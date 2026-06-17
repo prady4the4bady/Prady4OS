@@ -35,7 +35,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | UEFI Boot Path | 🔴 NOT BUILT | 1 | EDK2/OVMF-compatible; deferred (MBR path chosen first per user) |
 | Hardware-info handoff struct | 🔴 NOT BUILT | 1 | E820 + CPUID gathered but not yet packaged for a kernel; blocked on Phase 2a |
 | NEXUS Kernel Entry (asm) | 🟢 COMPLETE | 2a | 64-bit entry + C `kmain` in ring 0; kernel-owned flat GDT loaded (`arch/x86_64/cpu.asm`), CS reloaded via far return. |
-| Boot→kernel handoff struct | 🔴 NOT BUILT | 2a | E820/CPUID gathered in Stage 2 but not yet passed to the kernel (closes Phase 1 item) |
+| Boot→kernel handoff struct | 🟢 COMPLETE | 2a | `kernel/boot_info.h` ABI; Stage 2 fills it at phys 0x4000 (E820 map + vendor + LM), passes ptr in RDI; kernel re-prints the map. Closes Phase 1's last blocking item. |
 | NEXUS Interrupt Handlers | 🟡 IN PROGRESS | 2a | IDT + all 32 CPU exception vectors (`arch/x86_64/isr.asm`, `kernel/idt.c`); panic = fault + register dump + CR2 + backtrace + clean halt; `int3` self-test recovers. APIC + hardware IRQs still TODO. |
 | NEXUS Context Switch (asm) | 🔴 NOT BUILT | 2a | target TBD (see ADR) |
 | Physical Frame Oracle / PMM | 🔴 NOT BUILT | 2b | allocator design OPEN — see ADR-003 |

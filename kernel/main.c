@@ -12,12 +12,41 @@
  * ===========================================================================
  */
 #include "console.h"
+#include "boot_info.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
 
-void kmain(void) {
+static void print_boot_info(const struct boot_info *bi) {
+    if (bi->magic != BOOT_INFO_MAGIC) {
+        kputs("NEXUS: WARNING bad boot_info magic=");
+        kputhex(bi->magic);
+        kputs("\r\n");
+        return;
+    }
+    kputs("NEXUS: boot_info OK  vendor=");
+    kputs(bi->cpu_vendor);
+    kputs("  long_mode=");
+    kputhex(bi->long_mode);
+    kputs("\r\n");
+    kputs("NEXUS: E820 map, entries=");
+    kputhex(bi->e820_count);
+    kputs("\r\n");
+    for (uint32_t i = 0; i < bi->e820_count; i++) {
+        kputs("  base=");
+        kputhex(bi->e820[i].base);
+        kputs(" len=");
+        kputhex(bi->e820[i].len);
+        kputs(" type=");
+        kputhex(bi->e820[i].type);
+        kputs("\r\n");
+    }
+}
+
+void kmain(struct boot_info *bi) {
     kputs("NEXUS: entered kmain (64-bit long mode, ring 0)\r\n");
+
+    print_boot_info(bi);
 
     gdt_init();
     kputs("NEXUS: kernel GDT loaded\r\n");

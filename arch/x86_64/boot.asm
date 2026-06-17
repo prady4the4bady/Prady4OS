@@ -7,6 +7,10 @@
 ; section in kernel/kernel.ld). We set a known stack, clear the frame pointer,
 ; and call into C (kmain). kmain does not return; if it ever does, we halt.
 ;
+; ABI: the bootloader passes a pointer to the boot_info struct (kernel/boot_info.h)
+; in RDI per the SysV calling convention. We must NOT clobber RDI before calling
+; kmain, which takes it as its first argument: kmain(struct boot_info *).
+;
 ; The bootloader already set RSP, but we set it again so the kernel's entry
 ; contract does not depend on the loader's choice.
 ; ============================================================================

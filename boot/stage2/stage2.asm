@@ -48,6 +48,13 @@ PML4        equ 0x00070000
 PDPT        equ 0x00071000
 PD          equ 0x00072000
 
+; Boot -> kernel handoff struct (see kernel/boot_info.h). Lives at a fixed low
+; address (usable conventional RAM 0x500..0x7C00) so the kernel can find it.
+; Layout: magic(4) count(4) cpu_vendor(16) long_mode(4) reserved(4) then the
+; E820 entries (24 bytes each) at offset 32.
+BOOT_INFO   equ 0x00004000
+BOOT_MAGIC  equ 0x59445250     ; 'PRDY'
+
 stage2_start:
     xor ax, ax
     mov ds, ax
@@ -57,6 +64,7 @@ stage2_start:
     mov [boot_drive], dl        ; Stage 1 left the boot drive in DL
 
     call serial_init
+    call init_boot_info
 
     mov si, msg_s2
     call puts16
@@ -81,6 +89,16 @@ stage2_start:
     jmp CODE32_SEL:pm_entry
 
 ; ============================  16-bit helpers  ==============================
+
+; Zero the 32-byte boot_info header and stamp the magic. ES is already 0.
+init_boot_info:
+    cld
+    mov di, BOOT_INFO
+    xor ax, ax
+    mov cx, 16                  ; 32 bytes
+    rep stosw
+    mov dword [BOOT_INFO], BOOT_MAGIC
+    ret
 
 ; Fast A20 via System Control Port A (0x92); keep bit 0 clear (fast reset).
 enable_a20:
@@ -112,7 +130,7 @@ load_kernel:
 
 ; INT 15h EAX=E820h walk -> e820_buf / e820_count, then print the count.
 do_e820:
-    mov di, e820_buf
+    mov di, BOOT_INFO + 32      ; entries land in the handoff struct
     xor ebx, ebx
     mov word [e820_count], 0
 .loop:
@@ -131,6 +149,8 @@ do_e820:
     jae .done
     jmp .loop
 .done:
+    movzx eax, word [e820_count]
+    mov [BOOT_INFO + 4], eax    ; store the count into the handoff struct
     mov si, msg_e820
     call puts16
     mov al, [e820_count]
@@ -145,11 +165,11 @@ do_cpuid:
     call puts16
     xor eax, eax
     cpuid
-    mov [vendor_buf + 0], ebx
-    mov [vendor_buf + 4], edx
-    mov [vendor_buf + 8], ecx
-    mov byte [vendor_buf + 12], 0
-    mov si, vendor_buf
+    mov [BOOT_INFO + 8], ebx    ; vendor order is EBX, EDX, ECX
+    mov [BOOT_INFO + 12], edx
+    mov [BOOT_INFO + 16], ecx
+    mov byte [BOOT_INFO + 20], 0
+    mov si, BOOT_INFO + 8
     call puts16
     mov si, crlf
     call puts16
@@ -160,10 +180,12 @@ do_cpuid:
     cpuid
     test edx, 1 << 29
     jz .nolm
+    mov dword [BOOT_INFO + 24], 1
     mov si, msg_yes
     call puts16
     ret
 .nolm:
+    mov dword [BOOT_INFO + 24], 0
     mov si, msg_no
     call puts16
     ret
@@ -375,6 +397,7 @@ long_entry:
     mov fs, ax
     mov gs, ax
     mov rsp, KSTACK_TOP
+    mov edi, BOOT_INFO          ; SysV arg 1 -> kmain(struct boot_info *)
     mov rax, KERNEL_PHYS
     jmp rax
 
@@ -425,7 +448,5 @@ gdt_desc:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
-; --- scratch buffers (explicitly zeroed; flat bin has no BSS) ----------------
+; --- scratch (E820 entries now go straight into the boot_info struct) --------
 e820_count: dw 0
-vendor_buf: times 16      db 0
-e820_buf:   times 24 * 32 db 0
