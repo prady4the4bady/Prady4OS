@@ -14,9 +14,35 @@
 #include "console.h"
 #include "boot_info.h"
 #include "irq.h"
+#include "pmm.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
+
+static void pmm_selftest(const struct boot_info *bi) {
+    pmm_init(bi);
+    kputs("NEXUS: PMM (buddy) free frames=");
+    kputhex(pmm_free_page_count());
+    kputs("\r\n");
+
+    uint64_t start = pmm_free_page_count();
+    uint64_t a = pmm_alloc_page();        /* order 0 */
+    uint64_t b = pmm_alloc_pages(3);      /* order 3 = 8 frames */
+    kputs("  alloc 1 frame -> ");
+    kputhex(a);
+    kputs("\r\n  alloc 8 frames -> ");
+    kputhex(b);
+    kputs("\r\n  free frames after alloc=");
+    kputhex(pmm_free_page_count());
+    kputs("\r\n");
+
+    pmm_free_pages(b, 3);
+    pmm_free_page(a);
+    uint64_t end = pmm_free_page_count();
+    kputs("  free frames after release=");
+    kputhex(end);
+    kputs(end == start ? "  (balanced)\r\n" : "  (LEAK!)\r\n");
+}
 
 static void print_boot_info(const struct boot_info *bi) {
     if (bi->magic != BOOT_INFO_MAGIC) {
@@ -74,6 +100,8 @@ void kmain(struct boot_info *bi) {
     kputs("NEXUS: timer IRQ alive, ticks=");
     kputhex(g_ticks);
     kputs("\r\n");
+
+    pmm_selftest(bi);
 
     kputs("NEXUS: idle (halt, interrupts on)\r\n");
     for (;;)

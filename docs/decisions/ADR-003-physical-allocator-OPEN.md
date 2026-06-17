@@ -1,6 +1,8 @@
-# ADR-003: Physical memory allocator design (OPEN — needs decision in Phase 2b)
+# ADR-003: Physical memory allocator design
 
-- **Status:** Proposed (BLOCKED — the two source documents conflict)
+- **Status:** ACCEPTED 2026-06-17 — buddy allocator (user-approved). The
+  Blueprint's "Physical Frame Oracle" is deferred as an optional, measurement-
+  gated enhancement; its "without fragmentation" claim is not adopted.
 - **Date:** 2026-06-17
 - **Phase:** 2b
 

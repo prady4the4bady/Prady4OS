@@ -17,13 +17,13 @@ IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
 KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm
-KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c
+KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c kernel/pmm.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
 # boot.o MUST be first so kernel_entry (.text.boot) lands at 0x10000.
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o \
-               build/main.o build/console.o build/idt.o build/irq.o
+               build/main.o build/console.o build/idt.o build/irq.o build/pmm.o
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mno-red-zone -mgeneral-regs-only -fno-stack-protector \
                -fno-omit-frame-pointer -nostdlib -Wall -Wextra
@@ -68,6 +68,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/console.c -o build/console.o
 	$(CC) $(KCFLAGS) -c kernel/idt.c     -o build/idt.o
 	$(CC) $(KCFLAGS) -c kernel/irq.c     -o build/irq.o
+	$(CC) $(KCFLAGS) -c kernel/pmm.c     -o build/pmm.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 32768 || { echo "kernel.bin exceeds 32 KiB; Stage 2 only loads 64 sectors"; exit 1; }

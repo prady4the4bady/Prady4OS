@@ -3,14 +3,11 @@
 Updated after every phase. Status legend:
 🔴 NOT BUILT · 🟡 IN PROGRESS · 🟢 COMPLETE · ⚠️ BROKEN
 
-**Current phase:** 2a — NEXUS kernel. Boots Stage 1 → Stage 2 (A20, E820, CPUID)
-→ 32-bit PM (`PRADYOS BOOT OK`) → 4-level paging + long mode → ring-0 C kernel
-that loads its own GDT + an IDT with all 32 CPU exception handlers (panic =
-register dump + backtrace + clean halt; `int3` self-test recovers) → `NEXUS
-KERNEL OK` (smoke PASS). Boot→kernel handoff (E820/CPUID) done; legacy PIC + PIT
-@100Hz running with interrupts enabled (timer tick verified). Next: PCB + a
-context switch + the 3-lane scheduler driven by the PIT tick. APIC deferred to
-2b (ADR-005, ADR-006).
+**Current phase:** 2b — memory management. 2a complete (boot → long mode →
+ring-0 C kernel; own GDT/IDT; CPU exceptions w/ panic dumps; legacy PIC + PIT
+@100Hz, interrupts live). Phys memory: buddy allocator up and self-tested
+(ADR-003). Next 2b: VMM (kernel-built 4-level paging; higher-half decision per
+ADR-005), then a SLAB/kernel heap. APIC + scheduler still ahead.
 **Last updated:** 2026-06-17
 
 ## Phase 0 — Toolchain & Build System
@@ -40,8 +37,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Boot→kernel handoff struct | 🟢 COMPLETE | 2a | `kernel/boot_info.h` ABI; Stage 2 fills it at phys 0x4000 (E820 map + vendor + LM), passes ptr in RDI; kernel re-prints the map. Closes Phase 1's last blocking item. |
 | NEXUS Interrupt Handlers | 🟡 IN PROGRESS | 2a | IDT, 48 vectors (32 exceptions + 16 IRQ). Panic = fault + register dump + CR2 + backtrace + clean halt; `int3` recovers. Legacy 8259 PIC remapped + 8254 PIT @100Hz + keyboard IRQ; `sti` on; timer tick verified. APIC deferred to 2b (ADR-006). |
 | NEXUS Context Switch (asm) | 🔴 NOT BUILT | 2a | target TBD (see ADR) |
-| Physical Frame Oracle / PMM | 🔴 NOT BUILT | 2b | allocator design OPEN — see ADR-003 |
-| Virtual Memory Manager | 🔴 NOT BUILT | 2b | 4-level paging |
+| Physical Frame Oracle / PMM | 🟢 COMPLETE | 2b | Buddy allocator (`kernel/pmm.{c,h}`, ADR-003) seeded from E820; orders 0..10, split/coalesce. Self-test: 0x6FE0 free frames, aligned alloc, balanced release. Manages [16 MiB, 1 GiB). |
+| Virtual Memory Manager | 🔴 NOT BUILT | 2b | 4-level paging; higher-half decision pending (ADR-005) |
 | SLAB Allocator | 🔴 NOT BUILT | 2b | kernel heap |
 | Process Control Blocks | 🔴 NOT BUILT | 2c | PCB + lifecycle |
 | NEXUS Adaptive Scheduler | 🔴 NOT BUILT | 2c | 3-lane + AI hints |
