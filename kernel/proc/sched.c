@@ -69,12 +69,26 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     return t;
 }
 
-/* Switch to the next thread in the ring (round-robin). */
+static int runnable(const struct tcb *t) {
+    return t->state == THREAD_READY || t->state == THREAD_RUNNING;
+}
+
+/* Switch to the next runnable thread in the ring (round-robin, skipping
+ * blocked/finished threads). The idle thread is always runnable, so there is
+ * always something to run. */
 static void schedule(void) {
     struct tcb *prev = current_thread;
+
     struct tcb *next = prev->next;
-    if (next == prev)
-        return;                    /* nothing else to run */
+    while (next != prev && !runnable(next))
+        next = next->next;
+
+    if (next == prev) {
+        if (runnable(prev))
+            return;                /* prev is the only runnable thread */
+        next = &idle_tcb;          /* prev blocked and nothing else: fall to idle */
+    }
+
     if (prev->state == THREAD_RUNNING)
         prev->state = THREAD_READY;
     next->state = THREAD_RUNNING;
@@ -99,4 +113,18 @@ void yield(void) {
         return;
     current_thread->quantum = current_thread->quantum_reset;
     schedule();
+}
+
+/* Block the current thread until something calls sched_unblock on it. Callers
+ * hold a lock (cli) across the condition check + block to avoid lost wakeups. */
+void sched_block(void) {
+    if (!current_thread)
+        return;
+    current_thread->state = THREAD_BLOCKED;
+    schedule();                    /* switch away; returns when unblocked + run */
+}
+
+void sched_unblock(struct tcb *t) {
+    if (t && t->state == THREAD_BLOCKED)
+        t->state = THREAD_READY;
 }

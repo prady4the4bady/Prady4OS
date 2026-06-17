@@ -82,7 +82,32 @@ delegated/restricted caps survive the original's revoke), and the
 guard-before-operation pattern (`demo_file_read` requires `CAP_FILE_R`).
 smoke PASS; `-Werror` clean.
 
-### Next
+## Slice 3: synchronous IPC (NIA) + scheduler block/wakeup
 
-- IPC (NIA) built on top of capabilities (channels gated by CAP_IPC_SEND/RECV),
-  with thread block/wakeup. Then syscalls (NSI). 3-lane NAS + APIC still deferred.
+- **Date:** 2026-06-18
+- **Decision:** ADR-010 (sync first; async rings + broadcast bus follow).
+- **Files:** `kernel/ipc/ipc.{c,h}`, `kernel/proc/sched.c` (block/wakeup + runnable
+  skipping), `kernel/cap.c` (`cap_authorize` resource-bound check). Also: the
+  `kernel/` tree was reorganized into `mm/`, `proc/`, `ipc/` subdirs (separate
+  refactor commit) — see the repo layout.
+
+### Verified (QEMU)
+
+```
+[recv] blocking on endpoint (no message yet)
+[send] delivering message
+[send] delivered
+[recv] received: 0xFEEDFACECAFEBEEF 0x0102030405060708
+[recv] send with recv-only cap correctly DENIED
+```
+
+Confirms: a receiver blocks (off-CPU) until a sender delivers; the sender wakes
+it; the message arrives intact; and a recv-only capability is refused for send
+(rights + resource binding via `cap_authorize`). smoke PASS; `-Werror` clean.
+
+### Not done yet
+
+- Async lock-free SPSC ring buffers; sovereign broadcast bus (next IPC slices).
+- Sender does not block on a full slot (single outstanding message); larger /
+  zero-copy payloads come with the async work.
+- Syscalls (NSI), 3-lane NAS, APIC still ahead.

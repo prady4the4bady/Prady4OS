@@ -20,14 +20,14 @@ KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm \
                arch/x86_64/context.asm
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/cap.c \
-               kernel/proc/sched.c kernel/string.c
+               kernel/proc/sched.c kernel/ipc/ipc.c kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
 # boot.o MUST be first so kernel_entry (.text.boot) lands at the image start.
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
-               build/vmm.o build/cap.o build/sched.o build/string.o
+               build/vmm.o build/cap.o build/sched.o build/ipc.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall
@@ -84,6 +84,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c     -o build/vmm.o
 	$(CC) $(KCFLAGS) -c kernel/cap.c        -o build/cap.o
 	$(CC) $(KCFLAGS) -c kernel/proc/sched.c -o build/sched.o
+	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c    -o build/ipc.o
 	$(CC) $(KCFLAGS) -c kernel/string.c     -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)

@@ -19,6 +19,7 @@
 #include "vmm.h"
 #include "cap.h"
 #include "sched.h"
+#include "ipc.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -114,23 +115,56 @@ static void bench_ctx_switch(uint64_t tsc_hz) {
     kputs(" ns)  [target <= 1500 ns]\r\n");
 }
 
-/* Worker thread: prints its name + the global tick, then busy-works long enough
- * to be preempted, so two workers visibly interleave. */
-static void worker(void *arg) {
-    const char *name = (const char *)arg;
-    for (int i = 0; i < 6; i++) {
-        kputs("[thread ");
-        kputs(name);
-        kputs("] iter=");
-        kputdec((uint64_t)i);
-        kputs(" gtick=");
-        kputdec(g_ticks);
+/* --- IPC demo: a receiver blocks on an endpoint, a sender delivers ---------
+ * Both operations are capability-gated; each thread holds only the right it
+ * needs. Demonstrates block/wakeup AND capability enforcement. */
+static struct ipc_endpoint demo_ep;
+#define DEMO_EP_ID 0xABCDull
+
+static void ipc_receiver_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    uint64_t buf[IPC_MSG_WORDS];
+
+    kputs("[recv] blocking on endpoint (no message yet)\r\n");
+    if (ipc_recv(current_thread->caps, cap, &demo_ep, buf) == 0) {
+        kputs("[recv] received: ");
+        kputhex(buf[0]);
+        kputs(" ");
+        kputhex(buf[1]);
         kputs("\r\n");
-        for (volatile uint64_t d = 0; d < 30000000ull; d++) { }
+    } else {
+        kputs("[recv] DENIED\r\n");
     }
-    kputs("[thread ");
-    kputs(name);
-    kputs("] done\r\n");
+
+    /* Enforcement: a recv-only cap must not be usable to send. */
+    uint64_t m[IPC_MSG_WORDS] = { 0, 0, 0, 0 };
+    int r = ipc_send(current_thread->caps, cap, &demo_ep, m);
+    kputs(r != 0 ? "[recv] send with recv-only cap correctly DENIED\r\n"
+                 : "[recv] ERROR: recv-only cap was allowed to send!\r\n");
+}
+
+static void ipc_sender_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    for (volatile uint64_t d = 0; d < 60000000ull; d++) { }  /* let recv block first */
+
+    uint64_t msg[IPC_MSG_WORDS] = { 0xFEEDFACECAFEBEEFull, 0x0102030405060708ull, 0, 0 };
+    kputs("[send] delivering message\r\n");
+    int r = ipc_send(current_thread->caps, cap, &demo_ep, msg);
+    kputs(r == 0 ? "[send] delivered\r\n" : "[send] DENIED\r\n");
+}
+
+static void ipc_demo(void) {
+    ipc_endpoint_init(&demo_ep, DEMO_EP_ID);
+    struct tcb *recv = sched_create(ipc_receiver_thread, 0, "recv");
+    struct tcb *send = sched_create(ipc_sender_thread, 0, "send");
+    if (!recv || !send) {
+        kputs("NEXUS: ipc_demo — thread create failed\r\n");
+        return;
+    }
+    /* Mint each thread a single, resource-bound capability with only its right. */
+    recv->arg = (void *)(uintptr_t)cap_create(recv->caps, RES_IPC, DEMO_EP_ID, CAP_IPC_RECV);
+    send->arg = (void *)(uintptr_t)cap_create(send->caps, RES_IPC, DEMO_EP_ID, CAP_IPC_SEND);
+    kputs("NEXUS: IPC demo — capability-gated recv/send threads\r\n");
 }
 
 static void sched_demo(void) {
@@ -143,9 +177,8 @@ static void sched_demo(void) {
     sched_create(bench_partner, 0, "bench");
     bench_ctx_switch(tsc_hz);
 
-    sched_create(worker, (void *)"A", "A");
-    sched_create(worker, (void *)"B", "B");
-    kputs("NEXUS: 2 worker threads scheduled (PIT-preemptive round-robin)\r\n");
+    ipc_demo();
+    kputs("NEXUS: scheduler + IPC live\r\n");
 
     for (;;)                               /* this context is now the idle thread */
         __asm__ volatile("hlt");

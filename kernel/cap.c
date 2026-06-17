@@ -101,3 +101,15 @@ uint32_t cap_validate(struct cap_table *t, cap_t h, uint32_t required) {
         return 0;
     return 1;
 }
+
+uint32_t cap_authorize(struct cap_table *t, cap_t h, uint32_t res_type,
+                       uint64_t res_id, uint32_t required) {
+    struct cap_slot *s = resolve(t, h);
+    if (!s)
+        return 0;
+    if (s->res_type != res_type || s->res_id != res_id)
+        return 0;
+    if ((s->rights & required) != required)
+        return 0;
+    return 1;
+}

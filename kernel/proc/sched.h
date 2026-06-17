@@ -10,7 +10,12 @@
 
 typedef void (*thread_fn)(void *);
 
-enum thread_state { THREAD_READY = 0, THREAD_RUNNING = 1, THREAD_DONE = 2 };
+enum thread_state {
+    THREAD_READY = 0,
+    THREAD_RUNNING = 1,
+    THREAD_DONE = 2,
+    THREAD_BLOCKED = 3
+};
 
 struct tcb {
     uint64_t   rsp;            /* saved stack pointer (offset 0; asm relies on it) */
@@ -30,5 +35,7 @@ void        sched_init(void);                                   /* boot ctx -> i
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
+void        sched_block(void);                                  /* block current; switch away */
+void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 
 extern struct tcb *current_thread;

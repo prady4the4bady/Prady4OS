@@ -46,3 +46,7 @@ cap_t    cap_delegate(struct cap_table *src, cap_t h, struct cap_table *dst, uin
 int      cap_revoke(struct cap_table *t, cap_t h);
 /* 1 if the handle is valid AND holds all `required` rights, else 0. */
 uint32_t cap_validate(struct cap_table *t, cap_t h, uint32_t required_rights);
+/* Like cap_validate, but also requires the cap to refer to exactly
+ * (res_type, res_id) — binds authority to a specific resource. */
+uint32_t cap_authorize(struct cap_table *t, cap_t h, uint32_t res_type,
+                       uint64_t res_id, uint32_t required_rights);

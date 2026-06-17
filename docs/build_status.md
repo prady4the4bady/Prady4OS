@@ -11,8 +11,10 @@ a kernel-owned VMM (ADR-007), verified. Build is warning-clean and `-Werror`
 enforced (C + NASM). **Phase 2b complete.** Phase 2c: preemptive round-robin
 scheduler + asm context switch (~107 ns, well under target) verified with two
 interleaving threads. Capability system (NCS) done — opaque table-indexed
-handles, O(1) revoke, subset-only delegation (ADR-009), 11/11 tests. Next: IPC
-(NIA) built on capabilities, then syscalls (NSI); the 3-lane NAS + APIC deferred.
+handles, O(1) revoke, subset-only delegation (ADR-009), 11/11 tests. Sync IPC
+(NIA) done on top of capabilities + scheduler block/wakeup (ADR-010), verified.
+kernel/ reorganized into mm/proc/ipc subdirs. Next: async SPSC rings, then the
+sovereign broadcast bus, then syscalls (NSI); the 3-lane NAS + APIC deferred.
 Architecture confirmed against the user's Layer 1–6 boards; realistic perf
 targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **Last updated:** 2026-06-17
@@ -50,8 +52,9 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Process Control Blocks | 🟢 COMPLETE | 2c | Minimal TCB (`kernel/sched.h`): rsp, kstack, tid, state, quantum. Full PCB (caps, VAS, quotas) later. |
 | NEXUS Adaptive Scheduler | 🟡 IN PROGRESS | 2c | Round-robin ready ring, PIT-preemptive, quantum 2 ticks (ADR-008). Two threads verified interleaving. 3-lane NAS + AI-hint lane deferred. |
 | NCS Capability System | 🟢 COMPLETE | 2c | `kernel/cap.{c,h}` (ADR-009): opaque table-indexed handles, per-process tables on `tcb->caps`, O(1) generation-counter revoke, subset-only restrict/delegate, rights bitmap, guard-before-op. 11/11 tests pass. (MAC token = future external format only.) |
-| NIA IPC (Sync + Async) | 🔴 NOT BUILT | 2d | zero-copy |
-| Sovereign Broadcast Bus | 🔴 NOT BUILT | 2d | pub-sub kernel |
+| NIA IPC (Sync + Async) | 🟡 IN PROGRESS | 2c | Sync message passing done (`kernel/ipc/ipc.{c,h}`, ADR-010): capability-gated + resource-bound endpoint, scheduler block/wakeup, lost-wakeup-safe. Verified two threads exchange a message; recv-only cap denied send. Async SPSC rings next, then broadcast. |
+| Sovereign Broadcast Bus | 🔴 NOT BUILT | 2c | pub-sub kernel (after async rings) |
+| Thread block/wakeup | 🟢 COMPLETE | 2c | `sched_block`/`sched_unblock`; `schedule()` skips non-runnable; idle always runnable |
 | Syscall Table (200+ calls) | 🔴 NOT BUILT | 2e | SYSCALL/SYSRET |
 | PRADYOS Extended Syscalls | 🔴 NOT BUILT | 2e | agent + sovereign |
 | NVMe Driver | 🔴 NOT BUILT | 3 | priority storage |
