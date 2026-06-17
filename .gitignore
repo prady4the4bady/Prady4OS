@@ -1,0 +1,19 @@
+# Build artifacts
+/build/
+*.o
+*.elf
+*.bin
+*.img
+*.iso
+*.vdi
+*.vmdk
+*.log
+
+# Rust
+target/
+**/target/
+Cargo.lock
+
+# Editor / OS cruft
+.DS_Store
+*.swp

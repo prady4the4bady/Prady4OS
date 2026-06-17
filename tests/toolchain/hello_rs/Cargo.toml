@@ -1,0 +1,17 @@
+[package]
+name = "hello_rs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Toolchain-proof crate: a no_std staticlib so ld.lld must link Rust output
+# against C and NASM objects. Real kernel crates live under kernel/ later.
+[lib]
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"

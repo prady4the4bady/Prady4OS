@@ -1,0 +1,27 @@
+name: pradyos-ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm nasm make qemu-system-x86
+          rustup toolchain install nightly --profile minimal
+          rustup component add rust-src --toolchain nightly
+          rustup target add x86_64-unknown-none --toolchain nightly
+
+      - name: Toolchain check (clang + nasm + rust + lld)
+        run: make toolchain-check
+
+      - name: QEMU boot smoke test (inert until Phase 1)
+        run: make smoke

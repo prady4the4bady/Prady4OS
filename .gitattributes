@@ -1,0 +1,11 @@
+# PRADYOS builds in WSL2; scripts MUST stay LF even on a Windows checkout.
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.asm   text eol=lf
+*.mk    text eol=lf
+Makefile text eol=lf
+*.c     text eol=lf
+*.h     text eol=lf
+*.rs    text eol=lf
+*.yml   text eol=lf
