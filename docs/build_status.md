@@ -13,9 +13,11 @@ scheduler + asm context switch (~107 ns, well under target) verified with two
 interleaving threads. Capability system (NCS) done — opaque table-indexed
 handles, O(1) revoke, subset-only delegation (ADR-009), 11/11 tests. Sync IPC
 (NIA) done on top of capabilities + scheduler block/wakeup (ADR-010), verified.
-kernel/ reorganized into mm/proc/ipc subdirs. **Full NIA IPC fabric done** —
-sync endpoint + async SPSC ring + broadcast bus (ADR-010/011), all verified.
-**Layer 2 remaining: syscalls (NSI).** Then 3-lane NAS + APIC (deferred).
+kernel/ organized into mm/proc/ipc/syscall subdirs. Full NIA IPC fabric (sync +
+async ring + broadcast). **Syscalls (NSI) + ring-3 user mode done** (ADR-012):
+SYSCALL/SYSRET, TSS, user segments, capability-gated syscalls, a real ring-3
+thread verified. **Layer 2 (NEXUS kernel core) is COMPLETE.** Deferred: 3-lane
+NAS, APIC, W^X. Next major area: Phase 3 (drivers) per the Layer-3 board.
 Architecture confirmed against the user's Layer 1–6 boards; realistic perf
 targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **Last updated:** 2026-06-17
@@ -56,8 +58,9 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | NIA IPC (Sync + Async) | 🟢 COMPLETE | 2c | All 3 primitives: sync endpoint (block/wakeup), async lock-free SPSC ring, broadcast bus — all capability-gated + resource-bound (`kernel/ipc/`, ADR-010/011). Verified: sync exchange; ring 200 in-order; pub-sub filtered. |
 | Sovereign Broadcast Bus | 🟢 COMPLETE | 2c | `kernel/ipc/bcast.{c,h}` (ADR-011): event-mask pub-sub, publish gated by CAP_BROADCAST, subscribe by CAP_IPC_RECV. Filtering verified. |
 | Thread block/wakeup | 🟢 COMPLETE | 2c | `sched_block`/`sched_unblock`; `schedule()` skips non-runnable; idle always runnable |
-| Syscall Table (200+ calls) | 🔴 NOT BUILT | 2e | SYSCALL/SYSRET |
-| PRADYOS Extended Syscalls | 🔴 NOT BUILT | 2e | agent + sovereign |
+| Syscall Table (200+ calls) | 🟡 IN PROGRESS | 2e | SYSCALL/SYSRET armed (EFER.SCE/STAR/LSTAR/SFMASK), dispatch table + register, capability-aware (`kernel/syscall/`, ADR-012). 4 calls (putc/getpid/yield/exit) exercised from ring 3; more arrive with userspace. |
+| Ring-3 user mode (TSS + user segs) | 🟢 COMPLETE | 2e | `kernel/proc/tss.c`, user GDT segs, `sched_create_user`, IRETQ→ring3, cap-gated syscalls. Verified user thread runs + exits cleanly. |
+| PRADYOS Extended Syscalls | 🔴 NOT BUILT | 6 | agent + sovereign (Phase 6) |
 | NVMe Driver | 🔴 NOT BUILT | 3 | priority storage |
 | PCIe Enumeration | 🔴 NOT BUILT | 3 | MMCONFIG |
 | GPU Framebuffer (GOP) | 🔴 NOT BUILT | 3 | UEFI GOP first |
@@ -83,5 +86,5 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Mode Toggle Animation | 🔴 NOT BUILT | 7 | 300ms cubic-bezier |
 | Quantum Abstraction Layer | 🔴 NOT BUILT | 8 | future; citation unverified |
 | AVX-512 memcpy (asm) | 🔴 NOT BUILT | 2 | with CPUID fallback |
-| Syscall Entry (asm) | 🔴 NOT BUILT | 2e | target TBD (see ADR) |
+| Syscall Entry (asm) | 🟢 COMPLETE | 2e | `arch/x86_64/syscall_entry.asm` — stack switch, save/restore, marshal, SYSRET. |
 | IPC Zero-Copy (asm) | 🔴 NOT BUILT | 2d | VMOVDQU |

@@ -21,6 +21,9 @@
 #include "sched.h"
 #include "ipc.h"
 #include "bcast.h"
+#include "tss.h"
+#include "syscall.h"
+#include "string.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -286,6 +289,36 @@ static void bus_demo(void) {
     kputs("NEXUS: broadcast bus demo — 2 filtered subscribers + publisher\r\n");
 }
 
+/* --- ring-3 user thread demo ----------------------------------------------- */
+extern char user_blob_start[];
+extern char user_blob_end[];
+#define USER_CODE_VA  0x40000000ull          /* in PML4[0]/PDPT[1] — clear of the identity 2 MiB pages */
+#define USER_STACK_VA 0x40002000ull
+
+static void user_demo(void) {
+    uint64_t code_phys = pmm_alloc_page();
+    uint64_t stack_phys = pmm_alloc_page();
+    if (!code_phys || !stack_phys) {
+        kputs("NEXUS: user_demo — out of frames\r\n");
+        return;
+    }
+    /* Copy the position-independent user program into its page (identity view),
+     * then map it user-accessible at the user virtual address. */
+    memcpy((void *)(uintptr_t)code_phys, user_blob_start,
+           (uint64_t)(user_blob_end - user_blob_start));
+    vmm_map(USER_CODE_VA, code_phys, VMM_USER | VMM_RW);
+    vmm_map(USER_STACK_VA, stack_phys, VMM_USER | VMM_RW);
+
+    struct tcb *u = sched_create_user("user", USER_CODE_VA, USER_STACK_VA + PAGE_SIZE);
+    if (!u) {
+        kputs("NEXUS: user thread create failed\r\n");
+        return;
+    }
+    /* Give the user thread exactly one capability: console display. */
+    u->user_arg = (uint64_t)cap_create(u->caps, RES_DEVICE, CONSOLE_RES_ID, CAP_DISPLAY);
+    kputs("NEXUS: ring-3 user thread created (will syscall from user mode)\r\n");
+}
+
 static void sched_demo(void) {
     uint64_t tsc_hz = calibrate_tsc_hz();
     kputs("NEXUS: TSC ~");
@@ -303,8 +336,9 @@ static void sched_demo(void) {
     ipc_demo();
     ring_demo();
     bus_demo();
+    user_demo();
     __asm__ volatile("sti");
-    kputs("NEXUS: scheduler + IPC (sync + async + broadcast) live\r\n");
+    kputs("NEXUS: scheduler + IPC + ring-3 user mode live\r\n");
 
     for (;;)                               /* this context is now the idle thread */
         __asm__ volatile("hlt");
@@ -435,6 +469,10 @@ void kmain(struct boot_info *bi) {
 
     idt_init();
     kputs("NEXUS: IDT loaded (48 vectors: 32 exceptions + 16 IRQ)\r\n");
+
+    tss_init(0);                         /* rsp0 is set per user thread before ring 3 */
+    syscall_init();                      /* EFER.SCE + STAR/LSTAR/SFMASK + dispatch */
+    kputs("NEXUS: TSS loaded, SYSCALL/SYSRET armed\r\n");
 
     kvga_line("NEXUS KERNEL OK", 1);
     kputs("NEXUS KERNEL OK\r\n");

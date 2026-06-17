@@ -31,11 +31,11 @@ SECTIONS
     .data ALIGN(16) : AT(ADDR(.data) - KERNEL_VBASE + KERNEL_LMA) {
         *(.data .data.*)
     }
-    .bss ALIGN(16) (NOLOAD) : {
+    .bss ALIGN(64) (NOLOAD) : {        /* 64 = cache-line alignment for IPC rings */
         __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
-        . = ALIGN(16);
+        . = ALIGN(64);
         __bss_end = .;
     }
 

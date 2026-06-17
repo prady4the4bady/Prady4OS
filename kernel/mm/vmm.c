@@ -32,12 +32,18 @@ static unsigned idx(uint64_t virt, unsigned level) {  /* level: 4=PML4 .. 1=PT *
     return (unsigned)((virt >> (12 + 9 * (level - 1))) & 0x1FF);
 }
 
-/* Return the next-level table's physical address, creating it if `create`. */
-static uint64_t descend(uint64_t *table, unsigned i, int create) {
+/* Return the next-level table's physical address, creating it if `create`.
+ * When `user`, ensure this intermediate entry (existing OR new) is user-walkable:
+ * the CPU ANDs the user bit down the whole walk, so even a bootloader-made
+ * top-level entry must carry it. Actual access is still gated by the leaf's
+ * user bit, so a kernel-only leaf under a user-walkable path stays kernel-only. */
+static uint64_t descend(uint64_t *table, unsigned i, int create, int user) {
     uint64_t e = table[i];
     if (e & PTE_PRESENT) {
         if (e & PTE_PS)
             return 0;                 /* huge page here; cannot descend */
+        if (user && !(e & VMM_USER))
+            table[i] = e | VMM_USER;  /* promote existing entry to user-walkable */
         return e & PTE_ADDR;
     }
     if (!create)
@@ -46,7 +52,7 @@ static uint64_t descend(uint64_t *table, unsigned i, int create) {
     if (!frame)
         return 0;
     uint64_t fphys = (uint64_t)(uintptr_t)frame;
-    table[i] = fphys | PTE_PRESENT | VMM_RW;
+    table[i] = fphys | PTE_PRESENT | VMM_RW | (user ? VMM_USER : 0);
     return fphys;
 }
 
@@ -60,12 +66,13 @@ static int table_empty(const uint64_t *t) {
 
 int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
     uint64_t *pml4 = table_at(read_cr3() & PTE_ADDR);
+    int user = (flags & VMM_USER) ? 1 : 0;
 
-    uint64_t pdpt = descend(pml4, idx(virt, 4), 1);
+    uint64_t pdpt = descend(pml4, idx(virt, 4), 1, user);
     if (!pdpt) return -1;
-    uint64_t pd = descend(table_at(pdpt), idx(virt, 3), 1);
+    uint64_t pd = descend(table_at(pdpt), idx(virt, 3), 1, user);
     if (!pd) return -1;
-    uint64_t pt = descend(table_at(pd), idx(virt, 2), 1);
+    uint64_t pt = descend(table_at(pd), idx(virt, 2), 1, user);
     if (!pt) return -1;
 
     table_at(pt)[idx(virt, 1)] = (phys & PTE_ADDR) | (flags & 0xFFF) | PTE_PRESENT;
@@ -76,13 +83,13 @@ int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
 int vmm_unmap(uint64_t virt) {
     uint64_t *pml4 = table_at(read_cr3() & PTE_ADDR);
 
-    uint64_t pdpt_p = descend(pml4, idx(virt, 4), 0);
+    uint64_t pdpt_p = descend(pml4, idx(virt, 4), 0, 0);
     if (!pdpt_p) return -1;
     uint64_t *pdpt = table_at(pdpt_p);
-    uint64_t pd_p = descend(pdpt, idx(virt, 3), 0);
+    uint64_t pd_p = descend(pdpt, idx(virt, 3), 0, 0);
     if (!pd_p) return -1;
     uint64_t *pd = table_at(pd_p);
-    uint64_t pt_p = descend(pd, idx(virt, 2), 0);
+    uint64_t pt_p = descend(pd, idx(virt, 2), 0, 0);
     if (!pt_p) return -1;
     uint64_t *pt = table_at(pt_p);
 

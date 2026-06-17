@@ -1,12 +1,15 @@
-/* kernel/sched.c — preemptive round-robin kernel scheduler (Phase 2c). */
+/* kernel/sched.c — preemptive round-robin kernel scheduler (Phase 2c/2e). */
 #include "sched.h"
 #include "kheap.h"
 #include "console.h"
+#include "tss.h"
+#include "syscall.h"
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
 
 extern void context_switch(uint64_t *save_rsp, uint64_t load_rsp);  /* context.asm */
+extern void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t arg); /* usermode.asm */
 
 struct tcb *current_thread;       /* NULL until sched_init (safe: sched_tick checks) */
 static struct tcb idle_tcb;
@@ -49,6 +52,11 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->arg = arg;
     t->name = name;
     t->caps = cap_table_create();
+    t->is_user = 0;            /* kmalloc does not zero — init the user fields */
+    t->pid = 0;
+    t->user_rip = 0;
+    t->user_stack = 0;
+    t->user_arg = 0;
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
@@ -66,6 +74,28 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     /* Insert into the ring after the current thread. */
     t->next = current_thread->next;
     current_thread->next = t;
+    return t;
+}
+
+/* Kernel-side launch for a ring-3 thread: set the ring-0 stack the CPU will use
+ * for this thread's syscalls/interrupts, then drop to user mode (never returns). */
+static void user_launch(void *arg) {
+    (void)arg;
+    struct tcb *t = current_thread;
+    uint64_t ktop = t->kstack_base + STACK_SIZE;
+    tss_set_rsp0(ktop);
+    syscall_kstack_top = ktop;
+    enter_user_mode(t->user_rip, t->user_stack, t->user_arg);
+}
+
+struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user_stack) {
+    struct tcb *t = sched_create(user_launch, 0, name);
+    if (!t)
+        return 0;
+    t->is_user = 1;
+    t->pid = t->tid;
+    t->user_rip = user_rip;
+    t->user_stack = user_stack;
     return t;
 }
 
@@ -93,6 +123,11 @@ static void schedule(void) {
         prev->state = THREAD_READY;
     next->state = THREAD_RUNNING;
     current_thread = next;
+    if (next->is_user) {       /* point the CPU at this thread's ring-0 stack */
+        uint64_t ktop = next->kstack_base + STACK_SIZE;
+        tss_set_rsp0(ktop);
+        syscall_kstack_top = ktop;
+    }
     context_switch(&prev->rsp, next->rsp);
     /* resumed here later, as `prev`, when scheduled again */
 }
@@ -127,4 +162,12 @@ void sched_block(void) {
 void sched_unblock(struct tcb *t) {
     if (t && t->state == THREAD_BLOCKED)
         t->state = THREAD_READY;
+}
+
+/* Terminate the current thread: mark it done and switch away for good. */
+void sched_exit(void) {
+    current_thread->state = THREAD_DONE;
+    schedule();
+    for (;;)                   /* unreachable */
+        __asm__ volatile("hlt");
 }

@@ -17,19 +17,21 @@ IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
 KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm \
-               arch/x86_64/context.asm
+               arch/x86_64/context.asm arch/x86_64/syscall_entry.asm \
+               arch/x86_64/usermode.asm
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/cap.c \
-               kernel/proc/sched.c kernel/ipc/ipc.c kernel/ipc/bcast.c \
-               kernel/string.c
+               kernel/proc/sched.c kernel/proc/tss.c kernel/ipc/ipc.c \
+               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
 # boot.o MUST be first so kernel_entry (.text.boot) lands at the image start.
-KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o build/main.o \
+KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
+               build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
-               build/vmm.o build/cap.o build/sched.o build/ipc.o build/bcast.o \
-               build/string.o
+               build/vmm.o build/cap.o build/sched.o build/tss.o build/ipc.o \
+               build/bcast.o build/syscall.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall
@@ -73,22 +75,26 @@ kernel: $(KERNEL_BIN)
 
 $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	@mkdir -p build
-	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm    -o build/boot.o
-	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm     -o build/cpu.o
-	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm     -o build/isr.o
-	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/context.asm -o build/context.o
-	$(CC) $(KCFLAGS) -c kernel/main.c    -o build/main.o
-	$(CC) $(KCFLAGS) -c kernel/console.c -o build/console.o
-	$(CC) $(KCFLAGS) -c kernel/idt.c     -o build/idt.o
-	$(CC) $(KCFLAGS) -c kernel/irq.c     -o build/irq.o
-	$(CC) $(KCFLAGS) -c kernel/mm/pmm.c     -o build/pmm.o
-	$(CC) $(KCFLAGS) -c kernel/mm/kheap.c   -o build/kheap.o
-	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c     -o build/vmm.o
-	$(CC) $(KCFLAGS) -c kernel/cap.c        -o build/cap.o
-	$(CC) $(KCFLAGS) -c kernel/proc/sched.c -o build/sched.o
-	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c    -o build/ipc.o
-	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c  -o build/bcast.o
-	$(CC) $(KCFLAGS) -c kernel/string.c     -o build/string.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm           -o build/isr.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/context.asm       -o build/context.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/syscall_entry.asm -o build/syscall_entry.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/usermode.asm      -o build/usermode.o
+	$(CC) $(KCFLAGS) -c kernel/main.c          -o build/main.o
+	$(CC) $(KCFLAGS) -c kernel/console.c       -o build/console.o
+	$(CC) $(KCFLAGS) -c kernel/idt.c           -o build/idt.o
+	$(CC) $(KCFLAGS) -c kernel/irq.c           -o build/irq.o
+	$(CC) $(KCFLAGS) -c kernel/mm/pmm.c        -o build/pmm.o
+	$(CC) $(KCFLAGS) -c kernel/mm/kheap.c      -o build/kheap.o
+	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c        -o build/vmm.o
+	$(CC) $(KCFLAGS) -c kernel/cap.c           -o build/cap.o
+	$(CC) $(KCFLAGS) -c kernel/proc/sched.c    -o build/sched.o
+	$(CC) $(KCFLAGS) -c kernel/proc/tss.c      -o build/tss.o
+	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c       -o build/ipc.o
+	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/syscall.c -o build/syscall.o
+	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 32768 || { echo "kernel.bin exceeds 32 KiB; Stage 2 only loads 64 sectors"; exit 1; }

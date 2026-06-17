@@ -29,13 +29,22 @@ struct tcb {
     void      *arg;
     const char *name;
     struct cap_table *caps;    /* per-thread (process) capability table */
+
+    /* Ring-3 (user) thread metadata — zero/unused for pure kernel threads. */
+    uint32_t   is_user;
+    uint32_t   pid;
+    uint64_t   user_rip;       /* user-mode entry virtual address */
+    uint64_t   user_stack;     /* user-mode stack top (virtual)   */
+    uint64_t   user_arg;       /* value delivered to the user in RDI */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
+struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user_stack);
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_block(void);                                  /* block current; switch away */
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
+void        sched_exit(void);                                   /* terminate current thread   */
 
 extern struct tcb *current_thread;
