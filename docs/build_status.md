@@ -3,7 +3,10 @@
 Updated after every phase. Status legend:
 🔴 NOT BUILT · 🟡 IN PROGRESS · 🟢 COMPLETE · ⚠️ BROKEN
 
-**Current phase:** 1 IN PROGRESS — PRADYOS-BOOT (legacy BIOS MBR slice booting + serial sentinel)
+**Current phase:** 1 — PRADYOS-BOOT. BIOS/MBR path boots real mode → A20 → E820
+→ CPUID → 32-bit protected mode → `PRADYOS BOOT OK` (smoke PASS). Pending in
+Phase 1: UEFI/OVMF path, and kernel-ELF load + hardware-info handoff (the latter
+is blocked until Phase 2a produces a kernel to load).
 **Last updated:** 2026-06-17
 
 ## Phase 0 — Toolchain & Build System
@@ -25,9 +28,10 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 
 | Component | Status | Phase | Notes |
 |-----------|--------|-------|-------|
-| PRADYOS-BOOT Stage 1 (MBR) | 🟡 IN PROGRESS | 1 | 512-byte NASM boots in QEMU, prints `PRADYOS BOOT OK` to COM1, `make smoke` PASS. Does NOT yet enable A20, enter protected mode, read E820, or load Stage 2/kernel. |
-| PRADYOS-BOOT Stage 2 | 🔴 NOT BUILT | 1 | Protected mode, A20, E820 memory map |
-| UEFI Boot Path | 🔴 NOT BUILT | 1 | EDK2/OVMF-compatible (after MBR path) |
+| PRADYOS-BOOT Stage 1 (MBR) | 🟢 COMPLETE | 1 | 512-byte MBR; INT 13h/AH=42h LBA read loads Stage 2, jumps to it. Kernel-ELF load deferred to Phase 2a (no kernel yet). |
+| PRADYOS-BOOT Stage 2 | 🟢 COMPLETE | 1 | A20 (fast), INT 15h E820 walk, CPUID vendor + long-mode bit, flat GDT, 32-bit protected-mode switch, `PRADYOS BOOT OK` via COM1 + VGA. `make smoke` PASS. |
+| UEFI Boot Path | 🔴 NOT BUILT | 1 | EDK2/OVMF-compatible; deferred (MBR path chosen first per user) |
+| Hardware-info handoff struct | 🔴 NOT BUILT | 1 | E820 + CPUID gathered but not yet packaged for a kernel; blocked on Phase 2a |
 | NEXUS Kernel Entry (asm) | 🔴 NOT BUILT | 2a | long mode, GDT, IDT |
 | NEXUS Interrupt Handlers | 🔴 NOT BUILT | 2a | ISR stubs, APIC |
 | NEXUS Context Switch (asm) | 🔴 NOT BUILT | 2a | target TBD (see ADR) |

@@ -8,10 +8,12 @@ BUILD_DIR := build/toolchain
 TC_DIR    := tests/toolchain
 RUST_LIB  := $(TC_DIR)/hello_rs/target/$(RUST_TARGET)/release/libhello_rs.a
 
-# Phase 1 — PRADYOS-BOOT
-BOOT_DIR  := boot/mbr
-BOOT_BIN  := build/boot.bin
-IMG       := build/pradyos.img
+# Phase 1 — PRADYOS-BOOT (two-stage: MBR loader + protected-mode stage 2)
+STAGE1_SRC := boot/mbr/boot.asm
+STAGE2_SRC := boot/stage2/stage2.asm
+STAGE1_BIN := build/stage1.bin
+STAGE2_BIN := build/stage2.bin
+IMG        := build/pradyos.img
 
 .PHONY: all setup toolchain-check image smoke clean
 
@@ -39,18 +41,20 @@ toolchain-check:
 	      $(BUILD_DIR)/tc_main.o $(BUILD_DIR)/hello_c.o $(BUILD_DIR)/hello_asm.o $(RUST_LIB)
 	@echo "OK: clang + nasm + rust(no_std) + ld.lld linked -> $(BUILD_DIR)/toolchain_check.elf"
 
-# Assemble the 512-byte MBR and lay it down as sector 0 of a 1 MiB raw disk.
-# Padding past 512 bytes only keeps BIOS/QEMU from treating the image as a
-# degenerate 1-sector disk; the boot sector itself is still sector 0.
+# Assemble Stage 1 (512-byte MBR, LBA 0) and Stage 2 (LBA 1+), concatenate them
+# into a 1 MiB raw disk. Stage 1 reads 16 sectors (8 KiB) of Stage 2 at boot, so
+# stage2.bin must stay <= 8 KiB; the build asserts both size invariants.
 image: $(IMG)
 
-$(IMG): $(BOOT_DIR)/boot.asm
+$(IMG): $(STAGE1_SRC) $(STAGE2_SRC)
 	@mkdir -p build
-	$(NASM) -f bin $(BOOT_DIR)/boot.asm -o $(BOOT_BIN)
-	@test "$$(wc -c < $(BOOT_BIN))" -eq 512 || { echo "boot.bin is not 512 bytes"; exit 1; }
-	cp $(BOOT_BIN) $(IMG)
+	$(NASM) -f bin $(STAGE1_SRC) -o $(STAGE1_BIN)
+	@test "$$(wc -c < $(STAGE1_BIN))" -eq 512 || { echo "stage1.bin is not 512 bytes (got $$(wc -c < $(STAGE1_BIN)))"; exit 1; }
+	$(NASM) -f bin $(STAGE2_SRC) -o $(STAGE2_BIN)
+	@test "$$(wc -c < $(STAGE2_BIN))" -le 8192 || { echo "stage2.bin exceeds 8 KiB; Stage 1 only loads 16 sectors"; exit 1; }
+	cat $(STAGE1_BIN) $(STAGE2_BIN) > $(IMG)
 	truncate -s 1M $(IMG)
-	@echo "image: $(IMG) (boot sector $$(wc -c < $(BOOT_BIN)) bytes)"
+	@echo "image: $(IMG) (stage1 $$(wc -c < $(STAGE1_BIN))B, stage2 $$(wc -c < $(STAGE2_BIN))B)"
 
 smoke: $(IMG)
 	bash tools/qemu_runner/boot_test.sh $(IMG)

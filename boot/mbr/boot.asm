@@ -1,28 +1,27 @@
 ; boot/mbr/boot.asm
 ; ============================================================================
-; PRADYOS-BOOT — Stage 1 (legacy BIOS MBR), Phase 1 first slice.
+; PRADYOS-BOOT — Stage 1 (legacy BIOS MBR loader), Phase 1.
 ;
-; The BIOS loads this 512-byte sector to physical 0x0000:0x7C00 in 16-bit real
-; mode and jumps to it (boot signature 0xAA55 required at offset 510). This
-; slice does the minimum to prove the boot pipeline end-to-end: it writes the
-; boot sentinel to the COM1 serial port (so the headless QEMU smoke test can
-; grep it) and to the BIOS console via INT 10h (so a human watching sees it),
-; then halts.
+; The BIOS loads this 512-byte sector to 0x0000:0x7C00 in 16-bit real mode and
+; jumps to it (signature 0xAA55 required at offset 510). Stage 1's only job is
+; to load Stage 2 from disk and jump to it — Stage 2 is where A20, the E820
+; memory map, CPUID detection, and the protected-mode switch live (those don't
+; fit in 512 bytes).
 ;
-; NOT YET DONE (later Phase 1 slices): A20 enable, protected-mode transition,
-; INT 15h E820 memory map, CPUID vendor/topology detection, loading the kernel
-; ELF to high memory, and the hardware-info handoff struct. Those arrive once
-; Phase 2a produces a kernel to load.
+; Disk layout produced by the Makefile:
+;   LBA 0      : this sector (Stage 1)
+;   LBA 1..16  : Stage 2 (build/stage2.bin, <= 8 KiB), loaded to 0x0000:0x7E00
 ;
-; References (verify against these, do not trust from memory):
-;   - OSDev Wiki, "Serial Ports": 16550 UART register map relative to the base
-;     I/O port (COM1 = 0x3F8): +0 THR/RBR (and divisor LSB when DLAB=1),
-;     +1 IER (divisor MSB when DLAB=1), +2 FCR, +3 LCR (bit 7 = DLAB),
-;     +4 MCR, +5 LSR (bit 5 = THRE, transmit holding register empty).
-;   - OSDev Wiki, "Rolling Your Own Bootloader" (real-mode entry, 0x7C00, 0xAA55).
-;   - Ralf Brown's Interrupt List, INT 10h/AH=0Eh (teletype output).
+; We read with INT 13h AH=42h (extended/LBA read) via a Disk Address Packet,
+; which is supported by all modern BIOSes and QEMU's SeaBIOS, and avoids
+; CHS geometry guesswork.
 ;
-; Build: nasm -f bin boot.asm -o boot.bin   (output is exactly 512 bytes)
+; References (verify, do not trust from memory):
+;   - OSDev Wiki "Disk access using the BIOS (INT 13h)" — AH=42h DAP layout.
+;   - OSDev Wiki "Serial Ports" — 16550 register map (COM1=0x3F8).
+;   - Ralf Brown's Interrupt List — INT 13h/AH=42h, INT 10h/AH=0Eh.
+;
+; Build: nasm -f bin boot.asm -o stage1.bin   (exactly 512 bytes)
 ; ============================================================================
 
 BITS 16
@@ -30,86 +29,113 @@ ORG 0x7C00
 
 COM1 equ 0x3F8
 
-start:
+stage1:
     cli
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7C00          ; stack grows down from just below our load address
+    mov sp, 0x7C00              ; stack below us; Stage 2 loads above at 0x7E00
     sti
+    mov [boot_drive], dl        ; BIOS leaves the boot drive number in DL
 
     call serial_init
+    mov si, msg_s1
+    call puts
 
-    mov si, msg
-.print:
-    lodsb                   ; AL = DS:[SI], SI++
-    test al, al
-    jz .done
-    call serial_putc        ; preserves AL
-    call bios_putc          ; uses AL
-    jmp .print
-.done:
-    cli
-.hang:
+    mov si, dap                 ; DS:SI -> Disk Address Packet
+    mov ah, 0x42                ; extended read
+    mov dl, [boot_drive]
+    int 0x13
+    jc .disk_err
+
+    jmp 0x0000:0x7E00           ; hand off to Stage 2 (sets CS=0)
+
+.disk_err:
+    mov si, msg_err
+    call puts
+.halt:
     hlt
-    jmp .hang
+    jmp .halt
 
-; --- COM1 init: 115200 baud, 8N1, FIFO on. -----------------------------------
+; --- COM1 init: 115200 baud, 8N1, FIFO on. (See OSDev "Serial Ports".) -------
 serial_init:
-    mov dx, COM1 + 1        ; IER: disable all UART interrupts
+    mov dx, COM1 + 1
     mov al, 0x00
-    out dx, al
-    mov dx, COM1 + 3        ; LCR: set DLAB to access the baud divisor
+    out dx, al                 ; IER: interrupts off
+    mov dx, COM1 + 3
     mov al, 0x80
-    out dx, al
-    mov dx, COM1 + 0        ; divisor LSB = 1 -> 115200 baud
+    out dx, al                 ; LCR: DLAB on
+    mov dx, COM1 + 0
     mov al, 0x01
-    out dx, al
-    mov dx, COM1 + 1        ; divisor MSB = 0
+    out dx, al                 ; divisor LSB = 1 (115200)
+    mov dx, COM1 + 1
     mov al, 0x00
-    out dx, al
-    mov dx, COM1 + 3        ; LCR: 8 bits, no parity, 1 stop; clears DLAB
+    out dx, al                 ; divisor MSB = 0
+    mov dx, COM1 + 3
     mov al, 0x03
-    out dx, al
-    mov dx, COM1 + 2        ; FCR: enable FIFO, clear RX/TX, 14-byte threshold
+    out dx, al                 ; LCR: 8N1, DLAB off
+    mov dx, COM1 + 2
     mov al, 0xC7
-    out dx, al
-    mov dx, COM1 + 4        ; MCR: DTR + RTS + OUT2
+    out dx, al                 ; FCR: FIFO enable + clear
+    mov dx, COM1 + 4
     mov al, 0x0B
-    out dx, al
+    out dx, al                 ; MCR: DTR+RTS+OUT2
     ret
 
-; --- Send one byte over COM1 (AL). Preserves AX and DX. ----------------------
-serial_putc:
+serial_putc:                   ; AL = byte; preserves AX, DX
     push dx
     push ax
-    mov ah, al              ; stash the char in AH
-.sp_wait:
-    mov dx, COM1 + 5        ; LSR
+    mov ah, al
+.w:
+    mov dx, COM1 + 5
     in al, dx
-    test al, 0x20           ; THRE: transmit holding register empty?
-    jz .sp_wait
-    mov dx, COM1 + 0        ; THR
+    test al, 0x20              ; THRE?
+    jz .w
+    mov dx, COM1 + 0
     mov al, ah
     out dx, al
     pop ax
     pop dx
     ret
 
-; --- Print one byte to the BIOS console (AL) via teletype. Preserves AX, BX. -
-bios_putc:
+bios_putc:                     ; AL = byte; preserves AX, BX
     push bx
     push ax
-    mov ah, 0x0E            ; INT 10h teletype output
-    mov bx, 0x0007          ; BH=0 (page 0), BL=0x07 (light grey, text modes)
+    mov ah, 0x0E
+    mov bx, 0x0007
     int 0x10
     pop ax
     pop bx
     ret
 
-msg db "PRADYOS BOOT OK", 13, 10, 0
+puts:                          ; DS:SI -> NUL-terminated string
+    push ax
+    push si
+.l:
+    lodsb
+    test al, al
+    jz .e
+    call serial_putc
+    call bios_putc
+    jmp .l
+.e:
+    pop si
+    pop ax
+    ret
 
-; --- Pad to 510 bytes, then the 2-byte boot signature. -----------------------
+boot_drive db 0
+msg_s1     db "PRADYOS S1: loading stage2...", 13, 10, 0
+msg_err    db "PRADYOS S1: DISK READ ERROR", 13, 10, 0
+
+; Disk Address Packet for INT 13h/AH=42h.
+dap:
+    db 0x10                    ; packet size
+    db 0x00                    ; reserved
+    dw 16                      ; sectors to read (8 KiB; Stage 2 fits in this)
+    dw 0x7E00                  ; destination offset
+    dw 0x0000                  ; destination segment
+    dq 1                       ; starting LBA (Stage 2 begins right after MBR)
+
 times 510 - ($ - $$) db 0
 dw 0xAA55

@@ -44,6 +44,51 @@ make smoke    # boots build/pradyos.img in QEMU, greps COM1 for the sentinel
   `-device isa-debug-exit` + a port write to exit immediately (faster CI).
 - **VirtualBox not yet tested.** The protocol in the instructions calls for a
   VirtualBox boot after QEMU; deferred until the boot path does something a
-  human needs to see (Stage 2 / kernel load).
-- This is a print-and-halt sector only. Next slices: A20 + protected-mode
-  transition, INT 15h E820 memory map, then CPUID vendor/topology detection.
+  human needs to see (kernel load).
+
+## Slice 2: Two-stage boot — A20, E820, CPUID, protected mode
+
+- **Date:** 2026-06-17
+- **Restructure:** Stage 1 is now a loader (INT 13h/AH=42h LBA read pulls 16
+  sectors of Stage 2 to 0x0000:0x7E00 and jumps). Stage 2 (`boot/stage2/stage2.asm`)
+  does the real work. Image = `stage1.bin` (LBA 0) + `stage2.bin` (LBA 1+),
+  padded to 1 MiB. Build asserts stage1 == 512 B and stage2 <= 8 KiB.
+
+### Commands
+
+```bash
+make image    # nasm stage1 + stage2, assert sizes, concatenate, pad to 1 MiB
+make smoke    # boot + grep COM1 for PRADYOS BOOT OK
+```
+
+### Actual serial output (QEMU, AMD host)
+
+```
+PRADYOS S1: loading stage2...
+PRADYOS S2: protected-mode loader
+  A20: enabled (fast, port 0x92)
+  E820 map entries (hex): 0x06
+  CPU vendor: AuthenticAMD
+  Long mode supported: yes
+  switching to protected mode...
+PRADYOS BOOT OK
+```
+
+`make smoke` → PASS (exit 0). Sizes: stage1 512 B, stage2 1496 B.
+
+### What broke and how it was fixed
+
+- **NASM warning** `uninitialized space declared in .text section` from the
+  `resb` scratch buffers. Root cause: a flat `-f bin` image has no BSS, so `resb`
+  at the end is ambiguous. Fixed by declaring the E820/vendor buffers as explicit
+  zero-initialised data (`dw 0` / `times N db 0`). Rebuild is now warning-free.
+
+### Honest scope notes / what is NOT done in Phase 1 yet
+
+- **CPUID topology** is limited to the vendor string + the long-mode bit. Real
+  SMT/core/package topology needs CPUID leaf 0Bh/1Fh; deferred to Phase 2c.
+- **A20** is enabled but not exhaustively verified (QEMU enables it by default).
+- **UEFI/OVMF path** not built (MBR chosen first).
+- **Kernel-ELF load + hardware-info handoff struct** not built — there is no
+  kernel to load until Phase 2a. The E820/CPUID data is gathered but not yet
+  packaged for handoff.
