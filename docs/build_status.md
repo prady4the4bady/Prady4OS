@@ -88,3 +88,21 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | AVX-512 memcpy (asm) | 🔴 NOT BUILT | 2 | with CPUID fallback |
 | Syscall Entry (asm) | 🟢 COMPLETE | 2e | `arch/x86_64/syscall_entry.asm` — stack switch, save/restore, marshal, SYSRET. |
 | IPC Zero-Copy (asm) | 🔴 NOT BUILT | 2d | VMOVDQU |
+
+## ⏸ DEFERRED — tracked, not dropped (interim implementation in place or later phase)
+
+These are intentionally postponed. The current build is functionally complete
+without them; each has a concrete "build before" trigger so it is not forgotten.
+
+| Deferred item | Interim / status | Build before |
+|---------------|------------------|--------------|
+| **APIC** (Local + I/O APIC, APIC timer) | legacy 8259 PIC + PIT active | SMP; MSI device interrupts. Unblocked by the ACPI/MADT parser (Phase 3). |
+| **3-lane NAS scheduler** (Determ./Throughput/Interactive + AI-hint) | round-robin placeholder (ADR-008) | differentiated agent workloads (Layer 6) |
+| **Physical Frame Oracle** (variable-weight + predictive coalesce) | buddy PMM interim (ADR-003) | Sovereign Memory Pool / hugepages (Layer 6) |
+| **Agent Virtual Address Space (AVAS)** (128 TB + RO state mirror) | — | AETHER bringup (Layer 6) |
+| **Sovereign Memory Pool** (NUMA-pinned hugepages for weights) | — | AETHER/Ollama (Layer 6) |
+| **W^X / NX per-section perms + guard pages** | EFER.NXE unused; user pages W+X | running untrusted user code |
+| **UEFI / OVMF boot path** | legacy BIOS/MBR path complete | ARM64 / RISC-V variants (Layer 1) |
+| **AVX-512 asm + IPC zero-copy (VMOVDQU)** | scalar paths | performance-hardening pass |
+
+See the per-item rows above for the primary (non-deferred) component status.
