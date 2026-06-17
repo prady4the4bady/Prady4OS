@@ -167,6 +167,62 @@ static void ipc_demo(void) {
     kputs("NEXUS: IPC demo — capability-gated recv/send threads\r\n");
 }
 
+/* --- Async SPSC ring demo: producer and consumer decoupled by the ring ----- */
+#define RING_EP_ID 0x5170ull
+#define RING_N 200
+static struct ipc_ring demo_ring;
+
+static void ring_producer_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    for (uint64_t i = 1; i <= RING_N; ) {
+        int r = ipc_ring_push(current_thread->caps, cap, &demo_ring, i);
+        if (r == 0)
+            i++;                 /* pushed; advance */
+        else if (r == 1)
+            yield();             /* ring full; let the consumer drain */
+        else {
+            kputs("[ring prod] cap DENIED\r\n");
+            return;
+        }
+    }
+    kputs("[ring prod] pushed 1..200\r\n");
+}
+
+static void ring_consumer_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    uint64_t expect = 1, got, count = 0, errors = 0;
+    while (count < RING_N) {
+        int r = ipc_ring_pop(current_thread->caps, cap, &demo_ring, &got);
+        if (r == 0) {
+            if (got != expect)
+                errors++;
+            expect++;
+            count++;
+        } else if (r == 1) {
+            yield();             /* ring empty; let the producer fill */
+        } else {
+            kputs("[ring cons] cap DENIED\r\n");
+            return;
+        }
+    }
+    kputs("[ring cons] received 200 in-order, errors=");
+    kputdec(errors);
+    kputs(errors == 0 ? "  (OK)\r\n" : "  (FAIL)\r\n");
+}
+
+static void ring_demo(void) {
+    ipc_ring_init(&demo_ring, RING_EP_ID);
+    struct tcb *prod = sched_create(ring_producer_thread, 0, "prod");
+    struct tcb *cons = sched_create(ring_consumer_thread, 0, "cons");
+    if (!prod || !cons) {
+        kputs("NEXUS: ring_demo — thread create failed\r\n");
+        return;
+    }
+    prod->arg = (void *)(uintptr_t)cap_create(prod->caps, RES_IPC, RING_EP_ID, CAP_IPC_SEND);
+    cons->arg = (void *)(uintptr_t)cap_create(cons->caps, RES_IPC, RING_EP_ID, CAP_IPC_RECV);
+    kputs("NEXUS: async SPSC ring demo — producer + consumer\r\n");
+}
+
 static void sched_demo(void) {
     uint64_t tsc_hz = calibrate_tsc_hz();
     kputs("NEXUS: TSC ~");
@@ -178,7 +234,8 @@ static void sched_demo(void) {
     bench_ctx_switch(tsc_hz);
 
     ipc_demo();
-    kputs("NEXUS: scheduler + IPC live\r\n");
+    ring_demo();
+    kputs("NEXUS: scheduler + IPC (sync + async ring) live\r\n");
 
     for (;;)                               /* this context is now the idle thread */
         __asm__ volatile("hlt");

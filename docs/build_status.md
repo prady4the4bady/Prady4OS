@@ -52,7 +52,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Process Control Blocks | 🟢 COMPLETE | 2c | Minimal TCB (`kernel/sched.h`): rsp, kstack, tid, state, quantum. Full PCB (caps, VAS, quotas) later. |
 | NEXUS Adaptive Scheduler | 🟡 IN PROGRESS | 2c | Round-robin ready ring, PIT-preemptive, quantum 2 ticks (ADR-008). Two threads verified interleaving. 3-lane NAS + AI-hint lane deferred. |
 | NCS Capability System | 🟢 COMPLETE | 2c | `kernel/cap.{c,h}` (ADR-009): opaque table-indexed handles, per-process tables on `tcb->caps`, O(1) generation-counter revoke, subset-only restrict/delegate, rights bitmap, guard-before-op. 11/11 tests pass. (MAC token = future external format only.) |
-| NIA IPC (Sync + Async) | 🟡 IN PROGRESS | 2c | Sync message passing done (`kernel/ipc/ipc.{c,h}`, ADR-010): capability-gated + resource-bound endpoint, scheduler block/wakeup, lost-wakeup-safe. Verified two threads exchange a message; recv-only cap denied send. Async SPSC rings next, then broadcast. |
+| NIA IPC (Sync + Async) | 🟡 IN PROGRESS | 2c | Sync endpoint (block/wakeup) + async lock-free SPSC ring, both capability-gated + resource-bound (`kernel/ipc/ipc.{c,h}`, ADR-010). Verified: sync exchange; async ring 200 msgs in-order, 0 errors. Sovereign broadcast bus next. |
 | Sovereign Broadcast Bus | 🔴 NOT BUILT | 2c | pub-sub kernel (after async rings) |
 | Thread block/wakeup | 🟢 COMPLETE | 2c | `sched_block`/`sched_unblock`; `schedule()` skips non-runnable; idle always runnable |
 | Syscall Table (200+ calls) | 🔴 NOT BUILT | 2e | SYSCALL/SYSRET |

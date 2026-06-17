@@ -105,9 +105,28 @@ Confirms: a receiver blocks (off-CPU) until a sender delivers; the sender wakes
 it; the message arrives intact; and a recv-only capability is refused for send
 (rights + resource binding via `cap_authorize`). smoke PASS; `-Werror` clean.
 
+## Slice 4: async lock-free SPSC ring
+
+- **Date:** 2026-06-18
+- **Files:** `kernel/ipc/ipc.{c,h}` (ipc_ring_push/pop), `kernel/main.c` (demo).
+- **Design:** single-producer/single-consumer ring, capacity 256, head/tail on
+  separate cache lines (`_Alignas(64)`); cross-side reads use
+  `__atomic_load_n(..., ACQUIRE)` and index publish uses `__atomic_store_n(...,
+  RELEASE)` — lock-free, no library calls. Capability-gated + resource-bound.
+
+### Verified (QEMU)
+
+```
+[ring prod] pushed 1..200
+[ring cons] received 200 in-order, errors=0  (OK)
+```
+
+A producer pushes 1..200 (yielding when full); a consumer pops them (yielding
+when empty) and confirms in-order, error-free delivery. smoke PASS; `-Werror`
+clean (including the C11 atomics + alignment).
+
 ### Not done yet
 
-- Async lock-free SPSC ring buffers; sovereign broadcast bus (next IPC slices).
-- Sender does not block on a full slot (single outstanding message); larger /
-  zero-copy payloads come with the async work.
+- Sovereign broadcast bus (next IPC slice).
+- Sync sender does not block on a full slot; larger / zero-copy payloads later.
 - Syscalls (NSI), 3-lane NAS, APIC still ahead.
