@@ -57,3 +57,45 @@ works; and the C `kmain` executes in 64-bit ring 0.
   + ELF loading are Phase 2b.
 - `make smoke` still waits the 30 s QEMU watchdog (kernel halts; no self-exit).
 - VirtualBox not yet exercised.
+
+## Slice 2: Kernel GDT + IDT + CPU exception handlers
+
+- **Date:** 2026-06-17
+- **New artifacts:** `arch/x86_64/cpu.asm` (kernel GDT + `gdt_init` + `idt_load`),
+  `arch/x86_64/isr.asm` (32 exception stubs + `isr_common` + `isr_stub_table`),
+  `kernel/idt.c` (`idt_init`, `isr_dispatch`), `kernel/console.{c,h}` (shared
+  serial/VGA/hex). `kmain` now loads the GDT, installs the IDT, and runs an
+  `int3` self-test. Built `-fno-omit-frame-pointer` for backtraces.
+
+### What was verified (QEMU, AMD host)
+
+1. **Kernel GDT** installed; CS reloaded to 0x08 via far return (confirmed: the
+   panic dump below shows `CS=0x08`).
+2. **IDT** with all 32 CPU exception vectors loaded.
+3. **Recoverable exception** — `int3` (#BP) is caught and execution resumes:
+   `[#BP] breakpoint at RIP=0x...101BE — IDT works, resuming` then the kernel
+   continues. `make smoke` PASS (sentinel printed before and the kernel runs on).
+4. **Panic path** — verified once with a throwaway `ud2` (#UD), **not committed**.
+   The handler printed (per the error-handling mandate):
+
+   ```
+   *** NEXUS KERNEL PANIC ***
+   component: NEXUS isr
+   exception: #UD invalid opcode  vector=0x...06  error=0x...0
+   RIP=0x...101CD  CS =0x...08  RFLAGS=0x...02  RSP=0x...1FFFF0
+   RAX=... .. R15=...            (full GP register dump)
+   backtrace:
+     0x...1000D                  (= kernel_entry.hang, the kmain return addr)
+   halting.
+   ```
+
+   This confirms exception identification, the register dump, the frame-pointer
+   backtrace, and a clean halt. CR2 is additionally printed for vector 14 (#PF).
+
+### Not done yet
+
+- **No TSS** (handled in ring 0, no IST, no privilege change). TSS + IST arrive
+  with ring-3 / double-fault-stack support.
+- **No hardware interrupts** — no PIC remap, no APIC, no timer. That is the next
+  decision (PIC vs APIC) and the gateway to the scheduler.
+- Boot→kernel hardware-info handoff still pending (E820/CPUID not passed up).

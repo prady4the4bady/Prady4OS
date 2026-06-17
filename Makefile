@@ -16,14 +16,17 @@ STAGE2_BIN := build/stage2.bin
 IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
-KERNEL_ASM := arch/x86_64/boot.asm
-KERNEL_C   := kernel/main.c
-KERNEL_LD  := kernel/kernel.ld
-KERNEL_ELF := build/kernel.elf
-KERNEL_BIN := build/kernel.bin
-KCFLAGS    := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
-              -mno-red-zone -mgeneral-regs-only -fno-stack-protector \
-              -nostdlib -Wall -Wextra
+KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm
+KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c
+KERNEL_LD   := kernel/kernel.ld
+KERNEL_ELF  := build/kernel.elf
+KERNEL_BIN  := build/kernel.bin
+# boot.o MUST be first so kernel_entry (.text.boot) lands at 0x10000.
+KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o \
+               build/main.o build/console.o build/idt.o
+KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
+               -mno-red-zone -mgeneral-regs-only -fno-stack-protector \
+               -fno-omit-frame-pointer -nostdlib -Wall -Wextra
 
 .PHONY: all setup toolchain-check kernel image smoke clean
 
@@ -56,11 +59,15 @@ toolchain-check:
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASM) $(KERNEL_C) $(KERNEL_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	@mkdir -p build
-	$(NASM) -f elf64 $(KERNEL_ASM) -o build/kentry.o
-	$(CC) $(KCFLAGS) -c $(KERNEL_C) -o build/kmain.o
-	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) build/kentry.o build/kmain.o
+	$(NASM) -f elf64 arch/x86_64/boot.asm -o build/boot.o
+	$(NASM) -f elf64 arch/x86_64/cpu.asm  -o build/cpu.o
+	$(NASM) -f elf64 arch/x86_64/isr.asm  -o build/isr.o
+	$(CC) $(KCFLAGS) -c kernel/main.c    -o build/main.o
+	$(CC) $(KCFLAGS) -c kernel/console.c -o build/console.o
+	$(CC) $(KCFLAGS) -c kernel/idt.c     -o build/idt.o
+	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 32768 || { echo "kernel.bin exceeds 32 KiB; Stage 2 only loads 64 sectors"; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
