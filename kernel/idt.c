@@ -10,6 +10,7 @@
 #include "console.h"
 #include "io.h"
 #include "irq.h"
+#include "sched.h"
 #include <stdint.h>
 
 /* Must match the push order in arch/x86_64/isr.asm exactly. */
@@ -87,15 +88,18 @@ static void dump_line(const char *label, uint64_t v) {
 void isr_dispatch(struct regs *r) {
     /* Hardware IRQs (PIC remapped to 0x20..0x2F = vectors 32..47). */
     if (r->vector >= 32 && r->vector <= 47) {
-        if (r->vector == 32) {                 /* IRQ0: PIT timer */
-            g_ticks++;
-        } else if (r->vector == 33) {          /* IRQ1: keyboard */
+        unsigned irq = (unsigned)r->vector;
+        if (irq == 33) {                       /* IRQ1: keyboard */
             uint8_t scancode = inb(0x60);
             kputs("[kbd] scancode=");
             kputhex(scancode);
             kputs("\r\n");
         }
-        pic_eoi(r->vector);
+        pic_eoi(r->vector);                     /* EOI before any context switch */
+        if (irq == 32) {                        /* IRQ0: PIT timer drives preemption */
+            g_ticks++;
+            sched_tick();
+        }
         return;
     }
 

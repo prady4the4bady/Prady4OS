@@ -26,6 +26,21 @@ void kputhex(uint64_t v) {
         kputc(digits[(v >> shift) & 0xF]);
 }
 
+void kputdec(uint64_t v) {
+    char buf[20];
+    int i = 0;
+    if (v == 0) {
+        kputc('0');
+        return;
+    }
+    while (v) {
+        buf[i++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (i)
+        kputc(buf[--i]);
+}
+
 void kvga_line(const char *s, int row) {
     volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
     vga += (uint64_t)row * 80;

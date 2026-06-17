@@ -17,9 +17,88 @@
 #include "pmm.h"
 #include "kheap.h"
 #include "vmm.h"
+#include "sched.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
+
+static inline uint64_t rdtsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+/* Calibrate the TSC against the PIT (100 Hz). Runs before the scheduler is up,
+ * so the calibration loop is not preempted. */
+static uint64_t calibrate_tsc_hz(void) {
+    uint64_t t = g_ticks;
+    while (g_ticks == t) { }              /* align to a tick edge */
+    uint64_t start = g_ticks;
+    uint64_t c0 = rdtsc();
+    while (g_ticks < start + 20) { }      /* 20 ticks = 200 ms */
+    uint64_t c1 = rdtsc();
+    return (c1 - c0) * 5;                  /* per 0.2 s -> per second */
+}
+
+/* Bench partner: immediately hands the CPU back, so an idle yield() round-trips
+ * through exactly two context switches. */
+static void bench_partner(void *arg) {
+    (void)arg;
+    for (;;)
+        yield();
+}
+
+static void bench_ctx_switch(uint64_t tsc_hz) {
+    const uint64_t rounds = 100000;
+    uint64_t c0 = rdtsc();
+    for (uint64_t i = 0; i < rounds; i++)
+        yield();                          /* idle -> partner -> idle = 2 switches */
+    uint64_t c1 = rdtsc();
+    uint64_t switches = rounds * 2;
+    uint64_t cyc = (c1 - c0) / switches;
+    kputs("NEXUS: context_switch ~");
+    kputdec(cyc);
+    kputs(" cycles (~");
+    kputdec(tsc_hz ? (cyc * 1000000000ull / tsc_hz) : 0);
+    kputs(" ns)  [target <= 1500 ns]\r\n");
+}
+
+/* Worker thread: prints its name + the global tick, then busy-works long enough
+ * to be preempted, so two workers visibly interleave. */
+static void worker(void *arg) {
+    const char *name = (const char *)arg;
+    for (int i = 0; i < 6; i++) {
+        kputs("[thread ");
+        kputs(name);
+        kputs("] iter=");
+        kputdec((uint64_t)i);
+        kputs(" gtick=");
+        kputdec(g_ticks);
+        kputs("\r\n");
+        for (volatile uint64_t d = 0; d < 30000000ull; d++) { }
+    }
+    kputs("[thread ");
+    kputs(name);
+    kputs("] done\r\n");
+}
+
+static void sched_demo(void) {
+    uint64_t tsc_hz = calibrate_tsc_hz();
+    kputs("NEXUS: TSC ~");
+    kputdec(tsc_hz / 1000000);
+    kputs(" MHz\r\n");
+
+    sched_init();
+    sched_create(bench_partner, 0, "bench");
+    bench_ctx_switch(tsc_hz);
+
+    sched_create(worker, (void *)"A", "A");
+    sched_create(worker, (void *)"B", "B");
+    kputs("NEXUS: 2 worker threads scheduled (PIT-preemptive round-robin)\r\n");
+
+    for (;;)                               /* this context is now the idle thread */
+        __asm__ volatile("hlt");
+}
 
 static void vmm_test(void) {
     const uint64_t va = 0xFFFF800000000000ull;   /* unused PML4 slot (256) */
@@ -171,7 +250,6 @@ void kmain(struct boot_info *bi) {
     kheap_stress();
     vmm_test();
 
-    kputs("NEXUS: idle (halt, interrupts on)\r\n");
-    for (;;)
-        __asm__ volatile("hlt");
+    kputs("NEXUS: starting scheduler\r\n");
+    sched_demo();                          /* never returns (becomes the idle thread) */
 }

@@ -8,10 +8,12 @@ ring-0 C kernel; own GDT/IDT; CPU exceptions w/ panic dumps; legacy PIC + PIT
 @100Hz, interrupts live). Phys memory: buddy allocator (ADR-003) + SLAB/kernel
 heap, both self-tested leak-free. **Higher-half kernel** @0xFFFFFFFF80000000 with
 a kernel-owned VMM (ADR-007), verified. Build is warning-clean and `-Werror`
-enforced (C + NASM). **Phase 2b complete.** Next: Phase 2c (PCB + context switch
-+ 3-lane scheduler on the PIT tick), or APIC. Architecture confirmed against the
-user's Layer 1–6 boards; realistic perf targets adopted (context switch ≤ 1.5 µs,
-syscall ≤ 250 ns).
+enforced (C + NASM). **Phase 2b complete.** Phase 2c: preemptive round-robin
+scheduler + asm context switch (~107 ns, well under target) verified with two
+interleaving threads. Next in 2c: capability system (NCS), then IPC (NIA),
+syscalls (NSI); the 3-lane NAS + APIC are deferred. Architecture confirmed
+against the user's Layer 1–6 boards; realistic perf targets adopted (context
+switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **Last updated:** 2026-06-17
 
 ## Phase 0 — Toolchain & Build System
@@ -40,12 +42,12 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | NEXUS Kernel Entry (asm) | 🟢 COMPLETE | 2a | 64-bit entry + C `kmain` in ring 0; kernel-owned flat GDT loaded (`arch/x86_64/cpu.asm`), CS reloaded via far return. |
 | Boot→kernel handoff struct | 🟢 COMPLETE | 2a | `kernel/boot_info.h` ABI; Stage 2 fills it at phys 0x4000 (E820 map + vendor + LM), passes ptr in RDI; kernel re-prints the map. Closes Phase 1's last blocking item. |
 | NEXUS Interrupt Handlers | 🟡 IN PROGRESS | 2a | IDT, 48 vectors (32 exceptions + 16 IRQ). Panic = fault + register dump + CR2 + backtrace + clean halt; `int3` recovers. Legacy 8259 PIC remapped + 8254 PIT @100Hz + keyboard IRQ; `sti` on; timer tick verified. APIC deferred to 2b (ADR-006). |
-| NEXUS Context Switch (asm) | 🔴 NOT BUILT | 2a | target TBD (see ADR) |
+| NEXUS Context Switch (asm) | 🟢 COMPLETE | 2c | `arch/x86_64/context.asm`; measured ~275 cycles / ~107 ns @2.56 GHz (target ≤ 1.5 µs, board). TSC calibrated vs PIT. |
 | Physical Frame Oracle / PMM | 🟢 COMPLETE | 2b | Buddy allocator (`kernel/pmm.{c,h}`, ADR-003) seeded from E820; orders 0..10, split/coalesce. Self-test: 0x6FE0 free frames, aligned alloc, balanced release. Manages [16 MiB, 1 GiB). |
 | Virtual Memory Manager | 🟢 COMPLETE | 2b | Higher-half kernel @0xFFFFFFFF80000000 (ADR-007); bootloader maps high + low identity; kernel-owned `vmm_map`/`vmm_unmap` (`kernel/vmm.{c,h}`) allocate/reclaim tables from the PMM. Verified leak-free. NX/physmap/per-process CR3 deferred. |
 | SLAB Allocator / kernel heap | 🟢 COMPLETE | 2b | `kernel/kheap.{c,h}` on the buddy PMM: size-class slab caches + whole-page large allocs; dedicated PCB/cap/IPC/page-table pools; debug poison + double-free + leak accounting. Stress test: no leak. Build is `-Werror` (C + NASM). |
-| Process Control Blocks | 🔴 NOT BUILT | 2c | PCB + lifecycle |
-| NEXUS Adaptive Scheduler | 🔴 NOT BUILT | 2c | 3-lane + AI hints |
+| Process Control Blocks | 🟢 COMPLETE | 2c | Minimal TCB (`kernel/sched.h`): rsp, kstack, tid, state, quantum. Full PCB (caps, VAS, quotas) later. |
+| NEXUS Adaptive Scheduler | 🟡 IN PROGRESS | 2c | Round-robin ready ring, PIT-preemptive, quantum 2 ticks (ADR-008). Two threads verified interleaving. 3-lane NAS + AI-hint lane deferred. |
 | NCS Capability System | 🔴 NOT BUILT | 2d | 128-bit tokens |
 | NIA IPC (Sync + Async) | 🔴 NOT BUILT | 2d | zero-copy |
 | Sovereign Broadcast Bus | 🔴 NOT BUILT | 2d | pub-sub kernel |
