@@ -20,6 +20,7 @@
 #include "cap.h"
 #include "sched.h"
 #include "ipc.h"
+#include "bcast.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -92,11 +93,13 @@ static uint64_t calibrate_tsc_hz(void) {
     return (c1 - c0) * 5;                  /* per 0.2 s -> per second */
 }
 
-/* Bench partner: immediately hands the CPU back, so an idle yield() round-trips
- * through exactly two context switches. */
+/* Bench partner: hands the CPU back so an idle yield() round-trips through
+ * exactly two context switches. Exits once the benchmark is done so it stops
+ * consuming scheduler slots. */
+static volatile int bench_done = 0;
 static void bench_partner(void *arg) {
     (void)arg;
-    for (;;)
+    while (!bench_done)
         yield();
 }
 
@@ -145,7 +148,8 @@ static void ipc_receiver_thread(void *arg) {
 
 static void ipc_sender_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
-    for (volatile uint64_t d = 0; d < 60000000ull; d++) { }  /* let recv block first */
+    for (int i = 0; i < 8; i++)              /* let the receiver block first */
+        yield();
 
     uint64_t msg[IPC_MSG_WORDS] = { 0xFEEDFACECAFEBEEFull, 0x0102030405060708ull, 0, 0 };
     kputs("[send] delivering message\r\n");
@@ -223,6 +227,65 @@ static void ring_demo(void) {
     kputs("NEXUS: async SPSC ring demo — producer + consumer\r\n");
 }
 
+/* --- Sovereign broadcast bus demo: 2 filtered subscribers + a publisher ----- */
+#define BUS_EP_ID 0xB05ull
+static struct bcast_bus demo_bus;
+static struct bcast_subscriber sub_a, sub_b;
+static volatile int subs_ready = 0;       /* subscribers bump this once subscribed */
+
+static void sub_approvals_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    bcast_subscribe(current_thread->caps, cap, &demo_bus, &sub_a,
+                    EVT_APPROVAL_REQUEST | EVT_MODE_CHANGE);
+    subs_ready++;
+    for (int i = 0; i < 2; i++) {
+        struct bcast_event e;
+        bcast_wait(&sub_a, &e);
+        kputs("[sub-approve] event type=");
+        kputhex(e.type);
+        kputs(" payload=");
+        kputhex(e.payload);
+        kputs("\r\n");
+    }
+    kputs("[sub-approve] done (got APPROVAL+MODE, not ALERT)\r\n");
+}
+
+static void sub_alerts_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    bcast_subscribe(current_thread->caps, cap, &demo_bus, &sub_b, EVT_RESOURCE_ALERT);
+    subs_ready++;
+    struct bcast_event e;
+    bcast_wait(&sub_b, &e);
+    kputs("[sub-alert] event type=");
+    kputhex(e.type);
+    kputs("\r\n[sub-alert] done (got only ALERT)\r\n");
+}
+
+static void publisher_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    while (subs_ready < 2)                    /* wait until both subscribers register */
+        yield();
+    bcast_publish(current_thread->caps, cap, &demo_bus, EVT_APPROVAL_REQUEST, 0x1111);
+    bcast_publish(current_thread->caps, cap, &demo_bus, EVT_RESOURCE_ALERT, 0x2222);
+    bcast_publish(current_thread->caps, cap, &demo_bus, EVT_MODE_CHANGE, 0x3333);
+    kputs("[pub] published APPROVAL, ALERT, MODE\r\n");
+}
+
+static void bus_demo(void) {
+    bcast_bus_init(&demo_bus, BUS_EP_ID);
+    struct tcb *a = sched_create(sub_approvals_thread, 0, "sub-approve");
+    struct tcb *b = sched_create(sub_alerts_thread, 0, "sub-alert");
+    struct tcb *p = sched_create(publisher_thread, 0, "pub");
+    if (!a || !b || !p) {
+        kputs("NEXUS: bus_demo — thread create failed\r\n");
+        return;
+    }
+    a->arg = (void *)(uintptr_t)cap_create(a->caps, RES_IPC, BUS_EP_ID, CAP_IPC_RECV);
+    b->arg = (void *)(uintptr_t)cap_create(b->caps, RES_IPC, BUS_EP_ID, CAP_IPC_RECV);
+    p->arg = (void *)(uintptr_t)cap_create(p->caps, RES_IPC, BUS_EP_ID, CAP_BROADCAST);
+    kputs("NEXUS: broadcast bus demo — 2 filtered subscribers + publisher\r\n");
+}
+
 static void sched_demo(void) {
     uint64_t tsc_hz = calibrate_tsc_hz();
     kputs("NEXUS: TSC ~");
@@ -232,10 +295,16 @@ static void sched_demo(void) {
     sched_init();
     sched_create(bench_partner, 0, "bench");
     bench_ctx_switch(tsc_hz);
+    bench_done = 1;                           /* let the bench thread retire */
 
+    /* Create the demo threads with interrupts masked so each thread's capability
+     * (->arg) is fully set before the timer can schedule it. */
+    __asm__ volatile("cli");
     ipc_demo();
     ring_demo();
-    kputs("NEXUS: scheduler + IPC (sync + async ring) live\r\n");
+    bus_demo();
+    __asm__ volatile("sti");
+    kputs("NEXUS: scheduler + IPC (sync + async + broadcast) live\r\n");
 
     for (;;)                               /* this context is now the idle thread */
         __asm__ volatile("hlt");

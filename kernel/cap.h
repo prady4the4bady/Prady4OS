@@ -24,6 +24,7 @@ typedef uint64_t cap_t;
 #define CAP_HARDWARE_READ (1u << 6)
 #define CAP_IPC_SEND      (1u << 7)
 #define CAP_IPC_RECV      (1u << 8)
+#define CAP_BROADCAST     (1u << 9)   /* publish to the sovereign broadcast bus */
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u

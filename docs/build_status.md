@@ -13,8 +13,9 @@ scheduler + asm context switch (~107 ns, well under target) verified with two
 interleaving threads. Capability system (NCS) done — opaque table-indexed
 handles, O(1) revoke, subset-only delegation (ADR-009), 11/11 tests. Sync IPC
 (NIA) done on top of capabilities + scheduler block/wakeup (ADR-010), verified.
-kernel/ reorganized into mm/proc/ipc subdirs. Next: async SPSC rings, then the
-sovereign broadcast bus, then syscalls (NSI); the 3-lane NAS + APIC deferred.
+kernel/ reorganized into mm/proc/ipc subdirs. **Full NIA IPC fabric done** —
+sync endpoint + async SPSC ring + broadcast bus (ADR-010/011), all verified.
+**Layer 2 remaining: syscalls (NSI).** Then 3-lane NAS + APIC (deferred).
 Architecture confirmed against the user's Layer 1–6 boards; realistic perf
 targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **Last updated:** 2026-06-17
@@ -52,8 +53,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Process Control Blocks | 🟢 COMPLETE | 2c | Minimal TCB (`kernel/sched.h`): rsp, kstack, tid, state, quantum. Full PCB (caps, VAS, quotas) later. |
 | NEXUS Adaptive Scheduler | 🟡 IN PROGRESS | 2c | Round-robin ready ring, PIT-preemptive, quantum 2 ticks (ADR-008). Two threads verified interleaving. 3-lane NAS + AI-hint lane deferred. |
 | NCS Capability System | 🟢 COMPLETE | 2c | `kernel/cap.{c,h}` (ADR-009): opaque table-indexed handles, per-process tables on `tcb->caps`, O(1) generation-counter revoke, subset-only restrict/delegate, rights bitmap, guard-before-op. 11/11 tests pass. (MAC token = future external format only.) |
-| NIA IPC (Sync + Async) | 🟡 IN PROGRESS | 2c | Sync endpoint (block/wakeup) + async lock-free SPSC ring, both capability-gated + resource-bound (`kernel/ipc/ipc.{c,h}`, ADR-010). Verified: sync exchange; async ring 200 msgs in-order, 0 errors. Sovereign broadcast bus next. |
-| Sovereign Broadcast Bus | 🔴 NOT BUILT | 2c | pub-sub kernel (after async rings) |
+| NIA IPC (Sync + Async) | 🟢 COMPLETE | 2c | All 3 primitives: sync endpoint (block/wakeup), async lock-free SPSC ring, broadcast bus — all capability-gated + resource-bound (`kernel/ipc/`, ADR-010/011). Verified: sync exchange; ring 200 in-order; pub-sub filtered. |
+| Sovereign Broadcast Bus | 🟢 COMPLETE | 2c | `kernel/ipc/bcast.{c,h}` (ADR-011): event-mask pub-sub, publish gated by CAP_BROADCAST, subscribe by CAP_IPC_RECV. Filtering verified. |
 | Thread block/wakeup | 🟢 COMPLETE | 2c | `sched_block`/`sched_unblock`; `schedule()` skips non-runnable; idle always runnable |
 | Syscall Table (200+ calls) | 🔴 NOT BUILT | 2e | SYSCALL/SYSRET |
 | PRADYOS Extended Syscalls | 🔴 NOT BUILT | 2e | agent + sovereign |

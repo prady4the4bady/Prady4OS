@@ -125,8 +125,33 @@ A producer pushes 1..200 (yielding when full); a consumer pops them (yielding
 when empty) and confirms in-order, error-free delivery. smoke PASS; `-Werror`
 clean (including the C11 atomics + alignment).
 
-### Not done yet
+## Slice 5: sovereign broadcast bus (pub-sub)
 
-- Sovereign broadcast bus (next IPC slice).
-- Sync sender does not block on a full slot; larger / zero-copy payloads later.
-- Syscalls (NSI), 3-lane NAS, APIC still ahead.
+- **Date:** 2026-06-18
+- **Files:** `kernel/ipc/bcast.{c,h}`, `kernel/cap.h` (CAP_BROADCAST), `kernel/main.c`.
+- **Design (ADR-011):** subscribers register an event-type mask + own a small
+  ring; `bcast_publish` fans out to matching subscribers and wakes them. Publish
+  needs CAP_BROADCAST, subscribe needs CAP_IPC_RECV (both bus-bound).
+
+### Verified (QEMU)
+
+```
+[pub] published APPROVAL, ALERT, MODE
+[sub-alert]   event type=0x2            -> got only ALERT
+[sub-approve] event type=0x4 payload=0x1111   (APPROVAL)
+[sub-approve] event type=0x8 payload=0x3333   (MODE)
+```
+
+Event filtering is correct: the ALERT-only subscriber receives just
+RESOURCE_ALERT; the APPROVAL|MODE subscriber receives those two and not ALERT.
+smoke PASS; `-Werror` clean.
+
+### Demo robustness fix
+
+The earlier busy-delay loops + an always-yielding bench thread made the demos
+crawl. Replaced with `yield()`-based ordering (subscribers bump a ready counter;
+the publisher waits for it) and the bench thread now retires after the
+benchmark. Demos are fast and deterministic.
+
+**This completes the NIA IPC fabric (sync + async ring + broadcast bus).**
+Layer-2 remaining: syscalls (NSI). 3-lane NAS + APIC deferred.
