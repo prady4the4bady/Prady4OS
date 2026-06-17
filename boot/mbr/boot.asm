@@ -49,6 +49,7 @@ stage1:
     int 0x13
     jc .disk_err
 
+    mov dl, [boot_drive]        ; pass boot drive to Stage 2 in DL (INT 13h clobbers it)
     jmp 0x0000:0x7E00           ; hand off to Stage 2 (sets CS=0)
 
 .disk_err:

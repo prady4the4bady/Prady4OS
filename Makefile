@@ -15,13 +15,24 @@ STAGE1_BIN := build/stage1.bin
 STAGE2_BIN := build/stage2.bin
 IMG        := build/pradyos.img
 
-.PHONY: all setup toolchain-check image smoke clean
+# Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
+KERNEL_ASM := arch/x86_64/boot.asm
+KERNEL_C   := kernel/main.c
+KERNEL_LD  := kernel/kernel.ld
+KERNEL_ELF := build/kernel.elf
+KERNEL_BIN := build/kernel.bin
+KCFLAGS    := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
+              -mno-red-zone -mgeneral-regs-only -fno-stack-protector \
+              -nostdlib -Wall -Wextra
+
+.PHONY: all setup toolchain-check kernel image smoke clean
 
 all:
-	@echo "PRADYOS — Phase 1 (PRADYOS-BOOT, legacy BIOS MBR slice)."
+	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
 	@echo "  make setup            # install the toolchain (WSL2/Ubuntu)"
 	@echo "  make toolchain-check  # prove clang + nasm + rust + lld interoperate"
-	@echo "  make image            # assemble the MBR -> $(IMG)"
+	@echo "  make kernel           # build the NEXUS kernel -> $(KERNEL_BIN)"
+	@echo "  make image            # stage1 + stage2 + kernel -> $(IMG)"
 	@echo "  make smoke            # build image + QEMU boot test (greps sentinel)"
 
 setup:
@@ -41,20 +52,36 @@ toolchain-check:
 	      $(BUILD_DIR)/tc_main.o $(BUILD_DIR)/hello_c.o $(BUILD_DIR)/hello_asm.o $(RUST_LIB)
 	@echo "OK: clang + nasm + rust(no_std) + ld.lld linked -> $(BUILD_DIR)/toolchain_check.elf"
 
-# Assemble Stage 1 (512-byte MBR, LBA 0) and Stage 2 (LBA 1+), concatenate them
-# into a 1 MiB raw disk. Stage 1 reads 16 sectors (8 KiB) of Stage 2 at boot, so
-# stage2.bin must stay <= 8 KiB; the build asserts both size invariants.
+# Build the NEXUS kernel: 64-bit entry stub (NASM) + C main, linked flat at
+# 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
+kernel: $(KERNEL_BIN)
+
+$(KERNEL_BIN): $(KERNEL_ASM) $(KERNEL_C) $(KERNEL_LD)
+	@mkdir -p build
+	$(NASM) -f elf64 $(KERNEL_ASM) -o build/kentry.o
+	$(CC) $(KCFLAGS) -c $(KERNEL_C) -o build/kmain.o
+	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) build/kentry.o build/kmain.o
+	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 32768 || { echo "kernel.bin exceeds 32 KiB; Stage 2 only loads 64 sectors"; exit 1; }
+	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
+
+# Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
+#   LBA 0  stage1 (512 B MBR)   LBA 1  stage2 (<= 16 sectors)   LBA 17  kernel
+# Stage 1 loads 16 sectors of Stage 2; Stage 2 loads 64 sectors of the kernel
+# from LBA 17 — both LBAs are hard-coded in the asm and must match here.
 image: $(IMG)
 
-$(IMG): $(STAGE1_SRC) $(STAGE2_SRC)
+$(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 	@mkdir -p build
 	$(NASM) -f bin $(STAGE1_SRC) -o $(STAGE1_BIN)
 	@test "$$(wc -c < $(STAGE1_BIN))" -eq 512 || { echo "stage1.bin is not 512 bytes (got $$(wc -c < $(STAGE1_BIN)))"; exit 1; }
 	$(NASM) -f bin $(STAGE2_SRC) -o $(STAGE2_BIN)
 	@test "$$(wc -c < $(STAGE2_BIN))" -le 8192 || { echo "stage2.bin exceeds 8 KiB; Stage 1 only loads 16 sectors"; exit 1; }
-	cat $(STAGE1_BIN) $(STAGE2_BIN) > $(IMG)
 	truncate -s 1M $(IMG)
-	@echo "image: $(IMG) (stage1 $$(wc -c < $(STAGE1_BIN))B, stage2 $$(wc -c < $(STAGE2_BIN))B)"
+	dd if=$(STAGE1_BIN) of=$(IMG) bs=512 seek=0  conv=notrunc status=none
+	dd if=$(STAGE2_BIN) of=$(IMG) bs=512 seek=1  conv=notrunc status=none
+	dd if=$(KERNEL_BIN) of=$(IMG) bs=512 seek=17 conv=notrunc status=none
+	@echo "image: $(IMG) (stage1 $$(wc -c < $(STAGE1_BIN))B, stage2 $$(wc -c < $(STAGE2_BIN))B, kernel $$(wc -c < $(KERNEL_BIN))B)"
 
 smoke: $(IMG)
 	bash tools/qemu_runner/boot_test.sh $(IMG)

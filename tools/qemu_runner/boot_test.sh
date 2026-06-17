@@ -4,8 +4,12 @@
 # captures the serial port, and succeeds iff the boot sentinel appears.
 set -uo pipefail
 
+# Default sentinel is the kernel's — it prints only after the full chain
+# (Stage 1 -> Stage 2 -> A20/E820/CPUID -> protected mode -> long mode -> ring-0
+# C) succeeds, so it subsumes the Phase 1 "PRADYOS BOOT OK" gate. Override with
+# SENTINEL=... to test an earlier stage.
 IMG="${1:-build/pradyos.img}"
-SENTINEL="PRADYOS BOOT OK"
+SENTINEL="${SENTINEL:-NEXUS KERNEL OK}"
 TIMEOUT_S="${TIMEOUT_S:-30}"
 SERIAL_LOG="$(mktemp)"
 

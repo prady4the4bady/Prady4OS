@@ -3,10 +3,11 @@
 Updated after every phase. Status legend:
 🔴 NOT BUILT · 🟡 IN PROGRESS · 🟢 COMPLETE · ⚠️ BROKEN
 
-**Current phase:** 1 — PRADYOS-BOOT. BIOS/MBR path boots real mode → A20 → E820
-→ CPUID → 32-bit protected mode → `PRADYOS BOOT OK` (smoke PASS). Pending in
-Phase 1: UEFI/OVMF path, and kernel-ELF load + hardware-info handoff (the latter
-is blocked until Phase 2a produces a kernel to load).
+**Current phase:** 2a — NEXUS kernel entry. Full chain boots: Stage 1 → Stage 2
+(A20, E820, CPUID) → 32-bit PM (`PRADYOS BOOT OK`) → 4-level paging + long mode →
+64-bit ring-0 C kernel printing `NEXUS KERNEL OK` (smoke PASS on the kernel
+sentinel). Next 2a slices: hardware-info handoff struct, GDT/IDT in kernel +
+exception handlers, then context switch. See ADR-005.
 **Last updated:** 2026-06-17
 
 ## Phase 0 — Toolchain & Build System
@@ -32,8 +33,9 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | PRADYOS-BOOT Stage 2 | 🟢 COMPLETE | 1 | A20 (fast), INT 15h E820 walk, CPUID vendor + long-mode bit, flat GDT, 32-bit protected-mode switch, `PRADYOS BOOT OK` via COM1 + VGA. `make smoke` PASS. |
 | UEFI Boot Path | 🔴 NOT BUILT | 1 | EDK2/OVMF-compatible; deferred (MBR path chosen first per user) |
 | Hardware-info handoff struct | 🔴 NOT BUILT | 1 | E820 + CPUID gathered but not yet packaged for a kernel; blocked on Phase 2a |
-| NEXUS Kernel Entry (asm) | 🔴 NOT BUILT | 2a | long mode, GDT, IDT |
-| NEXUS Interrupt Handlers | 🔴 NOT BUILT | 2a | ISR stubs, APIC |
+| NEXUS Kernel Entry (asm) | 🟡 IN PROGRESS | 2a | 64-bit entry (`arch/x86_64/boot.asm`) + C `kmain` run in ring 0; long mode reached via bootloader paging. Kernel-owned GDT + IDT still TODO. |
+| Boot→kernel handoff struct | 🔴 NOT BUILT | 2a | E820/CPUID gathered in Stage 2 but not yet passed to the kernel (closes Phase 1 item) |
+| NEXUS Interrupt Handlers | 🔴 NOT BUILT | 2a | IDT, CPU exception stubs first, then APIC |
 | NEXUS Context Switch (asm) | 🔴 NOT BUILT | 2a | target TBD (see ADR) |
 | Physical Frame Oracle / PMM | 🔴 NOT BUILT | 2b | allocator design OPEN — see ADR-003 |
 | Virtual Memory Manager | 🔴 NOT BUILT | 2b | 4-level paging |
