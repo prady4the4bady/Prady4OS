@@ -13,6 +13,7 @@
  */
 #include "console.h"
 #include "boot_info.h"
+#include "irq.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -52,7 +53,7 @@ void kmain(struct boot_info *bi) {
     kputs("NEXUS: kernel GDT loaded\r\n");
 
     idt_init();
-    kputs("NEXUS: IDT loaded (32 exception vectors)\r\n");
+    kputs("NEXUS: IDT loaded (48 vectors: 32 exceptions + 16 IRQ)\r\n");
 
     kvga_line("NEXUS KERNEL OK", 1);
     kputs("NEXUS KERNEL OK\r\n");
@@ -62,7 +63,19 @@ void kmain(struct boot_info *bi) {
     __asm__ volatile("int3");
     kputs("NEXUS: resumed after int3 — exception handling verified\r\n");
 
-    kputs("NEXUS: idle (halt)\r\n");
+    /* Hardware interrupts: PIC + PIT, then enable and watch the clock tick. */
+    pic_remap();
+    pit_init(100);                       /* 100 Hz */
+    kputs("NEXUS: PIC remapped, PIT @100Hz; enabling interrupts (sti)\r\n");
+    __asm__ volatile("sti");
+
+    while (g_ticks < 5)                   /* prove IRQ0 actually fires */
+        __asm__ volatile("hlt");
+    kputs("NEXUS: timer IRQ alive, ticks=");
+    kputhex(g_ticks);
+    kputs("\r\n");
+
+    kputs("NEXUS: idle (halt, interrupts on)\r\n");
     for (;;)
         __asm__ volatile("hlt");
 }

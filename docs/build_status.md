@@ -7,8 +7,10 @@ Updated after every phase. Status legend:
 → 32-bit PM (`PRADYOS BOOT OK`) → 4-level paging + long mode → ring-0 C kernel
 that loads its own GDT + an IDT with all 32 CPU exception handlers (panic =
 register dump + backtrace + clean halt; `int3` self-test recovers) → `NEXUS
-KERNEL OK` (smoke PASS). Next 2a slices: boot→kernel hardware-info handoff,
-APIC + timer IRQ, then PCB + context switch. See ADR-005.
+KERNEL OK` (smoke PASS). Boot→kernel handoff (E820/CPUID) done; legacy PIC + PIT
+@100Hz running with interrupts enabled (timer tick verified). Next: PCB + a
+context switch + the 3-lane scheduler driven by the PIT tick. APIC deferred to
+2b (ADR-005, ADR-006).
 **Last updated:** 2026-06-17
 
 ## Phase 0 — Toolchain & Build System
@@ -36,7 +38,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Hardware-info handoff struct | 🔴 NOT BUILT | 1 | E820 + CPUID gathered but not yet packaged for a kernel; blocked on Phase 2a |
 | NEXUS Kernel Entry (asm) | 🟢 COMPLETE | 2a | 64-bit entry + C `kmain` in ring 0; kernel-owned flat GDT loaded (`arch/x86_64/cpu.asm`), CS reloaded via far return. |
 | Boot→kernel handoff struct | 🟢 COMPLETE | 2a | `kernel/boot_info.h` ABI; Stage 2 fills it at phys 0x4000 (E820 map + vendor + LM), passes ptr in RDI; kernel re-prints the map. Closes Phase 1's last blocking item. |
-| NEXUS Interrupt Handlers | 🟡 IN PROGRESS | 2a | IDT + all 32 CPU exception vectors (`arch/x86_64/isr.asm`, `kernel/idt.c`); panic = fault + register dump + CR2 + backtrace + clean halt; `int3` self-test recovers. APIC + hardware IRQs still TODO. |
+| NEXUS Interrupt Handlers | 🟡 IN PROGRESS | 2a | IDT, 48 vectors (32 exceptions + 16 IRQ). Panic = fault + register dump + CR2 + backtrace + clean halt; `int3` recovers. Legacy 8259 PIC remapped + 8254 PIT @100Hz + keyboard IRQ; `sti` on; timer tick verified. APIC deferred to 2b (ADR-006). |
 | NEXUS Context Switch (asm) | 🔴 NOT BUILT | 2a | target TBD (see ADR) |
 | Physical Frame Oracle / PMM | 🔴 NOT BUILT | 2b | allocator design OPEN — see ADR-003 |
 | Virtual Memory Manager | 🔴 NOT BUILT | 2b | 4-level paging |

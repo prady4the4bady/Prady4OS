@@ -92,10 +92,36 @@ works; and the C `kmain` executes in 64-bit ring 0.
    This confirms exception identification, the register dump, the frame-pointer
    backtrace, and a clean halt. CR2 is additionally printed for vector 14 (#PF).
 
-### Not done yet
+### Not done yet (as of slice 2)
 
 - **No TSS** (handled in ring 0, no IST, no privilege change). TSS + IST arrive
   with ring-3 / double-fault-stack support.
-- **No hardware interrupts** — no PIC remap, no APIC, no timer. That is the next
-  decision (PIC vs APIC) and the gateway to the scheduler.
-- Boot→kernel hardware-info handoff still pending (E820/CPUID not passed up).
+
+## Slice 3: boot→kernel handoff struct
+
+- **Date:** 2026-06-17. Added `kernel/boot_info.h`; Stage 2 fills the struct at
+  phys 0x4000 (magic, E820 entries, count, CPUID vendor, long-mode flag) and
+  passes the pointer in RDI. `kmain` validates the magic and prints the map.
+- **Verified (QEMU):** kernel printed the 6-entry 128 MB QEMU E820 map and
+  `vendor=AuthenticAMD long_mode=0x1` straight from the handoff struct. Closes
+  Phase 1's last blocking item.
+
+## Slice 4: legacy PIC + PIT timer + keyboard IRQ
+
+- **Date:** 2026-06-17. Added `kernel/io.h` (shared port I/O), `kernel/irq.{c,h}`
+  (PIC remap/EOI, PIT). Extended `isr.asm` to vectors 32..47 and the IDT to 48
+  gates; `isr_dispatch` branches IRQ vs exception and sends EOI. `kmain` remaps
+  the PIC, programs the PIT to 100 Hz, runs `sti`, and waits for ticks.
+- **Decision:** legacy 8259 PIC + 8254 PIT now; APIC deferred to Phase 2b
+  (ADR-006).
+- **Verified (QEMU):**
+  ```
+  NEXUS: PIC remapped, PIT @100Hz; enabling interrupts (sti)
+  NEXUS: timer IRQ alive, ticks=0x0000000000000005
+  NEXUS: idle (halt, interrupts on)
+  ```
+  IRQ0 fires; the kernel wakes from `hlt` and counts ticks — the full interrupt
+  pipeline (PIC → IDT gate → stub → dispatch → EOI → iretq) works. smoke PASS.
+- **Not done / notes:** keyboard IRQ1 handler installed but not exercised in the
+  headless smoke (no key input); spurious IRQ7/IRQ15 not specially handled yet
+  (ADR-006). APIC, PCB, context switch, and the scheduler are next.

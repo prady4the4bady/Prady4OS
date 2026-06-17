@@ -2,12 +2,13 @@
 ; ============================================================================
 ; NEXUS — CPU exception ISR stubs and common dispatch trampoline (Phase 2a).
 ;
-; One stub per vector 0..31. Vectors that the CPU pushes an error code for use
+; One stub per vector 0..47 (0..31 CPU exceptions, 32..47 the PIC-remapped
+; hardware IRQs 0x20..0x2F). Vectors that the CPU pushes an error code for use
 ; ISR_ERR (no dummy); the rest use ISR_NOERR (push a 0 so every frame has the
 ; same shape). Each stub pushes its vector number and jumps to isr_common,
 ; which saves all GP registers, hands a pointer to the frame to the C handler
 ; isr_dispatch(struct regs *), then restores and IRETQs (so recoverable faults
-; like #BP can resume).
+; like #BP, and all hardware IRQs, resume).
 ;
 ; The pushed frame must match `struct regs` in kernel/idt.c exactly. From the
 ; handler's RSP upward, low address first:
@@ -74,6 +75,24 @@ ISR_ERR   29
 ISR_ERR   30
 ISR_NOERR 31
 
+; Hardware IRQ vectors 32..47 (PIC remapped to 0x20..0x2F). No error codes.
+ISR_NOERR 32
+ISR_NOERR 33
+ISR_NOERR 34
+ISR_NOERR 35
+ISR_NOERR 36
+ISR_NOERR 37
+ISR_NOERR 38
+ISR_NOERR 39
+ISR_NOERR 40
+ISR_NOERR 41
+ISR_NOERR 42
+ISR_NOERR 43
+ISR_NOERR 44
+ISR_NOERR 45
+ISR_NOERR 46
+ISR_NOERR 47
+
 isr_common:
     push rax
     push rbx
@@ -113,13 +132,13 @@ isr_common:
     add rsp, 16                 ; discard vector + error code
     iretq
 
-; Address table consumed by idt_init() in kernel/idt.c (vectors 0..31).
+; Address table consumed by idt_init() in kernel/idt.c (vectors 0..47).
 section .rodata
 global isr_stub_table
 align 8
 isr_stub_table:
 %assign i 0
-%rep 32
+%rep 48
     dq isr_stub_ %+ i
 %assign i i+1
 %endrep
