@@ -78,3 +78,37 @@ no double-free/poison trip. smoke PASS.
   reuse); a reclaim pass is a later optimization.
 - Buddy/large lookups and slab-with-free search are linear; fine for now.
 - Next: VMM (4-level paging owned by the kernel; higher-half per ADR-005).
+
+## Slice 3: higher-half kernel + kernel-owned VMM (ADR-007)
+
+- **Date:** 2026-06-18
+- **Files:** `kernel/kernel.ld` (relink to 0xFFFFFFFF80000000, LMA 0x10000,
+  __bss bounds), `arch/x86_64/boot.asm` (high stack + .bss zero + RDI preserve),
+  `boot/stage2/stage2.asm` (build higher-half map + low identity, jump to
+  KERNEL_VIRT), `kernel/vmm.{c,h}`, Makefile (`-mcmodel=kernel`).
+
+### Verified (QEMU)
+
+- **Higher-half execution:** `int3` self-test now reports
+  `RIP=0xFFFFFFFF8000026D`; `llvm-nm` shows `kernel_entry @ ffffffff80000000`.
+  All prior self-tests (GDT/IDT/timer/PMM/heap) pass from higher-half, using the
+  retained low identity map to reach physical RAM.
+- **Kernel-owned VMM:**
+  ```
+  NEXUS: vmm_map va=0xFFFF800000000000 pa=0x07F89000 readback=0xCAFEBABEDEADBEEF  (OK)
+  NEXUS: vmm unmap reclaim — outstanding 0x0 -> 0x0  (clean)
+  ```
+  vmm_map allocated PDPT/PD/PT frames from the PMM, mapped a fresh page into an
+  empty PML4 slot, and the readback matched; vmm_unmap cleared the PTE and
+  reclaimed all three now-empty tables (via ptnode_free) leak-free.
+- smoke PASS; full `-Werror` build is warning-free.
+
+### Notes / deferred (ADR-007)
+
+- Low identity map kept so PMM/heap need no changes; a physmap + identity drop +
+  per-process CR3 come with user address spaces.
+- NX/W^X (`VMM_NX` defined, unused) needs EFER.NXE + per-section permissions —
+  a later hardening slice.
+
+**Phase 2b (memory management) is complete:** buddy PMM + slab heap + higher-half
+kernel-owned 4-level paging, all self-tested.

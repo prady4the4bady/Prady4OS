@@ -1,33 +1,48 @@
 ; arch/x86_64/boot.asm
 ; ============================================================================
-; NEXUS kernel — 64-bit entry stub (Phase 2a).
+; NEXUS kernel — higher-half 64-bit entry stub (Phase 2b VMM).
 ;
-; The bootloader (boot/stage2) enters long mode and jumps to the first byte of
-; the loaded kernel image, which is this label (placed first via the .text.boot
-; section in kernel/kernel.ld). We set a known stack, clear the frame pointer,
-; and call into C (kmain). kmain does not return; if it ever does, we halt.
+; The bootloader maps the kernel at the higher-half virtual base
+; 0xFFFFFFFF80000000 (-> physical 0x10000) plus a low identity map, then jumps
+; here at the high virtual address with RDI = boot_info pointer (SysV arg 1).
 ;
-; ABI: the bootloader passes a pointer to the boot_info struct (kernel/boot_info.h)
-; in RDI per the SysV calling convention. We must NOT clobber RDI before calling
-; kmain, which takes it as its first argument: kmain(struct boot_info *).
-;
-; The bootloader already set RSP, but we set it again so the kernel's entry
-; contract does not depend on the loader's choice.
+; This stub: switches to the kernel's own .bss stack (high virtual), zeroes
+; .bss (NOLOAD, so not loaded from disk), then calls kmain(boot_info*). RDI must
+; be preserved across the bss-zeroing (it holds the only pointer to boot_info).
 ; ============================================================================
 
 BITS 64
 
-KSTACK_TOP equ 0x200000        ; 2 MiB; identity-mapped RAM, away from the image
+KSTACK_SIZE equ 16384
 
 section .text.boot
 global kernel_entry
 extern kmain
+extern __bss_start
+extern __bss_end
 
 kernel_entry:
-    mov rsp, KSTACK_TOP
-    xor rbp, rbp                ; terminate stack-frame chain for backtraces
+    lea rsp, [rel kernel_stack_top]   ; high-virtual kernel stack
+    mov r15, rdi                      ; preserve boot_info pointer
+
+    ; zero .bss  [__bss_start, __bss_end)  (no stack use; rep does not push)
+    lea rdi, [rel __bss_start]
+    lea rcx, [rel __bss_end]
+    sub rcx, rdi
+    xor eax, eax
+    cld
+    rep stosb
+
+    xor rbp, rbp                      ; terminate backtrace chain
+    mov rdi, r15                      ; restore boot_info -> kmain arg 1
     call kmain
 .hang:
     cli
     hlt
     jmp .hang
+
+section .bss
+align 16
+kernel_stack:
+    resb KSTACK_SIZE
+kernel_stack_top:

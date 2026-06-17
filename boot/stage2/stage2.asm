@@ -43,10 +43,14 @@ CODE64_SEL  equ 0x18            ; GDT entry 3 (L=1)
 DATA64_SEL  equ 0x20            ; GDT entry 4
 
 KERNEL_PHYS equ 0x00010000
+KERNEL_VIRT equ 0xFFFFFFFF80000000   ; higher-half virtual base (matches kernel.ld)
 KSTACK_TOP  equ 0x00200000
 PML4        equ 0x00070000
-PDPT        equ 0x00071000
-PD          equ 0x00072000
+PDPT        equ 0x00071000           ; low identity: PDPT
+PD          equ 0x00072000           ; low identity: PD (1 GiB, 2 MiB pages)
+PDPT_HI     equ 0x00073000           ; higher-half: PDPT (PML4[511])
+PD_HI       equ 0x00074000           ; higher-half: PD   (PDPT_HI[510])
+PT_HI       equ 0x00075000           ; higher-half: PT   (4 KiB pages -> kernel)
 
 ; Boot -> kernel handoff struct (see kernel/boot_info.h). Lives at a fixed low
 ; address (usable conventional RAM 0x500..0x7C00) so the kernel can find it.
@@ -346,26 +350,44 @@ puts32:                         ; ESI -> NUL string
     pop eax
     ret
 
-; Identity-map the low 1 GiB: PML4[0]->PDPT[0]->PD, PD has 512 x 2 MiB pages.
+; Build two windows:
+;   - low identity: PML4[0]->PDPT[0]->PD (1 GiB, 2 MiB pages). Kept so the PMM
+;     and heap can dereference physical frames directly, and for the transition.
+;   - kernel higher-half: PML4[511]->PDPT_HI[510]->PD_HI[0]->PT_HI, mapping
+;     KERNEL_VIRT.. (4 KiB pages, 2 MiB span) -> physical KERNEL_PHYS..
 build_page_tables:
     cld
     mov edi, PML4
     xor eax, eax
-    mov ecx, 0x3000 / 4         ; zero PML4 + PDPT + PD
+    mov ecx, 0x6000 / 4         ; zero 6 tables: PML4,PDPT,PD,PDPT_HI,PD_HI,PT_HI
     rep stosd
 
+    ; low identity
     mov dword [PML4], PDPT | 0x3 ; present + rw
     mov dword [PDPT], PD | 0x3
-
     mov edi, PD
     mov eax, 0x83               ; phys 0 | present | rw | PS (2 MiB page)
     mov ecx, 512
-.fill:
+.fill_low:
     mov [edi], eax
     mov dword [edi + 4], 0
     add eax, 0x200000           ; next 2 MiB
     add edi, 8
-    loop .fill
+    loop .fill_low
+
+    ; kernel higher-half (4 KiB pages: KERNEL_VIRT -> KERNEL_PHYS, 2 MiB span)
+    mov dword [PML4 + 511*8], PDPT_HI | 0x3
+    mov dword [PDPT_HI + 510*8], PD_HI | 0x3
+    mov dword [PD_HI], PT_HI | 0x3
+    mov edi, PT_HI
+    mov eax, KERNEL_PHYS | 0x3  ; present + rw
+    mov ecx, 512
+.fill_hi:
+    mov [edi], eax
+    mov dword [edi + 4], 0
+    add eax, 0x1000
+    add edi, 8
+    loop .fill_hi
     ret
 
 ; PAE -> CR3 -> EFER.LME -> CR0.PG. (Intel SDM Vol.3 9.8.5.)
@@ -398,7 +420,7 @@ long_entry:
     mov gs, ax
     mov rsp, KSTACK_TOP
     mov edi, BOOT_INFO          ; SysV arg 1 -> kmain(struct boot_info *)
-    mov rax, KERNEL_PHYS
+    mov rax, KERNEL_VIRT        ; enter the kernel at its higher-half address
     jmp rax
 
 ; ============================  data + GDT  ==================================

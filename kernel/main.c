@@ -16,9 +16,45 @@
 #include "irq.h"
 #include "pmm.h"
 #include "kheap.h"
+#include "vmm.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
+
+static void vmm_test(void) {
+    const uint64_t va = 0xFFFF800000000000ull;   /* unused PML4 slot (256) */
+    uint64_t pg = pmm_alloc_page();
+    if (!pg) {
+        kputs("NEXUS: vmm test — no frame\r\n");
+        return;
+    }
+    uint64_t before = kheap_outstanding();
+    if (vmm_map(va, pg, VMM_RW) != 0) {
+        kputs("NEXUS: vmm_map FAILED\r\n");
+        pmm_free_page(pg);
+        return;
+    }
+    volatile uint64_t *p = (volatile uint64_t *)va;
+    p[0] = 0xCAFEBABEDEADBEEFull;
+    uint64_t rb = p[0];
+
+    kputs("NEXUS: vmm_map va=");
+    kputhex(va);
+    kputs(" pa=");
+    kputhex(pg);
+    kputs(" readback=");
+    kputhex(rb);
+    kputs(rb == 0xCAFEBABEDEADBEEFull ? "  (OK)\r\n" : "  (FAIL)\r\n");
+
+    vmm_unmap(va);
+    pmm_free_page(pg);
+    uint64_t after = kheap_outstanding();
+    kputs("NEXUS: vmm unmap reclaim — outstanding ");
+    kputhex(before);
+    kputs(" -> ");
+    kputhex(after);
+    kputs(after == before ? "  (clean)\r\n" : "  (LEAK!)\r\n");
+}
 
 static void kheap_stress(void) {
     kheap_init();
@@ -133,6 +169,7 @@ void kmain(struct boot_info *bi) {
 
     pmm_selftest(bi);
     kheap_stress();
+    vmm_test();
 
     kputs("NEXUS: idle (halt, interrupts on)\r\n");
     for (;;)
