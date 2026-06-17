@@ -46,8 +46,43 @@ regs + RFLAGS. New threads are seeded with a matching frame whose RET enters a
 trampoline. The PIT handler sends EOI *before* `sched_tick`, so the switch never
 strands an un-acknowledged interrupt.
 
-### Not done yet
+### Not done yet (slice 1)
 
 - Priorities/lanes (the 3-lane NAS), sleep/block/wakeup, thread teardown + stack
   reclaim (finished threads remain in the ring and just halt), SMP.
-- Next in Phase 2: capability system (NCS), IPC (NIA), syscalls (NSI).
+
+## Slice 2: capability system (NCS)
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-009 — opaque table-indexed handles (not the blueprint's
+  weak 16-bit-MAC token).
+- **Files:** `kernel/cap.{c,h}`; `tcb->caps` per-thread table (sched_init/create).
+
+### Verified (QEMU)
+
+```
+NEXUS: capability system (NCS) tests
+  validate R ok
+  reject NET (not granted) ok
+  guarded read allowed ok
+  restricted: W denied ok
+  restricted: R kept ok
+  delegate cannot amplify W ok
+  delegate keeps R ok
+  revoked handle invalid ok
+  guarded read now denied ok
+  delegated cap survives revoke ok
+  restricted cap survives revoke ok
+NEXUS: NCS 11/11 passed
+```
+
+Confirms: rights enforcement, subset-only `cap_restrict`, non-amplifying
+`cap_delegate`, O(1) `cap_revoke` via generation counters (and that independently
+delegated/restricted caps survive the original's revoke), and the
+guard-before-operation pattern (`demo_file_read` requires `CAP_FILE_R`).
+smoke PASS; `-Werror` clean.
+
+### Next
+
+- IPC (NIA) built on top of capabilities (channels gated by CAP_IPC_SEND/RECV),
+  with thread block/wakeup. Then syscalls (NSI). 3-lane NAS + APIC still deferred.

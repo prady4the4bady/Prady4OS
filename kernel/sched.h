@@ -6,6 +6,7 @@
  */
 #pragma once
 #include <stdint.h>
+#include "cap.h"
 
 typedef void (*thread_fn)(void *);
 
@@ -22,6 +23,7 @@ struct tcb {
     thread_fn  entry;
     void      *arg;
     const char *name;
+    struct cap_table *caps;    /* per-thread (process) capability table */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

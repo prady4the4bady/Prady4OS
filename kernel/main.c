@@ -17,10 +17,61 @@
 #include "pmm.h"
 #include "kheap.h"
 #include "vmm.h"
+#include "cap.h"
 #include "sched.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
+
+/* A subsystem guards an operation by demanding a capability with the right. */
+static int demo_file_read(struct cap_table *t, cap_t h) {
+    if (!cap_validate(t, h, CAP_FILE_R))
+        return -1;                       /* -EPERM: no read capability */
+    return 0;                            /* would read here */
+}
+
+static int cap_check(const char *label, uint32_t got, uint32_t expect) {
+    kputs("  ");
+    kputs(label);
+    kputs(got == expect ? " ok\r\n" : " FAIL\r\n");
+    return got == expect;
+}
+
+static void cap_test(void) {
+    kputs("NEXUS: capability system (NCS) tests\r\n");
+    struct cap_table *t = cap_table_create();
+    struct cap_table *t2 = cap_table_create();
+    int pass = 0, total = 0;
+
+    cap_t h = cap_create(t, RES_FILE, 0x1234, CAP_FILE_R | CAP_FILE_W);
+    total++; pass += cap_check("validate R", cap_validate(t, h, CAP_FILE_R), 1);
+    total++; pass += cap_check("reject NET (not granted)", cap_validate(t, h, CAP_NET), 0);
+    total++; pass += cap_check("guarded read allowed", demo_file_read(t, h) == 0, 1);
+
+    cap_t hr = cap_restrict(t, h, CAP_FILE_R);
+    total++; pass += cap_check("restricted: W denied", cap_validate(t, hr, CAP_FILE_W), 0);
+    total++; pass += cap_check("restricted: R kept", cap_validate(t, hr, CAP_FILE_R), 1);
+
+    /* Delegating a read-only cap while asking for R|W must NOT amplify. */
+    cap_t hd = cap_delegate(t, hr, t2, CAP_FILE_R | CAP_FILE_W);
+    total++; pass += cap_check("delegate cannot amplify W", cap_validate(t2, hd, CAP_FILE_W), 0);
+    total++; pass += cap_check("delegate keeps R", cap_validate(t2, hd, CAP_FILE_R), 1);
+
+    cap_revoke(t, h);
+    total++; pass += cap_check("revoked handle invalid", cap_validate(t, h, CAP_FILE_R), 0);
+    total++; pass += cap_check("guarded read now denied", demo_file_read(t, h) == -1, 1);
+    total++; pass += cap_check("delegated cap survives revoke", cap_validate(t2, hd, CAP_FILE_R), 1);
+    total++; pass += cap_check("restricted cap survives revoke", cap_validate(t, hr, CAP_FILE_R), 1);
+
+    kputs("NEXUS: NCS ");
+    kputdec((uint64_t)pass);
+    kputs("/");
+    kputdec((uint64_t)total);
+    kputs(pass == total ? " passed\r\n" : " FAILED\r\n");
+
+    cap_table_destroy(t);
+    cap_table_destroy(t2);
+}
 
 static inline uint64_t rdtsc(void) {
     uint32_t lo, hi;
@@ -249,6 +300,7 @@ void kmain(struct boot_info *bi) {
     pmm_selftest(bi);
     kheap_stress();
     vmm_test();
+    cap_test();
 
     kputs("NEXUS: starting scheduler\r\n");
     sched_demo();                          /* never returns (becomes the idle thread) */

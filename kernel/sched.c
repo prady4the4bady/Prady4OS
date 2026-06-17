@@ -27,6 +27,7 @@ void sched_init(void) {
     idle_tcb.state = THREAD_RUNNING;
     idle_tcb.quantum = idle_tcb.quantum_reset = QUANTUM;
     idle_tcb.next = &idle_tcb;     /* ring of one */
+    idle_tcb.caps = cap_table_create();
     current_thread = &idle_tcb;
 }
 
@@ -47,6 +48,7 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->entry = entry;
     t->arg = arg;
     t->name = name;
+    t->caps = cap_table_create();
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
