@@ -15,9 +15,39 @@
 #include "boot_info.h"
 #include "irq.h"
 #include "pmm.h"
+#include "kheap.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
+
+static void kheap_stress(void) {
+    kheap_init();
+    uint64_t base = kheap_outstanding();
+
+    /* Mixed-size churn: some land in slab caches, some are whole-page large. */
+    void *p[64];
+    for (int i = 0; i < 64; i++) {
+        size_t sz = (size_t)(((unsigned)i * 37u + 8u) & 0xFFFu) + 1u;  /* 1..4096 */
+        p[i] = kmalloc(sz);
+        if (p[i]) {
+            ((volatile unsigned char *)p[i])[0] = (unsigned char)i;
+            ((volatile unsigned char *)p[i])[sz - 1] = (unsigned char)~i;
+        }
+    }
+    for (int i = 0; i < 64; i++)
+        kfree(p[i]);
+
+    /* Dedicated object pools. */
+    void *a = pcb_alloc(), *b = cap_alloc(), *c = ipc_alloc(), *d = ptnode_alloc();
+    pcb_free(a); cap_free(b); ipc_free(c); ptnode_free(d);
+
+    uint64_t after = kheap_outstanding();
+    kputs("NEXUS: kheap stress — outstanding base=");
+    kputhex(base);
+    kputs(" after=");
+    kputhex(after);
+    kputs(after == base ? "  (no leak)\r\n" : "  (LEAK!)\r\n");
+}
 
 static void pmm_selftest(const struct boot_info *bi) {
     pmm_init(bi);
@@ -102,6 +132,7 @@ void kmain(struct boot_info *bi) {
     kputs("\r\n");
 
     pmm_selftest(bi);
+    kheap_stress();
 
     kputs("NEXUS: idle (halt, interrupts on)\r\n");
     for (;;)

@@ -17,16 +17,19 @@ IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
 KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm
-KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c kernel/pmm.c
+KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
+               kernel/pmm.c kernel/kheap.c kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
 # boot.o MUST be first so kernel_entry (.text.boot) lands at 0x10000.
-KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o \
-               build/main.o build/console.o build/idt.o build/irq.o build/pmm.o
+KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/main.o build/console.o \
+               build/idt.o build/irq.o build/pmm.o build/kheap.o build/string.o
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mno-red-zone -mgeneral-regs-only -fno-stack-protector \
-               -fno-omit-frame-pointer -nostdlib -Wall -Wextra
+               -fno-omit-frame-pointer -nostdlib -Wall -Wextra -Werror
+# Treat every assembler warning as fatal too (user mandate: zero warnings).
+NASM_WERROR := -Werror
 
 .PHONY: all setup toolchain-check kernel image smoke clean
 
@@ -61,14 +64,16 @@ kernel: $(KERNEL_BIN)
 
 $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	@mkdir -p build
-	$(NASM) -f elf64 arch/x86_64/boot.asm -o build/boot.o
-	$(NASM) -f elf64 arch/x86_64/cpu.asm  -o build/cpu.o
-	$(NASM) -f elf64 arch/x86_64/isr.asm  -o build/isr.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm -o build/boot.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm  -o build/cpu.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm  -o build/isr.o
 	$(CC) $(KCFLAGS) -c kernel/main.c    -o build/main.o
 	$(CC) $(KCFLAGS) -c kernel/console.c -o build/console.o
 	$(CC) $(KCFLAGS) -c kernel/idt.c     -o build/idt.o
 	$(CC) $(KCFLAGS) -c kernel/irq.c     -o build/irq.o
 	$(CC) $(KCFLAGS) -c kernel/pmm.c     -o build/pmm.o
+	$(CC) $(KCFLAGS) -c kernel/kheap.c   -o build/kheap.o
+	$(CC) $(KCFLAGS) -c kernel/string.c  -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 32768 || { echo "kernel.bin exceeds 32 KiB; Stage 2 only loads 64 sectors"; exit 1; }
@@ -82,9 +87,9 @@ image: $(IMG)
 
 $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 	@mkdir -p build
-	$(NASM) -f bin $(STAGE1_SRC) -o $(STAGE1_BIN)
+	$(NASM) $(NASM_WERROR) -f bin $(STAGE1_SRC) -o $(STAGE1_BIN)
 	@test "$$(wc -c < $(STAGE1_BIN))" -eq 512 || { echo "stage1.bin is not 512 bytes (got $$(wc -c < $(STAGE1_BIN)))"; exit 1; }
-	$(NASM) -f bin $(STAGE2_SRC) -o $(STAGE2_BIN)
+	$(NASM) $(NASM_WERROR) -f bin $(STAGE2_SRC) -o $(STAGE2_BIN)
 	@test "$$(wc -c < $(STAGE2_BIN))" -le 8192 || { echo "stage2.bin exceeds 8 KiB; Stage 1 only loads 16 sectors"; exit 1; }
 	truncate -s 1M $(IMG)
 	dd if=$(STAGE1_BIN) of=$(IMG) bs=512 seek=0  conv=notrunc status=none

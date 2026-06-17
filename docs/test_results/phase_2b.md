@@ -41,4 +41,40 @@ Interpretation:
   identity-mapped (ADR-005) and free-list links live in the frames. Lifts once
   the VMM maps more.
 - Next: VMM (kernel-built 4-level paging; higher-half kernel decision per
-  ADR-005), then a SLAB/slab-style kernel heap on top of the PMM.
+  ADR-005).
+
+## Slice 2: kernel heap (slab + kmalloc)
+
+- **Date:** 2026-06-17
+- **Files:** `kernel/kheap.{c,h}`, `kernel/string.{c,h}` (freestanding mem*).
+- **Design:** one PMM page per slab with a header at offset 0 (so slab objects
+  are never page-aligned → kfree distinguishes them from whole-page large
+  allocs). kmalloc ≤ 2 KiB → size-class slab caches (16..2048); larger → whole
+  pages from the PMM tracked in a registry. Dedicated caches for PCB / capability
+  token / IPC message; page-table nodes are zeroed full pages from the PMM.
+- **Debug (KHEAP_DEBUG):** free-poisoning (0xDD), double-free detection (free-list
+  scan), bad-pointer/magic checks, and per-pool leak accounting via
+  `kheap_outstanding()`.
+
+### Verified (QEMU)
+
+```
+NEXUS: kheap stress — outstanding base=0x0 after=0x0  (no leak)
+```
+
+Stress test: 64 mixed-size kmalloc/kfree (slab + large) with first/last-byte
+writes, plus pcb/cap/ipc/ptnode alloc+free. Outstanding returns to 0 — no leak,
+no double-free/poison trip. smoke PASS.
+
+### Build hardening
+
+- `-Werror` now enforced for **both** clang (`-Wall -Wextra -Werror`) and NASM
+  (`-Werror`) across the kernel and bootloader. Any warning fails the build
+  (user mandate: zero warnings at any point). Full clean rebuild is warning-free.
+
+### Notes / not done
+
+- Slab free-slab pages are not returned to the PMM when fully empty (kept for
+  reuse); a reclaim pass is a later optimization.
+- Buddy/large lookups and slab-with-free search are linear; fine for now.
+- Next: VMM (4-level paging owned by the kernel; higher-half per ADR-005).

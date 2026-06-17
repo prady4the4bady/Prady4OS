@@ -5,9 +5,12 @@ Updated after every phase. Status legend:
 
 **Current phase:** 2b — memory management. 2a complete (boot → long mode →
 ring-0 C kernel; own GDT/IDT; CPU exceptions w/ panic dumps; legacy PIC + PIT
-@100Hz, interrupts live). Phys memory: buddy allocator up and self-tested
-(ADR-003). Next 2b: VMM (kernel-built 4-level paging; higher-half decision per
-ADR-005), then a SLAB/kernel heap. APIC + scheduler still ahead.
+@100Hz, interrupts live). Phys memory: buddy allocator (ADR-003) + SLAB/kernel
+heap, both self-tested leak-free. Build is warning-clean and `-Werror` enforced
+(C + NASM). Next 2b: VMM (kernel-built 4-level paging; higher-half decision per
+ADR-005). APIC + scheduler still ahead. Architecture confirmed against the
+user's Layer 1–6 boards; realistic perf targets adopted from them (context
+switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **Last updated:** 2026-06-17
 
 ## Phase 0 — Toolchain & Build System
@@ -39,7 +42,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | NEXUS Context Switch (asm) | 🔴 NOT BUILT | 2a | target TBD (see ADR) |
 | Physical Frame Oracle / PMM | 🟢 COMPLETE | 2b | Buddy allocator (`kernel/pmm.{c,h}`, ADR-003) seeded from E820; orders 0..10, split/coalesce. Self-test: 0x6FE0 free frames, aligned alloc, balanced release. Manages [16 MiB, 1 GiB). |
 | Virtual Memory Manager | 🔴 NOT BUILT | 2b | 4-level paging; higher-half decision pending (ADR-005) |
-| SLAB Allocator | 🔴 NOT BUILT | 2b | kernel heap |
+| SLAB Allocator / kernel heap | 🟢 COMPLETE | 2b | `kernel/kheap.{c,h}` on the buddy PMM: size-class slab caches + whole-page large allocs; dedicated PCB/cap/IPC/page-table pools; debug poison + double-free + leak accounting. Stress test: no leak. Build is `-Werror` (C + NASM). |
 | Process Control Blocks | 🔴 NOT BUILT | 2c | PCB + lifecycle |
 | NEXUS Adaptive Scheduler | 🔴 NOT BUILT | 2c | 3-lane + AI hints |
 | NCS Capability System | 🔴 NOT BUILT | 2d | 128-bit tokens |
