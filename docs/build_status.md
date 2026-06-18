@@ -72,7 +72,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | GPU Framebuffer | 🔴 NOT BUILT | 3 | linear framebuffer |
 | Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; reuses virtio transport |
 | ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
-| VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + `vfs_mount`/`open`/`read`/`readdir`, all capability-gated (CAP_FS_READ via NCS). Single mount for now. |
+| VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + **mount table** (per-mount context vtable; FAT32/SFS/ext4 mountable side-by-side) + `open`/`create`/`read`/`write`/`unlink`/`readdir`, all capability-gated (CAP_FS_READ/WRITE via NCS) + per-thread write budget. Full mount-point namespace deferred. |
 | FAT32 (read-only) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names; mount/open/read/readdir. **Subdirectory traversal** (nested paths, path-aware readdir) added in slice 4b. Verified: list `/` + `/DOCS`, read `/HELLO.TXT` + `/DOCS/NOTE.TXT`. Writes/LFN deferred (slice 4c). |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
 | ext4 Compatibility | 🔴 NOT BUILT | 4 | read/write |

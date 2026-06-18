@@ -357,13 +357,13 @@ static void blk_test_thread(void *arg) {
 }
 
 /* List up to 32 entries of a directory by path (cap-gated). */
-static void fs_list(cap_t cap, const char *path) {
+static void fs_list(cap_t cap, int mnt, const char *path) {
     char name[16];
     uint32_t sz;
     kputs("[fs] dir ");
     kputs(path);
     kputs(":\r\n");
-    for (int i = 0; i < 32 && vfs_readdir(cap, path, i, name, &sz) == 0; i++) {
+    for (int i = 0; i < 32 && vfs_readdir(cap, mnt, path, i, name, &sz) == 0; i++) {
         kputs("    ");
         kputs(name);
         kputs("  ");
@@ -373,9 +373,9 @@ static void fs_list(cap_t cap, const char *path) {
 }
 
 /* Open a file by path, read it, and echo its contents (cap-gated). */
-static void fs_print_file(cap_t cap, const char *path) {
+static void fs_print_file(cap_t cap, int mnt, const char *path) {
     struct vfs_file f;
-    if (vfs_open(cap, path, &f) != 0) {
+    if (vfs_open(cap, mnt, path, &f) != 0) {
         kputs("[fs] ");
         kputs(path);
         kputs(" not found\r\n");
@@ -396,23 +396,27 @@ static void fs_print_file(cap_t cap, const char *path) {
  * path through a subdirectory — all capability-gated. */
 static void fs_test_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
-    int mounted = -1;
-    for (unsigned j = 0; j < blk_count(); j++)
-        if (vfs_mount(j) == 0) { mounted = (int)j; break; }
-    if (mounted < 0) {
+    int mnt = -1, blk = -1;
+    for (unsigned j = 0; j < blk_count(); j++) {
+        int id = vfs_mount(j);
+        if (id >= 0) { mnt = id; blk = (int)j; break; }
+    }
+    if (mnt < 0) {
         kputs("[fs] no mountable filesystem found\r\n");
         return;
     }
     kputs("[fs] mounted ");
-    kputs(vfs_fs_name());
+    kputs(vfs_fs_name(mnt));
     kputs(" on blk");
-    kputdec((uint64_t)mounted);
-    kputs("\r\n");
+    kputdec((uint64_t)blk);
+    kputs(" (mnt ");
+    kputdec((uint64_t)mnt);
+    kputs(")\r\n");
 
-    fs_list(cap, "/");
-    fs_print_file(cap, "/HELLO.TXT");
-    fs_list(cap, "/DOCS");
-    fs_print_file(cap, "/DOCS/NOTE.TXT");
+    fs_list(cap, mnt, "/");
+    fs_print_file(cap, mnt, "/HELLO.TXT");
+    fs_list(cap, mnt, "/DOCS");
+    fs_print_file(cap, mnt, "/DOCS/NOTE.TXT");
 }
 
 static void sched_demo(void) {

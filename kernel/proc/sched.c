@@ -52,6 +52,7 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->arg = arg;
     t->name = name;
     t->caps = cap_table_create();
+    t->fs_write_budget = FS_WRITE_BUDGET_DEFAULT;
     t->is_user = 0;            /* kmalloc does not zero — init the user fields */
     t->pid = 0;
     t->user_rip = 0;

@@ -10,6 +10,11 @@
 
 typedef void (*thread_fn)(void *);
 
+/* Default per-thread filesystem write budget (bytes). Caps how much a single
+ * thread can write through the VFS so a buggy/hostile consumer cannot exhaust
+ * the block device. Generous for tools, far below any real disk. */
+#define FS_WRITE_BUDGET_DEFAULT (1u << 20)   /* 1 MiB */
+
 enum thread_state {
     THREAD_READY = 0,
     THREAD_RUNNING = 1,
@@ -29,6 +34,7 @@ struct tcb {
     void      *arg;
     const char *name;
     struct cap_table *caps;    /* per-thread (process) capability table */
+    uint64_t   fs_write_budget; /* remaining VFS write allowance (bytes)  */
 
     /* Ring-3 (user) thread metadata — zero/unused for pure kernel threads. */
     uint32_t   is_user;
