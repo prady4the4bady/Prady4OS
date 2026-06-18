@@ -83,7 +83,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
 | VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + **mount table** (per-mount context vtable; FAT32/SFS/ext4 mountable side-by-side) + `open`/`create`/`read`/`write`/`unlink`/`readdir`, all capability-gated (CAP_FS_READ/WRITE via NCS) + per-thread write budget. Full mount-point namespace deferred. |
 | FAT32 (read-write) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names, nested paths. **Read-write (slice 4c):** create/write/unlink, cluster alloc + all-FAT-copies update, FSInfo, all-or-nothing alloc, in-kernel read-back verify. Validated by host `fsck.fat`+`mdir`/`mtype` (`make smoke-fs-rw`). LFN/timestamps deferred. |
-| SOVEREIGN FS (SFS) skeleton | 🟡 IN PROGRESS | 4 | `kernel/fs/sfs/` (ADR-017): on-disk superblock + B+ tree node structs pinned; mount stub declines (no engine yet); `CAP_FS_SFS_*` reserved. Engine (CoW B+ tree, versioning, atomic tx, LZ4) deferred. |
+| SOVEREIGN FS (SFS) | 🟡 IN PROGRESS | 4 | `kernel/fs/sfs/` (ADR-017/018): on-disk superblock + B+ tree node layout. **Slice 1 (4d):** in-kernel `sfs_format` (mkfs) + `sfs_mount` (superblock validate) + empty-root readdir — kernel formats a blank disk and mounts it via the multi-FS table (verified on a 3rd virtio-blk disk). Next: B+ tree insert/lookup (create/open), then extents, journal, snapshots, LZ4. `CAP_FS_SFS_*` reserved. |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
 | ext4 Compatibility | 🔴 NOT BUILT | 4 | read/write |
 | pradyos-init (PID 1) | 🔴 NOT BUILT | 5 | Rust |
@@ -125,7 +125,7 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 | **virtio: MSI-X + multi-request** | INTx; one in-flight request **per device**, multi-disk via per-device serialization (ADR-015) | APIC live; concurrent in-flight I/O (request-tag table) |
 | **Concurrent multi-thread block I/O** | self-tests share the block layer but the driver is single-in-flight-per-disk; per-mount FS lock not yet added | many threads issuing FS/block I/O at once (per-mount + block-layer locks, ADR-016) |
 | **SMP spinlocks** | single-core; PMM/console/scheduler use interrupt masking (ADR-016) | second CPU brought online (APIC) |
-| **SOVEREIGN FS (SFS) engine** | on-disk layout + driver stub only (ADR-017) | CoW B+ tree, versioned snapshots, journalled atomic tx, 4 KiB tags, inline LZ4 |
+| **SOVEREIGN FS (SFS) engine** | format + mount + empty-root only (ADR-018 slice 1) | B+ tree insert/lookup, file extents, journalled atomic tx, snapshots, 4 KiB tags, inline LZ4, free-space tree |
 | **FAT32 LFN / timestamps** | 8.3 names; new entries get a zero date (no RTC) | long filenames; real mtimes (needs an RTC driver) |
 
 See the per-item rows above for the primary (non-deferred) component status.

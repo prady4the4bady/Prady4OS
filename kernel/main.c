@@ -459,6 +459,28 @@ static void fs_test_thread(void *arg) {
     fs_list(cap, mnt, "/DOCS");
     fs_print_file(cap, mnt, "/DOCS/NOTE.TXT");
     fs_write_test(cap, mnt);
+
+    /* SFS slice 1: format a blank disk in-kernel, mount it (FAT32 declines, SFS
+     * claims it by superblock magic), and confirm its root mounts empty. */
+    if (blk_count() > 2) {
+        struct blk_device *sbd = blk_get(2);
+        if (sbd && sfs_format(sbd) == 0) {
+            int smnt = vfs_mount(2);
+            if (smnt >= 0) {
+                char nm[16];
+                uint32_t sz;
+                int r0 = vfs_readdir(cap, smnt, "/", 0, nm, &sz);
+                kputs("[sfs] mounted ");
+                kputs(vfs_fs_name(smnt));
+                kputs(" on blk2; root ");
+                kputs(r0 == 0 ? "non-empty\r\n" : "empty - format+mount OK\r\n");
+            } else {
+                kputs("[sfs] mount failed\r\n");
+            }
+        } else {
+            kputs("[sfs] format failed\r\n");
+        }
+    }
 }
 
 static void sched_demo(void) {
@@ -483,7 +505,8 @@ static void sched_demo(void) {
     struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
     if (fst)
         fst->arg = (void *)(uintptr_t)cap_create(fst->caps, RES_FILE, FS_RES_ID,
-                                                 CAP_FS_READ | CAP_FS_WRITE);
+                                                 CAP_FS_READ | CAP_FS_WRITE |
+                                                 CAP_FS_SFS_READ | CAP_FS_SFS_ADMIN);
     __asm__ volatile("sti");
     kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk + VFS live\r\n");
 

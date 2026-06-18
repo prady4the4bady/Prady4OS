@@ -154,6 +154,15 @@ fat-image:
 	mcopy -i $(FAT_IMG) build/note.txt ::/DOCS/NOTE.TXT
 	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT)"
 
+# A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
+# place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
+SFS_IMG := build/sfs.img
+
+sfs-image:
+	@mkdir -p build
+	dd if=/dev/zero of=$(SFS_IMG) bs=1M count=16 status=none
+	@echo "sfs: $(SFS_IMG) (16 MiB blank — kernel formats in place)"
+
 # Kernel boot gate: proves the kernel boots and prints its sentinel. Deliberately
 # does NOT depend on the FAT image — the kernel gate must not fail just because a
 # host FS tool (mtools/dosfstools) is absent. boot_test.sh attaches build/fat.img
@@ -165,8 +174,8 @@ smoke: $(IMG)
 # Filesystem gate: builds the FAT32 data disk and asserts BOTH the kernel
 # sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
 # Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
-smoke-fs: $(IMG) fat-image
-	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok\nkernel wrote this\ncreated+deleted /TMP.TXT OK')" \
+smoke-fs: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok\nkernel wrote this\ncreated+deleted /TMP.TXT OK\nformat+mount OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it
@@ -175,7 +184,7 @@ smoke-fs: $(IMG) fat-image
 # to prove the kernel-written file persisted with the right contents. QEMU writes
 # the modified disk image back to build/fat.img, so the host sees the kernel's
 # changes. Needs dosfstools (fsck.fat) + mtools (mdir/mtype).
-smoke-fs-rw: $(IMG) fat-image
+smoke-fs-rw: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'kernel wrote this\ncreated+deleted /TMP.TXT OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[fs-rw] host fsck.fat (consistency after kernel writes):"

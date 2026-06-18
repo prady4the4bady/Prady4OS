@@ -14,6 +14,7 @@
 #define SFS_MAGIC      0x53465331ull   /* "SFS1" little-endian                */
 #define SFS_VERSION    1u
 #define SFS_BLOCK_SIZE 4096u           /* on-disk block / metadata-tag size   */
+#define SFS_SECTORS_PER_BLOCK (SFS_BLOCK_SIZE / 512u)   /* 8 × 512-byte sectors */
 #define SFS_BTREE_FANOUT 64u           /* keys per B+ tree node (provisional) */
 
 /* Feature bits negotiated at mount (none active yet). */
@@ -33,9 +34,10 @@ struct sfs_superblock {
     uint64_t txn_log_start;            /* first block of the transaction log  */
     uint64_t txn_log_blocks;           /* length of the transaction log       */
     uint64_t generation;              /* bumped on every committed transaction */
+    uint64_t next_free_block;          /* high-water allocator until free tree  */
     uint32_t features;                 /* SFS_FEAT_* bitmap                    */
     uint32_t checksum;                 /* CRC32 of the superblock             */
-    uint8_t  reserved[4016];           /* pad to a full 4 KiB block           */
+    uint8_t  reserved[4008];           /* pad to a full 4 KiB block           */
 };
 
 /* B+ tree node (one block). Internal nodes point at child blocks; leaf nodes
@@ -58,7 +60,13 @@ struct sfs_btree_node {
     struct sfs_btree_key keys[SFS_BTREE_FANOUT];
 };
 
-/* Register the SFS driver with the VFS. The mount probe currently recognises no
- * volume (returns failure), so registering it is harmless; it reserves the slot
- * and exercises the multi-filesystem mount path. */
+struct blk_device;                     /* defined in kernel/drivers/blk/blk.h */
+
+/* Register the SFS driver with the VFS. The mount probe claims a disk only if
+ * block 0 holds a valid SFS superblock. */
 void sfs_register(void);
+
+/* Format a block device as an empty SFS volume (superblock + empty root leaf).
+ * Slice-1 bring-up: in-kernel mkfs. Conceptually a CAP_FS_SFS_ADMIN operation.
+ * Returns 0 on success. */
+int  sfs_format(struct blk_device *bd);

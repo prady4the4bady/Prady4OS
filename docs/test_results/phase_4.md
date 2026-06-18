@@ -176,3 +176,34 @@ re-enterable `schedule()`.
   multi-thread I/O (ADR-016 / build_status DEFERRED).
 - SFS engine (CoW B+ tree, versioning, atomic tx, LZ4) and ext4.
 - VFS mount-point namespace (`/mnt/...`).
+
+## Slice 4d: SFS engine — format + mount + empty root (slice 1)
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-018 (SFS engine design + phased bring-up).
+- **Files:** `kernel/fs/sfs/{sfs.c,sfs.h}` (format/mount/readdir + on-disk
+  superblock w/ `next_free_block`), `kernel/main.c` (SFS self-test + SFS caps),
+  `Makefile` (`sfs-image` blank disk; FS gates depend on it),
+  `tools/qemu_runner/boot_test.sh` (3rd virtio-blk disk).
+
+### Verified (QEMU q35, blank 3rd virtio-blk disk)
+
+```
+virtio-blk: blk2 ready, 32768 sectors, IRQ 11
+[sfs] mounted sfs on blk2; root empty — format+mount OK
+```
+
+- The kernel `sfs_format`s the blank disk in place (superblock at block 0 +
+  empty root B+ tree leaf at block 1, 4 KiB blocks = 8 sectors each).
+- `vfs_mount(2)` probes the registered drivers: FAT32 declines (no `0xAA55`/BPB),
+  SFS claims it by superblock magic — exercising the multi-FS mount table
+  (ADR-017) with FAT32 (blk1) and SFS (blk2) mounted simultaneously.
+- The empty root mounts and lists no entries (B+ tree leaf, 0 keys).
+- `make smoke-fs` asserts the `format+mount OK` line alongside the FAT32
+  patterns; `-Werror` clean.
+
+### Not done yet (after 4d)
+
+- SFS B+ tree insert/lookup (create/open), file extents (read/write), journal +
+  atomic commit, snapshots, inline LZ4, free-space B+ tree — ADR-018 slices 2-6.
+- FAT32 LFN/timestamps; ext4; VFS mount-point namespace.
