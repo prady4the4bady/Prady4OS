@@ -3,6 +3,10 @@
 Updated after every phase. Status legend:
 🔴 NOT BUILT · 🟡 IN PROGRESS · 🟢 COMPLETE · ⚠️ BROKEN
 
+Target ISAs, platform profiles (x86_64 / ARM64 incl. Grace Blackwell / Apple /
+RISC-V64), the 8-layer map, and the branch strategy live in
+[platform_profiles.md](platform_profiles.md).
+
 **Current phase:** 4 — filesystem. Layer 2 (NEXUS kernel core) COMPLETE: boot →
 long mode → ring-0 C kernel; own GDT/IDT; CPU exceptions w/ panic dumps; legacy
 PIC + PIT @100Hz; buddy PMM (ADR-003) + SLAB heap (leak-free); higher-half
