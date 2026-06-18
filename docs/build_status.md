@@ -16,10 +16,12 @@ handles, O(1) revoke, subset-only delegation (ADR-009), 11/11 tests. Sync IPC
 kernel/ organized into mm/proc/ipc/syscall subdirs. Full NIA IPC fabric (sync +
 async ring + broadcast). **Syscalls (NSI) + ring-3 user mode done** (ADR-012):
 SYSCALL/SYSRET, TSS, user segments, capability-gated syscalls, a real ring-3
-thread verified. **Layer 2 (NEXUS kernel core) is COMPLETE.** Deferred: 3-lane
-NAS, APIC, W^X. Next major area: Phase 3 (drivers) per the Layer-3 board.
-Architecture confirmed against the user's Layer 1–6 boards; realistic perf
-targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
+thread verified. Layer 2 (NEXUS kernel core) COMPLETE. **Phase 3 (Layer 3
+drivers) underway:** ACPI table parser + PCIe MMCONFIG enumeration done on QEMU
+q35 (7 devices incl. virtio-blk/net + VGA). Next in Phase 3: a real device
+driver (virtio or NVMe) on the PCIe foundation. Deferred: 3-lane NAS, APIC, W^X
+(see DEFERRED section). Architecture confirmed against the user's Layer 1–6
+boards; realistic perf targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **Last updated:** 2026-06-17
 
 ## Phase 0 — Toolchain & Build System
@@ -61,11 +63,12 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Syscall Table (200+ calls) | 🟡 IN PROGRESS | 2e | SYSCALL/SYSRET armed (EFER.SCE/STAR/LSTAR/SFMASK), dispatch table + register, capability-aware (`kernel/syscall/`, ADR-012). 4 calls (putc/getpid/yield/exit) exercised from ring 3; more arrive with userspace. |
 | Ring-3 user mode (TSS + user segs) | 🟢 COMPLETE | 2e | `kernel/proc/tss.c`, user GDT segs, `sched_create_user`, IRETQ→ring3, cap-gated syscalls. Verified user thread runs + exits cleanly. |
 | PRADYOS Extended Syscalls | 🔴 NOT BUILT | 6 | agent + sovereign (Phase 6) |
-| NVMe Driver | 🔴 NOT BUILT | 3 | priority storage |
-| PCIe Enumeration | 🔴 NOT BUILT | 3 | MMCONFIG |
-| GPU Framebuffer (GOP) | 🔴 NOT BUILT | 3 | UEFI GOP first |
-| Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | VM first |
-| ACPI Power Management | 🔴 NOT BUILT | 3 | CPU freq scaling |
+| ACPI table parser (RSDP/RSDT/XSDT) | 🟢 COMPLETE | 3 | `kernel/acpi/` (ADR-013): find RSDP, walk RSDT/XSDT, `acpi_find_table`. Unblocks MCFG/MADT/FADT. |
+| PCIe Enumeration | 🟢 COMPLETE | 3 | `kernel/drivers/pcie/` (ADR-013): MCFG→ECAM, uncached map, bus-0 scan + device registry. q35: 7 devices incl. virtio-blk/net + VGA. |
+| NVMe Driver | 🔴 NOT BUILT | 3 | priority storage (on PCIe) |
+| GPU Framebuffer | 🔴 NOT BUILT | 3 | linear framebuffer |
+| Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; driver next |
+| ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
 | VFS Layer | 🔴 NOT BUILT | 4 | abstraction |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
 | ext4 Compatibility | 🔴 NOT BUILT | 4 | read/write |

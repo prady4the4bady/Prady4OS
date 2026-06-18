@@ -22,7 +22,8 @@ KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm \
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/ipc/ipc.c \
-               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/string.c
+               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/acpi/acpi.c \
+               kernel/drivers/pcie/pcie.c kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -31,10 +32,11 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
                build/vmm.o build/cap.o build/sched.o build/tss.o build/ipc.o \
-               build/bcast.o build/syscall.o build/string.o
+               build/bcast.o build/syscall.o build/acpi.o build/pcie.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
-KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall
+KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
+               -Ikernel/acpi -Ikernel/drivers/pcie
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -94,6 +96,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c       -o build/ipc.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/syscall.c -o build/syscall.o
+	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)

@@ -24,6 +24,8 @@
 #include "tss.h"
 #include "syscall.h"
 #include "string.h"
+#include "acpi.h"
+#include "pcie.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -498,6 +500,10 @@ void kmain(struct boot_info *bi) {
     kheap_stress();
     vmm_test();
     cap_test();
+
+    /* Phase 3: hardware discovery. */
+    acpi_init();
+    pcie_init();
 
     kputs("NEXUS: starting scheduler\r\n");
     sched_demo();                          /* never returns (becomes the idle thread) */

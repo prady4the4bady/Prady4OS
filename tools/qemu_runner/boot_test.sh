@@ -21,12 +21,16 @@ if [ ! -f "$IMG" ]; then
 fi
 
 echo "[smoke] booting $IMG (timeout ${TIMEOUT_S}s, sentinel: '$SENTINEL')..."
-# -display none + -monitor none keep the guest's COM1 the *only* writer to the
-# capture file. Using -nographic instead muxes the QEMU monitor onto the serial
-# chardev AND makes SeaBIOS mirror INT 10h console output to COM1, both of which
-# corrupt the captured serial stream.
+# q35 gives a PCIe machine with an ACPI MCFG table (MMCONFIG/ECAM) for Phase 3
+# enumeration. Boot from a virtio-blk disk and add a virtio-net device so the
+# PCIe scan has real devices to find. -display none + -monitor none keep the
+# guest's COM1 the only writer to the capture file (see git history for why
+# -nographic corrupts it).
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
-    -drive format=raw,file="$IMG" \
+    -machine q35 \
+    -drive if=none,format=raw,file="$IMG",id=disk0 \
+    -device virtio-blk-pci,drive=disk0,bootindex=0 \
+    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
     || true

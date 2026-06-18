@@ -11,7 +11,9 @@
 #define VMM_PRESENT 0x1ull
 #define VMM_RW      0x2ull
 #define VMM_USER    0x4ull
-#define VMM_NX      0x8000000000000000ull   /* requires EFER.NXE; not set yet */
+#define VMM_PWT     0x8ull                    /* page write-through            */
+#define VMM_PCD     0x10ull                   /* page cache disable (for MMIO) */
+#define VMM_NX      0x8000000000000000ull     /* requires EFER.NXE; not set yet */
 
 /* Map/unmap a single 4 KiB page. Returns 0 on success, -1 on failure
  * (e.g. a huge page already covers the address, or out of frames). */
