@@ -41,5 +41,41 @@ PCIe: 7 devices enumerated
 - Multi-bus / bridge-recursive scanning (only bus 0 mapped/scanned).
 - BAR programming, MSI/MSI-X (need APIC).
 - Per-table ACPI checksum validation (RSDP checksum is validated).
-- A real device *driver* on top (virtio / NVMe / framebuffer) — next slice.
 - MADT (APIC) and FADT (power) parsing — the table parser is ready for them.
+
+## Slice 3b: virtio transport + virtio-blk + block layer
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-014.
+- **Files:** `kernel/drivers/virtio/{virtio_ring,virtio,virtio_pci}.{c,h}`,
+  `kernel/drivers/blk/{blk,virtio_blk}.{c,h}`; `kernel/irq.c` (pic_unmask),
+  `kernel/idt.c` (irq_register + reworked IRQ dispatch), `kernel/main.c`.
+  Stage 2 loader changed to chunked 256 KiB load (the kernel passed 32 KiB).
+
+### Verified (QEMU q35, booting from virtio-blk)
+
+```
+virtio-blk: ready, capacity 2048 sectors, INTx IRQ 11
+[blk] read sector 0, boot sig=0xAA55  (MBR OK)
+[blk] write/read round-trip OK
+```
+
+- Modern (VERSION_1) feature negotiation completes; queue programmed; DRIVER_OK.
+- `blk_read(0)` returns the on-disk MBR (boot signature 0xAA55).
+- write→read round-trip on sector 100 matches byte-for-byte.
+- **Completion is interrupt-driven** (INTx IRQ 11): the caller blocks and is
+  woken by the IRQ handler, which reads the ISR (deasserts the line) and reaps
+  the used ring — no busy polling.
+- smoke PASS; zero warnings.
+
+### Debugging note (root-caused)
+
+The kernel grew to ~34.5 KiB, exceeding Stage 2's old 32 KiB (64-sector) kernel
+load — the truncated kernel ran garbled. Fixed by loading the kernel in 8×64
+-sector chunks (256 KiB) to successive segments, and raising the build's size
+assert accordingly.
+
+### Not done yet
+
+- MSI/MSI-X (needs APIC); multiple concurrent requests; non-identity buffers.
+- virtio-net (reuses this transport); NVMe (registers with the blk layer).

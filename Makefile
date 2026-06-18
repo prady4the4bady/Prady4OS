@@ -23,7 +23,10 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/ipc/ipc.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/acpi/acpi.c \
-               kernel/drivers/pcie/pcie.c kernel/string.c
+               kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
+               kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
+               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
+               kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -32,11 +35,14 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
                build/vmm.o build/cap.o build/sched.o build/tss.o build/ipc.o \
-               build/bcast.o build/syscall.o build/acpi.o build/pcie.o build/string.o
+               build/bcast.o build/syscall.o build/acpi.o build/pcie.o \
+               build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
+               build/virtio_blk.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
-               -Ikernel/acpi -Ikernel/drivers/pcie
+               -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio \
+               -Ikernel/drivers/blk
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -97,11 +103,16 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/syscall.c -o build/syscall.o
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
-	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c -o build/pcie.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio.c       -o build/virtio.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_pci.c   -o build/virtio_pci.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk.c             -o build/blk.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 32768 || { echo "kernel.bin exceeds 32 KiB; Stage 2 only loads 64 sectors"; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 262144 || { echo "kernel.bin exceeds 256 KiB; Stage 2 loads 8x64 sectors"; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:

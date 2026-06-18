@@ -38,6 +38,15 @@ void pic_eoi(uint64_t vector) {
     outb(PIC1, PIC_EOI);
 }
 
+void pic_unmask(unsigned irq) {
+    if (irq < 8) {
+        outb(PIC1_DATA, inb(PIC1_DATA) & ~(uint8_t)(1u << irq));
+    } else if (irq < 16) {
+        outb(PIC2_DATA, inb(PIC2_DATA) & ~(uint8_t)(1u << (irq - 8)));
+        outb(PIC1_DATA, inb(PIC1_DATA) & ~(uint8_t)(1u << 2));   /* cascade IRQ2 */
+    }
+}
+
 void pit_init(uint32_t hz) {
     uint32_t divisor = PIT_HZ / hz;
     outb(PIT_CMD, 0x36);                          /* ch0, lo/hi byte, mode 3 */

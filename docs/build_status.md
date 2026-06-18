@@ -65,9 +65,12 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | PRADYOS Extended Syscalls | 🔴 NOT BUILT | 6 | agent + sovereign (Phase 6) |
 | ACPI table parser (RSDP/RSDT/XSDT) | 🟢 COMPLETE | 3 | `kernel/acpi/` (ADR-013): find RSDP, walk RSDT/XSDT, `acpi_find_table`. Unblocks MCFG/MADT/FADT. |
 | PCIe Enumeration | 🟢 COMPLETE | 3 | `kernel/drivers/pcie/` (ADR-013): MCFG→ECAM, uncached map, bus-0 scan + device registry. q35: 7 devices incl. virtio-blk/net + VGA. |
-| NVMe Driver | 🔴 NOT BUILT | 3 | priority storage (on PCIe) |
+| virtio transport (reusable) | 🟢 COMPLETE | 3 | `kernel/drivers/virtio/` (ADR-014): modern 1.0 — PCI caps, BAR/MMIO, status machine, feature negotiation, split virtqueues, notify, ISR. Shared by all virtio devices. |
+| Block layer (generic) | 🟢 COMPLETE | 3 | `kernel/drivers/blk/blk.{c,h}`: device registry + read/write dispatch. |
+| virtio-blk driver | 🟢 COMPLETE | 3 | `kernel/drivers/blk/virtio_blk.c` (ADR-014): interrupt-driven (INTx) read/write. Verified: sector-0 MBR read, write/read round-trip. |
+| NVMe Driver | 🔴 NOT BUILT | 3 | priority storage (registers with blk layer) |
 | GPU Framebuffer | 🔴 NOT BUILT | 3 | linear framebuffer |
-| Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; driver next |
+| Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; reuses virtio transport |
 | ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
 | VFS Layer | 🔴 NOT BUILT | 4 | abstraction |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
@@ -107,5 +110,7 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 | **W^X / NX per-section perms + guard pages** | EFER.NXE unused; user pages W+X | running untrusted user code |
 | **UEFI / OVMF boot path** | legacy BIOS/MBR path complete | ARM64 / RISC-V variants (Layer 1) |
 | **AVX-512 asm + IPC zero-copy (VMOVDQU)** | scalar paths | performance-hardening pass |
+| **Larger/relocating kernel loader** | Stage 2 loads 256 KiB (8×64 sectors) to 0x10000 | kernel exceeds ~256 KiB, or moving the kernel off low memory |
+| **virtio: MSI-X + multi-request** | INTx, one in-flight request | APIC live; concurrent I/O |
 
 See the per-item rows above for the primary (non-deferred) component status.

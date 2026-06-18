@@ -14,6 +14,9 @@ void pic_remap(void);
 /* Signal end-of-interrupt for a delivered IRQ vector (0x20..0x2F). */
 void pic_eoi(uint64_t vector);
 
+/* Unmask a single IRQ line (and the cascade for slave IRQs 8..15). */
+void pic_unmask(unsigned irq);
+
 /* Program PIT channel 0 to fire IRQ0 at `hz` Hz (square wave, mode 3). */
 void pit_init(uint32_t hz);
 

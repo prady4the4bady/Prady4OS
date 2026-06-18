@@ -116,14 +116,25 @@ enable_a20:
     ret
 
 ; Load the kernel image from disk (INT 13h/AH=42h) to physical 0x10000.
+; Load the kernel in 8 chunks of 64 sectors (256 KiB total) to successive 32 KiB
+; regions starting at physical 0x10000 — one INT 13h call per chunk stays under
+; the BIOS per-call sector limit and the 64 KiB real-mode segment, and scales as
+; the kernel grows (256 KiB ends at 0x50000, below the page tables at 0x70000).
 load_kernel:
     mov si, msg_ldk
     call puts16
+    mov cx, 8
+.chunk:
+    push cx
     mov si, kernel_dap
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
     jc .err
+    add dword [kdap_lba], 64        ; next 64 sectors on disk
+    add word  [kdap_seg], 0x800     ; next 32 KiB in memory (0x8000 >> 4)
+    pop cx
+    loop .chunk
     ret
 .err:
     mov si, msg_ldk_err
@@ -444,10 +455,12 @@ boot_drive db 0
 kernel_dap:
     db 0x10
     db 0x00
-    dw 64
+    dw 64                      ; sectors per chunk
     dw 0x0000                  ; offset
-    dw 0x1000                  ; segment (-> physical 0x10000)
-    dq 17                      ; starting LBA (matches the Makefile image layout)
+kdap_seg:
+    dw 0x1000                  ; segment (-> physical 0x10000), advanced per chunk
+kdap_lba:
+    dq 17                      ; starting LBA (matches the Makefile layout), advanced per chunk
 
 ; GDT: null, 32-bit code/data, 64-bit code (L=1) / data.
 gdt_start:

@@ -85,21 +85,34 @@ static void dump_line(const char *label, uint64_t v) {
     kputs("\r\n");
 }
 
+/* Registerable handlers for IRQ 2..15 (device drivers, e.g. virtio). */
+typedef void (*irq_handler_fn)(void);
+static irq_handler_fn irq_handlers[16];
+
+void irq_register(unsigned irq, irq_handler_fn fn) {
+    if (irq < 16)
+        irq_handlers[irq] = fn;
+}
+
 void isr_dispatch(struct regs *r) {
     /* Hardware IRQs (PIC remapped to 0x20..0x2F = vectors 32..47). */
     if (r->vector >= 32 && r->vector <= 47) {
-        unsigned irq = (unsigned)r->vector;
-        if (irq == 33) {                       /* IRQ1: keyboard */
+        unsigned irqno = (unsigned)r->vector - 32;
+        if (irqno == 0) {                      /* IRQ0: PIT timer — drives preemption */
+            pic_eoi(r->vector);                /* EOI first: sched_tick may switch away */
+            g_ticks++;
+            sched_tick();
+            return;
+        }
+        if (irqno == 1) {                      /* IRQ1: keyboard */
             uint8_t scancode = inb(0x60);
             kputs("[kbd] scancode=");
             kputhex(scancode);
             kputs("\r\n");
+        } else if (irq_handlers[irqno]) {
+            irq_handlers[irqno]();             /* device handler deasserts level INTx */
         }
-        pic_eoi(r->vector);                     /* EOI before any context switch */
-        if (irq == 32) {                        /* IRQ0: PIT timer drives preemption */
-            g_ticks++;
-            sched_tick();
-        }
+        pic_eoi(r->vector);                     /* EOI after the handler */
         return;
     }
 

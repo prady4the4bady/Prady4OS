@@ -26,6 +26,8 @@
 #include "string.h"
 #include "acpi.h"
 #include "pcie.h"
+#include "blk.h"
+#include "virtio_blk.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -321,6 +323,37 @@ static void user_demo(void) {
     kputs("NEXUS: ring-3 user thread created (will syscall from user mode)\r\n");
 }
 
+/* Block device test: runs as a thread so virtio-blk I/O can block on its IRQ
+ * (interrupt-driven completion, not busy-poll). */
+static void blk_test_thread(void *arg) {
+    (void)arg;
+    if (blk_count() == 0) {
+        kputs("[blk] no block device\r\n");
+        return;
+    }
+    uint64_t buf = pmm_alloc_page();
+    if (blk_read(0, 0, (void *)(uintptr_t)buf, 1) == 0) {
+        uint16_t sig = *(volatile uint16_t *)(uintptr_t)(buf + 510);
+        kputs("[blk] read sector 0, boot sig=");
+        kputhex(sig);
+        kputs(sig == 0xAA55 ? "  (MBR OK)\r\n" : "  (?)\r\n");
+    } else {
+        kputs("[blk] read sector 0 failed\r\n");
+    }
+
+    /* Write/read round-trip on a padding sector (well past the kernel). */
+    uint64_t w = pmm_alloc_page(), r = pmm_alloc_page();
+    for (int i = 0; i < 512; i++)
+        ((volatile uint8_t *)(uintptr_t)w)[i] = (uint8_t)(i * 7 + 3);
+    int wr = blk_write(0, 100, (void *)(uintptr_t)w, 1);
+    int rd = blk_read(0, 100, (void *)(uintptr_t)r, 1);
+    int ok = (wr == 0 && rd == 0);
+    for (int i = 0; ok && i < 512; i++)
+        if (((volatile uint8_t *)(uintptr_t)r)[i] != ((volatile uint8_t *)(uintptr_t)w)[i])
+            ok = 0;
+    kputs(ok ? "[blk] write/read round-trip OK\r\n" : "[blk] write/read round-trip FAILED\r\n");
+}
+
 static void sched_demo(void) {
     uint64_t tsc_hz = calibrate_tsc_hz();
     kputs("NEXUS: TSC ~");
@@ -339,8 +372,9 @@ static void sched_demo(void) {
     ring_demo();
     bus_demo();
     user_demo();
+    sched_create(blk_test_thread, 0, "blk");
     __asm__ volatile("sti");
-    kputs("NEXUS: scheduler + IPC + ring-3 user mode live\r\n");
+    kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk live\r\n");
 
     for (;;)                               /* this context is now the idle thread */
         __asm__ volatile("hlt");
@@ -501,9 +535,16 @@ void kmain(struct boot_info *bi) {
     vmm_test();
     cap_test();
 
-    /* Phase 3: hardware discovery. */
+    /* Phase 3: hardware discovery + first device driver. */
     acpi_init();
     pcie_init();
+    for (unsigned i = 0; i < pcie_device_count(); i++) {
+        const struct pcie_device *d = pcie_device_get(i);
+        if (d->vendor_id == 0x1AF4 && d->class_code == 0x01) {  /* virtio storage */
+            virtio_blk_init(d->bus, d->dev, d->func);
+            break;
+        }
+    }
 
     kputs("NEXUS: starting scheduler\r\n");
     sched_demo();                          /* never returns (becomes the idle thread) */
