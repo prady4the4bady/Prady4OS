@@ -48,8 +48,18 @@ this slice honest and verifiable.
 
 ## Consequences / deferred
 
-- **Read-only, 8.3.** Writes, long filenames (VFAT LFN), and FSInfo are not
-  implemented yet.
+- **Read-write, 8.3 — write added in slice 4c.** `create`/`write`/`unlink` are
+  implemented: cluster allocation + FAT-chain updates written to *all* FAT
+  copies, directory-entry create/update/delete, and FSInfo free-count
+  maintenance. Writes are **all-or-nothing on allocation** (a short disk rolls
+  back the clusters this operation grabbed, leaving the volume unchanged) and
+  every write is **read-back-verified** in-kernel before reporting success.
+  Per-thread write budgets (`tcb.fs_write_budget`) cap how much a single thread
+  can write so a buggy consumer cannot exhaust the device. Validated against an
+  adversarial host pass (`make smoke-fs-rw`: `fsck.fat` + `mdir`/`mtype`).
+- **Still deferred:** long filenames (VFAT LFN); timestamps (no RTC yet — new
+  entries carry a zero date); sparse-write hole zero-fill; a per-mount FS lock
+  for concurrent multi-thread access (see ADR-016 / build_status DEFERRED).
 - **Subdirectory traversal — added in slice 4b.** `open` resolves nested
   absolute paths component-by-component (each intermediate must be a directory);
   `readdir` gained a `path` argument and lists any directory (root or nested) via

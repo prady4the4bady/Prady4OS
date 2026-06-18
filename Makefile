@@ -26,7 +26,8 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
-               kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/string.c
+               kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
+               kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -37,12 +38,12 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/cap.o build/sched.o build/tss.o build/ipc.o \
                build/bcast.o build/syscall.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/vfs.o build/fat32.o build/string.o
+               build/virtio_blk.o build/vfs.o build/fat32.o build/sfs.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio \
-               -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32
+               -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -50,7 +51,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw fat-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -111,6 +112,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
+	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
@@ -135,11 +137,13 @@ $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 	dd if=$(KERNEL_BIN) of=$(IMG) bs=512 seek=17 conv=notrunc status=none
 	@echo "image: $(IMG) (stage1 $$(wc -c < $(STAGE1_BIN))B, stage2 $$(wc -c < $(STAGE2_BIN))B, kernel $$(wc -c < $(KERNEL_BIN))B)"
 
-# A FAT32 data disk (with a known file) for the VFS/FAT32 self-test. 64 MiB is
-# above the FAT32 minimum. Uses dosfstools (mkfs.fat) + mtools (mcopy).
+# A FAT32 data disk (with known files) for the VFS/FAT32 self-test. 64 MiB is
+# above the FAT32 minimum. Uses dosfstools (mkfs.fat) + mtools (mcopy/mmd).
+# `fat-image` is phony so every FS gate starts from a FRESH volume — the kernel
+# write test creates /KOUT.TXT, which must not already exist on a second run.
 FAT_IMG := build/fat.img
 
-$(FAT_IMG):
+fat-image:
 	@mkdir -p build
 	dd if=/dev/zero of=$(FAT_IMG) bs=1M count=64 status=none
 	mkfs.fat -F 32 -n PRADYOS $(FAT_IMG) >/dev/null
@@ -161,9 +165,26 @@ smoke: $(IMG)
 # Filesystem gate: builds the FAT32 data disk and asserts BOTH the kernel
 # sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
 # Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
-smoke-fs: $(IMG) $(FAT_IMG)
-	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok')" \
+smoke-fs: $(IMG) fat-image
+	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok\nkernel wrote this\ncreated+deleted /TMP.TXT OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it
+# creates+writes /KOUT.TXT and create+deletes /TMP.TXT on the FAT32 disk), then
+# on the host run fsck.fat to prove the volume is still consistent and mdir/mtype
+# to prove the kernel-written file persisted with the right contents. QEMU writes
+# the modified disk image back to build/fat.img, so the host sees the kernel's
+# changes. Needs dosfstools (fsck.fat) + mtools (mdir/mtype).
+smoke-fs-rw: $(IMG) fat-image
+	EXTRA_SENTINEL="$$(printf 'kernel wrote this\ncreated+deleted /TMP.TXT OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[fs-rw] host fsck.fat (consistency after kernel writes):"
+	fsck.fat -n -v $(FAT_IMG) | tail -n 20
+	@echo "[fs-rw] host mdir (root listing — expect KOUT.TXT, no TMP.TXT):"
+	mdir -i $(FAT_IMG) ::/
+	@echo "[fs-rw] host mtype /KOUT.TXT (expect 'kernel wrote this'):"
+	mtype -i $(FAT_IMG) ::/KOUT.TXT
+	@echo "[fs-rw] PASS — kernel-written file persisted and volume is consistent."
 
 clean:
 	rm -rf build

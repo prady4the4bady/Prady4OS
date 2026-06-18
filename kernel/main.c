@@ -30,6 +30,7 @@
 #include "virtio_blk.h"
 #include "vfs.h"
 #include "fat32.h"
+#include "sfs.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -343,12 +344,17 @@ static void blk_test_thread(void *arg) {
         kputs("[blk] read sector 0 failed\r\n");
     }
 
-    /* Write/read round-trip on a padding sector (well past the kernel). */
+    /* Write/read round-trip on a scratch sector in the boot disk's padding.
+     * MUST be past the kernel's on-disk image: the kernel loads from LBA 17 and
+     * the build caps it at 256 KiB (512 sectors), so it can occupy up to LBA
+     * ~529. QEMU persists writes back to the image file, so writing into the
+     * kernel region would corrupt the kernel for the next boot. LBA 1500 is past
+     * the kernel and inside the 1 MiB (2048-sector) image. */
     uint64_t w = pmm_alloc_page(), r = pmm_alloc_page();
     for (int i = 0; i < 512; i++)
         ((volatile uint8_t *)(uintptr_t)w)[i] = (uint8_t)(i * 7 + 3);
-    int wr = blk_write(0, 100, (void *)(uintptr_t)w, 1);
-    int rd = blk_read(0, 100, (void *)(uintptr_t)r, 1);
+    int wr = blk_write(0, 1500, (void *)(uintptr_t)w, 1);
+    int rd = blk_read(0, 1500, (void *)(uintptr_t)r, 1);
     int ok = (wr == 0 && rd == 0);
     for (int i = 0; ok && i < 512; i++)
         if (((volatile uint8_t *)(uintptr_t)r)[i] != ((volatile uint8_t *)(uintptr_t)w)[i])
@@ -392,6 +398,41 @@ static void fs_print_file(cap_t cap, int mnt, const char *path) {
     kputs("\"\r\n");
 }
 
+/* Exercise the write path: create a file, write to it, read it back, and
+ * create+delete a scratch file — all capability-gated (CAP_FS_WRITE). The
+ * persistent file (/KOUT.TXT) is left on disk for host-side fsck validation. */
+static void fs_write_test(cap_t cap, int mnt) {
+    const char *msg = "kernel wrote this";
+    uint32_t mlen = 0;
+    while (msg[mlen]) mlen++;
+
+    struct vfs_file f;
+    if (vfs_create(cap, mnt, "/KOUT.TXT", &f) != 0) {
+        kputs("[fs] create /KOUT.TXT failed\r\n");
+    } else {
+        int w = vfs_write(cap, &f, 0, msg, mlen);
+        kputs("[fs] wrote /KOUT.TXT (");
+        kputdec((w > 0) ? (uint64_t)w : 0);
+        kputs(" bytes)\r\n");
+        struct vfs_file g;
+        if (vfs_open(cap, mnt, "/KOUT.TXT", &g) == 0) {
+            uint64_t buf = pmm_alloc_page();
+            int n = vfs_read(cap, &g, 0, (void *)(uintptr_t)buf, 4095);
+            ((char *)(uintptr_t)buf)[(n > 0) ? n : 0] = 0;
+            kputs("[fs] /KOUT.TXT readback: \"");
+            kputs((char *)(uintptr_t)buf);
+            kputs("\"\r\n");
+        }
+    }
+
+    /* exercise create + delete on a scratch file */
+    if (vfs_create(cap, mnt, "/TMP.TXT", &f) == 0) {
+        vfs_write(cap, &f, 0, "temp", 4);
+        if (vfs_unlink(cap, mnt, "/TMP.TXT") == 0)
+            kputs("[fs] created+deleted /TMP.TXT OK\r\n");
+    }
+}
+
 /* VFS/FAT32 test: mount, list directories, read files — including a nested
  * path through a subdirectory — all capability-gated. */
 static void fs_test_thread(void *arg) {
@@ -417,6 +458,7 @@ static void fs_test_thread(void *arg) {
     fs_print_file(cap, mnt, "/HELLO.TXT");
     fs_list(cap, mnt, "/DOCS");
     fs_print_file(cap, mnt, "/DOCS/NOTE.TXT");
+    fs_write_test(cap, mnt);
 }
 
 static void sched_demo(void) {
@@ -440,7 +482,8 @@ static void sched_demo(void) {
     sched_create(blk_test_thread, 0, "blk");
     struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
     if (fst)
-        fst->arg = (void *)(uintptr_t)cap_create(fst->caps, RES_FILE, FS_RES_ID, CAP_FS_READ);
+        fst->arg = (void *)(uintptr_t)cap_create(fst->caps, RES_FILE, FS_RES_ID,
+                                                 CAP_FS_READ | CAP_FS_WRITE);
     __asm__ volatile("sti");
     kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk + VFS live\r\n");
 
@@ -612,6 +655,7 @@ void kmain(struct boot_info *bi) {
             virtio_blk_init(d->bus, d->dev, d->func);
     }
     fat32_register();                    /* Phase 4: register the FS driver with the VFS */
+    sfs_register();                      /* Phase 4: SFS skeleton (probe declines for now) */
 
     kputs("NEXUS: starting scheduler\r\n");
     sched_demo();                          /* never returns (becomes the idle thread) */

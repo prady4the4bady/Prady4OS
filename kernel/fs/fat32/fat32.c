@@ -32,11 +32,16 @@ struct fat32_ctx {
     uint32_t free_hint;            /* next-free-cluster search hint             */
     uint64_t scratch;              /* data/dir sector buffer (one PMM page)     */
     uint64_t fatbuf;               /* FAT sector buffer (one PMM page)          */
+    uint64_t auxbuf;               /* FSInfo sector buffer (one PMM page)       */
 };
 
 static uint16_t rd16(const uint8_t *p, int o) { return p[o] | ((uint16_t)p[o + 1] << 8); }
 static uint32_t rd32(const uint8_t *p, int o) {
     return p[o] | ((uint32_t)p[o + 1] << 8) | ((uint32_t)p[o + 2] << 16) | ((uint32_t)p[o + 3] << 24);
+}
+static void wr16(uint8_t *p, int o, uint16_t v) { p[o] = v & 0xFF; p[o + 1] = (v >> 8) & 0xFF; }
+static void wr32(uint8_t *p, int o, uint32_t v) {
+    p[o] = v & 0xFF; p[o + 1] = (v >> 8) & 0xFF; p[o + 2] = (v >> 16) & 0xFF; p[o + 3] = (v >> 24) & 0xFF;
 }
 
 static uint8_t *rd_data(struct fat32_ctx *c, uint32_t lba) {
@@ -175,7 +180,8 @@ static int fat32_mount(struct blk_device *bd, void **ctx_out) {
     c->bd = bd;
     c->scratch = pmm_alloc_page();
     c->fatbuf  = pmm_alloc_page();
-    if (!c->scratch || !c->fatbuf) {
+    c->auxbuf  = pmm_alloc_page();
+    if (!c->scratch || !c->fatbuf || !c->auxbuf) {
         kfree(c);
         return -1;
     }
@@ -271,14 +277,288 @@ static int fat32_read(void *ctx, const struct vfs_file *f, uint64_t off, void *b
     return (int)copied;
 }
 
+/* ---------------------------------------------------------------- writes -- */
+
+/* Write a 28-bit FAT entry value into every FAT copy (reserved hi nibble kept). */
+static void fat_set(struct fat32_ctx *c, uint32_t clus, uint32_t val) {
+    uint32_t off = (clus * 4) % 512;
+    uint32_t rel = (clus * 4) / 512;
+    for (uint8_t f = 0; f < c->num_fats; f++) {
+        uint32_t sec = c->fat_start + (uint32_t)f * c->fatsz + rel;
+        uint8_t *fb = rd_fat(c, sec);
+        uint32_t nv = (rd32(fb, off) & 0xF0000000u) | (val & 0x0FFFFFFFu);
+        wr32(fb, off, nv);
+        c->bd->write(c->bd, sec, fb, 1);
+    }
+}
+
+/* Adjust FSInfo free-count by `delta` and record `next_free` (best effort,
+ * only if the FSInfo signatures validate). Uses its own buffer (auxbuf). */
+static void fsinfo_adjust(struct fat32_ctx *c, int delta, uint32_t next_free) {
+    if (!c->fsinfo_sec)
+        return;
+    c->bd->read(c->bd, c->fsinfo_sec, (void *)(uintptr_t)c->auxbuf, 1);
+    uint8_t *b = (uint8_t *)(uintptr_t)c->auxbuf;
+    if (rd32(b, 0) != 0x41615252u || rd32(b, 484) != 0x61417272u)
+        return;                                  /* not a valid FSInfo sector */
+    uint32_t freec = rd32(b, 488);
+    if (freec != 0xFFFFFFFFu)
+        wr32(b, 488, (uint32_t)((int64_t)freec + delta));
+    wr32(b, 492, next_free);
+    c->bd->write(c->bd, c->fsinfo_sec, b, 1);
+}
+
+/* Find a free cluster, mark it end-of-chain, and return it (0 if the disk is
+ * full). Scans FAT sector by sector from free_hint, then wraps. */
+static uint32_t alloc_cluster(struct fat32_ctx *c) {
+    uint32_t total = c->total_clus ? c->total_clus : 0x0FFFFFF0u;
+    uint32_t start = c->free_hint < 2 ? 2 : c->free_hint;
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t from = (pass == 0) ? start : 2;
+        uint32_t to   = (pass == 0) ? total : start;
+        uint32_t cl = from;
+        while (cl < to) {
+            uint32_t sec = c->fat_start + (cl * 4) / 512;
+            uint32_t off = (cl * 4) % 512;
+            uint8_t *fb = rd_fat(c, sec);
+            for (; off < 512 && cl < to; off += 4, cl++) {
+                if ((rd32(fb, off) & 0x0FFFFFFFu) == 0) {
+                    fat_set(c, cl, 0x0FFFFFFFu);     /* clobbers fatbuf — done scanning */
+                    c->free_hint = cl + 1;
+                    fsinfo_adjust(c, -1, c->free_hint);
+                    return cl;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* Free a whole cluster chain back to the FAT + FSInfo. */
+static void free_chain(struct fat32_ctx *c, uint32_t clus) {
+    while (valid_chain(clus)) {
+        uint32_t nx = fat_next(c, clus);
+        fat_set(c, clus, 0);
+        fsinfo_adjust(c, +1, clus);
+        if (clus < c->free_hint) c->free_hint = clus;
+        clus = nx;
+    }
+}
+
+/* Zero every sector of a cluster (used for a freshly allocated directory cluster). */
+static void zero_cluster(struct fat32_ctx *c, uint32_t clus) {
+    uint8_t *b = (uint8_t *)(uintptr_t)c->scratch;
+    memset(b, 0, 512);
+    uint32_t base = clus_first_sector(c, clus);
+    for (uint32_t s = 0; s < c->spc; s++)
+        c->bd->write(c->bd, base + s, b, 1);
+}
+
+/* Patch a directory entry's first-cluster + size fields in place. */
+static int dirent_update(struct fat32_ctx *c, uint32_t ent_clus, uint16_t ent_off,
+                         uint32_t first_clus, uint32_t size) {
+    uint32_t sec = clus_first_sector(c, ent_clus) + ent_off / 512;
+    uint32_t o   = ent_off % 512;
+    uint8_t *b = rd_data(c, sec);
+    wr16(b, o + 20, (uint16_t)(first_clus >> 16));
+    wr16(b, o + 26, (uint16_t)(first_clus & 0xFFFF));
+    wr32(b, o + 28, size);
+    return c->bd->write(c->bd, sec, b, 1);
+}
+
+/* Resolve the parent directory cluster of `path` and the 8.3 key of its final
+ * component. Returns the parent cluster (0 on error); fills key[11]. */
+static uint32_t resolve_parent(struct fat32_ctx *c, const char *path, char *key) {
+    uint32_t clus = c->root_clus;
+    while (*path == '/') path++;
+    if (!*path) return 0;
+    for (;;) {
+        int len = 0;
+        while (path[len] && path[len] != '/') len++;
+        const char *next = path + len;
+        while (*next == '/') next++;
+        if (*next == 0) {                        /* final component = leaf name */
+            if (len == 0) return 0;
+            comp_key(path, len, key);
+            return clus;
+        }
+        char k[11];
+        comp_key(path, len, k);
+        struct dirent_info di;
+        if (dir_scan(c, clus, k, 0, 0, &di) != 0) return 0;
+        if (!(di.attr & ATTR_DIRECTORY)) return 0;
+        clus = di.first_clus ? di.first_clus : c->root_clus;
+        path = next;
+    }
+}
+
+static void write_new_entry(uint8_t *de, const char *key) {
+    memset(de, 0, 32);
+    for (int i = 0; i < 11; i++)
+        de[i] = (uint8_t)key[i];
+    de[11] = ATTR_ARCHIVE;                       /* first cluster + size zero via memset */
+}
+
+/* Create an empty regular file at `path` (fails if it already exists). */
+static int fat32_create(void *ctx, const char *path, struct vfs_file *out) {
+    struct fat32_ctx *c = (struct fat32_ctx *)ctx;
+    char key[11];
+    uint32_t dir = resolve_parent(c, path, key);
+    if (!dir)
+        return -1;
+    struct dirent_info ex;
+    if (dir_scan(c, dir, key, 0, 0, &ex) == 0)
+        return -1;                               /* already exists */
+
+    uint32_t clus = dir, last = dir;
+    while (valid_chain(clus)) {
+        last = clus;
+        for (uint32_t s = 0; s < c->spc; s++) {
+            uint32_t sec = clus_first_sector(c, clus) + s;
+            uint8_t *b = rd_data(c, sec);
+            for (int e = 0; e < 16; e++) {
+                uint8_t *de = b + e * 32;
+                if (de[0] == 0x00 || de[0] == 0xE5) {
+                    write_new_entry(de, key);
+                    c->bd->write(c->bd, sec, b, 1);
+                    out->cookie = 0; out->size = 0;
+                    out->dirent_clus = clus;
+                    out->dirent_off  = (uint16_t)(s * 512 + e * 32);
+                    return 0;
+                }
+            }
+        }
+        clus = fat_next(c, clus);
+    }
+    /* directory full — extend it by one zeroed cluster */
+    uint32_t nc = alloc_cluster(c);
+    if (!nc)
+        return -1;
+    zero_cluster(c, nc);
+    fat_set(c, last, nc);
+    uint32_t sec = clus_first_sector(c, nc);
+    uint8_t *b = rd_data(c, sec);
+    write_new_entry(b, key);
+    c->bd->write(c->bd, sec, b, 1);
+    out->cookie = 0; out->size = 0;
+    out->dirent_clus = nc; out->dirent_off = 0;
+    return 0;
+}
+
+/* Write `len` bytes at `off`. Allocates clusters all-or-nothing (rolls back on
+ * a short disk so the FS is left unchanged), commits the data, updates the
+ * directory entry, then read-back-verifies the written range before success. */
+static int fat32_write(void *ctx, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
+    struct fat32_ctx *c = (struct fat32_ctx *)ctx;
+    if (len == 0)
+        return 0;
+    uint32_t csize = (uint32_t)c->spc * 512;
+    uint64_t end = off + len;
+    uint32_t need_total = (uint32_t)((end + csize - 1) / csize);
+
+    /* 1) Measure the existing chain. */
+    uint32_t first = f->cookie, have = 0, last = 0, cl = first;
+    while (valid_chain(cl)) { have++; last = cl; cl = fat_next(c, cl); }
+
+    /* 2) All-or-nothing allocation of the shortfall. */
+    uint32_t need = (need_total > have) ? (need_total - have) : 0;
+    uint32_t newhead = 0, newtail = 0;
+    for (uint32_t i = 0; i < need; i++) {
+        uint32_t nc = alloc_cluster(c);
+        if (!nc) {                               /* rollback this op's allocations */
+            free_chain(c, newhead);
+            return -1;
+        }
+        if (!newhead) newhead = nc; else fat_set(c, newtail, nc);
+        newtail = nc;
+    }
+    if (need) {
+        if (first == 0) { first = newhead; f->cookie = newhead; }
+        else            { fat_set(c, last, newhead); }
+    }
+
+    /* 3) Commit the data (read-modify-write per sector). */
+    const uint8_t *src = (const uint8_t *)buf;
+    uint64_t pos = 0;
+    cl = first;
+    while (valid_chain(cl) && pos < end) {
+        for (uint32_t s = 0; s < c->spc; s++) {
+            uint64_t ss = pos;
+            if (ss + 512 > off && ss < end) {
+                uint32_t sec = clus_first_sector(c, cl) + s;
+                uint8_t *b = rd_data(c, sec);
+                for (int i = 0; i < 512; i++) {
+                    uint64_t fo = ss + i;
+                    if (fo >= off && fo < end)
+                        b[i] = src[fo - off];
+                }
+                c->bd->write(c->bd, sec, b, 1);
+            }
+            pos += 512;
+        }
+        cl = fat_next(c, cl);
+    }
+
+    /* 4) Update size + the directory entry. */
+    uint64_t newsize = (end > f->size) ? end : f->size;
+    f->size = newsize;
+    dirent_update(c, f->dirent_clus, f->dirent_off, f->cookie, (uint32_t)newsize);
+
+    /* 5) Read-back verification (mandate): re-read [off,end) and compare. */
+    uint32_t verified = 0;
+    pos = 0;
+    cl = f->cookie;
+    while (valid_chain(cl) && pos < end) {
+        for (uint32_t s = 0; s < c->spc; s++) {
+            uint64_t ss = pos;
+            if (ss + 512 > off && ss < end) {
+                uint8_t *b = rd_data(c, clus_first_sector(c, cl) + s);
+                for (int i = 0; i < 512; i++) {
+                    uint64_t fo = ss + i;
+                    if (fo >= off && fo < end) {
+                        if (b[i] != src[fo - off])
+                            return -1;             /* write did not persist */
+                        verified++;
+                    }
+                }
+            }
+            pos += 512;
+        }
+        cl = fat_next(c, cl);
+    }
+    if (verified != len)
+        return -1;
+    return (int)len;
+}
+
+/* Delete a regular file: free its chain and tombstone its directory entry. */
+static int fat32_unlink(void *ctx, const char *path) {
+    struct fat32_ctx *c = (struct fat32_ctx *)ctx;
+    char key[11];
+    uint32_t dir = resolve_parent(c, path, key);
+    if (!dir)
+        return -1;
+    struct dirent_info di;
+    if (dir_scan(c, dir, key, 0, 0, &di) != 0)
+        return -1;
+    if (di.attr & ATTR_DIRECTORY)
+        return -1;                               /* regular files only */
+    if (valid_chain(di.first_clus))
+        free_chain(c, di.first_clus);
+    uint32_t sec = clus_first_sector(c, di.ent_clus) + di.ent_off / 512;
+    uint8_t *b = rd_data(c, sec);
+    b[di.ent_off % 512] = 0xE5;
+    return c->bd->write(c->bd, sec, b, 1);
+}
+
 static const struct vfs_fs_ops fat32_ops = {
     .name    = "fat32",
     .mount   = fat32_mount,
     .open    = fat32_open,
-    .create  = 0,                  /* slice 4c */
+    .create  = fat32_create,
     .read    = fat32_read,
-    .write   = 0,                  /* slice 4c */
-    .unlink  = 0,                  /* slice 4c */
+    .write   = fat32_write,
+    .unlink  = fat32_unlink,
     .readdir = fat32_readdir,
 };
 

@@ -13,11 +13,16 @@ syscalls (NSI) + ring-3 user mode (ADR-012, SYSCALL/SYSRET, TSS, cap-gated).
 **Phase 3 (Layer 3 drivers) COMPLETE:** ACPI parser + PCIe MMCONFIG enumeration
 (ADR-013, 7 devices on q35); reusable modern-1.0 virtio transport + generic
 block layer + interrupt-driven virtio-blk (ADR-014). **Phase 4 (Layer 4 FS)
-underway:** VFS switch + read-only FAT32, capability-gated (ADR-015) — mounts a
-FAT32 disk, lists directories, reads files by path **including nested
-subdirectories** (slice 4b); verified on q35 with a second virtio-blk data disk.
-virtio-blk is now multi-instance + per-device serialized. Next in Phase 4:
-FAT32 writes (slice 4c), then SOVEREIGN FS (SFS). Build
+underway:** capability-gated VFS with a **mount table + per-mount context**
+(ADR-017, FAT32/SFS/ext4 mountable side-by-side). **FAT32 is now read-write**
+(ADR-015): mount, nested-path open/read/readdir (4a/4b), and create/write/unlink
+with cluster allocation, all-FAT-copy + FSInfo updates, all-or-nothing
+allocation, and in-kernel read-back verification (4c) — validated by an
+adversarial host pass (`fsck.fat` + `mdir`/`mtype`). The **SFS** on-disk layout
++ driver skeleton are stood up (ADR-017, engine deferred), and `CAP_FS_SFS_*`
+reserved. Shared kernel state (PMM/console/scheduler) made preemption-safe
+(ADR-016). Next: FAT32 LFN/timestamps or begin the SFS engine. virtio-blk is
+multi-instance + per-device serialized. Build
 is warning-clean and `-Werror` enforced (C + NASM). Deferred: 3-lane NAS, APIC,
 W^X, SFS, ext4 (see DEFERRED section). Architecture confirmed against the user's
 Layer 1–6 boards; realistic perf targets adopted (context switch ≤ 1.5 µs,
@@ -73,7 +78,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; reuses virtio transport |
 | ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
 | VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + **mount table** (per-mount context vtable; FAT32/SFS/ext4 mountable side-by-side) + `open`/`create`/`read`/`write`/`unlink`/`readdir`, all capability-gated (CAP_FS_READ/WRITE via NCS) + per-thread write budget. Full mount-point namespace deferred. |
-| FAT32 (read-only) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names; mount/open/read/readdir. **Subdirectory traversal** (nested paths, path-aware readdir) added in slice 4b. Verified: list `/` + `/DOCS`, read `/HELLO.TXT` + `/DOCS/NOTE.TXT`. Writes/LFN deferred (slice 4c). |
+| FAT32 (read-write) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names, nested paths. **Read-write (slice 4c):** create/write/unlink, cluster alloc + all-FAT-copies update, FSInfo, all-or-nothing alloc, in-kernel read-back verify. Validated by host `fsck.fat`+`mdir`/`mtype` (`make smoke-fs-rw`). LFN/timestamps deferred. |
+| SOVEREIGN FS (SFS) skeleton | 🟡 IN PROGRESS | 4 | `kernel/fs/sfs/` (ADR-017): on-disk superblock + B+ tree node structs pinned; mount stub declines (no engine yet); `CAP_FS_SFS_*` reserved. Engine (CoW B+ tree, versioning, atomic tx, LZ4) deferred. |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
 | ext4 Compatibility | 🔴 NOT BUILT | 4 | read/write |
 | pradyos-init (PID 1) | 🔴 NOT BUILT | 5 | Rust |
@@ -113,7 +119,9 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 | **AVX-512 asm + IPC zero-copy (VMOVDQU)** | scalar paths | performance-hardening pass |
 | **Larger/relocating kernel loader** | Stage 2 loads 256 KiB (8×64 sectors) to 0x10000 | kernel exceeds ~256 KiB, or moving the kernel off low memory |
 | **virtio: MSI-X + multi-request** | INTx; one in-flight request **per device**, multi-disk via per-device serialization (ADR-015) | APIC live; concurrent in-flight I/O (request-tag table) |
-| **FAT32 write / LFN / subdirectories** | read-only, 8.3, root-dir-only (ADR-015) | writable userspace FS; nested paths |
-| **VFS mount table (multi-volume)** | single global mount; FAT32 file-scope geometry | second filesystem (SFS/ext4) mounted alongside |
+| **Concurrent multi-thread block I/O** | self-tests share the block layer but the driver is single-in-flight-per-disk; per-mount FS lock not yet added | many threads issuing FS/block I/O at once (per-mount + block-layer locks, ADR-016) |
+| **SMP spinlocks** | single-core; PMM/console/scheduler use interrupt masking (ADR-016) | second CPU brought online (APIC) |
+| **SOVEREIGN FS (SFS) engine** | on-disk layout + driver stub only (ADR-017) | CoW B+ tree, versioned snapshots, journalled atomic tx, 4 KiB tags, inline LZ4 |
+| **FAT32 LFN / timestamps** | 8.3 names; new entries get a zero date (no RTC) | long filenames; real mtimes (needs an RTC driver) |
 
 See the per-item rows above for the primary (non-deferred) component status.

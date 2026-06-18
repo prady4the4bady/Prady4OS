@@ -28,6 +28,12 @@ typedef uint64_t cap_t;
 #define CAP_FS_READ       (1u << 10)  /* read files/dirs via the VFS            */
 #define CAP_FS_WRITE      (1u << 11)  /* write/create/delete via the VFS        */
 #define CAP_FS_ADMIN      (1u << 12)  /* mount/format                           */
+/* SOVEREIGN FS (SFS) rights — reserved ahead of the SFS engine (Phase 4).
+ * Distinct from the generic CAP_FS_* so SFS-native operations (snapshots,
+ * transactions, compression policy) can be gated independently. */
+#define CAP_FS_SFS_READ   (1u << 13)  /* read an SFS volume                     */
+#define CAP_FS_SFS_WRITE  (1u << 14)  /* write/transact on an SFS volume         */
+#define CAP_FS_SFS_ADMIN  (1u << 15)  /* mkfs/snapshot/compaction on SFS         */
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u

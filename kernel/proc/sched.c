@@ -104,10 +104,27 @@ static int runnable(const struct tcb *t) {
     return t->state == THREAD_READY || t->state == THREAD_RUNNING;
 }
 
+/* schedule() must be atomic against the timer: it is reached both voluntarily
+ * (yield/sched_block) and from the timer IRQ (sched_tick). If a voluntary
+ * schedule() ran with interrupts enabled (e.g. the yield in a driver's
+ * busy-wait), a timer tick could re-enter schedule() mid-context-switch and
+ * corrupt thread state. Masking interrupts here makes it non-reentrant; the
+ * per-thread IF is preserved across the switch by context_switch (pushfq/popfq)
+ * and the save/restore below restores the caller's IF on resume. */
+static inline uint64_t irq_save(void) {
+    uint64_t f;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+static inline void irq_restore(uint64_t f) {
+    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+}
+
 /* Switch to the next runnable thread in the ring (round-robin, skipping
  * blocked/finished threads). The idle thread is always runnable, so there is
  * always something to run. */
 static void schedule(void) {
+    uint64_t fl = irq_save();
     struct tcb *prev = current_thread;
 
     struct tcb *next = prev->next;
@@ -115,8 +132,10 @@ static void schedule(void) {
         next = next->next;
 
     if (next == prev) {
-        if (runnable(prev))
+        if (runnable(prev)) {
+            irq_restore(fl);
             return;                /* prev is the only runnable thread */
+        }
         next = &idle_tcb;          /* prev blocked and nothing else: fall to idle */
     }
 
@@ -131,6 +150,7 @@ static void schedule(void) {
     }
     context_switch(&prev->rsp, next->rsp);
     /* resumed here later, as `prev`, when scheduled again */
+    irq_restore(fl);
 }
 
 void sched_tick(void) {

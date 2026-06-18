@@ -113,3 +113,66 @@ allocator.
   directory-entry create/update, FSInfo.
 - Long filenames (VFAT LFN); relative paths / cwd; per-mount context.
 - SOVEREIGN FS (SFS) and ext4 — later phase-4 slices.
+
+## Slice 4c: FAT32 write + VFS mount table + SFS skeleton
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-015 (FAT32 write), ADR-016 (preemptive concurrency), ADR-017
+  (VFS mount table + SFS skeleton).
+- **Files:** `kernel/fs/vfs/{vfs.c,vfs.h}` (mount table + ctx ops + write/create/
+  unlink), `kernel/fs/fat32/fat32.c` (per-mount ctx + write path), `kernel/fs/
+  sfs/{sfs.c,sfs.h}` (skeleton), `kernel/cap.h` (CAP_FS_SFS_*), `kernel/proc/
+  sched.{c,h}` (write budget + atomic schedule), `kernel/mm/pmm.c`,
+  `kernel/console.c` (interrupt-atomic), `kernel/main.c`, `Makefile`,
+  `tools/qemu_runner/boot_test.sh`.
+
+### Verified (QEMU q35) — in-kernel write→read-back
+
+```
+[fs] wrote /KOUT.TXT (17 bytes)
+[fs] /KOUT.TXT readback: "kernel wrote this"
+[fs] created+deleted /TMP.TXT OK
+```
+
+### Verified (host-side adversarial validation, `make smoke-fs-rw`)
+
+After the kernel creates/writes `/KOUT.TXT` and create+deletes `/TMP.TXT`, the
+host inspects the same image QEMU wrote back:
+
+```
+fsck.fat -n -v build/fat.img   ->  "5 files, 5/129022 clusters"  (consistent)
+mdir   -i build/fat.img ::/    ->  HELLO.TXT, DOCS, KOUT.TXT  (no TMP.TXT)
+mtype  -i build/fat.img ::/KOUT.TXT  ->  "kernel wrote this"
+```
+
+- `fsck.fat` finding no errors confirms the FAT chains, directory entry, and
+  FSInfo free-count the kernel wrote are spec-correct.
+- Writes are all-or-nothing on allocation (rollback on a short disk) and every
+  write is read-back-verified in-kernel before returning success.
+- Per-thread write budget (`tcb.fs_write_budget`, 1 MiB default) enforced in
+  `vfs_write`.
+
+### Debugging note — the real root cause (root-caused)
+
+`make smoke-fs` failed intermittently (≈9/10) with garbled serial and a block
+test pattern appearing in kernel output. It was **not** the filesystem or a data
+race: the block self-test wrote its scratch pattern to **boot-disk sector 100**,
+and the kernel image had grown past 50 KiB so sector 100 now lies inside the
+on-disk kernel (loaded from LBA 17). QEMU persists guest writes back to
+`build/pradyos.img`, so each run corrupted the kernel for the *next* boot — run 1
+passed (clean image), runs 2-10 loaded a corrupted kernel. In slice 4b the
+kernel was < 50 KiB so the same sector-100 write landed in padding. Fixed by
+moving the scratch write to LBA 1500 (past the 256 KiB / 512-sector kernel cap,
+inside the 1 MiB image). `make smoke-fs` then passes repeatably.
+
+While diagnosing, three genuine preemptive-concurrency gaps were also fixed
+(ADR-016): unlocked PMM free-lists, interleaving console writes, and a
+re-enterable `schedule()`.
+
+### Not done yet (after 4c)
+
+- FAT32 long filenames (VFAT LFN); real timestamps (needs an RTC driver).
+- Per-mount FS lock + block-layer multi-request queue for fully concurrent
+  multi-thread I/O (ADR-016 / build_status DEFERRED).
+- SFS engine (CoW B+ tree, versioning, atomic tx, LZ4) and ext4.
+- VFS mount-point namespace (`/mnt/...`).

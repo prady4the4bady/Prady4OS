@@ -22,6 +22,21 @@ static inline uint64_t block_size(unsigned order) {
     return PAGE_SIZE << order;
 }
 
+/* The free lists are shared mutable state. With preemptive multitasking, two
+ * threads can call pmm_alloc/free concurrently; without mutual exclusion they
+ * race the intrusive lists and can hand out the same page twice. On this
+ * single core, masking interrupts around the critical section is sufficient
+ * (a real spinlock arrives with SMP/APIC). Save+restore the flag so callers
+ * that are already in a cli region stay masked on return. */
+static inline uint64_t irq_save(void) {
+    uint64_t f;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+static inline void irq_restore(uint64_t f) {
+    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+}
+
 static void list_push(unsigned order, uint64_t addr) {
     struct free_block *b = (struct free_block *)(uintptr_t)addr;
     b->next = free_list[order];
@@ -53,22 +68,25 @@ uint64_t pmm_alloc_pages(unsigned order) {
     if (order >= PMM_MAX_ORDER)
         return 0;
 
+    uint64_t fl = irq_save();
+    uint64_t addr = 0;
     unsigned o = order;
     while (o < PMM_MAX_ORDER && !free_list[o])
         o++;
-    if (o >= PMM_MAX_ORDER)
-        return 0;                       /* out of memory at this size */
-
-    uint64_t addr = list_pop(o);
-    while (o > order) {                 /* split down, freeing the upper buddy */
-        o--;
-        list_push(o, addr + block_size(o));
+    if (o < PMM_MAX_ORDER) {
+        addr = list_pop(o);
+        while (o > order) {             /* split down, freeing the upper buddy */
+            o--;
+            list_push(o, addr + block_size(o));
+        }
+        free_pages -= (1ull << order);
     }
-    free_pages -= (1ull << order);
-    return addr;
+    irq_restore(fl);
+    return addr;                        /* 0 == out of memory at this size */
 }
 
 void pmm_free_pages(uint64_t addr, unsigned order) {
+    uint64_t fl = irq_save();
     free_pages += (1ull << order);
     while (order < PMM_MAX_ORDER - 1) {
         uint64_t buddy = addr ^ block_size(order);
@@ -81,6 +99,7 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
         order++;
     }
     list_push(order, addr);
+    irq_restore(fl);
 }
 
 uint64_t pmm_alloc_page(void)        { return pmm_alloc_pages(0); }
