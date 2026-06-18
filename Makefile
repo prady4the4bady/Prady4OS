@@ -145,7 +145,10 @@ $(FAT_IMG):
 	mkfs.fat -F 32 -n PRADYOS $(FAT_IMG) >/dev/null
 	printf 'PRADYOS filesystem works!' > build/hello.txt
 	mcopy -i $(FAT_IMG) build/hello.txt ::/HELLO.TXT
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT)"
+	mmd   -i $(FAT_IMG) ::/DOCS
+	printf 'nested file ok' > build/note.txt
+	mcopy -i $(FAT_IMG) build/note.txt ::/DOCS/NOTE.TXT
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT)"
 
 # Kernel boot gate: proves the kernel boots and prints its sentinel. Deliberately
 # does NOT depend on the FAT image — the kernel gate must not fail just because a
@@ -159,7 +162,7 @@ smoke: $(IMG)
 # sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
 # Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
 smoke-fs: $(IMG) $(FAT_IMG)
-	EXTRA_SENTINEL='PRADYOS filesystem works!' \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

@@ -47,8 +47,8 @@ int vfs_read(cap_t cap, const struct vfs_file *f, uint64_t off, void *buf, uint3
     return g_mounted->read(f, off, buf, len);
 }
 
-int vfs_readdir(cap_t cap, int index, char *name, uint32_t *size) {
+int vfs_readdir(cap_t cap, const char *path, int index, char *name, uint32_t *size) {
     if (!g_mounted || !cap_ok(cap, CAP_FS_READ))
         return -1;
-    return g_mounted->readdir(index, name, size);
+    return g_mounted->readdir(path, index, name, size);
 }

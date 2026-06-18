@@ -65,10 +65,51 @@ disk's BARs overwrote the first disk's MMIO window (both pointed at blk1's
 registers). Each mapped BAR now gets a distinct VA window from a monotonic
 allocator.
 
-### Not done yet
+### Not done yet (after 4a)
 
-- FAT32 writes; long filenames (VFAT LFN); subdirectory traversal; FSInfo.
+- FAT32 writes; long filenames (VFAT LFN); FSInfo.
 - Mount table (multiple volumes / `blkN:/` paths) — single mount for now.
 - Per-mount context (FAT32 uses file-scope globals → one volume at a time).
 - SOVEREIGN FS (SFS: B+ tree, versioned, atomic tx) and ext4 — later slices.
 - Per-device blocked-waiter queue (serialization is a yield-spin for now).
+
+## Slice 4b: FAT32 subdirectory traversal (nested paths)
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-015 (extended).
+- **Files:** `kernel/fs/fat32/fat32.c` (component-based path resolver:
+  `comp_key`, `dir_scan`, `walk_dir`; rewrote `open`/`readdir`),
+  `kernel/fs/vfs/{vfs.c,vfs.h}` (`readdir` gains a `path` arg), `kernel/main.c`
+  (fs self-test reads a nested file + lists a subdirectory), `Makefile`
+  (`/DOCS/NOTE.TXT` added to the FAT image; `smoke-fs` asserts both files),
+  `tools/qemu_runner/boot_test.sh` (multi-pattern `EXTRA_SENTINEL`).
+
+### Verified (QEMU q35, FAT32 disk with a subdirectory)
+
+```
+[fs] mounted fat32 on blk1
+[fs] dir /:
+    HELLO.TXT  25 bytes
+    DOCS  0 bytes
+[fs] /HELLO.TXT: "PRADYOS filesystem works!"
+[fs] dir /DOCS:
+    .  0 bytes
+    ..  0 bytes
+    NOTE.TXT  14 bytes
+[fs] /DOCS/NOTE.TXT: "nested file ok"
+```
+
+- `open("/DOCS/NOTE.TXT")` descends component-by-component: each non-final
+  component must carry `ATTR_DIRECTORY`; the final must be a regular file.
+- `readdir("/DOCS", ...)` resolves the directory via `walk_dir` then enumerates
+  it (including `.`/`..`); `readdir("/", ...)` lists the root as before.
+- `make smoke-fs` now asserts BOTH `"PRADYOS filesystem works!"` (root) and
+  `"nested file ok"` (nested) — the nested assertion fails unless path descent
+  works. smoke + smoke-fs PASS; `-Werror` clean.
+
+### Not done yet (after 4b)
+
+- FAT32 **writes** (next slice 4c): cluster allocation, FAT + mirror update,
+  directory-entry create/update, FSInfo.
+- Long filenames (VFAT LFN); relative paths / cwd; per-mount context.
+- SOVEREIGN FS (SFS) and ext4 — later phase-4 slices.

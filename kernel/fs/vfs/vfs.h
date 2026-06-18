@@ -22,7 +22,7 @@ struct vfs_fs_ops {
     int (*mount)(struct blk_device *bd);                                   /* 0 if recognized+mounted */
     int (*open)(const char *path, struct vfs_file *out);                   /* 0 ok */
     int (*read)(const struct vfs_file *f, uint64_t off, void *buf, uint32_t len); /* bytes, or -1 */
-    int (*readdir)(int index, char *name, uint32_t *size);                 /* 0 ok, -1 = end */
+    int (*readdir)(const char *path, int index, char *name, uint32_t *size); /* 0 ok, -1 = end */
 };
 
 struct blk_device;
@@ -32,5 +32,5 @@ int  vfs_mount(unsigned blk_index);    /* try registered FS drivers on a disk */
 
 int  vfs_open(cap_t cap, const char *path, struct vfs_file *out);
 int  vfs_read(cap_t cap, const struct vfs_file *f, uint64_t off, void *buf, uint32_t len);
-int  vfs_readdir(cap_t cap, int index, char *name, uint32_t *size);
+int  vfs_readdir(cap_t cap, const char *path, int index, char *name, uint32_t *size);
 const char *vfs_fs_name(void);         /* mounted FS name, or NULL */

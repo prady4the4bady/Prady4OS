@@ -52,12 +52,20 @@ if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
     rm -f "$SERIAL_LOG"
     exit 1
 fi
-if [ -n "$EXTRA_SENTINEL" ] && ! grep -qF "$EXTRA_SENTINEL" "$SERIAL_LOG"; then
-    echo "[smoke] FAIL — extra sentinel '$EXTRA_SENTINEL' not found. Serial output was:"
-    cat "$SERIAL_LOG"
-    rm -f "$SERIAL_LOG"
-    exit 1
-fi
-echo "[smoke] PASS — saw '$SENTINEL'${EXTRA_SENTINEL:+ and '$EXTRA_SENTINEL'}."
+# Each non-empty line of EXTRA_SENTINEL is a literal pattern that must also appear.
+extra_count=0
+while IFS= read -r pat; do
+    [ -z "$pat" ] && continue
+    extra_count=$((extra_count + 1))
+    if ! grep -qF "$pat" "$SERIAL_LOG"; then
+        echo "[smoke] FAIL — required pattern '$pat' not found. Serial output was:"
+        cat "$SERIAL_LOG"
+        rm -f "$SERIAL_LOG"
+        exit 1
+    fi
+done <<EOF
+$EXTRA_SENTINEL
+EOF
+echo "[smoke] PASS — saw '$SENTINEL'$( [ "$extra_count" -gt 0 ] && echo " + $extra_count FS pattern(s)" )."
 rm -f "$SERIAL_LOG"
 exit 0

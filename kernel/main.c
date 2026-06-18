@@ -356,7 +356,44 @@ static void blk_test_thread(void *arg) {
     kputs(ok ? "[blk] write/read round-trip OK\r\n" : "[blk] write/read round-trip FAILED\r\n");
 }
 
-/* VFS/FAT32 test: mount a filesystem, list root, read a file — all cap-gated. */
+/* List up to 32 entries of a directory by path (cap-gated). */
+static void fs_list(cap_t cap, const char *path) {
+    char name[16];
+    uint32_t sz;
+    kputs("[fs] dir ");
+    kputs(path);
+    kputs(":\r\n");
+    for (int i = 0; i < 32 && vfs_readdir(cap, path, i, name, &sz) == 0; i++) {
+        kputs("    ");
+        kputs(name);
+        kputs("  ");
+        kputdec(sz);
+        kputs(" bytes\r\n");
+    }
+}
+
+/* Open a file by path, read it, and echo its contents (cap-gated). */
+static void fs_print_file(cap_t cap, const char *path) {
+    struct vfs_file f;
+    if (vfs_open(cap, path, &f) != 0) {
+        kputs("[fs] ");
+        kputs(path);
+        kputs(" not found\r\n");
+        return;
+    }
+    uint64_t buf = pmm_alloc_page();
+    uint32_t want = (f.size < 4095) ? (uint32_t)f.size : 4095;
+    int n = vfs_read(cap, &f, 0, (void *)(uintptr_t)buf, want);
+    ((char *)(uintptr_t)buf)[(n > 0) ? n : 0] = 0;
+    kputs("[fs] ");
+    kputs(path);
+    kputs(": \"");
+    kputs((char *)(uintptr_t)buf);
+    kputs("\"\r\n");
+}
+
+/* VFS/FAT32 test: mount, list directories, read files — including a nested
+ * path through a subdirectory — all capability-gated. */
 static void fs_test_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
     int mounted = -1;
@@ -372,28 +409,10 @@ static void fs_test_thread(void *arg) {
     kputdec((uint64_t)mounted);
     kputs("\r\n");
 
-    char name[16];
-    uint32_t sz;
-    for (int i = 0; i < 16 && vfs_readdir(cap, i, name, &sz) == 0; i++) {
-        kputs("  /");
-        kputs(name);
-        kputs("  ");
-        kputdec(sz);
-        kputs(" bytes\r\n");
-    }
-
-    struct vfs_file f;
-    if (vfs_open(cap, "/HELLO.TXT", &f) == 0) {
-        uint64_t buf = pmm_alloc_page();
-        uint32_t want = (f.size < 4095) ? (uint32_t)f.size : 4095;
-        int n = vfs_read(cap, &f, 0, (void *)(uintptr_t)buf, want);
-        ((char *)(uintptr_t)buf)[(n > 0) ? n : 0] = 0;
-        kputs("[fs] /HELLO.TXT: \"");
-        kputs((char *)(uintptr_t)buf);
-        kputs("\"\r\n");
-    } else {
-        kputs("[fs] /HELLO.TXT not found\r\n");
-    }
+    fs_list(cap, "/");
+    fs_print_file(cap, "/HELLO.TXT");
+    fs_list(cap, "/DOCS");
+    fs_print_file(cap, "/DOCS/NOTE.TXT");
 }
 
 static void sched_demo(void) {

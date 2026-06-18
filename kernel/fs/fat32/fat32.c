@@ -58,29 +58,100 @@ static void fmt_83(const uint8_t *de, char *out) {
     out[n] = 0;
 }
 
-/* "/HELLO.TXT" -> "HELLO   TXT" (11 bytes, space-padded, upper-cased). */
-static void key_83(const char *path, char *key) {
+#define ATTR_VOLUME_ID 0x08
+#define ATTR_DIRECTORY 0x10
+#define ATTR_LFN       0x0F            /* RO|HID|SYS|VOL — a long-name fragment */
+
+struct dirent_info {
+    uint32_t first_clus;
+    uint32_t size;
+    uint8_t  attr;
+};
+
+/* One path component (length `len`, no slashes) -> "NAME    EXT" (11 bytes,
+ * space-padded, upper-cased). */
+static void comp_key(const char *comp, int len, char *key) {
     for (int i = 0; i < 11; i++)
         key[i] = ' ';
-    while (*path == '/')
-        path++;
-    int i = 0;
-    while (*path && *path != '.' && i < 8) {
-        char c = *path++;
+    int n = 0, i = 0;
+    while (n < len && comp[n] != '.' && i < 8) {
+        char c = comp[n++];
         if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
         key[i++] = c;
     }
-    while (*path && *path != '.')
-        path++;
-    if (*path == '.') {
-        path++;
+    while (n < len && comp[n] != '.')
+        n++;
+    if (n < len && comp[n] == '.') {
+        n++;
         int j = 8;
-        while (*path && j < 11) {
-            char c = *path++;
+        while (n < len && j < 11) {
+            char c = comp[n++];
             if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
             key[j++] = c;
         }
     }
+}
+
+/* Scan the directory whose cluster chain starts at `dir_clus`. Two modes:
+ *   key != NULL : find the entry whose 11-byte 8.3 name equals key.
+ *   key == NULL : find the `index`-th visible entry (0-based), filling name_out.
+ * Fills *out (first cluster / size / attr) on a hit. Returns 0 on hit, -1 if the
+ * directory ends or the chain is exhausted first. */
+static int dir_scan(uint32_t dir_clus, const char *key, int index,
+                    char *name_out, struct dirent_info *out) {
+    int count = 0;
+    uint32_t clus = dir_clus;
+    while (valid_chain(clus)) {
+        for (uint32_t s = 0; s < g_spc; s++) {
+            uint8_t *sec = rd_data(clus_first_sector(clus) + s);
+            for (int e = 0; e < 16; e++) {
+                uint8_t *de = sec + e * 32;
+                if (de[0] == 0x00) return -1;          /* end of directory */
+                if (de[0] == 0xE5) continue;           /* deleted */
+                uint8_t attr = de[11];
+                if ((attr & ATTR_LFN) == ATTR_LFN) continue;   /* long-name */
+                if (attr & ATTR_VOLUME_ID) continue;           /* volume label */
+                if (key) {
+                    int match = 1;
+                    for (int i = 0; i < 11; i++)
+                        if ((char)de[i] != key[i]) { match = 0; break; }
+                    if (!match) continue;
+                } else if (count++ != index) {
+                    continue;
+                }
+                if (name_out) fmt_83(de, name_out);
+                if (out) {
+                    out->first_clus = ((uint32_t)rd16(de, 20) << 16) | rd16(de, 26);
+                    out->size  = rd32(de, 28);
+                    out->attr  = attr;
+                }
+                return 0;
+            }
+        }
+        clus = fat_next(clus);
+    }
+    return -1;
+}
+
+/* Resolve `path` as a directory, descending each component; return its starting
+ * cluster, or 0 on error. "/" (or "") resolves to the root directory. A first
+ * cluster of 0 in a "." /".." entry means the root on FAT32. */
+static uint32_t walk_dir(const char *path) {
+    uint32_t clus = g_root_clus;
+    while (*path) {
+        while (*path == '/') path++;
+        if (!*path) break;
+        int len = 0;
+        while (path[len] && path[len] != '/') len++;
+        char key[11];
+        comp_key(path, len, key);
+        struct dirent_info di;
+        if (dir_scan(clus, key, 0, 0, &di) != 0) return 0;
+        if (!(di.attr & ATTR_DIRECTORY)) return 0;   /* not a directory */
+        clus = di.first_clus ? di.first_clus : g_root_clus;
+        path += len;
+    }
+    return clus;
 }
 
 static int fat32_mount(struct blk_device *bd) {
@@ -106,58 +177,47 @@ static int fat32_mount(struct blk_device *bd) {
     return 0;
 }
 
-static int fat32_readdir(int index, char *name, uint32_t *size) {
-    int count = 0;
-    uint32_t clus = g_root_clus;
-    while (valid_chain(clus)) {
-        for (uint32_t s = 0; s < g_spc; s++) {
-            uint8_t *sec = rd_data(clus_first_sector(clus) + s);
-            for (int e = 0; e < 16; e++) {
-                uint8_t *de = sec + e * 32;
-                if (de[0] == 0x00) return -1;          /* end of directory */
-                if (de[0] == 0xE5) continue;           /* deleted */
-                uint8_t attr = de[11];
-                if ((attr & 0x0F) == 0x0F) continue;   /* long-name entry */
-                if (attr & 0x08) continue;             /* volume label */
-                if (count == index) {
-                    fmt_83(de, name);
-                    if (size) *size = rd32(de, 28);
-                    return 0;
-                }
-                count++;
-            }
-        }
-        clus = fat_next(clus);
-    }
-    return -1;
+/* List the `index`-th entry of the directory named by `path` ("/" = root). */
+static int fat32_readdir(const char *path, int index, char *name, uint32_t *size) {
+    uint32_t dir = walk_dir(path);
+    if (!dir)
+        return -1;
+    struct dirent_info di;
+    if (dir_scan(dir, 0, index, name, &di) != 0)
+        return -1;
+    if (size) *size = di.size;
+    return 0;
 }
 
+/* Open a regular file by absolute path, descending subdirectories. */
 static int fat32_open(const char *path, struct vfs_file *out) {
-    char key[11];
-    key_83(path, key);
     uint32_t clus = g_root_clus;
-    while (valid_chain(clus)) {
-        for (uint32_t s = 0; s < g_spc; s++) {
-            uint8_t *sec = rd_data(clus_first_sector(clus) + s);
-            for (int e = 0; e < 16; e++) {
-                uint8_t *de = sec + e * 32;
-                if (de[0] == 0x00) return -1;
-                if (de[0] == 0xE5) continue;
-                uint8_t attr = de[11];
-                if ((attr & 0x0F) == 0x0F || (attr & 0x08)) continue;
-                int match = 1;
-                for (int i = 0; i < 11; i++)
-                    if ((char)de[i] != key[i]) { match = 0; break; }
-                if (match) {
-                    out->cookie = ((uint32_t)rd16(de, 20) << 16) | rd16(de, 26);
-                    out->size = rd32(de, 28);
-                    return 0;
-                }
-            }
+    while (*path == '/')
+        path++;
+    for (;;) {
+        int len = 0;
+        while (path[len] && path[len] != '/') len++;
+        if (len == 0)
+            return -1;                      /* empty / trailing-slash component */
+        char key[11];
+        comp_key(path, len, key);
+        struct dirent_info di;
+        if (dir_scan(clus, key, 0, 0, &di) != 0)
+            return -1;
+        const char *next = path + len;
+        while (*next == '/') next++;
+        if (*next == 0) {                   /* final component — must be a file */
+            if (di.attr & ATTR_DIRECTORY)
+                return -1;
+            out->cookie = di.first_clus;
+            out->size   = di.size;
+            return 0;
         }
-        clus = fat_next(clus);
+        if (!(di.attr & ATTR_DIRECTORY))    /* intermediate must be a directory */
+            return -1;
+        clus = di.first_clus ? di.first_clus : g_root_clus;
+        path = next;
     }
-    return -1;
 }
 
 static int fat32_read(const struct vfs_file *f, uint64_t off, void *buf, uint32_t len) {

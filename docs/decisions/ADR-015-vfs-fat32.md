@@ -48,8 +48,13 @@ this slice honest and verifiable.
 
 ## Consequences / deferred
 
-- **Read-only, 8.3, root-dir-only.** Writes, long filenames (VFAT LFN),
-  subdirectory traversal, and FSInfo are not implemented yet.
+- **Read-only, 8.3.** Writes, long filenames (VFAT LFN), and FSInfo are not
+  implemented yet.
+- **Subdirectory traversal — added in slice 4b.** `open` resolves nested
+  absolute paths component-by-component (each intermediate must be a directory);
+  `readdir` gained a `path` argument and lists any directory (root or nested) via
+  a `walk_dir` resolver over a shared `dir_scan` helper. `.`/`..` entries are
+  surfaced as-is. See `docs/test_results/phase_4.md` slice 4b.
 - **Single mount, single FS instance.** A mount table (multiple volumes, paths
   like `blkN:/...`) comes with more filesystems.
 - **Per-FS global state.** FAT32 keeps its geometry in file-scope globals, so

@@ -14,9 +14,10 @@ syscalls (NSI) + ring-3 user mode (ADR-012, SYSCALL/SYSRET, TSS, cap-gated).
 (ADR-013, 7 devices on q35); reusable modern-1.0 virtio transport + generic
 block layer + interrupt-driven virtio-blk (ADR-014). **Phase 4 (Layer 4 FS)
 underway:** VFS switch + read-only FAT32, capability-gated (ADR-015) — mounts a
-FAT32 disk, lists root, reads a file by 8.3 name; verified on q35 with a second
-virtio-blk data disk. virtio-blk is now multi-instance + per-device serialized.
-Next in Phase 4: FAT32 writes / subdirectories, then SOVEREIGN FS (SFS). Build
+FAT32 disk, lists directories, reads files by path **including nested
+subdirectories** (slice 4b); verified on q35 with a second virtio-blk data disk.
+virtio-blk is now multi-instance + per-device serialized. Next in Phase 4:
+FAT32 writes (slice 4c), then SOVEREIGN FS (SFS). Build
 is warning-clean and `-Werror` enforced (C + NASM). Deferred: 3-lane NAS, APIC,
 W^X, SFS, ext4 (see DEFERRED section). Architecture confirmed against the user's
 Layer 1–6 boards; realistic perf targets adopted (context switch ≤ 1.5 µs,
@@ -72,7 +73,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; reuses virtio transport |
 | ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
 | VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + `vfs_mount`/`open`/`read`/`readdir`, all capability-gated (CAP_FS_READ via NCS). Single mount for now. |
-| FAT32 (read-only) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names, root dir; mount/open/read/readdir. Verified: mount blk1, list root, read `/HELLO.TXT`. Writes/LFN/subdirs deferred. |
+| FAT32 (read-only) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names; mount/open/read/readdir. **Subdirectory traversal** (nested paths, path-aware readdir) added in slice 4b. Verified: list `/` + `/DOCS`, read `/HELLO.TXT` + `/DOCS/NOTE.TXT`. Writes/LFN deferred (slice 4c). |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
 | ext4 Compatibility | 🔴 NOT BUILT | 4 | read/write |
 | pradyos-init (PID 1) | 🔴 NOT BUILT | 5 | Rust |
