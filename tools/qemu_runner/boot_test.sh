@@ -10,6 +10,9 @@ set -uo pipefail
 # SENTINEL=... to test an earlier stage.
 IMG="${1:-build/pradyos.img}"
 SENTINEL="${SENTINEL:-NEXUS KERNEL OK}"
+# Optional second pattern that must ALSO appear (e.g. the FAT32 self-test line).
+# Empty by default so the plain kernel gate only checks the boot sentinel.
+EXTRA_SENTINEL="${EXTRA_SENTINEL:-}"
 TIMEOUT_S="${TIMEOUT_S:-30}"
 SERIAL_LOG="$(mktemp)"
 
@@ -43,13 +46,18 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -serial "file:$SERIAL_LOG" \
     || true
 
-if grep -q "$SENTINEL" "$SERIAL_LOG"; then
-    echo "[smoke] PASS — saw '$SENTINEL'."
-    rm -f "$SERIAL_LOG"
-    exit 0
-else
-    echo "[smoke] FAIL — sentinel not found. Serial output was:"
+if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
+    echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"
     cat "$SERIAL_LOG"
     rm -f "$SERIAL_LOG"
     exit 1
 fi
+if [ -n "$EXTRA_SENTINEL" ] && ! grep -qF "$EXTRA_SENTINEL" "$SERIAL_LOG"; then
+    echo "[smoke] FAIL — extra sentinel '$EXTRA_SENTINEL' not found. Serial output was:"
+    cat "$SERIAL_LOG"
+    rm -f "$SERIAL_LOG"
+    exit 1
+fi
+echo "[smoke] PASS — saw '$SENTINEL'${EXTRA_SENTINEL:+ and '$EXTRA_SENTINEL'}."
+rm -f "$SERIAL_LOG"
+exit 0

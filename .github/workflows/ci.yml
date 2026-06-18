@@ -15,7 +15,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm nasm make qemu-system-x86
+            clang lld llvm nasm make qemu-system-x86 \
+            dosfstools mtools
           rustup toolchain install nightly --profile minimal
           rustup component add rust-src --toolchain nightly
           rustup target add x86_64-unknown-none --toolchain nightly
@@ -28,3 +29,6 @@ jobs:
 
       - name: QEMU boot smoke test (q35; greps the kernel sentinel)
         run: make smoke
+
+      - name: QEMU filesystem self-test (q35; FAT32 read end-to-end)
+        run: make smoke-fs

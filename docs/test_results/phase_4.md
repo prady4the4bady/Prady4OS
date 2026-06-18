@@ -14,10 +14,16 @@
 ### Commands
 
 ```bash
-make image && make smoke    # boots q35; smoke PASS
-# fs self-test runs with a second virtio-blk disk carrying a FAT32 volume:
-make fat.img                # 64 MiB mkfs.fat -F 32 with /HELLO.TXT
+make image && make smoke    # kernel gate: boots q35, greps the kernel sentinel
+make smoke-fs               # FS gate: builds the FAT32 disk, asserts BOTH the
+                            # kernel sentinel AND the FAT32 read self-test line
 ```
+
+`make smoke` does not depend on the FAT image — the kernel gate must not fail
+when the host lacks `mtools`/`dosfstools`. `make smoke-fs` builds a 64 MiB
+`mkfs.fat -F 32` volume with `/HELLO.TXT` and runs the boot test with
+`EXTRA_SENTINEL='PRADYOS filesystem works!'`. CI runs both (it now installs
+`dosfstools` + `mtools`).
 
 ### Verified (QEMU q35, two virtio-blk disks)
 

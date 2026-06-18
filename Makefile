@@ -50,7 +50,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -147,8 +147,20 @@ $(FAT_IMG):
 	mcopy -i $(FAT_IMG) build/hello.txt ::/HELLO.TXT
 	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT)"
 
-smoke: $(IMG) $(FAT_IMG)
+# Kernel boot gate: proves the kernel boots and prints its sentinel. Deliberately
+# does NOT depend on the FAT image — the kernel gate must not fail just because a
+# host FS tool (mtools/dosfstools) is absent. boot_test.sh attaches build/fat.img
+# only if it happens to exist; with no FS disk the self-test degrades cleanly to
+# "no mountable filesystem" and the kernel sentinel still appears.
+smoke: $(IMG)
 	bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Filesystem gate: builds the FAT32 data disk and asserts BOTH the kernel
+# sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
+# Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
+smoke-fs: $(IMG) $(FAT_IMG)
+	EXTRA_SENTINEL='PRADYOS filesystem works!' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:
 	rm -rf build
