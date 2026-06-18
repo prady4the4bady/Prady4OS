@@ -460,20 +460,50 @@ static void fs_test_thread(void *arg) {
     fs_print_file(cap, mnt, "/DOCS/NOTE.TXT");
     fs_write_test(cap, mnt);
 
-    /* SFS slice 1: format a blank disk in-kernel, mount it (FAT32 declines, SFS
-     * claims it by superblock magic), and confirm its root mounts empty. */
+    /* SFS: format a blank disk in-kernel, mount it (FAT32 declines, SFS claims
+     * it by superblock magic), then exercise the CoW B+tree — create 10 files,
+     * look each up by name, and verify the inode numbers round-trip. */
     if (blk_count() > 2) {
         struct blk_device *sbd = blk_get(2);
         if (sbd && sfs_format(sbd) == 0) {
             int smnt = vfs_mount(2);
             if (smnt >= 0) {
-                char nm[16];
-                uint32_t sz;
-                int r0 = vfs_readdir(cap, smnt, "/", 0, nm, &sz);
                 kputs("[sfs] mounted ");
                 kputs(vfs_fs_name(smnt));
-                kputs(" on blk2; root ");
-                kputs(r0 == 0 ? "non-empty\r\n" : "empty - format+mount OK\r\n");
+                kputs(" on blk2\r\n");
+
+                uint32_t created[10];
+                char nm[8] = "FILE0";
+                int made = 0;
+                for (int i = 0; i < 10; i++) {
+                    nm[4] = (char)('0' + i);
+                    struct vfs_file f;
+                    if (vfs_create(cap, smnt, nm, &f) != 0)
+                        break;
+                    created[i] = f.cookie;     /* SFS inode number */
+                    made++;
+                }
+                int verified = 0;
+                for (int i = 0; i < made; i++) {
+                    nm[4] = (char)('0' + i);
+                    struct vfs_file f;
+                    if (vfs_open(cap, smnt, nm, &f) == 0 && f.cookie == created[i])
+                        verified++;
+                }
+                char rn[16];
+                uint32_t rs;
+                int dcount = 0;
+                for (int i = 0; i < 32 && vfs_readdir(cap, smnt, "/", i, rn, &rs) == 0; i++)
+                    dcount++;
+
+                kputs("[sfs] created ");
+                kputdec((uint64_t)made);
+                kputs(", verified ");
+                kputdec((uint64_t)verified);
+                kputs(", dir entries ");
+                kputdec((uint64_t)dcount);
+                kputs((made == 10 && verified == 10 && dcount == 10)
+                          ? " - create/lookup OK\r\n" : " - FAIL\r\n");
             } else {
                 kputs("[sfs] mount failed\r\n");
             }

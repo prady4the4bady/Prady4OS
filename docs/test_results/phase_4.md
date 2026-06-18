@@ -207,3 +207,38 @@ virtio-blk: blk2 ready, 32768 sectors, IRQ 11
 - SFS B+ tree insert/lookup (create/open), file extents (read/write), journal +
   atomic commit, snapshots, inline LZ4, free-space B+ tree — ADR-018 slices 2-6.
 - FAT32 LFN/timestamps; ext4; VFS mount-point namespace.
+
+## Slice 4e: SFS CoW B+tree — create / lookup / open / readdir
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-018 (on-disk format BINDING section + phased bring-up #2).
+- **Files:** `kernel/fs/sfs/{sfs.c,sfs.h}` (CoW B+tree, inode records, dir/inode
+  keys), `kernel/main.c` (10-file create/lookup self-test), `Makefile`
+  (smoke-fs SFS assertion).
+
+### Verified (QEMU q35, SFS volume on the 3rd disk)
+
+```
+[sfs] mounted sfs on blk2
+[sfs] created 10, verified 10, dir entries 10 - create/lookup OK
+```
+
+- `sfs_create` allocates an inode block + inode number, inserts an INODE entry
+  (`inode_number → inode_block`) and a DIR entry (`(parent<<32)|hash → inode`).
+- Copy-on-write insert: a leaf/internal overflow splits into freshly allocated
+  blocks and the path to the root is rebuilt; nothing live is mutated; the new
+  root is published by the superblock write (the commit point).
+- 10 files = 21 keys > 14/leaf, so the root leaf splits and a 2-level tree
+  forms — exercising split, multi-level descent, and root growth.
+- `readdir` enumerates by **in-order tree walk** (the `next_leaf` chain is left
+  stale by CoW splits, so it is not used for enumeration).
+- `lookup` re-checks the stored name to guard FNV-1a hash collisions.
+- `_Static_assert`s pin every on-disk struct to its exact size (caught a
+  superblock padding miscalculation at compile time).
+- `make smoke-fs` asserts the `create/lookup OK` line. `-Werror` clean.
+
+### Not done yet (after 4e)
+
+- SFS file extents (read/write) — slice 4f; journal (4g); snapshots (4h);
+  LZ4 + tags (4i); free-space B+tree.
+- Full internal-node split is implemented but only exercised at large-dir scale.
