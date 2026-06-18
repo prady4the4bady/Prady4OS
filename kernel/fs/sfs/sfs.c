@@ -435,15 +435,108 @@ static int sfs_readdir(void *ctx, const char *path, int index, char *name, uint3
     return 0;
 }
 
-/* File data extents are slice 4f. */
-static int sfs_read (void *ctx, const struct vfs_file *f, uint64_t off, void *buf, uint32_t len) {
-    (void)ctx; (void)f; (void)off; (void)buf; (void)len; return -1;
+/* Read the inode block for inode number `ino` into `in`; returns its block, 0 on
+ * miss. */
+static uint64_t inode_block_of(struct sfs_ctx *c, uint64_t ino, struct sfs_inode *in) {
+    struct sfs_leaf_slot s;
+    if (bt_search(c, SFS_KEY_INODE | ino, &s) != 0)
+        return 0;
+    rd_block(c, s.v.ino.inode_block, in);
+    return s.v.ino.inode_block;
 }
+
+/* Read file bytes by walking the inode's inline extents in order (slice 4f). */
+static int sfs_read(void *ctx, const struct vfs_file *f, uint64_t off, void *buf, uint32_t len) {
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    uint64_t ip = pmm_alloc_page();
+    if (!ip) return -1;
+    struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -1; }
+    uint64_t fsize = in->size;
+
+    uint64_t db = pmm_alloc_page();
+    if (!db) { pmm_free_page(ip); return -1; }
+    uint8_t *dbuf = (uint8_t *)(uintptr_t)db;
+    uint8_t *out = (uint8_t *)buf;
+    uint32_t copied = 0;
+    uint64_t fpos = 0;                          /* file offset at block start */
+    for (int e = 0; e < in->extent_count && copied < len; e++) {
+        uint64_t bs = in->inline_extents[e].block_start;
+        uint32_t bc = in->inline_extents[e].block_count;
+        for (uint32_t b = 0; b < bc && copied < len; b++) {
+            if (fpos + SFS_BLOCK_SIZE > off && fpos < off + len && fpos < fsize) {
+                rd_block(c, bs + b, dbuf);
+                for (uint32_t i = 0; i < SFS_BLOCK_SIZE && copied < len; i++) {
+                    uint64_t fo = fpos + i;
+                    if (fo >= off && fo < off + len && fo < fsize)
+                        out[copied++] = dbuf[i];
+                }
+            }
+            fpos += SFS_BLOCK_SIZE;
+        }
+    }
+    pmm_free_page(db);
+    pmm_free_page(ip);
+    return (int)copied;
+}
+
+/* Append/grow write (slice 4f): allocate a contiguous extent for [off,off+len),
+ * CoW the inode to a new block, and repoint its INODE entry. `off` must equal
+ * the current file size (mid-file overwrite is a later slice). */
 static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
-    (void)ctx; (void)f; (void)off; (void)buf; (void)len; return -1;
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    if (len == 0)
+        return 0;
+    uint64_t ip = pmm_alloc_page();
+    if (!ip) return -1;
+    struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -1; }
+
+    if (off != in->size || in->extent_count >= 4) {
+        pmm_free_page(ip);                       /* overwrite / >4 extents: later */
+        return -1;
+    }
+
+    uint32_t nblocks = (len + SFS_BLOCK_SIZE - 1) / SFS_BLOCK_SIZE;
+    uint64_t start = c->next_free;               /* contiguous (high-water) */
+
+    uint64_t db = pmm_alloc_page();
+    if (!db) { pmm_free_page(ip); return -1; }
+    uint8_t *dbuf = (uint8_t *)(uintptr_t)db;
+    const uint8_t *src = (const uint8_t *)buf;
+    uint32_t done = 0;
+    for (uint32_t i = 0; i < nblocks; i++) {
+        uint64_t blk = alloc_block(c);           /* == start + i */
+        uint32_t chunk = (len - done < SFS_BLOCK_SIZE) ? (len - done) : SFS_BLOCK_SIZE;
+        memset(dbuf, 0, SFS_BLOCK_SIZE);
+        memcpy(dbuf, src + done, chunk);
+        wr_block(c, blk, dbuf);
+        done += chunk;
+    }
+    pmm_free_page(db);
+
+    in->inline_extents[in->extent_count].block_start = start;
+    in->inline_extents[in->extent_count].block_count = nblocks;
+    in->extent_count++;
+    in->size = off + len;
+
+    uint64_t niblk = alloc_block(c);             /* CoW the inode */
+    wr_block(c, niblk, in);
+    pmm_free_page(ip);
+
+    struct sfs_leaf_slot s;
+    memset(&s, 0, sizeof s);
+    s.key = SFS_KEY_INODE | f->cookie;
+    s.v.ino.inode_block = niblk;
+    if (bt_insert(c, &s))                         /* replaces the INODE entry */
+        return -1;
+    sfs_commit(c);
+    f->size = off + len;
+    return (int)len;
 }
+
 static int sfs_unlink(void *ctx, const char *path) {
-    (void)ctx; (void)path; return -1;
+    (void)ctx; (void)path; return -1;            /* slice TBD */
 }
 
 /* ---- mount / format / register ------------------------------------------- */

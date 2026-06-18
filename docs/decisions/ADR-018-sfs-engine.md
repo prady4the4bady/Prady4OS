@@ -91,7 +91,15 @@ files off the EXTENT keyspace entirely.
    creating 10 files (forces a leaf split + a 2-level tree), looking each up,
    and enumerating all 10. Full internal-node split is implemented but only
    exercised at large directory scale.
-3. **Leaf extents** → `read`/`write` of file data (CoW, no journal yet).
+3. **Leaf extents → `read`/`write` (slice 4f, done).** `write` (append/grow:
+   `off == size`) allocates a contiguous extent from the high-water allocator,
+   writes the data blocks, records the extent in the inode's 4 inline-extent
+   slots, CoWs the inode to a new block, and repoints its INODE entry (the
+   replace-on-equal-key insert). `read` walks the inline extents in order and
+   copies the requested byte range, clamped to file size. Verified by writing
+   64 KiB, reading it back byte-exact, then growing past EOF and confirming the
+   new size. Mid-file overwrite and >4 extents (EXTENT-keyed spill) are a later
+   sub-slice; the 4 inline extents keep small files off the EXTENT keyspace.
 4. **Journal + atomic commit** (crash-consistent multi-block updates).
 5. **Snapshots** (retain + mount prior roots).
 6. **Inline LZ4**; then free-space B+ tree (replace the high-water allocator);

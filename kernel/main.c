@@ -504,6 +504,35 @@ static void fs_test_thread(void *arg) {
                 kputdec((uint64_t)dcount);
                 kputs((made == 10 && verified == 10 && dcount == 10)
                           ? " - create/lookup OK\r\n" : " - FAIL\r\n");
+
+                /* Slice 4f: 64 KiB extent write -> read-back -> grow past EOF.
+                 * Buffers (64 KiB each, order-4) intentionally leaked — one-shot
+                 * self-test, matching the other demo threads. */
+                uint64_t wbuf = pmm_alloc_pages(4);
+                uint64_t rbuf = pmm_alloc_pages(4);
+                if (wbuf && rbuf) {
+                    uint8_t *w = (uint8_t *)(uintptr_t)wbuf;
+                    for (int i = 0; i < 65536; i++) w[i] = (uint8_t)(i * 31 + 7);
+                    int rw_ok = 0, grow_ok = 0;
+                    struct vfs_file df;
+                    if (vfs_create(cap, smnt, "DATA", &df) == 0 &&
+                        vfs_write(cap, &df, 0, (void *)(uintptr_t)wbuf, 65536) == 65536) {
+                        struct vfs_file rf;
+                        if (vfs_open(cap, smnt, "DATA", &rf) == 0 &&
+                            vfs_read(cap, &rf, 0, (void *)(uintptr_t)rbuf, 65536) == 65536 &&
+                            memcmp((void *)(uintptr_t)wbuf, (void *)(uintptr_t)rbuf, 65536) == 0)
+                            rw_ok = 1;
+                        if (vfs_write(cap, &rf, 65536, (void *)(uintptr_t)wbuf, 4096) == 4096) {
+                            struct vfs_file gf;
+                            if (vfs_open(cap, smnt, "DATA", &gf) == 0 && gf.size == 65536 + 4096)
+                                grow_ok = 1;
+                        }
+                    }
+                    kputs("[sfs] 64K write/read ");
+                    kputs(rw_ok ? "byte-exact OK" : "FAIL");
+                    kputs(", grow ");
+                    kputs(grow_ok ? "to 69632 OK\r\n" : "FAIL\r\n");
+                }
             } else {
                 kputs("[sfs] mount failed\r\n");
             }

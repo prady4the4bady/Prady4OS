@@ -35,3 +35,6 @@ jobs:
 
       - name: QEMU filesystem write test + host fsck (q35; FAT32 read-write)
         run: make smoke-fs-rw
+
+      - name: QEMU SFS read-write test (q35; CoW B+tree + extents)
+        run: make smoke-fs-sfs-rw

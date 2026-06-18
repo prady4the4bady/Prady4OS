@@ -242,3 +242,35 @@ virtio-blk: blk2 ready, 32768 sectors, IRQ 11
 - SFS file extents (read/write) — slice 4f; journal (4g); snapshots (4h);
   LZ4 + tags (4i); free-space B+tree.
 - Full internal-node split is implemented but only exercised at large-dir scale.
+
+## Slice 4f: SFS file extents — read / write
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-018 (phased bring-up #3).
+- **Files:** `kernel/fs/sfs/sfs.c` (`sfs_read`/`sfs_write`, `inode_block_of`),
+  `kernel/main.c` (64 KiB extent self-test), `Makefile`
+  (`smoke-fs-sfs-rw` gate + SFS assertions in `smoke-fs`),
+  `.github/workflows/ci.yml` (SFS rw gate).
+
+### Verified (QEMU q35, SFS volume)
+
+```
+[sfs] created 10, verified 10, dir entries 10 - create/lookup OK
+[sfs] 64K write/read byte-exact OK, grow to 69632 OK
+```
+
+- `sfs_write` (append/grow, `off == size`): allocates a contiguous extent from
+  the high-water allocator, writes the data blocks, records an inline extent,
+  CoWs the inode to a new block, and repoints the INODE B+tree entry; commit via
+  the superblock write.
+- `sfs_read` walks the inode's inline extents in order, copying `[off,off+len)`
+  clamped to file size.
+- Self-test: write 64 KiB (one 16-block extent), read it back and `memcmp`
+  byte-exact, then write 4 KiB past EOF and confirm the inode size is 69632.
+- New gate `make smoke-fs-sfs-rw` asserts the SFS create/lookup + byte-exact +
+  grow lines; CI runs it. `-Werror` clean.
+
+### Not done yet (after 4f)
+
+- SFS journal + atomic commit (4g); snapshots (4h); inline LZ4 + tags (4i).
+- Mid-file overwrite; >4 extents (EXTENT-keyed spill); free-space B+tree.

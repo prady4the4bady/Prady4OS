@@ -175,7 +175,7 @@ smoke: $(IMG)
 # sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
 # Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
 smoke-fs: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it
@@ -194,6 +194,13 @@ smoke-fs-rw: $(IMG) fat-image sfs-image
 	@echo "[fs-rw] host mtype /KOUT.TXT (expect 'kernel wrote this'):"
 	mtype -i $(FAT_IMG) ::/KOUT.TXT
 	@echo "[fs-rw] PASS — kernel-written file persisted and volume is consistent."
+
+# SFS read-write gate: the kernel formats a blank disk as SFS, builds a CoW
+# B+tree (create/lookup), and does a 64 KiB extent write -> read-back -> grow.
+# Asserts the SFS-specific self-test lines (create/lookup + byte-exact + grow).
+smoke-fs-sfs-rw: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:
 	rm -rf build
