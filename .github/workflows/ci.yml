@@ -2,11 +2,11 @@ name: pradyos-ci
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, "dev/**" ]
   pull_request:
 
 jobs:
-  toolchain:
+  build-and-boot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,5 +23,8 @@ jobs:
       - name: Toolchain check (clang + nasm + rust + lld)
         run: make toolchain-check
 
-      - name: QEMU boot smoke test (inert until Phase 1)
+      - name: Build kernel image (-Werror)
+        run: make image
+
+      - name: QEMU boot smoke test (q35; greps the kernel sentinel)
         run: make smoke
