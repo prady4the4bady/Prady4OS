@@ -26,7 +26,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
-               kernel/string.c
+               kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -37,12 +37,12 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/cap.o build/sched.o build/tss.o build/ipc.o \
                build/bcast.o build/syscall.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/string.o
+               build/virtio_blk.o build/vfs.o build/fat32.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio \
-               -Ikernel/drivers/blk
+               -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -109,6 +109,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_pci.c   -o build/virtio_pci.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk.c             -o build/blk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
+	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
+	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
@@ -133,7 +135,19 @@ $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 	dd if=$(KERNEL_BIN) of=$(IMG) bs=512 seek=17 conv=notrunc status=none
 	@echo "image: $(IMG) (stage1 $$(wc -c < $(STAGE1_BIN))B, stage2 $$(wc -c < $(STAGE2_BIN))B, kernel $$(wc -c < $(KERNEL_BIN))B)"
 
-smoke: $(IMG)
+# A FAT32 data disk (with a known file) for the VFS/FAT32 self-test. 64 MiB is
+# above the FAT32 minimum. Uses dosfstools (mkfs.fat) + mtools (mcopy).
+FAT_IMG := build/fat.img
+
+$(FAT_IMG):
+	@mkdir -p build
+	dd if=/dev/zero of=$(FAT_IMG) bs=1M count=64 status=none
+	mkfs.fat -F 32 -n PRADYOS $(FAT_IMG) >/dev/null
+	printf 'PRADYOS filesystem works!' > build/hello.txt
+	mcopy -i $(FAT_IMG) build/hello.txt ::/HELLO.TXT
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT)"
+
+smoke: $(IMG) $(FAT_IMG)
 	bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

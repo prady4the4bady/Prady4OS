@@ -10,6 +10,7 @@ struct virtio_pci_dev {
     volatile uint8_t *notify;              /* notify region base         */
     volatile uint8_t *isr;                 /* ISR status byte            */
     volatile uint8_t *devcfg;              /* device-specific config     */
+    volatile uint8_t *bar_virt[6];         /* per-device BAR mappings    */
     uint32_t notify_mult;                  /* notify_off_multiplier      */
 };
 

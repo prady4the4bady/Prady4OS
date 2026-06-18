@@ -25,6 +25,9 @@ typedef uint64_t cap_t;
 #define CAP_IPC_SEND      (1u << 7)
 #define CAP_IPC_RECV      (1u << 8)
 #define CAP_BROADCAST     (1u << 9)   /* publish to the sovereign broadcast bus */
+#define CAP_FS_READ       (1u << 10)  /* read files/dirs via the VFS            */
+#define CAP_FS_WRITE      (1u << 11)  /* write/create/delete via the VFS        */
+#define CAP_FS_ADMIN      (1u << 12)  /* mount/format                           */
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u

@@ -28,6 +28,8 @@
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
+#include "vfs.h"
+#include "fat32.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -354,6 +356,46 @@ static void blk_test_thread(void *arg) {
     kputs(ok ? "[blk] write/read round-trip OK\r\n" : "[blk] write/read round-trip FAILED\r\n");
 }
 
+/* VFS/FAT32 test: mount a filesystem, list root, read a file — all cap-gated. */
+static void fs_test_thread(void *arg) {
+    cap_t cap = (cap_t)(uintptr_t)arg;
+    int mounted = -1;
+    for (unsigned j = 0; j < blk_count(); j++)
+        if (vfs_mount(j) == 0) { mounted = (int)j; break; }
+    if (mounted < 0) {
+        kputs("[fs] no mountable filesystem found\r\n");
+        return;
+    }
+    kputs("[fs] mounted ");
+    kputs(vfs_fs_name());
+    kputs(" on blk");
+    kputdec((uint64_t)mounted);
+    kputs("\r\n");
+
+    char name[16];
+    uint32_t sz;
+    for (int i = 0; i < 16 && vfs_readdir(cap, i, name, &sz) == 0; i++) {
+        kputs("  /");
+        kputs(name);
+        kputs("  ");
+        kputdec(sz);
+        kputs(" bytes\r\n");
+    }
+
+    struct vfs_file f;
+    if (vfs_open(cap, "/HELLO.TXT", &f) == 0) {
+        uint64_t buf = pmm_alloc_page();
+        uint32_t want = (f.size < 4095) ? (uint32_t)f.size : 4095;
+        int n = vfs_read(cap, &f, 0, (void *)(uintptr_t)buf, want);
+        ((char *)(uintptr_t)buf)[(n > 0) ? n : 0] = 0;
+        kputs("[fs] /HELLO.TXT: \"");
+        kputs((char *)(uintptr_t)buf);
+        kputs("\"\r\n");
+    } else {
+        kputs("[fs] /HELLO.TXT not found\r\n");
+    }
+}
+
 static void sched_demo(void) {
     uint64_t tsc_hz = calibrate_tsc_hz();
     kputs("NEXUS: TSC ~");
@@ -373,8 +415,11 @@ static void sched_demo(void) {
     bus_demo();
     user_demo();
     sched_create(blk_test_thread, 0, "blk");
+    struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
+    if (fst)
+        fst->arg = (void *)(uintptr_t)cap_create(fst->caps, RES_FILE, FS_RES_ID, CAP_FS_READ);
     __asm__ volatile("sti");
-    kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk live\r\n");
+    kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk + VFS live\r\n");
 
     for (;;)                               /* this context is now the idle thread */
         __asm__ volatile("hlt");
@@ -540,11 +585,10 @@ void kmain(struct boot_info *bi) {
     pcie_init();
     for (unsigned i = 0; i < pcie_device_count(); i++) {
         const struct pcie_device *d = pcie_device_get(i);
-        if (d->vendor_id == 0x1AF4 && d->class_code == 0x01) {  /* virtio storage */
+        if (d->vendor_id == 0x1AF4 && d->class_code == 0x01)    /* virtio storage */
             virtio_blk_init(d->bus, d->dev, d->func);
-            break;
-        }
     }
+    fat32_register();                    /* Phase 4: register the FS driver with the VFS */
 
     kputs("NEXUS: starting scheduler\r\n");
     sched_demo();                          /* never returns (becomes the idle thread) */

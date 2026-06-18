@@ -26,10 +26,18 @@ echo "[smoke] booting $IMG (timeout ${TIMEOUT_S}s, sentinel: '$SENTINEL')..."
 # PCIe scan has real devices to find. -display none + -monitor none keep the
 # guest's COM1 the only writer to the capture file (see git history for why
 # -nographic corrupts it).
+# Optional FAT32 data disk for the VFS self-test (second virtio-blk).
+FATDISK=()
+if [ -f build/fat.img ]; then
+    FATDISK=(-drive if=none,format=raw,file=build/fat.img,id=disk1
+             -device virtio-blk-pci,drive=disk1)
+fi
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine q35 \
     -drive if=none,format=raw,file="$IMG",id=disk0 \
     -device virtio-blk-pci,drive=disk0,bootindex=0 \
+    "${FATDISK[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \

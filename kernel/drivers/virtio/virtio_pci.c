@@ -32,10 +32,12 @@ struct virtio_pci_common_cfg {
     uint64_t queue_device;
 } __attribute__((packed));
 
-#define BAR_VBASE 0xFFFFD00000000000ull    /* per-BAR mapping window (64 KiB each) */
-#define BAR_MAP_SZ 0x4000u                 /* 16 KiB per BAR (covers virtio caps) */
+#define BAR_VBASE 0xFFFFD00000000000ull    /* base of the per-BAR mapping windows  */
+#define BAR_MAP_SZ 0x4000u                 /* 16 KiB per BAR (covers virtio caps)  */
 
-static volatile uint8_t *g_bar_virt[6];
+/* Monotonic allocator of 64 KiB VA windows — each mapped BAR (across all virtio
+ * devices) gets a distinct window so devices never share a virtual mapping. */
+static uint64_t g_next_bar_va = BAR_VBASE;
 
 static uint8_t  cfg8 (struct virtio_pci_dev *d, uint16_t o) {
     return (pcie_read32(d->bus, d->dev, d->func, o & ~3u) >> ((o & 3) * 8)) & 0xFF;
@@ -44,12 +46,12 @@ static uint32_t cfg32(struct virtio_pci_dev *d, uint16_t o) {
     return pcie_read32(d->bus, d->dev, d->func, o);
 }
 
-/* Map (once) the given BAR's MMIO region, uncached; return its kernel VA. */
+/* Map (once per device) the given BAR's MMIO region, uncached; return its VA. */
 static volatile uint8_t *map_bar(struct virtio_pci_dev *d, uint8_t bar) {
     if (bar >= 6)
         return 0;
-    if (g_bar_virt[bar])
-        return g_bar_virt[bar];
+    if (d->bar_virt[bar])
+        return d->bar_virt[bar];
 
     uint32_t lo = cfg32(d, 0x10 + bar * 4);
     uint64_t base;
@@ -59,11 +61,12 @@ static volatile uint8_t *map_bar(struct virtio_pci_dev *d, uint8_t bar) {
     } else {
         base = lo & 0xFFFFFFF0u;
     }
-    uint64_t va = BAR_VBASE + (uint64_t)bar * 0x10000;
+    uint64_t va = g_next_bar_va;           /* unique window per BAR, per device */
+    g_next_bar_va += 0x10000;
     for (uint32_t off = 0; off < BAR_MAP_SZ; off += PAGE_SIZE)
         vmm_map(va + off, base + off, VMM_RW | VMM_PCD);
-    g_bar_virt[bar] = (volatile uint8_t *)(uintptr_t)va;
-    return g_bar_virt[bar];
+    d->bar_virt[bar] = (volatile uint8_t *)(uintptr_t)va;
+    return d->bar_virt[bar];
 }
 
 int virtio_pci_attach(struct virtio_pci_dev *d, uint8_t bus, uint8_t dev, uint8_t func) {
@@ -72,7 +75,7 @@ int virtio_pci_attach(struct virtio_pci_dev *d, uint8_t bus, uint8_t dev, uint8_
     d->notify_mult = 0;
     d->irq = cfg8(d, 0x3C);
     for (int i = 0; i < 6; i++)
-        g_bar_virt[i] = 0;
+        d->bar_virt[i] = 0;
 
     /* Command register: enable memory space + bus master (DMA), keep INTx on. */
     uint32_t cmd = cfg32(d, 0x04);

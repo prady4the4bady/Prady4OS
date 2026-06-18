@@ -3,26 +3,25 @@
 Updated after every phase. Status legend:
 🔴 NOT BUILT · 🟡 IN PROGRESS · 🟢 COMPLETE · ⚠️ BROKEN
 
-**Current phase:** 2b — memory management. 2a complete (boot → long mode →
-ring-0 C kernel; own GDT/IDT; CPU exceptions w/ panic dumps; legacy PIC + PIT
-@100Hz, interrupts live). Phys memory: buddy allocator (ADR-003) + SLAB/kernel
-heap, both self-tested leak-free. **Higher-half kernel** @0xFFFFFFFF80000000 with
-a kernel-owned VMM (ADR-007), verified. Build is warning-clean and `-Werror`
-enforced (C + NASM). **Phase 2b complete.** Phase 2c: preemptive round-robin
-scheduler + asm context switch (~107 ns, well under target) verified with two
-interleaving threads. Capability system (NCS) done — opaque table-indexed
-handles, O(1) revoke, subset-only delegation (ADR-009), 11/11 tests. Sync IPC
-(NIA) done on top of capabilities + scheduler block/wakeup (ADR-010), verified.
-kernel/ organized into mm/proc/ipc/syscall subdirs. Full NIA IPC fabric (sync +
-async ring + broadcast). **Syscalls (NSI) + ring-3 user mode done** (ADR-012):
-SYSCALL/SYSRET, TSS, user segments, capability-gated syscalls, a real ring-3
-thread verified. Layer 2 (NEXUS kernel core) COMPLETE. **Phase 3 (Layer 3
-drivers) underway:** ACPI table parser + PCIe MMCONFIG enumeration done on QEMU
-q35 (7 devices incl. virtio-blk/net + VGA). Next in Phase 3: a real device
-driver (virtio or NVMe) on the PCIe foundation. Deferred: 3-lane NAS, APIC, W^X
-(see DEFERRED section). Architecture confirmed against the user's Layer 1–6
-boards; realistic perf targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
-**Last updated:** 2026-06-17
+**Current phase:** 4 — filesystem. Layer 2 (NEXUS kernel core) COMPLETE: boot →
+long mode → ring-0 C kernel; own GDT/IDT; CPU exceptions w/ panic dumps; legacy
+PIC + PIT @100Hz; buddy PMM (ADR-003) + SLAB heap (leak-free); higher-half
+kernel @0xFFFFFFFF80000000 + kernel-owned VMM (ADR-007); preemptive round-robin
+scheduler + asm context switch (~107 ns); NCS capability system (ADR-009, 11/11
+tests); full NIA IPC fabric (sync + async ring + broadcast, ADR-010/011);
+syscalls (NSI) + ring-3 user mode (ADR-012, SYSCALL/SYSRET, TSS, cap-gated).
+**Phase 3 (Layer 3 drivers) COMPLETE:** ACPI parser + PCIe MMCONFIG enumeration
+(ADR-013, 7 devices on q35); reusable modern-1.0 virtio transport + generic
+block layer + interrupt-driven virtio-blk (ADR-014). **Phase 4 (Layer 4 FS)
+underway:** VFS switch + read-only FAT32, capability-gated (ADR-015) — mounts a
+FAT32 disk, lists root, reads a file by 8.3 name; verified on q35 with a second
+virtio-blk data disk. virtio-blk is now multi-instance + per-device serialized.
+Next in Phase 4: FAT32 writes / subdirectories, then SOVEREIGN FS (SFS). Build
+is warning-clean and `-Werror` enforced (C + NASM). Deferred: 3-lane NAS, APIC,
+W^X, SFS, ext4 (see DEFERRED section). Architecture confirmed against the user's
+Layer 1–6 boards; realistic perf targets adopted (context switch ≤ 1.5 µs,
+syscall ≤ 250 ns).
+**Last updated:** 2026-06-18
 
 ## Phase 0 — Toolchain & Build System
 
@@ -67,12 +66,13 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | PCIe Enumeration | 🟢 COMPLETE | 3 | `kernel/drivers/pcie/` (ADR-013): MCFG→ECAM, uncached map, bus-0 scan + device registry. q35: 7 devices incl. virtio-blk/net + VGA. |
 | virtio transport (reusable) | 🟢 COMPLETE | 3 | `kernel/drivers/virtio/` (ADR-014): modern 1.0 — PCI caps, BAR/MMIO, status machine, feature negotiation, split virtqueues, notify, ISR. Shared by all virtio devices. |
 | Block layer (generic) | 🟢 COMPLETE | 3 | `kernel/drivers/blk/blk.{c,h}`: device registry + read/write dispatch. |
-| virtio-blk driver | 🟢 COMPLETE | 3 | `kernel/drivers/blk/virtio_blk.c` (ADR-014): interrupt-driven (INTx) read/write. Verified: sector-0 MBR read, write/read round-trip. |
+| virtio-blk driver | 🟢 COMPLETE | 3 | `kernel/drivers/blk/virtio_blk.c` (ADR-014/015): interrupt-driven (INTx) read/write. **Multi-instance** (per-disk transport/queue/BAR window) + **per-device serialization** (busy + yield-wait). Verified: sector-0 MBR read, write/read round-trip, 2 disks concurrently. |
 | NVMe Driver | 🔴 NOT BUILT | 3 | priority storage (registers with blk layer) |
 | GPU Framebuffer | 🔴 NOT BUILT | 3 | linear framebuffer |
 | Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; reuses virtio transport |
 | ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
-| VFS Layer | 🔴 NOT BUILT | 4 | abstraction |
+| VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + `vfs_mount`/`open`/`read`/`readdir`, all capability-gated (CAP_FS_READ via NCS). Single mount for now. |
+| FAT32 (read-only) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names, root dir; mount/open/read/readdir. Verified: mount blk1, list root, read `/HELLO.TXT`. Writes/LFN/subdirs deferred. |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
 | ext4 Compatibility | 🔴 NOT BUILT | 4 | read/write |
 | pradyos-init (PID 1) | 🔴 NOT BUILT | 5 | Rust |
@@ -111,6 +111,8 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 | **UEFI / OVMF boot path** | legacy BIOS/MBR path complete | ARM64 / RISC-V variants (Layer 1) |
 | **AVX-512 asm + IPC zero-copy (VMOVDQU)** | scalar paths | performance-hardening pass |
 | **Larger/relocating kernel loader** | Stage 2 loads 256 KiB (8×64 sectors) to 0x10000 | kernel exceeds ~256 KiB, or moving the kernel off low memory |
-| **virtio: MSI-X + multi-request** | INTx, one in-flight request | APIC live; concurrent I/O |
+| **virtio: MSI-X + multi-request** | INTx; one in-flight request **per device**, multi-disk via per-device serialization (ADR-015) | APIC live; concurrent in-flight I/O (request-tag table) |
+| **FAT32 write / LFN / subdirectories** | read-only, 8.3, root-dir-only (ADR-015) | writable userspace FS; nested paths |
+| **VFS mount table (multi-volume)** | single global mount; FAT32 file-scope geometry | second filesystem (SFS/ext4) mounted alongside |
 
 See the per-item rows above for the primary (non-deferred) component status.
