@@ -137,3 +137,9 @@ void sfs_register(void);
 /* Format `bd` as an empty SFS volume (superblock + empty root leaf + root-dir
  * inode). In-kernel mkfs; conceptually CAP_FS_SFS_ADMIN. 0 on success. */
 int  sfs_format(struct blk_device *bd);
+
+/* Journal self-test (slice 4g, destructive — reformats `bd`). Exercises three
+ * crash scenarios end-to-end with real mount/unmount cycles and returns a
+ * bitmask: bit0 abort-discards, bit1 commit-persists, bit2 torn-commit-replays.
+ * 7 = all passed. */
+int  sfs_selftest_journal(struct blk_device *bd);

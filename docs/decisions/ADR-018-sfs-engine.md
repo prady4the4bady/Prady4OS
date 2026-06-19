@@ -100,7 +100,20 @@ files off the EXTENT keyspace entirely.
    64 KiB, reading it back byte-exact, then growing past EOF and confirming the
    new size. Mid-file overwrite and >4 extents (EXTENT-keyed spill) are a later
    sub-slice; the 4 inline extents keep small files off the EXTENT keyspace.
-4. **Journal + atomic commit** (crash-consistent multi-block updates).
+4. **Journal + atomic commit (slice 4g, done).** Transactions batch operations
+   by deferring the superblock write: `txn_begin` snapshots the rollback point,
+   ops accumulate CoW blocks + a new in-memory root, `txn_commit` writes a
+   CRC-protected journal commit record (the intended root + counters) *then* the
+   superblock, and `txn_abort` reverts the in-memory root (uncommitted blocks
+   are simply forgotten — `next_free` rolls back). **Design note:** because SFS
+   is copy-on-write, blocks are never overwritten in place, so the spec's
+   physical "shadow-block" journal is unnecessary — a *logical* commit-record
+   that makes the root-swap atomic is the correct CoW equivalent. On mount, if
+   the journal holds a CRC-valid record with `txn_id > superblock.generation`
+   (the commit's superblock write was lost to a crash), it is **replayed**.
+   Verified end-to-end (`sfs_selftest_journal`) across real mount/unmount
+   cycles: abort discards, commit persists, and a simulated torn commit
+   (journal written, superblock lost) is recovered on remount.
 5. **Snapshots** (retain + mount prior roots).
 6. **Inline LZ4**; then free-space B+ tree (replace the high-water allocator);
    then garbage collection of stale CoW blocks.

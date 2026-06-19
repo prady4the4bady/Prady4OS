@@ -274,3 +274,42 @@ virtio-blk: blk2 ready, 32768 sectors, IRQ 11
 
 - SFS journal + atomic commit (4g); snapshots (4h); inline LZ4 + tags (4i).
 - Mid-file overwrite; >4 extents (EXTENT-keyed spill); free-space B+tree.
+
+## Slice 4g: SFS journal + atomic transactions
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-018 (phased bring-up #4).
+- **Files:** `kernel/fs/sfs/{sfs.c,sfs.h}` (journal record, CRC32, txn_begin/
+  commit/abort, mount replay, `sfs_selftest_journal`), `kernel/fs/vfs/{vfs.c,
+  vfs.h}` (txn + umount ops, `vfs_unmount`/`vfs_txn_*`), `kernel/fs/fat32/
+  fat32.c` (umount), `kernel/main.c`, `Makefile`, `.github/workflows/ci.yml`.
+
+### Verified (QEMU q35, SFS volume)
+
+```
+[sfs] journal abort/commit/replay OK
+```
+
+`sfs_selftest_journal` runs three crash scenarios end-to-end with real
+mount/unmount cycles on the SFS disk:
+
+1. **abort discards** — `txn_begin`, create AAA, `txn_abort`, remount → AAA
+   absent (uncommitted CoW blocks forgotten; the superblock was never written).
+2. **commit persists** — `txn_begin`, create BBB, `txn_commit`, remount → BBB
+   present (journal record + superblock both written).
+3. **torn-commit replay** — `txn_begin`, create CCC, write the journal record
+   but NOT the superblock (a crash between the two writes), remount → recovery
+   sees `journal.txn_id > superblock.generation`, CRC-validates, and replays it
+   → CCC present.
+
+- Transactions defer the superblock write so a batch publishes atomically; abort
+  rolls back the in-memory root + `next_free`.
+- Design: SFS is copy-on-write, so the journal is a *logical* commit record (the
+  root swap), not a physical shadow-block log — the correct CoW equivalent.
+- `make smoke-fs-sfs-rw` (and `smoke-fs`) assert the journal line; CI runs it.
+  `-Werror` clean.
+
+### Not done yet (after 4g)
+
+- SFS snapshots (4h); inline LZ4 + 4 KiB tags (4i); free-space B+tree.
+- ext4 read + FAT32 LFN/timestamps (4j).

@@ -533,6 +533,13 @@ static void fs_test_thread(void *arg) {
                     kputs(", grow ");
                     kputs(grow_ok ? "to 69632 OK\r\n" : "FAIL\r\n");
                 }
+
+                /* Slice 4g: journal abort/commit/crash-replay (destructive —
+                 * reformats the disk, so release the VFS mount first). */
+                vfs_unmount(smnt);
+                int jr = sfs_selftest_journal(sbd);
+                kputs("[sfs] journal ");
+                kputs(jr == 7 ? "abort/commit/replay OK\r\n" : "FAIL\r\n");
             } else {
                 kputs("[sfs] mount failed\r\n");
             }

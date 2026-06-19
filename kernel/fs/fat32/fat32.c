@@ -551,6 +551,15 @@ static int fat32_unlink(void *ctx, const char *path) {
     return c->bd->write(c->bd, sec, b, 1);
 }
 
+/* Release a mount's per-volume resources (the 3 scratch pages + the context). */
+static void fat32_umount(void *ctx) {
+    struct fat32_ctx *c = (struct fat32_ctx *)ctx;
+    if (c->scratch) pmm_free_page(c->scratch);
+    if (c->fatbuf)  pmm_free_page(c->fatbuf);
+    if (c->auxbuf)  pmm_free_page(c->auxbuf);
+    kfree(c);
+}
+
 static const struct vfs_fs_ops fat32_ops = {
     .name    = "fat32",
     .mount   = fat32_mount,
@@ -560,6 +569,7 @@ static const struct vfs_fs_ops fat32_ops = {
     .write   = fat32_write,
     .unlink  = fat32_unlink,
     .readdir = fat32_readdir,
+    .umount  = fat32_umount,
 };
 
 void fat32_register(void) {

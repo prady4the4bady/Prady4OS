@@ -39,11 +39,24 @@ struct vfs_fs_ops {
     int (*write)  (void *ctx, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len);
     int (*unlink) (void *ctx, const char *path);
     int (*readdir)(void *ctx, const char *path, int index, char *name, uint32_t *size);
+    /* Optional (NULL = unsupported): atomic transactions + resource teardown. */
+    int (*txn_begin) (void *ctx);
+    int (*txn_commit)(void *ctx);
+    int (*txn_abort) (void *ctx);
+    void (*umount)   (void *ctx);
 };
 
 void vfs_register(const struct vfs_fs_ops *ops);
 int  vfs_mount(unsigned blk_index);    /* probe drivers on a disk -> mount id >= 0, or -1 */
+int  vfs_unmount(int mnt);             /* release a mount (frees FS resources)   */
 const char *vfs_fs_name(int mnt);      /* mounted FS name for a mount id, or NULL */
+
+/* Atomic transactions (capability-gated, CAP_FS_WRITE). FS drivers that do not
+ * support them return -1. Operations between begin and commit are published
+ * together; abort discards them. */
+int  vfs_txn_begin (cap_t cap, int mnt);
+int  vfs_txn_commit(cap_t cap, int mnt);
+int  vfs_txn_abort (cap_t cap, int mnt);
 
 /* Capability-gated operations. open/create/unlink/readdir take a mount id;
  * read/write take a vfs_file (which remembers its owning mount). */

@@ -22,6 +22,35 @@ _Static_assert(sizeof(struct sfs_node)       == SFS_BLOCK_SIZE, "sfs node != 409
 _Static_assert(sizeof(struct sfs_inode)      == SFS_BLOCK_SIZE, "sfs inode != 4096");
 _Static_assert(sizeof(struct sfs_leaf_slot)  == 272,            "sfs leaf slot != 272");
 
+/* Logical commit-record journal (ADR-018 slice 4g). SFS is copy-on-write, so a
+ * transaction's new blocks are already written out of place; the journal only
+ * needs to make the *root swap* crash-atomic. txn_commit writes this record
+ * (CRC-protected) before the superblock; if the superblock write does not land,
+ * mount sees journal.txn_id > superblock.generation and replays it. */
+#define SFS_JOURNAL_MAGIC 0x534a4e31u   /* "SJN1" */
+struct sfs_journal_rec {
+    uint32_t magic;
+    uint32_t crc32;                     /* CRC32 over the 40 bytes that follow  */
+    uint64_t txn_id;                    /* generation this commit publishes     */
+    uint64_t root_btree;
+    uint64_t next_free;
+    uint64_t next_inode;
+    uint64_t free_block_count;
+    uint8_t  reserved[SFS_BLOCK_SIZE - 48];
+};
+_Static_assert(sizeof(struct sfs_journal_rec) == SFS_BLOCK_SIZE, "sfs journal != 4096");
+
+static uint32_t sfs_crc32(const void *data, uint32_t len) {
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++)
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1)));
+    }
+    return ~crc;
+}
+
 struct sfs_ctx {
     struct blk_device *bd;
     uint64_t total_blocks;
@@ -29,6 +58,11 @@ struct sfs_ctx {
     uint64_t next_free;
     uint64_t next_inode;
     uint64_t generation;
+    uint64_t txn_log_start;            /* journal block                         */
+    int      in_txn;                   /* transaction open: defer superblock     */
+    uint64_t saved_root;               /* rollback point for txn_abort           */
+    uint64_t saved_next_free;
+    uint64_t saved_next_inode;
 };
 
 /* ---- block I/O (one 4 KiB block = 8 sectors; buffers are PMM pages) ------- */
@@ -51,8 +85,9 @@ static uint64_t alloc_block(struct sfs_ctx *c) {
     return c->next_free++;
 }
 
-/* Publish a transaction: write the superblock with the new root + counters. */
-static void sfs_commit(struct sfs_ctx *c) {
+/* Write the superblock from the current in-memory state (the commit point),
+ * bumping the generation. */
+static void sfs_write_super(struct sfs_ctx *c) {
     uint64_t page = pmm_alloc_page();
     if (!page)
         return;
@@ -66,10 +101,76 @@ static void sfs_commit(struct sfs_ctx *c) {
     sb->generation       = ++c->generation;
     sb->next_free_block  = c->next_free;
     sb->next_inode       = c->next_inode;
+    sb->txn_log_start    = c->txn_log_start;
+    sb->txn_log_blocks   = 1;
     sb->free_block_count = (c->total_blocks > c->next_free)
                          ? (c->total_blocks - c->next_free) : 0;
     wr_block(c, 0, sb);
     pmm_free_page(page);
+}
+
+/* Per-operation commit. Inside a transaction the superblock write is deferred to
+ * txn_commit, so a sequence of operations publishes atomically. */
+static void sfs_commit(struct sfs_ctx *c) {
+    if (c->in_txn)
+        return;
+    sfs_write_super(c);
+}
+
+/* Write the journal commit record (the intended new root + counters) ahead of
+ * the superblock. */
+static void sfs_journal_write(struct sfs_ctx *c) {
+    uint64_t page = pmm_alloc_page();
+    if (!page)
+        return;
+    struct sfs_journal_rec *j = (struct sfs_journal_rec *)(uintptr_t)page;
+    memset(j, 0, SFS_BLOCK_SIZE);
+    j->magic            = SFS_JOURNAL_MAGIC;
+    j->txn_id           = c->generation + 1;     /* generation this commit gets */
+    j->root_btree       = c->root_btree;
+    j->next_free        = c->next_free;
+    j->next_inode       = c->next_inode;
+    j->free_block_count = (c->total_blocks > c->next_free)
+                        ? (c->total_blocks - c->next_free) : 0;
+    j->crc32            = sfs_crc32((const uint8_t *)j + 8, 40);
+    wr_block(c, c->txn_log_start, j);
+    pmm_free_page(page);
+}
+
+static int sfs_txn_begin(void *ctx) {
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    if (c->in_txn)
+        return -1;
+    c->saved_root       = c->root_btree;
+    c->saved_next_free  = c->next_free;
+    c->saved_next_inode = c->next_inode;
+    c->in_txn = 1;
+    return 0;
+}
+
+static int sfs_txn_commit(void *ctx) {
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    if (!c->in_txn)
+        return -1;
+    c->in_txn = 0;
+    sfs_journal_write(c);          /* write-ahead: record the root swap first   */
+    sfs_write_super(c);            /* then publish (the checkpoint)             */
+    return 0;
+}
+
+static int sfs_txn_abort(void *ctx) {
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    if (!c->in_txn)
+        return -1;
+    c->root_btree = c->saved_root; /* discard uncommitted CoW blocks (forgotten) */
+    c->next_free  = c->saved_next_free;
+    c->next_inode = c->saved_next_inode;
+    c->in_txn = 0;
+    return 0;                       /* superblock untouched: nothing persisted   */
+}
+
+static void sfs_umount(void *ctx) {
+    kfree(ctx);
 }
 
 /* ---- copy-on-write B+ tree ----------------------------------------------- */
@@ -561,7 +662,31 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
     c->next_free   = sb->next_free_block;
     c->next_inode  = sb->next_inode;
     c->generation  = sb->generation;
+    c->txn_log_start = sb->txn_log_start;
+    c->in_txn      = 0;
+    c->saved_root = c->saved_next_free = c->saved_next_inode = 0;
     pmm_free_page(page);
+
+    /* Crash recovery: if the journal holds a CRC-valid commit record newer than
+     * the superblock (the commit's superblock write was lost), replay it. */
+    if (c->txn_log_start) {
+        uint64_t jp = pmm_alloc_page();
+        if (jp) {
+            struct sfs_journal_rec *j = (struct sfs_journal_rec *)(uintptr_t)jp;
+            rd_block(c, c->txn_log_start, j);
+            if (j->magic == SFS_JOURNAL_MAGIC &&
+                j->crc32 == sfs_crc32((const uint8_t *)j + 8, 40) &&
+                j->txn_id > c->generation) {
+                c->root_btree = j->root_btree;
+                c->next_free  = j->next_free;
+                c->next_inode = j->next_inode;
+                c->generation = j->txn_id - 1;
+                sfs_write_super(c);            /* checkpoint the recovered state */
+            }
+            pmm_free_page(jp);
+        }
+    }
+
     *ctx = c;
     return 0;
 }
@@ -575,7 +700,8 @@ int sfs_format(struct blk_device *bd) {
         return -1;
     uint8_t *b = (uint8_t *)(uintptr_t)page;
 
-    /* block 0: superblock (root B+tree=1, root inode=block 2, allocate from 3) */
+    /* Layout: 0 superblock, 1 root B+tree leaf, 2 root inode, 3 journal;
+     * data/metadata allocate from block 4 upward. */
     memset(b, 0, SFS_BLOCK_SIZE);
     struct sfs_superblock *sb = (struct sfs_superblock *)b;
     sb->magic            = SFS_MAGIC;
@@ -584,9 +710,11 @@ int sfs_format(struct blk_device *bd) {
     sb->total_blocks     = total;
     sb->root_btree       = 1;
     sb->generation       = 1;
-    sb->next_free_block  = 3;
+    sb->next_free_block  = 4;
     sb->next_inode       = SFS_ROOT_INODE + 1;
-    sb->free_block_count = total > 3 ? total - 3 : 0;
+    sb->txn_log_start    = 3;
+    sb->txn_log_blocks   = 1;
+    sb->free_block_count = total > 4 ? total - 4 : 0;
     wr_block_bd(bd, 0, b);
 
     /* block 1: root B+tree leaf holding the root directory's inode entry */
@@ -605,19 +733,80 @@ int sfs_format(struct blk_device *bd) {
     rin->flags = SFS_I_DIR;
     wr_block_bd(bd, 2, b);
 
+    /* block 3: journal — zeroed (no pending transaction) */
+    memset(b, 0, SFS_BLOCK_SIZE);
+    wr_block_bd(bd, 3, b);
+
     pmm_free_page(page);
     return 0;
 }
 
+/* End-to-end journal verification with real mount/unmount cycles (slice 4g).
+ * Destructive: reformats the device. Returns a 3-bit result (7 == all passed). */
+int sfs_selftest_journal(struct blk_device *bd) {
+    void *ctx;
+    struct sfs_ctx *c;
+    uint64_t ino;
+    int result = 0;
+
+    /* (1) abort discards: create in a txn, abort, remount -> must be absent. */
+    if (sfs_format(bd) != 0) return -1;
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+    sfs_txn_begin(c);
+    sfs_do_create(c, SFS_ROOT_INODE, "AAA", 3, &ino);
+    sfs_txn_abort(c);
+    sfs_umount(c);
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+    if (sfs_do_lookup(c, SFS_ROOT_INODE, "AAA", 3, &ino) != 0)
+        result |= 1;                                  /* absent: abort worked */
+    sfs_umount(c);
+
+    /* (2) commit persists: create in a txn, commit, remount -> must be present. */
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+    sfs_txn_begin(c);
+    sfs_do_create(c, SFS_ROOT_INODE, "BBB", 3, &ino);
+    sfs_txn_commit(c);
+    sfs_umount(c);
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+    if (sfs_do_lookup(c, SFS_ROOT_INODE, "BBB", 3, &ino) == 0)
+        result |= 2;                                  /* present: commit worked */
+    sfs_umount(c);
+
+    /* (3) torn-commit replay: write the journal but NOT the superblock (crash
+     *     between the two), remount -> recovery must replay the record. */
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+    sfs_txn_begin(c);
+    sfs_do_create(c, SFS_ROOT_INODE, "CCC", 3, &ino);
+    c->in_txn = 0;
+    sfs_journal_write(c);                              /* journal only ... */
+    sfs_umount(c);                                     /* ... superblock lost */
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+    if (sfs_do_lookup(c, SFS_ROOT_INODE, "CCC", 3, &ino) == 0)
+        result |= 4;                                  /* present via replay */
+    sfs_umount(c);
+
+    return result;
+}
+
 static const struct vfs_fs_ops sfs_ops = {
-    .name    = "sfs",
-    .mount   = sfs_mount,
-    .open    = sfs_open,
-    .create  = sfs_create,
-    .read    = sfs_read,
-    .write   = sfs_write,
-    .unlink  = sfs_unlink,
-    .readdir = sfs_readdir,
+    .name       = "sfs",
+    .mount      = sfs_mount,
+    .open       = sfs_open,
+    .create     = sfs_create,
+    .read       = sfs_read,
+    .write      = sfs_write,
+    .unlink     = sfs_unlink,
+    .readdir    = sfs_readdir,
+    .txn_begin  = sfs_txn_begin,
+    .txn_commit = sfs_txn_commit,
+    .txn_abort  = sfs_txn_abort,
+    .umount     = sfs_umount,
 };
 
 void sfs_register(void) {

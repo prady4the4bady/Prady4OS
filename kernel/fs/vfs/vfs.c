@@ -108,3 +108,37 @@ int vfs_readdir(cap_t cap, int mnt, const char *path, int index, char *name, uin
         return -1;
     return m->fs->readdir(m->ctx, path, index, name, size);
 }
+
+int vfs_unmount(int mnt) {
+    struct vfs_mount *m = mnt_get(mnt);
+    if (!m)
+        return -1;
+    if (m->fs->umount)
+        m->fs->umount(m->ctx);
+    g_mounts[mnt].used = 0;
+    g_mounts[mnt].ctx  = 0;
+    g_mounts[mnt].fs   = 0;
+    g_mounts[mnt].bd   = 0;
+    return 0;
+}
+
+int vfs_txn_begin(cap_t cap, int mnt) {
+    struct vfs_mount *m = mnt_get(mnt);
+    if (!m || !m->fs->txn_begin || !cap_ok(cap, CAP_FS_WRITE))
+        return -1;
+    return m->fs->txn_begin(m->ctx);
+}
+
+int vfs_txn_commit(cap_t cap, int mnt) {
+    struct vfs_mount *m = mnt_get(mnt);
+    if (!m || !m->fs->txn_commit || !cap_ok(cap, CAP_FS_WRITE))
+        return -1;
+    return m->fs->txn_commit(m->ctx);
+}
+
+int vfs_txn_abort(cap_t cap, int mnt) {
+    struct vfs_mount *m = mnt_get(mnt);
+    if (!m || !m->fs->txn_abort || !cap_ok(cap, CAP_FS_WRITE))
+        return -1;
+    return m->fs->txn_abort(m->ctx);
+}
