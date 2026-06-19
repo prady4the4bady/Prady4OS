@@ -545,6 +545,11 @@ static void fs_test_thread(void *arg) {
                 int sr = sfs_selftest_snapshot(sbd);
                 kputs("[sfs] snapshot ");
                 kputs(sr == 3 ? "version-isolation OK\r\n" : "FAIL\r\n");
+
+                /* Slice 4i: inline LZ4 + metadata tags (destructive). */
+                int lr = sfs_selftest_lz4(sbd);
+                kputs("[sfs] lz4+tags ");
+                kputs(lr == 7 ? "compress/readback/tag OK\r\n" : "FAIL\r\n");
             } else {
                 kputs("[sfs] mount failed\r\n");
             }

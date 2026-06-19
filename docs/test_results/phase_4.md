@@ -342,3 +342,34 @@ mount/unmount cycles on the SFS disk:
 - Free-space B+ tree + snapshot GC (high-water allocator is non-reclaiming;
   dropped-snapshot blocks not yet returned) — own sub-slice, persisted-format.
 - Inline LZ4 + 4 KiB metadata tags (4i); ext4 read + FAT32 LFN/timestamps (4j).
+
+## Slice 4i: SFS inline LZ4 + metadata tags
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-018 (phased bring-up #6).
+- **Files:** `kernel/fs/sfs/lz4.{c,h}` (LZ4 block-format codec, bounds-checked
+  decompressor), `kernel/fs/sfs/{sfs.c,sfs.h}` (per-extent compression, extent
+  ref carries logical_len/comp_len/flags, `sfs_set_tag`/`sfs_get_tag`,
+  `sfs_selftest_lz4`), `kernel/main.c`, `Makefile` (lz4.o + gate assertion),
+  `.github/workflows/ci.yml`.
+
+### Verified (QEMU q35, SFS volume)
+
+```
+[sfs] lz4+tags compress/readback/tag OK
+```
+
+- **Per-extent compression** (design correction): each write becomes one extent,
+  compressed independently if it saves >25% (`SFS_EXT_LZ4`), so a compressed file
+  can still be appended. (An earlier whole-file approach broke append for the 4f
+  grow / 4h snapshot tests — their data is compressible — and was replaced.)
+- `sfs_selftest_lz4`: write a 128 KiB highly-compressible file → lands in <32
+  blocks with the LZ4 flag, reads back byte-exact (decompress), and a metadata
+  tag round-trips across a remount.
+- LZ4 decompressor is fully bounds-checked (malformed input returns 0, never
+  overruns) per the security rules.
+
+### Not done yet (after 4i)
+
+- ext4 read-only + FAT32 LFN/timestamps (slice 4j) → then the Layer 4 gate.
+- Free-space B+ tree + snapshot GC; mid-file overwrite; >4-extent EXTENT spill.

@@ -25,7 +25,10 @@ struct blk_device;                     /* kernel/drivers/blk/blk.h */
 
 /* Inode flags. */
 #define SFS_I_DIR   (1u << 0)
-#define SFS_I_LZ4   (1u << 1)          /* extents are LZ4-compressed (slice 4i)  */
+#define SFS_I_LZ4   (1u << 1)          /* >=1 extent is LZ4-compressed (slice 4i) */
+
+/* Per-extent flags. */
+#define SFS_EXT_LZ4 (1u << 0)          /* this extent's blocks hold LZ4 data      */
 
 #define SFS_ROOT_INODE 1ull            /* inode number of the root directory     */
 #define SFS_MAX_SNAPSHOTS 16u          /* retained snapshot roots in the superblock */
@@ -109,15 +112,18 @@ struct sfs_node {
     } u;
 };                                     /* exactly SFS_BLOCK_SIZE */
 
-/* Inode record — its own 4 KiB block. */
+/* Inode record — its own 4 KiB block. Each write produces one extent, which may
+ * be independently LZ4-compressed (so a compressed file can still be appended). */
 struct sfs_extent_ref {
-    uint64_t block_start;
-    uint32_t block_count;
-    uint32_t reserved;
-};                                     /* 16 bytes */
+    uint64_t block_start;              /* first physical block                   */
+    uint32_t block_count;             /* physical blocks (compressed or raw)     */
+    uint32_t logical_len;              /* uncompressed bytes this extent holds    */
+    uint32_t comp_len;                 /* compressed bytes (0 = stored raw)       */
+    uint32_t flags;                    /* SFS_EXT_LZ4                             */
+};                                     /* 24 bytes */
 
 struct sfs_inode {
-    uint64_t size;
+    uint64_t size;                     /* logical (uncompressed) size            */
     uint32_t flags;
     uint32_t reserved0;
     uint64_t ctime;
@@ -125,8 +131,8 @@ struct sfs_inode {
     uint16_t extent_count;
     uint16_t reserved1;
     uint32_t reserved2;
-    struct sfs_extent_ref inline_extents[4];           /* 64 bytes */
-    uint8_t  tag[SFS_BLOCK_SIZE - (8+4+4+8+8+2+2+4+64)]; /* ~3992 B metadata tag */
+    struct sfs_extent_ref inline_extents[4];            /* 96 bytes */
+    uint8_t  tag[SFS_BLOCK_SIZE - (8+4+4+8+8+2+2+4+96)]; /* ~3960 B metadata tag */
 };                                     /* exactly SFS_BLOCK_SIZE */
 
 /* Hash a name component to 32 bits (FNV-1a). */
@@ -157,3 +163,9 @@ int  sfs_selftest_journal(struct blk_device *bd);
  * then reads v1 back through the snapshot and verifies it is unchanged. Returns
  * a bitmask: bit0 snapshot-read-intact, bit1 current-reflects-v2. 3 = passed. */
 int  sfs_selftest_snapshot(struct blk_device *bd);
+
+/* LZ4 + metadata-tag self-test (slice 4i, destructive). Writes a 128 KiB highly
+ * compressible file (must land in <32 blocks, LZ4 flagged), reads it back exact,
+ * and round-trips a metadata tag across a remount. Returns a bitmask: bit0
+ * compressed, bit1 readback-exact, bit2 tag-roundtrip. 7 = passed. */
+int  sfs_selftest_lz4(struct blk_device *bd);

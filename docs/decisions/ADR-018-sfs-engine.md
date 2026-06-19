@@ -128,8 +128,22 @@ files off the EXTENT keyspace entirely.
    blocks are not yet returned. Reclamation needs the free-space tree + a
    snapshot-delete API + reference/mark-sweep; tracked in build_status. (This is
    a persisted-format addition, so it gets its own ADR review before bytes land.)
-6. **Inline LZ4**; then free-space B+ tree (replace the high-water allocator);
-   then garbage collection of stale CoW blocks.
+6. **Inline LZ4 + 4 KiB metadata tags (slice 4i, done).** A whole-file write to
+   an empty file is LZ4-compressed (`kernel/fs/sfs/lz4.c`, standard block format,
+   fully bounds-checked decompressor); if it saves >25% it is stored compressed
+   in one extent with `SFS_I_LZ4` set and the compressed byte count in the
+   inode's `comp_size`, else stored raw. Reads of an LZ4 inode read the
+   compressed extent, decompress the whole object, and return the requested
+   range. Each inode also carries a ~4 KiB metadata-tag region (`sfs_set_tag`/
+   `sfs_get_tag`, CoW + commit; conceptually `CAP_FS_SFS_ADMIN`) for Layer-6
+   agent provenance/confidence/version data — zero-filled until then. Verified: a
+   128 KiB highly-compressible file lands in <32 blocks (LZ4 flagged), reads back
+   byte-exact, and a metadata tag round-trips across a remount. Append/overwrite
+   of an LZ4 file and per-extent (vs whole-file) compression are later work.
+
+7. **Free-space B+ tree** (replace the high-water allocator) then **garbage
+   collection** of stale CoW / dropped-snapshot blocks — deferred sub-slice,
+   persisted-format (own ADR review).
 
 ## Consequences / deferred
 

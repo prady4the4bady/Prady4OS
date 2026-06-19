@@ -10,6 +10,7 @@
  * File data extents (read/write) are slice 4f — they remain stubs here.
  */
 #include "sfs.h"
+#include "lz4.h"
 #include "vfs.h"
 #include "blk.h"
 #include "pmm.h"
@@ -82,9 +83,17 @@ static void wr_block(struct sfs_ctx *c, uint64_t blk, const void *buf) {
     wr_block_bd(c->bd, blk, buf);
 }
 
-/* High-water allocator (free-space tree arrives in slice 4h). */
+/* High-water allocator (free-space tree is a deferred sub-slice). */
 static uint64_t alloc_block(struct sfs_ctx *c) {
     return c->next_free++;
+}
+
+/* Smallest buddy order whose allocation holds `bytes`. */
+static unsigned order_for(uint32_t bytes) {
+    unsigned pages = (bytes + SFS_BLOCK_SIZE - 1) / SFS_BLOCK_SIZE;
+    unsigned order = 0;
+    while ((1u << order) < pages) order++;
+    return order;
 }
 
 /* Write the superblock from the current in-memory state (the commit point),
@@ -570,36 +579,115 @@ static int sfs_read(void *ctx, const struct vfs_file *f, uint64_t off, void *buf
     struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
     if (!inode_block_of_root(c, root, f->cookie, in)) { pmm_free_page(ip); return -1; }
     uint64_t fsize = in->size;
+    int ecount = in->extent_count;
 
-    uint64_t db = pmm_alloc_page();
-    if (!db) { pmm_free_page(ip); return -1; }
-    uint8_t *dbuf = (uint8_t *)(uintptr_t)db;
+    /* Walk extents by logical offset; materialise each (decompress if needed)
+     * into a scratch buffer and copy the overlap with [off,off+len). */
     uint8_t *out = (uint8_t *)buf;
     uint32_t copied = 0;
-    uint64_t fpos = 0;                          /* file offset at block start */
-    for (int e = 0; e < in->extent_count && copied < len; e++) {
-        uint64_t bs = in->inline_extents[e].block_start;
-        uint32_t bc = in->inline_extents[e].block_count;
-        for (uint32_t b = 0; b < bc && copied < len; b++) {
-            if (fpos + SFS_BLOCK_SIZE > off && fpos < off + len && fpos < fsize) {
-                rd_block(c, bs + b, dbuf);
-                for (uint32_t i = 0; i < SFS_BLOCK_SIZE && copied < len; i++) {
-                    uint64_t fo = fpos + i;
-                    if (fo >= off && fo < off + len && fo < fsize)
-                        out[copied++] = dbuf[i];
-                }
+    uint64_t fpos = 0;
+    int rc = (int)copied;
+    for (int e = 0; e < ecount && copied < len && fpos < fsize; e++) {
+        struct sfs_extent_ref ex = in->inline_extents[e];
+        uint32_t llen = ex.logical_len;
+        if (fpos + llen > off && fpos < off + len) {     /* overlaps the request */
+            unsigned ord = order_for(llen);
+            uint64_t buf_p = pmm_alloc_pages(ord);       /* materialised extent  */
+            if (!buf_p) { rc = -1; goto done; }
+            uint8_t *eb = (uint8_t *)(uintptr_t)buf_p;
+            if (ex.flags & SFS_EXT_LZ4) {
+                unsigned cord = order_for(ex.block_count * SFS_BLOCK_SIZE);
+                uint64_t cbp = pmm_alloc_pages(cord);
+                if (!cbp) { pmm_free_pages(buf_p, ord); rc = -1; goto done; }
+                uint8_t *cb = (uint8_t *)(uintptr_t)cbp;
+                for (uint32_t i = 0; i < ex.block_count; i++)
+                    rd_block(c, ex.block_start + i, cb + (uint64_t)i * SFS_BLOCK_SIZE);
+                uint32_t dlen = lz4_decompress(cb, ex.comp_len, eb, llen);
+                pmm_free_pages(cbp, cord);
+                if (dlen != llen) { pmm_free_pages(buf_p, ord); rc = -1; goto done; }
+            } else {
+                for (uint32_t i = 0; i < ex.block_count; i++)
+                    rd_block(c, ex.block_start + i, eb + (uint64_t)i * SFS_BLOCK_SIZE);
             }
-            fpos += SFS_BLOCK_SIZE;
+            for (uint32_t i = 0; i < llen && copied < len; i++) {
+                uint64_t fo = fpos + i;
+                if (fo >= off && fo < off + len && fo < fsize)
+                    out[copied++] = eb[i];
+            }
+            pmm_free_pages(buf_p, ord);
         }
+        fpos += llen;
     }
-    pmm_free_page(db);
+    rc = (int)copied;
+done:
     pmm_free_page(ip);
-    return (int)copied;
+    return rc;
 }
 
-/* Append/grow write (slice 4f): allocate a contiguous extent for [off,off+len),
- * CoW the inode to a new block, and repoint its INODE entry. `off` must equal
- * the current file size (mid-file overwrite is a later slice). */
+/* Write data blocks for one extent: store the buffer LZ4-compressed if it saves
+ * >25%, else raw. Fills `*ext` and returns 0, or -1 on error. Allocates from the
+ * high-water allocator (blocks are contiguous). */
+static int write_extent(struct sfs_ctx *c, const uint8_t *data, uint32_t len,
+                        struct sfs_extent_ref *ext) {
+    const uint8_t *store = data;       /* bytes to actually write to disk */
+    uint32_t store_len = len;
+    uint32_t comp_len = 0;
+    uint32_t flags = 0;
+    uint64_t cbp = 0;
+    unsigned cord = 0;
+
+    if (len >= 64) {                   /* worth trying to compress */
+        cord = order_for(len + len / 16 + SFS_BLOCK_SIZE);
+        uint64_t htp = pmm_alloc_page();
+        cbp = pmm_alloc_pages(cord);
+        if (htp && cbp) {
+            memset((void *)(uintptr_t)htp, 0, SFS_BLOCK_SIZE);
+            uint32_t cap = (1u << cord) * SFS_BLOCK_SIZE;
+            uint32_t clen = lz4_compress(data, len, (uint8_t *)(uintptr_t)cbp, cap,
+                                         (uint32_t *)(uintptr_t)htp);
+            if (clen != 0 && clen < (len / 4) * 3) {
+                store = (const uint8_t *)(uintptr_t)cbp;
+                store_len = clen;
+                comp_len = clen;
+                flags = SFS_EXT_LZ4;
+            } else {
+                pmm_free_pages(cbp, cord);
+                cbp = 0;
+            }
+        } else {
+            if (cbp) { pmm_free_pages(cbp, cord); cbp = 0; }
+        }
+        if (htp) pmm_free_page(htp);
+    }
+
+    uint32_t nblocks = (store_len + SFS_BLOCK_SIZE - 1) / SFS_BLOCK_SIZE;
+    uint64_t start = c->next_free;
+    uint64_t db = pmm_alloc_page();
+    if (!db) { if (cbp) pmm_free_pages(cbp, cord); return -1; }
+    uint8_t *dbuf = (uint8_t *)(uintptr_t)db;
+    uint32_t done = 0;
+    for (uint32_t i = 0; i < nblocks; i++) {
+        uint64_t blk = alloc_block(c);
+        uint32_t chunk = (store_len - done < SFS_BLOCK_SIZE) ? (store_len - done) : SFS_BLOCK_SIZE;
+        memset(dbuf, 0, SFS_BLOCK_SIZE);
+        memcpy(dbuf, store + done, chunk);
+        wr_block(c, blk, dbuf);
+        done += chunk;
+    }
+    pmm_free_page(db);
+    if (cbp) pmm_free_pages(cbp, cord);
+
+    ext->block_start = start;
+    ext->block_count = nblocks;
+    ext->logical_len = len;
+    ext->comp_len = comp_len;
+    ext->flags = flags;
+    return 0;
+}
+
+/* Append/grow write: each call adds one extent (independently compressed), so a
+ * compressed file can still be appended. `off` must equal the current file size
+ * (mid-file overwrite is a later slice). Up to 4 inline extents. */
 static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
     if (len == 0)
@@ -616,28 +704,15 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
         return -1;
     }
 
-    uint32_t nblocks = (len + SFS_BLOCK_SIZE - 1) / SFS_BLOCK_SIZE;
-    uint64_t start = c->next_free;               /* contiguous (high-water) */
-
-    uint64_t db = pmm_alloc_page();
-    if (!db) { pmm_free_page(ip); return -1; }
-    uint8_t *dbuf = (uint8_t *)(uintptr_t)db;
-    const uint8_t *src = (const uint8_t *)buf;
-    uint32_t done = 0;
-    for (uint32_t i = 0; i < nblocks; i++) {
-        uint64_t blk = alloc_block(c);           /* == start + i */
-        uint32_t chunk = (len - done < SFS_BLOCK_SIZE) ? (len - done) : SFS_BLOCK_SIZE;
-        memset(dbuf, 0, SFS_BLOCK_SIZE);
-        memcpy(dbuf, src + done, chunk);
-        wr_block(c, blk, dbuf);
-        done += chunk;
+    struct sfs_extent_ref ext;
+    if (write_extent(c, (const uint8_t *)buf, len, &ext) != 0) {
+        pmm_free_page(ip);
+        return -1;
     }
-    pmm_free_page(db);
-
-    in->inline_extents[in->extent_count].block_start = start;
-    in->inline_extents[in->extent_count].block_count = nblocks;
-    in->extent_count++;
+    in->inline_extents[in->extent_count++] = ext;
     in->size = off + len;
+    if (ext.flags & SFS_EXT_LZ4)
+        in->flags |= SFS_I_LZ4;
 
     uint64_t niblk = alloc_block(c);             /* CoW the inode */
     wr_block(c, niblk, in);
@@ -863,6 +938,97 @@ int sfs_selftest_snapshot(struct blk_device *bd) {
     pmm_free_page(a);
     pmm_free_page(b);
     sfs_umount(c);
+    return result;
+}
+
+/* ---- metadata tags (slice 4i) -------------------------------------------- */
+/* Each inode carries a ~4 KiB tag region (agent provenance, confidence, version
+ * vectors — populated by Layer 6). Conceptually CAP_FS_SFS_ADMIN for writes. */
+static int sfs_set_tag(struct sfs_ctx *c, uint64_t ino, const void *data, uint32_t len) {
+    struct sfs_inode probe;
+    if (len > sizeof probe.tag)
+        return -1;
+    uint64_t ip = pmm_alloc_page();
+    if (!ip) return -1;
+    struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+    if (!inode_block_of(c, ino, in)) { pmm_free_page(ip); return -1; }
+    memset(in->tag, 0, sizeof in->tag);
+    memcpy(in->tag, data, len);
+    uint64_t niblk = alloc_block(c);
+    wr_block(c, niblk, in);
+    pmm_free_page(ip);
+    struct sfs_leaf_slot s;
+    memset(&s, 0, sizeof s);
+    s.key = SFS_KEY_INODE | ino;
+    s.v.ino.inode_block = niblk;
+    if (bt_insert(c, &s)) return -1;
+    sfs_commit(c);
+    return 0;
+}
+static int sfs_get_tag(struct sfs_ctx *c, uint64_t ino, void *out, uint32_t len) {
+    struct sfs_inode probe;
+    if (len > sizeof probe.tag)
+        return -1;
+    uint64_t ip = pmm_alloc_page();
+    if (!ip) return -1;
+    struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+    if (!inode_block_of(c, ino, in)) { pmm_free_page(ip); return -1; }
+    memcpy(out, in->tag, len);
+    pmm_free_page(ip);
+    return 0;
+}
+
+/* LZ4 + tag self-test (slice 4i, destructive). 7 = all passed. */
+int sfs_selftest_lz4(struct blk_device *bd) {
+    void *ctx;
+    struct sfs_ctx *c;
+    int result = 0;
+    if (sfs_format(bd) != 0) return -1;
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+
+    uint64_t sp = pmm_alloc_pages(5), rp = pmm_alloc_pages(5);   /* 128 KiB each */
+    if (!sp || !rp) {
+        if (sp) pmm_free_pages(sp, 5);
+        if (rp) pmm_free_pages(rp, 5);
+        sfs_umount(c);
+        return -1;
+    }
+    uint8_t *s = (uint8_t *)(uintptr_t)sp, *r = (uint8_t *)(uintptr_t)rp;
+    static const char pat[7] = { 'P','R','A','D','Y','O','S' };
+    for (int i = 0; i < 131072; i++) s[i] = (uint8_t)pat[i % 7];
+
+    struct vfs_file f;
+    if (sfs_create(c, "BIGZ", &f) == 0 && sfs_write(c, &f, 0, s, 131072) == 131072) {
+        uint64_t ip = pmm_alloc_page();
+        if (ip) {
+            struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+            if (inode_block_of(c, f.cookie, in) && (in->flags & SFS_I_LZ4) &&
+                in->inline_extents[0].block_count < 32)
+                result |= 1;                       /* compressed into <32 blocks */
+            pmm_free_page(ip);
+        }
+        struct vfs_file rf;
+        if (sfs_open(c, "BIGZ", &rf) == 0 && rf.size == 131072 &&
+            sfs_read(c, &rf, 0, r, 131072) == 131072 && memcmp(s, r, 131072) == 0)
+            result |= 2;                           /* readback byte-exact */
+
+        const char tag[24] = "agent-provenance-tag-v1";
+        if (sfs_set_tag(c, f.cookie, tag, 24) == 0) {
+            uint64_t ino = f.cookie;
+            sfs_umount(c);
+            c = 0;
+            if (sfs_mount(bd, &ctx) == 0) {
+                c = (struct sfs_ctx *)ctx;
+                char tg[24];
+                if (sfs_get_tag(c, ino, tg, 24) == 0 && memcmp(tg, tag, 24) == 0)
+                    result |= 4;                   /* tag survived remount */
+            }
+        }
+    }
+    pmm_free_pages(sp, 5);
+    pmm_free_pages(rp, 5);
+    if (c) sfs_umount(c);
     return result;
 }
 

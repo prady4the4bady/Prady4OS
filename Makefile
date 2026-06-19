@@ -27,7 +27,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
-               kernel/string.c
+               kernel/fs/sfs/lz4.c kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -38,7 +38,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/cap.o build/sched.o build/tss.o build/ipc.o \
                build/bcast.o build/syscall.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/vfs.o build/fat32.o build/sfs.o build/string.o
+               build/virtio_blk.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
@@ -113,6 +113,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
+	$(CC) $(KCFLAGS) -c kernel/fs/sfs/lz4.c                 -o build/lz4.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
@@ -175,7 +176,7 @@ smoke: $(IMG)
 # sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
 # Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
 smoke-fs: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS filesystem works!\nnested file ok\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it
@@ -199,7 +200,7 @@ smoke-fs-rw: $(IMG) fat-image sfs-image
 # B+tree (create/lookup), and does a 64 KiB extent write -> read-back -> grow.
 # Asserts the SFS-specific self-test lines (create/lookup + byte-exact + grow).
 smoke-fs-sfs-rw: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK\njournal abort/commit/replay OK\nversion-isolation OK')" \
+	EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:
