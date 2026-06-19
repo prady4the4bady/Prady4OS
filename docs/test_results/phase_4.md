@@ -313,3 +313,32 @@ mount/unmount cycles on the SFS disk:
 
 - SFS snapshots (4h); inline LZ4 + 4 KiB tags (4i); free-space B+tree.
 - ext4 read + FAT32 LFN/timestamps (4j).
+
+## Slice 4h: SFS snapshots (version isolation)
+
+- **Date:** 2026-06-18
+- **Decision:** ADR-018 (phased bring-up #5).
+- **Files:** `kernel/fs/sfs/{sfs.c,sfs.h}` (superblock snapshot table,
+  `sfs_snapshot`/`sfs_open_version`, root-parameterised `bt_search_root`/
+  `inode_block_of_root`, versioned-read via `vfs_file.dirent_clus`,
+  `sfs_selftest_snapshot`), `kernel/main.c`, `Makefile`.
+
+### Verified (QEMU q35, SFS volume)
+
+```
+[sfs] snapshot version-isolation OK
+```
+
+- A snapshot is a retained B+ tree root captured at a generation (16-entry table
+  in the superblock). CoW + the non-reclaiming high-water allocator keep the
+  captured root and all reachable blocks valid with no extra work.
+- `sfs_selftest_snapshot`: write 4 KiB pattern A to VER (v1), snapshot, append
+  4 KiB pattern B (v2 → size 8192), then `open_version(snapshot)` and read →
+  exactly 4 KiB of pattern A (v1 intact), while the current handle shows size
+  8192. A versioned handle reads through the snapshot root and refuses writes.
+
+### Not done yet (after 4h)
+
+- Free-space B+ tree + snapshot GC (high-water allocator is non-reclaiming;
+  dropped-snapshot blocks not yet returned) — own sub-slice, persisted-format.
+- Inline LZ4 + 4 KiB metadata tags (4i); ext4 read + FAT32 LFN/timestamps (4j).

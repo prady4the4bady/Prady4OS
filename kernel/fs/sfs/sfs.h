@@ -28,11 +28,18 @@ struct blk_device;                     /* kernel/drivers/blk/blk.h */
 #define SFS_I_LZ4   (1u << 1)          /* extents are LZ4-compressed (slice 4i)  */
 
 #define SFS_ROOT_INODE 1ull            /* inode number of the root directory     */
+#define SFS_MAX_SNAPSHOTS 16u          /* retained snapshot roots in the superblock */
 
 /* Feature bits negotiated at mount (none active yet). */
 #define SFS_FEAT_VERSIONING (1u << 0)
 #define SFS_FEAT_TXN_LOG    (1u << 1)
 #define SFS_FEAT_LZ4        (1u << 2)
+
+/* A retained snapshot: an immutable B+ tree root captured at a generation. */
+struct sfs_snap {
+    uint64_t id;                       /* snapshot id (the generation captured)  */
+    uint64_t root;                     /* B+ tree root block for this version    */
+};
 
 /* Superblock (block 0), padded to a full 4 KiB block. */
 struct sfs_superblock {
@@ -51,7 +58,9 @@ struct sfs_superblock {
     uint64_t next_inode;               /* next inode number to hand out          */
     uint64_t free_block_count;         /* informational free-block estimate      */
     uint32_t checksum;                 /* CRC32 of the superblock (0 = unset)    */
-    uint8_t  reserved[3996];           /* pad to 4096 (100 B of fields above)    */
+    uint32_t snapshot_count;           /* number of retained snapshots           */
+    struct sfs_snap snapshots[SFS_MAX_SNAPSHOTS];   /* 256 bytes                 */
+    uint8_t  reserved[3736];           /* pad to 4096 (360 B of fields above)    */
 };
 
 /* B+tree node types. */
@@ -143,3 +152,8 @@ int  sfs_format(struct blk_device *bd);
  * bitmask: bit0 abort-discards, bit1 commit-persists, bit2 torn-commit-replays.
  * 7 = all passed. */
 int  sfs_selftest_journal(struct blk_device *bd);
+
+/* Snapshot self-test (slice 4h, destructive). Writes v1, snapshots, grows to v2,
+ * then reads v1 back through the snapshot and verifies it is unchanged. Returns
+ * a bitmask: bit0 snapshot-read-intact, bit1 current-reflects-v2. 3 = passed. */
+int  sfs_selftest_snapshot(struct blk_device *bd);

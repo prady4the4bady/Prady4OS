@@ -114,7 +114,20 @@ files off the EXTENT keyspace entirely.
    Verified end-to-end (`sfs_selftest_journal`) across real mount/unmount
    cycles: abort discards, commit persists, and a simulated torn commit
    (journal written, superblock lost) is recovered on remount.
-5. **Snapshots** (retain + mount prior roots).
+5. **Snapshots (slice 4h, done).** A snapshot is simply a retained B+ tree root
+   captured at a generation (stored in a 16-entry table in the superblock).
+   Because SFS is copy-on-write and the high-water allocator never reuses blocks,
+   the captured root and everything reachable from it stay valid with no extra
+   work. `sfs_snapshot` records `{id=generation, root}`; `sfs_open_version` reads
+   a file as of a snapshot by resolving it against the snapshot's root (a
+   versioned `vfs_file` carries that root in `dirent_clus`; writes to it are
+   refused). Verified: write v1, snapshot, grow to v2, then read v1 through the
+   snapshot and confirm it is byte-unchanged while the current view shows v2.
+   **Deferred (own sub-slice):** the free-space B+ tree and snapshot GC — the
+   high-water allocator is correct but non-reclaiming, so dropped snapshots'
+   blocks are not yet returned. Reclamation needs the free-space tree + a
+   snapshot-delete API + reference/mark-sweep; tracked in build_status. (This is
+   a persisted-format addition, so it gets its own ADR review before bytes land.)
 6. **Inline LZ4**; then free-space B+ tree (replace the high-water allocator);
    then garbage collection of stale CoW blocks.
 

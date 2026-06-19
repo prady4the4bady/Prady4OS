@@ -540,6 +540,11 @@ static void fs_test_thread(void *arg) {
                 int jr = sfs_selftest_journal(sbd);
                 kputs("[sfs] journal ");
                 kputs(jr == 7 ? "abort/commit/replay OK\r\n" : "FAIL\r\n");
+
+                /* Slice 4h: snapshot version isolation (destructive). */
+                int sr = sfs_selftest_snapshot(sbd);
+                kputs("[sfs] snapshot ");
+                kputs(sr == 3 ? "version-isolation OK\r\n" : "FAIL\r\n");
             } else {
                 kputs("[sfs] mount failed\r\n");
             }

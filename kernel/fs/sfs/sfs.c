@@ -63,6 +63,8 @@ struct sfs_ctx {
     uint64_t saved_root;               /* rollback point for txn_abort           */
     uint64_t saved_next_free;
     uint64_t saved_next_inode;
+    uint32_t snapshot_count;
+    struct sfs_snap snapshots[SFS_MAX_SNAPSHOTS];
 };
 
 /* ---- block I/O (one 4 KiB block = 8 sectors; buffers are PMM pages) ------- */
@@ -105,6 +107,9 @@ static void sfs_write_super(struct sfs_ctx *c) {
     sb->txn_log_blocks   = 1;
     sb->free_block_count = (c->total_blocks > c->next_free)
                          ? (c->total_blocks - c->next_free) : 0;
+    sb->snapshot_count   = c->snapshot_count;
+    for (uint32_t i = 0; i < SFS_MAX_SNAPSHOTS; i++)
+        sb->snapshots[i] = c->snapshots[i];
     wr_block(c, 0, sb);
     pmm_free_page(page);
 }
@@ -348,13 +353,14 @@ static int bt_insert(struct sfs_ctx *c, const struct sfs_leaf_slot *item) {
     return 0;
 }
 
-/* Exact-key lookup. 0 + *out on hit, -1 if absent. */
-static int bt_search(struct sfs_ctx *c, uint64_t key, struct sfs_leaf_slot *out) {
+/* Exact-key lookup from an explicit B+ tree root (used for versioned reads). */
+static int bt_search_root(struct sfs_ctx *c, uint64_t root, uint64_t key,
+                          struct sfs_leaf_slot *out) {
     uint64_t np = pmm_alloc_page();
     if (!np)
         return -1;
     struct sfs_node *n = (struct sfs_node *)(uintptr_t)np;
-    uint64_t blk = c->root_btree;
+    uint64_t blk = root;
     for (;;) {
         rd_block(c, blk, n);
         if (n->flags & SFS_NODE_LEAF) {
@@ -372,6 +378,11 @@ static int bt_search(struct sfs_ctx *c, uint64_t key, struct sfs_leaf_slot *out)
         while (i < n->nkeys && key >= n->u.intern[i].sep) i++;
         blk = (i == 0) ? n->child0 : n->u.intern[i - 1].child;
     }
+}
+
+/* Exact-key lookup in the current tree. */
+static int bt_search(struct sfs_ctx *c, uint64_t key, struct sfs_leaf_slot *out) {
+    return bt_search_root(c, c->root_btree, key, out);
 }
 
 /* ---- directory / inode helpers ------------------------------------------- */
@@ -536,23 +547,28 @@ static int sfs_readdir(void *ctx, const char *path, int index, char *name, uint3
     return 0;
 }
 
-/* Read the inode block for inode number `ino` into `in`; returns its block, 0 on
- * miss. */
-static uint64_t inode_block_of(struct sfs_ctx *c, uint64_t ino, struct sfs_inode *in) {
+/* Read the inode block for inode `ino` from B+ tree `root`; 0 on miss. */
+static uint64_t inode_block_of_root(struct sfs_ctx *c, uint64_t root, uint64_t ino,
+                                    struct sfs_inode *in) {
     struct sfs_leaf_slot s;
-    if (bt_search(c, SFS_KEY_INODE | ino, &s) != 0)
+    if (bt_search_root(c, root, SFS_KEY_INODE | ino, &s) != 0)
         return 0;
     rd_block(c, s.v.ino.inode_block, in);
     return s.v.ino.inode_block;
 }
+static uint64_t inode_block_of(struct sfs_ctx *c, uint64_t ino, struct sfs_inode *in) {
+    return inode_block_of_root(c, c->root_btree, ino, in);
+}
 
-/* Read file bytes by walking the inode's inline extents in order (slice 4f). */
+/* Read file bytes by walking the inode's inline extents in order (slice 4f).
+ * A versioned handle (vfs_file.dirent_clus != 0) reads from that snapshot root. */
 static int sfs_read(void *ctx, const struct vfs_file *f, uint64_t off, void *buf, uint32_t len) {
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    uint64_t root = f->dirent_clus ? f->dirent_clus : c->root_btree;
     uint64_t ip = pmm_alloc_page();
     if (!ip) return -1;
     struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
-    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -1; }
+    if (!inode_block_of_root(c, root, f->cookie, in)) { pmm_free_page(ip); return -1; }
     uint64_t fsize = in->size;
 
     uint64_t db = pmm_alloc_page();
@@ -588,6 +604,8 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
     if (len == 0)
         return 0;
+    if (f->dirent_clus != 0)
+        return -1;                               /* versioned handle is read-only */
     uint64_t ip = pmm_alloc_page();
     if (!ip) return -1;
     struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
@@ -665,6 +683,11 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
     c->txn_log_start = sb->txn_log_start;
     c->in_txn      = 0;
     c->saved_root = c->saved_next_free = c->saved_next_inode = 0;
+    c->snapshot_count = sb->snapshot_count;
+    if (c->snapshot_count > SFS_MAX_SNAPSHOTS)
+        c->snapshot_count = SFS_MAX_SNAPSHOTS;
+    for (uint32_t i = 0; i < SFS_MAX_SNAPSHOTS; i++)
+        c->snapshots[i] = sb->snapshots[i];
     pmm_free_page(page);
 
     /* Crash recovery: if the journal holds a CRC-valid commit record newer than
@@ -739,6 +762,108 @@ int sfs_format(struct blk_device *bd) {
 
     pmm_free_page(page);
     return 0;
+}
+
+/* ---- snapshots (slice 4h) ------------------------------------------------ */
+
+/* Capture the current tree as an immutable snapshot; returns its id (0 on full).
+ * CoW + the non-reclaiming high-water allocator guarantee the captured root and
+ * everything reachable from it stay valid (snapshot GC awaits the free-space
+ * tree). */
+static uint64_t sfs_snapshot(struct sfs_ctx *c) {
+    if (c->snapshot_count >= SFS_MAX_SNAPSHOTS)
+        return 0;
+    uint64_t id = c->generation;
+    c->snapshots[c->snapshot_count].id   = id;
+    c->snapshots[c->snapshot_count].root = c->root_btree;
+    c->snapshot_count++;
+    sfs_write_super(c);
+    return id;
+}
+
+/* Open a file as it existed in snapshot `snap_id` (read-only). */
+static int sfs_open_version(struct sfs_ctx *c, const char *path, uint64_t snap_id,
+                           struct vfs_file *out) {
+    uint64_t sroot = 0;
+    for (uint32_t i = 0; i < c->snapshot_count; i++)
+        if (c->snapshots[i].id == snap_id) { sroot = c->snapshots[i].root; break; }
+    if (!sroot)
+        return -1;
+    const char *name = skip_slashes(path);
+    int len = name_len_of(name);
+    if (len <= 0 || len > 255)
+        return -1;
+    uint64_t dir_key = (SFS_ROOT_INODE << 32) | (uint64_t)sfs_name_hash32(name, len);
+    struct sfs_leaf_slot s;
+    if (bt_search_root(c, sroot, dir_key, &s) != 0)
+        return -1;
+    if (s.v.dir.name_len != len)
+        return -1;
+    for (int i = 0; i < len; i++)
+        if (s.v.dir.name[i] != name[i])
+            return -1;
+    uint64_t ino = s.v.dir.inode_num;
+    uint64_t ip = pmm_alloc_page();
+    if (!ip) return -1;
+    struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+    if (!inode_block_of_root(c, sroot, ino, in)) { pmm_free_page(ip); return -1; }
+    out->size = in->size;
+    out->cookie = (uint32_t)ino;
+    out->dirent_clus = sroot;          /* read this version through the snapshot root */
+    out->dirent_off = 0;
+    pmm_free_page(ip);
+    return 0;
+}
+
+/* Snapshot self-test (slice 4h, destructive). Returns bit0 snapshot-intact,
+ * bit1 current-reflects-v2; 3 = passed. */
+int sfs_selftest_snapshot(struct blk_device *bd) {
+    void *ctx;
+    struct sfs_ctx *c;
+    int result = 0;
+
+    if (sfs_format(bd) != 0) return -1;
+    if (sfs_mount(bd, &ctx) != 0) return -1;
+    c = (struct sfs_ctx *)ctx;
+
+    uint64_t a = pmm_alloc_page(), b = pmm_alloc_page();
+    if (!a || !b) { sfs_umount(c); return -1; }
+    uint8_t *pa = (uint8_t *)(uintptr_t)a, *pb = (uint8_t *)(uintptr_t)b;
+    for (int i = 0; i < 4096; i++) pa[i] = (uint8_t)(i * 13 + 1);   /* v1 pattern */
+
+    /* v1: create VER and write 4 KiB of pattern A. */
+    struct vfs_file f;
+    if (sfs_create(c, "VER", &f) != 0) { sfs_umount(c); return -1; }
+    if (sfs_write(c, &f, 0, pa, 4096) != 4096) { sfs_umount(c); return -1; }
+
+    /* snapshot, then grow to v2 by appending a different 4 KiB. */
+    uint64_t snap = sfs_snapshot(c);
+    struct vfs_file cur;
+    if (sfs_open(c, "VER", &cur) != 0) { sfs_umount(c); return -1; }
+    for (int i = 0; i < 4096; i++) pb[i] = (uint8_t)(i * 7 + 99);   /* v2 tail */
+    sfs_write(c, &cur, 4096, pb, 4096);
+
+    /* read v1 back through the snapshot: must be 4 KiB of pattern A, unchanged. */
+    struct vfs_file v1;
+    if (sfs_open_version(c, "VER", snap, &v1) == 0 && v1.size == 4096) {
+        uint64_t r = pmm_alloc_page();
+        if (r) {
+            uint8_t *pr = (uint8_t *)(uintptr_t)r;
+            int n = sfs_read(c, &v1, 0, pr, 4096);
+            if (n == 4096 && memcmp(pr, pa, 4096) == 0)
+                result |= 1;                       /* snapshot intact */
+            pmm_free_page(r);
+        }
+    }
+    /* current must reflect v2 (size 8192). */
+    struct vfs_file v2;
+    if (sfs_open(c, "VER", &v2) == 0 && v2.size == 8192)
+        result |= 2;
+
+    pmm_free_page(a);
+    pmm_free_page(b);
+    sfs_umount(c);
+    return result;
 }
 
 /* End-to-end journal verification with real mount/unmount cycles (slice 4g).
