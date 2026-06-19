@@ -32,6 +32,7 @@
 #include "fat32.h"
 #include "sfs.h"
 #include "ext4.h"
+#include "rtc.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -459,6 +460,16 @@ static void fs_test_thread(void *arg) {
     fs_print_file(cap, mnt, "/HELLO.TXT");
     fs_list(cap, mnt, "/DOCS");
     fs_print_file(cap, mnt, "/DOCS/NOTE.TXT");
+    fs_print_file(cap, mnt, "/LongFileName.txt");   /* VFAT long-name read (4j) */
+
+    /* RTC wall-clock (4j): the kernel now has a real date for FS timestamps. */
+    {
+        struct rtc_time t;
+        rtc_now(&t);
+        kputs("[rtc] ");
+        kputdec(t.year); kputs("-"); kputdec(t.month); kputs("-"); kputdec(t.day);
+        kputs(" "); kputdec(t.hour); kputs(":"); kputdec(t.minute); kputs("\r\n");
+    }
     fs_write_test(cap, mnt);
 
     /* SFS: format a blank disk in-kernel, mount it (FAT32 declines, SFS claims

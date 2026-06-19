@@ -373,3 +373,47 @@ mount/unmount cycles on the SFS disk:
 
 - ext4 read-only + FAT32 LFN/timestamps (slice 4j) → then the Layer 4 gate.
 - Free-space B+ tree + snapshot GC; mid-file overwrite; >4-extent EXTENT spill.
+
+## Slice 4j: ext4 read-only + FAT32 long names + RTC timestamps
+
+- **Date:** 2026-06-18 / 2026-06-19
+- **Decision:** ADR-019 (ext4), ADR-020 (RTC + FAT32 LFN/timestamps).
+- **Files:** `kernel/fs/ext4/ext4.{c,h}`, `kernel/drivers/rtc/rtc.{c,h}`,
+  `kernel/fs/fat32/fat32.c` (LFN reconstruction + name matching + timestamps),
+  `kernel/main.c`, `Makefile` (ext4-image, smoke-fs-ext4, LFN/RTC assertions),
+  `.github/workflows/ci.yml` (e2fsprogs + ext4 gate).
+
+### Verified (QEMU q35, four filesystem disks)
+
+```
+[ext4] mounted ext4; /EXT4.TXT: "ext4 read works"
+[fs] /LongFileName.txt: "long name read works"
+[rtc] 2026-6-19 14:49
+```
+
+- **ext4 read-only** (part 1): superblock + group descriptors + extent-mapped
+  inodes (depth-0) + linear directory scan; reads a host `mkfs.ext4 -d` volume.
+- **FAT32 VFAT long names** (part 2): `dir_scan` reconstructs long names and
+  matches path components case-insensitively (long or 8.3); all lookups switched
+  to name-matching. 8.3 + nested reads unregressed.
+- **RTC + timestamps**: CMOS clock read; FAT32 create/write stamp real dates.
+
+### Layer 4 completion gate — ALL PASS
+
+```
+smoke           PASS   (kernel boot)
+smoke-fs        PASS   (FAT32 RO/LFN/RTC + SFS create/lookup/extents/journal/
+                        snapshot/LZ4 assertions)
+smoke-fs-rw     PASS   (FAT32 write + host fsck.fat/mdir/mtype)
+smoke-fs-sfs-rw PASS   (SFS CoW B+tree + extents + journal + snapshot + LZ4)
+smoke-fs-ext4   PASS   (ext4 read-only)
+```
+
+CI runs all five on `main`. Layer 4 (VFS + FAT32 RW + full SFS engine + ext4 RO)
+is complete; `-Werror` clean throughout.
+
+### Deferred (tracked, post-Layer-4)
+
+- FAT32 LFN *write*; full UTF-8; SFS free-space B+ tree + snapshot GC; SFS
+  mid-file overwrite + >4-extent EXTENT-keyed spill; ext4 write + multi-level
+  extents + block-mapped inodes; VFS mount-point namespace.

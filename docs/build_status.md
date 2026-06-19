@@ -16,21 +16,22 @@ tests); full NIA IPC fabric (sync + async ring + broadcast, ADR-010/011);
 syscalls (NSI) + ring-3 user mode (ADR-012, SYSCALL/SYSRET, TSS, cap-gated).
 **Phase 3 (Layer 3 drivers) COMPLETE:** ACPI parser + PCIe MMCONFIG enumeration
 (ADR-013, 7 devices on q35); reusable modern-1.0 virtio transport + generic
-block layer + interrupt-driven virtio-blk (ADR-014). **Phase 4 (Layer 4 FS)
-underway:** capability-gated VFS with a **mount table + per-mount context**
-(ADR-017, FAT32/SFS/ext4 mountable side-by-side). **FAT32 is now read-write**
-(ADR-015): mount, nested-path open/read/readdir (4a/4b), and create/write/unlink
-with cluster allocation, all-FAT-copy + FSInfo updates, all-or-nothing
-allocation, and in-kernel read-back verification (4c) — validated by an
-adversarial host pass (`fsck.fat` + `mdir`/`mtype`). The **SFS** on-disk layout
-+ driver skeleton are stood up (ADR-017, engine deferred), and `CAP_FS_SFS_*`
-reserved. Shared kernel state (PMM/console/scheduler) made preemption-safe
-(ADR-016). Next: FAT32 LFN/timestamps or begin the SFS engine. virtio-blk is
-multi-instance + per-device serialized. Build
-is warning-clean and `-Werror` enforced (C + NASM). Deferred: 3-lane NAS, APIC,
-W^X, SFS, ext4 (see DEFERRED section). Architecture confirmed against the user's
-Layer 1–6 boards; realistic perf targets adopted (context switch ≤ 1.5 µs,
-syscall ≤ 250 ns).
+block layer + interrupt-driven virtio-blk (ADR-014); CMOS RTC (ADR-020).
+**Phase 4 (Layer 4 FS) COMPLETE:** capability-gated VFS with a mount table +
+per-mount context (ADR-017, FAT32/SFS/ext4 side-by-side). **FAT32 read-write**
+(ADR-015): nested paths (4a/4b), create/write/unlink with all-or-nothing alloc +
+read-back verify (4c), VFAT long-name read + RTC timestamps (4j, ADR-020).
+**SOVEREIGN FS (SFS) engine** (ADR-018): in-kernel format/mount (4d), CoW B+tree
+create/lookup/open/readdir (4e), file extents (4f), journal + atomic transactions
+with crash replay (4g), snapshots/version isolation (4h), per-extent inline LZ4 +
+metadata tags (4i). **ext4 read-only** (ADR-019, 4j). Shared kernel state
+(PMM/console/scheduler) made preemption-safe (ADR-016). **Layer 4 completion gate
+PASSED** — all 5 gates green (smoke, smoke-fs, smoke-fs-rw, smoke-fs-sfs-rw,
+smoke-fs-ext4) on CI. Next: Layer 5 (userspace — ELF loader, syscalls, musl,
+init, PRISM shell, prad). Build is warning-clean and `-Werror` enforced (C +
+NASM). Deferred: 3-lane NAS, APIC, W^X, SFS free-space-tree/GC, ext4 write (see
+DEFERRED). Architecture confirmed against the user's Layer 1–6 boards; realistic
+perf targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **Last updated:** 2026-06-18
 
 ## Phase 0 — Toolchain & Build System
@@ -82,7 +83,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Network Driver (virtio-net) | 🔴 NOT BUILT | 3 | device enumerated; reuses virtio transport |
 | ACPI Power Management (FADT/MADT) | 🔴 NOT BUILT | 3 | parser ready; MADT→APIC, FADT→power |
 | VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + **mount table** (per-mount context vtable; FAT32/SFS/ext4 mountable side-by-side) + `open`/`create`/`read`/`write`/`unlink`/`readdir`, all capability-gated (CAP_FS_READ/WRITE via NCS) + per-thread write budget. Full mount-point namespace deferred. |
-| FAT32 (read-write) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 names, nested paths. **Read-write (slice 4c):** create/write/unlink, cluster alloc + all-FAT-copies update, FSInfo, all-or-nothing alloc, in-kernel read-back verify. Validated by host `fsck.fat`+`mdir`/`mtype` (`make smoke-fs-rw`). LFN/timestamps deferred. |
+| FAT32 (read-write) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 + **VFAT long-name read** (ADR-020), nested paths. Read-write (4c): create/write/unlink, all-or-nothing alloc, read-back verify (`smoke-fs-rw`). **Timestamps** from RTC (4j). LFN *write* deferred (creates 8.3). |
+| RTC / CMOS clock | 🟢 COMPLETE | 3 | `kernel/drivers/rtc/` (ADR-020): wall-clock via ports 0x70/0x71 (BCD/binary, 12/24h, stable read). `rtc_now` + `rtc_fat_datetime`; powers FS timestamps and later CLOCK_REALTIME. (Deferred Layer-3 item, pulled in at 4j.) |
 | SOVEREIGN FS (SFS) | 🟡 IN PROGRESS | 4 | `kernel/fs/sfs/` (ADR-017/018): inode-based CoW B+tree, 4 KiB blocks. **4d:** format/mount/empty-root. **4e:** CoW B+tree create/lookup/open/readdir (split-on-insert; 10-file test). **4f:** file extents (write append/grow + read). **4g:** journal + atomic transactions (commit-record + mount replay). **4h:** snapshots — retained CoW roots; `sfs_open_version` reads a file as-of a snapshot. **4i:** inline LZ4 (`kernel/fs/sfs/lz4.c`, bounds-checked) — **per-extent** compression so compressed files still append; + ~4 KiB inode metadata tags (`sfs_set_tag`/`get_tag`). Verified: 128 KiB compressible → <32 blocks, byte-exact readback, tag survives remount. Next: ext4 read + FAT32 LFN (4j) → Layer 4 gate. Free-space B+tree / snapshot GC deferred. `CAP_FS_SFS_*` reserved. |
 | SOVEREIGN FS (SFS) | 🔴 NOT BUILT | 4 | B+ tree, versioned |
 | ext4 Compatibility | 🟡 IN PROGRESS | 4 | `kernel/fs/ext4/` (ADR-019, slice 4j): **read-only** — superblock, group descriptors, extent-mapped inodes (depth-0), linear dir scan, nested paths. Verified reading a host `mkfs.ext4 -d` volume (4th disk). Write, multi-level extents, block-mapped inodes deferred. |

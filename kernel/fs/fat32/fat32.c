@@ -11,6 +11,7 @@
 #include "kheap.h"
 #include "console.h"
 #include "string.h"
+#include "rtc.h"
 
 #define ATTR_VOLUME_ID 0x08
 #define ATTR_DIRECTORY 0x10
@@ -110,13 +111,34 @@ struct dirent_info {
     uint16_t ent_off;              /* byte offset of the entry within that cluster */
 };
 
+static int ci_eq(const char *a, int alen, const char *b, int blen) {
+    if (alen != blen)
+        return 0;
+    for (int i = 0; i < alen; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'a' && x <= 'z') x = (char)(x - 32);
+        if (y >= 'a' && y <= 'z') y = (char)(y - 32);
+        if (x != y) return 0;
+    }
+    return 1;
+}
+
 /* Scan the directory whose cluster chain starts at `dir_clus`. Two modes:
- *   key != NULL : find the entry whose 11-byte 8.3 name equals key.
- *   key == NULL : find the `index`-th visible entry (0-based), filling name_out.
- * Fills *out on a hit. Returns 0 on hit, -1 if the directory ends first. */
-static int dir_scan(struct fat32_ctx *c, uint32_t dir_clus, const char *key,
+ *   want != NULL : find the entry matching name `want` (len `wlen`) — compared
+ *                  case-insensitively against the VFAT long name if present, or
+ *                  the 8.3 short name otherwise.
+ *   want == NULL : return the `index`-th visible entry, filling name_out with its
+ *                  long name (or 8.3 name). `.`/`..` are surfaced.
+ * Reconstructs VFAT long names (UTF-16 -> ASCII). Returns 0 on hit, -1 at end. */
+static int dir_scan(struct fat32_ctx *c, uint32_t dir_clus, const char *want, int wlen,
                     int index, char *name_out, struct dirent_info *out) {
     int count = 0;
+    char shortkey[11];
+    if (want) comp_key(want, wlen, shortkey);
+    char lfn[256];
+    int have_lfn = 0;
+    static const int LIDX[13] = { 1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30 };
+
     uint32_t clus = dir_clus;
     while (valid_chain(clus)) {
         for (uint32_t s = 0; s < c->spc; s++) {
@@ -124,19 +146,51 @@ static int dir_scan(struct fat32_ctx *c, uint32_t dir_clus, const char *key,
             for (int e = 0; e < 16; e++) {
                 uint8_t *de = sec + e * 32;
                 if (de[0] == 0x00) return -1;          /* end of directory */
-                if (de[0] == 0xE5) continue;           /* deleted */
+                if (de[0] == 0xE5) { have_lfn = 0; continue; }   /* deleted */
                 uint8_t attr = de[11];
-                if ((attr & ATTR_LFN) == ATTR_LFN) continue;   /* long-name */
-                if (attr & ATTR_VOLUME_ID) continue;           /* volume label */
-                if (key) {
-                    int match = 1;
-                    for (int i = 0; i < 11; i++)
-                        if ((char)de[i] != key[i]) { match = 0; break; }
-                    if (!match) continue;
-                } else if (count++ != index) {
+                if ((attr & ATTR_LFN) == ATTR_LFN) {   /* VFAT long-name fragment */
+                    int ord = de[0] & 0x1F;
+                    if (ord >= 1 && ord <= 19) {
+                        int base = (ord - 1) * 13;
+                        for (int k = 0; k < 13 && base + k < 255; k++) {
+                            uint16_t ch = de[LIDX[k]] | ((uint16_t)de[LIDX[k] + 1] << 8);
+                            lfn[base + k] = (ch == 0 || ch == 0xFFFF) ? 0
+                                          : (ch < 128 ? (char)ch : '?');
+                        }
+                        have_lfn = 1;
+                    }
                     continue;
                 }
-                if (name_out) fmt_83(de, name_out);
+                if (attr & ATTR_VOLUME_ID) { have_lfn = 0; continue; }
+
+                /* Real 8.3 entry: its display name is the accumulated long name
+                 * (if any) else the formatted 8.3 name. */
+                char disp[256];
+                int dlen = 0;
+                if (have_lfn) {
+                    while (dlen < 255 && lfn[dlen]) { disp[dlen] = lfn[dlen]; dlen++; }
+                    disp[dlen] = 0;
+                } else {
+                    fmt_83(de, disp);
+                    while (disp[dlen]) dlen++;
+                }
+
+                int hit;
+                if (want) {
+                    hit = (have_lfn && ci_eq(want, wlen, disp, dlen));
+                    if (!hit) {                        /* fall back to 8.3 key */
+                        int m = 1;
+                        for (int i = 0; i < 11; i++)
+                            if ((char)de[i] != shortkey[i]) { m = 0; break; }
+                        hit = m;
+                    }
+                } else {
+                    hit = (count++ == index);
+                }
+                if (!hit) { have_lfn = 0; continue; }
+
+                if (name_out)
+                    for (int i = 0; i <= dlen; i++) name_out[i] = disp[i];
                 if (out) {
                     out->first_clus = ((uint32_t)rd16(de, 20) << 16) | rd16(de, 26);
                     out->size     = rd32(de, 28);
@@ -161,10 +215,8 @@ static uint32_t walk_dir(struct fat32_ctx *c, const char *path) {
         if (!*path) break;
         int len = 0;
         while (path[len] && path[len] != '/') len++;
-        char key[11];
-        comp_key(path, len, key);
         struct dirent_info di;
-        if (dir_scan(c, clus, key, 0, 0, &di) != 0) return 0;
+        if (dir_scan(c, clus, path, len, 0, 0, &di) != 0) return 0;
         if (!(di.attr & ATTR_DIRECTORY)) return 0;   /* not a directory */
         clus = di.first_clus ? di.first_clus : c->root_clus;
         path += len;
@@ -216,7 +268,7 @@ static int fat32_readdir(void *ctx, const char *path, int index, char *name, uin
     if (!dir)
         return -1;
     struct dirent_info di;
-    if (dir_scan(c, dir, 0, index, name, &di) != 0)
+    if (dir_scan(c, dir, 0, 0, index, name, &di) != 0)
         return -1;
     if (size) *size = di.size;
     return 0;
@@ -233,10 +285,8 @@ static int fat32_open(void *ctx, const char *path, struct vfs_file *out) {
         while (path[len] && path[len] != '/') len++;
         if (len == 0)
             return -1;                      /* empty / trailing-slash component */
-        char key[11];
-        comp_key(path, len, key);
         struct dirent_info di;
-        if (dir_scan(c, clus, key, 0, 0, &di) != 0)
+        if (dir_scan(c, clus, path, len, 0, 0, &di) != 0)
             return -1;
         const char *next = path + len;
         while (*next == '/') next++;
@@ -363,12 +413,17 @@ static int dirent_update(struct fat32_ctx *c, uint32_t ent_clus, uint16_t ent_of
     wr16(b, o + 20, (uint16_t)(first_clus >> 16));
     wr16(b, o + 26, (uint16_t)(first_clus & 0xFFFF));
     wr32(b, o + 28, size);
+    uint32_t dt = rtc_fat_datetime();            /* refresh the write timestamp */
+    wr16(b, o + 22, (uint16_t)(dt & 0xFFFF));
+    wr16(b, o + 24, (uint16_t)(dt >> 16));
     return c->bd->write(c->bd, sec, b, 1);
 }
 
-/* Resolve the parent directory cluster of `path` and the 8.3 key of its final
- * component. Returns the parent cluster (0 on error); fills key[11]. */
-static uint32_t resolve_parent(struct fat32_ctx *c, const char *path, char *key) {
+/* Resolve the parent directory cluster of `path`, the 8.3 key of its final
+ * component (for writing), and the leaf name+len (for name matching). Returns
+ * the parent cluster, or 0 on error. */
+static uint32_t resolve_parent(struct fat32_ctx *c, const char *path, char *key,
+                               const char **leaf, int *leaf_len) {
     uint32_t clus = c->root_clus;
     while (*path == '/') path++;
     if (!*path) return 0;
@@ -380,12 +435,12 @@ static uint32_t resolve_parent(struct fat32_ctx *c, const char *path, char *key)
         if (*next == 0) {                        /* final component = leaf name */
             if (len == 0) return 0;
             comp_key(path, len, key);
+            if (leaf) *leaf = path;
+            if (leaf_len) *leaf_len = len;
             return clus;
         }
-        char k[11];
-        comp_key(path, len, k);
         struct dirent_info di;
-        if (dir_scan(c, clus, k, 0, 0, &di) != 0) return 0;
+        if (dir_scan(c, clus, path, len, 0, 0, &di) != 0) return 0;
         if (!(di.attr & ATTR_DIRECTORY)) return 0;
         clus = di.first_clus ? di.first_clus : c->root_clus;
         path = next;
@@ -397,17 +452,26 @@ static void write_new_entry(uint8_t *de, const char *key) {
     for (int i = 0; i < 11; i++)
         de[i] = (uint8_t)key[i];
     de[11] = ATTR_ARCHIVE;                       /* first cluster + size zero via memset */
+    uint32_t dt = rtc_fat_datetime();            /* stamp create/write/access */
+    uint16_t time = (uint16_t)(dt & 0xFFFF);
+    uint16_t date = (uint16_t)(dt >> 16);
+    wr16(de, 14, time);                          /* create time */
+    wr16(de, 16, date);                          /* create date */
+    wr16(de, 18, date);                          /* last-access date */
+    wr16(de, 22, time);                          /* write time */
+    wr16(de, 24, date);                          /* write date */
 }
 
 /* Create an empty regular file at `path` (fails if it already exists). */
 static int fat32_create(void *ctx, const char *path, struct vfs_file *out) {
     struct fat32_ctx *c = (struct fat32_ctx *)ctx;
     char key[11];
-    uint32_t dir = resolve_parent(c, path, key);
+    const char *leaf; int leaf_len;
+    uint32_t dir = resolve_parent(c, path, key, &leaf, &leaf_len);
     if (!dir)
         return -1;
     struct dirent_info ex;
-    if (dir_scan(c, dir, key, 0, 0, &ex) == 0)
+    if (dir_scan(c, dir, leaf, leaf_len, 0, 0, &ex) == 0)
         return -1;                               /* already exists */
 
     uint32_t clus = dir, last = dir;
@@ -535,11 +599,12 @@ static int fat32_write(void *ctx, struct vfs_file *f, uint64_t off, const void *
 static int fat32_unlink(void *ctx, const char *path) {
     struct fat32_ctx *c = (struct fat32_ctx *)ctx;
     char key[11];
-    uint32_t dir = resolve_parent(c, path, key);
+    const char *leaf; int leaf_len;
+    uint32_t dir = resolve_parent(c, path, key, &leaf, &leaf_len);
     if (!dir)
         return -1;
     struct dirent_info di;
-    if (dir_scan(c, dir, key, 0, 0, &di) != 0)
+    if (dir_scan(c, dir, leaf, leaf_len, 0, 0, &di) != 0)
         return -1;
     if (di.attr & ATTR_DIRECTORY)
         return -1;                               /* regular files only */
