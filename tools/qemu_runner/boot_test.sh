@@ -41,6 +41,11 @@ if [ -f build/sfs.img ]; then
     SFSDISK=(-drive if=none,format=raw,file=build/sfs.img,id=disk2
              -device virtio-blk-pci,drive=disk2)
 fi
+EXT4DISK=()
+if [ -f build/ext4.img ]; then
+    EXT4DISK=(-drive if=none,format=raw,file=build/ext4.img,id=disk3
+              -device virtio-blk-pci,drive=disk3)
+fi
 
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine q35 \
@@ -48,6 +53,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -device virtio-blk-pci,drive=disk0,bootindex=0 \
     "${FATDISK[@]}" \
     "${SFSDISK[@]}" \
+    "${EXT4DISK[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \

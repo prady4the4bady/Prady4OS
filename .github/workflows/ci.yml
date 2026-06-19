@@ -16,7 +16,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang lld llvm nasm make qemu-system-x86 \
-            dosfstools mtools
+            dosfstools mtools e2fsprogs
           rustup toolchain install nightly --profile minimal
           rustup component add rust-src --toolchain nightly
           rustup target add x86_64-unknown-none --toolchain nightly
@@ -38,3 +38,6 @@ jobs:
 
       - name: QEMU SFS read-write test (q35; CoW B+tree + extents)
         run: make smoke-fs-sfs-rw
+
+      - name: QEMU ext4 read test (q35; read-only ext4)
+        run: make smoke-fs-ext4

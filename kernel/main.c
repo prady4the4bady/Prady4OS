@@ -31,6 +31,7 @@
 #include "vfs.h"
 #include "fat32.h"
 #include "sfs.h"
+#include "ext4.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -557,6 +558,29 @@ static void fs_test_thread(void *arg) {
             kputs("[sfs] format failed\r\n");
         }
     }
+
+    /* ext4 read-only (slice 4j): mount the 4th disk and read a host-written file. */
+    if (blk_count() > 3) {
+        int emnt = vfs_mount(3);
+        if (emnt >= 0) {
+            struct vfs_file ef;
+            if (vfs_open(cap, emnt, "/EXT4.TXT", &ef) == 0) {
+                uint64_t buf = pmm_alloc_page();
+                uint32_t want = (ef.size < 4095) ? (uint32_t)ef.size : 4095;
+                int n = vfs_read(cap, &ef, 0, (void *)(uintptr_t)buf, want);
+                ((char *)(uintptr_t)buf)[(n > 0) ? n : 0] = 0;
+                kputs("[ext4] mounted ");
+                kputs(vfs_fs_name(emnt));
+                kputs("; /EXT4.TXT: \"");
+                kputs((char *)(uintptr_t)buf);
+                kputs("\"\r\n");
+            } else {
+                kputs("[ext4] open /EXT4.TXT failed\r\n");
+            }
+        } else {
+            kputs("[ext4] mount failed\r\n");
+        }
+    }
 }
 
 static void sched_demo(void) {
@@ -754,7 +778,8 @@ void kmain(struct boot_info *bi) {
             virtio_blk_init(d->bus, d->dev, d->func);
     }
     fat32_register();                    /* Phase 4: register the FS driver with the VFS */
-    sfs_register();                      /* Phase 4: SFS skeleton (probe declines for now) */
+    sfs_register();                      /* Phase 4: SOVEREIGN FS (ADR-018) */
+    ext4_register();                     /* Phase 4j: ext4 read-only compat */
 
     kputs("NEXUS: starting scheduler\r\n");
     sched_demo();                          /* never returns (becomes the idle thread) */

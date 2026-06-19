@@ -11,7 +11,7 @@ sudo apt-get install -y --no-install-recommends \
     nasm \
     make \
     qemu-system-x86 \
-    ovmf mtools xorriso dosfstools \
+    ovmf mtools xorriso dosfstools e2fsprogs \
     gdb-multiarch \
     curl ca-certificates
 
