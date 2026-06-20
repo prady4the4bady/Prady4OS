@@ -9,10 +9,10 @@ differs. No giant `#ifdef` jungles — platform divergence lives in per-ISA file
 | Layer | Subsystem | Status (x86_64 reference) |
 |-------|-----------|---------------------------|
 | L1 | Bootloader (MBR now; UEFI later) | 🟢 MBR two-stage; UEFI deferred |
-| L2 | NEXUS kernel core | 🟢 complete (APIC, 3-lane NAS, PFO, AVAS, Sovereign Pool, W^X deferred) |
-| L3 | Drivers | 🟡 ACPI/PCIe/virtio-blk done; virtio-net, NVMe, framebuffer, USB, power deferred |
-| L4 | VFS + filesystems | 🟡 FAT32 read-write done; SFS engine + ext4 deferred |
-| L5 | Userspace (pradyos-init, PRISM shell, musl, prad) | 🔴 |
+| L2 | NEXUS kernel core | 🟢 complete; user W^X/NX live (ADR-021). APIC, 3-lane NAS, PFO, AVAS, Sovereign Pool, kernel-self W^X deferred |
+| L3 | Drivers | 🟡 ACPI/PCIe/virtio-blk + RTC done; virtio-net, NVMe, framebuffer, USB, power deferred |
+| L4 | VFS + filesystems | 🟢 complete — FAT32 read-write, SFS engine (CoW B+tree, journal, snapshots, LZ4), ext4 read-only |
+| L5 | Userspace (pradyos-init, PRISM shell, musl, prad) | 🟡 5a static ELF loader + per-process AS + W^X done; syscalls (5b), musl, init, shell, prad pending |
 | L6 | AETHER runtime (aetherd, Ollama bridge, cloud adapters, 8 named agents, Sovereign Gate, approval queue) | 🔴 |
 | L7 | Desktop / compositor (Wayland + Sovereign/Manual UI) | 🔴 |
 | L8 | Quantum Abstraction Layer (`/dev/qpu0`, QAOA, Grover) | 🔴 future |

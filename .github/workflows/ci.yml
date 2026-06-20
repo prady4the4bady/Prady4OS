@@ -44,3 +44,21 @@ jobs:
 
       - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
         run: make smoke-user
+
+  # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
+  # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
+  # the graph from source and validates queries. Non-destructive (writes only the
+  # git-ignored .graph/ DB).
+  code-graph:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install graph deps (npm ci)
+        working-directory: tools/graph_mcp
+        run: npm ci --no-audit --no-fund
+      - name: Build + validate code graph
+        working-directory: tools/graph_mcp
+        run: node server.js selftest

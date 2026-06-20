@@ -1,0 +1,25 @@
+{
+  "name": "pradyos-graph-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PRADYOS persistent code knowledge graph — MCP server + CLI (Tree-sitter + SQLite, pure JS/WASM, cross-platform).",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "pradyos-graph": "server.js"
+  },
+  "scripts": {
+    "rebuild": "node server.js rebuild",
+    "selftest": "node server.js selftest",
+    "start": "node server.js mcp"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "sql.js": "^1.10.0",
+    "tree-sitter-wasms": "^0.1.11",
+    "web-tree-sitter": "0.22.6"
+  }
+}

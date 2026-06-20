@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "pradyos-graph": {
+      "command": "node",
+      "args": ["tools/graph_mcp/server.js", "mcp"],
+      "env": {}
+    }
+  }
+}

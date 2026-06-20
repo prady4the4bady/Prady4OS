@@ -17,3 +17,9 @@ Cargo.lock
 # Editor / OS cruft
 .DS_Store
 *.swp
+
+# Node tooling — PRADYOS code graph MCP (tools/graph_mcp). Dependencies are
+# reproduced from package-lock.json via `npm ci`; the graph DB is generated.
+node_modules/
+tools/graph_mcp/.graph/
+tools/graph_mcp/*.tmp
