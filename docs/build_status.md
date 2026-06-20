@@ -70,7 +70,13 @@ the destructive self-tests), allocates an fd, and records the open file + cap;
 `sys_read` now reads VFS files through `copyout`; `sys_close` frees the slot;
 `sys_fstat` fills a Linux-x86-64-layout `struct stat` (`kernel/include/stat.h`)
 via copyout. `SYS_OPEN=7`/`SYS_CLOSE=8`/`SYS_FSTAT=9`. New gate `smoke-sysfile`
-PASS (open/fstat/read/close + ENOENT). Next: 5b-5 (sys_lseek/sys_getcwd/getpid).
+PASS (open/fstat/read/close + ENOENT). **Slice 5b-5 (sys_lseek/sys_getcwd/getpid)
+COMPLETE:** `kernel/syscall/sys_proc.c` — `sys_lseek` (SEEK_SET/CUR/END on a VFS
+fd, -ESPIPE for console, -EINVAL on negative result) and `sys_getcwd` ("/" via
+copyout, -ERANGE if the buffer is too small); `sys_getpid` already existed
+(SYS_GETPID=2). `SYS_LSEEK=10`/`SYS_GETCWD=11`. New gate `smoke-sysproc` PASS
+(getpid>0, getcwd="/", lseek-then-read returns the byte at the new offset).
+Next: 5b-6 (sys_mmap MAP_ANON RW+NX baseline).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

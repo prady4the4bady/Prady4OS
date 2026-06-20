@@ -13,10 +13,13 @@ BITS 64
 
 SYS_WRITE equ 6
 SYS_EXIT  equ 4
-SYS_READ  equ 5
-SYS_OPEN  equ 7
-SYS_CLOSE equ 8
-SYS_FSTAT equ 9
+SYS_READ   equ 5
+SYS_OPEN   equ 7
+SYS_CLOSE  equ 8
+SYS_FSTAT  equ 9
+SYS_GETPID equ 2
+SYS_LSEEK  equ 10
+SYS_GETCWD equ 11
 
 STDOUT    equ 1
 ENOENT    equ 2          ; returned as -ENOENT
@@ -141,6 +144,72 @@ _start:
 .sf_done:
     add     rsp, 256
 
+    ; ---- slice 5: getpid / getcwd / lseek -----------------------------------
+    sub     rsp, 64
+    mov     rbx, rsp               ; rbx = scratch (survives syscalls)
+
+    mov     rax, SYS_GETPID        ; getpid() -> pid > 0
+    syscall
+    test    rax, rax
+    jle     .s5_after_pid
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_getpid]
+    mov     rdx, m_getpid_len
+    syscall
+.s5_after_pid:
+
+    mov     rax, SYS_GETCWD        ; getcwd(buf, 64) -> 2, buf = "/"
+    mov     rdi, rbx
+    mov     rsi, 64
+    syscall
+    cmp     rax, 2
+    jne     .s5_after_cwd
+    cmp     byte [rbx], 0x2F       ; '/'
+    jne     .s5_after_cwd
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_getcwd]
+    mov     rdx, m_getcwd_len
+    syscall
+.s5_after_cwd:
+
+    mov     rax, SYS_OPEN          ; open, lseek to 1, read 1 -> 'R'
+    lea     rdi, [rel p_hello]
+    xor     rsi, rsi
+    xor     rdx, rdx
+    syscall
+    mov     r12, rax
+    cmp     rax, 3
+    jl      .s5_done
+    mov     rax, SYS_LSEEK
+    mov     rdi, r12
+    mov     rsi, 1
+    xor     rdx, rdx               ; SEEK_SET
+    syscall
+    cmp     rax, 1
+    jne     .s5_close
+    mov     rax, SYS_READ
+    mov     rdi, r12
+    mov     rsi, rbx
+    mov     rdx, 1
+    syscall
+    cmp     rax, 1
+    jne     .s5_close
+    cmp     byte [rbx], 0x52       ; 'R' (HELLO.TXT[1])
+    jne     .s5_close
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_lseek]
+    mov     rdx, m_lseek_len
+    syscall
+.s5_close:
+    mov     rax, SYS_CLOSE
+    mov     rdi, r12
+    syscall
+.s5_done:
+    add     rsp, 64
+
     ; ---- done ---------------------------------------------------------------
     mov     rax, SYS_EXIT
     xor     rdi, rdi
@@ -167,3 +236,9 @@ m_close:     db "SYSCLOSE OK", 10
 m_close_len: equ $ - m_close
 m_noent:     db "SYSOPEN ENOENT OK", 10
 m_noent_len: equ $ - m_noent
+m_getpid:    db "SYSGETPID OK", 10
+m_getpid_len: equ $ - m_getpid
+m_getcwd:    db "SYSGETCWD OK", 10
+m_getcwd_len: equ $ - m_getcwd
+m_lseek:     db "SYSLSEEK OK", 10
+m_lseek_len: equ $ - m_lseek

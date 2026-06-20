@@ -7,6 +7,7 @@
 #include "errno.h"
 #include "sys_io.h"    /* SYS_READ / SYS_WRITE handlers (slice 3) */
 #include "sys_file.h"  /* SYS_OPEN / SYS_CLOSE / SYS_FSTAT handlers (slice 4) */
+#include "sys_proc.h"  /* SYS_LSEEK / SYS_GETCWD handlers (slice 5) */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
@@ -82,6 +83,7 @@ void syscall_init(void) {
     syscall_register(SYS_EXIT, sys_exit);
     sys_io_register();                   /* SYS_READ / SYS_WRITE (slice 3) */
     sys_file_register();                 /* SYS_OPEN / SYS_CLOSE / SYS_FSTAT (slice 4) */
+    sys_proc_register();                 /* SYS_LSEEK / SYS_GETCWD (slice 5) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

@@ -19,6 +19,8 @@
 #define SYS_OPEN   7   /* (path, flags, mode) -> fd          (5b slice 4)    */
 #define SYS_CLOSE  8   /* (fd)                -> 0           (5b slice 4)    */
 #define SYS_FSTAT  9   /* (fd, struct stat *) -> 0           (5b slice 4)    */
+#define SYS_LSEEK  10  /* (fd, off, whence)   -> new offset  (5b slice 5)    */
+#define SYS_GETCWD 11  /* (buf, size)         -> len incl NUL (5b slice 5)   */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
