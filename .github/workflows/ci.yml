@@ -45,6 +45,9 @@ jobs:
       - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
         run: make smoke-user
 
+      - name: QEMU uaccess test (q35; copyin/copyout/copyinstr EFAULT contract)
+        run: make smoke-uaccess
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the

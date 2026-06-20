@@ -3,6 +3,7 @@
 #include "console.h"
 #include "cap.h"
 #include "sched.h"
+#include "uaccess.h"   /* validated user-pointer copy path (ADR-022); used by 5b syscalls */
 
 #define MAX_SYSCALLS 16
 

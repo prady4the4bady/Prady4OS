@@ -15,6 +15,12 @@
 #define VMM_PCD     0x10ull                   /* page cache disable (for MMIO) */
 #define VMM_NX      0x8000000000000000ull     /* no-execute; honored once EFER.NXE is on */
 
+/* User virtual range = PML4 slot 1 = [512 GiB, 1 TiB) (ADR-021). The ELF loader
+ * mirrors these as its own USER_MIN/USER_MAX; any user pointer the kernel copies
+ * to/from must fall inside this range (see vmm_user_range_ok). */
+#define VMM_USER_MIN  0x8000000000ull
+#define VMM_USER_MAX  0x10000000000ull
+
 /* Record the kernel master CR3 and enable EFER.NXE (so VMM_NX is honored).
  * Call once early in kmain, before any per-process address space is created. */
 void vmm_init(void);
@@ -41,3 +47,11 @@ int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags)
 /* Free a per-process address space: its private user page tables and the PML4.
  * The shared kernel entries are left intact. */
 void vmm_destroy_address_space(uint64_t pml4_phys);
+
+/* Validate a user range against the page tables rooted at `cr3` WITHOUT touching
+ * the user memory: returns 1 iff every page spanned by [vaddr, vaddr+len) is
+ * present, user-accessible, inside the user range, and (when `writable`) RW;
+ * else 0. Never allocates and never faults — the foundation of copyin/copyout
+ * (ADR-022). User mappings are 4 KiB; a huge-page (PS) entry on the path is
+ * treated as not-walkable (fail-closed). */
+int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable);

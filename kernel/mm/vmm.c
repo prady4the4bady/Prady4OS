@@ -209,3 +209,34 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
     }
     ptnode_free((void *)(uintptr_t)pml4_phys);
 }
+
+/* Walk the tables rooted at `cr3` and confirm every page spanned by
+ * [vaddr, vaddr+len) is mapped USER (and RW when `writable`), inside the user
+ * range. Reads PTEs through the identity map; never dereferences the user
+ * address, so a bad pointer yields 0 instead of a #PF (ADR-022). USER is checked
+ * at every level (the user subtree lives entirely in PML4 slot 1, where the
+ * kernel master has nothing, so all intermediates are user-promoted) — defense
+ * in depth against a kernel-only page reachable under a user-walkable path. */
+int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable) {
+    if (len == 0)
+        return 1;
+    uint64_t end = vaddr + len;
+    if (end < vaddr)                                  /* address wrap */
+        return 0;
+    if (vaddr < VMM_USER_MIN || end > VMM_USER_MAX)
+        return 0;
+
+    uint64_t *pml4 = table_at(cr3 & PTE_ADDR);
+    for (uint64_t va = vaddr & ~((uint64_t)PAGE_SIZE - 1); va < end; va += PAGE_SIZE) {
+        uint64_t e = pml4[idx(va, 4)];
+        if (!(e & PTE_PRESENT) || (e & PTE_PS) || !(e & VMM_USER)) return 0;
+        e = table_at(e & PTE_ADDR)[idx(va, 3)];
+        if (!(e & PTE_PRESENT) || (e & PTE_PS) || !(e & VMM_USER)) return 0;
+        e = table_at(e & PTE_ADDR)[idx(va, 2)];
+        if (!(e & PTE_PRESENT) || (e & PTE_PS) || !(e & VMM_USER)) return 0;
+        e = table_at(e & PTE_ADDR)[idx(va, 1)];       /* leaf PTE (4 KiB) */
+        if (!(e & PTE_PRESENT) || !(e & VMM_USER)) return 0;
+        if (writable && !(e & VMM_RW)) return 0;
+    }
+    return 1;
+}

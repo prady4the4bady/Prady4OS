@@ -48,7 +48,13 @@ boards; realistic perf targets adopted (context switch ≤ 1.5 µs, syscall ≤ 
 (`copyin`/`copyout`/`copyinstr` → EFAULT, never CPL-0 panic), NSI-v2 table/ABI
 (6-arg, own number space, fd↔capability bridge), 9 syscall clusters in build
 order, fork = copy-all-pages (COW deferred to a future ADR), mmap MAP_ANON
-baseline. No 5b code yet — design only.
+baseline. **Slice 5b-2 (uaccess primitives) COMPLETE:** `kernel/mm/uaccess.c`
+(`copyin`/`copyout`/`copyinstr`) on `vmm_user_range_ok` — walks the calling
+process's page tables WITHOUT dereferencing the user address, so a wild pointer
+or a read-only-page write returns `-EFAULT` and the kernel never #PFs at CPL 0
+(W^X upheld on the copy path). New gate `smoke-uaccess` PASS (good page, wild
+ptr → EFAULT, RO-page write → EFAULT, valid string). Next: 5b-3 (sys_read/write
++ per-process fd table).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

@@ -34,6 +34,8 @@
 #include "ext4.h"
 #include "rtc.h"
 #include "elf.h"
+#include "uaccess.h"
+#include "errno.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -650,6 +652,73 @@ static void sched_demo(void) {
         __asm__ volatile("hlt");
 }
 
+/* Phase 5b slice 2: exercise the validated user-pointer copy path (ADR-022).
+ * Builds a throwaway user address space with one RW and one read-only user page,
+ * switches to it, and drives copyin/copyout/copyinstr. The two negative cases (a
+ * wild pointer and a write to a read-only page) MUST return -EFAULT with the
+ * kernel surviving — i.e. no #PF at CPL 0, no panic. Runs with interrupts masked
+ * around the CR3 switch so a timer tick can't schedule on the throwaway AS. */
+static void uaccess_selftest(void) {
+    kputs("NEXUS: uaccess (copyin/copyout/copyinstr) tests\r\n");
+
+    uint64_t save_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(save_cr3));
+
+    uint64_t as = vmm_new_address_space();
+    if (!as) { kputs("[uaccess] no address space\r\n"); return; }
+
+    const uint64_t UVA_RW = VMM_USER_MIN;            /* a writable user page     */
+    const uint64_t UVA_RO = VMM_USER_MIN + 0x1000;   /* a read-only user page    */
+    void *frw = ptnode_alloc();
+    void *fro = ptnode_alloc();
+    if (!frw || !fro) {
+        kputs("[uaccess] no frame\r\n");
+        vmm_destroy_address_space(as);
+        return;
+    }
+
+    const char *probe = "uaccess-probe";
+    uint64_t plen = 0;
+    while (probe[plen]) plen++;                       /* 13 chars, excl. NUL      */
+    memcpy((void *)(uintptr_t)frw, probe, (size_t)plen + 1);  /* seed via identity view */
+
+    vmm_map_in(as, UVA_RW, (uint64_t)(uintptr_t)frw, VMM_USER | VMM_RW | VMM_NX);
+    vmm_map_in(as, UVA_RO, (uint64_t)(uintptr_t)fro, VMM_USER | VMM_NX);  /* no RW */
+
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    __asm__ volatile("mov %0, %%cr3" :: "r"(as) : "memory");
+
+    char kbuf[32];
+    /* Test 1: copyin from a good user page. */
+    ssize_t r1 = copyin(kbuf, (const void __user *)(uintptr_t)UVA_RW, (size_t)plen + 1);
+    int t1 = (r1 == (ssize_t)(plen + 1)) && (memcmp(kbuf, probe, (size_t)plen + 1) == 0);
+
+    /* Test 2: copyin from an unmapped user address -> EFAULT, kernel survives. */
+    ssize_t r2 = copyin(kbuf, (const void __user *)(uintptr_t)0xdeadbeef000ull, 8);
+    int t2 = (r2 == -EFAULT);
+
+    /* Test 3: copyout to a read-only user page -> EFAULT (W^X upheld). */
+    ssize_t r3 = copyout((void __user *)(uintptr_t)UVA_RO, probe, (size_t)plen + 1);
+    int t3 = (r3 == -EFAULT);
+
+    /* Test 4: copyinstr on a valid user string -> string + correct length. */
+    char sbuf[32];
+    size_t slen = 0;
+    ssize_t r4 = copyinstr(sbuf, (const void __user *)(uintptr_t)UVA_RW, sizeof sbuf, &slen);
+    int t4 = (r4 == (ssize_t)plen) && (slen == plen) && (memcmp(sbuf, probe, (size_t)plen) == 0);
+
+    __asm__ volatile("mov %0, %%cr3" :: "r"(save_cr3) : "memory");
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+
+    kputs(t1 ? "[uaccess] copyin good page OK\r\n"      : "[uaccess] copyin good page FAIL\r\n");
+    kputs(t2 ? "[uaccess] copyin bad ptr EFAULT OK\r\n" : "[uaccess] copyin bad ptr FAIL\r\n");
+    kputs(t3 ? "[uaccess] copyout RO page EFAULT OK\r\n": "[uaccess] copyout RO page FAIL\r\n");
+    kputs(t4 ? "[uaccess] copyinstr OK\r\n"             : "[uaccess] copyinstr FAIL\r\n");
+
+    vmm_destroy_address_space(as);   /* frees the AS + both data frames (leaf pages) */
+}
+
 static void vmm_test(void) {
     const uint64_t va = 0xFFFF800000000000ull;   /* unused PML4 slot (256) */
     uint64_t pg = pmm_alloc_page();
@@ -805,6 +874,7 @@ void kmain(struct boot_info *bi) {
     kheap_stress();
     vmm_test();
     cap_test();
+    uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();

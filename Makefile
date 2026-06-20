@@ -28,7 +28,7 @@ USER_LD     := user/user.ld
 USER_ELF    := build/hello.elf
 USER_WX_ELF := build/wxviol.elf
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
-               kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/cap.c \
+               kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/ipc/ipc.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
@@ -44,7 +44,7 @@ KERNEL_BIN  := build/kernel.bin
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
-               build/vmm.o build/cap.o build/sched.o build/tss.o build/ipc.o \
+               build/vmm.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/ipc.o \
                build/bcast.o build/syscall.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
@@ -54,7 +54,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
                -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
-               -Ikernel/fs/ext4 -Ikernel/exec
+               -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -62,7 +62,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -117,6 +117,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/mm/pmm.c        -o build/pmm.o
 	$(CC) $(KCFLAGS) -c kernel/mm/kheap.c      -o build/kheap.o
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c        -o build/vmm.o
+	$(CC) $(KCFLAGS) -c kernel/mm/uaccess.c    -o build/uaccess.o
 	$(CC) $(KCFLAGS) -c kernel/cap.c           -o build/cap.o
 	$(CC) $(KCFLAGS) -c kernel/proc/sched.c    -o build/sched.o
 	$(CC) $(KCFLAGS) -c kernel/proc/tss.c      -o build/tss.o
@@ -258,6 +259,14 @@ smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image
 # push past the default 30 s, so allow more wall time.
 smoke-user: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[user] ELF loaded from SFS; ring-3 thread spawned\nHELLO FROM RING-3\n[user] sys_exit(0)\n[trap] user #PF page fault\n[sfs] lz4+tags compress/readback/tag OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
+# drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a
+# wild pointer (-> EFAULT), a read-only page write (-> EFAULT, W^X), and a valid
+# string. All four lines must appear AND the kernel must survive the two faults.
+smoke-uaccess: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:
