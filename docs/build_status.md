@@ -44,7 +44,12 @@ enforced (C + NASM). Deferred: 3-lane NAS, APIC, kernel-self W^X, COW fork,
 process reaping/AS-teardown on exit, dynamic linking, SFS free-space-tree/GC,
 ext4 write (see DEFERRED). Architecture confirmed against the user's Layer 1–6
 boards; realistic perf targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
-**Last updated:** 2026-06-20
+**5b design recorded (ADR-022 = DDR-5b):** validated user-pointer copy contract
+(`copyin`/`copyout`/`copyinstr` → EFAULT, never CPL-0 panic), NSI-v2 table/ABI
+(6-arg, own number space, fd↔capability bridge), 9 syscall clusters in build
+order, fork = copy-all-pages (COW deferred to a future ADR), mmap MAP_ANON
+baseline. No 5b code yet — design only.
+**Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System
 
