@@ -48,6 +48,11 @@ struct vfs_fs_ops {
 
 void vfs_register(const struct vfs_fs_ops *ops);
 int  vfs_mount(unsigned blk_index);    /* probe drivers on a disk -> mount id >= 0, or -1 */
+
+/* Process default ("root") mount: until a full mount-point namespace exists,
+ * syscall-layer paths (sys_open, ...) resolve against this mount (5b, ADR-022). */
+void vfs_set_default_mnt(int mnt);
+int  vfs_default_mnt(void);
 int  vfs_unmount(int mnt);             /* release a mount (frees FS resources)   */
 const char *vfs_fs_name(int mnt);      /* mounted FS name for a mount id, or NULL */
 

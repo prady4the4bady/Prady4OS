@@ -13,8 +13,13 @@ BITS 64
 
 SYS_WRITE equ 6
 SYS_EXIT  equ 4
+SYS_READ  equ 5
+SYS_OPEN  equ 7
+SYS_CLOSE equ 8
+SYS_FSTAT equ 9
 
 STDOUT    equ 1
+ENOENT    equ 2          ; returned as -ENOENT
 EBADF     equ 9          ; returned as -EBADF
 EFAULT    equ 14         ; returned as -EFAULT
 
@@ -59,6 +64,83 @@ _start:
     syscall
 .no_efault:
 
+    ; ---- slice 4: open / fstat / read / close -------------------------------
+    sub     rsp, 256               ; scratch: [rbx]=statbuf(144), [rbx+160]=rbuf
+    mov     rbx, rsp               ; rbx survives syscalls (callee-saved)
+
+    mov     rax, SYS_OPEN          ; open("/HELLO.TXT", 0, 0)
+    lea     rdi, [rel p_hello]
+    xor     rsi, rsi
+    xor     rdx, rdx
+    syscall
+    mov     r12, rax               ; r12 = fd (preserved across syscalls)
+    cmp     rax, 3
+    jl      .sf_done               ; open failed -> skip the file tests
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_open]
+    mov     rdx, m_open_len
+    syscall
+
+    mov     rax, SYS_FSTAT         ; fstat(fd, statbuf)
+    mov     rdi, r12
+    mov     rsi, rbx
+    syscall
+    test    rax, rax
+    jnz     .sf_after_fstat
+    mov     rax, [rbx + 48]        ; st_size (offset 48 in struct stat)
+    test    rax, rax
+    jz      .sf_after_fstat
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_fstat]
+    mov     rdx, m_fstat_len
+    syscall
+.sf_after_fstat:
+
+    mov     rax, SYS_READ          ; read(fd, rbuf, 4)
+    mov     rdi, r12
+    lea     rsi, [rbx + 160]
+    mov     rdx, 4
+    syscall
+    cmp     rax, 4
+    jne     .sf_after_read
+    cmp     byte [rbx + 160], 0x50 ; 'P' — HELLO.TXT begins "PRADYOS..."
+    jne     .sf_after_read
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_read]
+    mov     rdx, m_read_len
+    syscall
+.sf_after_read:
+
+    mov     rax, SYS_CLOSE         ; close(fd)
+    mov     rdi, r12
+    syscall
+    test    rax, rax
+    jnz     .sf_after_close
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_close]
+    mov     rdx, m_close_len
+    syscall
+.sf_after_close:
+
+    mov     rax, SYS_OPEN          ; open of a missing path -> -ENOENT
+    lea     rdi, [rel p_nope]
+    xor     rsi, rsi
+    xor     rdx, rdx
+    syscall
+    cmp     rax, -ENOENT
+    jne     .sf_done
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_noent]
+    mov     rdx, m_noent_len
+    syscall
+.sf_done:
+    add     rsp, 256
+
     ; ---- done ---------------------------------------------------------------
     mov     rax, SYS_EXIT
     xor     rdi, rdi
@@ -73,3 +155,15 @@ m_ebadf:     db "SYSIO EBADF OK", 10
 m_ebadf_len: equ $ - m_ebadf
 m_efault:    db "SYSIO EFAULT OK", 10
 m_efault_len: equ $ - m_efault
+p_hello:     db "/HELLO.TXT", 0
+p_nope:      db "/NOPE.TXT", 0
+m_open:      db "SYSOPEN OK", 10
+m_open_len:  equ $ - m_open
+m_fstat:     db "SYSFSTAT OK", 10
+m_fstat_len: equ $ - m_fstat
+m_read:      db "SYSREAD OK", 10
+m_read_len:  equ $ - m_read
+m_close:     db "SYSCLOSE OK", 10
+m_close_len: equ $ - m_close
+m_noent:     db "SYSOPEN ENOENT OK", 10
+m_noent_len: equ $ - m_noent

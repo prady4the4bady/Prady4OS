@@ -465,6 +465,9 @@ static void fs_test_thread(void *arg) {
         kputs("[fs] no mountable filesystem found\r\n");
         return;
     }
+    /* 5b: this stable FAT32 mount is the process root for the syscall layer
+     * (the SFS mount is later reformatted by the destructive self-tests). */
+    vfs_set_default_mnt(mnt);
     kputs("[fs] mounted ");
     kputs(vfs_fs_name(mnt));
     kputs(" on blk");

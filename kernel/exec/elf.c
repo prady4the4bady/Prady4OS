@@ -15,6 +15,7 @@
 #include "cap.h"
 #include "syscall.h"
 #include "string.h"
+#include "vfs.h"        /* FS_RES_ID + vfs_default_mnt for the 5b FS grant */
 
 /* --- ELF64 on-disk format (System V gABI; a public spec, clean-room) -------- */
 
@@ -231,8 +232,12 @@ int elf_load(const void *image, uint64_t image_len, const char *name,
     struct tcb *t = sched_create_user(prog, eh->e_entry, user_rsp);
     if (t) {
         t->cr3 = as;
-        /* exactly one capability: console display, delivered in RDI */
+        /* exactly one capability delivered in RDI: console display */
         t->user_arg = (uint64_t)cap_create(t->caps, RES_DEVICE, CONSOLE_RES_ID, CAP_DISPLAY);
+        /* 5b (ADR-022): grant an FS capability + root mount so the fd-based file
+         * syscalls (sys_open/read/...) can reach the VFS on this process's behalf. */
+        t->fs_cap   = cap_create(t->caps, RES_FILE, FS_RES_ID, CAP_FS_READ | CAP_FS_WRITE);
+        t->root_mnt = vfs_default_mnt();
     }
     __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
 

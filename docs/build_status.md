@@ -61,7 +61,16 @@ buffer via `copyin` and writes to the console (-EBADF on bad fd, -EFAULT on bad
 buffer, kernel survives); `sys_read` stubbed -ENOSYS until slice 4; NSI-v2 table
 grown to 64, unknown call → -ENOSYS; `SYS_READ=5`/`SYS_WRITE=6`. New ring-3
 `user/systest.asm` (grows per slice) drives these; new gate `smoke-sysio` PASS
-(SYSWRITE OK / EBADF / EFAULT). Next: 5b-4 (sys_open/sys_close/sys_fstat).
+(SYSWRITE OK / EBADF / EFAULT). **Slice 5b-4 (sys_open/sys_close/sys_fstat)
+COMPLETE:** `kernel/syscall/sys_file.c` bridges the POSIX fd API to the
+capability-gated VFS — `sys_open` copyinstr's the path, resolves it against the
+process root mount with the process FS capability (both granted at load by
+`elf_load`; root = the stable FAT32 mount, since the SFS mount is reformatted by
+the destructive self-tests), allocates an fd, and records the open file + cap;
+`sys_read` now reads VFS files through `copyout`; `sys_close` frees the slot;
+`sys_fstat` fills a Linux-x86-64-layout `struct stat` (`kernel/include/stat.h`)
+via copyout. `SYS_OPEN=7`/`SYS_CLOSE=8`/`SYS_FSTAT=9`. New gate `smoke-sysfile`
+PASS (open/fstat/read/close + ENOENT). Next: 5b-5 (sys_lseek/sys_getcwd/getpid).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

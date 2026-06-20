@@ -8,6 +8,7 @@
 
 #define EPERM           1   /* operation not permitted              */
 #define ENOENT          2   /* no such file or directory            */
+#define EIO             5   /* I/O error                            */
 #define EBADF           9   /* bad file descriptor                  */
 #define ECHILD         10   /* no child processes                   */
 #define ENOMEM         12   /* out of memory                        */

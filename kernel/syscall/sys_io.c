@@ -9,6 +9,7 @@
 #include "syscall.h"
 #include "sched.h"
 #include "fd.h"
+#include "vfs.h"
 #include "console.h"
 #include "uaccess.h"
 #include "errno.h"
@@ -46,11 +47,41 @@ static long sys_write(long fd, long ubuf, long count, long a4) {
 }
 
 static long sys_read(long fd, long ubuf, long count, long a4) {
-    (void)ubuf; (void)count; (void)a4;
+    (void)a4;
+    if (count < 0)
+        return -EINVAL;
     struct fd_entry *e = fd_get(current_thread, (int)fd);
     if (!e)
         return -EBADF;
-    return -ENOSYS;   /* real read (console + VFS) arrives in slice 4 */
+
+    if (e->kind == FD_VFS && e->file) {
+        if (count == 0)
+            return 0;
+        char kbuf[256];
+        long total = 0, remaining = count;
+        uint64_t uptr = (uint64_t)ubuf;
+        while (remaining > 0) {
+            uint32_t chunk = (remaining > (long)sizeof kbuf) ? (uint32_t)sizeof kbuf
+                                                             : (uint32_t)remaining;
+            int n = vfs_read(e->cap, e->file, e->off, kbuf, chunk);
+            if (n < 0)
+                return total > 0 ? total : -EIO;
+            if (n == 0)
+                break;                                  /* EOF */
+            if (copyout((void __user *)(uintptr_t)uptr, kbuf, (size_t)n) < 0)
+                return total > 0 ? total : -EFAULT;
+            e->off    += (uint64_t)n;
+            total     += n;
+            uptr      += (uint64_t)n;
+            remaining -= n;
+            if (n < (int)chunk)
+                break;                                  /* short read = EOF */
+        }
+        return total;
+    }
+
+    /* Console input is not implemented yet. */
+    return -ENOSYS;
 }
 
 void sys_io_register(void) {

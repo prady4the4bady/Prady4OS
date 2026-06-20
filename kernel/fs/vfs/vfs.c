@@ -14,6 +14,10 @@ struct vfs_mount {
 };
 static struct vfs_mount g_mounts[VFS_MAX_MOUNTS];
 
+static int g_default_mnt = -1;          /* process root mount (5b, ADR-022) */
+void vfs_set_default_mnt(int mnt) { g_default_mnt = mnt; }
+int  vfs_default_mnt(void)        { return g_default_mnt; }
+
 void vfs_register(const struct vfs_fs_ops *ops) {
     if (g_nfs < VFS_MAX_FS)
         g_fs[g_nfs++] = ops;

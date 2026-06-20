@@ -51,6 +51,9 @@ jobs:
       - name: QEMU syscall I/O test (q35; sys_write fd table + EBADF/EFAULT)
         run: make smoke-sysio
 
+      - name: QEMU file syscall test (q35; open/close/fstat/read via VFS bridge)
+        run: make smoke-sysfile
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the

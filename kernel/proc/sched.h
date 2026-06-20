@@ -46,6 +46,8 @@ struct tcb {
     uint64_t   cr3;            /* process page-table root; 0 == kernel master AS */
 
     struct fd_table fdt;       /* per-process file descriptors (5b, ADR-022) */
+    int        root_mnt;       /* mount paths resolve against (-1 = none)    */
+    cap_t      fs_cap;         /* FS capability granted at load (5b)         */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

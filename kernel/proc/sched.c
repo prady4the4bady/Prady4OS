@@ -61,6 +61,8 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->user_arg = 0;
     t->cr3 = 0;                /* kernel master AS until a loader assigns one */
     fd_table_init(&t->fdt);    /* all fds free; user threads get stdio wired below */
+    t->root_mnt = -1;          /* no filesystem root until a loader assigns one */
+    t->fs_cap = 0;
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */

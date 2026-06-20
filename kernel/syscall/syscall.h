@@ -14,8 +14,11 @@
 #define SYS_GETPID 2   /* ()           -> current pid                       */
 #define SYS_YIELD  3   /* ()           -> yield the CPU                      */
 #define SYS_EXIT   4   /* (code)       -> terminate the calling thread      */
-#define SYS_READ   5   /* (fd, buf, n) -> bytes read   (5b slice 3/4)       */
-#define SYS_WRITE  6   /* (fd, buf, n) -> bytes written (5b slice 3)        */
+#define SYS_READ   5   /* (fd, buf, n)        -> bytes read   (5b slice 3/4) */
+#define SYS_WRITE  6   /* (fd, buf, n)        -> bytes written (5b slice 3)  */
+#define SYS_OPEN   7   /* (path, flags, mode) -> fd          (5b slice 4)    */
+#define SYS_CLOSE  8   /* (fd)                -> 0           (5b slice 4)    */
+#define SYS_FSTAT  9   /* (fd, struct stat *) -> 0           (5b slice 4)    */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

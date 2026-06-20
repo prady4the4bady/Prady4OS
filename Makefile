@@ -32,7 +32,7 @@ USER_SYS_ELF := build/systest.elf
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/ipc/ipc.c \
-               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/acpi/acpi.c \
+               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
@@ -47,7 +47,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
                build/vmm.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/ipc.o \
-               build/bcast.o build/syscall.o build/sys_io.o build/acpi.o build/pcie.o \
+               build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o
@@ -64,7 +64,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -130,6 +130,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/syscall.c -o build/syscall.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_io.c  -o build/sys_io.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/sys_file.c -o build/sys_file.o
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
@@ -282,6 +283,14 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # boot now loads three user ELFs, so allow extra wall time.
 smoke-sysio: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSWRITE OK\nSYSIO EBADF OK\nSYSIO EFAULT OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Phase 5b slice 4 file gate: systest opens /HELLO.TXT on the (stable FAT32) root
+# mount, fstats it (size > 0), reads its first bytes (ELF/text content), closes
+# it, and confirms a missing path -> ENOENT — exercising the fd<->VFS/capability
+# bridge and the copyin/copyout path from ring 3.
+smoke-sysfile: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSOPEN OK\nSYSFSTAT OK\nSYSREAD OK\nSYSCLOSE OK\nSYSOPEN ENOENT OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:
