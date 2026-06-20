@@ -53,9 +53,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+      # ubuntu-latest ships a current Node (>=18, which the pure-JS/WASM graph
+      # stack needs); no setup-node action required.
+      - name: Node version
+        run: node --version
       - name: Install graph deps (npm ci)
         working-directory: tools/graph_mcp
         run: npm ci --no-audit --no-fund
