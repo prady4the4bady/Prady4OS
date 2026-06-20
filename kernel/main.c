@@ -310,6 +310,8 @@ extern const unsigned char hello_elf[];
 extern const unsigned char hello_elf_end[];
 extern const unsigned char wx_elf[];
 extern const unsigned char wx_elf_end[];
+extern const unsigned char systest_elf[];
+extern const unsigned char systest_elf_end[];
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -573,6 +575,9 @@ static void fs_test_thread(void *arg) {
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end);
+                /* Phase 5b: the syscall test program (read/write/open/... grows
+                 * per slice). Runs in ring 3 and prints SYS* sentinels. */
+                user_boot_from_sfs(cap, smnt, "SYSTEST.ELF", systest_elf, systest_elf_end);
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

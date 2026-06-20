@@ -22,15 +22,17 @@ KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm \
 # Freestanding ring-3 test programs (Phase 5a): each linked as its own static
 # ELF and embedded into the kernel via arch/x86_64/user_image.asm (incbin).
 # hello prints from ring 3; wxviol is the W^X negative regression.
-USER_SRC    := user/hello.asm
-USER_WX_SRC := user/wxviol.asm
-USER_LD     := user/user.ld
-USER_ELF    := build/hello.elf
-USER_WX_ELF := build/wxviol.elf
+USER_SRC     := user/hello.asm
+USER_WX_SRC  := user/wxviol.asm
+USER_SYS_SRC := user/systest.asm
+USER_LD      := user/user.ld
+USER_ELF     := build/hello.elf
+USER_WX_ELF  := build/wxviol.elf
+USER_SYS_ELF := build/systest.elf
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/uaccess.c kernel/cap.c \
-               kernel/proc/sched.c kernel/proc/tss.c kernel/ipc/ipc.c \
-               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/acpi/acpi.c \
+               kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/ipc/ipc.c \
+               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
@@ -44,8 +46,8 @@ KERNEL_BIN  := build/kernel.bin
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
-               build/vmm.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/ipc.o \
-               build/bcast.o build/syscall.o build/acpi.o build/pcie.o \
+               build/vmm.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/ipc.o \
+               build/bcast.o build/syscall.o build/sys_io.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o
@@ -62,7 +64,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -93,7 +95,7 @@ toolchain-check:
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -102,7 +104,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ELF) build/hello.o
 	$(NASM) $(NASM_WERROR) -f elf64 $(USER_WX_SRC) -o build/wxviol.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_WX_ELF) build/wxviol.o
-	@for e in $(USER_ELF) $(USER_WX_ELF); do test "$$(wc -c < $$e)" -le 8192 || { echo "$$e exceeds 8 KiB (loader uses a 2-page bootstrap buffer)"; exit 1; }; done
+	$(NASM) $(NASM_WERROR) -f elf64 $(USER_SYS_SRC) -o build/systest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SYS_ELF) build/systest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF); do test "$$(wc -c < $$e)" -le 8192 || { echo "$$e exceeds 8 KiB (loader uses a 2-page bootstrap buffer)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -121,9 +125,11 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/cap.c           -o build/cap.o
 	$(CC) $(KCFLAGS) -c kernel/proc/sched.c    -o build/sched.o
 	$(CC) $(KCFLAGS) -c kernel/proc/tss.c      -o build/tss.o
+	$(CC) $(KCFLAGS) -c kernel/proc/fd.c       -o build/fd.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c       -o build/ipc.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/syscall.c -o build/syscall.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/sys_io.c  -o build/sys_io.o
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
@@ -267,6 +273,15 @@ smoke-user: $(IMG) fat-image sfs-image
 # string. All four lines must appear AND the kernel must survive the two faults.
 smoke-uaccess: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Phase 5b slice 3 syscall I/O gate: the ring-3 systest program (loaded from SFS)
+# calls sys_write(1,...) (good), sys_write(badfd,...) -> EBADF, and
+# sys_write(1, NULL, ...) -> EFAULT, printing a sentinel per outcome. Proves the
+# fd table + the EFAULT copy path from ring 3, with the kernel surviving. The
+# boot now loads three user ELFs, so allow extra wall time.
+smoke-sysio: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSWRITE OK\nSYSIO EBADF OK\nSYSIO EFAULT OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

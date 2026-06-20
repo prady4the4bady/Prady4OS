@@ -60,6 +60,7 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->user_stack = 0;
     t->user_arg = 0;
     t->cr3 = 0;                /* kernel master AS until a loader assigns one */
+    fd_table_init(&t->fdt);    /* all fds free; user threads get stdio wired below */
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
@@ -99,6 +100,7 @@ struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user
     t->pid = t->tid;
     t->user_rip = user_rip;
     t->user_stack = user_stack;
+    fd_init_std(&t->fdt);      /* stdin/stdout/stderr -> console */
     return t;
 }
 

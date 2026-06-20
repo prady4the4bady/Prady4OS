@@ -22,3 +22,10 @@ global wx_elf_end
 wx_elf:
     incbin "build/wxviol.elf"
 wx_elf_end:
+
+; Phase 5b syscall test program (grows per slice; exercises read/write/open/...).
+global systest_elf
+global systest_elf_end
+systest_elf:
+    incbin "build/systest.elf"
+systest_elf_end:

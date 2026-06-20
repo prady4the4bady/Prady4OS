@@ -53,8 +53,15 @@ baseline. **Slice 5b-2 (uaccess primitives) COMPLETE:** `kernel/mm/uaccess.c`
 process's page tables WITHOUT dereferencing the user address, so a wild pointer
 or a read-only-page write returns `-EFAULT` and the kernel never #PFs at CPL 0
 (W^X upheld on the copy path). New gate `smoke-uaccess` PASS (good page, wild
-ptr → EFAULT, RO-page write → EFAULT, valid string). Next: 5b-3 (sys_read/write
-+ per-process fd table).
+ptr → EFAULT, RO-page write → EFAULT, valid string). **Slice 5b-3
+(sys_read/sys_write + per-process fd table) COMPLETE:** per-process `fd_table`
+(`kernel/proc/fd.c`, FD_MAX=64) embedded in the TCB, fds 0/1/2 pre-wired to the
+console for user threads; `sys_write` (`kernel/syscall/sys_io.c`) copies the user
+buffer via `copyin` and writes to the console (-EBADF on bad fd, -EFAULT on bad
+buffer, kernel survives); `sys_read` stubbed -ENOSYS until slice 4; NSI-v2 table
+grown to 64, unknown call → -ENOSYS; `SYS_READ=5`/`SYS_WRITE=6`. New ring-3
+`user/systest.asm` (grows per slice) drives these; new gate `smoke-sysio` PASS
+(SYSWRITE OK / EBADF / EFAULT). Next: 5b-4 (sys_open/sys_close/sys_fstat).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

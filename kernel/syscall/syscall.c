@@ -4,8 +4,10 @@
 #include "cap.h"
 #include "sched.h"
 #include "uaccess.h"   /* validated user-pointer copy path (ADR-022); used by 5b syscalls */
+#include "errno.h"
+#include "sys_io.h"    /* SYS_READ / SYS_WRITE handlers (slice 3) */
 
-#define MAX_SYSCALLS 16
+#define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
 static syscall_fn table[MAX_SYSCALLS];
 uint64_t syscall_kstack_top;
@@ -34,7 +36,7 @@ void syscall_register(unsigned num, syscall_fn fn) {
 
 long syscall_dispatch(long num, long a1, long a2, long a3, long a4) {
     if (num < 0 || num >= MAX_SYSCALLS || !table[num])
-        return -1;
+        return -ENOSYS;
     return table[num](a1, a2, a3, a4);
 }
 
@@ -77,6 +79,7 @@ void syscall_init(void) {
     syscall_register(SYS_GETPID, sys_getpid);
     syscall_register(SYS_YIELD, sys_yield);
     syscall_register(SYS_EXIT, sys_exit);
+    sys_io_register();                   /* SYS_READ / SYS_WRITE (slice 3) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

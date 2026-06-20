@@ -8,11 +8,14 @@
 #pragma once
 #include <stdint.h>
 
-/* Syscall numbers. */
+/* Syscall numbers (NSI-v2, ADR-022: own dense number space, append-only). 1..4
+ * are the Phase 2e bootstrap calls and never move. */
 #define SYS_PUTC   1   /* (cap, char)  -> write one char to the console     */
 #define SYS_GETPID 2   /* ()           -> current pid                       */
 #define SYS_YIELD  3   /* ()           -> yield the CPU                      */
 #define SYS_EXIT   4   /* (code)       -> terminate the calling thread      */
+#define SYS_READ   5   /* (fd, buf, n) -> bytes read   (5b slice 3/4)       */
+#define SYS_WRITE  6   /* (fd, buf, n) -> bytes written (5b slice 3)        */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
