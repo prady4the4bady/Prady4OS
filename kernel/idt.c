@@ -118,6 +118,31 @@ void isr_dispatch(struct regs *r) {
 
     const char *name = (r->vector < 32) ? exc_name[r->vector] : "unknown";
 
+    /* Fault originating in ring 3 (CPL in the saved CS == 3): a user program
+     * misbehaved — a W^X violation (write to RX text), a guard-page hit, a bad
+     * pointer, an illegal instruction, etc. Kill the process cleanly and keep the
+     * kernel running, rather than panicking. This is the enforcement half of the
+     * W^X / guard-page policy (ADR-021); until signals arrive in 5b this is
+     * sys_exit(-1) semantics. The fault was in user code, so no kernel lock is
+     * held and sched_exit can safely switch away (the dead thread's kernel-stack
+     * ISR frame is abandoned, reaped later). */
+    if (r->vector < 32 && (r->cs & 3) == 3) {
+        kputs("[trap] user ");
+        kputs(name);
+        kputs(" pid=");
+        kputdec(current_thread ? current_thread->pid : 0);
+        kputs(" rip=");
+        kputhex(r->rip);
+        if (r->vector == 14) {
+            kputs(" cr2=");
+            kputhex(read_cr2());
+            kputs(" err=");
+            kputhex(r->err_code);
+        }
+        kputs(" — killing process\r\n");
+        sched_exit();                    /* marks DONE + switches away; never returns */
+    }
+
     if (r->vector == 3) {                /* recoverable self-test */
         kputs("[#BP] breakpoint at RIP=");
         kputhex(r->rip);

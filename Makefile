@@ -18,7 +18,15 @@ IMG        := build/pradyos.img
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
 KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm \
                arch/x86_64/context.asm arch/x86_64/syscall_entry.asm \
-               arch/x86_64/usermode.asm
+               arch/x86_64/usermode.asm arch/x86_64/user_image.asm
+# Freestanding ring-3 test programs (Phase 5a): each linked as its own static
+# ELF and embedded into the kernel via arch/x86_64/user_image.asm (incbin).
+# hello prints from ring 3; wxviol is the W^X negative regression.
+USER_SRC    := user/hello.asm
+USER_WX_SRC := user/wxviol.asm
+USER_LD     := user/user.ld
+USER_ELF    := build/hello.elf
+USER_WX_ELF := build/wxviol.elf
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/ipc/ipc.c \
@@ -28,7 +36,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
                kernel/drivers/rtc/rtc.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
-               kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/string.c
+               kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -40,13 +48,13 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/bcast.o build/syscall.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
-               build/ext4.o build/string.o
+               build/ext4.o build/elf.o build/user_image.o build/string.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
                -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
-               -Ikernel/fs/ext4
+               -Ikernel/fs/ext4 -Ikernel/exec
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -54,7 +62,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -85,8 +93,17 @@ toolchain-check:
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_LD)
 	@mkdir -p build
+	# Phase 5a: build the freestanding ring-3 programs and link each as its own
+	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
+	# incbin's both ELFs, so this MUST precede that assembly step.
+	$(NASM) $(NASM_WERROR) -f elf64 $(USER_SRC) -o build/hello.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ELF) build/hello.o
+	$(NASM) $(NASM_WERROR) -f elf64 $(USER_WX_SRC) -o build/wxviol.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_WX_ELF) build/wxviol.o
+	@for e in $(USER_ELF) $(USER_WX_ELF); do test "$$(wc -c < $$e)" -le 8192 || { echo "$$e exceeds 8 KiB (loader uses a 2-page bootstrap buffer)"; exit 1; }; done
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm           -o build/isr.o
@@ -119,6 +136,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD)
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/lz4.c                 -o build/lz4.o
 	$(CC) $(KCFLAGS) -c kernel/fs/ext4/ext4.c              -o build/ext4.o
+	$(CC) $(KCFLAGS) -c kernel/exec/elf.c                  -o build/elf.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
@@ -226,6 +244,20 @@ smoke-fs-sfs-rw: $(IMG) fat-image sfs-image
 # it (4th disk) and reads the file back. Asserts the ext4 self-test line.
 smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image
 	EXTRA_SENTINEL='ext4 read works' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Phase 5a user gate: the kernel formats a blank SFS volume (disk2), writes the
+# embedded static ELFs to it, then loads each BACK FROM SFS into a fresh
+# per-process address space with W^X enforced and enters ring 3.
+#   - hello prints its banner and exits cleanly via sys_exit (happy path);
+#   - wxviol writes to its own RX text page -> #PF -> the kernel kills the process
+#     cleanly and keeps running (W^X negative regression).
+# Asserts: the loader line, the ring-3 banner, the clean exit, the user-kill
+# trap line, AND a post-kill SFS self-test line (proves the kernel survived the
+# fault) — full ELF-loader + W^X enforcement end-to-end. Two 8 MiB-stack loads
+# push past the default 30 s, so allow more wall time.
+smoke-user: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[user] ELF loaded from SFS; ring-3 thread spawned\nHELLO FROM RING-3\n[user] sys_exit(0)\n[trap] user #PF page fault\n[sfs] lz4+tags compress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

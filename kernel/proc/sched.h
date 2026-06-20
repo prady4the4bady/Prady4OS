@@ -42,6 +42,7 @@ struct tcb {
     uint64_t   user_rip;       /* user-mode entry virtual address */
     uint64_t   user_stack;     /* user-mode stack top (virtual)   */
     uint64_t   user_arg;       /* value delivered to the user in RDI */
+    uint64_t   cr3;            /* process page-table root; 0 == kernel master AS */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

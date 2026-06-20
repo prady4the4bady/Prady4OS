@@ -41,3 +41,6 @@ jobs:
 
       - name: QEMU ext4 read test (q35; read-only ext4)
         run: make smoke-fs-ext4
+
+      - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
+        run: make smoke-user

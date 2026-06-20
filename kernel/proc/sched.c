@@ -4,6 +4,7 @@
 #include "console.h"
 #include "tss.h"
 #include "syscall.h"
+#include "vmm.h"
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
@@ -58,6 +59,7 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->user_rip = 0;
     t->user_stack = 0;
     t->user_arg = 0;
+    t->cr3 = 0;                /* kernel master AS until a loader assigns one */
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
@@ -148,6 +150,14 @@ static void schedule(void) {
         tss_set_rsp0(ktop);
         syscall_kstack_top = ktop;
     }
+    /* Switch address spaces if the next thread lives in a different one. Kernel
+     * stacks are identity-mapped in every AS, so this is safe before the stack
+     * switch in context_switch. cr3 == 0 means the kernel master AS. */
+    uint64_t kmaster = vmm_kernel_cr3();
+    uint64_t prev_cr3 = prev->cr3 ? prev->cr3 : kmaster;
+    uint64_t next_cr3 = next->cr3 ? next->cr3 : kmaster;
+    if (next_cr3 != prev_cr3)
+        __asm__ volatile("mov %0, %%cr3" :: "r"(next_cr3) : "memory");
     context_switch(&prev->rsp, next->rsp);
     /* resumed here later, as `prev`, when scheduled again */
     irq_restore(fl);

@@ -12,6 +12,10 @@
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
 #define PTE_ADDR     0x000FFFFFFFFFF000ull
+#define MSR_EFER     0xC0000080u
+
+static uint64_t g_kernel_pml4;          /* master kernel page-table root */
+static int      g_nx_ok;                /* CPU supports NX (CPUID 8000_0001h:EDX[20]) */
 
 static inline uint64_t read_cr3(void) {
     uint64_t v;
@@ -21,6 +25,36 @@ static inline uint64_t read_cr3(void) {
 
 static inline void invlpg(uint64_t v) {
     __asm__ volatile("invlpg (%0)" : : "r"(v) : "memory");
+}
+
+void vmm_init(void) {
+    g_kernel_pml4 = read_cr3() & PTE_ADDR;
+
+    /* W^X relies on the NX bit, which is only architectural when CPUID advertises
+     * it (AMD64 CPUID 8000_0001h, EDX[20]). Enabling EFER.NXE on a CPU without NX
+     * would #GP, and setting PTE bit 63 while NXE is clear faults with a
+     * reserved-bit error — so gate both on this probe. The long-mode entry
+     * guarantees leaf 8000_0001h exists; QEMU's default qemu64 advertises NX. */
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(0x80000001u));
+    (void)eax; (void)ebx; (void)ecx;           /* cpuid writes all four; only EDX read */
+    g_nx_ok = (int)((edx >> 20) & 1u);
+
+    if (g_nx_ok) {
+        uint32_t lo, hi;
+        __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(MSR_EFER));
+        uint64_t efer = ((uint64_t)hi << 32) | lo;
+        efer |= (1ull << 11);                  /* EFER.NXE */
+        __asm__ volatile("wrmsr" : : "c"(MSR_EFER),
+                         "a"((uint32_t)efer), "d"((uint32_t)(efer >> 32)));
+    }
+}
+
+int vmm_nx_enabled(void) { return g_nx_ok; }
+
+uint64_t vmm_kernel_cr3(void) {
+    return g_kernel_pml4 ? g_kernel_pml4 : (read_cr3() & PTE_ADDR);
 }
 
 /* A table's physical address is directly usable through the identity map. */
@@ -64,8 +98,12 @@ static int table_empty(const uint64_t *t) {
     return 1;
 }
 
-int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
-    uint64_t *pml4 = table_at(read_cr3() & PTE_ADDR);
+/* Core mapper: install a leaf PTE into the tables rooted at `pml4_phys`.
+ * Low 12 flag bits (RW/USER/PWT/PCD/...) and the NX bit (63) are both honored;
+ * everything else is derived. Intermediate tables never carry NX, so an X leaf
+ * under a user-walkable path can still execute. */
+static int map_core(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
+    uint64_t *pml4 = table_at(pml4_phys);
     int user = (flags & VMM_USER) ? 1 : 0;
 
     uint64_t pdpt = descend(pml4, idx(virt, 4), 1, user);
@@ -75,9 +113,19 @@ int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
     uint64_t pt = descend(table_at(pd), idx(virt, 2), 1, user);
     if (!pt) return -1;
 
-    table_at(pt)[idx(virt, 1)] = (phys & PTE_ADDR) | (flags & 0xFFF) | PTE_PRESENT;
+    uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;   /* drop NX if unsupported */
+    table_at(pt)[idx(virt, 1)] =
+        (phys & PTE_ADDR) | (flags & 0xFFF) | nx | PTE_PRESENT;
     invlpg(virt);
     return 0;
+}
+
+int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
+    return map_core(read_cr3() & PTE_ADDR, virt, phys, flags);
+}
+
+int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
+    return map_core(pml4_phys & PTE_ADDR, virt, phys, flags);
 }
 
 int vmm_unmap(uint64_t virt) {
@@ -111,4 +159,53 @@ int vmm_unmap(uint64_t virt) {
         }
     }
     return 0;
+}
+
+uint64_t vmm_new_address_space(void) {
+    void *frame = ptnode_alloc();         /* zeroed PML4 */
+    if (!frame)
+        return 0;
+    uint64_t pml4 = (uint64_t)(uintptr_t)frame;
+    uint64_t *np = table_at(pml4);
+    uint64_t *kp = table_at(vmm_kernel_cr3());
+    /* Share every existing kernel top-level entry (low identity, MMIO, higher
+     * half). They point at the kernel's own PDPTs, so later kernel mappings stay
+     * coherent. The user range (PML4 slot 1) is empty in the kernel master, so
+     * each process gets a private subtree there. */
+    for (unsigned i = 0; i < 512; i++)
+        np[i] = kp[i];
+    return pml4;
+}
+
+/* Recursively free a private page-table subtree. level: 3=PDPT,2=PD,1=PT.
+ * Leaf (PT) entries point at user data pages (also ptnode-allocated). */
+static void free_subtree(uint64_t table_phys, int level) {
+    uint64_t *t = table_at(table_phys);
+    for (unsigned i = 0; i < 512; i++) {
+        uint64_t e = t[i];
+        if (!(e & PTE_PRESENT) || (e & PTE_PS))
+            continue;
+        if (level > 1)
+            free_subtree(e & PTE_ADDR, level - 1);
+        else
+            ptnode_free((void *)(uintptr_t)(e & PTE_ADDR));   /* user data page */
+    }
+    ptnode_free((void *)(uintptr_t)table_phys);
+}
+
+void vmm_destroy_address_space(uint64_t pml4_phys) {
+    pml4_phys &= PTE_ADDR;
+    uint64_t kcr3 = vmm_kernel_cr3();
+    if (!pml4_phys || pml4_phys == kcr3)
+        return;
+    uint64_t *np = table_at(pml4_phys);
+    uint64_t *kp = table_at(kcr3);
+    /* Free only the slots that differ from the kernel master — the private user
+     * range. Shared kernel entries (np[i] == kp[i]) are left intact. */
+    for (unsigned i = 0; i < 512; i++) {
+        uint64_t e = np[i];
+        if ((e & PTE_PRESENT) && e != kp[i])
+            free_subtree(e & PTE_ADDR, 3);
+    }
+    ptnode_free((void *)(uintptr_t)pml4_phys);
 }

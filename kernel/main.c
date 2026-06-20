@@ -33,6 +33,7 @@
 #include "sfs.h"
 #include "ext4.h"
 #include "rtc.h"
+#include "elf.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -298,34 +299,46 @@ static void bus_demo(void) {
     kputs("NEXUS: broadcast bus demo — 2 filtered subscribers + publisher\r\n");
 }
 
-/* --- ring-3 user thread demo ----------------------------------------------- */
-extern char user_blob_start[];
-extern char user_blob_end[];
-#define USER_CODE_VA  0x40000000ull          /* in PML4[0]/PDPT[1] — clear of the identity 2 MiB pages */
-#define USER_STACK_VA 0x40002000ull
+/* --- Phase 5a ring-3 user programs -----------------------------------------
+ * The static ELFs are embedded by arch/x86_64/user_image.asm. Each is written
+ * to a freshly formatted SFS volume and then loaded BACK from SFS into its own
+ * W^X address space (ADR-021) — the legacy RWX-mapped demo is gone. `hello`
+ * prints from ring 3 and exits; `wxviol` is the W^X negative regression. */
+extern const unsigned char hello_elf[];
+extern const unsigned char hello_elf_end[];
+extern const unsigned char wx_elf[];
+extern const unsigned char wx_elf_end[];
 
-static void user_demo(void) {
-    uint64_t code_phys = pmm_alloc_page();
-    uint64_t stack_phys = pmm_alloc_page();
-    if (!code_phys || !stack_phys) {
-        kputs("NEXUS: user_demo — out of frames\r\n");
+/* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
+ * process. Genuinely exercises the filesystem load path (the bytes elf_load
+ * parses come from sfs_read, not the embedded image). */
+static void user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
+                               const unsigned char *elf, const unsigned char *elf_end) {
+    uint64_t elen = (uint64_t)(elf_end - elf);
+    struct vfs_file ef;
+    if (vfs_create(cap, smnt, fname, &ef) != 0 ||
+        vfs_write(cap, &ef, 0, elf, (uint32_t)elen) != (int)elen) {
+        kputs("[user] SFS write failed for ");
+        kputs(fname);
+        kputs("\r\n");
         return;
     }
-    /* Copy the position-independent user program into its page (identity view),
-     * then map it user-accessible at the user virtual address. */
-    memcpy((void *)(uintptr_t)code_phys, user_blob_start,
-           (uint64_t)(user_blob_end - user_blob_start));
-    vmm_map(USER_CODE_VA, code_phys, VMM_USER | VMM_RW);
-    vmm_map(USER_STACK_VA, stack_phys, VMM_USER | VMM_RW);
-
-    struct tcb *u = sched_create_user("user", USER_CODE_VA, USER_STACK_VA + PAGE_SIZE);
-    if (!u) {
-        kputs("NEXUS: user thread create failed\r\n");
+    struct vfs_file rf;
+    uint64_t buf = pmm_alloc_pages(1);              /* 2 pages: ELF spans >4 KiB */
+    if (!buf || vfs_open(cap, smnt, fname, &rf) != 0)
         return;
+    int n = vfs_read(cap, &rf, 0, (void *)(uintptr_t)buf, 8192);
+    struct tcb *ut = 0;
+    int lr = (n > 0)
+        ? elf_load((void *)(uintptr_t)buf, (uint64_t)n, fname, &ut)
+        : ELF_E_ARGS;
+    if (lr == ELF_OK) {
+        kputs("[user] ELF loaded from SFS; ring-3 thread spawned\r\n");
+    } else {
+        kputs("[user] ELF load FAILED rc=");
+        kputdec((uint64_t)(-lr));
+        kputs("\r\n");
     }
-    /* Give the user thread exactly one capability: console display. */
-    u->user_arg = (uint64_t)cap_create(u->caps, RES_DEVICE, CONSOLE_RES_ID, CAP_DISPLAY);
-    kputs("NEXUS: ring-3 user thread created (will syscall from user mode)\r\n");
 }
 
 /* Block device test: runs as a thread so virtio-blk I/O can block on its IRQ
@@ -546,6 +559,19 @@ static void fs_test_thread(void *arg) {
                     kputs(grow_ok ? "to 69632 OK\r\n" : "FAIL\r\n");
                 }
 
+                /* Phase 5a: write each embedded static ELF to SFS, read it BACK
+                 * from SFS, and load it into a fresh W^X address space as a ring-3
+                 * process (ADR-021). Done while SFS is still mounted, i.e. before
+                 * the destructive journal/snapshot tests below.
+                 *   1. hello   — prints "HELLO FROM RING-3", exits via sys_exit.
+                 *   2. wxviol  — writes to its own RX text page; the W^X negative
+                 *      regression. The kernel must turn that ring-3 #PF into a
+                 *      clean process kill and keep running (the SFS self-tests
+                 *      after this still pass, proving survival). */
+                user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end);
+                kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
+                user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end);
+
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */
                 vfs_unmount(smnt);
@@ -611,7 +637,6 @@ static void sched_demo(void) {
     ipc_demo();
     ring_demo();
     bus_demo();
-    user_demo();
     sched_create(blk_test_thread, 0, "blk");
     struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
     if (fst)
@@ -753,7 +778,8 @@ void kmain(struct boot_info *bi) {
 
     tss_init(0);                         /* rsp0 is set per user thread before ring 3 */
     syscall_init();                      /* EFER.SCE + STAR/LSTAR/SFMASK + dispatch */
-    kputs("NEXUS: TSS loaded, SYSCALL/SYSRET armed\r\n");
+    vmm_init();                          /* record kernel master CR3 + enable EFER.NXE (W^X) */
+    kputs("NEXUS: TSS loaded, SYSCALL/SYSRET armed, NX enabled\r\n");
 
     kvga_line("NEXUS KERNEL OK", 1);
     kputs("NEXUS KERNEL OK\r\n");
