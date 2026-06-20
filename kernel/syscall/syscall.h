@@ -21,6 +21,8 @@
 #define SYS_FSTAT  9   /* (fd, struct stat *) -> 0           (5b slice 4)    */
 #define SYS_LSEEK  10  /* (fd, off, whence)   -> new offset  (5b slice 5)    */
 #define SYS_GETCWD 11  /* (buf, size)         -> len incl NUL (5b slice 5)   */
+#define SYS_MMAP   12  /* (addr, len, prot, flags) -> addr   (5b slice 6)    */
+#define SYS_MUNMAP 13  /* (addr, len)         -> 0           (5b slice 6)    */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

@@ -240,3 +240,16 @@ int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable) 
     }
     return 1;
 }
+
+uint64_t vmm_resolve(uint64_t cr3, uint64_t virt) {
+    uint64_t *pml4 = table_at(cr3 & PTE_ADDR);
+    uint64_t e = pml4[idx(virt, 4)];
+    if (!(e & PTE_PRESENT) || (e & PTE_PS)) return 0;
+    e = table_at(e & PTE_ADDR)[idx(virt, 3)];
+    if (!(e & PTE_PRESENT) || (e & PTE_PS)) return 0;
+    e = table_at(e & PTE_ADDR)[idx(virt, 2)];
+    if (!(e & PTE_PRESENT) || (e & PTE_PS)) return 0;
+    e = table_at(e & PTE_ADDR)[idx(virt, 1)];
+    if (!(e & PTE_PRESENT)) return 0;
+    return e & PTE_ADDR;
+}

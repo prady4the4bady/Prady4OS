@@ -76,7 +76,15 @@ fd, -ESPIPE for console, -EINVAL on negative result) and `sys_getcwd` ("/" via
 copyout, -ERANGE if the buffer is too small); `sys_getpid` already existed
 (SYS_GETPID=2). `SYS_LSEEK=10`/`SYS_GETCWD=11`. New gate `smoke-sysproc` PASS
 (getpid>0, getcwd="/", lseek-then-read returns the byte at the new offset).
-Next: 5b-6 (sys_mmap MAP_ANON RW+NX baseline).
+**Slice 5b-6 (sys_mmap MAP_ANON RW+NX baseline) COMPLETE:**
+`kernel/syscall/sys_mmap.c` — `sys_mmap` maps anonymous private RW+NX pages
+(ptnode-allocated, like the ELF loader) into the user mmap arena
+([544 GiB, 572 GiB), below the stack); **PROT_EXEC is rejected (-EINVAL, W^X)**;
+`sys_munmap` unmaps + frees the region (via new `vmm_resolve` va→phys) so a
+re-mmap of the same hint succeeds. Per-process `vm_area` table + bump pointer in
+the TCB. `SYS_MMAP=12`/`SYS_MUNMAP=13`. The 6-arg ABI widening is **deferred**
+(every 5b call fits in ≤4 args; anon mmap ignores fd/offset — see ADR-022 note).
+New gate `smoke-sysmmap` PASS. Next: 5b-7 (sys_execve).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

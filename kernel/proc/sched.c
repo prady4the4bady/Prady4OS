@@ -63,6 +63,8 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     fd_table_init(&t->fdt);    /* all fds free; user threads get stdio wired below */
     t->root_mnt = -1;          /* no filesystem root until a loader assigns one */
     t->fs_cap = 0;
+    for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }
+    t->mmap_next = VMM_MMAP_BASE;   /* anonymous mmap bump pointer */
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */

@@ -155,6 +155,13 @@ Today only `a1..a4` reach C. `mmap` needs up to 6 args. Decision:
 *(Cited: System V AMD64 ABI — first six integer/pointer args in
 `RDI, RSI, RDX, RCX, R8, R9`; further args on the stack.)*
 
+> **Implementation note (slice 6).** The widening is **deferred**: every 5b
+> syscall fits in ≤4 args, including the `mmap` MAP_ANON baseline (which needs
+> only addr/len/prot/flags — fd/offset are ignored for anonymous maps). The
+> 4-arg dispatch therefore stands for all of 5b; the 6-arg marshal lands when a
+> syscall (e.g. file-backed mmap with a real offset) actually needs a 5th/6th
+> argument.
+
 ### Return / error convention
 Handlers return a `long`: `>= 0` success (or count), **negative `errno`** on
 failure (`-EFAULT`, `-EBADF`, `-ENOENT`, `-EINVAL`, `-ENOSYS`, `-ENAMETOOLONG`,

@@ -21,6 +21,11 @@
 #define VMM_USER_MIN  0x8000000000ull
 #define VMM_USER_MAX  0x10000000000ull
 
+/* Anonymous mmap arena: [544 GiB, 572 GiB), inside the user range and below the
+ * 8 MiB user stack at 576 GiB (ADR-021). sys_mmap hands out RW+NX pages here. */
+#define VMM_MMAP_BASE 0x8800000000ull
+#define VMM_MMAP_TOP  0x8F00000000ull
+
 /* Record the kernel master CR3 and enable EFER.NXE (so VMM_NX is honored).
  * Call once early in kmain, before any per-process address space is created. */
 void vmm_init(void);
@@ -55,3 +60,8 @@ void vmm_destroy_address_space(uint64_t pml4_phys);
  * (ADR-022). User mappings are 4 KiB; a huge-page (PS) entry on the path is
  * treated as not-walkable (fail-closed). */
 int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable);
+
+/* Resolve a virtual address to its mapped physical page base in the tables rooted
+ * at `cr3` (4 KiB leaf), or 0 if not present. Used by sys_munmap to find the
+ * frame to free after clearing the PTE. */
+uint64_t vmm_resolve(uint64_t cr3, uint64_t virt);

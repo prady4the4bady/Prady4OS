@@ -20,6 +20,11 @@ SYS_FSTAT  equ 9
 SYS_GETPID equ 2
 SYS_LSEEK  equ 10
 SYS_GETCWD equ 11
+SYS_MMAP   equ 12
+SYS_MUNMAP equ 13
+
+MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
+EINVAL     equ 22               ; returned as -EINVAL
 
 STDOUT    equ 1
 ENOENT    equ 2          ; returned as -ENOENT
@@ -210,6 +215,72 @@ _start:
 .s5_done:
     add     rsp, 64
 
+    ; ---- slice 6: mmap / munmap (MAP_ANON RW+NX) ----------------------------
+    mov     r13, MMAP_HINT         ; r13 = hint addr (survives syscalls)
+
+    mov     rax, SYS_MMAP          ; mmap(hint, 4096, RW, ANON|PRIVATE, -1, 0)
+    mov     rdi, r13
+    mov     rsi, 4096
+    mov     rdx, 3                 ; PROT_READ|PROT_WRITE
+    mov     r10, 0x22             ; MAP_PRIVATE|MAP_ANONYMOUS
+    mov     r8, -1
+    xor     r9, r9
+    syscall
+    mov     r12, rax               ; r12 = mapped addr
+    cmp     rax, r13
+    jne     .s6_after_map
+    mov     rbx, 0x1234567890ABCDEF
+    mov     [r12], rbx             ; write the RW+NX page
+    mov     rax, [r12]             ; read it back
+    cmp     rax, rbx
+    jne     .s6_after_map
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmap]
+    mov     rdx, m_mmap_len
+    syscall
+.s6_after_map:
+
+    mov     rax, SYS_MMAP          ; PROT_EXEC must be rejected (W^X)
+    xor     rdi, rdi
+    mov     rsi, 4096
+    mov     rdx, 5                 ; PROT_READ|PROT_EXEC
+    mov     r10, 0x22
+    mov     r8, -1
+    xor     r9, r9
+    syscall
+    cmp     rax, -EINVAL
+    jne     .s6_after_wx
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapwx]
+    mov     rdx, m_mmapwx_len
+    syscall
+.s6_after_wx:
+
+    mov     rax, SYS_MUNMAP        ; munmap, then re-mmap the same hint
+    mov     rdi, r13
+    mov     rsi, 4096
+    syscall
+    test    rax, rax
+    jnz     .s6_done
+    mov     rax, SYS_MMAP
+    mov     rdi, r13
+    mov     rsi, 4096
+    mov     rdx, 3
+    mov     r10, 0x22
+    mov     r8, -1
+    xor     r9, r9
+    syscall
+    cmp     rax, r13
+    jne     .s6_done
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_munmap]
+    mov     rdx, m_munmap_len
+    syscall
+.s6_done:
+
     ; ---- done ---------------------------------------------------------------
     mov     rax, SYS_EXIT
     xor     rdi, rdi
@@ -242,3 +313,9 @@ m_getcwd:    db "SYSGETCWD OK", 10
 m_getcwd_len: equ $ - m_getcwd
 m_lseek:     db "SYSLSEEK OK", 10
 m_lseek_len: equ $ - m_lseek
+m_mmap:      db "SYSMMAP OK", 10
+m_mmap_len:  equ $ - m_mmap
+m_mmapwx:    db "SYSMMAP WX REJECTED", 10
+m_mmapwx_len: equ $ - m_mmapwx
+m_munmap:    db "SYSMUNMAP OK", 10
+m_munmap_len: equ $ - m_munmap

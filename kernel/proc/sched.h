@@ -23,6 +23,15 @@ enum thread_state {
     THREAD_BLOCKED = 3
 };
 
+/* Anonymous mmap region tracking (5b, ADR-022). A fixed table per process;
+ * npages == 0 marks a free slot. Lets sys_munmap find + free a region and
+ * (later) a reaper reclaim everything an exited process mapped. */
+#define VM_AREA_MAX 64
+struct vm_area {
+    uint64_t base;     /* page-aligned start in the user mmap arena */
+    uint64_t npages;   /* length in pages; 0 = free slot            */
+};
+
 struct tcb {
     uint64_t   rsp;            /* saved stack pointer (offset 0; asm relies on it) */
     uint64_t   kstack_base;    /* base of the thread's kernel stack               */
@@ -48,6 +57,9 @@ struct tcb {
     struct fd_table fdt;       /* per-process file descriptors (5b, ADR-022) */
     int        root_mnt;       /* mount paths resolve against (-1 = none)    */
     cap_t      fs_cap;         /* FS capability granted at load (5b)         */
+
+    struct vm_area vma[VM_AREA_MAX];  /* anonymous mmap regions (5b)         */
+    uint64_t   mmap_next;      /* bump pointer for addr==NULL mmaps           */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
