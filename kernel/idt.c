@@ -11,6 +11,7 @@
 #include "io.h"
 #include "irq.h"
 #include "sched.h"
+#include "vdso_page.h"
 #include <stdint.h>
 
 /* Must match the push order in arch/x86_64/isr.asm exactly. */
@@ -101,6 +102,11 @@ void isr_dispatch(struct regs *r) {
         if (irqno == 0) {                      /* IRQ0: PIT timer — drives preemption */
             pic_eoi(r->vector);                /* EOI first: sched_tick may switch away */
             g_ticks++;
+            if (vdso_data) {                   /* IMP-C: advance the user-visible clock */
+                vdso_data->seq++;              /* odd = write in progress */
+                vdso_data->wall_time_ns += 10000000ull;   /* 10 ms per tick @100 Hz */
+                vdso_data->seq++;              /* even = write complete  */
+            }
             sched_tick();
             return;
         }

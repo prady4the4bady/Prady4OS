@@ -16,6 +16,7 @@
 #include "syscall.h"
 #include "string.h"
 #include "vfs.h"        /* FS_RES_ID + vfs_default_mnt for the 5b FS grant */
+#include "vdso_page.h"  /* vdso_map_user — read-only clock page (IMP-C) */
 
 /* --- ELF64 on-disk format (System V gABI; a public spec, clean-room) -------- */
 
@@ -222,6 +223,8 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     sp -= 8; *(uint64_t *)(kp + sp) = argv0_uva;   /* argv[0]                    */
     sp -= 8; *(uint64_t *)(kp + sp) = 1;           /* argc                       */
     uint64_t user_rsp = top_uva + sp;
+
+    vdso_map_user(as);          /* IMP-C: read-only vDSO clock page in every user AS */
 
     *out_as    = as;
     *out_entry = eh->e_entry;

@@ -41,7 +41,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/rtc/rtc.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
-               kernel/arch/x86_64/cpu_mitigations.c
+               kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -53,13 +53,13 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
-               build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o
+               build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
                -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
-               -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64
+               -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -74,7 +74,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -165,6 +165,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/exec/elf.c                  -o build/elf.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(CC) $(KCFLAGS) -c kernel/arch/x86_64/cpu_mitigations.c -o build/cpu_mitigations.o
+	$(CC) $(KCFLAGS) -c kernel/vdso/vdso_page.c -o build/vdso_page.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 262144 || { echo "kernel.bin exceeds 256 KiB; Stage 2 loads 8x64 sectors"; exit 1; }
@@ -364,6 +365,13 @@ smoke-mitigations: $(IMG) fat-image sfs-image
 # canary regression test too (a smashed canary -> KHEAP PANIC -> missing sentinel).
 smoke-pmm-poison: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL='[pmm] poison enabled' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# IMP-C vDSO gate: the ring-3 systest reads wall_time_ns from the read-only vDSO
+# page (no syscall) and prints it only when non-zero, proving the kernel-updated
+# clock is visible in user space. Loads user ELFs, so allow extra wall time.
+smoke-vdso: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 EXTRA_SENTINEL='VDSO: clock ns=' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

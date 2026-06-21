@@ -155,8 +155,19 @@ every free slab object (written in both `cache_grow` and `cache_free`, every siz
 class is ≥16 B) and verifies it on each `cache_alloc` → `KHEAP PANIC` on a
 use-after-free write. Because KASAN is the default, all prior gates are now
 implicit poison/canary regression tests. New gate `smoke-pmm-poison` PASS (18
-gates total). Kernel 114,356 B. Code graph: 97 files / 983 symbols. Next: §8 IMP-C
-(vDSO clock_gettime).
+gates total). Kernel 114,356 B. Code graph: 97 files / 983 symbols. **IMP-C (vDSO
+clock page) COMPLETE:** `kernel/vdso/vdso_page.c` allocates one shared frame;
+`vdso_init` (kmain, after pmm) zeroes it and the PIT IRQ (`idt.c`, null-guarded)
+advances `wall_time_ns` 10 ms/tick under a seqlock. `vdso_map_user` (called from
+`elf_build_image`) maps the frame **read-only + NX** into every user AS at
+`VDSO_USER_VA` (0x7FFFFFF00000), so ring 3 reads the clock with a single aligned
+`mov` — no syscall (`systest` prints `VDSO: clock ns=<N>`, only when non-zero).
+W^X holds: kernel view is RW-not-X, user view is R-only. New `PTE_SW_SHARED` bit
+(vmm.h bit 10) marks the shared frame so `vmm_destroy_address_space` (free_subtree)
+never frees it and `vmm_fork` shares rather than copies it. The executable
+callable reader (vdso_entry.asm) is deferred — a single u64 needs no seqlock on
+the read side. New gate `smoke-vdso` PASS (19 gates total). Kernel 114,916 B. Code
+graph: 99 files / 996 symbols. Next: §9 IMP-D (COW fork).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

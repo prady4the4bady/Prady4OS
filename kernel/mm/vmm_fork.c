@@ -56,6 +56,21 @@ uint64_t vmm_fork_address_space_copy(uint64_t parent_cr3) {
 
                     uint64_t va = ((uint64_t)i4 << 39) | ((uint64_t)i3 << 30) |
                                   ((uint64_t)i2 << 21) | ((uint64_t)i1 << 12);
+                    /* Preserve RW/USER/PWT/PCD + SW bits (low 12) and NX (bit 63);
+                     * map_core re-adds PRESENT. PTE_SW_COW (the future COW bit) is
+                     * not set in the copy-all-pages baseline. */
+                    uint64_t flags = (e1 & 0xFFFull) | (e1 & VMM_NX);
+
+                    if (e1 & PTE_SW_SHARED) {
+                        /* Shared frame (e.g. the vDSO): map the SAME physical page
+                         * into the child — never copy or free a shared frame. */
+                        if (vmm_map_in(child, va, e1 & PG_ADDR, flags) != 0) {
+                            vmm_destroy_address_space(child);
+                            return 0;
+                        }
+                        continue;
+                    }
+
                     void *frame = ptnode_alloc();           /* zeroed child page  */
                     if (!frame) {
                         vmm_destroy_address_space(child);
@@ -63,10 +78,6 @@ uint64_t vmm_fork_address_space_copy(uint64_t parent_cr3) {
                     }
                     memcpy(frame, (const void *)(uintptr_t)(e1 & PG_ADDR),
                            (size_t)PAGE_SIZE);
-                    /* Preserve RW/USER/PWT/PCD (low 12) and NX (bit 63); map_core
-                     * re-adds PRESENT. PTE_SW_COW (the future COW bit) is not set
-                     * in the copy-all-pages baseline. */
-                    uint64_t flags = (e1 & 0xFFFull) | (e1 & VMM_NX);
                     if (vmm_map_in(child, va, (uint64_t)(uintptr_t)frame, flags) != 0) {
                         ptnode_free(frame);
                         vmm_destroy_address_space(child);

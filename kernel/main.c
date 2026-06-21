@@ -37,6 +37,7 @@
 #include "uaccess.h"
 #include "errno.h"
 #include "cpu_mitigations.h"
+#include "vdso_page.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -904,6 +905,8 @@ void kmain(struct boot_info *bi) {
     vmm_test();
     cap_test();
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
+
+    vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();

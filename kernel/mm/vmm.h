@@ -15,6 +15,12 @@
 #define VMM_PCD     0x10ull                   /* page cache disable (for MMIO) */
 #define VMM_NX      0x8000000000000000ull     /* no-execute; honored once EFER.NXE is on */
 
+/* Software-available PTE bits (x86-64 bits 9-11, ignored by the MMU). Bit 10
+ * marks a leaf whose physical frame is SHARED across address spaces (e.g. the
+ * vDSO page): vmm_destroy_address_space must NOT free that frame, and fork must
+ * share rather than copy it. (Bit 9 is reserved for the COW pass, IMP-D.) */
+#define PTE_SW_SHARED 0x400ull                 /* bit 10 */
+
 /* User virtual range = PML4 slot 1 = [512 GiB, 1 TiB) (ADR-021). The ELF loader
  * mirrors these as its own USER_MIN/USER_MAX; any user pointer the kernel copies
  * to/from must fall inside this range (see vmm_user_range_ok). */

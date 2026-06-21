@@ -187,8 +187,8 @@ static void free_subtree(uint64_t table_phys, int level) {
             continue;
         if (level > 1)
             free_subtree(e & PTE_ADDR, level - 1);
-        else
-            ptnode_free((void *)(uintptr_t)(e & PTE_ADDR));   /* user data page */
+        else if (!(e & PTE_SW_SHARED))
+            ptnode_free((void *)(uintptr_t)(e & PTE_ADDR));   /* user data page (skip shared, e.g. vDSO) */
     }
     ptnode_free((void *)(uintptr_t)table_phys);
 }

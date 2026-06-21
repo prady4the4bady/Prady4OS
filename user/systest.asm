@@ -27,6 +27,7 @@ SYS_FORK   equ 15
 SYS_WAIT4  equ 16
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
+VDSO_VA    equ 0x00007FFFFFF00000 ; read-only vDSO clock page (IMP-C)
 EINVAL     equ 22               ; returned as -EINVAL
 
 STDOUT    equ 1
@@ -284,6 +285,52 @@ _start:
     syscall
 .s6_done:
 
+    ; ---- IMP-C: vDSO clock read (ring-3, no syscall) -----------------------
+    ; The kernel maps a read-only clock page at VDSO_VA and the PIT advances
+    ; wall_time_ns. A single aligned load is atomic. Print only when non-zero
+    ; (a zero read => vDSO not wired => the gate's required line is absent).
+    mov     r12, VDSO_VA
+    mov     rax, [r12]                 ; wall_time_ns (offset 0)
+    test    rax, rax
+    jz      .vdso_done
+    sub     rsp, 96
+    mov     rbx, rsp                   ; rbx = output buffer [0..63]
+    lea     rsi, [rel m_vdsop]         ; copy the prefix
+    xor     rcx, rcx
+.vdso_pre:
+    mov     dl, [rsi + rcx]
+    mov     [rbx + rcx], dl
+    inc     rcx
+    cmp     rcx, m_vdsop_len
+    jne     .vdso_pre
+    lea     r8, [rsp + 88]             ; scratch end; digits grow downward
+    mov     r9, r8
+    mov     r10, 10
+.vdso_div:
+    xor     rdx, rdx
+    div     r10                        ; rax/=10, rdx=digit
+    add     dl, '0'
+    dec     r8
+    mov     [r8], dl
+    test    rax, rax
+    jnz     .vdso_div
+.vdso_cp:
+    mov     dl, [r8]                   ; append digits [r8,r9) after the prefix
+    mov     [rbx + rcx], dl
+    inc     r8
+    inc     rcx
+    cmp     r8, r9
+    jne     .vdso_cp
+    mov     byte [rbx + rcx], 10       ; newline
+    inc     rcx
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    mov     rsi, rbx
+    mov     rdx, rcx
+    syscall
+    add     rsp, 96
+.vdso_done:
+
     ; ---- slice 8: fork — child prints + exits, parent prints + continues ----
     ; Placed BEFORE execve: a successful execve replaces this image, so fork must
     ; run first. The child resumes right after this syscall with RAX=0.
@@ -409,3 +456,5 @@ m_forkerr:   db "FORK: ERROR", 10
 m_forkerr_len: equ $ - m_forkerr
 m_wait:      db "WAIT: child exited status=42", 10
 m_wait_len:  equ $ - m_wait
+m_vdsop:     db "VDSO: clock ns="
+m_vdsop_len: equ $ - m_vdsop
