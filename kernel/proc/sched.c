@@ -67,6 +67,8 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->mmap_next = VMM_MMAP_BASE;   /* anonymous mmap bump pointer */
     t->parent_pid = 0;             /* set by sched_create_user_clone for forks */
     t->fork_retval = -1;           /* unset until a fork assigns it             */
+    t->exit_status = 0;            /* set by sched_exit, collected by wait4     */
+    t->waiter = 0;                 /* parent blocked in wait4 on this thread    */
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
@@ -252,10 +254,62 @@ void sched_unblock(struct tcb *t) {
         t->state = THREAD_READY;
 }
 
-/* Terminate the current thread: mark it done and switch away for good. */
-void sched_exit(void) {
-    current_thread->state = THREAD_DONE;
+/* Terminate the current thread: save its exit status, become a ZOMBIE (so the
+ * parent's wait4 or the reaper can collect it), wake any waiter, and switch away
+ * for good. The address space + TCB are reclaimed by the collector, never here —
+ * we are still executing on this thread's kernel stack. */
+void sched_exit(int status) {
+    current_thread->exit_status = status;
+    current_thread->state = THREAD_ZOMBIE;
+    if (current_thread->waiter)
+        sched_unblock(current_thread->waiter);
     schedule();
     for (;;)                   /* unreachable */
         __asm__ volatile("hlt");
+}
+
+/* 1 if a runnable/blocked thread with this pid exists (a "living parent"). */
+static int pid_alive(uint32_t pid) {
+    if (pid == 0)
+        return 0;              /* parent_pid 0 == kernel/none -> treat as orphan */
+    struct tcb *t = current_thread;
+    do {
+        if (t->pid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return 1;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
+/* Low-priority kernel thread: reap orphaned zombies (exited user procs whose
+ * parent is gone and which no wait4 is collecting), bounding the zombie leak. A
+ * child still being waited on (waiter != 0) or with a living parent is left for
+ * its parent's wait4. Reaps at most one per pass under interrupts-off, then
+ * yields. */
+static void reaper_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        uint64_t fl = irq_save();
+        struct tcb *victim = 0;
+        struct tcb *t = current_thread->next;
+        while (t != current_thread) {
+            if (t->state == THREAD_ZOMBIE && !t->waiter && !pid_alive(t->parent_pid)) {
+                victim = t;
+                break;
+            }
+            t = t->next;
+        }
+        if (victim) {
+            uint64_t cr3 = victim->cr3;
+            sched_destroy(victim);
+            if (cr3)
+                vmm_destroy_address_space(cr3);
+        }
+        irq_restore(fl);
+        yield();
+    }
+}
+
+void sched_start_reaper(void) {
+    sched_create(reaper_thread, 0, "reaper");
 }

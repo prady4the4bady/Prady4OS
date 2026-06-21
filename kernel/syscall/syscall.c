@@ -11,6 +11,7 @@
 #include "sys_mmap.h"  /* SYS_MMAP / SYS_MUNMAP handlers (slice 6) */
 #include "sys_exec.h"  /* SYS_EXECVE handler (slice 7) */
 #include "sys_fork.h"  /* SYS_FORK handler (slice 8) */
+#include "sys_wait.h"  /* SYS_WAIT4 handler (slice 9) */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
@@ -74,7 +75,7 @@ static long sys_exit(long a1, long a2, long a3, long a4) {
     kputs("[user] sys_exit(");
     kputdec((uint64_t)a1);
     kputs(") — thread terminating\r\n");
-    sched_exit();              /* does not return */
+    sched_exit((int)a1);       /* zombie w/ status; does not return */
     return 0;
 }
 
@@ -91,6 +92,7 @@ void syscall_init(void) {
     sys_mmap_register();                  /* SYS_MMAP / SYS_MUNMAP (slice 6) */
     sys_exec_register();                  /* SYS_EXECVE (slice 7) */
     sys_fork_register();                  /* SYS_FORK (slice 8) */
+    sys_wait_register();                  /* SYS_WAIT4 (slice 9) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

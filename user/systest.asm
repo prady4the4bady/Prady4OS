@@ -24,6 +24,7 @@ SYS_MMAP   equ 12
 SYS_MUNMAP equ 13
 SYS_EXECVE equ 14
 SYS_FORK   equ 15
+SYS_WAIT4  equ 16
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
 EINVAL     equ 22               ; returned as -EINVAL
@@ -288,6 +289,7 @@ _start:
     ; run first. The child resumes right after this syscall with RAX=0.
     mov     rax, SYS_FORK
     syscall
+    test    rax, rax               ; SYSRET restores user RFLAGS — set flags from RAX
     js      .fork_err              ; RAX < 0 -> error
     jz      .fork_child            ; RAX == 0 -> child
     mov     rax, SYS_WRITE         ; parent (RAX = child pid)
@@ -312,6 +314,36 @@ _start:
     mov     rdx, m_forkerr_len
     syscall
 .fork_done:
+
+    ; ---- slice 9: fork + wait4 — parent reaps the child, reads its status ---
+    mov     rax, SYS_FORK
+    syscall
+    test    rax, rax
+    js      .w_done                ; fork error -> skip
+    jz      .w_child               ; child path
+    mov     r12, rax               ; parent: r12 = child pid (callee-saved)
+    sub     rsp, 16                ; [rsp] = status slot
+    mov     dword [rsp], 0
+    mov     rax, SYS_WAIT4
+    mov     rdi, r12               ; pid
+    mov     rsi, rsp               ; &status
+    xor     rdx, rdx               ; options = 0
+    syscall
+    cmp     dword [rsp], 42        ; child exited 42?
+    jne     .w_skip
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_wait]
+    mov     rdx, m_wait_len
+    syscall
+.w_skip:
+    add     rsp, 16
+    jmp     .w_done
+.w_child:
+    mov     rax, SYS_EXIT
+    mov     rdi, 42
+    syscall
+.w_done:
 
     ; ---- slice 7: execve — replace this image with /EXECTEST.ELF ------------
     ; The kernel placed /EXECTEST.ELF on the FAT32 root. On success execve never
@@ -375,3 +407,5 @@ m_forkc:     db "FORK: child running pid= OK", 10
 m_forkc_len: equ $ - m_forkc
 m_forkerr:   db "FORK: ERROR", 10
 m_forkerr_len: equ $ - m_forkerr
+m_wait:      db "WAIT: child exited status=42", 10
+m_wait_len:  equ $ - m_wait

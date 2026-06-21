@@ -140,7 +140,7 @@ void isr_dispatch(struct regs *r) {
             kputhex(r->err_code);
         }
         kputs(" — killing process\r\n");
-        sched_exit();                    /* marks DONE + switches away; never returns */
+        sched_exit(-1);                  /* zombie (status -1) + switches away; never returns */
     }
 
     if (r->vector == 3) {                /* recoverable self-test */

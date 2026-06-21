@@ -12,6 +12,7 @@
 #define ENOEXEC         8   /* exec format error (bad/oversized ELF) */
 #define EBADF           9   /* bad file descriptor                  */
 #define ECHILD         10   /* no child processes                   */
+#define EAGAIN         11   /* try again (WNOHANG, no child ready)   */
 #define ENOMEM         12   /* out of memory                        */
 #define EACCES         13   /* permission denied                    */
 #define EFAULT         14   /* bad address (user pointer)           */

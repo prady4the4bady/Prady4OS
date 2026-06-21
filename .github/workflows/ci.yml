@@ -66,6 +66,9 @@ jobs:
       - name: QEMU fork test (q35; sys_fork copy-all-pages, parent + child)
         run: make smoke-sysfork
 
+      - name: QEMU wait4 test (q35; zombie reap + exit status + reaper)
+        run: make smoke-syswait
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the

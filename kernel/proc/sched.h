@@ -19,8 +19,9 @@ typedef void (*thread_fn)(void *);
 enum thread_state {
     THREAD_READY = 0,
     THREAD_RUNNING = 1,
-    THREAD_DONE = 2,
-    THREAD_BLOCKED = 3
+    THREAD_DONE = 2,           /* finished kernel thread (no AS to reclaim)     */
+    THREAD_BLOCKED = 3,
+    THREAD_ZOMBIE = 4          /* exited user proc awaiting wait4/reaper (5b-9) */
 };
 
 /* Anonymous mmap region tracking (5b, ADR-022). A fixed table per process;
@@ -65,6 +66,8 @@ struct tcb {
      * of sched.h keep their field offsets. */
     uint32_t   parent_pid;     /* creating process pid; 0 for kernel threads  */
     int64_t    fork_retval;    /* child's fork() return (0); -1 when unset     */
+    int        exit_status;    /* set by sched_exit; collected by wait4 (5b-9) */
+    struct tcb *waiter;        /* parent blocked in wait4 on this thread, or 0 */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
@@ -83,6 +86,7 @@ void        sched_tick(void);                                   /* from the time
 void        yield(void);                                        /* cooperative switch      */
 void        sched_block(void);                                  /* block current; switch away */
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
-void        sched_exit(void);                                   /* terminate current thread   */
+void        sched_exit(int status);                             /* zombie + status; wakes waiter */
+void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 
 extern struct tcb *current_thread;

@@ -34,7 +34,7 @@ USER_EXEC_ELF := build/exectest.elf
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_fork.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/ipc/ipc.c \
-               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/acpi/acpi.c \
+               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
@@ -49,7 +49,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
                build/vmm.o build/vmm_fork.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/ipc.o \
-               build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/acpi.o build/pcie.o \
+               build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o
@@ -66,7 +66,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -140,6 +140,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_mmap.c -o build/sys_mmap.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_exec.c -o build/sys_exec.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_fork.c -o build/sys_fork.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/sys_wait.c -o build/sys_wait.o
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
@@ -332,6 +333,13 @@ smoke-sysexec: $(IMG) fat-image sfs-image
 # space copies + extra ring-3 runs push past the default wall time.
 smoke-sysfork: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'FORK: parent pid=\nFORK: child running pid=')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Phase 5b slice 9 wait4 gate: systest forks a child that exits(42); the parent
+# wait4's it, reads the status, and prints it. Proves zombie/reap + status copyout
+# (and the orphan reaper keeps zombies from leaking). Two ELF loads + fork/wait.
+smoke-syswait: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 EXTRA_SENTINEL='WAIT: child exited status=42' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

@@ -121,8 +121,23 @@ new globals `syscall_user_rip`/`syscall_user_rsp` — with RAX=0 (the parent get
 the child pid via the normal SYSRET path). New TCB fields `parent_pid`,
 `fork_retval`. Registers other than RAX are not replicated in the child (baseline
 limitation, documented). New gate `smoke-sysfork` PASS (15 gates total). Kernel
-112,404 B (<256 KiB). Code graph: 93 files / 962 symbols. Next: 5b-9 (sys_wait4 +
-process reaping).
+112,404 B (<256 KiB). Code graph: 93 files / 962 symbols. **Slice 5b-9 (sys_wait4
++ process reaping) COMPLETE:** `sys_wait4` (`SYS_WAIT4=16`,
+`kernel/syscall/sys_wait.c`) reaps a child. `sched_exit` now takes the exit
+status and leaves the thread in a new `THREAD_ZOMBIE` state holding it (waking any
+parent blocked in wait4) instead of leaking as `THREAD_DONE`; `sys_exit` passes
+the user code, the #PF user-kill path passes -1. `sys_wait4(pid, *status,
+options)` finds the caller's child (parent_pid match), blocks until it is a zombie
+(unless WNOHANG → -EAGAIN), copyout's the raw exit status, then reclaims the
+child's AS + TCB (`vmm_destroy_address_space` + `sched_destroy`). A low-priority
+`reaper` kernel thread (spawned in `sched_demo`) sweeps orphaned zombies (exited
+procs whose parent is gone and which no wait4 is collecting), bounding the leak —
+this also reclaims the hello/wxviol/exectest/fork-child address spaces that
+previously leaked. New TCB fields `exit_status`, `waiter`; new errno `EAGAIN`.
+Also fixed a latent systest fork bug: the post-`syscall` branches lacked a `test
+rax, rax` (SYSRET restores user RFLAGS), so they read stale flags. New gate
+`smoke-syswait` PASS (16 gates total). Kernel 113,572 B. Code graph: 95 files /
+975 symbols. Next: §6 IMP-A (Spectre/Meltdown MSR mitigations).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

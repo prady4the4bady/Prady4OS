@@ -25,6 +25,7 @@
 #define SYS_MUNMAP 13  /* (addr, len)         -> 0           (5b slice 6)    */
 #define SYS_EXECVE 14  /* (path, argv, envp)  -> no return on success (5b sl 7) */
 #define SYS_FORK   15  /* ()  -> child pid in parent, 0 in child  (5b slice 8) */
+#define SYS_WAIT4  16  /* (pid, *status, options) -> reaped pid     (5b slice 9) */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

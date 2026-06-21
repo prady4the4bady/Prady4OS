@@ -665,6 +665,7 @@ static void sched_demo(void) {
     ring_demo();
     bus_demo();
     sched_create(blk_test_thread, 0, "blk");
+    sched_start_reaper();                     /* 5b-9: reclaim orphaned zombie procs */
     struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
     if (fst)
         fst->arg = (void *)(uintptr_t)cap_create(fst->caps, RES_FILE, FS_RES_ID,
