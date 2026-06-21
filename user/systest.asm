@@ -22,6 +22,7 @@ SYS_LSEEK  equ 10
 SYS_GETCWD equ 11
 SYS_MMAP   equ 12
 SYS_MUNMAP equ 13
+SYS_EXECVE equ 14
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
 EINVAL     equ 22               ; returned as -EINVAL
@@ -281,6 +282,21 @@ _start:
     syscall
 .s6_done:
 
+    ; ---- slice 7: execve — replace this image with /EXECTEST.ELF ------------
+    ; The kernel placed /EXECTEST.ELF on the FAT32 root. On success execve never
+    ; returns: EXECTEST runs in THIS process and prints its own sentinel. The
+    ; line below must therefore NEVER appear (the gate greps for its absence).
+    mov     rax, SYS_EXECVE
+    lea     rdi, [rel p_exec]
+    xor     rsi, rsi               ; argv = NULL (baseline)
+    xor     rdx, rdx               ; envp = NULL (baseline)
+    syscall
+    mov     rax, SYS_WRITE         ; only reached if execve FAILED
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_execbug]
+    mov     rdx, m_execbug_len
+    syscall
+
     ; ---- done ---------------------------------------------------------------
     mov     rax, SYS_EXIT
     xor     rdi, rdi
@@ -319,3 +335,6 @@ m_mmapwx:    db "SYSMMAP WX REJECTED", 10
 m_mmapwx_len: equ $ - m_mmapwx
 m_munmap:    db "SYSMUNMAP OK", 10
 m_munmap_len: equ $ - m_munmap
+p_exec:      db "/EXECTEST.ELF", 0
+m_execbug:   db "EXECVE: post-exec (BUG)", 10
+m_execbug_len: equ $ - m_execbug

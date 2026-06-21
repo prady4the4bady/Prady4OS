@@ -29,3 +29,11 @@ global systest_elf_end
 systest_elf:
     incbin "build/systest.elf"
 systest_elf_end:
+
+; Phase 5b slice 7 execve target: the kernel writes this to the FAT32 root as
+; /EXECTEST.ELF; systest then SYS_EXECVE's it (replaces its own image).
+global exectest_elf
+global exectest_elf_end
+exectest_elf:
+    incbin "build/exectest.elf"
+exectest_elf_end:

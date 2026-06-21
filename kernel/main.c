@@ -312,6 +312,8 @@ extern const unsigned char wx_elf[];
 extern const unsigned char wx_elf_end[];
 extern const unsigned char systest_elf[];
 extern const unsigned char systest_elf_end[];
+extern const unsigned char exectest_elf[];
+extern const unsigned char exectest_elf_end[];
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -343,6 +345,20 @@ static void user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
         kputdec((uint64_t)(-lr));
         kputs("\r\n");
     }
+}
+
+/* Place the execve target image on the FAT32 root (the process root for the
+ * syscall layer, set by vfs_set_default_mnt below) so the ring-3 systest can
+ * SYS_EXECVE("/EXECTEST.ELF"). The FAT32 disk is rebuilt fresh for every gate
+ * run, so the file never pre-exists. */
+static void fat_place_exec_image(cap_t cap, int mnt) {
+    uint64_t elen = (uint64_t)(exectest_elf_end - exectest_elf);
+    struct vfs_file ef;
+    if (vfs_create(cap, mnt, "/EXECTEST.ELF", &ef) != 0 ||
+        vfs_write(cap, &ef, 0, exectest_elf, (uint32_t)elen) != (int)elen)
+        kputs("[exec] FAT32 placement of /EXECTEST.ELF failed\r\n");
+    else
+        kputs("[exec] placed /EXECTEST.ELF for the execve test\r\n");
 }
 
 /* Block device test: runs as a thread so virtio-blk I/O can block on its IRQ
@@ -491,6 +507,7 @@ static void fs_test_thread(void *arg) {
         kputs(" "); kputdec(t.hour); kputs(":"); kputdec(t.minute); kputs("\r\n");
     }
     fs_write_test(cap, mnt);
+    fat_place_exec_image(cap, mnt);   /* 5b slice 7: /EXECTEST.ELF for systest's execve */
 
     /* SFS: format a blank disk in-kernel, mount it (FAT32 declines, SFS claims
      * it by superblock magic), then exercise the CoW B+tree — create 10 files,

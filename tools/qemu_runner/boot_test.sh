@@ -13,6 +13,9 @@ SENTINEL="${SENTINEL:-NEXUS KERNEL OK}"
 # Optional second pattern that must ALSO appear (e.g. the FAT32 self-test line).
 # Empty by default so the plain kernel gate only checks the boot sentinel.
 EXTRA_SENTINEL="${EXTRA_SENTINEL:-}"
+# Optional patterns (newline-separated) that must NOT appear — e.g. the execve
+# "post-exec (BUG)" line that proves execve wrongly returned. Empty by default.
+FORBIDDEN_SENTINEL="${FORBIDDEN_SENTINEL:-}"
 TIMEOUT_S="${TIMEOUT_S:-30}"
 SERIAL_LOG="$(mktemp)"
 
@@ -78,6 +81,18 @@ while IFS= read -r pat; do
     fi
 done <<EOF
 $EXTRA_SENTINEL
+EOF
+# Each non-empty line of FORBIDDEN_SENTINEL is a literal pattern that must NOT appear.
+while IFS= read -r pat; do
+    [ -z "$pat" ] && continue
+    if grep -qF "$pat" "$SERIAL_LOG"; then
+        echo "[smoke] FAIL — forbidden pattern '$pat' appeared. Serial output was:"
+        cat "$SERIAL_LOG"
+        rm -f "$SERIAL_LOG"
+        exit 1
+    fi
+done <<EOF
+$FORBIDDEN_SENTINEL
 EOF
 echo "[smoke] PASS — saw '$SENTINEL'$( [ "$extra_count" -gt 0 ] && echo " + $extra_count FS pattern(s)" )."
 rm -f "$SERIAL_LOG"

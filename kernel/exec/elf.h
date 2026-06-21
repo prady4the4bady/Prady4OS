@@ -16,6 +16,15 @@ struct tcb;
 int elf_load(const void *image, uint64_t image_len, const char *name,
              struct tcb **out);
 
+/* Loader core shared by elf_load and sys_execve: validate the image, build a
+ * fresh W^X address space, map its PT_LOAD segments, and lay out the 8 MiB user
+ * stack with the SysV ABI initial frame — WITHOUT creating a thread. On success
+ * returns ELF_OK and fills *out_as (a CR3), *out_entry (e_entry), and *out_rsp
+ * (initial user RSP); on failure returns a negative elf_err with any partial
+ * address space already torn down. */
+int elf_build_image(const void *image, uint64_t image_len, const char *name,
+                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp);
+
 enum elf_err {
     ELF_OK            =  0,
     ELF_E_ARGS        = -1,   /* null/short image                       */

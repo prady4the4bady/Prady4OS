@@ -111,9 +111,10 @@ static uint64_t load_page(uint64_t as, uint64_t va, uint64_t flags,
     return phys;
 }
 
-int elf_load(const void *image, uint64_t image_len, const char *name,
-             struct tcb **out) {
-    if (!image || image_len < sizeof(struct elf64_ehdr) || !out)
+int elf_build_image(const void *image, uint64_t image_len, const char *name,
+                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp) {
+    if (!image || image_len < sizeof(struct elf64_ehdr) ||
+        !out_as || !out_entry || !out_rsp)
         return ELF_E_ARGS;
 
     const uint8_t *img = (const uint8_t *)image;
@@ -222,6 +223,24 @@ int elf_load(const void *image, uint64_t image_len, const char *name,
     sp -= 8; *(uint64_t *)(kp + sp) = 1;           /* argc                       */
     uint64_t user_rsp = top_uva + sp;
 
+    *out_as    = as;
+    *out_entry = eh->e_entry;
+    *out_rsp   = user_rsp;
+    return ELF_OK;
+}
+
+int elf_load(const void *image, uint64_t image_len, const char *name,
+             struct tcb **out) {
+    if (!out)
+        return ELF_E_ARGS;
+
+    uint64_t as, entry, user_rsp;
+    int rc = elf_build_image(image, image_len, name, &as, &entry, &user_rsp);
+    if (rc != ELF_OK)
+        return rc;
+
+    const char *prog = name ? name : "prog";
+
     /* --- ready ring-3 thread ------------------------------------------------- */
     /* sched_create_user inserts a READY thread into the run ring immediately, so
      * mask interrupts until cr3/user_arg are set — otherwise a timer tick could
@@ -229,7 +248,7 @@ int elf_load(const void *image, uint64_t image_len, const char *name,
      * mapped, and it would fault on the first ring-3 instruction. */
     uint64_t fl;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
-    struct tcb *t = sched_create_user(prog, eh->e_entry, user_rsp);
+    struct tcb *t = sched_create_user(prog, entry, user_rsp);
     if (t) {
         t->cr3 = as;
         /* exactly one capability delivered in RDI: console display */

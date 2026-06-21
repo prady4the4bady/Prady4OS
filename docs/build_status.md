@@ -84,7 +84,27 @@ copyout, -ERANGE if the buffer is too small); `sys_getpid` already existed
 re-mmap of the same hint succeeds. Per-process `vm_area` table + bump pointer in
 the TCB. `SYS_MMAP=12`/`SYS_MUNMAP=13`. The 6-arg ABI widening is **deferred**
 (every 5b call fits in ≤4 args; anon mmap ignores fd/offset — see ADR-022 note).
-New gate `smoke-sysmmap` PASS. Next: 5b-7 (sys_execve).
+New gate `smoke-sysmmap` PASS. **Slice 5b-7 (sys_execve) COMPLETE:**
+`kernel/syscall/sys_exec.c` — `sys_execve` replaces the calling process's image.
+The ELF loader core was refactored: `elf_build_image` (image → fresh W^X address
+space + entry + initial user RSP, no thread) is now shared by `elf_load` (which
+adds the thread) and `sys_execve`. execve `copyinstr`'s the path, opens + reads
+the target from the process root FS (the stable FAT32 mount) into a kernel
+buffer, builds the new address space, then — past the point of no return, under
+the SYSCALL's cleared IF (no preemption) — closes non-stdio fds (0/1/2 survive),
+points the TCB at the new CR3/entry/RSP, resets the anon-mmap arena, switches CR3
+(kernel stacks are mapped in every AS), tears down the **old** address space, and
+drops to ring 3 via `enter_user_mode` (so it never returns on success). On any
+pre-commit failure the old image keeps running with a negative errno (new
+`ENOEXEC`). The kernel places `/EXECTEST.ELF` (a second embedded static ELF,
+`user/exectest.asm`) on the FAT32 root each boot; `user/systest.asm` then
+`SYS_EXECVE`'s it — the new image's `EXECVE: new image running` sentinel must
+appear and systest's post-execve `(BUG)` line must NOT. `boot_test.sh` gained a
+`FORBIDDEN_SENTINEL` check for that absence. `SYS_EXECVE=14`. argv/envp
+marshalling is **deferred** (baseline argv[0] = path); the exec image must fit
+the 8 KiB user-ELF budget (matches the Makefile cap + SFS bootstrap buffer). New
+gate `smoke-sysexec` PASS (14 syscall/FS+user gates total). Code graph: 89 files
+/ 937 symbols. Next: 5b-8 (sys_fork, copy-all-pages first per ADR-022).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

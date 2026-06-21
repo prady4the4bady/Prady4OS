@@ -23,6 +23,7 @@
 #define SYS_GETCWD 11  /* (buf, size)         -> len incl NUL (5b slice 5)   */
 #define SYS_MMAP   12  /* (addr, len, prot, flags) -> addr   (5b slice 6)    */
 #define SYS_MUNMAP 13  /* (addr, len)         -> 0           (5b slice 6)    */
+#define SYS_EXECVE 14  /* (path, argv, envp)  -> no return on success (5b sl 7) */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
