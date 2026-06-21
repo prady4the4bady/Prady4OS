@@ -137,7 +137,17 @@ previously leaked. New TCB fields `exit_status`, `waiter`; new errno `EAGAIN`.
 Also fixed a latent systest fork bug: the post-`syscall` branches lacked a `test
 rax, rax` (SYSRET restores user RFLAGS), so they read stale flags. New gate
 `smoke-syswait` PASS (16 gates total). Kernel 113,572 B. Code graph: 95 files /
-975 symbols. Next: §6 IMP-A (Spectre/Meltdown MSR mitigations).
+975 symbols. **IMP-A (Spectre/Meltdown MSR mitigations) COMPLETE:**
+`kernel/arch/x86_64/cpu_mitigations.c` — `cpu_mitigations_init` (called in kmain
+after `idt_init`) probes CPUID.7.0:EDX and, where the CPU advertises them, sets
+IBRS/STIBP/SSBD in IA32_SPEC_CTRL (0x48) and fires an IBPB barrier
+(IA32_PRED_CMD 0x49); each wrmsr is gated on its CPUID bit so an unsupporting CPU
+is never written (no #GP). Inline asm uses the split-operand wrmsr + explicit
+cpuid outputs. QEMU TCG advertises none → prints `[cpu] mitigations: IBRS=0
+STIBP=0 SSBD=0 IBPB=0` (zero CI impact). New `kernel/arch/x86_64` dir
+(`-Ikernel/arch/x86_64`). New gate `smoke-mitigations` PASS (17 gates total).
+Kernel 114,116 B. Code graph: 97 files / 981 symbols. Next: §7 IMP-B (PMM poison
++ heap canary).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

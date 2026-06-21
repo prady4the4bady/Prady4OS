@@ -40,7 +40,8 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
                kernel/drivers/rtc/rtc.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
-               kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c
+               kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
+               kernel/arch/x86_64/cpu_mitigations.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -52,13 +53,13 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
-               build/ext4.o build/elf.o build/user_image.o build/string.o
+               build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
                -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
-               -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include
+               -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -66,7 +67,7 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -156,6 +157,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/fs/ext4/ext4.c              -o build/ext4.o
 	$(CC) $(KCFLAGS) -c kernel/exec/elf.c                  -o build/elf.o
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
+	$(CC) $(KCFLAGS) -c kernel/arch/x86_64/cpu_mitigations.c -o build/cpu_mitigations.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 262144 || { echo "kernel.bin exceeds 256 KiB; Stage 2 loads 8x64 sectors"; exit 1; }
@@ -340,6 +342,13 @@ smoke-sysfork: $(IMG) fat-image sfs-image
 # (and the orphan reaper keeps zombies from leaking). Two ELF loads + fork/wait.
 smoke-syswait: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL='WAIT: child exited status=42' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# IMP-A mitigations gate: the kernel probes CPUID and prints the IBRS/STIBP/SSBD/
+# IBPB state at boot. On QEMU TCG the values are 0 (no spec-ctrl advertised) — the
+# gate only asserts the line is present (the probe ran without faulting).
+smoke-mitigations: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL='[cpu] mitigations:' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

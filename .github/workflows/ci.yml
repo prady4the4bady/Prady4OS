@@ -69,6 +69,9 @@ jobs:
       - name: QEMU wait4 test (q35; zombie reap + exit status + reaper)
         run: make smoke-syswait
 
+      - name: QEMU CPU mitigations test (q35; IBRS/STIBP/SSBD/IBPB probe)
+        run: make smoke-mitigations
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the

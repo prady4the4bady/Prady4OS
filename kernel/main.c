@@ -36,6 +36,7 @@
 #include "elf.h"
 #include "uaccess.h"
 #include "errno.h"
+#include "cpu_mitigations.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -870,6 +871,8 @@ void kmain(struct boot_info *bi) {
 
     idt_init();
     kputs("NEXUS: IDT loaded (48 vectors: 32 exceptions + 16 IRQ)\r\n");
+
+    cpu_mitigations_init();              /* IMP-A: IBRS/STIBP/SSBD/IBPB where available */
 
     tss_init(0);                         /* rsp0 is set per user thread before ring 3 */
     syscall_init();                      /* EFER.SCE + STAR/LSTAR/SFMASK + dispatch */
