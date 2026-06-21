@@ -28,6 +28,24 @@ struct free_block {
 static struct free_block *free_list[PMM_MAX_ORDER];
 static uint64_t free_pages;
 
+/* Copy-on-write per-frame reference counts (IMP-D), indexed by frame number
+ * (phys >> 12) over the whole identity-mapped range [0, 1 GiB). alloc sets 1,
+ * pmm_free_page decrements and frees only at 0, COW fork increments on share.
+ * 262144 frames * 2 B = 512 KiB — too large for the kernel's low-memory BSS, so
+ * it is allocated FROM the pool in pmm_init (NULL until then; refcounting is a
+ * no-op before it exists, which is fine — nothing forks that early). */
+#define PMM_NFRAMES 262144u
+static uint16_t *pmm_refcount;
+
+static inline void rc_set(uint64_t addr, unsigned order, uint16_t v) {
+    if (!pmm_refcount)
+        return;
+    uint64_t base = addr >> PAGE_SHIFT;
+    for (uint64_t i = 0; i < (1ull << order); i++)
+        if (base + i < PMM_NFRAMES)
+            pmm_refcount[base + i] = v;
+}
+
 static inline uint64_t block_size(unsigned order) {
     return PAGE_SIZE << order;
 }
@@ -90,6 +108,7 @@ uint64_t pmm_alloc_pages(unsigned order) {
             list_push(o, addr + block_size(o));
         }
         free_pages -= (1ull << order);
+        rc_set(addr, order, 1);         /* fresh allocation: one owner */
     }
     irq_restore(fl);
     return addr;                        /* 0 == out of memory at this size */
@@ -97,6 +116,17 @@ uint64_t pmm_alloc_pages(unsigned order) {
 
 void pmm_free_pages(uint64_t addr, unsigned order) {
     uint64_t fl = irq_save();
+    /* COW: a single frame with other owners is only dereferenced, not freed (and
+     * must NOT be poisoned — another address space still maps it). */
+    if (order == 0 && pmm_refcount) {
+        uint64_t idx = addr >> PAGE_SHIFT;
+        if (idx < PMM_NFRAMES && pmm_refcount[idx] > 1) {
+            pmm_refcount[idx]--;
+            irq_restore(fl);
+            return;
+        }
+    }
+    rc_set(addr, order, 0);             /* actually freeing now: clear refcount(s) */
 #ifdef KASAN
     {
         uint64_t *p = (uint64_t *)(uintptr_t)addr;
@@ -123,6 +153,19 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
 uint64_t pmm_alloc_page(void)        { return pmm_alloc_pages(0); }
 void     pmm_free_page(uint64_t a)   { pmm_free_pages(a, 0); }
 uint64_t pmm_free_page_count(void)   { return free_pages; }
+
+void pmm_incref(uint64_t phys) {
+    uint64_t idx = phys >> PAGE_SHIFT;
+    uint64_t fl = irq_save();
+    if (pmm_refcount && idx < PMM_NFRAMES && pmm_refcount[idx] != 0xFFFFu)
+        pmm_refcount[idx]++;
+    irq_restore(fl);
+}
+
+uint16_t pmm_refcount_get(uint64_t phys) {
+    uint64_t idx = phys >> PAGE_SHIFT;
+    return (pmm_refcount && idx < PMM_NFRAMES) ? pmm_refcount[idx] : 0;
+}
 
 /* Carve [s,e) into maximal naturally-aligned power-of-2 blocks. */
 static void add_region(uint64_t s, uint64_t e) {
@@ -156,6 +199,16 @@ void pmm_init(const struct boot_info *bi) {
         if (e > PMM_MAX_PHYS) e = PMM_MAX_PHYS;
         if (s < e)
             add_region(s, e);
+    }
+
+    /* COW refcount table: 262144 * 2 B = 512 KiB = order-7 block, taken from the
+     * pool (too large for the kernel's low-memory BSS). pmm_alloc_pages runs with
+     * pmm_refcount still NULL, so this permanent block carries no refcount. */
+    uint64_t rc_block = pmm_alloc_pages(7);
+    if (rc_block) {
+        pmm_refcount = (uint16_t *)(uintptr_t)rc_block;
+        for (uint64_t i = 0; i < PMM_NFRAMES; i++)
+            pmm_refcount[i] = 0;
     }
 #ifdef KASAN
     kputs("[pmm] poison enabled\r\n");

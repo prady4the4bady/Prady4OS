@@ -19,6 +19,7 @@
  * marks a leaf whose physical frame is SHARED across address spaces (e.g. the
  * vDSO page): vmm_destroy_address_space must NOT free that frame, and fork must
  * share rather than copy it. (Bit 9 is reserved for the COW pass, IMP-D.) */
+#define PTE_SW_COW    0x200ull                 /* bit 9: copy-on-write (IMP-D)   */
 #define PTE_SW_SHARED 0x400ull                 /* bit 10 */
 
 /* User virtual range = PML4 slot 1 = [512 GiB, 1 TiB) (ADR-021). The ELF loader

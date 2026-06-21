@@ -23,5 +23,12 @@ void     pmm_init(const struct boot_info *bi);
 uint64_t pmm_alloc_pages(unsigned order);   /* physical addr, or 0 on failure */
 void     pmm_free_pages(uint64_t addr, unsigned order);
 uint64_t pmm_alloc_page(void);              /* order 0 */
-void     pmm_free_page(uint64_t addr);
+void     pmm_free_page(uint64_t addr);      /* drops one reference; frees at 0 (IMP-D) */
 uint64_t pmm_free_page_count(void);         /* current free frame count */
+
+/* Copy-on-write reference counting (IMP-D). Each managed frame has a 16-bit
+ * refcount: alloc sets it to 1, pmm_free_page decrements and frees only at 0.
+ * COW fork calls pmm_incref when sharing a frame; the #PF handler reads the
+ * count to decide copy-vs-regrant. */
+void     pmm_incref(uint64_t phys);
+uint16_t pmm_refcount_get(uint64_t phys);

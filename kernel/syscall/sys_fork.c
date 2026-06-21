@@ -1,7 +1,8 @@
 /* kernel/syscall/sys_fork.c — sys_fork: duplicate the calling process (5b slice 8).
  *
- * Copy-all-pages fork (ADR-022 baseline). The child is an exact copy of the
- * parent's user address space, capability table, and fd table; it resumes at the
+ * Copy-on-write fork (IMP-D; supersedes the copy-all-pages baseline). The child
+ * shares the parent's user pages copy-on-write plus copies of the capability
+ * table and fd table; it resumes at the
  * instruction after the fork SYSCALL with RAX == 0 (delivered by the child's
  * enter_user_mode launch — see §1 CONFIRMED ARCHITECTURAL FACT / sched.c), while
  * the parent returns the child's pid through the normal SYSRET path.
@@ -13,7 +14,7 @@
  */
 #include "sys_fork.h"
 #include "sched.h"
-#include "vmm_fork.h"
+#include "vmm_cow.h"
 #include "vmm.h"
 #include "syscall.h"      /* syscall_register, syscall_user_rip/rsp */
 #include "errno.h"
@@ -22,7 +23,7 @@ static long sys_fork(long a1, long a2, long a3, long a4) {
     (void)a1; (void)a2; (void)a3; (void)a4;        /* fork takes no user args */
     struct tcb *parent = current_thread;
 
-    uint64_t child_cr3 = vmm_fork_address_space_copy(parent->cr3);
+    uint64_t child_cr3 = vmm_fork_address_space_cow(parent->cr3);
     if (!child_cr3)
         return -ENOMEM;
 

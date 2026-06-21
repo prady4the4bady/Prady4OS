@@ -12,6 +12,7 @@
 #include "irq.h"
 #include "sched.h"
 #include "vdso_page.h"
+#include "vmm_cow.h"
 #include <stdint.h>
 
 /* Must match the push order in arch/x86_64/isr.asm exactly. */
@@ -132,6 +133,13 @@ void isr_dispatch(struct regs *r) {
      * sys_exit(-1) semantics. The fault was in user code, so no kernel lock is
      * held and sched_exit can safely switch away (the dead thread's kernel-stack
      * ISR frame is abandoned, reaped later). */
+    /* IMP-D: a ring-3 write to a present read-only page (error 0x7) on a COW page
+     * is resolved by copy-on-write — resume the instruction. Non-COW pages return
+     * -1 and fall through to the kill path, preserving W^X enforcement. */
+    if (r->vector == 14 && (r->cs & 3) == 3 && (r->err_code & 0x7) == 0x7 &&
+        current_thread && vmm_cow_fault(current_thread->cr3, read_cr2()) == 0)
+        return;
+
     if (r->vector < 32 && (r->cs & 3) == 3) {
         kputs("[trap] user ");
         kputs(name);

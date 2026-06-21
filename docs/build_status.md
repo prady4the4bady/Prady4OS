@@ -167,7 +167,24 @@ W^X holds: kernel view is RW-not-X, user view is R-only. New `PTE_SW_SHARED` bit
 never frees it and `vmm_fork` shares rather than copies it. The executable
 callable reader (vdso_entry.asm) is deferred — a single u64 needs no seqlock on
 the read side. New gate `smoke-vdso` PASS (19 gates total). Kernel 114,916 B. Code
-graph: 99 files / 996 symbols. Next: §9 IMP-D (COW fork).
+graph: 99 files / 996 symbols. **IMP-D (copy-on-write fork) COMPLETE:** replaces
+copy-all-pages. `kernel/mm/vmm_cow.c` (`vmm_fork_address_space_cow`) shares every
+present user page with the child and reference-counts the frame
+(`pmm_incref`), marking writable pages read-only + `PTE_SW_COW` (bit 9) in BOTH
+spaces; the vDSO (`PTE_SW_SHARED`) is shared verbatim. The #PF handler
+(`idt.c`) routes a ring-3 write fault (err 0x7) on a COW page to `vmm_cow_fault`,
+which gives the writer a private copy when the frame is shared (refcount>1) or
+just re-grants write when it is the sole owner; non-COW faults return -1 and fall
+through to the existing kill path, so W^X (wxviol) still dies. PMM gained per-frame
+refcounts (`pmm_incref`/`pmm_refcount_get`; `pmm_free_page` frees only at 0,
+checked before the KASAN poison); the 512 KiB refcount table is allocated FROM the
+pool at `pmm_init` (too large for the kernel's low-memory BSS — a 512 KiB BSS
+array overran the 0xA0000 VGA boundary and hung the boot). `vmm_fork.c`/`.h`
+removed; `sys_fork` now calls the COW path. In-kernel `cow_selftest` proves
+isolation; the ring-3 #PF COW path is covered by smoke-sysfork/smoke-syswait
+(the parent writes its stack after fork). New gate `smoke-cowfork` PASS (20 gates
+total). Kernel 117,108 B. Code graph: 99 files / 1010 symbols. Phase 5b + IMP-A..D
+complete. Next: §10 NET-A (virtio-net).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

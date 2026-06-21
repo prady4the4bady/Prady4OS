@@ -78,6 +78,9 @@ jobs:
       - name: QEMU vDSO clock test (q35; ring-3 reads wall_time_ns, no syscall)
         run: make smoke-vdso
 
+      - name: QEMU COW fork test (q35; copy-on-write isolation + refcount)
+        run: make smoke-cowfork
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the

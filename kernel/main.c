@@ -38,6 +38,7 @@
 #include "errno.h"
 #include "cpu_mitigations.h"
 #include "vdso_page.h"
+#include "vmm_cow.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -862,6 +863,37 @@ static void print_boot_info(const struct boot_info *bi) {
     }
 }
 
+/* IMP-D self-test: build a one-page user AS, COW-fork it, fault the child's
+ * copy, and prove the parent's page is untouched (true copy-on-write isolation).
+ * Exercises vmm_fork_address_space_cow + vmm_cow_fault + the PMM refcount path
+ * directly (the real ring-3 #PF path is covered by smoke-sysfork/syswait). */
+static void cow_selftest(void) {
+    uint64_t parent = vmm_new_address_space();
+    if (!parent) { kputs("[vmm] COW fork FAIL (no AS)\r\n"); return; }
+    void *pf = ptnode_alloc();
+    if (!pf) { vmm_destroy_address_space(parent); kputs("[vmm] COW fork FAIL (no frame)\r\n"); return; }
+
+    uint64_t va = 0x8000000000ull;                  /* user range (PML4 slot 1) */
+    *(volatile uint64_t *)pf = 0xAAAAAAAAAAAAAAAAull;
+    vmm_map_in(parent, va, (uint64_t)(uintptr_t)pf, VMM_USER | VMM_RW | VMM_NX);
+
+    uint64_t child = vmm_fork_address_space_cow(parent);
+    int ok = 0;
+    if (child) {
+        int rc = vmm_cow_fault(child, va);          /* simulate the child writing */
+        uint64_t cphys = vmm_resolve(child, va);
+        uint64_t pphys = vmm_resolve(parent, va);
+        if (rc == 0 && cphys && cphys != pphys) {
+            *(volatile uint64_t *)(uintptr_t)cphys = 0xBBBBBBBBBBBBBBBBull;
+            ok = (*(volatile uint64_t *)(uintptr_t)pphys == 0xAAAAAAAAAAAAAAAAull) &&
+                 (*(volatile uint64_t *)(uintptr_t)cphys == 0xBBBBBBBBBBBBBBBBull);
+        }
+        vmm_destroy_address_space(child);
+    }
+    vmm_destroy_address_space(parent);
+    kputs(ok ? "[vmm] COW fork copy-on-write OK\r\n" : "[vmm] COW fork FAIL\r\n");
+}
+
 void kmain(struct boot_info *bi) {
     kputs("NEXUS: entered kmain (64-bit long mode, ring 0)\r\n");
 
@@ -907,6 +939,7 @@ void kmain(struct boot_info *bi) {
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
 
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
+    cow_selftest();                      /* IMP-D: copy-on-write fork isolation */
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();
