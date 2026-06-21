@@ -104,7 +104,25 @@ appear and systest's post-execve `(BUG)` line must NOT. `boot_test.sh` gained a
 marshalling is **deferred** (baseline argv[0] = path); the exec image must fit
 the 8 KiB user-ELF budget (matches the Makefile cap + SFS bootstrap buffer). New
 gate `smoke-sysexec` PASS (14 syscall/FS+user gates total). Code graph: 89 files
-/ 937 symbols. Next: 5b-8 (sys_fork, copy-all-pages first per ADR-022).
+/ 937 symbols. **Slice 5b-8 (sys_fork, copy-all-pages) COMPLETE:** `sys_fork`
+(`SYS_FORK=15`, `kernel/syscall/sys_fork.c`) duplicates the calling process.
+`kernel/mm/vmm_fork.c` (`vmm_fork_address_space_copy`) deep-copies every present
+USER leaf page into a fresh AS (kernel top-level entries shared, not copied;
+frames `ptnode_alloc`'d so `vmm_destroy_address_space` reclaims them) — the
+ADR-022 baseline; COW is the IMP-D follow-on. `sched_create_user_clone`
+(`kernel/proc/sched.c`) builds the child TCB, copies the capability table
+(`cap_fork`, an exact slot copy so parent handles stay valid) and fd table
+(`fd_clone`, which deep-copies each `vfs_file` so parent/child close
+independently — no shared-pointer double-free), and enqueues it; `sched_destroy`
+unlinks a never-run/reaped thread and frees its kstack/caps/fds/TCB. Per the
+confirmed architectural fact (no stored SYSCALL trap-frame), the child resumes
+via `enter_user_mode` at the caller's user RIP/RSP — captured at SYSCALL entry in
+new globals `syscall_user_rip`/`syscall_user_rsp` — with RAX=0 (the parent gets
+the child pid via the normal SYSRET path). New TCB fields `parent_pid`,
+`fork_retval`. Registers other than RAX are not replicated in the child (baseline
+limitation, documented). New gate `smoke-sysfork` PASS (15 gates total). Kernel
+112,404 B (<256 KiB). Code graph: 93 files / 962 symbols. Next: 5b-9 (sys_wait4 +
+process reaping).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

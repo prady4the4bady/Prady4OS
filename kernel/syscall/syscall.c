@@ -10,12 +10,14 @@
 #include "sys_proc.h"  /* SYS_LSEEK / SYS_GETCWD handlers (slice 5) */
 #include "sys_mmap.h"  /* SYS_MMAP / SYS_MUNMAP handlers (slice 6) */
 #include "sys_exec.h"  /* SYS_EXECVE handler (slice 7) */
+#include "sys_fork.h"  /* SYS_FORK handler (slice 8) */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
 static syscall_fn table[MAX_SYSCALLS];
 uint64_t syscall_kstack_top;
 uint64_t syscall_user_rsp;
+uint64_t syscall_user_rip;
 
 extern void syscall_entry(void);   /* arch/x86_64/syscall_entry.asm */
 
@@ -88,6 +90,7 @@ void syscall_init(void) {
     sys_proc_register();                 /* SYS_LSEEK / SYS_GETCWD (slice 5) */
     sys_mmap_register();                  /* SYS_MMAP / SYS_MUNMAP (slice 6) */
     sys_exec_register();                  /* SYS_EXECVE (slice 7) */
+    sys_fork_register();                  /* SYS_FORK (slice 8) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

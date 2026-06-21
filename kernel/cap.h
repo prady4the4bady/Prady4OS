@@ -52,6 +52,11 @@ cap_t    cap_create(struct cap_table *t, uint32_t res_type, uint64_t res_id, uin
 cap_t    cap_restrict(struct cap_table *t, cap_t h, uint32_t keep_rights);
 /* Copy into dst with rights = src & subset_rights (cannot amplify). */
 cap_t    cap_delegate(struct cap_table *src, cap_t h, struct cap_table *dst, uint32_t subset_rights);
+/* fork: make `dst` an exact structural copy of `src` (every slot + generation),
+ * so all of the parent's handles stay valid verbatim in the child. Rights are
+ * equal (no escalation); the tables are separate (child cannot revoke parent
+ * caps). Returns 0 on success, -1 on a NULL table. */
+int      cap_fork(const struct cap_table *src, struct cap_table *dst);
 /* O(1) revoke: invalidates all outstanding handles for this slot. */
 int      cap_revoke(struct cap_table *t, cap_t h);
 /* 1 if the handle is valid AND holds all `required` rights, else 0. */

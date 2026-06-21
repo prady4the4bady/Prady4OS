@@ -60,11 +60,25 @@ struct tcb {
 
     struct vm_area vma[VM_AREA_MAX];  /* anonymous mmap regions (5b)         */
     uint64_t   mmap_next;      /* bump pointer for addr==NULL mmaps           */
+
+    /* Process model (5b slice 8+). Appended at struct end so the ~30 includers
+     * of sched.h keep their field offsets. */
+    uint32_t   parent_pid;     /* creating process pid; 0 for kernel threads  */
+    int64_t    fork_retval;    /* child's fork() return (0); -1 when unset     */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
 struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user_stack);
+/* fork (5b slice 8): clone `parent` into a ready ring-3 child whose AS is
+ * `child_cr3`, resuming at `entry`/`user_rsp` (RAX=0 via enter_user_mode). Copies
+ * the cap table (cap_fork) and fd table (fd_clone). Returns the child, or 0 on
+ * OOM (any partial child is destroyed). */
+struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
+                                    uint64_t entry, uint64_t user_rsp);
+/* Unlink a never-run / reaped thread from the ready ring and free its kstack,
+ * cap table, open files, and TCB. Not for the currently running thread. */
+void        sched_destroy(struct tcb *t);
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_block(void);                                  /* block current; switch away */

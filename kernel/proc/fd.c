@@ -2,6 +2,9 @@
 #include "fd.h"
 #include "sched.h"
 #include "kheap.h"
+#include "vfs.h"       /* struct vfs_file (deep copy in fd_clone) */
+#include "errno.h"     /* -ENOMEM */
+#include "string.h"    /* memcpy */
 
 void fd_table_init(struct fd_table *t) {
     for (int i = 0; i < FD_MAX; i++) {
@@ -53,4 +56,28 @@ void fd_free(struct tcb *t, int fd) {
     e->mnt   = -1;
     e->cap   = 0;
     e->flags = 0;
+}
+
+int fd_clone(struct tcb *src, struct tcb *dst) {
+    if (!src || !dst)
+        return -1;
+    for (int i = 0; i < FD_MAX; i++) {
+        struct fd_entry *se = &src->fdt.e[i];
+        struct fd_entry *de = &dst->fdt.e[i];
+        *de = *se;                                   /* scalar fields + (maybe) ptr */
+        if (se->kind == FD_VFS && se->file) {
+            struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
+            if (!nf) {
+                for (int j = 0; j < i; j++)          /* roll back earlier copies */
+                    if (dst->fdt.e[j].kind == FD_VFS && dst->fdt.e[j].file) {
+                        kfree(dst->fdt.e[j].file);
+                        dst->fdt.e[j].file = 0;
+                    }
+                return -ENOMEM;
+            }
+            memcpy(nf, se->file, sizeof(struct vfs_file));
+            de->file = nf;                           /* private copy, not shared */
+        }
+    }
+    return 0;
 }

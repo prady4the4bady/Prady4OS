@@ -53,3 +53,11 @@ struct fd_entry *fd_get(struct tcb *t, int fd);
 
 /* Release an fd, freeing any heap-allocated vfs_file. */
 void fd_free(struct tcb *t, int fd);
+
+/* fork: deep-copy every fd entry from `src` to `dst`. Each FD_VFS entry gets its
+ * OWN heap vfs_file copy (no shared pointer → no double-close), so parent and
+ * child can close independently. The seek offset is copied, not shared (a
+ * documented divergence from POSIX shared open-file descriptions, acceptable for
+ * the short-lived test processes). Returns 0 on success, -ENOMEM on alloc fail
+ * (any partial copies in `dst` are freed before returning). */
+int fd_clone(struct tcb *src, struct tcb *dst);

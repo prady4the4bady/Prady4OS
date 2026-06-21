@@ -23,6 +23,7 @@ SYS_GETCWD equ 11
 SYS_MMAP   equ 12
 SYS_MUNMAP equ 13
 SYS_EXECVE equ 14
+SYS_FORK   equ 15
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
 EINVAL     equ 22               ; returned as -EINVAL
@@ -282,6 +283,36 @@ _start:
     syscall
 .s6_done:
 
+    ; ---- slice 8: fork — child prints + exits, parent prints + continues ----
+    ; Placed BEFORE execve: a successful execve replaces this image, so fork must
+    ; run first. The child resumes right after this syscall with RAX=0.
+    mov     rax, SYS_FORK
+    syscall
+    js      .fork_err              ; RAX < 0 -> error
+    jz      .fork_child            ; RAX == 0 -> child
+    mov     rax, SYS_WRITE         ; parent (RAX = child pid)
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_forkp]
+    mov     rdx, m_forkp_len
+    syscall
+    jmp     .fork_done
+.fork_child:
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_forkc]
+    mov     rdx, m_forkc_len
+    syscall
+    mov     rax, SYS_EXIT
+    xor     rdi, rdi
+    syscall
+.fork_err:
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_forkerr]
+    mov     rdx, m_forkerr_len
+    syscall
+.fork_done:
+
     ; ---- slice 7: execve — replace this image with /EXECTEST.ELF ------------
     ; The kernel placed /EXECTEST.ELF on the FAT32 root. On success execve never
     ; returns: EXECTEST runs in THIS process and prints its own sentinel. The
@@ -338,3 +369,9 @@ m_munmap_len: equ $ - m_munmap
 p_exec:      db "/EXECTEST.ELF", 0
 m_execbug:   db "EXECVE: post-exec (BUG)", 10
 m_execbug_len: equ $ - m_execbug
+m_forkp:     db "FORK: parent pid= child fork OK", 10
+m_forkp_len: equ $ - m_forkp
+m_forkc:     db "FORK: child running pid= OK", 10
+m_forkc_len: equ $ - m_forkc
+m_forkerr:   db "FORK: ERROR", 10
+m_forkerr_len: equ $ - m_forkerr

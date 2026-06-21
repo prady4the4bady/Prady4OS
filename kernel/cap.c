@@ -84,6 +84,14 @@ cap_t cap_delegate(struct cap_table *src, cap_t h, struct cap_table *dst, uint32
     return cap_create(dst, s->res_type, s->res_id, s->rights & subset_rights);
 }
 
+int cap_fork(const struct cap_table *src, struct cap_table *dst) {
+    if (!src || !dst)
+        return -1;
+    for (int i = 0; i < CAP_SLOTS; i++)   /* exact copy: handles stay valid in dst */
+        dst->slots[i] = src->slots[i];
+    return 0;
+}
+
 int cap_revoke(struct cap_table *t, cap_t h) {
     struct cap_slot *s = resolve(t, h);
     if (!s)

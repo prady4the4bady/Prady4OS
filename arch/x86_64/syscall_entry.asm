@@ -22,9 +22,11 @@ global syscall_entry
 extern syscall_dispatch
 extern syscall_kstack_top
 extern syscall_user_rsp
+extern syscall_user_rip
 
 syscall_entry:
     mov [rel syscall_user_rsp], rsp     ; stash user RSP briefly (single-CPU, IF=0)
+    mov [rel syscall_user_rip], rcx     ; stash user return RIP (fork's child resume point)
     mov rsp, [rel syscall_kstack_top]   ; switch to this thread's kernel stack
 
     push qword [rel syscall_user_rsp]   ; save user RSP on the kernel stack

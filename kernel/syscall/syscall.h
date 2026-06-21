@@ -24,6 +24,7 @@
 #define SYS_MMAP   12  /* (addr, len, prot, flags) -> addr   (5b slice 6)    */
 #define SYS_MUNMAP 13  /* (addr, len)         -> 0           (5b slice 6)    */
 #define SYS_EXECVE 14  /* (path, argv, envp)  -> no return on success (5b sl 7) */
+#define SYS_FORK   15  /* ()  -> child pid in parent, 0 in child  (5b slice 8) */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
@@ -37,3 +38,6 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a4);  /* from as
  * to a user thread). The asm entry stub reads it; a brief scratch slot too. */
 extern uint64_t syscall_kstack_top;
 extern uint64_t syscall_user_rsp;
+/* User RIP/RSP of the in-flight syscall (captured by syscall_entry.asm). fork
+ * uses these as the child's ring-3 resume point. Valid only inside a syscall. */
+extern uint64_t syscall_user_rip;

@@ -65,6 +65,8 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->fs_cap = 0;
     for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }
     t->mmap_next = VMM_MMAP_BASE;   /* anonymous mmap bump pointer */
+    t->parent_pid = 0;             /* set by sched_create_user_clone for forks */
+    t->fork_retval = -1;           /* unset until a fork assigns it             */
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
@@ -106,6 +108,55 @@ struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user
     t->user_stack = user_stack;
     fd_init_std(&t->fdt);      /* stdin/stdout/stderr -> console */
     return t;
+}
+
+struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
+                                    uint64_t entry, uint64_t user_rsp) {
+    /* Mask interrupts across creation + field init: sched_create enqueues a READY
+     * thread immediately, and until cr3/user_rip are set a timer tick could run
+     * it with a kernel-master cr3 / null entry. (Mirrors the elf_load guard.) */
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+
+    struct tcb *t = sched_create(user_launch, 0, parent->name);
+    if (t) {
+        t->is_user     = 1;
+        t->pid         = t->tid;
+        t->parent_pid  = parent->pid;
+        t->user_rip    = entry;
+        t->user_stack  = user_rsp;
+        t->user_arg    = 0;               /* child RDI=0; RAX=0 (fork ret) via enter_user_mode */
+        t->cr3         = child_cr3;
+        t->fork_retval = 0;
+        t->root_mnt    = parent->root_mnt;
+        t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
+        /* Replace the fresh (empty) cap + fd tables with copies of the parent's. */
+        if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0) {
+            sched_destroy(t);
+            t = 0;
+        }
+    }
+
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    return t;
+}
+
+void sched_destroy(struct tcb *t) {
+    if (!t || t == current_thread)
+        return;
+    /* Unlink from the circular ready ring (t was inserted after some node). */
+    struct tcb *p = t->next;
+    while (p->next != t)
+        p = p->next;
+    p->next = t->next;
+    /* Free per-process resources: open files, capability table, kstack, TCB. */
+    for (int i = 0; i < FD_MAX; i++)
+        fd_free(t, i);
+    if (t->caps)
+        cap_table_destroy(t->caps);
+    if (t->kstack_base)
+        kfree((void *)(uintptr_t)t->kstack_base);
+    kfree(t);
 }
 
 static int runnable(const struct tcb *t) {
