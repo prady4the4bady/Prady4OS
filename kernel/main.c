@@ -28,6 +28,7 @@
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
+#include "virtio_net.h"
 #include "vfs.h"
 #include "fat32.h"
 #include "sfs.h"
@@ -948,6 +949,8 @@ void kmain(struct boot_info *bi) {
         const struct pcie_device *d = pcie_device_get(i);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x01)    /* virtio storage */
             virtio_blk_init(d->bus, d->dev, d->func);
+        if (d->vendor_id == 0x1AF4 && d->class_code == 0x02)    /* virtio network (NET-A) */
+            virtio_net_init(d->bus, d->dev, d->func);
     }
     fat32_register();                    /* Phase 4: register the FS driver with the VFS */
     sfs_register();                      /* Phase 4: SOVEREIGN FS (ADR-018) */

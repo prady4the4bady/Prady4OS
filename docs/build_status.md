@@ -184,7 +184,22 @@ removed; `sys_fork` now calls the COW path. In-kernel `cow_selftest` proves
 isolation; the ring-3 #PF COW path is covered by smoke-sysfork/smoke-syswait
 (the parent writes its stack after fork). New gate `smoke-cowfork` PASS (20 gates
 total). Kernel 117,108 B. Code graph: 99 files / 1010 symbols. Phase 5b + IMP-A..D
-complete. Next: §10 NET-A (virtio-net).
+complete. **NET-A (virtio-net driver) COMPLETE:** `kernel/drivers/net/virtio_net.c`
+reuses the modern virtio-pci transport — `virtio_pci_attach`/`negotiate`(VERSION_1
++ F_MAC)/`setup_queue` for RX(0) and TX(1), reads the MAC from device config, arms
+RX with `netbuf` pool buffers, registers the shared INTx handler, and DRIVER_OK.
+It then transmits one broadcast Ethernet frame (virtio_net_hdr + ARP) and reaps
+its TX completion off the used ring — a reliable functional check (QEMU completes
+TX regardless of where the packet goes). `kernel/drivers/net/netbuf.c` is a fixed
+LIFO pool of page DMA buffers (no alloc in the IRQ path). Detected in kmain's PCIe
+scan (vendor 0x1AF4, class 0x02). Sentinels `[net] virtio-net up MAC=...` and
+`[net] virtio-net TX OK`. Root-cause fix folded in: `irq_register`/`idt.c` now
+keep a small per-line handler CHAIN (idempotent) instead of one handler per IRQ —
+PCI INTx is shared, and the single-slot registry had let virtio-net clobber the
+virtio-blk handler, hanging block I/O (and the FS/user gates). A socket API and true peer loopback (needs a tap/socket
+netdev, not QEMU SLIRP) are deferred to NET-B. New gate `smoke-net` PASS (21 gates
+total). Kernel 119,156 B. Code graph: 103 files / 1040 symbols. Next: §10 NET-B
+(lwIP port).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

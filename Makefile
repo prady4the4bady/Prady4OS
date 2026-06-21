@@ -38,6 +38,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
+               kernel/drivers/net/virtio_net.c kernel/drivers/net/netbuf.c \
                kernel/drivers/rtc/rtc.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
@@ -52,13 +53,13 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
-               -Ikernel/drivers/blk -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
+               -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
                -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
@@ -74,7 +75,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -156,6 +157,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_pci.c   -o build/virtio_pci.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk.c             -o build/blk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/net/virtio_net.c     -o build/virtio_net.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/net/netbuf.c         -o build/netbuf.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rtc/rtc.c            -o build/rtc.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -380,6 +383,15 @@ smoke-vdso: $(IMG) fat-image sfs-image
 # smoke-sysfork/smoke-syswait (the parent writes its stack after fork).
 smoke-cowfork: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL='[vmm] COW fork copy-on-write OK' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# NET-A virtio-net gate: boot_test.sh already attaches a virtio-net-pci device.
+# The driver brings it up over the virtio transport (negotiate, RX/TX queues,
+# MAC, RX armed, DRIVER_OK); the gate asserts the bring-up line. The serial log
+# also shows "TX OK" (one frame reaped off the used ring) — true peer loopback
+# needs a tap/socket netdev rather than QEMU's SLIRP, deferred to NET-B/later.
+smoke-net: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL='[net] virtio-net up' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

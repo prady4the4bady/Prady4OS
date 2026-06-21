@@ -87,13 +87,26 @@ static void dump_line(const char *label, uint64_t v) {
     kputs("\r\n");
 }
 
-/* Registerable handlers for IRQ 2..15 (device drivers, e.g. virtio). */
+/* Registerable handlers for IRQ 2..15 (device drivers, e.g. virtio). PCI INTx is
+ * level-triggered and frequently SHARED (several virtio devices on one line), so
+ * each line holds a small chain of handlers — each driver's handler reads its own
+ * device's ISR (read-to-clear) and acts only on its own interrupt. Registration
+ * is idempotent so a driver registered on the same line N times occupies 1 slot. */
 typedef void (*irq_handler_fn)(void);
-static irq_handler_fn irq_handlers[16];
+#define IRQ_MAX_HANDLERS 4
+static irq_handler_fn irq_handlers[16][IRQ_MAX_HANDLERS];
 
 void irq_register(unsigned irq, irq_handler_fn fn) {
-    if (irq < 16)
-        irq_handlers[irq] = fn;
+    if (irq >= 16)
+        return;
+    for (int i = 0; i < IRQ_MAX_HANDLERS; i++) {
+        if (irq_handlers[irq][i] == fn)     /* already registered on this line */
+            return;
+        if (!irq_handlers[irq][i]) {
+            irq_handlers[irq][i] = fn;
+            return;
+        }
+    }
 }
 
 void isr_dispatch(struct regs *r) {
@@ -116,8 +129,10 @@ void isr_dispatch(struct regs *r) {
             kputs("[kbd] scancode=");
             kputhex(scancode);
             kputs("\r\n");
-        } else if (irq_handlers[irqno]) {
-            irq_handlers[irqno]();             /* device handler deasserts level INTx */
+        } else {
+            for (int i = 0; i < IRQ_MAX_HANDLERS; i++)
+                if (irq_handlers[irqno][i])    /* run every sharer on this line */
+                    irq_handlers[irqno][i]();
         }
         pic_eoi(r->vector);                     /* EOI after the handler */
         return;
