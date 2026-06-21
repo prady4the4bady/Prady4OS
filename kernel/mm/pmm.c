@@ -7,9 +7,19 @@
  * correct and simple; a per-block state bitmap is the obvious later speedup.
  */
 #include "pmm.h"
+#include "console.h"
 
 #define PMM_MIN_PHYS 0x01000000ull   /* 16 MiB: above kernel/bootloader/BIOS */
 #define PMM_MAX_PHYS 0x40000000ull   /* 1 GiB: identity-map limit (ADR-005)   */
+
+#ifdef KASAN
+/* Fill every freed frame with a recognizable pattern so a use-after-free read
+ * yields obvious garbage instead of stale data, and a later allocation that is
+ * read before being initialized is caught. The intrusive free-list link at
+ * offset 0 is rewritten by list_push afterwards; the rest of the block stays
+ * poisoned. ULL suffix avoids -Woverflow on the 64-bit literal. */
+#define PMM_POISON 0xDEADBEEFDEADBEEFULL
+#endif
 
 struct free_block {
     struct free_block *next;
@@ -87,6 +97,14 @@ uint64_t pmm_alloc_pages(unsigned order) {
 
 void pmm_free_pages(uint64_t addr, unsigned order) {
     uint64_t fl = irq_save();
+#ifdef KASAN
+    {
+        uint64_t *p = (uint64_t *)(uintptr_t)addr;
+        uint64_t nqwords = block_size(order) / 8u;
+        for (uint64_t i = 0; i < nqwords; i++)
+            p[i] = PMM_POISON;
+    }
+#endif
     free_pages += (1ull << order);
     while (order < PMM_MAX_ORDER - 1) {
         uint64_t buddy = addr ^ block_size(order);
@@ -139,4 +157,7 @@ void pmm_init(const struct boot_info *bi) {
         if (s < e)
             add_region(s, e);
     }
+#ifdef KASAN
+    kputs("[pmm] poison enabled\r\n");
+#endif
 }

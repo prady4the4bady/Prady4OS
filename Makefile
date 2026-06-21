@@ -64,10 +64,17 @@ KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
                -nostdlib -Wall -Wextra -Werror $(KINCLUDES)
+# KASAN-style hardening (IMP-B): default ON. Poisons every freed PMM frame and
+# arms an 8-byte slab canary checked on each kmalloc, so all gates double as
+# poison/use-after-free tests. Build with KASAN=0 to disable for A/B comparison.
+KASAN ?= 1
+ifeq ($(KASAN),1)
+KCFLAGS += -DKASAN=1
+endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -349,6 +356,14 @@ smoke-syswait: $(IMG) fat-image sfs-image
 # gate only asserts the line is present (the probe ran without faulting).
 smoke-mitigations: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL='[cpu] mitigations:' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# IMP-B poison gate: with KASAN=1 (the default) the kernel poisons freed PMM
+# frames and arms slab canaries. The gate asserts the "[pmm] poison enabled"
+# banner; because KASAN is the default, every other gate is implicitly a poison /
+# canary regression test too (a smashed canary -> KHEAP PANIC -> missing sentinel).
+smoke-pmm-poison: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL='[pmm] poison enabled' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

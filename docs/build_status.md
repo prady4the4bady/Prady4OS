@@ -146,8 +146,17 @@ is never written (no #GP). Inline asm uses the split-operand wrmsr + explicit
 cpuid outputs. QEMU TCG advertises none → prints `[cpu] mitigations: IBRS=0
 STIBP=0 SSBD=0 IBPB=0` (zero CI impact). New `kernel/arch/x86_64` dir
 (`-Ikernel/arch/x86_64`). New gate `smoke-mitigations` PASS (17 gates total).
-Kernel 114,116 B. Code graph: 97 files / 981 symbols. Next: §7 IMP-B (PMM poison
-+ heap canary).
+Kernel 114,116 B. Code graph: 97 files / 981 symbols. **IMP-B (PMM poison + heap
+canary) COMPLETE:** new Makefile `KASAN ?= 1` (default on → `-DKASAN=1`).
+`kernel/mm/pmm.c` fills every freed frame with `0xDEADBEEFDEADBEEF` (the free-list
+link at offset 0 is re-set afterwards) and prints `[pmm] poison enabled`.
+`kernel/mm/kheap.c` arms an 8-byte `0xFEEDFACEFEEDFACE` canary at offset 8 of
+every free slab object (written in both `cache_grow` and `cache_free`, every size
+class is ≥16 B) and verifies it on each `cache_alloc` → `KHEAP PANIC` on a
+use-after-free write. Because KASAN is the default, all prior gates are now
+implicit poison/canary regression tests. New gate `smoke-pmm-poison` PASS (18
+gates total). Kernel 114,356 B. Code graph: 97 files / 983 symbols. Next: §8 IMP-C
+(vDSO clock_gettime).
 **Last updated:** 2026-06-21
 
 ## Phase 0 — Toolchain & Build System

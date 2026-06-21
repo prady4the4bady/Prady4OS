@@ -20,6 +20,12 @@
 #define KHEAP_DEBUG 1
 #define SLAB_MAGIC  0x534C4142u          /* 'SLAB' */
 #define POISON_FREE 0xDDu
+/* 8-byte canary written into every FREE slab object at offset 8 (just past the
+ * intrusive free-list link). Verified on allocation: a mismatch means a freed
+ * object was written through (use-after-free / overflow from a neighbour). Every
+ * size class is >= 16 bytes, so offset 8..15 is always inside the object. ULL
+ * suffix avoids -Woverflow on the 64-bit literal. */
+#define KHEAP_CANARY 0xFEEDFACEFEEDFACEULL
 #define MAX_SLAB_OBJ 2048u               /* above this, allocate whole pages */
 #define MAX_LARGE   256u                 /* tracked concurrent large allocs   */
 
@@ -92,6 +98,9 @@ static struct slab *cache_grow(struct kmem_cache *c) {
     for (uint32_t i = 0; i < c->objs_per_slab; i++) {
         struct free_obj *o = (struct free_obj *)(base + (size_t)i * c->obj_size);
         o->next = s->free;
+#if KHEAP_DEBUG
+        *(uint64_t *)((uint8_t *)o + 8) = KHEAP_CANARY;   /* obj_size >= 16 */
+#endif
         s->free = o;
         s->free_count++;
     }
@@ -109,6 +118,10 @@ static void *cache_alloc(struct kmem_cache *c) {
     }
     struct free_obj *o = s->free;
     s->free = o->next;
+#if KHEAP_DEBUG
+    if (*(uint64_t *)((uint8_t *)o + 8) != KHEAP_CANARY)
+        heap_panic("kalloc: free-object canary smashed (use-after-free)");
+#endif
     s->free_count--;
     c->in_use++;
     return o;
@@ -129,6 +142,9 @@ static void cache_free(struct kmem_cache *c, void *ptr) {
 #endif
     struct free_obj *o = (struct free_obj *)ptr;
     o->next = s->free;
+#if KHEAP_DEBUG
+    *(uint64_t *)((uint8_t *)o + 8) = KHEAP_CANARY;   /* re-arm after the poison fill */
+#endif
     s->free = o;
     s->free_count++;
     c->in_use--;

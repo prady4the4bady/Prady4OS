@@ -72,6 +72,9 @@ jobs:
       - name: QEMU CPU mitigations test (q35; IBRS/STIBP/SSBD/IBPB probe)
         run: make smoke-mitigations
 
+      - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
+        run: make smoke-pmm-poison
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the
