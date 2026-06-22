@@ -28,6 +28,9 @@
 #define SYS_WAIT4  16  /* (pid, *status, options) -> reaped pid     (5b slice 9) */
 #define SYS_PIPE   17  /* (int fds[2])        -> 0; read+write fds  (PROC-A)     */
 #define SYS_DUP2   18  /* (oldfd, newfd)      -> newfd              (PROC-A)     */
+#define SYS_EPOLL_CREATE 19 /* (size)        -> epoll fd            (PROC-B)     */
+#define SYS_EPOLL_CTL    20 /* (epfd, op, fd, *ev) -> 0            (PROC-B)     */
+#define SYS_EPOLL_WAIT   21 /* (epfd, *evs, max, timeout) -> nready (PROC-B)    */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

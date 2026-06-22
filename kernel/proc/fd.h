@@ -18,6 +18,7 @@
 struct vfs_file;       /* forward decl: entries hold a kmalloc'd pointer */
 struct tcb;            /* forward decl: fd ops take the owning thread     */
 struct pipe;           /* forward decl: FD_PIPE entries reference a pipe  */
+struct epoll;          /* forward decl: FD_EPOLL entries reference one    */
 
 #define FD_MAX 64
 
@@ -26,6 +27,7 @@ enum fd_kind {
     FD_CONSOLE,        /* stdin/stdout/stderr -> kernel console           */
     FD_VFS,            /* regular file backed by the VFS (slice 4)        */
     FD_PIPE,           /* anonymous pipe end (PROC-A)                     */
+    FD_EPOLL,          /* epoll instance (PROC-B)                         */
 };
 
 struct fd_entry {
@@ -34,6 +36,7 @@ struct fd_entry {
     int              mnt;      /* owning mount id (FD_VFS)                */
     struct vfs_file *file;     /* heap-allocated open-file state (FD_VFS) */
     struct pipe     *pipe;     /* shared pipe object (FD_PIPE)            */
+    struct epoll    *epoll;    /* epoll instance (FD_EPOLL)               */
     cap_t            cap;      /* capability authorizing this fd          */
     int              flags;    /* open flags (FD_VFS) / PIPE_WRITE_END    */
 };

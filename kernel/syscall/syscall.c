@@ -13,6 +13,7 @@
 #include "sys_fork.h"  /* SYS_FORK handler (slice 8) */
 #include "sys_wait.h"  /* SYS_WAIT4 handler (slice 9) */
 #include "pipe.h"      /* SYS_PIPE / SYS_DUP2 handlers (PROC-A) */
+#include "epoll.h"     /* SYS_EPOLL_* handlers (PROC-B) */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
@@ -95,6 +96,7 @@ void syscall_init(void) {
     sys_fork_register();                  /* SYS_FORK (slice 8) */
     sys_wait_register();                  /* SYS_WAIT4 (slice 9) */
     pipe_register();                      /* SYS_PIPE / SYS_DUP2 (PROC-A) */
+    epoll_register();                     /* SYS_EPOLL_* (PROC-B) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

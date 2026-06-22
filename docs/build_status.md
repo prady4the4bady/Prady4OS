@@ -210,9 +210,17 @@ route `FD_PIPE` to `pipe_read`/`pipe_write` (non-blocking baseline; read of empt
 returns 0). systest round-trips "PIPE" through a pipe and through a dup2'd read
 end. New gate `smoke-syspipe` PASS (22 gates total). Kernel 122,276 B. (Graph
 counts carried — graph tool deps need an `npm ci` refresh this session;
-+`kernel/proc/pipe.{c,h}` → 105 files.) NET-B (lwIP) and PROC-D (musl) are
-deferred — both need a vendored third-party source tree. Next tractable: §11
-PROC-B (epoll) → §11 PROC-C (signals) → §11 PROC-E (io_uring).
++`kernel/proc/pipe.{c,h}` → 105 files.) **PROC-B (epoll skeleton) COMPLETE:**
+`kernel/proc/epoll.c` — `SYS_EPOLL_CREATE=19`/`_CTL=20`/`_WAIT=21`. An epoll
+instance is an `FD_EPOLL` fd with a fixed 64-entry interest table; `epoll_ctl`
+ADD/MOD/DEL'es `(fd, events, data)` (packed 12-byte `epoll_event`), `epoll_wait`
+non-blockingly polls readiness and copies out ready events. Baseline readiness:
+`EPOLLIN` on a pipe read-end iff the ring has bytes (`pipe_has_data`). epoll fds
+are freed by `fd_free` (sole owner) and NOT inherited across fork. systest watches
+a pipe read-end: 0 ready when empty, 1 ready (EPOLLIN) after a write. New errno
+`EEXIST`. New gate `smoke-sysepoll` PASS (23 gates total). NET-B (lwIP) and PROC-D
+(musl) remain deferred (vendoring). Next: §11 PROC-C (signals) → §11 PROC-E
+(io_uring).
 **Last updated:** 2026-06-22
 
 ## Phase 0 — Toolchain & Build System

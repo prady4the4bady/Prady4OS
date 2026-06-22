@@ -17,6 +17,7 @@
 #define EACCES         13   /* permission denied                    */
 #define EFAULT         14   /* bad address (user pointer)           */
 #define EINVAL         22   /* invalid argument                     */
+#define EEXIST         17   /* file/entry already exists            */
 #define EMFILE         24   /* too many open files                  */
 #define ESPIPE         29   /* illegal seek (non-seekable fd)       */
 #define ERANGE         34   /* result too large for the buffer      */

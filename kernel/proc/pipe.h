@@ -17,5 +17,6 @@ void  pipe_incref(struct pipe *p);
 void  pipe_close(struct pipe *p);   /* decref; frees ring + struct at 0 */
 long  pipe_read(struct pipe *p, void *dst, uint64_t n);        /* bytes read */
 long  pipe_write(struct pipe *p, const void *src, uint64_t n); /* bytes written */
+int   pipe_has_data(struct pipe *p);                          /* 1 if readable (epoll) */
 
 void  pipe_register(void);          /* register SYS_PIPE / SYS_DUP2 */

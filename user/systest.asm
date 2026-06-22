@@ -27,6 +27,9 @@ SYS_FORK   equ 15
 SYS_WAIT4  equ 16
 SYS_PIPE   equ 17
 SYS_DUP2   equ 18
+SYS_EPOLL_CREATE equ 19
+SYS_EPOLL_CTL    equ 20
+SYS_EPOLL_WAIT   equ 21
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
 VDSO_VA    equ 0x00007FFFFFF00000 ; read-only vDSO clock page (IMP-C)
@@ -458,6 +461,67 @@ _start:
 .pipe_done:
     add     rsp, 32
 
+    ; ---- PROC-B: epoll — watch a pipe read-end for EPOLLIN ------------------
+    sub     rsp, 48                 ; [rbx]=fds(8) [rbx+8]=ev(12) [rbx+24]=outev(12)
+    mov     rbx, rsp
+    mov     rax, SYS_PIPE
+    mov     rdi, rbx
+    syscall
+    test    rax, rax
+    jnz     .epoll_done
+    mov     r12d, [rbx]             ; read fd
+    mov     r13d, [rbx+4]           ; write fd
+    mov     rax, SYS_EPOLL_CREATE
+    mov     rdi, 1
+    syscall
+    test    rax, rax
+    js      .epoll_done
+    mov     r14, rax                ; epfd
+    mov     dword [rbx+8], 1        ; ev.events = EPOLLIN
+    mov     rax, r12
+    mov     [rbx+12], rax           ; ev.data = read fd
+    mov     rax, SYS_EPOLL_CTL
+    mov     rdi, r14
+    mov     rsi, 1                  ; EPOLL_CTL_ADD
+    mov     edx, r12d
+    lea     r10, [rbx+8]
+    syscall
+    test    rax, rax
+    jnz     .epoll_done
+    ; before data: wait should report 0 ready
+    mov     rax, SYS_EPOLL_WAIT
+    mov     rdi, r14
+    lea     rsi, [rbx+24]
+    mov     rdx, 1
+    xor     r10, r10
+    syscall
+    test    rax, rax
+    jnz     .epoll_done             ; expected 0 (empty pipe)
+    ; write one byte, then wait should report 1 ready with EPOLLIN
+    mov     rax, SYS_WRITE
+    mov     edi, r13d
+    lea     rsi, [rel m_pipedata]
+    mov     rdx, 1
+    syscall
+    mov     rax, SYS_EPOLL_WAIT
+    mov     rdi, r14
+    lea     rsi, [rbx+24]
+    mov     rdx, 1
+    xor     r10, r10
+    syscall
+    cmp     rax, 1
+    jne     .epoll_done
+    mov     eax, [rbx+24]           ; outev.events
+    cmp     eax, 1                  ; EPOLLIN
+    jne     .epoll_done
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_epollok]
+    mov     rdx, m_epollok_len
+    syscall
+.epoll_done:
+    add     rsp, 48
+
     ; ---- slice 7: execve — replace this image with /EXECTEST.ELF ------------
     ; The kernel placed /EXECTEST.ELF on the FAT32 root. On success execve never
     ; returns: EXECTEST runs in THIS process and prints its own sentinel. The
@@ -529,3 +593,5 @@ m_pipeok:    db "PIPE: roundtrip OK", 10
 m_pipeok_len: equ $ - m_pipeok
 m_dup2ok:    db "PIPE: dup2 OK", 10
 m_dup2ok_len: equ $ - m_dup2ok
+m_epollok:   db "EPOLL: pipe event OK", 10
+m_epollok_len: equ $ - m_epollok

@@ -75,6 +75,10 @@ long pipe_read(struct pipe *p, void *dst, uint64_t n) {
     return (long)i;
 }
 
+int pipe_has_data(struct pipe *p) {
+    return p && p->head != p->tail;
+}
+
 /* --- syscalls ------------------------------------------------------------- */
 
 static void install(struct fd_entry *e, struct pipe *p, int flags) {

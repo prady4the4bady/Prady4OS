@@ -14,6 +14,7 @@ void fd_table_init(struct fd_table *t) {
         t->e[i].mnt   = -1;
         t->e[i].file  = 0;
         t->e[i].pipe  = 0;
+        t->e[i].epoll = 0;
         t->e[i].cap   = 0;
         t->e[i].flags = 0;
     }
@@ -51,11 +52,14 @@ void fd_free(struct tcb *t, int fd) {
     struct fd_entry *e = &t->fdt.e[fd];
     if (e->kind == FD_PIPE && e->pipe) {
         pipe_close(e->pipe);          /* drop a reference; frees at 0 */
+    } else if (e->kind == FD_EPOLL && e->epoll) {
+        kfree(e->epoll);              /* sole owner (not inherited/dup'd) */
     } else if (e->file) {
         kfree(e->file);
     }
     e->file  = 0;
     e->pipe  = 0;
+    e->epoll = 0;
     e->kind  = FD_NONE;
     e->off   = 0;
     e->mnt   = -1;
@@ -70,7 +74,10 @@ int fd_clone(struct tcb *src, struct tcb *dst) {
         struct fd_entry *se = &src->fdt.e[i];
         struct fd_entry *de = &dst->fdt.e[i];
         *de = *se;                                   /* scalar fields + (maybe) ptr */
-        if (se->kind == FD_PIPE && se->pipe) {
+        if (se->kind == FD_EPOLL) {
+            de->kind = FD_NONE;                      /* epoll fds are not inherited */
+            de->epoll = 0;
+        } else if (se->kind == FD_PIPE && se->pipe) {
             pipe_incref(se->pipe);                   /* child shares the same pipe */
         } else if (se->kind == FD_VFS && se->file) {
             struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
