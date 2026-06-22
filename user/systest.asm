@@ -33,6 +33,8 @@ SYS_EPOLL_WAIT   equ 21
 SYS_SIGACTION    equ 22
 SYS_KILL         equ 23
 SYS_SIGRETURN    equ 24
+SYS_IO_URING_SETUP equ 25
+SYS_IO_URING_ENTER equ 26
 SIGUSR1          equ 10
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
@@ -549,6 +551,59 @@ _start:
     jnz     .sig_spin
 .sig_done:
 
+    ; ---- PROC-E: io_uring — batch WRITE then READ on a pipe ----------------
+    mov     rax, SYS_IO_URING_SETUP
+    mov     rdi, 8
+    syscall
+    test    rax, rax
+    js      .uring_done
+    mov     r14, rax                 ; ring user VA
+    sub     rsp, 32
+    mov     rbx, rsp                 ; [rbx]=fds(8) [rbx+8]=rbuf
+    mov     rax, SYS_PIPE
+    mov     rdi, rbx
+    syscall
+    test    rax, rax
+    jnz     .uring_done2
+    mov     r12d, [rbx]              ; read fd
+    mov     r13d, [rbx+4]            ; write fd
+    ; SQE[0] @ +32 : WRITE "URING"(5) to the write end
+    mov     byte [r14+32], 1        ; opcode = OP_WRITE
+    mov     dword [r14+36], r13d    ; fd
+    lea     rax, [rel m_uringdata]
+    mov     [r14+40], rax           ; addr
+    mov     dword [r14+48], 5       ; len
+    ; SQE[1] @ +64 : READ 5 bytes from the read end into rbuf
+    mov     byte [r14+64], 0        ; opcode = OP_READ
+    mov     dword [r14+68], r12d    ; fd
+    lea     rax, [rbx+8]
+    mov     [r14+72], rax           ; addr
+    mov     dword [r14+80], 5       ; len
+    mov     rax, SYS_IO_URING_ENTER
+    mov     rdi, r14
+    mov     rsi, 2
+    syscall
+    cmp     rax, 2
+    jne     .uring_done2
+    cmp     dword [r14+296], 5      ; cqe[0].res (write) == 5
+    jne     .uring_done2
+    cmp     dword [r14+312], 5      ; cqe[1].res (read) == 5
+    jne     .uring_done2
+    mov     eax, [rbx+8]            ; rbuf[0..3] == "URIN"
+    cmp     eax, [rel m_uringdata]
+    jne     .uring_done2
+    mov     al, [rbx+12]           ; rbuf[4] == 'G'
+    cmp     al, [rel m_uringdata+4]
+    jne     .uring_done2
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_uringok]
+    mov     rdx, m_uringok_len
+    syscall
+.uring_done2:
+    add     rsp, 32
+.uring_done:
+
     ; ---- slice 7: execve — replace this image with /EXECTEST.ELF ------------
     ; The kernel placed /EXECTEST.ELF on the FAT32 root. On success execve never
     ; returns: EXECTEST runs in THIS process and prints its own sentinel. The
@@ -638,3 +693,6 @@ m_epollok:   db "EPOLL: pipe event OK", 10
 m_epollok_len: equ $ - m_epollok
 m_sigusr1:   db "SIGNAL: SIGUSR1 caught", 10
 m_sigusr1_len: equ $ - m_sigusr1
+m_uringdata: db "URING"
+m_uringok:   db "IO_URING: batch read OK", 10
+m_uringok_len: equ $ - m_uringok

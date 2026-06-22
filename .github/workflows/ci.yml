@@ -93,6 +93,9 @@ jobs:
       - name: QEMU signal test (q35; SIGUSR1 handler + sigreturn)
         run: make smoke-syssignal
 
+      - name: QEMU io_uring test (q35; batched SQ/CQ read+write on a pipe)
+        run: make smoke-sysiouring
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the

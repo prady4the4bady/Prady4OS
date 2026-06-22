@@ -15,6 +15,7 @@
 #include "pipe.h"      /* SYS_PIPE / SYS_DUP2 handlers (PROC-A) */
 #include "epoll.h"     /* SYS_EPOLL_* handlers (PROC-B) */
 #include "signal.h"    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
+#include "sys_io_uring.h" /* SYS_IO_URING_* handlers (PROC-E) */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
@@ -99,6 +100,7 @@ void syscall_init(void) {
     pipe_register();                      /* SYS_PIPE / SYS_DUP2 (PROC-A) */
     epoll_register();                     /* SYS_EPOLL_* (PROC-B) */
     signal_register();                    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
+    sys_io_uring_register();              /* SYS_IO_URING_* (PROC-E) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

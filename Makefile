@@ -34,7 +34,7 @@ USER_EXEC_ELF := build/exectest.elf
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/ipc/ipc.c \
-               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/acpi/acpi.c \
+               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
@@ -51,7 +51,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
-               build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/acpi.o build/pcie.o \
+               build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/virtio_net.o build/netbuf.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o
@@ -75,7 +75,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -153,6 +153,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_exec.c -o build/sys_exec.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_fork.c -o build/sys_fork.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_wait.c -o build/sys_wait.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/sys_io_uring.c -o build/sys_io_uring.o
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
@@ -413,6 +414,12 @@ smoke-sysepoll: $(IMG) fat-image sfs-image
 # loops; a timer IRQ delivers the signal, the handler prints, sigreturn resumes.
 smoke-syssignal: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 EXTRA_SENTINEL='SIGNAL: SIGUSR1 caught' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# PROC-E io_uring gate: systest mmaps a ring, submits a batched WRITE then READ on
+# a pipe in one io_uring_enter, and verifies both completions + the data.
+smoke-sysiouring: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 EXTRA_SENTINEL='IO_URING: batch read OK' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

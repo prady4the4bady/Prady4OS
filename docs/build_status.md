@@ -230,8 +230,20 @@ handler ends with `sys_sigreturn`, which IRETQs back to the snapshot via
 fields `sig_pending`/`sig_handlers[32]`/`sig_saved`/`sig_active`; new errno
 `ESRCH`. systest installs a SIGUSR1 handler, kills itself, busy-loops so a timer
 tick delivers it (`SIGNAL: SIGUSR1 caught`), then resumes. New gate
-`smoke-syssignal` PASS (24 gates total). NET-B (lwIP) and PROC-D (musl) remain
-deferred (vendoring). Next: §11 PROC-E (io_uring).
+`smoke-syssignal` PASS (24 gates total). **PROC-E (io_uring batch) COMPLETE:**
+`kernel/syscall/sys_io_uring.c` — `SYS_IO_URING_SETUP=25` maps one zeroed ring
+page RW+NX into the process mmap arena and returns its user VA (header + 8 SQEs +
+8 CQEs in one page); `SYS_IO_URING_ENTER=26` validates the ring VA
+(`vmm_user_range_ok` over the whole page), resolves it to the shared frame, runs
+the first `to_submit` SQEs (OP_READ/OP_WRITE on FD_PIPE / FD_VFS / console via
+copyin/out), and posts one CQE each. systest batches a WRITE then a READ on a pipe
+in a single enter and verifies both completions + the data (`IO_URING: batch read
+OK`). New gate `smoke-sysiouring` PASS (25 gates total).
+
+**Phase 5b COMPLETE** through PROC-A/B/C/E + all IMP-A..D. Deferred (need a
+vendored third-party source tree, not fetchable via the available tooling):
+NET-B (lwIP, §10) and PROC-D (musl, §13). Layer 6 (AETHER agent runtime) begins in
+a dedicated next session.
 **Last updated:** 2026-06-22
 
 ## Phase 0 — Toolchain & Build System

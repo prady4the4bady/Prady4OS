@@ -34,6 +34,8 @@
 #define SYS_SIGACTION    22 /* (signum, handler_va) -> 0            (PROC-C)     */
 #define SYS_KILL         23 /* (pid, signum)        -> 0            (PROC-C)     */
 #define SYS_SIGRETURN    24 /* () -> no return (restores frame)    (PROC-C)     */
+#define SYS_IO_URING_SETUP 25 /* (entries)        -> ring user VA   (PROC-E)     */
+#define SYS_IO_URING_ENTER 26 /* (ring_va, to_submit) -> n done    (PROC-E)     */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
