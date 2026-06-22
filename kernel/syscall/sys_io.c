@@ -10,6 +10,7 @@
 #include "sched.h"
 #include "fd.h"
 #include "vfs.h"
+#include "pipe.h"
 #include "console.h"
 #include "uaccess.h"
 #include "errno.h"
@@ -38,6 +39,26 @@ static long sys_write(long fd, long ubuf, long count, long a4) {
             total     += (long)chunk;
             remaining -= (long)chunk;
             uptr      += chunk;
+        }
+        return total;
+    }
+
+    if (e->kind == FD_PIPE) {
+        if (e->flags != PIPE_WRITE_END)
+            return -EBADF;                        /* can't write the read end */
+        char kbuf[256];
+        long total = 0, remaining = count;
+        uint64_t uptr = (uint64_t)ubuf;
+        while (remaining > 0) {
+            size_t chunk = (remaining > (long)sizeof kbuf) ? sizeof kbuf : (size_t)remaining;
+            if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0)
+                return total > 0 ? total : -EFAULT;
+            long w = pipe_write(e->pipe, kbuf, chunk);
+            if (w <= 0)
+                break;                            /* pipe full (non-blocking) */
+            total += w; uptr += (uint64_t)w; remaining -= w;
+            if (w < (long)chunk)
+                break;
         }
         return total;
     }
@@ -76,6 +97,28 @@ static long sys_read(long fd, long ubuf, long count, long a4) {
             remaining -= n;
             if (n < (int)chunk)
                 break;                                  /* short read = EOF */
+        }
+        return total;
+    }
+
+    if (e->kind == FD_PIPE) {
+        if (e->flags == PIPE_WRITE_END)
+            return -EBADF;                        /* can't read the write end */
+        if (count == 0)
+            return 0;
+        char kbuf[256];
+        long total = 0, remaining = count;
+        uint64_t uptr = (uint64_t)ubuf;
+        while (remaining > 0) {
+            uint64_t chunk = (remaining > (long)sizeof kbuf) ? sizeof kbuf : (uint64_t)remaining;
+            long r = pipe_read(e->pipe, kbuf, chunk);
+            if (r <= 0)
+                break;                            /* empty (non-blocking baseline) */
+            if (copyout((void __user *)(uintptr_t)uptr, kbuf, (size_t)r) < 0)
+                return total > 0 ? total : -EFAULT;
+            total += r; uptr += (uint64_t)r; remaining -= r;
+            if (r < (long)chunk)
+                break;
         }
         return total;
     }

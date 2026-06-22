@@ -84,6 +84,9 @@ jobs:
       - name: QEMU virtio-net test (q35; device bring-up + TX over virtqueue)
         run: make smoke-net
 
+      - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
+        run: make smoke-syspipe
+
   # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the

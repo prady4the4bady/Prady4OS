@@ -198,9 +198,22 @@ keep a small per-line handler CHAIN (idempotent) instead of one handler per IRQ 
 PCI INTx is shared, and the single-slot registry had let virtio-net clobber the
 virtio-blk handler, hanging block I/O (and the FS/user gates). A socket API and true peer loopback (needs a tap/socket
 netdev, not QEMU SLIRP) are deferred to NET-B. New gate `smoke-net` PASS (21 gates
-total). Kernel 119,156 B. Code graph: 103 files / 1040 symbols. Next: §10 NET-B
-(lwIP port).
-**Last updated:** 2026-06-21
+total). Kernel 119,156 B. Code graph: 103 files / 1040 symbols. **PROC-A (pipe +
+dup2) COMPLETE:** `kernel/proc/pipe.c` — a pipe is a 4 KiB byte ring (power-of-two
+mask, `head-tail` = bytes buffered) shared by a read-end and write-end fd,
+reference-counted by the fds that name it (pipe/dup2/fork). `SYS_PIPE=17` installs
+both fds and copyouts `fds[2]`; `SYS_DUP2=18` duplicates onto a chosen fd (shares
+the pipe via `pipe_incref`, or deep-copies an FD_VFS). New `FD_PIPE` kind +
+`pipe` field in `fd_entry`; `fd_free` calls `pipe_close` (frees ring at refcount
+0), `fd_clone` increfs so a forked child shares the pipe. `sys_read`/`sys_write`
+route `FD_PIPE` to `pipe_read`/`pipe_write` (non-blocking baseline; read of empty
+returns 0). systest round-trips "PIPE" through a pipe and through a dup2'd read
+end. New gate `smoke-syspipe` PASS (22 gates total). Kernel 122,276 B. (Graph
+counts carried — graph tool deps need an `npm ci` refresh this session;
++`kernel/proc/pipe.{c,h}` → 105 files.) NET-B (lwIP) and PROC-D (musl) are
+deferred — both need a vendored third-party source tree. Next tractable: §11
+PROC-B (epoll) → §11 PROC-C (signals) → §11 PROC-E (io_uring).
+**Last updated:** 2026-06-22
 
 ## Phase 0 — Toolchain & Build System
 

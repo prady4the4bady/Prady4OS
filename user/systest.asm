@@ -25,6 +25,8 @@ SYS_MUNMAP equ 13
 SYS_EXECVE equ 14
 SYS_FORK   equ 15
 SYS_WAIT4  equ 16
+SYS_PIPE   equ 17
+SYS_DUP2   equ 18
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
 VDSO_VA    equ 0x00007FFFFFF00000 ; read-only vDSO clock page (IMP-C)
@@ -392,6 +394,70 @@ _start:
     syscall
 .w_done:
 
+    ; ---- PROC-A: pipe + dup2 -----------------------------------------------
+    ; pipe() -> [read fd, write fd]; write "PIPE" to the write end, read it back
+    ; from the read end. Then dup2 the read end onto fd 30 and round-trip again.
+    sub     rsp, 32
+    mov     rbx, rsp                ; [rbx]=fds[2], [rbx+16]=rdbuf
+    mov     rax, SYS_PIPE
+    mov     rdi, rbx
+    syscall
+    test    rax, rax
+    jnz     .pipe_done
+    mov     r12d, [rbx]             ; r12 = read fd
+    mov     r13d, [rbx+4]           ; r13 = write fd
+    mov     rax, SYS_WRITE          ; write "PIPE" to the write end
+    mov     edi, r13d
+    lea     rsi, [rel m_pipedata]
+    mov     rdx, 4
+    syscall
+    cmp     rax, 4
+    jne     .pipe_done
+    mov     rax, SYS_READ           ; read it back from the read end
+    mov     edi, r12d
+    lea     rsi, [rbx+16]
+    mov     rdx, 4
+    syscall
+    cmp     rax, 4
+    jne     .pipe_done
+    mov     eax, [rbx+16]
+    cmp     eax, [rel m_pipedata]   ; "PIPE" round-tripped?
+    jne     .pipe_done
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_pipeok]
+    mov     rdx, m_pipeok_len
+    syscall
+    ; dup2(read fd -> 30), then write via r13 and read via fd 30
+    mov     rax, SYS_DUP2
+    mov     edi, r12d
+    mov     esi, 30
+    syscall
+    cmp     rax, 30
+    jne     .pipe_done
+    mov     rax, SYS_WRITE
+    mov     edi, r13d
+    lea     rsi, [rel m_pipedata]
+    mov     rdx, 4
+    syscall
+    mov     rax, SYS_READ
+    mov     edi, 30
+    lea     rsi, [rbx+16]
+    mov     rdx, 4
+    syscall
+    cmp     rax, 4
+    jne     .pipe_done
+    mov     eax, [rbx+16]
+    cmp     eax, [rel m_pipedata]
+    jne     .pipe_done
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_dup2ok]
+    mov     rdx, m_dup2ok_len
+    syscall
+.pipe_done:
+    add     rsp, 32
+
     ; ---- slice 7: execve — replace this image with /EXECTEST.ELF ------------
     ; The kernel placed /EXECTEST.ELF on the FAT32 root. On success execve never
     ; returns: EXECTEST runs in THIS process and prints its own sentinel. The
@@ -458,3 +524,8 @@ m_wait:      db "WAIT: child exited status=42", 10
 m_wait_len:  equ $ - m_wait
 m_vdsop:     db "VDSO: clock ns="
 m_vdsop_len: equ $ - m_vdsop
+m_pipedata:  db "PIPE"
+m_pipeok:    db "PIPE: roundtrip OK", 10
+m_pipeok_len: equ $ - m_pipeok
+m_dup2ok:    db "PIPE: dup2 OK", 10
+m_dup2ok_len: equ $ - m_dup2ok

@@ -17,6 +17,7 @@
 
 struct vfs_file;       /* forward decl: entries hold a kmalloc'd pointer */
 struct tcb;            /* forward decl: fd ops take the owning thread     */
+struct pipe;           /* forward decl: FD_PIPE entries reference a pipe  */
 
 #define FD_MAX 64
 
@@ -24,6 +25,7 @@ enum fd_kind {
     FD_NONE = 0,       /* free slot                                       */
     FD_CONSOLE,        /* stdin/stdout/stderr -> kernel console           */
     FD_VFS,            /* regular file backed by the VFS (slice 4)        */
+    FD_PIPE,           /* anonymous pipe end (PROC-A)                     */
 };
 
 struct fd_entry {
@@ -31,8 +33,9 @@ struct fd_entry {
     uint64_t         off;      /* current byte offset (FD_VFS)            */
     int              mnt;      /* owning mount id (FD_VFS)                */
     struct vfs_file *file;     /* heap-allocated open-file state (FD_VFS) */
+    struct pipe     *pipe;     /* shared pipe object (FD_PIPE)            */
     cap_t            cap;      /* capability authorizing this fd          */
-    int              flags;    /* open flags (FD_VFS)                     */
+    int              flags;    /* open flags (FD_VFS) / PIPE_WRITE_END    */
 };
 
 struct fd_table {

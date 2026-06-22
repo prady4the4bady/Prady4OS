@@ -26,6 +26,8 @@
 #define SYS_EXECVE 14  /* (path, argv, envp)  -> no return on success (5b sl 7) */
 #define SYS_FORK   15  /* ()  -> child pid in parent, 0 in child  (5b slice 8) */
 #define SYS_WAIT4  16  /* (pid, *status, options) -> reaped pid     (5b slice 9) */
+#define SYS_PIPE   17  /* (int fds[2])        -> 0; read+write fds  (PROC-A)     */
+#define SYS_DUP2   18  /* (oldfd, newfd)      -> newfd              (PROC-A)     */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
