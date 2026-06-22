@@ -69,6 +69,10 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->fork_retval = -1;           /* unset until a fork assigns it             */
     t->exit_status = 0;            /* set by sched_exit, collected by wait4     */
     t->waiter = 0;                 /* parent blocked in wait4 on this thread    */
+    t->sig_pending = 0;            /* PROC-C: no pending signals                */
+    for (int i = 0; i < 32; i++)
+        t->sig_handlers[i] = 0;
+    t->sig_active = 0;
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */

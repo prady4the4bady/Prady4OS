@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "cap.h"
 #include "fd.h"
+#include "regs.h"
 
 typedef void (*thread_fn)(void *);
 
@@ -68,6 +69,12 @@ struct tcb {
     int64_t    fork_retval;    /* child's fork() return (0); -1 when unset     */
     int        exit_status;    /* set by sched_exit; collected by wait4 (5b-9) */
     struct tcb *waiter;        /* parent blocked in wait4 on this thread, or 0 */
+
+    /* POSIX signals (PROC-C). */
+    uint64_t   sig_pending;      /* bitmap of pending signal numbers          */
+    uint64_t   sig_handlers[32]; /* ring-3 handler VA per signal (NSIG=32)    */
+    struct regs sig_saved;       /* register snapshot restored by sigreturn   */
+    int        sig_active;       /* 1 while a signal handler is running        */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

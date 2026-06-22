@@ -218,9 +218,20 @@ non-blockingly polls readiness and copies out ready events. Baseline readiness:
 `EPOLLIN` on a pipe read-end iff the ring has bytes (`pipe_has_data`). epoll fds
 are freed by `fd_free` (sole owner) and NOT inherited across fork. systest watches
 a pipe read-end: 0 ready when empty, 1 ready (EPOLLIN) after a write. New errno
-`EEXIST`. New gate `smoke-sysepoll` PASS (23 gates total). NET-B (lwIP) and PROC-D
-(musl) remain deferred (vendoring). Next: §11 PROC-C (signals) → §11 PROC-E
-(io_uring).
+`EEXIST`. New gate `smoke-sysepoll` PASS (23 gates total). **PROC-C (POSIX signals)
+COMPLETE:** `kernel/proc/signal.c` — `SYS_SIGACTION=22` (install a ring-3 handler
+VA per signal; SIGKILL uncatchable), `SYS_KILL=23` (set the target's pending bit),
+`SYS_SIGRETURN=24`. `struct regs` moved to shared `kernel/include/regs.h`.
+Delivery (`signal_deliver`, from idt.c's timer-IRQ return to ring 3): SIGKILL/
+unhandled-SIGTERM → `sched_exit(-1)`; a caught signal snapshots the interrupted
+frame into the TCB, redirects RIP→handler with RDI=signum, sets `sig_active`. The
+handler ends with `sys_sigreturn`, which IRETQs back to the snapshot via
+`signal_sigreturn` (usermode.asm) — a full GP+RIP+RSP+RFLAGS restore. New TCB
+fields `sig_pending`/`sig_handlers[32]`/`sig_saved`/`sig_active`; new errno
+`ESRCH`. systest installs a SIGUSR1 handler, kills itself, busy-loops so a timer
+tick delivers it (`SIGNAL: SIGUSR1 caught`), then resumes. New gate
+`smoke-syssignal` PASS (24 gates total). NET-B (lwIP) and PROC-D (musl) remain
+deferred (vendoring). Next: §11 PROC-E (io_uring).
 **Last updated:** 2026-06-22
 
 ## Phase 0 — Toolchain & Build System

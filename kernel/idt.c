@@ -13,15 +13,9 @@
 #include "sched.h"
 #include "vdso_page.h"
 #include "vmm_cow.h"
+#include "regs.h"
+#include "signal.h"
 #include <stdint.h>
-
-/* Must match the push order in arch/x86_64/isr.asm exactly. */
-struct regs {
-    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
-    uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
-    uint64_t vector, err_code;
-    uint64_t rip, cs, rflags, rsp, ss;
-};
 
 struct idt_entry {
     uint16_t off_lo;
@@ -122,6 +116,8 @@ void isr_dispatch(struct regs *r) {
                 vdso_data->seq++;              /* even = write complete  */
             }
             sched_tick();
+            if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
+                signal_deliver(r);            /* to the ring-3 thread we're returning to */
             return;
         }
         if (irqno == 1) {                      /* IRQ1: keyboard */

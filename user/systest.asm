@@ -30,6 +30,10 @@ SYS_DUP2   equ 18
 SYS_EPOLL_CREATE equ 19
 SYS_EPOLL_CTL    equ 20
 SYS_EPOLL_WAIT   equ 21
+SYS_SIGACTION    equ 22
+SYS_KILL         equ 23
+SYS_SIGRETURN    equ 24
+SIGUSR1          equ 10
 
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
 VDSO_VA    equ 0x00007FFFFFF00000 ; read-only vDSO clock page (IMP-C)
@@ -522,6 +526,29 @@ _start:
 .epoll_done:
     add     rsp, 48
 
+    ; ---- PROC-C: signals — catch SIGUSR1 sent to self ----------------------
+    mov     rax, SYS_SIGACTION       ; install the SIGUSR1 handler
+    mov     rdi, SIGUSR1
+    lea     rsi, [rel sig_handler]
+    syscall
+    test    rax, rax
+    jnz     .sig_done
+    mov     rax, SYS_GETPID
+    syscall
+    mov     rbx, rax                 ; rbx = own pid (callee-saved)
+    mov     rax, SYS_KILL            ; kill(self, SIGUSR1) -> sets pending
+    mov     rdi, rbx
+    mov     rsi, SIGUSR1
+    syscall
+    ; busy-loop so a timer IRQ fires in ring 3 and delivers the signal; the
+    ; handler runs mid-loop, prints, and sigreturns (restoring rcx), then the
+    ; loop runs to completion.
+    mov     rcx, 0x10000000
+.sig_spin:
+    dec     rcx
+    jnz     .sig_spin
+.sig_done:
+
     ; ---- slice 7: execve — replace this image with /EXECTEST.ELF ------------
     ; The kernel placed /EXECTEST.ELF on the FAT32 root. On success execve never
     ; returns: EXECTEST runs in THIS process and prints its own sentinel. The
@@ -543,6 +570,20 @@ _start:
     syscall
 .hang:
     jmp     .hang                  ; sys_exit does not return; guard anyway
+
+; SIGUSR1 handler — entered via signal delivery (kernel sets RIP here, RDI=signum).
+; Prints, then sigreturns (restoring the interrupted frame). Never reached by
+; normal control flow.
+sig_handler:
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_sigusr1]
+    mov     rdx, m_sigusr1_len
+    syscall
+    mov     rax, SYS_SIGRETURN
+    syscall
+.sig_handler_hang:
+    jmp     .sig_handler_hang      ; sigreturn does not return; guard anyway
 
 section .rodata
 m_write:     db "SYSWRITE OK", 10
@@ -595,3 +636,5 @@ m_dup2ok:    db "PIPE: dup2 OK", 10
 m_dup2ok_len: equ $ - m_dup2ok
 m_epollok:   db "EPOLL: pipe event OK", 10
 m_epollok_len: equ $ - m_epollok
+m_sigusr1:   db "SIGNAL: SIGUSR1 caught", 10
+m_sigusr1_len: equ $ - m_sigusr1

@@ -31,6 +31,9 @@
 #define SYS_EPOLL_CREATE 19 /* (size)        -> epoll fd            (PROC-B)     */
 #define SYS_EPOLL_CTL    20 /* (epfd, op, fd, *ev) -> 0            (PROC-B)     */
 #define SYS_EPOLL_WAIT   21 /* (epfd, *evs, max, timeout) -> nready (PROC-B)    */
+#define SYS_SIGACTION    22 /* (signum, handler_va) -> 0            (PROC-C)     */
+#define SYS_KILL         23 /* (pid, signum)        -> 0            (PROC-C)     */
+#define SYS_SIGRETURN    24 /* () -> no return (restores frame)    (PROC-C)     */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

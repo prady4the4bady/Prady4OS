@@ -8,6 +8,7 @@
 
 #define EPERM           1   /* operation not permitted              */
 #define ENOENT          2   /* no such file or directory            */
+#define ESRCH           3   /* no such process                      */
 #define EIO             5   /* I/O error                            */
 #define ENOEXEC         8   /* exec format error (bad/oversized ELF) */
 #define EBADF           9   /* bad file descriptor                  */
