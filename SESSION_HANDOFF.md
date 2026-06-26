@@ -171,7 +171,7 @@ Phase 5b — gate report
   query tools (writes only the git-ignored `.graph/` DB; cannot make kernel gates flaky).
 - **Local full gate set (run before committing):**
   ```
-  wsl -d Ubuntu-22.04 -- bash -lc 'cd /mnt/c/Users/prady/Documents/Claude/Projects/Prady4OS \
+  wsl -d Ubuntu-24.04 -- bash -lc 'cd /mnt/c/Users/prady/Documents/Claude/Projects/Prady4OS \
     && source "$HOME/.cargo/env" && make toolchain-check && make image && make smoke \
     && make smoke-fs && make smoke-fs-rw && make smoke-fs-sfs-rw && make smoke-fs-ext4 && make smoke-user'
   ```
@@ -183,7 +183,7 @@ Phase 5b — gate report
 ## 7. TOOLCHAIN NOTES
 
 - **Builds run in WSL**, not native Windows:
-  `wsl -d Ubuntu-22.04 -- bash -lc 'cd <repo> && source "$HOME/.cargo/env" && make <target>'`.
+  `wsl -d Ubuntu-24.04 -- bash -lc 'cd <repo> && source "$HOME/.cargo/env" && make <target>'`.
   Cross toolchain (ADR-001): clang + `ld.lld` + `llvm-objcopy` + nasm; Rust nightly
   `x86_64-unknown-none`; QEMU q35.
 - **WSL has no Linux `node`** — only the Windows `node`/`npm` leak in via PATH

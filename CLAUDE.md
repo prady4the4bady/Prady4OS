@@ -25,8 +25,9 @@ First-time/fresh clone: `bash tools/graph_mcp/setup_graph.sh`.
 
 ## 2. Build, test, commit (see memory `build-test-workflow`)
 
-- Build/test run in **WSL** (`wsl -d Ubuntu-22.04`), not native Windows. Source
-  `$HOME/.cargo/env` before `make`.
+- Build/test run in **WSL** (`wsl -d Ubuntu-24.04`), not native Windows. Source
+  `$HOME/.cargo/env` before `make`. (Build distro is **Ubuntu-24.04** as of
+  2026-06; the older `Ubuntu-22.04` is gone. `sudo` now needs a password.)
 - **Every gate must pass before commit:** `make smoke smoke-fs smoke-fs-rw
   smoke-fs-sfs-rw smoke-fs-ext4 smoke-user` (and `toolchain-check`, `image`).
 - Commit to **`dev/phase1`**, then fast-forward **`main`** per slice; push both so
