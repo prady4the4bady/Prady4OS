@@ -5,6 +5,7 @@
 #include "tss.h"
 #include "syscall.h"
 #include "vmm.h"
+#include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D) */
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
@@ -73,6 +74,7 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     for (int i = 0; i < 32; i++)
         t->sig_handlers[i] = 0;
     t->sig_active = 0;
+    t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
@@ -136,6 +138,7 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->fork_retval = 0;
         t->root_mnt    = parent->root_mnt;
         t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
+        t->fs_base     = parent->fs_base; /* PROC-D: child inherits the thread pointer */
         /* Replace the fresh (empty) cap + fd tables with copies of the parent's. */
         if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0) {
             sched_destroy(t);
@@ -212,6 +215,10 @@ static void schedule(void) {
         uint64_t ktop = next->kstack_base + STACK_SIZE;
         tss_set_rsp0(ktop);
         syscall_kstack_top = ktop;
+        /* PROC-D (ADR-023): restore this thread's FS base. tcb->fs_base is the sole
+         * authority (only SYS_SET_TLS changes it), so restore-on-switch-in is both
+         * necessary and sufficient — no save in context_switch is needed. */
+        cpu_wrmsr(MSR_IA32_FS_BASE, next->fs_base);
     }
     /* Switch address spaces if the next thread lives in a different one. Kernel
      * stacks are identity-mapped in every AS, so this is safe before the stack

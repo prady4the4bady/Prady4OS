@@ -36,6 +36,8 @@
 #define SYS_SIGRETURN    24 /* () -> no return (restores frame)    (PROC-C)     */
 #define SYS_IO_URING_SETUP 25 /* (entries)        -> ring user VA   (PROC-E)     */
 #define SYS_IO_URING_ENTER 26 /* (ring_va, to_submit) -> n done    (PROC-E)     */
+#define SYS_SET_TLS  27  /* (fs_base) -> 0; set the thread pointer  (PROC-D, ADR-023) */
+#define SYS_WRITEV   28  /* (fd, iov, iovcnt) -> bytes written     (PROC-D, ADR-023) */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

@@ -26,11 +26,13 @@ USER_SRC     := user/hello.asm
 USER_WX_SRC  := user/wxviol.asm
 USER_SYS_SRC := user/systest.asm
 USER_EXEC_SRC := user/exectest.asm
+USER_TLS_SRC := user/tlstest.asm
 USER_LD      := user/user.ld
 USER_ELF     := build/hello.elf
 USER_WX_ELF  := build/wxviol.elf
 USER_SYS_ELF := build/systest.elf
 USER_EXEC_ELF := build/exectest.elf
+USER_TLS_ELF := build/tlstest.elf
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/ipc/ipc.c \
@@ -106,7 +108,7 @@ toolchain-check:
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -119,7 +121,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SYS_ELF) build/systest.o
 	$(NASM) $(NASM_WERROR) -f elf64 $(USER_EXEC_SRC) -o build/exectest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_EXEC_ELF) build/exectest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF); do test "$$(wc -c < $$e)" -le 8192 || { echo "$$e exceeds 8 KiB (loader uses a 2-page bootstrap buffer)"; exit 1; }; done
+	$(NASM) $(NASM_WERROR) -f elf64 $(USER_TLS_SRC) -o build/tlstest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_TLS_ELF) build/tlstest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -292,7 +296,7 @@ smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image
 # fault) — full ELF-loader + W^X enforcement end-to-end. Two 8 MiB-stack loads
 # push past the default 30 s, so allow more wall time.
 smoke-user: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[user] ELF loaded from SFS; ring-3 thread spawned\nHELLO FROM RING-3\n[user] sys_exit(0)\n[trap] user #PF page fault\n[sfs] lz4+tags compress/readback/tag OK')" \
+	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[user] ELF loaded from SFS; ring-3 thread spawned\nHELLO FROM RING-3\n[user] sys_exit(0)\n[trap] user #PF page fault\n[sfs] lz4+tags compress/readback/tag OK\nPRADYOS_TLS_OK WRITEV_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)

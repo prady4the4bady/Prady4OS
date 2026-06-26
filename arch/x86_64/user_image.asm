@@ -37,3 +37,11 @@ global exectest_elf_end
 exectest_elf:
     incbin "build/exectest.elf"
 exectest_elf_end:
+
+; PROC-D step 1: SYS_SET_TLS + SYS_WRITEV probe. Sets FS base to a stack scratch
+; slot, round-trips a value through %fs:0, then gathers two iovecs to fd 1.
+global tlstest_elf
+global tlstest_elf_end
+tlstest_elf:
+    incbin "build/tlstest.elf"
+tlstest_elf_end:

@@ -15,21 +15,14 @@
 #include "uaccess.h"
 #include "errno.h"
 
-static long sys_write(long fd, long ubuf, long count, long a4) {
-    (void)a4;
-    if (count < 0)
-        return -EINVAL;
-    if (count == 0)
-        return 0;
-
-    struct fd_entry *e = fd_get(current_thread, (int)fd);
-    if (!e)
-        return -EBADF;
-
+/* Write `count` (> 0) bytes from the user buffer at `uptr` to fd `e`, via the
+ * validated copyin path (never a raw user dereference). Returns bytes written
+ * (possibly short for a full pipe), or a negative errno when nothing was written.
+ * Shared by sys_write and sys_writev (PROC-D). */
+static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
     if (e->kind == FD_CONSOLE) {
         char kbuf[256];
         long total = 0, remaining = count;
-        uint64_t uptr = (uint64_t)ubuf;
         while (remaining > 0) {
             size_t chunk = (remaining > (long)sizeof kbuf) ? sizeof kbuf : (size_t)remaining;
             if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0)
@@ -48,7 +41,6 @@ static long sys_write(long fd, long ubuf, long count, long a4) {
             return -EBADF;                        /* can't write the read end */
         char kbuf[256];
         long total = 0, remaining = count;
-        uint64_t uptr = (uint64_t)ubuf;
         while (remaining > 0) {
             size_t chunk = (remaining > (long)sizeof kbuf) ? sizeof kbuf : (size_t)remaining;
             if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0)
@@ -65,6 +57,57 @@ static long sys_write(long fd, long ubuf, long count, long a4) {
 
     /* FD_VFS write arrives in slice 4. */
     return -EBADF;
+}
+
+static long sys_write(long fd, long ubuf, long count, long a4) {
+    (void)a4;
+    if (count < 0)
+        return -EINVAL;
+    if (count == 0)
+        return 0;
+
+    struct fd_entry *e = fd_get(current_thread, (int)fd);
+    if (!e)
+        return -EBADF;
+    return fd_write_user(e, (uint64_t)ubuf, count);
+}
+
+/* sys_writev (PROC-D, ADR-023) — gather write over an iovec array. Each iovec's
+ * base/len is validated by the fd_write_user copyin path; the array itself is
+ * copied in (never raw-dereferenced). musl stdio issues this with 2 iovecs. */
+#define SYS_IOV_MAX 16
+struct user_iovec { uint64_t base; uint64_t len; };
+
+static long sys_writev(long fd, long uiov, long iovcnt, long a4) {
+    (void)a4;
+    if (iovcnt < 0 || iovcnt > SYS_IOV_MAX)
+        return -EINVAL;
+    if (iovcnt == 0)
+        return 0;
+
+    struct fd_entry *e = fd_get(current_thread, (int)fd);
+    if (!e)
+        return -EBADF;
+
+    struct user_iovec iov[SYS_IOV_MAX];
+    if (copyin(iov, (const void __user *)(uintptr_t)uiov,
+               (size_t)iovcnt * sizeof iov[0]) < 0)
+        return -EFAULT;
+
+    long total = 0;
+    for (long i = 0; i < iovcnt; i++) {
+        if (iov[i].len == 0)
+            continue;
+        if (iov[i].len > (uint64_t)__INT32_MAX__)     /* sane per-iovec bound */
+            return total > 0 ? total : -EINVAL;
+        long w = fd_write_user(e, iov[i].base, (long)iov[i].len);
+        if (w < 0)
+            return total > 0 ? total : w;             /* EFAULT/EBADF */
+        total += w;
+        if (w < (long)iov[i].len)
+            break;                                    /* short write (pipe full) */
+    }
+    return total;
 }
 
 static long sys_read(long fd, long ubuf, long count, long a4) {
@@ -130,4 +173,5 @@ static long sys_read(long fd, long ubuf, long count, long a4) {
 void sys_io_register(void) {
     syscall_register(SYS_READ, sys_read);
     syscall_register(SYS_WRITE, sys_write);
+    syscall_register(SYS_WRITEV, sys_writev);
 }

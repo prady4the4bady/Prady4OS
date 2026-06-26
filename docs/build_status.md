@@ -240,11 +240,22 @@ copyin/out), and posts one CQE each. systest batches a WRITE then a READ on a pi
 in a single enter and verifies both completions + the data (`IO_URING: batch read
 OK`). New gate `smoke-sysiouring` PASS (25 gates total).
 
-**Phase 5b COMPLETE** through PROC-A/B/C/E + all IMP-A..D. Deferred (need a
-vendored third-party source tree, not fetchable via the available tooling):
-NET-B (lwIP, §10) and PROC-D (musl, §13). Layer 6 (AETHER agent runtime) begins in
-a dedicated next session.
-**Last updated:** 2026-06-22
+**Phase 5b COMPLETE** through PROC-A/B/C/E + all IMP-A..D.
+
+**PROC-D (musl libc) IN PROGRESS — step 1/3 done (ADR-023).** Kernel foundation
+for the musl port: `SYS_SET_TLS=27` programs `IA32_FS_BASE` for the calling
+thread (validated to the user range; restored on switch-in from `tcb.fs_base`,
+inherited across fork) — the thread pointer musl needs before `main`.
+`SYS_WRITEV=28` gather-writes an iovec array via the validated copyin path
+(refactored shared `fd_write_user` helper). The user-ELF budget `EXEC_MAX` is
+raised 8 KiB → **256 KiB** (PMM-pool buffer in `sys_exec` + the SFS bootstrap
+loader; Makefile size check follows) so musl binaries load. Ring-3 probe
+`user/tlstest.asm` round-trips a value through `%fs:0` and gathers two iovecs to
+fd 1; `smoke-user` greps `PRADYOS_TLS_OK WRITEV_OK`. Remaining: step 2 (musl
+submodule + overlay + `libc.a`), step 3 (`user/cmusl.c` printf gate). NSI stays
+append-only; ADR-021 W^X untouched. Still deferred: NET-B (lwIP, §10).
+Layer 6 (AETHER) begins after 5e + NET-B.
+**Last updated:** 2026-06-27
 
 ## Phase 0 — Toolchain & Build System
 

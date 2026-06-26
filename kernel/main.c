@@ -318,6 +318,8 @@ extern const unsigned char systest_elf[];
 extern const unsigned char systest_elf_end[];
 extern const unsigned char exectest_elf[];
 extern const unsigned char exectest_elf_end[];
+extern const unsigned char tlstest_elf[];        /* PROC-D: SET_TLS + WRITEV probe */
+extern const unsigned char tlstest_elf_end[];
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -334,14 +336,25 @@ static void user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
         return;
     }
     struct vfs_file rf;
-    uint64_t buf = pmm_alloc_pages(1);              /* 2 pages: ELF spans >4 KiB */
-    if (!buf || vfs_open(cap, smnt, fname, &rf) != 0)
+    /* 256 KiB read buffer (order-6) from the PMM pool, matching the EXEC_MAX
+     * user-ELF budget (PROC-D / ADR-023). Big buffers come from the PMM pool,
+     * never BSS (the low-mem image cap). Freed after the loader copies the
+     * image into the new address space. */
+    enum { USER_ELF_MAX = 256u * 1024u };
+    uint64_t buf = pmm_alloc_pages(6);
+    if (!buf)
         return;
-    int n = vfs_read(cap, &rf, 0, (void *)(uintptr_t)buf, 8192);
+    if (vfs_open(cap, smnt, fname, &rf) != 0) {
+        pmm_free_pages(buf, 6);
+        return;
+    }
+    uint32_t want = (elen > USER_ELF_MAX) ? USER_ELF_MAX : (uint32_t)elen;
+    int n = vfs_read(cap, &rf, 0, (void *)(uintptr_t)buf, want);
     struct tcb *ut = 0;
     int lr = (n > 0)
         ? elf_load((void *)(uintptr_t)buf, (uint64_t)n, fname, &ut)
         : ELF_E_ARGS;
+    pmm_free_pages(buf, 6);
     if (lr == ELF_OK) {
         kputs("[user] ELF loaded from SFS; ring-3 thread spawned\r\n");
     } else {
@@ -602,6 +615,9 @@ static void fs_test_thread(void *arg) {
                 /* Phase 5b: the syscall test program (read/write/open/... grows
                  * per slice). Runs in ring 3 and prints SYS* sentinels. */
                 user_boot_from_sfs(cap, smnt, "SYSTEST.ELF", systest_elf, systest_elf_end);
+                /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
+                 * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
+                user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end);
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

@@ -7,8 +7,9 @@
 #pragma once
 #include <stdint.h>
 
-#define MSR_IA32_SPEC_CTRL  0x48u   /* bit0 IBRS, bit1 STIBP, bit2 SSBD */
-#define MSR_IA32_PRED_CMD   0x49u   /* bit0 IBPB (write-only command)   */
+#define MSR_IA32_SPEC_CTRL  0x48u         /* bit0 IBRS, bit1 STIBP, bit2 SSBD */
+#define MSR_IA32_PRED_CMD   0x49u         /* bit0 IBPB (write-only command)   */
+#define MSR_IA32_FS_BASE    0xC0000100u   /* thread pointer base (PROC-D, ADR-023) */
 
 static inline void cpu_wrmsr(uint32_t msr, uint64_t val) {
     __asm__ volatile("wrmsr"

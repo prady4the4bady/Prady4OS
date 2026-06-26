@@ -75,6 +75,11 @@ struct tcb {
     uint64_t   sig_handlers[32]; /* ring-3 handler VA per signal (NSIG=32)    */
     struct regs sig_saved;       /* register snapshot restored by sigreturn   */
     int        sig_active;       /* 1 while a signal handler is running        */
+
+    /* Thread pointer (PROC-D, ADR-023). FS-base MSR value for this thread; set by
+     * SYS_SET_TLS, restored into IA32_FS_BASE on every switch to this user thread.
+     * 0 for a fresh thread / pure kernel threads. */
+    uint64_t   fs_base;
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

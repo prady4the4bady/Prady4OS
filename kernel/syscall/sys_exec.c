@@ -19,9 +19,9 @@
  * space, if any, is torn down by elf_build_image).
  *
  * Baseline scope (ADR-022): argv[0] is the path; argv/envp marshalling and
- * close-on-exec are deferred. The image must fit the platform's 8 KiB user-ELF
- * budget (matches the Makefile user-ELF cap and the SFS bootstrap buffer);
- * enlarging it is a later slice.
+ * close-on-exec are deferred. The image must fit the platform's 256 KiB user-ELF
+ * budget (EXEC_MAX, matching the Makefile user-ELF cap and the SFS bootstrap
+ * buffer; PROC-D / ADR-023 raised it from 8 KiB so musl binaries load).
  */
 #include "sys_exec.h"
 #include "syscall.h"
@@ -36,7 +36,9 @@
 #include <stddef.h>
 
 #define PATH_MAX 256
-#define EXEC_MAX 8192u            /* current user-ELF size budget (Makefile cap) */
+#define EXEC_MAX (256u * 1024u)   /* user-ELF size budget: 256 KiB (PROC-D, ADR-023).
+                                   * kmalloc routes this to the buddy PMM (order-6),
+                                   * matching the Makefile cap + SFS bootstrap buffer. */
 
 extern void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t arg); /* usermode.asm */
 

@@ -11,6 +11,8 @@
 #include "vfs.h"
 #include "uaccess.h"
 #include "errno.h"
+#include "vmm.h"               /* VMM_USER_MIN/MAX for fs_base validation */
+#include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D)   */
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -49,7 +51,22 @@ static long sys_getcwd(long ubuf, long size, long a3, long a4) {
     return (long)need;                         /* Linux getcwd returns length incl. NUL */
 }
 
+/* sys_set_tls (PROC-D, ADR-023) — set the calling thread's pointer (FS base).
+ * The analog of Linux arch_prctl(ARCH_SET_FS): record it in the TCB (authority
+ * for switch-in restore) and program IA32_FS_BASE for the current run. The base
+ * must be 0 or a user-range address — ring 3 may never aim %fs at kernel space. */
+static long sys_set_tls(long fs_base, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    uint64_t fb = (uint64_t)fs_base;
+    if (fb != 0 && (fb < VMM_USER_MIN || fb >= VMM_USER_MAX))
+        return -EINVAL;
+    current_thread->fs_base = fb;
+    cpu_wrmsr(MSR_IA32_FS_BASE, fb);
+    return 0;
+}
+
 void sys_proc_register(void) {
-    syscall_register(SYS_LSEEK,  sys_lseek);
-    syscall_register(SYS_GETCWD, sys_getcwd);
+    syscall_register(SYS_LSEEK,   sys_lseek);
+    syscall_register(SYS_GETCWD,  sys_getcwd);
+    syscall_register(SYS_SET_TLS, sys_set_tls);
 }
