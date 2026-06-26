@@ -8,15 +8,87 @@
 
 ## 0. RESUME INSTRUCTION (read this first, act in this order)
 
-> **"You are continuing PradyOS development. Read this file entirely before
-> touching anything. Then call `graph_session_primer()`. Then run the full gate
-> set. Only then begin Phase C, Slice 1: DDR-5b."**
+> **"You are continuing PROC-D Step 2 build-out. Read SESSION_HANDOFF.md in full.
+> Run `graph_session_primer()`. Run all 8 gates and confirm green. Then build the
+> PROC-D Step 2 items in order (§0.1), each compiling clean before the next."**
 
 Concretely:
-1. Read this whole file.
+1. Read this whole file (esp. §0.1 — current PROC-D state + the exact build plan).
 2. `graph_session_primer()` (MCP) — or `node tools/graph_mcp/server.js primer`.
-3. Run the full gate set (see §6) and confirm **all green** before editing.
-4. Begin **Phase C → Slice 1: DDR-5b** (see §4). Do not skip the DDR.
+   (Graph node_modules already installed in this worktree; if a fresh clone,
+   `cd tools/graph_mcp && npm ci && node server.js rebuild`.)
+3. Run the full gate set (see §6) and confirm **all 8 green** before editing.
+4. Continue **PROC-D Step 2 build-out** (§0.1). Do NOT restart earlier slices —
+   Layer 5b and PROC-D Step 1 are DONE and committed.
+
+### 0.1 CURRENT STATE (end of session 2026-06-27) + PROC-D resume plan
+
+- **HEAD:** `0688afc`  (`main` == `dev/phase1`; this worktree branch is
+  `claude/pedantic-shirley-a27bf3` — push by refspec to both, see §7).
+- **Build distro:** **Ubuntu-24.04** (NOT 22.04 — 22.04 is gone; `sudo` needs a
+  password now: the WSL password is the user's to supply).
+- **Toolchain fix applied this session:** `llvm-objcopy` was missing on 24.04.
+  Installed apt pkg **`llvm-18`** and symlinked **`/usr/local/bin/llvm-objcopy`**
+  → `llvm-objcopy-18`. (Also repaired a stale apt index so `libpfm4` resolved.)
+  `clang-18`/`ld.lld-18` were already present; qemu/mkfs.fat/mcopy/mkfs.ext4/
+  nasm/rustup all present.
+- **Gates at HEAD `0688afc`:** all 8 green — `toolchain-check, image, smoke,
+  smoke-fs, smoke-fs-rw, smoke-fs-sfs-rw, smoke-fs-ext4, smoke-user`.
+
+**Completed this session:**
+- **Layer 5b + IMP/PROC/NET series** were already complete on entry (the old
+  handoff was stale — it claimed HEAD `4608e9b`/"5b not started"). Reconciled.
+- **PROC-D Step 1 DONE** (`f2bd207`): `SYS_SET_TLS`=27 (FS-base thread pointer,
+  user-range-validated, restored on switch-in from `tcb.fs_base`, inherited on
+  fork), `SYS_WRITEV`=28 (iovec gather-write via the validated copyin path;
+  shared `fd_write_user` helper), `EXEC_MAX` 8 KiB→**256 KiB** (PMM-pool buffer
+  in `sys_exec` + the SFS bootstrap loader; Makefile cap follows). Ring-3 probe
+  `user/tlstest.asm` gated in `smoke-user` (`PRADYOS_TLS_OK WRITEV_OK`).
+- **PROC-D Step 2 PARTIAL** (`0688afc`): musl **v1.2.5** pinned at
+  `third_party/musl/` (commit `0784374d`); **ADR-023 §D7** records the design
+  (writable user data segment, musl startup/TLS path, overlay shims). The musl
+  build is **not wired into the kernel build yet**, so all gates stay green.
+
+**PROC-D Step 2 build-out — do these in order, each clean before the next:**
+- **2a. `user/user_c.ld`** — 3-segment W^X linker script: `text` PF_R|PF_X,
+  `rodata` PF_R (R+NX), `data` PF_R|PF_W (`.data*`+`.bss*`, RW+NX). Based on
+  `user/user.ld` but adds the writable segment (musl has writable globals). Verify
+  it links a dummy C object with no warnings. (ADR-023 §D7.1.)
+- **2b. `third_party/musl/overlay/bits/syscall.h`** — remap `write→6, writev→28,
+  mmap→12, munmap→13, exit→4, brk→9 (if used)`; all other `__NR_*` pass through
+  from musl's native x86_64 table (unimplemented ones resolve to `-ENOSYS`).
+- **2c. `third_party/musl/overlay/__set_thread_area.s`** — one-line shim issuing
+  `SYS_SET_TLS` (27) with the TP in RDI instead of `arch_prctl` (musl's stock
+  version does `mov %rdi,%rsi; mov $0x1002,%edi; mov $158,%eax; syscall`). Also
+  needs the 6-arg `mmap`→4-arg `SYS_MMAP` (anon) shim (ADR-023 §D5/§D7.2).
+- **2d. Makefile `musl` target** — enumerate the ~15-20 sources
+  `__libc_start_main`+`printf`+`malloc`+string subset pull in (resolve by
+  linking): `crt/crt1.o`, `src/env/__libc_start_main.c` + `__init_tls.c` +
+  `__init_libc.c` + `__libc_start_main`'s deps, `src/stdio/printf.c` +
+  `vfprintf.c` + `fwrite.c` + `__stdio_write.c` + the FILE plumbing,
+  `src/malloc/…`, `src/string/*` subset, our overlay shims. Output
+  `third_party/musl/lib/libc.a` + `crt/crt1.o`. Build BEFORE the user stage;
+  zero warnings. Overlay include path goes AHEAD of `arch/x86_64`.
+- **2e. Gate:** `make image` PASS + `make smoke-user` PASS (no regressions).
+  Commit; print:
+  `Phase PROC-D step 2 — gate report` / `<commit> | image PASS | smoke-user PASS | next: step 3 cmusl.c`
+
+**PROC-D Step 3 (same session if Step 2 gates green):**
+- **3a.** `user/cmusl.c` — ring-3 C calling `printf("PRADYOS_MUSL_OK\n")`, `return 0`.
+- **3b.** Link vs `third_party/musl/lib/libc.a` + `crt1.o` using `user/user_c.ld`.
+- **3c.** Embed in SFS (like `systest`), execve from `smoke-user`, grep `PRADYOS_MUSL_OK`.
+- **3d.** All 8 gates green; `docs/build_status.md` marks **PROC-D COMPLETE**
+  (same commit as the code).
+- **3e.** Final report:
+  `Phase PROC-D — COMPLETE` / `<commit> | all 8 gates PASS | next: 5d pradyos-init`
+
+**Known risk for next session:** Step 2d/3 is the first C/TLS bring-up on this
+kernel — expect QEMU debug cycles around `__init_tls`/auxv/stdio. `syscall_dispatch`
+already returns `-ENOSYS` for unregistered numbers (no panic), so musl's
+`set_tid_address`/`ioctl`/`rt_sigprocmask` degrade gracefully (verified).
+
+After Step 3, the build order continues: **5d pradyos-init (PID 1 + orphan
+reaper) → 5e PRISM shell → NET-B lwIP → Layer 6 AETHER**.
 
 ---
 
@@ -27,8 +99,10 @@ Concretely:
   with an original x86_64 kernel; built in strict layer/slice order — *a slice
   ships when it is correct, not when it is fast.*
 - **Active branch:** `dev/phase1` (fast-forwarded into `main` per slice).
-- **Current HEAD:** `4608e9b7758e5bce9b949a0b0644b25a3c5e0940`
-  (`4608e9b` — "ci: drop actions/setup-node from code-graph job"). `main` == `dev/phase1`.
+- **Current HEAD:** `0688afc` — "build(PROC-D): pin musl v1.2.5 submodule +
+  ADR-023 design revision (D7)". `main` == `dev/phase1`. (The rest of §2 below
+  predates this session and is partially stale — §0.1 is authoritative for the
+  current PROC-D state; Layer 5b + the IMP/PROC/NET series are all complete.)
 - **Repo path (this machine):**
   - Windows: `C:\Users\prady\Documents\Claude\Projects\Prady4OS`
   - WSL: `/mnt/c/Users/prady/Documents/Claude/Projects/Prady4OS`
