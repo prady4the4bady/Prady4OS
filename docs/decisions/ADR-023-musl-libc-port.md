@@ -159,6 +159,39 @@ Notes:
   is third-party source built with musl's own warning posture (it is not part of
   our `-Werror` surface); our overlay `.c`/`.h` are.
 
+### D7 — Writable user data segment + startup/TLS (added after inspecting musl)
+Discovered while wiring step 2: two assumptions in D2/D6 were incomplete.
+
+1. **User programs need a RW+NX data/bss segment.** `user/user.ld` emits a single
+   R+X segment (text+rodata) and discards the rest — correct for the 5a/5b asm
+   programs (no mutable globals), but musl has writable global state (the `stdout`
+   `FILE`, the `libc` struct, malloc/`ofl` state, the static `builtin_tls` block).
+   New script **`user/user_c.ld`** emits three W^X-clean PT_LOADs the existing ELF
+   loader already maps per `p_flags`:
+   - `text`  → `PF_R|PF_X` : `.text`
+   - `rodata`→ `PF_R`      : `.rodata*` (R + NX, per ADR-021)
+   - `data`  → `PF_R|PF_W` : `.data*` + `.bss*` (RW + NX)
+   No RWX segment, no W+X segment — ADR-021 is preserved. The asm programs keep
+   using `user/user.ld` unchanged.
+2. **TLS goes through musl's own startup, not a hand-rolled TCB.** musl's
+   `__set_thread_area` (x86_64 asm) issues `arch_prctl(ARCH_SET_FS, TP)`. We
+   **override** it with a one-line overlay shim that calls `SYS_SET_TLS(TP)`
+   directly (so `SET_TLS` keeps its `(fs_base)` contract — no arch_prctl
+   emulation in the kernel). The gate program is linked with musl's `crt1.o` →
+   `__libc_start_main` → `__init_libc`/`__init_tls`, which lays out the pthread
+   TCB (errno, locale, the static `builtin_tls`) correctly. Startup syscalls that
+   the NSI does not implement (`set_tid_address`, `ioctl(TCGETS)`,
+   `rt_sigprocmask`) map to unregistered NSI slots; `syscall_dispatch` returns
+   `-ENOSYS`, which musl tolerates for these (no panic — verified in `syscall.c`).
+
+Build mechanics consequence for D6: the overlay supplies a generated
+`bits/syscall.h` (musl's x86_64 numbers with `write→6, writev→28, mmap→12,
+munmap→13, exit/exit_group→4` remapped to the NSI; all other `__NR_*` keep their
+upstream values and resolve to `-ENOSYS` if ever issued). The hand-compiled file
+set is whatever `__libc_start_main` + `printf` + `malloc` + the string subset
+reference; it is resolved by linking and is enumerated in the Makefile's
+`musl` target.
+
 ---
 
 ## Consequences
