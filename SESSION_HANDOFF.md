@@ -23,10 +23,15 @@ Concretely:
    confirm green before editing.
 4. **Continue NET-B (lwIP)** — design is DONE and committed (**ADR-025** +
    **DDR-NET-B**), and **lwIP 2.2.1 is pinned** at `third_party/lwip` (commit
-   `77dcd25a`), not yet wired into the build (CI green). **Remaining (per the DDR
-   step sequence):** (1) `third_party/lwip-port/` (lwipopts.h, arch/cc.h,
-   sys_arch, mem_port → kmalloc) + `tools/build_lwip.sh` + `make lwip` →
-   `liblwip.a` compiles `-w`; CI submodule+lwip step. (2) extend
+   `77dcd25a`). **Step 1 DONE (CI-green, HEAD `d433bf6`):** `third_party/lwip-port/`
+   (lwipopts.h, arch/cc.h, arch/sys_arch.h, stdio/stdlib shims) +
+   `tools/build_lwip.sh` + `make lwip` build **liblwip.a** (`-w -nostdlibinc`); CI
+   runs `make lwip`. kernel string.{h,c} gained strlen/strncmp. liblwip.a is NOT
+   yet linked into the kernel. **Remaining (per the DDR step sequence):**
+   (2 — NEXT) write the first-party port shim `third_party/lwip-port/lwip_port.c`
+   (defines `pradyos_lwip_malloc/free/calloc`→kmalloc, `pradyos_lwip_rand`,
+   `pradyos_lwip_diag/assert`→console, `sys_now()` from `g_ticks*10`, `atoi`),
+   compiled as a kernel source; then extend
    `kernel/drivers/net/virtio_net.c` with `virtio_net_tx/set_rx/mac` (NET-A drops
    RX today), add `kernel/net/` + `pradyos_netif.c`, wire `net_init` into kmain +
    `sys_check_timeouts` on the PIT tick, loopback UDP echo → `smoke-net-lo`
