@@ -21,8 +21,20 @@ Concretely:
    && npm ci && node server.js rebuild`.)
 3. Run the full gate set (§6) **plus** `smoke-fpu smoke-init smoke-shell` and
    confirm green before editing.
-4. Begin **NET-B (lwIP)** — port lwIP over the existing virtio-net driver (NET-A).
-   ADR/DDR first. Gate: a loopback/UDP/TCP `smoke-net`-style test.
+4. **Continue NET-B (lwIP)** — design is DONE and committed (**ADR-025** +
+   **DDR-NET-B**), and **lwIP 2.2.1 is pinned** at `third_party/lwip` (commit
+   `77dcd25a`), not yet wired into the build (CI green). **Remaining (per the DDR
+   step sequence):** (1) `third_party/lwip-port/` (lwipopts.h, arch/cc.h,
+   sys_arch, mem_port → kmalloc) + `tools/build_lwip.sh` + `make lwip` →
+   `liblwip.a` compiles `-w`; CI submodule+lwip step. (2) extend
+   `kernel/drivers/net/virtio_net.c` with `virtio_net_tx/set_rx/mac` (NET-A drops
+   RX today), add `kernel/net/` + `pradyos_netif.c`, wire `net_init` into kmain +
+   `sys_check_timeouts` on the PIT tick, loopback UDP echo → `smoke-net-lo`
+   (`PRADYOS_NET_LO_OK`). (3) TCP echo on :8007 → `smoke-net` (QEMU hostfwd
+   18007→8007, host nc probe, `PRADYOS_NET_TCP_OK`). (4) security/fuzz gate
+   `smoke-net-fuzz` (malformed frames + SYN/ICMP bursts, no panic,
+   `ICMP_RATELIMITED`). All security controls are specified in ADR-025 §D6.
+   Then Layer 6 (AETHER, ADR-026) — only after NET-B is CI-green.
 
 **5d/5e closed this session** (HEAD `9f310da`): per-thread FPU save (ADR-023 §D8),
 pradyos-init PID 1 (ADR-023 §5d), and the **PRISM shell** (ADR-024) — interactive
