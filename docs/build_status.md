@@ -251,9 +251,20 @@ inherited across fork) — the thread pointer musl needs before `main`.
 raised 8 KiB → **256 KiB** (PMM-pool buffer in `sys_exec` + the SFS bootstrap
 loader; Makefile size check follows) so musl binaries load. Ring-3 probe
 `user/tlstest.asm` round-trips a value through `%fs:0` and gathers two iovecs to
-fd 1; `smoke-user` greps `PRADYOS_TLS_OK WRITEV_OK`. Remaining: step 2 (musl
-submodule + overlay + `libc.a`), step 3 (`user/cmusl.c` printf gate). NSI stays
-append-only; ADR-021 W^X untouched. Still deferred: NET-B (lwIP, §10).
+fd 1; `smoke-user` greps `PRADYOS_TLS_OK WRITEV_OK`.
+
+**PROC-D step 2/3 done.** The minimal musl subset builds to `build/musl/lib/`
+(`libc.a` + `crt1.o`) via `make musl` / `tools/build_musl.sh` from the pinned
+`third_party/musl` (v1.2.5) + `third_party/musl-overlay/`. The overlay: (1) a
+generated `bits/syscall.h` that offsets every musl x86_64 number by +4096 (so any
+unimplemented call is ≥ `MAX_SYSCALLS`=64 → `-ENOSYS`, never a mis-dispatch to an
+unrelated NSI handler such as native `ioctl`=16 → `SYS_WAIT4`), then remaps the 7
+we implement to their NSI numbers; (2) `__set_thread_area.s` issuing `SYS_SET_TLS`
+instead of `arch_prctl`. New `user/user_c.ld` gives C programs the 3 W^X-clean
+segments musl needs (RX text / R+NX rodata / RW+NX data+bss); C user code uses
+`-mcmodel=large` (the 0x8000000000 base exceeds 32-bit relocs). CI now checks out
+submodules and runs `make musl`. Remaining: step 3 (`user/cmusl.c` printf gate).
+NSI stays append-only; ADR-021 W^X untouched. Still deferred: NET-B (lwIP, §10).
 Layer 6 (AETHER) begins after 5e + NET-B.
 **Last updated:** 2026-06-27
 

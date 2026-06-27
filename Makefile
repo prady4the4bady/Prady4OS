@@ -33,6 +33,14 @@ USER_WX_ELF  := build/wxviol.elf
 USER_SYS_ELF := build/systest.elf
 USER_EXEC_ELF := build/exectest.elf
 USER_TLS_ELF := build/tlstest.elf
+
+# PROC-D: the minimal musl libc subset (ADR-023). Built by tools/build_musl.sh
+# from the pinned third_party/musl submodule + our overlay, into build/ (git-
+# ignored). crt1.o is produced as a side-effect of the same script run.
+MUSL_DIR  := third_party/musl
+MUSL_OVL  := third_party/musl-overlay
+MUSL_LIB  := build/musl/lib/libc.a
+MUSL_CRT  := build/musl/lib/crt1.o
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/ipc/ipc.c \
@@ -77,7 +85,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -103,6 +111,13 @@ toolchain-check:
 	$(LD) -nostdlib -e _start -o $(BUILD_DIR)/toolchain_check.elf \
 	      $(BUILD_DIR)/tc_main.o $(BUILD_DIR)/hello_c.o $(BUILD_DIR)/hello_asm.o $(RUST_LIB)
 	@echo "OK: clang + nasm + rust(no_std) + ld.lld linked -> $(BUILD_DIR)/toolchain_check.elf"
+
+# PROC-D: build the musl subset (libc.a + crt1.o) from the pinned submodule.
+# crt1.o is a by-product of the same script run (empty recipe, ordered after lib).
+$(MUSL_LIB): tools/build_musl.sh $(MUSL_OVL)/syscall_overrides.h $(MUSL_OVL)/__set_thread_area.s $(MUSL_DIR)/Makefile
+	bash tools/build_musl.sh
+$(MUSL_CRT): $(MUSL_LIB) ;
+musl: $(MUSL_LIB)
 
 # Build the NEXUS kernel: 64-bit entry stub (NASM) + C main, linked flat at
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.

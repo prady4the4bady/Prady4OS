@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
 
       - name: Install toolchain
         run: |
@@ -23,6 +25,9 @@ jobs:
 
       - name: Toolchain check (clang + nasm + rust + lld)
         run: make toolchain-check
+
+      - name: Build musl libc subset (PROC-D)
+        run: make musl
 
       - name: Build kernel image (-Werror)
         run: make image
