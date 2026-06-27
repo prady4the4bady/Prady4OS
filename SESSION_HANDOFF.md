@@ -8,12 +8,16 @@
 
 ## 0. RESUME INSTRUCTION (read this first, act in this order)
 
-> **"NET-B (lwIP TCP/IP) is COMPLETE and CI-green — UDP loopback, host→guest TCP
-> echo, and the malformed-frame/SYN-flood fuzz gate all pass (`smoke-net-lo`,
-> `smoke-net`, `smoke-net-fuzz`); liblwip.a is linked into the kernel. Begin
-> **Layer 6 — AETHER** (the AI-native agent layer). Read SESSION_HANDOFF.md in
-> full. Run `graph_session_primer()`. Run the full gate set and confirm green.
-> Write **ADR-026 + DDR-AETHER before any code**. Do NOT restart earlier slices."**
+> **"NET-B (lwIP) AND Layer 6 (AETHER) are COMPLETE and CI-green. AETHER ships
+> the agent layer (ADR-026 + DDR-AETHER): kernel action queue + append-only audit
+> + per-process mem cap + syscall rate limit, 10 NSI calls (29–38), CAP_SOVEREIGN/
+> CAP_AGENT, and the ring-3 daemon+agent — gates `smoke-aether`, `smoke-aether-
+> queue`, `smoke-aether-sec` all pass (32 gates total). Begin the next slice —
+> **Layer 7 (UI/UX)** per the binding brief `docs/design/LAYER7_UI_UX_BRIEF.md`,
+> or extend agent capabilities (a ring-3 socket NSI to unlock live Ollama
+> inference is the top deferred item). Read this file in full, run
+> `graph_session_primer()`, confirm the gate set is green, and write the ADR/DDR
+> before any code. Do NOT restart earlier slices."**
 
 Concretely:
 1. Read this whole file (esp. §0.1 — current state).
@@ -34,7 +38,13 @@ Concretely:
    chains freed). Gates **`smoke-net-lo`** (`PRADYOS_NET_LO_OK`), **`smoke-net`**
    (host→guest TCP echo on :8007, `PRADYOS_NET_TCP_OK`), **`smoke-net-fuzz`**
    (malformed frames + SYN flood, no panic, `PRADYOS_NET_FUZZ_OK`) — all in CI.
-   **Begin Layer 6 (AETHER, ADR-026) next.**
+   **Layer 6 (AETHER) is also COMPLETE and CI-green** (ADR-026 + DDR-AETHER):
+   `kernel/aether/` (queue/audit/mem/rate, PMM-pool rings), NSI 29–38 in
+   `kernel/syscall/sys_aether.c`, `CAP_SOVEREIGN`/`CAP_AGENT`, and the ring-3
+   `user/aether_daemon.c` + `user/agent_base.c`. Gates `smoke-aether`,
+   `smoke-aether-queue`, `smoke-aether-sec` in CI (32 gates total). Deferred:
+   live Ollama (needs a ring-3 socket NSI), SFS config read, IPC console.
+   **Begin Layer 7 (UI/UX) next, or a socket NSI for live inference.**
 
 **5d/5e closed this session** (HEAD `9f310da`): per-thread FPU save (ADR-023 §D8),
 pradyos-init PID 1 (ADR-023 §5d), and the **PRISM shell** (ADR-024) — interactive

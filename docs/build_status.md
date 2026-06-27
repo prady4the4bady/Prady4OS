@@ -329,7 +329,29 @@ malformed/truncated frames + a 256-segment SYN flood to a closed port fed into t
 RX path; kernel survives, no panic → `PRADYOS_NET_FUZZ_OK`). Stage2 kernel load
 raised to 11×64 sectors (352 KiB) to fit liblwip.a. Serial print paths carry only
 fixed sentinels — no kernel pointers leak to ring-3/network output. 29 gates total.
-**Next: Layer 6 (AETHER).**
+**Layer 6 (AETHER) COMPLETE:** the AI-native agent layer (ADR-026 + DDR-AETHER).
+An untrusted ring-3 *agent* proposes consequential actions that the kernel
+arbitrates. `kernel/aether/` holds a 256-entry action queue and a 4096-entry
+append-only audit ring (both PMM-pool allocated, not BSS — the low-mem image cap),
+a sovereign/manual mode flag (default sovereign auto-approves; process-spawn always
+PENDING), a per-process 128 MiB memory cap with clean OOM kill, and a 60 syscall/s
+rate limit; the kill *decision* (log+audit) is split from the kill *action*
+(sched_exit) so every bound is unit-testable in-boot. 10 append-only NSI calls
+(`SYS_GET_MODE`..`SYS_SET_MEM_LIMIT`, 29–38) in `kernel/syscall/sys_aether.c`,
+all crossing copyin/copyout; authority is the kernel-set per-process flag
+(`is_agent`/`is_sovereign`), never a user token (no self-escalation). `cap.h`
+gained `CAP_SOVEREIGN`/`CAP_AGENT`. Userspace: `user/aether_daemon.c` (PID-2,
+CAP_SOVEREIGN, spawns the agent) and `user/agent_base.c` (CAP_AGENT, submit→poll→
+execute). Root cause fixed: `sched_create` left the appended TCB fields
+uninitialised (kmalloc does not zero), so processes read `is_agent`!=0 and were
+spuriously killed — now zeroed. Gates **`smoke-aether`** (daemon→agent→submit→
+approve→execute→`PRADYOS_AGENT_DONE`), **`smoke-aether-queue`**
+(`PRADYOS_AETHER_QUEUE_OK`), **`smoke-aether-sec`** (queue overflow, audit wrap,
+OOM/rate kill, no self-escalation). 32 gates total.
+**Deferred (ADR-026):** live Ollama inference (HTTP/JSON over lwIP) — needs a
+ring-3 socket NSI (lwIP is in-kernel today); SFS `/etc/aether/config` reading
+(reference build defaults to test mode); the daemon's full NIA IPC console.
+**Next: Layer 7 (UI/UX) per the binding brief, or further agent capabilities.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
