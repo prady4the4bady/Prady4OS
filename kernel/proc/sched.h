@@ -93,6 +93,16 @@ struct tcb {
      * RBP/RBX/R12-R15. `forked` selects the launch path in user_launch. */
     int        forked;
     struct regs fork_regs;
+
+    /* AETHER agent governance (Layer 6, ADR-026). Appended at struct end so the
+     * ~30 includers of sched.h keep their field offsets. Zero for non-agents
+     * (kmalloc'd TCB is zeroed), so a 0 mem_limit lazily means 128 MiB. */
+    uint32_t   is_agent;        /* 1 = CAP_AGENT process: rate-limited + mem-capped */
+    uint32_t   is_sovereign;    /* 1 = CAP_SOVEREIGN (operator/daemon): mode+approve */
+    uint64_t   mem_limit;       /* hard cap in bytes; 0 -> AETHER_MEM_DEFAULT       */
+    uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
+    uint32_t   sc_count;        /* syscalls issued in the current rate window       */
+    uint64_t   sc_window_start; /* g_ticks at the window's open                     */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

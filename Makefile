@@ -68,7 +68,8 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/rtc/rtc.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
-               kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c
+               kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
+               kernel/aether/aether.c kernel/aether/aether_queue.c kernel/aether/aether_audit.c kernel/aether/aether_mem.c kernel/syscall/sys_aether.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -81,13 +82,14 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/virtio_net.o build/netbuf.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o \
+               build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o \
                build/lwip_port.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
                -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
-               -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso
+               -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso -Ikernel/aether
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
                -fno-stack-protector -fno-omit-frame-pointer \
@@ -102,7 +104,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether-queue smoke-aether-sec smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -231,6 +233,11 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/string.c        -o build/string.o
 	$(CC) $(KCFLAGS) -c kernel/arch/x86_64/cpu_mitigations.c -o build/cpu_mitigations.o
 	$(CC) $(KCFLAGS) -c kernel/vdso/vdso_page.c -o build/vdso_page.o
+	$(CC) $(KCFLAGS) -c kernel/aether/aether.c            -o build/aether.o
+	$(CC) $(KCFLAGS) -c kernel/aether/aether_queue.c      -o build/aether_queue.o
+	$(CC) $(KCFLAGS) -c kernel/aether/aether_audit.c      -o build/aether_audit.o
+	$(CC) $(KCFLAGS) -c kernel/aether/aether_mem.c        -o build/aether_mem.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/sys_aether.c       -o build/sys_aether.o
 	# NET-B: the lwIP-port glue (first-party, -Werror) — lwIP headers via -isystem
 	# (no warnings from them), our shims via -I, -nostdlibinc drops host glibc.
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
@@ -530,6 +537,19 @@ smoke-net-lo: $(IMG) fat-image sfs-image
 # the sentinel; boot_test.sh already fails the run on any panic string.
 smoke-net-fuzz: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_NET_FUZZ_OK \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# AETHER queue gate (ADR-026 §D2/§D3): the in-boot self-test submits an action,
+# sovereign mode auto-approves it, and an audit entry is written.
+smoke-aether-queue: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_AETHER_QUEUE_OK \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# AETHER security gate (ADR-026 §security): every bound is exercised in-boot —
+# queue overflow -> -EAGAIN, audit ring wrap, per-agent OOM kill, syscall
+# rate-limit kill, and the no-self-escalation mem-cap rejection. No panic.
+smoke-aether-sec: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'AETHER_SEC_QUEUE_FULL\nAETHER_AUDIT_WRAP\nAGENT_OOM_KILLED\nAGENT_RATE_LIMITED\nAETHER_SEC_CAP_DENIED\nPRADYOS_AETHER_SEC_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # PROC-A pipe/dup2 gate: systest pipe()s, round-trips "PIPE" through the ring, and

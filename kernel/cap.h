@@ -34,6 +34,11 @@ typedef uint64_t cap_t;
 #define CAP_FS_SFS_READ   (1u << 13)  /* read an SFS volume                     */
 #define CAP_FS_SFS_WRITE  (1u << 14)  /* write/transact on an SFS volume         */
 #define CAP_FS_SFS_ADMIN  (1u << 15)  /* mkfs/snapshot/compaction on SFS         */
+/* AETHER agent layer (Layer 6, ADR-026 §D6). Vocabulary bits; an agent's actual
+ * possession is the kernel-set per-process flag (tcb.is_agent / is_sovereign) so
+ * a process can never mint these into its own table (no self-escalation). */
+#define CAP_SOVEREIGN     (1u << 16)  /* change global mode; approve/reject actions */
+#define CAP_AGENT         (1u << 17)  /* submit/poll actions; spawn/kill agents      */
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u

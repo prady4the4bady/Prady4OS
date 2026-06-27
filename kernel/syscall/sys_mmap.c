@@ -18,6 +18,7 @@
 #include "kheap.h"     /* ptnode_alloc / ptnode_free */
 #include "pmm.h"       /* PAGE_SIZE */
 #include "errno.h"
+#include "aether.h"    /* per-agent memory cap (Layer 6, ADR-026) */
 
 #define PROT_READ   0x1
 #define PROT_WRITE  0x2
@@ -98,6 +99,11 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags) {
     if (!v)
         return -ENOMEM;                          /* too many regions */
 
+    /* AETHER memory cap (ADR-026 D5): charge this growth against the agent's
+     * 128 MiB hard cap; an over-cap agent is cleanly killed, never a panic. */
+    if (aether_mem_charge(t, npages * PAGE_SIZE) < 0)
+        sched_exit(137);                         /* AGENT_OOM_KILLED; never returns */
+
     uint64_t pflags = VMM_USER | VMM_NX;
     if (prot & PROT_WRITE)
         pflags |= VMM_RW;
@@ -129,6 +135,7 @@ static long sys_munmap(long a_addr, long a_len, long a3, long a4) {
     if (!v)
         return -EINVAL;
     unmap_range(t->cr3, v->base, v->npages);
+    aether_mem_uncharge(t, v->npages * PAGE_SIZE);
     v->base = 0;
     v->npages = 0;
     return 0;

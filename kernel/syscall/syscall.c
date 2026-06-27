@@ -16,6 +16,9 @@
 #include "epoll.h"     /* SYS_EPOLL_* handlers (PROC-B) */
 #include "signal.h"    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
 #include "sys_io_uring.h" /* SYS_IO_URING_* handlers (PROC-E) */
+#include "aether.h"       /* AETHER syscalls + per-agent rate limit (Layer 6) */
+
+void sys_aether_register(void);   /* kernel/syscall/sys_aether.c */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
@@ -53,6 +56,12 @@ void syscall_register(unsigned num, syscall_fn fn) {
 long syscall_dispatch(long num, long a1, long a2, long a3, long a4) {
     if (num < 0 || num >= MAX_SYSCALLS || !table[num])
         return -ENOSYS;
+    /* AETHER rate limit (ADR-026 D7): agent processes get 60 syscalls / 1 s; an
+     * over-budget agent is cleanly killed here and never reaches the handler.
+     * Non-agents (init, PRISM, kernel) are exempt, so existing gates are intact. */
+    if (current_thread && current_thread->is_agent &&
+        aether_rate_check(current_thread) < 0)
+        sched_exit(137);                         /* never returns */
     return table[num](a1, a2, a3, a4);
 }
 
@@ -106,6 +115,7 @@ void syscall_init(void) {
     epoll_register();                     /* SYS_EPOLL_* (PROC-B) */
     signal_register();                    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
     sys_io_uring_register();              /* SYS_IO_URING_* (PROC-E) */
+    sys_aether_register();                /* SYS_GET_MODE..SYS_SET_MEM_LIMIT (Layer 6) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

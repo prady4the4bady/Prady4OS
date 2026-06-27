@@ -38,6 +38,17 @@
 #define SYS_IO_URING_ENTER 26 /* (ring_va, to_submit) -> n done    (PROC-E)     */
 #define SYS_SET_TLS  27  /* (fs_base) -> 0; set the thread pointer  (PROC-D, ADR-023) */
 #define SYS_WRITEV   28  /* (fd, iov, iovcnt) -> bytes written     (PROC-D, ADR-023) */
+/* AETHER agent layer (Layer 6, ADR-026 §D6 / DDR §1). Append-only after 28. */
+#define SYS_GET_MODE       29  /* () -> mode (0|1)                                  */
+#define SYS_SET_MODE       30  /* (mode) -> 0 | -EPERM       (needs CAP_SOVEREIGN)  */
+#define SYS_SUBMIT_ACTION  31  /* (type, payload*, len) -> action_id | -EAGAIN      */
+#define SYS_POLL_RESULT    32  /* (action_id) -> status | -ESRCH                    */
+#define SYS_APPROVE_ACTION 33  /* (action_id) -> 0 | -EPERM  (CAP_SOVEREIGN)        */
+#define SYS_REJECT_ACTION  34  /* (action_id) -> 0 | -EPERM  (CAP_SOVEREIGN)        */
+#define SYS_SPAWN_AGENT    35  /* (path*, task*) -> pid | -EPERM   (CAP_AGENT)      */
+#define SYS_KILL_AGENT     36  /* (pid) -> 0 | -EPERM|-ESRCH       (CAP_AGENT)      */
+#define SYS_READ_AUDIT     37  /* (buf*, max) -> n entries copied                   */
+#define SYS_SET_MEM_LIMIT  38  /* (pid, bytes) -> 0 | -EPERM (lower-only)           */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
