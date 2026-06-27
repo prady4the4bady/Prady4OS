@@ -49,6 +49,8 @@ USER_CMUSL_SRC := user/cmusl.c
 USER_CMUSL_ELF := build/cmusl.elf
 USER_INIT_SRC  := user/init.c          # 5d: pradyos-init (PID 1), musl C program
 USER_INIT_ELF  := build/init.elf
+USER_PRISM_SRC := user/prism.c         # 5e: PRISM shell — placed on FAT32, init execve's it
+USER_PRISM_ELF := build/prism.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -99,7 +101,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl image smoke smoke-fpu smoke-init smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -137,7 +139,7 @@ musl: $(MUSL_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -161,7 +163,10 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	# 5d: pradyos-init (PID 1), same musl-C link recipe as cmusl.
 	$(CC) $(USER_C_CFLAGS) -c $(USER_INIT_SRC) -o build/init.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/init.o $(MUSL_LIB) -o $(USER_INIT_ELF)
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	# 5e: PRISM shell, same musl-C link recipe; embedded + loaded from SFS like init.
+	$(CC) $(USER_C_CFLAGS) -c $(USER_PRISM_SRC) -o build/prism.o
+	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/prism.o $(MUSL_LIB) -o $(USER_PRISM_ELF)
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -353,6 +358,32 @@ smoke-fpu: $(IMG) fat-image sfs-image
 smoke-init: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'PRADYOS_INIT_OK\ninit: reaped PID=')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# 5e PRISM shell gate (ADR-024 §D6): boot with -serial stdio, pipe a command
+# script (echo / help / exit) into the guest UART, and assert the shell came up
+# and ran the builtins with no kernel panic. Self-contained (boot_test.sh is
+# output-only). FAT32 carries /PRISM.ELF (init execve's it); SFS carries init.
+smoke-shell: $(IMG) fat-image sfs-image
+	@echo "[shell] booting PRISM; feeding commands once the prompt appears..."
+	@# The FIFO must live on a real Linux fs — DrvFs (/mnt/c, where build/ is) does
+	@# not support FIFOs. The serial log stays in build/.
+	@SHIN=$$(mktemp -u /tmp/pradyos_prism.XXXXXX); rm -f build/shell_serial.log; mkfifo "$$SHIN"; \
+	( exec > "$$SHIN"; \
+	  for i in $$(seq 1 300); do grep -q PRISM_READY build/shell_serial.log 2>/dev/null && break; sleep 0.1; done; \
+	  printf 'echo prism-echo-marker\n'; sleep 0.5; printf 'help\n'; sleep 0.5; printf 'exit\n'; sleep 0.5 ) & \
+	timeout 60 qemu-system-x86_64 -M q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=disk1 -device virtio-blk-pci,drive=disk1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=disk2 -device virtio-blk-pci,drive=disk2 \
+	    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+	    -serial stdio -display none -monitor none < "$$SHIN" > build/shell_serial.log 2>/dev/null || true; \
+	rm -f "$$SHIN"
+	@grep -q "PRISM_READY"            build/shell_serial.log || { echo "[shell] FAIL: no PRISM_READY";  tail -30 build/shell_serial.log; exit 1; }
+	@grep -q "prism> "               build/shell_serial.log || { echo "[shell] FAIL: no prism> prompt"; exit 1; }
+	@grep -q "prism-echo-marker"     build/shell_serial.log || { echo "[shell] FAIL: echo builtin";     exit 1; }
+	@grep -q "builtins: help echo"   build/shell_serial.log || { echo "[shell] FAIL: help builtin";     exit 1; }
+	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help, clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

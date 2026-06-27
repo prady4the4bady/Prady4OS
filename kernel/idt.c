@@ -85,8 +85,8 @@ static void dump_line(const char *label, uint64_t v) {
  * level-triggered and frequently SHARED (several virtio devices on one line), so
  * each line holds a small chain of handlers — each driver's handler reads its own
  * device's ISR (read-to-clear) and acts only on its own interrupt. Registration
- * is idempotent so a driver registered on the same line N times occupies 1 slot. */
-typedef void (*irq_handler_fn)(void);
+ * is idempotent so a driver registered on the same line N times occupies 1 slot.
+ * irq_handler_fn + irq_register are declared in irq.h. */
 #define IRQ_MAX_HANDLERS 4
 static irq_handler_fn irq_handlers[16][IRQ_MAX_HANDLERS];
 

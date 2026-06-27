@@ -23,6 +23,11 @@ static syscall_fn table[MAX_SYSCALLS];
 uint64_t syscall_kstack_top;
 uint64_t syscall_user_rsp;
 uint64_t syscall_user_rip;
+/* Parent's callee-saved registers + RFLAGS at SYSCALL entry, for full-register
+ * fork (the child resumes with these, RAX=0). Captured by syscall_entry.asm. */
+uint64_t syscall_user_rbx, syscall_user_rbp;
+uint64_t syscall_user_r12, syscall_user_r13, syscall_user_r14, syscall_user_r15;
+uint64_t syscall_user_rflags;
 
 extern void syscall_entry(void);   /* arch/x86_64/syscall_entry.asm */
 

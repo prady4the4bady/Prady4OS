@@ -86,6 +86,13 @@ struct tcb {
      * attribute keeps the field on a 16-byte boundary). Saved on switch-out,
      * restored on switch-in, so concurrent FPU users never clobber each other. */
     uint8_t    fpu_state[512] __attribute__((aligned(16)));
+
+    /* Full-register fork (5e). A forked child resumes via signal_sigreturn with
+     * the parent's complete register frame (RAX=0) instead of enter_user_mode
+     * (which zeroes the GP regs) — so non-inlined code in the child keeps a valid
+     * RBP/RBX/R12-R15. `forked` selects the launch path in user_launch. */
+    int        forked;
+    struct regs fork_regs;
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

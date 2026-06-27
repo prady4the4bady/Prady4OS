@@ -326,6 +326,8 @@ extern const unsigned char fputest_elf[];        /* 5d: FPU context-switch test 
 extern const unsigned char fputest_elf_end[];
 extern const unsigned char init_elf[];           /* 5d: pradyos-init (PID 1) */
 extern const unsigned char init_elf_end[];
+extern const unsigned char prism_elf[];          /* 5e: PRISM shell */
+extern const unsigned char prism_elf_end[];
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -641,6 +643,13 @@ static void fs_test_thread(void *arg) {
                                                     init_elf, init_elf_end);
                 if (it)
                     sched_set_init_pid(it->pid);
+                /* 5e: launch the PRISM shell as init's child (execve-based
+                 * respawn is deferred — ADR-024 §D5). It reads commands from the
+                 * console; init reaps it on exit. */
+                struct tcb *pr = user_boot_from_sfs(cap, smnt, "PRISM.ELF",
+                                                    prism_elf, prism_elf_end);
+                if (pr && it)
+                    pr->parent_pid = it->pid;
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */
@@ -964,6 +973,7 @@ void kmain(struct boot_info *bi) {
     /* Hardware interrupts: PIC + PIT, then enable and watch the clock tick. */
     pic_remap();
     pit_init(100);                       /* 100 Hz */
+    console_rx_init();                   /* 5e: arm COM1 RX IRQ + ring buffer */
     kputs("NEXUS: PIC remapped, PIT @100Hz; enabling interrupts (sti)\r\n");
     __asm__ volatile("sti");
 

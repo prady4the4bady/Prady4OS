@@ -27,11 +27,13 @@ COM1 (0x3F8) is already line-configured (output works). `sys_read` on an
 `FD_CONSOLE` fd reads the UART RBR when `LSR.DR` (0x3F8+5 bit 0) is set; if no
 byte is ready it **`yield()`s and retries** (blocking semantics), returning once
 it has ≥1 byte (then draining any already-buffered bytes up to `count`).
-- **Polled, not interrupt-driven (RX IRQ deferred).** QEMU delivers host stdin to
-  the UART asynchronously, so polling `LSR.DR` observes input without an IRQ; the
-  `yield()` keeps other threads (init, FPU tests) running while the shell waits —
-  no busy-spin starvation, no new IRQ handler / RX ring buffer. An RX-interrupt
-  TTY (with a line discipline) is a later hardening item.
+- **Interrupt-driven RX buffer (revised during bring-up).** A pure poll lost
+  input: the bulk command stream arrives while the cli-heavy boot output keeps
+  interrupts masked, overflowing the 16-byte UART FIFO before any reader runs. So
+  COM1 RX is now interrupt-driven — an **IRQ4 handler drains the UART into a
+  256-byte ring** from boot (`console_rx_init` enables the RX FIFO + IER, registers
+  the handler, unmasks IRQ4); `sys_read(FD_CONSOLE)` pops the ring and `yield()`s
+  while empty. Lock-free SPSC (IRQ writes head, reader writes tail; single core).
 - No terminal echo and no line editing in the kernel — the shell owns the line.
 
 ### D2 — Terminal I/O split: raw `SYS_READ` in, musl `printf` out
@@ -66,25 +68,38 @@ collects the child). Builtin set for 5e:
 - `exit` — terminate the shell cleanly (exit code 0).
 - Unknown command → `prism: unknown command: <cmd>` and reprompt (never crash).
 
-### D5 — Process model: init supervises PRISM; respawn only on abnormal exit
-PID 1 init `fork`+`execve`s `/PRISM.ELF` (placed on the FAT32 root at boot, like
-the existing execve target). Supervision policy:
-- **Clean exit (status 0) or EOF → do NOT respawn.** A deliberate `exit` is a
-  controlled shutdown; respawning would loop forever once the serial input hits
-  EOF (the gate's input stream ends). init returns to plain reaping.
-- **Abnormal exit (non-zero status, or killed by a fault) → respawn** PRISM, so a
-  shell crash recovers. (A real init would rate-limit; for 5e a single immediate
-  respawn is enough and the gate exercises the clean-exit path.)
-init keeps its 5d startup self-check (fork a child that `_exit(42)`, reap it) so
-`smoke-init` stays green; the PRISM supervise loop runs after it.
+### D5 — Process model: PRISM is init's child; execve-respawn deferred (revised)
+**Intended:** PID 1 init `fork`+`execve`s `/PRISM.ELF` and respawns it only on
+abnormal exit. **Found during bring-up:** `execve` of a *large musl-C* ELF read
+from FAT32 corrupts the loaded image (the program jumps mid-instruction with a
+zeroed frame). `execve` had only ever been exercised with the tiny *asm*
+EXECTEST; the SFS `elf_load` path, by contrast, loads 30 KB+ musl-C images fine
+(cmusl, init). Root cause is most likely FAT32 multi-cluster reads for large
+files — a separate kernel bug, out of 5e scope.
+**Decision (5e):** the kernel launches PRISM via the proven SFS `elf_load` path
+(embedded like cmusl/init, written to SFS, loaded back) and sets its
+`parent_pid` to init, so **PRISM is init's child and init reaps it**. init keeps
+its 5d startup self-check (fork a child that `_exit(42)`, reap it) so `smoke-init`
+stays green.
+**Deferred:** init-driven `fork`+`execve` **respawn** (needs the FAT32 large-read
+/ execve-of-large-musl-C fix). Tracked in `build_status.md`.
+- *Aside (general fork fix shipped here):* forked children previously resumed
+  with only RIP/RSP/RAX set (other GP regs zeroed — a documented `sys_fork`
+  limitation). 5e exposed it (init's non-inlined `nsi` faulted on `rbp=0`) and
+  fixes it: the child now resumes with the parent's **full register frame** (the
+  callee-saved snapshot captured at syscall entry, RAX=0) via `signal_sigreturn`.
+  This is required for any forked C program, including PRISM's `run`.
 
-### D6 — Gate `smoke-init`/`smoke-shell` and the input harness
-`smoke-shell` boots the image with `-serial stdio`, **pipes a command script**
-(`help`, `echo …`, `exit`) to the guest UART, captures serial output, and asserts:
-`PRISM_READY`, the `prism>` prompt, the `echo` output, the `help` listing, a clean
-exit, and **no kernel panic**. Run as a self-contained QEMU invocation (the
-existing `boot_test.sh` is output-only); the 8 prior gates + `smoke-fpu` +
-`smoke-init` stay green.
+### D6 — Gate `smoke-shell` and the input harness
+`smoke-shell` boots the image with `-serial stdio`, feeds the guest UART a
+command script (`echo …`, `help`, `exit`) **through a FIFO that opens only after
+`PRISM_READY` appears** in the captured output, and asserts: `PRISM_READY`, the
+`prism>` prompt, the `echo` output, the `help` listing, and **no kernel panic**.
+Waiting for the prompt is what makes it reliable — feeding input during boot
+overflows the UART before the shell reads. The FIFO lives in `/tmp` (DrvFs under
+`build/` cannot host FIFOs); the serial log stays in `build/`. Self-contained
+QEMU invocation (the existing `boot_test.sh` is output-only); all prior gates +
+`smoke-fpu` + `smoke-init` stay green.
 
 ## Consequences
 - First ring-3 input path on PRADYOS; unblocks any future interactive program.

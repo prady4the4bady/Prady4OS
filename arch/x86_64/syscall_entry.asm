@@ -23,10 +23,28 @@ extern syscall_dispatch
 extern syscall_kstack_top
 extern syscall_user_rsp
 extern syscall_user_rip
+; Callee-saved snapshot for full-register fork (the child resumes with the
+; parent's RBX/RBP/R12-R15 + RFLAGS, RAX=0 — see sys_fork / signal_sigreturn).
+extern syscall_user_rbx
+extern syscall_user_rbp
+extern syscall_user_r12
+extern syscall_user_r13
+extern syscall_user_r14
+extern syscall_user_r15
+extern syscall_user_rflags
 
 syscall_entry:
     mov [rel syscall_user_rsp], rsp     ; stash user RSP briefly (single-CPU, IF=0)
     mov [rel syscall_user_rip], rcx     ; stash user return RIP (fork's child resume point)
+    ; snapshot the user's callee-saved regs + RFLAGS (still the user's values here,
+    ; before the C dispatch; fork's child needs them to resume exactly).
+    mov [rel syscall_user_rbx], rbx
+    mov [rel syscall_user_rbp], rbp
+    mov [rel syscall_user_r12], r12
+    mov [rel syscall_user_r13], r13
+    mov [rel syscall_user_r14], r14
+    mov [rel syscall_user_r15], r15
+    mov [rel syscall_user_rflags], r11
     mov rsp, [rel syscall_kstack_top]   ; switch to this thread's kernel stack
 
     push qword [rel syscall_user_rsp]   ; save user RSP on the kernel stack

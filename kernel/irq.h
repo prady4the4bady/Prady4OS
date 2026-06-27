@@ -17,6 +17,12 @@ void pic_eoi(uint64_t vector);
 /* Unmask a single IRQ line (and the cascade for slave IRQs 8..15). */
 void pic_unmask(unsigned irq);
 
+/* Register a handler on a (possibly shared) IRQ line; the dispatcher (idt.c)
+ * chains every handler registered on the line. Handlers take no args and run
+ * with interrupts masked. */
+typedef void (*irq_handler_fn)(void);
+void irq_register(unsigned irq, irq_handler_fn fn);
+
 /* Program PIT channel 0 to fire IRQ0 at `hz` Hz (square wave, mode 3). */
 void pit_init(uint32_t hz);
 

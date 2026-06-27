@@ -25,6 +25,10 @@ static inline void fpu_restore(const void *area) {
 
 extern void context_switch(uint64_t *save_rsp, uint64_t load_rsp);  /* context.asm */
 extern void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t arg); /* usermode.asm */
+extern void signal_sigreturn(struct regs *saved);  /* usermode.asm — full-frame iretq */
+
+#define USER_CS_SEL 0x23u    /* (0x20 | 3): user code64, RPL 3 — matches usermode.asm */
+#define USER_SS_SEL 0x1Bu    /* (0x18 | 3): user data,   RPL 3 */
 
 struct tcb *current_thread;       /* NULL until sched_init (safe: sched_tick checks) */
 static struct tcb idle_tcb;
@@ -101,6 +105,7 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
         t->sig_handlers[i] = 0;
     t->sig_active = 0;
     t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
+    t->forked = 0;                 /* 5e: normal launch unless a fork sets fork_regs */
     memcpy(t->fpu_state, fpu_init_template, sizeof t->fpu_state);  /* 5d: clean FPU */
 
     /* Seed the stack with a context_switch frame whose RET enters the
@@ -130,6 +135,8 @@ static void user_launch(void *arg) {
     uint64_t ktop = t->kstack_base + STACK_SIZE;
     tss_set_rsp0(ktop);
     syscall_kstack_top = ktop;
+    if (t->forked)
+        signal_sigreturn(&t->fork_regs);   /* resume with the parent's full reg set, RAX=0 */
     enter_user_mode(t->user_rip, t->user_stack, t->user_arg);
 }
 
@@ -167,6 +174,22 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
         t->fs_base     = parent->fs_base; /* PROC-D: child inherits the thread pointer */
         memcpy(t->fpu_state, parent->fpu_state, sizeof t->fpu_state);  /* 5d: inherit FPU */
+        /* 5e: full-register fork. Resume the child with the parent's complete
+         * register frame (callee-saved snapshot from syscall entry) and RAX=0,
+         * via signal_sigreturn — so non-inlined code keeps a valid RBP/RBX/R12-15.
+         * Caller-saved regs (RDI/RSI/RDX/RCX/R8-R11) are 0: per the syscall ABI the
+         * parent's post-`syscall` code does not rely on them. */
+        t->forked = 1;
+        struct regs *fr = &t->fork_regs;
+        memset(fr, 0, sizeof *fr);
+        fr->rbx = syscall_user_rbx;  fr->rbp = syscall_user_rbp;
+        fr->r12 = syscall_user_r12;  fr->r13 = syscall_user_r13;
+        fr->r14 = syscall_user_r14;  fr->r15 = syscall_user_r15;
+        fr->rax = 0;                              /* fork returns 0 in the child */
+        fr->rip = entry;                          /* = syscall_user_rip          */
+        fr->rsp = user_rsp;                       /* = syscall_user_rsp          */
+        fr->rflags = syscall_user_rflags;         /* parent's flags (IF set)     */
+        fr->cs = USER_CS_SEL;  fr->ss = USER_SS_SEL;
         /* Replace the fresh (empty) cap + fd tables with copies of the parent's. */
         if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0) {
             sched_destroy(t);

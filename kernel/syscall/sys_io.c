@@ -166,8 +166,32 @@ static long sys_read(long fd, long ubuf, long count, long a4) {
         return total;
     }
 
-    /* Console input is not implemented yet. */
-    return -ENOSYS;
+    if (e->kind == FD_CONSOLE) {
+        /* 5e (ADR-024 §D1): blocking console read. Poll COM1 RX, yielding while
+         * empty so other threads run; return once >=1 byte arrives, draining any
+         * already-buffered bytes up to `count`. No echo / line discipline here —
+         * the shell owns the line. */
+        if (count == 0)
+            return 0;
+        char kbuf[256];
+        long n = 0;
+        for (;;) {
+            int c = kgetc_nb();
+            if (c >= 0) { kbuf[n++] = (char)c; break; }
+            yield();
+        }
+        while (n < count && n < (long)sizeof kbuf) {
+            int c = kgetc_nb();
+            if (c < 0)
+                break;
+            kbuf[n++] = (char)c;
+        }
+        if (copyout((void __user *)(uintptr_t)ubuf, kbuf, (size_t)n) < 0)
+            return -EFAULT;
+        return n;
+    }
+
+    return -EBADF;
 }
 
 void sys_io_register(void) {

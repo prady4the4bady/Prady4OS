@@ -290,8 +290,29 @@ reparents a dying thread's children to init (PID 1 reaps the whole tree) and
 kernel reaper remains a backstop. init issues fork/wait4/yield by raw NSI number
 (musl's wrappers pull in clone/cancellation plumbing not vendored). New gates
 `smoke-fpu`, `smoke-init` (both in CI). NSI append-only (no new number — wait4=16
-extended); ADR-021 W^X untouched. Still deferred: NET-B (lwIP, §10).
-**Next: 5e PRISM shell.** Layer 6 (AETHER) begins after 5e + NET-B.
+extended); ADR-021 W^X untouched.
+
+**5e PRISM shell — COMPLETE (ADR-024).** `user/prism.c` is the first interactive
+ring-3 shell: prints `PRISM_READY`, shows `prism> `, reads command lines from the
+console, and dispatches builtins `help`/`echo`/`cat`/`run`/`ls`/`ps`/`exit`
+(`echo`/`cat`/`run`/`exit` real; `ls`/`ps` minimal stubs pending
+`SYS_GETDENTS`/process-table). Input via raw `SYS_READ`, output via musl `printf`.
+Kernel support (no new NSI number): **console RX** — `sys_read(FD_CONSOLE)` now
+works, fed by an **IRQ4-driven 256-byte ring** (`console_rx_init` in `console.c`)
+so bulk input isn't lost during the cli-heavy boot; **full-register fork** — a
+forked child now resumes with the parent's complete register frame (callee-saved
+snapshot at syscall entry + RAX=0) via `signal_sigreturn`, fixing a documented
+`sys_fork` limitation that left `rbp`/`rbx`/`r12-15` zeroed (broke non-inlined C
+in the child / PRISM's `run`). PRISM is launched by the kernel via the proven SFS
+`elf_load` path as **init's child** (init reaps it). New gate **`smoke-shell`**
+(in CI): feeds `echo`/`help`/`exit` through a FIFO once `PRISM_READY` shows, and
+checks the builtin output with no panic.
+**Deferred (ADR-024):** init `fork`+`execve` **respawn** of PRISM — `execve` of a
+large musl-C ELF from FAT32 corrupts (likely FAT32 multi-cluster read; SFS large
+read is fine), a separate kernel fix; also `ls`/`ps` full impl, RX line
+discipline/echo, pipes/redirection/quoting/job-control/scripting. Still deferred:
+NET-B (lwIP, §10).
+**Next: NET-B (lwIP).** Layer 6 (AETHER) begins after NET-B.
 **Last updated:** 2026-06-27
 
 ## Phase 0 — Toolchain & Build System

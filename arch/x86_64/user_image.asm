@@ -69,3 +69,11 @@ global init_elf_end
 init_elf:
     incbin "build/init.elf"
 init_elf_end:
+
+; 5e: PRISM shell (musl C). The kernel writes it to SFS and loads it as init's
+; child (execve-from-FAT32 of a large image is deferred — see ADR-024 §D5).
+global prism_elf
+global prism_elf_end
+prism_elf:
+    incbin "build/prism.elf"
+prism_elf_end:

@@ -54,3 +54,8 @@ extern uint64_t syscall_user_rsp;
 /* User RIP/RSP of the in-flight syscall (captured by syscall_entry.asm). fork
  * uses these as the child's ring-3 resume point. Valid only inside a syscall. */
 extern uint64_t syscall_user_rip;
+/* Parent's callee-saved regs + RFLAGS captured at SYSCALL entry, used by fork to
+ * resume the child with a full register set (RAX=0). Valid only inside a syscall. */
+extern uint64_t syscall_user_rbx, syscall_user_rbp;
+extern uint64_t syscall_user_r12, syscall_user_r13, syscall_user_r14, syscall_user_r15;
+extern uint64_t syscall_user_rflags;

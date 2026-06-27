@@ -8,9 +8,12 @@
  * the parent returns the child's pid through the normal SYSRET path.
  *
  * The child's resume point is the caller's user RIP/RSP captured at SYSCALL entry
- * (syscall_user_rip / syscall_user_rsp). Registers other than RAX are not
- * replicated in the child (enter_user_mode zeroes them) — a documented baseline
- * limitation; full register-state fork arrives with the signal/trap-frame work.
+ * (syscall_user_rip / syscall_user_rsp). Since 5e the child resumes with the
+ * parent's FULL register set — the callee-saved snapshot (RBX/RBP/R12-R15 +
+ * RFLAGS, also captured at syscall entry) plus RAX=0 — via signal_sigreturn, so
+ * non-inlined code in the child keeps a valid RBP/RBX/R12-R15 (sched.c builds the
+ * frame in sched_create_user_clone). Caller-saved regs are 0: the syscall ABI
+ * lets the parent's post-`syscall` code not depend on them.
  */
 #include "sys_fork.h"
 #include "sched.h"

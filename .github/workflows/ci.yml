@@ -56,6 +56,9 @@ jobs:
       - name: QEMU pradyos-init test (q35; PID 1 forks + reaps a child, 5d)
         run: make smoke-init
 
+      - name: QEMU PRISM shell test (q35; interactive shell over serial, 5e)
+        run: make smoke-shell
+
       - name: QEMU uaccess test (q35; copyin/copyout/copyinstr EFAULT contract)
         run: make smoke-uaccess
 

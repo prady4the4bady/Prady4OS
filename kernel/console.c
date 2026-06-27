@@ -7,6 +7,7 @@
  */
 #include "console.h"
 #include "io.h"
+#include "irq.h"            /* irq_register + pic_unmask for COM1 RX (5e) */
 
 #define COM1 0x3F8
 
@@ -22,6 +23,48 @@ static inline void irq_restore(uint64_t f) {
 void kputc(char c) {
     while ((inb(COM1 + 5) & 0x20) == 0) { }   /* wait for THRE */
     outb(COM1, (uint8_t)c);
+}
+
+/* COM1 RX ring buffer (5e). An IRQ4 handler drains the UART into this ring from
+ * boot, so console input (e.g. a shell's piped command stream) is never lost in
+ * the window before a reader runs — the 16-byte UART FIFO would overflow. Single
+ * producer (the IRQ) + single consumer (sys_read): head is written only by the
+ * IRQ, tail only by the reader, so it is lock-free on this single core. */
+#define RX_RING_SZ 256u
+static volatile uint8_t  rx_ring[RX_RING_SZ];
+static volatile uint32_t rx_head, rx_tail;
+
+/* IRQ4 handler: drain every byte the UART has into the ring (drop on full). */
+static void console_rx_irq(void) {
+    while (inb(COM1 + 5) & 0x01) {            /* LSR bit0: data ready */
+        uint8_t c = inb(COM1);               /* read RBR (also clears the IRQ) */
+        uint32_t nh = (rx_head + 1u) % RX_RING_SZ;
+        if (nh != rx_tail) {                 /* space available */
+            rx_ring[rx_head] = c;
+            rx_head = nh;
+        }
+    }
+}
+
+/* Arm COM1 receive: enable the RX FIFO + the Received-Data-Available interrupt,
+ * register the IRQ4 handler, and unmask IRQ4 at the PIC. Call once at boot after
+ * pic_remap(). */
+void console_rx_init(void) {
+    outb(COM1 + 2, 0x07);                     /* FCR: enable FIFO + clear RX/TX  */
+    outb(COM1 + 1, 0x01);                     /* IER: Received Data Available IRQ */
+    irq_register(4, console_rx_irq);          /* COM1 = IRQ4 */
+    pic_unmask(4);
+}
+
+/* Non-blocking console read (5e): one buffered byte, or -1 if the ring is empty.
+ * The blocking/line discipline lives in sys_read(FD_CONSOLE), which polls this
+ * and yields while waiting — see ADR-024 §D1. */
+int kgetc_nb(void) {
+    if (rx_tail == rx_head)
+        return -1;                            /* empty */
+    uint8_t c = rx_ring[rx_tail];
+    rx_tail = (rx_tail + 1u) % RX_RING_SZ;
+    return (int)c;
 }
 
 void kputs(const char *s) {

@@ -32,23 +32,31 @@ int main(void) {
     printf("PRADYOS_INIT_OK v1.0.0 2026-06-27\n");
     fflush(stdout);
 
-    /* Spawn one child that exits immediately, proving the reap path end to end.
-     * (A real init would exec a shell here — that is 5e.) The child runs no libc;
-     * it just _exit(42) via the raw NSI so its state is trivial. */
-    long kid = nsi(SYS_FORK, 0, 0, 0);
-    if (kid == 0)
+    /* Startup self-check (5d): fork a child that exits 42 and reap it, proving the
+     * reap path end to end. The child runs no libc — just _exit(42). */
+    long dummy = nsi(SYS_FORK, 0, 0, 0);
+    if (dummy == 0)
         nsi(SYS_EXIT, 42, 0, 0);          /* child: terminate; never returns */
+    if (dummy > 0) {
+        int st = 0;
+        long r = nsi(SYS_WAIT4, dummy, (long)&st, 0);   /* block until it exits */
+        if (r > 0) {
+            printf("init: reaped PID=%ld exit=%d\n", r, st);
+            fflush(stdout);
+        }
+    }
 
-    /* PID 1 reap loop: collect any exited child (kernel returns the raw exit code
-     * in `status`), poll with yield so we never busy-spin, and never exit. */
+    /* PID 1 reap loop: the kernel launches the PRISM shell as init's child
+     * (ADR-024 §D5); init collects it (and any orphan reparented here) and never
+     * exits. Poll with yield so we never busy-spin. */
     for (;;) {
-        int status = 0;
-        long pid = nsi(SYS_WAIT4, -1, (long)&status, WNOHANG);
-        if (pid > 0) {
-            printf("init: reaped PID=%ld exit=%d\n", pid, status);
+        int st = 0;
+        long r = nsi(SYS_WAIT4, -1, (long)&st, WNOHANG);
+        if (r > 0) {
+            printf("init: reaped PID=%ld exit=%d\n", r, st);
             fflush(stdout);
         } else {
-            nsi(SYS_YIELD, 0, 0, 0);      /* -ECHILD / -EAGAIN: nothing to reap */
+            nsi(SYS_YIELD, 0, 0, 0);
         }
     }
     return 0;                              /* unreachable; kernel panics if reached */
