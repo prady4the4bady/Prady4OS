@@ -16,11 +16,14 @@
 > (ADR-027) is also COMPLETE — 8 kernel proxy sockets + `SYS_SOCK_*` (39–42) +
 > agent live mode (Ollama over HTTP), with the boot page tables relocated to
 > 0x300000 for durable kernel-growth headroom; `make smoke-agent-live` is the
-> developer-run live gate (CI stays test-mode). Begin the next slice — **Layer 7
-> (UI/UX)** per the binding brief `docs/design/LAYER7_UI_UX_BRIEF.md` (the
-> sovereign/manual toggle maps to `SYS_SET_MODE`). Read this file in full, run
-> `graph_session_primer()`, confirm the gate set is green, and write the ADR/DDR
-> before any code. Do NOT restart earlier slices."**
+> developer-run live gate (CI stays test-mode). **Layer 7 has STARTED** with the
+> Sovereign/Manual toggle binding (DDR-701): PRISM `mode` builtin + the daemon's
+> `SYS_SET_MODE` self-check, gate `smoke-mode` (33 gates). **The Layer-7 visual
+> compositor (brief §12) is BLOCKED on a VirtIO-GPU framebuffer driver** that does
+> not exist — the next real slice is **Layer-7 slice 0: a VirtIO-GPU framebuffer +
+> modeset driver** (write its ADR first), which unblocks 7a (wlroots) onward. Read
+> this file in full, run `graph_session_primer()`, confirm gates green, and write
+> the ADR/DDR before any code. Do NOT restart earlier slices."**
 
 Concretely:
 1. Read this whole file (esp. §0.1 — current state).

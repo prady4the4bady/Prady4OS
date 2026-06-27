@@ -363,10 +363,20 @@ triple fault); the 6 page tables moved to `0x300000`, above the kernel working
 window and below the 16 MiB PMM floor, so a growing kernel can never overrun them.
 Gate **`smoke-agent-live`** (`make smoke-agent-live [OLLAMA_HOST=a.b.c.d]`) is
 developer-run (needs a real Ollama); CI stays test-mode (32 gates).
-**Deferred (ADR-027/026):** event-driven socket blocking (vs the hlt+timeout
-poll); SFS `/etc/aether/config` reading (host is compile-time for the live build);
-the daemon's full NIA IPC console; a `CAP_NET` gate on socket creation.
-**Next: Layer 7 (UI/UX) — sovereign/manual mode toggle maps to SYS_SET_MODE.**
+**Layer 7 (UI/UX) STARTED — mode binding (DDR-701):** the brief's Sovereign/Manual
+toggle (§3) is bound to the kernel at the data/control layer. PRISM gains a `mode`
+builtin (`mode get` → `SYS_GET_MODE`; `mode set` → `SYS_SET_MODE`, denied without
+`CAP_SOVEREIGN` — the serial stand-in for Super+M). The AETHER daemon
+(`CAP_SOVEREIGN`) runs a startup binding self-check (GET→SET manual→GET→SET
+sovereign→GET → `PRADYOS_MODE_TOGGLE_OK`), ending sovereign. Gate **`smoke-mode`**
+in CI (33 gates). **BLOCKER (honest):** the Layer-7 *visual* compositor (brief §12
+7a–7j: wlroots/Wayland, OKLab transitions, glass shell) is blocked on a **VirtIO-GPU
+framebuffer + modeset driver**, which PRADYOS lacks and which needs its own ADR +
+slice sequence (a Layer-7 "slice 0"); only the toggle's kernel binding is built so
+far, by design.
+**Deferred (ADR-027/026):** event-driven socket blocking; SFS `/etc/aether/config`;
+the daemon's NIA IPC console; `CAP_NET` socket gate.
+**Next: Layer 7 slice 0 — VirtIO-GPU framebuffer driver (unblocks the compositor).**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
