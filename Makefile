@@ -51,6 +51,10 @@ USER_INIT_SRC  := user/init.c          # 5d: pradyos-init (PID 1), musl C progra
 USER_INIT_ELF  := build/init.elf
 USER_PRISM_SRC := user/prism.c         # 5e: PRISM shell — placed on FAT32, init execve's it
 USER_PRISM_ELF := build/prism.elf
+USER_AETHERD_SRC := user/aether_daemon.c  # L6: AETHER daemon (PID-2, CAP_SOVEREIGN)
+USER_AETHERD_ELF := build/aether_daemon.elf
+USER_AGENT_SRC   := user/agent_base.c     # L6: AETHER agent template (CAP_AGENT)
+USER_AGENT_ELF   := build/agent_base.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -104,7 +108,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether-queue smoke-aether-sec smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -152,7 +156,7 @@ lwip: $(LWIP_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -179,7 +183,13 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	# 5e: PRISM shell, same musl-C link recipe; embedded + loaded from SFS like init.
 	$(CC) $(USER_C_CFLAGS) -c $(USER_PRISM_SRC) -o build/prism.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/prism.o $(MUSL_LIB) -o $(USER_PRISM_ELF)
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	# L6: AETHER daemon + agent template, same musl-C link recipe; embedded below
+	# and loaded by the kernel (daemon from SFS like PRISM, agent via elf_load).
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AETHERD_SRC) -o build/aether_daemon.o
+	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/aether_daemon.o $(MUSL_LIB) -o $(USER_AETHERD_ELF)
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AGENT_SRC) -o build/agent_base.o
+	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/agent_base.o $(MUSL_LIB) -o $(USER_AGENT_ELF)
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -543,6 +553,14 @@ smoke-net-fuzz: $(IMG) fat-image sfs-image
 # sovereign mode auto-approves it, and an audit entry is written.
 smoke-aether-queue: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_AETHER_QUEUE_OK \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# AETHER functional gate (ADR-026 §D10/§D11): the daemon (CAP_SOVEREIGN) boots,
+# spawns the test agent (CAP_AGENT); the agent submits ACTION_WRITE_FILE which
+# sovereign mode auto-approves; the agent executes it and exits. End-to-end:
+# queue -> daemon -> agent -> approve -> execute -> done.
+smoke-aether: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_QUEUE_OK\nPRADYOS_AETHER_DAEMON_OK\nPRADYOS_AGENT_VERIFIED\nPRADYOS_AGENT_DONE')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # AETHER security gate (ADR-026 §security): every bound is exercised in-boot —

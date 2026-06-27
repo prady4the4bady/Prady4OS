@@ -77,3 +77,19 @@ global prism_elf_end
 prism_elf:
     incbin "build/prism.elf"
 prism_elf_end:
+
+; L6: AETHER daemon (PID-2, CAP_SOVEREIGN). Kernel writes it to SFS + loads it as
+; init's child, like PRISM; it owns the global mode + approve authority.
+global aether_daemon_elf
+global aether_daemon_elf_end
+aether_daemon_elf:
+    incbin "build/aether_daemon.elf"
+aether_daemon_elf_end:
+
+; L6: AETHER agent template (CAP_AGENT). Loaded on demand by SYS_SPAWN_AGENT from
+; these embedded bytes (elf_load) — the SFS mount is gone by scheduler time.
+global agent_base_elf
+global agent_base_elf_end
+agent_base_elf:
+    incbin "build/agent_base.elf"
+agent_base_elf_end:

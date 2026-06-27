@@ -107,6 +107,9 @@ jobs:
       - name: QEMU lwIP fuzz/hardening test (q35; malformed frames + SYN flood, NET-B)
         run: make smoke-net-fuzz
 
+      - name: QEMU AETHER end-to-end test (q35; daemon spawns agent, submit->approve->exec, L6)
+        run: make smoke-aether
+
       - name: QEMU AETHER queue test (q35; submit + sovereign auto-approve + audit, L6)
         run: make smoke-aether-queue
 

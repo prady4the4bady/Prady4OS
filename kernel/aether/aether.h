@@ -72,6 +72,11 @@ long aether_set_mem_limit(uint32_t pid, uint64_t bytes);
  * Returns 0 to proceed; cleanly kills + does not return when the budget is blown. */
 int  aether_rate_check(struct tcb *t);
 
+/* --- agent spawner hook (SYS_SPAWN_AGENT) ---------------------------------- */
+/* kmain registers a spawner that elf_loads the embedded agent image and marks it
+ * CAP_AGENT; the syscall layer calls it. Returns the new pid, or <0. */
+void aether_set_spawn_hook(long (*fn)(const char *task));
+
 /* --- in-boot self-tests (gates) -------------------------------------------- */
 void aether_selftest(void);    /* smoke-aether-queue: submit+auto-approve+audit */
 void aether_sectest(void);     /* smoke-aether-sec: overflow + audit-wrap paths */

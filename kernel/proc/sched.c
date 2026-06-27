@@ -106,6 +106,12 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     t->sig_active = 0;
     t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
     t->forked = 0;                 /* 5e: normal launch unless a fork sets fork_regs */
+    t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
+    t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
+    t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
+    t->mem_used = 0;
+    t->sc_count = 0;               /* L6: syscall rate-limit window (agents only)         */
+    t->sc_window_start = 0;
     memcpy(t->fpu_state, fpu_init_template, sizeof t->fpu_state);  /* 5d: clean FPU */
 
     /* Seed the stack with a context_switch frame whose RET enters the

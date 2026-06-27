@@ -328,6 +328,11 @@ extern const unsigned char init_elf[];           /* 5d: pradyos-init (PID 1) */
 extern const unsigned char init_elf_end[];
 extern const unsigned char prism_elf[];          /* 5e: PRISM shell */
 extern const unsigned char prism_elf_end[];
+extern const unsigned char aether_daemon_elf[];  /* L6: AETHER daemon (PID 2) */
+extern const unsigned char aether_daemon_elf_end[];
+extern const unsigned char agent_base_elf[];     /* L6: AETHER agent template */
+extern const unsigned char agent_base_elf_end[];
+void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
 void aether_selftest(void);
@@ -375,6 +380,21 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
     kputdec((uint64_t)(-lr));
     kputs("\r\n");
     return 0;
+}
+
+/* L6: SYS_SPAWN_AGENT hook. Loads the agent directly from its embedded kernel
+ * bytes (NOT from SFS — that mount is gone by scheduler time) and marks the new
+ * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
+static uint32_t g_aether_daemon_pid;
+static long aether_spawn_agent_hook(const char *task) {
+    (void)task;
+    struct tcb *ut = 0;
+    uint64_t len = (uint64_t)(agent_base_elf_end - agent_base_elf);
+    if (elf_load((void *)(uintptr_t)agent_base_elf, len, "AGENT", &ut) != ELF_OK || !ut)
+        return -1;
+    ut->is_agent = 1;
+    ut->parent_pid = g_aether_daemon_pid;
+    return (long)ut->pid;
 }
 
 /* Place the execve target image on the FAT32 root (the process root for the
@@ -654,6 +674,18 @@ static void fs_test_thread(void *arg) {
                                                     prism_elf, prism_elf_end);
                 if (pr && it)
                     pr->parent_pid = it->pid;
+
+                /* L6: AETHER daemon as init's child, granted CAP_SOVEREIGN (it
+                 * owns mode + approve authority). Loaded now while SFS is mounted;
+                 * it auto-spawns the test agent once the scheduler runs. */
+                struct tcb *dm = user_boot_from_sfs(cap, smnt, "AETHERD.ELF",
+                                                    aether_daemon_elf, aether_daemon_elf_end);
+                if (dm) {
+                    dm->is_sovereign = 1;
+                    if (it) dm->parent_pid = it->pid;
+                    g_aether_daemon_pid = dm->pid;
+                }
+                aether_set_spawn_hook(aether_spawn_agent_hook);
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */
