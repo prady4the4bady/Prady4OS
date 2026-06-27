@@ -322,6 +322,8 @@ extern const unsigned char tlstest_elf[];        /* PROC-D: SET_TLS + WRITEV pro
 extern const unsigned char tlstest_elf_end[];
 extern const unsigned char cmusl_elf[];          /* PROC-D: first musl C program */
 extern const unsigned char cmusl_elf_end[];
+extern const unsigned char fputest_elf[];        /* 5d: FPU context-switch test */
+extern const unsigned char fputest_elf_end[];
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -624,6 +626,11 @@ static void fs_test_thread(void *arg) {
                  * against musl; its crt/__libc_start_main set up TLS + stdio and
                  * printf flushes via SYS_WRITEV. Prints "PRADYOS_MUSL_OK ...". */
                 user_boot_from_sfs(cap, smnt, "CMUSL.ELF", cmusl_elf, cmusl_elf_end);
+                /* 5d: two concurrent FPU users sharing XMM0. Each survives only
+                 * if the context switch saves/restores FPU state (ADR-023 §D8).
+                 * Both print "PRADYOS_FPU_OK"; either prints FAIL on clobber. */
+                user_boot_from_sfs(cap, smnt, "FPUTST1.ELF", fputest_elf, fputest_elf_end);
+                user_boot_from_sfs(cap, smnt, "FPUTST2.ELF", fputest_elf, fputest_elf_end);
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

@@ -273,10 +273,12 @@ prints `PRADYOS_MUSL_OK v1.2.5 2026` via `printf` (→ `__stdio_write` →
 (overlay `__set_thread_area` → `SYS_SET_TLS`) and stdio. `cpu_enable_sse()`
 (ADR-023 §D8) enables x87/SSE so the SysV varargs ABI works (printf's XMM
 prologue `#UD`'d otherwise). `smoke-user` greps `PRADYOS_MUSL_OK`.
-**Deferred (ADR-023 §D8, binding trigger):** the context switch does not yet
-save/restore FPU+XMM — correct only while one thread uses the FPU at a time (true
-through 5d). Add per-thread `FXSAVE`/`FXRSTOR` before two ring-3 C/SSE processes
-run concurrently (PRISM children in 5e). NSI append-only; ADR-021 W^X untouched.
+**FPU context-switch (ADR-023 §D8) — RESOLVED (5d):** `schedule()` now does eager
+per-thread `FXSAVE`/`FXRSTOR` around `context_switch` (512-byte 16-aligned
+`fpu_state` in the TCB; new threads/idle seeded from a clean `fninit`+MXCSR
+template; forked children inherit). New gate **`smoke-fpu`**: two concurrent
+ring-3 FPU users keep distinct XMM0 values over ~30M preemption-interleaved
+iterations (OK=2, FAIL forbidden). NSI append-only; ADR-021 W^X untouched.
 Still deferred: NET-B (lwIP, §10). **Next: 5d pradyos-init (PID 1 + orphan
 reaper).** Layer 6 (AETHER) begins after 5e + NET-B.
 **Last updated:** 2026-06-27

@@ -27,12 +27,14 @@ USER_WX_SRC  := user/wxviol.asm
 USER_SYS_SRC := user/systest.asm
 USER_EXEC_SRC := user/exectest.asm
 USER_TLS_SRC := user/tlstest.asm
+USER_FPU_SRC := user/fputest.asm
 USER_LD      := user/user.ld
 USER_ELF     := build/hello.elf
 USER_WX_ELF  := build/wxviol.elf
 USER_SYS_ELF := build/systest.elf
 USER_EXEC_ELF := build/exectest.elf
 USER_TLS_ELF := build/tlstest.elf
+USER_FPU_ELF := build/fputest.elf
 
 # PROC-D: the minimal musl libc subset (ADR-023). Built by tools/build_musl.sh
 # from the pinned third_party/musl submodule + our overlay, into build/ (git-
@@ -95,7 +97,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl image smoke smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl image smoke smoke-fpu smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -133,7 +135,7 @@ musl: $(MUSL_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_CMUSL_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -148,11 +150,13 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_EXEC_ELF) build/exectest.o
 	$(NASM) $(NASM_WERROR) -f elf64 $(USER_TLS_SRC) -o build/tlstest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_TLS_ELF) build/tlstest.o
+	$(NASM) $(NASM_WERROR) -f elf64 $(USER_FPU_SRC) -o build/fputest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FPU_ELF) build/fputest.o
 	# PROC-D step 3: the first C program — compiled against the musl subset and
 	# linked with crt1.o + libc.a using the 3-segment W^X C linker script.
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CMUSL_SRC) -o build/cmusl.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/cmusl.o $(MUSL_LIB) -o $(USER_CMUSL_ELF)
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_CMUSL_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -326,6 +330,15 @@ smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image
 # push past the default 30 s, so allow more wall time.
 smoke-user: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[user] ELF loaded from SFS; ring-3 thread spawned\nHELLO FROM RING-3\n[user] sys_exit(0)\n[trap] user #PF page fault\n[sfs] lz4+tags compress/readback/tag OK\nPRADYOS_TLS_OK WRITEV_OK\nPRADYOS_MUSL_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# 5d FPU-context-switch gate (ADR-023 §D8): two concurrent ring-3 processes pin
+# their unique pid into XMM0, yield to interleave, and require XMM0 to survive.
+# Both print PRADYOS_FPU_OK only if the scheduler saves/restores FPU state per
+# thread; without it they clobber each other and print FPU_FAIL (so OK is absent
+# and the gate fails). Same image as smoke-user — the test runs at boot.
+smoke-fpu: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL="PRADYOS_FPU_OK" FORBIDDEN_SENTINEL="PRADYOS_FPU_FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)

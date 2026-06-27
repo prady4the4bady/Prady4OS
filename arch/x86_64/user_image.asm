@@ -53,3 +53,11 @@ global cmusl_elf_end
 cmusl_elf:
     incbin "build/cmusl.elf"
 cmusl_elf_end:
+
+; 5d: FPU-context-switch regression. Two instances run concurrently; each checks
+; its XMM0 survives a yield to the other. Proves per-thread FXSAVE (ADR-023 §D8).
+global fputest_elf
+global fputest_elf_end
+fputest_elf:
+    incbin "build/fputest.elf"
+fputest_elf_end:

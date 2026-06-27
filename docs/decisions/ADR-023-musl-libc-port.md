@@ -198,14 +198,22 @@ The x86_64 SysV ABI uses XMM registers — e.g. `printf`'s variadic prologue sav
 (`kernel/arch/x86_64/cpu_mitigations.c`, called once in `kmain`) sets
 `CR0.MP`/clears `CR0.EM` and sets `CR4.OSFXSR|OSXMMEXCPT`. The kernel is built
 `-mgeneral-regs-only` and never touches the FPU/XMM.
-- **Deferral (binding trigger):** the context switch does **not** save/restore
-  FPU+XMM state. This is correct only while **at most one thread uses the FPU at a
-  time** — true through PROC-D/5d (musl C programs run one at a time; asm programs
-  and the kernel use no SSE). **Before two ring-3 C/SSE processes can run
-  concurrently (PRISM spawning children in 5e, or any 5d+ multi-C-process
-  scenario), add per-thread `FXSAVE`/`FXRSTOR`** (a 512-byte 16-aligned area in
-  the TCB, saved/restored in `schedule()` like `fs_base`). Tracked here and in
-  `docs/build_status.md` DEFERRED.
+- **RESOLVED (5d):** the context switch now does **eager per-thread FPU
+  save/restore**. The TCB carries a 512-byte 16-aligned `fpu_state` (the kmalloc
+  pool is ≥16-aligned and the field attribute keeps it on a 16-byte boundary, as
+  FXSAVE/FXRSTOR require). `schedule()` does `fxsave(prev->fpu_state)` then
+  `fxrstor(next->fpu_state)` immediately before `context_switch` — the single
+  switch path (per `graph_callchain`), beside the CR3/`fs_base` restores; nothing
+  between there and the switch touches the FPU (`-mgeneral-regs-only`). New
+  threads (and `idle`) copy a clean template captured once in `sched_init`
+  (`fninit` + MXCSR=0x1F80 + `fxsave`) — a *zeroed* FXSAVE area is **not** clean
+  (MXCSR=0 unmasks all SSE exceptions). Forked children inherit the parent's
+  `fpu_state`. **Eager, not lazy** (no `CR0.TS`/`#NM` dance): simple, correct, and
+  free of the LazyFP (CVE-2018-3665) register-leak class. Lazy/XSAVE-optimized
+  save is a Layer-7 perf option, not a correctness need.
+  Gate **`smoke-fpu`**: two concurrent ring-3 processes each pin their pid into
+  XMM0 and verify it survives ~30M preemption-interleaved iterations; both print
+  `PRADYOS_FPU_OK` (gate also forbids `PRADYOS_FPU_FAIL`). Verified OK=2/FAIL=0.
 
 ---
 

@@ -80,6 +80,12 @@ struct tcb {
      * SYS_SET_TLS, restored into IA32_FS_BASE on every switch to this user thread.
      * 0 for a fresh thread / pure kernel threads. */
     uint64_t   fs_base;
+
+    /* Eager per-thread x87+SSE state (5d, ADR-023 §D8). FXSAVE area, 16-aligned
+     * (FXSAVE/FXRSTOR #GP otherwise; the TCB is kmalloc'd ->>=16-aligned, and the
+     * attribute keeps the field on a 16-byte boundary). Saved on switch-out,
+     * restored on switch-in, so concurrent FPU users never clobber each other. */
+    uint8_t    fpu_state[512] __attribute__((aligned(16)));
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

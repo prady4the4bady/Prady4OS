@@ -5,10 +5,23 @@
 #include "tss.h"
 #include "syscall.h"
 #include "vmm.h"
+#include "string.h"            /* memcpy for the per-thread FPU template (5d) */
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D) */
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
+
+/* Clean x87+SSE state (FNINIT + default MXCSR) captured once in sched_init and
+ * copied into every new thread's fpu_state (5d, ADR-023 §D8). A zeroed FXSAVE
+ * area is NOT clean — it would load MXCSR=0 (all SSE exceptions unmasked). */
+static uint8_t fpu_init_template[512] __attribute__((aligned(16)));
+
+static inline void fpu_save(void *area) {
+    __asm__ volatile("fxsave (%0)" :: "r"(area) : "memory");
+}
+static inline void fpu_restore(const void *area) {
+    __asm__ volatile("fxrstor (%0)" :: "r"(area) : "memory");
+}
 
 extern void context_switch(uint64_t *save_rsp, uint64_t load_rsp);  /* context.asm */
 extern void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t arg); /* usermode.asm */
@@ -33,6 +46,16 @@ void sched_init(void) {
     idle_tcb.quantum = idle_tcb.quantum_reset = QUANTUM;
     idle_tcb.next = &idle_tcb;     /* ring of one */
     idle_tcb.caps = cap_table_create();
+
+    /* Capture a clean FPU template (SSE already enabled by cpu_enable_sse in
+     * kmain, which runs before sched_init). New threads + idle copy this so the
+     * first FXRSTOR loads a valid state, not zeros. */
+    uint32_t mxcsr = 0x1F80u;          /* round-nearest, all exceptions masked */
+    __asm__ volatile("fninit");
+    __asm__ volatile("ldmxcsr %0" :: "m"(mxcsr));
+    __asm__ volatile("fxsave (%0)" :: "r"(fpu_init_template) : "memory");
+    memcpy(idle_tcb.fpu_state, fpu_init_template, sizeof idle_tcb.fpu_state);
+
     current_thread = &idle_tcb;
 }
 
@@ -75,6 +98,7 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
         t->sig_handlers[i] = 0;
     t->sig_active = 0;
     t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
+    memcpy(t->fpu_state, fpu_init_template, sizeof t->fpu_state);  /* 5d: clean FPU */
 
     /* Seed the stack with a context_switch frame whose RET enters the
      * trampoline, with RFLAGS = IF set so the thread runs interruptible. */
@@ -139,6 +163,7 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->root_mnt    = parent->root_mnt;
         t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
         t->fs_base     = parent->fs_base; /* PROC-D: child inherits the thread pointer */
+        memcpy(t->fpu_state, parent->fpu_state, sizeof t->fpu_state);  /* 5d: inherit FPU */
         /* Replace the fresh (empty) cap + fd tables with copies of the parent's. */
         if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0) {
             sched_destroy(t);
@@ -228,6 +253,13 @@ static void schedule(void) {
     uint64_t next_cr3 = next->cr3 ? next->cr3 : kmaster;
     if (next_cr3 != prev_cr3)
         __asm__ volatile("mov %0, %%cr3" :: "r"(next_cr3) : "memory");
+    /* 5d (ADR-023 §D8): eager per-thread FPU save/restore. Save the outgoing
+     * thread's x87+SSE state and load the incoming thread's, so concurrent FPU
+     * users (e.g. two ring-3 C processes) never see each other's XMM/x87 regs.
+     * Nothing between here and context_switch's return into `next` touches the
+     * FPU (this path is -mgeneral-regs-only). */
+    fpu_save(prev->fpu_state);
+    fpu_restore(next->fpu_state);
     context_switch(&prev->rsp, next->rsp);
     /* resumed here later, as `prev`, when scheduled again */
     irq_restore(fl);
