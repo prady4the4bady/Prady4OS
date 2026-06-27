@@ -25,6 +25,12 @@ PHDRS {
 SECTIONS {
     . = 0x8000000000;
 
+    /* musl's x86_64 _start stub does `lea _DYNAMIC(%rip),%rsi`. In a static
+     * binary _DYNAMIC is an undefined weak (0); from this high base that PC32
+     * displacement overflows. _start_c ignores the value, so just pin the symbol
+     * to an in-range address (the image base) to satisfy the relocation. */
+    PROVIDE_HIDDEN(_DYNAMIC = .);
+
     /* -mcmodel=large (required: the user base 0x8000000000 exceeds the 32-bit
      * relocation range, so C code uses 64-bit absolute refs) emits the large
      * section variants .ltext/.lrodata/.ldata/.lbss — match both spellings. */

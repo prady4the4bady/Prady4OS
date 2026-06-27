@@ -192,6 +192,21 @@ set is whatever `__libc_start_main` + `printf` + `malloc` + the string subset
 reference; it is resolved by linking and is enumerated in the Makefile's
 `musl` target.
 
+### D8 — Enable x87/SSE for ring-3; per-thread FPU save deferred (found in step 3)
+The x86_64 SysV ABI uses XMM registers — e.g. `printf`'s variadic prologue saves
+`%xmm0..7` — so any C program `#UD`s without `CR4.OSFXSR`. `cpu_enable_sse()`
+(`kernel/arch/x86_64/cpu_mitigations.c`, called once in `kmain`) sets
+`CR0.MP`/clears `CR0.EM` and sets `CR4.OSFXSR|OSXMMEXCPT`. The kernel is built
+`-mgeneral-regs-only` and never touches the FPU/XMM.
+- **Deferral (binding trigger):** the context switch does **not** save/restore
+  FPU+XMM state. This is correct only while **at most one thread uses the FPU at a
+  time** — true through PROC-D/5d (musl C programs run one at a time; asm programs
+  and the kernel use no SSE). **Before two ring-3 C/SSE processes can run
+  concurrently (PRISM spawning children in 5e, or any 5d+ multi-C-process
+  scenario), add per-thread `FXSAVE`/`FXRSTOR`** (a 512-byte 16-aligned area in
+  the TCB, saved/restored in `schedule()` like `fs_base`). Tracked here and in
+  `docs/build_status.md` DEFERRED.
+
 ---
 
 ## Consequences

@@ -25,3 +25,7 @@ static inline void cpu_cpuid(uint32_t leaf, uint32_t subleaf,
 }
 
 void cpu_mitigations_init(void);
+
+/* Enable x87 + SSE (CR0.EM/MP, CR4.OSFXSR/OSXMMEXCPT) so ring-3 C code can run
+ * the x86_64 SysV ABI. No per-thread FPU save yet — see ADR-023 §D8. */
+void cpu_enable_sse(void);

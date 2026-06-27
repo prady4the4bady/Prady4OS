@@ -45,3 +45,11 @@ global tlstest_elf_end
 tlstest_elf:
     incbin "build/tlstest.elf"
 tlstest_elf_end:
+
+; PROC-D step 3: the first ring-3 C program, statically linked against the musl
+; subset. Written to SFS and loaded back; prints "PRADYOS_MUSL_OK ..." via printf.
+global cmusl_elf
+global cmusl_elf_end
+cmusl_elf:
+    incbin "build/cmusl.elf"
+cmusl_elf_end:

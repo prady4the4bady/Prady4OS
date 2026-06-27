@@ -263,9 +263,22 @@ we implement to their NSI numbers; (2) `__set_thread_area.s` issuing `SYS_SET_TL
 instead of `arch_prctl`. New `user/user_c.ld` gives C programs the 3 W^X-clean
 segments musl needs (RX text / R+NX rodata / RW+NX data+bss); C user code uses
 `-mcmodel=large` (the 0x8000000000 base exceeds 32-bit relocs). CI now checks out
-submodules and runs `make musl`. Remaining: step 3 (`user/cmusl.c` printf gate).
-NSI stays append-only; ADR-021 W^X untouched. Still deferred: NET-B (lwIP, §10).
-Layer 6 (AETHER) begins after 5e + NET-B.
+submodules and runs `make musl`.
+
+**PROC-D COMPLETE (step 3/3 — all 8 gates green).** `user/cmusl.c` — the first
+ring-3 C program on PRADYOS — links statically against the musl subset
+(`crt1.o` + `libc.a`, `user/user_c.ld`), is written to SFS and loaded back, and
+prints `PRADYOS_MUSL_OK v1.2.5 2026` via `printf` (→ `__stdio_write` →
+`SYS_WRITEV` → serial). crt1 → `__libc_start_main` sets up the thread pointer
+(overlay `__set_thread_area` → `SYS_SET_TLS`) and stdio. `cpu_enable_sse()`
+(ADR-023 §D8) enables x87/SSE so the SysV varargs ABI works (printf's XMM
+prologue `#UD`'d otherwise). `smoke-user` greps `PRADYOS_MUSL_OK`.
+**Deferred (ADR-023 §D8, binding trigger):** the context switch does not yet
+save/restore FPU+XMM — correct only while one thread uses the FPU at a time (true
+through 5d). Add per-thread `FXSAVE`/`FXRSTOR` before two ring-3 C/SSE processes
+run concurrently (PRISM children in 5e). NSI append-only; ADR-021 W^X untouched.
+Still deferred: NET-B (lwIP, §10). **Next: 5d pradyos-init (PID 1 + orphan
+reaper).** Layer 6 (AETHER) begins after 5e + NET-B.
 **Last updated:** 2026-06-27
 
 ## Phase 0 — Toolchain & Build System

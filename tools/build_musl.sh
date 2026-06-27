@@ -62,12 +62,23 @@ SRCS=(
   # startup + libc core
   src/env/__libc_start_main.c
   src/env/__init_tls.c
+  src/env/__environ.c
   src/env/__stack_chk_fail.c
   src/internal/libc.c
   src/internal/syscall_ret.c
   src/internal/defsysinfo.c
   src/internal/vdso.c
   src/errno/__errno_location.c
+  src/errno/strerror.c
+  # long-double + multibyte glue referenced unconditionally by vfprintf's fmt_fp
+  src/math/__signbitl.c
+  src/math/__fpclassifyl.c
+  src/math/frexpl.c
+  src/multibyte/wctomb.c
+  src/multibyte/wcrtomb.c
+  src/locale/__lctrans.c
+  src/locale/c_locale.c
+  src/unistd/lseek.c
   # threads / locking (single-thread paths, but referenced)
   src/thread/__lock.c
   src/thread/__wait.c
@@ -95,6 +106,7 @@ SRCS=(
   src/stdio/ofl.c
   src/stdio/ofl_add.c
   src/stdio/fflush.c
+  src/stdio/__stdio_exit.c
   # malloc (mallocng)
   src/malloc/mallocng/malloc.c
   src/malloc/mallocng/free.c

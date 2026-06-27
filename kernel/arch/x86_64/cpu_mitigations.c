@@ -41,3 +41,22 @@ void cpu_mitigations_init(void) {
     kputdec((uint64_t)ibpb);
     kputs("\r\n");
 }
+
+/* Enable x87 + SSE so ring-3 C code can run (PROC-D, ADR-023 §D8). The x86_64
+ * SysV ABI uses XMM registers (e.g. the variadic prologue of printf), which
+ * #UD without CR4.OSFXSR. The kernel itself is built -mgeneral-regs-only and
+ * never touches the FPU/XMM. NOTE: this does NOT save/restore FPU+XMM state on
+ * context switch, so it is correct only while at most ONE thread uses the FPU at
+ * a time (true today: only musl-linked C programs do, and they run one at a
+ * time). Concurrent C processes (5d+) require per-thread FXSAVE/FXRSTOR — see
+ * ADR-023 §D8 deferral. */
+void cpu_enable_sse(void) {
+    uint64_t cr0, cr4;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1ull << 2);                 /* CR0.EM = 0: no x87 emulation trap   */
+    cr0 |=  (1ull << 1);                 /* CR0.MP = 1: monitor coprocessor     */
+    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0) : "memory");
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ull << 9) | (1ull << 10);   /* CR4.OSFXSR | CR4.OSXMMEXCPT          */
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
+}

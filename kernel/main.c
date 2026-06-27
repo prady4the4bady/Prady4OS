@@ -320,6 +320,8 @@ extern const unsigned char exectest_elf[];
 extern const unsigned char exectest_elf_end[];
 extern const unsigned char tlstest_elf[];        /* PROC-D: SET_TLS + WRITEV probe */
 extern const unsigned char tlstest_elf_end[];
+extern const unsigned char cmusl_elf[];          /* PROC-D: first musl C program */
+extern const unsigned char cmusl_elf_end[];
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -618,6 +620,10 @@ static void fs_test_thread(void *arg) {
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
                 user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end);
+                /* PROC-D step 3: the first ring-3 C program, statically linked
+                 * against musl; its crt/__libc_start_main set up TLS + stdio and
+                 * printf flushes via SYS_WRITEV. Prints "PRADYOS_MUSL_OK ...". */
+                user_boot_from_sfs(cap, smnt, "CMUSL.ELF", cmusl_elf, cmusl_elf_end);
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */
@@ -923,6 +929,7 @@ void kmain(struct boot_info *bi) {
     kputs("NEXUS: IDT loaded (48 vectors: 32 exceptions + 16 IRQ)\r\n");
 
     cpu_mitigations_init();              /* IMP-A: IBRS/STIBP/SSBD/IBPB where available */
+    cpu_enable_sse();                    /* PROC-D: x87+SSE for ring-3 C (musl) — ADR-023 §D8 */
 
     tss_init(0);                         /* rsp0 is set per user thread before ring 3 */
     syscall_init();                      /* EFER.SCE + STAR/LSTAR/SFMASK + dispatch */
