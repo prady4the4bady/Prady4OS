@@ -8,27 +8,38 @@
 
 ## 0. RESUME INSTRUCTION (read this first, act in this order)
 
-> **"You are beginning Layer 5 slice 5d — `pradyos-init` (PID 1). Read
-> SESSION_HANDOFF.md in full. Run `graph_session_primer()`. Run all 8 gates and
-> confirm green. Write the ADR/DDR for 5d before code. Do NOT restart earlier
-> slices — Layer 5b and **PROC-D (musl) are COMPLETE and committed**."**
+> **"Layer 5 is COMPLETE (5a–5f minus the deferred items below). Begin **NET-B —
+> lwIP TCP/IP over the virtio-net driver**. Read SESSION_HANDOFF.md in full. Run
+> `graph_session_primer()`. Run the full gate set and confirm green. Write the
+> ADR/DDR before code. Do NOT restart earlier slices; do NOT start Layer 6
+> (AETHER) until NET-B is gate-green."**
 
 Concretely:
 1. Read this whole file (esp. §0.1 — current state).
-2. `graph_session_primer()` (MCP) — or `node tools/graph_mcp/server.js primer`.
-   (Graph node_modules already installed in this worktree; if a fresh clone,
-   `cd tools/graph_mcp && npm ci && node server.js rebuild`.)
-3. Run the full gate set (see §6) and confirm **all 8 green** before editing.
-4. Begin **slice 5d — `pradyos-init` (PID 1 + orphan reaper)** as a ring-3 C
-   program built against the musl subset (see §0.1 "musl usage" + ADR-023).
-   **Before two ring-3 C/SSE processes run concurrently** (PID 1 spawning a
-   child shell in 5e), add per-thread `FXSAVE`/`FXRSTOR` to the context switch —
-   the FPU-state deferral recorded in **ADR-023 §D8**.
+2. `graph_session_primer()` — or `node tools/graph_mcp/server.js primer`.
+   (Graph node_modules already installed here; fresh clone: `cd tools/graph_mcp
+   && npm ci && node server.js rebuild`.)
+3. Run the full gate set (§6) **plus** `smoke-fpu smoke-init smoke-shell` and
+   confirm green before editing.
+4. Begin **NET-B (lwIP)** — port lwIP over the existing virtio-net driver (NET-A).
+   ADR/DDR first. Gate: a loopback/UDP/TCP `smoke-net`-style test.
+
+**5d/5e closed this session** (HEAD `9f310da`): per-thread FPU save (ADR-023 §D8),
+pradyos-init PID 1 (ADR-023 §5d), and the **PRISM shell** (ADR-024) — interactive
+ring-3 shell over the serial console, builtins help/echo/cat/run/ls/ps/exit, with
+console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
+
+**Open follow-ups (deferred, see ADR-024 / build_status):**
+- **FAT32 large-file read / `execve` of a large musl-C ELF corrupts** — PRISM is
+  kernel-spawned from SFS instead; init-`execve` respawn waits on this fix.
+- `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
+  discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
 ### 0.1 CURRENT STATE (end of session 2026-06-27) + PROC-D resume plan
 
-- **HEAD:** `0cfd957`  (`main` == `dev/phase1`, both pushed; this worktree branch
-  is `claude/pedantic-shirley-a27bf3` — push by refspec to both, see §7).
+- **HEAD:** `9f310da`  (5d+5e; `main` == `dev/phase1`, pushed by refspec; this
+  worktree branch is `claude/pedantic-shirley-a27bf3` — see §7). Gate set now also
+  includes `smoke-fpu`, `smoke-init`, `smoke-shell` (all in CI).
 - **Build distro:** **Ubuntu-24.04** (NOT 22.04 — 22.04 is gone; `sudo` needs a
   password now: the WSL password is the user's to supply).
 - **Toolchain:** `llvm-objcopy` was missing on 24.04 → installed apt pkg
