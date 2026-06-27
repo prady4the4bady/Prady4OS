@@ -19,6 +19,7 @@
 #include "aether.h"       /* AETHER syscalls + per-agent rate limit (Layer 6) */
 
 void sys_aether_register(void);   /* kernel/syscall/sys_aether.c */
+void sys_socket_register(void);   /* kernel/syscall/sys_socket.c (ADR-027) */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
@@ -116,6 +117,7 @@ void syscall_init(void) {
     signal_register();                    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
     sys_io_uring_register();              /* SYS_IO_URING_* (PROC-E) */
     sys_aether_register();                /* SYS_GET_MODE..SYS_SET_MEM_LIMIT (Layer 6) */
+    sys_socket_register();                /* SYS_SOCK_* proxy sockets (ADR-027) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:

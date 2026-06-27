@@ -55,6 +55,7 @@ USER_AETHERD_SRC := user/aether_daemon.c  # L6: AETHER daemon (PID-2, CAP_SOVERE
 USER_AETHERD_ELF := build/aether_daemon.elf
 USER_AGENT_SRC   := user/agent_base.c     # L6: AETHER agent template (CAP_AGENT)
 USER_AGENT_ELF   := build/agent_base.elf
+USER_AGENT_DEFS  ?=                       # extra -D for the agent (live mode sets AETHER_TEST_MODE=0)
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -73,7 +74,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
                kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
-               kernel/aether/aether.c kernel/aether/aether_queue.c kernel/aether/aether_audit.c kernel/aether/aether_mem.c kernel/syscall/sys_aether.c
+               kernel/aether/aether.c kernel/aether/aether_queue.c kernel/aether/aether_audit.c kernel/aether/aether_mem.c kernel/syscall/sys_aether.c kernel/syscall/sys_socket.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -86,7 +87,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/virtio_net.o build/netbuf.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o \
-               build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o \
+               build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o \
                build/lwip_port.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
@@ -108,7 +109,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -187,7 +188,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	# and loaded by the kernel (daemon from SFS like PRISM, agent via elf_load).
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AETHERD_SRC) -o build/aether_daemon.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/aether_daemon.o $(MUSL_LIB) -o $(USER_AETHERD_ELF)
-	$(CC) $(USER_C_CFLAGS) -c $(USER_AGENT_SRC) -o build/agent_base.o
+	$(CC) $(USER_C_CFLAGS) $(USER_AGENT_DEFS) -c $(USER_AGENT_SRC) -o build/agent_base.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/agent_base.o $(MUSL_LIB) -o $(USER_AGENT_ELF)
 	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
@@ -248,12 +249,13 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/aether/aether_audit.c      -o build/aether_audit.o
 	$(CC) $(KCFLAGS) -c kernel/aether/aether_mem.c        -o build/aether_mem.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_aether.c       -o build/sys_aether.o
+	$(CC) $(KCFLAGS) -I$(LWIP_PORT) -c kernel/syscall/sys_socket.c -o build/sys_socket.o
 	# NET-B: the lwIP-port glue (first-party, -Werror) — lwIP headers via -isystem
 	# (no warnings from them), our shims via -I, -nostdlibinc drops host glibc.
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 360448 || { echo "kernel.bin exceeds 352 KiB; Stage 2 loads 11x64 sectors (below page tables at 0x70000)"; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 360448 || { echo "kernel.bin exceeds 352 KiB; Stage 2 loads 11x64 sectors (page tables now at 0x300000, so this read window is the limit)"; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
@@ -561,6 +563,20 @@ smoke-aether-queue: $(IMG) fat-image sfs-image
 # queue -> daemon -> agent -> approve -> execute -> done.
 smoke-aether: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_QUEUE_OK\nPRADYOS_AETHER_DAEMON_OK\nPRADYOS_AGENT_VERIFIED\nPRADYOS_AGENT_DONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# AETHER LIVE agent gate (ADR-027 §D6): DEVELOPER-RUN, not CI — needs a real
+# Ollama. Rebuilds the agent with AETHER_TEST_MODE=0 (host defaults to 10.0.2.2 =
+# the QEMU SLIRP gateway, i.e. the developer's loopback) and boots; the agent
+# connects over the proxy-socket NSI, POSTs /api/generate, and prints
+# PRADYOS_AGENT_LIVE_OK. Usage: make smoke-agent-live [OLLAMA_HOST=a.b.c.d]
+OLLAMA_HOST ?= 10.0.2.2
+smoke-agent-live: $(STAGE1_BIN) $(STAGE2_BIN) fat-image sfs-image
+	@rm -f build/agent_base.o build/agent_base.elf build/kernel.bin build/pradyos.img
+	@hexbe=$$(echo $(OLLAMA_HOST) | awk -F. '{printf "0x%02X%02X%02X%02X",$$1,$$2,$$3,$$4}'); \
+	  echo "[agent-live] building agent for live Ollama at $(OLLAMA_HOST):11434 (BE $$hexbe)"; \
+	  $(MAKE) image USER_AGENT_DEFS="-DAETHER_TEST_MODE=0 -DOLLAMA_HOST_BE=$$hexbe"
+	TIMEOUT_S=120 EXTRA_SENTINEL=PRADYOS_AGENT_LIVE_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # AETHER security gate (ADR-026 §security): every bound is exercised in-boot —

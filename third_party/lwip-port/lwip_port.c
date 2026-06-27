@@ -17,6 +17,7 @@
 #include "console.h"
 #include "irq.h"          /* g_ticks */
 #include "string.h"
+#include "pmm.h"          /* proxy-socket RX rings come from the PMM pool */
 #include "virtio_net.h"
 #include "pradyos_net.h"
 
@@ -244,8 +245,155 @@ static void net_fuzz_test(void) {
     kputs("PRADYOS_NET_FUZZ_OK\r\n");
 }
 
-/* ---- entry points (declared in pradyos_net.h) ---------------------------- */
 static volatile int g_net_ready;   /* set once lwIP is initialised (PIT may fire earlier) */
+
+/* ---- proxy sockets for ring-3 (ADR-027) ----------------------------------
+ * The kernel owns the TCP connection; ring 3 holds only a slot index. lwIP is
+ * touched here from the SYS_SOCK_* handlers (which run IF=0, so an RX/PIT IRQ
+ * cannot reenter the stack mid-call) and from the recv callback (IRQ context,
+ * which only buffers into the ring). Rings are PMM-pool pages, not BSS. */
+#define PSOCK_N     8
+#define PSOCK_RING  4096u          /* power of two */
+#define PSOCK_MASK  (PSOCK_RING - 1u)
+enum { PS_CLOSED = 0, PS_CONNECTING, PS_OPEN, PS_CLOSING, PS_ERR };
+
+struct proxy_sock {
+    struct tcp_pcb *pcb;
+    uint8_t *rx;                   /* PSOCK_RING-byte ring from the PMM pool */
+    uint16_t head, tail;           /* head: producer (IRQ); tail: consumer (syscall) */
+    volatile uint8_t state;
+    uint8_t used;
+};
+static struct proxy_sock g_ps[PSOCK_N];
+
+static uint16_t ps_avail(struct proxy_sock *s) { return (uint16_t)((s->head - s->tail) & PSOCK_MASK); }
+static uint16_t ps_space(struct proxy_sock *s) { return (uint16_t)(PSOCK_MASK - ps_avail(s)); }
+
+/* recv (IRQ context): buffer the whole pbuf or refuse it for later redelivery so
+ * no byte is ever dropped (flow control via tcp_recved on accepted bytes). */
+static err_t ps_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
+    struct proxy_sock *s = (struct proxy_sock *)arg;
+    if (!s) { if (p) pbuf_free(p); return ERR_OK; }
+    if (p == NULL) { s->state = PS_CLOSING; return ERR_OK; }   /* peer closed */
+    if (err != ERR_OK) { pbuf_free(p); return err; }
+    if (ps_space(s) < p->tot_len)
+        return ERR_MEM;                          /* ring full: keep pbuf, retry later */
+    for (struct pbuf *q = p; q; q = q->next) {
+        const uint8_t *d = (const uint8_t *)q->payload;
+        for (u16_t i = 0; i < q->len; i++) {
+            s->rx[s->head] = d[i];
+            s->head = (uint16_t)((s->head + 1) & PSOCK_MASK);
+        }
+    }
+    tcp_recved(pcb, p->tot_len);
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+static void ps_err(void *arg, err_t err) {
+    (void)err;
+    struct proxy_sock *s = (struct proxy_sock *)arg;
+    if (s) { s->pcb = NULL; s->state = PS_ERR; }  /* lwIP already freed the pcb */
+}
+
+static err_t ps_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
+    (void)pcb;
+    struct proxy_sock *s = (struct proxy_sock *)arg;
+    if (s) s->state = (err == ERR_OK) ? PS_OPEN : PS_ERR;
+    return ERR_OK;
+}
+
+/* Open a connection to host (big-endian a.b.c.d packed) : port. Returns slot. */
+int psock_connect(uint32_t host, uint16_t port) {
+    if (!g_net_ready) return -1;
+    int slot = -1;
+    for (int i = 0; i < PSOCK_N; i++) if (!g_ps[i].used) { slot = i; break; }
+    if (slot < 0) return -1;
+    struct proxy_sock *s = &g_ps[slot];
+    s->rx = (uint8_t *)(uintptr_t)pmm_alloc_page();
+    if (!s->rx) return -1;
+    s->head = s->tail = 0;
+    s->used = 1;
+    s->state = PS_CONNECTING;
+
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    s->pcb = tcp_new();
+    if (!s->pcb) {
+        __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+        pmm_free_page((uint64_t)(uintptr_t)s->rx);
+        s->rx = 0; s->used = 0; s->state = PS_CLOSED;
+        return -1;
+    }
+    tcp_arg(s->pcb, s);
+    tcp_recv(s->pcb, ps_recv);
+    tcp_err(s->pcb, ps_err);
+    ip_addr_t ip;
+    IP4_ADDR(&ip, (host >> 24) & 0xff, (host >> 16) & 0xff, (host >> 8) & 0xff, host & 0xff);
+    err_t e = tcp_connect(s->pcb, &ip, port, ps_connected);
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    if (e != ERR_OK) { s->state = PS_ERR; return -1; }
+    return slot;
+}
+
+int psock_state(int slot) {
+    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
+    return g_ps[slot].state;
+}
+
+/* Drain up to len bytes into kbuf. Returns bytes copied (0 if the ring is empty);
+ * the caller distinguishes EOF/timeout via psock_state(). */
+int psock_read(int slot, uint8_t *kbuf, int len) {
+    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
+    struct proxy_sock *s = &g_ps[slot];
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    int n = 0;
+    while (n < len && s->tail != s->head) {
+        kbuf[n++] = s->rx[s->tail];
+        s->tail = (uint16_t)((s->tail + 1) & PSOCK_MASK);
+    }
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    return n;
+}
+
+int psock_write(int slot, const uint8_t *kbuf, int len) {
+    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
+    struct proxy_sock *s = &g_ps[slot];
+    if (s->state != PS_OPEN || !s->pcb) return -1;
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    u16_t snd = tcp_sndbuf(s->pcb);
+    if (len > (int)snd) len = (int)snd;
+    err_t e = ERR_OK;
+    if (len > 0) {
+        e = tcp_write(s->pcb, kbuf, (u16_t)len, TCP_WRITE_FLAG_COPY);
+        if (e == ERR_OK) tcp_output(s->pcb);
+    }
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    return (e == ERR_OK) ? len : -1;
+}
+
+int psock_close(int slot) {
+    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
+    struct proxy_sock *s = &g_ps[slot];
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    if (s->pcb) {
+        tcp_arg(s->pcb, NULL);
+        tcp_recv(s->pcb, NULL);
+        tcp_err(s->pcb, NULL);
+        if (tcp_close(s->pcb) != ERR_OK)
+            tcp_abort(s->pcb);                   /* force teardown on a busy pcb */
+        s->pcb = NULL;
+    }
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    if (s->rx) pmm_free_page((uint64_t)(uintptr_t)s->rx);
+    s->rx = 0; s->used = 0; s->state = PS_CLOSED;
+    return 0;
+}
+
+/* ---- entry points (declared in pradyos_net.h) ---------------------------- */
 
 void net_init(void) {
     if (!virtio_net_up())

@@ -23,9 +23,9 @@ struct aether_action_entry {
 };
 
 /* The 256-entry ring (~139 KiB) is allocated from the PMM pool by aether_init(),
- * NOT placed in BSS: a static array this large overruns the low-mem image's page
- * tables at 0x70000 and triple-faults the kernel before kmain prints (memory
- * note: big tables come from the PMM pool). */
+ * NOT placed in BSS: a static array this large bloats the kernel image+BSS and
+ * risks overrunning the boot page tables (memory note: big tables come from the
+ * PMM pool, not BSS). */
 static struct aether_action_entry *g_queue;
 static uint64_t g_next_action_id = 1;          /* monotonic; never reused this boot */
 static unsigned g_sovereign_mode = 1;          /* ADR-026 D2: default sovereign */

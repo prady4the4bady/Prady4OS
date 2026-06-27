@@ -49,6 +49,11 @@
 #define SYS_KILL_AGENT     36  /* (pid) -> 0 | -EPERM|-ESRCH       (CAP_AGENT)      */
 #define SYS_READ_AUDIT     37  /* (buf*, max) -> n entries copied                   */
 #define SYS_SET_MEM_LIMIT  38  /* (pid, bytes) -> 0 | -EPERM (lower-only)           */
+/* Ring-3 proxy sockets (ADR-027). Append-only after 38. */
+#define SYS_SOCK_CONNECT   39  /* (host_be, port) -> fd(0..7) | -errno              */
+#define SYS_SOCK_WRITE     40  /* (fd, buf, len) -> bytes written | -errno          */
+#define SYS_SOCK_READ      41  /* (fd, buf, len, timeout_ms) -> bytes | 0(EOF) | -errno */
+#define SYS_SOCK_CLOSE     42  /* (fd) -> 0 | -errno                                */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

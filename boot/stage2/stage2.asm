@@ -13,11 +13,10 @@
 ;   4. (long mode)  jump to the kernel entry at 0x10000.
 ;
 ; Memory map this stage establishes (all in identity-mapped low RAM):
-;   0x00010000  kernel image (flat binary, <= 32 KiB)        [loaded from LBA 17]
-;   0x00070000  PML4   (4 KiB)
-;   0x00071000  PDPT   (4 KiB)
-;   0x00072000  PD     (4 KiB, 512 x 2 MiB = 1 GiB identity)
+;   0x00010000  kernel image + BSS (flat binary)             [loaded from LBA 17]
 ;   0x00200000  kernel stack top
+;   0x00300000  PML4/PDPT/PD + PDPT_HI/PD_HI/PT_HI (6 x 4 KiB) — above the kernel
+;               working window so a growing kernel cannot overrun them
 ;
 ; Honest scope notes (see ADR-005): early identity map only (no higher-half yet);
 ; kernel loaded flat at a low fixed address (real mode can't write >=1 MiB and we
@@ -45,12 +44,17 @@ DATA64_SEL  equ 0x20            ; GDT entry 4
 KERNEL_PHYS equ 0x00010000
 KERNEL_VIRT equ 0xFFFFFFFF80000000   ; higher-half virtual base (matches kernel.ld)
 KSTACK_TOP  equ 0x00200000
-PML4        equ 0x00070000
-PDPT        equ 0x00071000           ; low identity: PDPT
-PD          equ 0x00072000           ; low identity: PD (1 GiB, 2 MiB pages)
-PDPT_HI     equ 0x00073000           ; higher-half: PDPT (PML4[511])
-PD_HI       equ 0x00074000           ; higher-half: PD   (PDPT_HI[510])
-PT_HI       equ 0x00075000           ; higher-half: PT   (4 KiB pages -> kernel)
+; Page tables live at 3 MiB — ABOVE the kernel working window (0x10000..0x200000:
+; image + BSS + stack) so a growing kernel can never overrun them, and below the
+; 16 MiB PMM floor (PMM_MIN_PHYS) + within the 1 GiB low identity map, so they are
+; reserved-by-construction and directly addressable. (Were at 0x70000, which the
+; kernel image+BSS outgrew once lwIP + AETHER + the socket NSI landed.)
+PML4        equ 0x00300000
+PDPT        equ 0x00301000           ; low identity: PDPT
+PD          equ 0x00302000           ; low identity: PD (1 GiB, 2 MiB pages)
+PDPT_HI     equ 0x00303000           ; higher-half: PDPT (PML4[511])
+PD_HI       equ 0x00304000           ; higher-half: PD   (PDPT_HI[510])
+PT_HI       equ 0x00305000           ; higher-half: PT   (4 KiB pages -> kernel)
 
 ; Boot -> kernel handoff struct (see kernel/boot_info.h). Lives at a fixed low
 ; address (usable conventional RAM 0x500..0x7C00) so the kernel can find it.
@@ -119,8 +123,9 @@ enable_a20:
 ; Load the kernel in 11 chunks of 64 sectors (352 KiB total) to successive 32 KiB
 ; regions starting at physical 0x10000 — one INT 13h call per chunk stays under
 ; the BIOS per-call sector limit and the 64 KiB real-mode segment, and scales as
-; the kernel grows. 352 KiB ends at 0x68000, still below the page tables at
-; 0x70000 (NET-B: lwIP pushed the kernel past the old 256 KiB / 8-chunk limit).
+; the kernel grows. The runtime image + BSS has room up to the stack at 0x200000;
+; the page tables now live at 0x300000 (moved off 0x70000), so the binding limit
+; on kernel.bin is this 352 KiB read window, not the page tables.
 load_kernel:
     mov si, msg_ldk
     call puts16
