@@ -310,10 +310,27 @@ checks the builtin output with no panic.
 **Deferred (ADR-024):** init `fork`+`execve` **respawn** of PRISM — `execve` of a
 large musl-C ELF from FAT32 corrupts (likely FAT32 multi-cluster read; SFS large
 read is fine), a separate kernel fix; also `ls`/`ps` full impl, RX line
-discipline/echo, pipes/redirection/quoting/job-control/scripting. Still deferred:
-NET-B (lwIP, §10).
-**Next: NET-B (lwIP).** Layer 6 (AETHER) begins after NET-B.
-**Last updated:** 2026-06-27
+discipline/echo, pipes/redirection/quoting/job-control/scripting.
+**NET-B (lwIP TCP/IP) COMPLETE:** lwIP 2.2.1 (pinned `third_party/lwip`, raw API,
+`NO_SYS=1`, kmalloc-backed) is linked into the kernel via `build/lwip/liblwip.a`
+(built `-w -nostdlibinc`) plus the first-party port `third_party/lwip-port/lwip_port.c`
+(`-Werror`): allocator/rand/diag/assert/`sys_now` shims, the virtio-net⇄netif
+bridge (`pradyos_linkoutput` TX, `pradyos_netif_rx` injects into `ethernet_input`),
+static IP 10.0.2.15/24 GW 10.0.2.2, `net_init` wired into kmain and
+`sys_check_timeouts`+`netif_poll_all` driven off the PIT tick (every 10 ticks).
+Root-cause fix folded in: the NET-A RX path dropped frames — `virtio_net.c` now
+recovers each buffer from `vq->desc[head].addr`, delivers the payload past the
+12-byte `virtio_net_hdr` to the registered RX cb, re-arms the descriptor, and
+frees TX chains (no leak). `net_init` runs IRQ-masked (lwIP is not reentrant under
+`NO_SYS`). Gates: **`smoke-net-lo`** (UDP echo on 127.0.0.1 → `PRADYOS_NET_LO_OK`),
+**`smoke-net`** (host→guest TCP echo on :8007 via QEMU hostfwd 18007→8007 →
+`PRADYOS_NET_TCP_OK` + host receives the echo), **`smoke-net-fuzz`** (512
+malformed/truncated frames + a 256-segment SYN flood to a closed port fed into the
+RX path; kernel survives, no panic → `PRADYOS_NET_FUZZ_OK`). Stage2 kernel load
+raised to 11×64 sectors (352 KiB) to fit liblwip.a. Serial print paths carry only
+fixed sentinels — no kernel pointers leak to ring-3/network output. 29 gates total.
+**Next: Layer 6 (AETHER).**
+**Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
 

@@ -8,11 +8,12 @@
 
 ## 0. RESUME INSTRUCTION (read this first, act in this order)
 
-> **"Layer 5 is COMPLETE (5a–5f minus the deferred items below). Begin **NET-B —
-> lwIP TCP/IP over the virtio-net driver**. Read SESSION_HANDOFF.md in full. Run
-> `graph_session_primer()`. Run the full gate set and confirm green. Write the
-> ADR/DDR before code. Do NOT restart earlier slices; do NOT start Layer 6
-> (AETHER) until NET-B is gate-green."**
+> **"NET-B (lwIP TCP/IP) is COMPLETE and CI-green — UDP loopback, host→guest TCP
+> echo, and the malformed-frame/SYN-flood fuzz gate all pass (`smoke-net-lo`,
+> `smoke-net`, `smoke-net-fuzz`); liblwip.a is linked into the kernel. Begin
+> **Layer 6 — AETHER** (the AI-native agent layer). Read SESSION_HANDOFF.md in
+> full. Run `graph_session_primer()`. Run the full gate set and confirm green.
+> Write **ADR-026 + DDR-AETHER before any code**. Do NOT restart earlier slices."**
 
 Concretely:
 1. Read this whole file (esp. §0.1 — current state).
@@ -21,25 +22,19 @@ Concretely:
    && npm ci && node server.js rebuild`.)
 3. Run the full gate set (§6) **plus** `smoke-fpu smoke-init smoke-shell` and
    confirm green before editing.
-4. **Continue NET-B (lwIP)** — design is DONE and committed (**ADR-025** +
-   **DDR-NET-B**), and **lwIP 2.2.1 is pinned** at `third_party/lwip` (commit
-   `77dcd25a`). **Step 1 DONE (CI-green, HEAD `d433bf6`):** `third_party/lwip-port/`
-   (lwipopts.h, arch/cc.h, arch/sys_arch.h, stdio/stdlib shims) +
-   `tools/build_lwip.sh` + `make lwip` build **liblwip.a** (`-w -nostdlibinc`); CI
-   runs `make lwip`. kernel string.{h,c} gained strlen/strncmp. liblwip.a is NOT
-   yet linked into the kernel. **Remaining (per the DDR step sequence):**
-   (2 — NEXT) write the first-party port shim `third_party/lwip-port/lwip_port.c`
-   (defines `pradyos_lwip_malloc/free/calloc`→kmalloc, `pradyos_lwip_rand`,
-   `pradyos_lwip_diag/assert`→console, `sys_now()` from `g_ticks*10`, `atoi`),
-   compiled as a kernel source; then extend
-   `kernel/drivers/net/virtio_net.c` with `virtio_net_tx/set_rx/mac` (NET-A drops
-   RX today), add `kernel/net/` + `pradyos_netif.c`, wire `net_init` into kmain +
-   `sys_check_timeouts` on the PIT tick, loopback UDP echo → `smoke-net-lo`
-   (`PRADYOS_NET_LO_OK`). (3) TCP echo on :8007 → `smoke-net` (QEMU hostfwd
-   18007→8007, host nc probe, `PRADYOS_NET_TCP_OK`). (4) security/fuzz gate
-   `smoke-net-fuzz` (malformed frames + SYN/ICMP bursts, no panic,
-   `ICMP_RATELIMITED`). All security controls are specified in ADR-025 §D6.
-   Then Layer 6 (AETHER, ADR-026) — only after NET-B is CI-green.
+4. **NET-B (lwIP) is COMPLETE and CI-green** (**ADR-025** + **DDR-NET-B**; lwIP
+   2.2.1 pinned at `third_party/lwip` `77dcd25a`). liblwip.a (`-w -nostdlibinc`)
+   is **linked into the kernel** alongside the first-party port
+   `third_party/lwip-port/lwip_port.c` (`-Werror`): allocator/rand/diag/assert/
+   `sys_now` shims, the virtio-net⇄netif bridge (`pradyos_linkoutput` TX,
+   `pradyos_netif_rx`→`ethernet_input`), static IP 10.0.2.15/24 GW 10.0.2.2,
+   `net_init` wired into kmain + `sys_check_timeouts`/`netif_poll_all` on the PIT
+   tick. The NET-A RX drop was root-caused (buffer recovered from
+   `vq->desc[head].addr`, delivered past the 12-byte hdr, descriptor re-armed; TX
+   chains freed). Gates **`smoke-net-lo`** (`PRADYOS_NET_LO_OK`), **`smoke-net`**
+   (host→guest TCP echo on :8007, `PRADYOS_NET_TCP_OK`), **`smoke-net-fuzz`**
+   (malformed frames + SYN flood, no panic, `PRADYOS_NET_FUZZ_OK`) — all in CI.
+   **Begin Layer 6 (AETHER, ADR-026) next.**
 
 **5d/5e closed this session** (HEAD `9f310da`): per-thread FPU save (ADR-023 §D8),
 pradyos-init PID 1 (ADR-023 §5d), and the **PRISM shell** (ADR-024) — interactive
