@@ -101,7 +101,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -134,6 +134,16 @@ $(MUSL_LIB): tools/build_musl.sh $(MUSL_OVL)/syscall_overrides.h $(MUSL_OVL)/__s
 	bash tools/build_musl.sh
 $(MUSL_CRT): $(MUSL_LIB) ;
 musl: $(MUSL_LIB)
+
+# NET-B: build the lwIP 2.2.1 core (third-party, -w) into build/lwip/liblwip.a
+# from the pinned submodule + the PRADYOS port headers (third_party/lwip-port/).
+# Archive only — linked into the kernel once the netif/net layer lands (NET-B 2+).
+LWIP_DIR  := third_party/lwip
+LWIP_PORT := third_party/lwip-port
+LWIP_LIB  := build/lwip/liblwip.a
+$(LWIP_LIB): tools/build_lwip.sh $(LWIP_PORT)/lwipopts.h $(LWIP_PORT)/arch/cc.h $(LWIP_PORT)/arch/sys_arch.h $(LWIP_DIR)/src/core/init.c
+	bash tools/build_lwip.sh
+lwip: $(LWIP_LIB)
 
 # Build the NEXUS kernel: 64-bit entry stub (NASM) + C main, linked flat at
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.

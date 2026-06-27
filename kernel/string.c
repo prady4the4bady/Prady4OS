@@ -38,3 +38,21 @@ int memcmp(const void *a, const void *b, size_t n) {
     }
     return 0;
 }
+
+size_t strlen(const char *s) {
+    size_t n = 0;
+    while (s[n])
+        n++;
+    return n;
+}
+
+int strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char x = (unsigned char)a[i], y = (unsigned char)b[i];
+        if (x != y)
+            return (int)x - (int)y;
+        if (!x)
+            break;
+    }
+    return 0;
+}
