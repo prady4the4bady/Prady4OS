@@ -8,87 +8,77 @@
 
 ## 0. RESUME INSTRUCTION (read this first, act in this order)
 
-> **"You are continuing PROC-D Step 2 build-out. Read SESSION_HANDOFF.md in full.
-> Run `graph_session_primer()`. Run all 8 gates and confirm green. Then build the
-> PROC-D Step 2 items in order (§0.1), each compiling clean before the next."**
+> **"You are beginning Layer 5 slice 5d — `pradyos-init` (PID 1). Read
+> SESSION_HANDOFF.md in full. Run `graph_session_primer()`. Run all 8 gates and
+> confirm green. Write the ADR/DDR for 5d before code. Do NOT restart earlier
+> slices — Layer 5b and **PROC-D (musl) are COMPLETE and committed**."**
 
 Concretely:
-1. Read this whole file (esp. §0.1 — current PROC-D state + the exact build plan).
+1. Read this whole file (esp. §0.1 — current state).
 2. `graph_session_primer()` (MCP) — or `node tools/graph_mcp/server.js primer`.
    (Graph node_modules already installed in this worktree; if a fresh clone,
    `cd tools/graph_mcp && npm ci && node server.js rebuild`.)
 3. Run the full gate set (see §6) and confirm **all 8 green** before editing.
-4. Continue **PROC-D Step 2 build-out** (§0.1). Do NOT restart earlier slices —
-   Layer 5b and PROC-D Step 1 are DONE and committed.
+4. Begin **slice 5d — `pradyos-init` (PID 1 + orphan reaper)** as a ring-3 C
+   program built against the musl subset (see §0.1 "musl usage" + ADR-023).
+   **Before two ring-3 C/SSE processes run concurrently** (PID 1 spawning a
+   child shell in 5e), add per-thread `FXSAVE`/`FXRSTOR` to the context switch —
+   the FPU-state deferral recorded in **ADR-023 §D8**.
 
 ### 0.1 CURRENT STATE (end of session 2026-06-27) + PROC-D resume plan
 
-- **HEAD:** `0688afc`  (`main` == `dev/phase1`; this worktree branch is
-  `claude/pedantic-shirley-a27bf3` — push by refspec to both, see §7).
+- **HEAD:** `0cfd957`  (`main` == `dev/phase1`, both pushed; this worktree branch
+  is `claude/pedantic-shirley-a27bf3` — push by refspec to both, see §7).
 - **Build distro:** **Ubuntu-24.04** (NOT 22.04 — 22.04 is gone; `sudo` needs a
   password now: the WSL password is the user's to supply).
-- **Toolchain fix applied this session:** `llvm-objcopy` was missing on 24.04.
-  Installed apt pkg **`llvm-18`** and symlinked **`/usr/local/bin/llvm-objcopy`**
-  → `llvm-objcopy-18`. (Also repaired a stale apt index so `libpfm4` resolved.)
-  `clang-18`/`ld.lld-18` were already present; qemu/mkfs.fat/mcopy/mkfs.ext4/
-  nasm/rustup all present.
-- **Gates at HEAD `0688afc`:** all 8 green — `toolchain-check, image, smoke,
+- **Toolchain:** `llvm-objcopy` was missing on 24.04 → installed apt pkg
+  **`llvm-18`**, symlinked **`/usr/local/bin/llvm-objcopy`** → `llvm-objcopy-18`
+  (also repaired a stale apt index so `libpfm4` resolved). `clang-18`/`ld.lld-18`
+  present; qemu/mkfs.fat/mcopy/mkfs.ext4/nasm/rustup present.
+- **Stored remote PAT in `.git/config` is EXPIRED** — push with a fresh token
+  inline in the URL (never write it to a tracked file).
+- **Gates at HEAD `0cfd957`:** all 8 green — `toolchain-check, image, smoke,
   smoke-fs, smoke-fs-rw, smoke-fs-sfs-rw, smoke-fs-ext4, smoke-user`.
 
-**Completed this session:**
+**Completed (PROC-D — musl libc — is COMPLETE):**
 - **Layer 5b + IMP/PROC/NET series** were already complete on entry (the old
-  handoff was stale — it claimed HEAD `4608e9b`/"5b not started"). Reconciled.
-- **PROC-D Step 1 DONE** (`f2bd207`): `SYS_SET_TLS`=27 (FS-base thread pointer,
-  user-range-validated, restored on switch-in from `tcb.fs_base`, inherited on
-  fork), `SYS_WRITEV`=28 (iovec gather-write via the validated copyin path;
-  shared `fd_write_user` helper), `EXEC_MAX` 8 KiB→**256 KiB** (PMM-pool buffer
-  in `sys_exec` + the SFS bootstrap loader; Makefile cap follows). Ring-3 probe
-  `user/tlstest.asm` gated in `smoke-user` (`PRADYOS_TLS_OK WRITEV_OK`).
-- **PROC-D Step 2 PARTIAL** (`0688afc`): musl **v1.2.5** pinned at
-  `third_party/musl/` (commit `0784374d`); **ADR-023 §D7** records the design
-  (writable user data segment, musl startup/TLS path, overlay shims). The musl
-  build is **not wired into the kernel build yet**, so all gates stay green.
+  handoff was stale — claimed HEAD `4608e9b`/"5b not started"). Reconciled.
+- **PROC-D Step 1** (`f2bd207`): `SYS_SET_TLS`=27 (FS-base thread pointer,
+  user-range-validated, restored on switch-in from `tcb.fs_base`, fork-inherited),
+  `SYS_WRITEV`=28 (iovec gather-write via the validated copyin path; shared
+  `fd_write_user`), `EXEC_MAX` 8 KiB→**256 KiB** (PMM-pool buffer). Probe
+  `user/tlstest.asm` (`PRADYOS_TLS_OK WRITEV_OK`).
+- **PROC-D Steps 2+3** (`8dd2162`, `0cfd957`): musl **v1.2.5** (`third_party/musl`,
+  commit `0784374d`) builds to `build/musl/lib/{libc.a,crt1.o}` via `make musl` /
+  `tools/build_musl.sh` + `third_party/musl-overlay/`. `user/cmusl.c` is the first
+  ring-3 C program — links static against the subset with `user/user_c.ld`, runs
+  from SFS, prints `PRADYOS_MUSL_OK v1.2.5 2026` via `printf`→`SYS_WRITEV`.
+  `cpu_enable_sse()` enables x87/SSE for the varargs ABI. Design + the hard-won
+  details are in **ADR-023** (§D1–D8).
 
-**PROC-D Step 2 build-out — do these in order, each clean before the next:**
-- **2a. `user/user_c.ld`** — 3-segment W^X linker script: `text` PF_R|PF_X,
-  `rodata` PF_R (R+NX), `data` PF_R|PF_W (`.data*`+`.bss*`, RW+NX). Based on
-  `user/user.ld` but adds the writable segment (musl has writable globals). Verify
-  it links a dummy C object with no warnings. (ADR-023 §D7.1.)
-- **2b. `third_party/musl/overlay/bits/syscall.h`** — remap `write→6, writev→28,
-  mmap→12, munmap→13, exit→4, brk→9 (if used)`; all other `__NR_*` pass through
-  from musl's native x86_64 table (unimplemented ones resolve to `-ENOSYS`).
-- **2c. `third_party/musl/overlay/__set_thread_area.s`** — one-line shim issuing
-  `SYS_SET_TLS` (27) with the TP in RDI instead of `arch_prctl` (musl's stock
-  version does `mov %rdi,%rsi; mov $0x1002,%edi; mov $158,%eax; syscall`). Also
-  needs the 6-arg `mmap`→4-arg `SYS_MMAP` (anon) shim (ADR-023 §D5/§D7.2).
-- **2d. Makefile `musl` target** — enumerate the ~15-20 sources
-  `__libc_start_main`+`printf`+`malloc`+string subset pull in (resolve by
-  linking): `crt/crt1.o`, `src/env/__libc_start_main.c` + `__init_tls.c` +
-  `__init_libc.c` + `__libc_start_main`'s deps, `src/stdio/printf.c` +
-  `vfprintf.c` + `fwrite.c` + `__stdio_write.c` + the FILE plumbing,
-  `src/malloc/…`, `src/string/*` subset, our overlay shims. Output
-  `third_party/musl/lib/libc.a` + `crt/crt1.o`. Build BEFORE the user stage;
-  zero warnings. Overlay include path goes AHEAD of `arch/x86_64`.
-- **2e. Gate:** `make image` PASS + `make smoke-user` PASS (no regressions).
-  Commit; print:
-  `Phase PROC-D step 2 — gate report` / `<commit> | image PASS | smoke-user PASS | next: step 3 cmusl.c`
+**musl usage for 5d/5e (how to build a ring-3 C program):**
+- Compile: `clang --target=x86_64-elf -ffreestanding -fno-pic -fno-pie
+  -mcmodel=large -nostdinc -nostdlib -Wall -Wextra -Werror
+  -Ibuild/musl/include -Ithird_party/musl/arch/x86_64
+  -Ithird_party/musl/arch/generic -Ithird_party/musl/include -c foo.c -o foo.o`
+  (**`-mcmodel=large` is mandatory** — the 0x8000000000 base exceeds 32-bit relocs).
+- Link: `ld.lld -nostdlib -static -no-pie -T user/user_c.ld
+  build/musl/lib/crt1.o foo.o build/musl/lib/libc.a -o foo.elf`.
+- Embed like `cmusl` (incbin in `arch/x86_64/user_image.asm` →
+  `user_boot_from_sfs` in `kernel/main.c`), or place on FAT/SFS for execve.
+- If a libc call hits an undefined symbol at link, add its musl source file to the
+  `SRCS` list in `tools/build_musl.sh` (the subset is link-resolved, not exhaustive).
+- A new syscall musl needs that the NSI lacks: add it to the NSI (append-only) and
+  remap it in `third_party/musl-overlay/syscall_overrides.h`.
 
-**PROC-D Step 3 (same session if Step 2 gates green):**
-- **3a.** `user/cmusl.c` — ring-3 C calling `printf("PRADYOS_MUSL_OK\n")`, `return 0`.
-- **3b.** Link vs `third_party/musl/lib/libc.a` + `crt1.o` using `user/user_c.ld`.
-- **3c.** Embed in SFS (like `systest`), execve from `smoke-user`, grep `PRADYOS_MUSL_OK`.
-- **3d.** All 8 gates green; `docs/build_status.md` marks **PROC-D COMPLETE**
-  (same commit as the code).
-- **3e.** Final report:
-  `Phase PROC-D — COMPLETE` / `<commit> | all 8 gates PASS | next: 5d pradyos-init`
+**⚠️ BEFORE 5e (or any two concurrent ring-3 C/SSE processes):** add per-thread
+`FXSAVE`/`FXRSTOR` to the context switch (512-byte 16-aligned area in the TCB,
+saved/restored in `schedule()` like `fs_base`). Today FPU/XMM state is NOT saved
+across switches — correct only while one thread uses the FPU at a time (**ADR-023
+§D8**, binding trigger). 5d (single PID-1 process) is still safe.
 
-**Known risk for next session:** Step 2d/3 is the first C/TLS bring-up on this
-kernel — expect QEMU debug cycles around `__init_tls`/auxv/stdio. `syscall_dispatch`
-already returns `-ENOSYS` for unregistered numbers (no panic), so musl's
-`set_tid_address`/`ioctl`/`rt_sigprocmask` degrade gracefully (verified).
-
-After Step 3, the build order continues: **5d pradyos-init (PID 1 + orphan
-reaper) → 5e PRISM shell → NET-B lwIP → Layer 6 AETHER**.
+**Next build order:** **5d pradyos-init (PID 1 + orphan reaper)** → 5e PRISM shell
+→ NET-B lwIP → Layer 6 AETHER. ADR/DDR before each slice's code.
 
 ---
 
@@ -99,10 +89,10 @@ reaper) → 5e PRISM shell → NET-B lwIP → Layer 6 AETHER**.
   with an original x86_64 kernel; built in strict layer/slice order — *a slice
   ships when it is correct, not when it is fast.*
 - **Active branch:** `dev/phase1` (fast-forwarded into `main` per slice).
-- **Current HEAD:** `0688afc` — "build(PROC-D): pin musl v1.2.5 submodule +
-  ADR-023 design revision (D7)". `main` == `dev/phase1`. (The rest of §2 below
-  predates this session and is partially stale — §0.1 is authoritative for the
-  current PROC-D state; Layer 5b + the IMP/PROC/NET series are all complete.)
+- **Current HEAD:** `0cfd957` — "feat(PROC-D): musl printf gate — PROC-D
+  complete". `main` == `dev/phase1`. (The rest of §2 below predates this session
+  and is partially stale — §0.1 is authoritative for current state; Layer 5b +
+  the IMP/PROC/NET series + **PROC-D (musl)** are all complete.)
 - **Repo path (this machine):**
   - Windows: `C:\Users\prady\Documents\Claude\Projects\Prady4OS`
   - WSL: `/mnt/c/Users/prady/Documents/Claude/Projects/Prady4OS`
