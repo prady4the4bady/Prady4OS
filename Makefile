@@ -102,7 +102,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -498,14 +498,38 @@ smoke-cowfork: $(IMG) fat-image sfs-image
 # MAC, RX armed, DRIVER_OK); the gate asserts the bring-up line. The serial log
 # also shows "TX OK" (one frame reaped off the used ring) — true peer loopback
 # needs a tap/socket netdev rather than QEMU's SLIRP, deferred to NET-B/later.
+# NET-B TCP gate (ADR-025 §D10): QEMU forwards host:18007 -> guest:8007; once the
+# stack is up a host TCP client sends PRADYOS_NET_PROBE and the kernel echo server
+# returns it (serial: PRADYOS_NET_TCP_OK). Exercises the full RX/TX path through
+# virtio-net + lwIP TCP. (/dev/tcp is a bash feature; the recipe shell is dash.)
 smoke-net: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL='[net] virtio-net up' \
-	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[net] TCP echo gate: boot + host connects to 127.0.0.1:18007..."
+	@rm -f build/net_tcp.log build/net_echo.txt
+	@bash -c 'for i in $$(seq 1 400); do grep -q "lwIP up" build/net_tcp.log 2>/dev/null && break; sleep 0.1; done; \
+	  sleep 1; \
+	  if exec 3<>/dev/tcp/127.0.0.1/18007; then printf "PRADYOS_NET_PROBE\n" >&3; IFS= read -t 8 -r reply <&3; printf "%s\n" "$$reply" > build/net_echo.txt; fi' &
+	@timeout 60 qemu-system-x86_64 -M q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -netdev user,id=n0,hostfwd=tcp::18007-:8007 -device virtio-net-pci,netdev=n0 \
+	    -serial stdio -display none -monitor none > build/net_tcp.log 2>/dev/null || true
+	@grep -q PRADYOS_NET_TCP_OK build/net_tcp.log || { echo "[net] FAIL: no PRADYOS_NET_TCP_OK"; tail -25 build/net_tcp.log; exit 1; }
+	@grep -q PRADYOS_NET_PROBE build/net_echo.txt 2>/dev/null || { echo "[net] FAIL: TCP echo not received by host"; exit 1; }
+	@if grep -qiE "\[panic\]|KERNEL PANIC" build/net_tcp.log; then echo "[net] FAIL: kernel panic"; exit 1; fi
+	@echo "[net] PASS — TCP echo on :8007 (PRADYOS_NET_TCP_OK + host echo)."
 
 # NET-B loopback gate (ADR-025 §D10): the kernel sends a UDP datagram to
 # 127.0.0.1:7 through lwIP's loopback interface and its recv callback fires.
 smoke-net-lo: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[net] lwIP up 10.0.2.15/24\nPRADYOS_NET_LO_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# NET-B fuzz/hardening gate (ADR-025 §D6/§D10): at boot the kernel feeds 512
+# malformed/truncated frames and a 256-segment SYN flood (to a closed port)
+# straight into the lwIP receive path. Passing = the kernel survives and prints
+# the sentinel; boot_test.sh already fails the run on any panic string.
+smoke-net-fuzz: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_NET_FUZZ_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # PROC-A pipe/dup2 gate: systest pipe()s, round-trips "PIPE" through the ring, and

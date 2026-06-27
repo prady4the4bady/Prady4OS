@@ -101,8 +101,11 @@ jobs:
       - name: QEMU COW fork test (q35; copy-on-write isolation + refcount)
         run: make smoke-cowfork
 
-      - name: QEMU virtio-net test (q35; device bring-up + TX over virtqueue)
+      - name: QEMU lwIP TCP echo test (q35; host->guest TCP echo on :8007, NET-B)
         run: make smoke-net
+
+      - name: QEMU lwIP fuzz/hardening test (q35; malformed frames + SYN flood, NET-B)
+        run: make smoke-net-fuzz
 
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
