@@ -278,9 +278,20 @@ per-thread `FXSAVE`/`FXRSTOR` around `context_switch` (512-byte 16-aligned
 `fpu_state` in the TCB; new threads/idle seeded from a clean `fninit`+MXCSR
 template; forked children inherit). New gate **`smoke-fpu`**: two concurrent
 ring-3 FPU users keep distinct XMM0 values over ~30M preemption-interleaved
-iterations (OK=2, FAIL forbidden). NSI append-only; ADR-021 W^X untouched.
-Still deferred: NET-B (lwIP, §10). **Next: 5d pradyos-init (PID 1 + orphan
-reaper).** Layer 6 (AETHER) begins after 5e + NET-B.
+iterations (OK=2, FAIL forbidden).
+
+**5d pradyos-init (PID 1) — COMPLETE (ADR-023 §5d).** `user/init.c` is the first
+long-lived ring-3 process: musl `printf` banner (`PRADYOS_INIT_OK …`), then a
+`waitpid(-1, WNOHANG)` reap loop polling with `yield`, never exiting. It forks a
+child (raw `SYS_FORK`) that `_exit(42)`s and reaps it (`init: reaped PID=N
+exit=42`). Kernel support: `sys_wait4` gained `pid==-1` (any child); `sched_exit`
+reparents a dying thread's children to init (PID 1 reaps the whole tree) and
+**panics if init itself exits** ("init exited — system halted"). The existing
+kernel reaper remains a backstop. init issues fork/wait4/yield by raw NSI number
+(musl's wrappers pull in clone/cancellation plumbing not vendored). New gates
+`smoke-fpu`, `smoke-init` (both in CI). NSI append-only (no new number — wait4=16
+extended); ADR-021 W^X untouched. Still deferred: NET-B (lwIP, §10).
+**Next: 5e PRISM shell.** Layer 6 (AETHER) begins after 5e + NET-B.
 **Last updated:** 2026-06-27
 
 ## Phase 0 — Toolchain & Build System

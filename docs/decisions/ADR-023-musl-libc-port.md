@@ -215,6 +215,33 @@ The x86_64 SysV ABI uses XMM registers — e.g. `printf`'s variadic prologue sav
   XMM0 and verify it survives ~30M preemption-interleaved iterations; both print
   `PRADYOS_FPU_OK` (gate also forbids `PRADYOS_FPU_FAIL`). Verified OK=2/FAIL=0.
 
+### 5d — pradyos-init (PID 1 + reaper). Decisions recorded here per the slice brief.
+`user/init.c` is the first long-lived ring-3 process. Open choices and their
+resolutions:
+- **Poll vs SIGCHLD:** *poll* — `waitpid(-1, &status, WNOHANG)` then `yield`.
+  Lower complexity given current kernel state (signal *delivery to handlers* into
+  ring 3 is not wired for arbitrary processes); SIGCHLD can replace the poll once
+  5e builds general signal handling. Yield (not a 10 ms `nanosleep`) because there
+  is no `SYS_NANOSLEEP` yet and a cooperative yield already prevents busy-spin.
+- **printf vs raw syscalls:** *both* — musl `printf` for human-readable output (a
+  reference PID 1), but `fork`/`wait4`/`yield` issued by **raw NSI number** via a
+  one-line inline-asm helper. musl's `fork`/`waitpid`/`sched_yield` wrappers pull
+  in `clone`/cancellation-point plumbing this minimal libc does not vendor;
+  calling the NSI directly keeps the kernel contract explicit and the libc small.
+  (stdout is full-buffered on the non-tty console and init never exits, so every
+  line is `fflush`'d.)
+- **Kernel support (no new syscall number — NSI stays append-only):**
+  `sys_wait4` gained `pid == -1` ("any child"); the status remains the raw exit
+  code (POSIX `W*` encoding still deferred — init logs it raw). `sched_exit`
+  reparents a dying thread's children to init so PID 1 reaps the whole subtree,
+  and **panics if init itself exits** (`init exited — system halted`) — the system
+  has no first process to fall back on. The pre-existing kernel `reaper_thread`
+  stays as a backstop (after reparent-to-init, orphans have a live parent so the
+  backstop skips them, leaving them for init — no double-reap).
+- **The dummy child** is forked by init itself (`SYS_FORK`) and `_exit(42)`s, so
+  it is genuinely init's child (no kernel-side parent_pid race) and exercises
+  fork-from-C. Gate `smoke-init`: greps `PRADYOS_INIT_OK` and `init: reaped PID=`.
+
 ---
 
 ## Consequences

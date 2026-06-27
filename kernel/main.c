@@ -324,11 +324,13 @@ extern const unsigned char cmusl_elf[];          /* PROC-D: first musl C program
 extern const unsigned char cmusl_elf_end[];
 extern const unsigned char fputest_elf[];        /* 5d: FPU context-switch test */
 extern const unsigned char fputest_elf_end[];
+extern const unsigned char init_elf[];           /* 5d: pradyos-init (PID 1) */
+extern const unsigned char init_elf_end[];
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
  * parses come from sfs_read, not the embedded image). */
-static void user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
+static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
                                const unsigned char *elf, const unsigned char *elf_end) {
     uint64_t elen = (uint64_t)(elf_end - elf);
     struct vfs_file ef;
@@ -337,7 +339,7 @@ static void user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
         kputs("[user] SFS write failed for ");
         kputs(fname);
         kputs("\r\n");
-        return;
+        return 0;
     }
     struct vfs_file rf;
     /* 256 KiB read buffer (order-6) from the PMM pool, matching the EXEC_MAX
@@ -347,10 +349,10 @@ static void user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
     enum { USER_ELF_MAX = 256u * 1024u };
     uint64_t buf = pmm_alloc_pages(6);
     if (!buf)
-        return;
+        return 0;
     if (vfs_open(cap, smnt, fname, &rf) != 0) {
         pmm_free_pages(buf, 6);
-        return;
+        return 0;
     }
     uint32_t want = (elen > USER_ELF_MAX) ? USER_ELF_MAX : (uint32_t)elen;
     int n = vfs_read(cap, &rf, 0, (void *)(uintptr_t)buf, want);
@@ -361,11 +363,12 @@ static void user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
     pmm_free_pages(buf, 6);
     if (lr == ELF_OK) {
         kputs("[user] ELF loaded from SFS; ring-3 thread spawned\r\n");
-    } else {
-        kputs("[user] ELF load FAILED rc=");
-        kputdec((uint64_t)(-lr));
-        kputs("\r\n");
+        return ut;
     }
+    kputs("[user] ELF load FAILED rc=");
+    kputdec((uint64_t)(-lr));
+    kputs("\r\n");
+    return 0;
 }
 
 /* Place the execve target image on the FAT32 root (the process root for the
@@ -631,6 +634,13 @@ static void fs_test_thread(void *arg) {
                  * Both print "PRADYOS_FPU_OK"; either prints FAIL on clobber. */
                 user_boot_from_sfs(cap, smnt, "FPUTST1.ELF", fputest_elf, fputest_elf_end);
                 user_boot_from_sfs(cap, smnt, "FPUTST2.ELF", fputest_elf, fputest_elf_end);
+                /* 5d: pradyos-init becomes PID 1 — orphans reparent to it and it
+                 * reaps the tree forever. It forks a child that exits 42; init
+                 * collects it and logs "init: reaped PID=N exit=42". */
+                struct tcb *it = user_boot_from_sfs(cap, smnt, "INIT.ELF",
+                                                    init_elf, init_elf_end);
+                if (it)
+                    sched_set_init_pid(it->pid);
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

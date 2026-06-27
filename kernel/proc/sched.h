@@ -106,5 +106,6 @@ void        sched_block(void);                                  /* block current
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
+void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */
 
 extern struct tcb *current_thread;

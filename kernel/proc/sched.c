@@ -29,6 +29,9 @@ extern void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t arg); /* usermo
 struct tcb *current_thread;       /* NULL until sched_init (safe: sched_tick checks) */
 static struct tcb idle_tcb;
 static uint32_t next_tid = 1;
+static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit panics */
+
+void sched_set_init_pid(uint32_t pid) { g_init_pid = pid; }
 
 /* First code a freshly-created thread runs (entered via context_switch's RET).
  * current_thread is already the new thread (set by schedule before switching). */
@@ -302,6 +305,24 @@ void sched_unblock(struct tcb *t) {
  * for good. The address space + TCB are reclaimed by the collector, never here —
  * we are still executing on this thread's kernel stack. */
 void sched_exit(int status) {
+    /* 5d: PID 1 must never exit. If init returns or _exit()s, halt loudly —
+     * the system has no reaper / no first process to fall back on. */
+    if (g_init_pid && current_thread->pid == g_init_pid) {
+        __asm__ volatile("cli");
+        kputs("[panic] init exited — system halted\r\n");
+        for (;;)
+            __asm__ volatile("hlt");
+    }
+    /* 5d: reparent this thread's children to init so PID 1 reaps the whole
+     * subtree (live children become orphans on this exit; zombies too). */
+    if (g_init_pid) {
+        struct tcb *t = current_thread->next;
+        while (t != current_thread) {
+            if (t->parent_pid == current_thread->pid)
+                t->parent_pid = g_init_pid;
+            t = t->next;
+        }
+    }
     current_thread->exit_status = status;
     current_thread->state = THREAD_ZOMBIE;
     if (current_thread->waiter)

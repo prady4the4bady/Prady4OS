@@ -6,9 +6,10 @@
  * child by pid, blocks until it is a zombie (unless WNOHANG), copies the status
  * out, and reclaims the child's address space + TCB.
  *
- * Baseline scope: a specific positive pid (pid==-1 "any child" is deferred); the
- * status is the raw exit code (POSIX W* encoding is deferred). Runs with IF clear
- * (SYSCALL entry), so the check-then-block sequence cannot lose a wakeup.
+ * Scope: a specific positive pid, OR pid==-1 ("any child" — 5d, needed by PID 1
+ * init's reap loop). The status is the raw exit code (POSIX W* encoding is
+ * deferred; init logs it raw). Runs with IF clear (SYSCALL entry), so the
+ * check-then-block sequence cannot lose a wakeup.
  */
 #include "sys_wait.h"
 #include "sched.h"
@@ -20,14 +21,25 @@
 
 #define WNOHANG 1
 
-/* The caller's child with process id `pid`, or NULL if none (scans the ring). */
-static struct tcb *find_child(struct tcb *parent, int pid) {
-    struct tcb *t = parent;
-    do {
-        if (t != parent && (int)t->pid == pid && t->parent_pid == parent->pid)
-            return t;
+/* Scan the ring for the caller's children. `pid` is a specific pid or -1 (any).
+ * Returns a zombie child if one matches (ready to reap); else NULL. `*has_live`
+ * is set to a still-running matched child (for the blocking path) and `*any` to
+ * whether any matching child exists at all (else -ECHILD). */
+static struct tcb *find_zombie_child(struct tcb *parent, int pid,
+                                     struct tcb **has_live, int *any) {
+    *has_live = NULL;
+    *any = 0;
+    struct tcb *t = parent->next;
+    while (t != parent) {
+        if (t->parent_pid == parent->pid && (pid == -1 || (int)t->pid == pid)) {
+            *any = 1;
+            if (t->state == THREAD_ZOMBIE)
+                return t;
+            if (!*has_live)
+                *has_live = t;
+        }
         t = t->next;
-    } while (t != parent);
+    }
     return NULL;
 }
 
@@ -37,17 +49,18 @@ static long sys_wait4(long a_pid, long a_status, long a_options, long a4) {
     int options = (int)a_options;
     struct tcb *self = current_thread;
 
-    struct tcb *child = find_child(self, pid);
-    if (!child)
-        return -ECHILD;
-
-    /* Wait for the child to become a zombie. IF is clear here, so the child can
-     * only run (and exit) once we sched_block — no lost-wakeup window. */
-    while (child->state != THREAD_ZOMBIE) {
+    struct tcb *live, *child;
+    int any;
+    /* Find a reapable zombie; block (or EAGAIN) while children remain but none
+     * has exited. IF is clear here, so a child can only run (and exit) once we
+     * sched_block — no lost-wakeup window. */
+    while (!(child = find_zombie_child(self, pid, &live, &any))) {
+        if (!any)
+            return -ECHILD;            /* no matching children at all */
         if (options & WNOHANG)
-            return -EAGAIN;
-        child->waiter = self;
-        sched_block();                 /* woken by the child's sched_exit */
+            return -EAGAIN;            /* children exist, none exited yet */
+        live->waiter = self;           /* any child's exit wakes us; we re-scan */
+        sched_block();
     }
 
     int status = child->exit_status;

@@ -61,3 +61,11 @@ global fputest_elf_end
 fputest_elf:
     incbin "build/fputest.elf"
 fputest_elf_end:
+
+; 5d: pradyos-init (PID 1), a musl C program. Reaps children; forks one that
+; exits 42. Prints "PRADYOS_INIT_OK ..." then "init: reaped PID=N exit=42".
+global init_elf
+global init_elf_end
+init_elf:
+    incbin "build/init.elf"
+init_elf_end:
