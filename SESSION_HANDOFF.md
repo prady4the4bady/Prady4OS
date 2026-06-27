@@ -12,10 +12,13 @@
 > the agent layer (ADR-026 + DDR-AETHER): kernel action queue + append-only audit
 > + per-process mem cap + syscall rate limit, 10 NSI calls (29–38), CAP_SOVEREIGN/
 > CAP_AGENT, and the ring-3 daemon+agent — gates `smoke-aether`, `smoke-aether-
-> queue`, `smoke-aether-sec` all pass (32 gates total). Begin the next slice —
-> **Layer 7 (UI/UX)** per the binding brief `docs/design/LAYER7_UI_UX_BRIEF.md`,
-> or extend agent capabilities (a ring-3 socket NSI to unlock live Ollama
-> inference is the top deferred item). Read this file in full, run
+> queue`, `smoke-aether-sec` all pass (32 gates total). The **ring-3 socket NSI**
+> (ADR-027) is also COMPLETE — 8 kernel proxy sockets + `SYS_SOCK_*` (39–42) +
+> agent live mode (Ollama over HTTP), with the boot page tables relocated to
+> 0x300000 for durable kernel-growth headroom; `make smoke-agent-live` is the
+> developer-run live gate (CI stays test-mode). Begin the next slice — **Layer 7
+> (UI/UX)** per the binding brief `docs/design/LAYER7_UI_UX_BRIEF.md` (the
+> sovereign/manual toggle maps to `SYS_SET_MODE`). Read this file in full, run
 > `graph_session_primer()`, confirm the gate set is green, and write the ADR/DDR
 > before any code. Do NOT restart earlier slices."**
 

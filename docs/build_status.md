@@ -348,10 +348,25 @@ spuriously killed — now zeroed. Gates **`smoke-aether`** (daemon→agent→sub
 approve→execute→`PRADYOS_AGENT_DONE`), **`smoke-aether-queue`**
 (`PRADYOS_AETHER_QUEUE_OK`), **`smoke-aether-sec`** (queue overflow, audit wrap,
 OOM/rate kill, no self-escalation). 32 gates total.
-**Deferred (ADR-026):** live Ollama inference (HTTP/JSON over lwIP) — needs a
-ring-3 socket NSI (lwIP is in-kernel today); SFS `/etc/aether/config` reading
-(reference build defaults to test mode); the daemon's full NIA IPC console.
-**Next: Layer 7 (UI/UX) per the binding brief, or further agent capabilities.**
+**Ring-3 socket NSI (ADR-027) COMPLETE:** the bridge from ring-3 agents to the
+in-kernel lwIP stack, without moving lwIP. `third_party/lwip-port` gains 8 proxy
+sockets — each a lwIP TCP PCB + a 4 KiB PMM-pool RX ring; `psock_*` touch lwIP only
+with interrupts masked (atomic vs the RX/PIT IRQ), and the recv callback applies
+`ERR_MEM` backpressure so no byte is dropped. `kernel/syscall/sys_socket.c` adds 4
+append-only syscalls (`SYS_SOCK_CONNECT`/`WRITE`/`READ`/`CLOSE`, 39–42), all
+copyin/copyout; `SYS_SOCK_READ` parks on `sti;hlt;cli` with a tick timeout.
+`user/agent_base.c` gains a live path (Ollama HTTP/1.1 `POST /api/generate` + a
+hand-written JSON `"response"` extractor) printing `PRADYOS_AGENT_LIVE_OK` when
+`AETHER_TEST_MODE=0`. Root cause fixed: the new code pushed the kernel image+BSS
+past the boot page tables at physical `0x70000` (entry-stub BSS-zero wiped them →
+triple fault); the 6 page tables moved to `0x300000`, above the kernel working
+window and below the 16 MiB PMM floor, so a growing kernel can never overrun them.
+Gate **`smoke-agent-live`** (`make smoke-agent-live [OLLAMA_HOST=a.b.c.d]`) is
+developer-run (needs a real Ollama); CI stays test-mode (32 gates).
+**Deferred (ADR-027/026):** event-driven socket blocking (vs the hlt+timeout
+poll); SFS `/etc/aether/config` reading (host is compile-time for the live build);
+the daemon's full NIA IPC console; a `CAP_NET` gate on socket creation.
+**Next: Layer 7 (UI/UX) — sovereign/manual mode toggle maps to SYS_SET_MODE.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
