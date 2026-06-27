@@ -17,6 +17,7 @@
 #define SYS_YIELD       3
 #define SYS_WAIT4       16
 #define SYS_GET_MODE    29
+#define SYS_SET_MODE    30
 #define SYS_SPAWN_AGENT 35
 #define WNOHANG         1
 
@@ -32,6 +33,24 @@ int main(void) {
     long mode = nsi(SYS_GET_MODE, 0, 0, 0);
     printf("PRADYOS_AETHER_DAEMON_OK mode=%s\n", mode ? "sovereign" : "manual");
     fflush(stdout);
+
+    /* L7 (DDR-701): Sovereign/Manual toggle binding self-check. As the
+     * CAP_SOVEREIGN authority, exercise SYS_SET_MODE both ways and confirm via
+     * SYS_GET_MODE, then restore SOVEREIGN so the agent pipeline auto-approves.
+     * This proves the toggle's control path end-to-end (the future graphical
+     * Super+M toggle is a renderer over exactly this binding). */
+    {
+        long ok = 1;
+        printf("PRADYOS_MODE_%s\n", nsi(SYS_GET_MODE, 0, 0, 0) ? "SOVEREIGN" : "MANUAL");
+        ok &= (nsi(SYS_SET_MODE, 0, 0, 0) == 0);                 /* -> MANUAL */
+        ok &= (nsi(SYS_GET_MODE, 0, 0, 0) == 0);
+        printf("PRADYOS_MODE_%s\n", nsi(SYS_GET_MODE, 0, 0, 0) ? "SOVEREIGN" : "MANUAL");
+        ok &= (nsi(SYS_SET_MODE, 1, 0, 0) == 0);                 /* -> SOVEREIGN */
+        ok &= (nsi(SYS_GET_MODE, 0, 0, 0) == 1);
+        printf("PRADYOS_MODE_%s\n", nsi(SYS_GET_MODE, 0, 0, 0) ? "SOVEREIGN" : "MANUAL");
+        printf("PRADYOS_MODE_TOGGLE_%s\n", ok ? "OK" : "FAIL");
+        fflush(stdout);
+    }
 
     /* Test-mode bring-up: spawn one agent with task "test". The kernel loads the
      * embedded agent image and marks it CAP_AGENT; sovereign mode auto-approves

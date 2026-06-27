@@ -18,6 +18,8 @@
 #define SYS_EXECVE 14
 #define SYS_FORK   15
 #define SYS_WAIT4  16
+#define SYS_GET_MODE 29   /* L7: sovereign/manual toggle binding (DDR-701) */
+#define SYS_SET_MODE 30
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -109,7 +111,22 @@ int main(void) {
         const char *cmd = argv[0];
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps exit\n");
+            printf("builtins: help echo cat run ls ps mode exit\n");
+        } else if (!strcmp(cmd, "mode")) {
+            /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
+             * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
+             * SYS_SET_MODE — denied here (no CAP_SOVEREIGN), proving the gate. */
+            if (argc >= 3 && !strcmp(argv[1], "set")) {
+                int want = !strcmp(argv[2], "sovereign") ? 1 : 0;
+                long r = nsi(SYS_SET_MODE, want, 0, 0);
+                if (r == 0)
+                    printf("mode: set %s\n", want ? "SOVEREIGN" : "MANUAL");
+                else
+                    printf("mode: denied (rc=%ld) — toggling requires CAP_SOVEREIGN\n", r);
+            } else {
+                long m = nsi(SYS_GET_MODE, 0, 0, 0);
+                printf("MODE: %s\n", m ? "SOVEREIGN" : "MANUAL");
+            }
         } else if (!strcmp(cmd, "echo")) {
             for (int i = 1; i < argc; i++)
                 printf("%s%s", argv[i], i + 1 < argc ? " " : "");

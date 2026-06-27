@@ -109,7 +109,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -563,6 +563,14 @@ smoke-aether-queue: $(IMG) fat-image sfs-image
 # queue -> daemon -> agent -> approve -> execute -> done.
 smoke-aether: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_QUEUE_OK\nPRADYOS_AETHER_DAEMON_OK\nPRADYOS_AGENT_VERIFIED\nPRADYOS_AGENT_DONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Layer 7 mode-binding gate (DDR-701): the daemon (CAP_SOVEREIGN) toggles the
+# Sovereign/Manual mode both ways via SYS_SET_MODE and confirms via SYS_GET_MODE,
+# proving the toggle's control path end-to-end (the brief's Super+M toggle is a
+# renderer over this binding). Ends in SOVEREIGN so smoke-aether is unaffected.
+smoke-mode: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_MODE_SOVEREIGN\nPRADYOS_MODE_MANUAL\nPRADYOS_MODE_TOGGLE_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # AETHER LIVE agent gate (ADR-027 §D6): DEVELOPER-RUN, not CI — needs a real

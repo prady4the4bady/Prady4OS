@@ -116,6 +116,9 @@ jobs:
       - name: QEMU AETHER security test (q35; OOM/rate/overflow/wrap/cap, L6)
         run: make smoke-aether-sec
 
+      - name: QEMU mode-binding test (q35; Sovereign/Manual toggle -> SYS_SET_MODE, L7)
+        run: make smoke-mode
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 
