@@ -41,6 +41,9 @@ static uint8_t  g_mac[6];
 static volatile int g_tx_done;
 static volatile int g_rx_seen;
 static int g_up;
+/* NET-B: RX delivery callback (lwIP netif input bridge). Set by virtio_net_set_rx;
+ * invoked from the IRQ with the Ethernet frame (virtio_net_hdr already stripped). */
+static void (*g_rx_cb)(const uint8_t *frame, uint32_t len);
 
 static void put_hex2(uint8_t b) {
     static const char hx[] = "0123456789abcdef";
@@ -48,7 +51,10 @@ static void put_hex2(uint8_t b) {
     kputc(hx[b & 0xF]);
 }
 
-/* Shared INTx handler: ack the ISR, then reap completed TX and RX chains. */
+/* Shared INTx handler: ack the ISR, reap completed TX (returning each buffer to
+ * the pool — NET-A leaked them), then deliver each received Ethernet frame to the
+ * lwIP bridge and re-arm its RX buffer. Bounded to 64 RX frames per IRQ so a
+ * flood cannot livelock the kernel (ADR-025 §D6 packet budget). */
 static void net_irq(void) {
     uint8_t isr = virtio_pci_isr_ack(&g_dev);
     if (!(isr & 1))
@@ -56,14 +62,51 @@ static void net_irq(void) {
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&g_tx, &len)) >= 0) {
+        uint64_t buf = g_tx.desc[head].addr;
         virtq_free_chain(&g_tx, head);
+        netbuf_free(buf);
         g_tx_done = 1;
     }
-    while ((head = virtq_pop_used(&g_rx, &len)) >= 0) {
-        virtq_free_chain(&g_rx, head);     /* baseline: note arrival, no re-arm/parse */
+    int budget = 64;
+    while (budget-- > 0 && (head = virtq_pop_used(&g_rx, &len)) >= 0) {
+        uint64_t buf = g_rx.desc[head].addr;   /* recover the netbuf before freeing the desc */
+        virtq_free_chain(&g_rx, head);
+        /* Length precheck: drop anything too short to be an Ethernet frame, before
+         * lwIP ever reads it (ADR-025 §D6 #1). */
+        if (g_rx_cb && len > VNET_HDR_LEN)
+            g_rx_cb((const uint8_t *)(uintptr_t)(buf + VNET_HDR_LEN), len - VNET_HDR_LEN);
+        struct virtq_buf rb = { buf, NETBUF_SIZE, 1 };   /* re-arm the same buffer */
+        int h = virtq_add(&g_rx, &rb, 1);
+        if (h >= 0)
+            virtq_publish(&g_rx, h);
+        else
+            netbuf_free(buf);
         g_rx_seen = 1;
     }
+    virtio_pci_notify(&g_dev, &g_rx, 0);       /* advertise the re-armed RX buffers */
 }
+
+/* NET-B public API (lwIP netif bridge). */
+int virtio_net_tx(const void *frame, uint32_t len) {
+    if (!g_up || len == 0 || len > NETBUF_SIZE - VNET_HDR_LEN)
+        return -1;
+    uint64_t b = netbuf_alloc();
+    if (!b)
+        return -1;
+    struct virtio_net_hdr *hdr = (struct virtio_net_hdr *)(uintptr_t)b;
+    memset(hdr, 0, sizeof *hdr);                /* no checksum offload / GSO */
+    memcpy((void *)(uintptr_t)(b + VNET_HDR_LEN), frame, len);
+    struct virtq_buf tb = { b, VNET_HDR_LEN + len, 0 };   /* device reads */
+    int h = virtq_add(&g_tx, &tb, 1);
+    if (h < 0) { netbuf_free(b); return -1; }
+    virtq_publish(&g_tx, h);
+    virtio_pci_notify(&g_dev, &g_tx, 1);
+    return 0;
+}
+
+void virtio_net_set_rx(void (*cb)(const uint8_t *frame, uint32_t len)) { g_rx_cb = cb; }
+void virtio_net_mac(uint8_t out[6]) { for (int i = 0; i < 6; i++) out[i] = g_mac[i]; }
+int  virtio_net_up(void) { return g_up; }
 
 static void net_arm_rx(void) {
     for (int i = 0; i < VNET_RX_BUFS; i++) {

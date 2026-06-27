@@ -90,6 +90,8 @@ static void dump_line(const char *label, uint64_t v) {
 #define IRQ_MAX_HANDLERS 4
 static irq_handler_fn irq_handlers[16][IRQ_MAX_HANDLERS];
 
+void net_poll_tick(void);   /* NET-B: lwip-port/pradyos_net.h (driven from the PIT) */
+
 void irq_register(unsigned irq, irq_handler_fn fn) {
     if (irq >= 16)
         return;
@@ -116,6 +118,8 @@ void isr_dispatch(struct regs *r) {
                 vdso_data->seq++;              /* even = write complete  */
             }
             sched_tick();
+            if ((g_ticks % 10u) == 0)         /* NET-B: drive lwIP timers ~every 100 ms */
+                net_poll_tick();
             if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
                 signal_deliver(r);            /* to the ring-3 thread we're returning to */
             return;

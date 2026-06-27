@@ -116,14 +116,15 @@ enable_a20:
     ret
 
 ; Load the kernel image from disk (INT 13h/AH=42h) to physical 0x10000.
-; Load the kernel in 8 chunks of 64 sectors (256 KiB total) to successive 32 KiB
+; Load the kernel in 11 chunks of 64 sectors (352 KiB total) to successive 32 KiB
 ; regions starting at physical 0x10000 — one INT 13h call per chunk stays under
 ; the BIOS per-call sector limit and the 64 KiB real-mode segment, and scales as
-; the kernel grows (256 KiB ends at 0x50000, below the page tables at 0x70000).
+; the kernel grows. 352 KiB ends at 0x68000, still below the page tables at
+; 0x70000 (NET-B: lwIP pushed the kernel past the old 256 KiB / 8-chunk limit).
 load_kernel:
     mov si, msg_ldk
     call puts16
-    mov cx, 8
+    mov cx, 11
 .chunk:
     push cx
     mov si, kernel_dap

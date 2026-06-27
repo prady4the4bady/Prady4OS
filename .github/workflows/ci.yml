@@ -62,6 +62,9 @@ jobs:
       - name: QEMU PRISM shell test (q35; interactive shell over serial, 5e)
         run: make smoke-shell
 
+      - name: QEMU lwIP loopback test (q35; UDP echo on 127.0.0.1, NET-B)
+        run: make smoke-net-lo
+
       - name: QEMU uaccess test (q35; copyin/copyout/copyinstr EFAULT contract)
         run: make smoke-uaccess
 

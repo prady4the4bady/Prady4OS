@@ -328,6 +328,7 @@ extern const unsigned char init_elf[];           /* 5d: pradyos-init (PID 1) */
 extern const unsigned char init_elf_end[];
 extern const unsigned char prism_elf[];          /* 5e: PRISM shell */
 extern const unsigned char prism_elf_end[];
+void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -1002,6 +1003,7 @@ void kmain(struct boot_info *bi) {
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x02)    /* virtio network (NET-A) */
             virtio_net_init(d->bus, d->dev, d->func);
     }
+    net_init();                          /* NET-B: bring up lwIP over virtio-net */
     fat32_register();                    /* Phase 4: register the FS driver with the VFS */
     sfs_register();                      /* Phase 4: SOVEREIGN FS (ADR-018) */
     ext4_register();                     /* Phase 4j: ext4 read-only compat */
