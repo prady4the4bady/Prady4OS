@@ -13,6 +13,7 @@
 #include "errno.h"
 #include "vmm.h"               /* VMM_USER_MIN/MAX for fs_base validation */
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D)   */
+#include "rtc.h"               /* rtc_now for SYS_CLOCK (DDR-709)          */
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -65,8 +66,18 @@ static long sys_set_tls(long fs_base, long a2, long a3, long a4) {
     return 0;
 }
 
+/* SYS_CLOCK (DDR-709): seconds since midnight from the RTC, for the time-of-day
+ * ambiance selection (the vDSO clock is monotonic-since-boot, not wall-clock). */
+static long sys_clock(long a1, long a2, long a3, long a4) {
+    (void)a1; (void)a2; (void)a3; (void)a4;
+    struct rtc_time t;
+    rtc_now(&t);
+    return (long)((uint32_t)t.hour * 3600u + (uint32_t)t.minute * 60u + t.second);
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
     syscall_register(SYS_SET_TLS, sys_set_tls);
+    syscall_register(SYS_CLOCK,   sys_clock);     /* DDR-709 */
 }

@@ -143,6 +143,9 @@ jobs:
       - name: QEMU z-order/focus test (q35; raise + focus + key routed to window, L7)
         run: make smoke-focus
 
+      - name: QEMU ambiance test (q35; 4 sun-driven ambiances + OKLab transitions, L7)
+        run: make smoke-ambiance
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 

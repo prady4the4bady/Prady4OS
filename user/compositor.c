@@ -21,6 +21,7 @@
 #define SYS_SURFACE_CMAP 52
 #define SYS_AGENT_ROSTER 53
 #define SYS_SURFACE_SENDKEY 55
+#define SYS_CLOCK        57
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; };
@@ -107,6 +108,67 @@ static void draw_str(const char *s, unsigned x, unsigned y, unsigned scale,
     }
 }
 
+/* ---- OKLab ambiance engine (DDR-709) -------------------------------------- */
+/* The four sun-driven ambiances (brief §1): representative bg + accent (R,G,B). */
+struct ambiance { const char *name; unsigned char bg[3], ac[3]; };
+static const struct ambiance AMB[4] = {
+    { "DAWN",  {0x1A,0x0A,0x2E}, {0xC8,0xA4,0xE8} },
+    { "DAY",   {0x0D,0x1B,0x2A}, {0x4F,0xAE,0xFF} },
+    { "DUSK",  {0x3D,0x15,0x00}, {0xFF,0xB3,0x47} },
+    { "NIGHT", {0x00,0x00,0x08}, {0x7B,0x4F,0xE0} },
+};
+static unsigned char g_bg[3] = {0x00,0x00,0x08};   /* current interpolated bg (R,G,B) */
+static unsigned char g_ac[3] = {0x7B,0x4F,0xE0};   /* current interpolated accent     */
+
+typedef struct { float L, a, b; } oklab;
+
+static float fcbrtf(float x) {                      /* libm-free cube root (Newton) */
+    if (x <= 0.0f) return 0.0f;
+    float y = x;
+    for (int i = 0; i < 24; i++) y = (2.0f * y + x / (y * y)) / 3.0f;
+    return y;
+}
+static unsigned char clamp8(float v) {
+    if (v < 0.0f) v = 0.0f; if (v > 1.0f) v = 1.0f;
+    return (unsigned char)(v * 255.0f + 0.5f);
+}
+static oklab rgb2lab(const unsigned char c[3]) {
+    float R = c[0] / 255.0f, G = c[1] / 255.0f, B = c[2] / 255.0f;
+    float l = 0.4122214708f*R + 0.5363325363f*G + 0.0514459929f*B;
+    float m = 0.2119034982f*R + 0.6806995451f*G + 0.1073969566f*B;
+    float s = 0.0883024619f*R + 0.2817188376f*G + 0.6299787005f*B;
+    float l_ = fcbrtf(l), m_ = fcbrtf(m), s_ = fcbrtf(s);
+    oklab o;
+    o.L = 0.2104542553f*l_ + 0.7936177850f*m_ - 0.0040720468f*s_;
+    o.a = 1.9779984951f*l_ - 2.4285922050f*m_ + 0.4505937099f*s_;
+    o.b = 0.0259040371f*l_ + 0.7827717662f*m_ - 0.8086757660f*s_;
+    return o;
+}
+static void lab2rgb(oklab o, unsigned char out[3]) {
+    float l_ = o.L + 0.3963377774f*o.a + 0.2158037573f*o.b;
+    float m_ = o.L - 0.1055613458f*o.a - 0.0638541728f*o.b;
+    float s_ = o.L - 0.0894841775f*o.a - 1.2914855480f*o.b;
+    float l = l_*l_*l_, m = m_*m_*m_, s = s_*s_*s_;
+    out[0] = clamp8( 4.0767416621f*l - 3.3077115913f*m + 0.2309699292f*s);
+    out[1] = clamp8(-1.2684380046f*l + 2.6097574011f*m - 0.3413193965f*s);
+    out[2] = clamp8(-0.0041960863f*l - 0.7034186147f*m + 1.7076147010f*s);
+}
+/* Interpolate a..b in OKLab at t in [0,1] -> sRGB out. */
+static void lab_lerp(const unsigned char a[3], const unsigned char b[3], float t, unsigned char out[3]) {
+    oklab A = rgb2lab(a), B = rgb2lab(b), m;
+    m.L = A.L + (B.L - A.L) * t;
+    m.a = A.a + (B.a - A.a) * t;
+    m.b = A.b + (B.b - A.b) * t;
+    lab2rgb(m, out);
+}
+static int ambiance_for_secs(long secs) {           /* §1 boundaries by hour */
+    int h = (int)(secs / 3600) % 24;
+    if (h >= 5 && h <= 8)  return 0;                /* DAWN  */
+    if (h >= 9 && h <= 16) return 1;                /* DAY   */
+    if (h >= 17 && h <= 20) return 2;               /* DUSK  */
+    return 3;                                       /* NIGHT */
+}
+
 /* Agent panel (DDR-707): the 8 named agents as cards on the right, each with a
  * status dot — green if AETHER's roster marks it active, dim otherwise. */
 static void render_agent_panel(void) {
@@ -123,18 +185,14 @@ static void render_agent_panel(void) {
     }
 }
 
-/* Render the desktop for `mode` (1 = sovereign, 0 = manual). */
+/* Render the desktop: the current ambiance bg + accent (DDR-709), the mode label
+ * (DDR-704), and the agent panel (DDR-707). Colours are BGRA; g_bg/g_ac are RGB. */
 static void render(int mode) {
-    if (mode) {
-        fill_rect(0, 0, g_fi.width, g_fi.height, 0x1A, 0x0A, 0x0A);          /* bg 0x0A0A1A */
-        fill_rect(0, 0, g_fi.width, 6, 0xA8, 0x21, 0x6B);                    /* accent bar (purple) */
-        draw_str("SOVEREIGN MODE", 24, 24, 3, 0xA8, 0x21, 0x6B);
-    } else {
-        fill_rect(0, 0, g_fi.width, g_fi.height, 0x2E, 0x1A, 0x1A);          /* bg 0x1A1A2E */
-        fill_rect(0, 0, g_fi.width, 6, 0x88, 0x94, 0x0D);                    /* accent bar (teal) */
-        draw_str("MANUAL MODE", 24, 24, 3, 0x88, 0x94, 0x0D);
-    }
-    render_agent_panel();                                       /* DDR-707 */
+    fill_rect(0, 0, g_fi.width, g_fi.height, g_bg[2], g_bg[1], g_bg[0]);  /* ambiance bg */
+    fill_rect(0, 0, g_fi.width, 6, g_ac[2], g_ac[1], g_ac[0]);            /* accent bar  */
+    draw_str(mode ? "SOVEREIGN MODE" : "MANUAL MODE", 24, 24, 3,
+             g_ac[2], g_ac[1], g_ac[0]);
+    render_agent_panel();                                                /* DDR-707 */
 }
 
 /* Blit a client surface (mapped at sva, w x h BGRA) onto the FB at (dx,dy). */
@@ -166,7 +224,37 @@ static int present(void) {
     return -1;
 }
 
+static int g_cur_amb = 3;                            /* current ambiance index (NIGHT) */
+
+/* Transition the ambiance bg+accent to AMB[idx] over `frames`, OKLab-interpolated. */
+static void set_ambiance(int idx, int frames) {
+    if (idx < 0 || idx > 3) return;
+    unsigned char fbg[3], fac[3];
+    for (int i = 0; i < 3; i++) { fbg[i] = g_bg[i]; fac[i] = g_ac[i]; }
+    for (int f = 1; f <= frames; f++) {
+        float t = (float)f / (float)frames;
+        lab_lerp(fbg, AMB[idx].bg, t, g_bg);
+        lab_lerp(fac, AMB[idx].ac, t, g_ac);
+        render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+        present();
+    }
+    g_cur_amb = idx;
+}
+
+/* Animated toggle (DDR-709): pulse the accent toward white and back in OKLab. */
+static void animate_toggle(void) {
+    static const unsigned char white[3] = {0xFF, 0xFF, 0xFF};
+    unsigned char base[3];
+    for (int i = 0; i < 3; i++) base[i] = g_ac[i];
+    int mode = (int)nsi(SYS_GET_MODE, 0, 0, 0);
+    for (int f = 1; f <= 6; f++) { lab_lerp(base, white, (float)f / 6.0f, g_ac); render(mode); present(); }
+    for (int f = 6; f >= 0; f--) { lab_lerp(base, white, (float)f / 6.0f, g_ac); render(mode); present(); }
+    printf("PRADYOS_TOGGLE_ANIM_OK\n");
+    fflush(stdout);
+}
+
 static void render_and_announce(int mode) {
+    animate_toggle();                               /* DDR-709: animated toggle */
     render(mode);
     present();
     long m = nsi(SYS_GET_MODE, 0, 0, 0);
@@ -199,12 +287,26 @@ int main(void) {
     printf("PRADYOS_COMPOSITOR_OK %ux%u\n", g_fi.width, g_fi.height);
     fflush(stdout);
 
+    /* DDR-709: one-time demo cycle through the 4 ambiances (OKLab transitions),
+     * then settle on the time-of-day ambiance from the RTC. */
+    for (int k = 0; k < 4; k++) {
+        set_ambiance(k, 6);
+        printf("PRADYOS_AMBIANCE %s\n", AMB[k].name);
+        fflush(stdout);
+    }
+    printf("PRADYOS_AMBIANCE_OK\n");
+    fflush(stdout);
+    set_ambiance(ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0)), 6);
+
     char keys[32];
     unsigned prev_btn = 0;
     long composited = 0;             /* count of client surfaces last composited */
     int focus_id = -1, last_focus = -2;       /* focused surface (DDR-708) */
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     for (;;) {
+        /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
+        int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
+        if (amb != g_cur_amb) set_ambiance(amb, 8);
         /* Named-agent panel (DDR-707): when AETHER's roster changes, re-render
          * (the panel is part of render()) and report the roster to serial. */
         unsigned char roster[8] = {0};

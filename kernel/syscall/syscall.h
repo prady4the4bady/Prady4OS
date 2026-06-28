@@ -72,6 +72,8 @@
 #define SYS_SURFACE_RAISE  54  /* (id) -> 0   raise to top + focus                   */
 #define SYS_SURFACE_SENDKEY 55 /* (id, ch) -> 0   compositor forwards a key          */
 #define SYS_SURFACE_GETKEY 56  /* (id) -> ch | -1   owner drains its key ring        */
+/* Wall-clock for time-of-day ambiance (Layer 7, DDR-709). */
+#define SYS_CLOCK          57  /* () -> seconds since midnight (RTC)                 */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
