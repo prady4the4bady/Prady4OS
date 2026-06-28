@@ -94,16 +94,17 @@ agent_base_elf:
     incbin "build/agent_base.elf"
 agent_base_elf_end:
 
-; L7 (DDR-702): ring-3 framebuffer draw test. Maps the GPU FB, draws, presents.
-global fbtest_elf
-global fbtest_elf_end
-fbtest_elf:
-    incbin "build/fbtest.elf"
-fbtest_elf_end:
-
 ; L7 (DDR-703): ring-3 keyboard input reader. Polls SYS_INPUT_POLL.
 global inputtest_elf
 global inputtest_elf_end
 inputtest_elf:
     incbin "build/inputtest.elf"
 inputtest_elf_end:
+
+; L7 (DDR-704): in-house sovereign-desktop compositor. Renders over the FB +
+; reacts to the keyboard; spawned with CAP_SOVEREIGN so it can flip the mode.
+global compositor_elf
+global compositor_elf_end
+compositor_elf:
+    incbin "build/compositor.elf"
+compositor_elf_end:

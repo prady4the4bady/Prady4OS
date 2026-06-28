@@ -56,10 +56,10 @@ USER_AETHERD_ELF := build/aether_daemon.elf
 USER_AGENT_SRC   := user/agent_base.c     # L6: AETHER agent template (CAP_AGENT)
 USER_AGENT_ELF   := build/agent_base.elf
 USER_AGENT_DEFS  ?=                       # extra -D for the agent (live mode sets AETHER_TEST_MODE=0)
-USER_FBTEST_SRC  := user/fbtest.c         # L7: ring-3 framebuffer draw test (DDR-702)
-USER_FBTEST_ELF  := build/fbtest.elf
 USER_INPUT_SRC   := user/inputtest.c      # L7: ring-3 keyboard input reader (DDR-703)
 USER_INPUT_ELF   := build/inputtest.elf
+USER_COMP_SRC    := user/compositor.c     # L7: in-house sovereign-desktop compositor (DDR-704)
+USER_COMP_ELF    := build/compositor.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -115,7 +115,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fb smoke-input smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fb smoke-input smoke-compositor smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -163,7 +163,7 @@ lwip: $(LWIP_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_FBTEST_SRC) $(USER_INPUT_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -196,11 +196,11 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/aether_daemon.o $(MUSL_LIB) -o $(USER_AETHERD_ELF)
 	$(CC) $(USER_C_CFLAGS) $(USER_AGENT_DEFS) -c $(USER_AGENT_SRC) -o build/agent_base.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/agent_base.o $(MUSL_LIB) -o $(USER_AGENT_ELF)
-	$(CC) $(USER_C_CFLAGS) -c $(USER_FBTEST_SRC) -o build/fbtest.o
-	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/fbtest.o $(MUSL_LIB) -o $(USER_FBTEST_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_INPUT_SRC) -o build/inputtest.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/inputtest.o $(MUSL_LIB) -o $(USER_INPUT_ELF)
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_FBTEST_ELF) $(USER_INPUT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_COMP_SRC) -o build/compositor.o
+	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/compositor.o $(MUSL_LIB) -o $(USER_COMP_ELF)
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -588,9 +588,9 @@ smoke-gpu: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 QEMU_GPU=1 EXTRA_SENTINEL=PRADYOS_GPU_FB_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
-# Layer-7 framebuffer-surface gate (DDR-702): a ring-3 program maps the GPU FB
-# (SYS_FB_MAP), draws a pattern into it, and presents it (SYS_FB_FLUSH). Proves
-# the userspace draw->present path; needs the GPU device, so QEMU_GPU=1.
+# Layer-7 framebuffer-surface gate (DDR-702): proves the ring-3 SYS_FB map+draw+
+# flush path. Served by the in-house compositor (DDR-704), which is the real FB
+# consumer and prints PRADYOS_FB_DRAW_OK on its first frame. Needs the GPU device.
 smoke-fb: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL=PRADYOS_FB_DRAW_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -611,6 +611,26 @@ smoke-input: $(IMG) fat-image sfs-image
 	    -serial file:build/input.log -display none -no-reboot || true
 	@grep -q PRADYOS_INPUT_OK build/input.log || { echo "[input] FAIL — key did not reach ring 3"; tail -20 build/input.log; exit 1; }
 	@echo "[input] PASS — $$(grep -a PRADYOS_INPUT_OK build/input.log | head -1)"
+
+# Layer-7 compositor gate (DDR-704): the in-house full-screen compositor renders
+# the sovereign desktop over the GPU framebuffer (PRADYOS_COMPOSITOR_OK), then the
+# harness injects 'm' and 's' via QEMU sendkey (real IRQ1). The compositor flips
+# the mode (SYS_SET_MODE) and re-renders; the manual->sovereign round-trip ending
+# in PRADYOS_COMPOSITOR_MODE SOVEREIGN proves keyboard -> mode -> framebuffer.
+smoke-compositor: $(IMG) fat-image sfs-image
+	@echo "[comp] compositor gate: boot(GPU) + sendkey m/s -> mode -> framebuffer..."
+	@rm -f build/comp.log /tmp/pcomp.sock
+	@bash tools/qemu_runner/input_inject.sh build/comp.log /tmp/pcomp.sock PRADYOS_COMPOSITOR_OK "m s" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/pcomp.sock,server,nowait \
+	    -serial file:build/comp.log -display none -no-reboot || true
+	@grep -q PRADYOS_COMPOSITOR_OK build/comp.log || { echo "[comp] FAIL — compositor did not render"; tail -20 build/comp.log; exit 1; }
+	@grep -q "PRADYOS_COMPOSITOR_MODE SOVEREIGN" build/comp.log || { echo "[comp] FAIL — key-driven mode flip not confirmed"; tail -20 build/comp.log; exit 1; }
+	@echo "[comp] PASS — desktop rendered + keyboard-driven mode flip confirmed."
 
 # Layer 7 mode-binding gate (DDR-701): the daemon (CAP_SOVEREIGN) toggles the
 # Sovereign/Manual mode both ways via SYS_SET_MODE and confirms via SYS_GET_MODE,

@@ -333,10 +333,10 @@ extern const unsigned char aether_daemon_elf[];  /* L6: AETHER daemon (PID 2) */
 extern const unsigned char aether_daemon_elf_end[];
 extern const unsigned char agent_base_elf[];     /* L6: AETHER agent template */
 extern const unsigned char agent_base_elf_end[];
-extern const unsigned char fbtest_elf[];         /* L7: ring-3 framebuffer test */
-extern const unsigned char fbtest_elf_end[];
 extern const unsigned char inputtest_elf[];      /* L7: ring-3 keyboard reader */
 extern const unsigned char inputtest_elf_end[];
+extern const unsigned char compositor_elf[];     /* L7: sovereign-desktop compositor */
+extern const unsigned char compositor_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -653,13 +653,17 @@ static void fs_test_thread(void *arg) {
                 /* Phase 5b: the syscall test program (read/write/open/... grows
                  * per slice). Runs in ring 3 and prints SYS* sentinels. */
                 user_boot_from_sfs(cap, smnt, "SYSTEST.ELF", systest_elf, systest_elf_end);
-                /* L7 (DDR-702): ring-3 framebuffer draw test. With a GPU it maps
-                 * the FB, draws, and presents (PRADYOS_FB_DRAW_OK); without one it
-                 * prints PRADYOS_FB_NODEV and exits. Exercised by smoke-fb. */
-                user_boot_from_sfs(cap, smnt, "FBTEST.ELF", fbtest_elf, fbtest_elf_end);
                 /* L7 (DDR-703): ring-3 keyboard reader. Polls SYS_INPUT_POLL;
                  * the smoke-input gate injects keys via QEMU sendkey. */
                 user_boot_from_sfs(cap, smnt, "INPUTTST.ELF", inputtest_elf, inputtest_elf_end);
+                /* L7 (DDR-704): the in-house compositor, spawned with CAP_SOVEREIGN
+                 * so it may flip the mode via SYS_SET_MODE. With a GPU it renders
+                 * the sovereign desktop and reacts to the keyboard; without one it
+                 * exits via SYS_FB_INFO -> -ENODEV. Exercised by smoke-compositor. */
+                struct tcb *comp = user_boot_from_sfs(cap, smnt, "COMPOSIT.ELF",
+                                                      compositor_elf, compositor_elf_end);
+                if (comp)
+                    comp->is_sovereign = 1;   /* may flip the mode; reparented to init on exit */
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
                 user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end);

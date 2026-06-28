@@ -52,6 +52,13 @@ inert on the 32 non-GPU gates and only live under `smoke-fb` (QEMU_GPU=1).
 `SYS_FB_FLUSH`es, and prints `PRADYOS_FB_DRAW_OK <w>x<h>`. Proves the full
 userspace draw→present path end to end (headless QEMU still ACKs the 2D commands).
 
+## Addendum (DDR-704)
+The standalone `user/fbtest.c` proof was **folded into the in-house compositor**
+(DDR-704): two processes presenting to the single framebuffer contended on the GPU
+control queue, so the compositor is now the **sole** framebuffer consumer and emits
+`PRADYOS_FB_DRAW_OK` on its first frame (the `smoke-fb` sentinel). The `SYS_FB_*`
+contract proven here is unchanged.
+
 ## Non-goals (later slices)
 Double buffering / page-flip, damage rectangles, per-client surfaces + a
 compositor, input (mouse/keyboard) routing, and the wlroots/Wayland protocol —

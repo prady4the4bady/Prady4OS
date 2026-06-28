@@ -128,6 +128,9 @@ jobs:
       - name: QEMU keyboard-input test (q35; sendkey -> IRQ1 -> SYS_INPUT_POLL, L7)
         run: make smoke-input
 
+      - name: QEMU compositor test (q35; sovereign desktop render + key-driven mode, L7)
+        run: make smoke-compositor
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 
