@@ -399,14 +399,26 @@ scancode-set-1 → ASCII into a 256-byte ring; `SYS_INPUT_POLL` (46) drains it t
 ring 3 (non-blocking). `user/inputtest.c` + gate **`smoke-input`** inject real keys
 via QEMU's HMP `sendkey` (so the i8042 raises IRQ1 — genuine hardware path) and
 confirm the byte reaches ring 3 (`PRADYOS_INPUT_OK a`). With DDR-702, ring 3 can
-now both draw to the screen and read the keyboard. 35 gates total.
-**Deferred (ADR-027/026/028, DDR-702/703):** event-driven socket + input blocking
-(epoll-able fds); SFS `/etc/aether/config`; daemon NIA IPC console; `CAP_NET` gate;
-GPU double-buffer / page-flip; Caps/Ctrl/Alt + key-repeat; mouse (virtio-input);
-per-client surfaces + a compositor; the wlroots/Wayland protocol (large out-of-tree
-library ports — brief §12 7b onward, the standing wall).
-**Next: per-client surfaces + a minimal in-house compositor (draw + input loop),
-or an epoll-able input/socket fd. wlroots/Wayland remain out-of-tree ports.**
+now both draw to the screen and read the keyboard.
+**In-house sovereign-desktop compositor (DDR-704) COMPLETE:** `user/compositor.c`
+— a single full-screen ring-3 process (CAP_SOVEREIGN), **not wlroots/Wayland** —
+maps the GPU framebuffer (`SYS_FB_MAP`), renders the current mode's desktop
+(background + accent bar + an embedded-8×8-font label: dark/purple SOVEREIGN,
+light/teal MANUAL), and runs a keyboard loop (`SYS_INPUT_POLL`): `s`/`m` flip the
+mode via `SYS_SET_MODE` (re-render + confirm), `q` exits. It is the **sole**
+framebuffer consumer (fbtest folded in — two FB presenters contended on the GPU
+control queue), emitting `PRADYOS_FB_DRAW_OK` + `PRADYOS_COMPOSITOR_OK` on the
+first frame. Gate **`smoke-compositor`** boots with the GPU, then injects `m`/`s`
+via QEMU `sendkey` (real IRQ1); the keyboard-driven sovereign→manual→sovereign
+round-trip ends in `PRADYOS_COMPOSITOR_MODE SOVEREIGN`, proving keyboard → mode →
+framebuffer end to end. 36 gates total.
+**Deferred (ADR-027/026/028, DDR-702/703/704):** double-buffer / page-flip; glass
+blur + OKLab ambiance transitions; the animated 300 ms toggle; per-client surfaces
++ a draw-command IPC protocol; mouse (virtio-input, `SYS_MOUSE_POLL`); epoll-able
+input/socket fds; SFS `/etc/aether/config`; `CAP_NET` gate; the named-agent panels;
+the wlroots/Wayland protocol (out-of-tree library ports — the standing wall).
+**Next: virtio-input mouse (`SYS_MOUSE_POLL`), then per-client surfaces + a
+draw-command IPC, then the named-agent panels. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
@@ -476,8 +488,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Approval Queue System | 🟢 COMPLETE | 6 | `kernel/aether/aether_queue.c`: 256-entry action queue + 4096-entry append-only audit ring (PMM-pool), 60 s TTL, `-EAGAIN` on overflow. Gates `smoke-aether-queue/-sec`. UI panel = compositor slice. |
 | Named Agents (KRYOS…SOLIN) | 🔴 NOT BUILT | 6f | 8 agents (the agent template + spawn path exist; the named personas/panels do not) |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
-| SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Mode binding + toggle control done (DDR-701, gate `smoke-mode`); the visual dark-space desktop is the in-house compositor slice (DDR-704). |
-| MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same as above — the manual-mode visual is rendered by the in-house compositor (DDR-704). |
+| SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
+| MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
 | Mode Toggle Animation | 🔴 NOT BUILT | 7 | 300ms cubic-bezier — visual polish, after the compositor renders the static toggle. |
 | Quantum Abstraction Layer | 🔴 NOT BUILT | 8 | future; citation unverified |
 | AVX-512 memcpy (asm) | 🔴 NOT BUILT | 2 | with CPUID fallback |

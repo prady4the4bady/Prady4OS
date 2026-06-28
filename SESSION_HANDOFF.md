@@ -28,10 +28,15 @@
 > load raised to 16 chunks/512 KiB). **PS/2 keyboard input (DDR-703) is also
 > COMPLETE** — `SYS_INPUT_POLL` (46) + a real IRQ1 path, gate `smoke-input` injects
 > keys via QEMU `sendkey` (35 CI gates). Ring 3 can now both **draw to the screen**
-> and **read the keyboard** — the raw I/O a shell builds on. Next toward the shell:
-> per-client surfaces + a minimal in-house compositor (a draw+input loop over the
-> framebuffer + keyboard), or epoll-able input/socket fds. wlroots/Wayland remain
-> large out-of-tree library ports (brief §12 7b+, the standing wall). Read this
+> and **read the keyboard**. **The in-house sovereign-desktop compositor (DDR-704)
+> is also COMPLETE** — `user/compositor.c` (CAP_SOVEREIGN) renders the mode's
+> desktop over the framebuffer with an embedded 8×8 font and flips Sovereign/Manual
+> on the `s`/`m` keys (gate `smoke-compositor`, 36 CI gates). It is the sole FB
+> consumer (fbtest was folded in). **PRADYOS now renders a keyboard-driven desktop
+> that reflects the kernel mode.** Next toward the full shell: virtio-input **mouse**
+> (`SYS_MOUSE_POLL`), then **per-client surfaces + a draw-command IPC** (compositor
+> owns the FB, clients submit draws), then the **named-agent panels**. wlroots/
+> Wayland remain out-of-tree ports (brief §12 7b+, the standing wall). Read this
 > file in full, run `graph_session_primer()`, confirm gates green, and write the
 > ADR/DDR before any code. Do NOT restart earlier slices."**
 
