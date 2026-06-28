@@ -93,3 +93,10 @@ global agent_base_elf_end
 agent_base_elf:
     incbin "build/agent_base.elf"
 agent_base_elf_end:
+
+; L7 (DDR-702): ring-3 framebuffer draw test. Maps the GPU FB, draws, presents.
+global fbtest_elf
+global fbtest_elf_end
+fbtest_elf:
+    incbin "build/fbtest.elf"
+fbtest_elf_end:

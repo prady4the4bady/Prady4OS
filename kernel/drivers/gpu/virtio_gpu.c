@@ -71,22 +71,29 @@ static uint32_t gpu_cmd(struct vgpu *g, uint32_t req_len, uint32_t resp_len) {
         return 0;
     virtq_publish(&g->vq, head);
     virtio_pci_notify(&g->dev, &g->vq, 0);
-    /* Wait on the used ring with HLT (interrupts are enabled this early — sti at
-     * kmain). HLT releases the core so QEMU's single-threaded TCG can process the
-     * kick; the PIT (100 Hz) wakes us to re-check. A busy spin instead starves the
-     * device backend and never converges with several virtio devices attached. */
+    /* Wait on the used ring with HLT so QEMU's single-threaded TCG can process the
+     * kick (a busy spin starves the backend; ADR-028). HLT needs IF=1, but this
+     * runs both at boot (IF=1) and inside SYS_FB_FLUSH (IF=0 via SFMASK) — so save
+     * the caller's RFLAGS, enable for each HLT, and restore on return. The PIT
+     * (100 Hz) bounds each wait; INTx is acked so the shared line never storms. */
+    uint64_t saved_fl;
+    __asm__ volatile("pushfq; pop %0" : "=r"(saved_fl) :: "memory");
+    uint32_t rtype = 0;
     for (uint64_t tick = 0; tick < 2000; tick++) {   /* ~20 s cap @ 10 ms/PIT */
         uint32_t len;
         int h = virtq_pop_used(&g->vq, &len);
         if (h >= 0) {
             virtq_free_chain(&g->vq, h);
-            return resp->type;
+            rtype = resp->type;
+            break;
         }
         (void)virtio_pci_isr_ack(&g->dev);            /* deassert any shared INTx */
-        __asm__ volatile("hlt");
+        __asm__ volatile("sti; hlt; cli");
     }
-    kputs("virtio-gpu: cmd poll timeout\r\n");
-    return 0;                                          /* timeout */
+    __asm__ volatile("push %0; popfq" :: "r"(saved_fl) : "memory", "cc");
+    if (!rtype)
+        kputs("virtio-gpu: cmd poll timeout\r\n");
+    return rtype;
 }
 
 static void hdr_set(uint32_t type) {
@@ -205,4 +212,29 @@ uint8_t *virtio_gpu_fb(uint32_t *w, uint32_t *h, uint32_t *stride) {
     if (h) *h = g_gpu.h;
     if (stride) *stride = g_gpu.stride;
     return g_gpu.fb;
+}
+
+/* Present the whole framebuffer (TRANSFER_TO_HOST_2D + RESOURCE_FLUSH). Callable
+ * from a syscall (SYS_FB_FLUSH); gpu_cmd handles the IF=0 wait. A single-flight
+ * guard prevents control-queue reentrancy if a flush is preempted mid-wait. */
+int virtio_gpu_present(void) {
+    static volatile int g_busy;
+    if (!g_up) return -1;
+    if (g_busy) return -1;
+    g_busy = 1;
+    int rc = -1;
+    hdr_set(VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D);
+    struct gpu_transfer_2d *t = (struct gpu_transfer_2d *)(uintptr_t)(g_gpu.scratch + GPU_REQ_OFF);
+    t->r.x = 0; t->r.y = 0; t->r.width = g_gpu.w; t->r.height = g_gpu.h;
+    t->offset = 0; t->resource_id = GPU_RESOURCE_ID;
+    if (gpu_cmd(&g_gpu, sizeof *t, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA) {
+        hdr_set(VIRTIO_GPU_CMD_RESOURCE_FLUSH);
+        struct gpu_resource_flush *f = (struct gpu_resource_flush *)(uintptr_t)(g_gpu.scratch + GPU_REQ_OFF);
+        f->r.x = 0; f->r.y = 0; f->r.width = g_gpu.w; f->r.height = g_gpu.h;
+        f->resource_id = GPU_RESOURCE_ID;
+        if (gpu_cmd(&g_gpu, sizeof *f, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA)
+            rc = 0;
+    }
+    g_busy = 0;
+    return rc;
 }

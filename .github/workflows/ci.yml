@@ -119,6 +119,12 @@ jobs:
       - name: QEMU mode-binding test (q35; Sovereign/Manual toggle -> SYS_SET_MODE, L7)
         run: make smoke-mode
 
+      - name: QEMU VirtIO-GPU framebuffer test (q35; 2D bring-up + scanout, L7 s0)
+        run: make smoke-gpu
+
+      - name: QEMU framebuffer-surface test (q35; ring-3 map+draw+flush, L7)
+        run: make smoke-fb
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 

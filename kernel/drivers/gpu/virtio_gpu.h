@@ -7,3 +7,6 @@
 void virtio_gpu_init(uint8_t bus, uint8_t dev, uint8_t func);
 /* The active framebuffer (identity-mapped phys==virt), or 0 if no GPU is up. */
 uint8_t *virtio_gpu_fb(uint32_t *w, uint32_t *h, uint32_t *stride);
+/* Present the whole framebuffer to scanout 0 (transfer + flush). 0 | -1.
+ * Safe to call from a syscall (handles the IF=0 control-queue wait). */
+int virtio_gpu_present(void);

@@ -120,16 +120,17 @@ enable_a20:
     ret
 
 ; Load the kernel image from disk (INT 13h/AH=42h) to physical 0x10000.
-; Load the kernel in 11 chunks of 64 sectors (352 KiB total) to successive 32 KiB
+; Load the kernel in 16 chunks of 64 sectors (512 KiB total) to successive 32 KiB
 ; regions starting at physical 0x10000 — one INT 13h call per chunk stays under
 ; the BIOS per-call sector limit and the 64 KiB real-mode segment, and scales as
 ; the kernel grows. The runtime image + BSS has room up to the stack at 0x200000;
-; the page tables now live at 0x300000 (moved off 0x70000), so the binding limit
-; on kernel.bin is this 352 KiB read window, not the page tables.
+; the page tables live at 0x300000 (moved off 0x70000). The disk image is 1 MiB,
+; so reading 512 KiB from LBA 17 stays well within it. Binding limit on kernel.bin
+; is this read window, not the page tables.
 load_kernel:
     mov si, msg_ldk
     call puts16
-    mov cx, 11
+    mov cx, 16
 .chunk:
     push cx
     mov si, kernel_dap

@@ -54,6 +54,10 @@
 #define SYS_SOCK_WRITE     40  /* (fd, buf, len) -> bytes written | -errno          */
 #define SYS_SOCK_READ      41  /* (fd, buf, len, timeout_ms) -> bytes | 0(EOF) | -errno */
 #define SYS_SOCK_CLOSE     42  /* (fd) -> 0 | -errno                                */
+/* Ring-3 framebuffer surface (Layer 7, DDR-702). Append-only after 42. */
+#define SYS_FB_INFO        43  /* (struct fb_info*) -> 0 | -ENODEV                  */
+#define SYS_FB_MAP         44  /* () -> user VA | -ENODEV                           */
+#define SYS_FB_FLUSH       45  /* () -> 0 | -ENODEV  (present the framebuffer)      */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

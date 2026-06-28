@@ -23,4 +23,5 @@
 #define ESPIPE         29   /* illegal seek (non-seekable fd)       */
 #define ERANGE         34   /* result too large for the buffer      */
 #define ENAMETOOLONG   36   /* file name / string too long          */
+#define ENODEV         19   /* no such device (e.g. no GPU framebuffer) */
 #define ENOSYS         38   /* function not implemented             */
