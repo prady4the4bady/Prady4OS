@@ -100,3 +100,10 @@ global fbtest_elf_end
 fbtest_elf:
     incbin "build/fbtest.elf"
 fbtest_elf_end:
+
+; L7 (DDR-703): ring-3 keyboard input reader. Polls SYS_INPUT_POLL.
+global inputtest_elf
+global inputtest_elf_end
+inputtest_elf:
+    incbin "build/inputtest.elf"
+inputtest_elf_end:

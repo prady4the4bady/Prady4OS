@@ -125,6 +125,9 @@ jobs:
       - name: QEMU framebuffer-surface test (q35; ring-3 map+draw+flush, L7)
         run: make smoke-fb
 
+      - name: QEMU keyboard-input test (q35; sendkey -> IRQ1 -> SYS_INPUT_POLL, L7)
+        run: make smoke-input
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 

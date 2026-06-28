@@ -58,6 +58,7 @@
 #define SYS_FB_INFO        43  /* (struct fb_info*) -> 0 | -ENODEV                  */
 #define SYS_FB_MAP         44  /* () -> user VA | -ENODEV                           */
 #define SYS_FB_FLUSH       45  /* () -> 0 | -ENODEV  (present the framebuffer)      */
+#define SYS_INPUT_POLL     46  /* (buf, max) -> count of keyboard bytes (DDR-703)   */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

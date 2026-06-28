@@ -335,6 +335,8 @@ extern const unsigned char agent_base_elf[];     /* L6: AETHER agent template */
 extern const unsigned char agent_base_elf_end[];
 extern const unsigned char fbtest_elf[];         /* L7: ring-3 framebuffer test */
 extern const unsigned char fbtest_elf_end[];
+extern const unsigned char inputtest_elf[];      /* L7: ring-3 keyboard reader */
+extern const unsigned char inputtest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -655,6 +657,9 @@ static void fs_test_thread(void *arg) {
                  * the FB, draws, and presents (PRADYOS_FB_DRAW_OK); without one it
                  * prints PRADYOS_FB_NODEV and exits. Exercised by smoke-fb. */
                 user_boot_from_sfs(cap, smnt, "FBTEST.ELF", fbtest_elf, fbtest_elf_end);
+                /* L7 (DDR-703): ring-3 keyboard reader. Polls SYS_INPUT_POLL;
+                 * the smoke-input gate injects keys via QEMU sendkey. */
+                user_boot_from_sfs(cap, smnt, "INPUTTST.ELF", inputtest_elf, inputtest_elf_end);
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
                 user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end);

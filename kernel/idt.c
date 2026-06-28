@@ -15,6 +15,7 @@
 #include "vmm_cow.h"
 #include "regs.h"
 #include "signal.h"
+#include "ps2kbd.h"
 #include <stdint.h>
 
 struct idt_entry {
@@ -124,11 +125,8 @@ void isr_dispatch(struct regs *r) {
                 signal_deliver(r);            /* to the ring-3 thread we're returning to */
             return;
         }
-        if (irqno == 1) {                      /* IRQ1: keyboard */
-            uint8_t scancode = inb(0x60);
-            kputs("[kbd] scancode=");
-            kputhex(scancode);
-            kputs("\r\n");
+        if (irqno == 1) {                      /* IRQ1: PS/2 keyboard (DDR-703) */
+            ps2kbd_isr();                      /* read 0x60, push ASCII to the ring */
         } else {
             for (int i = 0; i < IRQ_MAX_HANDLERS; i++)
                 if (irq_handlers[irqno][i])    /* run every sharer on this line */
