@@ -7,8 +7,11 @@
 #include "uaccess.h"
 #include "errno.h"
 #include "ps2kbd.h"
+#include "virtio_input.h"
 
 #define INPUT_MAX 256
+
+struct mouse_state { int32_t x, y; uint32_t buttons; };
 
 static long sys_input_poll(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
@@ -24,6 +27,20 @@ static long sys_input_poll(long a1, long a2, long a3, long a4) {
     return n;
 }
 
+static long sys_mouse_poll(long a1, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    struct mouse_state ms;
+    int x, y;
+    uint32_t btn;
+    if (virtio_input_state(&x, &y, &btn) != 0)
+        return -ENODEV;
+    ms.x = x; ms.y = y; ms.buttons = btn;
+    if (copyout((void __user *)a1, &ms, sizeof ms) < 0)
+        return -EFAULT;
+    return 0;
+}
+
 void sys_input_register(void) {
     syscall_register(SYS_INPUT_POLL, sys_input_poll);
+    syscall_register(SYS_MOUSE_POLL, sys_mouse_poll);
 }

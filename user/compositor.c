@@ -16,8 +16,10 @@
 #define SYS_FB_MAP      44
 #define SYS_FB_FLUSH    45
 #define SYS_INPUT_POLL  46
+#define SYS_MOUSE_POLL  47
 
 struct fb_info { unsigned width, height, stride, bpp; };
+struct mouse_state { int x, y; unsigned buttons; };
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -100,6 +102,14 @@ static void render(int mode) {
     }
 }
 
+/* A small white cursor block at (x,y), clamped to the screen. */
+static void draw_cursor(int x, int y) {
+    if (x < 0) x = 0; if (y < 0) y = 0;
+    if ((unsigned)x > g_fi.width - 12) x = (int)g_fi.width - 12;
+    if ((unsigned)y > g_fi.height - 12) y = (int)g_fi.height - 12;
+    fill_rect((unsigned)x, (unsigned)y, 12, 12, 0xFF, 0xFF, 0xFF);
+}
+
 static int present(void) {
     for (int i = 0; i < 10; i++) {                /* tolerate a transient busy GPU */
         if (nsi(SYS_FB_FLUSH, 0, 0, 0) == 0) return 0;
@@ -142,6 +152,7 @@ int main(void) {
     fflush(stdout);
 
     char keys[32];
+    unsigned prev_btn = 0;
     for (;;) {
         long n = nsi(SYS_INPUT_POLL, (long)keys, (long)sizeof keys, 0);
         for (long i = 0; i < n; i++) {
@@ -149,6 +160,19 @@ int main(void) {
             if (c == 's')      { nsi(SYS_SET_MODE, 1, 0, 0); render_and_announce(1); }
             else if (c == 'm') { nsi(SYS_SET_MODE, 0, 0, 0); render_and_announce(0); }
             else if (c == 'q') { printf("PRADYOS_COMPOSITOR_EXIT\n"); fflush(stdout); nsi(SYS_EXIT, 0, 0, 0); }
+        }
+        /* Pointer (DDR-705): on a button-down, redraw the desktop with a cursor at
+         * the pointer position and present it (event-driven — no continuous flush). */
+        struct mouse_state ms;
+        if (nsi(SYS_MOUSE_POLL, (long)&ms, 0, 0) == 0) {
+            if (ms.buttons && !prev_btn) {
+                render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+                draw_cursor(ms.x, ms.y);
+                present();
+                printf("PRADYOS_MOUSE_OK %d %d\n", ms.x, ms.y);
+                fflush(stdout);
+            }
+            prev_btn = ms.buttons;
         }
         nsi(SYS_YIELD, 0, 0, 0);
     }
