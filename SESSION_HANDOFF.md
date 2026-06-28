@@ -18,12 +18,15 @@
 > 0x300000 for durable kernel-growth headroom; `make smoke-agent-live` is the
 > developer-run live gate (CI stays test-mode). **Layer 7 has STARTED** with the
 > Sovereign/Manual toggle binding (DDR-701): PRISM `mode` builtin + the daemon's
-> `SYS_SET_MODE` self-check, gate `smoke-mode` (33 gates). **The Layer-7 visual
-> compositor (brief §12) is BLOCKED on a VirtIO-GPU framebuffer driver** that does
-> not exist — the next real slice is **Layer-7 slice 0: a VirtIO-GPU framebuffer +
-> modeset driver** (write its ADR first), which unblocks 7a (wlroots) onward. Read
-> this file in full, run `graph_session_primer()`, confirm gates green, and write
-> the ADR/DDR before any code. Do NOT restart earlier slices."**
+> `SYS_SET_MODE` self-check, gate `smoke-mode`. **Layer-7 slice 0 (VirtIO-GPU
+> framebuffer, ADR-028) is COMPLETE** — `kernel/drivers/gpu/virtio_gpu.c` brings up
+> scanout 0 + presents a BGRA framebuffer (gate `smoke-gpu` →
+> `PRADYOS_GPU_FB_OK 1024x768`; 33 CI gates). The framebuffer prerequisite is
+> satisfied, so the **compositor build order is unblocked**: next is a
+> `/dev/fb0`-style ring-3 framebuffer mapping + draw surface, then the wlroots/shell
+> slices (each with a DDR before code). Read this file in full, run
+> `graph_session_primer()`, confirm gates green, and write the ADR/DDR before any
+> code. Do NOT restart earlier slices."**
 
 Concretely:
 1. Read this whole file (esp. §0.1 — current state).

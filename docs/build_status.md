@@ -374,9 +374,21 @@ in CI (33 gates). **BLOCKER (honest):** the Layer-7 *visual* compositor (brief �
 framebuffer + modeset driver**, which PRADYOS lacks and which needs its own ADR +
 slice sequence (a Layer-7 "slice 0"); only the toggle's kernel binding is built so
 far, by design.
-**Deferred (ADR-027/026):** event-driven socket blocking; SFS `/etc/aether/config`;
-the daemon's NIA IPC console; `CAP_NET` socket gate.
-**Next: Layer 7 slice 0 — VirtIO-GPU framebuffer driver (unblocks the compositor).**
+**Layer-7 slice 0 — VirtIO-GPU framebuffer (ADR-028) COMPLETE:** the display-output
+prerequisite is in. `kernel/drivers/gpu/virtio_gpu.c` brings up scanout 0 over the
+2D control queue (GET_DISPLAY_INFO → RESOURCE_CREATE_2D → ATTACH_BACKING →
+SET_SCANOUT → TRANSFER_TO_HOST_2D → RESOURCE_FLUSH) and presents a linear BGRA
+framebuffer from the PMM pool (phys==virt identity-mapped DMA), reusing the shared
+virtio_pci/virtq transport; dispatched from kmain's PCIe scan (vendor 0x1AF4 class
+0x03). Bring-up waits on the used ring with `HLT` (not a busy-spin, which starves
+QEMU's TCG device backend) and suppresses/acks the shared INTx. Gate **`smoke-gpu`**
+boots `-device virtio-gpu-pci` (added to `boot_test.sh` only under `QEMU_GPU=1`) and
+greps `PRADYOS_GPU_FB_OK 1024x768` — verifiable headless. 33 gates total.
+**Deferred (ADR-027/026/028):** event-driven socket blocking; SFS
+`/etc/aether/config`; the daemon's NIA IPC console; `CAP_NET` socket gate; GPU
+double-buffering / page-flip + a `/dev/fb0` ring-3 mapping (compositor slices).
+**Next: Layer-7 compositor build order — 7a (a `/dev/fb0`-style FB device + a
+ring-3 draw surface), then the wlroots/shell slices on top.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
