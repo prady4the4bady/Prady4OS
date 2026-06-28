@@ -294,9 +294,9 @@ int main(void) {
         printf("PRADYOS_AMBIANCE %s\n", AMB[k].name);
         fflush(stdout);
     }
-    printf("PRADYOS_AMBIANCE_OK\n");
+    set_ambiance(ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0)), 6);   /* settle on time-of-day */
+    printf("PRADYOS_AMBIANCE_OK\n");                               /* loop is about to start */
     fflush(stdout);
-    set_ambiance(ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0)), 6);
 
     char keys[32];
     unsigned prev_btn = 0;

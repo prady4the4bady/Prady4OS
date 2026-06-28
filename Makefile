@@ -645,7 +645,7 @@ smoke-compositor: $(IMG) fat-image sfs-image
 smoke-mouse: $(IMG) fat-image sfs-image
 	@echo "[mouse] pointer gate: boot(GPU+tablet) + QMP move/click -> SYS_MOUSE_POLL..."
 	@rm -f build/mouse.log /tmp/pmouse.sock
-	@bash tools/qemu_runner/mouse_inject.sh build/mouse.log /tmp/pmouse.sock PRADYOS_COMPOSITOR_OK &
+	@bash tools/qemu_runner/mouse_inject.sh build/mouse.log /tmp/pmouse.sock PRADYOS_AMBIANCE_OK &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
