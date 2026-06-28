@@ -39,10 +39,13 @@
 > kernel mode.** **Per-client surfaces (DDR-706) are also COMPLETE** —
 > `SYS_SURFACE_*` (48–52) + a 16-entry PMM surface table shared by physical mapping;
 > `user/surfacetest.c` commits a window the compositor composites (gate
-> `smoke-surface`; 38 CI gates). **Ring-3 apps can now render windows.** Next toward
-> the full shell: the **named-agent UI panels** (agents shown active in a panel, per
-> the design images), then surface **z-order/focus + input routing to the focused
-> surface**. wlroots/Wayland remain out-of-tree ports (brief §12 7b+, the wall). Read this
+> `smoke-surface`; 38 CI gates). **Ring-3 apps can now render windows.** **Named-agent
+> UI panels (DDR-707) are also COMPLETE** — the compositor renders the 8 named agents
+> (KRYOS…SOLIN) as cards with active/inactive state tied to AETHER's 8-slot roster
+> (new `SYS_AGENT_ROSTER` 53; daemon lights KRYOS); gate `smoke-agents` (39 CI gates).
+> Next toward the full shell: surface **z-order/focus + input routing to the focused
+> surface**, then the visual polish (glass/OKLab). wlroots/Wayland remain out-of-tree
+> ports (brief §12 7b+, the wall). Read this
 > file in full, run `graph_session_primer()`, confirm gates green, and write the
 > ADR/DDR before any code. Do NOT restart earlier slices."**
 

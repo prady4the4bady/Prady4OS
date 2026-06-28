@@ -430,14 +430,24 @@ compositing is copy-free. Five syscalls (48–52): `SURFACE_CREATE`/`MAP`(owner)
 compositor polls committed surfaces and blits each at its `(x,y)` onto the desktop
 (`PRADYOS_SURFACE_OK <id>`). `user/surfacetest.c` commits a 64×64 green window at
 (100,100). Gate **`smoke-surface`** (client commit → compositor composite). **Ring 3
-apps can now render windows the compositor composites.** 38 gates total.
-**Deferred (DDR-702..706):** double-buffer / page-flip; glass + OKLab ambiance;
+apps can now render windows the compositor composites.**
+**Named-agent UI panels (DDR-707) COMPLETE:** the compositor renders the 8 named
+agents (KRYOS, PRAX, LUMYN, AHNIS, IRIS, RUFLO, HERMES, SOLIN) as cards with a
+status dot tied to AETHER's roster. Assessment found AETHER had no per-name
+registry, so one read-only syscall was added: `kernel/syscall/sys_aether.c` gains
+an 8-slot active-bit roster (`g_roster`); `SYS_SPAWN_AGENT`'s 3rd arg is now the
+roster slot, and **`SYS_AGENT_ROSTER` (53)** copies the bits to ring 3. The daemon
+spawns the test agent into slot 0 → **KRYOS active**, the rest inactive. The panel
+uses an extended 8×8 font (added K/Y/P/X/H/F glyphs); on a roster change it reports
+`AGENT <NAME> active|inactive` ×8 + `PRADYOS_AGENTS_OK`. Gate **`smoke-agents`**.
+39 gates total.
+**Deferred (DDR-702..707):** double-buffer / page-flip; glass + OKLab ambiance;
 the animated toggle; relative-mouse + scroll; surface alpha / z-order / destroy /
-focus + input routing to the focused surface; epoll-able fds; SFS
-`/etc/aether/config`; `CAP_NET` gate; the named-agent panels; the wlroots/Wayland
-protocol (out-of-tree library ports — the standing wall).
-**Next: named-agent UI panels (agents shown active in a panel, per the design
-images), then surface z-order/focus + input routing. wlroots/Wayland out-of-tree.**
+focus + input routing to the focused surface; per-agent live metrics + the panel's
+spawn/kill UI + clear-on-kill; epoll-able fds; SFS `/etc/aether/config`; `CAP_NET`
+gate; the wlroots/Wayland protocol (out-of-tree library ports — the standing wall).
+**Next: surface z-order/focus + input routing to the focused surface; then the
+visual polish (glass/OKLab). wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
@@ -505,7 +515,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Agent Capability Enforcer | 🟢 COMPLETE | 6 | `kernel/aether/` + `cap.h` CAP_AGENT/CAP_SOVEREIGN (kernel-set, no self-escalation) + 128 MiB mem cap (OOM kill) + 60 syscall/s rate limit. Gate `smoke-aether-sec`. |
 | SOVEREIGN Gate Logic | 🟢 COMPLETE | 6/7 | Global `g_sovereign_mode` (default sovereign auto-approve; manual holds PENDING); `SYS_GET_MODE`/`SYS_SET_MODE` (CAP_SOVEREIGN). Bound to the toggle (DDR-701). Gate `smoke-mode`. |
 | Approval Queue System | 🟢 COMPLETE | 6 | `kernel/aether/aether_queue.c`: 256-entry action queue + 4096-entry append-only audit ring (PMM-pool), 60 s TTL, `-EAGAIN` on overflow. Gates `smoke-aether-queue/-sec`. UI panel = compositor slice. |
-| Named Agents (KRYOS…SOLIN) | 🔴 NOT BUILT | 6f | 8 agents (the agent template + spawn path exist; the named personas/panels do not) |
+| Named Agents (KRYOS…SOLIN) | 🟡 IN PROGRESS | 6f/7 | The 8 named agents render as compositor panel cards with active/inactive state tied to AETHER's 8-slot roster (DDR-707, `SYS_AGENT_ROSTER`); the daemon lights KRYOS. Gate `smoke-agents`. Distinct per-persona agent behaviours are still future. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
