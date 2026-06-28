@@ -32,11 +32,13 @@
 > is also COMPLETE** — `user/compositor.c` (CAP_SOVEREIGN) renders the mode's
 > desktop over the framebuffer with an embedded 8×8 font and flips Sovereign/Manual
 > on the `s`/`m` keys (gate `smoke-compositor`, 36 CI gates). It is the sole FB
-> consumer (fbtest was folded in). **PRADYOS now renders a keyboard-driven desktop
-> that reflects the kernel mode.** Next toward the full shell: virtio-input **mouse**
-> (`SYS_MOUSE_POLL`), then **per-client surfaces + a draw-command IPC** (compositor
-> owns the FB, clients submit draws), then the **named-agent panels**. wlroots/
-> Wayland remain out-of-tree ports (brief §12 7b+, the standing wall). Read this
+> consumer (fbtest was folded in). **The virtio-input pointer (DDR-705) is also
+> COMPLETE** — `SYS_MOUSE_POLL` (47) + a virtio-tablet driver; the compositor draws
+> a cursor on click (gate `smoke-mouse` via QMP `input-send-event`; 37 CI gates).
+> **PRADYOS now renders a keyboard- and pointer-driven desktop that reflects the
+> kernel mode.** Next toward the full shell: **per-client surfaces + a draw-command
+> IPC** (compositor owns the FB, clients submit draws), then the **named-agent
+> panels**. wlroots/Wayland remain out-of-tree ports (brief §12 7b+, the wall). Read this
 > file in full, run `graph_session_primer()`, confirm gates green, and write the
 > ADR/DDR before any code. Do NOT restart earlier slices."**
 

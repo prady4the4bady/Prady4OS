@@ -411,14 +411,23 @@ control queue), emitting `PRADYOS_FB_DRAW_OK` + `PRADYOS_COMPOSITOR_OK` on the
 first frame. Gate **`smoke-compositor`** boots with the GPU, then injects `m`/`s`
 via QEMU `sendkey` (real IRQ1); the keyboard-driven sovereign→manual→sovereign
 round-trip ends in `PRADYOS_COMPOSITOR_MODE SOVEREIGN`, proving keyboard → mode →
-framebuffer end to end. 36 gates total.
-**Deferred (ADR-027/026/028, DDR-702/703/704):** double-buffer / page-flip; glass
-blur + OKLab ambiance transitions; the animated 300 ms toggle; per-client surfaces
-+ a draw-command IPC protocol; mouse (virtio-input, `SYS_MOUSE_POLL`); epoll-able
-input/socket fds; SFS `/etc/aether/config`; `CAP_NET` gate; the named-agent panels;
-the wlroots/Wayland protocol (out-of-tree library ports — the standing wall).
-**Next: virtio-input mouse (`SYS_MOUSE_POLL`), then per-client surfaces + a
-draw-command IPC, then the named-agent panels. wlroots/Wayland remain out-of-tree.**
+framebuffer end to end.
+**virtio-input pointer (DDR-705) COMPLETE:** `kernel/drivers/input/virtio_input.c`
+— a virtio-tablet (absolute) driver over the virtio-pci/virtq transport; the IRQ
+handler folds `virtio_input_event`s into a current `{abs_x, abs_y, buttons}` state
+and re-arms the eventq buffers. `SYS_MOUSE_POLL` (47) returns the state mapped to
+screen pixels (non-consuming). The compositor polls it and, on a button-down,
+draws a cursor + prints `PRADYOS_MOUSE_OK x y`. Gate **`smoke-mouse`** injects an
+absolute move + click via **QMP `input-send-event`** (the real virtio-input path)
+→ `PRADYOS_MOUSE_OK` (abs 16000,12000 → pixel 500,281). **Ring 3 now draws to the
+screen, reads the keyboard, AND tracks the pointer.** 37 gates total.
+**Deferred (DDR-702/703/704/705):** double-buffer / page-flip; glass blur + OKLab
+ambiance transitions; the animated 300 ms toggle; relative-mouse + scroll wheel;
+per-client surfaces + a draw-command IPC protocol; epoll-able input/socket fds;
+SFS `/etc/aether/config`; `CAP_NET` gate; the named-agent panels; the wlroots/
+Wayland protocol (out-of-tree library ports — the standing wall).
+**Next: per-client surfaces + a draw-command IPC (compositor owns the FB, clients
+submit draws), then the named-agent panels. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
