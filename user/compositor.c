@@ -17,9 +17,12 @@
 #define SYS_FB_FLUSH    45
 #define SYS_INPUT_POLL  46
 #define SYS_MOUSE_POLL  47
+#define SYS_SURFACE_POLL 51
+#define SYS_SURFACE_CMAP 52
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; };
+struct surface_info { unsigned id, w, h; int x, y; };
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -102,6 +105,19 @@ static void render(int mode) {
     }
 }
 
+/* Blit a client surface (mapped at sva, w x h BGRA) onto the FB at (dx,dy). */
+static void blit_surface(const unsigned char *sva, unsigned w, unsigned h, int dx, int dy) {
+    for (unsigned yy = 0; yy < h; yy++) {
+        for (unsigned xx = 0; xx < w; xx++) {
+            int px = dx + (int)xx, py = dy + (int)yy;
+            if (px < 0 || py < 0 || (unsigned)px >= g_fi.width || (unsigned)py >= g_fi.height)
+                continue;
+            const unsigned char *s = sva + ((unsigned long)yy * w + xx) * 4;
+            put_px((unsigned)px, (unsigned)py, s[0], s[1], s[2]);
+        }
+    }
+}
+
 /* A small white cursor block at (x,y), clamped to the screen. */
 static void draw_cursor(int x, int y) {
     if (x < 0) x = 0; if (y < 0) y = 0;
@@ -153,7 +169,27 @@ int main(void) {
 
     char keys[32];
     unsigned prev_btn = 0;
+    long composited = 0;             /* count of client surfaces last composited */
     for (;;) {
+        /* Per-client surfaces (DDR-706): when the committed set grows, re-render
+         * the desktop, blit each client surface at its position, and present. */
+        struct surface_info surfs[16];
+        long ns = nsi(SYS_SURFACE_POLL, (long)surfs, 16, 0);
+        if (ns > composited) {
+            render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+            for (long i = 0; i < ns; i++) {
+                long sva = nsi(SYS_SURFACE_CMAP, (long)surfs[i].id, 0, 0);
+                if (sva > 0)
+                    blit_surface((const unsigned char *)sva, surfs[i].w, surfs[i].h,
+                                 surfs[i].x, surfs[i].y);
+            }
+            present();
+            for (long i = composited; i < ns; i++) {
+                printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);
+                fflush(stdout);
+            }
+            composited = ns;
+        }
         long n = nsi(SYS_INPUT_POLL, (long)keys, (long)sizeof keys, 0);
         for (long i = 0; i < n; i++) {
             char c = keys[i];

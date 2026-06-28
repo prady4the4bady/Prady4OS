@@ -1,0 +1,139 @@
+/* kernel/syscall/sys_surface.c — per-client surfaces (Layer 7, DDR-706).
+ *
+ * A surface is a kernel-owned, physically-contiguous PMM buffer (BGRA) that the
+ * kernel maps into both the client (to draw) and the compositor (to read) — the
+ * same shared-physical model as SYS_FB_MAP, so the compositor composites straight
+ * from the client's pixels with no copy. Bounded table of 16 surfaces.
+ */
+#include "syscall.h"
+#include "sched.h"
+#include "uaccess.h"
+#include "errno.h"
+#include "vmm.h"
+#include "pmm.h"
+
+#define SURFACE_MAX        16
+#define SURFACE_DIM_MAX    512u                /* per-surface buffer <= 1 MiB (512*512*4) */
+#define SURFACE_VA_BASE    0x8600000000ull     /* below the FB mapping (0x8700000000) */
+#define SURFACE_VA_SLOT    0x100000ull         /* 1 MiB per surface id */
+
+struct surface {
+    uint64_t phys;
+    uint32_t w, h, npages;
+    uint32_t owner_pid;
+    int32_t  x, y;
+    uint8_t  used, committed;
+};
+static struct surface g_surf[SURFACE_MAX];
+
+struct surface_info { uint32_t id, w, h; int32_t x, y; };
+
+static unsigned order_for(uint64_t npages) {
+    unsigned o = 0;
+    while (((uint64_t)1 << o) < npages && o < 10) o++;
+    return o;
+}
+
+static long sys_surface_create(long a1, long a2, long a3, long a4) {
+    (void)a3; (void)a4;
+    uint32_t w = (uint32_t)a1, h = (uint32_t)a2;
+    if (w == 0 || h == 0 || w > SURFACE_DIM_MAX || h > SURFACE_DIM_MAX)
+        return -EINVAL;
+    int id = -1;
+    for (int i = 0; i < SURFACE_MAX; i++) if (!g_surf[i].used) { id = i; break; }
+    if (id < 0)
+        return -EMFILE;
+    uint64_t bytes = (uint64_t)w * h * 4;
+    uint64_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t phys = pmm_alloc_pages(order_for(npages));
+    if (!phys)
+        return -ENOMEM;
+    for (uint64_t i = 0; i < npages * PAGE_SIZE; i++)   /* zero (identity-mapped) */
+        ((volatile uint8_t *)(uintptr_t)phys)[i] = 0;
+    struct surface *s = &g_surf[id];
+    s->phys = phys; s->w = w; s->h = h; s->npages = (uint32_t)npages;
+    s->owner_pid = current_thread->pid; s->x = s->y = 0;
+    s->used = 1; s->committed = 0;
+    return id;
+}
+
+static long sys_surface_map(long a1, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    int id = (int)a1;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    struct surface *s = &g_surf[id];
+    if (s->owner_pid != current_thread->pid)
+        return -EPERM;                          /* a client maps only its own surface */
+    uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
+    uint64_t flags = VMM_USER | VMM_RW | VMM_NX;
+    for (uint32_t i = 0; i < s->npages; i++)
+        if (vmm_map_in(current_thread->cr3, va + (uint64_t)i * PAGE_SIZE,
+                       s->phys + (uint64_t)i * PAGE_SIZE, flags) != 0)
+            return -ENOMEM;
+    return (long)va;
+}
+
+/* The compositor maps a client's surface to read it; owner check is skipped (the
+ * compositor reads pixels it will composite, never gaining the owner's authority).
+ * Distinguished from sys_surface_map by being the compositor path — same VA. */
+static long sys_surface_map_ro(int id) {
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    struct surface *s = &g_surf[id];
+    uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
+    uint64_t flags = VMM_USER | VMM_RW | VMM_NX;
+    for (uint32_t i = 0; i < s->npages; i++)
+        if (vmm_map_in(current_thread->cr3, va + (uint64_t)i * PAGE_SIZE,
+                       s->phys + (uint64_t)i * PAGE_SIZE, flags) != 0)
+            return -ENOMEM;
+    return (long)va;
+}
+
+static long sys_surface_commit(long a1, long a2, long a3, long a4) {
+    (void)a4;
+    int id = (int)a1;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    struct surface *s = &g_surf[id];
+    if (s->owner_pid != current_thread->pid)
+        return -EPERM;
+    s->x = (int32_t)a2; s->y = (int32_t)a3; s->committed = 1;
+    return 0;
+}
+
+/* (id<0) -> POLL: list committed surfaces; (id>=0) -> compositor read-map.
+ * One handler multiplexes so the compositor can map a surface it just polled.
+ * a1 = buf/-(id+1)... kept as two distinct entry points below for clarity. */
+static long sys_surface_poll(long a1, long a2, long a3, long a4) {
+    (void)a3; (void)a4;
+    int max = (int)a2;
+    if (max <= 0) return 0;
+    if (max > SURFACE_MAX) max = SURFACE_MAX;
+    struct surface_info buf[SURFACE_MAX];
+    int n = 0;
+    for (int i = 0; i < SURFACE_MAX && n < max; i++) {
+        if (g_surf[i].used && g_surf[i].committed) {
+            buf[n].id = (uint32_t)i; buf[n].w = g_surf[i].w; buf[n].h = g_surf[i].h;
+            buf[n].x = g_surf[i].x;  buf[n].y = g_surf[i].y;
+            n++;
+        }
+    }
+    if (n > 0 && copyout((void __user *)a1, buf, (size_t)n * sizeof buf[0]) < 0)
+        return -EFAULT;
+    return n;
+}
+
+/* Compositor-side: map a polled surface read-side into the caller; returns VA. */
+static long sys_surface_cmap(long a1, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    return sys_surface_map_ro((int)a1);
+}
+
+void sys_surface_register(void) {
+    syscall_register(SYS_SURFACE_CREATE, sys_surface_create);
+    syscall_register(SYS_SURFACE_MAP,    sys_surface_map);
+    syscall_register(SYS_SURFACE_COMMIT, sys_surface_commit);
+    syscall_register(SYS_SURFACE_POLL,   sys_surface_poll);
+    syscall_register(SYS_SURFACE_CMAP,   sys_surface_cmap);
+}

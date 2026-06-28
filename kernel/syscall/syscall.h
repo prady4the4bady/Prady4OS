@@ -60,6 +60,12 @@
 #define SYS_FB_FLUSH       45  /* () -> 0 | -ENODEV  (present the framebuffer)      */
 #define SYS_INPUT_POLL     46  /* (buf, max) -> count of keyboard bytes (DDR-703)   */
 #define SYS_MOUSE_POLL     47  /* (struct mouse_state*) -> 0 | -ENODEV (DDR-705)    */
+/* Per-client surfaces (Layer 7, DDR-706). Append-only after 47. */
+#define SYS_SURFACE_CREATE 48  /* (w, h) -> surface_id | -errno                     */
+#define SYS_SURFACE_MAP    49  /* (id) -> user VA | -errno   (owner draws)          */
+#define SYS_SURFACE_COMMIT 50  /* (id, x, y) -> 0 | -errno   (mark visible)         */
+#define SYS_SURFACE_POLL   51  /* (struct surface_info*, max) -> count (compositor) */
+#define SYS_SURFACE_CMAP   52  /* (id) -> user VA  (compositor read-maps a surface) */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

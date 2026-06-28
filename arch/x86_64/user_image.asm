@@ -108,3 +108,10 @@ global compositor_elf_end
 compositor_elf:
     incbin "build/compositor.elf"
 compositor_elf_end:
+
+; L7 (DDR-706): per-client surface test window. Creates+commits a surface.
+global surfacetest_elf
+global surfacetest_elf_end
+surfacetest_elf:
+    incbin "build/surfacetest.elf"
+surfacetest_elf_end:

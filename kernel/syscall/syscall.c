@@ -22,6 +22,7 @@ void sys_aether_register(void);   /* kernel/syscall/sys_aether.c */
 void sys_socket_register(void);   /* kernel/syscall/sys_socket.c (ADR-027) */
 void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
+void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
 
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
@@ -121,7 +122,8 @@ void syscall_init(void) {
     sys_aether_register();                /* SYS_GET_MODE..SYS_SET_MEM_LIMIT (Layer 6) */
     sys_socket_register();                /* SYS_SOCK_* proxy sockets (ADR-027) */
     sys_fb_register();                    /* SYS_FB_* framebuffer surface (DDR-702) */
-    sys_input_register();                 /* SYS_INPUT_POLL keyboard (DDR-703) */
+    sys_input_register();                 /* SYS_INPUT_POLL / SYS_MOUSE_POLL (DDR-703/705) */
+    sys_surface_register();               /* SYS_SURFACE_* per-client surfaces (DDR-706) */
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:
