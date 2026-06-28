@@ -46,10 +46,13 @@
 > **Surface z-order + focus + input routing (DDR-708) is also COMPLETE** — surfaces
 > stack by `z`, one holds focus, and the compositor routes keys to the focused
 > window (`SYS_SURFACE_RAISE`/`SENDKEY`/`GETKEY` 54–56); gate `smoke-focus` (40 CI
-> gates). **PRADYOS now has stacked, focusable windows with keyboard routing.** Next
-> toward the full shell: the visual polish (glass/OKLab ambiances, the animated
-> toggle), or window move/drag + decorations. wlroots/Wayland remain out-of-tree
-> ports (brief §12 7b+, the wall). Read this
+> gates). **Sun-driven OKLab ambiances + the animated toggle (DDR-709) are also
+> COMPLETE** — the 4 time-of-day ambiances render with genuine OKLab interpolation
+> (libm-free Newton-cbrt), selected by `SYS_CLOCK` (57, RTC seconds-since-midnight);
+> gate `smoke-ambiance` (41 CI gates). **PRADYOS renders a perceptually-correct,
+> time-of-day windowed desktop with an agent roster.** Next: visual richness
+> (particle fields / glass blur / gradients) or window move/drag + decorations.
+> wlroots/Wayland remain out-of-tree ports (brief §12 7b+, the wall). Read this
 > file in full, run `graph_session_primer()`, confirm gates green, and write the
 > ADR/DDR before any code. Do NOT restart earlier slices."**
 

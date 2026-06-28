@@ -449,14 +449,26 @@ composites in z-order (`PRADYOS_ZORDER`), reports focus (`PRADYOS_FOCUS id=`), a
 forwards non-shortcut keys to the focused window; `surfacetest` raises window B over
 A and receives the routed key (`PRADYOS_FOCUS_KEY`). Input model: the compositor
 arbitrates the single global keyboard and forwards to the focused window's private
-ring (no client shared-ring race). Gate **`smoke-focus`**. **PRADYOS now has real
-stacked, focusable windows with keyboard routing.** 40 gates total.
-**Deferred (DDR-702..708):** double-buffer / page-flip; glass + OKLab ambiance; the
-animated toggle; relative-mouse + scroll; window move/drag; alt-tab focus cycling;
-window decorations / close; surface destroy + clear-on-kill; kernel focus-pid input
-gating; per-agent live metrics; epoll-able fds; SFS `/etc/aether/config`; `CAP_NET`
-gate; the wlroots/Wayland protocol (out-of-tree library ports — the standing wall).
-**Next: the visual polish (glass/OKLab ambiances, the animated toggle), or window
+ring (no client shared-ring race). Gate **`smoke-focus`**.
+**Sun-driven OKLab ambiances + animated toggle (DDR-709) COMPLETE:** the brief's
+signature UI (§1–§3). The compositor renders the four time-of-day ambiances
+(DAWN/DAY/DUSK/NIGHT) with **genuine OKLab** colour interpolation (a libm-free
+Newton-`cbrt` OKLab transform — the musl subset has no math lib; sRGB lerps were
+rejected per the brief). A new read-only **`SYS_CLOCK` (57)** returns
+seconds-since-midnight from the RTC (the vDSO clock is monotonic, not wall-clock),
+selecting the ambiance by hour + re-transitioning at boundaries. The mode toggle
+now animates the accent in OKLab (`PRADYOS_TOGGLE_ANIM_OK`). A startup demo-cycle
+proves all four ambiances (`PRADYOS_AMBIANCE …` + `PRADYOS_AMBIANCE_OK`). Gate
+**`smoke-ambiance`**. **PRADYOS renders a perceptually-correct, time-of-day desktop
+with stacked focusable windows + an agent roster.** 41 gates total.
+**Deferred (DDR-702..709):** particle fields (motes/embers/stars); real glass blur
++ saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
+15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
+motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
+alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
+`/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
+library ports — the standing wall).
+**Next: visual richness (particle fields / glass blur / gradients), or window
 move/drag + decorations. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-28
 
