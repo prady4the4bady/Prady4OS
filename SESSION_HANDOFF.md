@@ -22,9 +22,13 @@
 > framebuffer, ADR-028) is COMPLETE** — `kernel/drivers/gpu/virtio_gpu.c` brings up
 > scanout 0 + presents a BGRA framebuffer (gate `smoke-gpu` →
 > `PRADYOS_GPU_FB_OK 1024x768`; 33 CI gates). The framebuffer prerequisite is
-> satisfied, so the **compositor build order is unblocked**: next is a
-> `/dev/fb0`-style ring-3 framebuffer mapping + draw surface, then the wlroots/shell
-> slices (each with a DDR before code). Read this file in full, run
+> satisfied. The **ring-3 framebuffer surface (DDR-702) is also COMPLETE** —
+> `SYS_FB_INFO/MAP/FLUSH` (43–45) let a ring-3 program map the GPU front buffer,
+> draw, and present (gate `smoke-fb` → `PRADYOS_FB_DRAW_OK`; 34 CI gates; stage-2
+> load raised to 16 chunks/512 KiB). Userspace can now draw to the screen. Next
+> toward the shell: **input routing to ring 3** (PS/2 or virtio-input), then
+> per-client surfaces + a simple compositor. wlroots/Wayland remain large
+> out-of-tree library ports (brief §12 7b+). Read this file in full, run
 > `graph_session_primer()`, confirm gates green, and write the ADR/DDR before any
 > code. Do NOT restart earlier slices."**
 

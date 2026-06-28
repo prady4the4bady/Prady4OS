@@ -383,12 +383,22 @@ virtio_pci/virtq transport; dispatched from kmain's PCIe scan (vendor 0x1AF4 cla
 0x03). Bring-up waits on the used ring with `HLT` (not a busy-spin, which starves
 QEMU's TCG device backend) and suppresses/acks the shared INTx. Gate **`smoke-gpu`**
 boots `-device virtio-gpu-pci` (added to `boot_test.sh` only under `QEMU_GPU=1`) and
-greps `PRADYOS_GPU_FB_OK 1024x768` — verifiable headless. 33 gates total.
-**Deferred (ADR-027/026/028):** event-driven socket blocking; SFS
-`/etc/aether/config`; the daemon's NIA IPC console; `CAP_NET` socket gate; GPU
-double-buffering / page-flip + a `/dev/fb0` ring-3 mapping (compositor slices).
-**Next: Layer-7 compositor build order — 7a (a `/dev/fb0`-style FB device + a
-ring-3 draw surface), then the wlroots/shell slices on top.**
+greps `PRADYOS_GPU_FB_OK 1024x768` — verifiable headless.
+**Ring-3 framebuffer surface (DDR-702) COMPLETE:** userspace can now draw to the
+screen. Three syscalls (43–45): `SYS_FB_INFO` (geometry), `SYS_FB_MAP` (maps the
+GPU front buffer into the caller at `0x8700000000`, `VMM_USER|RW|NX`),
+`SYS_FB_FLUSH` (present). `virtio_gpu_present()` + a refactored `gpu_cmd` that
+saves/restores RFLAGS and waits `sti;hlt;cli` make the control-queue wait work in
+syscall context (IF=0) as well as at boot. `user/fbtest.c` maps the FB, draws, and
+flushes → gate **`smoke-fb`** (`PRADYOS_FB_DRAW_OK`); no-GPU boots degrade to
+`-ENODEV`. Stage 2 kernel load raised 11→16 chunks (512 KiB; safe — page tables at
+`0x300000`, 1 MiB disk image). `smoke-gpu` is now also in CI. 34 gates total.
+**Deferred (ADR-027/026/028, DDR-702):** event-driven socket blocking; SFS
+`/etc/aether/config`; daemon NIA IPC console; `CAP_NET` gate; GPU double-buffer /
+page-flip; per-client surfaces + a compositor; input routing; the wlroots/Wayland
+protocol (large library ports — the brief's §12 7b onward).
+**Next: input (PS/2 or virtio) routing to ring 3, then per-client surfaces — the
+compositor build-up. wlroots/Wayland remain large out-of-tree ports.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
