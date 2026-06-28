@@ -28,6 +28,7 @@
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
+#include "virtio_gpu.h"
 #include "virtio_net.h"
 #include "vfs.h"
 #include "fat32.h"
@@ -1037,6 +1038,8 @@ void kmain(struct boot_info *bi) {
             virtio_blk_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x02)    /* virtio network (NET-A) */
             virtio_net_init(d->bus, d->dev, d->func);
+        if (d->vendor_id == 0x1AF4 && d->class_code == 0x03)    /* virtio GPU (L7 slice 0) */
+            virtio_gpu_init(d->bus, d->dev, d->func);
     }
     net_init();                          /* NET-B: bring up lwIP over virtio-net */
     aether_init();                       /* Layer 6: PMM-pool queue + audit rings */

@@ -50,6 +50,14 @@ if [ -f build/ext4.img ]; then
               -device virtio-blk-pci,drive=disk3)
 fi
 
+# Optional VirtIO-GPU device (Layer-7 slice 0, ADR-028) — attached only when
+# QEMU_GPU is set, so the GPU bring-up gate (smoke-gpu) exercises it while every
+# other gate boots without a display device.
+GPUDEV=()
+if [ -n "${QEMU_GPU:-}" ]; then
+    GPUDEV=(-device virtio-gpu-pci)
+fi
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine q35 \
     -drive if=none,format=raw,file="$IMG",id=disk0 \
@@ -58,6 +66,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${SFSDISK[@]}" \
     "${EXT4DISK[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+    "${GPUDEV[@]}" \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
     || true
