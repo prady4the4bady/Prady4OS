@@ -73,21 +73,32 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.1 CURRENT STATE (end of session 2026-06-27) + PROC-D resume plan
+### 0.1 CURRENT STATE (updated 2026-06-28) + resume plan
 
-- **HEAD:** `9f310da`  (5d+5e; `main` == `dev/phase1`, pushed by refspec; this
-  worktree branch is `claude/pedantic-shirley-a27bf3` — see §7). Gate set now also
-  includes `smoke-fpu`, `smoke-init`, `smoke-shell` (all in CI).
+- **HEAD:** `5e5fb78` (`main` == `dev/phase1`, both pushed; this worktree branch is
+  `claude/pedantic-shirley-a27bf3` — see §7). Since the old 5d/5e state (`9f310da`)
+  the following shipped, **each CI-green**: **NET-B** (lwIP TCP/IP over virtio-net),
+  **Layer 6 AETHER** (agent queue/audit/mem/rate + daemon + agent template),
+  **ring-3 socket NSI** (ADR-027, live Ollama path), and **Layer 7** so far —
+  mode binding (DDR-701), VirtIO-GPU framebuffer (ADR-028, slice 0), ring-3
+  framebuffer surface (DDR-702), and PS/2 keyboard input (DDR-703).
+- **CI: all 35 gates green at HEAD `5e5fb78`.** New since 5d/5e: `smoke-net`,
+  `smoke-net-lo`, `smoke-net-fuzz`, `smoke-aether`, `smoke-aether-queue`,
+  `smoke-aether-sec`, `smoke-mode`, `smoke-gpu`, `smoke-fb`, `smoke-input`
+  (+ the dev-only `smoke-agent-live`, not in CI). NSI now extends through 46
+  (`SYS_INPUT_POLL`); see `kernel/syscall/syscall.h`.
 - **Build distro:** **Ubuntu-24.04** (NOT 22.04 — 22.04 is gone; `sudo` needs a
   password now: the WSL password is the user's to supply).
-- **Toolchain:** `llvm-objcopy` was missing on 24.04 → installed apt pkg
-  **`llvm-18`**, symlinked **`/usr/local/bin/llvm-objcopy`** → `llvm-objcopy-18`
-  (also repaired a stale apt index so `libpfm4` resolved). `clang-18`/`ld.lld-18`
-  present; qemu/mkfs.fat/mcopy/mkfs.ext4/nasm/rustup present.
+- **Toolchain:** `llvm-objcopy` symlinked to `llvm-objcopy-18`; `clang-18`/
+  `ld.lld-18`/qemu/mkfs.fat/mcopy/mkfs.ext4/nasm/rustup/**python3** present
+  (python3 is used by the `smoke-input` keyboard gate).
+- **Git note:** the worktree gitdir is a Windows path, so **git runs from native
+  Windows (PowerShell)**, not WSL (WSL git errors on the path). Build/test in WSL.
 - **Stored remote PAT in `.git/config` is EXPIRED** — push with a fresh token
   inline in the URL (never write it to a tracked file).
-- **Gates at HEAD `0cfd957`:** all 8 green — `toolchain-check, image, smoke,
-  smoke-fs, smoke-fs-rw, smoke-fs-sfs-rw, smoke-fs-ext4, smoke-user`.
+- **Boot-memory layout note:** the boot page tables now live at **0x300000** (moved
+  off 0x70000 once the kernel image+BSS grew); Stage 2 loads **16×64 sectors
+  (512 KiB)**; the 1 MiB disk image accommodates it.
 
 **Completed (PROC-D — musl libc — is COMPLETE):**
 - **Layer 5b + IMP/PROC/NET series** were already complete on entry (the old
@@ -138,10 +149,10 @@ across switches — correct only while one thread uses the FPU at a time (**ADR-
   with an original x86_64 kernel; built in strict layer/slice order — *a slice
   ships when it is correct, not when it is fast.*
 - **Active branch:** `dev/phase1` (fast-forwarded into `main` per slice).
-- **Current HEAD:** `0cfd957` — "feat(PROC-D): musl printf gate — PROC-D
-  complete". `main` == `dev/phase1`. (The rest of §2 below predates this session
-  and is partially stale — §0.1 is authoritative for current state; Layer 5b +
-  the IMP/PROC/NET series + **PROC-D (musl)** are all complete.)
+- **Current HEAD:** `5e5fb78` (`main` == `dev/phase1`). **§0.1 is authoritative for
+  current state.** The §2 layer-by-layer list below predates the NET-B / Layer 6 /
+  Layer 7 work and is kept only for the L1–L5 history; see §0.1 + `docs/build_status.md`
+  for everything after PROC-D (NET-B, AETHER, socket NSI, GPU FB, FB surface, input).
 - **Repo path (this machine):**
   - Windows: `C:\Users\prady\Documents\Claude\Projects\Prady4OS`
   - WSL: `/mnt/c/Users/prady/Documents/Claude/Projects/Prady4OS`
@@ -160,10 +171,9 @@ across switches — correct only while one thread uses the FPU at a time (**ADR-
 - **L4 VFS + filesystems** — mount table + per-mount context (ADR-015/017); **FAT32 read-write** + VFAT long-name read + RTC timestamps (ADR-015/020); **SFS** inode CoW B+tree, file extents, journal + atomic tx + crash replay, snapshots, per-extent LZ4, 4 KiB tags (ADR-018); **ext4 read-only** (ADR-019). Gates: `smoke-fs`, `smoke-fs-rw`, `smoke-fs-sfs-rw`, `smoke-fs-ext4`.
 - **L5a Userspace — static ELF loader + W^X (ADR-021)** — per-process address spaces + per-process CR3; `EFER.NXE` (CPUID-gated); ELF64 loader maps `PT_LOAD` with `p_flags`→W^X perms; 8 MiB RW+NX stack + guard page; SysV `argc/argv/envp/auxv`; ring-3 entry; user fault → clean kill. Test ELF written to SFS and **loaded back from SFS**. Gate: `smoke-user`.
 
-CI status as of this handoff: **all 8 gates green** (`toolchain-check`, `image`,
-`smoke`, `smoke-fs`, `smoke-fs-rw`, `smoke-fs-sfs-rw`, `smoke-fs-ext4`,
-`smoke-user`) **plus** the `code-graph` job — run
-[27874439210](https://github.com/prady4the4bady/Prady4OS/actions/runs/27874439210).
+CI status (this §2 list covers L1–L5a only — the historical baseline). **Current
+CI is 35 gates green at HEAD `5e5fb78`** (see §0.1 for the full list); the L1–L5a
+gates named here remain part of that set, plus the NET-B / Layer 6 / Layer 7 gates.
 **Re-verify the current run yourself before trusting this** (see §9).
 
 ### 🟡 In progress / partial
