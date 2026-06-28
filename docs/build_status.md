@@ -420,14 +420,24 @@ screen pixels (non-consuming). The compositor polls it and, on a button-down,
 draws a cursor + prints `PRADYOS_MOUSE_OK x y`. Gate **`smoke-mouse`** injects an
 absolute move + click via **QMP `input-send-event`** (the real virtio-input path)
 → `PRADYOS_MOUSE_OK` (abs 16000,12000 → pixel 500,281). **Ring 3 now draws to the
-screen, reads the keyboard, AND tracks the pointer.** 37 gates total.
-**Deferred (DDR-702/703/704/705):** double-buffer / page-flip; glass blur + OKLab
-ambiance transitions; the animated 300 ms toggle; relative-mouse + scroll wheel;
-per-client surfaces + a draw-command IPC protocol; epoll-able input/socket fds;
-SFS `/etc/aether/config`; `CAP_NET` gate; the named-agent panels; the wlroots/
-Wayland protocol (out-of-tree library ports — the standing wall).
-**Next: per-client surfaces + a draw-command IPC (compositor owns the FB, clients
-submit draws), then the named-agent panels. wlroots/Wayland remain out-of-tree.**
+screen, reads the keyboard, AND tracks the pointer.**
+**Per-client surfaces + compositing (DDR-706) COMPLETE:** client windows.
+`kernel/syscall/sys_surface.c` owns a 16-entry table of PMM-backed BGRA surfaces
+(≤512×512); the kernel maps each into **both** the owning client (to draw) and the
+compositor (to read) by physical address — the `SYS_FB_MAP` shared-page model, so
+compositing is copy-free. Five syscalls (48–52): `SURFACE_CREATE`/`MAP`(owner)/
+`COMMIT`/`POLL`(compositor lists committed)/`CMAP`(compositor read-maps). The
+compositor polls committed surfaces and blits each at its `(x,y)` onto the desktop
+(`PRADYOS_SURFACE_OK <id>`). `user/surfacetest.c` commits a 64×64 green window at
+(100,100). Gate **`smoke-surface`** (client commit → compositor composite). **Ring 3
+apps can now render windows the compositor composites.** 38 gates total.
+**Deferred (DDR-702..706):** double-buffer / page-flip; glass + OKLab ambiance;
+the animated toggle; relative-mouse + scroll; surface alpha / z-order / destroy /
+focus + input routing to the focused surface; epoll-able fds; SFS
+`/etc/aether/config`; `CAP_NET` gate; the named-agent panels; the wlroots/Wayland
+protocol (out-of-tree library ports — the standing wall).
+**Next: named-agent UI panels (agents shown active in a panel, per the design
+images), then surface z-order/focus + input routing. wlroots/Wayland out-of-tree.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System

@@ -36,9 +36,13 @@
 > COMPLETE** — `SYS_MOUSE_POLL` (47) + a virtio-tablet driver; the compositor draws
 > a cursor on click (gate `smoke-mouse` via QMP `input-send-event`; 37 CI gates).
 > **PRADYOS now renders a keyboard- and pointer-driven desktop that reflects the
-> kernel mode.** Next toward the full shell: **per-client surfaces + a draw-command
-> IPC** (compositor owns the FB, clients submit draws), then the **named-agent
-> panels**. wlroots/Wayland remain out-of-tree ports (brief §12 7b+, the wall). Read this
+> kernel mode.** **Per-client surfaces (DDR-706) are also COMPLETE** —
+> `SYS_SURFACE_*` (48–52) + a 16-entry PMM surface table shared by physical mapping;
+> `user/surfacetest.c` commits a window the compositor composites (gate
+> `smoke-surface`; 38 CI gates). **Ring-3 apps can now render windows.** Next toward
+> the full shell: the **named-agent UI panels** (agents shown active in a panel, per
+> the design images), then surface **z-order/focus + input routing to the focused
+> surface**. wlroots/Wayland remain out-of-tree ports (brief §12 7b+, the wall). Read this
 > file in full, run `graph_session_primer()`, confirm gates green, and write the
 > ADR/DDR before any code. Do NOT restart earlier slices."**
 
