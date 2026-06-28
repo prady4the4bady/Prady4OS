@@ -392,13 +392,21 @@ saves/restores RFLAGS and waits `sti;hlt;cli` make the control-queue wait work i
 syscall context (IF=0) as well as at boot. `user/fbtest.c` maps the FB, draws, and
 flushes → gate **`smoke-fb`** (`PRADYOS_FB_DRAW_OK`); no-GPU boots degrade to
 `-ENODEV`. Stage 2 kernel load raised 11→16 chunks (512 KiB; safe — page tables at
-`0x300000`, 1 MiB disk image). `smoke-gpu` is now also in CI. 34 gates total.
-**Deferred (ADR-027/026/028, DDR-702):** event-driven socket blocking; SFS
-`/etc/aether/config`; daemon NIA IPC console; `CAP_NET` gate; GPU double-buffer /
-page-flip; per-client surfaces + a compositor; input routing; the wlroots/Wayland
-protocol (large library ports — the brief's §12 7b onward).
-**Next: input (PS/2 or virtio) routing to ring 3, then per-client surfaces — the
-compositor build-up. wlroots/Wayland remain large out-of-tree ports.**
+`0x300000`, 1 MiB disk image). `smoke-gpu` is now also in CI.
+**PS/2 keyboard input → ring 3 (DDR-703) COMPLETE:** the IRQ1 handler (was a
+scancode-printing stub) now feeds `ps2kbd_isr` — read 0x60, track Shift, translate
+scancode-set-1 → ASCII into a 256-byte ring; `SYS_INPUT_POLL` (46) drains it to
+ring 3 (non-blocking). `user/inputtest.c` + gate **`smoke-input`** inject real keys
+via QEMU's HMP `sendkey` (so the i8042 raises IRQ1 — genuine hardware path) and
+confirm the byte reaches ring 3 (`PRADYOS_INPUT_OK a`). With DDR-702, ring 3 can
+now both draw to the screen and read the keyboard. 35 gates total.
+**Deferred (ADR-027/026/028, DDR-702/703):** event-driven socket + input blocking
+(epoll-able fds); SFS `/etc/aether/config`; daemon NIA IPC console; `CAP_NET` gate;
+GPU double-buffer / page-flip; Caps/Ctrl/Alt + key-repeat; mouse (virtio-input);
+per-client surfaces + a compositor; the wlroots/Wayland protocol (large out-of-tree
+library ports — brief §12 7b onward, the standing wall).
+**Next: per-client surfaces + a minimal in-house compositor (draw + input loop),
+or an epoll-able input/socket fd. wlroots/Wayland remain out-of-tree ports.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System

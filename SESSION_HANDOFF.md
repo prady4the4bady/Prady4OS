@@ -25,12 +25,15 @@
 > satisfied. The **ring-3 framebuffer surface (DDR-702) is also COMPLETE** —
 > `SYS_FB_INFO/MAP/FLUSH` (43–45) let a ring-3 program map the GPU front buffer,
 > draw, and present (gate `smoke-fb` → `PRADYOS_FB_DRAW_OK`; 34 CI gates; stage-2
-> load raised to 16 chunks/512 KiB). Userspace can now draw to the screen. Next
-> toward the shell: **input routing to ring 3** (PS/2 or virtio-input), then
-> per-client surfaces + a simple compositor. wlroots/Wayland remain large
-> out-of-tree library ports (brief §12 7b+). Read this file in full, run
-> `graph_session_primer()`, confirm gates green, and write the ADR/DDR before any
-> code. Do NOT restart earlier slices."**
+> load raised to 16 chunks/512 KiB). **PS/2 keyboard input (DDR-703) is also
+> COMPLETE** — `SYS_INPUT_POLL` (46) + a real IRQ1 path, gate `smoke-input` injects
+> keys via QEMU `sendkey` (35 CI gates). Ring 3 can now both **draw to the screen**
+> and **read the keyboard** — the raw I/O a shell builds on. Next toward the shell:
+> per-client surfaces + a minimal in-house compositor (a draw+input loop over the
+> framebuffer + keyboard), or epoll-able input/socket fds. wlroots/Wayland remain
+> large out-of-tree library ports (brief §12 7b+, the standing wall). Read this
+> file in full, run `graph_session_primer()`, confirm gates green, and write the
+> ADR/DDR before any code. Do NOT restart earlier slices."**
 
 Concretely:
 1. Read this whole file (esp. §0.1 — current state).
