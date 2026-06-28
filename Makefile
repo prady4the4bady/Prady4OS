@@ -117,7 +117,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -662,6 +662,26 @@ smoke-mouse: $(IMG) fat-image sfs-image
 smoke-surface: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_SURFACE_CLIENT_OK\nPRADYOS_SURFACE_OK 0')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Layer-7 z-order/focus/input-routing gate (DDR-708): the client creates two
+# overlapping surfaces and raises B (top + focused); the compositor composites in
+# z-order and reports the focus, then forwards an injected key to the focused
+# window, whose client prints PRADYOS_FOCUS_KEY. Needs the GPU + HMP monitor.
+smoke-focus: $(IMG) fat-image sfs-image
+	@echo "[focus] z-order + focus + key-routing gate (GPU + sendkey -> focused window)..."
+	@rm -f build/focus.log /tmp/pfocus.sock
+	@bash tools/qemu_runner/input_inject.sh build/focus.log /tmp/pfocus.sock PRADYOS_FOCUS "f" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/pfocus.sock,server,nowait \
+	    -serial file:build/focus.log -display none -no-reboot || true
+	@grep -q PRADYOS_ZORDER build/focus.log || { echo "[focus] FAIL — no z-order composite"; tail -20 build/focus.log; exit 1; }
+	@grep -q "PRADYOS_FOCUS id=" build/focus.log || { echo "[focus] FAIL — no focused window"; tail -20 build/focus.log; exit 1; }
+	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
+	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
 # Layer-7 named-agent panel gate (DDR-707): the compositor renders the 8 named
 # agent cards and reports the roster; the AETHER daemon's spawn lights KRYOS

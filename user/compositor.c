@@ -20,10 +20,11 @@
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
 #define SYS_AGENT_ROSTER 53
+#define SYS_SURFACE_SENDKEY 55
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; };
-struct surface_info { unsigned id, w, h; int x, y; };
+struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; };
 
 /* The 8 named agents (DDR-707), in roster-slot order. */
 static const char *g_agents[8] =
@@ -201,6 +202,7 @@ int main(void) {
     char keys[32];
     unsigned prev_btn = 0;
     long composited = 0;             /* count of client surfaces last composited */
+    int focus_id = -1, last_focus = -2;       /* focused surface (DDR-708) */
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     for (;;) {
         /* Named-agent panel (DDR-707): when AETHER's roster changes, re-render
@@ -218,24 +220,35 @@ int main(void) {
             fflush(stdout);
             for (int i = 0; i < 8; i++) last_roster[i] = roster[i];
         }
-        /* Per-client surfaces (DDR-706): when the committed set grows, re-render
-         * the desktop, blit each client surface at its position, and present. */
+        /* Per-client surfaces (DDR-706/708): SURFACE_POLL is z-sorted (back-to-front).
+         * Re-composite when the set grows or focus changes; blit in z-order so a
+         * raised window is on top, and report the z-order + focused window. */
         struct surface_info surfs[16];
         long ns = nsi(SYS_SURFACE_POLL, (long)surfs, 16, 0);
-        if (ns > composited) {
+        int cur_focus = -1;
+        for (long i = 0; i < ns; i++) if (surfs[i].focused) cur_focus = (int)surfs[i].id;
+        focus_id = cur_focus;
+        if (ns > composited || cur_focus != last_focus) {
             render((int)nsi(SYS_GET_MODE, 0, 0, 0));
-            for (long i = 0; i < ns; i++) {
+            for (long i = 0; i < ns; i++) {                 /* z-order: bottom..top */
                 long sva = nsi(SYS_SURFACE_CMAP, (long)surfs[i].id, 0, 0);
                 if (sva > 0)
                     blit_surface((const unsigned char *)sva, surfs[i].w, surfs[i].h,
                                  surfs[i].x, surfs[i].y);
             }
             present();
-            for (long i = composited; i < ns; i++) {
-                printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);
-                fflush(stdout);
+            if (ns > 0) {
+                printf("PRADYOS_ZORDER");
+                for (long i = 0; i < ns; i++) printf(" %u", surfs[i].id);
+                printf("\n");
             }
+            for (long i = composited; i < ns; i++)
+                printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);
+            if (cur_focus >= 0 && cur_focus != last_focus)
+                printf("PRADYOS_FOCUS id=%d\n", cur_focus);
+            fflush(stdout);
             composited = ns;
+            last_focus = cur_focus;
         }
         long n = nsi(SYS_INPUT_POLL, (long)keys, (long)sizeof keys, 0);
         for (long i = 0; i < n; i++) {
@@ -243,6 +256,8 @@ int main(void) {
             if (c == 's')      { nsi(SYS_SET_MODE, 1, 0, 0); render_and_announce(1); }
             else if (c == 'm') { nsi(SYS_SET_MODE, 0, 0, 0); render_and_announce(0); }
             else if (c == 'q') { printf("PRADYOS_COMPOSITOR_EXIT\n"); fflush(stdout); nsi(SYS_EXIT, 0, 0, 0); }
+            else if (focus_id >= 0)                          /* DDR-708: route to focus */
+                nsi(SYS_SURFACE_SENDKEY, focus_id, (long)c, 0);
         }
         /* Pointer (DDR-705): on a button-down, redraw the desktop with a cursor at
          * the pointer position and present it (event-driven — no continuous flush). */

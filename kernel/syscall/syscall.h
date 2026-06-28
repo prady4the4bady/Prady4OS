@@ -68,6 +68,10 @@
 #define SYS_SURFACE_CMAP   52  /* (id) -> user VA  (compositor read-maps a surface) */
 /* Named-agent roster (Layer 7, DDR-707). */
 #define SYS_AGENT_ROSTER   53  /* (u8 buf*, max) -> count of roster active-bytes     */
+/* Surface z-order / focus / input routing (Layer 7, DDR-708). */
+#define SYS_SURFACE_RAISE  54  /* (id) -> 0   raise to top + focus                   */
+#define SYS_SURFACE_SENDKEY 55 /* (id, ch) -> 0   compositor forwards a key          */
+#define SYS_SURFACE_GETKEY 56  /* (id) -> ch | -1   owner drains its key ring        */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
