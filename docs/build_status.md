@@ -440,14 +440,24 @@ roster slot, and **`SYS_AGENT_ROSTER` (53)** copies the bits to ring 3. The daem
 spawns the test agent into slot 0 → **KRYOS active**, the rest inactive. The panel
 uses an extended 8×8 font (added K/Y/P/X/H/F glyphs); on a roster change it reports
 `AGENT <NAME> active|inactive` ×8 + `PRADYOS_AGENTS_OK`. Gate **`smoke-agents`**.
-39 gates total.
-**Deferred (DDR-702..707):** double-buffer / page-flip; glass + OKLab ambiance;
-the animated toggle; relative-mouse + scroll; surface alpha / z-order / destroy /
-focus + input routing to the focused surface; per-agent live metrics + the panel's
-spawn/kill UI + clear-on-kill; epoll-able fds; SFS `/etc/aether/config`; `CAP_NET`
+**Surface z-order + focus + input routing (DDR-708) COMPLETE:** overlapping windows
+stack, one holds focus, and keys route to it. Surfaces gain `z` + `focused` + a
+per-surface key ring; `SYS_SURFACE_POLL` returns them z-sorted (back-to-front).
+Three syscalls (54–56): `SURFACE_RAISE` (top + focus), `SURFACE_SENDKEY`
+(compositor forwards a key), `SURFACE_GETKEY` (owner drains). The compositor
+composites in z-order (`PRADYOS_ZORDER`), reports focus (`PRADYOS_FOCUS id=`), and
+forwards non-shortcut keys to the focused window; `surfacetest` raises window B over
+A and receives the routed key (`PRADYOS_FOCUS_KEY`). Input model: the compositor
+arbitrates the single global keyboard and forwards to the focused window's private
+ring (no client shared-ring race). Gate **`smoke-focus`**. **PRADYOS now has real
+stacked, focusable windows with keyboard routing.** 40 gates total.
+**Deferred (DDR-702..708):** double-buffer / page-flip; glass + OKLab ambiance; the
+animated toggle; relative-mouse + scroll; window move/drag; alt-tab focus cycling;
+window decorations / close; surface destroy + clear-on-kill; kernel focus-pid input
+gating; per-agent live metrics; epoll-able fds; SFS `/etc/aether/config`; `CAP_NET`
 gate; the wlroots/Wayland protocol (out-of-tree library ports — the standing wall).
-**Next: surface z-order/focus + input routing to the focused surface; then the
-visual polish (glass/OKLab). wlroots/Wayland remain out-of-tree.**
+**Next: the visual polish (glass/OKLab ambiances, the animated toggle), or window
+move/drag + decorations. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System

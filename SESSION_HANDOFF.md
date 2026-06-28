@@ -42,9 +42,13 @@
 > `smoke-surface`; 38 CI gates). **Ring-3 apps can now render windows.** **Named-agent
 > UI panels (DDR-707) are also COMPLETE** — the compositor renders the 8 named agents
 > (KRYOS…SOLIN) as cards with active/inactive state tied to AETHER's 8-slot roster
-> (new `SYS_AGENT_ROSTER` 53; daemon lights KRYOS); gate `smoke-agents` (39 CI gates).
-> Next toward the full shell: surface **z-order/focus + input routing to the focused
-> surface**, then the visual polish (glass/OKLab). wlroots/Wayland remain out-of-tree
+> (new `SYS_AGENT_ROSTER` 53; daemon lights KRYOS); gate `smoke-agents`.
+> **Surface z-order + focus + input routing (DDR-708) is also COMPLETE** — surfaces
+> stack by `z`, one holds focus, and the compositor routes keys to the focused
+> window (`SYS_SURFACE_RAISE`/`SENDKEY`/`GETKEY` 54–56); gate `smoke-focus` (40 CI
+> gates). **PRADYOS now has stacked, focusable windows with keyboard routing.** Next
+> toward the full shell: the visual polish (glass/OKLab ambiances, the animated
+> toggle), or window move/drag + decorations. wlroots/Wayland remain out-of-tree
 > ports (brief §12 7b+, the wall). Read this
 > file in full, run `graph_session_primer()`, confirm gates green, and write the
 > ADR/DDR before any code. Do NOT restart earlier slices."**
