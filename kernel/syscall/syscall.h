@@ -66,6 +66,8 @@
 #define SYS_SURFACE_COMMIT 50  /* (id, x, y) -> 0 | -errno   (mark visible)         */
 #define SYS_SURFACE_POLL   51  /* (struct surface_info*, max) -> count (compositor) */
 #define SYS_SURFACE_CMAP   52  /* (id) -> user VA  (compositor read-maps a surface) */
+/* Named-agent roster (Layer 7, DDR-707). */
+#define SYS_AGENT_ROSTER   53  /* (u8 buf*, max) -> count of roster active-bytes     */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

@@ -137,6 +137,9 @@ jobs:
       - name: QEMU per-client surface test (q35; client commits + compositor composites, L7)
         run: make smoke-surface
 
+      - name: QEMU named-agent panel test (q35; 8 agent cards + AETHER roster, L7)
+        run: make smoke-agents
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 

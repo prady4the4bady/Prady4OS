@@ -19,10 +19,15 @@
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
+#define SYS_AGENT_ROSTER 53
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; };
 struct surface_info { unsigned id, w, h; int x, y; };
+
+/* The 8 named agents (DDR-707), in roster-slot order. */
+static const char *g_agents[8] =
+    { "KRYOS", "PRAX", "LUMYN", "AHNIS", "IRIS", "RUFLO", "HERMES", "SOLIN" };
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -47,12 +52,21 @@ static const unsigned char G_S[8] = {0x7C,0xC6,0xC0,0x7C,0x06,0xC6,0x7C,0x00};
 static const unsigned char G_U[8] = {0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00};
 static const unsigned char G_V[8] = {0xC6,0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x00};
 static const unsigned char G_SP[8] = {0,0,0,0,0,0,0,0};
+/* Extra glyphs for the agent names (K Y P X H F). */
+static const unsigned char G_K[8] = {0xC6,0xCC,0xD8,0xF0,0xD8,0xCC,0xC6,0x00};
+static const unsigned char G_Y[8] = {0xC6,0xC6,0x6C,0x38,0x30,0x30,0x30,0x00};
+static const unsigned char G_P[8] = {0xFC,0xC6,0xC6,0xFC,0xC0,0xC0,0xC0,0x00};
+static const unsigned char G_X[8] = {0xC6,0x6C,0x38,0x38,0x38,0x6C,0xC6,0x00};
+static const unsigned char G_H[8] = {0xC6,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0x00};
+static const unsigned char G_F[8] = {0xFE,0xC0,0xC0,0xFC,0xC0,0xC0,0xC0,0x00};
 
 static const unsigned char *glyph(char c) {
     switch (c) {
     case 'A': return G_A; case 'D': return G_D; case 'E': return G_E;
     case 'G': return G_G; case 'I': return G_I; case 'L': return G_L;
     case 'M': return G_M; case 'N': return G_N; case 'O': return G_O;
+    case 'K': return G_K; case 'Y': return G_Y; case 'P': return G_P;
+    case 'X': return G_X; case 'H': return G_H; case 'F': return G_F;
     case 'R': return G_R; case 'S': return G_S; case 'U': return G_U;
     case 'V': return G_V; default: return G_SP;
     }
@@ -92,6 +106,22 @@ static void draw_str(const char *s, unsigned x, unsigned y, unsigned scale,
     }
 }
 
+/* Agent panel (DDR-707): the 8 named agents as cards on the right, each with a
+ * status dot — green if AETHER's roster marks it active, dim otherwise. */
+static void render_agent_panel(void) {
+    unsigned char roster[8] = {0};
+    nsi(SYS_AGENT_ROSTER, (long)roster, 8, 0);
+    if (g_fi.width < 220) return;
+    unsigned px = g_fi.width - 210;
+    for (int i = 0; i < 8; i++) {
+        unsigned py = 70 + (unsigned)i * 44;
+        fill_rect(px, py, 200, 36, 0x30, 0x18, 0x20);            /* card bg */
+        draw_str(g_agents[i], px + 10, py + 14, 1, 0xE0, 0xE0, 0xF0);
+        if (roster[i]) fill_rect(px + 178, py + 12, 12, 12, 0x40, 0xE0, 0x40);  /* active = green */
+        else           fill_rect(px + 178, py + 12, 12, 12, 0x50, 0x50, 0x50);  /* inactive = gray */
+    }
+}
+
 /* Render the desktop for `mode` (1 = sovereign, 0 = manual). */
 static void render(int mode) {
     if (mode) {
@@ -103,6 +133,7 @@ static void render(int mode) {
         fill_rect(0, 0, g_fi.width, 6, 0x88, 0x94, 0x0D);                    /* accent bar (teal) */
         draw_str("MANUAL MODE", 24, 24, 3, 0x88, 0x94, 0x0D);
     }
+    render_agent_panel();                                       /* DDR-707 */
 }
 
 /* Blit a client surface (mapped at sva, w x h BGRA) onto the FB at (dx,dy). */
@@ -170,7 +201,23 @@ int main(void) {
     char keys[32];
     unsigned prev_btn = 0;
     long composited = 0;             /* count of client surfaces last composited */
+    unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     for (;;) {
+        /* Named-agent panel (DDR-707): when AETHER's roster changes, re-render
+         * (the panel is part of render()) and report the roster to serial. */
+        unsigned char roster[8] = {0};
+        nsi(SYS_AGENT_ROSTER, (long)roster, 8, 0);
+        int changed = 0;
+        for (int i = 0; i < 8; i++) if (roster[i] != last_roster[i]) changed = 1;
+        if (changed) {
+            render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+            present();
+            for (int i = 0; i < 8; i++)
+                printf("AGENT %s %s\n", g_agents[i], roster[i] ? "active" : "inactive");
+            printf("PRADYOS_AGENTS_OK\n");
+            fflush(stdout);
+            for (int i = 0; i < 8; i++) last_roster[i] = roster[i];
+        }
         /* Per-client surfaces (DDR-706): when the committed set grows, re-render
          * the desktop, blit each client surface at its position, and present. */
         struct surface_info surfs[16];

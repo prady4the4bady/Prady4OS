@@ -14,6 +14,12 @@
 
 #define SIGKILL 9
 
+/* Named-agent roster (DDR-707): one active bit per UI roster slot (KRYOS..SOLIN).
+ * Set when an agent is spawned into a slot, cleared when that agent is killed.
+ * The names live in userspace; the kernel tracks 8 bits by index. */
+#define AGENT_ROSTER_N 8
+static uint8_t g_roster[AGENT_ROSTER_N];
+
 /* Walk the ready ring for a live user thread with this pid. */
 static struct tcb *tcb_by_pid(uint32_t pid) {
     struct tcb *t = current_thread;
@@ -85,7 +91,7 @@ static long sys_reject_action(long a1, long a2, long a3, long a4) {
 }
 
 static long sys_spawn_agent(long a1, long a2, long a3, long a4) {
-    (void)a1; (void)a3; (void)a4;
+    (void)a1; (void)a4;
     /* The daemon (sovereign) or an existing agent may spawn agents (D6/D8). */
     if (!current_thread->is_sovereign && !current_thread->is_agent) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -97,7 +103,20 @@ static long sys_spawn_agent(long a1, long a2, long a3, long a4) {
     if (a2 && copyinstr(task, (const void __user *)a2, sizeof task, 0) < 0)
         return -EFAULT;
     if (!a2) task[0] = 0;
-    return g_spawn_hook(task);
+    long pid = g_spawn_hook(task);
+    if (pid >= 0 && a3 >= 0 && a3 < AGENT_ROSTER_N)   /* DDR-707: mark the roster slot */
+        g_roster[a3] = 1;
+    return pid;
+}
+
+static long sys_agent_roster(long a1, long a2, long a3, long a4) {
+    (void)a3; (void)a4;
+    int max = (int)a2;
+    if (max <= 0) return 0;
+    if (max > AGENT_ROSTER_N) max = AGENT_ROSTER_N;
+    if (copyout((void __user *)a1, g_roster, (size_t)max) < 0)
+        return -EFAULT;
+    return max;
 }
 
 static long sys_kill_agent(long a1, long a2, long a3, long a4) {
@@ -141,4 +160,5 @@ void sys_aether_register(void) {
     syscall_register(SYS_KILL_AGENT,     sys_kill_agent);
     syscall_register(SYS_READ_AUDIT,     sys_read_audit);
     syscall_register(SYS_SET_MEM_LIMIT,  sys_set_mem_limit);
+    syscall_register(SYS_AGENT_ROSTER,   sys_agent_roster);   /* DDR-707 */
 }

@@ -55,7 +55,9 @@ int main(void) {
     /* Test-mode bring-up: spawn one agent with task "test". The kernel loads the
      * embedded agent image and marks it CAP_AGENT; sovereign mode auto-approves
      * its action, so the agent completes and prints PRADYOS_AGENT_DONE. */
-    long apid = nsi(SYS_SPAWN_AGENT, 0, (long)"test", 0);
+    /* Spawn the test agent into roster slot 0 (KRYOS) so the agent panel lights
+     * it (DDR-707): SYS_SPAWN_AGENT(path, task, slot). */
+    long apid = nsi(SYS_SPAWN_AGENT, 0, (long)"test", 0 /* slot 0 = KRYOS */);
     if (apid > 0) {
         printf("aetherd: spawned agent PID=%ld\n", apid);
         fflush(stdout);
