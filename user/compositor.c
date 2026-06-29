@@ -20,8 +20,10 @@
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
 #define SYS_AGENT_ROSTER 53
+#define SYS_SURFACE_RAISE 54
 #define SYS_SURFACE_SENDKEY 55
 #define SYS_CLOCK        57
+#define SYS_SURFACE_MOVE 58
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; };
@@ -208,6 +210,16 @@ static void blit_surface(const unsigned char *sva, unsigned w, unsigned h, int d
     }
 }
 
+/* A window = its client surface content + a title-bar decoration above it
+ * (the drag handle), drawn in the ambiance accent colour (DDR-710). */
+#define TITLEBAR 18
+static void draw_window(const unsigned char *sva, const struct surface_info *s) {
+    blit_surface(sva, s->w, s->h, s->x, s->y);
+    int ty = s->y - TITLEBAR; if (ty < 0) ty = 0;
+    int tx = s->x < 0 ? 0 : s->x;
+    fill_rect((unsigned)tx, (unsigned)ty, s->w, TITLEBAR, g_ac[2], g_ac[1], g_ac[0]);
+}
+
 /* A small white cursor block at (x,y), clamped to the screen. */
 static void draw_cursor(int x, int y) {
     if (x < 0) x = 0; if (y < 0) y = 0;
@@ -262,6 +274,20 @@ static void render_and_announce(int mode) {
     fflush(stdout);
 }
 
+/* Re-render the whole scene during a drag: desktop + z-ordered windows (with
+ * title bars) + the cursor (DDR-710). */
+static void recompose_drag(int cx, int cy) {
+    struct surface_info sf[16];
+    long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
+    render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+    for (long i = 0; i < n; i++) {
+        long sva = nsi(SYS_SURFACE_CMAP, (long)sf[i].id, 0, 0);
+        if (sva > 0) draw_window((const unsigned char *)sva, &sf[i]);
+    }
+    draw_cursor(cx, cy);
+    present();
+}
+
 int main(void) {
     if (nsi(SYS_FB_INFO, (long)&g_fi, 0, 0) != 0) {
         printf("PRADYOS_COMPOSITOR_NODEV\n");
@@ -302,6 +328,7 @@ int main(void) {
     unsigned prev_btn = 0;
     long composited = 0;             /* count of client surfaces last composited */
     int focus_id = -1, last_focus = -2;       /* focused surface (DDR-708) */
+    int dragging = 0, drag_id = -1, drag_ox = 0, drag_oy = 0;   /* DDR-710 */
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     for (;;) {
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
@@ -335,8 +362,7 @@ int main(void) {
             for (long i = 0; i < ns; i++) {                 /* z-order: bottom..top */
                 long sva = nsi(SYS_SURFACE_CMAP, (long)surfs[i].id, 0, 0);
                 if (sva > 0)
-                    blit_surface((const unsigned char *)sva, surfs[i].w, surfs[i].h,
-                                 surfs[i].x, surfs[i].y);
+                    draw_window((const unsigned char *)sva, &surfs[i]);  /* + title bar */
             }
             present();
             if (ns > 0) {
@@ -361,16 +387,46 @@ int main(void) {
             else if (focus_id >= 0)                          /* DDR-708: route to focus */
                 nsi(SYS_SURFACE_SENDKEY, focus_id, (long)c, 0);
         }
-        /* Pointer (DDR-705): on a button-down, redraw the desktop with a cursor at
-         * the pointer position and present it (event-driven — no continuous flush). */
+        /* Pointer (DDR-705/710): button-down on a window title bar starts a drag
+         * (raise+focus, then move the window to follow the pointer until release);
+         * a button-down elsewhere is a plain click. */
         struct mouse_state ms;
         if (nsi(SYS_MOUSE_POLL, (long)&ms, 0, 0) == 0) {
-            if (ms.buttons && !prev_btn) {
-                render((int)nsi(SYS_GET_MODE, 0, 0, 0));
-                draw_cursor(ms.x, ms.y);
-                present();
-                printf("PRADYOS_MOUSE_OK %d %d\n", ms.x, ms.y);
+            int down = ms.buttons && !prev_btn;
+            int up = !ms.buttons && prev_btn;
+            if (down) {
+                struct surface_info sf[16];
+                long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
+                int hit = -1;
+                for (long i = n - 1; i >= 0; i--) {          /* topmost (highest z) first */
+                    int tx = sf[i].x, ty = sf[i].y - TITLEBAR;
+                    if (ms.x >= tx && ms.x < tx + (int)sf[i].w &&
+                        ms.y >= ty && ms.y < ty + TITLEBAR) {
+                        hit = (int)sf[i].id;
+                        drag_ox = ms.x - sf[i].x; drag_oy = ms.y - sf[i].y;
+                        break;
+                    }
+                }
+                if (hit >= 0) {
+                    nsi(SYS_SURFACE_RAISE, hit, 0, 0);
+                    dragging = 1; drag_id = hit;
+                    printf("PRADYOS_DRAG_START id=%d\n", hit);
+                    fflush(stdout);
+                } else {                                     /* plain click (DDR-705) */
+                    render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+                    draw_cursor(ms.x, ms.y);
+                    present();
+                    printf("PRADYOS_MOUSE_OK %d %d\n", ms.x, ms.y);
+                    fflush(stdout);
+                }
+            } else if (dragging && ms.buttons) {             /* drag-move */
+                nsi(SYS_SURFACE_MOVE, drag_id, ms.x - drag_ox, ms.y - drag_oy);
+                recompose_drag(ms.x, ms.y);
+            } else if (up && dragging) {                     /* drop */
+                dragging = 0;
+                printf("PRADYOS_DRAG id=%d x=%d y=%d\n", drag_id, ms.x - drag_ox, ms.y - drag_oy);
                 fflush(stdout);
+                recompose_drag(ms.x, ms.y);
             }
             prev_btn = ms.buttons;
         }

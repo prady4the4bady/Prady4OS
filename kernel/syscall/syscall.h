@@ -74,6 +74,8 @@
 #define SYS_SURFACE_GETKEY 56  /* (id) -> ch | -1   owner drains its key ring        */
 /* Wall-clock for time-of-day ambiance (Layer 7, DDR-709). */
 #define SYS_CLOCK          57  /* () -> seconds since midnight (RTC)                 */
+/* Window move (Layer 7, DDR-710). */
+#define SYS_SURFACE_MOVE   58  /* (id, x, y) -> 0  (owner or compositor)             */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

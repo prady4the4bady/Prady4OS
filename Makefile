@@ -117,7 +117,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -662,6 +662,24 @@ smoke-mouse: $(IMG) fat-image sfs-image
 smoke-surface: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_SURFACE_CLIENT_OK\nPRADYOS_SURFACE_OK 0')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Layer-7 window-drag gate (DDR-710): the compositor draws title-bar decorations
+# and supports drag-to-move. The harness drags window B by its title bar via QMP;
+# the compositor raises+moves it (PRADYOS_DRAG_START / PRADYOS_DRAG). Needs GPU+tablet.
+smoke-drag: $(IMG) fat-image sfs-image
+	@echo "[drag] window-drag gate: boot(GPU+tablet) + QMP title-bar drag -> SYS_SURFACE_MOVE..."
+	@rm -f build/drag.log /tmp/pdrag.sock
+	@bash tools/qemu_runner/drag_inject.sh build/drag.log /tmp/pdrag.sock PRADYOS_AMBIANCE_OK &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pdrag.sock,server,nowait \
+	    -serial file:build/drag.log -display none -no-reboot || true
+	@grep -q PRADYOS_DRAG_START build/drag.log || { echo "[drag] FAIL — drag did not start on the title bar"; tail -20 build/drag.log; exit 1; }
+	@grep -q "PRADYOS_DRAG id=" build/drag.log || { echo "[drag] FAIL — window did not move"; tail -20 build/drag.log; exit 1; }
+	@echo "[drag] PASS — $$(grep -a 'PRADYOS_DRAG id=' build/drag.log | head -1)"
 
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on

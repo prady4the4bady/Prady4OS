@@ -137,6 +137,19 @@ static long sys_surface_poll(long a1, long a2, long a3, long a4) {
     return n;
 }
 
+/* Reposition a surface (DDR-710): owner or the compositor (CAP_SOVEREIGN). */
+static long sys_surface_move(long a1, long a2, long a3, long a4) {
+    (void)a4;
+    int id = (int)a1;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    if (g_surf[id].owner_pid != current_thread->pid && !current_thread->is_sovereign)
+        return -EPERM;
+    g_surf[id].x = (int32_t)a2;
+    g_surf[id].y = (int32_t)a3;
+    return 0;
+}
+
 /* Raise a surface to the top of the stack and give it keyboard focus (DDR-708). */
 static long sys_surface_raise(long a1, long a2, long a3, long a4) {
     (void)a2; (void)a3; (void)a4;
@@ -199,4 +212,5 @@ void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_RAISE,  sys_surface_raise);    /* DDR-708 */
     syscall_register(SYS_SURFACE_SENDKEY, sys_surface_sendkey);
     syscall_register(SYS_SURFACE_GETKEY, sys_surface_getkey);
+    syscall_register(SYS_SURFACE_MOVE,   sys_surface_move);     /* DDR-710 */
 }
