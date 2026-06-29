@@ -122,6 +122,79 @@ static const struct ambiance AMB[4] = {
 static unsigned char g_bg[3] = {0x00,0x00,0x08};   /* current interpolated bg (R,G,B) */
 static unsigned char g_ac[3] = {0x7B,0x4F,0xE0};   /* current interpolated accent     */
 
+/* ---- DDR-712: particle field + frosted glass --------------------------------
+ * The brief's signature depth (§1 particles, §9 glass) on the software BGRA
+ * framebuffer. Real Gaussian blur is deferred; glass is a flat translucent tint
+ * of the ambiance bg (computed, not FB-read, so it stays cheap); particles are a
+ * deterministic LCG-seeded pool alpha-blended over the background. */
+static int g_cur_amb = 3;                            /* current ambiance index (NIGHT) */
+static unsigned g_frame = 0;                         /* advances each render (particle phase) */
+static int g_visual_announced = 0;                   /* one-time sentinel guard          */
+static int g_particle_n = 0;                         /* particles drawn last render      */
+
+#define PARTICLE_MAX 200
+static int   p_init = 0;
+static float p_x[PARTICLE_MAX], p_y[PARTICLE_MAX];
+static unsigned p_lcg = 0x1234567u;
+static unsigned lcg15(void) { p_lcg = p_lcg * 1103515245u + 12345u; return (p_lcg >> 16) & 0x7FFFu; }
+
+/* Alpha-composite one pixel over the framebuffer (a in [0,1]); B,G,R like put_px.
+ * Used for particles only (a few hundred px/frame, so the FB reads stay cheap). */
+static void blend_px(unsigned x, unsigned y, unsigned char b, unsigned char gg, unsigned char r, float a) {
+    if (x >= g_fi.width || y >= g_fi.height) return;
+    unsigned char *p = g_fb + (unsigned long)y * g_fi.stride + (unsigned long)x * 4;
+    p[0] = (unsigned char)(p[0] * (1.0f - a) + b  * a);
+    p[1] = (unsigned char)(p[1] * (1.0f - a) + gg * a);
+    p[2] = (unsigned char)(p[2] * (1.0f - a) + r  * a);
+    p[3] = 0xFF;
+}
+
+/* A frosted-glass card: a flat translucent tint of the current ambiance bg
+ * (computed, no FB reads) + a 1px accent border (brief §9; real blur deferred). */
+static void glass_card(unsigned x, unsigned y, unsigned w, unsigned h) {
+    const float a = 0.10f;                           /* ~rgba(255,255,255,0.10) over bg */
+    unsigned char tb = (unsigned char)(g_bg[2] * (1.0f - a) + 255.0f * a);
+    unsigned char tg = (unsigned char)(g_bg[1] * (1.0f - a) + 255.0f * a);
+    unsigned char tr = (unsigned char)(g_bg[0] * (1.0f - a) + 255.0f * a);
+    fill_rect(x, y, w, h, tb, tg, tr);
+    fill_rect(x, y, w, 1, g_ac[2], g_ac[1], g_ac[0]);          /* top    */
+    fill_rect(x, y + h - 1, w, 1, g_ac[2], g_ac[1], g_ac[0]);  /* bottom */
+    fill_rect(x, y, 1, h, g_ac[2], g_ac[1], g_ac[0]);          /* left   */
+    fill_rect(x + w - 1, y, 1, h, g_ac[2], g_ac[1], g_ac[0]);  /* right  */
+}
+
+/* The per-ambiance particle field (brief §1): DAWN motes, DAY none (mesh
+ * deferred), DUSK embers, NIGHT stars. Deterministic positions; wraps at edges. */
+static void render_particles(void) {
+    if (!p_init) {
+        for (int i = 0; i < PARTICLE_MAX; i++) {
+            p_x[i] = (float)(lcg15() % (g_fi.width  ? g_fi.width  : 1u));
+            p_y[i] = (float)(lcg15() % (g_fi.height ? g_fi.height : 1u));
+        }
+        p_init = 1;
+    }
+    int n; float dx, dy; unsigned char pr, pg, pb; float base_a;
+    switch (g_cur_amb) {
+    case 0:  n = 120; dx =  0.2f; dy = -0.2f;  pr = 0xC8; pg = 0xA4; pb = 0xE8; base_a = 0.30f; break; /* DAWN motes  */
+    case 1:  n = 0;   dx = 0;     dy = 0;      pr = pg = pb = 0;     base_a = 0;     break;            /* DAY  none   */
+    case 2:  n = 60;  dx = 0.0f;  dy = -0.12f; pr = 0xFF; pg = 0x78; pb = 0x28; base_a = 0.35f; break; /* DUSK embers */
+    default: n = 200; dx = 0.02f; dy = 0.03f;  pr = 0xFF; pg = 0xFF; pb = 0xFF; base_a = 0.40f; break; /* NIGHT stars */
+    }
+    for (int i = 0; i < n && i < PARTICLE_MAX; i++) {
+        p_x[i] += dx; p_y[i] += dy;
+        if (p_x[i] < 0) p_x[i] += g_fi.width;  if (p_x[i] >= g_fi.width)  p_x[i] -= g_fi.width;
+        if (p_y[i] < 0) p_y[i] += g_fi.height; if (p_y[i] >= g_fi.height) p_y[i] -= g_fi.height;
+        float a = base_a;
+        if (g_cur_amb == 3) a = 0.15f + 0.45f * ((float)((g_frame + (unsigned)i * 7u) % 16u) / 16.0f); /* twinkle */
+        blend_px((unsigned)p_x[i], (unsigned)p_y[i], pb, pg, pr, a);
+        if (g_cur_amb == 3 && i < 4) {               /* 4 bright stars w/ a soft glow */
+            blend_px((unsigned)p_x[i] + 1, (unsigned)p_y[i], pb, pg, pr, a * 0.6f);
+            blend_px((unsigned)p_x[i], (unsigned)p_y[i] + 1, pb, pg, pr, a * 0.6f);
+        }
+    }
+    g_particle_n = n;
+}
+
 typedef struct { float L, a, b; } oklab;
 
 static float fcbrtf(float x) {                      /* libm-free cube root (Newton) */
@@ -180,7 +253,7 @@ static void render_agent_panel(void) {
     unsigned px = g_fi.width - 210;
     for (int i = 0; i < 8; i++) {
         unsigned py = 70 + (unsigned)i * 44;
-        fill_rect(px, py, 200, 36, 0x30, 0x18, 0x20);            /* card bg */
+        glass_card(px, py, 200, 36);                             /* DDR-712: frosted glass */
         draw_str(g_agents[i], px + 10, py + 14, 1, 0xE0, 0xE0, 0xF0);
         if (roster[i]) fill_rect(px + 178, py + 12, 12, 12, 0x40, 0xE0, 0x40);  /* active = green */
         else           fill_rect(px + 178, py + 12, 12, 12, 0x50, 0x50, 0x50);  /* inactive = gray */
@@ -192,9 +265,17 @@ static void render_agent_panel(void) {
 static void render(int mode) {
     fill_rect(0, 0, g_fi.width, g_fi.height, g_bg[2], g_bg[1], g_bg[0]);  /* ambiance bg */
     fill_rect(0, 0, g_fi.width, 6, g_ac[2], g_ac[1], g_ac[0]);            /* accent bar  */
+    render_particles();                                                  /* DDR-712: particle field */
     draw_str(mode ? "SOVEREIGN MODE" : "MANUAL MODE", 24, 24, 3,
              g_ac[2], g_ac[1], g_ac[0]);
-    render_agent_panel();                                                /* DDR-707 */
+    render_agent_panel();                                                /* DDR-707 (glass cards) */
+    g_frame++;
+    if (!g_visual_announced) {                                           /* DDR-712 sentinels (once) */
+        printf("PRADYOS_PARTICLES_OK n=%d\n", g_particle_n);
+        printf("PRADYOS_GLASS_OK\n");
+        fflush(stdout);
+        g_visual_announced = 1;
+    }
 }
 
 /* Blit a client surface (mapped at sva, w x h BGRA) onto the FB at (dx,dy). */
@@ -235,8 +316,6 @@ static int present(void) {
     }
     return -1;
 }
-
-static int g_cur_amb = 3;                            /* current ambiance index (NIGHT) */
 
 /* Transition the ambiance bg+accent to AMB[idx] over `frames`, OKLab-interpolated. */
 static void set_ambiance(int idx, int frames) {

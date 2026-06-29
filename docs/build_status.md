@@ -480,7 +480,17 @@ stale access faults to a clean user-kill, ADR-021), and **`SYS_SURFACE_RESIZE`
 `surfacetest` grows a third window C, resizes it 64×64→96×96 (`PRADYOS_RESIZE_OK`),
 then closes it (`PRADYOS_CLOSE_OK`) — A and B stay up so the prior gates are
 unaffected. Gate **`smoke-winops`** (client-driven, GPU). 43 gates total.
-**Deferred (DDR-702..709):** particle fields (motes/embers/stars); real glass blur
+**Glass panels + particle field (DDR-712) COMPLETE:** the desktop gains the brief's
+signature depth (§1/§9) in the software compositor. A per-ambiance **particle
+field** (`render_particles`) draws over the background: DAWN 120 motes, DUSK 60
+embers, NIGHT 200 stars (twinkle + 4 bright), DAY none (mesh deferred) — a
+deterministic LCG-seeded pool alpha-blended via a new `blend_px` (FB-read kept to
+the few hundred particle px/frame). The agent cards (DDR-707) are now **frosted
+glass** (`glass_card`): a computed translucent bg+white tint (no FB reads) + 1px
+accent border, status dots unchanged. The compositor announces
+`PRADYOS_PARTICLES_OK` + `PRADYOS_GLASS_OK` on its first render. Gate
+**`smoke-visual`** (client-driven, GPU). 44 gates total.
+**Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
@@ -488,8 +498,9 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Close/min/max **buttons** + per-window title
 strings + pointer resize **handles** are the DDR-711 follow-ons.
-**Next: visual richness (particle fields / glass blur / gradients), or close/min/max
-title-bar buttons + per-window title strings. wlroots/Wayland remain out-of-tree.**
+**Next: more visual richness (real glass blur / gradients / DAY mesh / sun-bloom),
+the agent-card click→AETHER interaction, or close/min/max title-bar buttons +
+per-window title strings. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-29
 
 ## Phase 0 — Toolchain & Build System

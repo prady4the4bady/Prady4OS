@@ -689,6 +689,14 @@ smoke-winops: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_RESIZE_OK\nPRADYOS_CLOSE_OK\nPRADYOS_SURFACE_GONE')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Layer-7 visual-richness gate (DDR-712): the compositor renders a per-ambiance
+# particle field (NIGHT stars at boot) over the background and frosted-glass agent
+# cards, announcing PRADYOS_PARTICLES_OK + PRADYOS_GLASS_OK on its first render.
+# Client-driven (no QMP); needs the GPU.
+smoke-visual: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_PARTICLES_OK\nPRADYOS_GLASS_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on
 # the time-of-day ambiance from the RTC (SYS_CLOCK). Needs the GPU.
