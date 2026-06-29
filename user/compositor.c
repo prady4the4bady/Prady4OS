@@ -357,7 +357,7 @@ int main(void) {
         int cur_focus = -1;
         for (long i = 0; i < ns; i++) if (surfs[i].focused) cur_focus = (int)surfs[i].id;
         focus_id = cur_focus;
-        if (ns > composited || cur_focus != last_focus) {
+        if (ns != composited || cur_focus != last_focus) { /* grew, shrank, or focus moved */
             render((int)nsi(SYS_GET_MODE, 0, 0, 0));
             for (long i = 0; i < ns; i++) {                 /* z-order: bottom..top */
                 long sva = nsi(SYS_SURFACE_CMAP, (long)surfs[i].id, 0, 0);
@@ -372,6 +372,8 @@ int main(void) {
             }
             for (long i = composited; i < ns; i++)
                 printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);
+            if (ns < composited)                            /* a window was closed (DDR-711) */
+                printf("PRADYOS_SURFACE_GONE n=%ld\n", ns);
             if (cur_focus >= 0 && cur_focus != last_focus)
                 printf("PRADYOS_FOCUS id=%d\n", cur_focus);
             fflush(stdout);

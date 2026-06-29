@@ -203,6 +203,59 @@ static long sys_surface_cmap(long a1, long a2, long a3, long a4) {
     return sys_surface_map_ro((int)a1);
 }
 
+/* Close a surface (DDR-711): free its PMM buffer and the slot. Owner or the
+ * compositor (CAP_SOVEREIGN). When the OWNER closes (its AS is active), the VA
+ * range is unmapped first so a stale access faults -> clean user-kill rather than
+ * touching freed frames (ADR-021). A sovereign closing another process's surface
+ * frees the frames without unmapping the owner's tables (not the active AS) — the
+ * owner must not access a sovereign-closed surface. */
+static long sys_surface_close(long a1, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    int id = (int)a1;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    struct surface *s = &g_surf[id];
+    if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign)
+        return -EPERM;
+    if (s->owner_pid == current_thread->pid) {     /* unmap the owner's (active) view */
+        uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
+        for (uint32_t i = 0; i < s->npages; i++)
+            vmm_unmap(va + (uint64_t)i * PAGE_SIZE);
+    }
+    pmm_free_pages(s->phys, order_for(s->npages));
+    for (unsigned i = 0; i < sizeof *s; i++) ((uint8_t *)s)[i] = 0;   /* clears used */
+    return 0;
+}
+
+/* Resize a surface (DDR-711): swap in a fresh zeroed buffer of the new size,
+ * keeping position/stack/focus/committed. Owner-only (it owns the draw buffer).
+ * The owner re-maps (SYS_SURFACE_MAP) to draw into the new buffer. */
+static long sys_surface_resize(long a1, long a2, long a3, long a4) {
+    (void)a4;
+    int id = (int)a1;
+    uint32_t w = (uint32_t)a2, h = (uint32_t)a3;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    struct surface *s = &g_surf[id];
+    if (s->owner_pid != current_thread->pid)
+        return -EPERM;
+    if (w == 0 || h == 0 || w > SURFACE_DIM_MAX || h > SURFACE_DIM_MAX)
+        return -EINVAL;
+    uint64_t bytes = (uint64_t)w * h * 4;
+    uint64_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t nphys = pmm_alloc_pages(order_for(npages));
+    if (!nphys)
+        return -ENOMEM;
+    for (uint64_t i = 0; i < npages * PAGE_SIZE; i++)   /* zero (identity-mapped) */
+        ((volatile uint8_t *)(uintptr_t)nphys)[i] = 0;
+    uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
+    for (uint32_t i = 0; i < s->npages; i++)            /* drop the owner's old view */
+        vmm_unmap(va + (uint64_t)i * PAGE_SIZE);
+    pmm_free_pages(s->phys, order_for(s->npages));
+    s->phys = nphys; s->w = w; s->h = h; s->npages = (uint32_t)npages;
+    return 0;
+}
+
 void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_CREATE, sys_surface_create);
     syscall_register(SYS_SURFACE_MAP,    sys_surface_map);
@@ -213,4 +266,6 @@ void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_SENDKEY, sys_surface_sendkey);
     syscall_register(SYS_SURFACE_GETKEY, sys_surface_getkey);
     syscall_register(SYS_SURFACE_MOVE,   sys_surface_move);     /* DDR-710 */
+    syscall_register(SYS_SURFACE_CLOSE,  sys_surface_close);    /* DDR-711 */
+    syscall_register(SYS_SURFACE_RESIZE, sys_surface_resize);   /* DDR-711 */
 }

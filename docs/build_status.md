@@ -470,16 +470,27 @@ recomposited), button-up drops it (`PRADYOS_DRAG id=N x= y=`); a click elsewhere
 stays a plain click. Gate **`smoke-drag`** (QMP title-bar drag of window B →
 `PRADYOS_DRAG id=1 x=380 y=360`). **PRADYOS now has direct-manipulation windows:
 stack, focus, key routing, and drag-to-move.** 42 gates total.
+**Window close + resize (DDR-711) COMPLETE:** windows now have a full lifecycle.
+Two new syscalls: **`SYS_SURFACE_CLOSE` (59)** frees a surface's PMM buffer + slot
+(owner or the `CAP_SOVEREIGN` compositor; the owner path unmaps its VA first so a
+stale access faults to a clean user-kill, ADR-021), and **`SYS_SURFACE_RESIZE`
+(60)** swaps in a fresh zeroed buffer of the new size keeping position/stack/focus
+(owner-only). The compositor now recomposites when the live-surface set **shrinks**
+(`ns != composited`), erasing a closed window and printing `PRADYOS_SURFACE_GONE`.
+`surfacetest` grows a third window C, resizes it 64×64→96×96 (`PRADYOS_RESIZE_OK`),
+then closes it (`PRADYOS_CLOSE_OK`) — A and B stay up so the prior gates are
+unaffected. Gate **`smoke-winops`** (client-driven, GPU). 43 gates total.
 **Deferred (DDR-702..709):** particle fields (motes/embers/stars); real glass blur
 + saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
 alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
-library ports — the standing wall).
-**Next: visual richness (particle fields / glass blur / gradients), or window
-close/resize buttons + title strings. wlroots/Wayland remain out-of-tree.**
-**Last updated:** 2026-06-28
+library ports — the standing wall). Close/min/max **buttons** + per-window title
+strings + pointer resize **handles** are the DDR-711 follow-ons.
+**Next: visual richness (particle fields / glass blur / gradients), or close/min/max
+title-bar buttons + per-window title strings. wlroots/Wayland remain out-of-tree.**
+**Last updated:** 2026-06-29
 
 ## Phase 0 — Toolchain & Build System
 

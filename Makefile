@@ -681,6 +681,14 @@ smoke-drag: $(IMG) fat-image sfs-image
 	@grep -q "PRADYOS_DRAG id=" build/drag.log || { echo "[drag] FAIL — window did not move"; tail -20 build/drag.log; exit 1; }
 	@echo "[drag] PASS — $$(grep -a 'PRADYOS_DRAG id=' build/drag.log | head -1)"
 
+# Layer-7 window close+resize gate (DDR-711): the client (surfacetest) creates a
+# third window C, resizes it to 96x96 (PRADYOS_RESIZE_OK), then closes it
+# (PRADYOS_CLOSE_OK); the compositor recomposites when the live set shrinks and
+# prints PRADYOS_SURFACE_GONE. Client-driven (no QMP); needs the GPU.
+smoke-winops: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_RESIZE_OK\nPRADYOS_CLOSE_OK\nPRADYOS_SURFACE_GONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on
 # the time-of-day ambiance from the RTC (SYS_CLOCK). Needs the GPU.

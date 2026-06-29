@@ -76,6 +76,9 @@
 #define SYS_CLOCK          57  /* () -> seconds since midnight (RTC)                 */
 /* Window move (Layer 7, DDR-710). */
 #define SYS_SURFACE_MOVE   58  /* (id, x, y) -> 0  (owner or compositor)             */
+/* Window close + resize (Layer 7, DDR-711). */
+#define SYS_SURFACE_CLOSE  59  /* (id) -> 0  free the surface (owner or compositor)  */
+#define SYS_SURFACE_RESIZE 60  /* (id, w, h) -> 0  new buffer, same pos (owner only) */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

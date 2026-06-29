@@ -13,6 +13,8 @@
 #define SYS_SURFACE_COMMIT  50
 #define SYS_SURFACE_RAISE   54
 #define SYS_SURFACE_GETKEY  56
+#define SYS_SURFACE_CLOSE   59
+#define SYS_SURFACE_RESIZE  60
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -47,12 +49,41 @@ int main(void) {
     printf("PRADYOS_SURFACE_CLIENT_OK a=%ld b=%ld\n", a, b);
     fflush(stdout);
 
-    /* Drain forwarded keys from both windows; only the focused one (B) gets any. */
+    /* DDR-711: a third window C exercises resize + close. C is created and resized
+     * (64x64 -> 96x96) up front, but deliberately NOT raised — B keeps focus, so
+     * smoke-focus/smoke-drag are unaffected. C is placed off to the side so it
+     * never sits under B's title bar. It persists so the compositor composites it
+     * (the live set grows to 3); after a spell we close it and the set shrinks back
+     * to 2, which the compositor reports (PRADYOS_SURFACE_GONE). Meanwhile keep
+     * draining the focused window's key ring (DDR-708). */
+    long c = make_window(0x40, 0x40, 0xE0, 420, 70);        /* red, off to the side */
+    if (c >= 0 && nsi(SYS_SURFACE_RESIZE, c, 96, 96) == 0) {
+        long cva = nsi(SYS_SURFACE_MAP, c, 0, 0);           /* re-map the new 96x96 buffer */
+        if (cva > 0) {
+            unsigned char *s = (unsigned char *)cva;
+            for (unsigned i = 0; i < 96u * 96u; i++) {
+                s[i*4+0] = 0x40; s[i*4+1] = 0x40; s[i*4+2] = 0xE0; s[i*4+3] = 0xFF;
+            }
+        }
+        printf("PRADYOS_RESIZE_OK id=%ld\n", c);
+        fflush(stdout);
+    }
+
+    unsigned ticks = 0;
+    int closed = 0;
     for (;;) {
         long ka = nsi(SYS_SURFACE_GETKEY, a, 0, 0);
         if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", a, (char)ka); fflush(stdout); }
         long kb = nsi(SYS_SURFACE_GETKEY, b, 0, 0);
         if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", b, (char)kb); fflush(stdout); }
+
+        ticks++;
+        if (!closed && c >= 0 && ticks > 2000) {            /* close C; set shrinks 3 -> 2 */
+            nsi(SYS_SURFACE_CLOSE, c, 0, 0);
+            printf("PRADYOS_CLOSE_OK id=%ld\n", c);
+            fflush(stdout);
+            closed = 1;
+        }
         nsi(SYS_YIELD, 0, 0, 0);
     }
     return 0;

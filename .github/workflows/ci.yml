@@ -149,6 +149,9 @@ jobs:
       - name: QEMU window-drag test (q35; title-bar drag -> SYS_SURFACE_MOVE, L7)
         run: make smoke-drag
 
+      - name: QEMU window close+resize test (q35; SYS_SURFACE_CLOSE/RESIZE, L7)
+        run: make smoke-winops
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 
