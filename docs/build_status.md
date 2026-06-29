@@ -459,8 +459,17 @@ seconds-since-midnight from the RTC (the vDSO clock is monotonic, not wall-clock
 selecting the ambiance by hour + re-transitioning at boundaries. The mode toggle
 now animates the accent in OKLab (`PRADYOS_TOGGLE_ANIM_OK`). A startup demo-cycle
 proves all four ambiances (`PRADYOS_AMBIANCE …` + `PRADYOS_AMBIANCE_OK`). Gate
-**`smoke-ambiance`**. **PRADYOS renders a perceptually-correct, time-of-day desktop
-with stacked focusable windows + an agent roster.** 41 gates total.
+**`smoke-ambiance`**.
+**Window decorations + drag-to-move (DDR-710) COMPLETE:** windows have a title bar
+and can be dragged. New syscall **`SYS_SURFACE_MOVE` (58)** repositions a surface
+(owner or the `CAP_SOVEREIGN` compositor). The compositor draws an 18 px title-bar
+decoration (the drag handle) above each window and runs a drag state machine off the
+absolute pointer: button-down on the topmost title bar raises+focuses + starts a
+drag (`PRADYOS_DRAG_START`), pointer moves reposition the window (`SYS_SURFACE_MOVE`,
+recomposited), button-up drops it (`PRADYOS_DRAG id=N x= y=`); a click elsewhere
+stays a plain click. Gate **`smoke-drag`** (QMP title-bar drag of window B →
+`PRADYOS_DRAG id=1 x=380 y=360`). **PRADYOS now has direct-manipulation windows:
+stack, focus, key routing, and drag-to-move.** 42 gates total.
 **Deferred (DDR-702..709):** particle fields (motes/embers/stars); real glass blur
 + saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -469,7 +478,7 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall).
 **Next: visual richness (particle fields / glass blur / gradients), or window
-move/drag + decorations. wlroots/Wayland remain out-of-tree.**
+close/resize buttons + title strings. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-28
 
 ## Phase 0 — Toolchain & Build System
