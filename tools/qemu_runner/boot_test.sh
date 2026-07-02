@@ -58,6 +58,13 @@ if [ -n "${QEMU_GPU:-}" ]; then
     GPUDEV=(-device virtio-gpu-pci)
 fi
 
+# Optional SMP (ADR-029) — the smoke-smp gate boots multiple vCPUs; every other
+# gate stays -smp 1 (QEMU's default) for single-CPU determinism.
+SMPOPT=()
+if [ -n "${QEMU_SMP:-}" ]; then
+    SMPOPT=(-smp "$QEMU_SMP")
+fi
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine q35 \
     -drive if=none,format=raw,file="$IMG",id=disk0 \
@@ -67,6 +74,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${EXT4DISK[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${GPUDEV[@]}" \
+    "${SMPOPT[@]}" \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
     || true

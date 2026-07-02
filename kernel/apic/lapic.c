@@ -21,6 +21,8 @@
 #define LAPIC_TPR          0x080
 #define LAPIC_EOI          0x0B0
 #define LAPIC_SVR          0x0F0
+#define LAPIC_ICR_LO       0x300   /* write triggers the IPI (bit 12 = busy) */
+#define LAPIC_ICR_HI       0x310   /* destination LAPIC id in bits 56..63    */
 #define LAPIC_LVT_TIMER    0x320
 #define LAPIC_TIMER_ICR    0x380   /* initial count  */
 #define LAPIC_TIMER_CCR    0x390   /* current count  */
@@ -40,6 +42,8 @@ struct madt {
 
 static volatile uint8_t *g_lapic;   /* identity VA of the LAPIC page, or NULL */
 static unsigned g_ncpus;
+#define LAPIC_MAX_CPUS 16
+static uint8_t g_apic_ids[LAPIC_MAX_CPUS];   /* MADT type-0 LAPIC ids (ADR-029) */
 
 static uint32_t lapic_rd(uint32_t off) {
     return *(volatile uint32_t *)(g_lapic + off);
@@ -49,6 +53,23 @@ static void lapic_wr(uint32_t off, uint32_t val) {
 }
 
 unsigned lapic_cpu_count(void) { return g_ncpus; }
+
+uint32_t lapic_id(void) {
+    return g_lapic ? (lapic_rd(LAPIC_ID) >> 24) : 0;
+}
+
+uint32_t lapic_apic_id_at(unsigned i) {
+    return (i < g_ncpus) ? g_apic_ids[i] : 0;
+}
+
+void lapic_send_ipi(uint32_t dest_id, uint32_t icr_low) {
+    if (!g_lapic)
+        return;
+    lapic_wr(LAPIC_ICR_HI, dest_id << 24);
+    lapic_wr(LAPIC_ICR_LO, icr_low);
+    while (lapic_rd(LAPIC_ICR_LO) & (1u << 12))   /* delivery-status busy */
+        __asm__ volatile("pause");
+}
 
 void lapic_eoi(void) {
     lapic_wr(LAPIC_EOI, 0);
@@ -67,8 +88,12 @@ int lapic_init(void) {
     const uint8_t *end = (const uint8_t *)m + m->hdr.length;
     g_ncpus = 0;
     while (p + 2 <= end && p[1] >= 2 && p + p[1] <= end) {
-        if (p[0] == 0)
+        /* type 0 = processor LAPIC: [2]=ACPI id, [3]=LAPIC id, [4..7]=flags;
+         * count only enabled processors (flags bit 0), keep the id (ADR-029). */
+        if (p[0] == 0 && p[1] >= 8 && (p[4] & 1) && g_ncpus < LAPIC_MAX_CPUS) {
+            g_apic_ids[g_ncpus] = p[3];
             g_ncpus++;
+        }
         p += p[1];
     }
 

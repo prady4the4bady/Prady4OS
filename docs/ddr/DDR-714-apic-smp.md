@@ -13,10 +13,13 @@
   for device IRQs (keyboard, COM1 RX, PCI INTx) — the "hybrid virtual-wire"
   arrangement. This is the SMP prerequisite: INIT-SIPI IPIs and per-CPU timers
   need only the LAPIC, not the I/O APIC.
-- **B (next):** SMP bring-up — AP trampoline (INIT-SIPI-SIPI, real→long mode),
-  per-CPU GDT/TSS/idle, and **spinlocks** superseding ADR-016's
-  interrupt-masking for PMM/kheap/console/scheduler (needs its own ADR — ADR-016
-  is explicit that masking is single-core-only).
+- **B (done — see ADR-029):** SMP bring-up — AP trampoline
+  (`arch/x86_64/ap_boot.asm`, INIT-SIPI-SIPI, real→long mode at 0x8000) brings
+  every MADT AP online **parked** (`cli/hlt`, no scheduler/IRQs), plus the
+  spinlock primitive (`kernel/include/spinlock.h`). ADR-016 remains valid for
+  the single scheduling CPU; distributing the scheduler (per-CPU state +
+  locking every shared subsystem) is a future ADR. Gate `smoke-smp`
+  (`-smp 4` → `[smp] cpus online=4/4`).
 - **C (later):** I/O APIC migration of device IRQs (GSIs, interrupt source
   overrides) + MSI-X for virtio (unblocks the deferred multi-request virtio).
 

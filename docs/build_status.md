@@ -518,6 +518,20 @@ system; device IRQs (kbd/COM1/PCI INTx) stay on the 8259 (hybrid virtual-wire).
 No MADT → PIT retained (fallback). Stage B = SMP (INIT-SIPI + per-CPU + a
 spinlock ADR superseding ADR-016's masking); stage C = I/O APIC + MSI-X. Gate
 **`smoke-apic`**. 46 gates total.
+**SMP stage B (DDR-714 / ADR-029) COMPLETE:** real multi-core bring-up, APs
+**parked**. `arch/x86_64/ap_boot.asm` is a position-fixed 16-bit trampoline the
+BSP copies to physical 0x8000 (SIPI vector 0x08): each AP goes real mode →
+PAE+LME → long mode directly on the kernel master CR3, loads a per-AP stack +
+entry from the BSP-filled mailbox, and lands in `smp_ap_entry` — announces under
+a new **spinlock** (`kernel/include/spinlock.h`, the ADR-029 primitive), marks
+itself online (atomic), and parks (`cli/hlt`; no scheduler, no IRQs, so ADR-016's
+masking stays valid for the one scheduling CPU). `kernel/apic/smp.c` drives the
+SDM MP-init sequence (INIT, 10 ms, SIPI ×2 @200 µs) one AP at a time off the
+MADT LAPIC ids (now collected with the enabled-flag check); `lapic_send_ipi`
+waits out the ICR busy bit. `boot_test.sh` gained a `QEMU_SMP` knob; every
+existing gate stays `-smp 1` (`online=1/1`). Gate **`smoke-smp`** (`-smp 4` →
+3 APs → `[smp] cpus online=4/4`). Distributed scheduling = a future ADR.
+47 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -526,10 +540,10 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Close/min/max **buttons** + per-window title
 strings + pointer resize **handles** are the DDR-711 follow-ons.
-**Next: SMP bring-up (DDR-714 stage B: INIT-SIPI AP boot + per-CPU + a spinlock
-ADR), I/O APIC + MSI-X (stage C), more visual richness (real glass blur /
-gradients / DAY mesh / sun-bloom), or close/min/max title-bar buttons +
-per-window title strings. wlroots/Wayland remain out-of-tree.**
+**Next: distributed SMP scheduling (per-CPU + subsystem locking, its own ADR
+superseding ADR-016), I/O APIC + MSI-X (DDR-714 stage C), more visual richness
+(real glass blur / gradients / DAY mesh / sun-bloom), or close/min/max title-bar
+buttons + per-window title strings. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-07-02
 
 ## Phase 0 — Toolchain & Build System

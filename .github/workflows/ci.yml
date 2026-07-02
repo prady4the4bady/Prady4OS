@@ -95,6 +95,9 @@ jobs:
       - name: QEMU APIC test (q35; LAPIC up + APIC timer owns the 100Hz tick)
         run: make smoke-apic
 
+      - name: QEMU SMP test (q35 -smp 4; INIT-SIPI brings 3 APs online, parked)
+        run: make smoke-smp
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

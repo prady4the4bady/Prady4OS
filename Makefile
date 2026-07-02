@@ -18,7 +18,8 @@ IMG        := build/pradyos.img
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
 KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm \
                arch/x86_64/context.asm arch/x86_64/syscall_entry.asm \
-               arch/x86_64/usermode.asm arch/x86_64/user_image.asm
+               arch/x86_64/usermode.asm arch/x86_64/user_image.asm \
+               arch/x86_64/ap_boot.asm
 # Freestanding ring-3 test programs (Phase 5a): each linked as its own static
 # ELF and embedded into the kernel via arch/x86_64/user_image.asm (incbin).
 # hello prints from ring 3; wxviol is the W^X negative regression.
@@ -83,7 +84,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
                kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
                kernel/aether/aether.c kernel/aether/aether_queue.c kernel/aether/aether_audit.c kernel/aether/aether_mem.c kernel/syscall/sys_aether.c kernel/syscall/sys_socket.c kernel/syscall/sys_fb.c kernel/syscall/sys_surface.c \
-               kernel/apic/lapic.c
+               kernel/apic/lapic.c kernel/apic/smp.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -97,7 +98,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
-               build/lwip_port.o build/lapic.o
+               build/lwip_port.o build/lapic.o build/smp.o build/ap_boot.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
@@ -213,6 +214,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/context.asm       -o build/context.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/syscall_entry.asm -o build/syscall_entry.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/usermode.asm      -o build/usermode.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/ap_boot.asm       -o build/ap_boot.o
 	$(CC) $(KCFLAGS) -c kernel/main.c          -o build/main.o
 	$(CC) $(KCFLAGS) -c kernel/console.c       -o build/console.o
 	$(CC) $(KCFLAGS) -c kernel/idt.c           -o build/idt.o
@@ -242,6 +244,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_io_uring.c -o build/sys_io_uring.o
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
 	$(CC) $(KCFLAGS) -c kernel/apic/lapic.c      -o build/lapic.o
+	$(CC) $(KCFLAGS) -c kernel/apic/smp.c        -o build/smp.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio.c       -o build/virtio.o
@@ -715,6 +718,13 @@ smoke-winops: $(IMG) fat-image sfs-image
 # boot (scheduler, FS, user) implicitly proves the new tick drives the system.
 smoke-apic: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[apic] up id=\n[apic] timer 100Hz (PIT masked)')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# SMP stage-B gate (ADR-029): boot 4 vCPUs; the BSP INIT-SIPIs the 3 APs through
+# the 0x8000 trampoline into long mode; each announces and parks. Proves the
+# MP-init protocol end-to-end (MADT ids -> IPIs -> real->long mode -> C).
+smoke-smp: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 EXTRA_SENTINEL="$$(printf '[smp] cpus online=4/4')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 visual-richness gate (DDR-712): the compositor renders a per-ambiance
