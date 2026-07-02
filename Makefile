@@ -814,8 +814,11 @@ smoke-focus: $(IMG) fat-image sfs-image
 # Layer-7 named-agent panel gate (DDR-707): the compositor renders the 8 named
 # agent cards and reports the roster; the AETHER daemon's spawn lights KRYOS
 # (active), the rest inactive — state tied to AETHER's roster. Needs the GPU.
+# TIMEOUT_S=150: the KRYOS 'active' line needs the AETHER daemon's spawn, which
+# lands late under loaded KVM-less CI runners — this gate flaked twice on GitHub
+# at 90 s (runs 28341424605, 28614622428) while always passing locally.
 smoke-agents: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_AGENTS_OK\nAGENT KRYOS active\nAGENT SOLIN inactive')" \
+	TIMEOUT_S=150 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_AGENTS_OK\nAGENT KRYOS active\nAGENT SOLIN inactive')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer 7 mode-binding gate (DDR-701): the daemon (CAP_SOVEREIGN) toggles the
