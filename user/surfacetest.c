@@ -16,6 +16,9 @@
 #define SYS_SURFACE_CLOSE   59
 #define SYS_SURFACE_RESIZE  60
 #define SYS_SURFACE_SET_TITLE 61
+#define SYS_SURFACE_GETEV     63
+
+struct surf_event { unsigned short type, arg0, arg1; };   /* type 1 = RESIZE_REQ */
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -87,6 +90,24 @@ int main(void) {
         if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", a, (char)ka); fflush(stdout); }
         long kb = nsi(SYS_SURFACE_GETKEY, b, 0, 0);
         if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", b, (char)kb); fflush(stdout); }
+
+        /* DDR-718: honor compositor resize requests on B — resize, re-map,
+         * redraw at the new size, re-commit at the same position. */
+        struct surf_event ev;
+        if (nsi(SYS_SURFACE_GETEV, b, (long)&ev, 0) == 0 && ev.type == 1) {
+            if (nsi(SYS_SURFACE_RESIZE, b, ev.arg0, ev.arg1) == 0) {
+                long bva = nsi(SYS_SURFACE_MAP, b, 0, 0);
+                if (bva > 0) {
+                    unsigned char *s = (unsigned char *)bva;
+                    for (unsigned i = 0; i < (unsigned)ev.arg0 * ev.arg1; i++) {
+                        s[i*4+0] = 0xE0; s[i*4+1] = 0x40; s[i*4+2] = 0x40; s[i*4+3] = 0xFF;
+                    }
+                }
+                nsi(SYS_SURFACE_COMMIT, b, 140, 140);
+                printf("PRADYOS_EV_RESIZE_OK w=%u h=%u\n", ev.arg0, ev.arg1);
+                fflush(stdout);
+            }
+        }
 
         ticks++;
         if (!closed && c >= 0 && ticks > 2000) {            /* close C; set shrinks 3 -> 2 */

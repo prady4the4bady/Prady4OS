@@ -776,6 +776,25 @@ smoke-wmmin: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_WM_RESTORE build/wmmin.log || { echo "[wmmin] FAIL — r did not restore"; tail -20 build/wmmin.log; exit 1; }
 	@echo "[wmmin] PASS — $$(grep -a PRADYOS_WM_MIN build/wmmin.log | head -1) + restore"
 
+# Layer-7 event-channel resize gate (DDR-718): the harness drags window B's
+# bottom-right corner (QMP); the compositor sends SURF_EV_RESIZE_REQ
+# (PRADYOS_RESIZE_REQ); the OWNER resizes/redraws/recommits
+# (PRADYOS_EV_RESIZE_OK) — authority stays owner-only. Needs GPU + tablet.
+smoke-evresize: $(IMG) fat-image sfs-image
+	@echo "[evresize] corner drag-resize gate: boot(GPU+tablet) + QMP corner drag..."
+	@rm -f build/evresize.log /tmp/pevrs.sock
+	@SX=6303 SY=8404 EX=9599 EY=11090 bash tools/qemu_runner/drag_inject.sh build/evresize.log /tmp/pevrs.sock PRADYOS_AMBIANCE_OK &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pevrs.sock,server,nowait \
+	    -serial file:build/evresize.log -display none -no-reboot || true
+	@grep -q "PRADYOS_RESIZE_REQ id=1" build/evresize.log || { echo "[evresize] FAIL — corner drag did not request a resize"; tail -20 build/evresize.log; exit 1; }
+	@grep -q PRADYOS_EV_RESIZE_OK build/evresize.log || { echo "[evresize] FAIL — client did not honor the resize"; tail -20 build/evresize.log; exit 1; }
+	@echo "[evresize] PASS — $$(grep -a PRADYOS_EV_RESIZE_OK build/evresize.log | head -1)"
+
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
 # frames; the compositor announces each ambiance's first settled backdrop and

@@ -81,6 +81,9 @@
 #define SYS_SURFACE_RESIZE 60  /* (id, w, h) -> 0  new buffer, same pos (owner only) */
 /* Window title strings (Layer 7, DDR-715). */
 #define SYS_SURFACE_SET_TITLE 61 /* (id, str) -> 0  <=15 chars + NUL (owner only)    */
+/* Surface event channel (Layer 7, DDR-718). */
+#define SYS_SURFACE_SENDEV 62  /* (id, type, (w<<16)|h) -> 0  compositor/owner push  */
+#define SYS_SURFACE_GETEV  63  /* (id, struct surf_event*) -> 0 | -EAGAIN (owner)    */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

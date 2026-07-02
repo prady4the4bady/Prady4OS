@@ -18,6 +18,8 @@
 #define SURFACE_VA_SLOT    0x100000ull         /* 1 MiB per surface id */
 
 #define SURFACE_KQ 32                          /* per-surface key ring (DDR-708) */
+#define SURFACE_EQ 8                           /* per-surface event ring (DDR-718) */
+struct surf_event { uint16_t type, arg0, arg1; };   /* type 1 = RESIZE_REQ(w,h) */
 struct surface {
     uint64_t phys;
     uint32_t w, h, npages;
@@ -27,6 +29,8 @@ struct surface {
     uint8_t  kq[SURFACE_KQ];                    /* forwarded keystrokes (focused window) */
     uint8_t  kq_head, kq_tail;
     char     title[16];                         /* window title, NUL-terminated (DDR-715) */
+    struct surf_event eq[SURFACE_EQ];           /* compositor->owner events (DDR-718) */
+    uint8_t  eq_head, eq_tail;
 };
 static struct surface g_surf[SURFACE_MAX];
 static int32_t g_z_top;                         /* monotonic stacking counter */
@@ -60,6 +64,7 @@ static long sys_surface_create(long a1, long a2, long a3, long a4) {
     s->owner_pid = current_thread->pid; s->x = s->y = 0;
     s->z = ++g_z_top; s->focused = 0;
     s->kq_head = s->kq_tail = 0;
+    s->eq_head = s->eq_tail = 0;                /* empty event ring (DDR-718) */
     s->title[0] = 0;                            /* untitled until SET_TITLE (DDR-715) */
     s->used = 1; s->committed = 0;
     return id;
@@ -275,6 +280,44 @@ static long sys_surface_set_title(long a1, long a2, long a3, long a4) {
     return 0;
 }
 
+/* Push a typed event to a surface's ring (DDR-718): the compositor
+ * (CAP_SOVEREIGN) or the owner. a3 packs (arg0<<16)|arg1. Drop-on-full. */
+static long sys_surface_sendev(long a1, long a2, long a3, long a4) {
+    (void)a4;
+    int id = (int)a1;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    if (!current_thread->is_sovereign && g_surf[id].owner_pid != current_thread->pid)
+        return -EPERM;
+    struct surface *s = &g_surf[id];
+    uint8_t nh = (uint8_t)((s->eq_head + 1) % SURFACE_EQ);
+    if (nh != s->eq_tail) {
+        s->eq[s->eq_head].type = (uint16_t)a2;
+        s->eq[s->eq_head].arg0 = (uint16_t)((uint64_t)a3 >> 16);
+        s->eq[s->eq_head].arg1 = (uint16_t)a3;
+        s->eq_head = nh;
+    }
+    return 0;
+}
+
+/* The owner drains one event (DDR-718); -EAGAIN when the ring is empty. */
+static long sys_surface_getev(long a1, long a2, long a3, long a4) {
+    (void)a3; (void)a4;
+    int id = (int)a1;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    struct surface *s = &g_surf[id];
+    if (s->owner_pid != current_thread->pid)
+        return -EPERM;
+    if (s->eq_head == s->eq_tail)
+        return -EAGAIN;
+    struct surf_event ev = s->eq[s->eq_tail];
+    if (copyout((void __user *)a2, &ev, sizeof ev) < 0)
+        return -EFAULT;                          /* leave the event queued */
+    s->eq_tail = (uint8_t)((s->eq_tail + 1) % SURFACE_EQ);
+    return 0;
+}
+
 void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_CREATE, sys_surface_create);
     syscall_register(SYS_SURFACE_MAP,    sys_surface_map);
@@ -288,4 +331,6 @@ void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_CLOSE,  sys_surface_close);    /* DDR-711 */
     syscall_register(SYS_SURFACE_RESIZE, sys_surface_resize);   /* DDR-711 */
     syscall_register(SYS_SURFACE_SET_TITLE, sys_surface_set_title); /* DDR-715 */
+    syscall_register(SYS_SURFACE_SENDEV, sys_surface_sendev);   /* DDR-718 */
+    syscall_register(SYS_SURFACE_GETEV,  sys_surface_getev);
 }

@@ -563,6 +563,18 @@ routes to the focused window, documented). Maximize + pointer resize handles
 stay deferred pending a surface **event channel** (the client must redraw at a
 compositor-chosen size). Gate **`smoke-wmmin`** (GPU + tablet + HMP: click B's
 min box, then `r`). 50 gates total.
+**Surface event channel + pointer resize (DDR-718) COMPLETE:** the Wayland
+`configure` shape in miniature. Each surface gains an 8-entry typed-event ring;
+**`SYS_SURFACE_SENDEV` (62)** (compositor/owner push, drop-on-full) and
+**`SYS_SURFACE_GETEV` (63)** (owner drains, `-EAGAIN` when empty). Event 1 =
+`SURF_EV_RESIZE_REQ(w,h)`. **Authority is unchanged**: the compositor only
+requests; the owner performs `SYS_SURFACE_RESIZE`, re-maps, redraws, and
+re-commits. First consumer: dragging a window's **bottom-right 14×14 corner**
+sends the request on button-up (clamped 32..512; `PRADYOS_RESIZE_REQ`);
+`surfacetest`'s loop honors it on B (`PRADYOS_EV_RESIZE_OK`). `drag_inject.sh`
+gained `SX/SY/EX/EY` overrides (defaults unchanged → `smoke-drag` untouched).
+Maximize (saved-geometry restore on this channel) is the next natural consumer.
+Gate **`smoke-evresize`** (GPU + tablet, QMP corner drag). 51 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

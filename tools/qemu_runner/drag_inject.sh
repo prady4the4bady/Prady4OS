@@ -14,9 +14,13 @@ for _ in $(seq 1 600); do
 done
 sleep 0.5
 
-SOCK="$sock" python3 - <<'PY'
+# Optional SX/SY/EX/EY abs-coordinate overrides (DDR-718); defaults = the
+# DDR-710 title-bar drag, so smoke-drag is untouched.
+SOCK="$sock" SX="${SX:-5120}" SY="${SY:-5546}" EX="${EX:-12800}" EY="${EY:-14933}" python3 - <<'PY'
 import os, socket, json, time
 sock = os.environ["SOCK"]
+sx, sy = int(os.environ["SX"]), int(os.environ["SY"])
+ex, ey = int(os.environ["EX"]), int(os.environ["EY"])
 s = None
 for _ in range(50):
     try:
@@ -45,8 +49,8 @@ cmd({"execute": "qmp_capabilities"})
 # Window B's title bar is around pixel (160,130) -> abs (5120,5546); drag target
 # pixel (400,350) -> abs (12800,14933). Repeat so a missed phase still lands.
 for _round in range(3):
-    absmove(5120, 5546);  time.sleep(0.35)      # over B's title bar
+    absmove(sx, sy);      time.sleep(0.35)      # over the drag start point
     btn(True);            time.sleep(0.45)       # press (start drag)
-    absmove(12800, 14933); time.sleep(0.45)      # drag (button held)
+    absmove(ex, ey);      time.sleep(0.45)       # drag (button held)
     btn(False);           time.sleep(0.6)        # release (drop)
 PY

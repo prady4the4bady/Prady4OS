@@ -26,6 +26,7 @@
 #define SYS_CLOCK        57
 #define SYS_SURFACE_MOVE 58
 #define SYS_SURFACE_CLOSE 59
+#define SYS_SURFACE_SENDEV 62
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; };
@@ -530,6 +531,7 @@ int main(void) {
     long composited = 0;             /* count of client surfaces last composited */
     int focus_id = -1, last_focus = -2;       /* focused surface (DDR-708) */
     int dragging = 0, drag_id = -1, drag_ox = 0, drag_oy = 0;   /* DDR-710 */
+    int resizing = 0, rs_id = -1, rs_bx = 0, rs_by = 0;         /* DDR-718 */
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     for (;;) {
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
@@ -649,22 +651,49 @@ int main(void) {
                         dragging = 1; drag_id = hit;
                         printf("PRADYOS_DRAG_START id=%d\n", hit);
                         fflush(stdout);
-                    } else {                                 /* plain click (DDR-705) */
-                        render((int)nsi(SYS_GET_MODE, 0, 0, 0));
-                        draw_cursor(ms.x, ms.y);
-                        present();
-                        printf("PRADYOS_MOUSE_OK %d %d\n", ms.x, ms.y);
-                        fflush(stdout);
+                    } else {
+                        /* DDR-718: bottom-right 14x14 corner starts a resize drag. */
+                        int rz = -1;
+                        for (long i = n - 1; i >= 0; i--) {
+                            if (g_min_mask & (1u << sf[i].id)) continue;
+                            int cx0 = sf[i].x + (int)sf[i].w - 14, cy0 = sf[i].y + (int)sf[i].h - 14;
+                            if (ms.x >= cx0 && ms.x < sf[i].x + (int)sf[i].w &&
+                                ms.y >= cy0 && ms.y < sf[i].y + (int)sf[i].h) {
+                                rz = (int)sf[i].id;
+                                rs_bx = sf[i].x; rs_by = sf[i].y;
+                                break;
+                            }
+                        }
+                        if (rz >= 0) {
+                            resizing = 1; rs_id = rz;
+                        } else {                             /* plain click (DDR-705) */
+                            render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+                            draw_cursor(ms.x, ms.y);
+                            present();
+                            printf("PRADYOS_MOUSE_OK %d %d\n", ms.x, ms.y);
+                            fflush(stdout);
+                        }
                     }
                 }
             } else if (dragging && ms.buttons) {             /* drag-move */
                 nsi(SYS_SURFACE_MOVE, drag_id, ms.x - drag_ox, ms.y - drag_oy);
                 recompose_drag(ms.x, ms.y);
+            } else if (resizing && ms.buttons) {             /* resize-drag (DDR-718) */
+                recompose_drag(ms.x, ms.y);                  /* cursor tracks the corner */
             } else if (up && dragging) {                     /* drop */
                 dragging = 0;
                 printf("PRADYOS_DRAG id=%d x=%d y=%d\n", drag_id, ms.x - drag_ox, ms.y - drag_oy);
                 fflush(stdout);
                 recompose_drag(ms.x, ms.y);
+            } else if (up && resizing) {                     /* resize commit (DDR-718) */
+                resizing = 0;
+                int neww = ms.x - rs_bx, newh = ms.y - rs_by;
+                if (neww < 32) neww = 32; if (neww > 512) neww = 512;
+                if (newh < 32) newh = 32; if (newh > 512) newh = 512;
+                nsi(SYS_SURFACE_SENDEV, rs_id, 1, ((long)neww << 16) | (long)newh);
+                printf("PRADYOS_RESIZE_REQ id=%d w=%d h=%d\n", rs_id, neww, newh);
+                fflush(stdout);
+                recompose_scene();                           /* client recommits async */
             }
             prev_btn = ms.buttons;
         }
