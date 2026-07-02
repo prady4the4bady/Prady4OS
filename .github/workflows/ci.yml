@@ -167,6 +167,9 @@ jobs:
       - name: QEMU visual-richness test (q35; particle field + glass cards, L7)
         run: make smoke-visual
 
+      - name: QEMU backdrop test (q35; DAY mesh + DUSK sun-bloom + NIGHT nebulas, L7)
+        run: make smoke-backdrop
+
       - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
         run: make smoke-syspipe
 

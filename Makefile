@@ -755,6 +755,14 @@ smoke-wmclose: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_SURFACE_GONE build/wmclose.log || { echo "[wmclose] FAIL — no recomposite after close"; tail -20 build/wmclose.log; exit 1; }
 	@echo "[wmclose] PASS — $$(grep -a PRADYOS_WM_CLOSE build/wmclose.log | head -1)"
 
+# Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
+# nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
+# frames; the compositor announces each ambiance's first settled backdrop and
+# PRADYOS_BACKDROP_OK once all four are seen. Client-driven; needs the GPU.
+smoke-backdrop: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_BACKDROP DAY\nPRADYOS_BACKDROP DUSK\nPRADYOS_BACKDROP NIGHT\nPRADYOS_BACKDROP_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on
 # the time-of-day ambiance from the RTC (SYS_CLOCK). Needs the GPU.

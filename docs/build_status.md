@@ -543,8 +543,18 @@ with the DDR-711 shrink detector repainting (`PRADYOS_SURFACE_GONE`).
 `surfacetest` titles its windows ALPHA/BETA/GAMMA (`PRADYOS_TITLE_OK`). Gate
 **`smoke-wmclose`** (GPU + tablet, QMP clicks GAMMA's close box). `smoke-drag`
 unaffected (its click at x=160 is left of B's box at x≥192). 48 gates total.
+**Ambiance backdrops (DDR-716) COMPLETE:** the brief's §1 background features.
+A new sqrt-free `radial_glow` primitive (quadratic falloff over `blend_px`)
+draws, per ambiance: **DAY** 3 gradient-mesh nodes, **DUSK** the sun-bloom at
+(85%,90%) warm orange, **NIGHT** two nebulas (`#120024` / `#001220`); DAWN
+stays motes-only. Backdrops render only on **settled** frames (`g_settled`,
+set on an OKLab transition's final frame) so the 6–8 lerp frames — and the
+gates' timing — stay cheap. First settled render per ambiance prints
+`PRADYOS_BACKDROP <NAME>`, then `PRADYOS_BACKDROP_OK` after all four (the
+startup demo cycle covers them). Mesh/nebula animation + horizon bands stay
+deferred. Gate **`smoke-backdrop`** (client-driven, GPU). 49 gates total.
 **Deferred (DDR-702..709):** real glass blur
-+ saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
++ saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
 alt-tab; window decorations; surface destroy; per-agent live metrics; SFS

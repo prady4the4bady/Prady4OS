@@ -157,6 +157,61 @@ static void blend_px(unsigned x, unsigned y, unsigned char b, unsigned char gg, 
     p[3] = 0xFF;
 }
 
+/* A bounded radial glow (DDR-716): quadratic falloff a = base_a*(1 - d^2/r^2),
+ * sqrt-free, clipped to the screen. The backdrop primitive for the DAY mesh
+ * nodes, the DUSK sun-bloom, and the NIGHT nebulas. */
+static void radial_glow(int cx, int cy, int r,
+                        unsigned char cr, unsigned char cg, unsigned char cb, float base_a) {
+    int x0 = cx - r, x1 = cx + r, y0 = cy - r, y1 = cy + r;
+    if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
+    if (x1 > (int)g_fi.width)  x1 = (int)g_fi.width;
+    if (y1 > (int)g_fi.height) y1 = (int)g_fi.height;
+    float r2 = (float)r * (float)r;
+    for (int y = y0; y < y1; y++) {
+        for (int x = x0; x < x1; x++) {
+            float dx = (float)(x - cx), dy = (float)(y - cy);
+            float d2 = dx * dx + dy * dy;
+            if (d2 >= r2) continue;
+            blend_px((unsigned)x, (unsigned)y, cb, cg, cr, base_a * (1.0f - d2 / r2));
+        }
+    }
+}
+
+/* The settled per-ambiance backdrop (DDR-716, brief §1). Drawn only on settled
+ * frames (not mid-OKLab-lerp — D3's perf guard); announces each ambiance's
+ * first settled render and PRADYOS_BACKDROP_OK once all four have been seen. */
+static int g_settled = 1;                 /* cleared during ambiance transitions */
+static void render_backdrop(void) {
+    unsigned w = g_fi.width, h = g_fi.height;
+    switch (g_cur_amb) {
+    case 0:                                        /* DAWN: motes carry it */
+        break;
+    case 1:                                        /* DAY: 3-node gradient mesh */
+        radial_glow((int)(w / 4),     (int)(h / 4),     (int)(w * 30 / 100), 0x8F, 0xC8, 0xFF, 0.20f);
+        radial_glow((int)(w / 2),     (int)(h * 2 / 3), (int)(w * 25 / 100), 0xFF, 0xFF, 0xFF, 0.12f);
+        radial_glow((int)(w * 3 / 4), (int)(h / 3),     (int)(w * 28 / 100), 0x1E, 0x50, 0xA0, 0.18f);
+        break;
+    case 2:                                        /* DUSK: sun-bloom at 85%,90% */
+        radial_glow((int)(w * 85 / 100), (int)(h * 90 / 100), (int)(w * 35 / 100), 0xFF, 0x78, 0x1E, 0.25f);
+        break;
+    default:                                       /* NIGHT: two nebulas */
+        radial_glow((int)(w * 30 / 100), (int)(h * 40 / 100), (int)(w * 600 / 1024), 0x12, 0x00, 0x24, 0.30f);
+        radial_glow((int)(w * 70 / 100), (int)(h * 60 / 100), (int)(w * 500 / 1024), 0x00, 0x12, 0x20, 0.30f);
+        break;
+    }
+    static unsigned char seen[4];
+    static int all_announced;
+    if (!seen[g_cur_amb]) {
+        seen[g_cur_amb] = 1;
+        printf("PRADYOS_BACKDROP %s\n", AMB[g_cur_amb].name);
+        if (!all_announced && seen[0] && seen[1] && seen[2] && seen[3]) {
+            all_announced = 1;
+            printf("PRADYOS_BACKDROP_OK\n");
+        }
+        fflush(stdout);
+    }
+}
+
 /* A frosted-glass card: a flat translucent tint of the current ambiance bg
  * (computed, no FB reads) + a 1px accent border (brief §9; real blur deferred). */
 static void glass_card(unsigned x, unsigned y, unsigned w, unsigned h) {
@@ -286,6 +341,8 @@ static int agent_card_hit(int x, int y) {
 static void render(int mode) {
     fill_rect(0, 0, g_fi.width, g_fi.height, g_bg[2], g_bg[1], g_bg[0]);  /* ambiance bg */
     fill_rect(0, 0, g_fi.width, 6, g_ac[2], g_ac[1], g_ac[0]);            /* accent bar  */
+    if (g_settled)                                                       /* DDR-716: backdrops */
+        render_backdrop();                                               /* (skipped mid-lerp) */
     render_particles();                                                  /* DDR-712: particle field */
     draw_str(mode ? "SOVEREIGN MODE" : "MANUAL MODE", 24, 24, 3,
              g_ac[2], g_ac[1], g_ac[0]);
@@ -360,10 +417,13 @@ static void set_ambiance(int idx, int frames) {
         float t = (float)f / (float)frames;
         lab_lerp(fbg, AMB[idx].bg, t, g_bg);
         lab_lerp(fac, AMB[idx].ac, t, g_ac);
+        g_settled = (f == frames);            /* DDR-716: backdrop on the final frame only */
+        if (g_settled) g_cur_amb = idx;       /* the settled frame draws the NEW backdrop */
         render((int)nsi(SYS_GET_MODE, 0, 0, 0));
         present();
     }
     g_cur_amb = idx;
+    g_settled = 1;
 }
 
 /* Animated toggle (DDR-709): pulse the accent toward white and back in OKLab. */
