@@ -25,10 +25,11 @@
 #define SYS_SURFACE_SENDKEY 55
 #define SYS_CLOCK        57
 #define SYS_SURFACE_MOVE 58
+#define SYS_SURFACE_CLOSE 59
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; };
-struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; };
+struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; char title[16]; };
 
 /* The 8 named agents (DDR-707), in roster-slot order. */
 static const char *g_agents[8] =
@@ -64,6 +65,11 @@ static const unsigned char G_P[8] = {0xFC,0xC6,0xC6,0xFC,0xC0,0xC0,0xC0,0x00};
 static const unsigned char G_X[8] = {0xC6,0x6C,0x38,0x38,0x38,0x6C,0xC6,0x00};
 static const unsigned char G_H[8] = {0xC6,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0x00};
 static const unsigned char G_F[8] = {0xFE,0xC0,0xC0,0xFC,0xC0,0xC0,0xC0,0x00};
+/* Glyphs for the window titles (DDR-715). */
+static const unsigned char G_B[8] = {0xFC,0xC6,0xC6,0xFC,0xC6,0xC6,0xFC,0x00};
+static const unsigned char G_C[8] = {0x7C,0xC6,0xC0,0xC0,0xC0,0xC6,0x7C,0x00};
+static const unsigned char G_T[8] = {0xFE,0x18,0x18,0x18,0x18,0x18,0x18,0x00};
+static const unsigned char G_W[8] = {0xC6,0xC6,0xC6,0xD6,0xFE,0xEE,0xC6,0x00};
 
 static const unsigned char *glyph(char c) {
     switch (c) {
@@ -73,7 +79,8 @@ static const unsigned char *glyph(char c) {
     case 'K': return G_K; case 'Y': return G_Y; case 'P': return G_P;
     case 'X': return G_X; case 'H': return G_H; case 'F': return G_F;
     case 'R': return G_R; case 'S': return G_S; case 'U': return G_U;
-    case 'V': return G_V; default: return G_SP;
+    case 'V': return G_V; case 'B': return G_B; case 'C': return G_C;
+    case 'T': return G_T; case 'W': return G_W; default: return G_SP;
     }
 }
 
@@ -306,13 +313,26 @@ static void blit_surface(const unsigned char *sva, unsigned w, unsigned h, int d
 }
 
 /* A window = its client surface content + a title-bar decoration above it
- * (the drag handle), drawn in the ambiance accent colour (DDR-710). */
-#define TITLEBAR 18
+ * (the drag handle), drawn in the ambiance accent colour (DDR-710), with the
+ * window's title string and a close box on the right (DDR-715). */
+#define TITLEBAR  18
+#define CLOSEBOX  12                 /* close box size; inset 4 px from the right */
 static void draw_window(const unsigned char *sva, const struct surface_info *s) {
     blit_surface(sva, s->w, s->h, s->x, s->y);
     int ty = s->y - TITLEBAR; if (ty < 0) ty = 0;
     int tx = s->x < 0 ? 0 : s->x;
     fill_rect((unsigned)tx, (unsigned)ty, s->w, TITLEBAR, g_ac[2], g_ac[1], g_ac[0]);
+    if (s->title[0])                                     /* title text (DDR-715) */
+        draw_str(s->title, (unsigned)tx + 6, (unsigned)ty + 5, 1, 0x10, 0x10, 0x18);
+    fill_rect((unsigned)(tx + (int)s->w - CLOSEBOX - 4), (unsigned)ty + 3,
+              CLOSEBOX, CLOSEBOX, 0x30, 0x30, 0xE0);     /* close box (red, BGRA) */
+}
+
+/* Is (x,y) inside surface s's close box? Mirrors draw_window's layout. */
+static int close_box_hit(const struct surface_info *s, int x, int y) {
+    int ty = s->y - TITLEBAR;
+    int bx = s->x + (int)s->w - CLOSEBOX - 4;
+    return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
 }
 
 /* A small white cursor block at (x,y), clamped to the screen. */
@@ -501,17 +521,26 @@ int main(void) {
                 } else {
                     struct surface_info sf[16];
                     long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
-                    int hit = -1;
+                    int hit = -1, closed = 0;
                     for (long i = n - 1; i >= 0; i--) {      /* topmost (highest z) first */
                         int tx = sf[i].x, ty = sf[i].y - TITLEBAR;
                         if (ms.x >= tx && ms.x < tx + (int)sf[i].w &&
                             ms.y >= ty && ms.y < ty + TITLEBAR) {
+                            if (close_box_hit(&sf[i], ms.x, ms.y)) {   /* DDR-715 */
+                                nsi(SYS_SURFACE_CLOSE, (long)sf[i].id, 0, 0);
+                                printf("PRADYOS_WM_CLOSE id=%u\n", sf[i].id);
+                                fflush(stdout);
+                                closed = 1;                  /* shrink detector recomposites */
+                                break;
+                            }
                             hit = (int)sf[i].id;
                             drag_ox = ms.x - sf[i].x; drag_oy = ms.y - sf[i].y;
                             break;
                         }
                     }
-                    if (hit >= 0) {
+                    if (closed) {
+                        /* handled: the main loop's ns != composited path repaints */
+                    } else if (hit >= 0) {
                         nsi(SYS_SURFACE_RAISE, hit, 0, 0);
                         dragging = 1; drag_id = hit;
                         printf("PRADYOS_DRAG_START id=%d\n", hit);

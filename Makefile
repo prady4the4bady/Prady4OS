@@ -735,6 +735,26 @@ smoke-visual: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_PARTICLES_OK\nPRADYOS_GLASS_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Layer-7 title+close gate (DDR-715): windows carry title strings (ALPHA/BETA/
+# GAMMA) and a close box; the harness clicks window C (GAMMA)'s close box via QMP
+# -> the sovereign compositor SYS_SURFACE_CLOSEs it (PRADYOS_WM_CLOSE) and the
+# shrink detector repaints (PRADYOS_SURFACE_GONE). Needs GPU + tablet.
+smoke-wmclose: $(IMG) fat-image sfs-image
+	@echo "[wmclose] title + close-button gate: boot(GPU+tablet) + QMP click GAMMA's close box..."
+	@rm -f build/wmclose.log /tmp/pwmclose.sock
+	@ABSX=16190 ABSY=2602 bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_AMBIANCE_OK &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pwmclose.sock,server,nowait \
+	    -serial file:build/wmclose.log -display none -no-reboot || true
+	@grep -q PRADYOS_TITLE_OK build/wmclose.log || { echo "[wmclose] FAIL — titles not set"; tail -20 build/wmclose.log; exit 1; }
+	@grep -q "PRADYOS_WM_CLOSE id=2" build/wmclose.log || { echo "[wmclose] FAIL — close box click did not close"; tail -20 build/wmclose.log; exit 1; }
+	@grep -q PRADYOS_SURFACE_GONE build/wmclose.log || { echo "[wmclose] FAIL — no recomposite after close"; tail -20 build/wmclose.log; exit 1; }
+	@echo "[wmclose] PASS — $$(grep -a PRADYOS_WM_CLOSE build/wmclose.log | head -1)"
+
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on
 # the time-of-day ambiance from the RTC (SYS_CLOCK). Needs the GPU.

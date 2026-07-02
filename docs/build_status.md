@@ -532,18 +532,29 @@ waits out the ICR busy bit. `boot_test.sh` gained a `QEMU_SMP` knob; every
 existing gate stays `-smp 1` (`online=1/1`). Gate **`smoke-smp`** (`-smp 4` →
 3 APs → `[smp] cpus online=4/4`). Distributed scheduling = a future ADR.
 47 gates total.
+**Window titles + close button (DDR-715) COMPLETE:** direct-manipulation
+windowing is finished. New **`SYS_SURFACE_SET_TITLE` (61)** (owner-only,
+≤15 chars via `copyinstr`); `struct surface_info` carries `title[16]`
+(kernel/compositor/surfacetest updated together — in-tree ABI). The compositor
+draws the title in the DDR-710 title bar (font gained B/C/T/W glyphs) and a
+12×12 red **close box** at the bar's right; the pointer hit-test checks the box
+**before** drag-start and `SYS_SURFACE_CLOSE`s the window (`PRADYOS_WM_CLOSE`),
+with the DDR-711 shrink detector repainting (`PRADYOS_SURFACE_GONE`).
+`surfacetest` titles its windows ALPHA/BETA/GAMMA (`PRADYOS_TITLE_OK`). Gate
+**`smoke-wmclose`** (GPU + tablet, QMP clicks GAMMA's close box). `smoke-drag`
+unaffected (its click at x=160 is left of B's box at x≥192). 48 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
 alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
-library ports — the standing wall). Close/min/max **buttons** + per-window title
-strings + pointer resize **handles** are the DDR-711 follow-ons.
+library ports — the standing wall). Min/max buttons + pointer resize **handles**
+are the DDR-715 follow-ons (titles + close button shipped).
 **Next: distributed SMP scheduling (per-CPU + subsystem locking, its own ADR
 superseding ADR-016), I/O APIC + MSI-X (DDR-714 stage C), more visual richness
-(real glass blur / gradients / DAY mesh / sun-bloom), or close/min/max title-bar
-buttons + per-window title strings. wlroots/Wayland remain out-of-tree.**
+(real glass blur / gradients / DAY mesh / sun-bloom), or min/max buttons +
+resize handles. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-07-02
 
 ## Phase 0 — Toolchain & Build System

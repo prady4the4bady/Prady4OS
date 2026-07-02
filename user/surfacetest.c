@@ -15,6 +15,7 @@
 #define SYS_SURFACE_GETKEY  56
 #define SYS_SURFACE_CLOSE   59
 #define SYS_SURFACE_RESIZE  60
+#define SYS_SURFACE_SET_TITLE 61
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -49,6 +50,14 @@ int main(void) {
     printf("PRADYOS_SURFACE_CLIENT_OK a=%ld b=%ld\n", a, b);
     fflush(stdout);
 
+    /* DDR-715: name the windows (glyph-covered alphabet); the compositor draws
+     * the title in the title bar. */
+    if (nsi(SYS_SURFACE_SET_TITLE, a, (long)"ALPHA", 0) == 0 &&
+        nsi(SYS_SURFACE_SET_TITLE, b, (long)"BETA", 0) == 0) {
+        printf("PRADYOS_TITLE_OK\n");
+        fflush(stdout);
+    }
+
     /* DDR-711: a third window C exercises resize + close. C is created and resized
      * (64x64 -> 96x96) up front, but deliberately NOT raised — B keeps focus, so
      * smoke-focus/smoke-drag are unaffected. C is placed off to the side so it
@@ -57,6 +66,8 @@ int main(void) {
      * to 2, which the compositor reports (PRADYOS_SURFACE_GONE). Meanwhile keep
      * draining the focused window's key ring (DDR-708). */
     long c = make_window(0x40, 0x40, 0xE0, 420, 70);        /* red, off to the side */
+    if (c >= 0)
+        nsi(SYS_SURFACE_SET_TITLE, c, (long)"GAMMA", 0);    /* DDR-715 */
     if (c >= 0 && nsi(SYS_SURFACE_RESIZE, c, 96, 96) == 0) {
         long cva = nsi(SYS_SURFACE_MAP, c, 0, 0);           /* re-map the new 96x96 buffer */
         if (cva > 0) {

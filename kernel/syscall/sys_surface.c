@@ -26,11 +26,12 @@ struct surface {
     uint8_t  used, committed, focused;
     uint8_t  kq[SURFACE_KQ];                    /* forwarded keystrokes (focused window) */
     uint8_t  kq_head, kq_tail;
+    char     title[16];                         /* window title, NUL-terminated (DDR-715) */
 };
 static struct surface g_surf[SURFACE_MAX];
 static int32_t g_z_top;                         /* monotonic stacking counter */
 
-struct surface_info { uint32_t id, w, h; int32_t x, y, z; uint32_t focused; };
+struct surface_info { uint32_t id, w, h; int32_t x, y, z; uint32_t focused; char title[16]; };
 
 static unsigned order_for(uint64_t npages) {
     unsigned o = 0;
@@ -59,6 +60,7 @@ static long sys_surface_create(long a1, long a2, long a3, long a4) {
     s->owner_pid = current_thread->pid; s->x = s->y = 0;
     s->z = ++g_z_top; s->focused = 0;
     s->kq_head = s->kq_tail = 0;
+    s->title[0] = 0;                            /* untitled until SET_TITLE (DDR-715) */
     s->used = 1; s->committed = 0;
     return id;
 }
@@ -123,6 +125,7 @@ static long sys_surface_poll(long a1, long a2, long a3, long a4) {
             buf[n].id = (uint32_t)i; buf[n].w = g_surf[i].w; buf[n].h = g_surf[i].h;
             buf[n].x = g_surf[i].x;  buf[n].y = g_surf[i].y;
             buf[n].z = g_surf[i].z;  buf[n].focused = g_surf[i].focused;
+            for (int c = 0; c < 16; c++) buf[n].title[c] = g_surf[i].title[c];
             n++;
         }
     }
@@ -256,6 +259,22 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4) {
     return 0;
 }
 
+/* Name a window (DDR-715). Owner-only; <=15 chars + NUL via copyinstr. */
+static long sys_surface_set_title(long a1, long a2, long a3, long a4) {
+    (void)a3; (void)a4;
+    int id = (int)a1;
+    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+        return -EINVAL;
+    struct surface *s = &g_surf[id];
+    if (s->owner_pid != current_thread->pid)
+        return -EPERM;
+    if (copyinstr(s->title, (const void __user *)a2, sizeof s->title, 0) < 0) {
+        s->title[0] = 0;
+        return -EFAULT;
+    }
+    return 0;
+}
+
 void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_CREATE, sys_surface_create);
     syscall_register(SYS_SURFACE_MAP,    sys_surface_map);
@@ -268,4 +287,5 @@ void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_MOVE,   sys_surface_move);     /* DDR-710 */
     syscall_register(SYS_SURFACE_CLOSE,  sys_surface_close);    /* DDR-711 */
     syscall_register(SYS_SURFACE_RESIZE, sys_surface_resize);   /* DDR-711 */
+    syscall_register(SYS_SURFACE_SET_TITLE, sys_surface_set_title); /* DDR-715 */
 }

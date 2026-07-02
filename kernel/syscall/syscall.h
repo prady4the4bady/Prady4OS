@@ -79,6 +79,8 @@
 /* Window close + resize (Layer 7, DDR-711). */
 #define SYS_SURFACE_CLOSE  59  /* (id) -> 0  free the surface (owner or compositor)  */
 #define SYS_SURFACE_RESIZE 60  /* (id, w, h) -> 0  new buffer, same pos (owner only) */
+/* Window title strings (Layer 7, DDR-715). */
+#define SYS_SURFACE_SET_TITLE 61 /* (id, str) -> 0  <=15 chars + NUL (owner only)    */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
