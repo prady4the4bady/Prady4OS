@@ -755,6 +755,27 @@ smoke-wmclose: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_SURFACE_GONE build/wmclose.log || { echo "[wmclose] FAIL — no recomposite after close"; tail -20 build/wmclose.log; exit 1; }
 	@echo "[wmclose] PASS — $$(grep -a PRADYOS_WM_CLOSE build/wmclose.log | head -1)"
 
+# Layer-7 minimize gate (DDR-717): the mouse injector clicks B's min box (QMP),
+# the window vanishes from the composite (PRADYOS_WM_MIN), then the key injector
+# (waiting on PRADYOS_WM_MIN over the HMP monitor) sends 'r' -> restore-all
+# (PRADYOS_WM_RESTORE). Needs GPU + tablet + monitor.
+smoke-wmmin: $(IMG) fat-image sfs-image
+	@echo "[wmmin] minimize gate: boot(GPU+tablet) + QMP click B's min box + sendkey r..."
+	@rm -f build/wmmin.log /tmp/pwmmin.sock /tmp/pwmminh.sock
+	@ABSX=5760 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmin.log /tmp/pwmmin.sock PRADYOS_AMBIANCE_OK &
+	@bash tools/qemu_runner/input_inject.sh build/wmmin.log /tmp/pwmminh.sock PRADYOS_WM_MIN "r" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pwmmin.sock,server,nowait \
+	    -monitor unix:/tmp/pwmminh.sock,server,nowait \
+	    -serial file:build/wmmin.log -display none -no-reboot || true
+	@grep -q "PRADYOS_WM_MIN id=1" build/wmmin.log || { echo "[wmmin] FAIL — min box click did not minimize"; tail -20 build/wmmin.log; exit 1; }
+	@grep -q PRADYOS_WM_RESTORE build/wmmin.log || { echo "[wmmin] FAIL — r did not restore"; tail -20 build/wmmin.log; exit 1; }
+	@echo "[wmmin] PASS — $$(grep -a PRADYOS_WM_MIN build/wmmin.log | head -1) + restore"
+
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
 # frames; the compositor announces each ambiance's first settled backdrop and

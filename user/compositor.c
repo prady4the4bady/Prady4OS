@@ -383,6 +383,8 @@ static void draw_window(const unsigned char *sva, const struct surface_info *s) 
         draw_str(s->title, (unsigned)tx + 6, (unsigned)ty + 5, 1, 0x10, 0x10, 0x18);
     fill_rect((unsigned)(tx + (int)s->w - CLOSEBOX - 4), (unsigned)ty + 3,
               CLOSEBOX, CLOSEBOX, 0x30, 0x30, 0xE0);     /* close box (red, BGRA) */
+    fill_rect((unsigned)(tx + (int)s->w - 2 * CLOSEBOX - 6), (unsigned)ty + 3,
+              CLOSEBOX, CLOSEBOX, 0x30, 0xB0, 0xE0);     /* min box (amber, DDR-717) */
 }
 
 /* Is (x,y) inside surface s's close box? Mirrors draw_window's layout. */
@@ -391,6 +393,18 @@ static int close_box_hit(const struct surface_info *s, int x, int y) {
     int bx = s->x + (int)s->w - CLOSEBOX - 4;
     return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
 }
+
+/* Minimize (DDR-717): compositor-local — a minimized window is skipped when
+ * compositing and hit-testing; its surface stays committed. The min box sits
+ * 2 px left of the close box; `r` restores all (per-window restore needs a
+ * dock, deferred). */
+static unsigned g_min_mask;
+static int min_box_hit(const struct surface_info *s, int x, int y) {
+    int ty = s->y - TITLEBAR;
+    int bx = s->x + (int)s->w - 2 * CLOSEBOX - 6;    /* 12px box + 2px gap */
+    return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
+}
+
 
 /* A small white cursor block at (x,y), clamped to the screen. */
 static void draw_cursor(int x, int y) {
@@ -448,16 +462,30 @@ static void render_and_announce(int mode) {
 }
 
 /* Re-render the whole scene during a drag: desktop + z-ordered windows (with
- * title bars) + the cursor (DDR-710). */
+ * title bars, minimized skipped — DDR-717) + the cursor (DDR-710). */
 static void recompose_drag(int cx, int cy) {
     struct surface_info sf[16];
     long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
     render((int)nsi(SYS_GET_MODE, 0, 0, 0));
     for (long i = 0; i < n; i++) {
+        if (g_min_mask & (1u << sf[i].id)) continue;             /* DDR-717 */
         long sva = nsi(SYS_SURFACE_CMAP, (long)sf[i].id, 0, 0);
         if (sva > 0) draw_window((const unsigned char *)sva, &sf[i]);
     }
     draw_cursor(cx, cy);
+    present();
+}
+
+/* Repaint the scene without a cursor (min/restore, DDR-717). */
+static void recompose_scene(void) {
+    struct surface_info sf[16];
+    long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
+    render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+    for (long i = 0; i < n; i++) {
+        if (g_min_mask & (1u << sf[i].id)) continue;
+        long sva = nsi(SYS_SURFACE_CMAP, (long)sf[i].id, 0, 0);
+        if (sva > 0) draw_window((const unsigned char *)sva, &sf[i]);
+    }
     present();
 }
 
@@ -533,6 +561,7 @@ int main(void) {
         if (ns != composited || cur_focus != last_focus) { /* grew, shrank, or focus moved */
             render((int)nsi(SYS_GET_MODE, 0, 0, 0));
             for (long i = 0; i < ns; i++) {                 /* z-order: bottom..top */
+                if (g_min_mask & (1u << surfs[i].id)) continue;          /* DDR-717 */
                 long sva = nsi(SYS_SURFACE_CMAP, (long)surfs[i].id, 0, 0);
                 if (sva > 0)
                     draw_window((const unsigned char *)sva, &surfs[i]);  /* + title bar */
@@ -559,6 +588,12 @@ int main(void) {
             if (c == 's')      { nsi(SYS_SET_MODE, 1, 0, 0); render_and_announce(1); }
             else if (c == 'm') { nsi(SYS_SET_MODE, 0, 0, 0); render_and_announce(0); }
             else if (c == 'q') { printf("PRADYOS_COMPOSITOR_EXIT\n"); fflush(stdout); nsi(SYS_EXIT, 0, 0, 0); }
+            else if (c == 'r') {                             /* DDR-717: restore all */
+                g_min_mask = 0;
+                printf("PRADYOS_WM_RESTORE\n");
+                fflush(stdout);
+                recompose_scene();
+            }
             else if (focus_id >= 0)                          /* DDR-708: route to focus */
                 nsi(SYS_SURFACE_SENDKEY, focus_id, (long)c, 0);
         }
@@ -583,9 +618,18 @@ int main(void) {
                     long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
                     int hit = -1, closed = 0;
                     for (long i = n - 1; i >= 0; i--) {      /* topmost (highest z) first */
+                        if (g_min_mask & (1u << sf[i].id)) continue;   /* DDR-717 */
                         int tx = sf[i].x, ty = sf[i].y - TITLEBAR;
                         if (ms.x >= tx && ms.x < tx + (int)sf[i].w &&
                             ms.y >= ty && ms.y < ty + TITLEBAR) {
+                            if (min_box_hit(&sf[i], ms.x, ms.y)) {     /* DDR-717 */
+                                g_min_mask |= 1u << sf[i].id;
+                                printf("PRADYOS_WM_MIN id=%u\n", sf[i].id);
+                                fflush(stdout);
+                                closed = 1;                  /* repaint below */
+                                recompose_scene();
+                                break;
+                            }
                             if (close_box_hit(&sf[i], ms.x, ms.y)) {   /* DDR-715 */
                                 nsi(SYS_SURFACE_CLOSE, (long)sf[i].id, 0, 0);
                                 printf("PRADYOS_WM_CLOSE id=%u\n", sf[i].id);

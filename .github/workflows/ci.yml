@@ -164,6 +164,9 @@ jobs:
       - name: QEMU title+close-button test (q35; titles + close-box click, L7)
         run: make smoke-wmclose
 
+      - name: QEMU minimize test (q35; min-box click + r restore, L7)
+        run: make smoke-wmmin
+
       - name: QEMU visual-richness test (q35; particle field + glass cards, L7)
         run: make smoke-visual
 

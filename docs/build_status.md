@@ -553,6 +553,16 @@ gates' timing — stay cheap. First settled render per ambiance prints
 `PRADYOS_BACKDROP <NAME>`, then `PRADYOS_BACKDROP_OK` after all four (the
 startup demo cycle covers them). Mesh/nebula animation + horizon bands stay
 deferred. Gate **`smoke-backdrop`** (client-driven, GPU). 49 gates total.
+**Window minimize + restore (DDR-717) COMPLETE:** compositor-local (no kernel
+change) — a minimized window is skipped when compositing and hit-testing
+(`g_min_mask`); its surface stays committed. An amber **min box** sits 2 px left
+of the close box (hit-test order: min → close → drag); a hit prints
+`PRADYOS_WM_MIN id=` and repaints. The **`r` key** restores all
+(`PRADYOS_WM_RESTORE`; per-window restore needs a dock — deferred; `r` no longer
+routes to the focused window, documented). Maximize + pointer resize handles
+stay deferred pending a surface **event channel** (the client must redraw at a
+compositor-chosen size). Gate **`smoke-wmmin`** (GPU + tablet + HMP: click B's
+min box, then `r`). 50 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
