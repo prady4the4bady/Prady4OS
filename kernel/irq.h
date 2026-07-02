@@ -17,6 +17,9 @@ void pic_eoi(uint64_t vector);
 /* Unmask a single IRQ line (and the cascade for slave IRQs 8..15). */
 void pic_unmask(unsigned irq);
 
+/* Mask a single IRQ line (DDR-714: PIT IRQ0 once the APIC timer owns the tick). */
+void pic_mask(unsigned irq);
+
 /* Register a handler on a (possibly shared) IRQ line; the dispatcher (idt.c)
  * chains every handler registered on the line. Handlers take no args and run
  * with interrupts masked. */

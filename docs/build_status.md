@@ -505,6 +505,19 @@ while kmain is still booting, so the sovereign UI could click before the
 late-registered hook existed and get `-ENOSYS` (a boot race only the daemon-only
 call pattern had masked). Gate **`smoke-agent-click`** (GPU + tablet, QMP) clicks
 card 1 (PRAX) → trigger + roster lights PRAX active. 45 gates total.
+**APIC stage A (DDR-714) COMPLETE:** the ADR-006 migration begins. New
+`kernel/apic/lapic.c`: MADT parse (LAPIC base + CPU count for stage B), the
+LAPIC page identity-mapped **uncached** (the ECAM pattern) into the shared boot
+PDPT, software-enable via SVR (spurious vector 0xFF) + TPR=0, and the **APIC
+timer calibrated against the PIT** (100 ms free-run, div 16) then run periodic at
+100 Hz on **new vector 48** — `isr.asm`/IDT grew one stub, and the tick body
+(g_ticks/vDSO/sched_tick/lwIP/signals) is a shared `timer_tick` helper used by
+both timer paths (EOI-first preserved; the APIC path uses `lapic_eoi`). Once
+armed, **PIT IRQ0 is masked** (new `pic_mask`) so exactly one timer drives the
+system; device IRQs (kbd/COM1/PCI INTx) stay on the 8259 (hybrid virtual-wire).
+No MADT → PIT retained (fallback). Stage B = SMP (INIT-SIPI + per-CPU + a
+spinlock ADR superseding ADR-016's masking); stage C = I/O APIC + MSI-X. Gate
+**`smoke-apic`**. 46 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -513,10 +526,11 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Close/min/max **buttons** + per-window title
 strings + pointer resize **handles** are the DDR-711 follow-ons.
-**Next: APIC + SMP (DDR-714), more visual richness (real glass blur / gradients /
-DAY mesh / sun-bloom), or close/min/max title-bar buttons + per-window title
-strings. wlroots/Wayland remain out-of-tree.**
-**Last updated:** 2026-06-29
+**Next: SMP bring-up (DDR-714 stage B: INIT-SIPI AP boot + per-CPU + a spinlock
+ADR), I/O APIC + MSI-X (stage C), more visual richness (real glass blur /
+gradients / DAY mesh / sun-bloom), or close/min/max title-bar buttons +
+per-window title strings. wlroots/Wayland remain out-of-tree.**
+**Last updated:** 2026-07-02
 
 ## Phase 0 — Toolchain & Build System
 
@@ -600,7 +614,7 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 
 | Deferred item | Interim / status | Build before |
 |---------------|------------------|--------------|
-| **APIC** (Local + I/O APIC, APIC timer) | legacy 8259 PIC + PIT active | SMP; MSI device interrupts. Unblocked by the ACPI/MADT parser (Phase 3). |
+| **APIC** (Local + I/O APIC, APIC timer) | **LAPIC + APIC timer DONE (DDR-714 stage A)** — tick on vector 48, PIT masked; 8259 retained for device IRQs | I/O APIC + MSI (stage C); SMP AP boot (stage B) |
 | **3-lane NAS scheduler** (Determ./Throughput/Interactive + AI-hint) | round-robin placeholder (ADR-008) | differentiated agent workloads (Layer 6) |
 | **Physical Frame Oracle** (variable-weight + predictive coalesce) | buddy PMM interim (ADR-003) | Sovereign Memory Pool / hugepages (Layer 6) |
 | **Agent Virtual Address Space (AVAS)** (128 TB + RO state mirror) | — | AETHER bringup (Layer 6) |

@@ -47,6 +47,15 @@ void pic_unmask(unsigned irq) {
     }
 }
 
+/* Mask one IRQ line (DDR-714: the APIC timer takes over the tick and masks
+ * PIT IRQ0 here; the rest of the PIC keeps serving device IRQs). */
+void pic_mask(unsigned irq) {
+    if (irq < 8)
+        outb(PIC1_DATA, inb(PIC1_DATA) | (uint8_t)(1u << irq));
+    else if (irq < 16)
+        outb(PIC2_DATA, inb(PIC2_DATA) | (uint8_t)(1u << (irq - 8)));
+}
+
 void pit_init(uint32_t hz) {
     uint32_t divisor = PIT_HZ / hz;
     outb(PIT_CMD, 0x36);                          /* ch0, lo/hi byte, mode 3 */

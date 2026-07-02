@@ -16,6 +16,7 @@
 #include "regs.h"
 #include "signal.h"
 #include "ps2kbd.h"
+#include "lapic.h"
 #include <stdint.h>
 
 struct idt_entry {
@@ -67,7 +68,7 @@ static void set_gate(int v, void *handler) {
 }
 
 void idt_init(void) {
-    for (int i = 0; i < 48; i++)   /* 0..31 exceptions, 32..47 hardware IRQs */
+    for (int i = 0; i < 49; i++)   /* 0..31 exceptions, 32..47 IRQs, 48 APIC timer */
         set_gate(i, isr_stub_table[i]);
 
     static struct idtr idtr;
@@ -106,23 +107,36 @@ void irq_register(unsigned irq, irq_handler_fn fn) {
     }
 }
 
+/* The 100 Hz tick body, shared by the PIT (IRQ0) and APIC-timer (vector 48)
+ * paths (DDR-714): global ticks, vDSO wall clock, preemption, lwIP timers, and
+ * ring-3 signal delivery. The caller EOIs FIRST — sched_tick may switch away. */
+static void timer_tick(struct regs *r) {
+    g_ticks++;
+    if (vdso_data) {                   /* IMP-C: advance the user-visible clock */
+        vdso_data->seq++;              /* odd = write in progress */
+        vdso_data->wall_time_ns += 10000000ull;   /* 10 ms per tick @100 Hz */
+        vdso_data->seq++;              /* even = write complete  */
+    }
+    sched_tick();
+    if ((g_ticks % 10u) == 0)         /* NET-B: drive lwIP timers ~every 100 ms */
+        net_poll_tick();
+    if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
+        signal_deliver(r);            /* to the ring-3 thread we're returning to */
+}
+
 void isr_dispatch(struct regs *r) {
+    /* APIC timer (DDR-714): once armed it owns the tick (PIT IRQ0 masked). */
+    if (r->vector == LAPIC_TIMER_VECTOR) {
+        lapic_eoi();                           /* EOI first: sched_tick may switch away */
+        timer_tick(r);
+        return;
+    }
     /* Hardware IRQs (PIC remapped to 0x20..0x2F = vectors 32..47). */
     if (r->vector >= 32 && r->vector <= 47) {
         unsigned irqno = (unsigned)r->vector - 32;
         if (irqno == 0) {                      /* IRQ0: PIT timer — drives preemption */
             pic_eoi(r->vector);                /* EOI first: sched_tick may switch away */
-            g_ticks++;
-            if (vdso_data) {                   /* IMP-C: advance the user-visible clock */
-                vdso_data->seq++;              /* odd = write in progress */
-                vdso_data->wall_time_ns += 10000000ull;   /* 10 ms per tick @100 Hz */
-                vdso_data->seq++;              /* even = write complete  */
-            }
-            sched_tick();
-            if ((g_ticks % 10u) == 0)         /* NET-B: drive lwIP timers ~every 100 ms */
-                net_poll_tick();
-            if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
-                signal_deliver(r);            /* to the ring-3 thread we're returning to */
+            timer_tick(r);
             return;
         }
         if (irqno == 1) {                      /* IRQ1: PS/2 keyboard (DDR-703) */

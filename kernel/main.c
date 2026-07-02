@@ -25,6 +25,7 @@
 #include "syscall.h"
 #include "string.h"
 #include "acpi.h"
+#include "lapic.h"
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
@@ -1060,6 +1061,11 @@ void kmain(struct boot_info *bi) {
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();
+    /* DDR-714 stage A: LAPIC up + APIC timer takes the 100 Hz tick (PIT is then
+     * masked). Device IRQs stay on the 8259. Needs ACPI (MADT) + a live PIT for
+     * calibration, both true here; falls back to the PIT if no MADT. */
+    if (lapic_init() == 0)
+        lapic_timer_100hz();
     pcie_init();
     for (unsigned i = 0; i < pcie_device_count(); i++) {
         const struct pcie_device *d = pcie_device_get(i);

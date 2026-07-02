@@ -93,6 +93,10 @@ ISR_NOERR 45
 ISR_NOERR 46
 ISR_NOERR 47
 
+; APIC timer vector (DDR-714): outside the PIC's 32..47 range so the two timer
+; sources can never alias. No error code.
+ISR_NOERR 48
+
 isr_common:
     push rax
     push rbx
@@ -132,13 +136,13 @@ isr_common:
     add rsp, 16                 ; discard vector + error code
     iretq
 
-; Address table consumed by idt_init() in kernel/idt.c (vectors 0..47).
+; Address table consumed by idt_init() in kernel/idt.c (vectors 0..48).
 section .rodata
 global isr_stub_table
 align 8
 isr_stub_table:
 %assign i 0
-%rep 48
+%rep 49
     dq isr_stub_ %+ i
 %assign i i+1
 %endrep
