@@ -134,6 +134,9 @@ jobs:
       - name: QEMU pointer test (q35; virtio-tablet QMP move+click -> SYS_MOUSE_POLL, L7)
         run: make smoke-mouse
 
+      - name: QEMU agent-card click test (q35; click card -> SYS_SPAWN_AGENT, L7)
+        run: make smoke-agent-click
+
       - name: QEMU per-client surface test (q35; client commits + compositor composites, L7)
         run: make smoke-surface
 

@@ -490,6 +490,21 @@ glass** (`glass_card`): a computed translucent bg+white tint (no FB reads) + 1px
 accent border, status dots unchanged. The compositor announces
 `PRADYOS_PARTICLES_OK` + `PRADYOS_GLASS_OK` on its first render. Gate
 **`smoke-visual`** (client-driven, GPU). 44 gates total.
+**Agent-card click → AETHER (DDR-713) COMPLETE:** the agent cards are now
+interactive — the desktop's first UI→agent action. A new `agent_card_hit()` maps a
+pointer button-down to a roster slot (checked before the title-bar drag / plain
+click); on a hit the **sovereign** compositor calls `SYS_SPAWN_AGENT(_, name, slot)`
+(35) — the kernel spawn hook loads the embedded agent ELF as a `CAP_AGENT` process
+and lights `g_roster[slot]`, so the card's dot turns green. It prints
+`PRADYOS_AGENT_TRIGGER name=<N> slot=<i> pid=<p>`; no new syscall (authority stays
+the kernel flag — the compositor only launches). `mouse_inject.sh` gained optional
+`ABSX`/`ABSY` (defaults unchanged, so `smoke-mouse` is untouched). Root-cause fix
+folded in (DDR-713 D4): `aether_set_spawn_hook` is now registered **before the
+first user process is spawned** — the preemptive scheduler runs user threads
+while kmain is still booting, so the sovereign UI could click before the
+late-registered hook existed and get `-ENOSYS` (a boot race only the daemon-only
+call pattern had masked). Gate **`smoke-agent-click`** (GPU + tablet, QMP) clicks
+card 1 (PRAX) → trigger + roster lights PRAX active. 45 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop gradients + sun-bloom radials; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -498,9 +513,9 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Close/min/max **buttons** + per-window title
 strings + pointer resize **handles** are the DDR-711 follow-ons.
-**Next: more visual richness (real glass blur / gradients / DAY mesh / sun-bloom),
-the agent-card click→AETHER interaction, or close/min/max title-bar buttons +
-per-window title strings. wlroots/Wayland remain out-of-tree.**
+**Next: APIC + SMP (DDR-714), more visual richness (real glass blur / gradients /
+DAY mesh / sun-bloom), or close/min/max title-bar buttons + per-window title
+strings. wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-06-29
 
 ## Phase 0 — Toolchain & Build System

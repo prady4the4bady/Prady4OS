@@ -650,6 +650,15 @@ static void fs_test_thread(void *arg) {
                  *      regression. The kernel must turn that ring-3 #PF into a
                  *      clean process kill and keep running (the SFS self-tests
                  *      after this still pass, proving survival). */
+                /* DDR-713 root-cause fix: register the SYS_SPAWN_AGENT hook BEFORE
+                 * any user thread exists. The preemptive scheduler runs spawned
+                 * threads while kmain is still booting (the remaining ELF loads +
+                 * self-tests take seconds of virtio I/O), so a sovereign UI could
+                 * otherwise call SYS_SPAWN_AGENT before a late-registered hook and
+                 * get -ENOSYS. The hook needs only the embedded agent image;
+                 * g_aether_daemon_pid (the agents' parent) is filled in when the
+                 * daemon is loaded below — earlier spawns parent to 0 (reaper). */
+                aether_set_spawn_hook(aether_spawn_agent_hook);
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end);
@@ -707,7 +716,6 @@ static void fs_test_thread(void *arg) {
                     if (it) dm->parent_pid = it->pid;
                     g_aether_daemon_pid = dm->pid;
                 }
-                aether_set_spawn_hook(aether_spawn_agent_hook);
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

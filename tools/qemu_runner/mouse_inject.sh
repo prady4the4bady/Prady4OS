@@ -15,10 +15,12 @@ for _ in $(seq 1 600); do
 done
 sleep 0.5
 
-SOCK="$sock" python3 - <<'PY'
+SOCK="$sock" ABSX="${ABSX:-16000}" ABSY="${ABSY:-12000}" python3 - <<'PY'
 import os, socket, json, time
 
 sock = os.environ["SOCK"]
+ax = int(os.environ.get("ABSX", "16000"))
+ay = int(os.environ.get("ABSY", "12000"))
 s = None
 for _ in range(50):
     try:
@@ -44,8 +46,8 @@ cmd({"execute": "qmp_capabilities"})
 # Repeat the move+click a few times so a missed event still lands.
 for _round in range(5):
     cmd({"execute": "input-send-event", "arguments": {"events": [
-        {"type": "abs", "data": {"axis": "x", "value": 16000}},
-        {"type": "abs", "data": {"axis": "y", "value": 12000}},
+        {"type": "abs", "data": {"axis": "x", "value": ax}},
+        {"type": "abs", "data": {"axis": "y", "value": ay}},
     ]}})
     cmd({"execute": "input-send-event", "arguments": {"events": [
         {"type": "btn", "data": {"button": "left", "down": True}},

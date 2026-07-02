@@ -12,6 +12,7 @@
 #define SYS_EXIT        4
 #define SYS_GET_MODE    29
 #define SYS_SET_MODE    30
+#define SYS_SPAWN_AGENT 35
 #define SYS_FB_INFO     43
 #define SYS_FB_MAP      44
 #define SYS_FB_FLUSH    45
@@ -260,6 +261,19 @@ static void render_agent_panel(void) {
     }
 }
 
+/* DDR-713: which agent card (0..7) is under (x,y), or -1. Mirrors the layout in
+ * render_agent_panel (cards at x=width-210, y=70+i*44, 200x36). */
+static int agent_card_hit(int x, int y) {
+    if (g_fi.width < 220) return -1;
+    int px = (int)g_fi.width - 210;
+    for (int i = 0; i < 8; i++) {
+        int py = 70 + i * 44;
+        if (x >= px && x < px + 200 && y >= py && y < py + 36)
+            return i;
+    }
+    return -1;
+}
+
 /* Render the desktop: the current ambiance bg + accent (DDR-709), the mode label
  * (DDR-704), and the agent panel (DDR-707). Colours are BGRA; g_bg/g_ac are RGB. */
 static void render(int mode) {
@@ -476,29 +490,39 @@ int main(void) {
             int down = ms.buttons && !prev_btn;
             int up = !ms.buttons && prev_btn;
             if (down) {
-                struct surface_info sf[16];
-                long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
-                int hit = -1;
-                for (long i = n - 1; i >= 0; i--) {          /* topmost (highest z) first */
-                    int tx = sf[i].x, ty = sf[i].y - TITLEBAR;
-                    if (ms.x >= tx && ms.x < tx + (int)sf[i].w &&
-                        ms.y >= ty && ms.y < ty + TITLEBAR) {
-                        hit = (int)sf[i].id;
-                        drag_ox = ms.x - sf[i].x; drag_oy = ms.y - sf[i].y;
-                        break;
-                    }
-                }
-                if (hit >= 0) {
-                    nsi(SYS_SURFACE_RAISE, hit, 0, 0);
-                    dragging = 1; drag_id = hit;
-                    printf("PRADYOS_DRAG_START id=%d\n", hit);
+                int card = agent_card_hit(ms.x, ms.y);       /* DDR-713: card first */
+                if (card >= 0) {                             /* trigger the agent via AETHER */
+                    long pid = nsi(SYS_SPAWN_AGENT, 0, (long)g_agents[card], card);
+                    printf("PRADYOS_AGENT_TRIGGER name=%s slot=%d pid=%ld\n",
+                           g_agents[card], card, pid);
                     fflush(stdout);
-                } else {                                     /* plain click (DDR-705) */
-                    render((int)nsi(SYS_GET_MODE, 0, 0, 0));
-                    draw_cursor(ms.x, ms.y);
+                    render((int)nsi(SYS_GET_MODE, 0, 0, 0));  /* slot now lit */
                     present();
-                    printf("PRADYOS_MOUSE_OK %d %d\n", ms.x, ms.y);
-                    fflush(stdout);
+                } else {
+                    struct surface_info sf[16];
+                    long n = nsi(SYS_SURFACE_POLL, (long)sf, 16, 0);
+                    int hit = -1;
+                    for (long i = n - 1; i >= 0; i--) {      /* topmost (highest z) first */
+                        int tx = sf[i].x, ty = sf[i].y - TITLEBAR;
+                        if (ms.x >= tx && ms.x < tx + (int)sf[i].w &&
+                            ms.y >= ty && ms.y < ty + TITLEBAR) {
+                            hit = (int)sf[i].id;
+                            drag_ox = ms.x - sf[i].x; drag_oy = ms.y - sf[i].y;
+                            break;
+                        }
+                    }
+                    if (hit >= 0) {
+                        nsi(SYS_SURFACE_RAISE, hit, 0, 0);
+                        dragging = 1; drag_id = hit;
+                        printf("PRADYOS_DRAG_START id=%d\n", hit);
+                        fflush(stdout);
+                    } else {                                 /* plain click (DDR-705) */
+                        render((int)nsi(SYS_GET_MODE, 0, 0, 0));
+                        draw_cursor(ms.x, ms.y);
+                        present();
+                        printf("PRADYOS_MOUSE_OK %d %d\n", ms.x, ms.y);
+                        fflush(stdout);
+                    }
                 }
             } else if (dragging && ms.buttons) {             /* drag-move */
                 nsi(SYS_SURFACE_MOVE, drag_id, ms.x - drag_ox, ms.y - drag_oy);

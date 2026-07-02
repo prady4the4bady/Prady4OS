@@ -657,6 +657,25 @@ smoke-mouse: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_MOUSE_OK build/mouse.log || { echo "[mouse] FAIL — click did not reach ring 3"; tail -20 build/mouse.log; exit 1; }
 	@echo "[mouse] PASS — $$(grep -a PRADYOS_MOUSE_OK build/mouse.log | head -1)"
 
+# Layer-7 agent-card click gate (DDR-713): boot GPU+tablet; the daemon lights
+# KRYOS (slot 0); the harness clicks agent card 1 (PRAX) via QMP input-send-event;
+# the sovereign compositor triggers that agent (SYS_SPAWN_AGENT) -> the slot lights
+# and PRADYOS_AGENT_TRIGGER is printed. Proves desktop pointer -> AETHER.
+smoke-agent-click: $(IMG) fat-image sfs-image
+	@echo "[aclick] agent-card click gate: boot(GPU+tablet) + QMP click card 1 -> SYS_SPAWN_AGENT..."
+	@rm -f build/aclick.log /tmp/paclick.sock
+	@ABSX=29250 ABSY=5632 bash tools/qemu_runner/mouse_inject.sh build/aclick.log /tmp/paclick.sock PRADYOS_AGENTS_OK &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/paclick.sock,server,nowait \
+	    -serial file:build/aclick.log -display none -no-reboot || true
+	@grep -q "PRADYOS_AGENT_TRIGGER name=PRAX slot=1" build/aclick.log || { echo "[aclick] FAIL — card click did not trigger the agent"; tail -20 build/aclick.log; exit 1; }
+	@grep -q "AGENT PRAX active" build/aclick.log || { echo "[aclick] FAIL — roster did not light PRAX"; tail -20 build/aclick.log; exit 1; }
+	@echo "[aclick] PASS — $$(grep -a PRADYOS_AGENT_TRIGGER build/aclick.log | head -1)"
+
 # Layer-7 per-client surface gate (DDR-706): a ring-3 client creates+commits a
 # surface; the compositor composites it onto the desktop. Needs the GPU.
 smoke-surface: $(IMG) fat-image sfs-image
