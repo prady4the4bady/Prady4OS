@@ -97,12 +97,27 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.0 CURRENT STATE (updated 2026-07-03 — supersedes everything below)
+### 0.0 CURRENT STATE (updated 2026-07-04 — supersedes everything below)
 
-- **HEAD:** `5c54e6a` (`main` == `dev/phase1`, both pushed). **CI: all 52 gates
-  green** (run 28646522479). Git runs from native Windows (PowerShell); builds
+- **HEAD:** `59d7ac4` (`main` == `dev/phase1`, both pushed). **CI: all 57 gates
+  green** (run 28683624946). Git runs from native Windows (PowerShell); builds
   in WSL **Ubuntu-24.04**. `third_party/{musl,lwip}` are submodules — run
   `git submodule update --init --recursive` after a fresh clone/hard reset.
+- **SMP track (ADR-030, staged — 5 slices CI-green after the 52-gate state):**
+  stage 1 PMM/kheap/console under spinlocks (`smoke-smplock`); stage 2 percpu
+  identity (`smoke-percpu`); stage 3a **SWAPGS discipline** on all 4 ring
+  transitions + `this_cpu()` = `%gs:0` (`smoke-swapgs`); stage 3b
+  `current_thread`@`%gs:8` + SYSCALL kstack@`%gs:16` — `current_thread` is a
+  sched.h macro, `percpu_init_early` runs right after `gdt_init` (its gs reload
+  zeroes the base!) (`smoke-percpu-sched`); stage 3c-alpha **AP work dispatch**
+  — wake IPI vector 49 + single-slot percpu mailbox, `smp_run_on`/
+  `smp_job_done`; APs `idt_load_ap()` before sti (real-mode IDTR leftover
+  triple-faulted otherwise) (`smoke-smpjob`).
+- **Full 3c (APs inside the scheduler) is NOT started** and requires FIRST
+  locking the remaining ADR-016-masked subsystems (VFS/block/IPC/AETHER rings,
+  scheduler ring) — APs running arbitrary kernel threads would race them.
+  Plan it as stage-1-style lock slices, then per-CPU TSS/idle + ring lock +
+  preemption IPIs. Also deferred: IDT gate for the spurious vector (0xFF).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
