@@ -103,6 +103,10 @@ static long sys_surface_map_ro(int id) {
     return (long)va;
 }
 
+/* x == SURF_POS_KEEP (INT32_MAX) keeps the current position (DDR-719): the
+ * compositor owns placement (drag/maximize moves), so a client re-commit after
+ * an event-channel resize must not stomp it. */
+#define SURF_POS_KEEP 0x7FFFFFFF
 static long sys_surface_commit(long a1, long a2, long a3, long a4) {
     (void)a4;
     int id = (int)a1;
@@ -111,7 +115,11 @@ static long sys_surface_commit(long a1, long a2, long a3, long a4) {
     struct surface *s = &g_surf[id];
     if (s->owner_pid != current_thread->pid)
         return -EPERM;
-    s->x = (int32_t)a2; s->y = (int32_t)a3; s->committed = 1;
+    if ((int32_t)a2 != SURF_POS_KEEP) {
+        s->x = (int32_t)a2;
+        s->y = (int32_t)a3;
+    }
+    s->committed = 1;
     return 0;
 }
 

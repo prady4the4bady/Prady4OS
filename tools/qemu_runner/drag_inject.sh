@@ -16,7 +16,9 @@ sleep 0.5
 
 # Optional SX/SY/EX/EY abs-coordinate overrides (DDR-718); defaults = the
 # DDR-710 title-bar drag, so smoke-drag is untouched.
-SOCK="$sock" SX="${SX:-5120}" SY="${SY:-5546}" EX="${EX:-12800}" EY="${EY:-14933}" python3 - <<'PY'
+# Default start = pixel (150,130) on B's title-bar DRAG region (DDR-719 moved
+# it left of the max box at pixel >=160; three boxes now occupy x+20..x+64).
+SOCK="$sock" SX="${SX:-4800}" SY="${SY:-5546}" EX="${EX:-12800}" EY="${EY:-14933}" python3 - <<'PY'
 import os, socket, json, time
 sock = os.environ["SOCK"]
 sx, sy = int(os.environ["SX"]), int(os.environ["SY"])

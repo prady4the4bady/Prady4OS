@@ -103,7 +103,9 @@ int main(void) {
                         s[i*4+0] = 0xE0; s[i*4+1] = 0x40; s[i*4+2] = 0x40; s[i*4+3] = 0xFF;
                     }
                 }
-                nsi(SYS_SURFACE_COMMIT, b, 140, 140);
+                /* Re-commit keeping the compositor-owned position (DDR-719):
+                 * 0x7FFFFFFF = SURF_POS_KEEP. */
+                nsi(SYS_SURFACE_COMMIT, b, 0x7FFFFFFF, 0);
                 printf("PRADYOS_EV_RESIZE_OK w=%u h=%u\n", ev.arg0, ev.arg1);
                 fflush(stdout);
             }

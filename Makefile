@@ -776,6 +776,27 @@ smoke-wmmin: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_WM_RESTORE build/wmmin.log || { echo "[wmmin] FAIL — r did not restore"; tail -20 build/wmmin.log; exit 1; }
 	@echo "[wmmin] PASS — $$(grep -a PRADYOS_WM_MIN build/wmmin.log | head -1) + restore"
 
+# Layer-7 maximize gate (DDR-719): click B's max box -> the compositor saves
+# geometry, requests 512x512 via the event channel + moves B to (8,26)
+# (PRADYOS_WM_MAX, client PRADYOS_EV_RESIZE_OK w=512 h=512); a second injection
+# at the relocated box (keyed on the client's ack) restores (PRADYOS_WM_UNMAX).
+smoke-wmmax: $(IMG) fat-image sfs-image
+	@echo "[wmmax] maximize gate: boot(GPU+tablet) + QMP max-box click + restore click..."
+	@rm -f build/wmmax.log /tmp/pwmmax.sock
+	@ABSX=5311 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock PRADYOS_AMBIANCE_OK &
+	@ABSX=15424 ABSY=725 bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=512" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pwmmax.sock,server,nowait \
+	    -serial file:build/wmmax.log -display none -no-reboot || true
+	@grep -q "PRADYOS_WM_MAX id=1" build/wmmax.log || { echo "[wmmax] FAIL — max box click did not maximize"; tail -20 build/wmmax.log; exit 1; }
+	@grep -q "PRADYOS_EV_RESIZE_OK w=512 h=512" build/wmmax.log || { echo "[wmmax] FAIL — client did not honor maximize"; tail -20 build/wmmax.log; exit 1; }
+	@grep -q "PRADYOS_WM_UNMAX id=1" build/wmmax.log || { echo "[wmmax] FAIL — restore click did not un-maximize"; tail -20 build/wmmax.log; exit 1; }
+	@echo "[wmmax] PASS — $$(grep -a PRADYOS_WM_UNMAX build/wmmax.log | head -1)"
+
 # Layer-7 event-channel resize gate (DDR-718): the harness drags window B's
 # bottom-right corner (QMP); the compositor sends SURF_EV_RESIZE_REQ
 # (PRADYOS_RESIZE_REQ); the OWNER resizes/redraws/recommits

@@ -170,6 +170,9 @@ jobs:
       - name: QEMU event-channel resize test (q35; corner drag -> RESIZE_REQ -> owner resize, L7)
         run: make smoke-evresize
 
+      - name: QEMU maximize test (q35; max-box click + geometry restore, L7)
+        run: make smoke-wmmax
+
       - name: QEMU visual-richness test (q35; particle field + glass cards, L7)
         run: make smoke-visual
 

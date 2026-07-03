@@ -386,6 +386,8 @@ static void draw_window(const unsigned char *sva, const struct surface_info *s) 
               CLOSEBOX, CLOSEBOX, 0x30, 0x30, 0xE0);     /* close box (red, BGRA) */
     fill_rect((unsigned)(tx + (int)s->w - 2 * CLOSEBOX - 6), (unsigned)ty + 3,
               CLOSEBOX, CLOSEBOX, 0x30, 0xB0, 0xE0);     /* min box (amber, DDR-717) */
+    fill_rect((unsigned)(tx + (int)s->w - 3 * CLOSEBOX - 8), (unsigned)ty + 3,
+              CLOSEBOX, CLOSEBOX, 0x40, 0xC0, 0x40);     /* max box (green, DDR-719) */
 }
 
 /* Is (x,y) inside surface s's close box? Mirrors draw_window's layout. */
@@ -403,6 +405,18 @@ static unsigned g_min_mask;
 static int min_box_hit(const struct surface_info *s, int x, int y) {
     int ty = s->y - TITLEBAR;
     int bx = s->x + (int)s->w - 2 * CLOSEBOX - 6;    /* 12px box + 2px gap */
+    return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
+}
+
+/* Maximize (DDR-719): saved per-id geometry + a toggle mask. The compositor
+ * requests the size via the DDR-718 event channel and repositions the window;
+ * the owner redraws. 512 = SURFACE_DIM_MAX (the largest legal surface). */
+static unsigned g_max_mask;
+static int mx_x[16], mx_y[16];
+static unsigned short mx_w[16], mx_h[16];
+static int max_box_hit(const struct surface_info *s, int x, int y) {
+    int ty = s->y - TITLEBAR;
+    int bx = s->x + (int)s->w - 3 * CLOSEBOX - 8;    /* third box, 2px gaps */
     return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
 }
 
@@ -624,6 +638,28 @@ int main(void) {
                         int tx = sf[i].x, ty = sf[i].y - TITLEBAR;
                         if (ms.x >= tx && ms.x < tx + (int)sf[i].w &&
                             ms.y >= ty && ms.y < ty + TITLEBAR) {
+                            if (max_box_hit(&sf[i], ms.x, ms.y)) {     /* DDR-719 */
+                                unsigned id = sf[i].id;
+                                if (!(g_max_mask & (1u << id))) {      /* maximize */
+                                    mx_x[id] = sf[i].x; mx_y[id] = sf[i].y;
+                                    mx_w[id] = (unsigned short)sf[i].w;
+                                    mx_h[id] = (unsigned short)sf[i].h;
+                                    nsi(SYS_SURFACE_SENDEV, (long)id, 1, (512L << 16) | 512L);
+                                    nsi(SYS_SURFACE_MOVE, (long)id, 8, 26);
+                                    g_max_mask |= 1u << id;
+                                    printf("PRADYOS_WM_MAX id=%u\n", id);
+                                } else {                               /* restore */
+                                    nsi(SYS_SURFACE_SENDEV, (long)id, 1,
+                                        ((long)mx_w[id] << 16) | (long)mx_h[id]);
+                                    nsi(SYS_SURFACE_MOVE, (long)id, mx_x[id], mx_y[id]);
+                                    g_max_mask &= ~(1u << id);
+                                    printf("PRADYOS_WM_UNMAX id=%u\n", id);
+                                }
+                                fflush(stdout);
+                                closed = 1;                            /* repaint below */
+                                recompose_scene();
+                                break;
+                            }
                             if (min_box_hit(&sf[i], ms.x, ms.y)) {     /* DDR-717 */
                                 g_min_mask |= 1u << sf[i].id;
                                 printf("PRADYOS_WM_MIN id=%u\n", sf[i].id);

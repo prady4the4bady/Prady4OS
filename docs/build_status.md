@@ -575,6 +575,17 @@ sends the request on button-up (clamped 32..512; `PRADYOS_RESIZE_REQ`);
 gained `SX/SY/EX/EY` overrides (defaults unchanged → `smoke-drag` untouched).
 Maximize (saved-geometry restore on this channel) is the next natural consumer.
 Gate **`smoke-evresize`** (GPU + tablet, QMP corner drag). 51 gates total.
+**Window maximize + geometry restore (DDR-719) COMPLETE:** the event channel's
+second consumer. A green **max box** (third box, `x+w-44`) toggles: maximize
+saves `{x,y,w,h}` (per-id arrays + `g_max_mask`), requests **512×512** (the
+`SURFACE_DIM_MAX` cap — full-screen waits on a larger surface budget) via
+`SURF_EV_RESIZE_REQ`, and moves the window to (8,26); a second click restores
+the saved geometry. Prints `PRADYOS_WM_MAX` / `PRADYOS_WM_UNMAX`; the owner
+redraws through its DDR-718 handler. The crowded 64-px title bar keeps a 20-px
+drag region, so `drag_inject.sh`'s default start moved to pixel (150,130) —
+`smoke-drag` re-verified. Gate **`smoke-wmmax`** (two sequential QMP
+injections: maximize, then restore at the relocated box keyed on the client's
+ack). 52 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
