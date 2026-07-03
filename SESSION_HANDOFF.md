@@ -97,7 +97,40 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.1 CURRENT STATE (updated 2026-06-28) + resume plan
+### 0.0 CURRENT STATE (updated 2026-07-03 — supersedes everything below)
+
+- **HEAD:** `5c54e6a` (`main` == `dev/phase1`, both pushed). **CI: all 52 gates
+  green** (run 28646522479). Git runs from native Windows (PowerShell); builds
+  in WSL **Ubuntu-24.04**. `third_party/{musl,lwip}` are submodules — run
+  `git submodule update --init --recursive` after a fresh clone/hard reset.
+- **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
+  - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
+  - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
+  - **DDR-713** agent-card click → `SYS_SPAWN_AGENT` (`smoke-agent-click`).
+    **Root-cause kernel fix:** the AETHER spawn hook is registered BEFORE the
+    first user process (boot race — user threads run while kmain boots).
+  - **DDR-714 stage A** LAPIC + APIC timer own the 100 Hz tick on vector 48,
+    PIT masked, 8259 kept for device IRQs (`kernel/apic/lapic.c`, `smoke-apic`).
+  - **DDR-714 stage B / ADR-029** SMP bring-up: INIT-SIPI trampoline at 0x8000
+    (`arch/x86_64/ap_boot.asm`), APs online **parked**, spinlock primitive
+    (`kernel/include/spinlock.h`), `QEMU_SMP` runner knob (`smoke-smp` -smp 4).
+  - **DDR-715** window titles + close button (`SYS_SURFACE_SET_TITLE` 61,
+    `smoke-wmclose`); **DDR-716** ambiance backdrops (DAY mesh / DUSK sun-bloom /
+    NIGHT nebulas, settled-frame guard, `smoke-backdrop`); **DDR-717** minimize
+    + `r` restore (compositor-local, `smoke-wmmin`); **DDR-718** surface event
+    channel (`SENDEV/GETEV` 62/63, corner drag-resize, owner-honored,
+    `smoke-evresize`); **DDR-719** maximize + geometry restore (+ kernel
+    `SURF_POS_KEEP` commit sentinel, `smoke-wmmax`).
+  - CI robustness: `smoke-agents` TIMEOUT_S 90→150 (flaked twice on GitHub).
+- **NSI now extends through 63.** Window management is feature-complete
+  (title/drag/min/max/resize/close). The remaining big tracks: **distributed SMP
+  scheduling** (per-CPU + subsystem locking, its own ADR superseding ADR-016),
+  **I/O APIC + MSI-X** (DDR-714 stage C), **real glass blur/gradients**.
+- Gate wall-clock: ~70 min on CI; locally run the batches from
+  `docs/build_status.md`'s gate list (background tasks cap at 10 min — split
+  into <10-min chunks, and kill orphaned WSL qemu/make between failed runs).
+
+### 0.1 OLDER STATE (2026-06-28) + resume plan — historical
 
 - **HEAD:** `5e5fb78` (`main` == `dev/phase1`, both pushed; this worktree branch is
   `claude/pedantic-shirley-a27bf3` — see §7). Since the old 5d/5e state (`9f310da`)
