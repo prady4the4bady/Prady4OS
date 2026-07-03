@@ -637,6 +637,20 @@ thing in `smp_ap_entry`. The `sys_getpid` probe also verifies
 `this_cpu()->current` from ring-3 syscall context. Each CPU now tracks its own
 running thread — the 3c prerequisite. Gate **`smoke-percpu-sched`** (`-smp 4`).
 56 gates total.
+**AP work dispatch (ADR-030 stage 3c-alpha, DDR-SMP-3c-alpha) COMPLETE — the
+first real multi-core execution.** New **wake IPI on vector 49** (one more ISR
+stub; the handler just EOIs — its job is breaking `hlt`). Each AP now idles
+with its LAPIC software-enabled (`lapic_ap_enable`) and IF set, draining a
+**single-slot percpu mailbox** (`job` @`%gs:24`) per wake; CPL0→CPL0
+interrupts use the trampoline stack (no TSS needed) and the 3a conditional
+swapgs correctly leaves AP kernel GS in place. BSP API: `smp_run_on(idx, fn)`
+(store-release + fixed IPI) / `smp_job_done(idx)` — single-producer/
+single-consumer atomics, no lock. At boot the BSP dispatches a proof job to
+every AP (`[smp] cpu N job OK` ×3, `[smp] jobs done=3`). Known deferral: the
+spurious vector (0xFF) has no IDT gate (pre-existing since stage A; QEMU never
+delivers spurious). Full 3c (APs in the scheduler: per-CPU TSS/idle, ring
+lock, preemption IPIs) remains. Gate **`smoke-smpjob`** (`-smp 4`).
+57 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -645,10 +659,10 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Min/max buttons + pointer resize **handles**
 are the DDR-715 follow-ons (titles + close button shipped).
-**Next: ADR-030 stage 3c (per-CPU TSS/idle, the scheduler ring under its lock,
-APs run kernel threads, reschedule IPIs); or I/O APIC + MSI-X (DDR-714 stage
-C); or more visual richness (real glass blur / gradients). wlroots/Wayland
-remain out-of-tree.**
+**Next: ADR-030 full 3c (APs in the scheduler: per-CPU TSS/idle, ring lock,
+preemption IPIs — the AP job mailbox is the interim multi-core compute path);
+or I/O APIC + MSI-X (DDR-714 stage C); or more visual richness (real glass
+blur / gradients). wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-07-02
 
 ## Phase 0 — Toolchain & Build System

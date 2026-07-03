@@ -110,6 +110,9 @@ jobs:
       - name: QEMU per-CPU sched-state test (q35 -smp 4; current_thread + kstack via %gs)
         run: make smoke-percpu-sched
 
+      - name: QEMU AP job-dispatch test (q35 -smp 4; wake IPI + mailbox on 3 APs)
+        run: make smoke-smpjob
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

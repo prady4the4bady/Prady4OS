@@ -393,6 +393,13 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
     return 0;
 }
 
+/* DDR-SMP-3c-alpha: the boot-time AP-dispatch proof — runs ON each AP. */
+static void smp_test_job(void) {
+    kputs("[smp] cpu ");
+    kputdec(this_cpu()->cpu_idx);
+    kputs(" job OK\r\n");
+}
+
 /* L6: SYS_SPAWN_AGENT hook. Loads the agent directly from its embedded kernel
  * bytes (NOT from SFS — that mount is gone by scheduler time) and marks the new
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
@@ -1080,7 +1087,23 @@ void kmain(struct boot_info *bi) {
         kputs(" id=");
         kputdec(pc ? pc->apic_id : 999);
         kputs("\r\n");
-        smp_start_aps();                 /* ADR-029: INIT-SIPI; APs park (stage B) */
+        smp_start_aps();                 /* ADR-029: INIT-SIPI; APs idle for jobs */
+        /* DDR-SMP-3c-alpha: prove cross-CPU dispatch — one job per AP. */
+        unsigned jobs = 0;
+        for (unsigned i = 0; i < lapic_cpu_count(); i++) {
+            if (i == this_cpu()->cpu_idx)
+                continue;
+            if (smp_run_on(i, smp_test_job) != 0)
+                continue;
+            uint64_t deadline = g_ticks + 100;          /* <= 1 s each */
+            while (!smp_job_done(i) && g_ticks < deadline)
+                __asm__ volatile("pause");
+            if (smp_job_done(i))
+                jobs++;
+        }
+        kputs("[smp] jobs done=");
+        kputdec(jobs);
+        kputs("\r\n");
     }
     pcie_init();
     for (unsigned i = 0; i < pcie_device_count(); i++) {

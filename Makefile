@@ -754,6 +754,14 @@ smoke-swapgs: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="$$(printf 'gs FAIL\npercpu FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# AP work-dispatch gate (ADR-030 stage 3c-alpha, DDR-SMP-3c-alpha): the BSP
+# posts a job to each idle AP's mailbox + wake IPI (vector 49); every AP runs
+# it and reports, then the BSP confirms all mailboxes drained.
+smoke-smpjob: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 job OK\n[smp] cpu 2 job OK\n[smp] cpu 3 job OK\n[smp] jobs done=3')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Per-CPU scheduler-state gate (ADR-030 stage 3b, DDR-SMP-3b): current_thread +
 # the SYSCALL kstack now live at %gs:8/%gs:16; the probe verifies the running
 # thread resolves through percpu from ring-3 syscall context.

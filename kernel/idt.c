@@ -67,14 +67,22 @@ static void set_gate(int v, void *handler) {
     idt[v].zero      = 0;
 }
 
+static struct idtr g_idtr;
+
 void idt_init(void) {
-    for (int i = 0; i < 49; i++)   /* 0..31 exceptions, 32..47 IRQs, 48 APIC timer */
+    for (int i = 0; i < 50; i++)   /* 0..31 exc, 32..47 IRQs, 48 APIC timer, 49 wake IPI */
         set_gate(i, isr_stub_table[i]);
 
-    static struct idtr idtr;
-    idtr.limit = (uint16_t)(sizeof(idt) - 1);
-    idtr.base  = (uint64_t)&idt;
-    idt_load(&idtr);
+    g_idtr.limit = (uint16_t)(sizeof(idt) - 1);
+    g_idtr.base  = (uint64_t)&idt;
+    idt_load(&g_idtr);
+}
+
+/* Load the (already-built) kernel IDT on an AP (DDR-SMP-3c-alpha): the
+ * trampoline reaches long mode with the real-mode IDTR leftover, so the first
+ * interrupt on an AP would triple-fault without this. */
+void idt_load_ap(void) {
+    idt_load(&g_idtr);
 }
 
 static void dump_line(const char *label, uint64_t v) {
@@ -125,6 +133,11 @@ static void timer_tick(struct regs *r) {
 }
 
 void isr_dispatch(struct regs *r) {
+    /* AP wake IPI (DDR-SMP-3c-alpha): its only job is to break hlt; EOI + out. */
+    if (r->vector == LAPIC_TIMER_VECTOR + 1) {
+        lapic_eoi();
+        return;
+    }
     /* APIC timer (DDR-714): once armed it owns the tick (PIT IRQ0 masked). */
     if (r->vector == LAPIC_TIMER_VECTOR) {
         lapic_eoi();                           /* EOI first: sched_tick may switch away */

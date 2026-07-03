@@ -75,6 +75,13 @@ void lapic_eoi(void) {
     lapic_wr(LAPIC_EOI, 0);
 }
 
+void lapic_ap_enable(void) {
+    if (!g_lapic)
+        return;
+    lapic_wr(LAPIC_SVR, SVR_ENABLE | SVR_SPURIOUS_VEC);
+    lapic_wr(LAPIC_TPR, 0);
+}
+
 int lapic_init(void) {
     const struct madt *m = (const struct madt *)acpi_find_table("APIC");
     if (!m) {

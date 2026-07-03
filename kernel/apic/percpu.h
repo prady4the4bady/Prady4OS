@@ -16,10 +16,14 @@ struct percpu {
     struct percpu *self;   /* @0: this_cpu() reads %gs:0 (DDR-SMP-3a)            */
     struct tcb *current;   /* @8: this CPU's running thread (DDR-SMP-3b)         */
     uint64_t kstack_top;   /* @16: SYSCALL stack switch — asm reads [gs:16]      */
+    void (*job)(void);     /* @24: single-slot work mailbox (DDR-SMP-3c-alpha)   */
     uint32_t cpu_idx;      /* MADT roster index (0 = BSP)                        */
     uint32_t apic_id;      /* this CPU's LAPIC id                                */
     uint8_t  present;
 };
+
+/* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */
+struct percpu *percpu_get(uint32_t cpu_idx);
 
 /* Claim slot 0 for the BSP before the scheduler's first tick (kmain top);
  * percpu_init_bsp later fills the LAPIC id (migrating slots if the BSP's

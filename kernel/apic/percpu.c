@@ -65,6 +65,10 @@ void percpu_init_bsp(void) {
     g_percpu[ridx].present = 1;
 }
 
+struct percpu *percpu_get(uint32_t cpu_idx) {
+    return (cpu_idx < PERCPU_MAX) ? &g_percpu[cpu_idx] : 0;
+}
+
 struct percpu *this_cpu(void) {
     struct percpu *p;
     __asm__ volatile("mov %%gs:0, %0" : "=r"(p));   /* self pointer (DDR-SMP-3a) */

@@ -21,6 +21,12 @@ void lapic_timer_100hz(void);
 /* Signal end-of-interrupt to the LAPIC (vector-48 tick path in idt.c). */
 void lapic_eoi(void);
 
+/* Software-enable the calling AP's LAPIC (SVR + TPR) so it can receive the
+ * wake IPI (DDR-SMP-3c-alpha). The MMIO window is per-CPU at the same base. */
+void lapic_ap_enable(void);
+
+#define LAPIC_WAKE_VECTOR (LAPIC_TIMER_VECTOR + 1)   /* 49: AP wake IPI */
+
 /* CPU count from the MADT (type-0 entries) — reported now, used by stage B. */
 unsigned lapic_cpu_count(void);
 
