@@ -101,6 +101,9 @@ jobs:
       - name: QEMU SMP locking test (q35 -smp 4; APs exercise PMM/kheap spinlocks)
         run: make smoke-smplock
 
+      - name: QEMU per-CPU identity test (q35 -smp 4; this_cpu() on BSP + APs)
+        run: make smoke-percpu
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

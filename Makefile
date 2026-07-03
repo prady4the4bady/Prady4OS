@@ -84,7 +84,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
                kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
                kernel/aether/aether.c kernel/aether/aether_queue.c kernel/aether/aether_audit.c kernel/aether/aether_mem.c kernel/syscall/sys_aether.c kernel/syscall/sys_socket.c kernel/syscall/sys_fb.c kernel/syscall/sys_surface.c \
-               kernel/apic/lapic.c kernel/apic/smp.c
+               kernel/apic/lapic.c kernel/apic/smp.c kernel/apic/percpu.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
 KERNEL_BIN  := build/kernel.bin
@@ -98,7 +98,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
-               build/lwip_port.o build/lapic.o build/smp.o build/ap_boot.o
+               build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
@@ -245,6 +245,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
 	$(CC) $(KCFLAGS) -c kernel/apic/lapic.c      -o build/lapic.o
 	$(CC) $(KCFLAGS) -c kernel/apic/smp.c        -o build/smp.o
+	$(CC) $(KCFLAGS) -c kernel/apic/percpu.c     -o build/percpu.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio.c       -o build/virtio.o
@@ -734,6 +735,14 @@ smoke-smplock: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 locks OK\n[smp] cpu 2 locks OK\n[smp] cpu 3 locks OK\n[smp] cpus online=4/4')" \
 	FORBIDDEN_SENTINEL="locks FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Per-CPU identity gate (ADR-030 stage 2, DDR-SMP-2): the BSP and every AP
+# record + round-trip their percpu entry (LAPIC-ID-indexed this_cpu()).
+smoke-percpu: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[percpu] bsp idx=\n[smp] cpu 1 percpu OK\n[smp] cpu 2 percpu OK\n[smp] cpu 3 percpu OK')" \
+	FORBIDDEN_SENTINEL="percpu FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 visual-richness gate (DDR-712): the compositor renders a per-ambiance

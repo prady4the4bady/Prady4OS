@@ -9,6 +9,7 @@
  */
 #include "smp.h"
 #include "lapic.h"
+#include "percpu.h"
 #include "spinlock.h"
 #include "vmm.h"
 #include "pmm.h"
@@ -68,6 +69,15 @@ void smp_ap_entry(uint32_t idx) {
     kputs("[smp] cpu ");
     kputdec(idx);
     kputs(ok ? " locks OK\r\n" : " locks FAIL\r\n");
+    spin_unlock(&g_announce_lock);
+
+    /* ADR-030 stage 2 (DDR-SMP-2): record + round-trip this CPU's identity. */
+    percpu_init_cpu(idx);
+    struct percpu *pc = this_cpu();
+    spin_lock(&g_announce_lock);
+    kputs("[smp] cpu ");
+    kputdec(idx);
+    kputs(pc && pc->cpu_idx == idx ? " percpu OK\r\n" : " percpu FAIL\r\n");
     spin_unlock(&g_announce_lock);
     __atomic_add_fetch(&g_online, 1, __ATOMIC_SEQ_CST);
     for (;;)

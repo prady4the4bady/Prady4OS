@@ -598,6 +598,16 @@ Each AP now allocates+frees a PMM page and a slab object through the locks
 before parking (`[smp] cpu N locks OK`). Stages 2–4 (per-CPU GS state, the
 scheduler ring under its lock + AP kernel threads, user threads on APs) are
 scoped in ADR-030. Gate **`smoke-smplock`** (`-smp 4`). 53 gates total.
+**Per-CPU identity (ADR-030 stage 2, DDR-SMP-2) COMPLETE:**
+`kernel/apic/percpu.{c,h}` — a `struct percpu {cpu_idx, apic_id}` array with
+`this_cpu()` resolved by **LAPIC-ID lookup**, deliberately NOT `%gs`-based yet:
+without SWAPGS discipline a ring-3 `gs` selector reload could clobber a MSR-set
+base and let user code break the kernel (ADR-021 isolation) — GS+SWAPGS belongs
+to stage 3's syscall-path rework. The BSP records its roster slot after
+`lapic_init` (`[percpu] bsp idx= id=`); each AP records + round-trips its entry
+before parking (`[smp] cpu N percpu OK`). Fields grow with the stage that uses
+them (no dead members). Gate **`smoke-percpu`** (`-smp 4`, forbids
+`percpu FAIL`). 54 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -606,8 +616,8 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Min/max buttons + pointer resize **handles**
 are the DDR-715 follow-ons (titles + close button shipped).
-**Next: ADR-030 stage 2 (per-CPU GS-based state: current_thread, syscall
-kstack, TSS), then stage 3 (scheduler ring under its lock + APs run kernel
+**Next: ADR-030 stage 3 (GS+SWAPGS syscall-path rework, per-CPU
+TSS/kstack/current, the scheduler ring under its lock, APs run kernel
 threads); or I/O APIC + MSI-X (DDR-714 stage C); or more visual richness (real
 glass blur / gradients). wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-07-02

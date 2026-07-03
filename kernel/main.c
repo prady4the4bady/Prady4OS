@@ -27,6 +27,7 @@
 #include "acpi.h"
 #include "lapic.h"
 #include "smp.h"
+#include "percpu.h"
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
@@ -1067,6 +1068,13 @@ void kmain(struct boot_info *bi) {
      * calibration, both true here; falls back to the PIT if no MADT. */
     if (lapic_init() == 0) {
         lapic_timer_100hz();
+        percpu_init_bsp();               /* ADR-030 stage 2: BSP identity first */
+        struct percpu *pc = this_cpu();
+        kputs("[percpu] bsp idx=");
+        kputdec(pc ? pc->cpu_idx : 999);
+        kputs(" id=");
+        kputdec(pc ? pc->apic_id : 999);
+        kputs("\r\n");
         smp_start_aps();                 /* ADR-029: INIT-SIPI; APs park (stage B) */
     }
     pcie_init();
