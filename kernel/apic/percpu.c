@@ -11,6 +11,18 @@
 
 static struct percpu g_percpu[PERCPU_MAX];
 
+/* Fixed offsets consumed by syscall_entry.asm ([gs:16]) — keep in lockstep. */
+_Static_assert(__builtin_offsetof(struct percpu, current) == 8,
+               "percpu.current must be at offset 8");
+_Static_assert(__builtin_offsetof(struct percpu, kstack_top) == 16,
+               "percpu.kstack_top must be at offset 16 (syscall_entry.asm)");
+
+static void gs_base_set(struct percpu *p) {
+    uint64_t base = (uint64_t)(uintptr_t)p;
+    __asm__ volatile("wrmsr" :: "c"(MSR_GS_BASE),
+                     "a"((uint32_t)base), "d"((uint32_t)(base >> 32)));
+}
+
 void percpu_init_cpu(uint32_t cpu_idx) {
     if (cpu_idx >= PERCPU_MAX)
         return;
@@ -19,19 +31,38 @@ void percpu_init_cpu(uint32_t cpu_idx) {
     p->cpu_idx = cpu_idx;
     p->apic_id = lapic_id();
     p->present = 1;
-    uint64_t base = (uint64_t)(uintptr_t)p;
-    __asm__ volatile("wrmsr" :: "c"(MSR_GS_BASE),
-                     "a"((uint32_t)base), "d"((uint32_t)(base >> 32)));
+    gs_base_set(p);
+}
+
+/* DDR-SMP-3b D3: the scheduler ticks long before ACPI/APIC init, and
+ * current_thread is now %gs-relative — claim slot 0 for the BSP at kmain top
+ * (identity unknown yet; percpu_init_bsp completes it). */
+void percpu_init_early(void) {
+    struct percpu *p = &g_percpu[0];
+    p->self    = p;
+    p->present = 1;
+    gs_base_set(p);
 }
 
 void percpu_init_bsp(void) {
     uint32_t id = lapic_id();
+    uint32_t ridx = 0;
     for (unsigned i = 0; i < lapic_cpu_count() && i < PERCPU_MAX; i++)
         if (lapic_apic_id_at(i) == id) {
-            percpu_init_cpu(i);
-            return;
+            ridx = i;
+            break;
         }
-    percpu_init_cpu(0);            /* MADT absent/odd: BSP takes slot 0 */
+    if (ridx != 0) {
+        /* Migrate the early slot-0 claim (incl. live current/kstack_top) to the
+         * BSP's roster slot so an idx-0 AP can never collide (DDR-SMP-3b D3). */
+        g_percpu[ridx] = g_percpu[0];
+        g_percpu[ridx].self = &g_percpu[ridx];
+        g_percpu[0].present = 0;
+        gs_base_set(&g_percpu[ridx]);
+    }
+    g_percpu[ridx].cpu_idx = ridx;
+    g_percpu[ridx].apic_id = id;
+    g_percpu[ridx].present = 1;
 }
 
 struct percpu *this_cpu(void) {

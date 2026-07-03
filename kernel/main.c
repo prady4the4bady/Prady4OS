@@ -1020,6 +1020,11 @@ void kmain(struct boot_info *bi) {
     gdt_init();
     kputs("NEXUS: kernel GDT loaded\r\n");
 
+    /* DDR-SMP-3b: current_thread + the SYSCALL kstack are %gs-relative — claim
+     * the BSP percpu slot NOW, after gdt_init (whose gs selector reload zeroes
+     * the base) and before anything schedules. */
+    percpu_init_early();
+
     idt_init();
     kputs("NEXUS: IDT loaded (48 vectors: 32 exceptions + 16 IRQ)\r\n");
 

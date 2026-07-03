@@ -49,6 +49,7 @@ static void delay_200us(void) {
  * cpu index in RDI and a private stack). Announce, mark online, park. */
 void smp_ap_entry(uint32_t idx);
 void smp_ap_entry(uint32_t idx) {
+    percpu_init_cpu(idx);          /* GS base first: %gs state usable from here on */
     spin_lock(&g_announce_lock);
     kputs("[smp] cpu ");
     kputdec(idx);
@@ -71,8 +72,7 @@ void smp_ap_entry(uint32_t idx) {
     kputs(ok ? " locks OK\r\n" : " locks FAIL\r\n");
     spin_unlock(&g_announce_lock);
 
-    /* ADR-030 stage 2 (DDR-SMP-2): record + round-trip this CPU's identity. */
-    percpu_init_cpu(idx);
+    /* ADR-030 stage 2 (DDR-SMP-2): round-trip this CPU's identity (init'd above). */
     struct percpu *pc = this_cpu();
     spin_lock(&g_announce_lock);
     kputs("[smp] cpu ");

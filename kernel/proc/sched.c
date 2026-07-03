@@ -30,7 +30,8 @@ extern void signal_sigreturn(struct regs *saved);  /* usermode.asm — full-fram
 #define USER_CS_SEL 0x23u    /* (0x20 | 3): user code64, RPL 3 — matches usermode.asm */
 #define USER_SS_SEL 0x1Bu    /* (0x18 | 3): user data,   RPL 3 */
 
-struct tcb *current_thread;       /* NULL until sched_init (safe: sched_tick checks) */
+/* current_thread now lives in the percpu area, read via %gs (DDR-SMP-3b,
+ * sched.h macro). NULL until sched_init (safe: sched_tick checks). */
 static struct tcb idle_tcb;
 static uint32_t next_tid = 1;
 static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit panics */
@@ -140,7 +141,7 @@ static void user_launch(void *arg) {
     struct tcb *t = current_thread;
     uint64_t ktop = t->kstack_base + STACK_SIZE;
     tss_set_rsp0(ktop);
-    syscall_kstack_top = ktop;
+    this_cpu()->kstack_top = ktop;    /* SYSCALL stack switch reads [gs:16] (3b) */
     if (t->forked)
         signal_sigreturn(&t->fork_regs);   /* resume with the parent's full reg set, RAX=0 */
     enter_user_mode(t->user_rip, t->user_stack, t->user_arg);
@@ -271,7 +272,7 @@ static void schedule(void) {
     if (next->is_user) {       /* point the CPU at this thread's ring-0 stack */
         uint64_t ktop = next->kstack_base + STACK_SIZE;
         tss_set_rsp0(ktop);
-        syscall_kstack_top = ktop;
+        this_cpu()->kstack_top = ktop;    /* SYSCALL stack switch reads [gs:16] (3b) */
         /* PROC-D (ADR-023): restore this thread's FS base. tcb->fs_base is the sole
          * authority (only SYS_SET_TLS changes it), so restore-on-switch-in is both
          * necessary and sufficient — no save in context_switch is needed. */

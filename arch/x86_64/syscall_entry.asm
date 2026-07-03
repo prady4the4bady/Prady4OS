@@ -20,7 +20,6 @@ BITS 64
 section .text
 global syscall_entry
 extern syscall_dispatch
-extern syscall_kstack_top
 extern syscall_user_rsp
 extern syscall_user_rip
 ; Callee-saved snapshot for full-register fork (the child resumes with the
@@ -46,7 +45,7 @@ syscall_entry:
     mov [rel syscall_user_r14], r14
     mov [rel syscall_user_r15], r15
     mov [rel syscall_user_rflags], r11
-    mov rsp, [rel syscall_kstack_top]   ; switch to this thread's kernel stack
+    mov rsp, [gs:16]                    ; this CPU's kernel stack top (percpu, DDR-SMP-3b)
 
     push qword [rel syscall_user_rsp]   ; save user RSP on the kernel stack
     push rcx                            ; user RIP

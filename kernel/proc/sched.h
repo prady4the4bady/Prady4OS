@@ -125,4 +125,8 @@ void        sched_exit(int status);                             /* zombie + stat
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */
 
-extern struct tcb *current_thread;
+/* DDR-SMP-3b: the running thread is per-CPU state, read through %gs (valid
+ * from kmain top via percpu_init_early). Every existing site — reads and the
+ * scheduler's writes — resolves per-CPU unchanged. */
+#include "percpu.h"
+#define current_thread (this_cpu()->current)

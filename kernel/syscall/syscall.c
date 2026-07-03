@@ -28,7 +28,7 @@ void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
 static syscall_fn table[MAX_SYSCALLS];
-uint64_t syscall_kstack_top;
+/* syscall_kstack_top moved into the percpu area at [gs:16] (DDR-SMP-3b). */
 uint64_t syscall_user_rsp;
 uint64_t syscall_user_rip;
 /* Parent's callee-saved registers + RFLAGS at SYSCALL entry, for full-register
@@ -94,6 +94,11 @@ static long sys_getpid(long a1, long a2, long a3, long a4) {
             kputs("[percpu] gs OK (syscall ctx)\r\n");
         else
             kputs("[percpu] gs FAIL (syscall ctx)\r\n");
+        /* DDR-SMP-3b: current_thread resolves through the same percpu slot. */
+        if (pc && pc->current && pc->current == current_thread)
+            kputs("[percpu] current OK (syscall ctx)\r\n");
+        else
+            kputs("[percpu] current FAIL (syscall ctx)\r\n");
     }
     return (long)current_thread->pid;
 }

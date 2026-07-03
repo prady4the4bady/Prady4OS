@@ -93,9 +93,8 @@ void syscall_init(void);                       /* program MSRs + register table 
 void syscall_register(unsigned num, syscall_fn fn);
 long syscall_dispatch(long num, long a1, long a2, long a3, long a4);  /* from asm */
 
-/* Kernel stack top for the current user thread's SYSCALL entry (set on switch
- * to a user thread). The asm entry stub reads it; a brief scratch slot too. */
-extern uint64_t syscall_kstack_top;
+/* The kernel stack top for SYSCALL entry lives in the percpu area at [gs:16]
+ * (DDR-SMP-3b); the scheduler writes it on switch-in of a user thread. */
 extern uint64_t syscall_user_rsp;
 /* User RIP/RSP of the in-flight syscall (captured by syscall_entry.asm). fork
  * uses these as the child's ring-3 resume point. Valid only inside a syscall. */

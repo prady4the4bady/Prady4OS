@@ -622,6 +622,21 @@ properly, and per-CPU state is reachable from any kernel context (the stage-3b
 prerequisite). A one-time probe in `sys_getpid` verifies `%gs:0` from a
 ring-3-entered syscall (`[percpu] gs OK (syscall ctx)`). Gate **`smoke-swapgs`**
 (`-smp 4`, forbids `gs FAIL`/`percpu FAIL`). 55 gates total.
+**Per-CPU scheduler state (ADR-030 stage 3b, DDR-SMP-3b) COMPLETE:**
+`current_thread` and the SYSCALL kernel-stack top moved off globals into the
+percpu area — `current` @`%gs:8`, `kstack_top` @`%gs:16` (compile-time
+asserted). `sched.h` makes `current_thread` a macro over `this_cpu()->current`,
+so every read/write site resolves per-CPU unchanged; `syscall_entry.asm`'s
+stack switch is now `mov rsp, [gs:16]` (the entry `swapgs` precedes it); the
+`syscall_kstack_top` global is gone. Boot order (the DDR-713 lesson):
+`percpu_init_early()` claims the BSP slot right after `gdt_init` (whose gs
+selector reload zeroes the base) — before anything schedules;
+`percpu_init_bsp` later fills the LAPIC id and migrates slots if the BSP's
+roster index isn't 0 (collision-proof vs an idx-0 AP); APs init percpu first
+thing in `smp_ap_entry`. The `sys_getpid` probe also verifies
+`this_cpu()->current` from ring-3 syscall context. Each CPU now tracks its own
+running thread — the 3c prerequisite. Gate **`smoke-percpu-sched`** (`-smp 4`).
+56 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -630,10 +645,10 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Min/max buttons + pointer resize **handles**
 are the DDR-715 follow-ons (titles + close button shipped).
-**Next: ADR-030 stage 3b (per-CPU TSS/kstack/current), then 3c (the scheduler
-ring under its lock, APs run kernel threads); or I/O APIC + MSI-X (DDR-714
-stage C); or more visual richness (real glass blur / gradients).
-wlroots/Wayland remain out-of-tree.**
+**Next: ADR-030 stage 3c (per-CPU TSS/idle, the scheduler ring under its lock,
+APs run kernel threads, reschedule IPIs); or I/O APIC + MSI-X (DDR-714 stage
+C); or more visual richness (real glass blur / gradients). wlroots/Wayland
+remain out-of-tree.**
 **Last updated:** 2026-07-02
 
 ## Phase 0 — Toolchain & Build System

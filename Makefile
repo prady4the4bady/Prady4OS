@@ -754,6 +754,15 @@ smoke-swapgs: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="$$(printf 'gs FAIL\npercpu FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Per-CPU scheduler-state gate (ADR-030 stage 3b, DDR-SMP-3b): current_thread +
+# the SYSCALL kstack now live at %gs:8/%gs:16; the probe verifies the running
+# thread resolves through percpu from ring-3 syscall context.
+smoke-percpu-sched: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[percpu] current OK (syscall ctx)\n[percpu] gs OK (syscall ctx)\n[smp] cpus online=4/4')" \
+	FORBIDDEN_SENTINEL="$$(printf 'current FAIL\ngs FAIL\npercpu FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Layer-7 visual-richness gate (DDR-712): the compositor renders a per-ambiance
 # particle field (NIGHT stars at boot) over the background and frosted-glass agent
 # cards, announcing PRADYOS_PARTICLES_OK + PRADYOS_GLASS_OK on its first render.

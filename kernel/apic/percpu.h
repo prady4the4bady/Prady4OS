@@ -10,12 +10,21 @@
 
 #define PERCPU_MAX 16
 
+struct tcb;
+
 struct percpu {
-    struct percpu *self; /* MUST be first: this_cpu() reads %gs:0 (DDR-SMP-3a) */
-    uint32_t cpu_idx;    /* MADT roster index (0 = BSP)  */
-    uint32_t apic_id;    /* this CPU's LAPIC id           */
+    struct percpu *self;   /* @0: this_cpu() reads %gs:0 (DDR-SMP-3a)            */
+    struct tcb *current;   /* @8: this CPU's running thread (DDR-SMP-3b)         */
+    uint64_t kstack_top;   /* @16: SYSCALL stack switch — asm reads [gs:16]      */
+    uint32_t cpu_idx;      /* MADT roster index (0 = BSP)                        */
+    uint32_t apic_id;      /* this CPU's LAPIC id                                */
     uint8_t  present;
 };
+
+/* Claim slot 0 for the BSP before the scheduler's first tick (kmain top);
+ * percpu_init_bsp later fills the LAPIC id (migrating slots if the BSP's
+ * roster index isn't 0). DDR-SMP-3b D3. */
+void percpu_init_early(void);
 
 /* Record the calling CPU's identity (BSP after lapic_init; APs in smp_ap_entry). */
 void percpu_init_cpu(uint32_t cpu_idx);
