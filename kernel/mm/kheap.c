@@ -180,7 +180,15 @@ void kheap_init(void) {
     ptnode_in_use = 0;
 }
 
-void *kmalloc(size_t size) {
+/* ADR-030 stage 1: one heap spinlock over every public entry point. The slab
+ * lists previously had NO mutual exclusion (safe only because no IRQ path
+ * allocates); the lock closes that and adds cross-CPU safety for the ADR-029
+ * APs. Lock order: heap -> PMM (cache_grow/large allocate from the PMM, which
+ * takes its own lock); the PMM never calls back into the heap, so no cycle. */
+#include "spinlock.h"
+static spinlock_t g_heap_lock = SPINLOCK_INIT;
+
+static void *kmalloc_locked(size_t size) {
     if (size == 0)
         return 0;
 
@@ -206,7 +214,14 @@ void *kmalloc(size_t size) {
     return 0;
 }
 
-void kfree(void *ptr) {
+void *kmalloc(size_t size) {
+    uint64_t fl = spin_lock_irqsave(&g_heap_lock);
+    void *p = kmalloc_locked(size);
+    spin_unlock_irqrestore(&g_heap_lock, fl);
+    return p;
+}
+
+static void kfree_locked(void *ptr) {
     if (!ptr)
         return;
 
@@ -235,19 +250,39 @@ void kfree(void *ptr) {
     cache_free(s->cache, ptr);
 }
 
-void *pcb_alloc(void)    { return cache_alloc(&cache_pcb); }
-void  pcb_free(void *p)  { cache_free(&cache_pcb, p); }
-void *cap_alloc(void)    { return cache_alloc(&cache_cap); }
-void  cap_free(void *p)  { cache_free(&cache_cap, p); }
-void *ipc_alloc(void)    { return cache_alloc(&cache_ipc); }
-void  ipc_free(void *p)  { cache_free(&cache_ipc, p); }
+void kfree(void *ptr) {
+    uint64_t fl = spin_lock_irqsave(&g_heap_lock);
+    kfree_locked(ptr);
+    spin_unlock_irqrestore(&g_heap_lock, fl);
+}
+
+/* Dedicated pools: same heap lock (they share the slab machinery). */
+static void *pool_alloc(struct kmem_cache *c) {
+    uint64_t fl = spin_lock_irqsave(&g_heap_lock);
+    void *p = cache_alloc(c);
+    spin_unlock_irqrestore(&g_heap_lock, fl);
+    return p;
+}
+static void pool_free(struct kmem_cache *c, void *p) {
+    uint64_t fl = spin_lock_irqsave(&g_heap_lock);
+    cache_free(c, p);
+    spin_unlock_irqrestore(&g_heap_lock, fl);
+}
+void *pcb_alloc(void)    { return pool_alloc(&cache_pcb); }
+void  pcb_free(void *p)  { pool_free(&cache_pcb, p); }
+void *cap_alloc(void)    { return pool_alloc(&cache_cap); }
+void  cap_free(void *p)  { pool_free(&cache_cap, p); }
+void *ipc_alloc(void)    { return pool_alloc(&cache_ipc); }
+void  ipc_free(void *p)  { pool_free(&cache_ipc, p); }
 
 void *ptnode_alloc(void) {
-    uint64_t page = pmm_alloc_page();
+    uint64_t page = pmm_alloc_page();          /* PMM has its own lock */
     if (!page)
         return 0;
     memset((void *)(uintptr_t)page, 0, PAGE_SIZE);
+    uint64_t fl = spin_lock_irqsave(&g_heap_lock);
     ptnode_in_use++;
+    spin_unlock_irqrestore(&g_heap_lock, fl);
     return (void *)(uintptr_t)page;
 }
 
@@ -255,13 +290,17 @@ void ptnode_free(void *p) {
     if (!p)
         return;
     pmm_free_page((uint64_t)(uintptr_t)p);
+    uint64_t fl = spin_lock_irqsave(&g_heap_lock);
     ptnode_in_use--;
+    spin_unlock_irqrestore(&g_heap_lock, fl);
 }
 
 uint64_t kheap_outstanding(void) {
+    uint64_t fl = spin_lock_irqsave(&g_heap_lock);
     uint64_t total = large_in_use + ptnode_in_use
                    + cache_pcb.in_use + cache_cap.in_use + cache_ipc.in_use;
     for (unsigned i = 0; i < NUM_CLASSES; i++)
         total += class_cache[i].in_use;
+    spin_unlock_irqrestore(&g_heap_lock, fl);
     return total;
 }

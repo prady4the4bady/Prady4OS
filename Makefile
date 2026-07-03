@@ -727,6 +727,15 @@ smoke-smp: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 QEMU_SMP=4 EXTRA_SENTINEL="$$(printf '[smp] cpus online=4/4')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# SMP locking gate (ADR-030 stage 1): each AP allocates+frees a PMM page and a
+# slab object through the new subsystem spinlocks before parking; all three must
+# report locks OK (and none FAIL) alongside full bring-up.
+smoke-smplock: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 locks OK\n[smp] cpu 2 locks OK\n[smp] cpu 3 locks OK\n[smp] cpus online=4/4')" \
+	FORBIDDEN_SENTINEL="locks FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Layer-7 visual-richness gate (DDR-712): the compositor renders a per-ambiance
 # particle field (NIGHT stars at boot) over the background and frosted-glass agent
 # cards, announcing PRADYOS_PARTICLES_OK + PRADYOS_GLASS_OK on its first render.

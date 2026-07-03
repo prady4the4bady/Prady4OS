@@ -11,13 +11,16 @@
 
 #define COM1 0x3F8
 
+/* ADR-030 stage 1: the ADR-016 masking helpers now acquire the console
+ * spinlock (irqsave — one-CPU semantics unchanged, cross-CPU exclusion added
+ * for the ADR-029 APs). Call sites unchanged. */
+#include "spinlock.h"
+static spinlock_t g_console_lock = SPINLOCK_INIT;
 static inline uint64_t irq_save(void) {
-    uint64_t f;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
-    return f;
+    return spin_lock_irqsave(&g_console_lock);
 }
 static inline void irq_restore(uint64_t f) {
-    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+    spin_unlock_irqrestore(&g_console_lock, f);
 }
 
 void kputc(char c) {

@@ -50,19 +50,18 @@ static inline uint64_t block_size(unsigned order) {
     return PAGE_SIZE << order;
 }
 
-/* The free lists are shared mutable state. With preemptive multitasking, two
- * threads can call pmm_alloc/free concurrently; without mutual exclusion they
- * race the intrusive lists and can hand out the same page twice. On this
- * single core, masking interrupts around the critical section is sufficient
- * (a real spinlock arrives with SMP/APIC). Save+restore the flag so callers
- * that are already in a cli region stay masked on return. */
+/* The free lists are shared mutable state. ADR-030 stage 1: the ADR-016
+ * interrupt masking becomes a spinlock's irqsave acquire — identical semantics
+ * on one CPU (IF masked across the critical section, flags restored), plus
+ * cross-CPU mutual exclusion now that the APs are online (ADR-029). The
+ * helpers keep their names so every call site is unchanged. */
+#include "spinlock.h"
+static spinlock_t g_pmm_lock = SPINLOCK_INIT;
 static inline uint64_t irq_save(void) {
-    uint64_t f;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
-    return f;
+    return spin_lock_irqsave(&g_pmm_lock);
 }
 static inline void irq_restore(uint64_t f) {
-    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+    spin_unlock_irqrestore(&g_pmm_lock, f);
 }
 
 static void list_push(unsigned order, uint64_t addr) {

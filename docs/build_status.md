@@ -586,6 +586,18 @@ drag region, so `drag_inject.sh`'s default start moved to pixel (150,130) —
 `smoke-drag` re-verified. Gate **`smoke-wmmax`** (two sequential QMP
 injections: maximize, then restore at the relocated box keyed on the client's
 ack). 52 gates total.
+**SMP locking stage 1 (ADR-030) COMPLETE:** the distributed-scheduling
+migration begins (staged; each stage CI-green before the next). **PMM** and
+**console** swap ADR-016's interrupt masking for per-subsystem spinlocks
+(`spin_lock_irqsave` — identical one-CPU semantics, cross-CPU exclusion added);
+their local `irq_save/irq_restore` helpers became lock wrappers so no call site
+changed. **kheap** — whose slab lists previously had *no* mutual exclusion —
+gains a heap lock over every public entry point (kmalloc/kfree, the
+pcb/cap/ipc pools, ptnode, outstanding). Lock order: heap → PMM (no cycle).
+Each AP now allocates+frees a PMM page and a slab object through the locks
+before parking (`[smp] cpu N locks OK`). Stages 2–4 (per-CPU GS state, the
+scheduler ring under its lock + AP kernel threads, user threads on APs) are
+scoped in ADR-030. Gate **`smoke-smplock`** (`-smp 4`). 53 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -594,10 +606,10 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Min/max buttons + pointer resize **handles**
 are the DDR-715 follow-ons (titles + close button shipped).
-**Next: distributed SMP scheduling (per-CPU + subsystem locking, its own ADR
-superseding ADR-016), I/O APIC + MSI-X (DDR-714 stage C), more visual richness
-(real glass blur / gradients / DAY mesh / sun-bloom), or min/max buttons +
-resize handles. wlroots/Wayland remain out-of-tree.**
+**Next: ADR-030 stage 2 (per-CPU GS-based state: current_thread, syscall
+kstack, TSS), then stage 3 (scheduler ring under its lock + APs run kernel
+threads); or I/O APIC + MSI-X (DDR-714 stage C); or more visual richness (real
+glass blur / gradients). wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-07-02
 
 ## Phase 0 — Toolchain & Build System

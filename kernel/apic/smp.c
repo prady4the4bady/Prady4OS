@@ -12,6 +12,7 @@
 #include "spinlock.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "kheap.h"
 #include "irq.h"
 #include "io.h"
 #include "console.h"
@@ -53,6 +54,20 @@ void smp_ap_entry(uint32_t idx) {
     kputs(" up id=");
     kputdec(lapic_apic_id_at(idx));
     kputs("\r\n");
+    spin_unlock(&g_announce_lock);
+
+    /* ADR-030 stage 1: exercise the freshly locked allocators from this CPU —
+     * a PMM page and a slab object, allocated and returned — proving the lock
+     * plumbing works off the BSP before this AP parks. */
+    uint64_t page = pmm_alloc_page();
+    void *obj = kmalloc(64);
+    int ok = (page != 0) && (obj != 0);
+    if (obj)  kfree(obj);
+    if (page) pmm_free_page(page);
+    spin_lock(&g_announce_lock);
+    kputs("[smp] cpu ");
+    kputdec(idx);
+    kputs(ok ? " locks OK\r\n" : " locks FAIL\r\n");
     spin_unlock(&g_announce_lock);
     __atomic_add_fetch(&g_online, 1, __ATOMIC_SEQ_CST);
     for (;;)
