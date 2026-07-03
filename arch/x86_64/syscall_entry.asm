@@ -34,6 +34,7 @@ extern syscall_user_r15
 extern syscall_user_rflags
 
 syscall_entry:
+    swapgs                              ; DDR-SMP-3a: kernel GS (percpu) active
     mov [rel syscall_user_rsp], rsp     ; stash user RSP briefly (single-CPU, IF=0)
     mov [rel syscall_user_rip], rcx     ; stash user return RIP (fork's child resume point)
     ; snapshot the user's callee-saved regs + RFLAGS (still the user's values here,
@@ -74,4 +75,5 @@ syscall_entry:
     pop r11                             ; user RFLAGS -> R11 (SYSRET restores RFLAGS from R11)
     pop rcx                             ; user RIP   -> RCX (SYSRET jumps to RCX)
     pop rsp                             ; restore user RSP
+    swapgs                              ; DDR-SMP-3a: park percpu in KERNEL_GS_BASE
     o64 sysret                          ; return to ring 3

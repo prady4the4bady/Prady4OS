@@ -608,6 +608,20 @@ to stage 3's syscall-path rework. The BSP records its roster slot after
 before parking (`[smp] cpu N percpu OK`). Fields grow with the stage that uses
 them (no dead members). Gate **`smoke-percpu`** (`-smp 4`, forbids
 `percpu FAIL`). 54 gates total.
+**SWAPGS + GS percpu (ADR-030 stage 3a, DDR-SMP-3a) COMPLETE:** proper SWAPGS
+discipline on all four ring-transition sites (the complete set per the gs
+audit): `syscall_entry` (unconditional swap at entry + before SYSRET),
+`isr_common` (conditional on the frame's CS RPL, mirrored at IRETQ — a thread
+that context-switches away mid-ISR resumes with the same frame, so pairing is
+per-frame), `enter_user_mode` and `signal_sigreturn` (swap before IRETQ).
+Convention: kernel GS base = this CPU's percpu; parked in `KERNEL_GS_BASE`
+while ring 3 runs. `struct percpu` gained `self` as member 0;
+`percpu_init_cpu` loads `IA32_GS_BASE`; **`this_cpu()` is now one
+`mov %gs:0` read** — the stage-2 hazard (user gs-selector reload) is closed
+properly, and per-CPU state is reachable from any kernel context (the stage-3b
+prerequisite). A one-time probe in `sys_getpid` verifies `%gs:0` from a
+ring-3-entered syscall (`[percpu] gs OK (syscall ctx)`). Gate **`smoke-swapgs`**
+(`-smp 4`, forbids `gs FAIL`/`percpu FAIL`). 55 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
@@ -616,10 +630,10 @@ alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). Min/max buttons + pointer resize **handles**
 are the DDR-715 follow-ons (titles + close button shipped).
-**Next: ADR-030 stage 3 (GS+SWAPGS syscall-path rework, per-CPU
-TSS/kstack/current, the scheduler ring under its lock, APs run kernel
-threads); or I/O APIC + MSI-X (DDR-714 stage C); or more visual richness (real
-glass blur / gradients). wlroots/Wayland remain out-of-tree.**
+**Next: ADR-030 stage 3b (per-CPU TSS/kstack/current), then 3c (the scheduler
+ring under its lock, APs run kernel threads); or I/O APIC + MSI-X (DDR-714
+stage C); or more visual richness (real glass blur / gradients).
+wlroots/Wayland remain out-of-tree.**
 **Last updated:** 2026-07-02
 
 ## Phase 0 — Toolchain & Build System

@@ -745,6 +745,15 @@ smoke-percpu: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="percpu FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# SWAPGS gate (ADR-030 stage 3a, DDR-SMP-3a): the %gs:0 percpu self-pointer must
+# round-trip from a ring-3-entered syscall (only true when the SWAPGS discipline
+# on syscall/isr/usermode transitions is balanced) AND from every parked AP.
+smoke-swapgs: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[percpu] gs OK (syscall ctx)\n[smp] cpu 1 percpu OK\n[smp] cpu 2 percpu OK\n[smp] cpu 3 percpu OK\n[smp] cpus online=4/4')" \
+	FORBIDDEN_SENTINEL="$$(printf 'gs FAIL\npercpu FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Layer-7 visual-richness gate (DDR-712): the compositor renders a per-ambiance
 # particle field (NIGHT stars at boot) over the background and frosted-glass agent
 # cards, announcing PRADYOS_PARTICLES_OK + PRADYOS_GLASS_OK on its first render.

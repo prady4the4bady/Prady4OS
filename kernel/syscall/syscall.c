@@ -17,6 +17,7 @@
 #include "signal.h"    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
 #include "sys_io_uring.h" /* SYS_IO_URING_* handlers (PROC-E) */
 #include "aether.h"       /* AETHER syscalls + per-agent rate limit (Layer 6) */
+#include "percpu.h"       /* DDR-SMP-3a: %gs:0 probe from syscall context */
 
 void sys_aether_register(void);   /* kernel/syscall/sys_aether.c */
 void sys_socket_register(void);   /* kernel/syscall/sys_socket.c (ADR-027) */
@@ -83,6 +84,17 @@ static long sys_putc(long a1, long a2, long a3, long a4) {
 
 static long sys_getpid(long a1, long a2, long a3, long a4) {
     (void)a1; (void)a2; (void)a3; (void)a4;
+    /* DDR-SMP-3a probe (once): a %gs:0 read from a syscall entered at ring 3 —
+     * this only works when the SWAPGS discipline is balanced. */
+    static int gs_checked;
+    if (!gs_checked) {
+        gs_checked = 1;
+        struct percpu *pc = this_cpu();
+        if (pc && pc->self == pc)
+            kputs("[percpu] gs OK (syscall ctx)\r\n");
+        else
+            kputs("[percpu] gs FAIL (syscall ctx)\r\n");
+    }
     return (long)current_thread->pid;
 }
 

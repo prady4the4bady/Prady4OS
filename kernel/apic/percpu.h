@@ -11,6 +11,7 @@
 #define PERCPU_MAX 16
 
 struct percpu {
+    struct percpu *self; /* MUST be first: this_cpu() reads %gs:0 (DDR-SMP-3a) */
     uint32_t cpu_idx;    /* MADT roster index (0 = BSP)  */
     uint32_t apic_id;    /* this CPU's LAPIC id           */
     uint8_t  present;

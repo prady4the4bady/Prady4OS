@@ -39,6 +39,7 @@ enter_user_mode:
     xor r13, r13
     xor r14, r14
     xor r15, r15
+    swapgs                     ; DDR-SMP-3a: park percpu in KERNEL_GS_BASE
     iretq                      ; -> ring 3
 
 ; void signal_sigreturn(struct regs *saved /*RDI*/)
@@ -67,4 +68,5 @@ signal_sigreturn:
     mov rcx, [rax+96]
     mov rbx, [rax+104]
     mov rax, [rax+112]         ; rax last (clobbers base pointer)
+    swapgs                     ; DDR-SMP-3a: park percpu in KERNEL_GS_BASE
     iretq                      ; -> ring 3 at the interrupted RIP/RSP

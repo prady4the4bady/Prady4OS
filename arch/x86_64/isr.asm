@@ -114,6 +114,14 @@ isr_common:
     push r14
     push r15
 
+    ; DDR-SMP-3a: if we interrupted ring 3, the user's GS base is active — swap
+    ; to the kernel percpu base before any C runs. CS sits at frame offset 144
+    ; (15 GPRs + vector + err). Kernel-interrupts-kernel keeps kernel GS as-is.
+    test qword [rsp + 144], 3
+    jz .gs_kernel_in
+    swapgs
+.gs_kernel_in:
+
     mov rdi, rsp                ; struct regs * -> first argument
     call isr_dispatch
 
@@ -133,6 +141,13 @@ isr_common:
     pop rbx
     pop rax
 
+    ; DDR-SMP-3a: mirror of the entry swap — returning to ring 3 parks the
+    ; kernel percpu base back in KERNEL_GS_BASE. CS is at +24 here (vector +
+    ; err below it). The test's flags are dead: IRETQ reloads RFLAGS.
+    test qword [rsp + 24], 3
+    jz .gs_kernel_out
+    swapgs
+.gs_kernel_out:
     add rsp, 16                 ; discard vector + error code
     iretq
 
