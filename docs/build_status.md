@@ -676,6 +676,16 @@ hook grant authority **before** `sched_unblock` — the pre-authority window is
 gone by construction (the compositor's identical latent race closed too). The
 earlier `smoke-agents` timeout bump treated a symptom; no new gate — the
 existing agents/aether/mode gates assert the fix every run.
+**Block-path locking (DDR-SMP-3c-locks-2):** `virtio_blk`'s per-disk
+serialization is a **sleep-mutex** (`busy` is held across `sched_block()`
+while the device DMAs), so making it cross-CPU-safe means an **atomic**
+acquire (`__atomic_exchange_n` acquire / `__atomic_store_n` release), NOT a
+spinlock — a spinlock held across a block would deadlock spinners. No behavior
+change on the single CPU that does block I/O today; the FS gates
+(`smoke-fs`/`-rw`/`-sfs-rw`/`-ext4`) + `smoke-user` are the regression surface,
+so no new gate. (Completion fields `done`/`waiter` stay under the busy holder +
+the owning-CPU INTx; they get their own review when device IRQs move off the
+BSP — DDR-714 stage C.) Continues the full-3c prerequisite lock campaign.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

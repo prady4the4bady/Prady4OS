@@ -85,17 +85,20 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     };
 
     cli();
-    while (v->busy) {              /* serialize: one request in flight per disk */
+    /* DDR-SMP-3c-locks-2: sleep-mutex, held across sched_block() below — so the
+     * acquire is an atomic exchange (race-free across CPUs), NOT a spinlock (a
+     * spinlock held across a block would deadlock spinners). The loser reads 1
+     * and yields, exactly the prior one-CPU behavior. */
+    while (__atomic_exchange_n(&v->busy, 1, __ATOMIC_ACQUIRE)) {
         sti();
         yield();
         cli();
     }
-    v->busy = 1;
     v->done = 0;
     v->waiter = current_thread;
     int head = virtq_add(&v->vq, bufs, 3);
     if (head < 0) {
-        v->busy = 0;
+        __atomic_store_n(&v->busy, 0, __ATOMIC_RELEASE);
         sti();
         return -1;
     }
@@ -103,7 +106,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     virtio_pci_notify(&v->dev, &v->vq, 0);
     while (!v->done)
         sched_block();
-    v->busy = 0;
+    __atomic_store_n(&v->busy, 0, __ATOMIC_RELEASE);
     sti();
     return (*status == 0) ? 0 : -1;
 }
