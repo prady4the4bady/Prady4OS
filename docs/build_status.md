@@ -709,8 +709,22 @@ can't be lost. Lock order bus->subscriber; IRQs stay masked across the switch
 cross-CPU-correct (acquire/release on head/tail under a strict 1-producer/
 1-consumer contract) — unchanged. No new gate; the agents/aether/mode gates
 drive the endpoint + bus every run. Completes the subsystem-lock phase of the
-full-3c campaign (scheduler→block→VFS→IPC); next is per-CPU TSS/idle + APs
-entering `schedule()`.
+full-3c campaign (scheduler→block→VFS→IPC).
+**Capstone (ADR-031): APs enter the scheduler — staged.** The subsystem-lock
+phase being complete, ADR-031 governs the payoff: APs stop parking and run
+threads. It supersedes DDR-SMP-3c-locks-1's BSP-only-topology restriction under
+a defined locking discipline, in four sub-slices (cap-1..4), each CI-green
+before the next.
+**cap-1 — per-CPU TSS/GDT/TR (DDR-SMP-3c-cap-1):** the single global TSS +
+`0x28` descriptor + `LTR` become per-CPU (TR is per-logical-CPU; each consults
+its own RSP0, and two CPUs can't `LTR` one descriptor — busy bit → #GP). The
+GDT now holds `PERCPU_MAX` TSS descriptors (CPU i = `0x28+i*0x10`); `tss[]` is
+indexed by `cpu_idx`; `tss_set_rsp0` targets the running CPU's own TSS. APs load
+the shared `gdt64` (via `gdt_init`) BEFORE setting their GS base, then `LTR`
+their own TSS — proven at boot by `[smp] cpu N tss OK` (asserted by `smoke-smp`,
+`tss FAIL` forbidden). The BSP-migration case re-homes TR onto its final
+`cpu_idx`. Contract-neutral (RSP0 unused until ring-3 runs on an AP, cap-4); no
+new gate, no behavior change. Next: cap-2 (per-CPU idle + locked topology).
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

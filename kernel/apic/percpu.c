@@ -6,6 +6,7 @@
  * exactly while CPL 0 code runs. KERNEL_GS_BASE starts 0 = the user's view. */
 #include "percpu.h"
 #include "lapic.h"
+#include "tss.h"
 
 #define MSR_GS_BASE 0xC0000101u
 
@@ -59,6 +60,11 @@ void percpu_init_bsp(void) {
         g_percpu[ridx].self = &g_percpu[ridx];
         g_percpu[0].present = 0;
         gs_base_set(&g_percpu[ridx]);
+        /* DDR-SMP-3c-cap-1 D4: the BSP LTR'd TSS[0] (selector 0x28) at boot; now
+         * that its cpu_idx is ridx, re-home TR onto TSS[ridx] so tss_set_rsp0
+         * (which indexes cpu_idx) and the CPU's live TR agree. Dormant on QEMU
+         * (BSP roster index is 0), but correctness must not depend on that. */
+        tss_init_cpu(ridx, 0);
     }
     g_percpu[ridx].cpu_idx = ridx;
     g_percpu[ridx].apic_id = id;

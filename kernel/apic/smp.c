@@ -17,6 +17,9 @@
 #include "irq.h"
 #include "io.h"
 #include "console.h"
+#include "tss.h"
+
+extern void gdt_init(void);   /* arch/x86_64/cpu.asm — load the shared gdt64 */
 
 #define TRAMP_PHYS    0x8000ull
 #define OFF_MB_CR3    0xA0
@@ -49,7 +52,13 @@ static void delay_200us(void) {
  * cpu index in RDI and a private stack). Announce, mark online, park. */
 void smp_ap_entry(uint32_t idx);
 void smp_ap_entry(uint32_t idx) {
-    percpu_init_cpu(idx);          /* GS base first: %gs state usable from here on */
+    /* DDR-SMP-3c-cap-1 D3: leave the 3-entry trampoline GDT for the shared
+     * gdt64 (user segments + per-CPU TSS descriptors) BEFORE setting the GS
+     * base — gdt_init's gs selector reload zeroes it, exactly as the BSP does
+     * (main.c gdt_init -> percpu_init_early). percpu_init_cpu's wrmsr then
+     * installs this CPU's real GS base. */
+    gdt_init();
+    percpu_init_cpu(idx);          /* GS base: %gs state usable from here on */
     spin_lock(&g_announce_lock);
     kputs("[smp] cpu ");
     kputdec(idx);
@@ -78,6 +87,18 @@ void smp_ap_entry(uint32_t idx) {
     kputs("[smp] cpu ");
     kputdec(idx);
     kputs(pc && pc->cpu_idx == idx ? " percpu OK\r\n" : " percpu FAIL\r\n");
+    spin_unlock(&g_announce_lock);
+
+    /* ADR-031 cap-1: this CPU's own TSS + GDT descriptor + TR. RSP0 is a
+     * placeholder (0) — unused until a ring-3 thread runs here (cap-4); it is
+     * set per-thread via tss_set_rsp0 before any CPL3 entry. Prove TR loaded. */
+    tss_init_cpu(idx, 0);
+    uint16_t tr;
+    __asm__ volatile("str %0" : "=r"(tr));
+    spin_lock(&g_announce_lock);
+    kputs("[smp] cpu ");
+    kputdec(idx);
+    kputs(tr == (uint16_t)(0x28 + idx * 0x10) ? " tss OK\r\n" : " tss FAIL\r\n");
     spin_unlock(&g_announce_lock);
     __atomic_add_fetch(&g_online, 1, __ATOMIC_SEQ_CST);
 

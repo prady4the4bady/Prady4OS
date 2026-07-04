@@ -52,8 +52,10 @@ gdt64:
     dq 0x00CFF2000000FFFF       ; 0x18 user data     (DPL3, RW)
     dq 0x00AFFA000000FFFF       ; 0x20 user code64   (DPL3, L=1)
 gdt64_tss:
-    dq 0x0000000000000000       ; 0x28 TSS low  (patched by tss_init)
-    dq 0x0000000000000000       ; 0x30 TSS high (patched by tss_init)
+    ; ADR-031 D1 / DDR-SMP-3c-cap-1: PERCPU_MAX (16) back-to-back 16-byte TSS
+    ; descriptors, one per CPU (CPU i selector = 0x28 + i*0x10), each patched at
+    ; runtime by tss_init_cpu. Two CPUs cannot LTR one descriptor (busy bit).
+    times (16 * 2) dq 0x0000000000000000
 gdt64_end:
 gdt64_ptr:
     dw gdt64_end - gdt64 - 1    ; limit

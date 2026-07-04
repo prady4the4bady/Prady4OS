@@ -1080,7 +1080,7 @@ void kmain(struct boot_info *bi) {
     cpu_mitigations_init();              /* IMP-A: IBRS/STIBP/SSBD/IBPB where available */
     cpu_enable_sse();                    /* PROC-D: x87+SSE for ring-3 C (musl) — ADR-023 §D8 */
 
-    tss_init(0);                         /* rsp0 is set per user thread before ring 3 */
+    tss_init_cpu(0, 0);                  /* BSP is cpu_idx 0 here; rsp0 set per user thread */
     syscall_init();                      /* EFER.SCE + STAR/LSTAR/SFMASK + dispatch */
     vmm_init();                          /* record kernel master CR3 + enable EFER.NXE (W^X) */
     kputs("NEXUS: TSS loaded, SYSCALL/SYSRET armed, NX enabled\r\n");

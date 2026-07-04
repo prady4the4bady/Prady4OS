@@ -725,7 +725,9 @@ smoke-apic: $(IMG) fat-image sfs-image
 # the 0x8000 trampoline into long mode; each announces and parks. Proves the
 # MP-init protocol end-to-end (MADT ids -> IPIs -> real->long mode -> C).
 smoke-smp: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 EXTRA_SENTINEL="$$(printf '[smp] cpus online=4/4')" \
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 tss OK\n[smp] cpu 2 tss OK\n[smp] cpu 3 tss OK\n[smp] cpus online=4/4')" \
+	FORBIDDEN_SENTINEL="tss FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # SMP locking gate (ADR-030 stage 1): each AP allocates+frees a PMM page and a
