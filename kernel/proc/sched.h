@@ -9,6 +9,7 @@
 #include "cap.h"
 #include "fd.h"
 #include "regs.h"
+#include "spinlock.h"
 
 typedef void (*thread_fn)(void *);
 
@@ -120,6 +121,11 @@ void        sched_destroy(struct tcb *t);
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_block(void);                                  /* block current; switch away */
+/* DDR-SMP-3c-locks-4: sleep on a condition verified under `lk`. Sets the caller
+ * BLOCKED *while `lk` is held*, releases `lk`, switches away, and re-takes `lk`
+ * on return — so a waker serialized after the release always sees BLOCKED and
+ * its sched_unblock CAS cannot be lost. IRQs stay as the caller left them. */
+void        sched_block_on(spinlock_t *lk);
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */

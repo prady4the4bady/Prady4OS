@@ -9,6 +9,7 @@
 #pragma once
 #include <stdint.h>
 #include "cap.h"
+#include "spinlock.h"
 
 #define IPC_MSG_WORDS 4
 
@@ -19,6 +20,7 @@ struct ipc_endpoint {
     uint64_t    res_id;                /* capability resource id of this endpoint */
     uint64_t    msg[IPC_MSG_WORDS];
     struct tcb *waiting_receiver;      /* a receiver blocked here, or NULL */
+    spinlock_t  lock;                  /* DDR-SMP-3c-locks-4: guards full/msg/waiter */
 };
 
 void ipc_endpoint_init(struct ipc_endpoint *e, uint64_t res_id);

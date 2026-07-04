@@ -340,6 +340,24 @@ void sched_block(void) {
     schedule();                    /* switch away; returns when unblocked + run */
 }
 
+void sched_block_on(spinlock_t *lk) {
+    /* DDR-SMP-3c-locks-4: BLOCKED is published *under* `lk` so a waker
+     * serialized after the unlock always observes it (its CAS can't be lost).
+     * If the waker fires before schedule(), it CASes us READY and schedule()
+     * just re-queues us — a benign spurious wake the caller's while() re-checks.
+     * IRQs are left as the caller set them (masked, via spin_lock_irqsave);
+     * context_switch preserves RFLAGS so we resume masked, matching the old
+     * cli/sti path. */
+    if (!current_thread) {
+        spin_unlock(lk);
+        return;
+    }
+    current_thread->state = THREAD_BLOCKED;
+    spin_unlock(lk);
+    schedule();
+    spin_lock(lk);
+}
+
 void sched_unblock(struct tcb *t) {
     /* DDR-SMP-3c-locks-1: BLOCKED->READY is a pure state transition (no ring
      * topology), made an atomic CAS so an AP job may wake a BSP thread; the

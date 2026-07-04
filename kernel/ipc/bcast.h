@@ -9,6 +9,7 @@
 #pragma once
 #include <stdint.h>
 #include "cap.h"
+#include "spinlock.h"
 
 /* System-wide event types (bitmask, so a subscriber can want several). */
 #define EVT_AGENT_PROPOSAL   (1u << 0)
@@ -31,11 +32,14 @@ struct bcast_subscriber {
     struct bcast_event q[BCAST_QUEUE];
     struct tcb *waiter;                  /* blocked subscriber to wake         */
     struct bcast_subscriber *next;       /* linked into the bus                */
+    spinlock_t lock;                     /* DDR-SMP-3c-locks-4: guards q + waiter
+                                          * (MPSC: many publishers, one drainer) */
 };
 
 struct bcast_bus {
     uint64_t res_id;
     struct bcast_subscriber *subs;
+    spinlock_t lock;                     /* DDR-SMP-3c-locks-4: guards the subs list */
 };
 
 void bcast_bus_init(struct bcast_bus *b, uint64_t res_id);

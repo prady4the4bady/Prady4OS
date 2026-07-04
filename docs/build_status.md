@@ -696,6 +696,21 @@ mount->blk. The mount TABLE stays BSP-only (topology, like locks-1); this slice
 is corruption-safety, NOT transaction isolation (multi-syscall txn interleave
 is already possible single-CPU — unchanged). No new gate; the FS/user gates
 assert every locked path.
+**IPC + broadcast-bus locking (DDR-SMP-3c-locks-4):** the synchronous IPC
+endpoint and the sovereign broadcast bus closed their lost-wakeup race with
+`cli/sti` — which masks only the LOCAL CPU, so across CPUs a sender/publisher
+could miss a waiter that had not yet published its BLOCKED state. Fixed with
+per-object `spinlock_t` (endpoint; bus-list + per-subscriber, the bcast queue
+being MPSC) and a new scheduler primitive **`sched_block_on(lk)`** that sets the
+caller BLOCKED *under* `lk` before releasing + switching away, so a waker
+serialized after the release always sees BLOCKED and its `sched_unblock` CAS
+can't be lost. Lock order bus->subscriber; IRQs stay masked across the switch
+(RFLAGS preserved), matching the old path. The async SPSC `ipc_ring` is already
+cross-CPU-correct (acquire/release on head/tail under a strict 1-producer/
+1-consumer contract) — unchanged. No new gate; the agents/aether/mode gates
+drive the endpoint + bus every run. Completes the subsystem-lock phase of the
+full-3c campaign (scheduler→block→VFS→IPC); next is per-CPU TSS/idle + APs
+entering `schedule()`.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

@@ -1,20 +1,21 @@
 /* kernel/ipc/ipc.c — synchronous capability-gated message passing (Phase 2c).
  *
- * Single CPU for now: a cli/sti critical section around the condition check +
- * block (receiver) and the deliver + wakeup (sender) closes the lost-wakeup
- * race. context_switch preserves each thread's RFLAGS, so a blocked receiver
- * resumes with interrupts still masked and re-checks the condition before sti.
+ * DDR-SMP-3c-locks-4: a per-endpoint spinlock (irqsave) guards the condition
+ * check + block (receiver) and the deliver + wakeup (sender). The receiver
+ * publishes THREAD_BLOCKED *under* the lock via sched_block_on before releasing
+ * it, so a sender serialized after the release always sees the waiter — the
+ * lost-wakeup race is closed across CPUs, not just locally. context_switch
+ * preserves RFLAGS, so a blocked receiver resumes with interrupts still masked
+ * and re-checks the condition before the final irqrestore.
  */
 #include "ipc.h"
 #include "sched.h"
-
-static inline void cli(void) { __asm__ volatile("cli"); }
-static inline void sti(void) { __asm__ volatile("sti"); }
 
 void ipc_endpoint_init(struct ipc_endpoint *e, uint64_t res_id) {
     e->full = 0;
     e->res_id = res_id;
     e->waiting_receiver = 0;
+    e->lock = (spinlock_t)SPINLOCK_INIT;
     for (int i = 0; i < IPC_MSG_WORDS; i++)
         e->msg[i] = 0;
 }
@@ -23,7 +24,7 @@ int ipc_send(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, const uint
     if (!cap_authorize(caps, h, RES_IPC, e->res_id, CAP_IPC_SEND))
         return -1;
 
-    cli();
+    uint64_t flags = spin_lock_irqsave(&e->lock);
     for (int i = 0; i < IPC_MSG_WORDS; i++)
         e->msg[i] = msg[i];
     e->full = 1;
@@ -32,7 +33,7 @@ int ipc_send(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, const uint
         e->waiting_receiver = 0;
         sched_unblock(r);
     }
-    sti();
+    spin_unlock_irqrestore(&e->lock, flags);
     return 0;
 }
 
@@ -40,15 +41,15 @@ int ipc_recv(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, uint64_t *
     if (!cap_authorize(caps, h, RES_IPC, e->res_id, CAP_IPC_RECV))
         return -1;
 
-    cli();
+    uint64_t flags = spin_lock_irqsave(&e->lock);
     while (!e->full) {
         e->waiting_receiver = current_thread;
-        sched_block();             /* sleep until a sender delivers */
+        sched_block_on(&e->lock);  /* publishes BLOCKED under the lock, then sleeps */
     }
     for (int i = 0; i < IPC_MSG_WORDS; i++)
         out[i] = e->msg[i];
     e->full = 0;
-    sti();
+    spin_unlock_irqrestore(&e->lock, flags);
     return 0;
 }
 
