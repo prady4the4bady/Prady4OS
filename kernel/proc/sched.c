@@ -32,6 +32,8 @@ extern void signal_sigreturn(struct regs *saved);  /* usermode.asm — full-fram
 
 /* current_thread now lives in the percpu area, read via %gs (DDR-SMP-3b,
  * sched.h macro). NULL until sched_init (safe: sched_tick checks). */
+#include "spinlock.h"
+static spinlock_t g_sched_lock = SPINLOCK_INIT;   /* DDR-SMP-3c-locks-1 */
 static struct tcb idle_tcb;
 static uint32_t next_tid = 1;
 static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit panics */
@@ -41,6 +43,11 @@ void sched_set_init_pid(uint32_t pid) { g_init_pid = pid; }
 /* First code a freshly-created thread runs (entered via context_switch's RET).
  * current_thread is already the new thread (set by schedule before switching). */
 static void thread_trampoline(void) {
+    /* DDR-SMP-3c-locks-1: schedule() switched to this brand-new thread while
+     * holding g_sched_lock; a resumed thread releases it in irq_restore, but a
+     * first entry lands here instead — release before running the body (the
+     * crafted initial RFLAGS already restored IF via context_switch's popfq). */
+    spin_unlock(&g_sched_lock);
     current_thread->entry(current_thread->arg);
     current_thread->state = THREAD_DONE;
     for (;;)
@@ -237,13 +244,16 @@ static int runnable(const struct tcb *t) {
  * corrupt thread state. Masking interrupts here makes it non-reentrant; the
  * per-thread IF is preserved across the switch by context_switch (pushfq/popfq)
  * and the save/restore below restores the caller's IF on resume. */
+/* DDR-SMP-3c-locks-1: the masking helpers now acquire the scheduler spinlock
+ * (stage-1 pattern; one-CPU semantics identical). schedule() holds it ACROSS
+ * context_switch — the resuming thread's irq_restore releases it (the classic
+ * switch-lock handoff; test-and-set locks have no owner). A NEW thread's first
+ * entry has no resumed frame, so thread_trampoline releases the lock itself. */
 static inline uint64_t irq_save(void) {
-    uint64_t f;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
-    return f;
+    return spin_lock_irqsave(&g_sched_lock);
 }
 static inline void irq_restore(uint64_t f) {
-    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+    spin_unlock_irqrestore(&g_sched_lock, f);
 }
 
 /* Switch to the next runnable thread in the ring (round-robin, skipping
@@ -326,8 +336,14 @@ void sched_block(void) {
 }
 
 void sched_unblock(struct tcb *t) {
-    if (t && t->state == THREAD_BLOCKED)
-        t->state = THREAD_READY;
+    /* DDR-SMP-3c-locks-1: BLOCKED->READY is a pure state transition (no ring
+     * topology), made an atomic CAS so an AP job may wake a BSP thread; the
+     * BSP's locked walk observes READY this pass or the next tick (benign). */
+    if (!t)
+        return;
+    uint32_t expected = THREAD_BLOCKED;
+    __atomic_compare_exchange_n(&t->state, &expected, THREAD_READY,
+                                0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
 
 /* Terminate the current thread: save its exit status, become a ZOMBIE (so the

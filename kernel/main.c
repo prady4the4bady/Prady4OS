@@ -400,6 +400,39 @@ static void smp_test_job(void) {
     kputs(" job OK\r\n");
 }
 
+/* DDR-SMP-3c-locks-1: cross-CPU wake proof — a BSP thread blocks; an AP job
+ * sched_unblocks it (atomic CAS); it resumes on the BSP scheduler. Runs from
+ * the (scheduled) FS phase thread — kmain's APIC section predates sched_init
+ * (the first placement corrupted via a NULL current_thread; DDR D5). */
+static int g_smp_have_aps;
+static struct tcb *g_cw_thread;
+static void crosswake_thread(void *arg) {
+    (void)arg;
+    kputs("[smp] cross-wake waiting\r\n");
+    sched_block();
+    kputs("[smp] cross-wake OK\r\n");
+}
+static void crosswake_job(void) {
+    sched_unblock(g_cw_thread);
+}
+static void crosswake_proof(void) {
+    if (!g_smp_have_aps)
+        return;
+    g_cw_thread = sched_create(crosswake_thread, 0, "crosswake");
+    if (!g_cw_thread)
+        return;
+    uint64_t dl = g_ticks + 100;
+    while (g_cw_thread->state != THREAD_BLOCKED && g_ticks < dl)
+        yield();                                 /* let it run + block */
+    unsigned ap = 0;
+    for (unsigned i = 0; i < lapic_cpu_count(); i++)
+        if (i != this_cpu()->cpu_idx) { ap = i; break; }
+    smp_run_on(ap, crosswake_job);
+    dl = g_ticks + 100;                          /* let the wake land + run */
+    while (g_cw_thread->state == THREAD_BLOCKED && g_ticks < dl)
+        yield();
+}
+
 /* L6: SYS_SPAWN_AGENT hook. Loads the agent directly from its embedded kernel
  * bytes (NOT from SFS — that mount is gone by scheduler time) and marks the new
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
@@ -669,6 +702,8 @@ static void fs_test_thread(void *arg) {
                  * g_aether_daemon_pid (the agents' parent) is filled in when the
                  * daemon is loaded below — earlier spawns parent to 0 (reaper). */
                 aether_set_spawn_hook(aether_spawn_agent_hook);
+                crosswake_proof();   /* DDR-SMP-3c-locks-1: AP wakes a BSP thread
+                                        (needs the live scheduler — this thread) */
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end);
@@ -1104,6 +1139,8 @@ void kmain(struct boot_info *bi) {
         kputs("[smp] jobs done=");
         kputdec(jobs);
         kputs("\r\n");
+        g_smp_have_aps = (jobs > 0);     /* cross-wake proof runs later, once
+                                            the scheduler is up (DDR D5) */
     }
     pcie_init();
     for (unsigned i = 0; i < pcie_device_count(); i++) {

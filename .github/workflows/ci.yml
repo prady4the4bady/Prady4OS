@@ -113,6 +113,9 @@ jobs:
       - name: QEMU AP job-dispatch test (q35 -smp 4; wake IPI + mailbox on 3 APs)
         run: make smoke-smpjob
 
+      - name: QEMU cross-CPU wake test (q35 -smp 4; AP unblocks a BSP thread)
+        run: make smoke-crosswake
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

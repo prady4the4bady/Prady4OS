@@ -651,6 +651,20 @@ spurious vector (0xFF) has no IDT gate (pre-existing since stage A; QEMU never
 delivers spurious). Full 3c (APs in the scheduler: per-CPU TSS/idle, ring
 lock, preemption IPIs) remains. Gate **`smoke-smpjob`** (`-smp 4`).
 57 gates total.
+**Sched spinlock + cross-CPU wake (ADR-030 3c-locks-1) COMPLETE:** the full-3c
+prerequisite campaign begins at the scheduler. `sched.c`'s masking helpers now
+acquire **`g_sched_lock`** (`spin_lock_irqsave`, the stage-1 pattern) — held
+**across `context_switch`** with the classic handoff (the resuming thread's
+`irq_restore` releases; ownerless test-and-set makes that sound), and the one
+subtle case handled: a **brand-new thread's first entry** has no resumed frame,
+so `thread_trampoline` releases the lock itself (under masking the crafted
+RFLAGS auto-released via `popfq`; a lock would have leaked → deadlock).
+`sched_unblock` is now an **atomic CAS** (BLOCKED→READY — a pure state
+transition, safely callable from an AP; the BSP's locked walk observes READY
+within a tick). First cross-CPU scheduling act: a BSP thread blocks, an AP job
+wakes it (`[smp] cross-wake waiting` → `[smp] cross-wake OK`). Topology
+mutations remain BSP-only until their slices. Gate **`smoke-crosswake`**
+(`-smp 4`). 58 gates total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

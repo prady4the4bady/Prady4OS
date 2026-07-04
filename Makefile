@@ -762,6 +762,14 @@ smoke-smpjob: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 job OK\n[smp] cpu 2 job OK\n[smp] cpu 3 job OK\n[smp] jobs done=3')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Cross-CPU wake gate (ADR-030 3c-locks-1): a BSP thread blocks; an AP job
+# sched_unblocks it (atomic CAS, no ring lock needed for state-only
+# transitions); it resumes on the (spinlocked) BSP scheduler.
+smoke-crosswake: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] cross-wake waiting\n[smp] cross-wake OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Per-CPU scheduler-state gate (ADR-030 stage 3b, DDR-SMP-3b): current_thread +
 # the SYSCALL kstack now live at %gs:8/%gs:16; the probe verifies the running
 # thread resolves through percpu from ring-3 syscall context.
