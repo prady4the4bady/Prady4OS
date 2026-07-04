@@ -352,8 +352,12 @@ void aether_sectest(void);
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
  * parses come from sfs_read, not the embedded image). */
+/* `sovereign` grants CAP_SOVEREIGN BEFORE the thread's first run: elf_load now
+ * returns the thread BLOCKED, and the unblock happens only after the authority
+ * flags are set (DDR-boot-authority-race). */
 static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
-                               const unsigned char *elf, const unsigned char *elf_end) {
+                               const unsigned char *elf, const unsigned char *elf_end,
+                               int sovereign) {
     uint64_t elen = (uint64_t)(elf_end - elf);
     struct vfs_file ef;
     if (vfs_create(cap, smnt, fname, &ef) != 0 ||
@@ -384,6 +388,9 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
         : ELF_E_ARGS;
     pmm_free_pages(buf, 6);
     if (lr == ELF_OK) {
+        if (sovereign)
+            ut->is_sovereign = 1;      /* authority BEFORE the first run */
+        sched_unblock(ut);             /* elf_load returns the thread BLOCKED */
         kputs("[user] ELF loaded from SFS; ring-3 thread spawned\r\n");
         return ut;
     }
@@ -443,8 +450,9 @@ static long aether_spawn_agent_hook(const char *task) {
     uint64_t len = (uint64_t)(agent_base_elf_end - agent_base_elf);
     if (elf_load((void *)(uintptr_t)agent_base_elf, len, "AGENT", &ut) != ELF_OK || !ut)
         return -1;
-    ut->is_agent = 1;
+    ut->is_agent = 1;                  /* authority BEFORE the first run */
     ut->parent_pid = g_aether_daemon_pid;
+    sched_unblock(ut);                 /* elf_load returns the thread BLOCKED */
     return (long)ut->pid;
 }
 
@@ -704,50 +712,49 @@ static void fs_test_thread(void *arg) {
                 aether_set_spawn_hook(aether_spawn_agent_hook);
                 crosswake_proof();   /* DDR-SMP-3c-locks-1: AP wakes a BSP thread
                                         (needs the live scheduler — this thread) */
-                user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end);
+                user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end, 0);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
-                user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end);
+                user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end, 0);
                 /* Phase 5b: the syscall test program (read/write/open/... grows
                  * per slice). Runs in ring 3 and prints SYS* sentinels. */
-                user_boot_from_sfs(cap, smnt, "SYSTEST.ELF", systest_elf, systest_elf_end);
+                user_boot_from_sfs(cap, smnt, "SYSTEST.ELF", systest_elf, systest_elf_end, 0);
                 /* L7 (DDR-703): ring-3 keyboard reader. Polls SYS_INPUT_POLL;
                  * the smoke-input gate injects keys via QEMU sendkey. */
-                user_boot_from_sfs(cap, smnt, "INPUTTST.ELF", inputtest_elf, inputtest_elf_end);
+                user_boot_from_sfs(cap, smnt, "INPUTTST.ELF", inputtest_elf, inputtest_elf_end, 0);
                 /* L7 (DDR-706): a client window — creates + commits a surface that
                  * the compositor composites onto the desktop. Exercised by smoke-surface. */
-                user_boot_from_sfs(cap, smnt, "SURFTEST.ELF", surfacetest_elf, surfacetest_elf_end);
+                user_boot_from_sfs(cap, smnt, "SURFTEST.ELF", surfacetest_elf, surfacetest_elf_end, 0);
                 /* L7 (DDR-704): the in-house compositor, spawned with CAP_SOVEREIGN
                  * so it may flip the mode via SYS_SET_MODE. With a GPU it renders
                  * the sovereign desktop and reacts to the keyboard; without one it
                  * exits via SYS_FB_INFO -> -ENODEV. Exercised by smoke-compositor. */
-                struct tcb *comp = user_boot_from_sfs(cap, smnt, "COMPOSIT.ELF",
-                                                      compositor_elf, compositor_elf_end);
-                if (comp)
-                    comp->is_sovereign = 1;   /* may flip the mode; reparented to init on exit */
+                user_boot_from_sfs(cap, smnt, "COMPOSIT.ELF",
+                                   compositor_elf, compositor_elf_end,
+                                   1 /* CAP_SOVEREIGN before first run */);
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
-                user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end);
+                user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end, 0);
                 /* PROC-D step 3: the first ring-3 C program, statically linked
                  * against musl; its crt/__libc_start_main set up TLS + stdio and
                  * printf flushes via SYS_WRITEV. Prints "PRADYOS_MUSL_OK ...". */
-                user_boot_from_sfs(cap, smnt, "CMUSL.ELF", cmusl_elf, cmusl_elf_end);
+                user_boot_from_sfs(cap, smnt, "CMUSL.ELF", cmusl_elf, cmusl_elf_end, 0);
                 /* 5d: two concurrent FPU users sharing XMM0. Each survives only
                  * if the context switch saves/restores FPU state (ADR-023 §D8).
                  * Both print "PRADYOS_FPU_OK"; either prints FAIL on clobber. */
-                user_boot_from_sfs(cap, smnt, "FPUTST1.ELF", fputest_elf, fputest_elf_end);
-                user_boot_from_sfs(cap, smnt, "FPUTST2.ELF", fputest_elf, fputest_elf_end);
+                user_boot_from_sfs(cap, smnt, "FPUTST1.ELF", fputest_elf, fputest_elf_end, 0);
+                user_boot_from_sfs(cap, smnt, "FPUTST2.ELF", fputest_elf, fputest_elf_end, 0);
                 /* 5d: pradyos-init becomes PID 1 — orphans reparent to it and it
                  * reaps the tree forever. It forks a child that exits 42; init
                  * collects it and logs "init: reaped PID=N exit=42". */
                 struct tcb *it = user_boot_from_sfs(cap, smnt, "INIT.ELF",
-                                                    init_elf, init_elf_end);
+                                                    init_elf, init_elf_end, 0);
                 if (it)
                     sched_set_init_pid(it->pid);
                 /* 5e: launch the PRISM shell as init's child (execve-based
                  * respawn is deferred — ADR-024 §D5). It reads commands from the
                  * console; init reaps it on exit. */
                 struct tcb *pr = user_boot_from_sfs(cap, smnt, "PRISM.ELF",
-                                                    prism_elf, prism_elf_end);
+                                                    prism_elf, prism_elf_end, 0);
                 if (pr && it)
                     pr->parent_pid = it->pid;
 
@@ -755,9 +762,9 @@ static void fs_test_thread(void *arg) {
                  * owns mode + approve authority). Loaded now while SFS is mounted;
                  * it auto-spawns the test agent once the scheduler runs. */
                 struct tcb *dm = user_boot_from_sfs(cap, smnt, "AETHERD.ELF",
-                                                    aether_daemon_elf, aether_daemon_elf_end);
+                                                    aether_daemon_elf, aether_daemon_elf_end,
+                                                    1 /* CAP_SOVEREIGN before first run */);
                 if (dm) {
-                    dm->is_sovereign = 1;
                     if (it) dm->parent_pid = it->pid;
                     g_aether_daemon_pid = dm->pid;
                 }

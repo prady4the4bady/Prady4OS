@@ -158,6 +158,11 @@ struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user
     struct tcb *t = sched_create(user_launch, 0, name);
     if (!t)
         return 0;
+    /* DDR-boot-authority-race: start BLOCKED. The loader's caller grants any
+     * authority flags (is_sovereign/is_agent) and THEN sched_unblock()s the
+     * thread — otherwise a preemption could run its first syscalls before the
+     * flags land (the recurring smoke-agents CI failure). */
+    t->state = THREAD_BLOCKED;
     t->is_user = 1;
     t->pid = t->tid;
     t->user_rip = user_rip;

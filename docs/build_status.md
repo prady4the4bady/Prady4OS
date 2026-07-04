@@ -665,6 +665,17 @@ within a tick). First cross-CPU scheduling act: a BSP thread blocks, an AP job
 wakes it (`[smp] cross-wake waiting` → `[smp] cross-wake OK`). Topology
 mutations remain BSP-only until their slices. Gate **`smoke-crosswake`**
 (`-smp 4`). 58 gates total.
+**Boot authority race FIXED (DDR-boot-authority-race):** the recurring
+`smoke-agents` CI failure (3× GitHub-only) root-caused — `elf_load` enqueued
+the new thread READY, and kmain set `is_sovereign`/`is_agent` *after* it
+returned; under load the daemon ran its `SYS_SET_MODE`/`SYS_SPAWN_AGENT`
+self-checks before the flag landed (`-EPERM` = the observed `rc=-1` +
+`MODE_TOGGLE_FAIL`). `sched_create_user` now returns the thread **BLOCKED**;
+`user_boot_from_sfs` (new `sovereign` param, 13 sites) and the agent spawn
+hook grant authority **before** `sched_unblock` — the pre-authority window is
+gone by construction (the compositor's identical latent race closed too). The
+earlier `smoke-agents` timeout bump treated a symptom; no new gate — the
+existing agents/aether/mode gates assert the fix every run.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

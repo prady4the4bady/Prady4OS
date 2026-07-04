@@ -12,7 +12,10 @@ struct tcb;
 
 /* Returns 0 and sets *out to the new ring-3 thread on success; a negative
  * elf_err on any validation, W^X, or resource failure (the partially built
- * address space is torn down before returning). */
+ * address space is torn down before returning).
+ * CONTRACT (DDR-boot-authority-race): the thread is returned BLOCKED — the
+ * caller sets any authority flags (is_sovereign/is_agent) and then
+ * sched_unblock()s it, so no process can run before its authority lands. */
 int elf_load(const void *image, uint64_t image_len, const char *name,
              struct tcb **out);
 
