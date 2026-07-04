@@ -686,6 +686,16 @@ change on the single CPU that does block I/O today; the FS gates
 so no new gate. (Completion fields `done`/`waiter` stay under the busy holder +
 the owning-CPU INTx; they get their own review when device IRQs move off the
 BSP — DDR-714 stage C.) Continues the full-3c prerequisite lock campaign.
+**VFS/mount locking (DDR-SMP-3c-locks-3):** the block lock (locks-2) guards the
+device DMA, but each VFS op mutates the FS driver's *in-memory* metadata (SFS
+journal/B-tree, FAT cursor) *around* the block calls — unprotected. A per-mount
+**sleep-mutex** (`vfs_mount.busy`, atomic acquire/`yield` + release) now wraps
+the 9 data-path entry points (`open`/`create`/`read`/`write`/`unlink`/`readdir`/
+`txn_*`); sleep-mutex not spinlock (the op blocks on I/O), lock order always
+mount->blk. The mount TABLE stays BSP-only (topology, like locks-1); this slice
+is corruption-safety, NOT transaction isolation (multi-syscall txn interleave
+is already possible single-CPU — unchanged). No new gate; the FS/user gates
+assert every locked path.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

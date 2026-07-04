@@ -11,8 +11,22 @@ struct vfs_mount {
     struct blk_device       *bd;
     void                    *ctx;      /* FS-private per-mount context */
     int                      used;
+    int                      busy;     /* DDR-SMP-3c-locks-3: per-mount sleep-mutex */
 };
 static struct vfs_mount g_mounts[VFS_MAX_MOUNTS];
+
+/* DDR-SMP-3c-locks-3: serialize the FS driver's in-memory metadata (SFS
+ * journal/B-tree, FAT cursor) across CPUs. A sleep-mutex, NOT a spinlock — the
+ * FS op it guards descends into blk submit() which sched_block()s, and a
+ * spinlock held across a block deadlocks spinners. Lock order is always
+ * mount -> blk, never reversed. No IRQ touches `busy`, so no cli/sti. */
+static void mnt_lock(struct vfs_mount *m) {
+    while (__atomic_exchange_n(&m->busy, 1, __ATOMIC_ACQUIRE))
+        yield();
+}
+static void mnt_unlock(struct vfs_mount *m) {
+    __atomic_store_n(&m->busy, 0, __ATOMIC_RELEASE);
+}
 
 static int g_default_mnt = -1;          /* process root mount (5b, ADR-022) */
 void vfs_set_default_mnt(int mnt) { g_default_mnt = mnt; }
@@ -64,7 +78,9 @@ int vfs_open(cap_t cap, int mnt, const char *path, struct vfs_file *out) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->open || !cap_ok(cap, CAP_FS_READ))
         return -1;
+    mnt_lock(m);
     int r = m->fs->open(m->ctx, path, out);
+    mnt_unlock(m);
     if (r == 0) out->mnt = mnt;
     return r;
 }
@@ -73,7 +89,9 @@ int vfs_create(cap_t cap, int mnt, const char *path, struct vfs_file *out) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->create || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
+    mnt_lock(m);
     int r = m->fs->create(m->ctx, path, out);
+    mnt_unlock(m);
     if (r == 0) out->mnt = mnt;
     return r;
 }
@@ -82,7 +100,10 @@ int vfs_read(cap_t cap, const struct vfs_file *f, uint64_t off, void *buf, uint3
     struct vfs_mount *m = mnt_get(f->mnt);
     if (!m || !m->fs->read || !cap_ok(cap, CAP_FS_READ))
         return -1;
-    return m->fs->read(m->ctx, f, off, buf, len);
+    mnt_lock(m);
+    int r = m->fs->read(m->ctx, f, off, buf, len);
+    mnt_unlock(m);
+    return r;
 }
 
 int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
@@ -93,7 +114,9 @@ int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint
      * whole block device — it can only write what its thread was granted. */
     if (current_thread->fs_write_budget < len)
         return -1;
+    mnt_lock(m);
     int r = m->fs->write(m->ctx, f, off, buf, len);
+    mnt_unlock(m);
     if (r > 0)
         current_thread->fs_write_budget -= (uint64_t)r;
     return r;
@@ -103,14 +126,20 @@ int vfs_unlink(cap_t cap, int mnt, const char *path) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->unlink || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    return m->fs->unlink(m->ctx, path);
+    mnt_lock(m);
+    int r = m->fs->unlink(m->ctx, path);
+    mnt_unlock(m);
+    return r;
 }
 
 int vfs_readdir(cap_t cap, int mnt, const char *path, int index, char *name, uint32_t *size) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->readdir || !cap_ok(cap, CAP_FS_READ))
         return -1;
-    return m->fs->readdir(m->ctx, path, index, name, size);
+    mnt_lock(m);
+    int r = m->fs->readdir(m->ctx, path, index, name, size);
+    mnt_unlock(m);
+    return r;
 }
 
 int vfs_unmount(int mnt) {
@@ -130,19 +159,28 @@ int vfs_txn_begin(cap_t cap, int mnt) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->txn_begin || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    return m->fs->txn_begin(m->ctx);
+    mnt_lock(m);
+    int r = m->fs->txn_begin(m->ctx);
+    mnt_unlock(m);
+    return r;
 }
 
 int vfs_txn_commit(cap_t cap, int mnt) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->txn_commit || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    return m->fs->txn_commit(m->ctx);
+    mnt_lock(m);
+    int r = m->fs->txn_commit(m->ctx);
+    mnt_unlock(m);
+    return r;
 }
 
 int vfs_txn_abort(cap_t cap, int mnt) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->txn_abort || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    return m->fs->txn_abort(m->ctx);
+    mnt_lock(m);
+    int r = m->fs->txn_abort(m->ctx);
+    mnt_unlock(m);
+    return r;
 }
