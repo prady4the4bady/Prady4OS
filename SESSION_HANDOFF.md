@@ -113,6 +113,14 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   — wake IPI vector 49 + single-slot percpu mailbox, `smp_run_on`/
   `smp_job_done`; APs `idt_load_ap()` before sti (real-mode IDTR leftover
   triple-faulted otherwise) (`smoke-smpjob`).
+- **3c-locks-1 shipped (`smoke-crosswake`):** the scheduler runs under
+  `g_sched_lock` (held across `context_switch`; a NEW thread's first entry
+  releases it in `thread_trampoline` — a leak would deadlock); `sched_unblock`
+  is an atomic CAS callable from APs. **Loader contract changed
+  (DDR-boot-authority-race, fixed the 3× `smoke-agents` CI flake):**
+  `elf_load` returns threads **BLOCKED** — callers set `is_sovereign`/`is_agent`
+  and then `sched_unblock` (see `elf.h`; `user_boot_from_sfs` gained a
+  `sovereign` param). HEAD is now `e5e9f56`, 58 gates green (run 28699475194).
 - **Full 3c (APs inside the scheduler) is NOT started** and requires FIRST
   locking the remaining ADR-016-masked subsystems (VFS/block/IPC/AETHER rings,
   scheduler ring) — APs running arbitrary kernel threads would race them.
