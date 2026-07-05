@@ -163,7 +163,7 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
      * chain if the device lacks MSI-X or rejects the mapping. */
     unsigned unit = g_ninst;
     uint8_t vec = (uint8_t)(VBLK_MSIX_BASE + unit);
-    int msix = (virtio_pci_msix_setup(&v->dev, vec, lapic_id()) == 0);
+    int msix = (virtio_pci_msix_setup(&v->dev, vec, lapic_id(), 1) == 0);
     if (msix) {
         msix_register(vec, vblk_msix_fn[unit]);
     } else {

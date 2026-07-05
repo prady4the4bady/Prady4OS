@@ -16,6 +16,7 @@
 #include "console.h"
 #include "irq.h"
 #include "string.h"
+#include "lapic.h"   /* DDR-714C2: lapic_id() — MSI-X destination */
 
 extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 
@@ -55,10 +56,8 @@ static void put_hex2(uint8_t b) {
  * the pool — NET-A leaked them), then deliver each received Ethernet frame to the
  * lwIP bridge and re-arm its RX buffer. Bounded to 64 RX frames per IRQ so a
  * flood cannot livelock the kernel (ADR-025 §D6 packet budget). */
-static void net_irq(void) {
-    uint8_t isr = virtio_pci_isr_ack(&g_dev);
-    if (!(isr & 1))
-        return;
+/* Completion body, shared by INTx and MSI-X (DDR-714C2). */
+static void net_complete(void) {
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&g_tx, &len)) >= 0) {
@@ -84,6 +83,13 @@ static void net_irq(void) {
         g_rx_seen = 1;
     }
     virtio_pci_notify(&g_dev, &g_rx, 0);       /* advertise the re-armed RX buffers */
+}
+
+static void net_irq(void) {                    /* INTx: shared line — ack-gated */
+    uint8_t isr = virtio_pci_isr_ack(&g_dev);
+    if (!(isr & 1))
+        return;
+    net_complete();
 }
 
 /* NET-B public API (lwIP netif bridge). */
@@ -171,16 +177,26 @@ void virtio_net_init(uint8_t bus, uint8_t dev, uint8_t func) {
     netbuf_init();
     net_arm_rx();
 
-    irq_register(g_dev.irq, net_irq);
-    pic_unmask(g_dev.irq);
+    /* DDR-714C2: vector 54, both queues (RX 0 + TX 1) on it; INTx fallback. */
+    int msix = (virtio_pci_msix_setup(&g_dev, 54, lapic_id(), 2) == 0);
+    if (msix) {
+        msix_register(54, net_complete);
+    } else {
+        irq_register(g_dev.irq, net_irq);
+        pic_unmask(g_dev.irq);
+    }
     virtio_pci_driver_ok(&g_dev);
     virtio_pci_notify(&g_dev, &g_rx, 0);            /* advertise RX availability */
     g_up = 1;
 
     kputs("[net] virtio-net up MAC=");
     for (int i = 0; i < 6; i++) { if (i) kputc(':'); put_hex2(g_mac[i]); }
-    kputs(" IRQ ");
-    kputdec(g_dev.irq);
+    if (msix) {
+        kputs(" msix vec=54");
+    } else {
+        kputs(" IRQ ");
+        kputdec(g_dev.irq);
+    }
     kputs("\r\n");
 
     kputs(net_tx_test() == 0 ? "[net] virtio-net TX OK\r\n"

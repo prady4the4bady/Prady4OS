@@ -812,6 +812,16 @@ collect + `sched_destroy` (free the kernel stack) before the dying thread's
 locks-1 handoff releases it after the switch), so any collector's
 `sched_destroy` serializes behind the release — the stack is provably free of
 its owner when freed. No new gate (`smoke-syswait`/`smoke-user` ride the path).
+**DDR-714 stage C2 — MSI-X for virtio-net + virtio-input:** the remaining
+INTx consumers move to per-device vectors — net on 54 (BOTH queues, RX 0 + TX
+1, routed to table entry 0 via `virtio_pci_msix_setup`'s new `nqueues` param),
+the tablet on 55 (event queue). IDT 54→56 stubs; the drivers keep the C1
+split (shared `*_complete` body; the INTx fallback keeps its ack-gate).
+**No virtio device touches the 8259 anymore** — the only PIC lines left are ISA
+(keyboard IRQ1, COM1 RX IRQ4). `smoke-net-lo` asserts `msix vec=54`; the
+pointer gates prove vec 55 functionally (QMP events arrive only via it).
+Destination still the BSP; distribution (+ completion-field review) is C3.
+No new gate; 61 total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

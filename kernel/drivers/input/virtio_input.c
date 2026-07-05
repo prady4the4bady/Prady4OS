@@ -11,7 +11,8 @@
 #include "virtio_pci.h"
 #include "pmm.h"
 #include "console.h"
-#include "irq.h"             /* irq_register / pic_unmask */
+#include "irq.h"             /* irq_register / pic_unmask / msix_register */
+#include "lapic.h"           /* DDR-714C2: lapic_id() — MSI-X destination */
 #include "virtio_gpu.h"      /* screen geometry for abs->pixel mapping */
 
 extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
@@ -67,10 +68,8 @@ static void fold_event(const struct virtio_input_event *e) {
     }
 }
 
-static void input_irq(void) {
-    uint8_t isr = virtio_pci_isr_ack(&g_dev);
-    if (!(isr & 1))
-        return;
+/* Completion body, shared by INTx and MSI-X (DDR-714C2). */
+static void input_complete(void) {
     uint32_t len;
     int head;
     int budget = 256;                     /* bound work per IRQ */
@@ -85,6 +84,13 @@ static void input_irq(void) {
             virtq_publish(&g_vq, h);
     }
     virtio_pci_notify(&g_dev, &g_vq, 0);
+}
+
+static void input_irq(void) {                  /* INTx: shared line — ack-gated */
+    uint8_t isr = virtio_pci_isr_ack(&g_dev);
+    if (!(isr & 1))
+        return;
+    input_complete();
 }
 
 void virtio_input_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -115,12 +121,19 @@ void virtio_input_init(uint8_t bus, uint8_t dev, uint8_t func) {
     g_abs_x = VI_ABS_MAX / 2;             /* start centred */
     g_abs_y = VI_ABS_MAX / 2;
 
-    irq_register(g_dev.irq, input_irq);
-    pic_unmask(g_dev.irq);
+    /* DDR-714C2: vector 55, event queue only (queue 0); INTx fallback. */
+    int msix = (virtio_pci_msix_setup(&g_dev, 55, lapic_id(), 1) == 0);
+    if (msix) {
+        msix_register(55, input_complete);
+    } else {
+        irq_register(g_dev.irq, input_irq);
+        pic_unmask(g_dev.irq);
+    }
     virtio_pci_driver_ok(&g_dev);
     virtio_pci_notify(&g_dev, &g_vq, 0);
     g_up = 1;
-    kputs("[input] virtio pointer up (eventq armed)\r\n");
+    kputs(msix ? "[input] virtio pointer up (eventq armed) msix vec=55\r\n"
+               : "[input] virtio pointer up (eventq armed)\r\n");
 }
 
 int virtio_input_state(int *x, int *y, uint32_t *buttons) {

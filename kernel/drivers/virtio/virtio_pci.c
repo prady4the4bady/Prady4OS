@@ -188,7 +188,8 @@ uint8_t virtio_pci_isr_ack(struct virtio_pci_dev *d) {
  * entirely. Returns -1 (caller falls back to INTx) if the device has no MSI-X
  * capability or rejects the vector mapping. Call AFTER virtio_pci_setup_queue
  * (queue 0 selected), BEFORE driver_ok. */
-int virtio_pci_msix_setup(struct virtio_pci_dev *d, uint8_t vector, uint32_t apic_id) {
+int virtio_pci_msix_setup(struct virtio_pci_dev *d, uint8_t vector, uint32_t apic_id,
+                          uint16_t nqueues) {
     /* Find the MSI-X capability (ID 0x11). */
     uint8_t cap = cfg8(d, 0x34) & 0xFC;
     while (cap && cfg8(d, cap + 0) != 0x11)
@@ -211,14 +212,17 @@ int virtio_pci_msix_setup(struct virtio_pci_dev *d, uint8_t vector, uint32_t api
     e[2] = vector;                         /* message data: fixed, edge, vector   */
     e[3] = 0;                              /* vector control: unmasked            */
 
-    /* Route queue 0's interrupt to table entry 0; 0xFFFF read-back = rejected. */
+    /* Route queues 0..nqueues-1 ALL to table entry 0 (one vector per device —
+     * C2: net RX+TX, input event+status); 0xFFFF read-back = rejected. */
     volatile struct virtio_pci_common_cfg *c =
         (volatile struct virtio_pci_common_cfg *)d->common;
     c->msix_config = 0xFFFF;               /* no config-change vector */
-    c->queue_select = 0;
-    c->queue_msix_vector = 0;
-    if (c->queue_msix_vector == 0xFFFF)
-        return -1;
+    for (uint16_t q = 0; q < nqueues; q++) {
+        c->queue_select = q;
+        c->queue_msix_vector = 0;
+        if (c->queue_msix_vector == 0xFFFF)
+            return -1;
+    }
 
     /* This function signals via MSI-X now — disable its INTx assertions. */
     uint32_t cmd = cfg32(d, 0x04);

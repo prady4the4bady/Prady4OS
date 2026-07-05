@@ -566,7 +566,7 @@ smoke-net: $(IMG) fat-image sfs-image
 # NET-B loopback gate (ADR-025 §D10): the kernel sends a UDP datagram to
 # 127.0.0.1:7 through lwIP's loopback interface and its recv callback fires.
 smoke-net-lo: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[net] lwIP up 10.0.2.15/24\nPRADYOS_NET_LO_OK')" \
+	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'msix vec=54\n[net] lwIP up 10.0.2.15/24\nPRADYOS_NET_LO_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # NET-B fuzz/hardening gate (ADR-025 §D6/§D10): at boot the kernel feeds 512
