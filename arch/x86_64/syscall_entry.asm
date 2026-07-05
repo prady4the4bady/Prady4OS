@@ -20,34 +20,36 @@ BITS 64
 section .text
 global syscall_entry
 extern syscall_dispatch
-extern syscall_user_rsp
-extern syscall_user_rip
-; Callee-saved snapshot for full-register fork (the child resumes with the
-; parent's RBX/RBP/R12-R15 + RFLAGS, RAX=0 — see sys_fork / signal_sigreturn).
-extern syscall_user_rbx
-extern syscall_user_rbp
-extern syscall_user_r12
-extern syscall_user_r13
-extern syscall_user_r14
-extern syscall_user_r15
-extern syscall_user_rflags
+
+; cap-4 (ADR-031 D5): the user-register snapshot is PER-CPU, stored in the
+; percpu area via %gs at fixed offsets (static-asserted in percpu.c). Two CPUs
+; in syscalls concurrently no longer clobber each other's fork snapshot.
+%define PC_U_RSP    56
+%define PC_U_RIP    64
+%define PC_U_RBX    72
+%define PC_U_RBP    80
+%define PC_U_R12    88
+%define PC_U_R13    96
+%define PC_U_R14    104
+%define PC_U_R15    112
+%define PC_U_RFLAGS 120
 
 syscall_entry:
     swapgs                              ; DDR-SMP-3a: kernel GS (percpu) active
-    mov [rel syscall_user_rsp], rsp     ; stash user RSP briefly (single-CPU, IF=0)
-    mov [rel syscall_user_rip], rcx     ; stash user return RIP (fork's child resume point)
+    mov [gs:PC_U_RSP], rsp              ; stash user RSP (this CPU's slot; IF=0)
+    mov [gs:PC_U_RIP], rcx              ; user return RIP (fork's child resume point)
     ; snapshot the user's callee-saved regs + RFLAGS (still the user's values here,
     ; before the C dispatch; fork's child needs them to resume exactly).
-    mov [rel syscall_user_rbx], rbx
-    mov [rel syscall_user_rbp], rbp
-    mov [rel syscall_user_r12], r12
-    mov [rel syscall_user_r13], r13
-    mov [rel syscall_user_r14], r14
-    mov [rel syscall_user_r15], r15
-    mov [rel syscall_user_rflags], r11
+    mov [gs:PC_U_RBX], rbx
+    mov [gs:PC_U_RBP], rbp
+    mov [gs:PC_U_R12], r12
+    mov [gs:PC_U_R13], r13
+    mov [gs:PC_U_R14], r14
+    mov [gs:PC_U_R15], r15
+    mov [gs:PC_U_RFLAGS], r11
     mov rsp, [gs:16]                    ; this CPU's kernel stack top (percpu, DDR-SMP-3b)
 
-    push qword [rel syscall_user_rsp]   ; save user RSP on the kernel stack
+    push qword [gs:PC_U_RSP]            ; save user RSP on the kernel stack
     push rcx                            ; user RIP
     push r11                            ; user RFLAGS
     push rdi

@@ -30,8 +30,9 @@ static long sys_fork(long a1, long a2, long a3, long a4) {
     if (!child_cr3)
         return -ENOMEM;
 
+    /* cap-4: the entry snapshot is per-CPU (this syscall's own CPU). */
     struct tcb *child = sched_create_user_clone(parent, child_cr3,
-                                                syscall_user_rip, syscall_user_rsp);
+                                                this_cpu()->u_rip, this_cpu()->u_rsp);
     if (!child) {
         vmm_destroy_address_space(child_cr3);
         return -ENOMEM;                            /* clone/cap/fd dup failed */

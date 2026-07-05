@@ -748,6 +748,15 @@ smoke-smppreempt: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="ap preempt FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# User-on-AP gate (ADR-031 cap-4, the capstone): a ring-3 thread is claimed and
+# run by a non-BSP CPU, with the user programs still passing their own sentinels
+# (they must run CORRECTLY on APs, not merely run).
+smoke-smpuser: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] user on AP OK\nHELLO FROM RING-3\nPRADYOS_MUSL_OK')" \
+	FORBIDDEN_SENTINEL="user on AP FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # SMP locking gate (ADR-030 stage 1): each AP allocates+frees a PMM page and a
 # slab object through the new subsystem spinlocks before parking; all three must
 # report locks OK (and none FAIL) alongside full bring-up.

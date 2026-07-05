@@ -90,17 +90,12 @@
 typedef long (*syscall_fn)(long a1, long a2, long a3, long a4);
 
 void syscall_init(void);                       /* program MSRs + register table */
+void syscall_init_ap(void);                    /* cap-4: arm THIS CPU's SYSCALL MSRs */
 void syscall_register(unsigned num, syscall_fn fn);
 long syscall_dispatch(long num, long a1, long a2, long a3, long a4);  /* from asm */
 
 /* The kernel stack top for SYSCALL entry lives in the percpu area at [gs:16]
- * (DDR-SMP-3b); the scheduler writes it on switch-in of a user thread. */
-extern uint64_t syscall_user_rsp;
-/* User RIP/RSP of the in-flight syscall (captured by syscall_entry.asm). fork
- * uses these as the child's ring-3 resume point. Valid only inside a syscall. */
-extern uint64_t syscall_user_rip;
-/* Parent's callee-saved regs + RFLAGS captured at SYSCALL entry, used by fork to
- * resume the child with a full register set (RAX=0). Valid only inside a syscall. */
-extern uint64_t syscall_user_rbx, syscall_user_rbp;
-extern uint64_t syscall_user_r12, syscall_user_r13, syscall_user_r14, syscall_user_r15;
-extern uint64_t syscall_user_rflags;
+ * (DDR-SMP-3b). The in-flight syscall's user-register snapshot (RSP/RIP,
+ * callee-saved regs, RFLAGS — fork's child resume state) is per-CPU too:
+ * `this_cpu()->u_*` (percpu.h), written by syscall_entry.asm (ADR-031 cap-4).
+ * Valid only inside a syscall, on the syscall's own CPU. */

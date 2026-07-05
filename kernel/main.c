@@ -494,6 +494,20 @@ static void smppreempt_proof(void) {
     kputs(pc->ticks > t0 ? "[smp] ap preempt OK\r\n" : "[smp] ap preempt FAIL\r\n");
 }
 
+/* cap-4 proof: a ring-3 thread runs on an AP. The FS phase has just spawned a
+ * fleet of user processes; nudge the APs and poll the flag schedule() sets when
+ * a non-BSP CPU claims a user thread. (The flag-then-print split keeps console
+ * I/O out of the locked scheduler path.) */
+static void smpuser_proof(void) {
+    if (!g_smp_have_aps)
+        return;
+    smp_resched_all();
+    uint64_t dl = g_ticks + 200;                 /* up to ~2 s — user procs are live */
+    while (!g_user_on_ap && g_ticks < dl)
+        yield();
+    kputs(g_user_on_ap ? "[smp] user on AP OK\r\n" : "[smp] user on AP FAIL\r\n");
+}
+
 /* L6: SYS_SPAWN_AGENT hook. Loads the agent directly from its embedded kernel
  * bytes (NOT from SFS — that mount is gone by scheduler time) and marks the new
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
@@ -824,6 +838,7 @@ static void fs_test_thread(void *arg) {
                     if (it) dm->parent_pid = it->pid;
                     g_aether_daemon_pid = dm->pid;
                 }
+                smpuser_proof();     /* ADR-031 cap-4: ring 3 runs on an AP */
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

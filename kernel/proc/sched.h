@@ -127,6 +127,7 @@ void        sched_destroy(struct tcb *t);
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_ap_enter(void);                               /* cap-2b: AP joins the scheduler (never returns) */
+extern volatile int g_user_on_ap;                               /* cap-4: an AP ran a ring-3 thread (proof flag) */
 void        sched_block(void);                                  /* block current; switch away */
 /* DDR-SMP-3c-locks-4: sleep on a condition verified under `lk`. Sets the caller
  * BLOCKED *while `lk` is held*, releases `lk`, switches away, and re-takes `lk`

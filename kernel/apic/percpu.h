@@ -23,6 +23,20 @@ struct percpu {
     uint8_t  is_bsp;       /* 1 on the bootstrap processor (cap-2b D4); travels
                             * through the percpu_init_bsp migration copy         */
     uint64_t ticks;        /* cap-3: this CPU's LAPIC-timer ticks (preemption proof) */
+
+    /* cap-4 (ADR-031 D5): per-CPU SYSCALL-entry register snapshot. Written by
+     * syscall_entry.asm via %gs at the FIXED offsets below (static-asserted in
+     * percpu.c — keep in lockstep); read by the fork paths on the same CPU.
+     * Replaces the syscall_user_* globals two CPUs would clobber. */
+    uint64_t u_rsp;        /* @56  user RSP at syscall entry                     */
+    uint64_t u_rip;        /* @64  user return RIP (fork child resume point)     */
+    uint64_t u_rbx;        /* @72  callee-saved snapshot for full-register fork  */
+    uint64_t u_rbp;        /* @80                                                */
+    uint64_t u_r12;        /* @88                                                */
+    uint64_t u_r13;        /* @96                                                */
+    uint64_t u_r14;        /* @104                                               */
+    uint64_t u_r15;        /* @112                                               */
+    uint64_t u_rflags;     /* @120 user RFLAGS (R11) at entry                    */
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */

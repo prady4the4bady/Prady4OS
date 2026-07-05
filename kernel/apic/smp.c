@@ -19,6 +19,8 @@
 #include "console.h"
 #include "tss.h"
 #include "sched.h"
+#include "syscall.h"
+#include "cpu_mitigations.h"
 
 extern void gdt_init(void);   /* arch/x86_64/cpu.asm — load the shared gdt64 */
 
@@ -112,6 +114,13 @@ void smp_ap_entry(uint32_t idx) {
     idt_load_ap();
     lapic_ap_enable();
     lapic_timer_ap_arm();          /* cap-3: this AP's own 100Hz preemption tick */
+    /* cap-4: ring 3 runs here now — arm the PER-CPU machine state the BSP set
+     * for itself in kmain (the trampoline only does PAE+LME): SSE (CR0/CR4 —
+     * musl uses XMM; #UD without), EFER.NXE (W^X NX pages fault RSVD without),
+     * and the SYSCALL MSRs (EFER.SCE + STAR/LSTAR/SFMASK; #UD without). */
+    cpu_enable_sse();
+    vmm_enable_nxe_ap();
+    syscall_init_ap();
     sched_ap_enter();
 }
 

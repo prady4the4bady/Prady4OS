@@ -17,6 +17,17 @@ _Static_assert(__builtin_offsetof(struct percpu, current) == 8,
                "percpu.current must be at offset 8");
 _Static_assert(__builtin_offsetof(struct percpu, kstack_top) == 16,
                "percpu.kstack_top must be at offset 16 (syscall_entry.asm)");
+/* cap-4: the SYSCALL-entry snapshot block, written by syscall_entry.asm at
+ * these gs-relative offsets — keep in lockstep with the asm. */
+_Static_assert(__builtin_offsetof(struct percpu, u_rsp)    == 56,  "u_rsp @56");
+_Static_assert(__builtin_offsetof(struct percpu, u_rip)    == 64,  "u_rip @64");
+_Static_assert(__builtin_offsetof(struct percpu, u_rbx)    == 72,  "u_rbx @72");
+_Static_assert(__builtin_offsetof(struct percpu, u_rbp)    == 80,  "u_rbp @80");
+_Static_assert(__builtin_offsetof(struct percpu, u_r12)    == 88,  "u_r12 @88");
+_Static_assert(__builtin_offsetof(struct percpu, u_r13)    == 96,  "u_r13 @96");
+_Static_assert(__builtin_offsetof(struct percpu, u_r14)    == 104, "u_r14 @104");
+_Static_assert(__builtin_offsetof(struct percpu, u_r15)    == 112, "u_r15 @112");
+_Static_assert(__builtin_offsetof(struct percpu, u_rflags) == 120, "u_rflags @120");
 
 static void gs_base_set(struct percpu *p) {
     uint64_t base = (uint64_t)(uintptr_t)p;

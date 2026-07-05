@@ -28,14 +28,9 @@ void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
 #define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
 
 static syscall_fn table[MAX_SYSCALLS];
-/* syscall_kstack_top moved into the percpu area at [gs:16] (DDR-SMP-3b). */
-uint64_t syscall_user_rsp;
-uint64_t syscall_user_rip;
-/* Parent's callee-saved registers + RFLAGS at SYSCALL entry, for full-register
- * fork (the child resumes with these, RAX=0). Captured by syscall_entry.asm. */
-uint64_t syscall_user_rbx, syscall_user_rbp;
-uint64_t syscall_user_r12, syscall_user_r13, syscall_user_r14, syscall_user_r15;
-uint64_t syscall_user_rflags;
+/* syscall_kstack_top moved into the percpu area at [gs:16] (DDR-SMP-3b); the
+ * user-register snapshot (rsp/rip/callee-saved/rflags) moved there too at
+ * [gs:56..120] — per-CPU, written by syscall_entry.asm (ADR-031 cap-4). */
 
 extern void syscall_entry(void);   /* arch/x86_64/syscall_entry.asm */
 
@@ -142,6 +137,13 @@ void syscall_init(void) {
     sys_input_register();                 /* SYS_INPUT_POLL / SYS_MOUSE_POLL (DDR-703/705) */
     sys_surface_register();               /* SYS_SURFACE_* per-client surfaces (DDR-706) */
 
+    syscall_init_ap();                    /* the BSP's MSRs — same helper as the APs */
+}
+
+/* ADR-031 cap-4: the SYSCALL machinery MSRs are PER-CPU — an AP without
+ * EFER.SCE takes #UD on a user `syscall` instruction. The dispatch table above
+ * is global (once, BSP); the MSRs are armed on every CPU that runs ring 3. */
+void syscall_init_ap(void) {
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1);            /* EFER.SCE */
     /* STAR: [47:32]=0x08 (SYSCALL CS, SS=+8=0x10); [63:48]=0x10 (SYSRET base:
      * SS=+8=0x18 user data, CS=+16=0x20 user code, RPL forced to 3). */

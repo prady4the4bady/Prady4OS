@@ -771,7 +771,24 @@ firings; gate `smoke-smppreempt` asserts a non-BSP CPU's counter advances →
 crosswake/preempt proofs picked their target AP as "not the current CPU" — but
 proof threads themselves now migrate (cap-2b), so on an AP that resolved to the
 BSP, whose mailbox nothing drains (2/8 flaky); both proofs now select by
-`is_bsp` (10/10). Next: cap-4 (user threads on APs, per-CPU SYSCALL state).
+`is_bsp` (10/10).
+**cap-4 — user threads on APs (DDR-SMP-3c-cap-4): ADR-031 COMPLETE.** The BSP
+pin on ring-3 threads is gone — every CPU schedules, preempts, and runs user
+processes. (1) The SYSCALL-entry register snapshot (`syscall_user_*` globals —
+two CPUs would clobber each other's fork state) moved into `struct percpu` at
+fixed gs-relative offsets (`u_rsp..u_rflags` @56..120, static-asserted);
+`syscall_entry.asm` writes `[gs:...]`, the fork paths read `this_cpu()->u_*`.
+(2) AP timer returns to ring 3 now deliver pending signals (`signal_deliver` in
+the AP branch; global tick stays BSP-only). (3) `pickable()` drops the
+`is_user` rejection. (4) **The AP trampoline's machine state is not the
+BSP's** (found by the gate: every user process on an AP died — `#UD` at its
+first `syscall`, RSVD `#PF` on NX pages): APs now arm per-CPU `cpu_enable_sse`
+(musl XMM), `EFER.NXE` (W^X), and the SYSCALL MSRs (`syscall_init_ap`) in
+`smp_ap_entry`. Proof: `schedule()` flags when an AP claims a user thread; gate
+`smoke-smpuser` asserts `[smp] user on AP OK` plus the user programs' own
+sentinels (they must run *correctly* on APs). **61 gates.** This completes the
+ADR-030 staged migration (ADR-016 fully superseded for the scheduler) — begun
+at stage-1 subsystem locks, ended with ring 3 on every core.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

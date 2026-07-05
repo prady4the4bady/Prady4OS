@@ -53,6 +53,20 @@ void vmm_init(void) {
 
 int vmm_nx_enabled(void) { return g_nx_ok; }
 
+/* ADR-031 cap-4: EFER is PER-CPU — an AP without NXE treats PTE bit 63 as
+ * reserved and every W^X-marked (NX) user page faults with a RSVD-bit #PF.
+ * Reuses the BSP's CPUID probe (g_nx_ok; identical cores). Call on each AP. */
+void vmm_enable_nxe_ap(void) {
+    if (!g_nx_ok)
+        return;
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(MSR_EFER));
+    uint64_t efer = ((uint64_t)hi << 32) | lo;
+    efer |= (1ull << 11);                  /* EFER.NXE */
+    __asm__ volatile("wrmsr" : : "c"(MSR_EFER),
+                     "a"((uint32_t)efer), "d"((uint32_t)(efer >> 32)));
+}
+
 uint64_t vmm_kernel_cr3(void) {
     return g_kernel_pml4 ? g_kernel_pml4 : (read_cr3() & PTE_ADDR);
 }

@@ -43,6 +43,9 @@ uint64_t vmm_kernel_cr3(void);
 /* 1 if the CPU supports NX and EFER.NXE was enabled (so VMM_NX / W^X is live). */
 int vmm_nx_enabled(void);
 
+/* cap-4: EFER is per-CPU — arm NXE on the calling AP (reuses the BSP's probe). */
+void vmm_enable_nxe_ap(void);
+
 /* Map/unmap a single 4 KiB page in the ACTIVE address space. Returns 0 on
  * success, -1 on failure (huge page in the way, or out of frames). */
 int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags);

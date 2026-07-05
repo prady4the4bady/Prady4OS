@@ -147,10 +147,13 @@ void isr_dispatch(struct regs *r) {
     if (r->vector == LAPIC_TIMER_VECTOR) {
         lapic_eoi();                           /* EOI first: sched_tick may switch away */
         struct percpu *pc = this_cpu();
-        if (pc && !pc->is_bsp)
-            sched_tick();                      /* AP: preemption only */
-        else
+        if (pc && !pc->is_bsp) {
+            sched_tick();                      /* AP: preemption only (no global tick) */
+            if ((r->cs & 3) == 3)              /* cap-4: ring-3 runs on APs now — */
+                signal_deliver(r);             /* deliver pending signals here too */
+        } else {
             timer_tick(r);                     /* BSP (or pre-percpu): global tick */
+        }
         return;
     }
     /* Hardware IRQs (PIC remapped to 0x20..0x2F = vectors 32..47). */

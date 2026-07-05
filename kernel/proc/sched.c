@@ -44,6 +44,9 @@ static struct tcb *g_idle[PERCPU_MAX];
  * AP must not touch the ring until the scheduler exists. Set (release) at the
  * end of sched_init; sched_ap_enter waits on it (acquire). */
 static volatile int g_sched_ready;
+/* cap-4 proof: set by schedule() when an AP claims a ring-3 thread; polled by
+ * the boot proof (which prints — schedule() itself must not, under the lock). */
+volatile int g_user_on_ap;
 static uint32_t next_tid = 1;
 static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit panics */
 
@@ -275,13 +278,15 @@ struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user
 
 struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
                                     uint64_t entry, uint64_t user_rsp) {
-    /* The cli guard stays: this reads the GLOBAL syscall_user_* register
-     * snapshot, which a local preemption + another syscall would overwrite.
-     * cap-2a D3 ADDS BLOCKED-create on top — the child is not pickable by ANY
-     * CPU until fully built and sched_unblock'd below (the cli only masks the
-     * local CPU). (Per-CPU syscall entry state is a cap-4 concern.) */
+    /* cap-4: the syscall snapshot is per-CPU now (this_cpu()->u_*, written by
+     * syscall_entry.asm), so another CPU's syscalls can't clobber it. The cli
+     * guard stays anyway: a LOCAL preemption could migrate this thread to
+     * another CPU mid-fork, and the snapshot must be read on the CPU that took
+     * the syscall. BLOCKED-create (cap-2a D3) keeps the child unpickable until
+     * fully built. */
     uint64_t fl;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    struct percpu *pc = this_cpu();
 
     struct tcb *t = sched_create_state(user_launch, 0, parent->name, THREAD_BLOCKED);
     if (t) {
@@ -305,13 +310,13 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->forked = 1;
         struct regs *fr = &t->fork_regs;
         memset(fr, 0, sizeof *fr);
-        fr->rbx = syscall_user_rbx;  fr->rbp = syscall_user_rbp;
-        fr->r12 = syscall_user_r12;  fr->r13 = syscall_user_r13;
-        fr->r14 = syscall_user_r14;  fr->r15 = syscall_user_r15;
+        fr->rbx = pc->u_rbx;  fr->rbp = pc->u_rbp;
+        fr->r12 = pc->u_r12;  fr->r13 = pc->u_r13;
+        fr->r14 = pc->u_r14;  fr->r15 = pc->u_r15;
         fr->rax = 0;                              /* fork returns 0 in the child */
-        fr->rip = entry;                          /* = syscall_user_rip          */
-        fr->rsp = user_rsp;                       /* = syscall_user_rsp          */
-        fr->rflags = syscall_user_rflags;         /* parent's flags (IF set)     */
+        fr->rip = entry;                          /* = this CPU's u_rip          */
+        fr->rsp = user_rsp;                       /* = this CPU's u_rsp          */
+        fr->rflags = pc->u_rflags;                /* parent's flags (IF set)     */
         fr->cs = USER_CS_SEL;  fr->ss = USER_SS_SEL;
         /* Replace the fresh (empty) cap + fd tables with copies of the parent's. */
         if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0) {
@@ -363,18 +368,16 @@ static int runnable(const struct tcb *t) {
     return t->state == THREAD_READY || t->state == THREAD_RUNNING;
 }
 
-/* cap-2a D1 / cap-2b D1,D4: a thread CPU `cpu` (is_bsp) can pick up. READY and
+/* cap-2a D1 / cap-2b D1 / cap-4 D3: a thread CPU `cpu` can pick up. READY and
  * unclaimed (on_cpu<0); a per-CPU idle only by ITS OWN cpu (never cross-picked,
  * but the owner must be able to round-robin back to it — the idle is also that
- * CPU's main context, e.g. the BSP idle runs sched_demo); and a USER thread only
- * on the BSP — ring-3 on an AP needs per-CPU SYSCALL entry state (cap-4). On the
- * BSP with no APs this is exactly "READY, not prev" — the pick set is unchanged. */
-static int pickable(const struct tcb *t, int cpu, int is_bsp) {
+ * CPU's main context, e.g. the BSP idle runs sched_demo). USER threads run on
+ * any CPU since cap-4 (per-CPU TSS.RSP0, kstack_top, SYSCALL snapshot, signal
+ * delivery are all in place). */
+static int pickable(const struct tcb *t, int cpu) {
     if (t->state != THREAD_READY || t->on_cpu >= 0)
         return 0;
     if (t->is_idle && t != g_idle[cpu])
-        return 0;
-    if (t->is_user && !is_bsp)
         return 0;
     return 1;
 }
@@ -397,10 +400,9 @@ static void schedule(void) {
     struct tcb *prev = current_thread;
     struct percpu *pc = this_cpu();
     int cpu = pc ? (int)pc->cpu_idx : 0;
-    int is_bsp = pc ? pc->is_bsp : 1;
 
     struct tcb *next = prev->next;
-    while (next != prev && !pickable(next, cpu, is_bsp))
+    while (next != prev && !pickable(next, cpu))
         next = next->next;
 
     if (next == prev) {
@@ -422,6 +424,9 @@ static void schedule(void) {
     prev->on_cpu = -1;
     next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
+    if (next->is_user && pc && !pc->is_bsp)
+        g_user_on_ap = 1;          /* cap-4 proof: a ring-3 thread claimed by an AP
+                                    * (flag only — no console I/O under the lock) */
     current_thread = next;
     if (next->is_user) {       /* point the CPU at this thread's ring-0 stack */
         uint64_t ktop = next->kstack_base + STACK_SIZE;
