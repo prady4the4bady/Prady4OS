@@ -440,6 +440,29 @@ static void crosswake_proof(void) {
         yield();
 }
 
+/* cap-2b proof: a ring thread actually runs on a non-BSP CPU. Spawn several
+ * READY *kernel* probes, kick the APs, and spin (NOT yielding, so this CPU does
+ * not run them all) until a probe reports a cpu_idx other than ours. */
+static volatile uint32_t g_probe_cpumask;
+static void probe_thread(void *arg) {
+    (void)arg;
+    for (volatile int i = 0; i < 200000; i++)   /* bounded spin; sets our CPU's bit */
+        __atomic_or_fetch(&g_probe_cpumask, 1u << (this_cpu()->cpu_idx), __ATOMIC_SEQ_CST);
+}
+static void smpsched_proof(void) {
+    if (!g_smp_have_aps)
+        return;
+    for (int i = 0; i < 6; i++)
+        sched_create(probe_thread, 0, "probe");
+    smp_resched_all();                           /* wake idle APs to pick them up */
+    uint32_t self_bit = 1u << this_cpu()->cpu_idx;
+    uint64_t dl = g_ticks + 100;
+    while (!(g_probe_cpumask & ~self_bit) && g_ticks < dl)
+        __asm__ volatile("pause");
+    kputs((g_probe_cpumask & ~self_bit) ? "[smp] sched cross-CPU OK\r\n"
+                                        : "[smp] sched cross-CPU FAIL\r\n");
+}
+
 /* L6: SYS_SPAWN_AGENT hook. Loads the agent directly from its embedded kernel
  * bytes (NOT from SFS — that mount is gone by scheduler time) and marks the new
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
@@ -712,6 +735,7 @@ static void fs_test_thread(void *arg) {
                 aether_set_spawn_hook(aether_spawn_agent_hook);
                 crosswake_proof();   /* DDR-SMP-3c-locks-1: AP wakes a BSP thread
                                         (needs the live scheduler — this thread) */
+                smpsched_proof();    /* ADR-031 cap-2b: a ring thread runs on an AP */
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end, 0);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end, 0);

@@ -34,7 +34,16 @@ extern void signal_sigreturn(struct regs *saved);  /* usermode.asm — full-fram
  * sched.h macro). NULL until sched_init (safe: sched_tick checks). */
 #include "spinlock.h"
 static spinlock_t g_sched_lock = SPINLOCK_INIT;   /* DDR-SMP-3c-locks-1 */
-static struct tcb idle_tcb;
+/* cap-2b: one idle per CPU. The BSP idle is static (small, like the pre-cap-2b
+ * single idle); AP idles are kmalloc'd in sched_ap_enter — a full struct tcb
+ * (~KB) times PERCPU_MAX in BSS would blow the low-mem image cap (big tables
+ * come from the heap/PMM pool, never BSS). g_idle[cpu] is the fallback target. */
+static struct tcb idle0;
+static struct tcb *g_idle[PERCPU_MAX];
+/* cap-2b: APs are brought online (smp_start_aps) BEFORE sched_init runs, so an
+ * AP must not touch the ring until the scheduler exists. Set (release) at the
+ * end of sched_init; sched_ap_enter waits on it (acquire). */
+static volatile int g_sched_ready;
 static uint32_t next_tid = 1;
 static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit panics */
 
@@ -54,11 +63,7 @@ static inline void irq_restore(uint64_t f) {
     spin_unlock_irqrestore(&g_sched_lock, f);
 }
 
-/* This CPU's roster index (0 before percpu is up). Used to stamp tcb->on_cpu. */
-static inline int my_cpu(void) {
-    struct percpu *p = this_cpu();
-    return p ? (int)p->cpu_idx : 0;
-}
+static void schedule(void);        /* fwd decl: thread_trampoline schedules on exit */
 
 /* First code a freshly-created thread runs (entered via context_switch's RET).
  * current_thread is already the new thread (set by schedule before switching). */
@@ -69,19 +74,31 @@ static void thread_trampoline(void) {
      * crafted initial RFLAGS already restored IF via context_switch's popfq). */
     spin_unlock(&g_sched_lock);
     current_thread->entry(current_thread->arg);
+    /* cap-2b D3: cooperative exit. A returning kernel thread marks itself DONE
+     * and schedules away — DONE is unpickable so it never runs again. The old
+     * for(;;)hlt relied on timer preemption to leave, which an un-preempted AP
+     * (cap-3 pending) never gets, wedging that CPU. */
     current_thread->state = THREAD_DONE;
-    for (;;)
+    current_thread->on_cpu = -1;
+    schedule();
+    for (;;)                        /* unreachable */
         __asm__ volatile("hlt");
 }
 
-void sched_init(void) {
-    idle_tcb.tid = 0;
-    idle_tcb.name = "idle";
-    idle_tcb.state = THREAD_RUNNING;
-    idle_tcb.quantum = idle_tcb.quantum_reset = QUANTUM;
-    idle_tcb.next = &idle_tcb;     /* ring of one */
-    idle_tcb.caps = cap_table_create();
+/* Shared idle-thread init (cap-2b: one per CPU). The FPU template is captured
+ * once by sched_init before any init_idle runs. */
+static void init_idle(struct tcb *idle, int cpu) {
+    memset(idle, 0, sizeof(*idle));    /* zero all fields (AP idles are kmalloc'd) */
+    idle->name = "idle";
+    idle->state = THREAD_RUNNING;
+    idle->quantum = idle->quantum_reset = QUANTUM;
+    idle->caps = cap_table_create();
+    idle->is_idle = 1;
+    idle->on_cpu = cpu;                /* tid/is_user/cr3/fs_base = 0 via memset */
+    memcpy(idle->fpu_state, fpu_init_template, sizeof idle->fpu_state);
+}
 
+void sched_init(void) {
     /* Capture a clean FPU template (SSE already enabled by cpu_enable_sse in
      * kmain, which runs before sched_init). New threads + idle copy this so the
      * first FXRSTOR loads a valid state, not zeros. */
@@ -89,10 +106,61 @@ void sched_init(void) {
     __asm__ volatile("fninit");
     __asm__ volatile("ldmxcsr %0" :: "m"(mxcsr));
     __asm__ volatile("fxsave (%0)" :: "r"(fpu_init_template) : "memory");
-    memcpy(idle_tcb.fpu_state, fpu_init_template, sizeof idle_tcb.fpu_state);
 
-    idle_tcb.on_cpu = 0;           /* running on the BSP from here (cap-2a) */
-    current_thread = &idle_tcb;
+    struct tcb *idle = &idle0;          /* the BSP idle + ring anchor */
+    init_idle(idle, 0);
+    g_idle[0] = idle;
+    idle->next = idle;                 /* ring of one */
+    current_thread = idle;
+    __atomic_store_n(&g_sched_ready, 1, __ATOMIC_RELEASE);   /* APs may now join */
+}
+
+/* cap-2b: an AP joins the scheduler. Sets up this CPU's idle, links it into the
+ * shared ring, and runs the idle loop — drain the directed mailbox (smp_run_on),
+ * schedule any READY ring thread, then sleep until the next interrupt. The
+ * caller (smp_ap_entry) has already loaded this AP's IDT + enabled its LAPIC.
+ * Never returns. */
+void sched_ap_enter(void) {
+    struct percpu *pc = this_cpu();
+    int cpu = pc ? (int)pc->cpu_idx : 0;
+
+    /* The scheduler is initialized AFTER APs come online. Until it is, behave
+     * like the old park loop — drain directed mailbox jobs (the boot-time
+     * job-dispatch test runs before sched_init) and sleep. The acquire pairs
+     * with sched_init's release so g_idle[0] + the ring are visible below. */
+    while (!__atomic_load_n(&g_sched_ready, __ATOMIC_ACQUIRE)) {
+        void (*fn)(void) = __atomic_load_n(&pc->job, __ATOMIC_ACQUIRE);
+        if (fn) {
+            fn();
+            __atomic_store_n(&pc->job, (void (*)(void))0, __ATOMIC_RELEASE);
+        }
+        __asm__ volatile("sti; hlt");
+    }
+
+    struct tcb *idle = (struct tcb *)kmalloc(sizeof(struct tcb));  /* heap, not BSS */
+    if (!idle)
+        for (;;) __asm__ volatile("cli; hlt");   /* no idle -> this CPU cannot schedule */
+    init_idle(idle, cpu);
+    g_idle[cpu] = idle;
+
+    /* Link this CPU's idle after the BSP idle anchor and adopt it as current —
+     * topology, under the scheduler lock. The idle's rsp is left unseeded: it is
+     * first written by context_switch's save when this CPU first switches away. */
+    uint64_t fl = irq_save();
+    idle->next = g_idle[0]->next;
+    g_idle[0]->next = idle;
+    current_thread = idle;             /* this_cpu()->current */
+    irq_restore(fl);
+
+    for (;;) {
+        void (*fn)(void) = __atomic_load_n(&pc->job, __ATOMIC_ACQUIRE);
+        if (fn) {                      /* directed job from smp_run_on */
+            fn();
+            __atomic_store_n(&pc->job, (void (*)(void))0, __ATOMIC_RELEASE);
+        }
+        schedule();                    /* run any READY kernel thread from the ring */
+        __asm__ volatile("sti; hlt");  /* sleep until wake IPI / timer */
+    }
 }
 
 /* Core creator. `initial_state` is READY for kernel threads (fully runnable at
@@ -114,6 +182,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->tid = next_tid++;
     t->state = initial_state;
     t->on_cpu = -1;                  /* not running anywhere until schedule() claims it */
+    t->is_idle = 0;                  /* only the per-CPU idles set this */
     t->quantum = t->quantum_reset = QUANTUM;
     t->entry = entry;
     t->arg = arg;
@@ -294,11 +363,20 @@ static int runnable(const struct tcb *t) {
     return t->state == THREAD_READY || t->state == THREAD_RUNNING;
 }
 
-/* cap-2a D1: a thread another CPU can pick up. Only READY (a RUNNING thread is
- * live on some CPU) and only if not already claimed (on_cpu<0). On one CPU this
- * is exactly "READY, and not prev" — the pick set is unchanged. */
-static int pickable(const struct tcb *t) {
-    return t->state == THREAD_READY && t->on_cpu < 0;
+/* cap-2a D1 / cap-2b D1,D4: a thread CPU `cpu` (is_bsp) can pick up. READY and
+ * unclaimed (on_cpu<0); a per-CPU idle only by ITS OWN cpu (never cross-picked,
+ * but the owner must be able to round-robin back to it — the idle is also that
+ * CPU's main context, e.g. the BSP idle runs sched_demo); and a USER thread only
+ * on the BSP — ring-3 on an AP needs per-CPU SYSCALL entry state (cap-4). On the
+ * BSP with no APs this is exactly "READY, not prev" — the pick set is unchanged. */
+static int pickable(const struct tcb *t, int cpu, int is_bsp) {
+    if (t->state != THREAD_READY || t->on_cpu >= 0)
+        return 0;
+    if (t->is_idle && t != g_idle[cpu])
+        return 0;
+    if (t->is_user && !is_bsp)
+        return 0;
+    return 1;
 }
 
 /* schedule() must be atomic against the timer: it is reached both voluntarily
@@ -317,9 +395,12 @@ static int pickable(const struct tcb *t) {
 static void schedule(void) {
     uint64_t fl = irq_save();
     struct tcb *prev = current_thread;
+    struct percpu *pc = this_cpu();
+    int cpu = pc ? (int)pc->cpu_idx : 0;
+    int is_bsp = pc ? pc->is_bsp : 1;
 
     struct tcb *next = prev->next;
-    while (next != prev && !pickable(next))
+    while (next != prev && !pickable(next, cpu, is_bsp))
         next = next->next;
 
     if (next == prev) {
@@ -327,7 +408,7 @@ static void schedule(void) {
             irq_restore(fl);
             return;                /* prev is the only runnable thread; keep it */
         }
-        next = &idle_tcb;          /* prev blocked and nothing else: fall to idle */
+        next = g_idle[cpu];        /* prev blocked and nothing else: this CPU's idle */
     }
 
     /* Release prev (back to the pool for any CPU) and claim next for this CPU.
@@ -339,7 +420,7 @@ static void schedule(void) {
     if (prev->state == THREAD_RUNNING)
         prev->state = THREAD_READY;
     prev->on_cpu = -1;
-    next->on_cpu = my_cpu();
+    next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
     current_thread = next;
     if (next->is_user) {       /* point the CPU at this thread's ring-0 stack */

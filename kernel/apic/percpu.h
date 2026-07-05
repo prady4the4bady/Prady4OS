@@ -20,6 +20,8 @@ struct percpu {
     uint32_t cpu_idx;      /* MADT roster index (0 = BSP)                        */
     uint32_t apic_id;      /* this CPU's LAPIC id                                */
     uint8_t  present;
+    uint8_t  is_bsp;       /* 1 on the bootstrap processor (cap-2b D4); travels
+                            * through the percpu_init_bsp migration copy         */
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */

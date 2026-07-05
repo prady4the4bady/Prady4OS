@@ -109,6 +109,7 @@ struct tcb {
      * thread (-1 = none): schedule() picks only READY threads with on_cpu<0, so
      * two CPUs can never run one thread. Appended at struct end (offset stability). */
     int        on_cpu;
+    uint32_t   is_idle;         /* cap-2b: per-CPU idle thread; never cross-CPU picked */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
@@ -125,6 +126,7 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
 void        sched_destroy(struct tcb *t);
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
+void        sched_ap_enter(void);                               /* cap-2b: AP joins the scheduler (never returns) */
 void        sched_block(void);                                  /* block current; switch away */
 /* DDR-SMP-3c-locks-4: sleep on a condition verified under `lk`. Sets the caller
  * BLOCKED *while `lk` is held*, releases `lk`, switches away, and re-takes `lk`

@@ -741,8 +741,23 @@ lock and frees outside it. User creation (`sched_create_user`/`_clone`) inserts
 BLOCKED atomically and the caller unblocks after full init (the create-then-init
 race — clone keeps its `cli` for the GLOBAL `syscall_user_*` snapshot, a cap-4
 per-CPU item). BSP-only behavioral **no-op** — all 58 gates green prove the
-internals before cap-2b adds real AP concurrency. No new gate. Next: cap-2b
-(per-CPU idle + APs enter `schedule()` + wake IPI + gate).
+internals before cap-2b adds real AP concurrency. No new gate.
+**cap-2b — APs enter the scheduler (DDR-SMP-3c-cap-2b):** the APs leave their
+mailbox park loop and run **kernel** threads from the shared ready ring — the
+first time a ring thread executes off the BSP. Per-CPU idle (`is_idle`; BSP
+static, AP idles `kmalloc`'d — a full TCB × 16 in BSS overruns the low-mem cap);
+a CPU picks only its OWN idle (but must, since the idle is its main context —
+the BSP idle runs `sched_demo`). `sched_ap_enter` waits on `g_sched_ready`
+(APs come online before `sched_init`) then joins, draining the mailbox so
+`smp_run_on`/`smoke-smpjob`/`smoke-crosswake` keep working.
+`thread_trampoline` now `schedule()`s on a kernel thread's return instead of
+`hlt` (an un-preempted AP would wedge in a finished thread). USER threads stay
+**BSP-pinned** (`pickable`'s `is_bsp` guard + a `struct percpu.is_bsp` byte) —
+ring-3 on an AP needs per-CPU SYSCALL state (cap-4). New gate `smoke-smpsched`
+(`-smp 4`): a probe kernel thread runs on a non-BSP CPU → `[smp] sched
+cross-CPU OK`. **59 gates.** Three root-caused SMP bugs en route (BSS overflow;
+AP-before-`sched_init` ordering; own-idle pickability). Next: cap-3 (per-AP
+LAPIC-timer preemption) → cap-4 (user threads on APs).
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

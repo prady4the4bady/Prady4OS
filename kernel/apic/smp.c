@@ -18,6 +18,7 @@
 #include "io.h"
 #include "console.h"
 #include "tss.h"
+#include "sched.h"
 
 extern void gdt_init(void);   /* arch/x86_64/cpu.asm — load the shared gdt64 */
 
@@ -102,23 +103,15 @@ void smp_ap_entry(uint32_t idx) {
     spin_unlock(&g_announce_lock);
     __atomic_add_fetch(&g_online, 1, __ATOMIC_SEQ_CST);
 
-    /* DDR-SMP-3c-alpha: idle with the LAPIC listening for the wake IPI; each
-     * wake drains the single-slot mailbox. CPL0->CPL0 interrupts use this
-     * (trampoline) stack — no TSS needed; the ISR's CPL-conditional swapgs
-     * correctly leaves this AP's kernel GS in place. */
+    /* ADR-031 cap-2b: leave the park loop and JOIN THE SCHEDULER. Load this AP's
+     * IDT + enable its LAPIC (wake IPI now, timer in cap-3), then enter the
+     * scheduler idle loop — which also drains the directed mailbox (smp_run_on),
+     * so smoke-smpjob / smoke-crosswake keep working. Never returns. CPL0->CPL0
+     * interrupts still use this stack; ring-3 on APs (needing TSS.RSP0) is cap-4. */
     void idt_load_ap(void);        /* kernel/idt.c — APs boot with a stale IDTR */
     idt_load_ap();
     lapic_ap_enable();
-    struct percpu *me = this_cpu();
-    __asm__ volatile("sti");
-    for (;;) {
-        __asm__ volatile("hlt");
-        void (*fn)(void) = __atomic_load_n(&me->job, __ATOMIC_ACQUIRE);
-        if (fn) {
-            fn();
-            __atomic_store_n(&me->job, (void (*)(void))0, __ATOMIC_RELEASE);
-        }
-    }
+    sched_ap_enter();
 }
 
 /* Post fn to an AP's mailbox and wake it (BSP-side, single producer). Returns
@@ -130,6 +123,17 @@ int smp_run_on(uint32_t cpu_idx, void (*fn)(void)) {
     __atomic_store_n(&pc->job, fn, __ATOMIC_RELEASE);
     lapic_send_ipi(pc->apic_id, LAPIC_WAKE_VECTOR);   /* fixed delivery, edge */
     return 0;
+}
+
+/* cap-2b: nudge every online AP to reschedule — breaks its idle-loop hlt so it
+ * walks the ready ring and picks up newly-created work. Reuses the wake IPI
+ * (vector 49; its ISR just EOIs). */
+void smp_resched_all(void) {
+    for (unsigned i = 0; i < PERCPU_MAX; i++) {
+        struct percpu *pc = percpu_get(i);
+        if (pc && pc->present && !pc->is_bsp)
+            lapic_send_ipi(pc->apic_id, LAPIC_WAKE_VECTOR);
+    }
 }
 
 /* 1 when the AP has drained its mailbox (job finished). */

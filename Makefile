@@ -730,6 +730,15 @@ smoke-smp: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="tss FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# APs-in-scheduler gate (ADR-031 cap-2b): the BSP spawns several READY kernel
+# probe threads and kicks the APs; a probe reports a non-BSP cpu_idx, proving a
+# ready-ring thread executed on an AP (not just a directed mailbox job).
+smoke-smpsched: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] sched cross-CPU OK')" \
+	FORBIDDEN_SENTINEL="cross-CPU FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # SMP locking gate (ADR-030 stage 1): each AP allocates+frees a PMM page and a
 # slab object through the new subsystem spinlocks before parking; all three must
 # report locks OK (and none FAIL) alongside full bring-up.

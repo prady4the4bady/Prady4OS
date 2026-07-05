@@ -12,3 +12,7 @@ void smp_start_aps(void);
  * single-slot mailbox and wake it via IPI; poll completion with smp_job_done. */
 int smp_run_on(uint32_t cpu_idx, void (*fn)(void));
 int smp_job_done(uint32_t cpu_idx);
+
+/* cap-2b: kick every online AP to reschedule (wake IPI), so it picks up
+ * newly-created ready threads from the shared ring. */
+void smp_resched_all(void);

@@ -42,6 +42,7 @@ void percpu_init_early(void) {
     struct percpu *p = &g_percpu[0];
     p->self    = p;
     p->present = 1;
+    p->is_bsp  = 1;                /* cap-2b D4: the BSP; survives the migration copy */
     gs_base_set(p);
 }
 
