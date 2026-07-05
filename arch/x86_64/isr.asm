@@ -98,6 +98,12 @@ ISR_NOERR 47
 ISR_NOERR 48
 ; AP wake IPI (DDR-SMP-3c-alpha): breaks an AP out of hlt; handler just EOIs.
 ISR_NOERR 49
+; MSI-X device vectors (DDR-714C1): per-device message-signaled interrupts,
+; delivered straight to the LAPIC (no PIC/IOAPIC). 50..53 = virtio-blk 0..3.
+ISR_NOERR 50
+ISR_NOERR 51
+ISR_NOERR 52
+ISR_NOERR 53
 
 isr_common:
     push rax
@@ -153,13 +159,13 @@ isr_common:
     add rsp, 16                 ; discard vector + error code
     iretq
 
-; Address table consumed by idt_init() in kernel/idt.c (vectors 0..49).
+; Address table consumed by idt_init() in kernel/idt.c (vectors 0..53).
 section .rodata
 global isr_stub_table
 align 8
 isr_stub_table:
 %assign i 0
-%rep 50
+%rep 54
     dq isr_stub_ %+ i
 %assign i i+1
 %endrep

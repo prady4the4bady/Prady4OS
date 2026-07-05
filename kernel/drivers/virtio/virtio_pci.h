@@ -24,3 +24,6 @@ int      virtio_pci_setup_queue(struct virtio_pci_dev *d, struct virtq *vq, uint
 void     virtio_pci_driver_ok(struct virtio_pci_dev *d);
 void     virtio_pci_notify(struct virtio_pci_dev *d, struct virtq *vq, uint16_t qidx);
 uint8_t  virtio_pci_isr_ack(struct virtio_pci_dev *d);   /* read ISR (read-to-clear) */
+/* DDR-714C1: route queue 0 to MSI-X `vector` at LAPIC `apic_id` (table entry 0);
+ * -1 = no MSI-X / rejected — caller keeps INTx. After setup_queue, before ok. */
+int      virtio_pci_msix_setup(struct virtio_pci_dev *d, uint8_t vector, uint32_t apic_id);

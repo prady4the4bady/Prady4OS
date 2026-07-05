@@ -70,7 +70,8 @@ static void set_gate(int v, void *handler) {
 static struct idtr g_idtr;
 
 void idt_init(void) {
-    for (int i = 0; i < 50; i++)   /* 0..31 exc, 32..47 IRQs, 48 APIC timer, 49 wake IPI */
+    for (int i = 0; i < 54; i++)   /* 0..31 exc, 32..47 IRQs, 48 APIC timer,
+                                    * 49 wake IPI, 50..53 MSI-X (DDR-714C1) */
         set_gate(i, isr_stub_table[i]);
 
     g_idtr.limit = (uint16_t)(sizeof(idt) - 1);
@@ -99,6 +100,17 @@ static void dump_line(const char *label, uint64_t v) {
  * irq_handler_fn + irq_register are declared in irq.h. */
 #define IRQ_MAX_HANDLERS 4
 static irq_handler_fn irq_handlers[16][IRQ_MAX_HANDLERS];
+
+/* MSI-X vectors 50..53 (DDR-714C1): one handler per vector — message-signaled
+ * interrupts are never shared, so no chain. EOI is LAPIC-only (edge). */
+#define MSIX_VEC_BASE  50
+#define MSIX_VEC_COUNT 4
+static irq_handler_fn msix_handlers[MSIX_VEC_COUNT];
+
+void msix_register(unsigned vector, irq_handler_fn fn) {
+    if (vector >= MSIX_VEC_BASE && vector < MSIX_VEC_BASE + MSIX_VEC_COUNT)
+        msix_handlers[vector - MSIX_VEC_BASE] = fn;
+}
 
 void net_poll_tick(void);   /* NET-B: lwip-port/pradyos_net.h (driven from the PIT) */
 
@@ -154,6 +166,14 @@ void isr_dispatch(struct regs *r) {
         } else {
             timer_tick(r);                     /* BSP (or pre-percpu): global tick */
         }
+        return;
+    }
+    /* MSI-X device vectors (DDR-714C1): unshared, edge, LAPIC EOI only. */
+    if (r->vector >= MSIX_VEC_BASE && r->vector < MSIX_VEC_BASE + MSIX_VEC_COUNT) {
+        lapic_eoi();
+        irq_handler_fn fn = msix_handlers[r->vector - MSIX_VEC_BASE];
+        if (fn)
+            fn();
         return;
     }
     /* Hardware IRQs (PIC remapped to 0x20..0x2F = vectors 32..47). */

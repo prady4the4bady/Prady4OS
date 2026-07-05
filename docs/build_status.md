@@ -789,6 +789,19 @@ first `syscall`, RSVD `#PF` on NX pages): APs now arm per-CPU `cpu_enable_sse`
 sentinels (they must run *correctly* on APs). **61 gates.** This completes the
 ADR-030 staged migration (ADR-016 fully superseded for the scheduler) — begun
 at stage-1 subsystem locks, ended with ring 3 on every core.
+**DDR-714 stage C1 — MSI-X for virtio-blk:** stage C (IRQ routing off the
+8259/INTx) starts with MSI-X, NOT the I/O APIC — on q35 the PIC-mode
+`Interrupt Line` values the drivers read don't match the PCI-INTx→GSI mapping,
+and MSI-X sidesteps the question: the device writes its interrupt message
+straight to the LAPIC. `virtio_pci_msix_setup` (cap 0x11 walk, table entry 0 =
+`0xFEE00000|apic_id<<12` + vector, queue 0 → entry 0 with 0xFFFF-readback
+verification, INTx-disable) gives each of the 4 disks its own vector 50..53
+(IDT 50→54 stubs; `msix_register` + LAPIC-only-EOI dispatch in idt.c) with a
+clean INTx fallback. Unshares the blk lines (blk0/1+net on 11, blk2/3 on 10 —
+the chained-INTx workaround no longer covers disks) and is the prerequisite for
+multi-in-flight I/O. Destination = BSP for now (locks-2's completion-field
+review comes with distribution, C2/C3). `smoke-fs` now asserts `msix vec=50`
+(no silent fallback). No new gate; 61 total.
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

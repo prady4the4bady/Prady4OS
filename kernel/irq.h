@@ -26,6 +26,10 @@ void pic_mask(unsigned irq);
 typedef void (*irq_handler_fn)(void);
 void irq_register(unsigned irq, irq_handler_fn fn);
 
+/* DDR-714C1: register the handler for an MSI-X vector (50..53). Unshared —
+ * one handler per vector; dispatched with a LAPIC-only EOI (edge). */
+void msix_register(unsigned vector, irq_handler_fn fn);
+
 /* Program PIT channel 0 to fire IRQ0 at `hz` Hz (square wave, mode 3). */
 void pit_init(uint32_t hz);
 

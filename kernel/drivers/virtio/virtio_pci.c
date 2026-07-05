@@ -182,3 +182,46 @@ void virtio_pci_notify(struct virtio_pci_dev *d, struct virtq *vq, uint16_t qidx
 uint8_t virtio_pci_isr_ack(struct virtio_pci_dev *d) {
     return *d->isr;                        /* read-to-clear */
 }
+
+/* DDR-714C1: point queue 0's completion at MSI-X table entry 0, delivering
+ * `vector` to LAPIC `apic_id` — bypassing the shared INTx line and the 8259
+ * entirely. Returns -1 (caller falls back to INTx) if the device has no MSI-X
+ * capability or rejects the vector mapping. Call AFTER virtio_pci_setup_queue
+ * (queue 0 selected), BEFORE driver_ok. */
+int virtio_pci_msix_setup(struct virtio_pci_dev *d, uint8_t vector, uint32_t apic_id) {
+    /* Find the MSI-X capability (ID 0x11). */
+    uint8_t cap = cfg8(d, 0x34) & 0xFC;
+    while (cap && cfg8(d, cap + 0) != 0x11)
+        cap = cfg8(d, cap + 1) & 0xFC;
+    if (!cap)
+        return -1;
+
+    uint32_t tab = cfg32(d, cap + 4);      /* table offset (bits 31..3) + BIR (2..0) */
+    volatile uint8_t *bv = map_bar(d, (uint8_t)(tab & 7u));
+    if (!bv)
+        return -1;
+    volatile uint32_t *e = (volatile uint32_t *)(bv + (tab & ~7u));   /* entry 0 */
+
+    /* Enable MSI-X (message control bit 15), function-mask off (bit 14), while
+     * masked entries are programmed; then unmask entry 0. */
+    uint32_t mc = cfg32(d, cap);           /* [31:16] = message control */
+    pcie_write32(d->bus, d->dev, d->func, cap, mc | (1u << 31));      /* MSI-X enable */
+    e[0] = 0xFEE00000u | (apic_id << 12);  /* message address: this LAPIC        */
+    e[1] = 0;                              /* address high                        */
+    e[2] = vector;                         /* message data: fixed, edge, vector   */
+    e[3] = 0;                              /* vector control: unmasked            */
+
+    /* Route queue 0's interrupt to table entry 0; 0xFFFF read-back = rejected. */
+    volatile struct virtio_pci_common_cfg *c =
+        (volatile struct virtio_pci_common_cfg *)d->common;
+    c->msix_config = 0xFFFF;               /* no config-change vector */
+    c->queue_select = 0;
+    c->queue_msix_vector = 0;
+    if (c->queue_msix_vector == 0xFFFF)
+        return -1;
+
+    /* This function signals via MSI-X now — disable its INTx assertions. */
+    uint32_t cmd = cfg32(d, 0x04);
+    pcie_write32(d->bus, d->dev, d->func, 0x04, cmd | (1u << 10));
+    return 0;
+}

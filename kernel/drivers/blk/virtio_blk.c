@@ -14,6 +14,7 @@
 #include "pmm.h"
 #include "sched.h"
 #include "irq.h"
+#include "lapic.h"   /* DDR-714C1: lapic_id() — MSI-X destination (the BSP) */
 
 extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 
@@ -46,10 +47,7 @@ static unsigned    g_ninst;
 static inline void cli(void) { __asm__ volatile("cli"); }
 static inline void sti(void) { __asm__ volatile("sti"); }
 
-static void reap(struct vblk *v) {
-    uint8_t isr = virtio_pci_isr_ack(&v->dev);   /* read-to-clear, deasserts INTx */
-    if (!(isr & 1))
-        return;
+static void complete(struct vblk *v) {
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&v->vq, &len)) >= 0) {
@@ -63,11 +61,28 @@ static void reap(struct vblk *v) {
     }
 }
 
+static void reap(struct vblk *v) {
+    uint8_t isr = virtio_pci_isr_ack(&v->dev);   /* read-to-clear, deasserts INTx */
+    if (!(isr & 1))
+        return;
+    complete(v);
+}
+
 /* Shared INTx handler: a level-triggered line may be shared, so poll all. */
 static void virtio_blk_irq(void) {
     for (unsigned i = 0; i < g_ninst; i++)
         reap(&g_inst[i]);
 }
+
+/* DDR-714C1: per-device MSI-X handlers — unshared vector, no ISR-ack read
+ * (that register is the INTx deassert; MSI-X does not use it). */
+#define VBLK_MSIX_BASE 50
+static void vblk_msix0(void) { complete(&g_inst[0]); }
+static void vblk_msix1(void) { complete(&g_inst[1]); }
+static void vblk_msix2(void) { complete(&g_inst[2]); }
+static void vblk_msix3(void) { complete(&g_inst[3]); }
+static irq_handler_fn const vblk_msix_fn[VBLK_MAX] =
+    { vblk_msix0, vblk_msix1, vblk_msix2, vblk_msix3 };
 
 static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                   uint32_t count, int to_device) {
@@ -143,8 +158,18 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     }
     uint64_t capacity = *(volatile uint64_t *)(uintptr_t)v->dev.devcfg;
 
-    irq_register(v->dev.irq, virtio_blk_irq);
-    pic_unmask(v->dev.irq);
+    /* DDR-714C1: prefer a per-device MSI-X vector (50+unit) delivered straight
+     * to the BSP's LAPIC — unshared, no 8259. Fall back to the shared INTx
+     * chain if the device lacks MSI-X or rejects the mapping. */
+    unsigned unit = g_ninst;
+    uint8_t vec = (uint8_t)(VBLK_MSIX_BASE + unit);
+    int msix = (virtio_pci_msix_setup(&v->dev, vec, lapic_id()) == 0);
+    if (msix) {
+        msix_register(vec, vblk_msix_fn[unit]);
+    } else {
+        irq_register(v->dev.irq, virtio_blk_irq);
+        pic_unmask(v->dev.irq);
+    }
     virtio_pci_driver_ok(&v->dev);
 
     v->bd.name = "virtio-blk";
@@ -159,7 +184,12 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     kputdec(g_ninst - 1);
     kputs(" ready, ");
     kputdec(capacity);
-    kputs(" sectors, IRQ ");
-    kputdec(v->dev.irq);
+    if (msix) {
+        kputs(" sectors, msix vec=");
+        kputdec(vec);
+    } else {
+        kputs(" sectors, IRQ ");
+        kputdec(v->dev.irq);
+    }
     kputs("\r\n");
 }
