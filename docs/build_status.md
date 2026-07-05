@@ -725,6 +725,24 @@ their own TSS — proven at boot by `[smp] cpu N tss OK` (asserted by `smoke-smp
 `tss FAIL` forbidden). The BSP-migration case re-homes TR onto its final
 `cpu_idx`. Contract-neutral (RSP0 unused until ring-3 runs on an AP, cap-4); no
 new gate, no behavior change. Next: cap-2 (per-CPU idle + locked topology).
+**cap-2a — SMP-safe scheduler internals (DDR-SMP-3c-cap-2a):** cap-2 split so
+the hot-path rewrite lands separately from the AP-scheduling flip. The scheduler
+is one shared ring walked from each CPU's (`%gs`) `current`; `runnable()`
+treated `THREAD_RUNNING` as pickable, so a second CPU walking the ring could
+grab a thread live on another CPU. Fixed with an `on_cpu` claim (tcb field, −1 =
+free): `schedule()` picks only `READY && on_cpu<0`, claims/releases under
+`g_sched_lock` (atomic — no double-run). `on_cpu` clears whenever we switch AWAY
+from `prev` (not only when RUNNING) — a thread that blocked must release its CPU
+or it fails the `on_cpu<0` test after unblock and never runs again (caught
+locally on the first block-I/O). Topology (`sched_create` insert, `sched_exit`
+reparent+ZOMBIE, `sched_destroy` unlink) now under `g_sched_lock`
+(DDR-locks-1's BSP-only restriction superseded); the reaper unlinks under the
+lock and frees outside it. User creation (`sched_create_user`/`_clone`) inserts
+BLOCKED atomically and the caller unblocks after full init (the create-then-init
+race — clone keeps its `cli` for the GLOBAL `syscall_user_*` snapshot, a cap-4
+per-CPU item). BSP-only behavioral **no-op** — all 58 gates green prove the
+internals before cap-2b adds real AP concurrency. No new gate. Next: cap-2b
+(per-CPU idle + APs enter `schedule()` + wake IPI + gate).
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

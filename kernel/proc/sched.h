@@ -104,6 +104,11 @@ struct tcb {
     uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
+
+    /* SMP scheduling (ADR-031 / DDR-SMP-3c-cap-2a). Which CPU is running this
+     * thread (-1 = none): schedule() picks only READY threads with on_cpu<0, so
+     * two CPUs can never run one thread. Appended at struct end (offset stability). */
+    int        on_cpu;
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

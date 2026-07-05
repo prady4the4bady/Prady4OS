@@ -40,6 +40,26 @@ static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit pani
 
 void sched_set_init_pid(uint32_t pid) { g_init_pid = pid; }
 
+/* DDR-SMP-3c-locks-1: the scheduler's interrupt masking IS the scheduler
+ * spinlock (irqsave variant — identical one-CPU semantics, cross-CPU exclusion
+ * added). Defined here (not at schedule()) because sched_create's ring insert
+ * and the topology paths (cap-2a) take it too. schedule() holds it ACROSS
+ * context_switch; the resuming thread's irq_restore releases it (the switch-lock
+ * handoff — test-and-set locks have no owner). A brand-new thread's first entry
+ * has no resumed frame, so thread_trampoline releases the lock itself. */
+static inline uint64_t irq_save(void) {
+    return spin_lock_irqsave(&g_sched_lock);
+}
+static inline void irq_restore(uint64_t f) {
+    spin_unlock_irqrestore(&g_sched_lock, f);
+}
+
+/* This CPU's roster index (0 before percpu is up). Used to stamp tcb->on_cpu. */
+static inline int my_cpu(void) {
+    struct percpu *p = this_cpu();
+    return p ? (int)p->cpu_idx : 0;
+}
+
 /* First code a freshly-created thread runs (entered via context_switch's RET).
  * current_thread is already the new thread (set by schedule before switching). */
 static void thread_trampoline(void) {
@@ -71,10 +91,16 @@ void sched_init(void) {
     __asm__ volatile("fxsave (%0)" :: "r"(fpu_init_template) : "memory");
     memcpy(idle_tcb.fpu_state, fpu_init_template, sizeof idle_tcb.fpu_state);
 
+    idle_tcb.on_cpu = 0;           /* running on the BSP from here (cap-2a) */
     current_thread = &idle_tcb;
 }
 
-struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
+/* Core creator. `initial_state` is READY for kernel threads (fully runnable at
+ * insert — no post-init) and BLOCKED for user threads (the caller sets
+ * cr3/user_rip/authority, THEN sched_unblock — closing the create-then-init race
+ * against a second scheduling CPU; DDR-SMP-3c-cap-2a D3). */
+static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *name,
+                                      uint32_t initial_state) {
     struct tcb *t = (struct tcb *)kmalloc(sizeof(struct tcb));
     if (!t)
         return 0;
@@ -86,7 +112,8 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
 
     t->kstack_base = base;
     t->tid = next_tid++;
-    t->state = THREAD_READY;
+    t->state = initial_state;
+    t->on_cpu = -1;                  /* not running anywhere until schedule() claims it */
     t->quantum = t->quantum_reset = QUANTUM;
     t->entry = entry;
     t->arg = arg;
@@ -135,10 +162,18 @@ struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     *--sp = 0x202;        /* rflags: IF | reserved bit 1 */
     t->rsp = (uint64_t)(uintptr_t)sp;
 
-    /* Insert into the ring after the current thread. */
+    /* Insert into the ring after the current thread — topology, under the
+     * scheduler lock (cap-2a D2) so a concurrent CPU's walk/insert can't corrupt
+     * the links. Uncontended on one CPU. */
+    uint64_t fl = irq_save();
     t->next = current_thread->next;
     current_thread->next = t;
+    irq_restore(fl);
     return t;
+}
+
+struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
+    return sched_create_state(entry, arg, name, THREAD_READY);
 }
 
 /* Kernel-side launch for a ring-3 thread: set the ring-0 stack the CPU will use
@@ -155,14 +190,12 @@ static void user_launch(void *arg) {
 }
 
 struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user_stack) {
-    struct tcb *t = sched_create(user_launch, 0, name);
+    /* DDR-boot-authority-race + cap-2a D3: created BLOCKED *at insert* (atomic
+     * under the ring lock), so no CPU can run it before the loader's caller
+     * grants authority (is_sovereign/is_agent) and THEN sched_unblock()s it. */
+    struct tcb *t = sched_create_state(user_launch, 0, name, THREAD_BLOCKED);
     if (!t)
         return 0;
-    /* DDR-boot-authority-race: start BLOCKED. The loader's caller grants any
-     * authority flags (is_sovereign/is_agent) and THEN sched_unblock()s the
-     * thread — otherwise a preemption could run its first syscalls before the
-     * flags land (the recurring smoke-agents CI failure). */
-    t->state = THREAD_BLOCKED;
     t->is_user = 1;
     t->pid = t->tid;
     t->user_rip = user_rip;
@@ -173,13 +206,15 @@ struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user
 
 struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
                                     uint64_t entry, uint64_t user_rsp) {
-    /* Mask interrupts across creation + field init: sched_create enqueues a READY
-     * thread immediately, and until cr3/user_rip are set a timer tick could run
-     * it with a kernel-master cr3 / null entry. (Mirrors the elf_load guard.) */
+    /* The cli guard stays: this reads the GLOBAL syscall_user_* register
+     * snapshot, which a local preemption + another syscall would overwrite.
+     * cap-2a D3 ADDS BLOCKED-create on top — the child is not pickable by ANY
+     * CPU until fully built and sched_unblock'd below (the cli only masks the
+     * local CPU). (Per-CPU syscall entry state is a cap-4 concern.) */
     uint64_t fl;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
 
-    struct tcb *t = sched_create(user_launch, 0, parent->name);
+    struct tcb *t = sched_create_state(user_launch, 0, parent->name, THREAD_BLOCKED);
     if (t) {
         t->is_user     = 1;
         t->pid         = t->tid;
@@ -216,19 +251,27 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         }
     }
 
+    if (t)
+        sched_unblock(t);      /* fully built: now runnable on any CPU (cap-2a D3) */
+
     __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
     return t;
 }
 
-void sched_destroy(struct tcb *t) {
-    if (!t || t == current_thread)
-        return;
-    /* Unlink from the circular ready ring (t was inserted after some node). */
+/* Unlink t from the circular ready ring. Caller MUST hold g_sched_lock
+ * (cap-2a D2 — topology mutation is now serialized across CPUs). */
+static void sched_ring_unlink(struct tcb *t) {
     struct tcb *p = t->next;
     while (p->next != t)
         p = p->next;
     p->next = t->next;
-    /* Free per-process resources: open files, capability table, kstack, TCB. */
+}
+
+/* Free a thread's per-process resources (open files, cap table, kstack, TCB).
+ * Takes NO scheduler lock — kfree/fd_free take their own; t must already be
+ * unlinked and not running anywhere. Freeing outside g_sched_lock keeps that
+ * leaf lock short (the reaper otherwise held it across vmm teardown). */
+static void sched_free_tcb(struct tcb *t) {
     for (int i = 0; i < FD_MAX; i++)
         fd_free(t, i);
     if (t->caps)
@@ -238,8 +281,24 @@ void sched_destroy(struct tcb *t) {
     kfree(t);
 }
 
+void sched_destroy(struct tcb *t) {
+    if (!t || t == current_thread)
+        return;
+    uint64_t fl = irq_save();          /* unlink under the lock ... */
+    sched_ring_unlink(t);
+    irq_restore(fl);
+    sched_free_tcb(t);                  /* ... free outside it */
+}
+
 static int runnable(const struct tcb *t) {
     return t->state == THREAD_READY || t->state == THREAD_RUNNING;
+}
+
+/* cap-2a D1: a thread another CPU can pick up. Only READY (a RUNNING thread is
+ * live on some CPU) and only if not already claimed (on_cpu<0). On one CPU this
+ * is exactly "READY, and not prev" — the pick set is unchanged. */
+static int pickable(const struct tcb *t) {
+    return t->state == THREAD_READY && t->on_cpu < 0;
 }
 
 /* schedule() must be atomic against the timer: it is reached both voluntarily
@@ -249,17 +308,8 @@ static int runnable(const struct tcb *t) {
  * corrupt thread state. Masking interrupts here makes it non-reentrant; the
  * per-thread IF is preserved across the switch by context_switch (pushfq/popfq)
  * and the save/restore below restores the caller's IF on resume. */
-/* DDR-SMP-3c-locks-1: the masking helpers now acquire the scheduler spinlock
- * (stage-1 pattern; one-CPU semantics identical). schedule() holds it ACROSS
- * context_switch — the resuming thread's irq_restore releases it (the classic
- * switch-lock handoff; test-and-set locks have no owner). A NEW thread's first
- * entry has no resumed frame, so thread_trampoline releases the lock itself. */
-static inline uint64_t irq_save(void) {
-    return spin_lock_irqsave(&g_sched_lock);
-}
-static inline void irq_restore(uint64_t f) {
-    spin_unlock_irqrestore(&g_sched_lock, f);
-}
+/* irq_save/irq_restore (the g_sched_lock acquire/release) are defined near the
+ * top of the file — sched_create and the topology paths use them too. */
 
 /* Switch to the next runnable thread in the ring (round-robin, skipping
  * blocked/finished threads). The idle thread is always runnable, so there is
@@ -269,19 +319,27 @@ static void schedule(void) {
     struct tcb *prev = current_thread;
 
     struct tcb *next = prev->next;
-    while (next != prev && !runnable(next))
+    while (next != prev && !pickable(next))
         next = next->next;
 
     if (next == prev) {
         if (runnable(prev)) {
             irq_restore(fl);
-            return;                /* prev is the only runnable thread */
+            return;                /* prev is the only runnable thread; keep it */
         }
         next = &idle_tcb;          /* prev blocked and nothing else: fall to idle */
     }
 
+    /* Release prev (back to the pool for any CPU) and claim next for this CPU.
+     * Both under g_sched_lock, so the claim is atomic — no two CPUs take one
+     * thread (cap-2a D1). on_cpu clears whenever we switch AWAY from prev — not
+     * just when it was RUNNING: a thread that blocked (sched_block set it
+     * BLOCKED before calling us) must also release its CPU, or after unblock
+     * (BLOCKED->READY) it would fail the on_cpu<0 pick test and never run. */
     if (prev->state == THREAD_RUNNING)
         prev->state = THREAD_READY;
+    prev->on_cpu = -1;
+    next->on_cpu = my_cpu();
     next->state = THREAD_RUNNING;
     current_thread = next;
     if (next->is_user) {       /* point the CPU at this thread's ring-0 stack */
@@ -382,6 +440,11 @@ void sched_exit(int status) {
         for (;;)
             __asm__ volatile("hlt");
     }
+    /* cap-2a D2: the reparent ring walk + the ZOMBIE transition are topology —
+     * take g_sched_lock so a concurrent CPU's walk can't observe a torn ring.
+     * Released before schedule() (which re-takes it); a ZOMBIE is not pickable,
+     * so the gap is safe. */
+    uint64_t fl = irq_save();
     /* 5d: reparent this thread's children to init so PID 1 reaps the whole
      * subtree (live children become orphans on this exit; zombies too). */
     if (g_init_pid) {
@@ -394,8 +457,11 @@ void sched_exit(int status) {
     }
     current_thread->exit_status = status;
     current_thread->state = THREAD_ZOMBIE;
-    if (current_thread->waiter)
-        sched_unblock(current_thread->waiter);
+    current_thread->on_cpu = -1;               /* no longer occupies this CPU */
+    struct tcb *waiter = current_thread->waiter;
+    irq_restore(fl);
+    if (waiter)
+        sched_unblock(waiter);
     schedule();
     for (;;)                   /* unreachable */
         __asm__ volatile("hlt");
@@ -432,13 +498,17 @@ static void reaper_thread(void *arg) {
             }
             t = t->next;
         }
+        uint64_t cr3 = 0;
         if (victim) {
-            uint64_t cr3 = victim->cr3;
-            sched_destroy(victim);
+            cr3 = victim->cr3;
+            sched_ring_unlink(victim);     /* claim + unlink atomically under the lock */
+        }
+        irq_restore(fl);
+        if (victim) {                      /* free outside the lock (cap-2a D2) */
+            sched_free_tcb(victim);
             if (cr3)
                 vmm_destroy_address_space(cr3);
         }
-        irq_restore(fl);
         yield();
     }
 }
