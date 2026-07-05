@@ -756,8 +756,22 @@ the BSP idle runs `sched_demo`). `sched_ap_enter` waits on `g_sched_ready`
 ring-3 on an AP needs per-CPU SYSCALL state (cap-4). New gate `smoke-smpsched`
 (`-smp 4`): a probe kernel thread runs on a non-BSP CPU → `[smp] sched
 cross-CPU OK`. **59 gates.** Three root-caused SMP bugs en route (BSS overflow;
-AP-before-`sched_init` ordering; own-idle pickability). Next: cap-3 (per-AP
-LAPIC-timer preemption) → cap-4 (user threads on APs).
+AP-before-`sched_init` ordering; own-idle pickability).
+**cap-3 — per-AP LAPIC-timer preemption (DDR-SMP-3c-cap-3):** each AP arms its
+own LAPIC timer at the BSP-calibrated 100 Hz count (`lapic_timer_ap_arm`; same
+bus clock — no recalibration) in `smp_ap_entry`, so its vector-48 tick drives
+`sched_tick`→`schedule()` — real preemption on every CPU (cap-2b was
+cooperative-only on APs). **Global tick side-effects stay BSP-only:**
+`timer_tick` (g_ticks, vDSO wall clock, lwIP timers, ring-3 signal delivery)
+runs only on the BSP; an AP's tick calls just `sched_tick` — otherwise 4 CPUs
+inflate `g_ticks` 4×, shrinking every tick-based deadline (first symptom:
+`smoke-crosswake` flaked). Per-CPU `percpu.ticks` counts each CPU's timer
+firings; gate `smoke-smppreempt` asserts a non-BSP CPU's counter advances →
+`[smp] ap preempt OK`. **60 gates.** Second root-cause en route: the
+crosswake/preempt proofs picked their target AP as "not the current CPU" — but
+proof threads themselves now migrate (cap-2b), so on an AP that resolved to the
+BSP, whose mailbox nothing drains (2/8 flaky); both proofs now select by
+`is_bsp` (10/10). Next: cap-4 (user threads on APs, per-CPU SYSCALL state).
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

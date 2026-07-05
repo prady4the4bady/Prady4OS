@@ -739,6 +739,15 @@ smoke-smpsched: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="cross-CPU FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# AP preemption gate (ADR-031 cap-3): each AP arms its own LAPIC timer, so a
+# non-BSP CPU's per-CPU tick counter advances — proving timer-driven preemption
+# on APs (under cap-2b it would stay 0).
+smoke-smppreempt: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] ap preempt OK')" \
+	FORBIDDEN_SENTINEL="ap preempt FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # SMP locking gate (ADR-030 stage 1): each AP allocates+frees a PMM page and a
 # slab object through the new subsystem spinlocks before parking; all three must
 # report locks OK (and none FAIL) alongside full bring-up.

@@ -25,6 +25,10 @@ void lapic_eoi(void);
  * wake IPI (DDR-SMP-3c-alpha). The MMIO window is per-CPU at the same base. */
 void lapic_ap_enable(void);
 
+/* cap-3: arm the calling CPU's LAPIC timer at the BSP-calibrated 100 Hz, so its
+ * vector-48 tick drives sched_tick -> schedule() (per-AP preemption). */
+void lapic_timer_ap_arm(void);
+
 #define LAPIC_WAKE_VECTOR (LAPIC_TIMER_VECTOR + 1)   /* 49: AP wake IPI */
 
 /* CPU count from the MADT (type-0 entries) — reported now, used by stage B. */

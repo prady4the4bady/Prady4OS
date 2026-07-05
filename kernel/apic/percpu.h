@@ -22,6 +22,7 @@ struct percpu {
     uint8_t  present;
     uint8_t  is_bsp;       /* 1 on the bootstrap processor (cap-2b D4); travels
                             * through the percpu_init_bsp migration copy         */
+    uint64_t ticks;        /* cap-3: this CPU's LAPIC-timer ticks (preemption proof) */
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */

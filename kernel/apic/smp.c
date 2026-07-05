@@ -111,6 +111,7 @@ void smp_ap_entry(uint32_t idx) {
     void idt_load_ap(void);        /* kernel/idt.c — APs boot with a stale IDTR */
     idt_load_ap();
     lapic_ap_enable();
+    lapic_timer_ap_arm();          /* cap-3: this AP's own 100Hz preemption tick */
     sched_ap_enter();
 }
 

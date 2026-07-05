@@ -119,6 +119,9 @@ jobs:
       - name: QEMU APs-in-scheduler test (q35 -smp 4; a ready-ring thread runs on an AP)
         run: make smoke-smpsched
 
+      - name: QEMU AP-preemption test (q35 -smp 4; a non-BSP CPU's timer ticks advance)
+        run: make smoke-smppreempt
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

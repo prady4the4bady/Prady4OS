@@ -453,6 +453,9 @@ static void schedule(void) {
 }
 
 void sched_tick(void) {
+    struct percpu *pc = this_cpu();
+    if (pc)
+        pc->ticks++;               /* cap-3: per-CPU timer-tick count (preempt proof) */
     if (!current_thread)
         return;                    /* scheduler not up yet */
     if (current_thread->quantum > 0)

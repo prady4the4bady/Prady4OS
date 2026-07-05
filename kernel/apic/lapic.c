@@ -42,6 +42,7 @@ struct madt {
 
 static volatile uint8_t *g_lapic;   /* identity VA of the LAPIC page, or NULL */
 static unsigned g_ncpus;
+static uint32_t g_timer_count;      /* cap-3: calibrated APIC-timer count/10ms (BSP) */
 #define LAPIC_MAX_CPUS 16
 static uint8_t g_apic_ids[LAPIC_MAX_CPUS];   /* MADT type-0 LAPIC ids (ADR-029) */
 
@@ -150,6 +151,7 @@ void lapic_timer_100hz(void) {
     uint32_t per_10ms = elapsed / 10;         /* APIC-timer counts per 10 ms */
     if (per_10ms == 0)
         per_10ms = 1;
+    g_timer_count = per_10ms;                 /* cap-3: APs reuse this count */
 
     /* Periodic 100 Hz on vector 48, then hand the tick over: mask PIT IRQ0. */
     lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LVT_PERIODIC);
@@ -158,4 +160,15 @@ void lapic_timer_100hz(void) {
     kputs("[apic] timer 100Hz (PIT masked) count=");
     kputdec(per_10ms);
     kputs("\r\n");
+}
+
+/* cap-3: arm the CALLING CPU's LAPIC timer at the BSP-calibrated 100 Hz. No
+ * recalibration — every LAPIC shares the bus clock, and the PIT is masked by
+ * now. Requires lapic_timer_100hz to have run on the BSP first (g_timer_count). */
+void lapic_timer_ap_arm(void) {
+    if (!g_lapic || g_timer_count == 0)
+        return;
+    lapic_wr(LAPIC_TIMER_DCR, DCR_DIV16);
+    lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LVT_PERIODIC);
+    lapic_wr(LAPIC_TIMER_ICR, g_timer_count);
 }

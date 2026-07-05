@@ -431,9 +431,15 @@ static void crosswake_proof(void) {
     uint64_t dl = g_ticks + 100;
     while (g_cw_thread->state != THREAD_BLOCKED && g_ticks < dl)
         yield();                                 /* let it run + block */
+    /* Target a genuine AP (not the BSP): only APs run the mailbox-draining idle
+     * loop, so a job posted to the BSP's slot would never run. This proof thread
+     * is itself a kernel thread and may run on any CPU now (cap-2b), so we must
+     * pick by is_bsp, NOT by "not the current CPU". */
     unsigned ap = 0;
-    for (unsigned i = 0; i < lapic_cpu_count(); i++)
-        if (i != this_cpu()->cpu_idx) { ap = i; break; }
+    for (unsigned i = 0; i < lapic_cpu_count(); i++) {
+        struct percpu *pc = percpu_get(i);
+        if (pc && pc->present && !pc->is_bsp) { ap = i; break; }
+    }
     smp_run_on(ap, crosswake_job);
     dl = g_ticks + 100;                          /* let the wake land + run */
     while (g_cw_thread->state == THREAD_BLOCKED && g_ticks < dl)
@@ -461,6 +467,31 @@ static void smpsched_proof(void) {
         __asm__ volatile("pause");
     kputs((g_probe_cpumask & ~self_bit) ? "[smp] sched cross-CPU OK\r\n"
                                         : "[smp] sched cross-CPU FAIL\r\n");
+}
+
+/* cap-3 proof: an AP's own LAPIC timer fires (preemption). Read a non-BSP CPU's
+ * per-CPU tick counter, wait ~300 ms, and confirm it advanced — under cap-2b
+ * (no AP timer) it would stay put. */
+static void smppreempt_proof(void) {
+    if (!g_smp_have_aps)
+        return;
+    /* Measure a genuine AP (is_bsp==0): the BSP's timer always ticked, so
+     * picking it would not prove AP preemption. This thread may itself run on an
+     * AP now (cap-2b), so select by is_bsp, not by "not the current CPU". */
+    struct percpu *pc = 0;
+    for (unsigned i = 0; i < lapic_cpu_count(); i++) {
+        struct percpu *c = percpu_get(i);
+        if (c && c->present && !c->is_bsp) { pc = c; break; }
+    }
+    if (!pc) {
+        kputs("[smp] ap preempt FAIL\r\n");
+        return;
+    }
+    uint64_t t0 = pc->ticks;
+    uint64_t dl = g_ticks + 30;                  /* ~300 ms of BSP ticks */
+    while (g_ticks < dl)
+        __asm__ volatile("pause");
+    kputs(pc->ticks > t0 ? "[smp] ap preempt OK\r\n" : "[smp] ap preempt FAIL\r\n");
 }
 
 /* L6: SYS_SPAWN_AGENT hook. Loads the agent directly from its embedded kernel
@@ -736,6 +767,7 @@ static void fs_test_thread(void *arg) {
                 crosswake_proof();   /* DDR-SMP-3c-locks-1: AP wakes a BSP thread
                                         (needs the live scheduler — this thread) */
                 smpsched_proof();    /* ADR-031 cap-2b: a ring thread runs on an AP */
+                smppreempt_proof();  /* ADR-031 cap-3: an AP's timer preempts */
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end, 0);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end, 0);

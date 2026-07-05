@@ -138,10 +138,19 @@ void isr_dispatch(struct regs *r) {
         lapic_eoi();
         return;
     }
-    /* APIC timer (DDR-714): once armed it owns the tick (PIT IRQ0 masked). */
+    /* APIC timer (DDR-714): once armed it owns the tick (PIT IRQ0 masked).
+     * cap-3: every CPU has its own LAPIC timer, but the GLOBAL tick side-effects
+     * (g_ticks, the vDSO wall clock, lwIP timers) must advance once per real
+     * tick — only the BSP runs timer_tick(); an AP's tick drives ONLY its own
+     * preemption via sched_tick. (Ring-3 signal delivery is BSP-only until user
+     * threads run on APs, cap-4.) */
     if (r->vector == LAPIC_TIMER_VECTOR) {
         lapic_eoi();                           /* EOI first: sched_tick may switch away */
-        timer_tick(r);
+        struct percpu *pc = this_cpu();
+        if (pc && !pc->is_bsp)
+            sched_tick();                      /* AP: preemption only */
+        else
+            timer_tick(r);                     /* BSP (or pre-percpu): global tick */
         return;
     }
     /* Hardware IRQs (PIC remapped to 0x20..0x2F = vectors 32..47). */
