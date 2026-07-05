@@ -121,11 +121,18 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `elf_load` returns threads **BLOCKED** — callers set `is_sovereign`/`is_agent`
   and then `sched_unblock` (see `elf.h`; `user_boot_from_sfs` gained a
   `sovereign` param). HEAD is now `e5e9f56`, 58 gates green (run 28699475194).
-- **Full 3c (APs inside the scheduler) is NOT started** and requires FIRST
-  locking the remaining ADR-016-masked subsystems (VFS/block/IPC/AETHER rings,
-  scheduler ring) — APs running arbitrary kernel threads would race them.
-  Plan it as stage-1-style lock slices, then per-CPU TSS/idle + ring lock +
-  preemption IPIs. Also deferred: IDT gate for the spurious vector (0xFF).
+- **Full 3c is DONE — ADR-031 complete (2026-07-05, HEAD `62b9a97`, 61 gates).**
+  The lock slices (locks-2 block sleep-mutex, locks-3 per-mount VFS, locks-4
+  IPC/bcast + `sched_block_on`) then the capstone: cap-1 per-CPU TSS/GDT/TR,
+  cap-2a SMP-safe ring (`on_cpu` claim, locked topology, BLOCKED-create),
+  cap-2b APs run kernel threads (per-CPU idle — AP idles kmalloc'd, not BSS;
+  `g_sched_ready`; `smoke-smpsched`), cap-3 per-AP LAPIC-timer preemption
+  (global tick side-effects BSP-only or `g_ticks` runs Nx fast;
+  `smoke-smppreempt`), cap-4 ring 3 on every core (per-CPU SYSCALL snapshot in
+  percpu @56..120; per-AP `cpu_enable_sse`/NXE/SYSCALL-MSRs — see memory
+  `ap-percpu-machine-state`; `smoke-smpuser`). ADR-016 fully superseded for the
+  scheduler. Still deferred: IDT gate for the spurious vector (0xFF), per-CPU
+  runqueues/affinity, IRQ routing off the BSP (DDR-714 stage C).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
