@@ -394,9 +394,13 @@ static int pickable(const struct tcb *t, int cpu) {
 
 /* Switch to the next runnable thread in the ring (round-robin, skipping
  * blocked/finished threads). The idle thread is always runnable, so there is
- * always something to run. */
-static void schedule(void) {
-    uint64_t fl = irq_save();
+ * always something to run.
+ * schedule_locked: the body, entered with g_sched_lock ALREADY HELD (`fl` from
+ * the caller's irq_save). Exists for sched_exit (DDR-SMP-exit-stack-race): the
+ * dying thread must hold the lock ACROSS its final context_switch so a
+ * collector on another CPU cannot free its kernel stack until the handoff
+ * release — which happens strictly after the switch has left that stack. */
+static void schedule_locked(uint64_t fl) {
     struct tcb *prev = current_thread;
     struct percpu *pc = this_cpu();
     int cpu = pc ? (int)pc->cpu_idx : 0;
@@ -455,6 +459,10 @@ static void schedule(void) {
     context_switch(&prev->rsp, next->rsp);
     /* resumed here later, as `prev`, when scheduled again */
     irq_restore(fl);
+}
+
+static void schedule(void) {
+    schedule_locked(irq_save());
 }
 
 void sched_tick(void) {
@@ -529,10 +537,15 @@ void sched_exit(int status) {
         for (;;)
             __asm__ volatile("hlt");
     }
-    /* cap-2a D2: the reparent ring walk + the ZOMBIE transition are topology —
-     * take g_sched_lock so a concurrent CPU's walk can't observe a torn ring.
-     * Released before schedule() (which re-takes it); a ZOMBIE is not pickable,
-     * so the gap is safe. */
+    /* DDR-SMP-exit-stack-race: ONE g_sched_lock acquisition covers the reparent
+     * walk, the ZOMBIE transition, the waiter wake, AND the final switch. The
+     * dying thread is still executing on its kernel stack until context_switch
+     * completes — a collector (wait4/reaper on another CPU) must not be able to
+     * sched_destroy it before then. Holding the lock across the switch makes
+     * that structural: the collector's sched_destroy blocks on g_sched_lock
+     * until the handoff release, which happens strictly after the switch has
+     * left this stack. (The waiter wake is an atomic CAS — safe under the
+     * spinlock; the woken parent then queues behind the lock as required.) */
     uint64_t fl = irq_save();
     /* 5d: reparent this thread's children to init so PID 1 reaps the whole
      * subtree (live children become orphans on this exit; zombies too). */
@@ -547,11 +560,9 @@ void sched_exit(int status) {
     current_thread->exit_status = status;
     current_thread->state = THREAD_ZOMBIE;
     current_thread->on_cpu = -1;               /* no longer occupies this CPU */
-    struct tcb *waiter = current_thread->waiter;
-    irq_restore(fl);
-    if (waiter)
-        sched_unblock(waiter);
-    schedule();
+    if (current_thread->waiter)
+        sched_unblock(current_thread->waiter);
+    schedule_locked(fl);                       /* never returns; handoff releases */
     for (;;)                   /* unreachable */
         __asm__ volatile("hlt");
 }

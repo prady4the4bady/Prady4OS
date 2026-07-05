@@ -802,6 +802,16 @@ the chained-INTx workaround no longer covers disks) and is the prerequisite for
 multi-in-flight I/O. Destination = BSP for now (locks-2's completion-field
 review comes with distribution, C2/C3). `smoke-fs` now asserts `msix vec=50`
 (no silent fallback). No new gate; 61 total.
+**Exit-vs-collect kstack use-after-free FIXED (DDR-SMP-exit-stack-race,
+CI-caught):** `sched_exit` set ZOMBIE, RELEASED `g_sched_lock`, woke the
+waiter, then switched away — post-cap-4 a parent's `wait4` on another CPU could
+collect + `sched_destroy` (free the kernel stack) before the dying thread's
+`context_switch` left that stack. KASAN poison made it legible (kernel #GP,
+`RAX=0xDEADBEEF...`, TCG-only). Fix by construction: `schedule()` split into
+`schedule_locked(fl)`; `sched_exit` holds the lock ACROSS its final switch (the
+locks-1 handoff releases it after the switch), so any collector's
+`sched_destroy` serializes behind the release — the stack is provably free of
+its owner when freed. No new gate (`smoke-syswait`/`smoke-user` ride the path).
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
