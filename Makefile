@@ -757,6 +757,14 @@ smoke-smpuser: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="user on AP FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Runqueue stress gate (DDR-SMP-rq-1): 24 kernel threads in 3 waves over the
+# per-CPU ready queues (steal + wake spread them); all must complete.
+smoke-rqstress: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] rqstress OK')" \
+	FORBIDDEN_SENTINEL="rqstress FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Multi-in-flight gate (DDR-BLK-1): two threads keep requests outstanding on
 # one disk concurrently (per-request slots; the one-in-flight mutex is gone),
 # each round-tripping its own reads cleanly.

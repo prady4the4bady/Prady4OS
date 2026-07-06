@@ -131,6 +131,9 @@ jobs:
       - name: QEMU multi-in-flight blk test (q35 -smp 4; concurrent requests on one disk)
         run: make smoke-blkmq
 
+      - name: QEMU runqueue stress test (q35 -smp 4; thread storm over per-CPU rqs)
+        run: make smoke-rqstress
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

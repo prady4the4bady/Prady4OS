@@ -110,6 +110,9 @@ struct tcb {
      * two CPUs can never run one thread. Appended at struct end (offset stability). */
     int        on_cpu;
     uint32_t   is_idle;         /* cap-2b: per-CPU idle thread; never cross-CPU picked */
+    struct tcb *rq_next;        /* rq-1: intrusive per-CPU ready-FIFO link (NULL = tail
+                                 * or not enqueued; rq membership tracked by rq_on) */
+    int        rq_on;           /* rq-1: 1 while linked into some CPU's ready queue */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

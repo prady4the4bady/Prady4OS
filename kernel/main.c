@@ -469,6 +469,27 @@ static void smpsched_proof(void) {
                                         : "[smp] sched cross-CPU FAIL\r\n");
 }
 
+/* DDR-SMP-rq-1 proof: a thread storm across the per-CPU runqueues — 24
+ * kernel threads in 3 waves, spread by steal + wake; ALL must complete. */
+static volatile uint32_t g_rqs_done;
+static void rqstress_worker(void *arg) {
+    (void)arg;
+    for (volatile int i = 0; i < 50000; i++)
+        ;
+    __atomic_add_fetch(&g_rqs_done, 1, __ATOMIC_SEQ_CST);
+}
+static void rqstress_proof(void) {
+    for (int wave = 0; wave < 3; wave++) {
+        for (int i = 0; i < 8; i++)
+            sched_create(rqstress_worker, 0, "rqs");
+        smp_resched_all();
+        uint64_t dl = g_ticks + 100;
+        while (g_rqs_done < (uint32_t)((wave + 1) * 8) && g_ticks < dl)
+            yield();
+    }
+    kputs(g_rqs_done == 24 ? "[smp] rqstress OK\r\n" : "[smp] rqstress FAIL\r\n");
+}
+
 /* DDR-BLK-1 proof: two threads keep requests in flight on ONE disk
  * concurrently (each reads its own sector 8x and must round-trip cleanly).
  * Bits 0/1 = reader ok; bits 8/9 = reader error. */
@@ -817,16 +838,21 @@ static void fs_test_thread(void *arg) {
                 /* L7 (DDR-703): ring-3 keyboard reader. Polls SYS_INPUT_POLL;
                  * the smoke-input gate injects keys via QEMU sendkey. */
                 user_boot_from_sfs(cap, smnt, "INPUTTST.ELF", inputtest_elf, inputtest_elf_end, 0);
-                /* L7 (DDR-706): a client window — creates + commits a surface that
-                 * the compositor composites onto the desktop. Exercised by smoke-surface. */
-                user_boot_from_sfs(cap, smnt, "SURFTEST.ELF", surfacetest_elf, surfacetest_elf_end, 0);
                 /* L7 (DDR-704): the in-house compositor, spawned with CAP_SOVEREIGN
                  * so it may flip the mode via SYS_SET_MODE. With a GPU it renders
                  * the sovereign desktop and reacts to the keyboard; without one it
-                 * exits via SYS_FB_INFO -> -ENODEV. Exercised by smoke-compositor. */
+                 * exits via SYS_FB_INFO -> -ENODEV. Exercised by smoke-compositor.
+                 * rq-1: spawned BEFORE the surface client — per-CPU runqueues let
+                 * the client sprint through its whole setup+close before a later-
+                 * spawned compositor even initializes, so the compositor never saw
+                 * the 3-surface set and smoke-winops' SURFACE_GONE never fired. The
+                 * desktop-first order is also the natural one. */
                 user_boot_from_sfs(cap, smnt, "COMPOSIT.ELF",
                                    compositor_elf, compositor_elf_end,
                                    1 /* CAP_SOVEREIGN before first run */);
+                /* L7 (DDR-706): a client window — creates + commits a surface that
+                 * the compositor composites onto the desktop. Exercised by smoke-surface. */
+                user_boot_from_sfs(cap, smnt, "SURFTEST.ELF", surfacetest_elf, surfacetest_elf_end, 0);
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
                 user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end, 0);
@@ -866,6 +892,7 @@ static void fs_test_thread(void *arg) {
                 }
                 smpuser_proof();     /* ADR-031 cap-4: ring 3 runs on an AP */
                 blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
+                rqstress_proof();    /* DDR-SMP-rq-1: thread storm over the rqs */
                 /* DDR-714C3: plenty of disk I/O has completed by now (the SFS
                  * ELF loads above) — assert a blk completion ran off the BSP. */
                 if (g_smp_have_aps)

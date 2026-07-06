@@ -32,6 +32,26 @@
   The switch itself still runs under `g_sched_lock` this slice (rq-2 may
   move to per-CPU switch locks); the win here is the PICK no longer scans.
 
+## Implementation findings (bugs the gates caught)
+- **Idle starvation:** idles are never enqueued, so "keep prev if runnable on
+  empty queues" starved the own idle — which IS a real context (the BSP idle
+  runs `sched_demo`; the bench yield ping-pong hung). A non-idle prev now
+  always rotates through `g_idle[cpu]` on empty queues (prev re-queues at the
+  tail) — the cap-2b lesson, rq edition.
+- **Transient-drop lost threads:** an unblock can race its target's
+  switch-away (CAS READY while `on_cpu>=0` — the cap-2a spurious-wake case).
+  The FIFO's "drop stale entries" then LOST the thread (deterministic
+  `smoke-winops` hang). `rq_take` now RE-APPENDS READY-but-claimed transients
+  and drops only non-READY entries.
+- **Scheduling-speed assumptions in tests:** per-CPU queues let the surface
+  client sprint through create→close before a later-spawned compositor even
+  initialized — `SURFACE_GONE` needs the compositor to have composited the
+  3-set. The FS phase now spawns COMPOSIT before SURFTEST (the natural desktop
+  order) and the client's close delay widened.
+- **D3 deviation:** no per-wake IPI this slice — an idle AP picks fresh work
+  up via its own 100 Hz tick (≤10 ms) or an explicit `smp_resched_all` at the
+  spawn sites; per-wake `smp_resched_one` is an rq-2 optimization.
+
 ## Gate
 `smoke-rqstress` (`-smp 4`): a fork-storm/thread-storm stress — N kernel
 threads created in waves across CPUs, all must complete (counted), plus the

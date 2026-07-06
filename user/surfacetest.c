@@ -112,7 +112,10 @@ int main(void) {
         }
 
         ticks++;
-        if (!closed && c >= 0 && ticks > 2000) {            /* close C; set shrinks 3 -> 2 */
+        if (!closed && c >= 0 && ticks > 12000) {           /* close C; set shrinks 3 -> 2
+                                                             * (rq-1: yields are cheaper —
+                                                             * widened so the compositor
+                                                             * composites the 3-set first) */
             nsi(SYS_SURFACE_CLOSE, c, 0, 0);
             printf("PRADYOS_CLOSE_OK id=%ld\n", c);
             fflush(stdout);

@@ -849,6 +849,19 @@ A caller blocks only on ITS OWN request — others proceed concurrently on any
 CPU. Proof: two kernel threads keep interleaved reads in flight on one disk,
 each round-tripping cleanly → `[blk] multi-inflight OK`; gate `smoke-blkmq`
 (`-smp 4`) + the FS family re-verifies correctness. **63 gates.**
+**Per-CPU runqueues + work stealing (DDR-SMP-rq-1):** the scheduler hot path
+no longer scans the shared ring — each CPU picks O(1) from its own FIFO
+(`g_rq[]`, leaf locks), steals (trylock, own-rq-first release — no
+hold-and-wait) when empty, and re-queues a preempted prev at its tail. The
+ring survives as the TOPOLOGY list only (reparent/pid_alive/reaper, still
+under `g_sched_lock`, which also still covers the switch — the handoff keeps
+the resume-before-save argument intact; per-CPU switch locks are rq-2).
+`sched_unblock` enqueues on the waker's CPU. Three bugs the gates caught:
+idle starvation on empty queues (idles are contexts — rotate through them);
+transient READY-but-`on_cpu>=0` entries must be RE-APPENDED, never dropped
+(a dropped one is a lost thread — deterministic winops hang); and the surface
+client outracing compositor init (COMPOSIT now spawns before SURFTEST + wider
+close delay). Gate `smoke-rqstress` (24-thread storm, 3 waves). **64 gates.**
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

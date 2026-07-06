@@ -47,6 +47,81 @@ static volatile int g_sched_ready;
 /* cap-4 proof: set by schedule() when an AP claims a ring-3 thread; polled by
  * the boot proof (which prints — schedule() itself must not, under the lock). */
 volatile int g_user_on_ap;
+
+/* DDR-SMP-rq-1: per-CPU ready queues (FIFO, intrusive via tcb.rq_next). The
+ * rq lock is a LEAF: never held while taking g_sched_lock or another rq lock
+ * (steal releases its own first, then TRYlocks victims — no hold-and-wait). */
+struct rq {
+    spinlock_t  lock;
+    struct tcb *head, *tail;
+};
+static struct rq g_rq[PERCPU_MAX];
+
+/* Enqueue t on cpu's ready FIFO (idempotent via rq_on). */
+static void rq_push(int cpu, struct tcb *t) {
+    struct rq *q = &g_rq[cpu];
+    uint64_t fl = spin_lock_irqsave(&q->lock);
+    if (!t->rq_on) {
+        t->rq_on = 1;
+        t->rq_next = 0;
+        if (q->tail) q->tail->rq_next = t; else q->head = t;
+        q->tail = t;
+    }
+    spin_unlock_irqrestore(&q->lock, fl);
+}
+
+/* Pop the first pickable thread from cpu's own FIFO (skips became-unpickable
+ * entries, e.g. a thread that blocked after being enqueued). NULL if empty. */
+/* Dequeue helper: pops entries until a runnable one is found. An entry that is
+ * READY but still on_cpu>=0 is a TRANSIENT (an unblock raced its owner's
+ * switch-away — the cap-2a spurious-wake case): it must be RE-APPENDED, never
+ * dropped, or the thread is lost forever (found the hard way via smoke-winops).
+ * Non-READY entries are genuinely stale and drop. Caller holds q->lock. */
+static struct tcb *rq_take(struct rq *q) {
+    struct tcb *t;
+    while ((t = q->head)) {
+        q->head = t->rq_next;
+        if (!q->head) q->tail = 0;
+        t->rq_on = 0;
+        t->rq_next = 0;
+        if (t->state == THREAD_READY) {
+            if (t->on_cpu < 0)
+                return t;                /* runnable — take it */
+            /* transient: re-append at the tail and stop (its CPU releases it
+             * within one switch; retrying immediately could spin on ourselves) */
+            t->rq_on = 1;
+            if (q->tail) q->tail->rq_next = t; else q->head = t;
+            q->tail = t;
+            return 0;
+        }
+        /* not READY: stale — drop and keep scanning */
+    }
+    return 0;
+}
+
+static struct tcb *rq_pop(int cpu) {
+    struct rq *q = &g_rq[cpu];
+    uint64_t fl = spin_lock_irqsave(&q->lock);
+    struct tcb *t = rq_take(q);
+    spin_unlock_irqrestore(&q->lock, fl);
+    return t;
+}
+
+/* Steal one thread from another CPU's FIFO (trylock; own rq NOT held). */
+static struct tcb *rq_steal(int self) {
+    for (int c = 0; c < PERCPU_MAX; c++) {
+        if (c == self || !g_rq[c].head)
+            continue;
+        struct rq *q = &g_rq[c];
+        if (__atomic_test_and_set(&q->lock.v, __ATOMIC_ACQUIRE))
+            continue;                    /* busy — don't convoy, next victim */
+        struct tcb *t = rq_take(q);      /* transients re-appended, never dropped */
+        spin_unlock(&q->lock);
+        if (t)
+            return t;
+    }
+    return 0;
+}
 static uint32_t next_tid = 1;
 static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit panics */
 
@@ -186,6 +261,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->state = initial_state;
     t->on_cpu = -1;                  /* not running anywhere until schedule() claims it */
     t->is_idle = 0;                  /* only the per-CPU idles set this */
+    t->rq_next = 0;                  /* rq-1: not enqueued yet */
+    t->rq_on = 0;
     t->quantum = t->quantum_reset = QUANTUM;
     t->entry = entry;
     t->arg = arg;
@@ -241,6 +318,12 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->next = current_thread->next;
     current_thread->next = t;
     irq_restore(fl);
+    /* rq-1: a READY-at-insert (kernel) thread goes straight onto this CPU's
+     * ready FIFO; BLOCKED user threads are enqueued by their sched_unblock. */
+    if (initial_state == THREAD_READY) {
+        struct percpu *pc = this_cpu();
+        rq_push(pc ? (int)pc->cpu_idx : 0, t);
+    }
     return t;
 }
 
@@ -368,19 +451,9 @@ static int runnable(const struct tcb *t) {
     return t->state == THREAD_READY || t->state == THREAD_RUNNING;
 }
 
-/* cap-2a D1 / cap-2b D1 / cap-4 D3: a thread CPU `cpu` can pick up. READY and
- * unclaimed (on_cpu<0); a per-CPU idle only by ITS OWN cpu (never cross-picked,
- * but the owner must be able to round-robin back to it — the idle is also that
- * CPU's main context, e.g. the BSP idle runs sched_demo). USER threads run on
- * any CPU since cap-4 (per-CPU TSS.RSP0, kstack_top, SYSCALL snapshot, signal
- * delivery are all in place). */
-static int pickable(const struct tcb *t, int cpu) {
-    if (t->state != THREAD_READY || t->on_cpu >= 0)
-        return 0;
-    if (t->is_idle && t != g_idle[cpu])
-        return 0;
-    return 1;
-}
+/* rq-1: the old ring-walk pickable() is gone — the rq pop/steal paths filter
+ * inline (READY && on_cpu<0; idles are never enqueued at all). USER threads
+ * run on any CPU since cap-4. */
 
 /* schedule() must be atomic against the timer: it is reached both voluntarily
  * (yield/sched_block) and from the timer IRQ (sched_tick). If a voluntary
@@ -405,16 +478,26 @@ static void schedule_locked(uint64_t fl) {
     struct percpu *pc = this_cpu();
     int cpu = pc ? (int)pc->cpu_idx : 0;
 
-    struct tcb *next = prev->next;
-    while (next != prev && !pickable(next, cpu))
-        next = next->next;
-
-    if (next == prev) {
-        if (runnable(prev)) {
+    /* rq-1: O(1) pick — own FIFO first, then steal; no more ring scan. Safe
+     * against the resume-before-save hazard because the switch below still
+     * runs under g_sched_lock (held here): a thief that pops `prev` right
+     * after we re-enqueue it below still serializes its own switch behind this
+     * lock's handoff release, by which time context_switch has saved prev->rsp
+     * (the exit-stack-race argument, applied to preemption). */
+    struct tcb *next = rq_pop(cpu);
+    if (!next)
+        next = rq_steal(cpu);
+    if (!next) {
+        /* Empty queues. The own idle is never enqueued but IS a real context
+         * (the BSP idle runs sched_demo/main work): a non-idle prev must still
+         * round-robin THROUGH it (prev re-queues below), or a yield loop would
+         * starve it — the cap-2b lesson, rq edition. Only the idle itself may
+         * "keep running" here. */
+        if (prev == g_idle[cpu] && runnable(prev)) {
             irq_restore(fl);
-            return;                /* prev is the only runnable thread; keep it */
+            return;
         }
-        next = g_idle[cpu];        /* prev blocked and nothing else: this CPU's idle */
+        next = g_idle[cpu];
     }
 
     /* Release prev (back to the pool for any CPU) and claim next for this CPU.
@@ -426,6 +509,8 @@ static void schedule_locked(uint64_t fl) {
     if (prev->state == THREAD_RUNNING)
         prev->state = THREAD_READY;
     prev->on_cpu = -1;
+    if (prev->state == THREAD_READY && !prev->is_idle)
+        rq_push(cpu, prev);        /* rq-1: a preempted-but-runnable prev re-queues */
     next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
     if (next->is_user && pc && !pc->is_bsp)
@@ -520,8 +605,15 @@ void sched_unblock(struct tcb *t) {
     if (!t)
         return;
     uint32_t expected = THREAD_BLOCKED;
-    __atomic_compare_exchange_n(&t->state, &expected, THREAD_READY,
-                                0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    if (__atomic_compare_exchange_n(&t->state, &expected, THREAD_READY,
+                                    0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+        /* rq-1: a freshly READY thread must be findable — enqueue it on the
+         * waker's own CPU's FIFO (steal spreads it if this CPU stays busy; an
+         * idle CPU picks it up within a timer tick). rq_push is a leaf lock,
+         * safe from IRQ handlers and under device compl locks. */
+        struct percpu *pc = this_cpu();
+        rq_push(pc ? (int)pc->cpu_idx : 0, t);
+    }
 }
 
 /* Terminate the current thread: save its exit status, become a ZOMBIE (so the
