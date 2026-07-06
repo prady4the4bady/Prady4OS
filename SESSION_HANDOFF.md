@@ -145,6 +145,10 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `smoke-msixap`. Also fixed en route (CI-caught): the exit-vs-collect kstack
   use-after-free (`sched_exit` now holds `g_sched_lock` ACROSS its final
   switch — DDR-SMP-exit-stack-race).
+- **Multi-in-flight blk is DONE (DDR-BLK-1, HEAD `e0c8f79`, 63 gates):** the
+  one-in-flight `busy` mutex is deleted — 8 per-request slots per disk
+  (`head2slot[]`), ALL vq+slot state under `compl_lock`, slot exhaustion
+  sleeps via `sched_block_on`. Gate `smoke-blkmq`.
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
