@@ -132,7 +132,19 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   percpu @56..120; per-AP `cpu_enable_sse`/NXE/SYSCALL-MSRs — see memory
   `ap-percpu-machine-state`; `smoke-smpuser`). ADR-016 fully superseded for the
   scheduler. Still deferred: IDT gate for the spurious vector (0xFF), per-CPU
-  runqueues/affinity, IRQ routing off the BSP (DDR-714 stage C).
+  runqueues/affinity.
+- **DDR-714 stage C is DONE (2026-07-06, HEAD `ea7977f`, 62 gates):** C1/C2 =
+  MSI-X for ALL virtio devices (blk vectors 50..53, net 54 both queues, input
+  55; `virtio_pci_msix_setup`, IDT→56 stubs, `msix_register` + LAPIC-only EOI;
+  INTx fallback kept; engagement pinned in smoke-fs/smoke-net-lo). The 8259
+  now carries ONLY ISA (keyboard IRQ1, COM1 RX IRQ4) — I/O APIC deliberately
+  skipped (q35 PIC-mode Interrupt Line ≠ IOAPIC GSI; MSI-X sidesteps it). C3 =
+  blk vectors distributed round-robin across APs; the locks-2 completion review
+  done (per-device `compl_lock` + `sched_block_on` closes the cross-CPU lost
+  wakeup; net/input stay BSP-routed — lwIP is single-threaded by design). Gate
+  `smoke-msixap`. Also fixed en route (CI-caught): the exit-vs-collect kstack
+  use-after-free (`sched_exit` now holds `g_sched_lock` ACROSS its final
+  switch — DDR-SMP-exit-stack-race).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
