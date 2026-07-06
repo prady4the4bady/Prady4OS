@@ -149,6 +149,14 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   one-in-flight `busy` mutex is deleted — 8 per-request slots per disk
   (`head2slot[]`), ALL vq+slot state under `compl_lock`, slot exhaustion
   sleeps via `sched_block_on`. Gate `smoke-blkmq`.
+- **Per-CPU runqueues are DONE (DDR-SMP-rq-1, HEAD `11ba406`, 64 gates):**
+  O(1) pick from per-CPU FIFOs + trylock work stealing; the ring is topology
+  only. The switch STILL runs under `g_sched_lock` (handoff keeps
+  resume-before-save safe) — removing that + per-wake `smp_resched_one` IPIs
+  is **rq-2** (not started). Bugs found: idle starvation (rotate through the
+  own idle on empty queues); READY-but-`on_cpu>=0` transients must be
+  RE-APPENDED never dropped (lost-thread); COMPOSIT now spawns before
+  SURFTEST (client outraced compositor init). Gate `smoke-rqstress`.
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
