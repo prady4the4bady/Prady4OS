@@ -125,6 +125,9 @@ jobs:
       - name: QEMU user-on-AP test (q35 -smp 4; a ring-3 thread runs on a non-BSP CPU)
         run: make smoke-smpuser
 
+      - name: QEMU MSI-X-on-AP test (q35 -smp 4; a blk completion runs on a non-BSP CPU)
+        run: make smoke-msixap
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

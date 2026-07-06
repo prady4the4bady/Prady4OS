@@ -39,15 +39,19 @@ struct vblk {
     volatile int          done;
     volatile int          busy;       /* one request in flight per disk */
     struct tcb           *waiter;
+    spinlock_t            compl_lock; /* DDR-714C3: guards done/waiter/vq-complete —
+                                       * the IRQ can run on ANOTHER CPU now */
+    volatile int          compl_ap;   /* proof: a completion ran on a non-BSP CPU */
 };
 
 static struct vblk g_inst[VBLK_MAX];
 static unsigned    g_ninst;
 
-static inline void cli(void) { __asm__ volatile("cli"); }
-static inline void sti(void) { __asm__ volatile("sti"); }
-
 static void complete(struct vblk *v) {
+    /* DDR-714C3: runs on whatever CPU the vector targets. The lock closes the
+     * lost-wakeup race against submit()'s check-then-block (the locks-4
+     * pattern: the requester publishes BLOCKED under this same lock). */
+    uint64_t fl = spin_lock_irqsave(&v->compl_lock);
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&v->vq, &len)) >= 0) {
@@ -59,6 +63,10 @@ static void complete(struct vblk *v) {
             sched_unblock(w);
         }
     }
+    struct percpu *pc = this_cpu();
+    if (pc && !pc->is_bsp)
+        v->compl_ap = 1;              /* C3 proof: completion off the BSP */
+    spin_unlock_irqrestore(&v->compl_lock, fl);
 }
 
 static void reap(struct vblk *v) {
@@ -84,6 +92,14 @@ static void vblk_msix3(void) { complete(&g_inst[3]); }
 static irq_handler_fn const vblk_msix_fn[VBLK_MAX] =
     { vblk_msix0, vblk_msix1, vblk_msix2, vblk_msix3 };
 
+/* DDR-714C3 proof: 1 if any disk's completion handler ran on a non-BSP CPU. */
+int virtio_blk_completed_on_ap(void) {
+    for (unsigned i = 0; i < g_ninst; i++)
+        if (g_inst[i].compl_ap)
+            return 1;
+    return 0;
+}
+
 static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                   uint32_t count, int to_device) {
     struct virtio_blk_req *h = (struct virtio_blk_req *)(uintptr_t)v->reqbuf;
@@ -99,30 +115,34 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
         { v->reqbuf + 16, 1,                             1 },
     };
 
-    cli();
-    /* DDR-SMP-3c-locks-2: sleep-mutex, held across sched_block() below — so the
-     * acquire is an atomic exchange (race-free across CPUs), NOT a spinlock (a
-     * spinlock held across a block would deadlock spinners). The loser reads 1
-     * and yields, exactly the prior one-CPU behavior. */
-    while (__atomic_exchange_n(&v->busy, 1, __ATOMIC_ACQUIRE)) {
-        sti();
+    /* DDR-SMP-3c-locks-2: per-disk sleep-mutex (atomic acquire, yield-wait) —
+     * one request in flight; NOT a spinlock (held across the sleep below). */
+    while (__atomic_exchange_n(&v->busy, 1, __ATOMIC_ACQUIRE))
         yield();
-        cli();
-    }
+
+    /* DDR-714C3: the completion IRQ may run on another CPU, so the old cli
+     * around done/waiter no longer closes the lost-wakeup race. The locks-4
+     * pattern does: done/waiter (and the publish+notify, kept short) live under
+     * compl_lock, and the wait publishes BLOCKED under that same lock via
+     * sched_block_on — a completion serialized after the release always sees
+     * the waiter BLOCKED, so its wake CAS cannot miss. */
+    uint64_t fl = spin_lock_irqsave(&v->compl_lock);
     v->done = 0;
     v->waiter = current_thread;
     int head = virtq_add(&v->vq, bufs, 3);
     if (head < 0) {
+        v->waiter = 0;
+        spin_unlock_irqrestore(&v->compl_lock, fl);
         __atomic_store_n(&v->busy, 0, __ATOMIC_RELEASE);
-        sti();
         return -1;
     }
     virtq_publish(&v->vq, head);
     virtio_pci_notify(&v->dev, &v->vq, 0);
     while (!v->done)
-        sched_block();
+        sched_block_on(&v->compl_lock);
+    v->waiter = 0;
+    spin_unlock_irqrestore(&v->compl_lock, fl);
     __atomic_store_n(&v->busy, 0, __ATOMIC_RELEASE);
-    sti();
     return (*status == 0) ? 0 : -1;
 }
 
@@ -158,12 +178,19 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     }
     uint64_t capacity = *(volatile uint64_t *)(uintptr_t)v->dev.devcfg;
 
-    /* DDR-714C1: prefer a per-device MSI-X vector (50+unit) delivered straight
-     * to the BSP's LAPIC — unshared, no 8259. Fall back to the shared INTx
-     * chain if the device lacks MSI-X or rejects the mapping. */
+    /* DDR-714C1: prefer a per-device MSI-X vector (50+unit) — unshared, no
+     * 8259; INTx fallback. DDR-714C3: distribute the vectors round-robin over
+     * the APs (unit i -> roster 1+(i%(n-1))) so completions run off the BSP;
+     * single-CPU boots keep the BSP. The AP LAPICs are sw-enabled long before
+     * the first disk I/O (the FS phase runs under the scheduler). */
     unsigned unit = g_ninst;
     uint8_t vec = (uint8_t)(VBLK_MSIX_BASE + unit);
-    int msix = (virtio_pci_msix_setup(&v->dev, vec, lapic_id(), 1) == 0);
+    v->compl_lock = (spinlock_t)SPINLOCK_INIT;
+    v->compl_ap = 0;
+    unsigned ncpu = lapic_cpu_count();
+    uint32_t dest = (ncpu > 1) ? lapic_apic_id_at(1 + (unit % (ncpu - 1)))
+                               : lapic_id();
+    int msix = (virtio_pci_msix_setup(&v->dev, vec, dest, 1) == 0);
     if (msix) {
         msix_register(vec, vblk_msix_fn[unit]);
     } else {

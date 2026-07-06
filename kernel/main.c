@@ -839,6 +839,12 @@ static void fs_test_thread(void *arg) {
                     g_aether_daemon_pid = dm->pid;
                 }
                 smpuser_proof();     /* ADR-031 cap-4: ring 3 runs on an AP */
+                /* DDR-714C3: plenty of disk I/O has completed by now (the SFS
+                 * ELF loads above) — assert a blk completion ran off the BSP. */
+                if (g_smp_have_aps)
+                    kputs(virtio_blk_completed_on_ap()
+                              ? "[blk] msix on AP OK\r\n"
+                              : "[blk] msix on AP FAIL\r\n");
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

@@ -822,6 +822,22 @@ split (shared `*_complete` body; the INTx fallback keeps its ack-gate).
 pointer gates prove vec 55 functionally (QMP events arrive only via it).
 Destination still the BSP; distribution (+ completion-field review) is C3.
 No new gate; 61 total.
+**DDR-714 stage C3 — blk vectors distributed across APs (stage C COMPLETE):**
+disk completions now run OFF the BSP — blk unit i's vector targets roster CPU
+`1+(i%(n-1))`. The locks-2 D2 completion review, done: the old `cli` around
+`done`/`waiter` masked only the local CPU, so a completion IRQ on another CPU
+could fire between the requester's `done` check and its BLOCKED transition —
+its wake CAS a no-op → sleep forever. Fixed with the locks-4 pattern: a
+per-device `compl_lock` guards `done`/`waiter` (+the short publish/notify), the
+IRQ handler takes it (irqsave), and the requester waits via
+`sched_block_on(&compl_lock)` — BLOCKED published under the lock, the wake
+can't miss. The virtq needs no extra lock while the one-in-flight `busy`
+sleep-mutex holds (submit/complete never overlap in time; ordering via
+`virtio_mb` + the lock). **net + input stay BSP-routed by decision** (net's
+completion calls into lwIP, which is single-threaded by design; input folds
+into BSP-polled globals — documented in the DDR). Gate `smoke-msixap`
+(`-smp 4`): `[blk] msix on AP OK` + FS sentinels (correct I/O under cross-CPU
+completion). **62 gates.**
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

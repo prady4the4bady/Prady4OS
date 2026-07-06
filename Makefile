@@ -757,6 +757,15 @@ smoke-smpuser: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="user on AP FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# MSI-X distribution gate (DDR-714C3): the blk vectors target APs; a disk
+# completion handler provably ran on a non-BSP CPU while the FS phase's actual
+# I/O all still passes (correctness under cross-CPU completion).
+smoke-msixap: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[blk] msix on AP OK\n[sfs] lz4+tags compress/readback/tag OK')" \
+	FORBIDDEN_SENTINEL="msix on AP FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # SMP locking gate (ADR-030 stage 1): each AP allocates+frees a PMM page and a
 # slab object through the new subsystem spinlocks before parking; all three must
 # report locks OK (and none FAIL) alongside full bring-up.
