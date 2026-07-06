@@ -157,6 +157,10 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   own idle on empty queues); READY-but-`on_cpu>=0` transients must be
   RE-APPENDED never dropped (lost-thread); COMPOSIT now spawns before
   SURFTEST (client outraced compositor init). Gate `smoke-rqstress`.
+- **L7 polish resumed:** **DDR-720** Tab window cycling (compositor hotkey,
+  `smoke-alttab`) and **DDR-721** double-buffered page flip (two host GPU
+  resources over one guest buffer; flush = transfer-offscreen → scanout-flip;
+  `smoke-flip`). HEAD `d23b307`, **66 gates**, all CI-green.
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
