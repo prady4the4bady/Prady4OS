@@ -610,6 +610,24 @@ int main(void) {
                 fflush(stdout);
                 recompose_scene();
             }
+            else if (c == '\t') {                            /* DDR-720: cycle windows —
+                                                              * raise the bottom-most
+                                                              * visible surface (Tab is a
+                                                              * compositor hotkey, not
+                                                              * forwarded to the focus) */
+                int low_id = -1;
+                int low_z = 0x7FFFFFFF;
+                for (long i = 0; i < ns; i++) {
+                    if (g_min_mask & (1u << surfs[i].id)) continue;
+                    if (surfs[i].z < low_z) { low_z = surfs[i].z; low_id = (int)surfs[i].id; }
+                }
+                if (low_id >= 0) {
+                    nsi(SYS_SURFACE_RAISE, low_id, 0, 0);
+                    printf("PRADYOS_WM_CYCLE id=%d\n", low_id);
+                    fflush(stdout);
+                    recompose_scene();
+                }
+            }
             else if (focus_id >= 0)                          /* DDR-708: route to focus */
                 nsi(SYS_SURFACE_SENDKEY, focus_id, (long)c, 0);
         }

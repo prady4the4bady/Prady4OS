@@ -862,6 +862,13 @@ transient READY-but-`on_cpu>=0` entries must be RE-APPENDED, never dropped
 (a dropped one is a lost thread — deterministic winops hang); and the surface
 client outracing compositor init (COMPOSIT now spawns before SURFTEST + wider
 close delay). Gate `smoke-rqstress` (24-thread storm, 3 waves). **64 gates.**
+**Window cycling (DDR-720):** Tab is a compositor hotkey (not forwarded to the
+focus): each press raises the bottom-most visible, non-minimized surface
+(`SYS_SURFACE_RAISE`, sovereign override) — repeated Tab rotates the whole set
+in z-order, printing `PRADYOS_WM_CYCLE id=N`. Realized as plain Tab (the PS/2
+keymap delivers ASCII; Alt-modifier plumbing stays deferred with the scancode
+work). Gate `smoke-alttab` (GPU + sendkey `tab`): ≥2 cycles over ≥2 DIFFERENT
+windows — measured 3 cycles over 3 windows. **65 gates.**
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

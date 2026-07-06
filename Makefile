@@ -958,6 +958,26 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Window-cycling gate (DDR-720): Tab is a compositor hotkey — each press raises
+# the bottom-most visible window (focus + top). Two Tabs must cycle two
+# DIFFERENT windows (A and B swap as each raise buries the other).
+smoke-alttab: $(IMG) fat-image sfs-image
+	@echo "[alttab] Tab window-cycling gate (GPU + sendkey tab -> WM_CYCLE)..."
+	@rm -f build/alttab.log /tmp/palttab.sock
+	@bash tools/qemu_runner/input_inject.sh build/alttab.log /tmp/palttab.sock PRADYOS_FOCUS "tab" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/palttab.sock,server,nowait \
+	    -serial file:build/alttab.log -display none -no-reboot || true
+	@n=$$(grep -ac PRADYOS_WM_CYCLE build/alttab.log || true); \
+	 d=$$(grep -ao 'PRADYOS_WM_CYCLE id=[0-9]*' build/alttab.log | sort -u | wc -l); \
+	 [ "$$n" -ge 2 ] || { echo "[alttab] FAIL — fewer than 2 cycles ($$n)"; tail -20 build/alttab.log; exit 1; }; \
+	 [ "$$d" -ge 2 ] || { echo "[alttab] FAIL — cycling did not rotate windows"; tail -20 build/alttab.log; exit 1; }; \
+	 echo "[alttab] PASS — $$n cycles over $$d windows"
+
 # Layer-7 named-agent panel gate (DDR-707): the compositor renders the 8 named
 # agent cards and reports the roster; the AETHER daemon's spawn lights KRYOS
 # (active), the rest inactive — state tied to AETHER's roster. Needs the GPU.

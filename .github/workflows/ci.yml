@@ -134,6 +134,9 @@ jobs:
       - name: QEMU runqueue stress test (q35 -smp 4; thread storm over per-CPU rqs)
         run: make smoke-rqstress
 
+      - name: QEMU window-cycling test (GPU; Tab hotkey rotates focus through windows)
+        run: make smoke-alttab
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 
