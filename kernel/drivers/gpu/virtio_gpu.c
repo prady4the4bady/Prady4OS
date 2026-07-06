@@ -42,7 +42,9 @@ struct gpu_transfer_2d { struct gpu_ctrl_hdr hdr; struct gpu_rect r; uint64_t of
                          uint32_t resource_id, padding; };
 struct gpu_resource_flush { struct gpu_ctrl_hdr hdr; struct gpu_rect r; uint32_t resource_id, padding; };
 
-#define GPU_RESOURCE_ID 1
+#define GPU_RESOURCE_ID  1
+#define GPU_RESOURCE_ID2 2   /* DDR-721: second host resource for page flips */
+static int g_res2_ok;        /* second resource created (double-buffer active) */
 #define GPU_REQ_OFF     0u      /* request region within the scratch page */
 #define GPU_RESP_OFF    1024u   /* response region */
 
@@ -200,6 +202,26 @@ void virtio_gpu_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputs("virtio-gpu: resource_flush failed\r\n"); return;
     }
 
+    /* DDR-721: a SECOND host resource attached to the SAME guest pages —
+     * flushes then transfer into the off-screen one and flip scanout to it,
+     * so the displayed resource is always a complete frame (no tearing).
+     * Failure is non-fatal: g_res2_ok=0 keeps the single-buffer path. */
+    hdr_set(VIRTIO_GPU_CMD_RESOURCE_CREATE_2D);
+    c = (struct gpu_create_2d *)(uintptr_t)(g->scratch + GPU_REQ_OFF);
+    c->resource_id = GPU_RESOURCE_ID2;
+    c->format = VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM;
+    c->width = g->w; c->height = g->h;
+    if (gpu_cmd(g, sizeof *c, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA) {
+        hdr_set(VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING);
+        a = (struct gpu_attach_backing *)(uintptr_t)(g->scratch + GPU_REQ_OFF);
+        a->resource_id = GPU_RESOURCE_ID2;
+        a->nr_entries = 1;
+        a->addr = fb;
+        a->length = (uint32_t)fb_bytes;
+        if (gpu_cmd(g, sizeof *a, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA)
+            g_res2_ok = 1;
+    }
+
     g_up = 1;
     kputs("PRADYOS_GPU_FB_OK ");
     kputdec(g->w); kputs("x"); kputdec(g->h);
@@ -223,17 +245,39 @@ int virtio_gpu_present(void) {
     if (g_busy) return -1;
     g_busy = 1;
     int rc = -1;
+    /* DDR-721: flip target — transfer into the resource NOT being scanned out,
+     * then move the scanout to it. Falls back to the single resource if the
+     * second one wasn't created. */
+    static uint32_t g_frame;
+    static int g_flip_said;
+    uint32_t res = (g_res2_ok && (g_frame & 1)) ? GPU_RESOURCE_ID2 : GPU_RESOURCE_ID;
     hdr_set(VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D);
     struct gpu_transfer_2d *t = (struct gpu_transfer_2d *)(uintptr_t)(g_gpu.scratch + GPU_REQ_OFF);
     t->r.x = 0; t->r.y = 0; t->r.width = g_gpu.w; t->r.height = g_gpu.h;
-    t->offset = 0; t->resource_id = GPU_RESOURCE_ID;
+    t->offset = 0; t->resource_id = res;
     if (gpu_cmd(&g_gpu, sizeof *t, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA) {
-        hdr_set(VIRTIO_GPU_CMD_RESOURCE_FLUSH);
-        struct gpu_resource_flush *f = (struct gpu_resource_flush *)(uintptr_t)(g_gpu.scratch + GPU_REQ_OFF);
-        f->r.x = 0; f->r.y = 0; f->r.width = g_gpu.w; f->r.height = g_gpu.h;
-        f->resource_id = GPU_RESOURCE_ID;
-        if (gpu_cmd(&g_gpu, sizeof *f, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA)
-            rc = 0;
+        int ok = 1;
+        if (g_res2_ok) {                      /* flip the scanout to the fresh frame */
+            hdr_set(VIRTIO_GPU_CMD_SET_SCANOUT);
+            struct gpu_set_scanout *s = (struct gpu_set_scanout *)(uintptr_t)(g_gpu.scratch + GPU_REQ_OFF);
+            s->r.x = 0; s->r.y = 0; s->r.width = g_gpu.w; s->r.height = g_gpu.h;
+            s->scanout_id = 0; s->resource_id = res;
+            ok = (gpu_cmd(&g_gpu, sizeof *s, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA);
+        }
+        if (ok) {
+            hdr_set(VIRTIO_GPU_CMD_RESOURCE_FLUSH);
+            struct gpu_resource_flush *f = (struct gpu_resource_flush *)(uintptr_t)(g_gpu.scratch + GPU_REQ_OFF);
+            f->r.x = 0; f->r.y = 0; f->r.width = g_gpu.w; f->r.height = g_gpu.h;
+            f->resource_id = res;
+            if (gpu_cmd(&g_gpu, sizeof *f, sizeof(struct gpu_ctrl_hdr)) == VIRTIO_GPU_RESP_OK_NODATA) {
+                rc = 0;
+                g_frame++;
+                if (g_res2_ok && g_frame >= 2 && !g_flip_said) {
+                    g_flip_said = 1;          /* both resources have been presented */
+                    kputs("[gpu] page-flip OK\r\n");
+                }
+            }
+        }
     }
     g_busy = 0;
     return rc;

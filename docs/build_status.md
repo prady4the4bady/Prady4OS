@@ -869,6 +869,14 @@ in z-order, printing `PRADYOS_WM_CYCLE id=N`. Realized as plain Tab (the PS/2
 keymap delivers ASCII; Alt-modifier plumbing stays deferred with the scancode
 work). Gate `smoke-alttab` (GPU + sendkey `tab`): ≥2 cycles over ≥2 DIFFERENT
 windows — measured 3 cycles over 3 windows. **65 gates.**
+**Double-buffered page flip (DDR-721):** `SYS_FB_FLUSH` no longer transfers
+into the resource being scanned out (the host could present a half-transferred
+frame). The driver creates a SECOND host resource attached to the SAME guest
+pages (zero client API change); each flush transfers into the off-screen one →
+SET_SCANOUT flips to it → RESOURCE_FLUSH — the displayed resource is always a
+complete frame. Single-buffer fallback if the second create fails. Sentinel
+`[gpu] page-flip OK` after both resources have presented; gate `smoke-flip`.
+**66 gates.**
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

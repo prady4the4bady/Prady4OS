@@ -958,6 +958,14 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Page-flip gate (DDR-721): two host GPU resources over one guest buffer; every
+# flush transfers into the off-screen one and flips scanout — the sentinel
+# prints once both resources have been presented (tear-free by construction).
+smoke-flip: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_GPU=1 \
+	EXTRA_SENTINEL="$$(printf '[gpu] page-flip OK\nPRADYOS_COMPOSITOR_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Window-cycling gate (DDR-720): Tab is a compositor hotkey — each press raises
 # the bottom-most visible window (focus + top). Two Tabs must cycle two
 # DIFFERENT windows (A and B swap as each raise buries the other).

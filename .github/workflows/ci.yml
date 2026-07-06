@@ -137,6 +137,9 @@ jobs:
       - name: QEMU window-cycling test (GPU; Tab hotkey rotates focus through windows)
         run: make smoke-alttab
 
+      - name: QEMU page-flip test (GPU; double-buffered scanout flips on flush)
+        run: make smoke-flip
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 
