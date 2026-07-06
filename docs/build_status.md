@@ -838,6 +838,17 @@ completion calls into lwIP, which is single-threaded by design; input folds
 into BSP-polled globals — documented in the DDR). Gate `smoke-msixap`
 (`-smp 4`): `[blk] msix on AP OK` + FS sentinels (correct I/O under cross-CPU
 completion). **62 gates.**
+**Multi-in-flight block I/O (DDR-BLK-1):** the payoff C1–C3 unblocked. The
+one-in-flight `busy` sleep-mutex is DELETED: each disk gets `VBLK_NREQ` (8)
+per-request slots (32-byte header+status strides in the existing reqbuf page;
+per-slot `done`/`waiter`; `head2slot[]` maps used-ring heads back). ALL vq +
+slot state moves under `compl_lock` (submit-side add/publish and the vector
+CPU's pop now genuinely interleave — C3's "no vq lock" rested on one-in-flight);
+slot exhaustion sleeps via `sched_block_on` (never spins), woken on slot free.
+A caller blocks only on ITS OWN request — others proceed concurrently on any
+CPU. Proof: two kernel threads keep interleaved reads in flight on one disk,
+each round-tripping cleanly → `[blk] multi-inflight OK`; gate `smoke-blkmq`
+(`-smp 4`) + the FS family re-verifies correctness. **63 gates.**
 **Deferred (DDR-702..709):** real glass blur
 + saturation; multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple

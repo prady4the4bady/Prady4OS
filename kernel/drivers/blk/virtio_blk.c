@@ -31,16 +31,26 @@ struct virtio_blk_req {
     uint64_t sector;
 } __attribute__((packed));
 
+/* DDR-BLK-1: per-request slot — multiple requests are in flight per disk.
+ * Slot i's DMA header lives at reqbuf + i*32 (16B header + status byte). */
+#define VBLK_NREQ 8
+struct vreq {
+    volatile int  used;
+    volatile int  done;
+    struct tcb   *waiter;
+};
+
 struct vblk {
     struct virtio_pci_dev dev;
     struct virtq          vq;
     struct blk_device     bd;
     uint64_t              reqbuf;
-    volatile int          done;
-    volatile int          busy;       /* one request in flight per disk */
-    struct tcb           *waiter;
-    spinlock_t            compl_lock; /* DDR-714C3: guards done/waiter/vq-complete —
-                                       * the IRQ can run on ANOTHER CPU now */
+    struct vreq           req[VBLK_NREQ];
+    int16_t               head2slot[256];  /* used-ring head -> slot (-1 free) */
+    struct tcb           *slot_waiter;     /* a submitter waiting for a free slot */
+    spinlock_t            compl_lock; /* DDR-714C3/BLK-1: guards the vq + all slot
+                                       * state — submit and completion now overlap
+                                       * across CPUs (short, non-sleeping sections) */
     volatile int          compl_ap;   /* proof: a completion ran on a non-BSP CPU */
 };
 
@@ -55,12 +65,17 @@ static void complete(struct vblk *v) {
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&v->vq, &len)) >= 0) {
+        int s = (head >= 0 && head < 256) ? v->head2slot[head] : -1;
+        if (head >= 0 && head < 256)
+            v->head2slot[head] = -1;
         virtq_free_chain(&v->vq, head);
-        v->done = 1;
-        if (v->waiter) {
-            struct tcb *w = v->waiter;
-            v->waiter = 0;
-            sched_unblock(w);
+        if (s >= 0 && s < VBLK_NREQ) {          /* wake THIS request's submitter */
+            v->req[s].done = 1;
+            if (v->req[s].waiter) {
+                struct tcb *w = v->req[s].waiter;
+                v->req[s].waiter = 0;
+                sched_unblock(w);
+            }
         }
     }
     struct percpu *pc = this_cpu();
@@ -100,50 +115,67 @@ int virtio_blk_completed_on_ap(void) {
     return 0;
 }
 
+/* DDR-BLK-1: multi-in-flight submit. All slot + vq state under compl_lock
+ * (the locks-4 pattern from C3: waits publish BLOCKED under the lock via
+ * sched_block_on, so completions on any CPU can't lose the wakeup). The old
+ * one-in-flight busy sleep-mutex is gone — a caller blocks only on ITS OWN
+ * request; others proceed concurrently, on any CPU. */
 static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                   uint32_t count, int to_device) {
-    struct virtio_blk_req *h = (struct virtio_blk_req *)(uintptr_t)v->reqbuf;
-    volatile uint8_t *status = (volatile uint8_t *)(uintptr_t)(v->reqbuf + 16);
+    uint64_t fl = spin_lock_irqsave(&v->compl_lock);
+
+    /* Claim a request slot; sleep (never spin) when all are in flight. */
+    int s;
+    for (;;) {
+        for (s = 0; s < VBLK_NREQ; s++)
+            if (!v->req[s].used)
+                break;
+        if (s < VBLK_NREQ)
+            break;
+        v->slot_waiter = current_thread;
+        sched_block_on(&v->compl_lock);        /* woken when a slot frees */
+    }
+    v->req[s].used = 1;
+    v->req[s].done = 0;
+    v->req[s].waiter = current_thread;
+
+    uint64_t hdr = v->reqbuf + (uint64_t)s * 32;   /* 16B header + status byte */
+    struct virtio_blk_req *h = (struct virtio_blk_req *)(uintptr_t)hdr;
+    volatile uint8_t *status = (volatile uint8_t *)(uintptr_t)(hdr + 16);
     h->type = to_device ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
     h->reserved = 0;
     h->sector = lba;
     *status = 0xFF;
 
     struct virtq_buf bufs[3] = {
-        { v->reqbuf,      sizeof(struct virtio_blk_req), 0 },
-        { data_phys,      SECTOR * count,                to_device ? 0 : 1 },
-        { v->reqbuf + 16, 1,                             1 },
+        { hdr,       sizeof(struct virtio_blk_req), 0 },
+        { data_phys, SECTOR * count,                to_device ? 0 : 1 },
+        { hdr + 16,  1,                             1 },
     };
-
-    /* DDR-SMP-3c-locks-2: per-disk sleep-mutex (atomic acquire, yield-wait) —
-     * one request in flight; NOT a spinlock (held across the sleep below). */
-    while (__atomic_exchange_n(&v->busy, 1, __ATOMIC_ACQUIRE))
-        yield();
-
-    /* DDR-714C3: the completion IRQ may run on another CPU, so the old cli
-     * around done/waiter no longer closes the lost-wakeup race. The locks-4
-     * pattern does: done/waiter (and the publish+notify, kept short) live under
-     * compl_lock, and the wait publishes BLOCKED under that same lock via
-     * sched_block_on — a completion serialized after the release always sees
-     * the waiter BLOCKED, so its wake CAS cannot miss. */
-    uint64_t fl = spin_lock_irqsave(&v->compl_lock);
-    v->done = 0;
-    v->waiter = current_thread;
     int head = virtq_add(&v->vq, bufs, 3);
-    if (head < 0) {
-        v->waiter = 0;
+    if (head < 0 || head >= 256) {
+        v->req[s].used = 0;
+        v->req[s].waiter = 0;
         spin_unlock_irqrestore(&v->compl_lock, fl);
-        __atomic_store_n(&v->busy, 0, __ATOMIC_RELEASE);
         return -1;
     }
+    v->head2slot[head] = (int16_t)s;
     virtq_publish(&v->vq, head);
     virtio_pci_notify(&v->dev, &v->vq, 0);
-    while (!v->done)
-        sched_block_on(&v->compl_lock);
-    v->waiter = 0;
+
+    while (!v->req[s].done)
+        sched_block_on(&v->compl_lock);        /* BLOCKED published under the lock */
+
+    int ok = (*status == 0);
+    v->req[s].used = 0;                        /* release the slot ... */
+    v->req[s].waiter = 0;
+    if (v->slot_waiter) {                      /* ... and wake a starved submitter */
+        struct tcb *w = v->slot_waiter;
+        v->slot_waiter = 0;
+        sched_unblock(w);
+    }
     spin_unlock_irqrestore(&v->compl_lock, fl);
-    __atomic_store_n(&v->busy, 0, __ATOMIC_RELEASE);
-    return (*status == 0) ? 0 : -1;
+    return ok ? 0 : -1;
 }
 
 static int vblk_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
@@ -187,6 +219,14 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     uint8_t vec = (uint8_t)(VBLK_MSIX_BASE + unit);
     v->compl_lock = (spinlock_t)SPINLOCK_INIT;
     v->compl_ap = 0;
+    v->slot_waiter = 0;
+    for (int i = 0; i < VBLK_NREQ; i++) {      /* DDR-BLK-1: request slots */
+        v->req[i].used = 0;
+        v->req[i].done = 0;
+        v->req[i].waiter = 0;
+    }
+    for (int i = 0; i < 256; i++)
+        v->head2slot[i] = -1;
     unsigned ncpu = lapic_cpu_count();
     uint32_t dest = (ncpu > 1) ? lapic_apic_id_at(1 + (unit % (ncpu - 1)))
                                : lapic_id();

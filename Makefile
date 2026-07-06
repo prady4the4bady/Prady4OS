@@ -757,6 +757,15 @@ smoke-smpuser: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="user on AP FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Multi-in-flight gate (DDR-BLK-1): two threads keep requests outstanding on
+# one disk concurrently (per-request slots; the one-in-flight mutex is gone),
+# each round-tripping its own reads cleanly.
+smoke-blkmq: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[blk] multi-inflight OK\n[sfs] lz4+tags compress/readback/tag OK')" \
+	FORBIDDEN_SENTINEL="multi-inflight FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # MSI-X distribution gate (DDR-714C3): the blk vectors target APs; a disk
 # completion handler provably ran on a non-BSP CPU while the FS phase's actual
 # I/O all still passes (correctness under cross-CPU completion).

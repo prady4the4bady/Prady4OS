@@ -469,6 +469,32 @@ static void smpsched_proof(void) {
                                         : "[smp] sched cross-CPU FAIL\r\n");
 }
 
+/* DDR-BLK-1 proof: two threads keep requests in flight on ONE disk
+ * concurrently (each reads its own sector 8x and must round-trip cleanly).
+ * Bits 0/1 = reader ok; bits 8/9 = reader error. */
+static volatile uint32_t g_mq_done;
+static void blkmq_reader(void *arg) {
+    unsigned id = (unsigned)(uintptr_t)arg;
+    struct blk_device *bd = blk_get(0);
+    uint64_t buf = pmm_alloc_page();
+    int ok = (bd && buf);
+    for (int i = 0; ok && i < 8; i++)
+        if (bd->read(bd, id, (void *)(uintptr_t)buf, 1) != 0)
+            ok = 0;
+    if (buf)
+        pmm_free_page(buf);
+    __atomic_or_fetch(&g_mq_done, 1u << (ok ? id : id + 8), __ATOMIC_SEQ_CST);
+}
+static void blkmq_proof(void) {
+    sched_create(blkmq_reader, (void *)0, "mq0");
+    sched_create(blkmq_reader, (void *)1, "mq1");
+    uint64_t dl = g_ticks + 200;
+    while ((g_mq_done & 3u) != 3u && !(g_mq_done >> 8) && g_ticks < dl)
+        yield();
+    kputs((g_mq_done & 3u) == 3u ? "[blk] multi-inflight OK\r\n"
+                                 : "[blk] multi-inflight FAIL\r\n");
+}
+
 /* cap-3 proof: an AP's own LAPIC timer fires (preemption). Read a non-BSP CPU's
  * per-CPU tick counter, wait ~300 ms, and confirm it advanced — under cap-2b
  * (no AP timer) it would stay put. */
@@ -839,6 +865,7 @@ static void fs_test_thread(void *arg) {
                     g_aether_daemon_pid = dm->pid;
                 }
                 smpuser_proof();     /* ADR-031 cap-4: ring 3 runs on an AP */
+                blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
                 /* DDR-714C3: plenty of disk I/O has completed by now (the SFS
                  * ELF loads above) — assert a blk completion ran off the BSP. */
                 if (g_smp_have_aps)
