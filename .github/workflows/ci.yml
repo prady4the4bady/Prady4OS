@@ -143,6 +143,9 @@ jobs:
       - name: QEMU glass-blur test (GPU; cards blur + saturate the backdrop)
         run: make smoke-glassblur
 
+      - name: QEMU gradient test (GPU; multi-stop backdrop base)
+        run: make smoke-gradient
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

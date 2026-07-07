@@ -885,7 +885,13 @@ opaque precomputed fill would have erased the blur) + the 1px accent border.
 Sentinel `PRADYOS_GLASS_BLUR_OK` on the first blurred card; gate
 `smoke-glassblur`. Closes the longest-standing deferred visual (since
 DDR-712). **67 gates.**
-**Deferred (DDR-702..709):** multi-stop linear gradients; the Inter typeface; the
+**Multi-stop gradient backdrops (DDR-723):** the base fill under every
+ambiance was a flat `g_bg` rect; it is now a 3-stop vertical gradient DERIVED
+from the ambiance bg (0.0→bg, 0.35→bg×1.25 horizon lightening, 1.0→bg×0.55
+floor darkening, clamped, per-row fills) — so the OKLab ambiance transitions
+keep working unmodified and the DDR-716 glows draw over it. Sentinel
+`PRADYOS_GRADIENT_OK`; gate `smoke-gradient`. **68 gates.**
+**Deferred (DDR-702..709):** the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
 alt-tab; window decorations; surface destroy; per-agent live metrics; SFS

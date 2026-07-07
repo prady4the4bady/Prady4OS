@@ -403,7 +403,26 @@ static int agent_card_hit(int x, int y) {
 /* Render the desktop: the current ambiance bg + accent (DDR-709), the mode label
  * (DDR-704), and the agent panel (DDR-707). Colours are BGRA; g_bg/g_ac are RGB. */
 static void render(int mode) {
-    fill_rect(0, 0, g_fi.width, g_fi.height, g_bg[2], g_bg[1], g_bg[0]);  /* ambiance bg */
+    /* DDR-723: multi-stop vertical gradient base (brief §1) — 3 stops derived
+     * from the ambiance bg: lightened at the horizon-third, base at top,
+     * darkened toward the bottom. Per-row color, one fill per row. */
+    {
+        unsigned hh = g_fi.height ? g_fi.height : 1;
+        for (unsigned y = 0; y < hh; y++) {
+            /* stops: 0.0 -> bg, 0.35 -> bg*1.25 (lightened), 1.0 -> bg*0.55 */
+            unsigned char c[3];
+            float t = (float)y / (float)hh;
+            float f = (t < 0.35f) ? 1.0f + (0.25f * (t / 0.35f))
+                                  : 1.25f - (0.70f * ((t - 0.35f) / 0.65f));
+            for (int i = 0; i < 3; i++) {
+                float v = g_bg[i] * f;
+                c[i] = (unsigned char)(v > 255.0f ? 255 : v);
+            }
+            fill_rect(0, y, g_fi.width, 1, c[2], c[1], c[0]);
+        }
+        static int grad_said;
+        if (!grad_said) { grad_said = 1; printf("PRADYOS_GRADIENT_OK\n"); fflush(stdout); }
+    }
     fill_rect(0, 0, g_fi.width, 6, g_ac[2], g_ac[1], g_ac[0]);            /* accent bar  */
     if (g_settled)                                                       /* DDR-716: backdrops */
         render_backdrop();                                               /* (skipped mid-lerp) */
