@@ -458,6 +458,29 @@ static void blit_surface(const unsigned char *sva, unsigned w, unsigned h, int d
 #define TITLEBAR  18
 #define CLOSEBOX  12                 /* close box size; inset 4 px from the right */
 static void draw_window(const unsigned char *sva, const struct surface_info *s) {
+    /* DDR-724: decorations — a soft drop shadow (right+bottom strips, blended)
+     * and a 1px frame: accent-colored when focused, neutral gray otherwise. */
+    {
+        int ty0 = s->y - TITLEBAR; if (ty0 < 0) ty0 = 0;
+        int tx0 = s->x < 0 ? 0 : s->x;
+        unsigned fw = s->w, fh = (unsigned)(s->y - ty0) + s->h;
+        for (int d = 1; d <= 3; d++) {                     /* shadow, fading out */
+            float a = 0.22f - 0.06f * (float)(d - 1);
+            for (unsigned yy = 0; yy < fh + (unsigned)d; yy++)   /* right strip */
+                blend_px((unsigned)(tx0 + (int)fw - 1 + d), (unsigned)(ty0 + (int)yy + d), 0, 0, 0, a);
+            for (unsigned xx = 0; xx < fw; xx++)                 /* bottom strip */
+                blend_px((unsigned)(tx0 + (int)xx + d), (unsigned)(ty0 + (int)fh - 1 + d), 0, 0, 0, a);
+        }
+        unsigned char fb2 = s->focused ? g_ac[2] : 0x60;
+        unsigned char fg2 = s->focused ? g_ac[1] : 0x60;
+        unsigned char fr2 = s->focused ? g_ac[0] : 0x68;
+        fill_rect((unsigned)tx0 - 1, (unsigned)ty0 - 1, fw + 2, 1, fb2, fg2, fr2);
+        fill_rect((unsigned)tx0 - 1, (unsigned)(ty0 + (int)fh), fw + 2, 1, fb2, fg2, fr2);
+        fill_rect((unsigned)tx0 - 1, (unsigned)ty0 - 1, 1, fh + 2, fb2, fg2, fr2);
+        fill_rect((unsigned)(tx0 + (int)fw), (unsigned)ty0 - 1, 1, fh + 2, fb2, fg2, fr2);
+        static int decor_said;
+        if (!decor_said) { decor_said = 1; printf("PRADYOS_DECOR_OK\n"); fflush(stdout); }
+    }
     blit_surface(sva, s->w, s->h, s->x, s->y);
     int ty = s->y - TITLEBAR; if (ty < 0) ty = 0;
     int tx = s->x < 0 ? 0 : s->x;

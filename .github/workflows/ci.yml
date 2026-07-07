@@ -146,6 +146,9 @@ jobs:
       - name: QEMU gradient test (GPU; multi-stop backdrop base)
         run: make smoke-gradient
 
+      - name: QEMU decorations test (GPU; window frame + drop shadow)
+        run: make smoke-decor
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

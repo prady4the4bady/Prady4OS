@@ -891,6 +891,12 @@ from the ambiance bg (0.0→bg, 0.35→bg×1.25 horizon lightening, 1.0→bg×0.
 floor darkening, clamped, per-row fills) — so the OKLab ambiance transitions
 keep working unmodified and the DDR-716 glows draw over it. Sentinel
 `PRADYOS_GRADIENT_OK`; gate `smoke-gradient`. **68 gates.**
+**Window decorations (DDR-724):** windows now carry a 1px frame — ACCENT
+colored when focused, neutral gray otherwise (a glanceable focus cue) — plus a
+fading right/bottom drop shadow (3 `blend_px` strips, α 0.22→0.10). Off-screen
+edges clip through `put_px`. The title-bar click boxes (close/min/max) are
+unmoved — all pointer gates re-verified. Sentinel `PRADYOS_DECOR_OK`; gate
+`smoke-decor`. **69 gates.**
 **Deferred (DDR-702..709):** the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;

@@ -958,6 +958,13 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Decorations gate (DDR-724): windows carry a 1px frame (accent when focused,
+# gray otherwise) + a fading right/bottom drop shadow.
+smoke-decor: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_GPU=1 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_DECOR_OK\nPRADYOS_SURFACE_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Gradient gate (DDR-723): the backdrop base is a 3-stop vertical gradient
 # derived from the ambiance bg (horizon lightening, floor darkening).
 smoke-gradient: $(IMG) fat-image sfs-image
