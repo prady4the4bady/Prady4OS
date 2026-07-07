@@ -877,8 +877,15 @@ SET_SCANOUT flips to it → RESOURCE_FLUSH — the displayed resource is always 
 complete frame. Single-buffer fallback if the second create fails. Sentinel
 `[gpu] page-flip OK` after both resources have presented; gate `smoke-flip`.
 **66 gates.**
-**Deferred (DDR-702..709):** real glass blur
-+ saturation; multi-stop linear gradients; the Inter typeface; the
+**Real glass blur + saturation (DDR-722):** glass cards now BLUR the composed
+scene beneath them — separable in-place 9-tap box blur (radius 4), card-sized
+regions only — with a ×1.3 chroma boost around luma (the brief's frosted pair),
+then the tint BLENDS over it (`blend_px` rgba(255,255,255,0.10); the old
+opaque precomputed fill would have erased the blur) + the 1px accent border.
+Sentinel `PRADYOS_GLASS_BLUR_OK` on the first blurred card; gate
+`smoke-glassblur`. Closes the longest-standing deferred visual (since
+DDR-712). **67 gates.**
+**Deferred (DDR-702..709):** multi-stop linear gradients; the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
 alt-tab; window decorations; surface destroy; per-agent live metrics; SFS

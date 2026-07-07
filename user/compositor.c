@@ -213,14 +213,77 @@ static void render_backdrop(void) {
     }
 }
 
-/* A frosted-glass card: a flat translucent tint of the current ambiance bg
- * (computed, no FB reads) + a 1px accent border (brief §9; real blur deferred). */
+/* DDR-722: separable in-place box blur (radius 4) + saturation boost over a
+ * framebuffer rect — the real frosted-glass backdrop (brief §9). */
+#define BLUR_R 4
+static void blur_rect(unsigned x0, unsigned y0, unsigned w, unsigned h) {
+    if (!g_fb || w == 0 || h == 0) return;
+    if (x0 + w > g_fi.width || y0 + h > g_fi.height) return;
+    static unsigned char line[4096 * 4];             /* max row/col scratch */
+    if (w * 4 > sizeof line || h * 4 > sizeof line) return;
+
+    for (unsigned y = y0; y < y0 + h; y++) {         /* horizontal pass */
+        unsigned char *row = g_fb + (unsigned long)y * g_fi.stride + (unsigned long)x0 * 4;
+        for (unsigned x = 0; x < w; x++) {
+            unsigned sb = 0, sg = 0, sr = 0, n = 0;
+            for (int k = -BLUR_R; k <= BLUR_R; k++) {
+                int xx = (int)x + k;
+                if (xx < 0 || xx >= (int)w) continue;
+                sb += row[xx * 4 + 0]; sg += row[xx * 4 + 1]; sr += row[xx * 4 + 2]; n++;
+            }
+            line[x * 4 + 0] = (unsigned char)(sb / n);
+            line[x * 4 + 1] = (unsigned char)(sg / n);
+            line[x * 4 + 2] = (unsigned char)(sr / n);
+        }
+        for (unsigned x = 0; x < w; x++) {
+            row[x * 4 + 0] = line[x * 4 + 0];
+            row[x * 4 + 1] = line[x * 4 + 1];
+            row[x * 4 + 2] = line[x * 4 + 2];
+        }
+    }
+    for (unsigned x = x0; x < x0 + w; x++) {         /* vertical pass */
+        for (unsigned y = 0; y < h; y++) {
+            unsigned sb = 0, sg = 0, sr = 0, n = 0;
+            for (int k = -BLUR_R; k <= BLUR_R; k++) {
+                int yy = (int)y + k;
+                if (yy < 0 || yy >= (int)h) continue;
+                unsigned char *p = g_fb + (unsigned long)(y0 + yy) * g_fi.stride + (unsigned long)x * 4;
+                sb += p[0]; sg += p[1]; sr += p[2]; n++;
+            }
+            line[y * 4 + 0] = (unsigned char)(sb / n);
+            line[y * 4 + 1] = (unsigned char)(sg / n);
+            line[y * 4 + 2] = (unsigned char)(sr / n);
+        }
+        for (unsigned y = 0; y < h; y++) {
+            unsigned char *p = g_fb + (unsigned long)(y0 + y) * g_fi.stride + (unsigned long)x * 4;
+            /* saturation boost x1.3 around luma (brief: blur + saturation) */
+            int b = line[y * 4 + 0], gg = line[y * 4 + 1], r = line[y * 4 + 2];
+            int gray = (b + gg + r) / 3;
+            int nb = gray + ((b - gray) * 13) / 10;
+            int ng = gray + ((gg - gray) * 13) / 10;
+            int nr = gray + ((r - gray) * 13) / 10;
+            p[0] = (unsigned char)(nb < 0 ? 0 : nb > 255 ? 255 : nb);
+            p[1] = (unsigned char)(ng < 0 ? 0 : ng > 255 ? 255 : ng);
+            p[2] = (unsigned char)(nr < 0 ? 0 : nr > 255 ? 255 : nr);
+        }
+    }
+}
+
+/* A frosted-glass card: the scene beneath is BLURRED + saturated (DDR-722),
+ * then a translucent tint + 1px accent border go over it (brief §9). */
 static void glass_card(unsigned x, unsigned y, unsigned w, unsigned h) {
-    const float a = 0.10f;                           /* ~rgba(255,255,255,0.10) over bg */
-    unsigned char tb = (unsigned char)(g_bg[2] * (1.0f - a) + 255.0f * a);
-    unsigned char tg = (unsigned char)(g_bg[1] * (1.0f - a) + 255.0f * a);
-    unsigned char tr = (unsigned char)(g_bg[0] * (1.0f - a) + 255.0f * a);
-    fill_rect(x, y, w, h, tb, tg, tr);
+    static int blur_said;
+    blur_rect(x, y, w, h);
+    if (!blur_said) {
+        blur_said = 1;
+        printf("PRADYOS_GLASS_BLUR_OK\n");
+        fflush(stdout);
+    }
+    /* DDR-722: the tint now BLENDS over the blurred backdrop (an opaque
+     * precomputed fill would erase the blur). rgba(255,255,255,0.10). */
+    for (unsigned yy = y; yy < y + h; yy++)
+        for (unsigned xx = x; xx < x + w; xx++)
+            blend_px(xx, yy, 255, 255, 255, 0.10f);
     fill_rect(x, y, w, 1, g_ac[2], g_ac[1], g_ac[0]);          /* top    */
     fill_rect(x, y + h - 1, w, 1, g_ac[2], g_ac[1], g_ac[0]);  /* bottom */
     fill_rect(x, y, 1, h, g_ac[2], g_ac[1], g_ac[0]);          /* left   */

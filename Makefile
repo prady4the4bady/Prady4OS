@@ -958,6 +958,13 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Glass-blur gate (DDR-722): glass cards blur + saturate the scene beneath them
+# (separable box blur) before the tint; sentinel on the first blurred card.
+smoke-glassblur: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_GPU=1 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_GLASS_BLUR_OK\nPRADYOS_GLASS_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Page-flip gate (DDR-721): two host GPU resources over one guest buffer; every
 # flush transfers into the off-screen one and flips scanout — the sentinel
 # prints once both resources have been presented (tear-free by construction).
