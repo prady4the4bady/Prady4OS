@@ -661,6 +661,7 @@ smoke-mouse: $(IMG) fat-image sfs-image
 	    -serial file:build/mouse.log -display none -no-reboot || true
 	@grep -q "\[input\] virtio pointer up" build/mouse.log || { echo "[mouse] FAIL — pointer driver did not come up"; tail -20 build/mouse.log; exit 1; }
 	@grep -q PRADYOS_MOUSE_OK build/mouse.log || { echo "[mouse] FAIL — click did not reach ring 3"; tail -20 build/mouse.log; exit 1; }
+	@grep -q PRADYOS_RIPPLE_OK build/mouse.log || { echo "[mouse] FAIL — no click ripple (DDR-727)"; tail -20 build/mouse.log; exit 1; }
 	@echo "[mouse] PASS — $$(grep -a PRADYOS_MOUSE_OK build/mouse.log | head -1)"
 
 # Layer-7 agent-card click gate (DDR-713): boot GPU+tablet; the daemon lights
@@ -957,6 +958,21 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q "PRADYOS_FOCUS id=" build/focus.log || { echo "[focus] FAIL — no focused window"; tail -20 build/focus.log; exit 1; }
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
+
+# Motion gate (DDR-727): the mode toggle's damped-spring pulse (sendkey s).
+smoke-motion: $(IMG) fat-image sfs-image
+	@echo "[motion] spring gate (GPU + sendkey s -> SPRING_OK)..."
+	@rm -f build/motion.log /tmp/pmotion.sock
+	@bash tools/qemu_runner/input_inject.sh build/motion.log /tmp/pmotion.sock PRADYOS_FOCUS "s" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/pmotion.sock,server,nowait \
+	    -serial file:build/motion.log -display none -no-reboot || true
+	@grep -q PRADYOS_SPRING_OK build/motion.log || { echo "[motion] FAIL — no spring pulse"; tail -20 build/motion.log; exit 1; }
+	@echo "[motion] PASS — spring toggle pulse"
 
 # Cadence gate (DDR-726): the 'k' hotkey shrinks the auto-ambiance cadence so
 # a full automatic cycle (pre-transition pulse + 4 advances) proves in seconds.

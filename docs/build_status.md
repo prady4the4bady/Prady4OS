@@ -912,6 +912,11 @@ count approximating the brief's 900 s; a proper user clock refines this later
 — documented in the DDR). Hotkey `k` shrinks the cadence so gate
 `smoke-cadence` proves a FULL automatic cycle (pulse + 4 advances →
 `PRADYOS_CADENCE_OK`) in seconds. **71 gates.**
+**Spring toggle + click ripple (DDR-727):** the mode toggle's linear white
+pulse becomes a damped-SPRING amplitude table (overshoot → settle;
+`PRADYOS_SPRING_OK`, old `TOGGLE_ANIM_OK` kept); pointer clicks draw a 4-frame
+expanding fading ripple ring (`PRADYOS_RIPPLE_OK`). Gates: new `smoke-motion`
+(sendkey `s`), and `smoke-mouse` now also asserts the ripple. **72 gates.**
 **Deferred (DDR-702..709):** the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;

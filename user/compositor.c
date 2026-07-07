@@ -592,16 +592,52 @@ static void cadence_tick(void) {
     }
 }
 
-/* Animated toggle (DDR-709): pulse the accent toward white and back in OKLab. */
+/* Animated toggle (DDR-709; DDR-727): a damped-SPRING accent pulse toward
+ * white — ramps up, overshoots the peak, settles back. Fixed amplitude table. */
 static void animate_toggle(void) {
     static const unsigned char white[3] = {0xFF, 0xFF, 0xFF};
+    static const float spring[10] =
+        {0.30f, 0.60f, 0.85f, 1.00f, 1.08f, 1.02f, 0.97f, 1.00f, 0.50f, 0.0f};
     unsigned char base[3];
     for (int i = 0; i < 3; i++) base[i] = g_ac[i];
     int mode = (int)nsi(SYS_GET_MODE, 0, 0, 0);
-    for (int f = 1; f <= 6; f++) { lab_lerp(base, white, (float)f / 6.0f, g_ac); render(mode); present(); }
-    for (int f = 6; f >= 0; f--) { lab_lerp(base, white, (float)f / 6.0f, g_ac); render(mode); present(); }
+    for (int f = 0; f < 10; f++) {
+        float a = spring[f];
+        if (a > 1.0f) a = 1.0f;           /* OKLab lerp clamps at the endpoint;
+                                           * overshoot renders as a held peak */
+        lab_lerp(base, white, a, g_ac);
+        render(mode); present();
+    }
+    for (int i = 0; i < 3; i++) g_ac[i] = base[i];
+    render(mode); present();
+    printf("PRADYOS_SPRING_OK\n");
     printf("PRADYOS_TOGGLE_ANIM_OK\n");
     fflush(stdout);
+}
+
+/* DDR-727: expanding click ripple at (cx,cy) — 4 frames, radius 6->24,
+ * alpha fading, then recompose. */
+static void recompose_scene(void);            /* defined below */
+static void click_ripple(int cx, int cy) {
+    static int ripple_said;
+    for (int f = 0; f < 4; f++) {
+        int r = 6 + f * 6;
+        float a = 0.5f - 0.1f * (float)f;
+        for (int dx = -r; dx <= r; dx++) {          /* 1px ring via dy from r^2-dx^2 */
+            int dy2 = r * r - dx * dx;
+            int dy = 0;
+            while (dy * dy < dy2) dy++;
+            blend_px((unsigned)(cx + dx), (unsigned)(cy + dy), 255, 255, 255, a);
+            blend_px((unsigned)(cx + dx), (unsigned)(cy - dy), 255, 255, 255, a);
+        }
+        present();
+    }
+    recompose_scene();
+    if (!ripple_said) {
+        ripple_said = 1;
+        printf("PRADYOS_RIPPLE_OK\n");
+        fflush(stdout);
+    }
 }
 
 static void render_and_announce(int mode) {
@@ -791,6 +827,7 @@ int main(void) {
             int down = ms.buttons && !prev_btn;
             int up = !ms.buttons && prev_btn;
             if (down) {
+                click_ripple(ms.x, ms.y);                    /* DDR-727: ripple */
                 int card = agent_card_hit(ms.x, ms.y);       /* DDR-713: card first */
                 if (card >= 0) {                             /* trigger the agent via AETHER */
                     long pid = nsi(SYS_SPAWN_AGENT, 0, (long)g_agents[card], card);

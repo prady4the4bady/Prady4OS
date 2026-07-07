@@ -155,6 +155,9 @@ jobs:
       - name: QEMU cadence test (GPU; auto-ambiance cycle at the test cadence)
         run: make smoke-cadence
 
+      - name: QEMU motion test (GPU; spring toggle pulse)
+        run: make smoke-motion
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 
