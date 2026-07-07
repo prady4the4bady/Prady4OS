@@ -162,9 +162,11 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   resources over one guest buffer; flush = transfer-offscreen → scanout-flip;
   `smoke-flip`), **DDR-722** real glass blur + saturation (separable box blur
   under cards, tint BLENDS over — an opaque fill erases the blur;
-  `smoke-glassblur`). HEAD `48c0af8`, **67 gates**, all CI-green. Remaining
-  deferred visuals: multi-stop gradients, Inter typeface, window decorations,
-  relative-mouse + scroll, pre-transition cadence, spring/ripple motion.
+  `smoke-glassblur`), **DDR-723** multi-stop gradient backdrops
+  (`smoke-gradient`), **DDR-724** window decorations — focus-colored frame +
+  drop shadow (`smoke-decor`). HEAD `a184120`, **69 gates**, all CI-green.
+  Remaining deferred visuals: Inter typeface, relative-mouse + scroll,
+  pre-transition cadence, spring/ripple motion.
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
