@@ -94,7 +94,13 @@ int main(void) {
         /* DDR-718: honor compositor resize requests on B — resize, re-map,
          * redraw at the new size, re-commit at the same position. */
         struct surf_event ev;
-        if (nsi(SYS_SURFACE_GETEV, b, (long)&ev, 0) == 0 && ev.type == 1) {
+        ev.type = 0;
+        if (nsi(SYS_SURFACE_GETEV, b, (long)&ev, 0) == 0 && ev.type == 2) {
+            /* DDR-725: scroll event — delta in arg1 (signed 16-bit). */
+            printf("PRADYOS_EV_SCROLL_OK d=%d\n", (int)(short)ev.arg1);
+            fflush(stdout);
+        }
+        if (ev.type == 1) {
             if (nsi(SYS_SURFACE_RESIZE, b, ev.arg0, ev.arg1) == 0) {
                 long bva = nsi(SYS_SURFACE_MAP, b, 0, 0);
                 if (bva > 0) {

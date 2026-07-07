@@ -29,7 +29,7 @@
 #define SYS_SURFACE_SENDEV 62
 
 struct fb_info { unsigned width, height, stride, bpp; };
-struct mouse_state { int x, y; unsigned buttons; };
+struct mouse_state { int x, y; unsigned buttons; int wheel; };   /* DDR-725 */
 struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; char title[16]; };
 
 /* The 8 named agents (DDR-707), in roster-slot order. */
@@ -741,6 +741,14 @@ int main(void) {
          * a button-down elsewhere is a plain click. */
         struct mouse_state ms;
         if (nsi(SYS_MOUSE_POLL, (long)&ms, 0, 0) == 0) {
+            if (ms.wheel && focus_id >= 0) {             /* DDR-725: scroll to focus —
+                                                          * type 2, delta in arg1
+                                                          * (a3 packs arg0<<16|arg1) */
+                nsi(SYS_SURFACE_SENDEV, focus_id, 2,
+                    (long)(unsigned short)(short)ms.wheel);
+                printf("PRADYOS_SCROLL d=%d\n", ms.wheel);
+                fflush(stdout);
+            }
             int down = ms.buttons && !prev_btn;
             int up = !ms.buttons && prev_btn;
             if (down) {

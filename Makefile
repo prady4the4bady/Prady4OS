@@ -958,6 +958,24 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Scroll gate (DDR-725): QMP wheel events -> virtio-tablet EV_REL/REL_WHEEL ->
+# SYS_MOUSE_POLL wheel field -> compositor routes a type-2 surface event to the
+# focused window -> the client acks.
+smoke-scroll: $(IMG) fat-image sfs-image
+	@echo "[scroll] wheel gate: boot(GPU+tablet) + QMP wheel -> focused window..."
+	@rm -f build/scroll.log /tmp/pscroll.sock
+	@bash tools/qemu_runner/wheel_inject.sh build/scroll.log /tmp/pscroll.sock PRADYOS_FOCUS &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pscroll.sock,server,nowait \
+	    -serial file:build/scroll.log -display none -no-reboot || true
+	@grep -q "PRADYOS_SCROLL d=" build/scroll.log || { echo "[scroll] FAIL — compositor saw no wheel"; tail -20 build/scroll.log; exit 1; }
+	@grep -q "PRADYOS_EV_SCROLL_OK" build/scroll.log || { echo "[scroll] FAIL — scroll did not reach the focused client"; tail -20 build/scroll.log; exit 1; }
+	@echo "[scroll] PASS — $$(grep -a PRADYOS_EV_SCROLL_OK build/scroll.log | head -1)"
+
 # Decorations gate (DDR-724): windows carry a 1px frame (accent when focused,
 # gray otherwise) + a fading right/bottom drop shadow.
 smoke-decor: $(IMG) fat-image sfs-image

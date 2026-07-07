@@ -897,6 +897,13 @@ fading right/bottom drop shadow (3 `blend_px` strips, α 0.22→0.10). Off-scree
 edges clip through `put_px`. The title-bar click boxes (close/min/max) are
 unmoved — all pointer gates re-verified. Sentinel `PRADYOS_DECOR_OK`; gate
 `smoke-decor`. **69 gates.**
+**Scroll-wheel plumbing (DDR-725):** wheel detents flow end-to-end — virtio
+`EV_REL/REL_WHEEL` accumulates per-device; `SYS_MOUSE_POLL`'s `mouse_state`
+gains a `wheel` field (read-and-clear; all in-tree callers rebuilt); the
+compositor routes a type-2 surface event (delta in arg1) to the FOCUSED
+window; surfacetest acks `PRADYOS_EV_SCROLL_OK`. New QMP injector
+`wheel_inject.sh` (input-send-event wheel-up/down); gate `smoke-scroll`.
+**70 gates.**
 **Deferred (DDR-702..709):** the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;

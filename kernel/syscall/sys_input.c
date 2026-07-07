@@ -11,7 +11,9 @@
 
 #define INPUT_MAX 256
 
-struct mouse_state { int32_t x, y; uint32_t buttons; };
+/* DDR-725: `wheel` appended (detents since the last poll, read-and-clear).
+ * We own every caller (compositor); all rebuilt together. */
+struct mouse_state { int32_t x, y; uint32_t buttons; int32_t wheel; };
 
 static long sys_input_poll(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
@@ -35,6 +37,7 @@ static long sys_mouse_poll(long a1, long a2, long a3, long a4) {
     if (virtio_input_state(&x, &y, &btn) != 0)
         return -ENODEV;
     ms.x = x; ms.y = y; ms.buttons = btn;
+    ms.wheel = virtio_input_wheel();      /* DDR-725: detents since last poll */
     if (copyout((void __user *)a1, &ms, sizeof ms) < 0)
         return -EFAULT;
     return 0;

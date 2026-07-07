@@ -8,3 +8,4 @@ void virtio_input_init(uint8_t bus, uint8_t dev, uint8_t func);
 /* Current pointer state mapped to screen pixels (via the GPU framebuffer
  * geometry). Returns 0 with *x,*y,*btn filled, or -1 if no pointer is up. */
 int  virtio_input_state(int *x, int *y, uint32_t *buttons);
+int  virtio_input_wheel(void);   /* DDR-725: read-and-clear wheel detents */

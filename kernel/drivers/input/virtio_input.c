@@ -22,8 +22,9 @@ extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 #define EV_KEY 0x01
 #define EV_REL 0x02
 #define EV_ABS 0x03
-#define REL_X  0x00
-#define REL_Y  0x01
+#define REL_X     0x00
+#define REL_Y     0x01
+#define REL_WHEEL 0x08   /* DDR-725: vertical wheel, ±1 per detent */
 #define ABS_X  0x00
 #define ABS_Y  0x01
 #define BTN_LEFT 0x110
@@ -45,6 +46,7 @@ static int g_up;
 
 static volatile int      g_abs_x, g_abs_y;   /* raw axis value [0, 32767] */
 static volatile uint32_t g_buttons;          /* bit0 = left, bit1 = right, bit2 = middle */
+static volatile int      g_wheel;            /* DDR-725: accumulated wheel detents */
 
 static void fold_event(const struct virtio_input_event *e) {
     switch (e->type) {
@@ -55,6 +57,8 @@ static void fold_event(const struct virtio_input_event *e) {
     case EV_REL:                          /* relative mice: accumulate, clamp */
         if (e->code == REL_X) g_abs_x = (int)((uint32_t)g_abs_x + e->value);
         else if (e->code == REL_Y) g_abs_y = (int)((uint32_t)g_abs_y + e->value);
+        else if (e->code == REL_WHEEL)    /* DDR-725: wheel detents accumulate */
+            __atomic_add_fetch(&g_wheel, (int)e->value, __ATOMIC_SEQ_CST);
         if (g_abs_x < 0) g_abs_x = 0; if (g_abs_x >= VI_ABS_MAX) g_abs_x = VI_ABS_MAX - 1;
         if (g_abs_y < 0) g_abs_y = 0; if (g_abs_y >= VI_ABS_MAX) g_abs_y = VI_ABS_MAX - 1;
         break;
@@ -134,6 +138,11 @@ void virtio_input_init(uint8_t bus, uint8_t dev, uint8_t func) {
     g_up = 1;
     kputs(msix ? "[input] virtio pointer up (eventq armed) msix vec=55\r\n"
                : "[input] virtio pointer up (eventq armed)\r\n");
+}
+
+/* DDR-725: read-and-clear the accumulated wheel delta (detents since last call). */
+int virtio_input_wheel(void) {
+    return __atomic_exchange_n(&g_wheel, 0, __ATOMIC_SEQ_CST);
 }
 
 int virtio_input_state(int *x, int *y, uint32_t *buttons) {
