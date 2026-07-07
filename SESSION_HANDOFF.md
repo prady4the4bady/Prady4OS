@@ -167,9 +167,10 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   drop shadow (`smoke-decor`). HEAD `a184120`, **69 gates**, all CI-green.
   **DDR-725** scroll-wheel plumbing (REL_WHEEL → `mouse_state.wheel` →
   type-2 surface event to focus; `wheel_inject.sh`; `smoke-scroll`).
-  HEAD `5a50f0c`, **70 gates**, all CI-green. Remaining deferred visuals:
-  Inter typeface (font-asset question), 900 s auto cadence + 15-min
-  pre-transition (needs a testable-timescale design), spring/ripple motion.
+  **DDR-726** auto ambiance cadence + pre-transition pulse (frame-loop time
+  base, `k` test knob, `smoke-cadence`). HEAD `ec25246`, **71 gates**, all
+  CI-green. Remaining deferred visuals: Inter typeface (font-asset question),
+  spring/ripple motion (in progress as DDR-727).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
