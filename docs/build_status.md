@@ -904,6 +904,14 @@ compositor routes a type-2 surface event (delta in arg1) to the FOCUSED
 window; surfacetest acks `PRADYOS_EV_SCROLL_OK`. New QMP injector
 `wheel_inject.sh` (input-send-event wheel-up/down); gate `smoke-scroll`.
 **70 gates.**
+**Auto ambiance cadence + pre-transition (DDR-726):** the compositor now
+advances the ambiance 0→1→2→3→0 automatically through the existing OKLab
+transition path, with a gentle accent pulse (`PRADYOS_PRETRANSITION`) in the
+final 10% of each period. Time source is the yield-paced frame loop (iteration
+count approximating the brief's 900 s; a proper user clock refines this later
+— documented in the DDR). Hotkey `k` shrinks the cadence so gate
+`smoke-cadence` proves a FULL automatic cycle (pulse + 4 advances →
+`PRADYOS_CADENCE_OK`) in seconds. **71 gates.**
 **Deferred (DDR-702..709):** the Inter typeface; the
 15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
 motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;

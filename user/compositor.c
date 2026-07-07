@@ -560,6 +560,38 @@ static void set_ambiance(int idx, int frames) {
     g_settled = 1;
 }
 
+/* DDR-726: auto ambiance cadence. Time source is the frame loop itself (D1
+ * fallback — each iteration is yield-paced; no user clock yet), so the default
+ * is an ITERATION count approximating the brief's 900 s wall cadence; the 'k'
+ * hotkey shrinks it so a gate proves a full cycle in seconds. */
+static unsigned long g_cadence = 1500000;   /* iterations per ambiance period */
+static unsigned long g_cad_iter;
+static int g_cad_pre_said, g_cad_advances;
+
+static void cadence_tick(void) {
+    g_cad_iter++;
+    if (!g_cad_pre_said && g_cad_iter >= g_cadence - g_cadence / 10) {
+        g_cad_pre_said = 1;                 /* final 10%: gentle accent pulse */
+        unsigned char base[3], white[3] = {0xFF, 0xFF, 0xFF};
+        for (int i = 0; i < 3; i++) base[i] = g_ac[i];
+        int mode = (int)nsi(SYS_GET_MODE, 0, 0, 0);
+        for (int f = 1; f <= 3; f++) { lab_lerp(base, white, 0.1f * f, g_ac); render(mode); present(); }
+        for (int i = 0; i < 3; i++) g_ac[i] = base[i];
+        render(mode); present();
+        printf("PRADYOS_PRETRANSITION\n");
+        fflush(stdout);
+    }
+    if (g_cad_iter >= g_cadence) {
+        g_cad_iter = 0;
+        g_cad_pre_said = 0;
+        set_ambiance((g_cur_amb + 1) & 3, 12);
+        if (++g_cad_advances == 4) {        /* one full automatic cycle */
+            printf("PRADYOS_CADENCE_OK\n");
+            fflush(stdout);
+        }
+    }
+}
+
 /* Animated toggle (DDR-709): pulse the accent toward white and back in OKLab. */
 static void animate_toggle(void) {
     static const unsigned char white[3] = {0xFF, 0xFF, 0xFF};
@@ -715,6 +747,13 @@ int main(void) {
                 fflush(stdout);
                 recompose_scene();
             }
+            else if (c == 'k') {                             /* DDR-726: test cadence */
+                g_cadence = 2000;
+                g_cad_iter = 0;
+                g_cad_pre_said = 0;
+                printf("PRADYOS_CADENCE_TEST\n");
+                fflush(stdout);
+            }
             else if (c == '\t') {                            /* DDR-720: cycle windows —
                                                               * raise the bottom-most
                                                               * visible surface (Tab is a
@@ -864,6 +903,7 @@ int main(void) {
             }
             prev_btn = ms.buttons;
         }
+        cadence_tick();                     /* DDR-726: auto ambiance cadence */
         nsi(SYS_YIELD, 0, 0, 0);
     }
     return 0;

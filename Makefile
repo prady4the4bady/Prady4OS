@@ -958,6 +958,24 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Cadence gate (DDR-726): the 'k' hotkey shrinks the auto-ambiance cadence so
+# a full automatic cycle (pre-transition pulse + 4 advances) proves in seconds.
+smoke-cadence: $(IMG) fat-image sfs-image
+	@echo "[cadence] auto-ambiance gate (GPU + sendkey k -> test cadence)..."
+	@rm -f build/cadence.log /tmp/pcadence.sock
+	@bash tools/qemu_runner/input_inject.sh build/cadence.log /tmp/pcadence.sock PRADYOS_FOCUS "k" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/pcadence.sock,server,nowait \
+	    -serial file:build/cadence.log -display none -no-reboot || true
+	@grep -q PRADYOS_CADENCE_TEST build/cadence.log || { echo "[cadence] FAIL — test knob not armed"; tail -20 build/cadence.log; exit 1; }
+	@grep -q PRADYOS_PRETRANSITION build/cadence.log || { echo "[cadence] FAIL — no pre-transition pulse"; tail -20 build/cadence.log; exit 1; }
+	@grep -q PRADYOS_CADENCE_OK build/cadence.log || { echo "[cadence] FAIL — no full auto cycle"; tail -20 build/cadence.log; exit 1; }
+	@echo "[cadence] PASS — full automatic ambiance cycle at test cadence"
+
 # Scroll gate (DDR-725): QMP wheel events -> virtio-tablet EV_REL/REL_WHEEL ->
 # SYS_MOUSE_POLL wheel field -> compositor routes a type-2 surface event to the
 # focused window -> the client acks.

@@ -152,6 +152,9 @@ jobs:
       - name: QEMU scroll test (GPU+tablet; wheel -> focused window event)
         run: make smoke-scroll
 
+      - name: QEMU cadence test (GPU; auto-ambiance cycle at the test cadence)
+        run: make smoke-cadence
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 
