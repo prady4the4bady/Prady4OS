@@ -168,9 +168,20 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   **DDR-725** scroll-wheel plumbing (REL_WHEEL → `mouse_state.wheel` →
   type-2 surface event to focus; `wheel_inject.sh`; `smoke-scroll`).
   **DDR-726** auto ambiance cadence + pre-transition pulse (frame-loop time
-  base, `k` test knob, `smoke-cadence`). HEAD `ec25246`, **71 gates**, all
-  CI-green. Remaining deferred visuals: Inter typeface (font-asset question),
-  spring/ripple motion (in progress as DDR-727).
+  base, `k` test knob, `smoke-cadence`). **DDR-727** spring toggle + click
+  ripple (`smoke-motion`; `smoke-mouse` also asserts the ripple). **DDR-728**
+  the Inter typeface as a 16px alpha glyph ATLAS — `tools/fontgen/gen_inter.c`
+  + vendored public-domain `stb_truetype.h` rasterize Inter-Regular (SIL OFL)
+  into the generated, committed `user/inter_font.h` (~22 KB); the TTF is NOT
+  vendored (rendered bitmaps aren't font software; the no-out-of-tree-libs wall
+  governs the OS IMAGE, not build-host tooling). Proportional titles via
+  `draw_str_inter`; 8×8 face kept for small labels. `smoke-font`.
+  HEAD `aa7f548`, **73 gates**, all CI-green.
+- **The DDR-702..709 deferred VISUAL list is CLOSED** — glass blur, gradients,
+  typeface, cadence + pre-transition, spring/ripple, page-flip, scroll,
+  decorations, alt-tab all shipped. Remaining L7 (non-visual): surface destroy;
+  per-agent live metrics; SFS `/etc/aether/config`; `CAP_NET` gate;
+  wlroots/Wayland (the standing out-of-tree wall).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
