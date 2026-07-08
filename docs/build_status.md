@@ -917,18 +917,27 @@ pulse becomes a damped-SPRING amplitude table (overshoot → settle;
 `PRADYOS_SPRING_OK`, old `TOGGLE_ANIM_OK` kept); pointer clicks draw a 4-frame
 expanding fading ripple ring (`PRADYOS_RIPPLE_OK`). Gates: new `smoke-motion`
 (sendkey `s`), and `smoke-mouse` now also asserts the ripple. **72 gates.**
-**Deferred (DDR-702..709):** the Inter typeface; the
-15-min-before pre-transition + 900 s auto cadence; the toggle's spring/ripple
-motion; double-buffer / page-flip; relative-mouse + scroll; window move/drag;
-alt-tab; window decorations; surface destroy; per-agent live metrics; SFS
+**The Inter typeface (DDR-728) — the LAST deferred L7 visual:** Inter lands as
+a pre-rendered **16 px alpha glyph atlas**, not a TTF + rasterizer. Host-side
+`tools/fontgen/gen_inter.c` (+ vendored public-domain `stb_truetype.h`)
+rasterizes Inter-Regular (SIL OFL 1.1, rsms/inter v4.1) over ASCII 0x20–0x7E
+into the generated, committed `user/inter_font.h` (~22 KB: 8-bit alpha glyphs +
+metrics). The TTF is NOT vendored — rendered bitmaps are not font software, and
+the no-out-of-tree-libs wall governs the OS image, not build-host tooling
+(clang/mtools precedent). `draw_str_inter` alpha-blends each glyph with real
+pen advances — proportional titles replace the 8×8 monospace where 16 px fits
+(TITLEBAR=18); the 8×8 face stays for small text. Sentinel `PRADYOS_FONT_OK`;
+gate `smoke-font`. **73 gates.**
+**Deferred (L7):** surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
-library ports — the standing wall). Min/max buttons + pointer resize **handles**
-are the DDR-715 follow-ons (titles + close button shipped).
-**Next: ADR-030 full 3c (APs in the scheduler: per-CPU TSS/idle, ring lock,
-preemption IPIs — the AP job mailbox is the interim multi-core compute path);
-or I/O APIC + MSI-X (DDR-714 stage C); or more visual richness (real glass
-blur / gradients). wlroots/Wayland remain out-of-tree.**
-**Last updated:** 2026-07-02
+library ports — the standing wall). The DDR-702..709 visual list is now CLOSED:
+glass blur (722), gradients (723), typeface (728), pre-transition + cadence
+(726), spring/ripple (727), page-flip (721), scroll (725), decorations (724),
+alt-tab (720) all shipped.
+**Next:** rq-2 (per-CPU switch locks + per-wake resched IPIs — the last planned
+scheduler-perf item); or the remaining L7 items above. wlroots/Wayland remain
+out-of-tree.
+**Last updated:** 2026-07-08
 
 ## Phase 0 — Toolchain & Build System
 

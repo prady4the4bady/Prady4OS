@@ -158,6 +158,9 @@ jobs:
       - name: QEMU motion test (GPU; spring toggle pulse)
         run: make smoke-motion
 
+      - name: QEMU font test (GPU; Inter 16px atlas renders titles)
+        run: make smoke-font
+
       - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
         run: make smoke-pmm-poison
 

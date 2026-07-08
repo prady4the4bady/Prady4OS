@@ -455,6 +455,35 @@ static void blit_surface(const unsigned char *sva, unsigned w, unsigned h, int d
 /* A window = its client surface content + a title-bar decoration above it
  * (the drag handle), drawn in the ambiance accent colour (DDR-710), with the
  * window's title string and a close box on the right (DDR-715). */
+/* DDR-728: the Inter typeface — 16px alpha glyph atlas generated offline by
+ * tools/fontgen (stb_truetype over Inter-Regular, SIL OFL; rendered bitmaps).
+ * Alpha-blended per pixel; used where 16px fits (titles, banner). */
+#include "inter_font.h"
+static void draw_str_inter(const char *s, int x, int y,
+                           unsigned char b, unsigned char g2, unsigned char r) {
+    static int font_said;
+    int pen = x;
+    for (; *s; s++) {
+        unsigned c = (unsigned char)*s;
+        if (c < INTER_FIRST || c > INTER_LAST) { pen += INTER_PX / 2; continue; }
+        const struct inter_glyph *gl = &inter_glyphs[c - INTER_FIRST];
+        for (int gy = 0; gy < gl->h; gy++)
+            for (int gx = 0; gx < gl->w; gx++) {
+                unsigned char a = inter_pixels[gl->off + gy * gl->w + gx];
+                if (a)
+                    blend_px((unsigned)(pen + gl->xoff + gx),
+                             (unsigned)(y + INTER_ASCENT + gl->yoff + gy),
+                             b, g2, r, (float)a / 255.0f);
+            }
+        pen += gl->adv;
+    }
+    if (!font_said) {
+        font_said = 1;
+        printf("PRADYOS_FONT_OK\n");
+        fflush(stdout);
+    }
+}
+
 #define TITLEBAR  18
 #define CLOSEBOX  12                 /* close box size; inset 4 px from the right */
 static void draw_window(const unsigned char *sva, const struct surface_info *s) {
@@ -486,7 +515,7 @@ static void draw_window(const unsigned char *sva, const struct surface_info *s) 
     int tx = s->x < 0 ? 0 : s->x;
     fill_rect((unsigned)tx, (unsigned)ty, s->w, TITLEBAR, g_ac[2], g_ac[1], g_ac[0]);
     if (s->title[0])                                     /* title text (DDR-715) */
-        draw_str(s->title, (unsigned)tx + 6, (unsigned)ty + 5, 1, 0x10, 0x10, 0x18);
+        draw_str_inter(s->title, tx + 6, ty + 1, 0x10, 0x10, 0x18);  /* DDR-728 */
     fill_rect((unsigned)(tx + (int)s->w - CLOSEBOX - 4), (unsigned)ty + 3,
               CLOSEBOX, CLOSEBOX, 0x30, 0x30, 0xE0);     /* close box (red, BGRA) */
     fill_rect((unsigned)(tx + (int)s->w - 2 * CLOSEBOX - 6), (unsigned)ty + 3,

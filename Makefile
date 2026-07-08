@@ -959,6 +959,12 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Font gate (DDR-728): window titles render in the Inter 16px alpha atlas.
+smoke-font: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_GPU=1 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_FONT_OK\nPRADYOS_TITLE_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Motion gate (DDR-727): the mode toggle's damped-spring pulse (sendkey s).
 smoke-motion: $(IMG) fat-image sfs-image
 	@echo "[motion] spring gate (GPU + sendkey s -> SPRING_OK)..."
