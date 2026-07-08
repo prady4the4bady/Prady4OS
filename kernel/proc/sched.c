@@ -72,11 +72,14 @@ static void rq_push(int cpu, struct tcb *t) {
 
 /* Pop the first pickable thread from cpu's own FIFO (skips became-unpickable
  * entries, e.g. a thread that blocked after being enqueued). NULL if empty. */
-/* Dequeue helper: pops entries until a runnable one is found. An entry that is
- * READY but still on_cpu>=0 is a TRANSIENT (an unblock raced its owner's
- * switch-away — the cap-2a spurious-wake case): it must be RE-APPENDED, never
- * dropped, or the thread is lost forever (found the hard way via smoke-winops).
- * Non-READY entries are genuinely stale and drop. Caller holds q->lock. */
+/* Dequeue helper: pops entries until a READY one is found; non-READY entries
+ * are stale and drop. Caller holds q->lock.
+ * rq-2: on_cpu is NO LONGER part of the filter. Exclusion is the DEQUEUE (a
+ * thread sits in exactly one queue, so exactly one CPU pops it); on_cpu now
+ * only means "still executing / rsp not yet saved", and the picker
+ * switch_wait_offcpu()s on it before loading that rsp. This also retires
+ * rq-1's transient re-append: a READY-but-still-on-CPU thread (an unblock
+ * racing its owner's switch-away) is now legitimately takeable. */
 static struct tcb *rq_take(struct rq *q) {
     struct tcb *t;
     while ((t = q->head)) {
@@ -84,17 +87,8 @@ static struct tcb *rq_take(struct rq *q) {
         if (!q->head) q->tail = 0;
         t->rq_on = 0;
         t->rq_next = 0;
-        if (t->state == THREAD_READY) {
-            if (t->on_cpu < 0)
-                return t;                /* runnable — take it */
-            /* transient: re-append at the tail and stop (its CPU releases it
-             * within one switch; retrying immediately could spin on ourselves) */
-            t->rq_on = 1;
-            if (q->tail) q->tail->rq_next = t; else q->head = t;
-            q->tail = t;
-            return 0;
-        }
-        /* not READY: stale — drop and keep scanning */
+        if (t->state == THREAD_READY)
+            return t;
     }
     return 0;
 }
@@ -105,6 +99,27 @@ static struct tcb *rq_pop(int cpu) {
     struct tcb *t = rq_take(q);
     spin_unlock_irqrestore(&q->lock, fl);
     return t;
+}
+
+/* rq-2 D2: run in the RESUMED thread's context, right after context_switch.
+ * `this_cpu()->prev` names the thread the CPU we are NOW on just switched away
+ * from — its stack is saved, so publish it off-CPU with a RELEASE store. This
+ * pairs with the acquire spins in switch_wait_offcpu / sched_free_tcb. */
+static inline void finish_task_switch(void) {
+    struct percpu *pc = this_cpu();
+    if (pc && pc->prev) {
+        struct tcb *p = pc->prev;
+        pc->prev = 0;
+        __atomic_store_n(&p->on_cpu, -1, __ATOMIC_RELEASE);
+    }
+}
+
+/* rq-2 D3: a picked thread may still be mid-switch-away on another CPU (its
+ * rsp not yet saved). Wait for its owner's release before we load that rsp.
+ * Bounded: the holder is executing a few instructions, never blocked on us. */
+static inline void switch_wait_offcpu(struct tcb *t) {
+    while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) >= 0)
+        __asm__ volatile("pause");
 }
 
 /* Steal one thread from another CPU's FIFO (trylock; own rq NOT held). */
@@ -141,16 +156,30 @@ static inline void irq_restore(uint64_t f) {
     spin_unlock_irqrestore(&g_sched_lock, f);
 }
 
+/* rq-2: the SCHEDULE hot path no longer takes g_sched_lock at all — it only
+ * masks local IRQs across the switch (context_switch preserves each thread's
+ * RFLAGS, so a resumed thread comes back masked and restores below).
+ * g_sched_lock now covers ring TOPOLOGY only (D5). */
+static inline uint64_t local_irq_save(void) {
+    uint64_t f;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+static inline void local_irq_restore(uint64_t f) {
+    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+}
+
 static void schedule(void);        /* fwd decl: thread_trampoline schedules on exit */
 
 /* First code a freshly-created thread runs (entered via context_switch's RET).
  * current_thread is already the new thread (set by schedule before switching). */
 static void thread_trampoline(void) {
-    /* DDR-SMP-3c-locks-1: schedule() switched to this brand-new thread while
-     * holding g_sched_lock; a resumed thread releases it in irq_restore, but a
-     * first entry lands here instead — release before running the body (the
-     * crafted initial RFLAGS already restored IF via context_switch's popfq). */
-    spin_unlock(&g_sched_lock);
+    /* rq-2: a brand-new thread has no resumed schedule() frame, so IT performs
+     * the finish_task_switch — releasing the thread this CPU just switched away
+     * from (its stack is saved; context_switch has left it). The crafted initial
+     * RFLAGS already restored IF via context_switch's popfq. (Before rq-2 this
+     * released g_sched_lock, which the switch no longer holds.) */
+    finish_task_switch();
     current_thread->entry(current_thread->arg);
     /* cap-2b D3: cooperative exit. A returning kernel thread marks itself DONE
      * and schedules away — DONE is unpickable so it never runs again. The old
@@ -429,6 +458,11 @@ static void sched_ring_unlink(struct tcb *t) {
  * unlinked and not running anywhere. Freeing outside g_sched_lock keeps that
  * leaf lock short (the reaper otherwise held it across vmm teardown). */
 static void sched_free_tcb(struct tcb *t) {
+    /* rq-2 D4: the victim may still be executing on its kernel stack (a ZOMBIE
+     * mid-final-switch). Wait for its owner CPU's finish_task_switch release
+     * before freeing that stack — this is what replaces rq-1's
+     * lock-held-across-the-exit-switch (DDR-SMP-exit-stack-race). */
+    switch_wait_offcpu(t);
     for (int i = 0; i < FD_MAX; i++)
         fd_free(t, i);
     if (t->caps)
@@ -494,23 +528,26 @@ static void schedule_locked(uint64_t fl) {
          * starve it — the cap-2b lesson, rq edition. Only the idle itself may
          * "keep running" here. */
         if (prev == g_idle[cpu] && runnable(prev)) {
-            irq_restore(fl);
+            local_irq_restore(fl);
             return;
         }
         next = g_idle[cpu];
     }
 
-    /* Release prev (back to the pool for any CPU) and claim next for this CPU.
-     * Both under g_sched_lock, so the claim is atomic — no two CPUs take one
-     * thread (cap-2a D1). on_cpu clears whenever we switch AWAY from prev — not
-     * just when it was RUNNING: a thread that blocked (sched_block set it
-     * BLOCKED before calling us) must also release its CPU, or after unblock
-     * (BLOCKED->READY) it would fail the on_cpu<0 pick test and never run. */
+    /* rq-2: prev's on_cpu STAYS set until its stack is saved — it is released
+     * by finish_task_switch() in whichever thread resumes on this CPU. A thief
+     * that pops prev from the queue below spins in switch_wait_offcpu() until
+     * then, so it can never load a stale prev->rsp. Exclusion against
+     * double-run is the dequeue, not on_cpu (rq_take). */
     if (prev->state == THREAD_RUNNING)
         prev->state = THREAD_READY;
-    prev->on_cpu = -1;
     if (prev->state == THREAD_READY && !prev->is_idle)
         rq_push(cpu, prev);        /* rq-1: a preempted-but-runnable prev re-queues */
+
+    /* next may still be mid-switch-away on another CPU: wait for its release
+     * before we touch its rsp. (next != prev here — the keep-running case
+     * returned above, so we never wait on ourselves.) */
+    switch_wait_offcpu(next);
     next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
     if (next->is_user && pc && !pc->is_bsp)
@@ -541,13 +578,18 @@ static void schedule_locked(uint64_t fl) {
      * FPU (this path is -mgeneral-regs-only). */
     fpu_save(prev->fpu_state);
     fpu_restore(next->fpu_state);
+    /* rq-2 D2: name the outgoing thread for whoever resumes on THIS CPU. */
+    if (pc)
+        pc->prev = prev;
     context_switch(&prev->rsp, next->rsp);
-    /* resumed here later, as `prev`, when scheduled again */
-    irq_restore(fl);
+    /* Resumed here later (possibly on a different CPU) as some earlier `prev`.
+     * Release the thread THAT CPU just switched away from, then unmask. */
+    finish_task_switch();
+    local_irq_restore(fl);
 }
 
 static void schedule(void) {
-    schedule_locked(irq_save());
+    schedule_locked(local_irq_save());
 }
 
 void sched_tick(void) {
@@ -629,15 +671,16 @@ void sched_exit(int status) {
         for (;;)
             __asm__ volatile("hlt");
     }
-    /* DDR-SMP-exit-stack-race: ONE g_sched_lock acquisition covers the reparent
-     * walk, the ZOMBIE transition, the waiter wake, AND the final switch. The
-     * dying thread is still executing on its kernel stack until context_switch
-     * completes — a collector (wait4/reaper on another CPU) must not be able to
-     * sched_destroy it before then. Holding the lock across the switch makes
-     * that structural: the collector's sched_destroy blocks on g_sched_lock
-     * until the handoff release, which happens strictly after the switch has
-     * left this stack. (The waiter wake is an atomic CAS — safe under the
-     * spinlock; the woken parent then queues behind the lock as required.) */
+    /* DDR-SMP-exit-stack-race, rq-2 edition. The dying thread still executes on
+     * its kernel stack until context_switch completes, so a collector (wait4 /
+     * reaper, possibly on another CPU) must not free that stack before then.
+     * rq-1 achieved this by holding g_sched_lock across the final switch; rq-2
+     * removes the lock from the switch and uses the on_cpu handshake instead:
+     * `on_cpu` STAYS set here, sched_free_tcb spin-waits on it, and the thread
+     * that resumes on this CPU release-stores it in finish_task_switch — which
+     * happens strictly after the switch has left this stack. The guarantee is
+     * unchanged; the mechanism is now local rather than global.
+     * The lock still covers the reparent ring walk (topology, D5). */
     uint64_t fl = irq_save();
     /* 5d: reparent this thread's children to init so PID 1 reaps the whole
      * subtree (live children become orphans on this exit; zombies too). */
@@ -650,11 +693,11 @@ void sched_exit(int status) {
         }
     }
     current_thread->exit_status = status;
-    current_thread->state = THREAD_ZOMBIE;
-    current_thread->on_cpu = -1;               /* no longer occupies this CPU */
+    current_thread->state = THREAD_ZOMBIE;      /* NOT pickable; on_cpu stays set */
     if (current_thread->waiter)
         sched_unblock(current_thread->waiter);
-    schedule_locked(fl);                       /* never returns; handoff releases */
+    irq_restore(fl);                            /* topology lock only */
+    schedule();                                 /* never returns */
     for (;;)                   /* unreachable */
         __asm__ volatile("hlt");
 }

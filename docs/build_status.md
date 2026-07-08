@@ -928,15 +928,34 @@ the no-out-of-tree-libs wall governs the OS image, not build-host tooling
 pen advances — proportional titles replace the 8×8 monospace where 16 px fits
 (TITLEBAR=18); the 8×8 face stays for small text. Sentinel `PRADYOS_FONT_OK`;
 gate `smoke-font`. **73 gates.**
+**`g_sched_lock` off the switch path (DDR-SMP-rq-2):** rq-1 made the PICK O(1)
+but still held the ONE global lock across `context_switch`. It was protecting
+two things (double-run is the `on_cpu` claim under the rq leaf lock, not this):
+a thief loading a **stale `prev->rsp`** (prev is re-queued before the switch
+saves it), and the **exit-vs-collect UAF** (a collector freeing a stack whose
+owner still runs on it). Both are now an explicit handshake: `on_cpu >= 0`
+means "still executing / rsp not saved", released with a RELEASE store only
+AFTER the switch, by whichever thread resumes on that CPU
+(`finish_task_switch()` reading a new `percpu.prev` slot — correct because
+`%gs` names the CPU we are now on). The picker acquire-spins
+(`switch_wait_offcpu`) before touching `next->rsp`; `sched_free_tcb` waits on
+the same flag, so `sched_exit` no longer holds the lock across its final switch
+(the DDR-SMP-exit-stack-race guarantee is preserved — mechanism local, not
+global). `rq_take` drops `on_cpu` from its filter (the DEQUEUE is the
+exclusion), which also retires rq-1's transient re-append. `g_sched_lock` now
+covers ring topology ONLY and is never held across a switch; the hot path takes
+just local IRQ masking + its own rq leaf lock. Static asserts caught the
+`percpu` offset shift (`prev` appended after the asm-consumed `u_*` block).
+No new gate: the 73 plus stress determinism (rqstress ×8, syswait ×5).
 **Deferred (L7):** surface destroy; per-agent live metrics; SFS
 `/etc/aether/config`; `CAP_NET` gate; the wlroots/Wayland protocol (out-of-tree
 library ports — the standing wall). The DDR-702..709 visual list is now CLOSED:
 glass blur (722), gradients (723), typeface (728), pre-transition + cadence
 (726), spring/ripple (727), page-flip (721), scroll (725), decorations (724),
 alt-tab (720) all shipped.
-**Next:** rq-2 (per-CPU switch locks + per-wake resched IPIs — the last planned
-scheduler-perf item); or the remaining L7 items above. wlroots/Wayland remain
-out-of-tree.
+**Next:** per-wake `smp_resched_one` IPIs (rq-2's deferred half — idle APs
+currently pick up new work on their own 100 Hz tick); or the remaining L7 items
+above. wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-08
 
 ## Phase 0 — Toolchain & Build System

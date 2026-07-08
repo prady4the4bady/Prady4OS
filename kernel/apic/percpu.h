@@ -37,6 +37,12 @@ struct percpu {
     uint64_t u_r14;        /* @104                                               */
     uint64_t u_r15;        /* @112                                               */
     uint64_t u_rflags;     /* @120 user RFLAGS (R11) at entry                    */
+
+    /* rq-2: appended AFTER the asm-consumed u_* block (whose offsets are
+     * static-asserted) — the thread THIS CPU last switched away from. Whoever
+     * resumes here release-stores prev->on_cpu = -1 (finish_task_switch) once
+     * context_switch has left that thread's stack: the off-CPU handshake. */
+    struct tcb *prev;
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */
