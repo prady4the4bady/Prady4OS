@@ -149,14 +149,23 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   one-in-flight `busy` mutex is deleted — 8 per-request slots per disk
   (`head2slot[]`), ALL vq+slot state under `compl_lock`, slot exhaustion
   sleeps via `sched_block_on`. Gate `smoke-blkmq`.
-- **Per-CPU runqueues are DONE (DDR-SMP-rq-1, HEAD `11ba406`, 64 gates):**
-  O(1) pick from per-CPU FIFOs + trylock work stealing; the ring is topology
-  only. The switch STILL runs under `g_sched_lock` (handoff keeps
-  resume-before-save safe) — removing that + per-wake `smp_resched_one` IPIs
-  is **rq-2** (not started). Bugs found: idle starvation (rotate through the
-  own idle on empty queues); READY-but-`on_cpu>=0` transients must be
-  RE-APPENDED never dropped (lost-thread); COMPOSIT now spawns before
-  SURFTEST (client outraced compositor init). Gate `smoke-rqstress`.
+- **Per-CPU runqueues are DONE (DDR-SMP-rq-1, 64 gates):** O(1) pick from
+  per-CPU FIFOs + trylock work stealing; the ring is topology only. Bugs found:
+  idle starvation (rotate through the own idle on empty queues); COMPOSIT now
+  spawns before SURFTEST (client outraced compositor init). `smoke-rqstress`.
+- **`g_sched_lock` is OFF the switch path (DDR-SMP-rq-2, HEAD `176e329`,
+  73 gates):** the hot path takes only local IRQ masking + its own rq leaf
+  lock. The lock's two real jobs became an explicit **off-CPU handshake**:
+  `on_cpu >= 0` = "still executing / rsp not saved", release-stored AFTER the
+  switch by whoever resumes on that CPU (`finish_task_switch` reading the new
+  `percpu.prev`); pickers `switch_wait_offcpu()` (acquire-spin) before touching
+  `next->rsp`; `sched_free_tcb` waits on it, so `sched_exit` no longer holds the
+  lock across its final switch (exit-stack-race guarantee preserved, mechanism
+  local). `rq_take` dropped `on_cpu` from its filter — the DEQUEUE is the
+  exclusion — which RETIRED rq-1's transient re-append. `g_sched_lock` now
+  covers ring topology only. `percpu.prev` must stay AFTER the asm-consumed
+  `u_*` block (static asserts enforce). **Still open: per-wake
+  `smp_resched_one` IPIs** — idle APs pick up new work on their own 100 Hz tick.
 - **L7 polish resumed:** **DDR-720** Tab window cycling (compositor hotkey,
   `smoke-alttab`), **DDR-721** double-buffered page flip (two host GPU
   resources over one guest buffer; flush = transfer-offscreen → scanout-flip;
