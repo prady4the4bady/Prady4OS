@@ -343,6 +343,8 @@ extern const unsigned char compositor_elf[];     /* L7: sovereign-desktop compos
 extern const unsigned char compositor_elf_end[];
 extern const unsigned char surfacetest_elf[];    /* L7: per-client surface test window */
 extern const unsigned char surfacetest_elf_end[];
+extern const unsigned char surfdestroytest_elf[];    /* L7: surface lifecycle/destroy test (DDR-729) */
+extern const unsigned char surfdestroytest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -883,6 +885,10 @@ static void fs_test_thread(void *arg) {
                 /* L7 (DDR-706): a client window — creates + commits a surface that
                  * the compositor composites onto the desktop. Exercised by smoke-surface. */
                 user_boot_from_sfs(cap, smnt, "SURFTEST.ELF", surfacetest_elf, surfacetest_elf_end, 0);
+                /* L7 (DDR-729): surface lifecycle/destroy test — proves the table
+                 * reclaims slots on close AND on process exit (a client that dies
+                 * without SYS_SURFACE_CLOSE). Exercised by smoke-surfdestroy. */
+                user_boot_from_sfs(cap, smnt, "SURFDEST.ELF", surfdestroytest_elf, surfdestroytest_elf_end, 0);
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
                 user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end, 0);

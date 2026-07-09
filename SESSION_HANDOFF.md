@@ -199,9 +199,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   HEAD `aa7f548`, **73 gates**, all CI-green.
 - **The DDR-702..709 deferred VISUAL list is CLOSED** — glass blur, gradients,
   typeface, cadence + pre-transition, spring/ripple, page-flip, scroll,
-  decorations, alt-tab all shipped. Remaining L7 (non-visual): surface destroy;
-  per-agent live metrics; SFS `/etc/aether/config`; `CAP_NET` gate;
-  wlroots/Wayland (the standing out-of-tree wall).
+  decorations, alt-tab all shipped.
+- **Surface destroy is DONE (DDR-729, 75 gates):** completes the surface
+  lifecycle. Root-fixed ownership: client/compositor mappings are now
+  `PTE_SW_SHARED` views (vDSO precedent), so `vmm_destroy_address_space` never
+  frees surface/FB frames — the surface layer is the sole owner. `sched_exit`
+  calls `surface_reap_pid()` so a client that dies without `SYS_SURFACE_CLOSE`
+  no longer leaks its 16-slot table entry + frames (previously `-EMFILE` after a
+  few create/exit cycles; also closed a latent double-free vs. AS teardown and on
+  sovereign-close). A `g_surf_lock` leaf spinlock makes the slot lifecycle
+  SMP-safe. Gate `smoke-surfdestroy` (`-smp 4`, freestanding
+  `user/surfdestroytest.c` — musl-free to stay inside the 512 KiB kernel-image
+  budget) proves churn + slot-reuse + exit-reclamation. Also fixed the identical
+  missing-shared-bit flaw in `sys_fb.c`.
+  Remaining L7 (non-visual): per-agent live metrics; SFS `/etc/aether/config`;
+  `CAP_NET` gate; wlroots/Wayland (the standing out-of-tree wall).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).

@@ -11,11 +11,18 @@
 #include "errno.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "spinlock.h"
 
 #define SURFACE_MAX        16
 #define SURFACE_DIM_MAX    512u                /* per-surface buffer <= 1 MiB (512*512*4) */
 #define SURFACE_VA_BASE    0x8600000000ull     /* below the FB mapping (0x8700000000) */
 #define SURFACE_VA_SLOT    0x100000ull         /* 1 MiB per surface id */
+
+/* DDR-729: a client/compositor mapping is a VIEW of surface-layer-owned frames.
+ * PTE_SW_SHARED makes free_subtree (vmm_destroy_address_space) skip these leaves
+ * exactly like the vDSO, so address-space teardown never frees surface frames —
+ * the surface layer is the sole owner and surface_free_slot the sole free point. */
+#define SURF_VIEW_FLAGS    (VMM_USER | VMM_RW | VMM_NX | PTE_SW_SHARED)
 
 #define SURFACE_KQ 32                          /* per-surface key ring (DDR-708) */
 #define SURFACE_EQ 8                           /* per-surface event ring (DDR-718) */
@@ -34,6 +41,7 @@ struct surface {
 };
 static struct surface g_surf[SURFACE_MAX];
 static int32_t g_z_top;                         /* monotonic stacking counter */
+static spinlock_t g_surf_lock = SPINLOCK_INIT;  /* DDR-729: guards g_surf slot lifecycle */
 
 struct surface_info { uint32_t id, w, h; int32_t x, y, z; uint32_t focused; char title[16]; };
 
@@ -43,15 +51,26 @@ static unsigned order_for(uint64_t npages) {
     return o;
 }
 
+/* DDR-729 — the ONE free point. Under g_surf_lock, capture the slot's frames and
+ * clear it (used=0); the caller returns the frames to the buddy allocator OUTSIDE
+ * the lock (pmm_free is not held under IRQ-off). Returns 0 if the slot was live
+ * (caller must free *phys at *order), 1 if it was already empty (nothing to do). */
+static int surf_take_free(struct surface *s, uint64_t *phys, unsigned *order) {
+    if (!s->used)
+        return 1;
+    *phys  = s->phys;
+    *order = order_for(s->npages);
+    for (unsigned i = 0; i < sizeof *s; i++) ((uint8_t *)s)[i] = 0;   /* clears used */
+    return 0;
+}
+
 static long sys_surface_create(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
     uint32_t w = (uint32_t)a1, h = (uint32_t)a2;
     if (w == 0 || h == 0 || w > SURFACE_DIM_MAX || h > SURFACE_DIM_MAX)
         return -EINVAL;
-    int id = -1;
-    for (int i = 0; i < SURFACE_MAX; i++) if (!g_surf[i].used) { id = i; break; }
-    if (id < 0)
-        return -EMFILE;
+    /* Allocate + zero the buffer BEFORE the lock (a memset of up to 1 MiB must
+     * not run under the IRQ-off slot lock). */
     uint64_t bytes = (uint64_t)w * h * 4;
     uint64_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t phys = pmm_alloc_pages(order_for(npages));
@@ -59,6 +78,15 @@ static long sys_surface_create(long a1, long a2, long a3, long a4) {
         return -ENOMEM;
     for (uint64_t i = 0; i < npages * PAGE_SIZE; i++)   /* zero (identity-mapped) */
         ((volatile uint8_t *)(uintptr_t)phys)[i] = 0;
+
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
+    int id = -1;
+    for (int i = 0; i < SURFACE_MAX; i++) if (!g_surf[i].used) { id = i; break; }
+    if (id < 0) {
+        spin_unlock_irqrestore(&g_surf_lock, fl);
+        pmm_free_pages(phys, order_for(npages));       /* table full: return frames */
+        return -EMFILE;
+    }
     struct surface *s = &g_surf[id];
     s->phys = phys; s->w = w; s->h = h; s->npages = (uint32_t)npages;
     s->owner_pid = current_thread->pid; s->x = s->y = 0;
@@ -67,22 +95,28 @@ static long sys_surface_create(long a1, long a2, long a3, long a4) {
     s->eq_head = s->eq_tail = 0;                /* empty event ring (DDR-718) */
     s->title[0] = 0;                            /* untitled until SET_TITLE (DDR-715) */
     s->used = 1; s->committed = 0;
+    spin_unlock_irqrestore(&g_surf_lock, fl);
     return id;
 }
 
 static long sys_surface_map(long a1, long a2, long a3, long a4) {
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    if (s->owner_pid != current_thread->pid)
-        return -EPERM;                          /* a client maps only its own surface */
+    if (!s->used) { spin_unlock_irqrestore(&g_surf_lock, fl); return -EINVAL; }
+    if (s->owner_pid != current_thread->pid) {  /* a client maps only its own surface */
+        spin_unlock_irqrestore(&g_surf_lock, fl);
+        return -EPERM;
+    }
+    uint64_t phys = s->phys; uint32_t npages = s->npages;
+    spin_unlock_irqrestore(&g_surf_lock, fl);   /* map on locals, not under the lock */
     uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
-    uint64_t flags = VMM_USER | VMM_RW | VMM_NX;
-    for (uint32_t i = 0; i < s->npages; i++)
+    for (uint32_t i = 0; i < npages; i++)
         if (vmm_map_in(current_thread->cr3, va + (uint64_t)i * PAGE_SIZE,
-                       s->phys + (uint64_t)i * PAGE_SIZE, flags) != 0)
+                       phys + (uint64_t)i * PAGE_SIZE, SURF_VIEW_FLAGS) != 0)
             return -ENOMEM;
     return (long)va;
 }
@@ -91,14 +125,17 @@ static long sys_surface_map(long a1, long a2, long a3, long a4) {
  * compositor reads pixels it will composite, never gaining the owner's authority).
  * Distinguished from sys_surface_map by being the compositor path — same VA. */
 static long sys_surface_map_ro(int id) {
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
+    if (!s->used) { spin_unlock_irqrestore(&g_surf_lock, fl); return -EINVAL; }
+    uint64_t phys = s->phys; uint32_t npages = s->npages;
+    spin_unlock_irqrestore(&g_surf_lock, fl);
     uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
-    uint64_t flags = VMM_USER | VMM_RW | VMM_NX;
-    for (uint32_t i = 0; i < s->npages; i++)
+    for (uint32_t i = 0; i < npages; i++)
         if (vmm_map_in(current_thread->cr3, va + (uint64_t)i * PAGE_SIZE,
-                       s->phys + (uint64_t)i * PAGE_SIZE, flags) != 0)
+                       phys + (uint64_t)i * PAGE_SIZE, SURF_VIEW_FLAGS) != 0)
             return -ENOMEM;
     return (long)va;
 }
@@ -110,17 +147,22 @@ static long sys_surface_map_ro(int id) {
 static long sys_surface_commit(long a1, long a2, long a3, long a4) {
     (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    if (s->owner_pid != current_thread->pid)
-        return -EPERM;
-    if ((int32_t)a2 != SURF_POS_KEEP) {
-        s->x = (int32_t)a2;
-        s->y = (int32_t)a3;
+    long r = 0;
+    if (!s->used)                                  r = -EINVAL;
+    else if (s->owner_pid != current_thread->pid)  r = -EPERM;
+    else {
+        if ((int32_t)a2 != SURF_POS_KEEP) {
+            s->x = (int32_t)a2;
+            s->y = (int32_t)a3;
+        }
+        s->committed = 1;
     }
-    s->committed = 1;
-    return 0;
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    return r;
 }
 
 /* (id<0) -> POLL: list committed surfaces; (id>=0) -> compositor read-map.
@@ -133,6 +175,7 @@ static long sys_surface_poll(long a1, long a2, long a3, long a4) {
     if (max > SURFACE_MAX) max = SURFACE_MAX;
     struct surface_info buf[SURFACE_MAX];
     int n = 0;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);   /* consistent snapshot */
     for (int i = 0; i < SURFACE_MAX && n < max; i++) {
         if (g_surf[i].used && g_surf[i].committed) {
             buf[n].id = (uint32_t)i; buf[n].w = g_surf[i].w; buf[n].h = g_surf[i].h;
@@ -142,6 +185,7 @@ static long sys_surface_poll(long a1, long a2, long a3, long a4) {
             n++;
         }
     }
+    spin_unlock_irqrestore(&g_surf_lock, fl);        /* copyout never under the lock */
     for (int i = 1; i < n; i++) {                /* insertion sort by z ascending */
         struct surface_info t = buf[i];
         int j = i - 1;
@@ -157,60 +201,78 @@ static long sys_surface_poll(long a1, long a2, long a3, long a4) {
 static long sys_surface_move(long a1, long a2, long a3, long a4) {
     (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
-    if (g_surf[id].owner_pid != current_thread->pid && !current_thread->is_sovereign)
-        return -EPERM;
-    g_surf[id].x = (int32_t)a2;
-    g_surf[id].y = (int32_t)a3;
-    return 0;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
+    struct surface *s = &g_surf[id];
+    long r = 0;
+    if (!s->used)                                                           r = -EINVAL;
+    else if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign) r = -EPERM;
+    else { s->x = (int32_t)a2; s->y = (int32_t)a3; }
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    return r;
 }
 
 /* Raise a surface to the top of the stack and give it keyboard focus (DDR-708). */
 static long sys_surface_raise(long a1, long a2, long a3, long a4) {
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
-    if (g_surf[id].owner_pid != current_thread->pid && !current_thread->is_sovereign)
-        return -EPERM;
-    for (int i = 0; i < SURFACE_MAX; i++) g_surf[i].focused = 0;
-    g_surf[id].z = ++g_z_top;
-    g_surf[id].focused = 1;
-    return 0;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
+    struct surface *s = &g_surf[id];
+    long r = 0;
+    if (!s->used)                                                           r = -EINVAL;
+    else if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign) r = -EPERM;
+    else {
+        for (int i = 0; i < SURFACE_MAX; i++) g_surf[i].focused = 0;
+        s->z = ++g_z_top;
+        s->focused = 1;
+    }
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    return r;
 }
 
 /* Compositor forwards a keystroke to a surface's private key ring (DDR-708). */
 static long sys_surface_sendkey(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
-    if (!current_thread->is_sovereign && g_surf[id].owner_pid != current_thread->pid)
-        return -EPERM;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    uint8_t nh = (uint8_t)((s->kq_head + 1) % SURFACE_KQ);
-    if (nh != s->kq_tail) {                      /* drop on full */
-        s->kq[s->kq_head] = (uint8_t)a2;
-        s->kq_head = nh;
+    long r = 0;
+    if (!s->used)                                                           r = -EINVAL;
+    else if (!current_thread->is_sovereign && s->owner_pid != current_thread->pid) r = -EPERM;
+    else {
+        uint8_t nh = (uint8_t)((s->kq_head + 1) % SURFACE_KQ);
+        if (nh != s->kq_tail) {                  /* drop on full */
+            s->kq[s->kq_head] = (uint8_t)a2;
+            s->kq_head = nh;
+        }
     }
-    return 0;
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    return r;
 }
 
 /* The owning client drains a key from its surface's ring (DDR-708). */
 static long sys_surface_getkey(long a1, long a2, long a3, long a4) {
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    if (s->owner_pid != current_thread->pid)
-        return -EPERM;
-    if (s->kq_head == s->kq_tail)
-        return -1;                               /* empty */
-    uint8_t c = s->kq[s->kq_tail];
-    s->kq_tail = (uint8_t)((s->kq_tail + 1) % SURFACE_KQ);
-    return (long)c;
+    long r;
+    if (!s->used)                                r = -EINVAL;
+    else if (s->owner_pid != current_thread->pid) r = -EPERM;
+    else if (s->kq_head == s->kq_tail)           r = -1;    /* empty */
+    else {
+        r = (long)s->kq[s->kq_tail];
+        s->kq_tail = (uint8_t)((s->kq_tail + 1) % SURFACE_KQ);
+    }
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    return r;
 }
 
 /* Compositor-side: map a polled surface read-side into the caller; returns VA. */
@@ -228,19 +290,49 @@ static long sys_surface_cmap(long a1, long a2, long a3, long a4) {
 static long sys_surface_close(long a1, long a2, long a3, long a4) {
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign)
+    if (!s->used) { spin_unlock_irqrestore(&g_surf_lock, fl); return -EINVAL; }
+    if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign) {
+        spin_unlock_irqrestore(&g_surf_lock, fl);
         return -EPERM;
-    if (s->owner_pid == current_thread->pid) {     /* unmap the owner's (active) view */
+    }
+    int owner = (s->owner_pid == current_thread->pid);
+    uint32_t npages = s->npages;
+    uint64_t phys; unsigned order;
+    surf_take_free(s, &phys, &order);              /* captures + clears the slot */
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    /* Unmap the owner's (active) view so a stale access faults -> clean user-kill
+     * (ADR-021); the frames' PTE_SW_SHARED means AS teardown won't touch them, but
+     * an explicit close should still drop the live mapping. A sovereign closing
+     * another process's surface can't touch that (inactive) AS — the owner must
+     * not access a sovereign-closed surface (its poll de-lists it). */
+    if (owner) {
         uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
-        for (uint32_t i = 0; i < s->npages; i++)
+        for (uint32_t i = 0; i < npages; i++)
             vmm_unmap(va + (uint64_t)i * PAGE_SIZE);
     }
-    pmm_free_pages(s->phys, order_for(s->npages));
-    for (unsigned i = 0; i < sizeof *s; i++) ((uint8_t *)s)[i] = 0;   /* clears used */
+    pmm_free_pages(phys, order);                   /* the ONE free, outside the lock */
     return 0;
+}
+
+/* DDR-729 — automatic reclamation: free every surface owned by an exiting pid.
+ * Called from sched_exit. The owner's address space is being destroyed and no
+ * thread will run in it again, so no unmap is needed; PTE_SW_SHARED guarantees
+ * the subsequent vmm_destroy_address_space leaves these frames alone (no double
+ * free). Frames go back to the buddy allocator OUTSIDE the lock. */
+void surface_reap_pid(uint32_t pid) {
+    for (int id = 0; id < SURFACE_MAX; id++) {
+        uint64_t fl = spin_lock_irqsave(&g_surf_lock);
+        struct surface *s = &g_surf[id];
+        uint64_t phys = 0; unsigned order = 0;
+        int live = (s->used && s->owner_pid == pid) ? (surf_take_free(s, &phys, &order), 1) : 0;
+        spin_unlock_irqrestore(&g_surf_lock, fl);
+        if (live)
+            pmm_free_pages(phys, order);
+    }
 }
 
 /* Resize a surface (DDR-711): swap in a fresh zeroed buffer of the new size,
@@ -250,13 +342,11 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4) {
     (void)a4;
     int id = (int)a1;
     uint32_t w = (uint32_t)a2, h = (uint32_t)a3;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
-    struct surface *s = &g_surf[id];
-    if (s->owner_pid != current_thread->pid)
-        return -EPERM;
     if (w == 0 || h == 0 || w > SURFACE_DIM_MAX || h > SURFACE_DIM_MAX)
         return -EINVAL;
+    /* Allocate + zero the new buffer BEFORE the lock. */
     uint64_t bytes = (uint64_t)w * h * 4;
     uint64_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t nphys = pmm_alloc_pages(order_for(npages));
@@ -264,11 +354,23 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4) {
         return -ENOMEM;
     for (uint64_t i = 0; i < npages * PAGE_SIZE; i++)   /* zero (identity-mapped) */
         ((volatile uint8_t *)(uintptr_t)nphys)[i] = 0;
-    uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
-    for (uint32_t i = 0; i < s->npages; i++)            /* drop the owner's old view */
-        vmm_unmap(va + (uint64_t)i * PAGE_SIZE);
-    pmm_free_pages(s->phys, order_for(s->npages));
+
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
+    struct surface *s = &g_surf[id];
+    if (!s->used || s->owner_pid != current_thread->pid) {
+        long r = s->used ? -EPERM : -EINVAL;
+        spin_unlock_irqrestore(&g_surf_lock, fl);
+        pmm_free_pages(nphys, order_for(npages));      /* nothing to resize */
+        return r;
+    }
+    uint64_t ophys = s->phys; uint32_t onpages = s->npages;
     s->phys = nphys; s->w = w; s->h = h; s->npages = (uint32_t)npages;
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+
+    uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
+    for (uint32_t i = 0; i < onpages; i++)              /* drop the owner's old view */
+        vmm_unmap(va + (uint64_t)i * PAGE_SIZE);
+    pmm_free_pages(ophys, order_for(onpages));          /* free the old buffer */
     return 0;
 }
 
@@ -276,16 +378,28 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4) {
 static long sys_surface_set_title(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
+    /* Validate ownership under the lock, then copyinstr into a local (never under
+     * the lock — a user-fault path must not run IRQ-off holding a spinlock); swap
+     * the title in under the lock afterward. */
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    if (s->owner_pid != current_thread->pid)
-        return -EPERM;
-    if (copyinstr(s->title, (const void __user *)a2, sizeof s->title, 0) < 0) {
-        s->title[0] = 0;
-        return -EFAULT;
-    }
-    return 0;
+    long r = 0;
+    if (!s->used)                                r = -EINVAL;
+    else if (s->owner_pid != current_thread->pid) r = -EPERM;
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    if (r)
+        return r;
+    char title[16];
+    int faulted = (copyinstr(title, (const void __user *)a2, sizeof title, 0) < 0);
+    if (faulted)
+        title[0] = 0;                            /* leave the window untitled */
+    fl = spin_lock_irqsave(&g_surf_lock);
+    if (s->used && s->owner_pid == current_thread->pid)   /* re-check: still ours */
+        for (unsigned i = 0; i < sizeof s->title; i++) s->title[i] = title[i];
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    return faulted ? -EFAULT : 0;
 }
 
 /* Push a typed event to a surface's ring (DDR-718): the compositor
@@ -293,36 +407,49 @@ static long sys_surface_set_title(long a1, long a2, long a3, long a4) {
 static long sys_surface_sendev(long a1, long a2, long a3, long a4) {
     (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
-    if (!current_thread->is_sovereign && g_surf[id].owner_pid != current_thread->pid)
-        return -EPERM;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    uint8_t nh = (uint8_t)((s->eq_head + 1) % SURFACE_EQ);
-    if (nh != s->eq_tail) {
-        s->eq[s->eq_head].type = (uint16_t)a2;
-        s->eq[s->eq_head].arg0 = (uint16_t)((uint64_t)a3 >> 16);
-        s->eq[s->eq_head].arg1 = (uint16_t)a3;
-        s->eq_head = nh;
+    long r = 0;
+    if (!s->used)                                                           r = -EINVAL;
+    else if (!current_thread->is_sovereign && s->owner_pid != current_thread->pid) r = -EPERM;
+    else {
+        uint8_t nh = (uint8_t)((s->eq_head + 1) % SURFACE_EQ);
+        if (nh != s->eq_tail) {
+            s->eq[s->eq_head].type = (uint16_t)a2;
+            s->eq[s->eq_head].arg0 = (uint16_t)((uint64_t)a3 >> 16);
+            s->eq[s->eq_head].arg1 = (uint16_t)a3;
+            s->eq_head = nh;
+        }
     }
-    return 0;
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    return r;
 }
 
 /* The owner drains one event (DDR-718); -EAGAIN when the ring is empty. */
 static long sys_surface_getev(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
     int id = (int)a1;
-    if (id < 0 || id >= SURFACE_MAX || !g_surf[id].used)
+    if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
+    uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    if (s->owner_pid != current_thread->pid)
-        return -EPERM;
-    if (s->eq_head == s->eq_tail)
-        return -EAGAIN;
-    struct surf_event ev = s->eq[s->eq_tail];
+    struct surf_event ev;
+    long r = 0;
+    if (!s->used)                                r = -EINVAL;
+    else if (s->owner_pid != current_thread->pid) r = -EPERM;
+    else if (s->eq_head == s->eq_tail)           r = -EAGAIN;
+    else ev = s->eq[s->eq_tail];                 /* snapshot; dequeue only if copyout ok */
+    spin_unlock_irqrestore(&g_surf_lock, fl);
+    if (r)
+        return r;
     if (copyout((void __user *)a2, &ev, sizeof ev) < 0)
         return -EFAULT;                          /* leave the event queued */
-    s->eq_tail = (uint8_t)((s->eq_tail + 1) % SURFACE_EQ);
+    fl = spin_lock_irqsave(&g_surf_lock);
+    if (s->used && s->owner_pid == current_thread->pid && s->eq_head != s->eq_tail)
+        s->eq_tail = (uint8_t)((s->eq_tail + 1) % SURFACE_EQ);   /* advance past the delivered event */
+    spin_unlock_irqrestore(&g_surf_lock, fl);
     return 0;
 }
 

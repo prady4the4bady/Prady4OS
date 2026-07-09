@@ -115,3 +115,10 @@ global surfacetest_elf_end
 surfacetest_elf:
     incbin "build/surfacetest.elf"
 surfacetest_elf_end:
+
+; L7 (DDR-729): surface lifecycle/destroy test — churn, reuse, exit-reclamation.
+global surfdestroytest_elf
+global surfdestroytest_elf_end
+surfdestroytest_elf:
+    incbin "build/surfdestroytest.elf"
+surfdestroytest_elf_end:

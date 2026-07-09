@@ -227,6 +227,9 @@ jobs:
       - name: QEMU window close+resize test (q35; SYS_SURFACE_CLOSE/RESIZE, L7)
         run: make smoke-winops
 
+      - name: QEMU surface-destroy test (q35 -smp 4; slot reclaim on close + exit, L7)
+        run: make smoke-surfdestroy
+
       - name: QEMU title+close-button test (q35; titles + close-box click, L7)
         run: make smoke-wmclose
 

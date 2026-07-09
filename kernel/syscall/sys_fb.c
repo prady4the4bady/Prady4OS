@@ -37,7 +37,10 @@ static long sys_fb_map(long a1, long a2, long a3, long a4) {
     uint64_t phys = (uint64_t)(uintptr_t)fb;      /* identity-mapped: phys == kvirt */
     uint64_t bytes = (uint64_t)stride * h;
     uint64_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint64_t flags = VMM_USER | VMM_RW | VMM_NX;  /* data surface; never executable */
+    /* DDR-729: PTE_SW_SHARED marks this a VIEW of the GPU-owned scanout frames, so
+     * vmm_destroy_address_space (free_subtree) never frees them when a client that
+     * mapped the FB exits — the GPU resource is not the client's private memory. */
+    uint64_t flags = VMM_USER | VMM_RW | VMM_NX | PTE_SW_SHARED;  /* data surface; never executable */
     for (uint64_t i = 0; i < npages; i++) {
         if (vmm_map_in(t->cr3, FB_USER_VA + i * PAGE_SIZE,
                        phys + i * PAGE_SIZE, flags) != 0)

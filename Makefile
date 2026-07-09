@@ -63,6 +63,8 @@ USER_COMP_SRC    := user/compositor.c     # L7: in-house sovereign-desktop compo
 USER_COMP_ELF    := build/compositor.elf
 USER_SURF_SRC    := user/surfacetest.c    # L7: per-client surface test window (DDR-706)
 USER_SURF_ELF    := build/surfacetest.elf
+USER_SURFDESTROY_SRC := user/surfdestroytest.c  # L7: surface lifecycle/destroy test (DDR-729)
+USER_SURFDESTROY_ELF := build/surfdestroytest.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -167,7 +169,7 @@ lwip: $(LWIP_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -206,7 +208,11 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/compositor.o $(MUSL_LIB) -o $(USER_COMP_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SURF_SRC) -o build/surfacetest.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/surfacetest.o $(MUSL_LIB) -o $(USER_SURF_ELF)
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	# DDR-729: freestanding (no musl) so it stays a few KiB inside the kernel image
+	# budget — links against user.ld's single R+X segment (no writable globals).
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SURFDESTROY_SRC) -o build/surfdestroytest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SURFDESTROY_ELF) build/surfdestroytest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -713,6 +719,16 @@ smoke-drag: $(IMG) fat-image sfs-image
 # prints PRADYOS_SURFACE_GONE. Client-driven (no QMP); needs the GPU.
 smoke-winops: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_RESIZE_OK\nPRADYOS_CLOSE_OK\nPRADYOS_SURFACE_GONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Layer-7 surface-destroy gate (DDR-729, -smp 4 so the exit-reap runs cross-CPU):
+# surfdestroytest proves the 16-slot table reclaims on churn/close, reuses freed
+# slots, and — the lifecycle hole this slice closes — reclaims a child's surfaces
+# when it EXITS without SYS_SURFACE_CLOSE. GPU-independent (surfaces are PMM).
+smoke-surfdestroy: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SURFDESTROY_CHURN_OK\nPRADYOS_SURFDESTROY_REUSE_OK\nPRADYOS_SURFDESTROY_EXIT_OK\nPRADYOS_SURFDESTROY_OK')" \
+	FORBIDDEN_SENTINEL="SURFDESTROY FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # APIC stage-A gate (DDR-714): the MADT-discovered LAPIC comes up and the APIC

@@ -970,8 +970,30 @@ from another CPU (rq-3 made this reproducible by running a ring-3 printer on an
 AP concurrently with the BSP). Root cause fixed with `kwrite(buf, n)` in
 `console.c` — takes `g_console_lock` once for the whole chunk, giving user
 writes the same line-atomicity `kputs` already had.
-**Next:** the remaining L7 items above (surface destroy, per-agent live metrics,
-SFS `/etc/aether/config`, `CAP_NET` gate). wlroots/Wayland remain out-of-tree.
+**Surface destroy — lifecycle completion (DDR-729):** a surface
+(`kernel/syscall/sys_surface.c`) is a kernel-owned PMM buffer mapped into the
+owning client + the compositor. Teardown was explicit-only (`SYS_SURFACE_CLOSE`,
+DDR-711), leaving two root defects. (1) **Leak on exit:** a client that exited —
+normally, via signal, or fault-kill — without closing leaked its 16-slot table
+entry + frames forever; a handful of create/exit cycles hit `-EMFILE`. (2)
+**Double-free / ambiguous ownership:** surface (and FB, `sys_fb.c`) frames were
+mapped `VMM_USER|VMM_RW|VMM_NX` **without** `PTE_SW_SHARED`, so
+`vmm_destroy_address_space`→`free_subtree` `ptnode_free`d them as private user
+pages while the surface layer also `pmm_free_pages`'d them — two owners, mis-freed
+today on exit-with-mapping and on sovereign-close. **Fix (one owner, one free
+point):** mark every client/compositor mapping `PTE_SW_SHARED` (vDSO precedent),
+so address-space teardown never touches surface/FB frames — the surface layer is
+the sole owner and `surface_free_slot` the sole free. Automatic reclamation via
+`surface_reap_pid(pid)` from `sched_exit` frees every slot the exiting pid owns
+(no unmap needed — the AS is being destroyed and `PTE_SW_SHARED` prevents the
+double free). A leaf spinlock `g_surf_lock` makes the whole slot lifecycle
+SMP-safe (allocation/zeroing done outside the IRQ-off window; `copyout`/mapping
+loops never held under the lock). Gate `smoke-surfdestroy` (`-smp 4`, freestanding
+`user/surfdestroytest.c` — no musl, to stay inside the 512 KiB kernel-image
+budget) proves churn, slot-reuse, and exit-reclamation of a full table's worth.
+**75 gates.**
+**Next:** the remaining non-visual L7 items (per-agent live metrics, SFS
+`/etc/aether/config`, `CAP_NET` gate). wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-09
 
 ## Phase 0 — Toolchain & Build System

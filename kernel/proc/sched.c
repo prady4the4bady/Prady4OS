@@ -703,6 +703,13 @@ void sched_exit(int status) {
         for (;;)
             __asm__ volatile("hlt");
     }
+    /* DDR-729: reclaim any Layer-7 surfaces this process owns before it dies, so a
+     * client that exits without SYS_SURFACE_CLOSE never leaks its slot + frames.
+     * surface_reap_pid takes its own g_surf_lock (no ordering vs. the ring lock,
+     * which we have not taken yet). No-op for kernel threads (no owned surfaces). */
+    void surface_reap_pid(uint32_t pid);   /* kernel/syscall/sys_surface.c (DDR-729) */
+    if (current_thread->is_user)
+        surface_reap_pid(current_thread->pid);
     /* DDR-SMP-exit-stack-race, rq-2 edition. The dying thread still executes on
      * its kernel stack until context_switch completes, so a collector (wait4 /
      * reaper, possibly on another CPU) must not free that stack before then.
