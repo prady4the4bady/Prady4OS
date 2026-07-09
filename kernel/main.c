@@ -541,6 +541,35 @@ static void smppreempt_proof(void) {
     kputs(pc->ticks > t0 ? "[smp] ap preempt OK\r\n" : "[smp] ap preempt FAIL\r\n");
 }
 
+/* rq-3 proof: a cross-CPU unblock kicks an IDLE AP (directed wake IPI) so it
+ * steals the thread promptly. Let the APs settle to idle, block a probe, then
+ * unblock it from here — expect g_resched_ipis to advance AND the probe to run. */
+static volatile int g_rp_ran;
+static struct tcb *g_rp_thread;
+static void resched_probe(void *arg) {
+    (void)arg;
+    sched_block();
+    g_rp_ran = 1;
+}
+static void smpresched_proof(void) {
+    if (!g_smp_have_aps)
+        return;
+    uint64_t dl = g_ticks + 20;                  /* let APs drain work -> idle */
+    while (g_ticks < dl)
+        yield();
+    uint64_t before = g_resched_ipis;
+    g_rp_thread = sched_create(resched_probe, 0, "resched");
+    dl = g_ticks + 50;
+    while (g_rp_thread && g_rp_thread->state != THREAD_BLOCKED && g_ticks < dl)
+        yield();
+    sched_unblock(g_rp_thread);                  /* enqueue here + kick an idle AP */
+    dl = g_ticks + 50;
+    while (!g_rp_ran && g_ticks < dl)
+        yield();
+    kputs((g_resched_ipis > before && g_rp_ran) ? "[smp] resched OK\r\n"
+                                                : "[smp] resched FAIL\r\n");
+}
+
 /* cap-4 proof: a ring-3 thread runs on an AP. The FS phase has just spawned a
  * fleet of user processes; nudge the APs and poll the flag schedule() sets when
  * a non-BSP CPU claims a user thread. (The flag-then-print split keeps console
@@ -829,6 +858,7 @@ static void fs_test_thread(void *arg) {
                                         (needs the live scheduler — this thread) */
                 smpsched_proof();    /* ADR-031 cap-2b: a ring thread runs on an AP */
                 smppreempt_proof();  /* ADR-031 cap-3: an AP's timer preempts */
+                smpresched_proof();  /* DDR-SMP-rq-3: unblock kicks an idle AP */
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end, 0);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end, 0);

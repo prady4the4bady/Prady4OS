@@ -16,3 +16,6 @@ int smp_job_done(uint32_t cpu_idx);
 /* cap-2b: kick every online AP to reschedule (wake IPI), so it picks up
  * newly-created ready threads from the shared ring. */
 void smp_resched_all(void);
+/* rq-3: wake ONE idle CPU (directed) so it promptly steals newly-ready work. */
+void smp_resched_one(uint32_t cpu_idx);
+extern volatile uint64_t g_resched_ipis;   /* directed kicks sent (gate proof) */

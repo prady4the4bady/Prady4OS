@@ -146,6 +146,17 @@ void smp_resched_all(void) {
     }
 }
 
+/* rq-3: directed reschedule kick — wake ONE specific (idle) CPU so it steals a
+ * freshly-enqueued thread immediately instead of on its next timer tick. */
+volatile uint64_t g_resched_ipis;
+void smp_resched_one(uint32_t cpu_idx) {
+    struct percpu *pc = percpu_get(cpu_idx);
+    if (pc && pc->present && !pc->is_bsp) {
+        __atomic_add_fetch(&g_resched_ipis, 1, __ATOMIC_RELAXED);
+        lapic_send_ipi(pc->apic_id, LAPIC_WAKE_VECTOR);
+    }
+}
+
 /* 1 when the AP has drained its mailbox (job finished). */
 int smp_job_done(uint32_t cpu_idx) {
     struct percpu *pc = percpu_get(cpu_idx);

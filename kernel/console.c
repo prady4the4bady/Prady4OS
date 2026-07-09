@@ -77,6 +77,17 @@ void kputs(const char *s) {
     irq_restore(fl);
 }
 
+/* Emit `n` bytes as a single locked unit — the console lock is taken once for
+ * the whole buffer, so a user sys_write can't interleave mid-string with a
+ * kernel kputs or with another CPU's write (ADR-030: matters once APs run ring-3
+ * printers concurrently with the BSP — DDR-SMP-rq-3). */
+void kwrite(const char *buf, uint64_t n) {
+    uint64_t fl = irq_save();
+    for (uint64_t i = 0; i < n; ++i)
+        kputc(buf[i]);
+    irq_restore(fl);
+}
+
 void kputhex(uint64_t v) {
     static const char digits[] = "0123456789ABCDEF";
     uint64_t fl = irq_save();

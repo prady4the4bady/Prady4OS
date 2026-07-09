@@ -953,10 +953,26 @@ library ports — the standing wall). The DDR-702..709 visual list is now CLOSED
 glass blur (722), gradients (723), typeface (728), pre-transition + cadence
 (726), spring/ripple (727), page-flip (721), scroll (725), decorations (724),
 alt-tab (720) all shipped.
-**Next:** per-wake `smp_resched_one` IPIs (rq-2's deferred half — idle APs
-currently pick up new work on their own 100 Hz tick); or the remaining L7 items
-above. wlroots/Wayland remain out-of-tree.
-**Last updated:** 2026-07-08
+**Per-wake reschedule IPIs (DDR-SMP-rq-3):** rq-2's deferred half. On unblock,
+`sched_unblock` used to just `rq_push` the woken thread and let an idle AP find
+it on its own 100 Hz tick (~up to 10 ms of latency). Now the waker scans for an
+idle CPU and sends it a **directed** wake IPI (`smp_resched_one`, reusing the
+vector-49 wake ISR that just EOIs) so it leaves `hlt` and steals the thread
+immediately. A per-CPU `percpu.idle` flag marks the `hlt` wait; the wake/enqueue
+race is closed by the idle loop's double-check (set `idle=1`, re-scan
+`rq_has_ready()`, loop if work appeared before we halt), with the timer tick as
+the correctness backstop. Gate `smoke-resched` asserts `[smp] resched OK` when a
+BSP unblock provably kicks an idle AP (`g_resched_ipis > 0`). **74 gates.**
+Exposed and fixed a latent **cross-CPU console interleaving** bug: `sys_write`'s
+FD_CONSOLE path emitted user bytes via a bare per-char `kputc` loop holding no
+lock, so a ring-3 thread printing on an AP garbled mid-line against a `kputs`
+from another CPU (rq-3 made this reproducible by running a ring-3 printer on an
+AP concurrently with the BSP). Root cause fixed with `kwrite(buf, n)` in
+`console.c` — takes `g_console_lock` once for the whole chunk, giving user
+writes the same line-atomicity `kputs` already had.
+**Next:** the remaining L7 items above (surface destroy, per-agent live metrics,
+SFS `/etc/aether/config`, `CAP_NET` gate). wlroots/Wayland remain out-of-tree.
+**Last updated:** 2026-07-09
 
 ## Phase 0 — Toolchain & Build System
 

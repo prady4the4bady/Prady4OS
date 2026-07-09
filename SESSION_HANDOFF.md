@@ -164,8 +164,19 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   local). `rq_take` dropped `on_cpu` from its filter — the DEQUEUE is the
   exclusion — which RETIRED rq-1's transient re-append. `g_sched_lock` now
   covers ring topology only. `percpu.prev` must stay AFTER the asm-consumed
-  `u_*` block (static asserts enforce). **Still open: per-wake
-  `smp_resched_one` IPIs** — idle APs pick up new work on their own 100 Hz tick.
+  `u_*` block (static asserts enforce).
+- **Per-wake reschedule IPIs are DONE (DDR-SMP-rq-3, 74 gates):** rq-2's
+  deferred half. `sched_unblock` now finds an idle CPU (`percpu.idle`) and sends
+  a directed `smp_resched_one` wake IPI (vector-49 wake ISR) so the woken thread
+  is stolen immediately instead of on the AP's next 100 Hz tick. The wake/halt
+  race is closed by the idle loop's double-check (set `idle=1`, re-scan
+  `rq_has_ready()`, loop before `hlt`), timer as backstop. Gate `smoke-resched`
+  (`g_resched_ipis > 0`). **Fixed a latent bug rq-3 exposed:** `sys_write`'s
+  console path emitted user bytes via a bare per-char `kputc` loop with no lock,
+  so a ring-3 printer on an AP garbled mid-line against another CPU's `kputs`.
+  Root-caused with `kwrite(buf,n)` in `console.c` (takes `g_console_lock` once
+  per chunk → user writes get `kputs`'s line-atomicity). `u_*` static asserts
+  unaffected (`idle` appended after `prev`).
 - **L7 polish resumed:** **DDR-720** Tab window cycling (compositor hotkey,
   `smoke-alttab`), **DDR-721** double-buffered page flip (two host GPU
   resources over one guest buffer; flush = transfer-offscreen → scanout-flip;

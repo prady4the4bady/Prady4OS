@@ -27,8 +27,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
             size_t chunk = (remaining > (long)sizeof kbuf) ? sizeof kbuf : (size_t)remaining;
             if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0)
                 return total > 0 ? total : -EFAULT;   /* partial write or EFAULT */
-            for (size_t i = 0; i < chunk; i++)
-                kputc(kbuf[i]);
+            kwrite(kbuf, chunk);   /* whole chunk atomic vs. other CPUs' output */
             total     += (long)chunk;
             remaining -= (long)chunk;
             uptr      += chunk;

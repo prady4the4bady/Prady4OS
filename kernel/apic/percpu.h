@@ -43,6 +43,8 @@ struct percpu {
      * resumes here release-stores prev->on_cpu = -1 (finish_task_switch) once
      * context_switch has left that thread's stack: the off-CPU handshake. */
     struct tcb *prev;
+    volatile uint8_t idle;  /* rq-3: 1 while this CPU is in the idle-loop hlt wait —
+                             * a directed wake IPI (smp_resched_one) breaks it. */
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */

@@ -959,6 +959,14 @@ smoke-focus: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_FOCUS_KEY build/focus.log || { echo "[focus] FAIL — key not routed to focused window"; tail -20 build/focus.log; exit 1; }
 	@echo "[focus] PASS — $$(grep -a PRADYOS_FOCUS_KEY build/focus.log | head -1)"
 
+# Reschedule-IPI gate (DDR-SMP-rq-3): a cross-CPU unblock kicks an idle AP
+# (directed wake IPI) so it steals the thread promptly, not on its next tick.
+smoke-resched: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] resched OK')" \
+	FORBIDDEN_SENTINEL="resched FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Font gate (DDR-728): window titles render in the Inter 16px alpha atlas.
 smoke-font: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 \

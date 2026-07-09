@@ -7,6 +7,7 @@
 #include "vmm.h"
 #include "string.h"            /* memcpy for the per-thread FPU template (5d) */
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D) */
+#include "smp.h"               /* rq-3: smp_resched_one (directed wake IPI) */
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
@@ -120,6 +121,16 @@ static inline void finish_task_switch(void) {
 static inline void switch_wait_offcpu(struct tcb *t) {
     while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) >= 0)
         __asm__ volatile("pause");
+}
+
+/* rq-3: a lockless hint — is any CPU's ready queue non-empty? A stale read is
+ * harmless: a false negative is caught by the timer tick, a false positive just
+ * costs one extra idle-loop iteration. Used only to close the wake/idle race. */
+static int rq_has_ready(void) {
+    for (int c = 0; c < PERCPU_MAX; c++)
+        if (g_rq[c].head)
+            return 1;
+    return 0;
 }
 
 /* Steal one thread from another CPU's FIFO (trylock; own rq NOT held). */
@@ -266,7 +277,18 @@ void sched_ap_enter(void) {
             __atomic_store_n(&pc->job, (void (*)(void))0, __ATOMIC_RELEASE);
         }
         schedule();                    /* run any READY kernel thread from the ring */
+        /* rq-3: advertise idle so a waker will kick us; then DOUBLE-CHECK for
+         * work that may have arrived between schedule() and now (else that
+         * waker saw idle==0 and skipped the kick). SEQ_CST orders the flag store
+         * before the rq_has_ready load, pairing with the waker's rq_push then
+         * idle read. If we still hlt, the wake IPI (or timer) breaks it. */
+        __atomic_store_n(&pc->idle, 1, __ATOMIC_SEQ_CST);
+        if (rq_has_ready()) {
+            __atomic_store_n(&pc->idle, 0, __ATOMIC_SEQ_CST);
+            continue;                  /* work appeared — steal it next schedule() */
+        }
         __asm__ volatile("sti; hlt");  /* sleep until wake IPI / timer */
+        __atomic_store_n(&pc->idle, 0, __ATOMIC_SEQ_CST);
     }
 }
 
@@ -650,11 +672,21 @@ void sched_unblock(struct tcb *t) {
     if (__atomic_compare_exchange_n(&t->state, &expected, THREAD_READY,
                                     0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
         /* rq-1: a freshly READY thread must be findable — enqueue it on the
-         * waker's own CPU's FIFO (steal spreads it if this CPU stays busy; an
-         * idle CPU picks it up within a timer tick). rq_push is a leaf lock,
-         * safe from IRQ handlers and under device compl locks. */
+         * waker's own CPU's FIFO. rq_push is a leaf lock, safe from IRQ handlers
+         * and under device compl locks. */
         struct percpu *pc = this_cpu();
-        rq_push(pc ? (int)pc->cpu_idx : 0, t);
+        int self = pc ? (int)pc->cpu_idx : 0;
+        rq_push(self, t);
+        /* rq-3: kick an idle CPU so it steals this thread NOW rather than on its
+         * next 10 ms tick. Directed IPI to the first idling non-self CPU; the
+         * timer remains the backstop if none is (visibly) idle. */
+        for (int c = 0; c < PERCPU_MAX; c++) {
+            struct percpu *o = percpu_get((uint32_t)c);
+            if (c != self && o && o->present && o->idle) {
+                smp_resched_one((uint32_t)c);
+                break;
+            }
+        }
     }
 }
 
