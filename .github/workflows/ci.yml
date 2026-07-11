@@ -218,6 +218,9 @@ jobs:
       - name: QEMU per-agent live-metrics test (q35; SYS_AGENT_METRICS state/actions, L7)
         run: make smoke-agentmetrics
 
+      - name: QEMU CAP_NET socket-authority test (q35; capless connect/slot -> EPERM)
+        run: make smoke-capnet
+
       - name: QEMU z-order/focus test (q35; raise + focus + key routed to window, L7)
         run: make smoke-focus
 

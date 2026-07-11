@@ -67,6 +67,8 @@ USER_SURFDESTROY_SRC := user/surfdestroytest.c  # L7: surface lifecycle/destroy 
 USER_SURFDESTROY_ELF := build/surfdestroytest.elf
 USER_AGENTMETRICS_SRC := user/agentmetricstest.c  # L7: per-agent live metrics probe (DDR-730)
 USER_AGENTMETRICS_ELF := build/agentmetricstest.elf
+USER_CAPNET_SRC := user/capnettest.c      # L6/7: CAP_NET socket-authority probe (DDR-731)
+USER_CAPNET_ELF := build/capnettest.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -171,7 +173,7 @@ lwip: $(LWIP_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_AGENTMETRICS_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_AGENTMETRICS_SRC) $(USER_CAPNET_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -216,7 +218,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SURFDESTROY_ELF) build/surfdestroytest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AGENTMETRICS_SRC) -o build/agentmetricstest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AGENTMETRICS_ELF) build/agentmetricstest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_CAPNET_SRC) -o build/capnettest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CAPNET_ELF) build/capnettest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -1117,6 +1121,16 @@ smoke-agentmetrics: $(IMG) fat-image sfs-image
 	TIMEOUT_S=150 \
 	EXTRA_SENTINEL="$$(printf 'AGENT_METRIC KRYOS live pid ok\nPRADYOS_AGENT_METRICS_OK')" \
 	FORBIDDEN_SENTINEL="AGENT_METRICS FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# CAP_NET socket-authority gate (DDR-731): a CAP-less probe must get -EPERM from
+# SYS_SOCK_CONNECT (authority) and from WRITE/CLOSE on a slot it doesn't own
+# (per-slot ownership) — proving arbitrary processes can no longer reach the
+# network or hijack another process's connection. Kernel-side lwIP unaffected.
+smoke-capnet: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
+	EXTRA_SENTINEL="$$(printf 'CAPNET_CONNECT_DENIED\nCAPNET_SLOT_DENIED\nPRADYOS_CAPNET_OK')" \
+	FORBIDDEN_SENTINEL="CAPNET FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer 7 mode-binding gate (DDR-701): the daemon (CAP_SOVEREIGN) toggles the

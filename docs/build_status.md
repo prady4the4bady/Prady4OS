@@ -1018,10 +1018,22 @@ asserts the deterministic chain (TRIGGER then AGENT_DONE). (2) `smoke-smpuser`
 flaked ~50%: `user/hello.asm` printed per-char via `SYS_PUTC`, whose chars from
 an AP interleave with other CPUs' lines; the line is now ONE `SYS_WRITE` (atomic
 `kwrite` unit, rq-3 contract), newline kept on `SYS_PUTC` for NSI-1 coverage.
-**Next:** the remaining non-visual L7 items (SFS `/etc/aether/config`, `CAP_NET`
-gate); the >544 KiB kernel-relocation boot slice when needed. wlroots/Wayland
-remain out-of-tree.
-**Last updated:** 2026-07-09
+**CAP_NET — authority + ownership on the socket NSI (DDR-731):** `SYS_SOCK_*`
+(ADR-027) had **no authority check and no slot ownership** — any process could
+open outbound TCP (bypassing AETHER arbitration entirely), and could
+read/inject/close ANY of the 8 global proxy slots by index; slots also leaked on
+exit. Fix: new `tcb.is_net` (CAP_NET; explicitly zeroed in `sched_create_state`,
+NOT fork-inherited — a child re-earns authority), granted to agents at spawn
+(the sanctioned socket users — live mode talks to Ollama). `SYS_SOCK_CONNECT`
+requires `is_net || is_sovereign` (audited `-EPERM`, AETHER pattern);
+`g_sock_owner[slot]` records the connecting pid, enforced on WRITE/READ/CLOSE;
+`socket_reap_pid` from `sched_exit` closes an exiting pid's slots (the DDR-729
+one-owner pattern). Kernel-side lwIP gates (`smoke-net*`) unaffected. Gate
+`smoke-capnet` (freestanding `user/capnettest.c`): CAP-less connect and
+foreign-slot write/close are all exactly `-EPERM`. **77 gates.**
+**Next:** SFS `/etc/aether/config` (the last non-visual L7 item); the >544 KiB
+kernel-relocation boot slice when needed. wlroots/Wayland remain out-of-tree.
+**Last updated:** 2026-07-11
 
 ## Phase 0 — Toolchain & Build System
 

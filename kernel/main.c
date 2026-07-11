@@ -347,6 +347,8 @@ extern const unsigned char surfdestroytest_elf[];    /* L7: surface lifecycle/de
 extern const unsigned char surfdestroytest_elf_end[];
 extern const unsigned char agentmetricstest_elf[];   /* L7: per-agent live metrics probe (DDR-730) */
 extern const unsigned char agentmetricstest_elf_end[];
+extern const unsigned char capnettest_elf[];         /* L6/7: CAP_NET socket-authority probe (DDR-731) */
+extern const unsigned char capnettest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -599,6 +601,8 @@ static long aether_spawn_agent_hook(const char *task) {
     if (elf_load((void *)(uintptr_t)agent_base_elf, len, "AGENT", &ut) != ELF_OK || !ut)
         return -1;
     ut->is_agent = 1;                  /* authority BEFORE the first run */
+    ut->is_net = 1;                    /* DDR-731: agents are the sanctioned socket users
+                                        * (live mode talks to Ollama over SYS_SOCK_*) */
     ut->parent_pid = g_aether_daemon_pid;
     sched_unblock(ut);                 /* elf_load returns the thread BLOCKED */
     return (long)ut->pid;
@@ -895,6 +899,10 @@ static void fs_test_thread(void *arg) {
                  * and asserts the daemon's KRYOS agent reports live. Exercised by
                  * smoke-agentmetrics. */
                 user_boot_from_sfs(cap, smnt, "AGMETRIC.ELF", agentmetricstest_elf, agentmetricstest_elf_end, 0);
+                /* L6/7 (DDR-731): CAP_NET probe — spawned CAP-less; asserts the
+                 * socket NSI refuses it (-EPERM on connect, and on touching a
+                 * slot it doesn't own). Exercised by smoke-capnet. */
+                user_boot_from_sfs(cap, smnt, "CAPNET.ELF", capnettest_elf, capnettest_elf_end, 0);
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
                 user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end, 0);

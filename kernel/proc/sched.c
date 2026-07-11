@@ -343,6 +343,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->forked = 0;                 /* 5e: normal launch unless a fork sets fork_regs */
     t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
     t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
+    t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
     t->mem_used = 0;
     t->sc_count = 0;               /* L6: syscall rate-limit window (agents only)         */
@@ -708,8 +709,11 @@ void sched_exit(int status) {
      * surface_reap_pid takes its own g_surf_lock (no ordering vs. the ring lock,
      * which we have not taken yet). No-op for kernel threads (no owned surfaces). */
     void surface_reap_pid(uint32_t pid);   /* kernel/syscall/sys_surface.c (DDR-729) */
-    if (current_thread->is_user)
+    void socket_reap_pid(uint32_t pid);    /* kernel/syscall/sys_socket.c (DDR-731) */
+    if (current_thread->is_user) {
         surface_reap_pid(current_thread->pid);
+        socket_reap_pid(current_thread->pid);
+    }
     /* DDR-SMP-exit-stack-race, rq-2 edition. The dying thread still executes on
      * its kernel stack until context_switch completes, so a collector (wait4 /
      * reaper, possibly on another CPU) must not free that stack before then.

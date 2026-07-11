@@ -225,7 +225,13 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   attempt hung the boot — the 0xA0000 VGA/ROM hole makes a bigger flat load at
   0x10000 impossible. Past 544 KiB the kernel must be relocated above 1 MiB
   (unreal-mode bounce copy in stage2) — plan it as a dedicated boot slice.
-  Remaining L7 (non-visual): SFS `/etc/aether/config`; `CAP_NET` gate;
+- **CAP_NET is DONE (DDR-731, 77 gates):** the socket NSI is gated. New
+  `tcb.is_net` (granted to agents at spawn; zeroed in `sched_create_state`, not
+  fork-inherited); `SYS_SOCK_CONNECT` needs `is_net || is_sovereign` (audited
+  `-EPERM`); per-slot `g_sock_owner` enforced on WRITE/READ/CLOSE (no
+  cross-process hijack); `socket_reap_pid` from `sched_exit` (DDR-729 pattern).
+  Gate `smoke-capnet` (freestanding `user/capnettest.c`).
+  Remaining L7 (non-visual): SFS `/etc/aether/config`;
   wlroots/Wayland (the standing out-of-tree wall).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).

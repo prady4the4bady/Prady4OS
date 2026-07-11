@@ -129,3 +129,10 @@ global agentmetricstest_elf_end
 agentmetricstest_elf:
     incbin "build/agentmetricstest.elf"
 agentmetricstest_elf_end:
+
+; L6/7 (DDR-731): CAP_NET socket-authority probe.
+global capnettest_elf
+global capnettest_elf_end
+capnettest_elf:
+    incbin "build/capnettest.elf"
+capnettest_elf_end:

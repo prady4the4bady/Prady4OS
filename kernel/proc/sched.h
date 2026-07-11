@@ -113,6 +113,8 @@ struct tcb {
     struct tcb *rq_next;        /* rq-1: intrusive per-CPU ready-FIFO link (NULL = tail
                                  * or not enqueued; rq membership tracked by rq_on) */
     int        rq_on;           /* rq-1: 1 while linked into some CPU's ready queue */
+    uint32_t   is_net;          /* DDR-731: CAP_NET — may open proxy sockets (SYS_SOCK_*).
+                                 * Granted at agent spawn; NOT inherited across fork. */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

@@ -7,9 +7,11 @@
  * drives the stack (ADR-027 D3).
  */
 #include "syscall.h"
+#include "sched.h"        /* current_thread: is_net / is_sovereign / pid (DDR-731) */
 #include "uaccess.h"
 #include "errno.h"
 #include "irq.h"          /* g_ticks */
+#include "aether.h"       /* aether_audit AR_CAP_DENIED (denials are audited) */
 #include "pradyos_net.h"  /* psock_* */
 
 /* psock_state() codes (mirror the enum in lwip_port.c). */
@@ -20,14 +22,38 @@
 
 #define SOCK_IO_MAX 2048      /* per-call buffer bound (kernel staging) */
 
+/* DDR-731 — per-slot ownership. The proxy slots are a global table of 8; before
+ * this, ANY process could read/inject/close ANY slot by index. owner[slot] is
+ * the pid that connected it (0 = free), set at connect, cleared at close/reap.
+ * Single check point for WRITE/READ/CLOSE: owner or the sovereign operator. */
+#define SOCK_SLOTS 8
+static uint32_t g_sock_owner[SOCK_SLOTS];
+
+static int sock_denied(int slot) {
+    if (slot < 0 || slot >= SOCK_SLOTS)
+        return 0;                           /* out of range: let psock_* -EBADF it */
+    return g_sock_owner[slot] != current_thread->pid && !current_thread->is_sovereign;
+}
+
 static long sys_sock_connect(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
+    /* DDR-731: network authority. Agents are granted CAP_NET at spawn; the
+     * sovereign operator passes for diagnostics. Everyone else: audited -EPERM
+     * (the AETHER pattern — denial is logged, the caller survives). */
+    if (!current_thread->is_net && !current_thread->is_sovereign) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
     int slot = psock_connect((uint32_t)a1, (uint16_t)a2);
+    if (slot >= 0 && slot < SOCK_SLOTS)
+        g_sock_owner[slot] = current_thread->pid;
     return (slot < 0) ? -EMFILE : (long)slot;     /* no free socket / net down */
 }
 
 static long sys_sock_write(long a1, long a2, long a3, long a4) {
     (void)a4;
+    if (sock_denied((int)a1))
+        return -EPERM;                        /* DDR-731: not this caller's slot */
     int len = (int)a3;
     if (len <= 0) return 0;
     if (len > SOCK_IO_MAX) len = SOCK_IO_MAX;
@@ -40,6 +66,8 @@ static long sys_sock_write(long a1, long a2, long a3, long a4) {
 
 static long sys_sock_read(long a1, long a2, long a3, long a4) {
     int slot = (int)a1;
+    if (sock_denied(slot))
+        return -EPERM;                        /* DDR-731: not this caller's slot */
     int len = (int)a3;
     unsigned timeout_ms = (unsigned)a4;
     if (len <= 0) return 0;
@@ -73,7 +101,25 @@ static long sys_sock_read(long a1, long a2, long a3, long a4) {
 
 static long sys_sock_close(long a1, long a2, long a3, long a4) {
     (void)a2; (void)a3; (void)a4;
-    return (psock_close((int)a1) < 0) ? -EBADF : 0;
+    int slot = (int)a1;
+    if (sock_denied(slot))
+        return -EPERM;                        /* DDR-731: not this caller's slot */
+    if (psock_close(slot) < 0)
+        return -EBADF;
+    if (slot >= 0 && slot < SOCK_SLOTS)
+        g_sock_owner[slot] = 0;
+    return 0;
+}
+
+/* DDR-731 — exit reap (the DDR-729 one-owner pattern): close every proxy slot
+ * the exiting pid owns, so a process that dies mid-connection never leaks one
+ * of the 8 slots. Called from sched_exit. */
+void socket_reap_pid(uint32_t pid) {
+    for (int s = 0; s < SOCK_SLOTS; s++)
+        if (g_sock_owner[s] == pid) {
+            psock_close(s);
+            g_sock_owner[s] = 0;
+        }
 }
 
 void sys_socket_register(void) {
