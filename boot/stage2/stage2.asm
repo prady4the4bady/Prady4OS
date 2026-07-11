@@ -120,17 +120,19 @@ enable_a20:
     ret
 
 ; Load the kernel image from disk (INT 13h/AH=42h) to physical 0x10000.
-; Load the kernel in 16 chunks of 64 sectors (512 KiB total) to successive 32 KiB
+; Load the kernel in 17 chunks of 64 sectors (544 KiB total) to successive 32 KiB
 ; regions starting at physical 0x10000 — one INT 13h call per chunk stays under
-; the BIOS per-call sector limit and the 64 KiB real-mode segment, and scales as
-; the kernel grows. The runtime image + BSS has room up to the stack at 0x200000;
-; the page tables live at 0x300000 (moved off 0x70000). The disk image is 1 MiB,
-; so reading 512 KiB from LBA 17 stays well within it. Binding limit on kernel.bin
-; is this read window, not the page tables.
+; the BIOS per-call sector limit and the 64 KiB real-mode segment. 17 is the
+; PHYSICAL ceiling for this scheme: the load ends at 0x98000, just under the top
+; of conventional RAM (E820: usable ends 0x9FC00; 0xA0000.. is the VGA/ROM hole),
+; so a real-mode flat load at 0x10000 can NEVER exceed ~575 KiB — growing past
+; 544 KiB requires relocating the kernel above 1 MiB (unreal-mode bounce copy or
+; a PM disk driver), a dedicated slice. (Raised 16 -> 17 chunks for DDR-730 when
+; the freestanding-ELF trick exhausted the 512 KiB window.)
 load_kernel:
     mov si, msg_ldk
     call puts16
-    mov cx, 16
+    mov cx, 17
 .chunk:
     push cx
     mov si, kernel_dap

@@ -122,3 +122,10 @@ global surfdestroytest_elf_end
 surfdestroytest_elf:
     incbin "build/surfdestroytest.elf"
 surfdestroytest_elf_end:
+
+; L7 (DDR-730): per-agent live-metrics probe.
+global agentmetricstest_elf
+global agentmetricstest_elf_end
+agentmetricstest_elf:
+    incbin "build/agentmetricstest.elf"
+agentmetricstest_elf_end:

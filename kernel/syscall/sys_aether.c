@@ -14,11 +14,18 @@
 
 #define SIGKILL 9
 
-/* Named-agent roster (DDR-707): one active bit per UI roster slot (KRYOS..SOLIN).
- * Set when an agent is spawned into a slot, cleared when that agent is killed.
- * The names live in userspace; the kernel tracks 8 bits by index. */
+/* Named-agent roster (DDR-707/730): one UI slot per named agent (KRYOS..SOLIN).
+ * `used` + `pid` are recorded at spawn; `actions` counts what that agent has
+ * submitted. Liveness is NOT a stored bit — a slot is "active" iff its pid still
+ * resolves to a live agent tcb (see roster_active), so a card self-corrects to
+ * dim when its agent dies (root-fixes the DDR-707 never-cleared-bit leak). The
+ * names live in userspace; the kernel tracks slots by index. */
 #define AGENT_ROSTER_N 8
-static uint8_t g_roster[AGENT_ROSTER_N];
+struct agent_slot { uint8_t used; uint32_t pid; uint64_t actions; };
+static struct agent_slot g_agent[AGENT_ROSTER_N];
+
+/* The shape SYS_AGENT_METRICS returns (mirrored in user/compositor.c). */
+struct agent_metric { uint32_t pid, state; uint64_t mem_used, actions; };
 
 /* Walk the ready ring for a live user thread with this pid. */
 static struct tcb *tcb_by_pid(uint32_t pid) {
@@ -30,6 +37,19 @@ static struct tcb *tcb_by_pid(uint32_t pid) {
         t = t->next;
     } while (t != current_thread);
     return 0;
+}
+
+/* DDR-730: a slot is active iff it was spawned AND its agent is still alive. */
+static int roster_active(int i) {
+    return g_agent[i].used && tcb_by_pid(g_agent[i].pid) != 0;
+}
+
+/* DDR-730: the roster slot a submitting agent occupies, or -1. */
+static int slot_of_pid(uint32_t pid) {
+    for (int i = 0; i < AGENT_ROSTER_N; i++)
+        if (g_agent[i].used && g_agent[i].pid == pid)
+            return i;
+    return -1;
 }
 
 /* The kernel-side agent spawner is provided by kmain (it closes over the SFS
@@ -64,7 +84,12 @@ static long sys_submit_action(long a1, long a2, long a3, long a4) {
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
     if (len && copyin(kbuf, (const void __user *)a2, len) < 0)
         return -EFAULT;
-    return aether_submit(current_thread->pid, type, kbuf, len);
+    long r = aether_submit(current_thread->pid, type, kbuf, len);
+    if (r >= 0) {                                   /* DDR-730: live action count */
+        int slot = slot_of_pid(current_thread->pid);
+        if (slot >= 0) g_agent[slot].actions++;
+    }
+    return r;
 }
 
 static long sys_poll_result(long a1, long a2, long a3, long a4) {
@@ -104,8 +129,11 @@ static long sys_spawn_agent(long a1, long a2, long a3, long a4) {
         return -EFAULT;
     if (!a2) task[0] = 0;
     long pid = g_spawn_hook(task);
-    if (pid >= 0 && a3 >= 0 && a3 < AGENT_ROSTER_N)   /* DDR-707: mark the roster slot */
-        g_roster[a3] = 1;
+    if (pid >= 0 && a3 >= 0 && a3 < AGENT_ROSTER_N) {  /* DDR-707/730: claim the slot */
+        g_agent[a3].used = 1;
+        g_agent[a3].pid = (uint32_t)pid;
+        g_agent[a3].actions = 0;
+    }
     return pid;
 }
 
@@ -114,7 +142,35 @@ static long sys_agent_roster(long a1, long a2, long a3, long a4) {
     int max = (int)a2;
     if (max <= 0) return 0;
     if (max > AGENT_ROSTER_N) max = AGENT_ROSTER_N;
-    if (copyout((void __user *)a1, g_roster, (size_t)max) < 0)
+    uint8_t bits[AGENT_ROSTER_N];                    /* DDR-730: derived, self-correcting */
+    for (int i = 0; i < max; i++) bits[i] = (uint8_t)roster_active(i);
+    if (copyout((void __user *)a1, bits, (size_t)max) < 0)
+        return -EFAULT;
+    return max;
+}
+
+/* DDR-730: per-agent live metrics. For each slot, if its agent is alive, report
+ * its pid + scheduler state + charged memory + cumulative action count; inactive
+ * slots report all-zero. Read-only observability, no authority gate. */
+static long sys_agent_metrics(long a1, long a2, long a3, long a4) {
+    (void)a3; (void)a4;
+    int max = (int)a2;
+    if (max <= 0) return 0;
+    if (max > AGENT_ROSTER_N) max = AGENT_ROSTER_N;
+    struct agent_metric buf[AGENT_ROSTER_N];
+    for (int i = 0; i < max; i++) {
+        struct tcb *t = g_agent[i].used ? tcb_by_pid(g_agent[i].pid) : 0;
+        if (t) {
+            buf[i].pid      = g_agent[i].pid;
+            buf[i].state    = (t->state == THREAD_BLOCKED) ? 2u : 1u;   /* 1=run/ready 2=blocked */
+            buf[i].mem_used = t->mem_used;
+            buf[i].actions  = g_agent[i].actions;
+        } else {
+            buf[i].pid = buf[i].state = 0;
+            buf[i].mem_used = buf[i].actions = 0;
+        }
+    }
+    if (copyout((void __user *)a1, buf, (size_t)max * sizeof buf[0]) < 0)
         return -EFAULT;
     return max;
 }
@@ -161,4 +217,5 @@ void sys_aether_register(void) {
     syscall_register(SYS_READ_AUDIT,     sys_read_audit);
     syscall_register(SYS_SET_MEM_LIMIT,  sys_set_mem_limit);
     syscall_register(SYS_AGENT_ROSTER,   sys_agent_roster);   /* DDR-707 */
+    syscall_register(SYS_AGENT_METRICS,  sys_agent_metrics);  /* DDR-730 */
 }

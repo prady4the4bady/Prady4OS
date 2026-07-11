@@ -992,8 +992,35 @@ loops never held under the lock). Gate `smoke-surfdestroy` (`-smp 4`, freestandi
 `user/surfdestroytest.c` — no musl, to stay inside the 512 KiB kernel-image
 budget) proves churn, slot-reuse, and exit-reclamation of a full table's worth.
 **75 gates.**
-**Next:** the remaining non-visual L7 items (per-agent live metrics, SFS
-`/etc/aether/config`, `CAP_NET` gate). wlroots/Wayland remain out-of-tree.
+**Per-agent live metrics (DDR-730):** the DDR-707 agent panel's active bit was
+**never cleared** — a card stayed green after its agent died (`sys_kill_agent`
+only posts SIGKILL; `aether_drop_pid` touches the queue, not the roster).
+Root-fixed by **deriving liveness lazily**: the roster now stores `{used, pid,
+actions}` per slot and reports a slot active iff its pid still resolves to a live
+agent tcb (`roster_active`) — a dead agent's card self-dims with no teardown hook
+(monotonic pids can't false-positive). New `SYS_AGENT_METRICS` (NSI 64;
+`MAX_SYSCALLS` 64->80) returns `{pid, state, mem_used, actions}` per slot read
+straight from the live tcb; `actions` is bumped in `sys_submit_action`.
+`SYS_AGENT_ROSTER` derives its bits from the same check, so the compositor dot
+dims on death with zero compositor growth. Gate `smoke-agentmetrics`
+(freestanding `user/agentmetricstest.c` probe) asserts KRYOS reads live
+(`state>=1, pid!=0`) while unspawned SOLIN reads idle. **76 gates.**
+**Kernel load window: 512 -> 544 KiB (the real-mode ceiling).** The 16-chunk
+stage-2 load was full. A 24-chunk (768 KiB) bump **failed boot immediately**
+(gates caught it): conventional RAM ends at 0x9FC00, so a flat load at 0x10000
+tops out at ~575 KiB — the correct raise is 17 chunks (544 KiB, ends 0x98000).
+Growth past that needs kernel relocation above 1 MiB (unreal-mode bounce copy) —
+a dedicated boot slice, now documented in the size-check message.
+Two regressions the gates caught during this slice, both root-fixed: (1)
+`smoke-agent-click` asserted `AGENT PRAX active` — with live-derived liveness a
+millisecond-lived clicked agent may never be sampled alive, so the gate now
+asserts the deterministic chain (TRIGGER then AGENT_DONE). (2) `smoke-smpuser`
+flaked ~50%: `user/hello.asm` printed per-char via `SYS_PUTC`, whose chars from
+an AP interleave with other CPUs' lines; the line is now ONE `SYS_WRITE` (atomic
+`kwrite` unit, rq-3 contract), newline kept on `SYS_PUTC` for NSI-1 coverage.
+**Next:** the remaining non-visual L7 items (SFS `/etc/aether/config`, `CAP_NET`
+gate); the >544 KiB kernel-relocation boot slice when needed. wlroots/Wayland
+remain out-of-tree.
 **Last updated:** 2026-07-09
 
 ## Phase 0 — Toolchain & Build System

@@ -25,7 +25,7 @@ void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
 void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
 
-#define MAX_SYSCALLS 64   /* NSI-v2 table size (ADR-022) */
+#define MAX_SYSCALLS 80   /* NSI-v2 table size (ADR-022); headroom past NSI 64 (DDR-730) */
 
 static syscall_fn table[MAX_SYSCALLS];
 /* syscall_kstack_top moved into the percpu area at [gs:16] (DDR-SMP-3b); the

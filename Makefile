@@ -65,6 +65,8 @@ USER_SURF_SRC    := user/surfacetest.c    # L7: per-client surface test window (
 USER_SURF_ELF    := build/surfacetest.elf
 USER_SURFDESTROY_SRC := user/surfdestroytest.c  # L7: surface lifecycle/destroy test (DDR-729)
 USER_SURFDESTROY_ELF := build/surfdestroytest.elf
+USER_AGENTMETRICS_SRC := user/agentmetricstest.c  # L7: per-agent live metrics probe (DDR-730)
+USER_AGENTMETRICS_ELF := build/agentmetricstest.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -169,7 +171,7 @@ lwip: $(LWIP_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_AGENTMETRICS_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -208,11 +210,13 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/compositor.o $(MUSL_LIB) -o $(USER_COMP_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SURF_SRC) -o build/surfacetest.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/surfacetest.o $(MUSL_LIB) -o $(USER_SURF_ELF)
-	# DDR-729: freestanding (no musl) so it stays a few KiB inside the kernel image
-	# budget — links against user.ld's single R+X segment (no writable globals).
+	# DDR-729/730: freestanding (no musl) so each stays a few KiB inside the kernel
+	# image budget — links against user.ld's single R+X segment (no writable globals).
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SURFDESTROY_SRC) -o build/surfdestroytest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SURFDESTROY_ELF) build/surfdestroytest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AGENTMETRICS_SRC) -o build/agentmetricstest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AGENTMETRICS_ELF) build/agentmetricstest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -287,12 +291,12 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 524288 || { echo "kernel.bin exceeds 512 KiB; Stage 2 loads 16x64 sectors (page tables at 0x300000; bump the load + 1 MiB image if more is needed)"; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 557056 || { echo "kernel.bin exceeds 544 KiB — the PHYSICAL ceiling of the real-mode flat load at 0x10000 (17x64 sectors, ends 0x98000 < top of conventional RAM 0x9FC00). Growing further needs kernel relocation above 1 MiB (unreal-mode bounce copy) — a dedicated boot slice, not a chunk-count bump."; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
 #   LBA 0  stage1 (512 B MBR)   LBA 1  stage2 (<= 16 sectors)   LBA 17  kernel
-# Stage 1 loads 16 sectors of Stage 2; Stage 2 loads 64 sectors of the kernel
+# Stage 1 loads 16 sectors of Stage 2; Stage 2 loads 17x64 sectors of the kernel
 # from LBA 17 — both LBAs are hard-coded in the asm and must match here.
 image: $(IMG)
 
@@ -672,8 +676,12 @@ smoke-mouse: $(IMG) fat-image sfs-image
 
 # Layer-7 agent-card click gate (DDR-713): boot GPU+tablet; the daemon lights
 # KRYOS (slot 0); the harness clicks agent card 1 (PRAX) via QMP input-send-event;
-# the sovereign compositor triggers that agent (SYS_SPAWN_AGENT) -> the slot lights
-# and PRADYOS_AGENT_TRIGGER is printed. Proves desktop pointer -> AETHER.
+# the sovereign compositor triggers that agent (SYS_SPAWN_AGENT) and prints
+# PRADYOS_AGENT_TRIGGER. Proves desktop pointer -> AETHER. DDR-730: 'active' is
+# now LIVE (a slot lights only while its agent's tcb is alive), so the old
+# "AGENT PRAX active" serial assertion became a race against a millisecond-lived
+# test agent; the deterministic witness is TRIGGER followed by AGENT_DONE (the
+# clicked agent genuinely ran to completion).
 smoke-agent-click: $(IMG) fat-image sfs-image
 	@echo "[aclick] agent-card click gate: boot(GPU+tablet) + QMP click card 1 -> SYS_SPAWN_AGENT..."
 	@rm -f build/aclick.log /tmp/paclick.sock
@@ -686,7 +694,7 @@ smoke-agent-click: $(IMG) fat-image sfs-image
 	    -qmp unix:/tmp/paclick.sock,server,nowait \
 	    -serial file:build/aclick.log -display none -no-reboot || true
 	@grep -q "PRADYOS_AGENT_TRIGGER name=PRAX slot=1" build/aclick.log || { echo "[aclick] FAIL — card click did not trigger the agent"; tail -20 build/aclick.log; exit 1; }
-	@grep -q "AGENT PRAX active" build/aclick.log || { echo "[aclick] FAIL — roster did not light PRAX"; tail -20 build/aclick.log; exit 1; }
+	@awk '/PRADYOS_AGENT_TRIGGER name=PRAX/{t=1} t&&/PRADYOS_AGENT_DONE/{ok=1} END{exit !ok}' build/aclick.log || { echo "[aclick] FAIL — the clicked PRAX agent did not run to completion"; tail -20 build/aclick.log; exit 1; }
 	@echo "[aclick] PASS — $$(grep -a PRADYOS_AGENT_TRIGGER build/aclick.log | head -1)"
 
 # Layer-7 per-client surface gate (DDR-706): a ring-3 client creates+commits a
@@ -1097,6 +1105,18 @@ smoke-alttab: $(IMG) fat-image sfs-image
 # at 90 s (runs 28341424605, 28614622428) while always passing locally.
 smoke-agents: $(IMG) fat-image sfs-image
 	TIMEOUT_S=150 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_AGENTS_OK\nAGENT KRYOS active\nAGENT SOLIN inactive')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Layer-7 per-agent live-metrics gate (DDR-730): once the daemon spawns the test
+# agent into slot 0 (KRYOS), the agentmetricstest probe reads SYS_AGENT_METRICS and
+# asserts slot 0 is live (state>=1, pid!=0) while an unspawned slot (7=SOLIN) reads
+# idle — proving the metric reflects real per-agent tcb state, not a stuck roster
+# bit or a blanket all-active. No GPU needed (the probe is the witness, not the
+# compositor); generous timeout since the daemon's spawn lands late under CI load.
+smoke-agentmetrics: $(IMG) fat-image sfs-image
+	TIMEOUT_S=150 \
+	EXTRA_SENTINEL="$$(printf 'AGENT_METRIC KRYOS live pid ok\nPRADYOS_AGENT_METRICS_OK')" \
+	FORBIDDEN_SENTINEL="AGENT_METRICS FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer 7 mode-binding gate (DDR-701): the daemon (CAP_SOVEREIGN) toggles the

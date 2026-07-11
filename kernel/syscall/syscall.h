@@ -84,6 +84,8 @@
 /* Surface event channel (Layer 7, DDR-718). */
 #define SYS_SURFACE_SENDEV 62  /* (id, type, (w<<16)|h) -> 0  compositor/owner push  */
 #define SYS_SURFACE_GETEV  63  /* (id, struct surf_event*) -> 0 | -EAGAIN (owner)    */
+/* Per-agent live metrics (Layer 7, DDR-730). Append-only after 63. */
+#define SYS_AGENT_METRICS  64  /* (struct agent_metric*, max) -> count (observability)*/
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

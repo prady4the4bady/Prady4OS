@@ -212,8 +212,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `user/surfdestroytest.c` — musl-free to stay inside the 512 KiB kernel-image
   budget) proves churn + slot-reuse + exit-reclamation. Also fixed the identical
   missing-shared-bit flaw in `sys_fb.c`.
-  Remaining L7 (non-visual): per-agent live metrics; SFS `/etc/aether/config`;
-  `CAP_NET` gate; wlroots/Wayland (the standing out-of-tree wall).
+- **Per-agent live metrics are DONE (DDR-730, 76 gates):** roster slots are now
+  `{used, pid, actions}`; "active" is DERIVED (slot pid resolves to a live agent
+  tcb), root-fixing DDR-707's never-cleared active bit — dead agents' cards
+  self-dim with no teardown hook. New `SYS_AGENT_METRICS` (NSI 64;
+  `MAX_SYSCALLS` 64->80) returns `{pid, state, mem_used, actions}` live from the
+  tcb; `SYS_AGENT_ROSTER` shares the liveness check. Witness = freestanding
+  `user/agentmetricstest.c` probe (gate `smoke-agentmetrics`); the compositor is
+  untouched (its musl ELF had no image headroom).
+  **Kernel load window is at its real-mode CEILING: 544 KiB** (stage2 17x64
+  sectors, ends 0x98000 < conventional-RAM top 0x9FC00). A 24-chunk/768 KiB
+  attempt hung the boot — the 0xA0000 VGA/ROM hole makes a bigger flat load at
+  0x10000 impossible. Past 544 KiB the kernel must be relocated above 1 MiB
+  (unreal-mode bounce copy in stage2) — plan it as a dedicated boot slice.
+  Remaining L7 (non-visual): SFS `/etc/aether/config`; `CAP_NET` gate;
+  wlroots/Wayland (the standing out-of-tree wall).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
