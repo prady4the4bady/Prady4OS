@@ -231,8 +231,20 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `-EPERM`); per-slot `g_sock_owner` enforced on WRITE/READ/CLOSE (no
   cross-process hijack); `socket_reap_pid` from `sched_exit` (DDR-729 pattern).
   Gate `smoke-capnet` (freestanding `user/capnettest.c`).
-  Remaining L7 (non-visual): SFS `/etc/aether/config`;
-  wlroots/Wayland (the standing out-of-tree wall).
+- **Kernel relocated to 4 MiB (DDR-733, 77 gates):** the flat load at 0x10000
+  hit its ~575 KiB file+BSS ceiling (BSS tail crossed 0x9FC00 into the EBDA →
+  #GP on the first tick, gate-caught). Stage2 now INT13-reads into a 0x10000
+  bounce buffer and unreal-mode-copies each chunk to `KERNEL_PHYS = 0x400000`
+  (SDM Vol.3 §9.9.2; DS/ES limits re-armed per chunk under cli). 24-chunk /
+  768 KiB read window; runtime ceiling = the 2 MiB PT_HI span, enforced by an
+  nm-based `__bss_end` Makefile check. kernel.ld `KERNEL_LMA = 0x400000`.
+- **AETHER boot config is DONE (DDR-732, 78 gates):** the daemon reads
+  `/AETHER.CFG` (FAT32 boot volume, mcopy'd at image build) for mode/task/slot;
+  compiled defaults + `PRADYOS_AETHER_CFG_DEFAULT` on any config problem. Gate
+  `smoke-aethercfg`. (Not SFS: ring 3's root_mnt is the FAT volume; renaming to
+  /etc/aether/config awaits SFS-as-process-root.)
+  **ALL deferred non-visual L7 items are now CLOSED.**
+  Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).

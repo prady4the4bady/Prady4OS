@@ -295,13 +295,16 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 557056 || { echo "kernel.bin exceeds 544 KiB — the PHYSICAL ceiling of the real-mode flat load at 0x10000 (17x64 sectors, ends 0x98000 < top of conventional RAM 0x9FC00). Growing further needs kernel relocation above 1 MiB (unreal-mode bounce copy) — a dedicated boot slice, not a chunk-count bump."; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 786432 || { echo "kernel.bin exceeds 768 KiB — the stage-2 read window (24x64 sectors from LBA 17, DDR-733). Raise the chunk count in boot/stage2/stage2.asm and grow the 1 MiB disk image together (mind the 2 MiB PT_HI runtime ceiling checked next)."; exit 1; }
+	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
+	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
+	 test $$phys -le $$(( 0x600000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x600000 — the 2 MiB PT_HI higher-half span (DDR-733). Extend PT_HI in boot/stage2/stage2.asm (second PT) before growing further."; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
 #   LBA 0  stage1 (512 B MBR)   LBA 1  stage2 (<= 16 sectors)   LBA 17  kernel
-# Stage 1 loads 16 sectors of Stage 2; Stage 2 loads 17x64 sectors of the kernel
-# from LBA 17 — both LBAs are hard-coded in the asm and must match here.
+# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 24x64 sectors of the
+# kernel from LBA 17 to 4 MiB (DDR-733) — LBAs hard-coded in the asm, match here.
 image: $(IMG)
 
 $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)

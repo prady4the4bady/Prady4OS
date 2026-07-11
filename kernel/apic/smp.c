@@ -170,7 +170,8 @@ void smp_start_aps(void) {
         return;
     }
 
-    /* Stage the trampoline at 0x8000 (below the kernel at 0x10000; reserved). */
+    /* Stage the trampoline at 0x8000 (low conventional RAM, reserved by
+     * construction — the kernel lives at 0x400000 since DDR-733). */
     uint64_t tlen = (uint64_t)(ap_tramp_end - ap_tramp_start);
     volatile uint8_t *tramp = (volatile uint8_t *)(uintptr_t)TRAMP_PHYS;
     for (uint64_t i = 0; i < tlen; i++)

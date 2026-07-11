@@ -6,6 +6,7 @@
 CC       := clang
 LD       := ld.lld
 OBJCOPY  := llvm-objcopy
+NM       := nm
 NASM     := nasm
 
 # x86_64 freestanding triple. Pinned after `make toolchain-check` proves it

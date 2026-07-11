@@ -1031,8 +1031,36 @@ requires `is_net || is_sovereign` (audited `-EPERM`, AETHER pattern);
 one-owner pattern). Kernel-side lwIP gates (`smoke-net*`) unaffected. Gate
 `smoke-capnet` (freestanding `user/capnettest.c`): CAP-less connect and
 foreign-slot write/close are all exactly `-EPERM`. **77 gates.**
-**Next:** SFS `/etc/aether/config` (the last non-visual L7 item); the >544 KiB
-kernel-relocation boot slice when needed. wlroots/Wayland remain out-of-tree.
+**Kernel relocated to 4 MiB — unreal-mode bounce load (DDR-733):** the DDR-732
+daemon growth (~4 KiB) pushed `__bss_end` to phys 0x9FE80 — past the top of
+conventional RAM (0x9FC00) — putting the kernel's BSS tail (late-linked
+scheduler/lwIP state) in the EBDA: garbage on the first timer tick, a
+deterministic `#GP` in `sched_tick`, gate-caught. The flat real-mode load at
+0x10000 has a hard ~575 KiB file+BSS ceiling and it was reached. Root fix:
+`KERNEL_PHYS/KERNEL_LMA = 0x400000`. Stage2 INT13-reads each 64-sector chunk
+into a 0x10000 bounce buffer and copies it up in **unreal mode** (brief PM
+round-trip caches 4 GiB DS/ES limits — SDM Vol.3 §9.9.2; re-armed per chunk
+under `cli` so BIOS IRQ handlers can't reset them). 24-chunk/768 KiB read
+window; the PT_HI 2 MiB span (0x400000..0x600000) is the honest runtime
+ceiling, now enforced by an `nm`-based `__bss_end` Makefile check (the old
+file-size-only check was insufficient — the binding quantity is file+BSS).
+Page tables stay at 0x300000 (now below the kernel), trampoline at 0x8000,
+PMM floor at 16 MiB — all untouched. No new gate: every gate boots this loader.
+**77 gates green.**
+**AETHER boot config from disk (DDR-732):** the daemon's boot policy
+(mode/task/slot) moves from compiled-in constants to `/AETHER.CFG` on the FAT32
+boot volume (mcopy'd at image build — operator-editable without rebuilding).
+Not SFS `/etc/aether/config`: ring 3 cannot reach SFS (`root_mnt` is the FAT
+boot volume; SFS is the kernel's ELF store), so the literal path is impossible
+today — a rename when SFS becomes process root. Missing/garbled file falls back
+to compiled defaults (`PRADYOS_AETHER_CFG_DEFAULT`) — the daemon never fails to
+boot over config. Gate `smoke-aethercfg` asserts the parsed policy line
+(`PRADYOS_AETHER_CFG_OK mode=sovereign task=test slot=0`) + the configured
+spawn's `PRADYOS_AGENT_DONE`; the DEFAULT sentinel is forbidden. **78 gates.**
+**Next:** the DDR-702..709+ L7 list and all non-visual L7 items are CLOSED.
+Candidates: extend PT_HI / grow the disk as the kernel grows; SFS-as-process-root
+(moves /AETHER.CFG to /etc/aether/config); richer per-agent metrics (CPU time).
+wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-11
 
 ## Phase 0 — Toolchain & Build System

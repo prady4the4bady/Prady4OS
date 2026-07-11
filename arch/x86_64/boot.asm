@@ -3,7 +3,7 @@
 ; NEXUS kernel — higher-half 64-bit entry stub (Phase 2b VMM).
 ;
 ; The bootloader maps the kernel at the higher-half virtual base
-; 0xFFFFFFFF80000000 (-> physical 0x10000) plus a low identity map, then jumps
+; 0xFFFFFFFF80000000 (-> physical 0x400000, DDR-733) plus a low identity map, then jumps
 ; here at the high virtual address with RDI = boot_info pointer (SysV arg 1).
 ;
 ; This stub: switches to the kernel's own .bss stack (high virtual), zeroes
