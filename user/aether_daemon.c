@@ -15,6 +15,9 @@
 /* NSI numbers — keep in sync with kernel/syscall/syscall.h. */
 #define SYS_EXIT        4
 #define SYS_YIELD       3
+#define SYS_READ        5
+#define SYS_OPEN        7
+#define SYS_CLOSE       8
 #define SYS_WAIT4       16
 #define SYS_GET_MODE    29
 #define SYS_SET_MODE    30
@@ -29,9 +32,61 @@ static inline long nsi(long n, long a1, long a2, long a3) {
     return r;
 }
 
+/* DDR-732 — boot policy from /AETHER.CFG on the boot volume (key=value lines:
+ * mode=sovereign|manual, task=<str>, slot=<0..7>; unknown keys ignored). Filled
+ * with the compiled defaults first, so a missing/garbled file changes nothing —
+ * the daemon must never fail to boot over config. Returns 1 iff the file was
+ * read and at least one key parsed (the CFG_OK/CFG_DEFAULT distinction). */
+struct aether_cfg { int mode; long slot; char task[64]; };
+
+static int cfg_load(struct aether_cfg *c) {
+    c->mode = 1;                              /* defaults: sovereign/test/0 */
+    c->slot = 0;
+    c->task[0] = 't'; c->task[1] = 'e'; c->task[2] = 's'; c->task[3] = 't'; c->task[4] = 0;
+    long fd = nsi(SYS_OPEN, (long)"/AETHER.CFG", 0, 0);
+    if (fd < 0)
+        return 0;
+    char buf[257];
+    long n = nsi(SYS_READ, fd, (long)buf, 256);
+    nsi(SYS_CLOSE, fd, 0, 0);
+    if (n <= 0)
+        return 0;
+    buf[n] = 0;
+    int parsed = 0;
+    for (long i = 0; i < n; ) {
+        long e = i;                            /* line = [i, e) */
+        while (e < n && buf[e] != '\n') e++;
+        buf[e] = 0;
+        const char *ln = &buf[i];
+        if (ln[0] == 'm' && ln[1] == 'o' && ln[2] == 'd' && ln[3] == 'e' && ln[4] == '=') {
+            if (ln[5] == 's') { c->mode = 1; parsed = 1; }
+            else if (ln[5] == 'm') { c->mode = 0; parsed = 1; }
+        } else if (ln[0] == 't' && ln[1] == 'a' && ln[2] == 's' && ln[3] == 'k' && ln[4] == '=') {
+            int k = 0;
+            while (ln[5 + k] && k < 63) { c->task[k] = ln[5 + k]; k++; }
+            if (k > 0) { c->task[k] = 0; parsed = 1; }
+        } else if (ln[0] == 's' && ln[1] == 'l' && ln[2] == 'o' && ln[3] == 't' && ln[4] == '=') {
+            if (ln[5] >= '0' && ln[5] <= '7' && !ln[6]) { c->slot = ln[5] - '0'; parsed = 1; }
+        }
+        i = e + 1;
+    }
+    return parsed;
+}
+
 int main(void) {
     long mode = nsi(SYS_GET_MODE, 0, 0, 0);
     printf("PRADYOS_AETHER_DAEMON_OK mode=%s\n", mode ? "sovereign" : "manual");
+    fflush(stdout);
+
+    /* DDR-732: load the boot policy from /AETHER.CFG (falls back to the compiled
+     * defaults; the mode is applied AFTER the DDR-701 toggle self-check below so
+     * the check's fixed sequence stays deterministic). */
+    struct aether_cfg cfg;
+    if (cfg_load(&cfg))
+        printf("PRADYOS_AETHER_CFG_OK mode=%s task=%s slot=%ld\n",
+               cfg.mode ? "sovereign" : "manual", cfg.task, cfg.slot);
+    else
+        printf("PRADYOS_AETHER_CFG_DEFAULT\n");
     fflush(stdout);
 
     /* L7 (DDR-701): Sovereign/Manual toggle binding self-check. As the
@@ -52,12 +107,14 @@ int main(void) {
         fflush(stdout);
     }
 
-    /* Test-mode bring-up: spawn one agent with task "test". The kernel loads the
-     * embedded agent image and marks it CAP_AGENT; sovereign mode auto-approves
-     * its action, so the agent completes and prints PRADYOS_AGENT_DONE. */
-    /* Spawn the test agent into roster slot 0 (KRYOS) so the agent panel lights
-     * it (DDR-707): SYS_SPAWN_AGENT(path, task, slot). */
-    long apid = nsi(SYS_SPAWN_AGENT, 0, (long)"test", 0 /* slot 0 = KRYOS */);
+    /* DDR-732: apply the configured mode (the toggle self-check above ended in
+     * SOVEREIGN; the config may say otherwise), then spawn the bring-up agent
+     * with the configured task into the configured roster slot (DDR-707: slot 0
+     * = KRYOS by default). The kernel loads the embedded agent image and marks
+     * it CAP_AGENT (+CAP_NET, DDR-731); sovereign mode auto-approves its action,
+     * so the default agent completes and prints PRADYOS_AGENT_DONE. */
+    nsi(SYS_SET_MODE, cfg.mode, 0, 0);
+    long apid = nsi(SYS_SPAWN_AGENT, 0, (long)cfg.task, cfg.slot);
     if (apid > 0) {
         printf("aetherd: spawned agent PID=%ld\n", apid);
         fflush(stdout);

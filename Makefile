@@ -336,7 +336,10 @@ fat-image:
 	mcopy -i $(FAT_IMG) build/note.txt ::/DOCS/NOTE.TXT
 	printf 'long name read works' > build/longname.txt
 	mcopy -i $(FAT_IMG) build/longname.txt ::/LongFileName.txt
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt)"
+	# DDR-732: AETHER boot policy — operator-editable, read by the daemon at boot.
+	printf 'mode=sovereign\ntask=test\nslot=0\n' > build/aether.cfg
+	mcopy -i $(FAT_IMG) build/aether.cfg ::/AETHER.CFG
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /AETHER.CFG)"
 
 # A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
 # place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
@@ -1124,6 +1127,16 @@ smoke-agentmetrics: $(IMG) fat-image sfs-image
 	TIMEOUT_S=150 \
 	EXTRA_SENTINEL="$$(printf 'AGENT_METRIC KRYOS live pid ok\nPRADYOS_AGENT_METRICS_OK')" \
 	FORBIDDEN_SENTINEL="AGENT_METRICS FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# AETHER boot-config gate (DDR-732): the daemon reads /AETHER.CFG off the FAT32
+# boot volume (mcopy'd at image build) and applies mode/task/slot from it — the
+# CFG_OK line proves the file was read AND parsed (CFG_DEFAULT, the compiled
+# fallback, is the forbidden pattern); AGENT_DONE proves the configured spawn ran.
+smoke-aethercfg: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_CFG_OK mode=sovereign task=test slot=0\nPRADYOS_AGENT_DONE')" \
+	FORBIDDEN_SENTINEL="PRADYOS_AETHER_CFG_DEFAULT" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # CAP_NET socket-authority gate (DDR-731): a CAP-less probe must get -EPERM from
