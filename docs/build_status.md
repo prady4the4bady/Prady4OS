@@ -1070,10 +1070,20 @@ them BEFORE any agent spawns (`PRADYOS_NET_ALLOW_OK n=`); the shipped default is
 unchanged. Gate `smoke-netallow`: kernel match/deny self-test (`[net] allowlist
 OK` — exact match allows, wrong port and wrong host deny) + the config->NSI
 install path. **79 gates.**
-**Next (hardening 2/3, 3/3):** agent CPU-time metric (per-thread run-tick
-accounting feeding SYS_AGENT_METRICS); richer roster/metrics UI. Then:
-SFS-as-process-root; extend PT_HI / grow the disk as the kernel grows.
-wlroots/Wayland remain out-of-tree.
+**Agent CPU metric (DDR-735) — live-agent hardening 2/3:** `SYS_AGENT_METRICS`
+gains `run_ticks` (100 Hz ticks while current — sampled CPU time, from
+`sched_tick`) and `dispatches` (scheduler switch-ins, from `schedule()`'s claim
+point). Both are written only by the CPU that owns the thread (no hot-path
+locking — the `on_cpu` claim is the exclusion). The roster slot RETAINS the
+last-read counts past the agent's exit, so a short-lived agent's CPU proof stays
+observable; the gate probe latches "seen alive" and "dispatches >= 1"
+independently across samples (extended `smoke-agentmetrics`, gate count stays
+79). Also fixed a dev-host harness flake: `boot_test.sh`'s serial capture is now
+`SERIAL_LOG`-overridable (this WSL wipes `/tmp` mid-run, truncating long gates;
+CI default unchanged).
+**Next (hardening 3/3):** richer roster/metrics UI (draw the live counts on the
+agent cards). Then: SFS-as-process-root; extend PT_HI / grow the disk as the
+kernel grows. wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-12
 
 ## Phase 0 — Toolchain & Build System

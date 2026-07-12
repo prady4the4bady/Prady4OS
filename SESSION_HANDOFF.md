@@ -250,8 +250,15 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   sovereign-only install NSI `SYS_NET_ALLOW` (65, install-only — no revocation
   surface); daemon installs `net=<ip>:<port>` rows from `/AETHER.CFG` before
   any agent spawns (default `net=10.0.2.2:11434` keeps smoke-agent-live
-  working). Gate `smoke-netallow`. Hardening 2/3 = agent CPU-time metric,
-  3/3 = richer metrics UI.
+  working). Gate `smoke-netallow`.
+- **Agent CPU metric is DONE (DDR-735, 79 gates) — live-agent hardening 2/3:**
+  `SYS_AGENT_METRICS` gains `run_ticks` (from `sched_tick`) + `dispatches` (from
+  `schedule()`), owner-CPU-written (no hot-path lock). The roster slot retains
+  the counts past agent exit so a short-lived agent is provable; the probe
+  latches "alive" and "dispatched" independently. Extended `smoke-agentmetrics`.
+  Also: `boot_test.sh` `SERIAL_LOG` is now overridable (this WSL wipes /tmp
+  mid-run — set SERIAL_LOG to a persistent path for reliable local gates; CI
+  default unchanged). Hardening 3/3 = draw the counts on the agent cards.
   Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).

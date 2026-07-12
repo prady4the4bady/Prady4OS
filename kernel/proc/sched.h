@@ -115,6 +115,10 @@ struct tcb {
     int        rq_on;           /* rq-1: 1 while linked into some CPU's ready queue */
     uint32_t   is_net;          /* DDR-731: CAP_NET — may open proxy sockets (SYS_SOCK_*).
                                  * Granted at agent spawn; NOT inherited across fork. */
+    /* DDR-735: CPU accounting, written ONLY by the owning CPU (sched_tick on the
+     * running CPU; schedule() under the on_cpu claim) — lock-free by exclusion. */
+    uint64_t   run_ticks;       /* 100 Hz ticks observed while current (sampled CPU time) */
+    uint64_t   dispatches;      /* times the scheduler switched this thread in           */
 };
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */

@@ -37,14 +37,27 @@ hot path. Reads (metrics) are racy-by-a-tick, which is fine for observability.
 consumed only by `user/agentmetricstest.c` (kernel-mirrored layout, appended
 fields) — the compositor reads the roster bits, unaffected.
 
+**Retention (so the gate is deterministic).** A short-lived agent's tcb vanishes
+the instant it exits, and `state >= 1` (alive) only overlaps `dispatches >= 1`
+during its brief CPU time — asserting both in the same sample is racy. So the
+roster slot RETAINS the last-read `run_ticks`/`dispatches` (refreshed from the
+live tcb on every metrics read, kept after exit); the probe then latches the two
+facts INDEPENDENTLY across samples — (a) ever seen alive while slot 7 stayed
+idle, (b) dispatches ever >= 1 (readable post-exit) — and passes on both. This
+keeps the "alive" catch as wide as the DDR-730 gate while adding the CPU proof.
+
 ## Gate — extend `smoke-agentmetrics` (no new gate; stays 79)
 
-The probe already polls until KRYOS reads live. It now additionally requires
-`dispatches >= 1` before declaring success (an agent that is alive AND was ever
-scheduled), printing the existing sentinels plus
-`AGENT_METRIC KRYOS sched ok`. `run_ticks` is reported, not asserted — a
-sub-tick agent lifetime is legal. Extending the existing gate keeps the gate
-count stable and tests the same boot flow end-to-end.
+The probe prints the existing sentinels plus `AGENT_METRIC KRYOS sched ok` once
+both latched facts hold. `run_ticks` is reported, not asserted — a sub-tick
+agent lifetime is legal. Extending the existing gate keeps the count stable and
+tests the same boot flow end-to-end.
+
+**Harness fix (unrelated flake surfaced here):** `boot_test.sh` wrote its serial
+capture to a `mktemp` in `/tmp`; on the dev WSL host `/tmp` is wiped mid-run,
+truncating long-timeout gates and failing them spuriously. `SERIAL_LOG` is now
+overridable (default unchanged, so CI is unaffected) — local runs point it at a
+persistent path. Not a code issue; the feature verifies deterministically.
 
 ## Non-goals
 

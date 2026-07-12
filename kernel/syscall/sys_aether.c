@@ -21,11 +21,19 @@
  * dim when its agent dies (root-fixes the DDR-707 never-cleared-bit leak). The
  * names live in userspace; the kernel tracks slots by index. */
 #define AGENT_ROSTER_N 8
-struct agent_slot { uint8_t used; uint32_t pid; uint64_t actions; };
+struct agent_slot {
+    uint8_t used; uint32_t pid; uint64_t actions;
+    /* DDR-735: last-known CPU accounting, refreshed from the live tcb on every
+     * metrics read and RETAINED after the agent exits — so a short-lived agent's
+     * dispatch/run counts stay observable (its tcb is gone once it dies). */
+    uint64_t run_ticks, dispatches;
+};
 static struct agent_slot g_agent[AGENT_ROSTER_N];
 
-/* The shape SYS_AGENT_METRICS returns (mirrored in user/compositor.c). */
-struct agent_metric { uint32_t pid, state; uint64_t mem_used, actions; };
+/* The shape SYS_AGENT_METRICS returns (mirrored in user/agentmetricstest.c).
+ * DDR-735 appends run_ticks (100 Hz ticks while current — sampled CPU time) and
+ * dispatches (scheduler switch-ins; >= 1 for any thread that ever ran). */
+struct agent_metric { uint32_t pid, state; uint64_t mem_used, actions, run_ticks, dispatches; };
 
 /* Walk the ready ring for a live user thread with this pid. */
 static struct tcb *tcb_by_pid(uint32_t pid) {
@@ -133,6 +141,8 @@ static long sys_spawn_agent(long a1, long a2, long a3, long a4) {
         g_agent[a3].used = 1;
         g_agent[a3].pid = (uint32_t)pid;
         g_agent[a3].actions = 0;
+        g_agent[a3].run_ticks = 0;      /* DDR-735: reset accounting for the new agent */
+        g_agent[a3].dispatches = 0;
     }
     return pid;
 }
@@ -161,14 +171,21 @@ static long sys_agent_metrics(long a1, long a2, long a3, long a4) {
     for (int i = 0; i < max; i++) {
         struct tcb *t = g_agent[i].used ? tcb_by_pid(g_agent[i].pid) : 0;
         if (t) {
-            buf[i].pid      = g_agent[i].pid;
-            buf[i].state    = (t->state == THREAD_BLOCKED) ? 2u : 1u;   /* 1=run/ready 2=blocked */
-            buf[i].mem_used = t->mem_used;
-            buf[i].actions  = g_agent[i].actions;
+            g_agent[i].run_ticks  = t->run_ticks;    /* DDR-735: refresh + RETAIN so the */
+            g_agent[i].dispatches = t->dispatches;   /* counts survive the agent's exit  */
+            buf[i].pid        = g_agent[i].pid;
+            buf[i].state      = (t->state == THREAD_BLOCKED) ? 2u : 1u;   /* 1=run/ready 2=blocked */
+            buf[i].mem_used   = t->mem_used;
+            buf[i].actions    = g_agent[i].actions;
         } else {
+            /* dead (or never-spawned) slot: state 0, but the retained CPU counts
+             * remain readable — a short-lived agent's dispatches don't vanish. */
             buf[i].pid = buf[i].state = 0;
-            buf[i].mem_used = buf[i].actions = 0;
+            buf[i].mem_used = 0;
+            buf[i].actions  = g_agent[i].used ? g_agent[i].actions : 0;
         }
+        buf[i].run_ticks  = g_agent[i].run_ticks;
+        buf[i].dispatches = g_agent[i].dispatches;
     }
     if (copyout((void __user *)a1, buf, (size_t)max * sizeof buf[0]) < 0)
         return -EFAULT;

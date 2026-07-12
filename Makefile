@@ -1127,7 +1127,7 @@ smoke-agents: $(IMG) fat-image sfs-image
 # compositor); generous timeout since the daemon's spawn lands late under CI load.
 smoke-agentmetrics: $(IMG) fat-image sfs-image
 	TIMEOUT_S=150 \
-	EXTRA_SENTINEL="$$(printf 'AGENT_METRIC KRYOS live pid ok\nPRADYOS_AGENT_METRICS_OK')" \
+	EXTRA_SENTINEL="$$(printf 'AGENT_METRIC KRYOS live pid ok\nAGENT_METRIC KRYOS sched ok\nPRADYOS_AGENT_METRICS_OK')" \
 	FORBIDDEN_SENTINEL="AGENT_METRICS FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

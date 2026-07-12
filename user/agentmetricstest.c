@@ -17,7 +17,7 @@
 #define SYS_EXIT           4
 #define SYS_AGENT_METRICS  64
 
-struct agent_metric { unsigned pid, state; unsigned long mem_used, actions; };
+struct agent_metric { unsigned pid, state; unsigned long mem_used, actions, run_ticks, dispatches; };  /* DDR-730/735 (kernel-mirrored) */
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -33,11 +33,22 @@ static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
 __attribute__((noreturn)) void _start(void) {
     /* Poll long enough for the daemon to spawn the test agent (it lands late under
      * loaded CI runners — same reason smoke-agents uses a 150 s timeout). */
+    /* Two facts, latched independently across samples (they need not hold in the
+     * same sample): (a) KRYOS was seen ALIVE while slot 7 stayed idle — the metric
+     * discriminates real tcb state; (b) KRYOS accrued a scheduler dispatch. The
+     * kernel RETAINS the dispatch count past the agent's exit (DDR-735), so a
+     * millisecond-lived agent is still provable without catching the live instant. */
+    int seen_alive = 0, seen_sched = 0;
     for (long i = 0; i < 4000000; i++) {
         struct agent_metric m[8];
         long n = nsi(SYS_AGENT_METRICS, (long)m, 8, 0);
-        if (n >= 8 && m[0].state >= 1 && m[0].pid != 0 && m[7].state == 0) {
+        if (n >= 8) {
+            if (m[0].pid != 0 && m[0].state >= 1 && m[7].state == 0) seen_alive = 1;
+            if (m[0].dispatches >= 1) seen_sched = 1;
+        }
+        if (seen_alive && seen_sched) {
             wr("AGENT_METRIC KRYOS live pid ok\n");   /* slot 0 alive, slot 7 idle */
+            wr("AGENT_METRIC KRYOS sched ok\n");      /* dispatches >= 1 (DDR-735) */
             wr("PRADYOS_AGENT_METRICS_OK\n");
             nsi(SYS_EXIT, 0, 0, 0);
             for (;;) { }

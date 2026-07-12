@@ -344,6 +344,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
     t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
     t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
+    t->run_ticks = 0;              /* DDR-735: CPU accounting starts at zero              */
+    t->dispatches = 0;
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
     t->mem_used = 0;
     t->sc_count = 0;               /* L6: syscall rate-limit window (agents only)         */
@@ -573,6 +575,7 @@ static void schedule_locked(uint64_t fl) {
     switch_wait_offcpu(next);
     next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
+    next->dispatches++;            /* DDR-735: switch-in count (under the claim) */
     if (next->is_user && pc && !pc->is_bsp)
         g_user_on_ap = 1;          /* cap-4 proof: a ring-3 thread claimed by an AP
                                     * (flag only — no console I/O under the lock) */
@@ -621,6 +624,7 @@ void sched_tick(void) {
         pc->ticks++;               /* cap-3: per-CPU timer-tick count (preempt proof) */
     if (!current_thread)
         return;                    /* scheduler not up yet */
+    current_thread->run_ticks++;   /* DDR-735: sampled CPU time (this CPU owns it) */
     if (current_thread->quantum > 0)
         current_thread->quantum--;
     if (current_thread->quantum == 0) {

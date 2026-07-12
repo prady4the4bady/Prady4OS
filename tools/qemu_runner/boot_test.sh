@@ -17,7 +17,10 @@ EXTRA_SENTINEL="${EXTRA_SENTINEL:-}"
 # "post-exec (BUG)" line that proves execve wrongly returned. Empty by default.
 FORBIDDEN_SENTINEL="${FORBIDDEN_SENTINEL:-}"
 TIMEOUT_S="${TIMEOUT_S:-30}"
-SERIAL_LOG="$(mktemp)"
+# Serial capture file. Defaults to a private mktemp; override SERIAL_LOG=<path>
+# when the host's /tmp is unreliable (e.g. some WSL setups wipe /tmp mid-run,
+# corrupting long-timeout gates). CI leaves this unset — the default is used.
+SERIAL_LOG="${SERIAL_LOG:-$(mktemp)}"
 
 if [ ! -f "$IMG" ]; then
     echo "[smoke] no bootable image at '$IMG' yet — expected during Phase 0."
