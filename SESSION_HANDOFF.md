@@ -271,6 +271,17 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   TCG runners surfaced it. LOCAL GATE NOTE: back-to-back local runs flake on a
   QEMU image-lock release race + this WSL wipes /tmp (use SERIAL_LOG=<persistent
   path>, sleep 1 between gates); CI (isolated steps) is authoritative.
+- **smoke-agentmetrics made TCG-deterministic (DDR-735 gate fix):** the gate's
+  alive-window assertion was racy on TCG (an agent's whole life fits inside one
+  slow compositor frame). `sched_exit` now captures final counters into the
+  roster slot (`agent_metrics_reap`) and retains the pid; the probe asserts
+  post-mortem facts (`pid!=0 && dispatches>=1` vs empty slot 7), RTC-bounded.
+- **Agent-panel metrics are DONE (DDR-737, 80 gates) — hardening campaign
+  CLOSED (1/3 CAP_NET allowlist, 2/3 CPU metrics, 3/3 panel UI):** cards render
+  from `SYS_AGENT_METRICS` — state-colored dot (dim green = ran-and-exited via
+  retained pid) + up to 4 action pips; one-shot `AGENT_PANEL KRYOS` witness on
+  the post-mortem-stable fact. Gate `smoke-agentpanel` (GPU). The DDR-730
+  image-budget blocker is gone (DDR-733: kernel 545 KiB of 768).
   Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).

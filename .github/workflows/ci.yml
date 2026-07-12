@@ -218,6 +218,9 @@ jobs:
       - name: QEMU per-agent live-metrics test (q35; SYS_AGENT_METRICS state/actions, L7)
         run: make smoke-agentmetrics
 
+      - name: QEMU agent-panel metrics test (q35+GPU; cards render metrics, L7)
+        run: make smoke-agentpanel
+
       - name: QEMU CAP_NET socket-authority test (q35; capless connect/slot -> EPERM)
         run: make smoke-capnet
 

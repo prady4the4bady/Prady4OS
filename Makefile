@@ -1133,6 +1133,16 @@ smoke-agentmetrics: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="AGENT_METRICS FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Layer-7 agent-panel metrics gate (DDR-737): the compositor renders the agent
+# cards from SYS_AGENT_METRICS (state-colored dot + activity pips) and prints a
+# one-shot AGENT_PANEL witness keyed on the post-mortem-stable fact (pid
+# retained + dispatches captured at exit, DDR-735) — deterministic regardless of
+# frame cadence on TCG. Needs the GPU (the compositor is the witness).
+smoke-agentpanel: $(IMG) fat-image sfs-image
+	TIMEOUT_S=150 QEMU_GPU=1 \
+	EXTRA_SENTINEL="$$(printf 'AGENT_PANEL KRYOS act=\nPRADYOS_AGENT_PANEL_METRICS_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # AETHER boot-config gate (DDR-732): the daemon reads /AETHER.CFG off the FAT32
 # boot volume (mcopy'd at image build) and applies mode/task/slot from it — the
 # CFG_OK line proves the file was read AND parsed (CFG_DEFAULT, the compiled

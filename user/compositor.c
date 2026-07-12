@@ -21,6 +21,7 @@
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
 #define SYS_AGENT_ROSTER 53
+#define SYS_AGENT_METRICS 64            /* DDR-730/735: per-agent live metrics */
 #define SYS_SURFACE_RAISE 54
 #define SYS_SURFACE_SENDKEY 55
 #define SYS_CLOCK        57
@@ -31,6 +32,9 @@
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; int wheel; };   /* DDR-725 */
 struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; char title[16]; };
+/* DDR-735 (kernel-mirrored): counts are retained post-mortem; pid stays set for
+ * a spawned-then-exited slot (state 0), so "ran, now done" is renderable. */
+struct agent_metric { unsigned pid, state; unsigned long mem_used, actions, run_ticks, dispatches; };
 
 /* The 8 named agents (DDR-707), in roster-slot order. */
 static const char *g_agents[8] =
@@ -371,19 +375,28 @@ static int ambiance_for_secs(long secs) {           /* §1 boundaries by hour */
     return 3;                                       /* NIGHT */
 }
 
-/* Agent panel (DDR-707): the 8 named agents as cards on the right, each with a
- * status dot — green if AETHER's roster marks it active, dim otherwise. */
+/* Agent panel (DDR-707/737): the 8 named agents as cards on the right, rendered
+ * from SYS_AGENT_METRICS (which subsumes the roster — state >= 1 IS the DDR-730
+ * lazy-liveness bit). Status dot by state: green = running/ready, amber =
+ * blocked, dim green = ran-and-exited (retained pid, state 0), gray = never
+ * spawned. Up to 4 activity pips show submitted actions (font-free; DDR-735's
+ * post-mortem retention keeps them lit after the agent completes). */
 static void render_agent_panel(void) {
-    unsigned char roster[8] = {0};
-    nsi(SYS_AGENT_ROSTER, (long)roster, 8, 0);
+    struct agent_metric m[8] = {0};
+    nsi(SYS_AGENT_METRICS, (long)m, 8, 0);
     if (g_fi.width < 220) return;
     unsigned px = g_fi.width - 210;
     for (int i = 0; i < 8; i++) {
         unsigned py = 70 + (unsigned)i * 44;
         glass_card(px, py, 200, 36);                             /* DDR-712: frosted glass */
         draw_str(g_agents[i], px + 10, py + 14, 1, 0xE0, 0xE0, 0xF0);
-        if (roster[i]) fill_rect(px + 178, py + 12, 12, 12, 0x40, 0xE0, 0x40);  /* active = green */
-        else           fill_rect(px + 178, py + 12, 12, 12, 0x50, 0x50, 0x50);  /* inactive = gray */
+        if (m[i].state == 1)      fill_rect(px + 178, py + 12, 12, 12, 0x40, 0xE0, 0x40);  /* run/ready */
+        else if (m[i].state == 2) fill_rect(px + 178, py + 12, 12, 12, 0x40, 0xC0, 0xE0);  /* blocked = amber */
+        else if (m[i].pid)        fill_rect(px + 178, py + 12, 12, 12, 0x30, 0x80, 0x30);  /* ran, done = dim green */
+        else                      fill_rect(px + 178, py + 12, 12, 12, 0x50, 0x50, 0x50);  /* empty = gray */
+        unsigned pips = m[i].actions > 4 ? 4u : (unsigned)m[i].actions;   /* DDR-737 activity meter */
+        for (unsigned p = 0; p < pips; p++)
+            fill_rect(px + 118 + p * 8, py + 26, 5, 5, 0xC0, 0xC0, 0x60);
     }
 }
 
@@ -749,6 +762,7 @@ int main(void) {
     int dragging = 0, drag_id = -1, drag_ox = 0, drag_oy = 0;   /* DDR-710 */
     int resizing = 0, rs_id = -1, rs_bx = 0, rs_by = 0;         /* DDR-718 */
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
+    int metrics_said = 0;                    /* DDR-737: one-shot panel witness */
     for (;;) {
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
         int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
@@ -767,6 +781,21 @@ int main(void) {
             printf("PRADYOS_AGENTS_OK\n");
             fflush(stdout);
             for (int i = 0; i < 8; i++) last_roster[i] = roster[i];
+        }
+        /* DDR-737: one-shot panel-metrics witness. Keyed on the POST-MORTEM
+         * stable fact (DDR-735: pid retained + dispatches captured at exit), so
+         * this fires deterministically even when the agent's whole life fits
+         * inside one slow compositor frame on TCG runners. */
+        if (!metrics_said) {
+            struct agent_metric m[8] = {0};
+            nsi(SYS_AGENT_METRICS, (long)m, 8, 0);
+            if (m[0].pid != 0 && m[0].dispatches >= 1) {
+                metrics_said = 1;
+                printf("AGENT_PANEL KRYOS act=%u disp=%u\n",
+                       (unsigned)m[0].actions, (unsigned)m[0].dispatches);
+                printf("PRADYOS_AGENT_PANEL_METRICS_OK\n");
+                fflush(stdout);
+            }
         }
         /* Per-client surfaces (DDR-706/708): SURFACE_POLL is z-sorted (back-to-front).
          * Re-composite when the set grows or focus changes; blit in z-order so a

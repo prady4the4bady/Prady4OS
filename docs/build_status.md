@@ -1124,9 +1124,21 @@ DDR-729 hook pattern) and the dead slot retains its pid; the probe asserts
 `pid!=0 && dispatches>=1` on slot 0 vs `pid==0 && dispatches==0` on slot 7,
 prints the alive observation only opportunistically, and bounds its poll by 120
 RTC seconds (SYS_CLOCK) instead of an iteration count.
-**Next (hardening 3/3):** richer roster/metrics UI (draw the live counts on the
-agent cards). Then: SFS-as-process-root; extend PT_HI / grow the disk as the
-kernel grows. wlroots/Wayland remain out-of-tree.
+**Agent-panel live metrics (DDR-737) — live-agent hardening 3/3, campaign
+CLOSED:** the compositor's agent cards now render from `SYS_AGENT_METRICS`
+(which subsumes the roster read — `state >= 1` IS the DDR-730 liveness bit):
+status dot state-colored (green run/ready, amber blocked, **dim green =
+ran-and-exited** via the retained pid, gray = never spawned) plus up to 4
+activity pips (submitted actions; DDR-735's post-mortem retention keeps them
+lit after the agent completes). One-shot serial witness `AGENT_PANEL KRYOS
+act= disp=` + `PRADYOS_AGENT_PANEL_METRICS_OK`, keyed on the post-mortem-stable
+`pid!=0 && dispatches>=1` fact so TCG frame cadence can't miss it. This was
+DDR-730's reverted plan; DDR-733's 768 KiB window removed the image blocker
+(kernel.bin 545 KiB, ~236 KiB headroom). Gate `smoke-agentpanel` (GPU).
+**80 gates.**
+**Next:** SFS-as-process-root (moves /AETHER.CFG to /etc/aether/config); extend
+PT_HI / grow the disk as the kernel grows; perf: context_switch ~1663 ns vs the
+<=1500 ns target. wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-13
 
 ## Phase 0 — Toolchain & Build System
