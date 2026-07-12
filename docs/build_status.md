@@ -1081,6 +1081,20 @@ independently across samples (extended `smoke-agentmetrics`, gate count stays
 79). Also fixed a dev-host harness flake: `boot_test.sh`'s serial capture is now
 `SERIAL_LOG`-overridable (this WSL wipes `/tmp` mid-run, truncating long gates;
 CI default unchanged).
+**SMP teardown hardening + double-free diagnostic (DDR-735 follow-up):** the
+DDR-735 CI run hit a rare `kfree: double free` on one `-smp 4` boot (the common
+boot path — all SMP gates share it; rqstress's boot was the unlucky one), a
+latent pre-existing race that DDR-735's per-switch timing surfaced. Two changes:
+(1) **root-fix** — `thread_trampoline` no longer clears `on_cpu` before its final
+`schedule()`. That violated the rq-2 invariant (`on_cpu >= 0` = "still on its
+stack / rsp not saved"); `sched_exit` deliberately leaves it set and lets
+`finish_task_switch` release it AFTER the switch. Every free path is otherwise
+lock-serialized (`g_sched_lock`) and `pid_alive`-exclusive (reaper vs wait4), so
+this was the one clear invariant violation in the panicking subsystem.
+(2) **diagnostic** — the kheap double-free check now prints the offending pointer
++ object-size class before panicking, so if it recurs the serial log names the
+structure (TCB vs kstack vs other) for immediate root-cause. `KHEAP_DEBUG`
+(KASAN=1) is on in the normal build, so this fires in CI.
 **Next (hardening 3/3):** richer roster/metrics UI (draw the live counts on the
 agent cards). Then: SFS-as-process-root; extend PT_HI / grow the disk as the
 kernel grows. wlroots/Wayland remain out-of-tree.

@@ -135,8 +135,16 @@ static void cache_free(struct kmem_cache *c, void *ptr) {
     if (s->cache != c)
         heap_panic("kfree: cache mismatch");
     for (struct free_obj *f = s->free; f; f = f->next) {
-        if (f == (struct free_obj *)ptr)
+        if (f == (struct free_obj *)ptr) {
+            /* Identify the offending block so a rare SMP double-free is
+             * diagnosable from the serial log (size class -> which structure). */
+            kputs("[kheap] double-free ptr=");
+            kputhex((uint64_t)(uintptr_t)ptr);
+            kputs(" objsize=");
+            kputhex(c->obj_size);
+            kputs("\r\n");
             heap_panic("kfree: double free");
+        }
     }
     memset(ptr, POISON_FREE, c->obj_size);
 #endif

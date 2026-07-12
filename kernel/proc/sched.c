@@ -195,9 +195,17 @@ static void thread_trampoline(void) {
     /* cap-2b D3: cooperative exit. A returning kernel thread marks itself DONE
      * and schedules away — DONE is unpickable so it never runs again. The old
      * for(;;)hlt relied on timer preemption to leave, which an un-preempted AP
-     * (cap-3 pending) never gets, wedging that CPU. */
+     * (cap-3 pending) never gets, wedging that CPU.
+     *
+     * rq-2 invariant: `on_cpu` MUST NOT be cleared here. This thread is still
+     * executing on its own kernel stack until schedule()->context_switch saves
+     * its rsp; clearing on_cpu now would let switch_wait_offcpu()/sched_free_tcb()
+     * proceed against a not-yet-saved rsp and a live stack (a use-after-free that
+     * surfaces as heap corruption / kfree double-free under an SMP thread storm).
+     * It is released with a RELEASE store by finish_task_switch() in whichever
+     * thread next resumes on this CPU — strictly after the switch has left this
+     * stack — exactly as sched_exit() relies on for ZOMBIEs. */
     current_thread->state = THREAD_DONE;
-    current_thread->on_cpu = -1;
     schedule();
     for (;;)                        /* unreachable */
         __asm__ volatile("hlt");
