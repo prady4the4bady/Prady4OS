@@ -1119,15 +1119,17 @@ smoke-agents: $(IMG) fat-image sfs-image
 	TIMEOUT_S=150 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_AGENTS_OK\nAGENT KRYOS active\nAGENT SOLIN inactive')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
-# Layer-7 per-agent live-metrics gate (DDR-730): once the daemon spawns the test
-# agent into slot 0 (KRYOS), the agentmetricstest probe reads SYS_AGENT_METRICS and
-# asserts slot 0 is live (state>=1, pid!=0) while an unspawned slot (7=SOLIN) reads
-# idle — proving the metric reflects real per-agent tcb state, not a stuck roster
-# bit or a blanket all-active. No GPU needed (the probe is the witness, not the
-# compositor); generous timeout since the daemon's spawn lands late under CI load.
+# Layer-7 per-agent live-metrics gate (DDR-730/735): the agentmetricstest probe
+# asserts POST-MORTEM-STABLE facts — slot 0 (KRYOS) has pid!=0 AND dispatches>=1
+# (spawned + provably scheduled; the kernel captures the final counters at exit,
+# so this holds during OR after the agent's life) while slot 7 (SOLIN) stays
+# pid==0/dispatches==0. The original alive-window assertion (state>=1) was RACY
+# on TCG CI runners — an agent's whole life fits between two probe samples when
+# a compositor quantum takes seconds — and is now printed opportunistically, not
+# required. No GPU needed; generous timeout for the daemon's late spawn on CI.
 smoke-agentmetrics: $(IMG) fat-image sfs-image
 	TIMEOUT_S=150 \
-	EXTRA_SENTINEL="$$(printf 'AGENT_METRIC KRYOS live pid ok\nAGENT_METRIC KRYOS sched ok\nPRADYOS_AGENT_METRICS_OK')" \
+	EXTRA_SENTINEL="$$(printf 'AGENT_METRIC KRYOS sched ok\nPRADYOS_AGENT_METRICS_OK')" \
 	FORBIDDEN_SENTINEL="AGENT_METRICS FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

@@ -1112,10 +1112,22 @@ future; queue locks stay leaf; the hot path gains one uncontended atomic. The
 race predates DDR-735 (rq-1 era — the "benign spurious wake" comment described
 the pre-queue ring-walk scheduler); DDR-735's timing shift + CI's TCG runners
 surfaced it. The KASAN double-free diagnostic stays as the tripwire.
+**smoke-agentmetrics made TCG-deterministic (DDR-735 gate fix):** with DDR-736
+in place the corruption family stopped recurring in CI, but the next run
+(29203329840) failed `smoke-agentmetrics` for an unrelated reason: the gate's
+alive-window assertion (`state>=1` sampled during the agent's life) is racy on
+TCG runners — a seconds-long compositor quantum let the agent's entire life fit
+between two probe samples, and refresh-on-read retention then kept the counts at
+zero forever. Fixed by making the proof post-mortem stable: `sched_exit` now
+captures the final counters into the roster slot (`agent_metrics_reap`, the
+DDR-729 hook pattern) and the dead slot retains its pid; the probe asserts
+`pid!=0 && dispatches>=1` on slot 0 vs `pid==0 && dispatches==0` on slot 7,
+prints the alive observation only opportunistically, and bounds its poll by 120
+RTC seconds (SYS_CLOCK) instead of an iteration count.
 **Next (hardening 3/3):** richer roster/metrics UI (draw the live counts on the
 agent cards). Then: SFS-as-process-root; extend PT_HI / grow the disk as the
 kernel grows. wlroots/Wayland remain out-of-tree.
-**Last updated:** 2026-07-12
+**Last updated:** 2026-07-13
 
 ## Phase 0 — Toolchain & Build System
 

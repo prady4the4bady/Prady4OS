@@ -1,23 +1,37 @@
-/* user/agentmetricstest.c — per-agent live metrics probe (DDR-730).
+/* user/agentmetricstest.c — per-agent live metrics probe (DDR-730/735).
  *
- * A tiny observability witness: polls SYS_AGENT_METRICS until it sees the daemon's
- * test agent (roster slot 0 = KRYOS) reported ALIVE (state >= 1) while an unspawned
- * slot (7 = SOLIN) reads inactive — proving the metrics reflect real per-agent tcb
- * state (a running pid), not a stuck roster bit and not a blanket "all active".
+ * Proves SYS_AGENT_METRICS reflects real per-agent scheduling, using facts that
+ * are POST-MORTEM STABLE: the kernel captures an agent's final CPU counters at
+ * exit (agent_metrics_reap) and retains its pid in the roster slot, so this
+ * probe does NOT need to catch the agent alive — on slow TCG CI runners an
+ * agent's whole life can fit between two probe samples (a seconds-long
+ * compositor quantum), which made the original alive-window assertion racy.
  *
- *   -> AGENT_METRIC KRYOS live pid ok  (slot 0 alive, slot 7 idle)
- *   -> PRADYOS_AGENT_METRICS_OK
+ * Latches, in any order, within an RTC-bounded window:
+ *   - slot 0 (KRYOS): pid != 0 AND dispatches >= 1 — the daemon's agent was
+ *     spawned and provably scheduled (readable during OR after its life)
+ *                                            -> AGENT_METRIC KRYOS sched ok
+ *   - slot 7 (SOLIN): stays pid == 0, dispatches == 0 — the metric
+ *     discriminates spawned slots from empty ones (not a blanket all-active)
+ *     (checked at latch time, not separately printed)
+ *   - opportunistic: if slot 0 is also caught alive (state >= 1), print the
+ *     extra "live pid ok" line — informative, NOT required by the gate.
+ * Both facts -> PRADYOS_AGENT_METRICS_OK. Window exhausted -> "AGENT_METRICS
+ * FAIL" (the gate's forbidden pattern) and exit 1.
  *
- * Freestanding (no libc) to stay inside the kernel-image budget: raw SYS_WRITE of
- * fixed strings, no printf, no writable globals (links against user/user.ld).
+ * The window is 120 RTC seconds (SYS_CLOCK, seconds-since-midnight; wrap
+ * handled) — iteration-count bounds scale with host speed and mis-size on TCG.
+ *
+ * Freestanding (no libc): user.ld single R+X segment, no writable globals.
  */
 
 #define SYS_WRITE          6
 #define SYS_YIELD          3
 #define SYS_EXIT           4
+#define SYS_CLOCK          57
 #define SYS_AGENT_METRICS  64
 
-struct agent_metric { unsigned pid, state; unsigned long mem_used, actions, run_ticks, dispatches; };  /* DDR-730/735 (kernel-mirrored) */
+struct agent_metric { unsigned pid, state; unsigned long mem_used, actions, run_ticks, dispatches; };
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -30,34 +44,34 @@ static inline long nsi(long n, long a1, long a2, long a3) {
 static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
 static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
 
+static long elapsed(long start) {
+    long now = nsi(SYS_CLOCK, 0, 0, 0);
+    if (now < start) now += 86400;             /* midnight wrap */
+    return now - start;
+}
+
 __attribute__((noreturn)) void _start(void) {
-    /* Poll long enough for the daemon to spawn the test agent (it lands late under
-     * loaded CI runners — same reason smoke-agents uses a 150 s timeout). */
-    /* Two facts, latched independently across samples (they need not hold in the
-     * same sample): (a) KRYOS was seen ALIVE while slot 7 stayed idle — the metric
-     * discriminates real tcb state; (b) KRYOS accrued a scheduler dispatch. The
-     * kernel RETAINS the dispatch count past the agent's exit (DDR-735), so a
-     * millisecond-lived agent is still provable without catching the live instant. */
-    int seen_alive = 0, seen_sched = 0;
-    for (long i = 0; i < 4000000; i++) {
+    long start = nsi(SYS_CLOCK, 0, 0, 0);
+    int live_said = 0;
+    while (elapsed(start) < 120) {
         struct agent_metric m[8];
         long n = nsi(SYS_AGENT_METRICS, (long)m, 8, 0);
         if (n >= 8) {
-            if (m[0].pid != 0 && m[0].state >= 1 && m[7].state == 0) seen_alive = 1;
-            if (m[0].dispatches >= 1) seen_sched = 1;
-        }
-        if (seen_alive && seen_sched) {
-            wr("AGENT_METRIC KRYOS live pid ok\n");   /* slot 0 alive, slot 7 idle */
-            wr("AGENT_METRIC KRYOS sched ok\n");      /* dispatches >= 1 (DDR-735) */
-            wr("PRADYOS_AGENT_METRICS_OK\n");
-            nsi(SYS_EXIT, 0, 0, 0);
-            for (;;) { }
+            if (!live_said && m[0].state >= 1 && m[0].pid != 0) {
+                live_said = 1;                 /* bonus observation, not required */
+                wr("AGENT_METRIC KRYOS live pid ok\n");
+            }
+            if (m[0].pid != 0 && m[0].dispatches >= 1 &&
+                m[7].pid == 0 && m[7].dispatches == 0) {
+                wr("AGENT_METRIC KRYOS sched ok\n");   /* spawned + provably ran */
+                wr("PRADYOS_AGENT_METRICS_OK\n");
+                nsi(SYS_EXIT, 0, 0, 0);
+                for (;;) { }
+            }
         }
         nsi(SYS_YIELD, 0, 0, 0);
     }
-    /* Never observed a live agent — exit non-zero; the gate fails on the missing
-     * sentinel rather than a false pass. */
-    wr("AGENT_METRICS FAIL: no live agent observed\n");
+    wr("AGENT_METRICS FAIL: agent never observed as scheduled\n");
     nsi(SYS_EXIT, 1, 0, 0);
     for (;;) { }
 }

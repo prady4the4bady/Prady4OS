@@ -48,10 +48,27 @@ keeps the "alive" catch as wide as the DDR-730 gate while adding the CPU proof.
 
 ## Gate — extend `smoke-agentmetrics` (no new gate; stays 79)
 
-The probe prints the existing sentinels plus `AGENT_METRIC KRYOS sched ok` once
-both latched facts hold. `run_ticks` is reported, not asserted — a sub-tick
-agent lifetime is legal. Extending the existing gate keeps the count stable and
-tests the same boot flow end-to-end.
+**CI post-mortem (run 29203329840) — the alive-window assertion was racy.** On
+CI's TCG runners a compositor quantum takes seconds, so the test agent's whole
+life (spawn -> DONE, visible in the serial) fit between two probe samples: the
+`state >= 1` latch never fired, and since retention was refresh-ON-READ, the
+counts stayed zero too — the probe spun silently past the gate timeout. (Local
+KVM samples thousands of times during the agent's life, which is why it passed
+here.) Two corrections, both making the proof **post-mortem stable**:
+
+1. **Exit capture**: `sched_exit` calls `agent_metrics_reap(pid, run_ticks,
+   dispatches)` (the DDR-729 reap-hook pattern), so the roster's retained
+   counters are authoritative regardless of read timing; the dead slot also
+   retains its **pid** (identity checkable after death; state stays 0).
+2. **Probe/gate**: the REQUIRED facts are now `slot0.pid != 0 &&
+   slot0.dispatches >= 1` (spawned + provably scheduled — readable during or
+   after life) while `slot7` stays `pid == 0 / dispatches == 0`
+   (discrimination). The alive observation (`state >= 1`) is printed
+   opportunistically but no longer asserted — same reasoning as the DDR-730
+   `smoke-agent-click` change: transient live states are not deterministic
+   serial witnesses on slow hosts. The poll window is 120 **RTC seconds**
+   (`SYS_CLOCK`, wrap-handled) instead of an iteration count, which mis-sizes
+   across host speeds.
 
 **Harness fix (unrelated flake surfaced here):** `boot_test.sh` wrote its serial
 capture to a `mktemp` in `/tmp`; on the dev WSL host `/tmp` is wiped mid-run,

@@ -178,9 +178,13 @@ static long sys_agent_metrics(long a1, long a2, long a3, long a4) {
             buf[i].mem_used   = t->mem_used;
             buf[i].actions    = g_agent[i].actions;
         } else {
-            /* dead (or never-spawned) slot: state 0, but the retained CPU counts
-             * remain readable — a short-lived agent's dispatches don't vanish. */
-            buf[i].pid = buf[i].state = 0;
+            /* dead (or never-spawned) slot: state 0, but a spawned slot's IDENTITY
+             * and CPU counts stay readable POST-MORTEM (pid + counts retained; the
+             * counts are captured authoritatively at exit by agent_metrics_reap, so
+             * they never depend on a read having landed during the agent's life —
+             * on slow TCG hosts an agent's whole life can fit between two reads). */
+            buf[i].state = 0;
+            buf[i].pid = g_agent[i].used ? g_agent[i].pid : 0;
             buf[i].mem_used = 0;
             buf[i].actions  = g_agent[i].used ? g_agent[i].actions : 0;
         }
@@ -190,6 +194,18 @@ static long sys_agent_metrics(long a1, long a2, long a3, long a4) {
     if (copyout((void __user *)a1, buf, (size_t)max * sizeof buf[0]) < 0)
         return -EFAULT;
     return max;
+}
+
+/* DDR-735 (exit capture): called from sched_exit with the dying thread's final
+ * counters. Makes the roster's retained CPU accounting authoritative — with
+ * refresh-on-read alone, an agent whose whole life fits between two metrics
+ * reads (seconds-long quanta on TCG CI runners) would retain zeros forever. */
+void agent_metrics_reap(uint32_t pid, uint64_t run_ticks, uint64_t dispatches) {
+    int slot = slot_of_pid(pid);
+    if (slot >= 0) {
+        g_agent[slot].run_ticks  = run_ticks;
+        g_agent[slot].dispatches = dispatches;
+    }
 }
 
 static long sys_kill_agent(long a1, long a2, long a3, long a4) {

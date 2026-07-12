@@ -733,9 +733,15 @@ void sched_exit(int status) {
      * which we have not taken yet). No-op for kernel threads (no owned surfaces). */
     void surface_reap_pid(uint32_t pid);   /* kernel/syscall/sys_surface.c (DDR-729) */
     void socket_reap_pid(uint32_t pid);    /* kernel/syscall/sys_socket.c (DDR-731) */
+    /* DDR-735: capture the final CPU counters into the agent roster slot (if this
+     * pid holds one) so the metrics stay readable post-mortem without depending on
+     * a SYS_AGENT_METRICS read having landed during the agent's life. */
+    void agent_metrics_reap(uint32_t pid, uint64_t run_ticks, uint64_t dispatches);
     if (current_thread->is_user) {
         surface_reap_pid(current_thread->pid);
         socket_reap_pid(current_thread->pid);
+        agent_metrics_reap(current_thread->pid,
+                           current_thread->run_ticks, current_thread->dispatches);
     }
     /* DDR-SMP-exit-stack-race, rq-2 edition. The dying thread still executes on
      * its kernel stack until context_switch completes, so a collector (wait4 /
