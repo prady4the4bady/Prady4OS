@@ -259,6 +259,18 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   Also: `boot_test.sh` `SERIAL_LOG` is now overridable (this WSL wipes /tmp
   mid-run — set SERIAL_LOG to a persistent path for reliable local gates; CI
   default unchanged). Hardening 3/3 = draw the counts on the agent cards.
+- **rq double-enqueue FIXED (DDR-736):** the DDR-735-era CI failures (kfree
+  double-free; smpsched hang) had one root cause — `rq_push`'s `rq_on` check
+  ran under the target queue's lock, so a waker's unblock and the blocker's own
+  schedule() re-queue (two DIFFERENT leaf locks) could link one tcb into TWO
+  FIFOs via its single `rq_next` (list corruption = hang; double-pop/double-run
+  = double free). The `rq_on` claim is now an atomic exchange BEFORE any queue
+  lock; `rq_take` clears it with RELEASE. Also hardened `thread_trampoline`
+  (keeps `on_cpu` set until `finish_task_switch`, matching sched_exit) and the
+  KASAN double-free panic now prints ptr+objsize. Race predates DDR-735; CI's
+  TCG runners surfaced it. LOCAL GATE NOTE: back-to-back local runs flake on a
+  QEMU image-lock release race + this WSL wipes /tmp (use SERIAL_LOG=<persistent
+  path>, sleep 1 between gates); CI (isolated steps) is authoritative.
   Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).

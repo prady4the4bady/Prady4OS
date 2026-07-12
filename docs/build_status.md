@@ -1095,6 +1095,23 @@ this was the one clear invariant violation in the panicking subsystem.
 + object-size class before panicking, so if it recurs the serial log names the
 structure (TCB vs kstack vs other) for immediate root-cause. `KHEAP_DEBUG`
 (KASAN=1) is on in the normal build, so this fires in CI.
+**rq double-enqueue root-caused and FIXED (DDR-736):** the two CI failures (the
+`kfree: double free` and a later smpsched hang) share ONE root cause.
+`rq_push`'s `rq_on` idempotence check ran under the TARGET queue's leaf lock —
+but a waker's `sched_unblock` (device-completion IRQ on CPU B, winning the
+`BLOCKED->READY` CAS in the pre-switch window) and the blocker's own
+`schedule()` re-queue (CPU A, seeing that READY) push under two DIFFERENT
+locks. Both could read `rq_on == 0` and link ONE tcb into TWO FIFOs through its
+single `rq_next` pointer — breaking rq-2's exclusion premise ("a thread sits in
+exactly one queue"): list corruption loses threads (the hang — a woken FS
+thread vanishes) or two CPUs pop and double-run one kernel stack (the double
+free). Fix: the `rq_on` claim is now an atomic exchange taken BEFORE any queue
+lock (the loser no-ops — the winner's queue holds the thread); `rq_take`'s
+unlink clears it with a RELEASE store. Covers every pusher pair, present and
+future; queue locks stay leaf; the hot path gains one uncontended atomic. The
+race predates DDR-735 (rq-1 era — the "benign spurious wake" comment described
+the pre-queue ring-walk scheduler); DDR-735's timing shift + CI's TCG runners
+surfaced it. The KASAN double-free diagnostic stays as the tripwire.
 **Next (hardening 3/3):** richer roster/metrics UI (draw the live counts on the
 agent cards). Then: SFS-as-process-root; extend PT_HI / grow the disk as the
 kernel grows. wlroots/Wayland remain out-of-tree.

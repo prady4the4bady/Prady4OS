@@ -58,16 +58,25 @@ struct rq {
 };
 static struct rq g_rq[PERCPU_MAX];
 
-/* Enqueue t on cpu's ready FIFO (idempotent via rq_on). */
+/* Enqueue t on cpu's ready FIFO. Idempotent ACROSS queues (DDR-736): the rq_on
+ * claim is an atomic exchange taken BEFORE any queue lock, because two
+ * concurrent pushers use two DIFFERENT leaf locks — a waker's sched_unblock
+ * (device-IRQ completion on CPU B) racing the blocker's own schedule() re-queue
+ * (CPU A, which sees the waker's READY CAS in prev->state). Under the old
+ * per-queue check both could read rq_on == 0 and link ONE tcb into TWO FIFOs
+ * through its single rq_next pointer, breaking rq-2's exclusion premise ("a
+ * thread sits in exactly one queue"): list corruption loses threads (hang) or
+ * two CPUs pop and double-run one kernel stack (heap corruption/double free) —
+ * both observed in CI. The loser simply no-ops: the winner's queue holds the
+ * thread, findable by that CPU's pick or any steal. */
 static void rq_push(int cpu, struct tcb *t) {
+    if (__atomic_exchange_n(&t->rq_on, 1, __ATOMIC_ACQ_REL))
+        return;                        /* already queued somewhere — one queue only */
     struct rq *q = &g_rq[cpu];
     uint64_t fl = spin_lock_irqsave(&q->lock);
-    if (!t->rq_on) {
-        t->rq_on = 1;
-        t->rq_next = 0;
-        if (q->tail) q->tail->rq_next = t; else q->head = t;
-        q->tail = t;
-    }
+    t->rq_next = 0;
+    if (q->tail) q->tail->rq_next = t; else q->head = t;
+    q->tail = t;
     spin_unlock_irqrestore(&q->lock, fl);
 }
 
@@ -86,8 +95,10 @@ static struct tcb *rq_take(struct rq *q) {
     while ((t = q->head)) {
         q->head = t->rq_next;
         if (!q->head) q->tail = 0;
-        t->rq_on = 0;
         t->rq_next = 0;
+        /* DDR-736: RELEASE so the next rq_push claimant (possibly another CPU
+         * not holding THIS queue's lock) observes the unlink before its claim. */
+        __atomic_store_n(&t->rq_on, 0, __ATOMIC_RELEASE);
         if (t->state == THREAD_READY)
             return t;
     }
