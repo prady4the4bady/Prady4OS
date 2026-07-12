@@ -86,6 +86,8 @@
 #define SYS_SURFACE_GETEV  63  /* (id, struct surf_event*) -> 0 | -EAGAIN (owner)    */
 /* Per-agent live metrics (Layer 7, DDR-730). Append-only after 63. */
 #define SYS_AGENT_METRICS  64  /* (struct agent_metric*, max) -> count (observability)*/
+/* CAP_NET egress allowlist (DDR-734). */
+#define SYS_NET_ALLOW      65  /* (host_be, port) -> 0 | -EPERM | -ENOSPC (sovereign) */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

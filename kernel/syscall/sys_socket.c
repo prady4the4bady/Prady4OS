@@ -29,6 +29,38 @@
 #define SOCK_SLOTS 8
 static uint32_t g_sock_owner[SOCK_SLOTS];
 
+/* DDR-734 — per-host egress allowlist for CAP_NET callers. Bounded, append-only
+ * (no runtime revocation surface — policy changes are a config edit + reboot),
+ * installed by the sovereign daemon (SYS_NET_ALLOW) from /AETHER.CFG net= lines
+ * BEFORE any agent spawns. EMPTY LIST = DENY-ALL for agents; the sovereign
+ * operator bypasses (it is the authority that installs the list). */
+#define NET_ALLOW_MAX 8
+struct net_allow { uint32_t host_be; uint16_t port; };   /* port 0 = any port */
+static struct net_allow g_net_allow[NET_ALLOW_MAX];
+static unsigned g_net_allow_n;
+
+/* 0 = allowed, -1 = no matching rule. Exposed (non-static) for the kmain boot
+ * self-test, which proves match/deny without a live connection. */
+int netallow_check(uint32_t host_be, uint16_t port);
+int netallow_check(uint32_t host_be, uint16_t port) {
+    for (unsigned i = 0; i < g_net_allow_n; i++)
+        if (g_net_allow[i].host_be == host_be &&
+            (g_net_allow[i].port == 0 || g_net_allow[i].port == port))
+            return 0;
+    return -1;
+}
+
+/* Install one rule (kmain self-test uses this too; ring 3 goes via the NSI). */
+int netallow_add(uint32_t host_be, uint16_t port);
+int netallow_add(uint32_t host_be, uint16_t port) {
+    if (g_net_allow_n >= NET_ALLOW_MAX)
+        return -1;
+    g_net_allow[g_net_allow_n].host_be = host_be;
+    g_net_allow[g_net_allow_n].port = port;
+    g_net_allow_n++;
+    return 0;
+}
+
 static int sock_denied(int slot) {
     if (slot < 0 || slot >= SOCK_SLOTS)
         return 0;                           /* out of range: let psock_* -EBADF it */
@@ -41,6 +73,13 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4) {
      * sovereign operator passes for diagnostics. Everyone else: audited -EPERM
      * (the AETHER pattern — denial is logged, the caller survives). */
     if (!current_thread->is_net && !current_thread->is_sovereign) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    /* DDR-734: CAP_NET is scoped by the egress allowlist (deny-by-default);
+     * the sovereign operator bypasses it. Audited like every denial. */
+    if (!current_thread->is_sovereign &&
+        netallow_check((uint32_t)a1, (uint16_t)a2) != 0) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
     }
@@ -122,9 +161,21 @@ void socket_reap_pid(uint32_t pid) {
         }
 }
 
+/* DDR-734: sovereign-only, append an egress rule. -EPERM (audited) otherwise;
+ * -ENOSPC when the bounded list is full. Install-only by design. */
+static long sys_net_allow(long a1, long a2, long a3, long a4) {
+    (void)a3; (void)a4;
+    if (!current_thread->is_sovereign) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    return (netallow_add((uint32_t)a1, (uint16_t)a2) < 0) ? -ENOSPC : 0;
+}
+
 void sys_socket_register(void) {
     syscall_register(SYS_SOCK_CONNECT, sys_sock_connect);
     syscall_register(SYS_SOCK_WRITE,   sys_sock_write);
     syscall_register(SYS_SOCK_READ,    sys_sock_read);
     syscall_register(SYS_SOCK_CLOSE,   sys_sock_close);
+    syscall_register(SYS_NET_ALLOW,    sys_net_allow);    /* DDR-734 */
 }

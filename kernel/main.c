@@ -867,6 +867,20 @@ static void fs_test_thread(void *arg) {
                 smpsched_proof();    /* ADR-031 cap-2b: a ring thread runs on an AP */
                 smppreempt_proof();  /* ADR-031 cap-3: an AP's timer preempts */
                 smpresched_proof();  /* DDR-SMP-rq-3: unblock kicks an idle AP */
+                /* DDR-734: egress-allowlist match/deny self-test. Install one
+                 * test rule directly (kernel-side; ring 3 uses SYS_NET_ALLOW)
+                 * and prove exact-match allow + wrong-host/port deny. The rule
+                 * is a REAL entry that stays installed — harmless (192.0.2.1 is
+                 * TEST-NET-1, RFC 5737; nothing routes there in the guest). */
+                {
+                    int netallow_check(uint32_t host_be, uint16_t port);
+                    int netallow_add(uint32_t host_be, uint16_t port);
+                    int ok = (netallow_add(0xC0000201u, 9999) == 0)          /* 192.0.2.1:9999 */
+                          && (netallow_check(0xC0000201u, 9999) == 0)        /* exact match    */
+                          && (netallow_check(0xC0000201u, 9998) != 0)        /* wrong port     */
+                          && (netallow_check(0xC0000202u, 9999) != 0);       /* wrong host     */
+                    kputs(ok ? "[net] allowlist OK\r\n" : "[net] allowlist FAIL\r\n");
+                }
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end, 0);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end, 0);

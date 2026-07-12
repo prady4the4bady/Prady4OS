@@ -336,8 +336,10 @@ fat-image:
 	mcopy -i $(FAT_IMG) build/note.txt ::/DOCS/NOTE.TXT
 	printf 'long name read works' > build/longname.txt
 	mcopy -i $(FAT_IMG) build/longname.txt ::/LongFileName.txt
-	# DDR-732: AETHER boot policy — operator-editable, read by the daemon at boot.
-	printf 'mode=sovereign\ntask=test\nslot=0\n' > build/aether.cfg
+	# DDR-732/734: AETHER boot policy — operator-editable, read by the daemon at
+	# boot. net= rows are the CAP_NET egress allowlist (deny-by-default); the
+	# default entry is the Ollama endpoint at the SLIRP gateway (smoke-agent-live).
+	printf 'mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n' > build/aether.cfg
 	mcopy -i $(FAT_IMG) build/aether.cfg ::/AETHER.CFG
 	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /AETHER.CFG)"
 
@@ -1137,6 +1139,16 @@ smoke-aethercfg: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_CFG_OK mode=sovereign task=test slot=0\nPRADYOS_AGENT_DONE')" \
 	FORBIDDEN_SENTINEL="PRADYOS_AETHER_CFG_DEFAULT" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# CAP_NET egress-allowlist gate (DDR-734): the kernel match/deny self-test
+# proves exact-host+port allow, wrong-port deny, wrong-host deny; the daemon's
+# NET_ALLOW_OK n=1 proves the /AETHER.CFG net= row travelled config -> parser ->
+# sovereign-only SYS_NET_ALLOW -> kernel list. Deny-by-default for agents.
+smoke-netallow: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
+	EXTRA_SENTINEL="$$(printf '[net] allowlist OK\nPRADYOS_NET_ALLOW_OK n=1')" \
+	FORBIDDEN_SENTINEL="allowlist FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # CAP_NET socket-authority gate (DDR-731): a CAP-less probe must get -EPERM from

@@ -1057,11 +1057,24 @@ to compiled defaults (`PRADYOS_AETHER_CFG_DEFAULT`) — the daemon never fails t
 boot over config. Gate `smoke-aethercfg` asserts the parsed policy line
 (`PRADYOS_AETHER_CFG_OK mode=sovereign task=test slot=0`) + the configured
 spawn's `PRADYOS_AGENT_DONE`; the DEFAULT sentinel is forbidden. **78 gates.**
-**Next:** the DDR-702..709+ L7 list and all non-visual L7 items are CLOSED.
-Candidates: extend PT_HI / grow the disk as the kernel grows; SFS-as-process-root
-(moves /AETHER.CFG to /etc/aether/config); richer per-agent metrics (CPU time).
+**CAP_NET per-host allowlist (DDR-734) — live-agent hardening 1/3:** CAP_NET
+was all-or-nothing; a granted agent could connect anywhere. Now a bounded kernel
+egress allowlist ({host_be, port}, port 0 = any; 8 entries) is consulted in
+`sys_sock_connect` for CAP_NET callers — **empty list = deny-all for agents**
+(audited `-EPERM`); the sovereign operator bypasses (it installs the list). New
+sovereign-only `SYS_NET_ALLOW` (NSI 65), install-only by design (no runtime
+revocation surface — policy changes are a config edit + reboot). The daemon
+parses `net=<a.b.c.d>:<port>` rows from `/AETHER.CFG` (DDR-732) and installs
+them BEFORE any agent spawns (`PRADYOS_NET_ALLOW_OK n=`); the shipped default is
+`net=10.0.2.2:11434` (the Ollama/SLIRP endpoint), so `smoke-agent-live` works
+unchanged. Gate `smoke-netallow`: kernel match/deny self-test (`[net] allowlist
+OK` — exact match allows, wrong port and wrong host deny) + the config->NSI
+install path. **79 gates.**
+**Next (hardening 2/3, 3/3):** agent CPU-time metric (per-thread run-tick
+accounting feeding SYS_AGENT_METRICS); richer roster/metrics UI. Then:
+SFS-as-process-root; extend PT_HI / grow the disk as the kernel grows.
 wlroots/Wayland remain out-of-tree.
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-12
 
 ## Phase 0 — Toolchain & Build System
 

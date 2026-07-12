@@ -224,6 +224,9 @@ jobs:
       - name: QEMU AETHER boot-config test (q35; daemon reads /AETHER.CFG policy)
         run: make smoke-aethercfg
 
+      - name: QEMU CAP_NET allowlist test (q35; deny-by-default egress, config-installed)
+        run: make smoke-netallow
+
       - name: QEMU z-order/focus test (q35; raise + focus + key routed to window, L7)
         run: make smoke-focus
 
