@@ -54,7 +54,33 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
         return total;
     }
 
-    /* FD_VFS write arrives in slice 4. */
+    /* DDR-744: FD_VFS write — persist to the backing file through the cap-gated
+     * VFS. Chunked copyin (bounded kernel buffer), advancing the fd offset by the
+     * bytes actually written. vfs_write enforces CAP_FS_WRITE + the per-process
+     * write budget; a backend short-write ends the loop (returns the partial). */
+    if (e->kind == FD_VFS && e->file) {
+        char kbuf[256];
+        long total = 0, remaining = count;
+        while (remaining > 0) {
+            uint32_t chunk = (remaining > (long)sizeof kbuf) ? (uint32_t)sizeof kbuf
+                                                             : (uint32_t)remaining;
+            if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0)
+                return total > 0 ? total : -EFAULT;
+            int w = vfs_write(e->cap, e->file, e->off, kbuf, chunk);
+            if (w < 0)
+                return total > 0 ? total : -EIO;
+            if (w == 0)
+                break;                                  /* budget/space exhausted */
+            e->off    += (uint64_t)w;
+            total     += w;
+            uptr      += (uint64_t)w;
+            remaining -= w;
+            if (w < (int)chunk)
+                break;                                  /* short write */
+        }
+        return total;
+    }
+
     return -EBADF;
 }
 

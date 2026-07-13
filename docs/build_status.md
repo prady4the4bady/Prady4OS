@@ -1205,6 +1205,18 @@ incidental DDR-742 `ls`-gate flake: the `^HELLO.TXT$` anchor broke when the
 `prism> ` prompt shared the output line (flush/read timing) — relaxed to
 `(^|prism> )HELLO.TXT$`, still trailing-anchored so the kernel's `fs_list` line
 is excluded. **83 gates** (no new gate).
+**Ring-3 file lifecycle — O_CREAT + SYS_UNLINK + FD_VFS write (DDR-744).** Ring 3
+could `open`/`read`/`readdir` but had no way to create, write, or delete a file —
+the DDR-741 unlink path was proven only in-kernel. Added, all resolved against the
+caller's `root_mnt` + `fs_cap`: (1) `O_CREAT` (0x40) on `sys_open` (falls back to
+`vfs_create` when the open misses); (2) `SYS_UNLINK` (NSI 68) → `vfs_unlink`
+(file or empty dir; SFS's `0`/`-1` backend rc collapses to `-ENOENT`); (3) the
+`FD_VFS` branch of `sys_write`, which was a `-EBADF` stub ("slice 4", never
+landed) — now a chunked `copyin`+`vfs_write` mirror of the `FD_VFS` read path,
+advancing the fd offset (needed to populate a created file from ring 3). Gate
+`smoke-fsrm`: an **SFS-rooted** freestanding probe (FAT has no ring-3
+create/unlink) creates `/RMPROBE` via `O_CREAT`, writes+reads it back, unlinks,
+confirms it is gone, and re-unlinks (clean error) → `PRADYOS_FSRM_OK`. **84 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

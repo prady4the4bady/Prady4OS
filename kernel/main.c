@@ -351,6 +351,8 @@ extern const unsigned char capnettest_elf[];         /* L6/7: CAP_NET socket-aut
 extern const unsigned char capnettest_elf_end[];
 extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mount probe (DDR-739) */
 extern const unsigned char rootmounttest_elf_end[];
+extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
+extern const unsigned char fsrmtest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -998,6 +1000,21 @@ static void fs_test_thread(void *arg) {
                         rmp->root_mnt = ext4_mnt;     /* select before unblock (cap-2a D3) */
                         sched_unblock(rmp);
                         kputs("[user] ELF loaded (embedded); ext4-rooted probe spawned\r\n");
+                    }
+                }
+                /* fs (DDR-744): ring-3 file-lifecycle probe (O_CREAT open +
+                 * SYS_UNLINK). Spawned with root_mnt = the SFS volume (the
+                 * writable CoW root; FAT has no ring-3 create/unlink here), set
+                 * before unblock like the ext4 probe. Proves the two new VFS
+                 * mutations across the syscall boundary. Gate: smoke-fsrm. */
+                {
+                    struct tcb *fp = 0;
+                    uint64_t flen = (uint64_t)(fsrmtest_elf_end - fsrmtest_elf);
+                    if (elf_load((void *)(uintptr_t)fsrmtest_elf, flen,
+                                 "FSRMTEST", &fp) == ELF_OK && fp) {
+                        fp->root_mnt = smnt;          /* SFS root before unblock  */
+                        sched_unblock(fp);
+                        kputs("[user] ELF loaded (embedded); SFS-rooted fsrm probe spawned\r\n");
                     }
                 }
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.

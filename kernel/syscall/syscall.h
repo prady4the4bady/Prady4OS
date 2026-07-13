@@ -92,6 +92,8 @@
 #define SYS_GETDENTS       66  /* (path, index, name_buf) -> namelen | 0(end) | -errno */
 /* Ring-3 process listing (DDR-743). */
 #define SYS_GETPROCS       67  /* (index, struct procinfo*) -> 1(filled) | 0(end) | -errno */
+/* Ring-3 file removal (DDR-744; O_CREAT-on-open handled in sys_open flags). */
+#define SYS_UNLINK         68  /* (path) -> 0 | -errno  (file or empty dir)             */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

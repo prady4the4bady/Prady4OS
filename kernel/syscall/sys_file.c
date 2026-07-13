@@ -21,6 +21,7 @@
 #include "string.h"
 
 #define PATH_MAX 256
+#define O_CREAT  0x40                         /* DDR-744: Linux value (octal 0100) */
 
 static long sys_open(long upath, long flags, long mode, long a4) {
     (void)mode; (void)a4;
@@ -40,8 +41,13 @@ static long sys_open(long upath, long flags, long mode, long a4) {
     if (!f)
         return -ENOMEM;
 
-    if (vfs_open(t->fs_cap, t->root_mnt, path, f) != 0) {
-        kfree(f);
+    /* DDR-744: create-if-absent. Try the plain open first; only on failure with
+     * O_CREAT set do we create (needs CAP_FS_WRITE, which vfs_create enforces). */
+    if (vfs_open(t->fs_cap, t->root_mnt, path, f) != 0 &&
+        (!(flags & O_CREAT) ||
+         vfs_create(t->fs_cap, t->root_mnt, path, f) != 0)) {
+        kfree(f);                             /* fd_alloc doesn't claim the slot
+                                               * until e->kind is set below */
         return -ENOENT;
     }
 
@@ -111,9 +117,26 @@ static long sys_getdents(long upath, long index, long ubuf, long a4) {
     return len;
 }
 
+/* DDR-744: remove a file or empty directory. Resolves `path` against the
+ * caller's root mount + fs cap (per-process roots, DDR-739); vfs_unlink enforces
+ * CAP_FS_WRITE and the backend's semantics (SFS tombstones, -ENOTEMPTY for a
+ * non-empty dir, -ENOENT for an absent name — surfaced verbatim). */
+static long sys_unlink(long upath, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    struct tcb *t = current_thread;
+    if (t->root_mnt < 0)
+        return -ENOENT;
+    char path[PATH_MAX];
+    if (copyinstr(path, (const void __user *)(uintptr_t)upath, sizeof path, 0) < 0)
+        return -EFAULT;
+    int r = vfs_unlink(t->fs_cap, t->root_mnt, path);
+    return (r == 0) ? 0 : -ENOENT;            /* backend rc collapses to -ENOENT */
+}
+
 void sys_file_register(void) {
     syscall_register(SYS_OPEN,  sys_open);
     syscall_register(SYS_CLOSE, sys_close);
     syscall_register(SYS_FSTAT, sys_fstat);
     syscall_register(SYS_GETDENTS, sys_getdents);   /* DDR-742 */
+    syscall_register(SYS_UNLINK,   sys_unlink);     /* DDR-744 */
 }

@@ -143,3 +143,10 @@ global rootmounttest_elf_end
 rootmounttest_elf:
     incbin "build/rootmounttest.elf"
 rootmounttest_elf_end:
+
+; fs (DDR-744): ring-3 file-lifecycle probe (O_CREAT open + SYS_UNLINK on SFS).
+global fsrmtest_elf
+global fsrmtest_elf_end
+fsrmtest_elf:
+    incbin "build/fsrmtest.elf"
+fsrmtest_elf_end:

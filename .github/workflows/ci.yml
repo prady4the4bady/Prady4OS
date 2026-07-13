@@ -59,6 +59,9 @@ jobs:
       - name: QEMU per-process root-mount test (q35+ext4; probe rooted at ext4)
         run: make smoke-rootmount
 
+      - name: QEMU ring-3 file-lifecycle test (q35; O_CREAT+write+unlink on SFS, DDR-744)
+        run: make smoke-fsrm
+
       - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
         run: make smoke-user
 
