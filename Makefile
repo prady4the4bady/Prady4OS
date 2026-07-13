@@ -69,6 +69,8 @@ USER_AGENTMETRICS_SRC := user/agentmetricstest.c  # L7: per-agent live metrics p
 USER_AGENTMETRICS_ELF := build/agentmetricstest.elf
 USER_CAPNET_SRC := user/capnettest.c      # L6/7: CAP_NET socket-authority probe (DDR-731)
 USER_CAPNET_ELF := build/capnettest.elf
+USER_ROOTMNT_SRC := user/rootmounttest.c  # fs: per-process root-mount probe (DDR-739)
+USER_ROOTMNT_ELF := build/rootmounttest.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -173,7 +175,7 @@ lwip: $(LWIP_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_AGENTMETRICS_SRC) $(USER_CAPNET_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_AGENTMETRICS_SRC) $(USER_CAPNET_SRC) $(USER_ROOTMNT_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -220,7 +222,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AGENTMETRICS_ELF) build/agentmetricstest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CAPNET_SRC) -o build/capnettest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CAPNET_ELF) build/capnettest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_ROOTMNT_SRC) -o build/rootmounttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ROOTMNT_ELF) build/rootmounttest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -415,6 +419,15 @@ smoke-sfs-dirs: $(IMG) fat-image sfs-image
 # it (4th disk) and reads the file back. Asserts the ext4 self-test line.
 smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image
 	EXTRA_SENTINEL='ext4 read works' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Per-process root-mount gate (DDR-739): with the ext4 disk attached, a ring-3
+# probe is spawned with its root_mnt set to ext4 (not the FAT default). It opens
+# /EXT4.TXT (ext4-only) AND fails /HELLO.TXT (FAT-only) -> proves SYS_OPEN
+# resolves against the SELECTED root. Needs the ext4 disk (like smoke-fs-ext4).
+smoke-rootmount: $(IMG) fat-image sfs-image ext4-image
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ROOTMOUNT_OK ext4')" \
+	FORBIDDEN_SENTINEL="ROOTMOUNT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5a user gate: the kernel formats a blank SFS volume (disk2), writes the

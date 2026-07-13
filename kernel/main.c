@@ -349,6 +349,8 @@ extern const unsigned char agentmetricstest_elf[];   /* L7: per-agent live metri
 extern const unsigned char agentmetricstest_elf_end[];
 extern const unsigned char capnettest_elf[];         /* L6/7: CAP_NET socket-authority probe (DDR-731) */
 extern const unsigned char capnettest_elf_end[];
+extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mount probe (DDR-739) */
+extern const unsigned char rootmounttest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -770,6 +772,11 @@ static void fs_test_thread(void *arg) {
     fs_write_test(cap, mnt);
     fat_place_exec_image(cap, mnt);   /* 5b slice 7: /EXECTEST.ELF for systest's execve */
 
+    /* DDR-739: mount ext4 (blk3) ONCE, early, if present — read-only and never
+     * unmounted, so it survives to scheduler time (unlike SFS). Reused below by
+     * both the ext4 read self-test AND the per-process root-mount probe. */
+    int ext4_mnt = (blk_count() > 3) ? vfs_mount(3) : -1;
+
     /* SFS: format a blank disk in-kernel, mount it (FAT32 declines, SFS claims
      * it by superblock magic), then exercise the CoW B+tree — create 10 files,
      * look each up by name, and verify the inode numbers round-trip. */
@@ -952,6 +959,21 @@ static void fs_test_thread(void *arg) {
                  * socket NSI refuses it (-EPERM on connect, and on touching a
                  * slot it doesn't own). Exercised by smoke-capnet. */
                 user_boot_from_sfs(cap, smnt, "CAPNET.ELF", capnettest_elf, capnettest_elf_end, 0);
+                /* fs (DDR-739): per-process root-mount probe. Spawned from its
+                 * embedded bytes (not via SFS — root_mnt is set BEFORE unblock,
+                 * which user_boot_from_sfs doesn't allow) with root_mnt pointed at
+                 * the ext4 mount, only when blk3 is present. It proves SYS_OPEN
+                 * resolves against the selected root. Exercised by smoke-rootmount. */
+                if (ext4_mnt >= 0) {
+                    struct tcb *rmp = 0;
+                    uint64_t rlen = (uint64_t)(rootmounttest_elf_end - rootmounttest_elf);
+                    if (elf_load((void *)(uintptr_t)rootmounttest_elf, rlen,
+                                 "ROOTMNT", &rmp) == ELF_OK && rmp) {
+                        rmp->root_mnt = ext4_mnt;     /* select before unblock (cap-2a D3) */
+                        sched_unblock(rmp);
+                        kputs("[user] ELF loaded (embedded); ext4-rooted probe spawned\r\n");
+                    }
+                }
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.
                  * Prints "PRADYOS_TLS_OK WRITEV_OK" on success. */
                 user_boot_from_sfs(cap, smnt, "TLSTEST.ELF", tlstest_elf, tlstest_elf_end, 0);
@@ -1023,26 +1045,23 @@ static void fs_test_thread(void *arg) {
         }
     }
 
-    /* ext4 read-only (slice 4j): mount the 4th disk and read a host-written file. */
-    if (blk_count() > 3) {
-        int emnt = vfs_mount(3);
-        if (emnt >= 0) {
-            struct vfs_file ef;
-            if (vfs_open(cap, emnt, "/EXT4.TXT", &ef) == 0) {
-                uint64_t buf = pmm_alloc_page();
-                uint32_t want = (ef.size < 4095) ? (uint32_t)ef.size : 4095;
-                int n = vfs_read(cap, &ef, 0, (void *)(uintptr_t)buf, want);
-                ((char *)(uintptr_t)buf)[(n > 0) ? n : 0] = 0;
-                kputs("[ext4] mounted ");
-                kputs(vfs_fs_name(emnt));
-                kputs("; /EXT4.TXT: \"");
-                kputs((char *)(uintptr_t)buf);
-                kputs("\"\r\n");
-            } else {
-                kputs("[ext4] open /EXT4.TXT failed\r\n");
-            }
+    /* ext4 read-only (slice 4j): read a host-written file from the ext4 disk.
+     * DDR-739: reuses the single early ext4 mount (no second vfs_mount). */
+    if (ext4_mnt >= 0) {
+        int emnt = ext4_mnt;
+        struct vfs_file ef;
+        if (vfs_open(cap, emnt, "/EXT4.TXT", &ef) == 0) {
+            uint64_t buf = pmm_alloc_page();
+            uint32_t want = (ef.size < 4095) ? (uint32_t)ef.size : 4095;
+            int n = vfs_read(cap, &ef, 0, (void *)(uintptr_t)buf, want);
+            ((char *)(uintptr_t)buf)[(n > 0) ? n : 0] = 0;
+            kputs("[ext4] mounted ");
+            kputs(vfs_fs_name(emnt));
+            kputs("; /EXT4.TXT: \"");
+            kputs((char *)(uintptr_t)buf);
+            kputs("\"\r\n");
         } else {
-            kputs("[ext4] mount failed\r\n");
+            kputs("[ext4] open /EXT4.TXT failed\r\n");
         }
     }
 }

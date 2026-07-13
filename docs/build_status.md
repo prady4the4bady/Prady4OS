@@ -1149,10 +1149,20 @@ paths are the 1-deep case. Gate `smoke-sfs-dirs` builds/reads `/etc/aether/confi
 rejects dir-as-file + missing-intermediate opens, and enumerates each level.
 **81 gates.** Follow-on slices: switch the process root to SFS, then move
 `/AETHER.CFG` to its intended `/etc/aether/config`.
-**Next:** SFS-as-process-root (needs a per-process root-mount switch + image
-provisioning of the SFS tree); extend PT_HI / grow the disk as the kernel grows;
-perf: context_switch ~1663 ns vs the <=1500 ns target. wlroots/Wayland remain
-out-of-tree.
+**Per-process root mount (DDR-739) — SFS-as-root, half 1/2:** `tcb.root_mnt` was
+per-process (fork inherits it) but hard-wired — `elf_load` set every process to
+`vfs_default_mnt()` (FAT). Added spawn-with-root: the spawner sets `t->root_mnt`
+BEFORE `sched_unblock`. Proven by a ring-3 probe (`user/rootmounttest.c`,
+freestanding) spawned from embedded bytes with its root set to the ext4 mount
+(blk3 — read-only, never unmounted, survives to scheduler time, unlike SFS): it
+opens `/EXT4.TXT` (ext4-only) AND fails `/HELLO.TXT` (FAT-only), two-sided proof
+`SYS_OPEN` used the selected root. The single ext4 mount is taken once early and
+reused by the existing ext4 self-test (within `VFS_MAX_MOUNTS=4`). Gate
+`smoke-rootmount` (needs the ext4 disk). **82 gates.**
+**Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
+self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
+provisioning); extend PT_HI / grow the disk; perf: context_switch ~1663 ns vs the
+<=1500 ns target. wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-13
 
 ## Phase 0 — Toolchain & Build System

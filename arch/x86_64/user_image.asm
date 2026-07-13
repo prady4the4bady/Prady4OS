@@ -136,3 +136,10 @@ global capnettest_elf_end
 capnettest_elf:
     incbin "build/capnettest.elf"
 capnettest_elf_end:
+
+; fs (DDR-739): per-process root-mount probe.
+global rootmounttest_elf
+global rootmounttest_elf_end
+rootmounttest_elf:
+    incbin "build/rootmounttest.elf"
+rootmounttest_elf_end:

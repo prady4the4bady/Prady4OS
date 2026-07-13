@@ -290,6 +290,14 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   (needs image-time SFS tree provisioning — the kernel currently writes SFS
   files at boot, there is no host mkfs.sfs); (b) then move /AETHER.CFG ->
   /etc/aether/config. rmdir/unlink-dir, `.`/`..`, hard links still absent.
+- **Per-process root mount is DONE (DDR-739, 82 gates) — SFS-as-root half 1/2:**
+  a process can be spawned with a chosen root_mnt (spawner sets t->root_mnt
+  before sched_unblock; fork inherits). Proven by an ext4-rooted ring-3 probe
+  (user/rootmounttest.c) opening /EXT4.TXT + failing /HELLO.TXT. ext4 (blk3) is
+  mounted ONCE early in kmain and reused by the ext4 self-test. Gate
+  smoke-rootmount (needs ext4 disk). HALF 2/2 (the actual SFS root) still needs a
+  PERSISTENT SFS volume — the destructive SFS self-tests reformat the only SFS
+  disk — plus image-time /etc/aether/config provisioning.
   Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
