@@ -12,6 +12,16 @@ static inline uint8_t inb(uint16_t port) {
     return r;
 }
 
+static inline void outw(uint16_t port, uint16_t val) {
+    __asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint16_t inw(uint16_t port) {
+    uint16_t r;
+    __asm__ volatile("inw %1, %0" : "=a"(r) : "Nd"(port));
+    return r;
+}
+
 /* Short delay by bouncing a byte off an unused port (0x80) — lets slow legacy
  * controllers (PIC/PIT) settle between writes. */
 static inline void io_wait(void) {

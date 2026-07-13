@@ -215,6 +215,9 @@ jobs:
       - name: QEMU compositor test (q35; sovereign desktop render + key-driven mode, L7)
         run: make smoke-compositor
 
+      - name: QEMU ACPI poweroff test (q35+GPU; sovereign SYS_POWEROFF -> ACPI S5, DDR-746)
+        run: make smoke-poweroff
+
       - name: QEMU pointer test (q35; virtio-tablet QMP move+click -> SYS_MOUSE_POLL, L7)
         run: make smoke-mouse
 

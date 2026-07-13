@@ -94,6 +94,8 @@
 #define SYS_GETPROCS       67  /* (index, struct procinfo*) -> 1(filled) | 0(end) | -errno */
 /* Ring-3 file removal (DDR-744; O_CREAT-on-open handled in sys_open flags). */
 #define SYS_UNLINK         68  /* (path) -> 0 | -errno  (file or empty dir)             */
+/* ACPI S5 poweroff (DDR-746; CAP_SOVEREIGN). No return on success. */
+#define SYS_POWEROFF       69  /* () -> -EPERM (non-sovereign) | -ENODEV (no S5)        */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

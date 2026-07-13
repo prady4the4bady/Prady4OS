@@ -1409,6 +1409,7 @@ void kmain(struct boot_info *bi) {
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();
+    acpi_power_init();          /* DDR-746: parse FADT + \_S5_ for SYS_POWEROFF */
     /* DDR-714 stage A: LAPIC up + APIC timer takes the 100 Hz tick (PIT is then
      * masked). Device IRQs stay on the 8259. Needs ACPI (MADT) + a live PIT for
      * calibration, both true here; falls back to the PIT if no MADT. */

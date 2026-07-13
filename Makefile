@@ -723,6 +723,27 @@ smoke-compositor: $(IMG) fat-image sfs-image
 	@grep -q "PRADYOS_COMPOSITOR_MODE SOVEREIGN" build/comp.log || { echo "[comp] FAIL — key-driven mode flip not confirmed"; tail -20 build/comp.log; exit 1; }
 	@echo "[comp] PASS — desktop rendered + keyboard-driven mode flip confirmed."
 
+# DDR-746 ACPI poweroff gate: boot(GPU) so the sovereign compositor runs, wait
+# for it, then sendkey 'p' -> SYS_POWEROFF -> ACPI S5. QEMU has no -no-shutdown,
+# so S5 makes it exit; the gate asserts the kernel's pre-write PRADYOS_POWEROFF
+# sentinel (and the compositor's key-path marker), and no panic. Only this gate
+# sends 'p', so every other boot is unaffected.
+smoke-poweroff: $(IMG) fat-image sfs-image
+	@echo "[power] poweroff gate: boot(GPU) + sendkey p -> SYS_POWEROFF -> ACPI S5..."
+	@rm -f build/power.log /tmp/ppower.sock
+	@bash tools/qemu_runner/input_inject.sh build/power.log /tmp/ppower.sock PRADYOS_COMPOSITOR_OK "p" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/ppower.sock,server,nowait \
+	    -serial file:build/power.log -display none -no-reboot || true
+	@grep -q "PRADYOS_COMPOSITOR_POWEROFF" build/power.log || { echo "[power] FAIL — compositor did not issue SYS_POWEROFF"; tail -20 build/power.log; exit 1; }
+	@grep -q "PRADYOS_POWEROFF" build/power.log || { echo "[power] FAIL — kernel ACPI S5 path not reached"; tail -20 build/power.log; exit 1; }
+	@if grep -qiE "\[panic\]|KERNEL PANIC" build/power.log; then echo "[power] FAIL: kernel panic"; tail -20 build/power.log; exit 1; fi
+	@echo "[power] PASS — sovereign SYS_POWEROFF reached the ACPI S5 poweroff path."
+
 # Layer-7 pointer gate (DDR-705): boot with the GPU + a virtio-tablet; the
 # compositor renders the desktop, then the harness injects an absolute move + a
 # left click via QMP input-send-event (real virtio-input path). The pointer state

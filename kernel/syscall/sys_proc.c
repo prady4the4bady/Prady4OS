@@ -14,6 +14,7 @@
 #include "vmm.h"               /* VMM_USER_MIN/MAX for fs_base validation */
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D)   */
 #include "rtc.h"               /* rtc_now for SYS_CLOCK (DDR-709)          */
+#include "acpi.h"              /* acpi_poweroff / acpi_power_available (DDR-746) */
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -93,10 +94,24 @@ static long sys_getprocs(long index, long uout, long a3, long a4) {
     return 1;
 }
 
+/* SYS_POWEROFF (DDR-746): ACPI S5 soft-off. CAP_SOVEREIGN-gated (mirrors
+ * SYS_SET_MODE) — a non-sovereign caller gets -EPERM and survives, no
+ * self-escalation (ADR-026 §D6). On authority it does not return; if the S5
+ * path was never resolved it reports -ENODEV instead of hanging. */
+static long sys_poweroff(long a1, long a2, long a3, long a4) {
+    (void)a1; (void)a2; (void)a3; (void)a4;
+    if (!current_thread->is_sovereign)
+        return -EPERM;
+    if (!acpi_power_available())
+        return -ENODEV;
+    acpi_poweroff();                              /* no return */
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
     syscall_register(SYS_SET_TLS, sys_set_tls);
     syscall_register(SYS_CLOCK,   sys_clock);     /* DDR-709 */
     syscall_register(SYS_GETPROCS, sys_getprocs); /* DDR-743 */
+    syscall_register(SYS_POWEROFF, sys_poweroff); /* DDR-746 */
 }

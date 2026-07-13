@@ -21,3 +21,11 @@ struct acpi_sdt_header {
 
 void acpi_init(void);                                       /* locate RSDP + RSDT/XSDT */
 const struct acpi_sdt_header *acpi_find_table(const char sig[4]);   /* NULL if absent */
+
+/* DDR-746: FADT (FACP) power management. acpi_power_init parses the PM1x_CNT
+ * ports + the DSDT \_S5_ sleep-type values; acpi_poweroff performs an ACPI S5
+ * soft-off (does not return on success). acpi_power_available reports whether
+ * the S5 path was found (poweroff is a no-op if not). */
+void acpi_power_init(void);
+int  acpi_power_available(void);
+__attribute__((noreturn)) void acpi_poweroff(void);
