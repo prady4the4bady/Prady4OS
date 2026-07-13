@@ -1136,9 +1136,23 @@ act= disp=` + `PRADYOS_AGENT_PANEL_METRICS_OK`, keyed on the post-mortem-stable
 DDR-730's reverted plan; DDR-733's 768 KiB window removed the image blocker
 (kernel.bin 545 KiB, ~236 KiB headroom). Gate `smoke-agentpanel` (GPU).
 **80 gates.**
-**Next:** SFS-as-process-root (moves /AETHER.CFG to /etc/aether/config); extend
-PT_HI / grow the disk as the kernel grows; perf: context_switch ~1663 ns vs the
-<=1500 ns target. wlroots/Wayland remain out-of-tree.
+**SFS hierarchical directories (DDR-738):** SFS dir keys were already
+`(parent_inode<<32)|hash32`, but `open`/`create` resolved one component under
+the root, `readdir` ignored its path, and inodes had no dir type. Added:
+`SFS_INO_DIR` inode flag (the root is implicitly a dir — back-compatible with
+existing volumes); `sfs_walk` splits the path on `/` and resolves intermediates;
+`open` requires each intermediate to exist and be a directory; `create` does
+**mkdir -p** on intermediates (dir inodes) then the final file; `readdir` walks
+to the target dir inode. All SFS-local — the VFS vtable is unchanged, so FAT/ext4
+and the process root (still FAT) are untouched; existing single-component SFS
+paths are the 1-deep case. Gate `smoke-sfs-dirs` builds/reads `/etc/aether/config`,
+rejects dir-as-file + missing-intermediate opens, and enumerates each level.
+**81 gates.** Follow-on slices: switch the process root to SFS, then move
+`/AETHER.CFG` to its intended `/etc/aether/config`.
+**Next:** SFS-as-process-root (needs a per-process root-mount switch + image
+provisioning of the SFS tree); extend PT_HI / grow the disk as the kernel grows;
+perf: context_switch ~1663 ns vs the <=1500 ns target. wlroots/Wayland remain
+out-of-tree.
 **Last updated:** 2026-07-13
 
 ## Phase 0 — Toolchain & Build System

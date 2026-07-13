@@ -282,6 +282,14 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   retained pid) + up to 4 action pips; one-shot `AGENT_PANEL KRYOS` witness on
   the post-mortem-stable fact. Gate `smoke-agentpanel` (GPU). The DDR-730
   image-budget blocker is gone (DDR-733: kernel 545 KiB of 768).
+- **SFS hierarchical dirs are DONE (DDR-738, 81 gates):** path walk +
+  `SFS_INO_DIR` inode flag (root implicitly a dir) + mkdir-p on create; `open`
+  requires dir intermediates, `readdir` walks to the target dir. SFS-local (VFS
+  vtable unchanged; process root still FAT). Gate `smoke-sfs-dirs` builds
+  `/etc/aether/config`. FOLLOW-ONS: (a) switch a process's root_mnt to SFS
+  (needs image-time SFS tree provisioning — the kernel currently writes SFS
+  files at boot, there is no host mkfs.sfs); (b) then move /AETHER.CFG ->
+  /etc/aether/config. rmdir/unlink-dir, `.`/`..`, hard links still absent.
   Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).

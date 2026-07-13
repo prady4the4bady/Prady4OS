@@ -844,6 +844,41 @@ static void fs_test_thread(void *arg) {
                     kputs(grow_ok ? "to 69632 OK\r\n" : "FAIL\r\n");
                 }
 
+                /* DDR-738: hierarchical directories — create/read a deep path,
+                 * re-open it from a fresh walk, reject a dir-as-file and a
+                 * missing intermediate, and enumerate each level. */
+                {
+                    static const char CFGTEXT[] = "mode=sovereign\n";
+                    int ok = 1;
+                    struct vfs_file f;
+                    /* (1) mkdir -p /etc/aether + create the file, write+read back. */
+                    char rb[32];
+                    if (vfs_create(cap, smnt, "/etc/aether/config", &f) == 0 &&
+                        vfs_write(cap, &f, 0, (void *)CFGTEXT, sizeof CFGTEXT - 1)
+                            == (int)(sizeof CFGTEXT - 1)) {
+                        struct vfs_file g;   /* (2) fresh walk resolves the same file */
+                        if (vfs_open(cap, smnt, "/etc/aether/config", &g) == 0 &&
+                            g.size == sizeof CFGTEXT - 1 &&
+                            vfs_read(cap, &g, 0, rb, sizeof CFGTEXT - 1) == (int)(sizeof CFGTEXT - 1) &&
+                            memcmp(rb, CFGTEXT, sizeof CFGTEXT - 1) == 0)
+                            ; else ok = 0;
+                    } else ok = 0;
+                    /* (3) negative: a directory is not openable as a file, and a
+                     * missing intermediate fails. */
+                    struct vfs_file nf;
+                    if (vfs_open(cap, smnt, "/etc", &nf) == 0) ok = 0;
+                    if (vfs_open(cap, smnt, "/etc/nope/x", &nf) == 0) ok = 0;
+                    /* (4) enumerate each level. */
+                    char nm[256]; uint32_t sz;
+                    int saw_aether = 0, saw_config = 0;
+                    for (int i = 0; vfs_readdir(cap, smnt, "/etc", i, nm, &sz) == 0; i++)
+                        if (nm[0]=='a'&&nm[1]=='e'&&nm[2]=='t'&&nm[3]=='h'&&nm[4]=='e'&&nm[5]=='r'&&!nm[6]) saw_aether = 1;
+                    for (int i = 0; vfs_readdir(cap, smnt, "/etc/aether", i, nm, &sz) == 0; i++)
+                        if (nm[0]=='c'&&nm[1]=='o'&&nm[2]=='n'&&nm[3]=='f'&&nm[4]=='i'&&nm[5]=='g'&&!nm[6]) saw_config = 1;
+                    if (!saw_aether || !saw_config) ok = 0;
+                    kputs(ok ? "[sfs] hier dirs OK\r\n" : "[sfs] hier dirs FAIL\r\n");
+                }
+
                 /* Phase 5a: write each embedded static ELF to SFS, read it BACK
                  * from SFS, and load it into a fresh W^X address space as a ring-3
                  * process (ADR-021). Done while SFS is still mounted, i.e. before

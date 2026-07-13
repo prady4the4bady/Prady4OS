@@ -403,6 +403,14 @@ smoke-fs-sfs-rw: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# SFS hierarchical-directory gate (DDR-738): the kernel builds /etc/aether/config
+# (mkdir -p intermediates), reads it back from a fresh path walk, rejects opening
+# a directory as a file and a missing intermediate, and enumerates each level.
+smoke-sfs-dirs: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf '[sfs] hier dirs OK')" \
+	FORBIDDEN_SENTINEL="hier dirs FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # ext4 read-only gate: a host-built ext4 disk with /EXT4.TXT; the kernel mounts
 # it (4th disk) and reads the file back. Asserts the ext4 self-test line.
 smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image

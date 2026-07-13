@@ -47,6 +47,9 @@ jobs:
       - name: QEMU SFS read-write test (q35; CoW B+tree + extents)
         run: make smoke-fs-sfs-rw
 
+      - name: QEMU SFS hierarchical-dirs test (q35; /etc/aether/config path walk)
+        run: make smoke-sfs-dirs
+
       - name: QEMU ext4 read test (q35; read-only ext4)
         run: make smoke-fs-ext4
 

@@ -30,6 +30,10 @@ struct blk_device;                     /* kernel/drivers/blk/blk.h */
 /* Per-extent flags. */
 #define SFS_EXT_LZ4 (1u << 0)          /* this extent's blocks hold LZ4 data      */
 
+/* Inode flags (sfs_inode.flags; distinct from the per-extent flags above and the
+ * sfs_node type flags). DDR-738: mark a directory inode. */
+#define SFS_INO_DIR (1u << 0)          /* inode is a directory (holds DIR entries) */
+
 #define SFS_ROOT_INODE 1ull            /* inode number of the root directory     */
 #define SFS_MAX_SNAPSHOTS 16u          /* retained snapshot roots in the superblock */
 

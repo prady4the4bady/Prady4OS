@@ -420,7 +420,7 @@ static int sfs_do_lookup(struct sfs_ctx *c, uint64_t parent,
 }
 
 static int sfs_do_create(struct sfs_ctx *c, uint64_t parent,
-                         const char *name, int len, uint64_t *out_inode) {
+                         const char *name, int len, int is_dir, uint64_t *out_inode) {
     if (len <= 0 || len > 255)
         return -1;
     uint64_t dir_key = (parent << 32) | (uint64_t)sfs_name_hash32(name, len);
@@ -435,6 +435,7 @@ static int sfs_do_create(struct sfs_ctx *c, uint64_t parent,
     if (!ip) return -1;
     struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
     memset(in, 0, SFS_BLOCK_SIZE);
+    if (is_dir) in->flags = SFS_INO_DIR;        /* DDR-738: directory inode */
     wr_block(c, iblk, in);
     pmm_free_page(ip);
 
@@ -463,15 +464,73 @@ static const char *skip_slashes(const char *p) {
     return p;
 }
 
+/* Length of the first path component at `p` (up to the next '/' or NUL). */
+static int comp_len(const char *p) {
+    int n = 0;
+    while (p[n] && p[n] != '/') n++;
+    return n;
+}
+
+static uint64_t inode_block_of(struct sfs_ctx *c, uint64_t ino, struct sfs_inode *in);
+
+/* DDR-738: is `ino` a directory? The root inode is a directory by definition
+ * (it predates any inode block on legacy volumes), so it never reads a block. */
+static int sfs_is_dir(struct sfs_ctx *c, uint64_t ino) {
+    if (ino == SFS_ROOT_INODE)
+        return 1;
+    uint64_t ip = pmm_alloc_page();
+    if (!ip) return 0;
+    struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+    int isdir = inode_block_of(c, ino, in) ? (int)(in->flags & SFS_INO_DIR) : 0;
+    pmm_free_page(ip);
+    return isdir;
+}
+
+/* DDR-738: walk `path` to the directory that should CONTAIN its final component,
+ * resolving intermediates. `*final`/`*final_len` name the last component (a file
+ * for open/create). With make_dirs, a missing intermediate is created as a
+ * directory inode (mkdir -p); without it, every intermediate must already exist
+ * and be a directory. Returns 0 with *parent set, or -1 (missing / not-a-dir /
+ * empty final). */
+static int sfs_walk(struct sfs_ctx *c, const char *path, int make_dirs,
+                    uint64_t *parent, const char **final, int *final_len) {
+    uint64_t cur = SFS_ROOT_INODE;
+    const char *p = skip_slashes(path);
+    for (;;) {
+        int len = comp_len(p);
+        if (len == 0)
+            return -1;                          /* trailing slash / empty name */
+        const char *next = skip_slashes(p + len);
+        if (*next == 0) {                       /* p is the final component */
+            *parent = cur; *final = p; *final_len = len;
+            return 0;
+        }
+        /* intermediate component: must resolve to a directory */
+        uint64_t child;
+        if (sfs_do_lookup(c, cur, p, len, &child) == 0) {
+            if (!sfs_is_dir(c, child))
+                return -1;                      /* a file in the middle of a path */
+        } else if (make_dirs) {
+            if (sfs_do_create(c, cur, p, len, 1 /* dir */, &child) != 0)
+                return -1;
+        } else {
+            return -1;                          /* missing intermediate */
+        }
+        cur = child;
+        p = next;
+    }
+}
+
 static int sfs_open(void *ctx, const char *path, struct vfs_file *out) {
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
-    const char *name = skip_slashes(path);
-    int len = name_len_of(name);
-    if (len == 0)
-        return -1;                              /* root dir, not a file */
-    uint64_t ino;
-    if (sfs_do_lookup(c, SFS_ROOT_INODE, name, len, &ino) != 0)
+    uint64_t parent; const char *name; int len;
+    if (sfs_walk(c, path, 0 /* no mkdir */, &parent, &name, &len) != 0)
         return -1;
+    uint64_t ino;
+    if (sfs_do_lookup(c, parent, name, len, &ino) != 0)
+        return -1;
+    if (sfs_is_dir(c, ino))
+        return -1;                              /* open() targets files, not dirs */
     struct sfs_leaf_slot s;
     if (bt_search(c, SFS_KEY_INODE | ino, &s) != 0)
         return -1;
@@ -489,10 +548,11 @@ static int sfs_open(void *ctx, const char *path, struct vfs_file *out) {
 
 static int sfs_create (void *ctx, const char *path, struct vfs_file *out) {
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
-    const char *name = skip_slashes(path);
-    int len = name_len_of(name);
+    uint64_t parent; const char *name; int len;
+    if (sfs_walk(c, path, 1 /* mkdir -p intermediates */, &parent, &name, &len) != 0)
+        return -1;
     uint64_t ino;
-    if (sfs_do_create(c, SFS_ROOT_INODE, name, len, &ino) != 0)
+    if (sfs_do_create(c, parent, name, len, 0 /* file */, &ino) != 0)
         return -1;
     out->size = 0;
     out->cookie = (uint32_t)ino;
@@ -545,11 +605,29 @@ static int sfs_dir_walk(struct sfs_ctx *c, uint64_t blk, uint64_t parent,
     return 0;
 }
 
+/* DDR-738: resolve `path` to the directory inode it names (root when empty). */
+static int sfs_resolve_dir(struct sfs_ctx *c, const char *path, uint64_t *dir) {
+    const char *p = skip_slashes(path);
+    if (*p == 0) { *dir = SFS_ROOT_INODE; return 0; }   /* "" or "/" -> root */
+    uint64_t parent; const char *name; int len;
+    if (sfs_walk(c, path, 0, &parent, &name, &len) != 0)
+        return -1;
+    uint64_t ino;
+    if (sfs_do_lookup(c, parent, name, len, &ino) != 0)
+        return -1;
+    if (!sfs_is_dir(c, ino))
+        return -1;                              /* readdir targets directories */
+    *dir = ino;
+    return 0;
+}
+
 static int sfs_readdir(void *ctx, const char *path, int index, char *name, uint32_t *size) {
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
-    (void)path;
+    uint64_t dir;
+    if (sfs_resolve_dir(c, path, &dir) != 0)
+        return -1;
     int count = 0;
-    int r = sfs_dir_walk(c, c->root_btree, SFS_ROOT_INODE, index, &count, name);
+    int r = sfs_dir_walk(c, c->root_btree, dir, index, &count, name);
     if (r != 1)
         return -1;
     if (size) *size = 0;
@@ -1045,7 +1123,7 @@ int sfs_selftest_journal(struct blk_device *bd) {
     if (sfs_mount(bd, &ctx) != 0) return -1;
     c = (struct sfs_ctx *)ctx;
     sfs_txn_begin(c);
-    sfs_do_create(c, SFS_ROOT_INODE, "AAA", 3, &ino);
+    sfs_do_create(c, SFS_ROOT_INODE, "AAA", 3, 0, &ino);
     sfs_txn_abort(c);
     sfs_umount(c);
     if (sfs_mount(bd, &ctx) != 0) return -1;
@@ -1058,7 +1136,7 @@ int sfs_selftest_journal(struct blk_device *bd) {
     if (sfs_mount(bd, &ctx) != 0) return -1;
     c = (struct sfs_ctx *)ctx;
     sfs_txn_begin(c);
-    sfs_do_create(c, SFS_ROOT_INODE, "BBB", 3, &ino);
+    sfs_do_create(c, SFS_ROOT_INODE, "BBB", 3, 0, &ino);
     sfs_txn_commit(c);
     sfs_umount(c);
     if (sfs_mount(bd, &ctx) != 0) return -1;
@@ -1072,7 +1150,7 @@ int sfs_selftest_journal(struct blk_device *bd) {
     if (sfs_mount(bd, &ctx) != 0) return -1;
     c = (struct sfs_ctx *)ctx;
     sfs_txn_begin(c);
-    sfs_do_create(c, SFS_ROOT_INODE, "CCC", 3, &ino);
+    sfs_do_create(c, SFS_ROOT_INODE, "CCC", 3, 0, &ino);
     c->in_txn = 0;
     sfs_journal_write(c);                              /* journal only ... */
     sfs_umount(c);                                     /* ... superblock lost */
