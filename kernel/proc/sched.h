@@ -121,6 +121,19 @@ struct tcb {
     uint64_t   dispatches;      /* times the scheduler switched this thread in           */
 };
 
+/* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
+ * value copy (no pointers), so a caller can copyout it directly. */
+struct procinfo {
+    uint32_t pid;
+    uint32_t ppid;
+    uint32_t state;             /* raw THREAD_* enum */
+    uint32_t flags;             /* bit 0 = is_user */
+    char     name[16];
+};
+/* Fill *out with the index-th thread in the scheduler ring (walked under
+ * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */
+int         sched_snapshot(int index, struct procinfo *out);
+
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
 struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user_stack);

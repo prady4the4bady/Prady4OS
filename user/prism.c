@@ -19,6 +19,16 @@
 #define SYS_FORK   15
 #define SYS_WAIT4  16
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
+#define SYS_GETPROCS 67     /* DDR-743: (index, struct procinfo*) -> 1 | 0(end) | -errno */
+
+/* Mirrors kernel struct procinfo (sched.h) — pure-value process snapshot. */
+struct procinfo {
+    unsigned int pid;
+    unsigned int ppid;
+    unsigned int state;     /* 0 ready 1 running 2 done 3 blocked 4 zombie */
+    unsigned int flags;     /* bit 0 = user */
+    char name[16];
+};
 #define SYS_GET_MODE 29   /* L7: sovereign/manual toggle binding (DDR-701) */
 #define SYS_SET_MODE 30
 
@@ -150,8 +160,16 @@ int main(void) {
             }
             if (!any) printf("ls: %s: empty or not a directory\n", dir);
         } else if (!strcmp(cmd, "ps")) {
-            printf("ps: pid=%ld (minimal; full ps pending a process-table syscall)\n",
-                   nsi(SYS_GETPID, 0, 0, 0));
+            /* DDR-743: enumerate the scheduler ring via SYS_GETPROCS. */
+            static const char st[] = "RrDBZ";     /* ready run done blkd zomb */
+            printf("  PID  PPID S U NAME\n");
+            struct procinfo pi;
+            for (long i = 0; ; i++) {
+                if (nsi(SYS_GETPROCS, i, (long)&pi, 0) <= 0) break;
+                char s = (pi.state < sizeof st - 1) ? st[pi.state] : '?';
+                printf("%5u %5u %c %c %s\n",
+                       pi.pid, pi.ppid, s, (pi.flags & 1) ? 'u' : 'k', pi.name);
+            }
         } else if (!strcmp(cmd, "exit")) {
             return 0;
         } else {

@@ -90,6 +90,8 @@
 #define SYS_NET_ALLOW      65  /* (host_be, port) -> 0 | -EPERM | -ENOSPC (sovereign) */
 /* Ring-3 directory listing (DDR-742). */
 #define SYS_GETDENTS       66  /* (path, index, name_buf) -> namelen | 0(end) | -errno */
+/* Ring-3 process listing (DDR-743). */
+#define SYS_GETPROCS       67  /* (index, struct procinfo*) -> 1(filled) | 0(end) | -errno */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

@@ -1190,7 +1190,21 @@ and `copyout`s the name. PRISM's `ls [dir]` loops it. Gate: `smoke-shell`
 extended to feed `ls /` and assert an anchored `^HELLO.TXT$` line (PRISM's bare
 name, distinct from the kernel's indented boot `fs_list`) — so it specifically
 exercises the syscall through the real shell. **83 gates** (no new gate).
-`ps` stays a stub (needs a process-table syscall).
+**SYS_GETPROCS — ring-3 process listing / `ps` (DDR-743).** PRISM's `ps` was a
+stub (own pid only); ring 3 could not enumerate the scheduler ring. New
+`SYS_GETPROCS` (NSI 67): `(index, struct procinfo*) -> 1 | 0(end) | -errno`,
+per-entry like `getdents`. `procinfo` is a pure-value snapshot
+`{pid, ppid, state, flags, name[16]}` (flags bit 0 = user). The walk lives in
+`sched.c` as `sched_snapshot(index, out)` — the ring (a persistent all-threads
+circular `tcb.next` list, unlinked only at reap) is walked from
+`current_thread` under `g_sched_lock`; `sys_proc.c` never touches the ring and
+`copyout`s after the snapshot. `ps` loops it, printing `PID PPID S U NAME` for
+every live thread (kernel + user). Gate: `smoke-shell` feeds `ps` and asserts
+the `PID  PPID S U NAME` header (deterministic witness of the syscall). Fixed an
+incidental DDR-742 `ls`-gate flake: the `^HELLO.TXT$` anchor broke when the
+`prism> ` prompt shared the output line (flush/read timing) — relaxed to
+`(^|prism> )HELLO.TXT$`, still trailing-anchored so the kernel's `fs_list` line
+is excluded. **83 gates** (no new gate).
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

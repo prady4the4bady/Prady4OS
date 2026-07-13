@@ -480,7 +480,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@SHIN=$$(mktemp -u /tmp/pradyos_prism.XXXXXX); rm -f build/shell_serial.log; mkfifo "$$SHIN"; \
 	( exec > "$$SHIN"; \
 	  for i in $$(seq 1 300); do grep -q PRISM_READY build/shell_serial.log 2>/dev/null && break; sleep 0.1; done; \
-	  printf 'echo prism-echo-marker\n'; sleep 0.5; printf 'help\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'exit\n'; sleep 0.5 ) & \
+	  printf 'echo prism-echo-marker\n'; sleep 0.5; printf 'help\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'ps\n'; sleep 0.5; printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=disk1 -device virtio-blk-pci,drive=disk1 \
@@ -492,12 +492,18 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@grep -q "prism> "               build/shell_serial.log || { echo "[shell] FAIL: no prism> prompt"; exit 1; }
 	@grep -q "prism-echo-marker"     build/shell_serial.log || { echo "[shell] FAIL: echo builtin";     exit 1; }
 	@grep -q "builtins: help echo"   build/shell_serial.log || { echo "[shell] FAIL: help builtin";     exit 1; }
-	@# DDR-742: PRISM's `ls /` prints bare names (anchored ^NAME$), distinct from
-	@# the kernel's boot fs_list ("    HELLO.TXT  25 bytes"), so this specifically
-	@# exercises SYS_GETDENTS through the shell.
-	@grep -qE "^HELLO\.TXT$$"        build/shell_serial.log || { echo "[shell] FAIL: ls builtin (DDR-742)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-742: PRISM's `ls /` prints bare names, distinct from the kernel's boot
+	@# fs_list ("    HELLO.TXT  25 bytes") and "[fs] /HELLO.TXT:". The prompt
+	@# "prism> " may share the first output line (flush/read timing — flaky if
+	@# anchored to BOL, DDR-743), so accept BOL *or* a "prism> " prefix while the
+	@# trailing "$$" still excludes the kernel's " 25 bytes"/":" suffixed lines.
+	@grep -qE "(^|prism> )HELLO\.TXT$$" build/shell_serial.log || { echo "[shell] FAIL: ls builtin (DDR-742)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-743: PRISM's `ps` prints a "  PID  PPID S U NAME" header (emitted by no
+	@# other path) followed by the ring listing — proves SYS_GETPROCS end-to-end.
+	@# (the prompt "prism> " may share the header's line, so don't anchor to BOL)
+	@grep -qE "PID +PPID S U NAME$$" build/shell_serial.log || { echo "[shell] FAIL: ps builtin (DDR-743)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls, clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps, clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

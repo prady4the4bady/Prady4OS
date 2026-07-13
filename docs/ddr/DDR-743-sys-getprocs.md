@@ -46,6 +46,15 @@ Regression: `smoke-shell`, `smoke-syswait`/`smoke-sysfork` (the ring is walked
 while procs come and go), the SMP set (ring mutated cross-CPU), then the full
 suite.
 
+## Incidental fix — DDR-742 `ls` gate flake
+
+The `ls` assertion `^HELLO\.TXT$$` was flaky: PRISM flushes `prism> ` before
+`readline`, so depending on flush/read timing the first `ls` output line is
+either bare `HELLO.TXT` or `prism> HELLO.TXT`. CI hit the latter and went red
+(run 29260157525). Relaxed to `(^|prism> )HELLO\.TXT$$` — still trailing-anchored,
+so it excludes the kernel's `    HELLO.TXT  25 bytes` and `[fs] /HELLO.TXT:`
+lines. The `ps` header assert avoids the same trap by not anchoring to BOL.
+
 ## Non-goals
 
 - No CPU%/memory columns (run_ticks/dispatches exist per DDR-735 but are agent-

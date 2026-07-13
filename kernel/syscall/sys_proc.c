@@ -75,9 +75,28 @@ static long sys_clock(long a1, long a2, long a3, long a4) {
     return (long)((uint32_t)t.hour * 3600u + (uint32_t)t.minute * 60u + t.second);
 }
 
+/* SYS_GETPROCS (DDR-743): ring-3 process listing for `ps`. Snapshots the
+ * index-th thread in the scheduler ring via sched_snapshot (which walks the ring
+ * under IRQ-off; sys_proc.c must not touch the ring itself), then copies the
+ * pure-value struct out. Returns 1 (filled), 0 (index past the last thread), or
+ * -errno. Best-effort: a create/exit between successive indices only adds/drops
+ * a row, which `ps` tolerates. */
+static long sys_getprocs(long index, long uout, long a3, long a4) {
+    (void)a3; (void)a4;
+    if (index < 0)
+        return -EINVAL;
+    struct procinfo pi;
+    if (!sched_snapshot((int)index, &pi))
+        return 0;                                 /* end of the ring */
+    if (copyout((void __user *)(uintptr_t)uout, &pi, sizeof pi) < 0)
+        return -EFAULT;
+    return 1;
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
     syscall_register(SYS_SET_TLS, sys_set_tls);
     syscall_register(SYS_CLOCK,   sys_clock);     /* DDR-709 */
+    syscall_register(SYS_GETPROCS, sys_getprocs); /* DDR-743 */
 }

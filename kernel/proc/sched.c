@@ -516,6 +516,36 @@ static void sched_free_tcb(struct tcb *t) {
     kfree(t);
 }
 
+/* DDR-743: snapshot the index-th ring thread for SYS_GETPROCS. Walks the
+ * circular ring under g_sched_lock (create/exit/reap mutate it on any CPU),
+ * copies pure values into *out. A create/exit racing between indices only
+ * adds/drops a row — fine for a best-effort `ps`. */
+int sched_snapshot(int index, struct procinfo *out) {
+    if (index < 0 || !current_thread)
+        return 0;
+    uint64_t fl = irq_save();
+    struct tcb *t = current_thread;
+    int i = 0, found = 0;
+    do {
+        if (i == index) {
+            out->pid   = t->pid;
+            out->ppid  = t->parent_pid;
+            out->state = t->state;
+            out->flags = t->is_user ? 1u : 0u;
+            int k = 0;
+            if (t->name)
+                for (; k < 15 && t->name[k]; k++) out->name[k] = t->name[k];
+            out->name[k] = 0;
+            found = 1;
+            break;
+        }
+        i++;
+        t = t->next;
+    } while (t != current_thread);
+    irq_restore(fl);
+    return found;
+}
+
 void sched_destroy(struct tcb *t) {
     if (!t || t == current_thread)
         return;
