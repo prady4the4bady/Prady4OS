@@ -1181,6 +1181,16 @@ files AND empty directories (empty-check via `dir_walk`) through the single
 deferred (bounded leak until reformat; a CoW free-space GC is a later slice).
 Gate `smoke-sfs-unlink` (create/unlink/re-create, ENOTEMPTY, leaf-first rmdir,
 readdir gone). **83 gates.**
+**SYS_GETDENTS — ring-3 directory listing (DDR-742).** Ring 3 had no way to
+enumerate a directory (PRISM's `ls` was a stub). New `SYS_GETDENTS` (NSI 66):
+`(path, index, name_buf) -> namelen | 0(end) | -errno`, per-entry to match
+`vfs_readdir`'s index API. The handler mirrors `sys_open` — resolves `path`
+against the caller's `root_mnt` + `fs_cap` (honoring per-process roots, DDR-739)
+and `copyout`s the name. PRISM's `ls [dir]` loops it. Gate: `smoke-shell`
+extended to feed `ls /` and assert an anchored `^HELLO.TXT$` line (PRISM's bare
+name, distinct from the kernel's indented boot `fs_list`) — so it specifically
+exercises the syscall through the real shell. **83 gates** (no new gate).
+`ps` stays a stub (needs a process-table syscall).
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

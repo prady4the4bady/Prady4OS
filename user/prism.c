@@ -18,6 +18,7 @@
 #define SYS_EXECVE 14
 #define SYS_FORK   15
 #define SYS_WAIT4  16
+#define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
 #define SYS_GET_MODE 29   /* L7: sovereign/manual toggle binding (DDR-701) */
 #define SYS_SET_MODE 30
 
@@ -138,7 +139,16 @@ int main(void) {
             if (argc < 2) printf("run: usage: run <path>\n");
             else do_run(argv[1]);
         } else if (!strcmp(cmd, "ls")) {
-            printf("ls: directory listing pending SYS_GETDENTS (5e+)\n");
+            const char *dir = (argc > 1) ? argv[1] : "/";   /* DDR-742 */
+            char nm[256];
+            int any = 0;
+            for (long i = 0; ; i++) {
+                long len = nsi(SYS_GETDENTS, (long)dir, i, (long)nm);
+                if (len <= 0) break;
+                printf("%s\n", nm);
+                any = 1;
+            }
+            if (!any) printf("ls: %s: empty or not a directory\n", dir);
         } else if (!strcmp(cmd, "ps")) {
             printf("ps: pid=%ld (minimal; full ps pending a process-table syscall)\n",
                    nsi(SYS_GETPID, 0, 0, 0));

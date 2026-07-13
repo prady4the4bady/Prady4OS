@@ -86,8 +86,34 @@ static long sys_fstat(long fd, long ustat, long a3, long a4) {
     return 0;
 }
 
+/* DDR-742: enumerate a directory one entry at a time. Resolves `path` against
+ * the caller's root mount + fs cap (honoring per-process roots, DDR-739), reads
+ * the index-th name via vfs_readdir, and copies it out NUL-terminated. Returns
+ * the name length (>0), 0 when index is past the last entry (end), or -errno. */
+static long sys_getdents(long upath, long index, long ubuf, long a4) {
+    (void)a4;
+    struct tcb *t = current_thread;
+    if (t->root_mnt < 0)
+        return -ENOENT;
+    if (index < 0)
+        return -EINVAL;
+    char path[PATH_MAX];
+    if (copyinstr(path, (const void __user *)(uintptr_t)upath, sizeof path, 0) < 0)
+        return -EFAULT;
+    char name[256];
+    uint32_t sz = 0;
+    if (vfs_readdir(t->fs_cap, t->root_mnt, path, (int)index, name, &sz) != 0)
+        return 0;                              /* no entry at this index = end of dir */
+    int len = 0;
+    while (len < 255 && name[len]) len++;
+    if (copyout((void __user *)(uintptr_t)ubuf, name, (size_t)len + 1) < 0)
+        return -EFAULT;
+    return len;
+}
+
 void sys_file_register(void) {
     syscall_register(SYS_OPEN,  sys_open);
     syscall_register(SYS_CLOSE, sys_close);
     syscall_register(SYS_FSTAT, sys_fstat);
+    syscall_register(SYS_GETDENTS, sys_getdents);   /* DDR-742 */
 }

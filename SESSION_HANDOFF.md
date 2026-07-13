@@ -308,7 +308,12 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   lookup/dir_walk/create honor tombstones (re-creatable, readdir-invisible);
   sfs_unlink does files + empty dirs via the existing vfs_unlink op. Block
   reclamation deferred (bounded leak until reformat). Gate smoke-sfs-unlink.
-  Remaining wall: wlroots/Wayland (out-of-tree).
+- **SYS_GETDENTS is DONE (DDR-742, 83 gates):** ring-3 directory listing (NSI 66:
+  path,index,name_buf -> namelen|0|-errno), resolves against the caller's
+  root_mnt+fs_cap (per-process-root aware). PRISM `ls [dir]` now works; gate is
+  smoke-shell extended with `ls /` asserting `^HELLO.TXT$` (bare name, distinct
+  from the kernel's boot fs_list). `ps` still a stub (needs a process-table
+  syscall). Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).
   - **DDR-712** glass panels + particle field (`blend_px`, `smoke-visual`).
