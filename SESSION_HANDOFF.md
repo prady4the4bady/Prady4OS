@@ -298,6 +298,11 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   smoke-rootmount (needs ext4 disk). HALF 2/2 (the actual SFS root) still needs a
   PERSISTENT SFS volume — the destructive SFS self-tests reformat the only SFS
   disk — plus image-time /etc/aether/config provisioning.
+- **Context-switch lazy FPU is DONE (DDR-740):** schedule() only fxsave/fxrstor's
+  the FPU across USER threads now (guarded on is_user) — kernel threads are
+  -mgeneral-regs-only and never touch it. Switch cost ~1881 -> ~1054 ns (44%),
+  under the <=1500 ns target. smoke-fpu is the correctness gate; the perf number
+  is real-hardware (not CI-assertable on TCG). No new gate.
   Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).

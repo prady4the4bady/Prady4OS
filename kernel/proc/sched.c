@@ -616,13 +616,20 @@ static void schedule_locked(uint64_t fl) {
     uint64_t next_cr3 = next->cr3 ? next->cr3 : kmaster;
     if (next_cr3 != prev_cr3)
         __asm__ volatile("mov %0, %%cr3" :: "r"(next_cr3) : "memory");
-    /* 5d (ADR-023 §D8): eager per-thread FPU save/restore. Save the outgoing
-     * thread's x87+SSE state and load the incoming thread's, so concurrent FPU
-     * users (e.g. two ring-3 C processes) never see each other's XMM/x87 regs.
-     * Nothing between here and context_switch's return into `next` touches the
-     * FPU (this path is -mgeneral-regs-only). */
-    fpu_save(prev->fpu_state);
-    fpu_restore(next->fpu_state);
+    /* 5d (ADR-023 §D8) + DDR-740: per-thread FPU save/restore, but only ACROSS
+     * user threads. The kernel is -mgeneral-regs-only (no SSE even in string
+     * ops), so kernel threads never touch the x87/SSE register file — saving or
+     * restoring it for a kernel-involved switch is pure waste (two 512-byte
+     * FX ops). Save the outgoing state only if it may be dirty (prev is a user
+     * thread); restore the incoming state only if it will be read (next is a
+     * user thread). A user thread thus always sees its own state (U->K saves U;
+     * K->V restores V), while kernel threads — which cannot observe the register
+     * file — are skipped. smoke-fpu (two ring-3 XMM users) is the correctness
+     * gate. Nothing between here and context_switch touches the FPU. */
+    if (prev->is_user)
+        fpu_save(prev->fpu_state);
+    if (next->is_user)
+        fpu_restore(next->fpu_state);
     /* rq-2 D2: name the outgoing thread for whoever resumes on THIS CPU. */
     if (pc)
         pc->prev = prev;

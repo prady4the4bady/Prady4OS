@@ -1159,10 +1159,21 @@ opens `/EXT4.TXT` (ext4-only) AND fails `/HELLO.TXT` (FAT-only), two-sided proof
 `SYS_OPEN` used the selected root. The single ext4 mount is taken once early and
 reused by the existing ext4 self-test (within `VFS_MAX_MOUNTS=4`). Gate
 `smoke-rootmount` (needs the ext4 disk). **82 gates.**
+**Context-switch perf: lazy FPU (DDR-740) — target met.** `schedule()`
+`fxsave`/`fxrstor`'d the 512-byte FPU state on EVERY switch, but the kernel is
+`-mgeneral-regs-only` (no SSE even in string ops), so kernel threads never touch
+the x87/SSE register file — the save/restore was pure waste on any
+kernel-involved switch. Now guarded on `is_user`: save `prev` iff `prev->is_user`,
+restore `next` iff `next->is_user`. A user thread still always sees its own state
+(U->K saves U; K->V restores V); kernel threads (which can't read the file) are
+skipped. Measured cost dropped **~4552 -> ~2547 cycles (~1881 -> ~1054 ns)** — a
+44% cut, under the <=1500 ns Layer-2 target. `smoke-fpu` (two ring-3 XMM users)
+is the correctness gate; the perf number is real-hardware and not CI-assertable
+on TCG. No CR0.TS trap machinery.
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
-provisioning); extend PT_HI / grow the disk; perf: context_switch ~1663 ns vs the
-<=1500 ns target. wlroots/Wayland remain out-of-tree.
+provisioning); extend PT_HI / grow the disk as the kernel grows. wlroots/Wayland
+remain out-of-tree.
 **Last updated:** 2026-07-13
 
 ## Phase 0 — Toolchain & Build System
