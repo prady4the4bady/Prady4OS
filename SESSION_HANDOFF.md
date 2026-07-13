@@ -303,6 +303,11 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   -mgeneral-regs-only and never touch it. Switch cost ~1881 -> ~1054 ns (44%),
   under the <=1500 ns target. smoke-fpu is the correctness gate; the perf number
   is real-hardware (not CI-assertable on TCG). No new gate.
+- **SFS unlink+rmdir are DONE (DDR-741, 83 gates):** removal tombstones the DIR
+  entry (inode_num==0) since the B+tree has no delete and bt_insert replaces;
+  lookup/dir_walk/create honor tombstones (re-creatable, readdir-invisible);
+  sfs_unlink does files + empty dirs via the existing vfs_unlink op. Block
+  reclamation deferred (bounded leak until reformat). Gate smoke-sfs-unlink.
   Remaining wall: wlroots/Wayland (out-of-tree).
 - **Shipped since `199a637` (each CI-green, DDR/ADR before code):**
   - **DDR-711** window close+resize (`SYS_SURFACE_CLOSE/RESIZE` 59/60, `smoke-winops`).

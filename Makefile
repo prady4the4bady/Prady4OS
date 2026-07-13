@@ -415,6 +415,14 @@ smoke-sfs-dirs: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="hier dirs FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# SFS unlink/rmdir gate (DDR-741): the kernel removes a file (tombstone),
+# re-creates the freed name, refuses rmdir on a non-empty dir, removes it
+# leaf-first, and confirms readdir no longer lists it.
+smoke-sfs-unlink: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf '[sfs] unlink/rmdir OK')" \
+	FORBIDDEN_SENTINEL="unlink/rmdir FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # ext4 read-only gate: a host-built ext4 disk with /EXT4.TXT; the kernel mounts
 # it (4th disk) and reads the file back. Asserts the ext4 self-test line.
 smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image

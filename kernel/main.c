@@ -886,6 +886,32 @@ static void fs_test_thread(void *arg) {
                     kputs(ok ? "[sfs] hier dirs OK\r\n" : "[sfs] hier dirs FAIL\r\n");
                 }
 
+                /* DDR-741: unlink (files) + rmdir (empty dirs) via tombstones. */
+                {
+                    int ok = 1;
+                    struct vfs_file f;
+                    /* (1) create -> unlink -> gone from open + readdir. */
+                    if (vfs_create(cap, smnt, "/A.TXT", &f) != 0) ok = 0;
+                    if (vfs_unlink(cap, smnt, "/A.TXT") != 0) ok = 0;
+                    if (vfs_open(cap, smnt, "/A.TXT", &f) == 0) ok = 0;   /* must be gone */
+                    /* (2) re-create the tombstoned name. */
+                    if (vfs_create(cap, smnt, "/A.TXT", &f) != 0) ok = 0;
+                    if (vfs_open(cap, smnt, "/A.TXT", &f) != 0) ok = 0;   /* back */
+                    /* (3) rmdir requires empty: /D/E/F -> /D not empty; leaf-first. */
+                    if (vfs_create(cap, smnt, "/D/E/F", &f) != 0) ok = 0;
+                    if (vfs_unlink(cap, smnt, "/D") == 0) ok = 0;         /* ENOTEMPTY */
+                    if (vfs_unlink(cap, smnt, "/D/E/F") != 0) ok = 0;
+                    if (vfs_unlink(cap, smnt, "/D/E") != 0) ok = 0;
+                    if (vfs_unlink(cap, smnt, "/D") != 0) ok = 0;
+                    char nm[256]; uint32_t sz; int saw_d = 0;
+                    for (int i = 0; vfs_readdir(cap, smnt, "/", i, nm, &sz) == 0; i++)
+                        if (nm[0]=='D'&&!nm[1]) saw_d = 1;
+                    if (saw_d) ok = 0;                                    /* /D gone from readdir */
+                    /* (4) absent name. */
+                    if (vfs_unlink(cap, smnt, "/NOPE") == 0) ok = 0;
+                    kputs(ok ? "[sfs] unlink/rmdir OK\r\n" : "[sfs] unlink/rmdir FAIL\r\n");
+                }
+
                 /* Phase 5a: write each embedded static ELF to SFS, read it BACK
                  * from SFS, and load it into a fresh W^X address space as a ring-3
                  * process (ADR-021). Done while SFS is still mounted, i.e. before

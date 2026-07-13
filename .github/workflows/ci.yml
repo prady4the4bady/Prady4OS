@@ -50,6 +50,9 @@ jobs:
       - name: QEMU SFS hierarchical-dirs test (q35; /etc/aether/config path walk)
         run: make smoke-sfs-dirs
 
+      - name: QEMU SFS unlink/rmdir test (q35; tombstone file + empty-dir removal)
+        run: make smoke-sfs-unlink
+
       - name: QEMU ext4 read test (q35; read-only ext4)
         run: make smoke-fs-ext4
 

@@ -410,6 +410,8 @@ static int sfs_do_lookup(struct sfs_ctx *c, uint64_t parent,
     struct sfs_leaf_slot s;
     if (bt_search(c, key, &s) != 0)
         return -1;
+    if (s.v.dir.inode_num == 0)                /* DDR-741: tombstone = not found */
+        return -1;
     if (s.v.dir.name_len != len)               /* hash-collision guard */
         return -1;
     for (int i = 0; i < len; i++)
@@ -425,8 +427,9 @@ static int sfs_do_create(struct sfs_ctx *c, uint64_t parent,
         return -1;
     uint64_t dir_key = (parent << 32) | (uint64_t)sfs_name_hash32(name, len);
     struct sfs_leaf_slot probe;
-    if (bt_search(c, dir_key, &probe) == 0)
-        return -1;                              /* already exists */
+    if (bt_search(c, dir_key, &probe) == 0 && probe.v.dir.inode_num != 0)
+        return -1;                              /* a LIVE entry exists (DDR-741:
+                                                 * a tombstone slot is reusable) */
 
     uint64_t ino  = c->next_inode++;
     uint64_t iblk = alloc_block(c);
@@ -575,7 +578,8 @@ static int sfs_dir_walk(struct sfs_ctx *c, uint64_t blk, uint64_t parent,
     if (n->flags & SFS_NODE_LEAF) {
         for (int i = 0; i < n->nkeys; i++) {
             uint64_t k = n->u.leaf[i].key;
-            if ((k & SFS_KEY_TYPE_MASK) == SFS_KEY_DIR && (k >> 32) == parent) {
+            if ((k & SFS_KEY_TYPE_MASK) == SFS_KEY_DIR && (k >> 32) == parent &&
+                n->u.leaf[i].v.dir.inode_num != 0) {   /* DDR-741: skip tombstones */
                 if (*count == index) {
                     int l = n->u.leaf[i].v.dir.name_len;
                     for (int j = 0; j < l; j++) name[j] = n->u.leaf[i].v.dir.name[j];
@@ -807,8 +811,36 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
     return (int)len;
 }
 
+/* DDR-741: remove a file or an EMPTY directory by tombstoning its DIR entry
+ * (inode_num = 0). No B+tree delete and no block reclamation (bounded leak until
+ * reformat). Handles both files and dirs through the single vfs_unlink op. */
 static int sfs_unlink(void *ctx, const char *path) {
-    (void)ctx; (void)path; return -1;            /* slice TBD */
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    uint64_t parent; const char *name; int len;
+    if (sfs_walk(c, path, 0, &parent, &name, &len) != 0)
+        return -1;
+    uint64_t ino;
+    if (sfs_do_lookup(c, parent, name, len, &ino) != 0)
+        return -1;                              /* absent or already a tombstone */
+
+    /* A directory may only be removed when empty (no LIVE child of `ino`). */
+    if (sfs_is_dir(c, ino)) {
+        char probe[256]; int cnt = 0;
+        if (sfs_dir_walk(c, c->root_btree, ino, 0, &cnt, probe) == 1)
+            return -1;                          /* not empty (ENOTEMPTY) */
+    }
+
+    /* Overwrite the name->inode entry with a tombstone (bt_insert replaces). */
+    uint64_t dir_key = (parent << 32) | (uint64_t)sfs_name_hash32(name, len);
+    struct sfs_leaf_slot s;
+    memset(&s, 0, sizeof s);
+    s.key = dir_key;
+    s.v.dir.inode_num = 0;                       /* tombstone */
+    s.v.dir.name_len = 0;
+    if (bt_insert(c, &s))
+        return -1;
+    sfs_commit(c);
+    return 0;
 }
 
 /* ---- mount / format / register ------------------------------------------- */

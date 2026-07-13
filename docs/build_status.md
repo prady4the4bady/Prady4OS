@@ -1170,10 +1170,21 @@ skipped. Measured cost dropped **~4552 -> ~2547 cycles (~1881 -> ~1054 ns)** —
 44% cut, under the <=1500 ns Layer-2 target. `smoke-fpu` (two ring-3 XMM users)
 is the correctness gate; the perf number is real-hardware and not CI-assertable
 on TCG. No CR0.TS trap machinery.
+**SFS unlink + rmdir (DDR-741) — lifecycle completed.** `sfs_unlink` was a stub
+and the B+tree has no delete. Since `bt_insert` replaces an equal key, removal
+now overwrites the name->inode DIR entry with a **tombstone** (`inode_num == 0` —
+never valid: root is 1, `next_inode >= 2`). Lookup treats a tombstone as
+not-found, `dir_walk` skips it (invisible to readdir + the empty-dir check), and
+create treats a tombstoned slot as available (re-creatable). `sfs_unlink` handles
+files AND empty directories (empty-check via `dir_walk`) through the single
+`vfs_unlink` op — no VFS-vtable change, FAT/ext4 untouched. Block reclamation
+deferred (bounded leak until reformat; a CoW free-space GC is a later slice).
+Gate `smoke-sfs-unlink` (create/unlink/re-create, ENOTEMPTY, leaf-first rmdir,
+readdir gone). **83 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
-provisioning); extend PT_HI / grow the disk as the kernel grows. wlroots/Wayland
-remain out-of-tree.
+provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
+disk as the kernel grows. wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-13
 
 ## Phase 0 — Toolchain & Build System
