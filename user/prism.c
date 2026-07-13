@@ -20,6 +20,9 @@
 #define SYS_WAIT4  16
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
 #define SYS_GETPROCS 67     /* DDR-743: (index, struct procinfo*) -> 1 | 0(end) | -errno */
+#define SYS_UNLINK   68     /* DDR-744: (path) -> 0 | -errno */
+#define O_WRONLY     0x1    /* DDR-745: touch open mode */
+#define O_CREAT      0x40
 
 /* Mirrors kernel struct procinfo (sched.h) — pure-value process snapshot. */
 struct procinfo {
@@ -122,7 +125,7 @@ int main(void) {
         const char *cmd = argv[0];
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps mode exit\n");
+            printf("builtins: help echo cat run ls ps touch rm mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -170,6 +173,21 @@ int main(void) {
                 printf("%5u %5u %c %c %s\n",
                        pi.pid, pi.ppid, s, (pi.flags & 1) ? 'u' : 'k', pi.name);
             }
+        } else if (!strcmp(cmd, "touch")) {
+            /* DDR-745: create-if-absent an empty file on the (FAT) root. */
+            if (argc < 2) printf("touch: usage: touch <path>\n");
+            else {
+                long fd = nsi(SYS_OPEN, (long)argv[1], O_CREAT | O_WRONLY, 0);
+                if (fd < 0) printf("touch: cannot create %s\n", argv[1]);
+                else { nsi(SYS_CLOSE, fd, 0, 0); printf("touch: %s\n", argv[1]); }
+            }
+        } else if (!strcmp(cmd, "rm")) {
+            /* DDR-745: remove a file (or empty dir) from the root. */
+            if (argc < 2) printf("rm: usage: rm <path>\n");
+            else if (nsi(SYS_UNLINK, (long)argv[1], 0, 0) == 0)
+                printf("rm: removed %s\n", argv[1]);
+            else
+                printf("rm: cannot remove %s\n", argv[1]);
         } else if (!strcmp(cmd, "exit")) {
             return 0;
         } else {
