@@ -1263,6 +1263,15 @@ no cap) `copyout`s the broken-down RTC reading (`rtc_now` → `struct rtc_time
 `TIME YYYY-MM-DD HH:MM:SS` (verified `2026-07-14 08:13:57`) and range-validates
 each field → `PRADYOS_TIME_OK`. Gate `smoke-time` — deterministic (the exact
 value is host-provided but the field ranges always hold). **88 gates.**
+**Kernel log ring + `SYS_DMESG` (DDR-750).** Kernel output went straight out COM1
+with no in-memory record. `kputc` (the single output funnel) now also captures
+every byte into an 8 KiB circular ring under a dedicated leaf spinlock (`klog_lock`,
+always innermost — no deadlock vs. the console lock). `SYS_DMESG` (NSI 73, no cap
+— diagnostic) stages the recent log into a 4 KiB kernel buffer via `klog_read`
+(lock held only around the in-kernel copy, never across `copyout`) and copies it
+out. Freestanding probe `dmesgtest` writes a unique marker (which flows through
+`kputc` into the ring), reads the log back, and confirms the marker → ring-size-
+independent proof. Gate `smoke-dmesg`. **89 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

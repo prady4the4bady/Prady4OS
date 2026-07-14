@@ -23,7 +23,45 @@ static inline void irq_restore(uint64_t f) {
     spin_unlock_irqrestore(&g_console_lock, f);
 }
 
+/* DDR-750: kernel log ring. Every byte emitted through kputc is captured into a
+ * fixed circular buffer so a running program can read the log back (SYS_DMESG).
+ * A dedicated leaf spinlock guards it — always taken innermost (the console lock,
+ * when held by the bulk printers, nests outside it), so there is no deadlock; the
+ * per-char lock is negligible against kputc's UART busy-wait below. */
+#define KLOG_SZ 8192u
+static char        klog_buf[KLOG_SZ];
+static uint32_t    klog_head;                  /* next write position           */
+static uint64_t    klog_total;                 /* total bytes ever written       */
+static spinlock_t  klog_lock = SPINLOCK_INIT;
+
+static void klog_putc(char c) {
+    uint64_t fl = spin_lock_irqsave(&klog_lock);
+    klog_buf[klog_head] = c;
+    klog_head = (klog_head + 1u) % KLOG_SZ;
+    klog_total++;
+    spin_unlock_irqrestore(&klog_lock, fl);
+}
+
+/* Copy the most-recent min(max, available) bytes of the log, oldest-to-newest,
+ * into the kernel buffer `dst`. Returns the byte count. Lock held only around the
+ * in-kernel copy — the caller copyouts to user space afterwards (never under the
+ * lock). */
+uint32_t klog_read(char *dst, uint32_t max) {
+    uint64_t fl = spin_lock_irqsave(&klog_lock);
+    uint32_t avail = (klog_total < KLOG_SZ) ? (uint32_t)klog_total : KLOG_SZ;
+    uint32_t n     = (avail < max) ? avail : max;
+    uint32_t oldest = (klog_total < KLOG_SZ) ? 0u : klog_head;  /* ring-full: oldest at head */
+    uint32_t pos    = (oldest + (avail - n)) % KLOG_SZ;         /* keep most-recent n bytes   */
+    for (uint32_t i = 0; i < n; i++) {
+        dst[i] = klog_buf[pos];
+        pos = (pos + 1u) % KLOG_SZ;
+    }
+    spin_unlock_irqrestore(&klog_lock, fl);
+    return n;
+}
+
 void kputc(char c) {
+    klog_putc(c);                             /* DDR-750: capture into the log ring */
     while ((inb(COM1 + 5) & 0x20) == 0) { }   /* wait for THRE */
     outb(COM1, (uint8_t)c);
 }

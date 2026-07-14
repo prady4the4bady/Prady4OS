@@ -357,6 +357,8 @@ extern const unsigned char sysinfotest_elf[];         /* sys: SYS_SYSINFO probe 
 extern const unsigned char sysinfotest_elf_end[];
 extern const unsigned char timetest_elf[];            /* sys: SYS_TIME probe (DDR-749) */
 extern const unsigned char timetest_elf_end[];
+extern const unsigned char dmesgtest_elf[];           /* sys: SYS_DMESG probe (DDR-750) */
+extern const unsigned char dmesgtest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -998,6 +1000,9 @@ static void fs_test_thread(void *arg) {
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
                  * prints TIME YYYY-MM-DD HH:MM:SS + PRADYOS_TIME_OK. Gate smoke-time. */
                 user_boot_from_sfs(cap, smnt, "TIME.ELF", timetest_elf, timetest_elf_end, 0);
+                /* sys (DDR-750): SYS_DMESG probe — writes a marker then reads the
+                 * kernel log back and confirms it. Gate smoke-dmesg. */
+                user_boot_from_sfs(cap, smnt, "DMESG.ELF", dmesgtest_elf, dmesgtest_elf_end, 0);
                 /* fs (DDR-739): per-process root-mount probe. Spawned from its
                  * embedded bytes (not via SFS — root_mnt is set BEFORE unblock,
                  * which user_boot_from_sfs doesn't allow) with root_mnt pointed at

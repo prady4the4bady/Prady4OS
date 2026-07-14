@@ -219,8 +219,25 @@ static long sys_read(long fd, long ubuf, long count, long a4) {
     return -EBADF;
 }
 
+/* SYS_DMESG (DDR-750): copy the recent kernel log to a user buffer. No cap
+ * (diagnostic, like the other introspection syscalls). Capped at 4 KiB per call;
+ * staged into a kernel buffer under klog's lock, then copyout (never a user
+ * fault under the log lock). */
+static long sys_dmesg(long ubuf, long max, long a3, long a4) {
+    (void)a3; (void)a4;
+    if (max <= 0)
+        return 0;
+    char kbuf[4096];
+    uint32_t want = (max > (long)sizeof kbuf) ? (uint32_t)sizeof kbuf : (uint32_t)max;
+    uint32_t n = klog_read(kbuf, want);
+    if (n && copyout((void __user *)(uintptr_t)ubuf, kbuf, n) < 0)
+        return -EFAULT;
+    return (long)n;
+}
+
 void sys_io_register(void) {
     syscall_register(SYS_READ, sys_read);
     syscall_register(SYS_WRITE, sys_write);
     syscall_register(SYS_WRITEV, sys_writev);
+    syscall_register(SYS_DMESG, sys_dmesg);      /* DDR-750 */
 }

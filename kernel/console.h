@@ -2,7 +2,8 @@
 #pragma once
 #include <stdint.h>
 
-void kputc(char c);                       /* one byte to COM1 */
+void kputc(char c);                       /* one byte to COM1 (also captured into the log ring) */
+uint32_t klog_read(char *dst, uint32_t max); /* DDR-750: copy recent kernel log bytes */
 void console_rx_init(void);                /* arm COM1 RX IRQ + ring buffer (5e) */
 int  kgetc_nb(void);                       /* COM1 RX: one buffered byte, or -1 (5e) */
 void kputs(const char *s);                /* NUL-terminated string to COM1 */

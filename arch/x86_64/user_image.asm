@@ -164,3 +164,10 @@ global timetest_elf_end
 timetest_elf:
     incbin "build/timetest.elf"
 timetest_elf_end:
+
+; sys (DDR-750): SYS_DMESG kernel-log read-back probe.
+global dmesgtest_elf
+global dmesgtest_elf_end
+dmesgtest_elf:
+    incbin "build/dmesgtest.elf"
+dmesgtest_elf_end:

@@ -102,6 +102,8 @@
 #define SYS_SYSINFO        71  /* (struct sysinfo*) -> 0 | -EFAULT                      */
 /* Wall-clock date/time (DDR-749; no cap — read-only RTC). */
 #define SYS_TIME           72  /* (struct rtc_time*) -> 0 | -EFAULT                     */
+/* Kernel log read-back (DDR-750; no cap — diagnostic). */
+#define SYS_DMESG          73  /* (buf, max) -> bytes copied | -EFAULT                  */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
