@@ -29,3 +29,4 @@ const struct acpi_sdt_header *acpi_find_table(const char sig[4]);   /* NULL if a
 void acpi_power_init(void);
 int  acpi_power_available(void);
 __attribute__((noreturn)) void acpi_poweroff(void);
+__attribute__((noreturn)) void acpi_reboot(void);   /* DDR-747: ACPI/PC reset */

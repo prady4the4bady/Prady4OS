@@ -107,6 +107,15 @@ static long sys_poweroff(long a1, long a2, long a3, long a4) {
     acpi_poweroff();                              /* no return */
 }
 
+/* SYS_REBOOT (DDR-747): ACPI/PC reset. CAP_SOVEREIGN-gated like SYS_POWEROFF;
+ * the 0xCF9/8042 fallbacks always reset on a PC, so no -ENODEV. No return. */
+static long sys_reboot(long a1, long a2, long a3, long a4) {
+    (void)a1; (void)a2; (void)a3; (void)a4;
+    if (!current_thread->is_sovereign)
+        return -EPERM;
+    acpi_reboot();                                /* no return */
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
@@ -114,4 +123,5 @@ void sys_proc_register(void) {
     syscall_register(SYS_CLOCK,   sys_clock);     /* DDR-709 */
     syscall_register(SYS_GETPROCS, sys_getprocs); /* DDR-743 */
     syscall_register(SYS_POWEROFF, sys_poweroff); /* DDR-746 */
+    syscall_register(SYS_REBOOT,   sys_reboot);   /* DDR-747 */
 }

@@ -86,6 +86,8 @@ const struct acpi_sdt_header *acpi_find_table(const char sig[4]) {
 static uint16_t g_pm1a_cnt, g_pm1b_cnt;   /* PM1{a,b} control I/O ports        */
 static uint8_t  g_slp_typa, g_slp_typb;   /* \_S5_ sleep-type values (3 bits)  */
 static int      g_s5_ok;                  /* set once the S5 path is resolved  */
+static uint16_t g_reset_port;             /* FADT RESET_REG I/O port (0 = none) */
+static uint8_t  g_reset_value;            /* FADT RESET_VALUE                   */
 
 /* Little-endian u32 at a byte offset into a table (FADT fields are unaligned). */
 static uint32_t acpi_rd32(const void *base, uint32_t off) {
@@ -131,8 +133,25 @@ void acpi_power_init(void) {
         break;
     }
 
+    /* DDR-747: FADT reset register (ACPI §5.2.9). Flags@112 bit10 =
+     * RESET_REG_SUPPORTED; RESET_REG is a GAS@116 (byte0 = address_space_id,
+     * bytes4..11 = address); RESET_VALUE@128. Only a System-I/O (id==1) register
+     * is used — memory/PCI-config reset spaces need a different access path and
+     * the 0xCF9/8042 fallbacks in acpi_reboot() cover QEMU regardless. */
+    uint32_t flags = acpi_rd32(fadt, 112);
+    if ((flags & (1u << 10)) && ((const uint8_t *)fadt)[116] == 1) {
+        uint64_t addr = 0;
+        for (int k = 0; k < 8; k++)
+            addr |= (uint64_t)((const uint8_t *)fadt)[116 + 4 + k] << (8 * k);
+        if (addr && addr <= 0xFFFFu) {
+            g_reset_port  = (uint16_t)addr;
+            g_reset_value = ((const uint8_t *)fadt)[128];
+        }
+    }
+
     kputs("ACPI: FADT ok, S5 ");
-    kputs(g_s5_ok ? "found\r\n" : "NOT found\r\n");
+    kputs(g_s5_ok ? "found" : "NOT found");
+    kputs(g_reset_port ? ", reset-reg\r\n" : "\r\n");
 }
 
 int acpi_power_available(void) { return g_s5_ok; }
@@ -146,6 +165,20 @@ __attribute__((noreturn)) void acpi_poweroff(void) {
             outw(g_pm1b_cnt, (uint16_t)(((uint16_t)(g_slp_typb & 7u) << 10) | ACPI_SLP_EN));
     }
     /* Still running -> S5 unavailable or refused. Halt this CPU forever. */
+    for (;;)
+        __asm__ volatile("cli; hlt");
+}
+
+__attribute__((noreturn)) void acpi_reboot(void) {
+    kputs("PRADYOS_REBOOT\r\n");
+    /* 1. FADT reset register (if a System-I/O one was parsed). */
+    if (g_reset_port)
+        outb(g_reset_port, g_reset_value);
+    /* 2. PCI reset-control port 0xCF9: SYS_RST|RST_CPU|FULL_RST. */
+    outb(0xCF9, 0x0E);
+    /* 3. 8042 keyboard controller: pulse the CPU reset line. */
+    outb(0x64, 0xFE);
+    /* All reset paths failed (or are disabled) — halt this CPU forever. */
     for (;;)
         __asm__ volatile("cli; hlt");
 }

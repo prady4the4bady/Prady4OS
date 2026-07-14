@@ -11,6 +11,7 @@
 #define SYS_YIELD       3
 #define SYS_EXIT        4
 #define SYS_POWEROFF    69   /* DDR-746: ACPI S5 (CAP_SOVEREIGN) */
+#define SYS_REBOOT      70   /* DDR-747: ACPI/PC reset (CAP_SOVEREIGN) */
 #define SYS_GET_MODE    29
 #define SYS_SET_MODE    30
 #define SYS_SPAWN_AGENT 35
@@ -840,6 +841,11 @@ int main(void) {
                 printf("PRADYOS_COMPOSITOR_POWEROFF\n");
                 fflush(stdout);
                 nsi(SYS_POWEROFF, 0, 0, 0);                  /* S5 — no return if it works */
+            }
+            else if (c == 'b') {                             /* DDR-747: ACPI/PC reboot */
+                printf("PRADYOS_COMPOSITOR_REBOOT\n");
+                fflush(stdout);
+                nsi(SYS_REBOOT, 0, 0, 0);                    /* reset — no return if it works */
             }
             else if (c == 'r') {                             /* DDR-717: restore all */
                 g_min_mask = 0;

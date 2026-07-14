@@ -96,6 +96,8 @@
 #define SYS_UNLINK         68  /* (path) -> 0 | -errno  (file or empty dir)             */
 /* ACPI S5 poweroff (DDR-746; CAP_SOVEREIGN). No return on success. */
 #define SYS_POWEROFF       69  /* () -> -EPERM (non-sovereign) | -ENODEV (no S5)        */
+/* ACPI/PC reboot (DDR-747; CAP_SOVEREIGN). No return on success. */
+#define SYS_REBOOT         70  /* () -> -EPERM (non-sovereign)                          */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

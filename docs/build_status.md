@@ -1237,6 +1237,16 @@ interpreter); `acpi_poweroff()` prints `PRADYOS_POWEROFF` then writes
 key issues it. Gate `smoke-poweroff`: GPU boot + QMP `sendkey p`; QEMU has no
 `-no-shutdown`, so S5 exits it — the gate asserts the pre-write sentinel (only
 this gate sends `p`, so other boots are unaffected). **85 gates.**
+**ACPI reboot — `SYS_REBOOT` (DDR-747).** Sibling of DDR-746, completing basic
+power management. `acpi_power_init()` also parses the FADT reset register
+(Flags@112 bit10 `RESET_REG_SUPPORTED`, RESET_REG GAS@116, RESET_VALUE@128, when
+System-I/O). `acpi_reboot()` prints `PRADYOS_REBOOT` then tries, in order: the
+FADT reset write, `0xCF9<-0x0E` (PCI reset), `0x64<-0xFE` (8042 CPU-reset pulse) —
+the last two always reset a PC/QEMU, so reboot is robust regardless of the FADT.
+Exposed as `SYS_REBOOT` (NSI 70), CAP_SOVEREIGN-gated like `SYS_POWEROFF` (no
+`-ENODEV` — reset is always attempted). Compositor `b` key issues it. Gate
+`smoke-reboot`: GPU boot + QMP `sendkey b`; QEMU runs `-no-reboot`, so the reset
+exits it — asserts the pre-reset sentinel (only this gate sends `b`). **86 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
@@ -1290,7 +1300,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | NVMe Driver | 🔴 NOT BUILT | 3 | priority storage (registers with blk layer) |
 | GPU Framebuffer | 🟢 COMPLETE | 7-s0 | `kernel/drivers/gpu/virtio_gpu.c` (ADR-028): VirtIO-GPU 2D bring-up (display-info → create_2d → attach_backing → set_scanout → transfer → flush), linear BGRA framebuffer from the PMM pool. Gate `smoke-gpu`. Ring-3 surface via `SYS_FB_*` (DDR-702, gate `smoke-fb`). Double-buffer/page-flip deferred. |
 | Network Driver (virtio-net) | 🟢 COMPLETE | 3/NET-A | `kernel/drivers/net/virtio_net.c` (ADR-014): modern virtio-pci, RX/TX virtqueues, MAC, shared-INTx handler; RX delivery fixed in NET-B. Carries lwIP (ADR-025). |
-| ACPI Power Management (FADT/S5) | 🟡 IN PROGRESS | 3 | **DDR-746:** FADT (`FACP`) parsed for PM1a/b_CNT + DSDT `\_S5_` scan; `acpi_poweroff()` performs ACPI S5 soft-off, exposed as `SYS_POWEROFF` (NSI 69, CAP_SOVEREIGN). Compositor `p` key powers off. Gate `smoke-poweroff`. Reset register, S1–S4, MADT-via-FADT, full AML interpreter still future. |
+| ACPI Power Management (FADT/S5/reset) | 🟡 IN PROGRESS | 3 | **DDR-746/747:** FADT (`FACP`) parsed for PM1a/b_CNT + DSDT `\_S5_` scan + reset register; `acpi_poweroff()` = ACPI S5 soft-off (`SYS_POWEROFF`, NSI 69), `acpi_reboot()` = FADT-reset/0xCF9/8042 reset (`SYS_REBOOT`, NSI 70), both CAP_SOVEREIGN. Compositor `p`=off, `b`=reboot. Gates `smoke-poweroff`, `smoke-reboot`. S1–S4, MADT-via-FADT, full AML interpreter still future. |
 | VFS Layer | 🟢 COMPLETE | 4 | `kernel/fs/vfs/` (ADR-015): driver registry + **mount table** (per-mount context vtable; FAT32/SFS/ext4 mountable side-by-side) + `open`/`create`/`read`/`write`/`unlink`/`readdir`, all capability-gated (CAP_FS_READ/WRITE via NCS) + per-thread write budget. Full mount-point namespace deferred. |
 | FAT32 (read-write) | 🟢 COMPLETE | 4 | `kernel/fs/fat32/` (ADR-015): BPB parse, FAT chain, 8.3 + **VFAT long-name read** (ADR-020), nested paths. Read-write (4c): create/write/unlink, all-or-nothing alloc, read-back verify (`smoke-fs-rw`). **Timestamps** from RTC (4j). LFN *write* deferred (creates 8.3). |
 | RTC / CMOS clock | 🟢 COMPLETE | 3 | `kernel/drivers/rtc/` (ADR-020): wall-clock via ports 0x70/0x71 (BCD/binary, 12/24h, stable read). `rtc_now` + `rtc_fat_datetime`; powers FS timestamps and later CLOCK_REALTIME. (Deferred Layer-3 item, pulled in at 4j.) |

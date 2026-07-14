@@ -744,6 +744,26 @@ smoke-poweroff: $(IMG) fat-image sfs-image
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/power.log; then echo "[power] FAIL: kernel panic"; tail -20 build/power.log; exit 1; fi
 	@echo "[power] PASS — sovereign SYS_POWEROFF reached the ACPI S5 poweroff path."
 
+# DDR-747 ACPI reboot gate: like smoke-poweroff but sendkey 'b' -> SYS_REBOOT ->
+# ACPI/PC reset. QEMU runs with -no-reboot, so a CPU reset makes it exit; the gate
+# asserts the kernel's pre-reset PRADYOS_REBOOT sentinel + the compositor marker,
+# and no panic. Only this gate sends 'b', so every other boot is unaffected.
+smoke-reboot: $(IMG) fat-image sfs-image
+	@echo "[reboot] reboot gate: boot(GPU) + sendkey b -> SYS_REBOOT -> ACPI/PC reset..."
+	@rm -f build/reboot.log /tmp/preboot.sock
+	@bash tools/qemu_runner/input_inject.sh build/reboot.log /tmp/preboot.sock PRADYOS_COMPOSITOR_OK "b" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/preboot.sock,server,nowait \
+	    -serial file:build/reboot.log -display none -no-reboot || true
+	@grep -q "PRADYOS_COMPOSITOR_REBOOT" build/reboot.log || { echo "[reboot] FAIL — compositor did not issue SYS_REBOOT"; tail -20 build/reboot.log; exit 1; }
+	@grep -q "PRADYOS_REBOOT" build/reboot.log || { echo "[reboot] FAIL — kernel reset path not reached"; tail -20 build/reboot.log; exit 1; }
+	@if grep -qiE "\[panic\]|KERNEL PANIC" build/reboot.log; then echo "[reboot] FAIL: kernel panic"; tail -20 build/reboot.log; exit 1; fi
+	@echo "[reboot] PASS — sovereign SYS_REBOOT reached the ACPI/PC reset path."
+
 # Layer-7 pointer gate (DDR-705): boot with the GPU + a virtio-tablet; the
 # compositor renders the desktop, then the harness injects an absolute move + a
 # left click via QMP input-send-event (real virtio-input path). The pointer state
