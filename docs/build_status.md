@@ -1272,6 +1272,15 @@ always innermost — no deadlock vs. the console lock). `SYS_DMESG` (NSI 73, no 
 out. Freestanding probe `dmesgtest` writes a unique marker (which flows through
 `kputc` into the ring), reads the log back, and confirms the marker → ring-size-
 independent proof. Gate `smoke-dmesg`. **89 gates.**
+**PRISM system builtins (DDR-751).** The DDR-748/749/750 syscalls had only test
+probes as consumers. PRISM (musl C, so `printf` formatting is free) gains
+`uname` (SYS_SYSINFO → `AuthenticAMD "QEMU Virtual CPU version 2.5+" cpus=1`),
+`date` (SYS_TIME → `2026-07-14 22:19:12`), `uptime` (SYS_SYSINFO
+`uptime_ticks/100`), and `dmesg` (SYS_DMESG → byte-count header + the recent log).
+No kernel change (all three syscalls are uncapped). `poweroff`/`reboot` are
+intentionally omitted (CAP_SOVEREIGN — the compositor's `p`/`b` keys). Gate:
+`smoke-shell` feeds all four and asserts their fixed output shapes. **89 gates**
+(no new gate).
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
@@ -1334,7 +1343,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | ext4 Compatibility | 🟢 COMPLETE | 4 | `kernel/fs/ext4/` (ADR-019, slice 4j): **read-only** (the Layer-4 scope; write is out of scope) — superblock, group descriptors, extent-mapped inodes (depth-0), linear dir scan, nested paths. Verified reading a host `mkfs.ext4 -d` volume (4th disk). Write, multi-level extents, block-mapped inodes deferred. |
 | ELF64 loader + W^X (static) | 🟢 COMPLETE | 5a | `kernel/exec/elf.c` (ADR-021): validates ET_EXEC/x86-64, maps each PT_LOAD into a fresh per-process AS with p_flags→W^X perms (text RX, rodata R-NX, data RW-NX; **W+X rejected**), zero-fills BSS, 8 MiB RW-NX user stack + unmapped guard page, SysV `argc/argv/envp/auxv` frame; spawns a ring-3 thread (cap delivered in RDI). Bootstrapped via SFS: the embedded test ELF (`user/hello.asm`) is written to SFS then **loaded back from SFS** — prints `HELLO FROM RING-3`, exits via sys_exit. W^X negative regression (`user/wxviol.asm`: write to RX text → #PF err=0x7 → clean kill, kernel survives). Gate `smoke-user` PASS. COW fork / dynamic linking / AS-reaping deferred. |
 | pradyos-init (PID 1) | 🟢 COMPLETE | 5d | `user/init.c` (musl C, not Rust): PID 1, forks+reaps a child, then the system reaper loop; spawns PRISM. Gate `smoke-init`. |
-| PRISM Shell | 🟢 COMPLETE | 5e | `user/prism.c` (musl C): serial-console shell, builtins help/echo/cat/run/ls/ps/touch/rm/`mode`/exit (ls=SYS_GETDENTS, ps=SYS_GETPROCS, touch/rm=O_CREAT/SYS_UNLINK on the FAT root); console RX via IRQ4 ring. Gate `smoke-shell`. Agent DSL / job control deferred (ADR-024). |
+| PRISM Shell | 🟢 COMPLETE | 5e | `user/prism.c` (musl C): serial-console shell, builtins help/echo/cat/run/ls/ps/touch/rm/uname/date/uptime/dmesg/`mode`/exit (ls=SYS_GETDENTS, ps=SYS_GETPROCS, touch/rm=O_CREAT/SYS_UNLINK on the FAT root, uname=SYS_SYSINFO, date=SYS_TIME, uptime=SYS_SYSINFO, dmesg=SYS_DMESG — DDR-751); console RX via IRQ4 ring. Gate `smoke-shell`. Agent DSL / job control deferred (ADR-024). |
 | musl libc port | 🟢 COMPLETE | 5c/PROC-D | `third_party/musl` subset (libc.a + crt1.o) via `tools/build_musl.sh`, overrides in `third_party/musl-overlay/`; TLS + stdio + printf via SYS_WRITEV. Gate `smoke` (cmusl). |
 | prad package manager | 🔴 NOT BUILT | 5 | |
 | AETHER Daemon | 🟢 COMPLETE | 6 | `user/aether_daemon.c` (PID-2, CAP_SOVEREIGN): spawns the test agent via SYS_SPAWN_AGENT, reaps children, runs the mode-binding self-check. Gate `smoke-aether`. |

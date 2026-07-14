@@ -530,7 +530,8 @@ smoke-shell: $(IMG) fat-image sfs-image
 	( exec > "$$SHIN"; \
 	  for i in $$(seq 1 300); do grep -q PRISM_READY build/shell_serial.log 2>/dev/null && break; sleep 0.1; done; \
 	  printf 'echo prism-echo-marker\n'; sleep 0.5; printf 'help\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'ps\n'; sleep 0.5; \
-	  printf 'touch /PRISMNEW.TXT\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'rm /PRISMNEW.TXT\n'; sleep 0.5; printf 'exit\n'; sleep 0.5 ) & \
+	  printf 'touch /PRISMNEW.TXT\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'rm /PRISMNEW.TXT\n'; sleep 0.5; \
+	  printf 'uname\n'; sleep 0.5; printf 'date\n'; sleep 0.5; printf 'uptime\n'; sleep 0.5; printf 'dmesg\n'; sleep 0.5; printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=disk1 -device virtio-blk-pci,drive=disk1 \
@@ -556,8 +557,13 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# O_CREAT through the shell on the real FAT root), and `rm` must confirm removal.
 	@grep -qE "(^|prism> )PRISMNEW\.TXT$$" build/shell_serial.log || { echo "[shell] FAIL: touch builtin (DDR-745)"; tail -30 build/shell_serial.log; exit 1; }
 	@grep -qF "rm: removed /PRISMNEW.TXT" build/shell_serial.log || { echo "[shell] FAIL: rm builtin (DDR-745)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-751: system-introspection builtins. Values vary but the shapes are fixed.
+	@grep -qE "uname: .*cpus="        build/shell_serial.log || { echo "[shell] FAIL: uname builtin (DDR-751)";  tail -30 build/shell_serial.log; exit 1; }
+	@grep -qE "date: 20[0-9][0-9]-"   build/shell_serial.log || { echo "[shell] FAIL: date builtin (DDR-751)";   tail -30 build/shell_serial.log; exit 1; }
+	@grep -qE "uptime: [0-9]+s"       build/shell_serial.log || { echo "[shell] FAIL: uptime builtin (DDR-751)"; tail -30 build/shell_serial.log; exit 1; }
+	@grep -qE "dmesg: [1-9][0-9]* bytes" build/shell_serial.log || { echo "[shell] FAIL: dmesg builtin (DDR-751)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm, clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg, clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

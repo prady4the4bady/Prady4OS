@@ -23,6 +23,22 @@
 #define SYS_UNLINK   68     /* DDR-744: (path) -> 0 | -errno */
 #define O_WRONLY     0x1    /* DDR-745: touch open mode */
 #define O_CREAT      0x40
+#define SYS_SYSINFO  71     /* DDR-748: (struct sysinfo*) -> 0 | -EFAULT */
+#define SYS_TIME     72     /* DDR-749: (struct rtc_time*) -> 0 | -EFAULT */
+#define SYS_DMESG    73     /* DDR-750: (buf, max) -> bytes | -EFAULT */
+
+/* Mirror of kernel struct sysinfo (sys_proc.c) — DDR-748. */
+struct sysinfo {
+    char vendor[16];
+    char brand[64];
+    unsigned cpu_count, feat_edx, feat_ecx, _pad;
+    unsigned long long uptime_ticks, free_pages;
+};
+/* Mirror of kernel struct rtc_time (rtc.h) — DDR-749. */
+struct rtc_time {
+    unsigned short year;
+    unsigned char  month, day, hour, minute, second;
+};
 
 /* Mirrors kernel struct procinfo (sched.h) — pure-value process snapshot. */
 struct procinfo {
@@ -125,7 +141,7 @@ int main(void) {
         const char *cmd = argv[0];
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps touch rm mode exit\n");
+            printf("builtins: help echo cat run ls ps touch rm uname date uptime dmesg mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -188,6 +204,31 @@ int main(void) {
                 printf("rm: removed %s\n", argv[1]);
             else
                 printf("rm: cannot remove %s\n", argv[1]);
+        } else if (!strcmp(cmd, "uname")) {                  /* DDR-751 */
+            struct sysinfo si;
+            if (nsi(SYS_SYSINFO, (long)&si, 0, 0) == 0)
+                printf("uname: %s \"%s\" cpus=%u\n",
+                       si.vendor, si.brand[0] ? si.brand : "(none)", si.cpu_count);
+            else
+                printf("uname: unavailable\n");
+        } else if (!strcmp(cmd, "date")) {                   /* DDR-751 */
+            struct rtc_time t;
+            if (nsi(SYS_TIME, (long)&t, 0, 0) == 0)
+                printf("date: %04u-%02u-%02u %02u:%02u:%02u\n",
+                       t.year, t.month, t.day, t.hour, t.minute, t.second);
+            else
+                printf("date: unavailable\n");
+        } else if (!strcmp(cmd, "uptime")) {                 /* DDR-751 */
+            struct sysinfo si;
+            if (nsi(SYS_SYSINFO, (long)&si, 0, 0) == 0)
+                printf("uptime: %llus\n", si.uptime_ticks / 100ULL);  /* 100 Hz tick */
+            else
+                printf("uptime: unavailable\n");
+        } else if (!strcmp(cmd, "dmesg")) {                  /* DDR-751 */
+            char b[4096];
+            long n = nsi(SYS_DMESG, (long)b, (long)sizeof b, 0);
+            printf("dmesg: %ld bytes\n", n > 0 ? n : 0);
+            if (n > 0) fwrite(b, 1, (size_t)n, stdout);
         } else if (!strcmp(cmd, "exit")) {
             return 0;
         } else {
