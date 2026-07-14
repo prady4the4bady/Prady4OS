@@ -65,6 +65,9 @@ jobs:
       - name: QEMU system-introspection test (q35; SYS_SYSINFO CPU/mem/uptime, DDR-748)
         run: make smoke-sysinfo
 
+      - name: QEMU wall-clock test (q35; SYS_TIME RTC date/time range-check, DDR-749)
+        run: make smoke-time
+
       - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
         run: make smoke-user
 

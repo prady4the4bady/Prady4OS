@@ -157,3 +157,10 @@ global sysinfotest_elf_end
 sysinfotest_elf:
     incbin "build/sysinfotest.elf"
 sysinfotest_elf_end:
+
+; sys (DDR-749): SYS_TIME wall-clock probe.
+global timetest_elf
+global timetest_elf_end
+timetest_elf:
+    incbin "build/timetest.elf"
+timetest_elf_end:

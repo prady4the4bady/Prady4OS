@@ -1256,6 +1256,13 @@ features), `lapic_cpu_count`, `g_ticks`, and `pmm_free_page_count`, then
 (verified: `AuthenticAMD` / `QEMU Virtual CPU version 2.5+`) and validates the
 numeric fields → `PRADYOS_SYSINFO_OK`. Gate `smoke-sysinfo` (deterministic —
 stable CPUID + frame count). Total-RAM/load-average deferred. **87 gates.**
+**Wall-clock date/time — `SYS_TIME` (DDR-749).** `SYS_CLOCK` (DDR-709) gave only
+seconds-since-midnight; ring 3 could not read the date. New `SYS_TIME` (NSI 72,
+no cap) `copyout`s the broken-down RTC reading (`rtc_now` → `struct rtc_time
+{year, month, day, hour, minute, second}`). Freestanding probe `timetest` formats
+`TIME YYYY-MM-DD HH:MM:SS` (verified `2026-07-14 08:13:57`) and range-validates
+each field → `PRADYOS_TIME_OK`. Gate `smoke-time` — deterministic (the exact
+value is host-provided but the field ranges always hold). **88 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

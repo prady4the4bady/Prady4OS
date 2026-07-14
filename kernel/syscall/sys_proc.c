@@ -174,6 +174,17 @@ static long sys_sysinfo(long uout, long a2, long a3, long a4) {
     return 0;
 }
 
+/* SYS_TIME (DDR-749): ring-3 wall-clock date/time. No capability (non-sensitive,
+ * like SYS_CLOCK). Copies the broken-down RTC reading out verbatim. */
+static long sys_time(long uout, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    struct rtc_time t;
+    rtc_now(&t);
+    if (copyout((void __user *)(uintptr_t)uout, &t, sizeof t) < 0)
+        return -EFAULT;
+    return 0;
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
@@ -183,4 +194,5 @@ void sys_proc_register(void) {
     syscall_register(SYS_POWEROFF, sys_poweroff); /* DDR-746 */
     syscall_register(SYS_REBOOT,   sys_reboot);   /* DDR-747 */
     syscall_register(SYS_SYSINFO,  sys_sysinfo);  /* DDR-748 */
+    syscall_register(SYS_TIME,     sys_time);     /* DDR-749 */
 }
