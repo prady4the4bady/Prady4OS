@@ -15,6 +15,10 @@
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D)   */
 #include "rtc.h"               /* rtc_now for SYS_CLOCK (DDR-709)          */
 #include "acpi.h"              /* acpi_poweroff / acpi_power_available (DDR-746) */
+#include "lapic.h"             /* lapic_cpu_count (DDR-748)                        */
+#include "irq.h"               /* g_ticks (DDR-748)                               */
+#include "pmm.h"               /* pmm_free_page_count (DDR-748)                    */
+#include "string.h"            /* memset for SYS_SYSINFO (cpu_cpuid via cpu_mitigations.h above) */
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -116,6 +120,60 @@ static long sys_reboot(long a1, long a2, long a3, long a4) {
     acpi_reboot();                                /* no return */
 }
 
+/* SYS_SYSINFO (DDR-748): read-only CPU + system introspection. No capability —
+ * the fields are non-sensitive (CPU identity, counts, uptime, free frames). */
+struct sysinfo {
+    char     vendor[16];
+    char     brand[64];
+    uint32_t cpu_count;
+    uint32_t feat_edx;
+    uint32_t feat_ecx;
+    uint32_t _pad;
+    uint64_t uptime_ticks;
+    uint64_t free_pages;
+};
+
+static long sys_sysinfo(long uout, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    struct sysinfo si;
+    memset(&si, 0, sizeof si);
+
+    uint32_t a, b, c, d;
+    /* CPUID leaf 0: vendor string in EBX,EDX,ECX (12 bytes). */
+    cpu_cpuid(0, 0, &a, &b, &c, &d);
+    memcpy(si.vendor + 0, &b, 4);
+    memcpy(si.vendor + 4, &d, 4);
+    memcpy(si.vendor + 8, &c, 4);
+    si.vendor[12] = 0;
+
+    /* CPUID leaf 1: feature flags. */
+    cpu_cpuid(1, 0, &a, &b, &c, &d);
+    si.feat_ecx = c;
+    si.feat_edx = d;
+
+    /* CPUID leaves 0x80000002..4: processor brand string (48 bytes), if present. */
+    cpu_cpuid(0x80000000u, 0, &a, &b, &c, &d);
+    if (a >= 0x80000004u) {
+        for (uint32_t leaf = 0; leaf < 3; leaf++) {
+            cpu_cpuid(0x80000002u + leaf, 0, &a, &b, &c, &d);
+            memcpy(si.brand + leaf * 16 + 0,  &a, 4);
+            memcpy(si.brand + leaf * 16 + 4,  &b, 4);
+            memcpy(si.brand + leaf * 16 + 8,  &c, 4);
+            memcpy(si.brand + leaf * 16 + 12, &d, 4);
+        }
+        si.brand[48] = 0;
+    }
+
+    si.cpu_count    = lapic_cpu_count();
+    if (si.cpu_count == 0) si.cpu_count = 1;    /* single-CPU fallback (no MADT) */
+    si.uptime_ticks = g_ticks;
+    si.free_pages   = pmm_free_page_count();
+
+    if (copyout((void __user *)(uintptr_t)uout, &si, sizeof si) < 0)
+        return -EFAULT;
+    return 0;
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
@@ -124,4 +182,5 @@ void sys_proc_register(void) {
     syscall_register(SYS_GETPROCS, sys_getprocs); /* DDR-743 */
     syscall_register(SYS_POWEROFF, sys_poweroff); /* DDR-746 */
     syscall_register(SYS_REBOOT,   sys_reboot);   /* DDR-747 */
+    syscall_register(SYS_SYSINFO,  sys_sysinfo);  /* DDR-748 */
 }

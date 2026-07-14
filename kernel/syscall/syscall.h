@@ -98,6 +98,8 @@
 #define SYS_POWEROFF       69  /* () -> -EPERM (non-sovereign) | -ENODEV (no S5)        */
 /* ACPI/PC reboot (DDR-747; CAP_SOVEREIGN). No return on success. */
 #define SYS_REBOOT         70  /* () -> -EPERM (non-sovereign)                          */
+/* System/CPU introspection (DDR-748; no cap — read-only). */
+#define SYS_SYSINFO        71  /* (struct sysinfo*) -> 0 | -EFAULT                      */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

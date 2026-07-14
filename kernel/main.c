@@ -353,6 +353,8 @@ extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mou
 extern const unsigned char rootmounttest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
+extern const unsigned char sysinfotest_elf[];         /* sys: SYS_SYSINFO probe (DDR-748) */
+extern const unsigned char sysinfotest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -987,6 +989,10 @@ static void fs_test_thread(void *arg) {
                  * socket NSI refuses it (-EPERM on connect, and on touching a
                  * slot it doesn't own). Exercised by smoke-capnet. */
                 user_boot_from_sfs(cap, smnt, "CAPNET.ELF", capnettest_elf, capnettest_elf_end, 0);
+                /* sys (DDR-748): SYS_SYSINFO introspection probe — default root,
+                 * no special caps; prints CPU vendor/brand + PRADYOS_SYSINFO_OK.
+                 * Gate smoke-sysinfo. */
+                user_boot_from_sfs(cap, smnt, "SYSINFO.ELF", sysinfotest_elf, sysinfotest_elf_end, 0);
                 /* fs (DDR-739): per-process root-mount probe. Spawned from its
                  * embedded bytes (not via SFS — root_mnt is set BEFORE unblock,
                  * which user_boot_from_sfs doesn't allow) with root_mnt pointed at

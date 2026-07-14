@@ -62,6 +62,9 @@ jobs:
       - name: QEMU ring-3 file-lifecycle test (q35; O_CREAT+write+unlink on SFS, DDR-744)
         run: make smoke-fsrm
 
+      - name: QEMU system-introspection test (q35; SYS_SYSINFO CPU/mem/uptime, DDR-748)
+        run: make smoke-sysinfo
+
       - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
         run: make smoke-user
 

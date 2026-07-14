@@ -73,6 +73,8 @@ USER_ROOTMNT_SRC := user/rootmounttest.c  # fs: per-process root-mount probe (DD
 USER_ROOTMNT_ELF := build/rootmounttest.elf
 USER_FSRM_SRC := user/fsrmtest.c          # fs: ring-3 file lifecycle probe (DDR-744)
 USER_FSRM_ELF := build/fsrmtest.elf
+USER_SYSINFO_SRC := user/sysinfotest.c    # sys: SYS_SYSINFO introspection probe (DDR-748)
+USER_SYSINFO_ELF := build/sysinfotest.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -228,7 +230,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ROOTMNT_ELF) build/rootmounttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FSRM_SRC) -o build/fsrmtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FSRM_ELF) build/fsrmtest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SYSINFO_SRC) -o build/sysinfotest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SYSINFO_ELF) build/sysinfotest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -449,6 +453,14 @@ smoke-rootmount: $(IMG) fat-image sfs-image ext4-image
 smoke-fsrm: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_FSRM_OK')" \
 	FORBIDDEN_SENTINEL="FSRM FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-748 system-introspection gate: the SYS_SYSINFO probe reads CPU vendor/brand,
+# feature bits, CPU count, uptime, and free-frame count, validates them, and prints
+# PRADYOS_SYSINFO_OK. Deterministic on QEMU (stable CPUID + frame count).
+smoke-sysinfo: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SYSINFO_OK')" \
+	FORBIDDEN_SENTINEL="SYSINFO FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5a user gate: the kernel formats a blank SFS volume (disk2), writes the

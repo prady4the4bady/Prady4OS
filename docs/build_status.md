@@ -1247,6 +1247,15 @@ Exposed as `SYS_REBOOT` (NSI 70), CAP_SOVEREIGN-gated like `SYS_POWEROFF` (no
 `-ENODEV` — reset is always attempted). Compositor `b` key issues it. Gate
 `smoke-reboot`: GPU boot + QMP `sendkey b`; QEMU runs `-no-reboot`, so the reset
 exits it — asserts the pre-reset sentinel (only this gate sends `b`). **86 gates.**
+**System introspection — `SYS_SYSINFO` (DDR-748).** Ring 3 had no way to learn the
+machine or its live state. New `SYS_SYSINFO` (NSI 71, no cap — read-only) fills a
+`struct sysinfo {vendor[16], brand[64], cpu_count, feat_edx/ecx, uptime_ticks,
+free_pages}` from `cpu_cpuid` (leaf 0 vendor, 0x80000002..4 brand, leaf 1
+features), `lapic_cpu_count`, `g_ticks`, and `pmm_free_page_count`, then
+`copyout`s it. Freestanding probe `sysinfotest` echoes the CPU vendor/brand
+(verified: `AuthenticAMD` / `QEMU Virtual CPU version 2.5+`) and validates the
+numeric fields → `PRADYOS_SYSINFO_OK`. Gate `smoke-sysinfo` (deterministic —
+stable CPUID + frame count). Total-RAM/load-average deferred. **87 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

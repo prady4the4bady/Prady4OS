@@ -150,3 +150,10 @@ global fsrmtest_elf_end
 fsrmtest_elf:
     incbin "build/fsrmtest.elf"
 fsrmtest_elf_end:
+
+; sys (DDR-748): SYS_SYSINFO CPU/system introspection probe.
+global sysinfotest_elf
+global sysinfotest_elf_end
+sysinfotest_elf:
+    incbin "build/sysinfotest.elf"
+sysinfotest_elf_end:
