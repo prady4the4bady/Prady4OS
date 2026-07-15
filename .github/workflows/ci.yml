@@ -86,6 +86,9 @@ jobs:
       - name: QEMU lwIP loopback test (q35; UDP echo on 127.0.0.1, NET-B)
         run: make smoke-net-lo
 
+      - name: QEMU TCP loopback test (q35; TCP client echo on 127.0.0.1:8007, DDR-753)
+        run: make smoke-net-tcp-lo
+
       - name: QEMU uaccess test (q35; copyin/copyout/copyinstr EFAULT contract)
         run: make smoke-uaccess
 

@@ -700,6 +700,14 @@ smoke-net-fuzz: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_NET_FUZZ_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-753 TCP loopback gate: the kernel opens a TCP client to the in-guest echo
+# server on 127.0.0.1:8007, completes the handshake + echo over the loopback
+# netif, and verifies the returned bytes. Deterministic (no external network).
+smoke-net-tcp-lo: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_NET_TCP_LO_OK \
+	FORBIDDEN_SENTINEL=PRADYOS_NET_TCP_LO_FAIL \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # AETHER queue gate (ADR-026 §D2/§D3): the in-boot self-test submits an action,
 # sovereign mode auto-approves it, and an audit entry is written.
 smoke-aether-queue: $(IMG) fat-image sfs-image

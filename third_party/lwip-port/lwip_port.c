@@ -174,6 +174,54 @@ static void tcp_echo_init(void) {
     tcp_accept(lpcb, tcp_echo_accept);
 }
 
+/* ---- loopback TCP echo client gate (smoke-net-tcp-lo, DDR-753) ------------
+ * Drives the TCP CLIENT path end-to-end over 127.0.0.1: connect (3-way
+ * handshake) -> write "ping" -> the :8007 echo server echoes -> verify. All
+ * delivery is synchronous via netif_poll_all (loopback), so a bounded pump loop
+ * converges without timers; the cap guarantees no hang. */
+static volatile int g_tcp_lo_echoed;
+
+static err_t tcp_lo_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
+    (void)arg;
+    if (p == NULL) { tcp_close(pcb); return ERR_OK; }
+    if (err == ERR_OK) {
+        char b[8];
+        u16_t n = pbuf_copy_partial(p, b, sizeof b, 0);
+        if (n >= 4 && b[0] == 'p' && b[1] == 'i' && b[2] == 'n' && b[3] == 'g')
+            g_tcp_lo_echoed = 1;
+        tcp_recved(pcb, p->tot_len);
+    }
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+static err_t tcp_lo_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
+    (void)arg;
+    if (err != ERR_OK) return err;
+    tcp_write(pcb, "ping", 4, TCP_WRITE_FLAG_COPY);
+    tcp_output(pcb);
+    return ERR_OK;
+}
+
+static void net_loopback_tcp_test(void) {
+    struct tcp_pcb *pcb = tcp_new();
+    if (!pcb) return;
+    tcp_recv(pcb, tcp_lo_recv);
+    ip_addr_t lo;
+    IP4_ADDR(&lo, 127, 0, 0, 1);
+    if (tcp_connect(pcb, &lo, 8007, tcp_lo_connected) != ERR_OK) {
+        tcp_close(pcb);
+        return;
+    }
+    for (int i = 0; i < 200 && !g_tcp_lo_echoed; i++) {
+        netif_poll_all();
+        sys_check_timeouts();
+    }
+    kputs(g_tcp_lo_echoed ? "PRADYOS_NET_TCP_LO_OK\r\n"
+                          : "PRADYOS_NET_TCP_LO_FAIL\r\n");
+    /* pcb stays resident (one bounded PCB), like the UDP rx pcb. */
+}
+
 /* ---- fuzz / hardening self-test (smoke-net-fuzz, ADR-025 §D6/§D10) --------
  * SLIRP can't inject raw L2 frames, so we exercise the receive path in-kernel:
  * synthesise malformed/truncated frames and a bounded SYN flood and feed them
@@ -415,6 +463,7 @@ void net_init(void) {
     g_net_ready = 1;
     kputs("[net] lwIP up 10.0.2.15/24\r\n");
     net_loopback_test();
+    net_loopback_tcp_test();                     /* DDR-753: TCP client echo over loopback */
     net_fuzz_test();                             /* malformed-frame + SYN-flood hardening */
     __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
 }

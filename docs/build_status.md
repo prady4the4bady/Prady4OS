@@ -1290,6 +1290,15 @@ meminfo {total, free, used (=total-free, derived), page_size}`. PRISM `free` pri
 used=43972K`). `used` is whole-frame physical accounting (kernel image, page
 tables, refcount table, all allocs), not userspace RSS. Gate: `smoke-shell` feeds
 `free` and asserts the shape. **89 gates** (no new gate).
+**TCP loopback echo self-test (DDR-753).** The net stack had a UDP loopback gate
+and a TCP echo *server* (`:8007`), but nothing drove the TCP *client* path
+end-to-end. `net_loopback_tcp_test()` (in `net_init`, IRQ-masked) `tcp_connect`s
+to `127.0.0.1:8007`, writes `"ping"` on the connected callback, and verifies the
+echoed bytes in its recv callback, driven by a bounded `netif_poll_all` +
+`sys_check_timeouts` pump (≤200 iters — converges immediately over loopback; the
+cap guarantees no hang). Verified full round-trip: `TCP_READY` (accepted) →
+`TCP_OK` (data) → `PRADYOS_NET_TCP_LO_OK` (echo verified). Gate `smoke-net-tcp-lo`
+(deterministic — in-guest loopback, no external network). **90 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
