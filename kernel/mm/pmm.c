@@ -27,6 +27,7 @@ struct free_block {
 
 static struct free_block *free_list[PMM_MAX_ORDER];
 static uint64_t free_pages;
+static uint64_t total_pages;                 /* DDR-752: managed frames at init */
 
 /* Copy-on-write per-frame reference counts (IMP-D), indexed by frame number
  * (phys >> 12) over the whole identity-mapped range [0, 1 GiB). alloc sets 1,
@@ -152,6 +153,7 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
 uint64_t pmm_alloc_page(void)        { return pmm_alloc_pages(0); }
 void     pmm_free_page(uint64_t a)   { pmm_free_pages(a, 0); }
 uint64_t pmm_free_page_count(void)   { return free_pages; }
+uint64_t pmm_total_page_count(void)  { return total_pages; }  /* DDR-752 */
 
 void pmm_incref(uint64_t phys) {
     uint64_t idx = phys >> PAGE_SHIFT;
@@ -199,6 +201,8 @@ void pmm_init(const struct boot_info *bi) {
         if (s < e)
             add_region(s, e);
     }
+    total_pages = free_pages;               /* DDR-752: all managed frames, before
+                                             * the permanent refcount-table carve */
 
     /* COW refcount table: 262144 * 2 B = 512 KiB = order-7 block, taken from the
      * pool (too large for the kernel's low-memory BSS). pmm_alloc_pages runs with

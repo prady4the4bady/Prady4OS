@@ -1281,6 +1281,15 @@ No kernel change (all three syscalls are uncapped). `poweroff`/`reboot` are
 intentionally omitted (CAP_SOVEREIGN — the compositor's `p`/`b` keys). Gate:
 `smoke-shell` feeds all four and asserts their fixed output shapes. **89 gates**
 (no new gate).
+**`SYS_MEMINFO` + PMM total-RAM tracking + PRISM `free` (DDR-752).** Closes the
+DDR-748 total-RAM deferral: the PMM now captures `total_pages = free_pages` at the
+end of `pmm_init`'s E820 sweep (before the permanent refcount-table carve), with a
+`pmm_total_page_count()` getter. `SYS_MEMINFO` (NSI 74, no cap) copies out `struct
+meminfo {total, free, used (=total-free, derived), page_size}`. PRISM `free` prints
+`mem: total=<K>K free=<K>K used=<K>K` (verified `total=114520K free=70548K
+used=43972K`). `used` is whole-frame physical accounting (kernel image, page
+tables, refcount table, all allocs), not userspace RSS. Gate: `smoke-shell` feeds
+`free` and asserts the shape. **89 gates** (no new gate).
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

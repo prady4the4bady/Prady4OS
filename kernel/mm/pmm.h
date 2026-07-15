@@ -25,6 +25,7 @@ void     pmm_free_pages(uint64_t addr, unsigned order);
 uint64_t pmm_alloc_page(void);              /* order 0 */
 void     pmm_free_page(uint64_t addr);      /* drops one reference; frees at 0 (IMP-D) */
 uint64_t pmm_free_page_count(void);         /* current free frame count */
+uint64_t pmm_total_page_count(void);        /* total managed frames (DDR-752) */
 
 /* Copy-on-write reference counting (IMP-D). Each managed frame has a 16-bit
  * refcount: alloc sets it to 1, pmm_free_page decrements and frees only at 0.

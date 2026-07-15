@@ -26,6 +26,13 @@
 #define SYS_SYSINFO  71     /* DDR-748: (struct sysinfo*) -> 0 | -EFAULT */
 #define SYS_TIME     72     /* DDR-749: (struct rtc_time*) -> 0 | -EFAULT */
 #define SYS_DMESG    73     /* DDR-750: (buf, max) -> bytes | -EFAULT */
+#define SYS_MEMINFO  74     /* DDR-752: (struct meminfo*) -> 0 | -EFAULT */
+
+/* Mirror of kernel struct meminfo (sys_proc.c) — DDR-752. */
+struct meminfo {
+    unsigned long long total_pages, free_pages, used_pages;
+    unsigned page_size, _pad;
+};
 
 /* Mirror of kernel struct sysinfo (sys_proc.c) — DDR-748. */
 struct sysinfo {
@@ -141,7 +148,7 @@ int main(void) {
         const char *cmd = argv[0];
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps touch rm uname date uptime dmesg mode exit\n");
+            printf("builtins: help echo cat run ls ps touch rm uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -229,6 +236,13 @@ int main(void) {
             long n = nsi(SYS_DMESG, (long)b, (long)sizeof b, 0);
             printf("dmesg: %ld bytes\n", n > 0 ? n : 0);
             if (n > 0) fwrite(b, 1, (size_t)n, stdout);
+        } else if (!strcmp(cmd, "free")) {                   /* DDR-752 */
+            struct meminfo mi;
+            if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) == 0)
+                printf("mem: total=%lluK free=%lluK used=%lluK\n",
+                       mi.total_pages * 4ULL, mi.free_pages * 4ULL, mi.used_pages * 4ULL);
+            else
+                printf("free: unavailable\n");
         } else if (!strcmp(cmd, "exit")) {
             return 0;
         } else {

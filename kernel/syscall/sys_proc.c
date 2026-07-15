@@ -185,6 +185,30 @@ static long sys_time(long uout, long a2, long a3, long a4) {
     return 0;
 }
 
+/* SYS_MEMINFO (DDR-752): physical-frame accounting. No capability. used is
+ * derived (total - free), never stored, so it can't drift. */
+struct meminfo {
+    uint64_t total_pages;
+    uint64_t free_pages;
+    uint64_t used_pages;
+    uint32_t page_size;
+    uint32_t _pad;
+};
+
+static long sys_meminfo(long uout, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    struct meminfo mi;
+    mi.total_pages = pmm_total_page_count();
+    mi.free_pages  = pmm_free_page_count();
+    mi.used_pages  = (mi.total_pages >= mi.free_pages)
+                   ? (mi.total_pages - mi.free_pages) : 0;
+    mi.page_size   = 4096;
+    mi._pad        = 0;
+    if (copyout((void __user *)(uintptr_t)uout, &mi, sizeof mi) < 0)
+        return -EFAULT;
+    return 0;
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
@@ -195,4 +219,5 @@ void sys_proc_register(void) {
     syscall_register(SYS_REBOOT,   sys_reboot);   /* DDR-747 */
     syscall_register(SYS_SYSINFO,  sys_sysinfo);  /* DDR-748 */
     syscall_register(SYS_TIME,     sys_time);     /* DDR-749 */
+    syscall_register(SYS_MEMINFO,  sys_meminfo);  /* DDR-752 */
 }
