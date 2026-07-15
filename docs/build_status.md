@@ -1299,6 +1299,15 @@ echoed bytes in its recv callback, driven by a bounded `netif_poll_all` +
 cap guarantees no hang). Verified full round-trip: `TCP_READY` (accepted) →
 `TCP_OK` (data) → `PRADYOS_NET_TCP_LO_OK` (echo verified). Gate `smoke-net-tcp-lo`
 (deterministic — in-guest loopback, no external network). **90 gates.**
+**`ps` CPU accounting (DDR-754).** `ps` listed pid/ppid/state/name but no CPU
+usage, though DDR-735's per-tcb `run_ticks`/`dispatches` counters already tick for
+every thread. `struct procinfo` (SYS_GETPROCS) gains `run_ticks`/`dispatches`;
+`sched_snapshot` copies them under `g_sched_lock`; PRISM `ps` prints a
+`CPUms` (`run_ticks*10`, 100 Hz) + `DISP` (switch count) column — new header
+`PID PPID S U CPUms DISP NAME` (verified: `PRISM.ELF 60ms/8216`, `reaper
+580ms/36501`). Read-only; no scheduling-logic change. The `procinfo` struct + its
+sole consumer (PRISM's mirror) updated in lockstep. Gate: `smoke-shell` asserts
+the new header shape. **90 gates** (no new gate).
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

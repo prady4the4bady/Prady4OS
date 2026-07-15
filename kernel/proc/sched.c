@@ -536,6 +536,8 @@ int sched_snapshot(int index, struct procinfo *out) {
             if (t->name)
                 for (; k < 15 && t->name[k]; k++) out->name[k] = t->name[k];
             out->name[k] = 0;
+            out->run_ticks  = t->run_ticks;    /* DDR-754: CPU accounting */
+            out->dispatches = t->dispatches;
             found = 1;
             break;
         }

@@ -552,7 +552,8 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# DDR-743: PRISM's `ps` prints a "  PID  PPID S U NAME" header (emitted by no
 	@# other path) followed by the ring listing — proves SYS_GETPROCS end-to-end.
 	@# (the prompt "prism> " may share the header's line, so don't anchor to BOL)
-	@grep -qE "PID +PPID S U NAME$$" build/shell_serial.log || { echo "[shell] FAIL: ps builtin (DDR-743)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-754: header now carries the CPUms + DISP accounting columns.
+	@grep -qE "PID +PPID S U +CPUms +DISP NAME$$" build/shell_serial.log || { echo "[shell] FAIL: ps builtin (DDR-743/754)"; tail -30 build/shell_serial.log; exit 1; }
 	@# DDR-745: `touch /PRISMNEW.TXT` then `ls /` must list the created file (proves
 	@# O_CREAT through the shell on the real FAT root), and `rm` must confirm removal.
 	@grep -qE "(^|prism> )PRISMNEW\.TXT$$" build/shell_serial.log || { echo "[shell] FAIL: touch builtin (DDR-745)"; tail -30 build/shell_serial.log; exit 1; }

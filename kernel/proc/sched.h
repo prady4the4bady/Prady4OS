@@ -129,6 +129,8 @@ struct procinfo {
     uint32_t state;             /* raw THREAD_* enum */
     uint32_t flags;             /* bit 0 = is_user */
     char     name[16];
+    uint64_t run_ticks;         /* DDR-754: 100 Hz ticks observed while current */
+    uint64_t dispatches;        /* DDR-754: scheduler switch-in count           */
 };
 /* Fill *out with the index-th thread in the scheduler ring (walked under
  * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */

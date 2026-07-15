@@ -54,6 +54,8 @@ struct procinfo {
     unsigned int state;     /* 0 ready 1 running 2 done 3 blocked 4 zombie */
     unsigned int flags;     /* bit 0 = user */
     char name[16];
+    unsigned long long run_ticks;   /* DDR-754: 100 Hz ticks */
+    unsigned long long dispatches;  /* DDR-754: switch-in count */
 };
 #define SYS_GET_MODE 29   /* L7: sovereign/manual toggle binding (DDR-701) */
 #define SYS_SET_MODE 30
@@ -188,13 +190,14 @@ int main(void) {
         } else if (!strcmp(cmd, "ps")) {
             /* DDR-743: enumerate the scheduler ring via SYS_GETPROCS. */
             static const char st[] = "RrDBZ";     /* ready run done blkd zomb */
-            printf("  PID  PPID S U NAME\n");
+            printf("  PID  PPID S U    CPUms   DISP NAME\n");
             struct procinfo pi;
             for (long i = 0; ; i++) {
                 if (nsi(SYS_GETPROCS, i, (long)&pi, 0) <= 0) break;
                 char s = (pi.state < sizeof st - 1) ? st[pi.state] : '?';
-                printf("%5u %5u %c %c %s\n",
-                       pi.pid, pi.ppid, s, (pi.flags & 1) ? 'u' : 'k', pi.name);
+                printf("%5u %5u %c %c %8llu %6llu %s\n",
+                       pi.pid, pi.ppid, s, (pi.flags & 1) ? 'u' : 'k',
+                       pi.run_ticks * 10ULL, pi.dispatches, pi.name);
             }
         } else if (!strcmp(cmd, "touch")) {
             /* DDR-745: create-if-absent an empty file on the (FAT) root. */
