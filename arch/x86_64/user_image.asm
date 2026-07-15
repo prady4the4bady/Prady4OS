@@ -178,3 +178,10 @@ global killtest_elf_end
 killtest_elf:
     incbin "build/killtest.elf"
 killtest_elf_end:
+
+; proc (DDR-756): SYS_SETNAME self-rename probe.
+global setnametest_elf
+global setnametest_elf_end
+setnametest_elf:
+    incbin "build/setnametest.elf"
+setnametest_elf_end:

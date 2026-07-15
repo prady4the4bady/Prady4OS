@@ -74,6 +74,9 @@ jobs:
       - name: QEMU process-kill test (q35; fork + SIGKILL + reap, DDR-755)
         run: make smoke-kill
 
+      - name: QEMU self-rename test (q35; SYS_SETNAME visible in SYS_GETPROCS, DDR-756)
+        run: make smoke-setname
+
       - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
         run: make smoke-user
 

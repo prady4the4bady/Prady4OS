@@ -209,6 +209,23 @@ static long sys_meminfo(long uout, long a2, long a3, long a4) {
     return 0;
 }
 
+/* SYS_SETNAME (DDR-756): rename the CALLING thread (self only — no authority to
+ * touch another). Copies up to 15 chars into the tcb's own name buffer and
+ * repoints t->name at it; ps (SYS_GETPROCS reads t->name) reflects it at once. */
+static long sys_setname(long uname, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    struct tcb *t = current_thread;
+    char nm[16];
+    if (copyinstr(nm, (const void __user *)(uintptr_t)uname, sizeof nm, 0) < 0)
+        return -EFAULT;
+    int i = 0;
+    for (; i < 15 && nm[i]; i++)
+        t->name_buf[i] = nm[i];
+    t->name_buf[i] = 0;
+    t->name = t->name_buf;
+    return 0;
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
@@ -220,4 +237,5 @@ void sys_proc_register(void) {
     syscall_register(SYS_SYSINFO,  sys_sysinfo);  /* DDR-748 */
     syscall_register(SYS_TIME,     sys_time);     /* DDR-749 */
     syscall_register(SYS_MEMINFO,  sys_meminfo);  /* DDR-752 */
+    syscall_register(SYS_SETNAME,  sys_setname);  /* DDR-756 */
 }

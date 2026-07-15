@@ -81,6 +81,8 @@ USER_DMESG_SRC := user/dmesgtest.c        # sys: SYS_DMESG kernel-log probe (DDR
 USER_DMESG_ELF := build/dmesgtest.elf
 USER_KILL_SRC := user/killtest.c          # proc: SYS_KILL fork/kill/reap probe (DDR-755)
 USER_KILL_ELF := build/killtest.elf
+USER_SETNAME_SRC := user/setnametest.c    # proc: SYS_SETNAME self-rename probe (DDR-756)
+USER_SETNAME_ELF := build/setnametest.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -244,7 +246,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DMESG_ELF) build/dmesgtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_KILL_SRC) -o build/killtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILL_ELF) build/killtest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SETNAME_SRC) -o build/setnametest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SETNAME_ELF) build/setnametest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -498,6 +502,13 @@ smoke-dmesg: $(IMG) fat-image sfs-image
 smoke-kill: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'PRADYOS_KILL_OK')" \
 	FORBIDDEN_SENTINEL="KILL FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-756 self-rename gate: the probe SYS_SETNAMEs itself to "KILROY", then walks
+# SYS_GETPROCS to confirm its own process-table entry shows the new name.
+smoke-setname: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SETNAME_OK')" \
+	FORBIDDEN_SENTINEL="SETNAME FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5a user gate: the kernel formats a blank SFS volume (disk2), writes the

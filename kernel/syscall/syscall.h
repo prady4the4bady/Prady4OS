@@ -106,6 +106,8 @@
 #define SYS_DMESG          73  /* (buf, max) -> bytes copied | -EFAULT                  */
 /* Physical memory accounting (DDR-752; no cap — read-only). */
 #define SYS_MEMINFO        74  /* (struct meminfo*) -> 0 | -EFAULT                      */
+/* Self-rename (DDR-756; no cap — a thread may only rename itself). */
+#define SYS_SETNAME        75  /* (const char *name) -> 0 | -EFAULT                     */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

@@ -337,6 +337,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->entry = entry;
     t->arg = arg;
     t->name = name;
+    t->name_buf[0] = 0;             /* DDR-756: empty until SYS_SETNAME (kmalloc !zero) */
     t->caps = cap_table_create();
     t->fs_write_budget = FS_WRITE_BUDGET_DEFAULT;
     t->is_user = 0;            /* kmalloc does not zero — init the user fields */

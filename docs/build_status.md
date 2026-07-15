@@ -1317,6 +1317,14 @@ signal terminated the otherwise-immortal child (`PRADYOS_KILL_OK`). PRISM
 `kill <pid> [sig]` sends `SIGTERM` (or a given signum). No kernel change. Gate
 `smoke-kill` — the child's infinite loop makes a false pass impossible (a broken
 kill blocks `wait4` → clean timeout). **91 gates.**
+**Self-rename — `SYS_SETNAME` (DDR-756).** A process's `ps` name was fixed by the
+loader (the ELF filename); nothing let a process/agent label itself. `struct tcb`
+gains a `char name_buf[16]` (zeroed in `sched_create_state`); `SYS_SETNAME`
+(NSI 75, no cap — self only, so no escalation) `copyinstr`s ≤15 chars into it and
+repoints `t->name`. `ps` reflects it immediately (`sched_snapshot` reads
+`t->name`). PRISM `setname <name>` wraps it. Self-verify probe renames to
+`KILROY` then confirms via `SYS_GETPROCS` → `PRADYOS_SETNAME_OK`. Gate
+`smoke-setname`. **92 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

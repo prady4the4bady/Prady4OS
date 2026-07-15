@@ -46,6 +46,7 @@ struct tcb {
     thread_fn  entry;
     void      *arg;
     const char *name;
+    char       name_buf[16];   /* DDR-756: SYS_SETNAME target; name points here after rename */
     struct cap_table *caps;    /* per-thread (process) capability table */
     uint64_t   fs_write_budget; /* remaining VFS write allowance (bytes)  */
 

@@ -361,6 +361,8 @@ extern const unsigned char dmesgtest_elf[];           /* sys: SYS_DMESG probe (D
 extern const unsigned char dmesgtest_elf_end[];
 extern const unsigned char killtest_elf[];            /* proc: SYS_KILL probe (DDR-755) */
 extern const unsigned char killtest_elf_end[];
+extern const unsigned char setnametest_elf[];         /* proc: SYS_SETNAME probe (DDR-756) */
+extern const unsigned char setnametest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -1008,6 +1010,9 @@ static void fs_test_thread(void *arg) {
                 /* proc (DDR-755): fork/kill/reap probe — forks a child that spins
                  * forever, SIGKILLs it, reaps it -> PRADYOS_KILL_OK. Gate smoke-kill. */
                 user_boot_from_sfs(cap, smnt, "KILL.ELF", killtest_elf, killtest_elf_end, 0);
+                /* proc (DDR-756): self-rename probe — SYS_SETNAME then verifies the
+                 * new name via SYS_GETPROCS -> PRADYOS_SETNAME_OK. Gate smoke-setname. */
+                user_boot_from_sfs(cap, smnt, "SETNAME.ELF", setnametest_elf, setnametest_elf_end, 0);
                 /* fs (DDR-739): per-process root-mount probe. Spawned from its
                  * embedded bytes (not via SFS — root_mnt is set BEFORE unblock,
                  * which user_boot_from_sfs doesn't allow) with root_mnt pointed at
