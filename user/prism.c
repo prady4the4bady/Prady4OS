@@ -18,6 +18,8 @@
 #define SYS_EXECVE 14
 #define SYS_FORK   15
 #define SYS_WAIT4  16
+#define SYS_KILL   23     /* DDR-755: (pid, signum) -> 0 | -errno */
+#define SIGTERM    15
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
 #define SYS_GETPROCS 67     /* DDR-743: (index, struct procinfo*) -> 1 | 0(end) | -errno */
 #define SYS_UNLINK   68     /* DDR-744: (path) -> 0 | -errno */
@@ -150,7 +152,7 @@ int main(void) {
         const char *cmd = argv[0];
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps touch rm uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps kill touch rm uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -239,6 +241,20 @@ int main(void) {
             long n = nsi(SYS_DMESG, (long)b, (long)sizeof b, 0);
             printf("dmesg: %ld bytes\n", n > 0 ? n : 0);
             if (n > 0) fwrite(b, 1, (size_t)n, stdout);
+        } else if (!strcmp(cmd, "kill")) {                   /* DDR-755 */
+            if (argc < 2) { printf("kill: usage: kill <pid> [signum]\n"); }
+            else {
+                long pid = 0; const char *s = argv[1];
+                while (*s >= '0' && *s <= '9') pid = pid * 10 + (*s++ - '0');
+                int sig = SIGTERM;
+                if (argc >= 3) {
+                    sig = 0; const char *t = argv[2];
+                    while (*t >= '0' && *t <= '9') sig = sig * 10 + (*t++ - '0');
+                }
+                long r = nsi(SYS_KILL, pid, sig, 0);
+                if (r == 0) printf("kill: sent %d to %ld\n", sig, pid);
+                else        printf("kill: pid %ld not found (rc=%ld)\n", pid, r);
+            }
         } else if (!strcmp(cmd, "free")) {                   /* DDR-752 */
             struct meminfo mi;
             if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) == 0)

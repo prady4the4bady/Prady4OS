@@ -171,3 +171,10 @@ global dmesgtest_elf_end
 dmesgtest_elf:
     incbin "build/dmesgtest.elf"
 dmesgtest_elf_end:
+
+; proc (DDR-755): SYS_KILL fork/kill/reap probe.
+global killtest_elf
+global killtest_elf_end
+killtest_elf:
+    incbin "build/killtest.elf"
+killtest_elf_end:

@@ -1308,6 +1308,15 @@ every thread. `struct procinfo` (SYS_GETPROCS) gains `run_ticks`/`dispatches`;
 580ms/36501`). Read-only; no scheduling-logic change. The `procinfo` struct + its
 sole consumer (PRISM's mirror) updated in lockstep. Gate: `smoke-shell` asserts
 the new header shape. **90 gates** (no new gate).
+**Process signaling — kill end-to-end + PRISM `kill` (DDR-755).** `SYS_KILL` +
+`signal_deliver` existed (SIGKILL non-maskable, SIGTERM-default terminates) but
+were never proven end-to-end and had no shell verb. Freestanding `killtest`
+probe `fork`s a child that spins in ring 3 forever (`pause` loop — no exit path),
+then `SYS_KILL(child, SIGKILL)` + `SYS_WAIT4` — reaching past `wait4` proves the
+signal terminated the otherwise-immortal child (`PRADYOS_KILL_OK`). PRISM
+`kill <pid> [sig]` sends `SIGTERM` (or a given signum). No kernel change. Gate
+`smoke-kill` — the child's infinite loop makes a false pass impossible (a broken
+kill blocks `wait4` → clean timeout). **91 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

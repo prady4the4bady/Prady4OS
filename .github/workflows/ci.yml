@@ -71,6 +71,9 @@ jobs:
       - name: QEMU kernel-log test (q35; SYS_DMESG marker capture + read-back, DDR-750)
         run: make smoke-dmesg
 
+      - name: QEMU process-kill test (q35; fork + SIGKILL + reap, DDR-755)
+        run: make smoke-kill
+
       - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
         run: make smoke-user
 
