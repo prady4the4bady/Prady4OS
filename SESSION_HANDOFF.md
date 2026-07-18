@@ -111,16 +111,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `snapshot_count==0` to preserve isolation). CORRECTNESS-CRITICAL FS work. (b)
   NVMe driver (registers with the blk layer). (c) host `mkfs.sfs` for true
   cross-reboot persistence. (d) FAT `/AETHER.CFG` image-build cleanup (now dead).
-- **M1-AUDIT FINDING (open, low-freq):** `smoke-percpu-sched` (`-smp 4`) failed
-  ONCE on CI (run 29634662558) with the whole boot-time FS self-test suite red
-  (`[fs] /HELLO.TXT not found`, `[fs] create /KOUT.TXT failed`, `[sfs] created
-  0`). Those tests run at kmain L773–800 — BEFORE any user spawn (the DDR-758
-  fuzz probe is at L1021) — so the fuzz probe is NOT causal; the commit only
-  shifted image size/timing. Reproduced 0/3 locally (passes). Matches the
-  documented intermittent early-boot FS/block flake under `-smp 4`. The M1 SMP
-  audit slice should add a deterministic early-boot block-init consistency check
-  and root-cause whether virtio-blk MSI-X completion routing across APs has a
-  narrow init-window race. Not a regression from the hardening work.
+- **AUDIT FINDING (open, recurring low-freq): `-smp 4` one-shot boot-proof
+  window flakes.** Two distinct `-smp 4` gates have each failed ONCE on CI, always
+  0/3–4 locally, always with the commit only shifting boot timing (never in the
+  failing path's logic):
+    - `smoke-percpu-sched` (run 29634662558): boot FS self-tests red
+      (`/HELLO.TXT not found`, `[sfs] created 0`) — run before any user spawn.
+    - `smoke-msixap` (run 29648027891): `[blk] msix on AP OK` not observed under
+      DDR-761 (a daemon-config change unrelated to the blk/MSI-X path).
+  ROOT PATTERN: these gates assert a one-shot boot proof (`compl_ap` set, per-CPU
+  sched OK) by CHECKING ONCE at a fixed boot point; on slow TCG under `-smp 4` the
+  awaited cross-CPU event sometimes hasn't landed yet, so the check fails even
+  though the mechanism is correct. FIX CANDIDATE (future audit slice): convert the
+  one-shot `-smp 4` boot proofs (`smpjob`/`msixap`/`percpu-sched`) to POLL their
+  condition with a bounded `g_ticks` deadline instead of a single check. Not a
+  regression — infra/timing fragility in the PROOFS, not the kernel.
 - **Milestone track:** M1 kernel hardening (per the revised master prompt §11);
   then M2 storage (persistent SFS root half-2/2, GC, NVMe).
 
