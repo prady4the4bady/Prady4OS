@@ -1152,12 +1152,29 @@ static void fs_test_thread(void *arg) {
                 blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
                 smp_blk_integrity(); /* DDR-759: concurrent-read DATA integrity (M1 audit) */
                 rqstress_proof();    /* DDR-SMP-rq-1: thread storm over the rqs */
-                /* DDR-714C3: plenty of disk I/O has completed by now (the SFS
-                 * ELF loads above) — assert a blk completion ran off the BSP. */
-                if (g_smp_have_aps)
+                /* DDR-714C3: assert a blk completion ran off the BSP. The old
+                 * check-once was racy on slow TCG (the AP-routed completion hadn't
+                 * necessarily landed by this boot point — recurring `-smp 4` flake,
+                 * SESSION_HANDOFF audit finding). Root fix: poll with a bounded
+                 * deadline while ISSUING blk0 reads — unit 0's MSI-X vector targets
+                 * an AP, so each completion sets compl_ap. Deterministic: the loop
+                 * forces the very event it waits for. */
+                if (g_smp_have_aps) {
+                    struct blk_device *b0 = blk_get(0);
+                    uint64_t sbuf = pmm_alloc_page();
+                    uint64_t dl = g_ticks + 200;             /* <= 2 s backstop */
+                    while (!virtio_blk_completed_on_ap() && g_ticks < dl) {
+                        if (b0 && sbuf)
+                            b0->read(b0, 0, (void *)(uintptr_t)sbuf, 1);
+                        else
+                            yield();
+                    }
+                    if (sbuf)
+                        pmm_free_page(sbuf);
                     kputs(virtio_blk_completed_on_ap()
                               ? "[blk] msix on AP OK\r\n"
                               : "[blk] msix on AP FAIL\r\n");
+                }
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
                  * reformats the disk, so release the VFS mount first). */

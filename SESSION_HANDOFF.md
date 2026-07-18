@@ -122,10 +122,15 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   ROOT PATTERN: these gates assert a one-shot boot proof (`compl_ap` set, per-CPU
   sched OK) by CHECKING ONCE at a fixed boot point; on slow TCG under `-smp 4` the
   awaited cross-CPU event sometimes hasn't landed yet, so the check fails even
-  though the mechanism is correct. FIX CANDIDATE (future audit slice): convert the
-  one-shot `-smp 4` boot proofs (`smpjob`/`msixap`/`percpu-sched`) to POLL their
-  condition with a bounded `g_ticks` deadline instead of a single check. Not a
-  regression — infra/timing fragility in the PROOFS, not the kernel.
+  though the mechanism is correct. FIX: poll the condition with a bounded `g_ticks`
+  deadline instead of a single check.
+    - **`msixap` FIXED (this commit):** the proof now polls
+      `virtio_blk_completed_on_ap()` (deadline `g_ticks+200`) while ISSUING blk0
+      reads — unit 0's MSI-X vector targets an AP, so the loop forces the very
+      completion it waits for. Deterministic; 5/5 local. No kernel-logic change.
+    - **STILL OPEN:** `percpu-sched` (different symptom — early block I/O
+      intermittently failing, not a check-once proof; needs its own root-cause)
+      and `smpjob` (already has a per-AP deadline; lower risk). Later audit slice.
 - **Milestone track:** M1 kernel hardening (per the revised master prompt §11);
   then M2 storage (persistent SFS root half-2/2, GC, NVMe).
 
