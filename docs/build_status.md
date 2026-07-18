@@ -1357,6 +1357,18 @@ Read-only (no writes → no image/FS corruption); no change to the hardened
 race observed — strong evidence the earlier one-off was infra/timing, and a
 deterministic repro instrument if it ever recurs). Gate `smoke-blk-integrity`.
 **95 gates.** *M1 kernel hardening (W^X + syscall-fuzz + SMP audit) COMPLETE.*
+**Persistent SFS root (DDR-760) — M2 storage 1/N (SFS-as-root half 2/2).** DDR-739
+gave per-process roots (proven on ext4) but SFS could not be a durable root: the
+boot SFS self-tests `vfs_unmount` blk2 and run the destructive journal/snapshot/
+LZ4 tests on the raw device, leaving it corrupted. Fix (operator-endorsed low-risk
+single-disk path): all user ELFs are already loaded before the destructive tests,
+so *additively* after them — `sfs_format(sbd)` reformats blk2 clean, `vfs_mount(2)`
+remounts, the kernel provisions `/etc/aether/config`, and a probe is rooted there
+(DDR-739 hand-rolled: load blocked → set `root_mnt` → unblock). The probe reads
+`/etc/aether/config` through its SFS root → `PRADYOS_SFSROOT_OK`. No change to the
+fragile ELF-load sequence; existing destructive SFS gates unchanged. Gate
+`smoke-sfsroot`. Follow-ons: re-point the live daemon off `/AETHER.CFG` (FAT) to
+this SFS config; SFS free-space GC; host `mkfs.sfs`. **96 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

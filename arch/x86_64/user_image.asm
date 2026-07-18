@@ -192,3 +192,10 @@ global syscallfuzz_elf_end
 syscallfuzz_elf:
     incbin "build/syscallfuzz.elf"
 syscallfuzz_elf_end:
+
+; fs (DDR-760): persistent SFS-root probe.
+global sfsroottest_elf
+global sfsroottest_elf_end
+sfsroottest_elf:
+    incbin "build/sfsroottest.elf"
+sfsroottest_elf_end:

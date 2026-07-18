@@ -85,6 +85,8 @@ USER_SETNAME_SRC := user/setnametest.c    # proc: SYS_SETNAME self-rename probe 
 USER_SETNAME_ELF := build/setnametest.elf
 USER_FUZZ_SRC := user/syscallfuzz.c       # sec: hostile-syscall fuzz probe (DDR-758)
 USER_FUZZ_ELF := build/syscallfuzz.elf
+USER_SFSROOT_SRC := user/sfsroottest.c    # fs: persistent SFS-root probe (DDR-760)
+USER_SFSROOT_ELF := build/sfsroottest.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -252,7 +254,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SETNAME_ELF) build/setnametest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FUZZ_SRC) -o build/syscallfuzz.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FUZZ_ELF) build/syscallfuzz.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SFSROOT_SRC) -o build/sfsroottest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -1016,6 +1020,15 @@ smoke-blk-integrity: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] blk integrity OK')" \
 	FORBIDDEN_SENTINEL="blk integrity FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-760 persistent-SFS-root gate (M2): after the destructive SFS self-tests, the
+# kernel reformats blk2 clean, provisions /etc/aether/config, and roots a probe
+# there. The probe reads the config through its SFS root -> PRADYOS_SFSROOT_OK,
+# proving a process can durably root at a clean, provisioned SFS volume.
+smoke-sfsroot: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SFSROOT_OK')" \
+	FORBIDDEN_SENTINEL="SFSROOT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # MSI-X distribution gate (DDR-714C3): the blk vectors target APs; a disk

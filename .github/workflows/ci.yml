@@ -173,6 +173,9 @@ jobs:
       - name: QEMU SMP block-integrity test (q35 -smp 4; concurrent read data-verify, DDR-759)
         run: make smoke-blk-integrity
 
+      - name: QEMU persistent-SFS-root test (q35; process rooted at clean SFS reads config, DDR-760)
+        run: make smoke-sfsroot
+
       - name: QEMU runqueue stress test (q35 -smp 4; thread storm over per-CPU rqs)
         run: make smoke-rqstress
 

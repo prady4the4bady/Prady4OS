@@ -365,6 +365,8 @@ extern const unsigned char setnametest_elf[];         /* proc: SYS_SETNAME probe
 extern const unsigned char setnametest_elf_end[];
 extern const unsigned char syscallfuzz_elf[];         /* sec: syscall fuzz probe (DDR-758) */
 extern const unsigned char syscallfuzz_elf_end[];
+extern const unsigned char sfsroottest_elf[];         /* fs: persistent SFS-root probe (DDR-760) */
+extern const unsigned char sfsroottest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -1168,6 +1170,31 @@ static void fs_test_thread(void *arg) {
                 int lr = sfs_selftest_lz4(sbd);
                 kputs("[sfs] lz4+tags ");
                 kputs(lr == 7 ? "compress/readback/tag OK\r\n" : "FAIL\r\n");
+
+                /* DDR-760: persistent SFS root (SFS-as-root half 2/2). The
+                 * destructive tests above left blk2 dirty + unmounted; reformat it
+                 * CLEAN, remount, provision /etc/aether/config, and root a probe
+                 * there (DDR-739 hand-rolled: load blocked, set root_mnt, unblock)
+                 * — proving a process can durably root at a clean SFS volume. */
+                if (sfs_format(sbd) == 0) {
+                    int root_smnt = vfs_mount(2);
+                    if (root_smnt >= 0) {
+                        static const char CFGTEXT[] =
+                            "mode=sovereign\ntask=persist\nslot=0\n";
+                        struct vfs_file cf;
+                        if (vfs_create(cap, root_smnt, "/etc/aether/config", &cf) == 0)
+                            vfs_write(cap, &cf, 0, (void *)CFGTEXT,
+                                      (uint32_t)(sizeof CFGTEXT - 1));
+                        struct tcb *sp = 0;
+                        uint64_t splen = (uint64_t)(sfsroottest_elf_end - sfsroottest_elf);
+                        if (elf_load((void *)(uintptr_t)sfsroottest_elf, splen,
+                                     "SFSROOT", &sp) == ELF_OK && sp) {
+                            sp->root_mnt = root_smnt;   /* clean SFS root before unblock */
+                            sched_unblock(sp);
+                            kputs("[sfs] persistent root provisioned; SFS-rooted probe spawned\r\n");
+                        }
+                    }
+                }
             } else {
                 kputs("[sfs] mount failed\r\n");
             }

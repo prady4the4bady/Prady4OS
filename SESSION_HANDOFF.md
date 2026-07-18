@@ -99,17 +99,19 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-758 syscall-fuzz gate — CI-green on `main` at
-  `fedbf59`. 94 gates. **M1 1/3 (W^X) + 2/3 (fuzz) on main.**
-- **CURRENT_ACTIVE_TASK:** DDR-759 SMP block-read integrity audit (M1 3/3) —
-  concurrent-read data-verify self-test (reference checksum + 4 CPU workers) that
-  catches wrong-slot completion routing. Local 5/5 green under `-smp 4`; pushed to
-  `dev/phase1`, CI-verifying. 95 gates. **This completes M1 kernel hardening.**
-- **NEXT_TASK:** M2 storage completeness. Start with the persistent-SFS-root
-  blocker (SFS-as-root half 2/2): the destructive SFS self-tests reformat the only
-  SFS disk, so a process can't durably root there. Needs either a host `mkfs.sfs`
-  or image-time SFS provisioning + moving the destructive tests off the root
-  volume. Then: SFS free-space GC (block reclamation, DDR-741 deferred), NVMe.
+- **LAST_COMPLETED_TASK:** DDR-759 SMP block-read integrity audit — CI-green on
+  `main` at `18498a8`. 95 gates. **M1 kernel hardening COMPLETE (757/758/759).**
+- **CURRENT_ACTIVE_TASK:** DDR-760 persistent SFS root (M2 1/N) — after the
+  destructive SFS self-tests, reformat blk2 clean + remount + provision
+  /etc/aether/config + root a probe there (reads it -> PRADYOS_SFSROOT_OK). Chosen
+  low-risk single-disk path (no host mkfs.sfs, no 2nd disk). Local gates green;
+  pushed to `dev/phase1`, CI-verifying. 96 gates.
+- **NEXT_TASK:** M2 continues — (a) re-point the LIVE AETHER daemon from
+  /AETHER.CFG (FAT, DDR-732) to /etc/aether/config on the SFS root now that a
+  clean persistent SFS root exists (the daemon's root_mnt must become the SFS
+  root_smnt; provision the daemon's config there before it reads). (b) SFS
+  free-space GC (snapshot-aware, DDR-741-deferred). (c) NVMe. (d) host mkfs.sfs
+  for true cross-reboot persistence.
 - **M1-AUDIT FINDING (open, low-freq):** `smoke-percpu-sched` (`-smp 4`) failed
   ONCE on CI (run 29634662558) with the whole boot-time FS self-test suite red
   (`[fs] /HELLO.TXT not found`, `[fs] create /KOUT.TXT failed`, `[sfs] created
