@@ -185,3 +185,10 @@ global setnametest_elf_end
 setnametest_elf:
     incbin "build/setnametest.elf"
 setnametest_elf_end:
+
+; sec (DDR-758): hostile-syscall fuzz probe.
+global syscallfuzz_elf
+global syscallfuzz_elf_end
+syscallfuzz_elf:
+    incbin "build/syscallfuzz.elf"
+syscallfuzz_elf_end:

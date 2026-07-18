@@ -1336,6 +1336,15 @@ now arms NXE (via a BSP-written EFER OR-mask in the mailbox) *before* paging, so
 APs don't RSVD-#PF on the now-NX kernel-data pages (all SMP gates pass). Residual:
 kernel text stays writable through the identity alias (documented follow-on). Gate
 `smoke-wxkernel`. **93 gates.**
+**Syscall-fuzz gate (DDR-758) — M1 kernel hardening 2/3.** Stress-tests the
+ring-3→ring-0 boundary. Freestanding `syscallfuzz` probe (fixed-seed 64-bit LCG →
+reproducible) floods 3000 hostile syscalls: bad NSI numbers (negatives + out of
+range) that must hit the dispatch bounds check (`-ENOSYS`, no off-end deref), and
+wild pointers (NULL/kernel-VA/non-canonical/unmapped) into an **allowlist** of
+read-only query syscalls that must return `-EFAULT` via the uaccess fixup. The
+allowlist (not a denylist) guarantees no destructive/self-terminating NSI body is
+invoked, so the probe always runs to completion → `PRADYOS_FUZZ_OK`. Verified: 0
+panics, boot continues past the flood. Gate `smoke-syscallfuzz`. **94 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

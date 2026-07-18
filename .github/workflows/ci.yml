@@ -101,6 +101,9 @@ jobs:
       - name: QEMU kernel-self W^X test (q35; text RX + data NX PTE audit, DDR-757)
         run: make smoke-wxkernel
 
+      - name: QEMU syscall-fuzz test (q35; 3000 hostile NSI calls, kernel survives, DDR-758)
+        run: make smoke-syscallfuzz
+
       - name: QEMU syscall I/O test (q35; sys_write fd table + EBADF/EFAULT)
         run: make smoke-sysio
 

@@ -83,6 +83,8 @@ USER_KILL_SRC := user/killtest.c          # proc: SYS_KILL fork/kill/reap probe 
 USER_KILL_ELF := build/killtest.elf
 USER_SETNAME_SRC := user/setnametest.c    # proc: SYS_SETNAME self-rename probe (DDR-756)
 USER_SETNAME_ELF := build/setnametest.elf
+USER_FUZZ_SRC := user/syscallfuzz.c       # sec: hostile-syscall fuzz probe (DDR-758)
+USER_FUZZ_ELF := build/syscallfuzz.elf
 USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
@@ -248,7 +250,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILL_ELF) build/killtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SETNAME_SRC) -o build/setnametest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SETNAME_ELF) build/setnametest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	$(CC) $(USER_C_CFLAGS) -c $(USER_FUZZ_SRC) -o build/syscallfuzz.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FUZZ_ELF) build/syscallfuzz.o
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -608,6 +612,14 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK')" \
 	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-758 syscall-fuzz gate: a ring-3 probe floods 3000 hostile syscalls (bad NSI
+# numbers -> -ENOSYS via the dispatch bounds check; wild pointers into read-only
+# syscalls -> -EFAULT). The kernel must survive every one; PRADYOS_FUZZ_OK prints
+# only after all calls return, and any kernel fault is a panic boot_test catches.
+smoke-syscallfuzz: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'PRADYOS_FUZZ_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 3 syscall I/O gate: the ring-3 systest program (loaded from SFS)

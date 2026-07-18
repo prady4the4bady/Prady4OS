@@ -99,15 +99,16 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-757 kernel-self W^X (text RX, data/rodata NX,
-  identity-alias NX, AP NXE-before-paging fix) — local gates green (incl. full
-  SMP set); pushed to `dev/phase1`, CI-verifying. 93 gates.
+- **LAST_COMPLETED_TASK:** DDR-757 kernel-self W^X — CI-green on `main` at
+  `596ac80`. 93 gates.
 - **CURRENT_ACTIVE_TASK:** DDR-758 syscall-fuzz gate (M1 kernel hardening 2/3) —
-  a ring-3 probe hammers random/out-of-range NSI numbers + wild args (bounded,
-  seeded); the kernel must survive every one (bad NSI -> -ENOSYS, bad ptr ->
-  -EFAULT, never a panic). Witness: kernel still alive + a completion sentinel.
-- **NEXT_TASK:** M1 3/3 SMP audit (review cross-CPU invariants), then M2 storage
-  (persistent SFS root half-2/2 needs a host mkfs.sfs or image-time provisioning).
+  freestanding fixed-seed LCG probe floods 3000 hostile syscalls (bad NSI ->
+  -ENOSYS via dispatch bounds; wild ptrs into a read-only allowlist -> -EFAULT).
+  Local gates green (0 panics, PRADYOS_FUZZ_OK); pushed to `dev/phase1`,
+  CI-verifying. 94 gates.
+- **NEXT_TASK:** M1 3/3 SMP audit (a stress/consistency gate over the per-CPU
+  runqueue + cross-CPU wake invariants), then M2 storage (persistent SFS root
+  half-2/2 needs a host mkfs.sfs or image-time provisioning).
 - **Milestone track:** M1 kernel hardening (per the revised master prompt §11);
   then M2 storage (persistent SFS root half-2/2, GC, NVMe).
 
