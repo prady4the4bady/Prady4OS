@@ -99,19 +99,18 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-759 SMP block-read integrity audit — CI-green on
-  `main` at `18498a8`. 95 gates. **M1 kernel hardening COMPLETE (757/758/759).**
-- **CURRENT_ACTIVE_TASK:** DDR-760 persistent SFS root (M2 1/N) — after the
-  destructive SFS self-tests, reformat blk2 clean + remount + provision
-  /etc/aether/config + root a probe there (reads it -> PRADYOS_SFSROOT_OK). Chosen
-  low-risk single-disk path (no host mkfs.sfs, no 2nd disk). Local gates green;
-  pushed to `dev/phase1`, CI-verifying. 96 gates.
-- **NEXT_TASK:** M2 continues — (a) re-point the LIVE AETHER daemon from
-  /AETHER.CFG (FAT, DDR-732) to /etc/aether/config on the SFS root now that a
-  clean persistent SFS root exists (the daemon's root_mnt must become the SFS
-  root_smnt; provision the daemon's config there before it reads). (b) SFS
-  free-space GC (snapshot-aware, DDR-741-deferred). (c) NVMe. (d) host mkfs.sfs
-  for true cross-reboot persistence.
+- **LAST_COMPLETED_TASK:** DDR-760 persistent SFS root — CI-green on `main` at
+  `c381ddb`. 96 gates.
+- **CURRENT_ACTIVE_TASK:** DDR-761 AETHER config migration — the live daemon now
+  reads /etc/aether/config on the SFS root (was /AETHER.CFG on FAT); daemon loaded
+  blocked, rooted at root_smnt + unblocked after provisioning. Local AETHER/agent
+  suite all green; pushed to `dev/phase1`, CI-verifying. 96 gates.
+- **NEXT_TASK:** M2 continues — (a) SFS free-space GC: snapshot-aware block
+  reclamation (DDR-741-deferred; allocator is bump-only `next_free++`, unlink only
+  tombstones the dir entry so file/CoW blocks leak — reclaim only when
+  `snapshot_count==0` to preserve isolation). CORRECTNESS-CRITICAL FS work. (b)
+  NVMe driver (registers with the blk layer). (c) host `mkfs.sfs` for true
+  cross-reboot persistence. (d) FAT `/AETHER.CFG` image-build cleanup (now dead).
 - **M1-AUDIT FINDING (open, low-freq):** `smoke-percpu-sched` (`-smp 4`) failed
   ONCE on CI (run 29634662558) with the whole boot-time FS self-test suite red
   (`[fs] /HELLO.TXT not found`, `[fs] create /KOUT.TXT failed`, `[sfs] created

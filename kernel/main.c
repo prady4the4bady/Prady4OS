@@ -1134,14 +1134,19 @@ static void fs_test_thread(void *arg) {
                     pr->parent_pid = it->pid;
 
                 /* L6: AETHER daemon as init's child, granted CAP_SOVEREIGN (it
-                 * owns mode + approve authority). Loaded now while SFS is mounted;
-                 * it auto-spawns the test agent once the scheduler runs. */
-                struct tcb *dm = user_boot_from_sfs(cap, smnt, "AETHERD.ELF",
-                                                    aether_daemon_elf, aether_daemon_elf_end,
-                                                    1 /* CAP_SOVEREIGN before first run */);
-                if (dm) {
-                    if (it) dm->parent_pid = it->pid;
-                    g_aether_daemon_pid = dm->pid;
+                 * owns mode + approve authority). DDR-761: loaded BLOCKED here
+                 * (hand-rolled elf_load, DDR-739 pattern) and rooted at the clean
+                 * PERSISTENT SFS root + unblocked only AFTER the reformat+provision
+                 * below, so it reads /etc/aether/config from the SFS volume. */
+                struct tcb *dm = 0;
+                {
+                    uint64_t dlen = (uint64_t)(aether_daemon_elf_end - aether_daemon_elf);
+                    if (elf_load((void *)(uintptr_t)aether_daemon_elf, dlen,
+                                 "AETHERD", &dm) == ELF_OK && dm) {
+                        dm->is_sovereign = 1;         /* authority before first run */
+                        if (it) dm->parent_pid = it->pid;
+                        g_aether_daemon_pid = dm->pid;
+                    }
                 }
                 smpuser_proof();     /* ADR-031 cap-4: ring 3 runs on an AP */
                 blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
@@ -1179,8 +1184,11 @@ static void fs_test_thread(void *arg) {
                 if (sfs_format(sbd) == 0) {
                     int root_smnt = vfs_mount(2);
                     if (root_smnt >= 0) {
+                        /* DDR-761: the FULL AETHER boot policy (mode/task/slot +
+                         * the CAP_NET allowlist row) now lives on the SFS root at
+                         * /etc/aether/config — the daemon reads it from here. */
                         static const char CFGTEXT[] =
-                            "mode=sovereign\ntask=persist\nslot=0\n";
+                            "mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n";
                         struct vfs_file cf;
                         if (vfs_create(cap, root_smnt, "/etc/aether/config", &cf) == 0)
                             vfs_write(cap, &cf, 0, (void *)CFGTEXT,
@@ -1192,6 +1200,13 @@ static void fs_test_thread(void *arg) {
                             sp->root_mnt = root_smnt;   /* clean SFS root before unblock */
                             sched_unblock(sp);
                             kputs("[sfs] persistent root provisioned; SFS-rooted probe spawned\r\n");
+                        }
+                        /* DDR-761: release the AETHER daemon into the SFS root now
+                         * that /etc/aether/config exists (loaded blocked above). */
+                        if (dm) {
+                            dm->root_mnt = root_smnt;
+                            sched_unblock(dm);
+                            kputs("[sfs] AETHER daemon rooted at SFS /etc/aether/config\r\n");
                         }
                     }
                 }

@@ -72,7 +72,7 @@ static int cfg_load(struct aether_cfg *c) {
     c->slot = 0;
     c->task[0] = 't'; c->task[1] = 'e'; c->task[2] = 's'; c->task[3] = 't'; c->task[4] = 0;
     c->nnet = 0;                              /* DDR-734: no rules = deny-all */
-    long fd = nsi(SYS_OPEN, (long)"/AETHER.CFG", 0, 0);
+    long fd = nsi(SYS_OPEN, (long)"/etc/aether/config", 0, 0);  /* DDR-761: SFS root */
     if (fd < 0)
         return 0;
     char buf[257];

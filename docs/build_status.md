@@ -1369,6 +1369,18 @@ remounts, the kernel provisions `/etc/aether/config`, and a probe is rooted ther
 fragile ELF-load sequence; existing destructive SFS gates unchanged. Gate
 `smoke-sfsroot`. Follow-ons: re-point the live daemon off `/AETHER.CFG` (FAT) to
 this SFS config; SFS free-space GC; host `mkfs.sfs`. **96 gates.**
+**AETHER config on SFS (DDR-761) — M2 storage 2/N.** The daemon read its boot
+policy from `/AETHER.CFG` on the FAT boot volume (DDR-732 stopgap); now it reads
+`/etc/aether/config` on the DDR-760 SFS root — config lives on the sovereign FS at
+its real path. The daemon opens only its config, so switching its root is safe:
+it is now `elf_load`ed **blocked** at spawn (hand-rolled, DDR-739 pattern) and
+`root_mnt`+unblocked in the reformat/provision block, after the kernel writes the
+full policy (`mode/task/slot`+`net=` CAP_NET row) to SFS `/etc/aether/config`.
+Deferring the daemon a few boot steps is safe (only it spawns agents; none run
+until it does; `g_aether_daemon_pid` is set at load). Validated by the existing
+`smoke-aethercfg` (now green against the SFS source) + the full AETHER/agent set
+(`smoke-aether`/`-queue`/`-sec`/`-agents`/`-agentmetrics`/`-netallow`) + `smoke-
+sfsroot`. FAT `/AETHER.CFG` left dead-but-harmless. **96 gates** (no new gate).
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
