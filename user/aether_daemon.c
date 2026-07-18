@@ -33,7 +33,8 @@ static inline long nsi(long n, long a1, long a2, long a3) {
     return r;
 }
 
-/* DDR-732 — boot policy from /AETHER.CFG on the boot volume (key=value lines:
+/* DDR-732/761 — boot policy from /etc/aether/config on the SFS root (DDR-761
+ * moved it off the FAT boot volume). key=value lines:
  * mode=sovereign|manual, task=<str>, slot=<0..7>; unknown keys ignored). Filled
  * with the compiled defaults first, so a missing/garbled file changes nothing —
  * the daemon must never fail to boot over config. Returns 1 iff the file was
@@ -115,7 +116,7 @@ int main(void) {
     printf("PRADYOS_AETHER_DAEMON_OK mode=%s\n", mode ? "sovereign" : "manual");
     fflush(stdout);
 
-    /* DDR-732: load the boot policy from /AETHER.CFG (falls back to the compiled
+    /* DDR-732/761: load the boot policy from /etc/aether/config (falls back to the compiled
      * defaults; the mode is applied AFTER the DDR-701 toggle self-check below so
      * the check's fixed sequence stays deterministic). */
     struct aether_cfg cfg;

@@ -372,12 +372,10 @@ fat-image:
 	mcopy -i $(FAT_IMG) build/note.txt ::/DOCS/NOTE.TXT
 	printf 'long name read works' > build/longname.txt
 	mcopy -i $(FAT_IMG) build/longname.txt ::/LongFileName.txt
-	# DDR-732/734: AETHER boot policy — operator-editable, read by the daemon at
-	# boot. net= rows are the CAP_NET egress allowlist (deny-by-default); the
-	# default entry is the Ollama endpoint at the SLIRP gateway (smoke-agent-live).
-	printf 'mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n' > build/aether.cfg
-	mcopy -i $(FAT_IMG) build/aether.cfg ::/AETHER.CFG
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /AETHER.CFG)"
+	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
+	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
+	# FAT /AETHER.CFG (DDR-732/734) is retired here.
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt)"
 
 # A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
 # place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
@@ -1363,9 +1361,9 @@ smoke-agentpanel: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'AGENT_PANEL KRYOS act=\nPRADYOS_AGENT_PANEL_METRICS_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
-# AETHER boot-config gate (DDR-732): the daemon reads /AETHER.CFG off the FAT32
-# boot volume (mcopy'd at image build) and applies mode/task/slot from it — the
-# CFG_OK line proves the file was read AND parsed (CFG_DEFAULT, the compiled
+# AETHER boot-config gate (DDR-732/761): the daemon reads /etc/aether/config off
+# the SFS root (kernel-provisioned, DDR-760/761) and applies mode/task/slot from
+# it — the CFG_OK line proves the file was read AND parsed (CFG_DEFAULT, the compiled
 # fallback, is the forbidden pattern); AGENT_DONE proves the configured spawn ran.
 smoke-aethercfg: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
@@ -1375,7 +1373,7 @@ smoke-aethercfg: $(IMG) fat-image sfs-image
 
 # CAP_NET egress-allowlist gate (DDR-734): the kernel match/deny self-test
 # proves exact-host+port allow, wrong-port deny, wrong-host deny; the daemon's
-# NET_ALLOW_OK n=1 proves the /AETHER.CFG net= row travelled config -> parser ->
+# NET_ALLOW_OK n=1 proves the /etc/aether/config net= row travelled config -> parser ->
 # sovereign-only SYS_NET_ALLOW -> kernel list. Deny-by-default for agents.
 smoke-netallow: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \

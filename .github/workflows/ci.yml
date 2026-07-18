@@ -272,7 +272,7 @@ jobs:
       - name: QEMU CAP_NET socket-authority test (q35; capless connect/slot -> EPERM)
         run: make smoke-capnet
 
-      - name: QEMU AETHER boot-config test (q35; daemon reads /AETHER.CFG policy)
+      - name: QEMU AETHER boot-config test (q35; daemon reads /etc/aether/config on SFS, DDR-761)
         run: make smoke-aethercfg
 
       - name: QEMU CAP_NET allowlist test (q35; deny-by-default egress, config-installed)

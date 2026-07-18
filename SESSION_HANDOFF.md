@@ -99,12 +99,11 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-760 persistent SFS root — CI-green on `main` at
-  `c381ddb`. 96 gates.
-- **CURRENT_ACTIVE_TASK:** DDR-761 AETHER config migration — the live daemon now
-  reads /etc/aether/config on the SFS root (was /AETHER.CFG on FAT); daemon loaded
-  blocked, rooted at root_smnt + unblocked after provisioning. Local AETHER/agent
-  suite all green; pushed to `dev/phase1`, CI-verifying. 96 gates.
+- **LAST_COMPLETED_TASK:** DDR-761 AETHER config migration to SFS + msixap
+  boot-proof determinism fix — CI-green on `main` at `2b11716`. 96 gates.
+- **CURRENT_ACTIVE_TASK:** DDR-761 cleanup — retire the now-dead FAT `/AETHER.CFG`
+  from the image build + fix stale comments (daemon reads SFS now). Local gates
+  green; pushed to `dev/phase1`, CI-verifying.
 - **NEXT_TASK:** M2 continues — (a) SFS free-space GC: snapshot-aware block
   reclamation (DDR-741-deferred; allocator is bump-only `next_free++`, unlink only
   tombstones the dir entry so file/CoW blocks leak — reclaim only when

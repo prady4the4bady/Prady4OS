@@ -31,7 +31,7 @@ static uint32_t g_sock_owner[SOCK_SLOTS];
 
 /* DDR-734 — per-host egress allowlist for CAP_NET callers. Bounded, append-only
  * (no runtime revocation surface — policy changes are a config edit + reboot),
- * installed by the sovereign daemon (SYS_NET_ALLOW) from /AETHER.CFG net= lines
+ * installed by the sovereign daemon (SYS_NET_ALLOW) from /etc/aether/config net= lines
  * BEFORE any agent spawns. EMPTY LIST = DENY-ALL for agents; the sovereign
  * operator bypasses (it is the authority that installs the list). */
 #define NET_ALLOW_MAX 8

@@ -1380,7 +1380,10 @@ Deferring the daemon a few boot steps is safe (only it spawns agents; none run
 until it does; `g_aether_daemon_pid` is set at load). Validated by the existing
 `smoke-aethercfg` (now green against the SFS source) + the full AETHER/agent set
 (`smoke-aether`/`-queue`/`-sec`/`-agents`/`-agentmetrics`/`-netallow`) + `smoke-
-sfsroot`. FAT `/AETHER.CFG` left dead-but-harmless. **96 gates** (no new gate).
+sfsroot`. **96 gates** (no new gate). *Cleanup:* the now-dead FAT `/AETHER.CFG`
+is retired from the image build (no reader remains after the SFS migration);
+stale `/AETHER.CFG` comments across the daemon/socket/Makefile updated to the SFS
+path — verified `smoke-aethercfg`/`-netallow`/`-fs`/boot still green with it gone.
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
