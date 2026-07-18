@@ -109,6 +109,16 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - **NEXT_TASK:** M1 3/3 SMP audit (a stress/consistency gate over the per-CPU
   runqueue + cross-CPU wake invariants), then M2 storage (persistent SFS root
   half-2/2 needs a host mkfs.sfs or image-time provisioning).
+- **M1-AUDIT FINDING (open, low-freq):** `smoke-percpu-sched` (`-smp 4`) failed
+  ONCE on CI (run 29634662558) with the whole boot-time FS self-test suite red
+  (`[fs] /HELLO.TXT not found`, `[fs] create /KOUT.TXT failed`, `[sfs] created
+  0`). Those tests run at kmain L773–800 — BEFORE any user spawn (the DDR-758
+  fuzz probe is at L1021) — so the fuzz probe is NOT causal; the commit only
+  shifted image size/timing. Reproduced 0/3 locally (passes). Matches the
+  documented intermittent early-boot FS/block flake under `-smp 4`. The M1 SMP
+  audit slice should add a deterministic early-boot block-init consistency check
+  and root-cause whether virtio-blk MSI-X completion routing across APs has a
+  narrow init-window race. Not a regression from the hardening work.
 - **Milestone track:** M1 kernel hardening (per the revised master prompt §11);
   then M2 storage (persistent SFS root half-2/2, GC, NVMe).
 
