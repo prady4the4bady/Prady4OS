@@ -98,6 +98,9 @@ jobs:
       - name: QEMU uaccess test (q35; copyin/copyout/copyinstr EFAULT contract)
         run: make smoke-uaccess
 
+      - name: QEMU kernel-self W^X test (q35; text RX + data NX PTE audit, DDR-757)
+        run: make smoke-wxkernel
+
       - name: QEMU syscall I/O test (q35; sys_write fd table + EBADF/EFAULT)
         run: make smoke-sysio
 

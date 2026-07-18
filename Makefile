@@ -600,6 +600,16 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-757 kernel-self W^X gate: after vmm_protect_kernel re-stamps the kernel
+# image mapping (text RX, rodata R+NX, data/BSS RW+NX) it re-walks the PT and
+# audits that no text PTE is writable and no non-text PTE is executable, printing
+# [wx] kernel W^X OK. The whole boot (incl. SMP gates elsewhere) runs against the
+# hardened tables, so this doubles as a no-regression witness.
+smoke-wxkernel: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK')" \
+	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # Phase 5b slice 3 syscall I/O gate: the ring-3 systest program (loaded from SFS)
 # calls sys_write(1,...) (good), sys_write(badfd,...) -> EBADF, and
 # sys_write(1, NULL, ...) -> EFAULT, printing a sentinel per outcome. Proves the

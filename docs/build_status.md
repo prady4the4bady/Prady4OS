@@ -1325,6 +1325,17 @@ repoints `t->name`. `ps` reflects it immediately (`sched_snapshot` reads
 `t->name`). PRISM `setname <name>` wraps it. Self-verify probe renames to
 `KILROY` then confirms via `SYS_GETPROCS` → `PRADYOS_SETNAME_OK`. Gate
 `smoke-setname`. **92 gates.**
+**Kernel-self W^X (DDR-757) — M1 kernel hardening 1/3.** Closes the long-deferred
+ADR-021 item (stage2 mapped the kernel image RWX). `kernel.ld` page-aligns the
+section boundaries (`__text_end`/`__rodata_end`); `vmm_protect_kernel()` (after
+`vmm_init`, before SMP) re-walks the PT_HI page and stamps text RX, rodata R+NX,
+data/BSS RW+NX, plus NX on the 2 MiB identity alias, then re-walks and audits the
+live PTEs → `[wx] kernel W^X OK`. Shared kernel top-level entries mean every AS is
+hardened. Threat-modeling surfaced + fixed an AP boot ordering bug: the trampoline
+now arms NXE (via a BSP-written EFER OR-mask in the mailbox) *before* paging, so
+APs don't RSVD-#PF on the now-NX kernel-data pages (all SMP gates pass). Residual:
+kernel text stays writable through the identity alias (documented follow-on). Gate
+`smoke-wxkernel`. **93 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

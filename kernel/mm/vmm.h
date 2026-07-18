@@ -46,6 +46,11 @@ int vmm_nx_enabled(void);
 /* cap-4: EFER is per-CPU — arm NXE on the calling AP (reuses the BSP's probe). */
 void vmm_enable_nxe_ap(void);
 
+/* DDR-757: kernel-self W^X — re-stamp the kernel image mapping (text RX,
+ * rodata R+NX, data/BSS RW+NX) + NX the identity alias. Call once after
+ * vmm_init, before any user process. Prints the audit sentinel. */
+void vmm_protect_kernel(void);
+
 /* Map/unmap a single 4 KiB page in the ACTIVE address space. Returns 0 on
  * success, -1 on failure (huge page in the way, or out of frames). */
 int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags);

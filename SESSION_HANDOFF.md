@@ -97,7 +97,42 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.0 CURRENT STATE (updated 2026-07-04 — supersedes everything below)
+### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
+
+- **LAST_COMPLETED_TASK:** DDR-757 kernel-self W^X (text RX, data/rodata NX,
+  identity-alias NX, AP NXE-before-paging fix) — local gates green (incl. full
+  SMP set); pushed to `dev/phase1`, CI-verifying. 93 gates.
+- **CURRENT_ACTIVE_TASK:** DDR-758 syscall-fuzz gate (M1 kernel hardening 2/3) —
+  a ring-3 probe hammers random/out-of-range NSI numbers + wild args (bounded,
+  seeded); the kernel must survive every one (bad NSI -> -ENOSYS, bad ptr ->
+  -EFAULT, never a panic). Witness: kernel still alive + a completion sentinel.
+- **NEXT_TASK:** M1 3/3 SMP audit (review cross-CPU invariants), then M2 storage
+  (persistent SFS root half-2/2 needs a host mkfs.sfs or image-time provisioning).
+- **Milestone track:** M1 kernel hardening (per the revised master prompt §11);
+  then M2 storage (persistent SFS root half-2/2, GC, NVMe).
+
+### 0.0.1 STATE DELTA (2026-07-15 — DDR-743..756, supersedes §0.0 below)
+
+- **HEAD:** `69d3474` (`main` == `dev/phase1`, both pushed, CI-green). **92 gates.**
+- Shipped since §0.0 (each DDR-first + CI-green before main ff):
+  **743** SYS_GETPROCS/`ps` · **744** ring-3 file lifecycle (O_CREAT + SYS_UNLINK
+  + the FD_VFS write path, which was a stub) · **745** PRISM touch/rm ·
+  **746** ACPI S5 poweroff (SYS_POWEROFF 69, CAP_SOVEREIGN; compositor `p`) ·
+  **747** ACPI reboot (SYS_REBOOT 70; FADT reset reg + 0xCF9 + 8042; `b`) ·
+  **748** SYS_SYSINFO 71 (CPUID vendor/brand, cpus, uptime, free pages) ·
+  **749** SYS_TIME 72 (RTC broken-down) · **750** klog ring + SYS_DMESG 73 ·
+  **751** PRISM uname/date/uptime/dmesg · **752** SYS_MEMINFO 74 + PMM
+  total-RAM tracking + PRISM free · **753** TCP loopback echo self-test
+  (client path; `smoke-net-tcp-lo`) · **754** ps CPU accounting (procinfo grew
+  run_ticks/dispatches) · **755** kill end-to-end (`smoke-kill`) + PRISM kill ·
+  **756** SYS_SETNAME 75 (tcb.name_buf; `smoke-setname`).
+- **NSI extends through 75.** PRISM builtins: help echo cat run ls ps kill
+  setname touch rm uname date uptime dmesg free mode exit.
+- Known env quirks: WSL pipe exit codes flake (route output to build/*.log);
+  boot_test deletes its serial log (use explicit qemu run to inspect output);
+  `ls`-gate prompt-prefix flake fixed in 743 (`(^|prism> )` anchor pattern).
+
+### 0.0 CURRENT STATE (updated 2026-07-04 — superseded by §0.0.1 above)
 
 - **HEAD:** `59d7ac4` (`main` == `dev/phase1`, both pushed). **CI: all 57 gates
   green** (run 28683624946). Git runs from native Windows (PowerShell); builds

@@ -29,6 +29,7 @@ extern void gdt_init(void);   /* arch/x86_64/cpu.asm — load the shared gdt64 *
 #define OFF_MB_ENTRY  0xA8
 #define OFF_MB_STACK  0xB0
 #define OFF_MB_IDX    0xB8
+#define OFF_MB_EFER   0xBC          /* DDR-757: EFER OR-mask (LME | NXE?) */
 
 #define IPI_INIT      0x00004500u   /* INIT, assert, fixed dest              */
 #define IPI_SIPI      0x00004608u   /* STARTUP, vector 0x08 (page 0x8000)    */
@@ -191,6 +192,11 @@ void smp_start_aps(void) {
         *(volatile uint64_t *)(uintptr_t)(TRAMP_PHYS + OFF_MB_ENTRY) = (uint64_t)(uintptr_t)smp_ap_entry;
         *(volatile uint64_t *)(uintptr_t)(TRAMP_PHYS + OFF_MB_STACK) = stack + 4 * PAGE_SIZE;
         *(volatile uint32_t *)(uintptr_t)(TRAMP_PHYS + OFF_MB_IDX)   = i;
+        /* DDR-757: LME always; add NXE (bit 11) when the kernel enabled NX, so
+         * the AP arms NXE BEFORE paging — the higher-half kernel-data pages now
+         * carry NX and would RSVD-#PF if touched with NXE clear. */
+        *(volatile uint32_t *)(uintptr_t)(TRAMP_PHYS + OFF_MB_EFER)  =
+            0x100u | (vmm_nx_enabled() ? 0x800u : 0u);
 
         uint32_t before = g_online;
         lapic_send_ipi(id, IPI_INIT);

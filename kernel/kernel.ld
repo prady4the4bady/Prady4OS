@@ -23,14 +23,22 @@ SECTIONS
 {
     . = KERNEL_VBASE;
 
+    /* DDR-757 kernel-self W^X: section boundaries are page-aligned so each 4 KiB
+     * PT_HI page carries exactly one policy (text RX / rodata R+NX / data RW+NX);
+     * __text_end and __rodata_end are the policy boundaries vmm_protect_kernel
+     * walks. */
     .text ALIGN(16) : AT(ADDR(.text) - KERNEL_VBASE + KERNEL_LMA) {
         *(.text.boot)              /* kernel_entry first */
         *(.text .text.*)
+        . = ALIGN(4096);
+        __text_end = .;
     }
-    .rodata ALIGN(16) : AT(ADDR(.rodata) - KERNEL_VBASE + KERNEL_LMA) {
+    .rodata : AT(ADDR(.rodata) - KERNEL_VBASE + KERNEL_LMA) {
         *(.rodata .rodata.*)
+        . = ALIGN(4096);
+        __rodata_end = .;
     }
-    .data ALIGN(16) : AT(ADDR(.data) - KERNEL_VBASE + KERNEL_LMA) {
+    .data : AT(ADDR(.data) - KERNEL_VBASE + KERNEL_LMA) {
         *(.data .data.*)
     }
     .bss ALIGN(64) (NOLOAD) : {        /* 64 = cache-line alignment for IPC rings */

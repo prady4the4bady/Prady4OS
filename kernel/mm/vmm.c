@@ -8,6 +8,7 @@
 #include "vmm.h"
 #include "pmm.h"
 #include "kheap.h"
+#include "console.h"           /* kputs for the DDR-757 W^X audit sentinel */
 
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
@@ -69,6 +70,76 @@ void vmm_enable_nxe_ap(void) {
 
 uint64_t vmm_kernel_cr3(void) {
     return g_kernel_pml4 ? g_kernel_pml4 : (read_cr3() & PTE_ADDR);
+}
+
+/* ---- DDR-757: kernel-self W^X ---------------------------------------------
+ * Stage2 maps the kernel image (KERNEL_VBASE -> 0x400000, 4 KiB PT_HI pages,
+ * 2 MiB span) present+RW with no NX. Re-stamp each PTE by section: text RX,
+ * rodata R+NX, data/BSS/spare RW+NX; and NX the 2 MiB identity-map alias PDE at
+ * 0x400000 (execute-via-alias). Per-process ASes share the kernel top-level
+ * entries, so this single pass hardens every AS. NX bits gate on g_nx_ok
+ * (identical to user W^X); text RW-clearing is unconditional. */
+#define KERNEL_VBASE_WX 0xFFFFFFFF80000000ull
+extern char __text_end[], __rodata_end[];      /* page-aligned (kernel.ld) */
+static uint64_t *table_at(uint64_t phys);      /* defined below */
+
+void vmm_protect_kernel(void) {
+    /* Master walk: PML4[511] -> PDPT[510] -> PD[0] -> PT (the PT_HI page). */
+    uint64_t *pml4 = table_at(g_kernel_pml4);
+    uint64_t pdpt = pml4[511] & PTE_ADDR;
+    if (!pdpt) { kputs("[wx] kernel W^X FAIL: no PML4[511]\r\n"); return; }
+    uint64_t pd = table_at(pdpt)[510] & PTE_ADDR;
+    if (!pd)   { kputs("[wx] kernel W^X FAIL: no PDPT[510]\r\n"); return; }
+    uint64_t pt = table_at(pd)[0] & PTE_ADDR;
+    if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[0]\r\n"); return; }
+
+    uint64_t *ptes      = table_at(pt);
+    uint64_t text_end   = (uint64_t)(uintptr_t)__text_end;
+    uint64_t rodata_end = (uint64_t)(uintptr_t)__rodata_end;
+    for (unsigned i = 0; i < 512; i++) {
+        uint64_t e = ptes[i];
+        if (!(e & PTE_PRESENT))
+            continue;
+        uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
+        if (va < text_end) {
+            e &= ~VMM_RW;                       /* text: RX */
+        } else if (va < rodata_end) {
+            e &= ~VMM_RW;                       /* rodata: R, no-exec */
+            if (g_nx_ok) e |= VMM_NX;
+        } else {
+            if (g_nx_ok) e |= VMM_NX;           /* data/BSS/spare: RW, no-exec */
+        }
+        ptes[i] = e;
+    }
+
+    /* Identity alias 0x400000..0x600000: PML4[0] -> PDPT[0] -> PD entry 2
+     * (2 MiB page). NX kills execute-via-alias; RW kept (documented residue). */
+    if (g_nx_ok) {
+        uint64_t lo_pdpt = pml4[0] & PTE_ADDR;
+        if (lo_pdpt) {
+            uint64_t lo_pd = table_at(lo_pdpt)[0] & PTE_ADDR;
+            if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT))
+                table_at(lo_pd)[2] |= VMM_NX;
+        }
+    }
+
+    /* Full TLB flush (non-global entries), then audit what is actually live. */
+    __asm__ volatile("mov %0, %%cr3" : : "r"(g_kernel_pml4) : "memory");
+
+    int ok = 1;
+    for (unsigned i = 0; i < 512; i++) {
+        uint64_t e = ptes[i];
+        if (!(e & PTE_PRESENT))
+            continue;
+        uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
+        if (va < text_end) {
+            if (e & VMM_RW) ok = 0;             /* writable text = FAIL */
+        } else {
+            if (g_nx_ok && !(e & VMM_NX)) ok = 0;  /* executable non-text = FAIL */
+            if (va < rodata_end && (e & VMM_RW)) ok = 0;   /* writable rodata */
+        }
+    }
+    kputs(ok ? "[wx] kernel W^X OK\r\n" : "[wx] kernel W^X FAIL\r\n");
 }
 
 /* A table's physical address is directly usable through the identity map. */

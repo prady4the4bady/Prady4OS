@@ -1401,6 +1401,8 @@ void kmain(struct boot_info *bi) {
     tss_init_cpu(0, 0);                  /* BSP is cpu_idx 0 here; rsp0 set per user thread */
     syscall_init();                      /* EFER.SCE + STAR/LSTAR/SFMASK + dispatch */
     vmm_init();                          /* record kernel master CR3 + enable EFER.NXE (W^X) */
+    vmm_protect_kernel();                /* DDR-757: kernel-self W^X (text RX, data NX) —
+                                          * before SMP bring-up so APs arm NXE pre-paging */
     kputs("NEXUS: TSS loaded, SYSCALL/SYSRET armed, NX enabled\r\n");
 
     kvga_line("NEXUS KERNEL OK", 1);
