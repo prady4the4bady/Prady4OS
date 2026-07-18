@@ -1008,6 +1008,16 @@ smoke-blkmq: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="multi-inflight FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-759 SMP audit gate (M1 3/3): 4 concurrent workers under -smp 4 each read a
+# sector 64x and verify the bytes against a single-threaded reference checksum, so
+# a completion mis-routed to the wrong DDR-BLK-1 slot (wrong data) is caught (not
+# just read-success, which blkmq_proof already covers).
+smoke-blk-integrity: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] blk integrity OK')" \
+	FORBIDDEN_SENTINEL="blk integrity FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # MSI-X distribution gate (DDR-714C3): the blk vectors target APs; a disk
 # completion handler provably ran on a non-BSP CPU while the FS phase's actual
 # I/O all still passes (correctness under cross-CPU completion).

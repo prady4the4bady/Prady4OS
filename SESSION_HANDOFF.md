@@ -99,16 +99,17 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-757 kernel-self W^X — CI-green on `main` at
-  `596ac80`. 93 gates.
-- **CURRENT_ACTIVE_TASK:** DDR-758 syscall-fuzz gate (M1 kernel hardening 2/3) —
-  freestanding fixed-seed LCG probe floods 3000 hostile syscalls (bad NSI ->
-  -ENOSYS via dispatch bounds; wild ptrs into a read-only allowlist -> -EFAULT).
-  Local gates green (0 panics, PRADYOS_FUZZ_OK); pushed to `dev/phase1`,
-  CI-verifying. 94 gates.
-- **NEXT_TASK:** M1 3/3 SMP audit (a stress/consistency gate over the per-CPU
-  runqueue + cross-CPU wake invariants), then M2 storage (persistent SFS root
-  half-2/2 needs a host mkfs.sfs or image-time provisioning).
+- **LAST_COMPLETED_TASK:** DDR-758 syscall-fuzz gate — CI-green on `main` at
+  `fedbf59`. 94 gates. **M1 1/3 (W^X) + 2/3 (fuzz) on main.**
+- **CURRENT_ACTIVE_TASK:** DDR-759 SMP block-read integrity audit (M1 3/3) —
+  concurrent-read data-verify self-test (reference checksum + 4 CPU workers) that
+  catches wrong-slot completion routing. Local 5/5 green under `-smp 4`; pushed to
+  `dev/phase1`, CI-verifying. 95 gates. **This completes M1 kernel hardening.**
+- **NEXT_TASK:** M2 storage completeness. Start with the persistent-SFS-root
+  blocker (SFS-as-root half 2/2): the destructive SFS self-tests reformat the only
+  SFS disk, so a process can't durably root there. Needs either a host `mkfs.sfs`
+  or image-time SFS provisioning + moving the destructive tests off the root
+  volume. Then: SFS free-space GC (block reclamation, DDR-741 deferred), NVMe.
 - **M1-AUDIT FINDING (open, low-freq):** `smoke-percpu-sched` (`-smp 4`) failed
   ONCE on CI (run 29634662558) with the whole boot-time FS self-test suite red
   (`[fs] /HELLO.TXT not found`, `[fs] create /KOUT.TXT failed`, `[sfs] created

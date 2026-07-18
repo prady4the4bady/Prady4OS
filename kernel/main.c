@@ -538,6 +538,61 @@ static void blkmq_proof(void) {
                                  : "[blk] multi-inflight FAIL\r\n");
 }
 
+/* DDR-759 (M1 SMP audit): concurrent block-read DATA integrity. Unlike
+ * blkmq_proof (which only checks read success), each worker verifies the bytes
+ * it read match a single-threaded reference checksum for its sector — so a
+ * completion mis-routed to the wrong DDR-BLK-1 slot (wrong data) is detected.
+ * 4 workers under -smp 4 distribute across CPUs, keeping the 8 slots busy and
+ * routing completions to APs (DDR-714C3). */
+static volatile uint32_t g_blkint_done;         /* bits 0..3 done, 8..11 error   */
+static uint32_t g_blkint_ref[4];                 /* per-sector reference checksum */
+
+static uint32_t blk_sum(const uint8_t *b) {
+    uint32_t s = 0;
+    for (int i = 0; i < 512; i++)               /* 512-byte sectors (blk.h) */
+        s = s * 31u + b[i];
+    return s;
+}
+
+static void blkint_worker(void *arg) {
+    unsigned id = (unsigned)(uintptr_t)arg;
+    unsigned sec = id & 3u;
+    struct blk_device *bd = blk_get(0);
+    uint64_t buf = pmm_alloc_page();
+    int ok = (bd && buf);
+    for (int i = 0; ok && i < 64; i++) {
+        if (bd->read(bd, sec, (void *)(uintptr_t)buf, 1) != 0) { ok = 0; break; }
+        if (blk_sum((const uint8_t *)(uintptr_t)buf) != g_blkint_ref[sec]) { ok = 0; break; }
+    }
+    if (buf)
+        pmm_free_page(buf);
+    __atomic_or_fetch(&g_blkint_done, 1u << (ok ? id : id + 8), __ATOMIC_SEQ_CST);
+}
+
+static void smp_blk_integrity(void) {
+    struct blk_device *bd = blk_get(0);
+    uint64_t buf = pmm_alloc_page();
+    if (!bd || !buf) { if (buf) pmm_free_page(buf); kputs("[smp] blk integrity FAIL\r\n"); return; }
+    /* Single-threaded reference: sectors 0..3 are stable read-only boot image. */
+    int refok = 1;
+    for (unsigned sec = 0; sec < 4; sec++) {
+        if (bd->read(bd, sec, (void *)(uintptr_t)buf, 1) != 0) { refok = 0; break; }
+        g_blkint_ref[sec] = blk_sum((const uint8_t *)(uintptr_t)buf);
+    }
+    pmm_free_page(buf);
+    if (!refok) { kputs("[smp] blk integrity FAIL\r\n"); return; }
+
+    sched_create(blkint_worker, (void *)0, "bi0");
+    sched_create(blkint_worker, (void *)1, "bi1");
+    sched_create(blkint_worker, (void *)2, "bi2");
+    sched_create(blkint_worker, (void *)3, "bi3");
+    uint64_t dl = g_ticks + 400;
+    while ((g_blkint_done & 0xfu) != 0xfu && g_ticks < dl)
+        yield();
+    kputs(((g_blkint_done & 0xfu) == 0xfu && !(g_blkint_done >> 8))
+          ? "[smp] blk integrity OK\r\n" : "[smp] blk integrity FAIL\r\n");
+}
+
 /* cap-3 proof: an AP's own LAPIC timer fires (preemption). Read a non-BSP CPU's
  * per-CPU tick counter, wait ~300 ms, and confirm it advanced — under cap-2b
  * (no AP timer) it would stay put. */
@@ -1088,6 +1143,7 @@ static void fs_test_thread(void *arg) {
                 }
                 smpuser_proof();     /* ADR-031 cap-4: ring 3 runs on an AP */
                 blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
+                smp_blk_integrity(); /* DDR-759: concurrent-read DATA integrity (M1 audit) */
                 rqstress_proof();    /* DDR-SMP-rq-1: thread storm over the rqs */
                 /* DDR-714C3: plenty of disk I/O has completed by now (the SFS
                  * ELF loads above) — assert a blk completion ran off the BSP. */

@@ -1345,6 +1345,18 @@ read-only query syscalls that must return `-EFAULT` via the uaccess fixup. The
 allowlist (not a denylist) guarantees no destructive/self-terminating NSI body is
 invoked, so the probe always runs to completion → `PRADYOS_FUZZ_OK`. Verified: 0
 panics, boot continues past the flood. Gate `smoke-syscallfuzz`. **94 gates.**
+**SMP block-read integrity audit (DDR-759) — M1 kernel hardening 3/3.** The
+audit's detection instrument for the logged intermittent `-smp 4` FS flake.
+`blkmq_proof` only checked read *success*; `smp_blk_integrity()` verifies *data*:
+it records a single-threaded reference checksum for sectors 0..3, then 4 kernel
+workers (distributed across CPUs under `-smp 4`, keeping the 8 DDR-BLK-1 slots
+busy) each re-read a sector 64× and compare each read's checksum to the reference
+— a completion mis-routed to the wrong slot (wrong data) is caught, not tolerated.
+Read-only (no writes → no image/FS corruption); no change to the hardened
+`virtio_blk.c` submit/complete. Verified green 5/5 under `-smp 4` (no wrong-data
+race observed — strong evidence the earlier one-off was infra/timing, and a
+deterministic repro instrument if it ever recurs). Gate `smoke-blk-integrity`.
+**95 gates.** *M1 kernel hardening (W^X + syscall-fuzz + SMP audit) COMPLETE.*
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
