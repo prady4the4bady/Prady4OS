@@ -24,11 +24,19 @@ then prints `PRADYOS_FUZZ_OK`. Two phases, chosen per-iteration by an LCG bit:
   MAX_SYSCALLS+4000)`) with wild args. Must hit the dispatch bounds check and
   return `-ENOSYS` — the handler is never reached, so this is side-effect-free.
 - **Wild pointer into a real syscall:** `num` drawn from an **allowlist** of
-  read-only / query syscalls that take user pointers — `READ, WRITE, FSTAT,
+  read-only / query syscalls that take user pointers — `WRITE, FSTAT,
   GETCWD, SET_TLS, AGENT_ROSTER, AGENT_METRICS, GETDENTS, GETPROCS, SYSINFO,
   TIME, DMESG, MEMINFO, SETNAME` — with each arg a wild pointer (NULL, kernel VA,
   non-canonical, unmapped user, `0x41414141`). Each must return an error
   (`-EFAULT`/`-EBADF`/`-EINVAL`) with the kernel intact.
+
+  **`SYS_READ` is deliberately excluded from the allowlist**: the wild-arg set
+  includes `0`, so `read(fd=0, …)` would drain the *global* console-input ring
+  (`console.c` `rx_ring`) shared by every process — stealing another process's
+  stdin. That is a real cross-process side effect (which broke the `smoke-shell`
+  echo assertion on the first CI run), not a uaccess test, so `READ` is out.
+  `WRITE` stays: a wild buffer faults at `copyin` (`-EFAULT`) before any byte is
+  emitted, so it has no output side effect.
 
 **Allowlist, not denylist** (the safety-critical choice): only calls that cannot
 self-terminate the probe, kill another process, move memory, spawn, or power the

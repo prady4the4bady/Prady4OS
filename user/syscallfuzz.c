@@ -28,9 +28,14 @@ static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
 
 __attribute__((noreturn)) void _start(void) {
     /* Read-only / query syscalls that take user pointers — wild args -> -EFAULT/
-     * -EBADF/-EINVAL, no destructive side effect, cannot self-terminate. */
+     * -EBADF/-EINVAL, no destructive side effect, cannot self-terminate.
+     * NB: SYS_READ (5) is deliberately EXCLUDED — read(fd=0,...) drains the
+     * GLOBAL console-input ring (console.c rx_ring) that PRISM/other processes
+     * consume, so fuzzing it steals another process's stdin (a real side effect,
+     * not a uaccess test). SYS_WRITE stays: wild bufs fault at copyin (-EFAULT),
+     * so nothing is emitted. */
     static const long SAFE[] = {
-        5, 6, 9, 11, 27, 53, 64, 66, 67, 71, 72, 73, 74, 75
+        6, 9, 11, 27, 53, 64, 66, 67, 71, 72, 73, 74, 75
     };
     /* Wild pointer values: NULL, kernel VA, non-canonical, unmapped user,
      * a low-but-plausible junk address. */
