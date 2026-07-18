@@ -99,17 +99,35 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-761 AETHER config migration to SFS + msixap
-  boot-proof determinism fix — CI-green on `main` at `2b11716`. 96 gates.
-- **CURRENT_ACTIVE_TASK:** DDR-761 cleanup — retire the now-dead FAT `/AETHER.CFG`
-  from the image build + fix stale comments (daemon reads SFS now). Local gates
-  green; pushed to `dev/phase1`, CI-verifying.
-- **NEXT_TASK:** M2 continues — (a) SFS free-space GC: snapshot-aware block
-  reclamation (DDR-741-deferred; allocator is bump-only `next_free++`, unlink only
-  tombstones the dir entry so file/CoW blocks leak — reclaim only when
-  `snapshot_count==0` to preserve isolation). CORRECTNESS-CRITICAL FS work. (b)
-  NVMe driver (registers with the blk layer). (c) host `mkfs.sfs` for true
-  cross-reboot persistence. (d) FAT `/AETHER.CFG` image-build cleanup (now dead).
+- **LAST_COMPLETED_TASK:** DDR-761 cleanup (retire dead FAT `/AETHER.CFG`) —
+  CI-green on `main` at `7c7a241`. 96 gates.
+- **CURRENT_ACTIVE_TASK:** none (DDR-762 free-space GC attempt REVERTED — see the
+  two findings below). `main` == `dev/phase1` == `7c7a241`, all green.
+- **NEXT_TASK (BLOCKED chain — fix SFS-BTREE-BUG first):**
+    1. **SFS-BTREE-BUG (HIGH PRIORITY, pre-existing, correctness-critical):**
+       repeated create+write(64K)+unlink of the SAME path fails the WRITE at the
+       ~11th cycle (`failop=2`), independent of any allocator change (reproduces
+       with reclamation disabled = pure bump; only ~176 blocks used, NOT
+       exhaustion). Root cause is in the SFS B+tree growth/split path
+       (`bt_insert_rec`/`bt_insert` in `kernel/fs/sfs/sfs.c`): accumulating
+       `SFS_KEY_INODE|ino` entries + dir tombstone churn grow the tree past its
+       first node and a split/rebuild path fails the inode-update insert during
+       the write. Existing gates never churn >10 same-name cycles so it was
+       latent. FIX FIRST (its own slice) with a repeated-churn gate.
+    2. **SFS free-space GC (design validated, code drafted then reverted):** the
+       naive per-block free stack is WRONG — SFS extents need CONTIGUOUS blocks
+       and the write path assumes `alloc_block` returns a run at `next_free`
+       (`sfs.c` ~L762 `start=c->next_free`), so scattered freed blocks corrupt the
+       extent (caught: data written to freed blocks while the extent records
+       `[next_free, next_free+n)`). CORRECT design = a free-EXTENT-RUN allocator:
+       `free_runs[256]={start,count}` (snapshot-guarded push on unlink of each
+       extent + the inode block); `alloc_run(n)` = first-fit+split, else bump;
+       `alloc_block=alloc_run(1)`; write uses `alloc_run(nblocks)` writing
+       `[start,start+n)`. Uniform-size files reuse exactly (no fragmentation).
+       This was implemented + reverted because its VALIDATION gate hits
+       SFS-BTREE-BUG first. Re-do after (1). (Full design in the reverted diff /
+       this note.)
+    3. NVMe driver; host `mkfs.sfs` (cross-reboot persistence).
 - **AUDIT FINDING (open, recurring low-freq): `-smp 4` one-shot boot-proof
   window flakes.** Two distinct `-smp 4` gates have each failed ONCE on CI, always
   0/3–4 locally, always with the commit only shifting boot timing (never in the
