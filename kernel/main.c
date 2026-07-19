@@ -367,6 +367,8 @@ extern const unsigned char syscallfuzz_elf[];         /* sec: syscall fuzz probe
 extern const unsigned char syscallfuzz_elf_end[];
 extern const unsigned char sfsroottest_elf[];         /* fs: persistent SFS-root probe (DDR-760) */
 extern const unsigned char sfsroottest_elf_end[];
+extern const unsigned char bigwritetest_elf[];        /* fs: ring-3 large-write probe (DDR-764) */
+extern const unsigned char bigwritetest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -1218,6 +1220,17 @@ static void fs_test_thread(void *arg) {
                             sched_unblock(sp);
                             kputs("[sfs] persistent root provisioned; SFS-rooted probe spawned\r\n");
                         }
+                        /* DDR-764: ring-3 large-write probe — writes 8 KiB to the
+                         * SFS root (2 extents via the 4 KiB write chunk; the old
+                         * 256 B chunk short-wrote at ~1 KiB). */
+                        struct tcb *bw = 0;
+                        uint64_t bwlen = (uint64_t)(bigwritetest_elf_end - bigwritetest_elf);
+                        if (elf_load((void *)(uintptr_t)bigwritetest_elf, bwlen,
+                                     "BIGWRITE", &bw) == ELF_OK && bw) {
+                            bw->root_mnt = root_smnt;
+                            sched_unblock(bw);
+                        }
+
                         /* DDR-761: release the AETHER daemon into the SFS root now
                          * that /etc/aether/config exists (loaded blocked above). */
                         if (dm) {

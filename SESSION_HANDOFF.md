@@ -99,7 +99,13 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-762-v2 SFS free-space GC (free-EXTENT-RUN allocator,
+- **LAST_COMPLETED_TASK (newest):** DDR-764 ring-3 VFS write chunk 256B→4KiB —
+  `fd_write_user` used a 256-byte buffer (1 vfs_write/256B → 16× iterations; and
+  each 256B = 1 SFS extent, so the 4-extent cap limited ring-3 SFS files to ~1KiB).
+  Now a 4KiB PMM-page chunk → ring-3 SFS files reach 16KiB, FAT 16× faster. Gate
+  smoke-vfs-bigwrite (8KiB SFS write, verified discriminating). 99 gates. Local
+  regression green; pushing to dev/phase1.
+- **PRIOR:** DDR-762-v2 SFS free-space GC (free-EXTENT-RUN allocator,
   exact-fit) — the "B+tree bug" that blocked it was a MISDIAGNOSIS (DDR-763: the
   1 MiB per-thread FS write budget, not the tree). GC gate rewritten to observe
   block reuse directly (next_free delta over 10 cycles: reclaim grew≈92 vs

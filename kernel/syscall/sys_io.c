@@ -14,6 +14,7 @@
 #include "console.h"
 #include "uaccess.h"
 #include "errno.h"
+#include "pmm.h"                 /* DDR-764: 4 KiB bounce page for FD_VFS writes */
 
 /* Write `count` (> 0) bytes from the user buffer at `uptr` to fd `e`, via the
  * validated copyin path (never a raw user dereference). Returns bytes written
@@ -54,21 +55,31 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
         return total;
     }
 
-    /* DDR-744: FD_VFS write — persist to the backing file through the cap-gated
-     * VFS. Chunked copyin (bounded kernel buffer), advancing the fd offset by the
-     * bytes actually written. vfs_write enforces CAP_FS_WRITE + the per-process
-     * write budget; a backend short-write ends the loop (returns the partial). */
+    /* DDR-744/764: FD_VFS write — persist to the backing file through the
+     * cap-gated VFS. Chunked copyin, advancing the fd offset by the bytes actually
+     * written. vfs_write enforces CAP_FS_WRITE + the per-process write budget; a
+     * backend short-write ends the loop (returns the partial). DDR-764: the chunk
+     * is one 4 KiB block (from a PMM page, not the 16 KiB kernel stack) — 16x
+     * fewer vfs_write iterations, and each SFS extent now holds a full block so a
+     * ring-3 SFS file reaches 4 extents * 4 KiB = 16 KiB instead of ~1 KiB. */
     if (e->kind == FD_VFS && e->file) {
-        char kbuf[256];
+        uint64_t kp = pmm_alloc_page();
+        if (!kp)
+            return -ENOMEM;
+        char *kbuf = (char *)(uintptr_t)kp;
+        const uint32_t CHUNK = 4096;
         long total = 0, remaining = count;
         while (remaining > 0) {
-            uint32_t chunk = (remaining > (long)sizeof kbuf) ? (uint32_t)sizeof kbuf
-                                                             : (uint32_t)remaining;
-            if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0)
+            uint32_t chunk = (remaining > (long)CHUNK) ? CHUNK : (uint32_t)remaining;
+            if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0) {
+                pmm_free_page(kp);
                 return total > 0 ? total : -EFAULT;
+            }
             int w = vfs_write(e->cap, e->file, e->off, kbuf, chunk);
-            if (w < 0)
+            if (w < 0) {
+                pmm_free_page(kp);
                 return total > 0 ? total : -EIO;
+            }
             if (w == 0)
                 break;                                  /* budget/space exhausted */
             e->off    += (uint64_t)w;
@@ -78,6 +89,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
             if (w < (int)chunk)
                 break;                                  /* short write */
         }
+        pmm_free_page(kp);
         return total;
     }
 

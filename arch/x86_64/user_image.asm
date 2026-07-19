@@ -199,3 +199,10 @@ global sfsroottest_elf_end
 sfsroottest_elf:
     incbin "build/sfsroottest.elf"
 sfsroottest_elf_end:
+
+; fs (DDR-764): ring-3 large-write probe.
+global bigwritetest_elf
+global bigwritetest_elf_end
+bigwritetest_elf:
+    incbin "build/bigwritetest.elf"
+bigwritetest_elf_end:

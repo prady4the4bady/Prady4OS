@@ -1413,6 +1413,17 @@ gates' boots out on TCG; the delta is the same proof, cheap). Full SFS suite inc
 destructive journal/snapshot/lz4 + SMP `blkmq` + `smoke-fs-ext4` green (no
 corruption). In-memory reclaim (within-a-boot); on-disk free tree deferred.
 **98 gates.**
+**Ring-3 VFS write chunk 256 B → 4 KiB (DDR-764).** `fd_write_user` (the FD_VFS
+`SYS_WRITE` path) copied user data through a 256-byte kernel buffer — 1 `vfs_write`
+per 256 B. Two costs: 16× the iterations, and (SFS) each 256 B chunk became one
+extent, so with the 4-inline-extent inode cap a ring-3 process could write only
+~1 KiB to an SFS file. Now chunks at one 4 KiB block from a PMM page (not the
+16 KiB kernel stack) → 16× fewer iterations and ring-3 SFS files reach 4 × 4 KiB =
+16 KiB; FAT just writes 16× faster. Gate `smoke-vfs-bigwrite`: an SFS-rooted probe
+writes 8 KiB in one `SYS_WRITE` + reads it back (256-chunk short-writes at ~1 KiB →
+verified discriminating). Regression: shell touch/rm, fsrm lifecycle, sfsroot,
+fs-rw, sysio all green. Follow-ons: SFS extent-overflow (lift the 16 KiB ceiling),
+refillable write budget. **99 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
