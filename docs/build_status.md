@@ -1384,6 +1384,17 @@ sfsroot`. **96 gates** (no new gate). *Cleanup:* the now-dead FAT `/AETHER.CFG`
 is retired from the image build (no reader remains after the SFS migration);
 stale `/AETHER.CFG` comments across the daemon/socket/Makefile updated to the SFS
 path — verified `smoke-aethercfg`/`-netallow`/`-fs`/boot still green with it gone.
+**SFS B+tree churn — misdiagnosis corrected (DDR-763).** A prior "correctness-
+critical SFS B+tree bug" (repeated create+write(64K)+unlink failing the write at
+~cycle 11) was reproduced with per-return-path instrumentation in `sfs_write` —
+NONE of its markers fired, so the write never reached SFS. It failed in
+`vfs_write`'s `fs_write_budget < len` check: the **1 MiB per-thread write budget**
+(`FS_WRITE_BUDGET_DEFAULT`) exhausted by the boot thread's ~20 ELF-to-SFS writes +
+FS self-tests, leaving room for only ~10 more 64 KB writes. The 14-slot leaf-split
+coincidence was a red herring — **there is no B+tree bug** (`sfs.c` unchanged);
+refreshing the budget makes the churn reach 40/40. New gate `smoke-sfs-btree` (40×
+create/write/unlink past the leaf split, budget refreshed to test the tree)
+closes the coverage gap that allowed the misdiagnosis. **97 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

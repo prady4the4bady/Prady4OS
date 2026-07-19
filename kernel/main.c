@@ -1225,6 +1225,33 @@ static void fs_test_thread(void *arg) {
                             sched_unblock(dm);
                             kputs("[sfs] AETHER daemon rooted at SFS /etc/aether/config\r\n");
                         }
+
+                        /* DDR-763: B+tree churn REGRESSION witness. 40 cycles of
+                         * create+write(64K)+unlink on the SAME path drive the
+                         * inode-entry B+tree well past its first leaf split
+                         * (SFS_LEAF_MAX=14) — coverage that no prior gate had, which
+                         * is why a write-budget exhaustion (below) was once
+                         * mis-attributed to a "B+tree split bug" (it is not — the
+                         * tree is sound). The 1 MiB per-thread FS write budget
+                         * (vfs.c) is refreshed here so this exercises the B+TREE, not
+                         * the budget — this is kernel self-test context, not a
+                         * userspace consumer. */
+                        {
+                            uint64_t cbuf = pmm_alloc_pages(4);   /* 64 KiB */
+                            int churn_ok = (cbuf != 0);
+                            current_thread->fs_write_budget = ~0ull;   /* test the tree, not the budget */
+                            if (cbuf) memset((void *)(uintptr_t)cbuf, 0x5A, 65536);
+                            for (int i = 0; churn_ok && i < 40; i++) {
+                                struct vfs_file cf2;
+                                if (vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2) != 0 ||
+                                    vfs_write(cap, &cf2, 0, (void *)(uintptr_t)cbuf, 65536) != 65536 ||
+                                    vfs_unlink(cap, root_smnt, "/CHURN.TMP") != 0)
+                                    churn_ok = 0;
+                            }
+                            if (cbuf) pmm_free_pages(cbuf, 4);
+                            kputs(churn_ok ? "[sfs] btree churn OK\r\n"
+                                           : "[sfs] btree churn FAIL\r\n");
+                        }
                     }
                 }
             } else {

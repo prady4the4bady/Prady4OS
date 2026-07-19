@@ -1029,6 +1029,15 @@ smoke-sfsroot: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="SFSROOT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-763 B+tree churn gate: 40x create+write(64K)+unlink of the same path on the
+# SFS root drives the inode-entry B+tree well past its first leaf split
+# (SFS_LEAF_MAX=14) — coverage no prior gate had. Proves the tree is sound (the
+# "B+tree bug" was actually the 1 MiB per-thread write budget; see DDR-763).
+smoke-sfs-btree: $(IMG) fat-image sfs-image
+	EXTRA_SENTINEL="$$(printf '[sfs] btree churn OK')" \
+	FORBIDDEN_SENTINEL="btree churn FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # MSI-X distribution gate (DDR-714C3): the blk vectors target APs; a disk
 # completion handler provably ran on a non-BSP CPU while the FS phase's actual
 # I/O all still passes (correctness under cross-CPU completion).

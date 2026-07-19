@@ -176,6 +176,9 @@ jobs:
       - name: QEMU persistent-SFS-root test (q35; process rooted at clean SFS reads config, DDR-760)
         run: make smoke-sfsroot
 
+      - name: QEMU SFS B+tree churn test (q35; 40x create/write/unlink past leaf split, DDR-763)
+        run: make smoke-sfs-btree
+
       - name: QEMU runqueue stress test (q35 -smp 4; thread storm over per-CPU rqs)
         run: make smoke-rqstress
 
