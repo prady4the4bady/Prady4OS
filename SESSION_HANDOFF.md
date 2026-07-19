@@ -99,6 +99,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
+- **LAST_COMPLETED_TASK:** DDR-762-v2 SFS free-space GC (free-EXTENT-RUN allocator,
+  exact-fit) — the "B+tree bug" that blocked it was a MISDIAGNOSIS (DDR-763: the
+  1 MiB per-thread FS write budget, not the tree). GC gate rewritten to observe
+  block reuse directly (next_free delta over 10 cycles: reclaim grew≈92 vs
+  no-reclaim ≈262) after the 300-cycle exhaustion loop timed other gates' boots
+  out. Local: all SFS + broad regression green. Pushing fix on dev/phase1.
+- **CURRENT_ACTIVE_TASK:** land DDR-762-v2 fix (CI-green, ff main).
+- **NEXT_TASK (M2):** NVMe driver (registers with the blk layer); then host
+  `mkfs.sfs` (cross-reboot persistence). Also open: the FS write budget (1 MiB
+  per-thread LIFETIME) is very low for a real persistent-root process — a design
+  review (higher/refillable/per-op budget) is worth a slice before M2 is declared
+  done. And the recurring smoke-percpu-sched -smp 4 early-boot flake (below).
+
+### 0.-1b PRIOR TRACKER (superseded)
+
 - **LAST_COMPLETED_TASK:** DDR-763 SFS B+tree churn (misdiagnosis corrected) —
   CI-green on `main` at `d7d4123`. 97 gates.
 - **CURRENT_ACTIVE_TASK:** DDR-762-v2 SFS free-space reclamation — free-EXTENT-RUN

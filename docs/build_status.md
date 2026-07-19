@@ -1399,15 +1399,20 @@ closes the coverage gap that allowed the misdiagnosis. **97 gates.**
 naive per-block free stack was WRONG (extents need CONTIGUOUS blocks; `write_extent`
 records `block_start=next_free`). Correct design = a free-EXTENT-RUN allocator:
 `sfs_ctx.free_runs[256]={start,count}`; `free_run()` snapshot-guarded push on
-unlink of each extent + the inode block; `alloc_run(n)` first-fit+split else bump;
-`alloc_block=alloc_run(1)`; `write_extent` uses `alloc_run(nblocks)` writing
-`[start,start+n)`. Invariant: a run enters only when `snapshot_count==0`, so a
-reused run is never snapshot-referenced; uniform files reuse exactly. Gate
-`smoke-sfs-gc`: 300× create+write(64K,INCOMPRESSIBLE so LZ4 can't shrink it)+unlink
-on the SFS root — verified discriminating (reclaim off → exhausts+fails; on → all
-300 pass). Full SFS suite incl. destructive journal/snapshot/lz4 + SMP `blkmq`
-green (no corruption). In-memory reclaim (within-a-boot); on-disk free tree
-deferred. **98 gates.**
+unlink of each extent + the inode block; `alloc_run(n)` **EXACT-fit, never split**
+else bump; `alloc_block=alloc_run(1)`; `write_extent` uses `alloc_run(nblocks)`
+writing `[start,start+n)`. Exact-fit (not first-fit-split) is essential: single-
+block inode/B+tree `alloc_run(1)` would otherwise fragment a freed 16-block extent
+run before the next write could reuse it whole. Invariant: a run enters only when
+`snapshot_count==0`, so a reused run is never snapshot-referenced; uniform files
+reuse exactly. Gate `smoke-sfs-gc` observes reuse DIRECTLY via the committed
+high-water (`sfs_read_next_free`): 10× create+write(64K incompressible)+unlink,
+assert the `next_free` delta `grew < 170` — measured reclaim `grew≈92`,
+no-reclaim `≈262` (the 300-cycle exhaustion loop was correct but timed other
+gates' boots out on TCG; the delta is the same proof, cheap). Full SFS suite incl.
+destructive journal/snapshot/lz4 + SMP `blkmq` + `smoke-fs-ext4` green (no
+corruption). In-memory reclaim (within-a-boot); on-disk free tree deferred.
+**98 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

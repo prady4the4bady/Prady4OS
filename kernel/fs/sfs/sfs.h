@@ -173,3 +173,8 @@ int  sfs_selftest_snapshot(struct blk_device *bd);
  * and round-trips a metadata tag across a remount. Returns a bitmask: bit0
  * compressed, bit1 readback-exact, bit2 tag-roundtrip. 7 = passed. */
 int  sfs_selftest_lz4(struct blk_device *bd);
+
+/* DDR-762-v2: read the committed superblock's high-water block (next_free_block)
+ * straight off the device — lets a self-test observe block reuse (free-space GC)
+ * without an exhaustion loop. Returns 0 if the block isn't a valid SFS super. */
+uint64_t sfs_read_next_free(struct blk_device *bd);

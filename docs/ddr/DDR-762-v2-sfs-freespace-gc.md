@@ -26,9 +26,14 @@ points at `[next_free, next_free+n)`.
 - **`free_run(c, start, count)`** pushes the run **only when
   `c->snapshot_count == 0`** (no snapshot can reference it) and there is room;
   else it leaks (bounded — correctness over completeness).
-- **`alloc_run(c, n)`** first-fit a reclaimed run with `count >= n`, split it
-  (`run.start += n; run.count -= n`, swap-remove if emptied), return the start;
-  else bump `next_free` by `n`. Returns `n` CONTIGUOUS blocks.
+- **`alloc_run(c, n)`** — **EXACT-fit, never split**: reuse a reclaimed run of
+  *exactly* `count == n` (swap-remove it), else bump `next_free` by `n`. Returns
+  `n` CONTIGUOUS blocks. (First-fit-with-split was tried and rejected: single-block
+  inode/B+tree allocations `alloc_run(1)` would nibble a freed 16-block extent run
+  before the next extent write could reuse it whole, so reuse failed and
+  `next_free` bumped anyway. Exact-fit keeps a freed 16-run intact for the next
+  16-block write; single-block requests that find no size-1 run bump instead of
+  fragmenting a larger run. Uniform-size files reuse perfectly.)
 - **`alloc_block(c) = alloc_run(c, 1)`** (inode blocks, B+tree nodes).
 - **`write_extent`** allocates its run with `alloc_run(c, nblocks)` and writes
   `[start, start+nblocks)` (contiguous).
@@ -47,13 +52,19 @@ snapshot-referenced; contiguity is preserved by construction. Uniform-size files
 ## Gate — `smoke-sfs-gc` (new; 97 → 98)
 
 Boot self-test on the reclaimed SFS root (`snapshot_count == 0`): **refresh the
-boot thread's `fs_write_budget`** (DDR-763 lesson — else the 1 MiB budget caps the
-loop at ~10, masking block reuse), then 300× { create `/GC.TMP`, write 64 KiB,
-unlink }. Discriminating: without reclamation, ~300×16 data blocks exceed the
-~4096-block volume and a `wr_block` past the disk fails; WITH the run allocator
-each unlink's 16-block run is reused by the next write (exact fit) so all 300
-succeed → `[sfs] free-space GC OK`. (Verified during development that disabling
-`free_run` reproduces the pre-300 exhaustion — the reuse is real and necessary.)
+boot thread's `fs_write_budget`** (DDR-763 lesson — else the 1 MiB budget caps a
+loop at ~10, masking reuse). It observes block reuse **directly** rather than by
+exhaustion: warm up one cycle (so a freed 16-run exists), sample the committed
+high-water `sfs_read_next_free(sbd)`, run **10×** { create `/GC.TMP`, write 64 KiB
+incompressible, unlink }, resample, and assert the delta `grew < 170`.
+
+A 300-cycle exhaustion loop was correct but ran ~19 MB of incompressible writes in
+every boot's SFS section — so slow on TCG it timed *other* gates' boots out
+(`smoke-fs-ext4` never reached its assertion). The delta approach is the same
+proof, cheap: **measured reclaim `grew≈92`, no-reclaim (free_run disabled)
+`grew≈262`** over 10 cycles — the 16-block data extent + inode are reused each
+cycle, leaving only leaked B+tree-CoW garbage, so `grew` sits far below the 160
+data-only floor. Threshold 170 discriminates with wide margin both ways.
 Regression: full SFS suite + `smoke-sfs-btree` + `sfsroot` (no corruption).
 
 ## Non-goals

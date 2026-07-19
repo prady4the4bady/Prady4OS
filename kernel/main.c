@@ -1253,23 +1253,24 @@ static void fs_test_thread(void *arg) {
                                            : "[sfs] btree churn FAIL\r\n");
                         }
 
-                        /* DDR-762-v2: free-space GC — 300 cycles of
-                         * create+write(64K)+unlink. WITHOUT reclamation ~300*16
-                         * data blocks exceed the ~4096-block volume and a wr_block
-                         * past the disk fails; WITH the free-extent-run allocator
-                         * each unlink's 16-block run is reused (exact fit) so all
-                         * 300 succeed. Budget refreshed (DDR-763) so this tests
-                         * block reuse, not the 1 MiB write budget. */
+                        /* DDR-762-v2: free-space GC — observe block REUSE directly
+                         * (cheap, ~10 cycles) rather than exhausting the volume (a
+                         * 300-cycle loop of incompressible 64K writes was correct but
+                         * so slow on TCG it timed OTHER gates' boots out). Each
+                         * unlink frees the file's 16-block extent + inode block; with
+                         * the free-extent-run allocator the next 64K write reuses the
+                         * 16-run (exact fit), so the superblock high-water
+                         * (next_free_block) barely advances. WITHOUT reclamation it
+                         * would climb ~17 blocks/cycle. We assert the delta over 10
+                         * cycles is far below that no-reuse floor (170). Budget
+                         * refreshed (DDR-763) so this tests reuse, not the 1 MiB
+                         * write budget. INCOMPRESSIBLE fill so LZ4 can't shrink the
+                         * extent (a memset would compress to ~1 block). */
                         {
                             uint64_t gbuf = pmm_alloc_pages(4);   /* 64 KiB */
                             int gc_ok = (gbuf != 0);
                             current_thread->fs_write_budget = ~0ull;
                             if (gbuf) {
-                                /* INCOMPRESSIBLE fill (high per-byte entropy) so LZ4
-                                 * can't shrink it — each 64K write really needs its
-                                 * full 16-block extent, making the gate discriminate
-                                 * block reuse (a memset pattern would compress to ~1
-                                 * block and never exhaust). */
                                 uint8_t *g = (uint8_t *)(uintptr_t)gbuf;
                                 uint32_t x = 0x9e3779b9u;
                                 for (int k = 0; k < 65536; k++) {
@@ -1277,16 +1278,33 @@ static void fs_test_thread(void *arg) {
                                     g[k] = (uint8_t)(x >> 24);
                                 }
                             }
-                            for (int i = 0; gc_ok && i < 300; i++) {
-                                struct vfs_file gf;
+                            /* Warm up one cycle so a freed 16-run exists, then sample. */
+                            struct vfs_file gf;
+                            if (gc_ok &&
+                                (vfs_create(cap, root_smnt, "/GC.TMP", &gf) != 0 ||
+                                 vfs_write(cap, &gf, 0, (void *)(uintptr_t)gbuf, 65536) != 65536 ||
+                                 vfs_unlink(cap, root_smnt, "/GC.TMP") != 0))
+                                gc_ok = 0;
+                            uint64_t nf0 = sfs_read_next_free(sbd);
+                            for (int i = 0; gc_ok && i < 10; i++) {
                                 if (vfs_create(cap, root_smnt, "/GC.TMP", &gf) != 0 ||
                                     vfs_write(cap, &gf, 0, (void *)(uintptr_t)gbuf, 65536) != 65536 ||
                                     vfs_unlink(cap, root_smnt, "/GC.TMP") != 0)
                                     gc_ok = 0;
                             }
+                            uint64_t nf1 = sfs_read_next_free(sbd);
                             if (gbuf) pmm_free_pages(gbuf, 4);
-                            kputs(gc_ok ? "[sfs] free-space GC OK\r\n"
-                                        : "[sfs] free-space GC FAIL\r\n");
+                            uint64_t grew = (nf1 >= nf0) ? (nf1 - nf0) : ~0ull;
+                            kputs("[sfs] free-space GC grew="); kputdec(grew);
+                            kputs("\r\n");
+                            /* Measured: reclaim ~92, no-reclaim ~262 (10 cycles).
+                             * The 16-block data extent + inode are reused each cycle
+                             * (exact-fit run), so growth is only leaked btree-CoW
+                             * garbage. Threshold 170 discriminates with wide margin
+                             * both ways (reclaim << 170 << no-reclaim). */
+                            kputs((gc_ok && grew < 170)
+                                      ? "[sfs] free-space GC OK\r\n"
+                                      : "[sfs] free-space GC FAIL\r\n");
                         }
                     }
                 }

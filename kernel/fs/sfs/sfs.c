@@ -108,13 +108,16 @@ static void free_run(struct sfs_ctx *c, uint64_t start, uint32_t count) {
 /* Allocate `n` CONTIGUOUS blocks: first-fit a reclaimed run (splitting it), else
  * bump the high water. The returned start begins a run of exactly `n` blocks. */
 static uint64_t alloc_run(struct sfs_ctx *c, uint32_t n) {
+    /* EXACT-fit, never split. Splitting a larger run for a smaller request lets
+     * single-block (inode/B+tree) allocations nibble a freed extent run before
+     * the next extent write can reuse it whole — reuse then fails and next_free
+     * bumps anyway. Exact-fit keeps a freed 16-block extent run intact for the
+     * next 16-block write (uniform files reuse perfectly); a non-matching size
+     * simply bumps (bounded leak) rather than fragment. */
     for (uint32_t i = 0; i < c->free_run_count; i++) {
-        if (c->free_runs[i].count >= n) {
+        if (c->free_runs[i].count == n) {
             uint64_t start = c->free_runs[i].start;
-            c->free_runs[i].start += n;
-            c->free_runs[i].count -= n;
-            if (c->free_runs[i].count == 0)     /* run consumed: swap-remove */
-                c->free_runs[i] = c->free_runs[--c->free_run_count];
+            c->free_runs[i] = c->free_runs[--c->free_run_count];   /* swap-remove */
             return start;
         }
     }
@@ -958,6 +961,20 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
 
     *ctx = c;
     return 0;
+}
+
+/* DDR-762-v2: read the committed high-water block off the device (see sfs.h). */
+uint64_t sfs_read_next_free(struct blk_device *bd) {
+    if (!bd)
+        return 0;
+    uint64_t page = pmm_alloc_page();
+    if (!page)
+        return 0;
+    rd_block_bd(bd, 0, (void *)(uintptr_t)page);
+    struct sfs_superblock *sb = (struct sfs_superblock *)(uintptr_t)page;
+    uint64_t nf = (sb->magic == SFS_MAGIC) ? sb->next_free_block : 0;
+    pmm_free_page(page);
+    return nf;
 }
 
 int sfs_format(struct blk_device *bd) {
