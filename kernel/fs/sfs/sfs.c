@@ -66,6 +66,14 @@ struct sfs_ctx {
     uint64_t saved_next_inode;
     uint32_t snapshot_count;
     struct sfs_snap snapshots[SFS_MAX_SNAPSHOTS];
+    /* DDR-762-v2: in-memory free-EXTENT-RUN list (within-a-boot reclamation). SFS
+     * extents need CONTIGUOUS blocks, so reclamation tracks free RUNS
+     * ([start,count]), not individual blocks. A run enters only when
+     * snapshot_count==0 (no snapshot can reference it), so reused blocks are never
+     * snapshot-referenced. Overflow leaks (bounded). First-fit + split; exact-size
+     * reuse is fragmentation-free for uniform files. */
+    struct { uint64_t start; uint32_t count; } free_runs[256];
+    uint32_t free_run_count;
 };
 
 /* ---- block I/O (one 4 KiB block = 8 sectors; buffers are PMM pages) ------- */
@@ -83,9 +91,41 @@ static void wr_block(struct sfs_ctx *c, uint64_t blk, const void *buf) {
     wr_block_bd(c->bd, blk, buf);
 }
 
-/* High-water allocator (free-space tree is a deferred sub-slice). */
+/* DDR-762-v2: reclaim a CONTIGUOUS run [start,count) for reuse — ONLY when no
+ * snapshot exists (a snapshot could reference it) and the list has room; else it
+ * leaks (bounded) rather than risk a snapshot referencing reused blocks. No
+ * coalescing (correctness doesn't need it; exact-size reuse is fragmentation-free). */
+static void free_run(struct sfs_ctx *c, uint64_t start, uint32_t count) {
+    if (count == 0 || start == 0 || c->snapshot_count != 0)
+        return;
+    if (c->free_run_count < (uint32_t)(sizeof c->free_runs / sizeof c->free_runs[0])) {
+        c->free_runs[c->free_run_count].start = start;
+        c->free_runs[c->free_run_count].count = count;
+        c->free_run_count++;
+    }
+}
+
+/* Allocate `n` CONTIGUOUS blocks: first-fit a reclaimed run (splitting it), else
+ * bump the high water. The returned start begins a run of exactly `n` blocks. */
+static uint64_t alloc_run(struct sfs_ctx *c, uint32_t n) {
+    for (uint32_t i = 0; i < c->free_run_count; i++) {
+        if (c->free_runs[i].count >= n) {
+            uint64_t start = c->free_runs[i].start;
+            c->free_runs[i].start += n;
+            c->free_runs[i].count -= n;
+            if (c->free_runs[i].count == 0)     /* run consumed: swap-remove */
+                c->free_runs[i] = c->free_runs[--c->free_run_count];
+            return start;
+        }
+    }
+    uint64_t start = c->next_free;
+    c->next_free += n;
+    return start;
+}
+
+/* Single-block allocator (inode blocks, B+tree nodes) — a run of 1. */
 static uint64_t alloc_block(struct sfs_ctx *c) {
-    return c->next_free++;
+    return alloc_run(c, 1);
 }
 
 /* Smallest buddy order whose allocation holds `bytes`. */
@@ -743,17 +783,16 @@ static int write_extent(struct sfs_ctx *c, const uint8_t *data, uint32_t len,
     }
 
     uint32_t nblocks = (store_len + SFS_BLOCK_SIZE - 1) / SFS_BLOCK_SIZE;
-    uint64_t start = c->next_free;
+    uint64_t start = alloc_run(c, nblocks);    /* DDR-762-v2: one CONTIGUOUS run */
     uint64_t db = pmm_alloc_page();
     if (!db) { if (cbp) pmm_free_pages(cbp, cord); return -1; }
     uint8_t *dbuf = (uint8_t *)(uintptr_t)db;
     uint32_t done = 0;
     for (uint32_t i = 0; i < nblocks; i++) {
-        uint64_t blk = alloc_block(c);
         uint32_t chunk = (store_len - done < SFS_BLOCK_SIZE) ? (store_len - done) : SFS_BLOCK_SIZE;
         memset(dbuf, 0, SFS_BLOCK_SIZE);
         memcpy(dbuf, store + done, chunk);
-        wr_block(c, blk, dbuf);
+        wr_block(c, start + i, dbuf);          /* contiguous: [start, start+nblocks) */
         done += chunk;
     }
     pmm_free_page(db);
@@ -830,6 +869,27 @@ static int sfs_unlink(void *ctx, const char *path) {
             return -1;                          /* not empty (ENOTEMPTY) */
     }
 
+    /* DDR-762-v2: reclaim the removed inode's blocks (data extents + inode block)
+     * as CONTIGUOUS runs. free_run is snapshot-guarded (no-op when a snapshot may
+     * reference them). Read the inode before tombstoning; a read failure just
+     * skips reclaim (leak, not corruption). */
+    {
+        uint64_t ip = pmm_alloc_page();
+        if (ip) {
+            struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+            uint64_t iblk = inode_block_of(c, ino, in);
+            if (iblk) {
+                unsigned ne = in->extent_count;
+                if (ne > 4) ne = 4;             /* only 4 inline extents exist */
+                for (unsigned e = 0; e < ne; e++)
+                    free_run(c, in->inline_extents[e].block_start,
+                             in->inline_extents[e].block_count);   /* the whole run */
+                free_run(c, iblk, 1);           /* the inode block */
+            }
+            pmm_free_page(ip);
+        }
+    }
+
     /* Overwrite the name->inode entry with a tombstone (bt_insert replaces). */
     uint64_t dir_key = (parent << 32) | (uint64_t)sfs_name_hash32(name, len);
     struct sfs_leaf_slot s;
@@ -868,6 +928,7 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
     c->txn_log_start = sb->txn_log_start;
     c->in_txn      = 0;
     c->saved_root = c->saved_next_free = c->saved_next_inode = 0;
+    c->free_run_count = 0;              /* DDR-762-v2: kmalloc doesn't zero */
     c->snapshot_count = sb->snapshot_count;
     if (c->snapshot_count > SFS_MAX_SNAPSHOTS)
         c->snapshot_count = SFS_MAX_SNAPSHOTS;

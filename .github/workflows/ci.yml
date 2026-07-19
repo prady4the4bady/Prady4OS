@@ -179,6 +179,9 @@ jobs:
       - name: QEMU SFS B+tree churn test (q35; 40x create/write/unlink past leaf split, DDR-763)
         run: make smoke-sfs-btree
 
+      - name: QEMU SFS free-space GC test (q35; 300x create/write/unlink, block reuse, DDR-762-v2)
+        run: make smoke-sfs-gc
+
       - name: QEMU runqueue stress test (q35 -smp 4; thread storm over per-CPU rqs)
         run: make smoke-rqstress
 

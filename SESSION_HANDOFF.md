@@ -99,10 +99,14 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK:** DDR-763 SFS B+tree churn — misdiagnosis corrected (NO
-  B+tree bug; root cause = write budget) + regression gate `smoke-sfs-btree`.
-  Local green; pushed to `dev/phase1`, CI-verifying. 97 gates.
-- **CURRENT_ACTIVE_TASK:** none — DDR-763 in CI.
+- **LAST_COMPLETED_TASK:** DDR-763 SFS B+tree churn (misdiagnosis corrected) —
+  CI-green on `main` at `d7d4123`. 97 gates.
+- **CURRENT_ACTIVE_TASK:** DDR-762-v2 SFS free-space reclamation — free-EXTENT-RUN
+  allocator (`free_runs[256]`, `alloc_run` first-fit+split, snapshot-guarded
+  `free_run` on unlink, write uses `alloc_run(nblocks)`). Gate `smoke-sfs-gc` (300×
+  create/write/unlink, incompressible data, budget-refreshed) — verified
+  discriminating. Full SFS+SMP regression green. Local green; pushed to
+  `dev/phase1`, CI-verifying. 98 gates.
 - **RETRACTED FINDING — there was NO SFS B+tree bug.** DDR-763 reproduced the
   prior "bug" with per-return-path instrumentation in `sfs_write`: NONE of the
   `sfs_write` markers fired, so `sfs_write` was never reached. The write failed
@@ -113,20 +117,17 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   The ~14-slot leaf-split coincidence was a red herring. PROOF: refresh the boot
   thread's budget → churn reaches 40/40, failop=0. `sfs.c` UNCHANGED. B+tree is
   sound.
-- **NEXT_TASK:** M2 continues, now UNBLOCKED —
-    1. **SFS free-space GC (DDR-762 redo):** the free-EXTENT-RUN allocator design
-       is correct (per-block stack is WRONG — extents need CONTIGUOUS blocks;
-       write path assumes `alloc_block` returns a run at `next_free`, `sfs.c`
-       ~L762). Design: `free_runs[256]={start,count}` (snapshot-guarded push on
-       unlink of each extent + inode block); `alloc_run(n)`=first-fit+split, else
-       bump; `alloc_block=alloc_run(1)`; write uses `alloc_run(nblocks)` writing
-       `[start,start+n)`; uniform files reuse exactly. Its earlier iter-10 failure
-       was the SAME write budget — the GC test MUST refresh the boot thread's
-       budget (like `smoke-sfs-btree`) to isolate block reuse from the budget.
-    2. NVMe driver; host `mkfs.sfs` (cross-reboot persistence).
-    3. (Design note) the 1 MiB *lifetime* per-thread write budget is very
-       restrictive for a real process on the persistent SFS root — a separate
-       future decision (higher / refillable / per-op), not a bug.
+- **NEXT_TASK:** M2 continues —
+    1. **NVMe driver** (registers with the blk layer; needs an NVMe QEMU disk —
+       adds boot disk topology). Large new driver.
+    2. **host `mkfs.sfs`** — cross-reboot SFS persistence + on-disk free-extent
+       tree (the in-memory `free_runs` from DDR-762-v2 is within-a-boot only).
+    3. (Design note, revisit before M2 done) the 1 MiB *lifetime* per-thread FS
+       write budget (`FS_WRITE_BUDGET_DEFAULT`) is very restrictive for a real
+       process writing many files on the persistent SFS root — a separate future
+       decision (higher / refillable / per-op), not a bug.
+    4. (Open audit) `smoke-percpu-sched` intermittent `-smp 4` early-boot FS flake
+       — must be root-caused before M2 is declared complete.
 - **AUDIT FINDING (open, recurring low-freq): `-smp 4` one-shot boot-proof
   window flakes.** Two distinct `-smp 4` gates have each failed ONCE on CI, always
   0/3–4 locally, always with the commit only shifting boot timing (never in the

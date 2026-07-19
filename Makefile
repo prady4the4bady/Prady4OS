@@ -1038,6 +1038,15 @@ smoke-sfs-btree: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="btree churn FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-762-v2 SFS free-space GC gate: 300x create+write(64K)+unlink on the SFS root.
+# Without the free-extent-run reclaim the ~4800 data blocks exceed the ~4096-block
+# volume and a write past the disk fails; with reclaim each unlink's 16-block run
+# is reused (exact fit) -> all 300 succeed. Proves snapshot-safe contiguous reuse.
+smoke-sfs-gc: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf '[sfs] free-space GC OK')" \
+	FORBIDDEN_SENTINEL="free-space GC FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # MSI-X distribution gate (DDR-714C3): the blk vectors target APs; a disk
 # completion handler provably ran on a non-BSP CPU while the FS phase's actual
 # I/O all still passes (correctness under cross-CPU completion).

@@ -1395,6 +1395,19 @@ coincidence was a red herring — **there is no B+tree bug** (`sfs.c` unchanged)
 refreshing the budget makes the churn reach 40/40. New gate `smoke-sfs-btree` (40×
 create/write/unlink past the leaf split, budget refreshed to test the tree)
 closes the coverage gap that allowed the misdiagnosis. **97 gates.**
+**SFS free-space reclamation (DDR-762-v2).** Closes the DDR-741 block leak. The
+naive per-block free stack was WRONG (extents need CONTIGUOUS blocks; `write_extent`
+records `block_start=next_free`). Correct design = a free-EXTENT-RUN allocator:
+`sfs_ctx.free_runs[256]={start,count}`; `free_run()` snapshot-guarded push on
+unlink of each extent + the inode block; `alloc_run(n)` first-fit+split else bump;
+`alloc_block=alloc_run(1)`; `write_extent` uses `alloc_run(nblocks)` writing
+`[start,start+n)`. Invariant: a run enters only when `snapshot_count==0`, so a
+reused run is never snapshot-referenced; uniform files reuse exactly. Gate
+`smoke-sfs-gc`: 300× create+write(64K,INCOMPRESSIBLE so LZ4 can't shrink it)+unlink
+on the SFS root — verified discriminating (reclaim off → exhausts+fails; on → all
+300 pass). Full SFS suite incl. destructive journal/snapshot/lz4 + SMP `blkmq`
+green (no corruption). In-memory reclaim (within-a-boot); on-disk free tree
+deferred. **98 gates.**
 **Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
 self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
 provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the

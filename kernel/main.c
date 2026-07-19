@@ -1252,6 +1252,42 @@ static void fs_test_thread(void *arg) {
                             kputs(churn_ok ? "[sfs] btree churn OK\r\n"
                                            : "[sfs] btree churn FAIL\r\n");
                         }
+
+                        /* DDR-762-v2: free-space GC — 300 cycles of
+                         * create+write(64K)+unlink. WITHOUT reclamation ~300*16
+                         * data blocks exceed the ~4096-block volume and a wr_block
+                         * past the disk fails; WITH the free-extent-run allocator
+                         * each unlink's 16-block run is reused (exact fit) so all
+                         * 300 succeed. Budget refreshed (DDR-763) so this tests
+                         * block reuse, not the 1 MiB write budget. */
+                        {
+                            uint64_t gbuf = pmm_alloc_pages(4);   /* 64 KiB */
+                            int gc_ok = (gbuf != 0);
+                            current_thread->fs_write_budget = ~0ull;
+                            if (gbuf) {
+                                /* INCOMPRESSIBLE fill (high per-byte entropy) so LZ4
+                                 * can't shrink it — each 64K write really needs its
+                                 * full 16-block extent, making the gate discriminate
+                                 * block reuse (a memset pattern would compress to ~1
+                                 * block and never exhaust). */
+                                uint8_t *g = (uint8_t *)(uintptr_t)gbuf;
+                                uint32_t x = 0x9e3779b9u;
+                                for (int k = 0; k < 65536; k++) {
+                                    x ^= x << 13; x ^= x >> 17; x ^= x << 5;  /* xorshift */
+                                    g[k] = (uint8_t)(x >> 24);
+                                }
+                            }
+                            for (int i = 0; gc_ok && i < 300; i++) {
+                                struct vfs_file gf;
+                                if (vfs_create(cap, root_smnt, "/GC.TMP", &gf) != 0 ||
+                                    vfs_write(cap, &gf, 0, (void *)(uintptr_t)gbuf, 65536) != 65536 ||
+                                    vfs_unlink(cap, root_smnt, "/GC.TMP") != 0)
+                                    gc_ok = 0;
+                            }
+                            if (gbuf) pmm_free_pages(gbuf, 4);
+                            kputs(gc_ok ? "[sfs] free-space GC OK\r\n"
+                                        : "[sfs] free-space GC FAIL\r\n");
+                        }
                     }
                 }
             } else {
