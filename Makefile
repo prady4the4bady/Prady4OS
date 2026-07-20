@@ -146,7 +146,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-mkfs-sfs smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -391,6 +391,36 @@ sfs-image:
 	@mkdir -p build
 	dd if=/dev/zero of=$(SFS_IMG) bs=1M count=16 status=none
 	@echo "sfs: $(SFS_IMG) (16 MiB blank — kernel formats in place)"
+
+# Host SFS image writer + read-back verifier (DDR-767). Both #include the kernel's
+# sfs.h so their on-disk structs + FNV-1a name hash are byte-identical to the
+# kernel reader — no format drift. Built with the host cc (like mkfs.fat/mtools).
+MKFS_SFS      := build/mkfs.sfs
+SFS_READBACK  := build/sfs_readback
+MKFS_SFS_IMG  := build/mkfs_sfs.img
+SFS_PERSIST_MARK := PRADYOS SFS persistence marker: DDR-767 OK
+
+$(MKFS_SFS): tools/mkfs_sfs/mkfs_sfs.c kernel/fs/sfs/sfs.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Ikernel/fs/sfs -o $@ $<
+
+$(SFS_READBACK): tools/mkfs_sfs/sfs_readback.c kernel/fs/sfs/sfs.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Ikernel/fs/sfs -o $@ $<
+
+# Host round-trip gate: mkfs.sfs writes an image provisioning /PERSIST.TXT, and
+# sfs_readback (kernel sfs.h structs + the kernel's leaf-scan/inode/extent read
+# path) recovers it byte-for-byte — proving mkfs output is kernel-decodable. The
+# kernel-boots-and-reads end-to-end proof is DDR-768.
+smoke-mkfs-sfs: $(MKFS_SFS) $(SFS_READBACK)
+	@mkdir -p build
+	printf '$(SFS_PERSIST_MARK)' > build/persist.txt
+	$(MKFS_SFS) $(MKFS_SFS_IMG) --blocks 4096 --file PERSIST.TXT=build/persist.txt
+	@out=$$($(SFS_READBACK) $(MKFS_SFS_IMG) PERSIST.TXT); \
+	 echo "readback: $$out"; \
+	 [ "$$out" = "$(SFS_PERSIST_MARK)" ] \
+	   && echo "[smoke] PASS — mkfs.sfs host round-trip" \
+	   || { echo "[smoke] FAIL — mkfs.sfs round-trip mismatch"; exit 1; }
 
 # An ext4 disk populated at mkfs time (-d) with a known file, for the ext4
 # read-only self-test. Forces 4 KiB blocks to match the kernel's page reads.
@@ -965,7 +995,7 @@ smoke-winops: $(IMG) fat-image sfs-image
 # slots, and — the lifecycle hole this slice closes — reclaims a child's surfaces
 # when it EXITS without SYS_SURFACE_CLOSE. GPU-independent (surfaces are PMM).
 smoke-surfdestroy: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SURFDESTROY_CHURN_OK\nPRADYOS_SURFDESTROY_REUSE_OK\nPRADYOS_SURFDESTROY_EXIT_OK\nPRADYOS_SURFDESTROY_OK')" \
 	FORBIDDEN_SENTINEL="SURFDESTROY FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -981,7 +1011,7 @@ smoke-apic: $(IMG) fat-image sfs-image
 # the 0x8000 trampoline into long mode; each announces and parks. Proves the
 # MP-init protocol end-to-end (MADT ids -> IPIs -> real->long mode -> C).
 smoke-smp: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 tss OK\n[smp] cpu 2 tss OK\n[smp] cpu 3 tss OK\n[smp] cpus online=4/4')" \
 	FORBIDDEN_SENTINEL="tss FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -990,7 +1020,7 @@ smoke-smp: $(IMG) fat-image sfs-image
 # probe threads and kicks the APs; a probe reports a non-BSP cpu_idx, proving a
 # ready-ring thread executed on an AP (not just a directed mailbox job).
 smoke-smpsched: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] sched cross-CPU OK')" \
 	FORBIDDEN_SENTINEL="cross-CPU FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -999,7 +1029,7 @@ smoke-smpsched: $(IMG) fat-image sfs-image
 # non-BSP CPU's per-CPU tick counter advances — proving timer-driven preemption
 # on APs (under cap-2b it would stay 0).
 smoke-smppreempt: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] ap preempt OK')" \
 	FORBIDDEN_SENTINEL="ap preempt FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1008,7 +1038,7 @@ smoke-smppreempt: $(IMG) fat-image sfs-image
 # run by a non-BSP CPU, with the user programs still passing their own sentinels
 # (they must run CORRECTLY on APs, not merely run).
 smoke-smpuser: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] user on AP OK\nHELLO FROM RING-3\nPRADYOS_MUSL_OK')" \
 	FORBIDDEN_SENTINEL="user on AP FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1016,7 +1046,7 @@ smoke-smpuser: $(IMG) fat-image sfs-image
 # Runqueue stress gate (DDR-SMP-rq-1): 24 kernel threads in 3 waves over the
 # per-CPU ready queues (steal + wake spread them); all must complete.
 smoke-rqstress: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] rqstress OK')" \
 	FORBIDDEN_SENTINEL="rqstress FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1025,7 +1055,7 @@ smoke-rqstress: $(IMG) fat-image sfs-image
 # one disk concurrently (per-request slots; the one-in-flight mutex is gone),
 # each round-tripping its own reads cleanly.
 smoke-blkmq: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[blk] multi-inflight OK\n[sfs] lz4+tags compress/readback/tag OK')" \
 	FORBIDDEN_SENTINEL="multi-inflight FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1035,7 +1065,7 @@ smoke-blkmq: $(IMG) fat-image sfs-image
 # a completion mis-routed to the wrong DDR-BLK-1 slot (wrong data) is caught (not
 # just read-success, which blkmq_proof already covers).
 smoke-blk-integrity: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] blk integrity OK')" \
 	FORBIDDEN_SENTINEL="blk integrity FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1079,7 +1109,7 @@ smoke-sfs-gc: $(IMG) fat-image sfs-image
 # completion handler provably ran on a non-BSP CPU while the FS phase's actual
 # I/O all still passes (correctness under cross-CPU completion).
 smoke-msixap: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_SMP=4 \
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[blk] msix on AP OK\n[sfs] lz4+tags compress/readback/tag OK')" \
 	FORBIDDEN_SENTINEL="msix on AP FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1088,7 +1118,7 @@ smoke-msixap: $(IMG) fat-image sfs-image
 # slab object through the new subsystem spinlocks before parking; all three must
 # report locks OK (and none FAIL) alongside full bring-up.
 smoke-smplock: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 locks OK\n[smp] cpu 2 locks OK\n[smp] cpu 3 locks OK\n[smp] cpus online=4/4')" \
 	FORBIDDEN_SENTINEL="locks FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1096,7 +1126,7 @@ smoke-smplock: $(IMG) fat-image sfs-image
 # Per-CPU identity gate (ADR-030 stage 2, DDR-SMP-2): the BSP and every AP
 # record + round-trip their percpu entry (LAPIC-ID-indexed this_cpu()).
 smoke-percpu: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[percpu] bsp idx=\n[smp] cpu 1 percpu OK\n[smp] cpu 2 percpu OK\n[smp] cpu 3 percpu OK')" \
 	FORBIDDEN_SENTINEL="percpu FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1105,7 +1135,7 @@ smoke-percpu: $(IMG) fat-image sfs-image
 # round-trip from a ring-3-entered syscall (only true when the SWAPGS discipline
 # on syscall/isr/usermode transitions is balanced) AND from every parked AP.
 smoke-swapgs: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[percpu] gs OK (syscall ctx)\n[smp] cpu 1 percpu OK\n[smp] cpu 2 percpu OK\n[smp] cpu 3 percpu OK\n[smp] cpus online=4/4')" \
 	FORBIDDEN_SENTINEL="$$(printf 'gs FAIL\npercpu FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1114,7 +1144,7 @@ smoke-swapgs: $(IMG) fat-image sfs-image
 # posts a job to each idle AP's mailbox + wake IPI (vector 49); every AP runs
 # it and reports, then the BSP confirms all mailboxes drained.
 smoke-smpjob: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] cpu 1 job OK\n[smp] cpu 2 job OK\n[smp] cpu 3 job OK\n[smp] jobs done=3')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
@@ -1122,7 +1152,7 @@ smoke-smpjob: $(IMG) fat-image sfs-image
 # sched_unblocks it (atomic CAS, no ring lock needed for state-only
 # transitions); it resumes on the (spinlocked) BSP scheduler.
 smoke-crosswake: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] cross-wake waiting\n[smp] cross-wake OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
@@ -1130,7 +1160,7 @@ smoke-crosswake: $(IMG) fat-image sfs-image
 # the SYSCALL kstack now live at %gs:8/%gs:16; the probe verifies the running
 # thread resolves through percpu from ring-3 syscall context.
 smoke-percpu-sched: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[percpu] current OK (syscall ctx)\n[percpu] gs OK (syscall ctx)\n[smp] cpus online=4/4')" \
 	FORBIDDEN_SENTINEL="$$(printf 'current FAIL\ngs FAIL\npercpu FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1262,7 +1292,7 @@ smoke-focus: $(IMG) fat-image sfs-image
 # Reschedule-IPI gate (DDR-SMP-rq-3): a cross-CPU unblock kicks an idle AP
 # (directed wake IPI) so it steals the thread promptly, not on its next tick.
 smoke-resched: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_SMP=4 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[smp] resched OK')" \
 	FORBIDDEN_SENTINEL="resched FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)

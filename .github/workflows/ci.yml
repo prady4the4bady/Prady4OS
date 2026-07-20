@@ -38,6 +38,9 @@ jobs:
       - name: QEMU boot smoke test (q35; greps the kernel sentinel)
         run: make smoke
 
+      - name: Host mkfs.sfs round-trip (build-time SFS provisioning, DDR-767)
+        run: make smoke-mkfs-sfs
+
       - name: QEMU filesystem self-test (q35; FAT32 read end-to-end)
         run: make smoke-fs
 

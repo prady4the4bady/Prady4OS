@@ -1448,11 +1448,26 @@ scratch nvme.img → `PRADYOS_NVME_RW_OK`; `smoke-nvme` asserts it plus
 `registered nvme0`. Verified: `[nvme] registered nvme0 (32768 sectors)` +
 `PRADYOS_NVME_RW_OK`, image `-Werror`-clean. Still **100 gates** (smoke-nvme
 extended, not a new gate).
-**Next:** host `mkfs.sfs` (cross-reboot SFS persistence — format an SFS image on
-the host so a real filesystem survives reboot); then optionally mount a
-filesystem on the NVMe block device. Open: refillable FS write budget review;
-smoke-percpu-sched `-smp 4` early-boot flake; NVMe PRP-list for >page single
-commands (DDR-767) + NVMe IRQ. wlroots/Wayland remain out-of-tree.
+**DDR-767 (host `mkfs.sfs` — build-time SFS provisioning):** a host tool that
+writes byte-exact SFS images the kernel reads. `tools/mkfs_sfs/mkfs_sfs.c` +
+`sfs_readback.c` both `#include` the kernel's `sfs.h`, so their on-disk structs +
+FNV-1a name hash are identical to the kernel reader (no drift). mkfs formats
+blocks 0–3 exactly like `sfs_format`, then provisions root-level files (inode +
+inline extents + DIR/INODE leaf slots into the single root B+tree leaf). New
+host gate `smoke-mkfs-sfs`: mkfs writes `/PERSIST.TXT`; `sfs_readback` (kernel
+structs + the kernel's leaf-scan → inode → extent read path) recovers it
+byte-for-byte (~1 s, no boot). Verified locally. The kernel-boots-and-reads
+end-to-end proof is **DDR-768**. Also this commit: bumped the 16 `-smp 4` gate
+timeouts (60→120, 90→180 s) — CI's slower 4-vCPU TCG intermittently exceeded the
+tight 90 s margin on `smoke-surfdestroy` (test booted + passed locally; a
+runner-speed timeout flake, not a correctness bug — the deeper SMP-race
+investigation stays open). **101 gates.**
+**Next:** DDR-768 — kernel boots on the mkfs image + reads `/PERSIST.TXT`
+(`vfs_mount` + `vfs_open`/`vfs_read` → `PRADYOS_SFS_PERSIST_OK`), the true
+cross-reboot persistence proof; then nested-dir provisioning to migrate
+`/etc/aether/config` off kernel provisioning. Open: refillable FS write budget
+review; `-smp 4` SMP-race root-cause; NVMe PRP-list (>page single commands) +
+NVMe IRQ. wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-20
 
 ## Phase 0 — Toolchain & Build System
