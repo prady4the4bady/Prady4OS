@@ -1434,13 +1434,25 @@ NSID=1) over the admin queue — completion polled via the CQ phase bit, every
 hardware wait bounded by a spin counter so a missing/wedged controller cannot
 hang boot. Prints `[nvme] <model> ns1 <NSZE> LBAs x <lbasize> B`; on QEMU's
 `-device nvme` that is `QEMU NVMe Ctrl ns1 32768 LBAs x 512 B` (16 MiB image).
-No block I/O and no `blk_register` yet — that is DDR-766. New gate `smoke-nvme`
-(`QEMU_NVME=1` knob in boot_test.sh attaches the controller; every other gate
-boots without one, so the driver is a no-op there). **100 gates.**
-**Next:** DDR-766 — NVMe I/O queue + read/write + `blk_register` (make the
-controller a real block device); then host `mkfs.sfs` (cross-reboot SFS
-persistence). Open: refillable FS write budget review; smoke-percpu-sched
-`-smp 4` early-boot flake. wlroots/Wayland remain out-of-tree.
+New gate `smoke-nvme` (`QEMU_NVME=1` knob in boot_test.sh attaches the
+controller; every other gate boots without one, so the driver is a no-op there).
+
+**DDR-766 (NVMe I/O queue + read/write + blk_register — M2 driver 2/2):** makes
+the namespace a real block device. Creates one I/O SQ/CQ pair via Create I/O
+Completion/Submission Queue admin commands (qid 1, PC=1, poll — no IRQ), issues
+NVM Read (0x02)/Write (0x01) with a PRP1-only per-≤page-chunk loop (any buffer
+alignment; PRP lists deferred), and `blk_register`s `nvme0` with
+`capacity_sectors = NSZE` (512-byte LBA only this slice; non-512 logs + skips).
+Boot self-test round-trips LBA 100 (write pattern → read back → verify) on the
+scratch nvme.img → `PRADYOS_NVME_RW_OK`; `smoke-nvme` asserts it plus
+`registered nvme0`. Verified: `[nvme] registered nvme0 (32768 sectors)` +
+`PRADYOS_NVME_RW_OK`, image `-Werror`-clean. Still **100 gates** (smoke-nvme
+extended, not a new gate).
+**Next:** host `mkfs.sfs` (cross-reboot SFS persistence — format an SFS image on
+the host so a real filesystem survives reboot); then optionally mount a
+filesystem on the NVMe block device. Open: refillable FS write budget review;
+smoke-percpu-sched `-smp 4` early-boot flake; NVMe PRP-list for >page single
+commands (DDR-767) + NVMe IRQ. wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-20
 
 ## Phase 0 — Toolchain & Build System

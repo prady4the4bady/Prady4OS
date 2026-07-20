@@ -1,20 +1,21 @@
-/* kernel/drivers/nvme/nvme.c — NVMe controller bring-up + Identify (DDR-765).
+/* kernel/drivers/nvme/nvme.c — NVMe driver (DDR-765 bring-up + DDR-766 block I/O).
  *
- * First of two NVMe slices. Detects one NVMe controller (PCIe class 0x01 /
- * subclass 0x08), maps BAR0 uncached, enables the controller, stands up a
- * single admin submission/completion queue pair, and issues Identify Controller
- * + Identify Namespace to read the model number and namespace geometry. There is
- * no block I/O here and no blk_register — that is DDR-766. Completion is polled
- * via the CQ phase bit (no NVMe IRQ this slice); every hardware wait is bounded
- * by a spin counter so a missing or wedged controller can never hang the boot.
+ * Detects one NVMe controller (PCIe class 0x01 / subclass 0x08), maps BAR0
+ * uncached, enables the controller, and stands up an admin queue to run Identify
+ * Controller + Identify Namespace (DDR-765). DDR-766 then creates one I/O queue
+ * pair and registers the namespace as a generic block device ("nvme0"), with a
+ * boot self-test that round-trips a scratch LBA.
  *
- * PMM pages are page-aligned and identity-mapped (phys == pointer), so an admin
- * queue / PRP page doubles as both its DMA address and a CPU pointer.
+ * Completion is polled via the CQ phase bit (no NVMe IRQ); every hardware wait
+ * is spin-bounded so a missing/wedged controller can never hang the boot. PMM
+ * pages are page-aligned and identity-mapped (phys == pointer), so a queue / PRP
+ * page doubles as both its DMA address and a CPU pointer.
  */
 #include "nvme.h"
 #include "pcie.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "blk.h"
 #include "console.h"
 
 /* BAR0-relative controller registers (NVMe 1.x). */
@@ -25,23 +26,23 @@
 #define NVME_AQA   0x24
 #define NVME_ASQ   0x28      /* u64 */
 #define NVME_ACQ   0x30      /* u64 */
-#define NVME_SQ0TDBL 0x1000  /* admin SQ tail doorbell; CQ head at +stride */
+#define NVME_DBBASE 0x1000   /* doorbell array base */
 
 #define CC_EN      (1u << 0)
 #define CSTS_RDY   (1u << 0)
 
-/* Admin queue depth: 64 entries fits one 4 KiB page for both the 64-byte SQ
- * entries and the 16-byte CQ entries (16*256 also fits, but 64 keeps them
- * symmetric and one page each). AQA encodes size-1. */
-#define AQ_DEPTH   64
+/* Admin + I/O queues are 64 entries — one 4 KiB page holds both the 64-byte SQ
+ * entries and the 16-byte CQ entries. AQA / Create-Queue sizes encode depth-1. */
+#define Q_DEPTH    64
+#define IO_QID     1
 
 /* Distinct high-VA window for the NVMe BAR (virtio's map_bar uses a different
- * base). Two pages cover the register block + the admin doorbells at 0x1000. */
+ * base). Two pages cover the register block + the doorbells at 0x1000. */
 #define NVME_BAR_VBASE 0xFFFFD20000000000ull
 #define NVME_BAR_MAP   0x2000u
 
-/* One NVMe submission-queue entry (64 bytes) as raw dwords; we only fill the
- * fields Identify needs (opcode/CID, NSID, PRP1, CDW10). */
+/* NVMe submission-queue entry (64 bytes). We fill only the fields admin/NVM
+ * commands need (opcode/CID, NSID, PRP1, CDW10..12). */
 struct nvme_sqe {
     uint32_t cdw0;      /* opcode[7:0] | fuse[9:8] | psdt[15:14] | CID[31:16] */
     uint32_t nsid;
@@ -63,22 +64,30 @@ struct nvme_cqe {
     uint16_t sq_head;
     uint16_t sq_id;
     uint16_t cid;
-    uint16_t status;    /* phase bit is bit 0 here (P[16] of the DW3 word) */
+    uint16_t status;    /* bit0 = phase; bits 15:1 = status field */
+};
+
+struct nvme_queue {
+    struct nvme_sqe *sq;
+    struct nvme_cqe *cq;
+    uint16_t sq_tail;
+    uint16_t cq_head;
+    uint8_t  phase;     /* expected phase bit for the next CQE */
+    uint16_t qid;
 };
 
 struct nvme {
     volatile uint8_t *bar;
     uint32_t dstrd;                 /* doorbell stride shift from CAP */
-    struct nvme_sqe *asq;           /* admin submission queue (one page) */
-    struct nvme_cqe *acq;           /* admin completion queue (one page) */
-    uint16_t sq_tail;
-    uint16_t cq_head;
-    uint8_t  cq_phase;              /* expected phase bit for the next CQE */
+    struct nvme_queue admin;
+    struct nvme_queue io;
     uint16_t cid;
     uint8_t  ready;                 /* controller enabled + Identify done */
+    uint8_t  io_ready;              /* I/O queue up + registered */
     uint64_t nsze;                  /* namespace size in LBAs */
     uint32_t lba_bytes;             /* logical block size */
     char     model[41];
+    struct blk_device bd;
 };
 
 static struct nvme g_nvme;          /* single controller this slice */
@@ -98,14 +107,22 @@ static inline void wr64(struct nvme *n, uint32_t off, uint64_t v) {
     *(volatile uint32_t *)(n->bar + off + 4) = (uint32_t)(v >> 32);
 }
 
+/* Doorbell offsets for a queue (2*qid = SQ tail, 2*qid+1 = CQ head). */
+static inline uint32_t sq_db(struct nvme *n, uint16_t qid) {
+    return NVME_DBBASE + (2u * qid) * (4u << n->dstrd);
+}
+static inline uint32_t cq_db(struct nvme *n, uint16_t qid) {
+    return NVME_DBBASE + (2u * qid + 1u) * (4u << n->dstrd);
+}
+
 static void zero_page(void *p) {
     uint64_t *q = (uint64_t *)p;
     for (unsigned i = 0; i < PAGE_SIZE / sizeof(uint64_t); i++)
         q[i] = 0;
 }
 
-/* Bounded busy-wait for (rd32(reg) & mask) == want. Returns 0 on success, -1 on
- * timeout. Independent of the timer (may not be ticking here). */
+/* Bounded busy-wait for (rd32(reg) & mask) == want. 0 on success, -1 timeout.
+ * Independent of the timer (may not be ticking here). */
 static int wait_reg(struct nvme *n, uint32_t reg, uint32_t mask, uint32_t want) {
     for (uint64_t i = 0; i < 50000000ull; i++) {
         if ((rd32(n, reg) & mask) == want)
@@ -115,11 +132,12 @@ static int wait_reg(struct nvme *n, uint32_t reg, uint32_t mask, uint32_t want) 
     return -1;
 }
 
-/* Submit one admin command and poll its completion. Returns the CQE status
+/* Submit one command on queue q and poll its completion. Returns the CQE status
  * field (0 = success) or 0xFFFF on completion timeout. */
-static uint16_t admin_cmd(struct nvme *n, uint8_t opcode, uint32_t nsid,
-                          uint64_t prp1, uint32_t cdw10) {
-    struct nvme_sqe *e = &n->asq[n->sq_tail];
+static uint16_t nvme_submit(struct nvme *n, struct nvme_queue *q, uint8_t opcode,
+                            uint32_t nsid, uint64_t prp1,
+                            uint32_t cdw10, uint32_t cdw11, uint32_t cdw12) {
+    struct nvme_sqe *e = &q->sq[q->sq_tail];
     for (unsigned i = 0; i < sizeof *e / sizeof(uint32_t); i++)
         ((uint32_t *)e)[i] = 0;                        /* clear the 64-byte entry */
     uint16_t cid = n->cid++;
@@ -127,26 +145,107 @@ static uint16_t admin_cmd(struct nvme *n, uint8_t opcode, uint32_t nsid,
     e->nsid  = nsid;
     e->prp1  = prp1;
     e->cdw10 = cdw10;
+    e->cdw11 = cdw11;
+    e->cdw12 = cdw12;
 
-    n->sq_tail = (uint16_t)((n->sq_tail + 1) % AQ_DEPTH);
-    uint32_t stride = 4u << n->dstrd;
-    wr32(n, NVME_SQ0TDBL, n->sq_tail);                 /* ring SQ tail doorbell */
+    q->sq_tail = (uint16_t)((q->sq_tail + 1) % Q_DEPTH);
+    wr32(n, sq_db(n, q->qid), q->sq_tail);             /* ring SQ tail doorbell */
 
-    /* Poll the CQ head for a phase-bit flip. */
-    struct nvme_cqe *c = &n->acq[n->cq_head];
+    struct nvme_cqe *c = &q->cq[q->cq_head];
     for (uint64_t i = 0; i < 50000000ull; i++) {
         uint16_t st = c->status;
-        if ((st & 1) == n->cq_phase) {
+        if ((st & 1) == q->phase) {
             uint16_t status = (uint16_t)(st >> 1);     /* strip phase bit */
-            n->cq_head = (uint16_t)((n->cq_head + 1) % AQ_DEPTH);
-            if (n->cq_head == 0)
-                n->cq_phase ^= 1;                      /* wrapped → toggle phase */
-            wr32(n, NVME_SQ0TDBL + stride, n->cq_head);/* ring CQ head doorbell */
+            q->cq_head = (uint16_t)((q->cq_head + 1) % Q_DEPTH);
+            if (q->cq_head == 0)
+                q->phase ^= 1;                         /* wrapped → toggle phase */
+            wr32(n, cq_db(n, q->qid), q->cq_head);     /* ring CQ head doorbell */
             return status;
         }
         __asm__ volatile("pause");
     }
     return 0xFFFF;
+}
+
+/* Allocate + init a queue's SQ/CQ pages. Returns 0 on success, -1 on no memory. */
+static int queue_alloc(struct nvme_queue *q, uint16_t qid) {
+    uint64_t sq_phys = pmm_alloc_page();
+    uint64_t cq_phys = pmm_alloc_page();
+    if (!sq_phys || !cq_phys)
+        return -1;
+    q->sq = (struct nvme_sqe *)(uintptr_t)sq_phys;
+    q->cq = (struct nvme_cqe *)(uintptr_t)cq_phys;
+    zero_page(q->sq);
+    zero_page(q->cq);
+    q->sq_tail = 0;
+    q->cq_head = 0;
+    q->phase = 1;                       /* CQEs start phase 0 → first pass sets 1 */
+    q->qid = qid;
+    return 0;
+}
+
+/* One NVM Read (0x02) / Write (0x01) covering `sectors` 512-byte LBAs from the
+ * identity-mapped buffer at buf_phys. Each command spans at most to the next
+ * 4 KiB page boundary so PRP1 alone suffices (DDR-766: no PRP list this slice).
+ * Returns 0 on success, -1 on any command failure. */
+static int nvme_io(struct nvme *n, int is_write, uint64_t lba,
+                   uint64_t buf_phys, uint32_t sectors) {
+    if (!n->io_ready)
+        return -1;
+    while (sectors) {
+        uint32_t page_off = (uint32_t)(buf_phys & (PAGE_SIZE - 1));
+        uint32_t bytes_to_edge = PAGE_SIZE - page_off;
+        uint32_t nlb = bytes_to_edge / 512u;           /* fit within one page */
+        if (nlb == 0)
+            nlb = 1;                                    /* buffer 512-aligned edge */
+        if (nlb > sectors)
+            nlb = sectors;
+        uint16_t st = nvme_submit(n, &n->io, is_write ? 0x01 : 0x02, 1, buf_phys,
+                                  (uint32_t)lba, (uint32_t)(lba >> 32), nlb - 1);
+        if (st != 0)
+            return -1;
+        buf_phys += (uint64_t)nlb * 512u;
+        lba      += nlb;
+        sectors  -= nlb;
+    }
+    return 0;
+}
+
+static int nvme_bd_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
+    return nvme_io((struct nvme *)bd->drv, 0, lba, (uint64_t)(uintptr_t)buf, count);
+}
+static int nvme_bd_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count) {
+    return nvme_io((struct nvme *)bd->drv, 1, lba, (uint64_t)(uintptr_t)buf, count);
+}
+
+/* Round-trip a scratch region through the I/O path (DDR-766 gate): write a known
+ * pattern to LBA 100 (8 sectors = one 4 KiB page), read it back, and verify. Uses
+ * the dedicated nvme.img — never the boot/FAT/SFS disks. */
+#define NVME_SELFTEST_LBA 100u
+static void nvme_selftest(struct nvme *n) {
+    uint64_t wp = pmm_alloc_page();
+    uint64_t rp = pmm_alloc_page();
+    if (!wp || !rp) {
+        if (wp) pmm_free_page(wp);
+        if (rp) pmm_free_page(rp);
+        return;
+    }
+    uint32_t *w = (uint32_t *)(uintptr_t)wp;
+    uint32_t *r = (uint32_t *)(uintptr_t)rp;
+    for (unsigned i = 0; i < PAGE_SIZE / 4; i++) {
+        w[i] = 0xA5000000u + i;
+        r[i] = 0;
+    }
+    int ok = nvme_io(n, 1, NVME_SELFTEST_LBA, wp, 8) == 0 &&
+             nvme_io(n, 0, NVME_SELFTEST_LBA, rp, 8) == 0;
+    if (ok) {
+        for (unsigned i = 0; i < PAGE_SIZE / 4; i++) {
+            if (r[i] != w[i]) { ok = 0; break; }
+        }
+    }
+    kputs(ok ? "PRADYOS_NVME_RW_OK\r\n" : "PRADYOS_NVME_RW_FAIL\r\n");
+    pmm_free_page(wp);
+    pmm_free_page(rp);
 }
 
 void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -173,7 +272,6 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
         return;
     }
 
-    /* Map BAR0 uncached. */
     for (uint32_t off = 0; off < NVME_BAR_MAP; off += PAGE_SIZE)
         vmm_map(NVME_BAR_VBASE + off, base + off, VMM_RW | VMM_PCD);
     n->bar = (volatile uint8_t *)NVME_BAR_VBASE;
@@ -190,25 +288,15 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
         return;
     }
 
-    /* Admin queue pages (identity-mapped → phys == pointer). */
-    uint64_t sq_phys = pmm_alloc_page();
-    uint64_t cq_phys = pmm_alloc_page();
-    if (!sq_phys || !cq_phys) {
+    if (queue_alloc(&n->admin, 0) < 0) {
         kputs("[nvme] no queue mem\r\n");
         return;
     }
-    n->asq = (struct nvme_sqe *)(uintptr_t)sq_phys;
-    n->acq = (struct nvme_cqe *)(uintptr_t)cq_phys;
-    zero_page(n->asq);
-    zero_page(n->acq);
-    n->sq_tail = 0;
-    n->cq_head = 0;
-    n->cq_phase = 1;                     /* CQEs start phase 0 → first pass sets 1 */
     n->cid = 0;
 
-    wr32(n, NVME_AQA, ((AQ_DEPTH - 1) << 16) | (AQ_DEPTH - 1));
-    wr64(n, NVME_ASQ, sq_phys);
-    wr64(n, NVME_ACQ, cq_phys);
+    wr32(n, NVME_AQA, ((Q_DEPTH - 1) << 16) | (Q_DEPTH - 1));
+    wr64(n, NVME_ASQ, (uint64_t)(uintptr_t)n->admin.sq);
+    wr64(n, NVME_ACQ, (uint64_t)(uintptr_t)n->admin.cq);
 
     /* Enable: IOCQES=4 (16B), IOSQES=6 (64B), MPS=0 (4 KiB), CSS=0 (NVM). */
     cc = (4u << 20) | (6u << 16) | (0u << 7) | (0u << 4) | CC_EN;
@@ -218,7 +306,6 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
         return;
     }
 
-    /* PRP data page for Identify results. */
     uint64_t data_phys = pmm_alloc_page();
     if (!data_phys) {
         kputs("[nvme] no data mem\r\n");
@@ -226,9 +313,9 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
     }
     uint8_t *data = (uint8_t *)(uintptr_t)data_phys;
 
-    /* Identify Controller (opcode 0x06, CNS=1). Model number = bytes 24..63. */
+    /* Identify Controller (opcode 0x06, CNS=1). Model = bytes 24..63. */
     zero_page(data);
-    uint16_t st = admin_cmd(n, 0x06, 0, data_phys, 1);
+    uint16_t st = nvme_submit(n, &n->admin, 0x06, 0, data_phys, 1, 0, 0);
     if (st != 0) {
         kputs("[nvme] identify-ctrl failed status="); kputhex(st); kputs("\r\n");
         return;
@@ -236,14 +323,13 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
     for (int i = 0; i < 40; i++)
         n->model[i] = (char)data[24 + i];
     n->model[40] = 0;
-    /* Trim trailing spaces (NVMe pads the field). */
     for (int i = 39; i >= 0 && n->model[i] == ' '; i--)
         n->model[i] = 0;
 
-    /* Identify Namespace (CNS=0, NSID=1). NSZE @0 (u64); LBA size from the
-     * active format lbaf[FLBAS&0xf], LBADS = bits 16..23 → 2^LBADS bytes. */
+    /* Identify Namespace (CNS=0, NSID=1). NSZE @0 (u64); LBA size from the active
+     * format lbaf[FLBAS&0xf], LBADS = bits 16..23 → 2^LBADS bytes. */
     zero_page(data);
-    st = admin_cmd(n, 0x06, 1, data_phys, 0);
+    st = nvme_submit(n, &n->admin, 0x06, 1, data_phys, 0, 0, 0);
     if (st != 0) {
         kputs("[nvme] identify-ns failed status="); kputhex(st); kputs("\r\n");
         return;
@@ -262,4 +348,42 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
     kputs(" LBAs x ");
     kputdec(n->lba_bytes);
     kputs(" B\r\n");
+
+    /* DDR-766: create one I/O queue pair and register the block device. The
+     * block layer is 512-byte-sector; support only 512-byte LBAs this slice. */
+    if (n->lba_bytes != 512) {
+        kputs("[nvme] LBA size != 512, block I/O skipped\r\n");
+        return;
+    }
+    if (queue_alloc(&n->io, IO_QID) < 0) {
+        kputs("[nvme] no io-queue mem\r\n");
+        return;
+    }
+    /* Create I/O Completion Queue (admin 0x05): PC=1, IEN=0 (poll). */
+    st = nvme_submit(n, &n->admin, 0x05, 0, (uint64_t)(uintptr_t)n->io.cq,
+                     ((Q_DEPTH - 1) << 16) | IO_QID, 1u /*PC*/, 0);
+    if (st != 0) {
+        kputs("[nvme] create-iocq failed status="); kputhex(st); kputs("\r\n");
+        return;
+    }
+    /* Create I/O Submission Queue (admin 0x01): PC=1, CQID=IO_QID. */
+    st = nvme_submit(n, &n->admin, 0x01, 0, (uint64_t)(uintptr_t)n->io.sq,
+                     ((Q_DEPTH - 1) << 16) | IO_QID, 1u | ((uint32_t)IO_QID << 16), 0);
+    if (st != 0) {
+        kputs("[nvme] create-iosq failed status="); kputhex(st); kputs("\r\n");
+        return;
+    }
+    n->io_ready = 1;
+
+    n->bd.name = "nvme0";
+    n->bd.capacity_sectors = n->nsze;   /* 512-byte LBAs == block-layer sectors */
+    n->bd.read = nvme_bd_read;
+    n->bd.write = nvme_bd_write;
+    n->bd.drv = n;
+    blk_register(&n->bd);
+    kputs("[nvme] registered nvme0 (");
+    kputdec(n->nsze);
+    kputs(" sectors)\r\n");
+
+    nvme_selftest(n);
 }

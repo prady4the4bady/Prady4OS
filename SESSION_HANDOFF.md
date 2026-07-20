@@ -99,26 +99,29 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** DDR-765 NVMe controller bring-up + Identify
-  (M2 driver 1/2) — first non-virtio block driver. Detects NVMe by PCIe class
-  0x01/subclass 0x08, maps BAR0 uncached, resets+enables (CC.EN / poll CSTS.RDY),
-  stands up one admin SQ/CQ pair (identity-mapped PMM pages), runs Identify
-  Controller + Namespace over the admin queue (CQ phase-bit poll; all waits
-  spin-bounded). Prints `[nvme] QEMU NVMe Ctrl ns1 32768 LBAs x 512 B`. New gate
-  `smoke-nvme` (`QEMU_NVME=1` attaches `-device nvme`; no-op elsewhere). Full
-  image builds -Werror-clean, gate PASS locally. **100 gates (pending CI on
-  dev/phase1). No blk_register yet — DDR-766.**
-- **PRIOR:** DDR-764 ring-3 VFS write chunk 256B→4KiB — 4KiB PMM-page chunk →
-  ring-3 SFS files reach 16KiB, FAT 16× faster. **CI-green on `main` at
-  `f6d47b0`. 99 gates.**
-- **CURRENT_ACTIVE_TASK:** land DDR-765 (commit dev/phase1, watch CI, ff main).
-- **NEXT_TASK (M2):** DDR-766 — NVMe I/O queue (create I/O SQ/CQ) + read/write
-  commands + `blk_register` (make the controller a real block device, like
-  virtio-blk); then host `mkfs.sfs` (cross-reboot SFS persistence). Also open:
-  the FS write budget (1 MiB per-thread LIFETIME) is low for a real
+- **LAST_COMPLETED_TASK (newest):** DDR-766 NVMe I/O queue + read/write +
+  blk_register (M2 driver 2/2) — makes the namespace a real block device.
+  Creates one I/O SQ/CQ pair (Create I/O CQ/SQ admin cmds; qid 1; PC=1; poll),
+  NVM Read/Write via a PRP1-only per-≤page-chunk loop, registers `nvme0`
+  (capacity=NSZE; 512B LBA only). Boot self-test round-trips LBA 100 →
+  `PRADYOS_NVME_RW_OK`. `smoke-nvme` extended (asserts `registered nvme0` +
+  RW_OK). Local: image -Werror-clean, gate PASS. **100 gates.**
+- **PRIOR:** DDR-765 NVMe controller bring-up + Identify (M2 driver 1/2) —
+  detect by PCIe 0x01/0x08, map BAR0, enable, admin queue, Identify
+  Controller/Namespace → `[nvme] QEMU NVMe Ctrl ns1 32768 LBAs x 512 B`. Pushed
+  to dev/phase1 at `e2900b7`; CI run 29719916953 was in-flight when DDR-766
+  landed (the DDR-766 push supersedes it — the newer run validates 765+766
+  cumulatively).
+- **CURRENT_ACTIVE_TASK:** land DDR-765+766 (push dev/phase1, watch the
+  cumulative CI run, ff main when green).
+- **NEXT_TASK (M2):** host `mkfs.sfs` (format an SFS image on the host so a real
+  filesystem survives reboot — cross-reboot persistence); then optionally mount
+  a filesystem on the NVMe block device now that it's a real blk backend. Also
+  open: the FS write budget (1 MiB per-thread LIFETIME) is low for a real
   persistent-root process — a design review (higher/refillable/per-op budget) is
-  worth a slice before M2 is declared done. And the recurring smoke-percpu-sched
-  -smp 4 early-boot flake (below).
+  worth a slice before M2 is declared done; NVMe PRP-list for >page single
+  commands + NVMe IRQ (DDR-767); the recurring smoke-percpu-sched -smp 4
+  early-boot flake (below).
 
 ### 0.-1b PRIOR TRACKER (superseded)
 
