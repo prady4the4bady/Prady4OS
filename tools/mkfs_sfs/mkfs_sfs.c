@@ -52,22 +52,56 @@ static void leaf_add(uint64_t key, const void *val, size_t vlen) {
     memcpy(&s->v, val, vlen);
 }
 
-static void add_root_file(const char *name, const uint8_t *data, uint32_t len) {
-    size_t nlen = strlen(name);
-    if (nlen == 0 || nlen > 255) { fprintf(stderr, "mkfs.sfs: bad name '%s'\n", name); exit(1); }
-    if (len > MAX_FILE_BYTES) {
-        fprintf(stderr, "mkfs.sfs: '%s' is %u B > %u B cap (this slice)\n",
-                name, len, MAX_FILE_BYTES);
-        exit(1);
+/* Scan the (single) root leaf for a live DIR slot named `name` under `parent`;
+ * return its child inode, or 0 if absent. */
+static uint64_t find_dir(uint64_t parent, const char *name, int nlen) {
+    uint64_t key = (parent << 32) | (uint64_t)sfs_name_hash32(name, nlen);
+    for (int i = 0; i < g_root_leaf.nkeys; i++) {
+        struct sfs_leaf_slot *s = &g_root_leaf.u.leaf[i];
+        if (s->key == key && s->v.dir.inode_num &&
+            s->v.dir.name_len == nlen &&
+            memcmp(s->v.dir.name, name, (size_t)nlen) == 0)
+            return s->v.dir.inode_num;
     }
+    return 0;
+}
 
-    uint64_t ino        = g_next_inode++;
+/* Append a DIR slot linking `name` under `parent` to inode `child`. */
+static void link_dirent(uint64_t parent, const char *name, int nlen, uint64_t child) {
+    struct sfs_dirent de;
+    memset(&de, 0, sizeof de);
+    de.inode_num = child;
+    de.name_len  = (uint8_t)nlen;
+    memcpy(de.name, name, (size_t)nlen);
+    uint64_t key = (parent << 32) | (uint64_t)sfs_name_hash32(name, nlen);
+    leaf_add(key, &de, sizeof de);
+}
+
+/* Find or create directory `name` under `parent`; return its inode number. A dir
+ * inode is a block with SFS_INO_DIR and no extents — its contents are the
+ * DIR-keyed slots parented to it (matches kernel sfs_do_create is_dir=1). */
+static uint64_t find_or_make_dir(uint64_t parent, const char *name, int nlen) {
+    uint64_t existing = find_dir(parent, name, nlen);
+    if (existing) return existing;
+    uint64_t ino  = g_next_inode++;
+    uint64_t iblk = g_next_free++;
+    uint8_t blk[SFS_BLOCK_SIZE];
+    memset(blk, 0, sizeof blk);
+    ((struct sfs_inode *)blk)->flags = SFS_INO_DIR;
+    wr_block(iblk, blk);
+    struct { uint64_t inode_block; } ino_v = { iblk };
+    leaf_add(SFS_KEY_INODE | ino, &ino_v, sizeof ino_v);
+    link_dirent(parent, name, nlen, ino);
+    return ino;
+}
+
+/* Write a file inode (one inline extent per 4 KiB data block) and return it. */
+static uint64_t write_file_inode(const uint8_t *data, uint32_t len) {
     uint64_t inode_blk  = g_next_free++;
     uint32_t nblocks    = len ? (len + SFS_BLOCK_SIZE - 1) / SFS_BLOCK_SIZE : 0;
     uint64_t data_start = g_next_free;
     g_next_free += nblocks;
 
-    /* Data blocks (last padded with zeros). */
     uint8_t blk[SFS_BLOCK_SIZE];
     for (uint32_t e = 0; e < nblocks; e++) {
         uint32_t off  = e * SFS_BLOCK_SIZE;
@@ -76,8 +110,6 @@ static void add_root_file(const char *name, const uint8_t *data, uint32_t len) {
         memcpy(blk, data + off, part);
         wr_block(data_start + e, blk);
     }
-
-    /* Inode block: one inline extent per data block. */
     memset(blk, 0, sizeof blk);
     struct sfs_inode *in = (struct sfs_inode *)blk;
     in->size = len;
@@ -89,23 +121,42 @@ static void add_root_file(const char *name, const uint8_t *data, uint32_t len) {
         in->inline_extents[e].block_start = data_start + e;
         in->inline_extents[e].block_count = 1;
         in->inline_extents[e].logical_len = part;
-        in->inline_extents[e].comp_len    = 0;
-        in->inline_extents[e].flags       = 0;
     }
     wr_block(inode_blk, blk);
+    return inode_blk;
+}
 
-    /* Leaf slots: INODE (ino -> inode_blk) and DIR ((root<<32)|hash -> dirent). */
-    struct { uint64_t inode_block; } ino_v = { inode_blk };
-    leaf_add(SFS_KEY_INODE | ino, &ino_v, sizeof ino_v);
-
-    struct sfs_dirent de;
-    memset(&de, 0, sizeof de);
-    de.inode_num = ino;
-    de.name_len  = (uint8_t)nlen;
-    memcpy(de.name, name, nlen);
-    uint64_t dir_key = ((uint64_t)SFS_ROOT_INODE << 32)
-                     | (uint64_t)sfs_name_hash32(name, (int)nlen);
-    leaf_add(dir_key, &de, sizeof de);
+/* Provision a file at `path` (may contain '/', creating intermediate dirs like
+ * kernel sfs_walk: intermediates are directories, the last component is the
+ * file). Slots share the single root leaf; dir prefixes are deduped. */
+static void add_file(const char *path, const uint8_t *data, uint32_t len) {
+    if (len > MAX_FILE_BYTES) {
+        fprintf(stderr, "mkfs.sfs: '%s' is %u B > %u B cap (this slice)\n",
+                path, len, MAX_FILE_BYTES);
+        exit(1);
+    }
+    uint64_t parent = SFS_ROOT_INODE;
+    const char *p = path;
+    while (*p == '/') p++;
+    for (;;) {
+        int nlen = 0;
+        while (p[nlen] && p[nlen] != '/') nlen++;
+        if (nlen == 0 || nlen > 255) {
+            fprintf(stderr, "mkfs.sfs: bad path '%s'\n", path); exit(1);
+        }
+        const char *next = p + nlen;
+        while (*next == '/') next++;
+        if (*next == 0) {                                  /* final = the file */
+            uint64_t ino = g_next_inode++;
+            uint64_t iblk = write_file_inode(data, len);
+            struct { uint64_t inode_block; } ino_v = { iblk };
+            leaf_add(SFS_KEY_INODE | ino, &ino_v, sizeof ino_v);
+            link_dirent(parent, p, nlen, ino);
+            return;
+        }
+        parent = find_or_make_dir(parent, p, nlen);        /* intermediate dir */
+        p = next;
+    }
 }
 
 static void sort_leaf(void) {   /* insertion sort by key (kernel bt_insert expects sorted) */
@@ -172,9 +223,9 @@ int main(int argc, char **argv) {
         const char *eq = strchr(spec, '=');
         if (!eq) { fprintf(stderr, "mkfs.sfs: --file needs NAME=path (got '%s')\n", spec); return 1; }
         size_t nlen = (size_t)(eq - spec);
-        char name[256];
-        if (nlen == 0 || nlen > 255) { fprintf(stderr, "mkfs.sfs: bad file name\n"); return 1; }
-        memcpy(name, spec, nlen); name[nlen] = 0;
+        char path[256];   /* may contain '/' for nested provisioning (DDR-769) */
+        if (nlen == 0 || nlen > 255) { fprintf(stderr, "mkfs.sfs: bad file path\n"); return 1; }
+        memcpy(path, spec, nlen); path[nlen] = 0;
 
         int hf = open(eq + 1, O_RDONLY);
         if (hf < 0) { fprintf(stderr, "mkfs.sfs: open '%s': %s\n", eq + 1, strerror(errno)); return 1; }
@@ -183,10 +234,10 @@ int main(int argc, char **argv) {
         close(hf);
         if (got < 0) die("read hostfile");
         if ((uint32_t)got > MAX_FILE_BYTES) {
-            fprintf(stderr, "mkfs.sfs: '%s' exceeds %u B cap\n", name, MAX_FILE_BYTES);
+            fprintf(stderr, "mkfs.sfs: '%s' exceeds %u B cap\n", path, MAX_FILE_BYTES);
             return 1;
         }
-        add_root_file(name, fbuf, (uint32_t)got);
+        add_file(path, fbuf, (uint32_t)got);
     }
 
     /* Finalize the root leaf (block 1). */

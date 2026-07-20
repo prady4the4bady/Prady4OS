@@ -1472,12 +1472,24 @@ isn't formatted yet, so it only fires for a pre-formatted host image), mounts it
 (the virtio-blk driver caps at `VBLK_MAX=4`; MSI-X vectors 50–53 are packed
 against net@54/input@55, so suppressing ext4 keeps the persist disk within the
 cap rather than remapping vectors). `VFS_MAX_MOUNTS` 4→6 for mount headroom. New
-gate `smoke-sfs-persist` — verified `PRADYOS_SFS_PERSIST_OK` locally. **102 gates.**
-**Next:** nested-dir provisioning in mkfs.sfs → migrate `/etc/aether/config` off
-kernel provisioning (DDR-769). Open: refillable FS write budget review; `-smp 4`
-SMP-race root-cause; NVMe PRP-list (>page single commands) + NVMe IRQ; lift
-`VBLK_MAX` past 4 with an MSI-X vector remap if >4 concurrent disks are needed.
-wlroots/Wayland remain out-of-tree.
+gate `smoke-sfs-persist` — verified `PRADYOS_SFS_PERSIST_OK` locally.
+
+**DDR-769 (nested-directory provisioning in `mkfs.sfs`):** mkfs now writes
+directory hierarchies the kernel traverses. `add_file(path,…)` walks `/`-split
+components — intermediates become dir inodes (`SFS_INO_DIR`, no extents) with
+find-or-create dedup of shared prefixes, the last is the file — all keyed
+`(parent_inode<<32)|FNV1a32(name)` into the single root leaf (≤14 slots).
+`sfs_readback` walks the same way. `smoke-sfs-persist` extended: mkfs provisions
+`/etc/aether/config` and the kernel persist self-test reads it →
+`PRADYOS_SFS_NESTED_OK`. Verified locally (host round-trip + kernel boot). **102
+gates** (same gate, extra assertion).
+**Next:** DDR-770 — migrate the persistent-root `/etc/aether/config` off kernel
+provisioning (DDR-760/761) onto a shipped mkfs image (touches boot/root-mount +
+the destructive SFS self-tests that reformat blk2). Open: refillable FS write
+budget review; `-smp 4` SMP-race root-cause; NVMe PRP-list (>page single
+commands) + NVMe IRQ; lift `VBLK_MAX` past 4 with an MSI-X vector remap if >4
+concurrent disks are needed; mkfs multi-leaf trees (>14 slots). wlroots/Wayland
+remain out-of-tree.
 **Last updated:** 2026-07-20
 
 ## Phase 0 — Toolchain & Build System

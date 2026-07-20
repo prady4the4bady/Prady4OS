@@ -829,13 +829,17 @@ build/nvme.img:
 # reformatted), reads it back, and prints PRADYOS_SFS_PERSIST_OK. Proves the
 # kernel decodes a host-authored SFS volume byte-for-byte end-to-end.
 SFS_PERSIST_MARK768 := PRADYOS-SFS-PERSIST-DDR768-OK
+SFS_NESTED_MARK769  := PRADYOS-SFS-NESTED-DDR769-OK
 smoke-sfs-persist: $(IMG) fat-image sfs-image $(MKFS_SFS)
 	@mkdir -p build
 	printf '%s' '$(SFS_PERSIST_MARK768)' > build/persist768.txt
-	$(MKFS_SFS) $(MKFS_SFS_IMG) --blocks 4096 --file PERSIST.TXT=build/persist768.txt
+	printf '%s' '$(SFS_NESTED_MARK769)' > build/nested769.txt
+	$(MKFS_SFS) $(MKFS_SFS_IMG) --blocks 4096 \
+	    --file PERSIST.TXT=build/persist768.txt \
+	    --file /etc/aether/config=build/nested769.txt
 	TIMEOUT_S=90 QEMU_SFS2=1 QEMU_NO_EXT4=1 \
-	    EXTRA_SENTINEL=PRADYOS_SFS_PERSIST_OK \
-	    FORBIDDEN_SENTINEL=PRADYOS_SFS_PERSIST_FAIL \
+	    EXTRA_SENTINEL="$$(printf 'PRADYOS_SFS_PERSIST_OK\nPRADYOS_SFS_NESTED_OK')" \
+	    FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SFS_PERSIST_FAIL\nPRADYOS_SFS_NESTED_FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img

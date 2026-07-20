@@ -876,6 +876,19 @@ static void fs_test_thread(void *arg) {
                     kputs(ok ? "PRADYOS_SFS_PERSIST_OK\r\n"
                              : "PRADYOS_SFS_PERSIST_FAIL\r\n");
                 }
+                /* DDR-769: nested-dir provisioning — read a host-authored file at
+                 * a nested path, proving the kernel traverses mkfs.sfs-built
+                 * directory hierarchies (/etc/aether/config style). */
+                if (pmnt >= 0 && vfs_open(cap, pmnt, "/etc/aether/config", &pf) == 0) {
+                    static const char nmark[] = "PRADYOS-SFS-NESTED-DDR769-OK";
+                    char nbuf[64];
+                    int n = vfs_read(cap, &pf, 0, nbuf, sizeof nbuf - 1);
+                    int ok = (n == (int)(sizeof nmark - 1));
+                    for (int i = 0; ok && i < n; i++)
+                        if (nbuf[i] != nmark[i]) ok = 0;
+                    kputs(ok ? "PRADYOS_SFS_NESTED_OK\r\n"
+                             : "PRADYOS_SFS_NESTED_FAIL\r\n");
+                }
             }
         }
     }

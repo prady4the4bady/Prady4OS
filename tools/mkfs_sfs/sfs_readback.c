@@ -35,22 +35,33 @@ int main(int argc, char **argv) {
     uint64_t rootbt = sb->root_btree;
 
     const char *name = argv[2];
-    int nlen = (int)strlen(name);
-    uint64_t dkey = ((uint64_t)SFS_ROOT_INODE << 32) | (uint64_t)sfs_name_hash32(name, nlen);
-
     struct sfs_node nd;
     if (rd(rootbt)) return 2;
     memcpy(&nd, b, sizeof nd);
 
-    /* Linear leaf scan (matches kernel bt_search_root) for the DIR then INODE. */
-    uint64_t ino = 0, iblk = 0;
-    for (int i = 0; i < nd.nkeys; i++)
-        if (nd.u.leaf[i].key == dkey && nd.u.leaf[i].v.dir.inode_num) {
-            if (nd.u.leaf[i].v.dir.name_len != nlen) continue;      /* collision guard */
-            if (memcmp(nd.u.leaf[i].v.dir.name, name, (size_t)nlen)) continue;
-            ino = nd.u.leaf[i].v.dir.inode_num;
-        }
-    if (!ino) { fprintf(stderr, "sfs_readback: '%s' not found\n", name); return 1; }
+    /* Walk path components (matches kernel sfs_walk): each keyed by
+     * (parent<<32)|hash, resolved via the linear leaf scan; last = the file. */
+    uint64_t parent = SFS_ROOT_INODE, ino = 0, iblk = 0;
+    const char *p = name;
+    while (*p == '/') p++;
+    for (;;) {
+        int clen = 0;
+        while (p[clen] && p[clen] != '/') clen++;
+        if (clen == 0) { fprintf(stderr, "sfs_readback: bad path '%s'\n", name); return 1; }
+        uint64_t dkey = (parent << 32) | (uint64_t)sfs_name_hash32(p, clen);
+        uint64_t child = 0;
+        for (int i = 0; i < nd.nkeys; i++)
+            if (nd.u.leaf[i].key == dkey && nd.u.leaf[i].v.dir.inode_num &&
+                nd.u.leaf[i].v.dir.name_len == clen &&
+                memcmp(nd.u.leaf[i].v.dir.name, p, (size_t)clen) == 0)
+                child = nd.u.leaf[i].v.dir.inode_num;
+        if (!child) { fprintf(stderr, "sfs_readback: '%s' not found\n", name); return 1; }
+        const char *next = p + clen;
+        while (*next == '/') next++;
+        if (*next == 0) { ino = child; break; }
+        parent = child;
+        p = next;
+    }
     for (int i = 0; i < nd.nkeys; i++)
         if (nd.u.leaf[i].key == (SFS_KEY_INODE | ino))
             iblk = nd.u.leaf[i].v.ino.inode_block;
