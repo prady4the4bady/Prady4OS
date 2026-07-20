@@ -68,6 +68,15 @@ if [ -n "${QEMU_SMP:-}" ]; then
     SMPOPT=(-smp "$QEMU_SMP")
 fi
 
+# Optional NVMe controller (DDR-765) — attached only when QEMU_NVME is set, so
+# the smoke-nvme gate exercises controller bring-up + Identify while every other
+# gate boots without an NVMe device (the driver is a no-op when none is present).
+NVMEDEV=()
+if [ -n "${QEMU_NVME:-}" ]; then
+    NVMEDEV=(-drive if=none,format=raw,file=build/nvme.img,id=nvm
+             -device nvme,serial=PRADYOSNV,drive=nvm)
+fi
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine q35 \
     -drive if=none,format=raw,file="$IMG",id=disk0 \
@@ -78,6 +87,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \
+    "${NVMEDEV[@]}" \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
     || true

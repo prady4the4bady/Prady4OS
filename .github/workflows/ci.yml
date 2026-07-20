@@ -245,6 +245,9 @@ jobs:
       - name: QEMU VirtIO-GPU framebuffer test (q35; 2D bring-up + scanout, L7 s0)
         run: make smoke-gpu
 
+      - name: QEMU NVMe controller test (q35; -device nvme bring-up + Identify, DDR-765)
+        run: make smoke-nvme
+
       - name: QEMU framebuffer-surface test (q35; ring-3 map+draw+flush, L7)
         run: make smoke-fb
 

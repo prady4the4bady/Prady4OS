@@ -34,6 +34,7 @@
 #include "virtio_gpu.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
+#include "nvme.h"
 #include "vfs.h"
 #include "fat32.h"
 #include "sfs.h"
@@ -1696,6 +1697,8 @@ void kmain(struct boot_info *bi) {
             virtio_gpu_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x09)    /* virtio input/pointer (DDR-705) */
             virtio_input_init(d->bus, d->dev, d->func);
+        if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
+            nvme_init(d->bus, d->dev, d->func);
     }
     net_init();                          /* NET-B: bring up lwIP over virtio-net */
     aether_init();                       /* Layer 6: PMM-pool queue + audit rings */

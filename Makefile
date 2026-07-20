@@ -104,6 +104,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
                kernel/drivers/net/virtio_net.c kernel/drivers/net/netbuf.c \
                kernel/drivers/gpu/virtio_gpu.c \
+               kernel/drivers/nvme/nvme.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
@@ -121,7 +122,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -129,7 +130,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
-               -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/drivers/gpu -Ikernel/drivers/input -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
+               -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/drivers/gpu -Ikernel/drivers/nvme -Ikernel/drivers/input -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
                -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso -Ikernel/aether -Ikernel/apic
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
@@ -145,7 +146,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -309,6 +310,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/virtio_net.c     -o build/virtio_net.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/netbuf.c         -o build/netbuf.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/virtio_gpu.c     -o build/virtio_gpu.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/nvme/nvme.c          -o build/nvme.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/ps2kbd.c       -o build/ps2kbd.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/virtio_input.c -o build/virtio_input.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rtc/rtc.c            -o build/rtc.o
@@ -782,6 +784,20 @@ smoke-aether: $(IMG) fat-image sfs-image
 # verifiable via the serial sentinel (like the NET-A virtio-net gate).
 smoke-gpu: $(IMG) fat-image sfs-image
 	TIMEOUT_S=60 QEMU_GPU=1 EXTRA_SENTINEL=PRADYOS_GPU_FB_OK \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# NVMe controller bring-up gate (DDR-765): boot with a QEMU -device nvme backed
+# by a small raw image; the driver maps BAR0, enables the controller, stands up
+# the admin queue, and runs Identify Controller + Namespace, printing the model +
+# LBA geometry ("[nvme] <model> ns1 <N> LBAs x <sz> B"). The FORBIDDEN patterns
+# catch every bring-up failure path.
+build/nvme.img:
+	mkdir -p build && truncate -s 16M build/nvme.img
+
+smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img
+	TIMEOUT_S=60 QEMU_NVME=1 \
+	    EXTRA_SENTINEL="$$(printf '[nvme] \nLBAs x ')" \
+	    FORBIDDEN_SENTINEL="$$(printf 'controller not ready\nidentify-ctrl failed\nidentify-ns failed\nreset stuck')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 framebuffer-surface gate (DDR-702): proves the ring-3 SYS_FB map+draw+

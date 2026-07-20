@@ -99,24 +99,26 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** DDR-764 ring-3 VFS write chunk 256B→4KiB —
-  `fd_write_user` used a 256-byte buffer (1 vfs_write/256B → 16× iterations; and
-  each 256B = 1 SFS extent, so the 4-extent cap limited ring-3 SFS files to ~1KiB).
-  Now a 4KiB PMM-page chunk → ring-3 SFS files reach 16KiB, FAT 16× faster. Gate
-  smoke-vfs-bigwrite (8KiB SFS write, verified discriminating). 99 gates. Local
-  regression green; pushing to dev/phase1.
-- **PRIOR:** DDR-762-v2 SFS free-space GC (free-EXTENT-RUN allocator,
-  exact-fit) — the "B+tree bug" that blocked it was a MISDIAGNOSIS (DDR-763: the
-  1 MiB per-thread FS write budget, not the tree). GC gate rewritten to observe
-  block reuse directly (next_free delta over 10 cycles: reclaim grew≈92 vs
-  no-reclaim ≈262) after the 300-cycle exhaustion loop timed other gates' boots
-  out. Local: all SFS + broad regression green. Pushing fix on dev/phase1.
-- **CURRENT_ACTIVE_TASK:** land DDR-762-v2 fix (CI-green, ff main).
-- **NEXT_TASK (M2):** NVMe driver (registers with the blk layer); then host
-  `mkfs.sfs` (cross-reboot persistence). Also open: the FS write budget (1 MiB
-  per-thread LIFETIME) is very low for a real persistent-root process — a design
-  review (higher/refillable/per-op budget) is worth a slice before M2 is declared
-  done. And the recurring smoke-percpu-sched -smp 4 early-boot flake (below).
+- **LAST_COMPLETED_TASK (newest):** DDR-765 NVMe controller bring-up + Identify
+  (M2 driver 1/2) — first non-virtio block driver. Detects NVMe by PCIe class
+  0x01/subclass 0x08, maps BAR0 uncached, resets+enables (CC.EN / poll CSTS.RDY),
+  stands up one admin SQ/CQ pair (identity-mapped PMM pages), runs Identify
+  Controller + Namespace over the admin queue (CQ phase-bit poll; all waits
+  spin-bounded). Prints `[nvme] QEMU NVMe Ctrl ns1 32768 LBAs x 512 B`. New gate
+  `smoke-nvme` (`QEMU_NVME=1` attaches `-device nvme`; no-op elsewhere). Full
+  image builds -Werror-clean, gate PASS locally. **100 gates (pending CI on
+  dev/phase1). No blk_register yet — DDR-766.**
+- **PRIOR:** DDR-764 ring-3 VFS write chunk 256B→4KiB — 4KiB PMM-page chunk →
+  ring-3 SFS files reach 16KiB, FAT 16× faster. **CI-green on `main` at
+  `f6d47b0`. 99 gates.**
+- **CURRENT_ACTIVE_TASK:** land DDR-765 (commit dev/phase1, watch CI, ff main).
+- **NEXT_TASK (M2):** DDR-766 — NVMe I/O queue (create I/O SQ/CQ) + read/write
+  commands + `blk_register` (make the controller a real block device, like
+  virtio-blk); then host `mkfs.sfs` (cross-reboot SFS persistence). Also open:
+  the FS write budget (1 MiB per-thread LIFETIME) is low for a real
+  persistent-root process — a design review (higher/refillable/per-op budget) is
+  worth a slice before M2 is declared done. And the recurring smoke-percpu-sched
+  -smp 4 early-boot flake (below).
 
 ### 0.-1b PRIOR TRACKER (superseded)
 

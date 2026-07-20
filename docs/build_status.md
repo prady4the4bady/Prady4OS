@@ -1424,11 +1424,24 @@ writes 8 KiB in one `SYS_WRITE` + reads it back (256-chunk short-writes at ~1 Ki
 verified discriminating). Regression: shell touch/rm, fsrm lifecycle, sfsroot,
 fs-rw, sysio all green. Follow-ons: SFS extent-overflow (lift the 16 KiB ceiling),
 refillable write budget. **99 gates.**
-**Next:** SFS-as-root half 2/2 (a PERSISTENT SFS volume — the destructive SFS
-self-tests reformat the only SFS disk — plus image-time `/etc/aether/config`
-provisioning); SFS block reclamation (free-space GC); extend PT_HI / grow the
-disk as the kernel grows. wlroots/Wayland remain out-of-tree.
-**Last updated:** 2026-07-13
+
+**DDR-765 (NVMe controller bring-up + Identify — M2 driver 1/2):** the first
+non-virtio block driver. Detects an NVMe controller by PCIe class 0x01 /
+subclass 0x08, maps BAR0 uncached, resets + enables the controller (CC.EN,
+poll CSTS.RDY), stands up a single admin SQ/CQ pair (one identity-mapped PMM
+page each), and runs Identify Controller (CNS=1) + Identify Namespace (CNS=0,
+NSID=1) over the admin queue — completion polled via the CQ phase bit, every
+hardware wait bounded by a spin counter so a missing/wedged controller cannot
+hang boot. Prints `[nvme] <model> ns1 <NSZE> LBAs x <lbasize> B`; on QEMU's
+`-device nvme` that is `QEMU NVMe Ctrl ns1 32768 LBAs x 512 B` (16 MiB image).
+No block I/O and no `blk_register` yet — that is DDR-766. New gate `smoke-nvme`
+(`QEMU_NVME=1` knob in boot_test.sh attaches the controller; every other gate
+boots without one, so the driver is a no-op there). **100 gates.**
+**Next:** DDR-766 — NVMe I/O queue + read/write + `blk_register` (make the
+controller a real block device); then host `mkfs.sfs` (cross-reboot SFS
+persistence). Open: refillable FS write budget review; smoke-percpu-sched
+`-smp 4` early-boot flake. wlroots/Wayland remain out-of-tree.
+**Last updated:** 2026-07-20
 
 ## Phase 0 — Toolchain & Build System
 
