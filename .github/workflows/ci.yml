@@ -251,6 +251,9 @@ jobs:
       - name: QEMU NVMe controller test (q35; -device nvme bring-up + Identify, DDR-765)
         run: make smoke-nvme
 
+      - name: QEMU SFS persistence test (q35; kernel reads host mkfs.sfs /PERSIST.TXT, DDR-768)
+        run: make smoke-sfs-persist
+
       - name: QEMU framebuffer-surface test (q35; ring-3 map+draw+flush, L7)
         run: make smoke-fb
 

@@ -1462,12 +1462,22 @@ timeouts (60→120, 90→180 s) — CI's slower 4-vCPU TCG intermittently exceed
 tight 90 s margin on `smoke-surfdestroy` (test booted + passed locally; a
 runner-speed timeout flake, not a correctness bug — the deeper SMP-race
 investigation stays open). **101 gates.**
-**Next:** DDR-768 — kernel boots on the mkfs image + reads `/PERSIST.TXT`
-(`vfs_mount` + `vfs_open`/`vfs_read` → `PRADYOS_SFS_PERSIST_OK`), the true
-cross-reboot persistence proof; then nested-dir provisioning to migrate
-`/etc/aether/config` off kernel provisioning. Open: refillable FS write budget
-review; `-smp 4` SMP-race root-cause; NVMe PRP-list (>page single commands) +
-NVMe IRQ. wlroots/Wayland remain out-of-tree.
+**DDR-768 (cross-reboot SFS persistence proof):** the kernel boots on a
+host-authored `mkfs.sfs` image and reads a file back — end-to-end host→kernel SFS
+interop. A guarded self-test (`main.c`, in `fs_test_thread`) peeks the highest
+blk index's block 0 for `SFS_MAGIC` (raw `blk_read`; the blank in-kernel SFS disk
+isn't formatted yet, so it only fires for a pre-formatted host image), mounts it,
+`vfs_open`/`vfs_read`s `/PERSIST.TXT`, and prints `PRADYOS_SFS_PERSIST_OK`.
+`boot_test.sh` gains `QEMU_SFS2` (attach the mkfs image last) + `QEMU_NO_EXT4`
+(the virtio-blk driver caps at `VBLK_MAX=4`; MSI-X vectors 50–53 are packed
+against net@54/input@55, so suppressing ext4 keeps the persist disk within the
+cap rather than remapping vectors). `VFS_MAX_MOUNTS` 4→6 for mount headroom. New
+gate `smoke-sfs-persist` — verified `PRADYOS_SFS_PERSIST_OK` locally. **102 gates.**
+**Next:** nested-dir provisioning in mkfs.sfs → migrate `/etc/aether/config` off
+kernel provisioning (DDR-769). Open: refillable FS write budget review; `-smp 4`
+SMP-race root-cause; NVMe PRP-list (>page single commands) + NVMe IRQ; lift
+`VBLK_MAX` past 4 with an MSI-X vector remap if >4 concurrent disks are needed.
+wlroots/Wayland remain out-of-tree.
 **Last updated:** 2026-07-20
 
 ## Phase 0 — Toolchain & Build System

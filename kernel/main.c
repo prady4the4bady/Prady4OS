@@ -851,6 +851,35 @@ static void fs_test_thread(void *arg) {
      * both the ext4 read self-test AND the per-process root-mount probe. */
     int ext4_mnt = (blk_count() > 3) ? vfs_mount(3) : -1;
 
+    /* DDR-768: cross-reboot persistence proof. A host mkfs.sfs image (attached
+     * LAST via QEMU_SFS2) carries /PERSIST.TXT authored on the host. Peek the
+     * highest blk index's block 0 for the SFS magic (the blank in-kernel SFS
+     * disk isn't formatted until below, so this only fires for a PRE-formatted
+     * host image), then mount it read-only and read the file back — proving the
+     * kernel decodes a host-authored SFS volume byte-for-byte. Never writes it. */
+    if (blk_count() >= 1) {
+        unsigned pi = blk_count() - 1;
+        uint8_t sb0[512];
+        uint64_t magic = 0;
+        if (blk_get(pi) && blk_read(pi, 0, sb0, 1) == 0) {
+            memcpy(&magic, sb0, sizeof magic);
+            if (magic == SFS_MAGIC) {
+                int pmnt = vfs_mount(pi);
+                struct vfs_file pf;
+                if (pmnt >= 0 && vfs_open(cap, pmnt, "/PERSIST.TXT", &pf) == 0) {
+                    static const char mark[] = "PRADYOS-SFS-PERSIST-DDR768-OK";
+                    char pbuf[64];
+                    int n = vfs_read(cap, &pf, 0, pbuf, sizeof pbuf - 1);
+                    int ok = (n == (int)(sizeof mark - 1));
+                    for (int i = 0; ok && i < n; i++)
+                        if (pbuf[i] != mark[i]) ok = 0;
+                    kputs(ok ? "PRADYOS_SFS_PERSIST_OK\r\n"
+                             : "PRADYOS_SFS_PERSIST_FAIL\r\n");
+                }
+            }
+        }
+    }
+
     /* SFS: format a blank disk in-kernel, mount it (FAT32 declines, SFS claims
      * it by superblock magic), then exercise the CoW B+tree — create 10 files,
      * look each up by name, and verify the inode numbers round-trip. */

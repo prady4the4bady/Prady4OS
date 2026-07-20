@@ -146,7 +146,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-mkfs-sfs smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -823,6 +823,20 @@ smoke-gpu: $(IMG) fat-image sfs-image
 # catch every bring-up failure path.
 build/nvme.img:
 	mkdir -p build && truncate -s 16M build/nvme.img
+
+# Cross-reboot persistence proof (DDR-768): mkfs.sfs writes /PERSIST.TXT onto a
+# host image; the kernel mounts that image (attached LAST via QEMU_SFS2, never
+# reformatted), reads it back, and prints PRADYOS_SFS_PERSIST_OK. Proves the
+# kernel decodes a host-authored SFS volume byte-for-byte end-to-end.
+SFS_PERSIST_MARK768 := PRADYOS-SFS-PERSIST-DDR768-OK
+smoke-sfs-persist: $(IMG) fat-image sfs-image $(MKFS_SFS)
+	@mkdir -p build
+	printf '%s' '$(SFS_PERSIST_MARK768)' > build/persist768.txt
+	$(MKFS_SFS) $(MKFS_SFS_IMG) --blocks 4096 --file PERSIST.TXT=build/persist768.txt
+	TIMEOUT_S=90 QEMU_SFS2=1 QEMU_NO_EXT4=1 \
+	    EXTRA_SENTINEL=PRADYOS_SFS_PERSIST_OK \
+	    FORBIDDEN_SENTINEL=PRADYOS_SFS_PERSIST_FAIL \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img
 	TIMEOUT_S=60 QEMU_NVME=1 \

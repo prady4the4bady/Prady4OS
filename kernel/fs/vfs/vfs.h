@@ -15,7 +15,9 @@ struct blk_device;                     /* defined in kernel/drivers/blk/blk.h */
 
 #define FS_RES_ID      0x5346ull       /* 'FS' — resource id for FS capabilities */
 #define VFS_MAX_FS     4               /* registered filesystem drivers          */
-#define VFS_MAX_MOUNTS 4               /* concurrently mounted volumes            */
+#define VFS_MAX_MOUNTS 6               /* concurrently mounted volumes (DDR-768:
+                                        * 4->6 for the mkfs persist disk alongside
+                                        * fat/sfs/ext4/root)                      */
 
 struct vfs_file {
     uint64_t size;

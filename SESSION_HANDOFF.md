@@ -99,31 +99,32 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** DDR-767 host `mkfs.sfs` (build-time SFS
-  provisioning) — `tools/mkfs_sfs/{mkfs_sfs,sfs_readback}.c` #include the kernel
-  `sfs.h` (byte-exact structs + FNV-1a hash). mkfs formats blocks 0–3 like
-  `sfs_format` + provisions root files (inode/inline-extent/DIR+INODE leaf
-  slots). Host gate `smoke-mkfs-sfs`: mkfs writes `/PERSIST.TXT`, `sfs_readback`
-  (kernel read algorithm) recovers it byte-for-byte. Local PASS. Same commit:
-  bumped 16 `-smp 4` gate timeouts (90→180, 60→120 s) — DDR-766's CI run
-  29726803735 failed ONLY on `smoke-surfdestroy` (-smp 4) hitting the tight 90 s
-  margin on CI's slow TCG; it boots + PASSES locally (verified) → runner-speed
-  flake, not a regression. **101 gates.**
-- **PRIOR:** DDR-766 NVMe I/O queue + read/write + blk_register — `nvme0`
-  registered, LBA-100 round-trip → `PRADYOS_NVME_RW_OK`. Local gate PASS.
-  DDR-765 (controller bring-up) is **CI-green on `main` at `e2900b7`**; DDR-766
-  is on dev/phase1 at `24aa09e` (its CI run failed only on the surfdestroy -smp 4
-  flake — see above; not yet ff'd to main).
-- **CURRENT_ACTIVE_TASK:** land DDR-766+767 — push dev/phase1, watch the fresh
-  cumulative CI run (765 already on main; the timeout bump should clear the
-  surfdestroy flake), ff main to DDR-767 when green.
-- **NEXT_TASK (M2):** DDR-768 — kernel boots on the mkfs image + reads
-  `/PERSIST.TXT` (`vfs_mount(idx)` + `vfs_open`/`vfs_read` →
-  `PRADYOS_SFS_PERSIST_OK`), the true cross-reboot persistence proof; then
-  nested-dir provisioning to migrate `/etc/aether/config` off kernel
-  provisioning. Also open: FS write budget (1 MiB per-thread LIFETIME) design
+- **LAST_COMPLETED_TASK (newest):** DDR-768 cross-reboot SFS persistence proof —
+  the kernel boots on a host `mkfs.sfs` image and reads `/PERSIST.TXT` back.
+  Guarded self-test in `fs_test_thread` (`main.c`): peek highest blk index's
+  block 0 for `SFS_MAGIC` (`blk_read`), mount, `vfs_open`/`vfs_read`
+  `/PERSIST.TXT` → `PRADYOS_SFS_PERSIST_OK`. `boot_test.sh` gains `QEMU_SFS2`
+  (attach mkfs last) + `QEMU_NO_EXT4`. Root-caused a gotcha: virtio-blk caps at
+  `VBLK_MAX=4` (MSI-X vec 50–53 packed vs net@54/input@55 → can't naively raise);
+  with ext4 present the mkfs disk was the dropped 5th → suppress ext4 for this
+  gate instead. `VFS_MAX_MOUNTS` 4→6. New gate `smoke-sfs-persist`, local PASS.
+  **102 gates. CI pending on dev/phase1.**
+- **PRIOR:** DDR-767 host `mkfs.sfs` — `tools/mkfs_sfs/{mkfs_sfs,sfs_readback}.c`
+  #include kernel `sfs.h` (byte-exact). Host gate `smoke-mkfs-sfs`. Landed with
+  the 16 `-smp 4` timeout bumps (90→180/60→120) that cleared the surfdestroy
+  flake. **CI-green on `main` at `4ebcdc4`.** 101 gates.
+- **PRIOR:** DDR-765+766 NVMe (controller bring-up + block I/O + `blk_register`)
+  — `nvme0` registered, `PRADYOS_NVME_RW_OK`. Both **CI-green on `main` at
+  `4ebcdc4`** (the 767 run validated 765+766+767 cumulatively after the -smp4
+  timeout bump cleared the surfdestroy flake).
+- **CURRENT_ACTIVE_TASK:** land DDR-768 — push dev/phase1, watch the cumulative
+  CI run (767 already on main), ff main to DDR-768 when green.
+- **NEXT_TASK (M2):** DDR-769 — nested-dir provisioning in mkfs.sfs (so it can
+  write `/etc/aether/config`), then migrate that config off kernel provisioning
+  (DDR-760/761). Also open: FS write budget (1 MiB per-thread LIFETIME) design
   review; `-smp 4` SMP-race root-cause (timeout bumped as interim mitigation);
-  NVMe PRP-list (>page single commands) + NVMe IRQ.
+  NVMe PRP-list (>page single commands) + NVMe IRQ; lift `VBLK_MAX` past 4 with
+  an MSI-X vector remap if >4 concurrent virtio-blk disks are ever needed.
 
 ### 0.-1b PRIOR TRACKER (superseded)
 

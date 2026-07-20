@@ -48,7 +48,10 @@ if [ -f build/sfs.img ]; then
              -device virtio-blk-pci,drive=disk2)
 fi
 EXT4DISK=()
-if [ -f build/ext4.img ]; then
+# QEMU_NO_EXT4 suppresses the ext4 disk even if build/ext4.img exists — the
+# virtio-blk driver caps at VBLK_MAX=4 instances, so a gate that needs its own
+# extra disk (smoke-sfs-persist's mkfs image) drops ext4 to stay within the cap.
+if [ -f build/ext4.img ] && [ -z "${QEMU_NO_EXT4:-}" ]; then
     EXT4DISK=(-drive if=none,format=raw,file=build/ext4.img,id=disk3
               -device virtio-blk-pci,drive=disk3)
 fi
@@ -68,6 +71,16 @@ if [ -n "${QEMU_SMP:-}" ]; then
     SMPOPT=(-smp "$QEMU_SMP")
 fi
 
+# Optional host-authored SFS disk (DDR-768) — attached LAST (so it lands at the
+# highest blk index) only when QEMU_SFS2 is set. The smoke-sfs-persist gate uses
+# it to prove the kernel reads a file the host mkfs.sfs wrote; every other gate
+# omits it.
+SFS2DISK=()
+if [ -n "${QEMU_SFS2:-}" ] && [ -f build/mkfs_sfs.img ]; then
+    SFS2DISK=(-drive if=none,format=raw,file=build/mkfs_sfs.img,id=sfs2
+              -device virtio-blk-pci,drive=sfs2)
+fi
+
 # Optional NVMe controller (DDR-765) — attached only when QEMU_NVME is set, so
 # the smoke-nvme gate exercises controller bring-up + Identify while every other
 # gate boots without an NVMe device (the driver is a no-op when none is present).
@@ -84,6 +97,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${FATDISK[@]}" \
     "${SFSDISK[@]}" \
     "${EXT4DISK[@]}" \
+    "${SFS2DISK[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \
