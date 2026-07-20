@@ -254,6 +254,9 @@ jobs:
       - name: QEMU SFS persistence test (q35; kernel reads host mkfs.sfs /PERSIST.TXT, DDR-768)
         run: make smoke-sfs-persist
 
+      - name: QEMU AETHER SFS-root test (q35; daemon reads config from host mkfs image, DDR-770)
+        run: make smoke-aether-sfsroot
+
       - name: QEMU framebuffer-surface test (q35; ring-3 map+draw+flush, L7)
         run: make smoke-fb
 

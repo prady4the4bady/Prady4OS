@@ -146,7 +146,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -836,10 +836,24 @@ smoke-sfs-persist: $(IMG) fat-image sfs-image $(MKFS_SFS)
 	printf '%s' '$(SFS_NESTED_MARK769)' > build/nested769.txt
 	$(MKFS_SFS) $(MKFS_SFS_IMG) --blocks 4096 \
 	    --file PERSIST.TXT=build/persist768.txt \
-	    --file /etc/aether/config=build/nested769.txt
+	    --file /etc/test/config=build/nested769.txt
 	TIMEOUT_S=90 QEMU_SFS2=1 QEMU_NO_EXT4=1 \
 	    EXTRA_SENTINEL="$$(printf 'PRADYOS_SFS_PERSIST_OK\nPRADYOS_SFS_NESTED_OK')" \
 	    FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SFS_PERSIST_FAIL\nPRADYOS_SFS_NESTED_FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-770: a host-provisioned SFS ROOT image carrying the real /etc/aether/config
+# (nested-dir provisioning, DDR-769). The kernel roots the AETHER daemon here
+# instead of formatting+provisioning blk2, so the boot policy ships in the build.
+AETHER_CFG_TEXT := mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n
+build/sfsroot.img: $(MKFS_SFS)
+	@mkdir -p build
+	printf '$(AETHER_CFG_TEXT)' > build/aethercfg.txt
+	$(MKFS_SFS) build/sfsroot.img --blocks 4096 --file /etc/aether/config=build/aethercfg.txt
+
+smoke-aether-sfsroot: $(IMG) fat-image sfs-image build/sfsroot.img
+	TIMEOUT_S=90 QEMU_SFSROOT=1 QEMU_NO_EXT4=1 \
+	    EXTRA_SENTINEL="$$(printf 'rooted at provisioned mkfs image\nPRADYOS_AETHER_CFG_OK mode=sovereign')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img

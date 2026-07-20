@@ -99,7 +99,18 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** DDR-769 nested-directory provisioning in host
+- **LAST_COMPLETED_TASK (newest):** DDR-770 persistent root from a host mkfs.sfs
+  image — the AETHER `/etc/aether/config` now ships in `build/sfsroot.img`
+  (mkfs.sfs, `QEMU_SFSROOT` knob) instead of being kernel-provisioned. The
+  DDR-768 peek records the provisioned disk's mount (`prov_mnt`) when its
+  `/etc/aether/config` starts with `mode=`; the persistent-root block roots the
+  AETHER daemon there and skips the kernel `vfs_create/write` of config. Default
+  boots unchanged (blk2 fallback intact). DDR-769's nested marker moved to
+  `/etc/test/config` to disambiguate. New gate `smoke-aether-sfsroot`: `AETHER
+  daemon rooted at provisioned mkfs image` + `PRADYOS_AETHER_CFG_OK
+  mode=sovereign`. Local PASS (+ smoke-sfs-persist regression green). **103
+  gates. CI pending on dev/phase1.**
+- **PRIOR:** DDR-769 nested-directory provisioning in host
   `mkfs.sfs` — `add_file(path,…)` walks `/`-split components (intermediates =
   dir inodes `SFS_INO_DIR`, no extents, dedup shared prefixes; last = file),
   slots keyed `(parent<<32)|FNV1a32(name)` in the single root leaf; `sfs_readback`
@@ -126,16 +137,16 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   — `nvme0` registered, `PRADYOS_NVME_RW_OK`. Both **CI-green on `main` at
   `4ebcdc4`** (the 767 run validated 765+766+767 cumulatively after the -smp4
   timeout bump cleared the surfdestroy flake).
-- **CURRENT_ACTIVE_TASK:** land DDR-769 — push dev/phase1, watch the cumulative
-  CI run (768 already on main at db7a338), ff main to DDR-769 when green.
-- **NEXT_TASK (M2):** DDR-770 — migrate the persistent-root `/etc/aether/config`
-  off kernel provisioning (DDR-760/761) onto a shipped mkfs.sfs image (touches
-  the boot/root-mount flow + the destructive SFS self-tests that reformat blk2).
-  Also open: FS write budget (1 MiB per-thread LIFETIME) design review; `-smp 4`
-  SMP-race root-cause (timeout bumped as interim mitigation); NVMe PRP-list
-  (>page single commands) + NVMe IRQ; lift `VBLK_MAX` past 4 with an MSI-X vector
-  remap if >4 concurrent virtio-blk disks are ever needed; mkfs multi-leaf trees
-  (>14 slots).
+- **CURRENT_ACTIVE_TASK:** land DDR-770 — push dev/phase1, watch the cumulative
+  CI run (769 already on main at 51b3303), ff main to DDR-770 when green.
+- **NEXT_TASK (M2/M3):** the mkfs.sfs storage chain (765-770) is complete —
+  NVMe + host mkfs.sfs + kernel reads it + nested dirs + persistent root from a
+  build image. Remaining open items (pick per priority): lift `VBLK_MAX` past 4
+  (MSI-X vector remap) so the provisioned root can be the DEFAULT alongside ext4
+  + retire blk2's dual role; FS write budget (1 MiB per-thread LIFETIME) design
+  review; `-smp 4` SMP-race root-cause (timeout bumped as interim mitigation);
+  NVMe PRP-list (>page single commands) + NVMe IRQ; mkfs multi-leaf trees (>14
+  slots). Consider whether M2 is declarable done.
 
 ### 0.-1b PRIOR TRACKER (superseded)
 

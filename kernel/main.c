@@ -851,12 +851,17 @@ static void fs_test_thread(void *arg) {
      * both the ext4 read self-test AND the per-process root-mount probe. */
     int ext4_mnt = (blk_count() > 3) ? vfs_mount(3) : -1;
 
+    /* DDR-770: mount id of a pre-provisioned SFS root (a host mkfs.sfs image
+     * carrying a real /etc/aether/config), or -1. Set by the peek below and used
+     * further down to root the AETHER daemon there instead of the kernel
+     * reformatting+provisioning blk2 (DDR-760/761). */
+    int prov_mnt = -1;
+
     /* DDR-768: cross-reboot persistence proof. A host mkfs.sfs image (attached
-     * LAST via QEMU_SFS2) carries /PERSIST.TXT authored on the host. Peek the
-     * highest blk index's block 0 for the SFS magic (the blank in-kernel SFS
-     * disk isn't formatted until below, so this only fires for a PRE-formatted
-     * host image), then mount it read-only and read the file back — proving the
-     * kernel decodes a host-authored SFS volume byte-for-byte. Never writes it. */
+     * LAST via QEMU_SFS2/QEMU_SFSROOT) is peeked at the highest blk index — block
+     * 0 for the SFS magic (the blank in-kernel SFS disk isn't formatted until
+     * below, so this only fires for a PRE-formatted host image) — then mounted
+     * and read back, proving the kernel decodes a host-authored SFS volume. */
     if (blk_count() >= 1) {
         unsigned pi = blk_count() - 1;
         uint8_t sb0[512];
@@ -878,8 +883,9 @@ static void fs_test_thread(void *arg) {
                 }
                 /* DDR-769: nested-dir provisioning — read a host-authored file at
                  * a nested path, proving the kernel traverses mkfs.sfs-built
-                 * directory hierarchies (/etc/aether/config style). */
-                if (pmnt >= 0 && vfs_open(cap, pmnt, "/etc/aether/config", &pf) == 0) {
+                 * directory hierarchies. Uses /etc/test/config (distinct from the
+                 * real /etc/aether/config, which DDR-770 reserves for rooting). */
+                if (pmnt >= 0 && vfs_open(cap, pmnt, "/etc/test/config", &pf) == 0) {
                     static const char nmark[] = "PRADYOS-SFS-NESTED-DDR769-OK";
                     char nbuf[64];
                     int n = vfs_read(cap, &pf, 0, nbuf, sizeof nbuf - 1);
@@ -888,6 +894,16 @@ static void fs_test_thread(void *arg) {
                         if (nbuf[i] != nmark[i]) ok = 0;
                     kputs(ok ? "PRADYOS_SFS_NESTED_OK\r\n"
                              : "PRADYOS_SFS_NESTED_FAIL\r\n");
+                }
+                /* DDR-770: if this host image carries a real /etc/aether/config
+                 * (a valid policy starts with "mode="), remember its mount so the
+                 * AETHER daemon can root here — no kernel format/provision. */
+                if (pmnt >= 0 && vfs_open(cap, pmnt, "/etc/aether/config", &pf) == 0) {
+                    char cbuf[8];
+                    int n = vfs_read(cap, &pf, 0, cbuf, 5);
+                    if (n == 5 && cbuf[0]=='m' && cbuf[1]=='o' && cbuf[2]=='d' &&
+                        cbuf[3]=='e' && cbuf[4]=='=')
+                        prov_mnt = pmnt;                /* keep this mount */
                 }
             }
         }
@@ -1249,12 +1265,18 @@ static void fs_test_thread(void *arg) {
                         /* DDR-761: the FULL AETHER boot policy (mode/task/slot +
                          * the CAP_NET allowlist row) now lives on the SFS root at
                          * /etc/aether/config — the daemon reads it from here. */
+                        /* DDR-770: only KERNEL-provision the config when no host
+                         * mkfs.sfs image already carries one (prov_mnt < 0). When a
+                         * provisioned root is present the daemon roots there
+                         * (below) and this write is skipped entirely. */
                         static const char CFGTEXT[] =
                             "mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n";
-                        struct vfs_file cf;
-                        if (vfs_create(cap, root_smnt, "/etc/aether/config", &cf) == 0)
-                            vfs_write(cap, &cf, 0, (void *)CFGTEXT,
-                                      (uint32_t)(sizeof CFGTEXT - 1));
+                        if (prov_mnt < 0) {
+                            struct vfs_file cf;
+                            if (vfs_create(cap, root_smnt, "/etc/aether/config", &cf) == 0)
+                                vfs_write(cap, &cf, 0, (void *)CFGTEXT,
+                                          (uint32_t)(sizeof CFGTEXT - 1));
+                        }
                         struct tcb *sp = 0;
                         uint64_t splen = (uint64_t)(sfsroottest_elf_end - sfsroottest_elf);
                         if (elf_load((void *)(uintptr_t)sfsroottest_elf, splen,
@@ -1274,12 +1296,17 @@ static void fs_test_thread(void *arg) {
                             sched_unblock(bw);
                         }
 
-                        /* DDR-761: release the AETHER daemon into the SFS root now
-                         * that /etc/aether/config exists (loaded blocked above). */
+                        /* DDR-761/770: release the AETHER daemon into its root.
+                         * If a host mkfs.sfs image provisioned /etc/aether/config
+                         * (prov_mnt >= 0), root the daemon there — the config came
+                         * from the build image, not the kernel. Otherwise root at
+                         * the kernel-provisioned blk2 (DDR-761). */
                         if (dm) {
-                            dm->root_mnt = root_smnt;
+                            dm->root_mnt = (prov_mnt >= 0) ? prov_mnt : root_smnt;
                             sched_unblock(dm);
-                            kputs("[sfs] AETHER daemon rooted at SFS /etc/aether/config\r\n");
+                            kputs(prov_mnt >= 0
+                                  ? "[sfs] AETHER daemon rooted at provisioned mkfs image\r\n"
+                                  : "[sfs] AETHER daemon rooted at SFS /etc/aether/config\r\n");
                         }
 
                         /* DDR-763: B+tree churn REGRESSION witness. 40 cycles of

@@ -1483,13 +1483,23 @@ find-or-create dedup of shared prefixes, the last is the file — all keyed
 `/etc/aether/config` and the kernel persist self-test reads it →
 `PRADYOS_SFS_NESTED_OK`. Verified locally (host round-trip + kernel boot). **102
 gates** (same gate, extra assertion).
-**Next:** DDR-770 — migrate the persistent-root `/etc/aether/config` off kernel
-provisioning (DDR-760/761) onto a shipped mkfs image (touches boot/root-mount +
-the destructive SFS self-tests that reformat blk2). Open: refillable FS write
-budget review; `-smp 4` SMP-race root-cause; NVMe PRP-list (>page single
-commands) + NVMe IRQ; lift `VBLK_MAX` past 4 with an MSI-X vector remap if >4
-concurrent disks are needed; mkfs multi-leaf trees (>14 slots). wlroots/Wayland
-remain out-of-tree.
+**DDR-770 (persistent root from a host mkfs.sfs image):** the AETHER boot policy
+`/etc/aether/config` now ships in a build-time image instead of being
+kernel-provisioned. `build/sfsroot.img` (mkfs.sfs, nested-dir `/etc/aether/config`
+= real policy text) attaches via the `QEMU_SFSROOT` knob. The DDR-768 peek, on
+finding an SFS disk whose `/etc/aether/config` starts with `mode=`, records its
+mount (`prov_mnt`); the persistent-root block then roots the AETHER daemon there
+and **skips** the kernel `vfs_create`/`vfs_write` of the config. Default boots
+(no provisioned disk) are unchanged — blk2 reformat+provision fallback intact.
+DDR-769's nested test marker moved to `/etc/test/config` to keep
+`/etc/aether/config` unambiguous. New gate `smoke-aether-sfsroot` — verified
+`AETHER daemon rooted at provisioned mkfs image` + `PRADYOS_AETHER_CFG_OK
+mode=sovereign` locally. **103 gates.**
+**Next:** open items — refillable FS write budget review; `-smp 4` SMP-race
+root-cause; NVMe PRP-list (>page single commands) + NVMe IRQ; lift `VBLK_MAX`
+past 4 with an MSI-X vector remap (would let the provisioned root be the DEFAULT
+alongside ext4); mkfs multi-leaf trees (>14 slots). wlroots/Wayland remain
+out-of-tree.
 **Last updated:** 2026-07-20
 
 ## Phase 0 — Toolchain & Build System

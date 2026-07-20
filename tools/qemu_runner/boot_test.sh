@@ -80,6 +80,13 @@ if [ -n "${QEMU_SFS2:-}" ] && [ -f build/mkfs_sfs.img ]; then
     SFS2DISK=(-drive if=none,format=raw,file=build/mkfs_sfs.img,id=sfs2
               -device virtio-blk-pci,drive=sfs2)
 fi
+# Optional host-provisioned SFS ROOT disk (DDR-770) — a mkfs.sfs image carrying a
+# real /etc/aether/config. Attached LAST when QEMU_SFSROOT is set; the kernel
+# roots the AETHER daemon there instead of formatting+provisioning blk2.
+if [ -n "${QEMU_SFSROOT:-}" ] && [ -f build/sfsroot.img ]; then
+    SFS2DISK=(-drive if=none,format=raw,file=build/sfsroot.img,id=sfsroot
+              -device virtio-blk-pci,drive=sfsroot)
+fi
 
 # Optional NVMe controller (DDR-765) — attached only when QEMU_NVME is set, so
 # the smoke-nvme gate exercises controller bring-up + Identify while every other
