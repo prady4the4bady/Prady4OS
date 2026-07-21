@@ -23,7 +23,8 @@ extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 #define VIRTIO_BLK_F_SIZE_MAX (1u << 1)
 #define VIRTIO_BLK_F_SEG_MAX  (1u << 2)
 #define SECTOR 512u
-#define VBLK_MAX 4
+#define VBLK_MAX 8   /* DDR-771: 4->8 — matches BLK_MAX; MSI-X window relocated to
+                      * 56-63 (clear of net@54/input@55) so >4 disks register */
 
 struct virtio_blk_req {
     uint32_t type;
@@ -99,13 +100,19 @@ static void virtio_blk_irq(void) {
 
 /* DDR-714C1: per-device MSI-X handlers — unshared vector, no ISR-ack read
  * (that register is the INTx deassert; MSI-X does not use it). */
-#define VBLK_MSIX_BASE 50
+#define VBLK_MSIX_BASE 56   /* DDR-771: 8-vector window 56-63, clear of timer(48),
+                             * wake(49), net(54), input(55) */
 static void vblk_msix0(void) { complete(&g_inst[0]); }
 static void vblk_msix1(void) { complete(&g_inst[1]); }
 static void vblk_msix2(void) { complete(&g_inst[2]); }
 static void vblk_msix3(void) { complete(&g_inst[3]); }
+static void vblk_msix4(void) { complete(&g_inst[4]); }
+static void vblk_msix5(void) { complete(&g_inst[5]); }
+static void vblk_msix6(void) { complete(&g_inst[6]); }
+static void vblk_msix7(void) { complete(&g_inst[7]); }
 static irq_handler_fn const vblk_msix_fn[VBLK_MAX] =
-    { vblk_msix0, vblk_msix1, vblk_msix2, vblk_msix3 };
+    { vblk_msix0, vblk_msix1, vblk_msix2, vblk_msix3,
+      vblk_msix4, vblk_msix5, vblk_msix6, vblk_msix7 };
 
 /* DDR-714C3 proof: 1 if any disk's completion handler ran on a non-BSP CPU. */
 int virtio_blk_completed_on_ap(void) {

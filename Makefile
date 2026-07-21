@@ -851,9 +851,13 @@ build/sfsroot.img: $(MKFS_SFS)
 	printf '$(AETHER_CFG_TEXT)' > build/aethercfg.txt
 	$(MKFS_SFS) build/sfsroot.img --blocks 4096 --file /etc/aether/config=build/aethercfg.txt
 
-smoke-aether-sfsroot: $(IMG) fat-image sfs-image build/sfsroot.img
-	TIMEOUT_S=90 QEMU_SFSROOT=1 QEMU_NO_EXT4=1 \
-	    EXTRA_SENTINEL="$$(printf 'rooted at provisioned mkfs image\nPRADYOS_AETHER_CFG_OK mode=sovereign')" \
+# DDR-770/771: five virtio-blk disks — boot(0)/fat(1)/sfs(2)/ext4(3)/sfsroot(4).
+# `blk4 ready` proves the 5th disk registered (impossible under the old
+# VBLK_MAX=4), and the AETHER daemon roots at the provisioned image at blk4 —
+# i.e. the provisioned root coexists with ext4 (no QEMU_NO_EXT4).
+smoke-aether-sfsroot: $(IMG) fat-image sfs-image ext4-image build/sfsroot.img
+	TIMEOUT_S=90 QEMU_SFSROOT=1 \
+	    EXTRA_SENTINEL="$$(printf 'blk4 ready\nrooted at provisioned mkfs image\nPRADYOS_AETHER_CFG_OK mode=sovereign')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img

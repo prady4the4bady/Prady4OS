@@ -70,8 +70,9 @@ static void set_gate(int v, void *handler) {
 static struct idtr g_idtr;
 
 void idt_init(void) {
-    for (int i = 0; i < 56; i++)   /* 0..31 exc, 32..47 IRQs, 48 APIC timer,
-                                    * 49 wake IPI, 50..55 MSI-X (DDR-714C1/C2) */
+    for (int i = 0; i < 64; i++)   /* 0..31 exc, 32..47 IRQs, 48 APIC timer,
+                                    * 49 wake IPI, 50..63 MSI-X (DDR-714C1/C2;
+                                    * DDR-771 extended the window to 63) */
         set_gate(i, isr_stub_table[i]);
 
     g_idtr.limit = (uint16_t)(sizeof(idt) - 1);
@@ -101,11 +102,12 @@ static void dump_line(const char *label, uint64_t v) {
 #define IRQ_MAX_HANDLERS 4
 static irq_handler_fn irq_handlers[16][IRQ_MAX_HANDLERS];
 
-/* MSI-X vectors 50..55 (DDR-714C1/C2): one handler per vector — message-
- * signaled interrupts are never shared, so no chain. EOI is LAPIC-only (edge).
- * 50..53 virtio-blk, 54 virtio-net, 55 virtio-input. */
+/* MSI-X vectors 50..63 (DDR-714C1/C2, DDR-771): one handler per vector —
+ * message-signaled interrupts are never shared, so no chain. EOI is LAPIC-only
+ * (edge). 54 virtio-net, 55 virtio-input, 56..63 virtio-blk 0..7 (DDR-771).
+ * 50..53 unused since the block window was relocated to 56..63. */
 #define MSIX_VEC_BASE  50
-#define MSIX_VEC_COUNT 6
+#define MSIX_VEC_COUNT 14
 static irq_handler_fn msix_handlers[MSIX_VEC_COUNT];
 
 void msix_register(unsigned vector, irq_handler_fn fn) {

@@ -99,7 +99,16 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** DDR-770 persistent root from a host mkfs.sfs
+- **LAST_COMPLETED_TASK (newest):** DDR-771 `VBLK_MAX` 4→8 (MSI-X vector remap) —
+  virtio-blk block MSI-X window moved 50–53 → 56–63 (clear of net@54/input@55).
+  Required extending shared MSI-X infra: `isr.asm` stubs + `isr_stub_table`→64,
+  `idt.c` gate loop→64 + `MSIX_VEC_COUNT` 6→14, plus `virtio_blk.c` VBLK_MAX 8 +
+  base 56 + handlers 4–7. Root-caused a #GP (err 0x1C2 = IDT vec 56 ungated) a
+  driver-only change first hit. `smoke-aether-sfsroot` now boots 5 virtio-blk
+  disks (dropped `QEMU_NO_EXT4`, added ext4-image): asserts `blk4 ready` + daemon
+  roots at provisioned image at blk4 alongside ext4. Local PASS. **104 gates. CI
+  pending on dev/phase1.**
+- **PRIOR:** DDR-770 persistent root from a host mkfs.sfs
   image — the AETHER `/etc/aether/config` now ships in `build/sfsroot.img`
   (mkfs.sfs, `QEMU_SFSROOT` knob) instead of being kernel-provisioned. The
   DDR-768 peek records the provisioned disk's mount (`prov_mnt`) when its
@@ -137,8 +146,8 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   — `nvme0` registered, `PRADYOS_NVME_RW_OK`. Both **CI-green on `main` at
   `4ebcdc4`** (the 767 run validated 765+766+767 cumulatively after the -smp4
   timeout bump cleared the surfdestroy flake).
-- **CURRENT_ACTIVE_TASK:** land DDR-770 — push dev/phase1, watch the cumulative
-  CI run (769 already on main at 51b3303), ff main to DDR-770 when green.
+- **CURRENT_ACTIVE_TASK:** land DDR-771 — push dev/phase1, watch the cumulative
+  CI run (770 already on main at f8c6485), ff main to DDR-771 when green.
 - **NEXT_TASK (M2/M3):** the mkfs.sfs storage chain (765-770) is complete —
   NVMe + host mkfs.sfs + kernel reads it + nested dirs + persistent root from a
   build image. Remaining open items (pick per priority): lift `VBLK_MAX` past 4

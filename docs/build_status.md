@@ -1494,13 +1494,22 @@ and **skips** the kernel `vfs_create`/`vfs_write` of the config. Default boots
 DDR-769's nested test marker moved to `/etc/test/config` to keep
 `/etc/aether/config` unambiguous. New gate `smoke-aether-sfsroot` — verified
 `AETHER daemon rooted at provisioned mkfs image` + `PRADYOS_AETHER_CFG_OK
-mode=sovereign` locally. **103 gates.**
-**Next:** open items — refillable FS write budget review; `-smp 4` SMP-race
-root-cause; NVMe PRP-list (>page single commands) + NVMe IRQ; lift `VBLK_MAX`
-past 4 with an MSI-X vector remap (would let the provisioned root be the DEFAULT
-alongside ext4); mkfs multi-leaf trees (>14 slots). wlroots/Wayland remain
-out-of-tree.
-**Last updated:** 2026-07-20
+mode=sovereign` locally.
+
+**DDR-771 (`VBLK_MAX` 4→8, MSI-X vector remap):** the virtio-blk driver now
+supports 8 disks. The block MSI-X window moved from 50–53 to **56–63** (clear of
+net@54/input@55), which required extending the shared MSI-X infrastructure:
+`isr.asm` ISR stubs + `isr_stub_table` to 64, `idt.c` gate loop to 64, and
+`MSIX_VEC_COUNT` 6→14. Root-caused a #GP (err 0x1C2 → IDT vector 56 ungated) that
+a driver-only change first triggered. `smoke-aether-sfsroot` now boots **five**
+virtio-blk disks (boot/fat/sfs/ext4/sfsroot) — asserts `blk4 ready` (5th disk
+registered) + the AETHER daemon roots at the provisioned image at blk4 alongside
+ext4. **104 gates.**
+**Next:** open items — make the provisioned root the DEFAULT in the normal boot +
+retire blk2's dual role (now unblocked); refillable FS write budget review;
+`-smp 4` SMP-race root-cause; NVMe PRP-list (>page single commands) + NVMe IRQ;
+mkfs multi-leaf trees (>14 slots). wlroots/Wayland remain out-of-tree.
+**Last updated:** 2026-07-21
 
 ## Phase 0 — Toolchain & Build System
 
