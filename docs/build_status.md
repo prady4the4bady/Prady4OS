@@ -1524,6 +1524,16 @@ blk2's dual role (now unblocked); `-smp 4` SMP-race root-cause; NVMe PRP-list
 `make image` does not always rebuild `main.o` on source change — `rm build/main.o`
 before local test builds (CI clean-builds so it's unaffected). wlroots/Wayland
 remain out-of-tree.
+
+**DDR-772 (NVMe PRP2 + PRP list — multi-page single commands):** `nvme_io` no
+longer issues one command per ≤page chunk. `nvme_submit` gained a `prp2` arg; a
+per-controller scratch PRP-list page holds up to 512 page addresses. Per command:
+PRP1 (a possibly page-offset first region), `PRP2 = 0` (fits PRP1) / second-page
+base (one more page) / PRP-list phys (N>1 more pages), capped at ~2 MiB
+(4096 sectors) per command with a loop for larger. `smoke-nvme` extended: a
+16 KiB (4-page) round-trip now completes as ONE command via a 3-entry PRP list →
+`PRADYOS_NVME_PRP_OK`. **106 gates.** NVMe completion IRQ still deferred (needs an
+MSI-X vector; the 50–63 window is full).
 **Last updated:** 2026-07-21
 
 ## Phase 0 — Toolchain & Build System

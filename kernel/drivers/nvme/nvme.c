@@ -84,6 +84,7 @@ struct nvme {
     uint16_t cid;
     uint8_t  ready;                 /* controller enabled + Identify done */
     uint8_t  io_ready;              /* I/O queue up + registered */
+    uint64_t prp_list;              /* DDR-772: scratch PRP-list page (512 entries) */
     uint64_t nsze;                  /* namespace size in LBAs */
     uint32_t lba_bytes;             /* logical block size */
     char     model[41];
@@ -135,7 +136,7 @@ static int wait_reg(struct nvme *n, uint32_t reg, uint32_t mask, uint32_t want) 
 /* Submit one command on queue q and poll its completion. Returns the CQE status
  * field (0 = success) or 0xFFFF on completion timeout. */
 static uint16_t nvme_submit(struct nvme *n, struct nvme_queue *q, uint8_t opcode,
-                            uint32_t nsid, uint64_t prp1,
+                            uint32_t nsid, uint64_t prp1, uint64_t prp2,
                             uint32_t cdw10, uint32_t cdw11, uint32_t cdw12) {
     struct nvme_sqe *e = &q->sq[q->sq_tail];
     for (unsigned i = 0; i < sizeof *e / sizeof(uint32_t); i++)
@@ -144,6 +145,7 @@ static uint16_t nvme_submit(struct nvme *n, struct nvme_queue *q, uint8_t opcode
     e->cdw0  = (uint32_t)opcode | ((uint32_t)cid << 16);
     e->nsid  = nsid;
     e->prp1  = prp1;
+    e->prp2  = prp2;
     e->cdw10 = cdw10;
     e->cdw11 = cdw11;
     e->cdw12 = cdw12;
@@ -192,21 +194,37 @@ static int nvme_io(struct nvme *n, int is_write, uint64_t lba,
                    uint64_t buf_phys, uint32_t sectors) {
     if (!n->io_ready)
         return -1;
+    /* Cap a single command at what one PRP-list page covers: PRP1 (partial first
+     * page) + 512 further pages ~= 2 MiB. Fall back to 2 pages if no list page. */
+    const uint32_t max_lbas = n->prp_list ? 4096u : (2u * (PAGE_SIZE / 512u));
     while (sectors) {
-        uint32_t page_off = (uint32_t)(buf_phys & (PAGE_SIZE - 1));
-        uint32_t bytes_to_edge = PAGE_SIZE - page_off;
-        uint32_t nlb = bytes_to_edge / 512u;           /* fit within one page */
-        if (nlb == 0)
-            nlb = 1;                                    /* buffer 512-aligned edge */
-        if (nlb > sectors)
-            nlb = sectors;
-        uint16_t st = nvme_submit(n, &n->io, is_write ? 0x01 : 0x02, 1, buf_phys,
-                                  (uint32_t)lba, (uint32_t)(lba >> 32), nlb - 1);
+        uint32_t this = (sectors > max_lbas) ? max_lbas : sectors;
+        uint32_t nbytes = this * 512u;
+        uint32_t off    = (uint32_t)(buf_phys & (PAGE_SIZE - 1));
+        uint32_t first  = PAGE_SIZE - off;              /* bytes PRP1 covers */
+        uint64_t prp2   = 0;
+
+        if (nbytes > first) {
+            uint64_t p2 = (buf_phys & ~(uint64_t)(PAGE_SIZE - 1)) + PAGE_SIZE;
+            uint32_t more = (nbytes - first + PAGE_SIZE - 1) / PAGE_SIZE;
+            if (more == 1) {
+                prp2 = p2;                              /* one more page */
+            } else {
+                uint64_t *list = (uint64_t *)(uintptr_t)n->prp_list;
+                for (uint32_t i = 0; i < more; i++)
+                    list[i] = p2 + (uint64_t)i * PAGE_SIZE;
+                prp2 = n->prp_list;                     /* PRP list for pages 2..N */
+            }
+        }
+
+        uint16_t st = nvme_submit(n, &n->io, is_write ? 0x01 : 0x02, 1,
+                                  buf_phys, prp2,
+                                  (uint32_t)lba, (uint32_t)(lba >> 32), this - 1);
         if (st != 0)
             return -1;
-        buf_phys += (uint64_t)nlb * 512u;
-        lba      += nlb;
-        sectors  -= nlb;
+        buf_phys += (uint64_t)nbytes;
+        lba      += this;
+        sectors  -= this;
     }
     return 0;
 }
@@ -246,6 +264,23 @@ static void nvme_selftest(struct nvme *n) {
     kputs(ok ? "PRADYOS_NVME_RW_OK\r\n" : "PRADYOS_NVME_RW_FAIL\r\n");
     pmm_free_page(wp);
     pmm_free_page(rp);
+
+    /* DDR-772: 16 KiB (4-page) round-trip — one command via a 3-entry PRP list. */
+    uint64_t wq = pmm_alloc_pages(2);   /* 16 KiB contiguous */
+    uint64_t rq = pmm_alloc_pages(2);
+    if (wq && rq) {
+        uint32_t *wl = (uint32_t *)(uintptr_t)wq;
+        uint32_t *rl = (uint32_t *)(uintptr_t)rq;
+        for (unsigned i = 0; i < (4 * PAGE_SIZE) / 4; i++) { wl[i] = 0x5EED0000u + i; rl[i] = 0; }
+        int pok = nvme_io(n, 1, NVME_SELFTEST_LBA + 8, wq, 32) == 0 &&
+                  nvme_io(n, 0, NVME_SELFTEST_LBA + 8, rq, 32) == 0;
+        if (pok)
+            for (unsigned i = 0; i < (4 * PAGE_SIZE) / 4; i++)
+                if (rl[i] != wl[i]) { pok = 0; break; }
+        kputs(pok ? "PRADYOS_NVME_PRP_OK\r\n" : "PRADYOS_NVME_PRP_FAIL\r\n");
+    }
+    if (wq) pmm_free_pages(wq, 2);
+    if (rq) pmm_free_pages(rq, 2);
 }
 
 void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -315,7 +350,7 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
 
     /* Identify Controller (opcode 0x06, CNS=1). Model = bytes 24..63. */
     zero_page(data);
-    uint16_t st = nvme_submit(n, &n->admin, 0x06, 0, data_phys, 1, 0, 0);
+    uint16_t st = nvme_submit(n, &n->admin, 0x06, 0, data_phys, 0, 1, 0, 0);
     if (st != 0) {
         kputs("[nvme] identify-ctrl failed status="); kputhex(st); kputs("\r\n");
         return;
@@ -329,7 +364,7 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
     /* Identify Namespace (CNS=0, NSID=1). NSZE @0 (u64); LBA size from the active
      * format lbaf[FLBAS&0xf], LBADS = bits 16..23 → 2^LBADS bytes. */
     zero_page(data);
-    st = nvme_submit(n, &n->admin, 0x06, 1, data_phys, 0, 0, 0);
+    st = nvme_submit(n, &n->admin, 0x06, 1, data_phys, 0, 0, 0, 0);
     if (st != 0) {
         kputs("[nvme] identify-ns failed status="); kputhex(st); kputs("\r\n");
         return;
@@ -360,19 +395,20 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
         return;
     }
     /* Create I/O Completion Queue (admin 0x05): PC=1, IEN=0 (poll). */
-    st = nvme_submit(n, &n->admin, 0x05, 0, (uint64_t)(uintptr_t)n->io.cq,
+    st = nvme_submit(n, &n->admin, 0x05, 0, (uint64_t)(uintptr_t)n->io.cq, 0,
                      ((Q_DEPTH - 1) << 16) | IO_QID, 1u /*PC*/, 0);
     if (st != 0) {
         kputs("[nvme] create-iocq failed status="); kputhex(st); kputs("\r\n");
         return;
     }
     /* Create I/O Submission Queue (admin 0x01): PC=1, CQID=IO_QID. */
-    st = nvme_submit(n, &n->admin, 0x01, 0, (uint64_t)(uintptr_t)n->io.sq,
+    st = nvme_submit(n, &n->admin, 0x01, 0, (uint64_t)(uintptr_t)n->io.sq, 0,
                      ((Q_DEPTH - 1) << 16) | IO_QID, 1u | ((uint32_t)IO_QID << 16), 0);
     if (st != 0) {
         kputs("[nvme] create-iosq failed status="); kputhex(st); kputs("\r\n");
         return;
     }
+    n->prp_list = pmm_alloc_page();     /* DDR-772: scratch PRP-list page (>2-page I/O) */
     n->io_ready = 1;
 
     n->bd.name = "nvme0";

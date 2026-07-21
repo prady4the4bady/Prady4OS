@@ -99,7 +99,14 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** ADR-032 FS write budget lifetime-cap →
+- **LAST_COMPLETED_TASK (newest):** DDR-772 NVMe PRP2 + PRP list. `nvme_io` now
+  issues multi-page single commands instead of one-per-≤page-chunk: `nvme_submit`
+  gained a `prp2` arg; a scratch PRP-list page (`n->prp_list`) holds ≤512 page
+  addrs. Per command PRP1 + (0 | second-page | PRP-list), capped ~2 MiB, loop for
+  larger. `smoke-nvme` extended: 16 KiB round-trip as ONE command → gate PASS
+  (5 patterns incl. `PRADYOS_NVME_PRP_OK`). **106 gates. CI pending.** NVMe IRQ
+  still deferred (needs an MSI-X vector; 50–63 window full).
+- **PRIOR:** ADR-032 FS write budget lifetime-cap →
   token-bucket rate limit. `fs_write_budget` is now a bucket refilling
   256 KiB/tick (25 MiB/s) up to a 1 MiB burst cap; added `tcb.fs_budget_tick`;
   `vfs_write` lazily refills from elapsed ticks (only tops up below-cap; never
@@ -159,8 +166,8 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   — `nvme0` registered, `PRADYOS_NVME_RW_OK`. Both **CI-green on `main` at
   `4ebcdc4`** (the 767 run validated 765+766+767 cumulatively after the -smp4
   timeout bump cleared the surfdestroy flake).
-- **CURRENT_ACTIVE_TASK:** land ADR-032 — push dev/phase1, watch the cumulative
-  CI run (DDR-771 already on main at beb029f), ff main to ADR-032 when green.
+- **CURRENT_ACTIVE_TASK:** land DDR-772 — push dev/phase1, watch the cumulative
+  CI run (ADR-032 already on main at 47014e2), ff main to DDR-772 when green.
 - **NEXT_TASK (M2/M3):** the mkfs.sfs storage chain (765-770) is complete —
   NVMe + host mkfs.sfs + kernel reads it + nested dirs + persistent root from a
   build image. Remaining open items (pick per priority): lift `VBLK_MAX` past 4
