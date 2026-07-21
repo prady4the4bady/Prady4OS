@@ -446,7 +446,7 @@ smoke: $(IMG)
 # sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
 # Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
 smoke-fs: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf 'msix vec=50\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
+	EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it
