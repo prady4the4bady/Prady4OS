@@ -146,7 +146,7 @@ endif
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -858,6 +858,15 @@ build/sfsroot.img: $(MKFS_SFS)
 smoke-aether-sfsroot: $(IMG) fat-image sfs-image ext4-image build/sfsroot.img
 	TIMEOUT_S=90 QEMU_SFSROOT=1 \
 	    EXTRA_SENTINEL="$$(printf 'blk4 ready\nrooted at provisioned mkfs image\nPRADYOS_AETHER_CFG_OK mode=sovereign')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# ADR-032: FS write-budget token-bucket. The kernel self-test writes 1.5 MiB
+# (> the 1 MiB burst cap) from one thread across per-tick refills → the lifetime
+# cap is gone, the rate limit holds. FORBIDDEN catches a non-refilling budget.
+smoke-fs-budget: $(IMG) fat-image sfs-image
+	TIMEOUT_S=60 \
+	    EXTRA_SENTINEL=PRADYOS_FS_BUDGET_OK \
+	    FORBIDDEN_SENTINEL=PRADYOS_FS_BUDGET_FAIL \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img

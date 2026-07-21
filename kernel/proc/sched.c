@@ -8,6 +8,7 @@
 #include "string.h"            /* memcpy for the per-thread FPU template (5d) */
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D) */
 #include "smp.h"               /* rq-3: smp_resched_one (directed wake IPI) */
+#include "irq.h"               /* ADR-032: g_ticks for the FS write-budget bucket */
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
@@ -339,7 +340,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->name = name;
     t->name_buf[0] = 0;             /* DDR-756: empty until SYS_SETNAME (kmalloc !zero) */
     t->caps = cap_table_create();
-    t->fs_write_budget = FS_WRITE_BUDGET_DEFAULT;
+    t->fs_write_budget = FS_WRITE_BUDGET_DEFAULT;   /* ADR-032: full bucket */
+    t->fs_budget_tick  = g_ticks;                   /* kmalloc !zero */
     t->is_user = 0;            /* kmalloc does not zero — init the user fields */
     t->pid = 0;
     t->user_rip = 0;

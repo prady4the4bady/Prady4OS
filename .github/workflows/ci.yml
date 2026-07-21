@@ -248,6 +248,9 @@ jobs:
       - name: QEMU VirtIO-GPU framebuffer test (q35; 2D bring-up + scanout, L7 s0)
         run: make smoke-gpu
 
+      - name: QEMU FS write-budget test (q35; token-bucket >1 MiB across refills, ADR-032)
+        run: make smoke-fs-budget
+
       - name: QEMU NVMe controller test (q35; -device nvme bring-up + Identify, DDR-765)
         run: make smoke-nvme
 

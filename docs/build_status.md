@@ -1505,10 +1505,25 @@ a driver-only change first triggered. `smoke-aether-sfsroot` now boots **five**
 virtio-blk disks (boot/fat/sfs/ext4/sfsroot) — asserts `blk4 ready` (5th disk
 registered) + the AETHER daemon roots at the provisioned image at blk4 alongside
 ext4. **104 gates.**
-**Next:** open items — make the provisioned root the DEFAULT in the normal boot +
-retire blk2's dual role (now unblocked); refillable FS write budget review;
-`-smp 4` SMP-race root-cause; NVMe PRP-list (>page single commands) + NVMe IRQ;
-mkfs multi-leaf trees (>14 slots). wlroots/Wayland remain out-of-tree.
+
+**ADR-032 (FS write budget: lifetime cap → token-bucket rate limit):** supersedes
+ADR-015's per-thread *lifetime* write cap (1 MiB total, ever — far too little for
+a real process) with a **token bucket**: `fs_write_budget` is a balance that
+refills `FS_WRITE_REFILL_PER_TICK = 256 KiB`/tick (25 MiB/s sustained) up to a
+`FS_WRITE_BURST_MAX = 1 MiB` cap, added `tcb.fs_budget_tick`. `vfs_write` lazily
+refills from elapsed ticks; refill only tops up a below-cap balance and never
+reduces a higher one, preserving the kernel self-test `~0ull` bypass. Bounds the
+write RATE (anti-flood) with no lifetime ceiling; disk-SPACE exhaustion stays a
+separate control (SFS free-space GC + future per-mount quotas). New gate
+`smoke-fs-budget` (deterministic: a drained bucket refills from simulated elapsed
+ticks and writes — impossible under the old cap; and rejects with no elapsed time
+— rate limit holds). churn/bigwrite regressions green. **105 gates.**
+**Next:** open items — make the provisioned root the DEFAULT boot root + retire
+blk2's dual role (now unblocked); `-smp 4` SMP-race root-cause; NVMe PRP-list
+(>page single commands) + NVMe IRQ; mkfs multi-leaf trees (>14 slots). Dev note:
+`make image` does not always rebuild `main.o` on source change — `rm build/main.o`
+before local test builds (CI clean-builds so it's unaffected). wlroots/Wayland
+remain out-of-tree.
 **Last updated:** 2026-07-21
 
 ## Phase 0 — Toolchain & Build System

@@ -16,7 +16,12 @@ typedef void (*thread_fn)(void *);
 /* Default per-thread filesystem write budget (bytes). Caps how much a single
  * thread can write through the VFS so a buggy/hostile consumer cannot exhaust
  * the block device. Generous for tools, far below any real disk. */
-#define FS_WRITE_BUDGET_DEFAULT (1u << 20)   /* 1 MiB */
+/* ADR-032: token-bucket rate limit (replaced ADR-015's lifetime cap). The bucket
+ * caps a burst / idle accumulation; it refills per timer tick, so a thread's
+ * LIFETIME writes are unbounded but its RATE is capped (anti-flood). */
+#define FS_WRITE_BURST_MAX       (1u << 20)  /* 1 MiB bucket cap */
+#define FS_WRITE_REFILL_PER_TICK (256u << 10) /* 256 KiB/tick @100Hz = 25 MiB/s   */
+#define FS_WRITE_BUDGET_DEFAULT  FS_WRITE_BURST_MAX  /* initial full bucket */
 
 enum thread_state {
     THREAD_READY = 0,
@@ -48,7 +53,8 @@ struct tcb {
     const char *name;
     char       name_buf[16];   /* DDR-756: SYS_SETNAME target; name points here after rename */
     struct cap_table *caps;    /* per-thread (process) capability table */
-    uint64_t   fs_write_budget; /* remaining VFS write allowance (bytes)  */
+    uint64_t   fs_write_budget; /* ADR-032: token-bucket balance (bytes)   */
+    uint64_t   fs_budget_tick;  /* ADR-032: g_ticks at last budget refill  */
 
     /* Ring-3 (user) thread metadata — zero/unused for pure kernel threads. */
     uint32_t   is_user;

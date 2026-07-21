@@ -846,6 +846,37 @@ static void fs_test_thread(void *arg) {
     fs_write_test(cap, mnt);
     fat_place_exec_image(cap, mnt);   /* 5b slice 7: /EXECTEST.ELF for systest's execve */
 
+    /* ADR-032: FS write-budget token-bucket proof (deterministic — no wall-clock
+     * loop). (a) A fully DRAINED bucket, after simulated elapsed ticks, refills
+     * and permits a write — impossible under the old LIFETIME cap (a spent budget
+     * never returned). (b) A drained bucket with NO elapsed ticks still rejects —
+     * the rate limit holds (anti-flood). We simulate elapsed time by rewinding
+     * fs_budget_tick; the lazy refill in vfs_write does the rest. */
+    {
+        uint64_t bp = pmm_alloc_page();              /* 4 KiB */
+        if (bp) {
+            memset((void *)(uintptr_t)bp, 0xB6, 4096);
+            struct vfs_file bf;
+            int ok_refill = 0, ok_limit = 0;
+            if (vfs_create(cap, mnt, "/BUDGET.TMP", &bf) == 0) {
+                current_thread->fs_write_budget = 0;                 /* spent */
+                current_thread->fs_budget_tick  =
+                    (g_ticks > 8) ? g_ticks - 8 : 0;                 /* 8 ticks elapsed */
+                ok_refill = (vfs_write(cap, &bf, 0, (void *)(uintptr_t)bp, 4096) == 4096);
+
+                current_thread->fs_write_budget = 0;                 /* spent again */
+                current_thread->fs_budget_tick  = g_ticks + 1000000; /* no time can have
+                                                        elapsed past a far-future mark →
+                                                        no refill (race-free) */
+                ok_limit = (vfs_write(cap, &bf, 0, (void *)(uintptr_t)bp, 4096) < 0);
+                vfs_unlink(cap, mnt, "/BUDGET.TMP");
+            }
+            pmm_free_page(bp);
+            kputs((ok_refill && ok_limit) ? "PRADYOS_FS_BUDGET_OK\r\n"
+                                          : "PRADYOS_FS_BUDGET_FAIL\r\n");
+        }
+    }
+
     /* DDR-739: mount ext4 (blk3) ONCE, early, if present — read-only and never
      * unmounted, so it survives to scheduler time (unlike SFS). Reused below by
      * both the ext4 read self-test AND the per-process root-mount probe. */

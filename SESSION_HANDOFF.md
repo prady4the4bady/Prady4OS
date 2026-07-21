@@ -99,7 +99,20 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** DDR-771 `VBLK_MAX` 4→8 (MSI-X vector remap) —
+- **LAST_COMPLETED_TASK (newest):** ADR-032 FS write budget lifetime-cap →
+  token-bucket rate limit. `fs_write_budget` is now a bucket refilling
+  256 KiB/tick (25 MiB/s) up to a 1 MiB burst cap; added `tcb.fs_budget_tick`;
+  `vfs_write` lazily refills from elapsed ticks (only tops up below-cap; never
+  reduces → preserves the `~0ull` kernel bypass). Removes the 1 MiB LIFETIME
+  ceiling; bounds RATE (anti-flood); disk-space is a separate control. New gate
+  `smoke-fs-budget` — deterministic (rewind `fs_budget_tick` to simulate elapsed
+  ticks): drained bucket refills+writes (old cap couldn't) AND rejects with no
+  elapsed time. churn (smoke-sfs-btree) + budget bypass regressions green. **105
+  gates. CI pending on dev/phase1.** LESSONS: (1) `make image` doesn't always
+  rebuild `main.o` on source change — `rm build/main.o` before local test builds
+  (wasted cycles on stale kernels); (2) a single 64 KiB FAT `vfs_write` hung in
+  this context — used 4 KiB; (3) grep gate sentinels when changing kernel prints.
+- **PRIOR:** DDR-771 `VBLK_MAX` 4→8 (MSI-X vector remap) —
   virtio-blk block MSI-X window moved 50–53 → 56–63 (clear of net@54/input@55).
   Required extending shared MSI-X infra: `isr.asm` stubs + `isr_stub_table`→64,
   `idt.c` gate loop→64 + `MSIX_VEC_COUNT` 6→14, plus `virtio_blk.c` VBLK_MAX 8 +
@@ -146,8 +159,8 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   — `nvme0` registered, `PRADYOS_NVME_RW_OK`. Both **CI-green on `main` at
   `4ebcdc4`** (the 767 run validated 765+766+767 cumulatively after the -smp4
   timeout bump cleared the surfdestroy flake).
-- **CURRENT_ACTIVE_TASK:** land DDR-771 — push dev/phase1, watch the cumulative
-  CI run (770 already on main at f8c6485), ff main to DDR-771 when green.
+- **CURRENT_ACTIVE_TASK:** land ADR-032 — push dev/phase1, watch the cumulative
+  CI run (DDR-771 already on main at beb029f), ff main to ADR-032 when green.
 - **NEXT_TASK (M2/M3):** the mkfs.sfs storage chain (765-770) is complete —
   NVMe + host mkfs.sfs + kernel reads it + nested dirs + persistent root from a
   build image. Remaining open items (pick per priority): lift `VBLK_MAX` past 4

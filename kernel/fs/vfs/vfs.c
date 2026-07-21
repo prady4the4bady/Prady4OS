@@ -2,6 +2,7 @@
 #include "vfs.h"
 #include "blk.h"
 #include "sched.h"      /* current_thread for the capability check + write budget */
+#include "irq.h"        /* ADR-032: g_ticks for the token-bucket refill */
 
 static const struct vfs_fs_ops *g_fs[VFS_MAX_FS];
 static unsigned                 g_nfs;
@@ -110,8 +111,20 @@ int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint
     struct vfs_mount *m = mnt_get(f->mnt);
     if (!m || !m->fs->write || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    /* Per-process write budget: a buggy/hostile consumer cannot exhaust the
-     * whole block device — it can only write what its thread was granted. */
+    /* ADR-032: token-bucket write rate limit. Lazily refill the thread's bucket
+     * from elapsed ticks (capped at the burst max), then require enough tokens.
+     * Refill only tops up a below-cap balance and never reduces a higher one, so
+     * a kernel self-test's `fs_write_budget = ~0ull` bypass is preserved. This
+     * bounds the write RATE (anti-flood) without a lifetime cap. */
+    uint64_t now = g_ticks;
+    if (current_thread->fs_write_budget < FS_WRITE_BURST_MAX &&
+        now > current_thread->fs_budget_tick) {
+        uint64_t add = (now - current_thread->fs_budget_tick) * FS_WRITE_REFILL_PER_TICK;
+        uint64_t bal = current_thread->fs_write_budget + add;
+        current_thread->fs_write_budget =
+            (bal > FS_WRITE_BURST_MAX) ? FS_WRITE_BURST_MAX : bal;
+    }
+    current_thread->fs_budget_tick = now;
     if (current_thread->fs_write_budget < len)
         return -1;
     mnt_lock(m);
