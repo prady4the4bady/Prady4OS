@@ -99,7 +99,27 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
-- **LAST_COMPLETED_TASK (newest):** DDR-772 NVMe PRP2 + PRP list. `nvme_io` now
+- **CANONICAL FEATURE STATE:** `docs/AETHER_MASTER_FEATURES.md` (Sections A–H) is
+  the single source of truth for feature status — created 2026-07-24. Never let a
+  second feature list exist. Mirror it here + in `docs/build_status.md` in the
+  same commit as any code touching agents/UI/sockets/storage/namespaces/telemetry/
+  scheduling/capabilities.
+- **LAST_COMPLETED_TASK (newest):** DDR-773 mkfs.sfs multi-leaf B+tree (Master doc
+  Section B item 2). Slots now collected flat (bounded `MKFS_MAX_SLOTS = 512`,
+  clean error = S2) and bulk-loaded: ≤14 slots → single leaf at block 1
+  (byte-identical to before), else N leaves + one internal root with separators =
+  each next leaf's first key (mirrors kernel `bt_search_root` descend).
+  `sfs_readback` descends too. Gates: `smoke-mkfs-sfs` +20-file/41-slot case
+  verifying first/middle/last; `smoke-sfs-persist` now feeds the KERNEL a
+  multi-leaf image (`21 slots, root=23`) — both PASS locally. Host-tool only,
+  zero kernel files. **106 gates. CI pending on dev/phase1.**
+- **SECTION D VERIFIED (2026-07-24):** ADR-026 baseline #1–17 confirmed genuinely
+  BUILT in `kernel/aether/` (QUEUE_LEN 256, AUDIT_LEN 4096, PAYLOAD_MAX 512,
+  MEM_DEFAULT 128 MiB, RATE_MAX 60/window 100, CAP_SOVEREIGN 1<<16, CAP_AGENT
+  1<<17, SYS_SUBMIT/APPROVE/REJECT/SPAWN_AGENT/KILL_AGENT, ACTION_WRITE_FILE/
+  PRINT/SPAWN_PROCESS). No drift. Next free cap bit `1<<18` = CAP_MEMORY as
+  planned. This is the precondition for starting any Section E/F work.
+- **PRIOR:** DDR-772 NVMe PRP2 + PRP list. `nvme_io` now
   issues multi-page single commands instead of one-per-≤page-chunk: `nvme_submit`
   gained a `prp2` arg; a scratch PRP-list page (`n->prp_list`) holds ≤512 page
   addrs. Per command PRP1 + (0 | second-page | PRP-list), capped ~2 MiB, loop for
@@ -166,8 +186,16 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   — `nvme0` registered, `PRADYOS_NVME_RW_OK`. Both **CI-green on `main` at
   `4ebcdc4`** (the 767 run validated 765+766+767 cumulatively after the -smp4
   timeout bump cleared the surfdestroy flake).
-- **CURRENT_ACTIVE_TASK:** land DDR-772 — push dev/phase1, watch the cumulative
-  CI run (ADR-032 already on main at 47014e2), ff main to DDR-772 when green.
+- **CURRENT_ACTIVE_TASK:** land DDR-773 — push dev/phase1, watch the cumulative
+  CI run (DDR-772 already on main at 71468a7), ff main to DDR-773 when green.
+- **NEXT_TASK candidates** (Master doc Section B, pick per policy — bounded +
+  gateable first): B#1 NVMe IRQ (now less blocked — DDR-771 freed vectors 50–53 —
+  but needs a vector-pressure DDR + poll→IRQ completion rework); B#3 `-smp 4`
+  race (only with a narrow reproducer; the DDR-771 timeout bump is mitigation,
+  not root cause); B#4 SFS as default process root (unblocked by DDR-771, but
+  changes global boot topology → broader gate validation). Section E/F remain
+  gated behind a written DDR answering the architecture prerequisite checklist;
+  F#68 metric lockbox (= invariant S3) is the highest-priority proposed item.
 - **NEXT_TASK (M2/M3):** the mkfs.sfs storage chain (765-770) is complete —
   NVMe + host mkfs.sfs + kernel reads it + nested dirs + persistent root from a
   build image. Remaining open items (pick per priority): lift `VBLK_MAX` past 4

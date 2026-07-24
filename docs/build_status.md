@@ -1532,9 +1532,27 @@ PRP1 (a possibly page-offset first region), `PRP2 = 0` (fits PRP1) / second-page
 base (one more page) / PRP-list phys (N>1 more pages), capped at ~2 MiB
 (4096 sectors) per command with a loop for larger. `smoke-nvme` extended: a
 16 KiB (4-page) round-trip now completes as ONE command via a 3-entry PRP list →
-`PRADYOS_NVME_PRP_OK`. **106 gates.** NVMe completion IRQ still deferred (needs an
-MSI-X vector; the 50–63 window is full).
-**Last updated:** 2026-07-21
+`PRADYOS_NVME_PRP_OK`. **106 gates.** NVMe completion IRQ still deferred (needs a
+vector-pressure DDR + a poll→IRQ completion rework; note DDR-771 freed vectors
+50–53, so the window is no longer full).
+
+**DDR-773 (mkfs.sfs multi-leaf B+tree):** `mkfs.sfs` no longer hard-errors past
+`SFS_LEAF_MAX = 14` slots (~6 files). Slots are now collected flat (bounded at
+`MKFS_MAX_SLOTS = 512`, erroring cleanly per invariant S2) and **bulk-loaded** at
+finalize: ≤14 slots still emit a single leaf at block 1 (byte-identical to before,
+`root_btree = 1`), otherwise N leaves (chained via `next_leaf`) under one internal
+root whose separators are each following leaf's first key — matching the kernel's
+descend rule (`while (i < nkeys && key >= intern[i].sep) i++`, child holds keys
+≥ sep). `sfs_readback` gained the same descend. Gates: `smoke-mkfs-sfs` now also
+provisions 20 files (41 slots → 3 leaves + internal root) and verifies the
+**first, middle and last** file byte-exact (proving the descend lands at both
+separator edges); `smoke-sfs-persist` provisions past 14 slots so the **kernel**
+mounts and reads a host-authored two-level tree (`21 slots, root=23 (multi-leaf)`).
+Host-tool only — zero kernel files touched. **106 gates** (both gates extended,
+no new gate).
+**Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
+ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
+**Last updated:** 2026-07-24
 
 ## Phase 0 — Toolchain & Build System
 

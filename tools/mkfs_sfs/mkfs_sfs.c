@@ -26,7 +26,12 @@
 static int          g_fd;
 static uint64_t     g_next_free = 4;     /* blocks 0-3 are reserved */
 static uint64_t     g_next_inode = SFS_ROOT_INODE + 1;
-static struct sfs_node g_root_leaf;      /* block 1, built in memory */
+/* DDR-773: all slots are collected flat, then bulk-loaded into a B+tree at
+ * finalize (one leaf if <= SFS_LEAF_MAX, else N leaves + one internal root).
+ * MKFS_MAX_SLOTS is a hard bound that errors cleanly, never overflows (S2). */
+#define MKFS_MAX_SLOTS 512u
+static struct sfs_leaf_slot g_slots[MKFS_MAX_SLOTS];
+static unsigned g_nslots;
 
 static void die(const char *msg) {
     fprintf(stderr, "mkfs.sfs: %s: %s\n", msg, errno ? strerror(errno) : "error");
@@ -39,25 +44,25 @@ static void wr_block(uint64_t idx, const void *buf) {
         die("pwrite");
 }
 
-/* Append a slot to the in-memory root leaf. */
+/* Append a slot to the flat slot list (bulk-loaded into a tree at finalize). */
 static void leaf_add(uint64_t key, const void *val, size_t vlen) {
-    if (g_root_leaf.nkeys >= SFS_LEAF_MAX) {
-        fprintf(stderr, "mkfs.sfs: root leaf full (max %u slots) — too many files\n",
-                (unsigned)SFS_LEAF_MAX);
+    if (g_nslots >= MKFS_MAX_SLOTS) {
+        fprintf(stderr, "mkfs.sfs: slot table full (max %u) — too many files\n",
+                (unsigned)MKFS_MAX_SLOTS);
         exit(1);
     }
-    struct sfs_leaf_slot *s = &g_root_leaf.u.leaf[g_root_leaf.nkeys++];
+    struct sfs_leaf_slot *s = &g_slots[g_nslots++];
     memset(s, 0, sizeof *s);
     s->key = key;
     memcpy(&s->v, val, vlen);
 }
 
-/* Scan the (single) root leaf for a live DIR slot named `name` under `parent`;
+/* Scan the slot list for a live DIR slot named `name` under `parent`;
  * return its child inode, or 0 if absent. */
 static uint64_t find_dir(uint64_t parent, const char *name, int nlen) {
     uint64_t key = (parent << 32) | (uint64_t)sfs_name_hash32(name, nlen);
-    for (int i = 0; i < g_root_leaf.nkeys; i++) {
-        struct sfs_leaf_slot *s = &g_root_leaf.u.leaf[i];
+    for (unsigned i = 0; i < g_nslots; i++) {
+        struct sfs_leaf_slot *s = &g_slots[i];
         if (s->key == key && s->v.dir.inode_num &&
             s->v.dir.name_len == nlen &&
             memcmp(s->v.dir.name, name, (size_t)nlen) == 0)
@@ -159,29 +164,92 @@ static void add_file(const char *path, const uint8_t *data, uint32_t len) {
     }
 }
 
-static void sort_leaf(void) {   /* insertion sort by key (kernel bt_insert expects sorted) */
-    for (int i = 1; i < g_root_leaf.nkeys; i++) {
-        struct sfs_leaf_slot t = g_root_leaf.u.leaf[i];
-        int j = i - 1;
-        while (j >= 0 && g_root_leaf.u.leaf[j].key > t.key) {
-            g_root_leaf.u.leaf[j + 1] = g_root_leaf.u.leaf[j];
+static void sort_slots(void) {  /* insertion sort by key (the tree needs global order) */
+    for (unsigned i = 1; i < g_nslots; i++) {
+        struct sfs_leaf_slot t = g_slots[i];
+        int j = (int)i - 1;
+        while (j >= 0 && g_slots[j].key > t.key) {
+            g_slots[j + 1] = g_slots[j];
             j--;
         }
-        g_root_leaf.u.leaf[j + 1] = t;
+        g_slots[j + 1] = t;
     }
+}
+
+/* DDR-773: bulk-load the sorted slots into a B+tree and return the root block.
+ * <= SFS_LEAF_MAX slots -> a single leaf at block 1 (byte-identical to the
+ * pre-DDR-773 layout). Otherwise N leaves (leaf 0 at block 1, rest from
+ * next_free, chained via next_leaf) under ONE internal root whose separators are
+ * each following leaf's first key — matching the kernel's descend rule
+ * (`while (i < nkeys && key >= intern[i].sep) i++`, child >= sep). */
+static uint64_t write_tree(void) {
+    sort_slots();
+    uint8_t blk[SFS_BLOCK_SIZE];
+    struct sfs_node *nd = (struct sfs_node *)blk;
+
+    if (g_nslots <= SFS_LEAF_MAX) {
+        memset(blk, 0, sizeof blk);
+        nd->flags = SFS_NODE_LEAF;
+        nd->nkeys = (uint16_t)g_nslots;
+        nd->generation = 1;
+        for (unsigned i = 0; i < g_nslots; i++)
+            nd->u.leaf[i] = g_slots[i];
+        wr_block(1, blk);
+        return 1;
+    }
+
+    unsigned nleaves = (g_nslots + SFS_LEAF_MAX - 1) / SFS_LEAF_MAX;
+    if (nleaves > SFS_INT_MAX + 1u) {          /* one internal level only */
+        fprintf(stderr, "mkfs.sfs: %u leaves exceeds a single internal root (%u)\n",
+                nleaves, (unsigned)SFS_INT_MAX + 1u);
+        exit(1);
+    }
+    /* Leaf 0 keeps block 1; the rest come from the high-water allocator. */
+    uint64_t leaf_blk[SFS_INT_MAX + 1];
+    uint64_t first_key[SFS_INT_MAX + 1];
+    for (unsigned l = 0; l < nleaves; l++)
+        leaf_blk[l] = (l == 0) ? 1u : g_next_free++;
+
+    for (unsigned l = 0; l < nleaves; l++) {
+        unsigned base = l * SFS_LEAF_MAX;
+        unsigned cnt  = g_nslots - base;
+        if (cnt > SFS_LEAF_MAX) cnt = SFS_LEAF_MAX;
+        memset(blk, 0, sizeof blk);
+        nd->flags = SFS_NODE_LEAF;
+        nd->nkeys = (uint16_t)cnt;
+        nd->generation = 1;
+        nd->next_leaf = (l + 1 < nleaves) ? leaf_blk[l + 1] : 0;
+        for (unsigned i = 0; i < cnt; i++)
+            nd->u.leaf[i] = g_slots[base + i];
+        first_key[l] = g_slots[base].key;
+        wr_block(leaf_blk[l], blk);
+    }
+
+    uint64_t root = g_next_free++;
+    memset(blk, 0, sizeof blk);
+    nd->flags = SFS_NODE_INTERNAL;
+    nd->nkeys = (uint16_t)(nleaves - 1);
+    nd->generation = 1;
+    nd->child0 = leaf_blk[0];
+    for (unsigned l = 1; l < nleaves; l++) {
+        nd->u.intern[l - 1].sep   = first_key[l];   /* child holds keys >= sep */
+        nd->u.intern[l - 1].child = leaf_blk[l];
+    }
+    wr_block(root, blk);
+    return root;
 }
 
 int main(int argc, char **argv) {
     const char *image = NULL;
     uint64_t blocks = DEFAULT_BLOCKS;
-    const char *files[SFS_LEAF_MAX];
+    const char *files[MKFS_MAX_SLOTS];
     int nfiles = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--blocks") && i + 1 < argc) {
             blocks = strtoull(argv[++i], NULL, 0);
         } else if (!strcmp(argv[i], "--file") && i + 1 < argc) {
-            if (nfiles >= (int)SFS_LEAF_MAX) { fprintf(stderr, "mkfs.sfs: too many --file\n"); return 1; }
+            if (nfiles >= (int)MKFS_MAX_SLOTS) { fprintf(stderr, "mkfs.sfs: too many --file\n"); return 1; }
             files[nfiles++] = argv[++i];
         } else if (!image) {
             image = argv[i];
@@ -200,10 +268,7 @@ int main(int argc, char **argv) {
     if (g_fd < 0) die("open image");
     if (ftruncate(g_fd, (off_t)(blocks * SFS_BLOCK_SIZE)) != 0) die("ftruncate");
 
-    /* Root leaf (block 1): starts with the root-inode slot. */
-    memset(&g_root_leaf, 0, sizeof g_root_leaf);
-    g_root_leaf.flags = SFS_NODE_LEAF;
-    g_root_leaf.generation = 1;
+    /* Slot list starts with the root-inode slot (block 1 holds leaf 0). */
     struct { uint64_t inode_block; } root_ino_v = { 2 };
     leaf_add(SFS_KEY_INODE | SFS_ROOT_INODE, &root_ino_v, sizeof root_ino_v);
 
@@ -240,9 +305,9 @@ int main(int argc, char **argv) {
         add_file(path, fbuf, (uint32_t)got);
     }
 
-    /* Finalize the root leaf (block 1). */
-    sort_leaf();
-    wr_block(1, &g_root_leaf);
+    /* Finalize: bulk-load the slots into the B+tree (DDR-773). Must precede the
+     * superblock — it consumes blocks and yields the root. */
+    uint64_t root_btree = write_tree();
 
     /* Superblock (block 0) — same fields as kernel sfs_format(). */
     memset(blk, 0, sizeof blk);
@@ -251,7 +316,7 @@ int main(int argc, char **argv) {
     sb->version          = SFS_VERSION;
     sb->block_size       = SFS_BLOCK_SIZE;
     sb->total_blocks     = blocks;
-    sb->root_btree       = 1;
+    sb->root_btree       = root_btree;
     sb->generation       = 1;
     sb->next_free_block  = g_next_free;
     sb->next_inode       = g_next_inode;
@@ -261,8 +326,11 @@ int main(int argc, char **argv) {
     wr_block(0, blk);
 
     if (close(g_fd) != 0) die("close");
-    fprintf(stderr, "mkfs.sfs: %s — %llu blocks, %d file(s), next_free=%llu\n",
-            image, (unsigned long long)blocks, nfiles,
+    fprintf(stderr, "mkfs.sfs: %s — %llu blocks, %d file(s), %u slots, root=%llu%s, "
+                    "next_free=%llu\n",
+            image, (unsigned long long)blocks, nfiles, g_nslots,
+            (unsigned long long)root_btree,
+            (g_nslots > SFS_LEAF_MAX) ? " (multi-leaf)" : "",
             (unsigned long long)g_next_free);
     return 0;
 }

@@ -421,6 +421,21 @@ smoke-mkfs-sfs: $(MKFS_SFS) $(SFS_READBACK)
 	 [ "$$out" = "$(SFS_PERSIST_MARK)" ] \
 	   && echo "[smoke] PASS — mkfs.sfs host round-trip" \
 	   || { echo "[smoke] FAIL — mkfs.sfs round-trip mismatch"; exit 1; }
+# DDR-773: multi-leaf B+tree. 20 files = 41 slots > SFS_LEAF_MAX(14) -> 3 leaves
+# under an internal root. Reading the FIRST, a MIDDLE and the LAST file proves
+# the internal descend lands correctly at both edges of the separator range.
+	@set -e; args=""; \
+	 for i in $$(seq 0 19); do \
+	   printf 'multileaf-content-%02d' $$i > build/ml$$i.txt; \
+	   args="$$args --file F$$i.TXT=build/ml$$i.txt"; \
+	 done; \
+	 $(MKFS_SFS) build/mkfs_multi.img --blocks 4096 $$args; \
+	 for i in 0 9 19; do \
+	   got=$$($(SFS_READBACK) build/mkfs_multi.img F$$i.TXT); \
+	   want=$$(printf 'multileaf-content-%02d' $$i); \
+	   [ "$$got" = "$$want" ] || { echo "[smoke] FAIL — multi-leaf F$$i: '$$got' != '$$want'"; exit 1; }; \
+	 done; \
+	 echo "[smoke] PASS — mkfs.sfs multi-leaf B+tree (20 files, first/middle/last)"
 
 # An ext4 disk populated at mkfs time (-d) with a known file, for the ext4
 # read-only self-test. Forces 4 KiB blocks to match the kernel's page reads.
@@ -834,9 +849,15 @@ smoke-sfs-persist: $(IMG) fat-image sfs-image $(MKFS_SFS)
 	@mkdir -p build
 	printf '%s' '$(SFS_PERSIST_MARK768)' > build/persist768.txt
 	printf '%s' '$(SFS_NESTED_MARK769)' > build/nested769.txt
+	printf 'pad' > build/pad773.txt
+	@:  # DDR-773: 6 extra root files push this image past SFS_LEAF_MAX(14) slots,
+	@:  # so the KERNEL below mounts a genuinely multi-leaf host-authored tree.
 	$(MKFS_SFS) $(MKFS_SFS_IMG) --blocks 4096 \
 	    --file PERSIST.TXT=build/persist768.txt \
-	    --file /etc/test/config=build/nested769.txt
+	    --file /etc/test/config=build/nested769.txt \
+	    --file P0.TXT=build/pad773.txt --file P1.TXT=build/pad773.txt \
+	    --file P2.TXT=build/pad773.txt --file P3.TXT=build/pad773.txt \
+	    --file P4.TXT=build/pad773.txt --file P5.TXT=build/pad773.txt
 	TIMEOUT_S=90 QEMU_SFS2=1 QEMU_NO_EXT4=1 \
 	    EXTRA_SENTINEL="$$(printf 'PRADYOS_SFS_PERSIST_OK\nPRADYOS_SFS_NESTED_OK')" \
 	    FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SFS_PERSIST_FAIL\nPRADYOS_SFS_NESTED_FAIL')" \
