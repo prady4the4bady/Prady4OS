@@ -1740,6 +1740,26 @@ four failures, and it has never reproduced locally (3/3 pass). No further B#3 wo
 is warranted until a failure occurs and the probe names the mechanism — forcing a
 fix without it would be a fourth blind attempt.
 
+**DDR-778 (PRISM output redirection — Section B#12, first bounded slice):**
+`cmd … > file` now works in PRISM. Scoping first confirmed the kernel side
+**already ships** — `SYS_DUP2 = 18` and `SYS_PIPE` exist (PROC-A, gated by
+`smoke-syspipe` and the CI "pipe/dup2" step); `prism.c` had merely never
+`#define`d `SYS_DUP2` — so this slice is **ring-3 only, zero kernel change**.
+Implementation: scan `argv[1..argc)` for a bare `>` (from index 1, so a leading
+`> file` cannot leave `argv[0]` undefined), truncate `argc` at it, then
+`dup2(1, REDIR_SAVE_FD)` / `open(O_CREAT|O_WRONLY)` / `dup2(fd,1)` / `close(fd)`,
+restoring at the loop's existing flush point. Two hazards handled deliberately:
+musl **fully buffers** a non-tty stdout, so output is flushed *before* fd 1 is
+restored (a late flush would land on the console and make the redirect silently
+half-work); and a skipped restore would send *all* later shell output into the
+file, so control flow was audited — the only `continue` precedes the swap, the
+`ls` `break` is an inner loop, and `exit` returns from `main`. Gate: `smoke-shell`
+extended with a **discriminating pair** — asserting the marker alone would pass
+even if redirection did nothing (a plain `echo` prints the same text), so
+`REDIR.TXT` must also appear in `ls /`. **Gate count unchanged: 106.**
+Remaining B#12: `|` (needs a fork around the builtin dispatch — PRISM builtins are
+internal functions, not execs), `<`, `>>`, stderr, job control.
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

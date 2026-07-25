@@ -612,7 +612,9 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  for i in $$(seq 1 300); do grep -q PRISM_READY build/shell_serial.log 2>/dev/null && break; sleep 0.1; done; \
 	  printf 'echo prism-echo-marker\n'; sleep 0.5; printf 'help\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'ps\n'; sleep 0.5; \
 	  printf 'touch /PRISMNEW.TXT\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'rm /PRISMNEW.TXT\n'; sleep 0.5; \
-	  printf 'uname\n'; sleep 0.5; printf 'date\n'; sleep 0.5; printf 'uptime\n'; sleep 0.5; printf 'dmesg\n'; sleep 0.5; printf 'free\n'; sleep 0.5; printf 'exit\n'; sleep 0.5 ) & \
+	  printf 'uname\n'; sleep 0.5; printf 'date\n'; sleep 0.5; printf 'uptime\n'; sleep 0.5; printf 'dmesg\n'; sleep 0.5; printf 'free\n'; sleep 0.5; \
+	  printf 'echo redir-ok-7q2 > /REDIR.TXT\n'; sleep 0.5; printf 'cat /REDIR.TXT\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; \
+	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=disk1 -device virtio-blk-pci,drive=disk1 \
@@ -646,8 +648,14 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@grep -qE "dmesg: [1-9][0-9]* bytes" build/shell_serial.log || { echo "[shell] FAIL: dmesg builtin (DDR-751)"; tail -30 build/shell_serial.log; exit 1; }
 	@# DDR-752: `free` prints total/free/used physical memory (KiB). Shape is fixed.
 	@grep -qE "mem: total=[0-9]+K free=[0-9]+K used=[0-9]+K" build/shell_serial.log || { echo "[shell] FAIL: free builtin (DDR-752)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-778: output redirection. BOTH assertions are required and neither alone
+	@# is sufficient: the marker on its own would still appear if redirection did
+	@# nothing (a plain `echo` prints it to the console), so the file must ALSO show
+	@# up in `ls /` to prove it was actually created and written.
+	@grep -qE "(^|prism> )REDIR\.TXT$$" build/shell_serial.log || { echo "[shell] FAIL: redirect did not create the file (DDR-778)"; tail -30 build/shell_serial.log; exit 1; }
+	@grep -qF "redir-ok-7q2" build/shell_serial.log || { echo "[shell] FAIL: redirect content not read back (DDR-778)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free, clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect, clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

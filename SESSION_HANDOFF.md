@@ -374,7 +374,39 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   (`ls`/`ps`) was corrected earlier. All three moved to Section A. **The other
   Section B entries have NOT all been re-verified — check the tree before
   planning any of them.**
-- **NEXT_TASK — B#12: pipes / redirection / job control in PRISM** (best remaining
+- **LAST_COMPLETED_TASK (newest):** DDR-778 PRISM output redirection
+  (Master doc Section B#12, first bounded slice) — **ring-3 only, zero kernel
+  change.** Scoping confirmed `SYS_DUP2 = 18` and `SYS_PIPE` already ship
+  (PROC-A, gates `smoke-syspipe` + CI "pipe/dup2"); `prism.c` had merely never
+  `#define`d `SYS_DUP2`. `cmd … > file` now works: scan `argv[1..argc)` for a bare
+  `>` (from index 1 so a leading `> file` can't leave `argv[0]` undefined),
+  truncate `argc`, then `dup2(1,REDIR_SAVE_FD)` / `open(O_CREAT|O_WRONLY)` /
+  `dup2(fd,1)` / `close`, restoring at the loop's existing flush point.
+  TWO HAZARDS HANDLED — (1) musl FULLY BUFFERS a non-tty stdout, so the flush must
+  happen BEFORE fd 1 is restored or the output lands on the console and the
+  redirect silently half-works; (2) a skipped restore would send ALL later shell
+  output into the file, so control flow was audited (only `continue` precedes the
+  swap; `ls`'s `break` is an inner loop; `exit` returns from main). Gate:
+  `smoke-shell` + a DISCRIMINATING PAIR — the marker alone would pass even with
+  redirection broken (plain `echo` prints it), so `REDIR.TXT` must ALSO appear in
+  `ls /`. **106 gates. CI pending.**
+- ⚠ **LOCAL-ONLY GATE LIMITATION (not a regression): `make smoke-shell` fails
+  here with `no PRISM_READY`.** The gate writes its serial log to `build/` on
+  **DrvFs (`/mnt/c`)**, which is slow enough in this WSL setup that the boot
+  misses the gate's 60 s window. Evidence it is environmental: a direct boot
+  prints `PRISM_READY` fine, and `smoke-shell` **passes in CI** (step 26, green in
+  run 30170362044). Do NOT "fix" this by raising the gate's timeout. To validate
+  shell changes locally, use the same FIFO flow but put the serial log on `/tmp`
+  (ext4) — see the DDR-778 proof script pattern.
+- **NEXT_TASK — continue B#12**: `|` between two commands. NOTE (already
+  established, don't rediscover): PRISM builtins are INTERNAL FUNCTIONS, not
+  execs, so piping needs a fork around the **builtin dispatch** itself. Then `<`,
+  `>>`, stderr; job control (`&`, job table) is a separate slice needing signal
+  plumbing. Alternatives if B#12 stalls: B#4 SFS-as-default-root (invasive —
+  global boot topology), B#6 ext4 write (large). **Check the tree before planning
+  ANY Section B item** — #5, #7 and #8 were all stale "planned" entries that were
+  already shipped.
+- **(superseded) earlier framing: B#12 pipes / redirection / job control** (best remaining
   bounded+gateable item: ring-3 only, `user/prism.c`, zero kernel risk, and the
   kernel side already ships — `SYS_PIPE`, `dup2`, `SIGPIPE`, gates `smoke-syspipe`
   / the CI "pipe/dup2" step). Scope it SMALL in its DDR: start with output

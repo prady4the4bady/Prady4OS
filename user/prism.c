@@ -18,6 +18,8 @@
 #define SYS_EXECVE 14
 #define SYS_FORK   15
 #define SYS_WAIT4  16
+#define SYS_DUP2   18     /* DDR-778: PROC-A, already in the kernel — output redirection */
+#define REDIR_SAVE_FD 9   /* DDR-778: parking slot for the real stdout (FD_MAX=64) */
 #define SYS_KILL   23     /* DDR-755: (pid, signum) -> 0 | -errno */
 #define SIGTERM    15
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
@@ -152,6 +154,40 @@ int main(void) {
             continue;
         const char *cmd = argv[0];
 
+        /* DDR-778: output redirection `cmd ... > file`. Scan from index 1 so a
+         * leading "> file" can never leave argv[0] undefined; truncating argc at
+         * the '>' hides the redirect tokens from the builtin. Ring-3 only —
+         * SYS_DUP2 (PROC-A) and O_CREAT|O_WRONLY already exist. */
+        const char *redir = 0;
+        int redir_err = 0;
+        for (int i = 1; i < argc; i++) {
+            if (!strcmp(argv[i], ">")) {
+                if (i + 1 < argc) redir = argv[i + 1];
+                else              redir_err = 1;
+                argc = i;
+                break;
+            }
+        }
+        if (redir_err) {
+            printf("redirect: missing filename\n");
+            fflush(stdout);
+            continue;                    /* fd 1 untouched — nothing to restore */
+        }
+        long redir_save = -1;
+        if (redir) {
+            long rfd = nsi(SYS_OPEN, (long)redir, O_CREAT | O_WRONLY, 0);
+            if (rfd < 0) {
+                printf("redirect: cannot open %s\n", redir);
+                fflush(stdout);
+                continue;                /* still before the swap — safe */
+            }
+            fflush(stdout);              /* don't spill buffered console text into the file */
+            nsi(SYS_DUP2, 1, REDIR_SAVE_FD, 0);   /* stash the real stdout */
+            nsi(SYS_DUP2, rfd, 1, 0);
+            nsi(SYS_CLOSE, rfd, 0, 0);
+            redir_save = REDIR_SAVE_FD;
+        }
+
         if (!strcmp(cmd, "help")) {
             printf("builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
@@ -274,6 +310,13 @@ int main(void) {
         } else {
             printf("prism: unknown command: %s\n", cmd);
         }
-        fflush(stdout);
+        fflush(stdout);                  /* DDR-778: MUST flush INTO the file before
+                                          * restoring fd 1 — musl fully buffers a
+                                          * non-tty stdout, so a late flush would
+                                          * land on the console instead. */
+        if (redir_save >= 0) {
+            nsi(SYS_DUP2, redir_save, 1, 0);
+            nsi(SYS_CLOSE, redir_save, 0, 0);
+        }
     }
 }
