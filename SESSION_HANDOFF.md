@@ -207,7 +207,22 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   therefore NOT promoted to a02e790. The DDR-774a push re-attempts the install; if
   this recurs, consider pinning rust to a dated nightly or stable in the workflow
   (the rust dep exists only for the `toolchain-check` no_std interop gate).
-- **LAST_COMPLETED_TASK (newest):** DDR-774b NVMe MSI-X table mapping + IEN
+- **LAST_COMPLETED_TASK (newest):** DDR-774c **phase c-1** — NVMe MSI-X delivery
+  ROOT-CAUSED AND FIXED (Master doc Section B#1 sub-slice c). The 774b symptom
+  `[nvme] irqs=0` was **my bug in 774b**: NVMe `Create I/O CQ` CDW11[31:16] is an
+  **index into the MSI-X table**, NOT the x86 interrupt vector. It was passed 50,
+  aiming the controller at an unprogrammed/masked entry while only **entry 0** was
+  programmed (the x86 vector rides in that entry's message-data field). Fix =
+  pass the table index: `NVME_MSIX_ENTRY 0`. Result: **`[nvme] irqs=6`**.
+  IMPORTANT: the leading suspect (MSI-X **Function Mask**, MC bit 14, never
+  explicitly cleared) was **NOT** the cause — so `pcie_msix_program()` (the SHARED
+  774a helper) was left untouched and the four virtio consumers cannot regress.
+  Neither was the table address math / BIR decode. `smoke-nvme` PASS with 7
+  patterns, adding `PRADYOS_NVME_IRQ_OK` (forbidding `..._IRQ_FAIL`), made
+  deterministic by a BOUNDED settle spin (S2) instead of a timing-dependent count;
+  the exact count is printed but NOT asserted (brittle if the self-test changes).
+  **106 gates. CI pending.**
+- **PRIOR:** DDR-774b NVMe MSI-X table mapping + IEN
   (Master doc Section B#1 sub-slice b) — plumbing only, completion STILL POLLED.
   `nvme_msix_setup()` uses `pcie_msix_find()` for the runtime BIR/offset, maps 2
   uncached pages at `NVME_MSIX_VBASE` (separate from the BAR0 register window),
@@ -233,29 +248,30 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   site so it still runs after the per-queue routing). All three virtio callers
   unchanged → the DDR-774 stop condition ("if it forces driver changes, stop") did
   NOT trigger. Unblocks 774b. Gates: smoke-fs/net/input/gpu.
-- **DDR-774a IS CI-GREEN ON `main` @ `347c422`** (run 30141466540) — that promotion
-  also carried the a02e790 docs commit. The earlier `Install toolchain` rustup
-  failure was confirmed transient (this run's toolchain step succeeded), so no CI
+- **DDR-774b IS CI-GREEN ON `main` @ `2034a53`** (run 30146543550); DDR-774a landed
+  earlier at `347c422` (run 30141466540, which also carried the a02e790 docs
+  commit). The `Install toolchain` rustup failure was confirmed transient — no CI
   pinning change was needed.
-- **CURRENT_ACTIVE_TASK:** land DDR-774b — push dev/phase1, watch CI, ff main when
-  green.
-- **NEXT_TASK — DDR-774c** (Master doc Section B#1, sub-slice c), **two phases and
-  the first is mandatory**:
-  **(c-1) ROOT-CAUSE MSI-X DELIVERY** — `[nvme] irqs=0` today. Do NOT convert the
-  completion path until an interrupt is observably delivered (`irqs` > 0). Work
-  the suspects in order: explicitly clear the MSI-X **Function Mask** (message-
-  control bit 14) in `pcie_msix_program` — note this touches the SHARED 774a
-  helper, so re-run smoke-fs / smoke-net-lo / smoke-net / smoke-input / smoke-gpu;
-  then read back the programmed entry-0 dwords and compare against what was
-  written (catches bad table address math); then verify the BAR/offset decode
-  against QEMU's NVMe MSI-X capability.
-  **(c-2)** only once delivery is proven: convert `nvme_submit()` to wait on an
-  IRQ-set flag with a **bounded** spin fallback (S2) so a lost interrupt degrades
-  to polling instead of hanging, and add the now-deterministic count-based
-  `PRADYOS_NVME_IRQ_OK` sentinel to `smoke-nvme`.
-  If delivery cannot be root-caused in a bounded effort, the honest fallback is to
-  revert 774b's `IEN` bit (keep the mapping + helpers), document the finding, and
-  move to another Section B item rather than leave a half-armed interrupt path.
+- **CURRENT_ACTIVE_TASK:** land DDR-774c c-1 — push dev/phase1, watch CI, ff main
+  when green.
+- **NEXT_TASK — DDR-774c phase c-2** (Master doc Section B#1, final sub-slice).
+  Delivery is now PROVEN (`irqs=6`, `PRADYOS_NVME_IRQ_OK` gated), so the
+  completion path can finally be converted: make `nvme_submit()` wait on an
+  IRQ-set completion flag with a **BOUNDED** spin fallback (S2) so a lost or
+  misrouted interrupt degrades to polling instead of hanging the boot.
+  ⚠ The real risk in c-2 is **not** the interrupt — it is **CQ head/phase
+  ownership (S6)**. Today the polling loop in `nvme_submit()` exclusively owns
+  reading the phase bit, advancing `cq_head` and ringing the CQ head doorbell,
+  while the ISR only increments a counter. c-2 must transfer that ownership
+  atomically, not run both concurrently, or an interrupt arriving mid-poll will
+  corrupt an in-flight command. Simplest safe design: ISR sets a per-queue
+  "completion pending" flag only; `nvme_submit()` still does all CQ mutation, but
+  waits on the flag instead of spinning on the phase bit. Keep `smoke-nvme`'s
+  RW_OK / PRP_OK / IRQ_OK all green, and keep the DDR-772 multi-command PRP loop
+  correct (it issues several commands per call).
+  After c-2, Section B#1 is complete; next candidates are B#3 (`-smp 4` race —
+  needs a narrow reproducer first) and B#4 (SFS as default process root —
+  invasive, global boot topology).
   Alternatives if 774a is rejected: B#3 `-smp 4` race (needs a narrow reproducer
   first; the DDR-771 timeout bump is mitigation, not root cause) or B#4 SFS as
   default process root (invasive — global boot topology, broad gate validation).

@@ -51,6 +51,12 @@
 #define NVME_MSIX_VBASE 0xFFFFD21000000000ull
 #define NVME_MSIX_MAP   0x2000u
 #define NVME_MSIX_VEC   50u
+/* DDR-774c: Create I/O CQ CDW11[31:16] "Interrupt Vector" is an INDEX INTO THE
+ * MSI-X TABLE, not the x86 interrupt vector. We program table entry 0 (whose
+ * message-data field carries x86 vector NVME_MSIX_VEC), so the IV field must be
+ * 0. Passing the x86 vector here (the DDR-774b bug) pointed the controller at an
+ * unprogrammed, masked table entry — hence irqs=0. */
+#define NVME_MSIX_ENTRY 0u
 
 /* NVMe submission-queue entry (64 bytes). We fill only the fields admin/NVM
  * commands need (opcode/CID, NSID, PRP1, CDW10..12). */
@@ -336,11 +342,15 @@ static void nvme_selftest(struct nvme *n) {
     if (wq) pmm_free_pages(wq, 2);
     if (rq) pmm_free_pages(rq, 2);
 
-    /* DDR-774b: observability only — NOT gated. With completion still polled the
-     * delivery timing relative to this print is not guaranteed, so asserting the
-     * count would be a timing-dependent sentinel. It becomes a gated assertion in
-     * 774c, where the completion path actually depends on it. */
+    /* DDR-774c (c-1): prove MSI-X completions are actually DELIVERED. Completion
+     * is still polled, so the final command's interrupt may still be in flight
+     * when we get here — settle with a BOUNDED spin (S2) so the assertion is
+     * deterministic rather than timing-dependent. Every earlier command's
+     * interrupt has long since been raised, so this normally exits immediately. */
+    for (uint64_t i = 0; i < 1000000ull && g_nvme_irqs == 0; i++)
+        __asm__ volatile("pause");
     kputs("[nvme] irqs="); kputdec(g_nvme_irqs); kputs("\r\n");
+    kputs(g_nvme_irqs ? "PRADYOS_NVME_IRQ_OK\r\n" : "PRADYOS_NVME_IRQ_FAIL\r\n");
 }
 
 void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -471,7 +481,7 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
      * POLLED in nvme_submit — DDR-774c converts the wait. */
     uint32_t cq_cdw11 = 1u /*PC*/;
     if (msix)
-        cq_cdw11 |= (1u << 1) | ((uint32_t)NVME_MSIX_VEC << 16);   /* IEN | vector */
+        cq_cdw11 |= (1u << 1) | ((uint32_t)NVME_MSIX_ENTRY << 16); /* IEN | IV */
     st = nvme_submit(n, &n->admin, 0x05, 0, (uint64_t)(uintptr_t)n->io.cq, 0,
                      ((Q_DEPTH - 1) << 16) | IO_QID, cq_cdw11, 0);
     if (st != 0) {

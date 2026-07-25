@@ -1594,6 +1594,21 @@ converting the completion path.** The IRQ count is deliberately printed but NOT
 gated, since with polling active its timing is not deterministic.
 **Gate count unchanged: 106.**
 
+**DDR-774c phase c-1 (NVMe MSI-X delivery root-caused + fixed):** DDR-774b armed
+the interrupt but nothing was delivered (`[nvme] irqs=0`). Root cause was a spec
+misreading in 774b: NVMe `Create I/O CQ` **CDW11[31:16] is an index into the
+device's MSI-X table**, not an x86 interrupt vector. It was passed 50 (the x86
+vector), aiming the controller at an unprogrammed, masked table entry while only
+**entry 0** had been programmed — the x86 vector actually travels in that entry's
+message-data field. Passing the table index instead (`NVME_MSIX_ENTRY = 0`) turns
+`irqs=0` into **`irqs=6`**. The leading suspect going in — the MSI-X Function Mask
+(message-control bit 14) never being explicitly cleared — was **not** the cause,
+so the shared `pcie_msix_program()` helper was left untouched and the four virtio
+MSI-X consumers cannot regress. `smoke-nvme` now asserts **`PRADYOS_NVME_IRQ_OK`**
+(and forbids `..._IRQ_FAIL`), made deterministic by a **bounded** settle spin (S2)
+rather than a timing-dependent count; the exact count is printed but not asserted.
+Completion is **still polled** — phase c-2 converts it. **Gate count unchanged: 106.**
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via
