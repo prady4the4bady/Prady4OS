@@ -1619,6 +1619,22 @@ to a future DDR that must *measure* polling cost first. **Section B#1 is
 functionally complete for correctness**: NVMe MSI-X is programmed (774b),
 delivered (774c-1, `irqs=6`) and gated (`PRADYOS_NVME_IRQ_OK`).
 
+**DDR-775 — B#3 narrowed to the virtio-blk completion wait (findings, no code).**
+A second CI hit (run 30155872016) failed `smoke-blk-integrity` (`-smp 4`,
+concurrent read data-verify) at the full 180 s, while 3/3 local `smoke-surfdestroy`
+runs PASS. Two different `-smp 4` gates, both block-I/O; the surfdestroy stall
+point (`SYSFSTAT OK`, next sentinel `SYSREAD OK`) places it in `sys_read` →
+`vfs_read` → SFS → virtio-blk. **Confirmed defect and S2 violation:** `submit()`'s
+`while (!v->req[s].done) sched_block_on(&v->compl_lock);` is **unbounded**, so a
+missed completion hangs the boot permanently instead of failing diagnosably. The
+classic lost-wakeup race is *not* the defect — it is correctly closed by the
+locks-4 pattern. **Latent (not this trigger):** `slot_waiter` is a single pointer,
+so >`VBLK_NREQ`(8) concurrent submitters would lose a wakeup. No fix shipped: the
+bug does not reproduce locally, so a concurrency change in the shared block path
+would be unvalidatable. Next slice bounds the wait — which requires either a
+scheduler *timed* block (absent today) or a `g_ticks` yield-loop, an explicit
+design decision. See `docs/ddr/DDR-775-smp4-blk-hang.md`.
+
 **⚠ TOP BLOCKER — Section B#3 (`-smp 4` race), signature captured 2026-07-25.**
 CI run 30151522978 failed `smoke-surfdestroy` at the **full 180 s** timeout having
 missed the **first** sentinel, and the serial shows the boot **HUNG after

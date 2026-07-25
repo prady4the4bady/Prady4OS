@@ -269,8 +269,30 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   must MEASURE polling cost first. Section B#1 is functionally complete for
   correctness (programmed + delivered + gated).
 - **CURRENT_ACTIVE_TASK:** none — `715040e` awaits a green run.
-- **NEXT_TASK — Section B#3, the `-smp 4` hang (now the TOP BLOCKER: it is what
-  keeps green work off `main`).** The reproducer requirement is now partly met — a
+- **DDR-775 (findings, no code): B#3 NARROWED to the virtio-blk completion wait.**
+  Second CI hit — run 30155872016 failed `smoke-blk-integrity` (`-smp 4`,
+  concurrent read data-verify) at the full 180 s. Local repro attempted: 3/3
+  `smoke-surfdestroy` PASS → CI-only timing window. Two different `-smp 4` gates,
+  both block-I/O; surfdestroy's stall point (`SYSFSTAT OK`, next `SYSREAD OK`) is
+  inside `sys_read`→`vfs_read`→SFS→virtio-blk. **CONFIRMED DEFECT + S2 VIOLATION:**
+  `submit()`'s `while (!v->req[s].done) sched_block_on(&v->compl_lock);` is
+  UNBOUNDED → a missed completion hangs forever instead of erroring. The
+  lost-wakeup race is NOT the defect (locks-4 pattern correctly closes it).
+  **Latent, not this trigger:** `slot_waiter` is a single `struct tcb *`, so
+  >VBLK_NREQ(8) concurrent submitters lose a wakeup. NO fix shipped — it does not
+  reproduce locally, so a concurrency change to the shared block path would be
+  pushed unvalidated and judged only by a 2.5 h CI run.
+- **NEXT_TASK — Section B#3 fix slice, per DDR-775 §"Next slice":**
+  (1) BOUND the wait first (S2): replace the unbounded `sched_block_on` loop with
+  a deadline so a missed completion becomes an I/O error + `[vblk] completion
+  timeout slot=N lba=…` diagnostic. ⚠ `sched_block_on()` has NO timeout today, so
+  this needs either a new scheduler timed-block OR a bounded `g_ticks` yield-loop
+  — that choice is the design decision of the slice and must be made explicitly,
+  since a yield-loop gives up the deliberate "sleep, never spin" property.
+  (2) Then let the diagnostic name the real trigger (missed IRQ vs lost
+  `virtq_pop_used` vs `head2slot` corruption) instead of guessing.
+  (3) Fix `slot_waiter` into a real wait list (or wake-all + re-check).
+- **(superseded framing) Section B#3, the `-smp 4` hang — TOP BLOCKER:** The reproducer requirement is now partly met — a
   concrete CI signature exists (hang after `SYSFSTAT OK`, `-smp 4`, 180 s). Plan:
   (1) try to reproduce locally with `make smoke-surfdestroy` a few times (it has
   historically passed locally, so expect CI-only timing); (2) if it will not
