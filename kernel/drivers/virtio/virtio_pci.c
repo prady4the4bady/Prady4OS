@@ -190,27 +190,21 @@ uint8_t virtio_pci_isr_ack(struct virtio_pci_dev *d) {
  * (queue 0 selected), BEFORE driver_ok. */
 int virtio_pci_msix_setup(struct virtio_pci_dev *d, uint8_t vector, uint32_t apic_id,
                           uint16_t nqueues) {
-    /* Find the MSI-X capability (ID 0x11). */
-    uint8_t cap = cfg8(d, 0x34) & 0xFC;
-    while (cap && cfg8(d, cap + 0) != 0x11)
-        cap = cfg8(d, cap + 1) & 0xFC;
+    /* DDR-774a: capability walk + entry programming now live in the generic
+     * pcie_msix_* helpers (so NVMe can reuse them); this layer keeps the virtio
+     * BAR mapping and the per-queue vector routing below. Register writes and
+     * their order are unchanged. */
+    uint8_t bir; uint32_t table_off;
+    uint8_t cap = pcie_msix_find(d->bus, d->dev, d->func, &bir, &table_off);
     if (!cap)
         return -1;
 
-    uint32_t tab = cfg32(d, cap + 4);      /* table offset (bits 31..3) + BIR (2..0) */
-    volatile uint8_t *bv = map_bar(d, (uint8_t)(tab & 7u));
+    volatile uint8_t *bv = map_bar(d, bir);
     if (!bv)
         return -1;
-    volatile uint32_t *e = (volatile uint32_t *)(bv + (tab & ~7u));   /* entry 0 */
+    volatile uint32_t *e = (volatile uint32_t *)(bv + table_off);     /* entry 0 */
 
-    /* Enable MSI-X (message control bit 15), function-mask off (bit 14), while
-     * masked entries are programmed; then unmask entry 0. */
-    uint32_t mc = cfg32(d, cap);           /* [31:16] = message control */
-    pcie_write32(d->bus, d->dev, d->func, cap, mc | (1u << 31));      /* MSI-X enable */
-    e[0] = 0xFEE00000u | (apic_id << 12);  /* message address: this LAPIC        */
-    e[1] = 0;                              /* address high                        */
-    e[2] = vector;                         /* message data: fixed, edge, vector   */
-    e[3] = 0;                              /* vector control: unmasked            */
+    pcie_msix_program(d->bus, d->dev, d->func, cap, e, vector, apic_id);
 
     /* Route queues 0..nqueues-1 ALL to table entry 0 (one vector per device —
      * C2: net RX+TX, input event+status); 0xFFFF read-back = rejected. */
@@ -224,8 +218,9 @@ int virtio_pci_msix_setup(struct virtio_pci_dev *d, uint8_t vector, uint32_t api
             return -1;
     }
 
-    /* This function signals via MSI-X now — disable its INTx assertions. */
-    uint32_t cmd = cfg32(d, 0x04);
-    pcie_write32(d->bus, d->dev, d->func, 0x04, cmd | (1u << 10));
+    /* This function signals via MSI-X now — disable its INTx assertions. Kept
+     * here (not inside pcie_msix_program) so it still runs AFTER the per-queue
+     * routing above, exactly as before DDR-774a. */
+    pcie_intx_disable(d->bus, d->dev, d->func);
     return 0;
 }

@@ -1561,6 +1561,21 @@ Now **774a** (generic MSI-X helper, pure refactor, existing gates) → **774b**
 (NVMe table mapping + `IEN`, still polling) → **774c** (IRQ completion with a
 bounded spin fallback, invariant S2). **Gate count unchanged: 106.**
 
+**DDR-774a (generic PCI MSI-X programmer — pure refactor):** the capability walk +
+table-entry programming that only existed inside `virtio_pci_msix_setup()` now live
+in `kernel/drivers/pcie/pcie.c` as `pcie_msix_find()` (walks the cap chain for ID
+0x11, returns cap offset + table BIR/offset), `pcie_msix_program()` (MSI-X enable +
+entry-0 address/data/vector-control) and `pcie_intx_disable()`. `virtio_pci_msix_setup`
+is reimplemented on top with its **signature, register writes and their order
+unchanged** — INTx-disable deliberately stays at the call site so it still runs
+*after* the per-queue `queue_msix_vector` routing, keeping this a true no-op
+refactor. All three virtio callers (`virtio_blk.c`, `virtio_input.c`,
+`virtio_net.c`) are untouched. Unblocks DDR-774b (NVMe MSI-X). Verified by every
+gate covering an MSI-X consumer: `smoke-fs` (asserts `msix vec=56`, virtio-blk),
+`smoke-net-lo` (asserts `msix vec=54`, virtio-net — note this is the gate carrying
+that sentinel, not `smoke-net`), `smoke-net`, `smoke-input`, `smoke-gpu` — all
+PASS. **Gate count unchanged: 106.**
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

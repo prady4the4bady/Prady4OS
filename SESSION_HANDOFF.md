@@ -200,16 +200,34 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - **DRIFT CORRECTED:** master-doc Section B#8 (`ls`/`ps`) was STALE — both are
   already implemented in `user/prism.c` (`ls`→SYS_GETDENTS/DDR-742,
   `ps`→SYS_GETPROCS/DDR-743). Moved to Section A.
-- **CURRENT_ACTIVE_TASK:** none in flight — DDR-773 landed; DDR-774 is a
-  scoping/deferral doc.
-- **NEXT_TASK — start DDR-774a** (Master doc Section B#1, first bounded slice):
-  extract a generic `pcie_*` MSI-X capability programmer (capability walk + table
-  entry programming) out of `virtio_pci_msix_setup`, reimplement virtio on top of
-  it with **no behaviour change**; queue-vector programming stays in the virtio
-  layer. Gates: existing `smoke-fs` (asserts `msix vec=56`), `smoke-net`,
-  `smoke-input`, `smoke-gpu` must stay green — grep Makefile/tools/.github for
-  vector-string sentinels BEFORE editing (DDR-771 lesson). Then 774b (NVMe table
-  mapping + IEN, still polling) and 774c (IRQ completion + bounded fallback, S2).
+- **CI INFRA FLAKE (2026-07-25):** run 30139119085 (docs-only commit a02e790)
+  FAILED at the `Install toolchain` step — NOT a regression: rustup reported
+  `checksum failed for channel-rust-nightly.toml` → `toolchain 'nightly-...' is
+  not installable`. Upstream static.rust-lang.org publish/CDN issue. `main` was
+  therefore NOT promoted to a02e790. The DDR-774a push re-attempts the install; if
+  this recurs, consider pinning rust to a dated nightly or stable in the workflow
+  (the rust dep exists only for the `toolchain-check` no_std interop gate).
+- **LAST_COMPLETED_TASK (newest):** DDR-774a generic PCI MSI-X programmer (Master
+  doc Section B#1, sub-slice a) — pure refactor. `pcie_msix_find()`,
+  `pcie_msix_program()`, `pcie_intx_disable()` added to `kernel/drivers/pcie/pcie.c`
+  (+ decls in `pcie.h`); `virtio_pci_msix_setup()` reimplemented on them with
+  identical signature, register writes and ORDER (INTx-disable stays at the call
+  site so it still runs after the per-queue routing). All three virtio callers
+  unchanged → the DDR-774 stop condition ("if it forces driver changes, stop") did
+  NOT trigger. Unblocks 774b. Gates: smoke-fs/net/input/gpu.
+- **CURRENT_ACTIVE_TASK:** land DDR-774a (+ the a02e790 docs commit it sits on) —
+  push dev/phase1, watch CI, ff main when green.
+- **NEXT_TASK — DDR-774b** (Master doc Section B#1, sub-slice b): NVMe MSI-X table
+  mapping + `IEN`, **still polling** so `smoke-nvme` stays unchanged and green —
+  this proves the IRQ plumbing is inert-but-correct before behaviour changes. Use
+  the new `pcie_msix_find()` to get the table BIR/offset at runtime; note
+  `nvme.c` currently maps a FIXED 2-page window (`NVME_BAR_MAP 0x2000`) of BAR0 at
+  `NVME_BAR_VBASE`, so the table may fall outside it or in another BAR — extend/
+  replace that mapping accordingly. Then set `IEN` (Create I/O CQ `cdw11` bit 1)
+  with the vector in bits 31:16, and `pcie_msix_program` entry 0. Pick a free
+  vector from 50–53 (DDR-771 vacated them; `idt.c` gates 0–63 and
+  `MSIX_VEC_COUNT=14` covers 50–63). Then 774c (IRQ completion + bounded spin
+  fallback, S2 + deterministic count-based sentinel).
   Alternatives if 774a is rejected: B#3 `-smp 4` race (needs a narrow reproducer
   first; the DDR-771 timeout bump is mitigation, not root cause) or B#4 SFS as
   default process root (invasive — global boot topology, broad gate validation).

@@ -134,3 +134,41 @@ void pcie_init(void) {
     kputdec(g_count);
     kputs(" devices enumerated\r\n");
 }
+
+/* ---- MSI-X capability helpers (DDR-774a) --------------------------------- */
+/* Extracted verbatim from virtio_pci_msix_setup() so NVMe (DDR-774b) can reuse
+ * them. Capability offsets are DWORD-aligned by the PCI spec, so the byte fields
+ * (ID at +0, next at +1, message control at +2) come out of one pcie_read32. */
+
+uint8_t pcie_msix_find(uint8_t bus, uint8_t dev, uint8_t func,
+                       uint8_t *bir, uint32_t *table_off) {
+    uint8_t cap = (uint8_t)(pcie_read32(bus, dev, func, 0x34) & 0xFCu);
+    while (cap) {
+        uint32_t hdr = pcie_read32(bus, dev, func, cap);
+        if ((hdr & 0xFFu) == 0x11u) {                 /* MSI-X capability ID */
+            uint32_t tab = pcie_read32(bus, dev, func, (uint16_t)(cap + 4));
+            if (bir)       *bir = (uint8_t)(tab & 7u);        /* BAR index    */
+            if (table_off) *table_off = tab & ~7u;            /* byte offset  */
+            return cap;
+        }
+        cap = (uint8_t)((hdr >> 8) & 0xFCu);          /* next capability ptr */
+    }
+    return 0;
+}
+
+void pcie_msix_program(uint8_t bus, uint8_t dev, uint8_t func, uint8_t cap,
+                       volatile uint32_t *entry0, uint8_t vector, uint32_t apic_id) {
+    /* Enable MSI-X (message control bit 15 = bit 31 of the capability dword). */
+    uint32_t mc = pcie_read32(bus, dev, func, cap);
+    pcie_write32(bus, dev, func, cap, mc | (1u << 31));
+
+    entry0[0] = 0xFEE00000u | (apic_id << 12);   /* message address: this LAPIC */
+    entry0[1] = 0;                               /* address high                */
+    entry0[2] = vector;                          /* data: fixed, edge, vector   */
+    entry0[3] = 0;                               /* vector control: unmasked    */
+}
+
+void pcie_intx_disable(uint8_t bus, uint8_t dev, uint8_t func) {
+    uint32_t cmd = pcie_read32(bus, dev, func, 0x04);
+    pcie_write32(bus, dev, func, 0x04, cmd | (1u << 10));
+}
