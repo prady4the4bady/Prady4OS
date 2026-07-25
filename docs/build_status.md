@@ -1576,6 +1576,24 @@ gate covering an MSI-X consumer: `smoke-fs` (asserts `msix vec=56`, virtio-blk),
 that sentinel, not `smoke-net`), `smoke-net`, `smoke-input`, `smoke-gpu` — all
 PASS. **Gate count unchanged: 106.**
 
+**DDR-774b (NVMe MSI-X table mapping + `IEN` — plumbing only):** `nvme.c` now
+locates its MSI-X table at runtime via `pcie_msix_find()` (BAR index + offset are
+*not* assumed), maps 2 uncached pages for it at a dedicated `NVME_MSIX_VBASE`
+window (separate from the BAR0 register map, so that mapping is untouched),
+programs entry 0 for **vector 50** (free since DDR-771) via `pcie_msix_program()`,
+registers an inert counting handler, disables INTx, and creates the I/O CQ with
+`IEN` + vector in `cdw11`. **Completion is still polled** — `nvme_submit()` is
+unchanged, so `PRADYOS_NVME_RW_OK` / `PRADYOS_NVME_PRP_OK` prove the polled path
+is unaffected by arming the interrupt. `smoke-nvme` gains the deterministic
+`[nvme] msix vec=50` sentinel. **OPEN ISSUE: `[nvme] irqs=0` — the interrupt is
+programmed but never delivered.** Interrupts-masked is ruled out (`sti` at
+`main.c:1478`/`:1737` precedes `nvme_init` at `:1801`); remaining suspects are the
+MSI-X Function-Mask bit (MC bit 14, never explicitly cleared), the table address
+math, and per-entry vector control. **DDR-774c must root-cause delivery before
+converting the completion path.** The IRQ count is deliberately printed but NOT
+gated, since with polling active its timing is not deterministic.
+**Gate count unchanged: 106.**
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

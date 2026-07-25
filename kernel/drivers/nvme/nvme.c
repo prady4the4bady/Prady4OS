@@ -17,6 +17,8 @@
 #include "pmm.h"
 #include "blk.h"
 #include "console.h"
+#include "irq.h"        /* DDR-774b: msix_register */
+#include "lapic.h"      /* DDR-774b: lapic_id for the MSI-X message address */
 
 /* BAR0-relative controller registers (NVMe 1.x). */
 #define NVME_CAP   0x00      /* u64: MQES[15:0], DSTRD[35:32], TO[31:24] */
@@ -40,6 +42,15 @@
  * base). Two pages cover the register block + the doorbells at 0x1000. */
 #define NVME_BAR_VBASE 0xFFFFD20000000000ull
 #define NVME_BAR_MAP   0x2000u
+
+/* DDR-774b: MSI-X. The table's BAR index + offset are runtime values, so it gets
+ * its own 2-page uncached window rather than growing the BAR0 register mapping
+ * (2 pages because the table offset is only 8-byte aligned by spec, so a 16-byte
+ * entry can straddle a page). Vector 50 is free — DDR-771 moved virtio-blk to
+ * 56-63, and idt.c gates 0-63 with MSIX_VEC_COUNT=14 covering 50-63. */
+#define NVME_MSIX_VBASE 0xFFFFD21000000000ull
+#define NVME_MSIX_MAP   0x2000u
+#define NVME_MSIX_VEC   50u
 
 /* NVMe submission-queue entry (64 bytes). We fill only the fields admin/NVM
  * commands need (opcode/CID, NSID, PRP1, CDW10..12). */
@@ -92,6 +103,49 @@ struct nvme {
 };
 
 static struct nvme g_nvme;          /* single controller this slice */
+
+/* DDR-774b: MSI-X completion interrupts are ARMED but nothing depends on them yet
+ * — completion is still polled. The handler therefore does bounded work (one
+ * increment) and deliberately does NOT touch CQ head/phase, which the polling
+ * loop owns; racing it here would corrupt an in-flight command (S6). The LAPIC
+ * EOI is done by the MSI-X dispatch in idt.c. DDR-774c converts the wait. */
+static volatile uint32_t g_nvme_irqs;
+static void nvme_msix_isr(void) { g_nvme_irqs++; }
+
+/* Physical base of BAR `idx` (handles a 64-bit memory BAR), or 0. */
+static uint64_t nvme_bar_base(uint8_t bus, uint8_t dev, uint8_t func, uint8_t idx) {
+    uint16_t off = (uint16_t)(0x10 + idx * 4);
+    uint32_t lo = pcie_read32(bus, dev, func, off);
+    if (((lo >> 1) & 3) == 2) {                     /* 64-bit memory BAR */
+        uint32_t hi = pcie_read32(bus, dev, func, (uint16_t)(off + 4));
+        return (uint64_t)(lo & 0xFFFFFFF0u) | ((uint64_t)hi << 32);
+    }
+    return lo & 0xFFFFFFF0u;
+}
+
+/* Locate, map and program the controller's MSI-X entry 0 for NVME_MSIX_VEC.
+ * Returns 0 on success. Leaves completion polling untouched (DDR-774b). */
+static int nvme_msix_setup(struct nvme *n, uint8_t bus, uint8_t dev, uint8_t func) {
+    (void)n;
+    uint8_t bir; uint32_t table_off;
+    uint8_t cap = pcie_msix_find(bus, dev, func, &bir, &table_off);
+    if (!cap)
+        return -1;
+    uint64_t bbase = nvme_bar_base(bus, dev, func, bir);
+    if (!bbase)
+        return -1;
+
+    uint64_t page = (bbase + table_off) & ~(uint64_t)(PAGE_SIZE - 1);
+    for (uint32_t off = 0; off < NVME_MSIX_MAP; off += PAGE_SIZE)
+        vmm_map(NVME_MSIX_VBASE + off, page + off, VMM_RW | VMM_PCD);
+    volatile uint32_t *entry0 =
+        (volatile uint32_t *)(uintptr_t)(NVME_MSIX_VBASE + ((bbase + table_off) & (PAGE_SIZE - 1)));
+
+    msix_register(NVME_MSIX_VEC, nvme_msix_isr);
+    pcie_msix_program(bus, dev, func, cap, entry0, (uint8_t)NVME_MSIX_VEC, lapic_id());
+    pcie_intx_disable(bus, dev, func);
+    return 0;
+}
 
 static inline uint32_t rd32(struct nvme *n, uint32_t off) {
     return *(volatile uint32_t *)(n->bar + off);
@@ -281,6 +335,12 @@ static void nvme_selftest(struct nvme *n) {
     }
     if (wq) pmm_free_pages(wq, 2);
     if (rq) pmm_free_pages(rq, 2);
+
+    /* DDR-774b: observability only — NOT gated. With completion still polled the
+     * delivery timing relative to this print is not guaranteed, so asserting the
+     * count would be a timing-dependent sentinel. It becomes a gated assertion in
+     * 774c, where the completion path actually depends on it. */
+    kputs("[nvme] irqs="); kputdec(g_nvme_irqs); kputs("\r\n");
 }
 
 void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -394,9 +454,26 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputs("[nvme] no io-queue mem\r\n");
         return;
     }
-    /* Create I/O Completion Queue (admin 0x05): PC=1, IEN=0 (poll). */
+    /* DDR-774b: arm MSI-X before creating the CQ, so the CQ can be created with
+     * IEN + vector in one shot. Failure is non-fatal — the controller simply
+     * stays in the (unchanged) polled mode. */
+    int msix = (nvme_msix_setup(n, bus, dev, func) == 0);
+    if (msix) {
+        kputs("[nvme] msix vec=");
+        kputdec(NVME_MSIX_VEC);
+        kputs("\r\n");
+    } else {
+        kputs("[nvme] msix unavailable, polling only\r\n");
+    }
+
+    /* Create I/O Completion Queue (admin 0x05): PC=1, plus IEN + interrupt vector
+     * (cdw11 bit 1 and bits 31:16) once MSI-X is armed. Completion is still
+     * POLLED in nvme_submit — DDR-774c converts the wait. */
+    uint32_t cq_cdw11 = 1u /*PC*/;
+    if (msix)
+        cq_cdw11 |= (1u << 1) | ((uint32_t)NVME_MSIX_VEC << 16);   /* IEN | vector */
     st = nvme_submit(n, &n->admin, 0x05, 0, (uint64_t)(uintptr_t)n->io.cq, 0,
-                     ((Q_DEPTH - 1) << 16) | IO_QID, 1u /*PC*/, 0);
+                     ((Q_DEPTH - 1) << 16) | IO_QID, cq_cdw11, 0);
     if (st != 0) {
         kputs("[nvme] create-iocq failed status="); kputhex(st); kputs("\r\n");
         return;

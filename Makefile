@@ -892,8 +892,8 @@ smoke-fs-budget: $(IMG) fat-image sfs-image
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img
 	TIMEOUT_S=60 QEMU_NVME=1 \
-	    EXTRA_SENTINEL="$$(printf '[nvme] \nLBAs x \nregistered nvme0\nPRADYOS_NVME_RW_OK\nPRADYOS_NVME_PRP_OK')" \
-	    FORBIDDEN_SENTINEL="$$(printf 'controller not ready\nidentify-ctrl failed\nidentify-ns failed\nreset stuck\ncreate-iocq failed\ncreate-iosq failed\nPRADYOS_NVME_RW_FAIL\nPRADYOS_NVME_PRP_FAIL')" \
+	    EXTRA_SENTINEL="$$(printf '[nvme] \nLBAs x \nregistered nvme0\n[nvme] msix vec=50\nPRADYOS_NVME_RW_OK\nPRADYOS_NVME_PRP_OK')" \
+	    FORBIDDEN_SENTINEL="$$(printf 'controller not ready\nidentify-ctrl failed\nidentify-ns failed\nreset stuck\ncreate-iocq failed\ncreate-iosq failed\nmsix unavailable\nPRADYOS_NVME_RW_FAIL\nPRADYOS_NVME_PRP_FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 framebuffer-surface gate (DDR-702): proves the ring-3 SYS_FB map+draw+

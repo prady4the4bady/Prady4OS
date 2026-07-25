@@ -207,7 +207,25 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   therefore NOT promoted to a02e790. The DDR-774a push re-attempts the install; if
   this recurs, consider pinning rust to a dated nightly or stable in the workflow
   (the rust dep exists only for the `toolchain-check` no_std interop gate).
-- **LAST_COMPLETED_TASK (newest):** DDR-774a generic PCI MSI-X programmer (Master
+- **LAST_COMPLETED_TASK (newest):** DDR-774b NVMe MSI-X table mapping + IEN
+  (Master doc Section B#1 sub-slice b) — plumbing only, completion STILL POLLED.
+  `nvme_msix_setup()` uses `pcie_msix_find()` for the runtime BIR/offset, maps 2
+  uncached pages at `NVME_MSIX_VBASE` (separate from the BAR0 register window),
+  programs entry 0 for **vector 50**, registers an inert counting ISR, disables
+  INTx, and creates the I/O CQ with IEN + vector in cdw11. `smoke-nvme` PASS
+  (6 patterns incl. the deterministic `[nvme] msix vec=50`); RW_OK/PRP_OK green so
+  the polled path is unaffected. **106 gates. CI pending.**
+  ⚠ **OPEN ISSUE — MSI-X delivery does NOT work: boot prints `[nvme] irqs=0`.**
+  Ruled out: interrupts masked (`sti` at main.c:1478/:1737 precedes `nvme_init` at
+  :1801, so IF is set). Suspects for 774c, in order: (1) MSI-X **Function Mask**
+  (message-control bit 14) is never explicitly cleared by `pcie_msix_program` —
+  it is 0 after reset so virtio works, but NVMe's state is unverified;
+  (2) the table address math in `nvme_msix_setup` (no #PF occurred, so the write
+  hit mapped memory — but not provably the controller's table); (3) per-entry
+  vector control read-back. The count is printed but deliberately NOT gated
+  (timing-dependent while polling). **774c MUST root-cause delivery before
+  touching the completion path.**
+- **PRIOR:** DDR-774a generic PCI MSI-X programmer (Master
   doc Section B#1, sub-slice a) — pure refactor. `pcie_msix_find()`,
   `pcie_msix_program()`, `pcie_intx_disable()` added to `kernel/drivers/pcie/pcie.c`
   (+ decls in `pcie.h`); `virtio_pci_msix_setup()` reimplemented on them with
@@ -215,19 +233,29 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   site so it still runs after the per-queue routing). All three virtio callers
   unchanged → the DDR-774 stop condition ("if it forces driver changes, stop") did
   NOT trigger. Unblocks 774b. Gates: smoke-fs/net/input/gpu.
-- **CURRENT_ACTIVE_TASK:** land DDR-774a (+ the a02e790 docs commit it sits on) —
-  push dev/phase1, watch CI, ff main when green.
-- **NEXT_TASK — DDR-774b** (Master doc Section B#1, sub-slice b): NVMe MSI-X table
-  mapping + `IEN`, **still polling** so `smoke-nvme` stays unchanged and green —
-  this proves the IRQ plumbing is inert-but-correct before behaviour changes. Use
-  the new `pcie_msix_find()` to get the table BIR/offset at runtime; note
-  `nvme.c` currently maps a FIXED 2-page window (`NVME_BAR_MAP 0x2000`) of BAR0 at
-  `NVME_BAR_VBASE`, so the table may fall outside it or in another BAR — extend/
-  replace that mapping accordingly. Then set `IEN` (Create I/O CQ `cdw11` bit 1)
-  with the vector in bits 31:16, and `pcie_msix_program` entry 0. Pick a free
-  vector from 50–53 (DDR-771 vacated them; `idt.c` gates 0–63 and
-  `MSIX_VEC_COUNT=14` covers 50–63). Then 774c (IRQ completion + bounded spin
-  fallback, S2 + deterministic count-based sentinel).
+- **DDR-774a IS CI-GREEN ON `main` @ `347c422`** (run 30141466540) — that promotion
+  also carried the a02e790 docs commit. The earlier `Install toolchain` rustup
+  failure was confirmed transient (this run's toolchain step succeeded), so no CI
+  pinning change was needed.
+- **CURRENT_ACTIVE_TASK:** land DDR-774b — push dev/phase1, watch CI, ff main when
+  green.
+- **NEXT_TASK — DDR-774c** (Master doc Section B#1, sub-slice c), **two phases and
+  the first is mandatory**:
+  **(c-1) ROOT-CAUSE MSI-X DELIVERY** — `[nvme] irqs=0` today. Do NOT convert the
+  completion path until an interrupt is observably delivered (`irqs` > 0). Work
+  the suspects in order: explicitly clear the MSI-X **Function Mask** (message-
+  control bit 14) in `pcie_msix_program` — note this touches the SHARED 774a
+  helper, so re-run smoke-fs / smoke-net-lo / smoke-net / smoke-input / smoke-gpu;
+  then read back the programmed entry-0 dwords and compare against what was
+  written (catches bad table address math); then verify the BAR/offset decode
+  against QEMU's NVMe MSI-X capability.
+  **(c-2)** only once delivery is proven: convert `nvme_submit()` to wait on an
+  IRQ-set flag with a **bounded** spin fallback (S2) so a lost interrupt degrades
+  to polling instead of hanging, and add the now-deterministic count-based
+  `PRADYOS_NVME_IRQ_OK` sentinel to `smoke-nvme`.
+  If delivery cannot be root-caused in a bounded effort, the honest fallback is to
+  revert 774b's `IEN` bit (keep the mapping + helpers), document the finding, and
+  move to another Section B item rather than leave a half-armed interrupt path.
   Alternatives if 774a is rejected: B#3 `-smp 4` race (needs a narrow reproducer
   first; the DDR-771 timeout bump is mitigation, not root cause) or B#4 SFS as
   default process root (invasive — global boot topology, broad gate validation).
