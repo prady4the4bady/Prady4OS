@@ -313,7 +313,33 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `slot_waiter`) are still real S2 defects worth fixing on merit — but are NOT
   proven to be this trigger. Note this vindicates diagnosis-first: a blind bound
   on the blk wait would have fixed nothing and masked the real cause.
-- **NEXT_TASK — Section B#3: instrument the AP/scheduler path next, NOT another
+- ⚠⚠ **B#3 SECOND CORRECTION — LEADING HYPOTHESIS IS A STALLED TIMER.** In run
+  30163444702 the serial printed **neither** `[smp] user on AP OK` **nor**
+  `[smp] user on AP FAIL` (the 2 log hits are the sentinel echo + the "not found"
+  message, NOT serial), yet the preceding `ap preempt OK` / `resched OK` DID
+  print. `smpuser_proof()` (main.c:659) is `while (!g_user_on_ap && g_ticks < dl)`
+  — a deadline poll that MUST print one branch **unless `g_ticks` stops
+  advancing**. This RETRACTS my earlier inference: the DDR-776 watchdog runs on
+  the SAME timer path, so its silence cannot distinguish "no stuck blk request"
+  from "the watchdog never ran"; my "timer was demonstrably firing" claim rested
+  on boot progress that happened EARLIER than the stall point.
+  **Hypothesis: under `-smp 4` the timer tick intermittently stops advancing
+  `g_ticks`.** Explains all four failures at once (each missing whichever
+  sentinel the boot had reached), the watchdog silence, blk waits never waking,
+  and consistent local passes. **Systemic S2 exposure: EVERY `g_ticks`-bounded
+  wait in the tree is only as bounded as the timer.**
+- **NEXT_TASK — Section B#3: prove or refute the stalled-timer hypothesis FIRST.**
+  Decisive, cheap experiment: (a) a heartbeat print driven from the timer path in
+  `idt.c` (throttled, e.g. every 500 ticks: `[hb] t=<g_ticks> cpu=<id>`), and
+  (b) print `g_ticks` at entry and exit of the AP proofs in main.c. If the
+  heartbeat STOPS during a failing CI run, the LAPIC/timer path under `-smp 4` is
+  the root cause and B#3 moves there entirely. If the heartbeat KEEPS TICKING
+  while `smpuser_proof` still prints nothing, the hypothesis is refuted and the
+  stall is inside the proof/scheduler instead. Same design rules as DDR-776:
+  passive observer, timer-driven, NO locks from the ISR (S6), bounded + print
+  throttled (S2), deterministic. Do NOT add another timeout bump and do NOT
+  attempt a behavioural fix — blind fixes are now TWICE refuted.
+- **(superseded) earlier plan: instrument the AP/scheduler path, NOT another
   blk fix.** Do for the SMP/AP proofs what DDR-776 did for blk: bounded,
   deterministic progress prints so the next failure names WHICH AP proof stalls
   and where. Candidates to instrument: the user-on-AP handoff (`[smp] user on AP

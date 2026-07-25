@@ -1679,6 +1679,24 @@ merit, but are **not proven** to be this trigger. This is exactly why the
 diagnosis-first slice was chosen over a speculative fix — a blind bound on the blk
 wait would have "fixed" nothing and masked the real cause.
 
+**⚠⚠ B#3 SECOND CORRECTION — leading hypothesis is now a STALLED TIMER.** Closer
+reading of run 30163444702 shows the serial printed **neither** `[smp] user on AP
+OK` **nor** `[smp] user on AP FAIL` (both log hits are the sentinel echo and the
+"not found" message), while the preceding `ap preempt OK` / `resched OK` did
+print. `smpuser_proof()` (`main.c:659`) is `while (!g_user_on_ap && g_ticks < dl)`
+— a deadline poll that **must** print one branch **unless `g_ticks` stops
+advancing**. This also **retracts** the earlier inference from the watchdog's
+silence: the watchdog runs on the *same timer path*, so silence is consistent with
+either "no stuck blk request" or "the watchdog never ran"; the claim that "the
+timer was demonstrably still firing" rested on boot progress that occurred
+*earlier* than the stall. **Hypothesis: under `-smp 4` the timer tick
+intermittently stops advancing `g_ticks`** — explaining all four failures at once
+(each missing whichever sentinel the boot had reached), the watchdog's silence,
+virtio-blk waits never waking, and the consistent local passes. **This is a
+systemic S2 exposure: every `g_ticks`-bounded wait is only as bounded as the
+timer.** Next experiment is decisive and cheap: a timer-driven heartbeat plus
+`g_ticks` at AP-proof entry/exit.
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

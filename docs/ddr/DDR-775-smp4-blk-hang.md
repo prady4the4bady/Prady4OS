@@ -17,6 +17,56 @@ exact trigger is **not** yet proven, so no speculative concurrency fix was shipp
 
 | 30163444702 | `smoke-smpuser` — "user-on-AP" (`-smp 4`, ring-3 thread on a non-BSP CPU) | 180 s timeout | missed `[smp] user on AP OK`; **DDR-776 watchdog SILENT — no `[vblk] stuck` line** |
 
+## ⚠⚠ SECOND CORRECTION (2026-07-25, later) — a UNIFYING hypothesis: the timer stalls
+
+Re-reading run 30163444702's log more carefully **invalidates part of the first
+correction below, and points at a single cause for all four failures.**
+
+`[smp] user on AP OK` appears exactly **twice** in that log — once in the gate's
+`EXTRA_SENTINEL` echo and once in the `required pattern … not found` message.
+**Neither occurrence is serial output.** The serial printed **neither
+`[smp] user on AP OK` nor `[smp] user on AP FAIL`**, while the immediately
+preceding proofs (`[smp] ap preempt OK`, `[smp] resched OK`) *did* print.
+
+That is decisive, because `smpuser_proof()` (`kernel/main.c:659`) is:
+
+```c
+while (!g_user_on_ap && g_ticks < dl)   /* bounded ONLY if g_ticks advances */
+    ...
+kputs(g_user_on_ap ? "[smp] user on AP OK\r\n" : "[smp] user on AP FAIL\r\n");
+```
+
+It is a **deadline poll that must print one branch or the other** — unless
+**`g_ticks` stops advancing**, i.e. the timer tick stops being delivered. Then the
+"bounded" loop becomes unbounded and nothing is printed at all. That is exactly
+what the serial shows.
+
+**This also retracts the inference in the first correction.** I claimed the
+DDR-776 watchdog's silence proved "no virtio-blk request was stuck", on the
+grounds that "the timer was demonstrably still firing". That was **wrong**: the
+boot progress cited (the fuzz test) happens *earlier* than the hang point, so it
+says nothing about the timer at the moment of the stall. The watchdog is driven
+from the **same timer path**, so if the timer stalls the watchdog simply never
+runs — its silence is therefore consistent with **either** "no stuck blk request"
+**or** "the watchdog itself never ran", and cannot distinguish them.
+
+**Unifying hypothesis (now leading): under `-smp 4` the timer tick intermittently
+stops advancing `g_ticks`.** It explains every observation at once:
+- `smpuser_proof()` printing neither OK nor FAIL (its bound never expires);
+- the DDR-776 watchdog never firing (same timer path);
+- virtio-blk waits never completing (no wake, and no watchdog to report it);
+- different gates missing *different* sentinels — whichever `g_ticks`-bounded or
+  interrupt-dependent step the boot happened to be in when the timer stalled;
+- passing locally and intermittently in CI (a timing-dependent condition).
+
+**Every `g_ticks`-bounded "bounded wait" in the tree is only as bounded as the
+timer.** That is a systemic S2 exposure, not one driver's bug.
+
+**Next experiment (decisive, cheap):** prove whether `g_ticks` advances during the
+stall — e.g. a heartbeat print driven from the timer path, plus printing `g_ticks`
+at entry/exit of the AP proofs. If the heartbeat stops, the timer/LAPIC path under
+`-smp 4` is the root cause and the whole B#3 framing moves there.
+
 ## ⚠ CORRECTION (2026-07-25) — the virtio-blk narrowing below is NOT supported
 
 The DDR-776 watchdog's **negative** result refutes part of this DDR's conclusion.
