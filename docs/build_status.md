@@ -1760,6 +1760,21 @@ even if redirection did nothing (a plain `echo` prints the same text), so
 Remaining B#12: `|` (needs a fork around the builtin dispatch — PRISM builtins are
 internal functions, not execs), `<`, `>>`, stderr, job control.
 
+**🚨 DDR-779 — CI blocked by an upstream outage (`git.musl-libc.org`).** Run
+30178367399 died after 4m39s at **step 2 `actions/checkout@v5`**, before any
+project code was fetched: the `third_party/musl` submodule clone timed out twice.
+Independently verified — the host is unreachable from the dev machine too. **Not a
+regression; pushing more commits cannot help** until it returns. Second
+external-dependency outage this session (the first, `static.rust-lang.org`'s
+nightly checksum, self-resolved). `.gitmodules` pins musl to a single upstream
+host while lwip already resolves to GitHub, making musl a hard single point of
+failure ahead of every build. A mirror fix is **proposed but deliberately NOT
+applied** — it is a supply-chain change, and the pinned SHA could not be confirmed
+present in the mirror cheaply (`git ls-remote` lists only ref tips, so the result
+was inconclusive rather than negative). DDR-779 records the verification recipe
+and alternatives. **Operational rule: check step 2 before diagnosing any CI
+failure.** Local builds and gates are unaffected.
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

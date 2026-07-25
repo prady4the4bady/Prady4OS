@@ -390,6 +390,25 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `smoke-shell` + a DISCRIMINATING PAIR — the marker alone would pass even with
   redirection broken (plain `echo` prints it), so `REDIR.TXT` must ALSO appear in
   `ls /`. **106 gates. CI pending.**
+- 🚨 **CI IS BLOCKED UPSTREAM — `git.musl-libc.org` IS DOWN (DDR-779).** Run
+  30178367399 (`21e4a51`, DDR-778) failed after 4m39s at **step 2
+  `actions/checkout@v5`**, before any project code was fetched: the
+  `third_party/musl` submodule clone timed out twice. Verified independently —
+  `git ls-remote https://git.musl-libc.org/git/musl` is unreachable from here too.
+  **NOT a regression, and pushing more commits cannot help** — every run will die
+  at checkout until musl returns. This is the SECOND external-dependency outage
+  this session (the first was `static.rust-lang.org`'s nightly checksum, run
+  30139119085, which self-resolved). `.gitmodules` pins musl to a single upstream
+  host while lwip already uses GitHub — that asymmetry is the single point of
+  failure. **Proposed fix (NOT applied, needs maintainer sign-off — it is a
+  supply-chain change): point musl at a GitHub mirror keeping the same pinned SHA
+  `0784374d…`.** Content integrity is SHA-guaranteed, but the mirror must first be
+  confirmed to contain that exact commit via a real fetch (`git ls-remote` only
+  lists ref tips and returned inconclusive, not negative). See DDR-779 for the
+  verification recipe and alternatives (vendor / actions/cache / retried step).
+  **Operational rule while down: check step 2 before diagnosing any CI failure,
+  and do not push just to retrigger.** Local work is unaffected (musl is already
+  cloned; `make image` and all local gates run normally).
 - ⚠ **LOCAL-ONLY GATE LIMITATION (not a regression): `make smoke-shell` fails
   here with `no PRISM_READY`.** The gate writes its serial log to `build/` on
   **DrvFs (`/mnt/c`)**, which is slow enough in this WSL setup that the boot
