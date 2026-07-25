@@ -328,7 +328,39 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   sentinel the boot had reached), the watchdog silence, blk waits never waking,
   and consistent local passes. **Systemic S2 exposure: EVERY `g_ticks`-bounded
   wait in the tree is only as bounded as the timer.**
-- **NEXT_TASK — Section B#3: prove or refute the stalled-timer hypothesis FIRST.**
+- ⚠⚠⚠ **THIRD CORRECTION — "timeout ⇒ hang" WAS WRONG.** `boot_test.sh` ALWAYS
+  runs QEMU for the full `TIMEOUT_S` window and THEN greps; `terminating on
+  signal 15 … (timeout)` appears in PASSING runs too (verified in a local
+  smoke-input PASS). So none of the B#3 failures are proven to be hangs — the
+  only hard evidence is **sentinel absent**. Do not describe them as hangs.
+- **NEWLY ESTABLISHED:** every SMP proof shares `if (!g_smp_have_aps) return;`
+  (silent early return). In the failing run `ap preempt OK` + `resched OK` DID
+  print ⇒ `g_smp_have_aps == 1` ⇒ `smpuser_proof()` did NOT early-return; it
+  entered the poll and never reached its `kputs`. Three explanations survive:
+  **(A)** timer stalls so `g_ticks < dl` never expires; **(B)** scheduler
+  starvation — never resumes from `yield()` while the system stays alive;
+  **(C)** guard/ordering effect.
+- **LAST_COMPLETED_TASK (newest):** DDR-777 three-way discriminator probe
+  (Section B#3) — **passive instrumentation, NOT a fix.** `[hb] t=<g_ticks>` every
+  ~500 ticks from the existing timer call site in `idt.c`, plus
+  `[smp] user-on-AP probe t=…` at `smpuser_proof` entry and a tick appended to the
+  OK/FAIL line. Sentinel safety verified: `boot_test.sh` uses `grep -qF`
+  (substring), so EXTRA `[smp] user on AP OK` and FORBIDDEN `user on AP FAIL`
+  both still match with the ` t=<n>` suffix. No behaviour change, no locks, no
+  scheduler hook (S2/S6).
+  **HOW TO READ THE NEXT FAILING RUN (this is the whole point):**
+  no `probe t=` line ⇒ **(C)** APs never came up (silent guard);
+  `probe t=` present + `[hb]` STOPS ⇒ **(A)** timer stalled → B#3 moves to the
+  LAPIC/timer path, and *every* `g_ticks`-bounded wait in the tree is exposed
+  (systemic S2);
+  `probe t=` present + `[hb]` CONTINUES + no OK/FAIL ⇒ **(B)** scheduler
+  starvation → a runqueue/AP-claim bug.
+- **NEXT_TASK — read the discriminator, then fix what it names.** Grep every
+  future run for `\[hb\] t=`, `user-on-AP probe t=`, and `vblk\] stuck`. Only
+  after the mechanism is named should a behavioural fix be written — blind fixes
+  are now THREE times refuted (DDR-771 timeout bump; the virtio-blk theory; the
+  "timeout ⇒ hang" reading).
+- **(superseded) earlier plan: prove or refute the stalled-timer hypothesis.**
   Decisive, cheap experiment: (a) a heartbeat print driven from the timer path in
   `idt.c` (throttled, e.g. every 500 ticks: `[hb] t=<g_ticks> cpu=<id>`), and
   (b) print `g_ticks` at entry and exit of the AP proofs in main.c. If the

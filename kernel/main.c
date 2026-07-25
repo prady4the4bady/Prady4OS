@@ -661,9 +661,16 @@ static void smpuser_proof(void) {
         return;
     smp_resched_all();
     uint64_t dl = g_ticks + 200;                 /* up to ~2 s — user procs are live */
+    /* DDR-777: entry marker. Its ABSENCE in a failing run means the !g_smp_have_aps
+     * guard above returned silently (APs never came up); its presence with no
+     * OK/FAIL below means we stalled inside the poll — and the [hb] heartbeat then
+     * says whether g_ticks was still advancing (timer stall vs. never resuming
+     * from yield()). */
+    kputs("[smp] user-on-AP probe t="); kputdec(g_ticks); kputs("\r\n");
     while (!g_user_on_ap && g_ticks < dl)
         yield();
-    kputs(g_user_on_ap ? "[smp] user on AP OK\r\n" : "[smp] user on AP FAIL\r\n");
+    kputs(g_user_on_ap ? "[smp] user on AP OK t=" : "[smp] user on AP FAIL t=");
+    kputdec(g_ticks); kputs("\r\n");
 }
 
 /* L6: SYS_SPAWN_AGENT hook. Loads the agent directly from its embedded kernel

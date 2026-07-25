@@ -1697,6 +1697,29 @@ systemic S2 exposure: every `g_ticks`-bounded wait is only as bounded as the
 timer.** Next experiment is decisive and cheap: a timer-driven heartbeat plus
 `g_ticks` at AP-proof entry/exit.
 
+**DDR-777 (B#3 three-way discriminator probe) + a THIRD correction.** Two earlier
+claims are retracted. (1) **"Timed out at the full 180 s, therefore it hung" was
+WRONG:** `boot_test.sh` always runs QEMU for the whole `TIMEOUT_S` window and
+*then* greps — `terminating on signal 15 … (timeout)` appears in **passing** runs
+too. The only hard evidence is *sentinel absent*, not *hang*. (2) The watchdog-
+silence inference was already retracted in DDR-775. **Newly established:** every
+SMP proof shares `if (!g_smp_have_aps) return;`, and since `ap preempt OK` /
+`resched OK` printed in the failing run, APs **were** up — so `smpuser_proof()`
+did not take its silent early return; it entered the poll and never reached its
+`kputs`. Three explanations survive and nothing yet separates them: **(A)** the
+timer stalls so `g_ticks < dl` never expires, **(B)** scheduler starvation — the
+proof thread never resumes from `yield()` while the system stays alive, or **(C)**
+a guard/ordering effect. This slice therefore ships **only a discriminator**: a
+`[hb] t=<g_ticks>` heartbeat every ~500 ticks from the existing timer call site,
+plus a `[smp] user-on-AP probe t=…` entry marker and a tick on the OK/FAIL line.
+Next failing run reads unambiguously — no probe line ⇒ (C); probe present and
+heartbeat stops ⇒ (A), making this a systemic S2 exposure since *every*
+`g_ticks`-bounded wait is only as bounded as the timer; probe present and
+heartbeat continues ⇒ (B). Passive only: no behaviour change, no locks, no
+scheduler hook; sentinels verified safe (`grep -qF` substring keeps both the
+EXTRA `[smp] user on AP OK` and FORBIDDEN `user on AP FAIL` matching).
+**Gate count unchanged: 106.**
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

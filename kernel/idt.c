@@ -146,6 +146,13 @@ static void timer_tick(struct regs *r) {
         net_poll_tick();
     if ((g_ticks % 100u) == 0)        /* DDR-776: ~1 s stuck-blk-request scan */
         virtio_blk_watchdog();
+    if ((g_ticks % 500u) == 0) {      /* DDR-777: ~5 s heartbeat — proves whether
+                                       * g_ticks is still advancing during a B#3
+                                       * stall (a g_ticks-bounded wait is only as
+                                       * bounded as the timer). Evidence only:
+                                       * no gate asserts on it. */
+        kputs("[hb] t="); kputdec(g_ticks); kputs("\r\n");
+    }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
         signal_deliver(r);            /* to the ring-3 thread we're returning to */
 }
