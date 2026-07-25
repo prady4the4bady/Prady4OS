@@ -1720,6 +1720,26 @@ scheduler hook; sentinels verified safe (`grep -qF` substring keeps both the
 EXTRA `[smp] user on AP OK` and FORBIDDEN `user on AP FAIL` matching).
 **Gate count unchanged: 106.**
 
+**Section B audit (2026-07-26) — the roadmap overstated remaining work.** Three
+entries marked "planned" are in fact **shipped and gated**, verified against the
+tree rather than assumed: **B#5 COW fork** (`kernel/mm/vmm_cow.c`:
+`vmm_fork_address_space_cow()`, `PTE_SW_COW` in both address spaces, PMM
+refcounts, `PTE_SW_SHARED` pass-through for the vDSO; `vmm_cow_fault()` wired at
+`idt.c:225`; gate `smoke-cowfork` at Makefile:760 / CI:228 plus a `main.c`
+self-test), **B#7 kernel self W^X** (`vmm_protect_kernel()` re-stamps text RX /
+data NX after boot; DDR-757 gate at Makefile:660 + the CI "text RX + data NX PTE
+audit" step), and **B#8 `ls`/`ps`** (corrected earlier — both ship via
+`SYS_GETDENTS`/`SYS_GETPROCS`). All three are moved into Section A. The remaining
+Section B entries have **not** all been individually re-verified — check the tree
+before planning any of them.
+
+**B#3 status: instrumented, awaiting a natural failure.** The DDR-777
+discriminator is now on `main`. The flake has been quiet for four consecutive
+green runs (30158060606, 30165570464, 30167716462, 30170362044) after a cluster of
+four failures, and it has never reproduced locally (3/3 pass). No further B#3 work
+is warranted until a failure occurs and the probe names the mechanism — forcing a
+fix without it would be a fourth blind attempt.
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

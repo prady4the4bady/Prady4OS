@@ -355,7 +355,38 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   (systemic S2);
   `probe t=` present + `[hb]` CONTINUES + no OK/FAIL ⇒ **(B)** scheduler
   starvation → a runqueue/AP-claim bug.
-- **NEXT_TASK — read the discriminator, then fix what it names.** Grep every
+- ✅ **`main` IS AT `968169c`** — all of DDR-774c c-1, DDR-776 (blk watchdog),
+  DDR-777 (discriminator probe) and every B#3 correction doc are promoted.
+  `dev/phase1` and `main` are level.
+- **B#3 = INSTRUMENTED, AWAITING A NATURAL FAILURE.** Four consecutive green runs
+  (30158060606, 30165570464, 30167716462, 30170362044) after the cluster of four
+  failures; never reproduces locally (3/3). The probe is on `main` and will
+  explain the next failure by itself. **Do NOT force a fix** — that would be a
+  fourth blind attempt (already refuted: DDR-771 timeout bump, the virtio-blk
+  theory, the "timeout ⇒ hang" reading). On ANY future red run, grep for
+  `user-on-AP probe t=`, `[hb] t=`, and `vblk] stuck` and read the 3-way verdict
+  in DDR-777.
+- 🔎 **SECTION B AUDIT (2026-07-26) — the roadmap overstated remaining work.**
+  Verified against the tree (not assumed): **B#5 COW fork is SHIPPED**
+  (`kernel/mm/vmm_cow.c`, `vmm_cow_fault` at `idt.c:225`, gate `smoke-cowfork`
+  Makefile:760 / CI:228), **B#7 kernel self W^X is SHIPPED**
+  (`vmm_protect_kernel()`, DDR-757 gate Makefile:660 + CI PTE audit), and B#8
+  (`ls`/`ps`) was corrected earlier. All three moved to Section A. **The other
+  Section B entries have NOT all been re-verified — check the tree before
+  planning any of them.**
+- **NEXT_TASK — B#12: pipes / redirection / job control in PRISM** (best remaining
+  bounded+gateable item: ring-3 only, `user/prism.c`, zero kernel risk, and the
+  kernel side already ships — `SYS_PIPE`, `dup2`, `SIGPIPE`, gates `smoke-syspipe`
+  / the CI "pipe/dup2" step). Scope it SMALL in its DDR: start with output
+  redirection `>` for one command (uses existing SYS_OPEN + dup2), then `|`
+  between two commands via fork+pipe. NOTE PRISM builtins are internal functions,
+  not execs, so piping *builtins* needs a fork around the builtin dispatch —
+  decide that explicitly in the DDR rather than discovering it mid-implementation.
+  Gate: extend `smoke-shell` with a deterministic redirect/pipe assertion.
+  Alternatives weighed and rejected for now: B#4 SFS-as-default-root (invasive —
+  changes global boot topology, needs broad gate validation), B#6 ext4 write
+  (large, ADR-019 extension + journal), B#9 I/O APIC (low priority, replaces 8259).
+- **(superseded) earlier framing: read the discriminator, then fix what it names.** Grep every
   future run for `\[hb\] t=`, `user-on-AP probe t=`, and `vblk\] stuck`. Only
   after the mechanism is named should a behavioural fix be written — blind fixes
   are now THREE times refuted (DDR-771 timeout bump; the virtio-blk theory; the
