@@ -10,8 +10,8 @@ capabilities.
 open and code is in flight) · `planned` (tracked, not started) · `proposed`
 (designed, prerequisites not yet answered).
 
-**Last verified against repo:** 2026-07-24, `main` @ `71468a7` (DDR-772),
-106 gates green (CI run 29829043452).
+**Last verified against repo:** 2026-07-24, `main` @ `3485085` (DDR-773),
+106 gates green (CI run 30132610321).
 
 ---
 
@@ -38,6 +38,7 @@ All entries below are **shipped**.
 - Static ELF64 loader + per-process W^X AS (ADR-021); musl libc v1.2.5 (ADR-023)
 - `pradyos-init` PID 1 + orphan reaper; PRISM shell w/ full-register fork (ADR-024)
 - PRISM builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit
+  — `ls` enumerates via `SYS_GETDENTS` (DDR-742) and `ps` via `SYS_GETPROCS` (DDR-743) (was mis-tracked as planned in Section B#8 until 2026-07-24)
 - Lazy per-thread FPU save/restore, user-only (DDR-740); copyin/copyout (EFAULT never panics)
 - NSI 1–75 shipped; `SYS_GETDENTS` (66), `SYS_GETPROCS`, `SYS_POWEROFF`/`REBOOT` (69/70)
 - `SYS_SYSINFO`/`TIME`/`DMESG`/`MEMINFO` (71–74), `SYS_SETNAME` (75), TCP loopback echo, kill end-to-end
@@ -67,14 +68,14 @@ All entries below are **shipped**.
 
 | # | Feature | Priority | Status | Requires |
 |---|---|---|---|---|
-| 1 | NVMe IRQ (MSI-X vector) | High | planned | **Vector pressure eased:** DDR-771 moved the block window to 56–63, so **50–53 are now free** — the original "window full" blocker no longer holds. Still needs a vector-pressure DDR + blast-radius review, and a completion-path rework (poll → IRQ wait/wake). |
+| 1 | NVMe IRQ (MSI-X vector) | High | **re-scoped → DDR-774a/b/c** (blast-radius reviewed 2026-07-24) | **Vector availability was never the blocker** (DDR-771 vacated 50–53). The real cost is three coupled surfaces: (a) no generic PCI MSI-X programmer exists — the only one is virtio-coupled (`virtio_pci_msix_setup` takes `struct virtio_pci_dev*`, uses virtio's `map_bar` + `common_cfg.queue_msix_vector`), so it must be refactored out of a path serving blk/net/gpu/input; (b) `nvme.c` maps a fixed 2-page (`0x2000`) BAR0 window, but the MSI-X table offset/BIR must be read at runtime and may lie outside it or in another BAR; (c) completion moves from thread-context poll to IRQ context. Split into **774a** generic MSI-X helper (pure refactor, existing gates), **774b** NVMe table mapping + `IEN` (still polling), **774c** IRQ-driven completion with a bounded spin fallback (S2). See `docs/ddr/DDR-774-nvme-irq-scoping.md`. |
 | 2 | mkfs.sfs multi-leaf B+tree (>14 slots) | High | **shipped (DDR-773)** — moved to Section A | Host tool mirrors kernel `sfs.c` descend/node format exactly |
 | 3 | `-smp 4` percpu-sched race root-cause | High | planned | A narrow reproducer first; bounded `g_ticks` deadline poll replacing single-shot checks. CI symptom currently masked by the DDR-771 timeout bump (90→180 s / 60→120 s) — that is mitigation, **not** a root cause. |
 | 4 | SFS as default process root | Medium | planned | Provisioned SFS image as default `root_mnt`; retire blk2's dual role (scratch + root). Unblocked by DDR-771. |
 | 5 | COW fork | Medium | planned | Page-fault handler: mark RO on fork, clone on write fault, PMM refcount |
 | 6 | ext4 write support | Medium | planned | ADR-019 extension, journal transaction layer |
 | 7 | Kernel self W^X (kernel text RX / data NX) | Medium | planned | Split boot page tables into RX text + RW data |
-| 8 | `ls`/`ps` full implementations | Medium | planned | Process-table scan syscall beyond `SYS_GETDENTS` |
+| 8 | `ls`/`ps` full implementations | — | **shipped — entry was STALE, corrected 2026-07-24; moved to Section A** | Drift found while scoping: both are implemented in `user/prism.c` — `ls` over `SYS_GETDENTS` (66, DDR-742) and `ps` over `SYS_GETPROCS` (67, DDR-743). The "requires a process-table scan syscall" precondition was already satisfied. |
 | 9 | I/O APIC (q35 GSI routing) | Low | planned | Would replace 8259 for ISA devices |
 | 10 | Per-CPU runqueue affinity/NUMA hints | Low | planned | CPU topology hints extension to DDR-SMP-rq-1 |
 | 11 | wlroots/Wayland compatibility | Low | planned | EGL/GBM bridge to VirtIO-GPU; blocked by no-out-of-tree-libs policy |

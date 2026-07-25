@@ -1550,8 +1550,21 @@ separator edges); `smoke-sfs-persist` provisions past 14 slots so the **kernel**
 mounts and reads a host-authored two-level tree (`21 slots, root=23 (multi-leaf)`).
 Host-tool only — zero kernel files touched. **106 gates** (both gates extended,
 no new gate).
+**DDR-774 (scoping only — no code):** the pre-code blast-radius review of the NVMe
+completion IRQ (master-doc Section B#1) found it is **not** a bounded slice, so it
+was split rather than started. Vector availability was never the blocker
+(DDR-771 vacated 50–53); the cost is three coupled surfaces — (a) the only MSI-X
+programmer is virtio-coupled and would have to be refactored out of a path serving
+blk/net/gpu/input, (b) `nvme.c` maps a fixed 2-page BAR0 window while the MSI-X
+table offset/BIR is runtime-determined, (c) completion moves thread→IRQ context.
+Now **774a** (generic MSI-X helper, pure refactor, existing gates) → **774b**
+(NVMe table mapping + `IEN`, still polling) → **774c** (IRQ completion with a
+bounded spin fallback, invariant S2). **Gate count unchanged: 106.**
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
+Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via
+`SYS_GETDENTS`/`SYS_GETPROCS`.
 **Last updated:** 2026-07-24
 
 ## Phase 0 — Toolchain & Build System

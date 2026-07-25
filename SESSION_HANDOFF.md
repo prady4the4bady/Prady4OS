@@ -186,16 +186,36 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   — `nvme0` registered, `PRADYOS_NVME_RW_OK`. Both **CI-green on `main` at
   `4ebcdc4`** (the 767 run validated 765+766+767 cumulatively after the -smp4
   timeout bump cleared the surfdestroy flake).
-- **CURRENT_ACTIVE_TASK:** land DDR-773 — push dev/phase1, watch the cumulative
-  CI run (DDR-772 already on main at 71468a7), ff main to DDR-773 when green.
-- **NEXT_TASK candidates** (Master doc Section B, pick per policy — bounded +
-  gateable first): B#1 NVMe IRQ (now less blocked — DDR-771 freed vectors 50–53 —
-  but needs a vector-pressure DDR + poll→IRQ completion rework); B#3 `-smp 4`
-  race (only with a narrow reproducer; the DDR-771 timeout bump is mitigation,
-  not root cause); B#4 SFS as default process root (unblocked by DDR-771, but
-  changes global boot topology → broader gate validation). Section E/F remain
-  gated behind a written DDR answering the architecture prerequisite checklist;
-  F#68 metric lockbox (= invariant S3) is the highest-priority proposed item.
+- **DDR-773 IS CI-GREEN ON `main` @ `3485085`** (run 30132610321, 106 gates).
+- **DDR-774 (scoping only, no code):** blast-radius review of B#1 NVMe IRQ found
+  it is NOT bounded — split into 774a/b/c. Vector availability was never the
+  blocker. (a) the only MSI-X programmer is virtio-coupled
+  (`virtio_pci_msix_setup` takes `struct virtio_pci_dev*`, uses virtio `map_bar` +
+  `common_cfg.queue_msix_vector`) so it must be refactored out of a path serving
+  blk/net/gpu/input — the same shared surface that produced DDR-771's #GP and
+  stale-sentinel CI break; (b) `nvme.c` maps a fixed 2-page BAR0 window but the
+  MSI-X table offset/BIR is runtime-determined and may be outside it or in another
+  BAR; (c) completion moves thread→IRQ context for every I/O incl. the DDR-772 PRP
+  loop. Per policy, invasive work was NOT started.
+- **DRIFT CORRECTED:** master-doc Section B#8 (`ls`/`ps`) was STALE — both are
+  already implemented in `user/prism.c` (`ls`→SYS_GETDENTS/DDR-742,
+  `ps`→SYS_GETPROCS/DDR-743). Moved to Section A.
+- **CURRENT_ACTIVE_TASK:** none in flight — DDR-773 landed; DDR-774 is a
+  scoping/deferral doc.
+- **NEXT_TASK — start DDR-774a** (Master doc Section B#1, first bounded slice):
+  extract a generic `pcie_*` MSI-X capability programmer (capability walk + table
+  entry programming) out of `virtio_pci_msix_setup`, reimplement virtio on top of
+  it with **no behaviour change**; queue-vector programming stays in the virtio
+  layer. Gates: existing `smoke-fs` (asserts `msix vec=56`), `smoke-net`,
+  `smoke-input`, `smoke-gpu` must stay green — grep Makefile/tools/.github for
+  vector-string sentinels BEFORE editing (DDR-771 lesson). Then 774b (NVMe table
+  mapping + IEN, still polling) and 774c (IRQ completion + bounded fallback, S2).
+  Alternatives if 774a is rejected: B#3 `-smp 4` race (needs a narrow reproducer
+  first; the DDR-771 timeout bump is mitigation, not root cause) or B#4 SFS as
+  default process root (invasive — global boot topology, broad gate validation).
+  Section E/F stay gated behind a DDR answering the architecture prerequisite
+  checklist; F#68 metric lockbox (= invariant S3) is the highest-priority proposed
+  item now that Section D is confirmed built.
 - **NEXT_TASK (M2/M3):** the mkfs.sfs storage chain (765-770) is complete —
   NVMe + host mkfs.sfs + kernel reads it + nested dirs + persistent root from a
   build image. Remaining open items (pick per priority): lift `VBLK_MAX` past 4
