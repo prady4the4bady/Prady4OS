@@ -88,12 +88,39 @@ head/phase, so it cannot race the polling loop that owns them; MSI-X is per-devi
 and unshared, so NVMe cannot disturb virtio's vectors. S1/S3–S5/S7/S8 are not
 engaged. Nothing here touches W^X, NX, or any capability contract.
 
-## Remaining work — c-2 (next slice)
+## c-2 — STOPPED and re-scoped (stop condition invoked, no code written)
 
-Delivery is proven, so the completion path can now be converted: make
-`nvme_submit()` wait on an IRQ-set completion flag with a **bounded** spin
-fallback (S2) so a lost or misrouted interrupt degrades to polling instead of
-hanging the boot. The ISR must stay bounded and must take ownership of CQ
-head/phase *from* the polling loop atomically rather than concurrently with it
-(S6) — that ownership transfer, not the interrupt itself, is the real risk in c-2,
-which is why it is a separate slice.
+c-2 was to convert `nvme_submit()` to "wait on an IRQ-set flag with a bounded spin
+fallback, without a scheduler hook". On inspection that specification cannot
+deliver what it promises, so per the standing stop condition ("if c-2 needs
+locking/scheduler changes beyond `nvme.c`, STOP and re-scope rather than expand
+silently") **no code was written**. Reasons:
+
+1. **The completion path is already a bounded poll.** `nvme_submit()` spins on the
+   CQE phase bit for ≤5e7 iterations and then returns `0xFFFF`. Adding "re-check
+   when the IRQ counter moves" changes it into *polling with an interrupt hint* —
+   the phase bit still drives correctness, and no CPU time is actually saved.
+   That is churn on the hottest path in the driver for no measurable benefit.
+2. **A genuine IRQ-driven wait means the CPU sleeps**, which requires one of:
+   - `sti; hlt` — **rejected**: it would enable interrupts behind the caller's
+     back, changing `IF` state the caller may be relying on (a correctness hazard,
+     not a style question);
+   - plain `hlt` guarded by a runtime `IF` check — stays inside `nvme.c` and is
+     bounded (the 100 Hz timer guarantees a wake), but introduces a **new idle
+     path into every NVMe I/O**; or
+   - a scheduler **block/wake wait-queue** — the only design that is actually
+     correct and efficient, and explicitly **out of scope** for this slice.
+3. **Sequencing.** Option 2b is the plausible bounded middle ground, but adding a
+   new idle/halt path while an **unexplained `-smp 4` boot hang is open**
+   (Section B#3 — run 30151522978 hung after `SYSFSTAT OK` at the full 180 s) is
+   poor sequencing: it would muddy attribution if the hang recurs. B#3 should be
+   root-caused first.
+
+**Consequence for Section B#1:** 774a, 774b and 774c-1 ship — the NVMe MSI-X path
+is programmed, delivered and gated (`irqs=6`, `PRADYOS_NVME_IRQ_OK`). The
+remaining "use the interrupt to sleep instead of poll" work is deliberately
+deferred and re-scoped as a **future DDR** that must decide, up front, between the
+`hlt`-idle variant and a real scheduler wait-queue — with a measured justification
+(current polling cost) rather than an assumption that IRQ-driven is better.
+B#1 is therefore **functionally complete for correctness**, with a documented,
+optional performance follow-on.

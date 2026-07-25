@@ -1609,6 +1609,26 @@ MSI-X consumers cannot regress. `smoke-nvme` now asserts **`PRADYOS_NVME_IRQ_OK`
 rather than a timing-dependent count; the exact count is printed but not asserted.
 Completion is **still polled** — phase c-2 converts it. **Gate count unchanged: 106.**
 
+**DDR-774c phase c-2 — STOPPED and re-scoped (no code).** The stop condition was
+invoked deliberately: `nvme_submit()` is already a bounded poll, so the specified
+"IRQ flag + bounded spin, no scheduler hook" reduces to polling-with-a-hint and
+saves nothing on the driver's hottest path. A real IRQ-driven wait requires the
+CPU to sleep — `sti;hlt` (rejected: mutates the caller's `IF`), a guarded `hlt`
+idle path, or a scheduler block/wake wait-queue (out of scope) — so it is deferred
+to a future DDR that must *measure* polling cost first. **Section B#1 is
+functionally complete for correctness**: NVMe MSI-X is programmed (774b),
+delivered (774c-1, `irqs=6`) and gated (`PRADYOS_NVME_IRQ_OK`).
+
+**⚠ TOP BLOCKER — Section B#3 (`-smp 4` race), signature captured 2026-07-25.**
+CI run 30151522978 failed `smoke-surfdestroy` at the **full 180 s** timeout having
+missed the **first** sentinel, and the serial shows the boot **HUNG after
+`SYSFSTAT OK`** — inside the ring-3 syscall self-tests, before any surface test.
+It is a **hang, not slowness**, so the DDR-771 timeout bump is not a fix. It is
+**pre-existing and unrelated to DDR-774**: the same gate failed in run
+29726803735 (DDR-766, before 774a/b/c existed), and this gate boots with **no NVMe
+device** so `nvme_init` never runs. Intermittent (passed in runs 30141466540 and
+30146543550). This currently blocks promoting green work to `main`.
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

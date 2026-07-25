@@ -252,9 +252,34 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   earlier at `347c422` (run 30141466540, which also carried the a02e790 docs
   commit). The `Install toolchain` rustup failure was confirmed transient — no CI
   pinning change was needed.
-- **CURRENT_ACTIVE_TASK:** land DDR-774c c-1 — push dev/phase1, watch CI, ff main
-  when green.
-- **NEXT_TASK — DDR-774c phase c-2** (Master doc Section B#1, final sub-slice).
+- ⚠ **CI RED — main NOT promoted.** Run 30151522978 (commit `715040e`, DDR-774c
+  c-1) FAILED at step 101 `smoke-surfdestroy` (q35 `-smp 4`) — the Section B#3
+  race. NOT a regression from 774c: that gate boots with **no NVMe device** (so
+  `nvme_init` never runs), `smoke-nvme` passed earlier in the same run, and the
+  same gate failed back in run 29726803735 (DDR-766, before any 774 work).
+  **New signature:** timed out at the FULL 180 s having missed the FIRST sentinel,
+  serial shows the boot **HUNG after `SYSFSTAT OK`** (ring-3 syscall self-tests,
+  before any surface test) → a **hang, not slowness**; the DDR-771 timeout bump is
+  not a fix. `main` stays at `2034a53`; `715040e` is unpromoted on dev/phase1.
+- **DDR-774c c-2 STOPPED + re-scoped (no code)** — stop condition invoked; see
+  DDR-774c. `nvme_submit()` is already a bounded poll, so the specified
+  no-scheduler-hook design is polling-with-a-hint; a genuine IRQ wait needs the CPU
+  to sleep (`sti;hlt` rejected — mutates caller `IF`; guarded `hlt` idle; or a
+  scheduler block/wake wait-queue = out of scope). Deferred to a future DDR that
+  must MEASURE polling cost first. Section B#1 is functionally complete for
+  correctness (programmed + delivered + gated).
+- **CURRENT_ACTIVE_TASK:** none — `715040e` awaits a green run.
+- **NEXT_TASK — Section B#3, the `-smp 4` hang (now the TOP BLOCKER: it is what
+  keeps green work off `main`).** The reproducer requirement is now partly met — a
+  concrete CI signature exists (hang after `SYSFSTAT OK`, `-smp 4`, 180 s). Plan:
+  (1) try to reproduce locally with `make smoke-surfdestroy` a few times (it has
+  historically passed locally, so expect CI-only timing); (2) if it will not
+  reproduce, add bounded `g_ticks` deadline polls + progress prints around the
+  ring-3 systest sequence *after* `SYSFSTAT` so the next CI failure pinpoints the
+  stuck step instead of just ending at a sentinel; (3) DO NOT paper over it with
+  another timeout bump — the 180 s bound was already ample. Write the DDR first
+  citing Section B#3; S2 (bounded everything) governs any new wait.
+- **DEFERRED — DDR-774c phase c-2** (Master doc Section B#1, optional perf).
   Delivery is now PROVEN (`irqs=6`, `PRADYOS_NVME_IRQ_OK` gated), so the
   completion path can finally be converted: make `nvme_submit()` wait on an
   IRQ-set completion flag with a **BOUNDED** spin fallback (S2) so a lost or
