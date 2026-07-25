@@ -15,6 +15,35 @@ exact trigger is **not** yet proven, so no speculative concurrency fix was shipp
 | local ×3 | `smoke-surfdestroy` | — | **3/3 PASS** |
 | 30158060606 | `smoke-blkmq`, `smoke-blk-integrity`, `MSI-X-on-AP`, `smoke-surfdestroy` | `-smp 4` | **ALL PASS** — same commits, run green end-to-end |
 
+| 30163444702 | `smoke-smpuser` — "user-on-AP" (`-smp 4`, ring-3 thread on a non-BSP CPU) | 180 s timeout | missed `[smp] user on AP OK`; **DDR-776 watchdog SILENT — no `[vblk] stuck` line** |
+
+## ⚠ CORRECTION (2026-07-25) — the virtio-blk narrowing below is NOT supported
+
+The DDR-776 watchdog's **negative** result refutes part of this DDR's conclusion.
+In run 30163444702 a *third* `-smp 4` gate failed — `smoke-smpuser`, which is
+**not** block-I/O — and the watchdog printed **nothing**, i.e. **no virtio-blk
+request was stuck for >5 s**. The timer was demonstrably still firing (the boot
+progressed through the fuzz test and a ring-3 thread exited), so the watchdog did
+run and its silence is meaningful evidence, not absence of instrumentation.
+
+So the failure is **not** (or not only) a stuck block request. What all failures
+share is only `-smp 4`; the missed sentinels differ each time:
+
+- `smoke-surfdestroy` — hung after `SYSFSTAT OK` (next sentinel `SYSREAD OK`)
+- `smoke-blk-integrity` — missed `[smp] blk integrity OK`
+- `smoke-smpuser` — missed `[smp] user on AP OK`, boot still progressing
+
+**Revised position:** the original Section B#3 framing (an SMP/percpu-scheduler
+race affecting AP-dependent proofs) is better supported than the virtio-blk
+narrowing. The `sys_read`→virtio-blk inference from the surfdestroy stall point
+was a reasonable hypothesis from one data point, but it does not generalise, and
+this DDR's "Narrowing" section should be read as **superseded** by this note.
+
+**What survives unchanged:** Hazard 1 (the completion wait is unbounded) and
+Hazard 2 (single-element `slot_waiter`) are still genuine defects and still S2
+violations worth fixing on their own merit — they are simply **not proven to be
+this hang's trigger**.
+
 **Therefore the hang is INTERMITTENT, not deterministic.** Run 30158060606 passed
 every gate that failed in the two runs above, including `smoke-blk-integrity`
 (which failed in 30155872016) and the `MSI-X-on-AP` test that specifically proves

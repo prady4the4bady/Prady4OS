@@ -297,8 +297,31 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   >VBLK_NREQ(8) concurrent submitters lose a wakeup. NO fix shipped — it does not
   reproduce locally, so a concurrency change to the shared block path would be
   pushed unvalidated and judged only by a 2.5 h CI run.
-- **NEXT_TASK — Section B#3, the real S2 fix (bound the wait), now informed by
-  DDR-776's diagnostic.** FIRST check whether any CI run since DDR-776 printed
+- ⚠ **CI RED on `c61a149` (run 30163444702) — DDR-776 unpromoted; `main` stays at
+  `2083c09`.** Failing gate: step 51 `smoke-smpuser` "user-on-AP" (`-smp 4`,
+  ring-3 thread on a non-BSP CPU), 180 s timeout, missed `[smp] user on AP OK`.
+- 🔬 **DDR-776's FIRST RESULT IS A NEGATIVE ONE THAT REFUTES THE DDR-775
+  NARROWING.** The watchdog printed **nothing** in that failure — no virtio-blk
+  request stuck >5 s — while the timer was demonstrably still firing (boot
+  progressed through the fuzz test, a ring-3 thread exited). So this failure is
+  NOT a stuck block request. The three B#3 failures now share only `-smp 4` and
+  miss DIFFERENT sentinels: surfdestroy (hung after `SYSFSTAT OK`),
+  blk-integrity (`[smp] blk integrity OK`), smpuser (`[smp] user on AP OK`).
+  **Revised: the ORIGINAL percpu-scheduler/AP-race framing is better supported
+  than the virtio-blk narrowing** (DDR-775's narrowing section is marked
+  superseded). Hazard 1 (unbounded completion wait) and Hazard 2 (single-element
+  `slot_waiter`) are still real S2 defects worth fixing on merit — but are NOT
+  proven to be this trigger. Note this vindicates diagnosis-first: a blind bound
+  on the blk wait would have fixed nothing and masked the real cause.
+- **NEXT_TASK — Section B#3: instrument the AP/scheduler path next, NOT another
+  blk fix.** Do for the SMP/AP proofs what DDR-776 did for blk: bounded,
+  deterministic progress prints so the next failure names WHICH AP proof stalls
+  and where. Candidates to instrument: the user-on-AP handoff (`[smp] user on AP
+  OK` emitter) and the percpu run-queue/AP wake path. Keep every added wait
+  bounded (S2) and every print deterministic; do NOT add another timeout bump.
+  Only after the failing step is named should a behavioural fix be attempted —
+  blind fixes are now TWICE refuted (timeout bump, then the blk hypothesis).
+- **(deferred, still valid on merit) the virtio-blk S2 fix (bound the wait),** FIRST check whether any CI run since DDR-776 printed
   `[vblk] stuck dev=… slot=… lba=… age=…`: if it did, that names the stuck request
   and the trigger (missed IRQ vs lost `virtq_pop_used` vs `head2slot` corruption)
   becomes decidable — root-cause THAT rather than guessing. Then bound

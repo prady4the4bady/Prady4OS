@@ -1664,6 +1664,21 @@ mid-investigation. **This does not fix the hang** and is not claimed to; boundin
 the wait remains the follow-on S2 fix, to be designed with the diagnostic's output
 in hand. **Gate count unchanged: 106.**
 
+**⚠ DDR-776's first result is a NEGATIVE one that refutes the DDR-775 narrowing.**
+Run 30163444702 failed a *third* `-smp 4` gate — `smoke-smpuser` ("user-on-AP",
+a ring-3 thread on a non-BSP CPU), **not** block-I/O — missing `[smp] user on AP
+OK`, and the new watchdog printed **nothing**: no virtio-blk request was stuck
+>5 s. The timer was demonstrably still firing (the boot progressed through the
+fuzz test and a ring-3 thread exited), so the silence is evidence, not missing
+instrumentation. The three B#3 failures share only `-smp 4` and miss **different**
+sentinels each time. **Revised position: the original percpu-scheduler/AP-race
+framing is better supported than the virtio-blk narrowing**, which is now marked
+superseded in DDR-775. The two virtio-blk hazards (unbounded completion wait;
+single-element `slot_waiter`) remain real S2 defects worth fixing on their own
+merit, but are **not proven** to be this trigger. This is exactly why the
+diagnosis-first slice was chosen over a speculative fix — a blind bound on the blk
+wait would have "fixed" nothing and masked the real cause.
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via
