@@ -39,6 +39,11 @@ struct vreq {
     volatile int  used;
     volatile int  done;
     struct tcb   *waiter;
+    /* DDR-776: stuck-request watchdog. t0 is the submit tick; warned makes the
+     * diagnostic fire once per request. Read lock-free from the timer ISR. */
+    volatile uint64_t t0;
+    volatile uint64_t lba;
+    volatile int      warned;
 };
 
 struct vblk {
@@ -114,6 +119,36 @@ static irq_handler_fn const vblk_msix_fn[VBLK_MAX] =
     { vblk_msix0, vblk_msix1, vblk_msix2, vblk_msix3,
       vblk_msix4, vblk_msix5, vblk_msix6, vblk_msix7 };
 
+/* DDR-776: stuck-request watchdog (Section B#3 diagnosis). Driven from the timer
+ * path, so it still runs when a submitter is blocked forever on a lost completion
+ * — only the waiting thread is stuck, the timer keeps ticking. Prints once per
+ * request so a failing CI run NAMES the stuck request instead of just timing out.
+ *
+ * Deliberately lock-free: taking compl_lock from the timer ISR would add a
+ * deadlock surface to the very subsystem under investigation. All fields read are
+ * volatile scalars and this is diagnostic output only — a torn read can at worst
+ * print a stale LBA, and the watchdog never mutates driver state (S6). Work per
+ * call is bounded at VBLK_MAX * VBLK_NREQ scalar checks (S2). */
+#define VBLK_STUCK_TICKS 500u          /* 5 s @100 Hz */
+
+void virtio_blk_watchdog(void) {
+    for (unsigned i = 0; i < g_ninst; i++) {
+        struct vblk *v = &g_inst[i];
+        for (int s = 0; s < VBLK_NREQ; s++) {
+            if (!v->req[s].used || v->req[s].done || v->req[s].warned)
+                continue;
+            if (g_ticks - v->req[s].t0 < VBLK_STUCK_TICKS)
+                continue;
+            v->req[s].warned = 1;      /* once per request — no log spam */
+            kputs("[vblk] stuck dev="); kputdec(i);
+            kputs(" slot=");           kputdec((uint64_t)s);
+            kputs(" lba=");            kputdec(v->req[s].lba);
+            kputs(" age=");            kputdec(g_ticks - v->req[s].t0);
+            kputs(" ticks\r\n");
+        }
+    }
+}
+
 /* DDR-714C3 proof: 1 if any disk's completion handler ran on a non-BSP CPU. */
 int virtio_blk_completed_on_ap(void) {
     for (unsigned i = 0; i < g_ninst; i++)
@@ -145,6 +180,9 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     v->req[s].used = 1;
     v->req[s].done = 0;
     v->req[s].waiter = current_thread;
+    v->req[s].t0 = g_ticks;              /* DDR-776: watchdog arm point */
+    v->req[s].lba = lba;
+    v->req[s].warned = 0;
 
     uint64_t hdr = v->reqbuf + (uint64_t)s * 32;   /* 16B header + status byte */
     struct virtio_blk_req *h = (struct virtio_blk_req *)(uintptr_t)hdr;

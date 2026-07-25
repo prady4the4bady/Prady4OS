@@ -13,6 +13,15 @@ exact trigger is **not** yet proven, so no speculative concurrency fix was shipp
 | 30151522978 | `smoke-surfdestroy` (q35 `-smp 4`) | 180 s timeout | HUNG after `SYSFSTAT OK`; missed the **first** sentinel |
 | 30155872016 | `smoke-blk-integrity` (q35 `-smp 4`, **concurrent read data-verify**) | 180 s timeout | missed `[smp] blk integrity OK` |
 | local ×3 | `smoke-surfdestroy` | — | **3/3 PASS** |
+| 30158060606 | `smoke-blkmq`, `smoke-blk-integrity`, `MSI-X-on-AP`, `smoke-surfdestroy` | `-smp 4` | **ALL PASS** — same commits, run green end-to-end |
+
+**Therefore the hang is INTERMITTENT, not deterministic.** Run 30158060606 passed
+every gate that failed in the two runs above, including `smoke-blk-integrity`
+(which failed in 30155872016) and the `MSI-X-on-AP` test that specifically proves
+a blk completion running on a non-BSP CPU. This is consistent with a **rare missed
+completion**, not systematic breakage — and it means **one green run cannot prove
+a fix**. The honest success criterion is the DDR-776 diagnostic firing (naming the
+stuck request) or several consecutive green runs.
 
 **Narrowing:** two *different* gates, both `-smp 4`, both **block-I/O-centric**,
 both hanging at the full 180 s bound; three consecutive local runs pass. In the

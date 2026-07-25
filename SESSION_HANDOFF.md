@@ -252,7 +252,22 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   earlier at `347c422` (run 30141466540, which also carried the a02e790 docs
   commit). The `Install toolchain` rustup failure was confirmed transient — no CI
   pinning change was needed.
-- ⚠ **CI RED — main NOT promoted.** Run 30151522978 (commit `715040e`, DDR-774c
+- ✅ **`main` IS AT `2083c09`** (run 30158060606 GREEN) — that promotion carried
+  DDR-774c c-1 + both docs commits out of limbo. Section B#1 (NVMe MSI-X) is
+  functionally complete for correctness and fully on `main`.
+- **LAST_COMPLETED_TASK (newest):** DDR-776 virtio-blk stuck-request watchdog
+  (Master doc Section B#3) — **diagnosis, NOT a fix; do not describe it as one.**
+  `struct vreq` gains `t0`/`lba`/`warned`; `virtio_blk_watchdog()` is called from
+  the timer path in `idt.c` every ~1 s (same idiom as `net_poll_tick`) and prints
+  `[vblk] stuck dev=D slot=N lba=L age=T` once per request stuck >5 s. Works while
+  a submitter is blocked forever because only that thread is stuck. No blocking
+  behaviour changed; NO lock taken (read-only from the ISR — deliberately avoids
+  adding a deadlock surface to the subsystem under investigation, S6); bounded
+  64 checks/tick + one print per request (S2). **Design decision recorded:**
+  yield-loop REJECTED (would spin on every block I/O, regressing the hot path all
+  FS gates ride); scheduler timed-block DEFERRED (correct eventual primitive, but
+  changing the scheduler core mid-investigation would confound attribution).
+- **(historical) CI RED episode — main was NOT promoted.** Run 30151522978 (commit `715040e`, DDR-774c
   c-1) FAILED at step 101 `smoke-surfdestroy` (q35 `-smp 4`) — the Section B#3
   race. NOT a regression from 774c: that gate boots with **no NVMe device** (so
   `nvme_init` never runs), `smoke-nvme` passed earlier in the same run, and the
@@ -282,7 +297,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   >VBLK_NREQ(8) concurrent submitters lose a wakeup. NO fix shipped — it does not
   reproduce locally, so a concurrency change to the shared block path would be
   pushed unvalidated and judged only by a 2.5 h CI run.
-- **NEXT_TASK — Section B#3 fix slice, per DDR-775 §"Next slice":**
+- **NEXT_TASK — Section B#3, the real S2 fix (bound the wait), now informed by
+  DDR-776's diagnostic.** FIRST check whether any CI run since DDR-776 printed
+  `[vblk] stuck dev=… slot=… lba=… age=…`: if it did, that names the stuck request
+  and the trigger (missed IRQ vs lost `virtq_pop_used` vs `head2slot` corruption)
+  becomes decidable — root-cause THAT rather than guessing. Then bound
+  `submit()`'s completion wait, which per DDR-776 means adding a **scheduler
+  timed-block** (`sched_block_on()` has no timeout today) — a genuine scheduler
+  feature touching `kernel/proc/sched.{c,h}`, so scope it in its own DDR, do not
+  slip it in. On timeout you MUST release the slot (`v->req[s].used = 0`), clear
+  `v->req[s].waiter`, and wake any `v->slot_waiter`, or you leak a slot. Also fix
+  Hazard 2: `slot_waiter` is a single `struct tcb *`, so >VBLK_NREQ(8) concurrent
+  submitters lose a waiter — make it a real wait list or wake-all + re-check.
+  Remember: the bug does NOT reproduce locally and is intermittent in CI, so ONE
+  green run does not prove a fix — say "not yet proven".
+- **(superseded) earlier framing of the B#3 fix slice, per DDR-775:**
   (1) BOUND the wait first (S2): replace the unbounded `sched_block_on` loop with
   a deadline so a missed completion becomes an I/O error + `[vblk] completion
   timeout slot=N lba=…` diagnostic. ⚠ `sched_block_on()` has NO timeout today, so

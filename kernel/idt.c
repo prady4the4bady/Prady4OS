@@ -116,6 +116,7 @@ void msix_register(unsigned vector, irq_handler_fn fn) {
 }
 
 void net_poll_tick(void);   /* NET-B: lwip-port/pradyos_net.h (driven from the PIT) */
+void virtio_blk_watchdog(void);  /* DDR-776: name a stuck blk request (B#3 diag) */
 
 void irq_register(unsigned irq, irq_handler_fn fn) {
     if (irq >= 16)
@@ -143,6 +144,8 @@ static void timer_tick(struct regs *r) {
     sched_tick();
     if ((g_ticks % 10u) == 0)         /* NET-B: drive lwIP timers ~every 100 ms */
         net_poll_tick();
+    if ((g_ticks % 100u) == 0)        /* DDR-776: ~1 s stuck-blk-request scan */
+        virtio_blk_watchdog();
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
         signal_deliver(r);            /* to the ring-3 thread we're returning to */
 }

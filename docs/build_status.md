@@ -1645,6 +1645,25 @@ It is a **hang, not slowness**, so the DDR-771 timeout bump is not a fix. It is
 device** so `nvme_init` never runs. Intermittent (passed in runs 30141466540 and
 30146543550). This currently blocks promoting green work to `main`.
 
+**DDR-776 (virtio-blk stuck-request watchdog — diagnosis before fix, B#3):** run
+30158060606 passed every `-smp 4` block gate that had failed previously, on the
+same commits, confirming the hang is **intermittent** — so one green run proves
+nothing and a speculative behavioural fix would be unfalsifiable. Instead this
+slice makes failures *informative*: `struct vreq` gains a submit tick + LBA, and
+`virtio_blk_watchdog()` — called from the timer path in `idt.c` every ~1 s, the
+same idiom as the existing `net_poll_tick()` — prints `[vblk] stuck dev=D slot=N
+lba=L age=T` **once** per request stuck >5 s. It works even when a submitter is
+blocked forever, because only that thread is stuck while the timer keeps firing.
+**No blocking behaviour changed**, no lock taken (read-only from the ISR, so it
+adds no deadlock surface to the subsystem under investigation — S6), bounded at
+64 scalar checks per tick and one print per request (S2). Design decision recorded
+explicitly: a `g_ticks` yield-loop was rejected (it would spin on *every* block
+I/O, regressing the hot path every FS gate rides) and a scheduler timed-block —
+the correct eventual primitive — was deferred so the scheduler core is not changed
+mid-investigation. **This does not fix the hang** and is not claimed to; bounding
+the wait remains the follow-on S2 fix, to be designed with the diagnostic's output
+in hand. **Gate count unchanged: 106.**
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via
