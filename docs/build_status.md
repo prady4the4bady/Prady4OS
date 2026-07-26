@@ -1793,6 +1793,25 @@ would hand `echo` the literal tokens and print them verbatim. (An earlier
 already runs a plain `ls /`.) Verified locally — CI is blocked by DDR-779.
 **Gate count unchanged: 106.**
 
+**DDR-781 (PRISM `<` and `>>` — Section B#12, third slice):** ring-3 only, no
+kernel change — but the prerequisite check **changed the mechanism**: the kernel
+has **no `O_APPEND`** (`sys_file.c` honours only `O_CREAT`), so the planned
+`O_CREAT|O_WRONLY|O_APPEND` does not exist and adding a kernel open-flag would
+have been a silent scope expansion. `SYS_LSEEK = 10` does support `SEEK_END`
+(`base = e->file->size`), so append is done in ring 3 as `open` + seek-to-EOF.
+Recorded honestly: that is **not** atomic `O_APPEND` (fine here — one writer per
+command), and it exposed a **pre-existing** gap, namely there is no `O_TRUNC`
+either, so DDR-778's `>` does not truncate. `<` opens `O_RDONLY` and swaps fd 0,
+restored alongside fd 1 at the loop's existing flush point. Gate assertions are
+discriminating: `>>` requires **both** records to survive (had it behaved like
+`>`, the equal-length second write would have overwritten the first — a
+consequence of the missing `O_TRUNC`), and `<` requires the marker **and** forbids
+`cat: cannot open <`. **Gate count unchanged: 106.**
+
+**CI unblocked:** `git.musl-libc.org` is reachable again (DDR-779), so the
+backlog — DDR-778 `>`, the DDR-779 finding, DDR-780 `|`, and this slice — can
+finally be CI-validated.
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

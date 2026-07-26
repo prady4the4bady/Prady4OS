@@ -20,7 +20,10 @@
 #define SYS_WAIT4  16
 #define SYS_PIPE   17     /* DDR-780: PROC-A, (int fds[2]) -> 0 — pipes */
 #define SYS_DUP2   18     /* DDR-778: PROC-A, already in the kernel — output redirection */
+#define SYS_LSEEK  10     /* DDR-781: (fd, off, whence) — SEEK_END emulates append */
+#define SEEK_END   2
 #define REDIR_SAVE_FD 9   /* DDR-778: parking slot for the real stdout (FD_MAX=64) */
+#define REDIR_SAVE_IN 10  /* DDR-781: parking slot for the real stdin */
 #define SYS_KILL   23     /* DDR-755: (pid, signum) -> 0 | -errno */
 #define SIGTERM    15
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
@@ -222,29 +225,56 @@ int main(void) {
          * leading "> file" can never leave argv[0] undefined; truncating argc at
          * the '>' hides the redirect tokens from the builtin. Ring-3 only —
          * SYS_DUP2 (PROC-A) and O_CREAT|O_WRONLY already exist. */
-        const char *redir = 0;
-        int redir_err = 0;
+        /* DDR-781 extends this to `<` and `>>`. argc is truncated at the FIRST
+         * redirect token so the builtin sees only its own arguments. */
+        const char *redir = 0, *redir_in = 0;
+        int redir_err = 0, redir_append = 0, cut = argc;
         for (int i = 1; i < argc; i++) {
-            if (!strcmp(argv[i], ">")) {
-                if (i + 1 < argc) redir = argv[i + 1];
-                else              redir_err = 1;
-                argc = i;
-                break;
-            }
+            int is_out = !strcmp(argv[i], ">");
+            int is_app = !strcmp(argv[i], ">>");
+            int is_in  = !strcmp(argv[i], "<");
+            if (!is_out && !is_app && !is_in)
+                continue;
+            if (i < cut) cut = i;
+            if (i + 1 >= argc) { redir_err = 1; break; }
+            if (is_in) redir_in = argv[i + 1];
+            else     { redir = argv[i + 1]; redir_append = is_app; }
+            i++;                         /* skip the filename token */
         }
+        argc = cut;
         if (redir_err) {
             printf("redirect: missing filename\n");
             fflush(stdout);
-            continue;                    /* fd 1 untouched — nothing to restore */
+            continue;                    /* fds untouched — nothing to restore */
         }
-        long redir_save = -1;
+        long redir_save = -1, redir_save_in = -1;
+        if (redir_in) {                  /* DDR-781: `< file` */
+            long ifd = nsi(SYS_OPEN, (long)redir_in, 0 /*O_RDONLY*/, 0);
+            if (ifd < 0) {
+                printf("redirect: cannot open %s\n", redir_in);
+                fflush(stdout);
+                continue;
+            }
+            nsi(SYS_DUP2, 0, REDIR_SAVE_IN, 0);   /* stash the real stdin */
+            nsi(SYS_DUP2, ifd, 0, 0);
+            nsi(SYS_CLOSE, ifd, 0, 0);
+            redir_save_in = REDIR_SAVE_IN;
+        }
         if (redir) {
             long rfd = nsi(SYS_OPEN, (long)redir, O_CREAT | O_WRONLY, 0);
             if (rfd < 0) {
                 printf("redirect: cannot open %s\n", redir);
                 fflush(stdout);
-                continue;                /* still before the swap — safe */
+                if (redir_save_in >= 0) {         /* undo the stdin swap first */
+                    nsi(SYS_DUP2, redir_save_in, 0, 0);
+                    nsi(SYS_CLOSE, redir_save_in, 0, 0);
+                }
+                continue;                /* still before the stdout swap — safe */
             }
+            /* DDR-781: no kernel O_APPEND exists, so append = seek to EOF once.
+             * Sufficient here (one writer per command); NOT atomic O_APPEND. */
+            if (redir_append)
+                nsi(SYS_LSEEK, rfd, 0, SEEK_END);
             fflush(stdout);              /* don't spill buffered console text into the file */
             nsi(SYS_DUP2, 1, REDIR_SAVE_FD, 0);   /* stash the real stdout */
             nsi(SYS_DUP2, rfd, 1, 0);
@@ -381,6 +411,10 @@ int main(void) {
         if (redir_save >= 0) {
             nsi(SYS_DUP2, redir_save, 1, 0);
             nsi(SYS_CLOSE, redir_save, 0, 0);
+        }
+        if (redir_save_in >= 0) {        /* DDR-781: restore the real stdin */
+            nsi(SYS_DUP2, redir_save_in, 0, 0);
+            nsi(SYS_CLOSE, redir_save_in, 0, 0);
         }
         if (pipe_child)                  /* DDR-780: a pipe half never loops —
                                           * output already flushed above. */

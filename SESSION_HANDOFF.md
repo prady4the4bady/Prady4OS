@@ -423,7 +423,28 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   impossible. Put the boot AND every assertion in ONE scratchpad script. Also note
   an unexpanded `$VAR` inside nested `wsl -c` quoting makes `grep` error, and an
   `||` fallback then prints a FALSE "PASS" — use literal paths and `if/else`.
-- **NEXT_TASK — continue B#12**: `|` between two commands. NOTE (already
+- ✅ **CI UNBLOCKED (2026-07-26): `git.musl-libc.org` is REACHABLE again.** The
+  DDR-779 outage is over; runs get past `actions/checkout@v5` once more. The
+  backlog (`21e4a51` DDR-778 `>`, `d8d78e4` DDR-779 finding, `6561a74` DDR-780
+  `|`, plus DDR-781) can finally be CI-validated — promote `main` to the first
+  green sha covering them. DDR-779's mirror proposal still needs sign-off; do NOT
+  apply it autonomously.
+- **LAST_COMPLETED_TASK (newest):** DDR-781 PRISM `<` and `>>` (Section B#12,
+  third slice) — ring-3 only. **The prerequisite check changed the mechanism:**
+  the kernel has **NO `O_APPEND`** (`sys_file.c` honours only `O_CREAT`), so the
+  planned open-flag does not exist; `SYS_LSEEK = 10` DOES support `SEEK_END`, so
+  append = `open` + seek-to-EOF in ring 3. Documented as NOT atomic `O_APPEND`
+  (fine: one writer per command). Also exposed a PRE-EXISTING gap — there is no
+  `O_TRUNC`, so DDR-778's `>` does not truncate; recorded, out of scope.
+  All discriminating checks PASS locally (append kept BOTH records; `<` gave the
+  marker with no `cat: cannot open <`; pipe regression intact; no panic).
+- **NEXT_TASK — B#12 remainder or a new item.** Left in B#12: stderr (`2>`),
+  multi-stage pipelines (`a|b|c`), job control (`&`, job table — needs signal
+  plumbing). Kernel-side prerequisites for atomic `O_APPEND` / `O_TRUNC` would be
+  their own slice touching `sys_file.c` + the VFS write path — scope explicitly,
+  do not slip in. Otherwise pick a fresh Section B item, and CHECK THE TREE FIRST
+  (#5, #7, #8 were all stale "planned" entries already shipped).
+- **(superseded) earlier NEXT_TASK: `|` between two commands.** NOTE (already
   established, don't rediscover): PRISM builtins are INTERNAL FUNCTIONS, not
   execs, so piping needs a fork around the **builtin dispatch** itself. Then `<`,
   `>>`, stderr; job control (`&`, job table) is a separate slice needing signal
