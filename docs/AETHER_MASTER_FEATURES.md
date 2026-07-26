@@ -10,8 +10,10 @@ capabilities.
 open and code is in flight) · `planned` (tracked, not started) · `proposed`
 (designed, prerequisites not yet answered).
 
-**Last verified against repo:** 2026-07-26, `main` @ `721807f` (DDR-781),
-112 steps green (CI run 30184411583, conclusion `success`).
+**Last verified against repo:** 2026-07-26, `main` @ `ac459d7` (DDR-783),
+112 steps green (CI run 30193738689, conclusion `success`) — promotes DDR-782
+(kernel `O_TRUNC` + atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783
+(`smoke-fs` timeout margin).
 
 ---
 
