@@ -24,7 +24,11 @@ struct pipe {
     uint64_t buf;          /* 4 KiB ring (pmm frame, identity-mapped) */
     uint32_t head;         /* total bytes written (masked on access)  */
     uint32_t tail;         /* total bytes read                        */
-    int      refcount;     /* fds referencing this pipe               */
+    /* DDR-787: counted per END, not one refcount. A blocked reader needs to know
+     * a writer still exists (else it waits forever), and vice versa — that
+     * condition is what bounds the waiting loops in sys_read/sys_write (S2). */
+    int      readers;      /* read-end fds referencing this pipe      */
+    int      writers;      /* write-end fds referencing this pipe     */
 };
 
 struct pipe *pipe_create(void) {
@@ -34,23 +38,40 @@ struct pipe *pipe_create(void) {
     p->buf = pmm_alloc_page();
     if (!p->buf) { kfree(p); return 0; }
     p->head = p->tail = 0;
-    p->refcount = 0;
+    p->readers = p->writers = 0;
     return p;
 }
 
-void pipe_incref(struct pipe *p) {
-    if (p)
-        p->refcount++;
-}
-
-void pipe_close(struct pipe *p) {
+void pipe_destroy(struct pipe *p) {
     if (!p)
         return;
-    if (--p->refcount <= 0) {
-        if (p->buf)
-            pmm_free_page(p->buf);
-        kfree(p);
-    }
+    if (p->buf)
+        pmm_free_page(p->buf);
+    kfree(p);
+}
+
+void pipe_incref(struct pipe *p, int is_write) {
+    if (!p)
+        return;
+    if (is_write) p->writers++;
+    else          p->readers++;
+}
+
+void pipe_close(struct pipe *p, int is_write) {
+    if (!p)
+        return;
+    if (is_write) { if (p->writers > 0) p->writers--; }
+    else          { if (p->readers > 0) p->readers--; }
+    /* Free only once BOTH ends are gone. A peer blocked in read/write wakes on
+     * the count reaching 0 (EOF / -EPIPE) and must not touch a freed pipe. */
+    if (p->readers <= 0 && p->writers <= 0)
+        pipe_destroy(p);
+}
+
+int pipe_writers(struct pipe *p) { return p ? p->writers : 0; }
+int pipe_readers(struct pipe *p) { return p ? p->readers : 0; }
+int pipe_full(struct pipe *p) {
+    return p && (uint32_t)(p->head - p->tail) >= PIPE_SIZE;
 }
 
 long pipe_write(struct pipe *p, const void *src, uint64_t n) {
@@ -100,14 +121,14 @@ static long sys_pipe(long ufds, long a2, long a3, long a4) {
         return -ENOMEM;
 
     int rfd = fd_alloc(t);
-    if (rfd < 0) { pipe_close(p); return -EMFILE; }
+    if (rfd < 0) { pipe_destroy(p); return -EMFILE; }   /* never installed */
     install(&t->fdt.e[rfd], p, 0);          /* read end */
-    pipe_incref(p);
+    pipe_incref(p, 0);
 
     int wfd = fd_alloc(t);
     if (wfd < 0) { fd_free(t, rfd); return -EMFILE; }   /* fd_free -> pipe_close */
     install(&t->fdt.e[wfd], p, PIPE_WRITE_END);
-    pipe_incref(p);
+    pipe_incref(p, 1);
 
     int fds[2] = { rfd, wfd };
     if (copyout((void __user *)(uintptr_t)ufds, fds, sizeof fds) < 0) {
@@ -135,7 +156,9 @@ static long sys_dup2(long a_old, long a_new, long a3, long a4) {
     struct fd_entry *ne = &t->fdt.e[newfd];
     *ne = *oe;                              /* copy kind/flags/off/mnt/cap/ptrs */
     if (ne->kind == FD_PIPE && ne->pipe) {
-        pipe_incref(ne->pipe);             /* share the same pipe */
+        /* DDR-787: the dup'd fd inherits its END from the source's flags, so it
+         * must be counted on that same side. */
+        pipe_incref(ne->pipe, ne->flags == PIPE_WRITE_END);
     } else if (ne->kind == FD_VFS && ne->file) {
         struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
         if (!nf) { ne->kind = FD_NONE; ne->file = 0; return -ENOMEM; }

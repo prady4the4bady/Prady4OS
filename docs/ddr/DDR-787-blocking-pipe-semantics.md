@@ -1,6 +1,9 @@
 # DDR-787 — blocking pipe semantics (reader EOF correctness + writer backpressure)
 
-**Status:** **finding + design — NOT yet implemented.** Kernel-side; supports
+**Status:** **implemented** — locally verified: **200/200 payload lines (7824 B)
+survive `cat /BIG8K.TXT | cat` byte-exact**, head and tail markers intact, the
+DDR-780/786 single- and multi-stage pipelines still deliver, shell alive (no
+deadlock), zero panics, zero build warnings. Kernel-side; supports
 master-doc **Section B, item 12** (pipes), and it corrects an assumption behind
 already-shipped DDR-780 / DDR-786 behaviour.
 
@@ -85,9 +88,44 @@ prerequisite, not an optional extra.
    a marker through several stages and assert it arrives — with a stage count high
    enough that "the writer happened to run first" cannot hold for all of them.
 2. **Writer backpressure:** push **> 4 KiB** through `a | cat` and assert
-   **byte-exact** delivery (e.g. a known line count, plus first and last markers).
-   Today this silently truncates at 4096 bytes, so the assertion fails before the
-   fix and passes after.
+   delivery. Implemented as `/BIG8K.TXT` (~7.8 KiB, 200 payload lines between
+   `BIGHEAD-e5v` and `BIGTAIL-e5v`) piped through `cat`, asserting **≥ 180
+   payload lines**. PIPE_SIZE is 4096, so the pre-fix non-blocking write ceiling
+   is ~107 lines — the threshold sits far above it, and far enough below 200 to
+   tolerate the console-interleaving artefact described above. Fails before the
+   fix, passes after.
+
+The payload is 200 lines rather than the 500 first tried, so `smoke-shell` keeps a
+wide margin inside its 60 s window — **that timeout is not raised**.
+
+## What implementation added to the design
+
+- **`EPIPE` did not exist** in `kernel/include/errno.h` — added as 32 (Linux
+  value). The design assumed it was there.
+- **The writer's partial-write path was itself a bug.** The old code did
+  `if (w < chunk) break;` — i.e. a chunk that only partly fitted dropped its
+  remainder. Blocking alone would not have fixed that; the loop now re-copies the
+  remainder on the next iteration.
+- **The reader waits only when it has delivered nothing yet** (`total == 0`).
+  Otherwise a read that is already partly satisfied would stall waiting to fill
+  the caller's whole buffer, which is neither POSIX nor what `cat` wants.
+
+### A measured artefact that shaped the gate — worth knowing
+
+The first run scored 497/500 lines and looked like data loss. It was not. Raw
+bytes showed a concurrent kernel print splitting a payload line mid-string:
+
+```
+pipe payload line 098 0123456789abcdef$
+pipe p[sfs] journal abort/commit/replay OK^M$
+ayload line 099 0123456789abcdef$
+```
+
+Line 099 *was* delivered; the kernel's boot self-tests share COM1 with the
+shell's output, so an exact per-line match can fail for reasons that have nothing
+to do with pipes. The gate therefore **counts** payload lines against a threshold
+instead of demanding an exact match — see below. Recorded because the same trap
+will catch any future serial-output assertion.
 
 ## Architecture prerequisite checklist
 

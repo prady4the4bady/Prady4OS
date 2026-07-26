@@ -378,10 +378,19 @@ fat-image:
 	mcopy -i $(FAT_IMG) build/note.txt ::/DOCS/NOTE.TXT
 	printf 'long name read works' > build/longname.txt
 	mcopy -i $(FAT_IMG) build/longname.txt ::/LongFileName.txt
+	# DDR-787: a file LARGER than PIPE_SIZE (4096), with distinct first/last
+	# markers, so `cat /BIG8K.TXT | cat` can prove byte-exact pipe delivery. Before
+	# blocking pipe writes this truncated at 4096 and BIGTAIL-e5v never arrived.
+	# 200 lines ~= 7.8 KiB: comfortably past PIPE_SIZE while staying quick enough
+	# that smoke-shell keeps a wide margin inside its (unraised) 60 s window.
+	printf 'BIGHEAD-e5v\n' > build/big8k.txt
+	for i in $$(seq 1 200); do printf 'pipe payload line %03d 0123456789abcdef\n' $$i >> build/big8k.txt; done
+	printf 'BIGTAIL-e5v\n' >> build/big8k.txt
+	mcopy -i $(FAT_IMG) build/big8k.txt ::/BIG8K.TXT
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
 	# FAT /AETHER.CFG (DDR-732/734) is retired here.
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt)"
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT)"
 
 # A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
 # place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
@@ -631,6 +640,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'echo in-marker-8w1 > /IN.TXT\n'; sleep 0.5; printf 'cat < /IN.TXT\n'; sleep 0.5; \
 	  printf 'echo longrec-9x3-aaaaaaaaaaaaaaaaaa-TAIL9x3 > /TR.TXT\n'; sleep 0.5; \
 	  printf 'echo short-9x3 > /TR.TXT\n'; sleep 0.5; printf 'cat /TR.TXT\n'; sleep 0.5; \
+	  printf 'cat /BIG8K.TXT | cat\n'; sleep 3.5; \
 	  printf 'echo pipe3-m7q | cat | cat\n'; sleep 0.9; \
 	  printf 'cat /NOPE9k2.TXT > /OUT9k2.TXT 2> /ERR9k2.TXT\n'; sleep 0.7; \
 	  printf 'cat /ERR9k2.TXT\n'; sleep 0.5; \
@@ -701,6 +711,18 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# only via `cat` — the long line went to the file, never to the console.
 	@grep -qF "short-9x3" build/shell_serial.log || { echo "[shell] FAIL: truncating write not read back (DDR-782)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qF "TAIL9x3" build/shell_serial.log; then echo "[shell] FAIL: '>' did not truncate — stale tail survived (DDR-782)"; tail -30 build/shell_serial.log; exit 1; fi
+	@# DDR-787: >4 KiB must survive a pipe. /BIG8K.TXT is ~7.8 KiB (200 payload
+	@# lines); PIPE_SIZE is 4096, so the pre-DDR-787 non-blocking write truncated at
+	@# ~107 lines and silently dropped the rest. Requiring >=180 is far above that
+	@# ceiling, so it fails before the fix and passes after.
+	@# Counted rather than matched exactly, deliberately: concurrent kernel prints
+	@# interleave on the same COM1 and can split an individual line mid-string (a
+	@# measured artefact — `pipe p[sfs] journal ... OK` then `ayload line 099`), so
+	@# an exact 200/200 assertion would flake on console interleaving, not on pipe
+	@# behaviour. The threshold keeps a wide margin on both sides.
+	@n=$$(grep -ac "pipe payload line" build/shell_serial.log); \
+	  if [ "$$n" -lt 180 ]; then echo "[shell] FAIL: only $$n/200 payload lines survived the pipe — truncated at PIPE_SIZE? (DDR-787)"; tail -30 build/shell_serial.log; exit 1; fi
+	@grep -qaF "BIGHEAD-e5v" build/shell_serial.log || { echo "[shell] FAIL: big-pipe transfer never started (DDR-787)"; tail -30 build/shell_serial.log; exit 1; }
 	@# DDR-786: multi-stage pipelines. The marker must traverse TWO pipes, and the
 	@# second `|` must never reach a builtin as an argument. Discriminating: before
 	@# DDR-786 only the FIRST `|` was honoured, so `cat` received "| cat" and printed
@@ -718,7 +740,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# proves the message travelled on fd 2 (fd 1 pointed elsewhere in that command).
 	@grep -qF "cat: cannot open /NOPE9k2.TXT" build/shell_serial.log || { echo "[shell] FAIL: stderr not redirected to the 2> file (DDR-784)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes, clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB), clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

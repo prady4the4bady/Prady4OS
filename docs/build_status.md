@@ -1842,6 +1842,40 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**DDR-787 (blocking pipe semantics — kernel; Section B#12).** The prerequisite
+check for the queued ">4 KiB truncation" slice found the **larger** half first:
+the `FD_PIPE` read path returned 0 whenever the ring was momentarily empty, and
+every reader treats 0 as EOF — so `a | b` was **timing-dependent** and `b` could
+print nothing if scheduled first. The DDR-780/786 gates were passing by
+scheduling luck, not by guarantee; a latent correctness bug in shipped behaviour.
+Neither half was fixable on the old `struct pipe`, which carried a **single**
+`refcount` and could not distinguish readers from writers: a reader may block only
+while a writer remains and vice versa, so blocking without those counts would be
+**unbounded — a direct S2 violation**. Implemented: `refcount` → `readers` +
+`writers`, with the end passed explicitly at every incref/close (six call sites
+across `pipe.c`, `fd.c`'s `fd_free` and `fd_clone`, and `sys_dup2`), plus
+`pipe_destroy` for the never-installed error path; the pipe frees only when both
+counts reach zero. Reader waits while empty **and** `writers > 0` (EOF only at
+zero) and only when it has delivered nothing yet, so a partly-satisfied read
+returns promptly; writer waits while full **and** `readers > 0`, returning
+`-EPIPE` when the last reader goes (`EPIPE` added to `errno.h` as 32 — it did not
+exist). Waiting uses the `yield()` poll the tree already blesses for `FD_CONSOLE`
+blocking reads, so no per-pipe wait queue and no new scheduler hook; **termination
+is always the refcount condition, never a timeout**. Implementation also fixed a
+second writer bug the design had not spotted: `if (w < chunk) break;` dropped the
+remainder of a partly-fitting chunk, so the loop now re-copies it. Gate: `cat
+/BIG8K.TXT | cat` (~7.8 KiB, 200 payload lines) asserting **≥180 lines** — the
+pre-fix ceiling is ~107 lines at PIPE_SIZE 4096. **Counted, not exact-matched, for
+a measured reason:** concurrent kernel prints share COM1 and can split a payload
+line mid-string (`pipe p[sfs] journal … OK` / `ayload line 099`), which cost 3 of
+500 lines on the first run and would have flaked an exact assertion for reasons
+unrelated to pipes. Verified locally at CI-like pacing: **200/200 delivered**,
+head+tail intact, single- and multi-stage pipelines and shell-alive all PASS, zero
+panics. `smoke-shell`'s 60 s window is **not** raised (payload sized to fit).
+**S2** is now load-bearing in a new way — bounded by the readers/writers condition
+rather than trivially — and **S6** holds: the last close of either end wakes the
+peer with EOF or `-EPIPE` instead of wedging it. **Gate count unchanged: 106.**
+
 **DDR-786 (PRISM multi-stage pipelines `a | b | c` — Section B#12, fifth shell
 slice):** DDR-780 scanned for the FIRST `|` only, and its right-hand child fell
 through having already passed the pipe block, so a second `|` reached the builtin

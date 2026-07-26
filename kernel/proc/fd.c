@@ -51,7 +51,9 @@ void fd_free(struct tcb *t, int fd) {
         return;
     struct fd_entry *e = &t->fdt.e[fd];
     if (e->kind == FD_PIPE && e->pipe) {
-        pipe_close(e->pipe);          /* drop a reference; frees at 0 */
+        /* DDR-787: drop the reference on THIS fd's end; frees once both are 0.
+         * Dropping the last writer is what lets a blocked reader see EOF. */
+        pipe_close(e->pipe, e->flags == PIPE_WRITE_END);
     } else if (e->kind == FD_EPOLL && e->epoll) {
         kfree(e->epoll);              /* sole owner (not inherited/dup'd) */
     } else if (e->file) {
@@ -78,7 +80,8 @@ int fd_clone(struct tcb *src, struct tcb *dst) {
             de->kind = FD_NONE;                      /* epoll fds are not inherited */
             de->epoll = 0;
         } else if (se->kind == FD_PIPE && se->pipe) {
-            pipe_incref(se->pipe);                   /* child shares the same pipe */
+            /* DDR-787: the child's copy holds the same END as the parent's fd. */
+            pipe_incref(se->pipe, se->flags == PIPE_WRITE_END);
         } else if (se->kind == FD_VFS && se->file) {
             struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
             if (!nf) {

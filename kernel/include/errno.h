@@ -20,6 +20,7 @@
 #define EINVAL         22   /* invalid argument                     */
 #define EEXIST         17   /* file/entry already exists            */
 #define EMFILE         24   /* too many open files                  */
+#define EPIPE          32   /* broken pipe: write with no reader (DDR-787) */
 #define ESPIPE         29   /* illegal seek (non-seekable fd)       */
 #define ERANGE         34   /* result too large for the buffer      */
 #define ENAMETOOLONG   36   /* file name / string too long          */

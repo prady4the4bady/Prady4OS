@@ -46,12 +46,25 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
             size_t chunk = (remaining > (long)sizeof kbuf) ? sizeof kbuf : (size_t)remaining;
             if (copyin(kbuf, (const void __user *)(uintptr_t)uptr, chunk) < 0)
                 return total > 0 ? total : -EFAULT;
+            /* DDR-787: block while the ring is full, instead of silently
+             * truncating at PIPE_SIZE. Bounded (S2) by the reader count, never by
+             * a timeout: the moment the last reader closes there is nobody to
+             * drain the ring, so waiting could never succeed and we fail with
+             * -EPIPE. yield() matches the FD_CONSOLE blocking read already in
+             * this file. */
+            while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0)
+                yield();
+            if (pipe_readers(e->pipe) <= 0)
+                return total > 0 ? total : -EPIPE;   /* reader gone: never drains */
             long w = pipe_write(e->pipe, kbuf, chunk);
             if (w <= 0)
-                break;                            /* pipe full (non-blocking) */
+                break;                            /* no progress possible */
             total += w; uptr += (uint64_t)w; remaining -= w;
-            if (w < (long)chunk)
-                break;
+            if (w < (long)chunk) {
+                /* Partial: the ring filled mid-chunk. Re-copy the remainder on
+                 * the next iteration rather than dropping it (the old bug). */
+                continue;
+            }
         }
         return total;
     }
@@ -198,9 +211,19 @@ static long sys_read(long fd, long ubuf, long count, long a4) {
         uint64_t uptr = (uint64_t)ubuf;
         while (remaining > 0) {
             uint64_t chunk = (remaining > (long)sizeof kbuf) ? sizeof kbuf : (uint64_t)remaining;
+            /* DDR-787: block while the ring is empty and a writer still exists,
+             * instead of reporting EOF the instant it happens to be empty — that
+             * made `a | b` timing-dependent, so b could print nothing if it was
+             * scheduled first. Bounded (S2) by the writer count: once the last
+             * writer closes, nothing can ever arrive, and an empty ring is a
+             * genuine EOF. Only wait when we have delivered nothing yet, so a
+             * partially-satisfied read returns promptly. */
+            if (total == 0)
+                while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0)
+                    yield();
             long r = pipe_read(e->pipe, kbuf, chunk);
             if (r <= 0)
-                break;                            /* empty (non-blocking baseline) */
+                break;                            /* empty + no writers = EOF */
             if (copyout((void __user *)(uintptr_t)uptr, kbuf, (size_t)r) < 0)
                 return total > 0 ? total : -EFAULT;
             total += r; uptr += (uint64_t)r; remaining -= r;

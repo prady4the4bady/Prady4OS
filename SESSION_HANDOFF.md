@@ -434,7 +434,33 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
   confirms both fixes individually: **step 2 checkout passed** after three musl
   outages, and **step 10 smoke-fs passed** after the measured timeout bump.
-- **LAST_COMPLETED_TASK (newest):** DDR-786 — **multi-stage pipelines `a|b|c`**
+- **LAST_COMPLETED_TASK (newest):** DDR-787 — **blocking pipe semantics**
+  (kernel). Fixes a LATENT CORRECTNESS BUG in shipped DDR-780/786 behaviour: the
+  `FD_PIPE` read path returned 0 whenever the ring was momentarily empty and every
+  reader treats 0 as EOF, so `a | b` was TIMING-DEPENDENT — `b` printed nothing if
+  scheduled first. Those pipeline gates were passing by scheduling luck.
+  Neither that nor the >4 KiB silent truncation was fixable on the old
+  `struct pipe`: a SINGLE `refcount` cannot tell readers from writers, and a
+  reader may block only while a writer remains (and vice versa), so blocking
+  without those counts would be UNBOUNDED — a direct S2 violation.
+  Now: `refcount` → `readers`+`writers`, the end passed explicitly at all six
+  incref/close sites (`pipe.c`, `fd_free`, `fd_clone`, `sys_dup2`) plus
+  `pipe_destroy` for the never-installed error path; frees only when both hit 0.
+  Reader waits while empty && writers>0 (and only when it has delivered nothing
+  yet); writer waits while full && readers>0, else `-EPIPE` (**`EPIPE` did not
+  exist in errno.h** — added as 32). Waiting via the `yield()` poll already used
+  for FD_CONSOLE reads: no wait queue, no new scheduler hook, termination always
+  the refcount condition and never a timeout.
+  **Second bug found while implementing:** the writer's `if (w < chunk) break;`
+  dropped the remainder of a partly-fitting chunk — blocking alone would NOT have
+  fixed that; the loop now re-copies it.
+  Gate: `cat /BIG8K.TXT | cat` (~7.8 KiB, 200 lines) asserting >=180 — pre-fix
+  ceiling is ~107 at PIPE_SIZE 4096. **Counted, not exact-matched:** kernel prints
+  share COM1 and can split a payload line mid-string (measured: 3/500 lost that
+  way), so an exact assertion would flake for non-pipe reasons. Local at CI-like
+  pacing: **200/200**, head+tail intact, all pipeline regressions PASS, zero
+  panics. smoke-shell's 60 s window NOT raised.
+- **(previous) LAST_COMPLETED_TASK:** DDR-786 — **multi-stage pipelines `a|b|c`**
   (Section B#12, fifth shell slice). DDR-780 honoured only the FIRST `|`, and its
   right child fell through having already passed the pipe block, so a second `|`
   hit the builtin as a literal token (`cat` tried to open a file named `|`).
