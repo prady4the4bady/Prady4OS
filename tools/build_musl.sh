@@ -103,6 +103,11 @@ SRCS=(
   src/stdio/__stdio_seek.c
   src/stdio/__lockfile.c
   src/stdio/stdout.c
+  # DDR-784: stderr, so PRISM can send diagnostics to fd 2 (and `2>` can redirect
+  # them). Upstream sources, no overlay change; stderr is unbuffered in musl, so
+  # this pulls in no extra buffering machinery beyond the write path already here.
+  src/stdio/stderr.c
+  src/stdio/fprintf.c
   src/stdio/ofl.c
   src/stdio/ofl_add.c
   src/stdio/fflush.c

@@ -22,6 +22,7 @@
 #define SYS_DUP2   18     /* DDR-778: PROC-A, already in the kernel — output redirection */
 #define REDIR_SAVE_FD 9   /* DDR-778: parking slot for the real stdout (FD_MAX=64) */
 #define REDIR_SAVE_IN 10  /* DDR-781: parking slot for the real stdin */
+#define REDIR_SAVE_ERR 11 /* DDR-784: parking slot for the real stderr */
 #define SYS_KILL   23     /* DDR-755: (pid, signum) -> 0 | -errno */
 #define SIGTERM    15
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
@@ -127,7 +128,7 @@ static void do_cat_stdin(void) {
 static void do_cat(const char *path) {
     long fd = nsi(SYS_OPEN, (long)path, 0 /*O_RDONLY*/, 0);
     if (fd < 0) {
-        printf("cat: cannot open %s\n", path);
+        fprintf(stderr, "cat: cannot open %s\n", path);
         return;
     }
     char b[256];
@@ -145,7 +146,7 @@ static void do_run(const char *path) {
         nsi(SYS_EXIT, 127, 0, 0);          /* execve failed: child gives up */
     }
     if (kid < 0) {
-        printf("run: fork failed\n");
+        fprintf(stderr, "run: fork failed\n");
         return;
     }
     int st = 0;
@@ -181,12 +182,12 @@ int main(void) {
             for (int i = 1; i < argc; i++)
                 if (!strcmp(argv[i], "|")) { bar = i; break; }
             if (bar == 0 || (bar > 0 && bar + 1 >= argc)) {
-                printf("pipe: missing command\n"); fflush(stdout); continue;
+                fprintf(stderr, "pipe: missing command\n"); fflush(stderr); continue;
             }
             if (bar > 0) {
                 int fds[2];
                 if (nsi(SYS_PIPE, (long)fds, 0, 0) != 0) {
-                    printf("pipe: unavailable\n"); fflush(stdout); continue;
+                    fprintf(stderr, "pipe: unavailable\n"); fflush(stderr); continue;
                 }
                 long lpid = nsi(SYS_FORK, 0, 0, 0);
                 if (lpid == 0) {                       /* left: stdout -> pipe */
@@ -227,32 +228,36 @@ int main(void) {
          * SYS_DUP2 (PROC-A) and O_CREAT|O_WRONLY already exist. */
         /* DDR-781 extends this to `<` and `>>`. argc is truncated at the FIRST
          * redirect token so the builtin sees only its own arguments. */
-        const char *redir = 0, *redir_in = 0;
+        /* DDR-784 adds `2>`. Diagnostics now go to stderr, so redirecting fd 2 is
+         * observable; `2>` truncates like `>` (DDR-782 flags). */
+        const char *redir = 0, *redir_in = 0, *redir_e = 0;
         int redir_err = 0, redir_append = 0, cut = argc;
         for (int i = 1; i < argc; i++) {
             int is_out = !strcmp(argv[i], ">");
             int is_app = !strcmp(argv[i], ">>");
             int is_in  = !strcmp(argv[i], "<");
-            if (!is_out && !is_app && !is_in)
+            int is_e   = !strcmp(argv[i], "2>");
+            if (!is_out && !is_app && !is_in && !is_e)
                 continue;
             if (i < cut) cut = i;
             if (i + 1 >= argc) { redir_err = 1; break; }
-            if (is_in) redir_in = argv[i + 1];
-            else     { redir = argv[i + 1]; redir_append = is_app; }
+            if (is_in)      redir_in = argv[i + 1];
+            else if (is_e)  redir_e  = argv[i + 1];
+            else          { redir = argv[i + 1]; redir_append = is_app; }
             i++;                         /* skip the filename token */
         }
         argc = cut;
         if (redir_err) {
-            printf("redirect: missing filename\n");
-            fflush(stdout);
+            fprintf(stderr, "redirect: missing filename\n");
+            fflush(stderr);
             continue;                    /* fds untouched — nothing to restore */
         }
-        long redir_save = -1, redir_save_in = -1;
+        long redir_save = -1, redir_save_in = -1, redir_save_err = -1;
         if (redir_in) {                  /* DDR-781: `< file` */
             long ifd = nsi(SYS_OPEN, (long)redir_in, 0 /*O_RDONLY*/, 0);
             if (ifd < 0) {
-                printf("redirect: cannot open %s\n", redir_in);
-                fflush(stdout);
+                fprintf(stderr, "redirect: cannot open %s\n", redir_in);
+                fflush(stderr);
                 continue;
             }
             nsi(SYS_DUP2, 0, REDIR_SAVE_IN, 0);   /* stash the real stdin */
@@ -260,15 +265,38 @@ int main(void) {
             nsi(SYS_CLOSE, ifd, 0, 0);
             redir_save_in = REDIR_SAVE_IN;
         }
+        if (redir_e) {                   /* DDR-784: `2> file` */
+            long efd = nsi(SYS_OPEN, (long)redir_e, O_CREAT | O_WRONLY | O_TRUNC, 0);
+            if (efd < 0) {
+                fprintf(stderr, "redirect: cannot open %s\n", redir_e);
+                fflush(stderr);
+                if (redir_save_in >= 0) {         /* undo the stdin swap */
+                    nsi(SYS_DUP2, redir_save_in, 0, 0);
+                    nsi(SYS_CLOSE, redir_save_in, 0, 0);
+                }
+                continue;                /* still before the stdout swap — safe */
+            }
+            fflush(stderr);              /* musl leaves stderr unbuffered, but be explicit */
+            nsi(SYS_DUP2, 2, REDIR_SAVE_ERR, 0);  /* stash the real stderr */
+            nsi(SYS_DUP2, efd, 2, 0);
+            nsi(SYS_CLOSE, efd, 0, 0);
+            redir_save_err = REDIR_SAVE_ERR;
+        }
         if (redir) {
             /* DDR-782: the kernel now honours O_TRUNC and O_APPEND, so `>` really
              * replaces the file and `>>` appends atomically per write(). */
             long oflags = O_CREAT | O_WRONLY | (redir_append ? O_APPEND : O_TRUNC);
             long rfd = nsi(SYS_OPEN, (long)redir, oflags, 0);
             if (rfd < 0) {
-                printf("redirect: cannot open %s\n", redir);
-                fflush(stdout);
-                if (redir_save_in >= 0) {         /* undo the stdin swap first */
+                /* stderr may already be redirected — that is where a real shell
+                 * puts this message too. Unwind exactly the swaps made so far. */
+                fprintf(stderr, "redirect: cannot open %s\n", redir);
+                fflush(stderr);
+                if (redir_save_err >= 0) {
+                    nsi(SYS_DUP2, redir_save_err, 2, 0);
+                    nsi(SYS_CLOSE, redir_save_err, 0, 0);
+                }
+                if (redir_save_in >= 0) {
                     nsi(SYS_DUP2, redir_save_in, 0, 0);
                     nsi(SYS_CLOSE, redir_save_in, 0, 0);
                 }
@@ -293,7 +321,7 @@ int main(void) {
                 if (r == 0)
                     printf("mode: set %s\n", want ? "SOVEREIGN" : "MANUAL");
                 else
-                    printf("mode: denied (rc=%ld) — toggling requires CAP_SOVEREIGN\n", r);
+                    fprintf(stderr, "mode: denied (rc=%ld) — toggling requires CAP_SOVEREIGN\n", r);
             } else {
                 long m = nsi(SYS_GET_MODE, 0, 0, 0);
                 printf("MODE: %s\n", m ? "SOVEREIGN" : "MANUAL");
@@ -306,7 +334,7 @@ int main(void) {
             if (argc < 2) do_cat_stdin();        /* DDR-780: `... | cat` */
             else do_cat(argv[1]);
         } else if (!strcmp(cmd, "run")) {
-            if (argc < 2) printf("run: usage: run <path>\n");
+            if (argc < 2) fprintf(stderr, "run: usage: run <path>\n");
             else do_run(argv[1]);
         } else if (!strcmp(cmd, "ls")) {
             const char *dir = (argc > 1) ? argv[1] : "/";   /* DDR-742 */
@@ -318,7 +346,7 @@ int main(void) {
                 printf("%s\n", nm);
                 any = 1;
             }
-            if (!any) printf("ls: %s: empty or not a directory\n", dir);
+            if (!any) fprintf(stderr, "ls: %s: empty or not a directory\n", dir);
         } else if (!strcmp(cmd, "ps")) {
             /* DDR-743: enumerate the scheduler ring via SYS_GETPROCS. */
             static const char st[] = "RrDBZ";     /* ready run done blkd zomb */
@@ -401,7 +429,7 @@ int main(void) {
         } else if (!strcmp(cmd, "exit")) {
             return 0;
         } else {
-            printf("prism: unknown command: %s\n", cmd);
+            fprintf(stderr, "prism: unknown command: %s\n", cmd);
         }
         fflush(stdout);                  /* DDR-778: MUST flush INTO the file before
                                           * restoring fd 1 — musl fully buffers a
@@ -414,6 +442,11 @@ int main(void) {
         if (redir_save_in >= 0) {        /* DDR-781: restore the real stdin */
             nsi(SYS_DUP2, redir_save_in, 0, 0);
             nsi(SYS_CLOSE, redir_save_in, 0, 0);
+        }
+        if (redir_save_err >= 0) {       /* DDR-784: restore the real stderr */
+            fflush(stderr);              /* flush INTO the file, as for fd 1 above */
+            nsi(SYS_DUP2, redir_save_err, 2, 0);
+            nsi(SYS_CLOSE, redir_save_err, 0, 0);
         }
         if (pipe_child)                  /* DDR-780: a pipe half never loops —
                                           * output already flushed above. */

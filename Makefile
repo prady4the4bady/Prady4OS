@@ -624,6 +624,8 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'echo in-marker-8w1 > /IN.TXT\n'; sleep 0.5; printf 'cat < /IN.TXT\n'; sleep 0.5; \
 	  printf 'echo longrec-9x3-aaaaaaaaaaaaaaaaaa-TAIL9x3 > /TR.TXT\n'; sleep 0.5; \
 	  printf 'echo short-9x3 > /TR.TXT\n'; sleep 0.5; printf 'cat /TR.TXT\n'; sleep 0.5; \
+	  printf 'cat /NOPE9k2.TXT > /OUT9k2.TXT 2> /ERR9k2.TXT\n'; sleep 0.7; \
+	  printf 'cat /ERR9k2.TXT\n'; sleep 0.5; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -691,8 +693,16 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# only via `cat` — the long line went to the file, never to the console.
 	@grep -qF "short-9x3" build/shell_serial.log || { echo "[shell] FAIL: truncating write not read back (DDR-782)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qF "TAIL9x3" build/shell_serial.log; then echo "[shell] FAIL: '>' did not truncate — stale tail survived (DDR-782)"; tail -30 build/shell_serial.log; exit 1; fi
+	@# DDR-784: stderr + `2>`. The command redirects stdout and stderr to DIFFERENT
+	@# files, which is what makes this discriminate. If `2>` works, cat's error goes
+	@# to /ERR9k2.TXT and only reaches the console when we cat that file. If it does
+	@# NOT work, the error goes to fd 1 -> /OUT9k2.TXT, never reaches the console,
+	@# and /ERR9k2.TXT is empty — so the marker is ABSENT. Asserting presence after
+	@# `cat /ERR9k2.TXT` therefore fails before this change and passes after, and
+	@# proves the message travelled on fd 2 (fd 1 pointed elsewhere in that command).
+	@grep -qF "cat: cannot open /NOPE9k2.TXT" build/shell_serial.log || { echo "[shell] FAIL: stderr not redirected to the 2> file (DDR-784)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> <) + truncate/append + pipes, clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes, clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

@@ -1842,6 +1842,31 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**DDR-784 (PRISM diagnostics on stderr + `2>` — Section B#12, fourth shell
+slice):** the prerequisite check re-scoped this one too. PRISM had **zero**
+writers to fd 2 — every diagnostic went through `printf` → fd 1 — so `2>` alone
+would have been untestable sugar redirecting an fd nothing writes to. The slice
+is therefore two halves: route genuine errors to `fprintf(stderr, …)`, then add
+`2>` to the redirect scan. Success/informational messages deliberately stay on
+stdout; in particular **`rm: removed …` is gate-asserted** and moving it would
+have silently broken `smoke-shell` (checked before touching any print). fd 2
+already exists as `FD_CONSOLE` from `fd_init_std` and `fd_write_user` is
+fd-agnostic, so **no kernel change**. One prerequisite surfaced only at link
+time: the musl **subset** shipped `stdout.c` but not `stderr.c`/`fprintf.c`
+(`ld.lld: undefined symbol: stderr`), and `snprintf` is absent too, so some
+subset growth was unavoidable — `tools/build_musl.sh` gains those two upstream
+sources (no overlay change, no ADR-023 pin change). `2>` uses a third parking
+slot (`REDIR_SAVE_ERR 11`), truncating `O_CREAT|O_WRONLY|O_TRUNC` like DDR-782's
+`>`, swap order stdin → stderr → stdout with every failure path unwinding exactly
+the swaps already made. The gate discriminates by construction: `cat /NOPE9k2.TXT
+> /OUT9k2.TXT 2> /ERR9k2.TXT` sends stdout and stderr to **different** files, so a
+broken `2>` puts the error into the stdout file where it never reaches the
+console — the marker is absent before the change and present after, which also
+proves the message travelled on fd 2. Locally verified: discriminator, bare-error
+visibility, `rm: removed` retention, and the DDR-780/782 regressions all PASS,
+zero panics. **S2** (bounded parsing, clean failure) and **S6** (fault isolation,
+fd juggling confined to this process). **Gate count unchanged: 106.**
+
 **DDR-783 (`smoke-fs` timeout margin — infrastructure).** Run 30192189559 failed
 at step 10 with `required pattern 'compress/readback/tag OK' not found`, after the
 self-test had visibly run through journal + snapshot. **Not a DDR-782

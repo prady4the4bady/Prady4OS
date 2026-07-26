@@ -429,7 +429,25 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `|`, plus DDR-781) can finally be CI-validated — promote `main` to the first
   green sha covering them. DDR-779's mirror proposal still needs sign-off; do NOT
   apply it autonomously.
-- **LAST_COMPLETED_TASK (newest):** DDR-783 — `smoke-fs` ran at the harness
+- ✅ **PROMOTED (2026-07-26): `main` fast-forwarded to `ac459d7`** on CI run
+  **30193738689** (`success`, 112/112). Promotes DDR-782 (kernel `O_TRUNC` +
+  atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
+  confirms both fixes individually: **step 2 checkout passed** after three musl
+  outages, and **step 10 smoke-fs passed** after the measured timeout bump.
+- **LAST_COMPLETED_TASK (newest):** DDR-784 — PRISM diagnostics on **stderr** +
+  **`2>`** (Section B#12, fourth shell slice). **The prerequisite check re-scoped
+  it again:** PRISM had ZERO writers to fd 2 (everything went `printf` → fd 1), so
+  `2>` alone would have been untestable sugar. Two halves: route genuine errors to
+  `fprintf(stderr, …)`, then add `2>`. Success messages stay on stdout —
+  **`rm: removed …` is gate-asserted** and moving it would have broken
+  `smoke-shell` silently (checked first, per lesson 3). No kernel change (fd 2 is
+  already `FD_CONSOLE`; `fd_write_user` is fd-agnostic). **Surfaced only at link
+  time:** the musl SUBSET had no `stderr.c`/`fprintf.c` (`undefined symbol:
+  stderr`) and no `snprintf` either, so `tools/build_musl.sh` gained those two
+  upstream sources — recorded, not folded in quietly. Gate discriminates by
+  construction (stdout and stderr to DIFFERENT files in one command, so a broken
+  `2>` hides the error in the stdout file). All local checks PASS, zero panics.
+- **(previous) LAST_COMPLETED_TASK:** DDR-783 — `smoke-fs` ran at the harness
   default `TIMEOUT_S=30` while asserting the **last sentinel in the whole boot
   chain**. Measured: that sentinel lands at **t=24.26 s** locally (19 % margin),
   so a slower CI runner flakes it — which is what killed run 30192189559 at step
