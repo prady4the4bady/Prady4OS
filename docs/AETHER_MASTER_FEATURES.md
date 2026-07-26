@@ -10,11 +10,15 @@ capabilities.
 open and code is in flight) · `planned` (tracked, not started) · `proposed`
 (designed, prerequisites not yet answered).
 
-**Last verified against repo:** 2026-07-26, `main` @ `a87d6ee` (DDR-786),
-113 steps green (CI run 30206856237, conclusion `success`) — promotes multi-stage
-pipelines `a|b|c`. **DDR-787 has since fixed** the premature-EOF and >4 KiB
-truncation bugs that made pipelines pass by scheduling luck (blocking pipe
-semantics, readers/writers counts); awaiting its own CI run.
+**Last verified against repo:** 2026-07-27, `main` @ `0d3f2ab` (DDR-787),
+113 steps green (CI run 30211536949, conclusion `success`, 105.7 min) — promotes
+**blocking pipe semantics**: pipelines no longer depend on scheduling luck
+(premature EOF) and no longer truncate at 4 KiB. The big-pipe gate
+(`cat /BIG8K.TXT | cat`, ≥180 of 200 payload lines) passed in CI at its tighter
+pacing with no wedge.
+
+**(previous)** `main` @ `a87d6ee` (DDR-786), run 30206856237 — multi-stage
+pipelines `a|b|c`.
 
 **(previous)** `main` @ `ebd708d` (DDR-785),
 113 steps green (CI run 30200918063, conclusion `success`) — promotes DDR-784
