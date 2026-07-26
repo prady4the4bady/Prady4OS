@@ -429,6 +429,22 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `|`, plus DDR-781) can finally be CI-validated — promote `main` to the first
   green sha covering them. DDR-779's mirror proposal still needs sign-off; do NOT
   apply it autonomously.
+- **LAST_COMPLETED_TASK (newest):** DDR-783 — `smoke-fs` ran at the harness
+  default `TIMEOUT_S=30` while asserting the **last sentinel in the whole boot
+  chain**. Measured: that sentinel lands at **t=24.26 s** locally (19 % margin),
+  so a slower CI runner flakes it — which is what killed run 30192189559 at step
+  10. **NOT a DDR-782 regression** (that slice never touches the kernel-internal
+  `sfs_selftest_lz4`, and the same image passes locally). `smoke-user` already
+  asserts the identical sentinel at 60 s, so this gate was simply never updated as
+  the SFS chain grew. Fixed: `TIMEOUT_S=60` on `smoke-fs` alone — the other 56
+  default-30 gates assert earlier sentinels and were NOT blind-tuned. Cannot mask
+  a hang (`boot_test.sh` greps after the window regardless).
+  **Systemic finding, proposal only, NOT applied:** the harness always burns the
+  full window instead of exiting once all sentinels are seen — that is why every
+  timeout needs hand-tuning and why wall-clock is the sum of timeouts, not of
+  work. Early exit would kill this whole flake class AND speed up CI, but it sits
+  behind 100+ gates and `FORBIDDEN_SENTINEL` must still fail if the forbidden
+  pattern would have appeared after the early exit. Worth its own slice.
 - ✅ **DDR-779 / ADR-033 IMPLEMENTED (2026-07-26) — musl mirror, maintainer
   signed off.** The hard stop is cleared. `.gitmodules` now fetches
   `third_party/musl` from `https://github.com/ifduyue/musl`; **the pinned commit

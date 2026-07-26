@@ -460,8 +460,13 @@ smoke: $(IMG)
 # Filesystem gate: builds the FAT32 data disk and asserts BOTH the kernel
 # sentinel AND the FAT32 read self-test line — real end-to-end FS coverage.
 # Needs dosfstools (mkfs.fat) + mtools (mcopy); see setup_toolchain.sh.
+# DDR-783: TIMEOUT_S=60, not the harness default 30. This gate asserts the LAST
+# sentinel in the whole boot chain — measured at t=24.3s locally, i.e. only 19%
+# margin under a 30s window, which flaked on a slower CI runner (run 30192189559).
+# smoke-user already runs the same 'compress/readback/tag OK' assertion at 60s.
+# This cannot mask a hang: boot_test.sh greps AFTER the window either way.
 smoke-fs: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
+	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it

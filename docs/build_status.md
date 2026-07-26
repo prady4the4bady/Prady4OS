@@ -1842,6 +1842,28 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**DDR-783 (`smoke-fs` timeout margin — infrastructure).** Run 30192189559 failed
+at step 10 with `required pattern 'compress/readback/tag OK' not found`, after the
+self-test had visibly run through journal + snapshot. **Not a DDR-782
+regression** — that slice touched `sys_open`/the FD_VFS write path, while
+`sfs_selftest_lz4` is kernel-internal and never goes through the fd layer, and the
+identical image passes `smoke-fs` locally. Root cause **measured**: instrumenting
+the boot shows the last required sentinel lands at **t=24.26 s** (`NEXUS KERNEL
+OK` 0.31 s, `PRISM_READY` 23.91 s, journal 24.09 s, snapshot 24.18 s) against the
+harness **default `TIMEOUT_S=30`** — 19 % margin on a fast local machine, so a
+slower runner flakes it. The inconsistency making it a defect: `smoke-user`
+asserts the *same* sentinel and already uses `TIMEOUT_S=60`; the SFS chain grew
+across slices 4g/4h/4i and DDR-760 while this gate's window never moved. Fixed by
+setting `TIMEOUT_S=60` on `smoke-fs` only — the other 56 default-30 gates assert
+earlier sentinels and were left alone rather than blind-tuned. **This cannot mask
+a hang:** `boot_test.sh` greps after the window regardless, so a hung kernel still
+produces no sentinel and still fails. Systemic finding recorded as a proposal and
+deliberately NOT applied: the harness always runs the full window instead of
+exiting once all sentinels are seen, which is why every timeout must be
+hand-tuned; early exit would remove the whole flake class and speed up CI, but it
+touches 100+ gates and needs care with `FORBIDDEN_SENTINEL` semantics. No kernel
+or user code; S1–S8 untouched. **Gate count unchanged: 106.**
+
 **ADR-033 / DDR-779 IMPLEMENTED (2026-07-26) — musl submodule now fetches from a
 GitHub mirror.** After a **third** checkout outage (run 30188805082, `a077ccd`,
 DDR-782 — identical `Failed to connect ... port 443 after 134654 ms` / `Failed to
