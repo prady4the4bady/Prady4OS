@@ -1866,7 +1866,11 @@ finished in 2 s against a 60 s window, a **late forbidden pattern still took the
 full window and FAILED** (the one way this could have silently weakened all 91
 gates), a missing required pattern still failed, and a declared-but-absent
 forbidden pattern still passed. End-to-end: `smoke-fs` 30 s (60 s window),
-`smoke-uaccess` 4 s (30 s window), both PASS. No kernel or user code; S1–S8
+`smoke-uaccess` 4 s (30 s window), both PASS. **Confirmed in CI: run 30200918063
+took 105.8 min vs the 152.3 min baseline (run 30193738689) — 46.5 min saved on the
+same 113-step suite**, closely matching the ~43 min predicted from the budget
+measurement. The `smoke-selftest` step passed in CI as step 5, before the harness
+judged any gate. No kernel or user code; S1–S8
 untouched; the `timeout` ceiling is unchanged so a hung kernel still fails exactly
 as before. **Boot-gate count unchanged: 106.**
 

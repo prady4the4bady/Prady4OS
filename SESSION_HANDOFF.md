@@ -453,6 +453,16 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   60 s window; **late forbidden pattern still took the full window and FAILED**;
   missing required still failed; declared-but-absent forbidden still passed.
   End-to-end: smoke-fs 30 s (60 s window), smoke-uaccess 4 s (30 s window).
+  ✅ **CONFIRMED IN CI: run 30200918063 = 105.8 min vs the 152.3 min baseline
+  (run 30193738689) — 46.5 min saved on the same 113-step suite**, matching the
+  ~43 min predicted from the timeout-budget measurement. `smoke-selftest` passed
+  as CI step 5, before the harness judged any gate.
+- ✅ **PROMOTED (2026-07-26): `main` fast-forwarded to `ebd708d`** on green run
+  30200918063 (113/113) — carries DDR-784 and DDR-785.
+- ⚠️ **Watch for two runs per push:** `gh run list` also shows a **Dependabot
+  Updates** workflow that completes fast and green. Do NOT mistake it for CI —
+  filter on `workflowName == "pradyos-ci"` (this nearly caused a false "green"
+  read this session).
 - **(previous) LAST_COMPLETED_TASK:** DDR-784 — PRISM diagnostics on **stderr** +
   **`2>`** (Section B#12, fourth shell slice). **The prerequisite check re-scoped
   it again:** PRISM had ZERO writers to fd 2 (everything went `printf` → fd 1), so

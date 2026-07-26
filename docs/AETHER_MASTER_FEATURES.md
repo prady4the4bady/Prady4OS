@@ -10,10 +10,13 @@ capabilities.
 open and code is in flight) · `planned` (tracked, not started) · `proposed`
 (designed, prerequisites not yet answered).
 
-**Last verified against repo:** 2026-07-26, `main` @ `ac459d7` (DDR-783),
-112 steps green (CI run 30193738689, conclusion `success`) — promotes DDR-782
-(kernel `O_TRUNC` + atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783
-(`smoke-fs` timeout margin).
+**Last verified against repo:** 2026-07-26, `main` @ `ebd708d` (DDR-785),
+113 steps green (CI run 30200918063, conclusion `success`) — promotes DDR-784
+(PRISM stderr + `2>`) and DDR-785 (`boot_test.sh` early exit), on top of DDR-782
+(kernel `O_TRUNC` + atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783.
+That run also **measures DDR-785's effect: 105.8 min vs the 152.3 min baseline
+(run 30193738689) — 46.5 min saved**, matching the ~43 min predicted from the
+timeout budget.
 
 ---
 
