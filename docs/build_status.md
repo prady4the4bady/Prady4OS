@@ -1842,6 +1842,30 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**🚨 DDR-790 — OPEN: kernel heap double-free panic in CI, and it is on `main`.**
+Run 30215987521 (`ba5770e`) failed at step 54 `smoke-blkmq` (q35 `-smp 4`) with
+`[kheap] double-free ptr=0x…7E29F80 objsize=0x20` and `*** KHEAP PANIC: kfree:
+double free ***`. Prime suspect is **DDR-787** (the pipe `refcount` →
+`readers`/`writers` split), because `struct pipe` is 24 B and lands in the
+32-byte bucket and that slice is exactly what changed pipe lifetime — but
+`struct vfs_file` occupies the same bucket and is **not excluded**. Two readings
+were corrected during the investigation and both are worth keeping: the
+`multi-inflight FAIL` string in the log is the Makefile echoing the gate's
+`FORBIDDEN_SENTINEL=` line, not a kernel print; and the total absence of `[hb]`
+heartbeats looked like DDR-777's timer-stall verdict, but the run **panicked**, so
+that silence is a consequence rather than independent evidence — **B#3 was not
+validly read here and stays open.** A temporary `[pipe] create/destroy p=… r=… w=…`
+trace was added on the DDR-776 pattern. **It has not yet found the bug, and its
+first reading was a trap:** three pointers each appearing twice looked like a
+double free but was `kheap` **address reuse** — the paired create trace showed
+creates=4/destroys=4, exactly balanced. Pointer identity is not evidence; the
+create/destroy pairing is. Not reproduced locally (3/3 `smoke-blkmq` clean).
+One hardening was applied and is labelled as hardening, not as the fix:
+`pipe_close` frees only when the call actually **dropped** a reference, since the
+first cut freed whenever both counts merely *read* zero — a shape the old single
+refcount masked by going negative. **S6** is the invariant in question (a double
+`kfree` is a fault-isolation failure). **Gate count unchanged: 106.**
+
 **DDR-789 (PRISM exit status `$?` — Section B#12, sixth shell slice).** Queued
 behind SIGPIPE, and the tree check **reordered them**: (1) signal defaults are a
 whitelist, not a table — `signal_deliver` terminates on SIGKILL and on SIGTERM

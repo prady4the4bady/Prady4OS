@@ -6,6 +6,7 @@
  * (head - tail = bytes buffered), so no modulo. Non-blocking baseline.
  */
 #include "pipe.h"
+#include "console.h"     /* DDR-790: kputs/kputhex/kputdec for the destroy trace */
 #include "sched.h"
 #include "fd.h"
 #include "vfs.h"          /* struct vfs_file (dup2 of an FD_VFS) */
@@ -39,12 +40,27 @@ struct pipe *pipe_create(void) {
     if (!p->buf) { kfree(p); return 0; }
     p->head = p->tail = 0;
     p->readers = p->writers = 0;
+    /* DDR-790: paired with the destroy trace so create/destroy can be matched.
+     * Without this, "same pointer freed twice" is ambiguous — kheap recycles
+     * addresses, so it may be two different pipes rather than a double free. */
+    kputs("[pipe] create  p="); kputhex((uint64_t)(uintptr_t)p); kputs("\r\n");
     return p;
 }
 
 void pipe_destroy(struct pipe *p) {
     if (!p)
         return;
+    /* DDR-790: name every pipe we free. CI run 30215987521 panicked with
+     * "kfree: double free objsize=0x20" — the bucket struct pipe lands in — and
+     * inspection of the DDR-787 refcount sites did not find the defect, so the
+     * next occurrence must be decidable rather than argued: if the panicking
+     * pointer matches a line below, it IS the pipe (and r/w say how it got
+     * there); if it never appears, the pipe is exonerated. Evidence only — no
+     * gate asserts on this. */
+    kputs("[pipe] destroy p="); kputhex((uint64_t)(uintptr_t)p);   /* kputhex adds "0x" */
+    kputs(" r="); kputdec((uint64_t)(p->readers < 0 ? 0 : p->readers));
+    kputs(" w="); kputdec((uint64_t)(p->writers < 0 ? 0 : p->writers));
+    kputs("\r\n");
     if (p->buf)
         pmm_free_page(p->buf);
     kfree(p);
@@ -60,11 +76,19 @@ void pipe_incref(struct pipe *p, int is_write) {
 void pipe_close(struct pipe *p, int is_write) {
     if (!p)
         return;
-    if (is_write) { if (p->writers > 0) p->writers--; }
-    else          { if (p->readers > 0) p->readers--; }
+    /* DDR-790: free only if THIS close actually dropped a reference. The first
+     * cut freed whenever both counts read 0, so a close that decremented nothing
+     * — because the count was already 0 — freed the pipe a second time. The
+     * pre-DDR-787 single refcount hid that by going negative; splitting the
+     * counts and clamping at 0 turned a benign double-decrement into a double
+     * kfree, which is the panic in CI run 30215987521. Requiring a real
+     * transition makes a duplicate or stale close a no-op. */
+    int dropped = 0;
+    if (is_write) { if (p->writers > 0) { p->writers--; dropped = 1; } }
+    else          { if (p->readers > 0) { p->readers--; dropped = 1; } }
     /* Free only once BOTH ends are gone. A peer blocked in read/write wakes on
      * the count reaching 0 (EOF / -EPIPE) and must not touch a freed pipe. */
-    if (p->readers <= 0 && p->writers <= 0)
+    if (dropped && p->readers <= 0 && p->writers <= 0)
         pipe_destroy(p);
 }
 

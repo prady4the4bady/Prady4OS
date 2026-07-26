@@ -434,7 +434,30 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
   confirms both fixes individually: **step 2 checkout passed** after three musl
   outages, and **step 10 smoke-fs passed** after the measured timeout bump.
-- **LAST_COMPLETED_TASK (newest):** DDR-789 — PRISM **exit status `$?`**
+- 🚨 **OPEN REGRESSION — DDR-790: kernel heap DOUBLE-FREE PANIC in CI, on `main`.**
+  Run **30215987521** (`ba5770e`) died at step 54 `smoke-blkmq` (-smp 4) with
+  `[kheap] double-free ptr=0x7E29F80 objsize=0x20` / `*** KHEAP PANIC ***`.
+  **Prime suspect DDR-787** (pipe refcount split) — `struct pipe` is 24 B, the
+  32-byte bucket — and DDR-787 **is already promoted to main**.
+  TWO MISREADINGS CORRECTED ALONG THE WAY, both worth remembering:
+  (a) `multi-inflight FAIL` in the log is the Makefile echoing the gate's
+  `FORBIDDEN_SENTINEL=` line, NOT a kernel print; (b) zero `[hb]` heartbeats
+  looked like the DDR-777 timer-stall verdict, but the run PANICKED — so the
+  silence is a consequence, not evidence. **B#3 was NOT validly read here and
+  remains open.**
+  Diagnostic added (temporary): `[pipe] create/destroy p=… r=… w=…`.
+  **It has NOT found the bug.** Its first reading — three pointers each freed
+  twice — looked conclusive but was **kheap ADDRESS REUSE**; adding the paired
+  create trace showed creates=4/destroys=4, perfectly balanced. *Pointer identity
+  is not evidence of a double free; create/destroy pairing is.*
+  Not reproduced locally: 3/3 smoke-blkmq clean, trace clean.
+  One hardening applied and labelled as such, NOT as the fix: `pipe_close` now
+  frees only if the call actually DROPPED a reference (the first cut freed
+  whenever both counts merely READ 0, so a close decrementing nothing could free
+  twice; the old single refcount masked that shape by going negative).
+  **NEXT: let CI run with the traces; a `destroy` with no matching live `create`
+  names the pipe, and its absence exonerates it and points at `struct vfs_file`.**
+- **(previous) LAST_COMPLETED_TASK:** DDR-789 — PRISM **exit status `$?`**
   (Section B#12). **The tree check REORDERED the queue:** SIGPIPE was next, but
   (1) signal defaults are a WHITELIST not a table (`signal_deliver` terminates on
   SIGKILL, and on SIGTERM with no handler, and IGNORES everything else — so
