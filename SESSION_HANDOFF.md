@@ -434,7 +434,27 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
   confirms both fixes individually: **step 2 checkout passed** after three musl
   outages, and **step 10 smoke-fs passed** after the measured timeout bump.
-- **LAST_COMPLETED_TASK (newest):** DDR-785 — **`boot_test.sh` early exit**, the
+- **LAST_COMPLETED_TASK (newest):** DDR-786 — **multi-stage pipelines `a|b|c`**
+  (Section B#12, fifth shell slice). DDR-780 honoured only the FIRST `|`, and its
+  right child fell through having already passed the pipe block, so a second `|`
+  hit the builtin as a literal token (`cat` tried to open a file named `|`).
+  **Answer to the standing question: N stages do NOT force the ~120-line refactor
+  DDR-780 deferred** — the fall-through dispatch is reused unchanged, only the
+  pipe block grows (~40 lines). The ~10-line design (right child re-scans and
+  re-forks) was **REJECTED**: it leaves an intermediate shell at each boundary
+  holding the previous read end open, and with non-blocking 4 KiB pipes that
+  silently DROPS output instead of hanging — invisible in a small test. Chosen:
+  the shell splits all stages up front, forks each itself, threads one pipe
+  between neighbours, closes `prev_read`+`fds[1]` in the parent right after each
+  fork (DDR-780's EOF lesson, once per boundary), reaps all N. Malformed `|`
+  (first/last/doubled) rejected BEFORE any fork. No kernel change.
+  **Pre-existing limitation recorded, not introduced:** PIPE_SIZE 4096 +
+  non-blocking `pipe_write` ⇒ a stage producing >4 KiB faster than its reader
+  drains LOSES data (already true of DDR-780). Blocking pipe writes are a
+  kernel-side slice if pipelines are ever used for real streaming.
+  Local: 3-stage, 4-stage, malformed rejection, DDR-780/782/784 regressions, and
+  shell-still-alive all PASS, zero panics, zero warnings.
+- **(previous) LAST_COMPLETED_TASK:** DDR-785 — **`boot_test.sh` early exit**, the
   DDR-783 systemic finding now fixed. The harness always burned the full
   `TIMEOUT_S` then grepped, so the timeout WAS the runtime. Measured: 91
   invocations = **7590 s (126.5 min) of pure waiting per CI run**; the 53 gates

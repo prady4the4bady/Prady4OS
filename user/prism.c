@@ -176,46 +176,74 @@ int main(void) {
          * at the bottom of the loop (see `pipe_child`). Exactly one pipe and two
          * children — bounded (S2); a fault in a builtin now kills only the child,
          * not the shell (S6). */
+        /* DDR-786 generalises this to N stages. DDR-780 scanned for the FIRST `|`
+         * only, and its right-hand child fell through having already passed this
+         * block — so a second `|` reached the builtin as a literal token (`cat`
+         * would try to open a file named "|"). The shell now splits the line into
+         * all its stages up front and forks each one itself, threading a pipe
+         * between neighbours. That keeps the correct topology — N processes, one
+         * waiter — instead of leaving an intermediate shell at each boundary
+         * holding the previous read end open (which, with non-blocking 4 KiB
+         * pipes, silently drops output rather than hanging). */
         int pipe_child = 0;
         {
-            int bar = -1;
-            for (int i = 1; i < argc; i++)
-                if (!strcmp(argv[i], "|")) { bar = i; break; }
-            if (bar == 0 || (bar > 0 && bar + 1 >= argc)) {
+            int cut[8];                                /* start index of each stage */
+            int nstage = 1, bad = 0;
+            cut[0] = 0;
+            for (int i = 0; i < argc; i++) {
+                if (strcmp(argv[i], "|") != 0)
+                    continue;
+                /* `|` first, last, or doubled is malformed — reject before any
+                 * fork, so a bad line costs no processes (S2). */
+                if (i == 0 || i + 1 >= argc || !strcmp(argv[i + 1], "|")) { bad = 1; break; }
+                if (nstage >= (int)(sizeof cut / sizeof cut[0])) { bad = 1; break; }
+                argv[i] = 0;                           /* terminate the previous stage */
+                cut[nstage++] = i + 1;
+            }
+            if (bad) {
                 fprintf(stderr, "pipe: missing command\n"); fflush(stderr); continue;
             }
-            if (bar > 0) {
-                int fds[2];
-                if (nsi(SYS_PIPE, (long)fds, 0, 0) != 0) {
-                    fprintf(stderr, "pipe: unavailable\n"); fflush(stderr); continue;
-                }
-                long lpid = nsi(SYS_FORK, 0, 0, 0);
-                if (lpid == 0) {                       /* left: stdout -> pipe */
-                    nsi(SYS_DUP2, fds[1], 1, 0);
-                    nsi(SYS_CLOSE, fds[0], 0, 0);
-                    nsi(SYS_CLOSE, fds[1], 0, 0);
-                    argc = bar;                        /* run only the left command */
-                    pipe_child = 1;
-                } else {
-                    long rpid = nsi(SYS_FORK, 0, 0, 0);
-                    if (rpid == 0) {                   /* right: stdin <- pipe */
-                        nsi(SYS_DUP2, fds[0], 0, 0);
-                        nsi(SYS_CLOSE, fds[0], 0, 0);
-                        nsi(SYS_CLOSE, fds[1], 0, 0);
-                        int n = 0;                     /* shift the right command down */
-                        for (int i = bar + 1; i < argc; i++) argv[n++] = argv[i];
+            if (nstage > 1) {
+                long pids[8];
+                int prev_read = -1, forked = 0, am_child = 0;
+                for (int s = 0; s < nstage; s++) {
+                    int fds[2] = { -1, -1 };
+                    if (s + 1 < nstage && nsi(SYS_PIPE, (long)fds, 0, 0) != 0) {
+                        fprintf(stderr, "pipe: unavailable\n"); fflush(stderr);
+                        break;                         /* reap what we already forked */
+                    }
+                    long pid = nsi(SYS_FORK, 0, 0, 0);
+                    if (pid == 0) {                    /* this stage's process */
+                        if (prev_read >= 0) {
+                            nsi(SYS_DUP2, prev_read, 0, 0);
+                            nsi(SYS_CLOSE, prev_read, 0, 0);
+                        }
+                        if (fds[1] >= 0) {
+                            nsi(SYS_DUP2, fds[1], 1, 0);
+                            nsi(SYS_CLOSE, fds[0], 0, 0);
+                            nsi(SYS_CLOSE, fds[1], 0, 0);
+                        }
+                        int n = 0;                     /* shift this stage down to argv[0] */
+                        for (int i = cut[s]; i < argc && argv[i]; i++) argv[n++] = argv[i];
                         argc = n;
                         pipe_child = 1;
-                    } else {
-                        /* Parent: close BOTH ends or the reader never sees EOF
-                         * and the shell wedges. Then reap both children. */
-                        nsi(SYS_CLOSE, fds[0], 0, 0);
-                        nsi(SYS_CLOSE, fds[1], 0, 0);
-                        long st;
-                        nsi(SYS_WAIT4, lpid, (long)&st, 0);
-                        nsi(SYS_WAIT4, rpid, (long)&st, 0);
-                        continue;                      /* parent runs no builtin */
+                        am_child = 1;
+                        break;                         /* fall through to the dispatch */
                     }
+                    pids[forked++] = pid;
+                    /* The parent must hold NO pipe end open, or the reader never
+                     * sees EOF and the shell wedges (the DDR-780 lesson, applied
+                     * once per stage boundary). */
+                    if (prev_read >= 0) nsi(SYS_CLOSE, prev_read, 0, 0);
+                    if (fds[1] >= 0)    nsi(SYS_CLOSE, fds[1], 0, 0);
+                    prev_read = fds[0];
+                }
+                if (!am_child) {
+                    if (prev_read >= 0) nsi(SYS_CLOSE, prev_read, 0, 0);
+                    long st;
+                    for (int i = 0; i < forked; i++)
+                        nsi(SYS_WAIT4, pids[i], (long)&st, 0);
+                    continue;                          /* parent runs no builtin */
                 }
             }
         }

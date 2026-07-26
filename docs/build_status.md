@@ -1842,6 +1842,35 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**DDR-786 (PRISM multi-stage pipelines `a | b | c` — Section B#12, fifth shell
+slice):** DDR-780 scanned for the FIRST `|` only, and its right-hand child fell
+through having already passed the pipe block, so a second `|` reached the builtin
+as a literal token — `echo m | cat | cat` handed `cat` the arguments `| cat`. Real
+gap, now closed. **The standing question was whether N stages finally force the
+~120-line refactor DDR-780 deferred: they do not** — the existing fall-through
+dispatch is reused unchanged and only the pipe block grows (~40 lines). Two
+designs were weighed: the ~10-line version (right child re-scans and re-forks) was
+**rejected** because it leaves an intermediate shell at every boundary holding the
+previous pipe's read end open, which with non-blocking 4 KiB pipes silently drops
+output instead of hanging — a data-loss mode that hides in small tests. Chosen
+instead: the shell splits the line into all stages up front and forks each itself,
+threading one pipe between neighbours, closing `prev_read` and `fds[1]` in the
+parent immediately after each fork (the DDR-780 EOF lesson applied once per
+boundary) and reaping all N children. Correct topology — N processes, one waiter.
+Malformed pipelines (`|` first, last, or doubled) are rejected **before any fork**,
+so a bad line costs no processes. No kernel change: `pipe_create` heap-allocates
+per pipe with no fixed table, and `SYS_PIPE`/`FORK`/`DUP2`/`WAIT4` all ship.
+**Pre-existing limitation recorded, not introduced:** `PIPE_SIZE` is 4096 and
+`pipe_write` is non-blocking, so a stage producing >4 KiB faster than its reader
+drains loses data — already true of DDR-780, and it bounds what pipelines can be
+used for until pipe writes block (kernel-side, separate slice). Gate
+discriminates: `echo pipe3-m7q | cat | cat` must print the marker **and** must
+never produce `cat: cannot open |`, which is exactly what the old code printed.
+Locally: 3-stage, 4-stage, malformed rejection, all prior-slice regressions and
+shell-still-alive all PASS, zero panics. **S2** (bounded by `argv[16]` ≤ 8 stages;
+malformed rejected pre-fork) and **S6** (each stage its own process; every child
+reaped). **Gate count unchanged: 106.**
+
 **DDR-785 (`boot_test.sh` early exit — infrastructure; the DDR-783 systemic
 finding, now fixed).** The harness ran `timeout $TIMEOUT_S qemu …` to completion
 *every time* and only then grepped, so the timeout **was** the runtime. Measured

@@ -631,6 +631,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'echo in-marker-8w1 > /IN.TXT\n'; sleep 0.5; printf 'cat < /IN.TXT\n'; sleep 0.5; \
 	  printf 'echo longrec-9x3-aaaaaaaaaaaaaaaaaa-TAIL9x3 > /TR.TXT\n'; sleep 0.5; \
 	  printf 'echo short-9x3 > /TR.TXT\n'; sleep 0.5; printf 'cat /TR.TXT\n'; sleep 0.5; \
+	  printf 'echo pipe3-m7q | cat | cat\n'; sleep 0.9; \
 	  printf 'cat /NOPE9k2.TXT > /OUT9k2.TXT 2> /ERR9k2.TXT\n'; sleep 0.7; \
 	  printf 'cat /ERR9k2.TXT\n'; sleep 0.5; \
 	  printf 'exit\n'; sleep 0.5 ) & \
@@ -700,6 +701,14 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# only via `cat` — the long line went to the file, never to the console.
 	@grep -qF "short-9x3" build/shell_serial.log || { echo "[shell] FAIL: truncating write not read back (DDR-782)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qF "TAIL9x3" build/shell_serial.log; then echo "[shell] FAIL: '>' did not truncate — stale tail survived (DDR-782)"; tail -30 build/shell_serial.log; exit 1; fi
+	@# DDR-786: multi-stage pipelines. The marker must traverse TWO pipes, and the
+	@# second `|` must never reach a builtin as an argument. Discriminating: before
+	@# DDR-786 only the FIRST `|` was honoured, so `cat` received "| cat" and printed
+	@# exactly "cat: cannot open |" — forbidding that string fails deterministically
+	@# on the old behaviour. The marker alone would NOT discriminate, since a single
+	@# working pipe already prints it.
+	@grep -qF "pipe3-m7q" build/shell_serial.log || { echo "[shell] FAIL: 3-stage pipeline delivered no output (DDR-786)"; tail -30 build/shell_serial.log; exit 1; }
+	@if grep -qF "cat: cannot open |" build/shell_serial.log; then echo "[shell] FAIL: second '|' reached the builtin as an argument (DDR-786)"; tail -30 build/shell_serial.log; exit 1; fi
 	@# DDR-784: stderr + `2>`. The command redirects stdout and stderr to DIFFERENT
 	@# files, which is what makes this discriminate. If `2>` works, cat's error goes
 	@# to /ERR9k2.TXT and only reaches the console when we cat that file. If it does
