@@ -640,6 +640,8 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'echo in-marker-8w1 > /IN.TXT\n'; sleep 0.5; printf 'cat < /IN.TXT\n'; sleep 0.5; \
 	  printf 'echo longrec-9x3-aaaaaaaaaaaaaaaaaa-TAIL9x3 > /TR.TXT\n'; sleep 0.5; \
 	  printf 'echo short-9x3 > /TR.TXT\n'; sleep 0.5; printf 'cat /TR.TXT\n'; sleep 0.5; \
+	  printf 'echo st-ok=$$?\n'; sleep 0.6; \
+	  printf 'run /NOPE789.ELF\n'; sleep 0.9; printf 'echo st-fail=$$?\n'; sleep 0.6; \
 	  printf 'cat /BIG8K.TXT | cat\n'; sleep 3.5; \
 	  printf 'echo pipe3-m7q | cat | cat\n'; sleep 0.9; \
 	  printf 'cat /NOPE9k2.TXT > /OUT9k2.TXT 2> /ERR9k2.TXT\n'; sleep 0.7; \
@@ -711,6 +713,14 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# only via `cat` — the long line went to the file, never to the console.
 	@grep -qF "short-9x3" build/shell_serial.log || { echo "[shell] FAIL: truncating write not read back (DDR-782)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qF "TAIL9x3" build/shell_serial.log; then echo "[shell] FAIL: '>' did not truncate — stale tail survived (DDR-782)"; tail -30 build/shell_serial.log; exit 1; fi
+	@# DDR-789: `$$?` expands to the last exit status. Discriminating by
+	@# construction: before this slice the tokenizer passed `$$?` through untouched
+	@# and echo printed it LITERALLY, so forbidding "st-ok=$$?" fails deterministically
+	@# on the old behaviour. 127 is what do_run's child exits when execve fails, so
+	@# the failure value is asserted too, not just that expansion happened.
+	@grep -qaF "st-ok=0" build/shell_serial.log || { echo "[shell] FAIL: \$$? did not expand to 0 after a successful command (DDR-789)"; tail -30 build/shell_serial.log; exit 1; }
+	@grep -qaF "st-fail=127" build/shell_serial.log || { echo "[shell] FAIL: \$$? did not report 127 after a failed run (DDR-789)"; tail -30 build/shell_serial.log; exit 1; }
+	@if grep -qaF 'st-ok=$$?' build/shell_serial.log; then echo "[shell] FAIL: '\$$?' printed literally — no expansion (DDR-789)"; tail -30 build/shell_serial.log; exit 1; fi
 	@# DDR-787: >4 KiB must survive a pipe. /BIG8K.TXT is ~7.8 KiB (200 payload
 	@# lines); PIPE_SIZE is 4096, so the pre-DDR-787 non-blocking write truncated at
 	@# ~107 lines and silently dropped the rest. Requiring >=180 is far above that

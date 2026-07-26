@@ -1842,6 +1842,34 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**DDR-789 (PRISM exit status `$?` — Section B#12, sixth shell slice).** Queued
+behind SIGPIPE, and the tree check **reordered them**: (1) signal defaults are a
+whitelist, not a table — `signal_deliver` terminates on SIGKILL and on SIGTERM
+with no handler, and **ignores everything else**, so defining `SIGPIPE 13` and
+raising it would silently do nothing; and (2) SIGPIPE cannot be gated
+discriminatingly today, because PRISM has no `head`-like builtin that consumes
+part of its input and exits, and a stage's outcome is not observable at all — so
+"writer killed promptly" and "writer ran to completion into a dead pipe" look
+identical in the serial log. Exit status is what makes outcomes observable (a
+signal-killed thread exits `-1`), so it lands first and unblocks SIGPIPE.
+Ring-3 only: `sys_wait4` already copies out the **raw** exit code (explicitly not
+`W*`-encoded) and PRISM already collected it in `do_run` and DDR-786's stage loop
+and discarded it. Now kept in `last_status`, with a pipeline reporting its **last**
+stage. **The design changed under test:** the first draft expanded a token equal to
+exactly `$?`, which testing proved useless — the real idiom is `echo status=$?`,
+one token, so nothing expanded. Widened to a token *ending* in `$?` rather than
+contorting the gate; still not general expansion (no `$VAR`, no mid-token
+substitution). Two incidental fixes: `snprintf` is **not** in the musl subset (the
+same gap DDR-784 hit), so a bounded `fmt_long` replaces it rather than growing the
+subset for one integer; and DDR-786's stage loop read `wait4` into a `long` while
+the kernel copies out `sizeof(int)`, leaving the upper bytes uninitialised — now
+an `int`. Gate discriminates by construction: before this slice `echo st-ok=$?`
+printed the literal, so forbidding it fails deterministically, and the values are
+asserted too (`st-ok=0`, `st-fail=127` — 127 is what `do_run`'s child exits when
+`execve` fails). Local: all PASS with the DDR-786/787 regressions intact, zero
+panics. **S2** (fixed-length substitution inside existing `argv[16]`/`line[256]`
+bounds, no allocation) and **S6** (ring-3 only). **Gate count unchanged: 106.**
+
 **DDR-788 (retire the DDR-783 flake class — infrastructure).** DDR-783 raised one
 gate's window because its last sentinel landed at t=24.26 s under a 30 s default;
 the *condition* was left alive everywhere else because, pre-DDR-785, the timeout

@@ -98,6 +98,49 @@ static int readline(char *buf, int max) {
     }
 }
 
+/* DDR-789: exit status of the last reaped child, surfaced to the user as `$?`.
+ * do_run and the DDR-786 pipeline loop already collected this and discarded it. */
+static long last_status = 0;
+
+/* DDR-789: expand tokens that are EXACTLY "$?" to the decimal last status. This
+ * is deliberately not general variable expansion — no $VAR, no interpolation
+ * inside a larger token, no quoting. The rotating buffers let a line mention $?
+ * more than once; a token points at one until the next command overwrites it,
+ * which is safe because expansion happens once per line, before dispatch. */
+static void fmt_long(char *out, unsigned cap, long v) {
+    /* snprintf is NOT in the musl subset (the same gap DDR-784 hit with stderr),
+     * and one integer does not justify growing it. Bounded by cap (S2). */
+    char tmp[24];
+    unsigned n = 0;
+    int neg = v < 0;
+    unsigned long u = neg ? (unsigned long)(-(v + 1)) + 1UL : (unsigned long)v;
+    do { tmp[n++] = (char)('0' + (u % 10)); u /= 10; } while (u && n < sizeof tmp);
+    unsigned o = 0;
+    if (neg && o + 1 < cap) out[o++] = '-';
+    while (n > 0 && o + 1 < cap) out[o++] = tmp[--n];
+    out[o] = 0;
+}
+
+static void expand_status(char **argv, int argc) {
+    static char sbuf[4][64];
+    static int  slot = 0;
+    for (int i = 0; i < argc; i++) {
+        unsigned n = (unsigned)strlen(argv[i]);
+        /* A token ENDING in "$?" — so both `$?` alone and the usual idiom
+         * `status=$?` work. Still not general expansion: no $VAR, and nothing is
+         * substituted mid-token. Bounded copy into a fixed buffer (S2). */
+        if (n < 2 || argv[i][n - 2] != '$' || argv[i][n - 1] != '?')
+            continue;
+        char *out = sbuf[slot];
+        unsigned cap = (unsigned)sizeof sbuf[0], o = 0, pre = n - 2;
+        for (unsigned k = 0; k < pre && o + 1 < cap; k++)
+            out[o++] = argv[i][k];
+        fmt_long(out + o, cap - o, last_status);
+        argv[i] = out;
+        slot = (slot + 1) % 4;
+    }
+}
+
 /* Split s in place on runs of spaces; fills argv (up to maxv), returns argc. */
 static int tokenize(char *s, char **argv, int maxv) {
     int argc = 0;
@@ -151,6 +194,7 @@ static void do_run(const char *path) {
     }
     int st = 0;
     nsi(SYS_WAIT4, kid, (long)&st, 0);     /* block until the child finishes */
+    last_status = st;                      /* DDR-789: surfaced as `$?` */
 }
 
 int main(void) {
@@ -169,6 +213,7 @@ int main(void) {
         int argc = tokenize(line, argv, 16);
         if (argc == 0)
             continue;
+        expand_status(argv, argc);         /* DDR-789: `$?` -> last exit status */
         /* DDR-780: pipes `cmd1 | cmd2`. PRISM builtins are internal functions,
          * not execs, so the fork must wrap the builtin DISPATCH itself. Rather
          * than hoist the 120-line if/else chain into a function, each child sets
@@ -240,9 +285,16 @@ int main(void) {
                 }
                 if (!am_child) {
                     if (prev_read >= 0) nsi(SYS_CLOSE, prev_read, 0, 0);
-                    long st;
-                    for (int i = 0; i < forked; i++)
+                    /* int, not long: sys_wait4 copies out sizeof(int), so a long
+                     * would leave its upper bytes uninitialised (DDR-789). */
+                    int st = 0;
+                    for (int i = 0; i < forked; i++) {
                         nsi(SYS_WAIT4, pids[i], (long)&st, 0);
+                        /* DDR-789: a pipeline reports its LAST stage's status,
+                         * as a real shell does; pids[] is in stage order. */
+                        if (i == forked - 1)
+                            last_status = st;
+                    }
                     continue;                          /* parent runs no builtin */
                 }
             }

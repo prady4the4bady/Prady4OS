@@ -434,7 +434,29 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
   confirms both fixes individually: **step 2 checkout passed** after three musl
   outages, and **step 10 smoke-fs passed** after the measured timeout bump.
-- **LAST_COMPLETED_TASK (newest):** DDR-788 — retire the DDR-783 flake class now
+- **LAST_COMPLETED_TASK (newest):** DDR-789 — PRISM **exit status `$?`**
+  (Section B#12). **The tree check REORDERED the queue:** SIGPIPE was next, but
+  (1) signal defaults are a WHITELIST not a table (`signal_deliver` terminates on
+  SIGKILL, and on SIGTERM with no handler, and IGNORES everything else — so
+  defining SIGPIPE 13 and raising it would silently do NOTHING), and (2) SIGPIPE
+  cannot be gated discriminatingly today: PRISM has no `head`-like builtin and a
+  stage's outcome is unobservable, so "writer killed" vs "writer ran on into a
+  dead pipe" look identical. `$?` makes outcomes observable (a signal-killed
+  thread exits -1), so it lands first AND unblocks SIGPIPE.
+  Ring-3 only — `sys_wait4` already returns the raw exit code and PRISM already
+  collected it and threw it away. Pipeline reports its LAST stage.
+  **Design changed under test:** the draft expanded a token equal to exactly `$?`,
+  which testing showed useless (the idiom `echo status=$?` is ONE token), so it
+  widened to a token ENDING in `$?` — the gate was not contorted to fit the
+  design. Two incidental fixes: `snprintf` is NOT in the musl subset (same gap as
+  DDR-784's stderr) so a bounded `fmt_long` replaces it; and DDR-786's stage loop
+  read wait4 into a `long` while the kernel copies out `sizeof(int)` — upper bytes
+  were uninitialised, now `int`.
+  Local: st-ok=0, st-fail=127, no literal `$?`, DDR-786/787 regressions intact
+  (200/200 big pipe), zero panics/warnings.
+  **NEXT: SIGPIPE is now gate-able** — a killed stage exits -1, distinguishable
+  via `$?`. It still needs SIGPIPE added to the default-terminate list.
+- **(previous) LAST_COMPLETED_TASK:** DDR-788 — retire the DDR-783 flake class now
   that DDR-785's early exit makes margin FREE for eligible gates. Measured scope
   first and it was smaller than assumed: of 92 boot_test.sh invocations, 38
   declare FORBIDDEN_SENTINEL (untouched — for them the timeout IS the runtime, so
