@@ -417,6 +417,12 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   run 30170362044). Do NOT "fix" this by raising the gate's timeout. To validate
   shell changes locally, use the same FIFO flow but put the serial log on `/tmp`
   (ext4) — see the DDR-778 proof script pattern.
+- 🧪 **LOCAL-VALIDATION GOTCHA (cost a wasted check):** WSL's `/tmp` does **not**
+  persist between separate `wsl -d Ubuntu-24.04 bash -lc ...` invocations, so a
+  serial log written by one call is GONE in the next — post-hoc inspection is
+  impossible. Put the boot AND every assertion in ONE scratchpad script. Also note
+  an unexpanded `$VAR` inside nested `wsl -c` quoting makes `grep` error, and an
+  `||` fallback then prints a FALSE "PASS" — use literal paths and `if/else`.
 - **NEXT_TASK — continue B#12**: `|` between two commands. NOTE (already
   established, don't rediscover): PRISM builtins are INTERNAL FUNCTIONS, not
   execs, so piping needs a fork around the **builtin dispatch** itself. Then `<`,

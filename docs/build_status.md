@@ -1775,6 +1775,24 @@ was inconclusive rather than negative). DDR-779 records the verification recipe
 and alternatives. **Operational rule: check step 2 before diagnosing any CI
 failure.** Local builds and gates are unaffected.
 
+**DDR-780 (PRISM pipes `cmd1 | cmd2` — Section B#12, second slice):** ring-3 only,
+no kernel change (`SYS_PIPE = 17` / `SYS_DUP2 = 18` already ship, PROC-A). Because
+PRISM builtins are internal functions rather than execs, the fork must wrap the
+**dispatch itself** — but instead of hoisting the 120-line `if/else` chain into a
+function, each forked half sets up its fds and **falls through** to the existing
+dispatch, exiting at the bottom of the loop. Same semantics, far smaller blast
+radius. Parent closes **both** pipe ends (otherwise the reader never sees EOF and
+the shell wedges) and reaps both children — bounded at one pipe / two children
+(S2); a faulting builtin now kills only its child, not the shell (S6).
+**`cat` with no argument now reads stdin** — found while designing the gate that
+*no* PRISM builtin consumed fd 0, so a pipe would have been unobservable and
+useless. Gate: `smoke-shell` gains a **discriminating pair** — the marker must
+appear AND `pipe-marker-4k8 | cat` must never appear, since a shell ignoring `|`
+would hand `echo` the literal tokens and print them verbatim. (An earlier
+`ls / | cat` → `HELLO.TXT` assertion was rejected as non-discriminating: the FIFO
+already runs a plain `ls /`.) Verified locally — CI is blocked by DDR-779.
+**Gate count unchanged: 106.**
+
 **Canonical feature state:** see `docs/AETHER_MASTER_FEATURES.md` (Sections A–H).
 ADR-026 baseline (Section D #1–17) re-verified **built** this session — no drift.
 Section B#8 (`ls`/`ps`) corrected: it was stale, both already ship via

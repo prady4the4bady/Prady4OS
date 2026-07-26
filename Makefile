@@ -614,6 +614,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'touch /PRISMNEW.TXT\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; printf 'rm /PRISMNEW.TXT\n'; sleep 0.5; \
 	  printf 'uname\n'; sleep 0.5; printf 'date\n'; sleep 0.5; printf 'uptime\n'; sleep 0.5; printf 'dmesg\n'; sleep 0.5; printf 'free\n'; sleep 0.5; \
 	  printf 'echo redir-ok-7q2 > /REDIR.TXT\n'; sleep 0.5; printf 'cat /REDIR.TXT\n'; sleep 0.5; printf 'ls /\n'; sleep 0.5; \
+	  printf 'echo pipe-marker-4k8 | cat\n'; sleep 0.7; printf 'ls / | cat\n'; sleep 0.7; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -654,8 +655,16 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# up in `ls /` to prove it was actually created and written.
 	@grep -qE "(^|prism> )REDIR\.TXT$$" build/shell_serial.log || { echo "[shell] FAIL: redirect did not create the file (DDR-778)"; tail -30 build/shell_serial.log; exit 1; }
 	@grep -qF "redir-ok-7q2" build/shell_serial.log || { echo "[shell] FAIL: redirect content not read back (DDR-778)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-780: pipes. The marker must arrive THROUGH the pipe (echo -> cat's fd 0).
+	@# Discriminating: if `|` were ignored, tokenize would hand echo the literal
+	@# tokens and it would print "pipe-marker-4k8 | cat". So the marker must be
+	@# present AND must never appear with the trailing pipe tokens. (Asserting
+	@# HELLO.TXT from `ls / | cat` would NOT discriminate — the plain `ls /` earlier
+	@# in this same session already prints it.)
+	@grep -qF "pipe-marker-4k8" build/shell_serial.log || { echo "[shell] FAIL: pipe delivered no output (DDR-780)"; tail -30 build/shell_serial.log; exit 1; }
+	@if grep -qF "pipe-marker-4k8 | cat" build/shell_serial.log; then echo "[shell] FAIL: '|' not honoured — echo printed the pipe tokens (DDR-780)"; tail -30 build/shell_serial.log; exit 1; fi
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect, clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect + pipes, clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

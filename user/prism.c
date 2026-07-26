@@ -18,6 +18,7 @@
 #define SYS_EXECVE 14
 #define SYS_FORK   15
 #define SYS_WAIT4  16
+#define SYS_PIPE   17     /* DDR-780: PROC-A, (int fds[2]) -> 0 — pipes */
 #define SYS_DUP2   18     /* DDR-778: PROC-A, already in the kernel — output redirection */
 #define REDIR_SAVE_FD 9   /* DDR-778: parking slot for the real stdout (FD_MAX=64) */
 #define SYS_KILL   23     /* DDR-755: (pid, signum) -> 0 | -errno */
@@ -108,6 +109,18 @@ static int tokenize(char *s, char **argv, int maxv) {
     return argc;
 }
 
+/* DDR-780: `cat` with no argument copies stdin -> stdout, the standard shell
+ * behaviour. Without this nothing in PRISM consumes fd 0, so a pipe could not be
+ * demonstrated (or used) at all. Bounded per read (S2); a closed/empty stdin just
+ * yields EOF and returns. */
+static void do_cat_stdin(void) {
+    char b[256];
+    long r;
+    while ((r = nsi(SYS_READ, 0, (long)b, (long)sizeof b)) > 0)
+        fwrite(b, 1, (size_t)r, stdout);
+    fflush(stdout);
+}
+
 static void do_cat(const char *path) {
     long fd = nsi(SYS_OPEN, (long)path, 0 /*O_RDONLY*/, 0);
     if (fd < 0) {
@@ -152,6 +165,57 @@ int main(void) {
         int argc = tokenize(line, argv, 16);
         if (argc == 0)
             continue;
+        /* DDR-780: pipes `cmd1 | cmd2`. PRISM builtins are internal functions,
+         * not execs, so the fork must wrap the builtin DISPATCH itself. Rather
+         * than hoist the 120-line if/else chain into a function, each child sets
+         * up its fds here and FALLS THROUGH to the existing dispatch, then exits
+         * at the bottom of the loop (see `pipe_child`). Exactly one pipe and two
+         * children — bounded (S2); a fault in a builtin now kills only the child,
+         * not the shell (S6). */
+        int pipe_child = 0;
+        {
+            int bar = -1;
+            for (int i = 1; i < argc; i++)
+                if (!strcmp(argv[i], "|")) { bar = i; break; }
+            if (bar == 0 || (bar > 0 && bar + 1 >= argc)) {
+                printf("pipe: missing command\n"); fflush(stdout); continue;
+            }
+            if (bar > 0) {
+                int fds[2];
+                if (nsi(SYS_PIPE, (long)fds, 0, 0) != 0) {
+                    printf("pipe: unavailable\n"); fflush(stdout); continue;
+                }
+                long lpid = nsi(SYS_FORK, 0, 0, 0);
+                if (lpid == 0) {                       /* left: stdout -> pipe */
+                    nsi(SYS_DUP2, fds[1], 1, 0);
+                    nsi(SYS_CLOSE, fds[0], 0, 0);
+                    nsi(SYS_CLOSE, fds[1], 0, 0);
+                    argc = bar;                        /* run only the left command */
+                    pipe_child = 1;
+                } else {
+                    long rpid = nsi(SYS_FORK, 0, 0, 0);
+                    if (rpid == 0) {                   /* right: stdin <- pipe */
+                        nsi(SYS_DUP2, fds[0], 0, 0);
+                        nsi(SYS_CLOSE, fds[0], 0, 0);
+                        nsi(SYS_CLOSE, fds[1], 0, 0);
+                        int n = 0;                     /* shift the right command down */
+                        for (int i = bar + 1; i < argc; i++) argv[n++] = argv[i];
+                        argc = n;
+                        pipe_child = 1;
+                    } else {
+                        /* Parent: close BOTH ends or the reader never sees EOF
+                         * and the shell wedges. Then reap both children. */
+                        nsi(SYS_CLOSE, fds[0], 0, 0);
+                        nsi(SYS_CLOSE, fds[1], 0, 0);
+                        long st;
+                        nsi(SYS_WAIT4, lpid, (long)&st, 0);
+                        nsi(SYS_WAIT4, rpid, (long)&st, 0);
+                        continue;                      /* parent runs no builtin */
+                    }
+                }
+            }
+        }
+
         const char *cmd = argv[0];
 
         /* DDR-778: output redirection `cmd ... > file`. Scan from index 1 so a
@@ -210,7 +274,7 @@ int main(void) {
                 printf("%s%s", argv[i], i + 1 < argc ? " " : "");
             printf("\n");
         } else if (!strcmp(cmd, "cat")) {
-            if (argc < 2) printf("cat: usage: cat <path>\n");
+            if (argc < 2) do_cat_stdin();        /* DDR-780: `... | cat` */
             else do_cat(argv[1]);
         } else if (!strcmp(cmd, "run")) {
             if (argc < 2) printf("run: usage: run <path>\n");
@@ -318,5 +382,8 @@ int main(void) {
             nsi(SYS_DUP2, redir_save, 1, 0);
             nsi(SYS_CLOSE, redir_save, 0, 0);
         }
+        if (pipe_child)                  /* DDR-780: a pipe half never loops —
+                                          * output already flushed above. */
+            nsi(SYS_EXIT, 0, 0, 0);
     }
 }
