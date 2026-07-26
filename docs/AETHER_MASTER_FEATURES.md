@@ -10,7 +10,13 @@ capabilities.
 open and code is in flight) · `planned` (tracked, not started) · `proposed`
 (designed, prerequisites not yet answered).
 
-**Last verified against repo:** 2026-07-26, `main` @ `ebd708d` (DDR-785),
+**Last verified against repo:** 2026-07-26, `main` @ `a87d6ee` (DDR-786),
+113 steps green (CI run 30206856237, conclusion `success`) — promotes multi-stage
+pipelines `a|b|c`. **Open finding: DDR-787** records that the pipe read path
+returns premature EOF, so pipelines currently pass by scheduling luck; it is
+designed but NOT implemented.
+
+**(previous)** `main` @ `ebd708d` (DDR-785),
 113 steps green (CI run 30200918063, conclusion `success`) — promotes DDR-784
 (PRISM stderr + `2>`) and DDR-785 (`boot_test.sh` early exit), on top of DDR-782
 (kernel `O_TRUNC` + atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783.
