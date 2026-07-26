@@ -43,6 +43,11 @@ All entries below are **shipped**.
   fetched from a GitHub mirror per **ADR-033** — same pinned commit, upstream
   `git.musl-libc.org` remains canonical)
 - `pradyos-init` PID 1 + orphan reaper; PRISM shell w/ full-register fork (ADR-024)
+- PRISM redirection `>` `>>` `<` `2>` and pipes `|` (DDR-778/780/781/784), on kernel
+  `O_TRUNC`/atomic `O_APPEND` (DDR-782); diagnostics go to stderr
+- CI harness exits a boot gate as soon as its required sentinels appear
+  (**DDR-785**) — only where no `FORBIDDEN_SENTINEL` is declared, so no gate is
+  weakened; self-tested by `make smoke-selftest`
 - PRISM builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit
   — `ls` enumerates via `SYS_GETDENTS` (DDR-742) and `ps` via `SYS_GETPROCS` (DDR-743) (was mis-tracked as planned in Section B#8 until 2026-07-24)
 - Lazy per-thread FPU save/restore, user-only (DDR-740); copyin/copyout (EFAULT never panics)

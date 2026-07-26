@@ -97,6 +97,28 @@ if [ -n "${QEMU_NVME:-}" ]; then
              -device nvme,serial=PRADYOSNV,drive=nvm)
 fi
 
+# DDR-785: exit as soon as every REQUIRED pattern is in the log, instead of always
+# burning the whole window. Eligible ONLY when no forbidden patterns are declared:
+# a forbidden pattern must NOT appear, and stopping early would merely prove it had
+# not appeared YET — a gate that should FAIL could PASS. With only "must appear"
+# assertions in play, seeing them sooner cannot change the verdict, so this is
+# semantics-preserving by construction rather than by argument. Gates that declare
+# FORBIDDEN_SENTINEL keep today's full-window behaviour exactly.
+early_exit_eligible=0
+[ -z "$FORBIDDEN_SENTINEL" ] && early_exit_eligible=1
+
+# True once $SENTINEL and every non-empty EXTRA_SENTINEL line are in the log.
+all_required_present() {
+    grep -q "$SENTINEL" "$SERIAL_LOG" 2>/dev/null || return 1
+    while IFS= read -r pat; do
+        [ -z "$pat" ] && continue
+        grep -qF "$pat" "$SERIAL_LOG" 2>/dev/null || return 1
+    done <<EOF
+$EXTRA_SENTINEL
+EOF
+    return 0
+}
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine q35 \
     -drive if=none,format=raw,file="$IMG",id=disk0 \
@@ -111,7 +133,22 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${NVMEDEV[@]}" \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
-    || true
+    &
+qemu_pid=$!
+
+if [ "$early_exit_eligible" -eq 1 ]; then
+    # Poll the capture file while the guest runs. QEMU writes serial to a FILE,
+    # not a pipe, so there is no buffering to defeat. The `timeout` above remains
+    # the hard ceiling — this loop only ever stops things EARLIER.
+    while kill -0 "$qemu_pid" 2>/dev/null; do
+        if all_required_present; then
+            kill "$qemu_pid" 2>/dev/null
+            break
+        fi
+        sleep 0.25
+    done
+fi
+wait "$qemu_pid" 2>/dev/null || true
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"

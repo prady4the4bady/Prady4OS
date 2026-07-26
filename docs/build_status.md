@@ -1842,6 +1842,34 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**DDR-785 (`boot_test.sh` early exit — infrastructure; the DDR-783 systemic
+finding, now fixed).** The harness ran `timeout $TIMEOUT_S qemu …` to completion
+*every time* and only then grepped, so the timeout **was** the runtime. Measured
+across the Makefile: 91 `boot_test.sh` invocations totalling **7590 s = 126.5 min
+of pure waiting** per CI run; 53 of those gates declare no forbidden patterns and
+account for 4050 s, of which ~2566 s (**~43 min/run**) is idle at a conservative
+28 s real boot each. That design is also why gate timeouts must be hand-tuned and
+why DDR-783's flake existed at all. Fix: poll the serial capture file (QEMU writes
+a **file**, not a pipe, so there is nothing to defeat) and stop the guest once
+`$SENTINEL` and every `EXTRA_SENTINEL` line are present; the existing verification
+block is untouched, so PASS/FAIL output and log-deletion are identical. **The
+correctness hazard is excluded by construction, not mitigated:** early exit is
+enabled ONLY when `FORBIDDEN_SENTINEL` is empty, because a forbidden pattern must
+not appear and stopping early would prove only "not yet" — a gate that should FAIL
+could PASS. With solely must-appear assertions in play, seeing them sooner cannot
+change the verdict. The 38 gates declaring forbidden patterns keep today's
+behaviour exactly, deliberately leaving 3540 s of budget unclaimed in exchange for
+a guarantee rather than an argument. New host-only `make smoke-selftest`
+(`tools/qemu_runner/selftest.sh`, stub qemu, no kernel — also wired into CI before
+the harness is used to judge anything) asserts verdict **and timing**: early exit
+finished in 2 s against a 60 s window, a **late forbidden pattern still took the
+full window and FAILED** (the one way this could have silently weakened all 91
+gates), a missing required pattern still failed, and a declared-but-absent
+forbidden pattern still passed. End-to-end: `smoke-fs` 30 s (60 s window),
+`smoke-uaccess` 4 s (30 s window), both PASS. No kernel or user code; S1–S8
+untouched; the `timeout` ceiling is unchanged so a hung kernel still fails exactly
+as before. **Boot-gate count unchanged: 106.**
+
 **DDR-784 (PRISM diagnostics on stderr + `2>` — Section B#12, fourth shell
 slice):** the prerequisite check re-scoped this one too. PRISM had **zero**
 writers to fd 2 — every diagnostic went through `printf` → fd 1 — so `2>` alone

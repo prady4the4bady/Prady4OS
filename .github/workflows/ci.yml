@@ -26,6 +26,12 @@ jobs:
       - name: Toolchain check (clang + nasm + rust + lld)
         run: make toolchain-check
 
+      # DDR-785: self-test the boot harness before it is used to judge anything.
+      # Host-only (stub qemu, no kernel), a few seconds. Proves early exit fires
+      # when eligible AND cannot mask a late forbidden pattern.
+      - name: Boot-harness self-test (DDR-785 early exit)
+        run: make smoke-selftest
+
       - name: Build musl libc subset (PROC-D)
         run: make musl
 

@@ -434,7 +434,26 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
   confirms both fixes individually: **step 2 checkout passed** after three musl
   outages, and **step 10 smoke-fs passed** after the measured timeout bump.
-- **LAST_COMPLETED_TASK (newest):** DDR-784 — PRISM diagnostics on **stderr** +
+- **LAST_COMPLETED_TASK (newest):** DDR-785 — **`boot_test.sh` early exit**, the
+  DDR-783 systemic finding now fixed. The harness always burned the full
+  `TIMEOUT_S` then grepped, so the timeout WAS the runtime. Measured: 91
+  invocations = **7590 s (126.5 min) of pure waiting per CI run**; the 53 gates
+  with no forbidden patterns hold 4050 s of that, ~**43 min/run** of it idle.
+  Now: poll the serial capture FILE (QEMU writes a file, not a pipe) and stop the
+  guest once `$SENTINEL` + every `EXTRA_SENTINEL` is present; the verification
+  block is untouched so verdicts and log-deletion are identical.
+  **THE HAZARD IS EXCLUDED BY CONSTRUCTION, NOT MITIGATED:** early exit runs ONLY
+  when `FORBIDDEN_SENTINEL` is empty — a forbidden pattern must NOT appear, and
+  stopping early would prove only "not yet", so a gate that should FAIL could
+  PASS. The 38 forbidden-declaring gates keep today's behaviour byte for byte
+  (3540 s left unclaimed on purpose — a guarantee beats an argument). A settle
+  window was REJECTED as a heuristic that cannot rule the false-negative out.
+  New host-only `make smoke-selftest` (stub qemu, no kernel; wired into CI BEFORE
+  the harness judges anything) asserts verdict AND timing — early exit 2 s vs a
+  60 s window; **late forbidden pattern still took the full window and FAILED**;
+  missing required still failed; declared-but-absent forbidden still passed.
+  End-to-end: smoke-fs 30 s (60 s window), smoke-uaccess 4 s (30 s window).
+- **(previous) LAST_COMPLETED_TASK:** DDR-784 — PRISM diagnostics on **stderr** +
   **`2>`** (Section B#12, fourth shell slice). **The prerequisite check re-scoped
   it again:** PRISM had ZERO writers to fd 2 (everything went `printf` → fd 1), so
   `2>` alone would have been untestable sugar. Two halves: route genuine errors to
