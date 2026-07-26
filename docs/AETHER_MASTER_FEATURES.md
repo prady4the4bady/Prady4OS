@@ -37,7 +37,9 @@ All entries below are **shipped**.
 - NVMe controller + block I/O (DDR-765/766); NVMe PRP2/PRP-list (DDR-772); `VBLK_MAX` 4→8 (DDR-771)
 
 ### Userspace / Syscalls / Shell
-- Static ELF64 loader + per-process W^X AS (ADR-021); musl libc v1.2.5 (ADR-023)
+- Static ELF64 loader + per-process W^X AS (ADR-021); musl libc v1.2.5 (ADR-023;
+  fetched from a GitHub mirror per **ADR-033** — same pinned commit, upstream
+  `git.musl-libc.org` remains canonical)
 - `pradyos-init` PID 1 + orphan reaper; PRISM shell w/ full-register fork (ADR-024)
 - PRISM builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit
   — `ls` enumerates via `SYS_GETDENTS` (DDR-742) and `ps` via `SYS_GETPROCS` (DDR-743) (was mis-tracked as planned in Section B#8 until 2026-07-24)

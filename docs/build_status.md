@@ -1842,7 +1842,28 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
-**CI unblocked:** `git.musl-libc.org` is reachable again (DDR-779), so the
+**ADR-033 / DDR-779 IMPLEMENTED (2026-07-26) — musl submodule now fetches from a
+GitHub mirror.** After a **third** checkout outage (run 30188805082, `a077ccd`,
+DDR-782 — identical `Failed to connect ... port 443 after 134654 ms` / `Failed to
+clone 'third_party/musl' a second time, aborting`, only 3 of 113 steps run), the
+maintainer signed off on the mirror change. `.gitmodules` now points
+`third_party/musl` at `https://github.com/ifduyue/musl`; **the pinned commit is
+byte-identical** (`0784374d561435f7c787a555aeab8ede699ed298`) and the diff is a
+single URL line. The principle, recorded in ADR-033: a submodule records an exact
+SHA and git verifies content against it, so a mirror **cannot** serve different
+source under that SHA — the host is chosen for availability only and is
+substitutable in one line. Verification (the pre-condition DDR-779 blocked on) is
+complete and corrected the proposal twice: **the mirror DDR-779 named,
+`bminor/musl`, does not exist** (404), and content identity was instead confirmed
+by SHA **and tree** across three independent mirrors (`ifduyue/musl`,
+`tianon/mirror-musl`, `kraj/musl` — all tree
+`2deb5f7c62d8c9e9733c9ed77d9210b708bbb69e`, equal to the tree of the local
+submodule fetched from **upstream**), while `EOSIO/musl` and `AssemblyScript/musl`
+lack the commit and were rejected. Upstream `git.musl-libc.org` remains canonical
+for provenance and for any future version bump. No kernel code, no capability, no
+syscall, no on-disk change — S1–S8 untouched. **Gate count unchanged: 106.**
+
+**(historical) CI unblocked:** `git.musl-libc.org` was reachable again (DDR-779), so the
 backlog — DDR-778 `>`, the DDR-779 finding, DDR-780 `|`, and this slice — can
 finally be CI-validated.
 

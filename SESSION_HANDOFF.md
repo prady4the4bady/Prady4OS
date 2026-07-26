@@ -429,6 +429,22 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `|`, plus DDR-781) can finally be CI-validated — promote `main` to the first
   green sha covering them. DDR-779's mirror proposal still needs sign-off; do NOT
   apply it autonomously.
+- ✅ **DDR-779 / ADR-033 IMPLEMENTED (2026-07-26) — musl mirror, maintainer
+  signed off.** The hard stop is cleared. `.gitmodules` now fetches
+  `third_party/musl` from `https://github.com/ifduyue/musl`; **the pinned commit
+  is byte-identical** and the diff is one URL line. Forced by a **third** outage:
+  run **30188805082** (`a077ccd`, DDR-782) died at step 2 `actions/checkout@v5`
+  with the identical signature, 3 of 113 steps run — NOT a DDR-782 regression.
+  **Two corrections found during verification:** (1) the mirror DDR-779 named,
+  `bminor/musl`, **does not exist** (404 — applying the proposal verbatim would
+  have broken CI differently); (2) content identity is confirmed by SHA **and
+  tree** across three independent mirrors (`ifduyue`, `tianon`, `kraj` — all tree
+  `2deb5f7c62d8c9e9733c9ed77d9210b708bbb69e`, equal to the local submodule fetched
+  from **upstream**); `EOSIO/musl` and `AssemblyScript/musl` lack the commit and
+  were rejected. Principle: the SHA is the contract, the host is availability
+  only and swappable in one line. Upstream stays canonical for version bumps.
+  **Residual risk:** a third-party mirror could be deleted — that fails loudly,
+  not silently. **The proof this worked is a run getting PAST step 2.**
 - ✅ **PROMOTED (2026-07-26): `main` fast-forwarded to `721807f`** on CI run
   **30184411583** (conclusion `success`, 112/112 steps, zero failures). That run
   promotes the whole backlog — `21e4a51` (DDR-778 `>`), `d8d78e4` (DDR-779

@@ -1,7 +1,30 @@
 # DDR-779 — CI is blocked by third-party fetch outages (musl submodule)
 
-**Status:** **finding + proposal — NOT implemented. Needs maintainer sign-off**
-(supply-chain change; see "Why this was not done autonomously").
+**Status:** **IMPLEMENTED 2026-07-26 — maintainer sign-off obtained**, governed by
+**ADR-033** (which supersedes ADR-023's fetch-source clause; ADR-023's version pin
+is unchanged). The submodule now fetches from `https://github.com/ifduyue/musl`.
+
+**Two corrections to the proposal below, both found during verification:**
+
+1. **The mirror this DDR named, `bminor/musl`, DOES NOT EXIST** (HTTP 404 while a
+   control repo resolves normally). Applying the proposal verbatim would have
+   broken CI a different way.
+2. **The verification is now complete and it passed** — see ADR-033. The pinned
+   commit `0784374d…` resolves on `ifduyue/musl`, `tianon/mirror-musl` and
+   `kraj/musl`, all three with tree `2deb5f7c62d8c9e9733c9ed77d9210b708bbb69e`,
+   which equals the tree of the local submodule **fetched from upstream**.
+   `EOSIO/musl` and `AssemblyScript/musl` lack the commit and were rejected.
+
+**Third occurrence, which forced the issue:** run **30188805082** (`a077ccd`,
+DDR-782) failed at step 2 with the byte-identical signature, blocking CI
+validation of already-complete work. 3 of 113 steps ran.
+
+---
+
+## Original finding and proposal (retained as written, for the record)
+
+**Status at the time:** finding + proposal — NOT implemented. Needs maintainer
+sign-off (supply-chain change; see "Why this was not done autonomously").
 **Master-doc reference:** infrastructure, supporting all of Section B delivery.
 
 ## Problem — CI is currently blocked, and this is the second outage this session
