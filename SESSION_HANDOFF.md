@@ -434,7 +434,22 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
   confirms both fixes individually: **step 2 checkout passed** after three musl
   outages, and **step 10 smoke-fs passed** after the measured timeout bump.
-- **LAST_COMPLETED_TASK (newest):** DDR-787 — **blocking pipe semantics**
+- **LAST_COMPLETED_TASK (newest):** DDR-788 — retire the DDR-783 flake class now
+  that DDR-785's early exit makes margin FREE for eligible gates. Measured scope
+  first and it was smaller than assumed: of 92 boot_test.sh invocations, 38
+  declare FORBIDDEN_SENTINEL (untouched — for them the timeout IS the runtime, so
+  raising them would add ~57 min to every green run), 43 already had an explicit
+  TIMEOUT_S, leaving **11** on the default.
+  **A first-draft claim was corrected by measurement:** I asserted two gates were
+  at risk; only **`smoke-fs-sfs-rw`** actually is (30 s against a 30 s window — it
+  asserts the journal/version-isolation/compress chain DDR-783 timed at
+  24.09–24.26 s). `smoke-fs-rw` measured **5 s** and was never at risk.
+  Seven gates raised to TIMEOUT_S=120; three left alone on purpose (`smoke` ×2
+  asserts only NEXUS KERNEL OK at t=0.31 s; `smoke-mkfs-sfs` is host-side).
+  "Free on success" was CHECKED, not assumed: 4/3/4/5/30/34 s, all PASS under the
+  120 s ceiling and all against the DDR-787 kernel. Cost on failure is real and
+  stated: a failing eligible gate now burns 120 s instead of 30 s.
+- **(previous) LAST_COMPLETED_TASK:** DDR-787 — **blocking pipe semantics**
   (kernel). Fixes a LATENT CORRECTNESS BUG in shipped DDR-780/786 behaviour: the
   `FD_PIPE` read path returned 0 whenever the ring was momentarily empty and every
   reader treats 0 as EOF, so `a | b` was TIMING-DEPENDENT — `b` printed nothing if

@@ -56,7 +56,9 @@ All entries below are **shipped**.
   `O_TRUNC`/atomic `O_APPEND` (DDR-782); diagnostics go to stderr
 - CI harness exits a boot gate as soon as its required sentinels appear
   (**DDR-785**) — only where no `FORBIDDEN_SENTINEL` is declared, so no gate is
-  weakened; self-tested by `make smoke-selftest`
+  weakened; self-tested by `make smoke-selftest`. **DDR-788** then raised the
+  eligible gates' windows to 120 s, which early exit makes free on success,
+  retiring the DDR-783 timeout-margin flake class
 - PRISM builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit
   — `ls` enumerates via `SYS_GETDENTS` (DDR-742) and `ps` via `SYS_GETPROCS` (DDR-743) (was mis-tracked as planned in Section B#8 until 2026-07-24)
 - Lazy per-thread FPU save/restore, user-only (DDR-740); copyin/copyout (EFAULT never panics)

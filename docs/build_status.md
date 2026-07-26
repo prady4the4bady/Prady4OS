@@ -1842,6 +1842,29 @@ unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
 (fault isolation: errors return an errno; the offset override touches only the
 calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
 
+**DDR-788 (retire the DDR-783 flake class — infrastructure).** DDR-783 raised one
+gate's window because its last sentinel landed at t=24.26 s under a 30 s default;
+the *condition* was left alive everywhere else because, pre-DDR-785, the timeout
+**was** the runtime and margin cost real wall-clock. DDR-785 made margin free for
+early-exit-eligible gates, so this retires the class. Measured scope first, and it
+was smaller than assumed: of 92 `boot_test.sh` invocations, 38 declare
+`FORBIDDEN_SENTINEL` (timeout still is the runtime — untouched, raising them would
+add ~57 min to every green run), 43 already carry an explicit `TIMEOUT_S`, leaving
+**11** on the default. **A first-draft claim that two gates were at risk was
+corrected by measurement to one:** `smoke-fs-sfs-rw` takes **30 s** against a 30 s
+window (it asserts the same journal/version-isolation/compress chain DDR-783 timed
+at 24.09–24.26 s) — essentially zero margin; `smoke-fs-rw` turned out to be **5 s**
+and was never at risk. Seven gates raised to `TIMEOUT_S=120`; three deliberately
+left alone (`smoke` ×2 asserts only `NEXUS KERNEL OK` at t=0.31 s, and
+`smoke-mkfs-sfs` is a host-side tool gate). **Cost on success is zero** and that
+claim was checked rather than asserted — smoke-uaccess 4 s, smoke-cowfork 3 s,
+smoke-mitigations 4 s, smoke-fs-rw 5 s, smoke-fs-sfs-rw 30 s, smoke-fs-ext4 34 s,
+all PASS under the 120 s ceiling and all against the DDR-787 kernel. Cost on
+failure is real and stated: a genuinely failing eligible gate now burns 120 s
+instead of 30 s. No kernel or user code; S1–S8 untouched (`timeout` still bounds
+every gate, so a hung kernel still fails — only the deadline moves). **Gate count
+unchanged: 106.**
+
 **DDR-787 (blocking pipe semantics — kernel; Section B#12).** The prerequisite
 check for the queued ">4 KiB truncation" slice found the **larger** half first:
 the `FD_PIPE` read path returned 0 whenever the ring was momentarily empty, and

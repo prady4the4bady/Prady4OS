@@ -492,7 +492,7 @@ smoke-fs: $(IMG) fat-image sfs-image
 # the modified disk image back to build/fat.img, so the host sees the kernel's
 # changes. Needs dosfstools (fsck.fat) + mtools (mdir/mtype).
 smoke-fs-rw: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf 'kernel wrote this\ncreated+deleted /TMP.TXT OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'kernel wrote this\ncreated+deleted /TMP.TXT OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[fs-rw] host fsck.fat (consistency after kernel writes):"
 	fsck.fat -n -v $(FAT_IMG) | tail -n 20
@@ -506,7 +506,7 @@ smoke-fs-rw: $(IMG) fat-image sfs-image
 # B+tree (create/lookup), and does a 64 KiB extent write -> read-back -> grow.
 # Asserts the SFS-specific self-test lines (create/lookup + byte-exact + grow).
 smoke-fs-sfs-rw: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # SFS hierarchical-directory gate (DDR-738): the kernel builds /etc/aether/config
@@ -528,7 +528,7 @@ smoke-sfs-unlink: $(IMG) fat-image sfs-image
 # ext4 read-only gate: a host-built ext4 disk with /EXT4.TXT; the kernel mounts
 # it (4th disk) and reads the file back. Asserts the ext4 self-test line.
 smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image
-	EXTRA_SENTINEL='ext4 read works' \
+	TIMEOUT_S=120 EXTRA_SENTINEL='ext4 read works' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Per-process root-mount gate (DDR-739): with the ext4 disk attached, a ring-3
@@ -747,7 +747,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 # wild pointer (-> EFAULT), a read-only page write (-> EFAULT, W^X), and a valid
 # string. All four lines must appear AND the kernel must survive the two faults.
 smoke-uaccess: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-757 kernel-self W^X gate: after vmm_protect_kernel re-stamps the kernel
@@ -828,7 +828,7 @@ smoke-syswait: $(IMG) fat-image sfs-image
 # IBPB state at boot. On QEMU TCG the values are 0 (no spec-ctrl advertised) — the
 # gate only asserts the line is present (the probe ran without faulting).
 smoke-mitigations: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL='[cpu] mitigations:' \
+	TIMEOUT_S=120 EXTRA_SENTINEL='[cpu] mitigations:' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # IMP-B poison gate: with KASAN=1 (the default) the kernel poisons freed PMM
@@ -836,7 +836,7 @@ smoke-mitigations: $(IMG) fat-image sfs-image
 # banner; because KASAN is the default, every other gate is implicitly a poison /
 # canary regression test too (a smashed canary -> KHEAP PANIC -> missing sentinel).
 smoke-pmm-poison: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL='[pmm] poison enabled' \
+	TIMEOUT_S=120 EXTRA_SENTINEL='[pmm] poison enabled' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # IMP-C vDSO gate: the ring-3 systest reads wall_time_ns from the read-only vDSO
@@ -851,7 +851,7 @@ smoke-vdso: $(IMG) fat-image sfs-image
 # copy-on-write isolation). The ring-3 #PF COW path is additionally covered by
 # smoke-sysfork/smoke-syswait (the parent writes its stack after fork).
 smoke-cowfork: $(IMG) fat-image sfs-image
-	EXTRA_SENTINEL='[vmm] COW fork copy-on-write OK' \
+	TIMEOUT_S=120 EXTRA_SENTINEL='[vmm] COW fork copy-on-write OK' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # NET-A virtio-net gate: boot_test.sh already attaches a virtio-net-pci device.
