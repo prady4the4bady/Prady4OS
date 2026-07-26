@@ -20,8 +20,6 @@
 #define SYS_WAIT4  16
 #define SYS_PIPE   17     /* DDR-780: PROC-A, (int fds[2]) -> 0 — pipes */
 #define SYS_DUP2   18     /* DDR-778: PROC-A, already in the kernel — output redirection */
-#define SYS_LSEEK  10     /* DDR-781: (fd, off, whence) — SEEK_END emulates append */
-#define SEEK_END   2
 #define REDIR_SAVE_FD 9   /* DDR-778: parking slot for the real stdout (FD_MAX=64) */
 #define REDIR_SAVE_IN 10  /* DDR-781: parking slot for the real stdin */
 #define SYS_KILL   23     /* DDR-755: (pid, signum) -> 0 | -errno */
@@ -31,6 +29,8 @@
 #define SYS_UNLINK   68     /* DDR-744: (path) -> 0 | -errno */
 #define O_WRONLY     0x1    /* DDR-745: touch open mode */
 #define O_CREAT      0x40
+#define O_TRUNC      0x200  /* DDR-782: kernel sys_file.h values (Linux octal 01000) */
+#define O_APPEND     0x400  /* DDR-782: atomic append, honoured by the FD_VFS write path */
 #define SYS_SYSINFO  71     /* DDR-748: (struct sysinfo*) -> 0 | -EFAULT */
 #define SYS_TIME     72     /* DDR-749: (struct rtc_time*) -> 0 | -EFAULT */
 #define SYS_DMESG    73     /* DDR-750: (buf, max) -> bytes | -EFAULT */
@@ -261,7 +261,10 @@ int main(void) {
             redir_save_in = REDIR_SAVE_IN;
         }
         if (redir) {
-            long rfd = nsi(SYS_OPEN, (long)redir, O_CREAT | O_WRONLY, 0);
+            /* DDR-782: the kernel now honours O_TRUNC and O_APPEND, so `>` really
+             * replaces the file and `>>` appends atomically per write(). */
+            long oflags = O_CREAT | O_WRONLY | (redir_append ? O_APPEND : O_TRUNC);
+            long rfd = nsi(SYS_OPEN, (long)redir, oflags, 0);
             if (rfd < 0) {
                 printf("redirect: cannot open %s\n", redir);
                 fflush(stdout);
@@ -271,10 +274,6 @@ int main(void) {
                 }
                 continue;                /* still before the stdout swap — safe */
             }
-            /* DDR-781: no kernel O_APPEND exists, so append = seek to EOF once.
-             * Sufficient here (one writer per command); NOT atomic O_APPEND. */
-            if (redir_append)
-                nsi(SYS_LSEEK, rfd, 0, SEEK_END);
             fflush(stdout);              /* don't spill buffered console text into the file */
             nsi(SYS_DUP2, 1, REDIR_SAVE_FD, 0);   /* stash the real stdout */
             nsi(SYS_DUP2, rfd, 1, 0);

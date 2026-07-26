@@ -617,6 +617,8 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'echo pipe-marker-4k8 | cat\n'; sleep 0.7; printf 'ls / | cat\n'; sleep 0.7; \
 	  printf 'echo aaa-8w1 > /APP.TXT\n'; sleep 0.5; printf 'echo bbb-8w1 >> /APP.TXT\n'; sleep 0.5; printf 'cat /APP.TXT\n'; sleep 0.5; \
 	  printf 'echo in-marker-8w1 > /IN.TXT\n'; sleep 0.5; printf 'cat < /IN.TXT\n'; sleep 0.5; \
+	  printf 'echo longrec-9x3-aaaaaaaaaaaaaaaaaa-TAIL9x3 > /TR.TXT\n'; sleep 0.5; \
+	  printf 'echo short-9x3 > /TR.TXT\n'; sleep 0.5; printf 'cat /TR.TXT\n'; sleep 0.5; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -665,10 +667,10 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# in this same session already prints it.)
 	@grep -qF "pipe-marker-4k8" build/shell_serial.log || { echo "[shell] FAIL: pipe delivered no output (DDR-780)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qF "pipe-marker-4k8 | cat" build/shell_serial.log; then echo "[shell] FAIL: '|' not honoured — echo printed the pipe tokens (DDR-780)"; tail -30 build/shell_serial.log; exit 1; fi
-	@# DDR-781: append `>>` must PRESERVE the earlier record. Discriminating because
-	@# there is no kernel O_TRUNC: if `>>` silently behaved like `>`, the second
-	@# write would start at offset 0 and overwrite the first (same length), so
-	@# aaa-8w1 would be gone. Requiring BOTH is what proves the seek-to-EOF.
+	@# DDR-781/782: append `>>` must PRESERVE the earlier record. Discriminating: if
+	@# `>>` silently behaved like `>`, the second write would replace the file (since
+	@# DDR-782, `>` truncates) and aaa-8w1 would be gone. Requiring BOTH records is
+	@# what proves O_APPEND positions at end-of-file.
 	@grep -qF "aaa-8w1" build/shell_serial.log || { echo "[shell] FAIL: '>>' overwrote instead of appending (DDR-781)"; tail -30 build/shell_serial.log; exit 1; }
 	@grep -qF "bbb-8w1" build/shell_serial.log || { echo "[shell] FAIL: '>>' second record missing (DDR-781)"; tail -30 build/shell_serial.log; exit 1; }
 	@# DDR-781: input redirection. If `<` were ignored, cat would take "<" as its
@@ -676,8 +678,16 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# marker that can only arrive through fd 0.
 	@grep -qF "in-marker-8w1" build/shell_serial.log || { echo "[shell] FAIL: '<' delivered no stdin (DDR-781)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qF "cat: cannot open <" build/shell_serial.log; then echo "[shell] FAIL: '<' not honoured — cat got '<' as a path (DDR-781)"; tail -30 build/shell_serial.log; exit 1; fi
+	@# DDR-782: `>` must TRUNCATE. /TR.TXT is written long, then short; `cat` must
+	@# show the short record and NOT the long record's tail. Discriminating by
+	@# construction: without kernel O_TRUNC the short write lands at offset 0 and
+	@# leaves "...-TAIL9x3" behind, which is exactly the pre-DDR-782 behaviour, so
+	@# this assertion FAILS before the fix and passes after. TAIL9x3 reaches the log
+	@# only via `cat` — the long line went to the file, never to the console.
+	@grep -qF "short-9x3" build/shell_serial.log || { echo "[shell] FAIL: truncating write not read back (DDR-782)"; tail -30 build/shell_serial.log; exit 1; }
+	@if grep -qF "TAIL9x3" build/shell_serial.log; then echo "[shell] FAIL: '>' did not truncate — stale tail survived (DDR-782)"; tail -30 build/shell_serial.log; exit 1; fi
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> <) + pipes, clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> <) + truncate/append + pipes, clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

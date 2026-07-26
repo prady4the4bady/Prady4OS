@@ -429,7 +429,31 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   `|`, plus DDR-781) can finally be CI-validated — promote `main` to the first
   green sha covering them. DDR-779's mirror proposal still needs sign-off; do NOT
   apply it autonomously.
-- **LAST_COMPLETED_TASK (newest):** DDR-781 PRISM `<` and `>>` (Section B#12,
+- ✅ **PROMOTED (2026-07-26): `main` fast-forwarded to `721807f`** on CI run
+  **30184411583** (conclusion `success`, 112/112 steps, zero failures). That run
+  promotes the whole backlog — `21e4a51` (DDR-778 `>`), `d8d78e4` (DDR-779
+  finding), `6561a74` (DDR-780 `|`), `721807f` (DDR-781 `>>`/`<`) — and CI-validates
+  all four PRISM shell assertion sets, retiring the risk that the gate's tighter
+  FIFO pacing (0.5–0.7 s vs the 1–2 s used locally) would drop markers.
+- **LAST_COMPLETED_TASK (newest):** DDR-782 kernel `O_TRUNC` + atomic `O_APPEND`
+  (Section B#12, kernel-side remainder) — closes the two REAL defects DDR-781
+  recorded. **The prerequisite check re-scoped it:** `struct vfs_fs_ops` has **NO
+  truncate op** and no FS driver (FAT32/SFS/ext4) can shorten a file, so a literal
+  `ftruncate` would be a new VFS op implemented three times — reported instead of
+  invented. `O_TRUNC` = `vfs_unlink` + `vfs_create` on an existing file
+  (truncation-to-zero, all `>` needs; honest limitation: fresh inode/cookie,
+  non-zero `ftruncate` still impossible). `O_APPEND` = fd-layer only, `e->off =
+  e->file->size` once per `write()` call in `sys_io.c` before the chunk loop —
+  that IS the atomicity property. Flags live in `sys_file.h` (Linux values
+  `O_TRUNC 0x200`, `O_APPEND 0x400`) since two TUs honour them. No new syscall, no
+  new VFS op, no on-disk change, **no capability change** (CAP_FS_WRITE already
+  gates create/unlink/write). PRISM's `>`/`>>` use the flags and the
+  `SYS_LSEEK`/`SEEK_END` defines are removed (no dead refs). New `smoke-shell`
+  check is discriminating BY CONSTRUCTION — long write then short write, and the
+  long record's `TAIL9x3` tail must be ABSENT (it survives under the old
+  behaviour). Local: truncate, append, pipe and `<` all PASS, zero panics.
+  S2 + S6 apply; no invariant weakened.
+- **(previous) LAST_COMPLETED_TASK:** DDR-781 PRISM `<` and `>>` (Section B#12,
   third slice) — ring-3 only. **The prerequisite check changed the mechanism:**
   the kernel has **NO `O_APPEND`** (`sys_file.c` honours only `O_CREAT`), so the
   planned open-flag does not exist; `SYS_LSEEK = 10` DOES support `SEEK_END`, so

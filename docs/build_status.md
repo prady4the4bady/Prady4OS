@@ -1808,6 +1808,40 @@ discriminating: `>>` requires **both** records to survive (had it behaved like
 consequence of the missing `O_TRUNC`), and `<` requires the marker **and** forbids
 `cat: cannot open <`. **Gate count unchanged: 106.**
 
+**DDR-782 (kernel `O_TRUNC` + atomic `O_APPEND` — Section B#12, kernel-side
+remainder):** closes the two gaps DDR-781 recorded as real defects in shipped
+behaviour — `>` did not truncate (a shorter rewrite left the old tail in place)
+and `>>` was a one-shot `lseek(SEEK_END)`, not atomic. The prerequisite check
+**re-scoped the slice**: `struct vfs_fs_ops` (vfs.h) exposes no `truncate` op and
+none of FAT32/SFS/ext4 can shorten a file, so a real `ftruncate` would be a new
+VFS op implemented three times in three on-disk formats. Rather than invent one
+silently, `O_TRUNC` is implemented as `vfs_unlink` + `vfs_create` on an
+already-existing file — truncation-to-zero, which is exactly what a shell `>`
+needs, working identically on all three drivers. Honest limitation: the file is
+re-created rather than shortened, so it gets a fresh inode/cookie (nothing
+observable depends on inode identity today — no hard links); non-zero
+`ftruncate(len)` remains impossible and is a stated non-goal. `O_APPEND` needs no
+FS support at all: the FD_VFS write path in `sys_io.c` sets
+`e->off = e->file->size` once per `write()` call, before the chunk loop — that is
+the POSIX atomicity property (the whole call lands at end-of-file as one act),
+and it is what an lseek-at-open append cannot give when writers share a file.
+Flag values are Linux's (`O_TRUNC 0x200`, `O_APPEND 0x400`), defined once in
+`sys_file.h` because two translation units honour them. No new syscall (NSI stays
+at 75), no `fd_entry` field (`flags` was already stored), no on-disk change, and
+**no capability change** — CAP_FS_WRITE already gates `vfs_create`/`vfs_unlink`/
+`vfs_write`, so a read-only opener cannot truncate. `user/prism.c` now passes
+`O_TRUNC` for `>` and `O_APPEND` for `>>`, dropping the `SYS_LSEEK`/`SEEK_END`
+crutch (both defines removed — no dead refs). `smoke-shell` gains a
+**discriminating-by-construction** truncate check: `/TR.TXT` is written long then
+short and `cat` must show the short record while the long record's `TAIL9x3`
+suffix must be **absent** — that suffix survives under the pre-DDR-782 behaviour,
+so the assertion fails before the fix and passes after. Verified locally: both
+truncate checks, the append pair, and the DDR-780/781 pipe and `<` regressions
+all PASS with zero panics. **S2** (bounded: O(1) additions, no new loop, a failed
+unlink/create aborts cleanly rather than leaving a half-open fd) and **S6**
+(fault isolation: errors return an errno; the offset override touches only the
+calling process's fd table). No invariant weakened. **Gate count unchanged: 106.**
+
 **CI unblocked:** `git.musl-libc.org` is reachable again (DDR-779), so the
 backlog — DDR-778 `>`, the DDR-779 finding, DDR-780 `|`, and this slice — can
 finally be CI-validated.

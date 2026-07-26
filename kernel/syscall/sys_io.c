@@ -6,6 +6,7 @@
  * sys_read is a stub until the VFS read path lands in slice 4.
  */
 #include "sys_io.h"
+#include "sys_file.h"            /* DDR-782: O_APPEND (open flags, shared) */
 #include "syscall.h"
 #include "sched.h"
 #include "fd.h"
@@ -63,6 +64,12 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
      * fewer vfs_write iterations, and each SFS extent now holds a full block so a
      * ring-3 SFS file reaches 4 extents * 4 KiB = 16 KiB instead of ~1 KiB. */
     if (e->kind == FD_VFS && e->file) {
+        /* DDR-782: O_APPEND. Re-position at end-of-file once per write() call,
+         * before the chunk loop — that is the POSIX atomicity property (the whole
+         * call lands at the end as one act), and it is what an lseek-at-open
+         * append cannot give when writers share a file. */
+        if (e->flags & O_APPEND)
+            e->off = e->file->size;
         uint64_t kp = pmm_alloc_page();
         if (!kp)
             return -ENOMEM;

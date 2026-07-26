@@ -21,7 +21,6 @@
 #include "string.h"
 
 #define PATH_MAX 256
-#define O_CREAT  0x40                         /* DDR-744: Linux value (octal 0100) */
 
 static long sys_open(long upath, long flags, long mode, long a4) {
     (void)mode; (void)a4;
@@ -43,12 +42,26 @@ static long sys_open(long upath, long flags, long mode, long a4) {
 
     /* DDR-744: create-if-absent. Try the plain open first; only on failure with
      * O_CREAT set do we create (needs CAP_FS_WRITE, which vfs_create enforces). */
-    if (vfs_open(t->fs_cap, t->root_mnt, path, f) != 0 &&
+    int existed = (vfs_open(t->fs_cap, t->root_mnt, path, f) == 0);
+    if (!existed &&
         (!(flags & O_CREAT) ||
          vfs_create(t->fs_cap, t->root_mnt, path, f) != 0)) {
         kfree(f);                             /* fd_alloc doesn't claim the slot
                                                * until e->kind is set below */
         return -ENOENT;
+    }
+
+    /* DDR-782: O_TRUNC. vfs_fs_ops has no truncate op — no FS driver can shorten
+     * a file — so truncation-to-zero is unlink + create, the only primitives that
+     * exist, and exactly what a shell '>' needs. A freshly created file is already
+     * empty, so only an existing one is re-created. CAP_FS_WRITE is enforced by
+     * vfs_unlink/vfs_create, so a read-only opener cannot truncate. */
+    if (existed && (flags & O_TRUNC)) {
+        if (vfs_unlink(t->fs_cap, t->root_mnt, path) != 0 ||
+            vfs_create(t->fs_cap, t->root_mnt, path, f) != 0) {
+            kfree(f);
+            return -EIO;
+        }
     }
 
     struct fd_entry *e = &t->fdt.e[fd];
