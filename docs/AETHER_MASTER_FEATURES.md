@@ -124,7 +124,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | C-03 emergent tool composition | `aether/agents/tool_composer/composer.py` | ✅ |
 | C-04 invention registry | `aether/agents/invention/registry.py` | ✅ |
 | C-05 capability boundary mapper | `aether/agents/capability/boundary_mapper.py` | ✅ |
-| **C-06…C-10** gap features | — | ⬜ in progress |
+| C-06 counterfactual simulator | `aether/agents/counterfactual/simulator.py` | ✅ |
+| **C-07…C-10** gap features | — | ⬜ in progress |
 | **D-01…D-15** ASI-bridge features | — | ⬜ not started |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
