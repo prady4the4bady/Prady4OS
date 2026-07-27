@@ -23,3 +23,10 @@ Cargo.lock
 node_modules/
 tools/graph_mcp/.graph/
 tools/graph_mcp/*.tmp
+
+# AETHER host-side Python layer (ASI-bridge)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+kernel/lockbox/tokens.jsonl
+kernel/audit/audit_log.jsonl
