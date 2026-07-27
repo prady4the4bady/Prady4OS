@@ -448,7 +448,7 @@ that, "CI green" on an `aether/` commit proved only that the C kernel still buil
 | Section | Items | Status |
 |---|---|---|
 | **B** (foundation) | B-01…B-17 | ✅ **COMPLETE** — 187 passed, 1 skipped, 0 warnings |
-| **C** (gap features) | C-01…C-10 | 🔨 C-01…C-04 ✅ done; C-05…C-10 pending |
+| **C** (gap features) | C-01…C-10 | 🔨 C-01…C-05 ✅ done; C-06…C-10 pending |
 | **D** (ASI bridge) | D-01…D-15 | ⬜ not started |
 | **I** (integration) | I-01…I-10 | ⬜ not started |
 | **J** (Phase 4 audit) | J-01…J-06 | ⬜ not started |
