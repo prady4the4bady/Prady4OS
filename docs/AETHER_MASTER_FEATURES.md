@@ -119,7 +119,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | B-15 self-model maintenance | `aether/agents/self_model/self_model.py` | ✅ |
 | B-16 introspective failure analysis | `aether/agents/introspection/failure_analysis.py` | ✅ |
 | B-17 blind-spot discovery loop | `aether/agents/blindspot/discovery_loop.py` | ✅ |
-| **C-01…C-10** gap features | — | ⬜ not started |
+| C-01 federated knowledge sync | `aether/agents/federation/knowledge_sync.py` | ✅ |
+| **C-02…C-10** gap features | — | ⬜ in progress |
 | **D-01…D-15** ASI-bridge features | — | ⬜ not started |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
