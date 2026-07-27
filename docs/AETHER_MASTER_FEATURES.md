@@ -126,7 +126,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | C-05 capability boundary mapper | `aether/agents/capability/boundary_mapper.py` | ✅ |
 | C-06 counterfactual simulator | `aether/agents/counterfactual/simulator.py` | ✅ |
 | C-07 NL constraint spec + enforcer | `aether/agents/constraints/nl_constraint_parser.py` | ✅ |
-| **C-08…C-10** gap features | — | ⬜ in progress |
+| C-08 offline safety review mode | `aether/agents/safety/offline_review.py` | ✅ |
+| **C-09…C-10** gap features | — | ⬜ in progress |
 | **D-01…D-15** ASI-bridge features | — | ⬜ not started |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |

@@ -42,3 +42,4 @@ aether/agents/invention/registry.jsonl
 aether/agents/capability/boundary_map.jsonl
 aether/agents/counterfactual/simulations.jsonl
 aether/kernel/invariants/custom_invariants.jsonl
+aether/agents/safety/review_queue.jsonl
