@@ -30,3 +30,4 @@ __pycache__/
 .pytest_cache/
 aether/kernel/lockbox/tokens.jsonl
 aether/kernel/audit/audit_log.jsonl
+aether/agents/notification/notifications.jsonl
