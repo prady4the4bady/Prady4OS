@@ -38,3 +38,4 @@ aether/agents/federation/knowledge_store.jsonl
 aether/agents/federation/experiment_log.jsonl
 aether/agents/federation/experiment_results.jsonl
 aether/agents/tool_composer/pipelines.jsonl
+aether/agents/invention/registry.jsonl
