@@ -28,5 +28,5 @@ tools/graph_mcp/*.tmp
 __pycache__/
 *.py[cod]
 .pytest_cache/
-kernel/lockbox/tokens.jsonl
-kernel/audit/audit_log.jsonl
+aether/kernel/lockbox/tokens.jsonl
+aether/kernel/audit/audit_log.jsonl

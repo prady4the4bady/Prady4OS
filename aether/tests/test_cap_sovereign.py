@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from kernel.audit.audit_log import AuditLog
-from kernel.lockbox.cap_sovereign import (
+from aether.kernel.audit.audit_log import AuditLog
+from aether.kernel.lockbox.cap_sovereign import (
     CAP_SOVEREIGN,
     KNOWN_CAPABILITIES,
     CapabilityError,

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from kernel.audit.audit_log import AuditLog, AuditRecord, sha256_of_file
+from aether.kernel.audit.audit_log import AuditLog, AuditRecord, sha256_of_file
 
 
 def test_append_and_read(tmp_path: Path) -> None:

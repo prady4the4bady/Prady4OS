@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from kernel.audit.audit_log import AuditLog
+from aether.kernel.audit.audit_log import AuditLog
 
 __all__ = [
     "CAP_SOVEREIGN",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from kernel.integrity.merkle import (
+from aether.kernel.integrity.merkle import (
     leaf_hash,
     merkle_proof,
     merkle_root,
