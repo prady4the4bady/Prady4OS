@@ -33,3 +33,4 @@ aether/kernel/audit/audit_log.jsonl
 aether/agents/notification/notifications.jsonl
 aether/platform/oobe/oobe_state.json
 aether/agents/soul/soul_profile.json
+aether/agents/self_model/self_model.jsonl
