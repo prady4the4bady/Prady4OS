@@ -357,6 +357,26 @@ jobs:
   # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
   # the graph from source and validates queries. Non-destructive (writes only the
   # git-ignored .graph/ DB).
+  # AETHER host-side Python agent layer. Separate job from build-and-boot: it
+  # shares no toolchain with the kernel and must not wait ~100 minutes of QEMU
+  # gates to report. Without this job, "CI green" on an aether/ commit would
+  # prove only that the C kernel still builds.
+  aether-layer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install test deps
+        run: python -m pip install --quiet --upgrade pip pytest
+
+      - name: AETHER gates (zero warnings mandated)
+        run: python -m pytest -W error -x -q aether/tests/
+
   code-graph:
     runs-on: ubuntu-latest
     steps:

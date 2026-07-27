@@ -90,6 +90,45 @@ All entries below are **shipped**.
 
 ---
 
+## Section A2 — AETHER host-side Python agent layer (ASI-bridge v4.0)
+
+A **separate layer** from everything else in this document. Root `aether/`;
+Python 3.13; runs on top of the OS as a service, not inside the kernel. Its
+invariants are **S1–S14** in `aether/kernel/invariants/core_invariants.py` and are
+**independent of Section H's S1–S8** below — the numbering collides, the meanings
+do not, and they must never be merged.
+
+Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
+
+| Item | File | Status |
+|---|---|---|
+| B-01 CAP_SOVEREIGN lockbox | `aether/kernel/lockbox/cap_sovereign.py` | ✅ |
+| B-02 append-only audit log | `aether/kernel/audit/audit_log.py` | ✅ |
+| B-03 Merkle integrity | `aether/kernel/integrity/merkle.py` | ✅ |
+| B-04 prompt-injection firewall | `aether/agents/firewall/prompt_injection.py` | ✅ |
+| B-05 quarantine namespace | `aether/agents/quarantine/namespace.py` | ✅ |
+| B-06 red-team agent | `aether/agents/red_team/red_team_agent.py` | ✅ |
+| B-07 agent runtime bus | `aether/agents/runtime/agent_bus.py` | ✅ |
+| B-08 notification bus | `aether/agents/notification/notif_bus.py` | ✅ |
+| B-09 Ollama model manager | `aether/ai_core/model_manager/manager.py` | ✅ |
+| B-10 computer-use interface | `aether/ai_core/computer_use/interface.py` | ✅ |
+| B-11 out-of-box experience | `aether/platform/oobe/oobe.py` | ✅ |
+| B-12 AgentNet P2P mesh | `aether/agents/agentnet/mesh.py` | ✅ |
+| B-13 soul/personality engine | `aether/agents/soul/soul_engine.py` | ✅ |
+| B-14 vision pipeline | `aether/vision/pipeline.py` | ✅ |
+| B-15 self-model maintenance | `aether/agents/self_model/self_model.py` | ✅ |
+| B-16 introspective failure analysis | `aether/agents/introspection/failure_analysis.py` | ✅ |
+| B-17 blind-spot discovery loop | `aether/agents/blindspot/discovery_loop.py` | ✅ |
+| **C-01…C-10** gap features | — | ⬜ not started |
+| **D-01…D-15** ASI-bridge features | — | ⬜ not started |
+| **I-01…I-10** integration wiring | — | ⬜ not started |
+| **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
+
+Note: the spec's `ai-core/` is `aether/ai_core/` — hyphens are illegal in Python
+package names, so the literal path would be a syntax error on import.
+
+---
+
 ## Section B — Kernel/OS planned features (tracked)
 
 > **⚠ Audit note (2026-07-26).** This table was inherited from an earlier snapshot

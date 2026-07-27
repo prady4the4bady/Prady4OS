@@ -434,6 +434,39 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   atomic `O_APPEND`), ADR-033/DDR-779 (musl mirror) and DDR-783. That run also
   confirms both fixes individually: **step 2 checkout passed** after three musl
   outages, and **step 10 smoke-fs passed** after the measured timeout bump.
+## AETHER host-side Python layer (ASI-bridge v4.0) — build tracker
+
+Root: `aether/`. Host-side Python 3.13 agent stack that runs ON the OS as a
+service; NOT code the bare-metal target executes. Its invariants are **S1–S14**
+(`aether/kernel/invariants/core_invariants.py`) and are **independent of the C
+kernel's S1–S8** — the numbering collides, the meanings do not, never merge them.
+
+**Gate command:** `python -m pytest -W error -x -q aether/tests/`
+**CI:** the `aether-layer` job runs it on every push (added 2026-07-28 — before
+that, "CI green" on an `aether/` commit proved only that the C kernel still built).
+
+| Section | Items | Status |
+|---|---|---|
+| **B** (foundation) | B-01…B-17 | ✅ **COMPLETE** — 187 passed, 1 skipped, 0 warnings |
+| **C** (gap features) | C-01…C-10 | ⬜ not started |
+| **D** (ASI bridge) | D-01…D-15 | ⬜ not started |
+| **I** (integration) | I-01…I-10 | ⬜ not started |
+| **J** (Phase 4 audit) | J-01…J-06 | ⬜ not started |
+
+B-series detail: B-01 lockbox · B-02 audit log · B-03 merkle · B-04 firewall ·
+B-05 quarantine · B-06 red team · B-07 agent bus · B-08 notification bus ·
+B-09 model manager · B-10 computer use · B-11 OOBE · B-12 mesh · B-13 soul ·
+B-14 vision · B-15 self-model · B-16 failure analysis · B-17 blind spots.
+
+**Naming deviation:** the spec says `ai-core/`; hyphens are illegal in Python
+package names, so it is `aether/ai_core/`.
+
+**One test skips on Windows:** B-05's symlink-escape case needs a privilege this
+dev box lacks. It is B-05's discriminator, so it was verified separately under
+WSL. It runs normally in CI on Linux.
+
+---
+
 - 🚨 **OPEN REGRESSION — DDR-790: kernel heap DOUBLE-FREE PANIC in CI, on `main`.**
   Run **30215987521** (`ba5770e`) died at step 54 `smoke-blkmq` (-smp 4) with
   `[kheap] double-free ptr=0x7E29F80 objsize=0x20` / `*** KHEAP PANIC ***`.

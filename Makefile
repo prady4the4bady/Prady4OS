@@ -143,6 +143,12 @@ KASAN ?= 1
 ifeq ($(KASAN),1)
 KCFLAGS += -DKASAN=1
 endif
+# DDR-790: per-pipe create/destroy tracing, OFF by default. It is high-volume and
+# smoke-dmesg reads back only the last 4 KiB of the log ring, so an unconditional
+# trace evicts that gate's marker (run 30303017178). Enable with PIPE_TRACE=1 when
+# chasing the double-free panic.
+PIPE_TRACE ?= 0
+KCFLAGS += -DPIPE_TRACE=$(PIPE_TRACE)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 

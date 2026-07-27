@@ -40,27 +40,37 @@ struct pipe *pipe_create(void) {
     if (!p->buf) { kfree(p); return 0; }
     p->head = p->tail = 0;
     p->readers = p->writers = 0;
+#if PIPE_TRACE
     /* DDR-790: paired with the destroy trace so create/destroy can be matched.
      * Without this, "same pointer freed twice" is ambiguous — kheap recycles
      * addresses, so it may be two different pipes rather than a double free. */
     kputs("[pipe] create  p="); kputhex((uint64_t)(uintptr_t)p); kputs("\r\n");
+#endif
     return p;
 }
 
 void pipe_destroy(struct pipe *p) {
     if (!p)
         return;
+#if PIPE_TRACE
     /* DDR-790: name every pipe we free. CI run 30215987521 panicked with
      * "kfree: double free objsize=0x20" — the bucket struct pipe lands in — and
      * inspection of the DDR-787 refcount sites did not find the defect, so the
      * next occurrence must be decidable rather than argued: if the panicking
      * pointer matches a line below, it IS the pipe (and r/w say how it got
      * there); if it never appears, the pipe is exonerated. Evidence only — no
-     * gate asserts on this. */
+     * gate asserts on this.
+     *
+     * OPT-IN (-DPIPE_TRACE=1): run 30303017178 showed why it cannot be
+     * unconditional. smoke-dmesg writes a marker then reads back the LAST 4 KiB
+     * of the log ring; a per-pipe trace pushes enough bytes in between to evict
+     * the marker, so the diagnostic broke an unrelated gate. Enable it when
+     * chasing the panic, not by default. */
     kputs("[pipe] destroy p="); kputhex((uint64_t)(uintptr_t)p);   /* kputhex adds "0x" */
     kputs(" r="); kputdec((uint64_t)(p->readers < 0 ? 0 : p->readers));
     kputs(" w="); kputdec((uint64_t)(p->writers < 0 ? 0 : p->writers));
     kputs("\r\n");
+#endif
     if (p->buf)
         pmm_free_page(p->buf);
     kfree(p);
