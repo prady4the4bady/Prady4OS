@@ -35,3 +35,5 @@ aether/platform/oobe/oobe_state.json
 aether/agents/soul/soul_profile.json
 aether/agents/self_model/self_model.jsonl
 aether/agents/federation/knowledge_store.jsonl
+aether/agents/federation/experiment_log.jsonl
+aether/agents/federation/experiment_results.jsonl
