@@ -125,6 +125,47 @@ def test_digest_identifies_the_image(tmp_path: Path) -> None:
     assert a.sha256 != c.sha256
 
 
+def test_requesting_neither_ocr_nor_caption_is_refused(tmp_path: Path) -> None:
+    """Asking for nothing is always a caller bug. Returning an empty result
+    lets it read downstream as 'the image contained nothing', which is a
+    materially different claim and the one that causes harm."""
+    vp = _pipeline(tmp_path)
+    with pytest.raises(VisionError, match="neither OCR nor caption"):
+        vp.process(PNG, want_ocr=False, want_caption=False)
+
+
+def test_taint_origin_identifies_the_specific_image(tmp_path: Path) -> None:
+    """The origin is what lets an incident be traced back to the pixels that
+    caused it. A constant origin would satisfy every other taint test here
+    while making every finding untraceable."""
+    vp = _pipeline(tmp_path)
+    a = vp.process(PNG, source=ImageSource.SCREENSHOT)
+    b = vp.process(PNG + b"different", source=ImageSource.SCREENSHOT)
+    assert a.ocr_text is not None and b.ocr_text is not None
+    assert a.ocr_text.origin != b.ocr_text.origin
+    assert a.sha256[:12] in a.ocr_text.origin
+
+
+def test_ocr_and_caption_from_one_image_share_an_origin(tmp_path: Path) -> None:
+    """Two readings of the same pixels must trace to the same source."""
+    vp = _pipeline(tmp_path)
+    res = vp.process(PNG, want_ocr=True, want_caption=True)
+    assert res.ocr_text is not None and res.caption is not None
+    assert res.ocr_text.origin == res.caption.origin
+
+
+def test_source_is_recorded_in_the_origin(tmp_path: Path) -> None:
+    """Same pixels from a camera and from a screenshot are different trust
+    stories, and the taint must say which."""
+    vp = _pipeline(tmp_path)
+    shot = vp.process(PNG, source=ImageSource.SCREENSHOT)
+    cam = vp.process(PNG, source=ImageSource.CAMERA)
+    assert shot.ocr_text is not None and cam.ocr_text is not None
+    assert shot.ocr_text.origin != cam.ocr_text.origin
+    assert "screenshot" in shot.ocr_text.origin
+    assert "camera" in cam.ocr_text.origin
+
+
 def test_processing_is_audited(tmp_path: Path) -> None:
     audit_path = tmp_path / "audit_log.jsonl"
     vp = VisionPipeline(ocr=lambda _b: "t", audit=AuditLog(audit_path))

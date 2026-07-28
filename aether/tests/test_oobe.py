@@ -122,6 +122,54 @@ def test_revise_rejected_before_completion(tmp_path: Path) -> None:
         o.revise(Consent.TELEMETRY, True, changed_by="x", reason="y")
 
 
+def test_revise_can_revoke_not_only_grant(tmp_path: Path) -> None:
+    """An implementation that ignores `value` and always grants passes every
+    other revise test here — and turns the one post-setup lever the operator
+    has for taking permission BACK into a lever that only ever widens it.
+    """
+    o = _oobe(tmp_path)
+    o.set_operator("prady")
+    o.choose_model("llama3")
+    o.grant(Consent.FEDERATION_SYNC)
+    o.complete()
+    assert o.has_consent(Consent.FEDERATION_SYNC) is True
+
+    o.revise(Consent.FEDERATION_SYNC, False, changed_by="prady", reason="revoking")
+    assert o.has_consent(Consent.FEDERATION_SYNC) is False
+
+    entries = AuditLog(tmp_path / "audit_log.jsonl").read_all()
+    revocations = [e for e in entries
+                   if e["action"] == "oobe.revise" and e["gate_status"] == "revoked"]
+    assert revocations, "a revocation was recorded as a grant"
+
+
+def test_granted_consent_survives_a_restart(tmp_path: Path) -> None:
+    """Consent that silently resets on restart is consent the operator never
+    actually gave the second time — and nothing would surface the difference."""
+    o = _oobe(tmp_path)
+    o.set_operator("prady")
+    o.choose_model("llama3")
+    o.grant(Consent.FEDERATION_SYNC)
+    o.complete()
+
+    reborn = _oobe(tmp_path)
+    assert reborn.has_consent(Consent.FEDERATION_SYNC) is True
+    assert reborn.has_consent(Consent.TELEMETRY) is False   # and no widening
+
+
+def test_revocation_survives_a_restart(tmp_path: Path) -> None:
+    """The direction that actually matters: a revoked consent must not come
+    back on the next boot."""
+    o = _oobe(tmp_path)
+    o.set_operator("prady")
+    o.choose_model("llama3")
+    o.grant(Consent.FEDERATION_SYNC)
+    o.complete()
+    o.revise(Consent.FEDERATION_SYNC, False, changed_by="prady", reason="revoking")
+
+    assert _oobe(tmp_path).has_consent(Consent.FEDERATION_SYNC) is False
+
+
 def test_corrupt_state_reported(tmp_path: Path) -> None:
     path = tmp_path / "oobe_state.json"
     path.write_text("{not json", encoding="utf-8")

@@ -115,9 +115,57 @@ def test_plan_never_executes(tmp_path: Path) -> None:
 
 
 def test_refusals_are_audited(tmp_path: Path) -> None:
+    """The entry must say it was REFUSED.
+
+    Asserting only that some B-10 entry exists would pass against a successful
+    action's audit record, which is the opposite of what this checks.
+    """
     audit_path = tmp_path / "audit_log.jsonl"
     cu = ComputerUse(root=tmp_path / "ws", audit=AuditLog(audit_path))
     with pytest.raises(ActionRefused):
         cu.execute(Action(ActionType.WRITE_FILE, "x.txt", data="d"))
-    entries = AuditLog(audit_path).read_all()
-    assert any(e["extra"].get("plan") and e["ddr"] == "B-10" for e in entries)
+    entries = [e for e in AuditLog(audit_path).read_all() if e["ddr"] == "B-10"]
+    assert entries, "the refusal was not audited at all"
+    assert all(e["gate_status"] != "executed" for e in entries)
+    assert any(e["extra"].get("plan") for e in entries)
+
+
+def test_symlink_escape_is_contained(tmp_path: Path) -> None:
+    """Containment must survive a symlink, not just a textual '..'.
+
+    An implementation using lexical normalisation (os.path.normpath) instead of
+    real resolution passes every other containment test here and fails this one:
+    'inside/link/secret.txt' contains no '..' and is not absolute, yet resolves
+    outside the root. That is the whole difference between a path check and a
+    containment guarantee.
+    """
+    cu = _cu(tmp_path, approval_fn=_approve_all)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("classified", encoding="utf-8")
+
+    link = cu.root / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        # Windows without developer mode refuses symlink creation. Exercise the
+        # same resolved-prefix check directly rather than skipping — a skipped
+        # containment test is indistinguishable from an absent one.
+        with pytest.raises(ActionRefused):
+            cu.execute(Action(ActionType.READ_FILE, str(outside / "secret.txt")))
+        return
+
+    with pytest.raises(ActionRefused, match="escapes root"):
+        cu.execute(Action(ActionType.READ_FILE, "link/secret.txt"))
+
+
+def test_approval_callback_receives_the_real_action(tmp_path: Path) -> None:
+    """An approver shown a placeholder cannot make a real decision — it would
+    approve 'some write' rather than 'delete /important'."""
+    seen: list[Action] = []
+    cu = _cu(tmp_path, approval_fn=lambda a: (seen.append(a), True)[1])
+    cu.execute(Action(ActionType.WRITE_FILE, "audited.txt", data="x", confirm=True))
+    assert len(seen) == 1
+    assert seen[0].action_type is ActionType.WRITE_FILE
+    assert seen[0].target == "audited.txt"
+    assert seen[0].risk >= 3

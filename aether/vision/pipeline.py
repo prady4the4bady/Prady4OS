@@ -123,6 +123,15 @@ class VisionPipeline:
         want_caption: bool = False,
     ) -> VisionResult:
         """Extract text and/or a caption. All output is tainted."""
+        if not want_ocr and not want_caption:
+            # Asking for nothing is always a caller bug. Returning an empty
+            # result lets it read downstream as "the image contained nothing",
+            # which is a materially different claim — and the one that causes
+            # harm, because a consumer then treats an unexamined image as
+            # examined and clean.
+            raise VisionError(
+                "neither OCR nor caption requested; nothing to extract"
+            )
         data = self._load(image)
         digest = hashlib.sha256(data).hexdigest()
         origin = f"vision:{source.value}:{digest[:12]}"
