@@ -134,7 +134,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | D-03 multi-model ensemble router | `aether/ai_core/ensemble/ensemble_router.py` | ✅ |
 | D-04 persistent world model | `aether/agents/world_model/world_model.py` | ✅ |
 | D-05 meta-learning controller | `aether/agents/meta_learning/meta_controller.py` | ✅ |
-| **D-06…D-15** ASI-bridge features | — | ⬜ in progress |
+| D-06 causal reasoning engine | `aether/agents/causal/causal_reasoning_engine.py` | ✅ |
+| **D-07…D-15** ASI-bridge features | — | ⬜ in progress |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
