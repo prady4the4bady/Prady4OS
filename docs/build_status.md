@@ -2261,3 +2261,22 @@ informational line and exits 0. The assertion moves to `smoke-agentmetrics`'s
 required sentinels, where a genuinely unscheduled agent fails on a missing
 required pattern — which cannot be masked. The 120 s window is unchanged and no
 gate timeout was widened.
+
+
+### GLOBAL_FORBIDDEN false-positive audit (DDR-799)
+
+Full pass over every probe against every `GLOBAL_FORBIDDEN` pattern, static plus
+empirical (booting the four distinct device configurations the gates use).
+
+**Exactly one offender**: `rootmounttest` under `QEMU_NO_EXT4=1 QEMU_SFS2=1`.
+`kmain` picks the ext4 mount by disk INDEX (`main.c:895`, `blk_count() > 3`), so
+that configuration leaves an SFS image at index 3 and roots the probe there.
+
+Refuted by the empirical pass: `surfdestroytest` (surfaces need no virtio-gpu),
+the NVMe patterns (emit only from `nvme_init`, which runs only when PCI finds a
+controller) and the SMP self-tests (cannot emit with one CPU).
+
+Fixed probe-side with a three-way verdict — `/HELLO.TXT` exists only on the FAT
+default root, so it distinguishes "no ext4 provided" (SKIP) from "fell back to
+the default root" (FAIL). The FAIL branch — the assertion that matters — is
+unchanged. All four configurations now scan clean.

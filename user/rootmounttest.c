@@ -4,7 +4,10 @@
  * Two-sided proof that SYS_OPEN resolved against the SELECTED root:
  *   - /EXT4.TXT opens and reads "ext4 read works" (exists only on ext4), AND
  *   - /HELLO.TXT fails to open (exists only on the FAT default root).
- * Both -> PRADYOS_ROOTMOUNT_OK; otherwise "ROOTMOUNT FAIL" + exit 1.
+ * Three-way verdict (DDR-799), because "/EXT4.TXT missing" is ambiguous:
+ *   both facts hold                  -> PRADYOS_ROOTMOUNT_OK
+ *   /EXT4.TXT absent, /HELLO.TXT too -> ROOTMOUNT SKIP (no ext4 in this gate)
+ *   /EXT4.TXT absent, /HELLO.TXT yes -> ROOTMOUNT FAIL (fell back to FAT root)
  *
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
@@ -34,10 +37,42 @@ __attribute__((noreturn)) static void fail(const char *why) {
     for (;;) { }
 }
 
+__attribute__((noreturn)) static void skip(const char *why) {
+    /* DDR-799: NOT a failure — this gate did not provide the precondition.
+     * Informational rather than silent: an observation that stops being
+     * reported is how a regression becomes invisible. This string must never
+     * be added to GLOBAL_FORBIDDEN. */
+    wr("ROOTMOUNT SKIP: ");
+    wr(why);
+    wr("\n");
+    nsi(SYS_EXIT, 0, 0, 0);
+    for (;;) { }
+}
+
 __attribute__((noreturn)) void _start(void) {
     /* (a) /EXT4.TXT resolves on the ext4 root and holds the known content. */
     long fd = nsi(SYS_OPEN, (long)"/EXT4.TXT", 0, 0);
-    if (fd < 0) fail("EXT4.TXT not found on ext4 root");
+    if (fd < 0) {
+        /* DDR-799: absent /EXT4.TXT is ambiguous on its own. kmain picks the
+         * ext4 mount by DISK INDEX (main.c:895, `blk_count() > 3`), so a gate
+         * that suppresses ext4 while attaching another disk — smoke-sfs-persist
+         * sets QEMU_NO_EXT4 *and* QEMU_SFS2 — leaves an SFS volume at index 3
+         * and roots this probe there. /HELLO.TXT settles it: it exists ONLY on
+         * the FAT default root.
+         *
+         *   /HELLO.TXT present -> we fell back to the default root, so the
+         *                         root_mnt selection genuinely failed: FAIL.
+         *   /HELLO.TXT absent  -> the root is neither ext4 nor the default,
+         *                         i.e. no ext4 was provided at all: SKIP.
+         *
+         * The FAIL branch is the assertion that matters and is unchanged. */
+        long probe = nsi(SYS_OPEN, (long)"/HELLO.TXT", 0, 0);
+        if (probe >= 0) {
+            nsi(SYS_CLOSE, probe, 0, 0);
+            fail("EXT4.TXT absent and HELLO.TXT resolved (fell back to FAT root)");
+        }
+        skip("ext4 not provided in this gate");
+    }
     char buf[32];
     long n = nsi(SYS_READ, fd, (long)buf, 15);
     nsi(SYS_CLOSE, fd, 0, 0);
