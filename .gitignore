@@ -54,3 +54,4 @@ aether/agents/meta_learning/strategies.jsonl
 aether/agents/causal/causal_graph.jsonl
 aether/agents/research/hypotheses.jsonl
 aether/agents/research/outcomes.jsonl
+aether/agents/memory/knowledge.jsonl
