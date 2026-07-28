@@ -149,6 +149,7 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | I-10 daemon coordinator | `aether/daemon/coordinator.py` | ✅ |
 | DDR-792 ollama transport bridge | `aether/ollama_bridge/transport.py` | ✅ |
 | F#68 metric lockbox (S3) | `aether/kernel/lockbox/metric_lockbox.py` | ✅ |
+| Privacy-mode netfilter hook | `aether/platform/privacy/netfilter.py` | ✅ |
 | **I-01…I-10** integration wiring | — | ✅ **COMPLETE** |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
