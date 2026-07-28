@@ -13,11 +13,12 @@ what must never reach the experiment queue — it consumes budget and can never
 return a negative result, so it can only ever confirm.
 
 **I-06 (dead-end pre-check).** A hypothesis matching a known dead-end is blocked
-*before* generation completes, not after the experiment burns cost. D-13 does not
-exist yet, so this file defines the narrow interface it will satisfy
-(:class:`DeadEndLookup`) and defaults to :data:`NO_DEAD_ENDS`. When D-13 lands,
-the stub is replaced and these tests must still pass — that regression is the
-point of pinning the interface now rather than later.
+*before* generation completes, not after the experiment burns cost. The narrow
+interface is :class:`DeadEndLookup`; **D-13**
+(``aether.agents.memory.failure_memory_registry.FailureMemoryRegistry``) is the
+real implementation and drops in unchanged. :data:`NO_DEAD_ENDS` remains the
+default so a generator constructed without a registry is permissive rather than
+silently blocking everything.
 """
 
 from __future__ import annotations
@@ -76,17 +77,13 @@ class HypothesisStatus(str, Enum):
 
 
 class DeadEndLookup(Protocol):
-    """The interface D-13 will satisfy.
-
-    Pinned now so the D-07 tests become the regression that proves the real
-    registry is a drop-in when it lands.
-    """
+    """The interface D-13's FailureMemoryRegistry satisfies."""
 
     def is_dead_end(self, signature: str) -> bool: ...
 
 
 class _NoDeadEnds:
-    """Stub lookup: nothing is a dead end until D-13 exists."""
+    """Permissive default: used when no registry is wired in."""
 
     def is_dead_end(self, signature: str) -> bool:      # noqa: D102
         return False

@@ -79,7 +79,8 @@ def test_registry_survives_restart(tmp_path: Path) -> None:
 def test_registration_is_audited(tmp_path: Path) -> None:
     audit_path = tmp_path / "audit_log.jsonl"
     lb = Lockbox(registry_path=tmp_path / "tokens.jsonl", audit=AuditLog(audit_path))
-    lb.register("D-13", "agents/runtime/cognitive_load_balancer.py", "CAP_LOAD_BALANCE")
+    lb.register("D-13", "agents/memory/failure_memory_registry.py",
+               "CAP_FAILURE_REGISTRY")
     entries = AuditLog(audit_path).read_all()
     assert any(e["action"] == "lockbox.register" and e["ddr"] == "D-13" for e in entries)
 
@@ -105,7 +106,7 @@ def test_section_f_capability_set_is_complete() -> None:
         # D-09…D-15 slots were pre-allocated from an earlier draft; each is
         # renamed to the capability the shipped DDR actually exercises.
         "CAP_SELF_MODEL_WRITE", "CAP_WATCHDOG", "CAP_MEMORY_WRITE",
-        "CAP_SUBSTRATE", "CAP_LOAD_BALANCE", "CAP_ETHICS_DELIBERATE",
+        "CAP_SUBSTRATE", "CAP_FAILURE_REGISTRY", "CAP_ETHICS_DELIBERATE",
         "CAP_ONTOLOGY_WRITE",
     ):
         assert cap in KNOWN_CAPABILITIES

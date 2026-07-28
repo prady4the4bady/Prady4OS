@@ -108,8 +108,9 @@ def test_dead_end_matching_survives_rewording(tmp_path: Path) -> None:
         _gen(tmp_path, items=[reworded], dead_ends=dead).generate("x")
 
 
-def test_default_lookup_blocks_nothing_until_d13(tmp_path: Path) -> None:
-    """The stub must be permissive, and its interface is what D-13 will satisfy."""
+def test_default_lookup_blocks_nothing(tmp_path: Path) -> None:
+    """A generator with no registry wired in must be permissive, not silently
+    blocking everything. D-13 supplies the real lookup."""
     assert NO_DEAD_ENDS.is_dead_end("anything at all") is False
     gen = _gen(tmp_path)
     assert gen.dead_ends is NO_DEAD_ENDS

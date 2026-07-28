@@ -56,3 +56,4 @@ aether/agents/research/hypotheses.jsonl
 aether/agents/research/outcomes.jsonl
 aether/agents/memory/knowledge.jsonl
 aether/agents/planner/goal_queue.jsonl
+aether/agents/memory/failures.jsonl

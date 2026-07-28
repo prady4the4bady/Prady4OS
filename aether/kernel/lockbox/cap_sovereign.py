@@ -68,7 +68,7 @@ KNOWN_CAPABILITIES: frozenset[str] = frozenset(
         "CAP_WATCHDOG",                # D-10
         "CAP_MEMORY_WRITE",            # D-11
         "CAP_SUBSTRATE",               # D-12
-        "CAP_LOAD_BALANCE",            # D-13
+        "CAP_FAILURE_REGISTRY",        # D-13 failure memory registry
         "CAP_ETHICS_DELIBERATE",       # D-14
         "CAP_ONTOLOGY_WRITE",          # D-15
     }
