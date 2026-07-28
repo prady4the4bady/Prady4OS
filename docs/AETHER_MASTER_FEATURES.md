@@ -140,7 +140,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | D-09 recursive self-model updater | `aether/agents/self_model/recursive_self_model_updater.py` | ✅ |
 | D-10 experiment outcome evaluator | `aether/agents/research/experiment_outcome_evaluator.py` | ✅ |
 | D-11 knowledge consolidation | `aether/agents/memory/knowledge_consolidation.py` | ✅ |
-| **D-12…D-15** ASI-bridge features | — | ⬜ in progress |
+| D-12 adaptive goal prioritizer | `aether/agents/planner/adaptive_goal_prioritizer.py` | ✅ |
+| **D-13…D-15** ASI-bridge features | — | ⬜ in progress |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
