@@ -50,3 +50,4 @@ aether/agents/planner/plans.jsonl
 aether/ai_core/ensemble/model_profiles.jsonl
 aether/agents/world_model/entities.jsonl
 aether/agents/world_model/relations.jsonl
+aether/agents/meta_learning/strategies.jsonl
