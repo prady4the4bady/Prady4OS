@@ -177,7 +177,7 @@ jobs:
         run: make smoke-msixap
 
       - name: QEMU multi-in-flight blk test (q35 -smp 4; concurrent requests on one disk)
-        run: make smoke-blkmq
+        run: make smoke-blkmq-trace
 
       - name: QEMU SMP block-integrity test (q35 -smp 4; concurrent read data-verify, DDR-759)
         run: make smoke-blk-integrity

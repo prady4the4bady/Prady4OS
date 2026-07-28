@@ -110,6 +110,46 @@ proven to be the CI panic**: no such call was observed. It is a real latent
 weakness closed on inspection, and it is recorded as such rather than claimed as
 the fix.
 
+## Decision record — PIPE_TRACE=1 on smoke-blkmq (operator, 2026-07-28)
+
+> "PIPE_TRACE=1 enabled on smoke-blkmq CI job per operator decision 2026-07-28.
+> smoke-swapgs BSP liveness markers deferred to BUG-1 follow-up DDR (separate
+> from DDR-790). D-series Python loop continues in parallel unblocked."
+
+**Implementation note — why this is a separate make target, not an env flag.**
+`PIPE_TRACE` is **compile-time**, and CI builds a single shared image
+(`make image` once, then every gate runs against `build/pradyos.img`). Setting
+the flag for the CI step alone would do nothing, and setting it globally would
+put high-volume traces into every *later* gate — which is exactly what evicted
+`smoke-dmesg`'s log-ring marker and caused run 30303017178.
+
+`make smoke-blkmq-trace` therefore rebuilds the kernel with `PIPE_TRACE=1`, runs
+**only** this gate, and then rebuilds clean, propagating the gate's exit code. It
+also removes `pipe.o`/`kernel.elf`/`kernel.bin`/the image explicitly first,
+because make does not track CFLAGS changes — without that the flag silently does
+nothing, a stale-image trap this project has already hit twice.
+
+## BUG-1-SFS — filed, and one correction to the direction given
+
+The operator direction states the churn FAIL "IS causal" and to add an
+`sfs_btree_verify()` call. Two things must be recorded honestly:
+
+1. **`sfs_btree_verify()` does not exist.** `grep -rn "btree_verify" kernel/`
+   returns nothing. Adding it means writing a full B+tree structural verifier in
+   the kernel — a real slice with its own DDR, not a diagnostic one-liner.
+2. **Causality is still unproven.** The evidence establishes only that the churn
+   reported FAIL *and* that the BSP later stopped progressing. This DDR's own
+   history is three theories refuted by acting before the mechanism was named
+   (DDR-775/776/777), so the claim is recorded as a *hypothesis to test*, not a
+   given.
+
+**Cheaper first diagnostic, which actually discriminates:** the churn loop
+currently collapses `vfs_create` / `vfs_write` / `vfs_unlink` failure into one
+`churn_ok = 0`, discarding *which* call failed and *at which iteration*. Naming
+that costs three prints on a failure path only — no hot-path volume, so it cannot
+evict gate markers — and it is what decides whether the SFS allocator is even
+implicated before anyone writes a verifier.
+
 ## Risk while unfixed
 
 The panic is on `main` (DDR-787 was promoted on green run 30211536949). It is

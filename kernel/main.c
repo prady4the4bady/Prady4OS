@@ -1362,12 +1362,29 @@ static void fs_test_thread(void *arg) {
                             int churn_ok = (cbuf != 0);
                             current_thread->fs_write_budget = ~0ull;   /* test the tree, not the budget */
                             if (cbuf) memset((void *)(uintptr_t)cbuf, 0x5A, 65536);
+                            /* BUG-1-SFS (DDR-790 addendum): name WHICH call failed
+                             * and at which iteration. The old code collapsed all
+                             * three into churn_ok=0, discarding the one fact that
+                             * decides whether the SFS allocator is implicated when
+                             * the BSP later stops progressing. Failure path only —
+                             * no hot-path volume, so it cannot evict gate markers
+                             * from the log ring the way DDR-790's traces did. */
                             for (int i = 0; churn_ok && i < 40; i++) {
                                 struct vfs_file cf2;
-                                if (vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2) != 0 ||
-                                    vfs_write(cap, &cf2, 0, (void *)(uintptr_t)cbuf, 65536) != 65536 ||
-                                    vfs_unlink(cap, root_smnt, "/CHURN.TMP") != 0)
+                                const char *which = 0;
+                                if (vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2) != 0)
+                                    which = "create";
+                                else if (vfs_write(cap, &cf2, 0,
+                                                   (void *)(uintptr_t)cbuf, 65536) != 65536)
+                                    which = "write";
+                                else if (vfs_unlink(cap, root_smnt, "/CHURN.TMP") != 0)
+                                    which = "unlink";
+                                if (which) {
+                                    kputs("[sfs] churn FAIL op="); kputs(which);
+                                    kputs(" iter="); kputdec((uint64_t)i);
+                                    kputs("\r\n");
                                     churn_ok = 0;
+                                }
                             }
                             if (cbuf) pmm_free_pages(cbuf, 4);
                             kputs(churn_ok ? "[sfs] btree churn OK\r\n"

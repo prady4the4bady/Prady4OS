@@ -1235,6 +1235,32 @@ smoke-blkmq: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="multi-inflight FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-790 (P0, operator decision 2026-07-28): run smoke-blkmq against a kernel
+# built with PIPE_TRACE=1 so the create/destroy traces are actually reachable.
+#
+# It has to be its own target because PIPE_TRACE is COMPILE-TIME and CI builds a
+# single shared image: flipping the flag globally would put high-volume traces
+# into every later gate, and DDR-790 already proved that evicts smoke-dmesg's
+# log-ring marker. So this rebuilds with traces, runs only this gate, then
+# rebuilds clean — the tree and every other gate are left exactly as before.
+#
+# make does not track CFLAGS changes, so the objects are removed explicitly or
+# the flag silently does nothing (a stale-image trap this project has hit twice).
+.PHONY: smoke-blkmq-trace
+smoke-blkmq-trace: fat-image sfs-image
+	@echo "[blkmq-trace] rebuilding kernel with PIPE_TRACE=1 (DDR-790)"
+	rm -f $(BUILD_DIR)/pipe.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG)
+	$(MAKE) image PIPE_TRACE=1
+	TIMEOUT_S=180 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[blk] multi-inflight OK\n[sfs] lz4+tags compress/readback/tag OK')" \
+	FORBIDDEN_SENTINEL="multi-inflight FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
+	  rc=$$? ; \
+	  echo "[blkmq-trace] restoring untraced kernel" ; \
+	  rm -f $(BUILD_DIR)/pipe.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG) ; \
+	  $(MAKE) image ; \
+	  exit $$rc
+
 # DDR-759 SMP audit gate (M1 3/3): 4 concurrent workers under -smp 4 each read a
 # sector 64x and verify the bytes against a single-threaded reference checksum, so
 # a completion mis-routed to the wrong DDR-BLK-1 slot (wrong data) is caught (not
