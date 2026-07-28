@@ -381,6 +381,42 @@ jobs:
       - name: AETHER gates (zero warnings mandated)
         run: python -m pytest -W error -x -q aether/tests/
 
+  # ADR-034 — aarch64 / riscv64 bootstrap gates.
+  #
+  # Own job, not extra steps in build-and-boot: these share no artefact with the
+  # x86_64 image, so running them in parallel costs nothing and a failure here
+  # cannot be confused with an x86_64 regression. Scope is BOOT ONLY — the
+  # smoke-gate set is not ported (ADR-034 decision 3).
+  arch-bootstrap:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # a riscv64 break must not hide an aarch64 one
+      matrix:
+        include:
+          - arch: aarch64
+            qemu_pkg: qemu-system-arm
+          - arch: riscv64
+            qemu_pkg: qemu-system-misc
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install QEMU for ${{ matrix.arch }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ${{ matrix.qemu_pkg }}
+
+      - name: Toolchain (clang cross-compiles both; no GCC cross needed)
+        run: |
+          clang --version | head -1
+          ld.lld --version | head -1
+          clang --print-targets | grep -E 'aarch64|riscv64' | head -2
+
+      - name: Build kernel-${{ matrix.arch }} (zero warnings mandated)
+        run: make kernel-${{ matrix.arch }}
+
+      - name: Boot gate — ${{ matrix.arch }} on QEMU virt
+        run: make smoke-${{ matrix.arch }}
+
   code-graph:
     runs-on: ubuntu-latest
     steps:

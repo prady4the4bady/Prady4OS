@@ -21,6 +21,24 @@ CFLAGS_X64 := --target=$(X64_TRIPLE) -ffreestanding -fno-stack-protector \
 
 NASMFLAGS_X64 := -f elf64
 
+# --- Additional architectures (ADR-034) -------------------------------------
+# clang is the cross-compiler; no GCC cross-toolchain is installed. Assembly for
+# these targets is GAS syntax through clang's integrated assembler — nasm stays
+# x86-only.
+ARM64_TRIPLE := aarch64-none-elf
+RV64_TRIPLE  := riscv64-none-elf
+
+# -mgeneral-regs-only on aarch64: no FP/SIMD in kernel context, matching the
+# x86_64 build's stance. FP state is not saved across the boot path.
+CFLAGS_ARM64 := --target=$(ARM64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
+                -mgeneral-regs-only -fno-stack-protector -nostdlib \
+                -Wall -Wextra -Werror
+
+# -march=rv64imac: no FP either, and -mabi=lp64 (not lp64d) so the ABI matches.
+CFLAGS_RV64  := --target=$(RV64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
+                -march=rv64imac -mabi=lp64 -mcmodel=medany \
+                -fno-stack-protector -nostdlib -Wall -Wextra -Werror
+
 # --- Rust (bare-metal userspace + safe kernel subsystems) -------------------
 CARGO       := cargo +nightly
 RUST_TARGET := x86_64-unknown-none

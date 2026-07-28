@@ -50,3 +50,27 @@ Rules:
 
 Variant branches are created as markers from the current `main` and stay in
 lockstep with the reference until per-ISA bring-up begins on each.
+
+
+## Additional architectures (ADR-034) — BOOT-ONLY as of 2026-07-28
+
+| arch | build | boot gate | scope |
+|---|---|---|---|
+| x86_64 | `make image` | `make smoke` + ~107 gates | **reference platform, full** |
+| aarch64 | `make kernel-aarch64` | `make smoke-aarch64` | **boot only** — PL011 console + sentinel |
+| riscv64 | `make kernel-riscv64` | `make smoke-riscv64` | **boot only** — NS16550A console + sentinel |
+
+The aarch64/riscv64 ports reach C, bring up a serial console, print
+`NEXUS KERNEL OK` and halt. They do **not** have the PMM, VMM, scheduler, VFS,
+virtio or syscall surface, so the ~107 x86_64 smoke gates are **not** ported.
+Each of those subsystems needs its own slice.
+
+Toolchain: clang cross-compiles both (`aarch64-none-elf`, `riscv64-none-elf`)
+with `ld.lld`; no GCC cross-toolchain is installed (ADR-034 decision 1).
+Assembly is GAS syntax through clang's integrated assembler — `nasm` stays
+x86-only.
+
+The x86_64 tree is deliberately **not** restructured into `kernel/arch/x86_64/`
+yet: doing so under an open intermittent (BUG-1) would make the next red gate
+impossible to attribute. That hoist is its own slice, after BUG-1 closes
+(ADR-034 decision 2).

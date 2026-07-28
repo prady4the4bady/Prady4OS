@@ -1298,6 +1298,46 @@ smoke-rqstress-liveness: fat-image sfs-image
 	  $(MAKE) image ; \
 	  exit $$rc
 
+# ---------------------------------------------------------------------------
+# ADR-034 — aarch64 / riscv64 bootstrap. ADDITIVE: these targets share no
+# object, flag or rule with the x86_64 build, so a break here cannot be a break
+# there. Scope is BOOT ONLY — the smoke-gate set is not ported yet.
+# ---------------------------------------------------------------------------
+ARM64_DIR   := kernel/arch/aarch64
+RV64_DIR    := kernel/arch/riscv64
+ARM64_ELF   := build/kernel-aarch64.elf
+RV64_ELF    := build/kernel-riscv64.elf
+
+kernel-aarch64: $(ARM64_ELF)
+$(ARM64_ELF): $(ARM64_DIR)/boot.S $(ARM64_DIR)/start.c $(ARM64_DIR)/kernel.ld
+	@mkdir -p build
+	$(CC) $(CFLAGS_ARM64) -c $(ARM64_DIR)/boot.S  -o build/aarch64_boot.o
+	$(CC) $(CFLAGS_ARM64) -c $(ARM64_DIR)/start.c -o build/aarch64_start.o
+	$(LD) -nostdlib -T $(ARM64_DIR)/kernel.ld -o $@ \
+	      build/aarch64_boot.o build/aarch64_start.o
+	@echo "kernel-aarch64: $@"
+
+kernel-riscv64: $(RV64_ELF)
+$(RV64_ELF): $(RV64_DIR)/boot.S $(RV64_DIR)/start.c $(RV64_DIR)/kernel.ld
+	@mkdir -p build
+	$(CC) $(CFLAGS_RV64) -c $(RV64_DIR)/boot.S  -o build/riscv64_boot.o
+	$(CC) $(CFLAGS_RV64) -c $(RV64_DIR)/start.c -o build/riscv64_start.o
+	$(LD) -nostdlib -T $(RV64_DIR)/kernel.ld -o $@ \
+	      build/riscv64_boot.o build/riscv64_start.o
+	@echo "kernel-riscv64: $@"
+
+# Boot gates. Own runner rather than boot_test.sh: that script hard-codes
+# qemu-system-x86_64 and the whole virtio/FAT/SFS disk set, none of which this
+# boot-only slice has. Reusing it would mean threading arch through every disk
+# option for a gate that boots a bare ELF.
+smoke-aarch64: kernel-aarch64
+	ARCH=aarch64 QEMU=qemu-system-aarch64 KERNEL_ELF=$(ARM64_ELF) \
+	    bash tools/qemu_runner/boot_arch.sh
+
+smoke-riscv64: kernel-riscv64
+	ARCH=riscv64 QEMU=qemu-system-riscv64 KERNEL_ELF=$(RV64_ELF) \
+	    bash tools/qemu_runner/boot_arch.sh
+
 # DDR-759 SMP audit gate (M1 3/3): 4 concurrent workers under -smp 4 each read a
 # sector 64x and verify the bytes against a single-threaded reference checksum, so
 # a completion mis-routed to the wrong DDR-BLK-1 slot (wrong data) is caught (not
