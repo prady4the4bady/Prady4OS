@@ -32,16 +32,36 @@ __attribute__((noreturn)) void _start(void) {
      * NB: SYS_READ (5) is deliberately EXCLUDED — read(fd=0,...) drains the
      * GLOBAL console-input ring (console.c rx_ring) that PRISM/other processes
      * consume, so fuzzing it steals another process's stdin (a real side effect,
-     * not a uaccess test). SYS_WRITE stays: wild bufs fault at copyin (-EFAULT),
-     * so nothing is emitted. */
+     * not a uaccess test). SYS_WRITE stays: with every entry in WILD genuinely
+     * unmapped, a wild buf faults at copyin (-EFAULT) and nothing is emitted.
+     * DDR-797: that conditional is load-bearing. It held only as long as WILD
+     * contains no mapped address, and for a long time it did contain one (the
+     * load base), so this exemption quietly became false and flooded the
+     * console. If an entry is ever added to WILD, check it against user.ld. */
     static const long SAFE[] = {
         6, 9, 11, 27, 53, 64, 66, 67, 71, 72, 73, 74, 75
     };
     /* Wild pointer values: NULL, kernel VA, non-canonical, unmapped user,
-     * a low-but-plausible junk address. */
+     * a low-but-plausible junk address.
+     *
+     * DDR-797: this list used to contain 0x8000000000, described as "unmapped
+     * user". It is the exact opposite — user.ld line 13 bases the image there,
+     * so it is the MOST mapped address in the process. With every argument set
+     * to the same wild value, SYS_WRITE then became
+     *     write(fd=(int)0x8000000000 == 0, buf=<image base>, count=~512 GB)
+     * and fd_write_user did precisely what write(2) should: chunked from the
+     * image base to the console until copyin ran off the end of the mapping.
+     * That dumped this probe's whole image to the serial port ~20x per boot —
+     * 83% of all console traffic — and delayed boot enough to make BUG-1's
+     * metrics probe time out.
+     *
+     * 0x0000600000000000 replaces it: canonical, user half, and nothing maps
+     * there. Do not "restore" a load-base-adjacent constant here; the point of
+     * this array is addresses that must produce -EFAULT, and an address the
+     * loader actually maps tests the opposite of that. */
     static const unsigned long WILD[] = {
         0UL, 0xdeadbeefUL, 0xffffffff80000000UL,
-        0x8000000000UL, 0xffffffffffffffffUL, 0x41414141UL
+        0x0000600000000000UL, 0xffffffffffffffffUL, 0x41414141UL
     };
     const int NSAFE = (int)(sizeof SAFE / sizeof SAFE[0]);
     const int NWILD = (int)(sizeof WILD / sizeof WILD[0]);

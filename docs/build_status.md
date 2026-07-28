@@ -2194,7 +2194,7 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 See the per-item rows above for the primary (non-deferred) component status.
 
 
-## BUG-1 — PARTIALLY FIXED 2026-07-28 (DDR-796), NOT closed
+## BUG-1 — CLOSED 2026-07-29 (DDR-796 + DDR-797): TWO independent causes
 
 Root cause: the CMOS/RTC read was not SMP-safe. `cmos_read()` is a two-port
 sequence (0x70 selects a register, 0x71 reads it) over **chipset-global** state,
@@ -2220,3 +2220,23 @@ RTC race was a contributing cause, not the only one. The residual is a race
 between the metrics probe's 120 s window and how long boot takes to reach the
 daemon's agent spawn; DDR-791's unexplained serial flood (83% of console bytes)
 is the leading suspect for that slowness. See DDR-796 "Correction".
+
+
+### Second cause — the serial flood (DDR-797)
+
+`user/syscallfuzz.c`'s `WILD[]` listed `0x8000000000` as an "unmapped user"
+address. `user/user.ld:13` bases the user image at exactly that address, so it
+was the most-mapped address in the process. Since the probe passes the same wild
+value as every argument, `SYS_WRITE` became
+`write(fd=(int)0x8000000000==0, buf=<image base>, count=~512 GB)`, and
+`fd_write_user` chunked from the image base to the console until `copyin` ran off
+the end of the mapping — dumping the probe's whole image ~20x per boot.
+
+The kernel was correct throughout; `write(2)` is supposed to write what it can.
+The defect was a test constant that tested the opposite of what it claimed.
+
+Fixed by replacing it with `0x0000600000000000` (canonical, user half, unmapped).
+Serial output: **97,564 bytes (83% binary) -> 5,901 bytes (0% binary)**.
+
+Gate: `make smoke-serialflood` (32 KiB ceiling; also requires the boot sentinel,
+so a kernel that dies instantly cannot pass by being quiet).
