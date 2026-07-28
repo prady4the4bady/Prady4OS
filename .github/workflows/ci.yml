@@ -400,16 +400,31 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install QEMU for ${{ matrix.arch }}
+      # lld is NOT preinstalled on ubuntu-latest — the x86_64 job installs it
+      # too (line ~20). Run 30380714176 failed here with
+      # "make: ld.lld: No such file or directory" after clang had compiled both
+      # objects fine.
+      - name: Install clang/lld and QEMU for ${{ matrix.arch }}
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ${{ matrix.qemu_pkg }}
+          sudo apt-get install -y -qq --no-install-recommends \
+            clang lld make ${{ matrix.qemu_pkg }}
 
+      # Every tool is checked with `command -v` and the whole step is `set -e`.
+      # The previous version piped `--version` into `head`, which returns HEAD's
+      # exit status — so a missing binary passed the check and the failure
+      # surfaced two steps later as a make error. A toolchain check that cannot
+      # fail is not a check.
       - name: Toolchain (clang cross-compiles both; no GCC cross needed)
         run: |
-          clang --version | head -1
-          ld.lld --version | head -1
-          clang --print-targets | grep -E 'aarch64|riscv64' | head -2
+          set -e
+          for t in clang ld.lld make ${{ matrix.qemu_pkg == 'qemu-system-arm' && 'qemu-system-aarch64' || 'qemu-system-riscv64' }}; do
+            command -v "$t" >/dev/null || { echo "MISSING: $t"; exit 1; }
+            echo "found: $t"
+          done
+          clang --print-targets | grep -qE '^ +aarch64 ' || { echo "clang lacks aarch64"; exit 1; }
+          clang --print-targets | grep -qE '^ +riscv64 ' || { echo "clang lacks riscv64"; exit 1; }
+          echo "clang targets OK"
 
       - name: Build kernel-${{ matrix.arch }} (zero warnings mandated)
         run: make kernel-${{ matrix.arch }}
