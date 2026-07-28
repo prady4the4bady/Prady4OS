@@ -69,7 +69,7 @@ KNOWN_CAPABILITIES: frozenset[str] = frozenset(
         "CAP_MEMORY_WRITE",            # D-11
         "CAP_SUBSTRATE",               # D-12
         "CAP_FAILURE_REGISTRY",        # D-13 failure memory registry
-        "CAP_ETHICS_DELIBERATE",       # D-14
+        "CAP_ETHICS_DELIBERATE",       # D-14 lineage knowledge loader
         "CAP_ONTOLOGY_WRITE",          # D-15
     }
 )

@@ -142,7 +142,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | D-11 knowledge consolidation | `aether/agents/memory/knowledge_consolidation.py` | ✅ |
 | D-12 adaptive goal prioritizer | `aether/agents/planner/adaptive_goal_prioritizer.py` | ✅ |
 | D-13 failure memory registry | `aether/agents/memory/failure_memory_registry.py` | ✅ |
-| **D-14…D-15** ASI-bridge features | — | ⬜ in progress |
+| D-14 lineage knowledge loader | `aether/agents/memory/lineage_knowledge_loader.py` | ✅ |
+| **D-15** ASI-bridge feature | — | ⬜ in progress |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
