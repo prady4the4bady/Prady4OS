@@ -45,3 +45,4 @@ aether/kernel/invariants/custom_invariants.jsonl
 aether/agents/safety/review_queue.jsonl
 aether/agents/contracts/registry.jsonl
 aether/agents/analogy/analogy_log.jsonl
+aether/agents/self_improvement/proposals.jsonl

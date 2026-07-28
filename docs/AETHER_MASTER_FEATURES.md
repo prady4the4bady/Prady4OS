@@ -129,7 +129,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | C-08 offline safety review mode | `aether/agents/safety/offline_review.py` | ✅ |
 | C-09 versioned agent contracts | `aether/agents/contracts/agent_contract.py` | ✅ |
 | C-10 cross-domain analogy engine | `aether/agents/analogy/cross_domain_engine.py` | ✅ |
-| **D-01…D-15** ASI-bridge features | — | ⬜ not started |
+| D-01 self-improvement proposals | `aether/agents/self_improvement/proposal_engine.py` | ✅ |
+| **D-02…D-15** ASI-bridge features | — | ⬜ in progress |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
