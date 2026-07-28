@@ -237,6 +237,12 @@ jobs:
       - name: QEMU metric-region test (F#68/DDR-795; ring-3 read OK, write faults)
         run: make smoke-metric
 
+      # DDR-796 (BUG-1 root cause): SYS_CLOCK must not run backwards under
+      # -smp 4. Tests the invariant directly; the bug presented three
+      # inferential steps away as a metrics probe timing out.
+      - name: QEMU RTC monotonicity test (q35 -smp 4; DDR-796 BUG-1)
+        run: make smoke-rtc-smp
+
       - name: QEMU COW fork test (q35; copy-on-write isolation + refcount)
         run: make smoke-cowfork
 

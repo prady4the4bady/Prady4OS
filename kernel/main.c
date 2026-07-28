@@ -355,6 +355,8 @@ extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mou
 extern const unsigned char rootmounttest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
+extern const unsigned char rtcmonotest_elf[];         /* DDR-796: SYS_CLOCK monotonicity */
+extern const unsigned char rtcmonotest_elf_end[];
 extern const unsigned char metrictest_elf[];          /* F#68/DDR-795: metric-region probe */
 extern const unsigned char metrictest_elf_end[];
 extern const unsigned char sysinfotest_elf[];         /* sys: SYS_SYSINFO probe (DDR-748) */
@@ -1166,6 +1168,10 @@ static void fs_test_thread(void *arg) {
                  * it. The store must fault — idt.c kills the process, so
                  * METRIC_WX_FAIL is never printed. */
                 user_boot_from_sfs(cap, smnt, "METRIC.ELF", metrictest_elf, metrictest_elf_end, 0);
+                /* DDR-796 (BUG-1): asserts SYS_CLOCK never runs backwards. The
+                 * CMOS index/data pair is chipset-global; unserialised, two CPUs
+                 * read each other's register. */
+                user_boot_from_sfs(cap, smnt, "RTCMONO.ELF", rtcmonotest_elf, rtcmonotest_elf_end, 0);
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
                  * prints TIME YYYY-MM-DD HH:MM:SS + PRADYOS_TIME_OK. Gate smoke-time. */
                 user_boot_from_sfs(cap, smnt, "TIME.ELF", timetest_elf, timetest_elf_end, 0);

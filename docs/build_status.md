@@ -2192,3 +2192,24 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 | **FAT32 LFN / timestamps** | 8.3 names; new entries get a zero date (no RTC) | long filenames; real mtimes (needs an RTC driver) |
 
 See the per-item rows above for the primary (non-deferred) component status.
+
+
+## BUG-1 — CLOSED 2026-07-28 (DDR-796)
+
+Root cause: the CMOS/RTC read was not SMP-safe. `cmos_read()` is a two-port
+sequence (0x70 selects a register, 0x71 reads it) over **chipset-global** state,
+with no lock. Under `-smp 4` two CPUs interleave and each reads the other's
+register, so `SYS_CLOCK` can jump in either direction.
+
+The symptom was three inferential steps away: the DDR-730 metrics probe compares
+two `SYS_CLOCK` readings, treats any decrease as a midnight wrap (`+86400`), and
+so collapsed its whole 120-second window to zero — printing
+`AGENT_METRICS FAIL: agent never observed as scheduled` while the agent was in
+fact spawned, dispatched and reaped normally 75 KB of serial output later.
+
+Fix: one IRQ-saving spinlock held across the whole of `rtc_now()`. Per-`cmos_read`
+locking would be insufficient — another CPU could still move the index between
+the *paired* readings the consistency loop compares.
+
+Gate: `make smoke-rtc-smp` tests the invariant directly. A/B verified — the gate
+FAILS with the lock removed and PASSES with it.

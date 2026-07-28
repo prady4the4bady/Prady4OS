@@ -151,6 +151,13 @@ fsrmtest_elf:
     incbin "build/fsrmtest.elf"
 fsrmtest_elf_end:
 
+; DDR-796 (BUG-1): SYS_CLOCK monotonicity probe under SMP.
+global rtcmonotest_elf
+global rtcmonotest_elf_end
+rtcmonotest_elf:
+    incbin "build/rtcmonotest.elf"
+rtcmonotest_elf_end:
+
 ; F#68/DDR-795: sealed metric-region probe (reads the root, then proves a
 ; ring-3 write to it faults).
 global metrictest_elf
