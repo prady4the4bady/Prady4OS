@@ -107,6 +107,63 @@ fi
 early_exit_eligible=0
 [ -z "$FORBIDDEN_SENTINEL" ] && early_exit_eligible=1
 
+# DDR-791 harness gap: every boot runs EVERY in-kernel/user probe, but only the
+# ~39 gates that declare FORBIDDEN_SENTINEL watch for a failure string. A probe
+# that fails during some OTHER gate's boot therefore prints "... FAIL" into a log
+# nobody is checking, and the run goes green. That is how
+# "AGENT_METRICS FAIL: agent never observed as scheduled" appeared in run
+# 30326561378 without failing it.
+#
+# These patterns are forbidden in EVERY gate. Deliberately checked against the
+# captured log at exit rather than by adding them to FORBIDDEN_SENTINEL: doing
+# the latter would make every gate ineligible for DDR-785 early exit and give
+# back the measured 46.5 min/run saving.
+#
+# Known limit, stated rather than glossed: with early exit this catches a probe
+# failure that occurred BEFORE the required sentinels appeared — which is the
+# observed case — but not one after the run stopped early. A gate that needs the
+# later window still declares its own FORBIDDEN_SENTINEL.
+# The list is the UNION of every pattern any gate already declares forbidden,
+# because every boot runs every probe — if a string means "broken" in one gate it
+# means "broken" in all of them.
+#
+# Two declared patterns are deliberately EXCLUDED because they report state, not
+# failure, and promoting them here would turn a condition into an error:
+#   PRADYOS_AETHER_CFG_DEFAULT — config fell back to the built-in default, which
+#     is correct behaviour in gates that mount no SFS config.
+#   msix unavailable          — a device-capability report; only the MSI-X gate
+#     is entitled to treat its absence as a failure.
+GLOBAL_FORBIDDEN="$(printf '%s\n' \
+    'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
+    'FSRM FAIL' 'KILL FAIL' 'ROOTMOUNT FAIL' 'SETNAME FAIL' 'SFSROOT FAIL' \
+    'SURFDESTROY FAIL' 'SYSINFO FAIL' 'TIME FAIL' \
+    'PRADYOS_FPU_FAIL' 'PRADYOS_NVME_IRQ_FAIL' 'PRADYOS_NVME_PRP_FAIL' \
+    'PRADYOS_NVME_RW_FAIL' 'PRADYOS_SFS_NESTED_FAIL' 'PRADYOS_SFS_PERSIST_FAIL' \
+    'allowlist FAIL' 'ap preempt FAIL' 'blk integrity FAIL' 'btree churn FAIL' \
+    'churn FAIL' 'cross-CPU FAIL' 'current FAIL' 'free-space GC FAIL' \
+    'gs FAIL' 'hier dirs FAIL' 'kernel W^X FAIL' 'locks FAIL' \
+    'msix on AP FAIL' 'multi-inflight FAIL' 'percpu FAIL' 'resched FAIL' \
+    'rqstress FAIL' 'tss FAIL' 'unlink/rmdir FAIL' 'user on AP FAIL' \
+    'controller not ready' 'create-iocq failed' 'create-iosq failed' \
+    'identify-ctrl failed' 'identify-ns failed' 'reset stuck')"
+[ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
+
+# Fails the run when any probe reported a failure, whichever gate is running.
+check_global_forbidden() {
+    while IFS= read -r pat; do
+        [ -z "$pat" ] && continue
+        if grep -qF "$pat" "$SERIAL_LOG" 2>/dev/null; then
+            echo "[smoke] FAIL — a probe reported '$pat' during this gate's boot."
+            echo "[smoke] (DDR-791: forbidden in every gate, not only the one that owns it.)"
+            grep -aF "$pat" "$SERIAL_LOG" | head -5
+            return 1
+        fi
+    done <<EOF
+$GLOBAL_FORBIDDEN
+EOF
+    return 0
+}
+
 # True once $SENTINEL and every non-empty EXTRA_SENTINEL line are in the log.
 all_required_present() {
     grep -q "$SENTINEL" "$SERIAL_LOG" 2>/dev/null || return 1
@@ -149,6 +206,14 @@ if [ "$early_exit_eligible" -eq 1 ]; then
     done
 fi
 wait "$qemu_pid" 2>/dev/null || true
+
+# Checked FIRST: a probe failure is a real failure regardless of whether this
+# gate's own sentinels happened to appear. Running it after the required-pattern
+# checks would let a gate report "PASS" for a boot in which something broke.
+if ! check_global_forbidden; then
+    rm -f "$SERIAL_LOG"
+    exit 1
+fi
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"

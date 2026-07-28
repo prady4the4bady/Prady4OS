@@ -118,6 +118,52 @@ needs a bigger timeout" — raising windows (DDR-788) did not retire this class.
    artefact. Do not widen timeouts further; DDR-788 already showed that does not
    retire this class.
 
+## Harness gap — CLOSED 2026-07-28
+
+`boot_test.sh` now carries a `GLOBAL_FORBIDDEN` list: the **union of every
+pattern any gate declares forbidden**, checked against the captured log in every
+gate. If a string means "broken" in one gate it means "broken" in all of them,
+because every boot runs every probe.
+
+Two declared patterns are deliberately excluded, because they report state
+rather than failure and promoting them would turn a condition into an error:
+`PRADYOS_AETHER_CFG_DEFAULT` (correct in gates that mount no SFS config) and
+`msix unavailable` (a device-capability report only the MSI-X gate may treat as
+fatal).
+
+It is checked at exit rather than appended to `FORBIDDEN_SENTINEL` on purpose:
+the latter would make every gate ineligible for DDR-785 early exit and hand back
+the measured 46.5 min/run saving. **Stated limit:** with early exit this catches
+a probe failure that occurred *before* the required sentinels appeared — the
+observed case — but not one after the run stopped early. A gate needing the
+later window still declares its own `FORBIDDEN_SENTINEL`.
+
+`make smoke-selftest` gained three cases: the foreign-probe failure now fails a
+gate that never declared it, a clean boot is unaffected, and early exit still
+fires. All 7 pass.
+
+## BSP-liveness instrument — built 2026-07-28, awaiting CI data
+
+`BSP_LIVENESS=1` (off by default, same shape as `PIPE_TRACE`) prints one
+`[bsp] churn iter=N t=TICKS` per kmain SFS churn iteration.
+`make smoke-rqstress-liveness` builds it, runs only that gate, and restores a
+clean image. CI now runs that target **instead of** plain `smoke-rqstress` —
+running both would boot the same intermittent failure twice for one datum.
+
+Local run (healthy path, BUG-1 did not reproduce — 0/4 local attempts now):
+
+```
+bsp markers   : 40
+last marker   : [bsp] churn iter=39 t=8419
+churn result  : [sfs] btree churn OK
+last heartbeat: [hb] t=17500
+rqstress      : [smp] rqstress OK
+```
+
+That confirms the instrument produces a readable verdict; it does not diagnose
+anything, because nothing failed. The DDR-777 three-way read is now mechanised
+and waits on a failing CI run.
+
 ## Coverage gap worth closing regardless
 
 `AGENT_METRICS FAIL` is only forbidden on one gate. Any `... FAIL` sentinel a

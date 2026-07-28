@@ -149,10 +149,15 @@ endif
 # chasing the double-free panic.
 PIPE_TRACE ?= 0
 KCFLAGS += -DPIPE_TRACE=$(PIPE_TRACE)
+# DDR-777/DDR-791 (BUG-1): per-iteration BSP-liveness markers in the kmain SFS
+# churn block. Same reasoning as PIPE_TRACE — high volume, so OFF by default and
+# built only by `make smoke-rqstress-liveness`, which restores a clean image.
+BSP_LIVENESS ?= 0
+KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring fat-image sfs-image ext4-image clean
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness fat-image sfs-image ext4-image clean
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -1258,6 +1263,38 @@ smoke-blkmq-trace: fat-image sfs-image
 	  rc=$$? ; \
 	  echo "[blkmq-trace] restoring untraced kernel" ; \
 	  rm -f $(BUILD_DIR)/pipe.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG) ; \
+	  $(MAKE) image ; \
+	  exit $$rc
+
+# DDR-777/DDR-791 (BUG-1): run the gate that has failed most often, against a
+# kernel built with BSP_LIVENESS=1, so the churn block reports where the BSP got
+# to before it stopped progressing.
+#
+# The three-way read (DDR-777):
+#   no [bsp] lines at all         -> the BSP never reached the churn block; the
+#                                    stall is EARLIER than DDR-775 assumed.
+#   [bsp] lines stop at iter=N,
+#   and [hb] keeps ticking        -> the BSP is wedged INSIDE churn iteration N,
+#                                    with the timer alive: an SFS/allocator stall.
+#   [bsp] runs to iter=39 and
+#   "btree churn OK" prints       -> churn completed; the stall is AFTER it, and
+#                                    the SFS allocator is exonerated.
+#
+# Own target for the same reason as smoke-blkmq-trace: the flag is COMPILE-TIME
+# and CI builds one shared image, so enabling it globally would put per-iteration
+# output into every later gate — which DDR-790 already proved evicts smoke-dmesg's
+# marker from the last-4 KiB log ring.
+smoke-rqstress-liveness: fat-image sfs-image
+	@echo "[bsp-liveness] rebuilding kernel with BSP_LIVENESS=1 (DDR-777)"
+	rm -f $(BUILD_DIR)/main.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG)
+	$(MAKE) image BSP_LIVENESS=1
+	TIMEOUT_S=180 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf '[smp] rqstress OK')" \
+	FORBIDDEN_SENTINEL="rqstress FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
+	  rc=$$? ; \
+	  echo "[bsp-liveness] restoring untraced kernel" ; \
+	  rm -f $(BUILD_DIR)/main.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG) ; \
 	  $(MAKE) image ; \
 	  exit $$rc
 

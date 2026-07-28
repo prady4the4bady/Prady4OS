@@ -89,8 +89,30 @@ CASE_EXTRA="" CASE_FORBIDDEN="SOME BUG" \
 run_case "forbidden declared but absent still PASSES" \
     "1|NEXUS KERNEL OK" 8 0 25
 
+# 5. DDR-791 — THE HARNESS GAP. A probe failure from a gate that is NOT this one
+#    appears mid-boot, and this gate declares no FORBIDDEN_SENTINEL of its own.
+#    Before the global list, every required pattern was present and the gate
+#    reported PASS on a boot in which something broke. It must now FAIL.
+CASE_EXTRA="" CASE_FORBIDDEN="" \
+run_case "foreign probe FAIL fails a gate that never declared it" \
+    "1|AGENT_METRICS FAIL: agent never observed as scheduled;1|NEXUS KERNEL OK" \
+    10 1 25
+
+# 6. The global list must not fire on a clean boot — otherwise it would turn
+#    every gate red and be reverted within the day.
+CASE_EXTRA="" CASE_FORBIDDEN="" \
+run_case "clean boot is unaffected by the global list" \
+    "1|NEXUS KERNEL OK" 10 0 20
+
+# 7. The global check must not cost the DDR-785 saving: a clean gate is still
+#    eligible for early exit and must finish far short of its window.
+CASE_EXTRA="$(printf 'FS PATTERN OK')" CASE_FORBIDDEN="" \
+run_case "global list does not disable early exit" \
+    "1|NEXUS KERNEL OK;1|FS PATTERN OK" 60 0 20
+
 if [ "$fails" -eq 0 ]; then
-    echo "[selftest] PASS — early exit works, and it cannot mask a late forbidden pattern."
+    echo "[selftest] PASS — early exit works, it cannot mask a late forbidden"
+    echo "           pattern, and a foreign probe failure now fails every gate."
     exit 0
 fi
 echo "[selftest] FAIL — $fails case(s) failed."

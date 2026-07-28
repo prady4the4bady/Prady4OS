@@ -1370,6 +1370,28 @@ static void fs_test_thread(void *arg) {
                              * no hot-path volume, so it cannot evict gate markers
                              * from the log ring the way DDR-790's traces did. */
                             for (int i = 0; churn_ok && i < 40; i++) {
+#if BSP_LIVENESS
+                                /* DDR-777/DDR-791: BUG-1 BSP-liveness witness.
+                                 *
+                                 * The failing runs stop progressing somewhere at
+                                 * or after this block, with the timer alive and
+                                 * the APs up — but nothing distinguishes "the BSP
+                                 * is wedged INSIDE a churn iteration" from "the
+                                 * churn finished and the BSP wedged later". One
+                                 * marker per iteration settles it: the last
+                                 * printed index is where progress stopped.
+                                 *
+                                 * Opt-in because DDR-790 already proved that
+                                 * per-iteration output evicts smoke-dmesg's marker
+                                 * from the last-4 KiB log ring. Built only by
+                                 * `make smoke-rqstress-liveness`, which restores a
+                                 * clean image afterwards. */
+                                kputs("[bsp] churn iter=");
+                                kputdec((uint64_t)i);
+                                kputs(" t=");
+                                kputdec(g_ticks);
+                                kputs("\r\n");
+#endif
                                 struct vfs_file cf2;
                                 const char *which = 0;
                                 if (vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2) != 0)

@@ -194,8 +194,12 @@ jobs:
       - name: QEMU SFS free-space GC test (q35; next_free reuse-delta over 10 cycles, DDR-762-v2)
         run: make smoke-sfs-gc
 
-      - name: QEMU runqueue stress test (q35 -smp 4; thread storm over per-CPU rqs)
-        run: make smoke-rqstress
+      # DDR-777/DDR-791 (BUG-1): rqstress is the gate that has failed most often
+      # and it never reproduces locally (0/4 attempts), so the BSP-liveness
+      # instrument has to run HERE. Replaces the plain gate rather than adding a
+      # step: running both would boot the same failure twice for one datum.
+      - name: QEMU runqueue stress test (q35 -smp 4; BSP-liveness instrumented, DDR-777)
+        run: make smoke-rqstress-liveness
 
       - name: QEMU window-cycling test (GPU; Tab hotkey rotates focus through windows)
         run: make smoke-alttab
