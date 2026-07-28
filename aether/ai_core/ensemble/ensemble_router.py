@@ -36,6 +36,7 @@ __all__ = [
     "NoModelAvailable",
     "Provider",
     "EWMA_ALPHA",
+    "estimate_tokens",
 ]
 
 DDR_ID = "D-03"
@@ -55,6 +56,20 @@ class RoutingError(ValueError):
 
 class NoModelAvailable(RuntimeError):
     """No model satisfies the request."""
+
+
+def estimate_tokens(text: str) -> int:
+    """Approximate token count for audit accounting (I-04).
+
+    A whitespace/4-chars heuristic, not a tokenizer. It is deliberately local:
+    importing a real tokenizer would make the audit path depend on a model
+    package being installed, and an audit entry that can fail to be written is
+    worse than an approximate one. Callers that need exact counts should record
+    the provider's reported usage instead.
+    """
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
 
 
 @dataclass(slots=True)
@@ -237,7 +252,14 @@ class EnsembleRouter:
         latency_budget_ms: float = 5000.0,
         quality_floor: float = 0.0,
     ) -> tuple[str, ModelProfile]:
-        """Route then run, recording observed latency and returning both."""
+        """Route then run, recording observed latency and returning both.
+
+        **I-04**: every completed call writes one ``route.call`` audit entry
+        carrying ``token_count`` and ``latency_ms``. ``route.select`` alone
+        records only that a model was *chosen* — without the per-call cost the
+        log says inference happened but not what it cost, so no budget or
+        latency-regression question can be answered from it afterwards.
+        """
         profile = self.route(task_domain, latency_budget_ms, quality_floor)
         runner = runners.get(profile.model_id)
         if runner is None:
@@ -246,4 +268,11 @@ class EnsembleRouter:
         text = runner(prompt, profile)
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         self.update_stats(profile.model_id, elapsed_ms, profile.quality_score)
+        token_count = estimate_tokens(prompt) + estimate_tokens(text)
+        self.audit.append_action(
+            ddr=DDR_ID, file=_FILE, action="route.call", gate_status="ok",
+            domain=task_domain, model=profile.model_id,
+            token_count=token_count, latency_ms=round(elapsed_ms, 3),
+            cost=round(token_count / 1000.0 * profile.cost_per_1k_tokens, 6),
+        )
         return text, profile
