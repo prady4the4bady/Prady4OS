@@ -450,7 +450,7 @@ that, "CI green" on an `aether/` commit proved only that the C kernel still buil
 | **B** (foundation) | B-01…B-17 | ✅ **COMPLETE** — 187 passed, 1 skipped, 0 warnings |
 | **C** (gap features) | C-01…C-10 | ✅ **COMPLETE** — 335 passed, 1 skipped, 0 warnings |
 | **D** (ASI bridge) | D-01…D-15 | ✅ **COMPLETE** — D-01…D-15 (614 passed, 1 skipped, 0 warnings) |
-| **I** (integration) | I-01…I-10 | ✅ **COMPLETE** — 733 passed, 1 skipped, 0 warnings (DDR-792 bridge, F#68 lockbox, privacy netfilter, shared limiter) |
+| **I** (integration) | I-01…I-10 | ✅ **COMPLETE** — 750 passed, 1 skipped, 0 warnings (DDR-792/793 bridges, F#68 lockbox, netfilter, limiter) |
 | **J** (Phase 4 audit) | J-01…J-06 | ⬜ not started |
 
 B-series detail: B-01 lockbox · B-02 audit log · B-03 merkle · B-04 firewall ·
