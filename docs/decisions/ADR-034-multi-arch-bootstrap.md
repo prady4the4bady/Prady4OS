@@ -1,6 +1,7 @@
 # ADR-034 — multi-architecture bootstrap (aarch64, riscv64)
 
-**Status:** accepted, partially implemented.
+**Status:** accepted; boot slice implemented and CI-green on both
+architectures (run 30381074300).
 **Date:** 2026-07-28
 **Supersedes:** nothing. **Amends:** nothing binding.
 **Relates to:** `docs/platform_profiles.md`, ADR-033 (toolchain sourcing).
@@ -82,11 +83,12 @@ physical hardware.
 Per the phase-2 self-answer rule, the minimum viable bootstrap ships and CI
 adjudicates. These are the specific things a failure would most likely be:
 
-1. **aarch64 exception level on entry.** QEMU's `virt` `-kernel` path enters at
-   EL1 for a non-`virtualization=on` machine. The bootstrap does not switch EL
-   and does not configure `SCTLR_EL1` beyond what the reset state provides. If
-   entry is at EL2 on this QEMU version, the PL011 writes still work (device
-   memory is accessible at either level) but any later MMU work will not.
+1. **aarch64 exception level on entry — now MEASURED, not assumed.** The first
+   version printed "EL1" as a hard-coded string, which asserted the answer
+   instead of finding it. `arch_main` now reads `CurrentEL[3:2]` and prints what
+   it actually reads, so the CI log is evidence rather than a restatement of the
+   guess. The bootstrap still does not switch EL or configure `SCTLR_EL1` beyond
+   the reset state; that matters for the later MMU work, not for the console.
 2. **Secondary harts / CPUs.** Both bootstraps park every core except the
    primary. On riscv64 the parking is decided from `a0` before the stack is set
    up. If OpenSBI on the CI image starts only hart 0, the parking branch is
@@ -94,9 +96,24 @@ adjudicates. These are the specific things a failure would most likely be:
 3. **Cache/MMU state at entry.** Nothing here enables the MMU or caches, so the
    UART MMIO is accessed with the reset attributes. That is fine for a console
    and is *not* fine for the memory subsystem the later slices will add.
-4. **`-cpu rv64` naming.** QEMU accepts `rv64` as a CPU alias on the `virt`
-   machine; if the CI QEMU rejects it, the fix is the CPU string, not the
-   bootstrap.
+4. **`-cpu rv64` naming.** RESOLVED — accepted by the CI QEMU; riscv64 booted
+   first try (run 30380921699).
+
+## What CI actually found
+
+Both failures were environmental, not bootstrap defects, and both are worth
+recording because neither was on the uncertainty list:
+
+* **`ld.lld` is not preinstalled on `ubuntu-latest`** (run 30380714176). Worse,
+  the job's own toolchain step ran `ld.lld --version | head -1` and PASSED — a
+  pipeline returns its LAST command's status, so `head` masked the missing
+  binary and the failure surfaced two steps later as an opaque make error. The
+  check now uses `command -v` under `set -e`.
+* **QEMU's `virt` machine instantiates a default virtio NIC** whose option ROM
+  (`efi-virtio.rom`) is absent from Ubuntu's `qemu-system-arm` package, killing
+  QEMU at startup with an empty serial log (run 30380921699). Fixed with
+  `-nodefaults` rather than by shipping the ROM: this gate boots a CPU, some RAM
+  and a UART, so creating a NIC it never touches was the actual mistake.
 
 Uncertainty 1 is the one most likely to matter later; it is cheap now and
 expensive to discover after the MMU work is written on top of it.

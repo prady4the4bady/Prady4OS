@@ -42,11 +42,22 @@ static void uart_puts(const char *s) {
     }
 }
 
+/* CurrentEL[3:2] holds the exception level. ADR-034 uncertainty (1) asks which
+ * level QEMU's `-kernel` path actually enters at; printing the assumption would
+ * have answered nothing, so this reads the register and prints what it finds. */
+static unsigned current_el(void) {
+    uint64_t el;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    return (unsigned)((el >> 2) & 3u);
+}
+
 /* Called from boot.S with a valid stack and a zeroed BSS. */
 void arch_main(void);
 void arch_main(void) {
     uart_puts("PRADYOS BOOT OK\n");
-    uart_puts("NEXUS: entered arch_main (aarch64, EL1, MMU off)\n");
+    uart_puts("NEXUS: entered arch_main (aarch64, EL");
+    uart_putc((char)('0' + current_el()));
+    uart_puts(", MMU off)\n");
     uart_puts("NEXUS KERNEL OK\n");
     uart_puts("NEXUS: aarch64 bootstrap complete — boot-only slice (ADR-034)\n");
 
