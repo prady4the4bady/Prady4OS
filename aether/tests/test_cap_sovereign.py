@@ -102,7 +102,9 @@ def test_section_f_capability_set_is_complete() -> None:
         "CAP_ANALOGY_READ", "CAP_SELF_IMPROVEMENT_PROPOSE", "CAP_PLAN_WRITE",
         "CAP_MODEL_ROUTE", "CAP_WORLD_MODEL_WRITE", "CAP_META_LEARN",
         "CAP_CAUSAL_WRITE", "CAP_HYPOTHESIS_WRITE", "CAP_ALIGNMENT_MONITOR",
-        "CAP_PARALLEL_EXEC", "CAP_WATCHDOG", "CAP_MEMORY_WRITE",
+        # D-09…D-15 slots were pre-allocated from an earlier draft; each is
+        # renamed to the capability the shipped DDR actually exercises.
+        "CAP_SELF_MODEL_WRITE", "CAP_WATCHDOG", "CAP_MEMORY_WRITE",
         "CAP_SUBSTRATE", "CAP_LOAD_BALANCE", "CAP_ETHICS_DELIBERATE",
         "CAP_ONTOLOGY_WRITE",
     ):

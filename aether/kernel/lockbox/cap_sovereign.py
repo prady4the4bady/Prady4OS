@@ -61,7 +61,10 @@ KNOWN_CAPABILITIES: frozenset[str] = frozenset(
         "CAP_CAUSAL_WRITE",            # D-06
         "CAP_HYPOTHESIS_WRITE",        # D-07
         "CAP_ALIGNMENT_MONITOR",       # D-08
-        "CAP_PARALLEL_EXEC",           # D-09
+        # D-09…D-15 were pre-allocated from an earlier draft of the feature
+        # list; each is corrected to the capability the shipped DDR actually
+        # exercises as that DDR lands, so a token never outlives its meaning.
+        "CAP_SELF_MODEL_WRITE",        # D-09 recursive self-model updater
         "CAP_WATCHDOG",                # D-10
         "CAP_MEMORY_WRITE",            # D-11
         "CAP_SUBSTRATE",               # D-12

@@ -137,7 +137,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | D-06 causal reasoning engine | `aether/agents/causal/causal_reasoning_engine.py` | ✅ |
 | D-07 hypothesis generator | `aether/agents/research/hypothesis_generator.py` | ✅ |
 | D-08 superalignment monitor | `aether/agents/safety/superalignment_monitor.py` | ✅ |
-| **D-09…D-15** ASI-bridge features | — | ⬜ in progress |
+| D-09 recursive self-model updater | `aether/agents/self_model/recursive_self_model_updater.py` | ✅ |
+| **D-10…D-15** ASI-bridge features | — | ⬜ in progress |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
