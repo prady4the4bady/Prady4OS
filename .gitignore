@@ -52,3 +52,4 @@ aether/agents/world_model/entities.jsonl
 aether/agents/world_model/relations.jsonl
 aether/agents/meta_learning/strategies.jsonl
 aether/agents/causal/causal_graph.jsonl
+aether/agents/research/hypotheses.jsonl
