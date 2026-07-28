@@ -47,3 +47,4 @@ aether/agents/contracts/registry.jsonl
 aether/agents/analogy/analogy_log.jsonl
 aether/agents/self_improvement/proposals.jsonl
 aether/agents/planner/plans.jsonl
+aether/ai_core/ensemble/model_profiles.jsonl

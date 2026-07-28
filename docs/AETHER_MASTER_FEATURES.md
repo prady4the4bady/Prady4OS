@@ -131,7 +131,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | C-10 cross-domain analogy engine | `aether/agents/analogy/cross_domain_engine.py` | ✅ |
 | D-01 self-improvement proposals | `aether/agents/self_improvement/proposal_engine.py` | ✅ |
 | D-02 long-horizon planner | `aether/agents/planner/long_horizon_planner.py` | ✅ |
-| **D-03…D-15** ASI-bridge features | — | ⬜ in progress |
+| D-03 multi-model ensemble router | `aether/ai_core/ensemble/ensemble_router.py` | ✅ |
+| **D-04…D-15** ASI-bridge features | — | ⬜ in progress |
 | **I-01…I-10** integration wiring | — | ⬜ not started |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
