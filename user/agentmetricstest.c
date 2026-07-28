@@ -16,8 +16,10 @@
  *     (checked at latch time, not separately printed)
  *   - opportunistic: if slot 0 is also caught alive (state >= 1), print the
  *     extra "live pid ok" line — informative, NOT required by the gate.
- * Both facts -> PRADYOS_AGENT_METRICS_OK. Window exhausted -> "AGENT_METRICS
- * FAIL" (the gate's forbidden pattern) and exit 1.
+ * Both facts -> PRADYOS_AGENT_METRICS_OK. Window exhausted -> an INFORMATIONAL
+ * line and exit 0 (DDR-798): this probe runs on every boot, so a deadline it
+ * declares itself is a verdict about gates that never set it. smoke-agentmetrics
+ * owns the assertion via its required sentinels.
  *
  * The window is 120 RTC seconds (SYS_CLOCK, seconds-since-midnight; wrap
  * handled) — iteration-count bounds scale with host speed and mis-size on TCG.
@@ -71,7 +73,26 @@ __attribute__((noreturn)) void _start(void) {
         }
         nsi(SYS_YIELD, 0, 0, 0);
     }
-    wr("AGENT_METRICS FAIL: agent never observed as scheduled\n");
-    nsi(SYS_EXIT, 1, 0, 0);
+    /* DDR-798: window expiry is NOT a verdict this probe may return.
+     *
+     * This probe runs on EVERY boot, but its 120-second deadline is only
+     * meaningful in smoke-agentmetrics — the one gate that asks whether the
+     * agent gets scheduled and gives the boot 150 s to show it. In the other
+     * ~106 gates the probe still counted to 120 and declared failure about a
+     * boot that was never trying to reach the daemon quickly, so on a slow TCG
+     * runner it failed for reasons unrelated to what it tests. DDR-791's
+     * GLOBAL_FORBIDDEN then correctly propagated that to whichever gate was
+     * running, which is how it surfaced.
+     *
+     * The assertion has not been dropped — it has moved to where a timeout
+     * belongs. smoke-agentmetrics REQUIRES "AGENT_METRIC KRYOS sched ok" and
+     * PRADYOS_AGENT_METRICS_OK, so a genuinely unscheduled agent fails that gate
+     * on a missing required sentinel, which cannot be masked.
+     *
+     * Informational rather than silent: an observation that stops being reported
+     * is how a regression becomes invisible. This string is deliberately NOT a
+     * failure pattern and must never be added to GLOBAL_FORBIDDEN. */
+    wr("AGENT_METRIC not observed in window (informational; gate decides)\n");
+    nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }

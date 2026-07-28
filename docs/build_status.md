@@ -2240,3 +2240,24 @@ Serial output: **97,564 bytes (83% binary) -> 5,901 bytes (0% binary)**.
 
 Gate: `make smoke-serialflood` (32 KiB ceiling; also requires the boot sentinel,
 so a kernel that dies instantly cannot pass by being quiet).
+
+
+### Third cause — a probe owning a deadline it cannot judge (DDR-798)
+
+After DDR-796 and DDR-797 both landed, `AGENT_METRICS FAIL` still appeared in CI
+run 30391224155 (on `smoke-msixap`), while the same build passed 10/10 locally.
+The flood fix was confirmed working there — the string appeared as a clean line
+rather than buried in a binary blob.
+
+`user/agentmetricstest.c` runs on EVERY boot and declared failure if the AETHER
+daemon had not spawned an agent within 120 RTC seconds. That deadline is only
+meaningful in `smoke-agentmetrics`, the one gate that asks the question and
+allows 150 s. In the other ~106 gates it judged a boot that was never trying to
+reach the daemon quickly, so on a slow TCG runner it failed for reasons
+unrelated to what it tests.
+
+Fixed by removing the probe's self-declared verdict: window expiry now prints an
+informational line and exits 0. The assertion moves to `smoke-agentmetrics`'s
+required sentinels, where a genuinely unscheduled agent fails on a missing
+required pattern — which cannot be masked. The 120 s window is unchanged and no
+gate timeout was widened.
