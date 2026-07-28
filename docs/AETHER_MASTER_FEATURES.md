@@ -147,6 +147,7 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | I-09 D-08 alignment wiring | `aether/agents/safety/alignment_wiring.py` | ✅ |
 | I-02 capability enforcement | `aether/capability/enforcement.py` | ✅ |
 | I-10 daemon coordinator | `aether/daemon/coordinator.py` | ✅ |
+| DDR-792 ollama transport bridge | `aether/ollama_bridge/transport.py` | ✅ |
 | **I-01…I-10** integration wiring | — | ✅ **COMPLETE** |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
