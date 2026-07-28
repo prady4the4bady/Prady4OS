@@ -23,7 +23,22 @@
 #define SYS_EXIT   4
 #define SYS_CLOCK  57
 
-#define SAMPLES    20000
+/* DDR-796 addendum: the first version ran a flat 20,000 samples and never
+ * completed on a TCG CI runner — PRADYOS_RTC_MONO_OK appeared 0 times in an
+ * entire CI job, and the probe starved later boot work enough to push
+ * smoke-setname past its window (run 30405322967).
+ *
+ * Two mistakes, both mine, and both the same lesson this tree keeps teaching:
+ * an ITERATION count mis-sizes on hosts of wildly different speed, and each
+ * SYS_CLOCK now takes an IRQ-off spinlock that can spin ~2 ms during an RTC
+ * update tick — so 20,000 of them is not a bounded cost.
+ *
+ * Now bounded by BOTH: stop after the wall clock advances RUN_SECONDS, or after
+ * MAX_SAMPLES, whichever comes first. On a fast host that is a hard hammering;
+ * on a slow one it exits promptly and samples less. Detection is probabilistic
+ * either way — the A/B in DDR-796 is what proves it can detect the defect. */
+#define MAX_SAMPLES  4000
+#define RUN_SECONDS  3
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -54,8 +69,16 @@ __attribute__((noreturn)) void _start(void) {
     }
 
     long violations = 0;
-    for (long i = 0; i < SAMPLES; i++) {
+    long started = prev;
+    for (long i = 0; i < MAX_SAMPLES; i++) {
         long now = nsi(SYS_CLOCK, 0, 0, 0);
+
+        /* Wall-clock bound, checked from the same reading we are about to
+         * validate — no extra syscall, and it costs nothing when the clock is
+         * behaving. A real midnight wrap ends the run rather than being treated
+         * as elapsed time. */
+        if (now >= started && now - started >= RUN_SECONDS)
+            break;
 
         /* A real midnight wrap goes 86399 -> 0. Anything else that decreases is
          * the race. Treating every decrease as a wrap is exactly the mistake the

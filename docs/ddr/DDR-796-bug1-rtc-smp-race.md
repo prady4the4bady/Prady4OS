@@ -192,3 +192,24 @@ Two candidate responses, deliberately not chosen here:
 
 Recorded rather than actioned because picking (2) first is exactly how a real
 regression gets normalised.
+
+
+## Addendum — the gate's own probe was mis-sized (2026-07-29)
+
+The first `rtcmonotest` ran a flat 20,000 samples. On a TCG CI runner it never
+finished: `PRADYOS_RTC_MONO_OK` appeared **0 times in an entire CI job**, and the
+probe starved later boot work enough to push `smoke-setname` past its window
+(run 30405322967 failed on a **missing required sentinel**, not on
+`GLOBAL_FORBIDDEN`).
+
+Two mistakes, both mine, and both the lesson this tree keeps teaching:
+
+* an **iteration count** mis-sizes across hosts of wildly different speed — the
+  same defect the DDR-730 metrics probe's header already warns about;
+* each `SYS_CLOCK` now takes an IRQ-off spinlock that can spin ~2 ms during an
+  RTC update tick, so 20,000 of them is not a bounded cost. The fix in this DDR
+  made its own gate expensive, which I did not check.
+
+Now bounded by **both**: stop after the wall clock advances 3 seconds, or after
+4,000 samples, whichever comes first. Detection is probabilistic either way; the
+A/B above is what proves the gate can detect the defect at all.
