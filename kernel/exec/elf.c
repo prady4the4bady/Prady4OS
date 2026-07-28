@@ -17,6 +17,7 @@
 #include "string.h"
 #include "vfs.h"        /* FS_RES_ID + vfs_default_mnt for the 5b FS grant */
 #include "vdso_page.h"  /* vdso_map_user — read-only clock page (IMP-C) */
+#include "metric_page.h" /* metric_page_map_user — sealed objective root (DDR-795) */
 
 /* --- ELF64 on-disk format (System V gABI; a public spec, clean-room) -------- */
 
@@ -225,6 +226,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     uint64_t user_rsp = top_uva + sp;
 
     vdso_map_user(as);          /* IMP-C: read-only vDSO clock page in every user AS */
+    metric_page_map_user(as);   /* F#68/DDR-795: read-only sealed objective root */
 
     *out_as    = as;
     *out_entry = eh->e_entry;

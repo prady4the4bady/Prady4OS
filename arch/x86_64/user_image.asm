@@ -151,6 +151,14 @@ fsrmtest_elf:
     incbin "build/fsrmtest.elf"
 fsrmtest_elf_end:
 
+; F#68/DDR-795: sealed metric-region probe (reads the root, then proves a
+; ring-3 write to it faults).
+global metrictest_elf
+global metrictest_elf_end
+metrictest_elf:
+    incbin "build/metrictest.elf"
+metrictest_elf_end:
+
 ; sys (DDR-748): SYS_SYSINFO CPU/system introspection probe.
 global sysinfotest_elf
 global sysinfotest_elf_end

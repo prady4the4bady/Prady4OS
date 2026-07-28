@@ -234,6 +234,9 @@ jobs:
       - name: QEMU vDSO clock test (q35; ring-3 reads wall_time_ns, no syscall)
         run: make smoke-vdso
 
+      - name: QEMU metric-region test (F#68/DDR-795; ring-3 read OK, write faults)
+        run: make smoke-metric
+
       - name: QEMU COW fork test (q35; copy-on-write isolation + refcount)
         run: make smoke-cowfork
 

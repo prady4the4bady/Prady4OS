@@ -45,6 +45,7 @@
 #include "errno.h"
 #include "cpu_mitigations.h"
 #include "vdso_page.h"
+#include "metric_page.h"  /* F#68/DDR-795: sealed objective root page */
 #include "vmm_cow.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
@@ -354,6 +355,8 @@ extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mou
 extern const unsigned char rootmounttest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
+extern const unsigned char metrictest_elf[];          /* F#68/DDR-795: metric-region probe */
+extern const unsigned char metrictest_elf_end[];
 extern const unsigned char sysinfotest_elf[];         /* sys: SYS_SYSINFO probe (DDR-748) */
 extern const unsigned char sysinfotest_elf_end[];
 extern const unsigned char timetest_elf[];            /* sys: SYS_TIME probe (DDR-749) */
@@ -1159,6 +1162,10 @@ static void fs_test_thread(void *arg) {
                  * no special caps; prints CPU vendor/brand + PRADYOS_SYSINFO_OK.
                  * Gate smoke-sysinfo. */
                 user_boot_from_sfs(cap, smnt, "SYSINFO.ELF", sysinfotest_elf, sysinfotest_elf_end, 0);
+                /* F#68/DDR-795: reads the sealed objective root, then stores to
+                 * it. The store must fault — idt.c kills the process, so
+                 * METRIC_WX_FAIL is never printed. */
+                user_boot_from_sfs(cap, smnt, "METRIC.ELF", metrictest_elf, metrictest_elf_end, 0);
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
                  * prints TIME YYYY-MM-DD HH:MM:SS + PRADYOS_TIME_OK. Gate smoke-time. */
                 user_boot_from_sfs(cap, smnt, "TIME.ELF", timetest_elf, timetest_elf_end, 0);
@@ -1795,6 +1802,7 @@ void kmain(struct boot_info *bi) {
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
 
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
+    metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */
     cow_selftest();                      /* IMP-D: copy-on-write fork isolation */
 
     /* Phase 3: hardware discovery + first device driver. */

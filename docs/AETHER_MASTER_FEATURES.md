@@ -152,6 +152,7 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | Privacy-mode netfilter hook | `aether/platform/privacy/netfilter.py` | ✅ |
 | Shared egress rate limiter (S2) | `aether/platform/ratelimit/shared_limiter.py` | ✅ |
 | Cloud bridge (built, **not enabled** — DDR-793 R1/R3) | `aether/cloud_bridge/transport.py` | ✅ |
+| F#68 kernel wire (DDR-795) | `kernel/aether/metric_page.c` + `aether/kernel/lockbox/metric_region.py` | ✅ |
 | **I-01…I-10** integration wiring | — | ✅ **COMPLETE** |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
