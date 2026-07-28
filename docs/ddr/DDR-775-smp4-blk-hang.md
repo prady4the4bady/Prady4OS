@@ -16,6 +16,61 @@ exact trigger is **not** yet proven, so no speculative concurrency fix was shipp
 | 30158060606 | `smoke-blkmq`, `smoke-blk-integrity`, `MSI-X-on-AP`, `smoke-surfdestroy` | `-smp 4` | **ALL PASS** — same commits, run green end-to-end |
 
 | 30163444702 | `smoke-smpuser` — "user-on-AP" (`-smp 4`, ring-3 thread on a non-BSP CPU) | 180 s timeout | missed `[smp] user on AP OK`; **DDR-776 watchdog SILENT — no `[vblk] stuck` line** |
+| **30323686134** | **`smoke-swapgs`** (`-smp 4`, `TIMEOUT_S=120`, FORBIDDEN declared so early exit is OFF) | full 120 s window | missed `[percpu] gs OK (syscall ctx)`. **FIRST VALID DDR-777 READ — see verdict below.** |
+
+## ✅ DDR-777 DISCRIMINATOR READ (2026-07-28, run 30323686134) — verdict **(B)**
+
+The instrumentation planted in DDR-776/777 finally produced a readable failure.
+The head commit (`ff6d1d4`) is **Python-only**, so this failure cannot have been
+caused by the commit under test — which is itself confirmation that BUG-1 is
+intermittent and unrelated to the AETHER layer.
+
+**Evidence, all from the serial dump (not the Makefile echo — verified by
+stripping the CI prefix and reading only the region after "Serial output was"):**
+
+| Signal | Observed | Rules out |
+|---|---|---|
+| `[smp] user-on-AP probe t=152` | **present** | (C) APs never came up |
+| `[smp] user on AP OK t=152` | **present — the probe SUCCEEDED** | (C); ring-3 ran on a non-BSP CPU |
+| `[hb] t=` | **23 heartbeats, t=500 → t=11500, gaps uniformly 500** | **(A) timer stall — decisively** |
+| `[vblk] stuck` | **absent** | see the upgraded inference below |
+| `KHEAP PANIC` / double-free | **absent** | this is **not** BUG-0/DDR-790 |
+| `[percpu] gs OK` **and** `gs FAIL` | **both absent** | the one-shot probe block never executed at all |
+
+**Verdict (B): the BSP boot thread stopped making progress; the timer did not.**
+
+Every line of userspace output — mode toggle, `PRADYOS_NET_ALLOW_OK`, AETHER agent
+spawn/exec/verify/reap, `PRADYOS_BIGWRITE_OK`, `[sfs] btree churn FAIL`, and a
+final `[user] sys_exit(0)` — lands **before the first heartbeat at t=500**, i.e.
+within the first 5 seconds. After that the dump contains **nothing but 115
+seconds of perfectly uniform heartbeats**. `kmain` never reached whatever spawns
+the ring-3 program that calls `sys_getpid`, so the gate's sentinel could not be
+emitted. Neither branch of the probe printed, which is what proves the block was
+never entered rather than having run and reported failure.
+
+### The negative that was previously uninterpretable is now admissible
+
+DDR-776 recorded that watchdog silence "cannot distinguish *no stuck request*
+from *the watchdog never ran*", because both ride the same timer path. **That
+ambiguity is now resolved by the heartbeat**: it is emitted from the same
+`irq_timer` path at `(g_ticks % 500) == 0` and fired 23 times, so the watchdog's
+`(g_ticks % 100) == 0` scan provably ran ~115 times. Its silence is therefore
+real evidence: **no virtio-blk request was stuck**. That removes virtio-blk from
+the suspect list on evidence rather than by assumption.
+
+### What this leaves, and what it does not
+
+Still open: **why the BSP stopped progressing** while remaining schedulable
+enough for the idle path to run. The last kernel-side self-test region reached is
+the SFS churn/GC block in `kmain` (`kernel/main.c` ~1358–1392), and the churn
+reported **FAIL** in this run — an independent signal worth pulling on, though not
+yet shown to be causal.
+
+**Not concluded:** no fix is proposed here. Three theories have already been
+refuted in this DDR by acting before the mechanism was named, and the discipline
+holds — this entry records a *reading*, not a remedy. The next step is a
+BSP-liveness marker in the `kmain` self-test region (same opt-in pattern as
+DDR-790's `PIPE_TRACE`, so it cannot evict gate markers from the log ring).
 
 ## ⚠⚠ SECOND CORRECTION (2026-07-25, later) — a UNIFYING hypothesis: the timer stalls
 

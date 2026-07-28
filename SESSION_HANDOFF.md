@@ -467,6 +467,32 @@ WSL. It runs normally in CI on Linux.
 
 ---
 
+- ✅ **BUG-1 (-smp 4): FIRST VALID DDR-777 READ — verdict (B), 2026-07-28.**
+  Run **30323686134** (`smoke-swapgs`, -smp 4, head `ff6d1d4` which is PYTHON-ONLY,
+  so the commit under test cannot be the cause) missed `[percpu] gs OK (syscall ctx)`.
+  Discriminator read from the SERIAL DUMP (not the Makefile echo):
+  probe `t=152` **present** and `user on AP OK` **present** (rules out (C));
+  **23 heartbeats t=500→11500, gaps uniformly 500** (rules out (A) timer stall);
+  no `[vblk] stuck`; no KHEAP PANIC (so **not** BUG-0).
+  **Verdict (B): the BSP boot thread stopped progressing; the timer did not.**
+  ALL userspace output lands before the first heartbeat (<5 s), then 115 s of
+  nothing but heartbeats. Neither `gs OK` nor `gs FAIL` printed, proving the
+  one-shot probe block was never entered rather than having run and failed.
+  **DDR-776's negative is now ADMISSIBLE:** the heartbeat rides the same timer
+  path and fired 23 times, so the watchdog provably ran ~115 times — its silence
+  is real evidence that **no virtio-blk request was stuck**, removing virtio-blk
+  from the suspect list on evidence rather than assumption.
+  Last self-test region reached is the SFS churn/GC block in kmain, and the churn
+  reported **FAIL** in this run. NO FIX PROPOSED — three theories were already
+  refuted here by acting before the mechanism was named. Next step: an OPT-IN
+  BSP-liveness marker in that region (same pattern as PIPE_TRACE so it cannot
+  evict gate markers).
+- ⚠️ **CORRECTION to the handoff briefing:** the DDR-790 pipe create/destroy
+  traces are **NOT active in CI** — they were made opt-in (`PIPE_TRACE=0`) in
+  `c068d8e` because unconditional traces evicted `smoke-dmesg`'s log-ring marker.
+  "Read the traces from the next CI run" cannot work until a run is built with
+  `PIPE_TRACE=1`. Also: the current CI red is `smoke-swapgs`, not `smoke-blkmq`;
+  `8bfbad0` was kernel-GREEN.
 - 🚨 **OPEN REGRESSION — DDR-790: kernel heap DOUBLE-FREE PANIC in CI, on `main`.**
   Run **30215987521** (`ba5770e`) died at step 54 `smoke-blkmq` (-smp 4) with
   `[kheap] double-free ptr=0x7E29F80 objsize=0x20` / `*** KHEAP PANIC ***`.
