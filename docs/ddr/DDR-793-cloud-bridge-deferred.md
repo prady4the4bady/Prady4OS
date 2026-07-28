@@ -15,12 +15,15 @@ someone remembers why.
 
 | # | gate | status | evidence |
 |---|---|---|---|
-| 1 | F#68 metric lockbox shipped and gated | **NOT MET** | `docs/AETHER_MASTER_FEATURES.md:300` lists F#68 as **proposed**. It is described there as "THE single most important safety invariant for any self-improvement loop (= Invariant S3)" and as the highest-priority proposed feature. |
+| 1 | F#68 metric lockbox shipped and gated | ✅ **MET** (2026-07-28) | `aether/kernel/lockbox/metric_lockbox.py` + `test_metric_lockbox.py`, 18 tests. Non-`CAP_SOVEREIGN` write raises `CapError` and audits; a direct edit of the backing store is caught by the hash chain at load. |
 | 2 | `CAP_NET_BROWSE` (1<<23) has a DDR with blast-radius review | **NOT MET** | The token appears only in the feature tables (`AETHER_MASTER_FEATURES.md:255`, `:318`, `:357`). No `docs/ddr/` entry defines it and no blast-radius review exists. |
 | 3 | Privacy mode (Section E 3D) has a **tested** lwIP netfilter hook that BLOCKS this path when active | **NOT MET** | No netfilter hook exists in `kernel/`; the only occurrence of the concept is in the feature document. There is therefore nothing that could block the path, tested or otherwise. |
 | 4 | All cloud calls route through the same rate limiter (S2, 60 syscall/s) and audit tap as local Ollama — no bypass | **NOT ASSESSABLE** | Depends on 1–3 and on DDR-792's bridge existing. Cannot be evaluated, let alone met. |
 
-**Four of four unmet.** CONFIRM-1's condition is conjunctive, so the block holds.
+**One of four met.** CONFIRM-1's condition is conjunctive, so the block holds.
+
+**Gate log**
+- 2026-07-28 — gate 1 met: F#68 metric lockbox shipped (commit below).
 
 ## Why these gates are not bureaucracy
 
@@ -41,7 +44,7 @@ metric lockbox first, then the stronger reasoning.
 
 In order, each needing its own DDR and gate:
 
-1. Ship F#68 (metric lockbox / S3) with its gate.
+1. ~~Ship F#68 (metric lockbox / S3) with its gate.~~ **Done 2026-07-28.**
 2. Write the `CAP_NET_BROWSE` DDR including a blast-radius review over
    `net_allow`, `CAP_NET`, and the socket NSI (ADR-027) — item 8 of the
    change-checklist in `AETHER_MASTER_FEATURES.md:357` already requires this for
