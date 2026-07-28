@@ -2194,7 +2194,7 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 See the per-item rows above for the primary (non-deferred) component status.
 
 
-## BUG-1 — CLOSED 2026-07-28 (DDR-796)
+## BUG-1 — PARTIALLY FIXED 2026-07-28 (DDR-796), NOT closed
 
 Root cause: the CMOS/RTC read was not SMP-safe. `cmos_read()` is a two-port
 sequence (0x70 selects a register, 0x71 reads it) over **chipset-global** state,
@@ -2213,3 +2213,10 @@ the *paired* readings the consistency loop compares.
 
 Gate: `make smoke-rtc-smp` tests the invariant directly. A/B verified — the gate
 FAILS with the lock removed and PASSES with it.
+
+**Not closed.** Post-fix verification (7 gate runs) shows `RTC_MONO FAIL` 0/3 —
+the clock fix holds — but `AGENT_METRICS FAIL` still appears in 1/7 runs. The
+RTC race was a contributing cause, not the only one. The residual is a race
+between the metrics probe's 120 s window and how long boot takes to reach the
+daemon's agent spawn; DDR-791's unexplained serial flood (83% of console bytes)
+is the leading suspect for that slowness. See DDR-796 "Correction".

@@ -1,8 +1,10 @@
 # DDR-796 — BUG-1 root cause: the CMOS/RTC read is not SMP-safe
 
-**Status:** diagnosed, fixed in this slice.
+**Status:** a real SMP race, diagnosed and fixed in this slice. **BUG-1 is
+NOT fully closed** — see "Correction" at the end.
 **Date:** 2026-07-28
-**Closes:** BUG-1 (intermittent `-smp 4` gate failures), open since DDR-775.
+**Partially addresses:** BUG-1 (intermittent `-smp 4` gate failures), open
+since DDR-775. One contributing cause removed; a residual failure remains.
 **Supersedes the working hypotheses in:** DDR-777, DDR-791 (both were wrong —
 see "What this was not").
 
@@ -144,3 +146,49 @@ does not.
 This is a direct test of the invariant rather than a re-run of the symptom: the
 metrics probe failing was three inferential steps away from the defect, which is
 why it took so long to attribute.
+
+
+## Correction — BUG-1 is not closed (added same day, before promotion)
+
+The original text of this DDR said "Closes: BUG-1". Post-fix verification
+falsified that within minutes, so it is corrected here rather than left standing.
+
+Six gate runs after the fix (`smoke-smp` ×3, `smoke-rtc-smp` ×3) plus
+`smoke-agentmetrics`:
+
+| result | count |
+|---|---|
+| `RTC_MONO FAIL` (the clock invariant) | **0 / 3** — the fix holds |
+| `smoke-smp` | 3 / 3 pass |
+| `AGENT_METRICS FAIL` appearing somewhere | **1 / 7 runs** |
+
+So the RTC race was **a** cause, not **the** cause.
+
+What the fix demonstrably did: pre-fix, the probe's 120-second window collapsed
+to zero and it printed FAIL at serial byte 21930, before the agent existed.
+Post-fix the window runs its full length and FAIL, when it appears at all, lands
+at byte ~97676 — immediately *before* `aetherd: spawned agent` at ~98130.
+
+That relocation is the diagnosis of the residual: the probe now waits a genuine
+120 seconds and the AETHER daemon spawns its agent at roughly that same moment.
+The failure is a race between the probe's window and how long boot takes to
+reach the spawn.
+
+**The most likely driver of that is DDR-791 finding 1** — 83% of console bytes
+are a repeated binary blob, whose emitter is still unidentified. A boot that
+spends most of its serial bandwidth on garbage takes correspondingly longer to
+reach the daemon's spawn. That makes the flooding a plausible *cause* of the
+residual rather than a cosmetic annoyance, which is a change from what DDR-791
+concluded ("no experiment here establishes causation").
+
+Two candidate responses, deliberately not chosen here:
+
+1. **Find and remove the serial-flood emitter.** Principled — it attacks the
+   thing making boot slow, and the flood is a real defect regardless.
+2. **Re-size the probe's 120-second window.** Cheap, and defensible on the
+   grounds that a fixed wall-clock constant is a poor fit for TCG hosts of
+   wildly varying speed — but it would also hide a genuine slowdown, so it must
+   not be done before (1) is understood.
+
+Recorded rather than actioned because picking (2) first is exactly how a real
+regression gets normalised.
