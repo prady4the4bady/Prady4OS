@@ -47,12 +47,21 @@ case "$ARCH" in
     ;;
 esac
 
+# -nodefaults: the `virt` machine otherwise instantiates a default device set —
+# including a virtio NIC whose option ROM (efi-virtio.rom) is not in Ubuntu's
+# qemu-system-arm package, which killed QEMU at startup with an empty serial log
+# (run 30380921699: `failed to find romfile "efi-virtio.rom"`).
+#
+# Installing qemu-system-data would also have silenced it, but this gate boots a
+# CPU, some RAM and a UART; instantiating a NIC and a display it never touches is
+# the actual mistake. The explicit -serial below still creates the console,
+# because -nodefaults suppresses only devices nobody asked for.
 echo "[$ARCH] booting $KERNEL_ELF (timeout ${TIMEOUT_S}s, sentinel: '$SENTINEL')..."
 timeout "$TIMEOUT_S" "$QEMU" \
     "${MACHINE[@]}" \
     -m 512M -smp 1 \
     -kernel "$KERNEL_ELF" \
-    -no-reboot -display none -monitor none \
+    -nodefaults -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" &
 qemu_pid=$!
 
