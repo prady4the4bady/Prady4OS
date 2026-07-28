@@ -58,3 +58,4 @@ aether/agents/memory/knowledge.jsonl
 aether/agents/planner/goal_queue.jsonl
 aether/agents/memory/failures.jsonl
 aether/agents/memory/lineage.jsonl
+aether/agents/tool_composer/skills.jsonl
