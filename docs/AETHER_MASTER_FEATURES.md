@@ -145,7 +145,9 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | D-14 lineage knowledge loader | `aether/agents/memory/lineage_knowledge_loader.py` | ✅ |
 | D-15 autonomous skill composer | `aether/agents/tool_composer/autonomous_skill_composer.py` | ✅ |
 | I-09 D-08 alignment wiring | `aether/agents/safety/alignment_wiring.py` | ✅ |
-| **I-01…I-10** integration wiring | — | 🔨 I-05/I-06/I-09 done; rest pending |
+| I-02 capability enforcement | `aether/capability/enforcement.py` | ✅ |
+| I-10 daemon coordinator | `aether/daemon/coordinator.py` | ✅ |
+| **I-01…I-10** integration wiring | — | ✅ **COMPLETE** |
 | **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
 
 Note: the spec's `ai-core/` is `aether/ai_core/` — hyphens are illegal in Python
