@@ -237,6 +237,12 @@ jobs:
       - name: QEMU metric-region test (F#68/DDR-795; ring-3 read OK, write faults)
         run: make smoke-metric
 
+      # DDR-800 (R1): the sovereign egress exemption must still work AND be
+      # recorded. An implementation that keeps the bypass but drops the audit
+      # record passes the connect and fails this gate.
+      - name: QEMU sovereign-egress audit (DDR-800 R1)
+        run: make smoke-sovereign-egress
+
       # DDR-797: the console must not be flooded. Asserts on VOLUME; a boot can
       # carry every required sentinel and still be 83% binary garbage.
       - name: QEMU serial-flood ceiling (DDR-797; <=32 KiB per boot)

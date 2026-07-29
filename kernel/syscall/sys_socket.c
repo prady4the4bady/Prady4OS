@@ -73,15 +73,38 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4) {
      * sovereign operator passes for diagnostics. Everyone else: audited -EPERM
      * (the AETHER pattern — denial is logged, the caller survives). */
     if (!current_thread->is_net && !current_thread->is_sovereign) {
-        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+                     AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2), AR_CAP_DENIED);
         return -EPERM;
     }
     /* DDR-734: CAP_NET is scoped by the egress allowlist (deny-by-default);
      * the sovereign operator bypasses it. Audited like every denial. */
     if (!current_thread->is_sovereign &&
         netallow_check((uint32_t)a1, (uint16_t)a2) != 0) {
-        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+                     AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2), AR_CAP_DENIED);
         return -EPERM;
+    }
+
+    /* DDR-800 (R1): the sovereign exemption stays — an operator needs egress to
+     * diagnose the network, and requiring an allowlist rule first would mean
+     * needing network diagnostics to debug the path that installs them. What
+     * was missing is the RECORD.
+     *
+     * Before this, a denied agent produced an audit entry and a sovereign
+     * thread reaching any host on the internet produced nothing: the one
+     * category of egress with no limits was also the one with no evidence.
+     *
+     * Emitted only when the flag is what ALLOWED the call — no CAP_NET, or a
+     * destination off the allowlist. A sovereign thread that would have passed
+     * anyway is recorded below as an ordinary connect, so the code keeps
+     * meaning "this happened because of operator authority". */
+    if (current_thread->is_sovereign &&
+        (!current_thread->is_net ||
+         netallow_check((uint32_t)a1, (uint16_t)a2) != 0)) {
+        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+                     AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2),
+                     AR_SOVEREIGN_BYPASS);
     }
     int slot = psock_connect((uint32_t)a1, (uint16_t)a2);
     if (slot >= 0 && slot < SOCK_SLOTS)

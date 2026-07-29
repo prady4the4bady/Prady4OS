@@ -14,14 +14,29 @@ enum aether_status {
     AE_FREE = 0, AE_PENDING, AE_APPROVED, AE_REJECTED, AE_EXPIRED, AE_DONE
 };
 enum aether_action {
-    ACTION_NONE = 0, ACTION_WRITE_FILE, ACTION_PRINT, ACTION_SPAWN_PROCESS
+    ACTION_NONE = 0, ACTION_WRITE_FILE, ACTION_PRINT, ACTION_SPAWN_PROCESS,
+    /* DDR-800/801: an outbound socket connect. The destination rides in the
+     * record's action_id via AETHER_DEST_ID. */
+    ACTION_NET_CONNECT
 };
 
 /* audit `result` codes (what happened to an action / a process). */
 enum aether_result {
     AR_SUBMIT = 1, AR_APPROVE, AR_REJECT, AR_EXPIRE,
-    AR_OOM_KILL, AR_RATE_KILL, AR_CAP_DENIED, AR_WRAP
+    AR_OOM_KILL, AR_RATE_KILL, AR_CAP_DENIED, AR_WRAP,
+    /* DDR-800 (R1): egress proceeded ONLY because the caller is sovereign —
+     * it lacked CAP_NET, or the destination was off the allowlist, or both.
+     * Distinct from AR_APPROVE on purpose: the entire value of this record is
+     * that "allowed by operator authority" and "allowed by policy" are not the
+     * same event, and AR_APPROVE would make them indistinguishable. */
+    AR_SOVEREIGN_BYPASS,
+    /* DDR-801 (R3): a connect that policy allowed, recorded per destination. */
+    AR_NET_CONNECT
 };
+
+/* DDR-800/801: destination packed into the audit record's action_id. The field
+ * is 64-bit and unused on the egress path, so no struct change is needed. */
+#define AETHER_DEST_ID(host_be, port)     (((uint64_t)(uint32_t)(host_be) << 16) | (uint64_t)(uint16_t)(port))
 
 #define AETHER_QUEUE_LEN        256
 #define AETHER_AUDIT_LEN        4096

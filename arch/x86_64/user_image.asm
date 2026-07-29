@@ -151,6 +151,13 @@ fsrmtest_elf:
     incbin "build/fsrmtest.elf"
 fsrmtest_elf_end:
 
+; DDR-800 (R1): sovereign-egress audit probe.
+global sovegresstest_elf
+global sovegresstest_elf_end
+sovegresstest_elf:
+    incbin "build/sovegresstest.elf"
+sovegresstest_elf_end:
+
 ; DDR-796 (BUG-1): SYS_CLOCK monotonicity probe under SMP.
 global rtcmonotest_elf
 global rtcmonotest_elf_end

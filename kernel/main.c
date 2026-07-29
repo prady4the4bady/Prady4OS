@@ -355,6 +355,8 @@ extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mou
 extern const unsigned char rootmounttest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
+extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
+extern const unsigned char sovegresstest_elf_end[];
 extern const unsigned char rtcmonotest_elf[];         /* DDR-796: SYS_CLOCK monotonicity */
 extern const unsigned char rtcmonotest_elf_end[];
 extern const unsigned char metrictest_elf[];          /* F#68/DDR-795: metric-region probe */
@@ -1172,6 +1174,13 @@ static void fs_test_thread(void *arg) {
                  * CMOS index/data pair is chipset-global; unserialised, two CPUs
                  * read each other's register. */
                 user_boot_from_sfs(cap, smnt, "RTCMONO.ELF", rtcmonotest_elf, rtcmonotest_elf_end, 0);
+                /* DDR-800 (R1): spawned SOVEREIGN with is_net = 0 (the default
+                 * from sched_create) — the exact shape the audit is about: no
+                 * CAP_NET, destination off the allowlist, allowed anyway by the
+                 * operator flag. It asserts the connect is still permitted AND
+                 * that AR_SOVEREIGN_BYPASS recorded where it went. */
+                user_boot_from_sfs(cap, smnt, "SOVEGRESS.ELF",
+                                   sovegresstest_elf, sovegresstest_elf_end, 1);
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
                  * prints TIME YYYY-MM-DD HH:MM:SS + PRADYOS_TIME_OK. Gate smoke-time. */
                 user_boot_from_sfs(cap, smnt, "TIME.ELF", timetest_elf, timetest_elf_end, 0);
