@@ -355,6 +355,8 @@ extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mou
 extern const unsigned char rootmounttest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
+extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
+extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
 extern const unsigned char sovegresstest_elf_end[];
 extern const unsigned char rtcmonotest_elf[];         /* DDR-796: SYS_CLOCK monotonicity */
@@ -1181,6 +1183,21 @@ static void fs_test_thread(void *arg) {
                  * that AR_SOVEREIGN_BYPASS recorded where it went. */
                 user_boot_from_sfs(cap, smnt, "SOVEGRESS.ELF",
                                    sovegresstest_elf, sovegresstest_elf_end, 1);
+                /* DDR-801 (R3): spawned with CAP_NET but NOT sovereign — so
+                 * neither record it asserts can come from the DDR-800 bypass
+                 * path. user_boot_from_sfs cannot grant is_net, so this uses the
+                 * elf_load + set-flag-before-unblock pattern (cap-2a D3). */
+                {
+                    struct tcb *ea = 0;
+                    uint64_t ealen = (uint64_t)(egressaudittest_elf_end
+                                                - egressaudittest_elf);
+                    if (elf_load((void *)(uintptr_t)egressaudittest_elf, ealen,
+                                 "EGRESSAUD", &ea) == ELF_OK && ea) {
+                        ea->is_net = 1;          /* CAP_NET, no sovereign */
+                        sched_unblock(ea);
+                        kputs("[user] ELF loaded (embedded); egress-audit probe spawned\r\n");
+                    }
+                }
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
                  * prints TIME YYYY-MM-DD HH:MM:SS + PRADYOS_TIME_OK. Gate smoke-time. */
                 user_boot_from_sfs(cap, smnt, "TIME.ELF", timetest_elf, timetest_elf_end, 0);

@@ -151,6 +151,13 @@ fsrmtest_elf:
     incbin "build/fsrmtest.elf"
 fsrmtest_elf_end:
 
+; DDR-801 (R3): per-destination egress audit probe.
+global egressaudittest_elf
+global egressaudittest_elf_end
+egressaudittest_elf:
+    incbin "build/egressaudittest.elf"
+egressaudittest_elf_end:
+
 ; DDR-800 (R1): sovereign-egress audit probe.
 global sovegresstest_elf
 global sovegresstest_elf_end

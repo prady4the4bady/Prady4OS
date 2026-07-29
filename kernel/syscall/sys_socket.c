@@ -106,6 +106,26 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4) {
                      AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2),
                      AR_SOVEREIGN_BYPASS);
     }
+    /* DDR-801 (R3): record the ALLOWED-BY-POLICY case too. Before this, the
+     * denial path and the DDR-800 bypass path were both audited and the
+     * ordinary success path was not — so the log could answer "what was
+     * refused" and "what the operator overrode", but not "what actually went
+     * out". netallow_check() returning 0 is a decision; an unrecorded decision
+     * is not an audit trail.
+     *
+     * Emitted AFTER the authority decision and BEFORE psock_connect(): a
+     * connect that policy permitted but that then fails on -EMFILE or a dead
+     * network is still an authorised egress attempt, and that is what is being
+     * audited. Logging only TCP-level successes would make the trail depend on
+     * network conditions. */
+    if (!(current_thread->is_sovereign &&
+          (!current_thread->is_net ||
+           netallow_check((uint32_t)a1, (uint16_t)a2) != 0))) {
+        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+                     AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2),
+                     AR_NET_CONNECT);
+    }
+
     int slot = psock_connect((uint32_t)a1, (uint16_t)a2);
     if (slot >= 0 && slot < SOCK_SLOTS)
         g_sock_owner[slot] = current_thread->pid;

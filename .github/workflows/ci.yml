@@ -243,6 +243,12 @@ jobs:
       - name: QEMU sovereign-egress audit (DDR-800 R1)
         run: make smoke-sovereign-egress
 
+      # DDR-801 (R3): every egress decision names its destination. Checks the
+      # allowed AND denied case for the same host on different ports, so an
+      # implementation that drops the port cannot satisfy both.
+      - name: QEMU per-destination egress audit (DDR-801 R3)
+        run: make smoke-egress-audit
+
       # DDR-797: the console must not be flooded. Asserts on VOLUME; a boot can
       # carry every required sentinel and still be 83% binary garbage.
       - name: QEMU serial-flood ceiling (DDR-797; <=32 KiB per boot)
