@@ -83,3 +83,58 @@ aiming at a blocked host would get `-EPERM` either way, and the gate would pass
 against an implementation that does nothing. The third step catches a hook that
 latches on and never releases — a privacy mode that cannot be turned off is a
 different bug, not a stricter version of this one.
+
+## Implementation — state, and why not a bitmask
+
+`aether_set_mode()` already existed but coerced its argument to a single
+boolean, `g_sovereign_mode`. Widening it to a bitmask (bit 0 sovereign, bit 1
+privacy) was the obvious move and is **wrong here**: `aether_get_mode()` is
+returned verbatim to ring 3 by `SYS_GET_MODE`, and userspace compares that
+result against literal `0`/`1` (`user/compositor.c:837`, `user/aether_daemon.c`).
+OR-ing a privacy bit into it would silently break those comparisons — a
+correctness bug in the UI introduced by a security fix.
+
+So privacy is a **separate** flag, `g_privacy_mode`, reached through the same
+sovereign-gated `SYS_SET_MODE` (no new syscall, as decided above) using two
+additional selector values, `AETHER_MODE_PRIVACY_ON/OFF` (2/3). The 0/1 contract
+is untouched, and privacy stays on its own axis — it is not a third kind of
+sovereignty, and turning egress off must not drop the machine out of sovereign
+mode as a side effect.
+
+Blast radius was enumerated before the edit, not assumed: `g_sovereign_mode` has
+exactly one internal consumer (`aether_queue.c`, the approval gate) and
+`aether_get_mode()` exactly one caller (`sys_aether.c` → `SYS_GET_MODE`). Both
+are unaffected because the historical coercion is preserved for every value
+other than 2 and 3.
+
+## Gate — DEFERRED, and why (this slice ships the mechanism only)
+
+The mechanism above is complete and dormant: `g_privacy_mode` defaults to 0, so
+no existing gate changes behaviour. **`smoke-privacy-netfilter` is deliberately
+NOT shipped in this slice**, and the probe `user/privacynettest.c` is written but
+not wired into the build.
+
+The reason is a race I could not remove cheaply. Every probe in `kmain` is
+spawned with `sched_unblock` and runs **concurrently**; `user_boot_from_sfs`
+writes-then-loads unconditionally, so there is no way to make a probe run in
+only one gate. Privacy mode is global kernel state. A probe that switches it on
+— even for the two syscalls this one needs — can refuse the concurrent connects
+in `capnettest`, `sovegresstest` and `egressaudittest`, failing *their* gates at
+random.
+
+That is the `rtcmonotest` mistake exactly: a probe whose cost lands on unrelated
+gates, with a window small enough to pass locally and hit eventually in CI. A
+two-syscall window is still a race, and "small window" is what BUG-1 punished
+for four hypotheses.
+
+**What the gate needs first:** a kernel-visible per-boot opt-in, so the privacy
+probe exists only in its own QEMU configuration. The nearest precedent is
+`QEMU_SFSROOT`, which the kernel detects via an extra block device rather than
+through any general mechanism — so this needs designing, not copying. That
+design is the first step of the next slice, ahead of the gate and ahead of the
+three-arm A/B (remove the check / remove the audit emission / drop the distinct
+result code — each must fail the gate).
+
+Shipping the mechanism without its gate is the deliberate choice over shipping a
+gate that destabilises three neighbours. Per S11 the gate is **absent**, not
+passing — there is no stub asserting success.

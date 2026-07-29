@@ -29,6 +29,7 @@ struct aether_action_entry {
 static struct aether_action_entry *g_queue;
 static uint64_t g_next_action_id = 1;          /* monotonic; never reused this boot */
 static unsigned g_sovereign_mode = 1;          /* ADR-026 D2: default sovereign */
+static unsigned g_privacy_mode   = 0;          /* DDR-802: off unless the operator asks */
 
 void aether_queue_init(void) {
     g_queue = (struct aether_action_entry *)(uintptr_t)pmm_alloc_pages(6); /* 64 pg = 256 KiB */
@@ -37,7 +38,18 @@ void aether_queue_init(void) {
 }
 
 unsigned aether_get_mode(void) { return g_sovereign_mode; }
-int aether_set_mode(unsigned mode) { g_sovereign_mode = mode ? 1u : 0u; return 0; }
+unsigned aether_privacy_active(void) { return g_privacy_mode; }
+
+/* DDR-802: PRIVACY_ON/OFF are handled first and return without touching the
+ * sovereign flag — the two are independent axes, and an operator turning egress
+ * off must not silently drop the machine out of sovereign mode. Anything else
+ * keeps the historical 0/1 coercion, so existing callers are unaffected. */
+int aether_set_mode(unsigned mode) {
+    if (mode == AETHER_MODE_PRIVACY_ON)  { g_privacy_mode = 1u; return 0; }
+    if (mode == AETHER_MODE_PRIVACY_OFF) { g_privacy_mode = 0u; return 0; }
+    g_sovereign_mode = mode ? 1u : 0u;
+    return 0;
+}
 
 /* Lazily expire a PENDING entry whose 60 s TTL has elapsed. */
 static void expire_if_due(struct aether_action_entry *e) {

@@ -2311,3 +2311,32 @@ class, must not be attributed to DDR-803.
 **Refuted along the way:** the first hypothesis was that the DDR-800/801 probes
 had slowed the boot. Measured with verified-different kernel SHAs: 8.3 s with the
 probes vs 8.4 s without. They cost nothing.
+
+## DDR-802 — privacy mode is now a kernel property (mechanism; gate deferred)
+
+`sys_sock_connect` refuses egress when privacy mode is on, **before** the
+CAP_NET check, before the DDR-734 allowlist, and — deliberately — ahead of the
+DDR-800 sovereign bypass. That last ordering is the substance: the bypass exists
+so an operator can diagnose the network, while privacy mode is that same
+operator saying nothing leaves. Honouring the bypass first would let the flag
+override the control just set. The refusal is audited with the sovereign's own
+pid under a distinct result code `AR_PRIVACY_BLOCKED`, so "did privacy mode
+actually stop anything?" stays answerable.
+
+State is a separate `g_privacy_mode` reached through the existing sovereign-gated
+`SYS_SET_MODE` (no new syscall) via `AETHER_MODE_PRIVACY_ON/OFF` (2/3). A
+bitmask on the existing argument was rejected: `aether_get_mode()` is returned
+verbatim to ring 3 and userspace compares it against literal 0/1
+(`compositor.c:837`, `aether_daemon.c`), so a privacy bit would have broken
+those comparisons — a UI correctness bug introduced by a security fix.
+
+**The gate is deliberately absent.** Privacy is global kernel state and every
+kmain probe runs concurrently, so a probe that switches it on can refuse the
+connects in `capnettest`/`sovegresstest`/`egressaudittest` and fail *their*
+gates at random. That is the `rtcmonotest` mistake again — a window small enough
+to pass locally and hit eventually in CI. `user/privacynettest.c` is written
+(sovereign + CAP_NET, off→on→off, asserting no `AR_SOVEREIGN_BYPASS` survives)
+but is not wired into the build. It needs a kernel-visible per-boot opt-in
+first, so the probe exists only in its own QEMU config. Mechanism defaults off,
+so nothing else changes: `make image` is warning-free and `smoke`/`smoke-fs`
+pass unchanged.

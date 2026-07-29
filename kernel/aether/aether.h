@@ -31,7 +31,15 @@ enum aether_result {
      * same event, and AR_APPROVE would make them indistinguishable. */
     AR_SOVEREIGN_BYPASS,
     /* DDR-801 (R3): a connect that policy allowed, recorded per destination. */
-    AR_NET_CONNECT
+    AR_NET_CONNECT,
+    /* DDR-802: refused because privacy mode is on. Deliberately NOT folded into
+     * AR_CAP_DENIED: "refused by policy" and "refused because the operator
+     * switched egress off" are different operator-facing facts, and collapsing
+     * them makes "did privacy mode actually stop anything?" unanswerable — the
+     * only question that shows the control works in production, not just in a
+     * test. Note this code can carry a SOVEREIGN pid: privacy outranks the
+     * DDR-800 bypass, and the attempt is still recorded. */
+    AR_PRIVACY_BLOCKED
 };
 
 /* DDR-800/801: destination packed into the audit record's action_id. The field
@@ -56,6 +64,22 @@ void aether_audit_init(void);
 /* --- global mode (ADR-026 D2): 1 = sovereign (auto-approve), 0 = manual ----- */
 unsigned aether_get_mode(void);
 int      aether_set_mode(unsigned mode);       /* caller must hold CAP_SOVEREIGN */
+
+/* DDR-802: privacy mode rides the SAME sovereign-gated SYS_SET_MODE path (no new
+ * syscall) as two extra selector values, rather than as a bitmask on the
+ * existing argument. A bitmask was rejected: aether_get_mode() is returned
+ * verbatim to ring 3 by SYS_GET_MODE, and userspace compares it against 0/1
+ * (compositor.c, aether_daemon.c), so OR-ing a privacy bit into it would
+ * silently break those comparisons. These values leave the 0/1 contract intact
+ * and keep privacy on its own axis — it is not a third kind of sovereignty. */
+#define AETHER_MODE_MANUAL       0u
+#define AETHER_MODE_SOVEREIGN    1u
+#define AETHER_MODE_PRIVACY_ON   2u
+#define AETHER_MODE_PRIVACY_OFF  3u
+
+/* Read at call time, never cached: a captured copy goes stale exactly when the
+ * operator flips it, which is the moment the control has to be right. */
+unsigned aether_privacy_active(void);
 
 /* --- action queue (aether_queue.c) ----------------------------------------- */
 /* Submit a copied-in payload; returns a fresh action_id, or <0 errno. */

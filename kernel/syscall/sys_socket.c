@@ -69,6 +69,27 @@ static int sock_denied(int slot) {
 
 static long sys_sock_connect(long a1, long a2, long a3, long a4) {
     (void)a3; (void)a4;
+    /* DDR-802: privacy mode refuses egress BEFORE any other question is asked.
+     *
+     * The ordering is the substance of the control, not a detail:
+     *  - before the allowlist, because an allowlisted destination would
+     *    otherwise be permitted and then blocked, and the log would show a
+     *    policy decision that did not govern the outcome;
+     *  - before the CAP_NET check, so a caller with the capability and one
+     *    without are refused identically — otherwise the refusal leaks whether
+     *    the caller holds it;
+     *  - AHEAD OF THE DDR-800 SOVEREIGN BYPASS. This is the one place DDR-802
+     *    overrides DDR-800, deliberately. The bypass exists so an operator can
+     *    diagnose the network; privacy mode is that same operator's explicit
+     *    instruction that nothing leaves. Honouring the bypass here would let
+     *    the flag override the control the operator just set. The refusal is
+     *    audited with the sovereign's own pid, so the attempt stays visible. */
+    if (aether_privacy_active()) {
+        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+                     AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2),
+                     AR_PRIVACY_BLOCKED);
+        return -EPERM;
+    }
     /* DDR-731: network authority. Agents are granted CAP_NET at spawn; the
      * sovereign operator passes for diagnostics. Everyone else: audited -EPERM
      * (the AETHER pattern — denial is logged, the caller survives). */
