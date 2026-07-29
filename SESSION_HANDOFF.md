@@ -104,7 +104,28 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   second feature list exist. Mirror it here + in `docs/build_status.md` in the
   same commit as any code touching agents/UI/sockets/storage/namespaces/telemetry/
   scheduling/capabilities.
-- **LAST_COMPLETED_TASK (newest):** DDR-803 — twelve gates were inheriting
+- **GROUND STATE (2026-07-30):** HEAD `6a0ec7c` on `dev/phase1`. `main` is
+  **72 commits behind** `dev/phase1` — nothing has been promoted since
+  `3485085`. Latest CI: run **30472148480 on `1cbe6f6` = SUCCESS** (workflow
+  `pradyos-ci`; ignore "Dependabot Updates", it is not a CI verdict). `6a0ec7c`
+  is pushed but **its CI verdict is not yet read** — read it before anything
+  else. aether test baseline: **764 collected** (763 pass + 1 permitted skip,
+  `test_quarantine.py:69`).
+- **CURRENT_ACTIVE_TASK:** DDR-802, step "gate". The mechanism is committed and
+  green-adjacent; the gate is NOT written. The next action is designing a
+  kernel-visible per-boot opt-in (see the new OPEN-7), then wiring
+  `user/privacynettest.c` (already written, not built), then the three-arm A/B.
+- **LAST_COMPLETED_TASK (newest):** DDR-802 mechanism — `sys_sock_connect`
+  refuses egress under privacy mode ahead of the CAP_NET check, the allowlist,
+  and (deliberately) the DDR-800 sovereign bypass, audited as
+  `AR_PRIVACY_BLOCKED`. State is a separate `g_privacy_mode` on
+  `AETHER_MODE_PRIVACY_ON/OFF` (2/3) through the existing `SYS_SET_MODE`. A
+  bitmask was rejected after enumerating the blast radius: `aether_get_mode()`
+  goes verbatim to ring 3 and userspace compares it to literal 0/1
+  (`compositor.c:837`), so a privacy bit would have broken the UI. **The gate is
+  deliberately absent** — see OPEN-7. Defaults off; `make image` warning-free,
+  `smoke`/`smoke-fs` pass.
+- **PREVIOUS:** DDR-803 — twelve gates were inheriting
   `boot_test.sh`'s unstated 30 s default (`TIMEOUT_S="${TIMEOUT_S:-30}"`, line 19)
   while declaring `FORBIDDEN_SENTINEL`, which disables DDR-785 early exit. Their
   sentinels land late in boot, so on a slow shared runner the window expires
@@ -115,6 +136,20 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   the DDR. **Before this, I hypothesised my DDR-800/801 probes had slowed the
   boot and measured it: 8.3 s with vs 8.4 s without — hypothesis refuted, and I
   nearly fixed something that was not broken.**
+- **OPEN-7 (NEW, 2026-07-30) — probes cannot be scoped to one gate.** Every
+  `kmain` probe is spawned with `sched_unblock` and runs concurrently, and
+  `user_boot_from_sfs` writes-then-loads unconditionally, so there is no way to
+  make a probe exist in only one gate. Any probe that mutates GLOBAL kernel
+  state therefore perturbs its neighbours. This blocks the DDR-802 gate
+  (privacy-ON would refuse the concurrent connects in `capnettest`,
+  `sovegresstest`, `egressaudittest`) and will block every future
+  global-state gate. The nearest precedent, `QEMU_SFSROOT`, works by having the
+  kernel detect an extra block device — it is not a general mechanism, so this
+  needs designing rather than copying. Write it as its own DDR.
+- **OPEN-1 update (2026-07-30):** `smoke-smpuser` PASSED in run 30472148480, so
+  it is intermittent and no discriminator output was produced this session. The
+  rule is unchanged: wait for a natural red run, read the DDR-777 discriminator,
+  name the mechanism, THEN fix. Do not force a failure.
 - **STILL OPEN — do NOT fold into DDR-803:** `smoke-smpuser` failed in run
   30448425988 (`bf5b4c4`) missing `[smp] user on AP OK`. That gate sets
   `TIMEOUT_S=180` explicitly, so the DDR-803 mechanism does not apply. It is
