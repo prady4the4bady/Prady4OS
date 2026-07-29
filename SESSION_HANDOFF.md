@@ -104,7 +104,23 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   second feature list exist. Mirror it here + in `docs/build_status.md` in the
   same commit as any code touching agents/UI/sockets/storage/namespaces/telemetry/
   scheduling/capabilities.
-- **LAST_COMPLETED_TASK (newest):** DDR-773 mkfs.sfs multi-leaf B+tree (Master doc
+- **LAST_COMPLETED_TASK (newest):** DDR-803 — twelve gates were inheriting
+  `boot_test.sh`'s unstated 30 s default (`TIMEOUT_S="${TIMEOUT_S:-30}"`, line 19)
+  while declaring `FORBIDDEN_SENTINEL`, which disables DDR-785 early exit. Their
+  sentinels land late in boot, so on a slow shared runner the window expires
+  before the sentinel prints — `PRADYOS_BIGWRITE_OK` appears **nowhere** in run
+  30447042919's serial, and the FAIL is stamped exactly 30 s after the gate
+  starts. All twelve now set `TIMEOUT_S=90` explicitly. Costs ~+12 min/CI run;
+  the trade-off and why this is a correction rather than papering are argued in
+  the DDR. **Before this, I hypothesised my DDR-800/801 probes had slowed the
+  boot and measured it: 8.3 s with vs 8.4 s without — hypothesis refuted, and I
+  nearly fixed something that was not broken.**
+- **STILL OPEN — do NOT fold into DDR-803:** `smoke-smpuser` failed in run
+  30448425988 (`bf5b4c4`) missing `[smp] user on AP OK`. That gate sets
+  `TIMEOUT_S=180` explicitly, so the DDR-803 mechanism does not apply. It is
+  OPEN-1 class: on the next red run matching this signature, read the
+  discriminator output and name the mechanism BEFORE writing any fix.
+- **PREVIOUS:** DDR-773 mkfs.sfs multi-leaf B+tree (Master doc
   Section B item 2). Slots now collected flat (bounded `MKFS_MAX_SLOTS = 512`,
   clean error = S2) and bulk-loaded: ≤14 slots → single leaf at block 1
   (byte-identical to before), else N leaves + one internal root with separators =

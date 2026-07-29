@@ -2280,3 +2280,34 @@ Fixed probe-side with a three-way verdict — `/HELLO.TXT` exists only on the FA
 default root, so it distinguishes "no ext4 provided" (SKIP) from "fell back to
 the default root" (FAIL). The FAIL branch — the assertion that matters — is
 unchanged. All four configurations now scan clean.
+
+### Fourth cause — an unstated 30 s window twelve gates could not meet (DDR-803)
+
+`tools/qemu_runner/boot_test.sh:19` is `TIMEOUT_S="${TIMEOUT_S:-30}"`. Twelve
+gates never set it: `smoke-sfs-dirs`, `smoke-sfs-unlink`, `smoke-rootmount`,
+`smoke-fsrm`, `smoke-sysinfo`, `smoke-time`, `smoke-dmesg`, `smoke-setname`,
+`smoke-wxkernel`, `smoke-sfsroot`, `smoke-vfs-bigwrite`, `smoke-sfs-btree`.
+
+Every one also declares a `FORBIDDEN_SENTINEL`, so per DDR-785 they are not
+early-exit eligible — the full window must contain the sentinel. Their sentinels
+are emitted late in boot. On a shared TCG runner that does not fit in 30 s: in
+run 30447042919 `PRADYOS_BIGWRITE_OK` appears **nowhere** in the serial capture,
+and the FAIL is stamped exactly 30 s after the gate starts (12:07:00 → 12:07:30).
+
+This is the systemic half of what was being read as BUG-1: it wanders between
+gates and never reproduces locally. It stayed hidden because a genuine defect
+(the mis-sized `rtcmonotest`, DDR-796 addendum) was masking it.
+
+All twelve now set `TIMEOUT_S=90` explicitly. Cost is real and not free — these
+gates spend the full window every run, so this returns ~12 min/run of DDR-785's
+46.5 min saving. DDR-803 argues why this is a correction (the window was never
+chosen; the feature is not broken) rather than widening a timeout in place of a
+fix, and records the alternative windows considered.
+
+**Not fixed by this:** `smoke-smpuser` (run 30448425988) sets `TIMEOUT_S=180`
+explicitly and still missed `[smp] user on AP OK`. Separate mechanism, OPEN-1
+class, must not be attributed to DDR-803.
+
+**Refuted along the way:** the first hypothesis was that the DDR-800/801 probes
+had slowed the boot. Measured with verified-different kernel SHAs: 8.3 s with the
+probes vs 8.4 s without. They cost nothing.

@@ -541,6 +541,7 @@ smoke-fs-sfs-rw: $(IMG) fat-image sfs-image
 # (mkdir -p intermediates), reads it back from a fresh path walk, rejects opening
 # a directory as a file and a missing intermediate, and enumerates each level.
 smoke-sfs-dirs: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf '[sfs] hier dirs OK')" \
 	FORBIDDEN_SENTINEL="hier dirs FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -549,6 +550,7 @@ smoke-sfs-dirs: $(IMG) fat-image sfs-image
 # re-creates the freed name, refuses rmdir on a non-empty dir, removes it
 # leaf-first, and confirms readdir no longer lists it.
 smoke-sfs-unlink: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf '[sfs] unlink/rmdir OK')" \
 	FORBIDDEN_SENTINEL="unlink/rmdir FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -564,6 +566,7 @@ smoke-fs-ext4: $(IMG) fat-image sfs-image ext4-image
 # /EXT4.TXT (ext4-only) AND fails /HELLO.TXT (FAT-only) -> proves SYS_OPEN
 # resolves against the SELECTED root. Needs the ext4 disk (like smoke-fs-ext4).
 smoke-rootmount: $(IMG) fat-image sfs-image ext4-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_ROOTMOUNT_OK ext4')" \
 	FORBIDDEN_SENTINEL="ROOTMOUNT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -573,6 +576,7 @@ smoke-rootmount: $(IMG) fat-image sfs-image ext4-image
 # and re-unlinks (clean error). Proves O_CREAT + SYS_UNLINK across the syscall
 # boundary against the writable SFS root. PRADYOS_FSRM_OK on all-pass.
 smoke-fsrm: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_FSRM_OK')" \
 	FORBIDDEN_SENTINEL="FSRM FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -581,6 +585,7 @@ smoke-fsrm: $(IMG) fat-image sfs-image
 # feature bits, CPU count, uptime, and free-frame count, validates them, and prints
 # PRADYOS_SYSINFO_OK. Deterministic on QEMU (stable CPUID + frame count).
 smoke-sysinfo: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SYSINFO_OK')" \
 	FORBIDDEN_SENTINEL="SYSINFO FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -589,6 +594,7 @@ smoke-sysinfo: $(IMG) fat-image sfs-image
 # prints it, and range-validates each field (exact value is host-provided, ranges
 # always hold -> deterministic). PRADYOS_TIME_OK on all-pass.
 smoke-time: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_TIME_OK')" \
 	FORBIDDEN_SENTINEL="TIME FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -597,6 +603,7 @@ smoke-time: $(IMG) fat-image sfs-image
 # via kputc into the log ring), reads the log back through the syscall, and
 # confirms the marker is present -> PRADYOS_DMESG_OK. Ring-size-independent.
 smoke-dmesg: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_DMESG_OK')" \
 	FORBIDDEN_SENTINEL="DMESG FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -613,6 +620,7 @@ smoke-kill: $(IMG) fat-image sfs-image
 # DDR-756 self-rename gate: the probe SYS_SETNAMEs itself to "KILROY", then walks
 # SYS_GETPROCS to confirm its own process-table entry shows the new name.
 smoke-setname: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SETNAME_OK')" \
 	FORBIDDEN_SENTINEL="SETNAME FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -794,6 +802,7 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # [wx] kernel W^X OK. The whole boot (incl. SMP gates elsewhere) runs against the
 # hardened tables, so this doubles as a no-regression witness.
 smoke-wxkernel: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK')" \
 	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1431,6 +1440,7 @@ smoke-blk-integrity: $(IMG) fat-image sfs-image
 # there. The probe reads the config through its SFS root -> PRADYOS_SFSROOT_OK,
 # proving a process can durably root at a clean, provisioned SFS volume.
 smoke-sfsroot: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SFSROOT_OK')" \
 	FORBIDDEN_SENTINEL="SFSROOT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1439,6 +1449,7 @@ smoke-sfsroot: $(IMG) fat-image sfs-image
 # SYS_WRITE and reads it back. With the old 256-byte FD_VFS chunk this short-wrote
 # at ~1 KiB (5th SFS extent rejected); the 4 KiB chunk lands 8 KiB in 2 extents.
 smoke-vfs-bigwrite: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_BIGWRITE_OK')" \
 	FORBIDDEN_SENTINEL="BIGWRITE FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1448,6 +1459,7 @@ smoke-vfs-bigwrite: $(IMG) fat-image sfs-image
 # (SFS_LEAF_MAX=14) — coverage no prior gate had. Proves the tree is sound (the
 # "B+tree bug" was actually the 1 MiB per-thread write budget; see DDR-763).
 smoke-sfs-btree: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf '[sfs] btree churn OK')" \
 	FORBIDDEN_SENTINEL="btree churn FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
