@@ -4,7 +4,13 @@
  * kernel writes /etc/aether/config there after the destructive SFS self-tests).
  * Opens /etc/aether/config through its SFS root and verifies the content — proof
  * that a process can durably root at a clean SFS volume and read a real config
- * path. All-pass -> PRADYOS_SFSROOT_OK, else "SFSROOT FAIL" + exit 1.
+ * path.
+ *
+ * Three-way verdict (DDR-799), because "config absent" is a precondition miss
+ * rather than a defect — kmain provisions it onto this root only on one path:
+ *   config present + correct -> PRADYOS_SFSROOT_OK
+ *   config absent            -> SFSROOT SKIP (this gate rooted elsewhere)
+ *   config present + wrong   -> SFSROOT FAIL
  *
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
@@ -38,7 +44,25 @@ __attribute__((noreturn)) void _start(void) {
     /* Resolve /etc/aether/config against the SFS root (mkdir-p'd + written by the
      * kernel). This exercises a multi-level SFS path from ring 3 at runtime. */
     long fd = nsi(SYS_OPEN, (long)"/etc/aether/config", 0 /*O_RDONLY*/, 0);
-    if (fd < 0) fail("open /etc/aether/config on SFS root");
+    if (fd < 0) {
+        /* DDR-799: absent config is a PRECONDITION miss, not a failure.
+         *
+         * kmain writes /etc/aether/config onto this probe's root only on the
+         * path that provisions a clean SFS volume (main.c ~1327). Gates that
+         * root the daemon elsewhere — smoke-aether-sfsroot sets QEMU_SFSROOT=1,
+         * so the provisioned mkfs image is used instead — leave this probe's
+         * root without a config, and it was reporting that as a failure in a
+         * gate that never asked for it.
+         *
+         * The assertion is owned by smoke-sfsroot, which REQUIRES
+         * PRADYOS_SFSROOT_OK; a genuine regression fails there on a missing
+         * required sentinel, which cannot be masked. What survives as FAIL here
+         * is the case that is unambiguously wrong: the config EXISTS but does
+         * not read back correctly. */
+        wr("SFSROOT SKIP: no provisioned config on this root\n");
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
     char buf[64];
     long n = nsi(SYS_READ, fd, (long)buf, (long)sizeof buf - 1);
     nsi(SYS_CLOSE, fd, 0, 0);

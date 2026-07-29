@@ -33,7 +33,8 @@ Static analysis lists candidates; only this lists offenders.
 | `QEMU_SMP=4` | **clean** |
 | `QEMU_GPU=1` | **clean** |
 
-**Exactly one offender, in exactly one configuration.** The audit is materially
+**One offender in this pass — but the pass itself was incomplete; see the
+correction below.** The audit is materially
 smaller than feared, and three suspicions from the static pass are refuted:
 
 * `surfdestroytest` is spawned unconditionally and needs surfaces — but surfaces
@@ -97,3 +98,47 @@ cannot be masked — rather than relying on a forbidden string.
   logic in the boot path; that is its own slice if it ever matters beyond this.
 * **No probe is silenced.** The skip path prints an informational line, because
   an observation that stops being reported is how a regression becomes invisible.
+
+
+## Correction — the first pass enumerated configurations by hand and missed one
+
+The audit above scanned four configurations chosen by reading the Makefile by
+eye. CI then failed on `smoke-aether-sfsroot` with `SFSROOT FAIL`, because that
+gate uses a **fifth** configuration (`QEMU_SFSROOT=1`, which swaps
+`build/sfsroot.img` into the SFS2 slot) that was never scanned.
+
+A hand-enumerated list of configurations is the same class of mistake as a
+hand-checked rule: it decays the moment someone adds a knob. The scan is now
+derived from the Makefile — every `QEMU_*` variable any gate sets — and lives in
+`tools/qemu_runner/scan_forbidden.sh` so it can be re-run rather than
+reconstructed.
+
+Full result after both fixes:
+
+| configuration | forbidden patterns |
+|---|---|
+| default | clean |
+| `QEMU_SMP=4` | clean |
+| `QEMU_GPU=1` | clean |
+| `QEMU_GPU=1 QEMU_SMP=4` | clean |
+| `QEMU_NVME=1` | clean |
+| `QEMU_NO_EXT4=1 QEMU_SFS2=1` | clean |
+| `QEMU_SFSROOT=1` | clean |
+| `QEMU_SFSROOT=1 QEMU_NO_EXT4=1` | clean |
+
+### The second offender
+
+`sfsroottest` (DDR-760) opens `/etc/aether/config` through its SFS root.
+`kmain` provisions that file onto the probe's root only on the path that formats
+a clean SFS volume (`main.c` ~1327). `smoke-aether-sfsroot` roots the daemon at
+the provisioned mkfs image instead, so the probe's root has no config and it
+reported that as a failure in a gate that never asked for it.
+
+Notably that gate declares **no** `FORBIDDEN_SENTINEL`, so before DDR-791 it
+early-exited on its three required sentinels and the FAIL string sat unread in
+the log — the same silent tolerance DDR-791 was written to end.
+
+Fixed with the same three-way verdict: config absent → `SFSROOT SKIP`; config
+present but wrong → `SFSROOT FAIL`. `smoke-sfsroot` still REQUIRES
+`PRADYOS_SFSROOT_OK`, so a genuine regression fails there on a missing required
+sentinel.
