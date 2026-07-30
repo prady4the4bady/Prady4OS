@@ -224,3 +224,45 @@ incbin entry removed, then with only `fwcfg_init()` removed. One of them restore
 **Do not revert DDR-804 wholesale to go green.** It closes OPEN-7 and carries a
 verified three-arm A/B; the defect is a side effect of how it was wired in, not
 of the mechanism.
+
+## OPEN-8 MECHANISM LOCALIZED — `fwcfg_init()`, and CI agrees
+
+CI independently confirms the bisect: run **30504947387 on `9f1459a` = failure**.
+
+Discriminating experiment, one variable changed:
+
+| arm | kernel | `smoke-shell` |
+|---|---|---|
+| `fwcfg_init()` removed, incbin/image growth left in | `3d678e255ab7` | **PASS** |
+
+So **`fwcfg_init()` is the mechanism** and the ~6.4 KB image growth from the
+`privacynettest.elf` incbin is exonerated. Candidate 1 needs no further testing.
+
+### What is still NOT explained
+
+Localizing is not explaining, and the fix must wait on the explanation (S5).
+`fwcfg_init()` only performs bounded port I/O into a 257-byte static before
+`acpi_init()`. Two live hypotheses, and they have different fixes:
+
+1. **Boot-timing shift.** `smoke-shell` is driven by fixed `sleep 0.5` intervals
+   against a FIFO after `PRISM_READY`, and the `$?` assertion is order-sensitive.
+   If the fw_cfg directory is large, the scan is up to 64 entries x 64 bytes =
+   4096 `inb`, each a VM exit under TCG. If that is the cause, **the gate is
+   timing-fragile and the gate is what needs fixing** — not the driver.
+2. **Something in the port I/O genuinely perturbs guest state** on this machine
+   type. Less likely, more serious.
+
+### The measurement that settles it
+
+Instrument `fwcfg_init()` to print, once: whether the signature matched, the raw
+directory `count` before clamping, and the number of `inb` performed. That
+distinguishes "a handful of reads" (hypothesis 1 dies, look harder at 2) from
+"thousands of reads" (hypothesis 1 confirmed; fix the gate's fixed-sleep driver,
+or make the scan stop at the matching entry instead of draining the directory).
+
+Note the scan currently keeps reading after it finds its entry, deliberately, to
+leave the device in a defined state. If the read volume turns out to be the
+problem, that decision is the thing to revisit — not the feature.
+
+**DDR-804's mechanism stays.** It closes OPEN-7 and carries a verified three-arm
+A/B. What is in question is only the unconditional boot-time scan.
