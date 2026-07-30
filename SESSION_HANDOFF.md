@@ -108,8 +108,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   Last confirmed green: run **30483750211 on `90634b6`** (which contains
   `6a0ec7c`). `main` still **72 commits behind** — nothing promoted since
   `3485085`. aether baseline unchanged: **764 collected**.
-- **CURRENT_ACTIVE_TASK:** work-queue item 5 — SIGPIPE (13) in the
-  default-terminate whitelist in `signal_deliver`. Items 1–4 are DONE.
+- **CURRENT_ACTIVE_TASK:** UNATTRIBUTED RED — `smoke-shell` fails locally at
+  `9f1459a`, truncating the DDR-786/787 200-line pipeline at line 197 of 200.
+  **Resolve this before resuming the work queue.** Read CI run
+  **30504947387** on `9f1459a` first: green ⇒ local timing artefact (the gate is
+  driven by fixed `sleep`s against a FIFO, unlike the `boot_test.sh` gates);
+  red ⇒ DDR-804 is the first suspect. Items 1–4 are DONE.
+- **OPEN-8 (NEW):** the `smoke-shell` failure above. It passed in CI at
+  `90634b6`. Do NOT attribute it to DDR-805 — see the CORRECTION section of
+  `docs/ddr/DDR-805-sigpipe.md`.
+- **DDR-805 (SIGPIPE) is DESIGNED, IMPLEMENTED, and REVERTED — not blocked by
+  its own defect.** I first blamed it for the `smoke-shell` red, reverted it, and
+  the gate failed identically with the code gone. The design is sound and the
+  three edits are fully described in the DDR; re-apply them once OPEN-8 is
+  resolved. **Lesson recorded: a revert is not verified until the gate is re-run
+  — a failure that survives a revert was never yours.**
 - **DDR-802 IS COMPLETE.** Three-arm A/B, all four kernel SHAs distinct so every
   arm genuinely rebuilt (the DDR-791 trap): A no-privacy-check `1b6dddc3f139`
   FAIL · B no-audit-record `23daf7ef7146` FAIL · C wrong-result-code
