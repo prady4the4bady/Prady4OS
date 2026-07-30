@@ -114,8 +114,43 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   **30504947387** on `9f1459a` first: green ⇒ local timing artefact (the gate is
   driven by fixed `sleep`s against a FIFO, unlike the `boot_test.sh` gates);
   red ⇒ DDR-804 is the first suspect. Items 1–4 are DONE.
-- **OPEN-8 (NEW, CAUSE NAMED — START HERE):** `9f1459a` (DDR-804) broke
-  `smoke-shell`. Deterministic bisect: `90634b6` PASS, HEAD FAIL 2/2, and
+- **OPEN-1 — NARROWED, NOT EXPLAINED (DDR-806). A proposed fix was implemented
+  and REFUTED the same day; it is reverted, no DDR-806 code is in the tree.**
+  Four things are ESTABLISHED, each from a named artefact:
+  (1) the proofs never execute — neither OK nor FAIL variant, DDR-777 entry
+  marker absent; (2) **DDR-777 verdict (C) is REFUTED** — failing run
+  30507516805 shows `[smp] cpus online=4/4`, `ap preempt OK`, `resched OK`, so
+  APs were up and the `!g_smp_have_aps` guard passed; (3) not a code regression —
+  `9f1459a`/`6c375ea`/`c9a1537`/`d8c5c95` are a byte-identical kernel with CI
+  FAIL/PASS/FAIL/PASS across two different gates; (4) the proofs **cannot** be
+  hoisted above the probe block — `smpuser_proof()` polls `g_user_on_ap`, which
+  needs live user processes the probe block creates.
+  SURVIVING CANDIDATE: `fs_test_thread` (`main.c:829` — NOT `kmain`, which is at
+  `main.c:1805`) does not reach `main.c:1311` in the window; ~30
+  `user_boot_from_sfs()` calls sit between, each blocking on SFS I/O over
+  contended virtio-blk.
+  **DO THIS FIRST, before any fix: stamp `g_ticks` at `main.c:1134` and
+  `main.c:1311`.** No second stamp in a failing run confirms it; both stamps
+  early refutes it. DDR-806 has already produced two confident explanations that
+  the next measurement destroyed — do not add a third without the stamps.
+- **(superseded, kept as a record of a wrong turn) OPEN-1 "explained":** Open since
+  DDR-775 with four refuted hypotheses, all hunting a defect in the SMP path.
+  There is none. `smpuser_proof()` / `blkmq_proof()` / `smp_blk_integrity()` /
+  `rqstress_proof()` sat ~180 lines AFTER the user-probe spawn block in `kmain`;
+  those probes are `sched_unblock`ed and compete with `kmain` for CPU, so on a
+  slow runner `kmain` never reaches the proofs inside the window. The tell:
+  **neither the OK nor the FAIL variant of those sentinels appears in the failing
+  serials** — they never executed. Proof it is not a regression: `9f1459a`,
+  `6c375ea`, `c9a1537`, `d8c5c95` are a byte-identical kernel and CI alternates
+  FAIL/PASS/FAIL/PASS across two different gates. Fix: proofs moved ahead of the
+  probe storm. **Not proven fixed** — ~50% base rate means one green run is not
+  evidence; needs several consecutive greens.
+- **OPEN-8 IS RETIRED as a DDR-804 regression.** CI shows `smoke-shell` PASSING
+  on `9f1459a`; the deterministic local red is a property of THIS workstation
+  (fwcfg_init shifting boot timing against a gate driven by fixed `sleep`s on a
+  FIFO), not of the tree. Do not revert DDR-804 for it. Superseded detail below:
+- **(superseded) OPEN-8 as originally written:** `9f1459a` (DDR-804) broke
+  `smoke-shell`. Local bisect: `90634b6` PASS, HEAD FAIL 2/2, and
   `6c375ea` is docs-only. Failing assertion is
   **`[shell] FAIL: $? did not expand to 0 after a successful command (DDR-789)`**
   — NOT the 200-line pipe test, which passes.

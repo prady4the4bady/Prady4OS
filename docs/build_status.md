@@ -2370,3 +2370,75 @@ is explicitly not assumed NUL-terminated.
 
 Scope is new probes only; the 113 currently-green gates set no `QEMU_PROBES` and
 boot exactly as before.
+
+## DDR-806 — OPEN-1 explained: the SMP proofs ran behind the probe storm
+
+OPEN-1 has been open since DDR-775 with four refuted hypotheses, all of which
+hunted for a defect in the SMP path. There is none.
+
+`smpuser_proof()`, `blkmq_proof()`, `smp_blk_integrity()` and `rqstress_proof()`
+sat ~180 lines AFTER the user-probe spawn block in `kmain`. Every probe there is
+started with `sched_unblock` and then competes with `kmain` for CPU, so whether
+`kmain` reaches the proofs inside a gate window depends on runner speed and
+`-smp 4` scheduling — fine on a fast host, intermittent in CI.
+
+The evidence is what is **absent**. Each proof prints an `OK` or a `FAIL`
+variant; in both failing serials **neither** appears. The proofs did not fail,
+they never executed. A proof that ran and failed would have tripped
+`FORBIDDEN_SENTINEL`. That single observation separates "SMP is broken" from
+"the line was never reached", and it is why four defect-hunting hypotheses all
+died.
+
+Proof it is not a code regression: `9f1459a`, `6c375ea`, `c9a1537`, `d8c5c95`
+carry a byte-identical kernel (the last three are docs-only), and CI alternates
+FAIL / PASS / FAIL / PASS across two *different* gates. This also retires DDR-804
+as a suspect — it was suspected from a local `smoke-shell` red, but CI shows
+`smoke-shell` passing on that same commit, so that failure is a property of my
+workstation and is tracked separately.
+
+**Fix:** the proof block moves ahead of the probe spawns. Dependencies were
+checked, not assumed — scheduler running, APs up, block layer live with SFS
+mounted, all necessarily true because the probe block that follows needs them.
+Nothing in the proofs consumes probe-produced state.
+
+This is **not** a timeout change; no window moved. Raising windows would not
+converge anyway: the proofs run last, so their latency grows with every probe
+added (DDR-800, DDR-801, DDR-802 each added one), and per DDR-803 these gates
+cannot early-exit so every raise is paid in full on every run.
+
+**Verification limit, stated deliberately:** the base failure rate is ~50%, so
+one green CI run is not evidence — two of the four runs above were green *with*
+the defect present. Local gates passing confirms only that the reorder breaks
+nothing. Status is "mechanism named and addressed", not "proven fixed", until
+several consecutive green CI runs accumulate.
+
+### DDR-806 CORRECTION — the fix above was refuted the same day
+
+The reordering described in the previous section was implemented and **broke all
+three gates it was written to repair** (`smoke-smpuser`, `smoke-blkmq`,
+`smoke-rqstress-liveness` all FAIL on kernel `e8219c43ff84`; `smoke`,
+`smoke-user`, `smoke-fs` unaffected). It is reverted; no DDR-806 code is in the
+tree.
+
+Two claims in that section are false:
+
+* **"nothing in the proofs consumes probe-produced state"** — `smpuser_proof()`
+  polls `g_user_on_ap`, which is only set when a user thread runs on an AP, and
+  those threads come from the probe block. The existing order is a real
+  dependency.
+* **the line-number reasoning** — `kmain` is at `main.c:1805`; lines 1134/1311
+  are inside `fs_test_thread` (`main.c:829`), a thread spawned from
+  `sched_demo()` at `main.c:1580`. The question was never when `kmain` arrives.
+
+Also refuted, on evidence rather than argument: the `g_smp_have_aps` race and
+therefore **DDR-777 verdict (C)**. The flag is set at `main.c:1898`, before
+`sched_demo()` runs at `main.c:1924`; and failing run 30507516805 contains
+`[smp] cpus online=4/4`, `ap preempt OK`, `resched OK`. APs were up.
+
+**Surviving candidate:** `fs_test_thread` does not reach `main.c:1311` inside the
+window — ~30 `user_boot_from_sfs()` calls sit in between, each blocking on SFS
+I/O over contended virtio-blk under `-smp 4`.
+
+**Required next measurement, before any fix:** stamp `g_ticks` at `main.c:1134`
+and `main.c:1311`. A failing run that never prints the second stamp confirms it;
+both stamps landing early refutes it and reopens the search.
