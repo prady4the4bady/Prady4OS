@@ -60,9 +60,30 @@ uint32_t klog_read(char *dst, uint32_t max) {
     return n;
 }
 
+/* DDR-809: bound for the THRE wait. Far beyond any real transmit-holding latency
+ * (QEMU sets the bit within a handful of reads), but a hard ceiling — the
+ * unbounded form was an S2 violation that, on the BSP, would have taken g_ticks
+ * with it and silently un-bounded every g_ticks-deadline wait in the tree. */
+#define CONSOLE_THRE_MAX 10000u
+
+static void console_rx_drain(void);           /* defined with the IRQ4 handler */
+static volatile int g_rx_armed;               /* set by console_rx_init */
+
 void kputc(char c) {
     klog_putc(c);                             /* DDR-750: capture into the log ring */
-    while ((inb(COM1 + 5) & 0x20) == 0) { }   /* wait for THRE */
+    unsigned spins = 0;
+    while ((inb(COM1 + 5) & 0x20) == 0) {     /* wait for THRE */
+        /* DDR-809/DDR-808: kputs/kwrite hold the console lock with interrupts
+         * OFF for the whole buffer, so IRQ4 cannot run and COM1's 16-byte RX
+         * FIFO cannot be drained by its handler. A burst of output therefore
+         * destroyed concurrent console input — measured as one lost command per
+         * smoke-shell run. Draining inline here is what closes that window;
+         * the masking itself must stay, because ADR-030 needs the buffer atomic. */
+        if (g_rx_armed)
+            console_rx_drain();
+        if (++spins >= CONSOLE_THRE_MAX)
+            return;                           /* bounded (S2); klog already has it */
+    }
     outb(COM1, (uint8_t)c);
 }
 
@@ -75,8 +96,23 @@ void kputc(char c) {
 static volatile uint8_t  rx_ring[RX_RING_SZ];
 static volatile uint32_t rx_head, rx_tail;
 
-/* IRQ4 handler: drain every byte the UART has into the ring (drop on full). */
-static void console_rx_irq(void) {
+/* DDR-809: the producer side is no longer lock-free. Two producers now exist —
+ * the IRQ4 handler and kputc's in-spin drain — so rx_head is serialised. The
+ * CONSUMER side is unchanged: kgetc_nb() is still the only reader and still
+ * needs no lock.
+ *
+ * S6: this takes a lock from ISR context, which the rule restricts to patterns
+ * already in the tree. It is one — klog_putc() takes klog_lock via
+ * spin_lock_irqsave and kputc calls it on every character, including from ISRs.
+ * g_rx_lock is a leaf: nothing is acquired under it. Lock order where both are
+ * held is g_console_lock -> g_rx_lock (kputc holds the console lock when it
+ * drains); the ISR takes only g_rx_lock, so there is no inversion. */
+static spinlock_t g_rx_lock = SPINLOCK_INIT;
+
+/* Drain every byte the UART has into the ring (drop on full). Called from the
+ * IRQ4 handler AND from kputc's THRE spin, where IRQ4 cannot fire. */
+static void console_rx_drain(void) {
+    uint64_t fl = spin_lock_irqsave(&g_rx_lock);
     while (inb(COM1 + 5) & 0x01) {            /* LSR bit0: data ready */
         uint8_t c = inb(COM1);               /* read RBR (also clears the IRQ) */
         uint32_t nh = (rx_head + 1u) % RX_RING_SZ;
@@ -85,6 +121,12 @@ static void console_rx_irq(void) {
             rx_head = nh;
         }
     }
+    spin_unlock_irqrestore(&g_rx_lock, fl);
+}
+
+/* IRQ4 handler. */
+static void console_rx_irq(void) {
+    console_rx_drain();
 }
 
 /* Arm COM1 receive: enable the RX FIFO + the Received-Data-Available interrupt,
@@ -95,6 +137,12 @@ void console_rx_init(void) {
     outb(COM1 + 1, 0x01);                     /* IER: Received Data Available IRQ */
     irq_register(4, console_rx_irq);          /* COM1 = IRQ4 */
     pic_unmask(4);
+    /* DDR-809: only now are the RX FIFO and IER configured, so only now is an
+     * inline drain meaningful. A plain global with no percpu/LAPIC dependency —
+     * kputc prints the earliest boot messages, long before this_cpu() or
+     * lapic_id() are usable, so any CPU-identity guard here would fault on the
+     * first character the kernel ever prints. */
+    g_rx_armed = 1;
 }
 
 /* Non-blocking console read (5e): one buffered byte, or -1 if the ring is empty.

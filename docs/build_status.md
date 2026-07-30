@@ -2479,3 +2479,44 @@ skip COM1 but keep the log ring → serial and `dmesg` disagree). A gate must al
 genuinely back-pressure the UART, since asserting "did not hang" against a QEMU
 that never stalls would pass against today's code. Per S11 the gate is absent,
 not stubbed.
+
+## DDR-809 — console output no longer eats console input (closes OPEN-8, DDR-807)
+
+`kputs`/`kwrite` hold the console lock with interrupts OFF for a whole buffer
+(ADR-030 atomicity), while `kputc` spun **unboundedly** on UART THRE. IRQ4 could
+not fire, so COM1's 16-byte RX FIFO was never drained, and a burst of kernel
+output silently destroyed concurrent console input.
+
+Two changes inside that spin: the wait is bounded (`CONSOLE_THRE_MAX = 10000`,
+then the byte is dropped — `klog_putc` has already recorded it so `dmesg` keeps
+it), and the RX FIFO is drained inline so bytes arriving during a TX burst still
+reach the ring. The masking itself is unchanged — ADR-030 still needs the buffer
+atomic.
+
+**Invariant change, stated explicitly:** the RX ring was documented lock-free
+single-producer (IRQ4) / single-consumer. It is now **multi-producer under
+`g_rx_lock`**, single-consumer unchanged (`kgetc_nb()` still needs no lock).
+S6 is satisfied by existing precedent — `klog_putc()` already takes `klog_lock`
+from `kputc`, including from ISRs. `g_rx_lock` is a leaf; order is
+`g_console_lock -> g_rx_lock`, and the ISR takes only the latter, so no
+inversion.
+
+A BSP-only drain was designed and **rejected as unwritable**: `kputc` prints the
+earliest boot messages, long before percpu, so a `this_cpu()->is_bsp` test would
+dereference an uninitialised GS base on the first character the kernel ever
+prints. The drain is instead gated on `g_rx_armed`, a plain global set at the end
+of `console_rx_init()`.
+
+| | baseline `4923c1831f2a` | fixed `4a1dc378c13e` |
+|---|---|---|
+| `smoke-shell` | FAIL 4/4 | **PASS 3/3** |
+| RX losses per run | 1 | **0** |
+| `st-ok=0` | absent | present |
+| `st-fail=127` | absent (`st-fail=0`) | present |
+
+`smoke`, `smoke-user`, `smoke-fs`, `smoke-syspipe` all PASS.
+
+Gate is **absent, not stubbed** (S11): a real one must back-pressure the UART TX,
+and QEMU drains instantly, so "did not hang" would pass against the broken code
+too. `smoke-shell` is the regression test — it failed 4/4 through exactly this
+mechanism and now passes 3/3 with zero losses.

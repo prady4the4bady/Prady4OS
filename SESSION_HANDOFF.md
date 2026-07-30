@@ -114,6 +114,24 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   **30504947387** on `9f1459a` first: green ⇒ local timing artefact (the gate is
   driven by fixed `sleep`s against a FIFO, unlike the `boot_test.sh` gates);
   red ⇒ DDR-804 is the first suspect. Items 1–4 are DONE.
+- **OPEN-8 IS CLOSED (DDR-809). OPEN-8 was never a gate-timing problem — it was
+  a kernel input-integrity defect.** `kputs`/`kwrite` hold the console lock with
+  interrupts off while `kputc` spun unboundedly on THRE, so IRQ4 could not drain
+  COM1's 16-byte RX FIFO and kernel output silently destroyed console input.
+  Fix: bound the spin (`CONSOLE_THRE_MAX = 10000`) and drain RX inline.
+  A/B, distinct kernels: baseline `4923c1831f2a` FAIL 4/4 with 1 RX loss per run;
+  fixed `4a1dc378c13e` PASS 3/3 with **0 losses**, and both `$?` assertions
+  (`st-ok=0`, `st-fail=127`) now correct. `smoke`/`smoke-user`/`smoke-fs`/
+  `smoke-syspipe` all PASS. **DDR-807 is closed by the same change.**
+  Invariant changed on purpose: the RX ring is now multi-producer under
+  `g_rx_lock` (consumer unchanged). A BSP-only drain was rejected as unwritable —
+  `kputc` prints before percpu exists, so `this_cpu()` would fault on the first
+  character the kernel ever prints.
+  **Three earlier "established" OPEN-8 facts were each refuted by measurement:**
+  the 4096-VM-exit mechanism (actual `inb_count=968`; 4096 was my own clamp
+  arithmetic propagated through handoffs as observed data), the `fwcfg_init()`
+  cause (FAIL 3/3 both arms), and my `ae2fdbf` stamps (FAIL 3/3, and `90634b6`
+  too). Do not reintroduce any of them.
 - **OPEN-1 — SETTLING MEASUREMENT RUN (2026-07-30). Six hypotheses refuted, one
   open. The stamps are now PERMANENT INSTRUMENTATION in the tree — the next red
   run answers the question by itself.**
