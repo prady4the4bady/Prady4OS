@@ -41,6 +41,15 @@ All entries below are **shipped**.
 - Buddy PMM, SLAB heap, higher-half VMM, per-process CR3, W^X + NX (ADR-003/007/021)
 - **Kernel self W^X** — `vmm_protect_kernel()` re-stamps kernel text RX / data NX after boot (DDR-757; gate: kernel-self W^X PTE audit) *(was mis-tracked as Section B#7 until 2026-07-26)*
 - **COW fork** — `vmm_fork_address_space_cow()` + `PTE_SW_COW` + PMM refcounts + `vmm_cow_fault()` in the #PF path (IMP-D; gate: `smoke-cowfork`) *(was mis-tracked as Section B#5 until 2026-07-26)*
+- **Console input integrity** — `kputc` bounds the UART THRE wait
+  (`CONSOLE_THRE_MAX`) and drains the RX FIFO inline, so a burst of kernel output
+  can no longer destroy concurrent console input (DDR-809; closes OPEN-8 and the
+  DDR-807 S2 violation). The RX ring is now **multi-producer under `g_rx_lock`**,
+  single-consumer unchanged. Evidence: baseline `4923c1831f2a` `smoke-shell` FAIL
+  4/4 with 1 RX loss per run → fixed `4a1dc378c13e` PASS 3/3 with **0 losses**.
+  Gate deliberately **absent** per S11 (QEMU cannot back-pressure the UART, so
+  "did not hang" would pass against the broken code too); `smoke-shell` is the
+  regression test.
 - Per-CPU runqueues + work-stealing scheduler (DDR-SMP-rq-1/2/3); SMP bring-up 4 APs (ADR-029/031)
 - MSI-X for all virtio devices (DDR-714C, DDR-771); multi-in-flight virtio-blk (DDR-BLK-1)
 - NCS capabilities: `CAP_SOVEREIGN`, `CAP_AGENT`, `CAP_NET` (ADR-009, DDR-731)
