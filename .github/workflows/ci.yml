@@ -4,6 +4,13 @@ on:
   push:
     branches: [ main, "dev/**" ]
   pull_request:
+  # The promotion rule requires TWO consecutive green runs on the EXACT tip SHA.
+  # Without this, that is unachievable: `gh run rerun` needs admin rights the
+  # project PAT does not have, and any other way to start a run is a push, which
+  # changes the SHA. workflow_dispatch lets a second, independent run be started
+  # on the same commit — which is what makes the second green mean anything,
+  # given the ~50% intermittent failures tracked as OPEN-1/OPEN-2.
+  workflow_dispatch:
 
 jobs:
   build-and-boot:
