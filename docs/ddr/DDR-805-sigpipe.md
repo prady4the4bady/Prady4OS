@@ -167,3 +167,60 @@ Unattributed. Known facts only:
 Read that run's verdict before investigating anything else. If CI is green, this
 is a local timing artefact and DDR-805 can proceed on a quiet machine; if CI is
 red, DDR-804 is the first suspect and DDR-805 stays blocked behind it.
+
+## OPEN-8 RESOLVED TO A CAUSE — DDR-804 is the regression, and two of my
+## intermediate readings were wrong
+
+Bisect, deterministic:
+
+| tree | result |
+|---|---|
+| `90634b6` (CI-green) | **PASS** |
+| `6c375ea` HEAD, run 1 | FAIL |
+| `6c375ea` HEAD, run 2 | FAIL |
+
+`6c375ea` is docs-only, so **`9f1459a` (DDR-804) is the regressing commit**. Not
+a local timing artefact, not SIGPIPE. I shipped this.
+
+### Correction 1 — the "truncation at line 197" never happened
+
+Every earlier note here describes the 200-line pipeline truncating at 197/200.
+It does not. That line is split by an interleaved `[user] sys_exit(0)` from
+another thread; lines 198, 199, 200 and `BIGTAIL-e5v` all follow it. **The pipe
+test passes.** I read a concurrency artefact in a shared console as data loss and
+built two hypotheses on it.
+
+### Correction 2 — I analysed the wrong log
+
+The `build/shell_serial.log` I then inspected was written by the **passing**
+`90634b6` run, because the bisect script ran that arm last. Everything looked
+healthy because it was healthy — it was not the failing artefact. Same class of
+mistake as DDR-791's byte-identical arms: reasoning confidently about an artefact
+that was not the one under test.
+
+### The actual failing assertion
+
+```
+[shell] FAIL: $? did not expand to 0 after a successful command (DDR-789)
+```
+
+DDR-804 broke `$?` expansion in PRISM. The mechanism is **not yet named**, and
+per S5 no fix goes in before it is. Candidates, in the order worth testing:
+
+1. **Kernel image growth.** `privacynettest.elf` (~6.4 KB) was added to the
+   `user_image.asm` incbin set, so the embedded image grew on every boot, gated
+   or not. The tree has a standing low-memory image cap, and exit-status
+   plumbing sits near init/reap paths — worth checking whether something now
+   straddles a boundary.
+2. **`fwcfg_init()` at boot.** It runs unconditionally and performs bounded port
+   I/O before `acpi_init()`. It should be inert, but it is new on every path.
+3. The gated spawn block itself — least likely, `probe_enabled("privnet")` is
+   false without `QEMU_PROBES`.
+
+Discriminate by reverting each independently, not together: rebuild with only the
+incbin entry removed, then with only `fwcfg_init()` removed. One of them restores
+`$?`, and that names the mechanism.
+
+**Do not revert DDR-804 wholesale to go green.** It closes OPEN-7 and carries a
+verified three-arm A/B; the defect is a side effect of how it was wired in, not
+of the mechanism.

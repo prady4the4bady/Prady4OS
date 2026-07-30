@@ -114,9 +114,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   **30504947387** on `9f1459a` first: green ⇒ local timing artefact (the gate is
   driven by fixed `sleep`s against a FIFO, unlike the `boot_test.sh` gates);
   red ⇒ DDR-804 is the first suspect. Items 1–4 are DONE.
-- **OPEN-8 (NEW):** the `smoke-shell` failure above. It passed in CI at
-  `90634b6`. Do NOT attribute it to DDR-805 — see the CORRECTION section of
-  `docs/ddr/DDR-805-sigpipe.md`.
+- **OPEN-8 (NEW, CAUSE NAMED — START HERE):** `9f1459a` (DDR-804) broke
+  `smoke-shell`. Deterministic bisect: `90634b6` PASS, HEAD FAIL 2/2, and
+  `6c375ea` is docs-only. Failing assertion is
+  **`[shell] FAIL: $? did not expand to 0 after a successful command (DDR-789)`**
+  — NOT the 200-line pipe test, which passes.
+  Mechanism not yet named. Discriminate by reverting these INDEPENDENTLY:
+  (1) the `privacynettest.elf` incbin entry in `arch/x86_64/user_image.asm`
+      (~6.4 KB of image growth on every boot, gated or not — the tree has a
+      low-mem image cap); (2) the unconditional `fwcfg_init()` call in `kmain`.
+  Do NOT revert DDR-804 wholesale — it closes OPEN-7 and has a verified
+  three-arm A/B. The defect is in how it was wired in, not the mechanism.
+  Two of my intermediate readings were WRONG and are corrected in
+  `docs/ddr/DDR-805-sigpipe.md`: the "truncation at line 197" was interleaved
+  console output, not data loss; and I then analysed the PASSING run's
+  `shell_serial.log`, not the failing one.
 - **DDR-805 (SIGPIPE) is DESIGNED, IMPLEMENTED, and REVERTED — not blocked by
   its own defect.** I first blamed it for the `smoke-shell` red, reverted it, and
   the gate failed identically with the code gone. The design is sound and the
