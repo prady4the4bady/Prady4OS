@@ -137,6 +137,7 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
     'FSRM FAIL' 'KILL FAIL' 'ROOTMOUNT FAIL' 'SETNAME FAIL' 'SFSROOT FAIL' \
     'SURFDESTROY FAIL' 'SYSINFO FAIL' 'TIME FAIL' \
+    'PRIVACYNET FAIL' 'PRADYOS_SOVEREIGN_BYPASSED' \
     'PRADYOS_FPU_FAIL' 'PRADYOS_NVME_IRQ_FAIL' 'PRADYOS_NVME_PRP_FAIL' \
     'PRADYOS_NVME_RW_FAIL' 'PRADYOS_SFS_NESTED_FAIL' 'PRADYOS_SFS_PERSIST_FAIL' \
     'allowlist FAIL' 'ap preempt FAIL' 'blk integrity FAIL' 'btree churn FAIL' \
@@ -176,10 +177,19 @@ EOF
     return 0
 }
 
+# DDR-804: per-boot probe selection. Empty unless a gate asks for it, and
+# the kernel fails closed when the string is absent, so every gate that does
+# not set QEMU_PROBES boots exactly as before.
+FWCFG=()
+if [ -n "${QEMU_PROBES:-}" ]; then
+    FWCFG=(-fw_cfg name=opt/org.pradyos/probes,string="${QEMU_PROBES}")
+fi
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine q35 \
     -drive if=none,format=raw,file="$IMG",id=disk0 \
     -device virtio-blk-pci,drive=disk0,bootindex=0 \
+    "${FWCFG[@]}" \
     "${FATDISK[@]}" \
     "${SFSDISK[@]}" \
     "${EXT4DISK[@]}" \

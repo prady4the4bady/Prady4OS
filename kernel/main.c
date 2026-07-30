@@ -46,6 +46,7 @@
 #include "cpu_mitigations.h"
 #include "vdso_page.h"
 #include "metric_page.h"  /* F#68/DDR-795: sealed objective root page */
+#include "fwcfg.h"        /* DDR-804: per-boot probe selection */
 #include "vmm_cow.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
@@ -359,6 +360,8 @@ extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destinatio
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
 extern const unsigned char sovegresstest_elf_end[];
+extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
+extern const unsigned char privacynettest_elf_end[];
 extern const unsigned char rtcmonotest_elf[];         /* DDR-796: SYS_CLOCK monotonicity */
 extern const unsigned char rtcmonotest_elf_end[];
 extern const unsigned char metrictest_elf[];          /* F#68/DDR-795: metric-region probe */
@@ -1198,6 +1201,25 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] ELF loaded (embedded); egress-audit probe spawned\r\n");
                     }
                 }
+                /* DDR-802 gate, opt-in via DDR-804. This probe switches PRIVACY
+                 * MODE — global kernel state — on and off. Spawning it in every
+                 * gate would refuse the concurrent connects in capnettest /
+                 * sovegresstest / egressaudittest and fail THEIR gates at
+                 * random, so it runs only when smoke-privacy-netfilter selects
+                 * it. Sovereign AND CAP_NET: the strongest credential the
+                 * machine issues, so refusing it proves everyone is refused. */
+                if (probe_enabled("privnet")) {
+                    struct tcb *pn = 0;
+                    uint64_t pnlen = (uint64_t)(privacynettest_elf_end
+                                                - privacynettest_elf);
+                    if (elf_load((void *)(uintptr_t)privacynettest_elf, pnlen,
+                                 "PRIVNET", &pn) == ELF_OK && pn) {
+                        pn->is_net = 1;
+                        pn->is_sovereign = 1;
+                        sched_unblock(pn);
+                        kputs("[user] ELF loaded (embedded); privacy-netfilter probe spawned\r\n");
+                    }
+                }
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
                  * prints TIME YYYY-MM-DD HH:MM:SS + PRADYOS_TIME_OK. Gate smoke-time. */
                 user_boot_from_sfs(cap, smnt, "TIME.ELF", timetest_elf, timetest_elf_end, 0);
@@ -1836,6 +1858,10 @@ void kmain(struct boot_info *bi) {
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
     metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */
     cow_selftest();                      /* IMP-D: copy-on-write fork isolation */
+
+    /* DDR-804: read the boot-time probe list before anything can consult it.
+     * Two port reads, no wait, no allocation; fails closed when absent. */
+    fwcfg_init();
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();

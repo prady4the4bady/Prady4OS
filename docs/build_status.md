@@ -2340,3 +2340,33 @@ but is not wired into the build. It needs a kernel-visible per-boot opt-in
 first, so the probe exists only in its own QEMU config. Mechanism defaults off,
 so nothing else changes: `make image` is warning-free and `smoke`/`smoke-fs`
 pass unchanged.
+
+## DDR-804 — per-boot probe selection (closes OPEN-7)
+
+A probe could not exist in one gate and not the rest: `kmain` spawns every probe
+with `sched_unblock` and `user_boot_from_sfs` loads unconditionally. Harmless for
+read-only probes, which is why it never surfaced — until DDR-802's probe, which
+mutates GLOBAL kernel state (privacy mode) and would refuse the concurrent
+connects in `capnettest`/`sovegresstest`/`egressaudittest`, failing their gates.
+
+The harness now passes `-fw_cfg name=opt/org.pradyos/probes,string=<csv>` and the
+kernel reads it through QEMU's firmware-config channel (selector `0x510`, data
+`0x511`), exposing `probe_enabled()`. `inb`/`outw` already existed in
+`kernel/io.h`, so this adds **no new I/O primitives and no new hardware
+assumptions**. New subsystem: `kernel/drivers/fwcfg/`.
+
+Rejected alternatives, both recorded in the DDR: a compile-time `-DPROBE_*` would
+force a distinct kernel image per gate, multiplying build time across ~113 gates
+and destroying artefact identity (a green suite would stop meaning "this image is
+good" — DDR-791's lesson); another block device would consume one of
+`VBLK_MAX = 4` and make storage topology the carrier for unrelated config.
+
+**Fails closed.** A wrong signature at key `0x0000` yields an empty probe set.
+That direction is the safety property: an unselected probe fails its own gate —
+loud, local, obvious — whereas a wrongly-selected one perturbs unrelated gates,
+which is silent and remote. Every loop is bounded and every device-reported
+length is clamped before use (64 entries, 256 bytes), and the 56-byte name field
+is explicitly not assumed NUL-terminated.
+
+Scope is new probes only; the 113 currently-green gates set no `QEMU_PROBES` and
+boot exactly as before.

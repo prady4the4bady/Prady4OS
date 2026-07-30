@@ -87,6 +87,8 @@ USER_FUZZ_SRC := user/syscallfuzz.c       # sec: hostile-syscall fuzz probe (DDR
 USER_FUZZ_ELF := build/syscallfuzz.elf
 USER_EGAUD_SRC := user/egressaudittest.c  # DDR-801: per-destination egress audit
 USER_EGAUD_ELF := build/egressaudittest.elf
+USER_PRIVNET_SRC := user/privacynettest.c # DDR-802: privacy netfilter probe (DDR-804 opt-in)
+USER_PRIVNET_ELF := build/privacynettest.elf
 USER_SOVEG_SRC := user/sovegresstest.c    # DDR-800: sovereign-egress audit probe
 USER_SOVEG_ELF := build/sovegresstest.elf
 USER_RTCMONO_SRC := user/rtcmonotest.c    # DDR-796: SYS_CLOCK monotonicity under SMP
@@ -115,6 +117,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/nvme/nvme.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
+               kernel/drivers/fwcfg/fwcfg.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
                kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
@@ -130,14 +133,14 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
-               -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc \
+               -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc -Ikernel/drivers/fwcfg \
                -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/drivers/gpu -Ikernel/drivers/nvme -Ikernel/drivers/input -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
                -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso -Ikernel/aether -Ikernel/apic
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
@@ -280,6 +283,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_EGAUD_ELF) build/egressaudittest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SOVEG_SRC) -o build/sovegresstest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SOVEG_ELF) build/sovegresstest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_PRIVNET_SRC) -o build/privacynettest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_PRIVNET_ELF) build/privacynettest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -288,7 +293,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -341,6 +346,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/ps2kbd.c       -o build/ps2kbd.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/virtio_input.c -o build/virtio_input.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rtc/rtc.c            -o build/rtc.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/fwcfg/fwcfg.c        -o build/fwcfg.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
@@ -1453,6 +1459,20 @@ smoke-vfs-bigwrite: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_BIGWRITE_OK')" \
 	FORBIDDEN_SENTINEL="BIGWRITE FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-802 privacy netfilter gate, selected per-boot by DDR-804 so the probe's
+# global privacy toggle cannot perturb the concurrent egress probes in every
+# other gate. The probe is SOVEREIGN + CAP_NET on an ALLOWLISTED destination:
+# a connect that would otherwise unambiguously succeed, so an implementation
+# that does nothing fails here. It also proves ORDERING — a sovereign connect
+# to an off-allowlist port must NOT leave an AR_SOVEREIGN_BYPASS record, which
+# it would if the DDR-800 bypass ran ahead of the privacy check.
+smoke-privacy-netfilter: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_PROBES=privnet \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_PRIVACY_DENIED_OK\nPRADYOS_PRIVACY_AUDIT_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRIVACYNET FAIL\nPRADYOS_SOVEREIGN_BYPASSED')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 
 # DDR-763 B+tree churn gate: 40x create+write(64K)+unlink of the same path on the
 # SFS root drives the inode-entry B+tree well past its first leaf split

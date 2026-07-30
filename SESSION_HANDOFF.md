@@ -104,7 +104,21 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   second feature list exist. Mirror it here + in `docs/build_status.md` in the
   same commit as any code touching agents/UI/sockets/storage/namespaces/telemetry/
   scheduling/capabilities.
-- **GROUND STATE (2026-07-30):** HEAD `6a0ec7c` on `dev/phase1`. `main` is
+- **GROUND STATE (2026-07-30, later):** DDR-804 + the DDR-802 gate landed.
+  Last confirmed green: run **30483750211 on `90634b6`** (which contains
+  `6a0ec7c`). `main` still **72 commits behind** — nothing promoted since
+  `3485085`. aether baseline unchanged: **764 collected**.
+- **CURRENT_ACTIVE_TASK:** work-queue item 5 — SIGPIPE (13) in the
+  default-terminate whitelist in `signal_deliver`. Items 1–4 are DONE.
+- **DDR-802 IS COMPLETE.** Three-arm A/B, all four kernel SHAs distinct so every
+  arm genuinely rebuilt (the DDR-791 trap): A no-privacy-check `1b6dddc3f139`
+  FAIL · B no-audit-record `23daf7ef7146` FAIL · C wrong-result-code
+  `c58be04cf099` FAIL · restored `f9d03ce220da` PASS.
+- **OPEN-7 IS CLOSED** by DDR-804 (per-boot probe selection via QEMU fw_cfg,
+  `kernel/drivers/fwcfg/`). Any future gate over GLOBAL kernel state must use
+  `probe_enabled("<name>")` + `QEMU_PROBES=<name>` rather than spawning
+  unconditionally — that is now the standing pattern, not a one-off.
+- **PREVIOUS GROUND STATE (2026-07-30):** HEAD `6a0ec7c` on `dev/phase1`. `main` is
   **72 commits behind** `dev/phase1` — nothing has been promoted since
   `3485085`. Latest CI: run **30472148480 on `1cbe6f6` = SUCCESS** (workflow
   `pradyos-ci`; ignore "Dependabot Updates", it is not a CI verdict). `6a0ec7c`

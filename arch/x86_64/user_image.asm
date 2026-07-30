@@ -159,6 +159,12 @@ egressaudittest_elf:
 egressaudittest_elf_end:
 
 ; DDR-800 (R1): sovereign-egress audit probe.
+global privacynettest_elf
+global privacynettest_elf_end
+privacynettest_elf:
+    incbin "build/privacynettest.elf"
+privacynettest_elf_end:
+
 global sovegresstest_elf
 global sovegresstest_elf_end
 sovegresstest_elf:

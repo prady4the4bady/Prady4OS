@@ -150,7 +150,8 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | DDR-792 ollama transport bridge | `aether/ollama_bridge/transport.py` | ✅ |
 | F#68 metric lockbox (S3) | `aether/kernel/lockbox/metric_lockbox.py` | ✅ |
 | Privacy-mode netfilter hook (Python transport only) | `aether/platform/privacy/netfilter.py` | ✅ |
-| Privacy-mode netfilter — KERNEL (DDR-802 mechanism; gate deferred, see DDR) | `kernel/syscall/sys_socket.c`, `kernel/aether/aether_queue.c` | 🟡 |
+| Privacy-mode netfilter — KERNEL (DDR-802, gated by `smoke-privacy-netfilter`) | `kernel/syscall/sys_socket.c`, `kernel/aether/aether_queue.c` | ✅ |
+| Per-boot probe selection via QEMU fw_cfg (DDR-804, closes OPEN-7) | `kernel/drivers/fwcfg/fwcfg.c` | ✅ |
 | Shared egress rate limiter (S2) | `aether/platform/ratelimit/shared_limiter.py` | ✅ |
 | Cloud bridge (built, **not enabled** — DDR-793 R1/R3) | `aether/cloud_bridge/transport.py` | ✅ |
 | R3 per-destination egress audit (DDR-801) | `kernel/syscall/sys_socket.c` + `user/egressaudittest.c` | ✅ |
