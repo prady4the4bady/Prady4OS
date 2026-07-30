@@ -1131,6 +1131,14 @@ static void fs_test_thread(void *arg) {
                           && (netallow_check(0xC0000202u, 9999) != 0);       /* wrong host     */
                     kputs(ok ? "[net] allowlist OK\r\n" : "[net] allowlist FAIL\r\n");
                 }
+                /* DDR-806 settling measurement (stamp A). Pure instrumentation:
+                 * two prints, no behaviour change, no lock, no wait. Pairs with
+                 * stamp B just before smpuser_proof(). The surviving candidate is
+                 * that fs_test_thread never reaches B inside the gate window
+                 * because the ~30 user_boot_from_sfs() calls between A and B each
+                 * block on SFS I/O over contended virtio-blk under -smp 4.
+                 * B absent in a failing run confirms it; B early refutes it. */
+                kputs("[boot-stamp] A probe-block-begin t="); kputdec(g_ticks); kputs("\r\n");
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end, 0);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end, 0);
@@ -1308,6 +1316,11 @@ static void fs_test_thread(void *arg) {
                         g_aether_daemon_pid = dm->pid;
                     }
                 }
+                /* DDR-806 settling measurement (stamp B). Its ABSENCE in a
+                 * failing run is the confirmation: it means fs_test_thread never
+                 * got here, so the proofs below could not have run — which is
+                 * exactly what the missing OK/FAIL sentinels showed. */
+                kputs("[boot-stamp] B proofs-begin t="); kputdec(g_ticks); kputs("\r\n");
                 smpuser_proof();     /* ADR-031 cap-4: ring 3 runs on an AP */
                 blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
                 smp_blk_integrity(); /* DDR-759: concurrent-read DATA integrity (M1 audit) */

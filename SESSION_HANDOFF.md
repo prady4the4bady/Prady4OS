@@ -114,7 +114,27 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   **30504947387** on `9f1459a` first: green ⇒ local timing artefact (the gate is
   driven by fixed `sleep`s against a FIFO, unlike the `boot_test.sh` gates);
   red ⇒ DDR-804 is the first suspect. Items 1–4 are DONE.
-- **OPEN-1 — NARROWED, NOT EXPLAINED (DDR-806). A proposed fix was implemented
+- **OPEN-1 — SETTLING MEASUREMENT RUN (2026-07-30). Six hypotheses refuted, one
+  open. The stamps are now PERMANENT INSTRUMENTATION in the tree — the next red
+  run answers the question by itself.**
+  Measured on the exact failing artefact (`BSP_LIVENESS=1`, `-smp 4`,
+  `TIMEOUT_S=180`, kernel `32c84784cf9d`): stamp B (`main.c:1311`) is reached at
+  **6.8–10.8 s of a 180 s window** over 5 runs. The "boot runs out of window"
+  family — including DDR-803's prediction — is **closed**.
+  **READ THIS ON THE NEXT RED RUN:** grep the serial for `[boot-stamp] B`.
+  B present ⇒ the stall is AFTER B ⇒ prime suspect is **DDR-807** (`kputc`
+  unbounded THRE spin with IRQs off). B absent ⇒ stall is BEFORE B ⇒ DDR-807 is
+  wrong too and hypothesis 8 is needed. Do not fix before reading this.
+  Local repro rate is under 1-in-5 and each attempt costs a full 180 s (these
+  gates cannot early-exit per DDR-785), so do NOT fish for a local repro — let CI
+  produce the artefact.
+- **DDR-807 (NEW) — real S2 violation, found in passing, fix DEFERRED with no
+  code.** `kernel/console.c:63` spins on UART THRE with no bound, called with
+  interrupts disabled. Dormant today. The fix is not a two-liner: bounding it
+  forces a choice between a lossy console (every gate asserts on serial), an
+  error return (`kputc` is `void`, called from panic/ISR), or serial and `dmesg`
+  disagreeing. Needs a gate that genuinely back-pressures the UART.
+- **(superseded) OPEN-1 — NARROWED, NOT EXPLAINED (DDR-806). A proposed fix was implemented
   and REFUTED the same day; it is reverted, no DDR-806 code is in the tree.**
   Four things are ESTABLISHED, each from a named artefact:
   (1) the proofs never execute — neither OK nor FAIL variant, DDR-777 entry

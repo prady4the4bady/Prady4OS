@@ -2442,3 +2442,40 @@ I/O over contended virtio-blk under `-smp 4`.
 **Required next measurement, before any fix:** stamp `g_ticks` at `main.c:1134`
 and `main.c:1311`. A failing run that never prints the second stamp confirms it;
 both stamps landing early refutes it and reopens the search.
+
+### DDR-806 settling measurement — candidate refuted; stamps left in as a CI trap
+
+Two `g_ticks` stamps (`main.c:1134` = A, `main.c:1311` = B) measured against the
+exact failing artefact (`BSP_LIVENESS=1`, `-smp 4`, `TIMEOUT_S=180`): B is
+reached at **6.8–10.8 s of a 180 s window** across 5 runs, ~94% margin. The
+"`fs_test_thread` runs out of window" family is closed, including the version
+DDR-803 predicted.
+
+Also refuted by inspection, at no measurement cost: output eviction. `kputc`
+writes the log ring (which feeds `dmesg`) **and** COM1; the harness greps the
+serial capture *file*, which is append-only. Nothing can evict a sentinel.
+
+The stamps stay in the tree. They cost two `kputs` on a path that already prints
+and turn every future intermittent red into a decisive artefact: **B present** ⇒
+stall is after B (points at DDR-807); **B absent** ⇒ stall is before B. Cheaper
+than fishing for a local repro at 180 s per attempt.
+
+Running total on OPEN-1: **six hypotheses refuted, one open** (DDR-807 `kputc`).
+Every refutation came from an artefact or from source, none from argument.
+
+### DDR-807 — unbounded UART wait in `kputc` (S2 violation, found in passing)
+
+`kernel/console.c:63` spins `while ((inb(COM1 + 5) & 0x20) == 0) { }` with **no
+bound**, and `kputs`/`kwrite` call it with **interrupts disabled**. If THRE never
+sets (back-pressured host pipe, full QEMU buffer), that CPU spins forever, IRQs
+off — and on the BSP it would take `g_ticks` with it, silently un-bounding every
+`g_ticks`-deadline wait in the tree.
+
+Dormant under every configuration currently run, which is why it has never been
+seen. **Fix deliberately deferred with no code**: the hard part is what happens
+when the bound expires (drop the byte → lossy console, and every gate asserts on
+serial; return an error → `kputc` is `void` and called from panic/ISR paths;
+skip COM1 but keep the log ring → serial and `dmesg` disagree). A gate must also
+genuinely back-pressure the UART, since asserting "did not hang" against a QEMU
+that never stalls would pass against today's code. Per S11 the gate is absent,
+not stubbed.

@@ -232,3 +232,204 @@ inside the window, this is refuted too and the search reopens.
 
 Do not implement that reordering before the stamps are read. This DDR has
 already produced two confident explanations that the next measurement destroyed.
+
+## Revert verification — and a correction to the refutation table above
+
+Re-running the three gates on the reverted kernel `f9d03ce220da` (byte-identical
+to `d8c5c95`, whose CI run 30509373522 is green):
+
+| gate | original position (`f9d03ce220da`) | hoisted (`e8219c43ff84`) |
+|---|---|---|
+| `smoke-smpuser` | **PASS** | FAIL |
+| `smoke-blkmq` | **PASS** | FAIL |
+| `smoke-rqstress-liveness` | **FAIL** | FAIL |
+
+This corrects the refutation table earlier in this document, which implied the
+hoist broke all three. It broke **two**. `smoke-rqstress-liveness` was *already*
+failing locally at the original position, so its red in the hoisted arm cannot be
+attributed to the hoist. The refutation of the hoist stands on `smoke-smpuser`
+and `smoke-blkmq` alone — which is still decisive, but it is two gates, not
+three, and the difference matters because it is the third gate that is now the
+useful one.
+
+### The genuinely new fact: OPEN-1 reproduces locally
+
+`smoke-rqstress-liveness` fails **on this workstation**, on CI-green code. No
+previous session achieved a local reproduction of the OPEN-1 family — every
+earlier attempt reported "passes locally, fails in CI", which is what forced four
+hypotheses to be argued from CI logs instead of measured.
+
+That changes the economics of this investigation completely: the stamps can be
+read against a locally failing run, iterated in minutes, instead of waiting on
+~50% CI rolls. It also means "it only happens on slow CI runners" — an assumption
+threaded through DDR-803 and the earlier DDR-806 reasoning — is **not required**
+and may be wrong.
+
+## THE SETTLING MEASUREMENT — the surviving candidate is refuted too
+
+Two `g_ticks` stamps: **A** at the top of the probe block (`main.c:1134`), **B**
+immediately before `smpuser_proof()` (`main.c:1311`). Pure instrumentation — two
+prints, no lock, no wait, no behaviour change. Kernel `4923c1831f2a`, `-smp 4`,
+`TIMEOUT_S=180`:
+
+| run | A | B | Δ (probe block) | verdict |
+|---|---|---|---|---|
+| 1 | t=296 | t=695 | 399 ticks | PASS |
+| 2 | t=296 | t=726 | 430 ticks | PASS |
+| 3 | t=299 | t=723 | 424 ticks | PASS |
+
+At 100 Hz that is **~4.2 s for the whole probe block**, with B reached at **~7 s
+into a 180 s window** — roughly 96% of the window still unused.
+
+**The candidate is wrong by more than an order of magnitude.** "~30
+`user_boot_from_sfs()` calls consume the window" cannot be true: they cost 4
+seconds. Every version of the "boot is too slow to reach the proofs" story —
+including the one DDR-803 predicted and the one this DDR was built on — is now
+dead. That is the third confident explanation this investigation has produced and
+the third the next measurement has destroyed.
+
+### Caveat, stated because it matters
+
+This measurement used the **plain** kernel. `smoke-rqstress-liveness` rebuilds
+with `BSP_LIVENESS=1`, so the artefact that actually fails is a different binary
+with extra heartbeat output on the timer path. Per the specific-artefact rule the
+measurement is being repeated against that exact build, aiming to catch a RED run
+with the stamps present. The 96%-margin result is unlikely to be overturned by
+heartbeat prints, but "unlikely" is not the standard this DDR has earned.
+
+### Where the search reopens
+
+With slowness eliminated, the remaining shape is: `fs_test_thread` reaches B
+comfortably, and the proofs still sometimes produce neither `OK` nor `FAIL`. The
+next hypotheses to separate — none of them yet supported, listed so the next
+attempt does not start from zero:
+
+1. **The proofs run but their output is lost.** DDR-790 already established that
+   heavy trace output evicts markers from the 4 KiB log ring; `BSP_LIVENESS=1`
+   adds exactly that. If the sentinel is *printed and then evicted*, every
+   "never executed" conclusion in this document is an artefact of the ring, not
+   of execution. The stamps + serial byte counts in the repeat run test this
+   directly.
+2. **`rqstress_proof()` blocks inside itself** after B — it waits on 24 worker
+   threads, so a lost wake would hang it with no output either way.
+3. Something after B but before the first `kputs` in the proof.
+
+Hypothesis 1 is now the leading one, and it is nearly the opposite of everything
+argued above: not "too slow to run" but "ran, and the evidence was overwritten".
+
+## Hypothesis 1 (eviction) is refuted before it was ever tested
+
+`kputc` (`kernel/console.c:63`) does **both**:
+
+```c
+void kputc(char c) {
+    klog_putc(c);                             /* DDR-750: log ring (dmesg) */
+    while ((inb(COM1 + 5) & 0x20) == 0) { }   /* wait for THRE */
+    outb(COM1, (uint8_t)c);
+}
+```
+
+The 4 KiB ring DDR-790 talks about feeds **`dmesg`**. The serial byte goes
+straight out COM1, and `boot_test.sh` greps the **serial capture file**, which is
+append-only. Nothing can evict a sentinel from it.
+
+So "the proofs ran and their output was overwritten" is impossible, and the
+`BSP_LIVENESS=1` serial-volume angle cannot work the way I proposed one section
+above. I am retiring that hypothesis without spending the measurement on it —
+the code answers it for free.
+
+## A real S2 violation found on the way, independent of OPEN-1
+
+That same line is an **unbounded busy-wait**:
+
+```c
+while ((inb(COM1 + 5) & 0x20) == 0) { }   /* no bound, no deadline */
+```
+
+and `kputs`/`kwrite` call it with **interrupts disabled** (`irq_save()` …
+`irq_restore()`). If the UART's THRE bit does not set — a stalled or
+back-pressured host-side pipe, a full QEMU serial buffer — the calling CPU spins
+forever with IRQs off. That is a plain S2 violation ("every wait, loop, timeout
+is bounded") sitting in the single most-used function in the kernel.
+
+It is worth fixing on its own merit regardless of OPEN-1, and it needs its own
+DDR — bounding it changes console behaviour under back-pressure, which every gate
+depends on.
+
+### And it is a credible OPEN-1 mechanism
+
+It fits the evidence better than anything else so far:
+
+* a stall inside `kputc` **after stamp B but before the proof's first `kputs`**
+  yields exactly what the failing serials show — B present, then neither `OK` nor
+  `FAIL`;
+* other threads keep printing, because only the stalled CPU is spinning, which
+  explains why the failing serials continue past the proofs with probe output;
+* `BSP_LIVENESS=1` adds heartbeat traffic on the timer path, raising serial
+  pressure — which is why the *liveness* variant is the gate that reproduces
+  locally while plain `smoke-smpuser`/`smoke-blkmq` pass;
+* it is intermittent by nature, because it depends on host-side drain timing.
+
+**Not yet established.** The discriminator is already running: if a RED run shows
+stamp **B present** with no `OK`/`FAIL`, the stall is after B and this becomes
+the leading candidate. If B is **absent** in the red run, the stall is before B
+and this is wrong too. Either way the answer comes from the artefact, not from
+this argument.
+
+## Confirmed against the exact failing artefact — candidate dead
+
+Repeated with `BSP_LIVENESS=1` (kernel `32c84784cf9d`), the build
+`smoke-rqstress-liveness` actually runs, same `TIMEOUT_S=180` / `QEMU_SMP=4` /
+sentinels:
+
+| run | A | B | Δ | heartbeats | serial | verdict |
+|---|---|---|---|---|---|---|
+| 1 | t=351 | t=931 | 580 | 35 | 14140 B | PASS |
+| 2 | t=290 | t=693 | 403 | 36 | 14083 B | PASS |
+| 3 | t=283 | t=676 | 393 | 35 | 14138 B | PASS |
+| 4 | t=357 | t=973 | 616 | 32 | 14099 B | PASS |
+| 5 | t=371 | t=1077 | 706 | 35 | 14164 B | PASS |
+
+B is reached between **6.8 s and 10.8 s of a 180 s window**. There is no timing
+pressure anywhere near the boundary — the margin is ~94%. The
+"`fs_test_thread` runs out of window" family of explanations is closed.
+
+Serial volume is also flat (~14.1 KB across all runs), so the
+`BSP_LIVENESS=1` heartbeat traffic is not producing the pressure the retired
+eviction hypothesis assumed either.
+
+**What I did not get: a red run.** All 5 passed. The local failure rate is
+therefore well under 1-in-5, so the earlier single local red was luckier than it
+looked, and chasing one locally costs ~180 s per attempt (these gates declare
+`FORBIDDEN_SENTINEL`, so per DDR-785 they cannot early-exit and every run burns
+the full window).
+
+## Decision: leave the stamps in and let CI catch it
+
+Rather than spend ~30 minutes of local runs fishing for a red, the two stamps
+stay in the tree permanently. They cost two `kputs` on a path that already
+prints, and they convert every future intermittent red — in CI or locally — into
+a decisive artefact:
+
+* red with **B present** ⇒ `fs_test_thread` got there and the stall is *after* B,
+  which points at the DDR-807 `kputc` spin;
+* red with **B absent** ⇒ the stall is *before* B, and DDR-807 is not it either.
+
+This is the cheapest way to make an intermittent defect testable: stop trying to
+reproduce it, and make sure the next natural occurrence carries its own evidence.
+The next red run answers the question without anyone having to be watching.
+
+## Hypothesis column — current state
+
+| # | hypothesis | status |
+|---|---|---|
+| 1 | Defect in the SMP path (4 variants, DDR-775…777) | refuted — proofs never emit either variant |
+| 2 | `!g_smp_have_aps` guard / DDR-777 verdict (C) | **refuted** — failing serial has `cpus online=4/4`, `ap preempt OK`, `resched OK` |
+| 3 | DDR-804 regression | refuted — 4 commits, byte-identical kernel, FAIL/PASS/FAIL/PASS |
+| 4 | `kmain` starved, proofs hoistable | refuted — hoist broke `smoke-smpuser` + `smoke-blkmq`; proofs need live user procs |
+| 5 | Probe block consumes the window | **refuted this slice** — B at 7–11 s of 180 s |
+| 6 | Output evicted from a ring | refuted by inspection — serial is append-only to file; the ring feeds `dmesg` only |
+| 7 | **`kputc` unbounded THRE spin, IRQs off (DDR-807)** | **open — awaiting a red run with stamps** |
+
+Six refuted, one live. Every refutation came from an artefact or from the source,
+none from argument.
