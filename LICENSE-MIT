@@ -1,21 +1,59 @@
-MIT License
+PROPRIETARY SOFTWARE LICENSE
 
-Copyright (c) 2026 The PRADYOS Authors
+Copyright (c) 2025–2026 Pradyun Kumar Sinha. All Rights Reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software, PradyOS, and all associated source code, object code, design
+documents, architecture records (ADR/DDR), build systems, scripts, assets, and
+any derivative artefacts (collectively, "the Software") are the exclusive
+intellectual property of Pradyun Kumar Sinha ("the Owner").
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+ALL RIGHTS RESERVED. NO LICENCE IS GRANTED BY THIS NOTICE.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1.  PROHIBITION ON USE
+    You may NOT use, execute, run, deploy, or operate the Software, or any part
+    of it, in any form — including compiled binaries, kernel images, disk images,
+    or any other derivative form — without a prior written commercial licence
+    agreement signed by the Owner.
+
+2.  PROHIBITION ON COPYING AND DISTRIBUTION
+    You may NOT copy, reproduce, publish, upload, transmit, broadcast,
+    distribute, or otherwise disseminate the Software, or any portion of it, in
+    any medium or format, without express prior written permission from the Owner.
+
+3.  PROHIBITION ON MODIFICATION AND DERIVATIVE WORKS
+    You may NOT modify, adapt, translate, reverse-engineer, decompile,
+    disassemble, jailbreak, obfuscate, or create derivative works based on the
+    Software, in whole or in part. This prohibition extends to works that adopt
+    the same structural patterns, architectural patterns, design patterns, gate
+    structures, syscall conventions, or any other substantial conceptual element
+    of the Software, even if no source code is copied verbatim.
+
+4.  PROHIBITION ON COMMERCIAL EXPLOITATION
+    You may NOT sell, sublicence, rent, lease, offer as a service, or otherwise
+    commercially exploit the Software, or any part of it, without a paid
+    commercial licence from the Owner.
+
+5.  COMMERCIAL LICENSING
+    Commercial use of the Software, including any of the acts described in
+    Sections 1–4 above, requires a separate written licence agreement and
+    payment of a licence fee negotiated directly with the Owner. To enquire
+    about commercial licensing, contact: pradyun4kumar4sinha4@icloud.com
+
+6.  ENFORCEMENT
+    Any use, copying, modification, distribution, or exploitation of the
+    Software in violation of this licence constitutes copyright infringement
+    and will be pursued to the fullest extent of applicable law, including
+    claims for statutory damages, actual damages, lost profits, injunctive
+    relief, and attorney's fees.
+
+7.  NO WARRANTY
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED. THE OWNER SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+    LIABILITY ARISING FROM OR IN CONNECTION WITH THE SOFTWARE.
+
+8.  GOVERNING LAW
+    This licence is governed by the laws of India. Any disputes shall be subject
+    to the exclusive jurisdiction of the courts of India.
+
+---
+For licensing enquiries: pradyun4kumar4sinha4@icloud.com
