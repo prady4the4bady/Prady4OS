@@ -114,6 +114,26 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
   **30504947387** on `9f1459a` first: green ⇒ local timing artefact (the gate is
   driven by fixed `sleep`s against a FIFO, unlike the `boot_test.sh` gates);
   red ⇒ DDR-804 is the first suspect. Items 1–4 are DONE.
+- **DDR-805 (SIGPIPE) IMPLEMENTED + A/B VERIFIED 2026-07-31.** Three edits only:
+  `SIGPIPE 13`, added to the default-terminate set, raised on the `-EPIPE`
+  branch only. Three-arm A/B, distinct kernels: A no-sigpipe `30e6f27da9b2`
+  FAIL · B raised-not-terminal `4a8f44823ce5` FAIL · C correct `d3404eef47a7`
+  PASS. Gate `smoke-sigpipe`, opt-in via `QEMU_PROBES=sigpipe`.
+  **Gate asserts SURVIVAL, not `$? == 13`** — the kernel sets `exit_status = -1`
+  for every default-terminate signal and records no signal number, so a status
+  assertion would need a 4th edit adding `128+signum`, changing SIGKILL/SIGTERM
+  too. That remains available as a future DDR; do not fold it in silently.
+  Blast radius clean: `smoke-syspipe`/`smoke`/`smoke-user`/`smoke-fs` PASS.
+  **CI state: NOT yet confirmed — needs 2 greens on the pushed SHA.**
+- **OPEN-9 (NEW, unattributed):** `smoke-shell` failed once on the DDR-805 arm-C
+  kernel, then passed 6 consecutive runs on that identical kernel. NOT claimed as
+  caused by DDR-805 — a ~14% rate shows zero failures in 3 runs ~64% of the time,
+  so the 3/3 baseline does not establish the rate is new. Do not "fix" this
+  without a named mechanism from a real failing artefact.
+- **LICENSE-MIT renamed to LICENSE** — content was already the correct proprietary
+  text; `README.md` and `docs/decisions/ADR-002-licensing.md` referenced the old
+  filename and were updated, so a bare `git mv` would have left the licensing ADR
+  pointing at a missing file.
 - **OPEN-8 IS CLOSED (DDR-809). OPEN-8 was never a gate-timing problem — it was
   a kernel input-integrity defect.** `kputs`/`kwrite` hold the console lock with
   interrupts off while `kputc` spun unboundedly on THRE, so IRQ4 could not drain

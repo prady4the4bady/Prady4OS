@@ -12,6 +12,7 @@
 #include "fd.h"
 #include "vfs.h"
 #include "pipe.h"
+#include "signal.h"              /* DDR-805: SIGPIPE on a readerless pipe write */
 #include "console.h"
 #include "uaccess.h"
 #include "errno.h"
@@ -54,8 +55,24 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
              * this file. */
             while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0)
                 yield();
-            if (pipe_readers(e->pipe) <= 0)
-                return total > 0 ? total : -EPIPE;   /* reader gone: never drains */
+            if (pipe_readers(e->pipe) <= 0) {
+                /* DDR-805: no readers left, so this write can never complete.
+                 * Raise SIGPIPE on ourselves — syscall context, own TCB, so no
+                 * lock is taken and S6 does not apply. Delivery happens on the
+                 * next IRQ return to ring 3, which is deliberate: a thread that
+                 * installed a handler must still observe -EPIPE from this call,
+                 * and terminating inside the syscall would make that case
+                 * unrepresentable.
+                 *
+                 * ONLY on the nothing-written branch. A partial write SUCCEEDED
+                 * in part; killing the writer would discard output it
+                 * legitimately produced, and the short count already tells the
+                 * caller the pipe is closing. */
+                if (total > 0)
+                    return total;
+                current_thread->sig_pending |= (1ull << SIGPIPE);
+                return -EPIPE;
+            }
             long w = pipe_write(e->pipe, kbuf, chunk);
             if (w <= 0)
                 break;                            /* no progress possible */

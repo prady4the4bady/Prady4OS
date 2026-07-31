@@ -266,3 +266,55 @@ problem, that decision is the thing to revisit — not the feature.
 
 **DDR-804's mechanism stays.** It closes OPEN-7 and carries a verified three-arm
 A/B. What is in question is only the unconditional boot-time scan.
+
+## §Design (re-confirmed against the tree, 2026-07-31)
+
+The three edits stand unchanged. What needed re-checking was the **gate**, and the
+tree does not support the assertion as originally specified.
+
+### Blast radius
+
+* Pipe write path: `kernel/syscall/sys_io.c:58` — `return total > 0 ? total : -EPIPE;`
+  inside `fd_write_user`'s `FD_PIPE` branch. This is the only `-EPIPE` producer.
+* Gates exercising pipe I/O: `smoke-syspipe` (Makefile:1889) and `smoke-shell`
+  (the DDR-786/787 200-line pipeline plus `|`/`| cat | cat` cases). Both must
+  stay green — `smoke-shell` in particular now has a trustworthy baseline for
+  the first time (DDR-809).
+* Signal path: `signal_deliver` (`kernel/proc/signal.c:72`), default-terminate
+  set currently `{SIGKILL, SIGTERM}`.
+
+### The gate cannot assert "exit status 13", and why
+
+`sched_exit(-1)` sets `exit_status = -1` for **every** default-terminate signal;
+`sys_wait.c:66` hands that to `wait4`, and PRISM surfaces it as `$?`
+(`user/prism.c:103`). The kernel does not encode *which* signal terminated a
+process anywhere — there is no `128+signum` convention in this tree.
+
+Asserting `$? == 13` would therefore require a **fourth** edit adding that
+encoding, which changes the observable exit status of SIGKILL and SIGTERM as
+well. That is a behavioural change to two signals this DDR is not about, with
+blast radius into any gate asserting on the current value. It is a legitimate
+future change; it is not part of "three edits only", and folding it in silently
+would be exactly the kind of scope drift the A/B discipline exists to catch.
+
+### What the gate asserts instead — and why it is still discriminating
+
+The discriminating property is **"the writer does not survive its own write"**,
+which needs no new encoding:
+
+* the probe writes to a readerless pipe and, on the next line, prints
+  `PRADYOS_SIGPIPE_STUB`;
+* if SIGPIPE terminates it, that line is never reached;
+* if SIGPIPE is missing or not in the default-terminate set, `write()` returns
+  `-EPIPE`, the probe survives, and the line prints.
+
+`PRADYOS_SIGPIPE_STUB` is therefore the `FORBIDDEN_SENTINEL`, and it is
+load-bearing rather than decorative: a stub that fakes success cannot avoid
+printing it, because printing it *is* what surviving means.
+
+**Mechanism metric:** `$?` for the writer must be `-1` (kernel signal
+termination) and not `0`. That separates "terminated by signal" from "exited
+normally" using only what the tree already represents. A control arm — the same
+write with a **live** reader — must print the marker and yield `$? == 0`, so the
+gate also proves the kill is specific to the readerless case rather than a
+blanket failure of pipe writes.

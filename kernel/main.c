@@ -360,6 +360,8 @@ extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destinatio
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
 extern const unsigned char sovegresstest_elf_end[];
+extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe */
+extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
 extern const unsigned char privacynettest_elf_end[];
 extern const unsigned char rtcmonotest_elf[];         /* DDR-796: SYS_CLOCK monotonicity */
@@ -1216,6 +1218,20 @@ static void fs_test_thread(void *arg) {
                  * random, so it runs only when smoke-privacy-netfilter selects
                  * it. Sovereign AND CAP_NET: the strongest credential the
                  * machine issues, so refusing it proves everyone is refused. */
+                /* DDR-805 gate, opt-in via DDR-804. Self-contained: it writes
+                 * to its own pipes and is expected to be KILLED by SIGPIPE, so
+                 * it mutates no global state — but it is gated anyway, because
+                 * a probe that dies by signal in every boot would add a corpse
+                 * and its markers to all ~113 gates for no benefit. */
+                if (probe_enabled("sigpipe")) {
+                    struct tcb *sp = 0;
+                    uint64_t splen = (uint64_t)(sigpipetest_elf_end - sigpipetest_elf);
+                    if (elf_load((void *)(uintptr_t)sigpipetest_elf, splen,
+                                 "SIGPIPE", &sp) == ELF_OK && sp) {
+                        sched_unblock(sp);
+                        kputs("[user] ELF loaded (embedded); SIGPIPE probe spawned\r\n");
+                    }
+                }
                 if (probe_enabled("privnet")) {
                     struct tcb *pn = 0;
                     uint64_t pnlen = (uint64_t)(privacynettest_elf_end

@@ -2520,3 +2520,45 @@ Gate is **absent, not stubbed** (S11): a real one must back-pressure the UART TX
 and QEMU drains instantly, so "did not hang" would pass against the broken code
 too. `smoke-shell` is the regression test — it failed 4/4 through exactly this
 mechanism and now passes 3/3 with zero losses.
+
+## DDR-805 — SIGPIPE: a writer to a readerless pipe no longer survives
+
+Three edits: `SIGPIPE 13` in the signal table, added to the default-terminate
+set alongside `SIGTERM`, and raised in `fd_write_user`'s `FD_PIPE` branch on the
+`-EPIPE` path **only**. A partial write succeeded in part, so killing the writer
+would discard output it legitimately produced — the existing
+`total > 0 ? total : -EPIPE` expression already encodes that distinction.
+
+Delivery is at the next IRQ return to ring 3, not the syscall boundary, so
+`write()` still returns `-EPIPE` first. That is required, not tolerated: a thread
+with a SIGPIPE handler must observe the return value, and terminating inside the
+syscall would make the handler case unrepresentable.
+
+**The gate asserts survival, not exit status.** `sched_exit(-1)` sets
+`exit_status = -1` for every default-terminate signal and the kernel records no
+signal number, so asserting `$? == 13` would need a fourth edit adding a
+`128+signum` convention — which changes SIGKILL and SIGTERM's observable status
+too. Out of scope for "three edits", and folding it in silently is the scope
+drift the A/B discipline exists to catch.
+
+`smoke-sigpipe` (opt-in via the DDR-804 fw_cfg pattern) runs a **control** phase
+first — a pipe whose reader is still open, where the write must succeed and the
+probe must live — then the readerless phase. The control is what makes it
+discriminating: a kernel that killed every pipe writer would pass the main
+assertion and fail the control. `PRADYOS_SIGPIPE_STUB` is the FORBIDDEN sentinel
+and is load-bearing — printing it *is* what surviving means, so a stub cannot
+fake a pass.
+
+| arm | kernel | verdict |
+|---|---|---|
+| A — no SIGPIPE at all | `30e6f27da9b2` | FAIL |
+| B — raised, not default-terminate | `4a8f44823ce5` | FAIL |
+| C — correct | `d3404eef47a7` | **PASS** |
+
+Blast radius re-verified on arm C: `smoke-syspipe`, `smoke`, `smoke-user`,
+`smoke-fs` all PASS.
+
+**One unattributed observation:** `smoke-shell` failed once on arm C, then passed
+6 consecutive runs on the identical kernel. Not claimed as caused by DDR-805 — a
+~14% rate would show zero failures in 3 baseline runs roughly 64% of the time, so
+the 3/3 baseline does not establish the rate is new. Logged, not concluded.

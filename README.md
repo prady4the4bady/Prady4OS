@@ -2,7 +2,7 @@
 
 A clean-room, bare-metal, AI-native operating system: the **NEXUS** kernel,
 its bootloader, drivers, filesystem, userspace, and the **AETHER** agent
-runtime. No code lineage from Linux/BSD. MIT licensed (see `LICENSE-MIT`).
+runtime. No code lineage from Linux/BSD. MIT licensed (see `LICENSE`).
 
 > **Status: Phase 0 (toolchain + repo skeleton).** Nothing boots yet — that is
 > Phase 1. See [`docs/build_status.md`](docs/build_status.md) for the live

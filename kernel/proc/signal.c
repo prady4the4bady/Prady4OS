@@ -70,7 +70,11 @@ void signal_deliver(struct regs *r) {
         }
         uint64_t h = t->sig_handlers[sig];
         if (!h) {
-            if (sig == SIGTERM)
+            /* DDR-805: SIGPIPE joins SIGTERM in the default-terminate set. A
+             * writer whose readers have all closed can never make progress, so
+             * letting it run on — the pre-DDR-805 behaviour — is what leaves
+             * `producer | head -1` writing into a ring nobody will drain. */
+            if (sig == SIGTERM || sig == SIGPIPE)
                 sched_exit(-1);                  /* default action: terminate */
             continue;                            /* catchable + no handler: ignore */
         }

@@ -13,7 +13,7 @@ ecosystem, and imposes no copyleft.
 
 ## Decision
 
-License PRADYOS under the **MIT License** (`LICENSE-MIT`), copyright
+License PRADYOS under the **MIT License** (`LICENSE`), copyright
 "The PRADYOS Authors".
 
 ## Alternatives considered

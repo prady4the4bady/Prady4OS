@@ -13,6 +13,10 @@ struct regs;
 #define NSIG     32
 #define SIGKILL  9
 #define SIGUSR1  10
+/* DDR-805: raised on a ring-3 write to a pipe with no readers left. POSIX
+ * numbering throughout this header — an arbitrary value would mislead anyone
+ * comparing against `kill -l`. Default action terminates. */
+#define SIGPIPE  13
 #define SIGTERM  15
 
 void signal_register(void);                 /* SYS_SIGACTION / _KILL / _SIGRETURN */
