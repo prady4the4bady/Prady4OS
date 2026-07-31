@@ -97,6 +97,59 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-2 SESSION CLOSE — 2026-07-31 (read this first; it is the only source of truth)
+
+**HEAD / branches**
+- `main` = `06d8fa0` — **promoted 2026-07-31**, two verified greens.
+- `dev/phase1` = `06d8fa0` + the docs commit below.
+- Last two greens: run **30623530245 attempt 1 and attempt 2**, both on
+  `06d8fa0`. Second attempt obtained via `gh run rerun` (the fine-grained PAT has
+  admin; the old classic PAT did not, which is why this rule was previously
+  unsatisfiable).
+
+**CI facts worth not rediscovering**
+- Expected duration **~2h08m**. Two-green = ~4h15m per promotion.
+- The run object's `updatedAt` is **unreliable** — it freezes seconds after
+  creation while the job runs for hours. Use the `.../jobs` endpoint's step
+  timestamps for real progress.
+- `workflow_dispatch` resolves from the **default branch**; it only started
+  working once `main` carried it. `gh run rerun` is the better tool anyway — it
+  re-executes the identical SHA by construction.
+- Doc-only commits: 1 green is sufficient (protocol exception).
+
+**DDR state**
+- **DDR-805 SIGPIPE — CLOSED.** Three edits; three-arm A/B with distinct
+  kernels (A `30e6f27da9b2` FAIL, B `4a8f44823ce5` FAIL, C `d3404eef47a7` PASS);
+  gate `smoke-sigpipe` via `QEMU_PROBES=sigpipe`; two CI greens.
+  The gate asserts **survival, not `$? == 13`** — see the DDR for why a status
+  assertion needs a 4th edit that changes SIGKILL/SIGTERM.
+- **ADR-035 — WRITTEN, not yet CI-confirmed.** Bounded W^X carve-out; **E-05
+  code must not be written until this is accepted** (ADR-021 is binding).
+- **DDR-810 (§S5 metric lockbox) — BLOCKED ON THREE DECISIONS, no code.**
+  Do not start §S5 until these are answered:
+  1. Authoritative record in `metric_page` (page-table enforced) **not** SFS.
+     As specified, `/metric/lockbox` is writable by any `CAP_FS_WRITE` holder —
+     which every `CAP_SOVEREIGN` process is — so the lockbox would be writable
+     by exactly the processes it guards against. DDR-795's header already argued
+     this.
+  2. **No hash primitive exists in this kernel** (`grep blake3|sha256` over
+     `kernel/`+`tools/` → nothing). §S5 and §J-03 both need one. Prerequisite
+     slice, own DDR, gate must check **published test vectors**.
+  3. **SHA-256, not BLAKE3** (recommended) — `metric_page.h` already declares
+     SHA-256 and the shipped Python side produces it. Both are 32 bytes, so the
+     mismatch is invisible at the type level.
+
+**Open**
+- **OPEN-9 (new):** one unattributed `smoke-shell` red on the DDR-805 arm-C
+  kernel; 6 local passes + 2 CI greens since. Not attributed to DDR-805 — a ~14%
+  rate shows zero failures in 3 runs ~64% of the time. Needs a real artefact.
+- **OPEN-1 / OPEN-2:** passive. Stamps at `main.c:1134`/`:1311` and
+  `PIPE_TRACE=1` self-report on the next natural red. Do not force runs.
+
+**Throughput note:** the binding constraint is now wall-clock, not work — ~4h15m
+of CI per promotion against a ~75-item queue. The lever is DDR-803's unclaimed
+observation: cut boot work so the twelve 90 s windows can come down.
+
 ### 0.-1 TASK TRACKER (authoritative; update EVERY loop — master-prompt §3)
 
 - **CANONICAL FEATURE STATE:** `docs/AETHER_MASTER_FEATURES.md` (Sections A–H) is
