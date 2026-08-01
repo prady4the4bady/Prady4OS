@@ -14,6 +14,7 @@
 #include "vmm.h"               /* VMM_USER_MIN/MAX for fs_base validation */
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D)   */
 #include "rtc.h"               /* rtc_now for SYS_CLOCK (DDR-709)          */
+#include "metric_page.h"   /* DDR-812: shutdown commit */
 #include "acpi.h"              /* acpi_poweroff / acpi_power_available (DDR-746) */
 #include "lapic.h"             /* lapic_cpu_count (DDR-748)                        */
 #include "irq.h"               /* g_ticks (DDR-748)                               */
@@ -108,6 +109,8 @@ static long sys_poweroff(long a1, long a2, long a3, long a4) {
         return -EPERM;
     if (!acpi_power_available())
         return -ENODEV;
+    /* DDR-812: clean-shutdown commit, before the machine goes away. */
+    metric_lockbox_commit_shutdown();
     acpi_poweroff();                              /* no return */
 }
 

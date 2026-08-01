@@ -27,3 +27,4 @@
 #define ENODEV         19   /* no such device (e.g. no GPU framebuffer) */
 #define ENOSYS         38   /* function not implemented             */
 #define ENOSPC         28   /* no space left (bounded kernel table full) */
+#define ETAMPER       133  /* DDR-812: record hash failed verification */

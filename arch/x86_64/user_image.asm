@@ -159,6 +159,12 @@ egressaudittest_elf:
 egressaudittest_elf_end:
 
 ; DDR-800 (R1): sovereign-egress audit probe.
+global lockboxtest_elf
+global lockboxtest_elf_end
+lockboxtest_elf:
+    incbin "build/lockboxtest.elf"
+lockboxtest_elf_end:
+
 global sha256test_elf
 global sha256test_elf_end
 sha256test_elf:

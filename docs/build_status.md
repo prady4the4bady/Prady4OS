@@ -2562,3 +2562,92 @@ Blast radius re-verified on arm C: `smoke-syspipe`, `smoke`, `smoke-user`,
 6 consecutive runs on the identical kernel. Not claimed as caused by DDR-805 — a
 ~14% rate would show zero failures in 3 baseline runs roughly 64% of the time, so
 the 3/3 baseline does not establish the rate is new. Logged, not concluded.
+
+## DDR-811 + DDR-812 — SHA-256, and the metric lockbox in a page ring 3 cannot write
+
+**DDR-811** ships `kernel/crypto/sha256.c` — pure C, no hardware acceleration, no
+stdlib, no allocation. A SHA-NI path was rejected on portability: the same source
+must build for riscv64 and aarch64, and a hardware path would compile on x86_64,
+pass its gate there, and fail at runtime elsewhere — the failure shape where the
+gate that should catch it is the one that passes. Validated against four FIPS
+180-4 vectors including 1,000,000 `'a'`.
+
+**DDR-812** puts the lockbox record inside DDR-795's `metric_page` frame, **not**
+in SFS. The VFS gates writes on `CAP_FS_WRITE` alone, which every
+`CAP_SOVEREIGN` process holds, so an SFS lockbox would be writable by exactly the
+processes it guards against. In the page, the guarantee is a page-table property.
+
+`sha256.o` joined the kernel link in this slice — DDR-811 deliberately left it
+out for lack of a caller, and the build failed with `undefined symbol: sha256`
+until DDR-812 provided one. That is the dead-object state resolving as designed.
+
+**Arm D was already built.** `user/metrictest.c` (DDR-795) stores to
+`METRIC_USER_VA` and treats survival as failure, and `smoke-metric` pins the
+fault to `cr2=0x00007FFFFFEFF040` — offset 64, exactly where the lockbox record
+now begins. The existing W^X gate therefore protects the new record by
+construction, so `smoke-lockbox` covers only what is new (read + hash
+verification). Duplicating arm D would have added a second probe for one
+property and a second way for them to disagree. `smoke-metric` is consequently
+the most important regression in this slice, and it passes.
+
+**Write-once, as actually enforced.** The spec asked for a compile-time assertion
+that only two call sites exist. C cannot express that. What is enforced instead:
+`lockbox_commit()` is `static` inside `metric_page.c` so the linker makes it
+unnameable elsewhere; two thin wrappers encode the phase so a caller cannot pick
+one; a runtime phase guard rejects out-of-phase calls; and arm D tests the
+property from outside, which is the only check that tests behaviour rather than
+intent.
+
+Two details that are load-bearing rather than cosmetic:
+
+* `rtc_present` is recorded, so "booted at the epoch" stays distinguishable from
+  "we do not know when this booted". Coercing an absent clock to 0 would turn an
+  unknown into a plausible-looking fact.
+* The hash input order is **binding** and stated in both DDR-812 and a comment on
+  the struct. The probe serialises **independently** of the kernel — two
+  implementations of one contract, so a divergence is detectable rather than
+  silently agreed upon.
+
+`committed` is written last, after the digest, so a reader can never see a
+committed flag over a stale hash.
+
+Gates: `smoke-lockbox`, `smoke-metric`, `smoke-sha256`, `smoke`, `smoke-user`,
+`smoke-fs`, `smoke-shell` all PASS on kernel `f36ce889348e`. `ETAMPER` (133) and
+`SYS_METRIC_READ` (76) are new.
+
+### DDR-812 A/B — and the first attempt, which was invalid
+
+| arm | kernel | verdict |
+|---|---|---|
+| A — boot commit removed | `0c77a1ad2789` | FAIL (`-ENOENT`) |
+| B — `record_sha` bit-flipped after a valid commit | `1725e0a1847e` | FAIL (`-ETAMPER`) |
+| C — correct | `f36ce889348e` | **PASS** |
+
+Arm B commits a **fully valid** record and then flips one bit of the stored
+hash, which isolates verification from every other failure mode: the record is
+otherwise perfect, so only a kernel that actually checks the digest can fail it.
+
+**The first A/B attempt was discarded as invalid**, and the reason is worth
+keeping because the output looked like a good result:
+
+```
+ARM A | kernel=0c77a1ad2789 | FAIL
+ARM B | kernel=1725e0a1847e | FAIL
+ARM C | kernel=1725e0a1847e | FAIL      <- same SHA as B, and C should PASS
+```
+
+Arms B and C shared a SHA, so at least one never rebuilt, and C reported FAIL
+for a binary that passes when run directly. The per-arm cleanup had deleted only
+the `.o` each edit touched, leaving other artefacts stale — DDR-791's trap again,
+and the same one that made DDR-811's arm A vacuous three times. A/B arms A and B
+failing is exactly what one wants to see, which is precisely why reporting it
+would have been convenient and wrong.
+
+**Build determinism was verified before trusting any SHA:** two consecutive clean
+rebuilds of the unmodified tree both produce `f36ce889348e`. That underpins every
+A/B in this project — if the build were non-deterministic, "distinct SHAs prove
+the arms differ" would be unfounded. It holds.
+
+The re-run scrubs all derived artefacts per arm and asserts each edit actually
+applied before building, so a silently non-matching edit now aborts instead of
+producing a confident verdict for unmodified code.

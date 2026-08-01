@@ -41,6 +41,17 @@ All entries below are **shipped**.
 - Buddy PMM, SLAB heap, higher-half VMM, per-process CR3, W^X + NX (ADR-003/007/021)
 - **Kernel self W^X** — `vmm_protect_kernel()` re-stamps kernel text RX / data NX after boot (DDR-757; gate: kernel-self W^X PTE audit) *(was mis-tracked as Section B#7 until 2026-07-26)*
 - **COW fork** — `vmm_fork_address_space_cow()` + `PTE_SW_COW` + PMM refcounts + `vmm_cow_fault()` in the #PF path (IMP-D; gate: `smoke-cowfork`) *(was mis-tracked as Section B#5 until 2026-07-26)*
+- **SHA-256 kernel primitive** (DDR-811) — `kernel/crypto/sha256.c`, pure C,
+  no hardware acceleration so the same source builds for x86_64/aarch64/riscv64.
+  Validated against four FIPS 180-4 vectors incl. 1M `a`; gate `smoke-sha256`.
+  Prerequisite for DDR-812, §J-03, ACC and AGS.
+- **Metric lockbox** (DDR-812, F#68 §S5) — authoritative record inside the
+  DDR-795 `metric_page` frame, which ring 3 maps RO+NX, so tamper-resistance
+  is a page-table property rather than a path check. SFS was rejected: the VFS
+  gates on `CAP_FS_WRITE`, which every `CAP_SOVEREIGN` process holds.
+  `SYS_METRIC_READ` (76) verifies SHA-256 before returning any bytes;
+  `-ETAMPER` (133) on mismatch. Gates: `smoke-lockbox` + `smoke-metric`
+  (the latter already pins the fault address to the record's own offset).
 - **Console input integrity** — `kputc` bounds the UART THRE wait
   (`CONSOLE_THRE_MAX`) and drains the RX FIFO inline, so a burst of kernel output
   can no longer destroy concurrent console input (DDR-809; closes OPEN-8 and the

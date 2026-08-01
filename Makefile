@@ -87,6 +87,8 @@ USER_FUZZ_SRC := user/syscallfuzz.c       # sec: hostile-syscall fuzz probe (DDR
 USER_FUZZ_ELF := build/syscallfuzz.elf
 USER_EGAUD_SRC := user/egressaudittest.c  # DDR-801: per-destination egress audit
 USER_EGAUD_ELF := build/egressaudittest.elf
+USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
+USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
 USER_SHA256_ELF := build/sha256test.elf
 USER_SIGPIPE_SRC := user/sigpipetest.c    # DDR-805: SIGPIPE probe (DDR-804 opt-in)
@@ -122,6 +124,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
                kernel/drivers/fwcfg/fwcfg.c \
+               kernel/crypto/sha256.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
                kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
@@ -137,7 +140,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -294,6 +297,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/sha256.c -o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_SHA256_SRC) -o build/sha256test.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHA256_ELF) build/sha256test.o build/sha256_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_LOCKBOX_SRC) -o build/lockboxtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_LOCKBOX_ELF) build/lockboxtest.o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -302,7 +307,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -356,6 +361,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/virtio_input.c -o build/virtio_input.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rtc/rtc.c            -o build/rtc.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/fwcfg/fwcfg.c        -o build/fwcfg.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/sha256.c              -o build/sha256.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
@@ -1502,6 +1508,18 @@ smoke-sha256: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHA256_VECTORS_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SHA256_STUB\nSHA256 FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-812 metric lockbox. Arms A/B/C only — arm D (ring 3 cannot write the
+# page) is already gated by smoke-metric, whose probe stores to
+# METRIC_USER_VA and whose gate pins the fault to cr2=...040, i.e. offset 64,
+# which is exactly where the lockbox record begins. Duplicating it here would
+# add a second probe for one property and a second way for them to disagree.
+smoke-lockbox: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_PROBES=lockbox \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_LOCKBOX_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_LOCKBOX_STUB\nLOCKBOX FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 
 
 

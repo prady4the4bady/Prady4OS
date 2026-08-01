@@ -97,6 +97,46 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-3 SESSION — 2026-08-01 (read this first)
+
+**Shipped:** DDR-811 (SHA-256, two greens, promoted — `main` = `1d7637a`) and
+DDR-812 (metric lockbox, gate-verified locally on kernel `f36ce889348e`).
+
+**DDR-812 notes that matter for anyone touching it:**
+- Record lives in the DDR-795 `metric_page` frame, **not** SFS. The VFS gates
+  writes on `CAP_FS_WRITE` alone, which every `CAP_SOVEREIGN` process holds, so
+  an SFS lockbox is writable by exactly the processes it guards against.
+- **Arm D was already built.** `user/metrictest.c` + `smoke-metric` store to
+  `METRIC_USER_VA` and pin the fault to `cr2=...040` — offset 64, which is where
+  the lockbox record now begins. That gate protects the record by construction,
+  so `smoke-lockbox` covers only read+verify. **`smoke-metric` is therefore the
+  regression that matters most if the record layout is ever changed.**
+- Write-once is `static lockbox_commit()` (linker-enforced) + two phase wrappers
+  + a runtime phase guard. A compile-time assertion constraining call sites is
+  **not expressible in C**; do not re-add that claim.
+- Hash input order is BINDING, stated in `metric_page.h` and DDR-812. The probe
+  serialises independently — two implementations of one contract, so divergence
+  is detectable.
+- `sha256.o` joined the kernel link here (DDR-811 left it out for lack of a
+  caller; the build failed with `undefined symbol: sha256` until this slice).
+
+**§S dependency order changed by design review — do not follow the old brief:**
+- DDR-813 (ACC) is **blocked** on DDR-816 (entropy). There is NO entropy source
+  in this kernel; predictable X25519 keys and reused ChaCha20 nonces would make
+  a system that presents as encrypted and is not.
+- DDR-816 fails closed — no jitter fallback. A source that silently degrades is
+  worse than one obviously absent.
+- Two ACC spec bugs recorded in DDR-813: the owner CC box loses access at every
+  reboot without `agent_pubkey` in the envelope, and one `OWNER_PUBKEY[32]`
+  cannot be both an Ed25519 and an X25519 key.
+
+**Open:** OPEN-1, OPEN-2 (passive, await natural reds), OPEN-9 (one unattributed
+`smoke-shell` red; many passes since).
+
+**New:** `ETAMPER` 133, `SYS_METRIC_READ` 76, `smoke-lockbox`, `smoke-sha256`.
+`GLOBAL_FORBIDDEN` gained `PRADYOS_SHA256_STUB`, `SHA256 FAIL`,
+`PRADYOS_LOCKBOX_STUB`, `LOCKBOX FAIL` (append-only).
+
 ### 0.-2 SESSION CLOSE — 2026-07-31 (read this first; it is the only source of truth)
 
 **HEAD / branches**

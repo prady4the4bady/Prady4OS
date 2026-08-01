@@ -360,6 +360,8 @@ extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destinatio
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
 extern const unsigned char sovegresstest_elf_end[];
+extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
+extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
 extern const unsigned char sha256test_elf_end[];
 extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe */
@@ -1143,6 +1145,11 @@ static void fs_test_thread(void *arg) {
                  * block on SFS I/O over contended virtio-blk under -smp 4.
                  * B absent in a failing run confirms it; B early refutes it. */
                 kputs("[boot-stamp] A probe-block-begin t="); kputdec(g_ticks); kputs("\r\n");
+                /* DDR-812: commit the lockbox AFTER the boot self-tests and
+                 * BEFORE the first user process exists, so no ring-3 code has
+                 * ever run when the authoritative record is written. */
+                metric_lockbox_commit_boot();
+                kputs("[lockbox] committed at boot\r\n");
                 user_boot_from_sfs(cap, smnt, "HELLO.ELF", hello_elf, hello_elf_end, 0);
                 kputs("[wx] spawning W^X violator (expect a clean user-kill)\r\n");
                 user_boot_from_sfs(cap, smnt, "WXVIOL.ELF", wx_elf, wx_elf_end, 0);
@@ -1226,6 +1233,20 @@ static void fs_test_thread(void *arg) {
                  * a probe that dies by signal in every boot would add a corpse
                  * and its markers to all ~113 gates for no benefit. */
                 /* DDR-811: SHA-256 vector probe, opt-in via DDR-804. */
+                /* DDR-812: lockbox read/verify. Spawned SOVEREIGN because
+                 * SYS_METRIC_READ is sovereign-gated — the record is the
+                 * owner's ground truth, so a non-sovereign reader gets
+                 * -EPERM and an audit entry. */
+                if (probe_enabled("lockbox")) {
+                    struct tcb *lb = 0;
+                    uint64_t lblen = (uint64_t)(lockboxtest_elf_end - lockboxtest_elf);
+                    if (elf_load((void *)(uintptr_t)lockboxtest_elf, lblen,
+                                 "LOCKBOX", &lb) == ELF_OK && lb) {
+                        lb->is_sovereign = 1;
+                        sched_unblock(lb);
+                        kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
                 if (probe_enabled("sha256")) {
                     struct tcb *sh = 0;
                     uint64_t shlen = (uint64_t)(sha256test_elf_end - sha256test_elf);

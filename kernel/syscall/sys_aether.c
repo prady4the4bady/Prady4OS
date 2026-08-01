@@ -6,6 +6,7 @@
  * attempt but lets the caller survive (only resource abuse is fatal).
  */
 #include "syscall.h"
+#include "metric_page.h"   /* DDR-812: lockbox read */
 #include "sched.h"
 #include "uaccess.h"
 #include "errno.h"
@@ -69,6 +70,31 @@ void aether_set_spawn_hook(aether_spawn_fn fn) { g_spawn_hook = fn; }
 static long sys_get_mode(long a1, long a2, long a3, long a4) {
     (void)a1; (void)a2; (void)a3; (void)a4;
     return (long)aether_get_mode();
+}
+
+/* DDR-812 — read the metric lockbox.
+ *
+ * Sovereign-gated: the lockbox is the owner's ground truth, so a non-sovereign
+ * reader gets -EPERM and an audit record, matching every other authority check
+ * in this file.
+ *
+ * The verification happens in metric_lockbox_read() BEFORE any bytes are copied,
+ * so a tampered record returns -ETAMPER and nothing else. Returning the data
+ * "but flagged" would let a careless caller use it, which defeats the point of
+ * having a hash at all. */
+static long sys_metric_read(long a1, long a2, long a3, long a4) {
+    (void)a2; (void)a3; (void)a4;
+    if (!current_thread->is_sovereign) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    metric_lockbox_t rec;
+    long r = metric_lockbox_read(&rec);
+    if (r < 0)
+        return r;                       /* -ENOENT (never committed) | -ETAMPER */
+    if (copyout((void __user *)a1, &rec, sizeof rec) < 0)
+        return -EFAULT;
+    return 0;
 }
 
 static long sys_set_mode(long a1, long a2, long a3, long a4) {
@@ -241,6 +267,7 @@ static long sys_set_mem_limit(long a1, long a2, long a3, long a4) {
 void sys_aether_register(void) {
     syscall_register(SYS_GET_MODE,       sys_get_mode);
     syscall_register(SYS_SET_MODE,       sys_set_mode);
+    syscall_register(SYS_METRIC_READ,    sys_metric_read);  /* DDR-812 */
     syscall_register(SYS_SUBMIT_ACTION,  sys_submit_action);
     syscall_register(SYS_POLL_RESULT,    sys_poll_result);
     syscall_register(SYS_APPROVE_ACTION, sys_approve_action);

@@ -108,6 +108,9 @@
 #define SYS_MEMINFO        74  /* (struct meminfo*) -> 0 | -EFAULT                      */
 /* Self-rename (DDR-756; no cap — a thread may only rename itself). */
 #define SYS_SETNAME        75  /* (const char *name) -> 0 | -EFAULT                     */
+/* DDR-812: read the metric lockbox. CAP_SOVEREIGN only; verifies the record's
+ * SHA-256 before returning anything, so a tampered record yields NO bytes. */
+#define SYS_METRIC_READ    76  /* (metric_lockbox_t*) -> 0 | -EPERM|-ENOENT|-ETAMPER */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
