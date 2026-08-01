@@ -97,6 +97,44 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-4 SESSION CLOSE — 2026-08-01 late (READ FIRST)
+
+**HEAD `8677d6a` (DDR-812). `main` = `1d7637a`. Tree is CLEAN — DDR-816 was
+implemented and fully reverted.**
+
+**OPEN-9 HAS ESCALATED ON THIS WORKSTATION — local reds are no longer evidence
+about the tree.**
+`smoke-shell` now fails ~5/5 locally on kernel `f36ce889348e`, which is the exact
+binary that PASSED it earlier the same day. Same binary, opposite result. It also
+failed identically on the DDR-816 kernel and on the unconditional-drain kernel,
+so it tracks the host, not the code.
+
+**Consequence, and it is the important line in this file:** until OPEN-9's
+host-side cause is found, **judge changes in CI, not locally**. `smoke-shell`
+has passed in CI on every recent commit. I twice attributed a local red to the
+change in flight (OPEN-8 previously, DDR-816 today) and both survived a full
+revert. The REVERT VERIFICATION RULE caught both.
+
+**DDR-816 status: designed, implemented once, reverted, NOT pushed.**
+- `smoke-rng` **PASSED** — virtio-rng works, the `0x1040 + type` device ID was
+  right, fail-closed and the two-draw self-test all function.
+- Its `smoke-shell` 5/5 failure is NOT attributable to it: the baseline fails
+  5/5 too, so the comparison carries no information.
+- Re-apply from DDR-816 (fully described there) and judge it **in CI**.
+- Do NOT re-derive the "boot output aggravates RX loss" story — it was tested;
+  making the RX drain unconditional did not change the outcome (the failing
+  assertion merely moved from DDR-789 to DDR-782).
+
+**Correction to a claim I made earlier:** DDR-809 was reported as closing the
+input-loss window. It drains RX **only inside the THRE spin**, so on a fast UART
+the loop body rarely runs and the drain rarely happens. That is narrower than it
+was described. Whether it matters is unproven — the unconditional version did not
+help.
+
+**Still true and unaffected:** DDR-811 (SHA-256) and DDR-812 (metric lockbox) are
+sound, A/B-verified with distinct SHAs, and DDR-812's CI run 1 was in flight at
+session end (run 30710422416 on `8677d6a` — read its verdict first).
+
 ### 0.-3 SESSION — 2026-08-01 (read this first)
 
 **Shipped:** DDR-811 (SHA-256, two greens, promoted — `main` = `1d7637a`) and

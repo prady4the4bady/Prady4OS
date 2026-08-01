@@ -121,3 +121,49 @@ that memsets zero — which is precisely the failure this exists to reject.
 
 Distinct kernel SHAs per arm, printed — DDR-811's arm A passed with an identical
 SHA and proved nothing until that was checked.
+
+## Implementation attempt 2026-08-01 — reverted, and the attribution was WRONG
+
+Implemented as designed: `virtio_rng.c` over the existing generic transport,
+RDSEED secondary, fail-closed, kernel-side self-test (two draws compared
+byte-for-byte). **`smoke-rng` PASSED** — virtio-rng delivered real entropy and
+the two draws differed, so the `0x1040 + type` device ID was right.
+
+Then `smoke-shell` failed 5/5 with `rx_losses=1` in every run, and I attributed
+it to DDR-816's added `[rng]` boot output on the DDR-808 mechanism (kernel output
+destroying console input). That attribution is **not supported**.
+
+Sequence, recorded because the intermediate conclusions were confident and wrong:
+
+1. DDR-816 kernel `9cfd2f990467`: `smoke-shell` 5/5 FAIL, 1 RX loss each.
+2. Hypothesis: DDR-809 drains RX *only inside the THRE spin*, so on a fast UART
+   the loop body rarely runs and the drain rarely happens. Made the drain
+   unconditional (kernel `e93cb36d8198`).
+3. Still 5/5 FAIL, 1 loss each — the failing assertion merely moved earlier
+   (DDR-789 → DDR-782). Hypothesis refuted; change reverted.
+4. Reverted DDR-816 entirely. Full clean rebuild → **`f36ce889348e`**, which is
+   the exact kernel that PASSED `smoke-shell` earlier the same day. It now
+   **fails 5/5**.
+
+**Same binary, opposite result.** So the failure is not caused by DDR-816, not by
+the drain change, and not by DDR-812 — it tracks the workstation, not the tree.
+This is OPEN-9 escalating from roughly 1-in-7 to near-deterministic on this host,
+and it is the OPEN-8 pattern exactly: a local red attributed to the change in
+flight, surviving a full revert.
+
+### What this does and does not establish
+
+* **Does:** `smoke-rng` passes; the virtio-rng driver, the device ID, the
+  fail-closed path and the two-draw self-test all work.
+* **Does NOT:** that DDR-816 is safe. Its 5/5 was measured against a baseline
+  that also fails 5/5, so the comparison carries no information either way.
+* **CI is the arbiter.** `smoke-shell` has passed in CI on every recent commit
+  including `1d7637a`. A local red on this host is no longer evidence about the
+  tree.
+
+### For the next attempt
+
+Re-apply DDR-816 from this document (the implementation is fully described) and
+judge it **in CI**, not locally, until OPEN-9's host-side cause is understood.
+Do not re-derive the "boot output aggravates RX loss" story — it was tested and
+the unconditional drain did not change the outcome.
