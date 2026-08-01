@@ -87,6 +87,8 @@ USER_FUZZ_SRC := user/syscallfuzz.c       # sec: hostile-syscall fuzz probe (DDR
 USER_FUZZ_ELF := build/syscallfuzz.elf
 USER_EGAUD_SRC := user/egressaudittest.c  # DDR-801: per-destination egress audit
 USER_EGAUD_ELF := build/egressaudittest.elf
+USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
+USER_SHA256_ELF := build/sha256test.elf
 USER_SIGPIPE_SRC := user/sigpipetest.c    # DDR-805: SIGPIPE probe (DDR-804 opt-in)
 USER_SIGPIPE_ELF := build/sigpipetest.elf
 USER_PRIVNET_SRC := user/privacynettest.c # DDR-802: privacy netfilter probe (DDR-804 opt-in)
@@ -142,7 +144,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
-               -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc -Ikernel/drivers/fwcfg \
+               -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc -Ikernel/drivers/fwcfg -Ikernel/crypto \
                -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/drivers/gpu -Ikernel/drivers/nvme -Ikernel/drivers/input -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
                -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso -Ikernel/aether -Ikernel/apic
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
@@ -289,6 +291,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_PRIVNET_ELF) build/privacynettest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SIGPIPE_SRC) -o build/sigpipetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SIGPIPE_ELF) build/sigpipetest.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/sha256.c -o build/sha256_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_SHA256_SRC) -o build/sha256test.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHA256_ELF) build/sha256test.o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -297,7 +302,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -1488,6 +1493,16 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SIGPIPE_CONTROL_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SIGPIPE_STUB\nSIGPIPE FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-811 SHA-256 vector gate. Opt-in per DDR-804 so the probe exists only
+# here. The 1M-'a' vector is load-bearing: vectors 1-3 fit in two blocks and
+# would pass against a wrong length counter or a broken partial-block carry.
+smoke-sha256: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_PROBES=sha256 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHA256_VECTORS_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SHA256_STUB\nSHA256 FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 
 
 

@@ -360,6 +360,8 @@ extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destinatio
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
 extern const unsigned char sovegresstest_elf_end[];
+extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
+extern const unsigned char sha256test_elf_end[];
 extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe */
 extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
@@ -1223,6 +1225,16 @@ static void fs_test_thread(void *arg) {
                  * it mutates no global state — but it is gated anyway, because
                  * a probe that dies by signal in every boot would add a corpse
                  * and its markers to all ~113 gates for no benefit. */
+                /* DDR-811: SHA-256 vector probe, opt-in via DDR-804. */
+                if (probe_enabled("sha256")) {
+                    struct tcb *sh = 0;
+                    uint64_t shlen = (uint64_t)(sha256test_elf_end - sha256test_elf);
+                    if (elf_load((void *)(uintptr_t)sha256test_elf, shlen,
+                                 "SHA256", &sh) == ELF_OK && sh) {
+                        sched_unblock(sh);
+                        kputs("[user] ELF loaded (embedded); SHA-256 vector probe spawned\r\n");
+                    }
+                }
                 if (probe_enabled("sigpipe")) {
                     struct tcb *sp = 0;
                     uint64_t splen = (uint64_t)(sigpipetest_elf_end - sigpipetest_elf);
