@@ -153,8 +153,10 @@ published constant. **The in-QEMU `smoke-x25519` gate does not reach its
 sentinel, and the cause is NOT known.** Recorded as unknown rather than guessed.
 
 It is not slow: the same source runs all seven checks in **3 ms at -O0 on the
-host**, so even a 1000× TCG penalty is seconds. After the alignment fix below it
-neither traps nor prints. Candidates not ruled out, in DDR-820: the
+host**, so even a 1000× TCG penalty is seconds — and a re-run at `TIMEOUT_S=300`
+(3x the gate window) still produced no sentinel and no trap, which eliminates
+"slow" by measurement rather than by argument. After the alignment fix below it
+neither traps nor prints: it is stuck or dead, not late. Candidates not ruled out, in DDR-820: the
 large-code-model `.ltext`/`.lrodata` orphan sections (`user.ld` names neither —
 lld's orphan placement is what currently puts them in the PT_LOAD), stack depth
 in `fe_invert`'s addition chain, or an uninitialised `tcb` field for this
