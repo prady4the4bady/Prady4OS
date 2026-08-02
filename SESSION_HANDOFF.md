@@ -97,6 +97,49 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-6 SESSION — 2026-08-02 (CURRENT — read this first)
+
+**`main` = `dev/phase1` = `b823bb5`.** Two consecutive CI greens on the exact tip
+(run 30733620093, attempts 1 and 2). Tree clean, nothing unpushed.
+
+That promotion carried **DDR-816** (entropy), **DDR-818** (HMAC+HKDF) and
+**DDR-819** (ChaCha20-Poly1305) in one cycle. Six features reached `main` across
+the session: DDR-811, DDR-812, ADR-035, DDR-816, DDR-818, DDR-819.
+
+**NSI max is 76** (`SYS_METRIC_READ`). The next new syscall is **77**.
+
+**Two corrections to the standing work queue — verified against the tree, not
+assumed.** A session brief listed both of these as unbuilt:
+- `SYS_GETDENTS` is **already shipped at NSI 66**, and PRISM's `ls` enumerates
+  through it (DDR-742). It is not a stub.
+- `ps` is **already shipped** via `SYS_GETPROCS` at NSI 67 (DDR-743).
+Both were mis-tracked as "stubs" in Section 0's older prose and in Section B#8
+until 2026-07-24; `docs/AETHER_MASTER_FEATURES.md` records the correction.
+Building them again would duplicate shipped syscalls and burn two NSI numbers.
+The claim "current NSI max = 79" in that brief is wrong by three.
+
+**Outstanding on DDR-819:** `kernel/crypto/aead.{c,h}` is verified against RFC
+8439 vectors **on the host under gcc only**. There is no `smoke-aead` gate and
+the object is in no build. In-QEMU verification of this primitive is still owed —
+DDR-813 is scheduled to be its first caller and should wire the probe.
+
+**Owner decisions now on the record (do not re-ask):**
+- **D-1** — the X25519/Ed25519 constant-time gap is **accepted**. Build DDR-820
+  and DDR-821 to the best achievable standard (pure C, constant-time by
+  construction, all RFC vectors passing) and document that QEMU cannot verify
+  timing-channel resistance and that production use needs side-channel review.
+- **D-2** — sequencing: DDR-817 (boot acceleration) first, then 820 → 821 → 813
+  (ACC) → 814 (AGS) → 815 (update propagation).
+- **D-3** — local `smoke-shell` reds are informational; CI is the arbiter.
+- **D-4** — the `-smp 4` virtio-blk completion stall (B#3/DDR-806) must be
+  root-caused, not worked around.
+- **D-5** — the Rust requirement for init/compositor/service-manager is waived;
+  continue in C.
+
+**Next:** DDR-817 §Design — profile the boot and CI wall-clock, find the actual
+bottleneck before assuming one, and cut it. Target ≤60 min per CI cycle against
+the current ~4h15m per two-green promotion.
+
 ### 0.-5 SESSION — 2026-08-02
 
 **`main` = `a4d1569`** (promoted; DDR-811 SHA-256 + DDR-812 lockbox + ADR-035 +

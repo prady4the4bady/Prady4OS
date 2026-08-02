@@ -2747,3 +2747,71 @@ and the only `x25519`/`chacha20`/`poly1305` matches in `kernel/` were prose in a
 comment in `rng.h` that I had written myself. Sequenced as
 818 (done) → 819 ChaCha20-Poly1305 → 820 X25519 → 821 Ed25519 → 813 ACC, so a
 vector failure and a protocol failure stay distinguishable.
+
+## DDR-819 — ChaCha20-Poly1305 (RFC 8439), third of ACC's four primitives
+
+ACC's envelope carries two AEAD boxes over the same plaintext, keyed by the two
+HKDF outputs from DDR-818. This is the cipher that fills them.
+
+**AES-GCM was rejected as a decision, not inherited.** The same source must be
+correct *and* constant-time on three architectures, two of which have no AES
+instructions. Software AES is timing-variable via its S-box tables, and a
+timing-variable AEAD in a system whose threat model includes "an attacker holds
+an enrolled device" is a weakness, not a performance note. ChaCha20 and Poly1305
+are 32-bit add/xor/rotate plus a 130-bit multiply-accumulate: constant-time as a
+property of the algorithm rather than of the compiler's mood.
+
+`aead_open` verifies the tag in constant time and writes **no plaintext** before
+the verification succeeds.
+
+### Two defects, and where the vectors earned their keep
+
+1. `ctlen_or(ptlen)` — a typo, caught by the compiler.
+2. Incoherent Poly1305 short-block handling: a conditional whose two branches
+   were identical, plus an implicit high bit that must NOT be set for a short
+   block. The spec is simpler — a full block gets an implicit 1 at bit 128; a
+   short block gets a literal `0x01` after the data and no implicit bit.
+
+Defect 2 is the instructive one: it compiles cleanly and produces a wrong tag
+**only** for messages that are not a multiple of 16 bytes. RFC 8439 §2.5.2 uses a
+34-byte message — a 2-byte final block — so it catches it, and a 16-byte-multiple
+vector would not have. That is the concrete argument for choosing vectors by
+which code path they reach rather than by convenience, and for per-primitive
+vectors rather than only testing the composed AEAD.
+
+```
+poly1305 §2.5.2 (34-byte msg, 2-byte final block): OK
+chacha20 §2.4.2 (first 16 ct bytes):              OK
+```
+
+Verified under `gcc` on the host against the same source the kernel compiles.
+Deliberate: the question was whether the arithmetic is correct at all, and a
+~90 s boot per iteration is the wrong instrument for that. The in-kernel gate
+does not replace the host run — the host run de-risks it.
+
+### The gate that cannot work, stated rather than faked
+
+DDR-819's arm C was originally specified as "replace the constant-time tag
+compare with an early-exit `memcmp` → must FAIL". **It cannot.** The two
+comparisons reject exactly the same inputs; the difference is timing on real
+hardware, not output. No black-box gate in QEMU can distinguish them.
+
+So arm C became the *tamper* arm — the gate asserts what it can (tampered input
+is rejected) and the constant-time requirement is carried by construction, a
+comment on the function, and this record. This is the same class of gap that
+DDR-820/821 will have in larger form, and the owner has accepted it on the
+record (D-1) for those.
+
+### Deviation from spec, recorded
+
+`aead.{c,h}` is **not yet wired into any build** — no `smoke-aead` gate exists.
+DDR-819 defers linking until DDR-813 becomes the first caller (the DDR-811
+precedent), but the *probe* was also deferred, so in-QEMU verification of this
+primitive is still outstanding. It rides on the host-vector run alone until
+DDR-813 wires it.
+
+## ADR-035 — bounded W^X carve-out
+
+The single bounded exception to the ADR-021 W^X invariant, for §E-05
+self-rewriting code. Binding: supersedable only by a new ADR, never quietly
+amended.

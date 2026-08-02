@@ -10,7 +10,13 @@ capabilities.
 open and code is in flight) · `planned` (tracked, not started) · `proposed`
 (designed, prerequisites not yet answered).
 
-**Last verified against repo:** 2026-07-27, `main` @ `0d3f2ab` (DDR-787),
+**Last verified against repo:** 2026-08-02, `main` @ `b823bb5` — two consecutive
+CI greens on the exact tip (run 30733620093, attempts 1 and 2). That promotion
+carried **DDR-816** (kernel entropy), **DDR-818** (HMAC-SHA256 + HKDF-SHA256) and
+**DDR-819** (ChaCha20-Poly1305) in one cycle, on top of DDR-811 (SHA-256),
+DDR-812 (metric lockbox) and ADR-035 (bounded W^X carve-out).
+
+**(previous)** 2026-07-27, `main` @ `0d3f2ab` (DDR-787),
 113 steps green (CI run 30211536949, conclusion `success`, 105.7 min) — promotes
 **blocking pipe semantics**: pipelines no longer depend on scheduling luck
 (premature EOF) and no longer truncate at 4 KiB. The big-pipe gate
@@ -50,6 +56,21 @@ All entries below are **shipped**.
   past T(1) and TC3 covers the NULL-salt branch (HashLen zero bytes, not an
   empty string). Gate `smoke-hkdf`. Not yet in the kernel link — first caller
   is DDR-813. First of ACC's four missing primitives (819/820/821 follow).
+- **ChaCha20-Poly1305 AEAD** (DDR-819) — `kernel/crypto/aead.{c,h}`, RFC 8439.
+  Chosen over AES-GCM because the same source must be correct AND constant-time
+  on riscv64/aarch64, which have no AES instructions; ChaCha20 and Poly1305 are
+  add/xor/rotate and a 130-bit multiply-accumulate, constant-time as a property
+  of the *algorithm* rather than of the compiler. `aead_open` verifies the tag in
+  constant time and writes **no plaintext** before verifying. Verified against
+  RFC 8439 §2.4.2 (ChaCha20 keystream) and §2.5.2 (Poly1305, 34-byte message).
+  Not yet in the kernel link — first caller is DDR-813.
+  **Known gap, on the record:** the constant-time property is enforced by
+  construction and review, *not* by any gate — a constant-time compare and an
+  early-exit `memcmp` reject exactly the same inputs, so no black-box QEMU gate
+  can distinguish them. Stated in DDR-819 rather than papered over.
+- **Bounded W^X carve-out** (ADR-035) — the single, bounded exception to the
+  ADR-021 W^X invariant, for §E-05 self-rewriting code. Binding; may only be
+  superseded by a new ADR.
 - **Kernel entropy** (DDR-816) — virtio-rng primary over the existing generic
   transport, RDSEED secondary (x86-only, CPUID-gated), and **no third source**:
   `rng_bytes()` fails and crypto refuses to start rather than falling back to
