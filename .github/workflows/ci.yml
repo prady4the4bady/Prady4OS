@@ -13,8 +13,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  # DDR-817. Host-only, seconds: every smoke-* gate is in exactly one shard, or
+  # excluded with a stated reason. This is the assertion that keeps the matrix
+  # below from being fast for the wrong reason — a gate in no shard means CI
+  # stopped running something and got quicker as a result. Before DDR-817 that
+  # was already true of eight gates, including every crypto primitive's.
+  # It runs first and gates nothing else only because it is cheap enough that a
+  # dependency would cost more wall-clock than it saves.
+  shard-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Gate-shard completeness (DDR-817)
+        run: make ci-shard-check
+
+  # DDR-817. Was ONE serial job running 110 QEMU gates in 2 h 08 m, which was
+  # the entire CI critical path — the other jobs here finish in under 30 s
+  # combined. Shared setup is ~49 s against ~7 600 s of boots, so the work is
+  # ~99 % embarrassingly parallel and was running on one runner.
+  #
+  # Shards are packed longest-processing-time-first by MEASURED duration, not
+  # round-robin: eleven gates sit at a full 180 s (QEMU_SMP=4 with a
+  # FORBIDDEN_SENTINEL, so DDR-785 early exit does not apply), and packed badly
+  # those alone would cap the matrix. See tools/ci/gate_shards.txt.
+  #
+  # No gate's semantics, timeout, or sentinels change. Only which runner each
+  # assertion happens on.
   build-and-boot:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false      # one red shard must not hide reds in the others
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    name: build-and-boot (shard ${{ matrix.shard }})
     steps:
       - uses: actions/checkout@v5
         with:
@@ -34,8 +65,10 @@ jobs:
         run: make toolchain-check
 
       # DDR-785: self-test the boot harness before it is used to judge anything.
-      # Host-only (stub qemu, no kernel), a few seconds. Proves early exit fires
-      # when eligible AND cannot mask a late forbidden pattern.
+      # Host-only (stub qemu, no kernel), ~34 s. Proves early exit fires when
+      # eligible AND cannot mask a late forbidden pattern. It is a setup step in
+      # EVERY shard, not one gate in one shard: a shard whose gates trust the
+      # harness must have checked the harness first.
       - name: Boot-harness self-test (DDR-785 early exit)
         run: make smoke-selftest
 
@@ -48,356 +81,13 @@ jobs:
       - name: Build kernel image (-Werror)
         run: make image
 
-      - name: QEMU boot smoke test (q35; greps the kernel sentinel)
-        run: make smoke
+      - name: Run shard ${{ matrix.shard }}
+        run: bash tools/ci/run_shard.sh ${{ matrix.shard }}
 
-      - name: Host mkfs.sfs round-trip (build-time SFS provisioning, DDR-767)
-        run: make smoke-mkfs-sfs
-
-      - name: QEMU filesystem self-test (q35; FAT32 read end-to-end)
-        run: make smoke-fs
-
-      - name: QEMU filesystem write test + host fsck (q35; FAT32 read-write)
-        run: make smoke-fs-rw
-
-      - name: QEMU SFS read-write test (q35; CoW B+tree + extents)
-        run: make smoke-fs-sfs-rw
-
-      - name: QEMU SFS hierarchical-dirs test (q35; /etc/aether/config path walk)
-        run: make smoke-sfs-dirs
-
-      - name: QEMU SFS unlink/rmdir test (q35; tombstone file + empty-dir removal)
-        run: make smoke-sfs-unlink
-
-      - name: QEMU ext4 read test (q35; read-only ext4)
-        run: make smoke-fs-ext4
-
-      - name: QEMU per-process root-mount test (q35+ext4; probe rooted at ext4)
-        run: make smoke-rootmount
-
-      - name: QEMU ring-3 file-lifecycle test (q35; O_CREAT+write+unlink on SFS, DDR-744)
-        run: make smoke-fsrm
-
-      - name: QEMU system-introspection test (q35; SYS_SYSINFO CPU/mem/uptime, DDR-748)
-        run: make smoke-sysinfo
-
-      - name: QEMU wall-clock test (q35; SYS_TIME RTC date/time range-check, DDR-749)
-        run: make smoke-time
-
-      - name: QEMU kernel-log test (q35; SYS_DMESG marker capture + read-back, DDR-750)
-        run: make smoke-dmesg
-
-      - name: QEMU process-kill test (q35; fork + SIGKILL + reap, DDR-755)
-        run: make smoke-kill
-
-      - name: QEMU self-rename test (q35; SYS_SETNAME visible in SYS_GETPROCS, DDR-756)
-        run: make smoke-setname
-
-      - name: QEMU user ELF + W^X test (q35; static ELF from SFS, ring 3, W^X kill)
-        run: make smoke-user
-
-      - name: QEMU FPU context-switch test (q35; two concurrent XMM users, 5d)
-        run: make smoke-fpu
-
-      - name: QEMU pradyos-init test (q35; PID 1 forks + reaps a child, 5d)
-        run: make smoke-init
-
-      - name: QEMU PRISM shell test (q35; interactive shell over serial, 5e)
-        run: make smoke-shell
-
-      - name: QEMU lwIP loopback test (q35; UDP echo on 127.0.0.1, NET-B)
-        run: make smoke-net-lo
-
-      - name: QEMU TCP loopback test (q35; TCP client echo on 127.0.0.1:8007, DDR-753)
-        run: make smoke-net-tcp-lo
-
-      - name: QEMU uaccess test (q35; copyin/copyout/copyinstr EFAULT contract)
-        run: make smoke-uaccess
-
-      - name: QEMU kernel-self W^X test (q35; text RX + data NX PTE audit, DDR-757)
-        run: make smoke-wxkernel
-
-      - name: QEMU syscall-fuzz test (q35; 3000 hostile NSI calls, kernel survives, DDR-758)
-        run: make smoke-syscallfuzz
-
-      - name: QEMU syscall I/O test (q35; sys_write fd table + EBADF/EFAULT)
-        run: make smoke-sysio
-
-      - name: QEMU file syscall test (q35; open/close/fstat/read via VFS bridge)
-        run: make smoke-sysfile
-
-      - name: QEMU proc/seek syscall test (q35; getpid/getcwd/lseek)
-        run: make smoke-sysproc
-
-      - name: QEMU mmap syscall test (q35; MAP_ANON RW+NX, W^X reject, munmap)
-        run: make smoke-sysmmap
-
-      - name: QEMU execve test (q35; sys_execve replaces the process image)
-        run: make smoke-sysexec
-
-      - name: QEMU fork test (q35; sys_fork copy-all-pages, parent + child)
-        run: make smoke-sysfork
-
-      - name: QEMU wait4 test (q35; zombie reap + exit status + reaper)
-        run: make smoke-syswait
-
-      - name: QEMU CPU mitigations test (q35; IBRS/STIBP/SSBD/IBPB probe)
-        run: make smoke-mitigations
-
-      - name: QEMU APIC test (q35; LAPIC up + APIC timer owns the 100Hz tick)
-        run: make smoke-apic
-
-      - name: QEMU SMP test (q35 -smp 4; INIT-SIPI brings 3 APs online, parked)
-        run: make smoke-smp
-
-      - name: QEMU SMP locking test (q35 -smp 4; APs exercise PMM/kheap spinlocks)
-        run: make smoke-smplock
-
-      - name: QEMU per-CPU identity test (q35 -smp 4; this_cpu() on BSP + APs)
-        run: make smoke-percpu
-
-      - name: QEMU SWAPGS test (q35 -smp 4; %gs:0 percpu from syscall ctx + APs)
-        run: make smoke-swapgs
-
-      - name: QEMU per-CPU sched-state test (q35 -smp 4; current_thread + kstack via %gs)
-        run: make smoke-percpu-sched
-
-      - name: QEMU AP job-dispatch test (q35 -smp 4; wake IPI + mailbox on 3 APs)
-        run: make smoke-smpjob
-
-      - name: QEMU cross-CPU wake test (q35 -smp 4; AP unblocks a BSP thread)
-        run: make smoke-crosswake
-
-      - name: QEMU APs-in-scheduler test (q35 -smp 4; a ready-ring thread runs on an AP)
-        run: make smoke-smpsched
-
-      - name: QEMU AP-preemption test (q35 -smp 4; a non-BSP CPU's timer ticks advance)
-        run: make smoke-smppreempt
-
-      - name: QEMU reschedule-IPI test (q35 -smp 4; unblock kicks an idle AP)
-        run: make smoke-resched
-
-      - name: QEMU user-on-AP test (q35 -smp 4; a ring-3 thread runs on a non-BSP CPU)
-        run: make smoke-smpuser
-
-      - name: QEMU MSI-X-on-AP test (q35 -smp 4; a blk completion runs on a non-BSP CPU)
-        run: make smoke-msixap
-
-      - name: QEMU multi-in-flight blk test (q35 -smp 4; concurrent requests on one disk)
-        run: make smoke-blkmq-trace
-
-      - name: QEMU SMP block-integrity test (q35 -smp 4; concurrent read data-verify, DDR-759)
-        run: make smoke-blk-integrity
-
-      - name: QEMU persistent-SFS-root test (q35; process rooted at clean SFS reads config, DDR-760)
-        run: make smoke-sfsroot
-
-      - name: QEMU ring-3 large-write test (q35; 8 KiB SFS write via 4 KiB chunk, DDR-764)
-        run: make smoke-vfs-bigwrite
-
-      - name: QEMU SFS B+tree churn test (q35; 40x create/write/unlink past leaf split, DDR-763)
-        run: make smoke-sfs-btree
-
-      - name: QEMU SFS free-space GC test (q35; next_free reuse-delta over 10 cycles, DDR-762-v2)
-        run: make smoke-sfs-gc
-
-      # DDR-777/DDR-791 (BUG-1): rqstress is the gate that has failed most often
-      # and it never reproduces locally (0/4 attempts), so the BSP-liveness
-      # instrument has to run HERE. Replaces the plain gate rather than adding a
-      # step: running both would boot the same failure twice for one datum.
-      - name: QEMU runqueue stress test (q35 -smp 4; BSP-liveness instrumented, DDR-777)
-        run: make smoke-rqstress-liveness
-
-      - name: QEMU window-cycling test (GPU; Tab hotkey rotates focus through windows)
-        run: make smoke-alttab
-
-      - name: QEMU page-flip test (GPU; double-buffered scanout flips on flush)
-        run: make smoke-flip
-
-      - name: QEMU glass-blur test (GPU; cards blur + saturate the backdrop)
-        run: make smoke-glassblur
-
-      - name: QEMU gradient test (GPU; multi-stop backdrop base)
-        run: make smoke-gradient
-
-      - name: QEMU decorations test (GPU; window frame + drop shadow)
-        run: make smoke-decor
-
-      - name: QEMU scroll test (GPU+tablet; wheel -> focused window event)
-        run: make smoke-scroll
-
-      - name: QEMU cadence test (GPU; auto-ambiance cycle at the test cadence)
-        run: make smoke-cadence
-
-      - name: QEMU motion test (GPU; spring toggle pulse)
-        run: make smoke-motion
-
-      - name: QEMU font test (GPU; Inter 16px atlas renders titles)
-        run: make smoke-font
-
-      - name: QEMU PMM poison + heap canary test (q35; KASAN=1 default)
-        run: make smoke-pmm-poison
-
-      - name: QEMU vDSO clock test (q35; ring-3 reads wall_time_ns, no syscall)
-        run: make smoke-vdso
-
-      - name: QEMU metric-region test (F#68/DDR-795; ring-3 read OK, write faults)
-        run: make smoke-metric
-
-      # DDR-800 (R1): the sovereign egress exemption must still work AND be
-      # recorded. An implementation that keeps the bypass but drops the audit
-      # record passes the connect and fails this gate.
-      - name: QEMU sovereign-egress audit (DDR-800 R1)
-        run: make smoke-sovereign-egress
-
-      # DDR-801 (R3): every egress decision names its destination. Checks the
-      # allowed AND denied case for the same host on different ports, so an
-      # implementation that drops the port cannot satisfy both.
-      - name: QEMU per-destination egress audit (DDR-801 R3)
-        run: make smoke-egress-audit
-
-      # DDR-797: the console must not be flooded. Asserts on VOLUME; a boot can
-      # carry every required sentinel and still be 83% binary garbage.
-      - name: QEMU serial-flood ceiling (DDR-797; <=32 KiB per boot)
-        run: make smoke-serialflood
-
-      # DDR-796 (BUG-1 root cause): SYS_CLOCK must not run backwards under
-      # -smp 4. Tests the invariant directly; the bug presented three
-      # inferential steps away as a metrics probe timing out.
-      - name: QEMU RTC monotonicity test (q35 -smp 4; DDR-796 BUG-1)
-        run: make smoke-rtc-smp
-
-      - name: QEMU COW fork test (q35; copy-on-write isolation + refcount)
-        run: make smoke-cowfork
-
-      - name: QEMU lwIP TCP echo test (q35; host->guest TCP echo on :8007, NET-B)
-        run: make smoke-net
-
-      - name: QEMU lwIP fuzz/hardening test (q35; malformed frames + SYN flood, NET-B)
-        run: make smoke-net-fuzz
-
-      - name: QEMU AETHER end-to-end test (q35; daemon spawns agent, submit->approve->exec, L6)
-        run: make smoke-aether
-
-      - name: QEMU AETHER queue test (q35; submit + sovereign auto-approve + audit, L6)
-        run: make smoke-aether-queue
-
-      - name: QEMU AETHER security test (q35; OOM/rate/overflow/wrap/cap, L6)
-        run: make smoke-aether-sec
-
-      - name: QEMU mode-binding test (q35; Sovereign/Manual toggle -> SYS_SET_MODE, L7)
-        run: make smoke-mode
-
-      - name: QEMU VirtIO-GPU framebuffer test (q35; 2D bring-up + scanout, L7 s0)
-        run: make smoke-gpu
-
-      - name: QEMU FS write-budget test (q35; token-bucket >1 MiB across refills, ADR-032)
-        run: make smoke-fs-budget
-
-      - name: QEMU NVMe controller test (q35; -device nvme bring-up + Identify, DDR-765)
-        run: make smoke-nvme
-
-      - name: QEMU SFS persistence test (q35; kernel reads host mkfs.sfs /PERSIST.TXT, DDR-768)
-        run: make smoke-sfs-persist
-
-      - name: QEMU AETHER SFS-root test (q35; daemon reads config from host mkfs image, DDR-770)
-        run: make smoke-aether-sfsroot
-
-      - name: QEMU framebuffer-surface test (q35; ring-3 map+draw+flush, L7)
-        run: make smoke-fb
-
-      - name: QEMU keyboard-input test (q35; sendkey -> IRQ1 -> SYS_INPUT_POLL, L7)
-        run: make smoke-input
-
-      - name: QEMU compositor test (q35; sovereign desktop render + key-driven mode, L7)
-        run: make smoke-compositor
-
-      - name: QEMU ACPI poweroff test (q35+GPU; sovereign SYS_POWEROFF -> ACPI S5, DDR-746)
-        run: make smoke-poweroff
-
-      - name: QEMU ACPI reboot test (q35+GPU; sovereign SYS_REBOOT -> ACPI/PC reset, DDR-747)
-        run: make smoke-reboot
-
-      - name: QEMU pointer test (q35; virtio-tablet QMP move+click -> SYS_MOUSE_POLL, L7)
-        run: make smoke-mouse
-
-      - name: QEMU agent-card click test (q35; click card -> SYS_SPAWN_AGENT, L7)
-        run: make smoke-agent-click
-
-      - name: QEMU per-client surface test (q35; client commits + compositor composites, L7)
-        run: make smoke-surface
-
-      - name: QEMU named-agent panel test (q35; 8 agent cards + AETHER roster, L7)
-        run: make smoke-agents
-
-      - name: QEMU per-agent live-metrics test (q35; SYS_AGENT_METRICS state/actions, L7)
-        run: make smoke-agentmetrics
-
-      - name: QEMU agent-panel metrics test (q35+GPU; cards render metrics, L7)
-        run: make smoke-agentpanel
-
-      - name: QEMU CAP_NET socket-authority test (q35; capless connect/slot -> EPERM)
-        run: make smoke-capnet
-
-      - name: QEMU AETHER boot-config test (q35; daemon reads /etc/aether/config on SFS, DDR-761)
-        run: make smoke-aethercfg
-
-      - name: QEMU CAP_NET allowlist test (q35; deny-by-default egress, config-installed)
-        run: make smoke-netallow
-
-      - name: QEMU z-order/focus test (q35; raise + focus + key routed to window, L7)
-        run: make smoke-focus
-
-      - name: QEMU ambiance test (q35; 4 sun-driven ambiances + OKLab transitions, L7)
-        run: make smoke-ambiance
-
-      - name: QEMU window-drag test (q35; title-bar drag -> SYS_SURFACE_MOVE, L7)
-        run: make smoke-drag
-
-      - name: QEMU window close+resize test (q35; SYS_SURFACE_CLOSE/RESIZE, L7)
-        run: make smoke-winops
-
-      - name: QEMU surface-destroy test (q35 -smp 4; slot reclaim on close + exit, L7)
-        run: make smoke-surfdestroy
-
-      - name: QEMU title+close-button test (q35; titles + close-box click, L7)
-        run: make smoke-wmclose
-
-      - name: QEMU minimize test (q35; min-box click + r restore, L7)
-        run: make smoke-wmmin
-
-      - name: QEMU event-channel resize test (q35; corner drag -> RESIZE_REQ -> owner resize, L7)
-        run: make smoke-evresize
-
-      - name: QEMU maximize test (q35; max-box click + geometry restore, L7)
-        run: make smoke-wmmax
-
-      - name: QEMU visual-richness test (q35; particle field + glass cards, L7)
-        run: make smoke-visual
-
-      - name: QEMU backdrop test (q35; DAY mesh + DUSK sun-bloom + NIGHT nebulas, L7)
-        run: make smoke-backdrop
-
-      - name: QEMU pipe/dup2 test (q35; ring round-trip + dup2)
-        run: make smoke-syspipe
-
-      - name: QEMU epoll test (q35; EPOLLIN on a pipe read-end)
-        run: make smoke-sysepoll
-
-      - name: QEMU signal test (q35; SIGUSR1 handler + sigreturn)
-        run: make smoke-syssignal
-
-      - name: QEMU io_uring test (q35; batched SQ/CQ read+write on a pipe)
-        run: make smoke-sysiouring
-
-  # Code knowledge graph (tools/graph_mcp) — isolated job so it can never make
-  # the kernel gates flaky. Pure JS/WASM deps (sql.js + web-tree-sitter); builds
-  # the graph from source and validates queries. Non-destructive (writes only the
-  # git-ignored .graph/ DB).
   # AETHER host-side Python agent layer. Separate job from build-and-boot: it
-  # shares no toolchain with the kernel and must not wait ~100 minutes of QEMU
-  # gates to report. Without this job, "CI green" on an aether/ commit would
-  # prove only that the C kernel still builds.
+  # shares no toolchain with the kernel and must not wait on the QEMU gates to
+  # report. Without this job, "CI green" on an aether/ commit would prove only
+  # that the C kernel still builds.
   aether-layer:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,149 @@
+# tools/ci/gate_shards.txt — DDR-817 CI gate partition.
+#
+# Format:  <shard>  <make-target>  <secs>
+#
+# WHY THIS FILE EXISTS, twice over:
+#
+# 1. SPEED. The single serial `build-and-boot` job ran its gates in 2 h 08 m;
+#    the other four CI jobs finish in under 30 s combined, so that one job WAS
+#    the critical path. Shared setup (checkout + toolchain + musl + lwip +
+#    image) is ~49 s, i.e. ~0.6 % of the job — which is why splitting by gate is
+#    nearly free. Six shards: ~24 min each.
+#
+# 2. COVERAGE, which turned out to matter more. `ci.yml` hand-listed 111 gate
+#    steps and NOTHING checked that list against the Makefile. Eight gates were
+#    in the Makefile and in no CI run at all:
+#      smoke-sha256 smoke-hkdf smoke-lockbox smoke-rng smoke-sigpipe
+#      smoke-privacy-netfilter smoke-blkmq smoke-rqstress
+#    That includes the gate for every crypto primitive promoted on "two CI
+#    greens". Those greens were real, and they carried no information about
+#    those features. `make ci-shard-check` is what stops that recurring.
+#
+# Assignment is longest-processing-time-first over the durations recorded here,
+# NOT round-robin: eleven gates sit at 180 s (TIMEOUT_S=180 QEMU_SMP=4, all with
+# a FORBIDDEN_SENTINEL, so DDR-785 early exit does not apply to them). Packed
+# badly, those alone would make one shard 33 min and cap the matrix.
+#
+# Durations are measured, from run 30741785980 (main @ b823bb5, green), via the
+# .../actions/runs/<id>/jobs endpoint — EXCEPT for the eight gates above, which
+# have never run in CI and are therefore recorded at their own TIMEOUT_S, the
+# worst case. They are inputs to the packing only; nothing asserts against them
+# at runtime. They are recorded so a future re-balance has evidence in the file
+# rather than re-deriving it from the API.
+0	smoke-blk-integrity	181
+0	smoke-smpuser	180
+0	smoke-compositor	120
+0	smoke-motion	120
+0	smoke-smplock	120
+0	smoke-wmmin	120
+0	smoke-hkdf	90
+0	smoke-rootmount	90
+0	smoke-sfsroot	90
+0	smoke-shell	61
+0	smoke-fpu	60
+0	smoke-serialflood	60
+0	smoke-ambiance	30
+0	smoke-backdrop	28
+0	smoke-init	27
+0	smoke-sysiouring	24
+0	smoke-sysproc	23
+1	smoke-rqstress-liveness	181
+1	smoke-surfdestroy	180
+1	smoke-drag	120
+1	smoke-mouse	120
+1	smoke-sovereign-egress	120
+1	smoke-capnet	91
+1	smoke-sfs-dirs	91
+1	smoke-input	90
+1	smoke-setname	90
+1	smoke-sha256	90
+1	smoke-fs-budget	60
+1	smoke-winops	37
+1	smoke-reboot	31
+1	smoke-aether-sfsroot	28
+1	smoke-fs-sfs-rw	27
+1	smoke-glassblur	25
+1	smoke-sysfork	23
+1	smoke-fs-rw	2
+1	smoke-mkfs-sfs	2
+1	smoke	1
+1	smoke-aether-sec	1
+1	smoke-apic	1
+1	smoke-cowfork	1
+1	smoke-crosswake	1
+1	smoke-gpu	1
+1	smoke-net-fuzz	1
+1	smoke-smpjob	1
+1	smoke-uaccess	1
+1	smoke-aether-queue	0
+1	smoke-mitigations	0
+1	smoke-net-lo	0
+1	smoke-pmm-poison	0
+2	smoke-smppreempt	181
+2	smoke-agentmetrics	150
+2	smoke-percpu	121
+2	smoke-egress-audit	120
+2	smoke-percpu-sched	120
+2	smoke-swapgs	120
+2	smoke-time	91
+2	smoke-lockbox	90
+2	smoke-sfs-btree	90
+2	smoke-sigpipe	90
+2	smoke-kill	60
+2	smoke-agents	34
+2	smoke-font	31
+2	smoke-aether	28
+2	smoke-user	28
+2	smoke-flip	25
+2	smoke-sysfile	23
+2	smoke-syswait	23
+3	smoke-blkmq	180
+3	smoke-rqstress	180
+3	smoke-agent-click	120
+3	smoke-evresize	120
+3	smoke-resched	120
+3	smoke-sysexec	120
+3	smoke-aethercfg	90
+3	smoke-netallow	90
+3	smoke-sfs-gc	90
+3	smoke-sysinfo	90
+3	smoke-net	60
+3	smoke-fs-ext4	29
+3	smoke-gradient	28
+3	smoke-syscallfuzz	26
+3	smoke-vdso	24
+3	smoke-syssignal	23
+4	smoke-blkmq-trace	180
+4	smoke-rtc-smp	180
+4	smoke-alttab	120
+4	smoke-focus	120
+4	smoke-scroll	120
+4	smoke-wmclose	120
+4	smoke-dmesg	90
+4	smoke-privacy-netfilter	90
+4	smoke-sfs-persist	90
+4	smoke-vfs-bigwrite	90
+4	smoke-net-tcp-lo	60
+4	smoke-agentpanel	33
+4	smoke-poweroff	30
+4	smoke-mode	28
+4	smoke-visual	26
+4	smoke-sysepoll	23
+4	smoke-sysmmap	23
+5	smoke-msixap	180
+5	smoke-smpsched	180
+5	smoke-cadence	120
+5	smoke-metric	120
+5	smoke-smp	120
+5	smoke-wmmax	120
+5	smoke-fsrm	90
+5	smoke-rng	90
+5	smoke-sfs-unlink	90
+5	smoke-wxkernel	90
+5	smoke-nvme	60
+5	smoke-decor	31
+5	smoke-surface	31
+5	smoke-fs	28
+5	smoke-fb	26
+5	smoke-sysio	24
+5	smoke-syspipe	23

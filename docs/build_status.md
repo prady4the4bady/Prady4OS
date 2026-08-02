@@ -2815,3 +2815,92 @@ DDR-813 wires it.
 The single bounded exception to the ADR-021 W^X invariant, for §E-05
 self-rewriting code. Binding: supersedable only by a new ADR, never quietly
 amended.
+
+## DDR-817 — CI sharding, and eight gates that were never running
+
+### The measurement, before the assumption
+
+Run `30741785980` (`main` @ `b823bb5`, green), from the `.../jobs` endpoint:
+
+| job | wall-clock |
+|---|---|
+| **`build-and-boot`** | **2 h 08 m** |
+| `arch-bootstrap (aarch64 / riscv64)` | 20 s / 21 s |
+| `aether-layer` | 15 s |
+| `code-graph` | 8 s |
+
+The entire critical path was one job running 110 QEMU boots in series. Inside
+it, 33 steps over 95 s accounted for 59 % of the time, and **shared setup was
+~49 s against ~7 600 s of boots** — work that is ~99 % embarrassingly parallel,
+running on one runner.
+
+`build-and-boot` is now a 6-way matrix, packed longest-processing-time-first by
+measured duration (`tools/ci/gate_shards.txt`). Longest shard ≈ 1 425 s + ~85 s
+setup ≈ **25 min**, against a 60 min target and a 128 min baseline.
+
+Round-robin packing was rejected: eleven gates sit at a full 180 s
+(`QEMU_SMP=4` with a `FORBIDDEN_SENTINEL`, so DDR-785 early exit does not apply
+to them), and packed badly those alone would cap the matrix at 33 min.
+
+### What was NOT done, and why
+
+Reclaiming those eleven 180 s windows by extending DDR-785 — exit once the
+required sentinels appear plus a grace period — was rejected. DDR-785 excluded
+forbidden-sentinel gates because a forbidden pattern can appear *after* the
+required ones. A grace period weakens that to "probably long enough", and the
+only evidence any particular period suffices is that these gates happen to print
+failures early today. That is an observation about current behaviour, not an
+invariant. Sharding reaches the target without spending it, so there is no
+reason to.
+
+**No gate's semantics, timeout, or sentinels changed. No gate was removed.**
+
+### The finding that mattered more than the speed
+
+`ci.yml` hand-listed 111 gate steps and **nothing compared that list to the
+Makefile**. Eight gates existed and had never run in CI:
+
+```
+smoke-sha256  smoke-hkdf  smoke-lockbox  smoke-rng
+smoke-sigpipe  smoke-privacy-netfilter  smoke-blkmq  smoke-rqstress
+```
+
+That is the gate for **every crypto primitive promoted to `main` this session**
+— DDR-811, DDR-812, DDR-816, DDR-818 — plus DDR-805 and DDR-802. Those
+promotions each had two CI greens on the exact tip. The greens were real and
+they carried no information about those features. What those features actually
+rest on is their local 3-arm A/B verification, which is genuine evidence but is
+not what "two CI greens" was taken to mean.
+
+`smoke-blkmq` and `smoke-rqstress` were additionally masked by their own
+variants: `ci.yml` ran `smoke-blkmq-trace` and `smoke-rqstress-liveness`, so a
+grep for the base name matched and the absence looked like presence.
+
+All eight are now in the matrix. Their durations in the manifest are their own
+`TIMEOUT_S` — the worst case — because there is no measured value to use.
+
+### `make ci-shard-check` — the assertion that makes the speed safe
+
+A sharded suite's characteristic bug is a gate in no shard: CI gets faster
+because it quietly stopped running something. `tools/ci/shard_check.sh` fails if
+any `smoke-*` target in the Makefile is unassigned, assigned twice, or named in
+the manifest but undefined in the Makefile. Exclusions are explicit and each
+carries its reason on the line — a blanket "every target must be sharded" would
+be silently satisfiable by deleting the target.
+
+Verified by removing the assertion's own subject, four ways:
+
+| arm | manifest state | verdict |
+|---|---|---|
+| A | correct | **OK** — 117 gates, 6 shards, 4 excluded |
+| B | `smoke-sha256` dropped | FAIL, names it |
+| C | `smoke-sha256` listed twice | FAIL, names it |
+| D | `smoke-sha256` typo'd to `smoke-sha257` | FAIL on both symptoms |
+
+There is no kernel change in this slice, so the usual 3-arm kernel A/B has
+nothing to vary — the table above is its equivalent, and it varies the thing
+that can actually break.
+
+`smoke-selftest` (DDR-785's harness self-test) is excluded from the manifest and
+run as a setup step in **every** shard instead: a shard whose gates trust the
+harness must have checked the harness first.
