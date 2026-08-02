@@ -45,6 +45,11 @@ All entries below are **shipped**.
   no hardware acceleration so the same source builds for x86_64/aarch64/riscv64.
   Validated against four FIPS 180-4 vectors incl. 1M `a`; gate `smoke-sha256`.
   Prerequisite for DDR-812, §J-03, ACC and AGS.
+- **HMAC-SHA256 + HKDF-SHA256** (DDR-818) — `kernel/crypto/hkdf.{c,h}` on
+  DDR-811. Three RFC 5869 vectors; TC2 (82-byte OKM) forces the expand loop
+  past T(1) and TC3 covers the NULL-salt branch (HashLen zero bytes, not an
+  empty string). Gate `smoke-hkdf`. Not yet in the kernel link — first caller
+  is DDR-813. First of ACC's four missing primitives (819/820/821 follow).
 - **Kernel entropy** (DDR-816) — virtio-rng primary over the existing generic
   transport, RDSEED secondary (x86-only, CPUID-gated), and **no third source**:
   `rng_bytes()` fails and crypto refuses to start rather than falling back to

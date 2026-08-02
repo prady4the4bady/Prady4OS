@@ -361,6 +361,8 @@ extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destinatio
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
 extern const unsigned char sovegresstest_elf_end[];
+extern const unsigned char hkdftest_elf[];            /* DDR-818: HKDF vectors */
+extern const unsigned char hkdftest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
@@ -1238,6 +1240,16 @@ static void fs_test_thread(void *arg) {
                  * SYS_METRIC_READ is sovereign-gated — the record is the
                  * owner's ground truth, so a non-sovereign reader gets
                  * -EPERM and an audit entry. */
+                /* DDR-818: HKDF RFC 5869 vector probe, opt-in via DDR-804. */
+                if (probe_enabled("hkdf")) {
+                    struct tcb *hk = 0;
+                    uint64_t hklen = (uint64_t)(hkdftest_elf_end - hkdftest_elf);
+                    if (elf_load((void *)(uintptr_t)hkdftest_elf, hklen,
+                                 "HKDFTEST", &hk) == ELF_OK && hk) {
+                        sched_unblock(hk);
+                        kputs("[user] ELF loaded (embedded); HKDF vector probe spawned\r\n");
+                    }
+                }
                 if (probe_enabled("lockbox")) {
                     struct tcb *lb = 0;
                     uint64_t lblen = (uint64_t)(lockboxtest_elf_end - lockboxtest_elf);

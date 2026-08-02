@@ -2702,3 +2702,48 @@ this workstation the previous day on functionally identical code. Same code,
 recovered host, opposite verdict. That confirms the DDR-816 §Implementation
 correction: OPEN-9 is host-state dependent, and reverting the attribution rather
 than "fixing" a non-existent regression was right.
+
+## DDR-818 — HMAC-SHA256 + HKDF-SHA256 (first of ACC's four missing primitives)
+
+ACC derives two independent AEAD keys from one X25519 shared secret, separated
+only by the HKDF info label. That separation is what makes `K_session !=
+K_owner`, which is what lets the same nonce appear in both boxes without being a
+break — so HKDF is load-bearing for the envelope's safety argument, not a
+convenience.
+
+**Scope named at design time:** RFC 5869 is thin over HMAC, and HMAC was not in
+the tree either. So this slice is HMAC *and* HKDF. Naming that in the DDR rather
+than discovering it mid-implementation is what keeps a slice from quietly
+becoming two.
+
+Three RFC 5869 Appendix A vectors, each covering something the others cannot:
+
+| # | case | only this one covers |
+|---|---|---|
+| 1 | basic, 42-byte OKM | the ordinary path |
+| 2 | long inputs, 82-byte OKM | forces the expand loop past `T(1)` |
+| 3 | zero-length salt and info | the NULL-salt branch — RFC 5869 requires HashLen **zero bytes**, not an empty string |
+
+TC3 matters because treating an absent salt as an empty string produces
+plausible-looking output that is simply wrong, and is invisible in TC1 and TC2.
+
+| arm | kernel | verdict |
+|---|---|---|
+| A — primitive unlinked | *(no artefact)* | cannot build |
+| B — expand loop truncated to `T(1)` | `f74b515df09e` | FAIL |
+| C — correct | `2a454913ef66` | **PASS** |
+
+Arm B proves TC2 is load-bearing rather than decorative: truncating the loop
+still satisfies TC1 and TC3 (42 bytes each, one block) and fails only TC2.
+
+`hkdf.o` is deliberately **not** in the kernel link — no caller until DDR-813,
+and an unreferenced object in the image is dead code. Same discipline as
+DDR-811, where `sha256.o` waited for DDR-812 to become its first caller.
+
+### ACC's remaining dependency chain
+
+A tree check after DDR-816 found ACC needs **four** primitives, none present —
+and the only `x25519`/`chacha20`/`poly1305` matches in `kernel/` were prose in a
+comment in `rng.h` that I had written myself. Sequenced as
+818 (done) → 819 ChaCha20-Poly1305 → 820 X25519 → 821 Ed25519 → 813 ACC, so a
+vector failure and a protocol failure stay distinguishable.

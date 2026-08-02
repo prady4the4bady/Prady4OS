@@ -87,6 +87,8 @@ USER_FUZZ_SRC := user/syscallfuzz.c       # sec: hostile-syscall fuzz probe (DDR
 USER_FUZZ_ELF := build/syscallfuzz.elf
 USER_EGAUD_SRC := user/egressaudittest.c  # DDR-801: per-destination egress audit
 USER_EGAUD_ELF := build/egressaudittest.elf
+USER_HKDF_SRC := user/hkdftest.c         # DDR-818: HKDF RFC 5869 vectors
+USER_HKDF_ELF := build/hkdftest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -300,6 +302,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHA256_ELF) build/sha256test.o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_LOCKBOX_SRC) -o build/lockboxtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_LOCKBOX_ELF) build/lockboxtest.o build/sha256_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/hkdf.c -o build/hkdf_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_HKDF_SRC) -o build/hkdftest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_HKDF_ELF) build/hkdftest.o build/hkdf_user.o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -308,7 +313,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -1510,6 +1515,17 @@ smoke-sha256: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHA256_VECTORS_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SHA256_STUB\nSHA256 FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-818 HKDF-SHA256 vectors (RFC 5869 Appendix A). Three cases, each
+# covering something the others cannot: TC2's 82-byte OKM is the only one that
+# forces the expand loop past T(1), and TC3 is the only one exercising the
+# NULL-salt branch (HashLen zero bytes, not an empty string).
+smoke-hkdf: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_PROBES=hkdf \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_HKDF_VECTORS_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_HKDF_STUB\nHKDF FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 
 # DDR-812 metric lockbox. Arms A/B/C only — arm D (ring 3 cannot write the
 # page) is already gated by smoke-metric, whose probe stores to
