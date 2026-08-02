@@ -97,7 +97,103 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-6 SESSION — 2026-08-02 (CURRENT — read this first)
+### 0.-7 SESSION — 2026-08-02 late (CURRENT — read this first)
+
+**`dev/phase1` = `2158778`. `main` = `b823bb5`** (not promoted this session).
+NSI max **76**; next syscall is **77**.
+
+Commits: `b343b0f` docs sync · `a5d9dac` DDR-817 CI sharding ·
+`2158778` DDR-820 X25519.
+
+#### READ THIS FIRST — eight gates were never running in CI
+
+`ci.yml` hand-listed 111 gate steps and **nothing compared that list to the
+Makefile.** Eight gates existed and had never run in a single CI run:
+
+```
+smoke-sha256  smoke-hkdf  smoke-lockbox  smoke-rng
+smoke-sigpipe  smoke-privacy-netfilter  smoke-blkmq  smoke-rqstress
+```
+
+That is the gate for **every crypto primitive promoted to `main`** — DDR-811,
+DDR-812, DDR-816, DDR-818 — plus DDR-805 and DDR-802. Those promotions each had
+two CI greens on the exact tip. **The greens were real and carried no
+information about those features.** What they actually rest on is their local
+3-arm A/B verification, which is genuine evidence but is not what "two CI
+greens" was taken to mean. `smoke-blkmq`/`smoke-rqstress` were additionally
+masked by their own `-trace`/`-liveness` variants, so grepping the base name
+matched and the absence looked like presence.
+
+All eight are now in the shard matrix. **`make ci-shard-check` fails if any
+`smoke-*` target is unassigned, assigned twice, or names a target the Makefile
+does not define.** Exclusions are explicit, each with its reason on the line.
+
+#### DDR-817 — CI sharding (in flight)
+
+Measured before assuming: `build-and-boot` was 2 h 08 m and every other CI job
+finished in under 30 s, so one serial job was the entire critical path. Setup is
+~49 s against ~7 600 s of boots. Now a **6-way matrix**, packed
+longest-processing-time-first by measured duration
+(`tools/ci/gate_shards.txt`). Predicted longest shard ~24 min.
+
+**Run 30756063513 was still in flight at session end (23m+, all six shards
+running, `shard-check` green). Read its verdict first.** If green, it needs a
+second green before `main` moves.
+
+Rejected deliberately: relaxing DDR-785's forbidden-sentinel rule with a grace
+period to reclaim the eleven 180 s windows. That trades a real guarantee for
+speed the sharding already provides. **No gate's semantics, timeout, or
+sentinels changed; no gate was removed.**
+
+#### DDR-820 — X25519: host vectors pass, GATE DOES NOT
+
+`kernel/crypto/x25519.{c,h}` + `user/x25519test.c`. All RFC 7748 vectors pass
+under `gcc` on the host, including the commutativity check that depends on no
+published constant. **The in-QEMU `smoke-x25519` gate does not reach its
+sentinel, and the cause is NOT known.** Recorded as unknown rather than guessed.
+
+It is not slow: the same source runs all seven checks in **3 ms at -O0 on the
+host**, so even a 1000× TCG penalty is seconds. After the alignment fix below it
+neither traps nor prints. Candidates not ruled out, in DDR-820: the
+large-code-model `.ltext`/`.lrodata` orphan sections (`user.ld` names neither —
+lld's orphan placement is what currently puts them in the PT_LOAD), stack depth
+in `fe_invert`'s addition chain, or an uninitialised `tcb` field for this
+thread shape (see memory `tcb-fields-not-zeroed`).
+
+`smoke-x25519` is therefore **excluded from the shard matrix, explicitly, with
+that reason in `shard_check.sh`.** Re-register it the moment it passes.
+**DDR-813 must not consume this primitive until the gate is green.**
+
+**Two defects worth carrying forward:**
+
+1. **Ladder constant.** `a24 = 121665` paired with the `BB` form, which needs
+   `(A+2)/4 = 121666`. Both constants are correct *for different forms of the
+   same expression*, so it reads like a typo and is not. Every
+   constant-comparing vector failed while **commutativity passed** — diagnostic,
+   because a consistent group law with a wrong parameter still commutes and
+   broken field arithmetic does not. That narrowed 250 lines to one line.
+
+2. **`_start` stack alignment — affects EVERY freestanding probe in `user/`.**
+   SysV enters a process with RSP 16-byte aligned; a compiler treats `_start` as
+   a called function and assumes RSP ≡ 8 (mod 16). The frame is off by 8,
+   callees inherit it, and `movaps` to a stack slot raises **#GP** (not #AC).
+   **The kernel is correct — `elf_build_image` aligns properly. Do not "fix" the
+   entry RSP.** Fixed in this probe with `force_align_arg_pointer`. The other
+   probes survive only because their generated code never emitted an aligned SSE
+   stack access; nothing about them is safe by design. Worth its own slice.
+
+#### Next, in order
+
+1. Read run 30756063513's verdict. If green, `workflow_dispatch` a second run on
+   the same tip, then promote.
+2. Root-cause `smoke-x25519` (the `.ltext` orphan-section hypothesis is the
+   cheapest to test: name `*(.ltext*)` and `*(.lrodata*)` explicitly in
+   `user.ld` — but note that changes every user ELF, so check the blast radius).
+3. Then DDR-821 (Ed25519), then DDR-813 (ACC).
+4. Unrelated and still owed: DDR-819's `aead.{c,h}` has **no gate and is in no
+   build** — host vectors only.
+
+### 0.-6 SESSION — 2026-08-02 (earlier)
 
 **`main` = `dev/phase1` = `b823bb5`.** Two consecutive CI greens on the exact tip
 (run 30733620093, attempts 1 and 2). Tree clean, nothing unpushed.
