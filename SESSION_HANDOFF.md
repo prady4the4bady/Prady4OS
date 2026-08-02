@@ -97,7 +97,102 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-7 SESSION — 2026-08-02 late (CURRENT — read this first)
+### 0.-8 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**`dev/phase1` = `7a7385e`. `main` = `b823bb5`** (still not promoted).
+
+#### CORRECTION — DDR-820's "cause unknown" was wrong, and so was the last handoff
+
+`$(KERNEL_BIN)`'s prerequisites named **17 of the 31 files in `user/`**. Editing
+any of the other 14 did not rebuild the image. `make image` said success and the
+gate tested the previous binary.
+
+**The `_start` alignment fix was correct the first time and was never in a
+binary that ran.** The `#GP`, the "no output after the fix", and the "still
+fails at `TIMEOUT_S=300`, so it is stuck not slow" were three correct
+measurements of one stale 16:19 artefact while the source said 18:18. Fixed in
+DDR-822 with `$(wildcard user/*.c)`, verified by touch-then-relink.
+
+**This is the second instance of one structural bug this session.** DDR-817
+found `ci.yml` had drifted from the Makefile (eight gates never ran); DDR-822 is
+the Makefile drifting from `user/`. Both are hand-maintained lists mirroring a
+directory where drift silently produces a green result. **Treat any remaining
+hand-maintained list that mirrors a directory as a latent third instance.**
+
+#### smoke-x25519 — STILL NOT PASSING, still excluded
+
+Do not believe any claim that it passes. It was observed PASSing once, but under
+host conditions I had contaminated (see below), so that observation carries no
+weight. It remains in `EXCLUDE` in `shard_check.sh`. **DDR-813 must not consume
+x25519 until this gate is green on a clean host.**
+
+Host vectors still pass (RFC 7748 + commutativity + small-order rejection).
+
+#### STRONG OPEN-9 CANDIDATE — leaked QEMU holds the image write-lock
+
+Five consecutive `smoke-x25519` failures reported `kernel sentinel not found`
+while plain `make smoke` passed seconds earlier on the same image. Cause:
+
+```
+qemu-system-x86_64: Failed to get "write" lock
+Is another process using the image [build/pradyos.img]?
+```
+
+Two orphaned `qemu-system-x86_64` processes were live. QEMU exits before
+printing anything, so the harness sees an empty serial log and **blames the
+kernel**. Every OPEN-9 symptom matches: fails locally / passes CI (fresh runner
+per job), identical binary opposite verdicts, "recovered overnight" (orphan
+reaped), twice caused a change to be wrongly blamed.
+
+**Recorded as a hypothesis, not a closed defect** — it has not yet been caught
+red-handed on a `smoke-shell` failure. Full analysis in DDR-822 §A second
+host-side defect.
+
+**Highest-value next slice:** make `boot_test.sh` detect the lock error and
+report *"host has a stale QEMU holding the image"* instead of *"kernel sentinel
+not found"*. A harness that misattributes a host problem to the kernel is how
+two sessions were spent blaming the tree. Add `pkill -f qemu-system-x86_64` (or
+a lock precheck) to the gate preamble.
+
+**Practical rule learned the hard way this session: never run two QEMU gates
+concurrently on this host.** Several of my own measurements were invalidated by
+overlapping background runs sharing `build/pradyos.img` and the serial log.
+
+#### CI
+
+- run `30756063513` (DDR-817, tip `2158778`) — **GREEN, 25m20s**, down from
+  2h08m. Sharding works; `shard-check` green.
+- run `30756989017` (tip `0e23bf3`) — GREEN.
+- run `30757030329` (tip `7e5d522`, docs-only) — **RED**, then rerun still in
+  flight at session end.
+
+**NEW UNTRACKED DEFECT — `OPEN-10`.** That red was `smoke-smp` tripping
+`GLOBAL_FORBIDDEN` on **`'btree churn FAIL'`** — the DDR-763 SFS B+tree probe
+failing during an unrelated gate's boot, caught by DDR-791's global list working
+exactly as designed. Docs-only commit, so it is intermittent, not a regression.
+It is a *different* signature from OPEN-1 (`smoke-surfdestroy`) and was not
+previously tracked. **Read the rerun verdict before promoting anything.**
+
+#### ITEM 2 done
+
+`force_align_arg_pointer` applied to all 23 `user/` `_start` functions. Baseline
+`make smoke` still passes with the change.
+
+#### Next, in order
+
+1. Read run `30757030329`'s rerun verdict. Do not promote on a red tip.
+2. Harness lock-detection slice (above) — it unblocks trustworthy local testing,
+   which everything else depends on.
+3. Re-verify `smoke-x25519` on a clean host; if green, re-register it.
+4. Then ITEM 3 (`smoke-aead`), ITEM 4 (DDR-821 Ed25519), ITEM 5 (DDR-813 ACC).
+
+**Scope note on the 13-item queue:** items 3–13 are ~250 tracked features. At the
+current verified rate — and with two structural build/CI defects found in one
+session — that is many sessions of work, not one. The sequencing in the queue is
+sound; the "done when" criteria should be read as a destination, not a session
+goal.
+
+### 0.-7 SESSION — 2026-08-02 late
 
 **`dev/phase1` = `2158778`. `main` = `b823bb5`** (not promoted this session).
 NSI max **76**; next syscall is **77**.
