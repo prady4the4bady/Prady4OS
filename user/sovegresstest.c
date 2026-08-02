@@ -58,7 +58,7 @@ __attribute__((noreturn)) static void fail(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* 1. The exemption must still work. -EPERM here would mean the bypass was
      *    closed rather than recorded, which DDR-800 explicitly rejected: an
      *    operator needs egress to diagnose the network. Any other result —

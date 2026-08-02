@@ -235,7 +235,20 @@ lwip: $(LWIP_LIB)
 # 0x10000 and objcopied to a raw binary the bootloader loads verbatim.
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SRC) $(USER_SYS_SRC) $(USER_EXEC_SRC) $(USER_TLS_SRC) $(USER_FPU_SRC) $(USER_CMUSL_SRC) $(USER_INIT_SRC) $(USER_PRISM_SRC) $(USER_AETHERD_SRC) $(USER_AGENT_SRC) $(USER_INPUT_SRC) $(USER_COMP_SRC) $(USER_SURF_SRC) $(USER_SURFDESTROY_SRC) $(USER_AGENTMETRICS_SRC) $(USER_CAPNET_SRC) $(USER_ROOTMNT_SRC) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+# DDR-822: the user-source prerequisites are a WILDCARD, not a hand-written list.
+#
+# They used to be enumerated as $(USER_*_SRC) variables. That list named 17 of
+# the 31 files in user/, so editing any of the other 14 — including every crypto
+# probe (sha256test, hkdftest, lockboxtest, sigpipetest, x25519test) — did NOT
+# rebuild the kernel image, and the next gate run silently tested the PREVIOUS
+# binary. That is the DDR-791 stale-artefact trap built into the build system,
+# and it cost a full misdiagnosis of DDR-820 before it was found.
+#
+# A wildcard cannot go stale when a probe is added. Nothing here should ever be
+# a list a human has to remember to extend.
+USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h)
+
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then

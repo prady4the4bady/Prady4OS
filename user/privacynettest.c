@@ -94,7 +94,7 @@ static int seen(const struct audit_entry *e, long n,
     return 0;
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     const unsigned long id_allowed =
         ((unsigned long)HOST_BE << 16) | (unsigned long)PORT_ALLOWED;
     const unsigned long id_offlist =

@@ -79,7 +79,7 @@ static unsigned ser(const struct lockbox *L, unsigned char *b) {
     return n;
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct lockbox rec;
 
     long r = nsi(SYS_METRIC_READ, (long)&rec, 0, 0);

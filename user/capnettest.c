@@ -41,7 +41,7 @@ __attribute__((noreturn)) static void die(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* 1. No CAP_NET: connect must be refused with -EPERM specifically. */
     long r = nsi(SYS_SOCK_CONNECT, 0x0A00020FL /* 10.0.2.15 be */, 80, 0);
     if (r != -EPERM) die("connect not EPERM");

@@ -38,7 +38,7 @@ __attribute__((noreturn)) static void fail(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* Stack buffers only — user.ld forbids writable globals (R+X segment). The
      * ring-3 stack is 8 MiB (ADR-021), so 2*8 KiB is fine. */
     char pat[BIGLEN];

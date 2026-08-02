@@ -46,7 +46,7 @@ static void put_num(char *buf, int *pos, unsigned v, int width) {
     while (n > 0) buf[(*pos)++] = tmp[--n];
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct rtc_time t;
     if (nsi(SYS_TIME, (long)&t, 0, 0) != 0)
         fail("syscall returned nonzero");

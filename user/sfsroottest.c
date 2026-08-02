@@ -40,7 +40,7 @@ __attribute__((noreturn)) static void fail(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* Resolve /etc/aether/config against the SFS root (mkdir-p'd + written by the
      * kernel). This exercises a multi-level SFS path from ring 3 at runtime. */
     long fd = nsi(SYS_OPEN, (long)"/etc/aether/config", 0 /*O_RDONLY*/, 0);

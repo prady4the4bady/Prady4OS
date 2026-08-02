@@ -52,7 +52,7 @@ static long elapsed(long start) {
     return now - start;
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long start = nsi(SYS_CLOCK, 0, 0, 0);
     int live_said = 0;
     while (elapsed(start) < 120) {

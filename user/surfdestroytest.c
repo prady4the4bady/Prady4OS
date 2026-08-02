@@ -67,7 +67,7 @@ static int fill(long *ids, int cap) {
     return n;
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* 1. churn — 40 create/close cycles over a 16-slot table. */
     for (int i = 0; i < 40; i++) {
         long id = nsi(SYS_SURFACE_CREATE, 32, 32, 0);

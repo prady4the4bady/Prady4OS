@@ -49,7 +49,7 @@ __attribute__((noreturn)) static void skip(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* (a) /EXT4.TXT resolves on the ext4 root and holds the known content. */
     long fd = nsi(SYS_OPEN, (long)"/EXT4.TXT", 0, 0);
     if (fd < 0) {

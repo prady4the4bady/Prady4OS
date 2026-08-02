@@ -44,7 +44,7 @@ static int streq(const char *a, const char *b) {
     return a[i] == 0 && b[i] == 0;
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     const char *newname = "KILROY";
     if (nsi(SYS_SETNAME, (long)newname, 0, 0) != 0)
         fail("SYS_SETNAME returned error");

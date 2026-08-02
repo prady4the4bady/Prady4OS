@@ -42,7 +42,7 @@ __attribute__((noreturn)) static void fail(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct sysinfo si;
     if (nsi(SYS_SYSINFO, (long)&si, 0, 0) != 0)
         fail("syscall returned nonzero");

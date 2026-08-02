@@ -42,7 +42,7 @@ __attribute__((noreturn)) static void fail(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     volatile const unsigned int *page =
         (volatile const unsigned int *)METRIC_USER_VA;
 

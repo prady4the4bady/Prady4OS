@@ -37,7 +37,7 @@ __attribute__((noreturn)) static void fail(const char *why) {
     for (;;) { }
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long pid = nsi(SYS_FORK, 0, 0, 0);
     if (pid < 0)
         fail("fork failed");

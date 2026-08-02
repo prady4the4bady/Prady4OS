@@ -26,7 +26,7 @@ static inline long nsi(long n, long a1, long a2, long a3) {
 static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
 static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* Read-only / query syscalls that take user pointers — wild args -> -EFAULT/
      * -EBADF/-EINVAL, no destructive side effect, cannot self-terminate.
      * NB: SYS_READ (5) is deliberately EXCLUDED — read(fd=0,...) drains the

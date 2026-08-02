@@ -60,7 +60,7 @@ static void wrdec(long v) {
     wr(&buf[i + 1]);
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long prev = nsi(SYS_CLOCK, 0, 0, 0);
     if (prev < 0) {
         wr("RTC_MONO FAIL: SYS_CLOCK returned an error\n");

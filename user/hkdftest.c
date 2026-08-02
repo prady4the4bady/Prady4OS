@@ -77,7 +77,7 @@ static const uint8_t TC3_OKM[42] = {
     0x9d,0x20,0x13,0x95,0xfa,0xa4,0xb6,0x1a,0x96,0xc8
 };
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     uint8_t okm[82];
     int ok = 1;
 

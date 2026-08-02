@@ -43,7 +43,7 @@ static int contains(const char *hay, long hn, const char *needle) {
     return 0;
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* A unique marker for THIS probe — deliberately not a sentinel any gate
      * greps directly (the gate keys on PRADYOS_DMESG_OK below). */
     const char *marker = "DMESGRINGMARKER-750";

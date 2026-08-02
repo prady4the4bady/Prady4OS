@@ -73,7 +73,7 @@ static int seen(const struct audit_entry *e, long n,
     return 0;
 }
 
-__attribute__((noreturn)) void _start(void) {
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     (void)nsi(SYS_SOCK_CONNECT, (long)HOST_BE, PORT_ALLOWED, 0);
     (void)nsi(SYS_SOCK_CONNECT, (long)HOST_BE, PORT_DENIED, 0);
 
