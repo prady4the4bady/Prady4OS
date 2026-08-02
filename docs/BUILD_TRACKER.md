@@ -128,3 +128,55 @@ rate.** What is achievable is a defensible x86_64 build with the crypto chain
 closed and the two open races fixed. If the deadline is fixed, the useful
 decision is which subset ships — and that is a scope call, not an engineering
 one.
+
+---
+
+## 6. OPEN-10 stress budget — result, and what it does NOT show
+
+**Run: 20 × `smoke-sfs-btree` at `QEMU_SMP=4`, serial, clean host
+(0 HOST-ENV failures — DDR-823's detector confirms QEMU started every time).**
+
+```
+pass=4  fail=16  hostenv=0
+```
+
+**80% failure — and NONE of it is OPEN-10.**
+
+| signature | count |
+|---|---|
+| `'btree churn FAIL'` — **the CI signature** | **0 / 20** |
+| `required pattern '[sfs] btree churn OK' not found` — a **timeout** | 16 / 20 |
+
+The probe never reported failure. It never *finished*, within the gate's 90 s
+window, on this host, under `-smp 4`.
+
+**This is a different defect from OPEN-10 and must not be counted as it.**
+OPEN-10 is the probe explicitly printing `btree churn FAIL`; this is the probe
+printing nothing. Treating an 80% timeout rate as "OPEN-10 confirmed at 80%"
+would repeat the exact error this project has already paid for once — matching
+failures on colour rather than on identity (the run 30640007581 misattribution).
+
+**Most likely cause of the timeouts, stated as a hypothesis:** the gate is
+specified `-smp 1 / TIMEOUT_S=90`, and this host runs WSL2 under TCG. Adding
+three vCPUs multiplies the emulation work without adding host parallelism, so
+90 s is plausibly just too short here. That would make the timeouts a
+**measurement artefact of my stress setup**, not a kernel defect — the standard
+`-smp 1` gate passes.
+
+**What that means for OPEN-10:** the local budget produced **no evidence either
+way**. The only evidence remains the two CI occurrences (`smoke-smp` shard 5,
+`smoke-rqstress` shard 3, consecutive runs, both `-smp 4`). Per the standing
+rule — red again ⇒ do not promote — promotion stays blocked.
+
+### Next step for OPEN-10, corrected
+
+Do **not** re-run the local budget at 90 s; it measures the host. Instead:
+
+1. Re-run with `TIMEOUT_S=300` at `-smp 4` to separate "too slow here" from
+   "does not complete". If the timeouts vanish, they were the artefact above and
+   the local host simply cannot host this budget at 90 s.
+2. The signature that matters is `btree churn FAIL`. Only a run producing *that*
+   string is data about OPEN-10.
+3. Failing local reproduction, the cheaper path is CI itself: OPEN-10 has
+   appeared in 2 of the last ~4 runs, so a handful of `workflow_dispatch` runs on
+   one tip gives a rate on the machine where it actually occurs.
