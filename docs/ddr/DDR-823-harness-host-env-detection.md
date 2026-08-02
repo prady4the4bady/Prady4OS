@@ -89,3 +89,47 @@ argued about.
 previous session were invalidated this way, including a `smoke-x25519` PASS that
 therefore cannot be trusted. The harness now names the failure, but it cannot
 make concurrent runs correct.
+
+## §Third-instance audit (requested) — results
+
+Audited for other hand-maintained lists that mirror a directory or a set, where
+drift is silent and looks like success.
+
+| candidate | verdict |
+|---|---|
+| **syscall dispatch table** | **CLEAN as a list.** Derived via 79 `syscall_register()` calls, not an array literal. All 76 `SYS_*` defines verified registered — zero drift. |
+| `docs/AETHER_MASTER_FEATURES.md` | Names 14 source files in prose. **Not load-bearing** — it documents, nothing builds or gates from it. Drift here is a stale doc, not a silent green. Left as prose. |
+| `smoke-*` lists in `docs/**` | Prose in DDRs describing their own gate. Same reasoning. The *authoritative* list is `tools/ci/gate_shards.txt`, which `ci-shard-check` asserts. |
+| **`user/` `_start` attributes** | **WAS an instance.** Fixed above with `ci-start-align-check`. |
+
+### But the audit found a live trap of the same family
+
+`syscall_register()` was:
+
+```c
+if (num < MAX_SYSCALLS)
+    table[num] = fn;
+```
+
+An out-of-range registration was **silently discarded**. The syscall then
+returned `-ENOSYS` at runtime — so the symptom would surface in a gate, far from
+the cause, looking like a broken handler rather than a table that was never
+populated.
+
+This was not hypothetical. `MAX_SYSCALLS` was **80**, and NSI **77–87** are
+already sequenced in the work queue: ACC 77/78, AGS 79/80, agent-update 81,
+memory 82/83, checkpoint 84/85, rewrite-approve 86, read-audit 87.
+
+**Everything from 80 up would have registered into the void** — starting with
+AGS's `SYS_GOAL_VERIFY`. The first symptom would have appeared during DDR-814,
+several slices after the cause, presenting as an Ed25519 verification bug.
+
+Fixed: `MAX_SYSCALLS` raised to 128, and `syscall_register()` now **panics at
+boot** on overflow instead of dropping. A programming error is reported where it
+is committed, not where it eventually hurts. Verified: `smoke` and `smoke-user`
+both still pass with the change.
+
+That is now four instances of one bug in two sessions —
+`ci.yml`/Makefile/`_start`/`syscall_register` — differing only in which silent
+drop they perform. The general rule earned here: **when a check discards input
+rather than rejecting it, the discard must be loud.**

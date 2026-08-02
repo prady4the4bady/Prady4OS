@@ -25,7 +25,12 @@ void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
 void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
 
-#define MAX_SYSCALLS 80   /* NSI-v2 table size (ADR-022); headroom past NSI 64 (DDR-730) */
+#define MAX_SYSCALLS 128  /* NSI-v2 table size (ADR-022). Raised 80->128 in the
+                           * DDR-823 audit: NSI 77-87 are already sequenced and
+                           * 80+ would have registered into the void. 128 is
+                           * headroom, not a prediction — syscall_register()
+                           * now panics rather than dropping silently, so the
+                           * next overflow announces itself at boot. */
 
 static syscall_fn table[MAX_SYSCALLS];
 /* syscall_kstack_top moved into the percpu area at [gs:16] (DDR-SMP-3b); the
@@ -48,9 +53,28 @@ static inline uint64_t rdmsr(uint32_t msr) {
     return ((uint64_t)hi << 32) | lo;
 }
 
+/* DDR-823 audit. This used to be a bare `if (num < MAX_SYSCALLS)` — an
+ * out-of-range registration was SILENTLY DISCARDED. The syscall then returned
+ * -ENOSYS at runtime, so the symptom appeared in a gate, far from the cause,
+ * looking like a broken handler rather than a table that was never populated.
+ *
+ * That matters right now rather than hypothetically: NSI 77-87 are already
+ * sequenced (ACC 77/78, AGS 79/80, agent-update 81, memory 82/83, checkpoint
+ * 84/85, rewrite-approve 86, read-audit 87). With the old MAX_SYSCALLS of 80,
+ * everything from 80 up would have registered into the void.
+ *
+ * Now it is loud and it is at boot, where a programming error belongs. Same
+ * principle as ci-shard-check and ci-start-align-check: a silent drop that
+ * looks like success is the failure mode this project keeps paying for. */
 void syscall_register(unsigned num, syscall_fn fn) {
-    if (num < MAX_SYSCALLS)
-        table[num] = fn;
+    if (num >= MAX_SYSCALLS) {
+        kputs("PANIC: syscall_register() past MAX_SYSCALLS — raise it in "
+              "kernel/syscall/syscall.c. NSI numbers are append-only, so this "
+              "is a table-size bug, never a reason to reuse a number.\r\n");
+        for (;;)
+            __asm__ volatile("cli; hlt");
+    }
+    table[num] = fn;
 }
 
 long syscall_dispatch(long num, long a1, long a2, long a3, long a4) {
