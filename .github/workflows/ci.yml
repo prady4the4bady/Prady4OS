@@ -27,6 +27,13 @@ jobs:
       - name: Gate-shard completeness (DDR-817)
         run: make ci-shard-check
 
+      # DDR-823: every user/ _start carries force_align_arg_pointer. A process
+      # entry point gets RSP 16-byte aligned; the compiler assumes the call
+      # convention. Third instance of "a hand-maintained thing that drifts
+      # silently", so it is asserted rather than remembered.
+      - name: User entry-point stack alignment (DDR-823)
+        run: make ci-start-align-check
+
   # DDR-817. Was ONE serial job running 110 QEMU gates in 2 h 08 m, which was
   # the entire CI critical path — the other jobs here finish in under 30 s
   # combined. Shared setup is ~49 s against ~7 600 s of boots, so the work is

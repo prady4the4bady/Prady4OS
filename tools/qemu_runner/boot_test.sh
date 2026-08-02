@@ -22,10 +22,23 @@ TIMEOUT_S="${TIMEOUT_S:-30}"
 # corrupting long-timeout gates). CI leaves this unset — the default is used.
 SERIAL_LOG="${SERIAL_LOG:-$(mktemp)}"
 
+# DDR-823 / OPEN-9. QEMU's own startup errors go to STDERR, which this harness
+# used to leave uncaptured. When QEMU refuses to start — most often because a
+# leaked qemu-system-x86_64 from a previous run still holds the image's write
+# lock — it exits before emitting a single serial byte. The harness then saw an
+# empty capture file and reported "kernel sentinel not found", i.e. it blamed
+# the kernel for a host problem.
+#
+# That misattribution is expensive: it is indistinguishable from a genuine boot
+# failure, it reproduces "5/5" for as long as the orphan lives, and it clears on
+# its own when the orphan is reaped — which is exactly the OPEN-9 signature that
+# twice caused a working change to be blamed and reverted.
+QEMU_ERR="$(mktemp)"
+
 if [ ! -f "$IMG" ]; then
     echo "[smoke] no bootable image at '$IMG' yet — expected during Phase 0."
     echo "[smoke] SKIP (nothing to boot)."
-    rm -f "$SERIAL_LOG"
+    rm -f "$SERIAL_LOG" "$QEMU_ERR"
     exit 0
 fi
 
@@ -214,7 +227,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${RNGDEV[@]}" \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
-    &
+    2>"$QEMU_ERR" &
 qemu_pid=$!
 
 if [ "$early_exit_eligible" -eq 1 ]; then
@@ -231,18 +244,52 @@ if [ "$early_exit_eligible" -eq 1 ]; then
 fi
 wait "$qemu_pid" 2>/dev/null || true
 
-# Checked FIRST: a probe failure is a real failure regardless of whether this
-# gate's own sentinels happened to appear. Running it after the required-pattern
-# checks would let a gate report "PASS" for a boot in which something broke.
+# DDR-823 / OPEN-9 — checked BEFORE every other verdict, including the probe
+# check. If QEMU never ran, nothing downstream carries information: the serial
+# log is empty for a host reason, and every assertion below would report a
+# kernel or probe fault that did not happen.
+#
+# Distinct exit code 3, not 1. A host-environment failure and a failing gate are
+# different events and must not be summed: "5/5 red" means something completely
+# different when all five never booted.
+if [ -s "$QEMU_ERR" ] && grep -qiE "Failed to get \"?write\"? lock|Is another process using the image" "$QEMU_ERR"; then
+    echo "[smoke] HOST-ENV FAIL — STALE QEMU HOLDING IMAGE LOCK."
+    echo "[smoke] QEMU refused to start, so this run says NOTHING about the kernel."
+    echo "[smoke] A leaked qemu-system-x86_64 from an earlier run still holds"
+    echo "[smoke]   $IMG. Fix the host, then re-run:"
+    echo "[smoke]     pkill -f qemu-system-x86_64"
+    echo "[smoke] Do NOT run two QEMU gates concurrently — they share this image."
+    echo "[smoke] --- qemu stderr ---"
+    sed 's/^/[smoke]   /' "$QEMU_ERR"
+    rm -f "$SERIAL_LOG" "$QEMU_ERR"
+    exit 3
+fi
+
+# Any other QEMU startup refusal (bad device, missing file, unsupported option)
+# is equally not a kernel result. Matched on QEMU's own "qemu-system-x86_64:"
+# prefix, which it uses for fatal argument/device errors, and only when the
+# serial log is empty — a warning mid-run must not mask a real boot.
+if [ -s "$QEMU_ERR" ] && ! [ -s "$SERIAL_LOG" ] && grep -q "^qemu-system-x86_64:" "$QEMU_ERR"; then
+    echo "[smoke] HOST-ENV FAIL — QEMU refused to start; no serial output was produced."
+    echo "[smoke] This is not a kernel failure. QEMU stderr:"
+    sed 's/^/[smoke]   /' "$QEMU_ERR"
+    rm -f "$SERIAL_LOG" "$QEMU_ERR"
+    exit 3
+fi
+
+# Checked FIRST among guest verdicts: a probe failure is a real failure
+# regardless of whether this gate's own sentinels happened to appear. Running it
+# after the required-pattern checks would let a gate report "PASS" for a boot in
+# which something broke.
 if ! check_global_forbidden; then
-    rm -f "$SERIAL_LOG"
+    rm -f "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"
     cat "$SERIAL_LOG"
-    rm -f "$SERIAL_LOG"
+    rm -f "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 # Each non-empty line of EXTRA_SENTINEL is a literal pattern that must also appear.
@@ -253,7 +300,7 @@ while IFS= read -r pat; do
     if ! grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — required pattern '$pat' not found. Serial output was:"
         cat "$SERIAL_LOG"
-        rm -f "$SERIAL_LOG"
+        rm -f "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF
@@ -265,12 +312,12 @@ while IFS= read -r pat; do
     if grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — forbidden pattern '$pat' appeared. Serial output was:"
         cat "$SERIAL_LOG"
-        rm -f "$SERIAL_LOG"
+        rm -f "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF
 $FORBIDDEN_SENTINEL
 EOF
 echo "[smoke] PASS — saw '$SENTINEL'$( [ "$extra_count" -gt 0 ] && echo " + $extra_count FS pattern(s)" )."
-rm -f "$SERIAL_LOG"
+rm -f "$SERIAL_LOG" "$QEMU_ERR"
 exit 0
