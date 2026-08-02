@@ -45,6 +45,13 @@ All entries below are **shipped**.
   no hardware acceleration so the same source builds for x86_64/aarch64/riscv64.
   Validated against four FIPS 180-4 vectors incl. 1M `a`; gate `smoke-sha256`.
   Prerequisite for DDR-812, §J-03, ACC and AGS.
+- **Kernel entropy** (DDR-816) — virtio-rng primary over the existing generic
+  transport, RDSEED secondary (x86-only, CPUID-gated), and **no third source**:
+  `rng_bytes()` fails and crypto refuses to start rather than falling back to
+  jitter, because a source that silently degrades is worse than one obviously
+  absent. `rng_source()` names the active source in the boot log every boot.
+  Gate `smoke-rng`; arm B (fixed buffer) is what makes it discriminating.
+  Unblocks DDR-813/814/815, all of which need keys and nonces.
 - **Metric lockbox** (DDR-812, F#68 §S5) — authoritative record inside the
   DDR-795 `metric_page` frame, which ring 3 maps RO+NX, so tamper-resistance
   is a page-table property rather than a path check. SFS was rejected: the VFS

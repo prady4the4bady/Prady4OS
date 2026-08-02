@@ -91,6 +91,14 @@ fi
 # Optional NVMe controller (DDR-765) — attached only when QEMU_NVME is set, so
 # the smoke-nvme gate exercises controller bring-up + Identify while every other
 # gate boots without an NVMe device (the driver is a no-op when none is present).
+# DDR-816: virtio-rng, attached only when QEMU_RNG is set. Every other gate
+# therefore boots without an entropy device and exercises the fail-closed path.
+RNGDEV=()
+if [ -n "${QEMU_RNG:-}" ]; then
+    RNGDEV=(-object rng-random,filename=/dev/urandom,id=rng0
+            -device virtio-rng-pci,rng=rng0)
+fi
+
 NVMEDEV=()
 if [ -n "${QEMU_NVME:-}" ]; then
     NVMEDEV=(-drive if=none,format=raw,file=build/nvme.img,id=nvm
@@ -141,6 +149,7 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'PRADYOS_SIGPIPE_STUB' 'SIGPIPE FAIL' \
     'PRADYOS_SHA256_STUB' 'SHA256 FAIL' \
     'PRADYOS_LOCKBOX_STUB' 'LOCKBOX FAIL' \
+    'PRADYOS_RNG_STUB' 'RNG FAIL' \
     'PRADYOS_FPU_FAIL' 'PRADYOS_NVME_IRQ_FAIL' 'PRADYOS_NVME_PRP_FAIL' \
     'PRADYOS_NVME_RW_FAIL' 'PRADYOS_SFS_NESTED_FAIL' 'PRADYOS_SFS_PERSIST_FAIL' \
     'allowlist FAIL' 'ap preempt FAIL' 'blk integrity FAIL' 'btree churn FAIL' \
@@ -201,6 +210,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \
     "${NVMEDEV[@]}" \
+    "${RNGDEV[@]}" \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
     &

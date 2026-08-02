@@ -125,6 +125,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/rtc/rtc.c \
                kernel/drivers/fwcfg/fwcfg.c \
                kernel/crypto/sha256.c \
+               kernel/drivers/rng/virtio_rng.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
                kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
@@ -140,14 +141,14 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
-               -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc -Ikernel/drivers/fwcfg -Ikernel/crypto \
+               -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc -Ikernel/drivers/fwcfg -Ikernel/crypto -Ikernel/drivers/rng \
                -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/drivers/gpu -Ikernel/drivers/nvme -Ikernel/drivers/input -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs \
                -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso -Ikernel/aether -Ikernel/apic
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
@@ -362,6 +363,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_SRC) $(USER_WX_SR
 	$(CC) $(KCFLAGS) -c kernel/drivers/rtc/rtc.c            -o build/rtc.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/fwcfg/fwcfg.c        -o build/fwcfg.o
 	$(CC) $(KCFLAGS) -c kernel/crypto/sha256.c              -o build/sha256.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
@@ -1519,6 +1521,23 @@ smoke-lockbox: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_LOCKBOX_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_LOCKBOX_STUB\nLOCKBOX FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-816 entropy. A gate cannot prove randomness; these arms assert what it
+# CAN prove. The likeliest real bug is a driver that appears to work and
+# returns the same buffer every time, so the kernel self-test draws twice and
+# compares byte-for-byte. Asserting "the call returned 0" would pass against a
+# stub that memsets zero.
+#
+# Every OTHER gate boots with no entropy device, so the suite collectively
+# exercises the fail-closed path: if rng_bytes() wrongly returned success with
+# zeros, the self-test would print PRADYOS_RNG_STUB and GLOBAL_FORBIDDEN would
+# fail all of them.
+smoke-rng: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_RNG=1 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_RNG_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_RNG_STUB\nRNG FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 
 
 

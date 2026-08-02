@@ -47,6 +47,7 @@
 #include "vdso_page.h"
 #include "metric_page.h"  /* F#68/DDR-795: sealed objective root page */
 #include "fwcfg.h"        /* DDR-804: per-boot probe selection */
+#include "rng.h"          /* DDR-816: kernel entropy */
 #include "vmm_cow.h"
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
@@ -1969,11 +1970,19 @@ void kmain(struct boot_info *bi) {
             virtio_net_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x03)    /* virtio GPU (L7 slice 0) */
             virtio_gpu_init(d->bus, d->dev, d->func);
+        /* DDR-816: virtio-rng. Matched on device_id (0x1040 + type 4), not
+         * class_code — the 0x1040+type rule is structural to modern virtio,
+         * whereas the class byte is not something to assert from memory. */
+        if (d->vendor_id == 0x1AF4 &&
+            (d->device_id == 0x1044 || d->device_id == 0x1005))
+            virtio_rng_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x09)    /* virtio input/pointer (DDR-705) */
             virtio_input_init(d->bus, d->dev, d->func);
         if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
             nvme_init(d->bus, d->dev, d->func);
     }
+    rng_init();                          /* DDR-816: entropy, fail-closed */
+    rng_selftest();                      /* DDR-816: two draws must differ */
     net_init();                          /* NET-B: bring up lwIP over virtio-net */
     aether_init();                       /* Layer 6: PMM-pool queue + audit rings */
     aether_selftest();                   /* Layer 6: smoke-aether-queue (PRADYOS_AETHER_QUEUE_OK) */

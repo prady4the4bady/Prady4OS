@@ -2651,3 +2651,54 @@ the arms differ" would be unfounded. It holds.
 The re-run scrubs all derived artefacts per arm and asserts each edit actually
 applied before building, so a silently non-matching edit now aborts instead of
 producing a confident verdict for unmodified code.
+
+## DDR-816 — kernel entropy, fail-closed (unblocks §S1–§S4)
+
+No entropy source existed: `grep -il "rdrand|rdseed|random|entropy|csprng"` over
+`kernel/` matched one file, and the match was the word "random" in a comment.
+Every remaining §S feature is cryptographic, so this — not ACC — was the §S
+critical path.
+
+virtio-rng primary, over the already-generic transport (`virtio_pci_attach` /
+`negotiate` / `setup_queue` / `driver_ok` / `notify` serve blk/net/gpu/input
+today), so this is a new consumer rather than new transport code. RDSEED
+secondary and CPUID-gated, which can never be the only source because riscv64 and
+aarch64 lack it.
+
+**No third source — fail closed.** A jitter fallback was rejected deliberately:
+under TCG, timing variance is largely a host-scheduler artefact and is not
+trustworthy from inside the guest, and a source that silently degrades to
+predictable output is strictly worse than one obviously absent — absence is
+detectable, degradation is not. Same argument as DDR-811's hand-rolled hash, but
+sharper: a wrong hash fails a vector immediately, whereas a weak key produces
+ciphertext that looks perfect and protects nothing.
+
+Device matched on `device_id` (`0x1040 + type 4` = `0x1044`), not `class_code` —
+the `0x1040+type` rule is structural to modern virtio, whereas the class byte is
+not something to assert from memory. Confirmed empirically: `smoke-rng` passes.
+
+| arm | kernel | verdict |
+|---|---|---|
+| A — no virtio-rng device attached | `4a6b5e680038` | FAIL |
+| B — driver returns a fixed buffer | `b2b2b57ece36` | FAIL |
+| C — correct | `4a6b5e680038` | **PASS** |
+
+Arms A and C share a SHA **correctly**: arm A varies the QEMU invocation (no
+`-device virtio-rng-pci`), not the source, so the same binary is what should be
+under test. Arm B varies the source and has its own SHA.
+
+Arm B is the load-bearing one — the device attaches, the queue works, and
+`rng_bytes()` returns success while handing back a constant. That is the
+likeliest real implementation bug, and only the two-draw byte-for-byte
+comparison catches it. Asserting "the call returned 0" would pass against it.
+
+Every gate other than `smoke-rng` boots with **no** entropy device, so the suite
+collectively exercises the fail-closed path: a `rng_bytes()` that wrongly
+returned success with zeros would print `PRADYOS_RNG_STUB` and
+`GLOBAL_FORBIDDEN` would fail all of them.
+
+Nine gates PASS on `4a6b5e680038`, including `smoke-shell` — which failed 5/5 on
+this workstation the previous day on functionally identical code. Same code,
+recovered host, opposite verdict. That confirms the DDR-816 §Implementation
+correction: OPEN-9 is host-state dependent, and reverting the attribution rather
+than "fixing" a non-existent regression was right.

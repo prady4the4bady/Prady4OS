@@ -97,6 +97,34 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-5 SESSION — 2026-08-02
+
+**`main` = `a4d1569`** (promoted; DDR-811 SHA-256 + DDR-812 lockbox + ADR-035 +
+designs, two greens on the exact tip).
+
+**DDR-816 (entropy) re-applied and A/B-verified** — kernel `4a6b5e680038`:
+A no-device FAIL · B fixed-buffer `b2b2b57ece36` FAIL · C correct PASS.
+Arms A and C share a SHA **correctly**: arm A varies the QEMU invocation, not the
+source. Nine gates green locally. Awaiting two CI greens.
+
+**OPEN-9 UPDATE — the host recovered.** `smoke-shell` now PASSES locally on
+functionally identical DDR-816 code that failed 5/5 the previous day. Same code,
+opposite verdict, no change in between. This confirms OPEN-9 is host-state
+dependent and that reverting the DDR-816 attribution was correct. **Keep treating
+local `smoke-shell` reds as informational until the host-side cause is found** —
+it has now produced two false attributions (OPEN-8 and DDR-816).
+
+**Historical red never diagnosed:** run 30640007581 on `258e439` failed
+`smoke-surfdestroy` (missing `PRADYOS_SURFDESTROY_CHURN_OK`). That is the OPEN-1
+signature from run 30151522978. Docs-only commit; every later commit passed. Left
+recorded rather than closed — OPEN-1 is still live in CI, not only locally.
+
+**Next:** DDR-813 (ACC) unblocks on DDR-816's greens. Its two spec bugs are
+already documented and MUST be fixed at design time: the owner CC box needs
+`agent_pubkey[32]` in the envelope (otherwise the owner's later offline read —
+the whole point — fails after any reboot), and `OWNER_PUBKEY[32]` must split into
+separate Ed25519 (sign) and X25519 (box) constants.
+
 ### 0.-4 SESSION CLOSE — 2026-08-01 late (READ FIRST)
 
 **HEAD `8677d6a` (DDR-812). `main` = `1d7637a`. Tree is CLEAN — DDR-816 was
