@@ -363,6 +363,8 @@ extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egre
 extern const unsigned char sovegresstest_elf_end[];
 extern const unsigned char hkdftest_elf[];            /* DDR-818: HKDF vectors */
 extern const unsigned char hkdftest_elf_end[];
+extern const unsigned char x25519test_elf[];          /* DDR-820: X25519 vectors */
+extern const unsigned char x25519test_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
@@ -1248,6 +1250,16 @@ static void fs_test_thread(void *arg) {
                                  "HKDFTEST", &hk) == ELF_OK && hk) {
                         sched_unblock(hk);
                         kputs("[user] ELF loaded (embedded); HKDF vector probe spawned\r\n");
+                    }
+                }
+                /* DDR-820: X25519 RFC 7748 vector probe, opt-in via DDR-804. */
+                if (probe_enabled("x25519")) {
+                    struct tcb *xk = 0;
+                    uint64_t xklen = (uint64_t)(x25519test_elf_end - x25519test_elf);
+                    if (elf_load((void *)(uintptr_t)x25519test_elf, xklen,
+                                 "X25519", &xk) == ELF_OK && xk) {
+                        sched_unblock(xk);
+                        kputs("[user] ELF loaded (embedded); X25519 vector probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("lockbox")) {

@@ -165,6 +165,12 @@ hkdftest_elf:
     incbin "build/hkdftest.elf"
 hkdftest_elf_end:
 
+global x25519test_elf
+global x25519test_elf_end
+x25519test_elf:
+    incbin "build/x25519test.elf"
+x25519test_elf_end:
+
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:
