@@ -131,3 +131,54 @@ read (proves it covers the message rather than being a copy of the ciphertext).
 A fourth check follows from Blocker 2 and must be in the gate: **write a message,
 simulate a reboot, and have the owner read it**. Without `agent_pubkey` in the
 envelope that read fails — and no arm above would have caught it.
+
+## Blocker 1 is CLEARED — and a fourth blocker replaces it
+
+DDR-816 shipped (`66ce819`): virtio-rng primary, RDSEED secondary, fail-closed,
+A/B-verified. `rng_bytes()` now exists and refuses rather than degrading.
+
+**Blocker 4 (new): ACC needs four more primitives, none of which exist.**
+
+Tree check after DDR-816, and the same false-positive trap DDR-811 recorded:
+
+```
+x25519:   1 file   <- comment text in kernel/crypto/rng.h
+chacha20: 1 file   <- comment text in kernel/crypto/rng.h
+poly1305: 1 file   <- comment text in kernel/crypto/rng.h
+ed25519:  0
+hkdf:     0
+```
+
+Every non-zero count is **prose in a comment I wrote**, not code. `kernel/crypto/`
+contains exactly `sha256.{c,h}` and `rng.h`.
+
+So ACC as specified needs **X25519, ChaCha20-Poly1305, Ed25519 and HKDF-SHA256**
+implemented in-kernel, pure C, constant-time on three architectures, each
+validated against published test vectors before use — per the standing crypto
+rule. That is not a detail inside DDR-813; it is four slices, and X25519 and
+Ed25519 in particular are substantially harder to get right than SHA-256:
+SHA-256 is a transcription of a spec with published vectors, whereas the curve
+arithmetic has non-obvious constant-time requirements where a working
+implementation and a *secure* one differ invisibly.
+
+### Recommended sequencing (revises this DDR's own §Design)
+
+1. **DDR-818 — HKDF-SHA256.** Trivial on DDR-811, published RFC 5869 vectors,
+   no new maths. Do it first because it is nearly free and both boxes need it.
+2. **DDR-819 — ChaCha20-Poly1305.** Self-contained, RFC 8439 vectors, no curve
+   arithmetic. Gives AEAD without touching asymmetric crypto.
+3. **DDR-820 — X25519.** RFC 7748 vectors. The first genuinely hard one.
+4. **DDR-821 — Ed25519.** RFC 8032 vectors. Needed by AGS (DDR-814) as well.
+5. **DDR-813 (this) — ACC**, once 818-821 are green.
+
+**Do not implement these inside DDR-813.** A channel feature that also lands four
+unvalidated primitives is a slice where a vector failure and a protocol failure
+are indistinguishable, and the whole point of the per-primitive gates is that
+they are separable.
+
+### What still stands from the original design
+
+Blockers 2 and 3 are unchanged and must be fixed whenever ACC is written:
+`agent_pubkey[32]` in the envelope (or the owner loses access at every reboot),
+and `OWNER_SIGN_PUBKEY` / `OWNER_BOX_PUBKEY` as separate constants. The envelope
+layout, key custody and gate design in §Design remain correct.
