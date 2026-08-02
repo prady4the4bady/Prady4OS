@@ -115,3 +115,43 @@ a comment stating the requirement**, and the gate asserts only what it can — t
 tampered input is rejected (arm C becomes the tamper arm). The limitation is
 recorded here rather than papered over, and it is the same class of gap that
 DDR-820/821 will have in larger form.
+
+## Implementation — two defects caught, and where the vectors earned their keep
+
+`kernel/crypto/aead.{c,h}` written and **verified against published vectors**:
+
+```
+poly1305 §2.5.2 (34-byte msg, 2-byte final block): OK
+chacha20 §2.4.2 (first 16 ct bytes):              OK
+```
+
+Two defects were introduced and caught within minutes of writing:
+
+1. **`ctlen_or(ptlen)`** — a typo for `ptlen`, caught by the compiler.
+2. **Incoherent Poly1305 short-block handling** — a conditional whose two
+   branches were identical, plus an implicit high bit that must NOT be set for a
+   short block. The spec is simpler: a full block gets an implicit 1 at bit 128;
+   a short block gets a literal `0x01` immediately after the data and no
+   implicit bit.
+
+Defect 2 is the instructive one. It compiles cleanly, and it produces a wrong tag
+**only** for messages that are not a multiple of 16 bytes. RFC 8439 §2.5.2 uses a
+34-byte message — final block of 2 bytes — so it catches it; a 16-byte-multiple
+vector would not have. That is the concrete argument for per-primitive vectors
+rather than only testing the composed AEAD, and for choosing vectors by which
+code path they reach rather than by convenience.
+
+### Verified on the host, not in QEMU
+
+This check ran under `gcc` on the host against the same source the kernel
+compiles. That was deliberate: the question was whether the arithmetic is correct
+at all, and a ~90 s boot per iteration is the wrong instrument for that. The
+in-kernel `smoke-aead` gate follows and tests the same source in the real
+environment — the host run does not replace it, it de-risks it.
+
+### Still true: the constant-time property is untested
+
+`aead_open` compares the tag in constant time and writes no plaintext before
+verifying. Both are enforced by construction and by the comment on the
+declaration. Neither is testable by any gate this project can run, and the
+`smoke-aead` arms do not pretend otherwise.
