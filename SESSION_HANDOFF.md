@@ -118,11 +118,29 @@ same image. This one has all four preconditions verified *before* the run:
    pass. It exited **0**.
 4. Nothing else was running.
 
-**VERIFIED vs ASSUMED, stated precisely:**
-- **Verified:** one clean-host PASS, exit 0.
-- **NOT verified:** repeatability. Three serial confirmation runs were launched
-  and had **not reported** by handoff time. **I did not remove the shard
-  exclusion**, because one pass after this defect's history is not enough.
+**VERIFIED vs ASSUMED, stated precisely (updated post-handoff):**
+- **Verified: THREE clean-host PASSes, all rc=0** — the initial run plus
+  confirmation runs 1 and 2, each on a verified-empty host. A fourth was still
+  running at session end.
+- **NOT done:** the shard exclusion was **left in place**. The bar written below
+  was 5/5; three is not five, and unexcluding on partial evidence with no
+  context left to fix a resulting CI red is the wrong trade. The evidence is
+  strong — finish the count first.
+
+**CI greens that landed after the handoff was first written:**
+
+| run | tip | verdict |
+|---|---|---|
+| `30773609553` | `1fa8495` | **success** |
+| `30773828417` | `e4bb576` (DDR-824) | **success** |
+| `30774291748` | `1e40464` (SHA-512 gate) | **success** |
+| `30803907180` | `6a0c571` (tracker sync) | in flight at session end |
+
+**`smoke-sha512` is therefore CI-green**, not merely locally A/B-verified.
+
+**Promotion note:** those are four greens on **four different tips**. The rule
+is three consecutive greens on **one** tip, so none of this promotes anything
+yet — pick the final tip and dispatch two more runs on it.
 
 **Next exact command:**
 ```
