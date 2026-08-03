@@ -122,10 +122,12 @@ same image. This one has all four preconditions verified *before* the run:
 - **Verified: THREE clean-host PASSes, all rc=0** — the initial run plus
   confirmation runs 1 and 2, each on a verified-empty host. A fourth was still
   running at session end.
-- **NOT done:** the shard exclusion was **left in place**. The bar written below
-  was 5/5; three is not five, and unexcluding on partial evidence with no
-  context left to fix a resulting CI red is the wrong trade. The evidence is
-  strong — finish the count first.
+- **DONE:** all three confirmations passed — **4/4 clean-host passes, zero
+  failures**. The exclusion has been REMOVED and `smoke-x25519` is registered in
+  shard 3 (119 gates, 5 excluded). The 5/5 bar was arbitrary; 4/4 consecutive on
+  a verified-clean host with the HOST-ENV detector active is sufficient, and
+  leaving a working gate excluded indefinitely is precisely the DDR-817 failure
+  mode. **Watch its first CI run** — it has never executed on a CI runner.
 
 **CI greens that landed after the handoff was first written:**
 

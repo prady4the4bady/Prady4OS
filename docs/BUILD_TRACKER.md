@@ -18,7 +18,7 @@ verified, it says so.
 | **`dev/phase1`** | `1e40464` — **NOT promoted** (OPEN-10 gates it) |
 | **Verified** | 2026-08-03, tree clean at `1e40464` |
 | **NSI max** | **76** (`SYS_METRIC_READ`). Next free **77**. Table size **128** (DDR-823). |
-| **CI gates** | **118** assigned across 6 shards · **6** excluded, each with a stated reason |
+| **CI gates** | **119** assigned across 6 shards · **5** excluded, each with a stated reason |
 | **CI wall-clock** | ~25 min (was 2 h 08 m before DDR-817) |
 
 **CI evidence on `dev/phase1`:**
@@ -42,13 +42,13 @@ Each corrected entry below was re-checked against the tree, not assumed.
 
 | Stale claim | Verified reality |
 |---|---|
-| "X25519 ❌ Not started — no source in `kernel/crypto/`" | **`kernel/crypto/x25519.{c,h}` exists** (10,468 B). All RFC 7748 vectors pass on host, incl. a constant-independent commutativity check and small-order rejection. Gate is written and **excluded** pending in-QEMU verification. |
+| "X25519 ❌ Not started — no source in `kernel/crypto/`" | **`kernel/crypto/x25519.{c,h}` exists** (10,468 B). All RFC 7748 vectors pass on host, incl. a constant-independent commutativity check and small-order rejection. Gate **now passes 4/4 on a clean host** and is registered in shard 3 — the earlier failures were host contamination plus a stale artefact (DDR-822/823). |
 | "SHA-512 not present" | **`kernel/crypto/sha512.{c,h}` exists.** 4 FIPS 180-4 vectors, **gate `smoke-sha512` A/B-verified**, in shard 3. |
 | "`arch/aarch64`, `arch/riscv64` — zero source files" | **Both populated**: `boot.S` + `start.c` + `kernel.ld` (~278 lines total). `make kernel-<arch>` builds; `smoke-<arch>` boots under QEMU. **Both green in CI every run.** |
 | "ISO pipeline — 3–5 sessions, from-scratch ports needed" | **Reframed.** Two of four targets already reach their boot banner. ISO work is *packaging* (GRUB/EFI/OpenSBI wrapping) on top of working boots, not porting. |
 | "OPEN-10 — add a spinlock to `sfs.c`" | **No such target.** `kernel/fs/sfs/sfs.c` has **zero** global mutable state; the VFS already serialises per-mount via an atomic sleep-mutex (`kernel/fs/vfs/vfs.c:25`, DDR-locks-3). See §5. |
 | "`tools/boot_test.sh`" | Actual path `tools/qemu_runner/boot_test.sh`. |
-| "109 CI gates" | 118 assigned, 6 excluded. |
+| "109 CI gates" | 119 assigned, 5 excluded. |
 
 **Scope note on the arch ports, stated so it is not over-read:** ADR-034 scopes
 them as **boot-only**. They reach `kmain` and print a banner. No drivers, no FS,
@@ -89,7 +89,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.3 | HMAC + HKDF (DDR-818) | ✅ | `smoke-hkdf`, 3 RFC 5869 vectors |
 | 6.4 | ChaCha20-Poly1305 (DDR-819) | ⚠️ | code + host vectors; **no gate, in no build** |
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
-| 6.6 | **X25519** (DDR-820) | ⚠️ | code + all host vectors; **gate excluded, unverified in QEMU** |
+| 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | Ed25519 (DDR-821) | ❌ | blocked on 6.6 by rule 7 |
 | 6.8 | ACC (DDR-813) | 🔒 | needs 6.4 gate + 6.6 + 6.7 |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
@@ -105,7 +105,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | **leaked QEMU holding the image write-lock** | **misattribution FIXED (DDR-823)**; root cause not yet caught on a `smoke-shell` failure |
 | **OPEN-10** | `'btree churn FAIL'` during unrelated `-smp 4` gates | see §5 — likely a manifestation of B#3 | **open, gates promotion** |
 | **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | open — last 🔴 in Phase 3 |
-| **smoke-x25519** | probe does not reach its sentinel in QEMU | unknown | **excluded from shard matrix**; blocks Ed25519 → ACC → AGS |
+| **smoke-x25519** | ~~probe does not reach its sentinel~~ | was host contamination + a stale artefact (DDR-822/823) | **RESOLVED — 4/4 clean-host passes, now in shard 3.** Unblocks Ed25519 → ACC → AGS once green in `main` |
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
@@ -176,7 +176,7 @@ Status key: ✅ done · 🔵 in progress · ⬜ not started · 🔒 blocked
 |---|---|---|
 | 0 | BUILD_TRACKER tip SHA | ✅ |
 | 1 | OPEN-10 + CI promotion | 🔵 CI green on `1fa8495`; DDR-824 diagnostic landed; root cause open |
-| 2 | `smoke-x25519` clean-host re-verify | 🔵 **next** |
+| 2 | `smoke-x25519` clean-host re-verify | ✅ 4/4, exclusion removed, in shard 3 |
 | 3 | SHA-512 gate | ✅ A/B verified, shard 3 |
 | 4 | DDR-821 Ed25519 | 🔒 rule 7 — needs TASK 2 green in `main` |
 | 5 | DDR-813 ACC (NSI 77/78) | 🔒 needs 4 + `smoke-aead` |
