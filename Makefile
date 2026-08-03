@@ -151,7 +151,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -425,6 +425,14 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_
 	$(CC) $(KCFLAGS) -c kernel/drivers/rtc/rtc.c            -o build/rtc.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/fwcfg/fwcfg.c        -o build/fwcfg.o
 	$(CC) $(KCFLAGS) -c kernel/crypto/sha256.c              -o build/sha256.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/sha512.c              -o build/sha512.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/fe25519.c             -o build/fe25519.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/x25519.c              -o build/x25519.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/hkdf.c                -o build/hkdf.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/aead.c                -o build/aead.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/ed25519.c             -o build/ed25519.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/acc.c                 -o build/acc.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/sys_acc.c            -o build/sys_acc.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -450,7 +458,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 786432 || { echo "kernel.bin exceeds 768 KiB — the stage-2 read window (24x64 sectors from LBA 17, DDR-733). Raise the chunk count in boot/stage2/stage2.asm and grow the 1 MiB disk image together (mind the 2 MiB PT_HI runtime ceiling checked next)."; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 1048576 || { echo "kernel.bin exceeds 1 MiB — the stage-2 read window (32x64 sectors from LBA 17, DDR-733 as raised by DDR-827). Raise the chunk count in boot/stage2/stage2.asm and grow the 1 MiB disk image together (mind the 2 MiB PT_HI runtime ceiling checked next)."; exit 1; }
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
 	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
 	 test $$phys -le $$(( 0x600000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x600000 — the 2 MiB PT_HI higher-half span (DDR-733). Extend PT_HI in boot/stage2/stage2.asm (second PT) before growing further."; exit 1; }
@@ -468,7 +476,7 @@ $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 	@test "$$(wc -c < $(STAGE1_BIN))" -eq 512 || { echo "stage1.bin is not 512 bytes (got $$(wc -c < $(STAGE1_BIN)))"; exit 1; }
 	$(NASM) $(NASM_WERROR) -f bin $(STAGE2_SRC) -o $(STAGE2_BIN)
 	@test "$$(wc -c < $(STAGE2_BIN))" -le 8192 || { echo "stage2.bin exceeds 8 KiB; Stage 1 only loads 16 sectors"; exit 1; }
-	truncate -s 1M $(IMG)
+	truncate -s 2M $(IMG)          # DDR-827: 1M->2M; must move with the stage2 chunk count
 	dd if=$(STAGE1_BIN) of=$(IMG) bs=512 seek=0  conv=notrunc status=none
 	dd if=$(STAGE2_BIN) of=$(IMG) bs=512 seek=1  conv=notrunc status=none
 	dd if=$(KERNEL_BIN) of=$(IMG) bs=512 seek=17 conv=notrunc status=none

@@ -136,9 +136,23 @@ enable_a20:
 ; reloaded by the mode switch). The unreal limits are RE-ARMED for every chunk,
 ; under cli, because a BIOS interrupt handler between chunks may reload segment
 ; registers and reset their cached limits; INT 13h itself runs with IF as the
-; BIOS left it. 24 chunks = 768 KiB read window (LBA 17+1536 fits the 1 MiB
-; disk); the PT_HI higher-half mapping spans 2 MiB, so the runtime ceiling is
-; image + BSS <= 2 MiB — both enforced by the Makefile.
+; BIOS left it.
+;
+; DDR-827: 32 chunks = 1 MiB read window (was 24 = 768 KiB). ACC is the first
+; feature needing the whole crypto stack resident, and linking it took kernel.bin
+; 12,646 bytes past the old window — the image built, the size gate caught it,
+; and the image did not boot because the TAIL of the kernel was never read.
+;
+; Three coupled numbers, all three moved together or none:
+;   1. this chunk count            32 x 64 x 512 = 1,048,576 B read
+;   2. the disk image size         1 MiB -> 2 MiB (from LBA 17 a 1 MiB image
+;                                  holds only 1,039,872 B, LESS than the new
+;                                  window, so stage 2 would read past its end)
+;   3. the Makefile size gate      786,432 -> 1,048,576
+; The PT_HI higher-half mapping spans 2 MiB, so the runtime ceiling stays
+; image + BSS <= 2 MiB; measured headroom at the time of this change was
+; 1,253,504 bytes, so 32 chunks does not approach it. All enforced by the
+; Makefile.
 ;
 ; go_unreal: cache a 4 GiB limit into DS and ES (clobbers AX; call with IF off).
 go_unreal:
@@ -166,7 +180,7 @@ load_kernel:
     mov si, msg_ldk
     call puts16
     mov dword [kdst], KERNEL_PHYS
-    mov cx, 24
+    mov cx, 32                      ; DDR-827: 24->32 chunks = 1 MiB read window
 .chunk:
     push cx
     mov si, kernel_dap              ; read 64 sectors -> bounce @0x10000

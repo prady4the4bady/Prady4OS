@@ -158,9 +158,9 @@ void syscall_init(void) {
     sys_io_uring_register();              /* SYS_IO_URING_* (PROC-E) */
     sys_aether_register();                /* SYS_GET_MODE..SYS_SET_MEM_LIMIT (Layer 6) */
     sys_socket_register();                /* SYS_SOCK_* proxy sockets (ADR-027) */
-    /* DDR-813 ACC: NOT registered yet — linking acc.o + its five crypto deps
-     * pushes kernel.bin 12,646 bytes past the DDR-733 768 KiB stage-2 load
-     * window and the image stops booting. See DDR-827. */
+    sys_acc_register();                   /* SYS_ACC_SEAL / SYS_ACC_OPEN (DDR-813,
+                                           * linkable since DDR-827 raised the
+                                           * stage-2 window to 1 MiB) */
     sys_fb_register();                    /* SYS_FB_* framebuffer surface (DDR-702) */
     sys_input_register();                 /* SYS_INPUT_POLL / SYS_MOUSE_POLL (DDR-703/705) */
     sys_surface_register();               /* SYS_SURFACE_* per-client surfaces (DDR-706) */

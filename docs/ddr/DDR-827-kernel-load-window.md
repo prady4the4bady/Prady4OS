@@ -1,6 +1,6 @@
 # DDR-827 — ACC does not fit: the 768 KiB stage-2 load window is full
 
-**Status:** §Blocker recorded, fix designed, NOT implemented
+**Status:** Implemented
 **Date:** 2026-08-03
 **Blocks:** DDR-813 (ACC syscalls 77/78), and therefore DDR-814 (AGS) and
 DDR-815 (rotation).
@@ -26,10 +26,9 @@ The Makefile's own size gate caught it, and the resulting image **does not
 boot** — `smoke` fails with no kernel sentinel, because stage 2 reads only
 24 × 64 sectors from LBA 17 and the tail of the kernel is never loaded.
 
-**The tree has been reverted to a booting state** (774,502 bytes, `smoke`
-PASSES). `acc.{c,h}`, `sys_acc.c`, the NSI 77/78 numbers and the ACC audit codes
-are all committed; only the *link* and the `sys_acc_register()` call are backed
-out, with a comment at the call site pointing here.
+The tree was first reverted to a booting state (774,502 bytes) so that no commit
+ever left `dev/phase1` unbootable, and the window was then raised in a separate
+step — the fix below.
 
 ## §Why this is worth a DDR rather than a quick bump
 
@@ -50,15 +49,24 @@ Three coupled numbers in three different files. That is exactly the shape of
 thing this project has been bitten by seven times — change one, the others drift
 silently. So it gets a design note and its own verification, not a sed.
 
-## §Design — raise the window to 1.5 MiB, in one commit
+## §Design — raise the window to 1 MiB, in one commit — IMPLEMENTED
 
-- `boot/stage2/stage2.asm`: chunk count **24 → 48** (48 × 64 × 512 = 1,572,864 B).
-- `Makefile`: `truncate -s 1M` → `-s 2M` on `build/pradyos.img`, and the size
-  gate 786,432 → 1,572,864.
-- Re-check the PT_HI ceiling assertion still holds at the new size; 1.5 MiB of
-  kernel plus the 4 MiB relocation base stays under 2 MiB of page-table reach
-  **only if** that ceiling is measured from the load base, which must be
-  confirmed by reading the assertion rather than assumed.
+The design first said 48 chunks (1.5 MiB). **Reduced to 32 (1 MiB) after
+measuring** rather than reasoning: the PT_HI assertion caps image + BSS at
+`0x600000`, and `__bss_end` sits at physical `0x4cdf80`, leaving **1,253,504
+bytes** of headroom. 32 chunks doubles the window, clears the 799,078-byte
+kernel by 249 KB, and does not approach the ceiling. 48 would have been closer
+to PT_HI for no benefit, and each extra chunk is another INT13 round trip at
+boot.
+
+- `boot/stage2/stage2.asm` line 183: chunk count **24 → 32**
+  (32 × 64 × 512 = 1,048,576 B).
+- `Makefile`: `truncate -s 1M` → `-s 2M` on `$(IMG)`. **Not optional** — from
+  LBA 17 a 1 MiB image holds only 1,039,872 B, which is LESS than the new
+  window, so stage 2 would read past the end of the file.
+- `Makefile` size gate: 786,432 → 1,048,576.
+- The PT_HI assertion at `0x600000` is left unchanged; it was measured, not
+  assumed, and has ample headroom.
 
 **Verification, and it must be all four:**
 1. `make image` — size gate passes at the new limit.
@@ -85,8 +93,7 @@ library version would be a different, weaker feature wearing the same name.
   (seal = CAP_AGENT, open = CAP_SOVEREIGN), copyin/copyout throughout.
 - NSI 77/78 and `AR_ACC_SEALED`/`AR_ACC_OPENED`/`AR_ACC_REJECTED` — committed,
   append-only.
-- **NOT linked, NOT registered, NOT gated.** `smoke-acc` cannot exist until the
-  syscalls do.
-
-ACC is **not shipped** and must not be counted as such until DDR-827 lands and
-`smoke-acc` is green.
+- **NOW LINKED AND REGISTERED** — the window fix landed and `kernel.bin`
+  (799,078 B) boots. `make smoke` PASSES with ACC resident.
+- **Still NOT gated:** `smoke-acc` and its ring-3 probe are the remaining work.
+  ACC is not shipped until that gate is green.

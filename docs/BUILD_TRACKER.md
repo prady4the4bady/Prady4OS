@@ -93,7 +93,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
-| 6.8 | ACC (DDR-813) | 🔴 | envelope + `sys_acc.c` written, host-verified, NSI 77/78 assigned. **BLOCKED by DDR-827**: linking acc.o + 5 crypto deps puts kernel.bin 12,646 B past the DDR-733 768 KiB load window and the image stops booting. Not linked, not registered, not gated. |
+| 6.8 | ACC (DDR-813) | ⚠️ | envelope + syscalls 77/78 **LINKED AND REGISTERED**; DDR-827 raised the stage-2 window 768 KiB → 1 MiB. `smoke`, `smoke-user` (7 patterns), `smoke-fs` (12 patterns) all PASS with ACC resident. **Still no `smoke-acc`** — not shipped until that gate is green. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---
