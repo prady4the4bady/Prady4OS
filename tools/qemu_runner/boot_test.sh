@@ -182,7 +182,22 @@ check_global_forbidden() {
         if grep -qF "$pat" "$SERIAL_LOG" 2>/dev/null; then
             echo "[smoke] FAIL — a probe reported '$pat' during this gate's boot."
             echo "[smoke] (DDR-791: forbidden in every gate, not only the one that owns it.)"
+            echo "[smoke] --- matching lines ---"
             grep -aF "$pat" "$SERIAL_LOG" | head -5
+
+            # DDR-824 / OPEN-10. Printing ONLY the matching lines threw away the
+            # diagnosis. Probes are written summary-last: SFS prints
+            #   [sfs] churn FAIL op=create iter=17
+            # and only then the summary "[sfs] btree churn FAIL" that this list
+            # matches on. The op= line — the one naming WHICH operation broke and
+            # on which iteration — contains none of the forbidden string, so it
+            # was never printed. OPEN-10 was seen twice in CI and remained
+            # undiagnosable for exactly that reason.
+            #
+            # 40 lines of leading context is enough for any probe's own
+            # diagnostics without dumping a whole boot.
+            echo "[smoke] --- 40 lines of context before the first match (the diagnosis usually lives here) ---"
+            grep -aB40 -m1 -F "$pat" "$SERIAL_LOG" | sed 's/^/[smoke]   /'
             return 1
         fi
     done <<EOF

@@ -35,9 +35,12 @@ MAKEFILE="$ROOT/Makefile"
 #                   for an unknown reason must not be silently absent, and must
 #                   not be red for everyone either. Re-register the moment it
 #                   passes — see DDR-820 §Implementation.
+#   smoke-sfs-btree-smp4 ) DDR-824 OPEN-10 reproduction surface. Registering it
+#                    now would make CI red on a known-open defect and block
+#                    unrelated promotions. Register it when OPEN-10 is fixed.
 #   smoke-agent-live ) developer-run only: needs a live Ollama endpoint on the
 #                      host, so CI stays in test mode (ADR-027)
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-x25519"
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-x25519 smoke-sfs-btree-smp4"
 
 excluded() {
     local t="$1" e

@@ -180,7 +180,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check
 
 # DDR-817. Host-only, no QEMU: every smoke-* gate is in exactly one CI shard, or
 # is excluded WITH a stated reason. Guards the failure mode a sharded suite
@@ -1606,6 +1606,25 @@ smoke-rng: $(IMG) fat-image sfs-image
 # "B+tree bug" was actually the 1 MiB per-thread write budget; see DDR-763).
 smoke-sfs-btree: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
+	EXTRA_SENTINEL="$$(printf '[sfs] btree churn OK')" \
+	FORBIDDEN_SENTINEL="btree churn FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-824 / OPEN-10 reproduction surface. Same probe, -smp 4.
+#
+# NOT in the shard matrix yet, and the reason is not squeamishness: OPEN-10 has
+# hit ~2 of the last 4 CI runs under -smp 4, so registering this now would make
+# CI red on a known-open defect and block every unrelated promotion behind it.
+# It exists so the defect can be reproduced ON DEMAND with the diagnosis the
+# DDR-824 harness change now prints. Register it the moment OPEN-10 is fixed —
+# at that point a red here is a regression, which is what a gate is for.
+#
+# TIMEOUT_S=180, not 90: measured on a WSL2/TCG host, 16 of 20 runs at -smp 4
+# exceeded 90 s WITHOUT failing (they never printed OK or FAIL). Three extra
+# vCPUs multiply emulation work without adding host parallelism. A 90 s window
+# here would measure the host, not the kernel.
+smoke-sfs-btree-smp4: $(IMG) fat-image sfs-image
+	TIMEOUT_S=180 QEMU_SMP=4 \
 	EXTRA_SENTINEL="$$(printf '[sfs] btree churn OK')" \
 	FORBIDDEN_SENTINEL="btree churn FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
