@@ -169,9 +169,16 @@ the BLOCKED publication, because the submitter holds the lock until
 consistent with B#3 having been "narrowed but not fixed": the obvious races are
 already closed.
 
-**5 × `smoke-blkmq` (`-smp 4`, `TIMEOUT_S=180`) was still running at handoff**,
-instrumented to report `[vblk] stuck dev=` (DDR-776 watchdog) and any
-`churn FAIL op=` (DDR-824). **No results — do not infer anything from that.**
+**B#3 REPRODUCTION RESULT: 5/5 PASSED, `stuck_lines=0` on every run.**
+5 × `smoke-blkmq` at `-smp 4`, `TIMEOUT_S=180`, serial, clean host. The DDR-776
+watchdog **never fired once** — no request was stuck at all, and no
+`churn FAIL op=` appeared.
+
+That is real negative evidence, and it constrains B#3 without fixing it: the
+defect is **rarer than 1-in-5 locally at `-smp 4`, or host-dependent**. It does
+NOT show B#3 is fixed — nothing was changed. Next attempt should either run a
+much larger budget or, cheaper, harvest it from CI where both OPEN-10 hits
+actually occurred.
 
 **The unification hypothesis is unchanged and untested:** OPEN-10 may be B#3
 seen through the SFS churn probe. `op=write` supports it; `op=create`/`op=unlink`
