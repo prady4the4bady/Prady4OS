@@ -365,6 +365,8 @@ extern const unsigned char hkdftest_elf[];            /* DDR-818: HKDF vectors *
 extern const unsigned char hkdftest_elf_end[];
 extern const unsigned char x25519test_elf[];          /* DDR-820: X25519 vectors */
 extern const unsigned char x25519test_elf_end[];
+extern const unsigned char sha512test_elf[];          /* DDR-821: SHA-512 vectors */
+extern const unsigned char sha512test_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
@@ -1260,6 +1262,16 @@ static void fs_test_thread(void *arg) {
                                  "X25519", &xk) == ELF_OK && xk) {
                         sched_unblock(xk);
                         kputs("[user] ELF loaded (embedded); X25519 vector probe spawned\r\n");
+                    }
+                }
+                /* DDR-821: SHA-512 FIPS 180-4 vector probe, opt-in via DDR-804. */
+                if (probe_enabled("sha512")) {
+                    struct tcb *s5 = 0;
+                    uint64_t s5len = (uint64_t)(sha512test_elf_end - sha512test_elf);
+                    if (elf_load((void *)(uintptr_t)sha512test_elf, s5len,
+                                 "SHA512", &s5) == ELF_OK && s5) {
+                        sched_unblock(s5);
+                        kputs("[user] ELF loaded (embedded); SHA-512 vector probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("lockbox")) {

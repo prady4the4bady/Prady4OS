@@ -56,6 +56,14 @@ All entries below are **shipped**.
   past T(1) and TC3 covers the NULL-salt branch (HashLen zero bytes, not an
   empty string). Gate `smoke-hkdf`. Not yet in the kernel link — first caller
   is DDR-813. First of ACC's four missing primitives (819/820/821 follow).
+- **SHA-512** (DDR-821) — `kernel/crypto/sha512.{c,h}`, FIPS 180-4. Its own
+  file, not a parameterised `sha2.c`: 64-bit words, 128-byte blocks, 80 rounds,
+  a different constant table, four different rotation triples and a 128-bit
+  length field. Four vectors; the 112-byte case (112 = 128-16) is the only one
+  whose message ends exactly where the length field goes, and the 1M-`a` case is
+  streamed in 1000-byte chunks so the partial-block carry actually runs.
+  Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
+  DDR-821 Ed25519.
 - **ChaCha20-Poly1305 AEAD** (DDR-819) — `kernel/crypto/aead.{c,h}`, RFC 8439.
   Chosen over AES-GCM because the same source must be correct AND constant-time
   on riscv64/aarch64, which have no AES instructions; ChaCha20 and Poly1305 are

@@ -171,6 +171,12 @@ x25519test_elf:
     incbin "build/x25519test.elf"
 x25519test_elf_end:
 
+global sha512test_elf
+global sha512test_elf_end
+sha512test_elf:
+    incbin "build/sha512test.elf"
+sha512test_elf_end:
+
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

@@ -97,7 +97,94 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-8 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-9 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**`dev/phase1` = `e4bb576` + uncommitted SHA-512 gate. `main` = `b823bb5`.**
+NSI max 76, next free 77. MAX_SYSCALLS 128. 118 gates, 6 excluded.
+
+#### Corrections to the queue's premises — verified against the tree
+
+The verification table supplied with the queue is wrong on load-bearing points.
+Checked, not assumed:
+
+| table claim | reality |
+|---|---|
+| "X25519 ❌ Not started, no source found" | `kernel/crypto/x25519.c` — 10,468 B, all RFC 7748 vectors pass |
+| "`arch/aarch64/`, `arch/riscv64/` zero source files" | `kernel/arch/{aarch64,riscv64}/{boot.S,start.c}` exist; **CI's `arch-bootstrap` jobs build AND boot both, green every run** |
+| "SHA-512 not present" | `kernel/crypto/sha512.c` — 4 FIPS 180-4 vectors pass |
+| "`tools/boot_test.sh`" | actual path `tools/qemu_runner/boot_test.sh` |
+| "109 CI gates" | 118 assigned, 6 excluded |
+
+**This materially shrinks TASK 17.** aarch64 and riscv64 already reach their
+boot banner in CI. The ISO work is packaging, not a from-scratch port.
+
+#### TASK 1 — the queue's prescribed OPEN-10 fix has no target
+
+It said: find B+tree ops touching shared state without a lock under SMP, add a
+spinlock. **There is no such target.** `kernel/fs/sfs/sfs.c` has **zero** global
+mutable state, and the VFS already serialises every op per-mount with an atomic
+sleep-mutex (`kernel/fs/vfs/vfs.c:25`, DDR-locks-3). Adding a spinlock would be
+patchwork against a hypothesis the code contradicts.
+
+**Better-supported hypothesis, recorded not asserted:** the churn probe does
+40 × (create + 64 KiB write + unlink) of heavy block I/O, and **both OPEN-10
+hits were `-smp 4` gates** — which is exactly B#3/DDR-806, the known `-smp 4`
+virtio-blk completion stall. A lost completion makes `vfs_write` return
+≠ 65536, i.e. `op=write`. **If so, OPEN-10 and B#3 are one defect seen through
+two probes, and fixing B#3 fixes both.** Do B#3 (TASK 8) before more OPEN-10
+work.
+
+**DDR-824 — the harness was discarding the proof.** `check_global_forbidden`
+printed only lines matching the forbidden pattern. Probes print summary-last:
+`[sfs] churn FAIL op=create iter=17` (names the defect) then
+`[sfs] btree churn FAIL` (what the list matches). The `op=` line contains none
+of the forbidden string, so **it never reached CI output** — which is why
+OPEN-10 was seen twice and stayed undiagnosable. Now prints 40 lines of leading
+context. **The next OPEN-10 occurrence will name its failing operation.**
+
+`smoke-sfs-btree-smp4` added as a reproduction surface, **excluded** from the
+shard matrix with that reason (registering it now would make CI red on a
+known-open defect and block unrelated promotions). It **PASSED** locally at
+`TIMEOUT_S=180`, which also confirms last session's 16/20 "failures" were the
+90 s window, not a defect — 3 extra vCPUs multiply TCG work without adding host
+parallelism.
+
+#### TASK 3 — SHA-512 gate, A/B verified
+
+`user/sha512test.c` + `smoke-sha512`, registered in shard 3, added to
+`GLOBAL_FORBIDDEN` (append-only, nothing removed).
+
+| arm | kernel SHA | verdict |
+|---|---|---|
+| B — one byte flipped in the empty-message vector | `92d528310a7c` | **FAIL**, and names `case=empty first_bad_byte=7` — exactly the flipped byte |
+| C — correct | `4fe5534e6caa` | **PASS** |
+
+Distinct SHAs (DDR-791). Artefact freshness confirmed per rule 4 before running.
+Arm B also demonstrates DDR-824's context dump working end to end.
+
+#### TASK 2 — NOT DONE
+
+`smoke-x25519` was not re-verified. Rule 1 (serial QEMU) was binding all
+session: the smp4 reproduction and the SHA-512 A/B arms occupied the single
+QEMU slot. **This is the next thing to do**, and the host is currently clean
+(`pgrep qemu-system-x86_64` returned 0 before the last run).
+
+#### Next, in order
+
+1. `pgrep qemu-system-x86_64` (must be empty) → `make smoke-x25519 TIMEOUT_S=300`.
+2. Commit the SHA-512 gate if not already in (check `git status`).
+3. **TASK 8 (B#3) before more OPEN-10 work** — see the unification hypothesis.
+4. Read run `30773609553` (dispatched this session on `1fa8495`).
+5. Ed25519 stays blocked until `smoke-x25519` is green in `main` (rule 7).
+
+#### Scope reality, unchanged
+
+TASKs 9–21 are ~250 features including 4 ISO targets, 12 agents, F#66–F#76 and
+a package manager. This session completed TASK 0, most of TASK 1, and TASK 3,
+and found two more harness defects on the way. That rate does not reach Aug 31
+for the full set. The sequencing is sound; the scope is the decision.
+
+### 0.-8 SESSION — 2026-08-03 (earlier)
 
 **`dev/phase1` = `7a7385e`. `main` = `b823bb5`** (still not promoted).
 

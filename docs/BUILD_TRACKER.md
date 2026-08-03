@@ -11,10 +11,10 @@ of exactly that failure recorded below.**
 | | |
 |---|---|
 | **`main`** | `b823bb5` — DDR-819 ChaCha20-Poly1305, two greens |
-| **`dev/phase1`** | `1fa8495` — **NOT promoted** (OPEN-10 gates it) |
+| **`dev/phase1`** | `77e690c` — **NOT promoted** (OPEN-10 gates it) |
 | **Verified** | 2026-08-03 (tip 1fa8495) |
 | **NSI max** | **76** (`SYS_METRIC_READ`). Next free: **77**. Table size now 128. |
-| **CI gates** | 117 assigned across 6 shards · 5 excluded with reasons |
+| **CI gates** | 118 assigned across 6 shards · 6 excluded with reasons |
 | **CI wall-clock** | ~25 min (was 2 h 08 m before DDR-817) |
 
 **Stale feature branches — do not delete, do not merge.** `feature/arm64`,

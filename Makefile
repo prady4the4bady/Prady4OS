@@ -91,6 +91,8 @@ USER_HKDF_SRC := user/hkdftest.c         # DDR-818: HKDF RFC 5869 vectors
 USER_HKDF_ELF := build/hkdftest.elf
 USER_X25519_SRC := user/x25519test.c     # DDR-820: X25519 RFC 7748 vectors
 USER_X25519_ELF := build/x25519test.elf
+USER_SHA512_SRC := user/sha512test.c     # DDR-821: SHA-512 FIPS 180-4 vectors
+USER_SHA512_ELF := build/sha512test.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -180,7 +182,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check
 
 # DDR-817. Host-only, no QEMU: every smoke-* gate is in exactly one CI shard, or
 # is excluded WITH a stated reason. Guards the failure mode a sharded suite
@@ -333,6 +335,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/x25519.c -o build/x25519_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_X25519_SRC) -o build/x25519test.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_X25519_ELF) build/x25519test.o build/x25519_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/sha512.c -o build/sha512_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_SHA512_SRC) -o build/sha512test.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHA512_ELF) build/sha512test.o build/sha512_user.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -341,7 +346,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -2056,3 +2061,13 @@ smoke-sysiouring: $(IMG) fat-image sfs-image
 clean:
 	rm -rf build
 	cd $(TC_DIR)/hello_rs && cargo clean 2>/dev/null || true
+
+# DDR-821 SHA-512 vector gate (FIPS 180-4). Four vectors; the 112-byte case is
+# the only one whose message ends exactly where the 128-bit length field goes
+# (112 = 128-16), forcing the two-block path, and the 1M-'a' case is streamed in
+# 1000-byte chunks so the partial-block carry actually runs.
+smoke-sha512: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_PROBES=sha512 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHA512_VECTORS_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SHA512_STUB\nSHA512 FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
