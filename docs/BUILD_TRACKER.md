@@ -93,7 +93,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
-| 6.8 | ACC (DDR-813) | ⬜ | **UNBLOCKED** — 6.4, 6.6, 6.7 all green. Next slice. |
+| 6.8 | ACC (DDR-813) | ⚠️ | `kernel/crypto/acc.{c,h}` — envelope host-verified: seal/open round-trip, tamper-ct and tamper-sig both ACC_ERR_AUTH, replay ACC_ERR_REPLAY, owner-read-after-reboot ACC_OK. **No syscalls (77/78) and no `smoke-acc` yet** — not gated. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---
