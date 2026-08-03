@@ -72,6 +72,10 @@ All entries below are **shipped**.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
 - **ChaCha20-Poly1305 AEAD** (DDR-819) — `kernel/crypto/aead.{c,h}`, RFC 8439.
+  **Gate `smoke-aead` passes** (shard 4): §2.4.2 keystream, §2.5.2 tag over a
+  34-byte message (2-byte final block — the only path reaching the short-block
+  code), a seal/open round-trip depending on no published constant, and two
+  distinct rejection arms (tampered ciphertext, tampered tag).
   Chosen over AES-GCM because the same source must be correct AND constant-time
   on riscv64/aarch64, which have no AES instructions; ChaCha20 and Poly1305 are
   add/xor/rotate and a 130-bit multiply-accumulate, constant-time as a property

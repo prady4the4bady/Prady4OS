@@ -149,3 +149,4 @@
 5	smoke-syspipe	23
 3	smoke-sha512	90
 3	smoke-x25519	90
+4	smoke-aead	90

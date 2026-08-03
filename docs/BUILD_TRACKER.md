@@ -14,7 +14,7 @@ verified, it says so.
 
 | | |
 |---|---|
-| **`main`** | `b823bb5` — DDR-819 ChaCha20-Poly1305, two greens |
+| **`main`** | **`3b4830a`** — PROMOTED on 3 consecutive greens (30804476970, 30811210244, 30811221820). Carries DDR-817 sharding, X25519, SHA-512, DDR-822/823. |
 | **`dev/phase1`** | `1e40464` — **NOT promoted** (OPEN-10 gates it) |
 | **Verified** | 2026-08-03, tree clean at `1e40464` |
 | **NSI max** | **76** (`SYS_METRIC_READ`). Next free **77**. Table size **128** (DDR-823). |
@@ -89,7 +89,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.1 | SHA-256 (DDR-811) | ✅ | `smoke-sha256`, 4 FIPS vectors |
 | 6.2 | Metric lockbox (DDR-812) | ✅ | `smoke-lockbox`, `smoke-metric` |
 | 6.3 | HMAC + HKDF (DDR-818) | ✅ | `smoke-hkdf`, 3 RFC 5869 vectors |
-| 6.4 | ChaCha20-Poly1305 (DDR-819) | 🔴 | `smoke-aead` written + wired; **ran once and FAILED** — `case=chacha20_2_4_2 first_bad_byte=0`. Probe-vs-primitive not yet resolved; excluded. |
+| 6.4 | ChaCha20-Poly1305 (DDR-819) | ✅ | `smoke-aead` **PASSES**, registered in shard 4. First run failed on a wrong recalled nonce (§2.3.2 vs §2.4.2) — the probe, not the primitive. |
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | Ed25519 (DDR-821) | ❌ | blocked on 6.6 by rule 7 |

@@ -69,14 +69,28 @@ static int cmp(const char *name, const uint8_t *got, const uint8_t *want, unsign
     return 1;
 }
 
-/* RFC 8439 §2.4.2 — key 00..1f, nonce 00:00:00:09 00:00:00:4a 00:00:00:00,
- * counter 1. Only the first 16 ciphertext bytes are compared: enough to catch
- * any state/rotation/constant error, and it keeps the probe small. */
+/* RFC 8439 §2.4.2 — key 00..1f, counter 1. Only the first 16 ciphertext bytes
+ * are compared: enough to catch any state/rotation/constant error, and it keeps
+ * the probe small.
+ *
+ * THE NONCE IS ALL-ZEROS THEN 4a, AND THAT IS THE WHOLE POINT OF THIS COMMENT.
+ * RFC 8439 carries two different nonces a few pages apart:
+ *
+ *   §2.3.2 (block function test)  00 00 00 09 | 00 00 00 4a | 00 00 00 00
+ *   §2.4.2 (encryption test)      00 00 00 00 | 00 00 00 4a | 00 00 00 00
+ *
+ * The first version of this probe paired §2.3.2's nonce with §2.4.2's expected
+ * ciphertext. A different nonce changes the keystream from byte 0, so the gate
+ * failed with `first_bad_byte=0` on its very first run — a gross mismatch that
+ * correctly did NOT look like a carry bug. `aead.c` was right the whole time;
+ * the recalled constant was wrong. Confirmed by testing BOTH candidate nonces
+ * against the same primitive on the host: the §2.4.2 one matches, the §2.3.2
+ * one does not. */
 static const uint8_t K244[32] = {
     0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
     0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f };
 static const uint8_t N244[12] = {
-    0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x4a,0x00,0x00,0x00,0x00 };
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x4a,0x00,0x00,0x00,0x00 };
 static const char PT244[] =
     "Ladies and Gentlemen of the class of '99: If I could offer you only one tip "
     "for the future, sunscreen would be it.";
