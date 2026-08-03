@@ -97,7 +97,98 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-12 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-13 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**`main` = `3b4830a`. `dev/phase1` = `c68dc24`** + a pending handoff commit.
+NSI max 76, next free 77. **121 gates, 5 excluded.**
+
+#### ⭐ Ed25519 implemented — all RFC 8032 host vectors pass, first try
+
+`kernel/crypto/ed25519.{c,h}` over the fe25519 field layer and SHA-512.
+Host results on the first clean compile:
+
+```
+T1 pubkey/sig/verify (EMPTY message)   OK
+T2 pubkey/sig/verify (1 byte)          OK
+T2 tampered signature rejected         OK
+wrong pubkey rejected                  OK
+round-trip depending on no constant    OK
+```
+
+**Why it worked first try, and this is the transferable part: the curve
+constants are DERIVED, not recalled.**
+
+```
+d        = -121665 * inv(121666)      via fe_invert at init
+By       = 4 * inv(5)
+Bx       = even sqrt((y^2-1)/(d y^2+1))
+sqrt(-1) = 2^((p-1)/4)
+```
+
+DDR-819 and DDR-820 each shipped a **wrong recalled constant** that a vector
+caught (§2.3.2-vs-§2.4.2 nonce; 121665-vs-121666). Deriving removes that failure
+mode instead of testing for it. The one unavoidable recalled constant is the
+group order **L**, which does not follow from the curve equation — isolated in
+`L_BYTES`, and every checked signature exercises it.
+
+Other decisions worth keeping:
+- `sc_reduce` is **binary long division** (512 shift-and-subtract), not ref10's
+  21-bit-limb routine. Slower, obviously correct, no hand-transcribed magic.
+- `verify()` **rejects non-canonical S (S ≥ L)**. Without it the scheme is
+  malleable — a second valid signature exists for the same message. The probe
+  asserts it.
+- `*r = acc` on a 160-byte struct compiles to a **memcpy call**, which does not
+  exist in the freestanding user model. Replaced with explicit `fe_copy`.
+
+**GATE STATUS — UNRESOLVED, DO NOT ASSUME.** `smoke-ed25519` is written,
+registered in shard 5, and `GLOBAL_FORBIDDEN` extended. A run was in flight at
+session end and **its PASS/FAIL line was not captured** (the grep swallowed it
+and the pipeline hid make's exit status). A re-run writing to
+`/tmp/ed_gate.log` with `EXIT=` was started.
+
+**Next exact command:**
+```
+wsl -d Ubuntu-24.04 -e bash -c 'cd /mnt/c/Users/prady/Documents/Claude/Projects/Prady4OS
+grep -aE "^\[smoke\]|EXIT=" /tmp/ed_gate.log | tail -4'
+```
+If that shows PASS + `EXIT=0`, Ed25519 is done and **ACC (DDR-813) is
+unblocked** — AEAD, X25519 and Ed25519 would all then be genuinely green.
+
+#### Also this session
+
+- **`smoke-aead` green.** First failure was the probe pairing RFC 8439 §2.3.2's
+  nonce with §2.4.2's ciphertext. Proved by running both candidates against the
+  same unmodified `aead.c`. Registered in shard 4.
+- **DDR-821 step 1**: `fe25519.{c,h}` extracted; `smoke-x25519` passes on a
+  genuinely rebuilt artefact.
+- **DDR-825**: `kernel/crypto/*.c` and `Makefile` were not prerequisites of the
+  image, so `make image` reported success while the link never ran. Sixth
+  instance of the silent-drop family. **Now working as intended** — Makefile
+  edits correctly trigger full rebuilds, which is why gate wall-clock rose.
+
+#### B#3 / OPEN-10 — harvest returned NOTHING
+
+Three of four CI harvest runs concluded **green**. **No `btree churn FAIL`
+occurred, so there is no `op=` line to read.** The unification hypothesis
+(OPEN-10 ≡ B#3) is **still untested** — this is absence of evidence, not
+evidence of absence. Combined with 5/5 clean local `-smp 4` runs, B#3 is
+constrained but not fixed and not reproduced.
+
+**Still ruled out, do not retry:** `IRQF_PERCPU` (no analogue in this kernel);
+a spinlock in `sfs.c` (no global mutable state; VFS serialises per-mount).
+
+#### Next, in order
+
+1. Read `/tmp/ed_gate.log` for the Ed25519 verdict.
+2. If green: **ACC (DDR-813)** — NSI 77/78, envelope exactly as specified in the
+   queue (X25519 ephemeral → HKDF `ACC-session-v1`/`ACC-owner-v1` →
+   ChaCha20-Poly1305 with `nonce=eph_pub[0:12]` → Ed25519 over
+   `eph_pub||ct||tag`, `agent_pubkey[32]` in the envelope, Ed25519 and X25519
+   keys distinct). Arms: `ACC_OK`, `ACC_ERR_AUTH`, `ACC_ERR_REPLAY`,
+   owner-read-after-reboot.
+3. Then AGS (79/80) → rotation (81) → TASK 9–21.
+
+### 0.-12 SESSION — 2026-08-03 (earlier)
 
 **`main` = `3b4830a` — PROMOTED.** `dev/phase1` = `d5901ee`, clean, pushed.
 NSI max 76, next free 77. 120 gates, 5 excluded.
