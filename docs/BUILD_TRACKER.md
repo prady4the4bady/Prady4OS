@@ -17,7 +17,7 @@ verified, it says so.
 | **`main`** | **`3b4830a`** — PROMOTED on 3 consecutive greens (30804476970, 30811210244, 30811221820). Carries DDR-817 sharding, X25519, SHA-512, DDR-822/823. |
 | **`dev/phase1`** | `1e40464` — **NOT promoted** (OPEN-10 gates it) |
 | **Verified** | 2026-08-03, tree clean at `1e40464` |
-| **NSI max** | **76** (`SYS_METRIC_READ`). Next free **77**. Table size **128** (DDR-823). |
+| **NSI max** | **78** assigned (`SYS_ACC_SEAL` 77, `SYS_ACC_OPEN` 78 — numbers reserved, handlers NOT registered pending DDR-827). Next free **79**. Table size **128**. |
 | **CI gates** | **119** assigned across 6 shards · **6** excluded, each with a stated reason |
 | **CI wall-clock** | ~25 min (was 2 h 08 m before DDR-817) |
 
@@ -93,7 +93,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
-| 6.8 | ACC (DDR-813) | ⚠️ | `kernel/crypto/acc.{c,h}` — envelope host-verified: seal/open round-trip, tamper-ct and tamper-sig both ACC_ERR_AUTH, replay ACC_ERR_REPLAY, owner-read-after-reboot ACC_OK. **No syscalls (77/78) and no `smoke-acc` yet** — not gated. |
+| 6.8 | ACC (DDR-813) | 🔴 | envelope + `sys_acc.c` written, host-verified, NSI 77/78 assigned. **BLOCKED by DDR-827**: linking acc.o + 5 crypto deps puts kernel.bin 12,646 B past the DDR-733 768 KiB load window and the image stops booting. Not linked, not registered, not gated. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---

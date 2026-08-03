@@ -112,6 +112,13 @@
  * SHA-256 before returning anything, so a tampered record yields NO bytes. */
 #define SYS_METRIC_READ    76  /* (metric_lockbox_t*) -> 0 | -EPERM|-ENOENT|-ETAMPER */
 
+/* DDR-813 ACC. 77 seals (CAP_AGENT: any agent may report to the owner, and a
+ * sealed envelope leaks nothing to the sealer). 78 opens (CAP_SOVEREIGN:
+ * opening reveals a peer agent's plaintext, so it is owner-only). The asymmetry
+ * is deliberate — see kernel/syscall/sys_acc.c. */
+#define SYS_ACC_SEAL       77  /* (env_out, pt, ptlen, args) -> 0 | -EPERM|-EINVAL|-EFAULT|-EIO */
+#define SYS_ACC_OPEN       78  /* (pt_out, env, priv, ptlen_out) -> 0 | -EPERM|-EACCES|-EAGAIN */
+
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
 typedef long (*syscall_fn)(long a1, long a2, long a3, long a4);

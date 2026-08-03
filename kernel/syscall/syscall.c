@@ -24,6 +24,7 @@ void sys_socket_register(void);   /* kernel/syscall/sys_socket.c (ADR-027) */
 void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
 void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
+void sys_acc_register(void);      /* kernel/syscall/sys_acc.c (DDR-813) */
 
 #define MAX_SYSCALLS 128  /* NSI-v2 table size (ADR-022). Raised 80->128 in the
                            * DDR-823 audit: NSI 77-87 are already sequenced and
@@ -157,6 +158,9 @@ void syscall_init(void) {
     sys_io_uring_register();              /* SYS_IO_URING_* (PROC-E) */
     sys_aether_register();                /* SYS_GET_MODE..SYS_SET_MEM_LIMIT (Layer 6) */
     sys_socket_register();                /* SYS_SOCK_* proxy sockets (ADR-027) */
+    /* DDR-813 ACC: NOT registered yet — linking acc.o + its five crypto deps
+     * pushes kernel.bin 12,646 bytes past the DDR-733 768 KiB stage-2 load
+     * window and the image stops booting. See DDR-827. */
     sys_fb_register();                    /* SYS_FB_* framebuffer surface (DDR-702) */
     sys_input_register();                 /* SYS_INPUT_POLL / SYS_MOUSE_POLL (DDR-703/705) */
     sys_surface_register();               /* SYS_SURFACE_* per-client surfaces (DDR-706) */

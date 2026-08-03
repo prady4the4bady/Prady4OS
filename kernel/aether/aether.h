@@ -39,7 +39,14 @@ enum aether_result {
      * only question that shows the control works in production, not just in a
      * test. Note this code can carry a SOVEREIGN pid: privacy outranks the
      * DDR-800 bypass, and the attempt is still recorded. */
-    AR_PRIVACY_BLOCKED
+    AR_PRIVACY_BLOCKED,
+    /* DDR-813 ACC. Three distinct codes, not one: an envelope SEALED, an
+     * envelope OPENED, and an envelope REJECTED are different operator-facing
+     * facts. Folding the rejection into AR_CAP_DENIED would make "was a forged
+     * or replayed envelope ever presented?" unanswerable — which is the only
+     * question that shows the channel is doing anything. The rejection record
+     * carries the ACC_ERR_* code so forgery and replay stay distinguishable. */
+    AR_ACC_SEALED, AR_ACC_OPENED, AR_ACC_REJECTED
 };
 
 /* DDR-800/801: destination packed into the audit record's action_id. The field

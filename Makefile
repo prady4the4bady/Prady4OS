@@ -134,12 +134,12 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
                kernel/drivers/fwcfg/fwcfg.c \
-               kernel/crypto/sha256.c \
+               kernel/crypto/sha256.c kernel/crypto/acc.c kernel/crypto/x25519.c kernel/crypto/fe25519.c kernel/crypto/hkdf.c kernel/crypto/aead.c kernel/crypto/ed25519.c kernel/crypto/sha512.c \
                kernel/drivers/rng/virtio_rng.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
                kernel/arch/x86_64/cpu_mitigations.c kernel/vdso/vdso_page.c \
-               kernel/aether/aether.c kernel/aether/aether_queue.c kernel/aether/aether_audit.c kernel/aether/aether_mem.c kernel/syscall/sys_aether.c kernel/syscall/sys_socket.c kernel/syscall/sys_fb.c kernel/syscall/sys_surface.c \
+               kernel/aether/aether.c kernel/aether/aether_queue.c kernel/aether/aether_audit.c kernel/aether/aether_mem.c kernel/syscall/sys_aether.c kernel/syscall/sys_socket.c kernel/syscall/sys_acc.c kernel/syscall/sys_fb.c kernel/syscall/sys_surface.c \
                kernel/apic/lapic.c kernel/apic/smp.c kernel/apic/percpu.c
 KERNEL_LD   := kernel/kernel.ld
 KERNEL_ELF  := build/kernel.elf
