@@ -367,6 +367,8 @@ extern const unsigned char x25519test_elf[];          /* DDR-820: X25519 vectors
 extern const unsigned char x25519test_elf_end[];
 extern const unsigned char sha512test_elf[];          /* DDR-821: SHA-512 vectors */
 extern const unsigned char sha512test_elf_end[];
+extern const unsigned char aeadtest_elf[];            /* DDR-819: AEAD vectors */
+extern const unsigned char aeadtest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
@@ -1272,6 +1274,19 @@ static void fs_test_thread(void *arg) {
                                  "SHA512", &s5) == ELF_OK && s5) {
                         sched_unblock(s5);
                         kputs("[user] ELF loaded (embedded); SHA-512 vector probe spawned\r\n");
+                    }
+                }
+                /* DDR-819: ChaCha20-Poly1305 vector probe, opt-in via DDR-804.
+                 * Closes the gap where aead.c was host-verified only, with no
+                 * gate and no build wiring — DDR-813 must not consume it
+                 * ungated. */
+                if (probe_enabled("aead")) {
+                    struct tcb *ae = 0;
+                    uint64_t aelen = (uint64_t)(aeadtest_elf_end - aeadtest_elf);
+                    if (elf_load((void *)(uintptr_t)aeadtest_elf, aelen,
+                                 "AEAD", &ae) == ELF_OK && ae) {
+                        sched_unblock(ae);
+                        kputs("[user] ELF loaded (embedded); AEAD vector probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("lockbox")) {

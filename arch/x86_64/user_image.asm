@@ -177,6 +177,12 @@ sha512test_elf:
     incbin "build/sha512test.elf"
 sha512test_elf_end:
 
+global aeadtest_elf
+global aeadtest_elf_end
+aeadtest_elf:
+    incbin "build/aeadtest.elf"
+aeadtest_elf_end:
+
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

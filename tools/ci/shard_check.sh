@@ -31,9 +31,15 @@ MAKEFILE="$ROOT/Makefile"
 #   smoke-sfs-btree-smp4 ) DDR-824 OPEN-10 reproduction surface. Registering it
 #                    now would make CI red on a known-open defect and block
 #                    unrelated promotions. Register it when OPEN-10 is fixed.
+#   smoke-aead    ) DDR-819. Probe and wiring are written and lint-clean, but the
+#                   gate has NOT been run even once — the QEMU slot was busy
+#                   with the B#3 reproduction all session. Committing it
+#                   registered would put an unverified gate in front of every
+#                   promotion. Run it once, then remove this line. Same
+#                   discipline that was applied to smoke-x25519.
 #   smoke-agent-live ) developer-run only: needs a live Ollama endpoint on the
 #                      host, so CI stays in test mode (ADR-027)
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4"
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4 smoke-aead"
 
 excluded() {
     local t="$1" e

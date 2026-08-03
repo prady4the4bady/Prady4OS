@@ -97,7 +97,99 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-10 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-11 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**`dev/phase1` tip when this was written: `3b4830a` + this commit.
+`main` = `b823bb5`.** NSI max 76, next free 77. 119 gates, 6 excluded.
+
+#### ⭐ smoke-x25519 is CI-PROVEN
+
+**CI run `30804476970` on tip `3b4830a`: SUCCESS, all jobs.** That was the
+gate's first-ever execution on a CI runner, and it passed. Combined with 4/4
+clean-host local passes, X25519 is settled.
+
+**Root cause of the two-session mystery, now closed:** it was never one defect.
+A stale probe ELF (DDR-822 — the Makefile named 17 of 31 user sources, so the
+`_start` alignment fix was never in a tested binary) **plus** leaked QEMU
+holding the image write-lock (DDR-823 — reported as "kernel sentinel not
+found"). The primitive was correct throughout.
+
+#### Promotion — two runs dispatched on ONE tip, both in flight
+
+The rule is 3 consecutive greens on the **same** commit. Prior greens were on
+four *different* tips and promoted nothing.
+
+| run | tip | state at handoff |
+|---|---|---|
+| `30804476970` | `3b4830a` | **success** (green #1) |
+| `30811210244` | `3b4830a` | in flight (green #2?) |
+| `30811221820` | `3b4830a` | in flight (green #3?) |
+
+Both dispatches were verified to target `3b4830a` before I continued.
+**If both are green: `main` fast-forwards to `3b4830a`, and Ed25519 (TASK 4)
+unblocks under rule 7.** Later commits on `dev/phase1` do not affect this — a
+dispatched run pins its head SHA, so promote `3b4830a` specifically.
+
+```
+git checkout main && git merge --ff-only 3b4830a && git push origin main
+```
+
+#### smoke-aead written — COMMITTED BUT EXCLUDED, NOT YET RUN
+
+`user/aeadtest.c` + `smoke-aead` + build wiring + kernel spawn are complete and
+lint-clean (`ci-shard-check`, `ci-start-align-check` both pass). This closes the
+gap flagged since DDR-819: `aead.c` was host-verified only, with no gate and in
+no build, and DDR-813 must not consume an ungated primitive.
+
+**The gate has NOT been run even once.** The QEMU slot was occupied by the B#3
+reproduction for the whole session, and rule 1 is serial-QEMU. It is therefore
+**excluded with that reason recorded** in `shard_check.sh` — committing it
+registered would put an unverified gate in front of every promotion.
+
+**Next action for it:** `make smoke-aead`, then delete the `smoke-aead` line
+from `EXCLUDE` and add `4<TAB>smoke-aead<TAB>90` to `gate_shards.txt`.
+
+Five checks, chosen by code path: §2.4.2 keystream (isolates the cipher),
+§2.5.2 tag with a **34-byte** message (2-byte final block — the only path that
+catches the short-block defect DDR-819 actually shipped), a seal/open round-trip
+depending on no published constant, and **two distinct rejection arms**
+(tampered ciphertext, tampered tag — the second catches an `open()` that
+recomputes the tag but never compares it to the one supplied).
+
+#### B#3 — no evidence yet, and the queue's fix does not apply
+
+**The suggested `IRQF_PERCPU` fix is Linux terminology with no analogue in this
+kernel.** There is no such flag to set. Not applied.
+
+**Code review found no open race.** `submit()` holds `compl_lock` with IRQs off
+across `virtq_publish` → `notify` → `while (!done) sched_block_on()`, and
+`complete()` takes the same lock. The completion cannot land between publish and
+the BLOCKED publication, because the submitter holds the lock until
+`sched_block_on` releases it — the DDR-locks-4 pattern is intact. That is
+consistent with B#3 having been "narrowed but not fixed": the obvious races are
+already closed.
+
+**5 × `smoke-blkmq` (`-smp 4`, `TIMEOUT_S=180`) was still running at handoff**,
+instrumented to report `[vblk] stuck dev=` (DDR-776 watchdog) and any
+`churn FAIL op=` (DDR-824). **No results — do not infer anything from that.**
+
+**The unification hypothesis is unchanged and untested:** OPEN-10 may be B#3
+seen through the SFS churn probe. `op=write` supports it; `op=create`/`op=unlink`
+refutes it. DDR-824's context dump is what will show it.
+
+#### Next, in order
+
+1. Read `30811210244` and `30811221820`. Two greens ⇒ promote `3b4830a` to
+   `main` with the ff-only command above.
+2. `make smoke-aead` once; if green, unexclude and register in shard 4.
+3. Finish the B#3 reproduction (5 × `smoke-blkmq`) and read the `op=` line.
+4. **TASK 4 Ed25519** — only after x25519 is green in `main` (rule 7). Design is
+   already written in `docs/ddr/DDR-821-ed25519.md`; SHA-512 is done and gated.
+   First step there is extracting the shared field layer from `x25519.c` into
+   `fe25519.{c,h}`, with `smoke-x25519` as the regression test for the move.
+5. Then ACC (77/78) → AGS (79/80) → rotation (81), then TASK 9–21.
+
+### 0.-10 SESSION — 2026-08-03 (earlier)
 
 **Branch `dev/phase1` = `6a0c571`. `main` = `b823bb5` (not promoted).**
 NSI max 76, next free 77. `MAX_SYSCALLS` 128. 118 gates, 6 excluded.

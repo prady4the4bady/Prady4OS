@@ -18,14 +18,16 @@ verified, it says so.
 | **`dev/phase1`** | `1e40464` — **NOT promoted** (OPEN-10 gates it) |
 | **Verified** | 2026-08-03, tree clean at `1e40464` |
 | **NSI max** | **76** (`SYS_METRIC_READ`). Next free **77**. Table size **128** (DDR-823). |
-| **CI gates** | **119** assigned across 6 shards · **5** excluded, each with a stated reason |
+| **CI gates** | **119** assigned across 6 shards · **6** excluded, each with a stated reason |
 | **CI wall-clock** | ~25 min (was 2 h 08 m before DDR-817) |
 
 **CI evidence on `dev/phase1`:**
 
 | run | tip | verdict |
 |---|---|---|
-| `30773609553` (workflow_dispatch) | `1fa8495` | **GREEN — all jobs** |
+| `30804476970` | `3b4830a` | **GREEN — smoke-x25519 CI-PROVEN on its first CI run** |
+| `30811210244`, `30811221820` | `3b4830a` | dispatched for the 3-green promotion rule |
+| `30773609553` | `1fa8495` | GREEN |
 | `30773828417` | `e4bb576` | in flight at last check |
 | `30774291748` | `1e40464` | in flight at last check |
 
@@ -87,7 +89,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.1 | SHA-256 (DDR-811) | ✅ | `smoke-sha256`, 4 FIPS vectors |
 | 6.2 | Metric lockbox (DDR-812) | ✅ | `smoke-lockbox`, `smoke-metric` |
 | 6.3 | HMAC + HKDF (DDR-818) | ✅ | `smoke-hkdf`, 3 RFC 5869 vectors |
-| 6.4 | ChaCha20-Poly1305 (DDR-819) | ⚠️ | code + host vectors; **no gate, in no build** |
+| 6.4 | ChaCha20-Poly1305 (DDR-819) | ⚠️ | `smoke-aead` written + wired + in the build; **excluded, never gate-run** (QEMU slot busy all session) |
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | Ed25519 (DDR-821) | ❌ | blocked on 6.6 by rule 7 |
