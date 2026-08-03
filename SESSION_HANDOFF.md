@@ -97,7 +97,87 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-11 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-12 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**`main` = `3b4830a` — PROMOTED.** `dev/phase1` = `d5901ee`, clean, pushed.
+NSI max 76, next free 77. 120 gates, 5 excluded.
+
+#### ⭐ PROMOTION DONE — three consecutive greens on ONE tip
+
+`30804476970`, `30811210244`, `30811221820` — all success, all `3b4830a`.
+`git merge --ff-only` carried DDR-817 (CI sharding, 2 h 08 m → ~25 min),
+**X25519**, SHA-512, DDR-822, DDR-823, and the `_start` alignment fix across 23
+probes. **Ed25519 is unblocked under rule 7.**
+
+#### ⭐ smoke-aead PASSES — the wrong constant was the probe's
+
+Root-caused with positive evidence, not assumed. **RFC 8439 carries two
+different nonces a few pages apart:**
+
+```
+§2.3.2 (block function test)  00 00 00 09 | 00 00 00 4a | 00 00 00 00
+§2.4.2 (encryption test)      00 00 00 00 | 00 00 00 4a | 00 00 00 00
+```
+
+The probe paired §2.3.2's nonce with §2.4.2's expected ciphertext — which is
+exactly why the failure was `first_bad_byte=0`, a gross mismatch rather than
+anything resembling a carry bug. **Proved** by running both candidate nonces
+against the same unmodified `aead.c` on the host: §2.4.2 matches, §2.3.2 does
+not. `aead.c` was correct throughout.
+
+Gate now passes in QEMU, exclusion removed, registered in shard 4. The comment
+on `N244` records the trap. **This vindicates committing it excluded** — had it
+gone straight into the matrix, CI would have been red on a probe bug.
+
+#### ⭐ DDR-821 step 1 done — field layer extracted, regression-clean
+
+`kernel/crypto/fe25519.{c,h}` extracted from `x25519.c` so `ed25519.c` can share
+it. Verified **twice**: all 7 RFC 7748 checks still pass on the host, and
+`smoke-x25519` PASSES in QEMU on a genuinely rebuilt artefact.
+
+**Next step for Ed25519** is the group law itself — Edwards extended
+coordinates, plus scalar arithmetic mod
+`L = 2^252 + 27742317777372353535851937790883648493`. Design is complete in
+`docs/ddr/DDR-821-ed25519.md`, including the 7 vectors and the A/B/C arms.
+
+#### 🔴 DDR-825 — a build that reported success and never ran
+
+**DDR-822 fixed `user/` and stopped there.** The probe ELFs also link
+`kernel/crypto/*.c`, and the **Makefile itself** decides what gets linked.
+Neither was a prerequisite of `$(KERNEL_BIN)`.
+
+So `make image` reported no errors, `x25519test.elf` appeared to change size,
+and **`build/fe25519_user.o` did not exist** — the link never ran. Without the
+rule-4 freshness check, the next `smoke-x25519` would have exercised the OLD
+`x25519.c` with the field layer still inlined, and its PASS would have said
+nothing about the refactor it was meant to regression-test.
+
+Fixed by globbing `kernel/crypto/*` and listing `Makefile`. **Sixth instance**
+of the same structural defect. Rule extended: *when replacing a hand-maintained
+list, ask what else belongs in it before declaring it fixed.*
+
+#### B#3 — evidence harvest dispatched, not yet read
+
+Per the queue's instruction, stopped local repros and dispatched **four CI runs**
+(`30817443737`, `30817543924`, `30817552272`, `30817560375`) on `dev/phase1` to
+harvest `op=` lines from `smoke-smp`/`smoke-rqstress`, where both OPEN-10 hits
+actually occurred. **All still in flight — read them first next session.**
+
+`op=write` supports the OPEN-10 ≡ B#3 unification; `op=create`/`op=unlink`
+refutes it. **Still ruled out, do not retry:** `IRQF_PERCPU` (no analogue in
+this kernel) and a spinlock in `sfs.c` (no global mutable state; VFS already
+serialises per-mount).
+
+#### Next, in order
+
+1. Read the four B#3 harvest runs for `op=` lines.
+2. **Ed25519 group law** — `kernel/crypto/ed25519.{c,h}`, RFC 8032 vectors,
+   `smoke-ed25519` arms A/B/C. Field layer is ready and proven.
+3. ACC (DDR-813, NSI 77/78) — **now legitimately unblocked**: AEAD is genuinely
+   green, not merely excluded.
+4. AGS (79/80) → rotation (81) → TASK 9–21.
+
+### 0.-11 SESSION — 2026-08-03 (earlier)
 
 **`dev/phase1` tip when this was written: `3b4830a` + this commit.
 `main` = `b823bb5`.** NSI max 76, next free 77. 119 gates, 6 excluded.
