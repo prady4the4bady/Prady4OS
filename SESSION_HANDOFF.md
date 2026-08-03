@@ -140,11 +140,39 @@ Other decisions worth keeping:
 - `*r = acc` on a 160-byte struct compiles to a **memcpy call**, which does not
   exist in the freestanding user model. Replaced with explicit `fe_copy`.
 
-**GATE STATUS — UNRESOLVED, DO NOT ASSUME.** `smoke-ed25519` is written,
-registered in shard 5, and `GLOBAL_FORBIDDEN` extended. A run was in flight at
-session end and **its PASS/FAIL line was not captured** (the grep swallowed it
-and the pipeline hid make's exit status). A re-run writing to
-`/tmp/ed_gate.log` with `EXIT=` was started.
+**GATE STATUS — FAILED. Resolved at session end, recorded rather than left open.**
+
+```
+[smoke] FAIL — required pattern 'PRADYOS_ED25519_VECTORS_OK' not found.
+EXIT=2
+```
+
+**Read what this is and is NOT.** There is **no** `PRADYOS_ED25519_STUB` line and
+**no** trap. The probe did not report a wrong vector and did not fault — the
+sentinel simply never appeared inside the 150 s window. So this is NOT evidence
+that the implementation is wrong, and the host vectors (all of RFC 8032 §7.1,
+plus tamper/wrong-key/round-trip) stand.
+
+**Leading hypothesis, untested: the probe is too slow under TCG.** It performs
+**8 scalar multiplications** — 3 pubkey derivations, 3 signs (each of which does
+two scalarmults internally), plus verifies — at 256 ladder steps each with an
+unconditional `ge_add` and `ge_dbl`, i.e. roughly 40,000 `fe_mul` calls, plus a
+1023-byte hash. Every other crypto gate does a few hundred field operations.
+150 s was chosen by analogy, not measured.
+
+**Next actions, cheapest first:**
+1. Read the full serial log for `Ed25519 vector probe spawned` — that separates
+   "never started" from "started and did not finish".
+2. Raise `TIMEOUT_S` to 300 **in the recipe** (the shell-assignment prefix beats
+   the environment — see the 0.-10 note) and re-run.
+3. If still nothing, cut the probe to T1 + tamper only and re-measure; the cost
+   is dominated by scalarmult count, not by which vectors are checked.
+4. Only after those: suspect the implementation.
+
+**The gate stays REGISTERED in shard 5.** It is a real assertion about a real
+primitive and it is currently failing; hiding it in EXCLUDE would be the DDR-817
+mistake. **CI will be red on this until it is fixed — that is correct and
+intended, and it must be fixed before ACC (DDR-813) starts.**
 
 **Next exact command:**
 ```
