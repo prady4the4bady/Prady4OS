@@ -88,6 +88,14 @@ jobs:
       - name: Build kernel image (-Werror)
         run: make image
 
+      # DDR-826: no probe ELF may carry a writable allocated section without a
+      # writable PT_LOAD to hold it. lld places such an orphan in the R+X segment,
+      # the link succeeds, and the FIRST STORE faults at runtime — which the gate
+      # then reports as a missing sentinel, i.e. "the code under test is wrong".
+      # That is exactly how smoke-ed25519 failed.
+      - name: Probe ELFs carry no writable sections (DDR-826)
+        run: make ci-probe-rodata-check
+
       - name: Run shard ${{ matrix.shard }}
         run: bash tools/ci/run_shard.sh ${{ matrix.shard }}
 

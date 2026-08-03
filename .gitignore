@@ -60,3 +60,4 @@ aether/agents/memory/failures.jsonl
 aether/agents/memory/lineage.jsonl
 aether/agents/tool_composer/skills.jsonl
 aether/kernel/lockbox/metrics.jsonl
+build/gatelogs/

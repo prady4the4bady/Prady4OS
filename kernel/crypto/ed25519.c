@@ -83,9 +83,19 @@ static unsigned fe_isodd(const fe f) {
 
 typedef struct { fe X, Y, Z, T; } ge;      /* extended coords: x=X/Z, y=Y/Z */
 
-static fe C_D, C_SQRTM1;
-static ge  C_B;
-static int g_init;
+/* NO WRITABLE GLOBALS. user.ld gives probe ELFs a single R+X PT_LOAD with no
+ * writable segment, so a `static fe C_D` lands in .lbss, lld places it as an
+ * orphan inside that read-only segment, and the first store faults:
+ *
+ *   [trap] user #PF pid=29 rip=0x80000035D4 cr2=0x8000004F80 err=0x7
+ *          (err bit 1 = WRITE, bit 2 = USER -> a user write to a present RO page)
+ *
+ * That is exactly how smoke-ed25519 failed: the probe spawned, curve_init()
+ * stored to C_D, and the process was killed before printing anything. The
+ * constants therefore live in a caller-provided struct on the stack. Deriving
+ * them costs three fe_invert calls per public API call, which is negligible
+ * against the 5+ scalar multiplications each of those calls already performs. */
+typedef struct { fe d, sqrtm1; ge B; } ed_ctx;
 
 static void ge_zero(ge *p) { fe_0(p->X); fe_1(p->Y); fe_1(p->Z); fe_0(p->T); }
 
@@ -99,18 +109,17 @@ static void derive_sqrtm1(fe out) {
     fe_mul(out, t, two);
 }
 
-static void ge_add(ge *r, const ge *p, const ge *q);
+static void ge_add(const ed_ctx *cx, ge *r, const ge *p, const ge *q);
 
-static void curve_init(void) {
-    if (g_init) return;
+static void curve_init(ed_ctx *cx) {
 
     /* d = -121665 * inv(121666) */
     fe a, b;
     fe_small(a, 121665); fe_neg(a, a);
     fe_small(b, 121666); fe_invert(b, b);
-    fe_mul(C_D, a, b);
+    fe_mul(cx->d, a, b);
 
-    derive_sqrtm1(C_SQRTM1);
+    derive_sqrtm1(cx->sqrtm1);
 
     /* By = 4/5; Bx = even sqrt((y^2-1)/(d y^2 + 1)) */
     fe four, five, y, y2, num, den, x, chk;
@@ -121,7 +130,7 @@ static void curve_init(void) {
     fe_sq(y2, y);
     fe_1(a);
     fe_sub(num, y2, a);                 /* y^2 - 1 */
-    fe_mul(den, C_D, y2); fe_add(den, den, a);   /* d y^2 + 1 */
+    fe_mul(den, cx->d, y2); fe_add(den, den, a);   /* d y^2 + 1 */
     fe_invert(den, den);
     fe_mul(num, num, den);              /* u = (y^2-1)/(d y^2+1) */
 
@@ -130,26 +139,24 @@ static void curve_init(void) {
     fe_mul(x, x, num);
     fe_sq(chk, x);
     if (!fe_eq(chk, num))
-        fe_mul(x, x, C_SQRTM1);
+        fe_mul(x, x, cx->sqrtm1);
     if (fe_isodd(x))
         fe_neg(x, x);                   /* RFC 8032: base point has x even */
 
-    fe_copy(C_B.X, x);
-    fe_copy(C_B.Y, y);
-    fe_1(C_B.Z);
-    fe_mul(C_B.T, x, y);
-
-    g_init = 1;
+    fe_copy(cx->B.X, x);
+    fe_copy(cx->B.Y, y);
+    fe_1(cx->B.Z);
+    fe_mul(cx->B.T, x, y);
 }
 
 /* ---------------- group law (extended coords, a = -1) ---------------- */
 
 /* add-2008-hwcd-3 */
-static void ge_add(ge *r, const ge *p, const ge *q) {
+static void ge_add(const ed_ctx *cx, ge *r, const ge *p, const ge *q) {
     fe A, B, C, D, E, F, G, H, t;
     fe_sub(A, p->Y, p->X); fe_sub(t, q->Y, q->X); fe_mul(A, A, t);
     fe_add(B, p->Y, p->X); fe_add(t, q->Y, q->X); fe_mul(B, B, t);
-    fe_mul(C, p->T, q->T); fe_add(t, C_D, C_D); fe_mul(C, C, t);
+    fe_mul(C, p->T, q->T); fe_add(t, cx->d, cx->d); fe_mul(C, C, t);
     fe_mul(D, p->Z, q->Z); fe_add(D, D, D);
     fe_sub(E, B, A);
     fe_sub(F, D, C);
@@ -194,12 +201,12 @@ static void ge_cmov(ge *r, const ge *q, uint64_t b) {
 /* r = [s]p, MSB-first double-and-always-add. The add is unconditional and the
  * result is selected with a mask, so the sequence of field operations does not
  * depend on the scalar. */
-static void ge_scalarmult(ge *r, const uint8_t s[32], const ge *p) {
+static void ge_scalarmult(const ed_ctx *cx, ge *r, const uint8_t s[32], const ge *p) {
     ge acc, sum;
     ge_zero(&acc);
     for (int i = 255; i >= 0; i--) {
         ge_dbl(&acc, &acc);
-        ge_add(&sum, &acc, p);
+        ge_add(cx, &sum, &acc, p);
         ge_cmov(&acc, &sum, (uint64_t)((s[i >> 3] >> (i & 7)) & 1u));
     }
     fe_copy(r->X, acc.X); fe_copy(r->Y, acc.Y);
@@ -216,8 +223,7 @@ static void ge_tobytes(uint8_t out[32], const ge *p) {
 }
 
 /* 0 on success, -1 if the encoding is not a curve point. */
-static int ge_frombytes(ge *p, const uint8_t s[32]) {
-    curve_init();
+static int ge_frombytes(const ed_ctx *cx, ge *p, const uint8_t s[32]) {
     fe y, y2, num, den, x, chk, one;
     uint8_t t[32];
     for (unsigned i = 0; i < 32u; i++) t[i] = s[i];
@@ -228,7 +234,7 @@ static int ge_frombytes(ge *p, const uint8_t s[32]) {
     fe_1(one);
     fe_sq(y2, y);
     fe_sub(num, y2, one);
-    fe_mul(den, C_D, y2); fe_add(den, den, one);
+    fe_mul(den, cx->d, y2); fe_add(den, den, one);
     fe_invert(den, den);
     fe_mul(num, num, den);
 
@@ -236,7 +242,7 @@ static int ge_frombytes(ge *p, const uint8_t s[32]) {
     fe_mul(x, x, num);
     fe_sq(chk, x);
     if (!fe_eq(chk, num)) {
-        fe_mul(x, x, C_SQRTM1);
+        fe_mul(x, x, cx->sqrtm1);
         fe_sq(chk, x);
         if (!fe_eq(chk, num))
             return -1;                  /* not a square: not on the curve */
@@ -347,23 +353,25 @@ static void secret_scalar(uint8_t a[32], uint8_t prefix[32],
 }
 
 void ed25519_pubkey(uint8_t pub[32], const uint8_t seed[32]) {
-    curve_init();
+    ed_ctx cx;
+    curve_init(&cx);
     uint8_t a[32], prefix[32];
     ge A;
     secret_scalar(a, prefix, seed);
-    ge_scalarmult(&A, a, &C_B);
+    ge_scalarmult(&cx, &A, a, &cx.B);
     ge_tobytes(pub, &A);
 }
 
 void ed25519_sign(uint8_t sig[64], const void *msg, uint32_t msglen,
                   const uint8_t seed[32]) {
-    curve_init();
+    ed_ctx cx;
+    curve_init(&cx);
     uint8_t a[32], prefix[32], pub[32], rh[64], r[32], hram[64], k[32];
     ge R, A;
     sha512_ctx c;
 
     secret_scalar(a, prefix, seed);
-    ge_scalarmult(&A, a, &C_B);
+    ge_scalarmult(&cx, &A, a, &cx.B);
     ge_tobytes(pub, &A);
 
     /* r = SHA-512(prefix || M) mod L */
@@ -373,7 +381,7 @@ void ed25519_sign(uint8_t sig[64], const void *msg, uint32_t msglen,
     sha512_final(&c, rh);
     sc_reduce(r, rh);
 
-    ge_scalarmult(&R, r, &C_B);
+    ge_scalarmult(&cx, &R, r, &cx.B);
     ge_tobytes(sig, &R);                       /* sig[0..31] = R */
 
     /* k = SHA-512(R || A || M) mod L ; S = (k*a + r) mod L */
@@ -389,7 +397,8 @@ void ed25519_sign(uint8_t sig[64], const void *msg, uint32_t msglen,
 
 int ed25519_verify(const uint8_t sig[64], const void *msg, uint32_t msglen,
                    const uint8_t pub[32]) {
-    curve_init();
+    ed_ctx cx;
+    curve_init(&cx);
     ge A, R, sB, kA, rhs;
     uint8_t hram[64], k[32], lhs_b[32], rhs_b[32];
     sha512_ctx c;
@@ -404,9 +413,9 @@ int ed25519_verify(const uint8_t sig[64], const void *msg, uint32_t msglen,
             return -1;
     }
 
-    if (ge_frombytes(&A, pub) != 0)
+    if (ge_frombytes(&cx, &A, pub) != 0)
         return -1;
-    if (ge_frombytes(&R, sig) != 0)
+    if (ge_frombytes(&cx, &R, sig) != 0)
         return -1;
 
     sha512_init(&c);
@@ -417,9 +426,9 @@ int ed25519_verify(const uint8_t sig[64], const void *msg, uint32_t msglen,
     sc_reduce(k, hram);
 
     /* Check [S]B == R + [k]A */
-    ge_scalarmult(&sB, sig + 32, &C_B);
-    ge_scalarmult(&kA, k, &A);
-    ge_add(&rhs, &R, &kA);
+    ge_scalarmult(&cx, &sB, sig + 32, &cx.B);
+    ge_scalarmult(&cx, &kA, k, &A);
+    ge_add(&cx, &rhs, &R, &kA);
 
     ge_tobytes(lhs_b, &sB);
     ge_tobytes(rhs_b, &rhs);

@@ -92,8 +92,8 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.4 | ChaCha20-Poly1305 (DDR-819) | ✅ | `smoke-aead` **PASSES**, registered in shard 4. First run failed on a wrong recalled nonce (§2.3.2 vs §2.4.2) — the probe, not the primitive. |
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
-| 6.7 | **Ed25519** (DDR-821) | 🔴 | all RFC 8032 §7.1 vectors pass on the HOST; **`smoke-ed25519` FAILS in QEMU — sentinel never appears, no STUB line, no trap.** Leading hypothesis: too slow under TCG (~40k fe_mul). Gate stays registered; CI is red until fixed. |
-| 6.8 | ACC (DDR-813) | 🔒 | 6.4 ✅ 6.6 ✅; needs 6.7 green |
+| 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
+| 6.8 | ACC (DDR-813) | ⬜ | **UNBLOCKED** — 6.4, 6.6, 6.7 all green. Next slice. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---
@@ -111,7 +111,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
-### The recurring structural defect — SIX instances
+### The recurring structural defect — SEVEN instances
 
 One bug in five costumes: **a check that discards input instead of rejecting it,
 so drift is silent and looks like success.**
@@ -124,6 +124,7 @@ so drift is silent and looks like success.**
 | 4 | `syscall_register()` | `num >= MAX_SYSCALLS` discarded; NSI 80+ would vanish | DDR-823 — panic + table 80→128 |
 | 5 | `check_global_forbidden()` | printed only matching lines, **discarding the `op=` line that names the defect** | DDR-824 — 40 lines of context |
 | 6 | **crypto sources + Makefile not prerequisites** | **a build that reports success and never runs** — DDR-822 fixed `user/` and stopped there | DDR-825 — glob `kernel/crypto/*` and list `Makefile` |
+| 7 | **writable global in an R+X-only probe** | **link succeeds; the FIRST STORE faults at runtime**, and the gate reports it as a missing sentinel i.e. "the crypto is wrong" | DDR-826 — `make ci-probe-rodata-check` |
 
 **Rule earned: when a check discards input rather than rejecting it, the discard
 must be loud.**
