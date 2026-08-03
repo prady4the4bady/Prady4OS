@@ -89,7 +89,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.1 | SHA-256 (DDR-811) | ✅ | `smoke-sha256`, 4 FIPS vectors |
 | 6.2 | Metric lockbox (DDR-812) | ✅ | `smoke-lockbox`, `smoke-metric` |
 | 6.3 | HMAC + HKDF (DDR-818) | ✅ | `smoke-hkdf`, 3 RFC 5869 vectors |
-| 6.4 | ChaCha20-Poly1305 (DDR-819) | ⚠️ | `smoke-aead` written + wired + in the build; **excluded, never gate-run** (QEMU slot busy all session) |
+| 6.4 | ChaCha20-Poly1305 (DDR-819) | 🔴 | `smoke-aead` written + wired; **ran once and FAILED** — `case=chacha20_2_4_2 first_bad_byte=0`. Probe-vs-primitive not yet resolved; excluded. |
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | Ed25519 (DDR-821) | ❌ | blocked on 6.6 by rule 7 |

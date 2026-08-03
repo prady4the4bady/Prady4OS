@@ -141,10 +141,26 @@ lint-clean (`ci-shard-check`, `ci-start-align-check` both pass). This closes the
 gap flagged since DDR-819: `aead.c` was host-verified only, with no gate and in
 no build, and DDR-813 must not consume an ungated primitive.
 
-**The gate has NOT been run even once.** The QEMU slot was occupied by the B#3
-reproduction for the whole session, and rule 1 is serial-QEMU. It is therefore
-**excluded with that reason recorded** in `shard_check.sh` — committing it
-registered would put an unverified gate in front of every promotion.
+**IT WAS RUN ONCE AT SESSION END AND IT FAILED:**
+```
+PRADYOS_AEAD_STUB case=chacha20_2_4_2 first_bad_byte=0
+```
+**This vindicates excluding it.** Had it been registered, CI would be red right
+now and blocking every promotion.
+
+**Diagnosis, stated as far as the evidence goes and no further.** Byte 0 of the
+ChaCha20 keystream check differs — a gross mismatch, so it is the key/nonce/
+counter setup or a wrong recalled constant, NOT a subtle carry bug in the round
+function. DDR-819 recorded RFC 8439 §2.4.2 passing on the HOST against this same
+`aead.c`, which points at **the probe**, not the primitive. **That is a
+hypothesis, not a finding — it has not been checked.**
+
+First thing to do: re-derive the §2.4.2 inputs rather than trusting the recalled
+ones. Key = 00..1f, nonce = 00:00:00:09 00:00:00:4a 00:00:00:00, **counter = 1**,
+the "sunscreen" plaintext. Verify `chacha20_stream`'s counter argument means
+what the probe assumes. Then re-run, and only then unexclude.
+
+The gate stays **excluded with that reason recorded** in `shard_check.sh`.
 
 **Next action for it:** `make smoke-aead`, then delete the `smoke-aead` line
 from `EXCLUDE` and add `4<TAB>smoke-aead<TAB>90` to `gate_shards.txt`.
