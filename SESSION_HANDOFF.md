@@ -97,7 +97,98 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-13 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-14 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**`main` = `3b4830a`. `dev/phase1` = `5688db3`** + this handoff commit.
+NSI max 76, next free **77**. 121 gates, 5 excluded.
+
+#### ⭐ smoke-ed25519 is GREEN — and the failure was never the crypto
+
+```
+PRADYOS_ED25519_VECTORS_OK
+```
+
+**DDR-826.** `user/user.ld` links probes as a single **R+X `PT_LOAD` with no
+writable segment**. `ed25519.c` cached its derived curve constants in
+`static fe C_D` etc; those landed in a 264-byte `.lbss` (flags `WA`); **lld
+placed the orphan inside the read-only segment and the link SUCCEEDED**. The
+first store faulted:
+
+```
+[trap] user #PF pid=29 rip=0x80000035D4 cr2=0x8000004F80 err=0x7
+       err = present | WRITE | USER   cr2 = 0xB0 past the end of .lrodata
+```
+
+The probe spawned and died in `curve_init()` **before printing a byte**, so the
+gate said "required pattern not found" — which reads as *"Ed25519 is wrong"*. It
+was not; every RFC 8032 vector passed on the host before and after.
+
+**Two plausible hypotheses killed by measurement, not argument:**
+- *"too slow under TCG"* — the probe costs **~3 ms on the host at -O2**; even at
+  `-O0` with a 100× TCG penalty that is ~6 s against a 150 s window. A 25×
+  margin. Plausible-sounding and wrong.
+- *"the harness swallowed the verdict"* — killed by re-running with
+  `SERIAL_LOG` under `build/gatelogs/` instead of `/tmp`, **which had been wiped
+  mid-session** (exactly the flakiness `boot_test.sh` documents). The verdict was
+  real and the serial log showed the probe spawning and producing nothing.
+
+**Fix, two parts:** constants derive into a stack `ed_ctx` (no file-scope
+mutable state; `.data`/`.bss` now size 0), and **`make ci-probe-rodata-check`**
+fails the build if an ELF has a writable allocated section *and no writable
+`PT_LOAD` to hold it*. The predicate matters — the first version flagged
+writable sections outright and immediately failed on `init`/`prism`/
+`compositor`/`aether_daemon`/`cmusl`, which are **correct** (they link with
+`$(USER_C_LD)`, which does provide a writable segment). Rather than maintain a
+list of which program uses which script, **the check asks the binary**. 43 ELFs,
+none flagged. Wired into CI after `make image`.
+
+**Seventh instance of the structural defect — and six of seven are build-time
+silence.** The toolchain had the information and did not surface it. lld could
+see a writable section had no writable segment; it placed it anyway.
+
+#### ⭐ ACC (DDR-813) envelope written and host-verified
+
+`kernel/crypto/acc.{c,h}`. All arms pass on the host:
+
+```
+seal ACC_OK · open ACC_OK (plaintext matches) · agent_sign_pub present
+tamper ct ACC_ERR_AUTH · tamper sig ACC_ERR_AUTH
+replay ACC_ERR_REPLAY · owner-read-post-reboot ACC_OK · next seq ACC_OK
+```
+
+Both spec bugs fixed at design time: **BUG-1** `agent_sign_pub[32]` is in the
+envelope (without it the owner cannot verify after a reboot — the offline read
+is the entire point); **BUG-2** the Ed25519 and X25519 keys are distinct fields
+that never alias.
+
+**NOT DONE:** `SYS_ACC_SEAL` (77) / `SYS_ACC_OPEN` (78) are not implemented and
+**there is no `smoke-acc` gate.** This is host-verified code, not a shipped
+feature. Do not treat it as gated.
+
+#### B#3 / OPEN-10 — still no evidence
+
+Three harvest CI runs concluded green earlier; **no `btree churn FAIL` occurred,
+so no `op=` line exists.** The unification is **untested**, not refuted. Two more
+runs were dispatched this session and were in flight at the end.
+
+**Still ruled out, do not retry:** `IRQF_PERCPU` (no analogue here); a spinlock
+in `sfs.c` (no global mutable state; VFS serialises per-mount).
+
+#### Next, in order
+
+1. **Wire ACC**: `SYS_ACC_SEAL` (77) + `SYS_ACC_OPEN` (78) in
+   `kernel/syscall/`, `user/acctest.c`, gate `smoke-acc` with the four arms
+   already proven on the host. Register in a shard **only after it passes once**.
+2. Read the two in-flight CI runs for `op=` lines.
+3. DDR-814 AGS (79/80) → DDR-815 rotation (81) → TASK 9–21.
+
+**Reusable rules earned this session:**
+- Gate logs go under `build/gatelogs/`, never `/tmp` — WSL wipes it mid-run.
+- A probe that spawns and prints nothing is a **link-script violation** far more
+  often than a logic bug. Check `err=0x7` and `cr2` against section addresses
+  before suspecting the algorithm.
+
+### 0.-13 SESSION — 2026-08-03 (earlier)
 
 **`main` = `3b4830a`. `dev/phase1` = `c68dc24`** + a pending handoff commit.
 NSI max 76, next free 77. **121 gates, 5 excluded.**
