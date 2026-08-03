@@ -97,7 +97,79 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-14 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-15 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**`main` = `3b4830a`. `dev/phase1` = `eb2c2f1`** + this handoff commit.
+**NSI 77/78 assigned and REGISTERED.** Next free **79**. 121 gates, 5 excluded.
+
+#### ⭐ DDR-827 — the load window was full, and ACC did not fit
+
+ACC is the first feature needing the **whole** crypto stack resident. Linking
+`acc.o` + `x25519` + `fe25519` + `hkdf` + `aead` + `ed25519` + `sha512` +
+`sys_acc.o` took `kernel.bin` **774,502 → 799,078 bytes**, past the DDR-733
+limit of 786,432. The image built, the size gate caught it, **and it did not
+boot** — stage 2 read only 24×64 sectors from LBA 17, so the kernel's tail never
+arrived.
+
+**Three coupled numbers, moved in one commit:**
+
+| file | was | now |
+|---|---|---|
+| `boot/stage2/stage2.asm:183` chunk count | 24 | **32** (= 1,048,576 B) |
+| `Makefile` `truncate` on `$(IMG)` | 1M | **2M** |
+| `Makefile` size gate | 786,432 | **1,048,576** |
+
+The image growth is **not optional**: from LBA 17 a 1 MiB image holds only
+1,039,872 B — *less* than the new window — so stage 2 would read past
+end-of-file.
+
+**32 chunks, not the 48 first designed — reduced after measuring.** The PT_HI
+assertion caps image+BSS at `0x600000`; `__bss_end` sits at physical
+`0x4cdf80`, leaving **1,253,504 bytes** of headroom. 48 would have been closer
+to the ceiling for no benefit, and each chunk is another INT13 round trip.
+
+**Verified with gates that touch the END of the image** — a short read corrupts
+the tail, so an early-code gate would pass against a broken load:
+`smoke` PASS · `smoke-user` PASS (7 FS patterns) · `smoke-fs` PASS (12 patterns).
+`smoke-smp` was still running and is **not claimed**.
+
+**Sequencing worth copying:** the tree was reverted to a booting state and
+committed *that* way first, so no commit ever left `dev/phase1` unbootable. The
+window was then raised as a separate step.
+
+#### ACC (DDR-813) — linked and registered, NOT shipped
+
+- `kernel/crypto/acc.{c,h}` host-verified: seal/open round-trip, tamper-ct and
+  tamper-sig → `ACC_ERR_AUTH`, replay → `ACC_ERR_REPLAY`,
+  owner-read-after-reboot → `ACC_OK`. Both spec bugs fixed (agent_sign_pub
+  in-band; Ed25519 and X25519 keys distinct).
+- `kernel/syscall/sys_acc.c` — `SYS_ACC_SEAL` (77, CAP_AGENT) and
+  `SYS_ACC_OPEN` (78, CAP_SOVEREIGN). The asymmetry is deliberate: opening
+  reveals a *peer's* plaintext, so it is owner-only (S1). The signing seed is
+  not a ring-3 parameter — it comes from the kernel, so a compromised agent
+  cannot sign as another agent. Entropy varies the per-envelope sequence, never
+  the seed (randomising the seed would change `agent_sign_pub` per call and
+  break the owner's offline verify — the exact failure BUG-1 prevents).
+  `-EAGAIN` replay vs `-EACCES` forgery stay distinct.
+- **NOT SHIPPED: there is no `smoke-acc`.** That is the next task.
+
+#### Next, in order
+
+1. **`user/acctest.c` + `smoke-acc`**, four arms already proven on the host:
+   success `ACC_OK`, tamper `ACC_ERR_AUTH`, replay `ACC_ERR_REPLAY`,
+   owner-read-after-reboot `ACC_OK`. Probe must have **no writable globals**
+   (DDR-826) — `ci-probe-rodata-check` will catch it, but write it right.
+   Register in a shard only after it passes once.
+2. Read `smoke-smp` (DDR-827 verification 4) and the two in-flight CI runs.
+3. DDR-814 AGS (79/80) → DDR-815 rotation (81) → TASK 9–21.
+
+#### Unchanged blockers
+
+**B#3 / OPEN-10:** still **no `op=` line**. Three earlier harvest runs were
+green; two more dispatched this session. Untested, not refuted. Still ruled out:
+`IRQF_PERCPU` (no analogue here), spinlock in `sfs.c` (no global mutable state).
+
+### 0.-14 SESSION — 2026-08-03 (earlier)
 
 **`main` = `3b4830a`. `dev/phase1` = `5688db3`** + this handoff commit.
 NSI max 76, next free **77**. 121 gates, 5 excluded.
