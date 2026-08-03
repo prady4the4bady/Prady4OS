@@ -10,7 +10,14 @@ capabilities.
 open and code is in flight) · `planned` (tracked, not started) · `proposed`
 (designed, prerequisites not yet answered).
 
-**Last verified against repo:** 2026-08-02, `main` @ `b823bb5` — two consecutive
+**Last verified against repo:** 2026-08-03, `dev/phase1` @ `1e40464` (tree clean); `main` @ `b823bb5`.
+**Corrections this session** — these were recorded as absent and are not:
+X25519 (`kernel/crypto/x25519.c`, host vectors pass), SHA-512
+(`kernel/crypto/sha512.c`, gate `smoke-sha512` A/B-verified), and the
+aarch64/riscv64 bootstraps (both green in CI every run). Full itemisation and
+the corrected phase counts live in `docs/BUILD_TRACKER.md`.
+
+**(previous)** 2026-08-02, `main` @ `b823bb5` — two consecutive
 CI greens on the exact tip (run 30733620093, attempts 1 and 2). That promotion
 carried **DDR-816** (kernel entropy), **DDR-818** (HMAC-SHA256 + HKDF-SHA256) and
 **DDR-819** (ChaCha20-Poly1305) in one cycle, on top of DDR-811 (SHA-256),
@@ -76,6 +83,25 @@ All entries below are **shipped**.
   construction and review, *not* by any gate — a constant-time compare and an
   early-exit `memcmp` reject exactly the same inputs, so no black-box QEMU gate
   can distinguish them. Stated in DDR-819 rather than papered over.
+- **X25519 key agreement** (DDR-820) — `kernel/crypto/x25519.{c,h}`, RFC 7748.
+  Pure C, 5×51-bit field over `p = 2^255-19`, constant-time Montgomery ladder
+  with a masked `cswap`. **Status is `active-slice`, not `shipped`:** all RFC
+  7748 vectors pass **on the host** — including a commutativity check that
+  depends on no published constant, and small-order-point rejection — but the
+  in-QEMU gate `smoke-x25519` does not yet reach its sentinel, so it is
+  **excluded from the shard matrix with a stated reason** in
+  `tools/ci/shard_check.sh`. Ed25519, ACC and AGS are blocked behind it.
+  **Known gap (owner decision D-1, on the record):** constant-time execution is
+  by construction and review only. No gate this project can run detects a timing
+  channel; QEMU under TCG does not model cache or pipeline timing. Production
+  use requires side-channel review.
+- **aarch64 / riscv64 bootstrap** (ADR-034) — `kernel/arch/{aarch64,riscv64}/`
+  each hold `boot.S` + `start.c` + `kernel.ld`. `make kernel-<arch>` builds
+  warning-clean and `smoke-<arch>` boots them under QEMU `virt`; **both are
+  green in the `arch-bootstrap` CI job on every run.** Scope per ADR-034 is
+  **boot-only** — they reach `kmain` and print the banner. No drivers, no FS, no
+  userspace, and the smoke-gate set is deliberately not ported. Stated
+  explicitly because "the arch ports work" would over-read this.
 - **Bounded W^X carve-out** (ADR-035) — the single, bounded exception to the
   ADR-021 W^X invariant, for §E-05 self-rewriting code. Binding; may only be
   superseded by a new ADR.

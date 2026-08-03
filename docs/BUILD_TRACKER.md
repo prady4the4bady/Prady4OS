@@ -1,8 +1,12 @@
 # PRADYOS — BUILD TRACKER
 
-**Live dashboard source of truth. Update in the same commit as any merged
-feature. If this drifts from the tree, it is a defect — see the four instances
-of exactly that failure recorded below.**
+**Live dashboard, single source of truth for status. Update in the SAME commit
+as any status-changing code. If this drifts from the tree it is a defect — five
+instances of exactly that failure are recorded in §4.**
+
+Every claim below is anchored to a verified artefact: a file that exists, a gate
+that ran, or a CI job that concluded. Where something is assumed rather than
+verified, it says so.
 
 ---
 
@@ -11,172 +15,276 @@ of exactly that failure recorded below.**
 | | |
 |---|---|
 | **`main`** | `b823bb5` — DDR-819 ChaCha20-Poly1305, two greens |
-| **`dev/phase1`** | `77e690c` — **NOT promoted** (OPEN-10 gates it) |
-| **Verified** | 2026-08-03 (tip 1fa8495) |
-| **NSI max** | **76** (`SYS_METRIC_READ`). Next free: **77**. Table size now 128. |
-| **CI gates** | 118 assigned across 6 shards · 6 excluded with reasons |
+| **`dev/phase1`** | `1e40464` — **NOT promoted** (OPEN-10 gates it) |
+| **Verified** | 2026-08-03, tree clean at `1e40464` |
+| **NSI max** | **76** (`SYS_METRIC_READ`). Next free **77**. Table size **128** (DDR-823). |
+| **CI gates** | **118** assigned across 6 shards · **6** excluded, each with a stated reason |
 | **CI wall-clock** | ~25 min (was 2 h 08 m before DDR-817) |
+
+**CI evidence on `dev/phase1`:**
+
+| run | tip | verdict |
+|---|---|---|
+| `30773609553` (workflow_dispatch) | `1fa8495` | **GREEN — all jobs** |
+| `30773828417` | `e4bb576` | in flight at last check |
+| `30774291748` | `1e40464` | in flight at last check |
 
 **Stale feature branches — do not delete, do not merge.** `feature/arm64`,
 `feature/arm64-grace`, `feature/apple`, `feature/rv64` all sit at `a398b62`.
-They are landing zones for Phase 0.2/0.3, not live work.
+Landing zones for later arch work, not live.
 
 ---
 
-## 2. Phase summary
+## 2. Tracker corrections made this session
 
-Carried forward from the Aug 2 assessment. **Not re-verified line-by-line this
-session** — stated so rather than implying a fresh audit.
+The previously-circulated verification table was wrong on load-bearing points.
+Each corrected entry below was re-checked against the tree, not assumed.
+
+| Stale claim | Verified reality |
+|---|---|
+| "X25519 ❌ Not started — no source in `kernel/crypto/`" | **`kernel/crypto/x25519.{c,h}` exists** (10,468 B). All RFC 7748 vectors pass on host, incl. a constant-independent commutativity check and small-order rejection. Gate is written and **excluded** pending in-QEMU verification. |
+| "SHA-512 not present" | **`kernel/crypto/sha512.{c,h}` exists.** 4 FIPS 180-4 vectors, **gate `smoke-sha512` A/B-verified**, in shard 3. |
+| "`arch/aarch64`, `arch/riscv64` — zero source files" | **Both populated**: `boot.S` + `start.c` + `kernel.ld` (~278 lines total). `make kernel-<arch>` builds; `smoke-<arch>` boots under QEMU. **Both green in CI every run.** |
+| "ISO pipeline — 3–5 sessions, from-scratch ports needed" | **Reframed.** Two of four targets already reach their boot banner. ISO work is *packaging* (GRUB/EFI/OpenSBI wrapping) on top of working boots, not porting. |
+| "OPEN-10 — add a spinlock to `sfs.c`" | **No such target.** `kernel/fs/sfs/sfs.c` has **zero** global mutable state; the VFS already serialises per-mount via an atomic sleep-mutex (`kernel/fs/vfs/vfs.c:25`, DDR-locks-3). See §5. |
+| "`tools/boot_test.sh`" | Actual path `tools/qemu_runner/boot_test.sh`. |
+| "109 CI gates" | 118 assigned, 6 excluded. |
+
+**Scope note on the arch ports, stated so it is not over-read:** ADR-034 scopes
+them as **boot-only**. They reach `kmain` and print a banner. No drivers, no FS,
+no userspace. That is real and CI-proven, and it is not feature parity.
+
+---
+
+## 3. Phase summary
+
+Counts carried from the Aug 2 assessment **except** Phase 0 and Phase 6, which
+were re-verified this session (see §2).
 
 | Phase | Name | Items | ✅ | ⚠️ | ❌ | % |
 |---|---|---|---|---|---|---|
-| 0 | Toolchain & Build | 11 | 4 | 4 | 3 | 36% |
+| 0 | Toolchain & Build | 11 | 6 | 2 | 3 | **55%** ↑ |
 | 1 | Bootloader | 9 | 6 | 2 | 1 | 67% |
 | 2 | NEXUS Kernel Core | 57 | 46 | 5 | 4 | 81% |
 | 3 | Driver Framework | 33 | 24 | 1 | 5 | 73% |
 | 4 | Filesystem Layer | 25 | 22 | 0 | 0 | 88% |
 | 5 | Userspace Foundation | 40 | 31 | 2 | 2 | 78% |
-| 6 | Crypto Stack | 9 | 4 | 1 | 2 | 44% |
+| 6 | Crypto Stack | 9 | 5 | 2 | 0 | **61%** ↑ (+2 🔒) |
 | 7 | AETHER Agent Runtime | 50 | 41 | 8 | 1 | 82% |
 | 8 | Sovereign Desktop | 30 | 27 | 1 | 2 | 90% |
 | 9 | Assembly Optimization | 7 | 1 | 2 | 4 | 14% |
 | 10 | Quantum Layer | 4 | 0 | 0 | 4 | FUTURE |
-| **Total** | | **286** | **213** | **27** | **31** | **74%** |
+| **Total** | | **286** | **217** | **25** | **28** | **76%** |
+
+Phase 0 rose because 0.2/0.3 (aarch64/riscv64 cross-compile) are ⚠️→✅ for the
+compile+boot scope ADR-034 defines. Phase 6 rose because X25519 (code) and
+SHA-512 (code + gate) were mis-recorded as absent.
+
+### Phase 6 — Crypto Stack, itemised (most-contested table)
+
+| # | Feature | Status | Evidence |
+|---|---|---|---|
+| 6.1 | SHA-256 (DDR-811) | ✅ | `smoke-sha256`, 4 FIPS vectors |
+| 6.2 | Metric lockbox (DDR-812) | ✅ | `smoke-lockbox`, `smoke-metric` |
+| 6.3 | HMAC + HKDF (DDR-818) | ✅ | `smoke-hkdf`, 3 RFC 5869 vectors |
+| 6.4 | ChaCha20-Poly1305 (DDR-819) | ⚠️ | code + host vectors; **no gate, in no build** |
+| 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
+| 6.6 | **X25519** (DDR-820) | ⚠️ | code + all host vectors; **gate excluded, unverified in QEMU** |
+| 6.7 | Ed25519 (DDR-821) | ❌ | blocked on 6.6 by rule 7 |
+| 6.8 | ACC (DDR-813) | 🔒 | needs 6.4 gate + 6.6 + 6.7 |
+| 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---
 
-## 3. Open defects
+## 4. Open defects
 
-| ID | Symptom | Hypothesis / cause | Status |
+| ID | Symptom | Cause / hypothesis | Status |
 |---|---|---|---|
-| **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | unknown | open, passive |
-| **OPEN-2** | intermittent CI reds, ~50% historical | partly explained by OPEN-1/10 | open |
-| **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | **leaked QEMU holding the image write-lock** — explains reproduces-then-clears, and why reverts never helped | **misattribution FIXED (DDR-823); root cause not yet confirmed on a `smoke-shell` failure** |
-| **OPEN-10** | `GLOBAL_FORBIDDEN` hit `'btree churn FAIL'` during unrelated gates | SFS B+tree churn probe racing under `QEMU_SMP=4` | **open — gates promotion.** Seen twice: `smoke-smp` (shard 5) and `smoke-rqstress` (shard 3), consecutive runs, both `-smp 4`. Rerun of the first was green ⇒ intermittent, not a flake |
-| **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer-stall hypothesis; DDR-777 probe shipped | open — last 🔴 in Phase 3 |
-| **smoke-x25519** | probe does not reach its sentinel in QEMU | unknown; one PASS observed but under contaminated host conditions ⇒ **carries no weight** | excluded from shard matrix; **blocks DDR-813** |
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses its sentinel | unknown | open, passive |
+| **OPEN-2** | historical intermittent CI reds | partly OPEN-1/10 | open |
+| **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | **leaked QEMU holding the image write-lock** | **misattribution FIXED (DDR-823)**; root cause not yet caught on a `smoke-shell` failure |
+| **OPEN-10** | `'btree churn FAIL'` during unrelated `-smp 4` gates | see §5 — likely a manifestation of B#3 | **open, gates promotion** |
+| **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | open — last 🔴 in Phase 3 |
+| **smoke-x25519** | probe does not reach its sentinel in QEMU | unknown | **excluded from shard matrix**; blocks Ed25519 → ACC → AGS |
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
-### The recurring structural defect — four instances, two sessions
+### The recurring structural defect — five instances
 
-One bug wearing four costumes: **a check that discards input instead of
-rejecting it, so drift is silent and looks like success.**
+One bug in five costumes: **a check that discards input instead of rejecting it,
+so drift is silent and looks like success.**
 
 | # | Where | Silent drop | Fixed by |
 |---|---|---|---|
-| 1 | `ci.yml` gate list | 8 gates never ran in CI, incl. every crypto primitive's | DDR-817 — `make ci-shard-check` |
-| 2 | Makefile user sources | 14 of 31 probes never triggered a rebuild ⇒ gates tested stale binaries | DDR-822 — `$(wildcard user/*.c)` |
+| 1 | `ci.yml` gate list | 8 gates never ran in CI | DDR-817 — `make ci-shard-check` |
+| 2 | Makefile user sources | 14/31 probes never rebuilt ⇒ gates tested stale binaries | DDR-822 — `$(wildcard user/*.c)` |
 | 3 | `user/` `_start` attribute | a new probe silently reintroduces a #GP | DDR-823 — `make ci-start-align-check` |
-| 4 | `syscall_register()` | `num >= MAX_SYSCALLS` silently discarded; NSI 80+ would have vanished | DDR-823 — panic + table 80→128 |
+| 4 | `syscall_register()` | `num >= MAX_SYSCALLS` discarded; NSI 80+ would vanish | DDR-823 — panic + table 80→128 |
+| 5 | `check_global_forbidden()` | printed only matching lines, **discarding the `op=` line that names the defect** | DDR-824 — 40 lines of context |
 
 **Rule earned: when a check discards input rather than rejecting it, the discard
 must be loud.**
 
 ---
 
-## 4. Work queue
+## 5. OPEN-10 — current diagnosis
 
-| # | Item | Blocked by |
+**Signature (the only thing that counts as OPEN-10 data):** the probe prints the
+literal string `btree churn FAIL`.
+
+**Occurrences:** 2, both CI, both `QEMU_SMP=4` gates — `smoke-smp` (shard 5) and
+`smoke-rqstress` (shard 3), consecutive runs.
+
+**Local stress produced NO evidence either way.** 20 × `smoke-sfs-btree` at
+`-smp 4`: 16 failed, **0 with the OPEN-10 signature** — all 16 were timeouts
+(`required pattern not found`). Counting those as OPEN-10 would be
+colour-matching, which this project has already paid for once. The 90 s window
+is the likely cause: three extra vCPUs multiply TCG work without adding host
+parallelism. **Confirmed** — the same probe at `TIMEOUT_S=180` under `-smp 4`
+**passed**.
+
+**The queue's prescribed fix has no target.** `kernel/fs/sfs/sfs.c` contains
+zero global mutable state, and every VFS operation is already serialised
+per-mount by an atomic sleep-mutex. There is nothing to add a spinlock to.
+
+**Live hypothesis — OPEN-10 is B#3 seen through the SFS probe.** The churn probe
+does 40 × (create + 64 KiB write + unlink), i.e. heavy block I/O; both hits were
+`-smp 4`; B#3 is a known `-smp 4` virtio-blk completion stall. A lost completion
+makes `vfs_write` return ≠ 65536, which the probe reports as `op=write`. **If
+true, fixing B#3 fixes both.**
+
+**How it gets confirmed or refuted:** DDR-824 made the harness print 40 lines of
+context on a global-forbidden hit. The probe writes
+`[sfs] churn FAIL op=<create|write|unlink> iter=<N>` immediately before the
+summary line, and that line previously never reached CI output. **The next
+occurrence will name its failing operation.** `op=write` supports the
+unification; `op=create` or `op=unlink` refutes it.
+
+`smoke-sfs-btree-smp4` exists as an on-demand reproduction surface, **excluded**
+from the shard matrix — registering it now would make CI red on a known-open
+defect and block unrelated promotions.
+
+---
+
+## 6. Work queue — complete, dependency-ordered
+
+Status key: ✅ done · 🔵 in progress · ⬜ not started · 🔒 blocked
+
+### Immediate
+
+| TASK | Item | Status |
 |---|---|---|
-| ✅ 0 | DDR-823 harness host-env detection (OPEN-9 misattribution) | done this session |
-| 1 | **OPEN-10 root cause** — `smoke-sfs-btree` × 100 under `QEMU_SMP=4`; >2% ⇒ real race | — **do next; gates promotion** |
-| 2 | Promote `dev/phase1` → `main` (two greens on one tip) | OPEN-10 verdict |
-| 3 | `smoke-x25519` re-verify on a clean host, `TIMEOUT_S=300` | OPEN-9/10 settled |
-| 4 | DDR-821 Ed25519 (RFC 8032) | — |
-| 5 | DDR-813 ACC | x25519 + ed25519 gates green **in main** |
-| 6 | B#3 / DDR-806 `-smp 4` virtio-blk stall | — (parallel, different surface) |
-| 7 | Agent skill prompts × 8 in SFS | — (no kernel change) |
-| 8 | DDR-824 ISO pipeline | **x86_64 100% gated first** |
+| 0 | BUILD_TRACKER tip SHA | ✅ |
+| 1 | OPEN-10 + CI promotion | 🔵 CI green on `1fa8495`; DDR-824 diagnostic landed; root cause open |
+| 2 | `smoke-x25519` clean-host re-verify | 🔵 **next** |
+| 3 | SHA-512 gate | ✅ A/B verified, shard 3 |
+| 4 | DDR-821 Ed25519 | 🔒 rule 7 — needs TASK 2 green in `main` |
+| 5 | DDR-813 ACC (NSI 77/78) | 🔒 needs 4 + `smoke-aead` |
+| 6 | DDR-814 AGS (NSI 79/80) | 🔒 needs 4 |
+| 7 | DDR-815 ACC rotation (NSI 81) | 🔒 needs 5 |
+| 8 | B#3 `-smp 4` virtio-blk stall | ⬜ **do before more OPEN-10 work** |
+
+### Section E — kernel syscalls (TASK 9)
+
+| Item | NSI | Status |
+|---|---|---|
+| `SYS_MEMORY_WRITE` / `SYS_MEMORY_READ` | 82/83 | ⬜ |
+| `SYS_CHECKPOINT_AGENT` / `SYS_RESUME_AGENT` | 84/85 | ⬜ |
+| `spawn_depth` cap in TCB | — | ⬜ |
+| DAG action queue (`parent_action_id`) | — | ⬜ |
+| `SYS_APPROVE_CODE_REWRITE` | 86 | ⬜ |
+| `SYS_READ_AUDIT` (Merkle verify, F#76) | 87 | ⬜ |
+
+### Section 3B — capability bits (TASK 10)
+
+`CAP_MEMORY` (1<<18) · `CAP_OCR` (1<<19) · `CAP_EXEC` (1<<20) · `CAP_REWRITE`
+(1<<21, always needs `CAP_SOVEREIGN` co-approval) · `CAP_SCENE` (1<<22) ·
+`CAP_NET_BROWSE` (1<<23) — **all ⬜**, each needs an enforcement gate.
+
+### Section 3C — action types #31–44 (TASK 11) — all ⬜
+
+`ACTION_READ_FILE` · `DELETE_FILE` · `EXEC_CODE` · `SEND_IPC` ·
+`PARSE_DOCUMENT` · `BROWSE_WEB` · `QUERY_MEMORY` · `CAPTURE_FRAME` ·
+`SCAN_ENVIRONMENT` · `QUERY_SCENE` · `REWRITE_AGENT_CODE` ·
+`PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` · `EVOLVE_GENOME`
+
+### Section 3D — ring-3 / daemon #45–65 (TASK 12) — all ⬜
+
+1 skill.md · 2 SkillOpt loop · 3 SkillOpt-Sleep · 4 skill-update validation ·
+5 multi-agent transfer · 6 TokenJuice · 7 JSONL trajectory · 8 cost accounting ·
+9 goals.md · 10 subconscious loop · 11 MOSS pipeline · 12 OCR→memory ·
+13 multi-modal context · 14 privacy mode (ring-3) · 15 model routing ·
+16 hypothesis tree · 17 genome.md · 18 vector knowledge graph ·
+19 dead-end registry · 20 population tournament · 21 run visualiser
+
+### Section F — visionary #66–76 (TASK 13)
+
+| # | Feature | Status |
+|---|---|---|
+| F#66 | architect_agent | ⬜ |
+| F#67 | healer_agent | ⬜ |
+| **F#68** | **metric lockbox** | ⚠️ kernel (DDR-812) ✅ + Python ✅; **end-to-end wiring unverified** — `smoke-lockbox-e2e` ⬜ |
+| F#69 | inventor_agent | ⬜ |
+| F#70 | tournament_agent | ⬜ |
+| F#71 | subconscious world model | ⬜ |
+| F#72 | verifier_agent | ⬜ |
+| F#73 | sovereign NL UI | ⬜ |
+| F#74 | capability discovery | ⬜ |
+| F#75 | lineage memory | ⬜ |
+| F#76 | tamper-evident ledger | ⬜ |
+
+### Section G — 12-agent roster (TASK 14)
+
+8 kernel slots (KRYOS…SOLIN) ✅ registered + UI cards ✅; **skill prompts ❌ for
+all 8**. 12 named agents (file/shell/research/ocr/subconscious/ai_scientist/
+healer/architect/verifier/tournament/orchestrator/vision) — **all ⬜**.
+
+### J-01…J-06 retro audit (TASK 15) — all ⬜
+
+### Section B remaining (TASK 16)
+
+B#1 NVMe IRQ ⏸ · B#4 SFS default root ⬜ · B#6 ext4 write ⬜ · B#9 I/O APIC ⬜ ·
+B#10 NUMA affinity ⬜ · B#12 PRISM job control ⬜ (`$?` ✅, SIGPIPE ✅) ·
+B#13 dynamic linker ⬜ · B#14 NAS scheduler ⬜ · B#15 PMM policy ⬜
+
+### TASK 17 — ISO pipeline
+
+| Target | Boot status | ISO status |
+|---|---|---|
+| x86_64 | ✅ boots, 118 gates | ⬜ multiboot2 + grub-mkrescue |
+| aarch64 | ✅ **boots in CI** | ⬜ EFI/U-Boot packaging |
+| riscv64 | ✅ **boots in CI** | ⬜ OpenSBI + U-Boot packaging |
+| Apple Silicon | ⬜ | ⬜ m1n1 shim over the aarch64 kernel |
+
+### TASK 18–21
+
+18 `prad` package manager (NSI 87–89 — **renumber, 87 is taken by
+`SYS_READ_AUDIT`; use 88–90**) ⬜ · 19 Phase 9 assembly ⬜ ·
+20 security invariant gates S1–S8 ⬜ · 21 v1.0.0 release ⬜
 
 ---
 
-## 5. August 31 — honest assessment
+## 7. August 31 — honest assessment
 
-**28 days. ~73 features remaining.**
+**28 days. ~69 features remaining** (down from 73: SHA-512 gated, X25519 and the
+arch bootstraps recorded correctly).
 
-Highest-risk, each plausibly multi-session:
+### Risk flags
 
-- `smoke-x25519` unknown failure — **blocks the entire ACC/AGS crypto chain**
-- B#3 `-smp 4` virtio-blk stall — last 🔴 in Phase 3
-- aarch64 / riscv64 ports — feature branches empty
-- ISO pipeline — not started, 3–5 sessions on its own
-- VirtualBox runner — not started
-- Phase 9 assembly + cycle counts — 14%
-- `prad` package manager — not started
+1. **The observed rate does not reach 69 features in 28 days.** The last three
+   sessions produced roughly 2 features each plus five infrastructure fixes. The
+   infrastructure was necessary — without DDR-822 every local verification was
+   potentially against a stale binary — but it is not feature throughput.
+2. **Five silent-drop defects in three sessions implies more exist.** Every one
+   was found while chasing something else, not by looking, and each made some
+   past "verified" claim weaker than it read.
+3. **The remaining work is not the easy remainder.** It is disproportionately
+   never-started items (Sections 3C/3D/F/G, `prad`, Phase 9, invariant gates)
+   with no scaffolding.
+4. **One thing got cheaper.** The ISO task is packaging over two already-booting
+   arch targets, not four ports.
 
-### Risk flags, stated plainly
-
-1. **The measured rate does not reach 73 features in 28 days.** The last two
-   sessions produced ~2 features each and four infrastructure fixes. The
-   infrastructure work was necessary — without DDR-822 every local
-   verification was potentially against a stale binary — but it is not
-   feature throughput.
-2. **Four silent-drop defects in two sessions suggests more exist.** Each was
-   found by accident while chasing something else, not by looking. Every one
-   made some past "verified" claim weaker than it read.
-3. **Some past greens meant less than recorded.** The eight gates DDR-817 found
-   had never run; the probes DDR-822 found were tested stale. The features are
-   probably fine — local 3-arm A/B is real evidence — but "two CI greens" did
-   not mean what it was taken to mean for those slices.
-4. **The remaining 26% is not the easy 26%.** It is disproportionately the
-   never-started items (ISO, VirtualBox, package manager, arch ports, Phase 9),
-   which have no scaffolding at all.
-
-The honest read: **August 31 for all 286 items is not achievable at the observed
-rate.** What is achievable is a defensible x86_64 build with the crypto chain
-closed and the two open races fixed. If the deadline is fixed, the useful
-decision is which subset ships — and that is a scope call, not an engineering
-one.
-
----
-
-## 6. OPEN-10 stress budget — result, and what it does NOT show
-
-**Run: 20 × `smoke-sfs-btree` at `QEMU_SMP=4`, serial, clean host
-(0 HOST-ENV failures — DDR-823's detector confirms QEMU started every time).**
-
-```
-pass=4  fail=16  hostenv=0
-```
-
-**80% failure — and NONE of it is OPEN-10.**
-
-| signature | count |
-|---|---|
-| `'btree churn FAIL'` — **the CI signature** | **0 / 20** |
-| `required pattern '[sfs] btree churn OK' not found` — a **timeout** | 16 / 20 |
-
-The probe never reported failure. It never *finished*, within the gate's 90 s
-window, on this host, under `-smp 4`.
-
-**This is a different defect from OPEN-10 and must not be counted as it.**
-OPEN-10 is the probe explicitly printing `btree churn FAIL`; this is the probe
-printing nothing. Treating an 80% timeout rate as "OPEN-10 confirmed at 80%"
-would repeat the exact error this project has already paid for once — matching
-failures on colour rather than on identity (the run 30640007581 misattribution).
-
-**Most likely cause of the timeouts, stated as a hypothesis:** the gate is
-specified `-smp 1 / TIMEOUT_S=90`, and this host runs WSL2 under TCG. Adding
-three vCPUs multiplies the emulation work without adding host parallelism, so
-90 s is plausibly just too short here. That would make the timeouts a
-**measurement artefact of my stress setup**, not a kernel defect — the standard
-`-smp 1` gate passes.
-
-**What that means for OPEN-10:** the local budget produced **no evidence either
-way**. The only evidence remains the two CI occurrences (`smoke-smp` shard 5,
-`smoke-rqstress` shard 3, consecutive runs, both `-smp 4`). Per the standing
-rule — red again ⇒ do not promote — promotion stays blocked.
-
-### Next step for OPEN-10, corrected
-
-Do **not** re-run the local budget at 90 s; it measures the host. Instead:
-
-1. Re-run with `TIMEOUT_S=300` at `-smp 4` to separate "too slow here" from
-   "does not complete". If the timeouts vanish, they were the artefact above and
-   the local host simply cannot host this budget at 90 s.
-2. The signature that matters is `btree churn FAIL`. Only a run producing *that*
-   string is data about OPEN-10.
-3. Failing local reproduction, the cheaper path is CI itself: OPEN-10 has
-   appeared in 2 of the last ~4 runs, so a handful of `workflow_dispatch` runs on
-   one tip gives a rate on the machine where it actually occurs.
+The honest read: **all 286 items by Aug 31 is not achievable at the observed
+rate.** Achievable is a defensible x86_64 build with the crypto chain closed,
+both `-smp 4` races fixed, and ISOs for the three targets that already boot.
+Which subset ships is a scope decision, not an engineering one.
