@@ -111,7 +111,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
-### The recurring structural defect — five instances
+### The recurring structural defect — SIX instances
 
 One bug in five costumes: **a check that discards input instead of rejecting it,
 so drift is silent and looks like success.**
@@ -123,6 +123,7 @@ so drift is silent and looks like success.**
 | 3 | `user/` `_start` attribute | a new probe silently reintroduces a #GP | DDR-823 — `make ci-start-align-check` |
 | 4 | `syscall_register()` | `num >= MAX_SYSCALLS` discarded; NSI 80+ would vanish | DDR-823 — panic + table 80→128 |
 | 5 | `check_global_forbidden()` | printed only matching lines, **discarding the `op=` line that names the defect** | DDR-824 — 40 lines of context |
+| 6 | **crypto sources + Makefile not prerequisites** | **a build that reports success and never runs** — DDR-822 fixed `user/` and stopped there | DDR-825 — glob `kernel/crypto/*` and list `Makefile` |
 
 **Rule earned: when a check discards input rather than rejecting it, the discard
 must be loud.**

@@ -253,7 +253,17 @@ kernel: $(KERNEL_BIN)
 #
 # A wildcard cannot go stale when a probe is added. Nothing here should ever be
 # a list a human has to remember to extend.
-USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h)
+# DDR-825: the probe ELFs link kernel/crypto sources too, and the Makefile
+# itself decides what gets linked. Neither was a prerequisite, so editing a
+# crypto source — or the recipe that links it — produced "Nothing to be done"
+# and the next gate silently tested the PREVIOUS binary. That is DDR-822 exactly,
+# one directory over: the wildcard fixed user/ and stopped there.
+#
+# Caught when adding fe25519.c: `make image` reported success, build/fe25519_user.o
+# did not exist, and the .elf on disk was the pre-change one.
+USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h) \
+                 $(wildcard kernel/crypto/*.c) $(wildcard kernel/crypto/*.h) \
+                 Makefile
 
 $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
@@ -334,9 +344,10 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/hkdf.c -o build/hkdf_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_HKDF_SRC) -o build/hkdftest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_HKDF_ELF) build/hkdftest.o build/hkdf_user.o build/sha256_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/fe25519.c -o build/fe25519_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/x25519.c -o build/x25519_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_X25519_SRC) -o build/x25519test.o
-	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_X25519_ELF) build/x25519test.o build/x25519_user.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_X25519_ELF) build/x25519test.o build/x25519_user.o build/fe25519_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/sha512.c -o build/sha512_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_SHA512_SRC) -o build/sha512test.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHA512_ELF) build/sha512test.o build/sha512_user.o
