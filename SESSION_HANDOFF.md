@@ -97,7 +97,114 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-9 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-10 SESSION — 2026-08-03 (CURRENT — read this first)
+
+**Branch `dev/phase1` = `6a0c571`. `main` = `b823bb5` (not promoted).**
+NSI max 76, next free 77. `MAX_SYSCALLS` 128. 118 gates, 6 excluded.
+
+#### ⭐ smoke-x25519 PASSED on a clean host — the crypto chain may be unblocked
+
+```
+[smoke] PASS — saw 'NEXUS KERNEL OK' + 1 FS pattern(s).   EXIT=0
+```
+
+**Why this pass is trustworthy where last session's was not.** Last session a
+PASS was observed and correctly discounted, because two QEMUs were racing the
+same image. This one has all four preconditions verified *before* the run:
+
+1. `pgrep qemu-system-x86_64` returned **0** (rule 1).
+2. `build/x25519test.elf` newer than `user/x25519test.c` (rule 4, DDR-822).
+3. DDR-823's HOST-ENV detector is live — lock contention would exit **3**, not
+   pass. It exited **0**.
+4. Nothing else was running.
+
+**VERIFIED vs ASSUMED, stated precisely:**
+- **Verified:** one clean-host PASS, exit 0.
+- **NOT verified:** repeatability. Three serial confirmation runs were launched
+  and had **not reported** by handoff time. **I did not remove the shard
+  exclusion**, because one pass after this defect's history is not enough.
+
+**Next exact command:**
+```
+wsl -d Ubuntu-24.04 -e bash -c 'cd /mnt/c/Users/prady/Documents/Claude/Projects/Prady4OS
+for i in 1 2 3 4 5; do make smoke-x25519 >/dev/null 2>&1; echo "run $i rc=$?"; done'
+```
+5/5 with rc=0 ⇒ remove `smoke-x25519` from `EXCLUDE` in
+`tools/ci/shard_check.sh`, add `3<TAB>smoke-x25519<TAB>90` to
+`tools/ci/gate_shards.txt`, run `make ci-shard-check`, push, and **Ed25519
+(TASK 4) is unblocked** once it is green in `main` (rule 7).
+
+#### NEW FINDING — `TIMEOUT_S=<n> make smoke-*` is silently ignored
+
+The recipe sets `TIMEOUT_S=90` as a **shell assignment prefix**, which always
+beats the environment. So `TIMEOUT_S=300 make smoke-x25519` runs at **90 s** and
+says so in its own log — I caught it only by reading
+`[smoke] booting ... (timeout 90s ...)`.
+
+**Every past "still fails at TIMEOUT_S=300 via make" claim is void.** The one
+genuine 300 s data point came from invoking `tools/qemu_runner/boot_test.sh`
+directly, which does honour the environment. To override a gate's timeout you
+must either call the script directly or use `make TIMEOUT_S=300 smoke-x25519`
+(a make-level variable) — and even that loses to the recipe's inline assignment.
+**Verify the timeout in the harness's own banner line, never assume it took.**
+
+#### Tracker reconciled — five stale load-bearing entries corrected (`6a0c571`)
+
+| stale | verified |
+|---|---|
+| "X25519 not started, no source" | `kernel/crypto/x25519.{c,h}`, 10,468 B, all RFC 7748 host vectors pass |
+| "SHA-512 not present" | `kernel/crypto/sha512.{c,h}`, gate `smoke-sha512` A/B-verified, shard 3 |
+| "aarch64/riscv64 zero source files" | `boot.S` + `start.c` + `kernel.ld` each; **green in CI's `arch-bootstrap` every run**. Scope is **boot-only** per ADR-034 — recorded that way so it is not over-read |
+| "ISO = 4 from-scratch ports, 3–5 sessions" | **packaging**, not porting — 2 of 4 targets already boot |
+| tracker tip `77e690c` | matched nothing; now `1e40464`→`6a0c571` |
+
+Phase 0 36%→55%, Phase 6 44%→61%, total 74%→76%. **Bookkeeping, not new code** —
+those features existed and were invisible in the tables.
+
+`BUILD_TRACKER.md` §6 now enumerates the **entire** plan with per-item status:
+TASK 0–21, Section E (NSI 82–87), 3B capability bits, 3C action types #31–44,
+3D daemon features 1–21, F#66–F#76, Section G 12 agents, J-01…J-06, Section B
+remainder, ISO ×4, `prad`, invariant gates, v1.0.0. Nothing planned is hidden.
+
+**NSI collision flagged:** TASK 18 specified `prad` at 87–89, but **87 is
+`SYS_READ_AUDIT`** (F#76). `prad` renumbered **88–90**.
+
+#### OPEN-10 — diagnosis advanced, root cause still open
+
+- CI run `30773609553` (workflow_dispatch on `1fa8495`) — **GREEN, all jobs.**
+- **DDR-824**: the harness printed only lines matching the forbidden pattern, so
+  `[sfs] churn FAIL op=<create|write|unlink> iter=<N>` — the line that names the
+  defect — **never reached CI output**. That is why OPEN-10 was seen twice and
+  stayed undiagnosable. Now prints 40 lines of context.
+- **The queue's spinlock fix has no target**: `kernel/fs/sfs/sfs.c` has zero
+  global mutable state; the VFS already serialises per-mount (`vfs.c:25`).
+- **Live hypothesis:** OPEN-10 is **B#3 seen through the SFS probe**. Both hits
+  were `-smp 4`; the probe does 40 × (create + 64 KiB write + unlink); a lost
+  virtio-blk completion makes `vfs_write` return ≠ 65536 ⇒ `op=write`.
+  **`op=write` supports it; `op=create`/`op=unlink` refutes it.**
+- `smoke-sfs-btree-smp4` added as an on-demand repro, **excluded** from the
+  matrix. It **PASSED** at `TIMEOUT_S=180`, confirming last session's 16/20
+  "failures" were the 90 s window (see the TIMEOUT_S finding above).
+
+#### Remaining blockers
+
+| blocker | state |
+|---|---|
+| `smoke-x25519` repeatability | 1 clean PASS; confirmations pending |
+| OPEN-10 root cause | gates promotion; **do B#3 first** |
+| B#3 `-smp 4` virtio-blk | untouched this session |
+| `smoke-aead` | DDR-819 still has no gate and is in no build |
+| Ed25519 → ACC → AGS → rotation | rule 7 chain behind x25519 |
+
+#### Next, in order
+
+1. Run the 5× confirmation above; if 5/5, unexclude and register `smoke-x25519`.
+2. Read CI runs `30773828417`, `30774291748`, `30803907180` (all 10/11 green
+   with one shard outstanding at handoff).
+3. **TASK 8 (B#3) before more OPEN-10 work.**
+4. TASK 4 Ed25519 once x25519 is green **in `main`**.
+
+### 0.-9 SESSION — 2026-08-03 (earlier)
 
 **`dev/phase1` = `e4bb576` + uncommitted SHA-512 gate. `main` = `b823bb5`.**
 NSI max 76, next free 77. MAX_SYSCALLS 128. 118 gates, 6 excluded.
