@@ -183,6 +183,12 @@ aeadtest_elf:
     incbin "build/aeadtest.elf"
 aeadtest_elf_end:
 
+global ed25519test_elf
+global ed25519test_elf_end
+ed25519test_elf:
+    incbin "build/ed25519test.elf"
+ed25519test_elf_end:
+
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

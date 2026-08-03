@@ -92,8 +92,8 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.4 | ChaCha20-Poly1305 (DDR-819) | ✅ | `smoke-aead` **PASSES**, registered in shard 4. First run failed on a wrong recalled nonce (§2.3.2 vs §2.4.2) — the probe, not the primitive. |
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
-| 6.7 | Ed25519 (DDR-821) | ❌ | blocked on 6.6 by rule 7 |
-| 6.8 | ACC (DDR-813) | 🔒 | needs 6.4 gate + 6.6 + 6.7 |
+| 6.7 | **Ed25519** (DDR-821) | ⚠️ | code + `smoke-ed25519` written and registered; **all RFC 8032 §7.1 vectors pass on the host**, in-QEMU gate running at session end |
+| 6.8 | ACC (DDR-813) | 🔒 | 6.4 ✅ 6.6 ✅; needs 6.7 green |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---

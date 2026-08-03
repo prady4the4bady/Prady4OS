@@ -150,3 +150,4 @@
 3	smoke-sha512	90
 3	smoke-x25519	90
 4	smoke-aead	90
+5	smoke-ed25519	150

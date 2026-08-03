@@ -369,6 +369,8 @@ extern const unsigned char sha512test_elf[];          /* DDR-821: SHA-512 vector
 extern const unsigned char sha512test_elf_end[];
 extern const unsigned char aeadtest_elf[];            /* DDR-819: AEAD vectors */
 extern const unsigned char aeadtest_elf_end[];
+extern const unsigned char ed25519test_elf[];         /* DDR-821: Ed25519 vectors */
+extern const unsigned char ed25519test_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
@@ -1287,6 +1289,16 @@ static void fs_test_thread(void *arg) {
                                  "AEAD", &ae) == ELF_OK && ae) {
                         sched_unblock(ae);
                         kputs("[user] ELF loaded (embedded); AEAD vector probe spawned\r\n");
+                    }
+                }
+                /* DDR-821: Ed25519 RFC 8032 vector probe, opt-in via DDR-804. */
+                if (probe_enabled("ed25519")) {
+                    struct tcb *ed = 0;
+                    uint64_t edlen = (uint64_t)(ed25519test_elf_end - ed25519test_elf);
+                    if (elf_load((void *)(uintptr_t)ed25519test_elf, edlen,
+                                 "ED25519", &ed) == ELF_OK && ed) {
+                        sched_unblock(ed);
+                        kputs("[user] ELF loaded (embedded); Ed25519 vector probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("lockbox")) {
