@@ -130,8 +130,9 @@ to the ceiling for no benefit, and each chunk is another INT13 round trip.
 
 **Verified with gates that touch the END of the image** — a short read corrupts
 the tail, so an early-code gate would pass against a broken load:
-`smoke` PASS · `smoke-user` PASS (7 FS patterns) · `smoke-fs` PASS (12 patterns).
-`smoke-smp` was still running and is **not claimed**.
+`smoke` PASS · `smoke-user` PASS (7 FS patterns) · `smoke-fs` PASS (12 patterns)
+· **`smoke-smp` PASS (4 patterns, EXIT=0)** — resolved after the handoff was
+first written. All four DDR-827 verifications are satisfied.
 
 **Sequencing worth copying:** the tree was reverted to a booting state and
 committed *that* way first, so no commit ever left `dev/phase1` unbootable. The

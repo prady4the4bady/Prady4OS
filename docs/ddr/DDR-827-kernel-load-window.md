@@ -77,6 +77,15 @@ boot.
    early code would pass against a broken load).
 4. A gate at `-smp 4` — the AP trampoline lives in the image too.
 
+**All four PASSED:**
+```
+make image    size gate OK at 1,048,576
+smoke         PASS
+smoke-user    PASS  (7 FS patterns)
+smoke-fs      PASS  (12 FS patterns)
+smoke-smp     PASS  (4 FS patterns, EXIT=0)  <- AP trampoline at -smp 4
+```
+
 ## §Alternative considered and rejected
 
 **Keep ACC out of the kernel and expose it as a ring-3 library.** Rejected: the
