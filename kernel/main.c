@@ -371,6 +371,8 @@ extern const unsigned char aeadtest_elf[];            /* DDR-819: AEAD vectors *
 extern const unsigned char aeadtest_elf_end[];
 extern const unsigned char ed25519test_elf[];         /* DDR-821: Ed25519 vectors */
 extern const unsigned char ed25519test_elf_end[];
+extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
+extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
@@ -1299,6 +1301,16 @@ static void fs_test_thread(void *arg) {
                                  "ED25519", &ed) == ELF_OK && ed) {
                         sched_unblock(ed);
                         kputs("[user] ELF loaded (embedded); Ed25519 vector probe spawned\r\n");
+                    }
+                }
+                /* DDR-813: ACC envelope gate, opt-in via DDR-804. */
+                if (probe_enabled("acc")) {
+                    struct tcb *ac = 0;
+                    uint64_t aclen = (uint64_t)(acctest_elf_end - acctest_elf);
+                    if (elf_load((void *)(uintptr_t)acctest_elf, aclen,
+                                 "ACCTEST", &ac) == ELF_OK && ac) {
+                        sched_unblock(ac);
+                        kputs("[user] ELF loaded (embedded); ACC gate probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("lockbox")) {

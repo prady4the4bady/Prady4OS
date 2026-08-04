@@ -31,9 +31,15 @@ MAKEFILE="$ROOT/Makefile"
 #   smoke-sfs-btree-smp4 ) DDR-824 OPEN-10 reproduction surface. Registering it
 #                    now would make CI red on a known-open defect and block
 #                    unrelated promotions. Register it when OPEN-10 is fixed.
+#   smoke-acc     ) DDR-813. Probe + wiring complete and the image builds, but
+#                   the gate has not yet produced a verdict — it was still
+#                   inside its 150 s window at session end. Registering an
+#                   unverified gate would put it in front of every promotion.
+#                   Run `make smoke-acc` once, then remove this line. Same
+#                   discipline applied to smoke-x25519 and smoke-aead.
 #   smoke-agent-live ) developer-run only: needs a live Ollama endpoint on the
 #                      host, so CI stays in test mode (ADR-027)
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4"
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4 smoke-acc"
 
 excluded() {
     local t="$1" e

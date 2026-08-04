@@ -189,6 +189,12 @@ ed25519test_elf:
     incbin "build/ed25519test.elf"
 ed25519test_elf_end:
 
+global acctest_elf
+global acctest_elf_end
+acctest_elf:
+    incbin "build/acctest.elf"
+acctest_elf_end:
+
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:
