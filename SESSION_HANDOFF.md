@@ -97,6 +97,79 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-18 SESSION — 2026-08-04 (CURRENT — read this first)
+
+## OPEN-11 — MAJOR REFRAME: it is NOT a source regression. It is NONDETERMINISTIC.
+
+**All four suspect commits are EXONERATED. Stop bisecting.**
+
+| fact | evidence |
+|---|---|
+| `98fd2f8` clean worktree build | `smoke-sha256` **PASS** |
+| tip `1b401d9` clean worktree build | `smoke-sha256` **PASS** |
+| `17c3858` (the "ACC ship" commit) | touches **NO kernel source** — only SESSION_HANDOFF.md, 2 docs, gate_shards.txt, shard_check.sh. It cannot change one byte of the image. |
+| `bef93c2`, `148e969` | CI **success**; also ancestors of the passing `98fd2f8` |
+
+**THE DECISIVE OBSERVATION.** In the SAME worktree, with a byte-identical image
+(sha256 of `build/kernel.bin` and `build/pradyos.img` captured before and after
+and IDENTICAL), `smoke-sha256`:
+
+  * PASSED when run right after `make image`
+  * **FAILED** on a later invocation with no rebuild in between
+
+Same bytes. Different outcome. **OPEN-11 is a race/nondeterminism, not a build
+or layout defect.** Every deterministic explanation is therefore dead.
+
+### Hypotheses now REFUTED — do not retest any of these
+
+1. runner slowness — reproduces locally
+2. boot latency — `smoke` passes in 2 s
+3. `TIMEOUT_S` — recipe's inline 90 s wins; it ran the full window
+4. stale `user_image.o` — newer than every probe ELF
+5. incbin misalignment — all probe symbols 8-aligned
+6. **stale incremental build** — clean worktree builds fail too
+7. **a regressing commit** — all four exonerated above
+8. **FS-write gates corrupting the kernel tail** — tested directly: ran
+   `smoke-fs-rw` between two `smoke-sha256` runs; **checksums unchanged**, and
+   the control arm failed *before* the FS gate ever ran
+
+### THE ACTUAL LEAD — three traps, always at the same three RIPs
+
+```
+[trap] user #PF pid=13 rip=0x0000008000000007 cr2=0x0000008000000000 err=0x7
+[trap] user #PF pid=25 rip=0x0000008000000151 cr2=0x00007FFFFFEFF040 err=0x7
+[trap] user #GP pid=29 rip=0x00000080000000B4
+```
+
+`err=0x7` = **user-mode WRITE to a present page** → this is the **DDR-826
+writable-global class**, and it is affecting **more probes than ed25519**.
+pid=13 stores to `0x8000000000` — the load address, i.e. writing to its own
+R+X text page. That is the same bug DDR-826 fixed once, still present elsewhere.
+
+Why intermittent: per memory `kmain-boot-race-user-threads`, user threads run
+while kmain is still booting. Which probes get spawned/scheduled varies run to
+run, so whether the bad store executes before the checkpoint varies.
+
+### NEXT STEP (literal)
+
+Run `tools/ci/probe_rodata_check.sh` against **every** probe ELF, not just the
+ones it currently covers, and check whether `sha256test`/pid-13's probe has a
+writable global landing in the R+X PT_LOAD. Note that check **skips** ELFs that
+have a writable PT_LOAD — verify that skip is not hiding these.
+
+Then disassemble `sha256test.elf` at `0xb0..0xb8` **as loaded from the image**
+(not from `build/sha256test.elf`) to see the bytes actually executing.
+
+### Housekeeping (flagged, not blockers)
+- 5 Dependabot alerts (2 high, 3 moderate) — **seen, not triaged, human decision needed**
+- untracked `.claude/`; three prunable `claude/*` worktrees
+- two worktrees added this session: `pradyos-bisect` (98fd2f8), `pradyos-tip` (1b401d9)
+- **transport bug fixed**: `wsl bash -lc '<multiline>'` silently blanks shell
+  variables. All scripts now written to a file, CRLF-stripped, run by path, with
+  `MSYS_NO_PATHCONV=1` (Git Bash rewrites `/mnt/...` args otherwise).
+
+### AGS stays INERT. ACC stays ⚠️. Both correct until OPEN-11 closes.
+
 ### 0.-17 SESSION — 2026-08-04 (CURRENT — read this first)
 
 **`dev/phase1` = `17c3858` + this commit. `main` = `3b4830a`.**
