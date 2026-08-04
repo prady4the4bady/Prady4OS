@@ -97,6 +97,62 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-22 SESSION — RETRACTION: the "corrupted saved RIP" conclusion was WRONG
+
+**Commit `5ab7d4f` claimed OPEN-11 was a corrupted saved RIP across a context
+switch. That is FALSE. Do not act on it. No scheduler fix is warranted by it.**
+
+### What actually produces `#PF rip=0x8000000007 cr2=0x8000000000 err=0x7`
+
+`build/wxviol.elf` — the **W^X violation test** — disassembles to:
+
+```
+8000000000: 48 8d 05 f9 ff ff ff  lea  -0x7(%rip),%rax    # = 0x8000000000
+8000000007: c6 00 90              movb $0x90,(%rax)       <-- writes its own text
+```
+
+That is the gate **working as designed**: a ring-3 store into an R+X page,
+correctly refused. `0x07` IS an instruction boundary. My "mid-instruction, so the
+RIP must be corrupt" proof came from disassembling the shared `_start` stub
+instead of `wxviol.elf` — every probe loads at the same base, so an address alone
+never identifies a binary. That is the **same mistake** that made me disassemble
+`sha256test` for the `#GP`.
+
+**Consequence:** `smoke-rqstress-liveness` is a *liveness/timeout* failure — its
+sentinel `[smp] rqstress OK` never printed — and its only trap is the benign
+wxviol one. It is **NOT** the same bug as OPEN-11. Retract that too.
+
+### Also dead this session
+- **#GP frame misreporting**: vector 13 uses `ISR_ERR` in `arch/x86_64/isr.asm:58`
+  (no dummy error code pushed), so the frame layout is right and the reported RIP
+  is trustworthy. Not a diagnostic artefact.
+
+### What is genuinely still unknown
+
+`#GP pid=29 rip=0x80000000B4`. **FOUR** ELFs share entry `0x80000000b0` —
+`timetest`, `metrictest`, `sha256test`, `sfsroottest` — so pid=29 has **never
+been identified**. Every statement I made about "sha256test's `_start`" was an
+assumption from a shared address.
+
+At `0xb4` all four have `and $-16,%rsp`, which genuinely cannot `#GP`. Either the
+faulting process is none of those four, or something about the entry state is
+wrong. **This is unresolved. Do not invent a mechanism for it.**
+
+### NEXT STEP — get identification before theorising again
+
+The trap printer (`kernel/idt.c`, ~line 224-260) prints pid but not the thread
+name, while `elf_load` already names every thread ("SHA256", "TIME", "SFSROOT",
+"WXVIOL", ...). **Add the name to the trap line.** That is a legitimate
+diagnostic improvement, not a workaround, and it ends three sessions of guessing
+which binary faulted. Only then reason about the mechanism.
+
+### Standing lesson (third instance)
+
+**An address does not identify a binary when every binary loads at the same
+base.** Confirm which ELF is running before disassembling anything. This has now
+produced two wrong root causes (PMM exhaustion, corrupted RIP), both of which I
+committed as conclusions before this check.
+
 ### 0.-21 SESSION — OPEN-11 IDENTIFIED: corrupted saved RIP across context switch
 
 **OPEN-11 and the `smoke-rqstress-liveness` failure are THE SAME BUG.**
