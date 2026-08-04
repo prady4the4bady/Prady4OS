@@ -129,10 +129,21 @@ several address spaces at once.
 
 ### Where to look next (highest value first)
 
-- **SMP address-space race.** See memory `ap-percpu-machine-state` and
-  `kmain-boot-race-user-threads`. Suspect CR3 switching / TLB shootdown while
-  another CPU reuses a freed frame. Try forcing `-smp 1` in the gate: if the
-  failure vanishes, it is an SMP race and that is the whole answer.
+- ~~SMP address-space race~~ — **ALREADY EXCLUDED, do not spend a run on it.**
+  `boot_test.sh:80-84` adds `-smp` only when `QEMU_SMP` is set; every gate except
+  `smoke-smp` already runs on QEMU's default **single CPU**. There is no second
+  CPU to race with. This was killed by reading the runner, not by testing.
+- **Entropy / uninitialised memory is now the prime suspect.** On a single CPU
+  with a fixed image, the only things that vary run to run are host-timing and
+  virtio-rng entropy. Combined with memory `tcb-fields-not-zeroed` (kmalloc does
+  not zero; every new `struct tcb` field needs an explicit initialiser in
+  `sched_create`), a garbage field read as a pointer/rip would produce exactly
+  this: a process executing or writing at a wrong address, ~1 run in 3.
+- **What `98fd2f8` actually did** (it is where CI first went red): `kernel/main.c`
+  +12 (spawn the acc probe), `user_image.asm` +6, `Makefile`, `acctest.c`. It
+  added **one more spawned process**. It did not touch `sched.c`/`sched.h`. So it
+  did not introduce the bug — it shifted pid numbering and timing enough to
+  expose a latent one. Do not go looking for the defect inside that diff.
 - `ptnode_alloc()` handing out a frame that is still mapped elsewhere (frame
   reuse without invalidation) would explain a process executing/writing another
   process's memory.
