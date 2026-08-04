@@ -97,6 +97,69 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-21 SESSION — OPEN-11 IDENTIFIED: corrupted saved RIP across context switch
+
+**OPEN-11 and the `smoke-rqstress-liveness` failure are THE SAME BUG.**
+Latest CI (run 30928234191, `59941d9`): 10 of 11 jobs green, shard 1 red — but
+this time it failed at **gate 1 of 32, `smoke-rqstress-liveness`**, not
+`smoke-sha256`. Identical trap signature:
+
+```
+smoke-sha256            [trap] #PF pid=13 rip=0x8000000007 cr2=0x8000000000 err=0x7
+smoke-rqstress-liveness [trap] #PF pid=21 rip=0x8000000007 cr2=0x8000000000 err=0x7
+```
+Same rip, same cr2, same error code, different gate, different pid.
+
+### THE PROOF: rip=0x...07 is NOT an instruction boundary
+
+The `_start` stub (shared by 14 programs — init, prism, compositor,
+aether_daemon, agent_base, cmusl, ...) begins:
+
+```
+8000000000: 48 31 ed            xor %rbp,%rbp
+8000000003: 48 89 e7            mov %rsp,%rdi
+8000000006: 48 8d 35 f3 ff ff ff lea -0xd(%rip),%rsi     <-- spans 0x06..0x0C
+800000000d: 48 83 e4 f0          and $-16,%rsp
+```
+
+**`0x07` is the second byte of the `lea`.** A thread executing normally can never
+have `rip = 0x07`. The CPU is decoding misaligned garbage starting mid-instruction,
+which is why the resulting fault is an absurd *write* to the base of its own text.
+
+This retroactively explains the `#GP` at `0x...B4` in `sha256test` too: same
+corruption, different offset. `and $-16,%rsp` never faulted — the CPU was not
+executing `and $-16,%rsp`.
+
+### Therefore
+
+The saved RIP is being corrupted **across a context switch**, and the corrupting
+event hits several address spaces in one run (pids 13, 25, 29 together). This is
+a scheduler/context-switch defect, NOT a crypto, layout, memory-pressure or
+build defect — and `smoke-rqstress-liveness` is a *runqueue stress* gate, exactly
+where such a defect should surface first.
+
+### Where to look
+
+- `kernel/proc/sched.c` context switch / `finish_task_switch` / `thread_trampoline`
+- Prior art in this exact area, all suggestive: `a49bb65` "rq double-enqueue —
+  atomic cross-queue rq_on claim (DDR-736)", `4a9ca0b` "thread_trampoline keeps
+  on_cpu set until finish_task_switch (rq-2)", `f1ec096` lazy FPU.
+- A TCB enqueued on two runqueues, or resumed while still `on_cpu`, would let two
+  paths write one saved-state area — producing exactly a torn/misaligned RIP.
+- memory `tcb-fields-not-zeroed`: kmalloc does not zero; an uninitialised field
+  consumed as saved state gives the same signature.
+
+### Every other hypothesis is dead (measured, not argued)
+regressing commit (4 exonerated) · stale build · FS-gate image corruption ·
+unaligned movaps (zero SSE in probe) · DDR-826 writable globals (no probe ELF has
+a writable PT_LOAD) · probe_rodata_check skip · PMM exhaustion (DDR-829 built and
+REVERTED) · disk persistence (images re-mkfs'd every run) · SMP race (all gates
+are already `-smp 1`; only `smoke-smp` sets `QEMU_SMP`).
+
+### Shard status, latest run
+shard 0,2,3,4,5 green · aether-layer, code-graph, shard-check, both
+arch-bootstrap green · **shard 1 is the only red, and it is this one bug.**
+
 ### 0.-20 SESSION — OPEN-11: PMM root cause REFUTED by my own fix
 
 **DDR-829 (256 KiB stack) was implemented, measured, REVERTED.** Three runs after
