@@ -152,3 +152,4 @@
 4	smoke-aead	90
 5	smoke-ed25519	150
 5	smoke-acc	150
+1	smoke-ags	120

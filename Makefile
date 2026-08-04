@@ -99,6 +99,8 @@ USER_ED25519_SRC := user/ed25519test.c   # DDR-821: Ed25519 RFC 8032 vectors
 USER_ED25519_ELF := build/ed25519test.elf
 USER_ACC_SRC := user/acctest.c           # DDR-813: ACC envelope gate
 USER_ACC_ELF := build/acctest.elf
+USER_AGS_SRC := user/agstest.c           # DDR-814: AGS goal-signing gate
+USER_AGS_ELF := build/agstest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -153,7 +155,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -367,6 +369,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/acc.c -o build/acc_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_ACC_SRC) -o build/acctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ACC_ELF) build/acctest.o build/acc_user.o build/x25519_user.o build/fe25519_user.o build/hkdf_user.o build/sha256_user.o build/aead_user.o build/ed25519_user.o build/sha512_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -Ikernel/aether -c kernel/aether/ags.c -o build/ags_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -Ikernel/aether -c $(USER_AGS_SRC) -o build/agstest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AGS_ELF) build/agstest.o build/ags_user.o build/ed25519_user.o build/fe25519_user.o build/sha256_user.o build/sha512_user.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -438,6 +443,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_
 	$(CC) $(KCFLAGS) -c kernel/crypto/ed25519.c             -o build/ed25519.o
 	$(CC) $(KCFLAGS) -c kernel/crypto/acc.c                 -o build/acc.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_acc.c            -o build/sys_acc.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/aether/ags.c -o build/ags.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_ags.c -o build/sys_ags.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -1593,6 +1600,12 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 # DDR-811 SHA-256 vector gate. Opt-in per DDR-804 so the probe exists only
 # here. The 1M-'a' vector is load-bearing: vectors 1-3 fit in two blocks and
 # would pass against a wrong length counter or a broken partial-block carry.
+# DDR-814 AGS goal signing. Three arms: round-trip, tampered goal, wrong key.
+# The last two are the gate's whole point — a verify() that always returns 0
+# passes arm 1, and one that ignores the public key passes arms 1-2.
+smoke-ags: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=ags 	EXTRA_SENTINEL="$$(printf 'PRADYOS_AGS_VECTORS_OK')" 	FORBIDDEN_SENTINEL="AGS FAIL" 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-sha256: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=sha256 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHA256_VECTORS_OK')" \

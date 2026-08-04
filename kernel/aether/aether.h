@@ -24,6 +24,12 @@ enum aether_action {
 enum aether_result {
     AR_SUBMIT = 1, AR_APPROVE, AR_REJECT, AR_EXPIRE,
     AR_OOM_KILL, AR_RATE_KILL, AR_CAP_DENIED, AR_WRAP,
+    /* DDR-814 AGS. Kept distinct from AR_APPROVE/AR_CAP_DENIED deliberately:
+     * "the owner signed this goal" and "policy allowed this action" are not the
+     * same fact, and a REJECTED goal is a forgery attempt rather than a policy
+     * refusal. Collapsing either pair makes "was a forged goal ever presented?"
+     * unanswerable from the log — the only question that shows AGS works. */
+    AR_GOAL_SIGNED, AR_GOAL_REJECTED,
     /* DDR-800 (R1): egress proceeded ONLY because the caller is sovereign —
      * it lacked CAP_NET, or the destination was off the allowlist, or both.
      * Distinct from AR_APPROVE on purpose: the entire value of this record is

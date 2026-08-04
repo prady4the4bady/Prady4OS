@@ -71,6 +71,18 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
+- **AGS — Agent Goal Signing** (DDR-814) — wired, `smoke-ags` 20/20 locally,
+  awaiting first CI conclusion. `kernel/aether/ags.{c,h}` + `kernel/syscall/sys_ags.c`
+  + `SYS_GOAL_SIGN` (79, CAP_SOVEREIGN) / `SYS_GOAL_VERIFY` (80, CAP_AGENT).
+  `sig = Ed25519(owner_seed, SHA-256(goal))` — the goal is hashed first so any
+  goal length costs one fixed-size signature and the audit log can store the
+  32-byte hash rather than the record. The capability split is the INVERSE of
+  ACC's: signing AUTHORISES a goal, so if a ring-3 agent could sign it could
+  authorise its own goals and the audit log would show a valid signature on
+  something nobody approved (S1). Verification touches only public data, so
+  agents may check the goals handed to them. New audit codes `AR_GOAL_SIGNED` /
+  `AR_GOAL_REJECTED` are kept distinct from `AR_APPROVE`/`AR_CAP_DENIED` because
+  a forged goal and a policy refusal are different facts.
 - **ACC — Authenticated Confidential Channel** (DDR-813) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-acc (151s)`, run 30944847959 on `93ceee7`) — `kernel/crypto/acc.{c,h}`
   + `SYS_ACC_SEAL` (77, CAP_AGENT) / `SYS_ACC_OPEN` (78, CAP_SOVEREIGN). The

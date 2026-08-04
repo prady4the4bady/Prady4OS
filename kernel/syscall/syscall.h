@@ -119,6 +119,14 @@
 #define SYS_ACC_SEAL       77  /* (env_out, pt, ptlen, args) -> 0 | -EPERM|-EINVAL|-EFAULT|-EIO */
 #define SYS_ACC_OPEN       78  /* (pt_out, env, priv, ptlen_out) -> 0 | -EPERM|-EACCES|-EAGAIN */
 
+/* DDR-814 AGS. The capability split is the INVERSE of ACC's above, for the same
+ * reason: the privileged direction is whichever one an attacker would want.
+ * Signing AUTHORISES a goal, so 79 is CAP_SOVEREIGN; verification reads only
+ * public data, so 80 is open to CAP_AGENT — an agent should be able to check
+ * the goals handed to it. */
+#define SYS_GOAL_SIGN      79  /* (sig_out, goal, goallen, owner_seed) -> 0 | -EPERM|-EINVAL|-EFAULT */
+#define SYS_GOAL_VERIFY    80  /* (sig, goal, goallen, owner_pub)     -> 0 | -EPERM|-EACCES|-EINVAL */
+
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
 typedef long (*syscall_fn)(long a1, long a2, long a3, long a4);

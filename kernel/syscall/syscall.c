@@ -25,6 +25,7 @@ void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
 void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
 void sys_acc_register(void);      /* kernel/syscall/sys_acc.c (DDR-813) */
+void sys_ags_register(void);      /* kernel/syscall/sys_ags.c (DDR-814) */
 
 #define MAX_SYSCALLS 128  /* NSI-v2 table size (ADR-022). Raised 80->128 in the
                            * DDR-823 audit: NSI 77-87 are already sequenced and
@@ -158,6 +159,7 @@ void syscall_init(void) {
     sys_io_uring_register();              /* SYS_IO_URING_* (PROC-E) */
     sys_aether_register();                /* SYS_GET_MODE..SYS_SET_MEM_LIMIT (Layer 6) */
     sys_socket_register();                /* SYS_SOCK_* proxy sockets (ADR-027) */
+    sys_ags_register();                   /* SYS_GOAL_SIGN / SYS_GOAL_VERIFY (DDR-814) */
     sys_acc_register();                   /* SYS_ACC_SEAL / SYS_ACC_OPEN (DDR-813,
                                            * linkable since DDR-827 raised the
                                            * stage-2 window to 1 MiB) */

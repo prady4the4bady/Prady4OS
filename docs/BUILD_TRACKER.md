@@ -95,6 +95,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
 | 6.8 | **ACC** (DDR-813) | ✅ | `smoke-acc` **PASSES in CI** — `PASS smoke-acc (151s)` in the fully green run 30944847959 on `93ceee7`. The OPEN-11 suspicion against its introducing commit is resolved: the cause was DDR-831's stale scratch LBA, not ACC. Upgraded ⚠️→✅ only after CI concluded, not before. |
+| 6.9 | **AGS — Agent Goal Signing** (DDR-814) | ⏳ | NSI 79 `SYS_GOAL_SIGN` (CAP_SOVEREIGN) / 80 `SYS_GOAL_VERIFY` (CAP_AGENT) — the inverse split to ACC's, because signing *authorises* a goal. `smoke-ags` **20/20 locally**, zero warnings, probe-rodata clean; unexcluded and assigned to shard 1. Awaiting its first CI conclusion before ✅. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---

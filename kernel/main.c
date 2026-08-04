@@ -375,6 +375,8 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char agstest_elf[];             /* DDR-814: AGS goal signing */
+extern const unsigned char agstest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
 extern const unsigned char sha256test_elf_end[];
 extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe */
@@ -1331,6 +1333,26 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-814: AGS goal-signing gate, opt-in via DDR-804. Sovereign
+                 * because arm 1 calls SYS_GOAL_SIGN, which is CAP_SOVEREIGN. */
+                if (probe_enabled("ags")) {
+                    struct tcb *ag = 0;
+                    uint64_t aglen = (uint64_t)(agstest_elf_end - agstest_elf);
+                    int agrc = elf_load((void *)(uintptr_t)agstest_elf, aglen,
+                                        "AGS", &ag);
+                    if (agrc == ELF_OK && ag) {
+                        ag->is_sovereign = 1;
+                        sched_unblock(ag);
+                        kputs("[user] ELF loaded (embedded); AGS goal probe spawned\r\n");
+                    } else {
+                        /* OPEN-11's lesson: a silent load failure is
+                         * indistinguishable from a probe that ran and said
+                         * nothing, and cost five sessions. */
+                        kputs("[user] AGS probe elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)agrc);
+                        kputs("\r\n");
                     }
                 }
                 if (probe_enabled("sha256")) {
