@@ -15,10 +15,11 @@ verified, it says so.
 | | |
 |---|---|
 | **`main`** | **`3b4830a`** — PROMOTED on 3 consecutive greens (30804476970, 30811210244, 30811221820). Carries DDR-817 sharding, X25519, SHA-512, DDR-822/823. |
-| **`dev/phase1`** | `1e40464` — **NOT promoted** (OPEN-10 gates it) |
-| **Verified** | 2026-08-03, tree clean at `1e40464` |
-| **NSI max** | **78** assigned (`SYS_ACC_SEAL` 77, `SYS_ACC_OPEN` 78 — numbers reserved, handlers NOT registered pending DDR-827). Next free **79**. Table size **128**. |
-| **CI gates** | **119** assigned across 6 shards · **6** excluded, each with a stated reason |
+| **`dev/phase1`** | `bef93c2` — **NOT promoted**. Tip before it (`fd876cd`) went green twice: runs `30878361148`, `30879247169`. |
+| **Verified** | 2026-08-04, tree clean |
+| **NSI max** | **78** — `SYS_ACC_SEAL` 77 / `SYS_ACC_OPEN` 78 **registered and linked** (DDR-827 raised the load window). Next free **79**. Table size **128**. |
+| **CI gates** | **121** assigned across 6 shards · **5** excluded, each with a stated reason |
+| **CI health** | 8 reds on 2026-08-03 fully audited (DDR-828): 5 × `smoke-ed25519` (expected, DDR-826), 7 × `smoke-syscallfuzz` (stale 60 s window — fixed), 1 × `smoke-resched`, 1 × `smoke-blkmq-trace` (single occurrences, triaged to OPEN-2). |
 | **CI wall-clock** | ~25 min (was 2 h 08 m before DDR-817) |
 
 **CI evidence on `dev/phase1`:**
@@ -103,7 +104,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | ID | Symptom | Cause / hypothesis | Status |
 |---|---|---|---|
 | **OPEN-1** | `smoke-surfdestroy` intermittently misses its sentinel | unknown | open, passive |
-| **OPEN-2** | historical intermittent CI reds | partly OPEN-1/10 | open |
+| **OPEN-2** | historical intermittent CI reds | partly OPEN-1/10. **DDR-828 removed the largest contributor**: 7 of 8 reds on 2026-08-03 were a stale 60 s window on `smoke-syscallfuzz`, not a defect. | open — `smoke-resched` and `smoke-blkmq-trace` each have ONE occurrence, triaged not fixed |
 | **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | **leaked QEMU holding the image write-lock** | **misattribution FIXED (DDR-823)**; root cause not yet caught on a `smoke-shell` failure |
 | **OPEN-10** | `'btree churn FAIL'` during unrelated `-smp 4` gates | see §5 — likely a manifestation of B#3 | **open, gates promotion** |
 | **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | open — last 🔴 in Phase 3 |
