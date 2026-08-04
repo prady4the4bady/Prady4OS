@@ -71,7 +71,8 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
-- **ACC — Authenticated Confidential Channel** (DDR-813) — `kernel/crypto/acc.{c,h}`
+- **ACC — Authenticated Confidential Channel** (DDR-813) — ✅ SHIPPED, CI-confirmed
+  (`PASS smoke-acc (151s)`, run 30944847959 on `93ceee7`) — `kernel/crypto/acc.{c,h}`
   + `SYS_ACC_SEAL` (77, CAP_AGENT) / `SYS_ACC_OPEN` (78, CAP_SOVEREIGN). The
   capability split is asymmetric on purpose: opening reveals a PEER agent's
   plaintext, so it is owner-only (S1). Envelope: ephemeral X25519 → HKDF

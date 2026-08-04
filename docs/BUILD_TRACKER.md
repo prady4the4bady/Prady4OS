@@ -94,7 +94,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
-| 6.8 | **ACC** (DDR-813) | ⚠️ | `smoke-acc` **PASSES** (rc=0, 152 s), `smoke-acc` itself PASSES, but the commit that shipped it is under suspicion for OPEN-11 — do not count ACC as safely shipped until that is resolved. |
+| 6.8 | **ACC** (DDR-813) | ✅ | `smoke-acc` **PASSES in CI** — `PASS smoke-acc (151s)` in the fully green run 30944847959 on `93ceee7`. The OPEN-11 suspicion against its introducing commit is resolved: the cause was DDR-831's stale scratch LBA, not ACC. Upgraded ⚠️→✅ only after CI concluded, not before. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---
@@ -104,7 +104,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | ID | Symptom | Cause / hypothesis | Status |
 |---|---|---|---|
 | **OPEN-1** | `smoke-surfdestroy` intermittently misses its sentinel | unknown | open, passive |
-| **OPEN-11** | `smoke-sha256` (and `smoke-rqstress-liveness`) failed after the first run on a fresh image | **ROOT-CAUSED AND FIXED — DDR-831.** `blk_selftest` wrote its scratch sector at a hardcoded LBA 1500, chosen when the kernel was capped at 512 sectors; DDR-827 grew the kernel to ~1666 sectors, so the self-test wrote *into the kernel image*, and QEMU persisted it — corrupting the probe ELFs in `.rodata` for every later boot | **CLOSED pending CI.** 20/20 `smoke-sha256` + 5/5 `smoke-rqstress-liveness` locally on one image. Scratch LBA now the image's last sector + a `make image` gate that fails if the kernel reaches it |
+| ~~OPEN-11~~ **CLOSED** | `smoke-sha256` (and `smoke-rqstress-liveness`) failed after the first run on a fresh image | **ROOT-CAUSED AND FIXED — DDR-831.** `blk_selftest` wrote its scratch sector at a hardcoded LBA 1500, chosen when the kernel was capped at 512 sectors; DDR-827 grew the kernel to ~1666 sectors, so the self-test wrote *into the kernel image*, and QEMU persisted it — corrupting the probe ELFs in `.rodata` for every later boot | **CLOSED — CONFIRMED BY CI.** Run 30944847959 on `93ceee7`: all 11 jobs green, with `PASS smoke-sha256 (90s)` and `PASS smoke-rqstress-liveness (180s)` actually executed. The build guard printed `kernel ends at LBA 1666, scratch sector 4095 — clear` — 1666 > the old literal 1500, direct confirmation of the overlap. Locally 20/20 + 5/5. |
 | **OPEN-2** | historical intermittent CI reds | partly OPEN-1/10. **DDR-828 removed the largest contributor**: 7 of 8 reds on 2026-08-03 were a stale 60 s window on `smoke-syscallfuzz`, not a defect. | open — `smoke-resched` and `smoke-blkmq-trace` each have ONE occurrence, triaged not fixed |
 | **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | **leaked QEMU holding the image write-lock** | **misattribution FIXED (DDR-823)**; root cause not yet caught on a `smoke-shell` failure |
 | **OPEN-10** | `'btree churn FAIL'` during unrelated `-smp 4` gates | see §5 — likely a manifestation of B#3 | **open, gates promotion** |
