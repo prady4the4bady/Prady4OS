@@ -94,7 +94,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
-| 6.8 | **ACC** (DDR-813) | ✅ | `smoke-acc` **PASSES** (rc=0, 152 s), registered in shard 5. Five arms: round-trip, tampered-ct, tampered-sig, replay, owner-read-after-reboot. Syscalls 77/78 linked and registered. |
+| 6.8 | **ACC** (DDR-813) | ⚠️ | `smoke-acc` **PASSES** (rc=0, 152 s), `smoke-acc` itself PASSES, but the commit that shipped it is under suspicion for OPEN-11 — do not count ACC as safely shipped until that is resolved. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---
@@ -104,6 +104,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | ID | Symptom | Cause / hypothesis | Status |
 |---|---|---|---|
 | **OPEN-1** | `smoke-surfdestroy` intermittently misses its sentinel | unknown | open, passive |
+| **OPEN-11** | `smoke-sha256` fails: probe spawns then `#GP pid=29 rip=0x80000000B4` (4 bytes into `_start`, at `and 016,%rsp` — which cannot itself fault) | UNKNOWN. Ruled out: runner speed, boot latency, TIMEOUT_S, stale `user_image.o`, incbin misalignment | **NEW, BLOCKING.** Green twice at `fd876cd`; regressed within 4 commits, `98fd2f8` prime suspect |
 | **OPEN-2** | historical intermittent CI reds | partly OPEN-1/10. **DDR-828 removed the largest contributor**: 7 of 8 reds on 2026-08-03 were a stale 60 s window on `smoke-syscallfuzz`, not a defect. | open — `smoke-resched` and `smoke-blkmq-trace` each have ONE occurrence, triaged not fixed |
 | **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | **leaked QEMU holding the image write-lock** | **misattribution FIXED (DDR-823)**; root cause not yet caught on a `smoke-shell` failure |
 | **OPEN-10** | `'btree churn FAIL'` during unrelated `-smp 4` gates | see §5 — likely a manifestation of B#3 | **open, gates promotion** |

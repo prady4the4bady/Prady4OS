@@ -97,7 +97,93 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-16 SESSION — 2026-08-04 (CURRENT — read this first)
+### 0.-17 SESSION — 2026-08-04 (CURRENT — read this first)
+
+**`dev/phase1` = `17c3858` + this commit. `main` = `3b4830a`.**
+
+#### 🔴 OPEN-11 (NEW, BLOCKING) — `smoke-sha256` regressed on the tip
+
+**Do not treat ACC as safely shipped until this is resolved.** CI attempt 1 on
+`17c3858` FAILED, and it reproduces locally, so this is not runner speed.
+
+**Evidence, all verified this session:**
+
+```
+CI attempt 1, shard 1:  FAILED at smoke-sha256 after 10 of 32 gates
+                        06:40:49 -> 06:42:19  = exactly 90 s (its window)
+LOCAL:                  smoke-sha256 FAIL, elapsed 93 s
+LOCAL serial log:
+  [user] ELF loaded (embedded); SHA-256 vector probe spawned
+  [trap] user #GP general protection pid=29 rip=0x00000080000000B4
+```
+
+`sha256test.elf` entry point is `0x80000000b0`, so `rip=0xb4` is **4 bytes into
+`_start`** — at `and $0xfffffffffffffff0,%rsp`, the `force_align_arg_pointer`
+prologue. **An `and` on `%rsp` with an immediate cannot itself `#GP`.** That is
+the central puzzle.
+
+**Hypotheses RULED OUT — do not re-test these:**
+
+| hypothesis | how it was killed |
+|---|---|
+| CI runner slowness | reproduces locally at 93 s |
+| DDR-827's chunk raise slowed boot | **`smoke` PASSES in 2 s** — boot is fast |
+| `TIMEOUT_S=180` would fix it | the recipe's inline `TIMEOUT_S=90` wins (0.-10 finding); it ran at 90 s |
+| stale `user_image.o` (DDR-822/825 class) | `user_image.o` is **newer** than every probe ELF |
+| incbin misalignment from adding `acctest` | all three probe symbols are 8-byte aligned |
+
+**Known-good reference:** CI was **green twice on `fd876cd`** (runs
+`30878361148`, `30879247169`), and shard 1 contains `smoke-sha256`. So the
+regression is in exactly four commits: `bef93c2` (DDR-828 timeouts — did **not**
+touch `smoke-sha256`, which is 90 s), `148e969` (docs), `98fd2f8` (adds the
+`acctest` probe to the image), `17c3858` (ACC linked + gate registered).
+
+**`98fd2f8` is the prime suspect** — it is the one that changes the image.
+
+**Next exact command** (a bisect was attempted and left the tree on a detached
+HEAD; it has been restored, but run this in a worktree instead):
+```
+git worktree add /tmp/bisect fd876cd && cd /tmp/bisect && make image && make smoke-sha256
+```
+Then `98fd2f8` and `148e969`. Whichever first shows the `#GP` is the culprit.
+
+**A cheap discriminator worth trying first:** disassemble `sha256test.elf`
+around `0xb0` **from the image** (`build/kernel.bin`) rather than from
+`build/sha256test.elf`, and compare. If they differ, something is corrupting the
+embedded copy despite the timestamps.
+
+#### CI attempt 2 was at 10/11 green with shard 1 outstanding when this was written — read its conclusion first; it may contradict attempt 1.
+
+#### AGS (DDR-814) — written, INERT, not wired
+
+`kernel/aether/ags.{c,h}` and `kernel/syscall/sys_ags.c` are committed but
+**deliberately not wired**: no NSI numbers assigned, not in the kernel link, not
+registered, no gate. They cannot affect the build. Committed so the work is not
+lost; wiring waits until OPEN-11 is resolved, because adding another probe to
+the image is exactly the change under suspicion.
+
+Design decisions already made and worth keeping:
+- **`SYS_GOAL_SIGN` = CAP_SOVEREIGN, `SYS_GOAL_VERIFY` = CAP_AGENT** — the
+  inverse of ACC's split, for the same reason: the privileged direction is
+  whichever an attacker would want. If an agent could sign, it could authorise
+  its own goals and the audit log would show a valid signature on something
+  nobody approved (S1).
+- Goal is hashed with SHA-256 first, so any goal length costs one fixed-size
+  signature and the audit log can store the 32-byte hash.
+- `AR_GOAL_SIGNED` / `AR_GOAL_REJECTED` recorded distinctly from
+  `AR_CAP_DENIED`: a forged goal and a policy refusal are different facts.
+
+#### Next, in order
+
+1. **OPEN-11 first.** Nothing else should land on a tip with a red gate.
+2. Then wire AGS (NSI 79/80 + `AR_GOAL_*` audit codes + probe + gate).
+3. Then DDR-815 rotation (81), then Parts B–G of the queue.
+
+#### Unchanged
+
+**B#3 / OPEN-10:** still **no `op=` line**. Untested, not refuted.
+
+### 0.-16 SESSION — 2026-08-04 (earlier)
 
 **`main` = `3b4830a`. `dev/phase1` = `98fd2f8`** + this handoff commit.
 NSI 77/78 registered+linked. Next free **79**. 121 gates, **6** excluded.
