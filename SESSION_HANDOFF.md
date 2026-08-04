@@ -144,6 +144,24 @@ touch `smoke-sha256`, which is 90 s), `148e969` (docs), `98fd2f8` (adds the
 in a clean build — so `fd876cd` is a genuine known-good, not merely "CI was green".
 The search space is exactly `bef93c2`, `148e969`, `98fd2f8`, `17c3858`.
 
+**BISECT DATAPOINT 2 (INCONCLUSIVE — read the caveat):** the `98fd2f8` worktree
+**failed to build**, so the gate never ran. Two things must be sorted before
+trusting any rerun:
+
+1. `make image` output was suppressed with `>/dev/null 2>&1`, so the failure
+   reason was not captured. **Do not suppress it on the retry.**
+2. **HEAD mismatch:** git printed `HEAD is now at 98fd2f8` but
+   `git rev-parse --short HEAD` in that worktree returned **`abbd763`**. Resolve
+   this before believing any result from that tree — a bisect measuring the
+   wrong commit is worse than no bisect. Check whether the build simply needs
+   `make toolchain-check` / a clean `build/` in a fresh worktree, and whether the
+   worktree path under `Projects/pradyos-bisect` collides with anything.
+
+A worktree build may also fail for reasons unrelated to OPEN-11 (absolute paths,
+missing `build/` state). If it will not build cleanly, bisect instead by checking
+out each commit in the main tree and restoring afterwards — but record the tree
+state each time, since a stray detached HEAD already cost one session.
+
 **Next exact command** (a bisect was attempted and left the tree on a detached
 HEAD; it has been restored, but run this in a worktree instead):
 ```
