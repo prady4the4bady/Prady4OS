@@ -125,6 +125,20 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
             irq_restore(fl);
             return;
         }
+        /* DDR-830: refcount 0 means this frame is ALREADY on the free list.
+         * Absorbing the second free would push it on twice, and the allocator
+         * would then hand one frame to two owners — silent, delayed, cross-
+         * subsystem corruption (OPEN-11). A free list is a set; reject the
+         * duplicate loudly instead of destroying that invariant. */
+        if (idx < PMM_NFRAMES && pmm_refcount[idx] == 0) {
+            kputs("[pmm] DOUBLE FREE rejected addr=");
+            kputhex(addr);
+            kputs(" caller=");
+            kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+            kputs("\r\n");
+            irq_restore(fl);
+            return;
+        }
     }
     rc_set(addr, order, 0);             /* actually freeing now: clear refcount(s) */
 #ifdef KASAN

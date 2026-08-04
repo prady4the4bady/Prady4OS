@@ -263,6 +263,22 @@ void isr_dispatch(struct regs *r) {
             } else {
                 kputs(" bytes@rip=<unreadable>");
             }
+            /* Also dump the start of the containing page. If the text has been
+             * overwritten by a data pattern, where index 0 of that pattern lands
+             * tells us whether the writer was page-aligned (a reused frame) or
+             * offset (a stray copy), and those have different root causes. */
+            unsigned char pb[16];
+            uint64_t base = r->rip & ~0xFFFull;
+            if (copyin(pb, (const void __user *)(uintptr_t)base, sizeof pb) ==
+                (ssize_t)sizeof pb) {
+                static const char hexd2[] = "0123456789ABCDEF";
+                kputs(" page+0=");
+                for (unsigned i = 0; i < sizeof pb; i++) {
+                    kputc(hexd2[(pb[i] >> 4) & 0xF]);
+                    kputc(hexd2[pb[i] & 0xF]);
+                    kputc(' ');
+                }
+            }
         }
         kputs(" — killing process\r\n");
         sched_exit(-1);                  /* zombie (status -1) + switches away; never returns */
