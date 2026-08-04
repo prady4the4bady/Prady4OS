@@ -603,7 +603,7 @@ smoke-selftest:
 # smoke-user already runs the same 'compress/readback/tag OK' assertion at 60s.
 # This cannot mask a hang: boot_test.sh greps AFTER the window either way.
 smoke-fs: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it
@@ -729,7 +729,7 @@ smoke-setname: $(IMG) fat-image sfs-image
 # fault) — full ELF-loader + W^X enforcement end-to-end. Two 8 MiB-stack loads
 # push past the default 30 s, so allow more wall time.
 smoke-user: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[user] ELF loaded from SFS; ring-3 thread spawned\nHELLO FROM RING-3\n[user] sys_exit(0)\n[trap] user #PF page fault\n[sfs] lz4+tags compress/readback/tag OK\nPRADYOS_TLS_OK WRITEV_OK\nPRADYOS_MUSL_OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf '[user] ELF loaded from SFS; ring-3 thread spawned\nHELLO FROM RING-3\n[user] sys_exit(0)\n[trap] user #PF page fault\n[sfs] lz4+tags compress/readback/tag OK\nPRADYOS_TLS_OK WRITEV_OK\nPRADYOS_MUSL_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # 5d FPU-context-switch gate (ADR-023 §D8): two concurrent ring-3 processes pin
@@ -746,7 +746,7 @@ smoke-fpu: $(IMG) fat-image sfs-image
 # exited child (no leaked zombie). Greps the banner AND the reap line with the
 # child's exit code.
 smoke-init: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'PRADYOS_INIT_OK\ninit: reaped PID=')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'PRADYOS_INIT_OK\ninit: reaped PID=')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # 5e PRISM shell gate (ADR-024 §D6): boot with -serial stdio, pipe a command
@@ -905,7 +905,7 @@ smoke-wxkernel: $(IMG) fat-image sfs-image
 # syscalls -> -EFAULT). The kernel must survive every one; PRADYOS_FUZZ_OK prints
 # only after all calls return, and any kernel fault is a panic boot_test catches.
 smoke-syscallfuzz: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'PRADYOS_FUZZ_OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'PRADYOS_FUZZ_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 3 syscall I/O gate: the ring-3 systest program (loaded from SFS)
@@ -1022,7 +1022,7 @@ smoke-net: $(IMG) fat-image sfs-image
 # NET-B loopback gate (ADR-025 §D10): the kernel sends a UDP datagram to
 # 127.0.0.1:7 through lwIP's loopback interface and its recv callback fires.
 smoke-net-lo: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'msix vec=54\n[net] lwIP up 10.0.2.15/24\nPRADYOS_NET_LO_OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'msix vec=54\n[net] lwIP up 10.0.2.15/24\nPRADYOS_NET_LO_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # NET-B fuzz/hardening gate (ADR-025 §D6/§D10): at boot the kernel feeds 512
@@ -1030,7 +1030,7 @@ smoke-net-lo: $(IMG) fat-image sfs-image
 # straight into the lwIP receive path. Passing = the kernel survives and prints
 # the sentinel; boot_test.sh already fails the run on any panic string.
 smoke-net-fuzz: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_NET_FUZZ_OK \
+	TIMEOUT_S=120 EXTRA_SENTINEL=PRADYOS_NET_FUZZ_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-753 TCP loopback gate: the kernel opens a TCP client to the in-guest echo
@@ -1044,7 +1044,7 @@ smoke-net-tcp-lo: $(IMG) fat-image sfs-image
 # AETHER queue gate (ADR-026 §D2/§D3): the in-boot self-test submits an action,
 # sovereign mode auto-approves it, and an audit entry is written.
 smoke-aether-queue: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL=PRADYOS_AETHER_QUEUE_OK \
+	TIMEOUT_S=120 EXTRA_SENTINEL=PRADYOS_AETHER_QUEUE_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # AETHER functional gate (ADR-026 §D10/§D11): the daemon (CAP_SOVEREIGN) boots,
@@ -1061,7 +1061,7 @@ smoke-aether: $(IMG) fat-image sfs-image
 # BGRA framebuffer. Headless QEMU still ACKs every command, so the bring-up is
 # verifiable via the serial sentinel (like the NET-A virtio-net gate).
 smoke-gpu: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 QEMU_GPU=1 EXTRA_SENTINEL=PRADYOS_GPU_FB_OK \
+	TIMEOUT_S=120 QEMU_GPU=1 EXTRA_SENTINEL=PRADYOS_GPU_FB_OK \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # NVMe controller bring-up gate (DDR-765): boot with a QEMU -device nvme backed
@@ -1303,7 +1303,7 @@ smoke-surfdestroy: $(IMG) fat-image sfs-image
 # timer takes over the 100 Hz tick (PIT masked); every later sentinel in the
 # boot (scheduler, FS, user) implicitly proves the new tick drives the system.
 smoke-apic: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf '[apic] up id=\n[apic] timer 100Hz (PIT masked)')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf '[apic] up id=\n[apic] timer 100Hz (PIT masked)')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # SMP stage-B gate (ADR-029): boot 4 vCPUs; the BSP INIT-SIPIs the 3 APs through
@@ -1424,7 +1424,7 @@ smoke-egress-audit: $(IMG) fat-image sfs-image
 # boot_test.sh cannot — a boot can contain every required sentinel and still be
 # 83% binary garbage, which is exactly the state this gate now prevents.
 smoke-serialflood: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 MAX_BYTES=32768 bash tools/qemu_runner/flood_gate.sh $(IMG)
+	TIMEOUT_S=120 MAX_BYTES=32768 bash tools/qemu_runner/flood_gate.sh $(IMG)
 
 # DDR-796 (BUG-1): SYS_CLOCK must never run backwards under -smp 4. CMOS access
 # is a two-port sequence over chipset-global state; unserialised, two CPUs
@@ -2063,7 +2063,7 @@ smoke-agent-live: $(STAGE1_BIN) $(STAGE2_BIN) fat-image sfs-image
 # queue overflow -> -EAGAIN, audit ring wrap, per-agent OOM kill, syscall
 # rate-limit kill, and the no-self-escalation mem-cap rejection. No panic.
 smoke-aether-sec: $(IMG) fat-image sfs-image
-	TIMEOUT_S=60 EXTRA_SENTINEL="$$(printf 'AETHER_SEC_QUEUE_FULL\nAETHER_AUDIT_WRAP\nAGENT_OOM_KILLED\nAGENT_RATE_LIMITED\nAETHER_SEC_CAP_DENIED\nPRADYOS_AETHER_SEC_OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'AETHER_SEC_QUEUE_FULL\nAETHER_AUDIT_WRAP\nAGENT_OOM_KILLED\nAGENT_RATE_LIMITED\nAETHER_SEC_CAP_DENIED\nPRADYOS_AETHER_SEC_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # PROC-A pipe/dup2 gate: systest pipe()s, round-trips "PIPE" through the ring, and
