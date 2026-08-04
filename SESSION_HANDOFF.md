@@ -97,6 +97,51 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-20 SESSION — OPEN-11: PMM root cause REFUTED by my own fix
+
+**DDR-829 (256 KiB stack) was implemented, measured, REVERTED.** Three runs after
+the fix: **PASS, FAIL, FAIL** — identical `#GP` at pid=29. The premise was wrong:
+
+```
+free frames after release=0x0000000000006F53  (balanced)
+```
+
+PMM is nearly full and balanced; processes exit and release, so the ~29 threads
+never coexist and the "~13 process ceiling" never applies. `AGENT_OOM_KILLED` is
+a deliberate OOM *test* (`AETHER_SEC_OOM_OK` follows it), not real pressure.
+
+**Also excluded: disk state.** `fat-image`/`sfs-image` are phony targets that
+`dd`-zero and re-`mkfs` on EVERY gate invocation. Every run starts clean.
+
+### NEW decisive facts
+
+1. **Failure rate is roughly 1 in 3**, same binary, same command, back to back.
+2. **A PASSING run emits ZERO `[trap]` lines.** Failing runs emit exactly three.
+   So the two `#PF`s are NOT intentional W^X negative tests — they are part of
+   the failure, and they precede the `#GP`.
+3. `[trap] #PF pid=13 rip=0x8000000007 cr2=0x8000000000 err=0x7` — a process
+   **writing to the base of its own text page**, 7 bytes into execution.
+   err=0x7 = user + write + present.
+
+Three different processes (13, 25, 29) all misbehave in the same run and none
+misbehaves in a passing run. That is not three bugs; it is one event corrupting
+several address spaces at once.
+
+### Where to look next (highest value first)
+
+- **SMP address-space race.** See memory `ap-percpu-machine-state` and
+  `kmain-boot-race-user-threads`. Suspect CR3 switching / TLB shootdown while
+  another CPU reuses a freed frame. Try forcing `-smp 1` in the gate: if the
+  failure vanishes, it is an SMP race and that is the whole answer.
+- `ptnode_alloc()` handing out a frame that is still mapped elsewhere (frame
+  reuse without invalidation) would explain a process executing/writing another
+  process's memory.
+
+**Do NOT retest:** a regressing commit (all 4 exonerated), stale builds, FS-gate
+image corruption, unaligned `movaps` (zero SSE in the probe), DDR-826 writable
+globals (no probe ELF has a writable PT_LOAD), probe_rodata_check's skip, PMM
+exhaustion (refuted above), disk persistence between runs (refuted above).
+
 ### 0.-19 SESSION — 2026-08-04 (CURRENT — read this first)
 
 ## CI AUDIT OF THE LAST 25 RUNS — 14 red, but only 5 distinct bugs, 4 already closed
