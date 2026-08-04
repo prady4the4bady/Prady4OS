@@ -97,6 +97,63 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-23 SESSION — OPEN-11: PROVEN memory corruption, probe text overwritten by data
+
+**Diagnostics added to `kernel/idt.c` (thread NAME + the 16 bytes actually
+executing at the faulting RIP). They ended three sessions of guessing.**
+
+Captured failing run:
+```
+#PF pid=13 name=WXVIOL.ELF rip=...07 err=0x7 cr2=...00  bytes@rip=C6 00 90 ...   <- expected W^X test
+#PF pid=25 name=METRIC.ELF rip=...151 err=0x7 cr2=7FFFFFEFF040 bytes@rip=C7 40 40 EF BE AD DE ...  <- writes 0xDEADBEEF, a test
+#PF pid=29 name=SHA256 rip=0x80000000B0 err=0x5 cr2=0x0
+     bytes@rip= 03 0A 11 18 1F 26 2D 34 3B 42 49 50 57 5E 65 6C
+```
+
+**pid=29 is confirmed SHA256, and the bytes at its entry are NOT CODE.**
+`03 0A 11 18 1F 26 ...` is the arithmetic sequence **7n+3**. `03 0A` decodes as
+`add (%rdx),%ecx`, dereferencing `rdx=0` — which is exactly the reported
+`cr2=0x0`. The process is executing a **data pattern**.
+
+Note the trap also *changed shape* between runs (`#GP` at `0xB4` in one run,
+`#PF` at `0xB0` in another) — consistent with corruption, not with a fixed bug.
+
+### Who writes 7n+3
+
+```
+kernel/main.c:765   ((volatile uint8_t *)(uintptr_t)w)[i] = (uint8_t)(i * 7 + 3);
+user/bigwritetest.c:46  pat[i] = (char)(i * 7 + 3);
+```
+
+`kernel/main.c:747,763` — `blk_selftest` — allocates **three pages via
+`pmm_alloc_page()` and never frees any of them**, writes the pattern into one,
+and `blk_write`/`blk_read`s it to LBA 1500.
+
+`ptnode_alloc()` (kheap.c:286) zeroes each frame, and `elf_load` copies the ELF
+bytes in afterwards, so the text page IS correct at load time. **The pattern must
+therefore be written after the load** — i.e. the frame backing SHA256's text is
+owned by two things at once.
+
+Per memory `kmain-boot-race-user-threads`, kmain is still executing (and reaches
+`blk_selftest`) while probes are already spawned and running. That is the window.
+
+### UNRESOLVED detail that must be explained before any fix
+
+Pattern index 0 (`0x03`) sits at **page offset 0xB0**, not offset 0. A writer
+doing `w[0..511]` on a page-aligned frame would put index 0 at offset 0. So this
+is not a plain "same frame handed out twice" — either the write lands at an
+offset, or the page content arrived via the `blk_read` of LBA 1500 rather than
+the direct write. **Do not write a fix until this is explained**; the last two
+root causes I committed were both wrong because I stopped at "plausible".
+
+### Next
+1. Instrument `pmm_alloc_page`/`ptnode_alloc` to record owner, or add a check that
+   a frame handed out is not already mapped in a live address space.
+2. Determine whether `blk_selftest`'s leaked pages (747, 763) are the same frames
+   later handed to `elf_load` — print the physical addresses of both.
+3. `blk_selftest` leaking three pages every boot is a real bug regardless, but it
+   is NOT yet proven to be OPEN-11's cause.
+
 ### 0.-22 SESSION — RETRACTION: the "corrupted saved RIP" conclusion was WRONG
 
 **Commit `5ab7d4f` claimed OPEN-11 was a corrupted saved RIP across a context

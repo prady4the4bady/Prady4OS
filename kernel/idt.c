@@ -13,6 +13,7 @@
 #include "sched.h"
 #include "vdso_page.h"
 #include "vmm_cow.h"
+#include "uaccess.h"    /* copyin — dump the bytes actually executing at a fault */
 #include "regs.h"
 #include "signal.h"
 #include "ps2kbd.h"
@@ -230,13 +231,38 @@ void isr_dispatch(struct regs *r) {
         kputs(name);
         kputs(" pid=");
         kputdec(current_thread ? current_thread->pid : 0);
+        /* Every probe ELF is linked at the same base, so a faulting rip alone does
+         * NOT identify which binary faulted — four probes share entry 0x...b0.
+         * Print the thread name elf_load already assigned, or three sessions get
+         * spent disassembling the wrong ELF. */
+        kputs(" name=");
+        kputs(current_thread ? current_thread->name : "?");
         kputs(" rip=");
         kputhex(r->rip);
+        kputs(" err=");                  /* #GP's selector is as diagnostic as #PF's flags */
+        kputhex(r->err_code);
         if (r->vector == 14) {
             kputs(" cr2=");
             kputhex(read_cr2());
-            kputs(" err=");
-            kputhex(r->err_code);
+        }
+        /* The bytes actually executing. A fault on an instruction that provably
+         * cannot fault (e.g. #GP on `and $-16,%rsp`) means the loaded text is not
+         * the linked text — this line is what distinguishes the two, and nothing
+         * else in the log can. Read through the faulting thread's own mapping. */
+        {
+            unsigned char ib[16];
+            if (copyin(ib, (const void __user *)(uintptr_t)r->rip, sizeof ib) ==
+                (ssize_t)sizeof ib) {
+                static const char hexd[] = "0123456789ABCDEF";
+                kputs(" bytes@rip=");
+                for (unsigned i = 0; i < sizeof ib; i++) {
+                    kputc(hexd[(ib[i] >> 4) & 0xF]);
+                    kputc(hexd[ib[i] & 0xF]);
+                    kputc(' ');
+                }
+            } else {
+                kputs(" bytes@rip=<unreadable>");
+            }
         }
         kputs(" — killing process\r\n");
         sched_exit(-1);                  /* zombie (status -1) + switches away; never returns */
