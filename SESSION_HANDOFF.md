@@ -140,6 +140,10 @@ touch `smoke-sha256`, which is 90 s), `148e969` (docs), `98fd2f8` (adds the
 
 **`98fd2f8` is the prime suspect** — it is the one that changes the image.
 
+**BISECT DATAPOINT 1 (confirmed this session):** `smoke-sha256` **PASSES at `fd876cd`**
+in a clean build — so `fd876cd` is a genuine known-good, not merely "CI was green".
+The search space is exactly `bef93c2`, `148e969`, `98fd2f8`, `17c3858`.
+
 **Next exact command** (a bisect was attempted and left the tree on a detached
 HEAD; it has been restored, but run this in a worktree instead):
 ```
