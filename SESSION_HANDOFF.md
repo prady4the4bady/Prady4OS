@@ -97,6 +97,78 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-19 SESSION — 2026-08-04 (CURRENT — read this first)
+
+## CI AUDIT OF THE LAST 25 RUNS — 14 red, but only 5 distinct bugs, 4 already closed
+
+| gate | red runs | status |
+|---|---|---|
+| `smoke-syscallfuzz` | 6 | **FIXED** — verified `PASS smoke-syscallfuzz (27s)` in green run 30837801892 |
+| `smoke-ed25519` | 5 | **FIXED** (DDR-826) — verified `PASS smoke-ed25519 (150s)` |
+| `smoke-resched` | 1 | **FIXED** — verified `PASS smoke-resched (120s)` |
+| `smoke-blkmq-trace` | 1 | **FIXED** — verified `PASS smoke-blkmq-trace (180s)` |
+| **`smoke-sha256`** | **5** | **OPEN-11, still red** |
+
+All four fixed gates were checked against `EXCLUDE` in `tools/ci/shard_check.sh`
+(`smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4`)
+— **none of them is excluded**. They pass because they were repaired, not hidden.
+
+## OPEN-11 ROOT CAUSE — PMM CANNOT SUPPORT THE NUMBER OF PROCESSES WE SPAWN
+
+**This is a genuine resource-exhaustion bug, not a crypto or layout bug.**
+
+```
+NEXUS: PMM (buddy) free frames=0x0000000000006F56     = 28,502 frames ~= 111 MiB
+kernel/exec/elf.c:190  maps the FULL 8 MiB user stack EAGERLY, page by page
+                       8 MiB / 4 KiB = 2,048 frames PER PROCESS
+                       28,502 / 2,048 = ~13 processes MAXIMUM
+this boot spawns       ~29 ring-3 threads
+```
+
+The ceiling is ~13 and we ask for ~29. Adding the `acctest` probe in `98fd2f8`
+pushed an already-overcommitted boot further over the edge — which is exactly why
+"adding one probe broke a *different* probe", and why it is nondeterministic:
+which process loses the allocation race depends on scheduling order.
+
+Corroborating evidence in the same serial log:
+```
+AGENT_OOM_KILLED PID=2742943744      <-- garbage PID (0xA37Fxxxx)
+AETHER_SEC_OOM_OK
+```
+That PID is uninitialised — the `tcb-fields-not-zeroed` class from memory. The
+OOM path is being taken for real, and it reports a nonsense PID when it fires.
+
+### Hypotheses REFUTED this session (do not retest — all measured, not argued)
+- a regressing commit: all four suspects exonerated; `17c3858` touches **no kernel source**
+- stale incremental build: clean worktree builds fail too
+- FS gates corrupting the kernel tail: checksums identical before/after; control arm failed first
+- `movaps`/`movdqa` unaligned `#GP`: `objdump` shows **zero** SSE/AVX instructions in the probe
+- writable globals (DDR-826 class) in the probe: **no** probe ELF has a writable PT_LOAD (all 42 are R+X)
+- probe_rodata_check hiding something via its skip: nothing is skipped
+
+### THE FIX (next step, not yet applied)
+Make the 8 MiB user stack **lazily mapped** (demand-paged) instead of eagerly
+mapping 2,048 frames at `elf_load` time — map only the top page (which
+`elf.c:207` already needs for the argv/auxv frame) plus a guard page, and fault
+the rest in. That drops per-process cost from 2,048 frames to ~2 and lifts the
+ceiling far above the ~29 we spawn.
+Then separately fix the uninitialised PID in the `AGENT_OOM_KILLED` path.
+
+**Do not "fix" this by giving QEMU more RAM.** That hides a real kernel limit
+that would still bite on constrained hardware.
+
+### Housekeeping
+- Dependabot: 5 alerts (2 high, 3 moderate) — seen, NOT triaged, human decision
+- untracked `.claude/`; three prunable `claude/*` worktrees
+- worktrees added: `pradyos-bisect` (98fd2f8), `pradyos-tip` (1b401d9)
+- transport fixed: scripts to a file, CRLF-stripped, run by path, `MSYS_NO_PATHCONV=1`.
+  `wsl bash -lc '<multiline>'` silently blanks shell variables — it manufactured the
+  phantom "HEAD mismatch" of the previous session.
+- `readelf`/`objdump` do not exist in Git Bash; a `grep -c` over their missing output
+  returns 0 and reads as "clean". Run binutils inside WSL only.
+
+### AGS stays INERT. ACC stays ⚠️.
+
 ### 0.-18 SESSION — 2026-08-04 (CURRENT — read this first)
 
 ## OPEN-11 — MAJOR REFRAME: it is NOT a source regression. It is NONDETERMINISTIC.
