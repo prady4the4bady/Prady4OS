@@ -486,6 +486,19 @@ $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 	dd if=$(STAGE2_BIN) of=$(IMG) bs=512 seek=1  conv=notrunc status=none
 	dd if=$(KERNEL_BIN) of=$(IMG) bs=512 seek=17 conv=notrunc status=none
 	@echo "image: $(IMG) (stage1 $$(wc -c < $(STAGE1_BIN))B, stage2 $$(wc -c < $(STAGE2_BIN))B, kernel $$(wc -c < $(KERNEL_BIN))B)"
+# DDR-831: blk_selftest writes a scratch sector at BLK_SCRATCH_LBA (4095, the last
+# sector of the 2 MiB image) and QEMU PERSISTS that write into the image file. If
+# the kernel's on-disk extent ever reaches that sector, the self-test corrupts the
+# kernel — including the probe ELFs incbin'd into .rodata — for every later boot.
+# That was OPEN-11: the old literal LBA 1500 was chosen when the kernel was capped
+# at 512 sectors, and DDR-827 grew the kernel to ~1666 sectors without anything
+# failing. A comment cannot fail a build; this check can.
+	@kend=$$(( 17 + ( ($$(wc -c < $(KERNEL_BIN)) + 511) / 512 ) )); \
+	 test "$$kend" -lt 4095 || { \
+	   echo "kernel reaches LBA $$kend, at or past the blk_selftest scratch sector 4095 (DDR-831)."; \
+	   echo "The self-test would write into the kernel image and QEMU would persist it."; \
+	   echo "Grow the image and move BLK_SCRATCH_LBA in kernel/main.c together."; exit 1; }
+	@echo "image: kernel ends at LBA $$(( 17 + ( ($$(wc -c < $(KERNEL_BIN)) + 511) / 512 ) )), scratch sector 4095 — clear (DDR-831)"
 
 # A FAT32 data disk (with known files) for the VFS/FAT32 self-test. 64 MiB is
 # above the FAT32 minimum. Uses dosfstools (mkfs.fat) + mtools (mcopy/mmd).

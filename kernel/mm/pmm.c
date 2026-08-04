@@ -108,6 +108,22 @@ uint64_t pmm_alloc_pages(unsigned order) {
             list_push(o, addr + block_size(o));
         }
         free_pages -= (1ull << order);
+        /* DDR-830 follow-up: a block just popped off the free list must have no
+         * owner. If it already does, the free list contained a duplicate and we
+         * are about to hand one frame to a second owner — the OPEN-11 signature.
+         * Report before overwriting the evidence. */
+        if (order == 0 && pmm_refcount) {
+            uint64_t didx = addr >> PAGE_SHIFT;
+            if (didx < PMM_NFRAMES && pmm_refcount[didx] != 0) {
+                kputs("[pmm] FREE-LIST DUPLICATE addr=");
+                kputhex(addr);
+                kputs(" rc=");
+                kputdec(pmm_refcount[didx]);
+                kputs(" caller=");
+                kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+                kputs("\r\n");
+            }
+        }
         rc_set(addr, order, 1);         /* fresh allocation: one owner */
     }
     irq_restore(fl);

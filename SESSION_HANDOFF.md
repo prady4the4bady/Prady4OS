@@ -97,6 +97,49 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-24 SESSION — OPEN-11 ROOT-CAUSED AND FIXED (DDR-831)
+
+**It was never nondeterministic. It was STATEFUL.**
+
+`blk_selftest` (`kernel/main.c`) wrote its 512-byte `7n+3` scratch pattern to a
+hardcoded **LBA 1500**. That literal was chosen when the kernel was capped at 512
+sectors. **DDR-827 raised the cap**; the kernel is now 844,134 B = 1,649 sectors,
+spanning LBA 17 -> **1,666**. So the self-test was writing *into the kernel's own
+on-disk image*, and **QEMU persists writes back to the image file**.
+
+Consequence: the first gate run after `make image` used a pristine image and
+**passed** — and corrupted it. Every later run booted a kernel whose `.rodata`
+(where `user_image.asm` incbins every probe ELF) contained the pattern.
+
+That single fact explains every symptom chased across five sessions:
+- `bytes@rip = 03 0A 11 18 ...` — `7n+3` inside probe text
+- `elf_load rc=-2` = **ELF_E_MAGIC** — the embedded ELF's magic itself clobbered
+- the fault *changing shape* run to run (#GP / #PF / no spawn) — depends which ELF the pattern overlaps
+- "~1 in 3 flaky" ad hoc; "fails at gate 10 of 32" in CI (nine gates corrupt it first)
+- why it started at `98fd2f8`: linking ACC grew the kernel past LBA 1500 for the first time
+- why "adding one probe broke a *different* probe"
+
+**Fix (DDR-831):** scratch LBA is now `BLK_SCRATCH_LBA` = 4095, the last sector of
+the 2 MiB image — past any kernel that fits, by construction — plus a `make image`
+check that FAILS the build if the kernel's extent reaches it. A comment cannot
+fail a build; a gate can.
+
+**Verification: 20/20 `smoke-sha256` and 5/5 `smoke-rqstress-liveness`, one image,
+consecutive.** Before the fix the same sequence gave 1 pass then 7 straight fails.
+
+### Still to do
+- ONE full CI run must conclude green before ACC goes ⚠️ -> ✅ (deliberately NOT
+  upgraded yet — CI is ground truth).
+- Then wire AGS (NSI 79/80, smoke-ags). It has stayed inert throughout.
+
+### Kept from this investigation
+- **DDR-830** (PMM double-free rejection) — real hardening, fired zero times, does
+  NOT fix OPEN-11 and never claimed to.
+- Trap diagnostics in `kernel/idt.c`: thread **name**, **bytes at rip**, and the
+  page base. These ended the guessing and should stay.
+- `[fwcfg] probes=` line: distinguishes "probe never spawned" from "probe ran silently".
+- `elf_load` failure is now reported for the sha256 probe instead of failing silently.
+
 ### 0.-23 SESSION — OPEN-11: PROVEN memory corruption, probe text overwritten by data
 
 **Diagnostics added to `kernel/idt.c` (thread NAME + the 16 bytes actually

@@ -11,6 +11,7 @@
  */
 #include "fwcfg.h"
 #include "../../io.h"
+#include "../../console.h"   /* OPEN-11: report the selected probe set at boot */
 #include <stdint.h>
 
 #define FWCFG_PORT_SEL    0x510      /* 16-bit write: select a key */
@@ -100,6 +101,13 @@ void fwcfg_init(void) {
     fwcfg_read(g_probes, size);
     g_probes[size] = 0;
     g_probes_len = (unsigned)size;
+    /* OPEN-11: a run where no probe spawns is indistinguishable in the log from a
+     * run where the probe spawned and produced nothing. Say which happened. */
+    kputs("[fwcfg] probes=\"");
+    kputs((const char *)g_probes);
+    kputs("\" len=");
+    kputdec(g_probes_len);
+    kputs("\r\n");
 }
 
 int probe_enabled(const char *name) {

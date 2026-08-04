@@ -754,17 +754,27 @@ static void blk_test_thread(void *arg) {
         kputs("[blk] read sector 0 failed\r\n");
     }
 
+    /* DDR-831: last sector of the 2 MiB (4096-sector) boot image. Past any
+     * kernel that fits in the image by construction; `make image` enforces it. */
+#define BLK_SCRATCH_LBA 4095u
     /* Write/read round-trip on a scratch sector in the boot disk's padding.
-     * MUST be past the kernel's on-disk image: the kernel loads from LBA 17 and
-     * the build caps it at 256 KiB (512 sectors), so it can occupy up to LBA
-     * ~529. QEMU persists writes back to the image file, so writing into the
-     * kernel region would corrupt the kernel for the next boot. LBA 1500 is past
-     * the kernel and inside the 1 MiB (2048-sector) image. */
+     *
+     * DDR-831: this MUST stay past the kernel's on-disk extent. QEMU persists
+     * writes back to the image file, so a write inside the kernel region corrupts
+     * the kernel — including the probe ELFs incbin'd into .rodata — for every
+     * subsequent boot. That is exactly what OPEN-11 was: this test wrote to a
+     * hardcoded LBA 1500 chosen when the kernel was capped at 512 sectors; after
+     * DDR-827 raised the cap the kernel reached LBA ~1666 and the self-test began
+     * writing into it.
+     *
+     * The scratch sector is now the LAST sector of the image, which is past any
+     * kernel that fits in the image by construction, and `make image` enforces
+     * that the kernel cannot reach it. Do not replace this with a literal. */
     uint64_t w = pmm_alloc_page(), r = pmm_alloc_page();
     for (int i = 0; i < 512; i++)
         ((volatile uint8_t *)(uintptr_t)w)[i] = (uint8_t)(i * 7 + 3);
-    int wr = blk_write(0, 1500, (void *)(uintptr_t)w, 1);
-    int rd = blk_read(0, 1500, (void *)(uintptr_t)r, 1);
+    int wr = blk_write(0, BLK_SCRATCH_LBA, (void *)(uintptr_t)w, 1);
+    int rd = blk_read(0, BLK_SCRATCH_LBA, (void *)(uintptr_t)r, 1);
     int ok = (wr == 0 && rd == 0);
     for (int i = 0; ok && i < 512; i++)
         if (((volatile uint8_t *)(uintptr_t)r)[i] != ((volatile uint8_t *)(uintptr_t)w)[i])
@@ -1326,10 +1336,21 @@ static void fs_test_thread(void *arg) {
                 if (probe_enabled("sha256")) {
                     struct tcb *sh = 0;
                     uint64_t shlen = (uint64_t)(sha256test_elf_end - sha256test_elf);
-                    if (elf_load((void *)(uintptr_t)sha256test_elf, shlen,
-                                 "SHA256", &sh) == ELF_OK && sh) {
+                    /* OPEN-11: this spawn used to be `if (... == ELF_OK && sh)`
+                     * with no else, so a failed load printed NOTHING and the gate
+                     * timed out looking like the probe had run and stayed silent.
+                     * A load that fails must say so, and say why. */
+                    int shrc = elf_load((void *)(uintptr_t)sha256test_elf, shlen,
+                                        "SHA256", &sh);
+                    if (shrc == ELF_OK && sh) {
                         sched_unblock(sh);
                         kputs("[user] ELF loaded (embedded); SHA-256 vector probe spawned\r\n");
+                    } else {
+                        kputs("[user] SHA-256 probe elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)shrc);
+                        kputs(" free_frames=");
+                        kputhex(pmm_free_page_count());
+                        kputs("\r\n");
                     }
                 }
                 if (probe_enabled("sigpipe")) {
