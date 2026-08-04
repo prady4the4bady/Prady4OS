@@ -274,7 +274,13 @@ USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h) \
                  $(wildcard kernel/crypto/*.c) $(wildcard kernel/crypto/*.h) \
                  Makefile
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+# DDR-833: kernel HEADERS are prerequisites too. Without this, editing a header
+# (e.g. kernel/aether/aether.h) leaves `make image` reporting "Nothing to be done"
+# and every gate then tests the PREVIOUS binary. That is DDR-822/825 a third time:
+# the wildcard fixed user/, then kernel/crypto/, and stopped there both times.
+KERNEL_HS := $(wildcard kernel/*.h) $(wildcard kernel/*/*.h) $(wildcard kernel/*/*/*.h)
+
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then

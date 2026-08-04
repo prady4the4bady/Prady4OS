@@ -24,12 +24,6 @@ enum aether_action {
 enum aether_result {
     AR_SUBMIT = 1, AR_APPROVE, AR_REJECT, AR_EXPIRE,
     AR_OOM_KILL, AR_RATE_KILL, AR_CAP_DENIED, AR_WRAP,
-    /* DDR-814 AGS. Kept distinct from AR_APPROVE/AR_CAP_DENIED deliberately:
-     * "the owner signed this goal" and "policy allowed this action" are not the
-     * same fact, and a REJECTED goal is a forgery attempt rather than a policy
-     * refusal. Collapsing either pair makes "was a forged goal ever presented?"
-     * unanswerable from the log — the only question that shows AGS works. */
-    AR_GOAL_SIGNED, AR_GOAL_REJECTED,
     /* DDR-800 (R1): egress proceeded ONLY because the caller is sovereign —
      * it lacked CAP_NET, or the destination was off the allowlist, or both.
      * Distinct from AR_APPROVE on purpose: the entire value of this record is
@@ -52,8 +46,35 @@ enum aether_result {
      * or replayed envelope ever presented?" unanswerable — which is the only
      * question that shows the channel is doing anything. The rejection record
      * carries the ACC_ERR_* code so forgery and replay stay distinguishable. */
-    AR_ACC_SEALED, AR_ACC_OPENED, AR_ACC_REJECTED
+    AR_ACC_SEALED, AR_ACC_OPENED, AR_ACC_REJECTED,
+    /* DDR-814 AGS. APPENDED, never inserted — see the append-only rule below.
+     * Kept distinct from AR_APPROVE/AR_CAP_DENIED deliberately: "the owner
+     * signed this goal" and "policy allowed this action" are not the same fact,
+     * and a REJECTED goal is a forgery attempt rather than a policy refusal.
+     * Collapsing either pair makes "was a forged goal ever presented?"
+     * unanswerable from the log — the only question that shows AGS works. */
+    AR_GOAL_SIGNED, AR_GOAL_REJECTED
 };
+
+/* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.
+ *
+ * These values cross the ring boundary inside audit records, and ring-3 probes
+ * duplicate them as literals (e.g. user/egressaudittest.c hardcodes
+ * AR_SOVEREIGN_BYPASS 9 / AR_NET_CONNECT 10) because a freestanding probe cannot
+ * include this header. Inserting a code in the middle silently renumbers every
+ * later one and the probes then assert against stale numbers — which is exactly
+ * what wiring AGS did: three shards went red on smoke-egress-audit,
+ * smoke-privacy-netfilter and smoke-sovereign-egress.
+ *
+ * Add new codes at the END, and pin every externally-duplicated value here. A
+ * renumbering now fails the BUILD instead of a gate three shards away. */
+_Static_assert(AR_CAP_DENIED       == 7,  "audit wire format: AR_CAP_DENIED must stay 7");
+_Static_assert(AR_SOVEREIGN_BYPASS == 9,  "audit wire format: user/egressaudittest.c hardcodes 9");
+_Static_assert(AR_NET_CONNECT      == 10, "audit wire format: user/egressaudittest.c hardcodes 10");
+_Static_assert(AR_PRIVACY_BLOCKED  == 11, "audit wire format: privacy-netfilter probe depends on 11");
+_Static_assert(AR_ACC_SEALED       == 12, "audit wire format: ACC probe depends on 12");
+_Static_assert(AR_ACC_OPENED       == 13, "audit wire format: ACC probe depends on 13");
+_Static_assert(AR_ACC_REJECTED     == 14, "audit wire format: ACC probe depends on 14");
 
 /* DDR-800/801: destination packed into the audit record's action_id. The field
  * is 64-bit and unused on the egress path, so no struct change is needed. */
