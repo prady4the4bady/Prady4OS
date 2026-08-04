@@ -71,8 +71,8 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
-- **AGS — Agent Goal Signing** (DDR-814) — wired, `smoke-ags` 20/20 locally,
-  awaiting first CI conclusion. `kernel/aether/ags.{c,h}` + `kernel/syscall/sys_ags.c`
+- **AGS — Agent Goal Signing** (DDR-814) — ✅ SHIPPED, CI-confirmed
+  (`PASS smoke-ags (120s)`, run 30960084022 on `9fb8ea4`). `kernel/aether/ags.{c,h}` + `kernel/syscall/sys_ags.c`
   + `SYS_GOAL_SIGN` (79, CAP_SOVEREIGN) / `SYS_GOAL_VERIFY` (80, CAP_AGENT).
   `sig = Ed25519(owner_seed, SHA-256(goal))` — the goal is hashed first so any
   goal length costs one fixed-size signature and the audit log can store the
