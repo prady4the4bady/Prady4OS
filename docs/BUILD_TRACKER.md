@@ -18,7 +18,7 @@ verified, it says so.
 | **`dev/phase1`** | `bef93c2` — **NOT promoted**. Tip before it (`fd876cd`) went green twice: runs `30878361148`, `30879247169`. |
 | **Verified** | 2026-08-04, tree clean |
 | **NSI max** | **78** — `SYS_ACC_SEAL` 77 / `SYS_ACC_OPEN` 78 **registered and linked** (DDR-827 raised the load window). Next free **79**. Table size **128**. |
-| **CI gates** | **121** assigned across 6 shards · **5** excluded, each with a stated reason |
+| **CI gates** | **122** assigned across 6 shards · **5** excluded, each with a stated reason |
 | **CI health** | 8 reds on 2026-08-03 fully audited (DDR-828): 5 × `smoke-ed25519` (expected, DDR-826), 7 × `smoke-syscallfuzz` (stale 60 s window — fixed), 1 × `smoke-resched`, 1 × `smoke-blkmq-trace` (single occurrences, triaged to OPEN-2). |
 | **CI wall-clock** | ~25 min (was 2 h 08 m before DDR-817) |
 
@@ -94,7 +94,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | 6.5 | **SHA-512** (DDR-821) | ✅ | `smoke-sha512`, A/B-verified, shard 3 |
 | 6.6 | **X25519** (DDR-820) | ✅ | `smoke-x25519` 4/4 on a clean host, registered in shard 3 |
 | 6.7 | **Ed25519** (DDR-821) | ✅ | `smoke-ed25519` **PASSES** — `PRADYOS_ED25519_VECTORS_OK`. All RFC 8032 §7.1 vectors + tamper/wrong-key/non-canonical-S rejection. The earlier failure was DDR-826 (writable global in an R+X-only probe), not the arithmetic. |
-| 6.8 | ACC (DDR-813) | ⚠️ | envelope + syscalls 77/78 **LINKED AND REGISTERED**; DDR-827 raised the stage-2 window 768 KiB → 1 MiB. `smoke`, `smoke-user` (7), `smoke-fs` (12) and `smoke-smp` (4, `-smp 4`) all PASS with ACC resident — all four DDR-827 verifications satisfied. **Still no `smoke-acc`** — not shipped until that gate is green. |
+| 6.8 | **ACC** (DDR-813) | ✅ | `smoke-acc` **PASSES** (rc=0, 152 s), registered in shard 5. Five arms: round-trip, tampered-ct, tampered-sig, replay, owner-read-after-reboot. Syscalls 77/78 linked and registered. |
 | 6.9 | AGS (DDR-814) | 🔒 | needs 6.7 |
 
 ---

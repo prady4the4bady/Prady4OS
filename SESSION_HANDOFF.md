@@ -97,7 +97,82 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
-### 0.-15 SESSION — 2026-08-03 (CURRENT — read this first)
+### 0.-16 SESSION — 2026-08-04 (CURRENT — read this first)
+
+**`main` = `3b4830a`. `dev/phase1` = `98fd2f8`** + this handoff commit.
+NSI 77/78 registered+linked. Next free **79**. 121 gates, **6** excluded.
+
+#### ⭐ CI AUDIT — all 8 reds attributed, largest cause fixed (DDR-828)
+
+Every red run in the last 48 h was opened to its failing job, step and error
+string. **They were not one defect:**
+
+| gate | runs | verdict |
+|---|---|---|
+| `smoke-ed25519` | `c68dc24`, `5e551d8`, `df248af` ×3 | **EXPECTED** — DDR-826, deliberately left registered-and-red rather than hidden. Stopped at `ad8a3a4`, the fix. |
+| **`smoke-syscallfuzz`** | **7 of 8** | **A TIMEOUT, not a defect.** Fixed. |
+| `smoke-resched` | `ad8a3a4` only | 1 occurrence → OPEN-2, triaged, **not** claimed fixed |
+| `smoke-blkmq-trace` | `df248af` only | 1 occurrence → OPEN-2, triaged, **not** claimed fixed |
+
+`smoke-syscallfuzz` died at **exactly 60 s** (17:54:56 → 17:55:56) with
+`TIMEOUT_S=60`, and `PRADYOS_NET_FUZZ_OK` is in the same log — the kernel was
+alive and progressing. Measured locally: **25 s**. A 2.4× margin here, not
+enough on a shared runner as the image grew (every probe ELF is `incbin`'d in;
+ed25519 + aead added ~40 KB plus boot-time spawns).
+
+**Matching by identity mattered.** "Required pattern not found" is the *same
+string* DDR-826 produced, and DDR-826 *was* a real defect. Reading the
+timestamps rather than the message separated them.
+
+**Fix is the class, per DDR-788's own precedent.** A gate with no
+`FORBIDDEN_SENTINEL` is early-exit eligible, so a larger window is **free on
+success**. DDR-788 claimed to have "retired the timeout-margin flake class" but
+**17 gates were still at 60 s**. Eleven eligible ones raised to 120 s. Five are
+**deliberately left at 60 s** (`smoke-kill`, `smoke-fpu`, `smoke-net-tcp-lo`,
+`smoke-fs-budget`, `smoke-nvme`) — they declare `FORBIDDEN_SENTINEL`, burn the
+whole window every run, and raising them would cost 5 × 60 s of real CI
+wall-clock for gates that are not failing.
+
+**Rule earned:** *a gate's timeout is a claim about how long the system takes,
+and it goes stale as the system grows. When a gate fails on "pattern not found",
+check elapsed against the window BEFORE reading the code.*
+
+#### smoke-acc — written and wired, NO VERDICT YET
+
+`user/acctest.c` + `smoke-acc`, five checks: round-trip · tampered ciphertext
+(AEAD tag) · tampered signature (Ed25519) — **separate arms on purpose** ·
+replay → `ACC_ERR_REPLAY` · **owner-read-after-reboot with `last_seq = NULL`**,
+which is what BUG-1 exists for and the only arm that catches a verify key kept
+outside the envelope. Plus a next-seq-accepted check so the replay arm cannot be
+satisfied by an `open()` that rejects everything.
+
+**PASSES — `rc=0`, 152 s.** Verdict landed just before the handoff was
+committed. Exclusion removed, registered in shard 5 (121 gates, 5 excluded).
+**ACC is shipped**: syscalls 77/78 linked and registered, gate green.
+
+**Done in this session** — unexcluded and registered.|FAIL)" build/gatelogs/acc.log; grep -a "ACC_STUB" build/gatelogs/acc.log'
+```
+If PASS → remove `smoke-acc` from `EXCLUDE` in `shard_check.sh`, add
+`5<TAB>smoke-acc<TAB>150` to `gate_shards.txt`, and **ACC is finally shipped**.
+If it shows `ACC_STUB arm=<name>`, the failing arm names itself.
+
+`kernel.bin` is 840,038 B against the 1,048,576 limit — DDR-827's window absorbs
+the probe with 208 KB spare.
+
+#### Next, in order
+
+1. **DDR-814 AGS** (NSI 79/80) — Ed25519 over goal state; arms: valid
+   sign+verify, tampered goal fails, wrong key fails.
+2. DDR-815 ACC rotation (NSI 81).
+3. TASK 9–21.
+
+#### Unchanged
+
+**B#3 / OPEN-10:** still **no `op=` line**. Untested, not refuted.
+Ruled out and not to be retried: `IRQF_PERCPU` (no analogue), `sfs.c` spinlock
+(no global mutable state).
+
+### 0.-15 SESSION — 2026-08-03 (earlier)
 
 **`main` = `3b4830a`. `dev/phase1` = `eb2c2f1`** + this handoff commit.
 **NSI 77/78 assigned and REGISTERED.** Next free **79**. 121 gates, 5 excluded.

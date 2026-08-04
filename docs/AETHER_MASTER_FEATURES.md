@@ -71,6 +71,15 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
+- **ACC — Authenticated Confidential Channel** (DDR-813) — `kernel/crypto/acc.{c,h}`
+  + `SYS_ACC_SEAL` (77, CAP_AGENT) / `SYS_ACC_OPEN` (78, CAP_SOVEREIGN). The
+  capability split is asymmetric on purpose: opening reveals a PEER agent's
+  plaintext, so it is owner-only (S1). Envelope: ephemeral X25519 → HKDF
+  `ACC-session-v1`/`ACC-owner-v1` → ChaCha20-Poly1305 with `nonce=eph_pub[0:12]`
+  → Ed25519 over `eph_pub||ct||tag`. Two spec bugs fixed at design time:
+  `agent_sign_pub[32]` travels IN-BAND (without it the owner cannot verify after
+  a reboot — the offline read is the entire point), and the Ed25519 and X25519
+  keys are distinct fields that never alias. Gate `smoke-acc` PASSES, shard 5.
 - **ChaCha20-Poly1305 AEAD** (DDR-819) — `kernel/crypto/aead.{c,h}`, RFC 8439.
   **Gate `smoke-aead` passes** (shard 4): §2.4.2 keystream, §2.5.2 tag over a
   34-byte message (2-byte final block — the only path reaching the short-block
