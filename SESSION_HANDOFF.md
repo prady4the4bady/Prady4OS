@@ -97,6 +97,52 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-26 SESSION — x86_64 v1.0.0 BACKLOG CONFIRMED (50 items, 9 groups)
+
+**This supersedes every prior work queue.** The ISO is NOT to be built o
+proposed until every item is CI-green or explicitly marked as one of the two
+pre-approved exceptions.
+
+#### Standing rules added for this backlog
+- After EACH group: re-run the FULL gate suite, not just the group's new gates.
+  A regression in any previously-green gate blocks the group even if it looks
+  unrelated.
+- Zero uncommitted stale files at the end of EVERY group, verified explicitly.
+- A group is complete only if every item is CI-green, except the two
+  pre-approved exceptions, which must still be logged with a one-line reason.
+
+#### The two pre-approved exceptions
+- **Item 26 — Intel HDA audio (OPTIONAL).** May be skipped; log as
+  "deferred, optional".
+- **Item 41 — Wayland/wlroots compositor (PRE-APPROVED SUPERSEDED).** Already
+  superseded by the shipped custom C framebuffer compositor (8.1). Do NOT build;
+  tracker to read "superseded, not required".
+
+#### Groups
+1. Tracker & build-system integrity (items 1-5)
+2. Section E / capability / agent core close-out (6-14)
+3. Kernel completeness (15-21)
+4. Drivers & boot path (22-28)
+5. Filesystem completeness (29-31)
+6. Userspace completeness (32-38)
+7. Desktop completeness (39-41)
+8. Assembly optimization (42-45)
+9. Release (46-50)
+
+#### EXPLICITLY DEFERRED — do not pull forward under any circumstance
+- `arch/aarch64` and `arch/riscv64` ports (both are 1-file empty trees)
+- Apple Silicon / m1n1 path
+- Phase 10 quantum layer (QAL, virtual QPU, QAOA scheduler, hybrid API)
+- Rust rewrite of any component
+- Cloud bridge activation (DDR-793) — flag and ASK if any queue item turns out
+  to have a hard dependency on it
+
+#### Two decision points already raised, awaiting the operato
+- **Item 3 (CMake/Makefile hybrid)** — the brief requires explicit sign-off
+  before skipping. Assessment to be produced in Group 1; do not skip silently.
+- **Item 21 (syscall count target)** — report a realistic v1.0.0 number rathe
+  than blindly chasing 200+.
+
 ### 0.-25 SESSION — A4: an `op=` line CAPTURED for OPEN-10 / B#3
 
 **CI run 30999541696 on `7fea950`, shard 2, `smoke-percpu-sched`, gate 5 of 19:**

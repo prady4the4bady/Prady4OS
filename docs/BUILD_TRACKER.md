@@ -199,20 +199,33 @@ Status key: ✅ done · 🔵 in progress · ⬜ not started · 🔒 blocked
 
 ### Section E — kernel syscalls (TASK 9)
 
-| Item | NSI | Status |
-|---|---|---|
-| `SYS_MEMORY_WRITE` / `SYS_MEMORY_READ` | 82/83 | ⬜ |
-| `SYS_CHECKPOINT_AGENT` / `SYS_RESUME_AGENT` | 84/85 | ⬜ |
-| `spawn_depth` cap in TCB | — | ⬜ |
-| DAG action queue (`parent_action_id`) | — | ⬜ |
-| `SYS_APPROVE_CODE_REWRITE` | 86 | ⬜ |
-| `SYS_READ_AUDIT` (Merkle verify, F#76) | 87 | ⬜ |
+**NSI allocation lives in DDR-840, not here.** This table carries STATUS only;
+restating numbers in two places is what produced the 87 collision it records.
+
+| Item | NSI | Status | Evidence |
+|---|---|---|---|
+| `SYS_MEMORY_WRITE` / `SYS_MEMORY_READ` | 82/83 | ✅ | `PASS smoke-agentmem (120s)`, run 31003118400 on `7f7a9d3` (DDR-836) |
+| `SYS_CHECKPOINT_AGENT` / `SYS_RESUME_AGENT` | 84/85 | ✅ | `PASS smoke-checkpoint (120s)`, run 31015668039 on `35bab14` (DDR-837) |
+| `spawn_depth` cap in TCB | — | ✅ | `PASS smoke-spawndepth (120s)`, run 31028810861 on `83a761a` (DDR-838) |
+| DAG action queue (`parent_action_id`) | 92 | ✅ | `PASS smoke-actiondag (120s)`, run 31043474501 on `362cb36` (DDR-839) |
+| `SYS_APPROVE_CODE_REWRITE` | 86 | ⬜ | Group 2 item 6 — last open Section E syscall |
+| `SYS_READ_AUDIT` (Merkle verify, F#76) | **93** | ⬜ | Group 2 item 7. **Moved off 87 by DDR-840** — 87 is `SYS_VAULT_PUT`, shipped |
 
 ### Section 3B — capability bits (TASK 10)
 
-`CAP_MEMORY` (1<<18) · `CAP_OCR` (1<<19) · `CAP_EXEC` (1<<20) · `CAP_REWRITE`
-(1<<21, always needs `CAP_SOVEREIGN` co-approval) · `CAP_SCENE` (1<<22) ·
-`CAP_NET_BROWSE` (1<<23) — **all ⬜**, each needs an enforcement gate.
+| bit | capability | status |
+|---|---|---|
+| 1<<18 | `CAP_MEMORY` | ✅ shipped — `tcb.is_memory`, gate `smoke-agentmem` (DDR-836) |
+| 1<<19 | `CAP_OCR` | ⬜ deferred post-1.0 (no OCR path in the x86_64 v1 scope) |
+| 1<<20 | `CAP_EXEC` | ⬜ deferred post-1.0 |
+| 1<<21 | `CAP_REWRITE` | ⬜ **Group 2 item 6** — required by NSI 86, always CAP_SOVEREIGN co-approved |
+| 1<<22 | `CAP_SCENE` | ⬜ deferred post-1.0 (post-L7) |
+| 1<<23 | `CAP_NET_BROWSE` | ⬜ deferred post-1.0 |
+
+Each shipped bit needs an enforcement gate; a capability with no gate is a
+comment. Bits 19/20/22/23 are defined but unwired only when their consume
+lands — an unused bit position costs nothing, and reserving them now prevents a
+mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 
 ### Section 3C — action types #31–44 (TASK 11) — all ⬜
 
