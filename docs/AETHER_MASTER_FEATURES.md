@@ -71,7 +71,8 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
-- **DAG action queue** (DDR-839, Section E) — `SYS_SUBMIT_CHILD_ACTION` (92)
+- **DAG action queue** (DDR-839, Section E) — ✅ SHIPPED, CI-confirmed
+  (`PASS smoke-actiondag (120s)`, run 31043474501 on `362cb36`). `SYS_SUBMIT_CHILD_ACTION` (92)
   adds `parent_action_id` to the queue: an agent can plan "fetch, then report"
   up front and the kernel refuses the second until the first is approved.
   **Cycles are structurally impossible rather than checked** — ids are monotonic
@@ -82,7 +83,7 @@ All entries below are **shipped**.
   the sovereign-mode auto-approval path — the gate caught that guarding only
   `aether_approve` left the common path unguarded. A rejected parent needs no
   cascade code: its children simply never pass the check.
-  `smoke-actiondag` 20/20 locally, awaiting first CI conclusion.
+  `smoke-actiondag` 20/20 locally, then CI-green.
 - **Spawn-depth cap** (DDR-838, Section E) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-spawndepth (120s)`, run 31028810861 on `83a761a`). `SPAWN_DEPTH_MAX = 3`, enforced in
   `SYS_FORK`. An agent may found a chain three generations deep; the fourth is
