@@ -71,7 +71,8 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
-- **Agent checkpoint / resume** (DDR-837, Section E) — `SYS_CHECKPOINT_AGENT` (84)
+- **Agent checkpoint / resume** (DDR-837, Section E) — ✅ SHIPPED, CI-confirmed
+  (`PASS smoke-checkpoint (120s)`, run 31015668039 on `35bab14`). `SYS_CHECKPOINT_AGENT` (84)
   / `SYS_RESUME_AGENT` (85), both CAP_SOVEREIGN. The operator freezes and thaws a
   running agent. **The target blocks ITSELF** at its next syscall boundary, on a
   `tcb.checkpointed` flag observed in `syscall_dispatch`; marking THREAD_BLOCKED
@@ -79,8 +80,8 @@ All entries below are **shipped**.
   RUNNING elsewhere mid-kernel-work. The honest cost is that a checkpoint is not
   instantaneous — an agent in a long pure-computation loop runs until it calls
   something. Guards: init (pid 1) and self cannot be frozen, and an unknown pid
-  is `-ESRCH`, distinct from `-EPERM`. `smoke-checkpoint` 20/20 locally, awaiting
-  first CI conclusion.
+  is `-ESRCH`, distinct from `-EPERM`. `smoke-checkpoint` 20/20 locally, then
+  CI-green.
 - **Agent memory** (DDR-836, Section E / 3B) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-agentmem (120s)`, run 31003118400 on `7f7a9d3`). `SYS_MEMORY_WRITE` (82) /
   `SYS_MEMORY_READ` (83), gated by `CAP_MEMORY` (1<<18) with a `tcb.is_memory`
