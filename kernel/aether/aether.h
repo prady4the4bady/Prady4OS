@@ -67,7 +67,11 @@ enum aether_result {
     /* DDR-836. APPENDED per DDR-832. Reads are recorded as well as writes: the
      * store is a shared blackboard, so "who read this fact" is as much an
      * operator question as who wrote it. */
-    AR_MEM_WRITE, AR_MEM_READ
+    AR_MEM_WRITE, AR_MEM_READ,
+    /* DDR-837. APPENDED per DDR-832. Without these, "why did this agent stop
+     * producing?" is unanswerable from the log, and an operator freeze looks
+     * exactly like a fault. */
+    AR_AGENT_CHECKPOINT, AR_AGENT_RESUME
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.

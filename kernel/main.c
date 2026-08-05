@@ -375,6 +375,8 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
+extern const unsigned char ckpttest_elf_end[];
 extern const unsigned char agentmemtest_elf[];        /* DDR-836: agent memory */
 extern const unsigned char agentmemtest_elf_end[];
 extern const unsigned char vaulttest_elf[];           /* DDR-834: credential vault */
@@ -1339,6 +1341,38 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-837: checkpoint/resume gate. THREE instances — a sovereign
+                 * controller, a plain target named CKPT_T that the controller
+                 * finds by name, and an agent that must be denied. The target is
+                 * deliberately NOT an agent: agents are capped at 60 syscalls/s
+                 * and its yield loop would be killed at 137 mid-gate. */
+                if (probe_enabled("ckpt")) {
+                    uint64_t clen = (uint64_t)(ckpttest_elf_end - ckpttest_elf);
+                    struct tcb *c_ctl = 0, *c_tgt = 0, *c_deny = 0;
+                    if (elf_load((void *)(uintptr_t)ckpttest_elf, clen,
+                                 "CKPT_T", &c_tgt) == ELF_OK && c_tgt) {
+                        sched_unblock(c_tgt);
+                        kputs("[user] checkpoint target spawned\r\n");
+                    } else {
+                        kputs("[user] CKPT target elf_load FAILED\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)ckpttest_elf, clen,
+                                 "CKPT_C", &c_ctl) == ELF_OK && c_ctl) {
+                        c_ctl->is_sovereign = 1;
+                        sched_unblock(c_ctl);
+                        kputs("[user] checkpoint controller spawned\r\n");
+                    } else {
+                        kputs("[user] CKPT controller elf_load FAILED\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)ckpttest_elf, clen,
+                                 "CKPT_D", &c_deny) == ELF_OK && c_deny) {
+                        c_deny->is_agent = 1;
+                        sched_unblock(c_deny);
+                        kputs("[user] checkpoint deny probe spawned\r\n");
+                    } else {
+                        kputs("[user] CKPT deny elf_load FAILED\r\n");
                     }
                 }
                 /* DDR-836: agent memory gate. Spawned TWICE — one instance holds

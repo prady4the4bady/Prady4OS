@@ -368,6 +368,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
     t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does
                                     * not zero, so every new field needs this line    */
+    t->checkpointed = 0;           /* DDR-837: not frozen                             */
     t->run_ticks = 0;              /* DDR-735: CPU accounting starts at zero              */
     t->dispatches = 0;
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
@@ -816,6 +817,21 @@ void sched_exit(int status) {
     schedule();                                 /* never returns */
     for (;;)                   /* unreachable */
         __asm__ volatile("hlt");
+}
+
+/* DDR-837: the live thread with this pid, or NULL. Zombies and finished kernel
+ * threads are NOT returned — checkpointing something already dead should say
+ * -ESRCH rather than quietly succeed against a corpse. */
+struct tcb *sched_find_pid(uint32_t pid) {
+    if (pid == 0)
+        return 0;
+    struct tcb *t = current_thread;
+    do {
+        if (t->pid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
 }
 
 /* 1 if a runnable/blocked thread with this pid exists (a "living parent"). */

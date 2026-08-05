@@ -141,6 +141,12 @@
 #define SYS_MEMORY_WRITE   82  /* (key, val, vallen)      -> 0 | -EPERM|-EINVAL|-ENOSPC */
 #define SYS_MEMORY_READ    83  /* (key, out, outlen_ptr)  -> 0 | -EPERM|-ENOENT|-EFAULT */
 
+/* DDR-837: operator freeze/thaw of an agent. Both CAP_SOVEREIGN — an agent able
+ * to resume itself makes the freeze advisory. The target blocks ITSELF at its
+ * next syscall boundary, so a checkpoint is not instantaneous. */
+#define SYS_CHECKPOINT_AGENT 84  /* (pid) -> 0 | -EPERM|-EINVAL|-ESRCH */
+#define SYS_RESUME_AGENT     85  /* (pid) -> 0 | -EPERM|-EINVAL|-ESRCH */
+
 #define SYS_VAULT_PUT      87  /* (name, secret, secretlen) -> 0 | -EPERM|-EINVAL|-ENOSPC|-EIO */
 #define SYS_VAULT_GET      91  /* (name, out, outlen_ptr)   -> 0 | -EPERM|-ENOENT|-EACCES|-EIO */
 

@@ -124,6 +124,10 @@ struct tcb {
                                  * Granted at agent spawn; NOT inherited across fork. */
     uint32_t   is_memory;       /* DDR-836: CAP_MEMORY — agent memory store (NSI 82/83).
                                  * Granted at spawn; NOT inherited across fork. */
+    uint32_t   checkpointed;    /* DDR-837: operator froze this agent. The thread
+                                 * blocks ITSELF on seeing this at its next syscall
+                                 * boundary — never set THREAD_BLOCKED from anothe
+                                 * CPU, which races the scheduler. */
     /* DDR-735: CPU accounting, written ONLY by the owning CPU (sched_tick on the
      * running CPU; schedule() under the on_cpu claim) — lock-free by exclusion. */
     uint64_t   run_ticks;       /* 100 Hz ticks observed while current (sampled CPU time) */
@@ -168,6 +172,7 @@ void        sched_block(void);                                  /* block current
  * its sched_unblock CAS cannot be lost. IRQs stay as the caller left them. */
 void        sched_block_on(spinlock_t *lk);
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
+struct tcb *sched_find_pid(uint32_t pid);                       /* DDR-837: live thread by pid, or NULL */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */

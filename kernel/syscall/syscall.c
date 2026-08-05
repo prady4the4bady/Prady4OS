@@ -28,6 +28,7 @@ void sys_acc_register(void);      /* kernel/syscall/sys_acc.c (DDR-813) */
 void sys_ags_register(void);      /* kernel/syscall/sys_ags.c (DDR-814) */
 void sys_vault_register(void);    /* kernel/syscall/sys_vault.c (DDR-834) */
 void sys_agentmem_register(void); /* kernel/syscall/sys_agentmem.c (DDR-836) */
+void sys_checkpoint_register(void); /* kernel/syscall/sys_checkpoint.c (DDR-837) */
 
 #define MAX_SYSCALLS 128  /* NSI-v2 table size (ADR-022). Raised 80->128 in the
                            * DDR-823 audit: NSI 77-87 are already sequenced and
@@ -90,6 +91,13 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a4) {
     if (current_thread && current_thread->is_agent &&
         aether_rate_check(current_thread) < 0)
         sched_exit(137);                         /* never returns */
+    /* DDR-837: an operator checkpoint. The thread blocks ITSELF here, which is
+     * already a known-safe boundary (the rate limiter above kills a thread at
+     * this same point). Setting THREAD_BLOCKED from the checkpointing CPU would
+     * race the scheduler for a target that may be RUNNING elsewhere. Re-checked
+     * in a loop because a spurious wake must not resume a frozen agent. */
+    while (current_thread && current_thread->checkpointed)
+        sched_block();
     return table[num](a1, a2, a3, a4);
 }
 
@@ -164,6 +172,7 @@ void syscall_init(void) {
     sys_ags_register();                   /* SYS_GOAL_SIGN / SYS_GOAL_VERIFY (DDR-814) */
     sys_vault_register();                 /* SYS_VAULT_PUT / SYS_VAULT_GET (DDR-834) */
     sys_agentmem_register();              /* SYS_MEMORY_WRITE / SYS_MEMORY_READ (DDR-836) */
+    sys_checkpoint_register();            /* SYS_CHECKPOINT_AGENT / SYS_RESUME_AGENT (DDR-837) */
     sys_acc_register();                   /* SYS_ACC_SEAL / SYS_ACC_OPEN (DDR-813,
                                            * linkable since DDR-827 raised the
                                            * stage-2 window to 1 MiB) */

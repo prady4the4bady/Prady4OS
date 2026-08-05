@@ -156,3 +156,4 @@
 2	smoke-acc-rotate	120
 0	smoke-vault	120
 1	smoke-agentmem	120
+2	smoke-checkpoint	120
