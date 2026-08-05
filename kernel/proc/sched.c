@@ -369,6 +369,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does
                                     * not zero, so every new field needs this line    */
     t->checkpointed = 0;           /* DDR-837: not frozen                             */
+    t->agent_depth = 0;            /* DDR-838: outside any agent lineage by default    */
     t->run_ticks = 0;              /* DDR-735: CPU accounting starts at zero              */
     t->dispatches = 0;
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
@@ -463,6 +464,12 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->root_mnt    = parent->root_mnt;
         t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
         t->fs_base     = parent->fs_base; /* PROC-D: child inherits the thread pointer */
+        /* DDR-838: lineage, not authority. is_agent is deliberately NOT inherited
+         * (see the zeroing in sched_create), so the containment cap has to ride
+         * on something fork does propagate. A child of an agent, or of anything
+         * already inside an agent lineage, is one generation deeper. */
+        t->agent_depth = (parent->is_agent || parent->agent_depth > 0)
+                       ? parent->agent_depth + 1 : 0;
         memcpy(t->fpu_state, parent->fpu_state, sizeof t->fpu_state);  /* 5d: inherit FPU */
         /* 5e: full-register fork. Resume the child with the parent's complete
          * register frame (callee-saved snapshot from syscall entry) and RAX=0,

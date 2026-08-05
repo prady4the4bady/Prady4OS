@@ -71,6 +71,16 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
+- **Spawn-depth cap** (DDR-838, Section E) — `SPAWN_DEPTH_MAX = 3`, enforced in
+  `SYS_FORK`. An agent may found a chain three generations deep; the fourth is
+  refused with `-EAGAIN`. **Keyed on lineage (`tcb.agent_depth`), not on
+  `is_agent`**: fork deliberately does not inherit authority flags, so a cap
+  conditioned on `is_agent` would be escaped by one fork — the agent's child is
+  not an agent, and everything below it forks freely. The cap would have passed a
+  one-level test and contained nothing. `-EAGAIN` rather than `-EPERM` because
+  the caller is permitted to fork and has hit a ceiling. Scoped to agent
+  lineages, so `init` -> `prism` -> a command are all depth 0 and unaffected
+  (`smoke-shell` 5/5). `smoke-spawndepth` 20/20 locally, awaiting first CI.
 - **Agent checkpoint / resume** (DDR-837, Section E) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-checkpoint (120s)`, run 31015668039 on `35bab14`). `SYS_CHECKPOINT_AGENT` (84)
   / `SYS_RESUME_AGENT` (85), both CAP_SOVEREIGN. The operator freezes and thaws a

@@ -109,6 +109,8 @@ USER_AMEM_SRC := user/agentmemtest.c     # DDR-836: agent memory gate
 USER_AMEM_ELF := build/agentmemtest.elf
 USER_CKPT_SRC := user/ckpttest.c         # DDR-837: checkpoint/resume gate
 USER_CKPT_ELF := build/ckpttest.elf
+USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
+USER_SDEP_ELF := build/spawndepthtest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -400,6 +402,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AMEM_ELF) build/agentmemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CKPT_SRC) -o build/ckpttest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CKPT_ELF) build/ckpttest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SDEP_SRC) -o build/spawndepthtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -1651,6 +1655,15 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 # elapsed time - a timing assertion on a scheduling feature is a flake generator.
 # Arms 1-2 (freeze reaches THREAD_BLOCKED, resume leaves it) are the feature;
 # arms 3-4 (-ESRCH on unknown pid, -EPERM without sovereignty) are the guards.
+# DDR-838 spawn-depth cap. Asserts BOTH halves: depths 1-3 must succeed and the
+# fourth generation must be refused with -EAGAIN at depth 3 exactly. A cap that
+# refuses everything also bounds replication and would pass a refusal-only gate.
+smoke-spawndepth: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=spawndepth \
+	EXTRA_SENTINEL="PRADYOS_SPAWNDEPTH_OK depth=3" \
+	FORBIDDEN_SENTINEL="SPAWNDEPTH FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-checkpoint: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=ckpt \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_CKPT_OK\nPRADYOS_CKPT_DENY_OK')" \

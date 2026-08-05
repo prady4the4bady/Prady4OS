@@ -22,6 +22,7 @@ typedef void (*thread_fn)(void *);
 #define FS_WRITE_BURST_MAX       (1u << 20)  /* 1 MiB bucket cap */
 #define FS_WRITE_REFILL_PER_TICK (256u << 10) /* 256 KiB/tick @100Hz = 25 MiB/s   */
 #define FS_WRITE_BUDGET_DEFAULT  FS_WRITE_BURST_MAX  /* initial full bucket */
+#define SPAWN_DEPTH_MAX          3u  /* DDR-838: deepest agent-lineage generation */
 
 enum thread_state {
     THREAD_READY = 0,
@@ -124,6 +125,11 @@ struct tcb {
                                  * Granted at agent spawn; NOT inherited across fork. */
     uint32_t   is_memory;       /* DDR-836: CAP_MEMORY — agent memory store (NSI 82/83).
                                  * Granted at spawn; NOT inherited across fork. */
+    uint32_t   agent_depth;     /* DDR-838: generations below the founding agent. 0 fo
+                                 * processes outside any agent lineage. Keyed on
+                                 * LINEAGE, not on is_agent — fork does not inherit
+                                 * authority flags, so a cap on is_agent would be
+                                 * escaped by one fork. */
     uint32_t   checkpointed;    /* DDR-837: operator froze this agent. The thread
                                  * blocks ITSELF on seeing this at its next syscall
                                  * boundary — never set THREAD_BLOCKED from anothe

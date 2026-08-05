@@ -375,6 +375,8 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
+extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
 extern const unsigned char ckpttest_elf_end[];
 extern const unsigned char agentmemtest_elf[];        /* DDR-836: agent memory */
@@ -1341,6 +1343,24 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-838: spawn-depth cap. Spawned as an AGENT, because the cap
+                 * only applies to agent lineages — a non-agent founder would sit
+                 * at depth 0 forever and the gate would prove nothing. */
+                if (probe_enabled("spawndepth")) {
+                    struct tcb *sd = 0;
+                    uint64_t sdlen = (uint64_t)(spawndepthtest_elf_end - spawndepthtest_elf);
+                    int sdrc = elf_load((void *)(uintptr_t)spawndepthtest_elf, sdlen,
+                                        "SPAWNDEPTH", &sd);
+                    if (sdrc == ELF_OK && sd) {
+                        sd->is_agent = 1;
+                        sched_unblock(sd);
+                        kputs("[user] spawn-depth probe spawned (agent)\r\n");
+                    } else {
+                        kputs("[user] SPAWNDEPTH elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)sdrc);
+                        kputs("\r\n");
                     }
                 }
                 /* DDR-837: checkpoint/resume gate. THREE instances — a sovereign

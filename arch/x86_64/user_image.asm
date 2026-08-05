@@ -225,6 +225,12 @@ global ckpttest_elf_end
 ckpttest_elf:
     incbin "build/ckpttest.elf"
 ckpttest_elf_end:
+
+global spawndepthtest_elf
+global spawndepthtest_elf_end
+spawndepthtest_elf:
+    incbin "build/spawndepthtest.elf"
+spawndepthtest_elf_end:
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

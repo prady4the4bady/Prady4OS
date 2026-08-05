@@ -26,6 +26,12 @@ static long sys_fork(long a1, long a2, long a3, long a4) {
     (void)a1; (void)a2; (void)a3; (void)a4;        /* fork takes no user args */
     struct tcb *parent = current_thread;
 
+    /* DDR-838: bound agent self-replication. -EAGAIN, not -EPERM: the caller is
+     * permitted to fork and has hit a resource ceiling, and -EPERM would send an
+     * agent author hunting for a capability grant that does not exist. */
+    if (parent->agent_depth >= SPAWN_DEPTH_MAX)
+        return -EAGAIN;
+
     uint64_t child_cr3 = vmm_fork_address_space_cow(parent->cr3);
     if (!child_cr3)
         return -ENOMEM;
