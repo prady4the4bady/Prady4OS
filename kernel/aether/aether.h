@@ -53,7 +53,11 @@ enum aether_result {
      * and a REJECTED goal is a forgery attempt rather than a policy refusal.
      * Collapsing either pair makes "was a forged goal ever presented?"
      * unanswerable from the log — the only question that shows AGS works. */
-    AR_GOAL_SIGNED, AR_GOAL_REJECTED
+    AR_GOAL_SIGNED, AR_GOAL_REJECTED,
+    /* DDR-815. APPENDED per DDR-832, never inserted. Distinct because a rotation
+     * is the event that EXPLAINS why previously-valid envelopes stopped
+     * verifying; folded into AR_APPROVE that becomes unexplainable. */
+    AR_ACC_ROTATED
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.

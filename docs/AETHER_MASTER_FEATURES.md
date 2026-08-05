@@ -71,6 +71,15 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
+- **ACC session rotation** (DDR-815) — `SYS_ACC_ROTATE` (81, CAP_SOVEREIGN).
+  Replaces ACC's single global replay floor with a per-agent channel table keyed
+  by the agent's Ed25519 verify key — authenticated and carried in-band, unlike a
+  pid, which is recycled and would let a new process inherit a dead agent's
+  replay floor. Rotation is REVOCATION: it raises the floor past any issuable
+  sequence and keeps the slot as a tombstone. Clearing the floor to zero (my
+  first implementation) would have made every pre-rotation envelope acceptable
+  again — the exact replay hole the syscall exists to close. `smoke-acc-rotate`
+  20/20 locally, awaiting first CI conclusion.
 - **AGS — Agent Goal Signing** (DDR-814) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-ags (120s)`, run 30960084022 on `9fb8ea4`). `kernel/aether/ags.{c,h}` + `kernel/syscall/sys_ags.c`
   + `SYS_GOAL_SIGN` (79, CAP_SOVEREIGN) / `SYS_GOAL_VERIFY` (80, CAP_AGENT).

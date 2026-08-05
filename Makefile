@@ -101,6 +101,8 @@ USER_ACC_SRC := user/acctest.c           # DDR-813: ACC envelope gate
 USER_ACC_ELF := build/acctest.elf
 USER_AGS_SRC := user/agstest.c           # DDR-814: AGS goal-signing gate
 USER_AGS_ELF := build/agstest.elf
+USER_ACCROT_SRC := user/accrottest.c     # DDR-815: ACC rotation gate
+USER_ACCROT_ELF := build/accrottest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -378,6 +380,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -Ikernel/aether -c kernel/aether/ags.c -o build/ags_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -Ikernel/aether -c $(USER_AGS_SRC) -o build/agstest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AGS_ELF) build/agstest.o build/ags_user.o build/ed25519_user.o build/fe25519_user.o build/sha256_user.o build/sha512_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_ACCROT_SRC) -o build/accrottest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ACCROT_ELF) build/accrottest.o build/x25519_user.o build/fe25519_user.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -1609,6 +1613,16 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 # DDR-814 AGS goal signing. Three arms: round-trip, tampered goal, wrong key.
 # The last two are the gate's whole point — a verify() that always returns 0
 # passes arm 1, and one that ignores the public key passes arms 1-2.
+# DDR-815 ACC rotation. ONE ELF spawned twice at different privilege; it tells
+# the instances apart because rotate-unknown-channel returns -ENOENT to a
+# sovereign caller and -EPERM to an agent. Both sentinels are required, so a run
+# where only one instance spawns is a FAILURE, not a silent half-pass.
+smoke-acc-rotate: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=accrot QEMU_RNG=1 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACCROT_OK\nPRADYOS_ACCROT_DENY_OK')" \
+	FORBIDDEN_SENTINEL="ACCROT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-ags: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=ags 	EXTRA_SENTINEL="$$(printf 'PRADYOS_AGS_VECTORS_OK')" 	FORBIDDEN_SENTINEL="AGS FAIL" 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

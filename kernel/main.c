@@ -375,6 +375,8 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char accrottest_elf[];          /* DDR-815: ACC rotation */
+extern const unsigned char accrottest_elf_end[];
 extern const unsigned char agstest_elf[];             /* DDR-814: AGS goal signing */
 extern const unsigned char agstest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
@@ -1333,6 +1335,38 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-815: ACC rotation gate. The SAME ELF is spawned TWICE —
+                 * once sovereign, once agent-only — because the capability split
+                 * is the thing under test and one privilege level can only ever
+                 * test half of it. The probe tells the instances apart from
+                 * rotate's return code (-ENOENT vs -EPERM), so no argument
+                 * channel is needed. */
+                if (probe_enabled("accrot")) {
+                    uint64_t arlen = (uint64_t)(accrottest_elf_end - accrottest_elf);
+                    struct tcb *ar_sov = 0, *ar_ag = 0;
+                    int rc_sov = elf_load((void *)(uintptr_t)accrottest_elf, arlen,
+                                          "ACCROT_S", &ar_sov);
+                    if (rc_sov == ELF_OK && ar_sov) {
+                        ar_sov->is_sovereign = 1;
+                        sched_unblock(ar_sov);
+                        kputs("[user] ACC rotation probe spawned (sovereign)\r\n");
+                    } else {
+                        kputs("[user] ACCROT sovereign elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)rc_sov);
+                        kputs("\r\n");
+                    }
+                    int rc_ag = elf_load((void *)(uintptr_t)accrottest_elf, arlen,
+                                         "ACCROT_A", &ar_ag);
+                    if (rc_ag == ELF_OK && ar_ag) {
+                        ar_ag->is_agent = 1;
+                        sched_unblock(ar_ag);
+                        kputs("[user] ACC rotation probe spawned (agent)\r\n");
+                    } else {
+                        kputs("[user] ACCROT agent elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)rc_ag);
+                        kputs("\r\n");
                     }
                 }
                 /* DDR-814: AGS goal-signing gate, opt-in via DDR-804. Sovereign

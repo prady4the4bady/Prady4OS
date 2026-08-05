@@ -201,6 +201,12 @@ global agstest_elf_end
 agstest_elf:
     incbin "build/agstest.elf"
 agstest_elf_end:
+
+global accrottest_elf
+global accrottest_elf_end
+accrottest_elf:
+    incbin "build/accrottest.elf"
+accrottest_elf_end:
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

@@ -127,6 +127,11 @@
 #define SYS_GOAL_SIGN      79  /* (sig_out, goal, goallen, owner_seed) -> 0 | -EPERM|-EINVAL|-EFAULT */
 #define SYS_GOAL_VERIFY    80  /* (sig, goal, goallen, owner_pub)     -> 0 | -EPERM|-EACCES|-EINVAL */
 
+/* DDR-815: rotate an ACC channel — bumps its epoch and clears its replay floor.
+ * CAP_SOVEREIGN because rotation RESETS anti-replay state: an agent able to
+ * rotate its own channel could replay envelopes the owner already consumed. */
+#define SYS_ACC_ROTATE     81  /* (agent_pub32) -> 0 | -EPERM|-EINVAL|-ENOENT|-EFAULT */
+
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
 typedef long (*syscall_fn)(long a1, long a2, long a3, long a4);
