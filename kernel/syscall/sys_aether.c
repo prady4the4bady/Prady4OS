@@ -118,8 +118,31 @@ static long sys_submit_action(long a1, long a2, long a3, long a4) {
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
     if (len && copyin(kbuf, (const void __user *)a2, len) < 0)
         return -EFAULT;
-    long r = aether_submit(current_thread->pid, type, kbuf, len);
+    long r = aether_submit(current_thread->pid, type, kbuf, len, 0);
     if (r >= 0) {                                   /* DDR-730: live action count */
+        int slot = slot_of_pid(current_thread->pid);
+        if (slot >= 0) g_agent[slot].actions++;
+    }
+    return r;
+}
+
+/* DDR-839 ring-3 ABI: (type, payload, len, parent_action_id). A SEPARATE call
+ * rather than a fourth argument to NSI 31: every existing caller of 31 leaves
+ * that register undefined, so reading it would give old binaries a garbage
+ * parent id. An unused argument register is not a spare field. */
+static long sys_submit_child_action(long a1, long a2, long a3, long a4) {
+    if (!current_thread->is_agent) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    uint32_t type = (uint32_t)a1;
+    uint32_t len  = (uint32_t)a3;
+    if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
+    uint8_t kbuf[AETHER_PAYLOAD_MAX];
+    if (len && copyin(kbuf, (const void __user *)a2, len) < 0)
+        return -EFAULT;
+    long r = aether_submit(current_thread->pid, type, kbuf, len, (uint64_t)a4);
+    if (r >= 0) {
         int slot = slot_of_pid(current_thread->pid);
         if (slot >= 0) g_agent[slot].actions++;
     }
@@ -269,6 +292,7 @@ void sys_aether_register(void) {
     syscall_register(SYS_SET_MODE,       sys_set_mode);
     syscall_register(SYS_METRIC_READ,    sys_metric_read);  /* DDR-812 */
     syscall_register(SYS_SUBMIT_ACTION,  sys_submit_action);
+    syscall_register(SYS_SUBMIT_CHILD_ACTION, sys_submit_child_action);  /* NSI 92 (DDR-839) */
     syscall_register(SYS_POLL_RESULT,    sys_poll_result);
     syscall_register(SYS_APPROVE_ACTION, sys_approve_action);
     syscall_register(SYS_REJECT_ACTION,  sys_reject_action);

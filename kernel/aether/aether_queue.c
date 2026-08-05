@@ -14,6 +14,12 @@
 /* The internal entry (kernel-private; SYS_READ_AUDIT never exposes this). */
 struct aether_action_entry {
     uint64_t action_id;
+    /* DDR-839: 0 == root. A parent must already exist to be named, and ids are
+     * monotonic and never reused this boot, so parent_action_id < action_id
+     * ALWAYS holds and a cycle is structurally impossible. There is no
+     * cycle-check here because none is reachable — a property of the id
+     * allocator, so anyone making ids reusable must revisit this. */
+    uint64_t parent_action_id;
     uint32_t agent_pid;
     uint32_t action_type;
     uint32_t status;
@@ -60,10 +66,27 @@ static void expire_if_due(struct aether_action_entry *e) {
     }
 }
 
+/* DDR-839: find a live entry by id, or NULL. */
+static struct aether_action_entry *entry_of(uint64_t action_id) {
+    if (!g_queue || action_id == 0)
+        return 0;
+    for (int i = 0; i < AETHER_QUEUE_LEN; i++) {
+        if (g_queue[i].status != AE_FREE && g_queue[i].action_id == action_id)
+            return &g_queue[i];
+    }
+    return 0;
+}
+
 long aether_submit(uint32_t agent_pid, uint32_t action_type,
-                   const uint8_t *payload, uint32_t len) {
+                   const uint8_t *payload, uint32_t len,
+                   uint64_t parent_action_id) {
     if (!g_queue)
         return -ENOMEM;
+    /* Fail at SUBMIT, not at approval: accepting an action whose parent does not
+     * exist would queue something that can never be approved, and the agent
+     * would learn that only much later, from a different call. */
+    if (parent_action_id != 0 && !entry_of(parent_action_id))
+        return -ESRCH;
     if (len > AETHER_PAYLOAD_MAX)
         len = AETHER_PAYLOAD_MAX;
     int slot = -1;
@@ -77,6 +100,7 @@ long aether_submit(uint32_t agent_pid, uint32_t action_type,
 
     struct aether_action_entry *e = &g_queue[slot];
     e->action_id   = g_next_action_id++;
+    e->parent_action_id = parent_action_id;
     e->agent_pid   = agent_pid;
     e->action_type = action_type;
     e->submit_tick = g_ticks;
@@ -84,8 +108,22 @@ long aether_submit(uint32_t agent_pid, uint32_t action_type,
     if (payload && len)
         memcpy(e->payload, payload, len);
 
+    /* DDR-839: auto-approval must respect the dependency, or it bypasses the whole
+     * ordering — a child submitted in sovereign mode would be approved instantly,
+     * before its parent, which is exactly what the DAG exists to prevent. A child
+     * whose parent is not yet APPROVED stays PENDING and is approved later,
+     * through aether_approve, which re-checks the same condition.
+     *
+     * The gate caught this: enforcing the order only in aether_approve looked
+     * complete and left the common path (sovereign mode) unguarded. */
+    int parent_ready = (parent_action_id == 0);
+    if (!parent_ready) {
+        struct aether_action_entry *par = entry_of(parent_action_id);
+        parent_ready = (par && par->status == AE_APPROVED);
+    }
+
     /* Spawning a process is never auto-approved, even in sovereign mode (D8). */
-    if (action_type != ACTION_SPAWN_PROCESS && g_sovereign_mode) {
+    if (action_type != ACTION_SPAWN_PROCESS && g_sovereign_mode && parent_ready) {
         e->status = AE_APPROVED;
         aether_audit(agent_pid, action_type, e->action_id, AR_APPROVE);
     } else {
@@ -127,6 +165,16 @@ long aether_approve(uint64_t action_id, int approve) {
             continue;
         if (e->status != AE_PENDING)
             return -EINVAL;                    /* already decided/expired */
+        /* DDR-839: dependency ordering. -EAGAIN, not -EPERM — the operator HAS
+         * the authority; the dependency is simply unmet. A rejected or expired
+         * parent needs no cascade code: its children can never pass this check,
+         * and a cascade would be a second mechanism that has to agree with this
+         * one. Only approvals are ordered; a child may always be REJECTED. */
+        if (approve && e->parent_action_id != 0) {
+            struct aether_action_entry *par = entry_of(e->parent_action_id);
+            if (!par || par->status != AE_APPROVED)
+                return -EAGAIN;
+        }
         e->status = approve ? AE_APPROVED : AE_REJECTED;
         aether_audit(e->agent_pid, e->action_type, e->action_id,
                      approve ? AR_APPROVE : AR_REJECT);

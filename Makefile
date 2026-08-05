@@ -111,6 +111,8 @@ USER_CKPT_SRC := user/ckpttest.c         # DDR-837: checkpoint/resume gate
 USER_CKPT_ELF := build/ckpttest.elf
 USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
 USER_SDEP_ELF := build/spawndepthtest.elf
+USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
+USER_DAG_ELF := build/actiondagtest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -404,6 +406,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CKPT_ELF) build/ckpttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SDEP_SRC) -o build/spawndepthtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_DAG_SRC) -o build/actiondagtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DAG_ELF) build/actiondagtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -1658,6 +1662,16 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 # DDR-838 spawn-depth cap. Asserts BOTH halves: depths 1-3 must succeed and the
 # fourth generation must be refused with -EAGAIN at depth 3 exactly. A cap that
 # refuses everything also bounds replication and would pass a refusal-only gate.
+# DDR-839 DAG action queue. Arms 2 and 3 are a PAIR: a queue that refuses every
+# child approval passes arm 2 and is useless; one that ignores parents passes
+# arm 3 and enforces nothing. Both sentinels required, so a run where only the
+# agent half completes is a FAILURE rather than a silent half-pass.
+smoke-actiondag: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=actiondag \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONDAG_OK\nPRADYOS_ACTIONDAG_SUBMIT_OK')" \
+	FORBIDDEN_SENTINEL="ACTIONDAG FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-spawndepth: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=spawndepth \
 	EXTRA_SENTINEL="PRADYOS_SPAWNDEPTH_OK depth=3" \

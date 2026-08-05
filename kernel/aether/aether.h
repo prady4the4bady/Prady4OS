@@ -135,8 +135,11 @@ unsigned aether_privacy_active(void);
 
 /* --- action queue (aether_queue.c) ----------------------------------------- */
 /* Submit a copied-in payload; returns a fresh action_id, or <0 errno. */
+/* DDR-839: parent_action_id 0 == root. A child cannot be APPROVED until its
+ * parent is; see the DDR for why cycles are impossible rather than checked. */
 long aether_submit(uint32_t agent_pid, uint32_t action_type,
-                   const uint8_t *payload, uint32_t len);
+                   const uint8_t *payload, uint32_t len,
+                   uint64_t parent_action_id);
 long aether_poll(uint32_t agent_pid, uint64_t action_id);     /* -> status | -ESRCH */
 long aether_approve(uint64_t action_id, int approve);          /* approve=1 / reject=0 */
 void aether_drop_pid(uint32_t pid);            /* free an exited agent's queue slots */

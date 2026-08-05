@@ -22,7 +22,7 @@ void aether_init(void) {
 /* smoke-aether-queue: submit -> sovereign auto-approve -> audit entry present. */
 void aether_selftest(void) {
     const uint8_t msg[] = "PRADYOS_AETHER_SELFTEST";
-    long id = aether_submit(AE_TEST_PID, ACTION_PRINT, msg, sizeof msg);
+    long id = aether_submit(AE_TEST_PID, ACTION_PRINT, msg, sizeof msg, 0);
     if (id < 0) { kputs("[aether] selftest submit failed\r\n"); return; }
 
     long st = aether_poll(AE_TEST_PID, (uint64_t)id);   /* should be APPROVED */
@@ -42,7 +42,7 @@ void aether_sectest(void) {
      *     until polled), the next submit must return -EAGAIN. */
     int got_eagain = 0;
     for (int i = 0; i < AETHER_QUEUE_LEN + 1; i++) {
-        long r = aether_submit(AE_TEST_PID, ACTION_PRINT, (const uint8_t *)"x", 1);
+        long r = aether_submit(AE_TEST_PID, ACTION_PRINT, (const uint8_t *)"x", 1, 0);
         if (r == -11 /* -EAGAIN */) { got_eagain = 1; break; }
     }
     if (got_eagain) kputs("AETHER_SEC_QUEUE_FULL\r\n");

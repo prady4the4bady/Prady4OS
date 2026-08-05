@@ -375,6 +375,8 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char actiondagtest_elf[];       /* DDR-839: DAG action queue */
+extern const unsigned char actiondagtest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -1343,6 +1345,32 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-839: DAG action queue. TWO roles — submission is CAP_AGENT
+                 * and approval is CAP_SOVEREIGN, so no single privilege level can
+                 * drive this gate alone. Both hold CAP_MEMORY to rendezvous on
+                 * the action ids. */
+                if (probe_enabled("actiondag")) {
+                    uint64_t dlen = (uint64_t)(actiondagtest_elf_end - actiondagtest_elf);
+                    struct tcb *d_ag = 0, *d_sov = 0;
+                    if (elf_load((void *)(uintptr_t)actiondagtest_elf, dlen,
+                                 "DAG_A", &d_ag) == ELF_OK && d_ag) {
+                        d_ag->is_agent = 1;
+                        d_ag->is_memory = 1;
+                        sched_unblock(d_ag);
+                        kputs("[user] action-DAG agent spawned\r\n");
+                    } else {
+                        kputs("[user] ACTIONDAG agent elf_load FAILED\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)actiondagtest_elf, dlen,
+                                 "DAG_S", &d_sov) == ELF_OK && d_sov) {
+                        d_sov->is_sovereign = 1;
+                        d_sov->is_memory = 1;
+                        sched_unblock(d_sov);
+                        kputs("[user] action-DAG sovereign spawned\r\n");
+                    } else {
+                        kputs("[user] ACTIONDAG sovereign elf_load FAILED\r\n");
                     }
                 }
                 /* DDR-838: spawn-depth cap. Spawned as an AGENT, because the cap

@@ -231,6 +231,12 @@ global spawndepthtest_elf_end
 spawndepthtest_elf:
     incbin "build/spawndepthtest.elf"
 spawndepthtest_elf_end:
+
+global actiondagtest_elf
+global actiondagtest_elf_end
+actiondagtest_elf:
+    incbin "build/actiondagtest.elf"
+actiondagtest_elf_end:
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

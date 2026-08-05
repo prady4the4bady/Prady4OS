@@ -147,6 +147,10 @@
 #define SYS_CHECKPOINT_AGENT 84  /* (pid) -> 0 | -EPERM|-EINVAL|-ESRCH */
 #define SYS_RESUME_AGENT     85  /* (pid) -> 0 | -EPERM|-EINVAL|-ESRCH */
 
+/* DDR-839: submit an action that DEPENDS on another. Separate from NSI 31
+ * because 31's fourth argument register is undefined in every existing caller. */
+#define SYS_SUBMIT_CHILD_ACTION 92  /* (type, payload, len, parent_id) -> id | -ESRCH */
+
 #define SYS_VAULT_PUT      87  /* (name, secret, secretlen) -> 0 | -EPERM|-EINVAL|-ENOSPC|-EIO */
 #define SYS_VAULT_GET      91  /* (name, out, outlen_ptr)   -> 0 | -EPERM|-ENOENT|-EACCES|-EIO */
 

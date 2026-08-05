@@ -158,3 +158,4 @@
 1	smoke-agentmem	120
 2	smoke-checkpoint	120
 3	smoke-spawndepth	120
+4	smoke-actiondag	120
