@@ -132,6 +132,14 @@
  * rotate its own channel could replay envelopes the owner already consumed. */
 #define SYS_ACC_ROTATE     81  /* (agent_pub32) -> 0 | -EPERM|-EINVAL|-ENOENT|-EFAULT */
 
+/* DDR-834 credential vault. Both CAP_SOVEREIGN: a CAP_AGENT get would let one
+ * compromised agent drain the vault. The numbers are NOT adjacent because 82-86
+ * are reserved for Section E and 88-90 for the prad package manager; taking
+ * adjacent slots now would collide with scheduled work, and renumbering a
+ * syscall after it ships is a wire-format break. */
+#define SYS_VAULT_PUT      87  /* (name, secret, secretlen) -> 0 | -EPERM|-EINVAL|-ENOSPC|-EIO */
+#define SYS_VAULT_GET      91  /* (name, out, outlen_ptr)   -> 0 | -EPERM|-ENOENT|-EACCES|-EIO */
+
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
 typedef long (*syscall_fn)(long a1, long a2, long a3, long a4);

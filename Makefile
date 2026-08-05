@@ -103,6 +103,8 @@ USER_AGS_SRC := user/agstest.c           # DDR-814: AGS goal-signing gate
 USER_AGS_ELF := build/agstest.elf
 USER_ACCROT_SRC := user/accrottest.c     # DDR-815: ACC rotation gate
 USER_ACCROT_ELF := build/accrottest.elf
+USER_VAULT_SRC := user/vaulttest.c       # DDR-834: credential vault gate
+USER_VAULT_ELF := build/vaulttest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -157,7 +159,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -281,8 +283,14 @@ USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h) \
 # and every gate then tests the PREVIOUS binary. That is DDR-822/825 a third time:
 # the wildcard fixed user/, then kernel/crypto/, and stopped there both times.
 KERNEL_HS := $(wildcard kernel/*.h) $(wildcard kernel/*/*.h) $(wildcard kernel/*/*/*.h)
+# DDR-835: kernel SOURCES as a wildcard too. KERNEL_CS is a hand-maintained
+# list, so a NEW .c file compiles (its rule is explicit) but never triggers a
+# rebuild — `make image` says "Nothing to be done" and every gate tests the
+# previous binary. That is DDR-822/825/833 a fourth time, and the fourth list
+# to be fixed one entry at a time. A wildcard cannot go stale.
+KERNEL_ALL_CS := $(wildcard kernel/*.c) $(wildcard kernel/*/*.c) $(wildcard kernel/*/*/*.c)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -382,6 +390,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AGS_ELF) build/agstest.o build/ags_user.o build/ed25519_user.o build/fe25519_user.o build/sha256_user.o build/sha512_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_ACCROT_SRC) -o build/accrottest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ACCROT_ELF) build/accrottest.o build/x25519_user.o build/fe25519_user.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_VAULT_SRC) -o build/vaulttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_VAULT_ELF) build/vaulttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -455,6 +465,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_acc.c            -o build/sys_acc.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/aether/ags.c -o build/ags.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_ags.c -o build/sys_ags.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/aether/vault.c -o build/vault.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_vault.c -o build/sys_vault.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -1617,6 +1629,16 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 # the instances apart because rotate-unknown-channel returns -ENOENT to a
 # sovereign caller and -EPERM to an agent. Both sentinels are required, so a run
 # where only one instance spawns is a FAILURE, not a silent half-pass.
+# DDR-834 credential vault. Arm 3 tampers /VAULT.BIN through the ordinary file
+# syscalls and requires the read to be REJECTED - arms 1-2 pass on a vault that
+# stores plaintext, so that arm is the one carrying the feature. QEMU_RNG is
+# required: vault_put draws a fresh nonce and refuses to store without one.
+smoke-vault: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=vault QEMU_RNG=1 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_VAULT_OK\nPRADYOS_VAULT_DENY_OK')" \
+	FORBIDDEN_SENTINEL="VAULT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-acc-rotate: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=accrot QEMU_RNG=1 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACCROT_OK\nPRADYOS_ACCROT_DENY_OK')" \

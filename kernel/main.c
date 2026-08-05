@@ -375,6 +375,8 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char vaulttest_elf[];           /* DDR-834: credential vault */
+extern const unsigned char vaulttest_elf_end[];
 extern const unsigned char accrottest_elf[];          /* DDR-815: ACC rotation */
 extern const unsigned char accrottest_elf_end[];
 extern const unsigned char agstest_elf[];             /* DDR-814: AGS goal signing */
@@ -1335,6 +1337,35 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-834: credential vault gate. Spawned TWICE at different
+                 * privilege for the same reason as the rotation probe: the
+                 * capability split is part of what is under test. */
+                if (probe_enabled("vault")) {
+                    uint64_t vlen = (uint64_t)(vaulttest_elf_end - vaulttest_elf);
+                    struct tcb *v_sov = 0, *v_ag = 0;
+                    int vrc_s = elf_load((void *)(uintptr_t)vaulttest_elf, vlen,
+                                         "VAULT_S", &v_sov);
+                    if (vrc_s == ELF_OK && v_sov) {
+                        v_sov->is_sovereign = 1;
+                        sched_unblock(v_sov);
+                        kputs("[user] vault probe spawned (sovereign)\r\n");
+                    } else {
+                        kputs("[user] VAULT sovereign elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)vrc_s);
+                        kputs("\r\n");
+                    }
+                    int vrc_a = elf_load((void *)(uintptr_t)vaulttest_elf, vlen,
+                                         "VAULT_A", &v_ag);
+                    if (vrc_a == ELF_OK && v_ag) {
+                        v_ag->is_agent = 1;
+                        sched_unblock(v_ag);
+                        kputs("[user] vault probe spawned (agent)\r\n");
+                    } else {
+                        kputs("[user] VAULT agent elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)vrc_a);
+                        kputs("\r\n");
                     }
                 }
                 /* DDR-815: ACC rotation gate. The SAME ELF is spawned TWICE —

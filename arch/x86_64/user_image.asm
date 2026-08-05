@@ -207,6 +207,12 @@ global accrottest_elf_end
 accrottest_elf:
     incbin "build/accrottest.elf"
 accrottest_elf_end:
+
+global vaulttest_elf
+global vaulttest_elf_end
+vaulttest_elf:
+    incbin "build/vaulttest.elf"
+vaulttest_elf_end:
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

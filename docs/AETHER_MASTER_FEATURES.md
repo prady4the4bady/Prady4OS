@@ -71,6 +71,16 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
+- **Secure credential vault** (DDR-834, table 6.9) — `SYS_VAULT_PUT` (87) /
+  `SYS_VAULT_GET` (91), both CAP_SOVEREIGN. Cloud-bridge credentials encrypted at
+  rest in SFS at `/VAULT.BIN`: `K_vault = HKDF-SHA256(owner_seed, "PRADYOS-VAULT-v1")`,
+  each record sealed with ChaCha20-Poly1305. **The record name is the AEAD's
+  additional authenticated data** — without that a record could be renamed on
+  disk so a request for one credential returned another, while every tag still
+  verified. Confidentiality of the values is not integrity of the association.
+  A CAP_AGENT get was considered and rejected: it would let one compromised agent
+  drain the vault, the exact blast radius the vault bounds. `smoke-vault` 20/20
+  locally, awaiting first CI conclusion.
 - **ACC session rotation** (DDR-815) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-acc-rotate (120s)`, run 30966987476 on `7be4b65`).
   `SYS_ACC_ROTATE` (81, CAP_SOVEREIGN).

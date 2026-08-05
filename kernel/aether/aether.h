@@ -57,7 +57,13 @@ enum aether_result {
     /* DDR-815. APPENDED per DDR-832, never inserted. Distinct because a rotation
      * is the event that EXPLAINS why previously-valid envelopes stopped
      * verifying; folded into AR_APPROVE that becomes unexplainable. */
-    AR_ACC_ROTATED
+    AR_ACC_ROTATED,
+    /* DDR-834. APPENDED per DDR-832. AR_VAULT_REJECTED is distinct from
+     * AR_CAP_DENIED because a rejected TAG means the stored bytes were tampered
+     * with on disk — an attack on the image — while a denial means policy said
+     * no. Collapsing them makes "was the vault ever tampered with?"
+     * unanswerable. */
+    AR_VAULT_PUT, AR_VAULT_GET, AR_VAULT_REJECTED
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.

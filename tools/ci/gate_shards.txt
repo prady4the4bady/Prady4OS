@@ -154,3 +154,4 @@
 5	smoke-acc	150
 1	smoke-ags	120
 2	smoke-acc-rotate	120
+0	smoke-vault	120
