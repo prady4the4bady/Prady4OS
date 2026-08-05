@@ -97,6 +97,43 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-25 SESSION — A4: an `op=` line CAPTURED for OPEN-10 / B#3
+
+**CI run 30999541696 on `7fea950`, shard 2, `smoke-percpu-sched`, gate 5 of 19:**
+
+```
+[sfs] AETHER daemon rooted at SFS /etc/aether/config
+[sfs] churn FAIL op=create iter=0
+[sfs] btree churn FAIL
+```
+
+This is the first captured `op=` line from the SFS B+tree churn failure. **It is
+`op=create`, NOT `op=write`.** Recorded exactly, because the standing rule is
+that OPEN-10 must not be declared equivalent to B#3 without an actual `op=write`
+line — and this is not one. It narrows the search, it does not close it.
+
+### Why this is NOT a regression from the agent-memory commit
+
+- The commit touches **no filesystem code** (`git show --numstat`: a new
+  `agentmem.{c,h}`, `sys_agentmem.c`, one TCB field, NSI/audit/Makefile wiring).
+- `smoke-percpu-sched` **passed on the three preceding CI runs** (`b2e7836`,
+  `7be4b65`, `9fb8ea4`).
+- On the failing tip it passes **10/10 locally**.
+- The insertion-into-struct-tcb hazard was checked and excluded: no assembly uses
+  hardcoded TCB offsets (`grep` over `arch/x86_64/*.asm` finds none), so adding a
+  field mid-struct cannot have shifted anything the asm reads.
+
+So: a genuine pre-existing nondeterministic SMP/SFS defect that surfaces under CI
+load and not under a single local gate. It is NOT fixed and NOT dismissed.
+
+### Next for this thread (A4 — evidence only, no local repro loops)
+- Watch for an `op=write` line specifically; only that would support unification.
+- `iter=0` is worth noting: the churn fails on the FIRST iteration, not deep into
+  the loop, which argues against a slow-accumulating corruption and for a
+  first-touch/initialisation race.
+- The gate is SMP (`smoke-percpu-sched`), which is why 10/10 single-CPU-ish local
+  runs prove little about it.
+
 ### 0.-24 SESSION — OPEN-11 ROOT-CAUSED AND FIXED (DDR-831)
 
 **It was never nondeterministic. It was STATEFUL.**
