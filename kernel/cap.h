@@ -39,6 +39,10 @@ typedef uint64_t cap_t;
  * a process can never mint these into its own table (no self-escalation). */
 #define CAP_SOVEREIGN     (1u << 16)  /* change global mode; approve/reject actions */
 #define CAP_AGENT         (1u << 17)  /* submit/poll actions; spawn/kill agents      */
+/* DDR-836: agent memory (NSI 82/83). NOTE the scope — the store is a SHARED
+ * blackboard, so this bit grants read AND overwrite of EVERY key, not of some
+ * per-agent slice. Grant it accordingly. */
+#define CAP_MEMORY        (1u << 18)  /* read/write the agent memory store           */
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u

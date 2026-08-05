@@ -63,7 +63,11 @@ enum aether_result {
      * with on disk — an attack on the image — while a denial means policy said
      * no. Collapsing them makes "was the vault ever tampered with?"
      * unanswerable. */
-    AR_VAULT_PUT, AR_VAULT_GET, AR_VAULT_REJECTED
+    AR_VAULT_PUT, AR_VAULT_GET, AR_VAULT_REJECTED,
+    /* DDR-836. APPENDED per DDR-832. Reads are recorded as well as writes: the
+     * store is a shared blackboard, so "who read this fact" is as much an
+     * operator question as who wrote it. */
+    AR_MEM_WRITE, AR_MEM_READ
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.

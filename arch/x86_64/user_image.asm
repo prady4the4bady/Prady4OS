@@ -213,6 +213,12 @@ global vaulttest_elf_end
 vaulttest_elf:
     incbin "build/vaulttest.elf"
 vaulttest_elf_end:
+
+global agentmemtest_elf
+global agentmemtest_elf_end
+agentmemtest_elf:
+    incbin "build/agentmemtest.elf"
+agentmemtest_elf_end:
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

@@ -366,6 +366,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
     t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
     t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
+    t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does
+                                    * not zero, so every new field needs this line    */
     t->run_ticks = 0;              /* DDR-735: CPU accounting starts at zero              */
     t->dispatches = 0;
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */

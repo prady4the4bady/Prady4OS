@@ -71,6 +71,16 @@ All entries below are **shipped**.
   streamed in 1000-byte chunks so the partial-block carry actually runs.
   Gate `smoke-sha512`, A/B-verified. Not in the kernel link — first caller is
   DDR-821 Ed25519.
+- **Agent memory** (DDR-836, Section E / 3B) — `SYS_MEMORY_WRITE` (82) /
+  `SYS_MEMORY_READ` (83), gated by `CAP_MEMORY` (1<<18) with a `tcb.is_memory`
+  flag following the CAP_NET precedent. A bounded key/value store (64 records,
+  32-byte keys, 256-byte values) for facts agents keep across actions.
+  **It is a SHARED BLACKBOARD, not per-agent storage**: any CAP_MEMORY holder can
+  read and overwrite any key, and the capability is the entire boundary. Keying
+  records by owner pid was rejected because pids recycle — a new agent would
+  inherit a dead one's memories, which is worse than no isolation because it
+  looks like isolation. Durable per-agent identity arrives with the roste
+  (Section G). `smoke-agentmem` 20/20 locally, awaiting first CI conclusion.
 - **Secure credential vault** (DDR-834, table 6.9) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-vault (120s)`, run 30993915008 on `b2e7836`). `SYS_VAULT_PUT` (87) /
   `SYS_VAULT_GET` (91), both CAP_SOVEREIGN. Cloud-bridge credentials encrypted at

@@ -375,6 +375,8 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char agentmemtest_elf[];        /* DDR-836: agent memory */
+extern const unsigned char agentmemtest_elf_end[];
 extern const unsigned char vaulttest_elf[];           /* DDR-834: credential vault */
 extern const unsigned char vaulttest_elf_end[];
 extern const unsigned char accrottest_elf[];          /* DDR-815: ACC rotation */
@@ -1337,6 +1339,36 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-836: agent memory gate. Spawned TWICE — one instance holds
+                 * CAP_MEMORY, the other does not — because the capability check
+                 * is half of what is under test. */
+                if (probe_enabled("agentmem")) {
+                    uint64_t mlen = (uint64_t)(agentmemtest_elf_end - agentmemtest_elf);
+                    struct tcb *m_cap = 0, *m_no = 0;
+                    int mrc_c = elf_load((void *)(uintptr_t)agentmemtest_elf, mlen,
+                                         "AGENTMEM_C", &m_cap);
+                    if (mrc_c == ELF_OK && m_cap) {
+                        m_cap->is_agent = 1;
+                        m_cap->is_memory = 1;
+                        sched_unblock(m_cap);
+                        kputs("[user] agent-memory probe spawned (CAP_MEMORY)\r\n");
+                    } else {
+                        kputs("[user] AGENTMEM cap elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)mrc_c);
+                        kputs("\r\n");
+                    }
+                    int mrc_n = elf_load((void *)(uintptr_t)agentmemtest_elf, mlen,
+                                         "AGENTMEM_N", &m_no);
+                    if (mrc_n == ELF_OK && m_no) {
+                        m_no->is_agent = 1;      /* an agent, but WITHOUT CAP_MEMORY */
+                        sched_unblock(m_no);
+                        kputs("[user] agent-memory probe spawned (no CAP_MEMORY)\r\n");
+                    } else {
+                        kputs("[user] AGENTMEM nocap elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)mrc_n);
+                        kputs("\r\n");
                     }
                 }
                 /* DDR-834: credential vault gate. Spawned TWICE at different

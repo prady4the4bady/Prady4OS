@@ -137,6 +137,10 @@
  * are reserved for Section E and 88-90 for the prad package manager; taking
  * adjacent slots now would collide with scheduled work, and renumbering a
  * syscall after it ships is a wire-format break. */
+/* DDR-836 Section E: agent memory, CAP_MEMORY. */
+#define SYS_MEMORY_WRITE   82  /* (key, val, vallen)      -> 0 | -EPERM|-EINVAL|-ENOSPC */
+#define SYS_MEMORY_READ    83  /* (key, out, outlen_ptr)  -> 0 | -EPERM|-ENOENT|-EFAULT */
+
 #define SYS_VAULT_PUT      87  /* (name, secret, secretlen) -> 0 | -EPERM|-EINVAL|-ENOSPC|-EIO */
 #define SYS_VAULT_GET      91  /* (name, out, outlen_ptr)   -> 0 | -EPERM|-ENOENT|-EACCES|-EIO */
 
