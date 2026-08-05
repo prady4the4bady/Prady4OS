@@ -159,3 +159,4 @@
 2	smoke-checkpoint	120
 3	smoke-spawndepth	120
 4	smoke-actiondag	120
+5	smoke-chipset	120

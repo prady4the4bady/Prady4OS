@@ -230,8 +230,16 @@ if [ -n "${QEMU_PROBES:-}" ]; then
     FWCFG=(-fw_cfg name=opt/org.pradyos/probes,string="${QEMU_PROBES}")
 fi
 
+# DDR-841: machine/CPU are overridable so smoke-chipset can drive the SAME
+# runner across x86_64 variants. Defaults are the historical q35 + QEMU's
+# default CPU, so every pre-existing gate behaves exactly as before.
+QEMU_MACHINE="${QEMU_MACHINE:-q35}"
+CPUOPT=()
+[ -n "${QEMU_CPU:-}" ] && CPUOPT=(-cpu "${QEMU_CPU}")
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
-    -machine q35 \
+    -machine "$QEMU_MACHINE" \
+    "${CPUOPT[@]}" \
     -drive if=none,format=raw,file="$IMG",id=disk0 \
     -device virtio-blk-pci,drive=disk0,bootindex=0 \
     "${FWCFG[@]}" \

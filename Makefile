@@ -1666,6 +1666,60 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 # child approval passes arm 2 and is useless; one that ignores parents passes
 # arm 3 and enforces nothing. Both sentinels required, so a run where only the
 # agent half completes is a FAILURE rather than a silent half-pass.
+# DDR-841 Group 1: reproducible build env, VirtualBox runner, chipset matrix.
+#
+# smoke-chipset boots the SAME image across the x86_64 variants QEMU can give
+# us. Every other gate in this tree boots -M q35 only, so a q35-specific
+# assumption would never be caught. The AMD arm is the point: every CPU-feature
+# assumption here was written against an Intel-flavoured qemu64, and a missing
+# CPUID guard shows up there and nowhere else.
+CHIPSET_VARIANTS := q35/qemu64 pc/qemu64 q35/Nehalem q35/Opteron_G5
+
+smoke-chipset: $(IMG) fat-image sfs-image
+	@fail=0; \
+	for v in $(CHIPSET_VARIANTS); do \
+	  m=$${v%%/*}; c=$${v##*/}; \
+	  echo "[chipset] === -M $$m -cpu $$c ==="; \
+	  if TIMEOUT_S=90 QEMU_MACHINE=$$m QEMU_CPU=$$c \
+	     bash tools/qemu_runner/boot_test.sh $(IMG) >/tmp/cs_$$m_$$c.log 2>&1; then \
+	    echo "[chipset] PASS -M $$m -cpu $$c"; \
+	  else \
+	    echo "[chipset] FAIL -M $$m -cpu $$c"; tail -15 /tmp/cs_$$m_$$c.log; fail=1; \
+	  fi; \
+	done; \
+	test $$fail -eq 0 || { echo '[chipset] FAIL - a variant did not boot'; exit 1; }
+	@echo '[chipset] PASS - all $(words $(CHIPSET_VARIANTS)) x86_64 variants booted'
+
+# Item 2: build inside the pinned container. Not run in CI (docker-in-docker is
+# a separate can of worms); ci-docker-check validates the Dockerfile instead.
+.PHONY: docker-image docker-build ci-docker-check ci-vbox-check vbox-boot
+docker-image:
+	docker build -t pradyos-build .
+
+docker-build: docker-image
+	docker run --rm -v "$$PWD":/src -w /src pradyos-build make image
+
+# The Dockerfile must pin a base tag and must not add unpinned third-party
+# archives — an apt PPA would reintroduce the drift the image exists to remove.
+ci-docker-check:
+	@test -f Dockerfile || { echo 'ci-docker-check: FAIL — no Dockerfile'; exit 1; }
+	@grep -qE '^FROM ubuntu:24[.]04' Dockerfile || { echo 'ci-docker-check: FAIL — base image not pinned to ubuntu:24.04'; exit 1; }
+	@! grep -qiE 'add-apt-repository|ppa:' Dockerfile || { echo 'ci-docker-check: FAIL — unpinned third-party archive in Dockerfile'; exit 1; }
+	@echo 'ci-docker-check: OK — Dockerfile pins ubuntu:24.04, no unpinned archives'
+
+# Item 4: the runner cannot execute in CI (no VirtualBox, nesting unsupported).
+# CI validates what it honestly can — that the script parses — and the operator
+# runs the real boot for D.2. The script exits 77 when VBoxManage is absent,
+# never 0, so a green pipeline can never imply a boot that did not happen.
+ci-vbox-check:
+	@test -x tools/vbox_runner/run_vbox.sh || { echo 'ci-vbox-check: FAIL — runner missing or not executable'; exit 1; }
+	@bash -n tools/vbox_runner/run_vbox.sh || { echo 'ci-vbox-check: FAIL — syntax error'; exit 1; }
+	@grep -q 'exit 77' tools/vbox_runner/run_vbox.sh || { echo 'ci-vbox-check: FAIL — runner must exit 77 when VirtualBox is absent, not 0'; exit 1; }
+	@echo 'ci-vbox-check: OK — runner parses and fails loudly when VirtualBox is absent'
+
+vbox-boot: $(IMG)
+	bash tools/vbox_runner/run_vbox.sh $(IMG)
+
 smoke-actiondag: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=actiondag \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONDAG_OK\nPRADYOS_ACTIONDAG_SUBMIT_OK')" \

@@ -197,6 +197,37 @@ Status key: ✅ done · 🔵 in progress · ⬜ not started · 🔒 blocked
 | 7 | DDR-815 ACC rotation (NSI 81) | 🔒 needs 5 |
 | 8 | B#3 `-smp 4` virtio-blk stall | ⬜ **do before more OPEN-10 work** |
 
+### Group 1 — tracker & build-system integrity (x86_64 v1.0.0)
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Tracker contradictions + NSI 87 collision | ✅ DDR-840; CI run 31053809587 on `f80efa6` |
+| 2 | Docker reproducible build env | ✅ `Dockerfile` + `make docker-build`; `ci-docker-check` asserts the base tag is pinned and no unpinned archive is added. **Scope: pins the ENVIRONMENT, not bit-for-bit output** — that needs `SOURCE_DATE_EPOCH` work, not claimed here |
+| 3 | CMake/Makefile hybrid | ⏸ **AWAITING OPERATOR SIGN-OFF to skip** — assessment below |
+| 4 | VirtualBox runner | ✅ `tools/vbox_runner/run_vbox.sh`; `ci-vbox-check` parses it and asserts it exits **77** (not 0) when VirtualBox is absent. Real D.2 boot is operator-run |
+| 5 | x86_64 chipset variant coverage | ✅ `smoke-chipset` — q35/qemu64, **pc/qemu64 (i440FX)**, q35/Nehalem, **q35/Opteron_G5 (AMD)**. 20/20 local |
+
+#### Item 3 assessment — recommendation: SKIP CMake for v1.0.0, revisit post-1.0
+
+CMake earns its keep on multi-platform generation, multi-consumer library
+targets, and IDE integration. None applies to x86_64 v1.0.0: one architecture,
+one toolchain (clang/lld/nasm), no external consumers of the build.
+
+The defect CMake would plausibly have prevented is stale-prerequisite builds —
+and that class (DDR-822/825/833/835) is now closed structurally by the
+`KERNEL_ALL_CS` + `KERNEL_HS` + `USER_ALL_SRCS` wildcards, which cannot go stale
+the way a hand-maintained list did.
+
+Against that, porting ~2,400 Makefile lines carrying 130 gate recipes is a
+rewrite of the exact machinery that proves the release, and it would re-open the
+staleness class we spent four DDRs closing.
+
+**The honest case FOR CMake** is the deferred arch ports: when `arch/aarch64` and
+`arch/riscv64` become real, per-arch toolchain files are where CMake pays. That
+is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
+
+**This needs explicit sign-off before item 3 is marked resolved-by-substitution.**
+
 ### Section E — kernel syscalls (TASK 9)
 
 **NSI allocation lives in DDR-840, not here.** This table carries STATUS only;
