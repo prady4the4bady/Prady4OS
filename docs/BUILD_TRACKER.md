@@ -120,10 +120,10 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
-### The recurring structural defect — SEVEN instances
+### The recurring structural defect — TWELVE instances
 
-One bug in five costumes: **a check that discards input instead of rejecting it,
-so drift is silent and looks like success.**
+One bug in many costumes: **a check that discards or absorbs invalid input
+instead of rejecting it, so drift is silent and looks like success.**
 
 | # | Where | Silent drop | Fixed by |
 |---|---|---|---|
@@ -135,8 +135,16 @@ so drift is silent and looks like success.**
 | 6 | **crypto sources + Makefile not prerequisites** | **a build that reports success and never runs** — DDR-822 fixed `user/` and stopped there | DDR-825 — glob `kernel/crypto/*` and list `Makefile` |
 | 7 | **writable global in an R+X-only probe** | **link succeeds; the FIRST STORE faults at runtime**, and the gate reports it as a missing sentinel i.e. "the crypto is wrong" | DDR-826 — `make ci-probe-rodata-check` |
 
+| 8 | PMM double-free | a freed frame re-entered the pool | DDR-830 |
+| 9 | mid-enum insertion | shipped wire format silently renumbered | DDR-832 — append-only + `_Static_assert` |
+| 10 | kernel headers/sources not prerequisites | same class as #2/#6, third recurrence | DDR-833, DDR-835 — recursive wildcards |
+| 11 | **SkillOpt accepting a TIE** | **each tie changes the skill with no evidence it helped; every step "passes" and the skill drifts somewhere nobody chose** | DDR-847 — `>` not `>=`, with its own rejection branch |
+| 12 | **a skill revision thinning its own refusals** | **every refusal is a task the agent declines and scores zero on, so removing one RAISES the score — the optimiser is rewarded for it** | DDR-848 — refusal count may rise, may not fall |
+
 **Rule earned: when a check discards input rather than rejecting it, the discard
-must be loud.**
+must be loud.** Instances 11 and 12 extend it — the invalid case an optimiser
+will find is the one that scores well, so it needs an explicit branch and its
+own rejection message, never a fall-through comparison.
 
 ---
 
@@ -294,14 +302,21 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 `SCAN_ENVIRONMENT` · `QUERY_SCENE` · `REWRITE_AGENT_CODE` ·
 `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` · `EVOLVE_GENOME`
 
-### Section 3D — ring-3 / daemon #45–65 (TASK 12) — all ⬜
+### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 5 of 21 done
 
-1 skill.md · 2 SkillOpt loop · 3 SkillOpt-Sleep · 4 skill-update validation ·
-5 multi-agent transfer · 6 TokenJuice · 7 JSONL trajectory · 8 cost accounting ·
-9 goals.md · 10 subconscious loop · 11 MOSS pipeline · 12 OCR→memory ·
+| # | item | status |
+|---|---|---|
+| 1 (#45) | skill.md — 8 roster files, validated | ✅ DDR-846 |
+| 2 (#46) | SkillOpt loop | ✅ DDR-847 |
+| 3 (#47) | SkillOpt-Sleep | ✅ DDR-848 |
+| 4 (#48) | skill-update validation | ✅ DDR-848 |
+| 5 (#49) | multi-agent transfer | ✅ DDR-848 |
+
+6 TokenJuice · 7 JSONL trajectory · 8 cost accounting · 9 goals.md ·
+10 subconscious loop · 11 MOSS pipeline · 12 OCR→memory ·
 13 multi-modal context · 14 privacy mode (ring-3) · 15 model routing ·
 16 hypothesis tree · 17 genome.md · 18 vector knowledge graph ·
-19 dead-end registry · 20 population tournament · 21 run visualiser
+19 dead-end registry · 20 population tournament · 21 run visualiser — all ⬜
 
 ### Section F — visionary #66–76 (TASK 13)
 
@@ -321,9 +336,26 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 
 ### Section G — 12-agent roster (TASK 14)
 
-8 kernel slots (KRYOS…SOLIN) ✅ registered + UI cards ✅; **skill prompts ❌ for
-all 8**. 12 named agents (file/shell/research/ocr/subconscious/ai_scientist/
-healer/architect/verifier/tournament/orchestrator/vision) — **all ⬜**.
+8 kernel slots (KRYOS…SOLIN) ✅ registered + UI cards ✅; **skill prompts ✅ for
+all 8** (DDR-846 — this line previously read "❌ for all 8" and was one commit
+stale). DDR-846's design decision: the 8 legacy names **become** the 8
+highest-priority Section G roles rather than sitting alongside them, so the
+12-agent roster extends one working set instead of creating a second.
+
+| Section G role | slot | status |
+|---|---|---|
+| file_agent | KRYOS | ✅ skill.md, spawnable |
+| shell_agent | PRAX | ✅ skill.md, **not yet spawnable** (CAP_EXEC unwired) |
+| research_agent | LUMYN | ✅ skill.md, **not yet spawnable** (CAP_NET_BROWSE unwired) |
+| ocr_agent | AHNIS | ✅ skill.md, **not yet spawnable** (CAP_OCR unwired) |
+| vision_agent | IRIS | ✅ skill.md, **not yet spawnable** (CAP_SCENE unwired) |
+| healer_agent | RUFLO | ✅ skill.md, **not yet spawnable** |
+| orchestrator_agent | HERMES | ✅ skill.md, spawnable |
+| verifier_agent | SOLIN | ✅ skill.md, spawnable |
+
+Remaining 4 of the 12 (subconscious/ai_scientist/architect/tournament) — **⬜**;
+they have no kernel roster slot, so they need one before a skill file means
+anything. Kernel-side per-persona dispatch is still future for all 12.
 
 ### J-01…J-06 retro audit (TASK 15) — ✅ ALL SIX VERIFIED (DDR-845)
 

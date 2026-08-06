@@ -2157,6 +2157,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Approval Queue System | 🟢 COMPLETE | 6 | `kernel/aether/aether_queue.c`: 256-entry action queue + 4096-entry append-only audit ring (PMM-pool), 60 s TTL, `-EAGAIN` on overflow. Gates `smoke-aether-queue/-sec`. UI panel = compositor slice. |
 | Named Agents (KRYOS…SOLIN) | 🟡 IN PROGRESS | 6f/7 | The 8 named agents render as compositor panel cards with active/inactive state tied to AETHER's 8-slot roster (DDR-707, `SYS_AGENT_ROSTER`); the daemon lights KRYOS. Gate `smoke-agents`. Each of the 8 now has a validated `aether/agents/roster/<name>/skill.md` defining role, capabilities and refusals (DDR-846), mapped onto Section G's 8 highest-priority roles; 5 are marked *not yet spawnable* because the capabilities they need (CAP_EXEC/CAP_OCR/CAP_SCENE/CAP_NET_BROWSE) are declared in `cap.h` but wired to nothing. Validated by `aether/tests/test_agent_skills.py` in the pytest job. Kernel-side per-persona dispatch is still future. |
 | SkillOpt Training Loop | 🟢 COMPLETE | 6 | `aether/agents/skillopt/` (host-side Python, no kernel surface): rollout→reflect→aggregate→select→update→evaluate. A candidate skill replaces the incumbent **only on a strictly positive held-out improvement** — ties and regressions are rejected, held-out sets under 4 rollouts are refused outright, and train/held-out overlap raises rather than silently self-scoring (DDR-847). 16 tests in `aether/tests/test_skillopt.py` (pytest job); mutation-checked — `>` → `>=` fails exactly the tie tests. |
+| Skill Self-Modification Guards | 🟢 COMPLETE | 6 | `aether/agents/skillopt/{validate,sleep,transfer}.py` (DDR-848). Validation runs **before** scoring, so a candidate that escalates capability never reaches a comparison a good score could carry it through: declared capabilities may only shrink (S1), refusal count may rise and may not fall, `## Invariants` must survive. Sleep consolidates offline on the **same** acceptance bar with a deterministic `sha256(salt:task_id)` split and a bounded 4096-entry journal. Transfer is a proposal, never an application — the recipient's own held-out evaluation decides. 36 tests in `aether/tests/test_skillopt_guards.py`; all five guards mutation-checked. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
@@ -2943,3 +2944,87 @@ under that mutation would not be testing the decision at all.
 pytest is not installed on the build host, so the suite was run locally through
 a minimal `raises` shim against the **real** test file (not a re-implementation
 of it). CI's pytest job remains ground truth.
+
+
+## DDR-848 — the loop can rewrite the skill, so something has to bound what "improve" means
+
+DDR-847 gave SkillOpt the power to rewrite an agent's skill file on evidence.
+That power and the document it edits are in tension, and the tension has a
+direction: **a skill file says what the agent may do, and every refusal in it is
+a task the agent declines and therefore scores zero on.** Deleting a refusal
+raises the score. Nothing in DDR-847 prevents that -- its acceptance rule asks
+only whether the candidate scored better, never whether the candidate is still a
+legitimate skill file.
+
+That is instance **12** of this project's recurring structural defect, and
+instance 11 was the tie in DDR-847. Both are the same shape as the earlier ten
+with one addition that matters: **the invalid case an optimiser will find is the
+one that scores well.** A penalty is not enough, because a penalty is a price --
+and capability escalation is not something an agent should be able to buy with
+performance elsewhere.
+
+### Validation runs BEFORE scoring, not after
+
+A candidate that escalates capability must never reach a comparison a good score
+could carry it through. `consolidate()` builds the candidate, validates it, and
+only then evaluates. If validation ran afterwards as a safety net, a
+high-scoring rejected candidate would become a standing argument for relaxing
+the gate.
+
+The subtle rule is where capabilities are read from: the **declaration line**,
+not the whole document. A whole-document scan would read a refusal --
+"refuses to write to a `CAP_SOVEREIGN`-locked path" -- as a claim to *hold*
+`CAP_SOVEREIGN`. A gate that miscounts refusals as grants punishes exactly the
+files that are most careful about naming what they decline.
+
+### Sleep gets no relaxed threshold
+
+There is no "we have more data now, so a tie is good enough". An offline pass is
+a better opportunity to be rigorous, not a licence to be lenient; a second
+weaker acceptance path would become the path every change flowed through, and
+DDR-847's guarantees would still be in the code while no longer being true of
+the system.
+
+The split is `sha256(salt:task_id)`, not arrival order and not random. Order
+correlates the held-out set with time, so a skill that improved mid-session
+scores well for reasons unrelated to the edit. Random makes a rejection
+impossible to reproduce -- and an unreproducible rejection gets re-run until it
+passes, which is the same as having no gate at all.
+
+### Transfer is a proposal, never an application
+
+A lesson that improved KRYOS is evidence about KRYOS. It is a *hypothesis* about
+PRAX, and only PRAX's own held-out evaluation can settle it. Splicing it in
+directly would open a second path into a skill file that bypasses held-out
+scoring -- and being the easy path, it would become the path everything took.
+
+### Every guard is killed by at least one test
+
+36 tests, all of them refusals. The number that means something is not 36/36
+green; it is the mutation table:
+
+| mutation | tests killed |
+|---|---|
+| capability-escalation check disabled | 3 |
+| refusal-thinning check disabled | 1 |
+| capabilities parsed from whole document | 7 |
+| sleep skips validation | 1 |
+| split keyed on arrival order | 2 |
+
+A guard no test kills is a guard that is not being verified. None of the five
+are in that state, and the tree was restored and re-run green after each.
+
+### CI status at time of commit
+
+GitHub Actions is in a **major outage** (incident `qcvjkzcs7j74`, opened
+15:22 UTC 2026-08-06, still open): "capacity remains constrained and jobs may
+still be delayed or fail". Concretely -- the re-run of `31120386501` sat
+`queued` for 45+ minutes with **zero jobs scheduled**, and the push of `4bdbf3a`
+created **no run at all** (the incident lists webhook deliveries as affected).
+The two earlier reds, `31120032364` and `31120386501`, both died in "Set up
+job", before checkout and before any build, with `Failed to resolve action
+download info. Error: Service Unavailable`. **No code fix applies to them.**
+
+So DDR-847 and DDR-848 are *locally verified and not yet CI-confirmed*, and the
+distinction is recorded here rather than glossed. Group 9 stays gated on real
+CI greens for both.
