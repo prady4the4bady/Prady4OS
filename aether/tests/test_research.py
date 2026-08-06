@@ -1,147 +1,160 @@
-"""Hypothesis tree, genome lineage, dead-end registry (3D #60/#61/#63)."""
+"""Genome lineage (3D #61) and the D-07 hypothesis TREE (3D #60), DDR-851/855.
+
+The dead-end registry (#63) is NOT tested here: it is D-13's
+`FailureMemoryRegistry`, covered by `test_failure_registry.py`. The divergence
+score DDR-855 added to it is tested there, next to the registry it belongs to,
+rather than in a second file that would drift from it.
+"""
 from __future__ import annotations
 
 import pytest
 
-from aether.agents.research import (
-    MIN_DIVERGENCE,
-    DeadEnd,
-    DeadEndRegistry,
-    Genome,
-    GenomeArchive,
-    Hypothesis,
-    HypothesisStatus,
+from aether.agents.research import Genome, GenomeArchive, ResearchError
+from aether.agents.research.hypothesis_generator import Hypothesis, HypothesisStatus
+from aether.agents.research.hypothesis_tree import (
+    SCHEMA_VERSION,
     HypothesisTree,
-    ResearchError,
-    divergence,
+    TreeError,
 )
 
 
-def _h(hid: str, **kw) -> Hypothesis:
-    base = dict(hid=hid, statement=f"statement for {hid}",
-                prediction=f"if {hid} holds, metric X rises above 0.9")
-    base.update(kw)
-    return Hypothesis(**base)
+def _hyp(hid: str, statement: str = "") -> Hypothesis:
+    return Hypothesis(
+        hyp_id=hid,
+        statement=statement or f"statement for {hid}",
+        falsification_condition=f"{hid} fails if metric X stays below 0.9",
+        expected_evidence="metric X from the experiment harness",
+        estimated_cost=1.0,
+    )
 
 
 # ==========================================================================
-# #60 hypothesis tree
+# #60 hypothesis tree — versioning, lineage, persistence over D-07's type
 # ==========================================================================
-def test_hypothesis_requires_a_prediction() -> None:
-    """One that cannot be wrong cannot be right either."""
-    with pytest.raises(ResearchError, match="prediction"):
-        Hypothesis("H1", "vague idea", "   ")
+def test_tree_stores_the_d07_hypothesis_not_a_rival_type() -> None:
+    """The whole point of DDR-855's remediation.
 
-
-def test_superseding_keeps_the_old_version() -> None:
-    """Editing in place erases the reasoning that led somewhere wrong."""
+    Two notions of "hypothesis" would let the weaker one win wherever it was
+    imported, and the weaker one had no falsification condition at all.
+    """
     t = HypothesisTree()
-    t.add(_h("H1"))
-    new = t.supersede("H1", "refined", "metric X rises above 0.95")
-    assert new.hid == "H1.v2" and new.version == 2 and new.parent == "H1"
-    assert t.get("H1").statement == "statement for H1"
+    node = t.add(_hyp("H1"))
+    assert isinstance(node.hypothesis, Hypothesis)
+    assert node.hypothesis.falsification_condition
+    assert node.hypothesis.estimated_cost == 1.0
+
+
+def test_superseding_keeps_the_old_node() -> None:
+    """Editing in place erases the reasoning that led somewhere wrong — and the
+    dead-end registry can only match what is still on the record."""
+    t = HypothesisTree()
+    t.add(_hyp("H1"))
+    new = t.supersede("H1", _hyp("H1.v2", "refined statement"))
+    assert new.version == 2 and new.parent == "H1"
+    assert t.get("H1").hypothesis.statement == "statement for H1"
     assert t.lineage("H1.v2") == ["H1", "H1.v2"]
 
 
-def test_in_place_edit_is_impossible() -> None:
+def test_supersede_cannot_reuse_the_id() -> None:
     t = HypothesisTree()
-    t.add(_h("H1"))
-    with pytest.raises(ResearchError, match="already exists"):
-        t.add(_h("H1"))
+    t.add(_hyp("H1"))
+    with pytest.raises(TreeError, match="own id"):
+        t.supersede("H1", _hyp("H1"))
 
 
-def test_refuted_hypotheses_are_retained() -> None:
-    """A research agent's failures are its most valuable output."""
+def test_in_place_add_is_impossible() -> None:
     t = HypothesisTree()
-    t.add(_h("H1"))
-    t.resolve("H1", HypothesisStatus.REFUTED, "experiment 12: metric fell to 0.4")
-    assert [h.hid for h in t.refuted] == ["H1"]
+    t.add(_hyp("H1"))
+    with pytest.raises(TreeError, match="already in the tree"):
+        t.add(_hyp("H1"))
+
+
+def test_falsified_hypotheses_are_retained() -> None:
+    t = HypothesisTree()
+    t.add(_hyp("H1"))
+    t.resolve("H1", HypothesisStatus.FALSIFIED, "experiment 12: metric fell to 0.4")
+    assert [n.hyp_id for n in t.falsified] == ["H1"]
     assert t.get("H1").evidence.startswith("experiment 12")
 
 
 def test_resolution_requires_evidence() -> None:
     """An unevidenced verdict is an opinion in the shape of a result."""
     t = HypothesisTree()
-    t.add(_h("H1"))
-    with pytest.raises(ResearchError, match="requires evidence"):
-        t.resolve("H1", HypothesisStatus.SUPPORTED, "  ")
+    t.add(_hyp("H1"))
+    with pytest.raises(TreeError, match="requires evidence"):
+        t.resolve("H1", HypothesisStatus.CONFIRMED, "   ")
 
 
 def test_a_resolved_hypothesis_cannot_be_re_resolved() -> None:
-    """Re-resolving overwrites the first verdict and its evidence."""
     t = HypothesisTree()
-    t.add(_h("H1"))
-    t.resolve("H1", HypothesisStatus.REFUTED, "evidence A")
-    with pytest.raises(ResearchError, match="already refuted"):
-        t.resolve("H1", HypothesisStatus.SUPPORTED, "evidence B")
+    t.add(_hyp("H1"))
+    t.resolve("H1", HypothesisStatus.FALSIFIED, "evidence A")
+    with pytest.raises(TreeError, match="already falsified"):
+        t.resolve("H1", HypothesisStatus.CONFIRMED, "evidence B")
 
 
 def test_resolve_rejects_a_non_terminal_status() -> None:
     t = HypothesisTree()
-    t.add(_h("H1"))
-    with pytest.raises(ResearchError, match="terminal status"):
-        t.resolve("H1", HypothesisStatus.OPEN, "e")
+    t.add(_hyp("H1"))
+    with pytest.raises(TreeError, match="terminal status"):
+        t.resolve("H1", HypothesisStatus.QUEUED, "e")
 
 
-def test_missing_parent_is_refused() -> None:
+def test_missing_and_self_parent_are_refused() -> None:
     t = HypothesisTree()
-    with pytest.raises(ResearchError, match="does not exist"):
-        t.add(_h("H2", parent="nope"))
-
-
-def test_self_parent_is_refused() -> None:
-    """Caught by parent-must-exist, which is also what makes cycles impossible."""
-    with pytest.raises(ResearchError, match="does not exist"):
-        HypothesisTree().add(_h("H1x", parent="H1x"))
+    with pytest.raises(TreeError, match="not in the tree"):
+        t.add(_hyp("H2"), parent="nope")
+    with pytest.raises(TreeError, match="not in the tree"):
+        t.add(_hyp("H1x"), parent="H1x")
 
 
 def test_edges_point_strictly_backwards_so_lineage_terminates() -> None:
     """The acyclicity argument, asserted rather than assumed.
 
-    A parent must exist before its child is added and no node is ever
-    re-parented, so every edge points backwards in insertion order. That is why
-    there is no cycle check to test — an explicit one would be unreachable, and
-    a guard that never runs is a net nobody would notice breaking.
+    A parent must exist before its child is added and no node is re-parented,
+    so every edge points backwards in insertion order. That is why there is no
+    cycle check to test — one would be unreachable, and a guard that never runs
+    is a net nobody would notice breaking.
     """
     t = HypothesisTree()
-    t.add(_h("H1"))
-    t.add(_h("H2", parent="H1"))
-    t.supersede("H2", "refined", "metric X rises above 0.99")
+    t.add(_hyp("H1"))
+    t.add(_hyp("H2"), parent="H1")
+    t.supersede("H2", _hyp("H2.v2"))
     order = t.to_dict()["nodes"]
-    index = {n["hid"]: i for i, n in enumerate(order)}
+    index = {n["hyp_id"]: i for i, n in enumerate(order)}
     for n in order:
         if n["parent"] is not None:
-            assert index[n["parent"]] < index[n["hid"]]
+            assert index[n["parent"]] < index[n["hyp_id"]]
     assert t.lineage("H2.v2") == ["H1", "H2", "H2.v2"]
 
 
-def test_children_and_lineage() -> None:
+def test_children() -> None:
     t = HypothesisTree()
-    t.add(_h("H1"))
-    t.add(_h("H2", parent="H1"))
-    t.add(_h("H3", parent="H1"))
-    assert {c.hid for c in t.children("H1")} == {"H2", "H3"}
-    assert t.lineage("H3") == ["H1", "H3"]
+    t.add(_hyp("H1"))
+    t.add(_hyp("H2"), parent="H1")
+    t.add(_hyp("H3"), parent="H1")
+    assert {c.hyp_id for c in t.children("H1")} == {"H2", "H3"}
 
 
 def test_round_trips_for_persistence_across_boots() -> None:
     t = HypothesisTree()
-    t.add(_h("H1"))
-    t.supersede("H1", "refined", "metric X rises above 0.95")
-    t.resolve("H1", HypothesisStatus.REFUTED, "experiment 12")
+    t.add(_hyp("H1"))
+    t.supersede("H1", _hyp("H1.v2", "refined"))
+    t.resolve("H1", HypothesisStatus.FALSIFIED, "experiment 12")
     back = HypothesisTree.from_dict(t.to_dict())
     assert back.to_dict() == t.to_dict()
-    assert back.get("H1").status is HypothesisStatus.REFUTED
+    assert back.get("H1").hypothesis.status is HypothesisStatus.FALSIFIED
+    assert back.get("H1").hypothesis.falsification_condition
 
 
-def test_unknown_serialisation_version_is_refused() -> None:
+def test_unknown_schema_is_refused() -> None:
     """Refusing to guess at a format this build does not know."""
-    with pytest.raises(ResearchError, match="unknown hypothesis tree version"):
-        HypothesisTree.from_dict({"version": 99, "nodes": []})
+    with pytest.raises(TreeError, match="unknown hypothesis tree schema"):
+        HypothesisTree.from_dict({"schema": SCHEMA_VERSION + 99, "nodes": []})
 
 
 def test_get_unknown_raises() -> None:
-    with pytest.raises(ResearchError, match="no hypothesis"):
+    with pytest.raises(TreeError, match="no hypothesis"):
         HypothesisTree().get("nope")
 
 
@@ -202,91 +215,3 @@ def test_genome_validation() -> None:
         Genome("A", -1, {"x": "1"})
     with pytest.raises(ResearchError, match="no generation"):
         GenomeArchive("A").at(5)
-
-
-# ==========================================================================
-# #63 dead-end registry
-# ==========================================================================
-def test_dead_end_requires_a_failure_reason() -> None:
-    """'It did not work' cannot be checked against a new attempt, so the
-    registry grows while remaining unable to prevent anything."""
-    with pytest.raises(ResearchError, match="failure REASON"):
-        DeadEnd("tried gradient descent on the tokeniser", "   ")
-
-
-def test_query_before_repeating_catches_a_near_duplicate() -> None:
-    r = DeadEndRegistry()
-    r.record(DeadEnd("tune the learning rate on the small corpus",
-                     "diverged after 200 steps every seed", 5000))
-    hit = r.check("tune the learning rate on the small corpus again")
-    assert hit is not None
-    assert "diverged" in hit.reason
-
-
-def test_check_returns_the_entry_not_a_boolean() -> None:
-    """A bare False makes the refusal unarguable — the operator needs to see
-    what it collided with and why that failed."""
-    r = DeadEndRegistry()
-    r.record(DeadEnd("approach alpha beta gamma", "ran out of memory"))
-    hit = r.check("approach alpha beta gamma")
-    assert isinstance(hit, DeadEnd) and hit.reason == "ran out of memory"
-
-
-def test_a_genuinely_different_approach_is_not_blocked() -> None:
-    r = DeadEndRegistry()
-    r.record(DeadEnd("tune the learning rate on the small corpus", "diverged"))
-    assert r.check("rewrite the tokeniser to use byte pair encoding") is None
-
-
-def test_divergence_bounds() -> None:
-    assert divergence("a b c", "a b c") == 0.0
-    assert divergence("a b c", "x y z") == 1.0
-    assert 0.0 < divergence("a b c", "a b z") < 1.0
-    assert divergence("", "") == 0.0
-    assert divergence("a", "") == 1.0
-
-
-def test_divergence_is_deterministic_and_explainable() -> None:
-    """An embedding score would judge meaning better and make a refusal
-    impossible to argue with."""
-    assert divergence("one two", "two one") == divergence("two one", "one two")
-    assert divergence("a b", "a c") == 0.6666666666666667 - 0.0 or True
-    # exact value: |{a}| / |{a,b,c}| = 1/3 similarity -> 2/3 divergence
-    assert abs(divergence("a b", "a c") - (2 / 3)) < 1e-9
-
-
-def test_threshold_is_tunable_and_validated() -> None:
-    r = DeadEndRegistry()
-    r.record(DeadEnd("alpha beta gamma delta", "failed"))
-    assert r.check("alpha beta gamma epsilon", threshold=0.1) is None
-    assert r.check("alpha beta gamma epsilon", threshold=0.9) is not None
-    with pytest.raises(ResearchError):
-        r.check("x", threshold=1.5)
-    with pytest.raises(ResearchError):
-        r.check("   ")
-
-
-def test_registry_is_bounded_and_counts_drops() -> None:
-    r = DeadEndRegistry(capacity=3)
-    for i in range(10):
-        r.record(DeadEnd(f"approach number {i}", "failed"))
-    assert len(r.entries) == 3 and r.dropped == 7
-    assert r.entries[0].approach == "approach number 7", "oldest dropped"
-
-
-def test_wasted_cost_is_the_case_for_querying() -> None:
-    r = DeadEndRegistry()
-    r.record(DeadEnd("a b c", "failed", 1000))
-    r.record(DeadEnd("d e f", "failed", 2500))
-    assert r.wasted_microcents() == 3500
-
-
-def test_zero_capacity_is_refused() -> None:
-    with pytest.raises(ResearchError):
-        DeadEndRegistry(capacity=0)
-
-
-def test_default_threshold_is_conservative() -> None:
-    """A false 'too similar' costs one overridable refusal; a false
-    'different enough' costs re-deriving a known failure."""
-    assert 0.0 < MIN_DIVERGENCE < 0.5

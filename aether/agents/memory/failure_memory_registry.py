@@ -40,6 +40,8 @@ __all__ = [
     "FailureMemoryRegistry",
     "FailureRegistryError",
     "normalise_signature",
+    "signature_divergence",
+    "MIN_DIVERGENCE",
 ]
 
 DDR_ID = "D-13"
@@ -58,6 +60,24 @@ class FailureKind(str, Enum):
     ERROR = "error"                # crashed or errored out
     REJECTED = "rejected"          # refused by a gate or reviewer
     TIMEOUT = "timeout"
+
+
+#: Below this divergence a new approach is too close to a recorded dead end to
+#: be worth spending on (Section 3D #63). Conservative on purpose: a false
+#: "too similar" costs one refusal the operator can override, while a false
+#: "different enough" costs the full price of re-deriving a known failure.
+MIN_DIVERGENCE = 0.30
+
+
+def signature_divergence(a: str, b: str) -> float:
+    """1.0 - Jaccard similarity over normalised tokens. 0.0 same, 1.0 disjoint."""
+    ta = set(normalise_signature(a).split())
+    tb = set(normalise_signature(b).split())
+    if not ta and not tb:
+        return 0.0
+    if not ta or not tb:
+        return 1.0
+    return 1.0 - len(ta & tb) / len(ta | tb)
 
 
 def normalise_signature(text: str) -> str:
@@ -248,6 +268,45 @@ class FailureMemoryRegistry:
 
     def by_kind(self, kind: FailureKind) -> list[FailureRecord]:
         return [r for r in self._records if r.kind is kind]
+
+    # -- divergence scoring (Section 3D #63, DDR-855) -------------------------
+    def nearest_dead_end(
+        self, text: str, threshold: float = MIN_DIVERGENCE
+    ) -> tuple[FailureRecord, float] | None:
+        """Closest recorded dead end to `text`, if it is nearer than `threshold`.
+
+        `is_dead_end` matches an EXACT normalised signature, which catches
+        re-proposing the same approach verbatim and nothing else. Section 3D #63
+        asks for a divergence score so a *reworded* near-repeat is caught too —
+        the obvious evasion once an agent learns exact matching exists.
+
+        Returns the RECORD and its divergence, not a boolean, so a refusal can
+        show the operator which dead end was hit and why that one failed. A bare
+        `False` makes the refusal unarguable, and an unarguable refusal gets
+        overridden on principle rather than on the merits.
+
+        Deliberately NOT an embedding score. `1 - Jaccard` over normalised
+        tokens is deterministic (S9) and explainable; "the model thought it was
+        similar" is not a reason an operator can argue with, and this refusal
+        must be arguable. It is also strictly a *supplement* — `is_dead_end`
+        remains the exact-match gate D-07's I-06 wire calls.
+        """
+        if not text.strip():
+            raise FailureRegistryError("cannot score an empty approach")
+        if not 0.0 <= threshold <= 1.0:
+            raise FailureRegistryError(f"threshold must be in [0,1], got {threshold}")
+
+        best: FailureRecord | None = None
+        best_d = 1.1
+        for record in self._records:
+            if not record.active or record.kind is not FailureKind.DEAD_END:
+                continue
+            d = signature_divergence(text, record.signature)
+            if d < best_d:
+                best, best_d = record, d
+        if best is None or best_d >= threshold:
+            return None
+        return best, best_d
 
     @property
     def records(self) -> tuple[FailureRecord, ...]:

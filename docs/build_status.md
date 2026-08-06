@@ -3249,3 +3249,43 @@ bytecode before every run, and fails the run if a mutation kills nothing. A
 surviving mutation is the finding, not a footnote.
 
 Section 3D is now 18 of 21. Locally verified, not CI-confirmed.
+
+
+## DDR-855 -- I rebuilt D-07 and D-13 because I skipped the code graph
+
+DDR-853 shipped a hypothesis type and a dead-end registry that **already
+existed**, and both existing versions were stricter. D-07's `Hypothesis`
+requires statement, falsification condition, expected evidence and estimated
+cost; mine required a `prediction`. D-13's `FailureMemoryRegistry` is
+append-only with **no delete path at all** -- its docstring says "a registry
+that can forget is worse than no registry" -- while mine dropped its oldest
+entries when full, which is exactly the forgetting D-13 exists to prevent.
+
+**Root cause: I never ran `graph_session_primer()`.** CLAUDE.md requires it
+before opening any source file, precisely to prevent this, and I worked from
+directory listings and greps for the whole session instead. The tell was there
+and I misread it -- creating `research/__init__.py` reported "has been updated",
+not "File created"; I saw a five-line stub and moved on rather than asking why a
+stub existed, which is the question that would have found
+`hypothesis_generator.py` beside it.
+
+This is not the "check absorbs invalid input" pattern catalogued in
+BUILD_TRACKER §4. It is its own lesson: **an orientation step skipped to save
+time costs more than it saves, and it fails silently** -- duplicated code
+compiles, passes its own tests, and looks like progress.
+
+**Remediation.** The duplicate registry is deleted; #63 is D-13. The divergence
+score #63 actually requires was **added to D-13**, which genuinely lacked it --
+`is_dead_end` matches an exact signature, so a *reworded* near-repeat walked
+straight through. `nearest_dead_end()` returns the record and its score, not a
+boolean, so the refusal names which dead end was hit. The tree was rebuilt over
+D-07's type and now adds only what D-07 lacks: parent links, versions, and a
+schema-versioned serialisation.
+
+29 tests on D-13 (9 new, beside the registry rather than in a drifting second
+file), 21 on the tree and genome, 17 unchanged on D-07, 201 across my suites.
+D-13's own guard caught four of my new tests -- `record()` requires a detail --
+and I fixed the tests, not the guard.
+
+Every remaining item is now checked against the code graph before any file is
+written.

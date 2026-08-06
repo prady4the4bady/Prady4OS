@@ -332,9 +332,9 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 | 14 (#58) | privacy mode (ring-3) — fails closed; kernel remains the enforcement | ✅ DDR-852 |
 | 15 (#59) | model routing — privacy-gated, deterministic, budget-aware | ✅ DDR-852 |
 
-| 16 (#60) | hypothesis tree — versioned, append-only, persists | OK DDR-853 |
+| 16 (#60) | hypothesis tree — versioned, persists; wraps **D-07**'s `Hypothesis`, not a rival type (DDR-855) | OK DDR-853+855 |
 | 17 (#61) | `genome.md` — lineage archived, rationale required | OK DDR-853 |
-| 19 (#63) | dead-end registry — reason + divergence, queried first | OK DDR-853 |
+| 19 (#63) | dead-end registry | OK — **D-13 `FailureMemoryRegistry`**, which already existed; DDR-855 added the missing divergence score to it rather than shipping the duplicate DDR-853 wrote |
 
 Still open: 18 (#62) vector knowledge graph, 20 (#64) population tournament,
 21 (#65) run visualiser.

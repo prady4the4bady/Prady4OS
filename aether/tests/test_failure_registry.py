@@ -11,7 +11,9 @@ from aether.agents.memory.failure_memory_registry import (
     FailureKind,
     FailureMemoryRegistry,
     FailureRegistryError,
+    MIN_DIVERGENCE,
     normalise_signature,
+    signature_divergence,
 )
 from aether.kernel.audit.audit_log import AuditLog
 from aether.kernel.lockbox.cap_sovereign import CapabilityError, Lockbox
@@ -256,3 +258,100 @@ def test_alignment_tap_receives_steps(tmp_path: Path) -> None:
     reg.record("x", detail="d")
     reg.supersede("x", reason="r")
     assert {"D-13.record", "D-13.supersede"} <= set(events)
+
+
+# ==========================================================================
+# Section 3D #63 — divergence scoring (DDR-855)
+#
+# `is_dead_end` matches an EXACT normalised signature, which catches a verbatim
+# re-proposal and nothing else. #63 asks for a divergence score so a REWORDED
+# near-repeat is caught too — the obvious evasion once an agent learns exact
+# matching exists. These tests live here, beside the registry, rather than in a
+# second file that would drift from it.
+# ==========================================================================
+def test_divergence_bounds_and_symmetry() -> None:
+    assert signature_divergence("a b c", "a b c") == 0.0
+    assert signature_divergence("a b c", "x y z") == 1.0
+    assert signature_divergence("", "") == 0.0
+    assert signature_divergence("a", "") == 1.0
+    assert signature_divergence("one two", "two one") == 0.0
+    assert abs(signature_divergence("a b", "a c") - (2 / 3)) < 1e-9
+
+
+def test_divergence_ignores_case_and_whitespace() -> None:
+    """It normalises through the same function exact matching uses, so the two
+    cannot disagree about what a signature is."""
+    assert signature_divergence("Tune  The RATE", "tune the rate") == 0.0
+
+
+def test_nearest_dead_end_catches_a_reworded_repeat(tmp_path: Path) -> None:
+    """The gap this closes: exact matching would let this straight through."""
+    reg, _lb, _audit = _registry(tmp_path)
+    reg.record("tune the learning rate on the small corpus",
+               FailureKind.DEAD_END, detail="diverged after 200 steps every seed")
+    hit = reg.nearest_dead_end("tune the learning rate on the small corpus again")
+    assert hit is not None
+    record, d = hit
+    assert "diverged" in record.detail
+    assert 0.0 < d < MIN_DIVERGENCE
+    assert not reg.is_dead_end("tune the learning rate on the small corpus again"), (
+        "exact matching alone would have missed this — that is the point"
+    )
+
+
+def test_nearest_dead_end_returns_the_record_not_a_boolean(tmp_path: Path) -> None:
+    """A bare False makes the refusal unarguable, and an unarguable refusal gets
+    overridden on principle rather than on the merits."""
+    reg, _lb, _audit = _registry(tmp_path)
+    reg.record("approach alpha beta gamma", FailureKind.DEAD_END,
+               detail="ran out of memory")
+    hit = reg.nearest_dead_end("approach alpha beta gamma")
+    assert hit is not None and hit[0].detail == "ran out of memory"
+
+
+def test_a_genuinely_different_approach_is_not_blocked(tmp_path: Path) -> None:
+    reg, _lb, _audit = _registry(tmp_path)
+    reg.record("tune the learning rate on the small corpus", FailureKind.DEAD_END,
+               detail="diverged after 200 steps")
+    assert reg.nearest_dead_end("rewrite the tokeniser to use byte pair encoding") is None
+
+
+def test_non_dead_end_kinds_do_not_score(tmp_path: Path) -> None:
+    """An ERROR or TIMEOUT may be an unlucky run, not a bad approach — the same
+    reasoning `is_dead_end` already applies."""
+    reg, _lb, _audit = _registry(tmp_path)
+    reg.record("flaky approach one two three", FailureKind.TIMEOUT,
+               detail="exceeded the 600s wall clock")
+    assert reg.nearest_dead_end("flaky approach one two three") is None
+
+
+def test_superseded_dead_ends_do_not_score(tmp_path: Path) -> None:
+    reg, _lb, _audit = _registry(tmp_path)
+    reg.record("approach alpha beta gamma", FailureKind.DEAD_END,
+               detail="ran out of memory")
+    reg.supersede("approach alpha beta gamma", "later found to work")
+    assert reg.nearest_dead_end("approach alpha beta gamma") is None
+
+
+def test_threshold_is_tunable_and_validated(tmp_path: Path) -> None:
+    reg, _lb, _audit = _registry(tmp_path)
+    reg.record("alpha beta gamma delta", FailureKind.DEAD_END,
+               detail="the harness never converged")
+    assert reg.nearest_dead_end("alpha beta gamma epsilon", threshold=0.05) is None
+    assert reg.nearest_dead_end("alpha beta gamma epsilon", threshold=0.9) is not None
+    with pytest.raises(FailureRegistryError):
+        reg.nearest_dead_end("x", threshold=1.5)
+    with pytest.raises(FailureRegistryError):
+        reg.nearest_dead_end("   ")
+
+
+def test_scoring_needs_no_capability(tmp_path: Path) -> None:
+    """Querying before repeating must never be harder than repeating."""
+    reg, _lb, _audit = _registry(tmp_path, granted=False)
+    assert reg.nearest_dead_end("anything at all here") is None
+
+
+def test_default_threshold_is_conservative() -> None:
+    """A false 'too similar' costs one overridable refusal; a false 'different
+    enough' costs re-deriving a known failure."""
+    assert 0.0 < MIN_DIVERGENCE < 0.5
