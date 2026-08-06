@@ -2161,6 +2161,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | TokenJuice / trajectory / cost | 🟢 COMPLETE | 6 | `aether/agents/budget/` (DDR-849 + DDR-850). **Context compression to ≤80%** (`compress.py`): pinned segments are never dropped and an unreachable target **raises** rather than returning a best-effort context, which at the call site is indistinguishable from a successful one. Cost records `latency_ms` alongside `token_count`. Budgets **refuse** rather than truncate (a silently shortened context is a wrong answer wearing a right answer's shape), with a 5% completion reserve ordinary work cannot reach, grants debited at grant time (S1), and two-phase reserve/commit. Cost: an **unknown model raises** — never priced at zero — integer micro-cents, rounding up. Trajectory: append-only JSONL with no update path, redacted before the write, tolerating a truncated tail but refusing mid-file corruption. 34 tests in `aether/tests/test_budget.py`; 10/10 mutations killed. |
 | Goals / subconscious / MOSS | 🟢 COMPLETE | 6 | `aether/agents/goals/` + `aether/agents/moss/` (DDR-851). `goals.md` refuses a goal with **no checkable success criterion** (an unfalsifiable goal makes every report against it unfalsifiable) and requires `CAP_SOVEREIGN` — it is the objective function; an agent cannot mark its own goal complete. Subconscious loop is periodic, goal-diffed, **idle-agents-only**, capped at a **minority (25%) share** of the 60 syscall/s limit, and **raises rather than truncating** a batch. MOSS: staged never in-place, **a regression suite that did not RUN is not a pass**, snapshot-before-promote enforced by the state machine, co-approval by **two different** principals. 36 tests; 11/11 mutations killed. |
 | Privacy routing / OCR / context | 🟢 COMPLETE | 6 | `aether/agents/routing/` (DDR-852). Ring-3 privacy is an **early readable refusal, not the enforcement** — the kernel netfilter hook (DDR-802, `AR_PRIVACY_BLOCKED`) remains the only thing that counts — and it **fails closed**: an unreadable privacy state blocks. An unresolved hostname is never classified local. Routing refuses rather than near-missing, and is deterministic across registration order. OCR **quarantines** anything under 0.80 confidence with mandatory provenance; quarantined records enter the context marked `[UNVERIFIED OCR]` at lowest priority so a guess cannot be laundered into authoritative context. 36 tests; 10/10 mutations killed. |
+| Research lineage (hypothesis/genome/dead-end) | COMPLETE | 6 | `aether/agents/research/` (DDR-853). All three are **records of what did not work**, append-only, because a research agent's failures are its most valuable output and the easiest to lose. A hypothesis needs a prediction (one that cannot be wrong cannot be right); superseding versions rather than edits; resolution requires evidence and cannot be re-run. A genome mutation requires a rationale. A dead end requires a failure reason, and `check()` returns the colliding entry rather than a bare boolean so the refusal is arguable. 32 tests; 10/10 mutations killed. |
+| Mutation harness | COMPLETE | - | `tools/mutation/mutate.py` (DDR-853). **Fails closed**: aborts on a missing or ambiguous target, clears `__pycache__` and imports with `-B`, and **fails the run if any mutation kills nothing**. Replaces the ad-hoc shell version, which skipped absent targets with a warning while still printing kills from the previous mutation's stale bytecode. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
@@ -3214,3 +3216,36 @@ the guess into an authoritative-looking line.
 
 36 tests, ten mutations, ten kills. Section 3D is now 15 of 21.
 Locally verified, not CI-confirmed; outage `qcvjkzcs7j74` still open.
+
+
+## DDR-853 -- two defects in my own verification, found and fixed
+
+Every DDR from 847 onward leans on a mutation table: flip a guard off, and if no
+test dies, the guard is not verified. While running this slice I found the
+harness producing a result it had not earned, twice.
+
+**Stale bytecode misattributed kills.** `__pycache__` on `/mnt/c` has coarse
+mtime granularity, so a mutate/restore cycle inside one second could leave
+Python importing the *previous* module. A mutation appeared to kill a test that
+had nothing to do with it.
+
+**A mutation whose target string was absent was skipped with a warning, and the
+run still printed kills.** DDR-850 reflowed a `validate_skill_update(...)` call
+onto three lines, so one guards-matrix mutation silently stopped applying -- and
+the kill it reported came from the previous mutation's stale bytecode.
+
+That second one is instance **16**: a check that absorbs an invalid input
+instead of rejecting it, so drift is silent and looks like success -- inside the
+tool built to detect exactly that.
+
+**Every prior matrix was re-run** with bytecode cleared and `-B`. All 43
+mutations across DDR-848 through 853 still kill at least one test, and the one
+mutation that had never actually applied kills two once corrected. **No guard
+was found unverified -- but they stood on a harness that could have hidden a
+gap**, which is why this is recorded rather than quietly re-run.
+
+`tools/mutation/mutate.py` now aborts on a missing or ambiguous target, clears
+bytecode before every run, and fails the run if a mutation kills nothing. A
+surviving mutation is the finding, not a footnote.
+
+Section 3D is now 18 of 21. Locally verified, not CI-confirmed.

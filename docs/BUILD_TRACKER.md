@@ -120,7 +120,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
-### The recurring structural defect — FIFTEEN instances
+### The recurring structural defect — SIXTEEN instances
 
 One bug in many costumes: **a check that discards or absorbs invalid input
 instead of rejecting it, so drift is silent and looks like success.**
@@ -145,6 +145,8 @@ instead of rejecting it, so drift is silent and looks like success.**
 | 14 | **`check_invariant()` asserting a TAUTOLOGY** | `available` is derived by subtraction, so the accounting identity over it **could never fail**. It read as a strong invariant and was decorative — the defect appearing inside code written to guard against the defect | DDR-849 — assert the independently-tracked counters instead |
 
 | 15 | **building from the tracker LABEL instead of the spec text** | four items (#47/#48/#50/#52) shipped satisfying their one-line titles while missing what §3D actually specified — and it **passes review**, because the label is what a reviewer checks against | DDR-850 — corrected against `AETHER_MASTER_FEATURES.md` §3D |
+
+| 16 | **the MUTATION HARNESS itself** | a mutation whose target string was absent was **skipped with a warning** while the run still printed kills -- from the *previous* mutation's stale `__pycache__`. The defect inside the tool built to detect the defect | DDR-853 -- `tools/mutation/mutate.py` aborts on a missing/ambiguous target, clears bytecode, and **fails if a mutation kills nothing** |
 
 **Rule earned: when a check discards input rather than rejecting it, the discard
 must be loud.** And: **a tracker line is a label FOR a requirement, not the
@@ -308,7 +310,7 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 `SCAN_ENVIRONMENT` · `QUERY_SCENE` · `REWRITE_AGENT_CODE` ·
 `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` · `EVOLVE_GENOME`
 
-### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 15 of 21 done
+### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 18 of 21 done
 
 | # | item | status |
 |---|---|---|
@@ -329,6 +331,13 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 | 13 (#57) | multi-modal context builder | ✅ DDR-852 |
 | 14 (#58) | privacy mode (ring-3) — fails closed; kernel remains the enforcement | ✅ DDR-852 |
 | 15 (#59) | model routing — privacy-gated, deterministic, budget-aware | ✅ DDR-852 |
+
+| 16 (#60) | hypothesis tree — versioned, append-only, persists | OK DDR-853 |
+| 17 (#61) | `genome.md` — lineage archived, rationale required | OK DDR-853 |
+| 19 (#63) | dead-end registry — reason + divergence, queried first | OK DDR-853 |
+
+Still open: 18 (#62) vector knowledge graph, 20 (#64) population tournament,
+21 (#65) run visualiser.
 
 16 hypothesis tree · 17 genome.md · 18 vector knowledge graph ·
 19 dead-end registry · 20 population tournament · 21 run visualiser — all ⬜
