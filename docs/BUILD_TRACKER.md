@@ -228,6 +228,35 @@ is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
 
 **This needs explicit sign-off before item 3 is marked resolved-by-substitution.**
 
+### Group 2 — Section E / capability / agent core close-out
+
+| # | Item | Status |
+|---|---|---|
+| 6 | NSI 86 `SYS_APPROVE_CODE_REWRITE` + `CAP_REWRITE` (1<<21) | ⏳ 20/20 local, awaiting CI |
+| 7 | Audit hash chain + NSI 93 `SYS_VERIFY_AUDIT` | ⏳ 20/20 local (both arms), awaiting CI |
+| 8 | Section 3C action types | ⏳ **8 of 14 built**; 6 blocked, see below |
+| 9 | Section 3D daemon features (#45-65) | ⬜ not started |
+| 10 | Section F #66-76 beyond item 7 | ⬜ not started |
+| 11 | Section G 12-agent roster | ⬜ not started |
+| 12 | J-01..J-06 retrospective audit | ⬜ not started |
+| 13 | `smoke-invariants` S1-S8 | ⬜ not started |
+| 14 | ChaCha20-Poly1305 gate-wiring verification | ✅ **resolved by inspection**: `smoke-aead` exists and is CI-registered (shard 4, 90 s), testing RFC 8439 vectors directly. It is not merely exercised via `smoke-vault` — it is its own gate. No new gate needed |
+
+#### Item 8 — the six NOT built, with reasons (not silently dropped)
+
+| action type | why not |
+|---|---|
+| `ACTION_CAPTURE_FRAME` | post-L7 per spec; needs `CAP_SCENE` + camera path |
+| `ACTION_SCAN_ENVIRONMENT` | post-L7; SLAM3R, no hardware path |
+| `ACTION_QUERY_SCENE` | post-L7 NL query over a scene graph that does not exist |
+| `ACTION_PARSE_DOCUMENT` | needs a 64 MiB local OCR model; no model-shipping path |
+| `ACTION_EXEC_CODE` | needs a sandboxed interpreter — a subsystem, not an action |
+| `ACTION_BROWSE_WEB` | needs a headless browser **and network egress = cloud bridge (DDR-793)**, which the deferred list says to flag rather than enable. **Operator decision outstanding** |
+
+Declaring these as enum values without enforcement would be worse than omitting
+them: an agent could submit one and the kernel would queue an action nothing
+implements. They are omitted until their subsystem exists.
+
 ### Section E — kernel syscalls (TASK 9)
 
 **NSI allocation lives in DDR-840, not here.** This table carries STATUS only;
@@ -239,8 +268,8 @@ restating numbers in two places is what produced the 87 collision it records.
 | `SYS_CHECKPOINT_AGENT` / `SYS_RESUME_AGENT` | 84/85 | ✅ | `PASS smoke-checkpoint (120s)`, run 31015668039 on `35bab14` (DDR-837) |
 | `spawn_depth` cap in TCB | — | ✅ | `PASS smoke-spawndepth (120s)`, run 31028810861 on `83a761a` (DDR-838) |
 | DAG action queue (`parent_action_id`) | 92 | ✅ | `PASS smoke-actiondag (120s)`, run 31043474501 on `362cb36` (DDR-839) |
-| `SYS_APPROVE_CODE_REWRITE` | 86 | ⬜ | Group 2 item 6 — last open Section E syscall |
-| `SYS_READ_AUDIT` (Merkle verify, F#76) | **93** | ⬜ | Group 2 item 7. **Moved off 87 by DDR-840** — 87 is `SYS_VAULT_PUT`, shipped |
+| `SYS_APPROVE_CODE_REWRITE` | 86 | ⏳ | DDR-842. `CAP_REWRITE` + `CAP_SOVEREIGN`, neither alone. `smoke-coderewrite` 20/20 local, unexcluded, shard 0. Awaiting CI |
+| `SYS_VERIFY_AUDIT` (chain verify, F#76) | **93** | ⏳ | DDR-842. Renamed from `SYS_READ_AUDIT`: that name is **already NSI 37**, shipped, and three probes parse its struct — widening it would have overflowed their buffers. 93 verifies, never returns records. `smoke-auditchain` + `smoke-auditchain-tamper` 20/20 local. Awaiting CI |
 
 ### Section 3B — capability bits (TASK 10)
 

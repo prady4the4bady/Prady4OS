@@ -160,3 +160,6 @@
 3	smoke-spawndepth	120
 4	smoke-actiondag	120
 5	smoke-chipset	120
+0	smoke-coderewrite	120
+1	smoke-auditchain	120
+2	smoke-auditchain-tamper	120
