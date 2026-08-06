@@ -237,6 +237,18 @@ global actiondagtest_elf_end
 actiondagtest_elf:
     incbin "build/actiondagtest.elf"
 actiondagtest_elf_end:
+
+global coderewritetest_elf
+global coderewritetest_elf_end
+coderewritetest_elf:
+    incbin "build/coderewritetest.elf"
+coderewritetest_elf_end:
+
+global auditchaintest_elf
+global auditchaintest_elf_end
+auditchaintest_elf:
+    incbin "build/auditchaintest.elf"
+auditchaintest_elf_end:
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

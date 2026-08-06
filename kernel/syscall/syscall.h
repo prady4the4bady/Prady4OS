@@ -149,10 +149,21 @@
 
 /* DDR-839: submit an action that DEPENDS on another. Separate from NSI 31
  * because 31's fourth argument register is undefined in every existing caller. */
+/* DDR-842: code-rewrite approval. Requires CAP_REWRITE **and** CAP_SOVEREIGN —
+ * neither alone. Refuses any action that is not ACTION_REWRITE_AGENT_CODE, so it
+ * cannot become a general-purpose approval bypass. */
+#define SYS_APPROVE_CODE_REWRITE 86  /* (action_id) -> 0 | -EPERM|-EINVAL|-ESRCH */
+
 #define SYS_SUBMIT_CHILD_ACTION 92  /* (type, payload, len, parent_id) -> id | -ESRCH */
 
 #define SYS_VAULT_PUT      87  /* (name, secret, secretlen) -> 0 | -EPERM|-EINVAL|-ENOSPC|-EIO */
-#define SYS_VAULT_GET      91  /* (name, out, outlen_ptr)   -> 0 | -EPERM|-ENOENT|-EACCES|-EIO */
+#define SYS_VAULT_GET      91  /* (name, out, outlen_ptr) -> 0 | -EPERM|-ENOENT|-EACCES|-EIO */
+
+/* DDR-842: VERIFY the audit hash chain. Deliberately separate from the shipped
+ * SYS_READ_AUDIT (37), whose record layout three ring-3 probes already parse —
+ * widening that struct would overflow their buffers. This call returns a verdict,
+ * never records. NSI 93, not 87: 87 is SYS_VAULT_PUT, shipped (DDR-840). */
+#define SYS_VERIFY_AUDIT   93  /* (bad_idx_ptr) -> 0 intact | -EACCES broken | -EPERM */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 

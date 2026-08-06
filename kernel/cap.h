@@ -43,6 +43,10 @@ typedef uint64_t cap_t;
  * blackboard, so this bit grants read AND overwrite of EVERY key, not of some
  * per-agent slice. Grant it accordingly. */
 #define CAP_MEMORY        (1u << 18)  /* read/write the agent memory store           */
+/* DDR-842: code rewrite. ALWAYS requires CAP_SOVEREIGN co-approval and is neve
+ * auto-granted — the syscall checks both bits, and sovereignty alone is refused
+ * so that this bit is not decoration. */
+#define CAP_REWRITE       (1u << 21)  /* approve MOSS-style code rewrites            */
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u

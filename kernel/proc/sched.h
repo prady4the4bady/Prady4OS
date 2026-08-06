@@ -130,6 +130,9 @@ struct tcb {
                                  * LINEAGE, not on is_agent — fork does not inherit
                                  * authority flags, so a cap on is_agent would be
                                  * escaped by one fork. */
+    uint32_t   is_rewrite;      /* DDR-842: CAP_REWRITE — code-rewrite approval.
+                                 * Meaningless without is_sovereign; the syscall
+                                 * requires BOTH. Granted at spawn only. */
     uint32_t   checkpointed;    /* DDR-837: operator froze this agent. The thread
                                  * blocks ITSELF on seeing this at its next syscall
                                  * boundary — never set THREAD_BLOCKED from anothe

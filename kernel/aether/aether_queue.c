@@ -122,8 +122,10 @@ long aether_submit(uint32_t agent_pid, uint32_t action_type,
         parent_ready = (par && par->status == AE_APPROVED);
     }
 
-    /* Spawning a process is never auto-approved, even in sovereign mode (D8). */
-    if (action_type != ACTION_SPAWN_PROCESS && g_sovereign_mode && parent_ready) {
+    /* DDR-842: the force-PENDING set (spawn, delete, code-rewrite, genome) is
+     * never auto-approved even in sovereign mode — S4 names each as needing a
+     * human gate. One predicate, so the queue and the spec cannot drift. */
+    if (!aether_action_forces_pending(action_type) && g_sovereign_mode && parent_ready) {
         e->status = AE_APPROVED;
         aether_audit(agent_pid, action_type, e->action_id, AR_APPROVE);
     } else {
@@ -156,6 +158,15 @@ long aether_poll(uint32_t agent_pid, uint64_t action_id) {
 }
 
 /* Operator decision (caller already proven to hold CAP_SOVEREIGN). */
+int aether_action_type_of(uint64_t action_id, uint32_t *type_out) {
+    struct aether_action_entry *e = entry_of(action_id);
+    if (!e)
+        return -1;
+    if (type_out)
+        *type_out = e->action_type;
+    return 0;
+}
+
 long aether_approve(uint64_t action_id, int approve) {
     if (!g_queue)
         return -ESRCH;

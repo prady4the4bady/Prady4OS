@@ -29,6 +29,8 @@ void sys_ags_register(void);      /* kernel/syscall/sys_ags.c (DDR-814) */
 void sys_vault_register(void);    /* kernel/syscall/sys_vault.c (DDR-834) */
 void sys_agentmem_register(void); /* kernel/syscall/sys_agentmem.c (DDR-836) */
 void sys_checkpoint_register(void); /* kernel/syscall/sys_checkpoint.c (DDR-837) */
+void sys_rewrite_register(void);  /* kernel/syscall/sys_rewrite.c (DDR-842) */
+void sys_audit_register(void);    /* kernel/syscall/sys_audit.c (DDR-842) */
 
 #define MAX_SYSCALLS 128  /* NSI-v2 table size (ADR-022). Raised 80->128 in the
                            * DDR-823 audit: NSI 77-87 are already sequenced and
@@ -173,6 +175,8 @@ void syscall_init(void) {
     sys_vault_register();                 /* SYS_VAULT_PUT / SYS_VAULT_GET (DDR-834) */
     sys_agentmem_register();              /* SYS_MEMORY_WRITE / SYS_MEMORY_READ (DDR-836) */
     sys_checkpoint_register();            /* SYS_CHECKPOINT_AGENT / SYS_RESUME_AGENT (DDR-837) */
+    sys_rewrite_register();               /* SYS_APPROVE_CODE_REWRITE (DDR-842) */
+    sys_audit_register();                 /* SYS_READ_AUDIT (DDR-842) */
     sys_acc_register();                   /* SYS_ACC_SEAL / SYS_ACC_OPEN (DDR-813,
                                            * linkable since DDR-827 raised the
                                            * stage-2 window to 1 MiB) */

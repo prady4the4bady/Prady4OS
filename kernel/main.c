@@ -375,6 +375,10 @@ extern const unsigned char acctest_elf[];             /* DDR-813: ACC gate */
 extern const unsigned char acctest_elf_end[];
 extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox */
 extern const unsigned char lockboxtest_elf_end[];
+extern const unsigned char coderewritetest_elf[];     /* DDR-842: code-rewrite gate */
+extern const unsigned char coderewritetest_elf_end[];
+extern const unsigned char auditchaintest_elf[];      /* DDR-842: audit chain gate */
+extern const unsigned char auditchaintest_elf_end[];
 extern const unsigned char actiondagtest_elf[];       /* DDR-839: DAG action queue */
 extern const unsigned char actiondagtest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
@@ -420,6 +424,9 @@ void net_init(void);                             /* NET-B: lwip-port/pradyos_net
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
 void aether_selftest(void);
 void aether_sectest(void);
+/* DDR-842: probe-gated audit-chain fault injection. main.c declares aether
+ * entry points locally rather than including aether.h (see the three above). */
+void aether_audit_tamper(void);
 
 /* Write an embedded ELF to SFS, read it BACK from SFS, and load it as a ring-3
  * process. Genuinely exercises the filesystem load path (the bytes elf_load
@@ -1345,6 +1352,45 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-842 item 6: FOUR roles. The capability split IS the
+                 * feature, and no single privilege level can test it. */
+                if (probe_enabled("coderewrite")) {
+                    uint64_t l = (uint64_t)(coderewritetest_elf_end - coderewritetest_elf);
+                    struct tcb *ag = 0, *ap = 0, *so = 0, *rw = 0;
+                    if (elf_load((void *)(uintptr_t)coderewritetest_elf, l, "CRW_AG", &ag) == ELF_OK && ag) {
+                        ag->is_agent = 1; ag->is_memory = 1; sched_unblock(ag);
+                    } else { kputs("[user] CRW agent elf_load FAILED\r\n"); }
+                    if (elf_load((void *)(uintptr_t)coderewritetest_elf, l, "CRW_AP", &ap) == ELF_OK && ap) {
+                        ap->is_sovereign = 1; ap->is_rewrite = 1; ap->is_memory = 1; sched_unblock(ap);
+                    } else { kputs("[user] CRW approver elf_load FAILED\r\n"); }
+                    if (elf_load((void *)(uintptr_t)coderewritetest_elf, l, "CRW_SO", &so) == ELF_OK && so) {
+                        so->is_sovereign = 1; so->is_memory = 1;   /* NO is_rewrite */
+                        sched_unblock(so);
+                    } else { kputs("[user] CRW sovonly elf_load FAILED\r\n"); }
+                    if (elf_load((void *)(uintptr_t)coderewritetest_elf, l, "CRW_RW", &rw) == ELF_OK && rw) {
+                        rw->is_rewrite = 1;                        /* NO is_sovereign */
+                        sched_unblock(rw);
+                    } else { kputs("[user] CRW rwonly elf_load FAILED\r\n"); }
+                    kputs("[user] code-rewrite probes spawned (4 roles)\r\n");
+                }
+                /* DDR-842 item 7. audittamper is a SEPARATE probe flag so one
+                 * binary serves both the intact and the tampered gate. */
+                if (probe_enabled("auditchain")) {
+                    if (probe_enabled("audittamper"))
+                        aether_audit_tamper();
+                    struct tcb *ac = 0;
+                    uint64_t l = (uint64_t)(auditchaintest_elf_end - auditchaintest_elf);
+                    int rc = elf_load((void *)(uintptr_t)auditchaintest_elf, l, "AUDITCHAIN", &ac);
+                    if (rc == ELF_OK && ac) {
+                        ac->is_sovereign = 1;
+                        sched_unblock(ac);
+                        kputs("[user] audit-chain probe spawned\r\n");
+                    } else {
+                        kputs("[user] AUDITCHAIN elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)rc);
+                        kputs("\r\n");
                     }
                 }
                 /* DDR-839: DAG action queue. TWO roles — submission is CAP_AGENT

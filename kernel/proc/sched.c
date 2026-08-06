@@ -370,6 +370,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
                                     * not zero, so every new field needs this line    */
     t->checkpointed = 0;           /* DDR-837: not frozen                             */
     t->agent_depth = 0;            /* DDR-838: outside any agent lineage by default    */
+    t->is_rewrite = 0;             /* DDR-842: no CAP_REWRITE unless granted           */
     t->run_ticks = 0;              /* DDR-735: CPU accounting starts at zero              */
     t->dispatches = 0;
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */

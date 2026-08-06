@@ -227,7 +227,14 @@ EOF
 # not set QEMU_PROBES boots exactly as before.
 FWCFG=()
 if [ -n "${QEMU_PROBES:-}" ]; then
-    FWCFG=(-fw_cfg name=opt/org.pradyos/probes,string="${QEMU_PROBES}")
+    # DDR-842: a comma is QEMU's own option separator, so a multi-probe list
+    # like "auditchain,audittamper" truncated the option and QEMU refused to
+    # start. QEMU escapes a literal comma by DOUBLING it. The fw_cfg payload
+    # the guest receives is unchanged, so probe_enabled() still splits on a
+    # single comma. This path had never been exercised: every gate before now
+    # passed exactly one probe.
+    _probes_escaped="${QEMU_PROBES//,/,,}"
+    FWCFG=(-fw_cfg name=opt/org.pradyos/probes,string="${_probes_escaped}")
 fi
 
 # DDR-841: machine/CPU are overridable so smoke-chipset can drive the SAME

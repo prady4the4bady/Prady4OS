@@ -17,8 +17,34 @@ enum aether_action {
     ACTION_NONE = 0, ACTION_WRITE_FILE, ACTION_PRINT, ACTION_SPAWN_PROCESS,
     /* DDR-800/801: an outbound socket connect. The destination rides in the
      * record's action_id via AETHER_DEST_ID. */
-    ACTION_NET_CONNECT
+    ACTION_NET_CONNECT,
+    /* DDR-842 (3C). APPENDED, never inserted: action_type crosses the ring
+     * boundary in every audit record and queue entry, so an insertion renumbers
+     * a wire format exactly as DDR-832 describes for enum aether_result.
+     *
+     * Six further 3C types are deliberately ABSENT until their subsystem exists
+     * — CAPTURE_FRAME / SCAN_ENVIRONMENT / QUERY_SCENE (post-L7, CAP_SCENE),
+     * PARSE_DOCUMENT (64 MiB OCR model), EXEC_CODE (sandboxed interpreter),
+     * BROWSE_WEB (headless browser + deferred cloud bridge). Declaring an enum
+     * value with no enforcement is worse than omitting it: an agent could submit
+     * one and the kernel would queue an action nothing implements. */
+    ACTION_READ_FILE, ACTION_DELETE_FILE, ACTION_SEND_IPC, ACTION_QUERY_MEMORY,
+    ACTION_REWRITE_AGENT_CODE, ACTION_PROPOSE_HYPOTHESIS,
+    ACTION_RUN_EXPERIMENT, ACTION_EVOLVE_GENOME
 };
+
+/* Wire-format pins for the pre-existing action types (DDR-832 discipline). */
+_Static_assert(ACTION_WRITE_FILE    == 1, "action wire format: WRITE_FILE is 1");
+_Static_assert(ACTION_PRINT         == 2, "action wire format: PRINT is 2");
+_Static_assert(ACTION_SPAWN_PROCESS == 3, "action wire format: SPAWN_PROCESS is 3");
+
+/* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
+ * structural). ONE list, used by the queue, so there are not two that must
+ * agree. */
+static inline int aether_action_forces_pending(uint32_t t) {
+    return t == ACTION_SPAWN_PROCESS || t == ACTION_DELETE_FILE ||
+           t == ACTION_REWRITE_AGENT_CODE || t == ACTION_EVOLVE_GENOME;
+}
 
 /* audit `result` codes (what happened to an action / a process). */
 enum aether_result {
@@ -71,7 +97,11 @@ enum aether_result {
     /* DDR-837. APPENDED per DDR-832. Without these, "why did this agent stop
      * producing?" is unanswerable from the log, and an operator freeze looks
      * exactly like a fault. */
-    AR_AGENT_CHECKPOINT, AR_AGENT_RESUME
+    AR_AGENT_CHECKPOINT, AR_AGENT_RESUME,
+    /* DDR-842. APPENDED per DDR-832. AR_AUDIT_TAMPERED is distinct from every
+     * other rejection: "the log itself is forged" is not a policy denial, and it
+     * is the one record an operator must never see folded into a generic code. */
+    AR_CODE_REWRITE_APPROVED, AR_AUDIT_READ, AR_AUDIT_TAMPERED
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.
@@ -142,6 +172,10 @@ long aether_submit(uint32_t agent_pid, uint32_t action_type,
                    uint64_t parent_action_id);
 long aether_poll(uint32_t agent_pid, uint64_t action_id);     /* -> status | -ESRCH */
 long aether_approve(uint64_t action_id, int approve);          /* approve=1 / reject=0 */
+/* DDR-842: the action_type of a live action, or -1 if there is no such action.
+ * SYS_APPROVE_CODE_REWRITE uses it to refuse anything that is not a code
+ * rewrite, so it cannot serve as a general approval bypass. */
+int  aether_action_type_of(uint64_t action_id, uint32_t *type_out);
 void aether_drop_pid(uint32_t pid);            /* free an exited agent's queue slots */
 
 /* --- audit log (aether_audit.c) -------------------------------------------- */
@@ -149,6 +183,23 @@ struct aether_audit_entry_pub {                /* the shape SYS_READ_AUDIT retur
     uint64_t timestamp; uint32_t agent_pid; uint32_t action_type;
     uint64_t action_id; uint32_t result;     uint32_t _pad;
 };
+/* DDR-842: the chain value is deliberately NOT in this struct. NSI 37
+ * (SYS_READ_AUDIT) is shipped and user/egressaudittest.c, user/privacynettest.c
+ * and user/sovegresstest.c each carry their own copy of this layout. Adding 32
+ * bytes per entry would make the kernel write past buffers those probes sized
+ * for the old shape — an overflow, not merely a parse error. Verification is a
+ * SEPARATE call (SYS_VERIFY_AUDIT, 93) that returns a verdict, not records. */
+
+/* DDR-842: recompute the chain over the RETAINED window and report the index of
+ * the first mismatch. Returns 0 when intact, -1 when broken (*bad_index set).
+ * A boolean would be useless to an operator: "tampered at entry 1204" locates
+ * the event being hidden; "tampered" does not. */
+int  aether_audit_verify(uint32_t *bad_index);
+/* DDR-842 fault injection, DDR-804 probe-gated. Flips one byte of one committed
+ * entry so the gate can prove verification FAILS when it should. Ring 3 has no
+ * write path into the log (that is what S5 asserts), so this is the only way to
+ * exercise the failure branch. */
+void aether_audit_tamper(void);
 void aether_audit(uint32_t agent_pid, uint32_t action_type,
                   uint64_t action_id, uint32_t result);
 /* Copy up to max entries (oldest..newest) into a kernel-side caller buffer.

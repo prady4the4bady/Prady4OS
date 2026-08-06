@@ -113,6 +113,10 @@ USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
 USER_SDEP_ELF := build/spawndepthtest.elf
 USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
 USER_DAG_ELF := build/actiondagtest.elf
+USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
+USER_CRW_ELF := build/coderewritetest.elf
+USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
+USER_ACH_ELF := build/auditchaintest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -167,7 +171,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
+               build/virtio_blk.o build/virtio_net.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -408,6 +412,10 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DAG_SRC) -o build/actiondagtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DAG_ELF) build/actiondagtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ACH_ELF) build/auditchaintest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -486,6 +494,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/aether/agentmem.c -o build/agentmem.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_agentmem.c -o build/sys_agentmem.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_checkpoint.c -o build/sys_checkpoint.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_rewrite.c -o build/sys_rewrite.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_audit.c -o build/sys_audit.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -1719,6 +1729,34 @@ ci-vbox-check:
 
 vbox-boot: $(IMG)
 	bash tools/vbox_runner/run_vbox.sh $(IMG)
+
+# DDR-842 item 6. FOUR sentinels required. The sov-only arm is the point: if
+# CAP_SOVEREIGN alone sufficed, CAP_REWRITE would be decoration, and a gate that
+# only checked 'unprivileged is denied' would pass against exactly that bug.
+smoke-coderewrite: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=coderewrite \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_CODEREWRITE_OK\nPRADYOS_CODEREWRITE_SUBMIT_OK\nPRADYOS_CODEREWRITE_SOVONLY_DENIED_OK\nPRADYOS_CODEREWRITE_RWONLY_DENIED_OK')" \
+	FORBIDDEN_SENTINEL="CODEREWRITE FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-842 item 7, arm 1: an untouched log verifies clean. The tamper sentinel is
+# FORBIDDEN here, so an over-eager verifier that cries tamper on a clean log
+# fails this arm instead of looking correct.
+smoke-auditchain: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=auditchain \
+	EXTRA_SENTINEL="PRADYOS_AUDITCHAIN_INTACT_OK" \
+	FORBIDDEN_SENTINEL="$$(printf 'AUDITCHAIN FAIL\nPRADYOS_AUDITCHAIN_TAMPER_DETECTED_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-842 item 7, arm 2 - THE arm that proves the verifier can fail. Ring 3 has
+# no write path into the log (that is what S5 asserts), so the corruption is
+# injected kernel-side behind a probe flag. Without this, a verify() returning 0
+# unconditionally would pass arm 1 and the gate would assert nothing.
+smoke-auditchain-tamper: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=auditchain,audittamper \
+	EXTRA_SENTINEL="PRADYOS_AUDITCHAIN_TAMPER_DETECTED_OK" \
+	FORBIDDEN_SENTINEL="$$(printf 'AUDITCHAIN FAIL\nPRADYOS_AUDITCHAIN_INTACT_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-actiondag: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=actiondag \
