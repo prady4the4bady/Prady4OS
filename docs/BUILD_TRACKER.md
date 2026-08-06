@@ -239,7 +239,7 @@ is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
 | 10 | Section F #66-76 beyond item 7 | ⬜ not started |
 | 11 | Section G 12-agent roster | ⬜ not started |
 | 12 | J-01..J-06 retrospective audit | ⬜ not started |
-| 13 | `smoke-invariants` S1-S8 | ⬜ not started |
+| 13 | `smoke-invariants` S1-S8 | ✅ `PASS smoke-invariants (120s)`, run 31104672684 on `81a3eaf`; 20/20 local. Covers S1,S2,S4,S5,S6,S8. **S3/S7 deliberately NOT claimed** — they depend on unbuilt F#66-72, and a green arm for an unbuilt subsystem would convert "not implemented" into "verified". S5's no-erase-path half is asserted at build time by `ci-audit-noerase-check` |
 | 14 | ChaCha20-Poly1305 gate-wiring verification | ✅ **resolved by inspection**: `smoke-aead` exists and is CI-registered (shard 4, 90 s), testing RFC 8439 vectors directly. It is not merely exercised via `smoke-vault` — it is its own gate. No new gate needed |
 
 #### Item 8 — the six NOT built, with reasons (not silently dropped)
