@@ -308,7 +308,7 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 `SCAN_ENVIRONMENT` · `QUERY_SCENE` · `REWRITE_AGENT_CODE` ·
 `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` · `EVOLVE_GENOME`
 
-### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 8 of 21 done
+### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 11 of 21 done
 
 | # | item | status |
 |---|---|---|
@@ -321,7 +321,11 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 | 7 (#51) | JSONL trajectory log | ✅ DDR-849 |
 | 8 (#52) | cost accounting — `token_count` + `latency_ms` | ✅ DDR-849 + **DDR-850** |
 
-9 goals.md · 10 subconscious loop · 11 MOSS pipeline · 12 OCR→memory ·
+| 9 (#53) | `goals.md` per agent — `CAP_SOVEREIGN`, checkable criteria | ✅ DDR-851 |
+| 10 (#54) | subconscious loop — period, goal-diff, ≤25% of 60 syscall/s, idle-only | ✅ DDR-851 |
+| 11 (#55) | MOSS pipeline — staging, regression gate, snapshot rollback, co-approval | ✅ DDR-851 |
+
+12 OCR→memory ·
 13 multi-modal context · 14 privacy mode (ring-3) · 15 model routing ·
 16 hypothesis tree · 17 genome.md · 18 vector knowledge graph ·
 19 dead-end registry · 20 population tournament · 21 run visualiser — all ⬜

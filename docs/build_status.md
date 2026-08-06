@@ -2159,6 +2159,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | SkillOpt Training Loop | 🟢 COMPLETE | 6 | `aether/agents/skillopt/` (host-side Python, no kernel surface): rollout→reflect→aggregate→select→update→evaluate. A candidate skill replaces the incumbent **only on a strictly positive held-out improvement** — ties and regressions are rejected, held-out sets under 4 rollouts are refused outright, and train/held-out overlap raises rather than silently self-scoring (DDR-847). 16 tests in `aether/tests/test_skillopt.py` (pytest job); mutation-checked — `>` → `>=` fails exactly the tie tests. |
 | Skill Self-Modification Guards | 🟢 COMPLETE | 6 | `aether/agents/skillopt/{validate,sleep,transfer}.py` (DDR-848). Validation runs **before** scoring, so a candidate that escalates capability never reaches a comparison a good score could carry it through: declared capabilities may only shrink (S1), refusal count may rise and may not fall, `## Invariants` must survive. Sleep consolidates offline on the **same** acceptance bar with a deterministic `sha256(salt:task_id)` split and a bounded 4096-entry journal. Transfer is a proposal, never an application — the recipient's own held-out evaluation decides. 36 tests in `aether/tests/test_skillopt_guards.py`; all five guards mutation-checked. DDR-850 adds the spec's **`CAP_SOVEREIGN`-always** approval gate (a missing approver is refused, not assumed authorised) and sleep's named `harvest→mine→replay→consolidate` stages, which **refuse to run while any agent is active**. |
 | TokenJuice / trajectory / cost | 🟢 COMPLETE | 6 | `aether/agents/budget/` (DDR-849 + DDR-850). **Context compression to ≤80%** (`compress.py`): pinned segments are never dropped and an unreachable target **raises** rather than returning a best-effort context, which at the call site is indistinguishable from a successful one. Cost records `latency_ms` alongside `token_count`. Budgets **refuse** rather than truncate (a silently shortened context is a wrong answer wearing a right answer's shape), with a 5% completion reserve ordinary work cannot reach, grants debited at grant time (S1), and two-phase reserve/commit. Cost: an **unknown model raises** — never priced at zero — integer micro-cents, rounding up. Trajectory: append-only JSONL with no update path, redacted before the write, tolerating a truncated tail but refusing mid-file corruption. 34 tests in `aether/tests/test_budget.py`; 10/10 mutations killed. |
+| Goals / subconscious / MOSS | 🟢 COMPLETE | 6 | `aether/agents/goals/` + `aether/agents/moss/` (DDR-851). `goals.md` refuses a goal with **no checkable success criterion** (an unfalsifiable goal makes every report against it unfalsifiable) and requires `CAP_SOVEREIGN` — it is the objective function; an agent cannot mark its own goal complete. Subconscious loop is periodic, goal-diffed, **idle-agents-only**, capped at a **minority (25%) share** of the 60 syscall/s limit, and **raises rather than truncating** a batch. MOSS: staged never in-place, **a regression suite that did not RUN is not a pass**, snapshot-before-promote enforced by the state machine, co-approval by **two different** principals. 36 tests; 11/11 mutations killed. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
@@ -3150,3 +3151,34 @@ latency not accumulated (2).
 Committed **without pushing**: GitHub Actions remains in outage `qcvjkzcs7j74`,
 and the operator's instruction is to hold local until it clears, then run CI
 across the whole batch at once.
+
+
+## DDR-851 — three items where the guard is the feature
+
+**A regression suite that did not RUN is not a pass.** `if failures == 0` is
+also true when zero tests ran, which turns a broken harness into a green light
+for an agent rewriting its own source. MOSS checks `ran` and `total > 0`
+separately from `failures == 0`, so "no result" stays a distinct state from
+"passed". It is the single most dangerous confusion available in this pipeline
+and the cheapest one to write by accident.
+
+**A goal with no checkable success criterion is refused.** "Improve file
+handling" cannot be satisfied or failed, only asserted about — and once a goal
+is unfalsifiable, every report against it is unfalsifiable too, so the tracking
+apparatus emits confident statements carrying no information.
+
+**The subconscious gets a minority share of the syscall budget.** Background
+work that eats the limiter starves the foreground agent, and the symptom is
+that *the agent* looks slow, not that the subconscious looks wrong. Exceeding
+the share raises rather than emitting a partial batch, because a truncated batch
+silently drops the lowest-priority goals while looking like it kept up.
+
+Co-approval is **two different principals**: one principal holding both
+`CAP_REWRITE` and `CAP_SOVEREIGN` is one decision wearing two hats, which is
+exactly what a two-key rule exists to prevent. And the promote path is ordered
+so that promoting without a snapshot is structurally impossible — a rollback
+path that was never created is discovered at the moment it is needed, which is
+the moment it cannot be created.
+
+36 tests, eleven mutations, eleven kills. Section 3D is now 11 of 21.
+Locally verified, not CI-confirmed; outage `qcvjkzcs7j74` still open.
