@@ -163,3 +163,4 @@
 0	smoke-coderewrite	120
 1	smoke-auditchain	120
 2	smoke-auditchain-tamper	120
+3	smoke-invariants	120

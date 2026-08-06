@@ -377,6 +377,8 @@ extern const unsigned char lockboxtest_elf[];         /* DDR-812: metric lockbox
 extern const unsigned char lockboxtest_elf_end[];
 extern const unsigned char coderewritetest_elf[];     /* DDR-842: code-rewrite gate */
 extern const unsigned char coderewritetest_elf_end[];
+extern const unsigned char invarianttest_elf[];       /* DDR-844: S1-S8 attack gate */
+extern const unsigned char invarianttest_elf_end[];
 extern const unsigned char auditchaintest_elf[];      /* DDR-842: audit chain gate */
 extern const unsigned char auditchaintest_elf_end[];
 extern const unsigned char actiondagtest_elf[];       /* DDR-839: DAG action queue */
@@ -1352,6 +1354,25 @@ static void fs_test_thread(void *arg) {
                         lb->is_sovereign = 1;
                         sched_unblock(lb);
                         kputs("[user] ELF loaded (embedded); lockbox probe spawned\r\n");
+                    }
+                }
+                /* DDR-844: S1-S8 attack gate. Spawned as an AGENT with
+                 * CAP_MEMORY and nothing else, DELIBERATELY — a sovereign probe
+                 * would be permitted to do most of what this attempts and the
+                 * gate would assert nothing. */
+                if (probe_enabled("invariants")) {
+                    struct tcb *iv = 0;
+                    uint64_t l = (uint64_t)(invarianttest_elf_end - invarianttest_elf);
+                    int rc = elf_load((void *)(uintptr_t)invarianttest_elf, l, "INVARIANT", &iv);
+                    if (rc == ELF_OK && iv) {
+                        iv->is_agent = 1;
+                        iv->is_memory = 1;   /* so the S2/S6 memory arms reach the bounds checks */
+                        sched_unblock(iv);
+                        kputs("[user] invariant attack probe spawned (agent)\r\n");
+                    } else {
+                        kputs("[user] INVARIANT elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)rc);
+                        kputs("\r\n");
                     }
                 }
                 /* DDR-842 item 6: FOUR roles. The capability split IS the

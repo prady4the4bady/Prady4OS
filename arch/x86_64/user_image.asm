@@ -249,6 +249,12 @@ global auditchaintest_elf_end
 auditchaintest_elf:
     incbin "build/auditchaintest.elf"
 auditchaintest_elf_end:
+
+global invarianttest_elf
+global invarianttest_elf_end
+invarianttest_elf:
+    incbin "build/invarianttest.elf"
+invarianttest_elf_end:
 global lockboxtest_elf
 global lockboxtest_elf_end
 lockboxtest_elf:

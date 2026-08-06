@@ -117,6 +117,8 @@ USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
 USER_ACH_ELF := build/auditchaintest.elf
+USER_INV_SRC := user/invarianttest.c     # DDR-844: S1-S8 attack gate
+USER_INV_ELF := build/invarianttest.elf
 USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
@@ -416,6 +418,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ACH_ELF) build/auditchaintest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_INV_SRC) -o build/invarianttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_INV_ELF) build/invarianttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_RTCMONO_SRC) -o build/rtcmonotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RTCMONO_ELF) build/rtcmonotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_METRIC_SRC) -o build/metrictest.o
@@ -1733,6 +1737,25 @@ vbox-boot: $(IMG)
 # DDR-842 item 6. FOUR sentinels required. The sov-only arm is the point: if
 # CAP_SOVEREIGN alone sufficed, CAP_REWRITE would be decoration, and a gate that
 # only checked 'unprivileged is denied' would pass against exactly that bug.
+# DDR-844: S1-S8 attack gate. Every OTHER gate asserts a feature works; this one
+# asserts attacks FAIL. A refactor that deletes a capability check breaks no
+# feature gate - only the refusals stop happening, and nothing else notices.
+smoke-invariants: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=invariants \
+	EXTRA_SENTINEL="PRADYOS_INVARIANTS_OK S1,S2,S4,S5,S6,S8" \
+	FORBIDDEN_SENTINEL="INVARIANT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-844: S5's 'no user-space erase path' cannot be attacked from ring 3 - the
+# ABSENCE of a syscall is not something a syscall can test. Asserted at build
+# time instead: no erase/clear/reset/purge entry point may be registered against
+# the audit log. A runtime arm would have to invent the hole it tests for.
+.PHONY: ci-audit-noerase-check
+ci-audit-noerase-check:
+	@! grep -rniE 'syscall_register\(SYS_[A-Z_]*(ERASE|CLEAR|RESET|PURGE)' kernel/syscall/ \
+	  || { echo 'ci-audit-noerase-check: FAIL - an audit erase/clear syscall is registered (S5)'; exit 1; }
+	@echo 'ci-audit-noerase-check: OK - no user-space audit erase path exists (S5)'
+
 smoke-coderewrite: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=coderewrite \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_CODEREWRITE_OK\nPRADYOS_CODEREWRITE_SUBMIT_OK\nPRADYOS_CODEREWRITE_SOVONLY_DENIED_OK\nPRADYOS_CODEREWRITE_RWONLY_DENIED_OK')" \
