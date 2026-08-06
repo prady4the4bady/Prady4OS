@@ -97,6 +97,66 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-27 SESSION — Group 1 CI-GREEN; Group 2 built, gates pending 20x
+
+**Tip `eecd7ec`. Repo clean. Nothing claimed shipped that CI has not confirmed.**
+
+#### Group 1 — COMPLETE except item 3
+| # | item | state |
+|---|---|---|
+| 1 | tracker contradictions + NSI 87 collision (DDR-840) | CI-green, run 31053809587 |
+| 2 | Docker reproducible build env | CI-green, run 31058035157 |
+| 3 | CMake/Makefile hybrid | **BLOCKED ON OPERATOR SIGN-OFF** — recommendation to skip is in BUILD_TRACKER |
+| 4 | VirtualBox runner (exit 77, never 0) | CI-green, same run |
+| 5 | x86_64 chipset matrix (incl. AMD Opteron_G5) | CI-green, `PASS smoke-chipset`, 4/4 variants |
+
+#### Group 2 — items 6/7/8 BUILT, three gates green locally, EXCLUDED pending 20x
+- NSI 86 `SYS_APPROVE_CODE_REWRITE` + `CAP_REWRITE` (1<<21). Both bits required;
+  **CAP_SOVEREIGN alone is refused**, which is the arm that stops the bit being
+  decoration.
+- NSI 93 `SYS_VERIFY_AUDIT` + a SHA-256 chain over the audit log.
+- Eight 3C action types APPENDED, with `aether_action_forces_pending()` as the
+  single force-PENDING predicate.
+
+**20x status when this was written: `smoke-coderewrite` 19/19 completed runs
+passed (run 20 in flight). `smoke-auditchain` and `smoke-auditchain-tamper` not
+yet started.** The three gates must reach 20/20 before being unexcluded.
+
+#### THE BUG THIS CYCLE FOUND — kernel heap overflow, now fixed
+`chain[32]` grew the audit entry 32 -> 64 bytes; `aether_audit_init` still
+allocated a hardcoded `pmm_alloc_pages(5)` = 128 KiB. 4096 entries need 256 KiB,
+so the log wrote **128 KiB past its allocation** every boot. Fixed by deriving
+the order from `sizeof` with `_Static_assert`s that fail the BUILD on drift.
+
+Two wrong hypotheses are recorded in the commit rather than hidden: a
+concurrency race (the lock was added, is justified on its own merits, and was
+NOT the fix) and ring arithmetic across the wrap (refuted by measurement).
+
+#### MEASURED THROUGHPUT — read before promising a date
+- gate run with a FORBIDDEN sentinel: **~2-3 min** (DDR-785 forbids early exit,
+  by design — a forbidden pattern must be absent for the WHOLE window)
+- 20x for one such gate: **~45-60 min**
+- one CI conclusion: **~25 min**
+- => roughly **1.5-2 h per gated feature**, and Groups 2-8 hold **41 items**
+
+That is ~80 h of gate/CI wall time alone, before any design or debugging. **It
+does not fit before Aug 31 at this cadence**, and no amount of batching changes
+it because the 20x rule and the single-lane CI rule are the binding constraints,
+not the coding.
+
+**Two levers exist, both need the operator's call:**
+1. Tune `TIMEOUT_S` per gate from measured time-to-sentinel (the CI-load brief
+   already asked for this: "gate completes in Xs across 20 measured runs,
+   timeout set to 2X"). Would roughly halve gate time.
+2. Calibrate the 20x rule by gate class — 20x for anything touching scheduling,
+   timing or shared state; a smaller stated N for purely deterministic gates.
+
+#### Still awaiting the operato
+- **Item 3** — sign-off to skip CMake.
+- **`ACTION_BROWSE_WEB`** — needs the cloud bridge (DDR-793), which the deferred
+  list says to flag rather than enable. Currently treated as deferred post-1.0,
+  logged, not silently dropped.
+
 ### 0.-26 SESSION — x86_64 v1.0.0 BACKLOG CONFIRMED (50 items, 9 groups)
 
 **This supersedes every prior work queue.** The ISO is NOT to be built o
