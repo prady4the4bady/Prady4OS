@@ -238,7 +238,7 @@ is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
 | 9 | Section 3D daemon features (#45-65) | ⬜ not started |
 | 10 | Section F #66-76 beyond item 7 | ⬜ not started |
 | 11 | Section G 12-agent roster | ⬜ not started |
-| 12 | J-01..J-06 retrospective audit | ⬜ not started |
+| 12 | J-01..J-06 retrospective audit | ✅ **all six verified — DDR-845**. J-01 pytest green in CI's `aether-layer` job (`-W error`); J-02 I-01..I-10 modules present and in the pytest tree; J-03 the kernel chain is pure C and never touches Python `hashlib` — but there are TWO audit chains and the naming invites confusion; J-04 Python S1-S14 and kernel S1-S8 collide in label only and must never merge; J-05 covered by the shipped `smoke-privacy-netfilter` gate; J-06 cloud bridge gated off pending R1/R3, which independently confirms the DDR-843 `ACTION_BROWSE_WEB` deferral. **No code written — correct for an audit** |
 | 13 | `smoke-invariants` S1-S8 | ✅ `PASS smoke-invariants (120s)`, run 31104672684 on `81a3eaf`; 20/20 local. Covers S1,S2,S4,S5,S6,S8. **S3/S7 deliberately NOT claimed** — they depend on unbuilt F#66-72, and a green arm for an unbuilt subsystem would convert "not implemented" into "verified". S5's no-erase-path half is asserted at build time by `ci-audit-noerase-check` |
 | 14 | ChaCha20-Poly1305 gate-wiring verification | ✅ **resolved by inspection**: `smoke-aead` exists and is CI-registered (shard 4, 90 s), testing RFC 8439 vectors directly. It is not merely exercised via `smoke-vault` — it is its own gate. No new gate needed |
 
@@ -325,7 +325,7 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 all 8**. 12 named agents (file/shell/research/ocr/subconscious/ai_scientist/
 healer/architect/verifier/tournament/orchestrator/vision) — **all ⬜**.
 
-### J-01…J-06 retro audit (TASK 15) — all ⬜
+### J-01…J-06 retro audit (TASK 15) — ✅ ALL SIX VERIFIED (DDR-845)
 
 ### Section B remaining (TASK 16)
 

@@ -358,7 +358,7 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | R1 sovereign-egress audit (DDR-800) | `kernel/syscall/sys_socket.c` + `user/sovegresstest.c` | ✅ |
 | F#68 kernel wire (DDR-795) | `kernel/aether/metric_page.c` + `aether/kernel/lockbox/metric_region.py` | ✅ |
 | **I-01…I-10** integration wiring | — | ✅ **COMPLETE** |
-| **J-01…J-06** Phase-4 retro audit | — | ⬜ not started |
+| **J-01…J-06** Phase-4 retro audit | — | ✅ **verified, DDR-845** (audit; no code) |
 
 Note: the spec's `ai-core/` is `aether/ai_core/` — hyphens are illegal in Python
 package names, so the literal path would be a syntax error on import.
