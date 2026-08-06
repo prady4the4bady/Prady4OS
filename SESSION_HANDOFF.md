@@ -97,6 +97,50 @@ console RX (IRQ4 ring buffer) and **full-register fork** now in the kernel.
 - `ls`/`ps` are stubs (need `SYS_GETDENTS` / a process-table syscall); RX line
   discipline/echo; pipes/redirection/quoting/job-control/scripting.
 
+### 0.-28 SESSION — B#3 narrowing evidence: `smoke-smpuser`, DDR-777 branch (B)
+
+**CI run 31104672684 on `81a3eaf`, shard 0, `smoke-smpuser`, gate 2 of 19.**
+Committed BEFORE any re-run, per the standing rule.
+
+`smoke-invariants` itself PASSED in the same run (`PASS smoke-invariants (120s)`),
+so this is not a regression from the invariant gate. It is the known B#3 family.
+
+#### What the serial shows — this is the discriminator DDR-777 asked fo
+
+```
+[smp] cpu 2 job OK
+[smp] cpu 3 job OK
+[smp] jobs done=3
+[smp] cross-wake waiting
+[smp] cross-wake OK
+[smp] sched cross-CPU OK
+[smp] ap preempt OK
+[smp] resched OK
+```
+
+Then `[smp] user on AP OK` never appears, and the gate fails.
+
+**DDR-777 defined three branches:**
+- (A) the timer stalls -> `g_ticks` stops, heartbeat stops
+- (B) scheduler starvation -> the system is alive, the poll never resumes
+- (C) guard/ordering -> the probe never enters
+
+**(C) is refuted:** the preceding SMP proofs all printed, so the AP path ran.
+**(A) is not supported here:** `cross-wake`, `ap preempt` and `resched` all
+completed, which requires the timer to have been advancing through that window.
+
+That leaves **(B) — scheduler starvation of the user-on-AP poll** as the branch
+this run supports. That is the first time the three-way discriminator has landed
+cleanly on one branch rather than being ambiguous.
+
+**Still NOT claimed:** no `op=write` line, so OPEN-10 and B#3 remain formally
+separate per the standing rule. This narrows B#3 itself, not the unification.
+
+#### Next measurement for whoever picks this up
+DDR-806 asked for `g_ticks` stamps at `main.c:1134` and `main.c:1311`. Branch (B)
+predicts both stamps present with a large gap; branch (A) predicts the second
+absent. That single measurement now distinguishes the surviving hypotheses.
+
 ### 0.-27 SESSION — Group 1 CI-GREEN; Group 2 built, gates pending 20x
 
 **Tip `eecd7ec`. Repo clean. Nothing claimed shipped that CI has not confirmed.**
