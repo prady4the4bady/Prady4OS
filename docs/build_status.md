@@ -2160,6 +2160,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Skill Self-Modification Guards | 🟢 COMPLETE | 6 | `aether/agents/skillopt/{validate,sleep,transfer}.py` (DDR-848). Validation runs **before** scoring, so a candidate that escalates capability never reaches a comparison a good score could carry it through: declared capabilities may only shrink (S1), refusal count may rise and may not fall, `## Invariants` must survive. Sleep consolidates offline on the **same** acceptance bar with a deterministic `sha256(salt:task_id)` split and a bounded 4096-entry journal. Transfer is a proposal, never an application — the recipient's own held-out evaluation decides. 36 tests in `aether/tests/test_skillopt_guards.py`; all five guards mutation-checked. DDR-850 adds the spec's **`CAP_SOVEREIGN`-always** approval gate (a missing approver is refused, not assumed authorised) and sleep's named `harvest→mine→replay→consolidate` stages, which **refuse to run while any agent is active**. |
 | TokenJuice / trajectory / cost | 🟢 COMPLETE | 6 | `aether/agents/budget/` (DDR-849 + DDR-850). **Context compression to ≤80%** (`compress.py`): pinned segments are never dropped and an unreachable target **raises** rather than returning a best-effort context, which at the call site is indistinguishable from a successful one. Cost records `latency_ms` alongside `token_count`. Budgets **refuse** rather than truncate (a silently shortened context is a wrong answer wearing a right answer's shape), with a 5% completion reserve ordinary work cannot reach, grants debited at grant time (S1), and two-phase reserve/commit. Cost: an **unknown model raises** — never priced at zero — integer micro-cents, rounding up. Trajectory: append-only JSONL with no update path, redacted before the write, tolerating a truncated tail but refusing mid-file corruption. 34 tests in `aether/tests/test_budget.py`; 10/10 mutations killed. |
 | Goals / subconscious / MOSS | 🟢 COMPLETE | 6 | `aether/agents/goals/` + `aether/agents/moss/` (DDR-851). `goals.md` refuses a goal with **no checkable success criterion** (an unfalsifiable goal makes every report against it unfalsifiable) and requires `CAP_SOVEREIGN` — it is the objective function; an agent cannot mark its own goal complete. Subconscious loop is periodic, goal-diffed, **idle-agents-only**, capped at a **minority (25%) share** of the 60 syscall/s limit, and **raises rather than truncating** a batch. MOSS: staged never in-place, **a regression suite that did not RUN is not a pass**, snapshot-before-promote enforced by the state machine, co-approval by **two different** principals. 36 tests; 11/11 mutations killed. |
+| Privacy routing / OCR / context | 🟢 COMPLETE | 6 | `aether/agents/routing/` (DDR-852). Ring-3 privacy is an **early readable refusal, not the enforcement** — the kernel netfilter hook (DDR-802, `AR_PRIVACY_BLOCKED`) remains the only thing that counts — and it **fails closed**: an unreadable privacy state blocks. An unresolved hostname is never classified local. Routing refuses rather than near-missing, and is deterministic across registration order. OCR **quarantines** anything under 0.80 confidence with mandatory provenance; quarantined records enter the context marked `[UNVERIFIED OCR]` at lowest priority so a guess cannot be laundered into authoritative context. 36 tests; 10/10 mutations killed. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
@@ -3181,4 +3182,35 @@ path that was never created is discovered at the moment it is needed, which is
 the moment it cannot be created.
 
 36 tests, eleven mutations, eleven kills. Section 3D is now 11 of 21.
+Locally verified, not CI-confirmed; outage `qcvjkzcs7j74` still open.
+
+
+## DDR-852 — the ring-3 privacy check is a convenience, and saying so is the decision
+
+The kernel already blocks non-local egress in privacy mode and gives it its own
+audit code (DDR-802, gate `smoke-privacy-netfilter`). This slice adds a ring-3
+refusal so an agent is told *why* by the router instead of meeting an opaque
+`-EPERM` three layers down.
+
+Naming what this layer is **not** is part of the design. A ring-3 check that
+looks like enforcement invites someone later to weaken the kernel one on the
+grounds that it is redundant. It is not redundant — it is the only one that
+counts, and this layer must never be trusted.
+
+It fails closed: `PrivacyState.UNKNOWN` blocks. Assuming "off" when the state
+cannot be read turns an unreadable config into an open egress path, and nothing
+in the logs would say so. And an unresolved hostname is **not** local, however
+local it reads — resolution can change between the check and the connection, so
+treating a name as local makes the classification depend on a DNS answer the
+function never saw.
+
+**OCR is lossy in a way that reads as authoritative.** A misrecognised digit
+does not arrive flagged; it arrives as a number, is stored as a fact, and is
+retrieved later with the same confidence as something the operator typed.
+Anything under 0.80 is quarantined — marked and retrievable, neither discarded
+nor silently promoted — and a quarantined record enters the context as
+`[UNVERIFIED OCR]` at lowest priority, because passing it in clean would launder
+the guess into an authoritative-looking line.
+
+36 tests, ten mutations, ten kills. Section 3D is now 15 of 21.
 Locally verified, not CI-confirmed; outage `qcvjkzcs7j74` still open.

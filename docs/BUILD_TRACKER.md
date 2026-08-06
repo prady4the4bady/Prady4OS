@@ -308,7 +308,7 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 `SCAN_ENVIRONMENT` · `QUERY_SCENE` · `REWRITE_AGENT_CODE` ·
 `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` · `EVOLVE_GENOME`
 
-### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 11 of 21 done
+### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 15 of 21 done
 
 | # | item | status |
 |---|---|---|
@@ -325,8 +325,11 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 | 10 (#54) | subconscious loop — period, goal-diff, ≤25% of 60 syscall/s, idle-only | ✅ DDR-851 |
 | 11 (#55) | MOSS pipeline — staging, regression gate, snapshot rollback, co-approval | ✅ DDR-851 |
 
-12 OCR→memory ·
-13 multi-modal context · 14 privacy mode (ring-3) · 15 model routing ·
+| 12 (#56) | OCR→memory — confidence quarantine, mandatory provenance | ✅ DDR-852 |
+| 13 (#57) | multi-modal context builder | ✅ DDR-852 |
+| 14 (#58) | privacy mode (ring-3) — fails closed; kernel remains the enforcement | ✅ DDR-852 |
+| 15 (#59) | model routing — privacy-gated, deterministic, budget-aware | ✅ DDR-852 |
+
 16 hypothesis tree · 17 genome.md · 18 vector knowledge graph ·
 19 dead-end registry · 20 population tournament · 21 run visualiser — all ⬜
 
