@@ -232,9 +232,9 @@ is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
 
 | # | Item | Status |
 |---|---|---|
-| 6 | NSI 86 `SYS_APPROVE_CODE_REWRITE` + `CAP_REWRITE` (1<<21) | ⏳ 20/20 local, awaiting CI |
-| 7 | Audit hash chain + NSI 93 `SYS_VERIFY_AUDIT` | ⏳ 20/20 local (both arms), awaiting CI |
-| 8 | Section 3C action types | ⏳ **8 of 14 built**; 6 blocked, see below |
+| 6 | NSI 86 `SYS_APPROVE_CODE_REWRITE` + `CAP_REWRITE` (1<<21) | ✅ `PASS smoke-coderewrite (120s)`, run 31094358972 on `93b51ea` |
+| 7 | Audit hash chain + NSI 93 `SYS_VERIFY_AUDIT` | ✅ `PASS smoke-auditchain (120s)` + `PASS smoke-auditchain-tamper (120s)`, run 31094358972 |
+| 8 | Section 3C action types | ✅ **8 of 14** CI-green in the same run; 6 blocked with reasons below, 1 of which is an open operator decision |
 | 9 | Section 3D daemon features (#45-65) | ⬜ not started |
 | 10 | Section F #66-76 beyond item 7 | ⬜ not started |
 | 11 | Section G 12-agent roster | ⬜ not started |
@@ -268,8 +268,8 @@ restating numbers in two places is what produced the 87 collision it records.
 | `SYS_CHECKPOINT_AGENT` / `SYS_RESUME_AGENT` | 84/85 | ✅ | `PASS smoke-checkpoint (120s)`, run 31015668039 on `35bab14` (DDR-837) |
 | `spawn_depth` cap in TCB | — | ✅ | `PASS smoke-spawndepth (120s)`, run 31028810861 on `83a761a` (DDR-838) |
 | DAG action queue (`parent_action_id`) | 92 | ✅ | `PASS smoke-actiondag (120s)`, run 31043474501 on `362cb36` (DDR-839) |
-| `SYS_APPROVE_CODE_REWRITE` | 86 | ⏳ | DDR-842. `CAP_REWRITE` + `CAP_SOVEREIGN`, neither alone. `smoke-coderewrite` 20/20 local, unexcluded, shard 0. Awaiting CI |
-| `SYS_VERIFY_AUDIT` (chain verify, F#76) | **93** | ⏳ | DDR-842. Renamed from `SYS_READ_AUDIT`: that name is **already NSI 37**, shipped, and three probes parse its struct — widening it would have overflowed their buffers. 93 verifies, never returns records. `smoke-auditchain` + `smoke-auditchain-tamper` 20/20 local. Awaiting CI |
+| `SYS_APPROVE_CODE_REWRITE` | 86 | ✅ | DDR-842. `CAP_REWRITE` + `CAP_SOVEREIGN`, neither alone. `PASS smoke-coderewrite (120s)`, run 31094358972; 20/20 local |
+| `SYS_VERIFY_AUDIT` (chain verify, F#76) | **93** | ✅ | DDR-842. Renamed from `SYS_READ_AUDIT`: that name is **already NSI 37**, shipped, and three probes parse its struct — widening it would have overflowed their buffers. 93 verifies, never returns records. `PASS smoke-auditchain` + `PASS smoke-auditchain-tamper` (120s each), run 31094358972; 20/20 local |
 
 ### Section 3B — capability bits (TASK 10)
 

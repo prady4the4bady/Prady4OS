@@ -96,11 +96,15 @@ All entries below are **shipped**.
   lineages, so `init` -> `prism` -> a command are all depth 0 and unaffected
   (`smoke-shell` 5/5 locally and `PASS smoke-shell (60s)` in the same CI run).
   `smoke-spawndepth` 20/20 locally, then CI-green.
-- **Code-rewrite approval** (DDR-842, Section E) — `SYS_APPROVE_CODE_REWRITE` (86)
+- **Code-rewrite approval** (DDR-842, Section E) — ✅ SHIPPED, CI-confirmed
+  (`PASS smoke-coderewrite (120s)`, run 31094358972 on `93b51ea`).
+  `SYS_APPROVE_CODE_REWRITE` (86)
   requires `CAP_REWRITE` **and** `CAP_SOVEREIGN`. Sovereignty alone is refused, so
   the bit is not decoration; and only `ACTION_REWRITE_AGENT_CODE` may be approved,
-  so the call cannot become a general approval bypass. 20/20 local, awaiting CI.
-- **Tamper-evident audit** (DDR-842, S5) — each entry carries
+  so the call cannot become a general approval bypass. 20/20 local, then CI-green.
+- **Tamper-evident audit** (DDR-842, S5) — ✅ SHIPPED, CI-confirmed
+  (`PASS smoke-auditchain` + `PASS smoke-auditchain-tamper`, run 31094358972).
+  Each entry carries
   `SHA-256(prev || fields)`; `SYS_VERIFY_AUDIT` (93) recomputes the chain and
   reports the INDEX of the first mismatch. Append-only removed the user-space
   write path and said nothing about the bytes on the page; only a recomputable
@@ -109,7 +113,7 @@ All entries below are **shipped**.
   in the chain of custody, which is why `AETHER_AUDIT_WRAP` is emitted. The
   durable ledger that survives wrap is F#76 and is not claimed here.
   Building this found a live kernel heap overflow: the ring was allocated 128 KiB
-  for a 256 KiB structure. 20/20 local on both arms, awaiting CI.
+  for a 256 KiB structure. 20/20 local on both arms, then CI-green.
 - **Agent checkpoint / resume** (DDR-837, Section E) — ✅ SHIPPED, CI-confirmed
   (`PASS smoke-checkpoint (120s)`, run 31015668039 on `35bab14`). `SYS_CHECKPOINT_AGENT` (84)
   / `SYS_RESUME_AGENT` (85), both CAP_SOVEREIGN. The operator freezes and thaws a
