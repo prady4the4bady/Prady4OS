@@ -2158,6 +2158,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Named Agents (KRYOS…SOLIN) | 🟡 IN PROGRESS | 6f/7 | The 8 named agents render as compositor panel cards with active/inactive state tied to AETHER's 8-slot roster (DDR-707, `SYS_AGENT_ROSTER`); the daemon lights KRYOS. Gate `smoke-agents`. Each of the 8 now has a validated `aether/agents/roster/<name>/skill.md` defining role, capabilities and refusals (DDR-846), mapped onto Section G's 8 highest-priority roles; 5 are marked *not yet spawnable* because the capabilities they need (CAP_EXEC/CAP_OCR/CAP_SCENE/CAP_NET_BROWSE) are declared in `cap.h` but wired to nothing. Validated by `aether/tests/test_agent_skills.py` in the pytest job. Kernel-side per-persona dispatch is still future. |
 | SkillOpt Training Loop | 🟢 COMPLETE | 6 | `aether/agents/skillopt/` (host-side Python, no kernel surface): rollout→reflect→aggregate→select→update→evaluate. A candidate skill replaces the incumbent **only on a strictly positive held-out improvement** — ties and regressions are rejected, held-out sets under 4 rollouts are refused outright, and train/held-out overlap raises rather than silently self-scoring (DDR-847). 16 tests in `aether/tests/test_skillopt.py` (pytest job); mutation-checked — `>` → `>=` fails exactly the tie tests. |
 | Skill Self-Modification Guards | 🟢 COMPLETE | 6 | `aether/agents/skillopt/{validate,sleep,transfer}.py` (DDR-848). Validation runs **before** scoring, so a candidate that escalates capability never reaches a comparison a good score could carry it through: declared capabilities may only shrink (S1), refusal count may rise and may not fall, `## Invariants` must survive. Sleep consolidates offline on the **same** acceptance bar with a deterministic `sha256(salt:task_id)` split and a bounded 4096-entry journal. Transfer is a proposal, never an application — the recipient's own held-out evaluation decides. 36 tests in `aether/tests/test_skillopt_guards.py`; all five guards mutation-checked. |
+| TokenJuice / trajectory / cost | 🟢 COMPLETE | 6 | `aether/agents/budget/` (DDR-849). Budgets **refuse** rather than truncate (a silently shortened context is a wrong answer wearing a right answer's shape), with a 5% completion reserve ordinary work cannot reach, grants debited at grant time (S1), and two-phase reserve/commit. Cost: an **unknown model raises** — never priced at zero — integer micro-cents, rounding up. Trajectory: append-only JSONL with no update path, redacted before the write, tolerating a truncated tail but refusing mid-file corruption. 34 tests in `aether/tests/test_budget.py`; 10/10 mutations killed. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
@@ -3028,3 +3029,69 @@ download info. Error: Service Unavailable`. **No code fix applies to them.**
 So DDR-847 and DDR-848 are *locally verified and not yet CI-confirmed*, and the
 distinction is recorded here rather than glossed. Group 9 stays gated on real
 CI greens for both.
+
+
+## DDR-849 — a ceiling, a record, an attribution, and two bugs I wrote on the way
+
+Three things an agent that spends resources needs, each with an obvious
+implementation that fails *quietly* -- the failure looks like success and the
+number the operator reads stays plausible.
+
+**The budget refuses; it never degrades.** A soft budget is worse than no
+budget: the run keeps going, quietly does less per step, and "succeeds" having
+answered from a truncated context. The only evidence is that the output got
+vaguer. A refusal is a fact an operator can act on.
+
+**An unknown model raises; it is never priced at zero.** `rates.get(model, 0.0)`
+keeps the code short and nothing ever crashes, and it makes the cost of every
+model nobody has priced yet invisible. Zero is a legitimate price for a local
+model -- the point is that it must be **declared**, so "free" and "unknown" stay
+distinguishable. That is instance **13**.
+
+**The trajectory is append-only and redacted on the way IN.** Redacting at read
+time means the secret is on disk and every future reader is one code path from
+printing it. JSONL rather than one JSON array because a run killed mid-write
+must still be readable: a truncated array is not valid JSON at all and takes the
+whole run with it. The reader tolerates a truncated tail and refuses mid-file
+corruption -- a bad line with good lines after it is not a truncated write.
+
+### The two bugs, recorded because the second one is the interesting one
+
+The first draft tracked one `_outstanding` counter for both pools, so a
+completion reservation was debited against the fenced reserve **and** against
+ordinary availability. Every individual operation looked correct. Caught by
+writing the test that says completion work must not consume ordinary budget.
+
+The second was in the check meant to catch the first. `check_invariant()`
+asserted
+
+    total == spent + outstanding + granted + available + reserve_remaining
+
+which is a **tautology**: `available` is *derived* by subtracting the others
+from `total`, so the assertion could never fail. It read as a strong invariant
+and was decorative. I only found it because a test that deliberately corrupted
+the books still passed.
+
+That is instance **14**, and it is the defect appearing inside code written to
+guard against the defect. The identity is now documented as something
+deliberately *not* asserted, and the check tests the independently-tracked
+quantities -- the counters against the open reservations, and non-negativity of
+each pool -- which are the parts that can actually be violated.
+
+### Ten mutations, ten kills
+
+| mutation | tests killed |
+|---|---|
+| unknown model priced at zero | 2 |
+| pricing rounds down | 1 |
+| ledger records tokens before pricing | 3 |
+| budget truncates instead of refusing | 3 |
+| completion reservation charged to ordinary pool | 3 |
+| grant debited lazily | 2 |
+| failed commit consumes the reservation | 1 |
+| trajectory redaction disabled | 4 |
+| mid-file corruption tolerated | 1 |
+| redaction depth bound removed | 1 |
+
+34/34 green after restore. Still **not CI-confirmed** -- GitHub Actions remains
+in the outage described in the DDR-848 section above.

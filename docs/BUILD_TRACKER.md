@@ -120,7 +120,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
-### The recurring structural defect — TWELVE instances
+### The recurring structural defect — FOURTEEN instances
 
 One bug in many costumes: **a check that discards or absorbs invalid input
 instead of rejecting it, so drift is silent and looks like success.**
@@ -140,6 +140,9 @@ instead of rejecting it, so drift is silent and looks like success.**
 | 10 | kernel headers/sources not prerequisites | same class as #2/#6, third recurrence | DDR-833, DDR-835 — recursive wildcards |
 | 11 | **SkillOpt accepting a TIE** | **each tie changes the skill with no evidence it helped; every step "passes" and the skill drifts somewhere nobody chose** | DDR-847 — `>` not `>=`, with its own rejection branch |
 | 12 | **a skill revision thinning its own refusals** | **every refusal is a task the agent declines and scores zero on, so removing one RAISES the score — the optimiser is rewarded for it** | DDR-848 — refusal count may rise, may not fall |
+
+| 13 | `rates.get(model, 0.0)` for cost | **an unpriced model charged as free.** The total stays plausible and the report looks complete, so the number used to decide "is this agent worth running" is wrong in the direction that says keep going | DDR-849 — `UnknownModel` raised; zero must be *declared* |
+| 14 | **`check_invariant()` asserting a TAUTOLOGY** | `available` is derived by subtraction, so the accounting identity over it **could never fail**. It read as a strong invariant and was decorative — the defect appearing inside code written to guard against the defect | DDR-849 — assert the independently-tracked counters instead |
 
 **Rule earned: when a check discards input rather than rejecting it, the discard
 must be loud.** Instances 11 and 12 extend it — the invalid case an optimiser
@@ -302,7 +305,7 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 `SCAN_ENVIRONMENT` · `QUERY_SCENE` · `REWRITE_AGENT_CODE` ·
 `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` · `EVOLVE_GENOME`
 
-### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 5 of 21 done
+### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 8 of 21 done
 
 | # | item | status |
 |---|---|---|
@@ -311,9 +314,11 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 | 3 (#47) | SkillOpt-Sleep | ✅ DDR-848 |
 | 4 (#48) | skill-update validation | ✅ DDR-848 |
 | 5 (#49) | multi-agent transfer | ✅ DDR-848 |
+| 6 (#50) | TokenJuice — hard token ceiling | ✅ DDR-849 |
+| 7 (#51) | JSONL trajectory log | ✅ DDR-849 |
+| 8 (#52) | cost accounting | ✅ DDR-849 |
 
-6 TokenJuice · 7 JSONL trajectory · 8 cost accounting · 9 goals.md ·
-10 subconscious loop · 11 MOSS pipeline · 12 OCR→memory ·
+9 goals.md · 10 subconscious loop · 11 MOSS pipeline · 12 OCR→memory ·
 13 multi-modal context · 14 privacy mode (ring-3) · 15 model routing ·
 16 hypothesis tree · 17 genome.md · 18 vector knowledge graph ·
 19 dead-end registry · 20 population tournament · 21 run visualiser — all ⬜
