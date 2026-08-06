@@ -120,7 +120,7 @@ SHA-512 (code + gate) were mis-recorded as absent.
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
 
-### The recurring structural defect — FOURTEEN instances
+### The recurring structural defect — FIFTEEN instances
 
 One bug in many costumes: **a check that discards or absorbs invalid input
 instead of rejecting it, so drift is silent and looks like success.**
@@ -144,8 +144,11 @@ instead of rejecting it, so drift is silent and looks like success.**
 | 13 | `rates.get(model, 0.0)` for cost | **an unpriced model charged as free.** The total stays plausible and the report looks complete, so the number used to decide "is this agent worth running" is wrong in the direction that says keep going | DDR-849 — `UnknownModel` raised; zero must be *declared* |
 | 14 | **`check_invariant()` asserting a TAUTOLOGY** | `available` is derived by subtraction, so the accounting identity over it **could never fail**. It read as a strong invariant and was decorative — the defect appearing inside code written to guard against the defect | DDR-849 — assert the independently-tracked counters instead |
 
+| 15 | **building from the tracker LABEL instead of the spec text** | four items (#47/#48/#50/#52) shipped satisfying their one-line titles while missing what §3D actually specified — and it **passes review**, because the label is what a reviewer checks against | DDR-850 — corrected against `AETHER_MASTER_FEATURES.md` §3D |
+
 **Rule earned: when a check discards input rather than rejecting it, the discard
-must be loud.** Instances 11 and 12 extend it — the invalid case an optimiser
+must be loud.** And: **a tracker line is a label FOR a requirement, not the
+requirement — build from the spec text.** Instances 11 and 12 extend it — the invalid case an optimiser
 will find is the one that scores well, so it needs an explicit branch and its
 own rejection message, never a fall-through comparison.
 
@@ -311,12 +314,12 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 |---|---|---|
 | 1 (#45) | skill.md — 8 roster files, validated | ✅ DDR-846 |
 | 2 (#46) | SkillOpt loop | ✅ DDR-847 |
-| 3 (#47) | SkillOpt-Sleep | ✅ DDR-848 |
-| 4 (#48) | skill-update validation | ✅ DDR-848 |
+| 3 (#47) | SkillOpt-Sleep — harvest→mine→replay→consolidate, pauses agents | ✅ DDR-848 + **DDR-850** |
+| 4 (#48) | skill-update validation — `CAP_SOVEREIGN` always | ✅ DDR-848 + **DDR-850** |
 | 5 (#49) | multi-agent transfer | ✅ DDR-848 |
-| 6 (#50) | TokenJuice — hard token ceiling | ✅ DDR-849 |
+| 6 (#50) | TokenJuice — context compression ≤80% + hard token ceiling | ✅ DDR-849 + **DDR-850** |
 | 7 (#51) | JSONL trajectory log | ✅ DDR-849 |
-| 8 (#52) | cost accounting | ✅ DDR-849 |
+| 8 (#52) | cost accounting — `token_count` + `latency_ms` | ✅ DDR-849 + **DDR-850** |
 
 9 goals.md · 10 subconscious loop · 11 MOSS pipeline · 12 OCR→memory ·
 13 multi-modal context · 14 privacy mode (ring-3) · 15 model routing ·

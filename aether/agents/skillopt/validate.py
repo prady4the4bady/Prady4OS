@@ -38,7 +38,13 @@ __all__ = [
     "MIN_SKILL_TOKENS",
     "MIN_REFUSALS",
     "UNWIRED_CAPS",
+    "CAP_SOVEREIGN",
 ]
+
+# The capability an approver must hold for ANY skill update. Section 3D #48
+# says "CAP_SOVEREIGN always", and always means without exception for
+# well-formed candidates, small candidates, or candidates that only add.
+CAP_SOVEREIGN = "CAP_SOVEREIGN"
 
 # Section 3D #45 budget, same bound test_agent_skills.py enforces on the
 # committed roster. A revision that grows past it is no longer the kind of
@@ -118,7 +124,10 @@ def count_refusals(body: str) -> int:
 
 
 def validate_skill_update(
-    incumbent: str, candidate: str, granted: frozenset[str] | set[str] | None = None
+    incumbent: str,
+    candidate: str,
+    granted: frozenset[str] | set[str] | None = None,
+    approver_caps: frozenset[str] | set[str] | None = None,
 ) -> ValidationReport:
     """Gate a proposed skill body. Raises `SkillValidationError` if unfit.
 
@@ -127,9 +136,29 @@ def validate_skill_update(
     (`validate_skill_update(old, new)`) mean "may not gain anything it did not
     already have" — the safe reading, so a caller that forgets the argument
     gets the strict behaviour rather than the permissive one.
+
+    `approver_caps` is the capability set of the principal AUTHORISING the
+    update. Section 3D #48 requires `CAP_SOVEREIGN` **always**: a skill file is
+    the document that says what an agent may do, so changing it is a sovereign
+    act even when every structural check below passes. Structural validity and
+    authority are different questions, and this function answers both because
+    a caller who has one and not the other would otherwise apply the update.
+
+    `approver_caps=None` means "no approver was supplied" and is REFUSED. The
+    permissive reading of a missing argument — assume authorised — is the one
+    that turns a forgotten parameter into an ungated self-rewrite.
     """
     if not candidate.strip():
         raise SkillValidationError("candidate skill body is empty")
+
+    caps = frozenset(approver_caps) if approver_caps is not None else frozenset()
+    if CAP_SOVEREIGN not in caps:
+        raise SkillValidationError(
+            "skill updates require CAP_SOVEREIGN approval (Section 3D #48). "
+            f"Approver holds {sorted(caps) or 'nothing'}. A skill file states "
+            "what the agent may do, so revising it is a sovereign act however "
+            "well-formed the revision is"
+        )
 
     inc_caps = parse_capabilities(incumbent)
     granted_set = frozenset(granted) if granted is not None else inc_caps

@@ -63,6 +63,14 @@ class _AgentTotals:
     output_tokens: int = 0
     microcents: int = 0
     calls: int = 0
+    # Section 3D #52 pairs token_count with latency_ms in the audit entry.
+    # Both are needed to answer the only question that matters about an agent:
+    # cost alone cannot distinguish "cheap and useless" from "cheap and fast".
+    latency_ms: int = 0
+
+    @property
+    def mean_latency_ms(self) -> float:
+        return self.latency_ms / self.calls if self.calls else 0.0
 
 
 class CostLedger:
@@ -101,7 +109,12 @@ class CostLedger:
         )
 
     def record(
-        self, agent: str, model: str, input_tokens: int, output_tokens: int
+        self,
+        agent: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        latency_ms: int = 0,
     ) -> int:
         """Attribute one call. Returns its cost in micro-cents.
 
@@ -111,6 +124,8 @@ class CostLedger:
         """
         if not agent.strip():
             raise ValueError("agent must be named — unattributed spend is not spend")
+        if latency_ms < 0:
+            raise ValueError("latency_ms cannot be negative")
         cost = self.price(model, input_tokens, output_tokens)
 
         for table, key in ((self._by_agent, agent), (self._by_model, model)):
@@ -118,6 +133,7 @@ class CostLedger:
             totals.input_tokens += input_tokens
             totals.output_tokens += output_tokens
             totals.microcents += cost
+            totals.latency_ms += latency_ms
             totals.calls += 1
         return cost
 

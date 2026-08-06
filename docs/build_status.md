@@ -2157,8 +2157,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Approval Queue System | 🟢 COMPLETE | 6 | `kernel/aether/aether_queue.c`: 256-entry action queue + 4096-entry append-only audit ring (PMM-pool), 60 s TTL, `-EAGAIN` on overflow. Gates `smoke-aether-queue/-sec`. UI panel = compositor slice. |
 | Named Agents (KRYOS…SOLIN) | 🟡 IN PROGRESS | 6f/7 | The 8 named agents render as compositor panel cards with active/inactive state tied to AETHER's 8-slot roster (DDR-707, `SYS_AGENT_ROSTER`); the daemon lights KRYOS. Gate `smoke-agents`. Each of the 8 now has a validated `aether/agents/roster/<name>/skill.md` defining role, capabilities and refusals (DDR-846), mapped onto Section G's 8 highest-priority roles; 5 are marked *not yet spawnable* because the capabilities they need (CAP_EXEC/CAP_OCR/CAP_SCENE/CAP_NET_BROWSE) are declared in `cap.h` but wired to nothing. Validated by `aether/tests/test_agent_skills.py` in the pytest job. Kernel-side per-persona dispatch is still future. |
 | SkillOpt Training Loop | 🟢 COMPLETE | 6 | `aether/agents/skillopt/` (host-side Python, no kernel surface): rollout→reflect→aggregate→select→update→evaluate. A candidate skill replaces the incumbent **only on a strictly positive held-out improvement** — ties and regressions are rejected, held-out sets under 4 rollouts are refused outright, and train/held-out overlap raises rather than silently self-scoring (DDR-847). 16 tests in `aether/tests/test_skillopt.py` (pytest job); mutation-checked — `>` → `>=` fails exactly the tie tests. |
-| Skill Self-Modification Guards | 🟢 COMPLETE | 6 | `aether/agents/skillopt/{validate,sleep,transfer}.py` (DDR-848). Validation runs **before** scoring, so a candidate that escalates capability never reaches a comparison a good score could carry it through: declared capabilities may only shrink (S1), refusal count may rise and may not fall, `## Invariants` must survive. Sleep consolidates offline on the **same** acceptance bar with a deterministic `sha256(salt:task_id)` split and a bounded 4096-entry journal. Transfer is a proposal, never an application — the recipient's own held-out evaluation decides. 36 tests in `aether/tests/test_skillopt_guards.py`; all five guards mutation-checked. |
-| TokenJuice / trajectory / cost | 🟢 COMPLETE | 6 | `aether/agents/budget/` (DDR-849). Budgets **refuse** rather than truncate (a silently shortened context is a wrong answer wearing a right answer's shape), with a 5% completion reserve ordinary work cannot reach, grants debited at grant time (S1), and two-phase reserve/commit. Cost: an **unknown model raises** — never priced at zero — integer micro-cents, rounding up. Trajectory: append-only JSONL with no update path, redacted before the write, tolerating a truncated tail but refusing mid-file corruption. 34 tests in `aether/tests/test_budget.py`; 10/10 mutations killed. |
+| Skill Self-Modification Guards | 🟢 COMPLETE | 6 | `aether/agents/skillopt/{validate,sleep,transfer}.py` (DDR-848). Validation runs **before** scoring, so a candidate that escalates capability never reaches a comparison a good score could carry it through: declared capabilities may only shrink (S1), refusal count may rise and may not fall, `## Invariants` must survive. Sleep consolidates offline on the **same** acceptance bar with a deterministic `sha256(salt:task_id)` split and a bounded 4096-entry journal. Transfer is a proposal, never an application — the recipient's own held-out evaluation decides. 36 tests in `aether/tests/test_skillopt_guards.py`; all five guards mutation-checked. DDR-850 adds the spec's **`CAP_SOVEREIGN`-always** approval gate (a missing approver is refused, not assumed authorised) and sleep's named `harvest→mine→replay→consolidate` stages, which **refuse to run while any agent is active**. |
+| TokenJuice / trajectory / cost | 🟢 COMPLETE | 6 | `aether/agents/budget/` (DDR-849 + DDR-850). **Context compression to ≤80%** (`compress.py`): pinned segments are never dropped and an unreachable target **raises** rather than returning a best-effort context, which at the call site is indistinguishable from a successful one. Cost records `latency_ms` alongside `token_count`. Budgets **refuse** rather than truncate (a silently shortened context is a wrong answer wearing a right answer's shape), with a 5% completion reserve ordinary work cannot reach, grants debited at grant time (S1), and two-phase reserve/commit. Cost: an **unknown model raises** — never priced at zero — integer micro-cents, rounding up. Trajectory: append-only JSONL with no update path, redacted before the write, tolerating a truncated tail but refusing mid-file corruption. 34 tests in `aether/tests/test_budget.py`; 10/10 mutations killed. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
@@ -3095,3 +3095,58 @@ each pool -- which are the parts that can actually be violated.
 
 34/34 green after restore. Still **not CI-confirmed** -- GitHub Actions remains
 in the outage described in the DDR-848 section above.
+
+
+## DDR-850 — I built four items from the tracker label instead of the spec text
+
+`docs/BUILD_TRACKER.md` carries one-line titles for the Section 3D items. They
+are abbreviations of the real requirement in `docs/AETHER_MASTER_FEATURES.md`
+§3D, and I built from them. Re-reading the source paragraph found four gaps:
+#50 is "TokenJuice **context compression** (≤80% tokens)" and I built a token
+budget; #48 is a validation gate "**`CAP_SOVEREIGN` always**" and I built only
+the structural checks; #47 is "**harvest→mine→replay→consolidate**; **pauses
+active agents**" and I built a single `consolidate()`; #52 pairs `token_count`
+with **`latency_ms`** and I recorded only tokens and cost.
+
+That is instance **15**, and its shape is worth naming because it is not a
+coding error: **a tracker line is a label FOR a requirement, not the
+requirement.** Building from the label produces something that satisfies the
+label and can still miss the thing — and it passes review, because the label is
+what a reviewer checks against.
+
+The DDR-849 budget is **kept**, not replaced. Refuse-don't-degrade stands on its
+own merits; it simply was not item #50.
+
+### What the corrections actually enforce
+
+**"Always" means always.** A structurally flawless candidate is still refused
+without `CAP_SOVEREIGN` — a skill file states what an agent may do, so revising
+it is a sovereign act however well-formed the revision is. And a missing
+approver is **refused**, not read as authorised: the permissive reading of a
+forgotten argument is the one that turns a dropped parameter into an ungated
+self-rewrite.
+
+**Sleep refuses to run over live work.** Consolidating while an agent is
+mid-task lands the revision between two steps of one action, so neither the old
+skill nor the new one describes what actually ran, and the trajectory cannot be
+read back as a coherent run. Activity is tracked explicitly, because "the caller
+will have stopped them" is true right up until it is not.
+
+**Compression refuses rather than best-efforts.** Pinned segments — system
+prompt, skill body, current task, safety invariants — are the ones whose absence
+changes what the agent *is* rather than what it knows, and they are never
+dropped. If the 80% target cannot be met without dropping one, `compress()`
+raises: a best-effort context is indistinguishable from a successful one at the
+call site, and the agent proceeds believing it has information it does not have.
+
+### Verification
+
+108 tests across four suites (16 + 36 + 34 + 22), all green. Seven mutations,
+seven kills: sovereign gate removed (3), missing approver treated as authorised
+(2), sleep no longer refuses over active agents (1), pinned segments evictable
+(3), impossible target returns best-effort (1), eviction ignores priority (1),
+latency not accumulated (2).
+
+Committed **without pushing**: GitHub Actions remains in outage `qcvjkzcs7j74`,
+and the operator's instruction is to hold local until it clears, then run CI
+across the whole batch at once.

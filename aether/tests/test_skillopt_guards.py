@@ -22,8 +22,19 @@ from aether.agents.skillopt.validate import (
     SkillValidationError,
     count_refusals,
     parse_capabilities,
-    validate_skill_update,
 )
+from aether.agents.skillopt.validate import validate_skill_update as _validate_raw
+
+# DDR-850 added the "CAP_SOVEREIGN always" gate (3D #48). Every test in THIS
+# file is about structural validity, so they supply a sovereign approver and
+# vary the candidate. The gate itself is tested in test_spec_corrections.py,
+# where the approver is what varies and the candidate is held flawless — the
+# two questions are separate and are tested separately.
+SOVEREIGN = frozenset({"CAP_SOVEREIGN"})
+
+
+def validate_skill_update(incumbent, candidate, granted=None, approver_caps=SOVEREIGN):
+    return _validate_raw(incumbent, candidate, granted, approver_caps)
 
 # A minimal but STRUCTURALLY REAL skill body: same fields and sections the
 # committed roster files carry, so the validator is exercised against the shape
@@ -243,7 +254,7 @@ def test_consolidate_refuses_when_there_is_too_little_to_learn_from() -> None:
     s = SkillOptSleep(BASE, _scorer_prefers_learned)
     for r in _rollouts(MIN_TRAIN_ROLLOUTS - 1):
         s.record(r)
-    res = s.consolidate()
+    res = s.consolidate(approver_caps=SOVEREIGN)
     assert not res.applied
     assert s.incumbent == BASE
 
@@ -252,7 +263,7 @@ def test_consolidate_applies_on_a_strictly_positive_improvement() -> None:
     s = SkillOptSleep(BASE, _scorer_prefers_learned)
     for r in _rollouts(40):
         s.record(r)
-    res = s.consolidate()
+    res = s.consolidate(approver_caps=SOVEREIGN)
     assert res.applied, res.reason
     assert "## Learned" in s.incumbent
     assert res.train_n >= MIN_TRAIN_ROLLOUTS
@@ -263,7 +274,7 @@ def test_sleep_uses_the_same_bar_a_tie_still_loses() -> None:
     s = SkillOptSleep(BASE, lambda _b, _r: 0.7)
     for r in _rollouts(40):
         s.record(r)
-    res = s.consolidate()
+    res = s.consolidate(approver_caps=SOVEREIGN)
     assert not res.applied
     assert "tie" in res.reason.lower()
     assert s.incumbent == BASE
@@ -281,7 +292,7 @@ def test_consolidate_runs_validation_before_scoring() -> None:
     s._granted = frozenset()
     for r in _rollouts(40):
         s.record(r)
-    res = s.consolidate()
+    res = s.consolidate(approver_caps=SOVEREIGN)
     assert not res.applied
     assert "validation" in res.reason
     assert s.incumbent == BASE

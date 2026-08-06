@@ -107,6 +107,33 @@ class SkillOptSleep:
         self._capacity = capacity
         self._journal: list[Rollout] = []
         self.dropped = 0
+        # Section 3D #47: sleep PAUSES ACTIVE AGENTS. Tracked explicitly rather
+        # than assumed, because "the caller will have stopped them" is exactly
+        # the assumption that is true right up until it is not.
+        self._active: set[str] = set()
+        self.paused = False
+
+    # -- agent activity, so sleep can refuse to run over live work ---------
+    def mark_active(self, agent: str) -> None:
+        self._active.add(agent)
+
+    def mark_idle(self, agent: str) -> None:
+        self._active.discard(agent)
+
+    @property
+    def active_agents(self) -> frozenset[str]:
+        return frozenset(self._active)
+
+    def pause_agents(self) -> frozenset[str]:
+        """Quiesce before consolidating. Returns who was paused."""
+        paused = frozenset(self._active)
+        self._active.clear()
+        self.paused = True
+        return paused
+
+    def resume_agents(self, agents: frozenset[str] | set[str]) -> None:
+        self._active |= set(agents)
+        self.paused = False
 
     @property
     def incumbent(self) -> str:
@@ -126,9 +153,45 @@ class SkillOptSleep:
             self._journal.pop(0)
             self.dropped += 1
 
-    def consolidate(self, salt: str = "", k: int = 3) -> SleepResult:
-        """One bounded pass. The incumbent changes only on a clean acceptance."""
-        train, held = heldout_split(self._journal, salt)
+    # -- harvest -> mine -> replay -> consolidate --------------------------
+    def harvest(self, salt: str = "") -> tuple[list[Rollout], list[Rollout]]:
+        """Stage 1. Gather the journal and split it train/held-out."""
+        return heldout_split(self._journal, salt)
+
+    @staticmethod
+    def mine(train: Sequence[Rollout], k: int = 3):
+        """Stage 2. Turn rollouts into the k heaviest lessons."""
+        return SkillOptLoop.select(SkillOptLoop.aggregate(SkillOptLoop.reflect(train)), k)
+
+    def replay(self, candidate, held: Sequence[Rollout]):
+        """Stage 3. Score incumbent and candidate over the held-out set."""
+        return self._loop.evaluate(candidate, held)
+
+    def consolidate(
+        self,
+        salt: str = "",
+        k: int = 3,
+        approver_caps: frozenset[str] | set[str] | None = None,
+    ) -> SleepResult:
+        """Stages 1-4. The incumbent changes only on a clean acceptance.
+
+        Refuses to run while any agent is active. Consolidating under live work
+        rewrites the skill of an agent that is mid-task — the revision lands
+        between two steps of one action, so neither the old skill nor the new
+        one describes what actually ran, and the trajectory cannot be read back
+        as a single coherent run.
+        """
+        if self._active:
+            return SleepResult(
+                False,
+                f"agents still active: {sorted(self._active)} — sleep pauses "
+                "active agents before consolidating (3D #47). Rewriting a skill "
+                "mid-task means neither the old nor the new skill describes what "
+                "ran",
+                0, 0,
+            )
+
+        train, held = self.harvest(salt)
 
         if len(train) < MIN_TRAIN_ROLLOUTS:
             return SleepResult(
@@ -148,21 +211,18 @@ class SkillOptSleep:
         # Build the candidate WITHOUT touching the incumbent, so validation runs
         # before anything is scored. A candidate that escalates capability must
         # never reach a comparison a good score could carry it through.
-        candidate = SkillOptLoop.update(
-            self.incumbent,
-            SkillOptLoop.select(
-                SkillOptLoop.aggregate(SkillOptLoop.reflect(train)), k
-            ),
-        )
+        candidate = SkillOptLoop.update(self.incumbent, self.mine(train, k))
         try:
-            validate_skill_update(self.incumbent, candidate.body, self._granted)
+            validate_skill_update(
+                self.incumbent, candidate.body, self._granted, approver_caps
+            )
         except SkillValidationError as exc:
             return SleepResult(
                 False, f"candidate rejected by validation: {exc}",
                 len(train), len(held),
             )
 
-        result = self._loop.evaluate(candidate, held)
+        result = self.replay(candidate, held)
         if result.accepted:
             self._loop.incumbent = result.skill_body
         self._loop.history.append(result)
