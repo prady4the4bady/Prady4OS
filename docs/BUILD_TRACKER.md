@@ -203,7 +203,7 @@ Status key: ✅ done · 🔵 in progress · ⬜ not started · 🔒 blocked
 |---|---|---|
 | 1 | Tracker contradictions + NSI 87 collision | ✅ DDR-840; CI run 31053809587 on `f80efa6` |
 | 2 | Docker reproducible build env | ✅ `Dockerfile` + `make docker-build`; `ci-docker-check` asserts the base tag is pinned and no unpinned archive is added. **Scope: pins the ENVIRONMENT, not bit-for-bit output** — that needs `SOURCE_DATE_EPOCH` work, not claimed here |
-| 3 | CMake/Makefile hybrid | ⏸ **AWAITING OPERATOR SIGN-OFF to skip** — assessment below |
+| 3 | CMake/Makefile hybrid | ✅ **RESOLVED BY SUBSTITUTION (DDR-843)** — skipped for v1.0.0; the stale-prerequisite class CMake would have prevented is already closed structurally by the build wildcards. Revisit post-1.0 with the arch ports |
 | 4 | VirtualBox runner | ✅ `tools/vbox_runner/run_vbox.sh`; `ci-vbox-check` parses it and asserts it exits **77** (not 0) when VirtualBox is absent. Real D.2 boot is operator-run |
 | 5 | x86_64 chipset variant coverage | ✅ `smoke-chipset` — q35/qemu64, **pc/qemu64 (i440FX)**, q35/Nehalem, **q35/Opteron_G5 (AMD)**. 20/20 local |
 
@@ -226,7 +226,7 @@ staleness class we spent four DDRs closing.
 `arch/riscv64` become real, per-arch toolchain files are where CMake pays. That
 is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
 
-**This needs explicit sign-off before item 3 is marked resolved-by-substitution.**
+**Decision taken in DDR-843: skipped for v1.0.0, revisit post-1.0.**
 
 ### Group 2 — Section E / capability / agent core close-out
 
@@ -251,7 +251,7 @@ is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
 | `ACTION_QUERY_SCENE` | post-L7 NL query over a scene graph that does not exist |
 | `ACTION_PARSE_DOCUMENT` | needs a 64 MiB local OCR model; no model-shipping path |
 | `ACTION_EXEC_CODE` | needs a sandboxed interpreter — a subsystem, not an action |
-| `ACTION_BROWSE_WEB` | needs a headless browser **and network egress = cloud bridge (DDR-793)**, which the deferred list says to flag rather than enable. **Operator decision outstanding** |
+| `ACTION_BROWSE_WEB` | needs a headless browser **and network egress = cloud bridge (DDR-793)**. **DEFERRED post-1.0 (DDR-843)** — nothing in the release path depends on it, and enabling it is a security-posture change (outbound egress from an agent-capable OS), not a feature toggle. Needs an explicit instruction to enable the bridge |
 
 Declaring these as enum values without enforcement would be worse than omitting
 them: an agent could submit one and the kernel would queue an action nothing
