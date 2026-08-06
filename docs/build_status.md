@@ -2155,7 +2155,8 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Agent Capability Enforcer | 🟢 COMPLETE | 6 | `kernel/aether/` + `cap.h` CAP_AGENT/CAP_SOVEREIGN (kernel-set, no self-escalation) + 128 MiB mem cap (OOM kill) + 60 syscall/s rate limit. Gate `smoke-aether-sec`. |
 | SOVEREIGN Gate Logic | 🟢 COMPLETE | 6/7 | Global `g_sovereign_mode` (default sovereign auto-approve; manual holds PENDING); `SYS_GET_MODE`/`SYS_SET_MODE` (CAP_SOVEREIGN). Bound to the toggle (DDR-701). Gate `smoke-mode`. |
 | Approval Queue System | 🟢 COMPLETE | 6 | `kernel/aether/aether_queue.c`: 256-entry action queue + 4096-entry append-only audit ring (PMM-pool), 60 s TTL, `-EAGAIN` on overflow. Gates `smoke-aether-queue/-sec`. UI panel = compositor slice. |
-| Named Agents (KRYOS…SOLIN) | 🟡 IN PROGRESS | 6f/7 | The 8 named agents render as compositor panel cards with active/inactive state tied to AETHER's 8-slot roster (DDR-707, `SYS_AGENT_ROSTER`); the daemon lights KRYOS. Gate `smoke-agents`. Distinct per-persona agent behaviours are still future. |
+| Named Agents (KRYOS…SOLIN) | 🟡 IN PROGRESS | 6f/7 | The 8 named agents render as compositor panel cards with active/inactive state tied to AETHER's 8-slot roster (DDR-707, `SYS_AGENT_ROSTER`); the daemon lights KRYOS. Gate `smoke-agents`. Each of the 8 now has a validated `aether/agents/roster/<name>/skill.md` defining role, capabilities and refusals (DDR-846), mapped onto Section G's 8 highest-priority roles; 5 are marked *not yet spawnable* because the capabilities they need (CAP_EXEC/CAP_OCR/CAP_SCENE/CAP_NET_BROWSE) are declared in `cap.h` but wired to nothing. Validated by `aether/tests/test_agent_skills.py` in the pytest job. Kernel-side per-persona dispatch is still future. |
+| SkillOpt Training Loop | 🟢 COMPLETE | 6 | `aether/agents/skillopt/` (host-side Python, no kernel surface): rollout→reflect→aggregate→select→update→evaluate. A candidate skill replaces the incumbent **only on a strictly positive held-out improvement** — ties and regressions are rejected, held-out sets under 4 rollouts are refused outright, and train/held-out overlap raises rather than silently self-scoring (DDR-847). 16 tests in `aether/tests/test_skillopt.py` (pytest job); mutation-checked — `>` → `>=` fails exactly the tie tests. |
 | Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
@@ -2904,3 +2905,41 @@ that can actually break.
 `smoke-selftest` (DDR-785's harness self-test) is excluded from the manifest and
 run as a setup step in **every** shard instead: a shard whose gates trust the
 harness must have checked the harness first.
+
+## DDR-846 / DDR-847 — the 8 named agents get behaviour, and a loop that can revise it
+
+DDR-846 shipped in `3b369c5` **without updating this file** — a break of the
+same-commit tracker rule. Recorded here rather than quietly fixed: the row for
+Named Agents above was one commit stale, and the reason it was not caught is
+that nothing enforces the rule mechanically.
+
+### The tie is the whole decision (DDR-847)
+
+SkillOpt's acceptance rule is `>`, not `>=`, and that is not a style choice.
+An optimiser that accepts ties drifts: each accepted tie changes the skill with
+no evidence the change helped, every individual step "passes", and after N of
+them the skill has wandered somewhere nobody chose and the history says nothing
+went wrong. This is the eleventh instance in this project of one structural
+defect — **a check that absorbs an invalid case instead of rejecting it, so
+drift is silent and looks like success** (DDR-817, -822, -823, -824, -825, -826,
+-830, -832, -833, -835, -845). A tie is the invalid case here.
+
+Three further refusals follow from the same principle: a held-out set smaller
+than 4 rollouts is refused outright rather than gambled on; a held-out set that
+overlaps the training rollouts **raises** rather than quietly scoring the
+candidate on its own homework (S7); and every result carries
+`incumbent_score`, `candidate_score` and `heldout_n` whether it accepted or
+rejected, because an acceptance an operator cannot audit is a change that
+happened for unstated reasons.
+
+### The verification that matters is the mutation, not the pass
+
+16/16 green proves little on its own — a suite that only checks the accept path
+would also be green. The check with teeth: changing `if cand > inc:` to
+`if cand >= inc:` fails exactly `test_tie_is_rejected_not_accepted` and
+`test_history_records_rejections_too`, and nothing else. A suite still green
+under that mutation would not be testing the decision at all.
+
+pytest is not installed on the build host, so the suite was run locally through
+a minimal `raises` shim against the **real** test file (not a re-implementation
+of it). CI's pytest job remains ground truth.
