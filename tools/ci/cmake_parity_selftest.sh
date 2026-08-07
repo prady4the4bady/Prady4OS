@@ -29,7 +29,7 @@ _verdict() {   # $1 = captured file -> prints PASS/DRIFT/CONTRACT
     echo DRIFT; return
   fi
   for key in KCFLAGS USER_C_CFLAGS KINCLUDES NASM_WERROR X64_TRIPLE \
-             KERNEL_LD KERNEL_ELF KERNEL_CS_COUNT; do
+             KERNEL_LD KERNEL_ELF KERNEL_CS_COUNT CC LD NASM; do
     grep -q "^${key}=" "$captured" || { echo CONTRACT; return; }
   done
   for required in "-Werror" "-mcmodel=kernel" "-mno-red-zone"; do
@@ -73,10 +73,23 @@ _arm "required variable missing" DRIFT "$TMP/d.txt"
 sed 's/^KERNEL_CS_COUNT=.*/KERNEL_CS_COUNT=71/' "$current" > "$TMP/e.txt"
 _arm "stale kernel source count" DRIFT "$TMP/e.txt"
 
+# F: the compiler silently changed -> DRIFT.
+# This arm models the bug that actually reached CI: every flag identical, the
+# COMPILER different. Flags-only parity reported success while CMake was set to
+# build the kernel with gcc and the Makefile with clang.
+sed 's/^CC=.*/CC=gcc/' "$current" > "$TMP/f.txt"
+_arm "compiler differs (clang vs gcc)" DRIFT "$TMP/f.txt"
+
+# G: CC absent from the contract -> caught.
+# Without CC the checker cannot compare toolchains at all, which is exactly the
+# state that let the gcc build through unnoticed.
+grep -v '^CC=' "$current" > "$TMP/g.txt"
+_arm "CC absent from the contract" DRIFT "$TMP/g.txt"
+
 echo
 if [ "$fails" -ne 0 ]; then
   echo "cmake-parity-selftest FAILED"
   exit 1
 fi
-echo "cmake-parity-selftest OK - 5 arms"
+echo "cmake-parity-selftest OK - 7 arms"
 echo "NOTE: the cmake configure path itself is CI-only on this host (no cmake)."

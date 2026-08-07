@@ -27,18 +27,56 @@
 # and it cannot silently disagree with the build that ships.
 
 cmake_minimum_required(VERSION 3.22)
-project(pradyos C ASM_NASM)
 
-set(CMAKE_C_COMPILER clang)
+# --------------------------------------------------------------------------
+# ORDER IS LOAD-BEARING: the flags are queried and the compiler is set BEFORE
+# project(). CMake resolves the compiler during project(), so anything set
+# after it is ignored.
+#
+# The first version of this file called project() first and then
+# `set(CMAKE_C_COMPILER clang)`. CMake silently used the system default — GNU
+# 13.3.0 on the CI runner — while the Makefile builds with clang. The flag
+# parity check passed, because flags were identical; nothing compared the
+# COMPILER. That is the same defect one level down from where the guard was
+# looking, and it is why CC is now part of print-flags and asserted.
+#
+# ASM_NASM is deliberately NOT declared. CMake here compiles C objects only;
+# assembly is delegated to the Makefile. Declaring a language it does not use
+# made configure hard-fail on a runner without nasm — a dependency on a tool
+# this file never invokes.
+# --------------------------------------------------------------------------
+find_program(MAKE_EXECUTABLE NAMES make gmake REQUIRED)
+
+execute_process(
+  COMMAND ${MAKE_EXECUTABLE} --no-print-directory print-flags
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  OUTPUT_VARIABLE PRADYOS_PREFLIGHT
+  RESULT_VARIABLE PRADYOS_PREFLIGHT_RC
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT PRADYOS_PREFLIGHT_RC EQUAL 0)
+  message(FATAL_ERROR
+    "`make print-flags` failed (${PRADYOS_PREFLIGHT_RC}) before project(). "
+    "Refusing to configure with a guessed toolchain.")
+endif()
+if(PRADYOS_PREFLIGHT MATCHES "(^|\n)CC=([^\n]+)")
+  set(CMAKE_C_COMPILER "${CMAKE_MATCH_2}")
+else()
+  message(FATAL_ERROR
+    "print-flags did not report CC. The compiler must come from the Makefile: "
+    "letting CMake pick the system default is how a gcc-built kernel ships "
+    "while every gate proved a clang-built one.")
+endif()
+
+project(pradyos C)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-find_program(MAKE_EXECUTABLE NAMES make gmake REQUIRED)
-
 # --------------------------------------------------------------------------
-# Query the Makefile for the canonical flags. Configure FAILS if this does not
-# work — a CMake build that silently fell back to defaults would be exactly the
-# divergence this file exists to prevent.
+# Re-query after project() and keep the authoritative copy. Configure FAILS if
+# this does not work — a CMake build that silently fell back to defaults would
+# be exactly the divergence this file exists to prevent.
 # --------------------------------------------------------------------------
 execute_process(
   COMMAND ${MAKE_EXECUTABLE} --no-print-directory print-flags
@@ -61,13 +99,24 @@ foreach(line IN LISTS PRADYOS_FLAG_LINES)
   endif()
 endforeach()
 
-foreach(required KCFLAGS USER_C_CFLAGS X64_TRIPLE KERNEL_LD KERNEL_ELF)
+foreach(required KCFLAGS USER_C_CFLAGS X64_TRIPLE KERNEL_LD KERNEL_ELF CC LD NASM)
   if(NOT DEFINED PRADYOS_${required})
     message(FATAL_ERROR
       "print-flags did not report ${required}. The Makefile's flag contract "
       "changed; update print-flags rather than hardcoding it here.")
   endif()
 endforeach()
+
+# The compiler CMake actually resolved must be the one the Makefile names.
+# Compared by basename: CMake reports an absolute path, the Makefile a command.
+get_filename_component(_resolved_cc "${CMAKE_C_COMPILER}" NAME_WE)
+get_filename_component(_declared_cc "${PRADYOS_CC}" NAME_WE)
+if(NOT _resolved_cc STREQUAL _declared_cc)
+  message(FATAL_ERROR
+    "compiler mismatch: CMake resolved '${_resolved_cc}', the Makefile builds "
+    "with '${_declared_cc}'. Identical flags across different compilers is not "
+    "parity — it is two different kernels.")
+endif()
 
 # Persist what was captured so `cmake-check` can diff it against the Makefile
 # later, without re-configuring.

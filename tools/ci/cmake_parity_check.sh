@@ -64,7 +64,7 @@ fi
 # The contract itself: every variable CMake depends on must still be reported.
 missing=""
 for key in KCFLAGS USER_C_CFLAGS KINCLUDES NASM_WERROR X64_TRIPLE \
-           KERNEL_LD KERNEL_ELF KERNEL_CS_COUNT; do
+           KERNEL_LD KERNEL_ELF KERNEL_CS_COUNT CC LD NASM; do
   grep -q "^${key}=" "$CURRENT" || missing="$missing $key"
 done
 if [ -n "$missing" ]; then
@@ -81,6 +81,27 @@ for required in "-Werror" "-mcmodel=kernel" "-mno-red-zone"; do
     exit 1
   }
 done
+
+# The TOOLCHAIN, not just the flags. The first version of this checker compared
+# flags only. CMake had silently resolved gcc while the Makefile builds with
+# clang, and parity was reported because every flag string matched. Identical
+# flags through a different compiler is not parity — it is two different
+# kernels, and it reached CI before this arm existed.
+declared_cc=$(grep '^CC=' "$CURRENT" | cut -d= -f2-)
+if [ -z "$declared_cc" ]; then
+  echo "[cmake-check] FAIL: print-flags reports no CC, so the toolchains" >&2
+  echo "[cmake-check] cannot be compared at all." >&2
+  exit 1
+fi
+cmake_cc=$(grep -E '^CMAKE_C_COMPILER:' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null | cut -d= -f2-)
+if [ -n "$cmake_cc" ]; then
+  if [ "$(basename "$cmake_cc")" != "$(basename "$declared_cc")" ]; then
+    echo "[cmake-check] FAIL: CMake resolved '$cmake_cc' but the Makefile" >&2
+    echo "[cmake-check] builds with '$declared_cc'." >&2
+    exit 1
+  fi
+  echo "[cmake-check] toolchain OK - both use $(basename "$declared_cc")"
+fi
 
 n_flags=$(grep -c '=' "$CURRENT")
 echo "[cmake-check] OK - $n_flags flag variables, CMake matches the Makefile"

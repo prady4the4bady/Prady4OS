@@ -233,6 +233,9 @@ print-flags:
 	@printf 'KERNEL_LD=%s\n' '$(KERNEL_LD)'
 	@printf 'KERNEL_ELF=%s\n' '$(KERNEL_ELF)'
 	@printf 'KERNEL_CS_COUNT=%s\n' '$(words $(KERNEL_CS))'
+	@printf 'CC=%s\n' '$(CC)'
+	@printf 'LD=%s\n' '$(LD)'
+	@printf 'NASM=%s\n' '$(NASM)'
 
 print-kernel-sources:
 	@printf '%s' '$(KERNEL_CS)'

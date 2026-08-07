@@ -34,9 +34,17 @@ jobs:
       - name: User entry-point stack alignment (DDR-823)
         run: make ci-start-align-check
 
-      # DDR-859. The CMake/Makefile hybrid takes its flags FROM the Makefile;
-      # this fails if the captured copy has drifted. ubuntu-latest ships cmake,
-      # so unlike the dev host this actually exercises the configure path.
+      # DDR-859/862. The hybrid takes its flags AND its compiler from the
+      # Makefile, so configure needs the Makefile's clang to exist. Installed
+      # explicitly rather than relying on the runner image happening to carry
+      # it: this job installs no toolchain otherwise, and "it was there last
+      # time" is not a build dependency.
+      - name: Toolchain for the CMake parity check
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+
+      # Fails if CMake's captured copy has drifted from the Makefile. Unlike the
+      # dev host (no cmake), ubuntu-latest ships it, so this genuinely exercises
+      # the configure path.
       - name: CMake/Makefile flag parity (DDR-859)
         run: make cmake-check
 
