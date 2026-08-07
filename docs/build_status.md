@@ -3385,3 +3385,44 @@ required sentinel (`PRADYOS_AEAD_VECTORS_OK`) *and* a forbidden one
 `build/aead.o`, and is driven by `user/aeadtest.c`. The forbidden sentinel is
 what makes it meaningful: it fails if the primitive is ever replaced by a stub
 that would otherwise print the success marker.
+
+
+## Two intermittent SMP reds, measured rather than assumed (OPEN-2, Group 9 item 47)
+
+While landing DDR-859/862 the CI went red four times. The audit separates them
+cleanly, and the separation is the point — two were mine, two were not.
+
+**Mine, and real:** `shard-check` failed on `c99f1f8` and `39fa1cf` because the
+CMake hybrid declared `ASM_NASM` it never uses, and because it resolved **gcc**
+while the Makefile builds with clang. Fixed in DDR-862; `shard-check` passes on
+`e51584a`.
+
+**Not mine:** `smoke-msixap` (shard 5, run 31139497587) and `smoke-crosswake`
+(shard 1, runs 31142981014 and 31142982460).
+
+### The crosswake occurrence is the best evidence OPEN-2 has
+
+Re-running shard 1 on **the identical SHA `e51584a`, with no code change,
+PASSED**. Failed, then passed, same tree. That is intermittency by
+demonstration rather than by the usual argument-from-plausibility, and it is
+worth more than the earlier single-occurrence triages.
+
+The temptation was to call it flaky immediately — my Makefile diff since the
+last fully-green SHA is three *phony* targets, which cannot reach the image or
+the kernel. But "my change can't have done this" is exactly the reasoning that
+is wrong when it is wrong, and the last fully-green run (`16b4843`) really was
+green on both runs, so the failures genuinely did begin with my work. The re-run
+settled it in a way reasoning could not.
+
+### What this contributes to item 47
+
+Item 47 asks for the `-smp 4` virtio-blk defect to be fixed **or** explicitly
+documented with a measured reproduction rate. This adds two dated occurrences
+and one clean negative (a passing re-run on unchanged code). Both gates are SMP
+paths — `smoke-crosswake` already carries a documented flake history here (AP
+tick inflation, with a second root-cause noted as en route).
+
+**Not yet a rate.** Two occurrences across roughly a dozen runs is an
+observation, not a measurement, and quoting a percentage from it would be
+inventing precision. A real rate needs a deliberate N-run campaign on one SHA,
+which is the shape item 47's "measured reproduction rate" actually requires.
