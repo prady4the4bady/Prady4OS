@@ -3335,3 +3335,53 @@ With detection fixed, two mutations genuinely survived:
   order**, so the sort was never asserted.
 
 36 tests, 15/15 mutations killed after both gaps were closed.
+
+
+## Group 1 closed, and Group 2 items 6/7/14 verified (DDR-859/860)
+
+### Group 1 — build-system integrity: 5 of 5
+
+| item | state |
+|---|---|
+| 1 tracker contradictions / NSI 87 collision | `SYS_VAULT_PUT`=87, `SYS_VERIFY_AUDIT`=93, `SYS_READ_AUDIT` stays at its shipped 37 (DDR-840/860) |
+| 2 Docker reproducible build env | `Dockerfile` pins `ubuntu:24.04`; `ci-docker-check` asserts no unpinned archive |
+| 3 CMake/Makefile hybrid | **BUILT** (DDR-859) — supersedes DDR-843 Decision 1 on the operator's direction |
+| 4 VirtualBox runner | `tools/vbox_runner/run_vbox.sh`, exits 77 when VBoxManage is absent |
+| 5 chipset variants | 4 x86_64 variants: q35/pc x qemu64/Nehalem/Opteron_G5, incl. AMD |
+
+### The CMake decision was reversed, and that is recorded rather than smoothed
+
+I recommended skipping CMake and documented why in DDR-843. The operator had
+reserved the call, reviewed it, and directed that the hybrid be built. DDR-859
+supersedes that decision explicitly. The recommendation was wrong in a specific
+way worth naming: it argued the Makefile was *sufficient*, when sufficiency was
+never the question being asked.
+
+**The hybrid's real hazard is not two build systems — it is two sets of flags.**
+A CMakeLists that restated `-mcmodel=kernel` or dropped `-Werror` would still
+produce a `kernel.elf`; the 138 gates would keep passing against the Makefile's
+binary; and CMake would ship a different one. So the Makefile stays canonical,
+CMake *queries* it (`make print-flags`), configure **fails** rather than falling
+back to defaults, and `make cmake-check` asserts the captured copy still
+matches. `-Werror`, `-mcmodel=kernel` and `-mno-red-zone` are checked **by
+name** as well as by diff, because a diff reports parity when *both* sides lose
+a flag together.
+
+`cmake` is absent on this build host, so the configure path is CI-only here.
+Rather than ship the drift logic unverified — the DDR-854 mistake — a self-test
+exercises all five non-cmake arms, including the one a diff cannot catch.
+
+### Group 2
+
+| item | state |
+|---|---|
+| 6 NSI 86 + `CAP_REWRITE` (bit 21) | already in tree (DDR-842) |
+| 7 audit verification | closes on the SHA-256 **chain**, operator-directed (DDR-860) |
+| 14 ChaCha20-Poly1305 gate wiring | **verified DIRECT** — see below |
+
+**Item 14 needed no fallback.** `smoke-aead` exists as a dedicated gate with a
+required sentinel (`PRADYOS_AEAD_VECTORS_OK`) *and* a forbidden one
+(`PRADYOS_AEAD_STUB`, `AEAD FAIL`), sits in CI shard 4 at 90 s, links
+`build/aead.o`, and is driven by `user/aeadtest.c`. The forbidden sentinel is
+what makes it meaningful: it fails if the primitive is ever replaced by a stub
+that would otherwise print the success marker.
