@@ -5,7 +5,7 @@ import importlib
 
 import pytest
 
-from aether.agents.roster.roles import (
+from aether.agents.runtime.roles import (
     ROSTER,
     UNWIRED_CAPS,
     CapabilityRefused,

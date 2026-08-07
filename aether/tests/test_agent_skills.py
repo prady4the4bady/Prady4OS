@@ -118,6 +118,26 @@ def test_unwired_capability_implies_not_spawnable(name: str) -> None:
     )
 
 
+def test_roster_holds_no_python_so_no_bytecode_dir_can_appear() -> None:
+    """`roster/` is DATA — one skill.md per agent — and must stay that way.
+
+    DDR-857 briefly put a module here. Importing it created `__pycache__`,
+    which the slot test below reads as a ninth agent, and CI went red on
+    `934106c`. The module moved to `agents/runtime/roles.py`; this test is what
+    stops it (or anything else importable) coming back.
+
+    Asserted at the source rather than by teaching the slot test to skip
+    `__pycache__`: an exception there would also hide a real stray directory,
+    and the actual rule is that code does not belong in a data directory.
+    """
+    stray = sorted(p.name for p in ROSTER.rglob("*.py"))
+    assert not stray, (
+        f"roster/ contains Python: {stray}. It is a data directory; importing "
+        "anything from it creates __pycache__, which the slot check below then "
+        "reads as an extra agent."
+    )
+
+
 def test_every_kernel_roster_slot_is_covered() -> None:
     """The roster directory must not drift from the kernel's 8 slots."""
     on_disk = {p.name for p in ROSTER.iterdir() if p.is_dir()}
