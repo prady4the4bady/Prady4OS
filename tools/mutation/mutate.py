@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -70,11 +71,23 @@ def _run(runner: Path) -> list[str]:
         capture_output=True, text=True, cwd=str(REPO),
         env={"PYTHONDONTWRITEBYTECODE": "1", "PATH": ""},
     )
-    return [
-        line.split("FAIL", 1)[1].strip()
-        for line in proc.stdout.splitlines()
-        if line.strip().startswith("FAIL")
-    ]
+    # Match the per-test failure line EXACTLY: two spaces, FAIL, two spaces,
+    # then the test name. A looser `startswith("FAIL")` also matches a runner's
+    # own summary line ("FAILREG OK -- 35 passed"), which reports a PASSING run
+    # as a kill — a mutation then looks verified by a test that never failed.
+    # That is the same defect this harness exists to catch, so the pattern is
+    # anchored and a malformed line is surfaced rather than guessed at.
+    killed = []
+    for line in proc.stdout.splitlines():
+        m = re.match(r"^ {2}FAIL {2}(\S.*)$", line.rstrip())
+        if m:
+            killed.append(m.group(1).strip())
+    if proc.returncode not in (0, 1):
+        raise MutationError(
+            f"runner {runner} exited {proc.returncode}; its output cannot be "
+            f"trusted as a kill list.\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+        )
+    return killed
 
 
 def run_matrix(spec_path: Path) -> int:

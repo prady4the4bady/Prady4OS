@@ -3289,3 +3289,49 @@ and I fixed the tests, not the guard.
 
 Every remaining item is now checked against the code graph before any file is
 written.
+
+
+## DDR-856 -- Section 3D complete (21 of 21), and the harness caught two real gaps
+
+Per DDR-855 every item was checked against existing code first. D-11
+(`knowledge_consolidation`) resolves conflicting claims about one key; C-02
+(`distributed_experiments`) is quorum voting among peers. Neither is similarity
+search or head-to-head competition, so #62 and #64 are genuinely new and compose
+with them rather than replacing them.
+
+**#62 vector KG.** A dimension mismatch is refused, never padded -- padding
+silently changes a vector's direction, so the neighbour it returns is
+*confidently wrong* rather than absent. `cosine` raises on a zero vector instead
+of returning 0.0, because 0.0 is a real similarity meaning orthogonal and using
+it for "undefined" makes an error look like a result. A full graph **raises
+rather than evicting** (the D-13 principle).
+
+**#64 tournament.** A variant that never played is *unranked*, not ranked last:
+"untested" and "tested and bad" are different states, and collapsing them lets a
+variant win by having avoided scrutiny. A tie does not promote -- the same bar as
+DDR-847.
+
+**#65 visualiser.** Reads the existing trajectory through the writer's own
+reader rather than a second parser that would drift from it. Never un-redacts,
+deterministic (a render timestamp would make it un-replayable), self-contained
+(a fetching viewer on an offline OS breaks exactly when needed, and under
+privacy mode is an egress attempt), everything HTML-escaped.
+
+### The harness reported 15/15, and was wrong
+
+Two entries claimed "killed by 1" against a suite that had passed 35/35. The
+harness matched any line starting with `FAIL`, and the runner's summary line
+reads `FAILREG OK -- 35 passed` -- a **passing** run counted as a kill. Third
+appearance of the recurring defect inside the tooling built to detect it. The
+kill pattern is now anchored to `^  FAIL  <name>$`.
+
+With detection fixed, two mutations genuinely survived:
+
+* **M7** -- `nodes` sorted by key *and* `nearest` broke ties by key, so with a
+  stable sort the tie-break was **unreachable dead code**. It looked like
+  defence in depth; it meant neither mechanism was tested. `nodes` now returns
+  insertion order, so the code providing determinism is code a test can kill.
+* **M15** -- the summary-order test compared dicts, and **dict equality ignores
+  order**, so the sort was never asserted.
+
+36 tests, 15/15 mutations killed after both gaps were closed.

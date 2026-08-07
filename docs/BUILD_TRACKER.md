@@ -310,7 +310,7 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 `SCAN_ENVIRONMENT` · `QUERY_SCENE` · `REWRITE_AGENT_CODE` ·
 `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` · `EVOLVE_GENOME`
 
-### Section 3D — ring-3 / daemon #45–65 (TASK 12) — 18 of 21 done
+### Section 3D — ring-3 / daemon #45–65 (TASK 12) — **21 of 21 COMPLETE**
 
 | # | item | status |
 |---|---|---|
@@ -336,8 +336,11 @@ mid-bitmask insertion later (the DDR-832 hazard applied to capabilities).
 | 17 (#61) | `genome.md` — lineage archived, rationale required | OK DDR-853 |
 | 19 (#63) | dead-end registry | OK — **D-13 `FailureMemoryRegistry`**, which already existed; DDR-855 added the missing divergence score to it rather than shipping the duplicate DDR-853 wrote |
 
-Still open: 18 (#62) vector knowledge graph, 20 (#64) population tournament,
-21 (#65) run visualiser.
+| 18 (#62) | vector knowledge graph — online learning, refuses to evict | OK DDR-856 |
+| 20 (#64) | population tournament — unranked is not last, ties do not promote | OK DDR-856 |
+| 21 (#65) | replayable run visualiser — deterministic, self-contained, never un-redacts | OK DDR-856 |
+
+**Section 3D is complete: all 21 items (#45-#65).**
 
 16 hypothesis tree · 17 genome.md · 18 vector knowledge graph ·
 19 dead-end registry · 20 population tournament · 21 run visualiser — all ⬜
