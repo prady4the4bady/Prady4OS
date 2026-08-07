@@ -65,17 +65,54 @@ points the investigation at the shared substrate: AP timer/tick handling,
 per-CPU state, and the virtio-blk queue under concurrent CPUs — the same area
 DDR-777/DDR-806 already implicate.
 
-## What is deliberately NOT claimed
+## AMENDED — a denominator became available, so a rate can now be stated
 
-**No reproduction rate.** Item 47 asks for a measured one, and 6 occurrences
-across an unrecorded denominator is not a measurement. Producing a percentage
-from it would be inventing precision.
+The first version of this DDR declined to give a reproduction rate, correctly:
+the occurrences had no recorded denominator. Continuing to push produced one,
+and a **fifth** intermittent gate (`smoke-smp`, run 31153802543 — also
+`QEMU_SMP=4`).
 
-A real rate needs a deliberate campaign: one pinned SHA, N runs of the four
-gates, occurrences counted. That is the correct next step for item 47 and is
-bounded work — 20 runs of four gates at ~180 s each is roughly 4 h of QEMU, and
-it would either produce a rate or fail to reproduce, both of which are answers.
+Every full-suite run since the CMake bugs were fixed, so the denominator is
+clean — these are not my failures:
 
-**No claim that all four share one root cause.** They share a configuration.
-Whether that is one bug or several living in the same place is exactly what the
-campaign would begin to separate.
+| SHA | branch | verdict | gate |
+|---|---|---|---|
+| `e51584a` | dev/phase1 | FAIL | `smoke-crosswake` |
+| `e51584a` | main | FAIL | `smoke-crosswake` |
+| `8a2754c` | main | **PASS** | — |
+| `8a2754c` | dev/phase1 | FAIL | `smoke-blkmq-trace` |
+| `f6dfa0f` | main | **PASS** | — |
+| `f6dfa0f` | dev/phase1 | FAIL | `smoke-smp` |
+
+**4 of 6 initial full-suite runs failed — every one on an `-smp 4` gate**, and
+every re-run on unchanged code has passed.
+
+A per-run failure probability of ~0.67 across the ~20 SMP gates in a suite
+implies a per-gate flake probability of roughly `1 - (0.33)^(1/20) ≈ 5.4%`.
+That inference assumes the gates fail independently, which is unproven — if they
+share one root cause they will not. Treat ~5% as an order of magnitude for a
+single SMP gate, and **~67% per full suite as the directly observed figure**,
+which needs no modelling at all.
+
+## This blocks item 50, which the queue did not anticipate
+
+Item 50 requires **three consecutive green CI runs on one tip** before
+`dev/phase1` → `main` promotion.
+
+At an observed ~33% pass rate per run, three consecutive greens is `0.33³ ≈ 3.6%`
+per attempt — roughly **28 attempts expected**, at ~30 minutes each. That is not
+a slow path to release; it is a closed one.
+
+**So item 47 is not an optional "fix or document" item — it gates item 50.**
+The queue lists them as independent, and on this evidence they are not. Flagged
+rather than worked around: raising the promotion rule to "3 greens allowing
+re-runs" would satisfy the letter of item 50 while removing exactly the signal
+it exists to provide.
+
+## What is still deliberately NOT claimed
+
+**No claim that all five share one root cause.** They share a configuration.
+Whether that is one bug or several living in the same place is what a targeted
+campaign would separate — one pinned SHA, N runs of the five gates individually
+rather than through the full suite, so a per-gate rate is measured rather than
+inferred from a suite-level number.
