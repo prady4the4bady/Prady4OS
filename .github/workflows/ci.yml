@@ -34,6 +34,17 @@ jobs:
       - name: User entry-point stack alignment (DDR-823)
         run: make ci-start-align-check
 
+      # DDR-859. The CMake/Makefile hybrid takes its flags FROM the Makefile;
+      # this fails if the captured copy has drifted. ubuntu-latest ships cmake,
+      # so unlike the dev host this actually exercises the configure path.
+      - name: CMake/Makefile flag parity (DDR-859)
+        run: make cmake-check
+
+      # The checker's own arms, including the one a plain diff cannot catch:
+      # -Werror dropped from BOTH sides still reports parity.
+      - name: CMake parity checker self-test (DDR-859)
+        run: bash tools/ci/cmake_parity_selftest.sh
+
   # DDR-817. Was ONE serial job running 110 QEMU gates in 2 h 08 m, which was
   # the entire CI critical path — the other jobs here finish in under 30 s
   # combined. Shared setup is ~49 s against ~7 600 s of boots, so the work is
