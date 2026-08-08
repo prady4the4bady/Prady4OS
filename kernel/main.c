@@ -2280,6 +2280,11 @@ void kmain(struct boot_info *bi) {
     kputs("NEXUS: IDT loaded (48 vectors: 32 exceptions + 16 IRQ)\r\n");
 
     cpu_mitigations_init();              /* IMP-A: IBRS/STIBP/SSBD/IBPB where available */
+    /* DDR-871 (item 42): probe CPUID for ERMS before anything copies in
+     * bulk. Runs on the BSP before APs start, so the flag it writes is
+     * read-only by the time any other CPU exists — no locking needed. */
+    extern void fast_memcpy_init(void);
+    fast_memcpy_init();
     cpu_enable_sse();                    /* PROC-D: x87+SSE for ring-3 C (musl) — ADR-023 §D8 */
 
     tss_init_cpu(0, 0);                  /* BSP is cpu_idx 0 here; rsp0 set per user thread */

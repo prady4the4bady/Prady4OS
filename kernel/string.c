@@ -8,14 +8,25 @@ void *memset(void *dst, int c, size_t n) {
     return dst;
 }
 
+/* DDR-871 (item 42): the real copy lives in arch/x86_64/fast_memcpy.asm and
+ * picks REP MOVSB when the CPU advertises ERMS, else REP MOVSQ + a byte tail.
+ * Both use general-purpose registers only, so neither disturbs FPU/XMM state —
+ * which matters because the context switch saves only FXSAVE (x87 + XMM), not
+ * YMM/ZMM. See the .asm header for why AVX paths wait on item 18. */
+void *fast_memcpy(void *dst, const void *src, size_t n);
+
 void *memcpy(void *dst, const void *src, size_t n) {
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    for (size_t i = 0; i < n; i++)
-        d[i] = s[i];
-    return dst;
+    return fast_memcpy(dst, src, n);
 }
 
+/* memmove deliberately does NOT route through fast_memcpy.
+ *
+ * `rep movsb` copies strictly forward, so it is correct for memmove only when
+ * the destination is below the source. Sending an overlapping backward move
+ * through it would corrupt the tail — and it would do so only for overlapping
+ * arguments, which is exactly the case a quick test does not cover. The
+ * byte loop below already handles both directions; leaving it alone is the
+ * cheaper correctness guarantee. */
 void *memmove(void *dst, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dst;
     const unsigned char *s = (const unsigned char *)src;
