@@ -144,7 +144,7 @@ USER_C_LD      := user/user_c.ld
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
 USER_C_CFLAGS  := --target=x86_64-elf -ffreestanding -fno-pic -fno-pie -mcmodel=large \
   -nostdinc -nostdlib -Wall -Wextra -Werror \
-  -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
+  -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/ipc/ipc.c \
@@ -361,6 +361,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FPU_ELF) build/fputest.o
 	# PROC-D step 3: the first C program — compiled against the musl subset and
 	# linked with crt1.o + libc.a using the 3-segment W^X C linker script.
+	@bash tools/build/gen_nsi_header.sh   # DDR-869: NSI header, generated not copied
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CMUSL_SRC) -o build/cmusl.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/cmusl.o $(MUSL_LIB) -o $(USER_CMUSL_ELF)
 	# 5d: pradyos-init (PID 1), same musl-C link recipe as cmusl.

@@ -20,13 +20,12 @@
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
 
-#define SYS_WRITE      6
-#define SYS_READ       5
-#define SYS_OPEN       7
-#define SYS_CLOSE      8
-#define SYS_EXIT       4
-#define SYS_FSTAT      9
-#define SYS_FTRUNCATE 94
+/* DDR-869: syscall numbers come from the GENERATED pradyos_nsi.h via
+ * <pradyos.h>, not from a hand-copied block. This probe used to redeclare seven
+ * of them — and got SYS_FSTAT wrong on the first attempt (20 instead of 9),
+ * which is exactly the class of mistake forty probes' worth of copied constants
+ * invites. */
+#include "pradyos.h"
 
 #define EINVAL    22      /* kernel/include/errno.h */
 
@@ -35,13 +34,9 @@
 #define O_RDWR    0x2
 #define O_CREAT   0x40
 
-static inline long nsi(long n, long a1, long a2, long a3) {
-    long r;
-    __asm__ volatile("syscall" : "=a"(r)
-                     : "a"(n), "D"(a1), "S"(a2), "d"(a3)
-                     : "rcx", "r11", "memory");
-    return r;
-}
+/* The trap itself now comes from <pradyos.h> too; `nsi` stays as a local alias
+ * so the rest of this probe reads unchanged. */
+#define nsi pradyos_syscall
 
 static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
 static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
