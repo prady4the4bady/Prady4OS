@@ -909,6 +909,12 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'echo pipe3-m7q | cat | cat\n'; sleep 0.9; \
 	  printf 'cat /NOPE9k2.TXT > /OUT9k2.TXT 2> /ERR9k2.TXT\n'; sleep 0.7; \
 	  printf 'cat /ERR9k2.TXT\n'; sleep 0.5; \
+	  printf 'cat /NOPE55a.TXT 2>> /EAP55a.TXT\n'; sleep 0.7; \
+	  printf 'cat /NOPE55b.TXT 2>> /EAP55a.TXT\n'; sleep 0.7; \
+	  printf 'cat /EAP55a.TXT\n'; sleep 0.6; \
+	  printf 'cat /NOPE66c.TXT > /BOTH66c.TXT 2>&1\n'; sleep 0.7; \
+	  printf 'echo MARKER66c\n'; sleep 0.5; \
+	  printf 'cat /BOTH66c.TXT\n'; sleep 0.6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -917,6 +923,27 @@ smoke-shell: $(IMG) fat-image sfs-image
 	    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
 	    -serial stdio -display none -monitor none < "$$SHIN" > build/shell_serial.log 2>/dev/null || true; \
 	rm -f "$$SHIN"
+	@# DDR-868 (item 33): `2>>` APPENDS. Two failing commands both redirect to
+	@# one file; the second must not truncate the first. A `2>>` wired to
+	@# O_TRUNC would leave exactly one line and still look like it worked.
+	@# BOTH names must survive in the file. If `2>>` were wired to O_TRUNC the
+	@# second command would overwrite the first, leaving only NOPE55b — which a
+	@# mere "the file is non-empty" check would happily accept.
+	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
+	@# DDR-868: `2>&1` AFTER `>` sends stderr to the SAME file as stdout. If it
+	@# were applied before the stdout swap it would capture the console instead,
+	@# the error would print to the terminal, and /BOTH66c.TXT would be empty —
+	@# which is the bug this syntax exists to prevent.
+	@# POSITION is the discriminator, not presence. Grepping the whole log for
+	@# the error matches whether it landed in the FILE or on the CONSOLE, so it
+	@# cannot tell a working 2>&1 from one applied before the stdout swap — a
+	@# mutation proved exactly that assertion useless. The marker is printed
+	@# AFTER the redirect and BEFORE the cat, so the error text may only appear
+	@# in the lines that FOLLOW it.
+	@sed -n '/MARKER66c/,$$p' build/shell_serial.log | grep -q 'cat: cannot open /NOPE66c.TXT' || { echo "[shell] FAIL: 2>&1 did not send stderr to the stdout file (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
+	@# ...and it must NOT have reached the console before the marker.
+	@sed -n '1,/MARKER66c/p' build/shell_serial.log | grep -q 'cat: cannot open /NOPE66c.TXT' && { echo "[shell] FAIL: 2>&1 leaked stderr to the console (DDR-868)"; tail -40 build/shell_serial.log; exit 1; } || true
 	@grep -q "PRISM_READY"            build/shell_serial.log || { echo "[shell] FAIL: no PRISM_READY";  tail -30 build/shell_serial.log; exit 1; }
 	@grep -q "prism> "               build/shell_serial.log || { echo "[shell] FAIL: no prism> prompt"; exit 1; }
 	@grep -q "prism-echo-marker"     build/shell_serial.log || { echo "[shell] FAIL: echo builtin";     exit 1; }

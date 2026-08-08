@@ -310,19 +310,37 @@ int main(void) {
          * redirect token so the builtin sees only its own arguments. */
         /* DDR-784 adds `2>`. Diagnostics now go to stderr, so redirecting fd 2 is
          * observable; `2>` truncates like `>` (DDR-782 flags). */
+        /* DDR-868 (item 33) adds `2>>` and `2>&1`.
+         *
+         * `2>&1` takes NO filename, so it must be matched before the
+         * "next token is the target" logic — treating it as `2>` followed by a
+         * file named "&1" would create a junk file and leave stderr pointing at
+         * it, which looks like it worked. */
         const char *redir = 0, *redir_in = 0, *redir_e = 0;
-        int redir_err = 0, redir_append = 0, cut = argc;
+        int redir_err = 0, redir_append = 0, redir_e_append = 0;
+        int redir_e_to_out = 0, cut = argc;
         for (int i = 1; i < argc; i++) {
-            int is_out = !strcmp(argv[i], ">");
-            int is_app = !strcmp(argv[i], ">>");
-            int is_in  = !strcmp(argv[i], "<");
-            int is_e   = !strcmp(argv[i], "2>");
-            if (!is_out && !is_app && !is_in && !is_e)
+            int is_out  = !strcmp(argv[i], ">");
+            int is_app  = !strcmp(argv[i], ">>");
+            int is_in   = !strcmp(argv[i], "<");
+            int is_e    = !strcmp(argv[i], "2>");
+            int is_eapp = !strcmp(argv[i], "2>>");
+            int is_edup = !strcmp(argv[i], "2>&1");
+            if (!is_out && !is_app && !is_in && !is_e && !is_eapp && !is_edup)
                 continue;
             if (i < cut) cut = i;
+            if (is_edup) {               /* no operand — do not consume a token */
+                redir_e_to_out = 1;
+                redir_e = 0;             /* last one wins, as a real shell does */
+                continue;
+            }
             if (i + 1 >= argc) { redir_err = 1; break; }
             if (is_in)      redir_in = argv[i + 1];
-            else if (is_e)  redir_e  = argv[i + 1];
+            else if (is_e || is_eapp) {
+                redir_e = argv[i + 1];
+                redir_e_append = is_eapp;
+                redir_e_to_out = 0;      /* an explicit file overrides an earlier 2>&1 */
+            }
             else          { redir = argv[i + 1]; redir_append = is_app; }
             i++;                         /* skip the filename token */
         }
@@ -345,8 +363,9 @@ int main(void) {
             nsi(SYS_CLOSE, ifd, 0, 0);
             redir_save_in = REDIR_SAVE_IN;
         }
-        if (redir_e) {                   /* DDR-784: `2> file` */
-            long efd = nsi(SYS_OPEN, (long)redir_e, O_CREAT | O_WRONLY | O_TRUNC, 0);
+        if (redir_e) {                   /* DDR-784 `2> file`, DDR-868 `2>> file` */
+            long eflags = O_CREAT | O_WRONLY | (redir_e_append ? O_APPEND : O_TRUNC);
+            long efd = nsi(SYS_OPEN, (long)redir_e, eflags, 0);
             if (efd < 0) {
                 fprintf(stderr, "redirect: cannot open %s\n", redir_e);
                 fflush(stderr);
@@ -387,6 +406,24 @@ int main(void) {
             nsi(SYS_DUP2, rfd, 1, 0);
             nsi(SYS_CLOSE, rfd, 0, 0);
             redir_save = REDIR_SAVE_FD;
+        }
+
+        /* DDR-868 (item 33): `2>&1` — point stderr at WHATEVER fd 1 IS NOW.
+         *
+         * ORDER IS THE WHOLE POINT, and it is why this sits after the `>` block
+         * rather than beside the `2>` one. `cmd > f 2>&1` must send both streams
+         * to f, which only works if fd 1 already refers to f when fd 2 is
+         * duplicated from it. Doing it earlier would capture the console, and
+         * `cmd > f 2>&1` would silently leave errors on the terminal — the exact
+         * bug this syntax exists to avoid, and one that looks like it worked.
+         *
+         * Note this is a SNAPSHOT, not an alias: a later change to fd 1 does not
+         * follow. That matches the shell semantics being implemented. */
+        if (redir_e_to_out && redir_save_err < 0) {
+            fflush(stderr);
+            nsi(SYS_DUP2, 2, REDIR_SAVE_ERR, 0);  /* stash the real stderr */
+            nsi(SYS_DUP2, 1, 2, 0);               /* fd 2 := current fd 1      */
+            redir_save_err = REDIR_SAVE_ERR;
         }
 
         if (!strcmp(cmd, "help")) {
