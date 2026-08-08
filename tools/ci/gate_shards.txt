@@ -166,3 +166,4 @@
 3	smoke-invariants	120
 4	smoke-ftruncate	90
 0	smoke-bench	90
+2	smoke-ahci	90

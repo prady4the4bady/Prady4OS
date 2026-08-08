@@ -26,7 +26,8 @@
 #include "string.h"
 #include "acpi.h"
 #include "lapic.h"
-#include "ioapic.h"        /* DDR-874: I/O APIC + GSI routing */
+#include "ioapic.h"
+#include "ahci.h"           /* DDR-875: AHCI SATA */        /* DDR-874: I/O APIC + GSI routing */
 #include "smp.h"
 #include "percpu.h"
 #include "pcie.h"
@@ -2375,6 +2376,11 @@ void kmain(struct boot_info *bi) {
         const struct pcie_device *d = pcie_device_get(i);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x01)    /* virtio storage */
             virtio_blk_init(d->bus, d->dev, d->func);
+        /* DDR-875 (item 23): AHCI is class 0x01 subclass 0x06. Matched on
+         * BOTH, because class 0x01 alone is "mass storage" and would also
+         * catch IDE and NVMe controllers, which this driver cannot drive. */
+        if (d->class_code == 0x01 && d->subclass == 0x06)
+            ahci_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x02)    /* virtio network (NET-A) */
             virtio_net_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x03)    /* virtio GPU (L7 slice 0) */

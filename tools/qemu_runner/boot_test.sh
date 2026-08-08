@@ -241,6 +241,16 @@ fi
 # runner across x86_64 variants. Defaults are the historical q35 + QEMU's
 # default CPU, so every pre-existing gate behaves exactly as before.
 QEMU_MACHINE="${QEMU_MACHINE:-q35}"
+# DDR-875: attach an ich9-ahci controller with a SATA disk when a gate asks for
+# one. Opt-in rather than always-on: an extra controller changes PCI enumeration
+# for every gate, and a driver probing a device that is only sometimes present
+# is exactly how an intermittent boot difference appears.
+AHCIDEV=()
+if [ -n "${QEMU_AHCI_IMG:-}" ]; then
+    AHCIDEV=(-device ich9-ahci,id=ahci0
+             -drive if=none,format=raw,file="${QEMU_AHCI_IMG}",id=satadisk0
+             -device ide-hd,drive=satadisk0,bus=ahci0.0)
+fi
 CPUOPT=()
 [ -n "${QEMU_CPU:-}" ] && CPUOPT=(-cpu "${QEMU_CPU}")
 
@@ -254,6 +264,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${SFSDISK[@]}" \
     "${EXT4DISK[@]}" \
     "${SFS2DISK[@]}" \
+    "${AHCIDEV[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \
