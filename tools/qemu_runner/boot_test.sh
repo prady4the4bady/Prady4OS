@@ -245,6 +245,13 @@ QEMU_MACHINE="${QEMU_MACHINE:-q35}"
 # one. Opt-in rather than always-on: an extra controller changes PCI enumeration
 # for every gate, and a driver probing a device that is only sometimes present
 # is exactly how an intermittent boot difference appears.
+# DDR-876: attach an Intel e1000e NIC when a gate asks. Opt-in for the same
+# reason as the AHCI device: a second NIC changes PCI enumeration for every
+# gate, and the lwIP bridge already owns virtio-net.
+E1000DEV=()
+if [ -n "${QEMU_E1000E:-}" ]; then
+    E1000DEV=(-netdev user,id=net1 -device e1000e,netdev=net1)
+fi
 AHCIDEV=()
 if [ -n "${QEMU_AHCI_IMG:-}" ]; then
     AHCIDEV=(-device ich9-ahci,id=ahci0
@@ -265,6 +272,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${EXT4DISK[@]}" \
     "${SFS2DISK[@]}" \
     "${AHCIDEV[@]}" \
+    "${E1000DEV[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \

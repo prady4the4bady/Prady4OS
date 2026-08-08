@@ -26,8 +26,9 @@
 #include "string.h"
 #include "acpi.h"
 #include "lapic.h"
-#include "ioapic.h"
-#include "ahci.h"           /* DDR-875: AHCI SATA */        /* DDR-874: I/O APIC + GSI routing */
+#include "ioapic.h"        /* DDR-874: I/O APIC + GSI routing */
+#include "ahci.h"          /* DDR-875: AHCI SATA */
+#include "e1000e.h"        /* DDR-876: Intel e1000e NIC */
 #include "smp.h"
 #include "percpu.h"
 #include "pcie.h"
@@ -2383,6 +2384,12 @@ void kmain(struct boot_info *bi) {
             ahci_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x02)    /* virtio network (NET-A) */
             virtio_net_init(d->bus, d->dev, d->func);
+        /* DDR-876 (item 25): Intel e1000e. Matched on vendor+device rather
+         * than class 0x02 alone, which is every Ethernet controller — this
+         * driver programs 82574L registers and would misdrive anything
+         * else that merely claims to be a NIC. */
+        if (d->vendor_id == 0x8086 && d->device_id == 0x10D3)
+            e1000e_init(d->bus, d->dev, d->func);
         if (d->vendor_id == 0x1AF4 && d->class_code == 0x03)    /* virtio GPU (L7 slice 0) */
             virtio_gpu_init(d->bus, d->dev, d->func);
         /* DDR-816: virtio-rng. Matched on device_id (0x1040 + type 4), not

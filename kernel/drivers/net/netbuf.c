@@ -2,7 +2,10 @@
 #include "netbuf.h"
 #include "pmm.h"
 
-#define NETBUF_COUNT 40              /* RX ring (16) + TX + slack */
+/* virtio-net RX ring (16) + TX + slack, plus the e1000e rings (16 RX + 8 TX,
+ * DDR-876). The pool is shared, so a second NIC's rings must be budgeted here
+ * or its init fails with "netbuf exhausted". */
+#define NETBUF_COUNT 72
 
 static uint64_t pool[NETBUF_COUNT];  /* LIFO free stack of buffer addresses */
 static int      top;                 /* number of free buffers */

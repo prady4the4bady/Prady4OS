@@ -3500,3 +3500,43 @@ returned `-EIO` and both are negative.
 Mutation table: baseline PASS, all three mutations FAIL, restore PASS.
 Regression set green (`smoke`, `-fsrm`, `-fs-sfs-rw`, `-fs-rw`, `-sfs-persist`,
 `-user`). Zero warnings under `-Werror`. 135 gates across 6 shards.
+
+## Group 4 item 25 — Intel e1000e NIC (DDR-876)
+
+`kernel/drivers/net/e1000e.{c,h}` drives QEMU's `e1000e` (82574L, `8086:10D3`)
+behind the same five-function API as `virtio_net.h`, so the lwIP bridge above
+sees one interface whichever NIC the platform has. RX/TX descriptor rings, MAC
+from RAL0/RAH0, polled receive. Matched on **vendor AND device**, not class 0x02
+— class alone is every Ethernet controller, and this driver programs 82574L
+registers.
+
+Polled rather than interrupt-driven on purpose: INTx here is shared and chained,
+virtio-net already owns MSI-X vector 54, and a mis-shared line loses interrupts,
+which reads as a network that works until it silently stops.
+
+**Two things went wrong and are worth keeping.** The first run page-faulted at
+`CR2=0xFEB85400` — RAH0 sits at BAR offset 0x5404 and the map covered one page.
+The BAR is now *probed* for its size rather than assumed; swapping one assumed
+constant for a larger one would have been the same mistake. The second was
+"netbuf exhausted": `netbuf` is a fixed 40-buffer pool sized for one NIC. Rings
+are now 16 RX / 8 TX (a multiple of 8, keeping RDLEN a multiple of 128 bytes) and
+`NETBUF_COUNT` is 72 with the second NIC written into the budget comment.
+
+`smoke-e1000e` attaches a real device (opt-in `QEMU_E1000E`) and requires a MAC
+prefix of `52:54:00:` plus `TX OK` **and** `RX OK` — bring-up sends a broadcast
+ARP and polls for slirp's reply. That round trip is the only thing exercising the
+TX descriptor, RX descriptor, DD bit and tail pointer together; all four can be
+wrong while the device probes and prints cleanly.
+
+Mutation matrix: `RDT = 0`, RDLEN-in-entries, dropped bus-master, and a wrong
+RAL0 offset are all **killed**. Testing `d->length` instead of `STATUS.DD`
+**survives** — the ring is zeroed and QEMU writes length and status together, so
+one packet cannot distinguish them. The DD check is correct on the SDM's terms
+but this gate does not prove it; a ring-wrapping multi-packet gate would.
+
+Not proven: ring wraparound, sustained throughput, link-state changes, and lwIP
+running over e1000e (the bridge is still bound to virtio-net).
+
+Gates green: `smoke-e1000e`, `smoke`, `smoke-fs`, `smoke-fs-rw`,
+`smoke-fs-sfs-rw`, `smoke-fs-ext4`, `smoke-user`. Zero warnings under `-Werror`.
+138 gates across 6 shards.
