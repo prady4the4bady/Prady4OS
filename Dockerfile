@@ -14,7 +14,7 @@
 #
 # The base is pinned to the same distro the project already builds on
 # (Ubuntu 24.04, per CLAUDE.md), so container and WSL builds agree.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
