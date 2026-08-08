@@ -2163,7 +2163,7 @@ NASM 2.15.05, QEMU 6.2.0, rustc/cargo 1.98.0-nightly (target
 | Privacy routing / OCR / context | 🟢 COMPLETE | 6 | `aether/agents/routing/` (DDR-852). Ring-3 privacy is an **early readable refusal, not the enforcement** — the kernel netfilter hook (DDR-802, `AR_PRIVACY_BLOCKED`) remains the only thing that counts — and it **fails closed**: an unreadable privacy state blocks. An unresolved hostname is never classified local. Routing refuses rather than near-missing, and is deterministic across registration order. OCR **quarantines** anything under 0.80 confidence with mandatory provenance; quarantined records enter the context marked `[UNVERIFIED OCR]` at lowest priority so a guess cannot be laundered into authoritative context. 36 tests; 10/10 mutations killed. |
 | Research lineage (hypothesis/genome/dead-end) | COMPLETE | 6 | `aether/agents/research/` (DDR-853). All three are **records of what did not work**, append-only, because a research agent's failures are its most valuable output and the easiest to lose. A hypothesis needs a prediction (one that cannot be wrong cannot be right); superseding versions rather than edits; resolution requires evidence and cannot be re-run. A genome mutation requires a rationale. A dead end requires a failure reason, and `check()` returns the colliding entry rather than a bare boolean so the refusal is arguable. 32 tests; 10/10 mutations killed. |
 | Mutation harness | COMPLETE | - | `tools/mutation/mutate.py` (DDR-853). **Fails closed**: aborts on a missing or ambiguous target, clears `__pycache__` and imports with `-B`, and **fails the run if any mutation kills nothing**. Replaces the ad-hoc shell version, which skipped absent targets with a warning while still printing kills from the previous mutation's stale bytecode. |
-| Wayland Compositor | 🔴 NOT BUILT | 7 | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
+| Wayland Compositor | ⚪ SUPERSEDED | 7 | **Not required for v1.0.0** (item 41, operator pre-approved; DDR-865). The in-house C framebuffer compositor (`user/compositor.c`, DDR-704) already renders both ambiances with input, windowing, focus and drag, proven by ~25 gates. A wlroots port would replace working gate-proven code with a large out-of-tree dependency chain (libdrm/EGL/pixman) for no capability this release needs. Must NOT appear in release notes as an unmet item. | wlroots/Wayland is a large out-of-tree port (libdrm/EGL/pixman) — standing wall. An **in-house** full-screen compositor over `SYS_FB_*`+`SYS_INPUT_POLL` is the in-progress path (DDR-704), not wlroots. |
 | SOVEREIGN MODE UI | 🟡 IN PROGRESS | 7 | Basic in-house compositor renders it (DDR-704, `user/compositor.c`): dark/purple desktop + `SOVEREIGN MODE` label, keyboard-driven (gate `smoke-compositor`). Full glass/OKLab/animation spec deferred. |
 | MANUAL MODE UI | 🟡 IN PROGRESS | 7 | Same compositor renders the light/teal `MANUAL MODE` desktop; `m` key flips to it (gate `smoke-compositor`). Full visual spec deferred. |
 | Mode Toggle Animation | 🔴 NOT BUILT | 7 | 300ms cubic-bezier — visual polish, after the compositor renders the static toggle. |
@@ -3426,3 +3426,40 @@ tick inflation, with a second root-cause noted as en route).
 observation, not a measurement, and quoting a percentage from it would be
 inventing precision. A real rate needs a deliberate N-run campaign on one SHA,
 which is the shape item 47's "measured reproduction rate" actually requires.
+
+
+## DDR-865 — the local kernel build was blocked by Windows Defender
+
+`make kernel` died at `llvm-objcopy: error: 'build/kernel.elf': Invalid
+argument` while CI stayed green on the same commit. It was not objcopy:
+**nothing** could read the file, `cp` included, and Windows reported the file as
+containing "a virus or potentially unwanted software".
+
+**Windows Defender quarantines the kernel ELF.** A freestanding x86_64 image —
+no libc, raw entry point — trips a heuristic. The file stays visible at its full
+1,017,984 bytes and every read returns `EINVAL`, which is why the failure reads
+as a toolchain bug.
+
+**Fixed by building on WSL's native ext4** (`~/pradyos-build`, rsync-mirrored)
+rather than by adding a Defender exclusion. An exclusion would work, but it
+changes the operator's security posture, and that is theirs to decide rather
+than a side effect of a build fix. ext4 also matches CI's filesystem semantics.
+
+**This materially changes throughput.** The full `image` target builds, and
+`make smoke` passes in **0.6 s** — DDR-785's early exit fires the moment the
+sentinel appears, so local gating costs far less than the ~2–3 min per gate
+previously assumed. Kernel work can now be verified locally instead of waiting
+on a ~30 min CI round trip.
+
+One trap worth recording because it cost a build: `--exclude 'build/'` in rsync
+is **not** anchored, so it also matched `tools/build/` and removed
+`toolchain.mk`. The build then failed with `No rule to make target
+'tools/build/toolchain.mk'`, which looks exactly like a missing file in the
+repo. The pattern must be `/build/`.
+
+### Item 41 — Wayland: superseded, not required
+
+Pre-approved by the operator and involving no code. The in-house compositor is
+built, gate-proven and sufficient; a wlroots port would trade that for a large
+dependency chain and no new capability. Recorded so it is not read later as an
+unmet release item.
