@@ -12,6 +12,37 @@
 ; only RAX/RCX/R11 change), marshal up to four args into the SysV C calling
 ; convention, call syscall_dispatch, then restore and SYSRET back to ring 3.
 ;
+; ---------------------------------------------------------------------------
+; COST (Group 8 item 44, DDR-870)
+;
+; STATIC — exact, and the only figures here that hold on real silicon:
+;   46 instructions on the entry+exit path
+;   18 stack accesses (9 push + 9 pop) = 144 bytes of stack traffic
+;   1 SWAPGS in, 1 SWAPGS out
+;   1 stack switch (user RSP -> per-thread kernel RSP)
+;   5 register moves to marshal the syscall ABI into the SysV C ABI
+;   no locks, no serialising instruction beyond SWAPGS/SYSRET themselves
+;
+; The nine saved registers are the ones the C dispatch may clobber. Saving
+; fewer would break the syscall ABI's promise that only RAX/RCX/R11 change;
+; saving more would cost two dependent memory operations per call, on the
+; hottest path in the kernel. Both directions are wrong, which is why the set
+; is fixed rather than tuned.
+;
+; The arg marshal is 5 moves because the syscall ABI (RDI/RSI/RDX/R10) and the
+; SysV C ABI (RDI/RSI/RDX/RCX) disagree on the 4th register: SYSCALL destroys
+; RCX with the return RIP, so the kernel takes arg 4 in R10 and shuffles.
+;
+; MEASURED — QEMU TCG, 2000 iterations, minimum, net of an RDTSC baseline of
+; 119 ticks (tools: user/benchtest.c, gate smoke-bench):
+;   SYS_GETPID round trip ~662 emulated ticks
+;
+; GETPID is used precisely because its handler does almost nothing, so the
+; figure is this trampoline plus dispatch, not a syscall's work. It is NOT a
+; hardware cycle count — under TCG a translated instruction costs whatever the
+; translation costs. Useful for spotting a regression; meaningless as an
+; absolute number. Do not quote it as "cycles".
+; ---------------------------------------------------------------------------
 ; No nesting: SFMASK clears IF, so a syscall is never interrupted.
 ; ============================================================================
 

@@ -158,6 +158,13 @@ ftrunctest_elf:
     incbin "build/ftrunctest.elf"
 ftrunctest_elf_end:
 
+; DDR-870: perf benchmark probe (Group 8 items 44/45)
+global benchtest_elf
+global benchtest_elf_end
+benchtest_elf:
+    incbin "build/benchtest.elf"
+benchtest_elf_end:
+
 ; DDR-801 (R3): per-destination egress audit probe.
 global egressaudittest_elf
 global egressaudittest_elf_end

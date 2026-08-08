@@ -165,3 +165,4 @@
 2	smoke-auditchain-tamper	120
 3	smoke-invariants	120
 4	smoke-ftruncate	90
+0	smoke-bench	90

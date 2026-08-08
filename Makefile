@@ -75,6 +75,8 @@ USER_FSRM_SRC := user/fsrmtest.c          # fs: ring-3 file lifecycle probe (DDR
 USER_FSRM_ELF := build/fsrmtest.elf
 USER_FTRUNC_SRC := user/ftrunctest.c      # fs: ring-3 ftruncate probe (DDR-866)
 USER_FTRUNC_ELF := build/ftrunctest.elf
+USER_BENCH_SRC  := user/benchtest.c       # perf: RDTSC path benchmark (DDR-870)
+USER_BENCH_ELF  := build/benchtest.elf
 USER_SYSINFO_SRC := user/sysinfotest.c    # sys: SYS_SYSINFO introspection probe (DDR-748)
 USER_SYSINFO_ELF := build/sysinfotest.elf
 USER_TIME_SRC := user/timetest.c          # sys: SYS_TIME wall-clock probe (DDR-749)
@@ -210,7 +212,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -396,6 +398,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FSRM_ELF) build/fsrmtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FTRUNC_SRC) -o build/ftrunctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FTRUNC_ELF) build/ftrunctest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_BENCH_SRC) -o build/benchtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BENCH_ELF) build/benchtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SYSINFO_SRC) -o build/sysinfotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SYSINFO_ELF) build/sysinfotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_TIME_SRC) -o build/timetest.o
@@ -469,7 +473,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FTRUNC_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FTRUNC_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -797,6 +801,21 @@ smoke-rootmount: $(IMG) fat-image sfs-image ext4-image
 # per failed case, so a shrink that silently zeroed the surviving bytes, or a
 # grow that handed back stale block content, fails here rather than passing a
 # length-only check.
+# DDR-870 (Group 8 items 44/45): perf benchmark. Opt-in via DDR-804 — it issues
+# thousands of syscalls and would perturb the timing-sensitive gates if it ran
+# on every boot.
+#
+# The gate asserts the benchmark RAN and produced self-consistent numbers, not
+# that any particular figure was hit. Under QEMU TCG the guest TSC counts
+# emulated time, so a hard cycle threshold would be asserting a property the
+# measurement cannot support — it would fail on a faster host and pass on a
+# slower one, for reasons unrelated to the code.
+smoke-bench: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_PROBES=bench \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_BENCH_OK')" \
+	FORBIDDEN_SENTINEL="BENCH FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-ftruncate: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=ftruncate \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_FTRUNCATE_OK')" \

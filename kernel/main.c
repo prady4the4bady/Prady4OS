@@ -355,6 +355,8 @@ extern const unsigned char capnettest_elf[];         /* L6/7: CAP_NET socket-aut
 extern const unsigned char capnettest_elf_end[];
 extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mount probe (DDR-739) */
 extern const unsigned char rootmounttest_elf_end[];
+extern const unsigned char benchtest_elf[];            /* perf: RDTSC benchmark (DDR-870) */
+extern const unsigned char benchtest_elf_end[];
 extern const unsigned char ftrunctest_elf[];          /* fs: ftruncate probe (DDR-866) */
 extern const unsigned char ftrunctest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
@@ -1705,6 +1707,19 @@ static void fs_test_thread(void *arg) {
                         tp->root_mnt = smnt;          /* SFS root before unblock */
                         sched_unblock(tp);
                         kputs("[user] ELF loaded (embedded); ftruncate probe spawned\r\n");
+                    }
+                }
+                /* DDR-870 (items 44/45): RDTSC benchmark of the syscall and
+                 * context-switch paths. Opt-in via DDR-804: it runs thousands
+                 * of syscalls, which would perturb the timing-sensitive gates
+                 * if it ran on every boot. */
+                if (probe_enabled("bench")) {
+                    struct tcb *bp = 0;
+                    uint64_t blen2 = (uint64_t)(benchtest_elf_end - benchtest_elf);
+                    if (elf_load((void *)(uintptr_t)benchtest_elf, blen2,
+                                 "BENCHTEST", &bp) == ELF_OK && bp) {
+                        sched_unblock(bp);
+                        kputs("[user] ELF loaded (embedded); perf benchmark spawned\r\n");
                     }
                 }
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.

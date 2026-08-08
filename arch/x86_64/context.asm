@@ -16,6 +16,32 @@
 ; New threads are seeded with this exact frame by sched_create().
 ;
 ; Target: <= 1.5 us cold same-core (see the Layer-2 board); measured at boot.
+;
+; ---------------------------------------------------------------------------
+; COST (Group 8 item 44, DDR-870)
+;
+; STATIC — exact, and the only figures here that mean anything on real silicon:
+;   17 instructions
+;   14 stack accesses (7 push + 7 pop) = 112 bytes of stack traffic
+;   2 register moves for the RSP swap, 1 RET
+;   no memory allocation, no locks, no CPUID/serialising instruction
+;
+; The push/pop pairs dominate: every one is a dependent store or load against
+; the same stack pointer, so this path is bounded by store-buffer and L1
+; latency rather than by instruction count. That is why the register set saved
+; here is deliberately only the SysV callee-saved six plus RFLAGS — each extra
+; register would add two more dependent memory operations to every switch in
+; the system.
+;
+; MEASURED — QEMU TCG, 2000 iterations, minimum, net of an RDTSC baseline of
+; 119 ticks (tools: user/benchtest.c, gate smoke-bench):
+;   SYS_YIELD round trip ~170,660 emulated ticks
+;
+; That figure includes the full syscall entry, schedule(), this switch, and the
+; return. It is NOT a hardware cycle count: under TCG a translated instruction
+; costs whatever the translation costs, so the number is valid for spotting a
+; regression and worthless as an absolute claim. Do not quote it as "cycles".
+; ---------------------------------------------------------------------------
 ; ============================================================================
 
 BITS 64
