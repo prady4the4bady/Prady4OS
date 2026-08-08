@@ -11,6 +11,20 @@
 #include "ipc.h"
 #include "sched.h"
 
+/* DDR-873 (item 43): the 32-byte payload copy lives in
+ * arch/x86_64/ipc_copy.asm as two MOVDQU pairs. XMM rather than YMM on
+ * purpose — see the .asm header: a YMM path would need a runtime gate
+ * (FXSAVE does not save YMM on pre-AVX CPUs) and a VZEROUPPER whose cost
+ * exceeds the three instructions it would save on a copy this small.
+ *
+ * Only the two HOT paths use it. The init path below stays a plain loop:
+ * it zeroes rather than copies, runs once per endpoint, and giving it a
+ * vector path would add a second thing to keep in step with
+ * IPC_MSG_WORDS for no measurable gain. */
+void ipc_copy32(void *dst, const void *src);
+_Static_assert(IPC_MSG_WORDS * sizeof(uint64_t) == 32,
+               "ipc_copy32 hard-codes 32 bytes; IPC_MSG_WORDS changed");
+
 void ipc_endpoint_init(struct ipc_endpoint *e, uint64_t res_id) {
     e->full = 0;
     e->res_id = res_id;
@@ -25,8 +39,7 @@ int ipc_send(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, const uint
         return -1;
 
     uint64_t flags = spin_lock_irqsave(&e->lock);
-    for (int i = 0; i < IPC_MSG_WORDS; i++)
-        e->msg[i] = msg[i];
+    ipc_copy32(e->msg, msg);
     e->full = 1;
     if (e->waiting_receiver) {
         struct tcb *r = e->waiting_receiver;
@@ -46,8 +59,7 @@ int ipc_recv(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, uint64_t *
         e->waiting_receiver = current_thread;
         sched_block_on(&e->lock);  /* publishes BLOCKED under the lock, then sleeps */
     }
-    for (int i = 0; i < IPC_MSG_WORDS; i++)
-        out[i] = e->msg[i];
+    ipc_copy32(out, e->msg);
     e->full = 0;
     spin_unlock_irqrestore(&e->lock, flags);
     return 0;
