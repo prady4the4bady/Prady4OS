@@ -26,6 +26,7 @@
 #include "string.h"
 #include "acpi.h"
 #include "lapic.h"
+#include "ioapic.h"        /* DDR-874: I/O APIC + GSI routing */
 #include "smp.h"
 #include "percpu.h"
 #include "pcie.h"
@@ -2331,6 +2332,11 @@ void kmain(struct boot_info *bi) {
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();
+    /* DDR-874 (item 28): I/O APIC + q35 GSI routing. Needs the MADT, so it
+     * runs straight after acpi_init. Returns 0 on a board without one, and
+     * the 8259 PIC stays in charge — this does not disturb the existing
+     * routing, it adds the table per-CPU affinity will be expressed in. */
+    ioapic_init();
     acpi_power_init();          /* DDR-746: parse FADT + \_S5_ for SYS_POWEROFF */
     /* DDR-714 stage A: LAPIC up + APIC timer takes the 100 Hz tick (PIT is then
      * masked). Device IRQs stay on the 8259. Needs ACPI (MADT) + a live PIT for
