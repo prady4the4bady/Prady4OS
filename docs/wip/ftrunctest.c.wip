@@ -1,0 +1,136 @@
+/* user/ftrunctest.c — ring-3 ftruncate probe (DDR-866, Group 3 item 20).
+ *
+ * Spawned with its root_mnt on the SFS volume (the writable CoW root).
+ *
+ * The interesting cases are the ones that are NOT "truncate to zero", because
+ * zero is the case a wrong implementation still gets right:
+ *   1. create a 40-byte file.
+ *   2. ftruncate to 16   -> shrink. Size is 16 AND the surviving bytes are the
+ *      original first 16, not zeros. A "shrink" that discarded content and
+ *      reported the right length would pass a length-only check.
+ *   3. ftruncate to 64   -> grow. Size is 64 and the tail is ZERO-FILLED, not
+ *      whatever was previously in those blocks. Reading back stale extent bytes
+ *      is the classic grow bug and it leaks prior file contents.
+ *   4. ftruncate to 0    -> empty.
+ *   5. ftruncate(fd, -1) -> -EINVAL, NOT a 16-exabyte grow. A signed check
+ *      before the cast is the only thing standing between the two.
+ *   6. ftruncate on a bad fd -> < 0.
+ * All pass -> PRADYOS_FTRUNCATE_OK; any step wrong -> "FTRUNC FAIL" + exit 1.
+ *
+ * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
+ */
+
+#define SYS_WRITE      6
+#define SYS_READ       5
+#define SYS_OPEN       7
+#define SYS_CLOSE      8
+#define SYS_EXIT       4
+#define SYS_FSTAT      9
+#define SYS_FTRUNCATE 94
+
+#define O_RDONLY  0x0
+#define O_WRONLY  0x1
+#define O_RDWR    0x2
+#define O_CREAT   0x40
+
+static inline long nsi(long n, long a1, long a2, long a3) {
+    long r;
+    __asm__ volatile("syscall" : "=a"(r)
+                     : "a"(n), "D"(a1), "S"(a2), "d"(a3)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
+static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
+
+__attribute__((noreturn)) static void fail(const char *why) {
+    wr("FTRUNC FAIL: ");
+    wr(why);
+    wr("\n");
+    nsi(SYS_EXIT, 1, 0, 0);
+    for (;;) { }
+}
+
+/* struct stat's st_size sits at a fixed offset; the probe needs only that one
+ * field, so it reads the raw buffer rather than duplicating the whole layout.
+ * Offsets verified against kernel/include/stat.h:
+ *   st_dev 8 + st_ino 8 + st_nlink 8 + st_mode 4 + st_uid 4 + st_gid 4
+ *   + __pad0 4 + st_rdev 8 = 48, and the struct totals 144 bytes. */
+#define STAT_BUF   144
+#define ST_SIZE_OFF 48
+
+static long fsize(long fd) {
+    char st[STAT_BUF];
+    for (int i = 0; i < STAT_BUF; i++) st[i] = 0;
+    if (nsi(SYS_FSTAT, fd, (long)st, 0) != 0) fail("fstat failed");
+    long sz = 0;
+    for (int i = 7; i >= 0; i--)
+        sz = (sz << 8) | (unsigned char)st[ST_SIZE_OFF + i];
+    return sz;
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
+    const char *path = "/FTRUNC.BIN";
+    char pat[40];
+    for (int i = 0; i < 40; i++)
+        pat[i] = (char)('A' + (i % 26));
+
+    /* (1) create a 40-byte file. */
+    long fd = nsi(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0);
+    if (fd < 0) fail("create failed");
+    if (nsi(SYS_WRITE, fd, (long)pat, 40) != 40) fail("initial write short");
+    if (fsize(fd) != 40) fail("size after write is not 40");
+
+    /* (2) SHRINK to 16 — and the surviving bytes must be the original ones. */
+    if (nsi(SYS_FTRUNCATE, fd, 16, 0) != 0) fail("shrink to 16 failed");
+    if (fsize(fd) != 16) fail("size after shrink is not 16");
+    nsi(SYS_CLOSE, fd, 0, 0);
+
+    long rf = nsi(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (rf < 0) fail("reopen after shrink failed");
+    char buf[80];
+    for (int i = 0; i < 80; i++) buf[i] = (char)0x5A;
+    long n = nsi(SYS_READ, rf, (long)buf, 40);
+    nsi(SYS_CLOSE, rf, 0, 0);
+    if (n != 16) fail("read after shrink returned more than 16 bytes");
+    for (int i = 0; i < 16; i++)
+        if (buf[i] != pat[i]) fail("shrink lost or altered surviving content");
+
+    /* (3) GROW to 64 — the tail must be zeros, not stale block bytes. */
+    fd = nsi(SYS_OPEN, (long)path, O_RDWR, 0);
+    if (fd < 0) fail("reopen for grow failed");
+    if (nsi(SYS_FTRUNCATE, fd, 64, 0) != 0) fail("grow to 64 failed");
+    if (fsize(fd) != 64) fail("size after grow is not 64");
+    nsi(SYS_CLOSE, fd, 0, 0);
+
+    rf = nsi(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (rf < 0) fail("reopen after grow failed");
+    for (int i = 0; i < 80; i++) buf[i] = (char)0x5A;
+    n = nsi(SYS_READ, rf, (long)buf, 64);
+    nsi(SYS_CLOSE, rf, 0, 0);
+    if (n != 64) fail("read after grow short");
+    for (int i = 0; i < 16; i++)
+        if (buf[i] != pat[i]) fail("grow disturbed the original prefix");
+    for (int i = 16; i < 64; i++)
+        if (buf[i] != 0) fail("grow left stale bytes instead of zeros");
+
+    /* (4) truncate to zero. */
+    fd = nsi(SYS_OPEN, (long)path, O_RDWR, 0);
+    if (fd < 0) fail("reopen for zero failed");
+    if (nsi(SYS_FTRUNCATE, fd, 0, 0) != 0) fail("truncate to 0 failed");
+    if (fsize(fd) != 0) fail("size after truncate to 0 is not 0");
+
+    /* (5) NEGATIVE length is refused. Cast-before-check would make this a
+     * request to grow to ~16 exabytes, and it would not be refused. */
+    if (nsi(SYS_FTRUNCATE, fd, -1, 0) >= 0) fail("negative length accepted");
+    if (fsize(fd) != 0) fail("refused negative length still changed the size");
+    nsi(SYS_CLOSE, fd, 0, 0);
+
+    /* (6) a bad descriptor is an error, not a fault. */
+    if (nsi(SYS_FTRUNCATE, 4242, 8, 0) >= 0) fail("ftruncate on bad fd succeeded");
+
+    wr("PRADYOS_FTRUNCATE_OK\n");
+    nsi(SYS_EXIT, 0, 0, 0);
+    for (;;) { }
+}
