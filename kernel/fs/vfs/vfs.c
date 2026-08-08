@@ -107,6 +107,28 @@ int vfs_read(cap_t cap, const struct vfs_file *f, uint64_t off, void *buf, uint3
     return r;
 }
 
+/* DDR-866 (item 20): set a file's length.
+ *
+ * Gated on CAP_FS_WRITE, not a metadata capability: truncate destroys file
+ * content exactly as a write does, and a caller able to shrink a file to
+ * zero without CAP_FS_WRITE would hold a delete primitive that bypasses the
+ * write gate entirely.
+ *
+ * Deliberately NOT charged to the ADR-032 token bucket that vfs_write uses.
+ * That bucket bounds write THROUGHPUT — caller bytes pushed through the FS —
+ * and a truncate moves none. Charging it would let one length change exhaust
+ * a process's budget, and leaving it uncharged is safe because truncate
+ * cannot write attacker-chosen data. */
+int vfs_truncate(cap_t cap, struct vfs_file *f, uint64_t len) {
+    struct vfs_mount *m = mnt_get(f->mnt);
+    if (!m || !m->fs->truncate || !cap_ok(cap, CAP_FS_WRITE))
+        return -1;
+    mnt_lock(m);
+    int r = m->fs->truncate(m->ctx, f, len);
+    mnt_unlock(m);
+    return r;
+}
+
 int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
     struct vfs_mount *m = mnt_get(f->mnt);
     if (!m || !m->fs->write || !cap_ok(cap, CAP_FS_WRITE))

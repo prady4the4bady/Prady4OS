@@ -163,6 +163,9 @@
  * SYS_READ_AUDIT (37), whose record layout three ring-3 probes already parse —
  * widening that struct would overflow their buffers. This call returns a verdict,
  * never records. NSI 93, not 87: 87 is SYS_VAULT_PUT, shipped (DDR-840). */
+/* DDR-866 (item 20): set an open file's length. Grows with zeros, shrinks by
+ * discarding the tail. Appended at 94 — the next free NSI, per DDR-832. */
+#define SYS_FTRUNCATE      94  /* (fd, len) -> 0 | -EBADF|-EINVAL|-EPERM|-EIO  */
 #define SYS_VERIFY_AUDIT   93  /* (bad_idx_ptr) -> 0 intact | -EACCES broken | -EPERM */
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */

@@ -853,6 +853,98 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
     return (int)len;
 }
 
+/* DDR-866 (item 20) — non-zero ftruncate.
+ *
+ * SFS stores content as up to 4 append-only extents, so a length change is a
+ * READ-THEN-REWRITE rather than an in-place extent edit: an extent may be
+ * LZ4-compressed, so its byte range cannot be trimmed without decompressing it
+ * anyway.
+ *
+ * The size bound is ENFORCED, not assumed: past SFS_TRUNC_MAX the request is
+ * REFUSED rather than silently satisfied at a different length. A "successful"
+ * truncate that produced a length nobody asked for is the worst outcome here,
+ * because the caller's next write lands at an offset it did not choose.
+ *
+ * Growing zero-fills, matching POSIX. The zeros are real bytes: SFS has no
+ * sparse representation, and inventing one silently would make st_blocks lie.
+ */
+#define SFS_TRUNC_MAX (64u * 1024u)          /* 16 pages; refuse beyond */
+
+static int sfs_truncate(void *ctx, struct vfs_file *f, uint64_t len) {
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    if (f->dirent_clus != 0)
+        return -1;                            /* versioned handle is read-only */
+    if (len > SFS_TRUNC_MAX)
+        return -1;                            /* refused, never partly applied */
+
+    uint64_t ip = pmm_alloc_page();
+    if (!ip) return -1;
+    struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
+    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -1; }
+
+    uint64_t oldsz = in->size;
+    if (len == oldsz) { pmm_free_page(ip); return 0; }   /* exact no-op */
+
+    /* Materialise the surviving prefix BEFORE touching the inode, so a failure
+     * here leaves the file exactly as it was. */
+    uint8_t *buf = 0;
+    uint64_t keep = (len < oldsz) ? len : oldsz;
+    unsigned bord = order_for(SFS_TRUNC_MAX);
+    if (len > 0) {
+        uint64_t bp = pmm_alloc_pages(bord);
+        if (!bp) { pmm_free_page(ip); return -1; }
+        buf = (uint8_t *)(uintptr_t)bp;
+        memset(buf, 0, SFS_TRUNC_MAX);                    /* the zero-fill tail */
+        if (keep > 0) {
+            int got = sfs_read(ctx, f, 0, buf, (uint32_t)keep);
+            if (got < (int)keep) {
+                pmm_free_pages(bp, bord);
+                pmm_free_page(ip);
+                return -1;
+            }
+        }
+#ifdef FTRUNC_DEBUG
+        kputs("[ftrunc] keep="); kputhex(keep);
+        kputs(" b0="); kputhex(buf[0]);
+        kputs(" b1="); kputhex(buf[1]);
+        kputs(" b15="); kputhex(buf[15]);
+        kputs("\r\n");
+#endif
+    }
+
+    in->extent_count = 0;                     /* drop the old extents ... */
+    in->size = 0;
+    in->flags &= ~(uint32_t)SFS_I_LZ4;
+    if (len > 0) {                            /* ... and re-write the content */
+        struct sfs_extent_ref ext;
+        if (write_extent(c, buf, (uint32_t)len, &ext) != 0) {
+            pmm_free_pages((uint64_t)(uintptr_t)buf, bord);
+            pmm_free_page(ip);
+            return -1;
+        }
+        in->inline_extents[in->extent_count++] = ext;
+        in->size = len;
+        if (ext.flags & SFS_EXT_LZ4)
+            in->flags |= SFS_I_LZ4;
+    }
+    if (buf)
+        pmm_free_pages((uint64_t)(uintptr_t)buf, bord);
+
+    uint64_t niblk = alloc_block(c);          /* CoW the inode, as sfs_write does */
+    wr_block(c, niblk, in);
+    pmm_free_page(ip);
+
+    struct sfs_leaf_slot s;
+    memset(&s, 0, sizeof s);
+    s.key = SFS_KEY_INODE | f->cookie;
+    s.v.ino.inode_block = niblk;
+    if (bt_insert(c, &s))
+        return -1;
+    sfs_commit(c);
+    f->size = len;
+    return 0;
+}
+
 /* DDR-741: remove a file or an EMPTY directory by tombstoning its DIR entry
  * (inode_num = 0). No B+tree delete and no block reclamation (bounded leak until
  * reformat). Handles both files and dirs through the single vfs_unlink op. */
@@ -1286,6 +1378,7 @@ static const struct vfs_fs_ops sfs_ops = {
     .txn_commit = sfs_txn_commit,
     .txn_abort  = sfs_txn_abort,
     .umount     = sfs_umount,
+    .truncate   = sfs_truncate,          /* DDR-866 */
 };
 
 void sfs_register(void) {

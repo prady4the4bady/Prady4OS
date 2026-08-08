@@ -355,6 +355,8 @@ extern const unsigned char capnettest_elf[];         /* L6/7: CAP_NET socket-aut
 extern const unsigned char capnettest_elf_end[];
 extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mount probe (DDR-739) */
 extern const unsigned char rootmounttest_elf_end[];
+extern const unsigned char ftrunctest_elf[];          /* fs: ftruncate probe (DDR-866) */
+extern const unsigned char ftrunctest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
@@ -1686,6 +1688,23 @@ static void fs_test_thread(void *arg) {
                         fp->root_mnt = smnt;          /* SFS root before unblock  */
                         sched_unblock(fp);
                         kputs("[user] ELF loaded (embedded); SFS-rooted fsrm probe spawned\r\n");
+                    }
+                }
+                /* DDR-866 (item 20): ring-3 ftruncate probe — shrink, grow
+                 * with zero-fill, truncate-to-zero, negative-length refusal.
+                 *
+                 * OPT-IN via DDR-804, unlike the fsrm probe beside it, because
+                 * this one CREATES A FILE ON THE SHARED SFS ROOT. Running it
+                 * every boot would change what every other SFS gate sees, so a
+                 * failure elsewhere could be this probe's leftovers. */
+                if (probe_enabled("ftruncate")) {
+                    struct tcb *tp = 0;
+                    uint64_t tlen = (uint64_t)(ftrunctest_elf_end - ftrunctest_elf);
+                    if (elf_load((void *)(uintptr_t)ftrunctest_elf, tlen,
+                                 "FTRUNCTEST", &tp) == ELF_OK && tp) {
+                        tp->root_mnt = smnt;          /* SFS root before unblock */
+                        sched_unblock(tp);
+                        kputs("[user] ELF loaded (embedded); ftruncate probe spawned\r\n");
                     }
                 }
                 /* PROC-D step 1: SET_TLS thread pointer + WRITEV gather-write.

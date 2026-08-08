@@ -105,6 +105,31 @@ static long sys_fstat(long fd, long ustat, long a3, long a4) {
     return 0;
 }
 
+/* DDR-866 (item 20): ftruncate(fd, len).
+ *
+ * A NEGATIVE length is -EINVAL, checked as a SIGNED value BEFORE the cast to
+ * uint64_t. Casting first turns -1 into 0xFFFF...F, which reaches the FS as a
+ * request to grow to 16 exabytes. */
+static long sys_ftruncate(long fd, long len, long a3, long a4) {
+    (void)a3; (void)a4;
+    if (len < 0)
+        return -EINVAL;
+
+    struct fd_entry *e = fd_get(current_thread, (int)fd);
+    if (!e)
+        return -EBADF;
+    if (e->kind != FD_VFS || !e->file)
+        return -EINVAL;            /* console/pipe: no length to set */
+
+    /* e->cap, not the thread's caps: the capability is the one captured when
+     * this fd was OPENED, so a descriptor opened read-only cannot be
+     * truncated later merely because the thread holds CAP_FS_WRITE for
+     * something else. Same convention as vfs_write in sys_io.c. */
+    if (vfs_truncate(e->cap, e->file, (uint64_t)len) != 0)
+        return -EIO;
+    return 0;
+}
+
 /* DDR-742: enumerate a directory one entry at a time. Resolves `path` against
  * the caller's root mount + fs cap (honoring per-process roots, DDR-739), reads
  * the index-th name via vfs_readdir, and copies it out NUL-terminated. Returns
@@ -152,4 +177,5 @@ void sys_file_register(void) {
     syscall_register(SYS_FSTAT, sys_fstat);
     syscall_register(SYS_GETDENTS, sys_getdents);   /* DDR-742 */
     syscall_register(SYS_UNLINK,   sys_unlink);     /* DDR-744 */
+    syscall_register(SYS_FTRUNCATE, sys_ftruncate); /* DDR-866 */
 }

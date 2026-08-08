@@ -28,6 +28,8 @@
 #define SYS_FSTAT      9
 #define SYS_FTRUNCATE 94
 
+#define EINVAL    22      /* kernel/include/errno.h */
+
 #define O_RDONLY  0x0
 #define O_WRONLY  0x1
 #define O_RDWR    0x2
@@ -121,9 +123,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (nsi(SYS_FTRUNCATE, fd, 0, 0) != 0) fail("truncate to 0 failed");
     if (fsize(fd) != 0) fail("size after truncate to 0 is not 0");
 
-    /* (5) NEGATIVE length is refused. Cast-before-check would make this a
-     * request to grow to ~16 exabytes, and it would not be refused. */
-    if (nsi(SYS_FTRUNCATE, fd, -1, 0) >= 0) fail("negative length accepted");
+    /* (5) NEGATIVE length is refused, and refused SPECIFICALLY as -EINVAL.
+     *
+     * Asserting only "returns negative" is not enough, and that gap was real:
+     * with the sign check removed, (uint64_t)-1 still fails — sfs_truncate's
+     * 64 KiB bound rejects it — and comes back as -EIO. Both are negative, so a
+     * sign-only assertion passes while the guard it claims to test is gone.
+     * Pinning the exact errno is what makes this case verify the sign check. */
+    if (nsi(SYS_FTRUNCATE, fd, -1, 0) != -EINVAL) fail("negative length not -EINVAL");
     if (fsize(fd) != 0) fail("refused negative length still changed the size");
     nsi(SYS_CLOSE, fd, 0, 0);
 

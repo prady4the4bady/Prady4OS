@@ -3463,3 +3463,40 @@ Pre-approved by the operator and involving no code. The in-house compositor is
 built, gate-proven and sufficient; a wlroots port would trade that for a large
 dependency chain and no new capability. Recorded so it is not read later as an
 unmet release item.
+
+
+## Item 20 (ftruncate) ships — and DDR-866's "bug" was my harness
+
+DDR-866 reverted a WORKING implementation. The deterministic 5/5 failure
+(`shrink lost or altered surviving content`) was not in the kernel: the build
+mirror used `rsync -a`, which **preserves the source mtime**, so restoring a
+mutated file whose mtime predated the object built from it left `make` believing
+that object was current. The tree kept running the **mutated** code, and the
+failure message was mutation M3's exact symptom.
+
+A clean-room rebuild passes **5/5**. The code was correct when I reverted it.
+
+Third time a stale artifact has made a harness lie here — after DDR-853's
+`__pycache__` and DDR-862's flags-only parity. Same lesson: **a restore that
+does not force a rebuild has not restored anything.** The mirror now uses
+`--checksum --no-times`, so changed files get a fresh mtime and `make` rebuilds
+exactly those.
+
+The judgement error is worth separating from the tooling one: I treated 5/5
+determinism as proof the bug was real, when determinism only shows the input was
+constant — and a stale object is a very constant input.
+
+**What ships:** a `truncate` VFS op (NULL for fat32/ext4, refused rather than
+called through), `vfs_truncate` gated on `CAP_FS_WRITE` and deliberately not
+charged to the ADR-032 throughput bucket, `sfs_truncate` as a bounded
+read-then-rewrite that refuses past 64 KiB rather than satisfying a length
+nobody asked for, `SYS_FTRUNCATE` at NSI 94 with the sign checked before the
+cast, and a probe-gated `smoke-ftruncate`.
+
+The probe's negative-length case now pins **`-EINVAL` specifically** — asserting
+only "negative" passed even with the sign check removed, because the size bound
+returned `-EIO` and both are negative.
+
+Mutation table: baseline PASS, all three mutations FAIL, restore PASS.
+Regression set green (`smoke`, `-fsrm`, `-fs-sfs-rw`, `-fs-rw`, `-sfs-persist`,
+`-user`). Zero warnings under `-Werror`. 135 gates across 6 shards.

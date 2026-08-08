@@ -151,6 +151,13 @@ fsrmtest_elf:
     incbin "build/fsrmtest.elf"
 fsrmtest_elf_end:
 
+; DDR-866: ring-3 ftruncate probe (Group 3 item 20)
+global ftrunctest_elf
+global ftrunctest_elf_end
+ftrunctest_elf:
+    incbin "build/ftrunctest.elf"
+ftrunctest_elf_end:
+
 ; DDR-801 (R3): per-destination egress audit probe.
 global egressaudittest_elf
 global egressaudittest_elf_end

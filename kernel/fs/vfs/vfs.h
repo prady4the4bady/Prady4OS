@@ -46,6 +46,13 @@ struct vfs_fs_ops {
     int (*txn_commit)(void *ctx);
     int (*txn_abort) (void *ctx);
     void (*umount)   (void *ctx);
+    /* DDR-866 (item 20): set a file's length, growing with zeros or
+     * shrinking. Appended rather than inserted. All three drivers use
+     * DESIGNATED initialisers, so position does not matter to them; what
+     * matters is that fat32 and ext4 simply do not set this, leaving it
+     * NULL, and vfs_truncate refuses on NULL rather than calling through
+     * a garbage pointer. Unimplemented stays unimplemented. */
+    int (*truncate)  (void *ctx, struct vfs_file *f, uint64_t len);
 };
 
 void vfs_register(const struct vfs_fs_ops *ops);
@@ -56,6 +63,9 @@ int  vfs_mount(unsigned blk_index);    /* probe drivers on a disk -> mount id >=
 void vfs_set_default_mnt(int mnt);
 int  vfs_default_mnt(void);
 int  vfs_unmount(int mnt);             /* release a mount (frees FS resources)   */
+/* DDR-866: set a file's length. Requires CAP_FS_WRITE — truncate destroys
+ * data exactly as a write does, so it is gated as a write, not as metadata. */
+int  vfs_truncate(cap_t cap, struct vfs_file *f, uint64_t len);
 const char *vfs_fs_name(int mnt);      /* mounted FS name for a mount id, or NULL */
 
 /* Atomic transactions (capability-gated, CAP_FS_WRITE). FS drivers that do not
