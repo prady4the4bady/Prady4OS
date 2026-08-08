@@ -16,12 +16,44 @@
 /* Clean x87+SSE state (FNINIT + default MXCSR) captured once in sched_init and
  * copied into every new thread's fpu_state (5d, ADR-023 §D8). A zeroed FXSAVE
  * area is NOT clean — it would load MXCSR=0 (all SSE exceptions unmasked). */
-static uint8_t fpu_init_template[512] __attribute__((aligned(16)));
+static uint8_t fpu_init_template[FPU_STATE_MAX] __attribute__((aligned(64)));
+
+/* DDR-872 (item 18): 1 once XSAVE is enabled with the AVX/AVX-512 components.
+ * Written once on the BSP in sched_init, before any AP runs, so it is read-only
+ * by the time a second CPU can observe it — no barrier needed. */
+static int g_xsave_on;
+
+/* Which state components XCR0 enables when XSAVE is available.
+ * x87(0) | SSE(1) | AVX(2) | opmask(5) | ZMM_hi256(6) | Hi16_ZMM(7).
+ * MPX and PKRU are deliberately excluded: nothing in this kernel or its
+ * userspace uses them, and every enabled component enlarges the per-thread
+ * save area and lengthens the switch. */
+#define XCR0_X87        (1ull << 0)
+#define XCR0_SSE        (1ull << 1)
+#define XCR0_AVX        (1ull << 2)
+#define XCR0_OPMASK     (1ull << 5)
+#define XCR0_ZMM_HI256  (1ull << 6)
+#define XCR0_HI16_ZMM   (1ull << 7)
 
 static inline void fpu_save(void *area) {
+    if (g_xsave_on) {
+        /* EDX:EAX is the requested-feature bitmap; -1 means "everything XCR0
+         * enables". XSAVE writes XSTATE_BV so XRSTOR knows what is present. */
+        __asm__ volatile("xsave (%0)"
+                         :: "r"(area), "a"(0xFFFFFFFFu), "d"(0xFFFFFFFFu)
+                         : "memory");
+        return;
+    }
     __asm__ volatile("fxsave (%0)" :: "r"(area) : "memory");
 }
+
 static inline void fpu_restore(const void *area) {
+    if (g_xsave_on) {
+        __asm__ volatile("xrstor (%0)"
+                         :: "r"(area), "a"(0xFFFFFFFFu), "d"(0xFFFFFFFFu)
+                         : "memory");
+        return;
+    }
     __asm__ volatile("fxrstor (%0)" :: "r"(area) : "memory");
 }
 
@@ -243,7 +275,78 @@ void sched_init(void) {
     uint32_t mxcsr = 0x1F80u;          /* round-nearest, all exceptions masked */
     __asm__ volatile("fninit");
     __asm__ volatile("ldmxcsr %0" :: "m"(mxcsr));
-    __asm__ volatile("fxsave (%0)" :: "r"(fpu_init_template) : "memory");
+
+    /* DDR-872 (item 18): enable XSAVE with the AVX/AVX-512 components when the
+     * CPU has them, so a context switch preserves YMM/ZMM. Without this the
+     * switch saves only x87+XMM via FXSAVE, and any kernel or ring-3 use of the
+     * wide registers is silently corrupted across a preemption — which is why
+     * DDR-871 could not use AVX in fast_memcpy.
+     *
+     * Order matters: CR4.OSXSAVE must be set before XSETBV, and XCR0 must be
+     * set before the size query, because CPUID.0xD.0:EBX reports the size for
+     * the components CURRENTLY enabled. Querying first would size the area for
+     * x87+SSE and then enable more state than it can hold. */
+    uint32_t xa = 0, xb = 0, xc = 0, xd = 0;
+    __asm__ volatile("cpuid" : "=a"(xa), "=b"(xb), "=c"(xc), "=d"(xd)
+                             : "a"(1), "c"(0));
+    int have_xsave = (xc & (1u << 26)) != 0;          /* CPUID.1:ECX.XSAVE */
+
+    if (have_xsave) {
+        uint64_t cr4;
+        __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+        cr4 |= (1ull << 18);                          /* CR4.OSXSAVE */
+        __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
+
+        /* Only enable components the CPU actually supports: XSETBV #GPs on a
+         * bit the CPU does not implement, which would fault the boot path. */
+        __asm__ volatile("cpuid" : "=a"(xa), "=b"(xb), "=c"(xc), "=d"(xd)
+                                 : "a"(0xD), "c"(0));
+        uint64_t supported = ((uint64_t)xd << 32) | xa;
+        uint64_t want = XCR0_X87 | XCR0_SSE;
+        if (supported & XCR0_AVX)       want |= XCR0_AVX;
+        if ((supported & XCR0_OPMASK) && (supported & XCR0_ZMM_HI256) &&
+            (supported & XCR0_HI16_ZMM))
+            want |= XCR0_OPMASK | XCR0_ZMM_HI256 | XCR0_HI16_ZMM;
+
+        uint32_t lo = (uint32_t)want, hi = (uint32_t)(want >> 32);
+        __asm__ volatile("xsetbv" :: "c"(0), "a"(lo), "d"(hi));
+
+        /* Now the size is meaningful. */
+        __asm__ volatile("cpuid" : "=a"(xa), "=b"(xb), "=c"(xc), "=d"(xd)
+                                 : "a"(0xD), "c"(0));
+        if (xb > FPU_STATE_MAX) {
+            /* PANIC rather than truncate. A short XSAVE area is not a smaller
+             * save — XSAVE writes past the end of the tcb and corrupts whatever
+             * follows it, which would surface anywhere but here. */
+            kputs("[fpu] PANIC: XSAVE area ");
+            kputdec(xb);
+            kputs(" exceeds FPU_STATE_MAX ");
+            kputdec(FPU_STATE_MAX);
+            kputs("\r\n");
+            for (;;) __asm__ volatile("cli; hlt");
+        }
+        g_xsave_on = 1;
+        kputs("[fpu] XSAVE on, area ");
+        kputdec(xb);
+        kputs(" bytes\r\n");
+    } else {
+        kputs("[fpu] XSAVE absent - FXSAVE (x87+SSE only)\r\n");
+    }
+
+    /* Build the per-thread init template with the SAME instruction the switch
+     * will restore with. An FXSAVE image is not a valid XSAVE area, so mixing
+     * them would XRSTOR garbage into the first thread that runs. */
+    if (g_xsave_on) {
+        /* A zeroed area is exactly right here: XSTATE_BV = 0 tells XRSTOR to
+         * put every component in its INIT state, and XCOMP_BV = 0 selects the
+         * non-compacted format XSAVE produces. That is cleaner than capturing a
+         * live image, which would bake in whatever the BSP happened to hold. */
+        memset(fpu_init_template, 0, sizeof fpu_init_template);
+    } else {
+        /* FXSAVE path: a zeroed area is NOT clean — it loads MXCSR = 0, which
+         * unmasks every SSE exception. Capture a real FNINIT image instead. */
+        __asm__ volatile("fxsave (%0)" :: "r"(fpu_init_template) : "memory");
+    }
 
     struct tcb *idle = &idle0;          /* the BSP idle + ring anchor */
     init_idle(idle, 0);

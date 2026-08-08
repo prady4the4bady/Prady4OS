@@ -41,6 +41,10 @@ struct vm_area {
     uint64_t npages;   /* length in pages; 0 = free slot            */
 };
 
+/* DDR-872: 4096 covers x87+SSE (512), AVX (576), and the full AVX-512
+ * component set (~2688) with margin. Asserted against CPUID.0xD at boot. */
+#define FPU_STATE_MAX 4096u
+
 struct tcb {
     uint64_t   rsp;            /* saved stack pointer (offset 0; asm relies on it) */
     uint64_t   kstack_base;    /* base of the thread's kernel stack               */
@@ -94,7 +98,14 @@ struct tcb {
      * (FXSAVE/FXRSTOR #GP otherwise; the TCB is kmalloc'd ->>=16-aligned, and the
      * attribute keeps the field on a 16-byte boundary). Saved on switch-out,
      * restored on switch-in, so concurrent FPU users never clobber each other. */
-    uint8_t    fpu_state[512] __attribute__((aligned(16)));
+    /* DDR-872 (item 18): sized and aligned for XSAVE, not just FXSAVE.
+     * XSAVE needs 64-byte alignment (FXSAVE only 16), and the AVX-512
+     * state components push the area well past 512 bytes — ~2688 on a
+     * Skylake-X class CPU. FPU_STATE_MAX is a compile-time ceiling that
+     * boot ASSERTS against the CPU's reported size and panics if it does
+     * not fit, rather than truncating: a short XSAVE area is not a
+     * smaller save, it is memory corruption past the end of the tcb. */
+    uint8_t    fpu_state[FPU_STATE_MAX] __attribute__((aligned(64)));
 
     /* Full-register fork (5e). A forked child resumes via signal_sigreturn with
      * the parent's complete register frame (RAX=0) instead of enter_user_mode
