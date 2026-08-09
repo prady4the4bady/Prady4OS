@@ -107,3 +107,38 @@ is the same defect as 46.
 per attempt rather than a wall.
 
 Zero warnings under `-Werror`.
+
+---
+
+## Addendum (2026-08-09) — two more observations, and a push-procedure change
+
+Two further CI failures, both on `main`, both with the DDR-880 signature:
+
+| Commit | `dev/phase1` | `main` | Failing gate |
+|---|---|---|---|
+| `d5cdf7e` (docs + stamp C) | ✅ | ❌ | `smoke-blkmq` — `'[blk] multi-inflight OK'` not found |
+| `aef693e` (item 34) | ✅ | ❌ | `smoke-msixap` — `'[blk] msix on AP OK'` not found |
+
+`d5cdf7e` was **documentation plus one boot stamp**. The identical tree passed on
+the other branch. Both missing sentinels belong to proofs that `fs_test_thread`
+runs, so both are the same lost thread — this is the unification in section 3
+reproducing in CI rather than under a local loop.
+
+**The two branch runs always execute concurrently.** Every pair in the last five
+pushes started within 2–3 seconds of the other, because pushing `dev/phase1` and
+fast-forwarding `main` in one step fires both workflows at once. That doubles
+the shard jobs racing on the runner pool — 12 instead of 6 — on a defect that is
+timing-sensitive by nature.
+
+**What is fact and what is not.** The concurrency is fact and directly
+observable. "`main` loses more often" is **not** established: two failures out of
+five pairs both landing on `main` has p ≈ 0.25 under a fair coin, which is not
+evidence of anything. The procedure change below is justified by the contention,
+not by that split.
+
+**Procedure change:** push `dev/phase1`, wait for it to go green, and only then
+fast-forward `main`. This halves the concurrent load and gives item 50's
+"3 consecutive greens on one tip" a materially better chance per attempt. It
+costs one CI cycle of wall-clock per push, which is the correct trade when the
+alternative is a promotion criterion that keeps failing for a reason unrelated
+to the change under test.

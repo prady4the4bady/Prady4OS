@@ -3704,3 +3704,20 @@ the assertion checked that the shell *said* "no such job", which prints before
 the guard is consulted, not that it *did not call kill*. Re-aimed at the
 behaviour, it kills M2. The first attempt also used `/HELLO.ELF` and got
 `Done(127)`: that file is not on the shell's root, and the gate found it.
+
+### Item 46/47 addendum — CI push procedure (DDR-880)
+
+Two more CI failures, both on `main`, both the DDR-880 signature: `d5cdf7e`
+(`smoke-blkmq`) and `aef693e` (`smoke-msixap`). `d5cdf7e` was docs plus one boot
+stamp, and the identical tree passed on `dev/phase1`. Both missing sentinels
+belong to proofs `fs_test_thread` runs — the same lost thread, now reproducing
+in CI rather than only under a local loop.
+
+The two branch runs **always execute concurrently** (every pair in the last five
+pushes started within 2–3 s), so 12 shard jobs race instead of 6 on a defect
+that is timing-sensitive. That concurrency is fact; "`main` loses more" is **not**
+established — 2 of 5 both landing on `main` is p ≈ 0.25, which is not evidence.
+
+**Procedure from here:** push `dev/phase1`, wait for green, *then* fast-forward
+`main`. It costs one CI cycle of wall-clock and halves the contention, which
+matters for item 50's "3 consecutive greens on one tip".
