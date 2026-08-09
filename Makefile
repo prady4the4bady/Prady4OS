@@ -973,6 +973,11 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'cat /NOPE66c.TXT > /BOTH66c.TXT 2>&1\n'; sleep 0.7; \
 	  printf 'echo MARKER66c\n'; sleep 0.5; \
 	  printf 'cat /BOTH66c.TXT\n'; sleep 0.6; \
+	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
+	  printf 'jobs\n'; sleep 0.6; \
+	  printf 'fg %%1\n'; sleep 1.0; \
+	  printf 'jobs\n'; sleep 0.6; \
+	  printf 'kill %%99\n'; sleep 0.6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 60 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -989,6 +994,30 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# mere "the file is non-empty" check would happily accept.
 	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
+	@# DDR-881 (item 34): job control. Three DETERMINISTIC facts only —
+	@# `jobs` and `fg` output races the child's exit (HELLO.ELF finishes in
+	@# milliseconds), so asserting on them would be a flaky gate dressed up as
+	@# a feature test.
+	@# 1. '[1] <pid>' proves `&` was parsed and the shell forked WITHOUT waiting.
+	@grep -qE '\[1\] [0-9]+' build/shell_serial.log || { echo "[shell] FAIL: '&' did not background (DDR-881)"; tail -40 build/shell_serial.log; exit 1; }
+	@# 2. 'Done' proves the non-blocking reap ran and reported. Without it the
+	@#    child stays a zombie holding its TCB and nothing ever collects it.
+	@grep -q 'Done(0)   /EXECTEST.ELF' build/shell_serial.log || { echo "[shell] FAIL: background job never reaped (DDR-881)"; tail -40 build/shell_serial.log; exit 1; }
+	@# 3. `kill %99` must REFUSE. A missing job left pid at 0, and kill(0,sig) is
+	@#    a process-group broadcast, not a no-op — so falling through here would
+	@#    signal everything rather than doing nothing.
+	@grep -q 'kill: no such job %99' build/shell_serial.log || { echo "[shell] FAIL: kill %n did not reject an unknown job (DDR-881)"; tail -40 build/shell_serial.log; exit 1; }
+	@# The message above prints BEFORE the guard is consulted, so it passes even
+	@# if the code then falls through with pid 0 — mutation testing caught that.
+	@# This second check tests the BEHAVIOUR: no kill(2) call must be attempted
+	@# at all. A fall-through calls kill(0,...) and prints 'kill: pid 0 not
+	@# found'; the correct path prints nothing further.
+	@#
+	@# NOTE, so the guard is not oversold: kill(0) is NOT a process-group
+	@# broadcast here — PRADYOS has no process groups, so the kernel simply finds
+	@# no pid 0 and returns an error. The guard is defence in depth against the
+	@# day pid semantics grow, not a fix for a live escalation.
+	@! grep -q 'kill: pid 0 not found' build/shell_serial.log || { echo "[shell] FAIL: kill %n fell through to pid 0 (DDR-881)"; tail -40 build/shell_serial.log; exit 1; }
 	@# DDR-868: `2>&1` AFTER `>` sends stderr to the SAME file as stdout. If it
 	@# were applied before the stdout swap it would capture the console instead,
 	@# the error would print to the terminal, and /BOTH66c.TXT would be empty —

@@ -3678,3 +3678,29 @@ would be the unsupported conclusion these DDRs exist to avoid.
 
 Item 46 **documented** to its stated standard: measured rate, identified
 signature, named misnomer. Item 50 is now blocked by one defect, not two.
+
+## Group 6 item 34 — PRISM job control (DDR-881)
+
+`&`, an 8-slot job table, `jobs`, `fg %n`, `kill %n`, and a non-blocking reap.
+
+**Not shipped, and not a corner-cut:** `bg` and ^Z/SIGTSTP need process groups
+and a tty that owns a foreground group; PRADYOS has neither `setpgid` nor a
+controlling terminal. Offering them would advertise a capability the kernel
+cannot provide.
+
+The reap is load-bearing: an unwaited background child stays a zombie holding
+its TCB, and the shell is the only thing that can collect its own children.
+`wait4`'s `options` is the **third** argument, so the existing 3-arg `nsi()`
+already carries `WNOHANG` — a 4-arg wrapper added for it was removed once
+`sys_wait4`'s signature was read, rather than left as dead code.
+
+`&` is stripped before redirection and pipe parsing, or `>` reads it as a
+filename — the same ordering trap DDR-868 hit with `2>&1`.
+
+The gate asserts three deterministic facts and deliberately does **not** assert
+`jobs`/`fg` output, which races the child's exit. Mutation matrix: M1 (ignore
+`&`) killed; M2 (`kill %n` falls through with pid 0) **initially survived** —
+the assertion checked that the shell *said* "no such job", which prints before
+the guard is consulted, not that it *did not call kill*. Re-aimed at the
+behaviour, it kills M2. The first attempt also used `/HELLO.ELF` and got
+`Done(127)`: that file is not on the shell's root, and the gate found it.

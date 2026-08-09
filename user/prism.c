@@ -182,6 +182,104 @@ static void do_cat(const char *path) {
     nsi(SYS_CLOSE, fd, 0, 0);
 }
 
+
+/* ---- DDR-881 (item 34): job control ------------------------------------
+ *
+ * SCOPE, stated before the code. This is `&`, a job table, `jobs`, `fg`, and
+ * signalling a job by %n. It is NOT ^Z/SIGTSTP stop-and-continue, and it is not
+ * POSIX job control in the full sense — that needs process GROUPS and a tty
+ * layer that owns a foreground group, and PRADYOS has neither. Claiming `bg`
+ * and `%1` suspension on a kernel with no setpgid and no controlling terminal
+ * would be a shell pretending to a capability the system does not have.
+ *
+ * What IS here is the part that is real without those: a background child that
+ * the shell does not wait for, a table that remembers it, and a reap that turns
+ * a finished child into a reported exit status instead of a silent zombie.
+ */
+#define NJOBS 8
+#define WNOHANG 1
+
+struct job {
+    long pid;              /* 0 = free slot                                  */
+    int  id;               /* %n as the user sees it                         */
+    int  done;             /* reaped, status valid, not yet reported         */
+    int  status;
+    char cmd[64];
+};
+static struct job jobs_tab[NJOBS];
+static int next_job_id = 1;
+
+static struct job *job_slot(void) {
+    for (int i = 0; i < NJOBS; i++)
+        if (!jobs_tab[i].pid && !jobs_tab[i].done)
+            return &jobs_tab[i];
+    return 0;
+}
+
+static struct job *job_by_spec(const char *s) {
+    if (*s == '%') s++;
+    int n = 0;
+    if (!*s) return 0;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9') return 0;
+        n = n * 10 + (*s - '0');
+    }
+    for (int i = 0; i < NJOBS; i++)
+        if (jobs_tab[i].id == n && (jobs_tab[i].pid || jobs_tab[i].done))
+            return &jobs_tab[i];
+    return 0;
+}
+
+/* Reap without blocking and REPORT. A background child that exits and is never
+ * waited for stays a zombie holding its TCB, so this is not cosmetic: the shell
+ * is the only thing that can collect them. Called before each prompt. */
+static void jobs_reap(void) {
+    for (int i = 0; i < NJOBS; i++) {
+        if (!jobs_tab[i].pid)
+            continue;
+        int st = 0;
+        long r = nsi(SYS_WAIT4, jobs_tab[i].pid, (long)&st, WNOHANG);
+        if (r == jobs_tab[i].pid) {
+            printf("[%d]+ Done(%d)   %s\n", jobs_tab[i].id, st, jobs_tab[i].cmd);
+            jobs_tab[i].pid = 0;
+            jobs_tab[i].done = 0;
+            jobs_tab[i].id = 0;
+        }
+    }
+}
+
+static void job_record(long pid, const char *cmdline) {
+    struct job *j = job_slot();
+    if (!j) {
+        /* Refuse rather than silently dropping the job: an unrecorded
+         * background child can never be waited for or signalled, and the user
+         * would see a command that appeared to start and then vanished. */
+        fprintf(stderr, "jobs: table full (%d); run in foreground\n", NJOBS);
+        return;
+    }
+    j->pid = pid;
+    j->id = next_job_id++;
+    j->done = 0;
+    j->status = 0;
+    int k = 0;
+    while (cmdline[k] && k < (int)sizeof j->cmd - 1) { j->cmd[k] = cmdline[k]; k++; }
+    j->cmd[k] = 0;
+    printf("[%d] %ld\n", j->id, pid);
+}
+
+static void do_run_bg(const char *path) {
+    long kid = nsi(SYS_FORK, 0, 0, 0);
+    if (kid == 0) {
+        nsi(SYS_EXECVE, (long)path, 0, 0);
+        nsi(SYS_EXIT, 127, 0, 0);
+    }
+    if (kid < 0) {
+        fprintf(stderr, "run: fork failed\n");
+        return;
+    }
+    job_record(kid, path);              /* parent does NOT wait — that is `&` */
+}
+
 static void do_run(const char *path) {
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid == 0) {
@@ -204,6 +302,7 @@ int main(void) {
     char line[256];
     char *argv[16];
     for (;;) {
+        jobs_reap();                   /* DDR-881: report finished background jobs */
         printf("prism> ");
         fflush(stdout);
 
@@ -214,6 +313,18 @@ int main(void) {
         if (argc == 0)
             continue;
         expand_status(argv, argc);         /* DDR-789: `$?` -> last exit status */
+        /* DDR-881 (item 34): a trailing `&`. Stripped BEFORE redirection and
+         * pipe parsing so neither ever sees it as a filename or a command — the
+         * same ordering trap DDR-868 hit with `2>&1`, which had to be matched
+         * before the generic `2>` prefix or it read as a redirect to a file
+         * literally named "&1". */
+        int background = 0;
+        if (argc > 0 && !strcmp(argv[argc - 1], "&")) {
+            background = 1;
+            argv[--argc] = 0;
+            if (argc == 0)
+                continue;                  /* a bare `&` is not a command */
+        }
         /* DDR-780: pipes `cmd1 | cmd2`. PRISM builtins are internal functions,
          * not execs, so the fork must wrap the builtin DISPATCH itself. Rather
          * than hoist the 120-line if/else chain into a function, each child sets
@@ -427,7 +538,7 @@ int main(void) {
         }
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps jobs fg kill setname touch rm uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -451,7 +562,8 @@ int main(void) {
             if (argc < 2) do_cat_stdin();        /* DDR-780: `... | cat` */
             else do_cat(argv[1]);
         } else if (!strcmp(cmd, "run")) {
-            if (argc < 2) fprintf(stderr, "run: usage: run <path>\n");
+            if (argc < 2) fprintf(stderr, "run: usage: run <path> [&]\n");
+            else if (background) do_run_bg(argv[1]);   /* DDR-881 */
             else do_run(argv[1]);
         } else if (!strcmp(cmd, "ls")) {
             const char *dir = (argc > 1) ? argv[1] : "/";   /* DDR-742 */
@@ -516,19 +628,58 @@ int main(void) {
             long n = nsi(SYS_DMESG, (long)b, (long)sizeof b, 0);
             printf("dmesg: %ld bytes\n", n > 0 ? n : 0);
             if (n > 0) fwrite(b, 1, (size_t)n, stdout);
+        } else if (!strcmp(cmd, "jobs")) {                   /* DDR-881 */
+            int any = 0;
+            for (int i = 0; i < NJOBS; i++) {
+                if (!jobs_tab[i].pid) continue;
+                printf("[%d]  Running  %ld  %s\n",
+                       jobs_tab[i].id, jobs_tab[i].pid, jobs_tab[i].cmd);
+                any = 1;
+            }
+            if (!any) printf("jobs: none\n");
+        } else if (!strcmp(cmd, "fg")) {                     /* DDR-881 */
+            struct job *j = (argc >= 2) ? job_by_spec(argv[1]) : 0;
+            if (!j) {
+                fprintf(stderr, "fg: usage: fg %%<n>  (see `jobs`)\n");
+            } else {
+                printf("%s\n", j->cmd);
+                fflush(stdout);
+                int st = 0;
+                nsi(SYS_WAIT4, j->pid, (long)&st, 0);   /* blocking: it is fg now */
+                last_status = st;
+                j->pid = 0; j->id = 0; j->done = 0;
+            }
         } else if (!strcmp(cmd, "kill")) {                   /* DDR-755 */
-            if (argc < 2) { printf("kill: usage: kill <pid> [signum]\n"); }
+            if (argc < 2) { printf("kill: usage: kill <pid|%%n> [signum]\n"); }
             else {
+                /* DDR-881: `%n` resolves through the job table. A shell that
+                 * prints %n in `jobs` but only accepts pids is advertising a
+                 * handle it does not honour. */
                 long pid = 0; const char *s = argv[1];
-                while (*s >= '0' && *s <= '9') pid = pid * 10 + (*s++ - '0');
+                int resolved = 1;
+                if (*s == '%') {
+                    struct job *j = job_by_spec(s);
+                    if (!j) {
+                        fprintf(stderr, "kill: no such job %s\n", s);
+                        resolved = 0;      /* MUST NOT fall through: pid is still
+                                            * 0, and kill(0, sig) is a broadcast
+                                            * to the process group, not a no-op */
+                    } else {
+                        pid = j->pid;
+                    }
+                } else {
+                    while (*s >= '0' && *s <= '9') pid = pid * 10 + (*s++ - '0');
+                }
                 int sig = SIGTERM;
                 if (argc >= 3) {
                     sig = 0; const char *t = argv[2];
                     while (*t >= '0' && *t <= '9') sig = sig * 10 + (*t++ - '0');
                 }
-                long r = nsi(SYS_KILL, pid, sig, 0);
-                if (r == 0) printf("kill: sent %d to %ld\n", sig, pid);
-                else        printf("kill: pid %ld not found (rc=%ld)\n", pid, r);
+                if (resolved) {
+                    long r = nsi(SYS_KILL, pid, sig, 0);
+                    if (r == 0) printf("kill: sent %d to %ld\n", sig, pid);
+                    else        printf("kill: pid %ld not found (rc=%ld)\n", pid, r);
+                }
             }
         } else if (!strcmp(cmd, "setname")) {                /* DDR-756 */
             if (argc < 2) printf("setname: usage: setname <name>\n");
