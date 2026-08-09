@@ -1056,6 +1056,10 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'cat /NOPE66c.TXT > /BOTH66c.TXT 2>&1\n'; sleep 0.7; \
 	  printf 'echo MARKER66c\n'; sleep 0.5; \
 	  printf 'cat /BOTH66c.TXT\n'; sleep 0.6; \
+	  printf 'agent list\n'; sleep 0.6; \
+	  printf 'agent spawn /NOPE.ELF probe\n'; sleep 0.6; \
+	  printf 'action submit 4 hello\n'; sleep 0.6; \
+	  printf 'action approve 1\n'; sleep 0.6; \
 	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
 	  printf 'jobs\n'; sleep 0.6; \
 	  printf 'fg %%1\n'; sleep 1.0; \
@@ -1077,6 +1081,15 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# mere "the file is non-empty" check would happily accept.
 	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
+	@# DDR-888 (item 36): the agent DSL. PRISM holds neither CAP_AGENT nor
+	@# CAP_SOVEREIGN, so the privileged verbs MUST be refused — the refusal
+	@# printing IS the assertion. A shell that offered `agent spawn` and did
+	@# nothing would look like a missing feature; one that appeared to succeed
+	@# would be a capability hole.
+	@grep -q 'AGENT ROSTER slots=' build/shell_serial.log || { echo "[shell] FAIL: agent list did not read the roster (DDR-888)"; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'AGENT SPAWN DENIED' build/shell_serial.log || { echo "[shell] FAIL: agent spawn NOT denied without CAP_AGENT (DDR-888)"; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'ACTION SUBMIT DENIED' build/shell_serial.log || { echo "[shell] FAIL: action submit NOT denied for a non-agent (DDR-888)"; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'ACTION APPROVE DENIED' build/shell_serial.log || { echo "[shell] FAIL: action approve NOT denied without CAP_SOVEREIGN (DDR-888)"; tail -40 build/shell_serial.log; exit 1; }
 	@# DDR-881 (item 34): job control. Three DETERMINISTIC facts only —
 	@# `jobs` and `fg` output races the child's exit (HELLO.ELF finishes in
 	@# milliseconds), so asserting on them would be a flaky gate dressed up as

@@ -67,6 +67,14 @@ struct procinfo {
     unsigned long long run_ticks;   /* DDR-754: 100 Hz ticks */
     unsigned long long dispatches;  /* DDR-754: switch-in count */
 };
+/* DDR-888 (item 36): the agent DSL's NSI surface. */
+#define SYS_SUBMIT_ACTION  31   /* (type, payload*, len) -> id | -EPERM (agents only) */
+#define SYS_POLL_RESULT    32   /* (action_id) -> status | -ESRCH                     */
+#define SYS_APPROVE_ACTION 33   /* (action_id) -> 0 | -EPERM (CAP_SOVEREIGN)          */
+#define SYS_SPAWN_AGENT    35   /* (path*, task*) -> pid | -EPERM (CAP_AGENT)         */
+#define SYS_AGENT_ROSTER   53   /* (buf*, max) -> count  (ungated: observability)     */
+#define EPERM              1
+#define ESRCH              3
 #define SYS_GET_MODE 29   /* L7: sovereign/manual toggle binding (DDR-701) */
 #define SYS_SET_MODE 30
 
@@ -538,7 +546,7 @@ int main(void) {
         }
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps jobs fg kill setname touch rm uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps jobs fg kill agent action setname touch rm uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -628,6 +636,54 @@ int main(void) {
             long n = nsi(SYS_DMESG, (long)b, (long)sizeof b, 0);
             printf("dmesg: %ld bytes\n", n > 0 ? n : 0);
             if (n > 0) fwrite(b, 1, (size_t)n, stdout);
+        } else if (!strcmp(cmd, "agent")) {                  /* DDR-888 item 36 */
+            /* The agent DSL. PRISM runs WITHOUT CAP_AGENT and WITHOUT
+             * CAP_SOVEREIGN, so the privileged verbs here are expected to be
+             * REFUSED — and printing the refusal is the point. A shell that
+             * offered `agent spawn` and silently did nothing would look like a
+             * missing feature; one that appeared to succeed would be worse. */
+            if (argc >= 2 && !strcmp(argv[1], "list")) {
+                unsigned char bits[16];
+                long n = nsi(SYS_AGENT_ROSTER, (long)bits, (long)sizeof bits, 0);
+                if (n < 0) {
+                    fprintf(stderr, "agent list: rc=%ld\n", n);
+                } else {
+                    int active = 0;
+                    for (long i = 0; i < n; i++)
+                        if (bits[i]) active++;
+                    printf("AGENT ROSTER slots=%ld active=%d\n", n, active);
+                }
+            } else if (argc >= 3 && !strcmp(argv[1], "spawn")) {
+                long r = nsi(SYS_SPAWN_AGENT, (long)argv[2], (long)(argc > 3 ? argv[3] : ""), 0);
+                if (r >= 0) printf("agent spawn: pid %ld\n", r);
+                else        printf("AGENT SPAWN DENIED rc=%ld\n", r);
+            } else {
+                printf("agent: usage: agent list | agent spawn <path> [task]\n");
+            }
+        } else if (!strcmp(cmd, "action")) {                 /* DDR-888 item 36 */
+            if (argc >= 3 && !strcmp(argv[1], "submit")) {
+                /* Type is parsed from the argument rather than fixed: a DSL that
+                 * hard-coded one action type could not express the 3C set. */
+                long type = 0; const char *s = argv[2];
+                while (*s >= '0' && *s <= '9') type = type * 10 + (*s++ - '0');
+                const char *payload = (argc > 3) ? argv[3] : "";
+                long r = nsi(SYS_SUBMIT_ACTION, type, (long)payload, (long)strlen(payload));
+                if (r >= 0) printf("action submit: id %ld\n", r);
+                else        printf("ACTION SUBMIT DENIED rc=%ld\n", r);
+            } else if (argc >= 3 && !strcmp(argv[1], "poll")) {
+                long id = 0; const char *s = argv[2];
+                while (*s >= '0' && *s <= '9') id = id * 10 + (*s++ - '0');
+                long r = nsi(SYS_POLL_RESULT, id, 0, 0);
+                printf("action poll %ld -> %ld\n", id, r);
+            } else if (argc >= 3 && !strcmp(argv[1], "approve")) {
+                long id = 0; const char *s = argv[2];
+                while (*s >= '0' && *s <= '9') id = id * 10 + (*s++ - '0');
+                long r = nsi(SYS_APPROVE_ACTION, id, 0, 0);
+                if (r == 0) printf("action approve: %ld ok\n", id);
+                else        printf("ACTION APPROVE DENIED rc=%ld\n", r);
+            } else {
+                printf("action: usage: action submit <type> [payload] | poll <id> | approve <id>\n");
+            }
         } else if (!strcmp(cmd, "jobs")) {                   /* DDR-881 */
             int any = 0;
             for (int i = 0; i < NJOBS; i++) {

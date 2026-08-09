@@ -3944,3 +3944,24 @@ cause.
 **CI gap this exposed:** `smoke-uefi` shipped last commit but CI installed no
 `ovmf`, so it would go red on a missing firmware file. `ovmf xorriso grub-pc-bin
 grub-efi-amd64-bin` are now in the workflow's install list.
+
+## Group 6 item 36 — PRISM agent DSL (DDR-888)
+
+`agent list|spawn`, `action submit|poll|approve`. ADR-024 §D3 deferred the DSL
+without specifying it, so DDR-888 defines it. The action **type is parsed**, not
+fixed — a hard-coded type could not express the Section 3C set.
+
+**PRISM is unprivileged, and that is the test.** It holds neither `CAP_AGENT` nor
+`CAP_SOVEREIGN`, so three of the five verbs are expected to be refused and the
+refusal printing is the assertion: `AGENT SPAWN DENIED`, `ACTION SUBMIT DENIED`,
+`ACTION APPROVE DENIED`, while `agent list` works because `sys_agent_roster` is
+deliberately ungated (observability is not privileged). A shell that offered
+`agent spawn` and did nothing would look like a missing feature; one that
+appeared to succeed would be a capability hole.
+
+**Mutation testing caught itself first:** two mutations "survived", then the file
+showed `sed` had matched nothing — the patterns contained `\n` escapes that did
+not survive quoting, and a mutation that never applies reads exactly like one the
+gate cannot kill. The re-run verifies the edit applied before trusting the
+verdict, and the mutation is then **killed** with the right message. Recorded as
+invalid, not as survivals.
