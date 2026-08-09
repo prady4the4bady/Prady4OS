@@ -212,7 +212,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -849,17 +849,40 @@ ahci-image:
 # 'node1 mem=256MiB' is the assertion that carries the weight. A parser that
 # finds SRAT but reads the base/length fields at the wrong offsets still
 # reports a node COUNT, and only an exact byte total shows it walked the
-# sub-tables correctly. node0 is 255MiB, not 256: its low range is split around
-# the legacy hole, which is also why ranges=3 for two nodes.
+# sub-tables correctly. node0 is 249MiB, not 250: its low range is split around
+# the legacy hole, which is also why ranges=3 for two nodes. The 250M/262M split
+# is deliberate — see boot_test.sh: a 256/256 split is max-order aligned and
+# leaves item 17b straddle-splitting untested.
 #
 # NO FORBIDDEN SENTINEL, deliberately. The rejection check is folded into the
 # required line as 'rejected=0', so the DDR-785 early exit stays eligible and
 # the gate stops as soon as numa_init() has printed — before lapic_init()
 # brings up the second vCPU. A FORBIDDEN pattern would disable early exit and
 # expose this gate to the unresolved lost-thread defect (DDR-880).
+# DDR-882 (Group 3 item 17b): node-aware ALLOCATION, not just topology.
+#
+# Parsing SRAT proves nothing about allocation — an allocator that ignores its
+# node argument passes every assertion in smoke-numa. This asks node 1 for a
+# frame and requires the address to land inside node 1's range.
+#
+# The rebucket line is asserted too, but only on what is STABLE. node0=59904 is
+# structural — node 0 is 250 MiB and the managed range starts at 16 MiB, so it
+# contributes 234 MiB = 59904 pages. The
+# block count and node1's exact page count are NOT asserted: they shift with how
+# much was allocated before the rebucket runs (194/65320 under the probe vs
+# 198/65323 without it), so pinning them would be a gate that fails on unrelated
+# allocation changes.
+#
+# 'node1=6' still has teeth: a rebucket that filed everything onto node 0 leaves
+# node1=0, and one that mis-split straddling blocks moves node0 off 61440.
+smoke-numa-alloc: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_NUMA=1 QEMU_PROBES=numaalloc \
+	EXTRA_SENTINEL="$$(printf 'node0=59904 node1=6\n[numa] alloc node1 -> node1 OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-numa: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_NUMA=1 \
-	EXTRA_SENTINEL="$$(printf '[numa] nodes=2 ranges=3 rejected=0\n[numa] node0 mem=255MiB\n[numa] node1 mem=256MiB')" \
+	EXTRA_SENTINEL="$$(printf '[numa] nodes=2 ranges=3 rejected=0\n[numa] node0 mem=249MiB\n[numa] node1 mem=262MiB')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-e1000e: $(IMG) fat-image sfs-image

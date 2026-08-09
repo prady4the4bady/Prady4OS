@@ -89,6 +89,12 @@ fi
 # publishes to EVERY gate, and a table that appears only sometimes is exactly how
 # an intermittent boot difference gets introduced.
 #
+# 250M/262M, NOT 256M/256M. A 256 MiB boundary is 4 MiB aligned — the largest
+# buddy order — so no block can ever straddle it and the re-bucket's
+# straddle-splitting path is never exercised. Mutation testing proved that:
+# disabling the split still passed. 250 MiB is not 4 MiB aligned, so blocks do
+# straddle and the split has to be correct for the gate to pass.
+#
 # Explicit memory-backend objects rather than the `-numa node,mem=` form: mem= is
 # deprecated and QEMU splits the ranges differently across versions, which would
 # make the per-node byte assertions depend on the host's QEMU build rather than
@@ -110,8 +116,8 @@ fi
 NUMAOPT=()
 if [ -n "${QEMU_NUMA:-}" ]; then
     NUMAOPT=(-m 512M
-             -object memory-backend-ram,id=nram0,size=256M
-             -object memory-backend-ram,id=nram1,size=256M
+             -object memory-backend-ram,id=nram0,size=250M
+             -object memory-backend-ram,id=nram1,size=262M
              -numa node,nodeid=0,memdev=nram0
              -numa node,nodeid=1,memdev=nram1
              -smp 2)

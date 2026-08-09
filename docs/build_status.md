@@ -3753,3 +3753,62 @@ compile) and is not counted as a kill.
 **17a only. Item 17 is NOT complete:** slice 17b — per-node PMM free lists,
 re-bucketing after `numa_init()`, and `pmm_alloc_pages_node()` — has not been
 built. Item 37 depends on both.
+
+## Group 3 item 17b — node-aware PMM allocation (DDR-882) — ITEM 17 COMPLETE
+
+`free_list` is now `[NUMA_MAX_NODES][PMM_MAX_ORDER]`. **Cross-node coalescing is
+prevented by construction, not by a check:** the free path searches
+`numa_node_of(addr)`'s list, so a buddy owned by another node is simply not
+there, `list_remove` fails, and coalescing stops. No explicit "same node?" test
+was added, because an explicit test is a thing that can be wrong.
+
+`pmm_alloc_pages_node(node, order)` prefers a node and **falls back** to others
+rather than failing. That is deliberate: a node is a locality *preference*, and
+returning 0 while free memory exists elsewhere would turn a hint into an
+out-of-memory condition the caller cannot distinguish. Locality is an
+optimisation; allocation failing is a correctness event.
+
+`pmm_numa_rebucket()` re-files every block after `numa_init()`, because
+`pmm_init` (main.c:2195) runs before `acpi_init` (main.c:2343). Straddling blocks
+are split into buddies recursively down to order 0, where a frame lies in exactly
+one node — which holds only because `numa.c` rejects unaligned SRAT ranges.
+
+`smoke-numa-alloc` asserts `node0=59904` and `[numa] alloc node1 -> node1 OK`.
+The block count and node1's page count are deliberately **not** asserted: they
+shift with pre-rebucket allocation (194/65320 under the probe vs 198/65323
+without), so pinning them would fail on unrelated allocation changes.
+
+**The gate was strengthened after mutation testing exposed it.** With the
+original 256M/256M node split, disabling straddle-splitting still PASSED — a
+256 MiB boundary is 4 MiB aligned, the largest buddy order, so nothing can ever
+straddle it and the split path was never exercised. The QEMU layout is now
+**250M/262M**, which is not max-order aligned, and the same mutation is now
+killed (node0 drifts 59904 → 60416).
+
+**Mutation matrix — 17b: M1 (alloc ignores node) killed, M2 (rebucket to node 0)
+killed, M3 (no straddle split) killed after the layout fix.** 17a: M1 killed;
+**M3 (accept unaligned ranges) still SURVIVES** — QEMU cannot emit an unaligned
+SRAT range, so that guard remains defensive code with no test behind it, and this
+says so rather than counting it as covered.
+
+**Item 17 is complete.** Item 37 (per-CPU runqueue NUMA affinity) is now
+unblocked: it consumes `numa_node_of_cpu()` and these per-node lists.
+
+### Item 17 push check — the `-smp 4` rate was measured, not assumed
+
+`fce31b1` (17a) went red in CI on `smoke-crosswake` with `created 0, verified 0`
+— the wrong-data variant DDR-864 documented — and `smoke-blkmq` failed once in a
+local regression. Since DDR-878 measured `smoke-blkmq` at **0/8** before the NUMA
+work, "it's the known flake" needed proof rather than assertion: 17b rewrites the
+buddy free lists, which is exactly the kind of change that could make a
+concurrency defect worse.
+
+Measured on the 17a+17b tree, gates run individually:
+
+| Gate | Rate | Signature |
+|---|---|---|
+| `smoke-blkmq` | **1 / 20** (5%) | `'[blk] multi-inflight OK' not found` — DDR-880 |
+| `smoke-crosswake` | **0 / 20** | — |
+
+5% matches the documented rate (2/40 rqstress, 2/30 btree). **The NUMA work did
+not change it.** Item 17 pushed on that evidence.

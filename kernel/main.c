@@ -2363,6 +2363,27 @@ void kmain(struct boot_info *bi) {
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();
     numa_init();      /* DDR-882 (item 17a): SRAT topology, needs ACPI first */
+    pmm_numa_rebucket();  /* 17b: re-file the free lists onto their nodes */
+    /* DDR-882 (item 17b) probe. Parsing SRAT proves nothing about ALLOCATION:
+     * a node-aware allocator that ignores its node argument passes every
+     * topology assertion. This asks node 1 for a frame and checks the address
+     * actually landed inside node 1's range.
+     *
+     * Opt-in (DDR-804): it allocates and never frees, so running it on every
+     * boot would shift free-page counts that other gates assert on. */
+    if (probe_enabled("numaalloc")) {
+        if (numa_node_count() < 2) {
+            kputs("[numa] alloc probe SKIP (single node)\r\n");
+        } else {
+            uint64_t a = pmm_alloc_pages_node(1, 0);
+            uint32_t got = a ? numa_node_of(a) : 0xFFFFFFFFu;
+            kputs("[numa] alloc node1 -> node");
+            kputdec(got);
+            kputs(a && got == 1 ? " OK\r\n" : " MISMATCH\r\n");
+            if (a)
+                pmm_free_page(a);
+        }
+    }
     /* DDR-874 (item 28): I/O APIC + q35 GSI routing. Needs the MADT, so it
      * runs straight after acpi_init. Returns 0 on a board without one, and
      * the 8259 PIC stays in charge — this does not disturb the existing

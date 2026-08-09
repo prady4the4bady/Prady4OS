@@ -21,6 +21,14 @@
 
 void     pmm_init(const struct boot_info *bi);
 uint64_t pmm_alloc_pages(unsigned order);   /* physical addr, or 0 on failure */
+
+/* DDR-882 (item 17b): allocate preferring `node`. Falls back to other nodes
+ * rather than failing — a node is a locality PREFERENCE, not a constraint. */
+uint64_t pmm_alloc_pages_node(unsigned node, unsigned order);
+
+/* Re-file every free block onto its owning node's list. Called once, after
+ * numa_init(), because pmm_init() runs before ACPI is readable. */
+void     pmm_numa_rebucket(void);
 void     pmm_free_pages(uint64_t addr, unsigned order);
 uint64_t pmm_alloc_page(void);              /* order 0 */
 void     pmm_free_page(uint64_t addr);      /* drops one reference; frees at 0 (IMP-D) */
