@@ -3920,3 +3920,27 @@ is recorded as invalid, not a kill.
 
 Legacy path re-verified after the `BOOTDISK` harness refactor: `smoke`,
 `smoke-fs`, `smoke-user`, `smoke-shell`, `smoke-numa` all green.
+
+## Group 9 item 48 — BLOCKED on build-host tooling (DDR-887)
+
+`xorriso`, `grub-mkrescue`, and GRUB's BIOS/EFI module trees are all absent from
+this build host, and `sudo` requires a password this session does not have. The
+packages cannot be installed here, so item 48 cannot be built or verified.
+
+No `make iso` rule ships. It could be written blind, but this project's standard
+is 20 local runs before a gate is trusted, and a gate that has never run locally
+is exactly what goes red in CI for an unattributable reason.
+
+**Design recorded** so it is not re-derived: hybrid El Torito with two catalog
+entries — the UEFI arm is `build/esp.img` from DDR-886, already proven under
+OVMF and needing no new code; the BIOS arm is `build/pradyos.img` padded to
+2.88 MiB and booted via floppy emulation, so stage1/stage2 run unmodified.
+**Multiboot2 is recommended AGAINST** and flagged for sign-off: it hands control
+in 32-bit protected mode while `kernel_entry` needs long mode with the DDR-886
+contract established, so it would be a third handoff implementation to keep in
+sync — and DDR-886 §1 is explicit that boot-path divergence fails far from its
+cause.
+
+**CI gap this exposed:** `smoke-uefi` shipped last commit but CI installed no
+`ovmf`, so it would go red on a missing firmware file. `ovmf xorriso grub-pc-bin
+grub-efi-amd64-bin` are now in the workflow's install list.

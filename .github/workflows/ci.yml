@@ -82,7 +82,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang lld llvm nasm make qemu-system-x86 \
-            dosfstools mtools e2fsprogs
+            dosfstools mtools e2fsprogs \
+            ovmf xorriso grub-pc-bin grub-efi-amd64-bin
           rustup toolchain install nightly --profile minimal
           rustup component add rust-src --toolchain nightly
           rustup target add x86_64-unknown-none --toolchain nightly
