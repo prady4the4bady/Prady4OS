@@ -1,5 +1,6 @@
 /* kernel/sched.c — preemptive round-robin kernel scheduler (Phase 2c/2e). */
 #include "sched.h"
+#include "numa.h"      /* DDR-885: NUMA-affine steal order */
 #include "kheap.h"
 #include "console.h"
 #include "tss.h"
@@ -178,19 +179,62 @@ static int rq_has_ready(void) {
 }
 
 /* Steal one thread from another CPU's FIFO (trylock; own rq NOT held). */
-static struct tcb *rq_steal(int self) {
+/* DDR-885 (item 37): NUMA-affine steal order.
+ *
+ * Stealing a thread moves its working set to another CPU. Doing that WITHIN a
+ * node keeps the memory local; doing it across nodes makes every subsequent
+ * access remote. So same-node victims are tried first, and remote nodes only
+ * when the local ones have nothing.
+ *
+ * This is a HINT and never a restriction. The second pass is unconditional: a
+ * CPU that finds no local work still steals remotely, because an idle CPU next
+ * to a loaded one on another node is a worse outcome than a remote access.
+ * A NUMA-aware scheduler that let a runnable thread sit is not an optimisation,
+ * it is a liveness bug.
+ *
+ * ONLY the victim ORDER changes. Which runqueue a thread is enqueued on is
+ * deliberately untouched: that would change placement, and this subsystem is
+ * under investigation for an intermittent lost-thread defect (DDR-880/884).
+ * Changing placement now would make the next red impossible to attribute.
+ */
+static uint64_t g_steal_local, g_steal_remote;
+
+static struct tcb *steal_pass(int self, uint32_t want_node, int same) {
     for (int c = 0; c < PERCPU_MAX; c++) {
         if (c == self || !g_rq[c].head)
+            continue;
+        struct percpu *pc = percpu_get((unsigned)c);
+        if (!pc || !pc->present)
+            continue;
+        uint32_t cnode = numa_node_of_cpu(pc->apic_id);
+        if (same != (cnode == want_node))
             continue;
         struct rq *q = &g_rq[c];
         if (__atomic_test_and_set(&q->lock.v, __ATOMIC_ACQUIRE))
             continue;                    /* busy — don't convoy, next victim */
         struct tcb *t = rq_take(q);      /* transients re-appended, never dropped */
         spin_unlock(&q->lock);
-        if (t)
+        if (t) {
+            if (same) g_steal_local++;
+            else      g_steal_remote++;
             return t;
+        }
     }
     return 0;
+}
+
+static struct tcb *rq_steal(int self) {
+    struct percpu *me = percpu_get((unsigned)self);
+    uint32_t node = me ? numa_node_of_cpu(me->apic_id) : 0;
+    struct tcb *t = steal_pass(self, node, 1);   /* same node first */
+    if (!t)
+        t = steal_pass(self, node, 0);           /* then anywhere */
+    return t;
+}
+
+void sched_steal_counts(uint64_t *local, uint64_t *remote) {
+    if (local)  *local  = g_steal_local;
+    if (remote) *remote = g_steal_remote;
 }
 static uint32_t next_tid = 1;
 static uint32_t g_init_pid = 0;   /* 5d: PID 1; orphans reparent here, exit panics */

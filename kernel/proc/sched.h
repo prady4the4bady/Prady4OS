@@ -196,6 +196,10 @@ void        sched_block(void);                                  /* block current
  * on return — so a waker serialized after the release always sees BLOCKED and
  * its sched_unblock CAS cannot be lost. IRQs stay as the caller left them. */
 void        sched_block_on(spinlock_t *lk);
+/* DDR-885 (item 37): how many steals stayed on-node vs crossed. Diagnostic —
+ * the gate reads these to show the two-pass order is actually exercised. */
+void        sched_steal_counts(uint64_t *local, uint64_t *remote);
+
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 struct tcb *sched_find_pid(uint32_t pid);                       /* DDR-837: live thread by pid, or NULL */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */

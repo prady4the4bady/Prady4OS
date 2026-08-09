@@ -1642,7 +1642,7 @@ smoke-smpuser: $(IMG) fat-image sfs-image
 # per-CPU ready queues (steal + wake spread them); all must complete.
 smoke-rqstress: $(IMG) fat-image sfs-image
 	TIMEOUT_S=180 QEMU_SMP=4 \
-	EXTRA_SENTINEL="$$(printf '[smp] rqstress OK')" \
+	EXTRA_SENTINEL="$$(printf '[smp] rqstress OK\n[sched] steal local=')" \
 	FORBIDDEN_SENTINEL="rqstress FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

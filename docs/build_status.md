@@ -3847,3 +3847,30 @@ now printed, landed **before** re-running so the next occurrence is diagnosable.
 No fix attempted: three candidates remain and the evidence does not separate
 them. Patching one would be validated only by a rare failure not recurring,
 which is indistinguishable from having fixed nothing.
+
+## Group 6 item 37 — NUMA-affine steal order (DDR-885)
+
+`rq_steal()` is two passes: same-node victims first, then everything else. The
+second pass is **unconditional** — a scheduler that withheld work for locality
+would be a liveness bug, not an optimisation. Only the victim ORDER changed;
+enqueue placement is deliberately untouched while the lost-thread defect is open.
+
+Measured on 4 CPUs, single node: `[sched] steal local=86850 remote=0` — the
+first pass does all the work rather than falling through, and `smoke-rqstress`
+stays green.
+
+**Not proven: the node preference itself.** Every CPU there is node 0, so
+"same node" is trivially true; proving preference needs 4 vCPUs across 2 nodes,
+which is currently unreliable for the same reason item 50 is. **And the
+assertion is weak** — `[sched] steal local=` also matches `local=0`. A mutation
+skipping the same-node pass was killed, but most likely by the pre-existing
+`rqstress FAIL` pattern rather than by this line, and I did not confirm which.
+Recorded as a diagnostic, not as a gate with teeth.
+
+### Item 46 capture campaign — 0 hits in 45 runs
+
+`smoke-smpuser`, `smoke-rqstress`, `smoke-smp` × 15 with the DDR-884 `rc`
+instrument in place: **45 runs, 0 `churn FAIL op=` hits, 0 other reds.**
+OPEN-10 did not reproduce locally. It remains a single CI observation, and its
+local rate is below 1-in-45. The `rc` instrument is in place for the next
+occurrence; no fix is attempted without it.

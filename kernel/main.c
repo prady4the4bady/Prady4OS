@@ -1804,6 +1804,19 @@ static void fs_test_thread(void *arg) {
                 blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
                 smp_blk_integrity(); /* DDR-759: concurrent-read DATA integrity (M1 audit) */
                 rqstress_proof();    /* DDR-SMP-rq-1: thread storm over the rqs */
+                {
+                    /* DDR-885 (item 37). Printed HERE because rqstress is the
+                     * only workload that reliably produces steals: 24 threads in
+                     * 3 waves across the per-CPU runqueues. Printed after it so
+                     * the counts are non-zero and the gate can assert on them. */
+                    uint64_t sl = 0, sr = 0;
+                    sched_steal_counts(&sl, &sr);
+                    kputs("[sched] steal local=");
+                    kputdec(sl);
+                    kputs(" remote=");
+                    kputdec(sr);
+                    kputs("\r\n");
+                }
                 /* DDR-714C3: assert a blk completion ran off the BSP. The old
                  * check-once was racy on slow TCG (the AP-routed completion hadn't
                  * necessarily landed by this boot point — recurring `-smp 4` flake,
