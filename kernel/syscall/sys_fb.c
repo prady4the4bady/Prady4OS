@@ -16,7 +16,8 @@
 
 struct fb_info { uint32_t width, height, stride, bpp; };
 
-static long sys_fb_info(long a1, long a2, long a3, long a4) {
+static long sys_fb_info(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     uint32_t w, h, stride;
     if (!virtio_gpu_fb(&w, &h, &stride))
@@ -27,7 +28,8 @@ static long sys_fb_info(long a1, long a2, long a3, long a4) {
     return 0;
 }
 
-static long sys_fb_map(long a1, long a2, long a3, long a4) {
+static long sys_fb_map(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     uint32_t w, h, stride;
     uint8_t *fb = virtio_gpu_fb(&w, &h, &stride);
@@ -49,7 +51,8 @@ static long sys_fb_map(long a1, long a2, long a3, long a4) {
     return (long)FB_USER_VA;
 }
 
-static long sys_fb_flush(long a1, long a2, long a3, long a4) {
+static long sys_fb_flush(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     if (!virtio_gpu_fb(0, 0, 0))
         return -ENODEV;

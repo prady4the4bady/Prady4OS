@@ -1153,8 +1153,13 @@ smoke-sysproc: $(IMG) fat-image sfs-image
 # Phase 5b slice 6 mmap gate: systest mmaps an anon RW+NX page (writes+reads it),
 # confirms PROT_EXEC is rejected with EINVAL (W^X), and munmaps then re-mmaps the
 # same hint (region freed and reusable).
+#
+# DDR-877 (item 19) added the two REJECT arms. mmap is the six-argument syscall,
+# so it is where the widened ABI is proved: 'FD REJECTED' needs a5 to arrive and
+# be read, 'OFF REJECTED' needs a6, and the two expect DIFFERENT errno values, so
+# an r8/r9 swap in the marshal fails both instead of passing by symmetry.
 smoke-sysmmap: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMUNMAP OK')" \
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMMAP FD REJECTED\nSYSMMAP OFF REJECTED\nSYSMUNMAP OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 7 execve gate: the kernel places /EXECTEST.ELF on the FAT32

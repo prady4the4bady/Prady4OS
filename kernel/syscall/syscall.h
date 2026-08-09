@@ -21,7 +21,7 @@
 #define SYS_FSTAT  9   /* (fd, struct stat *) -> 0           (5b slice 4)    */
 #define SYS_LSEEK  10  /* (fd, off, whence)   -> new offset  (5b slice 5)    */
 #define SYS_GETCWD 11  /* (buf, size)         -> len incl NUL (5b slice 5)   */
-#define SYS_MMAP   12  /* (addr, len, prot, flags) -> addr   (5b slice 6)    */
+#define SYS_MMAP   12  /* (addr,len,prot,flags,fd,off)->addr (DDR-877 6-arg) */
 #define SYS_MUNMAP 13  /* (addr, len)         -> 0           (5b slice 6)    */
 #define SYS_EXECVE 14  /* (path, argv, envp)  -> no return on success (5b sl 7) */
 #define SYS_FORK   15  /* ()  -> child pid in parent, 0 in child  (5b slice 8) */
@@ -170,12 +170,17 @@
 
 #define CONSOLE_RES_ID 1ull   /* capability resource id for the console */
 
-typedef long (*syscall_fn)(long a1, long a2, long a3, long a4);
+/* DDR-877 (item 19): six arguments, matching the SysV syscall register set
+ * RDI/RSI/RDX/R10/R8/R9. Every handler takes all six even when it uses four —
+ * a per-arity table would mean the dispatcher had to know each handler's
+ * arity, and a wrong entry there reads a register the caller never set. */
+typedef long (*syscall_fn)(long a1, long a2, long a3, long a4, long a5, long a6);
 
 void syscall_init(void);                       /* program MSRs + register table */
 void syscall_init_ap(void);                    /* cap-4: arm THIS CPU's SYSCALL MSRs */
 void syscall_register(unsigned num, syscall_fn fn);
-long syscall_dispatch(long num, long a1, long a2, long a3, long a4);  /* from asm */
+long syscall_dispatch(long num, long a1, long a2, long a3, long a4,
+                      long a5, long a6);                              /* from asm */
 
 /* The kernel stack top for SYSCALL entry lives in the percpu area at [gs:16]
  * (DDR-SMP-3b). The in-flight syscall's user-register snapshot (RSP/RIP,

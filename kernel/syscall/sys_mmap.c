@@ -4,9 +4,13 @@
  * mmap arena. PROT_EXEC is rejected (W^X — anon regions are data; executable
  * code arrives via the ELF loader, not mmap). File-backed (MAP_SHARED / fd),
  * MAP_FIXED replace semantics, partial munmap, demand paging and mremap are
- * deferred (see ADR-022 / docs/build_status.md). The MAP_ANON baseline needs
- * only addr/len/prot/flags, so the existing 4-arg dispatch suffices — the 6-arg
- * ABI widening is deferred until a syscall actually needs >4 args.
+ * deferred (see ADR-022 / docs/build_status.md).
+ *
+ * DDR-877 (item 19): this is now the real POSIX six-argument mmap. The 4-arg
+ * form was worse than incomplete — a caller passing fd and offset had them
+ * silently discarded and got anonymous zero pages back, i.e. "map this file"
+ * succeeded and returned something else entirely. fd and offset are now read
+ * and REJECTED when they ask for something this implementation does not do.
  *
  * Pages are ptnode_alloc'd (like the ELF loader) so vmm_destroy_address_space
  * reclaims any still-mapped region when the process is reaped.
@@ -66,7 +70,8 @@ static void unmap_range(uint64_t cr3, uint64_t base, uint64_t npages) {
     }
 }
 
-static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags) {
+static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
+                     long a_fd, long a_off) {
     struct tcb *t = current_thread;
     uint64_t addr = (uint64_t)a_addr;
     uint64_t len  = (uint64_t)a_len;
@@ -77,6 +82,15 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags) {
         return -EINVAL;
     if (!(flags & MAP_ANONYMOUS) || (flags & MAP_SHARED))
         return -EINVAL;                         /* anonymous private only */
+    /* POSIX: an anonymous mapping carries fd == -1 and offset == 0. Some libcs
+     * pass fd == 0 instead, which is a real, open file descriptor — accepting
+     * it would mean silently ignoring a request to map stdin. Both are refused
+     * rather than absorbed: a file-backed mapping is not implemented, so the
+     * only honest answer is an error, not zero pages that look like success. */
+    if (a_fd != -1)
+        return -ENOSYS;                         /* file-backed mmap: not built */
+    if (a_off != 0)
+        return -EINVAL;                         /* offset is meaningless for anon */
     if (prot & PROT_EXEC)
         return -EINVAL;                         /* W^X: no executable anon page */
 
@@ -128,8 +142,8 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags) {
     return (long)base;
 }
 
-static long sys_munmap(long a_addr, long a_len, long a3, long a4) {
-    (void)a_len; (void)a3; (void)a4;             /* whole-region unmap (baseline) */
+static long sys_munmap(long a_addr, long a_len, long a3, long a4, long a5, long a6) {
+    (void)a_len; (void)a3; (void)a4; (void)a5; (void)a6;  /* whole-region unmap */
     struct tcb *t = current_thread;
     struct vm_area *v = vma_find(t, (uint64_t)a_addr);
     if (!v)

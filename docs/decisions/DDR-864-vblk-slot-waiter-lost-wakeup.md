@@ -1,6 +1,11 @@
 # DDR-864 — `virtio_blk` loses a wakeup when two submitters wait for a slot
 
-**Status:** Open defect, documented — **not yet fixed**
+**Status:** FIXED and CLOSED by DDR-878 (2026-08-09). The defect was real and
+is now a FIFO wait list. The hypothesis in this document — that it caused the
+`-smp 4` flake — was **tested and disproved**: an instrumented boot shows the
+wait list never reaches depth >= 2, so the overwrite this document describes
+never occurs in that workload, and the flake survives the fix at the same rate.
+Read DDR-878 for the measurement. The text below is kept as written.
 **Date:** 2026-08-07
 **Scope:** `kernel/drivers/blk/virtio_blk.c`. Found while investigating item 47
 (the `-smp 4` flake, DDR-863).

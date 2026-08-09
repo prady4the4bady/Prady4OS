@@ -50,7 +50,8 @@ struct io_ring {
 };
 _Static_assert(sizeof(struct io_ring) <= 4096, "io_ring must fit one page");
 
-static long sys_io_uring_setup(long a_entries, long a2, long a3, long a4) {
+static long sys_io_uring_setup(long a_entries, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a_entries; (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
 
@@ -116,7 +117,8 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
     return -EINVAL;
 }
 
-static long sys_io_uring_enter(long a_ring, long a_submit, long a3, long a4) {
+static long sys_io_uring_enter(long a_ring, long a_submit, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     struct tcb *t = current_thread;
     uint64_t va = (uint64_t)a_ring;

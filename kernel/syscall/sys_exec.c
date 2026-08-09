@@ -42,7 +42,8 @@
 
 extern void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t arg); /* usermode.asm */
 
-static long sys_execve(long upath, long uargv, long uenvp, long a4) {
+static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)uargv; (void)uenvp; (void)a4;        /* baseline: argv[0] = path only */
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)

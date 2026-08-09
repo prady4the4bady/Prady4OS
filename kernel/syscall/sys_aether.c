@@ -67,7 +67,8 @@ typedef long (*aether_spawn_fn)(const char *task);
 static aether_spawn_fn g_spawn_hook;
 void aether_set_spawn_hook(aether_spawn_fn fn) { g_spawn_hook = fn; }
 
-static long sys_get_mode(long a1, long a2, long a3, long a4) {
+static long sys_get_mode(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     return (long)aether_get_mode();
 }
@@ -82,7 +83,8 @@ static long sys_get_mode(long a1, long a2, long a3, long a4) {
  * so a tampered record returns -ETAMPER and nothing else. Returning the data
  * "but flagged" would let a careless caller use it, which defeats the point of
  * having a hash at all. */
-static long sys_metric_read(long a1, long a2, long a3, long a4) {
+static long sys_metric_read(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -97,7 +99,8 @@ static long sys_metric_read(long a1, long a2, long a3, long a4) {
     return 0;
 }
 
-static long sys_set_mode(long a1, long a2, long a3, long a4) {
+static long sys_set_mode(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -106,7 +109,8 @@ static long sys_set_mode(long a1, long a2, long a3, long a4) {
     return aether_set_mode((unsigned)a1);
 }
 
-static long sys_submit_action(long a1, long a2, long a3, long a4) {
+static long sys_submit_action(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     if (!current_thread->is_agent) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -130,7 +134,8 @@ static long sys_submit_action(long a1, long a2, long a3, long a4) {
  * rather than a fourth argument to NSI 31: every existing caller of 31 leaves
  * that register undefined, so reading it would give old binaries a garbage
  * parent id. An unused argument register is not a spare field. */
-static long sys_submit_child_action(long a1, long a2, long a3, long a4) {
+static long sys_submit_child_action(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     if (!current_thread->is_agent) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
@@ -149,12 +154,14 @@ static long sys_submit_child_action(long a1, long a2, long a3, long a4) {
     return r;
 }
 
-static long sys_poll_result(long a1, long a2, long a3, long a4) {
+static long sys_poll_result(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     return aether_poll(current_thread->pid, (uint64_t)a1);
 }
 
-static long sys_approve_action(long a1, long a2, long a3, long a4) {
+static long sys_approve_action(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -163,7 +170,8 @@ static long sys_approve_action(long a1, long a2, long a3, long a4) {
     return aether_approve((uint64_t)a1, 1);
 }
 
-static long sys_reject_action(long a1, long a2, long a3, long a4) {
+static long sys_reject_action(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -172,7 +180,8 @@ static long sys_reject_action(long a1, long a2, long a3, long a4) {
     return aether_approve((uint64_t)a1, 0);
 }
 
-static long sys_spawn_agent(long a1, long a2, long a3, long a4) {
+static long sys_spawn_agent(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a4;
     /* The daemon (sovereign) or an existing agent may spawn agents (D6/D8). */
     if (!current_thread->is_sovereign && !current_thread->is_agent) {
@@ -196,7 +205,8 @@ static long sys_spawn_agent(long a1, long a2, long a3, long a4) {
     return pid;
 }
 
-static long sys_agent_roster(long a1, long a2, long a3, long a4) {
+static long sys_agent_roster(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int max = (int)a2;
     if (max <= 0) return 0;
@@ -211,7 +221,8 @@ static long sys_agent_roster(long a1, long a2, long a3, long a4) {
 /* DDR-730: per-agent live metrics. For each slot, if its agent is alive, report
  * its pid + scheduler state + charged memory + cumulative action count; inactive
  * slots report all-zero. Read-only observability, no authority gate. */
-static long sys_agent_metrics(long a1, long a2, long a3, long a4) {
+static long sys_agent_metrics(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int max = (int)a2;
     if (max <= 0) return 0;
@@ -257,7 +268,8 @@ void agent_metrics_reap(uint32_t pid, uint64_t run_ticks, uint64_t dispatches) {
     }
 }
 
-static long sys_kill_agent(long a1, long a2, long a3, long a4) {
+static long sys_kill_agent(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign && !current_thread->is_agent)
         return -EPERM;
@@ -268,7 +280,8 @@ static long sys_kill_agent(long a1, long a2, long a3, long a4) {
     return 0;
 }
 
-static long sys_read_audit(long a1, long a2, long a3, long a4) {
+static long sys_read_audit(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int max = (int)a2;
     if (max <= 0) return 0;
@@ -281,7 +294,8 @@ static long sys_read_audit(long a1, long a2, long a3, long a4) {
     return n;
 }
 
-static long sys_set_mem_limit(long a1, long a2, long a3, long a4) {
+static long sys_set_mem_limit(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     long r = aether_set_mem_limit((uint32_t)a1, (uint64_t)a2);
     return r < 0 ? -EPERM : 0;                   /* lower-only; no self-escalation */

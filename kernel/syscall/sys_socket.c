@@ -67,7 +67,8 @@ static int sock_denied(int slot) {
     return g_sock_owner[slot] != current_thread->pid && !current_thread->is_sovereign;
 }
 
-static long sys_sock_connect(long a1, long a2, long a3, long a4) {
+static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     /* DDR-802: privacy mode refuses egress BEFORE any other question is asked.
      *
@@ -153,7 +154,8 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4) {
     return (slot < 0) ? -EMFILE : (long)slot;     /* no free socket / net down */
 }
 
-static long sys_sock_write(long a1, long a2, long a3, long a4) {
+static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     if (sock_denied((int)a1))
         return -EPERM;                        /* DDR-731: not this caller's slot */
@@ -167,7 +169,8 @@ static long sys_sock_write(long a1, long a2, long a3, long a4) {
     return (n < 0) ? -EIO : (long)n;
 }
 
-static long sys_sock_read(long a1, long a2, long a3, long a4) {
+static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     int slot = (int)a1;
     if (sock_denied(slot))
         return -EPERM;                        /* DDR-731: not this caller's slot */
@@ -202,7 +205,8 @@ static long sys_sock_read(long a1, long a2, long a3, long a4) {
     }
 }
 
-static long sys_sock_close(long a1, long a2, long a3, long a4) {
+static long sys_sock_close(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int slot = (int)a1;
     if (sock_denied(slot))
@@ -227,7 +231,8 @@ void socket_reap_pid(uint32_t pid) {
 
 /* DDR-734: sovereign-only, append an egress rule. -EPERM (audited) otherwise;
  * -ENOSPC when the bounded list is full. Install-only by design. */
-static long sys_net_allow(long a1, long a2, long a3, long a4) {
+static long sys_net_allow(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);

@@ -133,7 +133,8 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
     return -EBADF;
 }
 
-static long sys_write(long fd, long ubuf, long count, long a4) {
+static long sys_write(long fd, long ubuf, long count, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     if (count < 0)
         return -EINVAL;
@@ -152,7 +153,8 @@ static long sys_write(long fd, long ubuf, long count, long a4) {
 #define SYS_IOV_MAX 16
 struct user_iovec { uint64_t base; uint64_t len; };
 
-static long sys_writev(long fd, long uiov, long iovcnt, long a4) {
+static long sys_writev(long fd, long uiov, long iovcnt, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     if (iovcnt < 0 || iovcnt > SYS_IOV_MAX)
         return -EINVAL;
@@ -184,7 +186,8 @@ static long sys_writev(long fd, long uiov, long iovcnt, long a4) {
     return total;
 }
 
-static long sys_read(long fd, long ubuf, long count, long a4) {
+static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     if (count < 0)
         return -EINVAL;
@@ -282,7 +285,8 @@ static long sys_read(long fd, long ubuf, long count, long a4) {
  * (diagnostic, like the other introspection syscalls). Capped at 4 KiB per call;
  * staged into a kernel buffer under klog's lock, then copyout (never a user
  * fault under the log lock). */
-static long sys_dmesg(long ubuf, long max, long a3, long a4) {
+static long sys_dmesg(long ubuf, long max, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     if (max <= 0)
         return 0;

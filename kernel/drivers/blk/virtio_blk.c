@@ -53,12 +53,22 @@ struct vblk {
     uint64_t              reqbuf;
     struct vreq           req[VBLK_NREQ];
     int16_t               head2slot[256];  /* used-ring head -> slot (-1 free) */
-    struct tcb           *slot_waiter;     /* a submitter waiting for a free slot */
+    /* DDR-878 (item 47): a FIFO of submitters waiting for a free request slot.
+     * This was a SINGLE `struct tcb *slot_waiter`, which a second waiter simply
+     * overwrote — the first thread was then blocked with no record of it
+     * anywhere and was never woken. The per-request `waiter` field is one slot
+     * PER REQUEST and was always correct; this path had one slot PER DEVICE for
+     * an unbounded number of waiters, which is the whole defect. */
+    struct tcb           *slot_head;       /* oldest waiter, or 0 */
+    struct tcb           *slot_tail;       /* newest waiter, or 0 */
     spinlock_t            compl_lock; /* DDR-714C3/BLK-1: guards the vq + all slot
                                        * state — submit and completion now overlap
                                        * across CPUs (short, non-sleeping sections) */
     volatile int          compl_ap;   /* proof: a completion ran on a non-BSP CPU */
 };
+
+/* DDR-878: one-shot witness that two submitters really do wait at once. */
+static volatile int g_multiwait_seen;
 
 static struct vblk g_inst[VBLK_MAX];
 static unsigned    g_ninst;
@@ -162,6 +172,22 @@ int virtio_blk_completed_on_ap(void) {
  * sched_block_on, so completions on any CPU can't lose the wakeup). The old
  * one-in-flight busy sleep-mutex is gone — a caller blocks only on ITS OWN
  * request; others proceed concurrently, on any CPU. */
+/* DDR-878: pop the oldest waiter and wake it. Called with compl_lock held, on
+ * every path that frees a request slot. Waking ONE per freed slot (rather than
+ * all) keeps the wake count equal to the resource count; the woken thread
+ * re-checks in submit()'s loop and re-queues if another CPU took the slot
+ * first, so a spurious wake is safe and a lost one is not possible. */
+static void slot_wake_one(struct vblk *v) {
+    struct tcb *w = v->slot_head;
+    if (!w)
+        return;
+    v->slot_head = w->blk_wait_next;
+    if (!v->slot_head)
+        v->slot_tail = 0;
+    w->blk_wait_next = 0;
+    sched_unblock(w);
+}
+
 static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                   uint32_t count, int to_device) {
     uint64_t fl = spin_lock_irqsave(&v->compl_lock);
@@ -174,7 +200,25 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                 break;
         if (s < VBLK_NREQ)
             break;
-        v->slot_waiter = current_thread;
+        /* Enqueue at the tail, then block. Both under compl_lock, which is the
+         * same lock the release path takes — that is what makes the
+         * check-then-block safe (the locks-4 pattern). */
+        current_thread->blk_wait_next = 0;
+        if (v->slot_tail) {
+            /* This is the old bug's precondition, made observable: a SECOND
+             * submitter queueing while a first is already waiting is exactly
+             * the case the single `slot_waiter` pointer overwrote. Printed once
+             * so a gate can assert it actually happens — without it, "the fix
+             * works" would rest on the queue never being exercised at all. */
+            if (!g_multiwait_seen) {
+                g_multiwait_seen = 1;
+                kputs("[vblk] slot wait list depth>=2\r\n");
+            }
+            v->slot_tail->blk_wait_next = current_thread;
+        } else {
+            v->slot_head = current_thread;
+        }
+        v->slot_tail = current_thread;
         sched_block_on(&v->compl_lock);        /* woken when a slot frees */
     }
     v->req[s].used = 1;
@@ -201,6 +245,10 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     if (head < 0 || head >= 256) {
         v->req[s].used = 0;
         v->req[s].waiter = 0;
+        /* This path frees a slot too. The original woke nobody here, so a
+         * descriptor-exhaustion failure could strand every waiter even with the
+         * single-waiter bug fixed. Same release, same wake. */
+        slot_wake_one(v);
         spin_unlock_irqrestore(&v->compl_lock, fl);
         return -1;
     }
@@ -214,11 +262,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     int ok = (*status == 0);
     v->req[s].used = 0;                        /* release the slot ... */
     v->req[s].waiter = 0;
-    if (v->slot_waiter) {                      /* ... and wake a starved submitter */
-        struct tcb *w = v->slot_waiter;
-        v->slot_waiter = 0;
-        sched_unblock(w);
-    }
+    slot_wake_one(v);                          /* ... and wake ONE starved submitter */
     spin_unlock_irqrestore(&v->compl_lock, fl);
     return ok ? 0 : -1;
 }
@@ -264,7 +308,8 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     uint8_t vec = (uint8_t)(VBLK_MSIX_BASE + unit);
     v->compl_lock = (spinlock_t)SPINLOCK_INIT;
     v->compl_ap = 0;
-    v->slot_waiter = 0;
+    v->slot_head = 0;
+    v->slot_tail = 0;
     for (int i = 0; i < VBLK_NREQ; i++) {      /* DDR-BLK-1: request slots */
         v->req[i].used = 0;
         v->req[i].done = 0;

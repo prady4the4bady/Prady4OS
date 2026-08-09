@@ -17,7 +17,8 @@
 #include "aether.h"
 
 /* ring-3 ABI: (pid) */
-static long sys_checkpoint_agent(long a1, long a2, long a3, long a4) {
+static long sys_checkpoint_agent(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -39,7 +40,8 @@ static long sys_checkpoint_agent(long a1, long a2, long a3, long a4) {
 }
 
 /* ring-3 ABI: (pid) */
-static long sys_resume_agent(long a1, long a2, long a3, long a4) {
+static long sys_resume_agent(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);

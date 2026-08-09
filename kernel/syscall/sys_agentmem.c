@@ -14,7 +14,8 @@
 #include "agentmem.h"
 
 /* ring-3 ABI: (key, val, vallen) */
-static long sys_memory_write(long a1, long a2, long a3, long a4) {
+static long sys_memory_write(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     if (!current_thread->is_memory && !current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
@@ -41,7 +42,8 @@ static long sys_memory_write(long a1, long a2, long a3, long a4) {
 }
 
 /* ring-3 ABI: (key, out, outlen_ptr) */
-static long sys_memory_read(long a1, long a2, long a3, long a4) {
+static long sys_memory_read(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     if (!current_thread->is_memory && !current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);

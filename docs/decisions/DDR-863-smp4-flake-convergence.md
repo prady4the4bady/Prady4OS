@@ -1,3 +1,9 @@
+> **SUPERSEDED IN PART by DDR-878 (2026-08-09).** The per-gate rate here was
+> measured from suite-level reds. Running each gate individually on one pinned
+> SHA gives a different and much narrower picture: `smoke-rqstress-liveness`
+> fails ~1/8, and the four block-layer `-smp 4` gates were clean 32/32. The
+> flake is one gate, not "the SMP gates".
+
 # DDR-863 — every intermittent gate is an `-smp 4` gate (Group 9 item 47)
 
 **Status:** Accepted — analysis, no code change

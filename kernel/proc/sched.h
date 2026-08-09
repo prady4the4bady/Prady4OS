@@ -132,6 +132,11 @@ struct tcb {
     struct tcb *rq_next;        /* rq-1: intrusive per-CPU ready-FIFO link (NULL = tail
                                  * or not enqueued; rq membership tracked by rq_on) */
     int        rq_on;           /* rq-1: 1 while linked into some CPU's ready queue */
+    struct tcb *blk_wait_next;  /* DDR-878: intrusive FIFO link for virtio-blk's
+                                 * slot wait list. Separate from rq_next because a
+                                 * thread waiting for a request slot is BLOCKED and
+                                 * simultaneously NOT on any ready queue — reusing
+                                 * rq_next would splice the two lists together. */
     uint32_t   is_net;          /* DDR-731: CAP_NET — may open proxy sockets (SYS_SOCK_*).
                                  * Granted at agent spawn; NOT inherited across fork. */
     uint32_t   is_memory;       /* DDR-836: CAP_MEMORY — agent memory store (NSI 82/83).

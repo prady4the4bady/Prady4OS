@@ -90,13 +90,25 @@ syscall_entry:
     push r8
     push r9
 
-    ; marshal: syscall_dispatch(num=RAX, a1=RDI, a2=RSI, a3=RDX, a4=R10)
+    ; marshal: syscall_dispatch(num, a1..a6)  — DDR-877, item 19.
+    ;
+    ; User (SysV syscall)  : RDI RSI RDX R10 R8  R9   = a1..a6
+    ; Callee (SysV C, 7 args): RDI RSI RDX RCX R8 R9 + [rsp] = num,a1..a6
+    ;
+    ; The order below is not arbitrary: R8 and R9 are both sources and
+    ; destinations, so a6 is pushed and a5 moved BEFORE R8 is overwritten.
+    ; Reversing any two of these lines silently passes a stale register — the
+    ; kind of defect that shows up as a plausible-looking wrong argument, not
+    ; as a crash. The reject arm of smoke-mmap6 is what catches it.
+    push r9                             ; C arg7 (a6) — must sit at [rsp] at CALL
+    mov r9, r8                          ; C arg6 (a5)
     mov r8, r10                         ; C arg5 (a4)
     mov rcx, rdx                        ; C arg4 (a3)
     mov rdx, rsi                        ; C arg3 (a2)
     mov rsi, rdi                        ; C arg2 (a1)
     mov rdi, rax                        ; C arg1 (num)
     call syscall_dispatch               ; return value in RAX
+    add rsp, 8                          ; drop the stacked a6
 
     pop r9
     pop r8

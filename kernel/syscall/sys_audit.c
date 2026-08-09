@@ -27,7 +27,8 @@
  * The verdict rides on the RETURN VALUE, not on an out-parameter the caller may
  * forget to read. A tampered log that returned 0 with a quiet flag would be read
  * as success by every caller that only checks for a negative return. */
-static long sys_verify_audit(long a1, long a2, long a3, long a4) {
+static long sys_verify_audit(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);

@@ -20,7 +20,8 @@
 
 extern void signal_sigreturn(struct regs *saved);   /* arch/x86_64/usermode.asm */
 
-static long sys_sigaction(long a_signum, long a_handler, long a3, long a4) {
+static long sys_sigaction(long a_signum, long a_handler, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int sig = (int)a_signum;
     if (sig <= 0 || sig >= NSIG || sig == SIGKILL)
@@ -29,7 +30,8 @@ static long sys_sigaction(long a_signum, long a_handler, long a3, long a4) {
     return 0;
 }
 
-static long sys_kill(long a_pid, long a_signum, long a3, long a4) {
+static long sys_kill(long a_pid, long a_signum, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int pid = (int)a_pid, sig = (int)a_signum;
     if (sig <= 0 || sig >= NSIG)
@@ -46,7 +48,8 @@ static long sys_kill(long a_pid, long a_signum, long a3, long a4) {
     return 0;
 }
 
-static long sys_sigreturn(long a1, long a2, long a3, long a4) {
+static long sys_sigreturn(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
     if (!t->sig_active)

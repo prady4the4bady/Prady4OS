@@ -57,7 +57,8 @@ static uint32_t fd_ready(struct tcb *t, int fd, uint32_t events) {
     return 0;
 }
 
-static long sys_epoll_create(long a_size, long a2, long a3, long a4) {
+static long sys_epoll_create(long a_size, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a_size; (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
     int fd = fd_alloc(t);
@@ -74,7 +75,8 @@ static long sys_epoll_create(long a_size, long a2, long a3, long a4) {
     return fd;
 }
 
-static long sys_epoll_ctl(long a_epfd, long a_op, long a_fd, long a_ev) {
+static long sys_epoll_ctl(long a_epfd, long a_op, long a_fd, long a_ev, long a5, long a6) {
+    (void)a5; (void)a6;
     struct tcb *t = current_thread;
     struct epoll *ep = epoll_of(t, (int)a_epfd);
     if (!ep)
@@ -121,7 +123,8 @@ static long sys_epoll_ctl(long a_epfd, long a_op, long a_fd, long a_ev) {
     return -ENOENT;
 }
 
-static long sys_epoll_wait(long a_epfd, long a_events, long a_max, long a_timeout) {
+static long sys_epoll_wait(long a_epfd, long a_events, long a_max, long a_timeout, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a_timeout;                 /* non-blocking baseline */
     struct tcb *t = current_thread;
     struct epoll *ep = epoll_of(t, (int)a_epfd);

@@ -437,6 +437,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_idle = 0;                  /* only the per-CPU idles set this */
     t->rq_next = 0;                  /* rq-1: not enqueued yet */
     t->rq_on = 0;
+    t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
+                                      * kmalloc does not zero, so an uninitialised
+                                      * link here would be a garbage pointer the
+                                      * block layer later dereferences. */
     t->quantum = t->quantum_reset = QUANTUM;
     t->entry = entry;
     t->arg = arg;

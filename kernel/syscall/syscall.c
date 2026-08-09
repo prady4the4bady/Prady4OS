@@ -84,7 +84,8 @@ void syscall_register(unsigned num, syscall_fn fn) {
     table[num] = fn;
 }
 
-long syscall_dispatch(long num, long a1, long a2, long a3, long a4) {
+long syscall_dispatch(long num, long a1, long a2, long a3, long a4,
+                      long a5, long a6) {
     if (num < 0 || num >= MAX_SYSCALLS || !table[num])
         return -ENOSYS;
     /* AETHER rate limit (ADR-026 D7): agent processes get 60 syscalls / 1 s; an
@@ -100,12 +101,13 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a4) {
      * in a loop because a spurious wake must not resume a frozen agent. */
     while (current_thread && current_thread->checkpointed)
         sched_block();
-    return table[num](a1, a2, a3, a4);
+    return table[num](a1, a2, a3, a4, a5, a6);
 }
 
 /* --- handlers ------------------------------------------------------------- */
 
-static long sys_putc(long a1, long a2, long a3, long a4) {
+static long sys_putc(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     cap_t cap = (cap_t)a1;
     /* Mutating op: require a capability bound to the console with display rights. */
@@ -115,7 +117,8 @@ static long sys_putc(long a1, long a2, long a3, long a4) {
     return 0;
 }
 
-static long sys_getpid(long a1, long a2, long a3, long a4) {
+static long sys_getpid(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     /* DDR-SMP-3a probe (once): a %gs:0 read from a syscall entered at ring 3 —
      * this only works when the SWAPGS discipline is balanced. */
@@ -136,13 +139,15 @@ static long sys_getpid(long a1, long a2, long a3, long a4) {
     return (long)current_thread->pid;
 }
 
-static long sys_yield(long a1, long a2, long a3, long a4) {
+static long sys_yield(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     yield();
     return 0;
 }
 
-static long sys_exit(long a1, long a2, long a3, long a4) {
+static long sys_exit(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     kputs("[user] sys_exit(");
     kputdec((uint64_t)a1);

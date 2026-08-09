@@ -24,7 +24,8 @@
 #define AGS_MAX_GOAL 512u        /* S2: bounded, never unbounded */
 
 /* ring-3 ABI: (sig_out, goal, goallen, owner_seed) */
-static long sys_goal_sign(long a1, long a2, long a3, long a4) {
+static long sys_goal_sign(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
@@ -49,7 +50,8 @@ static long sys_goal_sign(long a1, long a2, long a3, long a4) {
 }
 
 /* ring-3 ABI: (sig, goal, goallen, owner_pub) */
-static long sys_goal_verify(long a1, long a2, long a3, long a4) {
+static long sys_goal_verify(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     if (!current_thread->is_agent && !current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;

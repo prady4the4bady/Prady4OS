@@ -25,7 +25,8 @@
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-static long sys_lseek(long fd, long offset, long whence, long a4) {
+static long sys_lseek(long fd, long offset, long whence, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     struct fd_entry *e = fd_get(current_thread, (int)fd);
     if (!e)
@@ -47,7 +48,8 @@ static long sys_lseek(long fd, long offset, long whence, long a4) {
     return (long)pos;
 }
 
-static long sys_getcwd(long ubuf, long size, long a3, long a4) {
+static long sys_getcwd(long ubuf, long size, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     static const char cwd[] = "/";
     size_t need = sizeof cwd;                  /* 2: '/' + NUL */
@@ -62,7 +64,8 @@ static long sys_getcwd(long ubuf, long size, long a3, long a4) {
  * The analog of Linux arch_prctl(ARCH_SET_FS): record it in the TCB (authority
  * for switch-in restore) and program IA32_FS_BASE for the current run. The base
  * must be 0 or a user-range address — ring 3 may never aim %fs at kernel space. */
-static long sys_set_tls(long fs_base, long a2, long a3, long a4) {
+static long sys_set_tls(long fs_base, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     uint64_t fb = (uint64_t)fs_base;
     if (fb != 0 && (fb < VMM_USER_MIN || fb >= VMM_USER_MAX))
@@ -74,7 +77,8 @@ static long sys_set_tls(long fs_base, long a2, long a3, long a4) {
 
 /* SYS_CLOCK (DDR-709): seconds since midnight from the RTC, for the time-of-day
  * ambiance selection (the vDSO clock is monotonic-since-boot, not wall-clock). */
-static long sys_clock(long a1, long a2, long a3, long a4) {
+static long sys_clock(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     struct rtc_time t;
     rtc_now(&t);
@@ -87,7 +91,8 @@ static long sys_clock(long a1, long a2, long a3, long a4) {
  * pure-value struct out. Returns 1 (filled), 0 (index past the last thread), or
  * -errno. Best-effort: a create/exit between successive indices only adds/drops
  * a row, which `ps` tolerates. */
-static long sys_getprocs(long index, long uout, long a3, long a4) {
+static long sys_getprocs(long index, long uout, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     if (index < 0)
         return -EINVAL;
@@ -103,7 +108,8 @@ static long sys_getprocs(long index, long uout, long a3, long a4) {
  * SYS_SET_MODE) — a non-sovereign caller gets -EPERM and survives, no
  * self-escalation (ADR-026 §D6). On authority it does not return; if the S5
  * path was never resolved it reports -ENODEV instead of hanging. */
-static long sys_poweroff(long a1, long a2, long a3, long a4) {
+static long sys_poweroff(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign)
         return -EPERM;
@@ -116,7 +122,8 @@ static long sys_poweroff(long a1, long a2, long a3, long a4) {
 
 /* SYS_REBOOT (DDR-747): ACPI/PC reset. CAP_SOVEREIGN-gated like SYS_POWEROFF;
  * the 0xCF9/8042 fallbacks always reset on a PC, so no -ENODEV. No return. */
-static long sys_reboot(long a1, long a2, long a3, long a4) {
+static long sys_reboot(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign)
         return -EPERM;
@@ -136,7 +143,8 @@ struct sysinfo {
     uint64_t free_pages;
 };
 
-static long sys_sysinfo(long uout, long a2, long a3, long a4) {
+static long sys_sysinfo(long uout, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct sysinfo si;
     memset(&si, 0, sizeof si);
@@ -179,7 +187,8 @@ static long sys_sysinfo(long uout, long a2, long a3, long a4) {
 
 /* SYS_TIME (DDR-749): ring-3 wall-clock date/time. No capability (non-sensitive,
  * like SYS_CLOCK). Copies the broken-down RTC reading out verbatim. */
-static long sys_time(long uout, long a2, long a3, long a4) {
+static long sys_time(long uout, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct rtc_time t;
     rtc_now(&t);
@@ -198,7 +207,8 @@ struct meminfo {
     uint32_t _pad;
 };
 
-static long sys_meminfo(long uout, long a2, long a3, long a4) {
+static long sys_meminfo(long uout, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct meminfo mi;
     mi.total_pages = pmm_total_page_count();
@@ -215,7 +225,8 @@ static long sys_meminfo(long uout, long a2, long a3, long a4) {
 /* SYS_SETNAME (DDR-756): rename the CALLING thread (self only — no authority to
  * touch another). Copies up to 15 chars into the tcb's own name buffer and
  * repoints t->name at it; ps (SYS_GETPROCS reads t->name) reflects it at once. */
-static long sys_setname(long uname, long a2, long a3, long a4) {
+static long sys_setname(long uname, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
     char nm[16];

@@ -17,7 +17,8 @@
 #include "aether.h"
 
 /* ring-3 ABI: (action_id) */
-static long sys_approve_code_rewrite(long a1, long a2, long a3, long a4) {
+static long sys_approve_code_rewrite(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
 
     /* Both bits. Neither alone. */

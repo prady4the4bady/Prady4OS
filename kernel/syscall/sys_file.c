@@ -22,7 +22,8 @@
 
 #define PATH_MAX 256
 
-static long sys_open(long upath, long flags, long mode, long a4) {
+static long sys_open(long upath, long flags, long mode, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)mode; (void)a4;
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)
@@ -74,7 +75,8 @@ static long sys_open(long upath, long flags, long mode, long a4) {
     return fd;
 }
 
-static long sys_close(long fd, long a2, long a3, long a4) {
+static long sys_close(long fd, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!fd_get(current_thread, (int)fd))
         return -EBADF;
@@ -82,7 +84,8 @@ static long sys_close(long fd, long a2, long a3, long a4) {
     return 0;
 }
 
-static long sys_fstat(long fd, long ustat, long a3, long a4) {
+static long sys_fstat(long fd, long ustat, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     struct fd_entry *e = fd_get(current_thread, (int)fd);
     if (!e)
@@ -110,7 +113,8 @@ static long sys_fstat(long fd, long ustat, long a3, long a4) {
  * A NEGATIVE length is -EINVAL, checked as a SIGNED value BEFORE the cast to
  * uint64_t. Casting first turns -1 into 0xFFFF...F, which reaches the FS as a
  * request to grow to 16 exabytes. */
-static long sys_ftruncate(long fd, long len, long a3, long a4) {
+static long sys_ftruncate(long fd, long len, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     if (len < 0)
         return -EINVAL;
@@ -134,7 +138,8 @@ static long sys_ftruncate(long fd, long len, long a3, long a4) {
  * the caller's root mount + fs cap (honoring per-process roots, DDR-739), reads
  * the index-th name via vfs_readdir, and copies it out NUL-terminated. Returns
  * the name length (>0), 0 when index is past the last entry (end), or -errno. */
-static long sys_getdents(long upath, long index, long ubuf, long a4) {
+static long sys_getdents(long upath, long index, long ubuf, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)
@@ -159,7 +164,8 @@ static long sys_getdents(long upath, long index, long ubuf, long a4) {
  * caller's root mount + fs cap (per-process roots, DDR-739); vfs_unlink enforces
  * CAP_FS_WRITE and the backend's semantics (SFS tombstones, -ENOTEMPTY for a
  * non-empty dir, -ENOENT for an absent name — surfaced verbatim). */
-static long sys_unlink(long upath, long a2, long a3, long a4) {
+static long sys_unlink(long upath, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)

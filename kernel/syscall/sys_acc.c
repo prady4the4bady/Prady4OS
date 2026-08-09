@@ -93,7 +93,8 @@ struct acc_seal_args {
     uint8_t agent_sign_seed[32];
 };
 
-static long sys_acc_seal(long a1, long a2, long a3, long a4) {
+static long sys_acc_seal(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     if (!current_thread->is_agent && !current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
@@ -142,7 +143,8 @@ static long sys_acc_seal(long a1, long a2, long a3, long a4) {
 }
 
 /* ring-3 ABI: (pt_out, env, owner_box_priv, ptlen_out) */
-static long sys_acc_open(long a1, long a2, long a3, long a4) {
+static long sys_acc_open(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;                      /* S1: opening is owner-only */
@@ -188,7 +190,8 @@ static long sys_acc_open(long a1, long a2, long a3, long a4) {
  * last_seq back to zero and re-present envelopes the owner already consumed,
  * turning the anti-replay control into a replay tool. The capability that
  * protects a mechanism must not be grantable to the party it constrains. */
-static long sys_acc_rotate(long a1, long a2, long a3, long a4) {
+static long sys_acc_rotate(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);

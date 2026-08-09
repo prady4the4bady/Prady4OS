@@ -64,7 +64,8 @@ static int surf_take_free(struct surface *s, uint64_t *phys, unsigned *order) {
     return 0;
 }
 
-static long sys_surface_create(long a1, long a2, long a3, long a4) {
+static long sys_surface_create(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     uint32_t w = (uint32_t)a1, h = (uint32_t)a2;
     if (w == 0 || h == 0 || w > SURFACE_DIM_MAX || h > SURFACE_DIM_MAX)
@@ -99,7 +100,8 @@ static long sys_surface_create(long a1, long a2, long a3, long a4) {
     return id;
 }
 
-static long sys_surface_map(long a1, long a2, long a3, long a4) {
+static long sys_surface_map(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -144,7 +146,8 @@ static long sys_surface_map_ro(int id) {
  * compositor owns placement (drag/maximize moves), so a client re-commit after
  * an event-channel resize must not stomp it. */
 #define SURF_POS_KEEP 0x7FFFFFFF
-static long sys_surface_commit(long a1, long a2, long a3, long a4) {
+static long sys_surface_commit(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -168,7 +171,8 @@ static long sys_surface_commit(long a1, long a2, long a3, long a4) {
 /* (id<0) -> POLL: list committed surfaces; (id>=0) -> compositor read-map.
  * One handler multiplexes so the compositor can map a surface it just polled.
  * a1 = buf/-(id+1)... kept as two distinct entry points below for clarity. */
-static long sys_surface_poll(long a1, long a2, long a3, long a4) {
+static long sys_surface_poll(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int max = (int)a2;
     if (max <= 0) return 0;
@@ -198,7 +202,8 @@ static long sys_surface_poll(long a1, long a2, long a3, long a4) {
 }
 
 /* Reposition a surface (DDR-710): owner or the compositor (CAP_SOVEREIGN). */
-static long sys_surface_move(long a1, long a2, long a3, long a4) {
+static long sys_surface_move(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -214,7 +219,8 @@ static long sys_surface_move(long a1, long a2, long a3, long a4) {
 }
 
 /* Raise a surface to the top of the stack and give it keyboard focus (DDR-708). */
-static long sys_surface_raise(long a1, long a2, long a3, long a4) {
+static long sys_surface_raise(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -234,7 +240,8 @@ static long sys_surface_raise(long a1, long a2, long a3, long a4) {
 }
 
 /* Compositor forwards a keystroke to a surface's private key ring (DDR-708). */
-static long sys_surface_sendkey(long a1, long a2, long a3, long a4) {
+static long sys_surface_sendkey(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -256,7 +263,8 @@ static long sys_surface_sendkey(long a1, long a2, long a3, long a4) {
 }
 
 /* The owning client drains a key from its surface's ring (DDR-708). */
-static long sys_surface_getkey(long a1, long a2, long a3, long a4) {
+static long sys_surface_getkey(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -276,7 +284,8 @@ static long sys_surface_getkey(long a1, long a2, long a3, long a4) {
 }
 
 /* Compositor-side: map a polled surface read-side into the caller; returns VA. */
-static long sys_surface_cmap(long a1, long a2, long a3, long a4) {
+static long sys_surface_cmap(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     return sys_surface_map_ro((int)a1);
 }
@@ -287,7 +296,8 @@ static long sys_surface_cmap(long a1, long a2, long a3, long a4) {
  * touching freed frames (ADR-021). A sovereign closing another process's surface
  * frees the frames without unmapping the owner's tables (not the active AS) — the
  * owner must not access a sovereign-closed surface. */
-static long sys_surface_close(long a1, long a2, long a3, long a4) {
+static long sys_surface_close(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -338,7 +348,8 @@ void surface_reap_pid(uint32_t pid) {
 /* Resize a surface (DDR-711): swap in a fresh zeroed buffer of the new size,
  * keeping position/stack/focus/committed. Owner-only (it owns the draw buffer).
  * The owner re-maps (SYS_SURFACE_MAP) to draw into the new buffer. */
-static long sys_surface_resize(long a1, long a2, long a3, long a4) {
+static long sys_surface_resize(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     int id = (int)a1;
     uint32_t w = (uint32_t)a2, h = (uint32_t)a3;
@@ -375,7 +386,8 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4) {
 }
 
 /* Name a window (DDR-715). Owner-only; <=15 chars + NUL via copyinstr. */
-static long sys_surface_set_title(long a1, long a2, long a3, long a4) {
+static long sys_surface_set_title(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -404,7 +416,8 @@ static long sys_surface_set_title(long a1, long a2, long a3, long a4) {
 
 /* Push a typed event to a surface's ring (DDR-718): the compositor
  * (CAP_SOVEREIGN) or the owner. a3 packs (arg0<<16)|arg1. Drop-on-full. */
-static long sys_surface_sendev(long a1, long a2, long a3, long a4) {
+static long sys_surface_sendev(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)
@@ -428,7 +441,8 @@ static long sys_surface_sendev(long a1, long a2, long a3, long a4) {
 }
 
 /* The owner drains one event (DDR-718); -EAGAIN when the ring is empty. */
-static long sys_surface_getev(long a1, long a2, long a3, long a4) {
+static long sys_surface_getev(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int id = (int)a1;
     if (id < 0 || id >= SURFACE_MAX)

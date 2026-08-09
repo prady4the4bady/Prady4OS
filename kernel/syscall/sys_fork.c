@@ -22,7 +22,8 @@
 #include "syscall.h"      /* syscall_register, syscall_user_rip/rsp */
 #include "errno.h"
 
-static long sys_fork(long a1, long a2, long a3, long a4) {
+static long sys_fork(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;        /* fork takes no user args */
     struct tcb *parent = current_thread;
 

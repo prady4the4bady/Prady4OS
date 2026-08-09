@@ -40,6 +40,7 @@ SIGUSR1          equ 10
 MMAP_HINT  equ 0x8800000000      ; VMM_MMAP_BASE (544 GiB)
 VDSO_VA    equ 0x00007FFFFFF00000 ; read-only vDSO clock page (IMP-C)
 EINVAL     equ 22               ; returned as -EINVAL
+ENOSYS     equ 38               ; returned as -ENOSYS (DDR-877)
 
 STDOUT    equ 1
 ENOENT    equ 2          ; returned as -ENOENT
@@ -272,6 +273,48 @@ _start:
     mov     rdx, m_mmapwx_len
     syscall
 .s6_after_wx:
+
+    ; ---- DDR-877 (item 19): the 6-arg ABI, proved by REJECTION -------------
+    ; The accept arm above already passes r8=-1 and r9=0, so a broken marshal
+    ; turns a5 into garbage and mmap fails. That proves the registers arrive,
+    ; but not that the kernel READS them — a kernel still discarding fd and
+    ; offset passes it unchanged. These two arms only pass if a5 and a6 are
+    ; read and acted on, and they are distinguishable from each other because
+    ; the two errors differ (-ENOSYS vs -EINVAL): swapping r8 and r9 in the
+    ; marshal would fail both.
+    mov     rax, SYS_MMAP          ; fd=3 -> file-backed, not implemented
+    xor     rdi, rdi
+    mov     rsi, 4096
+    mov     rdx, 3
+    mov     r10, 0x22
+    mov     r8, 3
+    xor     r9, r9
+    syscall
+    cmp     rax, -ENOSYS
+    jne     .s6_after_fd
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapfd]
+    mov     rdx, m_mmapfd_len
+    syscall
+.s6_after_fd:
+
+    mov     rax, SYS_MMAP          ; offset != 0 is meaningless for anon
+    xor     rdi, rdi
+    mov     rsi, 4096
+    mov     rdx, 3
+    mov     r10, 0x22
+    mov     r8, -1
+    mov     r9, 4096
+    syscall
+    cmp     rax, -EINVAL
+    jne     .s6_after_off
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapoff]
+    mov     rdx, m_mmapoff_len
+    syscall
+.s6_after_off:
 
     mov     rax, SYS_MUNMAP        ; munmap, then re-mmap the same hint
     mov     rdi, r13
@@ -669,6 +712,10 @@ m_mmap:      db "SYSMMAP OK", 10
 m_mmap_len:  equ $ - m_mmap
 m_mmapwx:    db "SYSMMAP WX REJECTED", 10
 m_mmapwx_len: equ $ - m_mmapwx
+m_mmapfd:    db "SYSMMAP FD REJECTED", 10
+m_mmapfd_len: equ $ - m_mmapfd
+m_mmapoff:   db "SYSMMAP OFF REJECTED", 10
+m_mmapoff_len: equ $ - m_mmapoff
 m_munmap:    db "SYSMUNMAP OK", 10
 m_munmap_len: equ $ - m_munmap
 p_exec:      db "/EXECTEST.ELF", 0

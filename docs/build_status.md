@@ -3540,3 +3540,63 @@ running over e1000e (the bridge is still bound to virtio-net).
 Gates green: `smoke-e1000e`, `smoke`, `smoke-fs`, `smoke-fs-rw`,
 `smoke-fs-sfs-rw`, `smoke-fs-ext4`, `smoke-user`. Zero warnings under `-Werror`.
 138 gates across 6 shards.
+
+## Group 3 item 19 — six-argument syscall ABI (DDR-877)
+
+`syscall_dispatch` and `syscall_fn` now carry the full SysV syscall register set
+RDI/RSI/RDX/R10/R8/R9. All 91 handlers take six arguments even when they use
+two: a per-arity table would mean the dispatcher had to know each handler's
+arity, and a wrong entry there reads a register the caller never set and passes
+the garbage on as a real argument. `-Wunused-parameter` under `-Werror` makes
+the ignored ones explicit.
+
+The marshal ordering in `syscall_entry.asm` is load-bearing — R8 and R9 are both
+sources and destinations, so a6 is pushed and a5 moved *before* R8 is
+overwritten. The seventh C argument goes on the stack per SysV.
+
+`SYS_MMAP` is the consumer, and it was already wrong: it took four arguments, so
+a caller passing fd and offset — which `user/systest.asm` **already did**,
+correctly — had them silently discarded and got anonymous zero pages back. "Map
+this file at this offset" returned success and something else entirely. It now
+reads both and refuses what it cannot do: `fd != -1` → `-ENOSYS` (this also
+rejects `fd == 0`, which some libcs pass for anonymous maps and which is a real
+open descriptor), `offset != 0` → `-EINVAL`.
+
+`smoke-sysmmap` gained two reject arms, `SYSMMAP FD REJECTED` and `SYSMMAP OFF
+REJECTED`, with **different** expected errno values on purpose — symmetric arms
+would both pass under an r8/r9 swap in the marshal; asymmetric ones both fail.
+
+## Group 9 item 47 — the `-smp 4` flake, measured and narrowed (DDR-878)
+
+Two findings, deliberately not merged.
+
+**Fixed:** virtio_blk's single `slot_waiter` pointer (DDR-864) is now an
+intrusive FIFO wait list (`slot_head`/`slot_tail` + `tcb.blk_wait_next`,
+initialised in `sched_create` because `kmalloc` does not zero). One waiter is
+woken per freed slot, on *both* release paths — the original woke nobody on the
+`virtq_add` failure path.
+
+**Not the flake.** A one-shot witness prints when the wait list first reaches
+depth ≥ 2 — the exact case the old pointer overwrote. It fires **zero** times in
+an instrumented `-smp 4` boot, and the flake survives the fix: **2/40** post-fix
+runs of `smoke-rqstress-liveness` failed against a 2/27 baseline. DDR-864's
+hypothesis is disproved, not quietly dropped.
+
+**And DDR-863's picture was wrong.** Per-gate, on one pinned SHA:
+`smoke-rqstress-liveness` 1/8; `smoke-msixap`, `smoke-blkmq`,
+`smoke-blk-integrity`, `smoke-sfs-btree-smp4` **0/8 each**. It is one gate, not
+"the SMP gates".
+
+**What it actually is.** A captured failing boot shows `[boot-stamp] A` printing
+and `[boot-stamp] B` never printing, while the boot continues normally for 100+
+more lines. `fs_test_thread` spawns the ext4 probe and never runs again, so
+`rqstress_proof()` is never reached — the gate reports a missing sentinel, which
+reads as a scheduler proof failing when the proof never ran. Not wrong data, not
+block I/O (the next step is an embedded ELF load). One runnable thread lost while
+every other thread continues: a per-CPU runqueue / work-stealing loss, which is
+why the one gate that stresses the runqueues is the one that flakes.
+
+Item 47 is **documented, not fixed** — the item's own standard — but with a
+measured per-gate rate, four gates cleared, a named subsystem, and a repeatable
+capture procedure. Item 50's "3 consecutive greens" is now ~68% per attempt
+rather than a wall.

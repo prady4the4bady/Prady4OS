@@ -146,7 +146,8 @@ static void install(struct fd_entry *e, struct pipe *p, int flags) {
     e->file  = 0;
 }
 
-static long sys_pipe(long ufds, long a2, long a3, long a4) {
+static long sys_pipe(long ufds, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
 
@@ -173,7 +174,8 @@ static long sys_pipe(long ufds, long a2, long a3, long a4) {
     return 0;
 }
 
-static long sys_dup2(long a_old, long a_new, long a3, long a4) {
+static long sys_dup2(long a_old, long a_new, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     struct tcb *t = current_thread;
     int oldfd = (int)a_old, newfd = (int)a_new;

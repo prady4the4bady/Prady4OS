@@ -43,7 +43,8 @@ static struct tcb *find_zombie_child(struct tcb *parent, int pid,
     return NULL;
 }
 
-static long sys_wait4(long a_pid, long a_status, long a_options, long a4) {
+static long sys_wait4(long a_pid, long a_status, long a_options, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a4;
     int pid     = (int)a_pid;
     int options = (int)a_options;

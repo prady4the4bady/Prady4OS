@@ -15,7 +15,8 @@
  * We own every caller (compositor); all rebuilt together. */
 struct mouse_state { int32_t x, y; uint32_t buttons; int32_t wheel; };
 
-static long sys_input_poll(long a1, long a2, long a3, long a4) {
+static long sys_input_poll(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a3; (void)a4;
     int max = (int)a2;
     if (max <= 0)
@@ -29,7 +30,8 @@ static long sys_input_poll(long a1, long a2, long a3, long a4) {
     return n;
 }
 
-static long sys_mouse_poll(long a1, long a2, long a3, long a4) {
+static long sys_mouse_poll(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct mouse_state ms;
     int x, y;
