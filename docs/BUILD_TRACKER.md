@@ -156,7 +156,26 @@ own rejection message, never a fall-through comparison.
 
 ---
 
-## 5. OPEN-10 — current diagnosis
+## 5. OPEN-10 — RESOLVED AS A MISNOMER by DDR-880 (2026-08-09)
+
+> **OPEN-10 is not a B+tree bug and not a distinct defect.** It is the item-47
+> lost-thread failure seen through a different sentinel. Measured 2/30 on
+> `smoke-sfs-btree-smp4`; in both failures the kernel printed **neither**
+> `[sfs] btree churn OK` **nor** `... FAIL` — the probe never ran, because
+> `fs_test_thread` is lost before reaching it. `[boot-stamp] B` is absent in
+> every captured failure of both gates.
+>
+> The B#3 / virtio-blk hypothesis below is **closed**: DDR-878 cleared the block
+> layer (block gates 0/8, the slot-wait precondition witness never fires, and
+> the statement after the stall point is an embedded ELF load with no disk I/O).
+>
+> The 90 s-window explanation below was right about the timeouts it measured and
+> does not cover these: `smoke-sfs-btree-smp4` already runs at `TIMEOUT_S=180`,
+> and a thread lost at t≈240 is not waiting for more time.
+>
+> Text below kept as written.
+
+## 5. OPEN-10 — superseded diagnosis (kept for history)
 
 **Signature (the only thing that counts as OPEN-10 data):** the probe prints the
 literal string `btree churn FAIL`.

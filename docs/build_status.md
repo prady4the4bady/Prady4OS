@@ -3600,3 +3600,81 @@ Item 47 is **documented, not fixed** — the item's own standard — but with a
 measured per-gate rate, four gates cleared, a named subsystem, and a repeatable
 capture procedure. Item 50's "3 consecutive greens" is now ~68% per attempt
 rather than a wall.
+
+## Group 3 item 21 — v1.0.0 syscall target: ~95, not 200+ (DDR-879)
+
+Assessment, which is what the item asks for. **91 NSI numbers defined, 91
+registered** — not the 76 in the older tracker text. The two counts matching
+matters on its own: a defined-but-unregistered number returns `-ENOSYS` while
+looking present in the header.
+
+The surface is four groups, not one list: 31 POSIX process/file/memory, 26
+AETHER agent+capability, 22 Layer-7 desktop, 12 introspection/system.
+
+**200+ is the wrong release criterion.** Linux's ~350 are mostly variants and
+compatibility strata (`open`/`openat`, four `stat` forms, 32-bit and `time64`
+doubles) kept for binaries compiled decades ago. PRADYOS has no compatibility
+stratum. Counting to 200 without that pressure means *inventing* syscalls — each
+a permanent NSI number, a handler nobody calls, and a gate nobody wrote.
+DDR-877 is the precedent: the defect was in a syscall that already existed and
+was already counted.
+
+**Target ~95, derived from the remaining queue:** +3 for item 15's service
+manager (capability-based supervision has no existing expression), +1 conditional
+for item 27 if suspend is ring-3 triggerable. Items 34, 35, 38 and 40 need
+**zero** new numbers — job tables are shell-side, a loader needs only
+`mmap`/`open`/`read`, and a VFS mount is kernel-side.
+
+`pread`/`pwrite`, `MAP_FIXED`, file-backed `mmap`, `mprotect`, `statx` and
+threads are real and defensible — as post-1.0 items with their own gates, not as
+numbers reserved now against a design that does not exist. The count is a
+reported measurement, never a goal: a release should be able to say every number
+has a handler, a caller and a gate.
+
+## Group 4 item 26 — Intel HDA audio: DEFERRED, OPTIONAL
+
+Logged as the item itself directs. HDA is marked optional in the queue and its
+absence does not block Group 4, which is complete with items 22–25, 27 and 28.
+
+Not a silent skip: no audio subsystem exists above it either — no mixer, no
+per-process audio capability in the ADR-026 model, and no sentinel a gate could
+assert beyond "a codec answered". Shipping a driver under that would add a
+device whose only proof is that it enumerated, which is the probe-not-function
+standard DDR-875 and DDR-876 were both written to avoid. It is deferred with the
+audio stack, not deferred on its own.
+
+## Group 9 item 46 — OPEN-10 is item 47, not a B+tree bug (DDR-880)
+
+A 30-run campaign of `smoke-sfs-btree-smp4` reported "2/30 with the OPEN-10
+signature", which would have been the first local reproduction ever. **It was a
+detector bug:** `make` echoes its own recipe, so every log contains
+`FORBIDDEN_SENTINEL="btree churn FAIL"` and grepping the whole log matches the
+harness's own echo. The tell is `signature == failures` exactly. Re-classified
+against the kernel's own print, both failures show **neither** `[sfs] btree
+churn OK` **nor** `FAIL` — the probe never ran. Rule that keeps catching this:
+assert on what the kernel printed, never on a string the harness also prints.
+
+Both failures carry the item-47 signature exactly: stamp A prints, **stamp B
+never does**, ~100 lines of normal boot follow, and the last thing
+`fs_test_thread` does is spawn the ext4-rooted probe. That thread runs the
+churn probe, `rqstress_proof`, `blkmq_proof` and `smp_blk_integrity` — when it
+is lost, all of them silently do not run, and whichever gate asserts on one of
+those sentinels reports "required pattern not found". **OPEN-10 and item 47 are
+two gates watching the same thread die.**
+
+It also explains what never fit: OPEN-10 was named for a B+tree, and `sfs.c` has
+no global mutable state to race on. There was nothing to fix there.
+
+Measured, one pinned SHA, gates run individually: `smoke-sfs-btree-smp4` 2/30
+(6.7%), `smoke-rqstress-liveness` 2/40 (5.0%) — the two rates agree, as one
+defect seen through two gates should. `BUILD_TRACKER.md` §5's B#3/virtio-blk
+hypothesis is closed by DDR-878, not left standing.
+
+`[boot-stamp] C` now lands immediately after the ext4-probe block, narrowing the
+~90-line loss window to one bit: C without B means the next `elf_load` is the
+suspect; no C means the loss is inside the ext4 block. It ships **without** the
+campaign that reads it — claiming a result from a stamp nobody has caught yet
+would be the unsupported conclusion these DDRs exist to avoid.
+
+Item 46 **documented** to its stated standard: measured rate, identified
+signature, named misnomer. Item 50 is now blocked by one defect, not two.

@@ -1685,6 +1685,13 @@ static void fs_test_thread(void *arg) {
                  * writable CoW root; FAT has no ring-3 create/unlink here), set
                  * before unblock like the ext4 probe. Proves the two new VFS
                  * mutations across the syscall boundary. Gate: smoke-fsrm. */
+                /* DDR-880: stamp C. Every captured failure so far stops between
+                 * stamp A and stamp B with the ext4 probe as the last thing
+                 * spawned — a ~90-line window. This narrows it to one statement:
+                 * if C prints and B does not, the thread is lost AFTER the ext4
+                 * block and the next elf_load is the suspect; if C never prints,
+                 * it is lost inside the ext4 block itself. */
+                kputs("[boot-stamp] C ext4-done t="); kputdec(g_ticks); kputs("\r\n");
                 {
                     struct tcb *fp = 0;
                     uint64_t flen = (uint64_t)(fsrmtest_elf_end - fsrmtest_elf);
