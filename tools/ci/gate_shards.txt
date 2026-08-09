@@ -170,3 +170,4 @@
 3	smoke-e1000e	90
 4	smoke-numa	90
 5	smoke-numa-alloc	90
+0	smoke-uefi	90

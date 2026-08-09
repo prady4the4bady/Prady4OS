@@ -212,7 +212,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -875,6 +875,46 @@ ahci-image:
 #
 # 'node1=6' still has teeth: a rebucket that filed everything onto node 0 leaves
 # node1=0, and one that mis-split straddling blocks moves node0 off 61440.
+# ---- DDR-886 (Group 4 item 22): UEFI boot path ---------------------------
+# clang emits PE32+ directly and lld-link is already installed, so no EDK2 or
+# gnu-efi dependency is introduced (DDR-886 section 2). -Werror as everywhere.
+UEFI_EFI := build/BOOTX64.EFI
+ESP_IMG  := build/esp.img
+
+$(UEFI_EFI): boot/uefi/loader.c boot/uefi/efi.h
+	clang --target=x86_64-unknown-windows -ffreestanding -fshort-wchar -mno-red-zone \
+	      -Wall -Wextra -Werror -c boot/uefi/loader.c -o build/uefi_loader.obj
+	lld-link-18 -subsystem:efi_application -entry:efi_main -nodefaultlib \
+	      build/uefi_loader.obj -out:$(UEFI_EFI)
+
+# A FAT ESP carrying the loader at the removable-media path plus the SAME
+# kernel.bin the legacy path uses. Byte-identical on purpose: nothing in the
+# kernel is conditional on which loader ran.
+esp-image: $(UEFI_EFI) $(KERNEL_BIN)
+	dd if=/dev/zero of=$(ESP_IMG) bs=1M count=48 status=none
+	mkfs.fat -F 32 -n PRADYOSESP $(ESP_IMG) >/dev/null
+	mmd -i $(ESP_IMG) ::/EFI ::/EFI/BOOT
+	mcopy -i $(ESP_IMG) $(UEFI_EFI) ::/EFI/BOOT/BOOTX64.EFI
+	mcopy -i $(ESP_IMG) $(KERNEL_BIN) ::/KERNEL.BIN
+	@echo "esp: $(ESP_IMG) (BOOTX64.EFI + KERNEL.BIN)"
+
+# The sentinel is IDENTICAL to every other boot gate on purpose: it proves the
+# same unmodified kernel reaches the same state through a completely different
+# loader. A UEFI-specific sentinel would let the two paths drift while both
+# looked green. '[uefi] handoff' is required too so a failure can be attributed
+# to the loader rather than the kernel.
+#
+# The E820 entry COUNT is required too, and that is what proves the HANDOFF.
+# Mutation testing found the gate blind without it: handing the kernel a
+# deliberately wrong boot_info pointer still reached NEXUS KERNEL OK, because
+# that sentinel prints before the memory map is used for anything. 16 is the
+# merged count for this OVMF machine; garbage at a wrong pointer will not be 16.
+smoke-uefi: esp-image
+	TIMEOUT_S=90 QEMU_UEFI=1 \
+	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010')" \
+	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL')" \
+	    bash tools/qemu_runner/boot_test.sh $(ESP_IMG)
+
 smoke-numa-alloc: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_NUMA=1 QEMU_PROBES=numaalloc \
 	EXTRA_SENTINEL="$$(printf 'node0=59904 node1=6\n[numa] alloc node1 -> node1 OK')" \

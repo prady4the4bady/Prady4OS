@@ -3892,3 +3892,31 @@ write-budget refusal.
 
 No fix ships because a sub-1-in-75 failure not recurring cannot validate one.
 The `rc` instrument is landed and waiting for the next occurrence.
+
+## Group 4 item 22 — UEFI boot path (DDR-886)
+
+`boot/uefi/` is a from-scratch PE32+ UEFI application (clang
+`--target=x86_64-unknown-windows` + `lld-link-18`), reproducing the legacy
+loader's handoff contract exactly: RDI = `boot_info` at 0x4000, kernel.bin at
+physical 0x400000, `0xFFFFFFFF80000000` → 0x400000 plus a low identity map, long
+mode, interrupts off. **No EDK2 or gnu-efi dependency** — stated as a deviation
+in DDR-886 §2, since the item named EDK2; 150 lines of spec-fixed declarations
+is a smaller surface than a submodule with its own build system.
+
+`smoke-uefi` boots OVMF from a FAT ESP and requires the **same**
+`NEXUS KERNEL OK` sentinel as every other gate — that identity is the point,
+since a UEFI-specific sentinel would let the two paths drift while both looked
+green.
+
+**Two defects the work surfaced.** The first version **silently truncated** the
+firmware memory map at 96 entries (OVMF emits >100), so the kernel booted with
+less RAM than the machine had and nothing said so; adjacent same-type runs are
+now merged (16 entries) and overflow is **refused**, not truncated. And the gate
+was **blind to a wrong handoff**: mutation M2, a deliberately wrong `boot_info`
+pointer, PASSED, because `NEXUS KERNEL OK` prints before the memory map is used.
+Requiring the E820 entry count fixed it — M2, M3 (all memory marked usable) and
+M4 (`sizeof` instead of `desc_size`) are now all killed. M1 did not compile and
+is recorded as invalid, not a kill.
+
+Legacy path re-verified after the `BOOTDISK` harness refactor: `smoke`,
+`smoke-fs`, `smoke-user`, `smoke-shell`, `smoke-numa` all green.

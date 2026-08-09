@@ -84,6 +84,37 @@ if [ -n "${QEMU_SMP:-}" ]; then
     SMPOPT=(-smp "$QEMU_SMP")
 fi
 
+# DDR-886 (item 22): boot via OVMF instead of the legacy MBR path. The image
+# argument is then an ESP (FAT) rather than a disk with a boot sector, so the
+# usual -drive/bootindex block is replaced entirely rather than added to.
+#
+# OVMF_CODE is attached read-only and OVMF_VARS is COPIED per run: the vars
+# store is written by the firmware, and sharing one across runs would let one
+# gate's boot order leak into the next — an intermittent difference with no
+# visible cause.
+BOOTDISK=(-drive "if=none,format=raw,file=$IMG,id=disk0"
+          -device virtio-blk-pci,drive=disk0,bootindex=0)
+UEFIOPT=()
+if [ -n "${QEMU_UEFI:-}" ]; then
+    OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+    OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
+    if [ ! -f "$OVMF_CODE" ] || [ ! -f "$OVMF_VARS_SRC" ]; then
+        echo "[smoke] OVMF not installed ($OVMF_CODE) — cannot test the UEFI path."
+        echo "[smoke] FAIL (missing firmware, not a kernel failure)."
+        rm -f "$SERIAL_LOG" "$QEMU_ERR"
+        exit 1
+    fi
+    OVMF_VARS="$(mktemp)"
+    cp "$OVMF_VARS_SRC" "$OVMF_VARS"
+    UEFIOPT=(-drive "if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_CODE"
+             -drive "if=pflash,format=raw,unit=1,file=$OVMF_VARS")
+    # The ESP REPLACES the legacy boot disk rather than joining it. An image with
+    # no boot sector sitting on bootindex=0 next to OVMF just falls through to
+    # the UEFI shell, which looks exactly like a kernel that never printed.
+    BOOTDISK=(-drive "if=none,format=raw,file=$IMG,id=esp"
+              -device virtio-blk-pci,drive=esp,bootindex=0)
+fi
+
 # DDR-882 (item 17): a genuinely two-node machine for the NUMA gates. Opt-in for
 # the same reason as the AHCI and e1000e devices — SRAT changes what the firmware
 # publishes to EVERY gate, and a table that appears only sometimes is exactly how
@@ -303,8 +334,7 @@ CPUOPT=()
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine "$QEMU_MACHINE" \
     "${CPUOPT[@]}" \
-    -drive if=none,format=raw,file="$IMG",id=disk0 \
-    -device virtio-blk-pci,drive=disk0,bootindex=0 \
+    "${BOOTDISK[@]}" \
     "${FWCFG[@]}" \
     "${FATDISK[@]}" \
     "${SFSDISK[@]}" \
@@ -316,6 +346,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \
     "${NUMAOPT[@]}" \
+    "${UEFIOPT[@]}" \
     "${NVMEDEV[@]}" \
     "${RNGDEV[@]}" \
     -no-reboot -display none -monitor none \
