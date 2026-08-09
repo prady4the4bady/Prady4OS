@@ -3874,3 +3874,21 @@ instrument in place: **45 runs, 0 `churn FAIL op=` hits, 0 other reds.**
 OPEN-10 did not reproduce locally. It remains a single CI observation, and its
 local rate is below 1-in-45. The `rc` instrument is in place for the next
 occurrence; no fix is attempted without it.
+
+### Item 46 CLOSED — documented known issue (DDR-884)
+
+Item 46 permits "root-cause and fix **or** explicitly document as known issue
+with measured reproduction rate". Closed on the second branch.
+
+**75 local runs, 0 reproductions** (30 on `smoke-sfs-btree-smp4`, 45 on
+`smoke-smpuser`/`rqstress`/`smp` with the `rc` instrument). **1 CI occurrence.**
+
+Known: signature is `op=create iter=0` — the FIRST create, where no B+tree split
+is reachable, so it is neither a churn nor a B+tree defect; the thread is not
+lost (`boot-stamp` C and B both printed), which separates it from item 47; and
+`sfs.c` still has no global mutable state, so the prescribed spinlock has no
+target. Three causes remain unseparated: `-EEXIST`, `-ENOSPC`, or an ADR-032
+write-budget refusal.
+
+No fix ships because a sub-1-in-75 failure not recurring cannot validate one.
+The `rc` instrument is landed and waiting for the next occurrence.
