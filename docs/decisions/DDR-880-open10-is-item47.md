@@ -142,3 +142,58 @@ fast-forward `main`. This halves the concurrent load and gives item 50's
 costs one CI cycle of wall-clock per push, which is the correct trade when the
 alternative is a promotion criterion that keeps failing for a reason unrelated
 to the change under test.
+
+---
+
+## CORRECTION (2026-08-10) — OPEN-10 is a REAL, SEPARATE defect after all
+
+The conclusion in section 3 — that OPEN-10 is the item-47 lost thread seen
+through another sentinel — was drawn from **two** local failures in which the
+kernel printed neither `btree churn OK` nor `FAIL`. CI run `31329941053`
+(`00808b4`, shard 0) contradicts it:
+
+```
+[boot-stamp] C ext4-done t=146
+[boot-stamp] B proofs-begin t=167
+[sfs] btree churn FAIL
+```
+
+**Stamp B printed.** `fs_test_thread` was not lost — it reached the proofs, ran
+the churn probe, and the probe **genuinely failed**. That is the real OPEN-10
+signature, the one prior work had never captured, and it is not the lost thread.
+
+So there are **two distinct defects**, both intermittent, both on `-smp 4`:
+
+1. **The lost thread** (items 46/47 as characterised above): stamp B absent, no
+   proof output at all, whichever gate asserts on a missing proof goes red.
+   Measured 5–6.7%. Shard 4 of the same CI run is this mode —
+   `'[blk] multi-inflight OK' not found`.
+2. **A genuine SFS B+tree churn failure** (OPEN-10 proper): all stamps present,
+   the probe runs and reports FAIL. Rarer — 0 occurrences in 30 local runs of
+   `smoke-sfs-btree-smp4`, 1 in CI.
+
+Both appeared in the **same CI run**, on different shards. That is why the two
+were conflated: they are gates apart, not runs apart.
+
+**What was wrong and why.** Section 3 generalised from two samples that happened
+to share a mode, and the fact that both known local failures lacked the print was
+treated as showing the print could not happen. It only showed it had not happened
+*yet*, in that sample. The detector bug earlier in this DDR made the sample
+smaller than it looked, which compounded it.
+
+**Status changes:**
+
+- **Item 46 (OPEN-10) reverts to OPEN and DISTINCT.** It is not a misnomer. It
+  needs its own root cause, and it now has one confirmed capture with the true
+  signature and full boot stamps.
+- **Item 47 keeps its characterisation** — the lost thread is real, measured, and
+  unaffected by this.
+- The `[boot-stamp] C` instrument works and is already paying: it is what shows
+  the thread reached the proofs in this failure.
+
+**What this does NOT change:** the block layer is still cleared for the lost
+thread (DDR-878's witness), and `sfs.c` still has no global mutable state, so
+the queue's prescribed "add a spinlock to sfs.c" still has no target. The churn
+failure is a data or ordering fault inside the churn workload itself, and
+finding it needs the failing run's per-cycle detail, which the probe does not
+currently print.

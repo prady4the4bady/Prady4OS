@@ -3812,3 +3812,18 @@ Measured on the 17a+17b tree, gates run individually:
 
 5% matches the documented rate (2/40 rqstress, 2/30 btree). **The NUMA work did
 not change it.** Item 17 pushed on that evidence.
+
+### CORRECTION — item 46 (OPEN-10) is a REAL, SEPARATE defect (DDR-880 addendum)
+
+CI run `31329941053` (`00808b4`) failed on two shards with **two different
+defects**, which is why they were conflated:
+
+- shard 4 — `'[blk] multi-inflight OK' not found`: the lost thread (item 47).
+- shard 0 — `[boot-stamp] C` **and** `[boot-stamp] B` both printed, then
+  `[sfs] btree churn FAIL`. The thread was **not** lost; the churn probe ran and
+  genuinely failed. That is the true OPEN-10 signature, never captured before.
+
+DDR-880 concluded OPEN-10 was a misnomer for the lost thread. That conclusion was
+generalised from two local failures that happened to share a mode, and it is
+**wrong**. Item 46 reverts to **open and distinct**; item 47's characterisation
+is unaffected. The `[boot-stamp] C` instrument works and is what proved it.
