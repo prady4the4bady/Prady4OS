@@ -29,6 +29,7 @@
 #include "ioapic.h"        /* DDR-874: I/O APIC + GSI routing */
 #include "ahci.h"          /* DDR-875: AHCI SATA */
 #include "e1000e.h"        /* DDR-876: Intel e1000e NIC */
+#include "numa.h"          /* DDR-882: SRAT NUMA topology */
 #include "smp.h"
 #include "percpu.h"
 #include "pcie.h"
@@ -709,8 +710,28 @@ static void smpresched_proof(void) {
     dl = g_ticks + 50;
     while (!g_rp_ran && g_ticks < dl)
         yield();
-    kputs((g_resched_ipis > before && g_rp_ran) ? "[smp] resched OK\r\n"
-                                                : "[smp] resched FAIL\r\n");
+    /* DDR-883. The property that must hold is that the unblocked thread RUNS.
+     * Requiring an IPI on top of that was over-specified: at -smp 2 there is one
+     * AP, the thread is picked up without a cross-CPU kick, and the proof
+     * reported FAIL with ipis=0 ran=1 — a correct system failing its own test,
+     * deterministically, 5/5. No gate had ever run -smp 2.
+     *
+     * The IPI term is kept where it is genuinely expected — more than one AP,
+     * i.e. cpu_count > 2 — so the cross-CPU kick keeps its coverage at the 3-
+     * and 4-CPU configurations every existing SMP gate uses. Both terms are
+     * printed on failure because "never ran" and "no IPI needed" demand
+     * opposite actions.
+     */
+    int ipi_expected = (lapic_cpu_count() > 2);
+    if (g_rp_ran && (!ipi_expected || g_resched_ipis > before)) {
+        kputs("[smp] resched OK\r\n");
+    } else {
+        kputs("[smp] resched FAIL ipis=");
+        kputdec(g_resched_ipis - before);
+        kputs(" ran=");
+        kputdec((uint64_t)g_rp_ran);
+        kputs("\r\n");
+    }
 }
 
 /* cap-4 proof: a ring-3 thread runs on an AP. The FS phase has just spawned a
@@ -2341,6 +2362,7 @@ void kmain(struct boot_info *bi) {
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init();
+    numa_init();      /* DDR-882 (item 17a): SRAT topology, needs ACPI first */
     /* DDR-874 (item 28): I/O APIC + q35 GSI routing. Needs the MADT, so it
      * runs straight after acpi_init. Returns 0 on a board without one, and
      * the 8259 PIC stays in charge — this does not disturb the existing

@@ -84,6 +84,39 @@ if [ -n "${QEMU_SMP:-}" ]; then
     SMPOPT=(-smp "$QEMU_SMP")
 fi
 
+# DDR-882 (item 17): a genuinely two-node machine for the NUMA gates. Opt-in for
+# the same reason as the AHCI and e1000e devices — SRAT changes what the firmware
+# publishes to EVERY gate, and a table that appears only sometimes is exactly how
+# an intermittent boot difference gets introduced.
+#
+# Explicit memory-backend objects rather than the `-numa node,mem=` form: mem= is
+# deprecated and QEMU splits the ranges differently across versions, which would
+# make the per-node byte assertions depend on the host's QEMU build rather than
+# on the parser under test.
+#
+# `-smp 2` is required for SRAT to carry more than one Local APIC affinity entry
+# (QEMU assigns vCPUs to nodes round-robin), so the CPU->node parse that item 37
+# depends on is genuinely exercised. The explicit `-numa cpu,socket-id=` form is
+# NOT used: it needs a sockets= topology, and the extra vCPU only matters here
+# for what SRAT contains, not for how the guest schedules.
+#
+# Bringing up APs would expose this gate to the unresolved lost-thread defect
+# (DDR-880). It does not: `[numa]` prints from numa_init(), immediately after
+# acpi_init() and BEFORE lapic_init() starts any AP, so with no FORBIDDEN
+# pattern the DDR-785 early exit fires before the SMP proofs ever run. That is
+# why this gate declares its rejection check INSIDE the required line
+# ("rejected=0") rather than as a FORBIDDEN sentinel — a FORBIDDEN pattern would
+# disable early exit and hand the gate the flake.
+NUMAOPT=()
+if [ -n "${QEMU_NUMA:-}" ]; then
+    NUMAOPT=(-m 512M
+             -object memory-backend-ram,id=nram0,size=256M
+             -object memory-backend-ram,id=nram1,size=256M
+             -numa node,nodeid=0,memdev=nram0
+             -numa node,nodeid=1,memdev=nram1
+             -smp 2)
+fi
+
 # Optional host-authored SFS disk (DDR-768) — attached LAST (so it lands at the
 # highest blk index) only when QEMU_SFS2 is set. The smoke-sfs-persist gate uses
 # it to prove the kernel reads a file the host mkfs.sfs wrote; every other gate
@@ -276,6 +309,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \
+    "${NUMAOPT[@]}" \
     "${NVMEDEV[@]}" \
     "${RNGDEV[@]}" \
     -no-reboot -display none -monitor none \

@@ -3721,3 +3721,35 @@ established — 2 of 5 both landing on `main` is p ≈ 0.25, which is not eviden
 **Procedure from here:** push `dev/phase1`, wait for green, *then* fast-forward
 `main`. It costs one CI cycle of wall-clock and halves the contention, which
 matters for item 50's "3 consecutive greens on one tip".
+
+## Group 3 item 17a — SRAT NUMA topology (DDR-882)
+
+`struct numa_topology` is declared in `boot_info.h` and populated by the KERNEL
+from ACPI SRAT, not by the bootloader. Two structural reasons: `struct boot_info`
+ends in a flexible array (`e820[]`) so nothing can be appended after it, and
+stage2 is 1294 bytes of 16-bit assembly that cannot do RSDP discovery, checksum
+validation and sub-table walking. The boot protocol is unchanged.
+
+`kernel/mm/numa.c` parses SRAT sub-table types 0, 1 and 2. Three things that make
+SRAT subtly wrong are handled explicitly: the proximity domain is **split** in
+type 0 (low byte at offset 2, high three bytes at 9..11, APIC id in between); a
+sub-table with `length == 0` is an infinite loop, so the walk is bounded; and the
+enabled flag is not optional, since firmware lists disabled hot-plug entries that
+would otherwise inflate the node count.
+
+`smoke-numa` runs against a genuine two-node QEMU machine and asserts
+`nodes=2 ranges=3 rejected=0`, `node0 mem=255MiB`, `node1 mem=256MiB`. The exact
+byte totals are the assertion with teeth — a parser that finds SRAT but reads
+base/length at the wrong offsets still reports a node count. The rejection check
+is folded into the required line as `rejected=0` rather than being a FORBIDDEN
+sentinel, which keeps the DDR-785 early exit eligible.
+
+**Mutation matrix, reported honestly:** M1 (length field at the wrong offset)
+killed. M3 (accept unaligned ranges) **SURVIVED** — QEMU never emits an unaligned
+range, so that guard is defensive code with no test behind it, and this says so
+rather than counting it as covered. M2 was an invalid mutation (it did not
+compile) and is not counted as a kill.
+
+**17a only. Item 17 is NOT complete:** slice 17b — per-node PMM free lists,
+re-bucketing after `numa_init()`, and `pmm_alloc_pages_node()` — has not been
+built. Item 37 depends on both.

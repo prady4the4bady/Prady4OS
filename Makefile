@@ -148,7 +148,7 @@ USER_C_CFLAGS  := --target=x86_64-elf -ffreestanding -fno-pic -fno-pie -mcmodel=
   -nostdinc -nostdlib -Wall -Wextra -Werror \
   -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
-               kernel/mm/pmm.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/uaccess.c kernel/cap.c \
+               kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/ipc/ipc.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
@@ -173,7 +173,7 @@ KERNEL_BIN  := build/kernel.bin
 # boot.o MUST be first so kernel_entry (.text.boot) lands at the image start.
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
-               build/console.o build/idt.o build/irq.o build/pmm.o build/kheap.o \
+               build/console.o build/idt.o build/irq.o build/pmm.o build/numa.o build/kheap.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
@@ -212,7 +212,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -516,6 +516,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/apic/ioapic.c     -o build/ioapic.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/ahci/ahci.c -o build/ahci.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/e1000e.c -o build/e1000e.o
+	$(CC) $(KCFLAGS) -c kernel/mm/numa.c -o build/numa.o
 	$(CC) $(KCFLAGS) -c kernel/apic/smp.c        -o build/smp.o
 	$(CC) $(KCFLAGS) -c kernel/apic/percpu.c     -o build/percpu.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
@@ -842,6 +843,25 @@ ahci-image:
 # and slirp's reply came back through the RX ring. That one round trip is the
 # only thing that proves the descriptor rings, the DD bit and the tail pointer
 # are right — all three can be wrong while the device still probes cleanly.
+# DDR-882 (Group 3 item 17a): SRAT NUMA topology, against a QEMU machine that
+# genuinely has two memory nodes.
+#
+# 'node1 mem=256MiB' is the assertion that carries the weight. A parser that
+# finds SRAT but reads the base/length fields at the wrong offsets still
+# reports a node COUNT, and only an exact byte total shows it walked the
+# sub-tables correctly. node0 is 255MiB, not 256: its low range is split around
+# the legacy hole, which is also why ranges=3 for two nodes.
+#
+# NO FORBIDDEN SENTINEL, deliberately. The rejection check is folded into the
+# required line as 'rejected=0', so the DDR-785 early exit stays eligible and
+# the gate stops as soon as numa_init() has printed — before lapic_init()
+# brings up the second vCPU. A FORBIDDEN pattern would disable early exit and
+# expose this gate to the unresolved lost-thread defect (DDR-880).
+smoke-numa: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_NUMA=1 \
+	EXTRA_SENTINEL="$$(printf '[numa] nodes=2 ranges=3 rejected=0\n[numa] node0 mem=255MiB\n[numa] node1 mem=256MiB')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-e1000e: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_E1000E=1 \
 	EXTRA_SENTINEL="$$(printf '[e1000e] up, mac=52:54:00:\n[e1000e] TX OK\n[e1000e] RX OK n=')" \

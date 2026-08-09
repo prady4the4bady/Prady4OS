@@ -168,3 +168,4 @@
 0	smoke-bench	90
 2	smoke-ahci	90
 3	smoke-e1000e	90
+4	smoke-numa	90
