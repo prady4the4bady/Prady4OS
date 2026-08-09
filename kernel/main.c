@@ -1947,16 +1947,35 @@ static void fs_test_thread(void *arg) {
 #endif
                                 struct vfs_file cf2;
                                 const char *which = 0;
-                                if (vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2) != 0)
+                                /* DDR-884: keep the RETURN CODE. OPEN-10's one
+                                 * captured failure is op=create iter=0 — the
+                                 * FIRST create, which never reaches a B+tree leaf
+                                 * split (SFS_LEAF_MAX=14), so the defect is not
+                                 * churn. Which error it is decides the diagnosis:
+                                 * -EEXIST means a leftover file or a concurrent
+                                 * writer, -ENOSPC means the volume, an ADR-032
+                                 * budget refusal means neither. Discarding it left
+                                 * all three indistinguishable. */
+                                long rc = vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2);
+                                if (rc != 0) {
                                     which = "create";
-                                else if (vfs_write(cap, &cf2, 0,
-                                                   (void *)(uintptr_t)cbuf, 65536) != 65536)
-                                    which = "write";
-                                else if (vfs_unlink(cap, root_smnt, "/CHURN.TMP") != 0)
-                                    which = "unlink";
+                                } else {
+                                    rc = vfs_write(cap, &cf2, 0,
+                                                   (void *)(uintptr_t)cbuf, 65536);
+                                    if (rc != 65536) {
+                                        which = "write";
+                                    } else {
+                                        rc = vfs_unlink(cap, root_smnt, "/CHURN.TMP");
+                                        if (rc != 0)
+                                            which = "unlink";
+                                    }
+                                }
                                 if (which) {
                                     kputs("[sfs] churn FAIL op="); kputs(which);
                                     kputs(" iter="); kputdec((uint64_t)i);
+                                    kputs(" rc=");
+                                    if (rc < 0) { kputs("-"); kputdec((uint64_t)(-rc)); }
+                                    else        { kputdec((uint64_t)rc); }
                                     kputs("\r\n");
                                     churn_ok = 0;
                                 }

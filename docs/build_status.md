@@ -3827,3 +3827,23 @@ DDR-880 concluded OPEN-10 was a misnomer for the lost thread. That conclusion wa
 generalised from two local failures that happened to share a mode, and it is
 **wrong**. Item 46 reverts to **open and distinct**; item 47's characterisation
 is unaffected. The `[boot-stamp] C` instrument works and is what proved it.
+
+### Item 46 narrowed — OPEN-10 is `op=create iter=0` (DDR-884)
+
+The single real capture says `[sfs] churn FAIL op=create iter=0`. Iteration 0
+creates one file into a fresh directory and `SFS_LEAF_MAX` is 14, so no B+tree
+split is reachable. **OPEN-10 is a first-create failure, not a churn defect** —
+it is merely *reported by* the churn probe, which is what happens to be creating
+a file at that moment. That is why 30 local `smoke-sfs-btree-smp4` runs found
+nothing while a `smoke-smpuser` boot found one: it depends on what else is
+touching the SFS root, not on churn depth.
+
+The probe discarded the return code, leaving `-EEXIST` (leftover file or
+concurrent writer), `-ENOSPC` (volume) and an ADR-032 write-budget refusal
+indistinguishable — and a write-budget exhaustion has already been
+mis-attributed to a "B+tree split bug" in this same probe once before. `rc` is
+now printed, landed **before** re-running so the next occurrence is diagnosable.
+
+No fix attempted: three candidates remain and the evidence does not separate
+them. Patching one would be validated only by a rare failure not recurring,
+which is indistinguishable from having fixed nothing.
