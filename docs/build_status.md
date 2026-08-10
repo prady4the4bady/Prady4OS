@@ -4023,3 +4023,33 @@ verified as applied first. The second is killed by the *disk* filesystems failin
 Not implemented: subdirectories, persistence (RAM by design), per-agent isolation
 into separate volumes (needs a mount table larger than `VFS_MAX_MOUNTS`=6 — a VFS
 capacity change, not a pdrive one), grow-by-truncate.
+
+## Group 3 item 15 — capability-based service manager (DDR-891)
+
+PID 1 was a *reaper*: `wait4(-1)` in a loop, print, repeat. Nothing started
+services, nothing knew what a service was, nothing reacted to one dying.
+
+Now a bounded static table declares name, path, restart policy and required
+capabilities; the reap loop **attributes each exit to its service** and applies
+policy. Orphans reparented to init are still collected exactly as before.
+
+**Restarts are budgeted (3), and give up loudly.** `RESTART_ON_FAILURE` with no
+bound is a fork bomb written by the supervisor: a missing binary fails `execve`
+instantly, so PID 1 spins at 100% and the failure looks like a hang rather than a
+misconfiguration. A supervisor that silently stops retrying is indistinguishable
+from one that never noticed.
+
+**Capabilities are checked BEFORE the fork.** Leaving it to the kernel would let
+the process start and fail later at first privileged use — by which point a
+process is running that should never have existed, and the failure surfaces
+somewhere unrelated to the misconfigured service.
+
+Observed: `start exectest` → `refuse agentsvc` (no pid ever created) → `exit
+exectest st=0` → three `restart missing n/3` → `giveup missing after 3 restarts`.
+Mutations "remove the restart budget" and "remove the capability check" are both
+**killed**, each verified as applied first.
+
+Not implemented: dependency ordering, restart backoff, `RESTART_ALWAYS`, socket
+activation, and runtime start/stop/status control — the last needs a syscall or
+IPC endpoint into PID 1, and inventing one here would create a second control
+surface to reconcile with the PRISM agent DSL (DDR-888).

@@ -1022,7 +1022,7 @@ smoke-fpu: $(IMG) fat-image sfs-image
 # exited child (no leaked zombie). Greps the banner AND the reap line with the
 # child's exit code.
 smoke-init: $(IMG) fat-image sfs-image
-	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'PRADYOS_INIT_OK\ninit: reaped PID=')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'PRADYOS_INIT_OK\ninit: reaped PID=\n[svc] start exectest pid=\n[svc] exit exectest\n[svc] refuse agentsvc\n[svc] giveup missing after 3 restarts')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # 5e PRISM shell gate (ADR-024 §D6): boot with -serial stdio, pipe a command
