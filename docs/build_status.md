@@ -4185,3 +4185,33 @@ scheduling should favour. 17/18 gates green is not shipping.
 Next attempt must **derive** the clamp from the measured vruntime-per-tick rate,
 not hard-code it. Also noted: `diverge=0` post-fix is tautological (the chosen
 thread is the fair candidate) and is not evidence.
+
+### Item 16 — third attempt reverted (DDR-899)
+
+The DDR-895 unit mismatch is genuinely fixed: the clamp is now ONE MEASURED TICK
+of vruntime, sampled from the floor's own advance, so it is correct in whatever
+units vruntime uses. It did not fix the failure.
+
+Controlled, same machine, back to back:
+
+| Configuration | smoke-shell |
+|---|---|
+| baseline, item 16 absent (control) | **0 / 5 failed** |
+| item 16, hard-coded clamp | 5 / 5 failed |
+| item 16, derived clamp | 4 / 5 failed |
+
+Fair-share picking breaks smoke-shell; the clamp magnitude is not the mechanism.
+NOT established: whether PRISM is genuinely slower under fair-share, or whether
+the gate budget is marginal (~25 injected commands with fixed sleeps inside a
+60 s timeout). Those demand opposite responses, and raising the timeout would be
+tuning the test to fit the change. The separating measurement is PRISM's own
+block-to-dispatch latency. **Item 16 OPEN.**
+
+### Item 35.1 — file-backed mmap design (DDR-900)
+
+Eager population, not demand paging: demand paging needs blocking I/O inside the
+#PF handler, which couples to the scheduler paths item 16 is unresolved in.
+Private frames, no page cache — MAP_PRIVATE stays correct while MAP_SHARED is
+**refused rather than approximated**, since approximating it would silently lose
+writes another process expects to see. Every refusal carries its own errno.
+Gate proves CONTENT equality, not call success. Implementation not started.
