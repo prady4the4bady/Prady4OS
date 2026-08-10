@@ -734,7 +734,7 @@ smoke-selftest:
 # smoke-user already runs the same 'compress/readback/tag OK' assertion at 60s.
 # This cannot mask a hang: boot_test.sh greps AFTER the window either way.
 smoke-fs: $(IMG) fat-image sfs-image
-	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK\n[sfs] freelist persist OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Read-write FS gate with ADVERSARIAL HOST-SIDE VALIDATION: boot the kernel (it
@@ -758,7 +758,7 @@ smoke-fs-rw: $(IMG) fat-image sfs-image
 # B+tree (create/lookup), and does a 64 KiB extent write -> read-back -> grow.
 # Asserts the SFS-specific self-test lines (create/lookup + byte-exact + grow).
 smoke-fs-sfs-rw: $(IMG) fat-image sfs-image
-	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK')" \
+	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'create/lookup OK\nbyte-exact OK\nto 69632 OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK\n[sfs] freelist persist OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # SFS hierarchical-directory gate (DDR-738): the kernel builds /etc/aether/config

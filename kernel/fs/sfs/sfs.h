@@ -178,3 +178,7 @@ int  sfs_selftest_lz4(struct blk_device *bd);
  * straight off the device — lets a self-test observe block reuse (free-space GC)
  * without an exhaustion loop. Returns 0 if the block isn't a valid SFS super. */
 uint64_t sfs_read_next_free(struct blk_device *bd);
+
+/* DDR-889 (item 31): runs in the PERSISTED free list, or -1 when the superblock
+ * names none or the block fails its magic check. */
+long     sfs_read_freelist_count(struct blk_device *bd);

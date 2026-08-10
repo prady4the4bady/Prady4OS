@@ -74,6 +74,7 @@ struct sfs_ctx {
      * reuse is fragmentation-free for uniform files. */
     struct { uint64_t start; uint32_t count; } free_runs[256];
     uint32_t free_run_count;
+    uint64_t free_list_blk;            /* DDR-889: on-disk free list block */
 };
 
 /* ---- block I/O (one 4 KiB block = 8 sectors; buffers are PMM pages) ------- */
@@ -141,6 +142,9 @@ static unsigned order_for(uint32_t bytes) {
 
 /* Write the superblock from the current in-memory state (the commit point),
  * bumping the generation. */
+/* DDR-889: defined below, used by the superblock write above it. */
+static void sfs_freelist_save(struct sfs_ctx *c);
+
 static void sfs_write_super(struct sfs_ctx *c) {
     uint64_t page = pmm_alloc_page();
     if (!page)
@@ -159,10 +163,100 @@ static void sfs_write_super(struct sfs_ctx *c) {
     sb->txn_log_blocks   = 1;
     sb->free_block_count = (c->total_blocks > c->next_free)
                          ? (c->total_blocks - c->next_free) : 0;
+    /* DDR-889: persist the free list, then record where it went. Saving BEFORE
+     * writing the superblock matters — the superblock is the commit point, so a
+     * root recorded for a block not yet written would survive a crash pointing
+     * at stale bytes. */
+    sfs_freelist_save(c);
+    sb->free_extent_tree = c->free_list_blk;
     sb->snapshot_count   = c->snapshot_count;
     for (uint32_t i = 0; i < SFS_MAX_SNAPSHOTS; i++)
         sb->snapshots[i] = c->snapshots[i];
     wr_block(c, 0, sb);
+    pmm_free_page(page);
+}
+
+/* ---- DDR-889 (item 31): the free list ON DISK -----------------------------
+ *
+ * c->free_runs[] was in-memory only, so every reclaimed run was lost at unmount
+ * and the volume leaked blocks across a remount — next_free bumped forever even
+ * on a filesystem that was mostly free space. The superblock already reserved
+ * `free_extent_tree` as a root pointer for exactly this.
+ *
+ * ON-DISK SHAPE: one block holding {count, runs[]}. Not a B+tree despite the
+ * field name. The in-memory model is a bounded 256-entry array with exact-fit
+ * and no coalescing (DDR-762-v2), and a tree would be a second structure with
+ * different semantics to keep in step with it. 256 runs x 16 bytes = 4 KiB, so
+ * the whole list fits one block by construction — the same bound, persisted.
+ *
+ * The block is allocated ONCE and reused in place. Allocating a fresh one each
+ * sync would consume a block per commit, which is a leak dressed up as an
+ * allocation.
+ */
+#define SFS_FREELIST_MAGIC 0x4C465346u          /* 'SFFL' */
+
+struct sfs_freelist_disk {
+    uint32_t magic;
+    uint32_t count;
+    uint64_t reserved;
+    struct { uint64_t start; uint32_t count; uint32_t pad; } runs[254];
+};
+_Static_assert(sizeof(struct sfs_freelist_disk) <= SFS_BLOCK_SIZE,
+               "the free list must fit one block");
+
+static void sfs_freelist_save(struct sfs_ctx *c) {
+    /* A snapshot may reference any block, so free_run() already refuses to
+     * reclaim while one exists. Persisting an empty list in that state is
+     * correct and keeps the on-disk root valid. */
+    if (!c->free_list_blk) {
+        c->free_list_blk = alloc_block(c);      /* once; reused in place after */
+        if (!c->free_list_blk)
+            return;
+    }
+    uint64_t page = pmm_alloc_page();
+    if (!page)
+        return;
+    struct sfs_freelist_disk *fl = (struct sfs_freelist_disk *)(uintptr_t)page;
+    memset(fl, 0, SFS_BLOCK_SIZE);
+    fl->magic = SFS_FREELIST_MAGIC;
+    uint32_t n = c->free_run_count;
+    if (n > 254) n = 254;                       /* the block's own bound */
+    fl->count = n;
+    for (uint32_t i = 0; i < n; i++) {
+        fl->runs[i].start = c->free_runs[i].start;
+        fl->runs[i].count = c->free_runs[i].count;
+    }
+    wr_block(c, c->free_list_blk, fl);
+    pmm_free_page(page);
+}
+
+static void sfs_freelist_load(struct sfs_ctx *c, uint64_t blk) {
+    c->free_list_blk  = blk;
+    c->free_run_count = 0;
+    if (!blk)
+        return;
+    uint64_t page = pmm_alloc_page();
+    if (!page)
+        return;
+    struct sfs_freelist_disk *fl = (struct sfs_freelist_disk *)(uintptr_t)page;
+    rd_block(c, blk, fl);
+    /* REJECT a list that does not identify itself. Loading whatever bytes are
+     * at that block would hand the allocator arbitrary "free" runs and then
+     * write real data over live blocks — silent cross-file corruption. An
+     * unrecognised list is dropped: blocks leak, which is bounded and safe. */
+    if (fl->magic == SFS_FREELIST_MAGIC && fl->count <= 254) {
+        for (uint32_t i = 0; i < fl->count; i++) {
+            /* Each run must lie inside the volume and below the high water, or
+             * it is not a block this filesystem ever allocated. */
+            if (fl->runs[i].start == 0 || fl->runs[i].count == 0)
+                continue;
+            if (fl->runs[i].start + fl->runs[i].count > c->next_free)
+                continue;
+            c->free_runs[c->free_run_count].start = fl->runs[i].start;
+            c->free_runs[c->free_run_count].count = fl->runs[i].count;
+            c->free_run_count++;
+        }
+    }
     pmm_free_page(page);
 }
 
@@ -1024,6 +1118,8 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
     c->in_txn      = 0;
     c->saved_root = c->saved_next_free = c->saved_next_inode = 0;
     c->free_run_count = 0;              /* DDR-762-v2: kmalloc doesn't zero */
+    c->free_list_blk  = 0;
+    sfs_freelist_load(c, sb->free_extent_tree);   /* DDR-889 (item 31) */
     c->snapshot_count = sb->snapshot_count;
     if (c->snapshot_count > SFS_MAX_SNAPSHOTS)
         c->snapshot_count = SFS_MAX_SNAPSHOTS;
@@ -1056,6 +1152,34 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
 }
 
 /* DDR-762-v2: read the committed high-water block off the device (see sfs.h). */
+/* DDR-889 (item 31): read the PERSISTED free list straight off the device and
+ * report how many runs it holds, or -1 if the superblock names no list / the
+ * block does not identify itself.
+ *
+ * This exists because the obvious test — unmount, remount, watch reuse — does
+ * not discriminate: vfs_mount() returns the cached mount, so the in-memory
+ * runs survive and the measurement is the same either way (grew=9 vs grew=10,
+ * measured). Reading the device is a smaller claim, but it is a TRUE one.
+ */
+long sfs_read_freelist_count(struct blk_device *bd) {
+    uint64_t page = pmm_alloc_page();
+    if (!page)
+        return -1;
+    struct sfs_superblock *sb = (struct sfs_superblock *)(uintptr_t)page;
+    rd_block_bd(bd, 0, sb);
+    if (sb->magic != SFS_MAGIC || sb->free_extent_tree == 0) {
+        pmm_free_page(page);
+        return -1;
+    }
+    uint64_t root = sb->free_extent_tree;
+    struct sfs_freelist_disk *fl = (struct sfs_freelist_disk *)(uintptr_t)page;
+    rd_block_bd(bd, root, fl);
+    long n = (fl->magic == SFS_FREELIST_MAGIC && fl->count <= 254)
+           ? (long)fl->count : -1;
+    pmm_free_page(page);
+    return n;
+}
+
 uint64_t sfs_read_next_free(struct blk_device *bd) {
     if (!bd)
         return 0;

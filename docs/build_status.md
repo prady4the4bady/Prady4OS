@@ -3965,3 +3965,33 @@ not survive quoting, and a mutation that never applies reads exactly like one th
 gate cannot kill. The re-run verifies the edit applied before trusting the
 verdict, and the mutation is then **killed** with the right message. Recorded as
 invalid, not as survivals.
+
+## Group 5 item 31 — on-disk SFS free list (DDR-889)
+
+`c->free_runs[]` was in-memory only, so reclaimed runs were discarded at unmount
+and the volume leaked blocks across a remount. It now persists to one block
+`{magic, count, runs[254]}` rooted at the superblock's `free_extent_tree` —
+**a list, not a B+tree despite the field name**, because the in-memory model is a
+bounded array with exact-fit and no coalescing, and a tree would be a second
+structure to keep in step. The block is allocated once and reused in place.
+
+Rejected rather than absorbed: a block with the wrong magic is **dropped** (using
+it would hand the allocator arbitrary "free" runs and the next write would land
+on live blocks), and runs past `next_free` are skipped. The save happens before
+the superblock write, since the superblock is the commit point.
+
+**The first gate passed for the wrong reason and was deleted.** Unmount →
+remount → watch reuse passed even with the on-disk load *disabled*: `grew=10` vs
+`grew=9`. `vfs_mount()` returns the cached mount, so no fresh context is built
+and the in-memory runs survive. A threshold between 9 and 10 would have looked
+decisive while testing nothing.
+
+What ships is smaller and true: `sfs_read_freelist_count()` reads the superblock
+off the device, follows the root, checks the magic, and the self-test requires a
+non-empty list — `[sfs] freelist ondisk runs=1`. Mutations "never save" and
+"wrong magic" are both **killed**, each verified as applied first.
+
+**Not proven: reuse after a genuine cold remount.** Every mount in one boot is
+cached, so the load path is exercised only at first mount when the list is empty.
+That round trip needs a second boot against a persisted image or a `vfs_unmount`
+that truly destroys the context — a VFS change, named as the follow-up.

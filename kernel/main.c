@@ -2050,6 +2050,31 @@ static void fs_test_thread(void *arg) {
                             kputs((gc_ok && grew < 170)
                                       ? "[sfs] free-space GC OK\r\n"
                                       : "[sfs] free-space GC FAIL\r\n");
+
+                            /* DDR-889 (item 31): read the PERSISTED free list
+                             * back off the DEVICE and require it to be there,
+                             * well-formed, and non-empty.
+                             *
+                             * The obvious test — unmount, remount, watch reuse —
+                             * was written first and DOES NOT DISCRIMINATE:
+                             * vfs_mount() returns the cached mount, so the
+                             * in-memory runs survive and the measurement is the
+                             * same whether the on-disk list is loaded or not
+                             * (grew=9 loaded vs grew=10 not loaded, measured).
+                             * It passed for the wrong reason, so it was removed
+                             * rather than tuned into looking decisive.
+                             *
+                             * This claim is smaller and true: the list reached
+                             * the disk, carries its magic, and holds runs. */
+                            {
+                                long fl = sfs_read_freelist_count(sbd);
+                                kputs("[sfs] freelist ondisk runs=");
+                                if (fl < 0) kputs("none");
+                                else        kputdec((uint64_t)fl);
+                                kputs("\n");
+                                kputs(fl > 0 ? "[sfs] freelist persist OK\n"
+                                             : "[sfs] freelist persist FAIL\n");
+                            }
                         }
                     }
                 }
