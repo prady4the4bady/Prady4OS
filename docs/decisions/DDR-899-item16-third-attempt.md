@@ -112,3 +112,59 @@ not another constant to guess.
 
 Item 16 remains **OPEN**, now with the budget hypothesis eliminated by
 experiment and the failure localised to the wake/requeue path.
+
+---
+
+## Fourth attempt — two-sided placement. Also failed.
+
+DDR-899 localised the failure to the one-sided clamp: it only LIFTED threads
+behind the floor, so an I/O-blocking thread returning above the floor sat behind
+every fresh entrant. The fix was the other half of `place_entity` — pull a
+**waking** thread down to the floor (sleeper credit), and grant that credit only
+on wake, never on preemption requeue, so a CPU-bound thread cannot launder away
+its accrued cost by bouncing through the queue.
+
+| Configuration | `smoke-shell` |
+|---|---|
+| baseline, item 16 absent (control) | 0 / 5 |
+| one-sided clamp | 5 / 5 FAIL |
+| derived clamp | 4 / 5 FAIL |
+| **two-sided, wake-only sleeper credit** | **5 / 5 FAIL** |
+
+**The wake-path hypothesis is refuted too.** Placement is not the mechanism.
+
+### The next suspect, found by reading rather than guessing
+
+`rq_unlink()` — the helper the fair path uses instead of `rq_take()` — has a
+latent defect:
+
+```c
+__atomic_store_n(&c->rq_on, 0, __ATOMIC_RELEASE);
+return (c->state == THREAD_READY) ? c : 0;
+```
+
+It unlinks the thread and clears `rq_on` **before** the READY test. If the test
+fails it returns 0, and the caller —
+
+```c
+struct tcb *t = fair ? rq_unlink(q, fair) : rq_take(q);
+```
+
+— does **not** fall back to `rq_take()`. The thread is then unlinked, marked
+un-queued, and returned to nobody: **lost from every runqueue**. `rq_pop` reports
+an empty queue while runnable threads exist.
+
+Separately, the fair path never drains stale non-READY entries, which `rq_take`
+did as a side effect. They accumulate and are re-scanned on every pick.
+
+Whether either explains the PRISM stall is **not established** — it is a code
+defect found by inspection, not a measured cause, and this DDR is explicit about
+that distinction because the last three hypotheses all looked equally convincing
+before measurement refuted them.
+
+### Status
+
+Item 16 **OPEN**. Four attempts. Three genuine defects found and fixed along the
+way (tick-only charging; the unit mismatch; the one-sided clamp), one latent
+defect identified by inspection, and the actual cause of the PRISM stall still
+unattributed. Reverted; the tree is green.
