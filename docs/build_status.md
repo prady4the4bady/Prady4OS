@@ -3995,3 +3995,31 @@ non-empty list — `[sfs] freelist ondisk runs=1`. Mutations "never save" and
 cached, so the load path is exercised only at first mount when the list is empty.
 That round trip needs a second boot against a persisted image or a `vfs_unmount`
 that truly destroys the context — a VFS change, named as the follow-up.
+
+## Group 7 item 40 — PRADYOS Drive (DDR-890)
+
+`kernel/fs/pdrive/` is a RAM-backed filesystem implementing the same
+`struct vfs_fs_ops` as fat32/SFS/ext4, so an agent rooted there uses the ordinary
+file calls — a workspace threaded through the syscall layer would have been a
+second file API to keep in step and would prove nothing about the VFS contract.
+
+`vfs_mount_virtual(name)` selects **by name** and does not fall back: "mount
+whichever driver accepts a NULL device" breaks as soon as there are two virtual
+filesystems. Symmetrically `pd_mount()` **refuses a non-NULL device** — otherwise
+the probe loop would hand it the first disk, and the real filesystem on that disk
+would never be tried.
+
+**Bounded because an agent controls the size.** An unbounded RAM filesystem is a
+DoS primitive: the PMM starves the kernel, not the agent. 32 files / 1 MiB, both
+enforced by **refusal** — clipping would report success for data that is not
+there. A full table refuses rather than evicting, since eviction loses another
+agent's data silently. Growth charges the delta before allocating.
+
+Self-test: `[pdrive] mounted id=3 rw OK readdir OK overflow REFUSED unlink OK`.
+Mutations "clip instead of refuse" and "claim a real disk" both **killed**, each
+verified as applied first. The second is killed by the *disk* filesystems failing
+— the correct blast radius, and why `pd_mount` refuses rather than ignores.
+
+Not implemented: subdirectories, persistence (RAM by design), per-agent isolation
+into separate volumes (needs a mount table larger than `VFS_MAX_MOUNTS`=6 — a VFS
+capacity change, not a pdrive one), grow-by-truncate.

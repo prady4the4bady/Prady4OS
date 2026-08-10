@@ -58,6 +58,11 @@ struct vfs_fs_ops {
 void vfs_register(const struct vfs_fs_ops *ops);
 int  vfs_mount(unsigned blk_index);    /* probe drivers on a disk -> mount id >= 0, or -1 */
 
+/* DDR-890 (item 40): mount a block-device-less filesystem BY NAME. Named rather
+ * than probed, because every virtual filesystem would accept a NULL device and
+ * the caller would silently get whichever registered first. */
+int  vfs_mount_virtual(const char *fsname);
+
 /* Process default ("root") mount: until a full mount-point namespace exists,
  * syscall-layer paths (sys_open, ...) resolve against this mount (5b, ADR-022). */
 void vfs_set_default_mnt(int mnt);

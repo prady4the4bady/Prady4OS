@@ -30,6 +30,7 @@
 #include "ahci.h"          /* DDR-875: AHCI SATA */
 #include "e1000e.h"        /* DDR-876: Intel e1000e NIC */
 #include "numa.h"          /* DDR-882: SRAT NUMA topology */
+#include "pdrive.h"        /* DDR-890: PRADYOS Drive workspace FS */
 #include "smp.h"
 #include "percpu.h"
 #include "pcie.h"
@@ -2066,6 +2067,62 @@ static void fs_test_thread(void *arg) {
                              *
                              * This claim is smaller and true: the list reached
                              * the disk, carries its magic, and holds runs. */
+                            /* DDR-890 (item 40): PRADYOS Drive. Mounted as a
+                             * real VFS volume, so the SAME create/write/read/
+                             * unlink/readdir path every disk filesystem uses is
+                             * what exercises it — a workspace threaded through
+                             * the syscall layer as a special case would prove
+                             * nothing about the VFS contract.
+                             *
+                             * The REFUSAL arms are the point: this is memory an
+                             * agent sizes, so both caps must reject rather than
+                             * silently truncate. */
+                            {
+                                int pm = vfs_mount_virtual("pdrive");
+                                if (pm < 0) {
+                                    kputs("[pdrive] mount FAIL\n");
+                                } else {
+                                    struct vfs_file pf;
+                                    static const char MSG[] = "pradyos drive workspace";
+                                    char rb[32];
+                                    int ok = 1;
+                                    if (vfs_create(cap, pm, "/WORK.TXT", &pf) != 0) ok = 0;
+                                    if (ok && vfs_write(cap, &pf, 0, (void *)MSG,
+                                                        (uint32_t)(sizeof MSG - 1))
+                                              != (int)(sizeof MSG - 1)) ok = 0;
+                                    if (ok && vfs_read(cap, &pf, 0, rb,
+                                                       (uint32_t)(sizeof MSG - 1))
+                                              != (int)(sizeof MSG - 1)) ok = 0;
+                                    if (ok && memcmp(rb, MSG, sizeof MSG - 1) != 0) ok = 0;
+
+                                    char nm[64]; uint32_t sz = 0;
+                                    int listed = (vfs_readdir(cap, pm, "/", 0, nm, &sz) == 0);
+
+                                    /* Capacity refusal: one write larger than the
+                                     * whole volume must be REFUSED, not clipped. */
+                                    uint64_t big = pmm_alloc_pages(4);
+                                    int refused = 0;
+                                    if (big) {
+                                        refused = (vfs_write(cap, &pf, 2u*1024*1024,
+                                                             (void *)(uintptr_t)big, 4096) < 0);
+                                        pmm_free_pages(big, 4);
+                                    }
+                                    if (ok && vfs_unlink(cap, pm, "/WORK.TXT") != 0) ok = 0;
+                                    int gone = (vfs_open(cap, pm, "/WORK.TXT", &pf) != 0);
+
+                                    kputs("[pdrive] mounted id=");
+                                    kputdec((uint64_t)pm);
+                                    kputs(ok ? " rw OK" : " rw FAIL");
+                                    kputs(listed ? " readdir OK" : " readdir FAIL");
+                                    kputs(refused ? " overflow REFUSED" : " overflow ACCEPTED");
+                                    kputs(gone ? " unlink OK" : " unlink FAIL");
+                                    kputs("\n");
+                                    kputs((ok && listed && refused && gone)
+                                              ? "[pdrive] workspace OK\n"
+                                              : "[pdrive] workspace FAIL\n");
+                                }
+                            }
+
                             {
                                 long fl = sfs_read_freelist_count(sbd);
                                 kputs("[sfs] freelist ondisk runs=");
@@ -2518,6 +2575,7 @@ void kmain(struct boot_info *bi) {
     aether_sectest();                    /* Layer 6: smoke-aether-sec (bounds + clean-kill paths) */
     fat32_register();                    /* Phase 4: register the FS driver with the VFS */
     sfs_register();                      /* Phase 4: SOVEREIGN FS (ADR-018) */
+    pdrive_register();                   /* DDR-890 (item 40): PRADYOS Drive */
     ext4_register();                     /* Phase 4j: ext4 read-only compat */
 
     kputs("NEXUS: starting scheduler\r\n");

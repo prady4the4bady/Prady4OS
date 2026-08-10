@@ -60,6 +60,42 @@ int vfs_mount(unsigned blk_index) {
     return -1;                          /* no driver claimed the disk */
 }
 
+/* The kernel's string.h has no strcmp — comparing two NUL-terminated names is
+ * the only string operation these paths need, so it is local rather than an
+ * addition to a shared header for one caller. */
+static int name_eq(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == 0 && *b == 0;
+}
+
+/* DDR-890 (item 40): mount a filesystem that has NO block device.
+ *
+ * vfs_mount() probes drivers against a disk; a virtual filesystem has nothing to
+ * probe, so it is named explicitly. Selecting BY NAME rather than "the driver
+ * that accepts NULL" matters: two virtual filesystems would both accept NULL and
+ * the caller would silently get whichever registered first.
+ */
+int vfs_mount_virtual(const char *fsname) {
+    int id = -1;
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+        if (!g_mounts[i].used) { id = i; break; }
+    if (id < 0)
+        return -1;                     /* mount table full */
+    for (unsigned i = 0; i < g_nfs; i++) {
+        if (!g_fs[i]->name || !name_eq(g_fs[i]->name, fsname))
+            continue;
+        void *ctx = 0;
+        if (g_fs[i]->mount(0, &ctx) != 0)
+            return -1;                 /* named driver refused: do NOT fall back */
+        g_mounts[id].fs   = g_fs[i];
+        g_mounts[id].bd   = 0;
+        g_mounts[id].ctx  = ctx;
+        g_mounts[id].used = 1;
+        return id;
+    }
+    return -1;                          /* no driver by that name */
+}
+
 static struct vfs_mount *mnt_get(int id) {
     if (id < 0 || id >= VFS_MAX_MOUNTS || !g_mounts[id].used)
         return 0;
