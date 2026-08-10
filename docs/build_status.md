@@ -4215,3 +4215,18 @@ Private frames, no page cache — MAP_PRIVATE stays correct while MAP_SHARED is
 **refused rather than approximated**, since approximating it would silently lose
 writes another process expects to see. Every refusal carries its own errno.
 Gate proves CONTENT equality, not call success. Implementation not started.
+
+### Item 16 — budget hypothesis ELIMINATED by experiment (DDR-899 addendum)
+
+Raising only the smoke-shell timeout (mirror only, discarded) separates the two
+hypotheses: fair-share fails **3/3 at 60 s and 3/3 at 200 s**. With 3.3x the
+time the failure lands at the identical point, so the gate budget is not the
+cause — PRISM **stops making progress**, it is not merely slower.
+
+Failure now localised to the **wake/requeue path**: `sched_place()` is one-sided
+by construction (it only lifts threads that are *behind* the floor), so a thread
+that ran a long slice before blocking returns *above* the floor and stays behind
+every fresh thread entering at it. Correct for anti-starvation, but it leaves no
+sleeper-credit mechanism — exactly what an interactive shell needs.
+
+Item 16 OPEN, with a named suspect line rather than another guessed constant.

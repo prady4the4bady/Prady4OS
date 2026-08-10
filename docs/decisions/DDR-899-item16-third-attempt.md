@@ -64,3 +64,51 @@ guessing at a third constant.
 Item 16 is **OPEN**. Three attempts; two genuine defects found and fixed along
 the way (tick-only charging, DDR-895; the unit mismatch, here). The remaining
 failure is not yet attributed. 17/18 gates is not shipping.
+
+---
+
+## Addendum — the separating experiment was run, and it answered
+
+Rather than a fourth instrumented cycle, one cheap experiment separates the two
+hypotheses directly: raise **only** the `smoke-shell` QEMU timeout (mirror only,
+never committed) and see whether fair-share then passes.
+
+- Budget-marginal → passes with more time.
+- PRISM genuinely stalled → fails regardless.
+
+| Configuration | Result |
+|---|---|
+| fair-share, stock 60 s | 3 / 3 FAIL |
+| fair-share, **200 s** | **3 / 3 FAIL** |
+
+**The gate budget is NOT the cause.** With 3.3x the time, `kill %99` still never
+executes and the failure lands at the identical point. This is not "PRISM is
+slower"; PRISM **stops making progress**.
+
+This is not test tuning: the timeout change was discarded either way, and its
+only purpose was to distinguish two hypotheses demanding opposite fixes.
+
+### What that means
+
+Fair-share picking **stalls an I/O-blocked interactive thread**. PRISM blocks in
+`SYS_READ` on the console, is woken by the serial IRQ, and after `jobs: none`
+never visibly runs again — even across 200 seconds.
+
+The wake path is now the prime suspect, not the pick order:
+
+- `sched_place()` runs from `rq_push`, which is reached via `sched_unblock` →
+  requeue. If a woken thread's `dbg_vruntime` is *above* the floor, `sched_place`
+  does nothing (it only lifts threads that are behind). A thread that ran a long
+  slice before blocking therefore returns **above** the floor and stays behind
+  every fresh thread entering at it.
+- The clamp is one-sided by construction, and one-sidedness is correct for
+  anti-starvation but leaves no mechanism for **sleeper credit** — the thing that
+  makes an interactive shell responsive.
+
+That is a concrete, testable next hypothesis and it names a specific line. It is
+not another constant to guess.
+
+### Status
+
+Item 16 remains **OPEN**, now with the budget hypothesis eliminated by
+experiment and the failure localised to the wake/requeue path.
