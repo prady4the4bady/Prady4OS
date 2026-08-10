@@ -4230,3 +4230,29 @@ every fresh thread entering at it. Correct for anti-starvation, but it leaves no
 sleeper-credit mechanism — exactly what an interactive shell needs.
 
 Item 16 OPEN, with a named suspect line rather than another guessed constant.
+
+### Item 16 — rq_unlink suspect REFUTED (DDR-902)
+
+Instrumented before fixing, per discipline. 746,753 fair-path unlinks:
+`notfound=0 notready_LOST=0 pop_empty_with_queue=0`. The loss path never
+executes. The defect is real as written and worth repairing when item 16 lands,
+but it is **not** the mechanism.
+
+Five hypotheses now eliminated by measurement (FS-thread starvation; stale-low
+entry; gate budget; one-sided clamp; rq_unlink loss). Three genuine defects found
+and fixed along the way — none was the cause.
+
+Next suspect, **not acted on**: `sched_place()` returns early when
+`g_vr_per_tick == 0`, and that rate is sampled from the floor's per-tick advance.
+On the largely idle single-CPU system `smoke-shell` becomes after boot, the delta
+is frequently zero, so the rate may never establish and placement never happens
+at all — which would also explain why the two-sided fix changed nothing, since
+both branches sit behind that early return. One counter, one run, settles it.
+
+### Items 48/49 — still BLOCKED: the sudoers drop-in is not present
+
+`/etc/sudoers.d/` in **Ubuntu-24.04** (the build distro) contains only `README`
+and a 1-byte `athena-nopasswd`. There is no `claude-apt`, and
+`sudo -n apt-get --version` still returns "a password is required". The install
+never ran. WSL lists `Ubuntu-24.04` and `docker-desktop`; the drop-in may have
+been created in a different distro or on the Windows side.
