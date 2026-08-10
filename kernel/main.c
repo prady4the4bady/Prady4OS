@@ -31,6 +31,7 @@
 #include "e1000e.h"        /* DDR-876: Intel e1000e NIC */
 #include "numa.h"          /* DDR-882: SRAT NUMA topology */
 #include "pdrive.h"        /* DDR-890: PRADYOS Drive workspace FS */
+#include "pstate.h"        /* DDR-892: CPU frequency scaling */
 #include "smp.h"
 #include "percpu.h"
 #include "pcie.h"
@@ -2504,6 +2505,16 @@ void kmain(struct boot_info *bi) {
      * routing, it adds the table per-CPU affinity will be expressed in. */
     ioapic_init();
     acpi_power_init();          /* DDR-746: parse FADT + \_S5_ for SYS_POWEROFF */
+
+    /* DDR-892 (item 27). MUST follow acpi_power_init(): that is what scans the
+     * DSDT. Reported before it, acpi_s3_available() answered 0 for a machine
+     * whose _S3_ the scanner had in fact parsed. The raw-occurrence counter is
+     * what separated "the scanner is broken" from "the report ran too early" —
+     * two conclusions with opposite fixes. */
+    pstate_init();
+    kputs(acpi_s3_available() ? "[acpi] S3 available\r\n"
+                              : "[acpi] S3 not advertised\r\n");
+    acpi_suspend_s3();   /* refuses: discovery ships, entry does not */
     /* DDR-714 stage A: LAPIC up + APIC timer takes the 100 Hz tick (PIT is then
      * masked). Device IRQs stay on the 8259. Needs ACPI (MADT) + a live PIT for
      * calibration, both true here; falls back to the PIT if no MADT. */

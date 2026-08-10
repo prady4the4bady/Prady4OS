@@ -29,4 +29,10 @@ const struct acpi_sdt_header *acpi_find_table(const char sig[4]);   /* NULL if a
 void acpi_power_init(void);
 int  acpi_power_available(void);
 __attribute__((noreturn)) void acpi_poweroff(void);
+
+/* DDR-892 (item 27): S3. Discovery is real; acpi_suspend_s3() deliberately
+ * REFUSES until a resume trampoline exists — entering S3 without one does not
+ * fail, it never returns. */
+int  acpi_s3_available(void);
+int  acpi_suspend_s3(void);
 __attribute__((noreturn)) void acpi_reboot(void);   /* DDR-747: ACPI/PC reset */

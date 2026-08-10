@@ -85,6 +85,8 @@ const struct acpi_sdt_header *acpi_find_table(const char sig[4]) {
 
 static uint16_t g_pm1a_cnt, g_pm1b_cnt;   /* PM1{a,b} control I/O ports        */
 static uint8_t  g_slp_typa, g_slp_typb;   /* \_S5_ sleep-type values (3 bits)  */
+static uint8_t  g_s3_typa,  g_s3_typb;    /* DDR-892: \_S3_ sleep-type values  */
+static int      g_s3_ok;                  /* DDR-892: \_S3_ was found          */
 static int      g_s5_ok;                  /* set once the S5 path is resolved  */
 static uint16_t g_reset_port;             /* FADT RESET_REG I/O port (0 = none) */
 static uint8_t  g_reset_value;            /* FADT RESET_VALUE                   */
@@ -115,22 +117,51 @@ void acpi_power_init(void) {
     const struct acpi_sdt_header *d = (const struct acpi_sdt_header *)(uintptr_t)dsdt;
     const uint8_t *aml = (const uint8_t *)d + sizeof *d;
     uint32_t n = d->length - (uint32_t)sizeof *d;
+    /* DDR-892 (item 27): the SAME scan finds \_S3_ as well as \_S5_. The two
+     * objects have identical shape, so the digit is a parameter rather than a
+     * second copy of the walker — a duplicated scanner is a second place for the
+     * PkgLength arithmetic to be wrong. */
     for (uint32_t i = 0; i + 6 < n; i++) {
-        if (aml[i] != '_' || aml[i+1] != 'S' || aml[i+2] != '5' || aml[i+3] != '_')
+        char digit = 0;
+        if (aml[i] == '_' && aml[i+1] == 'S' && aml[i+3] == '_' &&
+            (aml[i+2] == '5' || aml[i+2] == '3'))
+            digit = (char)aml[i+2];
+        if (!digit)
             continue;
         /* Valid form: NameOp(0x08) ["\\"] "_S5_" PackageOp(0x12). */
         int name_ok = (i >= 1 && aml[i-1] == 0x08) ||
                       (i >= 2 && aml[i-2] == 0x08 && aml[i-1] == '\\');
         if (!name_ok || aml[i+4] != 0x12)
             continue;
-        const uint8_t *p = aml + i + 5;         /* past "_S5_" + PackageOp        */
+        const uint8_t *p = aml + i + 5;         /* past "_Sx_" + PackageOp        */
         p += ((*p & 0xC0u) >> 6) + 2;           /* skip PkgLength(+extra) + NumElem */
         if (*p == 0x0A) p++;                    /* optional BytePrefix            */
-        g_slp_typa = *p++;
+        uint8_t ta = *p++;
         if (*p == 0x0A) p++;
-        g_slp_typb = *p;
-        g_s5_ok = 1;
-        break;
+        uint8_t tb = *p;
+        if (digit == '5') {
+            g_slp_typa = ta; g_slp_typb = tb; g_s5_ok = 1;
+        } else {
+            g_s3_typa  = ta; g_s3_typb  = tb; g_s3_ok = 1;
+        }
+        if (g_s5_ok && g_s3_ok)
+            break;                              /* both found; nothing else to scan */
+    }
+
+    /* DDR-892: count RAW "_S3_" byte occurrences, independent of the NameOp
+     * validation above. This separates "our scanner rejected it" from "the
+     * firmware never published it" — two conclusions with opposite fixes, and
+     * without this the S3 path reports the same line either way. */
+    {
+        uint32_t raw3 = 0;
+        for (uint32_t i = 0; i + 4 <= n; i++)
+            if (aml[i] == '_' && aml[i+1] == 'S' && aml[i+2] == '3' && aml[i+3] == '_')
+                raw3++;
+        kputs("[acpi] DSDT _S3_ occurrences=");
+        kputdec(raw3);
+        kputs(" parsed=");
+        kputdec((uint64_t)g_s3_ok);
+        kputs("\n");
     }
 
     /* DDR-747: FADT reset register (ACPI §5.2.9). Flags@112 bit10 =
@@ -155,6 +186,30 @@ void acpi_power_init(void) {
 }
 
 int acpi_power_available(void) { return g_s5_ok; }
+
+int acpi_s3_available(void) { return g_s3_ok; }
+
+/* DDR-892 (item 27): S3 suspend-to-RAM. DISCOVERY is complete; ENTRY is closed.
+ *
+ * Entering S3 without a resume trampoline is not a bug that yields a wrong
+ * answer — it powers the CPU down and never returns. In a gate that is
+ * indistinguishable from a hung QEMU; on hardware it is a box that needs the
+ * power button. A capability that would brick the run is not left enabled in the
+ * hope the caller knows better.
+ *
+ * On resume the firmware re-enters in REAL MODE at FACS.firmware_waking_vector,
+ * so long mode, CR3, GDT, IDT, TSS and every per-CPU MSR must be rebuilt before
+ * any C runs. arch/x86_64/ap_boot.asm already does exactly that walk for SMP
+ * bring-up; the resume path is that code with a different tail. See DDR-892 §3.
+ */
+int acpi_suspend_s3(void) {
+    if (!g_s3_ok || !g_pm1a_cnt) {
+        kputs("[acpi] S3 unavailable: no _S3_ in DSDT\r\n");
+        return -1;
+    }
+    kputs("[acpi] S3 refused: no resume path (waking vector unset)\r\n");
+    return -1;
+}
 
 __attribute__((noreturn)) void acpi_poweroff(void) {
     /* Sentinel BEFORE the port write — the machine may power off immediately. */

@@ -4053,3 +4053,34 @@ Not implemented: dependency ordering, restart backoff, `RESTART_ALWAYS`, socket
 activation, and runtime start/stop/status control — the last needs a syscall or
 IPC endpoint into PID 1, and inventing one here would create a second control
 surface to reconcile with the PRISM agent DSL (DDR-888).
+
+## Group 4 item 27 — ACPI S3 discovery + CPU frequency scaling (DDR-892) — PARTIAL
+
+**Complete:** `\_S3_` discovery (the `_S5_` scanner is parameterised on the digit
+rather than duplicated — a second walker is a second place for the PkgLength
+arithmetic to be wrong), `acpi_s3_available()`, EIST detection via CPUID.01H:ECX
+bit 7, and `IA32_PERF_CTL`/`PERF_STATUS` behind that check.
+
+**NOT complete: S3 entry and resume.** `acpi_suspend_s3()` deliberately
+**refuses**. Entering S3 without a resume trampoline does not produce a wrong
+answer — it powers the CPU down and never returns: an indistinguishable-from-hung
+QEMU in a gate, a power-button box on hardware. On resume the firmware re-enters
+in **real mode** at `FACS.firmware_waking_vector`, so long mode, CR3, GDT, IDT,
+TSS and every per-CPU MSR must be rebuilt before any C runs. `ap_boot.asm`
+already performs exactly that walk for SMP bring-up; the resume path is that code
+with a different tail. **Item 27 is partially delivered and this says so rather
+than counting discovery as the feature.**
+
+Under QEMU/TCG, EIST is not advertised, so the path exercised is the refusal —
+reporting a frequency from an unimplemented MSR would be inventing a number.
+
+**Two things the build found.** The S3 report was placed *before*
+`acpi_power_init()` scans the DSDT, so it printed "not advertised" for a machine
+whose `_S3_` had parsed fine; the raw-occurrence counter (`occurrences=1
+parsed=1`) is what separated "scanner broken" from "report too early" and is kept
+permanently. And `QEMU_S3` was added then **removed**: measured, the DSDT carries
+`_S3_` regardless, so the knob changed nothing and dead configuration is worse
+than none.
+
+Mutations "scanner ignores `_S3_`" and "claim EIST without checking CPUID" both
+**killed**, each verified as applied first.

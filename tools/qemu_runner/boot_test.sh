@@ -347,6 +347,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${SMPOPT[@]}" \
     "${NUMAOPT[@]}" \
     "${UEFIOPT[@]}" \
+    "${S3OPT[@]}" \
     "${NVMEDEV[@]}" \
     "${RNGDEV[@]}" \
     -no-reboot -display none -monitor none \
