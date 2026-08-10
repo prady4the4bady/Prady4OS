@@ -93,3 +93,45 @@ A circular overwrite (keep the LAST 512) would have captured the interesting
 window. Recorded rather than silently fixed, because the conclusion above rests
 entirely on the accounting table and it would be wrong to imply the ring
 contributed.
+
+---
+
+## 6. Fix slice ATTEMPTED and REVERTED — the clamp constant was in the wrong unit
+
+Both approved guards were implemented and both worked as designed. The slice was
+still reverted, for a defect in my own constant.
+
+**Guard 1 (charge elapsed time, TSC-based) — worked.** The unbounded lag closed:
+
+| | FS thread vruntime | floor | lag |
+|---|---|---|---|
+| before | 399,360 | 583,680 | **184,320** |
+| after | 12,532,879 | 12,549,844 | **16,965** |
+
+**Guard 2 (place_entity clamp) — worked, and that is the problem.** The lag lands
+at exactly `SCHED_LAG_MAX` (16,384), which is the bug: **`SCHED_LAG_MAX` was
+chosen as `1024 * 16` while vruntime was still tick-scaled (1024 units per
+tick). Guard 1 changed the unit to TSC-derived, where the floor reaches
+~12,500,000 over a boot.** 16,384 against 12.5M is ~0.13% — the clamp stopped
+being "one slice of catch-up credit" and became **snap-to-floor**.
+
+The consequence is the opposite of what CFS should do: a thread returning from
+I/O gets essentially **no sleeper credit**. `smoke-shell` — PRISM reading serial
+one byte at a time, the most I/O-bound workload in the system — went **5/5
+deterministic failure**, its injected command sequence no longer completing in
+the window. Interactive responsiveness is exactly what a fair scheduler is
+supposed to improve.
+
+**`diverge=0` in the post-fix trace is tautological and is not evidence.** Once
+the fair candidate becomes the real pick, the trace compares the chosen thread
+against itself. The bounded-lag measurement above is the evidence; the divergence
+counter is now meaningless and should be removed or re-aimed if the instrument
+is reused.
+
+**What the next attempt must do differently:** derive the clamp from the observed
+vruntime-per-tick rate rather than hard-coding it. The two guards are correct in
+principle — one unit mismatch between them turned a fairness fix into a
+latency regression, and picking another constant by eye would repeat the mistake.
+
+Item 16 remains **OPEN**. Nine gates pass, `smoke-shell` does not, and 8/9 is
+not shipping.

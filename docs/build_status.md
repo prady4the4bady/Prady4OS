@@ -4165,3 +4165,23 @@ two sub-phases are kernel prerequisites — file-backed `mmap` does not exist
 (`sys_mmap` refuses `fd != -1`, DDR-877), and `PT_INTERP`/auxv are absent from
 `elf.c`. Eager `BIND_NOW` binding is chosen on **W^X grounds** (ADR-021): lazy
 binding needs a permanently writable GOT.
+
+### Item 16 fix slice — ATTEMPTED, REVERTED AGAIN (DDR-895 §6)
+
+Both approved guards were implemented and both behaved as designed. Guard 1
+(TSC elapsed-time charging) closed the unbounded lag: FS-thread lag behind the
+floor fell from **184,320 to 16,965**. Guard 2 (place_entity clamp) held that
+bound exactly — **and that is the defect**.
+
+`SCHED_LAG_MAX` was set to `1024*16` while vruntime was tick-scaled. Guard 1
+changed the unit to TSC-derived, where the floor reaches ~12.5M per boot, so
+16,384 became ~0.13% — the clamp stopped meaning "one slice of catch-up credit"
+and became **snap-to-floor**, removing sleeper credit entirely.
+
+Result: `smoke-shell` **5/5 deterministic failure** — PRISM reading serial a byte
+at a time is the most I/O-bound workload present, and it is precisely what fair
+scheduling should favour. 17/18 gates green is not shipping.
+
+Next attempt must **derive** the clamp from the measured vruntime-per-tick rate,
+not hard-code it. Also noted: `diverge=0` post-fix is tautological (the chosen
+thread is the fair candidate) and is not evidence.
