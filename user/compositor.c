@@ -383,6 +383,8 @@ static int ambiance_for_secs(long secs) {           /* §1 boundaries by hour */
  * blocked, dim green = ran-and-exited (retained pid, state 0), gray = never
  * spawned. Up to 4 activity pips show submitted actions (font-free; DDR-735's
  * post-mortem retention keeps them lit after the agent completes). */
+static int g_manual_announced;   /* DDR-893: Manual sentinels print once */
+
 static void render_agent_panel(void) {
     struct agent_metric m[8] = {0};
     nsi(SYS_AGENT_METRICS, (long)m, 8, 0);
@@ -417,7 +419,83 @@ static int agent_card_hit(int x, int y) {
 
 /* Render the desktop: the current ambiance bg + accent (DDR-709), the mode label
  * (DDR-704), and the agent panel (DDR-707). Colours are BGRA; g_bg/g_ac are RGB. */
+/* ---- DDR-893 (item 39): MANUAL MODE is a DIFFERENT DESKTOP -----------------
+ *
+ * Before this, "manual" changed one string. The item is explicit that a mode
+ * flag on the Sovereign layout is not the feature, and it is right: the two
+ * modes exist to answer different questions. Sovereign says "what are my agents
+ * doing" — an ambient gradient, a particle field, glass cards for eight agents.
+ * Manual says "let me drive" — and a user driving wants chrome where a
+ * traditional desktop puts it, not ambience.
+ *
+ * So Manual is structurally different, not restyled:
+ *
+ *   - FLAT background. No gradient, no particles, no backdrop. Those are
+ *     Sovereign's ambient language and they cost a full-screen per-row fill and
+ *     a particle pass every frame for a user who is trying to read a window.
+ *   - A TASKBAR along the BOTTOM with a start button and window buttons — the
+ *     conventional position and the conventional affordance.
+ *   - A MENU BAR along the top instead of Sovereign's accent stripe.
+ *   - NO agent panel. Agents keep running; Manual simply does not put them on
+ *     screen, because the panel is the Sovereign answer to the Sovereign
+ *     question.
+ *
+ * The two render paths share only put_px/fill_rect/draw_str — the primitives.
+ * Sharing the LAYOUT would be the mode-flag design the item rules out.
+ */
+#define MANUAL_TASKBAR_H 28
+#define MANUAL_MENUBAR_H 18
+
+static void render_manual(void) {
+    unsigned W = g_fi.width, H = g_fi.height;
+    if (!W || !H)
+        return;
+
+    /* Flat desktop fill. Deliberately one fill, not a per-row gradient. */
+    fill_rect(0, 0, W, H, (unsigned char)(g_bg[2] * 0.85f),
+                          (unsigned char)(g_bg[1] * 0.85f),
+                          (unsigned char)(g_bg[0] * 0.85f));
+
+    /* Top menu bar. */
+    fill_rect(0, 0, W, MANUAL_MENUBAR_H, 40, 40, 44);
+    draw_str("File  Edit  View  Window  Help", 8, 4, 1, 220, 220, 226);
+
+    /* Bottom taskbar with a start button, then one button per window slot. */
+    unsigned ty = (H > MANUAL_TASKBAR_H) ? H - MANUAL_TASKBAR_H : 0;
+    fill_rect(0, ty, W, MANUAL_TASKBAR_H, 32, 32, 36);
+    fill_rect(0, ty, W, 1, g_ac[2], g_ac[1], g_ac[0]);      /* 1px accent edge */
+
+    fill_rect(6, ty + 5, 72, MANUAL_TASKBAR_H - 10, g_ac[2], g_ac[1], g_ac[0]);
+    draw_str("START", 16, ty + 9, 1, 20, 20, 24);
+
+    for (int i = 0; i < 4; i++) {
+        int bx = 88 + i * 104;
+        if ((unsigned)(bx + 96) >= W)
+            break;
+        fill_rect((unsigned)bx, ty + 5, 96, MANUAL_TASKBAR_H - 10, 58, 58, 64);
+        draw_str("Window", (unsigned)bx + 8, ty + 9, 1, 210, 210, 216);
+    }
+
+    draw_str("MANUAL MODE", 24, MANUAL_MENUBAR_H + 10, 2,
+             g_ac[2], g_ac[1], g_ac[0]);
+
+    g_frame++;
+    if (!g_manual_announced) {
+        /* Sentinels naming the STRUCTURE, so a gate can tell the two layouts
+         * apart rather than reading a title string that either could print. */
+        printf("PRADYOS_MANUAL_TASKBAR_OK h=%d\n", MANUAL_TASKBAR_H);
+        printf("PRADYOS_MANUAL_MENUBAR_OK h=%d\n", MANUAL_MENUBAR_H);
+        printf("PRADYOS_MANUAL_NO_AGENT_PANEL\n");
+        fflush(stdout);
+        g_manual_announced = 1;
+    }
+}
+
 static void render(int mode) {
+    if (!mode) {                 /* DDR-893: Manual is its own desktop */
+        render_manual();
+        return;
+    }
     /* DDR-723: multi-stop vertical gradient base (brief §1) — 3 stops derived
      * from the ambiance bg: lightened at the horizon-third, base at top,
      * darkened toward the bottom. Per-row color, one fill per row. */
@@ -442,7 +520,7 @@ static void render(int mode) {
     if (g_settled)                                                       /* DDR-716: backdrops */
         render_backdrop();                                               /* (skipped mid-lerp) */
     render_particles();                                                  /* DDR-712: particle field */
-    draw_str(mode ? "SOVEREIGN MODE" : "MANUAL MODE", 24, 24, 3,
+    draw_str("SOVEREIGN MODE", 24, 24, 3,
              g_ac[2], g_ac[1], g_ac[0]);
     render_agent_panel();                                                /* DDR-707 (glass cards) */
     g_frame++;

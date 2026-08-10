@@ -4084,3 +4084,28 @@ than none.
 
 Mutations "scanner ignores `_S3_`" and "claim EIST without checking CPUID" both
 **killed**, each verified as applied first.
+
+## Group 7 item 39 — MANUAL MODE is a different desktop (DDR-893)
+
+MANUAL was one string: `draw_str(mode ? "SOVEREIGN MODE" : "MANUAL MODE", ...)`,
+with gradient, particles, backdrop and agent panel identical in both. The item
+says a mode flag on the Sovereign layout is not the feature.
+
+Manual is now structurally different: **flat background** (one fill — no
+gradient, no particle pass, no backdrop), a **bottom taskbar** with start and
+window buttons, a **top menu bar** in place of the accent stripe, and **no agent
+panel**. The two paths share only the drawing primitives; sharing the layout is
+the design the item rules out.
+
+**The gate asserts structure, not a title** — a title is something either layout
+could print, so asserting "MANUAL MODE" would pass for the very implementation
+being replaced. `PRADYOS_MANUAL_NO_AGENT_PANEL` asserts an **absence**, which a
+gate cannot otherwise observe: something failing to render produces no output, so
+the Manual path states it positively.
+
+Mutation `if (0)` on the Manual branch — i.e. exactly the pre-DDR-893 behaviour —
+is **killed**.
+
+Not implemented: live window enumeration in the taskbar (buttons are a fixed
+count, not the surface table), a functioning start menu, per-mode input routing,
+mode persistence across boots.

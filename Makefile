@@ -1528,6 +1528,13 @@ smoke-compositor: $(IMG) fat-image sfs-image
 	    -serial file:build/comp.log -display none -no-reboot || true
 	@grep -q PRADYOS_COMPOSITOR_OK build/comp.log || { echo "[comp] FAIL — compositor did not render"; tail -20 build/comp.log; exit 1; }
 	@grep -q "PRADYOS_COMPOSITOR_MODE SOVEREIGN" build/comp.log || { echo "[comp] FAIL — key-driven mode flip not confirmed"; tail -20 build/comp.log; exit 1; }
+	@# DDR-893 (item 39): MANUAL is a DIFFERENT desktop, not a relabelled one.
+	@# These assert STRUCTURE — a taskbar, a menu bar, and the absence of the
+	@# agent panel — because a title string is something either layout could
+	@# print, which is exactly the mode-flag design the item rules out.
+	@grep -q 'PRADYOS_MANUAL_TASKBAR_OK' build/comp.log || { echo "[comp] FAIL: MANUAL has no taskbar (DDR-893)"; tail -20 build/comp.log; exit 1; }
+	@grep -q 'PRADYOS_MANUAL_MENUBAR_OK' build/comp.log || { echo "[comp] FAIL: MANUAL has no menu bar (DDR-893)"; tail -20 build/comp.log; exit 1; }
+	@grep -q 'PRADYOS_MANUAL_NO_AGENT_PANEL' build/comp.log || { echo "[comp] FAIL: MANUAL still renders the Sovereign agent panel (DDR-893)"; tail -20 build/comp.log; exit 1; }
 	@echo "[comp] PASS — desktop rendered + keyboard-driven mode flip confirmed."
 
 # DDR-746 ACPI poweroff gate: boot(GPU) so the sovereign compositor runs, wait
