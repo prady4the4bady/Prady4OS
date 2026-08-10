@@ -124,6 +124,103 @@ static void rq_push(int cpu, struct tcb *t) {
  * switch_wait_offcpu()s on it before loading that rsp. This also retires
  * rq-1's transient re-append: a READY-but-still-on-CPU thread (an unblock
  * racing its owner's switch-away) is now legitimately takeable. */
+/* ---- DDR-895 (item 16): DIAGNOSTIC INSTRUMENTATION, not a scheduler --------
+ *
+ * Everything here OBSERVES. The pick below is unchanged FIFO. A shadow vruntime
+ * is maintained and the fair-pick candidate is computed, but the FIFO answer is
+ * always the one returned — so this build behaves exactly like the green tree
+ * while recording what a fair picker would have done differently.
+ *
+ * That matters because DDR-894 was reverted for changing boot-phase progress in
+ * a way its own gate could not observe. Measuring by *running* the candidate
+ * would perturb the very timing under investigation.
+ *
+ * TWO HYPOTHESES, and they are separable only with creation/wake vruntime:
+ *
+ *   H1  The FS thread yields often, accrues vruntime, and is deprioritised
+ *       against threads that have run less.
+ *       Signature: fs thread's dbg_vruntime HIGH relative to peers; its
+ *       v_at_create/v_at_wake close to its current vruntime.
+ *
+ *   H2  Short-lived boot/probe threads repeatedly leapfrog it because they
+ *       ENTER or WAKE at a stale low vruntime relative to an advancing floor.
+ *       Signature: probe threads' v_at_create/v_at_wake FAR BELOW the floor at
+ *       that moment; their vruntime stays low no matter how often they run.
+ *
+ * H1 says "charge less / credit sleepers". H2 says "clamp entry to the floor".
+ * Opposite fixes, indistinguishable from pick order alone — which is exactly
+ * why the creation/wake fields are recorded.
+ */
+#define SCHED_TRACE_N 512
+
+struct sched_trace_ent {
+    uint64_t tick;
+    uint32_t cpu;
+    uint32_t fifo_tid;      /* what the REAL (FIFO) picker chose            */
+    uint32_t fair_tid;      /* what a smallest-vruntime picker WOULD choose */
+    uint64_t fifo_vr;
+    uint64_t fair_vr;
+    uint64_t floor;
+    uint32_t depth;         /* runnable entries scanned                     */
+};
+
+static struct sched_trace_ent g_trace[SCHED_TRACE_N];
+static uint32_t g_trace_n;              /* entries written (saturating)     */
+static uint32_t g_trace_diverge;        /* count of FIFO != fair            */
+static uint64_t g_trace_first_div_tick; /* first disagreement, 0 = none yet */
+static uint64_t g_dbg_floor;            /* shadow of a CFS min-vruntime     */
+
+/* Shadow charge. Writes dbg_vruntime; nothing reads it for a decision. */
+static void sched_dbg_charge(struct tcb *t, uint64_t ticks) {
+    if (!t)
+        return;
+    t->dbg_ticks += (uint32_t)ticks;
+    t->dbg_vruntime += ticks * 1024u;   /* weight 1024 for every thread here:
+                                         * weights are not the variable under
+                                         * test, entry position is */
+    if (t->dbg_vruntime > g_dbg_floor)
+        g_dbg_floor = t->dbg_vruntime;
+}
+
+/* What a fair picker WOULD choose from this queue. Pure observation: it does
+ * not unlink, and its answer is discarded. */
+static struct tcb *fair_candidate(struct rq *q, uint32_t *depth_out) {
+    struct tcb *best = 0;
+    uint32_t depth = 0;
+    for (struct tcb *c = q->head; c; c = c->rq_next) {
+        if (c->state != THREAD_READY)
+            continue;
+        depth++;
+        if (!best || c->dbg_vruntime < best->dbg_vruntime)
+            best = c;
+    }
+    if (depth_out)
+        *depth_out = depth;
+    return best;
+}
+
+static void sched_trace_note(struct tcb *chosen, struct tcb *fair,
+                             uint32_t depth, uint32_t cpu) {
+    if (!chosen)
+        return;
+    if (fair && fair != chosen) {
+        g_trace_diverge++;
+        if (!g_trace_first_div_tick)
+            g_trace_first_div_tick = g_ticks;
+    }
+    if (g_trace_n < SCHED_TRACE_N) {
+        struct sched_trace_ent *e = &g_trace[g_trace_n++];
+        e->tick     = g_ticks;
+        e->cpu      = cpu;
+        e->fifo_tid = chosen->tid;
+        e->fair_tid = fair ? fair->tid : 0;
+        e->fifo_vr  = chosen->dbg_vruntime;
+        e->fair_vr  = fair ? fair->dbg_vruntime : 0;
+        e->floor    = g_dbg_floor;
+        e->depth    = depth;
+    }
+}
+
 static struct tcb *rq_take(struct rq *q) {
     struct tcb *t;
     while ((t = q->head)) {
@@ -142,7 +239,16 @@ static struct tcb *rq_take(struct rq *q) {
 static struct tcb *rq_pop(int cpu) {
     struct rq *q = &g_rq[cpu];
     uint64_t fl = spin_lock_irqsave(&q->lock);
+    /* DDR-895: snapshot the fair candidate BEFORE the unlink — after it, the
+     * queue no longer contains what the picker was choosing from, and the
+     * comparison would be against a different set. */
+    uint32_t depth = 0;
+    struct tcb *fair = fair_candidate(q, &depth);
     struct tcb *t = rq_take(q);
+    if (t) {
+        t->dbg_picks++;
+        sched_trace_note(t, fair, depth, (uint32_t)cpu);
+    }
     spin_unlock_irqrestore(&q->lock, fl);
     return t;
 }
@@ -481,6 +587,13 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_idle = 0;                  /* only the per-CPU idles set this */
     t->rq_next = 0;                  /* rq-1: not enqueued yet */
     t->rq_on = 0;
+    /* DDR-895: creation-time snapshot. H2 predicts probe threads enter FAR
+     * BELOW the floor; H1 predicts entry position is irrelevant. */
+    t->dbg_vruntime    = g_dbg_floor;
+    t->dbg_v_at_create = g_dbg_floor;
+    t->dbg_v_at_wake   = 0;
+    t->dbg_picks       = 0;
+    t->dbg_ticks       = 0;
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -848,6 +961,7 @@ void sched_tick(void) {
     if (!current_thread)
         return;                    /* scheduler not up yet */
     current_thread->run_ticks++;   /* DDR-735: sampled CPU time (this CPU owns it) */
+    sched_dbg_charge(current_thread, 1);   /* DDR-895: shadow only, never read */
     if (current_thread->quantum > 0)
         current_thread->quantum--;
     if (current_thread->quantum == 0) {
@@ -896,6 +1010,10 @@ void sched_unblock(struct tcb *t) {
      * BSP's locked walk observes READY this pass or the next tick (benign). */
     if (!t)
         return;
+    /* DDR-895: wake-time snapshot. This is the field that separates H1 from H2 —
+     * a thread that wakes far below the floor leapfrogs everything regardless of
+     * how much it has already run. */
+    t->dbg_v_at_wake = g_dbg_floor;
     uint32_t expected = THREAD_BLOCKED;
     if (__atomic_compare_exchange_n(&t->state, &expected, THREAD_READY,
                                     0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
@@ -1041,4 +1159,59 @@ static void reaper_thread(void *arg) {
 
 void sched_start_reaper(void) {
     sched_create(reaper_thread, 0, "reaper");
+}
+
+
+/* ---- DDR-895 (item 16): the dump ----------------------------------------
+ * Probe-gated (DDR-804). Prints the first divergence and the per-thread
+ * accounting that separates H1 from H2. Bounded output: the ring is fixed and
+ * only the first 24 divergent entries print, because DDR-790 already showed
+ * per-iteration output evicts other gates' markers from the 4 KiB log ring.
+ */
+void sched_trace_dump(void) {
+    kputs("[schedtrace] picks=");
+    kputdec(g_trace_n);
+    kputs(" diverge=");
+    kputdec(g_trace_diverge);
+    kputs(" first_div_tick=");
+    kputdec(g_trace_first_div_tick);
+    kputs(" floor=");
+    kputdec(g_dbg_floor);
+    kputs("\n");
+
+    unsigned shown = 0;
+    for (uint32_t i = 0; i < g_trace_n && shown < 24; i++) {
+        if (g_trace[i].fair_tid == g_trace[i].fifo_tid)
+            continue;
+        kputs("[schedtrace] t=");      kputdec(g_trace[i].tick);
+        kputs(" cpu=");                kputdec(g_trace[i].cpu);
+        kputs(" fifo=");               kputdec(g_trace[i].fifo_tid);
+        kputs("/vr=");                 kputdec(g_trace[i].fifo_vr);
+        kputs(" fair=");               kputdec(g_trace[i].fair_tid);
+        kputs("/vr=");                 kputdec(g_trace[i].fair_vr);
+        kputs(" depth=");              kputdec(g_trace[i].depth);
+        kputs("\n");
+        shown++;
+    }
+
+    /* Per-thread accounting. v_at_create/v_at_wake versus the floor is the
+     * measurement: H2 shows entries far below it, H1 does not. */
+    uint64_t fl = irq_save();
+    struct tcb *start = current_thread, *c = start;
+    unsigned n = 0;
+    do {
+        if (c && n < 24) {
+            kputs("[schedacct] tid=");  kputdec(c->tid);
+            kputs(" ");                 kputs(c->name ? c->name : "?");
+            kputs(" vr=");              kputdec(c->dbg_vruntime);
+            kputs(" create=");          kputdec(c->dbg_v_at_create);
+            kputs(" wake=");            kputdec(c->dbg_v_at_wake);
+            kputs(" picks=");           kputdec(c->dbg_picks);
+            kputs(" ticks=");           kputdec(c->dbg_ticks);
+            kputs("\n");
+            n++;
+        }
+        c = c ? c->next : 0;
+    } while (c && c != start && n < 24);
+    irq_restore(fl);
 }

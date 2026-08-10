@@ -1806,6 +1806,11 @@ static void fs_test_thread(void *arg) {
                 blkmq_proof();       /* DDR-BLK-1: concurrent in-flight requests */
                 smp_blk_integrity(); /* DDR-759: concurrent-read DATA integrity (M1 audit) */
                 rqstress_proof();    /* DDR-SMP-rq-1: thread storm over the rqs */
+                /* DDR-895 (item 16 diagnostic): probe-gated, so no default boot
+                 * changes. The trace is observation only — the pick is still
+                 * FIFO in this build. */
+                if (probe_enabled("schedtrace"))
+                    sched_trace_dump();
                 {
                     /* DDR-885 (item 37). Printed HERE because rqstress is the
                      * only workload that reliably produces steals: 24 threads in

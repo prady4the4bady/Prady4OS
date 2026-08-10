@@ -4109,3 +4109,59 @@ is **killed**.
 Not implemented: live window enumeration in the taskbar (buttons are a fixed
 count, not the surface table), a functioning start menu, per-mode input routing,
 mode persistence across boots.
+
+## Item 16 — ROOT CAUSE FOUND (DDR-895). Still OPEN; no scheduler change ships.
+
+Diagnostic slice only: the pick stays **FIFO**, a shadow vruntime is maintained,
+and the fair-pick candidate is computed and compared without being acted on.
+Probe-gated (`QEMU_PROBES=schedtrace`), so no default boot changes.
+
+Captured on `-smp 4`:
+
+```
+[schedtrace] picks=512 diverge=993 first_div_tick=89 floor=583680
+[schedacct] tid=11 fs  vr=399360 create=24576  wake=578560 picks=48155 ticks=366
+[schedacct] tid=87 rqs vr=583680 create=583680 wake=0      picks=1     ticks=0
+```
+
+**Both prior hypotheses are refuted.** The FS thread is **below** the floor
+(399360 vs 583680), not above it — so it is not starved by accrued vruntime. And
+every probe thread enters at `create == floor` exactly — so entry placement was
+never wrong.
+
+**The mechanism is `picks=48155` against `ticks=366`.** The FS thread yields
+voluntarily before the timer tick that would charge it, and charging happens
+only on the tick, for the running thread. It therefore accrues almost nothing
+while the floor races ahead. Under FIFO that is invisible; under
+smallest-vruntime it is a **monopoly** — the FS thread is permanently the
+minimum and the probe threads doing the actual filesystem work, entering at the
+much higher floor, are starved. That is exactly the failing set.
+
+**Fix direction for the next slice** (not implemented): charge voluntary
+yields/blocks, and clamp how far behind the floor a thread may sit on requeue
+(Linux's `place_entity`). Neither exists today.
+
+**Instrument limitation, recorded:** the ring saturates at 512 entries and
+stopped before `first_div_tick=89`'s divergences, so it printed none — the
+**per-thread accounting carried this finding, not the ring**. A circular
+overwrite would have captured the window.
+
+Behaviour-neutral confirmed: 16-gate regression green, and `smoke-rqstress`
+0/10 with the instrument in place (the one earlier red was the known ~5% flake).
+
+## Item 48 — Multiboot2 SUPERSEDED by owner decision (DDR-896)
+
+Recorded as a **formal substitution, not a scope cut**. The hybrid El Torito ISO
+carries the two already-proven loaders (BIOS `pradyos.img`, UEFI `esp.img`)
+rather than adding a Multiboot2 handoff, which would hand control in 32-bit
+protected mode and require a **third** implementation of the DDR-886 contract.
+Item 48's intent — one artifact booting both paths, proven by gate — is
+unchanged. **Still BLOCKED on host tooling.**
+
+## Item 35 — Phase-0 design delivered (DDR-897). Implementation NOT started.
+
+Six sub-phases. **The headline: item 35 cannot begin with the linker.** Its first
+two sub-phases are kernel prerequisites — file-backed `mmap` does not exist
+(`sys_mmap` refuses `fd != -1`, DDR-877), and `PT_INTERP`/auxv are absent from
+`elf.c`. Eager `BIND_NOW` binding is chosen on **W^X grounds** (ADR-021): lazy
+binding needs a permanently writable GOT.

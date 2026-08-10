@@ -132,6 +132,17 @@ struct tcb {
     struct tcb *rq_next;        /* rq-1: intrusive per-CPU ready-FIFO link (NULL = tail
                                  * or not enqueued; rq membership tracked by rq_on) */
     int        rq_on;           /* rq-1: 1 while linked into some CPU's ready queue */
+    /* ---- DDR-895 (item 16 DIAGNOSTIC): observation only ------------------
+     * These fields are WRITTEN but never read by any scheduling decision. The
+     * pick stays FIFO. That is deliberate: measuring a candidate algorithm by
+     * running it changes the timing you are trying to measure, and DDR-894's
+     * revert exists because a scheduler change altered boot-phase progress in
+     * ways its own gate could not see. */
+    uint64_t   dbg_vruntime;    /* what vruntime WOULD be, if it were used     */
+    uint64_t   dbg_v_at_create; /* floor at creation — H2's signature          */
+    uint64_t   dbg_v_at_wake;   /* floor at last unblock — H2's signature      */
+    uint32_t   dbg_picks;       /* times chosen by the real (FIFO) picker      */
+    uint32_t   dbg_ticks;       /* ticks charged while running                 */
     struct tcb *blk_wait_next;  /* DDR-878: intrusive FIFO link for virtio-blk's
                                  * slot wait list. Separate from rq_next because a
                                  * thread waiting for a request slot is BLOCKED and
@@ -199,6 +210,10 @@ void        sched_block_on(spinlock_t *lk);
 /* DDR-885 (item 37): how many steals stayed on-node vs crossed. Diagnostic —
  * the gate reads these to show the two-pass order is actually exercised. */
 void        sched_steal_counts(uint64_t *local, uint64_t *remote);
+
+/* DDR-895 (item 16 diagnostic). Dump the selection trace and per-thread
+ * accounting. Probe-gated; never called on a default boot. */
+void        sched_trace_dump(void);
 
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 struct tcb *sched_find_pid(uint32_t pid);                       /* DDR-837: live thread by pid, or NULL */
