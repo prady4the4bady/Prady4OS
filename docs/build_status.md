@@ -4453,3 +4453,44 @@ enlarge the sleeps, which would tune the test to fit the change.
 Pending: the three gates re-run at `bd58545` in an isolated tree, to decide
 whether they were already broken (CI's historical green was unreliable) or
 genuinely regressed.
+
+### WM regression bisected to item 16 (35e79f9)
+
+Both isolated-tree runs verified their overlay before trusting the result.
+
+| Tree | winops | wmclose | wmmin |
+|---|---|---|---|
+| `bd58545` (last CI-green) | PASS | PASS | PASS |
+| `f7f1884` (first CI-red) | PASS | PASS | PASS |
+| HEAD | **FAIL** | **FAIL** | PASS |
+
+`f7f1884` passes locally on all three. The only commit between it and HEAD that
+changes kernel behaviour is **`35e79f9` — item 16's CFS scheduler**. Everything
+else in the range is docs, a PowerShell script and a lockfile.
+
+**Item 16 is the local cause.** Its smallest-vruntime pick and TSC elapsed-time
+charging change how promptly the compositor thread runs after an input event.
+
+Two contributing factors, one fragile mechanism:
+
+1. `f7f1884`'s CI red is NOT reproducible locally, so the ISO build steps shifted
+   runner wall-clock enough to tip the same fixed-sleep margin there first.
+2. `35e79f9` then added enough input latency to tip it on ordinary hosts too.
+
+Neither would have failed a gate that waited for observed state. The injection
+tooling has no polling at all (`sleep 0.1`/`sleep 0.5`, zero `until`/`while`),
+so it cannot distinguish a failed click from one that has not landed yet.
+
+**Fix order, deliberately in this sequence:**
+
+1. **Repair the gates first** — polling-with-timeout in `mouse_inject.sh` and
+   `input_inject.sh`. This must come first because it is the instrument. Until
+   the gates can distinguish "slow" from "broken", any measurement of item 16's
+   latency is unreadable.
+2. **Then measure item 16's actual input latency** against repaired gates.
+   Raising the sleeps instead would tune the test to fit the change AND hide a
+   real scheduler regression — the outcome this project's rules exist to prevent.
+
+Item 16 is NOT to be reverted on this evidence: it fixed a measured fairness
+defect (48,155 picks against 366 ticks charged) across six hypotheses. Added
+latency in an unpolled UI gate is not itself proof of a scheduler defect.
