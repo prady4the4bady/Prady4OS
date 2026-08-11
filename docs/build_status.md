@@ -4971,3 +4971,61 @@ changed the CPU share so C died before the compositor's first poll (measured:
 `FIRSTPOLL ns=2` at HEAD vs `ns=3` at `bd58545`). A readiness handshake remains
 the right design; this implementation of it also broke a headless gate, and that
 interaction must be understood before the next attempt.
+
+## STANDING RULE (DDR-912): build freshness must be verified before any gate result is trusted
+
+**A multi-hour session was lost to this. It is now a permanent part of the
+checklist, alongside the sentinel-agreement and empty-gate-name guards.**
+
+### The mechanism, measured
+
+```
+user/surfacetest.c   src=1786479678
+build/kernel.bin     obj=1786482125      artifact 2447s NEWER than its source
+make -q image        -> UP TO DATE
+touch + make -n      -> recompile IS scheduled
+```
+
+`rsync --checksum --no-times` into the build tree writes new **content** while
+leaving the destination mtime older than the existing `build/kernel.bin`. `make`
+compares timestamps, finds every source older than the artifact, and reports
+nothing to do — so **`make image` succeeds without compiling** and every gate
+afterwards tests the *previous* binary.
+
+**The dependency graph is NOT at fault.** `$(KERNEL_BIN)` lists every source and
+header (`$(USER_ALL_SRCS)`, `$(KERNEL_HS)`), and touching a file correctly
+schedules a rebuild. The header-dependency hypothesis was wrong; only the
+timestamps lie. No other unanchored `--exclude build` exists in tracked tooling
+(the one found tonight was in a scratch script).
+
+### What it cost
+
+Four separate source-level hypotheses were each "refuted by measurement" —
+log eviction, grace duration, C-never-closing, and `3a4878c` — because none of
+them was ever actually under test. The binary never reflected the edited source.
+`e3e8692` reverted a commit on that contaminated evidence.
+
+### The rule
+
+Before trusting ANY gate result:
+
+1. Build in a genuinely fresh directory, **or**
+2. Run `bash tools/ci/build_freshness.sh`, which fails if `make -q` reports the
+   tree up to date while a `build/kernel.bin` exists — the one state that must
+   never be trusted. `--fix` touches all sources to force the rebuild.
+
+Rsync into a build tree is safe only when followed by (1) or (2).
+
+### Invalidated tonight, to be re-measured clean
+
+Every WM gate result from `~/pradyos-build`: the "all four criteria met" run, the
+17/18 regression, the `GRACE_SECS`/`LIVENESS_SECS` experiments, and the `3a4878c`
+isolation. **Whether the handshake breaks `smoke-shell` at all is now unknown.**
+
+### Still valid
+
+Anything built in a separate directory — the `bd58545`, `f7f1885` and `b7e955b`
+isolated-tree runs, each created fresh by `git archive` overlay. That includes
+the confirmed root cause (`FIRSTPOLL ns=2` at HEAD vs `ns=3` at `bd58545`).
+Items 48 and 49 also stand: both were proven by direct serial output, not by
+differential gate results.
