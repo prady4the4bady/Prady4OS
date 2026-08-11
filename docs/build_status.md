@@ -4384,3 +4384,72 @@ An earlier run reporting 12x PASS with **empty gate names** was discarded — th
 shell variable never expanded and every line ran bare `make`. `smoke-iso-x86` is
 now **unexcluded** and assigned to shard 1; `make ci-shard-check` OK, 142 gates
 across 6 shards, 5 excluded with reasons.
+
+## CORRECTION — items 16, 48, 49 are NOT shipped (CI-unconfirmed)
+
+Retracted. All three were reported **shipped** on the strength of a local
+12-gate subset while `dev/phase1` CI was **red**. Correct status:
+
+| Item | Status |
+|---|---|
+| 16 CFS scheduler | code-complete, locally proven, **CI-unconfirmed** |
+| 48 hybrid ISO | code-complete, locally proven, **CI-unconfirmed** |
+| 49 VirtualBox | code-complete, locally proven, **CI-unconfirmed** |
+
+CI red for four consecutive runs, first red `f7f1884`, last green `bd58545`:
+
+```
+788d730 failure   381b454 failure   35e79f9 failure   f7f1884 failure
+bd58545 success
+```
+
+Failures, all Layer 7 compositor/input, none boot/fs/scheduler/ISO:
+
+```
+shard 1: [smoke] FAIL — required pattern 'PRADYOS_SURFACE_GONE' not found
+         make: *** [Makefile:1703: smoke-winops] Error 1
+shard 4: [wmclose] FAIL — close box click did not close
+         make: *** [Makefile:2335: smoke-wmclose] Error 1
+shard 0: [wmmin] FAIL — min box click did not minimize
+```
+
+**The reporting defect is the point.** A 12-gate subset was treated as equivalent
+to the suite; it did not cover the WM gates, so it could not have caught this.
+That is the identical coverage-gap shape this project's gate discipline exists to
+prevent, occurring in status reporting rather than in code.
+
+**Standing rule, effective now:** no item is reported shipped without quoting a
+**terminal green CI run ID for the exact commit SHA**. If CI has not concluded,
+the only permitted wording is "code-complete, CI-pending".
+
+Direct boot observations remain valid — the BIOS arm's `NEXUS KERNEL OK` and the
+VirtualBox boot were captured serial output, not gate inferences. Only the word
+"shipped" is withdrawn. `main` stays at `27ba426`.
+
+### Diagnosis so far
+
+Local reproduction at HEAD: `smoke-wmclose` FAIL, `smoke-winops` FAIL,
+`smoke-wmmin` PASS. **Real regression, not CI flake** — and `wmmin` is
+additionally timing-sensitive (passes locally, fails in CI).
+
+`f7f1884` (first red) touched only Makefile, `mk_hdimg.py`, docs and one
+`gate_shards.txt` line — **no compositor, input, or kernel code**. The first red
+commit and the cause are therefore probably different commits.
+
+Measured: the injection tooling is **fixed-sleep with no polling at all**.
+
+```
+mouse_inject.sh:14  sleep 0.1     input_inject.sh:17  sleep 0.1
+mouse_inject.sh:16  sleep 0.5     input_inject.sh:19  sleep 0.5
+polling constructs (until / while-grep / poll): 0
+```
+
+These gates assume the guest reached a state after a wall-clock delay and never
+confirm it, so they cannot distinguish "the click failed" from "the click had not
+happened yet". Any unrelated change to build or boot wall-clock time can flip
+them. The fix is to make them poll for the state with a timeout — **not** to
+enlarge the sleeps, which would tune the test to fit the change.
+
+Pending: the three gates re-run at `bd58545` in an isolated tree, to decide
+whether they were already broken (CI's historical green was unreliable) or
+genuinely regressed.
