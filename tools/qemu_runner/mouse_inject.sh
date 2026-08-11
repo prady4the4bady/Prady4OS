@@ -90,7 +90,7 @@ def resolve_geometry():
     except OSError:
         return False
     for ln in reversed(lines):                 # newest wins: layout can change
-        if "PRADYOS_WM_CLOSEBOX" not in ln or ("title=" + geom_title) not in ln:
+        if "PRADYOS_WM_GEOM" not in ln or ("title=" + geom_title) not in ln:
             continue
         for tok in ln.split():
             if tok.startswith(geom_field + "="):
@@ -135,7 +135,7 @@ def click():
 if geom_title:
     while not resolve_geometry():
         if time.monotonic() >= deadline:
-            print("[inject] TIMEOUT — no PRADYOS_WM_CLOSEBOX for title=%s"
+            print("[inject] TIMEOUT — no PRADYOS_WM_GEOM for title=%s"
                   % geom_title)
             raise SystemExit(0)
         time.sleep(0.2)

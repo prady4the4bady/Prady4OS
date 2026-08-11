@@ -4814,3 +4814,67 @@ surfacetest already uses for resize requests. The compositor sends the owner an
 event the first time it composites a surface; surfacetest waits for that event on
 C before starting any close countdown. No new syscall, and the race is eliminated
 structurally rather than out-waited.
+
+### DDR-911 handshake SHIPPED (locally) — winops + wmorder green, wmclose exposes a new defect
+
+The readiness handshake replaces the loop-iteration countdown:
+
+- `user/compositor.c` sends a one-shot `surf_event` type 3 (COMPOSITED) to a
+  surface's owner the first time it is actually drawn, over the existing
+  `SENDEV`/`GETEV` channel (DDR-718). No new syscall.
+- `user/surfacetest.c` waits for that event on C before closing it. **`ticks >
+  12000` and the `ticks` counter are deleted outright** — deliberately no
+  fallback, because a fallback re-races the same defect on faster hardware.
+- The `PRADYOS_FIRSTPOLL` diagnostic is removed.
+- New gate `smoke-wmorder` asserts `PRADYOS_ZORDER 0 1 2` appears before any
+  shrink. Shard 2; `ci-shard-check` OK, 143 gates across 6 shards.
+
+```
+PASS smoke-wmorder    PASS smoke-wmmin (3 clicks)    PASS smoke-winops
+PRADYOS_WM_GEOM id=2 title=GAMMA close=16207,2605
+```
+
+**`winops` is fixed** and reaches `PRADYOS_SURFACE_GONE` through genuine
+shrinkage. The multi-session root cause is closed.
+
+Two defects of my own were caught by guards during verification and are worth
+recording, since both were the same shape as the bugs being fixed:
+
+1. **Sentinel substring collision.** `PRADYOS_WM_CLOSEBOX` contains
+   `PRADYOS_WM_CLOSE`, so the injector's expect pattern matched its own geometry
+   line and reported success after 1 click without anything closing. Renamed to
+   `PRADYOS_WM_GEOM`, and the expect pattern tightened to `PRADYOS_WM_CLOSE id=`
+   so it matches exactly what the gate asserts.
+2. **Producer/consumer rename skew.** The verify harness synced the compositor
+   but not `mouse_inject.sh`, so the emitter and reader disagreed on the sentinel
+   name and the mismatch looked identical to a broken feature. The harness now
+   extracts the name each side uses and refuses to run unless they agree.
+
+### NEW, SEPARATE DEFECT: GAMMA's close box does not respond
+
+```
+[inject] geometry for GAMMA: close=16207,2605
+[inject] TIMEOUT — 'PRADYOS_WM_CLOSE id=' never appeared after 49 click(s)
+```
+
+Only reachable now that GAMMA exists; it was masked for the whole investigation.
+**Not diagnosed, not guessed.** Established so far:
+
+- Geometry is arithmetically correct. GAMMA x=420, w=96 -> close box spans screen
+  x 500..511, centre 506; `tab_x(506)` at width 1024 = 16207, which is what was
+  emitted and clicked.
+- The three title-bar boxes do not overlap (max 472..483, min 486..497, close
+  500..511), so the click cannot be landing on a neighbour.
+- `close_box_hit` (compositor.c:639) uses `s->x + s->w - CLOSEBOX - 4` and
+  `s->y - TITLEBAR`, matching `draw_window` for GAMMA (y=70, so the draw path's
+  `ty` clamp does not diverge).
+- `min_box_hit` works on another window in the same run, so the dispatch path is
+  functional in general.
+
+**Next measurement:** whether the click-dispatch loop at compositor.c:1071 even
+reaches GAMMA — its iteration bounds, ordering, and any skip for unfocused,
+unraised or minimised surfaces. C is documented in `surfacetest.c` as
+deliberately never raised, which makes an unraised-window skip the first thing to
+check. Read the loop before instrumenting.
+
+**Not shipped.** No CI run ID; `main` unmoved.

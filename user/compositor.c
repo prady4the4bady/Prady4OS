@@ -104,6 +104,9 @@ static void put_px(unsigned x, unsigned y, unsigned char b, unsigned char gg, un
 /* DDR-910: screen pixel -> virtio-tablet absolute (0..32767). The scaling lives
  * HERE, in the only code that knows the framebuffer size, so a gate never has to
  * duplicate the mapping and get it wrong a second way. */
+/* DDR-911: which surface ids have already been told they were composited. */
+static unsigned g_composited_told;
+
 static int tab_x(int px) {
     unsigned w = g_fi.width > 1 ? g_fi.width - 1 : 1;
     if (px < 0) px = 0;
@@ -897,18 +900,6 @@ int main(void) {
          * raised window is on top, and report the z-order + focused window. */
         struct surface_info surfs[16];
         long ns = nsi(SYS_SURFACE_POLL, (long)surfs, 16, 0);
-        /* DDR-911 MEASUREMENT: the surface count at the compositor's VERY FIRST
-         * poll. If C's whole lifecycle already completed by now, ns is 2 here and
-         * the third window was never observable — that is the loop-iteration race,
-         * confirmed rather than inferred from ZORDER's final state. */
-        {
-            static int first_poll_said;
-            if (!first_poll_said) {
-                first_poll_said = 1;
-                printf("PRADYOS_FIRSTPOLL ns=%ld\n", ns);
-                fflush(stdout);
-            }
-        }
         int cur_focus = -1;
         for (long i = 0; i < ns; i++) if (surfs[i].focused) cur_focus = (int)surfs[i].id;
         focus_id = cur_focus;
@@ -917,8 +908,18 @@ int main(void) {
             for (long i = 0; i < ns; i++) {                 /* z-order: bottom..top */
                 if (g_min_mask & (1u << surfs[i].id)) continue;          /* DDR-717 */
                 long sva = nsi(SYS_SURFACE_CMAP, (long)surfs[i].id, 0, 0);
-                if (sva > 0)
+                if (sva > 0) {
                     draw_window((const unsigned char *)sva, &surfs[i]);  /* + title bar */
+                    /* DDR-911: tell the owner, once, that this surface has
+                     * actually been composited. A client that needs to know its
+                     * window became visible must be TOLD, not left to infer it
+                     * from elapsed time or loop iterations — those are
+                     * scheduling-dependent and item 16 changed them. */
+                    if (!(g_composited_told & (1u << surfs[i].id))) {
+                        g_composited_told |= (1u << surfs[i].id);
+                        nsi(SYS_SURFACE_SENDEV, (long)surfs[i].id, 3, 0);
+                    }
+                }
             }
             present();
             if (ns > 0) {
@@ -939,7 +940,7 @@ int main(void) {
                 int gcx = gtx + (int)surfs[gi].w - CLOSEBOX - 4 + CLOSEBOX / 2;
                 int gmx = gtx + (int)surfs[gi].w - 2 * CLOSEBOX - 6 + CLOSEBOX / 2;
                 int gby = gty + 3 + CLOSEBOX / 2;
-                printf("PRADYOS_WM_CLOSEBOX id=%u title=%s close=%d,%d min=%d,%d\n",
+                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d\n",
                        surfs[gi].id, surfs[gi].title[0] ? surfs[gi].title : "-",
                        tab_x(gcx), tab_y(gby), tab_x(gmx), tab_y(gby));
             }

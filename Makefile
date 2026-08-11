@@ -1703,6 +1703,31 @@ smoke-winops: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_RESIZE_OK\nPRADYOS_CLOSE_OK\nPRADYOS_SURFACE_GONE')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Layer-7 startup-ordering gate (DDR-911). The live set MUST be observed at 3
+# before it shrinks to 2. surfacetest used to close its third window on a loop-
+# iteration count, so when item 16's fair-share pick changed its CPU share the
+# window was created and destroyed before the compositor's first poll — the set
+# never reached 3, and two gates failed for a reason neither could express.
+#
+# Asserting ZORDER with three ids is what stops that recurring silently: it fails
+# whenever the third window is unobservable, whatever the cause.
+smoke-wmorder: $(IMG) fat-image sfs-image
+	@echo "[wmorder] startup ordering: compositor must observe the 3-set before it shrinks..."
+	@rm -f build/wmorder.log
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -serial file:build/wmorder.log -display none -no-reboot || true
+	@grep -aq "PRADYOS_ZORDER 0 1 2" build/wmorder.log || { \
+	    echo "[wmorder] FAIL — the compositor never observed three surfaces."; \
+	    echo "          ZORDER lines seen:"; grep -a PRADYOS_ZORDER build/wmorder.log | head -5; \
+	    exit 1; }
+	@grep -aq PRADYOS_SURFACE_GONE build/wmorder.log || { \
+	    echo "[wmorder] FAIL — set reached 3 but never shrank; close path broken"; exit 1; }
+	@echo "[wmorder] PASS — $$(grep -a 'PRADYOS_ZORDER 0 1 2' build/wmorder.log | head -1) then shrink"
+
 # Layer-7 surface-destroy gate (DDR-729, -smp 4 so the exit-reap runs cross-CPU):
 # surfdestroytest proves the 16-slot table reclaims on churn/close, reuses freed
 # slots, and — the lifecycle hole this slice closes — reclaims a child's surfaces
@@ -2329,7 +2354,7 @@ smoke-visual: $(IMG) fat-image sfs-image
 smoke-wmclose: $(IMG) fat-image sfs-image
 	@echo "[wmclose] title + close-button gate: boot(GPU+tablet) + QMP click GAMMA's close box..."
 	@rm -f build/wmclose.log /tmp/pwmclose.sock
-	@GEOM_TITLE=GAMMA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_AMBIANCE_OK PRADYOS_WM_CLOSE &
+	@GEOM_TITLE=GAMMA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
