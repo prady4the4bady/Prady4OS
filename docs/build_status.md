@@ -4316,3 +4316,41 @@ it does.
 
 Not claimed: the sleeper-credit branch shows `credit=0` — correct and bounded,
 but unexercised by current gates.
+
+## Group 9 item 49 — SHIPPED: VirtualBox validation (DDR-906)
+
+`tools/vbox/run_vbox.ps1` creates a throwaway VM, attaches the built ISO,
+captures COM1 to a file and asserts the same `NEXUS KERNEL OK` sentinel every
+other boot path uses. Proven by a real run: EFI arm, VirtualBox 7.2.8r173730,
+exit 0, kernel reaching `NEXUS: starting scheduler`.
+
+Two-host split, by necessity: **WSL builds the ISO, Windows boots it.**
+VirtualBox needs VT-x directly and WSL2 is a Hyper-V guest without nested VT-x.
+So this is an owner-run check and is deliberately **not** in the CI shard matrix
+(no VirtualBox, no Windows host on the runners); `gate_shards.txt` is unchanged.
+
+Value beyond the QEMU gates: VirtualBox is a third firmware, neither SeaBIOS nor
+OVMF, so it independently checks for firmware-specific assumptions — the exact
+class of defect item 48 is stuck on.
+
+## Group 9 item 48 — still PARTIAL; DDR-905 was wrong (DDR-907)
+
+DDR-905 concluded the ISO's BIOS arm failed because the El Torito emulated drive
+lacked EDD, and specified a CHS `AH=02h` fallback. That fallback was built for
+both loaders (geometry from `AH=08h`, never hardcoded), assembled clean under
+`-Werror`, fit stage1's 512-byte budget with 111 bytes spare — and was
+**reverted**, because measurement refuted the diagnosis it was built on:
+
+```
+s01h02     AH=08h reports 1 sector/track, 2 heads — impossible geometry
+R01        AH=02h returns AH=01 "invalid command", same as AH=42h
+```
+
+Every read function is rejected, so the defect is not a missing feature; it is
+consistent with drive 0x80 not being present. `DL=0x80` never proved hard-disk
+emulation engaged — that was an over-reading of one register, and DDR-905's
+whole chain inherited it. No choice of read function fixes an absent drive.
+
+Boot loaders are unchanged from their committed state. `smoke-iso-x86` stays
+excluded. Next step is a **measurement** (did SeaBIOS register the boot image as
+a drive at all), not another fix.
