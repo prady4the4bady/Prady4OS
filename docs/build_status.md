@@ -4256,3 +4256,30 @@ and a 1-byte `athena-nopasswd`. There is no `claude-apt`, and
 `sudo -n apt-get --version` still returns "a password is required". The install
 never ran. WSL lists `Ubuntu-24.04` and `docker-desktop`; the drop-in may have
 been created in a different distro or on the Windows side.
+
+## Group 9 item 48 — hybrid ISO: UEFI arm PROVEN, BIOS arm blocked (DDR-903)
+
+Tooling installed and verified explicitly (not trusting apt's exit code):
+`xorriso 1.5.6`, `grub-mkrescue 2.12`, **276** GRUB BIOS modules, **269** EFI
+modules, OVMF present. Installed via `wsl -u root`; a `/etc/sudoers.d/claude-apt`
+drop-in was also written so future non-interactive `sudo` works.
+
+`make iso` produces a 52.8 MB hybrid El Torito image carrying both proven
+loaders — no Multiboot2, per DDR-896. **The UEFI arm boots the real kernel from
+the real ISO** to the standard `NEXUS KERNEL OK` sentinel.
+
+**BIOS arm fails** at stage1's first read (`PRADYOS S1: DISK READ ERROR`).
+stage1 is not at fault — it uses the BIOS-provided `DL` and issues an ordinary
+16-sector EDD read. Two emulations measured: **floppy** fails because emulated
+floppies do not implement `INT 13h AH=42h`, which is exactly what stage1 issues;
+**hard disk** (drive 0x80, EDD supported, MBR partition table added by
+`tools/build/mk_hdimg.py` after verifying 0x1BE..0x1FD was all-zero) also fails,
+and that result is **not yet explained**. No-emulation is rejected by analysis:
+2048-byte CD sectors would put every LBA four times too deep.
+
+`smoke-iso-x86` tests **both** arms and is registered **EXCLUDED** — a gate that
+cannot pass must not enter the matrix, and weakening it to UEFI-only would let
+the BIOS arm rot while the suite looked green.
+
+Next measurement: print `DL` from stage1 under the ISO — one byte settles whether
+SeaBIOS engaged hard-disk emulation at all.

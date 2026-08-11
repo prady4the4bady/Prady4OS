@@ -212,7 +212,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -917,6 +917,56 @@ esp-image: $(UEFI_EFI) $(KERNEL_BIN)
 # deliberately wrong boot_info pointer still reached NEXUS KERNEL OK, because
 # that sentinel prints before the memory map is used for anything. 16 is the
 # merged count for this OVMF machine; garbage at a wrong pointer will not be 16.
+# ---- DDR-896 (Group 9 item 48): hybrid BIOS + UEFI ISO -------------------
+# Multiboot2 is SUPERSEDED (owner-approved, DDR-896). The ISO carries the two
+# loaders this project already proved independently rather than adding a third
+# handoff contract that would hand control in 32-bit protected mode.
+#
+# BIOS arm: floppy emulation at 2.88 MiB. El Torito then presents pradyos.img
+# to the BIOS as drive 0 with 512-byte sectors, which is exactly what stage1
+# already reads. No-emulation boot would hand it 2048-byte CD sectors and every
+# LBA in stage1/stage2 would address the wrong place.
+#
+# UEFI arm: build/esp.img verbatim — the same FAT ESP smoke-uefi already boots.
+ISO_IMG   := build/pradyos.iso
+ISO_HD    := build/pradyos-hd.img
+
+# El Torito HARD-DISK emulation: drive 0x80, 512-byte sectors, EDD supported.
+# Floppy emulation was tried first and MEASURED to fail — emulated floppies do
+# not implement INT 13h AH=42h, and stage1 issues exactly that, printing
+# 'PRADYOS S1: DISK READ ERROR'. No-emulation is worse: 2048-byte CD sectors
+# would put every LBA four times too deep. Hard-disk emulation needs an MBR
+# partition table, which mk_hdimg.py writes into a COPY.
+$(ISO_HD): $(IMG)
+	python3 tools/build/mk_hdimg.py $(IMG) $(ISO_HD)
+
+iso: $(ISO_HD) esp-image
+	@rm -rf build/isoroot && mkdir -p build/isoroot/boot
+	cp $(ISO_HD)     build/isoroot/boot/pradyos.img
+	cp build/esp.img build/isoroot/boot/esp.img
+	xorriso -as mkisofs \
+	    -V PRADYOS \
+	    -b boot/pradyos.img -hard-disk-boot \
+	    -eltorito-alt-boot -e boot/esp.img -no-emul-boot \
+	    -o $(ISO_IMG) build/isoroot
+	@echo "iso: $(ISO_IMG) ($$(stat -c%s $(ISO_IMG)) bytes, BIOS+UEFI)"
+smoke-iso-x86: iso
+	@echo "[iso] BIOS arm..."
+	@timeout 120 qemu-system-x86_64 -machine q35 -cdrom $(ISO_IMG) -boot d \
+	    -no-reboot -display none -monitor none -serial file:build/iso_bios.log >/dev/null 2>&1 || true
+	@grep -q 'NEXUS KERNEL OK' build/iso_bios.log || { echo "[iso] FAIL: BIOS arm did not reach the kernel"; tail -20 build/iso_bios.log; exit 1; }
+	@echo "[iso] BIOS arm OK"
+	@echo "[iso] UEFI arm..."
+	@cp /usr/share/OVMF/OVMF_VARS_4M.fd build/iso_vars.fd
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+	    -drive if=pflash,format=raw,unit=1,file=build/iso_vars.fd \
+	    -cdrom $(ISO_IMG) -boot d \
+	    -no-reboot -display none -monitor none -serial file:build/iso_uefi.log >/dev/null 2>&1 || true
+	@grep -q '\[uefi\] handoff' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm loader did not hand off"; tail -20 build/iso_uefi.log; exit 1; }
+	@grep -q 'NEXUS KERNEL OK' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm did not reach the kernel"; tail -20 build/iso_uefi.log; exit 1; }
+	@echo "[iso] UEFI arm OK — one ISO, both boot paths, same sentinel"
+
 smoke-uefi: esp-image
 	TIMEOUT_S=90 QEMU_UEFI=1 \
 	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010')" \
