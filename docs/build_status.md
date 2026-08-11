@@ -4617,3 +4617,43 @@ one read of the helper plus one instrumented run.
 not been run and remains the decisive test for whether this predates item 16 — it
 is very likely latent and previously unexercised, since no gate before this
 instrumentation ever verified a third surface reached the compositor.
+
+### Step B (clean re-run) — race REFUTED; exit-reap is the new candidate
+
+Single controlled run, artifact `/tmp/attrib.wmclose.20260811T175706Z.log`,
+copied and made read-only immediately after the gate exited. Nothing below is
+inferred from any other run — the previous cross-run reasoning is discarded.
+
+**`PRADYOS_ZORDER` never shows three ids. Maximum is 2, at any point.**
+
+That **refutes the race hypothesis**: C is not briefly visible and then closed by
+surfacetest's own scheduled close. It never reaches the compositor at all.
+
+Ordering from the same artifact:
+
+```
+210: PRADYOS_RESIZE_OK id=2          C exists, committed, resized
+212: PRADYOS_SURFDESTROY_CHURN_OK
+213: PRADYOS_SURFDESTROY_REUSE_OK
+215: PRADYOS_SURFDESTROY_EXIT_OK     a DIFFERENT process's exit-reap runs
+216: PRADYOS_SURFDESTROY_OK
+371: PRADYOS_WM_CLOSEBOX id=0 ALPHA  first composite: only 0 and 1 survive
+372: PRADYOS_WM_CLOSEBOX id=1 BETA
+```
+
+`surfdestroytest` runs its exit-reap between C's creation and the compositor's
+first composite, and `PRADYOS_SURFDESTROY_REUSE_OK` shows slot reuse is exercised
+in exactly that window.
+
+**New leading candidate: the process-exit surface reap destroys a surface it does
+not own**, taking surfacetest's C (id=2) with it. This is a kernel defect, and it
+would explain both failing gates while leaving `wmmin` (ALPHA/BETA only) green.
+
+**Explicitly NOT concluded.** The ordering is consistent with the reap taking C;
+it does not prove it. The confirming measurement is a log at the destroy call
+site recording `(id, owner_pid, caller_pid, reason)` for every destruction,
+showing whether id=2 is destroyed and by whom. The commit-path hypothesis from
+f59bbb7 is also still live and is distinguished by the same instrumentation.
+
+**Item 16 remains unconnected**, and the `bd58545` reproduction is still the
+outstanding decisive test.
