@@ -171,4 +171,4 @@
 4	smoke-numa	90
 5	smoke-numa-alloc	90
 0	smoke-uefi	90
-#excluded	smoke-iso-x86	120	DDR-903: BIOS arm blocked on El Torito+EDD; UEFI arm passes. Unexclude when both arms boot.
+1	smoke-iso-x86	240

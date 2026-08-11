@@ -47,7 +47,10 @@ stage1:
     mov ah, 0x42                ; extended read
     mov dl, [boot_drive]
     int 0x13
+    jnc .loaded                 ; EDD present: ordinary disk, ordinary boot
+    call chs_load               ; DDR-908: no EDD (El Torito HD emulation)
     jc .disk_err
+.loaded:
 
     mov dl, [boot_drive]        ; pass boot drive to Stage 2 in DL (INT 13h clobbers it)
     jmp 0x0000:0x7E00           ; hand off to Stage 2 (sets CS=0)
@@ -125,7 +128,71 @@ puts:                          ; DS:SI -> NUL-terminated string
     pop ax
     ret
 
+; --- CHS fallback (DDR-908) --------------------------------------------------
+; Taken only when AH=42h fails. SeaBIOS's El Torito hard-disk emulation presents
+; a real drive (AH=15h returns type 03) but has no EDD: AH=42h returns AH=01.
+;
+; Geometry is READ from the drive with AH=08h, never assumed. It is also only
+; trustworthy because mk_hdimg.py now writes a cylinder-aligned partition end —
+; see DDR-908 for why a wrong end CHS makes the BIOS invent a 1-sector-per-track
+; disk on which BOTH read functions fail.
+;
+; One sector per INT 13h call: AH=02h cannot straddle a track boundary, and at
+; one sector per call no read ever can, so there is no track arithmetic to get
+; wrong. Returns CF=0 on success.
+chs_load:
+    push es
+    mov ah, 0x08                ; get drive parameters
+    mov dl, [boot_drive]
+    xor di, di
+    mov es, di                  ; some BIOSes require ES:DI=0 for AH=08h
+    int 0x13
+    pop es
+    jc .fail
+    mov al, cl
+    and ax, 0x003F              ; CL[5:0] = sectors per track
+    jz .fail                    ; zero would divide by zero below
+    mov [spt], ax
+    mov al, dh                  ; DH = MAXIMUM head number, so heads = DH+1
+    xor ah, ah
+    inc ax
+    mov [nheads], ax
+
+    mov byte [nleft], 16        ; the same 16 sectors the DAP above asks for
+    mov di, 0x7E00              ; ES:DI destination (ES=0 since stage1 entry)
+    mov si, 1                   ; starting LBA, matching the DAP
+.next:
+    mov ax, si
+    xor dx, dx
+    div word [spt]              ; AX = lba/spt, DX = lba mod spt
+    inc dl
+    mov bl, dl                  ; BL = sector, 1-based
+    xor dx, dx
+    div word [nheads]           ; AX = cylinder, DX = head
+    mov dh, dl                  ; DH = head
+    mov ch, al                  ; CH = cylinder bits 7:0
+    shl ah, 6
+    or  bl, ah                  ; CL[7:6] = cylinder bits 9:8
+    mov cl, bl
+    mov dl, [boot_drive]
+    mov bx, di                  ; ES:BX = buffer
+    mov ax, 0x0201              ; AH=02h read, AL=1 sector
+    int 0x13
+    jc .fail
+    add di, 512
+    inc si
+    dec byte [nleft]
+    jnz .next
+    clc
+    ret
+.fail:
+    stc
+    ret
+
 boot_drive db 0
+spt        dw 0
+nheads     dw 0
+nleft      db 0
 msg_s1     db "PRADYOS S1: loading stage2...", 13, 10, 0
 msg_err    db "PRADYOS S1: DISK READ ERROR", 13, 10, 0
 

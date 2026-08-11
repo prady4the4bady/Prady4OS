@@ -187,7 +187,10 @@ load_kernel:
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
+    jnc .got
+    call chs_read_chunk             ; DDR-908: no EDD (El Torito HD emulation)
     jc .err
+.got:
     add dword [kdap_lba], 64        ; next 64 sectors on disk
     cli                             ; no IRQ may touch DS/ES during the copy
     call go_unreal                  ; re-arm the 4 GiB limits (per chunk)
@@ -206,6 +209,78 @@ load_kernel:
 .halt:
     hlt
     jmp .halt
+
+; --- CHS fallback (DDR-908) --------------------------------------------------
+; The mirror of stage1's chs_load, for the same reason: the El Torito emulated
+; drive is real but has no EDD. Both loaders read from disk, so both need it.
+; Geometry from AH=08h, cached after the first query, never assumed.
+; One sector per call, so no read can straddle a track boundary.
+chs_read_chunk:
+    pusha
+    push es
+    cmp word [chs_spt], 0
+    jne .have_geom
+    mov ah, 0x08
+    mov dl, [boot_drive]
+    xor di, di
+    mov es, di                      ; some BIOSes require ES:DI=0 for AH=08h
+    int 0x13
+    jc .fail
+    mov al, cl
+    and ax, 0x003F                  ; CL[5:0] = sectors per track
+    jz .fail                        ; zero would divide by zero below
+    mov [chs_spt], ax
+    mov al, dh                      ; DH = MAXIMUM head number
+    xor ah, ah
+    inc ax
+    mov [chs_heads], ax
+.have_geom:
+    cmp word [kdap_lba + 2], 0
+    jne .fail                       ; 16-bit CHS math below: refuse, never wrap
+    mov ax, [kdap_lba]
+    mov [chs_lba], ax
+    mov word [chs_left], 64
+    mov ax, [kdap_seg]
+    mov es, ax
+    xor di, di
+.next:
+    mov ax, [chs_lba]
+    xor dx, dx
+    div word [chs_spt]              ; AX = lba/spt, DX = lba mod spt
+    inc dl
+    mov bl, dl                      ; BL = sector, 1-based
+    xor dx, dx
+    div word [chs_heads]            ; AX = cylinder, DX = head
+    cmp ax, 1024
+    jae .fail                       ; past CHS reach: refuse, never wrap
+    mov dh, dl                      ; DH = head
+    mov ch, al                      ; CH = cylinder bits 7:0
+    shl ah, 6
+    or  bl, ah                      ; CL[7:6] = cylinder bits 9:8
+    mov cl, bl
+    mov dl, [boot_drive]
+    mov bx, di                      ; ES:BX = destination
+    mov ax, 0x0201                  ; AH=02h read, AL=1 sector
+    int 0x13
+    jc .fail
+    add di, 512
+    inc word [chs_lba]
+    dec word [chs_left]
+    jnz .next
+    pop es
+    popa
+    clc
+    ret
+.fail:
+    pop es
+    popa
+    stc
+    ret
+
+chs_spt   dw 0
+chs_heads dw 0
+chs_lba   dw 0
+chs_left  dw 0
 
 ; INT 15h EAX=E820h walk -> e820_buf / e820_count, then print the count.
 do_e820:

@@ -27,13 +27,12 @@ import sys
 SECTOR = 512
 
 
-def chs(lba, heads=16, spt=63):
-    """Legacy CHS triple, clamped to the classic 1023/15/63 maximum."""
-    c = lba // (heads * spt)
-    h = (lba // spt) % heads
-    s = (lba % spt) + 1
-    if c > 1023:
-        c, h, s = 1023, heads - 1, spt
+HEADS = 16
+SPT = 63
+
+
+def chs_bytes(c, h, s):
+    """Pack a CHS triple into the 3-byte on-disk form."""
     return bytes([h, ((c >> 2) & 0xC0) | (s & 0x3F), c & 0xFF])
 
 
@@ -55,21 +54,39 @@ def main():
 
     total = (len(data) + SECTOR - 1) // SECTOR
 
-    # One partition spanning the image from LBA 1. It starts at 1, not 0, so the
-    # entry never claims the MBR itself as partition content.
+    # DDR-908: the END CHS field is not decoration — SeaBIOS's El Torito
+    # hard-disk emulation DERIVES the emulated drive's geometry from it, as
+    # heads = end_head + 1 and sectors-per-track = end_sector.
+    #
+    # That inference only round-trips if the partition ends on a cylinder
+    # boundary. The previous version wrote the arithmetically-correct CHS for
+    # the last sector of the image (h=1 s=1 c=4 for a 4096-sector image), from
+    # which SeaBIOS inferred a 2-head, 1-sector-per-track disk. Every read then
+    # fell outside that degenerate geometry and INT 13h returned AH=01 for both
+    # AH=42h and AH=02h — measured as "s01h02" from stage1 itself.
+    #
+    # So the partition is truncated to whole cylinders and the end CHS is
+    # written as the last sector of the last head of the last cylinder, which
+    # is the only form that reproduces HEADS/SPT when read back.
+    cyl = total // (HEADS * SPT)
+    if cyl < 1:
+        sys.exit("image is smaller than one %dx%d cylinder (%d sectors)"
+                 % (HEADS, SPT, total))
+    last = cyl * HEADS * SPT - 1          # last LBA inside whole cylinders
+
     entry = bytearray(16)
     entry[0] = 0x80                                   # bootable
-    entry[1:4] = chs(1)                               # first sector CHS
-    entry[4] = 0x0C                                   # FAT32 LBA; type is cosmetic here
-    entry[5:8] = chs(total - 1)                       # last sector CHS
+    entry[1:4] = chs_bytes(0, 0, 2)                   # first sector = LBA 1
+    entry[4] = 0x0C                                   # FAT32 LBA; cosmetic here
+    entry[5:8] = chs_bytes(cyl - 1, HEADS - 1, SPT)   # defines the geometry
     entry[8:12] = (1).to_bytes(4, "little")           # first LBA
-    entry[12:16] = (total - 1).to_bytes(4, "little")  # sector count
+    entry[12:16] = last.to_bytes(4, "little")         # sectors: LBA 1..last
     data[0x1BE:0x1CE] = entry
 
     with open(dst, "wb") as f:
         f.write(data)
-    print("hdimg: %s -> %s (%d sectors, bootable partition at LBA 1)"
-          % (src, dst, total))
+    print("hdimg: %s -> %s (%d sectors, partition LBA 1..%d, geometry %dH/%dS/%dC)"
+          % (src, dst, total, last, HEADS, SPT, cyl))
 
 
 if __name__ == "__main__":

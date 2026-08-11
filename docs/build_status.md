@@ -4354,3 +4354,33 @@ whole chain inherited it. No choice of read function fixes an absent drive.
 Boot loaders are unchanged from their committed state. `smoke-iso-x86` stays
 excluded. Next step is a **measurement** (did SeaBIOS register the boot image as
 a drive at all), not another fix.
+
+## Group 9 item 48 — SHIPPED: hybrid BIOS+UEFI ISO boots on both arms (DDR-908)
+
+```
+PRADYOS S1: loading stage2...
+PRADYOS S2: protected-mode loader
+PRADYOS BOOT OK
+NEXUS KERNEL OK
+```
+
+Two stacked defects, both measured, neither guessed:
+
+1. **`mk_hdimg.py` wrote a non-cylinder-aligned partition end CHS.** SeaBIOS
+   *derives* the emulated drive's geometry from that field, so `h=1 s=1` became
+   a 2-head/1-sector-per-track disk on which every LBA was out of range. Both
+   `AH=42h` and `AH=02h` returned `AH=01`, which is why the drive looked absent.
+   Fixed by truncating to whole cylinders: now reports 63 spt / 16 heads.
+2. **The El Torito emulated drive has no EDD.** With correct geometry `AH=42h`
+   still returns `01`, confirming DDR-905's original diagnosis. Both loaders now
+   fall back to CHS `AH=02h`, geometry from `AH=08h`, one sector per call.
+
+DDR-905 was right and DDR-907 was wrong; the CHS fallback measured zero effect
+only because a geometry defect underneath made it unreachable. Same failure mode
+as item 16.
+
+Regression: **12/12 gates pass**, including `smoke-iso-x86` covering both arms.
+An earlier run reporting 12x PASS with **empty gate names** was discarded — the
+shell variable never expanded and every line ran bare `make`. `smoke-iso-x86` is
+now **unexcluded** and assigned to shard 1; `make ci-shard-check` OK, 142 gates
+across 6 shards, 5 excluded with reasons.
