@@ -2329,7 +2329,7 @@ smoke-visual: $(IMG) fat-image sfs-image
 smoke-wmclose: $(IMG) fat-image sfs-image
 	@echo "[wmclose] title + close-button gate: boot(GPU+tablet) + QMP click GAMMA's close box..."
 	@rm -f build/wmclose.log /tmp/pwmclose.sock
-	@ABSX=16190 ABSY=2602 bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_AMBIANCE_OK &
+	@ABSX=16190 ABSY=2602 bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_AMBIANCE_OK PRADYOS_WM_CLOSE &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -2349,7 +2349,7 @@ smoke-wmclose: $(IMG) fat-image sfs-image
 smoke-wmmin: $(IMG) fat-image sfs-image
 	@echo "[wmmin] minimize gate: boot(GPU+tablet) + QMP click B's min box + sendkey r..."
 	@rm -f build/wmmin.log /tmp/pwmmin.sock /tmp/pwmminh.sock
-	@ABSX=5760 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmin.log /tmp/pwmmin.sock PRADYOS_AMBIANCE_OK &
+	@ABSX=5760 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmin.log /tmp/pwmmin.sock PRADYOS_AMBIANCE_OK PRADYOS_WM_MIN &
 	@bash tools/qemu_runner/input_inject.sh build/wmmin.log /tmp/pwmminh.sock PRADYOS_WM_MIN "r" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \

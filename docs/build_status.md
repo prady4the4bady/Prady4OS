@@ -4494,3 +4494,48 @@ so it cannot distinguish a failed click from one that has not landed yet.
 Item 16 is NOT to be reverted on this evidence: it fixed a measured fairness
 defect (48,155 picks against 366 ticks charged) across six hypotheses. Added
 latency in an unpolled UI gate is not itself proof of a scheduler defect.
+
+### Step 1/2 result — instrument repaired; wmclose is a HIT-TEST defect, not latency
+
+`mouse_inject.sh` now polls for the outcome instead of firing five blind clicks
+after a fixed 0.5s settle. Outcome patterns wired into the two pointer gates.
+
+```
+PASS smoke-wmmin    [inject] observed 'PRADYOS_WM_MIN' after 4 click(s)
+FAIL smoke-wmclose  [inject] TIMEOUT — 'PRADYOS_WM_CLOSE' never appeared after 50 click(s)
+FAIL smoke-winops   (no injector at all; guest alive at [hb] t=8500)
+```
+
+**`wmmin` was purely a margin** — four clicks and it responded. The instrument fix
+alone closed it.
+
+**`wmclose` is a genuine non-response**, and the repaired instrument is what
+proves it: 50 clicks over 60s. The old fixed-sleep gate could not have
+distinguished this from slowness.
+
+The cause is NOT latency and NOT input delivery:
+
+```
+23  PRADYOS_MOUSE_OK   input delivered and serviced 23 times
+ 1  PRADYOS_TITLE_OK   windows exist, titles set
+ 0  PRADYOS_WM_CLOSE
+```
+
+Every click was received and handled; none hit GAMMA's close box. The gate
+hardcodes `ABSX=16190 ABSY=2602`. Item 16's fair-share pick changed the order in
+which the client's three windows are created, so GAMMA is no longer at those
+pixels.
+
+**Hardcoded coordinates are the spatial equivalent of a fixed sleep** — the same
+"assume instead of observe" defect. The root fix is to derive the close box
+position from the compositor's reported geometry, not to nudge the constants
+until they hit again. Nudging them would leave the gate just as brittle and would
+still not prove the close path works.
+
+`smoke-winops` is client-driven with no injector and already polls with a 90s
+timeout, so it is a third, separate question and must not be lumped in with the
+pointer gates.
+
+**Item 16 is still not implicated in a functional defect.** Changing window
+creation order is a legitimate consequence of fair-share scheduling; a gate that
+depended on the old order was depending on undocumented FIFO behaviour.
