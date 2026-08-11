@@ -143,6 +143,10 @@ struct tcb {
     uint64_t   dbg_v_at_wake;   /* floor at last unblock — H2's signature      */
     uint32_t   dbg_picks;       /* times chosen by the real (FIFO) picker      */
     uint32_t   dbg_ticks;       /* ticks charged while running                 */
+    uint32_t   weight;
+    uint64_t   vt_in;
+    uint32_t   dbg_yields;
+    uint32_t   sched_woke;
     struct tcb *blk_wait_next;  /* DDR-878: intrusive FIFO link for virtio-blk's
                                  * slot wait list. Separate from rq_next because a
                                  * thread waiting for a request slot is BLOCKED and

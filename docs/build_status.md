@@ -4283,3 +4283,36 @@ the BIOS arm rot while the suite looked green.
 
 Next measurement: print `DL` from stage1 under the ISO — one byte settles whether
 SeaBIOS engaged hard-disk emulation at all.
+
+## Group 3 item 16 — CFS + AI hint lane SHIPPED (DDR-904)
+
+**Cause: placement was never running.** Measured during a failing boot,
+`g_vr_per_tick` was **0 for the first 4,097 `sched_place()` calls** — the rate was
+sampled as an instantaneous floor delta between two ticks, and on the idle
+single-CPU system `smoke-shell` becomes, that delta is frequently zero. Every
+guard from the four previous attempts lives *behind* that early return: they were
+correct and never reached, which is why each measured zero effect.
+
+Fix: seed the rate from the **first real charge** — non-zero as soon as anything
+has run, and in the right units by construction because it *is* a charge.
+
+**A Heisenbug was caught before being believed.** The instrumented build passed
+0/5, but `sched_place()` runs under the runqueue lock with IRQs off and `kputs`
+there perturbs the timing under test. Diagnostics removed, re-run: **still 0/5**.
+Only then was it real.
+
+| Configuration | smoke-shell |
+|---|---|
+| baseline (control) | 0/5 |
+| one-sided clamp | 5/5 FAIL |
+| derived clamp | 4/5 FAIL |
+| two-sided credit | 5/5 FAIL |
+| **rate seeded, no diagnostics** | **0/5** |
+
+**Full 18-gate regression green**, including all nine gates this item previously
+broke. Six hypotheses; five refuted by measurement; three genuine defects fixed
+en route. Lesson: verifying a code path *executes* belongs before verifying what
+it does.
+
+Not claimed: the sleeper-credit branch shows `credit=0` — correct and bounded,
+but unexercised by current gates.

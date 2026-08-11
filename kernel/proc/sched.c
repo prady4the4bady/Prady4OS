@@ -103,9 +103,51 @@ static struct rq g_rq[PERCPU_MAX];
  * two CPUs pop and double-run one kernel stack (heap corruption/double free) —
  * both observed in CI. The loser simply no-ops: the winner's queue holds the
  * thread, findable by that CPU's pick or any steal. */
+static uint64_t g_dbg_floor;
+static uint64_t g_vr_per_tick;
+static uint64_t g_vr_last_tick;
+
+/* DDR-904 MEASUREMENT: does sched_place() ever actually run?
+ *
+ * Hypothesis 6: g_vr_per_tick is sampled as an instantaneous per-tick delta of
+ * the floor. On a largely idle single-CPU system - which is what smoke-shell
+ * becomes once boot finishes - that delta is frequently zero, so the rate may
+ * never establish and the early return disables placement ENTIRELY. That would
+ * explain why guards 1, 2 and the two-sided fix all measured zero effect: every
+ * one of them lives behind this return.
+ *
+ * Counted, not fixed. Printed sparsely so it lands in the shell gate's own
+ * serial log without evicting other markers (DDR-790). */
+static uint64_t g_place_calls;
+static uint64_t g_place_zero;     /* early return: NO placement happened      */
+static uint64_t g_place_lift;
+static uint64_t g_place_credit;
+
+static void sched_place(struct tcb *t) {
+    /* No printing here: this runs under the runqueue lock with IRQs off, and
+     * serial output at that point perturbs exactly the timing under test. The
+     * instrumented build passed 5/5 purely because of it — a Heisenbug, not a
+     * fix. Counters only. */
+    uint64_t lag = g_vr_per_tick;
+    g_place_calls++;
+    if (!lag) {
+        g_place_zero++;
+        return;
+    }
+    if (t->dbg_vruntime + lag < g_dbg_floor) {
+        t->dbg_vruntime = g_dbg_floor - lag;
+        g_place_lift++;
+    } else if (t->sched_woke && t->dbg_vruntime > g_dbg_floor) {
+        t->dbg_vruntime = g_dbg_floor;
+        g_place_credit++;
+    }
+    t->sched_woke = 0;
+}
+
 static void rq_push(int cpu, struct tcb *t) {
     if (__atomic_exchange_n(&t->rq_on, 1, __ATOMIC_ACQ_REL))
         return;                        /* already queued somewhere — one queue only */
+    sched_place(t);
     struct rq *q = &g_rq[cpu];
     uint64_t fl = spin_lock_irqsave(&q->lock);
     t->rq_next = 0;
@@ -168,18 +210,31 @@ static struct sched_trace_ent g_trace[SCHED_TRACE_N];
 static uint32_t g_trace_n;              /* entries written (saturating)     */
 static uint32_t g_trace_diverge;        /* count of FIFO != fair            */
 static uint64_t g_trace_first_div_tick; /* first disagreement, 0 = none yet */
-static uint64_t g_dbg_floor;            /* shadow of a CFS min-vruntime     */
+/* defined above rq_push */
 
-/* Shadow charge. Writes dbg_vruntime; nothing reads it for a decision. */
+static inline uint64_t sched_rdtsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static void sched_charge_elapsed(struct tcb *t) {
+    if (!t || !t->vt_in)
+        return;
+    uint64_t now = sched_rdtsc();
+    uint64_t d   = (now > t->vt_in) ? (now - t->vt_in) : 0;
+    t->vt_in = now;
+    uint32_t w = t->weight ? t->weight : 1024u;
+    t->dbg_vruntime += ((d >> 10) * 1024u) / w;
+    if (t->dbg_vruntime > g_dbg_floor)
+        g_dbg_floor = t->dbg_vruntime;
+}
+
 static void sched_dbg_charge(struct tcb *t, uint64_t ticks) {
     if (!t)
         return;
     t->dbg_ticks += (uint32_t)ticks;
-    t->dbg_vruntime += ticks * 1024u;   /* weight 1024 for every thread here:
-                                         * weights are not the variable under
-                                         * test, entry position is */
-    if (t->dbg_vruntime > g_dbg_floor)
-        g_dbg_floor = t->dbg_vruntime;
+    sched_charge_elapsed(t);
 }
 
 /* What a fair picker WOULD choose from this queue. Pure observation: it does
@@ -197,6 +252,19 @@ static struct tcb *fair_candidate(struct rq *q, uint32_t *depth_out) {
     if (depth_out)
         *depth_out = depth;
     return best;
+}
+
+static struct tcb *rq_unlink(struct rq *q, struct tcb *want) {
+    struct tcb *prev = 0, *c = q->head;
+    while (c && c != want) { prev = c; c = c->rq_next; }
+    if (!c)
+        return 0;
+    if (prev) prev->rq_next = c->rq_next;
+    else      q->head       = c->rq_next;
+    if (q->tail == c) q->tail = prev;
+    c->rq_next = 0;
+    __atomic_store_n(&c->rq_on, 0, __ATOMIC_RELEASE);
+    return (c->state == THREAD_READY) ? c : 0;
 }
 
 static void sched_trace_note(struct tcb *chosen, struct tcb *fair,
@@ -244,9 +312,10 @@ static struct tcb *rq_pop(int cpu) {
      * comparison would be against a different set. */
     uint32_t depth = 0;
     struct tcb *fair = fair_candidate(q, &depth);
-    struct tcb *t = rq_take(q);
+    struct tcb *t = fair ? rq_unlink(q, fair) : rq_take(q);
     if (t) {
         t->dbg_picks++;
+        t->vt_in = sched_rdtsc();
         sched_trace_note(t, fair, depth, (uint32_t)cpu);
     }
     spin_unlock_irqrestore(&q->lock, fl);
@@ -589,6 +658,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->rq_on = 0;
     /* DDR-895: creation-time snapshot. H2 predicts probe threads enter FAR
      * BELOW the floor; H1 predicts entry position is irrelevant. */
+    t->weight          = 1024u;
+    t->vt_in           = 0;
+    t->dbg_yields      = 0;
+    t->sched_woke      = 0;
     t->dbg_vruntime    = g_dbg_floor;
     t->dbg_v_at_create = g_dbg_floor;
     t->dbg_v_at_wake   = 0;
@@ -961,7 +1034,13 @@ void sched_tick(void) {
     if (!current_thread)
         return;                    /* scheduler not up yet */
     current_thread->run_ticks++;   /* DDR-735: sampled CPU time (this CPU owns it) */
-    sched_dbg_charge(current_thread, 1);   /* DDR-895: shadow only, never read */
+    sched_dbg_charge(current_thread, 1);
+    {
+        uint64_t d = (g_dbg_floor > g_vr_last_tick) ? (g_dbg_floor - g_vr_last_tick) : 0;
+        g_vr_last_tick = g_dbg_floor;
+        if (d)
+            g_vr_per_tick = g_vr_per_tick ? ((g_vr_per_tick * 3 + d) / 4) : d;
+    }
     if (current_thread->quantum > 0)
         current_thread->quantum--;
     if (current_thread->quantum == 0) {
@@ -973,6 +1052,8 @@ void sched_tick(void) {
 void yield(void) {
     if (!current_thread)
         return;
+    sched_charge_elapsed(current_thread);
+    current_thread->dbg_yields++;
     current_thread->quantum = current_thread->quantum_reset;
     schedule();
 }
@@ -982,6 +1063,8 @@ void yield(void) {
 void sched_block(void) {
     if (!current_thread)
         return;
+    sched_charge_elapsed(current_thread);
+    current_thread->dbg_yields++;
     current_thread->state = THREAD_BLOCKED;
     schedule();                    /* switch away; returns when unblocked + run */
 }
@@ -1014,6 +1097,7 @@ void sched_unblock(struct tcb *t) {
      * a thread that wakes far below the floor leapfrogs everything regardless of
      * how much it has already run. */
     t->dbg_v_at_wake = g_dbg_floor;
+    t->sched_woke = 1;
     uint32_t expected = THREAD_BLOCKED;
     if (__atomic_compare_exchange_n(&t->state, &expected, THREAD_READY,
                                     0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
