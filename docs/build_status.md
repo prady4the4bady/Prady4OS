@@ -4657,3 +4657,42 @@ f59bbb7 is also still live and is distinguished by the same instrumentation.
 
 **Item 16 remains unconnected**, and the `bd58545` reproduction is still the
 outstanding decisive test.
+
+### Reap hypothesis REFUTED by code inspection
+
+`surface_reap_pid` (`kernel/syscall/sys_surface.c:336`) checks ownership:
+
+```c
+int live = (s->used && s->owner_pid == pid) ? (surf_take_free(s, &phys, &order), 1) : 0;
+```
+
+Only surfaces whose `owner_pid` matches the exiting process are freed, and the
+sole caller (`sched.c:1147`) passes `current_thread->pid` under `is_user`. There
+is **no missing ownership check**, so this is not item 15's
+verify-before-acting defect class one layer down. The timing correlation did not
+survive contact with the code — which is why the second confirmation was
+required before concluding.
+
+**Three candidates remain, none yet measured:**
+
+1. **Compositor start ordering.** The compositor's render block only runs when
+   `ns != composited`. `surfacetest` creates C, then closes it after a delay by
+   design. If the compositor's *first* poll happens after that close, C is never
+   seen and `ns` goes straight 0 -> 2. This is the only candidate with a
+   plausible link to item 16, since fair-share scheduling changes when the
+   compositor first runs relative to its clients.
+2. **`owner_pid` mismatch** — PID reuse or a thread/process id confusion making a
+   legitimate check free the wrong slot.
+3. **Commit-path** (`f59bbb7`) — still live, though `make_window` calls
+   `SYS_SURFACE_COMMIT` for all three windows identically.
+
+**The measurement that separates all three** is one instrumented run logging, with
+timestamps: every `g_surf[i].committed = 1` (id, pid), every destroy (id,
+owner_pid, caller_pid, reason), and each compositor poll result (`ns`). Candidate
+1 shows C created and destroyed before the first poll; candidate 2 shows a
+destroy whose caller_pid differs from owner_pid; candidate 3 shows no commit for
+id=2.
+
+Candidate 1 makes the outstanding `bd58545` reproduction more important, not
+less: it is the only thing that can show whether item 16 moved the compositor's
+first poll.
