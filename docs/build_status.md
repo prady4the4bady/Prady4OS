@@ -4580,3 +4580,40 @@ involved at all. **Not yet known; not to be guessed.**
 
 The geometry work stands on its merits: it removed a genuine assume-don't-observe
 defect and is the instrument that made the real one visible.
+
+### Step B — narrowed: surface 2 is created but NEVER COMMITTED
+
+Neither of the two predicted outcomes. The third surface is **requested AND
+granted**, then never becomes visible to the compositor.
+
+```
+PRADYOS_RESIZE_OK id=2        <- surface 2 exists in the kernel and resized fine
+PRADYOS_SURFACE_OK 0
+PRADYOS_SURFACE_OK 1          <- but only 0 and 1 are ever composited
+```
+
+Not a client-side omission (surfacetest calls `make_window` then SET_TITLE
+"GAMMA"), and not a kernel refusal (id=2 was allocated and resized).
+
+Not a table limit either: the compositor polls for up to 16
+(`surfs[16]`, `SYS_SURFACE_POLL(..., 16, 0)`), so the cap is not binding.
+
+The filter is in `kernel/syscall/sys_surface.c:184`:
+
+```c
+if (g_surf[i].used && g_surf[i].committed) {
+```
+
+**Surface 2 is `used` but not `committed`**, so `SYS_SURFACE_POLL` omits it, the
+compositor never learns it exists, and no close box is ever drawn or emitted for
+it. `sys_surface_resize` is documented (line 349) as *keeping* the committed
+flag, so resize is not the eraser.
+
+**Next measurement, not yet taken:** whether `make_window` in `user/surfacetest.c`
+commits C at all, and if it does, whether that commit is refused or lost. That is
+one read of the helper plus one instrumented run.
+
+**Item 16 still has no established connection.** The `bd58545` reproduction has
+not been run and remains the decisive test for whether this predates item 16 — it
+is very likely latent and previously unexercised, since no gate before this
+instrumentation ever verified a third surface reached the compositor.
