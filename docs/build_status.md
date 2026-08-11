@@ -4878,3 +4878,48 @@ deliberately never raised, which makes an unraised-window skip the first thing t
 check. Read the loop before instrumenting.
 
 **Not shipped.** No CI run ID; `main` unmoved.
+
+### wmclose: the handshake closed C too FAST — a conflict the tick count was hiding
+
+Ordering from `build/wmclose.log`:
+
+```
+371: PRADYOS_CLOSE_OK id=2      surfacetest closes C
+372: PRADYOS_ZORDER 0 1 2       compositor composites all three
+375: PRADYOS_WM_GEOM id=2 GAMMA geometry emitted
+380: PRADYOS_ZORDER 0 1         C already gone
+383: PRADYOS_SURFACE_GONE n=2
+```
+
+The dispatch loop is **not** at fault — it hit-tests every non-minimised surface
+top-down with no focus or raise skip, so the "GAMMA is never raised" hypothesis
+is refuted by code. Coordinates are exact: TITLEBAR=18, close box y 55..67 inside
+the title bar 52..70, and 16207,2605 round-trips to (506,61) at 1024x768.
+
+**The defect is that C no longer lives long enough to be clicked.** The
+handshake closes it the moment the compositor first composites it.
+
+`ticks > 12000` was silently doing **two** jobs:
+
+1. waiting until the compositor had composited the 3-set (its documented purpose,
+   now correctly replaced by the COMPOSITED event), and
+2. incidentally leaving a window in which `smoke-wmclose`'s click could land.
+
+Job 2 was never stated anywhere. Removing the counter removed it.
+
+**Two gates need opposite things from one client.** `smoke-winops` needs C closed
+*by the client* (`PRADYOS_CLOSE_OK` + `PRADYOS_SURFACE_GONE`); `smoke-wmclose`
+needs C to persist so the *compositor* can close it on a click
+(`PRADYOS_WM_CLOSE id=`). A surface can only be closed once.
+
+**Fix direction:** after the COMPOSITED event, C must remain alive for a bounded
+grace period during which a WM close may arrive; only if none does should
+surfacetest close it itself. Both gates then pass on their own terms.
+
+A grace period here is legitimate and is NOT the defect that was just removed:
+"the compositor has composited C" is an observable event and is now waited on
+properly, whereas "no user click is coming" is only knowable by waiting. The
+grace must still be generous and wall-clock-meaningful rather than a loop count,
+or it reintroduces the same class of race.
+
+Not yet implemented.
