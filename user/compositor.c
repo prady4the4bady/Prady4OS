@@ -897,6 +897,18 @@ int main(void) {
          * raised window is on top, and report the z-order + focused window. */
         struct surface_info surfs[16];
         long ns = nsi(SYS_SURFACE_POLL, (long)surfs, 16, 0);
+        /* DDR-911 MEASUREMENT: the surface count at the compositor's VERY FIRST
+         * poll. If C's whole lifecycle already completed by now, ns is 2 here and
+         * the third window was never observable — that is the loop-iteration race,
+         * confirmed rather than inferred from ZORDER's final state. */
+        {
+            static int first_poll_said;
+            if (!first_poll_said) {
+                first_poll_said = 1;
+                printf("PRADYOS_FIRSTPOLL ns=%ld\n", ns);
+                fflush(stdout);
+            }
+        }
         int cur_focus = -1;
         for (long i = 0; i < ns; i++) if (surfs[i].focused) cur_focus = (int)surfs[i].id;
         focus_id = cur_focus;

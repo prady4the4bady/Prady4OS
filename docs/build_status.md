@@ -4736,3 +4736,43 @@ demonstrably observed it. The correct shape is a readiness handshake — surface
 waits for a compositor-emitted signal that the live set reached 3 before starting
 its close countdown — not a larger tick threshold, which would re-race the same
 defect on faster hardware.
+
+### CONFIRMED (DDR-911): C's lifecycle completes before the compositor's first poll
+
+Instrumented run, artifact `/tmp/attrib.instr.20260811T181358Z.log`, chmod 444
+immediately after the gate exited:
+
+```
+210: PRADYOS_RESIZE_OK id=2     C created
+282: PRADYOS_CLOSE_OK id=2      C closed
+369: PRADYOS_FIRSTPOLL ns=2     compositor's FIRST poll — C already gone
+372: PRADYOS_ZORDER 0 1
+```
+
+`PRADYOS_FIRSTPOLL` reports the surface count at the compositor's very first
+`SYS_SURFACE_POLL`. **ns=2.** The third window is created and destroyed inside a
+window in which nothing can observe it. Candidate 1 confirmed; candidates 2
+(pid mismatch) and 3 (commit path) are both excluded — C is committed (it is
+resized and closed by id) and is destroyed by its own owner for its own reason.
+
+### The race was previously KNOWN and tuned, not fixed
+
+`user/surfacetest.c:121`:
+
+```c
+if (!closed && c >= 0 && ticks > 12000) {   /* close C; set shrinks 3 -> 2
+                                             * (rq-1: yields are cheaper —
+                                             * widened so the compositor
+                                             * composites the 3-set first) */
+```
+
+The comment records that this threshold was **already widened once** to win this
+exact race. So this is not a latent defect that was never exercised: it is a known
+race that was papered over with a larger loop count, and item 16's change to the
+CPU share moved the race back.
+
+That is empirical proof that raising the number buys time and nothing else, and
+it settles the fix: a **readiness handshake**, not another threshold.
+
+**Item 16 is the trigger, not the defect.** A client measuring a duration in loop
+iterations depends on undocumented scheduling behaviour.
