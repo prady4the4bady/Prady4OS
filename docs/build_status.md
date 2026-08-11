@@ -4696,3 +4696,43 @@ id=2.
 Candidate 1 makes the outstanding `bd58545` reproduction more important, not
 less: it is the only thing that can show whether item 16 moved the compositor's
 first poll.
+
+### Candidate 1 supported by code: C's lifetime is a LOOP-ITERATION COUNT
+
+`user/surfacetest.c:121`:
+
+```c
+if (!closed && c >= 0 && ticks > 12000) {   /* close C; set shrinks 3 -> 2 */
+```
+
+`ticks` increments once per pass of surfacetest's polling loop. **C's lifetime is
+therefore measured in loop iterations, not in observed state and not in
+wall-clock.** How long 12,000 iterations takes depends entirely on how much CPU
+surfacetest receives relative to the compositor — which is exactly what item 16's
+fair-share pick changed.
+
+Under FIFO, surfacetest ran slowly enough that C was still alive when the
+compositor first polled. Under fair-share it completes 12,000 iterations sooner
+relative to compositor startup, so C is created *and closed* before the
+compositor's first poll — `ns` goes straight 0 -> 2, C is never composited, no
+close box is ever emitted for GAMMA, and `winops` never sees a shrink because the
+set never grew.
+
+This is the **same defect class as the fixed sleeps and the hardcoded pixels**: a
+fixed count standing in for an observed state. Third instance on this item, third
+axis — time, space, now iteration count.
+
+**Item 16 is the trigger, not the defect.** A client that measures a duration in
+loop iterations is depending on undocumented scheduling behaviour, exactly as the
+hardcoded pixels depended on undocumented creation order.
+
+**Status: strongly supported by code, NOT yet confirmed.** The combined
+instrumented run (commit/destroy/poll timestamps) and the `bd58545` reproduction
+are both still required — the standing bar on this item is a second independent
+measurement, and four hypotheses have already died at exactly this stage.
+
+**Fix direction if confirmed:** C must stay alive until the compositor has
+demonstrably observed it. The correct shape is a readiness handshake — surfacetest
+waits for a compositor-emitted signal that the live set reached 3 before starting
+its close countdown — not a larger tick threshold, which would re-race the same
+defect on faster hardware.
