@@ -4776,3 +4776,41 @@ it settles the fix: a **readiness handshake**, not another threshold.
 
 **Item 16 is the trigger, not the defect.** A client measuring a duration in loop
 iterations depends on undocumented scheduling behaviour.
+
+### SECOND CONFIRMATION (bd58545) — item 16 moved the timing; defect is pre-existing
+
+Identical instrumentation, identical gate, opposite outcome. Tree verified as
+bd58545 (item 16 and item 48 both absent) before building; the patch applied only
+the measurement, no behaviour change.
+
+```
+bd58545                            HEAD
+217: RESIZE_OK id=2                210: RESIZE_OK id=2
+253: PRADYOS_FIRSTPOLL ns=3        282: CLOSE_OK  id=2
+256: PRADYOS_ZORDER 0 1 2          369: PRADYOS_FIRSTPOLL ns=2
+268: PRADYOS_ZORDER 0 1            372: PRADYOS_ZORDER 0 1
+393: CLOSE_OK id=2
+gate rc=0 (PASS)                   gate FAIL
+```
+
+At `bd58545` the compositor's first poll sees **three** surfaces, composites all
+three (`ZORDER 0 1 2`), then observes a genuine shrink. At HEAD C is already
+closed before the first poll ever happens.
+
+**Root cause is now fact, not hypothesis** — two independent measurements agree.
+
+- The **defect** is `surfacetest.c:121`: a close countdown measured in loop
+  iterations (`ticks > 12000`) rather than in observed state. Pre-existing.
+- The **trigger** is item 16: fair-share pick changed surfacetest's CPU share
+  relative to the compositor, so those iterations now complete before the
+  compositor's first poll.
+- Item 16 is **not defective**. The comment at that line records the threshold was
+  already widened once to win this same race, which is proof that a larger number
+  postpones it rather than fixing it.
+
+**Fix (next atomic step):** a readiness handshake. The compositor already has a
+client event channel (`SYS_SURFACE_SENDEV` / `SYS_SURFACE_GETEV`, DDR-718) that
+surfacetest already uses for resize requests. The compositor sends the owner an
+event the first time it composites a surface; surfacetest waits for that event on
+C before starting any close countdown. No new syscall, and the race is eliminated
+structurally rather than out-waited.
