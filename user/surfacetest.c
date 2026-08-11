@@ -83,6 +83,7 @@ int main(void) {
         fflush(stdout);
     }
 
+    unsigned ticks = 0;
     int closed = 0;
     for (;;) {
         long ka = nsi(SYS_SURFACE_GETKEY, a, 0, 0);
@@ -116,29 +117,15 @@ int main(void) {
             }
         }
 
-        /* DDR-911: close C only once the compositor has DEMONSTRABLY composited
-         * it (surf_event type 3), so the live set is observed at 3 before it
-         * shrinks to 2.
-         *
-         * This replaced `ticks > 12000`, which measured a duration in loop
-         * iterations — a scheduling-dependent quantity. Item 16's fair-share
-         * pick changed this process's CPU share and C began dying before the
-         * compositor's first poll ever ran (measured: FIRSTPOLL ns=2 at HEAD
-         * vs ns=3 at bd58545). The threshold had already been widened once for
-         * this same race, which is proof that a bigger number postpones it
-         * rather than fixing it.
-         *
-         * There is deliberately NO tick fallback. A fallback would reintroduce
-         * the identical race on faster hardware. */
-        if (!closed && c >= 0) {
-            struct surf_event cev;
-            cev.type = 0;
-            if (nsi(SYS_SURFACE_GETEV, c, (long)&cev, 0) == 0 && cev.type == 3) {
-                nsi(SYS_SURFACE_CLOSE, c, 0, 0);
-                printf("PRADYOS_CLOSE_OK id=%ld\n", c);
-                fflush(stdout);
-                closed = 1;
-            }
+        ticks++;
+        if (!closed && c >= 0 && ticks > 12000) {           /* close C; set shrinks 3 -> 2
+                                                             * (rq-1: yields are cheaper —
+                                                             * widened so the compositor
+                                                             * composites the 3-set first) */
+            nsi(SYS_SURFACE_CLOSE, c, 0, 0);
+            printf("PRADYOS_CLOSE_OK id=%ld\n", c);
+            fflush(stdout);
+            closed = 1;
         }
         nsi(SYS_YIELD, 0, 0, 0);
     }

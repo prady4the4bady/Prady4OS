@@ -4923,3 +4923,51 @@ grace must still be generous and wall-clock-meaningful rather than a loop count,
 or it reintroduces the same class of race.
 
 Not yet implemented.
+
+### REVERTED 3a4878c — the handshake broke smoke-shell deterministically
+
+Isolation run, tree verified as `3a4878c` (handshake present, grace period
+absent):
+
+```
+verified: tree is 3a4878c — handshake only, no grace period
+FAIL smoke-shell   [shell] FAIL: kill %n did not reject an unknown job (DDR-881)
+PASS smoke-winops
+```
+
+`smoke-shell` passed at `b7e955b` and fails at `3a4878c`, so the handshake commit
+is the cause. It is reverted rather than shipped, per the standing rule.
+
+**Three hypotheses for the shell failure, all refuted by measurement:**
+
+| Hypothesis | Refuted by |
+|---|---|
+| serial-log eviction from `PRADYOS_WM_GEOM` | log ends mid-feed at `fg: usage`; nothing evicted, the feed never reached `kill %99` |
+| grace-period duration | fails identically at `GRACE_SECS` 4 **and** 1 |
+| C never closing (no GPU -> event never fires) | fails with `LIVENESS_SECS=8` too |
+
+`smoke-shell` has **no virtio-gpu**, so nothing composites and the COMPOSITED
+event cannot arrive there — that observation is solid and is the most likely
+ingredient, but the precise mechanism connecting it to prism's `kill %99` is
+**not established**, and no fix should be attempted until it is.
+
+**`LIVENESS_SECS=8` was itself a bad fix and is gone.** Measured from C's
+creation, it expired before the compositor's first composite during boot, so C
+died before being seen and it broke `wmclose`, `winops` and `wmorder` — three
+gates that had been passing. The constant was picked without measuring how long
+boot takes to reach the first poll: the same unmeasured-constant mistake as
+DDR-895's clamp.
+
+**What the revert costs and what it restores.** `winops`/`wmclose` return to
+failing as they were before this slice; `smoke-shell` returns to passing. That is
+strictly better than the current state, where all four fail.
+
+**What survives the revert** (independently correct, not part of the regression):
+`tools/ci/sentinel_collision.sh` and the `PRADYOS_WM_GEOM` rename discipline.
+
+**The confirmed root cause of the ORIGINAL defect stands and is not withdrawn:**
+`surfacetest` closed C on a loop-iteration count, and item 16's fair-share pick
+changed the CPU share so C died before the compositor's first poll (measured:
+`FIRSTPOLL ns=2` at HEAD vs `ns=3` at `bd58545`). A readiness handshake remains
+the right design; this implementation of it also broke a headless gate, and that
+interaction must be understood before the next attempt.
