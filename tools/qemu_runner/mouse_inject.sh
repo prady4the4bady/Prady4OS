@@ -33,6 +33,7 @@ for _ in $(seq 1 600); do
 done
 
 SOCK="$sock" LOGFILE="$log" EXPECT="$expect" \
+GEOM_TITLE="${GEOM_TITLE:-}" GEOM_FIELD="${GEOM_FIELD:-close}" \
 ABSX="${ABSX:-16000}" ABSY="${ABSY:-12000}" \
 INJECT_TIMEOUT_S="${INJECT_TIMEOUT_S:-60}" python3 - <<'PY'
 import os, socket, json, time
@@ -42,6 +43,8 @@ logfile  = os.environ["LOGFILE"]
 expect   = os.environ.get("EXPECT", "")
 ax       = int(os.environ.get("ABSX", "16000"))
 ay       = int(os.environ.get("ABSY", "12000"))
+geom_title = os.environ.get("GEOM_TITLE", "")
+geom_field = os.environ.get("GEOM_FIELD", "close")
 deadline = time.monotonic() + float(os.environ.get("INJECT_TIMEOUT_S", "60"))
 
 s = None
@@ -69,6 +72,39 @@ def cmd(obj):
 cmd({"execute": "qmp_capabilities"})
 
 
+def resolve_geometry():
+    """DDR-910: take the click target from what the compositor SAYS it drew.
+
+    The gate used to hardcode pixels, which silently encoded the window creation
+    order. Fair-share scheduling is free to change that order, and when item 16
+    did, every click landed on empty space while the input path worked perfectly
+    (23x PRADYOS_MOUSE_OK, zero PRADYOS_WM_CLOSE). Reading the emitted geometry
+    removes the assumption instead of re-tuning it.
+    """
+    global ax, ay
+    if not geom_title:
+        return True
+    try:
+        with open(logfile, "r", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return False
+    for ln in reversed(lines):                 # newest wins: layout can change
+        if "PRADYOS_WM_CLOSEBOX" not in ln or ("title=" + geom_title) not in ln:
+            continue
+        for tok in ln.split():
+            if tok.startswith(geom_field + "="):
+                try:
+                    nx, ny = tok.split("=", 1)[1].split(",")
+                    ax, ay = int(nx), int(ny)
+                except ValueError:
+                    return False
+                print("[inject] geometry for %s: %s=%d,%d"
+                      % (geom_title, geom_field, ax, ay))
+                return True
+    return False
+
+
 def observed():
     """Has the guest acted on the click yet? Empty pattern == nothing to wait for."""
     if not expect:
@@ -93,6 +129,16 @@ def click():
         {"type": "btn", "data": {"button": "left", "down": False}},
     ]}})
 
+
+# Resolve the target BEFORE the first click. Never fall back to a default pixel:
+# clicking a guessed coordinate is precisely the defect being removed here.
+if geom_title:
+    while not resolve_geometry():
+        if time.monotonic() >= deadline:
+            print("[inject] TIMEOUT — no PRADYOS_WM_CLOSEBOX for title=%s"
+                  % geom_title)
+            raise SystemExit(0)
+        time.sleep(0.2)
 
 rounds = 0
 while True:

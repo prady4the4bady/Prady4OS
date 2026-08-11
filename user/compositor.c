@@ -101,6 +101,21 @@ static void put_px(unsigned x, unsigned y, unsigned char b, unsigned char gg, un
     p[0] = b; p[1] = gg; p[2] = r; p[3] = 0xFF;
 }
 
+/* DDR-910: screen pixel -> virtio-tablet absolute (0..32767). The scaling lives
+ * HERE, in the only code that knows the framebuffer size, so a gate never has to
+ * duplicate the mapping and get it wrong a second way. */
+static int tab_x(int px) {
+    unsigned w = g_fi.width > 1 ? g_fi.width - 1 : 1;
+    if (px < 0) px = 0;
+    return (int)((long)px * 32767L / (long)w);
+}
+
+static int tab_y(int py) {
+    unsigned h = g_fi.height > 1 ? g_fi.height - 1 : 1;
+    if (py < 0) py = 0;
+    return (int)((long)py * 32767L / (long)h);
+}
+
 static void fill_rect(unsigned x0, unsigned y0, unsigned w, unsigned h,
                       unsigned char b, unsigned char gg, unsigned char r) {
     for (unsigned y = y0; y < y0 + h; y++)
@@ -898,6 +913,23 @@ int main(void) {
                 printf("PRADYOS_ZORDER");
                 for (long i = 0; i < ns; i++) printf(" %u", surfs[i].id);
                 printf("\n");
+            }
+            /* DDR-910: publish the close/min box centres in TABLET coordinates, so a
+             * gate clicks what the compositor actually drew rather than a hardcoded
+             * pixel. These are the SAME expressions draw_window uses for the boxes
+             * themselves — one source of truth, so the emitted target cannot drift
+             * from what the hit-test accepts. A gate that hardcoded coordinates was
+             * depending on window creation order, which fair-share scheduling is
+             * free to change (item 16). */
+            for (long gi = 0; gi < ns; gi++) {
+                int gty = surfs[gi].y - TITLEBAR; if (gty < 0) gty = 0;
+                int gtx = surfs[gi].x < 0 ? 0 : surfs[gi].x;
+                int gcx = gtx + (int)surfs[gi].w - CLOSEBOX - 4 + CLOSEBOX / 2;
+                int gmx = gtx + (int)surfs[gi].w - 2 * CLOSEBOX - 6 + CLOSEBOX / 2;
+                int gby = gty + 3 + CLOSEBOX / 2;
+                printf("PRADYOS_WM_CLOSEBOX id=%u title=%s close=%d,%d min=%d,%d\n",
+                       surfs[gi].id, surfs[gi].title[0] ? surfs[gi].title : "-",
+                       tab_x(gcx), tab_y(gby), tab_x(gmx), tab_y(gby));
             }
             for (long i = composited; i < ns; i++)
                 printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);

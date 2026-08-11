@@ -4539,3 +4539,44 @@ pointer gates.
 **Item 16 is still not implicated in a functional defect.** Changing window
 creation order is a legitimate consequence of fair-share scheduling; a gate that
 depended on the old order was depending on undocumented FIFO behaviour.
+
+### Step A result — geometry emission works; the real defect is a MISSING THIRD SURFACE
+
+`PRADYOS_WM_CLOSEBOX` now publishes each window's close/min box centre in tablet
+coordinates, computed with the same expressions `draw_window` uses. The injector
+resolves its target from that line and refuses to fall back to a guessed pixel.
+
+```
+PASS smoke-wmmin    [inject] observed 'PRADYOS_WM_MIN' after 4 click(s)
+FAIL smoke-wmclose  [inject] TIMEOUT — no PRADYOS_WM_CLOSEBOX for title=GAMMA
+```
+
+The emission itself is correct and complete:
+
+```
+PRADYOS_WM_CLOSEBOX id=0 title=ALPHA close=4932,3887 min=4484,3887
+PRADYOS_WM_CLOSEBOX id=1 title=BETA  close=6213,5596 min=5765,5596
+```
+
+**Only two surfaces exist. GAMMA is never created.** The hardcoded 16190,2602 was
+pointing at a window that does not exist, which is why 50 clicks changed nothing
+while input worked perfectly (23x `PRADYOS_MOUSE_OK`).
+
+**The creation-order hypothesis was wrong.** The order did not change; the third
+window is absent. Recorded because the wrong hypothesis was stated confidently in
+DDR-910 and in the previous commit message.
+
+**This unifies Step A and Step B.** `smoke-winops` drives surfacetest to create
+window C, resize it, then close it, and waits for `PRADYOS_SURFACE_GONE` when the
+live set shrinks. If C is never created the set never shrinks and the sentinel
+never fires. **wmclose and winops have ONE root cause: the third surface is never
+created.** `smoke-wmmin` needs only ALPHA/BETA and is unaffected — which is
+exactly why it passes.
+
+This is a real userspace/kernel defect, not a gate defect. Next measurement:
+whether surfacetest requests the third surface and is refused, or never requests
+it — and whether this reproduces at `bd58545`, which decides if item 16 is
+involved at all. **Not yet known; not to be guessed.**
+
+The geometry work stands on its merits: it removed a genuine assume-don't-observe
+defect and is the instrument that made the real one visible.
