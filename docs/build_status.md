@@ -5071,3 +5071,53 @@ the bisect proved none is needed.
 It reports FAIL when run *after* a build, because make is then legitimately up to
 date. It is only meaningful **before** building. Run it after syncing and before
 `make`; running it afterwards is a false alarm.
+
+## STANDING RULE (DDR-913): "local green" is meaningless unless the gate set is CI-derived
+
+Three times in one session "18/18 green locally" was reported while CI was red.
+Each number was true and carried no information: the eighteen were **chosen by
+hand** and excluded the gates that were failing. `make ci-shard-check` proves
+every Makefile gate is *assigned* to a shard; nothing proved the gates run
+locally matched the gates CI *executes*.
+
+`tools/ci/local_regression.sh` closes that by construction — it derives its list
+from `tools/ci/gate_shards.txt`, the same file the CI matrix reads.
+
+```
+bash tools/ci/local_regression.sh            # all 143 gates CI runs
+bash tools/ci/local_regression.sh --shard 0  # one shard (21 gates)
+bash tools/ci/local_regression.sh --list     # print the set, run nothing
+```
+
+It runs `build_freshness.sh --fix` **before** building (the only point at which
+that check means anything, per DDR-912) and prints the coverage fraction, so a
+partial run states plainly that it is not CI-equivalent.
+
+**No claim of CI equivalence may be made from a hand-assembled list, ever again.
+"Shipped" requires a terminal CI run ID on the exact SHA — not a local number.**
+
+### A limit on "the complete failure set", stated honestly
+
+A CI shard runs its gates via `make` and **stops at the first failure**. So one
+red run reveals only the FIRST failing gate per shard, never the full set. The
+complete failure list is therefore not knowable from a single run: it can only be
+approached iteratively — fix what is visible, re-run, see what surfaces next.
+
+Known red on `23755ad` (one per failing shard, so a lower bound, not a total):
+
+| Shard | Gate | Failure |
+|---|---|---|
+| 0 | `smoke-shell` | `kill %n did not reject an unknown job (DDR-881)` |
+| 2 | `smoke-agents` | `required pattern 'AGENT KRYOS active' not found` |
+| 4 | `smoke-actiondag` | `agent never published the action ids rc=0` |
+| 5 | `smoke-cadence` | `no full auto cycle` |
+
+Shards 1 and 3 passed, so those two are genuinely clean end to end.
+
+Compared with the previous run (`788d730`: `smoke-agents`, `smoke-shell`,
+`smoke-winops`, `smoke-wmclose`), **`winops` and `wmclose` are fixed in real CI**
+— the WM work landed. `smoke-agents` was red before any of it and remains so.
+
+`smoke-shell` passes 2/2 in a freshness-verified clean room but fails on the CI
+runner: same SHA, opposite results, so an environment difference rather than the
+source. Not yet diagnosed.
