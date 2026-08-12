@@ -5121,3 +5121,62 @@ Compared with the previous run (`788d730`: `smoke-agents`, `smoke-shell`,
 `smoke-shell` passes 2/2 in a freshness-verified clean room but fails on the CI
 runner: same SHA, opposite results, so an environment difference rather than the
 source. Not yet diagnosed.
+
+## EXHAUSTIVE GATE SWEEP on 23755ad — 143/143 coverage, 140 pass, 3 fail
+
+`local_regression.sh` invokes make once **per gate**, so a failure never aborts
+the sweep. That is what yields a complete list rather than CI's first-failure-
+per-shard lower bound — `make -k` was not needed.
+
+```
+=== local-regression: ran 143 of 143 CI gates (100% coverage) ===
+FAILED: smoke-agents smoke-rqstress smoke-actiondag
+```
+
+### Cross-referenced against CI's four
+
+| Gate | Local | CI | Reading |
+|---|---|---|---|
+| `smoke-agents` | FAIL | FAIL | **real defect**, reproducible |
+| `smoke-actiondag` | FAIL | FAIL | **real defect**, reproducible |
+| `smoke-rqstress` | FAIL | PASS | local-environment only |
+| `smoke-shell` | PASS | FAIL | CI-environment only |
+| `smoke-cadence` | PASS | FAIL | CI-environment only |
+
+**`smoke-shell` is not a source defect.** It passes inside a 143-gate,
+freshness-verified sweep on the same SHA that fails in CI. Every hypothesis
+tonight that treated it as a code problem was chasing an environment difference.
+
+**The "three agent gates share one cause" hunch is partly wrong.** `cadence`
+passes locally, so it does not share a mechanism with `agents`/`actiondag`.
+Recorded because it was stated as a suspicion and the sweep refuted half of it.
+
+### The two real defects, both pre-dating tonight's work
+
+`smoke-agents` — requires `AGENT KRYOS active`; the roster prints the other three
+and never that line, while the panel reports `AGENT_PANEL KRYOS act=1 disp=1`.
+So KRYOS *is* active and the **roster listing** omits it. Not a liveness bug —
+a reporting one.
+
+```
+AGENT RUFLO inactive / AGENT HERMES inactive / AGENT SOLIN inactive
+PRADYOS_AGENTS_OK
+AGENT_PANEL KRYOS act=1 disp=1
+```
+
+`smoke-actiondag` — the agent spawns and then publishes nothing:
+
+```
+[user] action-DAG agent spawned
+[user] action-DAG sovereign spawned
+ACTIONDAG FAIL: agent never published the action ids rc=0
+```
+
+Both are agent-subsystem and both were red at `788d730`, before any WM work.
+Neither is caused by this session's changes.
+
+### Net effect of this session on the CI suite
+
+`smoke-winops` and `smoke-wmclose` went red -> green in real CI. No gate that was
+passing has regressed. Remaining red is three pre-existing defects plus two
+environment divergences.
