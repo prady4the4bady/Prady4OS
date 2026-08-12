@@ -5029,3 +5029,45 @@ isolated-tree runs, each created fresh by `git archive` overlay. That includes
 the confirmed root cause (`FIRSTPOLL ns=2` at HEAD vs `ns=3` at `bd58545`).
 Items 48 and 49 also stand: both were proven by direct serial output, not by
 differential gate results.
+
+## DDR-911 RESOLVED — handshake exonerated, grace period added, five gates green
+
+### The clean-room bisect (fresh directory per commit)
+
+```
+                    shell    wmclose  wmmin  winops  wmorder
+b7e955b baseline    PASS x2  FAIL     PASS   FAIL    (absent)
+2579704 injector    PASS x2  FAIL     PASS   FAIL    (absent)
+f29fa5e geometry    PASS x2  FAIL     PASS   FAIL    (absent)
+3a4878c handshake   PASS x2  FAIL     PASS   PASS    PASS
+```
+
+**`smoke-shell` passes at every commit, including the handshake.** `3a4878c`
+never broke it. The revert `e3e8692` rested on stale-build evidence and is
+discarded; `LIVENESS_SECS=8` was a reaction to the same artifact and is not
+reinstated. The handshake is a strict improvement: it fixes `winops` and adds a
+passing `wmorder`.
+
+`wmclose` failed at the **baseline** too, so it was pre-existing, not a
+regression — and its cause was the one diagnosis never contaminated, because it
+came from log ordering rather than differential gates: C closed on first
+composite, leaving no window for the click.
+
+### Final state, clean-room verified
+
+```
+PASS smoke-shell x2
+PASS smoke-wmclose   observed 'PRADYOS_WM_CLOSE id=' after 2 click(s)
+PASS smoke-wmmin     observed 'PRADYOS_WM_MIN' after 5 click(s)
+PASS smoke-winops
+PASS smoke-wmorder
+```
+
+`GRACE_SECS=4` on a real clock (`SYS_TIME`), with **no** liveness fallback —
+the bisect proved none is needed.
+
+### Note on build_freshness.sh
+
+It reports FAIL when run *after* a build, because make is then legitimately up to
+date. It is only meaningful **before** building. Run it after syncing and before
+`make`; running it afterwards is a false alarm.

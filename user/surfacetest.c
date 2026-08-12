@@ -18,7 +18,20 @@
 #define SYS_SURFACE_SET_TITLE 61
 #define SYS_SURFACE_GETEV     63
 
+#define SYS_TIME              72     /* DDR-749: (struct rtc_time*) -> 0 | -EFAULT */
+
 struct surf_event { unsigned short type, arg0, arg1; };   /* type 1 = RESIZE_REQ */
+
+/* Mirror of kernel struct rtc_time (rtc.h) — DDR-749. */
+struct rtc_time {
+    unsigned short year;
+    unsigned char  month, day, hour, minute, second;
+};
+
+/* DDR-911: how long C stays clickable after the compositor first composites it.
+ * smoke-wmclose's injector lands its click in about a second; smoke-winops has a
+ * 90s budget to observe the shrink, so four seconds satisfies both. */
+#define GRACE_SECS 4
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -26,6 +39,16 @@ static inline long nsi(long n, long a1, long a2, long a3) {
                      : "a"(n), "D"(a1), "S"(a2), "d"(a3)
                      : "rcx", "r11", "memory");
     return r;
+}
+
+/* DDR-911: wall-clock seconds-of-day for the grace period below. A REAL clock,
+ * never a loop counter — a loop counter is what raced the compositor and cost
+ * this entire investigation. */
+static long wall_secs(void) {
+    struct rtc_time t;
+    if (nsi(SYS_TIME, (long)&t, 0, 0) != 0)
+        return -1;
+    return (long)t.hour * 3600 + (long)t.minute * 60 + (long)t.second;
 }
 
 static long make_window(unsigned char b, unsigned char g, unsigned char r, int x, int y) {
@@ -83,8 +106,8 @@ int main(void) {
         fflush(stdout);
     }
 
-    unsigned ticks = 0;
     int closed = 0;
+    long grace_start = -1;          /* DDR-911: wall-clock start of C's grace */
     for (;;) {
         long ka = nsi(SYS_SURFACE_GETKEY, a, 0, 0);
         if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", a, (char)ka); fflush(stdout); }
@@ -117,15 +140,52 @@ int main(void) {
             }
         }
 
-        ticks++;
-        if (!closed && c >= 0 && ticks > 12000) {           /* close C; set shrinks 3 -> 2
-                                                             * (rq-1: yields are cheaper —
-                                                             * widened so the compositor
-                                                             * composites the 3-set first) */
-            nsi(SYS_SURFACE_CLOSE, c, 0, 0);
-            printf("PRADYOS_CLOSE_OK id=%ld\n", c);
-            fflush(stdout);
-            closed = 1;
+        /* DDR-911: close C only once the compositor has DEMONSTRABLY composited
+         * it (surf_event type 3), so the live set is observed at 3 before it
+         * shrinks to 2.
+         *
+         * This replaced `ticks > 12000`, which measured a duration in loop
+         * iterations — a scheduling-dependent quantity. Item 16's fair-share
+         * pick changed this process's CPU share and C began dying before the
+         * compositor's first poll ever ran (measured: FIRSTPOLL ns=2 at HEAD
+         * vs ns=3 at bd58545). The threshold had already been widened once for
+         * this same race, which is proof that a bigger number postpones it
+         * rather than fixing it.
+         *
+         * There is deliberately NO tick fallback. A fallback would reintroduce
+         * the identical race on faster hardware. */
+        if (!closed && c >= 0) {
+            struct surf_event cev;
+            cev.type = 0;
+            if (nsi(SYS_SURFACE_GETEV, c, (long)&cev, 0) == 0 && cev.type == 3 &&
+                grace_start < 0)
+                grace_start = wall_secs();   /* composited — start the grace, don't close */
+
+            /* DDR-911: `ticks > 12000` was silently doing TWO jobs — waiting for
+             * the compositor (now the type-3 event above) AND leaving a window
+             * for smoke-wmclose's click to land in. The second job was never
+             * written down, so removing the counter removed it and 49 correct
+             * clicks hit a surface that had already gone.
+             *
+             * C therefore stays alive a bounded while after being composited. If
+             * the compositor closes it first on a click, this branch never runs
+             * and wmclose is satisfied; otherwise C self-closes and winops is.
+             *
+             * Measured against a real clock, so no scheduling change can move it.
+             * No liveness fallback: a clean-room bisect showed smoke-shell passes
+             * 2/2 at this commit, so nothing here needs a headless escape hatch,
+             * and the LIVENESS_SECS attempt was a reaction to a stale-build
+             * artifact rather than to any real failure. */
+            if (grace_start >= 0) {
+                long e = wall_secs() - grace_start;
+                if (e < 0) e += 24 * 3600;               /* midnight wrap */
+                if (e >= GRACE_SECS) {
+                    nsi(SYS_SURFACE_CLOSE, c, 0, 0);
+                    printf("PRADYOS_CLOSE_OK id=%ld\n", c);
+                    fflush(stdout);
+                    closed = 1;
+                }
+            }
         }
         nsi(SYS_YIELD, 0, 0, 0);
     }
