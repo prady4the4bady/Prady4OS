@@ -50,171 +50,170 @@ uint32_t klog_read(char *dst, uint32_t max) {
     uint64_t fl = spin_lock_irqsave(&klog_lock);
     uint32_t avail = (klog_total < KLOG_SZ) ? (uint32_t)klog_total : KLOG_SZ;
     uint32_t n     = (avail < max) ? avail : max;
-    uint32_t oldest = (klog_total < KLOG_SZ)
-                      ? 0u
-                      : (uint32_t)(klog_head);
-    for (uint32_t i = 0; i < n; i++)
-        dst[i] = klog_buf[(oldest + i) % KLOG_SZ];
+    uint32_t oldest = (klog_total < KLOG_SZ) ? 0u : klog_head;  /* ring-full: oldest at head */
+    uint32_t pos    = (oldest + (avail - n)) % KLOG_SZ;         /* keep most-recent n bytes   */
+    for (uint32_t i = 0; i < n; i++) {
+        dst[i] = klog_buf[pos];
+        pos = (pos + 1u) % KLOG_SZ;
+    }
     spin_unlock_irqrestore(&klog_lock, fl);
     return n;
 }
 
-/* ---------------------------------------------------------------------------
- * COM1 UART helpers
- * ---------------------------------------------------------------------------*/
+/* DDR-809: bound for the THRE wait. Far beyond any real transmit-holding latency
+ * (QEMU sets the bit within a handful of reads), but a hard ceiling — the
+ * unbounded form was an S2 violation that, on the BSP, would have taken g_ticks
+ * with it and silently un-bounded every g_ticks-deadline wait in the tree. */
+#define CONSOLE_THRE_MAX 10000u
 
-/* DDR-807: poll THRE (bit 5 of LSR) before each outb so we never overrun the
- * 16-byte FIFO when the host is slower than the guest. */
-static inline void uart_wait_tx(void) {
-    while (!(inb(COM1 + 5) & 0x20))
-        asm volatile("pause");
-}
-
-/* DDR-916: drain any RX bytes that have arrived in the UART FIFO.
- * Called (a) after each outb in kputc so residual RX from a host burst is
- * retired one character at a time, and (b) at the entry of kputs/kwrite
- * BEFORE the character loop so the burst-start window is closed.
- *
- * Placement rationale:
- *   Per-character drain alone (original DDR-916 partial fix) was insufficient
- *   because kputs/kwrite hold irq_save() across the whole buffer.  Between
- *   the klog_putc overhead and the inb-LSR poll, the 16-byte FIFO can fill
- *   before the first character's outb when the host delivers a full command
- *   line at once.  Adding a burst-entry drain closes that window.
- *
- *   Both placements are therefore required:
- *     1. kputc   — per-character drain (original fix, still present below)
- *     2. kputs/kwrite entry — burst-start drain (this extension)
- */
-static inline void uart_drain_rx(void) {
-    /* LSR bit 0 (DR) set means a byte is waiting in RBR. Read and discard. */
-    while (inb(COM1 + 5) & 0x01)
-        (void)inb(COM1);
-}
-
-/* ---------------------------------------------------------------------------
- * VGA helpers
- * ---------------------------------------------------------------------------*/
-#define VGA_BASE  ((volatile uint16_t *)0xB8000)
-#define VGA_COLS  80
-#define VGA_ROWS  25
-#define VGA_ATTR  0x0700   /* light grey on black */
-
-static int vga_row;
-static int vga_col;
-
-static void vga_scroll(void) {
-    for (int r = 1; r < VGA_ROWS; r++)
-        for (int c = 0; c < VGA_COLS; c++)
-            VGA_BASE[(r-1)*VGA_COLS + c] = VGA_BASE[r*VGA_COLS + c];
-    for (int c = 0; c < VGA_COLS; c++)
-        VGA_BASE[(VGA_ROWS-1)*VGA_COLS + c] = VGA_ATTR | ' ';
-    vga_row = VGA_ROWS - 1;
-}
-
-static void vga_putc_raw(char c) {
-    if (c == '\n') {
-        vga_col = 0;
-        if (++vga_row >= VGA_ROWS) vga_scroll();
-    } else if (c == '\r') {
-        vga_col = 0;
-    } else {
-        VGA_BASE[vga_row * VGA_COLS + vga_col] = VGA_ATTR | (uint8_t)c;
-        if (++vga_col >= VGA_COLS) {
-            vga_col = 0;
-            if (++vga_row >= VGA_ROWS) vga_scroll();
-        }
-    }
-}
-
-/* ---------------------------------------------------------------------------
- * Public API
- * ---------------------------------------------------------------------------*/
-
-void console_init(void) {
-    /* Disable interrupts, set 38400 baud (divisor=3), 8N1, enable FIFO. */
-    outb(COM1 + 1, 0x00);   /* disable interrupts          */
-    outb(COM1 + 3, 0x80);   /* DLAB on                     */
-    outb(COM1 + 0, 0x03);   /* divisor low  (38400 baud)   */
-    outb(COM1 + 1, 0x00);   /* divisor high                */
-    outb(COM1 + 3, 0x03);   /* 8N1, DLAB off               */
-    outb(COM1 + 2, 0xC7);   /* enable FIFO, 14-byte thresh */
-    outb(COM1 + 4, 0x0B);   /* RTS+DTR+OUT2                */
-    vga_row = 0; vga_col = 0;
-}
+static void console_rx_drain(void);           /* defined with the IRQ4 handler */
+static volatile int g_rx_armed;               /* set by console_rx_init */
 
 void kputc(char c) {
-    uint64_t f = irq_save();
-    klog_putc(c);
-    uart_wait_tx();
+    klog_putc(c);                             /* DDR-750: capture into the log ring */
+    unsigned spins = 0;
+    while ((inb(COM1 + 5) & 0x20) == 0) {     /* wait for THRE */
+        /* DDR-809/DDR-808: kputs/kwrite hold the console lock with interrupts
+         * OFF for the whole buffer, so IRQ4 cannot run and COM1's 16-byte RX
+         * FIFO cannot be drained by its handler. A burst of output therefore
+         * destroyed concurrent console input — measured as one lost command per
+         * smoke-shell run. Draining inline here is what closes that window;
+         * the masking itself must stay, because ADR-030 needs the buffer atomic. */
+        if (g_rx_armed)
+            console_rx_drain();
+        if (++spins >= CONSOLE_THRE_MAX)
+            return;                           /* bounded (S2); klog already has it */
+    }
     outb(COM1, (uint8_t)c);
-    /* DDR-916 arm0: per-character RX drain — retires bytes that arrived
-     * between the previous outb and this one. */
-    uart_drain_rx();
-    vga_putc_raw(c);
-    irq_restore(f);
+}
+
+/* COM1 RX ring buffer (5e). An IRQ4 handler drains the UART into this ring from
+ * boot, so console input (e.g. a shell's piped command stream) is never lost in
+ * the window before a reader runs — the 16-byte UART FIFO would overflow. Single
+ * producer (the IRQ) + single consumer (sys_read): head is written only by the
+ * IRQ, tail only by the reader, so it is lock-free on this single core. */
+#define RX_RING_SZ 256u
+static volatile uint8_t  rx_ring[RX_RING_SZ];
+static volatile uint32_t rx_head, rx_tail;
+
+/* DDR-809: the producer side is no longer lock-free. Two producers now exist —
+ * the IRQ4 handler and kputc's in-spin drain — so rx_head is serialised. The
+ * CONSUMER side is unchanged: kgetc_nb() is still the only reader and still
+ * needs no lock.
+ *
+ * S6: this takes a lock from ISR context, which the rule restricts to patterns
+ * already in the tree. It is one — klog_putc() takes klog_lock via
+ * spin_lock_irqsave and kputc calls it on every character, including from ISRs.
+ * g_rx_lock is a leaf: nothing is acquired under it. Lock order where both are
+ * held is g_console_lock -> g_rx_lock (kputc holds the console lock when it
+ * drains); the ISR takes only g_rx_lock, so there is no inversion. */
+static spinlock_t g_rx_lock = SPINLOCK_INIT;
+
+/* Drain every byte the UART has into the ring (drop on full). Called from the
+ * IRQ4 handler AND from kputc's THRE spin, where IRQ4 cannot fire. */
+static void console_rx_drain(void) {
+    uint64_t fl = spin_lock_irqsave(&g_rx_lock);
+    while (inb(COM1 + 5) & 0x01) {            /* LSR bit0: data ready */
+        uint8_t c = inb(COM1);               /* read RBR (also clears the IRQ) */
+        uint32_t nh = (rx_head + 1u) % RX_RING_SZ;
+        if (nh != rx_tail) {                 /* space available */
+            rx_ring[rx_head] = c;
+            rx_head = nh;
+        }
+    }
+    spin_unlock_irqrestore(&g_rx_lock, fl);
+}
+
+/* IRQ4 handler. */
+static void console_rx_irq(void) {
+    console_rx_drain();
+}
+
+/* Arm COM1 receive: enable the RX FIFO + the Received-Data-Available interrupt,
+ * register the IRQ4 handler, and unmask IRQ4 at the PIC. Call once at boot after
+ * pic_remap(). */
+void console_rx_init(void) {
+    outb(COM1 + 2, 0x07);                     /* FCR: enable FIFO + clear RX/TX  */
+    outb(COM1 + 1, 0x01);                     /* IER: Received Data Available IRQ */
+    irq_register(4, console_rx_irq);          /* COM1 = IRQ4 */
+    pic_unmask(4);
+    /* DDR-809: only now are the RX FIFO and IER configured, so only now is an
+     * inline drain meaningful. A plain global with no percpu/LAPIC dependency —
+     * kputc prints the earliest boot messages, long before this_cpu() or
+     * lapic_id() are usable, so any CPU-identity guard here would fault on the
+     * first character the kernel ever prints. */
+    g_rx_armed = 1;
+}
+
+/* Non-blocking console read (5e): one buffered byte, or -1 if the ring is empty.
+ * The blocking/line discipline lives in sys_read(FD_CONSOLE), which polls this
+ * and yields while waiting — see ADR-024 §D1. */
+int kgetc_nb(void) {
+    if (rx_tail == rx_head)
+        return -1;                            /* empty */
+    uint8_t c = rx_ring[rx_tail];
+    rx_tail = (rx_tail + 1u) % RX_RING_SZ;
+    return (int)c;
 }
 
 void kputs(const char *s) {
-    uint64_t f = irq_save();
-    /* DDR-916 arm1-ext: burst-start drain — retire any RX bytes that
-     * accumulated before this burst begins, closing the window between
-     * irq_save() and the first character's outb. */
-    uart_drain_rx();
-    for (; *s; s++) {
-        klog_putc(*s);
-        uart_wait_tx();
-        outb(COM1, (uint8_t)*s);
-        uart_drain_rx();   /* per-character drain (arm0) still active */
-        vga_putc_raw(*s);
-    }
-    irq_restore(f);
+    uint64_t fl = irq_save();
+    /* DDR-916 arm1-ext: burst-start drain. kputs holds irq_save() across the
+     * whole buffer, so IRQ4 cannot retire RX during it; drain once up front to
+     * close the window between irq_save() and the first character's outb.
+     * console_rx_drain() BUFFERS into rx_ring — never discard (see 3065e78). */
+    if (g_rx_armed)
+        console_rx_drain();
+    for (; *s; ++s)
+        kputc(*s);
+    irq_restore(fl);
 }
 
-void kwrite(const char *buf, uint32_t len) {
-    uint64_t f = irq_save();
-    /* DDR-916 arm1-ext: burst-start drain — same rationale as kputs above. */
-    uart_drain_rx();
-    for (uint32_t i = 0; i < len; i++) {
-        klog_putc(buf[i]);
-        uart_wait_tx();
-        outb(COM1, (uint8_t)buf[i]);
-        uart_drain_rx();   /* per-character drain (arm0) still active */
-        vga_putc_raw(buf[i]);
-    }
-    irq_restore(f);
+/* Emit `n` bytes as a single locked unit — the console lock is taken once for
+ * the whole buffer, so a user sys_write can't interleave mid-string with a
+ * kernel kputs or with another CPU's write (ADR-030: matters once APs run ring-3
+ * printers concurrently with the BSP — DDR-SMP-rq-3). */
+void kwrite(const char *buf, uint64_t n) {
+    uint64_t fl = irq_save();
+    /* DDR-916 arm1-ext: burst-start drain — same rationale as kputs. */
+    if (g_rx_armed)
+        console_rx_drain();
+    for (uint64_t i = 0; i < n; ++i)
+        kputc(buf[i]);
+    irq_restore(fl);
 }
 
-void kprintf(const char *fmt, ...) {
-    /* Minimal kprintf: %s %d %u %x %c %% only. No heap, no floats. */
-    va_list ap;
-    __builtin_va_start(ap, fmt);
-    for (const char *p = fmt; *p; p++) {
-        if (*p != '%') { kputc(*p); continue; }
-        switch (*++p) {
-        case 's': { const char *s = __builtin_va_arg(ap, const char *);
-                    if (!s) s = "(null)";
-                    kputs(s); break; }
-        case 'd': { int v = __builtin_va_arg(ap, int);
-                    if (v < 0) { kputc('-'); v = -v; }
-                    /* fall through to unsigned */ }
-        /* FALLTHROUGH */
-        case 'u': { unsigned v = __builtin_va_arg(ap, unsigned);
-                    char tmp[12]; int i = 0;
-                    if (!v) { kputc('0'); break; }
-                    while (v) { tmp[i++] = '0' + v % 10; v /= 10; }
-                    while (i--) kputc(tmp[i]); break; }
-        case 'x': { unsigned v = __builtin_va_arg(ap, unsigned);
-                    char tmp[9]; int i = 0;
-                    if (!v) { kputc('0'); break; }
-                    while (v) { int d = v & 0xf;
-                                tmp[i++] = d < 10 ? '0'+d : 'a'+d-10;
-                                v >>= 4; }
-                    while (i--) kputc(tmp[i]); break; }
-        case 'c': kputc((char)__builtin_va_arg(ap, int)); break;
-        case '%': kputc('%'); break;
-        default:  kputc('%'); kputc(*p); break;
-        }
+void kputhex(uint64_t v) {
+    static const char digits[] = "0123456789ABCDEF";
+    uint64_t fl = irq_save();
+    kputc('0');
+    kputc('x');
+    for (int shift = 60; shift >= 0; shift -= 4)
+        kputc(digits[(v >> shift) & 0xF]);
+    irq_restore(fl);
+}
+
+void kputdec(uint64_t v) {
+    char buf[20];
+    int i = 0;
+    uint64_t fl = irq_save();
+    if (v == 0) {
+        kputc('0');
+        irq_restore(fl);
+        return;
     }
-    __builtin_va_end(ap);
+    while (v) {
+        buf[i++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (i)
+        kputc(buf[--i]);
+    irq_restore(fl);
+}
+
+void kvga_line(const char *s, int row) {
+    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
+    vga += (uint64_t)row * 80;
+    for (int i = 0; s[i]; ++i)
+        vga[i] = (uint16_t)((uint8_t)s[i]) | (uint16_t)(0x0F << 8);
 }

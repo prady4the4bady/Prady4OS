@@ -3504,3 +3504,53 @@ The graph DB and `node_modules` are reproduced via `npm ci` + `rebuild`.
 *Generated at the end of the session that completed Layer 5a (ADR-021) and added
 the `tools/graph_mcp` code knowledge graph. HEAD `4608e9b`. Next: Phase C, Slice 1
 — DDR-5b.*
+
+## Checkpoint 2026-08-14 — console RX restore + DDR-808 still open
+
+### Done
+- `kernel/console.c` RESTORED from `23755ad` (merge-base). Verified present:
+  `rx_ring` (3), `console_rx_drain` (4), `kgetc_nb` (2), `console_rx_init` (2),
+  `uart_drain_rx` (0). IRQ4 wired at console.c:138-139
+  (`irq_register(4, console_rx_irq)` + `pic_unmask(4)`).
+- Added DDR-916 burst-start `console_rx_drain()` at `kputs` and `kwrite` entry
+  (after `irq_save()`, before the char loop), guarded by `g_rx_armed`.
+- `make image` EXIT=0, zero warnings, -Werror clean.
+- `.claude/` added to .gitignore.
+
+### Why the restore was necessary
+`3065e78` (remote head) replaced the RX ring with `uart_drain_rx()`, which reads
+RBR and DISCARDS the byte — destroying all ring-3 console input — and removed
+`kgetc_nb()`'s definition while `console.h:8` still declares it and
+`sys_io.c:266,271` still call it.
+
+### STILL FAILING — smoke-shell 0/3
+Non-deterministic, three different stopping points:
+`Makefile:1100`, `Makefile:1110`, `Makefile:1100` (truncated mid-token
+"pipe payload line 164 012345678"). DDR-808 character loss persists WITH both
+drain sites active and the ring restored.
+
+### REFUTED THIS CHECKPOINT — do not retry
+**FIFO trigger level is NOT the cause.** `console.c:136` is
+`outb(COM1 + 2, 0x07)` — FCR bits 7:6 = 00 = **1-byte** trigger, already the
+most aggressive setting. The proposed `0xC1` sets bits 7:6 = 11 = **14-byte**
+trigger (PC16550D: 00=1, 01=4, 10=8, 11=14), i.e. strictly worse. Escalation
+STEP A is a no-op and STEP B's premise ("RTL too high") is false.
+
+Also previously refuted, with evidence: fair-share starvation (arm-B disproof),
+feeder fixed-sleep desync (DDR-808, 4 runs), `/IN.TXT` missing fixture
+(Makefile:1102 creates it at runtime), `CONSOLE_THRE_MAX` dropping input
+(that bound aborts a TX, not an RX).
+
+### Next actions, in order
+1. Fix `tools/ci/shell_evidence.sh` to tee `make` stdout — the `[shell] FAIL`
+   line is Makefile stdout, NOT serial, so the failing assertion is currently
+   invisible in the artifact. This is STEP C and it must come FIRST; everything
+   after it is blind guessing without it.
+2. With the FAIL line visible, identify which assertion fails per run.
+3. Then STEP D: IRQ4 sharing / missing IIR read causing spurious re-trigger.
+4. Then STEP E: minimal standalone COM1 RX hammer test, no shell/Makefile.
+
+### Order corrections that must survive
+- Push `dev/phase1` → CI green → THEN `git push origin dev/phase1:main`.
+  `main` (27ba426) is NOT an ancestor of dev/phase1; `--ff-only` will fail.
+- Real DDR filename: `docs/decisions/DDR-916-console-gap-b-unconditional-rx-drain.md`
