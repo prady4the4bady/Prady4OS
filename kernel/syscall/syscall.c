@@ -90,8 +90,18 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a4,
         return -ENOSYS;
     /* AETHER rate limit (ADR-026 D7): agent processes get 60 syscalls / 1 s; an
      * over-budget agent is cleanly killed here and never reaches the handler.
-     * Non-agents (init, PRISM, kernel) are exempt, so existing gates are intact. */
-    if (current_thread && current_thread->is_agent &&
+     * Non-agents (init, PRISM, kernel) are exempt, so existing gates are intact.
+     *
+     * ADR-036 supersedes D7's COUNTING SCOPE (budget, window, kill and log are
+     * unchanged): SYS_YIELD does not count. D7 exists to bound "a tight-loop
+     * agent's ability to DoS the single core", and SYS_YIELD is the one syscall
+     * whose entire semantic is surrendering that core — counting it killed
+     * agents for cooperating. A rendezvous costs 2 syscalls per poll, so a
+     * correctly-waiting agent died at ~30 iterations no matter how well its
+     * peer behaved. The exemption is ENUMERATED, not a category: every other
+     * syscall, SYS_MEMORY_READ included, still counts, so an agent spamming
+     * real work is killed exactly as before. Widening this list needs an ADR. */
+    if (current_thread && current_thread->is_agent && num != SYS_YIELD &&
         aether_rate_check(current_thread) < 0)
         sched_exit(137);                         /* never returns */
     /* DDR-837: an operator checkpoint. The thread blocks ITSELF here, which is

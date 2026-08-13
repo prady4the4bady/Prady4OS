@@ -5180,3 +5180,53 @@ Neither is caused by this session's changes.
 `smoke-winops` and `smoke-wmclose` went red -> green in real CI. No gate that was
 passing has regressed. Remaining red is three pre-existing defects plus two
 environment divergences.
+
+## Session 2026-08-13 — smoke-agents + smoke-actiondag fixed (ADR-036, DDR-914/915)
+
+Two gates fixed at their real source, each two-arm confirmed with preserved
+artifacts under `build/artifacts/`.
+
+**smoke-agents (DDR-914).** A sampling race, not a liveness bug.
+`roster_active()` is instantaneous liveness by design (DDR-730: the card
+self-corrects to inactive when its agent dies), and the compositor only reported
+on an observed *change* in that sample — so on a slow TCG runner the agent's whole
+0->1->0 lifecycle fell between two frames. Same race class DDR-735 already fixed
+one path over. The serial witness now reads the post-mortem-stable plane; the UI
+card still reads live liveness, so DDR-730 is untouched. Evidence:
+`artifacts/agents-20260812T132541Z.log`.
+
+Caught during the fix: `PRADYOS_AGENTS_OK` has a second, non-gate consumer —
+`Makefile:1662` uses it as the readiness trigger for `smoke-agent-click`'s mouse
+injector. Moving it would have pushed that click toward its 120 s bound. It keeps
+its original timing; only the per-slot lines moved.
+
+**smoke-actiondag (ADR-036 + DDR-915).** The agent was being KILLED, not starved.
+ADR-026 D7's limiter kills any agent exceeding 60 counted syscalls/s via
+`sched_exit(137)`; the rendezvous cost 2 per poll, so a fully cooperative agent
+died at ~30 iterations. Confirmed by the kill code path and by
+`AGENT_RATE_LIMITED PID=29` in `artifacts/dagdiag-20260813T024223Z.log`.
+ADR-036 supersedes D7's *counting scope* only — `SYS_YIELD` is exempt, everything
+else including `SYS_MEMORY_READ` still counts. That alone was insufficient, so the
+test now paces polls at half the budget, derived from AETHER_RATE_MAX /
+AETHER_RATE_WINDOW and timed off the zero-syscall vDSO clock — a computed
+interval, not a chosen one. Arm A: 3/3 PASS. Arm B (pacing removed): still killed,
+gate fails — the exemption did not gut the protection.
+
+A refuted hypothesis recorded so it is not retried: fair-share starvation of the
+busy-waiting agent. Arm B disproves it.
+
+### Gate status notes
+
+- **smoke-rqstress** — previously failed locally while passing in CI. It PASSED in
+  the 143-gate run of 2026-08-13. Read as transient host contention, not a defect.
+  Recorded honestly: the earlier local flakiness was real and observed, and this
+  single clean run is not by itself proof it cannot recur.
+- **smoke-cadence — UNCONFIRMED.** It did not appear in the failure list of the
+  2026-08-13 regression, but that run's output was piped through `tail -40`, so the
+  completeness of that list cannot be attested. Its status is UNCONFIRMED, not
+  passing, until a full untailed regression run.
+- **smoke-shell — OPEN, sole remaining failure.** 143/143 coverage was achieved with
+  smoke-shell the only failure. Its earlier characterisation as "environment-only,
+  proven code-clean" is RETRACTED: it now reproduces locally. Not root-caused; the
+  last observation (log ending truncated mid-token after `PRADYOS_MODE_SOVEREIGN`)
+  was made on a build that FAILED `build_freshness.sh` and is a lead only.

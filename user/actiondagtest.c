@@ -78,6 +78,30 @@ static void spin_delay(void) {
     for (volatile long i = 0; i < 200000; i++) { }
 }
 
+/* ---- rendezvous pacing (ADR-026 D7 budget, ADR-036 counting scope) --------
+ *
+ * An agent gets AETHER_RATE_MAX counted syscalls per AETHER_RATE_WINDOW, and
+ * exceeding it is a KILL, not a stall (kernel/syscall/syscall.c). Since ADR-036
+ * SYS_YIELD is free, so one poll of this rendezvous costs exactly ONE counted
+ * syscall: the SYS_MEMORY_READ. The poll interval is therefore derived from the
+ * kernel's own constants rather than picked — polling at half the budget leaves
+ * a 2x margin for the handful of submit syscalls that follow.
+ *
+ * The wait itself must cost nothing, so it reads the vDSO clock (ring-3
+ * readable, no syscall) and yields (free) until the interval has elapsed. */
+#define RATE_MAX_SYSCALLS  60u              /* AETHER_RATE_MAX   */
+#define RATE_WINDOW_NS     1000000000ull    /* AETHER_RATE_WINDOW */
+#define POLL_INTERVAL_NS   (RATE_WINDOW_NS / (RATE_MAX_SYSCALLS / 2u))   /* 30/s */
+
+#define VDSO_USER_VA 0x00007FFFFFF00000ull
+static uint64_t vdso_ns(void) { return *(volatile uint64_t *)VDSO_USER_VA; }
+
+/* Yield until the next poll is due. Costs no counted syscalls. */
+static void pace_to(uint64_t due_ns) {
+    while (vdso_ns() < due_ns)
+        nsi(SYS_YIELD, 0, 0, 0);
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* Role probe: submitting is CAP_AGENT, so the sovereign gets -EPERM here. */
     long who = nsi(SYS_SUBMIT_ACTION, ACTION_PRINT, (long)"probe", 5);
@@ -89,16 +113,30 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
          * mode every action is auto-approved at submit, so the ordering this
          * gate exists to test would never be exercised. The rendezvous is the
          * agent memory store, which both roles hold CAP_MEMORY for. */
+        /* Phase breadcrumb: with both roles racing on a loaded boot, a silent
+         * agent is indistinguishable from one that was never scheduled. */
+        wr("ACTIONDAG AGENT alive\r\n");
+
+        /* DDR-915: poll until the signal arrives. NO internal iteration cap —
+         * the harness TIMEOUT_S is the single authority on how long this gate
+         * may wait. A nested 400-iteration budget made a SLOW peer read as a
+         * BROKEN one, and any replacement count would be equally unmeasured. */
         char go[8];
         uint32_t golen = 0;
-        int ready = 0;
-        for (int i = 0; i < 400 && !ready; i++) {
-            if (nsi(SYS_MEMORY_READ, (long)"DAG_GO", (long)go, (long)&golen) == 0)
-                ready = 1;
-            else { spin_delay(); nsi(SYS_YIELD, 0, 0, 0); }
+        int spins = 0;
+        uint64_t due = vdso_ns();
+        while (nsi(SYS_MEMORY_READ, (long)"DAG_GO", (long)go, (long)&golen) != 0) {
+            if (++spins % 16 == 0) {          /* keeps a timeout diagnosable */
+                wr("ACTIONDAG AGENT waiting DAG_GO spins=");
+                wrint(spins);
+                wr("\r\n");
+            }
+            due += POLL_INTERVAL_NS;
+            pace_to(due);
         }
-        if (!ready)
-            fail("sovereign never signalled MANUAL mode", 0);
+        wr("ACTIONDAG AGENT go spins=");
+        wrint(spins);
+        wr("\r\n");
 
         long root = nsi(SYS_SUBMIT_ACTION, ACTION_PRINT, (long)"root", 4);
         if (root < 0)
@@ -148,14 +186,28 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     uint64_t ids[4];
     uint32_t got = 0;
     int have = 0;
-    for (int i = 0; i < 400 && !have; i++) {
+    wr("ACTIONDAG SOV waiting\r\n");
+    /* DDR-915: same rule as the agent side — poll until the ids appear; the
+     * harness timeout bounds the gate. This wait is what previously expired
+     * first under host load and reported a live agent as one that never ran. */
+    int sspins = 0;
+    while (!have) {
         if (nsi(SYS_MEMORY_READ, (long)"DAG_IDS", (long)ids, (long)&got) == 0 &&
             got == sizeof ids)
             have = 1;
-        else { spin_delay(); nsi(SYS_YIELD, 0, 0, 0); }
+        else {
+            if (++sspins % 64 == 0) {
+                wr("ACTIONDAG SOV waiting DAG_IDS spins=");
+                wrint(sspins);
+                wr("\r\n");
+            }
+            spin_delay();
+            nsi(SYS_YIELD, 0, 0, 0);
+        }
     }
-    if (!have)
-        fail("agent never published the action ids", (long)got);
+    wr("ACTIONDAG SOV ids spins=");
+    wrint(sspins);
+    wr("\r\n");
 
     /* Arm 2: the child BEFORE its parent must be refused, and specifically with
      * -EAGAIN — the operator has the authority, the dependency is unmet. */

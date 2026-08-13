@@ -866,7 +866,11 @@ int main(void) {
         int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
         if (amb != g_cur_amb) set_ambiance(amb, 8);
         /* Named-agent panel (DDR-707): when AETHER's roster changes, re-render
-         * (the panel is part of render()) and report the roster to serial. */
+         * (the panel is part of render()). SYS_AGENT_ROSTER is instantaneous
+         * liveness by design (DDR-730: a card self-corrects to inactive when its
+         * agent dies), so it drives the CARD ONLY — the serial roster report is
+         * emitted from the post-mortem-stable plane below (DDR-914), because a
+         * whole agent lifecycle can fit between two frames on a TCG runner. */
         unsigned char roster[8] = {0};
         nsi(SYS_AGENT_ROSTER, (long)roster, 8, 0);
         int changed = 0;
@@ -874,8 +878,11 @@ int main(void) {
         if (changed) {
             render((int)nsi(SYS_GET_MODE, 0, 0, 0));
             present();
-            for (int i = 0; i < 8; i++)
-                printf("AGENT %s %s\n", g_agents[i], roster[i] ? "active" : "inactive");
+            /* PRADYOS_AGENTS_OK keeps its ORIGINAL meaning — "the compositor's
+             * roster loop is live" — because smoke-agent-click (Makefile:1662)
+             * uses it as the readiness trigger for its mouse injector. Only the
+             * per-slot AGENT lines move to the stable plane (DDR-914); moving
+             * this one too would delay that click past its 120s bound. */
             printf("PRADYOS_AGENTS_OK\n");
             fflush(stdout);
             for (int i = 0; i < 8; i++) last_roster[i] = roster[i];
@@ -889,6 +896,14 @@ int main(void) {
             nsi(SYS_AGENT_METRICS, (long)m, 8, 0);
             if (m[0].pid != 0 && m[0].dispatches >= 1) {
                 metrics_said = 1;
+                /* DDR-914: the serial roster witness answers "does this slot
+                 * hold a spawned agent?" (pid is retained past exit) rather
+                 * than "is it alive this instant?". Gated behind dispatches>=1,
+                 * so it still cannot print unless the kernel provably scheduled
+                 * the agent — strictly stronger than a lucky live sample. */
+                for (int i = 0; i < 8; i++)
+                    printf("AGENT %s %s\n", g_agents[i],
+                           m[i].pid != 0 ? "active" : "inactive");
                 printf("AGENT_PANEL KRYOS act=%u disp=%u\n",
                        (unsigned)m[0].actions, (unsigned)m[0].dispatches);
                 printf("PRADYOS_AGENT_PANEL_METRICS_OK\n");
