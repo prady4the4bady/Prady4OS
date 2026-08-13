@@ -3554,3 +3554,54 @@ feeder fixed-sleep desync (DDR-808, 4 runs), `/IN.TXT` missing fixture
 - Push `dev/phase1` → CI green → THEN `git push origin dev/phase1:main`.
   `main` (27ba426) is NOT an ancestor of dev/phase1; `--ff-only` will fail.
 - Real DDR filename: `docs/decisions/DDR-916-console-gap-b-unconditional-rx-drain.md`
+
+## Checkpoint 2026-08-14 (b) — STEP C DONE: smoke-shell root cause is NOT character loss
+
+### STEP C implemented
+`tools/ci/shell_evidence.sh` now tees `make` stdout to
+`build/artifacts/shell-make-<TS>.log` and greps the `^[shell]` lines.
+This was the blocking tooling gap: the assertion name is Makefile stdout,
+never serial, so every prior failure was anonymous.
+
+### RESULT — the failure is DETERMINISTIC, and it is a real shell/kernel bug
+Three arms, identical assertion every time:
+
+    [shell] FAIL: 2>> truncated the earlier entry (DDR-868)
+
+The earlier "non-deterministic Makefile:1100 / 1110 / truncated" reading was an
+artifact of `tail -1` catching different trailing lines. There is no
+intermittency. **DDR-808 character loss is NOT what is failing this gate.**
+
+### Localisation
+- `user/prism.c:486` is CORRECT:
+  `long eflags = O_CREAT | O_WRONLY | (redir_e_append ? O_APPEND : O_TRUNC);`
+  `2>>` sets `redir_e_append` (parser at prism.c:446/460). Shell side is fine.
+- `prism.c:33-34` defines O_TRUNC 0x200 / O_APPEND 0x400 and claims DDR-782
+  makes the FD_VFS write path honour them.
+- The earlier task list still carries DDR-782 ("O_TRUNC + atomic O_APPEND") as
+  an OPEN item. So the likely root cause is that the KERNEL does not honour
+  O_APPEND (or honours it on only one filesystem), making `2>>` behave as
+  truncate.
+
+### Next actions
+1. Verify kernel side: grep O_APPEND / FD_APPEND in kernel/syscall/sys_file.c
+   and the FD_VFS write path. Confirm whether O_APPEND is parsed in sys_open
+   and whether sys_write seeks to EOF before each write.
+2. If absent -> implement DDR-782 O_APPEND (FD_APPEND flag on fd_entry;
+   sys_write seeks EOF under the vfs lock, atomic per write). That is the fix
+   for this gate.
+3. Re-run smoke-shell 3x via shell_evidence.sh; the [shell] line now names the
+   assertion directly.
+
+### Refuted / closed — do not retry
+- FIFO trigger level (console.c:136 is FCR 0x07, bits 7:6 = 00 = 1-byte, the
+  most aggressive setting; 0xC1 would select 14-byte = worse).
+- Escalation STEPS A, B, D, E as framed: they all target character loss, which
+  is not what fails this gate. Do not spend time on IRQ4 sharing / IIR /
+  minimal RX repro until a failure actually shows character loss again.
+- Previously refuted: fair-share starvation, feeder fixed-sleep desync,
+  /IN.TXT missing fixture, CONSOLE_THRE_MAX.
+
+NOTE: the console.c RX restore (bb7f9bc) remains correct and necessary on its
+own merits (3065e78 discarded RX bytes and left kgetc_nb undefined) — it is
+simply not the smoke-shell fix.

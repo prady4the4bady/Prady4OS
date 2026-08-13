@@ -12,8 +12,18 @@ set -u
 cd "$(dirname "$0")/../.."
 mkdir -p build/artifacts
 
-make smoke-shell
-RC=$?
+# DDR-916 tooling gap: the `[shell] FAIL: …` line that names the failing
+# assertion is emitted by the Makefile recipe to STDOUT, not into the guest's
+# serial stream. Capturing only the serial log left every failure anonymous —
+# several diagnostic cycles were spent guessing which assertion tripped.
+# Tee make's output into a companion artifact alongside the serial log.
+MAKEOUT="build/artifacts/shell-make-$(date -u +%Y%m%dT%H%M%SZ).log"
+make smoke-shell 2>&1 | tee "$MAKEOUT"
+RC=${PIPESTATUS[0]}
+chmod 444 "$MAKEOUT" 2>/dev/null || true
+echo "MAKEOUT=$MAKEOUT"
+echo "--- assertion result ---"
+grep -a '^\[shell\]' "$MAKEOUT" || echo "(no [shell] line emitted)"
 
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 OUT="build/artifacts/shell-$TS.log"
