@@ -3677,3 +3677,55 @@ WHY TASK 3 IS THE RIGHT TARGET: smoke-shell fails DETERMINISTICALLY with
 user/prism.c:486 already passes O_APPEND correctly, so the defect is kernel-side.
 Do NOT re-investigate character loss / IRQ4 / starvation / feeder desync /
 THRE cap / FIFO trigger — all refuted, see checkpoints (a)-(c).
+
+## Checkpoint 2026-08-14 (e) — TASK 3 REFRAMED: O_APPEND already exists; the "2>>" label is a tripwire
+
+### DO NOT implement O_APPEND — it is already in the tree
+- `kernel/syscall/sys_io.c:96-102`: the FD_VFS write path already does
+  `if (e->flags & O_APPEND) e->off = e->file->size;` before the chunk loop —
+  exactly the POSIX atomic-append the MASTER_PLAN TASK 3 spec asks to add.
+- `kernel/syscall/sys_file.c:74`: `sys_open` already stores `e->flags = flags`,
+  so O_APPEND survives per-fd.
+- The MASTER_PLAN premise ("kernel does not honour O_APPEND / fd_entry has no
+  append flag") is REFUTED by the code. `fd_entry.flags` already carries it.
+  Implementing it again would be a no-op and would not fix the gate.
+
+### The real failure — evidence, fresh freshness-verified build
+`build/shell_serial.log` (486 lines) ends at `uptime: 40s`. The `2>>` append
+commands are Makefile:1111-1113 — the session NEVER REACHES them. Grep for
+`EAP55a`, `NOPE55`, `cannot open` in the serial: ZERO hits.
+
+The gate assertion order (Makefile:1140-1141) makes `2>>` the FIRST grep in the
+DDR-868 block. So `[shell] FAIL: 2>> truncated the earlier entry` fires as a
+TRIPWIRE for ANY early session stop past `uptime`, not because the append
+truncated. That is why it looked deterministic across arms — it is the first
+missing string, whatever killed the session.
+
+### What this means
+- The session stops producing shell output after `uptime` (feeder ~line 1100).
+  Next feeder commands: dmesg (large klog burst), free, then TR.TXT/redirect/
+  pipe/append tests.
+- Earlier THIS session, artifact shell-20260813T111828Z.log reached the redirect
+  region (line ~529); shell-20260813T113436Z.log stopped after `uptime`. So the
+  STOPPING POINT VARIES between runs. That variance is the real signal.
+- The "deterministic 2>> truncation" framing (and the standing "do not
+  investigate character loss" instruction built on it) rests on the tripwire
+  misread. The variable stopping point is consistent with a burst-timing input
+  loss the DDR-916 drains REDUCED but did not eliminate — NOT with an O_APPEND
+  truncation bug.
+
+### Next action (cold-resume)
+1. Do NOT touch O_APPEND. Do NOT re-add FD_APPEND.
+2. Run smoke-shell ~5x, record the LAST shell line of each build/shell_serial.log
+   (the stopping point). Confirm whether it varies (burst timing) or is fixed at
+   one command (that command hangs/crashes the shell).
+3. If it varies around dmesg: the big dmesg klog burst is still overflowing RX
+   for the following command despite DDR-916 drains → the remaining fix is
+   bounded per-N-char drain inside kputs/kwrite loops (DDR-916 arm2), measured.
+4. If it is fixed at one command: that command is the bug — diagnose it directly.
+5. Fix shell_evidence.sh to also print `tail -3` of shell_serial.log so the
+   stopping point is captured in the evidence bundle automatically.
+
+### State
+LOCAL HEAD = b07fb7d (pushed). REMOTE = b07fb7d. MAIN = 27ba426. No code changed
+this checkpoint. smoke-shell still 0-pass (stops ~uptime, tripwire = 2>>).
