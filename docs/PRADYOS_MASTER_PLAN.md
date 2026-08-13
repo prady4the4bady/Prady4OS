@@ -1,6 +1,6 @@
 # PRADYOS — COMPLETE, VERIFIED, PHASE-WISE MASTER PLAN
 
-> **Single file. Nothing omitted.**  
+> **Single file. Nothing omitted.**
 > Synthesised from `docs/BUILD_TRACKER.md`, `docs/AETHER_MASTER_FEATURES.md`,
 > `docs/RECOVERY_AUDIT.md`, and all active session state as of 2026-08-14.
 > All status claims are anchored to a CI run, a commit SHA, or an explicit
@@ -8,40 +8,139 @@
 
 ---
 
-## 0. Session Snapshot (as of 2026-08-14)
+## ⚡ AUTONOMOUS CONTINUATION INSTRUCTIONS FOR CLAUDE
+
+> **READ THIS FIRST. This section tells you exactly what to do, in order,
+> without human input. Follow it precisely. Do not re-litigate anything
+> in the Refuted Hypotheses table. Do not re-run STEP C — it is done.**
+
+### Context-Limit Protocol
+When you feel your context filling, **commit immediately** with an honest message,
+append a checkpoint block to `SESSION_HANDOFF.md`, and stop. Do not summarise
+without committing. The next session reads this file to resume.
+
+### Repo Hygiene Rules (enforced before any new work)
+1. Never insert a new NSI number mid-table. Append only. Next free NSI: **94**.
+2. Never insert a new capability bit mid-bitmask. Next free: **1<<24**.
+3. Every new smoke gate must have a stated timeout and a discriminating assertion
+   (a gate that passes against a broken implementation is worthless).
+4. Every DDR number must be unique and appended to the existing sequence.
+5. `make ci-shard-check` must pass before any push.
+6. `make ci-probe-rodata-check` must pass before any push.
+7. `make ci-start-align-check` must pass before any push.
+8. After any kernel header change, run `make clean && make` — never trust incremental.
+9. The structural defect pattern has 16 instances. Before writing any new check,
+   ask: "does this discard invalid input silently?" If yes, make it loud.
+
+### Current Work — ORDERED, DO NOT REORDER
+
+**TASK 3 (ACTIVE) — Fix DDR-782 kernel O_APPEND**
+
+This is the ONE thing blocking `smoke-shell`. All character-loss hypotheses are
+refuted. The bug is deterministic and localised:
+
+- **Symptom:** `[shell] FAIL: 2>> truncated the earlier entry` — identical in all 3 arms
+- **Shell side:** `user/prism.c:486` already passes `O_CREAT|O_WRONLY|O_APPEND`
+  for `2>>`. Parser at `:446/:460` sets the flag correctly. Shell is NOT the bug.
+- **Kernel side:** `kernel/syscall/sys_file.c` (and the FD_VFS write path) does
+  not honour `O_APPEND`. The fd_entry has no `FD_APPEND` flag. Every write goes
+  to the stored offset, not EOF. This is the DDR-782 gap.
+- **Fix specification:**
+  1. Add `FD_APPEND` flag to `struct fd_entry` in `kernel/syscall/sys_file.c`
+     (or wherever fd_entry is defined — check `kernel/fs/vfs/vfs.h`).
+  2. In `sys_open`: if `flags & O_APPEND`, set `entry->flags |= FD_APPEND`.
+  3. In `sys_write` (the VFS write path): if `entry->flags & FD_APPEND`,
+     acquire the VFS lock, seek `entry->off = entry->file->size`, then write.
+     The seek + write must be atomic under the lock — this IS the POSIX
+     atomicity property.
+  4. Do NOT add a new syscall. Do NOT change any on-disk format.
+     Do NOT change `CAP_FS_WRITE` — it already gates create/write.
+  5. The existing `prism.c` `>>` (stdout append) uses `O_APPEND` too and must
+     continue to work. The fix is generic — it benefits both `>>`  and `2>>`.
+- **Gate:** `smoke-shell` — run 3 consecutive passes locally before pushing.
+  The gate already has the discriminating assertion (`2>>` requires BOTH records
+  to survive). A pass means O_APPEND is atomic.
+- **Commit message:** `kernel: implement FD_APPEND / O_APPEND in sys_write (DDR-782)`
+
+**TASK 4 — B#3 `-smp 4` thread loss (OPEN-10)**
+
+Do this BEFORE any more OPEN-10 diagnosis work.
+- Insert `kprintf("[tick] g_ticks=%lu at main.c:1134\n", g_ticks);` at `main.c:1134`
+- Insert `kprintf("[tick] g_ticks=%lu at main.c:1311\n", g_ticks);` at `main.c:1311`
+- Run `smoke-sfs-btree-smp4` 5× under `-smp 4`
+- If the second stamp never appears, `fs_test_thread` is lost in the ~30 SFS I/O
+  calls between those two lines. That confirms the B#3 diagnosis and the fix
+  is a bounded timeout on `vfs_write` returning to the caller.
+- Commit message: `kernel: add g_ticks stamps for B#3 OPEN-10 diagnosis (DDR-806)`
+
+**TASK 5 — Push and CI**
+
+```
+git push origin dev/phase1
+# wait for 3 consecutive CI greens on dev/phase1
+git push origin dev/phase1:main   # NOT --ff-only; main is not an ancestor
+```
+
+**TASK 6 — Section F #66–76 (Visionary features)**
+
+Work in DDR order. Each feature needs its own DDR number (next: DDR-884+).
+Before implementing any F# item, run the Architecture Prerequisite Checklist
+(Section 11 of this file). Start with **F#68 smoke-lockbox-e2e** because the
+kernel and Python sides already exist — only the end-to-end gate is missing.
+
+**TASK 7 — Section G remaining 4 agents**
+
+`subconscious_agent`, `ai_scientist_agent`, `architect_agent`, `tournament_agent`
+need kernel roster slots before their skill files mean anything.
+Pattern: follow DDR-707 / DDR-737 for adding a named slot.
+
+**TASK 8 — ISO pipeline**
+
+x86_64: `multiboot2` header + `grub-mkrescue` → `pradyos-x86_64.iso`
+aarch64: EFI + U-Boot packaging
+riscv64: OpenSBI + U-Boot packaging
+Apple Silicon: m1n1 shim over the aarch64 kernel
+
+**TASK 9a–9e — TASK 17–21 (see §8 Work Queue)**
+
+Order: TASK 17 (ISO) → TASK 18 (`prad`, NSI 88–90) → TASK 19 (Phase 9 asm) →
+TASK 20 (invariant gates S1–S8, unblock S3/S7 by completing F#66–72 first) →
+TASK 21 (v1.0.0 release tag).
+
+---
+
+## 0. Session Snapshot (as of 2026-08-14, commit 7aa4f31)
 
 | Field | Value |
 |---|---|
-| **Local HEAD** | `bb7f9bc` (committed, not pushed) |
+| **Local HEAD** | `7aa4f31` (committed, not pushed) |
 | **Remote `dev/phase1` HEAD** | `3065e78` |
-| **`main` HEAD** | `3b4830a` (promoted on 3 consecutive greens: runs 30804476970, 30811210244, 30811221820) |
+| **`main` HEAD** | `3b4830a` (promoted: runs 30804476970 / 30811210244 / 30811221820) |
 | **CI status** | pending — nothing pushed since `bb7f9bc` |
-| **Last committed content** | console.c RX-ring restoration · DDR-916 burst-start drain · `tools/ci/shell_evidence.sh` · `.gitignore` · checkpoint appended to `SESSION_HANDOFF.md` |
-| **NSI max** | **91** used (next free **92**) — see §NSI table |
-| **CI gates assigned** | 122 across 6 shards · 5 excluded (each with a stated reason) |
-| **Overall completion** | 217 ✅ / 25 ⚠️ / 28 ❌ out of 286 items = **76%** |
+| **Last committed content** | STEP C: `shell_evidence.sh` tees make stdout; three arms reveal one identical deterministic assertion: `[shell] FAIL: 2>> truncated the earlier entry (DDR-868)` |
+| **NSI max** | **93** used (next free **94**) |
+| **CI gates assigned** | 122 across 6 shards · 5 excluded |
+| **Overall completion** | 217 ✅ / 25 ⚠️ / 28 ❌ out of 286 = **76%** |
 
-### Immediate Next Actions (ordered, do not reorder)
+### Tasks Done This Session
+`0b` · `0c` · `1a` · `1b` · `1c` · `1d` · `1e` · `2` · `5` · **STEP C**
 
-1. **STEP C first** — make `tools/ci/shell_evidence.sh` tee `make` stdout so the
-   `[shell] FAIL` assertion becomes visible, then re-run `smoke-shell` 3× and
-   read which assertion actually fails.
-2. **Steps D & E** — follow from Step C findings.
-3. **Tasks 3, 4, 6, 7, 8, 9a–9e** — see §Work Queue.
-4. **Push `dev/phase1`** then wait for CI green before any `main` merge
-   (`main` is not an ancestor of `dev/phase1`, so `--ff-only` will fail; use
-   `git push origin dev/phase1:main` after 3 greens).
+### Tasks Remaining
+`3` (DDR-782 O_APPEND — THE ACTIVE TASK) · `4` · `6` · `7` · `8` · `9a–9e`
 
-### Refuted Hypotheses (do not re-litigate)
+### Refuted Hypotheses — DO NOT RE-LITIGATE ANY OF THESE
 
-| Hypothesis | Refutation evidence |
+| Hypothesis | Refutation |
 |---|---|
-| RTL trigger-level (STEP A: outb COM1+2, 0xC1) | `console.c:136` already sets FCR=0x07 (bits 7:6=00 = 1-byte trigger, the most aggressive). 0xC1 sets bits 7:6=11 = 14-byte trigger — 14× worse. Step A was a no-op at best, harmful at worst. Not applied. |
+| RTL trigger-level (STEP A: outb COM1+2, 0xC1) | `console.c:136` already sets FCR=0x07 (bits 7:6=00 = 1-byte trigger). 0xC1 sets 14-byte trigger — 14× worse. Not applied. |
 | RX starvation | Refuted by RX-ring restoration commit |
 | Feeder desync | Refuted by DDR-916 burst-start drain |
 | Missing fixture | Not present in tree |
-| THRE cap | Bounded by `CONSOLE_THRE_MAX`, verified in DDR-809 |
-| [shell] FAIL root cause known | **FALSE** — the FAIL line goes to Makefile stdout, not the serial log. Shell_evidence.sh never captured it. Every prior diagnosis was blind. |
+| THRE cap | Bounded by `CONSOLE_THRE_MAX` (DDR-809) |
+| IRQ4 sharing / minimal RX repro (Steps B/D/E) | ALL closed — they target character loss. `smoke-shell` does NOT fail on character loss. |
+| `smoke-shell` is non-deterministic / timing race | **REFUTED by STEP C.** The assertion is identical in all 3 arms every run. The apparent non-determinism was `tail -1` sampling different trailing lines. The bug is deterministic. |
+| DDR-808 character loss | NOT the failure mode. The gate fails on O_APPEND semantics, not lost characters. |
+| `[shell] FAIL` root cause was known before STEP C | **FALSE.** The FAIL line went to Makefile stdout, not the serial log. Every diagnosis before STEP C was blind. |
 
 ---
 
@@ -102,8 +201,8 @@
 - SFS write-budget token bucket 25 MiB/s (ADR-032); cross-reboot persistence (DDR-768/769/770)
 - Host `mkfs.sfs` + multi-leaf B+tree bulk load (DDR-767/773); ext4 read-only (ADR-019); per-process root mount (DDR-739)
 - NVMe controller + block I/O (DDR-765/766/772); `VBLK_MAX` 4→8 (DDR-771)
-- NVMe MSI-X (DDR-774a/b/c) — programmed + delivered + gated (`smoke-nvme`, `[nvme] irqs=6`); IRQ-driven sleep deferred to a future DDR
-- **aarch64 / riscv64 bootstrap** (ADR-034) — boot-only; CI-green every run in `arch-bootstrap` job
+- NVMe MSI-X (DDR-774a/b/c) — programmed + delivered + gated (`smoke-nvme`, `[nvme] irqs=6`); IRQ-driven sleep deferred
+- **aarch64 / riscv64 bootstrap** (ADR-034) — boot-only; CI-green every run
 - **Bounded W^X carve-out** for self-rewriting code (ADR-035)
 
 ### Userspace / Syscalls / Shell
@@ -115,10 +214,16 @@
 - PRISM builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit
 - `ls` via `SYS_GETDENTS` (66); `ps` via `SYS_GETPROCS` (67)
 - Lazy per-thread FPU save/restore; copyin/copyout (EFAULT never panics)
-- NSI 1–93 allocated (see §NSI table)
+- NSI 1–93 allocated; next free **94**
 - TCP loopback echo; kill end-to-end
 - CI harness early-exit (DDR-785/788); `make smoke-selftest`; per-boot probe selection (DDR-804)
-- `smoke-chipset` — q35/qemu64, pc/qemu64 (i440FX), q35/Nehalem, q35/Opteron_G5; 20/20 local
+- `smoke-chipset` — q35/qemu64, pc/qemu64 (i440FX), q35/Nehalem, q35/Opteron_G5
+
+### ⚠️ KNOWN GAP — O_APPEND not yet in kernel (ACTIVE BUG)
+
+`prism.c:486` passes `O_APPEND` correctly for both `>>` and `2>>`. The kernel
+does not yet honour it. `sys_write` always writes at the stored fd offset,
+not at EOF. This causes `2>>` to truncate the file. Fix is TASK 3 (DDR-782).
 
 ### AETHER Agent Layer (kernel plumbing)
 
@@ -148,8 +253,8 @@
 
 ## 3. Section A2 — AETHER Host-Side Python Agent Layer (ASI-bridge v4.0)
 
-> Root: `aether/` · Python 3.13 · Runs on top of the OS, not inside the kernel.  
-> Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`)  
+> Root: `aether/` · Python 3.13 · Runs on top of the OS, not inside the kernel.
+> Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`)
 > Invariants: S1–S14 in `aether/kernel/invariants/core_invariants.py` — **independent of kernel S1–S8, never merge**.
 
 | Module | File | Status |
@@ -206,7 +311,7 @@
 | Cloud bridge (built, NOT enabled) | `aether/cloud_bridge/transport.py` | ✅ |
 | F#68 kernel wire (DDR-795) | `kernel/aether/metric_page.c` + `aether/kernel/lockbox/metric_region.py` | ✅ |
 | I-01…I-10 integration wiring | — | ✅ COMPLETE |
-| J-01…J-06 retro audit | — | ✅ verified DDR-845 (audit only, no code) |
+| J-01…J-06 retro audit | — | ✅ verified DDR-845 |
 
 ---
 
@@ -215,15 +320,15 @@
 | # | Feature | Priority | Status |
 |---|---|---|---|
 | B#1 | NVMe IRQ (MSI-X) | High | ⏸ functionally complete (DDR-774c); IRQ-driven sleep deferred |
-| B#3 | `-smp 4` percpu-sched race | **High** | ⬜ OPEN — B#3 / DDR-806. Leading hypothesis: `fs_test_thread` lost before `main.c:1311` due to ~30 blocking SFS I/O calls. Next step: stamp `g_ticks` at `main.c:1134` and `:1311`. Gates promotion. |
+| B#3 | `-smp 4` percpu-sched / thread loss | **High** | ⬜ OPEN — DDR-806. Next: stamp `g_ticks` at `main.c:1134` and `:1311`. Gates promotion. |
 | B#4 | SFS as default process root | Medium | ⬜ planned |
-| B#6 | ext4 write support | Medium | ⬜ planned (ADR-019 extension, journal transaction layer) |
+| B#6 | ext4 write support | Medium | ⬜ planned |
 | B#9 | I/O APIC (q35 GSI routing) | Low | ⬜ planned |
 | B#10 | Per-CPU runqueue affinity/NUMA hints | Low | ⬜ planned |
-| B#12 | Job control in PRISM (`&`, SIGPIPE, job table) | Low | ⬜ partial (`$?` ✅, SIGPIPE ✅, `&` ⬜) |
-| B#13 | Dynamic linker (`ld-pradyos.so`) | Low | ⬜ planned |
+| B#12 | Job control in PRISM | Low | ⬜ partial (`$?` ✅, SIGPIPE ✅, `&` ⬜) |
+| B#13 | Dynamic linker | Low | ⬜ planned |
 | B#14 | 3-lane NAS scheduler | Low | ⬜ planned |
-| B#15 | PMM variable-weight/predictive allocator | Low | ⬜ planned |
+| B#15 | PMM variable-weight allocator | Low | ⬜ planned |
 
 ---
 
@@ -231,71 +336,70 @@
 
 | ID | Symptom | Status |
 |---|---|---|
+| **DDR-868 / TASK 3** | `smoke-shell` FAIL: `2>>` truncates instead of appending | **ACTIVE — kernel O_APPEND not implemented. Fix specified in §0 TASK 3 above.** |
 | **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel | open, passive |
-| **OPEN-2** | Intermittent CI reds on `-smp 4` gates (`smoke-msixap`, `smoke-blkmq-trace` ×2, `smoke-crosswake` ×2) | open — DDR-863: all 4 intermittent gates run `QEMU_SMP=4`; 0/118 single-CPU gates ever flaked |
-| **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | root cause of the specific QEMU lock-hold scenario not yet caught |
-| **OPEN-10** | Reframed by DDR-880 — not a B+tree bug; it is the item-47 lost-thread failure seen through a different sentinel. `fs_test_thread` lost before reaching `smoke-sfs-btree-smp4`; `[boot-stamp] B` absent in every captured failure | open, gates promotion |
-| **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall / thread loss | open — see §4 above |
+| **OPEN-2** | Intermittent CI reds on `-smp 4` gates | open — DDR-863 |
+| **OPEN-9** | `smoke-shell` fails locally / passes CI (QEMU lock-hold) | root cause not yet caught; **not the same failure as DDR-868** |
+| **OPEN-10** | item-47 lost-thread failure seen through `smoke-sfs-btree-smp4` | open, gates promotion |
+| **B#3 / DDR-806** | `-smp 4` thread loss | open — see §4 |
 | ~~OPEN-7~~ | Per-boot probe selection | CLOSED (DDR-804) |
 | ~~OPEN-8~~ | Console input loss | CLOSED (DDR-809) |
-| ~~OPEN-11~~ | `smoke-sha256` failure after fresh image | CLOSED (DDR-831) — `blk_selftest` scratch sector overlapped kernel image at LBA 1500; fixed to LBA 4095 |
+| ~~OPEN-11~~ | `smoke-sha256` after fresh image | CLOSED (DDR-831) |
 
 ### Structural Defect Pattern — 16 Instances
 
-One bug in many forms: **a check that discards or absorbs invalid input instead of rejecting it, so drift is silent and looks like success.**
-
 | # | Where | Silent drop | Fixed by |
 |---|---|---|---|
-| 1 | `ci.yml` gate list | 8 gates never ran in CI | DDR-817 — `make ci-shard-check` |
-| 2 | Makefile user sources | 14/31 probes never rebuilt; gates tested stale binaries | DDR-822 — `$(wildcard user/*.c)` |
-| 3 | `user/` `_start` attribute | new probe silently reintroduces a #GP | DDR-823 — `make ci-start-align-check` |
-| 4 | `syscall_register()` | `num >= MAX_SYSCALLS` discarded; NSI 80+ would vanish | DDR-823 — panic + table 80→128 |
-| 5 | `check_global_forbidden()` | printed only matching lines, discarding the `op=` line | DDR-824 — 40 lines of context |
-| 6 | crypto sources + Makefile not prerequisites | build reports success and never runs | DDR-825 — glob `kernel/crypto/*` and list `Makefile` |
-| 7 | writable global in R+X-only probe | link succeeds; first STORE faults at runtime | DDR-826 — `make ci-probe-rodata-check` |
-| 8 | PMM double-free | freed frame re-entered the pool | DDR-830 |
-| 9 | mid-enum insertion | shipped wire format silently renumbered | DDR-832 — append-only + `_Static_assert` |
-| 10 | kernel headers/sources not prerequisites | third recurrence of same class | DDR-833/835 |
-| 11 | SkillOpt accepting a TIE | each tie changes skill with no evidence it helped | DDR-847 — `>` not `>=` |
-| 12 | skill revision thinning its own refusals | removing a refusal raises score; optimiser rewarded for it | DDR-848 — refusal count may rise, may not fall |
-| 13 | `rates.get(model, 0.0)` for cost | unpriced model charged as free | DDR-849 — `UnknownModel` raised |
-| 14 | `check_invariant()` asserting a tautology | `available` is derived by subtraction; invariant could never fail | DDR-849 — assert independently-tracked counters |
-| 15 | building from tracker LABEL not spec text | items #47/#48/#50/#52 satisfied titles while missing §3D | DDR-850 — corrected against `AETHER_MASTER_FEATURES.md` §3D |
-| 16 | mutation harness itself | absent target string skipped with warning; stale `__pycache__` still counted kills | DDR-853 — aborts on missing/ambiguous target, clears bytecode, fails if mutation kills nothing |
+| 1 | `ci.yml` gate list | 8 gates never ran | DDR-817 |
+| 2 | Makefile user sources | 14/31 probes stale | DDR-822 |
+| 3 | `user/` `_start` attribute | silent #GP reintroduced | DDR-823 |
+| 4 | `syscall_register()` | NSI 80+ discarded | DDR-823 |
+| 5 | `check_global_forbidden()` | `op=` line dropped | DDR-824 |
+| 6 | crypto sources not prerequisites | build never runs | DDR-825 |
+| 7 | writable global in R+X probe | STORE faults at runtime | DDR-826 |
+| 8 | PMM double-free | freed frame re-pooled | DDR-830 |
+| 9 | mid-enum insertion | wire format renumbered | DDR-832 |
+| 10 | kernel headers not prerequisites | third recurrence | DDR-833/835 |
+| 11 | SkillOpt accepting TIE | skill drifts uncontrolled | DDR-847 |
+| 12 | skill revision thinning refusals | optimiser rewarded for dropping | DDR-848 |
+| 13 | `rates.get(model, 0.0)` | unpriced model = free | DDR-849 |
+| 14 | `check_invariant()` tautology | invariant could never fail | DDR-849 |
+| 15 | building from label not spec | items satisfied title, missed §3D | DDR-850 |
+| 16 | mutation harness stale bytecode | kills counted from prior run | DDR-853 |
 
-**Standing rule:** when a check discards input rather than rejecting it, the discard must be loud. A tracker line is a label FOR a requirement, not the requirement — build from the spec text.
+**Standing rule:** a check that discards input silently is a bug. Make every discard loud.
 
 ---
 
-## 6. NSI Allocation Table (append-only; never insert mid-table)
+## 6. NSI Allocation Table (append-only)
 
 | NSI | Syscall | Capability | Status |
 |---|---|---|---|
-| 1–28 | Core OS syscalls | varies | ✅ shipped |
-| 29–38 | AETHER agent calls | CAP_AGENT / CAP_SOVEREIGN | ✅ shipped |
-| 66 | SYS_GETDENTS | — | ✅ shipped |
-| 67 | SYS_GETPROCS | — | ✅ shipped |
-| 69/70 | SYS_POWEROFF / SYS_REBOOT | — | ✅ shipped |
-| 71–75 | SYS_SYSINFO/TIME/DMESG/MEMINFO/SETNAME | — | ✅ shipped |
-| 76 | SYS_METRIC_READ | CAP_SOVEREIGN | ✅ shipped (DDR-812) |
-| 77 | SYS_ACC_SEAL | CAP_AGENT | ✅ shipped (DDR-813) |
-| 78 | SYS_ACC_OPEN | CAP_SOVEREIGN | ✅ shipped (DDR-813) |
-| 79 | SYS_GOAL_SIGN | CAP_SOVEREIGN | ✅ shipped (DDR-814) |
-| 80 | SYS_GOAL_VERIFY | CAP_AGENT | ✅ shipped (DDR-814) |
-| 81 | SYS_ACC_ROTATE | CAP_SOVEREIGN | ✅ shipped (DDR-815) |
-| 82 | SYS_MEMORY_WRITE | CAP_MEMORY (1<<18) | ✅ shipped (DDR-836) |
-| 83 | SYS_MEMORY_READ | CAP_MEMORY (1<<18) | ✅ shipped (DDR-836) |
-| 84 | SYS_CHECKPOINT_AGENT | CAP_SOVEREIGN | ✅ shipped (DDR-837) |
-| 85 | SYS_RESUME_AGENT | CAP_SOVEREIGN | ✅ shipped (DDR-837) |
-| 86 | SYS_APPROVE_CODE_REWRITE | CAP_REWRITE + CAP_SOVEREIGN | ✅ shipped (DDR-842) |
-| 87 | SYS_VAULT_PUT | CAP_SOVEREIGN | ✅ shipped (DDR-834) |
-| 88–90 | `prad` package manager (renumbered; 87 is taken) | — | ⬜ TASK 18 |
-| 91 | SYS_VAULT_GET | CAP_SOVEREIGN | ✅ shipped (DDR-834) |
-| 92 | SYS_SUBMIT_CHILD_ACTION | CAP_AGENT | ✅ shipped (DDR-839) |
-| 93 | SYS_VERIFY_AUDIT | CAP_SOVEREIGN | ✅ shipped (DDR-842) |
+| 1–28 | Core OS syscalls | varies | ✅ |
+| 29–38 | AETHER agent calls | CAP_AGENT / CAP_SOVEREIGN | ✅ |
+| 66 | SYS_GETDENTS | — | ✅ |
+| 67 | SYS_GETPROCS | — | ✅ |
+| 69/70 | SYS_POWEROFF / SYS_REBOOT | — | ✅ |
+| 71–75 | SYS_SYSINFO/TIME/DMESG/MEMINFO/SETNAME | — | ✅ |
+| 76 | SYS_METRIC_READ | CAP_SOVEREIGN | ✅ DDR-812 |
+| 77 | SYS_ACC_SEAL | CAP_AGENT | ✅ DDR-813 |
+| 78 | SYS_ACC_OPEN | CAP_SOVEREIGN | ✅ DDR-813 |
+| 79 | SYS_GOAL_SIGN | CAP_SOVEREIGN | ✅ DDR-814 |
+| 80 | SYS_GOAL_VERIFY | CAP_AGENT | ✅ DDR-814 |
+| 81 | SYS_ACC_ROTATE | CAP_SOVEREIGN | ✅ DDR-815 |
+| 82 | SYS_MEMORY_WRITE | CAP_MEMORY (1<<18) | ✅ DDR-836 |
+| 83 | SYS_MEMORY_READ | CAP_MEMORY (1<<18) | ✅ DDR-836 |
+| 84 | SYS_CHECKPOINT_AGENT | CAP_SOVEREIGN | ✅ DDR-837 |
+| 85 | SYS_RESUME_AGENT | CAP_SOVEREIGN | ✅ DDR-837 |
+| 86 | SYS_APPROVE_CODE_REWRITE | CAP_REWRITE + CAP_SOVEREIGN | ✅ DDR-842 |
+| 87 | SYS_VAULT_PUT | CAP_SOVEREIGN | ✅ DDR-834 |
+| 88–90 | `prad` package manager | — | ⬜ TASK 18 |
+| 91 | SYS_VAULT_GET | CAP_SOVEREIGN | ✅ DDR-834 |
+| 92 | SYS_SUBMIT_CHILD_ACTION | CAP_AGENT | ✅ DDR-839 |
+| 93 | SYS_VERIFY_AUDIT | CAP_SOVEREIGN | ✅ DDR-842 |
 | **94+** | **NEXT FREE** | — | — |
 
-> ⚠️ **Warning:** `prad` package manager was previously scoped to NSI 87–89. 87 is already `SYS_VAULT_PUT`. Use **88–90** instead. Record this in any DDR that implements `prad`.
+> ⚠️ `prad` was previously scoped to NSI 87–89. 87 is `SYS_VAULT_PUT`. Use **88–90**.
 
 ---
 
@@ -303,12 +407,12 @@ One bug in many forms: **a check that discards or absorbs invalid input instead 
 
 | Bit | Name | Status |
 |---|---|---|
-| 1<<16 | CAP_SOVEREIGN | ✅ shipped |
-| 1<<17 | CAP_AGENT | ✅ shipped |
-| 1<<18 | CAP_MEMORY | ✅ shipped (DDR-836) |
+| 1<<16 | CAP_SOVEREIGN | ✅ |
+| 1<<17 | CAP_AGENT | ✅ |
+| 1<<18 | CAP_MEMORY | ✅ DDR-836 |
 | 1<<19 | CAP_OCR | ⬜ deferred post-1.0 |
 | 1<<20 | CAP_EXEC | ⬜ deferred post-1.0 |
-| 1<<21 | CAP_REWRITE | ✅ shipped (DDR-842); always requires CAP_SOVEREIGN co-approval |
+| 1<<21 | CAP_REWRITE | ✅ DDR-842; always requires CAP_SOVEREIGN |
 | 1<<22 | CAP_SCENE | ⬜ deferred post-1.0 (post-L7) |
 | 1<<23 | CAP_NET_BROWSE | ⬜ deferred post-1.0 |
 
@@ -318,94 +422,94 @@ One bug in many forms: **a check that discards or absorbs invalid input instead 
 
 Status: ✅ done · 🔵 in-progress · ⬜ not started · 🔒 blocked
 
-### Immediate (current session)
+### Immediate (TASK 3 is the active task)
 
 | # | Task | Status |
 |---|---|---|
-| 0b | Checkpoint commit | ✅ `bb7f9bc` |
+| 0b | Checkpoint commit `bb7f9bc` | ✅ |
 | 0c | SESSION_HANDOFF.md updated | ✅ |
-| 1a | STEP C — tee make stdout in `shell_evidence.sh` | 🔵 NEXT |
-| 1b | Re-run `smoke-shell` 3× and read which assertion fails | 🔒 needs 1a |
-| 1c | STEP D — fix whichever assertion 1b reveals | 🔒 needs 1b |
-| 1d | STEP E — verify fix with 3 consecutive passes | 🔒 needs 1c |
-| 1e | Push `dev/phase1` | 🔒 needs 1d |
-| 2 | CI green on pushed tip | 🔒 needs 1e |
-| 3 | Steps C/D/E remaining work (see above) | 🔵 |
-| 4 | B#3 `-smp 4` virtio-blk/thread-loss root cause | ⬜ do before more OPEN-10 work |
-| 5 | Push to `main` (3 greens required; `--ff-only` will fail, use `git push origin dev/phase1:main`) | 🔒 needs CI green |
+| 1a–1e | STEP C through push | ✅ STEP C done (`7aa4f31`); push pending |
+| 2 | CI green | 🔒 needs push |
+| **3** | **DDR-782 kernel O_APPEND — see §0 TASK 3** | 🔵 **ACTIVE** |
+| 4 | B#3 g_ticks stamps | ⬜ |
+| 5 | Push to `main` (3 greens; `git push origin dev/phase1:main`) | 🔒 |
+| 6 | Section F #66–76 | ⬜ start with F#68 smoke-lockbox-e2e |
+| 7 | Section G remaining 4 agents | ⬜ |
+| 8 | ISO pipeline | ⬜ |
+| 9a | TASK 17 ISO | ⬜ |
+| 9b | TASK 18 `prad` NSI 88–90 | ⬜ |
+| 9c | TASK 19 Phase 9 asm | ⬜ |
+| 9d | TASK 20 invariant gates S1–S8 | ⬜ unblock S3/S7 by completing F#66–72 first |
+| 9e | TASK 21 v1.0.0 release | ⬜ |
 
-### Group 1 — Tracker & Build-System Integrity (x86_64 v1.0.0)
-
-| # | Item | Status |
-|---|---|---|
-| G1-1 | Tracker contradictions + NSI 87 collision | ✅ DDR-840, run 31053809587 on `f80efa6` |
-| G1-2 | Docker reproducible build env | ✅ `Dockerfile` + `make docker-build` |
-| G1-3 | CMake/Makefile hybrid | ✅ SKIPPED for v1.0.0 (DDR-843); revisit post-1.0 with arch ports |
-| G1-4 | VirtualBox runner | ✅ `tools/vbox_runner/run_vbox.sh` |
-| G1-5 | x86_64 chipset variant coverage | ✅ `smoke-chipset` 20/20 local |
-
-### Group 2 — Section E / Capability / Agent Core Close-Out
+### Group 1 — Tracker & Build-System Integrity
 
 | # | Item | Status |
 |---|---|---|
-| G2-1 | NSI 86 `SYS_APPROVE_CODE_REWRITE` + `CAP_REWRITE` | ✅ run 31094358972 |
-| G2-2 | Audit hash chain + NSI 93 `SYS_VERIFY_AUDIT` | ✅ run 31094358972 |
-| G2-3 | Section 3C action types (8 of 14 shipped; 6 deferred — see below) | ✅ partial |
-| G2-4 | Section 3D daemon features #45–65 | ✅ ALL 21 COMPLETE (DDR-846–856) |
-| G2-5 | Section F #66–76 | ⬜ not started |
-| G2-6 | Section G 12-agent roster | ⬜ partial (8 slots registered; 4 remaining) |
+| G1-1 | NSI 87 collision fix | ✅ DDR-840 |
+| G1-2 | Docker reproducible build | ✅ |
+| G1-3 | CMake skipped v1.0.0 | ✅ DDR-843 |
+| G1-4 | VirtualBox runner | ✅ |
+| G1-5 | chipset coverage | ✅ `smoke-chipset` |
+
+### Group 2 — Section E / Agent Core Close-Out
+
+| # | Item | Status |
+|---|---|---|
+| G2-1 | NSI 86 + CAP_REWRITE | ✅ run 31094358972 |
+| G2-2 | Audit hash chain + NSI 93 | ✅ run 31094358972 |
+| G2-3 | 3C action types (8/14; 6 deferred) | ✅ partial |
+| G2-4 | 3D daemon features #45–65 | ✅ ALL 21 COMPLETE |
+| G2-5 | Section F #66–76 | ⬜ |
+| G2-6 | Section G 12-agent roster | ⬜ partial |
 | G2-7 | J-01…J-06 retro audit | ✅ DDR-845 |
-| G2-8 | `smoke-invariants` S1–S8 | ✅ `PASS smoke-invariants (120s)` run 31104672684 on `81a3eaf` (S3/S7 deliberately NOT claimed — depend on unbuilt F#66–72) |
-| G2-9 | `smoke-aead` gate-wiring verification | ✅ confirmed standalone gate in shard 4 |
+| G2-8 | smoke-invariants S1–S8 | ✅ run 31104672684 |
+| G2-9 | smoke-aead gate wiring | ✅ shard 4 |
 
-#### 3C Action Types — 6 NOT built (reasons on record)
+#### 3C Action Types — 6 Deferred (on record)
 
-| Action type | Why deferred |
+| Action | Why |
 |---|---|
-| `ACTION_CAPTURE_FRAME` | post-L7; needs `CAP_SCENE` + camera path |
-| `ACTION_SCAN_ENVIRONMENT` | post-L7; SLAM3R, no hardware path |
-| `ACTION_QUERY_SCENE` | post-L7; NL query over non-existent scene graph |
-| `ACTION_PARSE_DOCUMENT` | needs 64 MiB local OCR model; no model-shipping path |
-| `ACTION_EXEC_CODE` | needs a sandboxed interpreter — a subsystem, not an action |
-| `ACTION_BROWSE_WEB` | needs headless browser + network egress (cloud bridge). **DEFERRED post-1.0 (DDR-843)** — enabling it is a security-posture change, not a feature toggle |
+| ACTION_CAPTURE_FRAME | post-L7; CAP_SCENE + camera path missing |
+| ACTION_SCAN_ENVIRONMENT | post-L7; SLAM3R missing |
+| ACTION_QUERY_SCENE | post-L7; scene graph missing |
+| ACTION_PARSE_DOCUMENT | 64 MiB OCR model; no model-shipping path |
+| ACTION_EXEC_CODE | needs sandboxed interpreter subsystem |
+| ACTION_BROWSE_WEB | headless browser + network egress; DEFERRED post-1.0 (DDR-843) |
 
-#### Section 3D — Ring-3/Daemon Features #45–65 — ALL 21 COMPLETE
+#### Section 3D — #45–65 — ALL 21 COMPLETE
 
-| # | Item | Status | DDR |
-|---|---|---|---|
-| #45 | skill.md — 8 roster files, validated | ✅ | DDR-846 |
-| #46 | SkillOpt loop | ✅ | DDR-847 |
-| #47 | SkillOpt-Sleep (harvest→mine→replay→consolidate) | ✅ | DDR-848+850 |
-| #48 | skill-update validation (CAP_SOVEREIGN always) | ✅ | DDR-848+850 |
-| #49 | multi-agent skill transfer | ✅ | DDR-848 |
-| #50 | TokenJuice — context compression ≤80% + hard token ceiling | ✅ | DDR-849+850 |
-| #51 | JSONL trajectory log | ✅ | DDR-849 |
-| #52 | cost accounting (token_count + latency_ms) | ✅ | DDR-849+850 |
-| #53 | goals.md per agent | ✅ | DDR-851 |
-| #54 | subconscious loop | ✅ | DDR-851 |
-| #55 | MOSS pipeline | ✅ | DDR-851 |
-| #56 | OCR→memory pipeline | ✅ | DDR-852 |
-| #57 | multi-modal context builder | ✅ | DDR-852 |
-| #58 | privacy mode (ring-3) | ✅ | DDR-852 |
-| #59 | model routing | ✅ | DDR-852 |
-| #60 | hypothesis tree (versioned, SFS-persistent) | ✅ | DDR-853+855 |
-| #61 | genome.md (lineage archived, rationale required) | ✅ | DDR-853 |
-| #62 | vector knowledge graph (online learning) | ✅ | DDR-856 |
-| #63 | dead-end registry (D-13 FailureMemoryRegistry + divergence score) | ✅ | DDR-855 |
-| #64 | population tournament (unranked ≠ last, ties do not promote) | ✅ | DDR-856 |
-| #65 | replayable run visualiser (deterministic, never un-redacts) | ✅ | DDR-856 |
+| # | Item | DDR |
+|---|---|---|
+| #45 | skill.md 8 roster files | DDR-846 |
+| #46 | SkillOpt loop | DDR-847 |
+| #47 | SkillOpt-Sleep | DDR-848+850 |
+| #48 | skill-update validation | DDR-848+850 |
+| #49 | multi-agent skill transfer | DDR-848 |
+| #50 | TokenJuice | DDR-849+850 |
+| #51 | JSONL trajectory log | DDR-849 |
+| #52 | cost accounting | DDR-849+850 |
+| #53 | goals.md per agent | DDR-851 |
+| #54 | subconscious loop | DDR-851 |
+| #55 | MOSS pipeline | DDR-851 |
+| #56 | OCR→memory | DDR-852 |
+| #57 | multi-modal context builder | DDR-852 |
+| #58 | privacy mode ring-3 | DDR-852 |
+| #59 | model routing | DDR-852 |
+| #60 | hypothesis tree | DDR-853+855 |
+| #61 | genome.md | DDR-853 |
+| #62 | vector knowledge graph | DDR-856 |
+| #63 | dead-end registry | DDR-855 |
+| #64 | population tournament | DDR-856 |
+| #65 | replayable run visualiser | DDR-856 |
 
-### Section E — Kernel Syscalls (TASK 9) — ALL COMPLETE
-
-See §NSI table for numbers. All CI-confirmed.
-
-### Section F — Visionary Features #66–76 (TASK 13)
+### Section F — Visionary #66–76 (TASK 13)
 
 | # | Feature | Status |
 |---|---|---|
 | F#66 | architect_agent | ⬜ |
 | F#67 | healer_agent | ⬜ |
-| F#68 | metric lockbox | ⚠️ kernel ✅ + Python ✅; end-to-end `smoke-lockbox-e2e` ⬜ |
+| F#68 | metric lockbox e2e | ⚠️ kernel+Python ✅; smoke-lockbox-e2e ⬜ |
 | F#69 | inventor_agent | ⬜ |
 | F#70 | tournament_agent | ⬜ |
 | F#71 | subconscious world model | ⬜ |
@@ -417,144 +521,137 @@ See §NSI table for numbers. All CI-confirmed.
 
 ### Section G — 12-Agent Roster (TASK 14)
 
-8 kernel slots (KRYOS…SOLIN) registered + UI cards + skill prompts (DDR-846).  
-DDR-846 decision: 8 legacy names **become** the 8 highest-priority Section G roles.
-
-| Section G role | Slot | Capabilities | Spawnable? |
-|---|---|---|---|
-| file_agent | KRYOS | CAP_AGENT, CAP_MEMORY | ✅ |
-| shell_agent | PRAX | CAP_AGENT, CAP_EXEC | ❌ CAP_EXEC unwired |
-| research_agent | LUMYN | CAP_AGENT, CAP_NET_BROWSE | ❌ CAP_NET_BROWSE unwired |
-| ocr_agent | AHNIS | CAP_AGENT, CAP_OCR | ❌ CAP_OCR unwired |
-| vision_agent | IRIS | CAP_AGENT, CAP_SCENE | ❌ CAP_SCENE unwired (post-L7) |
-| healer_agent | RUFLO | CAP_AGENT, CAP_REWRITE | ❌ not yet spawnable |
-| orchestrator_agent | HERMES | CAP_AGENT | ✅ |
-| verifier_agent | SOLIN | CAP_AGENT | ✅ |
-| subconscious_agent | — | daemon-level | ⬜ no kernel roster slot yet |
-| ai_scientist_agent | — | CAP_AGENT, CAP_EXEC, CAP_MEMORY | ⬜ no kernel roster slot yet |
-| architect_agent | — | CAP_AGENT, CAP_REWRITE | ⬜ no kernel roster slot yet |
-| tournament_agent | — | daemon-level | ⬜ no kernel roster slot yet |
-
-> 4 remaining roster agents need a kernel slot before their skill file means anything. Kernel-side per-persona dispatch is future for all 12.
+| Role | Slot | Spawnable? |
+|---|---|---|
+| file_agent | KRYOS | ✅ |
+| shell_agent | PRAX | ❌ CAP_EXEC unwired |
+| research_agent | LUMYN | ❌ CAP_NET_BROWSE unwired |
+| ocr_agent | AHNIS | ❌ CAP_OCR unwired |
+| vision_agent | IRIS | ❌ CAP_SCENE unwired (post-L7) |
+| healer_agent | RUFLO | ❌ not yet spawnable |
+| orchestrator_agent | HERMES | ✅ |
+| verifier_agent | SOLIN | ✅ |
+| subconscious_agent | — | ⬜ no kernel slot yet |
+| ai_scientist_agent | — | ⬜ no kernel slot yet |
+| architect_agent | — | ⬜ no kernel slot yet |
+| tournament_agent | — | ⬜ no kernel slot yet |
 
 ### Section B Remaining (TASK 16)
 
-B#1 NVMe IRQ ⏸ · B#4 SFS default root ⬜ · B#6 ext4 write ⬜ · B#9 I/O APIC ⬜ · B#10 NUMA affinity ⬜ · B#12 PRISM job control ⬜ · B#13 dynamic linker ⬜ · B#14 NAS scheduler ⬜ · B#15 PMM policy ⬜
+B#1 ⏸ · B#4 ⬜ · B#6 ⬜ · B#9 ⬜ · B#10 ⬜ · B#12 ⬜ · B#13 ⬜ · B#14 ⬜ · B#15 ⬜
 
 ### TASK 17 — ISO Pipeline
 
-| Target | Boot status | ISO status |
+| Target | Boot | ISO |
 |---|---|---|
-| x86_64 | ✅ boots, 118+ gates | ⬜ multiboot2 + grub-mkrescue |
-| aarch64 | ✅ boots in CI | ⬜ EFI/U-Boot packaging |
-| riscv64 | ✅ boots in CI | ⬜ OpenSBI + U-Boot packaging |
-| Apple Silicon | ⬜ | ⬜ m1n1 shim over aarch64 kernel |
+| x86_64 | ✅ | ⬜ multiboot2 + grub-mkrescue |
+| aarch64 | ✅ CI | ⬜ EFI/U-Boot |
+| riscv64 | ✅ CI | ⬜ OpenSBI + U-Boot |
+| Apple Silicon | ⬜ | ⬜ m1n1 shim |
 
 ### TASK 18–21
 
 | Task | Item | Status |
 |---|---|---|
-| 18 | `prad` package manager (NSI **88–90**, NOT 87–89) | ⬜ |
-| 19 | Phase 9 assembly optimisation | ⬜ |
-| 20 | Security invariant gates S1–S8 (S3/S7 blocked on F#66–72) | ⬜ partial |
+| 18 | `prad` NSI **88–90** | ⬜ |
+| 19 | Phase 9 assembly | ⬜ |
+| 20 | Invariant gates S1–S8 | ⬜ partial |
 | 21 | v1.0.0 release | ⬜ |
 
 ---
 
-## 9. Section D — ADR-026 Baseline (#1–17) — VERIFIED BUILT 2026-07-24
+## 9. Section D — ADR-026 Baseline (#1–17) — VERIFIED BUILT
+
+All 17 items confirmed in `kernel/aether/`. No drift found.
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Kernel-is-arbiter trust model (`SYS_SUBMIT_ACTION`) | ✅ |
-| 2 | Sovereign auto-approve mode | ✅ |
-| 3 | Manual mode w/ 60 s expiry | ✅ |
-| 4 | 256-entry fixed action queue | ✅ |
-| 5 | 4096-entry append-only audit log (wrap-flagged) | ✅ |
-| 6 | Per-agent hard 128 MiB memory cap + OOM kill | ✅ |
-| 7 | `CAP_SOVEREIGN` (1<<16) | ✅ |
-| 8 | `CAP_AGENT` (1<<17) | ✅ |
-| 9 | 60 syscall/s sliding-window rate limiter | ✅ |
-| 10 | `SYS_SPAWN_AGENT` force-PENDING in sovereign mode | ✅ |
-| 11 | `SYS_KILL_AGENT` (caller kills own children only) | ✅ |
+| 1 | Kernel-is-arbiter (`SYS_SUBMIT_ACTION`) | ✅ |
+| 2 | Sovereign auto-approve | ✅ |
+| 3 | Manual mode 60 s expiry | ✅ |
+| 4 | 256-entry fixed queue | ✅ |
+| 5 | 4096-entry append-only audit | ✅ |
+| 6 | 128 MiB cap + OOM kill | ✅ |
+| 7 | CAP_SOVEREIGN (1<<16) | ✅ |
+| 8 | CAP_AGENT (1<<17) | ✅ |
+| 9 | 60 syscall/s rate limiter | ✅ |
+| 10 | SYS_SPAWN_AGENT force-PENDING | ✅ |
+| 11 | SYS_KILL_AGENT own-children only | ✅ |
 | 12 | Ollama HTTP/1.1 ring-3 bridge | ✅ |
-| 13 | CI test mode (deterministic, no live model) | ✅ |
-| 14 | Daemon topology (PID-1 → daemon → agents) | ✅ |
-| 15 | `ACTION_WRITE_FILE` (SFS W^X validated) | ✅ |
-| 16 | `ACTION_PRINT` (512-byte bounded) | ✅ |
-| 17 | `ACTION_SPAWN_PROCESS` (force-PENDING always) | ✅ |
+| 13 | CI test mode deterministic | ✅ |
+| 14 | Daemon topology PID-1→daemon→agents | ✅ |
+| 15 | ACTION_WRITE_FILE (SFS W^X) | ✅ |
+| 16 | ACTION_PRINT (512 B bounded) | ✅ |
+| 17 | ACTION_SPAWN_PROCESS force-PENDING | ✅ |
 
 ---
 
 ## 10. Section H — Security Invariants (BINDING, ADR-level)
 
-Govern all 93+ features. Changeable only by a superseding ADR.
-
-- **S1 — No self-escalation.** An agent cannot raise its own cap bits, `mem_limit`, or approve its own actions.
-- **S2 — Bounded everything.** queue 256 · audit 4096 · payload 512 B · memory 128 MiB · syscalls 60/s · skill 2 KB · IPC msg 256 B · spawn depth 3 · lineage results ≤16/query. Every bound returns an error or clean kill — **never a panic**.
-- **S3 — Immutable objective function.** `CAP_SOVEREIGN`-locked SFS path, kernel-signed; agent write attempt → kill + audit.
-- **S4 — Human gate is structural.** spawn, scene, skill-update, code-rewrite, genome-evolve, architect proposals all require `CAP_SOVEREIGN` approval; force-PENDING for highest-consequence actions.
-- **S5 — Append-only audit + Merkle ledger.** No user-space erase path; science ledger Merkle-chained; wraps flagged.
-- **S6 — Fault isolation.** Ring-3 fault kills the agent, never the kernel; copyin/copyout on all user pointers.
-- **S7 — Metric-gaming prevention.** Verifier agent is structurally independent; objective function is kernel-locked.
-- **S8 — Skill-change veto.** Any `skill.md` or code write requires `CAP_SOVEREIGN` + optional manual approval.
+- **S1** — No self-escalation. Agent cannot raise own caps, `mem_limit`, or approve own actions.
+- **S2** — Bounded everything. queue 256 · audit 4096 · payload 512 B · memory 128 MiB · syscalls 60/s · skill 2 KB · IPC 256 B · spawn depth 3 · lineage ≤16/query. Every bound: error or clean kill, never panic.
+- **S3** — Immutable objective function. CAP_SOVEREIGN-locked SFS path; agent write → kill + audit.
+- **S4** — Human gate is structural. spawn/scene/skill-update/code-rewrite/genome-evolve/architect → CAP_SOVEREIGN; force-PENDING for highest-consequence.
+- **S5** — Append-only audit + Merkle ledger. No user-space erase; wraps flagged.
+- **S6** — Fault isolation. Ring-3 fault kills agent, not kernel; copyin/copyout on all user pointers.
+- **S7** — Metric-gaming prevention. Verifier agent structurally independent; objective function kernel-locked.
+- **S8** — Skill-change veto. Any `skill.md` or code write requires CAP_SOVEREIGN.
 
 ---
 
-## 11. Architecture Prerequisite Checklist (answer in DDR before coding any Section E/F item)
+## 11. Architecture Prerequisite Checklist (answer in DDR before any Section E/F item)
 
-1. New NSI/syscalls — is the append-only NSI range still open? (next free: **94**)
-2. TCB / roster-slot / agent-slot fields — struct extension? ABI size assumptions?
-3. PMM/VMM shared mappings — needs `PTE_SW_SHARED` or a new mapping class?
-4. Capability checks — which `CAP_*` gates it; is a new bit needed?
-5. AETHER queue/audit extensions — new record type in `aether_audit.c`/`aether_queue.c`?
-6. Scheduler/accounting hooks — `sched_exit`, `sched_create_state`, spawn-depth enforcement?
-7. Filesystem/root-mount constraints — depends on `root_mnt`, SFS dirs, or new namespace concept?
-8. Network policy tables — touches `net_allow`, `CAP_NET`, `CAP_NET_BROWSE`, or socket NSI?
-9. Compositor/UI exposure — new agent card/roster visual needed?
-10. New smoke gate — what proves it **deterministically**? (avoid TCG-timing flakiness)
-11. **Security invariant check (MANDATORY)** — which of S1–S8 govern this feature, and does the plan violate any of them even indirectly?
-
----
-
-## 12. Risk Flags (honest assessment)
-
-1. **Rate does not reach remaining work.** ~69 features remain. The observed rate is ~2 features + infrastructure per session. Infrastructure was necessary but is not feature throughput.
-2. **5 silent-drop defects in 3 sessions** implies more exist. Every one was found while chasing something else.
-3. **Remaining work is disproportionately never-started**: Sections F/G, `prad`, Phase 9, invariant gates — no scaffolding.
-4. **ISO task is cheaper than it looked** — packaging on two already-booting arch targets, not four ports.
-5. **Honest scope for v1.0.0:** a defensible x86_64 build with crypto chain closed, both `-smp 4` races fixed, and ISOs for the three targets that already boot. Which subset ships is a scope decision, not an engineering one.
+1. NSI range open? Next free: **94**
+2. TCB / roster-slot fields — struct extension? ABI size assumptions?
+3. PMM/VMM shared mappings — `PTE_SW_SHARED` or new class?
+4. Capability check — which `CAP_*` gates it?
+5. AETHER queue/audit — new record type needed?
+6. Scheduler hooks — `sched_exit`, spawn-depth enforcement?
+7. FS/root-mount constraints — depends on `root_mnt`, SFS dirs?
+8. Network policy — touches `net_allow`, socket NSI?
+9. UI exposure — new agent card needed?
+10. Smoke gate — what proves it **deterministically**?
+11. **S1–S8 check (MANDATORY)** — which invariants govern it? Does the plan violate any, even indirectly?
 
 ---
 
-## 13. Competitor Landscape (Table C)
+## 12. Risk Flags
+
+1. **Rate does not cover remaining work.** ~69 features remain. ~2 features + infra per session.
+2. **Silent-drop defects** — 16 found, more likely exist. Every one was found while chasing something else.
+3. **Remaining work is disproportionately never-started** — Sections F/G, `prad`, Phase 9, invariant gates. No scaffolding.
+4. **ISO task is cheaper than it looked** — packaging over already-booting targets.
+5. **Honest v1.0.0 scope:** x86_64 with crypto chain closed, both `-smp 4` races fixed, ISOs for 3 booting targets.
+
+---
+
+## 13. Competitor Landscape
 
 | Competitor | Weakness | AETHER fix |
 |---|---|---|
-| OpenClaw (210k★) | Abysmal skill-vetting security | `CAP_AGENT` ring-3 sandbox + 128 MiB cap + CAP_SOVEREIGN veto + append-only audit |
-| AutoGPT (183k★) | Stalled, hallucination-prone | SkillOpt-Sleep nightly evolution + MOSS rewriting + SFS CoW rollback |
-| CrewAI (60k★) | No kernel isolation | `ACTION_SEND_IPC` + DAG action queue at kernel level |
-| LangChain (146k★) | Stateless, cloud-dependent | `SYS_MEMORY_WRITE/READ` + SFS memory tree + local Ollama |
-| n8n (100k★) | Static workflows, no learning | Subconscious agent rewrites plans on failure + SkillOpt |
-| Dify (85k★) | Weak action capability | `ACTION_EXEC_CODE` + `ACTION_PARSE_DOCUMENT` |
-| OpenHands (47k★) | Privileged Docker, no self-improvement | Hard ring-3 isolation + kernel-audited syscalls + SkillOpt |
-| MOSS (academic) | No kernel safety boundary on self-rewriting | `ACTION_REWRITE_AGENT_CODE` behind CAP_SOVEREIGN + regression + SFS snapshot |
-| Ouroboros/AutoResearch | No local fallback, no OS safety, metric-gaming risk | Local Ollama loop + CAP_SOVEREIGN-locked metric lockbox |
-| AI Scientist/Curie | $15–45/paper, no local run, no persistent memory | $0 local experiments + persistent hypothesis tree |
-| Pentagi (19k★) | Security-domain only, no kernel sandbox | Same `CAP_AGENT` sandbox + rate limiting |
-| RuVector (4k★) | Standalone DB, no agent loop | Adopted as AETHER's vector knowledge-graph memory model |
+| OpenClaw (210k★) | Skill-vetting security | CAP_AGENT sandbox + CAP_SOVEREIGN veto + audit |
+| AutoGPT (183k★) | Stalled, hallucination-prone | SkillOpt-Sleep + MOSS + SFS CoW rollback |
+| CrewAI (60k★) | No kernel isolation | ACTION_SEND_IPC + DAG queue at kernel level |
+| LangChain (146k★) | Stateless, cloud-dependent | SYS_MEMORY_WRITE/READ + SFS + local Ollama |
+| n8n (100k★) | Static workflows | Subconscious agent rewrites on failure + SkillOpt |
+| Dify (85k★) | Weak action capability | ACTION_EXEC_CODE + ACTION_PARSE_DOCUMENT |
+| OpenHands (47k★) | Privileged Docker, no self-improvement | ring-3 isolation + kernel-audited syscalls |
+| MOSS (academic) | No kernel safety on self-rewriting | ACTION_REWRITE_AGENT_CODE behind CAP_SOVEREIGN |
+| Ouroboros/AutoResearch | No local fallback, metric-gaming risk | Local Ollama + kernel-locked metric lockbox |
+| AI Scientist/Curie | $15–45/paper, no persistent memory | $0 local experiments + persistent hypothesis tree |
+| Pentagi (19k★) | Security-domain only | Same CAP_AGENT sandbox + rate limiting |
+| RuVector (4k★) | Standalone DB, no agent loop | Adopted as AETHER vector knowledge-graph model |
 
 ---
 
 ## 14. Standing AETHER Cognitive/ASI Mandate
 
-Long-term trajectory: subconscious background reasoning (F#71), verifier-based
-self-improvement (F#72), the **metric lockbox** (F#68 / S3 — highest priority
-among proposed features), and the full 12-agent Section G roster. This is not a
-single task; it is an evolving capability goal. Decompose into bounded DDRs only
-when a concrete slice is chosen.
-
-Section D is confirmed built. That is the precondition for all Section E/F work.
+Long-term: subconscious background reasoning (F#71), verifier-based self-improvement
+(F#72), metric lockbox (F#68/S3 — highest priority among proposed features), and
+the full 12-agent Section G roster. Decompose into bounded DDRs only when a
+concrete slice is chosen. Section D is confirmed built — that is the precondition
+for all Section E/F work.
 
 ---
 
-*Last updated: 2026-08-14 by Perplexity session synthesis. Anchored to local HEAD `bb7f9bc` / remote `3065e78` / `main` `3b4830a`.*
+*Last updated: 2026-08-14 — STEP C breakthrough recorded. Local HEAD `7aa4f31` / remote `3065e78` / `main` `3b4830a`. Active task: DDR-782 kernel O_APPEND.*
