@@ -3650,3 +3650,30 @@ or move it deliberately — do not fork two copies.
 The old PAT was revoked and removed from the remote URL (origin is now clean
 HTTPS). Pushes authenticate through Git Credential Manager, which is the
 configured helper. Do not put a token in the remote URL or any file again.
+
+## Checkpoint 2026-08-14 (d) — divergence RESOLVED, TASK 3 not started
+
+LOCAL HEAD  : 23ed5c2 (rebased cleanly onto origin/dev/phase1 = 174c318)
+REMOTE HEAD : 174c318 (before this checkpoint push)
+MAIN        : 27ba426 (untouched, nothing shipped)
+
+TASKS DONE  : branch reconcile (6 commits replayed, zero conflicts, tree clean);
+              docs/PRADYOS_MASTER_PLAN.md now present locally;
+              STEP C tooling (b43b28d); console.c RX restore (1cc41d5)
+TASKS REMAIN: TASK 3 (DDR-782 O_APPEND) — NOT STARTED; TASK 4 (B#3 g_ticks
+              stamps); TASK 5 (push + 3 CI greens + promote main);
+              TASK 6+ (Section F #66-76 from F#68, Section G 4 agents, ISO, 17-21)
+
+NEXT ACTION : Read docs/PRADYOS_MASTER_PLAN.md section "AUTONOMOUS CONTINUATION
+INSTRUCTIONS FOR CLAUDE -> TASK 3 (ACTIVE)", then implement DDR-782: add
+FD_APPEND to fd_entry in kernel/syscall/, set it in sys_open when O_APPEND
+(0x400) is passed, and in sys_write for FD_VFS seek to EOF under the vfs lock
+before each write (atomic per write). Then run smoke-shell 3x via
+`bash tools/ci/shell_evidence.sh` and require the SAME PASS on all three;
+the `[shell]` assertion line is now visible in build/artifacts/shell-make-*.log.
+
+WHY TASK 3 IS THE RIGHT TARGET: smoke-shell fails DETERMINISTICALLY with
+`[shell] FAIL: 2>> truncated the earlier entry (DDR-868)` on all 3 arms.
+user/prism.c:486 already passes O_APPEND correctly, so the defect is kernel-side.
+Do NOT re-investigate character loss / IRQ4 / starvation / feeder desync /
+THRE cap / FIFO trigger — all refuted, see checkpoints (a)-(c).
