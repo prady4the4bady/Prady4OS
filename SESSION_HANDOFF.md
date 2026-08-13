@@ -3605,3 +3605,48 @@ intermittency. **DDR-808 character loss is NOT what is failing this gate.**
 NOTE: the console.c RX restore (bb7f9bc) remains correct and necessary on its
 own merits (3065e78 discarded RX bytes and left kgetc_nb undefined) — it is
 simply not the smoke-shell fix.
+
+## Checkpoint 2026-08-14 (c) — BLOCKED on branch divergence, no code work done
+
+### Why no TASK 3 work happened
+`docs/PRADYOS_MASTER_PLAN.md` does NOT exist locally. It is only on the remote,
+in two commits this branch does not have. The branch diverged AGAIN:
+
+    left=local-only  right=remote-only
+    5                2
+
+    remote-only: 174c318 docs: update MASTER_PLAN — STEP C breakthrough …
+                 dda3d13 docs: add PRADYOS_MASTER_PLAN.md …
+    local-only : 7aa4f31 fix(ci): shell_evidence.sh tees make stdout …
+                 bb7f9bc kernel/console: restore rx_ring …
+                 + 3 rebased commits (e74a075 lineage)
+
+`git pull --ff-only` correctly ABORTED ("Not possible to fast-forward").
+`7aa4f31` is NOT an ancestor of `origin/dev/phase1`.
+
+The two remote commits are docs-only (MASTER_PLAN). The five local commits are
+code + tooling. They do not touch the same files, so the reconcile should be
+trivial — but it must not be done blind.
+
+### Next action (do this FIRST, before any TASK 3 work)
+    git rebase origin/dev/phase1
+Expect NO conflicts (remote = docs/PRADYOS_MASTER_PLAN.md only; local = kernel/,
+tools/ci/, docs/decisions/, SESSION_HANDOFF.md). Verify with `git status` that
+docs/PRADYOS_MASTER_PLAN.md exists afterwards, THEN read it and start TASK 3.
+
+### TASK 3 target (unchanged, from checkpoint (b))
+`[shell] FAIL: 2>> truncated the earlier entry (DDR-868)` — deterministic across
+3 arms. prism.c:486 already passes O_APPEND correctly; defect is kernel-side.
+Check `O_APPEND` / `FD_APPEND` in kernel/syscall/sys_file.c and the FD_VFS write
+path. If unimplemented, implement DDR-782: FD_APPEND flag on fd_entry, sys_write
+seeks EOF under the vfs lock (atomic per write).
+
+### Note on SESSION_HANDOFF.md location
+This file is at REPO ROOT, not docs/. The prompt refers to docs/SESSION_HANDOFF.md.
+Keep appending to the root one (it is the one under version control with history)
+or move it deliberately — do not fork two copies.
+
+### Auth note
+The old PAT was revoked and removed from the remote URL (origin is now clean
+HTTPS). Pushes authenticate through Git Credential Manager, which is the
+configured helper. Do not put a token in the remote URL or any file again.
