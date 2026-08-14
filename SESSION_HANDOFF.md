@@ -4125,3 +4125,72 @@ made deliberately rather than eight times in a row.
    greens gate, then `git push origin dev/phase1:main`.
 3. Only then F#68 e2e (spec above), and BEFORE any F#66+ agent work, write the
    roster-expansion DDR — do not silently grow AGENT_ROSTER_N.
+
+## Checkpoint 2026-08-14 (m) — CORRECTION: DDR-885 is PARTIAL, gate still 5/10 red locally
+
+LOCAL+REMOTE: 87c2583 (+this). main 27ba426.
+
+### Correcting checkpoint (l): I called the fix "holding" on 4 partial samples. Full result:
+`tools/ci/_rq.sh 10` on smoke-rqstress-liveness, all runs FRESH:
+    run1  rc=0  [smp] rqstress OK
+    run2  rc=2  [smp] rqstress OK      <-- OK printed, gate STILL failed
+    run3  rc=2  [smp] rqstress OK      <-- same
+    run4  rc=2  [smp] rqstress OK      <-- same
+    run5  rc=0  [smp] rqstress OK
+    run6  rc=2  <no rqstress line at all>
+    run7  rc=2  <no rqstress line at all>
+    run8  rc=0  [smp] rqstress OK
+    run9  rc=0  [smp] rqstress OK
+    run10 rc=0  [smp] rqstress OK
+    OK=5 FAIL=5 of 10
+
+### What this actually shows — THREE separate things, do not conflate
+1. **DDR-885 works for what it targeted.** 8/10 runs print `[smp] rqstress OK`.
+   The late-completion mode (FAIL for threads that were merely late) is gone —
+   no run printed `rqstress FAIL` at all, and none printed the new `FAIL n=`.
+2. **A 2/10 (~20%) mode where rqstress NEVER PRINTS.** Runs 6 and 7 have no
+   rqstress line whatsoever. That IS the DDR-880 / item-47 "probe never ran"
+   signature, and it is NOT fixed by DDR-885 (nothing to fix — the probe never
+   reached its kputs). This is the real lost-thread defect, still open.
+3. **The gate fails even when rqstress prints OK** (runs 2,3,4). So
+   smoke-rqstress-liveness is red for a reason OTHER than its own
+   EXTRA_SENTINEL. Unexplained — investigate next.
+
+### GATE STRUCTURE (needed for #3, non-obvious)
+smoke-rqstress-liveness is NOT a plain boot_test. It:
+    rm -f main.o kernel.elf kernel.bin $(IMG)
+    $(MAKE) image BSP_LIVENESS=1        <-- rebuilds a DIFFERENT, traced kernel
+    TIMEOUT_S=180 QEMU_SMP=4 EXTRA_SENTINEL='[smp] rqstress OK'
+        FORBIDDEN_SENTINEL='rqstress FAIL' boot_test.sh
+    rc=$?
+    rm -f ... ; $(MAKE) image          <-- restores the untraced kernel
+    exit $rc
+So (a) every run rebuilds twice, (b) the kernel under test is BSP_LIVENESS=1,
+which is not the kernel any other gate runs.
+
+### KNOWN TOOLING WRINKLE (do not trust blindly)
+The preserved build/artifacts/rq-N.log files disagree with the campaign's own
+inline grep for at least run3 (campaign reported `[smp] rqstress OK`; a later
+grep -ac of the same file returned 0 for every marker). The live-mirror poller
+races boot_test.sh's unlink-on-exit. Before drawing any conclusion from
+rq-N.log, re-verify — or better, set SERIAL_LOG to a path boot_test does not
+delete and confirm content, not just mtime.
+
+### CI STATE
+Two runs were in_progress at checkpoint time and were NOT read:
+    31814634427 (f108189, the DDR-885 fix)  <-- THIS is the one that matters
+    31814854049 (87c2583, docs)
+NEXT SESSION FIRST ACTION: `gh run view 31814634427 --log-failed` and see whether
+rqstress still appears. Do NOT assume green.
+
+### NEXT ACTIONS, in order
+1. Read CI 31814634427. If rqstress is gone from the failures, DDR-885 did its
+   job at CI scale even though the local gate is noisy.
+2. Investigate #3: why smoke-rqstress-liveness exits 2 while its own sentinel is
+   present. Suspect the BSP_LIVENESS=1 arm or the restore-rebuild step. Capture
+   boot_test's own stdout (it prints the reason) rather than only the serial.
+3. Investigate #2 (the 20% never-printed mode) — that is item 47, still open.
+   It now has a LOCAL reproduction at ~20%, which is far better than the 0/75
+   the handoff recorded. Use it.
+4. Do NOT promote main. Do NOT start F#66+ agent work before the roster-size ADR
+   (see checkpoint (l)).
