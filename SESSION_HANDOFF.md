@@ -4378,3 +4378,58 @@ sentinel_collision.sh OK (159). Build clean.
 bfce0ec ADR-037 (roster is a contract — most of F#66-76 needs NO kernel slot),
 1beed9e / 5e5cff2 / b5da2be checkpoints, e49a23f instrument.
 Push order does not matter; they are docs + one diagnostic print.
+
+## Checkpoint 2026-08-15 (r) — DDR-886: blk probes now report LATE vs WRONG
+
+LOCAL+REMOTE: 4a07b2a. main: 27ba426 — still NOT promotable.
+
+### What CI run 31834006700 (with the [boot-load] instrument) showed
+    PASS smoke-rqstress-liveness (180s)        <- item 47 did NOT hit this run
+    ...
+    [smoke] FAIL - a probe reported 'blk integrity FAIL' during this gate's boot.
+    [smoke]   [boot-load] PRISM.ELF t=3029     <- e49a23f instrument CONFIRMED working
+    [smoke]   [boot-stamp] B proofs-begin t=3093
+    [smoke]   [blk] multi-inflight FAIL
+    [smoke]   [smp] blk integrity FAIL
+    shard 1: FAILED at smoke-winops after 12 of 36 gates
+
+So dev/phase1 has AT LEAST TWO independent intermittents, not one:
+  - item 47  : fs_test_thread blocks, stamp A only, ~20% (did not fire here)
+  - blk pair : multi-inflight + blk integrity both FAIL together, fires
+               separately and takes down whatever gate is booting (DDR-785)
+DO NOT conflate them. Different signatures, different runs.
+
+### DDR-886 landed (4a07b2a)
+Both blk probes had the DDR-885 defect shape: a FIXED pacing deadline
+(200 / 400 ticks) then an immediate verdict, so a LATE worker read as a WRONG
+one. `[smp] blk integrity FAIL` was also emitted from THREE sites with identical
+text. The bitmask that already answers the question was discarded
+(bit id = ok, bit id+8 = mismatch).
+Now: drain before verdict (same budget the pacing loop had, S2 holds), and print
+    [blk] multi-inflight FAIL done=<hex>
+    [smp] blk integrity FAIL <workers-late|checksum-mismatch> done=<hex>
+    [smp] blk integrity FAIL no-device-or-page | reference-read
+Assertions unchanged. Forbidden sentinels still match. Verified: build clean,
+sentinel_collision OK (159), all three ci-*-check PASS, smoke-blkmq rc=0.
+
+**This is NOT a virtio-blk fix and must not be reported as one.** Per §6, fixing
+on the unconfirmed completion-loss hypothesis is forbidden. This only makes the
+probes report what they observed — the precondition for confirming or refuting
+DDR-775/776.
+
+### HOW TO READ THE NEXT BLK FAILURE (this is the payoff)
+    done=...f  with a HIGH bit set  -> checksum-mismatch -> the blk layer
+                                       returned BAD DATA. Real DDR-775/776
+                                       defect. Fix the driver.
+    low bits unset, no high bits    -> workers-late -> the reads were merely
+                                       slow. NOT a data defect; the probe budget
+                                       or host load is the story.
+Those two point at completely different work. Until now both printed one word.
+
+### NEXT ACTIONS
+1. Wait for CI on 4a07b2a. Read any blk FAIL with the rule above.
+2. Item 47 still needs its own capture: the next A-only failure will now also
+   carry [boot-load] naming the parked load.
+3. main stays at 27ba426 until 3 greens on ONE tip. At ~20% (item 47) plus the
+   blk intermittent, that will not happen until both are fixed — do not retry
+   promotion hoping for luck; the same-tip green->red already disproved that.
