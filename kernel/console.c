@@ -85,14 +85,12 @@ void kputc(char c) {
             return;                           /* bounded (S2); klog already has it */
     }
     outb(COM1, (uint8_t)c);
-    /* DDR-916 arm2 was TESTED HERE AND REVERTED — an unconditional per-character
-     * console_rx_drain() after this outb. Measured over 5 runs each, serial line
-     * counts at the feeder's stopping point:
-     *     without arm2: 536 537 537 486 477
-     *     with    arm2: 483 488 529 537 538
-     * Statistically indistinguishable — no measured benefit — so the extra
-     * inb(LSR) per character is not justified. Do not re-add it without new
-     * evidence. The remaining input loss is NOT closed by drain frequency. */
+    /* DDR-916 arm2 (per-character drain here) was tested TWICE and reverted both
+     * times. The second test was the valid one: run against deterministic
+     * post-b08058b runs and scored on MARKER PRESENCE rather than serial line
+     * counts, it changed nothing — 3/3 runs still lost BIGTAIL and EAP55a at
+     * exactly the same point. Drain FREQUENCY is not the constraint; ring
+     * CAPACITY is (see RX_RING_SZ). Do not re-add without new evidence. */
 }
 
 /* COM1 RX ring buffer (5e). An IRQ4 handler drains the UART into this ring from
@@ -100,6 +98,10 @@ void kputc(char c) {
  * the window before a reader runs — the 16-byte UART FIFO would overflow. Single
  * producer (the IRQ) + single consumer (sys_read): head is written only by the
  * IRQ, tail only by the reader, so it is lock-free on this single core. */
+/* DDR-916 arm3 (enlarging this ring to 4096 to survive a stalled reader) was
+ * TESTED AND REVERTED: 3/3 runs were byte-identical to the 256-byte ring, same
+ * markers lost at the same point. Ring capacity is not the constraint either.
+ * Do not re-try without new evidence. */
 #define RX_RING_SZ 256u
 static volatile uint8_t  rx_ring[RX_RING_SZ];
 static volatile uint32_t rx_head, rx_tail;

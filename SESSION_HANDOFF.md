@@ -3785,3 +3785,53 @@ the returned fd and the eflags value, rebuild, run smoke-shell once, and read
 whether the open succeeded and whether dup2(fd,2) was applied. That distinguishes
 "open failed" from "dup2 not applied" from "cat wrote nothing". Do NOT touch
 kernel O_APPEND.
+
+## Checkpoint 2026-08-14 (g) — smoke-shell narrowed to `cat /BIG8K.TXT | cat` emitting NOTHING
+
+LOCAL HEAD (pre-commit): b8e09d0. Console-side hypotheses now exhausted.
+
+### THE FAILING WINDOW IS EXACT
+Feeder commands that WORK (markers present, 1 each):
+  pipe-marker-4k8, redir-ok-7q2, aaa-8w1, in-marker   <- `>`, `>>`, `<`, pipe all fine
+  agent list (AGENT ROSTER slots= present), jobs, fg, kill %99  <- after the window
+Feeder commands that NEVER RUN (0 hits, deterministic across all runs):
+  BIGHEAD, BIGTAIL          <- `cat /BIG8K.TXT | cat` (Makefile:1107)
+  ERR9k2, EAP55a, BOTH66c   <- the 2> / 2>> / 2>&1 tests (Makefile:1109-1116)
+Serial is byte-identical at 568 lines every run. 43 prompts.
+
+### PROVEN THIS SESSION (do not redo)
+- **Branch (A) confirmed**: a diagnostic printf placed on fd 1 immediately after
+  the `2>>` open in prism.c NEVER PRINTED. `redir_e` is never set for ANY
+  command, so open/dup2/O_APPEND are all irrelevant — those commands never
+  execute. The prism.c parse (446/460) and open+dup2 (485-499) are NOT the bug.
+- **DDR-916 arm2 (per-char drain) — reverted, tested TWICE.** The second test was
+  the valid one (deterministic runs, scored on marker presence not line counts):
+  3/3 identical, nothing recovered. Drain frequency is not the constraint.
+- **DDR-916 arm3 (RX_RING_SZ 256 -> 4096) — tested and reverted.** 3/3 identical.
+  Ring capacity is not the constraint either.
+- `fd_init_std` (kernel/proc/fd.c:23) DOES open fds 0/1/2 as FD_CONSOLE, so
+  stderr exists. PRISM's `cat` error text is exactly `cat: cannot open %s`
+  (prism.c:182), matching the gate's grep. Neither is the bug.
+
+### KEY NEW FACT — this is a REGRESSION, not a longstanding limit
+BIGHEAD is absent too, not just BIGTAIL, so `cat /BIG8K.TXT | cat` emits NOTHING
+AT ALL — not a truncated stream. A blocked-reader/pipe-capacity theory would
+still show the first 4 KiB. AND an earlier artifact from this same session,
+build/artifacts/shell-20260813T111828Z.log, DOES contain `BIGHEAD-e5v` followed
+by `pipe payload line 001..016`. So BIG8K worked on that build and does not now.
+
+### NEXT ACTION (highest value, cheap)
+Bisect what broke BIG8K between that artifact's build and HEAD. The console.c
+lineage is the prime suspect since that is what changed:
+  1. `git log --oneline -- kernel/console.c kernel/proc/pipe.c` — list candidates.
+  2. The 111828Z artifact was produced on the 3065e78-based tree (uart_drain_rx
+     discarding RX); current tree is the 23755ad restore + burst-start drain.
+     Diff kernel/console.c between those two points and look at what else moved
+     besides the drain (e.g. whether CONSOLE_THRE_MAX / the early-return at the
+     spin cap can abort a large write mid-stream — kputc RETURNS without
+     transmitting when spins >= CONSOLE_THRE_MAX, which would silently truncate
+     exactly this kind of long burst).
+  3. That early `return` in kputc is the strongest untested candidate: it drops
+     the character on the floor when the bound trips, and an 8 KiB burst is
+     precisely when it would trip.
+Do NOT touch prism.c, O_APPEND, drain frequency, or ring size — all cleared.

@@ -496,7 +496,6 @@ int main(void) {
             }
             fflush(stderr);              /* musl leaves stderr unbuffered, but be explicit */
             nsi(SYS_DUP2, 2, REDIR_SAVE_ERR, 0);  /* stash the real stderr */
-            nsi(SYS_DUP2, efd, 2, 0);
             nsi(SYS_CLOSE, efd, 0, 0);
             redir_save_err = REDIR_SAVE_ERR;
         }
