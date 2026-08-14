@@ -4194,3 +4194,66 @@ rqstress still appears. Do NOT assume green.
    the handoff recorded. Use it.
 4. Do NOT promote main. Do NOT start F#66+ agent work before the roster-size ADR
    (see checkpoint (l)).
+
+## Checkpoint 2026-08-14 (n) — CI GREEN x3; DDR-885 confirmed at CI scale; ADR-037 written
+
+LOCAL: bfce0ec (ADR-037, NOT pushed — see below). REMOTE: 5f11cf5. main: 27ba426.
+
+### CI IS GREEN — DDR-885 fixed the blocker, confirmed
+Every job, every run (11/11 jobs green, verified per-job, not from the summary):
+    31811181126  a260687  (before fix)  FAILURE
+    31814634427  f108189  (DDR-885)     SUCCESS  11/11
+    31814854049  87c2583  (docs)        SUCCESS  11/11
+    31816582068  5f11cf5  (docs)        SUCCESS  11/11
+The failure/success boundary is exactly the DDR-885 commit. The two docs commits
+changed only SESSION_HANDOFF.md, so all three greens tested a byte-identical
+kernel — arguably stronger than three reruns of one tip.
+A 4th run (rerun of 31816582068, tip 5f11cf5) was dispatched and was IN PROGRESS
+at checkpoint time, to satisfy "3 greens on a SINGLE tip" literally.
+
+### WHY ADR-037 IS COMMITTED BUT NOT PUSHED
+Pushing changes the tip and restarts the single-tip green count. Held
+deliberately. Push it AFTER main is promoted, or accept re-counting greens on
+the new tip (it is docs-only, so the tested kernel is unchanged either way).
+
+### ISSUE (b) — LIKELY MY OWN HARNESS, NOT A KERNEL DEFECT
+Local gate rc=2 while `[smp] rqstress OK` printed (runs 2,3,4). Reading the
+recipe: it saves rc=$? from boot_test.sh and exits with it. If `rqstress OK`
+printed, EXTRA_SENTINEL was satisfied; no run printed `rqstress FAIL`, so the
+FORBIDDEN_SENTINEL did not trip either. What is left is a host-side failure, and
+boot_test.sh documents exactly one: a leaked qemu-system-x86_64 from a previous
+run still holding the image write lock => QEMU refuses to start => HOST-ENV FAIL.
+My campaign ran 10 of these back-to-back, each rebuilding the kernel TWICE
+(BSP_LIVENESS=1 then restore). That is the contention pattern that triggers it.
+UNCONFIRMED — /tmp/rq.log was overwritten each iteration. To confirm: re-run
+ONE AT A TIME with boot_test's own stdout preserved, and look for HOST-ENV FAIL.
+Do NOT treat (b) as a kernel bug without that evidence.
+
+### ISSUE (a) — STILL OPEN AND STILL REAL
+2/10 local runs had NO `[smp] rqstress` line at all. That is the DDR-880 /
+item-47 "probe never ran" signature, ~20% locally, untouched by DDR-885 (nothing
+to fix — the probe never reaches its kputs). CI is green, so this does not block
+promotion, but it is a live defect with a local reproduction rate far better
+than the 0/75 previously recorded. Investigate with SINGLE, non-concurrent runs.
+
+### ADR-037 — read before ANY Section F/G work
+The 8-slot roster is a contract, not an array size. `8` is load-bearing in four
+coupled sites (sys_aether.c:24; compositor.c:42, :407-411, :425-430), and ring 3
+hard-codes the count at the syscall boundary, so a kernel-only change is silently
+truncated. The panel is also bounded and undocumented: card i at y=70+44i h=36,
+no scroll, no height guard — at 768 lines the last visible card is i=15, at 600
+it is i=11; beyond that cards render off-screen and agent_card_hit returns
+unclickable indices (silent UI failure).
+KEY CONSEQUENCE: most of F#66-76 needs NO roster slot. aether/agents/ already has
+36 modules, essentially none owning a named card. The eight names are a desktop
+presentation of a curated set, not the registry of all agents. Implement F/G
+agents in the PYTHON LAYER with their own gates. AGENT_ROSTER_N changes only by
+superseding ADR-037.
+
+### NEXT ACTIONS
+1. Read the rerun of 31816582068. If green -> promote:
+       git push origin dev/phase1:main
+   (main 27ba426 is NOT an ancestor of dev/phase1 — do NOT use --ff-only.)
+2. Push bfce0ec (ADR-037) after promotion.
+3. Then F#68 e2e (spec in checkpoint (l)) and F/G Python-layer agents per ADR-037.
+4. Item 47 / issue (a) remains open — single-run investigation only.
