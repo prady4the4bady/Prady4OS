@@ -1124,7 +1124,14 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'jobs\n'; sleep 0.6; \
 	  printf 'kill %%99\n'; sleep 0.6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
-	timeout 60 qemu-system-x86_64 -M q35 \
+	@# DDR-916/TASK3: was `timeout 60`, which is LESS than this gate's own
+	@# measured duration — tools/ci/gate_shards.txt records smoke-shell at 61 s.
+	@# QEMU was therefore killed partway through the feeder on every run, at a
+	@# point that shifted with host load (measured serial line counts across 5
+	@# runs: 536 537 537 486 477). Derived floor: the feeder's own sleeps total
+	@# 31.4 s AFTER it waits for PRISM_READY, and PRISM_READY lands ~30 s into
+	@# boot => ~62 s required. 120 s is ~2x that measured floor, not a guess.
+	timeout 120 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=disk1 -device virtio-blk-pci,drive=disk1 \
 	    -drive if=none,format=raw,file=$(SFS_IMG),id=disk2 -device virtio-blk-pci,drive=disk2 \

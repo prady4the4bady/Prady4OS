@@ -85,6 +85,14 @@ void kputc(char c) {
             return;                           /* bounded (S2); klog already has it */
     }
     outb(COM1, (uint8_t)c);
+    /* DDR-916 arm2 was TESTED HERE AND REVERTED — an unconditional per-character
+     * console_rx_drain() after this outb. Measured over 5 runs each, serial line
+     * counts at the feeder's stopping point:
+     *     without arm2: 536 537 537 486 477
+     *     with    arm2: 483 488 529 537 538
+     * Statistically indistinguishable — no measured benefit — so the extra
+     * inb(LSR) per character is not justified. Do not re-add it without new
+     * evidence. The remaining input loss is NOT closed by drain frequency. */
 }
 
 /* COM1 RX ring buffer (5e). An IRQ4 handler drains the UART into this ring from
