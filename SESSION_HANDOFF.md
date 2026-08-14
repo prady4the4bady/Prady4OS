@@ -4503,3 +4503,64 @@ on a REAL failing run.**
 `[sfs] churn FAIL op=create iter=0 rc=-1` reproduced LOCALLY during the
 instrument test — the DDR-884 rc instrument firing outside CI. op=create failing
 at iter=0 with rc=-1. Track on its own.
+
+## Checkpoint 2026-08-15 (t) — DDR-887 FIX WORKS: g_ticks advances again
+
+LOCAL+REMOTE: d72bd93. main: 27ba426.
+
+### THE FIX IS CONFIRMED WORKING (CI run 31843212987)
+Evidence, in the CI log of the run carrying the fix:
+    [hb] t=6000 / 6500 / 7000 / 7500 / 8000 / 8500 ...
+Heartbeats STREAM. Before the fix, failing runs had ZERO [hb] lines across a
+full 180 s (~36 were due). g_ticks is advancing again.
+
+Only shard 5 failed. Shards 0 and 1 — carrying smoke-blk-integrity and
+smoke-rqstress-liveness, the two CONFIRMED freeze sites — both PASSED.
+Locally both also passed rc=0 before the push.
+
+### What was fixed (d72bd93)
+switch_wait_offcpu spun with IF=0 (schedule_locked enters via local_irq_save =
+CLI), so a CPU waiting for another CPU's finish_task_switch could not take its
+LAPIC timer. Under -smp 4 all CPUs could reach that state at once => timer_tick
+never entered anywhere => g_ticks frozen => every g_ticks-relative deadline
+unblockable.
+New switch_wait_offcpu_sched(): sti;pause;cli per spin + a per-CPU g_in_switch[]
+flag; sched_tick still TAKES the tick but skips its schedule() call when the flag
+is set (we need the tick, not a nested switch mid-switch). Old
+switch_wait_offcpu() left untouched for sched_free_tcb (reaper runs with IF=1;
+an unconditional sti/cli loop there would leave IF clear on exit).
+Lock-safety verified first: rq-2 removed g_sched_lock from the switch (:433),
+schedule() uses local_irq_save (:1027), sched_exit releases before scheduling
+(:1177), sched_free_tcb takes no scheduler lock (:852). NOTE the comments at
+sched.c:932/:944 claiming the lock is held are STALE rq-1 text — do not trust.
+
+### REMAINING FAILURE — smoke-cadence (shard 5), NOT yet classified
+    [cadence] FAIL — no full auto cycle
+Not one of the freeze gates. smoke-cadence has a documented prior history of
+CI-only flakiness (it was carried as UNCONFIRMED earlier in this project).
+Do NOT assume regression and do NOT revert the fix on this alone. Classify it:
+  1. Re-run CI on the same tip. If cadence passes, it is a flake and the fix is
+     green #1 of the three required.
+  2. If it fails repeatedly, read the cadence serial: it is a GPU/ambiance
+     timing gate, and this fix DOES change interrupt timing, so a genuine
+     interaction is possible.
+
+### NEW, REAL, SEPARATE DEFECT SPOTTED IN THE SAME LOG
+    [hb] t=7500 ... appears TWICE
+Two CPUs entered timer_tick at the same g_ticks value. g_ticks++ (idt.c:139) is
+a NON-ATOMIC read-modify-write on a shared global; with interrupts now enabled
+more often, the race is observable. Consequences: ticks can be LOST (two CPUs
+increment from the same value), so every g_ticks deadline can run long, and the
+vDSO wall clock (wall_time_ns += 10000000 in the same block) can double-advance
+or stall.
+This is NOT caused by the fix — the fix only made it visible. Fix separately:
+make g_ticks a single-writer (BSP-only increment) or use an atomic RMW. Needs
+its own DDR; do not fold it into DDR-887.
+
+### NEXT ACTIONS
+1. Re-run CI on d72bd93 to classify smoke-cadence (flake vs interaction).
+2. Count greens on ONE tip. Three consecutive before main moves. d72bd93 is
+   currently 0 of 3 (this run was red on cadence).
+3. Then the g_ticks atomicity DDR (separate defect, above).
+4. Still forbidden: any g_ticks-based bound for the virtio-blk completion wait —
+   defer sched_block_on_timeout until the three greens exist.
