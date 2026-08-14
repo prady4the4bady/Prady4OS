@@ -4059,3 +4059,69 @@ W^X-violation probe, so the #PF may be expected — but the boot stopped there).
 ### STILL TRUE
 smoke-shell GREEN 3/3 (bbc8649 + e533dab + d503a7c). TASK B not needed
 (O_APPEND already implemented). TASK C not needed (stamps already carry g_ticks).
+
+## Checkpoint 2026-08-14 (l) — CI blocker root-caused and fixed (DDR-885); F/G scope is bigger than briefed
+
+LOCAL+REMOTE: f108189. main 27ba426.
+
+### THE CI BLOCKER WAS rqstress, AND IT IS FIXED (f108189, DDR-885)
+Two independent CI runs, BOTH on docs-only commits, failed solely because of it:
+  run 31803482520 -> shards 2,3,5; "shard 3: FAILED at smoke-sfs-gc"
+  run 31811181126 -> shard 5;      "shard 5: FAILED at smoke-fs"
+Both logs:
+  [smoke] FAIL - a probe reported 'rqstress FAIL' during this gate's boot.
+  [smp] rqstress FAIL
+smoke-sfs-gc and smoke-fs have NOTHING to do with rqstress. Per DDR-785 the
+harness fails ANY gate whose boot contains a foreign probe FAIL, and
+rqstress_proof runs on every boot inside fs_test_thread — so one flaky probe
+reddens whatever gate happens to be running. That is why docs-only commits went
+red while code commits passed: the signal was pure timing, uncorrelated with
+content.
+
+Root cause (main.c:572): each of the 3 waves waited on a FIXED 100-tick deadline
+then fell through unconditionally, and `g_rqs_done == 24` was read immediately —
+reporting FAIL for threads that were LATE, not lost. DDR-910 shape: asserting on
+a timer instead of an outcome.
+
+Fix: per-wave deadlines demoted to pacing; added a final drain bounded at 300
+ticks (the same total the 3 waves already had => worst case ~600 ticks / 6 s,
+S2 holds, far inside every TIMEOUT_S); failure now prints
+`[smp] rqstress FAIL n=<count>` so late-vs-lost is distinguishable. Assertion
+unchanged (all 24 must land). Forbidden sentinel "rqstress FAIL" still matches;
+sentinel_collision.sh OK (159).
+
+### VALIDATION IN FLIGHT AT CHECKPOINT TIME
+- CI run 31814634427 (f108189) — in_progress. THIS is the run that proves it.
+- Local: tools/ci/_rq.sh 10 running in background; 4/10 done, ALL
+  "[smp] rqstress OK". Artifacts build/artifacts/rq-*.log.
+NEXT SESSION: read both. If CI green -> that is 1 of the 3 consecutive greens
+required before `git push origin dev/phase1:main`.
+
+### TASK E / F SCOPE CORRECTION — read before starting
+F#68 smoke-lockbox-e2e: the pieces exist but are NOT end-to-end.
+  - kernel side: smoke-lockbox (Makefile:2241, shard 2, 90 s) — lockboxtest.c
+    recomputes SHA-256 IN-GUEST against record_sha. Self-contained.
+  - python side: aether/tests/test_metric_lockbox.py — uses tmp_path fixtures,
+    entirely synthetic, never sees kernel output. Run by the `aether-layer` CI
+    job (ci.yml:126, pytest aether/tests/).
+  - THE GAP: nothing proves the kernel's record FORMAT is what the Python layer
+    parses. A real e2e needs lockboxtest.c to emit the record bytes to serial
+    behind a marker, plus a host step feeding them to metric_lockbox.py.
+    That is a kernel probe change + host script + gate + shard entry + DDR.
+
+F#66/67/69-76 and Section G agents: architect, healer, inventor, tournament,
+verifier, ai_scientist DO NOT EXIST in aether/agents/ (36 dirs, none of them).
+Only aether/agents/goals/subconscious.py is present.
+**The kernel roster is FIXED AT 8 named slots** (user/compositor.c:43
+KRYOS..SOLIN, AGENT_ROSTER_N=8) and the compositor renders exactly 8 cards.
+Adding a 9th agent is therefore NOT a pattern-copy of DDR-707 — it changes
+AGENT_ROSTER_N, the panel layout, and the DDR-707/737 UI contract. That is an
+architectural decision needing its own ADR/DDR before any code, and it should be
+made deliberately rather than eight times in a row.
+
+### NEXT ACTION
+1. Read CI 31814634427 result and the finished build/artifacts/rq-*.log set.
+2. If green: push again (or wait for 2 more green runs) toward the 3-consecutive
+   greens gate, then `git push origin dev/phase1:main`.
+3. Only then F#68 e2e (spec above), and BEFORE any F#66+ agent work, write the
+   roster-expansion DDR — do not silently grow AGENT_ROSTER_N.
