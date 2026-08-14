@@ -4433,3 +4433,73 @@ Those two point at completely different work. Until now both printed one word.
 3. main stays at 27ba426 until 3 greens on ONE tip. At ~20% (item 47) plus the
    blk intermittent, that will not happen until both are fixed — do not retry
    promotion hoping for luck; the same-tip green->red already disproved that.
+
+## Checkpoint 2026-08-15 (s) — DDR-887: g_ticks FREEZE confirmed; items 47 and 48 are ONE defect
+
+LOCAL: 9c0782f. main: 27ba426 — still not promotable.
+
+### THE CONFIRMED FINDING
+**g_ticks stops advancing.** CI run 31837700697 shard 0, smoke-blk-integrity,
+full 180 s TIMEOUT_S. The [hb] heartbeat (idt.c:148, (g_ticks % 500)==0) is
+UNCONDITIONAL — NOT behind BSP_LIVENESS (that flag only gates the churn block,
+Makefile:210). 180 s at 100 Hz = 18000 ticks = ~36 heartbeats due. ZERO appear.
+Last observed tick t=207. Ring-3 output continues after that, so threads still
+run and the console still works — only TIME stops.
+
+### ITEMS 47 AND 48 ARE THE SAME DEFECT (unified by evidence, not assumption)
+Every deadline in the tree is g_ticks-relative — blkmq_proof (main.c:632),
+smp_blk_integrity (:673), rqstress_proof (:572), virtio_blk_watchdog. With
+g_ticks frozen NONE can terminate. That one fact explains all of it:
+  - item 47: fs_test_thread hits stamp A, never B/C — parked on a deadline that
+    cannot expire. It was never "lost".
+  - item 48: blk probes print NEITHER verdict — which is exactly why DDR-886's
+    workers-late/checksum-mismatch never appeared. The pacing loop never exits.
+  - the watchdog's silence, and four gates missing four different sentinels.
+§4.4's "do not conflate" was right while they were unexplained; they are now
+unified BY EVIDENCE. Stop tracking them separately.
+
+### MECHANISM — deduced from code, NOT confirmed, NOT fixed
+g_ticks++ is the FIRST statement of timer_tick (idt.c:139), so a frozen counter
+means timer_tick is not ENTERED at all, on any CPU. Timer delivery stops
+everywhere only if every CPU has IF=0. spin_lock_irqsave() masks interrupts THEN
+spins, so one wedged lock-holder parks every contender with IRQs off — a
+system-wide spinlock deadlock. Deduction only. Do not fix on it.
+
+### INSTRUMENT BUILT AND PROVEN (9c0782f)
+Nothing inside the guest can see this (kputs itself takes the console lock and
+masks IRQs), so the observation is EXTERNAL:
+  tools/qemu_runner/qmp_cpudump.py + opt-in boot_test.sh hook
+  QEMU_QMP_DIAG=1 — DEFAULT OFF, so none of the 106 gates change behaviour
+  (verified: smoke-blkmq rc=0 on the default path; all three ci-*-check PASS)
+~5 s before the timeout kill it dumps `info cpus` + `info registers -a` into the
+serial capture, so per-CPU state lands in the failure artifact.
+  Run:     SERIAL_LOG=/tmp/x.serial QEMU_QMP_DIAG=1 QEMU_SMP=4 TIMEOUT_S=180 \
+             bash tools/qemu_runner/boot_test.sh build/pradyos.img
+  Resolve: llvm-addr2line -f -e build/kernel.elf <rip>
+
+### FIRST READING — A LEAD, NOT A CONCLUSION
+Forced-timeout sample (fake sentinel, -smp 4, 20 s): all four vCPUs IF CLEAR,
+none halted; THREE in switch_wait_offcpu (sched.c), one in find_zombie_child.
+A CPU spinning there with IRQs off cannot take its timer tick — exactly the
+condition needed for the freeze.
+BUT this sample was forced, so the guest may simply have finished its work. If
+idle CPUs always parked there with IF=0, g_ticks would freeze every boot, which
+it does not. **Do NOT change switch_wait_offcpu until the same picture is seen
+on a REAL failing run.**
+
+### NEXT ACTION (exact)
+1. Push 9c0782f.
+2. Re-run smoke-blk-integrity / smoke-rqstress-liveness locally with
+   QEMU_QMP_DIAG=1 until a REAL sentinel-miss occurs (~20%), then compare the
+   vCPU dump against the lead above. Single runs only — no concurrency.
+3. If the wedge shows the same three-in-switch_wait_offcpu picture, that spin's
+   bound is the defect. DDR before any fix.
+4. Do NOT write the queued S2 "bound the blk completion wait with a g_ticks
+   timeout" — a g_ticks bound is worthless when g_ticks is what stops. Same flaw
+   in the deferred sched_block_on_timeout(deadline_ticks). Any bound for this
+   class must be tick-independent.
+
+### SEPARATE DATUM (do not lose, not part of DDR-887)
+`[sfs] churn FAIL op=create iter=0 rc=-1` reproduced LOCALLY during the
+instrument test — the DDR-884 rc instrument firing outside CI. op=create failing
+at iter=0 with rc=-1. Track on its own.
