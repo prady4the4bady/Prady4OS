@@ -578,7 +578,30 @@ static void rqstress_proof(void) {
         while (g_rqs_done < (uint32_t)((wave + 1) * 8) && g_ticks < dl)
             yield();
     }
-    kputs(g_rqs_done == 24 ? "[smp] rqstress OK\r\n" : "[smp] rqstress FAIL\r\n");
+    /* DDR-885: the per-wave deadlines above are PACING (they keep the waves
+     * overlapping, which is the point of the stress) — they must not decide the
+     * verdict. Previously the last wave's 100-tick deadline could expire with
+     * workers still runnable, and `g_rqs_done == 24` was read immediately,
+     * reporting FAIL for threads that were LATE, not lost. Because DDR-785 fails
+     * any gate whose boot contains a foreign probe FAIL, that one late wave
+     * reddened unrelated gates across several CI shards (run 31803482520 failed
+     * smoke-sfs-gc on a docs-only commit).
+     *
+     * Drain budget = 300 ticks, the same total the three waves already had, so
+     * the worst case stays bounded (S2) at ~600 ticks / 6 s — well inside every
+     * consuming gate's TIMEOUT_S. The assertion is unchanged: all 24 must land. */
+    uint64_t drain_dl = g_ticks + 300;
+    while (g_rqs_done < 24 && g_ticks < drain_dl)
+        yield();
+    if (g_rqs_done == 24) {
+        kputs("[smp] rqstress OK\r\n");
+    } else {
+        /* Report the count — a bare FAIL cannot distinguish "23 landed late"
+         * from "the runqueues lost a thread". */
+        kputs("[smp] rqstress FAIL n=");
+        kputdec(g_rqs_done);
+        kputs("\r\n");
+    }
 }
 
 /* DDR-BLK-1 proof: two threads keep requests in flight on ONE disk
