@@ -4257,3 +4257,42 @@ superseding ADR-037.
 2. Push bfce0ec (ADR-037) after promotion.
 3. Then F#68 e2e (spec in checkpoint (l)) and F/G Python-layer agents per ADR-037.
 4. Item 47 / issue (a) remains open — single-run investigation only.
+
+## Checkpoint 2026-08-14 (o) — ITEM 47 LOCALISED: A-only, loss is inside the ext4 block
+
+Stamp census over the 10 preserved smoke-rqstress-liveness logs:
+
+    run  1  5  8  9 10   rc=0   A=1 B=1 C=1 rq=1   ~14.9 KB   healthy
+    run  2  3  4         rc=2   A=1 B=1 C=1 rq=1   ~10.7 KB   TRUNCATED, see (b)
+    run  6  7            rc=2   A=1 B=0 C=0 rq=0   8.6-10.3KB ITEM 47
+
+**Runs 6 and 7 are DDR-880's item-47 signature exactly: stamp A prints, stamp B
+never does.** C is absent too. By DDR-880's own reading rule — "A but no C means
+the loss is INSIDE the ext4 block" — item 47 is localised to the ext4 probe
+block between main.c:1223 (A) and main.c:1717 (C).
+
+IMPORTANT CORRECTION to checkpoint (k): I wrote "DDR-880's signature does not
+reproduce". That was measured on smoke-sfs-btree-smp4. On
+smoke-rqstress-liveness — which boots a SEPARATELY BUILT BSP_LIVENESS=1 kernel —
+it reproduces at 2/10 (~20%). Both statements can be true; they are different
+gates and different binaries. Do not carry "does not reproduce" forward.
+
+Supporting detail for issue (b): the rc=2-with-rqstress-OK runs (2,3,4) have
+visibly TRUNCATED logs (~10.7 KB vs ~14.9 KB healthy) while printing every stamp
+and rqstress OK. A short log with all markers present is a run that was CUT OFF,
+not one that failed an assertion — consistent with host contention / image write
+lock (boot_test.sh's documented HOST-ENV FAIL), not a kernel defect.
+
+CAVEAT: these artifacts carry the live-mirror/unlink race warning. The A/B/C
+census is robust (distinct strings, coherent 8-vs-2 split) but re-verify with
+SINGLE, non-concurrent runs before writing any fix.
+
+### NEXT ACTION FOR ITEM 47 (highest-value open defect)
+1. Re-run smoke-rqstress-liveness ONE AT A TIME (no concurrency, nothing else
+   using QEMU) ~10x with boot_test's own stdout preserved alongside the serial.
+2. Confirm the A-only signature and confirm whether boot_test reports HOST-ENV
+   FAIL on the truncated runs (that would close issue (b) as harness noise).
+3. For A-only runs, read the ext4 probe block main.c:1223..1717 and add a stamp
+   INSIDE it to bisect where the thread is lost. The window is currently ~490
+   lines; one stamp halves it per iteration.
+4. DDR before any fix.
