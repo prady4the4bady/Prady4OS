@@ -1092,6 +1092,16 @@ smoke-init: $(IMG) fat-image sfs-image
 # PRISM_READY, which lands ~30 s into boot => ~62 s required. 120 s is ~2x that
 # measured floor, not a guess.
 #
+# DDR-881 job control: the feeder backgrounds TWO copies of /EXECTEST.ELF.
+# `fg %1` foregrounds and reaps job [1], which is the fg-path coverage. Job [2]
+# is never foregrounded, so it finishes on its own and jobs_reap()
+# (user/prism.c:251, called at the prompt from :313) reports it as
+# "Done(0)   /EXECTEST.ELF" — the string this gate asserts at the grep below.
+# With only ONE job the gate could never pass: `fg` consumes the job
+# synchronously, so there is nothing left for jobs_reap to announce, which is
+# correct shell behaviour (bash does not print Done for a job you foregrounded).
+# The sleep after the second `jobs` is 1.2 s so job [2] has exited by then.
+#
 # NOTE: everything from the `@SHIN=...` line to `) & \` is ONE shell command
 # joined by backslash continuations. A `@#` make-comment inserted inside that
 # run is spliced into the shell text and breaks its quoting
@@ -1132,9 +1142,10 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'action submit 4 hello\n'; sleep 0.6; \
 	  printf 'action approve 1\n'; sleep 0.6; \
 	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
+	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
 	  printf 'jobs\n'; sleep 0.6; \
-	  printf 'fg %%1\n'; sleep 1.0; \
-	  printf 'jobs\n'; sleep 0.6; \
+	  printf 'fg %%1\n'; sleep 1.5; \
+	  printf 'jobs\n'; sleep 1.2; \
 	  printf 'kill %%99\n'; sleep 0.6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 120 qemu-system-x86_64 -M q35 \
