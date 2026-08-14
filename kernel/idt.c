@@ -153,7 +153,9 @@ static void timer_tick(struct regs *r) {
                                        * bounded as the timer). Evidence only:
                                        * no gate asserts on it. */
         kputs("[hb] t="); kputdec(g_ticks);
-        { extern uint64_t g_thre_drops; kputs(" thre_drops="); kputdec(g_thre_drops); }
+        { extern uint64_t g_thre_drops, g_rx_drops;
+          kputs(" thre_drops="); kputdec(g_thre_drops);
+          kputs(" rx_drops=");   kputdec(g_rx_drops); }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */

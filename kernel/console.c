@@ -73,6 +73,12 @@ static void console_rx_drain(void);           /* defined with the IRQ4 handler *
  * inside kputc would recurse. Confirms or refutes the ceiling hypothesis before
  * any fix is written. */
 uint64_t g_thre_drops;
+
+/* TEMP DIAG (DDR-916 PHASE A): count bytes discarded because the RX ring was
+ * FULL. Distinguishes ring overflow (this counter rises => capacity is the
+ * constraint, arm3) from UART-FIFO overflow (both counters stay 0 => bytes are
+ * lost before they ever reach the ring, arm5). */
+uint64_t g_rx_drops;
 static volatile int g_rx_armed;               /* set by console_rx_init */
 
 void kputc(char c) {
@@ -106,11 +112,21 @@ void kputc(char c) {
  * the window before a reader runs — the 16-byte UART FIFO would overflow. Single
  * producer (the IRQ) + single consumer (sys_read): head is written only by the
  * IRQ, tail only by the reader, so it is lock-free on this single core. */
-/* DDR-916 arm3 (enlarging this ring to 4096 to survive a stalled reader) was
- * TESTED AND REVERTED: 3/3 runs were byte-identical to the 256-byte ring, same
- * markers lost at the same point. Ring capacity is not the constraint either.
- * Do not re-try without new evidence. */
-#define RX_RING_SZ 256u
+/* DDR-916 arm3: sized from a MEASURED overflow, not chosen.
+ *
+ * A ring-3 reader can stop consuming console input for long stretches while the
+ * kernel prints (kputs/kwrite hold the console lock with IRQs off for a whole
+ * buffer, so IRQ4 cannot retire the UART FIFO for the duration). The feeder
+ * keeps writing throughout. With a 256-byte ring, console_rx_drain's full-branch
+ * discarded 102 bytes in a single smoke-shell run (measured via g_rx_drops,
+ * reported in the heartbeat; g_thre_drops stayed 0 over the same run, so the
+ * loss is capacity, not the TX spin bound).
+ *
+ * Those discards are what fuse feeder commands: the tail of one command is
+ * dropped and the next concatenates onto the orphan ("agent spawn" + "fg %1"
+ * arriving as "agenfg"). 4096 is ~40x the measured worst-case overflow and
+ * costs 4 KiB of BSS. */
+#define RX_RING_SZ 4096u
 static volatile uint8_t  rx_ring[RX_RING_SZ];
 static volatile uint32_t rx_head, rx_tail;
 
@@ -137,6 +153,8 @@ static void console_rx_drain(void) {
         if (nh != rx_tail) {                 /* space available */
             rx_ring[rx_head] = c;
             rx_head = nh;
+        } else {
+            g_rx_drops++;                    /* TEMP DIAG: ring full, byte lost */
         }
     }
     spin_unlock_irqrestore(&g_rx_lock, fl);
