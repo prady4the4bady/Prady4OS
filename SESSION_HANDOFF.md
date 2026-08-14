@@ -3729,3 +3729,59 @@ missing string, whatever killed the session.
 ### State
 LOCAL HEAD = b07fb7d (pushed). REMOTE = b07fb7d. MAIN = 27ba426. No code changed
 this checkpoint. smoke-shell still 0-pass (stops ~uptime, tripwire = 2>>).
+
+## Checkpoint 2026-08-14 (f) — TASK 3: variance ELIMINATED, 2>> now genuinely isolated
+
+LOCAL HEAD  : b08058b (committed, unpushed at time of writing)
+REMOTE HEAD : 38dba88
+MAIN        : 27ba426
+
+### FIXED AND COMMITTED (b08058b)
+**The timeout was a real defect.** Makefile:1127 used `timeout 60` while
+tools/ci/gate_shards.txt records this gate's measured duration as 61 s. QEMU was
+killed partway through the feeder on EVERY run, at a point that moved with host
+load (5 runs: 536 537 537 486 477 serial lines). Raised to 120 s, derived: the
+feeder's own sleeps total 31.4 s after PRISM_READY, which lands ~30 s into boot
+=> ~62 s floor, 120 s is ~2x. Result: 3 consecutive runs now IDENTICAL
+(568 lines, same stop point). **The run-to-run variance that was read as
+intermittent input loss for several sessions was this timeout.**
+
+### DDR-916 arm2 — TESTED AND REVERTED (do not re-add)
+Unconditional per-character console_rx_drain() after outb in kputc:
+    without arm2: 536 537 537 486 477
+    with    arm2: 483 488 529 537 538
+No measured benefit. Reverted; rationale recorded in kernel/console.c so it is
+not retried. Remaining loss is NOT a drain-frequency problem.
+
+### CONFIRMED DEAD (do not re-investigate)
+- O_APPEND "missing from kernel" — FALSE. sys_io.c:96-102 repositions to EOF on
+  every FD_VFS write when O_APPEND is set; sys_open:74 stores flags per-fd.
+  MASTER_PLAN TASK 3 as written is a no-op.
+- PRADYOS_INPUT_TIMEOUT in the serial is from user/inputtest.c:42 (virtio-input
+  probe), NOT PRISM. Its sys_exit(1) is that probe. Red herring.
+- Feeder does NOT die early any more: `jobs` (Makefile:1122/1124) and
+  `kill %99` (1125) execute and are the last real shell output.
+
+### NEW CONFOUNDER — dmesg replays the klog into the serial
+`dmesg` (feeder, before the redirect tests) dumps the 4 KiB klog ring, which
+RE-EMITS earlier boot lines into the serial — including a second `PRISM_READY`
+and `prism> prism-echo-marker`. Any gate assertion that greps the WHOLE log can
+match replayed text. Note Makefile:1192 already guards against this by scoping
+with `sed -n '/MARKER66c/,$p'`; the NOPE55a assertion at :1147 does NOT scope,
+so it is also worth checking whether it can false-match/miss for this reason.
+
+### THE REMAINING REAL BUG (start here)
+`grep -q 'cat: cannot open /NOPE55a.TXT'` fails because `cat /EAP55a.TXT`
+(Makefile:1113) prints nothing — /EAP55a.TXT is empty or absent. Feeder:
+  1111: cat /NOPE55a.TXT 2>> /EAP55a.TXT
+  1112: cat /NOPE55b.TXT 2>> /EAP55a.TXT
+  1113: cat /EAP55a.TXT
+So `2>>` is not delivering stderr into the file. Kernel O_APPEND is fine, so
+suspect the ring-3 side: user/prism.c parse at :446/:460 and the dup2 wiring at
+:485-486 (`eflags = O_CREAT|O_WRONLY|(redir_e_append?O_APPEND:O_TRUNC)`).
+
+NEXT ACTION: add a one-shot debug print in prism.c after the 2>> open showing
+the returned fd and the eflags value, rebuild, run smoke-shell once, and read
+whether the open succeeded and whether dup2(fd,2) was applied. That distinguishes
+"open failed" from "dup2 not applied" from "cat wrote nothing". Do NOT touch
+kernel O_APPEND.
