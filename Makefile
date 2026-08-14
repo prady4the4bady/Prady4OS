@@ -1086,6 +1086,19 @@ smoke-init: $(IMG) fat-image sfs-image
 # script (echo / help / exit) into the guest UART, and assert the shell came up
 # and ran the builtins with no kernel panic. Self-contained (boot_test.sh is
 # output-only). FAT32 carries /PRISM.ELF (init execve's it); SFS carries init.
+# DDR-916/TASK3: the QEMU bound below was `timeout 60`, which is LESS than this
+# gate's own measured duration — tools/ci/gate_shards.txt records smoke-shell at
+# 61 s. Derived floor: the feeder's sleeps total 31.4 s AFTER it waits for
+# PRISM_READY, which lands ~30 s into boot => ~62 s required. 120 s is ~2x that
+# measured floor, not a guess.
+#
+# NOTE: everything from the `@SHIN=...` line to `) & \` is ONE shell command
+# joined by backslash continuations. A `@#` make-comment inserted inside that
+# run is spliced into the shell text and breaks its quoting
+# ("/bin/sh: Syntax error: Unterminated quoted string"), which makes the recipe
+# die BEFORE it boots QEMU while build/shell_serial.log keeps its previous
+# contents — so the gate then greps a stale log and misreports. Keep commentary
+# out of the continuation block.
 smoke-shell: $(IMG) fat-image sfs-image
 	@echo "[shell] booting PRISM; feeding commands once the prompt appears..."
 	@# The FIFO must live on a real Linux fs — DrvFs (/mnt/c, where build/ is) does
@@ -1124,13 +1137,6 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'jobs\n'; sleep 0.6; \
 	  printf 'kill %%99\n'; sleep 0.6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
-	@# DDR-916/TASK3: was `timeout 60`, which is LESS than this gate's own
-	@# measured duration — tools/ci/gate_shards.txt records smoke-shell at 61 s.
-	@# QEMU was therefore killed partway through the feeder on every run, at a
-	@# point that shifted with host load (measured serial line counts across 5
-	@# runs: 536 537 537 486 477). Derived floor: the feeder's own sleeps total
-	@# 31.4 s AFTER it waits for PRISM_READY, and PRISM_READY lands ~30 s into
-	@# boot => ~62 s required. 120 s is ~2x that measured floor, not a guess.
 	timeout 120 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=disk1 -device virtio-blk-pci,drive=disk1 \

@@ -152,7 +152,9 @@ static void timer_tick(struct regs *r) {
                                        * stall (a g_ticks-bounded wait is only as
                                        * bounded as the timer). Evidence only:
                                        * no gate asserts on it. */
-        kputs("[hb] t="); kputdec(g_ticks); kputs("\r\n");
+        kputs("[hb] t="); kputdec(g_ticks);
+        { extern uint64_t g_thre_drops; kputs(" thre_drops="); kputdec(g_thre_drops); }
+        kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
         signal_deliver(r);            /* to the ring-3 thread we're returning to */

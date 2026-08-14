@@ -67,6 +67,12 @@ uint32_t klog_read(char *dst, uint32_t max) {
 #define CONSOLE_THRE_MAX 10000u
 
 static void console_rx_drain(void);           /* defined with the IRQ4 handler */
+
+/* TEMP DIAG (DDR-916 arm4): count characters dropped by the THRE ceiling.
+ * Reported from the heartbeat (idt.c) rather than printed here — printing from
+ * inside kputc would recurse. Confirms or refutes the ceiling hypothesis before
+ * any fix is written. */
+uint64_t g_thre_drops;
 static volatile int g_rx_armed;               /* set by console_rx_init */
 
 void kputc(char c) {
@@ -81,8 +87,10 @@ void kputc(char c) {
          * the masking itself must stay, because ADR-030 needs the buffer atomic. */
         if (g_rx_armed)
             console_rx_drain();
-        if (++spins >= CONSOLE_THRE_MAX)
+        if (++spins >= CONSOLE_THRE_MAX) {
+            g_thre_drops++;                   /* TEMP DIAG: is the ceiling real? */
             return;                           /* bounded (S2); klog already has it */
+        }
     }
     outb(COM1, (uint8_t)c);
     /* DDR-916 arm2 (per-character drain here) was tested TWICE and reverted both
