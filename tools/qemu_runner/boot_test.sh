@@ -331,6 +331,18 @@ fi
 CPUOPT=()
 [ -n "${QEMU_CPU:-}" ] && CPUOPT=(-cpu "${QEMU_CPU}")
 
+# DDR-887: opt-in QMP diagnostic socket. OFF by default, so none of the 106
+# gates change behaviour. With QEMU_QMP_DIAG=1 a watcher dumps every vCPU's
+# registers ~5 s before the timeout kill — the only way to observe a
+# system-wide IRQs-off spinlock deadlock, since nothing in the guest can print
+# once every CPU is spinning with IF=0 (kputs itself takes the console lock).
+QMPOPT=()
+QMP_SOCK=""
+if [ -n "${QEMU_QMP_DIAG:-}" ]; then
+    QMP_SOCK="$(mktemp -u /tmp/pradyos_qmp.XXXXXX)"
+    QMPOPT=(-qmp "unix:${QMP_SOCK},server,nowait")
+fi
+
 timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -machine "$QEMU_MACHINE" \
     "${CPUOPT[@]}" \
@@ -350,10 +362,25 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${S3OPT[@]}" \
     "${NVMEDEV[@]}" \
     "${RNGDEV[@]}" \
+    "${QMPOPT[@]}" \
     -no-reboot -display none -monitor none \
     -serial "file:$SERIAL_LOG" \
     2>"$QEMU_ERR" &
 qemu_pid=$!
+
+# DDR-887 watcher: fire ~5 s before the hard timeout, while QEMU is still alive,
+# and append the vCPU dump to the serial capture so it lands in the artifact.
+qmp_watcher_pid=""
+if [ -n "${QEMU_QMP_DIAG:-}" ]; then
+    (
+        sleep "$(( TIMEOUT_S > 5 ? TIMEOUT_S - 5 : 1 ))"
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            python3 "$(dirname "$0")/qmp_cpudump.py" "$QMP_SOCK" "$SERIAL_LOG" \
+                >>"$SERIAL_LOG" 2>&1 || true
+        fi
+    ) &
+    qmp_watcher_pid=$!
+fi
 
 if [ "$early_exit_eligible" -eq 1 ]; then
     # Poll the capture file while the guest runs. QEMU writes serial to a FILE,
@@ -368,6 +395,11 @@ if [ "$early_exit_eligible" -eq 1 ]; then
     done
 fi
 wait "$qemu_pid" 2>/dev/null || true
+if [ -n "$qmp_watcher_pid" ]; then
+    kill "$qmp_watcher_pid" 2>/dev/null || true
+    wait "$qmp_watcher_pid" 2>/dev/null || true
+fi
+[ -n "$QMP_SOCK" ] && rm -f "$QMP_SOCK"
 
 # DDR-823 / OPEN-9 — checked BEFORE every other verdict, including the probe
 # check. If QEMU never ran, nothing downstream carries information: the serial
