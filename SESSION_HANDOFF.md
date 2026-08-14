@@ -4010,3 +4010,52 @@ failing serials preserved as build/artifacts/open10-*-fail<N>.log.
    ci-probe-rodata-check / ci-start-align-check already PASS as of 80e8580),
    and only promote main after CI is green.
 4. Then TASK E: F#68 smoke-lockbox-e2e, next DDR-884, next NSI 94, next cap 1<<24.
+
+## Checkpoint 2026-08-14 (k) — OPEN-10 campaign RESULT: DDR-880's signature does NOT reproduce
+
+LOCAL+REMOTE: 63856a6 (+ this). main 27ba426.
+
+### Campaign: 30 runs, 21 healthy, 9 FAIL (30%)
+Rate is 30%, NOT DDR-880's measured 6.7% (2/30). Different defect(s).
+Report: build/artifacts/open10-20260814T130853Z.txt
+Failing serials preserved: build/artifacts/open10-20260814T130853Z-fail{2,4,7,15,23,26}.log
+
+### TWO DISTINCT FAILURE MODES — neither is "fs_test_thread lost"
+
+**Mode 1 — `[sfs] btree churn FAIL` (fail2, 7, 15, 23, 26 — the majority)**
+    boot-stamps: A t~330  C t~360  B t~385   (ALL THREE PRESENT, sane gaps)
+    churnOK=0  churnFAIL=1  rqstress=1  ~271 lines
+    last line: [hb] t=17000 thre_drops=0 rx_drops=0  (kernel alive and healthy)
+fs_test_thread RUNS TO COMPLETION. The churn probe executes and ACTIVELY FAILS.
+**This is the opposite of DDR-880's item-47 signature ("stamp A prints, stamp B
+never does").** All three stamps print. So the thread is not being lost — the
+B+tree churn assertion itself is failing under -smp 4.
+
+**Mode 2 — truncated boot (fail4 only)**
+    boot-stamps: A t=526 ONLY (vs ~330 in every other run — boot ran LATE)
+    churnOK=0 churnFAIL=0 rqstress=0  182 lines
+    last line: [trap] user #PF ... name=WXVIOL.ELF ... — killing process
+No churn at all. Ends on a page fault in WXVIOL.ELF (which is an intentional
+W^X-violation probe, so the #PF may be expected — but the boot stopped there).
+
+### WHAT THIS MEANS
+- Do NOT chase "fs_test_thread is lost" — the stamps disprove it for Mode 1.
+- The console work is holding: thre_drops=0 rx_drops=0 in every failing log.
+- DDR-880's conclusion may itself have been drawn from too few samples, or the
+  defect changed. Either way the CURRENT evidence says: the btree churn probe
+  fails outright under -smp 4 roughly 1 run in 4.
+
+### NEXT ACTION
+1. Read a Mode-1 serial around the churn probe:
+     grep -n -B20 'btree churn FAIL' build/artifacts/open10-20260814T130853Z-fail7.log
+   Find which churn assertion fails and what the probe printed just before.
+   That names the actual B+tree/SMP defect. Write a DDR before any fix.
+2. Classify Mode 2 separately — check whether the WXVIOL #PF is the expected
+   probe behaviour and why the boot did not continue past it (A at t=526 vs
+   t~330 says that boot was already anomalous before the fault).
+3. Re-run the campaign after any fix; 30 runs is enough to see a 30% rate move.
+4. THEN TASK D (CI dispatch) — hygiene gates already PASS at 80e8580.
+
+### STILL TRUE
+smoke-shell GREEN 3/3 (bbc8649 + e533dab + d503a7c). TASK B not needed
+(O_APPEND already implemented). TASK C not needed (stamps already carry g_ticks).
