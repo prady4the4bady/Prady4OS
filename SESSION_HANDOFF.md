@@ -4325,3 +4325,56 @@ main.c:1717 — a ~490-line window, entered but never exited on failing runs.
 
 NEXT: bisect the window with one added stamp (halves it per iteration), running
 SINGLE non-concurrent local runs. DDR before any fix.
+
+## Checkpoint 2026-08-14 (q) — ITEM 47: fs_test_thread BLOCKS (not crashes); instrument landed
+
+LOCAL: e49a23f (unpushed). REMOTE: 5f11cf5. main: 27ba426 — NOT promoted.
+
+### The evidence, both sides, same signature
+CI 31816582068 shard 1, smoke-rqstress-liveness, full 180 s TIMEOUT_S:
+    [boot-stamp] A probe-block-begin t=185
+    [lockbox] committed at boot
+    [wx] spawning W^X violator (expect a clean user-kill)
+    [trap] user #PF ... name=WXVIOL.ELF ... — killing process
+    ... PIPE / EPOLL / SIGNAL / IO_URING / PRADYOS_COMPOSITOR_NODEV /
+        PRADYOS_INPUT_WAIT / PRADYOS_INPUT_TIMEOUT all print normally ...
+    (no stamp B, no stamp C, no [smp] rqstress)
+Local: 2/10 same gate, A=1 B=0 C=0 rq=0.
+
+### What that proves
+fs_test_thread **BLOCKS, it does not crash.** Every already-spawned thread keeps
+running and printing for the full 180 s. It gets PAST the W^X violator and past
+the SYSTEST / INPUTTST / COMPOSIT / SURFTEST spawns — their sentinels appear —
+then never reaches stamp C about 440 lines later.
+
+Each user_boot_from_sfs does vfs_create + vfs_write + vfs_read against SFS. A
+missed virtio-blk completion / lost wakeup under -smp 4 parks a thread exactly
+like this, and that is B#3's original suspicion (DDR-878 blk wait list).
+HYPOTHESIS, not yet confirmed — do not fix on it.
+
+### Why the window could not be narrowed from the log
+Most of main.c:1223..1717 is probe_enabled() gated and therefore SILENT when
+QEMU_PROBES is unset, which is the case for this gate. The serial simply has
+nothing between the last spawn sentinel and stamp C.
+
+### Instrument landed (e49a23f, DDR-886)
+user_boot_from_sfs now prints on ENTRY:
+    [boot-load] <FNAME> t=<g_ticks>
+so the LAST [boot-load] line in a stuck boot names the load it died on.
+Diagnostic only — no control-flow change, no new sentinel semantics,
+sentinel_collision.sh OK (159). Build clean.
+
+### NEXT ACTION (exact)
+1. Push e49a23f. CI will run it; a red shard-1 now yields a named load.
+2. Locally, run smoke-rqstress-liveness ONE AT A TIME (never concurrently —
+   concurrent QEMU on this host has already produced two retracted root causes)
+   until the A-only signature recurs (~20%), then read the last [boot-load].
+3. With the load named, inspect that path's blk wait/completion under -smp 4
+   against DDR-878. DDR before any fix.
+4. STILL DO NOT PROMOTE MAIN. Same-tip green->red proved the 3-green rule is
+   load-bearing; item 47 is the blocker at ~20% per run.
+
+### ALSO PENDING (unpushed, deliberately)
+bfce0ec ADR-037 (roster is a contract — most of F#66-76 needs NO kernel slot),
+1beed9e / 5e5cff2 / b5da2be checkpoints, e49a23f instrument.
+Push order does not matter; they are docs + one diagnostic print.
