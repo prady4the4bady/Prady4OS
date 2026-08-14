@@ -635,8 +635,21 @@ static void blkmq_proof(void) {
     uint64_t dl = g_ticks + 200;
     while ((g_mq_done & 3u) != 3u && !(g_mq_done >> 8) && g_ticks < dl)
         yield();
-    kputs((g_mq_done & 3u) == 3u ? "[blk] multi-inflight OK\r\n"
-                                 : "[blk] multi-inflight FAIL\r\n");
+    /* DDR-886: the loop above is PACING — it must not decide the verdict. A
+     * reader that has not landed yet was previously indistinguishable from one
+     * that failed its read. Drain with the same 200-tick budget the pacing loop
+     * had (worst case 4 s at 100 Hz, far inside this gate's TIMEOUT_S), then
+     * report the bitmask: low bit unset = LATE, high bit set = read FAILED. */
+    uint64_t drain = g_ticks + 200;
+    while ((g_mq_done & 3u) != 3u && !(g_mq_done >> 8) && g_ticks < drain)
+        yield();
+    if ((g_mq_done & 3u) == 3u) {
+        kputs("[blk] multi-inflight OK\r\n");
+    } else {
+        kputs("[blk] multi-inflight FAIL done=");
+        kputhex(g_mq_done);
+        kputs("\r\n");
+    }
 }
 
 /* DDR-759 (M1 SMP audit): concurrent block-read DATA integrity. Unlike
@@ -673,7 +686,10 @@ static void blkint_worker(void *arg) {
 static void smp_blk_integrity(void) {
     struct blk_device *bd = blk_get(0);
     uint64_t buf = pmm_alloc_page();
-    if (!bd || !buf) { if (buf) pmm_free_page(buf); kputs("[smp] blk integrity FAIL\r\n"); return; }
+    /* DDR-886: three sites emitted the identical "blk integrity FAIL" text, so a
+     * resource shortage could not be told from a data mismatch. Each now names
+     * itself. */
+    if (!bd || !buf) { if (buf) pmm_free_page(buf); kputs("[smp] blk integrity FAIL no-device-or-page\r\n"); return; }
     /* Single-threaded reference: sectors 0..3 are stable read-only boot image. */
     int refok = 1;
     for (unsigned sec = 0; sec < 4; sec++) {
@@ -681,7 +697,7 @@ static void smp_blk_integrity(void) {
         g_blkint_ref[sec] = blk_sum((const uint8_t *)(uintptr_t)buf);
     }
     pmm_free_page(buf);
-    if (!refok) { kputs("[smp] blk integrity FAIL\r\n"); return; }
+    if (!refok) { kputs("[smp] blk integrity FAIL reference-read\r\n"); return; }
 
     sched_create(blkint_worker, (void *)0, "bi0");
     sched_create(blkint_worker, (void *)1, "bi1");
@@ -690,8 +706,23 @@ static void smp_blk_integrity(void) {
     uint64_t dl = g_ticks + 400;
     while ((g_blkint_done & 0xfu) != 0xfu && g_ticks < dl)
         yield();
-    kputs(((g_blkint_done & 0xfu) == 0xfu && !(g_blkint_done >> 8))
-          ? "[smp] blk integrity OK\r\n" : "[smp] blk integrity FAIL\r\n");
+    /* DDR-886: drain before the verdict, same 400-tick budget the pacing loop
+     * had (worst case 8 s at 100 Hz). Then report the bitmask so LATE (a low
+     * bit unset) is distinguishable from WRONG (a high bit set) — previously
+     * both printed the same word, which is why an intermittent CI failure here
+     * carried no information. */
+    uint64_t drain = g_ticks + 400;
+    while ((g_blkint_done & 0xfu) != 0xfu && g_ticks < drain)
+        yield();
+    if ((g_blkint_done & 0xfu) == 0xfu && !(g_blkint_done >> 8)) {
+        kputs("[smp] blk integrity OK\r\n");
+    } else {
+        kputs("[smp] blk integrity FAIL ");
+        kputs((g_blkint_done >> 8) ? "checksum-mismatch" : "workers-late");
+        kputs(" done=");
+        kputhex(g_blkint_done);
+        kputs("\r\n");
+    }
 }
 
 /* cap-3 proof: an AP's own LAPIC timer fires (preemption). Read a non-BSP CPU's
