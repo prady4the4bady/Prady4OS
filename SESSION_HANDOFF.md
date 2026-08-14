@@ -3835,3 +3835,62 @@ lineage is the prime suspect since that is what changed:
      the character on the floor when the bound trips, and an 8 KiB burst is
      precisely when it would trip.
 Do NOT touch prism.c, O_APPEND, drain frequency, or ring size — all cleared.
+
+## Checkpoint 2026-08-14 (h) — GATE WAS NEVER RUNNING; prior conclusions withdrawn
+
+### THE BIG ONE: smoke-shell had a broken recipe (fixed, bbc8649)
+b08058b (mine) inserted a `@#` make-comment between the feeder's closing `) & \`
+and the `timeout ... qemu` line. That whole region is ONE shell command joined by
+backslash continuations, so the comment was spliced into the shell text:
+
+    /bin/sh: 35: Syntax error: Unterminated quoted string
+    make: *** [Makefile:1093: smoke-shell] Error 2
+
+The recipe died BEFORE `rm -f build/shell_serial.log` and before QEMU booted.
+build/shell_serial.log stayed frozen (mtime 17:41 while builds were hours newer),
+so every run re-greped the SAME stale file. `rc=2` was make's error exit, not a
+gate assertion. FIXED in bbc8649; comment moved above the target with a warning.
+
+### CONCLUSIONS WITHDRAWN (all measured against the stale log — do not trust)
+- "deterministic 568 lines"                      -> log never changed
+- DDR-916 arm2 (per-char drain) "no benefit"     -> never executed
+- DDR-916 arm3 (RX ring 256->4096) "no benefit"  -> never executed
+- "BIG8K emits nothing / BIGHEAD absent"         -> FALSE, see below
+- "cat|cat 8KiB pipe is broken"                  -> FALSE
+- thre_drops diagnostic "never fired"            -> recipe never ran
+
+### MEASURED ON THE WORKING GATE (3 runs, bbc8649)
+  serial 762 / 763 / 755 lines (NOT 568)
+  BIGHEAD=1  BIGTAIL=1   -> `cat /BIG8K.TXT | cat` WORKS; the pipe is fine
+  thre_drops=0 in every heartbeat -> the CONSOLE_THRE_MAX ceiling NEVER trips
+  first failure, all 3 runs:
+      [shell] FAIL: agent spawn NOT denied without CAP_AGENT (DDR-888)
+
+**MASTER_PLAN "FACT 4" (kputc THRE ceiling drop) is REFUTED by thre_drops=0.**
+Do NOT implement arm4. The counter is instrumentation still in the tree
+(kernel/console.c g_thre_drops, printed by kernel/idt.c heartbeat) — keep it,
+it is cheap and it is what disproved the theory.
+
+### THE REMAINING REAL BUG — DDR-808 character loss, now properly evidenced
+serial line 739:
+    prism> prism: unknown command: agenfg
+The feeder sends `agent spawn /NOPE.ELF probe` then later `fg %%1`. PRISM
+received `agen` + `fg` fused. That is DDR-808's exact signature: a partial
+command with the next command concatenated onto the orphan. `AGENT ROSTER
+slots=8 active=0` (line 738) proves `agent list` ran fine just before.
+So input IS being lost, but NOT via the THRE ceiling and NOT during the BIG8K
+burst — it happens around the agent DSL commands near the end of the feeder.
+
+### NEXT ACTION
+1. Re-test DDR-916 arm2 and arm3 FOR REAL now that the gate runs — both were
+   never actually executed. Score on: does `agenfg` disappear and does
+   `AGENT SPAWN DENIED` appear. arm2 = per-char console_rx_drain() after outb in
+   kputc; arm3 = RX_RING_SZ 256->4096. Test arm3 FIRST (the fuse happens while
+   PRISM is busy, which is a capacity symptom, and thre_drops=0 rules out the
+   spin path).
+2. If neither fixes it, instrument console_rx_drain to count ring-full discards
+   (the `nh != rx_tail` else-branch) and report via the heartbeat, same pattern
+   as thre_drops. That directly measures whether loss is ring overflow.
+3. Only after smoke-shell is green: TASK 4 (g_ticks stamps), then push + CI.
+
+STATE: local+remote bbc8649. main 27ba426. smoke-shell RED (DDR-888 assertion).
