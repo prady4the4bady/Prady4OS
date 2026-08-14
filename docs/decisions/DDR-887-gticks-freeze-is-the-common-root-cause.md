@@ -175,3 +175,58 @@ Do not change `switch_wait_offcpu` before that comparison exists.
 `[sfs] churn FAIL op=create iter=0 rc=-1` — the DDR-884 rc instrument fired
 locally. `op=create` failing at `iter=0` with `rc=-1` is the btree-churn arm,
 and it reproduced OUTSIDE CI. Track separately; it is not part of DDR-887.
+
+## THE FIX — verified against the code, with one correction to the proposed form
+
+### Verification of the call-site's lock state (this had to be checked first)
+
+A `sti` inside a spin is only safe if no non-reentrant lock is held. Checked:
+
+- `schedule()` (sched.c:1026-1027) calls `schedule_locked(local_irq_save())`.
+  `local_irq_save()` (sched.c:437) is a bare `pushfq; pop; cli` — **no lock**.
+- `g_sched_lock` was removed from the switch by rq-2 and now "covers ring
+  TOPOLOGY only" (sched.c:433-436).
+- `sched_exit` takes the topology lock but calls `irq_restore(fl)` **before**
+  `schedule()` (sched.c:1177).
+- `sched_free_tcb` "Takes NO scheduler lock" (sched.c:852).
+
+**The comments at sched.c:932 and :944 claiming `g_sched_lock` is "ALREADY
+HELD" across the switch are STALE rq-1-era text.** They are contradicted by
+sched.c:433-436 and by the actual call at :1027. Anyone reasoning from those
+comments will reach the wrong conclusion about `sti` safety.
+
+Conclusion: `switch_wait_offcpu` is never reached with `g_sched_lock` held, so
+re-enabling interrupts there cannot self-deadlock on it.
+
+### The hazard the naive form DOES have
+
+`sched_tick` calls `schedule()` on quantum expiry. Enabling interrupts inside
+`schedule_locked` — after `prev` has been re-queued and `next` popped, but
+before `next->on_cpu = cpu` is claimed — lets the timer **re-enter the scheduler
+mid-switch on the same CPU**. That is a reentrancy hazard, not a state-visibility
+one; "`on_cpu` is still set" does not address it.
+
+We need the **tick**, not a nested switch. So the fix is two parts:
+
+1. A per-CPU `g_in_switch[]` flag (file-local array in sched.c — NOT a new
+   `struct percpu` field, because that struct has asm-visible fixed offsets that
+   are static-asserted in percpu.c).
+2. `sched_tick` skips its `schedule()` call when this CPU's flag is set. The
+   tick still runs: `g_ticks++`, the vDSO clock, lwIP timers and the blk
+   watchdog all advance — which is the entire point.
+
+### Form
+
+A separate schedule-path variant is used so `sched_free_tcb`'s call site is
+untouched. That matters: `sched_free_tcb` runs from the reaper with interrupts
+ENABLED, and a bare `sti;pause;cli` loop would leave IF **clear** on exit,
+silently changing the caller's interrupt state. The new variant also returns
+immediately when no wait is needed, so the common path touches IF not at all.
+
+### Bound
+
+The IF=1 window is a single `pause` between `sti` and `cli` — one instruction
+boundary, long enough for a pending LAPIC timer to be delivered, too short to be
+a scheduling quantum. S2 is unaffected: the loop's termination condition is
+unchanged (it still exits when the owner releases `on_cpu`), and the fix makes
+that release *reachable*, which it was not before.

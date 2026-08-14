@@ -343,6 +343,44 @@ static inline void switch_wait_offcpu(struct tcb *t) {
         __asm__ volatile("pause");
 }
 
+/* DDR-887: per-CPU "this CPU is inside the switch" flag. A file-local array
+ * rather than a `struct percpu` field on purpose — that struct has asm-visible
+ * fixed offsets (syscall_entry.asm reads %gs:56.. ) which are static-asserted in
+ * percpu.c, so widening it mid-struct is a trap. */
+static volatile uint8_t g_in_switch[PERCPU_MAX];
+
+/* DDR-887: the SCHEDULE-path variant of switch_wait_offcpu.
+ *
+ * CONFIRMED defect: every CPU can be spinning in the bare-`pause` loop above
+ * with IF=0 (schedule_locked enters via local_irq_save = CLI). A CPU spinning
+ * with interrupts masked cannot take its LAPIC timer, so `timer_tick` is never
+ * entered on ANY CPU, `g_ticks` freezes, and every g_ticks-relative deadline in
+ * the tree becomes unblockable. CI run 31837700697 shard 0: zero `[hb]` lines
+ * across 180 s (~36 were due), last tick t=207, ring-3 output continuing after.
+ *
+ * Re-enable interrupts for ONE instruction boundary per spin so the timer can
+ * fire. `g_in_switch` suppresses the reentrant `schedule()` that `sched_tick`
+ * would otherwise perform on quantum expiry — we need the TICK to advance, not
+ * a nested switch on a CPU that is mid-switch already.
+ *
+ * Safe because no lock is held here: rq-2 removed g_sched_lock from the switch
+ * (see the local_irq_save comment above); sched_exit releases the topology lock
+ * before calling schedule(). The stale "g_sched_lock ALREADY HELD" comments
+ * further down this file predate rq-2 and do not describe the current code.
+ *
+ * Kept separate from switch_wait_offcpu() so sched_free_tcb's call site is
+ * untouched: that runs from the reaper with interrupts ENABLED, and an
+ * unconditional sti/cli loop would leave IF clear on exit, silently changing
+ * the caller's interrupt state. The no-wait fast path below touches IF at all. */
+static inline void switch_wait_offcpu_sched(struct tcb *t, int cpu) {
+    if (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) < 0)
+        return;                         /* common case: no wait, IF untouched */
+    __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
+    while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) >= 0)
+        __asm__ volatile("sti; pause; cli" ::: "memory");
+    __atomic_store_n(&g_in_switch[cpu], 0, __ATOMIC_RELEASE);
+}
+
 /* rq-3: a lockless hint — is any CPU's ready queue non-empty? A stale read is
  * harmless: a false negative is caught by the timer tick, a false positive just
  * costs one extra idle-loop iteration. Used only to close the wake/idle race. */
@@ -974,7 +1012,7 @@ static void schedule_locked(uint64_t fl) {
     /* next may still be mid-switch-away on another CPU: wait for its release
      * before we touch its rsp. (next != prev here — the keep-running case
      * returned above, so we never wait on ourselves.) */
-    switch_wait_offcpu(next);
+    switch_wait_offcpu_sched(next, cpu);   /* DDR-887: ticks must keep advancing */
     next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
     next->dispatches++;            /* DDR-735: switch-in count (under the claim) */
@@ -1045,6 +1083,13 @@ void sched_tick(void) {
         current_thread->quantum--;
     if (current_thread->quantum == 0) {
         current_thread->quantum = current_thread->quantum_reset;
+        /* DDR-887: this CPU may be inside switch_wait_offcpu_sched(), which
+         * re-enables interrupts so THIS tick can happen. Take the tick (g_ticks,
+         * vDSO clock, lwIP, blk watchdog have all advanced above) but do NOT
+         * re-enter the scheduler on a CPU that is already mid-switch. */
+        struct percpu *sp = this_cpu();
+        if (sp && g_in_switch[sp->cpu_idx])
+            return;
         schedule();
     }
 }
