@@ -3894,3 +3894,58 @@ burst — it happens around the agent DSL commands near the end of the feeder.
 3. Only after smoke-shell is green: TASK 4 (g_ticks stamps), then push + CI.
 
 STATE: local+remote bbc8649. main 27ba426. smoke-shell RED (DDR-888 assertion).
+
+## Checkpoint 2026-08-14 (i) — arm3 CONFIRMED FIXED; smoke-shell now fails on a gate/feeder contradiction
+
+LOCAL+REMOTE: e533dab. main 27ba426.
+
+### FIXED THIS SESSION
+1. **bbc8649** — repaired the smoke-shell recipe. My own `@#` comment inside the
+   backslash-continued feeder block made `/bin/sh` fail with "Unterminated quoted
+   string"; make exited rc=2 before QEMU booted, so the gate had not run at all
+   and every earlier analysis re-greped a frozen log.
+2. **e533dab** — DDR-916 arm3, RX ring 256 -> 4096. MEASURED:
+       old ring: thre_drops=0 rx_drops=102
+       new ring: thre_drops=0 rx_drops=0
+   agenfg fusion GONE; `AGENT SPAWN DENIED` now present (DDR-888 passes).
+   3/3 runs, all freshness-verified (serial mtime after run start).
+
+### HYPOTHESES NOW SETTLED WITH REAL DATA
+- **arm4 / CONSOLE_THRE_MAX: REFUTED.** g_thre_drops=0 across every run, both
+  before and after the fix. The TX spin bound never trips. Do not implement.
+- **BIG8K / 8 KiB pipe: FINE.** BIGHEAD=1 BIGTAIL=1.
+- **arm3: CONFIRMED CORRECT** (previous "no benefit" verdict was from the stale
+  log era and is superseded).
+- Diagnostic counters g_thre_drops / g_rx_drops are STILL IN THE TREE
+  (kernel/console.c, printed by kernel/idt.c heartbeat). Keep until v1.0.0
+  hardening; they are cheap and they settled two hypotheses.
+
+### CURRENT FAILURE — NOT a kernel bug, a gate/feeder contradiction
+    [shell] FAIL: background job never reaped (DDR-881)
+Makefile:1172 requires the literal `Done(0)   /EXECTEST.ELF`.
+PRISM prints `[%d]+ Done(%d)   %s` ONLY from jobs_reap() (user/prism.c:251),
+which reports finished BACKGROUND jobs at the next prompt (called from :313).
+
+Feeder order (Makefile:1134-1138):
+    run /EXECTEST.ELF &   -> [1] 92
+    jobs                  -> [1]  Running  92  /EXECTEST.ELF
+    fg %1                 -> foregrounds it; PRISM waits on and CONSUMES the job
+    jobs                  -> jobs: none
+Because `fg %1` reaps the job synchronously, jobs_reap never sees it and never
+prints Done(0). This matches real shell semantics (bash does not print "Done"
+for a job you foregrounded). The gate therefore asserts something the feeder
+makes impossible.
+
+### NEXT ACTION — pick ONE (both are one-line changes; prefer the first)
+(a) FEEDER: background a SECOND short job that is never foregrounded, e.g. add
+    `printf 'run /EXECTEST.ELF &\n'; sleep 1.5;` after the `fg %%1` line, so a
+    background job completes and jobs_reap reports `Done(0)` at the next prompt.
+    Keeps both behaviours under test (fg path AND background-reap path).
+(b) GATE: relax :1172 to accept the fg path. WORSE — it would stop testing
+    background reaping entirely, which is the point of DDR-881.
+Recommend (a). Remember the Makefile comment rule: no `@#` inside the
+backslash-continued block; put commentary above the target.
+
+Then: re-run smoke-shell 3x, and continue down the assertion list — each fix
+reveals the next real assertion. After green: TASK 4 (g_ticks stamps), then
+ci-shard-check / ci-probe-rodata-check / ci-start-align-check, push, CI.
