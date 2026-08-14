@@ -3949,3 +3949,64 @@ backslash-continued block; put commentary above the target.
 Then: re-run smoke-shell 3x, and continue down the assertion list — each fix
 reveals the next real assertion. After green: TASK 4 (g_ticks stamps), then
 ci-shard-check / ci-probe-rodata-check / ci-start-align-check, push, CI.
+
+## Checkpoint 2026-08-14 (j) — smoke-shell GREEN 3/3; OPEN-10 campaign running
+
+LOCAL+REMOTE: 80e8580. main 27ba426 (not promoted — no CI run yet).
+
+### smoke-shell IS GREEN — 3/3, freshness-verified
+Three fixes, in order, each measured:
+1. **bbc8649** — repaired the recipe. A `@#` comment inside the backslash-
+   continued feeder block broke /bin/sh quoting; make exited rc=2 before QEMU
+   booted, so the gate had not run at all and every earlier analysis re-greped
+   a frozen serial log.
+2. **e533dab** — DDR-916 arm3, RX ring 256 -> 4096. Measured with a temporary
+   g_rx_drops counter: rx_drops 102 -> 0, `agenfg` command fusion gone,
+   `AGENT SPAWN DENIED` appears (DDR-888 passes).
+3. **d503a7c** — DDR-881 gate/feeder contradiction. The gate asserts
+   `Done(0)   /EXECTEST.ELF`, which jobs_reap() (prism.c:251) prints only for a
+   BACKGROUND job, but the feeder ran `fg %1` on the only job, consuming it
+   synchronously. Correct shell semantics; the assertion was unsatisfiable.
+   Fix: background a SECOND /EXECTEST.ELF that is never foregrounded, so the fg
+   path AND the background-reap path are both still covered.
+Result: `make smoke-shell` rc=0 on 3 consecutive runs, each verified with
+serial-log mtime >= run start.
+
+### TASK B (DDR-782 O_APPEND) — NOT NEEDED
+smoke-shell green means its 2>>/DDR-868 and DDR-782 assertions pass. O_APPEND
+was already implemented (sys_io.c:96-102 + sys_open storing flags). Do not
+implement FD_APPEND; MASTER_PLAN TASK 3's spec remains a no-op.
+
+### TASK C (g_ticks stamps) — ALREADY IN THE TREE
+main.c:1223 (A probe-block-begin), :1717 (C ext4-done), :1804 (B proofs-begin)
+each already print `t=` via kputdec(g_ticks). The prescribed line numbers
+(1134/1311) are stale — 1134 is inside an AETHER config check and 1311 inside a
+comment block. Nothing to add.
+What DDR-880 actually left undone was the CAMPAIGN that reads those stamps.
+
+### NEW: tools/ci/open10_campaign.sh (80e8580)
+Runs smoke-sfs-btree-smp4 N times, records rc + which stamps appeared, applies
+DDR-880's reading rule:
+    A but no C       -> loss INSIDE the ext4 block
+    A and C but no B -> the next elf_load after ext4 is the suspect
+    A, B, C present  -> healthy
+Guards against DDR-880's documented detector bug: scores only on kernel prints,
+mirrors boot_test.sh's SERIAL_LOG while live (it unlinks on exit), and requires
+mtime >= run start. Smoke-tested 2/2 healthy (A=1 B=1 C=1 churnOK=1).
+
+### IN FLIGHT
+A 30-run campaign is running in the background. DDR-880's measured rate is 2/30
+(6.7%), so expect 1-2 failures. Report lands at build/artifacts/open10-*.txt,
+failing serials preserved as build/artifacts/open10-*-fail<N>.log.
+
+### NEXT ACTION
+1. Read build/artifacts/open10-*.txt. For any run with verdict=FAIL, read its
+   preserved serial and classify by the A/B/C rule above. That classification is
+   the first real localisation of item 47 / OPEN-10 and belongs in a DDR before
+   any fix.
+2. If 30 runs produce zero failures, run another 30 before concluding anything —
+   6.7% means ~13% chance of a clean 30-run block.
+3. Then TASK D: dispatch CI (hygiene gates ci-shard-check /
+   ci-probe-rodata-check / ci-start-align-check already PASS as of 80e8580),
+   and only promote main after CI is green.
+4. Then TASK E: F#68 smoke-lockbox-e2e, next DDR-884, next NSI 94, next cap 1<<24.
