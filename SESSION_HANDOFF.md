@@ -4296,3 +4296,32 @@ SINGLE, non-concurrent runs before writing any fix.
    INSIDE it to bisect where the thread is lost. The window is currently ~490
    lines; one stamp halves it per iteration.
 4. DDR before any fix.
+
+## Checkpoint 2026-08-14 (p) — CI CONFIRMS ITEM 47; DO NOT PROMOTE MAIN
+
+Rerun of tip 5f11cf5 (run 31816582068) went RED after the same tip was GREEN.
+Shard 1, first gate:
+
+    [smoke] FAIL - required pattern '[smp] rqstress OK' not found. Serial output was:
+    [boot-stamp] A probe-block-begin t=185
+    shard 1: FAILED at smoke-rqstress-liveness after 1 of 36 gates
+
+**Stamp A ONLY — the exact item-47 signature localised locally (A=1 B=0 C=0
+rq=0, 2/10).** Reproduced now on BOTH sides, same gate, same signature.
+
+CONSEQUENCES:
+- The three earlier greens (f108189, 87c2583, 5f11cf5) were LUCK at a ~20%
+  per-run failure rate. Green CI on this branch is not currently evidence of
+  correctness for this gate.
+- **DO NOT promote main.** The 3-greens-on-a-single-tip rule did its job: the
+  same tip produced green then red.
+- The failure is "required pattern not found", NOT the forbidden sentinel. So
+  DDR-885 still holds — nothing printed `rqstress FAIL`. The probe simply never
+  ran, which DDR-885 never claimed to fix.
+
+ITEM 47 IS NOW THE SINGLE BLOCKER for v1.0.0 and for promoting main.
+Localised to the ext4 probe block: stamp A at main.c:1223, stamp C at
+main.c:1717 — a ~490-line window, entered but never exited on failing runs.
+
+NEXT: bisect the window with one added stamp (halves it per iteration), running
+SINGLE non-concurrent local runs. DDR before any fix.
