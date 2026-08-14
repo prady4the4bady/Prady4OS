@@ -449,6 +449,15 @@ void aether_audit_tamper(void);
 static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
                                const unsigned char *elf, const unsigned char *elf_end,
                                int sovereign) {
+    /* ITEM 47 / B#3 instrument (DDR-886): name every SFS-backed load as it is
+     * ENTERED, so a boot that stops mid-block says WHICH load it stopped on.
+     * fs_test_thread has been observed reaching stamp A and never stamp C while
+     * every already-spawned thread keeps running and printing — i.e. it BLOCKS,
+     * it does not crash. Each call below does vfs_create + vfs_write + vfs_read
+     * against SFS, so a missed virtio-blk completion under -smp 4 would park it
+     * here forever. Without this print the ~440-line window between the last
+     * spawn and stamp C cannot be narrowed from a serial log alone. */
+    kputs("[boot-load] "); kputs(fname); kputs(" t="); kputdec(g_ticks); kputs("\r\n");
     uint64_t elen = (uint64_t)(elf_end - elf);
     struct vfs_file ef;
     if (vfs_create(cap, smnt, fname, &ef) != 0 ||
