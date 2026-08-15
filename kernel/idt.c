@@ -177,6 +177,14 @@ static void timer_tick(struct regs *r) {
           kputs(" spins="); kputdec(stot);
           kputs(" max=");   kputdec(smax);
           kputs(" cpu=");   kputdec((uint64_t)scpu); }
+        /* DDR-893: calls/bails separate "one long wait" from "constant short
+         * waits". A high call count is thrashing — the pick keeps landing on a
+         * thread that is still on-CPU elsewhere. */
+        { extern void sched_take_wait_stats(uint32_t *, uint32_t *);
+          uint32_t wc = 0, wb = 0;
+          sched_take_wait_stats(&wc, &wb);
+          kputs(" calls="); kputdec(wc);
+          kputs(" bails="); kputdec(wb); }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */

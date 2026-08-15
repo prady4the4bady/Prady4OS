@@ -379,6 +379,12 @@ static volatile uint8_t g_in_switch[PERCPU_MAX];
  * g_in_switch is set and therefore suppresses preemption for the duration of
  * this spin. If the spin is rare, (B) is refuted by data rather than argument. */
 static volatile uint32_t g_spin_ct[PERCPU_MAX];
+/* DDR-893: calls = how often the wait was ENTERED (i.e. the pick was still
+ * on-CPU); bails = how often the DDR-892 bound was hit. Together with spins they
+ * separate "one long wait" from "constant short waits" — the latter is
+ * thrashing, and only the counters can tell them apart. */
+static volatile uint32_t g_wait_calls[PERCPU_MAX];
+static volatile uint32_t g_wait_bails[PERCPU_MAX];
 
 /* DDR-892: bound derived from what the wait is FOR (rq-2 D3): context_switch
  * saving rsp, then finish_task_switch's release store — tens of instructions.
@@ -392,10 +398,12 @@ static volatile uint32_t g_spin_ct[PERCPU_MAX];
 static inline int switch_wait_offcpu_sched(struct tcb *t, int cpu) {
     if (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) < 0)
         return 1;                       /* common case: no wait, IF untouched */
+    __atomic_add_fetch(&g_wait_calls[cpu], 1, __ATOMIC_RELAXED);   /* DDR-893 */
     __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
     unsigned n = 0;
     while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) >= 0) {
         if (++n >= SWITCH_WAIT_MAX_SPINS) {
+            __atomic_add_fetch(&g_wait_bails[cpu], 1, __ATOMIC_RELAXED);
             /* DDR-892: give up on this PICK, never on the invariant.
              * g_in_switch stays set until we return, so the non-reentrancy
              * guarantee of sched.c:983-989 is unbroken. */
@@ -423,6 +431,17 @@ uint32_t sched_take_spin_stats(uint32_t *max_out, int *max_cpu_out) {
     if (max_out)     *max_out = max;
     if (max_cpu_out) *max_cpu_out = mcpu;
     return total;
+}
+
+/* DDR-893: drain the call/bail counters alongside the spin count. */
+void sched_take_wait_stats(uint32_t *calls_out, uint32_t *bails_out) {
+    uint32_t calls = 0, bails = 0;
+    for (int c = 0; c < PERCPU_MAX; c++) {
+        calls += __atomic_exchange_n(&g_wait_calls[c], 0, __ATOMIC_RELAXED);
+        bails += __atomic_exchange_n(&g_wait_bails[c], 0, __ATOMIC_RELAXED);
+    }
+    if (calls_out) *calls_out = calls;
+    if (bails_out) *bails_out = bails;
 }
 
 /* rq-3: a lockless hint — is any CPU's ready queue non-empty? A stale read is
