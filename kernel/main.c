@@ -668,6 +668,12 @@ static uint32_t blk_sum(const uint8_t *b) {
     return s;
 }
 
+/* DDR-898: per-worker progress. g_blkint_done is written only at the very END of
+ * the worker, so done=0x0 (observed in CI 31907631454) proves "no worker
+ * RETURNED" but cannot tell "never scheduled" from "ran and stalled mid-loop".
+ * These counters make that distinction directly. */
+static volatile uint32_t g_blkint_prog[4];
+
 static void blkint_worker(void *arg) {
     unsigned id = (unsigned)(uintptr_t)arg;
     unsigned sec = id & 3u;
@@ -677,6 +683,8 @@ static void blkint_worker(void *arg) {
     for (int i = 0; ok && i < 64; i++) {
         if (bd->read(bd, sec, (void *)(uintptr_t)buf, 1) != 0) { ok = 0; break; }
         if (blk_sum((const uint8_t *)(uintptr_t)buf) != g_blkint_ref[sec]) { ok = 0; break; }
+        if (id < 4)
+            __atomic_add_fetch(&g_blkint_prog[id], 1, __ATOMIC_RELAXED);
     }
     if (buf)
         pmm_free_page(buf);
@@ -721,6 +729,14 @@ static void smp_blk_integrity(void) {
         kputs((g_blkint_done >> 8) ? "checksum-mismatch" : "workers-late");
         kputs(" done=");
         kputhex(g_blkint_done);
+        /* DDR-898: per-worker completed iterations (of 64). prog=0,0,0,0 means
+         * the workers never ran at all (scheduling), any non-zero means they
+         * ran and stalled — done= alone cannot tell those apart. */
+        kputs(" prog=");
+        for (int pi = 0; pi < 4; pi++) {
+            if (pi) kputs(",");
+            kputdec(g_blkint_prog[pi]);
+        }
         kputs("\r\n");
     }
 }

@@ -105,3 +105,44 @@ reported an explicit failure.
 is collateral. The actual defect remains `sfs_create` failing at `iter=0`, which
 is blocked on a capture naming `-ENOENT` vs `-ENOSPC` (DDR-891) — and per the
 standing rule, SFS internals stay untouched until that capture exists.
+
+## RESULT — the widened dump worked, and it REFUTES the rate-margin hypothesis
+
+CI 31911253495 shard 3, with the wider dump in place:
+
+```
+PRADYOS_AGENT_START task=test mode=test      <- boot-time agent #1
+AETHER_AGENT_EXEC WRITE_FILE /tmp/aether_test.txt
+PRADYOS_AGENT_VERIFIED
+PRADYOS_AGENT_DONE
+PRADYOS_AGENT_START task=test mode=test      <- boot-time agent #2
+...
+PRADYOS_AGENT_DONE
+PRADYOS_AGENT_TRIGGER name=PRAX slot=1 pid=82   <- LAST agent line
+AGENT_RATE_LIMITED PID=2742943744
+```
+
+Two readings, both now settled:
+
+1. **The clicked agent never printed `PRADYOS_AGENT_START`.** That is the FIRST
+   statement of the agent's `main()`. So it never executed a single instruction
+   of user code — it cannot have consumed the ~55 counted syscalls the poll loop
+   needs. **The 55/60 rate-margin hypothesis recorded above is REFUTED for this
+   failure.** The margin remains a real latent risk and the note stands, but it
+   is not what this gate is hitting.
+2. **The one `AGENT_RATE_LIMITED` is `PID=2742943744`**, the synthetic TCB from
+   `aether_sectest`, not pid 82. Reading it as the agent's kill would have been
+   the wrong conclusion — exactly the trap the wider dump exists to prevent.
+
+The gate's `awk` is correct: the two `AGENT_DONE` lines precede the TRIGGER, so
+they rightly do not satisfy "done AFTER trigger".
+
+## The real question, and it is not local to this gate
+
+The agent is *triggered* (a pid is allocated: `pid=82`) and then never runs.
+That is the same shape as DDR-898's `done=0x0`: threads that are created but
+produce nothing. See DDR-898 for the convergence — this is now two independent
+gates pointing at newly spawned threads not being scheduled.
+
+`user/agent_base.c` remains UNCHANGED, now for a stronger reason than "no
+evidence": the evidence positively excludes it.
