@@ -700,16 +700,38 @@ static void set_ambiance(int idx, int frames) {
     g_settled = 1;
 }
 
-/* DDR-726: auto ambiance cadence. Time source is the frame loop itself (D1
- * fallback — each iteration is yield-paced; no user clock yet), so the default
- * is an ITERATION count approximating the brief's 900 s wall cadence; the 'k'
- * hotkey shrinks it so a gate proves a full cycle in seconds. */
-static unsigned long g_cadence = 1500000;   /* iterations per ambiance period */
-static unsigned long g_cad_iter;
+/* DDR-726 + DDR-895: auto ambiance cadence, now driven by a CLOCK.
+ *
+ * The original comment here said the time source was "the frame loop itself …
+ * an ITERATION count approximating the brief's 900 s wall cadence", because no
+ * user clock was available when DDR-726 was written. That measured how much CPU
+ * the compositor was GIVEN, not elapsed time, so smoke-cadence failed under CI
+ * load whenever the loop did not accumulate enough iterations (CI 31843212987).
+ * It is the same anti-pattern DDR-911 fixed in surfacetest.c.
+ *
+ * A user clock does exist now: the vDSO page is mapped read-only into every
+ * address space and carries wall_time_ns, readable with a plain load and ZERO
+ * syscalls (IMP-C) — the same source DDR-915 used to pace the actiondag
+ * rendezvous. That keeps this hot loop syscall-free, which is why an iteration
+ * count was chosen in the first place. */
+#define VDSO_USER_VA 0x00007FFFFFF00000ull
+static unsigned long long vdso_ns(void) {
+    return *(volatile unsigned long long *)VDSO_USER_VA;
+}
+
+/* Period per ambiance, in NANOSECONDS. 900 s is the brief's cadence, stated
+ * directly instead of as "1 500 000 iterations, which is about 900 s if the
+ * compositor gets a typical share of a typical CPU". */
+static unsigned long long g_cadence_ns = 900ULL * 1000ULL * 1000ULL * 1000ULL;
+static unsigned long long g_cad_start_ns;   /* 0 = not yet armed */
 static int g_cad_pre_said, g_cad_advances;
 
 static void cadence_tick(void) {
-    g_cad_iter++;
+    unsigned long long now = vdso_ns();
+    if (!g_cad_start_ns)
+        g_cad_start_ns = now;               /* arm on the first frame */
+    unsigned long long g_cad_iter = now - g_cad_start_ns;   /* elapsed, ns */
+    unsigned long long g_cadence = g_cadence_ns;
     if (!g_cad_pre_said && g_cad_iter >= g_cadence - g_cadence / 10) {
         g_cad_pre_said = 1;                 /* final 10%: gentle accent pulse */
         unsigned char base[3], white[3] = {0xFF, 0xFF, 0xFF};
@@ -722,7 +744,7 @@ static void cadence_tick(void) {
         fflush(stdout);
     }
     if (g_cad_iter >= g_cadence) {
-        g_cad_iter = 0;
+        g_cad_start_ns = now;               /* DDR-895: restart the period here */
         g_cad_pre_said = 0;
         set_ambiance((g_cur_amb + 1) & 3, 12);
         if (++g_cad_advances == 4) {        /* one full automatic cycle */
@@ -1001,8 +1023,13 @@ int main(void) {
                 recompose_scene();
             }
             else if (c == 'k') {                             /* DDR-726: test cadence */
-                g_cadence = 2000;
-                g_cad_iter = 0;
+                /* DDR-895: a short period in the SAME units (ns), not an
+                 * iteration count. 2 s per ambiance => a full 4-ambiance cycle
+                 * in ~8 s, comfortably inside the gate window even on a loaded
+                 * TCG runner, because it is now elapsed time rather than
+                 * accumulated CPU share. */
+                g_cadence_ns = 2ULL * 1000ULL * 1000ULL * 1000ULL;
+                g_cad_start_ns = vdso_ns();  /* re-arm from now */
                 g_cad_pre_said = 0;
                 printf("PRADYOS_CADENCE_TEST\n");
                 fflush(stdout);

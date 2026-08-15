@@ -96,3 +96,23 @@ is not.
 | `smoke-cadence` | root-caused here, fix not yet implemented |
 | `smoke-agent-click` | not reproducible locally 3/3; hypothesis recorded, unproven |
 | `smoke-rtc-smp` | blocked on a DDR-891 capture naming -ENOENT vs -ENOSPC |
+
+## IMPLEMENTED — verified both paths
+
+Landed as designed. `g_cadence_ns` is a period in nanoseconds (900 s production,
+stated directly); `cadence_tick` reads the vDSO wall clock with a plain load and
+no syscalls; the pre-transition pulse fires at 90% of *elapsed time*; the `k`
+knob sets 2 s per ambiance (a full 4-ambiance cycle in ~8 s) and re-arms
+`g_cad_start_ns` from the current instant.
+
+Verification, both branches as the DDR required:
+
+- **`k` test path:** `smoke-cadence` **3/3 consecutive PASS**.
+- **Production path:** a normal boot (`smoke-compositor`, rc=0) emits **zero**
+  `PRADYOS_CADENCE_OK` / `PRADYOS_PRETRANSITION`. That absence is the observable
+  check for the 900 s branch — it cannot be positively observed inside a gate
+  window, but a units error would make it misfire immediately, and it does not.
+
+Hygiene: build warning-clean; sentinel-collision OK (159); the three
+`ci-*-check` PASS; `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity` all rc=0; no stray QEMU (bracket form).
