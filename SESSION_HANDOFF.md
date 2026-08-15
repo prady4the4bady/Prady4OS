@@ -4753,3 +4753,63 @@ after DDR-887 stopped the freeze from masking them.
 1. A rerun of ae243f0 was dispatched. Read it.
 2. Then per-gate flake-rate measurement (above) rather than more blind reruns.
 3. main stays at 27ba426.
+
+## Checkpoint 2026-08-16 (x) — DDR-894 fixes smoke-evresize deterministically
+
+LOCAL+REMOTE: d4c6412. main: 27ba426.
+
+### DDR-894 (d4c6412) — smoke-evresize FIXED, root cause was a hardcoded pixel
+The DDR-718 resize hit-test accepts only the bottom-right **14x14 PIXEL** corner
+(compositor.c:1106-1112). The gate injected FIXED tablet coordinates
+(SX=6303 SY=8404), so it passed only while the window sat where those constants
+assumed. MEASURED: the compositor actually publishes the corner at 6309,8416 —
+the corner drifts, and against a 14-pixel target that is the flake.
+
+DDR-910's Step A had shipped (PRADYOS_WM_GEOM with close=/min= centres) but never
+included the resize corner, so this gate had nothing to observe. Now the line
+carries rz=X,Y derived from the SAME expression as the hit-test, and
+drag_inject.sh has an RZ_ID mode that reads it.
+
+RESULT: 4/4 consecutive local PASS, stable observed start every run.
+Ruled out by reading (not chased): the injector is correct (press/move/release,
+and RESIZE_REQ prints on release at :1139-1145); no mode gate on the resize path.
+
+Also fixed a bug I introduced in the first cut: tail -1 could pick a line
+truncated by serial interleaving, leaving a non-numeric SX so $(( SX + ... ))
+made bash evaluate log text as a variable name ("PRADYOS_WM_GEOM: unbound
+variable"). Parse now requires rz= present and validates both fields numeric.
+
+### smoke-agent-click — NOT reproducible locally, hypothesis recorded UNPROVEN
+3/3 PASS locally. The CI failure log is `tail -20` only, so the absence of
+PRADYOS_AGENT_START there proves nothing (it may be above the tail).
+
+HYPOTHESIS (unproven, do NOT fix on it): the test-mode agent
+(user/agent_base.c:174-180) polls SYS_POLL_RESULT + SYS_YIELD **50 times**
+before printing AGENT_DONE. ADR-026 D7 kills an agent exceeding 60 counted
+syscalls in a 1 s window; ADR-036 exempts SYS_YIELD, so the loop costs ~50
+counted calls plus printfs — right at the budget edge. Same class as DDR-915
+(actiondag agent killed mid-rendezvous).
+DISCRIMINATING TEST for next session: make the gate's FAIL branch dump more than
+tail -20 (or preserve the whole log as an artifact), then look for
+AGENT_RATE_LIMITED PID=<n> and whether PRADYOS_AGENT_START appears at all. If
+the agent is being killed, pace the poll loop off the vDSO clock exactly as
+DDR-915 did.
+
+### smoke-cadence / smoke-rtc-smp — NOT yet investigated this session
+Still OPEN. rtc-smp is blocked on a capture returning -ENOENT/-ENOSPC (DDR-891
+instrumented it; do not touch SFS internals before that).
+
+### OPEN gates (rule 9)
+    smoke-cadence      OPEN  CI 31843212987   not investigated
+    smoke-rtc-smp      OPEN  CI 31845930664   awaiting DDR-891 capture
+    smoke-agent-click  OPEN  CI 31892607786   not reproducible locally 3/3
+    smoke-evresize     FIXED CI 31898538294   DDR-894, 4/4 local PASS
+
+### NEXT ACTIONS
+1. Read CI 31902452751 (DDR-894 tip). If evresize no longer appears, one flake
+   is retired from the pool.
+2. smoke-cadence root-cause (the queue's questions: is the auto-cycle driven by
+   real RTC wall time, and is the sentinel printed by compositor or kernel?).
+3. smoke-agent-click: widen the gate's failure dump first — the current tail -20
+   cannot answer the question.
+4. main stays at 27ba426 until 3 consecutive greens on ONE tip.
