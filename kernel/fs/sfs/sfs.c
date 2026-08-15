@@ -10,6 +10,7 @@
  * File data extents (read/write) are slice 4f — they remain stubs here.
  */
 #include "sfs.h"
+#include "errno.h"      /* DDR-891: distinct create failure codes, not bare -1 */
 #include "lz4.h"
 #include "vfs.h"
 #include "blk.h"
@@ -689,11 +690,16 @@ static int sfs_open(void *ctx, const char *path, struct vfs_file *out) {
 static int sfs_create (void *ctx, const char *path, struct vfs_file *out) {
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
     uint64_t parent; const char *name; int len;
+    /* DDR-891: these two used to be the SAME bare -1, which is what has made
+     * `[sfs] churn FAIL op=create iter=0 rc=-1` unactionable for three sessions.
+     * The rc travels out through vfs_create's driver passthrough untouched, so
+     * DDR-888's -EPERM/-EINVAL split at the VFS layer can never name it — the
+     * value is SFS's. Distinguish them here instead. */
     if (sfs_walk(c, path, 1 /* mkdir -p intermediates */, &parent, &name, &len) != 0)
-        return -1;
+        return -ENOENT;                /* parent path unresolvable/uncreatable */
     uint64_t ino;
     if (sfs_do_create(c, parent, name, len, 0 /* file */, &ino) != 0)
-        return -1;
+        return -ENOSPC;                /* no free inode/extent (or name clash) */
     out->size = 0;
     out->cookie = (uint32_t)ino;
     out->dirent_clus = 0;
