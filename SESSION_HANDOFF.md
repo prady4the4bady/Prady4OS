@@ -4682,3 +4682,74 @@ two are the former freeze sites). Build warning-clean. All three ci-*-check PASS
 - CI classification: 4 pre-DDR-892 runs, 4 different gates, all "did not
   complete in time". DDR-892 may or may not move this; its CI run is the test.
 - main: 0 of 3 greens. Do not promote.
+
+## Checkpoint 2026-08-15 (w) — TASK A/B done; the promotion blocker is an AGGREGATE FLAKE RATE
+
+LOCAL+REMOTE: ae243f0. main: 27ba426.
+
+### TASK A — DDR-893 (0c847bc). CI GREEN.
+Root-caused from code, then MEASURED before fixing. Q3 first: rq_pop returning
+an on-CPU TCB is INTENDED (sched.c:163-168 — "on_cpu is NO LONGER part of the
+filter … legitimately takeable"); rq_take filters only on THREAD_READY.
+
+Then added call/bail counters beside the spin count:
+    t=1000 spins=1901883 calls=100014 bails=14
+    t=1500 spins=768910  calls=37465  bails=21
+    t=2000 spins=0       calls=0      bails=0   <-- and zero thereafter
+
+**This CORRECTED my own DDR-890 conclusion.** Mean spin per call is ~19
+iterations, not a million — the rq-2 "few instructions" invariant is NOT
+violated, and DDR-890's claim that it was is withdrawn. The contention is a
+BOOT-PHASE TRANSIENT; steady state is exactly zero. Total suppressed time is
+~19 ms in a 5 s window (~0.4%, boot only), which cannot make a gate overrun by
+seconds. **Reading (B) is REFUTED.** DDR-892's bound is kept as insurance
+(bails ~35 in 137k calls), not as a fix. rq_pop/rq_steal deliberately NOT changed.
+
+### TASK B — DDR-891 (ae243f0). Root-caused from code, no QEMU.
+Q2: SFS DOES register .create (sfs.c:1496). Q1: mount id valid — no unmount /
+remount / reformat between main.c:1937 and the churn at :2042, and the SAME cap
+and root_smnt succeed at main.c:1950. Q3: the churn runs INLINE in
+fs_test_thread with that same cap, so CAP_FS_WRITE necessarily holds.
+=> neither -EPERM nor -EINVAL can be the observed rc=-1, which **REFUTES
+DDR-888's inference** that it pointed at the vfs_create precondition.
+The -1 is SFS's own: sfs_create returns bare -1 from sfs_walk failure and from
+sfs_do_create failure. Now -ENOENT / -ENOSPC respectively. DDR-888's split is
+kept (it disambiguates the VFS layer) but CANNOT name this failure — do not wait
+on a capture that cannot speak.
+
+### TASK C — the real promotion blocker, reframed
+Five DISTINCT gates have failed across recent runs, one per run, never the same
+one twice:
+    smoke-cadence      (shard 5)  no full auto cycle
+    smoke-rtc-smp      (shard 4)  btree churn collateral
+    smoke-agent-click  (shard 3)  PRAX spawned, AGENT_DONE never printed
+    smoke-evresize     (shard 3)  corner drag did not request a resize
+Recent run outcomes: 0a60436 GREEN, 21916fa RED, 0c847bc GREEN, ae243f0 RED.
+**Per-run pass rate is roughly 50%.**
+
+That is not one defect. It is an AGGREGATE FLAKE RATE across a ~106-gate suite:
+if each gate independently fails ~1% of runs, a full run passes only ~35% of the
+time. This is consistent with DDR-893's conclusion (reading (A): pre-existing
+flakes the freeze used to hide) and it reframes the promotion problem:
+
+**Chasing 3 consecutive greens by luck is expensive.** At 50%/run it is 12.5%
+per attempt, ~8 attempts, ~5 hours of CI. That is a strategy, not a fix.
+
+RECOMMENDED next approach (not started): stop treating the 3-green bar as the
+work item and instead drive the per-gate flake rate down. For each of the five
+gates above, run it in isolation N times locally (single, non-concurrent) to get
+its individual failure rate, then fix the worst offender. A suite that passes
+35% of the time cannot be promoted by rerunning; it has to get more reliable.
+
+### OPEN gates (rule 9 — named, not hidden)
+    smoke-cadence      OPEN  CI 31843212987
+    smoke-rtc-smp      OPEN  CI 31845930664  (btree churn, DDR-891 instrumented)
+    smoke-agent-click  OPEN  CI 31892607786
+    smoke-evresize     OPEN  CI 31898538294
+None classified regression-vs-pre-existing yet; all became first-failure only
+after DDR-887 stopped the freeze from masking them.
+
+### NEXT ACTIONS
+1. A rerun of ae243f0 was dispatched. Read it.
+2. Then per-gate flake-rate measurement (above) rather than more blind reruns.
+3. main stays at 27ba426.
