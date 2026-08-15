@@ -380,15 +380,33 @@ static volatile uint8_t g_in_switch[PERCPU_MAX];
  * this spin. If the spin is rare, (B) is refuted by data rather than argument. */
 static volatile uint32_t g_spin_ct[PERCPU_MAX];
 
-static inline void switch_wait_offcpu_sched(struct tcb *t, int cpu) {
+/* DDR-892: bound derived from what the wait is FOR (rq-2 D3): context_switch
+ * saving rsp, then finish_task_switch's release store — tens of instructions.
+ * 4096 is ~3 orders of magnitude above that, so a legitimate wait never trips
+ * it, while the measured pathological case (~10^6, DDR-890) is cut ~250x. A
+ * backstop for a violated invariant, not a tuning knob. */
+#define SWITCH_WAIT_MAX_SPINS 4096u
+
+/* Returns 1 if `t` is now off-CPU and may be switched to, 0 if the bound was
+ * hit and the caller must pick something else (DDR-892). */
+static inline int switch_wait_offcpu_sched(struct tcb *t, int cpu) {
     if (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) < 0)
-        return;                         /* common case: no wait, IF untouched */
+        return 1;                       /* common case: no wait, IF untouched */
     __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
+    unsigned n = 0;
     while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) >= 0) {
+        if (++n >= SWITCH_WAIT_MAX_SPINS) {
+            /* DDR-892: give up on this PICK, never on the invariant.
+             * g_in_switch stays set until we return, so the non-reentrancy
+             * guarantee of sched.c:983-989 is unbroken. */
+            __atomic_store_n(&g_in_switch[cpu], 0, __ATOMIC_RELEASE);
+            return 0;
+        }
         __atomic_add_fetch(&g_spin_ct[cpu], 1, __ATOMIC_RELAXED);
         __asm__ volatile("sti; pause; cli" ::: "memory");
     }
     __atomic_store_n(&g_in_switch[cpu], 0, __ATOMIC_RELEASE);
+    return 1;
 }
 
 /* DDR-890: drain the spin counters. Returns the total across all CPUs since the
@@ -1038,7 +1056,21 @@ static void schedule_locked(uint64_t fl) {
     /* next may still be mid-switch-away on another CPU: wait for its release
      * before we touch its rsp. (next != prev here — the keep-running case
      * returned above, so we never wait on ourselves.) */
-    switch_wait_offcpu_sched(next, cpu);   /* DDR-887: ticks must keep advancing */
+    /* DDR-887: ticks must keep advancing while we wait.
+     * DDR-892: and the wait is bounded — if `next` is still mid-switch-away on
+     * another CPU after the bound, put it back and run this CPU's idle instead
+     * of burning ~10^6 pause iterations with preemption suppressed. `next` stays
+     * runnable and is picked again later by whichever CPU can actually take it;
+     * idle is never enqueued and never runs elsewhere, so it needs no wait. */
+    if (!switch_wait_offcpu_sched(next, cpu)) {
+        if (!next->is_idle)
+            rq_push(cpu, next);            /* contended: let someone else take it */
+        next = g_idle[cpu];
+        if (next == prev) {                /* already on idle — nothing to switch to */
+            local_irq_restore(fl);
+            return;
+        }
+    }
     next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
     next->dispatches++;            /* DDR-735: switch-in count (under the claim) */
