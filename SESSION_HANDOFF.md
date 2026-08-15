@@ -4813,3 +4813,48 @@ instrumented it; do not touch SFS internals before that).
 3. smoke-agent-click: widen the gate's failure dump first — the current tail -20
    cannot answer the question.
 4. main stays at 27ba426 until 3 consecutive greens on ONE tip.
+
+## Checkpoint 2026-08-16 (y) — session close: two flakes root-caused, one fixed
+
+LOCAL+REMOTE: a71f1c1. main: 27ba426 — 0 of 3 greens.
+
+### Shipped this session
+- **DDR-893 (0c847bc)** CI-GREEN. Call/bail data REFUTED reading (B) and
+  corrected my own DDR-890: mean spin/call ~19, contention is boot-phase only
+  (zero from t=2000), suppression ~0.4% of a window. rq_pop/rq_steal
+  deliberately unchanged.
+- **DDR-891 (ae243f0)**. Corrected DDR-888: the churn rc=-1 is SFS's own
+  (sfs_create's two bare returns), NOT a vfs_create precondition — proven by
+  three code facts (SFS registers .create; mount valid with no unmount between
+  main.c:1937 and :2042; same cap succeeds at :1950). Now -ENOENT/-ENOSPC.
+- **DDR-894 (d4c6412)**. smoke-evresize FIXED deterministically, 4/4 local.
+  A 14-PIXEL hit-test target aimed at by hardcoded coordinates; the compositor
+  publishes the corner at 6309,8416 vs the gate's 6303,8404. PRADYOS_WM_GEOM now
+  carries rz=, drag_inject.sh reads it.
+- **DDR-895 (a71f1c1)**. smoke-cadence ROOT-CAUSED, fix NOT implemented (CI was
+  in flight; local QEMU would contend). The cadence is an ITERATION COUNT of the
+  compositor frame loop (compositor.c:703-707), i.e. a measure of CPU share, not
+  time. Design recorded: drive it from the vDSO wall clock. Explicitly rejected:
+  raising the timeout — the iteration rate depends on scheduler share, which has
+  already changed once (item 16) and will again.
+
+### OPEN gates (rule 9)
+    smoke-evresize     FIXED  DDR-894, 4/4 local
+    smoke-cadence      OPEN   CI 31843212987 — root-caused (DDR-895), fix pending
+    smoke-agent-click  OPEN   CI 31892607786 — 3/3 PASS locally, not reproducible
+    smoke-rtc-smp      OPEN   CI 31845930664 — awaiting a DDR-891 capture
+
+### NEXT ACTIONS, in order
+1. Implement DDR-895 (vDSO-clocked cadence). Verification bar is in the DDR:
+   3x local PASS **and** exercise the production path, not just the `k` branch,
+   because changing the units touches both.
+2. smoke-agent-click: the gate's FAIL branch dumps only `tail -20`, which cannot
+   answer whether the agent ever started. Widen that dump (or preserve the whole
+   log as an artifact) BEFORE theorising further. The recorded hypothesis —
+   agent_base.c's 50-iteration SYS_POLL_RESULT loop sitting at ADR-026's 60
+   syscall/s budget, same class as DDR-915 — is UNPROVEN and must not be fixed on.
+3. smoke-rtc-smp stays blocked until a capture names -ENOENT vs -ENOSPC. Do not
+   touch B+tree or sfs_do_create internals before that.
+4. Only once the flake pool is drained: chase 3 consecutive greens on ONE tip.
+   At ~50%/run that bar is ~12.5% per attempt, so draining flakes first is the
+   cheaper path to promotion — this was the reframing in checkpoint (w).
