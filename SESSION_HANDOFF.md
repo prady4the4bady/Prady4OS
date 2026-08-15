@@ -4858,3 +4858,62 @@ LOCAL+REMOTE: a71f1c1. main: 27ba426 — 0 of 3 greens.
 4. Only once the flake pool is drained: chase 3 consecutive greens on ONE tip.
    At ~50%/run that bar is ~12.5% per attempt, so draining flakes first is the
    cheaper path to promotion — this was the reframing in checkpoint (w).
+
+## Checkpoint 2026-08-16 (z) — three flakes now fixed; blk driver EXONERATED by DDR-886
+
+LOCAL+REMOTE: 8b6313d. main: 27ba426.
+
+### Fixed this session
+- **DDR-895 (a9b923a)** smoke-cadence FIXED. The cadence was a FRAME-LOOP
+  ITERATION COUNT (a measure of CPU share, not time). Now driven by the vDSO
+  wall clock; g_cadence_ns is a period in ns (900 s production stated directly),
+  the k knob sets 2 s and re-arms from the current instant.
+  VERIFIED BOTH BRANCHES: k path 3/3 PASS; production path emits ZERO
+  CADENCE_OK/PRETRANSITION in a normal boot (a units error would misfire).
+- **DDR-897 (8b6313d)** smoke-drag FIXED, 3/3. WM_GEOM gains dg=X,Y.
+  A/B FIRST cleared my own DDR-894 change: pre-DDR-894 script 0/3, current 2/3 —
+  the flake predates it. First attempt at dg used x+20 and measured 0/3, WORSE
+  than the hardcode, because these windows are narrow (w~64) so the boxes occupy
+  x+20..x+64 and x+20 lands ON the max box. Now derived from the same expression
+  as the boxes (midpoint of x .. x+w-3*CLOSEBOX-8) => measured 4804 vs the old
+  hand-tuned 4800, computed rather than guessed.
+- **DDR-896 (8b6313d)** smoke-agent-click made DIAGNOSABLE (failure branch now
+  dumps agent/rate lines + tail -200 instead of tail -20, which could never show
+  whether AGENT_START printed). agent_base.c deliberately UNCHANGED.
+
+### MAJOR: the virtio-blk driver is EXONERATED for this occurrence
+CI 31907631454 shard 4 produced DDR-886's disambiguation for the first time:
+    [smp] blk integrity FAIL workers-late done=0x0000000000000000
+    [blk] multi-inflight FAIL done=0x0000000000000000
+reason=**workers-late**, NOT checksum-mismatch, and done=0x0 means NO worker set
+any bit. So the reads were never completed, not corrupted. Per §6.0-D a
+virtio-blk driver change is NOT authorized — DDR-775/776's completion-loss
+hypothesis is ruled out here. done=0x0 (zero of four workers) points at
+scheduling/starvation of the worker threads, not at block I/O.
+
+### Recorded, NOT acted on (no evidence)
+- agent_base.c test-mode worst case is ~55 counted syscalls vs AETHER_RATE_MAX
+  60 (8% margin; exceeding = KILL). Mode-dependent: sovereign ~5 calls, only
+  MANUAL runs all 50. No AGENT_RATE_LIMITED in evidence, gate passes 3/3 local.
+- smoke-rtc-smp's timeout is NOT the problem (TIMEOUT_S=180 already, own
+  sentinel is PRADYOS_RTC_MONO_OK, failed on a FOREIGN probe per DDR-785).
+  Doubling it would fix nothing. The queue's ITEM 3 premise does not hold.
+- D2 FAT32: the shared-buffer hypothesis is REFUTED — rd_data uses c->scratch
+  and rd_fat uses c->fatbuf, separate buffers, so fat_next cannot invalidate the
+  sector being copied. fat32_read's sequential path looks correct on inspection.
+  D2 needs a targeted reproduction, not more staring.
+
+### OPEN gates (rule 9)
+    smoke-evresize     FIXED  DDR-894
+    smoke-cadence      FIXED  DDR-895
+    smoke-drag         FIXED  DDR-897
+    smoke-agent-click  OPEN   CI 31892607786 — now diagnosable, awaiting a capture
+    smoke-rtc-smp      OPEN   CI 31845930664 — awaiting -ENOENT/-ENOSPC (DDR-891)
+    blk integrity/multi-inflight  OPEN — workers-late, done=0x0, NOT a data defect
+
+### NEXT ACTIONS
+1. Read CI on 8b6313d.
+2. The blk pair is now the top open item and it is NOT a driver bug: done=0x0
+   with workers-late means four worker threads produced nothing. Investigate why
+   they do not run (scheduling/starvation), NOT virtio-blk.
+3. main stays at 27ba426 until 3 consecutive greens on ONE tip.
