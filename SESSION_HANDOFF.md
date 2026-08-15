@@ -4564,3 +4564,62 @@ its own DDR; do not fold it into DDR-887.
 3. Then the g_ticks atomicity DDR (separate defect, above).
 4. Still forbidden: any g_ticks-based bound for the virtio-blk completion wait —
    defer sched_block_on_timeout until the three greens exist.
+
+## Checkpoint 2026-08-15 (u) — DDR-888 + DDR-889 landed; CI pattern needs classification
+
+LOCAL+REMOTE: e0ffac0. main: 27ba426 — 0 of 3 greens.
+
+### Landed this session
+- **effa6ab / DDR-888** — vfs_create returned a bare -1 from TWO unrelated
+  places (precondition: bad mount / no create op / CAP_FS_WRITE denied; and
+  driver passthrough). Now -EPERM vs -EINVAL for the precondition branch.
+  Note this also RULES OUT DDR-884's three candidates: -1 is none of
+  -EEXIST(-17), -ENOSPC(-28), or an ADR-032 budget refusal — so the
+  leftover-file / full-volume / rate-limit theories are not this failure.
+  Safe: all 20 callers test ==0/!=0, none compares to -1.
+- **e0ffac0 / DDR-889** — g_ticks++ made atomic. MEASURED: of 12 [hb] lines in
+  run 31843212987, t=7500 and t=11000 each appeared TWICE. volatile orders but
+  does not make an RMW atomic; two CPUs can both read N and write N+1, printing
+  one heartbeat twice and LOSING a tick. Lost ticks make every g_ticks deadline
+  run long, drift the vDSO clock slow, and can skip the %100/%10 arms entirely.
+  NOTE: the commit message lost one line to shell backtick substitution
+  ("the dispatch is  so when"). Full text is in the DDR; not amended because
+  force-push is forbidden.
+
+### THE CI PATTERN — four runs, four DIFFERENT gates, one shard each
+    31843212987 (d72bd93, the DDR-887 fix)  -> shard 5  smoke-cadence
+    31845930664 (d93bda2, docs)             -> shard 4  smoke-rtc-smp (btree churn FAIL)
+    31892607786 (effa6ab, DDR-888)          -> shard 3  smoke-agent-click
+Each failure has the shape "did not complete in time":
+  [cadence] FAIL — no full auto cycle
+  [aclick]  FAIL — the clicked PRAX agent did not run to completion
+                   (PRADYOS_AGENT_TRIGGER name=PRAX slot=1 pid=82 DID print)
+That is exactly what DDR-889's lost ticks produce, which is why DDR-889 was
+landed next. Its CI run is the test of that reading.
+
+### CLASSIFICATION STILL OPEN — be honest about this
+Run history around the DDR-887 fix:
+    pre-fix : 31834006700 FAIL, 31837700697 FAIL, 31837732470 OK, 31841554253 OK
+    post-fix: 31843212987 FAIL, 31845930664 FAIL, 31892607786 FAIL
+3/3 red after the fix vs 2/4 before. That is suggestive but NOT conclusive at
+these sample sizes. Two readings remain open:
+  (a) pre-existing flakes, previously masked because the freeze failed runs
+      earlier and differently;
+  (b) a timing regression from DDR-887 — plausible mechanism: sched_tick now
+      SKIPS its schedule() call while g_in_switch is set, so preemption is
+      suppressed for the duration of a switch_wait_offcpu spin. If that spin is
+      frequent, threads run past their quantum and latency-sensitive gates fail.
+DO NOT revert DDR-887 on this alone — the freeze it fixed is confirmed gone
+(heartbeats stream; the two freeze gates pass). If (b) is real, the fix is the
+suppression window, not the sti.
+
+### NEXT ACTIONS
+1. Read CI on e0ffac0. If the "did not complete in time" failures stop, DDR-889
+   was the cause and reading (a) holds.
+2. If they continue, test reading (b) directly: measure how often
+   switch_wait_offcpu_sched actually spins (a counter reported in [hb], same
+   pattern as thre_drops/rx_drops). If it spins rarely, suppression cannot be
+   the cause and (b) is refuted.
+3. Only then consider narrowing the g_ticks concurrent-entry paths (pre-percpu
+   AP window; PIT/LAPIC handover) — both recorded in DDR-889 as follow-on.
+4. main stays at 27ba426. Three greens on ONE tip, still 0.
