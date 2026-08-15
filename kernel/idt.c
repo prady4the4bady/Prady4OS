@@ -167,6 +167,16 @@ static void timer_tick(struct regs *r) {
         { extern uint64_t g_thre_drops, g_rx_drops;
           kputs(" thre_drops="); kputdec(g_thre_drops);
           kputs(" rx_drops=");   kputdec(g_rx_drops); }
+        /* DDR-890: how much did switch_wait_offcpu_sched spin in this window?
+         * spins is the total across CPUs; max/cpu name the busiest one. This is
+         * the data that decides whether the DDR-887 preemption-suppression
+         * window is frequent enough to explain the post-fix CI pattern. */
+        { extern uint32_t sched_take_spin_stats(uint32_t *, int *);
+          uint32_t smax = 0; int scpu = 0;
+          uint32_t stot = sched_take_spin_stats(&smax, &scpu);
+          kputs(" spins="); kputdec(stot);
+          kputs(" max=");   kputdec(smax);
+          kputs(" cpu=");   kputdec((uint64_t)scpu); }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */

@@ -372,13 +372,39 @@ static volatile uint8_t g_in_switch[PERCPU_MAX];
  * untouched: that runs from the reaper with interrupts ENABLED, and an
  * unconditional sti/cli loop would leave IF clear on exit, silently changing
  * the caller's interrupt state. The no-wait fast path below touches IF at all. */
+/* DDR-890: per-CPU spin counter for the loop below, drained by the heartbeat.
+ * This is the DISCRIMINATING measurement between the two open readings of the
+ * post-DDR-887 CI pattern: (A) pre-existing flakes the freeze used to hide, vs
+ * (B) a timing regression, because sched_tick skips its schedule() call while
+ * g_in_switch is set and therefore suppresses preemption for the duration of
+ * this spin. If the spin is rare, (B) is refuted by data rather than argument. */
+static volatile uint32_t g_spin_ct[PERCPU_MAX];
+
 static inline void switch_wait_offcpu_sched(struct tcb *t, int cpu) {
     if (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) < 0)
         return;                         /* common case: no wait, IF untouched */
     __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
-    while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) >= 0)
+    while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) >= 0) {
+        __atomic_add_fetch(&g_spin_ct[cpu], 1, __ATOMIC_RELAXED);
         __asm__ volatile("sti; pause; cli" ::: "memory");
+    }
     __atomic_store_n(&g_in_switch[cpu], 0, __ATOMIC_RELEASE);
+}
+
+/* DDR-890: drain the spin counters. Returns the total across all CPUs since the
+ * last call and reports the busiest CPU, then zeroes them — so each heartbeat
+ * line describes exactly one 500-tick window. Called from the tick (BSP) only. */
+uint32_t sched_take_spin_stats(uint32_t *max_out, int *max_cpu_out) {
+    uint32_t total = 0, max = 0;
+    int mcpu = 0;
+    for (int c = 0; c < PERCPU_MAX; c++) {
+        uint32_t v = __atomic_exchange_n(&g_spin_ct[c], 0, __ATOMIC_RELAXED);
+        total += v;
+        if (v > max) { max = v; mcpu = c; }
+    }
+    if (max_out)     *max_out = max;
+    if (max_cpu_out) *max_cpu_out = mcpu;
+    return total;
 }
 
 /* rq-3: a lockless hint — is any CPU's ready queue non-empty? A stale read is
