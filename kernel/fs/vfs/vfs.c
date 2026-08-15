@@ -3,6 +3,7 @@
 #include "blk.h"
 #include "sched.h"      /* current_thread for the capability check + write budget */
 #include "irq.h"        /* ADR-032: g_ticks for the token-bucket refill */
+#include "errno.h"      /* DDR-888: distinct precondition codes from vfs_create */
 
 static const struct vfs_fs_ops *g_fs[VFS_MAX_FS];
 static unsigned                 g_nfs;
@@ -124,8 +125,17 @@ int vfs_open(cap_t cap, int mnt, const char *path, struct vfs_file *out) {
 
 int vfs_create(cap_t cap, int mnt, const char *path, struct vfs_file *out) {
     struct vfs_mount *m = mnt_get(mnt);
-    if (!m || !m->fs->create || !cap_ok(cap, CAP_FS_WRITE))
-        return -1;
+    /* DDR-888: split the precondition failure from the driver's own return.
+     * Both used to be a bare -1, so `[sfs] churn FAIL op=create iter=0 rc=-1`
+     * could not distinguish "this mount/capability was never usable" from "the
+     * filesystem refused the create" — two unrelated defects. -1 also matches
+     * none of DDR-884's candidates (-EEXIST=-17, -ENOSPC=-28, ADR-032 budget),
+     * which is itself evidence that this is the precondition branch.
+     * All 20 in-tree callers test ==0/!=0; none compares against -1. */
+    if (!cap_ok(cap, CAP_FS_WRITE))
+        return -EPERM;                 /* capability problem */
+    if (!m || !m->fs->create)
+        return -EINVAL;                /* mount problem: bad id, or no create op */
     mnt_lock(m);
     int r = m->fs->create(m->ctx, path, out);
     mnt_unlock(m);
