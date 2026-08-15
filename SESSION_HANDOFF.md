@@ -4623,3 +4623,62 @@ suppression window, not the sti.
 3. Only then consider narrowing the g_ticks concurrent-entry paths (pre-percpu
    AP window; PIT/LAPIC handover) — both recorded in DDR-889 as follow-on.
 4. main stays at 27ba426. Three greens on ONE tip, still 0.
+
+## Checkpoint 2026-08-15 (v) — DDR-890 measured, DDR-892 bounded; the REAL defect is now named
+
+LOCAL+REMOTE: 21916fa. main: 27ba426 — still 0 of 3 greens.
+
+### DDR-890 (5795966) — the discriminating measurement, and a broken guard
+Instrumented switch_wait_offcpu_sched; heartbeat now prints
+    [hb] t=<n> thre_drops=<n> rx_drops=<n> spins=<total> max=<n> cpu=<id>
+RESULT: 2-3 MILLION spins per 5 s window, ~1.3M on one CPU, against a stated
+"suppression is real" threshold of 50. **Reading (B) CONFIRMED** — the
+preemption-suppression window from DDR-887 is enormous, not rare. This also
+falsifies switch_wait_offcpu's own comment ("Bounded: the holder is executing a
+few instructions").
+
+ALSO FIXED: the standing stray-QEMU guard NEVER WORKED. Linux truncates comm to
+15 chars, "qemu-system-x86_64" is 18, so `pgrep qemu-system-x86_64` returns zero
+matches whether or not QEMU runs — pgrep even says so. Every "no stray QEMU"
+observation against that command was vacuous. `pgrep -f` works but self-matches
+the invoking shell (observed). Correct form:
+    pgrep -f "[q]emu-system-x86_64"
+
+### DDR-892 (21916fa) — bounded the spin, and an HONEST negative result
+Each wait now bounded at 4096 iterations; on expiry `next` goes back on the
+runqueue and the CPU runs its own idle. g_in_switch stays set for the whole
+bounded window, so sched.c:983-989's non-reentrancy invariant is unbroken (that
+is why "clear the flag and keep spinning" was rejected).
+
+MEASURED AFTER: spins 2-3M -> 1.4-1.8M, max ~1.3M -> ~590-634k.
+**This DDR's own Gate criterion was WRONG and I corrected it in the file.**
+"max must fall to at most the bound" is wrong because max is the CUMULATIVE
+per-window count for one CPU, not the largest single call. max~600k with a 4096
+bound implies ~150+ bounded calls per CPU per window.
+  - per call: FIXED (no single wait can burn 10^6 iterations)
+  - in aggregate: BARELY IMPROVED
+Do not record DDR-892 as having fixed the behaviour. It has not.
+
+### THE REAL DEFECT, now named and NOT yet fixed
+schedule() is entered constantly and almost always finds `next` still on-CPU
+elsewhere. That is scheduler thrashing. The wait is the symptom; the rq
+steal/pop policy is the suspect.
+
+NEXT INVESTIGATION (specified, not started): instrument the CALL rate and the
+BAIL rate separately from the spin count — how many times per window is
+switch_wait_offcpu_sched entered, and how many of those hit the bound? A high
+entry count with a high bail ratio means CPUs are fighting over the same small
+set of runnable threads, which points at rq_pop/rq_steal, not at the wait.
+
+### Regression surface — clean at 21916fa
+smoke-blkmq, smoke-rqstress-liveness, smoke-blk-integrity all rc=0 (the latter
+two are the former freeze sites). Build warning-clean. All three ci-*-check PASS.
+
+### STILL OPEN
+- STEP 2 (DDR-888 follow-on): root-cause which vfs_create precondition branch
+  fires for `op=create iter=0`. NOT started — the -EPERM/-EINVAL split is
+  committed, so the next capture names it. Do not touch B+tree/SFS internals
+  before that.
+- CI classification: 4 pre-DDR-892 runs, 4 different gates, all "did not
+  complete in time". DDR-892 may or may not move this; its CI run is the test.
+- main: 0 of 3 greens. Do not promote.
