@@ -4917,3 +4917,58 @@ scheduling/starvation of the worker threads, not at block I/O.
    with workers-late means four worker threads produced nothing. Investigate why
    they do not run (scheduling/starvation), NOT virtio-blk.
 3. main stays at 27ba426 until 3 consecutive greens on ONE tip.
+
+## Checkpoint 2026-08-16 (aa) — §5c threshold. Root cause candidate found for BOTH blk probes.
+
+LOCAL+REMOTE: e64feb4. main: 27ba426.
+
+### THE FINDING (DDR-900) — a one-line-per-probe fix is queued and ready
+    rqstress_proof     main.c:584-585  smp_resched_all() YES  -> passes
+    blkmq_proof        main.c:633-635  NO                     -> done=0x0
+    smp_blk_integrity  main.c:710-714  NO                     -> done=0x0
+smp_resched_all has THREE call sites in the entire tree, all probes in main.c,
+and is called from NEITHER sched_create NOR sched_unblock. So creating a runnable
+thread does not wake an idle CPU; pickup waits on rq_has_ready()'s lockless hint
+(sched.c:349 — "a false negative is caught by the timer tick") or the next tick,
+while the creator sits in while(...) yield() which reschedules only locally.
+
+**NEXT ACTION (start here, it is small and testable):** add smp_resched_all()
+after the spawn loops in blkmq_proof and smp_blk_integrity — one line each,
+matching the known-good rqstress pattern, no scheduler semantics touched. Then
+build, hygiene, run smoke-blkmq + smoke-blk-integrity, and read DDR-898's prog=
+counter on any failure: prog=0,0,0,0 gone => the wake was the cause; still
+present => the scheduler is next.
+
+### Landed this session
+- DDR-898 (15951ad): per-worker prog= instrument. Established done=0x0 means NO
+  worker RETURNED (the final atomic_or is unconditional), and REFUTED the
+  blocked-in-I/O reading: zero '[vblk] stuck' lines while [hb] proved g_ticks was
+  advancing, so the watchdog was live and no request was outstanding.
+- DDR-896 UPDATE (15951ad): the widened dump REFUTED its own 55/60 rate-margin
+  hypothesis. The clicked agent never printed AGENT_START, so it never ran one
+  instruction and cannot have spent 55 syscalls. The lone AGENT_RATE_LIMITED is
+  PID=2742943744, the synthetic aether_sectest TCB — NOT pid 82. agent_base.c
+  unchanged, now because evidence positively excludes it.
+- DDR-899 (15951ad): §6.2-1 design. main.c:1128 formats SFS unconditionally every
+  boot. Mechanism decided: probe_enabled() over fw_cfg (DDR-804), NOT a new
+  QEMU_SFS_SELFTEST transport (boot_test.sh knobs cannot be read in-kernel).
+  Blast radius ENUMERATED: 12 gates assert on [sfs] sentinels and must each opt
+  in and be re-run individually.
+- DDR-900 (e64feb4): the correlation above.
+
+### Verified this session
+ITEM 3 CLOSED by code read: vfs_create ends `return r;` — it forwards the
+driver's code unchanged, so with DDR-891 in place the next churn capture shows
+rc=-2 (ENOENT) or rc=-28 (ENOSPC), not -1. No printk needed.
+
+### OPEN gates (rule 9)
+    smoke-evresize / smoke-cadence / smoke-drag   FIXED (DDR-894/895/897)
+    smoke-agent-click   OPEN  CI 31911253495 — agent gets pid 82, never starts
+    smoke-blkmq + smoke-blk-integrity  OPEN — done=0x0, DDR-900 candidate fix ready
+    smoke-rtc-smp       OPEN  CI 31845930664 — awaiting -ENOENT/-ENOSPC capture
+
+NOTE smoke-cadence failed once post-fix (CI 31911235283, tip 8b6313d) but passed
+on the later tip. It is 3/3 locally. Watch it; do not assume DDR-895 is complete
+until it survives a few CI runs.
+
+### main: 27ba426, 0 of 3 greens. Do not promote.
