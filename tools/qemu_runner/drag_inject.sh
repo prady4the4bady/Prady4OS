@@ -21,6 +21,37 @@ sleep 0.5
 # does, which is why hardcoded SX/SY made smoke-evresize flake.
 # The drag END stays a relative offset from the observed start (RZ_DX/RZ_DY), so
 # the drag distance is preserved without reintroducing an absolute assumption.
+# DDR-897: same mechanism for the TITLE-BAR drag. DG_ID selects the surface and
+# the start point comes from that surface's published dg= (a point on the title
+# bar, left of the close/min/max boxes). smoke-drag previously hardcoded
+# SX/SY and failed 0/3 locally; A/B against the pre-DDR-894 script confirmed the
+# flake predates the rz= work rather than being caused by it.
+if [ -n "${DG_ID:-}" ]; then
+    geom=""
+    for _ in $(seq 1 600); do
+        geom=$(grep -a "PRADYOS_WM_GEOM id=${DG_ID} " "$log" 2>/dev/null | grep -a "dg=" | tail -1)
+        [ -n "$geom" ] && break
+        sleep 0.1
+    done
+    if [ -z "$geom" ]; then
+        echo "[drag_inject] FAIL — no complete PRADYOS_WM_GEOM (with dg=) for id=${DG_ID}"
+        exit 1
+    fi
+    dg=${geom##*dg=}
+    SX=${dg%%,*}
+    SY=${dg##*,}
+    SY=${SY%% *}
+    case "$SX$SY" in
+        ''|*[!0-9]*)
+            echo "[drag_inject] FAIL — malformed dg in: $geom"
+            exit 1 ;;
+    esac
+    export SX SY
+    export EX="$(( SX + ${DG_DX:-8000} ))"
+    export EY="$(( SY + ${DG_DY:-9387} ))"
+    echo "[drag_inject] DDR-897: observed dg for id=${DG_ID}: start=${SX},${SY} end=${EX},${EY}"
+fi
+
 if [ -n "${RZ_ID:-}" ]; then
     # Require the line to actually CARRY rz=. Serial output from other threads
     # interleaves mid-line in this tree, so a matching-but-truncated

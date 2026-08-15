@@ -1692,7 +1692,10 @@ smoke-agent-click: $(IMG) fat-image sfs-image
 	    -qmp unix:/tmp/paclick.sock,server,nowait \
 	    -serial file:build/aclick.log -display none -no-reboot || true
 	@grep -q "PRADYOS_AGENT_TRIGGER name=PRAX slot=1" build/aclick.log || { echo "[aclick] FAIL — card click did not trigger the agent"; tail -20 build/aclick.log; exit 1; }
-	@awk '/PRADYOS_AGENT_TRIGGER name=PRAX/{t=1} t&&/PRADYOS_AGENT_DONE/{ok=1} END{exit !ok}' build/aclick.log || { echo "[aclick] FAIL — the clicked PRAX agent did not run to completion"; tail -20 build/aclick.log; exit 1; }
+	@# DDR-896: dump the AGENT-relevant lines plus a wide tail on failure. The old
+	@# `tail -20` could not show whether PRADYOS_AGENT_START ever printed, which
+	@# made every hypothesis about this gate untestable from a CI log.
+	@awk '/PRADYOS_AGENT_TRIGGER name=PRAX/{t=1} t&&/PRADYOS_AGENT_DONE/{ok=1} END{exit !ok}' build/aclick.log || { echo "[aclick] FAIL — the clicked PRAX agent did not run to completion"; echo "--- agent/rate lines (DDR-896) ---"; grep -aE 'PRADYOS_AGENT_|AGENT_RATE_LIMITED|AETHER_AGENT_|sys_exit' build/aclick.log || echo "(none)"; echo "--- tail 200 ---"; tail -200 build/aclick.log; exit 1; }
 	@echo "[aclick] PASS — $$(grep -a PRADYOS_AGENT_TRIGGER build/aclick.log | head -1)"
 
 # Layer-7 per-client surface gate (DDR-706): a ring-3 client creates+commits a
@@ -1707,7 +1710,7 @@ smoke-surface: $(IMG) fat-image sfs-image
 smoke-drag: $(IMG) fat-image sfs-image
 	@echo "[drag] window-drag gate: boot(GPU+tablet) + QMP title-bar drag -> SYS_SURFACE_MOVE..."
 	@rm -f build/drag.log /tmp/pdrag.sock
-	@bash tools/qemu_runner/drag_inject.sh build/drag.log /tmp/pdrag.sock PRADYOS_AMBIANCE_OK &
+	@DG_ID=1 bash tools/qemu_runner/drag_inject.sh build/drag.log /tmp/pdrag.sock PRADYOS_AMBIANCE_OK &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \

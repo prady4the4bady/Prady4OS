@@ -985,10 +985,22 @@ int main(void) {
                  * is why it flaked whenever the window moved at all. */
                 int grx = gtx + (int)surfs[gi].w - 7;
                 int gry = surfs[gi].y + (int)surfs[gi].h - 7;
-                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d rz=%d,%d\n",
+                /* DDR-897: also publish a DRAG point on the title bar. The drag
+                 * hit is the fallback AFTER the close/min/max boxes, and those
+                 * sit on the RIGHT — the leftmost is the max box at
+                 * x + w - 3*CLOSEBOX - 8. So the drag strip is x .. that edge,
+                 * and the safe point is its MIDPOINT. Deriving it from the same
+                 * box expression matters: a fixed offset does not work, because
+                 * these windows are narrow (w~64 leaves the boxes occupying
+                 * x+20..x+64, so a naive x+20 lands ON the max box — measured,
+                 * 0/3 pass). smoke-drag hardcoded SX/SY and was 0/3 before this. */
+                int gmaxbox = gtx + (int)surfs[gi].w - 3 * CLOSEBOX - 8;
+                int gdx = gtx + (gmaxbox - gtx) / 2;
+                int gdy = gty + TITLEBAR / 2;
+                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d rz=%d,%d dg=%d,%d\n",
                        surfs[gi].id, surfs[gi].title[0] ? surfs[gi].title : "-",
                        tab_x(gcx), tab_y(gby), tab_x(gmx), tab_y(gby),
-                       tab_x(grx), tab_y(gry));
+                       tab_x(grx), tab_y(gry), tab_x(gdx), tab_y(gdy));
             }
             for (long i = composited; i < ns; i++)
                 printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);
