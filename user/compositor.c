@@ -955,9 +955,18 @@ int main(void) {
                 int gcx = gtx + (int)surfs[gi].w - CLOSEBOX - 4 + CLOSEBOX / 2;
                 int gmx = gtx + (int)surfs[gi].w - 2 * CLOSEBOX - 6 + CLOSEBOX / 2;
                 int gby = gty + 3 + CLOSEBOX / 2;
-                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d\n",
+                /* DDR-894: also publish the RESIZE corner. Same expression as the
+                 * DDR-718 hit-test (bottom-right 14x14 box at x+w-14 .. x+w),
+                 * so the emitted target cannot drift from what the hit-test
+                 * accepts — the centre is (x+w-7, y+h-7). smoke-evresize used to
+                 * hardcode absolute coordinates for that 14-PIXEL target, which
+                 * is why it flaked whenever the window moved at all. */
+                int grx = gtx + (int)surfs[gi].w - 7;
+                int gry = surfs[gi].y + (int)surfs[gi].h - 7;
+                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d rz=%d,%d\n",
                        surfs[gi].id, surfs[gi].title[0] ? surfs[gi].title : "-",
-                       tab_x(gcx), tab_y(gby), tab_x(gmx), tab_y(gby));
+                       tab_x(gcx), tab_y(gby), tab_x(gmx), tab_y(gby),
+                       tab_x(grx), tab_y(gry));
             }
             for (long i = composited; i < ns; i++)
                 printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);

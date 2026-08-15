@@ -2440,7 +2440,7 @@ smoke-wmmax: $(IMG) fat-image sfs-image
 smoke-evresize: $(IMG) fat-image sfs-image
 	@echo "[evresize] corner drag-resize gate: boot(GPU+tablet) + QMP corner drag..."
 	@rm -f build/evresize.log /tmp/pevrs.sock
-	@SX=6303 SY=8404 EX=9599 EY=11090 bash tools/qemu_runner/drag_inject.sh build/evresize.log /tmp/pevrs.sock PRADYOS_AMBIANCE_OK &
+	@RZ_ID=1 bash tools/qemu_runner/drag_inject.sh build/evresize.log /tmp/pevrs.sock PRADYOS_AMBIANCE_OK &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \

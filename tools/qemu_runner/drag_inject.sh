@@ -14,6 +14,46 @@ for _ in $(seq 1 600); do
 done
 sleep 0.5
 
+# DDR-894: OBSERVE the resize corner instead of assuming it. When RZ_ID is set,
+# wait for the compositor's own PRADYOS_WM_GEOM line for that surface and take
+# its `rz=X,Y` (the centre of the DDR-718 14x14 corner, already in tablet
+# coordinates) as the drag START. The 14-pixel target moves whenever the window
+# does, which is why hardcoded SX/SY made smoke-evresize flake.
+# The drag END stays a relative offset from the observed start (RZ_DX/RZ_DY), so
+# the drag distance is preserved without reintroducing an absolute assumption.
+if [ -n "${RZ_ID:-}" ]; then
+    # Require the line to actually CARRY rz=. Serial output from other threads
+    # interleaves mid-line in this tree, so a matching-but-truncated
+    # "PRADYOS_WM_GEOM id=1 …" is a real possibility; taking tail -1 blindly
+    # then yields a non-numeric SX, and $(( SX + … )) makes bash evaluate the
+    # log text as a variable name (observed: "PRADYOS_WM_GEOM: unbound variable").
+    geom=""
+    for _ in $(seq 1 600); do
+        geom=$(grep -a "PRADYOS_WM_GEOM id=${RZ_ID} " "$log" 2>/dev/null | grep -a "rz=" | tail -1)
+        [ -n "$geom" ] && break
+        sleep 0.1
+    done
+    if [ -z "$geom" ]; then
+        echo "[drag_inject] FAIL — no complete PRADYOS_WM_GEOM (with rz=) for id=${RZ_ID}"
+        exit 1
+    fi
+    rz=${geom##*rz=}
+    SX=${rz%%,*}
+    SY=${rz##*,}
+    SY=${SY%% *}
+    # Validate before arithmetic: a partially-interleaved line must fail loudly
+    # here, not as a confusing bash arithmetic error 20 lines later.
+    case "$SX$SY" in
+        ''|*[!0-9]*)
+            echo "[drag_inject] FAIL — malformed rz in: $geom"
+            exit 1 ;;
+    esac
+    export SX SY
+    export EX="$(( SX + ${RZ_DX:-3296} ))"
+    export EY="$(( SY + ${RZ_DY:-2686} ))"
+    echo "[drag_inject] DDR-894: observed rz for id=${RZ_ID}: start=${SX},${SY} end=${EX},${EY}"
+fi
+
 # Optional SX/SY/EX/EY abs-coordinate overrides (DDR-718); defaults = the
 # DDR-710 title-bar drag, so smoke-drag is untouched.
 # Default start = pixel (150,130) on B's title-bar DRAG region (DDR-719 moved
