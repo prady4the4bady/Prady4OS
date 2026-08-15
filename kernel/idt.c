@@ -135,8 +135,19 @@ void irq_register(unsigned irq, irq_handler_fn fn) {
 /* The 100 Hz tick body, shared by the PIT (IRQ0) and APIC-timer (vector 48)
  * paths (DDR-714): global ticks, vDSO wall clock, preemption, lwIP timers, and
  * ring-3 signal delivery. The caller EOIs FIRST — sched_tick may switch away. */
+/* DDR-889: g_ticks is `volatile uint64_t` (irq.c:5). `volatile` orders the
+ * access but does NOT make a read-modify-write atomic, so two CPUs entering
+ * timer_tick concurrently can both read N, both write N+1, and both match
+ * (g_ticks % 500) == 0 — printing one heartbeat twice and LOSING a tick.
+ * Measured in CI run 31843212987: of 12 [hb] lines, t=7500 and t=11000 each
+ * appeared twice. A lost increment makes every g_ticks deadline run long, drifts
+ * the vDSO wall clock slow, and can skip the %100 (blk watchdog) and %10 (lwIP)
+ * arms outright. RELAXED is sufficient: this is a counter, and nothing infers
+ * the ordering of other memory from its value. */
+_Static_assert(sizeof(g_ticks) == 8, "DDR-889: g_ticks must stay 8 bytes (lock-free atomic add)");
+
 static void timer_tick(struct regs *r) {
-    g_ticks++;
+    __atomic_add_fetch(&g_ticks, 1, __ATOMIC_RELAXED);
     if (vdso_data) {                   /* IMP-C: advance the user-visible clock */
         vdso_data->seq++;              /* odd = write in progress */
         vdso_data->wall_time_ns += 10000000ull;   /* 10 ms per tick @100 Hz */
