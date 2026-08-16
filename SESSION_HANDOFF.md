@@ -5010,3 +5010,65 @@ this is resolved. `main` remains at `27ba426`.
 2. Three CI greens on ONE tip -> promote `main`.
 3. §6.2-D1 SFS default boot root (design in DDR-931; 12 gates must opt in).
 4. §6.2-D2 FAT32 multi-cluster probe. 5. §6.2-D3..D7. 6. §6.3 onward.
+
+## Checkpoint — 2026-08-16, tip `e4c45c0` (DDR-936 instrument)
+
+**Checkpoint-and-continue per the rewritten §5c. Not a stop.**
+
+### The finding this slice — DDR-936
+`smoke-agent-click` CI failure (31926397044) measured against `[hb]` ticks:
+`PRADYOS_AGENT_TRIGGER … pid=82` then **~6500 more ticks (~65 s) of healthy
+runtime** (`spins=0`, no drops) and PRAX **never** printed `AGENT_START`.
+
+Ruled out by measurement, not argument:
+- not the 120 s gate window (65 s of healthy runtime after the trigger);
+- not allocation (pid=82 returned ⇒ `elf_load` made a real TCB) — DDR-934's
+  `spawned<total` branch does not apply;
+- **not a missing cross-CPU wake IPI** — `smoke-agent-click` boots with **no
+  `-smp` flag**. Uniprocessor. No AP, no per-CPU rq, no IPI in the path. That
+  mechanism has now been proposed three times for this class; it is
+  unavailable here. Stop proposing it.
+
+Code read narrowed it to **two silent gates**, both with no counter/log/return:
+1. `sched_unblock`'s `THREAD_BLOCKED` CAS (`sched.c:1223`) — the enqueue lives
+   inside the success arm;
+2. `rq_push`'s `rq_on` test-and-set (`sched.c:147`) — early return.
+
+`schedule()` picks via `rq_pop` then `rq_steal` **only** — there is no global
+thread-list walk fallback (the ":1215 locked walk" comment is stale rq-1 text,
+same class as :932/:944). So either gate strands a thread permanently: valid
+pid, no queue, never picked, healthy system.
+
+**Same signature as the blk `done=0x0` probes.** Two unrelated subsystems, one
+shape ⇒ evidence for ONE defect in create/unblock/enqueue.
+
+### Shipped
+`e4c45c0` — `ubcas=` / `ubrq=` / `ubst=` counters on the `[hb]` line.
+Diagnostic only, no behaviour change. Build rc=0, warning-clean. Non-QEMU
+hygiene (rodata / shard / start-align) all OK. **QEMU gates not run locally —
+three CI runs were in flight (§6.0-A).** CI gates this commit.
+
+### CURRENT_ACTIVE_TASK — read `ubcas`/`ubrq` off the next CI failure
+- `ubcas>0` ⇒ thread was not BLOCKED when unblocked; `ubst` names the state.
+  Find who moved it.
+- `ubrq>0` ⇒ `rq_on` leaked set. Find the pop path that fails to clear it.
+- **both zero** on a run that still loses a thread ⇒ the enqueue WORKED and the
+  defect is in the pick, not the enqueue — different subsystem, re-scope.
+Do NOT write a fix before this reads out. DDR-920/928/932 were each a
+mechanism named from inference and each was refuted.
+
+### Gate status
+- `smoke-agent-click` — OPEN intermittent. 3/3 local, failed CI 31926397044.
+- `smoke-evresize` — OPEN. DDR-935 fixed the parse (it PASSED CI on `cf3146c`);
+  a second defect remains, 2/3 locally with correct coordinates.
+- `smoke-rtc-smp` — SFS churn, awaiting -ENOENT/-ENOSPC capture.
+- Note: CI on `1b634b4` was **green** while `cf3146c` (same code + docs) failed
+  ⇒ both open flakes are confirmed intermittent in CI, not deterministic.
+- `main` still `27ba426`. Green count 1 (`1b634b4`), broken by the next red.
+
+### Auth — this bit the session twice
+`gh auth switch` is NOT sufficient. The git credential helper is Windows
+Credential Manager, which caches `binaryzbackend` independently of gh. Working
+form used for every push this slice:
+`git -c credential.helper='!gh auth git-credential' push origin dev/phase1`
+Also: remote had moved ahead (your two `ops:` commits) — rebase, never force.
