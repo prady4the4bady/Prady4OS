@@ -185,6 +185,17 @@ static void timer_tick(struct regs *r) {
           sched_take_wait_stats(&wc, &wb);
           kputs(" calls="); kputdec(wc);
           kputs(" bails="); kputdec(wb); }
+        /* DDR-936: the two silent gates between sched_unblock and the runqueue.
+         * ubcas>0 => the thread was not BLOCKED when unblocked (ubst names the
+         * state seen); ubrq>0 => rq_on leaked set so rq_push returned early.
+         * Both zero on a run that still loses a thread => it WAS enqueued and
+         * the defect is in the pick, not the enqueue. */
+        { extern void sched_take_unblock_stats(uint32_t *, uint32_t *, uint32_t *);
+          uint32_t uc = 0, ur = 0, us = 0;
+          sched_take_unblock_stats(&uc, &ur, &us);
+          kputs(" ubcas="); kputdec(uc);
+          kputs(" ubrq=");  kputdec(ur);
+          kputs(" ubst=");  kputdec(us); }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */

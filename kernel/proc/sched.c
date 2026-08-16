@@ -144,9 +144,26 @@ static void sched_place(struct tcb *t) {
     t->sched_woke = 0;
 }
 
+/* DDR-936: the two silent gates on the unblock->enqueue path. A thread that
+ * fails either one is created with a valid pid, sits in no runqueue, and is
+ * never picked again — schedule() has no global-list fallback to rescue it.
+ * Neither gate logged anything, which is why three CI failures could not
+ * distinguish "never enqueued" from "enqueued but never picked". */
+static volatile uint32_t g_ub_cas_fail;   /* sched_unblock: state was not BLOCKED */
+static volatile uint32_t g_ub_rqon_skip;  /* rq_push: rq_on was already set */
+static volatile uint32_t g_ub_last_state; /* the state actually observed by a failed CAS */
+
+void sched_take_unblock_stats(uint32_t *cas_out, uint32_t *rqon_out, uint32_t *state_out) {
+    if (cas_out)   *cas_out   = __atomic_exchange_n(&g_ub_cas_fail,  0, __ATOMIC_RELAXED);
+    if (rqon_out)  *rqon_out  = __atomic_exchange_n(&g_ub_rqon_skip, 0, __ATOMIC_RELAXED);
+    if (state_out) *state_out = __atomic_load_n(&g_ub_last_state, __ATOMIC_RELAXED);
+}
+
 static void rq_push(int cpu, struct tcb *t) {
-    if (__atomic_exchange_n(&t->rq_on, 1, __ATOMIC_ACQ_REL))
+    if (__atomic_exchange_n(&t->rq_on, 1, __ATOMIC_ACQ_REL)) {
+        __atomic_add_fetch(&g_ub_rqon_skip, 1, __ATOMIC_RELAXED);   /* DDR-936 */
         return;                        /* already queued somewhere — one queue only */
+    }
     sched_place(t);
     struct rq *q = &g_rq[cpu];
     uint64_t fl = spin_lock_irqsave(&q->lock);
@@ -1239,6 +1256,12 @@ void sched_unblock(struct tcb *t) {
                 break;
             }
         }
+    } else {
+        /* DDR-936: the CAS did not fire, so NOTHING above ran — no enqueue.
+         * Record it and the state we actually saw; `expected` holds the
+         * observed value after a failed compare_exchange. */
+        __atomic_add_fetch(&g_ub_cas_fail, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_ub_last_state, expected, __ATOMIC_RELAXED);
     }
 }
 
