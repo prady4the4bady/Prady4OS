@@ -75,7 +75,64 @@ DDR-934's decision table for the blk case listed
 instance of exactly that branch, arriving before the blk instrument reported —
 and it arrives on a uniprocessor, which is a much smaller search space.
 
-## Next step — read, do not guess
+## Code read — the search space is now two silent gates
+
+`schedule()` picks via `rq_pop(cpu)` then `rq_steal(cpu)`
+(`kernel/proc/sched.c:1049-1051`). **Runqueues only — there is no global
+thread-list walk fallback.** (The "the BSP's locked walk observes READY this
+pass or the next tick" comment at :1215 is stale rq-1 text, the same stale-
+comment class already found at :932/:944. There is no such walk today.)
+
+`sched_create_state` enqueues at creation **only** for `THREAD_READY` (:842).
+The agent thread is created `THREAD_BLOCKED` (:870), correctly not enqueued.
+
+Therefore `sched_unblock`'s `rq_push` is the **only** path by which an agent
+thread can ever reach a runqueue. Between the spawn and that enqueue sit
+exactly two gates, and **both fail silently** — no counter, no log, no return
+value the caller could check:
+
+1. **The state CAS** (:1223-1225) — enqueue happens only inside the
+   CAS-success branch. If `t->state != THREAD_BLOCKED` at that instant, the
+   whole body is skipped.
+   ```c
+   uint32_t expected = THREAD_BLOCKED;
+   if (__atomic_compare_exchange_n(&t->state, &expected, THREAD_READY, …)) {
+       rq_push(self, t);          /* the only enqueue */
+   }
+   ```
+2. **The `rq_on` test-and-set** (:147-148) — `rq_push` returns early if
+   `rq_on` was already 1.
+   ```c
+   if (__atomic_exchange_n(&t->rq_on, 1, __ATOMIC_ACQ_REL)) return;
+   ```
+
+Either one produces exactly the observed outcome: a thread with a valid pid,
+in no queue, never picked, on a healthy system, forever.
+
+`sched_create_state` does initialise both `state` (:755) and `rq_on = 0`
+(:758), so a fresh TCB should pass both gates — which is precisely why this
+document does **not** pick one. Naming the mechanism from here would be the
+DDR-920/928/932 error a fourth time.
+
+## Next step — instrument, do not guess
+
+Add counters that separate the two gates, surfaced on the existing `[hb]` line
+(which is already proven to stream in CI and is how this defect was measured):
+
+- `ub_cas_fail` — `sched_unblock` called and the CAS did not fire, plus the
+  observed state.
+- `ub_rqon_skip` — `rq_push` returned early because `rq_on` was already set.
+
+Reading it: `ub_cas_fail>0` ⇒ the thread was not `BLOCKED` when unblocked ⇒
+find who moved it. `ub_rqon_skip>0` ⇒ `rq_on` leaked set ⇒ find the pop path
+that fails to clear it. Both zero ⇒ the thread WAS enqueued and the defect is
+in the pick, not the enqueue — a different subsystem entirely.
+
+This is §6.0-B (instrument-first) applied to a third gate. The same counters
+should also settle the blk `done=0x0` case, since DDR-936's whole point is that
+the two share a signature.
+
+## Superseded reading, do not guess
 
 Read `sched_unblock()` and the enqueue path for a case where the TCB is marked
 runnable but not pushed to the runqueue (or pushed to a queue the uniprocessor
