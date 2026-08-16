@@ -630,8 +630,12 @@ static void blkmq_reader(void *arg) {
     __atomic_or_fetch(&g_mq_done, 1u << (ok ? id : id + 8), __ATOMIC_SEQ_CST);
 }
 static void blkmq_proof(void) {
-    sched_create(blkmq_reader, (void *)0, "mq0");
-    sched_create(blkmq_reader, (void *)1, "mq1");
+    /* DDR-934: sched_create returns NULL if the TCB or the 16 KiB stack cannot
+     * be allocated. Discarding that made "never created" indistinguishable from
+     * "created but never ran" — both surface only as done=0x0. */
+    unsigned mq_spawned = 0;
+    if (sched_create(blkmq_reader, (void *)0, "mq0")) mq_spawned++;
+    if (sched_create(blkmq_reader, (void *)1, "mq1")) mq_spawned++;
     uint64_t dl = g_ticks + 200;
     while ((g_mq_done & 3u) != 3u && !(g_mq_done >> 8) && g_ticks < dl)
         yield();
@@ -648,7 +652,9 @@ static void blkmq_proof(void) {
     } else {
         kputs("[blk] multi-inflight FAIL done=");
         kputhex(g_mq_done);
-        kputs("\r\n");
+        kputs(" spawned=");                 /* DDR-934 */
+        kputdec(mq_spawned);
+        kputs("/2\r\n");
     }
 }
 
@@ -707,10 +713,14 @@ static void smp_blk_integrity(void) {
     pmm_free_page(buf);
     if (!refok) { kputs("[smp] blk integrity FAIL reference-read\r\n"); return; }
 
-    sched_create(blkint_worker, (void *)0, "bi0");
-    sched_create(blkint_worker, (void *)1, "bi1");
-    sched_create(blkint_worker, (void *)2, "bi2");
-    sched_create(blkint_worker, (void *)3, "bi3");
+    /* DDR-934: see blkmq_proof — a discarded sched_create return hides an
+     * allocation failure behind the same done=0x0 that a scheduling stall
+     * produces. Four workers cost ~4 x 16 KiB of kernel stack, late in boot. */
+    unsigned bi_spawned = 0;
+    if (sched_create(blkint_worker, (void *)0, "bi0")) bi_spawned++;
+    if (sched_create(blkint_worker, (void *)1, "bi1")) bi_spawned++;
+    if (sched_create(blkint_worker, (void *)2, "bi2")) bi_spawned++;
+    if (sched_create(blkint_worker, (void *)3, "bi3")) bi_spawned++;
     uint64_t dl = g_ticks + 400;
     while ((g_blkint_done & 0xfu) != 0xfu && g_ticks < dl)
         yield();
@@ -729,7 +739,10 @@ static void smp_blk_integrity(void) {
         kputs((g_blkint_done >> 8) ? "checksum-mismatch" : "workers-late");
         kputs(" done=");
         kputhex(g_blkint_done);
-        /* DDR-898: per-worker completed iterations (of 64). prog=0,0,0,0 means
+        kputs(" spawned=");                 /* DDR-934 */
+        kputdec(bi_spawned);
+        kputs("/4");
+        /* DDR-930: per-worker completed iterations (of 64). prog=0,0,0,0 means
          * the workers never ran at all (scheduling), any non-zero means they
          * ran and stalled — done= alone cannot tell those apart. */
         kputs(" prog=");
