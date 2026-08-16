@@ -5221,3 +5221,62 @@ forbids pulling forward. Do not invent work here.
   plan that specified it would have produced a guaranteed false positive.
   Mode B lives on `smoke-agent-click`.
 - Auth: `git -c credential.helper='!gh auth git-credential' push` (required).
+
+## Checkpoint — 2026-08-16, tip `4a3e126` (DDR-946)
+
+### MODE A SPLITS INTO A1 / A2 — classify before using any failure's data
+`smoke-agent-click` mode A is **not one defect**:
+
+| | A1 | A2 |
+|---|---|---|
+| seen | DDR-945, CI 31958185299 | local, 2 of 12 runs, tip `2a20001` |
+| triggered pid | **exits 0** (`sys_exit(0) pid=82`) | **never exits** (pids 50, 55) |
+| `AGENT_START` | absent | absent |
+| reading | ran, printed nothing | may never have run |
+
+**The discriminator is whether the triggered pid ever appears in a `sys_exit`
+line.** Classify EVERY future failure as A1 or A2 *before* using its data.
+
+**DDR-945's claim "DDR-936's framing is refuted for mode A" is SCOPED TOO
+BROADLY** — it is refuted for A1, on the one run it was measured from. For A2,
+DDR-936's "created but never executes" may still hold. Corrected in DDR-946.
+
+**Consequence:** the `ubcas=0 ubrq=0 rqmiss=0 rqdepth` readings came from runs
+that may have been A1 and **do not transfer to A2**. Re-read them on a confirmed
+A2 failure. This is §6.0-C applying *within* a mode, a third level of
+granularity (A/B, then A1/A2).
+
+### DDR-946 — the EBADF discriminator, and why the planned marker was dropped
+The task plan specified an `[agent-exec]` marker at `sched_unblock`. **Not
+built, deliberately:** `sys_exit` is a ring-3 syscall, so DDR-945's
+`sys_exit(0) pid=82` already proves the thread was unblocked, scheduled and
+entered ring 3. Both outcomes of that marker were already known. Built the
+`[fd] write EBADF pid= fd=` instrument instead, which splits the live candidates.
+
+Result: **no EBADF for any triggered agent pid**; the only EBADF lines are
+`fd=99` and `fd=0xDEADBEEF` from deliberate negative-test probes. With
+`AGENT_START` also absent, `sys_write` was never called by the agent at all →
+candidate "main entered, write failed" **refuted**.
+
+### Verified this session (premise checks that changed the plan)
+- **B#3 stamps already exist** — `[boot-stamp] A/B/C` with `t=` are in
+  `main.c` (~:1360/:1941/:1854). Step 5 needs **no new code**, only a read on
+  the next `smoke-smpuser` failure.
+- **Group 3 is gated, not startable.** CLAUDE.md §6.1 requires the active
+  intermittents CI-green before later items, and §6 forbids starting an item
+  whose prerequisites are not green. The tracker's `15 (#59)`–`21 (#65)` rows
+  are a *different* table and are all ✅ already.
+- **Section E** still has no open buildable items (confirmed again).
+
+### Intermittent triage — do not read a single failure as a regression
+`smoke-blkmq` and `smoke-rqstress-liveness` each FAILED once in hygiene this
+session, then passed **2/2** on re-run. Known intermittents, not a regression
+from the new TCB field. Always re-run before blaming a change.
+
+### State
+- CI green on `2a20001` and `97b9ca2` before the `4a3e126` push.
+- `main` still `27ba426`; three-greens count **0** (greens keep landing on
+  different SHAs, which does not satisfy the rule).
+- Sentinels **160**, stable across every instrument this session.
+- Auth: `git -c credential.helper='!gh auth git-credential' push` (required).
+- DDR numbering: 946 used. **Next free is DDR-947** (verify both dirs, §0.4).
