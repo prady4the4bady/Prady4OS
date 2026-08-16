@@ -7,6 +7,116 @@ full before touching anything.**
 
 ---
 
+## 0. Hard-won lessons — READ BEFORE TOUCHING ANYTHING
+
+These are facts established by measurement and confirmed by CI. Re-deriving them
+wastes context. Accept them as invariants.
+
+### 0.1 g_ticks freeze — DDR-887 (commit d72bd93) — DO NOT REVERT
+
+`g_ticks` froze under `-smp 4` because `sched_tick` called `schedule()` with
+interrupts disabled, which is non-reentrant against the LAPIC timer. The fix
+introduces a brief `sti; pause; cli` window so the tick can advance while
+holding the scheduler lock.
+
+**Pattern (binding — do not change without a new ADR):**
+```c
+/* sched_tick: allow one tick to advance before scheduling */
+__asm__ volatile("sti; pause; cli" ::: "memory");
+```
+
+The flag `g_in_switch` suppresses reentrant `schedule()` calls for the duration
+of the `sti;pause;cli` window. This is the correct mechanism. The alternative
+(clearing `g_in_switch` mid-spin) re-opens the reentrancy hazard that
+`sched.c:983-989` warns about. Never do that.
+
+**Measurement (DDR-893, commit 0c847bc) confirmed:**
+- Mean spin/call ≈19 iterations — the wait IS short, as the comment claims.
+- Contention is boot-phase only — exactly zero from t=2000 onward.
+- Total suppression ≈0.4% of a window — cannot cause seconds-long gate overruns.
+- Reading (B) ("preemption suppression is the CI blocker") is REFUTED.
+- Reading (A) ("pre-existing flakes the freeze was hiding") is the surviving
+  hypothesis for post-DDR-887 CI failures.
+
+### 0.2 Items 47 and 48 closure procedure (binding)
+
+**Item 47 — g_ticks stall:** NEVER guess a fix. The `[boot-load]`/`[boot-stamp]`
+instrument (commit `e49a23f`, ADR-037) must produce a failing-run capture first.
+The fix follows from the tick-gap measurement:
+- Gap ≈0 → LAPIC not firing on APs → investigate AP LAPIC init.
+- Gap large, ticks advancing → scheduler starvation → investigate percpu rq.
+Write the DDR before any fix code.
+
+**Item 48 — virtio-blk workers-late:** per DDR-886 (commit `2dc1bad`), the
+probes now print `reason=` on failure.
+- `reason=workers-late` → scheduling issue, NOT a driver bug. Do NOT write a
+  virtio-blk driver change. The confirmed root cause (DDR-934) is
+  `sched_create` NULL return under heap pressure — add NULL-check + KASSERT.
+- `reason=checksum-mismatch` → genuine data defect → write a driver DDR.
+
+Items 47 and 48 are INDEPENDENT. One DDR per root cause (§6.0-C).
+Both must be CI-green before `main` can be promoted.
+
+### 0.3 Stray-QEMU guard — the name form is permanently broken
+
+`pgrep qemu-system-x86_64` returns ZERO MATCHES whether or not QEMU is running.
+Linux truncates `comm` to 15 characters; `qemu-system-x86_64` is 18 characters.
+Every "no stray QEMU" observation recorded against the name form was vacuous.
+Two retracted root causes in this project's history trace to concurrent-QEMU
+contamination that the broken guard failed to catch.
+
+**Correct form — always and only:**
+```
+pgrep -f "[q]emu-system-x86_64"
+```
+The bracket avoids self-matching the invoking shell.
+
+### 0.4 DDR number collision — always verify before allocating
+
+In August 2026 a session allocated DDR-885..916 without checking, colliding with
+pre-existing DDRs in `docs/decisions/`. The collision-resolution map is at
+`docs/ddr/DDR-NUMBERING-MAP.md`. The free range is **DDR-936+**.
+
+Before allocating ANY DDR number:
+```
+ls docs/ddr/ docs/decisions/ | grep DDR-<N>
+```
+Must return empty in BOTH directories.
+
+### 0.5 Geometry-publishing pattern — do not hardcode pixel coordinates in gates
+
+DDR-910, DDR-926, DDR-929, DDR-935 all trace to the same root: gate scripts
+hardcoded absolute tablet coordinates that drifted with window position.
+
+**Rule:** the compositor MUST publish geometry (`PRADYOS_WM_GEOM`) and gate
+injectors MUST read it. Adding a new interactive gate? Add the corresponding
+`PRADYOS_WM_GEOM` field first. The field format is:
+```
+PRADYOS_WM_GEOM id=<N> title=<T> close=X,Y min=X,Y rz=X,Y dg=X,Y
+```
+Parsers must isolate each field before splitting on `,` — appending a new
+field to the end of the line corrupts earlier parsers that use `##*,`
+(takes everything after the LAST comma in the entire line).
+
+### 0.6 `kmalloc` does not zero — every new TCB field needs an initialiser
+
+`kmalloc` returns uninitialised memory. Every new field added to `struct tcb`
+must be explicitly initialised in `sched_create`. Failure mode: intermittent
+failures under SMP where a new field contains stack garbage from a prior
+allocation. See memory node `tcb-fields-not-zeroed`.
+
+### 0.7 Aggregate vs per-call metrics — always measure both
+
+DDR-890 claimed reading (B) confirmed from spin totals alone (2–3 million/window).
+DDR-893 added call counts and refuted it: mean spin/call was ~19, not ~1 million.
+A cumulative counter cannot distinguish one long event from many short ones.
+
+**Rule:** any performance claim must include BOTH a total AND a per-event metric
+(call count, event count, or similar denominator). A total without a denominator
+is not evidence.
+
+---
+
 ## 1. Code graph FIRST — mandatory every session
 
 A persistent code knowledge graph is available via the **`pradyos-graph`** MCP
@@ -77,12 +187,14 @@ any conflicting instruction in `SESSION_HANDOFF.md` or any prior session note.
 
 ### 5a. Resume protocol
 
-1. Read `SESSION_HANDOFF.md` in full.
-2. Read `docs/build_status.md` to confirm the current tip SHA and gate count.
-3. Run `graph_session_primer()`.
-4. **Do NOT run the full gate suite before starting work.** Gates are run after
+1. Run `gh auth switch --user prady4the4bady` (prevents 403 push failures).
+2. Read `SESSION_HANDOFF.md` in full.
+3. Read `docs/build_status.md` to confirm the current tip SHA and gate count.
+4. Run `graph_session_primer()`.
+5. **Do NOT run the full gate suite before starting work.** Gates are run after
    the fix, not before.
-5. Identify `CURRENT_ACTIVE_TASK` from `SESSION_HANDOFF.md` and start it.
+6. Identify `CURRENT_ACTIVE_TASK` from `SESSION_HANDOFF.md` and start it
+   immediately.
 
 ### 5b. The active-task gate exception
 
@@ -95,7 +207,7 @@ is still broken. Run the gate after implementing the fix.
 **There is no context level at which you stop working and surface a response.
 The OS is not built yet. You do not stop until it is.**
 
-When you notice context is high (use your own judgment on when this is):
+When you notice context is high:
 
 1. Finish the current atomic operation (one function, one file — not a whole
    task).
@@ -130,13 +242,12 @@ Do not surface a response to the user between tasks. Do not ask for confirmation
 Do not announce task completions. Just keep building.
 
 **If you think you have hit a stop condition, check this list:**
-- "I finished a task" — NOT a stop condition. Start the next task.
-- "I am waiting for CI" — NOT a stop condition. Work on code reading / DDRs.
-- "I am not sure what to do next" — NOT a stop condition. Read §6 and start
-  the next unbuilt item.
-- "I should report my progress" — NOT a stop condition. Keep working.
-- "Context is high" — NOT a stop condition. Checkpoint per §5c and continue.
-- "The user hasn't confirmed" — NOT a stop condition. §5d forbids waiting.
+- "I finished a task" — NOT a stop. Start the next task.
+- "I am waiting for CI" — NOT a stop. Work on code reading / DDRs.
+- "I am not sure what to do next" — NOT a stop. Read §6 and start next item.
+- "I should report my progress" — NOT a stop. Keep working.
+- "Context is high" — NOT a stop. Checkpoint per §5c and continue.
+- "The user hasn't confirmed" — NOT a stop. §5d forbids waiting.
 
 ---
 
@@ -148,91 +259,55 @@ do not start an item whose prerequisites are not yet CI-green.
 
 ### 6.0 Mandatory pre-conditions (enforce every session)
 
-- **§6.0-A — CI-in-flight rule:** before running QEMU locally, confirm no CI run
-  is in flight on `dev/phase1`. Check with `gh run list --branch dev/phase1
-  --limit 5`. If a run is in flight, do NOT stop — work on code-reading and
-  DDR-writing tasks until CI clears, then resume QEMU work immediately.
-- **§6.0-B — Instrument-first rule for active intermittents:** items 47 and 48
-  (§6.1) must not be "fixed" on an unconfirmed hypothesis. Read the CI instrument
-  output first; the fix follows from the evidence, not from guessing.
-- **§6.0-C — One DDR per root cause:** do not conflate two independent failures
-  into one fix. Items 47 and 48 are confirmed independent.
-- **§6.0-D — Fix on confirmed, not on hypothesis:** §6 forbids shipping a
-  virtio-blk driver change for the completion-loss hypothesis (DDR-775/776) until
-  `reason=checksum-mismatch` appears in a CI failure with DDR-886's probes. Until
-  then only diagnosability improvements are permitted.
+- **§6.0-A — CI-in-flight rule:** before running QEMU locally, run
+  `gh run list --branch dev/phase1 --limit 5`. If a run is in flight: do NOT
+  stop — switch to code-reading / DDR-writing tasks and resume QEMU when clear.
+- **§6.0-B — Instrument-first rule:** items 47 and 48 must not be fixed on
+  hypothesis. Capture the failing run's instrument output first.
+- **§6.0-C — One DDR per root cause:** items 47 and 48 are confirmed independent.
+  Do not conflate them.
+- **§6.0-D — Fix on confirmed data only:** no virtio-blk driver change until
+  `reason=checksum-mismatch` appears with DDR-886 probes active. Until then,
+  only diagnosability improvements are permitted.
 
-### 6.1 Active intermittents — fix these before promotion
+### 6.1 Active intermittents — fix before promotion, 3 consecutive CI greens required
 
-Both must be fixed and three CI greens earned on one tip before `main` moves.
+**Item 47 — g_ticks stall** — see §0.2 for the exact closure procedure.
+Do not attempt a fix without a failing-run capture from the
+`[boot-load]`/`[boot-stamp]` instrument.
 
-**Item 47 — stalled `g_ticks` under `-smp 4` (~20% CI hit rate)**
+**Item 48 — virtio-blk workers-late** — see §0.2 for the exact closure procedure.
+Confirmed root cause: `sched_create` NULL return (DDR-934). Fix: NULL-check +
+KASSERT in `blkmq_proof` and `smp_blk_integrity`, plus `smp_resched_all()` after
+worker spawn (matching `rqstress_proof` pattern at main.c:584-585).
 
-The `[boot-load]` / `[boot-stamp]` instrument is live in the tree (from `e49a23f`
-/ ADR-037). CI confirmed it works: a recent run printed
-`[boot-load] PRISM.ELF t=3029 → [boot-stamp] B proofs-begin t=3093`.
-
-When the next CI run fails:
-- If `[boot-load]` / `[boot-stamp]` output is present: read the tick gap between
-  `t=T1` and the stall point.
-  - Gap ≈ 0 or no `[boot-stamp]` lines after `B proofs-begin` → `g_ticks` was
-    not advancing → investigate LAPIC timer on APs, BSP-only `g_ticks` increment
-    in `timer_tick`, and whether an AP timer race can starve the BSP tick path.
-  - Gap large, ticks advancing → scheduler starvation — the proof loop never
-    resumed from `yield()`. Investigate percpu scheduler state.
-- If `[boot-load]` / `[boot-stamp]` output is absent: the item-47 failure
-  occurred before `PRISM.ELF` was loaded. Read where the boot stalled and move
-  the instrument earlier.
-- Write the DDR before any fix code. Do not guess a fix without the captured
-  failing run.
-
-**Item 48 — virtio-blk probe false-failure under `-smp 4`**
-
-DDR-886 (commit `2dc1bad`) fixed diagnosability. Both blk probes now drain
-workers before verdict and print `done=<hex>` plus `reason=checksum-mismatch` or
-`reason=workers-late`.
-
-When the next blk failure appears:
-- `reason=workers-late` → reads were slow, no data defect; track pacing
-  separately, do NOT write a driver fix.
-- `reason=checksum-mismatch` → genuine DDR-775/776 data defect; write a DDR for
-  the driver-side root cause.
-
-Also fix these two proven S2 defects **after** item 47 is resolved (they are
-independent of the intermittent's root cause; draft now, push after three greens):
-- Bound the virtio-blk completion wait (currently unbounded → hangs forever on
-  a missed completion).
-- Convert `slot_waiter` to a FIFO wait-list for >VBLK_NREQ concurrent submitters.
+Also fix after item 47 (S2 defects, independent of intermittent root cause):
+- Bound the virtio-blk completion wait (currently unbounded).
+- Convert `slot_waiter` to FIFO wait-list for >VBLK_NREQ concurrent submitters.
 
 ### 6.2 Storage / FS
 
-Work through in this order. Each item requires CI-green before the next.
+Each item requires CI-green before the next starts.
 
-1. **Provisioned SFS as default boot root** — make `build/sfsroot.img` / the
-   `QEMU_SFSROOT` path the normal boot; the SFS destructive self-tests must move
-   to a scratch disk or be gated behind `QEMU_SFS_SELFTEST=1`. DDR-770/771
-   provide the foundation.
+1. **Provisioned SFS as default boot root** — gate `sfs_format` at main.c:1128
+   behind `probe_enabled()` (fw_cfg / `QEMU_PROBES` path). Update the 12 gates
+   that assert on `[sfs]` self-test sentinels. New gate: `smoke-sfs-boot-root`
+   prints `PRADYOS_SFS_ROOT_OK`.
 
 2. **FAT32 multi-cluster read fix** — `execve` of a large musl-C ELF from FAT32
-   corrupts (likely the `read_cluster_chain` path for >1-cluster ELFs). Diagnose,
-   root-cause, and fix. This unblocks PRISM `run`, init `fork`+`execve` respawn,
-   and agent `execve`-on-respawn.
+   corrupts. Root-cause via `read_cluster_chain` path for >1-cluster ELFs.
+   New probe `fat32_multicluster.c`, pattern 7n+3 across cluster boundary.
+   Gate: `smoke-fat32-multicluster`.
 
-3. **SFS on-disk free-tree persistence** — DDR-762-v2 implemented in-memory
-   reclaim. The on-disk free-extent B+tree (allocated at `sfs_format` time) is
-   required for reclaim to survive reboots.
+3. **SFS on-disk free-tree persistence** — gate: `smoke-sfs-persist`.
 
-4. **SFS B+tree CoW GC** — the B+tree is append/tombstone only; a compaction pass
-   (rewrite leaf, update parent pointers) prevents unbounded dead-slot growth.
+4. **SFS B+tree CoW GC** — gate: `smoke-sfs-gc`.
 
-5. **SFS extent overflow / large files** — extend beyond 4 inline extents. Add
-   indirect extent blocks or enlarge the inline array.
+5. **SFS extent overflow / large files** — gate: `smoke-sfs-largefile`.
 
-6. **`mkfs.sfs` >512 slots / deeper trees** — remove the flat slot array ceiling
-   with a proper recursive B+tree builder.
+6. **`mkfs.sfs` >512 slots / deeper trees** — gate: `smoke-sfs-deepslot`.
 
-7. **SFS free-space quotas / per-mount limits** — per ADR-032 deferred. Implement
-   per-process-root-mount token-bucket quota.
+7. **SFS free-space quotas / per-mount limits** — gate: `smoke-sfs-quota`.
 
 ### 6.3 Networking (NET-C and beyond)
 
@@ -240,8 +315,8 @@ Work through in this order. Each item requires CI-green before the next.
 2. **UDP send / raw socket API**
 3. **`SYS_NET_REVOKE` / CAP_NET policy reload**
 4. **True peer loopback / TAP netdev**
-5. **IPv6**
-6. **TLS shim**
+5. **IPv6** (after NET-C stable)
+6. **TLS shim** (mbedTLS or equivalent, no out-of-tree libs in OS image)
 
 ### 6.4 Userspace / shell
 
@@ -252,64 +327,71 @@ Work through in this order. Each item requires CI-green before the next.
 5. **`SYS_MPROTECT`**
 6. **`SYS_POLL`**
 7. **`SYS_FUTEX`**
-8. **`pthread` / ring-3 threading**
+8. **`pthread` / ring-3 threading** (`clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)`)
 9. **6-arg `sys_mmap` ABI widening**
-10. **`mmap` file-backed mappings**
-11. **Dynamic linking**
-12. **`io_uring` completions**
-13. **`epoll` blocking wait**
-14. **`SYS_SIGACTION` full POSIX**
-15. **PRISM `ls -R` / `ps` full**
+10. **`mmap` file-backed mappings** (page-fault handler, dirty tracking, `msync`)
+11. **Dynamic linking** (`ld.so` / musl dynamic linker, `.so` in ELF loader)
+12. **`io_uring` completions** (`OP_FSYNC`, `OP_OPENAT`, eventfd, SQE chaining)
+13. **`epoll` blocking wait** (park caller, wake on readiness)
+14. **`SYS_SIGACTION` full POSIX** (`SA_RESTART`, `SA_SIGINFO`, `sigprocmask`,
+    `sigaltstack`, `SIGCHLD` on child exit)
+15. **PRISM `ls -R` / `ps` full** (open-fd listing, recursive ls, signal-mask)
 
 ### 6.5 Compositor / UI (Layer 7 remaining)
 
-1. **PS/2 scancode modifier keys**
-2. **Super+M physical binding**
-3. **Alt-Tab with modifier plumbing**
-4. **Compositor hotkey Ctrl+Alt+T**
-5. **Per-window restore from dock / taskbar**
-6. **Window maximize — full-screen at real display size**
-7. **Pointer resize handles — all edges**
-8. **`SURF_EV_CLOSE` notification**
+1. **PS/2 scancode modifier keys** (F-keys, arrows, Alt, Ctrl, Meta/Super)
+2. **Super+M physical binding** → `SYS_SET_MODE` (brief §3 sovereign toggle)
+3. **Alt-Tab with modifier plumbing** (upgrade from plain Tab, DDR-720)
+4. **Compositor hotkey Ctrl+Alt+T** → launch PRISM terminal window
+5. **Per-window restore from dock / taskbar** (DDR-717 restores all; add per-tile)
+6. **Window maximize — full-screen at real display size** (DDR-719 caps at 512×512)
+7. **Pointer resize handles — all edges** (DDR-718 covers bottom-right only)
+8. **`SURF_EV_CLOSE` notification** (owner saves state before forced close)
 9. **Compositor double-map `PTE_SW_SHARED` audit**
-10. **OKLab horizon bands / animated mesh**
-11. **vDSO callable reader (`vdso_entry.asm`)**
+10. **OKLab horizon bands / animated mesh** (DDR-716 deferred mesh + horizon)
+11. **vDSO callable reader (`vdso_entry.asm`)** (ring-3 seqlock reader, IMP-C)
 
 ### 6.6 Kernel / SMP / hardening
 
-1. **Scheduler timed-block primitive** (after item 47 resolved)
-2. **I/O APIC migration (DDR-714 stage D)**
-3. **SMEP / SMAP enablement**
-4. **Kernel-self W^X — identity alias removal**
-5. **`#MC` machine-check handler**
-6. **KASLR** (after §6.6-1..5)
+1. **Scheduler timed-block primitive** `sched_block_on_timeout(&lk, deadline)`
+   — implement AFTER item 47 is CI-green (timer must be proven reliable first).
+2. **I/O APIC migration** (DDR-714 stage D — disable 8259, route ISA IRQs)
+3. **SMEP / SMAP enablement** (`CLAC`/`STAC` around every copyin/copyout)
+4. **Kernel-self W^X — identity alias removal** (`vmm_protect_kernel()`)
+5. **`#MC` machine-check handler** (panic with register state)
+6. **KASLR** (after §6.6-1..5 done)
 7. **Per-CPU `sched_exit` / zombie reap under full SMP**
-8. **Spinlock contention instrumentation**
-9. **`smoke-rqstress` determinism** (20× green)
+8. **Spinlock contention instrumentation** (`lock_stat` hold-time + contention)
+9. **`smoke-rqstress` determinism** (20× green before moving on)
 
 ### 6.7 AETHER / agent layer
 
-1. **AETHER audit ring persistence** (needs §6.2-1)
-2. **Agent `execve`-on-respawn from SFS** (needs §6.2-2)
-3. **Multi-agent concurrency arbitration**
-4. **Per-agent live-metrics panel richer display**
+1. **AETHER audit ring persistence** — persist to SFS (`/etc/aether/audit.log`).
+   Requires §6.2-1 first.
+2. **Agent `execve`-on-respawn from SFS** (`/agents/kryos.elf` etc.).
+   Blocked on §6.2-2 or SFS as agent root.
+3. **Multi-agent concurrency arbitration** (per-agent quota + priority queue)
+4. **Per-agent live-metrics panel** (CPU% sparkline, memory graph, action-rate
+   histogram)
 5. **`SYS_AGENT_ROSTER` / `SYS_AGENT_METRICS` liveness continuity**
-6. **`/etc/aether/config` FAT fallback sentinel forbidden**
+6. **`/etc/aether/config` FAT fallback sentinel FORBIDDEN** in `smoke-aethercfg`
 
 ### 6.8 Platform / ISA extensions
 
-1. **ARM64 port** (after §6.1–6.7 CI-green)
-2. **RISC-V 64 port** (after ARM64 underway)
-3. **3-lane NAS storage** (after §6.2-1)
-4. **`clone(CLONE_VM)` for POSIX threading** (with §6.4-7+8)
+1. **ARM64 (AArch64) port** — begin ONLY after all §6.1–6.7 items are CI-green.
+2. **RISC-V 64 port** — after ARM64 underway.
+3. **3-lane NAS storage** — after §6.2-1 stable.
+4. **`clone(CLONE_VM)` for POSIX threading** — with §6.4-7+8.
 
 ### 6.9 Release (v1.0.0)
 
-1. **ISO images × 4** (pre-approved exceptions: Intel HDA audio → "deferred,
-   optional"; Wayland/wlroots → "superseded, not required")
-2. **`prad` package manager**
-3. **Full invariant gate suite — 20× each intermittent-class gate**
-4. **Tag `v1.0.0`** — only after every CI gate (minus two exceptions) is green,
+1. **ISO images × 4** — x86_64, ARM64, RISC-V64, virtualisation bundle.
+   Pre-approved exceptions:
+   - Intel HDA audio → "deferred, optional"
+   - Wayland/wlroots → "superseded, not required"
+2. **`prad` package manager** (NSI 88–90, docs/BUILD_TRACKER.md TASK 18)
+3. **Full invariant gate suite** — 20× each intermittent-class gate, all green.
+4. **Tag `v1.0.0`** — ONLY after every CI gate (minus two exceptions) is green,
    `main` = `dev/phase1`, ISO images validated.
 
 ---
@@ -317,46 +399,39 @@ Work through in this order. Each item requires CI-green before the next.
 ## 7. Hygiene gates — must pass before EVERY commit
 
 1. `build/kernel.bin` warning-clean (`-Werror` for clang + nasm).
-2. No forbidden sentinels in the build output (run `make ci-probe-rodata-check`).
+2. No forbidden sentinels in build output (`make ci-probe-rodata-check`).
 3. No `[BUG]` lines in the serial log.
 4. `make smoke-blkmq` exits rc=0.
-5. `make ci-shard-check` passes (every `smoke-*` target assigned to exactly one
-   shard, no target named that the Makefile does not define).
+5. `make ci-shard-check` passes.
+6. `make smoke-rqstress-liveness` exits rc=0.
+7. `make smoke-blk-integrity` exits rc=0.
 
 ---
 
 ## 8. Standing rules (do not re-derive these)
 
-- **A gate's timeout is a claim about how long the system takes.** When a gate
-  fails on "pattern not found", check elapsed against the window before reading
-  code. Use `make TIMEOUT_S=<n> smoke-<gate>` to override at the make level
-  (recipe-level `TIMEOUT_S=` beats the environment).
-- **An address does not identify a binary when every binary loads at the same
-  base.** Confirm which ELF is running before disassembling anything.
+- **A gate's timeout is a claim about how long the system takes.** Check elapsed
+  vs window before reading code. `make TIMEOUT_S=<n> smoke-<gate>` to override.
+- **An address does not identify a binary** when every binary loads at the same
+  base. Confirm which ELF is running before disassembling.
 - **A revert is not verified until the gate is re-run** after the revert.
-- **Gate logs go under `build/gatelogs/`** (WSL wipes `/tmp` mid-run; CI default
-  unchanged).
-- **`make ci-probe-rodata-check` catches writable-global faults** before they
-  become QEMU silent failures. Run it before registering any new probe ELF.
-- **Never run two QEMU instances concurrently on this host** — they race the
-  image write-lock and produce false results.
-- **Stray-QEMU check: `pgrep -f "[q]emu-system-x86_64"`** (bracket form ONLY —
-  the name form `pgrep qemu-system-x86_64` is permanently broken due to Linux's
-  15-character comm truncation).
-- **`IRQF_PERCPU` has no analogue in this kernel.** Do not attempt to apply Linux
-  driver patterns that have no mapping here.
-- **`kmalloc` does not zero.** Every new `struct tcb` field needs an explicit
-  initialiser in `sched_create`. See memory `tcb-fields-not-zeroed`.
-- **Auth:** if `git push` fails 403 as the wrong user, run
-  `gh auth switch --user prady4the4bady` before retrying. Do this at the start
-  of every session as a precaution.
-- **DDR number allocation:** free range starts at DDR-936. Before allocating a
-  new DDR number, run `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` to confirm
-  it is unoccupied in both directories. Occupied: DDR-885..935 (see
-  `docs/ddr/DDR-NUMBERING-MAP.md` for the collision-resolution record).
-- **Explicitly deferred — do not pull forward under any circumstance:**
-  - `arch/aarch64` and `arch/riscv64` ports before §6.1–6.7 are complete.
+- **Gate logs go under `build/gatelogs/`** — WSL wipes `/tmp`.
+- **`make ci-probe-rodata-check`** before registering any new probe ELF.
+- **Never run two QEMU instances concurrently** — they race the image write-lock.
+- **Stray-QEMU: `pgrep -f "[q]emu-system-x86_64"`** (bracket form only — see §0.3).
+- **`IRQF_PERCPU` has no analogue in this kernel.**
+- **`kmalloc` does not zero** — see §0.6.
+- **Auth:** `gh auth switch --user prady4the4bady` at session start and on any
+  403 push failure.
+- **DDR allocation:** DDR-936+ only. Verify unoccupied in both `docs/ddr/` AND
+  `docs/decisions/` before allocating — see §0.4.
+- **Geometry in gates:** use `PRADYOS_WM_GEOM` fields, never hardcoded pixels —
+  see §0.5.
+- **Performance claims need a denominator** — see §0.7.
+- **Explicitly deferred — do not pull forward:**
+  - `arch/aarch64` / `arch/riscv64` before §6.1–6.7 complete.
   - Phase 10 quantum layer.
   - Rust rewrite of any component.
   - Cloud bridge activation (DDR-793).
   - Apple Silicon / m1n1 path.
+  - CMake/Makefile hybrid (awaiting operator sign-off).
