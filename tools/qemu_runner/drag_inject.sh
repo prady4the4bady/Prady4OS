@@ -37,10 +37,13 @@ if [ -n "${DG_ID:-}" ]; then
         echo "[drag_inject] FAIL — no complete PRADYOS_WM_GEOM (with dg=) for id=${DG_ID}"
         exit 1
     fi
+    # DDR-935: isolate the FIELD first (cut at the first space), THEN split on
+    # the comma. Using ${x##*,} on the whole tail takes everything after the LAST
+    # comma in the line, so any field appended after this one silently steals Y.
     dg=${geom##*dg=}
+    dg=${dg%% *}
     SX=${dg%%,*}
     SY=${dg##*,}
-    SY=${SY%% *}
     case "$SX$SY" in
         ''|*[!0-9]*)
             echo "[drag_inject] FAIL — malformed dg in: $geom"
@@ -68,10 +71,14 @@ if [ -n "${RZ_ID:-}" ]; then
         echo "[drag_inject] FAIL — no complete PRADYOS_WM_GEOM (with rz=) for id=${RZ_ID}"
         exit 1
     fi
+    # DDR-935: same field-isolation fix as the dg= parse above. This one was
+    # ACTIVELY BROKEN by DDR-929 appending dg= after rz= on the same line:
+    # SY=${rz##*,} then returned dg's Y (5596 instead of 8416), so the resize
+    # click landed on the wrong row and missed the 14-pixel corner.
     rz=${geom##*rz=}
+    rz=${rz%% *}
     SX=${rz%%,*}
     SY=${rz##*,}
-    SY=${SY%% *}
     # Validate before arithmetic: a partially-interleaved line must fail loudly
     # here, not as a confusing bash arithmetic error 20 lines later.
     case "$SX$SY" in
