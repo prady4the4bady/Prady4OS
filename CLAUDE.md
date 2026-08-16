@@ -90,33 +90,53 @@ If the current task is fixing a specific failing gate, that gate being red does
 NOT block starting the task. Do not waste context verifying a known-broken gate
 is still broken. Run the gate after implementing the fix.
 
-### 5c. Context-limit protocol
+### 5c. Context-limit protocol — CHECKPOINT AND CONTINUE, NEVER STOP
 
-- If context < 85%: **do NOT stop**. Keep working.
-- If context ≥ 85%:
-  1. Finish the current atomic operation (one function, one file — not a whole
-     task).
-  2. Build and run the gate for what was just written.
-  3. Commit with an honest message (pass or fail, state which).
-  4. Append a checkpoint block to `SESSION_HANDOFF.md`.
-  5. Push both the work commit and the `SESSION_HANDOFF.md` commit.
-  6. Stop — the next session resumes from the checkpoint.
-- **Never stop mid-task saying "context limit" if context < 85%.** Check the
-  actual percentage first.
+**There is no context level at which you stop working and surface a response.
+The OS is not built yet. You do not stop until it is.**
+
+When you notice context is high (use your own judgment on when this is):
+
+1. Finish the current atomic operation (one function, one file — not a whole
+   task).
+2. Build and run the gate for what was just written.
+3. Commit with an honest message (pass or fail, state which).
+4. Append a checkpoint block to `SESSION_HANDOFF.md`.
+5. Push both the work commit and the `SESSION_HANDOFF.md` commit.
+6. **Immediately start the next task. Do not stop. Do not surface a response
+   to the user. Continue working.**
+
+The checkpoint exists so work is not lost — not as permission to stop.
+**Stopping and reporting to the user is NEVER the correct action mid-build.**
+The only time you surface a response is when one of the §5d stop conditions
+is genuinely met.
 
 ### 5d. Autonomous task loop — KEEP GOING UNTIL EVERYTHING IS BUILT
 
 Work through the backlog in §6 below **without waiting for human confirmation
 between tasks.** The only valid stop conditions are:
 
-1. Context window genuinely ≥ 85%.
-2. A gate fails that is NOT the active repair target AND no fix is obvious.
-3. A build error that requires an architectural decision not covered by existing
-   ADRs.
-4. A CI run is in flight and §6.1's local-QEMU rule applies.
+1. A gate fails that is NOT the active repair target AND no fix is obvious
+   AND you have already tried two independent approaches.
+2. A build error that requires an architectural decision not covered by existing
+   ADRs, AND you have already read all related ADRs and cannot resolve it.
+3. A CI run is in flight and local QEMU would contend with it — in this case
+   work on code-reading and DDR-writing tasks only, then resume QEMU work when
+   CI clears. **This is not a stop — it is a task switch.**
 
 **For everything else: keep going.** Do not stop at the end of a task and ask
-what to do next. Read §6, pick the next unbuilt item, and start it.
+what to do next. Read §6, pick the next unbuilt item, and start it immediately.
+Do not surface a response to the user between tasks. Do not ask for confirmation.
+Do not announce task completions. Just keep building.
+
+**If you think you have hit a stop condition, check this list:**
+- "I finished a task" — NOT a stop condition. Start the next task.
+- "I am waiting for CI" — NOT a stop condition. Work on code reading / DDRs.
+- "I am not sure what to do next" — NOT a stop condition. Read §6 and start
+  the next unbuilt item.
+- "I should report my progress" — NOT a stop condition. Keep working.
+- "Context is high" — NOT a stop condition. Checkpoint per §5c and continue.
+- "The user hasn't confirmed" — NOT a stop condition. §5d forbids waiting.
 
 ---
 
@@ -130,8 +150,8 @@ do not start an item whose prerequisites are not yet CI-green.
 
 - **§6.0-A — CI-in-flight rule:** before running QEMU locally, confirm no CI run
   is in flight on `dev/phase1`. Check with `gh run list --branch dev/phase1
-  --limit 5`. If a run is in flight, wait for it rather than risk
-  contention-induced false results.
+  --limit 5`. If a run is in flight, do NOT stop — work on code-reading and
+  DDR-writing tasks until CI clears, then resume QEMU work immediately.
 - **§6.0-B — Instrument-first rule for active intermittents:** items 47 and 48
   (§6.1) must not be "fixed" on an unconfirmed hypothesis. Read the CI instrument
   output first; the fix follows from the evidence, not from guessing.
@@ -216,206 +236,81 @@ Work through in this order. Each item requires CI-green before the next.
 
 ### 6.3 Networking (NET-C and beyond)
 
-1. **`epoll` / `select` integration for proxy sockets** — `SYS_SOCK_READ` parks
-   on `sti;hlt;cli`. Integrate proxy-socket readiness into the `epoll` interest
-   table; trigger from the recv callback.
-
-2. **UDP send / raw socket API** — the ring-3 socket NSI covers TCP only.
-
-3. **`SYS_NET_REVOKE` / CAP_NET policy reload** — DDR-734 is install-only.
-   Add a `SYS_NET_REVOKE` (sovereign-only) for runtime allowlist changes without
-   reboot.
-
-4. **True peer loopback / TAP netdev** — NET-A noted real loopback beyond QEMU
-   SLIRP requires a tap or socket netdev (NET-C).
-
-5. **IPv6** — tracked in the masterplan as a future layer. Build after NET-C is
-   stable.
-
-6. **TLS shim** — the Ollama agent path uses plaintext HTTP/1.1. Add minimal TLS
-   (mbedTLS or equivalent minimal lib, subject to the no-out-of-tree-libs wall for
-   the OS image).
+1. **`epoll` / `select` integration for proxy sockets**
+2. **UDP send / raw socket API**
+3. **`SYS_NET_REVOKE` / CAP_NET policy reload**
+4. **True peer loopback / TAP netdev**
+5. **IPv6**
+6. **TLS shim**
 
 ### 6.4 Userspace / shell
 
-1. **`argv`/`envp` marshalling in `sys_execve`** — ADR-021/ADR-022 deferred this.
-   Implement full NULL-terminated `char**` copying via `copyin`, placed on the
-   initial user stack below `auxv`.
-
-2. **PRISM RX line discipline / echo / readline** — add echo, backspace, Ctrl-C
-   → SIGINT, and line-buffer discipline to the console input path.
-
-3. **PRISM `run` re-enable** — after FAT32 multi-cluster fix (§6.2-2), re-enable
-   init `fork`+`execve` respawn of PRISM.
-
-4. **PRISM pipes / redirection / quoting / job control / scripting** — shell
-   grammar parser, pipe plumbing (`fork`+`dup2`+`execve`), `&` background jobs,
-   `wait` builtin.
-
-5. **`SYS_MPROTECT`** — required for JIT, dynamic linker segment permission
-   changes, and POSIX compliance.
-
-6. **`SYS_POLL`** — required for many POSIX programs; complement to `epoll`.
-
-7. **`SYS_FUTEX`** — required for musl's `pthread_mutex` / `pthread_cond`.
-
-8. **`pthread` / ring-3 threading** — `clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)`,
-   per-thread stack, `SYS_FUTEX`, TLS-per-thread setup.
-
-9. **6-arg `sys_mmap` ABI widening** — ADR-022 deferred (every 5b call fits ≤4
-   args). Required for `mmap` with fd/offset for file-backed mappings.
-
-10. **`mmap` file-backed mappings** — MAP_ANON only today. Add: page-fault handler
-    calling into VFS, dirty tracking, `msync`. Required for dynamic linking.
-
-11. **Dynamic linking** — `ld.so`/musl dynamic linker, `.so` support in the ELF
-    loader, `SYS_MMAP` file-backed.
-
-12. **`io_uring` completions** — add `OP_FSYNC`, `OP_OPENAT`, completion-event
-    notifications (eventfd), SQE chaining, fixed buffers.
-
-13. **`epoll` blocking wait** — PROC-B is non-blocking. Add blocking `epoll_wait`
-    (park caller, wake on readiness from pipe/socket recv path).
-
-14. **`SYS_SIGACTION` full POSIX** — `SA_RESTART`, `SA_SIGINFO`, `sigprocmask`,
-    `sigaltstack`, `SIGCHLD` generation on child exit.
-
-15. **PRISM `ls -R` / `ps` full** — per-process open-fd listing, recursive `ls`,
-    signal-mask display in `ps`.
+1. **`argv`/`envp` marshalling in `sys_execve`**
+2. **PRISM RX line discipline / echo / readline**
+3. **PRISM `run` re-enable** (after §6.2-2)
+4. **PRISM pipes / redirection / quoting / job control / scripting**
+5. **`SYS_MPROTECT`**
+6. **`SYS_POLL`**
+7. **`SYS_FUTEX`**
+8. **`pthread` / ring-3 threading**
+9. **6-arg `sys_mmap` ABI widening**
+10. **`mmap` file-backed mappings**
+11. **Dynamic linking**
+12. **`io_uring` completions**
+13. **`epoll` blocking wait**
+14. **`SYS_SIGACTION` full POSIX**
+15. **PRISM `ls -R` / `ps` full**
 
 ### 6.5 Compositor / UI (Layer 7 remaining)
 
-1. **PS/2 scancode modifier keys** — multi-byte scancodes (F-keys, arrow keys,
-   Insert/Delete/Home/End, numpad) and modifier tracking (Alt, Ctrl, Meta/Super).
-   Super+M (brief §3 sovereign/manual toggle) is the priority modifier.
-
-2. **Super+M physical binding** — once modifier plumbing is done, bind Super+M to
-   `SYS_SET_MODE` in the compositor. This is the brief's §3 specification.
-
-3. **Alt-Tab with modifier plumbing** — DDR-720 used plain Tab. Upgrade to Alt+Tab
-   once modifier tracking is in place.
-
-4. **Compositor hotkey Ctrl+Alt+T** — launch a PRISM terminal window.
-
-5. **Per-window restore from dock / taskbar** — DDR-717's `r` key restores ALL
-   minimized windows. Add a taskbar with per-window restore tiles.
-
-6. **Window maximize — full-screen at real display size** — DDR-719 caps at
-   512×512. Full-screen requires a larger surface budget or a scanout-override
-   path.
-
-7. **Pointer resize handles — all edges** — DDR-718 covers bottom-right corner
-   only. Add left/top/other-edge handles plus minimum window size enforcement.
-
-8. **`SURF_EV_CLOSE` notification** — send a close event from the compositor to
-   the owner before forcible `SYS_SURFACE_CLOSE`, so the owner can save state
-   (the Wayland `xdg_toplevel.close` shape).
-
-9. **Compositor double-map `PTE_SW_SHARED` audit** — verify the compositor's
-   `SYS_SURFACE_CMAP` double-map is correctly marked `PTE_SW_SHARED` so address-
-   space teardown (DDR-729) never double-frees surface frames.
-
-10. **OKLab horizon bands / animated mesh** — DDR-716 deferred mesh animation and
-    horizon bands. Implement per-ambiance animated horizon + the DAY-ambiance mesh.
-
-11. **vDSO callable reader (`vdso_entry.asm`)** — IMP-C deferred the ring-3-
-    callable seqlock reader. Implement it so multi-word consistent wall-clock reads
-    don't require a syscall.
+1. **PS/2 scancode modifier keys**
+2. **Super+M physical binding**
+3. **Alt-Tab with modifier plumbing**
+4. **Compositor hotkey Ctrl+Alt+T**
+5. **Per-window restore from dock / taskbar**
+6. **Window maximize — full-screen at real display size**
+7. **Pointer resize handles — all edges**
+8. **`SURF_EV_CLOSE` notification**
+9. **Compositor double-map `PTE_SW_SHARED` audit**
+10. **OKLab horizon bands / animated mesh**
+11. **vDSO callable reader (`vdso_entry.asm`)**
 
 ### 6.6 Kernel / SMP / hardening
 
-1. **Scheduler timed-block primitive** — `sched_block_on_timeout(&lk, deadline)`
-   — the correct fix for virtio-blk's unbounded wait and any other bounded-wait
-   need. Implement after item 47 is resolved (timer must be proven reliable first).
-
-2. **I/O APIC migration (DDR-714 stage D)** — all virtio devices and NVMe use
-   MSI-X; the 8259 PIC is still live for ISA lines (keyboard IRQ1, COM1 IRQ4).
-   Migrate to the I/O APIC: disable 8259 in virtual-wire mode, route ISA IRQs
-   through I/O APIC GSIs.
-
-3. **SMEP / SMAP enablement** — IMP-A covered Spectre/Meltdown MSRs. Enable SMEP
-   (Supervisor Mode Execution Prevention) and SMAP (Supervisor Mode Access
-   Prevention). The `copyin`/`copyout` discipline already provides the structural
-   requirement; add `CLAC`/`STAC` around every copyin/copyout call site.
-
-4. **Kernel-self W^X — identity alias removal** — the kernel text is writable
-   through the 2 MiB identity alias. Call `vmm_protect_kernel()` on the identity
-   alias pages as R+NX (or remove the alias once relocation is stable).
-
-5. **`#MC` machine-check handler** — add a minimal `#MC` handler that panics with
-   register state; a bare-metal crash would otherwise triple-fault.
-
-6. **KASLR** — kernel loads at fixed physical address 0x400000. Add KASLR for
-   hardening. (Track as a future ADR; do not start before §6.6-1..5 are done.)
-
-7. **Per-CPU `sched_exit` / zombie reap under full SMP** — the reaper thread runs
-   BSP-only. Add cross-CPU zombie queue or per-CPU reap sweep.
-
-8. **Spinlock contention instrumentation** — add `lock_stat` (hold-time + contention
-   counters) to identify hot spinlocks under pathological workloads.
-
-9. **`smoke-rqstress` determinism** — per-CPU runqueue migration stress testing
-   under real user workloads beyond the 24-thread storm. Ensure the gate is
-   deterministic across 20× runs before moving on.
+1. **Scheduler timed-block primitive** (after item 47 resolved)
+2. **I/O APIC migration (DDR-714 stage D)**
+3. **SMEP / SMAP enablement**
+4. **Kernel-self W^X — identity alias removal**
+5. **`#MC` machine-check handler**
+6. **KASLR** (after §6.6-1..5)
+7. **Per-CPU `sched_exit` / zombie reap under full SMP**
+8. **Spinlock contention instrumentation**
+9. **`smoke-rqstress` determinism** (20× green)
 
 ### 6.7 AETHER / agent layer
 
-1. **AETHER audit ring persistence** — the 4096-entry audit ring is in-memory
-   only. Persist it to SFS (`/etc/aether/audit.log`). Requires §6.2-1 (SFS as
-   default root) first.
-
-2. **Agent `execve`-on-respawn from SFS** — the AETHER daemon spawns agents via
-   embedded ELF bytes. Change to `execve` from the SFS agent image store
-   (`/agents/kryos.elf` etc.). Blocked on §6.2-2 (FAT32 multi-cluster fix) or
-   unblocked once SFS is the agent root.
-
-3. **Multi-agent concurrency arbitration** — the AETHER queue is one global
-   256-entry ring. Add per-agent quota + priority scheduler for the action queue.
-
-4. **Per-agent live-metrics panel richer display** — DDR-737 closed the hardening
-   campaign. Add CPU% sparkline, memory-used graph, and action-rate histogram to
-   the agent panel in the compositor.
-
-5. **`SYS_AGENT_ROSTER` / `SYS_AGENT_METRICS` — per-slot liveness continuity** —
-   ensure metrics are retained across agent restarts (current: slot retains last
-   dead agent's counts, which is correct; verify no regression on respawn).
-
-6. **`/etc/aether/config` FAT fallback sentinel forbidden** — DDR-732/761 migrated
-   to SFS. Ensure `smoke-aethercfg` explicitly FORBIDs the `PRADYOS_AETHER_CFG_DEFAULT`
-   sentinel so a FAT fallback is always a gate failure.
+1. **AETHER audit ring persistence** (needs §6.2-1)
+2. **Agent `execve`-on-respawn from SFS** (needs §6.2-2)
+3. **Multi-agent concurrency arbitration**
+4. **Per-agent live-metrics panel richer display**
+5. **`SYS_AGENT_ROSTER` / `SYS_AGENT_METRICS` liveness continuity**
+6. **`/etc/aether/config` FAT fallback sentinel forbidden**
 
 ### 6.8 Platform / ISA extensions
 
-1. **ARM64 (AArch64) port** — AArch64 boot protocol, EL1/EL0, GIC instead of
-   LAPIC/8259, MMU with 4-level translation. Track in `docs/platform_profiles.md`.
-   Begin after all x86_64 items in §6.1–6.7 are CI-green.
-
-2. **RISC-V 64 port** — similarly, after ARM64 work is underway.
-
-3. **3-lane NAS storage** — deferred since phase 3. Implement after SFS is stable
-   as the default root (§6.2-1).
-
-4. **`clone(CLONE_VM)` for POSIX threading** — IMP-D shipped COW fork. Full
-   `clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)` is the prerequisite for pthreads
-   (§6.4-8). Implement together with `SYS_FUTEX`.
+1. **ARM64 port** (after §6.1–6.7 CI-green)
+2. **RISC-V 64 port** (after ARM64 underway)
+3. **3-lane NAS storage** (after §6.2-1)
+4. **`clone(CLONE_VM)` for POSIX threading** (with §6.4-7+8)
 
 ### 6.9 Release (v1.0.0)
 
-Work through these only after §6.1–6.8 are CI-green.
-
-1. **ISO images × 4** — x86_64 (primary), ARM64, RISC-V64, and a virtualisation
-   bundle. Per `docs/BUILD_TRACKER.md` Section 9. The two pre-approved exceptions:
-   - **Item 26 — Intel HDA audio** — OPTIONAL; skip and log as "deferred, optional".
-   - **Item 41 — Wayland/wlroots compositor** — PRE-APPROVED SUPERSEDED by the
-     in-house C framebuffer compositor. Log as "superseded, not required".
-
-2. **`prad` package manager** — NSI 88–90 per `docs/BUILD_TRACKER.md` TASK 18.
-
-3. **Full invariant gate suite** — 20× each intermittent-class gate, all green, no
-   excluded gates except the two pre-approved exceptions above.
-
-4. **Tag `v1.0.0`** — only after every CI gate (minus the two exceptions) is
-   green, `main` = `dev/phase1`, and the ISO images are validated.
+1. **ISO images × 4** (pre-approved exceptions: Intel HDA audio → "deferred,
+   optional"; Wayland/wlroots → "superseded, not required")
+2. **`prad` package manager**
+3. **Full invariant gate suite — 20× each intermittent-class gate**
+4. **Tag `v1.0.0`** — only after every CI gate (minus two exceptions) is green,
+   `main` = `dev/phase1`, ISO images validated.
 
 ---
 
@@ -445,15 +340,23 @@ Work through these only after §6.1–6.8 are CI-green.
   become QEMU silent failures. Run it before registering any new probe ELF.
 - **Never run two QEMU instances concurrently on this host** — they race the
   image write-lock and produce false results.
-- **`pgrep qemu-system-x86_64` must return empty** before a local gate run.
+- **Stray-QEMU check: `pgrep -f "[q]emu-system-x86_64"`** (bracket form ONLY —
+  the name form `pgrep qemu-system-x86_64` is permanently broken due to Linux's
+  15-character comm truncation).
 - **`IRQF_PERCPU` has no analogue in this kernel.** Do not attempt to apply Linux
   driver patterns that have no mapping here.
 - **`kmalloc` does not zero.** Every new `struct tcb` field needs an explicit
   initialiser in `sched_create`. See memory `tcb-fields-not-zeroed`.
+- **Auth:** if `git push` fails 403 as the wrong user, run
+  `gh auth switch --user prady4the4bady` before retrying. Do this at the start
+  of every session as a precaution.
+- **DDR number allocation:** free range starts at DDR-936. Before allocating a
+  new DDR number, run `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` to confirm
+  it is unoccupied in both directories. Occupied: DDR-885..935 (see
+  `docs/ddr/DDR-NUMBERING-MAP.md` for the collision-resolution record).
 - **Explicitly deferred — do not pull forward under any circumstance:**
   - `arch/aarch64` and `arch/riscv64` ports before §6.1–6.7 are complete.
-  - Phase 10 quantum layer (QAL, virtual QPU, QAOA scheduler, hybrid API).
+  - Phase 10 quantum layer.
   - Rust rewrite of any component.
-  - Cloud bridge activation (DDR-793) — flag and ask if a queue item has a hard
-    dependency on it.
-  - Apple Silicon / m1n1 path (until ARM64 port is scoped as its own ADR).
+  - Cloud bridge activation (DDR-793).
+  - Apple Silicon / m1n1 path.
