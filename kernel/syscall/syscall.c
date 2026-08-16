@@ -159,9 +159,17 @@ static long sys_yield(long a1, long a2, long a3, long a4, long a5, long a6) {
 static long sys_exit(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
+    /* DDR-940: name the thread. Without the pid this line cannot answer the
+     * question it is most often read for — in a smoke-agent-click failure a
+     * bare sys_exit(0) right after PRADYOS_AGENT_TRIGGER pid=82 could be the
+     * triggered agent exiting before it printed anything (so it DID run), or
+     * an unrelated thread (so the agent never ran). Those are opposite
+     * conclusions about the same log. */
     kputs("[user] sys_exit(");
     kputdec((uint64_t)a1);
-    kputs(") — thread terminating\r\n");
+    kputs(") pid=");
+    kputdec((uint64_t)current_thread->pid);
+    kputs(" — thread terminating\r\n");
     sched_exit((int)a1);       /* zombie w/ status; does not return */
     return 0;
 }
