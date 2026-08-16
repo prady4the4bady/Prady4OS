@@ -318,6 +318,30 @@ void sched_take_rqmiss_stats(uint32_t *miss_out, uint32_t *state_out) {
     if (state_out) *state_out = __atomic_load_n(&g_rq_miss_state, __ATOMIC_RELAXED);
 }
 
+/* DDR-942: total entries sitting in every ready queue, and how many CPUs hold
+ * at least one. On a failing boot ubcas/ubrq/rqmiss all read ZERO, which means
+ * the thread was enqueued and was never dropped at pick time — so the only
+ * reading left is that it is STILL QUEUED and the queue is not being drained.
+ * That is the claim this measures directly. A depth that stays >0 across many
+ * heartbeats while a probe reports "never ran" IS the smoking gun; a depth of
+ * 0 refutes the whole "still queued" reading and sends the hunt elsewhere.
+ *
+ * Best-effort and lock-free ON PURPOSE: taking q->lock from the timer ISR to
+ * print a diagnostic would add a real deadlock risk to every boot in order to
+ * observe a rare one. A torn count is acceptable; a hung kernel is not. */
+void sched_rq_depth(uint32_t *total_out, uint32_t *busy_cpus_out) {
+    uint32_t total = 0, busy = 0;
+    for (int c = 0; c < PERCPU_MAX; c++) {
+        uint32_t n = 0;
+        for (struct tcb *t = g_rq[c].head; t && n < 4096u; t = t->rq_next)
+            n++;                      /* bounded: a corrupt list must not hang the ISR */
+        if (n) busy++;
+        total += n;
+    }
+    if (total_out)     *total_out     = total;
+    if (busy_cpus_out) *busy_cpus_out = busy;
+}
+
 static struct tcb *rq_take(struct rq *q) {
     struct tcb *t;
     while ((t = q->head)) {

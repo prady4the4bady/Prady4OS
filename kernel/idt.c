@@ -208,6 +208,14 @@ static void timer_tick(struct regs *r) {
           kputs(" rqmiss="); kputdec(rm);
           kputs(" rqmst=");  kputdec(rs);
           kputs(" btnedge="); kputdec(virtio_input_btn_edges()); }
+        /* DDR-942: rqdepth = entries still sitting in ready queues, rqcpus =
+         * how many CPUs hold at least one. Depth staying >0 while a probe
+         * reports "never ran" means the queue is not being drained. */
+        { extern void sched_rq_depth(uint32_t *, uint32_t *);
+          uint32_t rd = 0, rc2 = 0;
+          sched_rq_depth(&rd, &rc2);
+          kputs(" rqdepth="); kputdec(rd);
+          kputs(" rqcpus=");  kputdec(rc2); }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
