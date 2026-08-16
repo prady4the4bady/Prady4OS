@@ -1,9 +1,9 @@
-= DDR-900 — `sched_create` does not wake idle CPUs; the probes that compensate pass
+= DDR-932 — `sched_create` does not wake idle CPUs; the probes that compensate pass
 
 **Status:** ACCEPTED (diagnosis). **Fix NOT implemented** — reached at the §5c
 context threshold; an unverified scheduler change must not be left in the tree.
 **Date:** 2026-08-16
-**Lineage:** DDR-886 → DDR-898 (done=0x0) + DDR-896 (agent never started) → **DDR-900**.
+**Lineage:** DDR-918 → DDR-930 (done=0x0) + DDR-928 (agent never started) → **DDR-932**.
 
 ## The correlation
 
@@ -14,7 +14,7 @@ context threshold; an unverified scheduler change must not be left in the tree.
 | `smp_blk_integrity` (main.c:710-714) | **no** | `blk integrity FAIL done=0x0` |
 
 The two probes that omit the wake are exactly the two that report `done=0x0` —
-i.e. not one spawned worker ever returned (DDR-898 established that the final
+i.e. not one spawned worker ever returned (DDR-930 established that the final
 `__atomic_or_fetch` is unconditional, so a returning worker always sets a bit).
 
 ## The mechanism
@@ -41,7 +41,7 @@ blk probes do not, and they are the ones failing.
 
 The safe, minimal step is to make the two blk probes match the known-good
 `rqstress_proof` pattern — one line each, no scheduler semantics touched, and
-directly testable against the `prog=` instrument added in DDR-898:
+directly testable against the `prog=` instrument added in DDR-930:
 
 - if `prog=0,0,0,0` disappears once the IPI is added, the wake was the cause;
 - if it persists, the wake is not the cause and the scheduler is next.
@@ -55,7 +55,7 @@ of scope here.
 ## Does this explain the agent too?
 
 Unclear, and NOT claimed. `smoke-agent-click`'s clicked agent gets a pid and
-never prints `AGENT_START` (DDR-896), which is the same "created but never ran"
+never prints `AGENT_START` (DDR-928), which is the same "created but never ran"
 shape. The agent spawn path was not traced to a `sched_create`/`sched_unblock`
 call in this slice, so the connection is a hypothesis only.
 
@@ -63,5 +63,5 @@ call in this slice, so the connection is a hypothesis only.
 
 1. Add `smp_resched_all()` after the spawn loops in `blkmq_proof` and
    `smp_blk_integrity`. Build, hygiene, run both gates.
-2. Read `prog=` on the next failure (DDR-898) to confirm or refute.
+2. Read `prog=` on the next failure (DDR-930) to confirm or refute.
 3. Only then consider whether `sched_create` should wake, with measurement.

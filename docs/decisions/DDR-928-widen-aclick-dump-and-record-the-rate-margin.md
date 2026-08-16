@@ -1,8 +1,8 @@
-= DDR-896 — make `smoke-agent-click` diagnosable, and record its 55/60 rate margin
+= DDR-928 — make `smoke-agent-click` diagnosable, and record its 55/60 rate margin
 
 **Status:** ACCEPTED. **Diagnosability + a recorded latent risk. No agent change.**
 **Date:** 2026-08-16
-**Lineage:** DDR-885 / DDR-886 / DDR-888 / DDR-891 (one message, several causes)
+**Lineage:** DDR-917 / DDR-918 / DDR-920 / DDR-923 (one message, several causes)
 and DDR-915 (an agent killed by the ADR-026 rate limiter mid-rendezvous).
 
 ## Part 1 — the gate could not be diagnosed at all
@@ -103,7 +103,7 @@ reported an explicit failure.
 
 **No timeout change is warranted, and doubling it would fix nothing.** The gate
 is collateral. The actual defect remains `sfs_create` failing at `iter=0`, which
-is blocked on a capture naming `-ENOENT` vs `-ENOSPC` (DDR-891) — and per the
+is blocked on a capture naming `-ENOENT` vs `-ENOSPC` (DDR-923) — and per the
 standing rule, SFS internals stay untouched until that capture exists.
 
 ## RESULT — the widened dump worked, and it REFUTES the rate-margin hypothesis
@@ -140,8 +140,8 @@ they rightly do not satisfy "done AFTER trigger".
 ## The real question, and it is not local to this gate
 
 The agent is *triggered* (a pid is allocated: `pid=82`) and then never runs.
-That is the same shape as DDR-898's `done=0x0`: threads that are created but
-produce nothing. See DDR-898 for the convergence — this is now two independent
+That is the same shape as DDR-930's `done=0x0`: threads that are created but
+produce nothing. See DDR-930 for the convergence — this is now two independent
 gates pointing at newly spawned threads not being scheduled.
 
 `user/agent_base.c` remains UNCHANGED, now for a stronger reason than "no

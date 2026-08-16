@@ -1,15 +1,15 @@
-= DDR-889 — `g_ticks++` is a non-atomic RMW and loses ticks
+= DDR-921 — `g_ticks++` is a non-atomic RMW and loses ticks
 
 **Status:** ACCEPTED.
 **Date:** 2026-08-15
-**Separate from DDR-887** — that fixed the *freeze* (interrupts masked while
+**Separate from DDR-919** — that fixed the *freeze* (interrupts masked while
 spinning off-CPU). This is a distinct defect the fix made *visible*: with
 interrupts enabled more often, concurrent entry into `timer_tick` is now
-observable. Deliberately not folded into DDR-887.
+observable. Deliberately not folded into DDR-919.
 
 ## Evidence — measured, not argued
 
-CI run 31843212987 (the run carrying the DDR-887 fix). Of **12** `[hb]` lines in
+CI run 31843212987 (the run carrying the DDR-919 fix). Of **12** `[hb]` lines in
 the failing shard's serial dump, **two values print twice**:
 
 ```

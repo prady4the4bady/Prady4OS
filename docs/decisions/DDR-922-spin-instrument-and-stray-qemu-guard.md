@@ -1,13 +1,13 @@
-= DDR-890 — measure the DDR-887 spin, and fix the stray-QEMU guard that cannot fail
+= DDR-922 — measure the DDR-919 spin, and fix the stray-QEMU guard that cannot fail
 
 **Status:** ACCEPTED (instrument + tooling correction). **No behavioural kernel
 change.**
 **Date:** 2026-08-15
-**Lineage:** DDR-887 (freeze fix) → **DDR-890 (this)**.
+**Lineage:** DDR-919 (freeze fix) → **DDR-922 (this)**.
 
 ## Part 1 — the discriminating instrument
 
-Since DDR-887 landed, four consecutive CI runs each failed on a *different*
+Since DDR-919 landed, four consecutive CI runs each failed on a *different*
 single shard, and all three named failures share one shape — "did not complete
 in time":
 
@@ -19,9 +19,9 @@ smoke-aclick    [aclick] FAIL — the clicked PRAX agent did not run to completi
 
 Two readings are open and neither is settled:
 
-- **(A)** pre-existing flakes that the freeze used to hide — before DDR-887 a run
+- **(A)** pre-existing flakes that the freeze used to hide — before DDR-919 a run
   usually died at the freeze first, so these never got to be the first failure.
-- **(B)** a timing regression introduced *by* DDR-887: `sched_tick` skips its
+- **(B)** a timing regression introduced *by* DDR-919: `sched_tick` skips its
   `schedule()` call while `g_in_switch` is set, so preemption is suppressed for
   the duration of a `switch_wait_offcpu_sched` spin. If that spin is frequent,
   preemption gaps accumulate and latency-sensitive gates run long.
@@ -110,13 +110,13 @@ Conclusions, in order of confidence:
 1. **Reading (B) is confirmed.** `g_in_switch` is set for a large fraction of
    the time, so `sched_tick` skips its `schedule()` call correspondingly often
    and preemption is suppressed, not merely deferred. That is sufficient to make
-   latency-sensitive gates run long, which is the shape of every post-DDR-887
+   latency-sensitive gates run long, which is the shape of every post-DDR-919
    failure.
 2. **The original invariant is false.** `switch_wait_offcpu`'s comment claims
    "Bounded: the holder is executing a few instructions, never blocked on us."
    A CPU does not execute 1.3 million `pause` iterations waiting for "a few
    instructions". The holder is *not* being released promptly.
-3. **DDR-887 is still correct and must not be reverted.** The freeze is gone —
+3. **DDR-919 is still correct and must not be reverted.** The freeze is gone —
    heartbeats stream, and both freeze gates pass. What this shows is that the
    `sti` made the system *live* while leaving it *thrashing*: before the fix the
    same contention deadlocked silently; now it spins visibly. The spin was

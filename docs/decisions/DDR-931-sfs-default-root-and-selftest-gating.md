@@ -1,4 +1,4 @@
-= DDR-899 — provisioned SFS as default boot root; gate the destructive self-tests
+= DDR-931 — provisioned SFS as default boot root; gate the destructive self-tests
 
 **Status:** ACCEPTED (design). **Implementation deferred within this slice** —
 a CI run was in flight, and this change requires re-running 12 gates to verify,
@@ -6,7 +6,7 @@ which needs QEMU.
 **Date:** 2026-08-16
 **Scope:** CLAUDE.md §6.2 item 1 (D1).
 **Lineage:** DDR-770/771 (provisioned root mechanism) + DDR-804 (fw_cfg probe
-selection) → **DDR-899 (this)**.
+selection) → **DDR-931 (this)**.
 
 ## The defect
 

@@ -1,20 +1,20 @@
-= DDR-897 — smoke-drag must observe the title-bar point, not hardcode it
+= DDR-929 — smoke-drag must observe the title-bar point, not hardcode it
 
 **Status:** ACCEPTED. **Date:** 2026-08-16
-**Lineage:** DDR-910 → DDR-894 (rz=) → **DDR-897 (this)**.
+**Lineage:** DDR-910 → DDR-926 (rz=) → **DDR-929 (this)**.
 
 ## Evidence, including an A/B that cleared my own change
 
 `smoke-drag` failed in CI 31907631454 shard 1 ("drag did not start on the title
-bar"). Because that gate uses `drag_inject.sh`, which DDR-894 had just modified,
+bar"). Because that gate uses `drag_inject.sh`, which DDR-926 had just modified,
 the first question was whether I had regressed it. A/B, two distinct scripts:
 
 | arm | injector | result |
 |---|---|---|
-| A | pre-DDR-894 (`d00bee0`) | **0/3 PASS** |
-| C | current (DDR-894) | **2/3 PASS** |
+| A | pre-DDR-926 (`d00bee0`) | **0/3 PASS** |
+| C | current (DDR-926) | **2/3 PASS** |
 
-So the flake **predates** DDR-894 and that change slightly improved it. Not a
+So the flake **predates** DDR-926 and that change slightly improved it. Not a
 regression — a pre-existing instance of the same hardcoded-coordinate class.
 
 ## Root cause

@@ -1,12 +1,12 @@
-= DDR-892 — bound the off-CPU spin: fall back to idle instead of burning the CPU
+= DDR-924 — bound the off-CPU spin: fall back to idle instead of burning the CPU
 
 **Status:** ACCEPTED.
 **Date:** 2026-08-15
-**Lineage:** DDR-887 (freeze fix) → DDR-890 (measurement) → **DDR-892 (this)**.
+**Lineage:** DDR-919 (freeze fix) → DDR-922 (measurement) → **DDR-924 (this)**.
 
 ## The measurement that forces this
 
-DDR-890 instrumented `switch_wait_offcpu_sched` and drained the counter per
+DDR-922 instrumented `switch_wait_offcpu_sched` and drained the counter per
 500-tick heartbeat window. Measured, `-smp 4`:
 
 ```
@@ -15,14 +15,14 @@ DDR-890 instrumented `switch_wait_offcpu_sched` and drained the counter per
 [hb] t=3500 spins=2246234 max=1096888 cpu=0
 ```
 
-2–3 million spins per 5 s window; ~1.3 million on one CPU. DDR-890's stated
+2–3 million spins per 5 s window; ~1.3 million on one CPU. DDR-922's stated
 threshold for "the suppression is real" was >50 per window.
 
 Two things follow:
 
 1. `g_in_switch` is set for a large fraction of wall time, so `sched_tick` skips
    its `schedule()` call correspondingly often — preemption is **suppressed**,
-   not deferred. That matches every post-DDR-887 CI failure's shape ("did not
+   not deferred. That matches every post-DDR-919 CI failure's shape ("did not
    complete in time").
 2. `switch_wait_offcpu`'s comment — *"Bounded: the holder is executing a few
    instructions, never blocked on us"* — is **false**. A CPU does not run 1.3
@@ -38,7 +38,7 @@ Two things follow:
 > mid-context-switch and corrupt thread state. Masking interrupts here makes it
 > non-reentrant.
 
-DDR-887 kept that invariant's *intent* while changing its *mechanism*: interrupts
+DDR-919 kept that invariant's *intent* while changing its *mechanism*: interrupts
 are briefly enabled so the tick can advance `g_ticks`, and `g_in_switch`
 suppresses the reentrant `schedule()` that would otherwise follow. Dropping the
 flag mid-spin re-opens precisely the reentrancy the comment warns about. So the
@@ -82,7 +82,7 @@ design allows, and this DDR does not explain what. That investigation is
 separate and is the more important one; this change stops one CPU from
 monopolising itself while it proceeds.
 
-The `[hb] spins=` instrument from DDR-890 is retained precisely to show whether
+The `[hb] spins=` instrument from DDR-922 is retained precisely to show whether
 the bound is being hit, and how often.
 
 ## Gate
@@ -123,7 +123,7 @@ So the correct reading is:
 
 The problem is **not** that one wait is long. It is that `schedule()` is being
 entered constantly and *almost always finds `next` still on-CPU elsewhere*. That
-is scheduler thrashing, and it is the real defect — the one DDR-890 flagged as
+is scheduler thrashing, and it is the real defect — the one DDR-922 flagged as
 "a release that takes a million pauses is a scheduler defect in its own right".
 Bounding the spin is a guard against pathological CPU monopolisation, and it is
 worth keeping on that merit, but it must not be recorded as having fixed the

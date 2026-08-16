@@ -1,10 +1,10 @@
-= DDR-886 — a probe verdict must distinguish LATE from WRONG
+= DDR-918 — a probe verdict must distinguish LATE from WRONG
 
-**Status:** ACCEPTED — generalises DDR-885 to the two virtio-blk probes and
+**Status:** ACCEPTED — generalises DDR-917 to the two virtio-blk probes and
 covers the `[boot-load]` instrument landed in e49a23f.
 **Date:** 2026-08-15
-**Lineage:** DDR-910 (observe, don't assume) → DDR-885 (rqstress) →
-**DDR-886 (this)**. Related: DDR-785 (a foreign probe FAIL fails the booting
+**Lineage:** DDR-910 (observe, don't assume) → DDR-917 (rqstress) →
+**DDR-918 (this)**. Related: DDR-785 (a foreign probe FAIL fails the booting
 gate), DDR-878 (blk waiter FIFO), DDR-775/776 (blk completion waits).
 
 ## Evidence
@@ -25,7 +25,7 @@ shard 1: FAILED at smoke-winops after 12 of 36 gates
 `smoke-winops` has nothing to do with block I/O; per DDR-785 it failed because a
 foreign probe reported FAIL during its boot. Both blk probes failed together.
 
-## The defect — same shape as DDR-885, twice
+## The defect — same shape as DDR-917, twice
 
 **`blkmq_proof` (main.c:632)**
 
@@ -63,7 +63,7 @@ bits set" is LATE; "any high bit set" is WRONG. These are opposite conclusions.
 ## Decision
 
 1. **Drain before verdict.** After the pacing deadline, wait again — bounded —
-   for the workers to land, exactly as DDR-885 did for rqstress. The pacing
+   for the workers to land, exactly as DDR-917 did for rqstress. The pacing
    deadline keeps the reads overlapping (the point of the proof); it must not
    decide the verdict.
 2. **Report the bitmask and the reason.** Emit
@@ -94,7 +94,7 @@ merely slow and there is no data defect. Today both print the same word.
 ## Also recorded here
 
 `e49a23f` added `[boot-load] <FNAME> t=<ticks>` on entry to every
-`user_boot_from_sfs`, and cited "DDR-886" before this file existed. That
+`user_boot_from_sfs`, and cited "DDR-918" before this file existed. That
 instrument belongs to this DDR: same principle, applied to the boot sequence —
 a stuck boot must name the load it stopped on rather than going silent. It is
 confirmed working in this run (`[boot-load] PRISM.ELF t=3029`).

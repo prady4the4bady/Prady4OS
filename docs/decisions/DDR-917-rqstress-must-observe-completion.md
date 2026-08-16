@@ -1,4 +1,4 @@
-= DDR-885 — rqstress must observe completion, not assume it inside a fixed window
+= DDR-917 — rqstress must observe completion, not assume it inside a fixed window
 
 **Status:** ACCEPTED — fixes the intermittent `[smp] rqstress FAIL` that reddens
 multiple CI shards.

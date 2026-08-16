@@ -1,12 +1,12 @@
-= DDR-891 — the churn `rc=-1` comes from SFS, not from `vfs_create`'s precondition (corrects DDR-888)
+= DDR-923 — the churn `rc=-1` comes from SFS, not from `vfs_create`'s precondition (corrects DDR-920)
 
-**Status:** ACCEPTED (diagnosis + instrument). **Corrects an inference in DDR-888.**
+**Status:** ACCEPTED (diagnosis + instrument). **Corrects an inference in DDR-920.**
 **Date:** 2026-08-15
-**Lineage:** DDR-884 (keep the rc) → DDR-888 (split vfs_create's -1) → **DDR-891 (this)**.
+**Lineage:** DDR-884 (keep the rc) → DDR-920 (split vfs_create's -1) → **DDR-923 (this)**.
 
-## What DDR-888 inferred, and why it was wrong
+## What DDR-920 inferred, and why it was wrong
 
-DDR-888 split `vfs_create`'s bare `-1` into `-EPERM` (capability) and `-EINVAL`
+DDR-920 split `vfs_create`'s bare `-1` into `-EPERM` (capability) and `-EINVAL`
 (mount), and reasoned:
 
 > That points at **(A)** — most plausibly `mnt_get(mnt)` returning NULL … or
@@ -56,7 +56,7 @@ with a third at `:711`. So the churn's `rc=-1` is `vfs_create`'s **branch (B)**,
 the driver passthrough — the value is SFS's, and it arrives through the VFS
 untouched.
 
-**Consequence for DDR-888:** the split is still correct and worth keeping (it
+**Consequence for DDR-920:** the split is still correct and worth keeping (it
 disambiguates the VFS layer permanently, and cost nothing), but it will **not**
 name this failure. The next capture will still print `rc=-1`. Recording that
 now, so the next session does not wait on a capture that cannot speak.
@@ -74,7 +74,7 @@ now, so the next session does not wait on a capture that cannot speak.
 :711 is inside `sfs_dir_walk`, a different function. `sfs_create` has exactly
 two. Corrected before commit.)
 
-This is the same defect class as DDR-885, DDR-886 and DDR-888: one message,
+This is the same defect class as DDR-917, DDR-918 and DDR-920: one message,
 several causes. It is why `op=create iter=0` has been unactionable for three
 sessions.
 
@@ -89,7 +89,7 @@ instrument prints something that names the cause:
   distinguish "name exists", `-EEXIST`.
 
 Callers test `!= 0` (the churn probe prints whatever it gets), so widening the
-negative space is safe by the same argument DDR-888 verified for `vfs_create`.
+negative space is safe by the same argument DDR-920 verified for `vfs_create`.
 
 ## What this does NOT do
 

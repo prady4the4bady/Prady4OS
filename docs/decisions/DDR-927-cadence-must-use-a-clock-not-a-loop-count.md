@@ -1,11 +1,11 @@
-= DDR-895 — the ambiance cadence must use a clock, not a frame-loop iteration count
+= DDR-927 — the ambiance cadence must use a clock, not a frame-loop iteration count
 
 **Status:** ACCEPTED (diagnosis + design). **Implementation deferred to the next
 slice** — a CI run was in flight, and the standing rule forbids local QEMU that
 would contend with it, so this could not be gate-verified in this session.
 **Date:** 2026-08-16
 **Lineage:** DDR-726 (auto cadence) + DDR-911 (loop-count vs observed state) +
-DDR-910 (observe, don't assume) → **DDR-895 (this)**.
+DDR-910 (observe, don't assume) → **DDR-927 (this)**.
 
 ## The flake
 
@@ -92,10 +92,10 @@ is not.
 
 | gate | state |
 |---|---|
-| `smoke-evresize` | FIXED (DDR-894), 4/4 local |
+| `smoke-evresize` | FIXED (DDR-926), 4/4 local |
 | `smoke-cadence` | root-caused here, fix not yet implemented |
 | `smoke-agent-click` | not reproducible locally 3/3; hypothesis recorded, unproven |
-| `smoke-rtc-smp` | blocked on a DDR-891 capture naming -ENOENT vs -ENOSPC |
+| `smoke-rtc-smp` | blocked on a DDR-923 capture naming -ENOENT vs -ENOSPC |
 
 ## IMPLEMENTED — verified both paths
 

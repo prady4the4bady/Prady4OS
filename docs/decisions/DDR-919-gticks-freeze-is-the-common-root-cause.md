@@ -1,12 +1,12 @@
-= DDR-887 — CONFIRMED: `g_ticks` stops advancing; items 47 and 48 are one defect
+= DDR-919 — CONFIRMED: `g_ticks` stops advancing; items 47 and 48 are one defect
 
 **Status:** ACCEPTED (diagnosis). **No fix in this slice** — §4.5 forbids fixing
 on hypothesis, and the *mechanism* (which lock) is not yet identified.
 **Date:** 2026-08-15
 **Supersedes the framing of:** item 47 ("fs_test_thread lost") and item 48
 ("virtio-blk probe false-failure") as independent intermittents.
-**Lineage:** DDR-777 (heartbeat discriminator) → DDR-880 → DDR-885 → DDR-886
-(probe disambiguation) → **DDR-887 (this)**.
+**Lineage:** DDR-777 (heartbeat discriminator) → DDR-880 → DDR-917 → DDR-918
+(probe disambiguation) → **DDR-919 (this)**.
 
 ## The capture
 
@@ -28,7 +28,7 @@ SYSCLOSE OK / SYSGETPID OK / SYSGETCWD OK
 ```
 
 Shard 4 in the same run: `[blk] multi-inflight OK` **not found** — the probe
-printed **neither** `OK` nor the new DDR-886 `FAIL done=…`.
+printed **neither** `OK` nor the new DDR-918 `FAIL done=…`.
 
 ## What is CONFIRMED
 
@@ -60,14 +60,14 @@ explains, without any further assumption:
 
 - **item 47** — `fs_test_thread` reaches stamp A and never B or C. It is not
   "lost"; it is parked on a deadline that cannot expire.
-- **item 48** — the blk probes print *neither* verdict. DDR-886's
+- **item 48** — the blk probes print *neither* verdict. DDR-918's
   `workers-late` / `checksum-mismatch` disambiguation never fires because the
   pacing loop itself never exits. This is why the new fields did not appear.
 - **the watchdog's silence** — `% 100` never comes round again.
 - **four different gates missing four different sentinels** — whichever gate is
   booting when time stops is the one that reports.
 
-DDR-886 remains correct and worth keeping (a *late* worker still must not read
+DDR-918 remains correct and worth keeping (a *late* worker still must not read
 as a *wrong* one), but it could never have fixed this: it disambiguates a
 verdict that is never reached.
 
@@ -174,7 +174,7 @@ Do not change `switch_wait_offcpu` before that comparison exists.
 
 `[sfs] churn FAIL op=create iter=0 rc=-1` — the DDR-884 rc instrument fired
 locally. `op=create` failing at `iter=0` with `rc=-1` is the btree-churn arm,
-and it reproduced OUTSIDE CI. Track separately; it is not part of DDR-887.
+and it reproduced OUTSIDE CI. Track separately; it is not part of DDR-919.
 
 ## THE FIX — verified against the code, with one correction to the proposed form
 

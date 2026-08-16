@@ -1,10 +1,10 @@
-= DDR-916 — GAP B: the RX drain must run per character, not only inside the THRE spin
+= DDR-933 — GAP B: the RX drain must run per character, not only inside the THRE spin
 
 **Status:** ACCEPTED. **Supersedes DDR-809's fix.** DDR-809's analysis, locking
 design and THRE bound all stand; only the *placement* of the drain changes.
 **Date:** 2026-08-13
 **Lineage:** DDR-807 (unbounded THRE spin) -> DDR-808 (OPEN-8 mechanism: RX FIFO
-overflow) -> DDR-809 (in-spin drain + THRE bound) -> **DDR-916 (this)**.
+overflow) -> DDR-809 (in-spin drain + THRE bound) -> **DDR-933 (this)**.
 
 ## The defect
 

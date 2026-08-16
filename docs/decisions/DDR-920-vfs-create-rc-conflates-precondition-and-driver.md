@@ -1,10 +1,10 @@
-= DDR-888 — `vfs_create`'s `-1` conflates a precondition failure with a driver failure
+= DDR-920 — `vfs_create`'s `-1` conflates a precondition failure with a driver failure
 
 **Status:** ACCEPTED. Diagnosability fix for the `btree churn FAIL` intermittent.
 **Date:** 2026-08-15
-**Lineage:** DDR-884 (keep the churn rc) → **DDR-888 (this)**.
-Related: DDR-885 / DDR-886 (same defect class — one message, several causes).
-**Not related to** DDR-887: the `g_ticks` freeze is fixed and confirmed; this is
+**Lineage:** DDR-884 (keep the churn rc) → **DDR-920 (this)**.
+Related: DDR-917 / DDR-918 (same defect class — one message, several causes).
+**Not related to** DDR-919: the `g_ticks` freeze is fixed and confirmed; this is
 a different intermittent that the freeze previously masked.
 
 ## Evidence

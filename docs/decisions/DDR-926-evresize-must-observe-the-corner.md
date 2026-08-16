@@ -1,9 +1,9 @@
-= DDR-894 — `smoke-evresize` must observe the resize corner, not hardcode it
+= DDR-926 — `smoke-evresize` must observe the resize corner, not hardcode it
 
 **Status:** ACCEPTED.
 **Date:** 2026-08-15
 **Lineage:** DDR-718 (corner resize) + DDR-910 (observe, don't assume) →
-**DDR-894 (this)**. Completes DDR-910's coverage for the one gate it missed.
+**DDR-926 (this)**. Completes DDR-910's coverage for the one gate it missed.
 
 ## The flake
 
