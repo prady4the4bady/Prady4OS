@@ -5097,27 +5097,42 @@ Hygiene caught my own error: the first version greped `PRADYOS_EV_RESIZE`, a
 strict prefix of `PRADYOS_EV_RESIZE_OK`. `sentinel_collision.sh` rejected it.
 Fixed to the full form. Sentinel count unchanged at 159.
 
-### §6.2-D1 correction — the blast radius is 16 gates, not 12
-DDR-931's design says 12 gates must opt in when `sfs_format` moves behind
-`probe_enabled()`. The actual set that asserts on `[sfs]`/`PRADYOS_SFS*`
-sentinels is **16**:
+### §6.2-D1 — RETRACTED my "16 gates" claim; DDR-931's 12 is CORRECT
+An earlier checkpoint in this session claimed the opt-in blast radius was 16
+gates and that DDR-931's 12 "would have left four gates broken". **That was
+wrong.** It came from a naive `awk` that matched sentinel names inside
+*comments* and mis-attributed lines across recipe boundaries. Verified:
+
+- `smoke-blk-integrity` — mentions `PRADYOS_SFSROOT_OK` in a **comment** only.
+- `smoke-gpu` — asserts no SFS sentinel at all (awk block-boundary error).
+- `smoke-sfs-persist` / `smoke-sfsroot` — assert `PRADYOS_SFS_PERSIST_OK` /
+  `PRADYOS_SFSROOT_OK`, emitted at `kernel/main.c:1105`, which is **before**
+  the destructive `sfs_format` at `:1141`. They belong to the DDR-770
+  provisioned path, so DDR-931 correctly excludes them.
+
+DDR-931's enumeration stands at 12. I made the exact "assume instead of
+observe" error (DDR-910 class) that I have been citing at other people's
+hypotheses all session. Grep output is not evidence until you check whether the
+match is code or a comment.
+
+### §6.2-D1 — the REAL finding: there are TWO sfs_format sites
+DDR-931's design gates **one** call site (it names `kernel/main.c:1128`, now
+`:1141`). There is a second:
 
 ```
-smoke-blk-integrity  smoke-blkmq       smoke-blkmq-trace  smoke-fs
-smoke-fs-sfs-rw      smoke-gpu         smoke-msixap       smoke-sfs-btree
-smoke-sfs-btree-smp4 smoke-sfs-dirs    smoke-sfs-gc       smoke-sfs-persist
-smoke-sfs-unlink     smoke-sfsroot     smoke-shell        smoke-user
+kernel/main.c:1141   destructive self-test format      <- DDR-931 gates this
+kernel/main.c:1965   DDR-760 "reformat CLEAN" for the persistent root  <- NOT gated
 ```
-(`awk` over the Makefile mapping each `smoke-*:` recipe to the sentinels it
-references.) Note `smoke-gpu`, `smoke-msixap`, `smoke-shell` and `smoke-user`
-are in the set — gates whose names give no hint they depend on the SFS
-self-test. Update DDR-931 before starting §6.2-D1; a 12-gate plan would have
-left four gates broken.
 
-Also relevant: DDR-770 already implements a "provisioned, do not format"
-path (`kernel/main.c:1122-1131` — if `/etc/aether/config` starts with `mode=`,
-keep that mount and skip the kernel format). §6.2-D1 should extend that
-existing mechanism rather than invent a second one.
+`:1965` is unconditional. It runs *after* `prov_mnt` has been detected, and the
+DDR-770 check that follows it only decides whether to **provision the config**,
+not whether to **format** — so a host-provisioned `mkfs.sfs` image is wiped by
+`:1965` even when `:1141` is gated off.
+
+**§6.2-D1 cannot work by gating `:1141` alone.** Update DDR-931 to cover both
+sites before writing any code, and decide explicitly what `:1965` should do
+when the disk already carries a valid provisioned root (likely: skip the
+format and just mount, which is what "provisioned as default root" means).
 
 ### State
 - Pushed `ed74ac7`. CI: 4+ runs queued/in flight — no local QEMU (§6.0-A).
