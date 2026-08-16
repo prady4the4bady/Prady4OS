@@ -147,6 +147,7 @@ struct tcb {
     uint64_t   vt_in;
     uint32_t   dbg_yields;
     uint32_t   sched_woke;
+    uint32_t   dbg_ebadf_seen;  /* DDR-946: first -EBADF write already reported */
     struct tcb *blk_wait_next;  /* DDR-878: intrusive FIFO link for virtio-blk's
                                  * slot wait list. Separate from rq_next because a
                                  * thread waiting for a request slot is BLOCKED and

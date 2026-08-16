@@ -142,8 +142,24 @@ static long sys_write(long fd, long ubuf, long count, long a4, long a5, long a6)
         return 0;
 
     struct fd_entry *e = fd_get(current_thread, (int)fd);
-    if (!e)
+    if (!e) {
+        /* DDR-946: name the FIRST rejected write per thread. A ring-3 printf
+         * whose fd is unwired returns -EBADF, musl discards it, and the process
+         * runs to a normal exit(0) with NO output — indistinguishable in the
+         * serial log from "main was never entered". This line is emitted from
+         * the kernel so it cannot be swallowed by the very path under suspicion.
+         * First occurrence only: a process looping on a bad fd must not flood
+         * the log (same volume discipline as DDR-941's on-change BTN_STATE). */
+        if (!current_thread->dbg_ebadf_seen) {
+            current_thread->dbg_ebadf_seen = 1;
+            kputs("[fd] write EBADF pid=");
+            kputdec((uint64_t)current_thread->pid);
+            kputs(" fd=");
+            kputdec((uint64_t)(uint32_t)fd);
+            kputs("\r\n");
+        }
         return -EBADF;
+    }
     return fd_write_user(e, (uint64_t)ubuf, count);
 }
 

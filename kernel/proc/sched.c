@@ -836,6 +836,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_idle = 0;                  /* only the per-CPU idles set this */
     t->rq_next = 0;                  /* rq-1: not enqueued yet */
     t->rq_on = 0;
+    t->dbg_ebadf_seen = 0;           /* DDR-946 / §0.6: kmalloc does not zero */
     /* DDR-895: creation-time snapshot. H2 predicts probe threads enter FAR
      * BELOW the floor; H1 predicts entry position is irrelevant. */
     t->weight          = 1024u;
