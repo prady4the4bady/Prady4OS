@@ -5142,3 +5142,82 @@ format and just mount, which is what "provisioned as default root" means).
   failing run to read the branch), `smoke-rtc-smp`.
 - **Do not fix either defect until its instrument reads out.** That is the
   DDR-920/928/932 lesson and it has now cost four wrong mechanisms.
+
+## Checkpoint — 2026-08-16, tip `97b9ca2`
+
+### THE HEADLINE: DDR-936's framing is REFUTED for smoke-agent-click mode A
+```
+PRADYOS_AGENT_TRIGGER name=PRAX slot=1 pid=82
+sys_exit(0) pid=82
+```
+The clicked agent was created, **scheduled, executed, and exited cleanly with
+status 0** — it just never printed `AGENT_START`. **Mode A is not a scheduler
+defect.** Do not resume the scheduler hunt for it.
+
+### Ten mechanisms retired this investigation — every one by instrument
+1-4. missing wake IPI (x4: idle loop is `sti;hlt`; aclick is uniprocessor;
+     rqstress already calls `smp_resched_all()` and still fails)
+5. `sched_unblock` CAS gate — `ubcas=0`
+6. `rq_on` gate — `ubrq=0`
+7. pick-time drop — `rqmiss=0`
+8. non-present-CPU strand (DDR-944) — `rqq=1 rqpres=1`, queued CPU IS present
+9. stdout-not-wired — a PASSING run shows 4 triggers -> 4 START/DONE pairs ->
+   those 4 pids exiting. stdio IS wired.
+10. UART transport loss — `thre_drops=0 rx_drops=0` on all 21 heartbeats of the
+    FAILING boot. The line was never written, not written-and-lost.
+
+**Not one was retired by argument.** Every plausible mechanism was wrong.
+
+### CURRENT_ACTIVE_TASK — mode A, two candidates left
+On a FAILING run the agent runs and exits 0 without printing; on a PASSING run
+an identically-spawned agent prints normally. Same path, same wiring. Left:
+- `main` never entered (musl crt / `__libc_start_main` exits 0), or
+- an early exit reporting status 0.
+Distinguish with a marker emitted **before** the first ring-3 `printf` — from
+the KERNEL side at exec (`kputs`), because ring-3 output is the thing in
+question. Do not guess between them.
+
+### Also newly known
+- **The injector fires FOUR triggers per run**, each spawning a distinct agent.
+  Any reasoning assuming one clicked agent per run is wrong — DDR-936's
+  included (it read a single `pid=82`).
+- `rqstress FAIL n=8 spawned=24/24` — all 24 created, 16 never completed.
+  Allocation excluded. `rqdepth` hit **21** vs baseline 6. Blk/rqstress keep
+  their own root cause (§6.0-C) — mode A's refutation does NOT transfer.
+
+### DDR-943 (PMM) — DOWNGRADED to PLAUSIBLE/UNCONFIRMED
+Two of my errors are recorded in it:
+1. `ptnode_alloc` is **not** the only source of `ELF_E_NOMEM` — `vmm_map_in` in
+   the same loop returns it too, so `rc=8` does not identify the stack loop.
+2. I claimed `pmmfree=19645` near a failure refuted it. **Wrong** — every
+   `ELF_E_NOMEM` path calls `vmm_destroy_address_space()` on the way out
+   (frees up to 2047 frames) and that heartbeat was 254 ticks *after* the
+   failure. 500-tick sampling cannot see a transient that heals via its own
+   error path.
+Still true: the eager loop is real (2,048 frames/process, `elf.c:189-200`),
+`pmmtot=28630`, `pmmfree=14316` steady — ~14 processes fit in all RAM, ~7 in
+the free half, against ~30 probes. DDR-829/831 were **never fixed** (verified
+in source, not from the record).
+**Next:** `pmmfree=` now prints ON the `[boot-load] FAILED` line. `<2048`
+confirms; `>>2048` refutes and moves the hunt to the VMM.
+
+### Instruments live on `[hb]`
+`ubcas ubrq ubst rqmiss rqmst btnedge rqdepth rqcpus rqq rqpres pmmfree pmmtot`
+Baselines on a PASSING boot: `rqdepth=6 rqcpus=1 rqq=1 rqpres=1 pmmtot=28630`.
+**Read rqdepth as a SERIES, never one line** — nonzero is normal.
+
+### Section E (thread 4) — no open buildable work
+10 items SHIPPED/CI-confirmed; the rest have passing gates (`smoke-aead`,
+`smoke-acc`), are invariants (S1-S5), or are aarch64/riscv64 which CLAUDE.md §8
+forbids pulling forward. Do not invent work here.
+
+### Gate/CI state
+- `main` still `27ba426`; three-greens count **0** (greens have been on
+  different SHAs, which does not satisfy the rule).
+- Open: `smoke-agent-click` (A and B, separate defects per §6.0-C),
+  `smoke-evresize` (2nd defect), `smoke-wmorder`, blk/rqstress.
+- **`smoke-wmorder` injects NO mouse input** — it yields `btnedge=0` and zero
+  `BTN_STATE` lines even when passing. Never use it for the mode-B readout; the
+  plan that specified it would have produced a guaranteed false positive.
+  Mode B lives on `smoke-agent-click`.
+- Auth: `git -c credential.helper='!gh auth git-credential' push` (required).
