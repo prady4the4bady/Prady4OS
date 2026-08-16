@@ -342,6 +342,25 @@ void sched_rq_depth(uint32_t *total_out, uint32_t *busy_cpus_out) {
     if (busy_cpus_out) *busy_cpus_out = busy;
 }
 
+/* DDR-944: which CPU indices hold queue entries, vs which CPUs are `present`.
+ * steal_pass() skips any CPU with !pc->present (sched.c:542-544), and a
+ * non-present CPU is not running schedule() either — so an entry queued there
+ * is drained by nobody. These two masks answer "are the stranded entries on a
+ * CPU nothing can reach?" directly, which is the whole question left after
+ * ubcas/ubrq/rqmiss all read zero. Same lock-free rationale as sched_rq_depth. */
+void sched_rq_cpumasks(uint32_t *queued_out, uint32_t *present_out) {
+    uint32_t queued = 0, present = 0;
+    for (int c = 0; c < PERCPU_MAX && c < 32; c++) {
+        if (g_rq[c].head)
+            queued |= 1u << c;
+        struct percpu *pc = percpu_get((unsigned)c);
+        if (pc && pc->present)
+            present |= 1u << c;
+    }
+    if (queued_out)  *queued_out  = queued;
+    if (present_out) *present_out = present;
+}
+
 static struct tcb *rq_take(struct rq *q) {
     struct tcb *t;
     while ((t = q->head)) {

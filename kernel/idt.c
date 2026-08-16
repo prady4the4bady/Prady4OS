@@ -216,6 +216,21 @@ static void timer_tick(struct regs *r) {
           sched_rq_depth(&rd, &rc2);
           kputs(" rqdepth="); kputdec(rd);
           kputs(" rqcpus=");  kputdec(rc2); }
+        /* DDR-944: rqq = CPUs holding queue entries, rqpres = CPUs marked
+         * present. Any bit set in rqq but clear in rqpres is a queue that
+         * neither its own CPU nor any stealer will ever drain.
+         * DDR-943: pmmfree/pmmtot — the eager 8 MiB user stack costs 2048
+         * frames per process (elf.c:189-200) against 32768 on a default 128 MiB
+         * QEMU machine, so ~15 processes exhaust RAM. Watch this collapse. */
+        { extern void sched_rq_cpumasks(uint32_t *, uint32_t *);
+          extern uint64_t pmm_free_page_count(void);
+          extern uint64_t pmm_total_page_count(void);
+          uint32_t rqq = 0, rqp = 0;
+          sched_rq_cpumasks(&rqq, &rqp);
+          kputs(" rqq=");     kputdec(rqq);
+          kputs(" rqpres=");  kputdec(rqp);
+          kputs(" pmmfree="); kputdec(pmm_free_page_count());
+          kputs(" pmmtot=");  kputdec(pmm_total_page_count()); }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
