@@ -1,6 +1,11 @@
 = DDR-943 — the eager 8 MiB user stack exhausts a 128 MiB machine at ~15 processes
 
-**Status:** ACCEPTED (root cause identified by arithmetic + code read).
+> **STATUS DOWNGRADED — see "The evidence does not yet support this" at the
+> bottom. The mechanism is real and the arithmetic holds, but the causal claim
+> is NOT established, and two statements in this document are wrong.**
+
+**Status:** ~~ACCEPTED~~ **PLAUSIBLE, UNCONFIRMED** (mechanism verified in
+source; causation not measured).
 **Date:** 2026-08-16
 **Evidence:** CI run 31952413936 (tip `62c65cd`), shard 0 — 11 x
 `[boot-load] FAILED <name> reason=elf rc=8`.
@@ -143,3 +148,64 @@ while the PMM (frames) was failing — different allocators. And `done=0x0` show
 those workers never reached even their failure path, which frame exhaustion
 does not explain. Two defects, same boot. A common cause may yet exist; it has
 not been measured, so it is not claimed.
+
+---
+
+## The evidence does not yet support this (added after CI run 31958185299)
+
+Two corrections to this document, both mine.
+
+### Correction 1 — `ptnode_alloc` is NOT the only source of `ELF_E_NOMEM`
+
+This DDR states that `ptnode_alloc()` returning NULL "is the *only* source of
+`ELF_E_NOMEM` on this path, so the observed `rc=8` **is** this loop". That is
+false. The same loop has a second one:
+
+```c
+if (vmm_map_in(as, va, phys, VMM_USER|VMM_RW|VMM_NX) != 0) {
+    ptnode_free(frame); vmm_destroy_address_space(as); return ELF_E_NOMEM;
+}
+```
+
+`vmm_map_in` failing returns `ELF_E_NOMEM` too, and earlier segment-mapping
+code can also produce it. `rc=8` therefore does **not** identify the stack loop
+on its own.
+
+### Correction 2 — the `pmmfree` reading neither confirms nor refutes this
+
+CI run 31958185299 has `INIT.ELF` failing at `t=2746` with the next heartbeat at
+`t=3000` reporting `pmmfree=19645` — nearly 20,000 free frames, far above the
+2,048 a stack needs. My first reading of that was that it **refutes** this DDR.
+**That reading was wrong**, for two reasons:
+
+1. Every `ELF_E_NOMEM` path calls `vmm_destroy_address_space(as)` on the way
+   out, **returning up to 2,047 frames**. The count recovers by construction.
+2. The heartbeat is **254 ticks after** the failure, and `[hb]` samples only
+   every 500 ticks.
+
+So `pmmfree=19645` is the *post-cleanup* figure. A transient exhaustion that
+heals via its own error path is **invisible** at this sampling rate. The
+instrument was too coarse to test the claim it was added to test — the same
+class of error as DDR-942's first-draft `rqdepth` criterion.
+
+### What is still true
+
+- The eager loop is real: 2,048 frames per process, verified at `elf.c:189-200`.
+- `pmmtot=28630`, `pmmfree=14316` at steady state — measured. ~14 processes fit
+  in all RAM, ~7 in the free half, against ~30 probes.
+- DDR-829/831 did not fix it.
+
+### What is now needed
+
+`pmmfree=` is printed **on the `[boot-load] FAILED` line itself** (DDR-945), so
+the free count is read at the instant of failure rather than up to 500 ticks
+later. Then:
+
+- `pmmfree` at failure **< 2,048** ⇒ this DDR is confirmed.
+- `pmmfree` at failure **>> 2,048** ⇒ genuinely refuted; the failure is
+  `vmm_map_in` or an address-space limit, not frame exhaustion, and the hunt
+  moves to the VMM.
+
+Until that reads out, this DDR is a **plausible mechanism with correct
+arithmetic and no proof of causation**, and must not be cited as the root cause
+of the `rc=8` failures.

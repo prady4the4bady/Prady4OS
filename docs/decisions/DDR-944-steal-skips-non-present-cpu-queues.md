@@ -80,6 +80,45 @@ observe, and "still queued" is wrong).
 **Reminder (DDR-942):** `rqdepth` must be read as a *series*. Baseline on a
 healthy boot is `rqdepth=6 rqcpus=1`; a single nonzero line means nothing.
 
+## A concrete route exists — and `g_rq[]` is not migrated with `g_percpu[]`
+
+`percpu_init_early()` claims slot 0 with `present = 1` because "the scheduler
+ticks long before ACPI/APIC init" (`percpu.c:49-57`). Threads created in that
+window take `rq_push(0, t)` and land on `g_rq[0]`.
+
+`percpu_init_bsp()` then re-homes the BSP to its real roster index
+(`percpu.c:62-84`):
+
+```c
+if (ridx != 0) {
+    g_percpu[ridx] = g_percpu[0];      /* percpu struct migrates */
+    g_percpu[ridx].self = &g_percpu[ridx];
+    g_percpu[0].present = 0;           /* slot 0 is now NOT present */
+    …
+}
+```
+
+**`g_rq[]` is a separate array and is NOT migrated.** So when `ridx != 0`:
+
+- threads already queued on `g_rq[0]` stay there;
+- the BSP now runs as `ridx` and pops from `g_rq[ridx]`, never `g_rq[0]`;
+- `steal_pass` skips `g_rq[0]` forever, because slot 0's `present` is now 0.
+
+Every thread enqueued before `percpu_init_bsp()` is stranded permanently. That
+is this DDR's mechanism with a specific trigger, and it is a genuine latent
+defect regardless of whether it fires today.
+
+**It is probably NOT our bug.** The code's own comment says "Dormant on QEMU
+(BSP roster index is 0), but correctness must not depend on that" — if
+`lapic_apic_id_at(0) == lapic_id()` then `ridx == 0` and the migration branch
+never runs. Recording it as **latent** rather than causal, because asserting it
+without measuring `ridx` would be the same error this investigation has already
+made seven times.
+
+`rqq`/`rqpres` decide it directly: **bit 0 set in `rqq` while clear in
+`rqpres`** is this exact bug, live. Baseline on a passing boot is
+`rqq=1 rqpres=1` — bit 0 queued *and* present, i.e. the dormant case.
+
 ## Note on the uniprocessor case
 
 `smoke-agent-click` mode A boots with no `-smp` (DDR-936), so only CPU 0 exists

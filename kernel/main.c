@@ -510,6 +510,15 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
     kputs(fname);
     kputs(" reason=elf rc=");
     kputdec((uint64_t)(-lr));
+    /* DDR-945: free frames AT THE FAILURE, not 500 ticks later. The [hb] sample
+     * cannot answer this: elf_load's ELF_E_NOMEM paths call
+     * vmm_destroy_address_space() on the way out, returning up to 2047 frames,
+     * so the next heartbeat shows the RECOVERED count and a transient
+     * exhaustion is invisible. Reading pmmfree here is the only way to tell
+     * "no frames were available" from "frames were available and something
+     * else failed". */
+    kputs(" pmmfree=");
+    kputdec(pmm_free_page_count());
     kputs("\r\n");
     return 0;
 }
