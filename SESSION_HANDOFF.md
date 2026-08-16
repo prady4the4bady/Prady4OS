@@ -5072,3 +5072,58 @@ Credential Manager, which caches `binaryzbackend` independently of gh. Working
 form used for every push this slice:
 `git -c credential.helper='!gh auth git-credential' push origin dev/phase1`
 Also: remote had moved ahead (your two `ops:` commits) — rebase, never force.
+
+## Checkpoint — 2026-08-16, tip `ed74ac7` (DDR-937)
+
+### DDR-937 — the evresize press branch was ALREADY observable
+No new instrument was needed for the DDR-935 second defect. Every branch of
+the compositor's press dispatch (`user/compositor.c:1085-1174`) **except** the
+resize corner already prints a distinct sentinel:
+
+| log line | meaning |
+|---|---|
+| `PRADYOS_MOUSE_OK x y` | corner hit-test MISSED — and names the coord used |
+| `PRADYOS_DRAG_START` | landed on a title bar instead |
+| `PRADYOS_WM_MIN/MAX/CLOSE` | hit a window button |
+| *(none of these)* | the button-down edge was never observed at all |
+
+Four outcomes, four different subsystems. CI never showed any of them because
+both `smoke-evresize` assertions dumped only `tail -20` and the press happens
+long before the end of a boot log. **Three CI failures produced no branch
+evidence for that reason alone** — the same gap DDR-896 closed for
+`smoke-agent-click`. Dump widened to press/geom lines + `tail 200`.
+
+Hygiene caught my own error: the first version greped `PRADYOS_EV_RESIZE`, a
+strict prefix of `PRADYOS_EV_RESIZE_OK`. `sentinel_collision.sh` rejected it.
+Fixed to the full form. Sentinel count unchanged at 159.
+
+### §6.2-D1 correction — the blast radius is 16 gates, not 12
+DDR-931's design says 12 gates must opt in when `sfs_format` moves behind
+`probe_enabled()`. The actual set that asserts on `[sfs]`/`PRADYOS_SFS*`
+sentinels is **16**:
+
+```
+smoke-blk-integrity  smoke-blkmq       smoke-blkmq-trace  smoke-fs
+smoke-fs-sfs-rw      smoke-gpu         smoke-msixap       smoke-sfs-btree
+smoke-sfs-btree-smp4 smoke-sfs-dirs    smoke-sfs-gc       smoke-sfs-persist
+smoke-sfs-unlink     smoke-sfsroot     smoke-shell        smoke-user
+```
+(`awk` over the Makefile mapping each `smoke-*:` recipe to the sentinels it
+references.) Note `smoke-gpu`, `smoke-msixap`, `smoke-shell` and `smoke-user`
+are in the set — gates whose names give no hint they depend on the SFS
+self-test. Update DDR-931 before starting §6.2-D1; a 12-gate plan would have
+left four gates broken.
+
+Also relevant: DDR-770 already implements a "provisioned, do not format"
+path (`kernel/main.c:1122-1131` — if `/etc/aether/config` starts with `mode=`,
+keep that mount and skip the kernel format). §6.2-D1 should extend that
+existing mechanism rather than invent a second one.
+
+### State
+- Pushed `ed74ac7`. CI: 4+ runs queued/in flight — no local QEMU (§6.0-A).
+- Three-greens count: **0**. `main` still `27ba426`.
+- Open: `smoke-agent-click` (DDR-936 instrument shipped, awaiting a failing run
+  to read `ubcas=`/`ubrq=`), `smoke-evresize` (DDR-937 dump shipped, awaiting a
+  failing run to read the branch), `smoke-rtc-smp`.
+- **Do not fix either defect until its instrument reads out.** That is the
+  DDR-920/928/932 lesson and it has now cost four wrong mechanisms.
