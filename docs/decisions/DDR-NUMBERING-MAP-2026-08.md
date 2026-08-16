@@ -61,3 +61,32 @@ ls docs/decisions/ docs/ddr/ | grep -oE 'DDR-[0-9]{3}' | sort -u | tail -5
 ```
 
 Next free at the time of writing: **DDR-934**.
+
+## Source-code comments also cite the OLD numbers — deliberately left alone
+
+In-tree comments in `kernel/`, `user/`, `tools/` and the `Makefile` still cite
+the pre-renumber numbers for this series (e.g. `sched.c` says `DDR-887` where the
+document is now DDR-919). **They were NOT rewritten, on purpose.**
+
+A blanket substitution over the 885-900 range would corrupt correct references,
+because source citations in that range are a MIX of this series and pre-existing
+DDRs of the same number. Verified examples of references that must NOT change:
+
+| file | cites | actually means (pre-existing) |
+|---|---|---|
+| `kernel/fs/sfs/sfs.c` | DDR-889 | SFS on-disk freelist |
+| `kernel/acpi/acpi.c` | DDR-892 | ACPI S3 and P-states |
+| `user/init.c` | DDR-891 | service manager |
+| `user/prism.c` | DDR-888 | PRISM agent DSL |
+| `user/compositor.c` | DDR-893 | manual-mode layout |
+
+Distinguishing mine from those requires per-reference judgment, and getting it
+wrong silently breaks a correct citation — a worse outcome than a stale one that
+this table resolves.
+
+**Rule for readers:** when a source comment cites 885-900 or 916, check the
+subject. If it matches a row in the table above, use the pre-existing DDR. If it
+matches this series' subject (g_ticks, spin, probe verdicts, cadence, drag,
+evresize, churn rc, blkint), add the offset from the mapping table.
+
+New code from DDR-934 onward cites the correct current numbers.
