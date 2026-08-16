@@ -46,6 +46,14 @@ static int g_up;
 
 static volatile int      g_abs_x, g_abs_y;   /* raw axis value [0, 32767] */
 static volatile uint32_t g_buttons;          /* bit0 = left, bit1 = right, bit2 = middle */
+static volatile uint32_t g_btn_edges;        /* DDR-941: press edges seen by the driver */
+
+/* DDR-941: read-only accessor (NOT draining — the compositor-side count it is
+ * compared against is cumulative too, and a drained counter cannot be compared
+ * against a cumulative one). */
+uint32_t virtio_input_btn_edges(void) {
+    return __atomic_load_n(&g_btn_edges, __ATOMIC_RELAXED);
+}
 static volatile int      g_wheel;            /* DDR-725: accumulated wheel detents */
 
 static void fold_event(const struct virtio_input_event *e) {
@@ -65,6 +73,15 @@ static void fold_event(const struct virtio_input_event *e) {
     case EV_KEY:
         if (e->code >= BTN_LEFT && e->code <= BTN_LEFT + 2) {
             uint32_t bit = 1u << (e->code - BTN_LEFT);
+            /* DDR-941 (mode B): count press edges the DRIVER saw. SYS_MOUSE_POLL
+             * exposes current state, not an event queue, so a press+release that
+             * completes between two ring-3 polls is invisible to the compositor
+             * BY CONSTRUCTION — no edge-detector bug required. Comparing this
+             * count against the compositor's PRADYOS_BTN_STATE transitions is
+             * what separates "the event never arrived" from "it arrived and was
+             * coalesced before ring 3 looked". */
+            if (e->value && !(g_buttons & bit))
+                __atomic_add_fetch(&g_btn_edges, 1, __ATOMIC_RELAXED);
             if (e->value) g_buttons |= bit; else g_buttons &= ~bit;
         }
         break;

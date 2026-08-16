@@ -306,6 +306,18 @@ static void sched_trace_note(struct tcb *chosen, struct tcb *fair,
     }
 }
 
+/* DDR-941: see the increment site in rq_take below. Cumulative, not drained —
+ * a single strand event is one increment in a whole boot, and a drained counter
+ * would report it on one heartbeat and zero forever after, which is precisely
+ * how it would be missed. */
+static volatile uint32_t g_rq_miss;
+static volatile uint32_t g_rq_miss_state;
+
+void sched_take_rqmiss_stats(uint32_t *miss_out, uint32_t *state_out) {
+    if (miss_out)  *miss_out  = __atomic_load_n(&g_rq_miss, __ATOMIC_RELAXED);
+    if (state_out) *state_out = __atomic_load_n(&g_rq_miss_state, __ATOMIC_RELAXED);
+}
+
 static struct tcb *rq_take(struct rq *q) {
     struct tcb *t;
     while ((t = q->head)) {
@@ -317,6 +329,13 @@ static struct tcb *rq_take(struct rq *q) {
         __atomic_store_n(&t->rq_on, 0, __ATOMIC_RELEASE);
         if (t->state == THREAD_READY)
             return t;
+        /* DDR-941 (DDR-936 follow-up): this entry has just been UNLINKED and its
+         * rq_on cleared, and it is not READY — so it is dropped and nothing
+         * re-enqueues it. That strands the thread permanently while incrementing
+         * neither ubcas nor ubrq, which is exactly the hole left when those two
+         * read zero on a failing run. Count it and record the state seen. */
+        __atomic_add_fetch(&g_rq_miss, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_rq_miss_state, t->state, __ATOMIC_RELAXED);
     }
     return 0;
 }

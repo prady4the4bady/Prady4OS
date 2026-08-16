@@ -1080,6 +1080,18 @@ int main(void) {
                 printf("PRADYOS_SCROLL d=%d\n", ms.wheel);
                 fflush(stdout);
             }
+            /* DDR-941 (mode B): log the button state ONLY when it changes.
+             * SYS_MOUSE_POLL reads current state and returns 0 on every call
+             * (sys_input.c:39-45) — it is not an event queue — so this block
+             * runs every iteration of the main loop. An unconditional print
+             * here would emit thousands of lines per second, swamp the serial
+             * log, and slow the compositor enough to mask the ~11% flake it is
+             * meant to catch. On-change keeps every transition and no spam. */
+            if (ms.buttons != prev_btn) {
+                printf("PRADYOS_BTN_STATE buttons=%u prev=%u x=%d y=%d\n",
+                       (unsigned)ms.buttons, (unsigned)prev_btn, ms.x, ms.y);
+                fflush(stdout);
+            }
             int down = ms.buttons && !prev_btn;
             int up = !ms.buttons && prev_btn;
             if (down) {

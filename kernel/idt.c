@@ -196,6 +196,18 @@ static void timer_tick(struct regs *r) {
           kputs(" ubcas="); kputdec(uc);
           kputs(" ubrq=");  kputdec(ur);
           kputs(" ubst=");  kputdec(us); }
+        /* DDR-941: rqmiss counts threads dropped by rq_take for being non-READY
+         * at pick time — the strand path that increments neither ubcas nor ubrq.
+         * btnedge counts press edges the input DRIVER saw; compare it against
+         * the compositor's PRADYOS_BTN_STATE transitions to tell a lost event
+         * from one coalesced between two ring-3 polls. Both cumulative. */
+        { extern void sched_take_rqmiss_stats(uint32_t *, uint32_t *);
+          extern uint32_t virtio_input_btn_edges(void);
+          uint32_t rm = 0, rs = 0;
+          sched_take_rqmiss_stats(&rm, &rs);
+          kputs(" rqmiss="); kputdec(rm);
+          kputs(" rqmst=");  kputdec(rs);
+          kputs(" btnedge="); kputdec(virtio_input_btn_edges()); }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */

@@ -474,8 +474,16 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
      * image into the new address space. */
     enum { USER_ELF_MAX = 256u * 1024u };
     uint64_t buf = pmm_alloc_pages(6);
-    if (!buf)
+    if (!buf) {
+        /* DDR-941: was a SILENT return 0. ~30 probes boot through this one
+         * function, so an unnamed failure is indistinguishable from a probe
+         * that booted fine and then misbehaved — the exact ambiguity that made
+         * smoke-wmorder's "never shrank" unreadable. */
+        kputs("[boot-load] FAILED ");
+        kputs(fname);
+        kputs(" reason=no-256k-buf\r\n");
         return 0;
+    }
     if (vfs_open(cap, smnt, fname, &rf) != 0) {
         pmm_free_pages(buf, 6);
         return 0;
@@ -494,7 +502,13 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
         kputs("[user] ELF loaded from SFS; ring-3 thread spawned\r\n");
         return ut;
     }
-    kputs("[user] ELF load FAILED rc=");
+    /* DDR-941: name the file. "ELF load FAILED rc=8" with ~30 probes booting
+     * through this function does not say WHICH probe never started, so a gate
+     * that later reports a missing behaviour cannot tell "its probe failed to
+     * load" from "its probe loaded and then failed". */
+    kputs("[boot-load] FAILED ");
+    kputs(fname);
+    kputs(" reason=elf rc=");
     kputdec((uint64_t)(-lr));
     kputs("\r\n");
     return 0;
