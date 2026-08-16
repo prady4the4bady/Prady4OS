@@ -558,15 +558,24 @@ static void probe_thread(void *arg) {
 static void smpsched_proof(void) {
     if (!g_smp_have_aps)
         return;
+    /* DDR-939: same spawn check as rqstress_proof — a cross-CPU FAIL must not
+     * be read as a scheduling defect when no probe thread was ever created. */
+    int probe_spawned = 0;
     for (int i = 0; i < 6; i++)
-        sched_create(probe_thread, 0, "probe");
+        if (sched_create(probe_thread, 0, "probe"))
+            probe_spawned++;
     smp_resched_all();                           /* wake idle APs to pick them up */
     uint32_t self_bit = 1u << this_cpu()->cpu_idx;
     uint64_t dl = g_ticks + 100;
     while (!(g_probe_cpumask & ~self_bit) && g_ticks < dl)
         __asm__ volatile("pause");
-    kputs((g_probe_cpumask & ~self_bit) ? "[smp] sched cross-CPU OK\r\n"
-                                        : "[smp] sched cross-CPU FAIL\r\n");
+    if (g_probe_cpumask & ~self_bit) {
+        kputs("[smp] sched cross-CPU OK\r\n");
+    } else {
+        kputs("[smp] sched cross-CPU FAIL spawned=");   /* DDR-939 */
+        kputdec((uint64_t)probe_spawned);
+        kputs("/6\r\n");
+    }
 }
 
 /* DDR-SMP-rq-1 proof: a thread storm across the per-CPU runqueues — 24
@@ -579,9 +588,16 @@ static void rqstress_worker(void *arg) {
     __atomic_add_fetch(&g_rqs_done, 1, __ATOMIC_SEQ_CST);
 }
 static void rqstress_proof(void) {
+    /* DDR-939: count successful spawns. `n=0` alone cannot distinguish 24
+     * threads that were created and never scheduled (the DDR-936 class) from
+     * sched_create returning NULL 24 times — 24 x (TCB + 16 KiB stack) is
+     * ~384 KiB of kernel heap requested late in boot. Those are different
+     * subsystems. Same check DDR-934 added to the blk probes. */
+    int rqs_spawned = 0;
     for (int wave = 0; wave < 3; wave++) {
         for (int i = 0; i < 8; i++)
-            sched_create(rqstress_worker, 0, "rqs");
+            if (sched_create(rqstress_worker, 0, "rqs"))
+                rqs_spawned++;
         smp_resched_all();
         uint64_t dl = g_ticks + 100;
         while (g_rqs_done < (uint32_t)((wave + 1) * 8) && g_ticks < dl)
@@ -609,7 +625,13 @@ static void rqstress_proof(void) {
          * from "the runqueues lost a thread". */
         kputs("[smp] rqstress FAIL n=");
         kputdec(g_rqs_done);
-        kputs("\r\n");
+        /* DDR-939: spawned<24 => allocation failure, and the DDR-936 scheduler
+         * hunt does not apply to this instance. spawned=24 with n=0 => the
+         * threads exist and none ran, which makes this the loudest reproducer
+         * of the DDR-936 class (24 threads, and ubcas=/ubrq= are already live). */
+        kputs(" spawned=");
+        kputdec((uint64_t)rqs_spawned);
+        kputs("/24\r\n");
     }
 }
 
