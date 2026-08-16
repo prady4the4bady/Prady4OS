@@ -4972,3 +4972,41 @@ on the later tip. It is 3/3 locally. Watch it; do not assume DDR-895 is complete
 until it survives a few CI runs.
 
 ### main: 27ba426, 0 of 3 greens. Do not promote.
+
+## Checkpoint — 2026-08-16, tip `cf3146c` (DDR-935)
+
+**Stopped on §5c (context >= 85%), at a clean atomic boundary.**
+
+### Done this slice
+- **DDR-935** — fixed the `PRADYOS_WM_GEOM` field parse in
+  `tools/qemu_runner/drag_inject.sh` that **I broke in DDR-929**. Appending
+  `dg=X,Y` after `rz=X,Y` made `${rz##*,}` return dg's Y. Both parsers now cut
+  the field at the first space before splitting on the comma.
+- Verified: `rz` Y = 8416 (correct) in 3/3 runs; `smoke-drag` 3/3.
+- Hygiene: `ci-shard-check` OK, `sentinel_collision` OK (159 sentinels).
+  Shell+docs only — no kernel rebuild, so rodata/blkmq are not implicated.
+- Pushed `cf3146c`. Note: `git push` first failed 403 as `binaryzbackend`;
+  fixed with `gh auth switch --user prady4the4bady`. **Check the active gh
+  account before pushing** — it does not persist reliably.
+
+### CURRENT_ACTIVE_TASK — the SECOND evresize defect
+`smoke-evresize` is **still 2/3 after the parse fix**. Run 1 pressed the
+**correct** corner and no resize started. The parse bug was masking a second,
+independent defect in the press-to-resize path.
+
+Next step is a **capture, not a fix**: instrument what the compositor sees for
+the press on a failing run (does it receive the button event at all? does it
+hit-test into the 14x14 corner? does it enter the resize state and then lose
+it?). Do NOT guess a fix — this is the DDR-917/918/920/923 "one message,
+several causes" class, and the last three wrong calls in this area
+(DDR-920/928/932) all came from inferring a mechanism instead of observing one.
+
+`smoke-evresize` is **NOT clear for the three-greens promotion count** until
+this is resolved. `main` remains at `27ba426`.
+
+### Queue behind it (unchanged)
+1. Read CI on `cf3146c` for `spawned=`/`prog=` — resolves the blk `done=0x0`
+   question (DDR-934). `spawned<total` => heap exhaustion, not scheduling.
+2. Three CI greens on ONE tip -> promote `main`.
+3. §6.2-D1 SFS default boot root (design in DDR-931; 12 gates must opt in).
+4. §6.2-D2 FAT32 multi-cluster probe. 5. §6.2-D3..D7. 6. §6.3 onward.
