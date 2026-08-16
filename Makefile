@@ -2451,8 +2451,16 @@ smoke-evresize: $(IMG) fat-image sfs-image
 	    -device virtio-gpu-pci -device virtio-tablet-pci \
 	    -qmp unix:/tmp/pevrs.sock,server,nowait \
 	    -serial file:build/evresize.log -display none -no-reboot || true
-	@grep -q "PRADYOS_RESIZE_REQ id=1" build/evresize.log || { echo "[evresize] FAIL — corner drag did not request a resize"; tail -20 build/evresize.log; exit 1; }
-	@grep -q PRADYOS_EV_RESIZE_OK build/evresize.log || { echo "[evresize] FAIL — client did not honor the resize"; tail -20 build/evresize.log; exit 1; }
+	@# DDR-937: dump the press-dispatch lines on failure. Every press branch
+	@# except the resize corner already prints a distinct sentinel, so the log
+	@# names which branch swallowed the click — MOUSE_OK means the corner
+	@# hit-test missed (with the coordinate it missed with), DRAG_START means it
+	@# hit a title bar, WM_MIN/MAX/CLOSE means a window button, and none of them
+	@# means the button-down edge was never observed at all. WM_GEOM is included
+	@# so the published corner can be compared against the injected point. The
+	@# old `tail -20` scrolled all of this past unseen.
+	@grep -q "PRADYOS_RESIZE_REQ id=1" build/evresize.log || { echo "[evresize] FAIL — corner drag did not request a resize"; echo "--- press/geom lines (DDR-937) ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG_START|PRADYOS_RESIZE_REQ|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)|PRADYOS_EV_RESIZE_OK|PRADYOS_AGENT_TRIGGER' build/evresize.log || echo "(none)"; echo "--- tail 200 ---"; tail -200 build/evresize.log; exit 1; }
+	@grep -q PRADYOS_EV_RESIZE_OK build/evresize.log || { echo "[evresize] FAIL — client did not honor the resize"; echo "--- press/geom lines (DDR-937) ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG_START|PRADYOS_RESIZE_REQ|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)|PRADYOS_EV_RESIZE_OK|PRADYOS_AGENT_TRIGGER' build/evresize.log || echo "(none)"; echo "--- tail 200 ---"; tail -200 build/evresize.log; exit 1; }
 	@echo "[evresize] PASS — $$(grep -a PRADYOS_EV_RESIZE_OK build/evresize.log | head -1)"
 
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
