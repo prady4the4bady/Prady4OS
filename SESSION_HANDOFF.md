@@ -5329,3 +5329,65 @@ classified* A2. Prior A2 readings are suspect because two of four were mode B.
 - `main` `27ba426`; three-greens **0**.
 - Next free DDR: **948** (945/946/947 taken — verify both dirs, §0.4).
 - Auth: `git -c credential.helper='!gh auth git-credential' push`.
+
+## Checkpoint — 2026-08-16, tip `e3d31f6` (DDR-948)
+
+### Phase A1 COMPLETE — full TCB audit, §0.6 satisfied
+Audited **all 64** `struct tcb` fields against `sched_create_state`, not just
+the DDR-946 one. 62/64 explicitly initialised. The two that are not:
+- `fork_regs` — read only under `if (t->forked)`; `t->forked = 0` IS
+  initialised (`sched.c:904`/`:963`). **Guarded.**
+- `sig_saved` — `sys_sigreturn` returns `-EINVAL` unless `sig_active` is set,
+  and `signal_deliver` writes `sig_saved` before setting it. **Guarded.**
+No live defect. Do not "fix" these; the record that they are guarded IS the
+deliverable.
+
+### A3 instrument shipped — `writes=` at `sys_exit`
+`[user] sys_exit(<st>) pid=<p> writes=<n> — thread terminating`
+
+**The instrument the plan specified would NOT have worked.** F5 called for a
+marker "before the first `sys_write` in the agent's `main()`" — as a ring-3
+`printf` it travels the very path under suspicion, so its absence proves
+nothing. Built kernel-side instead, counting attempts BEFORE fd validation, and
+counting **`writev` as well as `write`** (musl stdio uses `writev`,
+`sys_io.c:150-152` — a write-only counter would read 0 on every run).
+
+Reading on an A1 failure (pid IS in a `sys_exit` line):
+- `writes=0` ⇒ `main` never entered ⇒ defect is **pre-main** (crt / ELF entry)
+- `writes>0` ⇒ attempted and accepted, no output ⇒ downstream of `fd_write_user`
+
+**Baseline (passing run):** printing agents show `writes=1..3`, so `writes=0` is
+a live discriminator. Also explains DDR-940's unexplained `exit(127)` threads:
+`sys_exit(127) pid=50 writes=0` — no output attempted, consistent with main
+never entered (127 = conventional exec-failure code).
+
+### ⚠ DIRECTIVE v3 CONTRADICTS MEASURED DATA — resolve before acting on D4
+Directive D4 states: *"Confirmed root cause: `sched_create` NULL return under
+heap pressure. Fix: NULL-check + KASSERT … + `smp_resched_all()`."*
+
+**DDR-942 refuted this.** The failing run measured `spawned=4/4` — all four TCBs
+were created, so `sched_create` did **not** return NULL. `done=0x0` further
+showed the workers never reached even their own failure path. And
+`smp_resched_all()` targets the missing-IPI mechanism, refuted **four** separate
+times (DDR-934/936/939 + `rqstress_proof` already calls it and still fails).
+
+Implementing D4 as written would violate R4 (no fix without instrument data).
+**A6 is BLOCKED pending an operator decision:** drop the refuted cause, or keep
+the NULL-check purely as defensive hardening (not as a workers-late fix).
+
+### Other stale facts in directive v3 (corrected here)
+- Active tip was `23bc14b`, not `7a2d864`; now `e3d31f6`.
+- **Next free DDR is 949** — 947 was allocated last session, 948 this one.
+- F5's replacement marker is unusable as ring-3 `printf` (see above).
+
+### CI / gate state
+- `e8f880e` **green**. `23bc14b` (docs-only on top of it) **failed** on
+  `smoke-cadence` + `smoke-wmorder` — same code, different verdict ⇒
+  intermittents, not regressions. `smoke-cadence` is NEW to the flake list.
+- Sentinels **160**. Build warning-clean. All R7 hygiene gates pass.
+- `main` `27ba426`; three-greens **0**.
+
+### CURRENT_ACTIVE_TASK
+Hunt an **A1** failure (triggered pid present in a `sys_exit` line) and read
+`writes=`. That single field decides pre-main vs post-`fd_write_user`. Use the
+corrected classifier (assert `trig>0` FIRST — see the DDR-947 harness defect).
