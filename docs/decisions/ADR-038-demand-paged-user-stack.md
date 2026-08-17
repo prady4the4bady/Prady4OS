@@ -200,3 +200,78 @@ the window, which is measurable rather than speculative.
 **Next step is a measurement, not a choice:** instrument `vmm_user_range_ok`
 failures by address so the actual stack depth syscall buffers reach is known.
 That number sizes option 3 and either confirms or refutes the mechanism above.
+
+---
+
+## Step 1-A MEASUREMENT — my regression diagnosis does NOT hold up
+
+Instrumented `vmm_user_range_ok` to record the deepest not-present offset below
+`USER_STACK_TOP` (prints only on a new maximum, so it cannot perturb timing the
+way the `cur=` ISR print did). Applied the Option-1 stash and re-ran the three
+gates that had failed.
+
+**Result:**
+
+```
+smoke-blkmq:             PASS
+smoke-rqstress-liveness: PASS
+smoke-blk-integrity:     PASS
+[stkdepth] lines:        ZERO
+```
+
+Two conclusions, both against what the section above claims:
+
+### 1. The regression did not reproduce
+
+All three gates pass **with Option 1 applied**. The previous section states
+"the regression is MINE", based on one failing sample per gate against one
+passing sample. **That was a single-sample generalisation** — the same error
+made in DDR-945 (mode A) and DDR-947 (the 42-pin), and it is now made a third
+time, by me, in this ADR.
+
+Three gates failing together looked like strong evidence. It was not: these are
+three of the gates already on the known-intermittent list, and intermittents
+cluster. A 1-vs-1 comparison cannot separate "my change broke it" from "the
+flaky gates flaked".
+
+### 2. The `vmm_user_range_ok` mechanism is UNSUPPORTED
+
+`[stkdepth]` never fired. If untouched stack pages were reaching
+`vmm_user_range_ok` and being rejected, the counter would have printed on the
+first occurrence. Zero lines means **no not-present stack address was ever
+validated** in these runs.
+
+So the mechanism the section above presents as the confirmed root cause — with
+a code citation and a clean explanation — has **no measurement behind it**. It
+was plausible, internally consistent, and wrong in the same way the ten
+previously-retired mechanisms were.
+
+The `vmm_user_range_ok` *hazard* remains real in principle (its contract genuinely
+never faults, and Rule 17 is worth keeping). But it is **not** what happened here.
+
+### What is actually still unknown
+
+- Whether Option 1 regresses anything at all. The rate is unmeasured: 3/3 pass
+  in one round, 0/3 in an earlier round. **A proper rate needs N≥10 per gate
+  with the change applied, compared against N≥10 without it.** That comparison
+  has not been run and is the real Step 1-A.
+- Therefore **W is still unmeasured**, and Option 3 cannot be sized. The
+  directive's instruction "DO NOT GUESS W. Measure it" stands — and the
+  measurement did not produce a W because the instrument never fired.
+
+### State of the code
+
+Option 1 + the instrument are **stashed, not committed**. Nothing is pushed.
+Per RULE 16 a change touching `kernel/mm/` and `kernel/idt.c` may not be pushed
+without a revert verification, and the verification I ran was too small a sample
+to conclude anything in either direction.
+
+### The honest status of this ADR
+
+- The **frame win is measured and real**: `pmmfree` 14,316 → 26,538+, ~12,200
+  frames recovered. That number came from a passing gate and stands.
+- The **regression is unproven in both directions.**
+- The **root cause named above is refuted as an explanation of these failures.**
+- **Next step is unchanged in kind but larger in size:** N≥10 with/without runs
+  per gate before any conclusion about Option 1's safety, and before Option 3
+  can be sized.
