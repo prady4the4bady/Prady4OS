@@ -2314,7 +2314,11 @@ static void sched_demo(void) {
     kputs(" MHz\r\n");
 
     sched_init();
-    sched_create(bench_partner, 0, "bench");
+    /* DDR-949: sched_create returns NULL on TCB/stack kmalloc failure. Unchecked,
+     * bench_ctx_switch below would measure a context switch against a partner
+     * that does not exist and report a bogus number as a real measurement. */
+    if (!sched_create(bench_partner, 0, "bench"))
+        kputs("[bench] FAILED to spawn partner — timing below is not valid\r\n");
     bench_ctx_switch(tsc_hz);
     bench_done = 1;                           /* let the bench thread retire */
 
@@ -2324,7 +2328,11 @@ static void sched_demo(void) {
     ipc_demo();
     ring_demo();
     bus_demo();
-    sched_create(blk_test_thread, 0, "blk");
+    /* DDR-949: same class as the bench spawn above — an unchecked NULL here
+     * means the blk self-test silently never runs and its absence reads as
+     * "no output", not as "failed to start". */
+    if (!sched_create(blk_test_thread, 0, "blk"))
+        kputs("[blk] FAILED to spawn blk_test_thread\r\n");
     sched_start_reaper();                     /* 5b-9: reclaim orphaned zombie procs */
     struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
     if (fst)
