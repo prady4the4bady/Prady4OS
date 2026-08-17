@@ -5442,3 +5442,58 @@ Use the corrected classifier: **assert `trig>0` FIRST** (the DDR-947 harness bug
 reported mode-B runs as A2).
 
 ### Next free DDR: 950
+
+## Checkpoint — 2026-08-16, DDR-943 CONFIRMED
+
+### DDR-943 (PMM frame exhaustion) is now CONFIRMED by measurement
+CI run **31989445727** (tip `c2ae001`), the boot that reddened `smoke-winops`:
+```
+pmmfree=16393 pmmtot=28630     <- steady
+pmmfree=14588
+pmmfree=2130                   <- collapsing
+pmmfree=2096                   <- 7.3% of RAM left
+```
+**2,096 free frames is barely ONE eager stack** (a process needs exactly 2,048,
+`elf.c:189-200`). Predicted threshold and observed floor agree. Status raised
+from PLAUSIBLE/UNCONFIRMED to **CONFIRMED**.
+
+**A6/D6 is unblocked.** Fix = demand-paged stack (top page + guard page, fault
+the rest in). It touches ADR-021's stack contract and the #PF handler, so it
+needs **its own ADR before code**. Keep `pmmfree=` as the regression witness:
+after the fix the floor must never approach 2,048.
+**Still forbidden:** raising QEMU RAM (masks a real per-process cost).
+
+**NOT claimed:** this is not the cause of the same boot's workers-late.
+`blkint_worker` needs ONE page and 2,096 were free; `done=0x0` shows the workers
+never reached their own failure path. §6.0-C — two defects, one boot. The
+honest link is only that operating near the frame floor plausibly *widens the
+window* for timing-sensitive defects — a hypothesis, not a measured cause.
+
+### Regression triage on `c2ae001` (my DDR-949 commit) — NOT a regression
+Both `c2ae001` and `c83850d` went RED, prior tips green, so I checked whether my
+change was implicated. **Decisive test:** my new code emits output *only* on a
+NULL spawn. `grep -c "FAILED to spawn"` = **0** on both failing runs ⇒ both
+spawns succeeded ⇒ my change took its no-op path and cannot have caused these.
+Failures were `smoke-cadence` (known intermittent, F13) and `smoke-winops` via
+the blk-integrity foreign-probe rule.
+
+### Same boot, other instruments
+`spawned=4/4 done=0x0 prog=0,0,0,0` (workers-late, unchanged).
+`preempt` climbing 1417→2407 with `supp=0` ⇒ **scheduler healthy** during the
+blk failure. Workers-late is not preempt suppression.
+
+### CI / promotion
+`c2ae001` RED, `c83850d` RED (both intermittents). R8 three-greens count **0**.
+`main` `27ba426`.
+
+### CURRENT_ACTIVE_TASK
+1. **A6/D6** — write the ADR for demand-paged stack (ADR-021 contract change),
+   then implement. This is now the best-evidenced open defect in the tree.
+2. **A3** — `hunt.sh` (corrected classifier, `trig>0` first) is written and
+   ready at `build/gatelogs/hunt.sh`; needs a CI-clear window. Read `writes=`
+   on the first A1 failure. Pre-read done: the agent links musl CRT
+   (`Makefile:380`) and `elf_load` builds an auxv of only `AT_PAGESZ`+`AT_NULL`
+   (`elf.c:218-221`) — no `AT_PHDR`/`AT_PHNUM`/`AT_RANDOM`, which static musl's
+   `__init_tls`/`__init_ssp` consult. Candidate to CHECK if `writes=0`, not a claim.
+
+### Next free DDR: 950

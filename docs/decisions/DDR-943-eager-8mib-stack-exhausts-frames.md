@@ -1,11 +1,13 @@
 = DDR-943 — the eager 8 MiB user stack exhausts a 128 MiB machine at ~15 processes
 
-> **STATUS DOWNGRADED — see "The evidence does not yet support this" at the
-> bottom. The mechanism is real and the arithmetic holds, but the causal claim
-> is NOT established, and two statements in this document are wrong.**
+> **STATUS: CONFIRMED (2026-08-16). See "CONFIRMED — pmmfree reaches the
+> predicted exhaustion threshold" at the bottom: CI 31989445727 measured
+> pmmfree=2096 against a 2,048-frame per-process cost. The two mid-document
+> corrections still stand and are worth reading — rc=8 does not uniquely
+> identify the stack loop, and the earlier pmmfree reading was inconclusive.**
 
-**Status:** ~~ACCEPTED~~ **PLAUSIBLE, UNCONFIRMED** (mechanism verified in
-source; causation not measured).
+**Status:** ~~PLAUSIBLE, UNCONFIRMED~~ **CONFIRMED** — the eager stack drives
+free frames to the failure threshold (measured, not inferred).
 **Date:** 2026-08-16
 **Evidence:** CI run 31952413936 (tip `62c65cd`), shard 0 — 11 x
 `[boot-load] FAILED <name> reason=elf rc=8`.
@@ -209,3 +211,52 @@ later. Then:
 Until that reads out, this DDR is a **plausible mechanism with correct
 arithmetic and no proof of causation**, and must not be cited as the root cause
 of the `rc=8` failures.
+
+---
+
+## CONFIRMED — `pmmfree` reaches the predicted exhaustion threshold
+
+**CI run 31989445727** (tip `c2ae001`), the failing boot that reddened
+`smoke-winops` via the blk-integrity foreign-probe rule:
+
+```
+pmmfree=16393 pmmtot=28630     <- steady state
+pmmfree=14588 pmmtot=28630
+pmmfree=2130  pmmtot=28630     <- collapsing
+pmmfree=2096  pmmtot=28630     <- 7.3% of RAM left
+```
+
+**2,096 free frames is barely ONE eager stack.** A process needs exactly 2,048
+(`elf.c:189-200`, 8 MiB / 4 KiB). So at that instant:
+
+- the next `elf_load` has ~48 frames of headroom over its own requirement;
+- **two** concurrent loads cannot both succeed;
+- any other frame consumer tips it into `ELF_E_NOMEM`.
+
+This is the measurement this DDR was downgraded for lacking. The predicted
+threshold and the observed floor agree. **The mechanism is confirmed as real
+and near-critical.** The status is raised from PLAUSIBLE/UNCONFIRMED to
+**CONFIRMED — the eager stack drives free frames to the failure threshold.**
+
+### What is still NOT claimed
+
+This does **not** make frame exhaustion the cause of the blk workers-late
+failure in the same boot (§6.0-C). `blkint_worker` needs a **single** page and
+2,096 were free, so its `pmm_alloc_page()` would have succeeded — and `done=0x0`
+still shows the workers never reached even their own failure path, which
+exhaustion does not explain. Two defects in one boot, as recorded throughout.
+
+The honest link is weaker and worth stating precisely: the eager stack makes the
+whole system operate near the frame floor, which plausibly *widens the window*
+for other timing-sensitive defects. That is a hypothesis about interaction, not
+a measured cause, and it must not be used to merge the two.
+
+### Fix is now unblocked (A6 / D6)
+
+Demand-paged stack: map the top page (needed for the SysV initial frame) plus a
+guard page, fault the rest in. It touches ADR-021's stack contract and the #PF
+handler, so it needs its own ADR before code. `pmmfree=` stays in the tree as
+the regression witness — after the fix, the floor should never approach 2,048.
+
+**Still forbidden:** raising QEMU RAM. It would move the floor without removing
+a 2,048-frames-per-process cost that is real on any 128 MiB machine.
