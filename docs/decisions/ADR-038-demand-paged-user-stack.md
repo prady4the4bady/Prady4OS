@@ -275,3 +275,37 @@ to conclude anything in either direction.
 - **Next step is unchanged in kind but larger in size:** N≥10 with/without runs
   per gate before any conclusion about Option 1's safety, and before Option 3
   can be sized.
+
+### The N>=10 attempt was VOID — recorded so it is not mistaken for data
+
+Attempted the rate comparison immediately. It produced **no usable result**, for
+two independent reasons, both mine:
+
+1. **The counters printed empty** (`blkmq WITH Option1: pass= fail=`). The
+   `$((p+1))` arithmetic was mangled by the Windows→WSL quoting layer, so
+   nothing was ever counted. The run exited 0 and *looked* like it had worked.
+2. **The source was stashed mid-run.** `make` rebuilds the image, so later
+   iterations tested a kernel **without** Option 1. Even with working counters
+   the two arms would have been mixed into one number.
+
+Either alone voids it. A void measurement that looks like data is worse than no
+measurement — it is how a wrong conclusion acquires a citation.
+
+**Mitigation shipped:** `tools/ci/ab_rate.sh`. It exists as a file rather than an
+inline command specifically because the inline form failed silently twice, and it
+**hashes `build/kernel.bin` before and after every run**, aborting with `VOID` if
+the kernel changes mid-sequence. That makes the arm-mixing failure impossible to
+commit silently rather than merely discouraged.
+
+**Step 1-A remains UNDONE.** The command to run, with the Option-1 stash applied
+and the tree left untouched for the duration:
+
+```
+bash tools/ci/ab_rate.sh smoke-blkmq            10 with-option1
+bash tools/ci/ab_rate.sh smoke-blk-integrity    10 with-option1
+bash tools/ci/ab_rate.sh smoke-rqstress-liveness 10 with-option1
+# then pop the stash and repeat all three with label "baseline"
+```
+
+Six sequences, ~30 runs per arm. Only after both arms are in can Option 1 be
+called safe or unsafe, and only then can W be sized for Option 3.
