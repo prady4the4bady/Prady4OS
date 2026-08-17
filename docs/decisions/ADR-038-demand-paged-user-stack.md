@@ -383,3 +383,89 @@ that is precisely why Option 3 was chosen over Options 1 and 2.
 
 Remaining before "shipped" per RULE 4/10: 20/20 on the co-gates, the
 `smoke-stack-demand` guard-page arm, and 3 consecutive CI greens on one SHA.
+
+---
+
+## Step 1-2: N=20 shipping check — gate CLEAN, co-gates 19/20, baseline 40/40
+
+`smoke-stack-demand` wired and registered (shard 4, 150s; `ci-shard-check` OK,
+144 gates / 6 shards). All runs via `ab_rate.sh` against the **committed** tree
+`b4283ce` (RULE 5 — the dirty-tree measurement is what voided Session 3).
+
+| gate | N=20 result |
+|---|---|
+| **smoke-stack-demand** | **20/20** |
+| smoke-rqstress-liveness | **20/20** |
+| smoke-blkmq | 19/20 |
+| smoke-blk-integrity | 19/20 |
+
+### Baseline arm — the co-gate shortfall is NOT cleared
+
+Per the directive, "intermittent" may not be asserted without a baseline. Ran
+the same two gates at N=20 on the pre-wiring commit `0253fbe`
+(detached HEAD, not a stash — RULE 19):
+
+```
+baseline kernel 1efde646:  smoke-blkmq 20/20   smoke-blk-integrity 20/20
+wired    kernel e1f19edb:  smoke-blkmq 19/20   smoke-blk-integrity 19/20
+```
+
+**Baseline is 40/40; wired is 38/40.** That is below the directive's regression
+threshold (Arm-B worse by ≥3/10), so it does **not** qualify as a confirmed
+regression — but it is **not a clean bill of health either**, and it must not be
+recorded as one.
+
+### The failure signature is the documented SMP=4 class
+
+Both failing boots ran to completion (`PRISM_READY`, full 444-line serial,
+`pmmfree=27884` healthy, and only the two EXPECTED `#PF` kills — `WXVIOL.ELF`
+and `METRIC.ELF`, the deliberate negative-test probes). The distinguishing line:
+
+```
+[hb] t=500 … spins=361642 max=124505 cpu=2 calls=19002 bails=5 … rqdepth=1
+```
+
+Per §0.7 the total alone is not evidence, so with the denominator:
+**361642 / 19002 calls ≈ 19 spins per call — exactly DDR-893's measured mean.**
+`smoke-blk-integrity` is an SMP=4 gate, placing this in the documented OPEN-2
+class (all 20 SMP=4 gates flake; zero of 118 single-CPU gates ever have).
+
+### Two readings, both consistent with the data
+
+1. **OPEN-2 intermittent** that happened not to fire in the baseline's 40 runs.
+   At a ~5% rate, 40 clean runs has probability ~0.95^40 ≈ 13% — unlikely but
+   entirely possible.
+2. **The wiring perturbed SMP timing.** The gate adds ~30 KB to the kernel
+   image; layout shifts can move a timing-sensitive flake even though
+   `probe_enabled("stackdemand")` is false for these gates.
+
+**Neither is established.** Distinguishing them needs N≥40 per arm, which is
+~3 hours of QEMU. Recording both rather than picking the convenient one.
+
+### Consequence for shipping
+
+`smoke-stack-demand` itself is **20/20** and its three arms are sound. The open
+question is confined to whether the wiring nudges the pre-existing SMP=4 flake.
+That question does not block CI — CI will exercise the same gates and add data
+— but ADR-038 must **not** be marked SHIPPED on the strength of 38/40 while the
+baseline reads 40/40.
+
+## Tooling defect found and fixed in this step
+
+`check_hash.sh --verify` reported **"CHANGED — the change is compiled in"** when
+the current kernel was the *pre-wiring* one. The baseline had been `--save`d
+**after** the wiring build, so "changed vs saved" inverted: changed meant the
+wrong kernel was built. The verifier written to enforce RULE 23 gave a
+confidently wrong verdict.
+
+Fixed by adding `--expect <hash>`, which states the required hash outright and
+infers nothing. `--verify` keeps its old meaning with the trap documented in
+the source. Verified: `--expect e1f19edb…` → MATCH.
+
+Also caught here: the restore build failed with
+`llvm-objcopy: 'build/kernel.elf': Invalid argument` (corrupt ELF from the
+interrupted build) while `make` still reported `rc=0` to the wrapper, leaving a
+**stale** `kernel.bin` on disk. Removing `kernel.elf`/`kernel.bin` and
+rebuilding produced the correct `e1f19edb…`. A build that fails while the
+previous binary survives is indistinguishable from a build that succeeded —
+which is precisely why Rule 23 is a hash check and not an exit-code check.
