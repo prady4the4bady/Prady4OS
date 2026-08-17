@@ -309,3 +309,78 @@ bash tools/ci/ab_rate.sh smoke-rqstress-liveness 10 with-option1
 
 Six sequences, ~30 runs per arm. Only after both arms are in can Option 1 be
 called safe or unsafe, and only then can W be sized for Option 3.
+
+---
+
+## RESOLVED — three arms, N=10 per gate per arm, all via `ab_rate.sh`
+
+The Step 1-A comparison finally ran with valid tooling. Preflight first pinned
+the Session-3 quoting bug precisely:
+
+| form | result |
+|---|---|
+| inline `wsl -- bash -c '$((p + 1))'` | **empty — broken** |
+| identical arithmetic **inside a file** | `file_arith=2` — works |
+
+bash is fine; the Windows→WSL *inline command* layer eats `$((...))`. Shipping
+`ab_rate.sh` as a file was therefore the correct mitigation, not a guess.
+
+### The data
+
+| arm | eager pages | blkmq | rqstress | blk-integrity | `[stkdepth]` |
+|---|---|---|---|---|---|
+| **A** baseline (eager) | 2048 | 10/10 | 10/10 | 10/10 | n/a |
+| **B** Option 1 | 1 | **0/10** | **0/10** | **0/10** | **fires, 30/30 runs** |
+| **C** Option 3 | 8 | 10/10 | 10/10 | 10/10 | **silent** |
+
+`[stkdepth]` in Arm B, on every run:
+
+```
+[stkdepth] not-present at off=16384 pages=4
+```
+
+### The `vmm_user_range_ok` mechanism IS confirmed — my retraction was wrong
+
+The earlier section "Step 1-A MEASUREMENT — my regression diagnosis does NOT
+hold up" retracted this mechanism because the gates passed and the instrument
+was silent. **That retraction was itself a measurement artifact.**
+
+Those two facts together are impossible if Option 1 were compiled in: a silent
+instrument AND passing gates means the kernel under test was the **baseline**.
+`git stash pop` restores files with mtimes older than the existing `.o` files, so
+`make` had nothing to rebuild. I measured the baseline while believing I had
+measured the change.
+
+That is a **fourth** measurement-integrity failure, and the hardest of the four
+to catch — the only thing that exposed it was an instrument contradicting a
+passing gate. Mitigation: `touch` the changed sources before building. A build
+that silently does nothing is indistinguishable from a build that works.
+
+So the record is: the mechanism was correct in Session 1, wrongly retracted in
+Session 2 on stale-build evidence, and is now **confirmed by a fired instrument
+plus a 30/30 → 0/30 rate difference**.
+
+### W is measured, not guessed
+
+`W_measured = 4 pages` (off=16384). Chosen **W = 8** — the measured depth
+doubled, as margin for syscall paths the three co-gates do not exercise. Defined
+once, in `vmm.h` (`USER_STACK_EAGER_PAGES`), per the mirrored-definition rule.
+
+### The frame win survives
+
+```
+eager baseline:  pmmfree ~14,316 steady, floor 2,096
+Option 3 (W=8):  pmmfree  27,589 .. 27,623   (of pmmtot=28,630)
+```
+
+**~13,300 frames recovered**, floor 27,589 versus 2,096 — a 13x improvement in
+worst-case headroom. Per-process stack cost: 2,048 frames → 8.
+
+### Status
+
+**Option 3 is the resolution.** ADR-038 supersedes ADR-021's eager-stack clause;
+ADR-021's W^X rules and ADR-022's never-faults contract are both **unchanged** —
+that is precisely why Option 3 was chosen over Options 1 and 2.
+
+Remaining before "shipped" per RULE 4/10: 20/20 on the co-gates, the
+`smoke-stack-demand` guard-page arm, and 3 consecutive CI greens on one SHA.

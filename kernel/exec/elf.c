@@ -69,9 +69,10 @@ _Static_assert(sizeof(struct elf64_phdr) == 56, "Elf64_Phdr must be 56 bytes");
 /* --- user address-space layout (PML4 slot 1: [512 GiB, 1 TiB), per ADR-021) - */
 #define USER_MIN         0x8000000000ull            /* 512 GiB                  */
 #define USER_MAX         0x10000000000ull           /* 1 TiB                    */
-#define USER_STACK_TOP   0x9000000000ull            /* 576 GiB                  */
-#define USER_STACK_SIZE  (8ull * 1024 * 1024)       /* 8 MiB (ADR-021)          */
-#define USER_STACK_BOT   (USER_STACK_TOP - USER_STACK_SIZE)
+/* ADR-038: USER_STACK_TOP / _SIZE / _BOT now live in vmm.h, because the #PF
+ * growth path needs the SAME range test this loader maps against. Defining them
+ * in two places is the mirrored-definition bug class (DDR-822/825): the two
+ * copies drift and the guard silently stops being a guard. One definition. */
 
 static inline uint64_t page_down(uint64_t x) { return x & ~((uint64_t)PAGE_SIZE - 1); }
 static inline uint64_t page_up(uint64_t x)   { return (x + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1); }
@@ -186,8 +187,16 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     }
 
     /* --- user stack: 8 MiB RW+NX, guard page below, SysV ABI initial frame --- */
+    /* ADR-038: map ONLY the top page here; the rest of the 8 MiB is faulted in
+     * on first touch (vmm_stack_fault, called from the #PF path). The eager loop
+     * this replaces cost 2048 frames per process whether or not they were ever
+     * touched — measured by DDR-943 driving pmmfree to 2096 of 28630, i.e. one
+     * stack's headroom. The top page cannot be lazy: elf.c writes the SysV
+     * initial frame (argc/argv/envp/auxv) into it just below, through its
+     * identity view, before the thread ever runs. */
     uint64_t top_phys = 0;
-    for (uint64_t va = USER_STACK_BOT; va < USER_STACK_TOP; va += PAGE_SIZE) {
+    for (uint64_t i = 0; i < USER_STACK_EAGER_PAGES; i++) {
+        uint64_t va = USER_STACK_TOP - (i + 1) * PAGE_SIZE;
         void *frame = ptnode_alloc();
         if (!frame) { vmm_destroy_address_space(as); return ELF_E_NOMEM; }
         uint64_t phys = (uint64_t)(uintptr_t)frame;
@@ -196,8 +205,8 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
             vmm_destroy_address_space(as);
             return ELF_E_NOMEM;
         }
-        if (va == USER_STACK_TOP - PAGE_SIZE)
-            top_phys = phys;
+        if (i == 0)
+            top_phys = phys;              /* the SysV initial frame lives here */
     }
     /* guard page at [USER_STACK_BOT - PAGE_SIZE, USER_STACK_BOT) is left unmapped. */
 

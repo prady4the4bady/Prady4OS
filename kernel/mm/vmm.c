@@ -302,6 +302,36 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
  * at every level (the user subtree lives entirely in PML4 slot 1, where the
  * kernel master has nothing, so all intermediates are user-promoted) — defense
  * in depth against a kernel-only page reachable under a user-walkable path. */
+/* ADR-038 Step 1-A: how deep into the user stack do syscall buffers actually
+ * reach? vmm_user_range_ok's contract is "never allocates and never faults"
+ * (ADR-022), so a demand-paged stack makes it reject pointers into untouched
+ * stack pages — that is the regression ADR-038's Option 1 caused. This records
+ * the DEEPEST offset below USER_STACK_TOP at which a not-present page was seen,
+ * which sizes the eagerly-mapped window W for Option 3.
+ *
+ * Prints only when a NEW maximum is seen — a handful of lines per boot. Volume
+ * discipline is deliberate: an earlier instrument (cur= in the timer ISR) was
+ * heavy enough to move the failure rate it was measuring. */
+static volatile uint64_t g_stk_np_deepest;   /* bytes below USER_STACK_TOP */
+
+static void stk_note_not_present(uint64_t va) {
+    if (va < USER_STACK_BOT || va >= USER_STACK_TOP)
+        return;                              /* not a stack address */
+    uint64_t off = USER_STACK_TOP - va;
+    if (off <= __atomic_load_n(&g_stk_np_deepest, __ATOMIC_RELAXED))
+        return;                              /* not a new maximum */
+    __atomic_store_n(&g_stk_np_deepest, off, __ATOMIC_RELAXED);
+    kputs("[stkdepth] not-present at off=");
+    kputdec(off);
+    kputs(" pages=");
+    kputdec((off + PAGE_SIZE - 1) / PAGE_SIZE);
+    kputs("\r\n");
+}
+
+uint64_t vmm_stack_np_deepest(void) {
+    return __atomic_load_n(&g_stk_np_deepest, __ATOMIC_RELAXED);
+}
+
 int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable) {
     if (len == 0)
         return 1;
@@ -320,7 +350,11 @@ int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable) 
         e = table_at(e & PTE_ADDR)[idx(va, 2)];
         if (!(e & PTE_PRESENT) || (e & PTE_PS) || !(e & VMM_USER)) return 0;
         e = table_at(e & PTE_ADDR)[idx(va, 1)];       /* leaf PTE (4 KiB) */
-        if (!(e & PTE_PRESENT) || !(e & VMM_USER)) return 0;
+        if (!(e & PTE_PRESENT) || !(e & VMM_USER)) {
+            if (!(e & PTE_PRESENT))
+                stk_note_not_present(va);             /* ADR-038 Step 1-A */
+            return 0;
+        }
         if (writable && !(e & VMM_RW)) return 0;
     }
     return 1;

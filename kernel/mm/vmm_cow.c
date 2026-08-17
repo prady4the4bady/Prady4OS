@@ -131,3 +131,45 @@ int vmm_cow_fault(uint64_t cr3, uint64_t fault_va) {
     invlpg(va);
     return 0;
 }
+
+/* ADR-038 — demand-paged user stack.
+ *
+ * Called from the ring-3 #PF path for a NOT-PRESENT fault. Maps one zeroed page
+ * if the address is inside [USER_STACK_BOT, USER_STACK_TOP); returns -1 for
+ * anything else so the caller's existing kill path handles it unchanged.
+ *
+ * Replaces the eager 2048-frame-per-process loop the ELF loader used to run
+ * (DDR-943: measured pmmfree=2096 of 28630 — one stack's headroom left).
+ */
+int vmm_stack_fault(uint64_t cr3, uint64_t fault_va) {
+    uint64_t va = fault_va & ~0xFFFull;
+
+    /* Range test FIRST. The guard page lives at [USER_STACK_BOT - PAGE_SIZE,
+     * USER_STACK_BOT), i.e. strictly BELOW this range, so a guard touch can
+     * never be satisfied here and always falls through to the kill path. */
+    if (va < USER_STACK_BOT || va >= USER_STACK_TOP)
+        return -1;
+
+    uint64_t *pte = leaf_pte(cr3, va);
+    if (pte && (*pte & VMM_PRESENT))
+        return 0;                    /* SMP: another thread won the race — resume */
+
+    /* ptnode_alloc returns a ZEROED page. Zeroing is mandatory, not incidental:
+     * an unzeroed growth page would leak a prior process's memory into a fresh
+     * stack. */
+    void *frame = ptnode_alloc();
+    if (!frame)
+        return -1;                   /* OOM -> real fault -> thread is killed, no panic (S2) */
+
+    if (vmm_map_in(cr3, va, (uint64_t)(uintptr_t)frame,
+                   VMM_USER | VMM_RW | VMM_NX) != 0) {
+        /* Lost the race after allocating, or the mapping genuinely failed. If
+         * the page is present now, someone else mapped it — free our spare and
+         * resume rather than double-mapping. */
+        ptnode_free(frame);
+        pte = leaf_pte(cr3, va);
+        return (pte && (*pte & VMM_PRESENT)) ? 0 : -1;
+    }
+    invlpg(va);
+    return 0;
+}

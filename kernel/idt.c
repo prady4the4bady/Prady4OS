@@ -13,6 +13,7 @@
 #include "sched.h"
 #include "vdso_page.h"
 #include "vmm_cow.h"
+#include "vmm.h"          /* ADR-038: vmm_stack_fault + USER_STACK_* range */
 #include "uaccess.h"    /* copyin — dump the bytes actually executing at a fault */
 #include "regs.h"
 #include "signal.h"
@@ -327,6 +328,17 @@ void isr_dispatch(struct regs *r) {
      * -1 and fall through to the kill path, preserving W^X enforcement. */
     if (r->vector == 14 && (r->cs & 3) == 3 && (r->err_code & 0x7) == 0x7 &&
         current_thread && vmm_cow_fault(current_thread->cr3, read_cr2()) == 0)
+        return;
+
+    /* ADR-038: a ring-3 NOT-PRESENT fault (err bit0 == 0) inside the user stack
+     * range grows the stack by one zeroed page. Note the COW arm above requires
+     * bit0 == 1 (present), so the two cannot both claim a fault. Out-of-range
+     * addresses — including the guard page, which sits BELOW USER_STACK_BOT —
+     * and OOM both return -1 and fall through to the kill path below, so the
+     * guard stays a guard and an allocation failure kills one thread rather
+     * than panicking (S2). */
+    if (r->vector == 14 && (r->cs & 3) == 3 && !(r->err_code & 0x1) &&
+        current_thread && vmm_stack_fault(current_thread->cr3, read_cr2()) == 0)
         return;
 
     if (r->vector < 32 && (r->cs & 3) == 3) {

@@ -64,6 +64,33 @@ uint64_t vmm_new_address_space(void);
 /* Map a page into a SPECIFIC address space `pml4_phys` (need not be active). */
 int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
 
+/* ADR-038: user stack layout. Single definition — the ELF loader maps the top
+ * page against these and the #PF growth path range-tests against them; two
+ * copies would drift and silently disarm the guard page (DDR-822/825 class). */
+#define USER_STACK_TOP   0x9000000000ull            /* 576 GiB                  */
+#define USER_STACK_SIZE  (8ull * 1024 * 1024)       /* 8 MiB (ADR-021)          */
+#define USER_STACK_BOT   (USER_STACK_TOP - USER_STACK_SIZE)
+
+/* ADR-038 Option 3: pages eagerly mapped at the TOP of the stack; everything
+ * below is demand-paged. This window exists because vmm_user_range_ok (ADR-022)
+ * validates syscall pointers WITHOUT faulting, so a syscall buffer on an
+ * untouched stack page would be rejected with -EFAULT.
+ *
+ * MEASURED, not guessed (ADR-038 Step 1-A, N=10 per gate per arm):
+ *   Arm A (eager):     30/30 pass.  Arm B (map 1 page only): 0/30 pass.
+ *   [stkdepth] fired on all 30 Arm-B runs: deepest not-present off=16384 = 4 pages.
+ * W = 8 = the measured 4 pages doubled, as margin for syscall paths the three
+ * co-gates do not exercise. Cost is 8 frames per process against the 2048 the
+ * eager map used — the recovered-frame win is essentially unchanged. */
+#define USER_STACK_EAGER_PAGES 8ull
+
+/* ADR-038: resolve a not-present ring-3 fault inside the stack range by mapping
+ * a zeroed page. Returns 0 if handled, -1 if the caller must treat it as a real
+ * fault (out of range, or OOM). The guard page at [BOT-PAGE, BOT) is BELOW
+ * USER_STACK_BOT and therefore never satisfied here — that is what keeps it a
+ * guard rather than decoration. */
+int vmm_stack_fault(uint64_t cr3, uint64_t fault_va);
+
 /* Free a per-process address space: its private user page tables and the PML4.
  * The shared kernel entries are left intact. */
 void vmm_destroy_address_space(uint64_t pml4_phys);
