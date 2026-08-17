@@ -5391,3 +5391,54 @@ the NULL-check purely as defensive hardening (not as a workers-late fix).
 Hunt an **A1** failure (triggered pid present in a `sys_exit` line) and read
 `writes=`. That single field decides pre-main vs post-`fd_write_user`. Use the
 corrected classifier (assert `trig>0` FIRST — see the DDR-947 harness defect).
+
+## Checkpoint — 2026-08-16, tip `c2ae001` (DDR-949)
+
+### A4 audit — the requested NULL-check WAS ALREADY IN THE TREE (R20 #1)
+Directive v4 A4 asks to add a NULL-check to `blkmq_proof` and
+`smp_blk_integrity`. **Both already have one** (DDR-934/939):
+```
+main.c:682-683  if (sched_create(blkmq_reader,  ...)) mq_spawned++;
+main.c:765-768  if (sched_create(blkint_worker, ...)) bi_spawned++;
+```
+That check is what produced `spawned=4/4` / `spawned=24/24`. **Do not re-add
+it, and do not add a KASSERT** — the NULL branch has never been taken on any
+observed failure, so a KASSERT would convert a measured non-event into a panic
+risk.
+
+### What the audit DID find — two unchecked spawns, now fixed
+| site | thread | silent-NULL consequence |
+|---|---|---|
+| `main.c:2317` | `bench_partner` | `bench_ctx_switch()` measures against a partner **that does not exist** and prints it as a real number — a **fabricated measurement** (§0.7 / Q8) |
+| `main.c:2327` | `blk_test_thread` | blk self-test silently never runs; absence reads as "no output" not "failed to start" |
+Both now name the failure. Silent-drop class (BUILD_TRACKER §4). Verified: zero
+`FAILED to spawn` lines on a healthy boot — the new paths stay quiet on success.
+
+### workers-late — root cause STILL OPEN (R20 #2)
+`sched_create` NULL is **refuted** (DDR-942: `spawned=4/4`, `done=0x0`).
+Nothing in `c2ae001` claims to fix it. The instrument still needed is the one
+v4 §3 D4 describes: **per-worker** completion state plus `on_cpu`/runnability
+at the moment the workers are expected to run. `done=` already encodes
+per-worker bits (bit `id` = ok, bit `id+8` = fail); what is missing is
+runnability at that instant.
+
+### CI / promotion
+`b72e22c` **green**, `e3d31f6` **green** — but on **different SHAs**, so R8's
+three-consecutive-greens-on-ONE-SHA count is still **0**. `main` `27ba426`.
+
+### Live instruments (all on `[hb]` unless noted)
+`ubcas ubrq ubst rqmiss rqmst btnedge rqdepth rqcpus rqq rqpres pmmfree pmmtot
+preempt supp curpid [cur, only when rqdepth>8]`
+Plus `writes=` on `sys_exit` (DDR-948) and `[fd] write EBADF` (DDR-946).
+Passing baselines: `rqdepth=6 rqcpus=1 rqq=1 rqpres=1 pmmtot=28630`;
+printing agents `writes=1..3`.
+
+### CURRENT_ACTIVE_TASK — A1, single defect focus
+Hunt an **A1** failure (`trig>0` AND triggered pid present in a `sys_exit`
+line) and read `writes=` for that pid:
+- `writes=0` ⇒ `main` never entered ⇒ pre-main: crt / `_start` / ELF entry
+- `writes>0` ⇒ attempted and accepted, no output ⇒ downstream of `fd_write_user`
+Use the corrected classifier: **assert `trig>0` FIRST** (the DDR-947 harness bug
+reported mode-B runs as A2).
+
+### Next free DDR: 950
