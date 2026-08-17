@@ -5280,3 +5280,52 @@ from the new TCB field. Always re-run before blaming a change.
 - Sentinels **160**, stable across every instrument this session.
 - Auth: `git -c credential.helper='!gh auth git-credential' push` (required).
 - DDR numbering: 946 used. **Next free is DDR-947** (verify both dirs, §0.4).
+
+## Checkpoint — 2026-08-16, tip `e8f880e` (DDR-947)
+
+### A2 WAS CAUGHT AND THE COUNTERS READ — then the reading was refuted
+On `ac-FAIL-3` (confirmed A2 — triggered pids 50/55 in **no** `sys_exit` line):
+```
+rqdepth: 2 1 2 2 2 6 7 11 16 32 42 42 42 42 42 42 42 42 42 42 42
+ubcas=0 ubrq=0 rqmiss=0   rqq=1 rqpres=1   spins=0   no [BUG]
+last non-hb line: [sfs] freelist persist OK
+```
+42 threads queued on a present, ticking CPU, never picked for ~55 s.
+
+**But 14 further runs refuted it as THE A2 signature.** Genuine mode-A failures
+read `rqdepth` flat at baseline (6-8), `preempt=` climbing every heartbeat,
+`supp=0`, `cur=` rotating COMPOSIT.ELF → reaper → SURFTEST.ELF. **The scheduler
+is healthy in those A2 failures.** The 42-pin was ONE run.
+
+**A2's mechanism is OPEN.** The 42-pin is a separate, real, unexplained event —
+do not cite it as A2's cause. Twelve mechanisms now retired, all by instrument.
+
+### TWO DEFECTS IN MY OWN TOOLING — do not inherit them
+1. **A2 classifier false positive.** `a2=1; for p in <triggered pids>; do …` —
+   with **zero** triggers the loop never runs and it reports A2. Two of four
+   "A2" runs had `trig=0` and were mode **B**. **Any classifier must assert
+   `trig>0` FIRST, then test the exit.** This produced the wrong claim above.
+2. **The instrument perturbed the measurement.** Failure rate went
+   **2/12 → 9/14** after adding `cur=` (a string `kputs`) to the **timer ISR**.
+   `cur=` is now gated on `rqdepth > 8`. **The 9/14 rate is not this build's
+   flake rate — do not quote it.**
+
+### Live `[hb]` fields
+`ubcas ubrq ubst rqmiss rqmst btnedge rqdepth rqcpus rqq rqpres pmmfree pmmtot
+preempt supp curpid [cur]` — `cur` only when `rqdepth > 8`.
+Passing baseline: `rqdepth=6 rqcpus=1 rqq=1 rqpres=1 pmmtot=28630`.
+
+### Directive item A1 — DONE
+DDR-946's `dbg_ebadf_seen` **is** explicitly initialised (`sched.c:839`), §0.6
+satisfied. Verified, not assumed.
+
+### CURRENT_ACTIVE_TASK
+Re-hunt A2 with the **corrected** classifier (assert `trig>0` first) and the
+lightened instrument, then read `preempt`/`supp`/`cur` on a *correctly
+classified* A2. Prior A2 readings are suspect because two of four were mode B.
+
+### State
+- Sentinels **160**. Build warning-clean. Hygiene gates pass.
+- `main` `27ba426`; three-greens **0**.
+- Next free DDR: **948** (945/946/947 taken — verify both dirs, §0.4).
+- Auth: `git -c credential.helper='!gh auth git-credential' push`.
