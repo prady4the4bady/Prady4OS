@@ -169,6 +169,13 @@ static long sys_exit(long a1, long a2, long a3, long a4, long a5, long a6) {
     kputdec((uint64_t)a1);
     kputs(") pid=");
     kputdec((uint64_t)current_thread->pid);
+    /* DDR-948: write ATTEMPTS by this thread. On an A1 failure (agent exits 0
+     * with no AGENT_START and no EBADF), writes=0 means main was never entered
+     * — the defect is pre-main in the crt/ELF entry; writes>0 means the writes
+     * were attempted and accepted yet produced no serial output, putting the
+     * defect downstream of fd_write_user. Two different subsystems. */
+    kputs(" writes=");
+    kputdec((uint64_t)current_thread->dbg_writes);
     kputs(" — thread terminating\r\n");
     sched_exit((int)a1);       /* zombie w/ status; does not return */
     return 0;

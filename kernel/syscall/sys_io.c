@@ -141,6 +141,11 @@ static long sys_write(long fd, long ubuf, long count, long a4, long a5, long a6)
     if (count == 0)
         return 0;
 
+    /* DDR-948: count the ATTEMPT, before any fd validation, so sys_exit can
+     * separate "the agent never tried to write" (main not entered) from
+     * "it tried and the output vanished". */
+    current_thread->dbg_writes++;
+
     struct fd_entry *e = fd_get(current_thread, (int)fd);
     if (!e) {
         /* DDR-946: name the FIRST rejected write per thread. A ring-3 printf
@@ -172,6 +177,10 @@ struct user_iovec { uint64_t base; uint64_t len; };
 static long sys_writev(long fd, long uiov, long iovcnt, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a4;
+    /* DDR-948: musl stdio issues writev, not write (see the comment above), so
+     * a counter that only covered sys_write would read 0 on every run and prove
+     * nothing. Count the attempt here too, before validation. */
+    current_thread->dbg_writes++;
     if (iovcnt < 0 || iovcnt > SYS_IOV_MAX)
         return -EINVAL;
     if (iovcnt == 0)
