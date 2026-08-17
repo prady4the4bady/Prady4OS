@@ -1,15 +1,14 @@
 = ADR-038 — demand-paged user stack (supersedes ADR-021's eager-stack clause)
 
-> **STATUS: DESIGN INCOMPLETE — read "IMPLEMENTED, MEASURED, THEN REGRESSED"
-> at the bottom FIRST. The frame win is real (~12,200 frames recovered) but the
-> implementation regressed three gates, and the cause is a flaw in this ADR's
-> own analysis: it never considered the paths that deliberately never fault
-> (ADR-022 copyin/copyout). Code is stashed, NOT committed.**
+> **STATUS: OPTION 3 COMMITTED (`0253fbe`), GATE IN PROGRESS.** The earlier
+> "DESIGN INCOMPLETE" header is superseded — it referred to Option 1, which was
+> measured at 0/30 and replaced. Read "RESOLVED — three arms" at the bottom for
+> the final data. Not yet SHIPPED: `smoke-stack-demand` + N=20 + 3 CI greens
+> are still owed (RULE 4/10).
 
-**Status:** ~~ACCEPTED~~ **PROPOSED / DESIGN INCOMPLETE.** Would supersede the
-stack-mapping clause of **ADR-021** only; ADR-021's W^X segment rules are
-unchanged and remain binding. Not in force — the design needs option 1, 2 or 3
-from the bottom section before it can supersede anything.
+**Status:** **ACCEPTED (Option 3).** Supersedes the stack-mapping clause of
+**ADR-021** only; ADR-021's W^X segment rules and ADR-022's never-faults
+contract are both unchanged and remain binding.
 **Date:** 2026-08-16
 **Driver:** DDR-943, **CONFIRMED** by measurement (CI 31989445727):
 `pmmfree=2096` against `pmmtot=28630`, with a per-process cost of exactly

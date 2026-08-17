@@ -363,6 +363,8 @@ extern const unsigned char rootmounttest_elf[];      /* fs: per-process root-mou
 extern const unsigned char rootmounttest_elf_end[];
 extern const unsigned char benchtest_elf[];            /* perf: RDTSC benchmark (DDR-870) */
 extern const unsigned char benchtest_elf_end[];
+extern const unsigned char stackdemand_elf[];         /* ADR-038: demand-paged stack probe */
+extern const unsigned char stackdemand_elf_end[];
 extern const unsigned char ftrunctest_elf[];          /* fs: ftruncate probe (DDR-866) */
 extern const unsigned char ftrunctest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
@@ -1869,6 +1871,21 @@ static void fs_test_thread(void *arg) {
                  * this one CREATES A FILE ON THE SHARED SFS ROOT. Running it
                  * every boot would change what every other SFS gate sees, so a
                  * failure elsewhere could be this probe's leftovers. */
+                /* ADR-038: demand-paged-stack probe. Behind probe_enabled
+                 * because arm 3 deliberately overflows the guard page and dies —
+                 * an unconditional spawn would put a killed process in every
+                 * boot and every other gate's log. */
+                if (probe_enabled("stackdemand")) {
+                    struct tcb *sp2 = 0;
+                    uint64_t slen = (uint64_t)(stackdemand_elf_end - stackdemand_elf);
+                    if (elf_load((void *)(uintptr_t)stackdemand_elf, slen,
+                                 "STACKDEMAND", &sp2) == ELF_OK && sp2) {
+                        sched_unblock(sp2);
+                        kputs("[user] ELF loaded (embedded); stackdemand probe spawned\r\n");
+                    } else {
+                        kputs("[user] stackdemand probe FAILED to load\r\n");
+                    }
+                }
                 if (probe_enabled("ftruncate")) {
                     struct tcb *tp = 0;
                     uint64_t tlen = (uint64_t)(ftrunctest_elf_end - ftrunctest_elf);

@@ -152,6 +152,12 @@ fsrmtest_elf:
 fsrmtest_elf_end:
 
 ; DDR-866: ring-3 ftruncate probe (Group 3 item 20)
+global stackdemand_elf
+global stackdemand_elf_end
+stackdemand_elf:
+    incbin "build/stackdemand.elf"
+stackdemand_elf_end:
+
 global ftrunctest_elf
 global ftrunctest_elf_end
 ftrunctest_elf:
