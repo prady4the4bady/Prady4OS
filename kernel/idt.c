@@ -231,6 +231,30 @@ static void timer_tick(struct regs *r) {
           kputs(" rqpres=");  kputdec(rqp);
           kputs(" pmmfree="); kputdec(pmm_free_page_count());
           kputs(" pmmtot=");  kputdec(pmm_total_page_count()); }
+        /* DDR-947: on the A2 failure rqdepth pins (42, 11 heartbeats) on a
+         * present ticking CPU with ubcas/ubrq/rqmiss all zero. preempt= climbing
+         * while supp= stays flat means schedule() IS being called and not
+         * switching; supp= climbing means g_in_switch is suppressing it; both
+         * flat means the tick never reaches the preempt point. cur= names the
+         * thread that is holding the CPU. */
+        { extern void sched_take_preempt_stats(uint32_t *, uint32_t *);
+          extern void sched_rq_depth(uint32_t *, uint32_t *);
+          extern uint32_t sched_current_pid(void);
+          extern const char *sched_current_name(void);
+          uint32_t pt = 0, ps = 0, rd = 0;
+          sched_take_preempt_stats(&pt, &ps);
+          sched_rq_depth(&rd, 0);
+          kputs(" preempt="); kputdec(pt);
+          kputs(" supp=");    kputdec(ps);
+          kputs(" curpid=");  kputdec((uint64_t)sched_current_pid());
+          /* DDR-947: the NAME is a variable-length kputs inside the timer ISR.
+           * Printing it every heartbeat coincided with the failure rate going
+           * 2/12 -> 9/14, i.e. the instrument was heavy enough to move the
+           * timing it was measuring (the hazard DDR-941 flagged for BTN_STATE
+           * and this did not heed). Print it only when the queue is ABOVE
+           * baseline — exactly the case it was added to diagnose — so the
+           * steady state pays only the fixed-width numeric fields. */
+          if (rd > 8u) { kputs(" cur="); kputs(sched_current_name()); } }
         kputs("\r\n");
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */

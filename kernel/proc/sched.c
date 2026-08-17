@@ -348,6 +348,27 @@ void sched_rq_depth(uint32_t *total_out, uint32_t *busy_cpus_out) {
  * is drained by nobody. These two masks answer "are the stranded entries on a
  * CPU nothing can reach?" directly, which is the whole question left after
  * ubcas/ubrq/rqmiss all read zero. Same lock-free rationale as sched_rq_depth. */
+/* DDR-947: preempt-path counters (cumulative) + the identity of whatever is
+ * occupying the CPU. `curpid`/`curname` name the stuck thread directly; without
+ * them the A2 pin says only THAT nothing is picked, never WHAT is holding on. */
+static volatile uint32_t g_preempt_try;
+static volatile uint32_t g_preempt_supp;
+
+void sched_take_preempt_stats(uint32_t *try_out, uint32_t *supp_out) {
+    if (try_out)  *try_out  = __atomic_load_n(&g_preempt_try,  __ATOMIC_RELAXED);
+    if (supp_out) *supp_out = __atomic_load_n(&g_preempt_supp, __ATOMIC_RELAXED);
+}
+
+uint32_t sched_current_pid(void) {
+    return current_thread ? current_thread->pid : 0;
+}
+
+const char *sched_current_name(void) {
+    if (!current_thread)
+        return "-";
+    return current_thread->name ? current_thread->name : "?";
+}
+
 void sched_rq_cpumasks(uint32_t *queued_out, uint32_t *present_out) {
     uint32_t queued = 0, present = 0;
     for (int c = 0; c < PERCPU_MAX && c < 32; c++) {
@@ -1245,8 +1266,16 @@ void sched_tick(void) {
          * vDSO clock, lwIP, blk watchdog have all advanced above) but do NOT
          * re-enter the scheduler on a CPU that is already mid-switch. */
         struct percpu *sp = this_cpu();
-        if (sp && g_in_switch[sp->cpu_idx])
+        /* DDR-947: separate "the tick never reached the preempt point" from
+         * "it reached it and was suppressed" and from "schedule() was called
+         * and did not switch". On the A2 failure rqdepth pins at 42 on a
+         * present, ticking CPU with ubcas/ubrq/rqmiss all zero, so the pick is
+         * not happening — these two counters say WHERE it stops. */
+        __atomic_add_fetch(&g_preempt_try, 1, __ATOMIC_RELAXED);
+        if (sp && g_in_switch[sp->cpu_idx]) {
+            __atomic_add_fetch(&g_preempt_supp, 1, __ATOMIC_RELAXED);
             return;
+        }
         schedule();
     }
 }
