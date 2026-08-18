@@ -5565,3 +5565,29 @@ global** instead of using the value the atomic op returns, which can skip the
 **Two new RULE 24 harnesses** (`tools/ci/build_check.sh`, `hygiene_check.sh`)
 exist because inline checks through `wsl bash -c` returned empty `$?`/`$(...)`
 and reported three passing hygiene checks that had never run.
+
+### DDR-953 — CI red on 889a059 root-caused: SFS use-after-free, NOT agentmetrics
+
+Runs 32086799351 (**green**) and 32086772141 (**red**) are both dispatches on the
+SAME tip 889a059 → **intermittent**, not a regression, and NOT caused by the
+DDR-951/952 work.
+
+Red gate `smoke-agentmetrics` is the **messenger, not the defect**: the kernel
+`#PF` panicked before the sentinel could print (AGMETRIC.ELF had already loaded
+at t=2605). Mechanism confirmed from the register file:
+  RIP → `rd_block_bd` (sfs.c:83); `bd->read` is at +0x10; CR2 = RDI+0x10 exactly.
+  RDI = RAX = 0x53465331 = SFS_MAGIC. `struct sfs_ctx` starts with `bd` at
+  offset 0, so `c->bd == *(uint64_t*)c` → a stale `sfs_ctx*` aliasing a
+  superblock buffer. `sfs_umount` (sfs.c:324) is `kfree(ctx)` with NO
+  invalidation of the 11 other sites that re-cast the stored ctx.
+
+NOT item 47: A→B gap 474 ticks (baseline ≲1450), `[hb]` continuous.
+
+**NEXT STEP (do this first):** add poison-on-free in `sfs_umount` per DDR-953 §f
+step 1, then capture a failing run to NAME the caller. Do NOT write the real fix
+before that capture — §6.0-B / CLAUDE.md §0.2.
+
+Two more RULE 24 / I24 harness files added after inline forms lied again:
+`tools/ci/sym_at.py` (awk did 64-bit address math in DOUBLES and named the WRONG
+function — 0xFFFFFFFF8002CD18 is past 2^53; python integers are exact) and
+`tools/ci/hygiene_check.sh` / `build_check.sh` from the previous checkpoint.
