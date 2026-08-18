@@ -5541,3 +5541,27 @@ uncommitted under `build/gatelogs/drafts/` pending its N=30 measurement.
      - B present, gap ≲1450                 → baseline, not a stall
    `[hb]` prints t=3000 twice (DDR-889 double-print) — do not double-count.
    The capture is only informative on a **failing** run; force one under `-smp 4`.
+
+### ADDENDUM — DDR-952 (A3) committed locally, still unpushed
+
+Local tip **12eff7d** (889a059 → a0249ef DDR-951 → 12eff7d DDR-952).
+**Nothing pushed.** Runs 32086799351 / 32086772141 were still `in_progress` on
+889a059 at 35 min (longer than the ~25 min norm — check whether they are stuck).
+
+A3 turned out NOT to be "add a print guard": DDR-889/921's atomic increment had
+already landed. The unfixed half was that `timer_tick`'s consumers **re-read the
+global** instead of using the value the atomic op returns, which can skip the
+`%100` blk watchdog and `%10` lwIP arms silently. Fixed by taking `now`.
+
+**Still owed on DDR-952:** `smoke-blkmq` rc=0 (its declared gate). Could not run
+— §6.0-A bars local QEMU while CI is in flight. **Run it first** when CI clears.
+
+**Two directive figures are stale — do not trust them:**
+- §7 "start new DDRs at DDR-890" → 890..949 are occupied; CLAUDE.md §0.4 fixes
+  the floor at 936+. Used 951 and 952.
+- §1 "122 gates assigned" → `shard_check.sh` reports **144** across 6 shards.
+- A1's premise (OPEN-9 misattribution unfixed) → already fixed by DDR-823.
+
+**Two new RULE 24 harnesses** (`tools/ci/build_check.sh`, `hygiene_check.sh`)
+exist because inline checks through `wsl bash -c` returned empty `$?`/`$(...)`
+and reported three passing hygiene checks that had never run.
