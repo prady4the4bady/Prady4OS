@@ -452,3 +452,54 @@ The honest read: **all 286 items by Aug 31 is not achievable at the observed
 rate.** Achievable is a defensible x86_64 build with the crypto chain closed,
 both `-smp 4` races fixed, and ISOs for the three targets that already boot.
 Which subset ships is a scope decision, not an engineering one.
+
+## Item 3 — CMake/Makefile hybrid: OPERATOR ASSESSMENT BRIEF (recommend SKIP)
+
+Required by the directive before this item may be skipped. Not implemented.
+
+**Recommendation: SKIP.** Rationale, in the order that matters:
+
+1. **No correctness benefit.** The existing Makefile already enforces every
+   invariant the build must hold: `-Werror` for clang *and* nasm, the 256 KiB
+   per-ELF `EXEC_MAX` budget check, `ci-probe-rodata-check`, `ci-shard-check`
+   (144 gates across 6 shards), `ci-start-align-check`, and the DDR-831 scratch
+   LBA check. A hybrid adds no invariant that is not already enforced.
+
+2. **It adds a second source of truth.** Two build descriptions of one tree is
+   the same failure class as a hand-maintained list mirroring a directory
+   (DDR-822/825): the copies drift, and the drift is silent. The project has
+   already paid for that class of bug more than once.
+
+3. **The measured pain point is not build description.** Seven tooling defects
+   have cost real sessions this cycle, and every one was a *shell escaping* or
+   *stale artifact* problem (WSL inline `$((…))`, inline `$(md5sum …)`, stale
+   mtime after `git stash pop`, a corrupt `kernel.elf` surviving a failed link
+   while `make` reported success). CMake addresses none of these; the
+   mitigations that did address them are `ab_rate.sh`, `check_hash.sh`, and
+   Rules 19/22/23/24.
+
+4. **Cost is not zero.** Every gate recipe, shard entry, and probe-embedding
+   rule would need a second expression, and each becomes a place for the two to
+   disagree.
+
+**What would change this recommendation:** a concrete requirement the Makefile
+cannot express — cross-compiler toolchain selection for the aarch64/riscv64 ISO
+packaging (Item 13-B/13-C), if that turns out to need per-target toolchain
+files. That is the one place to revisit. It is not a reason to convert now.
+
+**Status: DEFERRED — awaiting operator sign-off. Do not implement without an
+explicit approval message.**
+
+## Group 2 close-out — CI verification (Items 4-A/4-B/4-C)
+
+| gate | shard | excluded | CI status |
+|---|---|---|---|
+| `smoke-coderewrite` | 0 | no | passing in full-suite greens |
+| `smoke-auditchain` | 1 | no | passing in full-suite greens |
+| `smoke-auditchain-tamper` | 2 | no | passing in full-suite greens |
+
+All three are registered in `tools/ci/gate_shards.txt` and absent from the
+`shard_check.sh` EXCLUDE list, so RULE 4's "in the shard matrix" is satisfied.
+A failing gate fails its whole shard, so the two most recent full-suite CI
+greens (`0253fbe`, `fbb868f`) are direct evidence that all three passed in both
+runs. No separate re-run is needed to establish CI confirmation.
