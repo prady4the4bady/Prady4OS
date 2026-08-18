@@ -80,16 +80,69 @@ struct sfs_ctx {
 
 /* ---- block I/O (one 4 KiB block = 8 sectors; buffers are PMM pages) ------- */
 /* Bare device I/O, usable before a ctx exists (mount/format). */
+/* DDR-953 instrument — name the caller that reached a freed sfs_ctx.
+ *
+ * The captured panic (CI 32086772141) was a #PF in rd_block_bd with
+ * bd == SFS_MAGIC (0x53465331) and CR2 == bd + 0x10, the bd->read slot.
+ * struct sfs_ctx begins with `bd` at offset 0, so c->bd is *(uint64_t*)c:
+ * a stale sfs_ctx* was aliasing a buffer that held a superblock.
+ *
+ * WHY NOT POISON-ON-FREE. The obvious instrument is to poison the ctx in
+ * sfs_umount before kfree. It would NOT have caught this crash: bd held
+ * SFS_MAGIC, which means the chunk had already been REALLOCATED and
+ * overwritten with superblock bytes, so any poison written at free time was
+ * overwritten too. Poison only catches a dereference that happens BEFORE
+ * reuse — a strict subset, and not the case on record. (KHEAP_DEBUG already
+ * provides free-poisoning for that subset.)
+ *
+ * What the capture is missing is not WHAT was corrupt — that is settled — but
+ * WHICH caller held the dead pointer. So the check goes at the dereference and
+ * reports its return address; sym_at.py turns that into a function name.
+ *
+ * The validity test is EXACT, not a heuristic: a live bd is by construction one
+ * of the registered block devices, so it is compared against that list rather
+ * than against an address range. blk_count() is bounded by VBLK_MAX (4).
+ *
+ * On detection this prints and RETURNS, letting the natural fault proceed, so
+ * the existing register dump is preserved intact and behaviour on a valid
+ * pointer is bit-identical. It reports; it does not recover. */
+static int sfs_bd_is_registered(const struct blk_device *bd) {
+    if ((uint64_t)(uintptr_t)bd < 0x1000ull)
+        return 0;
+    for (unsigned i = 0; i < blk_count(); i++)
+        if ((const struct blk_device *)blk_get(i) == bd)
+            return 1;
+    return 0;
+}
+
+static void sfs_bd_guard(const struct blk_device *bd, uint64_t blk,
+                         const char *op, void *ret) {
+    if (sfs_bd_is_registered(bd))
+        return;
+    kputs("[sfs-uaf] STALE CTX op="); kputs(op);
+    kputs(" bd=");     kputhex((uint64_t)(uintptr_t)bd);
+    kputs(" blk=");    kputdec(blk);
+    kputs(" caller="); kputhex((uint64_t)(uintptr_t)ret);
+    if ((uint64_t)(uintptr_t)bd == SFS_MAGIC)
+        kputs(" note=bd-holds-SFS_MAGIC-ctx-aliases-a-superblock");
+    kputs("
+");
+}
+
 static void rd_block_bd(struct blk_device *bd, uint64_t blk, void *buf) {
+    sfs_bd_guard(bd, blk, "read", __builtin_return_address(0));
     bd->read(bd, blk * SFS_SECTORS_PER_BLOCK, buf, SFS_SECTORS_PER_BLOCK);
 }
 static void wr_block_bd(struct blk_device *bd, uint64_t blk, const void *buf) {
+    sfs_bd_guard(bd, blk, "write", __builtin_return_address(0));
     bd->write(bd, blk * SFS_SECTORS_PER_BLOCK, buf, SFS_SECTORS_PER_BLOCK);
 }
 static void rd_block(struct sfs_ctx *c, uint64_t blk, void *buf) {
+    sfs_bd_guard(c->bd, blk, "read-ctx", __builtin_return_address(0));
     rd_block_bd(c->bd, blk, buf);
 }
 static void wr_block(struct sfs_ctx *c, uint64_t blk, const void *buf) {
+    sfs_bd_guard(c->bd, blk, "write-ctx", __builtin_return_address(0));
     wr_block_bd(c->bd, blk, buf);
 }
 

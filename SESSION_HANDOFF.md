@@ -5591,3 +5591,36 @@ Two more RULE 24 / I24 harness files added after inline forms lied again:
 `tools/ci/sym_at.py` (awk did 64-bit address math in DOUBLES and named the WRONG
 function — 0xFFFFFFFF8002CD18 is past 2^53; python integers are exact) and
 `tools/ci/hygiene_check.sh` / `build_check.sh` from the previous checkpoint.
+
+### P1a — DDR-953 UAF instrument added (LOCAL ONLY, NOT VALIDATED, NOT PUSHED)
+
+`kernel/fs/sfs/sfs.c`: `sfs_bd_guard()` on all four block accessors
+(`rd_block`, `wr_block`, `rd_block_bd`, `wr_block_bd`). Validates `bd` against
+the **registered device list** (`blk_get`/`blk_count`, exact — not an address
+range), and on mismatch prints:
+
+    [sfs-uaf] STALE CTX op=<..> bd=<..> blk=<..> caller=<..> [note=bd-holds-SFS_MAGIC..]
+
+then RETURNS so the natural fault still produces the full register dump.
+Behaviour on a valid pointer is bit-identical. Build rc=0, 0 warnings.
+
+**DEVIATION FROM THE PROMPT'S P1a, deliberate.** The prompt specifies
+poison-on-free in `sfs_umount`. That would NOT have caught the captured crash:
+`bd` held `SFS_MAGIC`, so the chunk had already been reallocated and overwritten
+with superblock bytes — any poison written at `kfree` time was overwritten too.
+Poison only catches a deref BEFORE reuse, a strict subset, and not the case on
+record. (`KHEAP_DEBUG` already provides free-poisoning for that subset.) The
+capture does not lack "what was corrupt" — that is settled — it lacks WHICH
+CALLER held the dead pointer, so the check belongs at the dereference.
+
+**NOT YET VALIDATED — do this first, it is the blocking risk:** the guard has
+never run. If `bd` is ever legitimately not-yet-registered, it will print on
+every SFS access and drown the logs. Before pushing:
+  1. `pgrep -f "[q]emu-system-x86_64"` empty (file-based harness, I15/S16).
+  2. Run any SFS-touching gate and confirm **zero** `[sfs-uaf]` lines on a
+     PASSING boot. Only then push.
+  3. Then P1b: loop `smoke-agentmetrics` under -smp 4 until the panic fires and
+     read `caller=` with `tools/ci/sym_at.py` (NOT awk — I28/S21).
+
+Also still owed from DDR-952: **`smoke-blkmq` has never been run** (P0b), and
+ADR-038 still needs 3 CI greens on one tip (P0c).
