@@ -148,23 +148,33 @@ void irq_register(unsigned irq, irq_handler_fn fn) {
 _Static_assert(sizeof(g_ticks) == 8, "DDR-889: g_ticks must stay 8 bytes (lock-free atomic add)");
 
 static void timer_tick(struct regs *r) {
-    __atomic_add_fetch(&g_ticks, 1, __ATOMIC_RELAXED);
+    /* DDR-952: use THIS tick's value, never a re-read of the global.
+     * DDR-889 made the increment atomic, which stopped ticks being LOST, but
+     * left every consumer below re-reading g_ticks. That is still a race, and
+     * it has a worse failure mode than the duplicate heartbeat that motivated
+     * it: two CPUs that increment to N and N+1 can BOTH re-read N (heartbeat
+     * prints twice) or BOTH re-read N+1 (the value N is matched by nobody, so
+     * the %100 blk watchdog and %10 lwIP arms are SKIPPED outright for that
+     * tick). A skipped watchdog is silent; a doubled print is merely noisy.
+     * __atomic_add_fetch already returns the post-increment value, so taking it
+     * makes each tick value handled exactly once by exactly one CPU. */
+    const uint64_t now = __atomic_add_fetch(&g_ticks, 1, __ATOMIC_RELAXED);
     if (vdso_data) {                   /* IMP-C: advance the user-visible clock */
         vdso_data->seq++;              /* odd = write in progress */
         vdso_data->wall_time_ns += 10000000ull;   /* 10 ms per tick @100 Hz */
         vdso_data->seq++;              /* even = write complete  */
     }
     sched_tick();
-    if ((g_ticks % 10u) == 0)         /* NET-B: drive lwIP timers ~every 100 ms */
+    if ((now % 10u) == 0)         /* NET-B: drive lwIP timers ~every 100 ms */
         net_poll_tick();
-    if ((g_ticks % 100u) == 0)        /* DDR-776: ~1 s stuck-blk-request scan */
+    if ((now % 100u) == 0)        /* DDR-776: ~1 s stuck-blk-request scan */
         virtio_blk_watchdog();
-    if ((g_ticks % 500u) == 0) {      /* DDR-777: ~5 s heartbeat — proves whether
+    if ((now % 500u) == 0) {      /* DDR-777: ~5 s heartbeat — proves whether
                                        * g_ticks is still advancing during a B#3
                                        * stall (a g_ticks-bounded wait is only as
                                        * bounded as the timer). Evidence only:
                                        * no gate asserts on it. */
-        kputs("[hb] t="); kputdec(g_ticks);
+        kputs("[hb] t="); kputdec(now);
         { extern uint64_t g_thre_drops, g_rx_drops;
           kputs(" thre_drops="); kputdec(g_thre_drops);
           kputs(" rx_drops=");   kputdec(g_rx_drops); }
