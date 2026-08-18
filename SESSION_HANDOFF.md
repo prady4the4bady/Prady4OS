@@ -5497,3 +5497,47 @@ blk failure. Workers-late is not preempt suppression.
    `__init_tls`/`__init_ssp` consult. Candidate to CHECK if `writes=0`, not a claim.
 
 ### Next free DDR: 950
+
+---
+
+## CHECKPOINT — DDR-951, OPEN-9 stage 2 (pre-flight stray guard + orphan cause)
+
+**Tip at checkpoint:** 889a059. **Not pushed yet** — two `workflow_dispatch` runs
+(32086799351, 32086772141) were still `in_progress` on 889a059 at commit time.
+Pushing would have landed a third dispatch on the same ref and GitHub's
+concurrency group would have **cancelled** the older two, destroying ~30 min of
+in-flight verification. Push only after both report.
+
+**What changed:** `tools/qemu_runner/boot_test.sh` only.
+1. Pre-flight stray-QEMU check (bracket form, §0.3) → `exit 3` before launch.
+2. `trap … INT TERM` on the QEMU child → orphans no longer survive cancellation.
+
+**What did NOT change, and why it matters:** the OPEN-9 *misattribution* was
+already fixed by DDR-823 (exit 3 + named host-env failure). The backlog text for
+A1 describes it as outstanding; that text is stale. DDR-951 §a records this so
+the item is not closed on a false claim.
+
+**Verification:** two arms, both PASS (A: no stray → does not trip, rc=1 from an
+absent sentinel; B: synthetic stray → rc=3, pre-flight). Residue clean.
+The FIRST attempt was **VOID** — harness passed to WSL as `bash -c '<script>'`,
+so the script text put `qemu-system-x86_64` into the harness's own argv and
+`pgrep -f` matched the apparatus. Recorded in DDR-951 §d as a repeat of the
+measurement-alters-measurement class (§0.3, RULE 24).
+
+**DDR numbering conflict — resolved in favour of CLAUDE.md.** The operator
+directive's §7 says "start new DDRs at DDR-890". DDR-890..949 are **occupied**;
+CLAUDE.md §0.4 fixes the free range at DDR-936+ precisely because an earlier
+session collided there. Allocated **DDR-951**. DDR-950 remains drafted and
+uncommitted under `build/gatelogs/drafts/` pending its N=30 measurement.
+
+### CURRENT_ACTIVE_TASK (next session picks up here)
+1. Read the verdict of runs 32086799351 / 32086772141 on 889a059.
+2. Push this commit + the ADR-038 docs-only mirror commit. ONE dispatch only.
+3. Then §7.2 **Item 47** (g_ticks stall). Baseline discriminator is established:
+   passing-run A→B gap is **769–1446 ticks** with `[hb]` every 500 ticks and NO
+   gap in the series. So on a FAILING run:
+     - B absent + `[hb]` stops              → AP LAPIC init
+     - B absent + `[hb]` continues >1500t   → percpu runqueue starvation
+     - B present, gap ≲1450                 → baseline, not a stall
+   `[hb]` prints t=3000 twice (DDR-889 double-print) — do not double-count.
+   The capture is only informative on a **failing** run; force one under `-smp 4`.

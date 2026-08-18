@@ -42,6 +42,43 @@ if [ ! -f "$IMG" ]; then
     exit 0
 fi
 
+# DDR-951 / OPEN-9 stage 2 — PRE-flight stray check.
+#
+# The post-hoc handler below (search "STALE QEMU HOLDING IMAGE LOCK") already
+# stops a stray from being misreported as a kernel failure, but it can only fire
+# AFTER this gate has burned its whole timeout window, and only when QEMU
+# actually emits the lock message. Two cases slip past it:
+#   1. The stray holds a DIFFERENT image. No lock error is printed, so the run
+#      proceeds -- but both QEMUs then compete for host CPU, and every timing
+#      gate in this tree is a claim about wall-clock. That is a SILENT
+#      perturbation, which is worse than a loud failure.
+#   2. The stray is mid-shutdown. Whether the lock error appears is then a race,
+#      so one host condition yields two different verdicts.
+# Checking first collapses both into one deterministic exit 3.
+#
+# BRACKET FORM IS MANDATORY. `pgrep qemu-system-x86_64` matches NOTHING, ever:
+# Linux truncates comm to 15 chars and the name is 18, so every "no stray QEMU"
+# observation recorded against the name form was vacuous. The bracket in
+# "[q]emu" additionally keeps this command from matching its own pattern.
+if command -v pgrep >/dev/null 2>&1; then
+    stray="$(pgrep -f "[q]emu-system-x86_64" || true)"
+    if [ -n "$stray" ]; then
+        stray_flat="$(echo "$stray" | tr '
+' ' ')"
+        echo "[smoke] HOST-ENV FAIL -- STALE QEMU HOLDS IMAGE LOCK (pre-flight)."
+        echo "[smoke] Refusing to start: a qemu-system-x86_64 is already running."
+        echo "[smoke] This run was NOT attempted; it says NOTHING about the kernel."
+        echo "[smoke] Offending pid(s): $stray_flat"
+        echo "[smoke] Inspect before killing -- it may be a gate you started:"
+        stray_csv="$(echo "$stray" | paste -sd, -)"
+        echo "[smoke]     ps -o pid,etime,args -p $stray_csv"
+        rm -f "$SERIAL_LOG" "$QEMU_ERR"
+        exit 3
+    fi
+else
+    echo "[smoke] NOTE: pgrep unavailable -- pre-flight stray-QEMU check skipped."
+fi
+
 echo "[smoke] booting $IMG (timeout ${TIMEOUT_S}s, sentinel: '$SENTINEL')..."
 # q35 gives a PCIe machine with an ACPI MCFG table (MMCONFIG/ECAM) for Phase 3
 # enumeration. Boot from a virtio-blk disk and add a virtio-net device so the
@@ -367,6 +404,17 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     -serial "file:$SERIAL_LOG" \
     2>"$QEMU_ERR" &
 qemu_pid=$!
+
+# DDR-951 -- reap our own child on interruption, not only on the timeout path.
+# The normal path kills $qemu_pid when the window expires, so a run that
+# completes leaks nothing. An INTERRUPTED run is the actual leak source: this
+# project's CI cancels runs routinely (the workflow concurrency group cancels
+# the older run whenever two dispatches land on one ref), and Ctrl-C does the
+# same locally. The shell dies, QEMU is orphaned, and it holds the image write
+# lock until someone notices. That orphan is exactly what the pre-flight check
+# above trips over on the NEXT run -- so this trap removes the CAUSE, while the
+# check above only contains the symptom.
+trap 'kill "$qemu_pid" 2>/dev/null; exit 130' INT TERM
 
 # DDR-887 watcher: fire ~5 s before the hard timeout, while QEMU is still alive,
 # and append the vCPU dump to the serial capture so it lands in the artifact.
