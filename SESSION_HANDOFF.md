@@ -5769,3 +5769,51 @@ moved the count from 43ce5a9 to 227c643 and cost a cycle.
 3. FEAT-1 `$?` / FEAT-2 SIGPIPE / FEAT-3 SFS root / FEAT-7 sched_block_timeout.
 4. NOT NEEDED — already shipped and gated: SYS_FTRUNCATE (94), SYS_GETDENTS (66),
    the BIOS+UEFI ISO (`make iso` + `smoke-iso-x86`, shard 1).
+
+### ADR-038 green #2 FAILED — count reset. New intermittent isolated (NOT the UAF)
+
+Run `32259190462` (workflow_dispatch on **227c643**, the same SHA that passed
+twice) → **failure**, shard 5, gate **`smoke-fs`**, missing required sentinel
+`[sfs] freelist persist OK`.
+
+**It is NOT the DDR-953/954 use-after-free.** Verified in the failing log:
+`sfs-uaf` lines = **0**, `KERNEL PANIC` = **0**. The `[sfs]` trace shows the
+self-tests completing (`lz4+tags compress/readback/tag OK`), the persistent root
+provisioned, and the AETHER daemon rooted at SFS. The freelist-persist self-test
+simply never announced.
+
+**My DDR-954 fix was checked as a cause and cleared.** `mnt_lock_live()` bails
+when `!m->used || !m->ctx`, so a mount with a legitimately-NULL ctx would now
+get a spurious `-EIO`. The only virtual mount in the tree is `pdrive`
+(`main.c:2241` → `vfs_mount_virtual("pdrive")`), and `pd_mount` sets
+`*ctx = c` to a real pointer (`pdrive.c:82`). No mount in the tree carries a
+NULL ctx, so the guard cannot mis-fire. Risk cleared by inspection.
+
+**Rate so far for `smoke-fs`:** 1 fail in ~12 observations (9/9 local
+`fs_regression`, 2 CI green on this SHA, 1 CI fail). Not yet characterised —
+needs `gate_rate.sh smoke-fs 20` before any fix (R11: this is an active bug,
+not a known intermittent).
+
+**ADR-038 status:** three-green count is **0/3** — a failure breaks the
+consecutive run. ADR-038 code is in the tree and gated; only the greens are owed.
+
+### Verified corrections to §0 of the driving prompt (checked in-tree)
+- **`mv` is NOT a PRISM builtin.** §0 lists it as shipped and FEAT-B(f) calls it
+  "already scaffolded". Neither is true — `user/prism.c` has 16 builtins
+  (cat date dmesg echo exit free help kill ls mode ps rm run touch uname uptime)
+  and **no `mv`**. It must be written from scratch.
+- `SYS_RENAME` / `sys_rename` / `vfs_rename` are **absent** — FEAT-B is
+  genuinely new, confirming that part of §0.
+- `$?` (11 refs) and pipes/redirection (29 refs) in `prism.c` ARE shipped.
+- **NSI max verified live = 94 → next free 95** (confirms §0/R5).
+
+### EXACT NEXT ACTION
+1. `gate_rate.sh smoke-fs 20` to characterise the new intermittent. Do NOT fix
+   before the rate and mechanism are known (§6.0-B / R11).
+2. Find why `[sfs] freelist persist OK` is skipped — suspect ordering between
+   the freelist-persist self-test and the SFS-root provisioning that now runs
+   before it (both appear in the same boot).
+3. Once green, restart ADR-038's 3 greens: `gh workflow run pradyos-ci --ref
+   dev/phase1`, ONE dispatch at a time.
+4. Then FEAT-A (`sched_block_timeout`, DDR-955 written — see its §c for two
+   corrections to the prescribed design) and FEAT-B (`SYS_RENAME`, NSI 95).
