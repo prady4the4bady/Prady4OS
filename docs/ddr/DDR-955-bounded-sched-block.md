@@ -90,3 +90,59 @@ primitive converts it from a silent hang into a loud, attributable `-EIO` with a
 named device and LBA. That is **diagnostic value, not proof of a fix** — and it
 must not be reported as closing BUG-A. BUG-A is closed only by the DDR-777
 discriminator naming the mechanism, per CLAUDE.md §0.2.
+
+---
+
+## j. CORRECTIONS 3-6 — verified against the tree before implementation (R18)
+
+Implementation has NOT started. These are defects in the prescribed design that
+would have compiled and then deadlocked or silently done nothing.
+
+### Correction 3 — `g_all_threads[]` / `SCHED_MAX_THREADS` do not exist
+Neither symbol is in the tree. Threads are reachable via per-CPU runqueues
+(`g_rq[c]`, `rq_next`, **READY only** — a BLOCKED thread with an expired
+deadline is unreachable there) and a ring linked by `tcb->next`. `g_sched_lock`
+(`sched.c:71`) "covers ring TOPOLOGY only" (`sched.c:637`).
+
+### Correction 4 — the calling convention is INVERTED in the prescription
+The prescribed body opens with `spin_acquire(lk)`. That is backwards and would
+**double-acquire and deadlock on the first call**. The proven contract, from
+`sched_block_on` (`sched.c:1304`) and its live caller (`virtio_blk.c:259-260`):
+
+```c
+/* caller ALREADY holds lk (spin_lock_irqsave earlier) */
+while (!v->req[s].done)
+    sched_block_on(&v->compl_lock);
+```
+
+`sched_block_on` therefore **receives** the lock held, does
+`spin_unlock(lk); schedule(); spin_lock(lk);` and **returns with lk still held**.
+`sched_block_timeout` MUST match this exactly, or every caller breaks: they
+proceed to `spin_unlock_irqrestore(&v->compl_lock, fl)` (`virtio_blk.c:266`)
+on a lock the function had already released.
+
+### Correction 5 — three wrong symbol names
+| prescribed | actual in tree |
+|---|---|
+| `spin_acquire` / `spin_release` | `spin_lock` / `spin_unlock` |
+| `this_cpu()->current` | `current_thread` |
+| `yield()` | `schedule()` |
+
+### Correction 6 — the expiry scan is CASE A, and simpler than either branch
+`sched_unblock` (`sched.c:1322`) does **not** take `g_sched_lock`. It performs an
+atomic CAS `BLOCKED -> READY` then `rq_push`, which is documented as "a leaf
+lock, **safe from IRQ handlers** and under device compl locks". So the timer may
+call `sched_unblock` directly — neither the `g_timeout_lock` list of CASE B nor
+a deferred wake array is needed.
+
+`schedule()` also no longer takes `g_sched_lock` at all (`sched.c:634-637`), and
+`g_sched_lock` is always taken with `spin_lock_irqsave` (`sched.c:628`), so IRQs
+are masked while it is held and a timer IRQ cannot re-enter it on the same CPU.
+
+**Remaining open question — settle before coding:** whether the `tcb->next` ring
+enumerates every thread or only the per-CPU idles (`g_idle` is
+`struct tcb *g_idle[PERCPU_MAX]`, `sched.c:77`). If it is idle-only, the scan
+reaches no blocked thread and the timeout **silently never fires** — a bounded
+wait that is not bounded, passing any gate that only tests the happy path. Read
+`sched_snapshot` (which walks threads under `g_sched_lock`) to find the true
+enumeration head before writing the scan.

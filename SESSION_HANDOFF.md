@@ -6033,3 +6033,37 @@ list would compile, run, and silently expire nothing.
 Confirm whether the `->next` ring seeded at `g_idle[0]` enumerates ALL threads
 or only idles (`kernel/proc/sched.c:774-812`), amend DDR-955 §c accordingly,
 then implement `sched_block_timeout` using `struct tcb` at `kernel/proc/sched.h:48`.
+
+### FEAT-A NOT STARTED — four design defects found first (R18), tip e5b097a PUSHED
+
+`e5b097a` is pushed; remote tip = `e5b097a`. CI will run on it.
+
+**FEAT-A implementation deliberately not begun.** R18 verification against the
+tree found the prescribed design would compile and then deadlock. Recorded as
+DDR-955 §j Corrections 3-6:
+
+1. **Calling convention inverted.** The prescribed body starts with
+   `spin_acquire(lk)`. `sched_block_on` (`sched.c:1304`) is called with the lock
+   ALREADY HELD (`virtio_blk.c:259-260`), releases it, schedules, and returns
+   with it **re-acquired**. Opening with an acquire = double-acquire deadlock on
+   the first call; and callers then `spin_unlock_irqrestore` a lock the function
+   already dropped (`virtio_blk.c:266`).
+2. **Three wrong names:** `spin_acquire/spin_release` → `spin_lock/spin_unlock`;
+   `this_cpu()->current` → `current_thread`; `yield()` → `schedule()`.
+3. **CASE B is unnecessary.** `sched_unblock` (`sched.c:1322`) does NOT take
+   `g_sched_lock` — atomic CAS + `rq_push`, documented "safe from IRQ handlers".
+   The timer can call it directly; no `g_timeout_lock` list needed. This is
+   CASE A, and simpler than either branch the prompt describes.
+4. **`g_all_threads[]` / `SCHED_MAX_THREADS` absent** (already Correction 3).
+
+**BLOCKING QUESTION before any code:** does the `tcb->next` ring enumerate all
+threads, or only the per-CPU idles (`struct tcb *g_idle[PERCPU_MAX]`,
+`sched.c:77`)? If idle-only, the expiry scan reaches no blocked thread and the
+timeout silently never fires — a "bounded" wait that is not bounded and that
+passes any happy-path gate. Read `sched_snapshot` for the true enumeration head.
+
+### NEXT ACTION (one sentence)
+Read `sched_snapshot` in `kernel/proc/sched.c` to identify the head it walks
+under `g_sched_lock`, confirm it reaches THREAD_BLOCKED threads, then write
+`sched_block_timeout` matching `sched_block_on`'s lock-held-on-entry-and-exit
+contract.
