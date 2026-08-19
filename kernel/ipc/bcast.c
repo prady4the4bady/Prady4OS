@@ -10,6 +10,7 @@
  * race the same way the synchronous endpoint does.
  */
 #include "bcast.h"
+#include "errno.h"     /* DDR-955: ETIMEDOUT */
 #include "sched.h"
 
 void bcast_bus_init(struct bcast_bus *b, uint64_t res_id) {
@@ -25,6 +26,7 @@ int bcast_subscribe(struct cap_table *caps, cap_t h, struct bcast_bus *b,
     s->mask = mask;
     s->head = s->tail = 0;
     s->waiter = 0;
+    s->pending = 0;
     s->lock = (spinlock_t)SPINLOCK_INIT;
     uint64_t flags = spin_lock_irqsave(&b->lock);
     s->next = b->subs;
@@ -40,6 +42,7 @@ static void enqueue(struct bcast_subscriber *s, uint32_t type, uint64_t payload)
     s->q[s->tail].type = type;
     s->q[s->tail].payload = payload;
     s->tail = next;
+    s->pending = 1;
 }
 
 int bcast_publish(struct cap_table *caps, cap_t h, struct bcast_bus *b,
@@ -68,8 +71,12 @@ void bcast_wait(struct bcast_subscriber *s, struct bcast_event *out) {
     while (s->head == s->tail) {
         s->waiter = current_thread;
         sched_block_on(&s->lock);        /* publishes BLOCKED under the lock, then sleeps */
+        /* DDR-955: NOT bounded. bcast_wait returns void and fills *out, so an
+         * early timeout return would hand the caller an UNFILLED buffer with no
+         * way to detect it. Bounding this needs a return value first. */
     }
     *out = s->q[s->head];
     s->head = (s->head + 1) % BCAST_QUEUE;
+    if (s->head == s->tail) s->pending = 0;
     spin_unlock_irqrestore(&s->lock, flags);
 }

@@ -9,6 +9,7 @@
  * and re-checks the condition before the final irqrestore.
  */
 #include "ipc.h"
+#include "errno.h"     /* DDR-955: ETIMEDOUT */
 #include "sched.h"
 
 /* DDR-873 (item 43): the 32-byte payload copy lives in
@@ -58,6 +59,9 @@ int ipc_recv(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, uint64_t *
     while (!e->full) {
         e->waiting_receiver = current_thread;
         sched_block_on(&e->lock);  /* publishes BLOCKED under the lock, then sleeps */
+        /* DDR-955: NOT bounded. ipc_recv's -1 already means "cap denied", so a
+         * timeout returning -1 is indistinguishable from a permission failure.
+         * Bounding this needs a distinct return code first. */
     }
     ipc_copy32(out, e->msg);
     e->full = 0;

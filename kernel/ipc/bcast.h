@@ -34,6 +34,7 @@ struct bcast_subscriber {
     struct bcast_subscriber *next;       /* linked into the bus                */
     spinlock_t lock;                     /* DDR-SMP-3c-locks-4: guards q + waiter
                                           * (MPSC: many publishers, one drainer) */
+    volatile int pending;   /* DDR-955: 1 when queue has an unread item */
 };
 
 struct bcast_bus {

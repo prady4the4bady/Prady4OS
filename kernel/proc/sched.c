@@ -1,5 +1,6 @@
 /* kernel/sched.c — preemptive round-robin kernel scheduler (Phase 2c/2e). */
 #include "sched.h"
+#include "errno.h"     /* DDR-955: ETIMEDOUT for sched_block_timeout */
 #include "numa.h"      /* DDR-885: NUMA-affine steal order */
 #include "kheap.h"
 #include "console.h"
@@ -870,6 +871,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dbg_v_at_wake   = 0;
     t->dbg_picks       = 0;
     t->dbg_ticks       = 0;
+    t->block_deadline  = 0;   /* DDR-955 */
+    t->wake_timed_out  = 0;   /* DDR-955 */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -1250,7 +1253,31 @@ void sched_tick(void) {
         pc->ticks++;               /* cap-3: per-CPU timer-tick count (preempt proof) */
     if (!current_thread)
         return;                    /* scheduler not up yet */
-    current_thread->run_ticks++;   /* DDR-735: sampled CPU time (this CPU owns it) */
+    current_thread->run_ticks++;
+
+    /* DDR-955: expire blocked threads whose deadline has passed */
+    {
+        struct tcb *_wake[32];
+        int _nwake = 0;
+        uint64_t _fl2 = irq_save();
+        struct tcb *_t = current_thread;
+        if (_t) {
+            do {
+                if (_t->state == THREAD_BLOCKED
+                    && _t->block_deadline != 0
+                    && g_ticks >= _t->block_deadline
+                    && _nwake < 32) {
+                    _t->wake_timed_out = 1;
+                    _t->block_deadline = 0;
+                    _wake[_nwake++] = _t;
+                }
+                _t = _t->next;
+            } while (_t != current_thread);
+        }
+        irq_restore(_fl2);
+        for (int _i = 0; _i < _nwake; _i++)
+            sched_unblock(_wake[_i]);
+    }   /* DDR-735: sampled CPU time (this CPU owns it) */
     sched_dbg_charge(current_thread, 1);
     {
         uint64_t d = (g_dbg_floor > g_vr_last_tick) ? (g_dbg_floor - g_vr_last_tick) : 0;
@@ -1317,6 +1344,27 @@ void sched_block_on(spinlock_t *lk) {
     spin_unlock(lk);
     schedule();
     spin_lock(lk);
+}
+
+/* DDR-955: sched_block_on with a deadline.
+ * IDENTICAL locking contract: called WITH lk held, returns WITH lk held.
+ * Returns 0 on normal wake, -ETIMEDOUT if the timer expired first. */
+int sched_block_timeout(spinlock_t *lk, volatile int *done,
+                        uint64_t timeout_ticks)
+{
+    if (!current_thread) {
+        spin_unlock(lk);
+        return -ETIMEDOUT;
+    }
+    if (*done) return 0;
+    current_thread->wake_timed_out = 0;
+    current_thread->block_deadline = g_ticks + timeout_ticks;
+    current_thread->state = THREAD_BLOCKED;
+    spin_unlock(lk);
+    schedule();
+    spin_lock(lk);
+    current_thread->block_deadline = 0;
+    return current_thread->wake_timed_out ? -ETIMEDOUT : 0;
 }
 
 void sched_unblock(struct tcb *t) {

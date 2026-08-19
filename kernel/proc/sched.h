@@ -174,6 +174,9 @@ struct tcb {
      * running CPU; schedule() under the on_cpu claim) — lock-free by exclusion. */
     uint64_t   run_ticks;       /* 100 Hz ticks observed while current (sampled CPU time) */
     uint64_t   dispatches;      /* times the scheduler switched this thread in           */
+    /* DDR-955: bounded-wait fields */
+    uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
+    int        wake_timed_out;   /* 1 if timer expired before wakeup   */
 };
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
@@ -213,6 +216,8 @@ void        sched_block(void);                                  /* block current
  * on return — so a waker serialized after the release always sees BLOCKED and
  * its sched_unblock CAS cannot be lost. IRQs stay as the caller left them. */
 void        sched_block_on(spinlock_t *lk);
+int         sched_block_timeout(spinlock_t *lk, volatile int *done,
+                                uint64_t timeout_ticks);
 /* DDR-885 (item 37): how many steals stayed on-node vs crossed. Diagnostic —
  * the gate reads these to show the two-pass order is actually exercised. */
 void        sched_steal_counts(uint64_t *local, uint64_t *remote);

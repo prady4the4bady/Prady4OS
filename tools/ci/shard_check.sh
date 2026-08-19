@@ -33,7 +33,12 @@ MAKEFILE="$ROOT/Makefile"
 #                    unrelated promotions. Register it when OPEN-10 is fixed.
 #   smoke-agent-live ) developer-run only: needs a live Ollama endpoint on the
 #                      host, so CI stays in test mode (ADR-027)
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4"
+# smoke-fs-liveness: DDR-777/BUG-1 diagnostic. It REBUILDS the kernel with
+# BSP_LIVENESS=1, whose per-iteration churn output fills the 4 KiB dmesg ring
+# and evicts smoke-dmesg's required marker (DDR-790). It must never run in the
+# shared-image shard matrix. Remove this exclusion when BUG-1 closes and the
+# target is deleted.
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4 smoke-fs-liveness"
 
 excluded() {
     local t="$1" e

@@ -29,3 +29,4 @@
 #define ENOSPC         28   /* no space left (bounded kernel table full) */
 #define ETAMPER       133  /* DDR-812: record hash failed verification */
 #define ENOKEY        126  /* DDR-834: key derivation failed (Linux value) */
+#define ETIMEDOUT     110  /* DDR-955: timed-block wait expired */

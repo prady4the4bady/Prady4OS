@@ -174,3 +174,4 @@
 0	smoke-uefi	90
 1	smoke-iso-x86	240
 2	smoke-wmorder	120
+0	smoke-blk-timeout	120

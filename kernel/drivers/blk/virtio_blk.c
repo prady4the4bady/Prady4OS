@@ -7,6 +7,7 @@
  * blocked caller. One request in flight per disk.
  */
 #include "virtio_blk.h"
+#include "errno.h"     /* DDR-955: ETIMEDOUT / EIO */
 #include "blk.h"
 #include "virtio.h"
 #include "virtio_pci.h"
@@ -64,7 +65,8 @@ struct vblk {
     spinlock_t            compl_lock; /* DDR-714C3/BLK-1: guards the vq + all slot
                                        * state — submit and completion now overlap
                                        * across CPUs (short, non-sleeping sections) */
-    volatile int          compl_ap;   /* proof: a completion ran on a non-BSP CPU */
+    volatile int          compl_ap;
+    volatile int          slot_free;  /* DDR-955: 1 when a slot just freed */   /* proof: a completion ran on a non-BSP CPU */
 };
 
 /* DDR-878: one-shot witness that two submitters really do wait at once. */
@@ -185,6 +187,7 @@ static void slot_wake_one(struct vblk *v) {
     if (!v->slot_head)
         v->slot_tail = 0;
     w->blk_wait_next = 0;
+    v->slot_free = 1;      /* DDR-955: signal that a slot is available */
     sched_unblock(w);
 }
 
@@ -219,7 +222,14 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
             v->slot_head = current_thread;
         }
         v->slot_tail = current_thread;
-        sched_block_on(&v->compl_lock);        /* woken when a slot frees */
+        if (sched_block_timeout(&v->compl_lock,
+                                &v->slot_free,
+                                500) == -ETIMEDOUT) {
+            kputs("[vblk] slot wait timeout\r\n");
+            spin_unlock_irqrestore(&v->compl_lock, fl);
+            return -EIO;
+        }
+        v->slot_free = 0;
     }
     v->req[s].used = 1;
     v->req[s].done = 0;
@@ -256,8 +266,18 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     virtq_publish(&v->vq, head);
     virtio_pci_notify(&v->dev, &v->vq, 0);
 
-    while (!v->req[s].done)
-        sched_block_on(&v->compl_lock);        /* BLOCKED published under the lock */
+    while (!v->req[s].done) {
+        if (sched_block_timeout(&v->compl_lock,
+                                &v->req[s].done,
+                                500) == -ETIMEDOUT) {
+            kputs("[vblk] compl wait timeout\r\n");
+            v->req[s].used = 0;
+            v->req[s].waiter = 0;
+            slot_wake_one(v);
+            spin_unlock_irqrestore(&v->compl_lock, fl);
+            return -EIO;
+        }
+    }
 
     int ok = (*status == 0);
     v->req[s].used = 0;                        /* release the slot ... */
@@ -308,6 +328,7 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     uint8_t vec = (uint8_t)(VBLK_MSIX_BASE + unit);
     v->compl_lock = (spinlock_t)SPINLOCK_INIT;
     v->compl_ap = 0;
+    v->slot_free = 0;
     v->slot_head = 0;
     v->slot_tail = 0;
     for (int i = 0; i < VBLK_NREQ; i++) {      /* DDR-BLK-1: request slots */
