@@ -102,3 +102,72 @@ a block-device lock.
 `unlink`; and use-after-unmount, which must return `-EIO` rather than fault.
 Acceptance is **N=20 green on one kernel hash** via `gate_rate.sh`, because a
 1-in-10 defect trivially survives a 5-run check.
+
+---
+
+## h. The fix as implemented — and why it is NOT the prescribed refcount
+
+The prescribed fix was: add `ctx_refcount` to `struct vfs_mount`, add
+`vfs_ctx_get`/`vfs_ctx_put`, and have `vfs_unmount` store 0 and wait for holders.
+That was **not implemented**, for two reasons — one structural, one a defect in
+the prescription itself.
+
+**1. The mechanism already exists.** `struct vfs_mount` already carries `busy`,
+a per-mount sleep-mutex (`mnt_lock`/`mnt_unlock`, added by DDR-SMP-3c-locks-3),
+and **all ten** FS entry points already serialise on it:
+
+```c
+int vfs_unlink(cap_t cap, int mnt, const char *path) {
+    ...
+    mnt_lock(m);
+    int r = m->fs->unlink(m->ctx, path);
+    mnt_unlock(m);
+```
+
+`vfs_unmount` was the **single** writer of `m->ctx` that never took that lock —
+it called `m->fs->umount(m->ctx)` (which `kfree`s) and cleared the slot with no
+mutual exclusion whatsoever. That asymmetry *is* the race. Adding a second,
+parallel lifetime mechanism alongside the existing mutex would leave two
+overlapping schemes to keep consistent, which is how the next defect gets built.
+
+**2. The prescribed step is itself unsound.** `atomic_store(&m->ctx_refcount, 0)`
+while holders exist *discards* their outstanding counts. Each holder then calls
+`vfs_ctx_put`, driving the counter negative — or, if `put` frees at zero, causing
+a **double free**. A bounded wait after zeroing does not repair this, because the
+count it would wait on has already been destroyed.
+
+### What was implemented
+
+- `vfs_unmount` now takes `mnt_lock` and clears `ctx`/`used`/`fs`/`bd` **before**
+  releasing it. The free now waits for any in-flight op to finish.
+- New `mnt_lock_live(m)`: acquires the lock, then **re-validates** `used && ctx`,
+  returning 0 with the lock released if the mount died. All ten op sites use it
+  and return `-EIO` when it fails.
+
+The re-validation is the non-obvious half. `mnt_get()` runs *before* the lock, so
+a thread can resolve a live mount, queue on `busy` behind an in-flight op, and be
+handed the lock only after unmount has freed the context — then operate on freed
+memory with the lock correctly held. Taking the lock alone does not fix this;
+clearing the slot under the lock plus re-checking after acquisition does.
+
+Lock order is unchanged (`mount → blk`); no scheduler lock is taken, so no
+inversion (§R9). Build: `make image` rc=0, 0 warnings, hash **moved**
+`6f464197… → 6c56b414…`.
+
+## i. Ground-state corrections found while implementing (verified in-tree)
+
+- **NSI 79/80/81 are TAKEN** — `SYS_GOAL_SIGN`=79, `SYS_GOAL_VERIFY`=80,
+  `SYS_ACC_ROTATE`=81. The real maximum is **94** (`SYS_FTRUNCATE`), so the next
+  free number is **95**. Assigning 79/80/81 to new syscalls would have collided
+  with three live entries and broken the wire ABI.
+- **`SYS_FTRUNCATE` already exists** at NSI 94, `vfs_fs_ops.truncate` already
+  exists (DDR-866), and **`smoke-ftruncate` is already a registered gate**
+  (shard 4, 90s). That feature is shipped, not pending.
+- **The ISO already exists.** `make iso` builds a hybrid BIOS+UEFI image with
+  `xorriso` (not GRUB), and **`smoke-iso-x86` is already a registered gate**
+  (shard 1, 240s) asserting `NEXUS KERNEL OK` on **both** the BIOS arm and the
+  UEFI arm. There is no Multiboot2 header anywhere in the tree because this path
+  does not need one; adding GRUB/multiboot2 would duplicate a working, gated
+  boot path and risk regressing it.
+- `SYS_GETDENTS` already exists at NSI 66. Only `SYS_RENAME` is genuinely
+  absent — it should take **NSI 95**.

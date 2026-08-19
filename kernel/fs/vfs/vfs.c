@@ -30,6 +30,27 @@ static void mnt_unlock(struct vfs_mount *m) {
     __atomic_store_n(&m->busy, 0, __ATOMIC_RELEASE);
 }
 
+/* DDR-954: take the mount lock and prove the mount is STILL LIVE.
+ *
+ * Acquiring the lock is necessary but NOT sufficient. mnt_get() runs before the
+ * lock, so a thread can resolve a live mount, block on `busy` behind an
+ * in-flight op, and be handed the lock only after vfs_unmount has freed the
+ * context underneath it. It would then operate on freed memory with the lock
+ * correctly held. Re-checking used/ctx AFTER acquisition closes that window:
+ * vfs_unmount clears both while holding the same lock, so any waiter that wakes
+ * afterwards observes the cleared state and bails with -EIO instead of running
+ * on a dead context.
+ *
+ * Returns 1 with the lock HELD, or 0 with the lock RELEASED. */
+static int mnt_lock_live(struct vfs_mount *m) {
+    mnt_lock(m);
+    if (!m->used || !m->ctx) {
+        mnt_unlock(m);
+        return 0;
+    }
+    return 1;
+}
+
 static int g_default_mnt = -1;          /* process root mount (5b, ADR-022) */
 void vfs_set_default_mnt(int mnt) { g_default_mnt = mnt; }
 int  vfs_default_mnt(void)        { return g_default_mnt; }
@@ -116,7 +137,7 @@ int vfs_open(cap_t cap, int mnt, const char *path, struct vfs_file *out) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->open || !cap_ok(cap, CAP_FS_READ))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->open(m->ctx, path, out);
     mnt_unlock(m);
     if (r == 0) out->mnt = mnt;
@@ -136,7 +157,7 @@ int vfs_create(cap_t cap, int mnt, const char *path, struct vfs_file *out) {
         return -EPERM;                 /* capability problem */
     if (!m || !m->fs->create)
         return -EINVAL;                /* mount problem: bad id, or no create op */
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->create(m->ctx, path, out);
     mnt_unlock(m);
     if (r == 0) out->mnt = mnt;
@@ -147,7 +168,7 @@ int vfs_read(cap_t cap, const struct vfs_file *f, uint64_t off, void *buf, uint3
     struct vfs_mount *m = mnt_get(f->mnt);
     if (!m || !m->fs->read || !cap_ok(cap, CAP_FS_READ))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->read(m->ctx, f, off, buf, len);
     mnt_unlock(m);
     return r;
@@ -169,7 +190,7 @@ int vfs_truncate(cap_t cap, struct vfs_file *f, uint64_t len) {
     struct vfs_mount *m = mnt_get(f->mnt);
     if (!m || !m->fs->truncate || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->truncate(m->ctx, f, len);
     mnt_unlock(m);
     return r;
@@ -195,7 +216,7 @@ int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint
     current_thread->fs_budget_tick = now;
     if (current_thread->fs_write_budget < len)
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->write(m->ctx, f, off, buf, len);
     mnt_unlock(m);
     if (r > 0)
@@ -207,7 +228,7 @@ int vfs_unlink(cap_t cap, int mnt, const char *path) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->unlink || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->unlink(m->ctx, path);
     mnt_unlock(m);
     return r;
@@ -217,7 +238,7 @@ int vfs_readdir(cap_t cap, int mnt, const char *path, int index, char *name, uin
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->readdir || !cap_ok(cap, CAP_FS_READ))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->readdir(m->ctx, path, index, name, size);
     mnt_unlock(m);
     return r;
@@ -227,12 +248,24 @@ int vfs_unmount(int mnt) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m)
         return -1;
-    if (m->fs->umount)
+    /* DDR-954 root-fix. Every other entry point serialises on this lock before
+     * touching m->ctx; unmount did not, so it could kfree the context while a
+     * ring-3 thread was executing inside sys_unlink with that same pointer
+     * already loaded. Captured as: umount ctx=0x07C3C000 immediately followed
+     * by a #PF at alloc_run with RDI=RSI=0x07C3C000 and RDX holding the
+     * KHEAP_DEBUG free poison.
+     *
+     * Taking the lock here makes the free wait for the in-flight op to finish.
+     * Clearing used/ctx BEFORE the release makes every thread queued behind us
+     * fail its mnt_lock_live() re-check rather than run on freed memory. */
+    mnt_lock(m);
+    if (m->fs && m->fs->umount)
         m->fs->umount(m->ctx);
-    g_mounts[mnt].used = 0;
-    g_mounts[mnt].ctx  = 0;
-    g_mounts[mnt].fs   = 0;
-    g_mounts[mnt].bd   = 0;
+    m->ctx  = 0;
+    m->used = 0;
+    m->fs   = 0;
+    m->bd   = 0;
+    mnt_unlock(m);
     return 0;
 }
 
@@ -240,7 +273,7 @@ int vfs_txn_begin(cap_t cap, int mnt) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->txn_begin || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->txn_begin(m->ctx);
     mnt_unlock(m);
     return r;
@@ -250,7 +283,7 @@ int vfs_txn_commit(cap_t cap, int mnt) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->txn_commit || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->txn_commit(m->ctx);
     mnt_unlock(m);
     return r;
@@ -260,7 +293,7 @@ int vfs_txn_abort(cap_t cap, int mnt) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->txn_abort || !cap_ok(cap, CAP_FS_WRITE))
         return -1;
-    mnt_lock(m);
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->txn_abort(m->ctx);
     mnt_unlock(m);
     return r;
