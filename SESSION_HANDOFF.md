@@ -5817,3 +5817,56 @@ consecutive run. ADR-038 code is in the tree and gated; only the greens are owed
    dev/phase1`, ONE dispatch at a time.
 4. Then FEAT-A (`sched_block_timeout`, DDR-955 written — see its §c for two
    corrections to the prescribed design) and FEAT-B (`SYS_RENAME`, NSI 95).
+
+### BUG-C (smoke-fs) MEASURED — 20/20 local, does NOT reproduce off-CI
+
+`gate_rate.sh smoke-fs 20` on kernel md5 `6c56b414` (verified unchanged across
+all runs): **PASS=20 FAIL=0**, zero `sfs-uaf`, zero panics.
+
+**Combined tally: 1 failure in ~32 observations** — 20/20 local + 9/9
+`fs_regression` + 2 CI green on 227c643 + **1 CI fail** (run 32259190462).
+The only failure ever seen was on a **GitHub runner**, never on this host.
+
+### §3-A's stated hypothesis is REFUTED — do not implement it
+1. It names `sfs_freelist_persist_test()` and `sfs_provision_root()`.
+   **Neither function exists anywhere in the tree.**
+2. It assumes the freelist test ran and failed. **It never ran.** The code at
+   `main.c:2286-2294` prints `fl > 0 ? "[sfs] freelist persist OK"
+   : "[sfs] freelist persist FAIL"`. The failing CI log contains **neither**
+   line, and no `freelist ondisk runs=` and no `[pdrive]` output at all — so the
+   whole enclosing block was never entered. Moving or barriering a test that is
+   not executing would change nothing, and would look like a fix if the
+   intermittent simply did not recur.
+
+**What the failure actually is:** a late-boot divergence. The failing boot's last
+SFS output is:
+```
+[sfs] mount ctx=0x07C24000 caller=vfs_mount
+[sfs] persistent root provisioned; SFS-rooted probe spawned
+[sfs] AETHER daemon rooted at SFS /etc/aether/config
+```
+then nothing further — the pdrive workspace block and the freelist block (both
+inside the same deep `if` chain in `main.c`) never execute.
+
+**Gate-reporting note:** `smoke-fs` requires **14** sentinels and the harness
+names only the FIRST missing one. "missing `[sfs] freelist persist OK`"
+understates it — `[pdrive] workspace OK` is missing too. Treat that verdict line
+as "≥1 of 14 missing", not as a specific failure.
+
+### EXACT NEXT ACTION for BUG-C
+Do NOT fix blind — there is no local reproduction. Either:
+ (a) Add a sentinel at the TOP of each nesting level in the `main.c` block chain
+     (~2200-2295) so the next CI failure names the level that was not entered,
+     then dispatch CI until it recurs; or
+ (b) Reproduce the runner's conditions locally (contended CPU / slower I/O)
+     before attempting a fix.
+Option (a) is cheaper and follows the instrument-first rule (§6.0-B).
+
+### STATE
+- Tip `efb015c` local == remote, tree clean. CI was in flight on it.
+- ADR-038: **0/3** greens. Code already in tree; only greens owed.
+- DDR-955 (`sched_block_timeout`) designed, not implemented; its §c holds two
+  corrections to the prescribed design (rq-blocked-list does not exist; the
+  -ETIMEDOUT verdict must come from a TCB wake_reason flag, not a g_ticks
+  re-read).
+- FEAT-B (`SYS_RENAME` + PRISM `mv`) confirmed genuinely absent → **NSI 95**.
