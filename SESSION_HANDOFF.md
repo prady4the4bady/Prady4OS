@@ -5624,3 +5624,50 @@ every SFS access and drown the logs. Before pushing:
 
 Also still owed from DDR-952: **`smoke-blkmq` has never been run** (P0b), and
 ADR-038 still needs 3 CI greens on one tip (P0c).
+
+### CHECKPOINT — DDR-953 capture obtained; local tip cc6ee90, NOT pushed
+
+**Pushed tip: 0371aec (RED). Local: bc6b6b1 → cc6ee90, unpushed.**
+
+**Correction to the previous checkpoint:** bc6b6b1's "build rc=0, 0 warnings" was
+WRONG. `sfs.c` did not compile — `kputs("\r\n")` was written with real CR/LF
+control chars, so the literal was unterminated (20 errors). The build I trusted
+had not recompiled sfs.c. Fixed in cc6ee90 via `tools/ci/fix_crlf_literal.py`
+(builds the backslash with `chr(92)` so none traverses the shell). Rebuild after
+`touch`: rc=0, 0 warnings.
+
+**THE INSTRUMENT WORKED — P1b is done.** `make smoke-aether-sfsroot` now
+reproduces the fault LOCALLY and DETERMINISTICALLY:
+    [sfs-uaf] STALE CTX op=read-ctx bd=0x53465331 blk=363 caller=0xFFFFFFFF80030344
+    [sfs-uaf] STALE CTX op=read     bd=0x53465331 blk=363 caller=0xFFFFFFFF8002F643
+`sym_at.py`: **`bt_insert_rec`+0x54** is the real caller; `rd_block` is the wrapper.
+
+Eliminated (tested, not assumed): uninitialised-field/type confusion is ruled out
+— `sfs_mount` sets `c->bd` unconditionally at sfs.c:1169. So the memory was valid
+then overwritten ⇒ genuinely use-after-free.
+Reuse path identified: `struct sfs_ctx` is large enough for kmalloc's page-backed
+path, so a freed ctx returns a whole PMM page; superblocks are read into
+`pmm_alloc_page()` pages — recycling one puts SFS_MAGIC at offset 0.
+
+**THE CI RED IS NOT A REGRESSION.** `smoke-aether-sfsroot` PASSED twice on
+889a059 (27s/29s) and fails on 0371aec — but it reproduces locally as this same
+SFS UAF. It is the DDR-953 intermittent surfacing, not DDR-951/952 breakage.
+
+### EXACT NEXT ACTION
+1. Prove WHO holds the stale ctx into `bt_insert_rec`. Prime suspect: the
+   destructive self-tests call `sfs_umount(c)` at sfs.c:1402 and sfs.c:1456
+   (`sfs_selftest_lz4` and sibling) on a device the VFS may still hold a mount
+   on. Add a print of the ctx pointer at every `sfs_umount` and at `sfs_mount`
+   return, then match the stale pointer against them. DO NOT fix before this.
+2. Then fix (likely: VFS must drop/refuse its mount before a destructive
+   self-test umounts, or refcount the ctx), and add gate `smoke-sfs-uaf`.
+3. Re-run smoke-aether-sfsroot; it should go green and clear the red tip.
+4. Still owed: `smoke-blkmq` never run (P0b); ADR-038 3 CI greens (P0c).
+
+### FLAGGED SPEC CONFLICTS (do not implement as written)
+- FEAT-5 assigns `SYS_FTRUNCATE` = **NSI 76** and FEAT-6 `SYS_RENAME` = **NSI 77**.
+  Both are TAKEN — NSI max is 78 (SYS_ACC_SEAL=77, SYS_ACC_OPEN=78); next free is
+  **79**. Using 76/77 would renumber the wire format and violate I3/I10
+  (append-only). Allocate 79/80.
+- P2b's `smp_resched_all()` remains refuted (already called at main.c:626 while
+  still failing); NULL-checks already present at main.c:684 and 767-770.
