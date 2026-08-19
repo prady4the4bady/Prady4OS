@@ -5671,3 +5671,72 @@ SFS UAF. It is the DDR-953 intermittent surfacing, not DDR-951/952 breakage.
   (append-only). Allocate 79/80.
 - P2b's `smp_resched_all()` remains refuted (already called at main.c:626 while
   still failing); NULL-checks already present at main.c:684 and 767-770.
+
+---
+
+## PUSHED — 43ce5a9 — DDR-954 SFS use-after-free ROOT-FIXED
+
+**Pushed tip: `43ce5a9`** (was `0371aec`, RED). CI run triggered by this push.
+
+### The defect
+`vfs_unmount` called `m->fs->umount(m->ctx)` — which `kfree`s — and cleared the
+mount slot with **no mutual exclusion**, while all ten other VFS entry points
+already serialise on the per-mount sleep-mutex (`m->busy`/`mnt_lock`) before
+touching `m->ctx`. A ring-3 thread inside `sys_unlink` held the pointer while
+unmount freed it.
+
+Capture (`gate_rate.sh` run 1/10, kernel md5 `6f464197`):
+```
+[sfs] umount ctx=0x07C3C000 caller=vfs_unmount+0x55
+*** PANIC *** #PF  RDI=RSI=0x07C3C000   <- the ctx just freed
+                   RDX=0x0DEADBEEE0     <- KHEAP_DEBUG free poison
+syscall_entry -> sys_unlink -> vfs_unlink -> sfs_unlink -> bt_insert_rec -> alloc_run
+```
+
+### The fix
+- `vfs_unmount` takes `mnt_lock`; clears `ctx/used/fs/bd` **before** releasing.
+- New `mnt_lock_live()` re-validates `used && ctx` **after** acquiring the lock;
+  all ten op sites use it and return `-EIO` if the mount died.
+- The re-check is essential: `mnt_get()` runs before the lock, so a waiter can
+  be handed the lock after the free and run on dead memory with the lock held.
+- **Deviation (R12):** the prescribed `ctx_refcount` was NOT implemented — it
+  duplicates the existing mutex, and `atomic_store(refcount,0)` while holders
+  exist discards their counts (negative count / double free). DDR-954 §h.
+
+### Verification
+| check | result |
+|---|---|
+| `make image` | rc=0, 0 warnings, hash MOVED `6f464197`→`6c56b414` |
+| `gate_rate.sh smoke-aether-sfsroot 20` | **20/20 PASS**, 0 uaf, 0 panics, hash constant |
+| baseline before fix | 9/10 PASS (1-in-10 failure) |
+| `fs_regression.sh` (9 FS gates) | **9/9 PASS**, zero regressions |
+
+Caveat: at a 1-in-10 rate, 20/20 has ~12% probability by chance. It is
+persuasive because it pairs with a named mechanism and a targeted fix — not
+because 20/20 is alone conclusive.
+
+### GROUND-STATE CORRECTIONS — verified in-tree, prior notes were WRONG
+- **NSI 79/80/81 are TAKEN** (`SYS_GOAL_SIGN`, `SYS_GOAL_VERIFY`,
+  `SYS_ACC_ROTATE`). Real max = **94** (`SYS_FTRUNCATE`). **Next free = 95.**
+  Assigning 79/80/81 would collide with three live syscalls and break the ABI.
+- **`SYS_FTRUNCATE` already exists** (NSI 94) with `vfs_fs_ops.truncate`
+  (DDR-866) and a registered `smoke-ftruncate` gate (shard 4). SHIPPED.
+- **The ISO already exists.** `make iso` = hybrid BIOS+UEFI via `xorriso`;
+  `smoke-iso-x86` (shard 1, 240s) asserts `NEXUS KERNEL OK` on BOTH arms. No
+  Multiboot2 header exists because this path does not need one — adding GRUB
+  would duplicate a working gated path.
+- `SYS_GETDENTS` exists (NSI 66). Only **`SYS_RENAME` is genuinely absent** → 95.
+- **`build_check.sh` validated NOTHING** until this session: the Makefile's
+  default goal `all:` is a help target that compiles nothing. It now builds
+  `image` and reports the before/after hash. This is the mechanism behind every
+  false "build clean" in recent sessions.
+
+### New tooling (all file-based, per T4)
+`build_check.sh` (fixed), `run_gate.sh`, `gate_rate.sh`, `fs_regression.sh`,
+`sym_at.py`, `sym_bt.sh`, `patch_ctxtrace.py`, `fix_crlf_literal.py`.
+
+### EXACT NEXT ACTION
+1. Watch CI on `43ce5a9`. If green, the red tip is cleared.
+2. Then BUG-A: `gate_rate.sh smoke-blkmq 20` (never yet run — owed since DDR-952).
+3. Then ADR-038 3 CI greens on one SHA.
+4. `SYS_RENAME` is the only genuinely-new syscall in the queue → **NSI 95**.
