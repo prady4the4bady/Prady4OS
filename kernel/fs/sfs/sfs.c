@@ -374,6 +374,12 @@ static int sfs_txn_abort(void *ctx) {
 }
 
 static void sfs_umount(void *ctx) {
+    /* DDR-953 STEP 1-A: record every ctx death so the stale pointer seen by
+     * sfs_bd_guard can be matched against the ctx that was freed, and by whom.
+     * Paired with the [sfs] mount line below. Diagnostic only. */
+    kputs("[sfs] umount ctx="); kputhex((uint64_t)(uintptr_t)ctx);
+    kputs(" caller="); kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+    kputs("\r\n");
     kfree(ctx);
 }
 
@@ -1205,6 +1211,11 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
         }
     }
 
+    /* DDR-953 STEP 1-A: record every ctx birth (pointer + its bd). */
+    kputs("[sfs] mount ctx="); kputhex((uint64_t)(uintptr_t)c);
+    kputs(" bd=");             kputhex((uint64_t)(uintptr_t)c->bd);
+    kputs(" caller=");         kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+    kputs("\r\n");
     *ctx = c;
     return 0;
 }
