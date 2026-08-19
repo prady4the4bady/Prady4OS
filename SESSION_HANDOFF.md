@@ -6067,3 +6067,31 @@ Read `sched_snapshot` in `kernel/proc/sched.c` to identify the head it walks
 under `g_sched_lock`, confirm it reaches THREAD_BLOCKED threads, then write
 `sched_block_timeout` matching `sched_block_on`'s lock-held-on-entry-and-exit
 contract.
+
+### FEAT-A design fully resolved (DDR-955 §k) — implementation is next, no unknowns left
+
+Local tip `3885e8a` + this commit. Remote `e5b097a`; **CI in flight on it**
+(run 32272722318), so nothing pushed this turn (R14).
+
+**Both blocking questions answered from the tree, not assumed:**
+1. The `->next` ring **does enumerate every thread**, including BLOCKED ones —
+   `sched_snapshot` (`sched.c:1077-1099`) walks it from `current_thread` and
+   reports `t->state`, which is how `ps` shows blocked processes. The §j fear
+   that it might be idle-only is refuted. Ring head is `current_thread`; there is
+   no `g_thread_head` symbol — do not invent one.
+2. **CASE A.** `sched_tick` (`sched.c:1247`) has **zero** `g_sched_lock`
+   references. The ring's actual protection in `sched_snapshot` is `irq_save()`
+   (`sched.c:1080`), NOT `g_sched_lock` — any note saying otherwise is wrong.
+   `sched_tick` already runs IRQ-masked. Take `g_sched_lock` in the scan anyway
+   for SMP topology safety (it is irqsave-held elsewhere, so no self-deadlock),
+   collect into a local array, release, then `sched_unblock` outside — keeping
+   lock order `g_sched_lock -> rq` with no nesting.
+
+The exact code shape is written out in DDR-955 §k.
+
+### NEXT ACTION (one sentence)
+Add `block_deadline`/`wake_timed_out` to `struct tcb` (`kernel/proc/sched.h:48`),
+write `sched_block_timeout` mirroring `sched_block_on`'s lock-held-on-entry-and-
+exit contract (`sched.c:1304`), add the expiry scan to `sched_tick`
+(`sched.c:1247`) per DDR-955 §k, then convert the four call sites
+(`virtio_blk.c:222,260` at 500 ticks; `ipc/ipc.c:60`, `ipc/bcast.c:70` at 100).

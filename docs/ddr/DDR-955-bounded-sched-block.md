@@ -146,3 +146,49 @@ reaches no blocked thread and the timeout **silently never fires** — a bounded
 wait that is not bounded, passing any gate that only tests the happy path. Read
 `sched_snapshot` (which walks threads under `g_sched_lock`) to find the true
 enumeration head before writing the scan.
+
+## k. Design RESOLVED — the two open questions, answered from the tree
+
+### The `->next` ring DOES enumerate every thread (Correction 3 closed)
+`sched_snapshot` (`sched.c:1077-1099`) walks `t = current_thread; ... t = t->next`
+and reports `out->state = t->state` for each entry — which is how `ps` displays
+BLOCKED processes. So the ring reaches blocked threads, and the §j worry that it
+might be idle-only is **refuted**. The expiry scan can use it.
+
+Ring head: **`current_thread`**. The ring is circular, so any live member is a
+valid start; `sched_snapshot` uses exactly this and terminates on
+`t != <start>`. There is no dedicated `g_thread_head` symbol — do not invent one.
+
+### Locking: CASE A, and the protection is `irq_save()`, not `g_sched_lock`
+- `sched_tick` (`sched.c:1247`) contains **zero** references to `g_sched_lock`.
+- `sched_snapshot` guards its ring walk with `irq_save()` (`sched.c:1080`), NOT
+  `g_sched_lock`. (Any note claiming it walks under `g_sched_lock` is wrong.)
+- `sched_tick` already runs in the timer IRQ with interrupts masked, so it has
+  the same protection `sched_snapshot` relies on.
+- `g_sched_lock` "covers ring TOPOLOGY only" (`sched.c:637`) and is always taken
+  with `spin_lock_irqsave` (`sched.c:628`), so IRQs are masked while it is held
+  and a timer IRQ cannot re-enter it on the same CPU. Taking it in the scan is
+  therefore **safe but optional**; take it for SMP topology safety, since another
+  CPU may be splicing the ring while this CPU walks it.
+- `sched_unblock` does not take `g_sched_lock` (§j Correction 6), so the
+  collect-then-wake pattern keeps lock order `g_sched_lock -> rq` (R9) with no
+  nesting: collect under the lock, release, then wake.
+
+### Settled implementation shape
+```
+sched_tick():  ... after the tick is taken ...
+    fl = spin_lock_irqsave(&g_sched_lock);
+    t = current_thread;
+    do { if (t->state == THREAD_BLOCKED && t->block_deadline &&
+             g_ticks >= t->block_deadline && n < 32) {
+             t->wake_timed_out = 1; t->block_deadline = 0; wake[n++] = t; }
+         t = t->next; } while (t != current_thread);
+    spin_unlock_irqrestore(&g_sched_lock, fl);
+    for (i = 0; i < n; i++) sched_unblock(wake[i]);
+```
+`sched_block_timeout` mirrors `sched_block_on` exactly: **called with `*lk` held,
+returns with `*lk` held** (§j Correction 4). Only additions are setting
+`block_deadline` before the block and reading `wake_timed_out` after.
+
+**Nothing above is implemented yet.** This section removes every unknown; the
+next session writes code, not analysis.
