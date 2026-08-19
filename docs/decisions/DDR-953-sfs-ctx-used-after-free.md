@@ -112,3 +112,55 @@ This is a strong candidate for the unattributed SFS-churn / `FSRM FAIL`
 intermittents already on record. It is NOT claimed as their cause here — one
 capture cannot establish that (RULE 20), and those entries stay open pending a
 capture carrying the poison from §f step 1.
+
+---
+
+## h. CAPTURE OBTAINED — the instrument reproduced it locally and named the caller
+
+`make smoke-aether-sfsroot` at tip bc6b6b1 + the string-literal repair:
+
+```
+virtio-blk: blk4 ready, 32768 sectors, msix vec=60
+[sfs-uaf] STALE CTX op=read-ctx bd=0x53465331 blk=363 caller=0xFFFFFFFF80030344
+[sfs-uaf] STALE CTX op=read     bd=0x53465331 blk=363 caller=0xFFFFFFFF8002F643
+*** NEXUS KERNEL PANIC ***
+```
+
+Resolved with `tools/ci/sym_at.py` (exact integers, per §S21):
+
+| address | function |
+|---|---|
+| `0xFFFFFFFF8002F643` | `rd_block` +0x43 (the wrapper — expected) |
+| `0xFFFFFFFF80030344` | **`bt_insert_rec` +0x54** — the real caller |
+
+`blk=363` here; the CI panic was `blk=362`. Same region, same magic.
+
+### Two alternatives were tested and eliminated
+
+**Type confusion / uninitialised field — ELIMINATED.** `kmalloc` does not zero
+(§0.6), so a ctx handed a recycled superblock page could plausibly retain
+`SFS_MAGIC` in `bd` with no free-then-use at all. That would need a different
+fix. It is ruled out: `sfs_mount` sets `c->bd = bd` unconditionally at
+`sfs.c:1169`, immediately after the allocation, on the only path that yields a
+ctx. A mounted ctx therefore always has a valid `bd`.
+
+**So the memory was valid and was later overwritten** — which is use-after-free,
+confirming §d rather than replacing it.
+
+### The reuse path, now identified
+
+`struct sfs_ctx` carries the `snapshots[]` array and is large enough for
+`kmalloc`'s page-backed path, so a freed ctx returns a **whole PMM page**.
+Superblocks are read with `rd_block_bd(bd, 0, page)` into `pmm_alloc_page()`
+pages. Free a page-sized ctx, then read a superblock into the recycled page, and
+the dead ctx's first 8 bytes become `SFS_MAGIC` exactly as observed. This closes
+§f's "which allocation reused the chunk".
+
+### Still open — the last unknown
+
+WHO holds the stale ctx and reaches `bt_insert_rec` after the free.
+`sfs_umount(c)` is called on every error path and unconditionally at `sfs.c:1402`
+and `sfs.c:1456` by the destructive self-tests (`sfs_selftest_lz4` and its
+sibling), which `sfs_format` + `sfs_mount` + `sfs_umount` a device that the VFS
+may also hold a mount on. That is the prime suspect and the next thing to prove.
+Do not fix until it is proven.

@@ -125,8 +125,7 @@ static void sfs_bd_guard(const struct blk_device *bd, uint64_t blk,
     kputs(" caller="); kputhex((uint64_t)(uintptr_t)ret);
     if ((uint64_t)(uintptr_t)bd == SFS_MAGIC)
         kputs(" note=bd-holds-SFS_MAGIC-ctx-aliases-a-superblock");
-    kputs("
-");
+    kputs("\r\n");
 }
 
 static void rd_block_bd(struct blk_device *bd, uint64_t blk, void *buf) {
