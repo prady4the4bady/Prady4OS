@@ -5870,3 +5870,62 @@ Option (a) is cheaper and follows the instrument-first rule (§6.0-B).
   -ETIMEDOUT verdict must come from a TCB wake_reason flag, not a g_ticks
   re-read).
 - FEAT-B (`SYS_RENAME` + PRISM `mv`) confirmed genuinely absent → **NSI 95**.
+
+### BUG-C IDENTIFIED — it is the KNOWN BSP-progress bug (DDR-777/790/791), not a new defect
+
+**Evidence, from CI run 32259190462 (the only failure ever observed):**
+
+| string searched | occurrences |
+|---|---|
+| `[sfs] btree churn OK` | **0** |
+| `[sfs] churn FAIL` | **0** |
+| any post-churn GC output | **0** |
+
+The DDR-763 B+tree churn block (`main.c:2076-2160`, 40 x
+create+write(64K)+unlink) prints **exactly one** of `btree churn OK` or
+`churn FAIL op=… iter=… rc=…` on every path. **Neither printed.** The BSP
+therefore wedged *inside* the churn loop — it neither completed nor failed.
+
+That block's own comment already names this:
+> "The failing runs stop progressing somewhere at or after this block, with the
+> timer alive and the APs up"
+
+So `smoke-fs` is not a new intermittent. It is the **same** BSP-progress defect
+tracked as DDR-777 / DDR-790 / DDR-791 / BUG-1, surfacing through a different
+gate. The missing `[sfs] freelist persist OK` and `[pdrive] workspace OK`
+sentinels are downstream consequences: both blocks sit *after* the churn loop and
+are simply never reached.
+
+### §3-A's prescribed instrumentation is the WRONG instrument — do not write it
+§3-A (and §0) direct me to add "per-nesting-level sentinels to the main.c
+pdrive+freelist if-chain". That would not help: the divergence is **inside a
+loop**, not at a nesting boundary. Per-level sentinels would print "entered the
+block" and then stop — yielding nothing beyond what is already known.
+
+**The correct instrument ALREADY EXISTS in the tree** and is purpose-built for
+this: `BSP_LIVENESS` (`Makefile:212-213`, `KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)`).
+With it, the churn loop prints `[bsp] churn iter=<i> t=<ticks>` every iteration,
+so the last printed index **is** the point where progress stopped. It is opt-in
+because DDR-790 proved per-iteration output evicts `smoke-dmesg`'s marker from
+the 4 KiB log ring; `make smoke-rqstress-liveness` (Makefile:1958-1960) builds
+`image BSP_LIVENESS=1` and restores a clean image afterwards.
+
+### CORRECTION to §0 (stated twice now, still wrong in this prompt)
+`7cb5a4d` contains **NO instrumentation**. `git show --name-only` = exactly one
+file, `SESSION_HANDOFF.md`, zero kernel sources. §0/§3-A's instruction to
+"confirm it contains only instrumentation" and push it as a diagnostic is based
+on work that was never written — it was a *recommendation* in the handoff that
+the prompt read as completed.
+
+### EXACT NEXT ACTION
+1. Do NOT write new per-level sentinels. Reproduce with the existing instrument:
+   push a CI job that builds `BSP_LIVENESS=1` for the `smoke-fs` shard, or run
+   `make image BSP_LIVENESS=1` + `gate_rate.sh smoke-fs 20` under CI-like load.
+   The failure is CI-only (0/20 locally, ~1/32 overall), so it must be caught on
+   a runner.
+2. Read the last `[bsp] churn iter=N t=T` line. N names the iteration; T names
+   the tick. That is the divergence point DDR-777 has been missing.
+3. Then fix the named mechanism. FEAT-A (`sched_block_timeout`, DDR-955) is the
+   leading candidate: if the BSP is blocked forever on a lost virtio-blk wakeup
+   inside a churn iteration, a bounded wait converts the silent wedge into an
+   attributable `-EIO`. That is diagnosis support, NOT proof of a fix.
