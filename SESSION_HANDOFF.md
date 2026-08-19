@@ -5929,3 +5929,55 @@ the prompt read as completed.
    leading candidate: if the BSP is blocked forever on a lost virtio-blk wakeup
    inside a churn iteration, a bounded wait converts the silent wedge into an
    attributable `-EIO`. That is diagnosis support, NOT proof of a fix.
+
+### BUG-1 diagnostic harness: smoke-fs-liveness added, NOT YET FUNCTIONAL
+
+**Added** `smoke-fs-liveness` (Makefile), modelled on the in-tree
+`smoke-rqstress-liveness`: rebuild with `BSP_LIVENESS=1`, run the smoke-fs
+sentinels, restore the untraced image. Aimed at smoke-fs because that is the
+gate that actually reproduced the wedge (CI 32259190462). Makefile parses clean.
+NOT registered in the shard matrix — diagnostic only, remove when BUG-1 closes.
+
+**BLOCKER (one-line fix, next action):** `boot_test.sh` does
+`rm -f "$SERIAL_LOG"` on BOTH exit paths — line ~520 (fail, after `cat`) and
+line ~527 (pass). Pinning `SERIAL_LOG` from the environment therefore cannot
+survive the run, so the `[bsp] churn iter=` trace is destroyed before it can be
+read. The gate PASSES and the trace is gone.
+
+  FIX: add a `KEEP_SERIAL` opt-in to `boot_test.sh` — when set, skip both
+  `rm -f "$SERIAL_LOG"` calls (keep them the default so ordinary gates are
+  unchanged). Then `smoke-fs-liveness` sets `KEEP_SERIAL=1 SERIAL_LOG=...`.
+  This is general: every future serial-trace diagnostic needs it.
+
+**Three validation attempts, three distinct defects — all in MY harness, none
+in the kernel.** Recorded because each produced a confident-looking wrong answer:
+ 1. Run 1: "zero [bsp] lines" — VOID. `boot_test.sh` only cats the serial on the
+    FAILURE path; on PASS the body was never in the log at all (zero markers of
+    any kind, not even `[hb] t=`). Concluding "flag not compiled in" from that
+    would have sent the next step chasing a non-existent Makefile bug (STOP-2).
+ 2. Run 2: `$(BUILD_DIR)` is **build/toolchain**, not `build` (Makefile:7), so
+    SERIAL_LOG pointed at a directory that does not exist.
+ 3. Run 2 also: the `|| echo 'NO [bsp] LINES'` fallback did NOT fire on a missing
+    file — the absent case was silent, the exact outcome the fallback existed to
+    prevent. Replaced with an explicit three-way test distinguishing
+    capture-missing (harness broken) / trace-present / flag-not-compiled-in.
+    Run 3 proved the new reporting works: it correctly named the harness fault
+    instead of implying a kernel finding.
+
+**Still unknown, and NOT to be assumed:** whether `BSP_LIVENESS=1` actually
+reaches the compile. No run has yet produced a valid serial capture, so the
+flag's effect is unverified. Do not treat its absence as evidence either way
+until a capture survives.
+
+### STATE
+- Remote tip `c3a764b` (pushed this session; `efb015c` CI was SUCCESS, not
+  in-flight as §0 claimed).
+- Uncommitted: `smoke-fs-liveness` target + `tools/ci/patch_fsliveness.py`,
+  `fix_fsliveness_serial.py`, `fix_fsliveness_path.py`.
+- ADR-038: 0/3.
+- NSI max live 94, next free 95. FEAT-B (SYS_RENAME + mv) still absent.
+
+### NEXT ACTION (one sentence)
+Add a `KEEP_SERIAL` opt-in to `tools/qemu_runner/boot_test.sh` that skips both
+`rm -f "$SERIAL_LOG"` calls, set it in `smoke-fs-liveness`, re-run, and confirm
+`[bsp] churn iter=` lines appear before pushing the target to CI.

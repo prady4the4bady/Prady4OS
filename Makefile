@@ -214,7 +214,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -1963,6 +1963,43 @@ smoke-rqstress-liveness: fat-image sfs-image
 	FORBIDDEN_SENTINEL="rqstress FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
 	  rc=$$? ; \
+	  echo "[bsp-liveness] restoring untraced kernel" ; \
+	  rm -f $(BUILD_DIR)/main.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG) ; \
+	  $(MAKE) image ; \
+	  exit $$rc
+
+# DDR-777/790/791 (BUG-1): smoke-fs against a BSP_LIVENESS=1 kernel.
+#
+# smoke-fs is the gate that actually caught the wedge (CI run 32259190462):
+# neither '[sfs] btree churn OK' nor '[sfs] churn FAIL' printed, so the BSP
+# stopped INSIDE the 40-iteration DDR-763 churn loop -- it neither finished nor
+# reported a failure. The downstream [pdrive] and freelist sentinels were simply
+# never reached, which is why the gate blamed the freelist.
+#
+# smoke-rqstress-liveness already does this for the rqstress gate; this is the
+# same harness pointed at the gate that reproduces. Same three-way read (DDR-777):
+#   no [bsp] lines            -> BSP never reached churn; stall is EARLIER.
+#   [bsp] stops at iter=N,
+#     [hb] still ticking      -> wedged INSIDE iteration N, timer alive.
+#   [bsp] reaches iter=39 and
+#     'btree churn OK' prints -> churn completed; stall is AFTER it.
+#
+# Own target, NOT added to the shard matrix: BSP_LIVENESS is COMPILE-TIME and CI
+# builds one shared image, so enabling it globally would put per-iteration output
+# into every later gate -- DDR-790 proved that evicts smoke-dmesg's marker from
+# the last-4 KiB log ring. Diagnostic only; remove once BUG-1 is closed.
+smoke-fs-liveness: fat-image sfs-image
+	@echo "[bsp-liveness] rebuilding kernel with BSP_LIVENESS=1 (DDR-777)"
+	rm -f $(BUILD_DIR)/main.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG)
+	$(MAKE) image BSP_LIVENESS=1
+	SERIAL_LOG=build/gatelogs/fsliveness_serial.log \
+	    TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf 'msix vec=56\nPRADYOS filesystem works!\nnested file ok\nlong name read works\n[rtc] 20\nkernel wrote this\ncreated+deleted /TMP.TXT OK\ncreate/lookup OK\nbyte-exact OK\njournal abort/commit/replay OK\nversion-isolation OK\ncompress/readback/tag OK\n[sfs] freelist persist OK\n[pdrive] workspace OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
+	  rc=$$? ; \
+	  echo "[bsp-liveness] serial kept at build/gatelogs/fsliveness_serial.log" ; \
+	  echo "[bsp-liveness] churn trace (last 3):" ; \
+	  if [ ! -s build/gatelogs/fsliveness_serial.log ]; then echo '[bsp-liveness] SERIAL CAPTURE MISSING OR EMPTY - harness broken, not a verdict'; elif grep -aq 'churn iter=' build/gatelogs/fsliveness_serial.log; then grep -a 'churn iter=' build/gatelogs/fsliveness_serial.log | tail -3; else echo '[bsp-liveness] NO [bsp] LINES - BSP_LIVENESS not compiled in'; fi ; \
+	  grep -ac 'btree churn OK' build/gatelogs/fsliveness_serial.log | sed 's/^/[bsp-liveness] btree-churn-OK count: /' ; \
 	  echo "[bsp-liveness] restoring untraced kernel" ; \
 	  rm -f $(BUILD_DIR)/main.o $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin $(IMG) ; \
 	  $(MAKE) image ; \
