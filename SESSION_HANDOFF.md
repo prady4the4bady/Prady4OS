@@ -5740,3 +5740,32 @@ because 20/20 is alone conclusive.
 2. Then BUG-A: `gate_rate.sh smoke-blkmq 20` (never yet run — owed since DDR-952).
 3. Then ADR-038 3 CI greens on one SHA.
 4. `SYS_RENAME` is the only genuinely-new syscall in the queue → **NSI 95**.
+
+### RED TIP CLEARED — both CI runs GREEN; BUG-A closed
+
+**CI:** `32253729356` (43ce5a9) **success**, `32253770891` (227c643) **success**.
+First green tip since 889a059. DDR-954 is confirmed by CI, not just locally.
+
+**BUG-A CLOSED — `smoke-blkmq` N=20 → PASS=20 FAIL=0**, zero `[sfs-uaf]`,
+kernel md5 `6c56b414` verified unchanged across all 20 runs. The "38/40" figure
+does not reproduce. Note it had **never actually been measured** before this run;
+it was carried forward as an assertion.
+
+**ADR-038 (BUG-C):** already fully in the tree — `USER_STACK_EAGER_PAGES=8`,
+`vmm_stack_fault`, `smoke-stack-demand` registered (shard 4). No code owed.
+Needs only 3 CI greens on ONE SHA. Current SHA `227c643` has **1 of 3**.
+Green #2 dispatched as run `32259190462`.
+
+**DO NOT PUSH until 3/3 lands on 227c643** — every push moves the tip and resets
+the count. Accumulate greens with `gh workflow run pradyos-ci --ref dev/phase1`,
+ONE AT A TIME (two dispatches on one ref cancel the older via the concurrency
+group). My own R14 slip earlier — pushing docs while CI ran on the fix — is what
+moved the count from 43ce5a9 to 227c643 and cost a cycle.
+
+### Next actions, in order
+1. Dispatch greens #2 and #3 serially on `227c643`. Then ADR-038 = SHIPPED.
+2. Then FEAT-6 `SYS_RENAME` — the ONLY genuinely-new syscall left. **NSI 95**
+   (79/80/81 are live: SYS_GOAL_SIGN/GOAL_VERIFY/ACC_ROTATE; max is 94).
+3. FEAT-1 `$?` / FEAT-2 SIGPIPE / FEAT-3 SFS root / FEAT-7 sched_block_timeout.
+4. NOT NEEDED — already shipped and gated: SYS_FTRUNCATE (94), SYS_GETDENTS (66),
+   the BIOS+UEFI ISO (`make iso` + `smoke-iso-x86`, shard 1).
