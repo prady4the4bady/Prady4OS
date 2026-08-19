@@ -22,6 +22,21 @@ TIMEOUT_S="${TIMEOUT_S:-30}"
 # corrupting long-timeout gates). CI leaves this unset — the default is used.
 SERIAL_LOG="${SERIAL_LOG:-$(mktemp)}"
 
+# DDR-777 / BUG-1 diagnostics: KEEP_SERIAL=1 preserves the serial capture.
+#
+# Every exit path below removes the capture, which is correct for a normal gate
+# but destroys the only product of a diagnostic run (the [bsp] churn trace).
+# Pinning SERIAL_LOG from the environment is NOT enough -- the file is deleted
+# regardless of where it lives, which is why three validation attempts produced
+# an empty capture and looked like "the instrument is silent".
+#
+# One helper, used by every removal site, so the opt-in cannot be applied to
+# some paths and missed on others. Unset (the default) behaves exactly as before.
+serial_rm() {
+    [ -n "${KEEP_SERIAL:-}" ] && return 0
+    rm -f "$@"
+}
+
 # DDR-823 / OPEN-9. QEMU's own startup errors go to STDERR, which this harness
 # used to leave uncaptured. When QEMU refuses to start — most often because a
 # leaked qemu-system-x86_64 from a previous run still holds the image's write
@@ -38,7 +53,7 @@ QEMU_ERR="$(mktemp)"
 if [ ! -f "$IMG" ]; then
     echo "[smoke] no bootable image at '$IMG' yet — expected during Phase 0."
     echo "[smoke] SKIP (nothing to boot)."
-    rm -f "$SERIAL_LOG" "$QEMU_ERR"
+    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
     exit 0
 fi
 
@@ -72,7 +87,7 @@ if command -v pgrep >/dev/null 2>&1; then
         echo "[smoke] Inspect before killing -- it may be a gate you started:"
         stray_csv="$(echo "$stray" | paste -sd, -)"
         echo "[smoke]     ps -o pid,etime,args -p $stray_csv"
-        rm -f "$SERIAL_LOG" "$QEMU_ERR"
+        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
         exit 3
     fi
 else
@@ -138,7 +153,7 @@ if [ -n "${QEMU_UEFI:-}" ]; then
     if [ ! -f "$OVMF_CODE" ] || [ ! -f "$OVMF_VARS_SRC" ]; then
         echo "[smoke] OVMF not installed ($OVMF_CODE) — cannot test the UEFI path."
         echo "[smoke] FAIL (missing firmware, not a kernel failure)."
-        rm -f "$SERIAL_LOG" "$QEMU_ERR"
+        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
     OVMF_VARS="$(mktemp)"
@@ -466,7 +481,7 @@ if [ -s "$QEMU_ERR" ] && grep -qiE "Failed to get \"?write\"? lock|Is another pr
     echo "[smoke] Do NOT run two QEMU gates concurrently — they share this image."
     echo "[smoke] --- qemu stderr ---"
     sed 's/^/[smoke]   /' "$QEMU_ERR"
-    rm -f "$SERIAL_LOG" "$QEMU_ERR"
+    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
     exit 3
 fi
 
@@ -478,7 +493,7 @@ if [ -s "$QEMU_ERR" ] && ! [ -s "$SERIAL_LOG" ] && grep -q "^qemu-system-x86_64:
     echo "[smoke] HOST-ENV FAIL — QEMU refused to start; no serial output was produced."
     echo "[smoke] This is not a kernel failure. QEMU stderr:"
     sed 's/^/[smoke]   /' "$QEMU_ERR"
-    rm -f "$SERIAL_LOG" "$QEMU_ERR"
+    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
     exit 3
 fi
 
@@ -487,14 +502,14 @@ fi
 # after the required-pattern checks would let a gate report "PASS" for a boot in
 # which something broke.
 if ! check_global_forbidden; then
-    rm -f "$SERIAL_LOG" "$QEMU_ERR"
+    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"
     cat "$SERIAL_LOG"
-    rm -f "$SERIAL_LOG" "$QEMU_ERR"
+    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 # Each non-empty line of EXTRA_SENTINEL is a literal pattern that must also appear.
@@ -505,7 +520,7 @@ while IFS= read -r pat; do
     if ! grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — required pattern '$pat' not found. Serial output was:"
         cat "$SERIAL_LOG"
-        rm -f "$SERIAL_LOG" "$QEMU_ERR"
+        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF
@@ -517,12 +532,12 @@ while IFS= read -r pat; do
     if grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — forbidden pattern '$pat' appeared. Serial output was:"
         cat "$SERIAL_LOG"
-        rm -f "$SERIAL_LOG" "$QEMU_ERR"
+        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF
 $FORBIDDEN_SENTINEL
 EOF
 echo "[smoke] PASS — saw '$SENTINEL'$( [ "$extra_count" -gt 0 ] && echo " + $extra_count FS pattern(s)" )."
-rm -f "$SERIAL_LOG" "$QEMU_ERR"
+serial_rm "$SERIAL_LOG" "$QEMU_ERR"
 exit 0

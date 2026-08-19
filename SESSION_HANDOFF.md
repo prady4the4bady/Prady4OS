@@ -5981,3 +5981,55 @@ until a capture survives.
 Add a `KEEP_SERIAL` opt-in to `tools/qemu_runner/boot_test.sh` that skips both
 `rm -f "$SERIAL_LOG"` calls, set it in `smoke-fs-liveness`, re-run, and confirm
 `[bsp] churn iter=` lines appear before pushing the target to CI.
+
+### KEEP_SERIAL landed in boot_test.sh; liveness harness SET ASIDE per R20
+
+**Done and verified:** `tools/qemu_runner/boot_test.sh` now routes every serial
+removal through one `serial_rm()` helper honouring `KEEP_SERIAL`. There were
+**TEN** `rm -f "$SERIAL_LOG"` sites, not the two prior notes claimed — wrapping
+them individually would have been ten chances to miss one, and a missed site
+silently destroys the evidence again. One helper, 10/10 sites routed, `bash -n`
+clean, default behaviour unchanged (unset ⇒ still removed).
+
+**Set aside (R20 / STOP-16):** `smoke-fs-liveness` still lacks its one-line
+Makefile wiring (`KEEP_SERIAL=1` on the recipe's SERIAL_LOG line —
+`fix_liveness_keep.py` did not apply; the Makefile has no KEEP_SERIAL token).
+The harness has now cost most of three sessions. It is diagnostic-only and NOT
+on the critical path. Do not resume it before FEAT-A.
+
+### BLOCKING FINDING FOR FEAT-A — DDR-955 Correction 1 names a non-existent array
+R18 verification (this session) against the real tree:
+
+| DDR-955 / prompt says | tree reality |
+|---|---|
+| `g_all_threads[]` | **does not exist** |
+| `SCHED_MAX_THREADS` | **does not exist** |
+| walk array under `g_sched_lock` | no array to walk |
+
+Threads are enumerated two ways in `kernel/proc/sched.c`:
+ - `g_rq[c]` per-CPU runqueues, linked by `rq_next` (`sched.c:336`) — these hold
+   **READY** threads only, so a BLOCKED thread with an expired deadline is NOT
+   reachable this way. This is the same trap DDR-955 §c already caught once.
+ - a circular list linked by `->next`, seeded from `g_idle[0]`
+   (`sched.c:774`, `811-812`) — this is the candidate for the expiry scan.
+
+**Verified names for FEAT-A (use these, not the prompt's):**
+ - header: `kernel/proc/sched.h` (NOT `kernel/sched/sched.h`)
+ - `struct tcb` at `sched.h:48`; `THREAD_BLOCKED = 3`, `THREAD_READY = 0` (:28-31)
+ - `void sched_unblock(struct tcb *t)` at `sched.c:1322`
+ - `void sched_block_on(spinlock_t *lk)` at `sched.c:1304`
+ - unbounded waits: `virtio_blk.c:222`, `virtio_blk.c:260`, `ipc/ipc.c:60`,
+   `ipc/bcast.c:70`
+
+**Before writing FEAT-A:** amend DDR-955 §c Correction 1 to name the `->next`
+ring (and confirm it actually contains every BLOCKED thread, not just idles —
+`g_idle[]` is `struct tcb *g_idle[PERCPU_MAX]` at `sched.c:77`, so the ring may
+be idle-only). If the ring does not enumerate all blocked threads, the expiry
+scan needs a different mechanism entirely — e.g. an explicit deadline list
+threaded off the TCB. Do not code until that is settled; a scan over the wrong
+list would compile, run, and silently expire nothing.
+
+### NEXT ACTION (one sentence)
+Confirm whether the `->next` ring seeded at `g_idle[0]` enumerates ALL threads
+or only idles (`kernel/proc/sched.c:774-812`), amend DDR-955 §c accordingly,
+then implement `sched_block_timeout` using `struct tcb` at `kernel/proc/sched.h:48`.
