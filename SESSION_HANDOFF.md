@@ -6095,3 +6095,62 @@ write `sched_block_timeout` mirroring `sched_block_on`'s lock-held-on-entry-and-
 exit contract (`sched.c:1304`), add the expiry scan to `sched_tick`
 (`sched.c:1247`) per DDR-955 §k, then convert the four call sites
 (`virtio_blk.c:222,260` at 500 ticks; `ipc/ipc.c:60`, `ipc/bcast.c:70` at 100).
+
+---
+
+## 2026-08-20 — ADR-038 CLOSED, main promoted to bb19449
+
+**main: `27ba426` → `bb19449`** (fast-forward, 144 commits).
+**dev/phase1 tip: `bb19449`.**
+
+### ADR-038 — SHIPPED
+Three consecutive CI greens, all verified on the SAME SHA `bb19449`:
+`32395650883` (push), `32402456422`, `32405858449` (dispatches).
+Code was already in tree; only the greens were owed. Section A updated.
+
+### DDR-955 — PARTIAL, and recorded as partial
+Shipped: `sched_block_timeout` primitive (TCB `block_deadline`/`wake_timed_out`,
+expiry scan in `sched_tick` over the `->next` ring under `irq_save()`, waking via
+`sched_unblock` outside the walk), plus **2 of 4** call sites bounded —
+virtio-blk slot-wait and compl-wait at 500 ticks.
+
+NOT shipped, deliberately: `ipc_recv` and `bcast_wait`. Converted at 100 ticks,
+measured **19/20** with two lwIP `#GP` panics (`tcp_output+0x349`,
+`tcp_process_refused_data+0x21`, `RAX=0xF000FF53F000FF53` = BIOS ROM filler used
+as data), then reverted. The defect is structural, not a threshold:
+`bcast_wait` returns `void` and fills an out-parameter, so ANY early return hands
+the caller an unfilled buffer it cannot detect; `ipc_recv`'s `-1` already means
+"cap denied", so a timeout is indistinguishable from a permission failure.
+Raising the deadline would only make the corruption rarer. In-code comments at
+both sites say exactly this.
+
+### Measurements (hash recorded per result — the revert moved the binary)
+| gate | result | kernel |
+|---|---|---|
+| `smoke-blk-timeout` N=20 | 20/20, forbidden-sentinel arm never tripped | `0ec73506` |
+| `smoke-fs` N=20 | 20/20, 0 timeout lines in all 20 logs | `0ec73506` |
+| `smoke-smpuser` N=20 | 20/20, 0 panics in all 20 logs | `988aac0f` |
+| `fs_regression.sh` | 9/9 PASS | `988aac0f` |
+| `ci-shard-check` | OK — 145 gates / 6 shards / 6 excluded | — |
+
+### BUG-1 — STILL OPEN. Not closed by this work.
+The BSP wedge inside the DDR-763 churn loop (`main.c:2076-2160`) is CI-only at
+~1-in-32 and has NEVER reproduced on this host. `smoke-fs` was already 20/20
+locally BEFORE this change, so local greens prove nothing about it. Three CI
+greens also cannot distinguish "fixed" from "did not recur": at a 1-in-32 rate,
+P(3 clean runs | unchanged) is about 0.91. Bounding the compl-wait is a plausible
+fix for the leading hypothesis, not evidence the wedge is gone. Keep watching
+shard 5 / `smoke-fs` on future CI runs.
+
+### Also fixed this session
+`shard_check` was failing on CI (`e5b097a`, run 32272722318 — every other job
+merely CANCELLED by the early abort) because `smoke-fs-liveness` was added to the
+Makefile without a shard or an exclusion. Now in EXCLUDE with its DDR-790 reason.
+
+### NEXT ACTION
+FEAT-B: `SYS_RENAME` + PRISM `mv`. Verify NSI live first
+(`grep "#define SYS_" kernel/syscall/nsi.h | sort -t= -k2 -n | tail -3`) —
+max is 94, next free **95**. Model `vfs_rename` on `vfs_unlink`'s
+`mnt_lock_live()` pattern (DDR-954), `sfs_rename` on `sfs_unlink`'s journal
+transaction, PRISM `mv` on the `rm` builtin. Gate `smoke-rename` with sentinels
+RENAME_SRC_OK / RENAME_MV_OK / RENAME_DST_OK / RENAME_SRC_GONE, shard 4, 20/20.

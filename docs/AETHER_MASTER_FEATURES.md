@@ -48,6 +48,20 @@ timeout budget.
 All entries below are **shipped**.
 
 ### Boot / Kernel / Drivers / Filesystem
+- **ADR-038 demand-paged user stack** — eager window `USER_STACK_EAGER_PAGES=8`,
+  `#PF`-driven growth, guard page below `USER_STACK_BOT` (gate: `smoke-stack-demand`).
+  SHIPPED 2026-08-20: three consecutive CI greens on one SHA `bb19449` —
+  runs 32395650883, 32402456422, 32405858449. `main` fast-forwarded to `bb19449`.
+- **DDR-955 `sched_block_timeout`** — bounded-wait primitive: TCB `block_deadline`/
+  `wake_timed_out`, expiry scan in `sched_tick` over the `->next` ring under
+  `irq_save()`, waking via `sched_unblock` outside the walk (gate:
+  `smoke-blk-timeout`, 20/20, forbidden-sentinel arm on both timeout strings).
+  **PARTIAL — 2 of 4 sites bounded.** virtio-blk slot-wait and compl-wait at 500
+  ticks are shipped. `ipc_recv` and `bcast_wait` are deliberately NOT bounded:
+  `bcast_wait` returns `void` and fills an out-parameter, so an early timeout
+  hands the caller an unfilled buffer it cannot detect, and `ipc_recv`'s `-1`
+  already means "cap denied". Both need a return-value contract first; measured
+  at 19/20 with two lwIP `#GP` panics before revert.
 - MBR two-stage boot → long mode → ring-0 C (gate: `smoke`)
 - Kernel relocated to 4 MiB, 768 KiB load window (DDR-733)
 - GDT/IDT + exception panic path; 8259 PIC ISA-only; LAPIC/APIC timer @100 Hz (DDR-714A)
