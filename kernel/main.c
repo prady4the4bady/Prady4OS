@@ -739,6 +739,13 @@ static void blkmq_proof(void) {
     unsigned mq_spawned = 0;
     if (sched_create(blkmq_reader, (void *)0, "mq0")) mq_spawned++;
     if (sched_create(blkmq_reader, (void *)1, "mq1")) mq_spawned++;
+    /* DDR-966: kick the APs, matching rqstress_proof. sched_create enqueues on
+     * the CALLING CPU's run queue, so another CPU only collects a fresh worker
+     * when it next runs its scheduler — and an idle AP sits in hlt until its
+     * own timer tick. Without this the BSP burns the deadline below in yield()
+     * while runnable workers wait on halted APs, which is exactly the captured
+     * `done=0x0 spawned=2/2`: created, never run. */
+    smp_resched_all();
     uint64_t dl = g_ticks + 200;
     while ((g_mq_done & 3u) != 3u && !(g_mq_done >> 8) && g_ticks < dl)
         yield();
@@ -824,6 +831,7 @@ static void smp_blk_integrity(void) {
     if (sched_create(blkint_worker, (void *)1, "bi1")) bi_spawned++;
     if (sched_create(blkint_worker, (void *)2, "bi2")) bi_spawned++;
     if (sched_create(blkint_worker, (void *)3, "bi3")) bi_spawned++;
+    smp_resched_all();                      /* DDR-966: see blkmq_proof */
     uint64_t dl = g_ticks + 400;
     while ((g_blkint_done & 0xfu) != 0xfu && g_ticks < dl)
         yield();

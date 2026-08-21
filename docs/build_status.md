@@ -6327,3 +6327,61 @@ Five post-fix runs, all **PASS** with `PRADYOS_CADENCE_OK`, reaching n=28, 7, 7,
 No regression: `smoke-compositor`, `smoke-surface`, `smoke-wmorder`,
 `smoke-wmclose`, `ci-shard-check` (147 gates / 6 shards / 6 excluded),
 `ci-probe-rodata-check` all PASS. `compositor.elf` 75,240 ≤ 262,144.
+
+## Item 48 — §0.2's stated root cause is REFUTED by its own instrument (DDR-966)
+
+`CLAUDE.md` §0.2/§6.1 record Item 48's confirmed root cause as *"`sched_create`
+NULL return under heap pressure (DDR-934) — add NULL-check + KASSERT"*. **The
+captures no longer support that.** DDR-934 added the spawn counter precisely to
+separate "never created" from "created but never ran", and every capture since
+reads:
+
+```
+[blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
+```
+
+`spawned=2/2` means both `sched_create` calls **succeeded**. The NULL-return
+hypothesis is refuted by the very counter added to test it. That is the
+diagnostic working as designed; §0.2's attribution is the stale half of it.
+
+The NULL checks stay — they are what makes the discrimination possible — but
+they are not the fix, and **no `KASSERT` was added**: asserting on a condition
+the data says does not occur would trade a diagnosable FAIL line for a panic.
+
+### The surviving reading — a missing AP kick
+
+§0.2's other half stands (*a scheduling issue, NOT a driver bug*). Of the three
+proofs that spawn kernel workers and wait:
+
+| proof | spawns | kicks the APs? |
+|---|---|---|
+| `rqstress_proof` | 8 × 3 waves | **yes** — `smp_resched_all()` |
+| `blkmq_proof` | 2 | **no** |
+| `smp_blk_integrity` | 4 | **no** |
+
+`sched_create` enqueues on the **calling** CPU's run queue, so another CPU only
+collects a fresh worker when it next runs its scheduler — and an idle AP sits in
+`hlt` until its own timer tick. Meanwhile the BSP spins in
+`while (… && g_ticks < dl) yield()`. Runnable workers, a BSP burning its
+deadline, halted APs: `done=0x0` with `spawned=2/2`.
+
+Fixed by adding `smp_resched_all()` after the spawns in both proofs — the
+pattern §6.1 names. Not a virtio-blk change (§0.2/§6.0-D forbid one without
+`reason=checksum-mismatch`); it touches neither driver nor block layer.
+
+### Verification — and a capture I lost
+Kernel `sha256:328a9c33ef3316d1`. `smoke-blkmq`, `smoke-blk-integrity` (both
+printing OK), `smoke-msixap`, `smoke-percpu-sched`, `smoke-rqstress-liveness`,
+`smoke-shell` **5/5**, `ci-probe-rodata-check`, `ci-shard-check` all PASS.
+
+**`smoke-blkmq-trace` failed once and I did not capture why** — it was run with
+stdout discarded, so the signature is gone. It then passed **5/5** with output
+retained. That gate is in the Item 48 family (shard 4) so a pre-existing
+intermittent is the likely reading, but *likely* is not *known*, and discarding
+output on a gate that can fail is the same error class as the vacuous checks
+logged above. Recorded as unexplained rather than assumed benign.
+
+**Item 48 is NOT claimed closed.** It is intermittent in CI and has never
+reproduced locally, so a local green cannot prove this fix — only that nothing
+regressed. Confirmation is the absence of the signature in CI over time
+(DDR-966 §6).
