@@ -6016,3 +6016,75 @@ against CI's intermittent. OPEN-10 stays open until the promotion requirement
 already in force is met: three consecutive CI greens on the same tip (§3). A
 recurrence *with* a `[fs] FAILED to …` marker, or with a well-formed handle,
 reopens it on a different mechanism (DDR-964 §11).
+
+## A FOURTH intermittent family — `FSRM FAIL: created file did not persist`
+
+Shard 1 on `239f300` (`smoke-rqstress-liveness`, check run 96859678133) failed
+with a signature matching **none** of the three characterised families, so the
+stopping rule requires it be recorded.
+
+```
+[sfs] umount ctx=0x0000000007C3C000 caller=0xFFFFFFFF8002A91C
+FSRM FAIL: created file did not persist
+```
+
+### Read the signature, not the gate name
+`smoke-rqstress-liveness`'s own required sentinel **passed** — `[smp] rqstress
+OK` is in the log. The gate died on a *forbidden* sentinel (DDR-791: forbidden
+in every gate, not only the one that owns it) raised by an unrelated probe.
+This is the third distinct reason this gate family can go red, and reinforces
+the rule recorded above: the gate name does not identify the defect.
+
+### What the probe actually proved
+`user/fsrmtest.c` fails at step (2). Steps (1) and (2) are adjacent:
+
+```c
+long fd = nsi(SYS_OPEN, path, O_CREAT | O_WRONLY, 0);   /* succeeded */
+if (nsi(SYS_WRITE, fd, payload, plen) != plen) fail("write short");  /* succeeded */
+nsi(SYS_CLOSE, fd, 0, 0);
+long rf = nsi(SYS_OPEN, path, O_RDONLY, 0);
+if (rf < 0) fail("created file did not persist");       /* FAILED HERE */
+```
+
+So the create **and** the write both succeeded and only the immediately
+following reopen failed. This is not a capability failure (that would fail step
+1) and not a short write (step 1 checks it). Something invalidated the file
+between the close and the reopen.
+
+### Leading hypothesis — two SFS contexts writing one volume
+The line immediately preceding the failure is an SFS **umount**. `sfs_umount`
+(`sfs.c:376`) is called only from the SFS self-tests inside `sfs.c`
+(lines 1442, 1448, 1449, 1454, 1477, 1531, 1556, 1568). Those self-tests mount
+their **own** context on the same block device and write to it —
+`sfs_create(c, "VER", &f)`, `sfs_write(c, &f, 0, pa, 4096)`.
+
+Two independent SFS contexts on one device, each with its own in-memory
+superblock, free-tree and allocator state, both writing, will clobber one
+another's metadata. The ring-3 FSRM probe holds the root mount; a self-test
+mount writing concurrently would make an already-created file unfindable on
+reopen — exactly what is observed. Under one CPU these serialise; under
+`-smp 4` they interleave, which is why this is SMP-only. That run also shows
+`[sched] steal local=5531 remote=0` — far above the 796 seen in the shard-2
+capture, i.e. an unusually interleaved boot.
+
+**This is a hypothesis, not a finding.** Per §6.0-B it is recorded without a
+fix. It is *not* the DDR-964 race: that fails at create with `rc=-1`, and here
+the create succeeded.
+
+### Explicitly not caused by the DDR-964 work
+This failure is on `239f300`, which predates the DDR-964 fix (`f11d6c7`). It is
+pre-existing, not a regression from the `sched_create_blocked` conversion.
+
+### The discriminating instrument (not yet built)
+Print the *root* mount's ctx alongside each self-test mount/umount, and have the
+FSRM probe report which ctx served its failing open. If the probe's root ctx was
+never umounted, the shared-device-write reading is confirmed and the fix is to
+serialise or isolate the self-test mounts. If the root ctx itself was freed, it
+is a lifetime bug and belongs with DDR-953's stale-ctx work instead.
+
+### A resolution NOT to trust
+`caller=0xFFFFFFFF8002A91C` resolves inside `vfs_rename` in a **local** build —
+which is nonsense as a caller of `sfs_umount`. The failing binary was
+`239f300` built with `BSP_LIVENESS=1`; this build is `f11d6c7` without it.
+Standing rule §8 applies: an address does not identify a binary. The resolution
+was discarded rather than reported.
