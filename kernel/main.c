@@ -1948,18 +1948,13 @@ static void fs_test_thread(void *arg) {
                 /* 5e: launch the PRISM shell as init's child (execve-based
                  * respawn is deferred — ADR-024 §D5). It reads commands from the
                  * console; init reaps it on exit. */
-                /* DDR-957 follow-on: PRISM now resolves `run <path>` against SFS,
-                 * but /EXECTEST.ELF was only ever placed on the FAT32 root
-                 * (fat_place_exec_image at the mnt call site). smoke-shell
-                 * backgrounds it twice and asserts Done(0); without a copy here it
-                 * exits 127 and the job-control assertions fail. The helper is
-                 * mount-generic, so the same bytes go onto the SFS volume. */
-                fat_place_exec_image(cap, smnt);
-                /* DDR-957 (FEAT-E): PRISM roots at the SFS volume. Its ELF was
-                 * already loaded FROM there; without this it resolved every
-                 * path against the FAT default, where fat32 has no rename op. */
-                struct tcb *pr = user_boot_from_sfs_rooted(cap, smnt, "PRISM.ELF",
-                                                    prism_elf, prism_elf_end, 0, smnt);
+                /* DDR-957: PRISM stays on the FAT default root. Rooting it at
+                 * `smnt` was tried and reverted -- that volume is REFORMATTED at
+                 * sfs_format(sbd) later in boot, and smoke-shell asserts on
+                 * FAT-only fixtures (/HELLO.TXT, /BIG8K.TXT, /EXECTEST.ELF).
+                 * See DDR-957 sec.9-10 before trying again. */
+                struct tcb *pr = user_boot_from_sfs(cap, smnt, "PRISM.ELF",
+                                                    prism_elf, prism_elf_end, 0);
                 if (pr && it)
                     pr->parent_pid = it->pid;
 

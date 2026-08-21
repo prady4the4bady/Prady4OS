@@ -228,3 +228,44 @@ pass rather than attempted at the end of a session.
 Diagnostics removed (0 occurrences in `sys_exec.c`), build clean at
 `09aed0a6`, `kernel.bin` 1,044,862 B, shard-check 145/6/6. FEAT-E remains
 unpushed and `smoke-shell` remains regressed. Nothing is claimed shipped.
+
+---
+
+## 10. FEAT-E REVERTED — it is the MORE invasive path, not the cheaper one
+
+I previously recommended FEAT-E as the cheap unblock for DDR-956. That was
+**wrong**, and the correction matters for planning.
+
+Rooting PRISM at SFS breaks `smoke-shell` in at least three places, because the
+gate asserts on **FAT-only fixtures**:
+
+| assertion | fixture | where it lives |
+|---|---|---|
+| `ls /` lists `HELLO.TXT` | `/HELLO.TXT` | `mcopy` into the FAT image, `Makefile:633` |
+| `cat /BIG8K.TXT \| cat` | `/BIG8K.TXT` | `mcopy` into the FAT image, `Makefile:647` |
+| `Done(0) /EXECTEST.ELF` | `/EXECTEST.ELF` | placed on FAT; the SFS copy is wiped by the reformat |
+
+`Makefile:811` states it outright: `/HELLO.TXT` is "FAT-only". The kernel never
+writes any of these to SFS.
+
+So the full FEAT-E cost is: relaunch PRISM after `sfs_format` (restructuring
+init's parent/child wiring), **plus** migrate three fixtures onto the freshly
+formatted root, **plus** re-verify ~20 `smoke-shell` assertions. That is a
+fixture migration against the shell's whole test surface, not a one-line change.
+
+### Reverted
+The PRISM rooting and the dependent SFS `EXECTEST.ELF` placement are removed.
+`smoke-shell` is green again (full assertion line), `fs_regression` 9/9,
+shard-check 145/6/6, `kernel.bin` 1,044,862 B, kernel `1b8a380a`.
+
+**Kept:** `user_boot_from_sfs_rooted(…, int root_mnt)`. It is correct
+infrastructure — it does exactly what `main.c:1831` said the helper could not do,
+and the eventual fix needs it. The wrapper passes `-1`, so behaviour is
+unchanged and nothing is dead code.
+
+### Recommendation reversed
+`fat32_rename` is now the smaller path: one function in one file, PRISM stays
+FAT-rooted, zero gate churn, zero fixture migration, no boot reordering — and it
+makes `mv` work for the shell users who actually have a FAT root. Designed in
+DDR-958; **not implemented**, per the standing instruction that it is a separate
+piece of work.
