@@ -1156,6 +1156,70 @@ static int sfs_unlink(void *ctx, const char *path) {
     return 0;
 }
 
+/* DDR-956: atomic rename. Same contract as sfs_unlink -- the VFS layer already
+ * holds the per-mount sleep-mutex, so this function must NOT take it (mnt_lock
+ * is not recursive; re-acquiring on this thread would spin against itself).
+ *
+ * Atomicity: BOTH key changes go into ONE journal transaction. bt_insert stages
+ * the new name->inode entry and the old name's tombstone, and a single
+ * sfs_commit flushes them together, so a crash replays both or neither. The
+ * inode number is REUSED, never copied -- a copy-then-unlink shape would leave
+ * the file duplicated in the window between the halves, and a crash there
+ * leaves stale data behind. */
+static int sfs_rename(void *ctx, const char *old_path, const char *new_path) {
+    struct sfs_ctx *c = (struct sfs_ctx *)ctx;
+    uint64_t oparent, nparent;
+    const char *oname, *nname;
+    int olen, nlen;
+
+    if (sfs_walk(c, old_path, 0, &oparent, &oname, &olen) != 0)
+        return -1;                       /* missing source or missing parent */
+    if (sfs_walk(c, new_path, 0, &nparent, &nname, &nlen) != 0)
+        return -1;                       /* destination parent must exist */
+
+    uint64_t ino;
+    if (sfs_do_lookup(c, oparent, oname, olen, &ino) != 0)
+        return -1;                       /* absent or already a tombstone */
+
+    uint64_t okey = (oparent << 32) | (uint64_t)sfs_name_hash32(oname, olen);
+    uint64_t nkey = (nparent << 32) | (uint64_t)sfs_name_hash32(nname, nlen);
+    if (okey == nkey)
+        return 0;                        /* same entry: POSIX no-op */
+
+    /* A directory source may only move onto an absent or empty destination,
+     * mirroring the emptiness rule sfs_unlink applies before removing one. */
+    uint64_t dst_ino;
+    if (sfs_do_lookup(c, nparent, nname, nlen, &dst_ino) == 0 &&
+        sfs_is_dir(c, dst_ino)) {
+        char probe[256]; int cnt = 0;
+        if (sfs_dir_walk(c, c->root_btree, dst_ino, 0, &cnt, probe) == 1)
+            return -1;                   /* destination directory not empty */
+    }
+
+    struct sfs_leaf_slot s;
+
+    /* 1: new name -> the SAME inode (bt_insert replaces any existing entry, so
+     *    an occupied destination is overwritten inside this transaction). */
+    memset(&s, 0, sizeof s);
+    s.key = nkey;
+    s.v.dir.inode_num = ino;
+    s.v.dir.name_len = (uint8_t)nlen;
+    for (int i = 0; i < nlen; i++) s.v.dir.name[i] = nname[i];
+    if (bt_insert(c, &s))
+        return -1;
+
+    /* 2: old name -> tombstone, exactly as sfs_unlink writes it. */
+    memset(&s, 0, sizeof s);
+    s.key = okey;
+    s.v.dir.inode_num = 0;
+    s.v.dir.name_len = 0;
+    if (bt_insert(c, &s))
+        return -1;
+
+    sfs_commit(c);                       /* ONE commit covers both changes */
+    return 0;
+}
+
 /* ---- mount / format / register ------------------------------------------- */
 
 static int sfs_mount(struct blk_device *bd, void **ctx) {
@@ -1566,6 +1630,7 @@ static const struct vfs_fs_ops sfs_ops = {
     .read       = sfs_read,
     .write      = sfs_write,
     .unlink     = sfs_unlink,
+    .rename     = sfs_rename,        /* DDR-956 */
     .readdir    = sfs_readdir,
     .txn_begin  = sfs_txn_begin,
     .txn_commit = sfs_txn_commit,

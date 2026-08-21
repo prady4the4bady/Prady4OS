@@ -40,6 +40,8 @@ struct vfs_fs_ops {
     int (*read)   (void *ctx, const struct vfs_file *f, uint64_t off, void *buf, uint32_t len);
     int (*write)  (void *ctx, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len);
     int (*unlink) (void *ctx, const char *path);
+    /* DDR-956: optional; NULL-safe -- vfs_rename returns -ENOSYS. */
+    int (*rename) (void *ctx, const char *old_path, const char *new_path);
     int (*readdir)(void *ctx, const char *path, int index, char *name, uint32_t *size);
     /* Optional (NULL = unsupported): atomic transactions + resource teardown. */
     int (*txn_begin) (void *ctx);
@@ -87,4 +89,7 @@ int  vfs_create (cap_t cap, int mnt, const char *path, struct vfs_file *out);
 int  vfs_read   (cap_t cap, const struct vfs_file *f, uint64_t off, void *buf, uint32_t len);
 int  vfs_write  (cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len);
 int  vfs_unlink (cap_t cap, int mnt, const char *path);
+/* DDR-956: rename within ONE mount. Every caller passes t->root_mnt and no
+ * path->mount resolution exists, so -EXDEV is unreachable and absent. */
+int  vfs_rename (cap_t cap, int mnt, const char *old_path, const char *new_path);
 int  vfs_readdir(cap_t cap, int mnt, const char *path, int index, char *name, uint32_t *size);

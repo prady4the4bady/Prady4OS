@@ -234,6 +234,24 @@ int vfs_unlink(cap_t cap, int mnt, const char *path) {
     return r;
 }
 
+/* DDR-956: rename, modelled exactly on vfs_unlink above -- same capability
+ * gate, same mnt_lock_live() revalidation (DDR-954), unlock on every path.
+ *
+ * There is deliberately NO -EXDEV branch. Every syscall passes t->root_mnt
+ * (sys_file.c) and no path->mount resolution exists anywhere in the tree, so a
+ * caller cannot name a second mount; an EXDEV check would be unreachable. */
+int vfs_rename(cap_t cap, int mnt, const char *old_path, const char *new_path) {
+    struct vfs_mount *m = mnt_get(mnt);
+    if (!m || !cap_ok(cap, CAP_FS_WRITE))
+        return -1;
+    if (!m->fs->rename)
+        return -ENOSYS;
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
+    int r = m->fs->rename(m->ctx, old_path, new_path);
+    mnt_unlock(m);
+    return r;
+}
+
 int vfs_readdir(cap_t cap, int mnt, const char *path, int index, char *name, uint32_t *size) {
     struct vfs_mount *m = mnt_get(mnt);
     if (!m || !m->fs->readdir || !cap_ok(cap, CAP_FS_READ))
