@@ -50,8 +50,18 @@ Write the DDR before any fix code.
 **Item 48 — virtio-blk workers-late:** per DDR-886 (commit `2dc1bad`), the
 probes now print `reason=` on failure.
 - `reason=workers-late` → scheduling issue, NOT a driver bug. Do NOT write a
-  virtio-blk driver change. The confirmed root cause (DDR-934) is
-  `sched_create` NULL return under heap pressure — add NULL-check + KASSERT.
+  virtio-blk driver change. ~~The confirmed root cause (DDR-934) is
+  `sched_create` NULL return under heap pressure — add NULL-check + KASSERT.~~
+  **CORRECTED by DDR-966 (measured):** the NULL-return attribution is
+  **REFUTED by DDR-934's own counter.** That counter was added precisely to
+  separate "never created" from "created but never ran", and every capture
+  since reads `spawned=2/2` — both `sched_create` calls SUCCEEDED. The
+  NULL-checks stay (they are what makes the discrimination possible) but they
+  are not the fix, and **no KASSERT was added**: asserting on a condition the
+  data says does not occur trades a diagnosable FAIL line for a panic. The
+  real gap was that of the three proofs which spawn workers and wait, only
+  `rqstress_proof` called `smp_resched_all()`. The "scheduling issue, not a
+  driver bug" half of this bullet still stands.
 - `reason=checksum-mismatch` → genuine data defect → write a driver DDR.
 
 Items 47 and 48 are INDEPENDENT. One DDR per root cause (§6.0-C).
@@ -276,10 +286,13 @@ do not start an item whose prerequisites are not yet CI-green.
 Do not attempt a fix without a failing-run capture from the
 `[boot-load]`/`[boot-stamp]` instrument.
 
-**Item 48 — virtio-blk workers-late** — see §0.2 for the exact closure procedure.
-Confirmed root cause: `sched_create` NULL return (DDR-934). Fix: NULL-check +
-KASSERT in `blkmq_proof` and `smp_blk_integrity`, plus `smp_resched_all()` after
-worker spawn (matching `rqstress_proof` pattern at main.c:584-585).
+**Item 48 — virtio-blk workers-late** — see §0.2 for the exact closure procedure
+**and its correction**. The `sched_create`-NULL root cause is REFUTED (every
+capture reads `spawned=2/2`); no KASSERT was added, deliberately. What shipped
+(DDR-966) is the other half: `smp_resched_all()` after worker spawn in
+`blkmq_proof` and `smp_blk_integrity`, matching `rqstress_proof` (now at
+`main.c:671`, not 584-585 — the line drifted). NOT yet closed: never reproduced
+locally, so only CI over time confirms it.
 
 Also fix after item 47 (S2 defects, independent of intermittent root cause):
 - Bound the virtio-blk completion wait (currently unbounded).
