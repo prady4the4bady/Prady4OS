@@ -5565,3 +5565,59 @@ intermittently exposed under SMP — a candidate contributor to the
 intermittent-failure classes this project keeps chasing. Fixing it means holding
 the console lock across a whole logical line, a change to the console hot path
 and its lock ordering; it needs its own DDR.
+
+## Session 2026-08-21 (cont.) — `smoke-cadence` CI red on PR #5: NOT this PR, and NOT a timeout
+
+`build-and-boot (shard 5)` failed on `9e0ee66` at **`smoke-cadence`**
+(`[cadence] FAIL — no full auto cycle`, run `32494290321`). Investigated before
+touching anything, because shard 5 also carries `smoke-fs` (BUG-1's home) and
+the new `smoke-rename-sfs` — it was neither.
+
+### It is not caused by this PR — three independent lines
+1. **The failing SHA differs from a passing SHA by documentation only.**
+   `git diff --name-only 3120170..9e0ee66` yields **0** non-`.md` files; the
+   kernel is byte-identical. Shard 5 **passed** at `3120170`.
+2. **The same commit passed and failed concurrently.** Two CI runs on
+   `9e0ee66`: the `push`-event run `32494286674` → **success**; the
+   `pull_request`-event run `32494290321` → **failure**. Same SHA, same runner
+   image, minutes apart. CI itself demonstrates the non-determinism, so no
+   re-run was spent to establish it.
+3. **It passes locally** on a kernel whose md5 (`26effe65…`) matches the CI
+   SHA's kernel exactly: `[cadence] PASS — full automatic ambiance cycle`.
+
+This reproduces the pattern already recorded for this gate:
+`| smoke-cadence | PASS | FAIL | CI-environment only |`, same failure string
+`no full auto cycle`, on `23755ad` — long before this branch.
+
+### But "CI-environment only ⇒ slow runner ⇒ raise the window" is REFUTED
+The obvious patch is to raise `timeout 120`. **The measurement says that would
+not fix it.**
+
+| | local (PASS) | CI (FAIL) |
+|---|---|---|
+| `PRADYOS_CADENCE_OK` | appears just after **t=9000** | never |
+| highest heartbeat tick | **t=11500** | **t=11500** |
+
+The guest reached the **same tick depth in both runs**. It was not starved of
+guest time, so the window was not too short — the cadence state machine simply
+did not complete 4 advances.
+
+Mechanism, from the source: the gate's final sentinel fires only at
+`++g_cad_advances == 4` (`user/compositor.c:750`), and advances are paced by
+`g_cad_start_ns` against `now` — **vDSO wall-clock nanoseconds (DDR-895), not
+ticks.** Under a contended runner the guest's real-time progress and its tick
+accumulation diverge, so the same tick depth can carry fewer wall-clock-paced
+advances. That is the thing to measure.
+
+**Console interleaving is ruled out as the cause here**, despite being this
+session's other finding: `PRADYOS_CADENCE_OK` is a single buffered
+`printf` + `fflush` (`compositor.c:751-752`), i.e. one `kwrite` emitted as a
+single locked unit, so it cannot be split mid-token the way a multi-`kputs`
+line can.
+
+### Not fixed here, and the next diagnostic named
+No patch pushed: this is a pre-existing intermittent in a gate this PR does not
+touch, and the one obvious patch is refuted above. The next step is an
+instrument, not a fix — log `g_cad_advances` and the observed advance period
+alongside the tick count, so the wall-clock-vs-tick divergence can be measured
+rather than inferred. That belongs in its own DDR.
