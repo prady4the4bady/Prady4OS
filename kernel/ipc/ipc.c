@@ -58,10 +58,25 @@ int ipc_recv(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, uint64_t *
     uint64_t flags = spin_lock_irqsave(&e->lock);
     while (!e->full) {
         e->waiting_receiver = current_thread;
-        sched_block_on(&e->lock);  /* publishes BLOCKED under the lock, then sleeps */
-        /* DDR-955: NOT bounded. ipc_recv's -1 already means "cap denied", so a
-         * timeout returning -1 is indistinguishable from a permission failure.
-         * Bounding this needs a distinct return code first. */
+        /* DDR-961: bounded. -1 still means "cap denied" (the caller above relies
+         * on it); a timeout is -ETIMEDOUT, a value this interface never
+         * previously returned. 500 ticks matches the two virtio-blk sites
+         * DDR-955 shipped green. */
+        if (sched_block_timeout(&e->lock, &e->full, 500) == -ETIMEDOUT) {
+            /* Clear our own registration before leaving. Nothing else will:
+             * ipc_send clears it only on the wake path, so a timed-out receiver
+             * that returns and exits would leave e->waiting_receiver pointing at
+             * a freed TCB, and the next ipc_send would sched_unblock() through
+             * it. That use-after-free -- not the return-code defect -- is the
+             * mechanism behind the lwIP #GPs DDR-955 saw. The == current_thread
+             * guard matters: a sender may have cleared it and unblocked us on
+             * this same pass, and clobbering it would lose another thread's
+             * wakeup. */
+            if (e->waiting_receiver == current_thread)
+                e->waiting_receiver = 0;
+            spin_unlock_irqrestore(&e->lock, flags);
+            return -ETIMEDOUT;
+        }
     }
     ipc_copy32(out, e->msg);
     e->full = 0;

@@ -66,17 +66,32 @@ int bcast_publish(struct cap_table *caps, cap_t h, struct bcast_bus *b,
     return 0;
 }
 
-void bcast_wait(struct bcast_subscriber *s, struct bcast_event *out) {
+/* DDR-961: returns 0 with *out filled, or -ETIMEDOUT with *out untouched.
+ * The void signature was the reason DDR-955 could not bound this: an early
+ * return handed the caller an unfilled buffer it had no way to detect. */
+int bcast_wait(struct bcast_subscriber *s, struct bcast_event *out) {
     uint64_t flags = spin_lock_irqsave(&s->lock);
     while (s->head == s->tail) {
         s->waiter = current_thread;
-        sched_block_on(&s->lock);        /* publishes BLOCKED under the lock, then sleeps */
-        /* DDR-955: NOT bounded. bcast_wait returns void and fills *out, so an
-         * early timeout return would hand the caller an UNFILLED buffer with no
-         * way to detect it. Bounding this needs a return value first. */
+        /* 500 ticks, matching the virtio-blk sites DDR-955 shipped green rather
+         * than the 100 it measured red. */
+        if (sched_block_timeout(&s->lock, &s->pending, 500) == -ETIMEDOUT) {
+            /* Clear our own registration before leaving -- bcast_publish clears
+             * it only on the wake path, so a timed-out waiter that returns and
+             * exits would leave s->waiter dangling at a freed TCB for the next
+             * publish to sched_unblock() through. That use-after-free is the
+             * mechanism behind the lwIP #GPs DDR-955 attributed to a "corrupt
+             * bcast buffer"; see DDR-961 sec.2. The == current_thread guard
+             * keeps a publisher that won the race from having its clear undone. */
+            if (s->waiter == current_thread)
+                s->waiter = 0;
+            spin_unlock_irqrestore(&s->lock, flags);
+            return -ETIMEDOUT;
+        }
     }
     *out = s->q[s->head];
     s->head = (s->head + 1) % BCAST_QUEUE;
     if (s->head == s->tail) s->pending = 0;
     spin_unlock_irqrestore(&s->lock, flags);
+    return 0;
 }

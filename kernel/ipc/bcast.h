@@ -51,4 +51,6 @@ int  bcast_subscribe(struct cap_table *caps, cap_t h, struct bcast_bus *b,
 int  bcast_publish(struct cap_table *caps, cap_t h, struct bcast_bus *b,
                    uint32_t type, uint64_t payload);
 /* Block until an event is queued for `s`, then dequeue it. */
-void bcast_wait(struct bcast_subscriber *s, struct bcast_event *out);
+/* DDR-961: 0 = event dequeued into *out; -ETIMEDOUT = deadline expired, *out
+ * untouched. Callers MUST check -- an ignored return reads an unfilled event. */
+int  bcast_wait(struct bcast_subscriber *s, struct bcast_event *out);

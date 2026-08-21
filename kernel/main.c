@@ -163,12 +163,20 @@ static void ipc_receiver_thread(void *arg) {
     uint64_t buf[IPC_MSG_WORDS];
 
     kputs("[recv] blocking on endpoint (no message yet)\r\n");
-    if (ipc_recv(current_thread->caps, cap, &demo_ep, buf) == 0) {
+    /* DDR-961: three-way now that the wait is bounded. -1 is still "cap denied";
+     * -ETIMEDOUT is new and must not be folded into it -- a bounded wait that
+     * hides its own expiry is worse than an unbounded one. The timeout prints a
+     * string no gate asserts on, so an expiry turns the affected gate red rather
+     * than passing quietly. */
+    int rr = ipc_recv(current_thread->caps, cap, &demo_ep, buf);
+    if (rr == 0) {
         kputs("[recv] received: ");
         kputhex(buf[0]);
         kputs(" ");
         kputhex(buf[1]);
         kputs("\r\n");
+    } else if (rr == -ETIMEDOUT) {
+        kputs("[recv] TIMEOUT\r\n");
     } else {
         kputs("[recv] DENIED\r\n");
     }
@@ -274,7 +282,10 @@ static void sub_approvals_thread(void *arg) {
     subs_ready++;
     for (int i = 0; i < 2; i++) {
         struct bcast_event e;
-        bcast_wait(&sub_a, &e);
+        if (bcast_wait(&sub_a, &e) == -ETIMEDOUT) {   /* DDR-961 */
+            kputs("[sub-approve] TIMEOUT\r\n");
+            return;                                   /* e is UNFILLED — do not read it */
+        }
         kputs("[sub-approve] event type=");
         kputhex(e.type);
         kputs(" payload=");
@@ -289,7 +300,10 @@ static void sub_alerts_thread(void *arg) {
     bcast_subscribe(current_thread->caps, cap, &demo_bus, &sub_b, EVT_RESOURCE_ALERT);
     subs_ready++;
     struct bcast_event e;
-    bcast_wait(&sub_b, &e);
+    if (bcast_wait(&sub_b, &e) == -ETIMEDOUT) {       /* DDR-961 */
+        kputs("[sub-alert] TIMEOUT\r\n");
+        return;                                       /* e is UNFILLED — do not read it */
+    }
     kputs("[sub-alert] event type=");
     kputhex(e.type);
     kputs("\r\n[sub-alert] done (got only ALERT)\r\n");
