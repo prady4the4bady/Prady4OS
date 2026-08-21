@@ -5498,3 +5498,70 @@ on future CI runs.
 
 The clean kernel was rebuilt afterwards and reproduces md5
 `78544f73b2b43c625260875530e0467c`.
+
+## Session 2026-08-21 (cont.) — DDR-961: `ipc_recv` / `bcast_wait` bounded
+
+Completes the half of DDR-955 that shipped as partial. DDR-955 converted both
+sites at 100 ticks, measured 19/20 with two lwIP `#GP` panics, reverted them,
+and attributed the panics to "a corrupt bcast buffer".
+
+**That attribution does not survive inspection, and correcting it is the
+substance of this change.** `struct bcast_event` is `{type, payload}` and every
+caller does nothing with it but `kputs`/`kputhex`, so an unfilled event prints
+garbage hex. There is no path from those call sites into lwIP's heap.
+
+**The mechanism that does fit is a stale waiter pointer.** Both sites register
+the current thread as *the* waiter and rely on the waker to clear it —
+`bcast_publish` and `ipc_send` each do `s->waiter = 0` before `sched_unblock`.
+On a timeout there is no waker, so nothing clears it, and all three call sites
+then run to completion and exit. The TCB is freed and recycled; a later publish
+reads the dangling pointer and calls `sched_unblock()` through it, writing a
+state field into whatever now owns that allocation. lwIP's PCB pool is the
+largest consumer of that heap. That is a use-after-free introduced **by** the
+timeout conversion, not by the return-type defects — which is why no threshold
+change could have fixed it. **Clearing the registration on the timeout path is
+the load-bearing part; the signature fixes make a timeout reportable.**
+
+- `ipc_recv` → `-ETIMEDOUT` as a distinct code; `-1` still means "cap denied",
+  so the one existing caller's `== 0` test keeps its exact meaning.
+- `bcast_wait` → `void` becomes `int`, so an early return can no longer hand
+  back an unfilled out-parameter undetectably.
+- Both → clear the registration before returning, under the lock
+  `sched_block_timeout` re-acquires, guarded by `== current_thread` so a
+  publisher that won the race does not have its clear undone.
+- Deadline 500 ticks, matching the virtio-blk sites DDR-955 shipped green rather
+  than the 100 it measured red.
+
+Caller audit complete — three sites, all in `kernel/main.c` (166, 277, 292),
+each handling `-ETIMEDOUT` explicitly with a distinct printed string. Those
+strings are deliberately **not** in any gate's sentinel list: a timeout prints
+something other than the asserted sentinel, so an expiry turns the affected gate
+red rather than passing quietly.
+
+### Measured (kernel `26effe65daa046ff7c9257a6d5a1f423`)
+**`smoke-smpuser` N=20: 20/20 PASS, panics=0, ipc_timeouts=0.** Exactly 2
+`[trap]` lines in every run, all accounted for as the deliberate `WXVIOL.ELF`
+and `METRIC.ELF` boot faults. Full-length `smoke-fs` serial capture shows every
+IPC/bcast demo sentinel intact.
+
+### Two scoring bugs found on the way — both produced plausible wrong numbers
+1. `grep -c` already prints `0`; a `|| echo 0` fallback appended a **second**
+   zero, the arithmetic died, and the loop stopped after run 1 **while still
+   printing `1/20 PASS`**. A verdict was reported for a loop that never ran.
+2. **Line-based grep is unreliable on SMP serial output.** The `[trap] user …`
+   line is built from ~10 separate `kputs`/`kputdec` calls (`idt.c:355-363`).
+   Each call is serialised (`irq_save()` in `console.c` is a shadowing local
+   taking `g_console_lock`, ADR-030 stage 1) but the lock is **released between
+   calls**, so another CPU splices output mid-line:
+   `[trap] user [boot-load] SYSTEST.ELF t=#PF page fault pid=180`.
+   11 of 20 runs had the `WXVIOL` trap mangled this way, which defeated a
+   `grep -v WXVIOL` exclusion and scored as "unexpected".
+
+### Finding exposed, deliberately NOT fixed
+**A serial line assembled from multiple `kputs` calls can be split by another
+CPU under `-smp 4`.** Per-call atomicity holds; per-line atomicity does not.
+Every gate here asserts on serial patterns, so any gate matching a whole line is
+intermittently exposed under SMP — a candidate contributor to the
+intermittent-failure classes this project keeps chasing. Fixing it means holding
+the console lock across a whole logical line, a change to the console hot path
+and its lock ordering; it needs its own DDR.

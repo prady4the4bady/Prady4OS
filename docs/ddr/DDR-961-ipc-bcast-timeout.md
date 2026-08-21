@@ -155,20 +155,82 @@ its own expiry is worse than an unbounded one.
 The new strings are deliberately **not** added to any gate's sentinel list.
 They exist to make a timeout legible in the log, not to be asserted on.
 
-## 5. Verification — zero panics, not a pass rate
+## 5. Verification — zero panics, not a pass rate. MEASURED.
 
-`smoke-smpuser` **20×**. The pass criterion is **zero** `#GP`/`#PF`/`[BUG]`/
-`PANIC` across all 20 logs, not 20/20 green: DDR-955's attempt was *19/20* and
-the single failure carried the two panics that mattered. A run can pass its
-sentinel check while having panicked in a thread the gate does not assert on.
+`smoke-smpuser` **N=20**, kernel `26effe65daa046ff7c9257a6d5a1f423` (R1).
+The criterion is **zero** panics across all 20 logs, not 20/20 green: DDR-955's
+attempt was *19/20* and the single failure carried the two panics that mattered.
+A run can pass its sentinel check while having panicked in a thread the gate
+does not assert on.
 
-Kernel md5 recorded with the result (R1).
+```
+==== DDR-961 N=20: 20 PASS / 0 FAIL | panics=0 ipc_timeouts=0 | kernel 26effe65 ====
+```
 
-**Halt rule, binding:** if any panic appears, revert immediately, record the
-panic text and faulting address in this DDR as evidence, and make **no** second
-fix attempt this session. §2's mechanism is a hypothesis until 20 clean runs say
-otherwise; a panic means it was wrong or incomplete, and the right response is
-evidence, not another guess.
+| metric | result |
+|---|---|
+| gate verdict | **20/20 PASS** |
+| `[BUG]` / `PANIC` / `#GP` / `#DF` | **0** across all 20 serial logs |
+| `[recv]`/`[sub-approve]`/`[sub-alert] TIMEOUT` | **0** — no bounded wait expired in any run |
+| `[trap]` lines per run | **exactly 2 in every run**, fully accounted for below |
+
+Separately, a full-length `smoke-fs` serial capture on the same kernel shows all
+IPC/bcast demo sentinels intact and unchanged: `[recv] blocking on endpoint`,
+`[sub-approve] event type=` ×2 plus `done`, `[sub-alert] event type=` plus
+`done`. The bounded waits changed no observable behaviour on the happy path.
+
+### Every trap line accounted for — and two scoring bugs found on the way
+
+The first scoring pass reported `unexpected_traps=11`. **It was wrong**, and how
+it was wrong is worth recording because both defects produce plausible numbers
+rather than obvious errors:
+
+1. **`grep -c` already prints `0`** when nothing matches. The `|| echo 0`
+   fallback appended a *second* zero, `$((panics+p))` then died on
+   `syntax error in expression`, and the loop stopped after run 1 — while still
+   printing a summary line reading `1/20 PASS`. A verdict was reported for a
+   loop that never ran.
+2. **Line-based exclusion of the deliberate boot faults fails under SMP.** The
+   `[trap] user …` line is assembled from ~10 separate `kputs`/`kputdec` calls
+   (`idt.c:355-363`). Each call is individually serialised — `irq_save()` in
+   `console.c` is a *shadowing* local that takes `g_console_lock` (ADR-030
+   stage 1), so `kputs` really is cross-CPU safe — but the lock is **released
+   between calls**, so another CPU can interleave its own output mid-line:
+
+   ```
+   [trap] user [boot-load] SYSTEST.ELF t=#PF page fault pid=180
+   ```
+
+   That is the `WXVIOL.ELF` trap with a `[boot-load]` line spliced through it.
+   The ELF name is displaced, so `grep -v WXVIOL` does not exclude it and it
+   scores as "unexpected".
+
+Corrected accounting over all 20 runs:
+
+| | runs |
+|---|---|
+| total `[trap]` lines exactly 2 | **20 / 20** |
+| exactly one `METRIC.ELF` trap | **20 / 20** |
+| `WXVIOL.ELF` trap intact | 9 |
+| `WXVIOL.ELF` trap interleaved with `[boot-load]` output | 11 |
+| **unexplained traps** | **0** |
+
+Both traps are the boot faults `WXVIOL.ELF` and `METRIC.ELF` take on purpose
+every boot (W^X and read-only-page regressions). Nothing else faults.
+
+### A finding this exposed, NOT fixed here
+**A serial line assembled from multiple `kputs` calls can be split by another
+CPU's output under `-smp 4`.** Per-call atomicity is guaranteed; per-line
+atomicity is not. `kwrite` documents itself as emitting "n bytes as a single
+locked unit" precisely because a multi-call line has no such guarantee.
+
+Every gate in this tree asserts on serial patterns, so any gate matching a whole
+line is exposed to this intermittently under SMP — which makes it a candidate
+contributor to the intermittent-failure classes this project keeps chasing.
+Recorded with evidence, deliberately not fixed: holding the console lock across
+a whole logical line is a change to the console hot path and its lock ordering
+(`klog_lock` nests inside, the console lock outside), and it deserves its own
+DDR and its own verification rather than a tail-end edit.
 
 ## 6. Explicitly not done
 
