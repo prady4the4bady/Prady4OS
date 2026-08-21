@@ -90,3 +90,50 @@ BUG-1 is still open and a timeout firing here is information worth failing on.
   reusing `sfs_is_dir` + `sfs_dir_walk` as `sfs_unlink` does
 - prefix collisions (`/a/bc` vs `/a/b`) are distinct keys — the B+tree key is
   `(parent_ino << 32) | FNV1a32(name)`, so no prefix aliasing exists
+
+---
+
+## 7. GATE BLOCKED — PRISM is FAT-rooted and fat32 has no rename op
+
+The PRISM-shell gate strategy was implemented (two gates, 147/6/6, Makefile
+parsing clean) and **failed on first run** with the rename itself failing:
+
+```
+prism> mv: cannot rename /RENSRC.TXT
+prism> cat: cannot open /RENDST.TXT
+```
+
+Cause, confirmed in the tree:
+- `fat32_ops` declares `.unlink` but **no `.rename`** (`fat32.c:635`), so
+  `vfs_rename` returns `-ENOSYS`.
+- PRISM is launched via `user_boot_from_sfs(cap, smnt, "PRISM.ELF", …)`
+  (`main.c:1934`), which loads the ELF *from* SFS but does **not** set
+  `root_mnt` — the comment at `main.c:1831` says so explicitly ("root_mnt is set
+  BEFORE unblock, which user_boot_from_sfs doesn't allow"). PRISM therefore runs
+  on the FAT default root.
+
+### Consequence worth stating plainly
+`mv` is shipped but **non-functional for every shell user**: the syscall and the
+SFS backend are correct, but the filesystem PRISM actually runs on cannot rename.
+
+### Why the ENOENT gate was ALSO withdrawn
+It would have passed — vacuously. On FAT every `mv` fails, so
+`mv: cannot rename …` appears regardless of whether rename is implemented
+correctly. A sentinel that fires independently of the behaviour under test is
+exactly what R8 forbids, and shipping it would have recorded a green for a
+feature that does not work.
+
+### Two ways to unblock, both out of this task's scope
+1. **Implement `fat32_rename`.** Bounded but not trivial: `fat32_unlink`
+   (`fat32.c:599-617`) resolves the parent, scans the entry, frees the chain and
+   stamps `0xE5`. A rename overwrites the 11-byte 8.3 name in place for a
+   same-directory move — but any file with a long-name chain has LFN entries
+   preceding it, and renaming only the 8.3 record leaves that chain pointing at
+   the new name. Getting that wrong corrupts the directory, so it needs its own
+   DDR rather than being appended here.
+2. **Root PRISM at SFS** — that is FEAT-E (SFS as default process root), already
+   a separate queued item. It would make `mv` work for shell users immediately
+   and make this gate strategy viable unchanged.
+
+Gates reverted; shard matrix back to 145/6/6. `SYS_RENAME` remains implemented,
+callable, and **not claimed as shipped**.
