@@ -5822,3 +5822,62 @@ refuted above.
 No fix attempted, unchanged: the next step remains the capability instrument
 (print the `cap` handle and owning `cap_table` state alongside `rc` at
 `main.c:2190`), which two captures now make clearly worth landing.
+
+## `smoke-blk-integrity` red on shard 0 — Item 48 family, and DDR-961's timeout WITNESSED it
+
+Shard 0 failed on `ca0abca`:
+
+```
+[sub-approve] TIMEOUT
+[blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
+[vblk] compl wait timeout          (x3)
+[smp] blk integrity FAIL reference-read
+```
+
+`[sub-approve] TIMEOUT` is a string **this session introduced** (DDR-961's
+`bcast_wait` timeout path). Its first appearance in the wild is on a failing
+gate, so it needed ruling in or out as a cause rather than waved off.
+
+### It is a witness, not the cause
+- **No mechanism.** `bcast_wait` timing out cannot stop virtio-blk workers
+  completing. The bcast demo threads share no state with the block layer; the
+  timeout path clears `s->waiter` under the lock and returns.
+- **Same kernel already passed this gate in CI.** `3120170` carries the DDR-961
+  code and its shard 0 — which includes `smoke-blk-integrity` — was **green**
+  (run `32488429624`). `ca0abca` is docs-only from it (**0** non-`.md` files),
+  so the kernel is byte-identical.
+- **Passes locally.** 3/3 PASS on kernel `26effe65…`, with `[sub-approve]
+  TIMEOUT` firing **0** times — as it did in all 20 `smoke-smpuser` runs.
+- The failure itself is the **Item 48 / workers-late family**: workers spawned
+  2/2 but `done=0`, with three `[vblk] compl wait timeout`s. CLAUDE.md §0.2 is
+  explicit that `workers-late` is *"a scheduling issue, NOT a driver bug"*.
+
+### The finding worth keeping
+**A second, unrelated subsystem independently reported a stall in the same
+window.** `bcast_wait` waited its full 500 ticks without a publisher waking it,
+at the same moment the block workers failed to run. That is corroborating
+evidence for the scheduling-stall root cause §0.2 asserts for Item 48, arriving
+from a completely independent code path — the bcast demo has nothing to do with
+blk.
+
+DDR-961's timeouts were added to make an expiry legible. They turn out to double
+as a **system-wide stall detector**: an unrelated thread announcing "nothing woke
+me for 500 ticks" is exactly the witness Item 48 has lacked. Worth exploiting
+deliberately rather than treating as log noise.
+
+### Calibration on the deadline, and on the vblk timeouts
+500 ticks is reachable under CI load — this is the first observation of that,
+against 0 in 20 local `smoke-smpuser` runs and 0 in 3 local `smoke-blk-integrity`
+runs. Not a reason to change it: the deadline fired exactly when the system was
+genuinely stalled, which is what a bound is *for*.
+
+Separately, and worth knowing before anyone reads a `[vblk] compl wait timeout`
+as a failure: two of the three **passing** local runs contained **15** and **10**
+of them. They are common and tolerated; they only fail the gate when they
+cascade into `blk integrity FAIL reference-read`.
+
+### Gap in my own verification, owned
+`smoke-blk-integrity` was run locally on kernel `78544f73` (the STEP 2 batch,
+*before* DDR-961), not on the DDR-961 kernel, before that work was pushed. CI
+covered it on `3120170` and the three runs above cover it now, but the local
+pre-push batch had a hole in it.
