@@ -173,3 +173,58 @@ implicated once the exit code is known.
 One fix attempt was made (placing the ELF on SFS). It did not turn the gate
 green, so per the standing instruction this stops here rather than iterating
 blindly. FEAT-E remains unpushed and `smoke-shell` remains regressed.
+
+---
+
+## 9. ROOT CAUSE FOUND — PRISM is rooted at a volume that is later REFORMATTED
+
+Three diagnostic boots settled it. The final one printed:
+
+```
+[execve-diag] exit ENOENT path=/EXECTEST.ELF
+```
+
+so `vfs_open` fails inside `execve`. Not a size problem, not a short read, not
+`root_mnt < 0` (the entry probe printed `root_mnt=1`, which is SFS — FAT is 0,
+pdrive is 2), and not `copyinstr`.
+
+### The sequence (all line numbers from `kernel/main.c`)
+| line | event |
+|---|---|
+| 1957 | `fat_place_exec_image(cap, smnt)` — /EXECTEST.ELF written to SFS |
+| 1961 | PRISM launched, rooted at `smnt` |
+| 2033 | comment: "reformats the disk, so release the VFS mount first" |
+| 2045 | `sfs_selftest_lz4(sbd)` — **destructive** |
+| 2054 | **`sfs_format(sbd)`** — blk2 is reformatted |
+| 2055 | `root_smnt = vfs_mount(2)` — the volume is remounted under a NEW id |
+
+**PRISM is rooted at `smnt`, a mount whose underlying volume is wiped and
+released later in the same boot.** Everything it could open disappears. The
+`ENOENT` is a destroyed filesystem, not a missing file — which is why placing the
+ELF harder (the previous attempt) could never have worked.
+
+### Correction to §8
+§8 recorded "PRISM's own `ls /` lists EXECTEST.ELF" as ruling out invisibility.
+That was an **over-read**: the count came from grepping the whole serial log,
+which includes kernel-side output emitted *before* the reformat. It was not
+evidence about what PRISM could see. The `[execve-diag]` line is.
+
+### The fix — the pattern is already in the tree, one line above
+`main.c:1969` describes exactly this for the AETHER daemon:
+
+> "loaded BLOCKED here (hand-rolled elf_load, DDR-739 pattern) and rooted at the
+> clean PERSISTENT SFS root + unblocked only AFTER the reformat+provision below"
+
+PRISM needs the same shape: load it BLOCKED, and after `sfs_format` +
+`vfs_mount(2)` at 2054-2055, set `root_mnt = root_smnt` and only then
+`sched_unblock`. Rooting at `smnt` is unfixable by any amount of file placement.
+
+This is a larger change than the current `user_boot_from_sfs_rooted(…, smnt)`
+one-liner — PRISM's launch must move relative to the reformat, and init's
+parent/child wiring at 1962-1963 has to follow it. It is left for a deliberate
+pass rather than attempted at the end of a session.
+
+### State
+Diagnostics removed (0 occurrences in `sys_exec.c`), build clean at
+`09aed0a6`, `kernel.bin` 1,044,862 B, shard-check 145/6/6. FEAT-E remains
+unpushed and `smoke-shell` remains regressed. Nothing is claimed shipped.
