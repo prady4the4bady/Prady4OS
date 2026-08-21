@@ -269,3 +269,52 @@ FAT-rooted, zero gate churn, zero fixture migration, no boot reordering — and 
 makes `mv` work for the shell users who actually have a FAT root. Designed in
 DDR-958; **not implemented**, per the standing instruction that it is a separate
 piece of work.
+
+---
+
+## 11. STEP 2 ordering fix IMPLEMENTED and MEASURED — necessary but not sufficient
+
+The prescribed fix was applied exactly: PRISM loaded BLOCKED via hand-rolled
+`elf_load` (mirroring AETHER at 1969), rooted at `root_smnt` and unblocked beside
+`dm` at 2092-2093 — i.e. after `sfs_format` (2049) and `vfs_mount(2)` (2050).
+Built clean, `1b8a380a → 14c55ba0`, 0 warnings.
+
+**`smoke-shell` still fails**, on TWO assertions:
+
+```
+[shell] FAIL: background job never reaped (DDR-881)
+[1]+ Done(127)   /EXECTEST.ELF      <- still 127
+HELLO.TXT occurrences in ls output: 0
+```
+
+### What this measurement establishes
+The ordering fix is **correct and necessary** — PRISM no longer roots at a volume
+that gets wiped. But it is **not sufficient**, because the clean `root_smnt`
+volume contains only `/etc/aether/config`. Every fixture the shell gate needs is
+somewhere else:
+
+| fixture | lives on | needed by |
+|---|---|---|
+| `/EXECTEST.ELF` | FAT, and the pre-reformat SFS volume | `run … &` → `Done(0)` |
+| `/HELLO.TXT` | FAT only (`Makefile:633`) | `ls /` assertion |
+| `/BIG8K.TXT` | FAT only (`Makefile:647`) | `cat /BIG8K.TXT \| cat` |
+
+So rooting PRISM at SFS — at `smnt` **or** `root_smnt` — requires migrating the
+shell's whole fixture set onto the post-reformat volume. That is the same
+conclusion as §10, now demonstrated rather than predicted: the blocker was never
+the launch ordering alone.
+
+### Halt
+One fix attempt was made and measured; per the standing rule this records and
+stops rather than iterating. The STEP 2 change is reverted — kernel back to
+`1b8a380a`, `smoke-shell` PASS (full assertion line), tree green.
+
+### What the complete FEAT-E actually requires
+1. The STEP 2 ordering fix (validated here — keep it when the time comes).
+2. Provision `/EXECTEST.ELF`, `/HELLO.TXT` and `/BIG8K.TXT` onto `root_smnt`
+   after `vfs_mount(2)` at 2050, before PRISM is unblocked.
+3. Re-verify all ~20 `smoke-shell` assertions against the new root.
+
+Step 2 of that list is what makes this a fixture migration rather than a
+one-liner, and it is why `fat32_rename` remains the smaller path to a working
+`mv` (§10).
