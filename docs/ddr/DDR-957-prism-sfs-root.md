@@ -72,3 +72,50 @@ the SFS volume too — not to revert the rooting.
 
 `make image` clean, `kernel.bin` still ≤ 1,048,576 B, shard-check 145/6/6,
 then `smoke-shell` and `smoke-rename` both run and read.
+
+---
+
+## 7. STATUS: implemented, builds clean, but REGRESSES smoke-shell — NOT pushed
+
+`user_boot_from_sfs_rooted` + the PRISM call site are in and build clean
+(`626f9652`, then `09aed0a6` with the EXECTEST follow-on; rc=0, 0 warnings,
+`kernel.bin` 1,044,862 B, shard-check 145/6/6).
+
+**But `smoke-shell` fails**, exactly in the risk area §5 named — though on a
+different file than predicted:
+
+```
+[shell] FAIL: background job never reaped (DDR-881)
+[1]+ Done(127)   /EXECTEST.ELF
+[2]+ Done(127)   /EXECTEST.ELF
+```
+
+The gate asserts `Done(0)` (Makefile:1132). Exit 127 means `run /EXECTEST.ELF`
+could not launch the image.
+
+### What has been ruled out
+`/EXECTEST.ELF` being absent from SFS. It was placed there by reusing the
+mount-generic `fat_place_exec_image(cap, smnt)` at the PRISM launch site, and
+the serial log now shows **three** `[exec] placed /EXECTEST.ELF` lines. The file
+is on the volume and `run` still returns 127, so absence is not the cause.
+
+(Note for whoever continues: the first attempt to check this grepped the make
+output rather than `build/shell_serial.log`, which smoke-shell writes serial to,
+and returned a misleading zero. Grep the serial log.)
+
+### Still unknown
+Why `run` fails with the file present. Next probes, in order:
+1. What `do_run_bg` / `do_run` in `user/prism.c` actually call — path resolution
+   vs. an execve that may still target the default mount.
+2. Whether the SFS copy is written *before* PRISM is unblocked. The placement
+   call sits at the PRISM launch site; if PRISM starts first, the file may not
+   yet exist when the shell runs. Ordering here is the same class of bug as the
+   `root_mnt`-before-unblock issue this DDR exists to fix.
+3. Whether exit 127 originates in the loader or in PRISM's own error path.
+
+### Decision
+FEAT-E is **not** shipped and **not** pushed. It trades a working `smoke-shell`
+for an unproven `mv`, which is a net regression: `smoke-shell` is one of the 145
+green gates and job control is a shipped feature. Reverting the rooting is NOT
+the answer either — DDR-956 §7 shows `mv` is unusable without it. The correct
+close is to finish diagnosing item 2 above.

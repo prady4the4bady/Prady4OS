@@ -448,9 +448,18 @@ void aether_audit_tamper(void);
 /* `sovereign` grants CAP_SOVEREIGN BEFORE the thread's first run: elf_load now
  * returns the thread BLOCKED, and the unblock happens only after the authority
  * flags are set (DDR-boot-authority-race). */
+/* Unchanged entry point for the ~25 callers that keep the default root. */
 static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
                                const unsigned char *elf, const unsigned char *elf_end,
-                               int sovereign) {
+                               int sovereign);
+
+/* DDR-957: `root_mnt >= 0` selects the new thread's root mount BEFORE it is
+ * unblocked. That ordering is the whole point -- this helper unblocks
+ * internally, so a caller assigning ->root_mnt on the returned pointer would
+ * race a thread that is already runnable (see main.c:1831). */
+static struct tcb *user_boot_from_sfs_rooted(cap_t cap, int smnt, const char *fname,
+                               const unsigned char *elf, const unsigned char *elf_end,
+                               int sovereign, int root_mnt) {
     /* ITEM 47 / B#3 instrument (DDR-886): name every SFS-backed load as it is
      * ENTERED, so a boot that stops mid-block says WHICH load it stopped on.
      * fs_test_thread has been observed reaching stamp A and never stamp C while
@@ -500,6 +509,8 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
     if (lr == ELF_OK) {
         if (sovereign)
             ut->is_sovereign = 1;      /* authority BEFORE the first run */
+        if (root_mnt >= 0)
+            ut->root_mnt = root_mnt;   /* DDR-957: root BEFORE the first run */
         sched_unblock(ut);             /* elf_load returns the thread BLOCKED */
         kputs("[user] ELF loaded from SFS; ring-3 thread spawned\r\n");
         return ut;
@@ -523,6 +534,12 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
     kputdec(pmm_free_page_count());
     kputs("\r\n");
     return 0;
+}
+
+static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
+                               const unsigned char *elf, const unsigned char *elf_end,
+                               int sovereign) {
+    return user_boot_from_sfs_rooted(cap, smnt, fname, elf, elf_end, sovereign, -1);
 }
 
 /* DDR-SMP-3c-alpha: the boot-time AP-dispatch proof — runs ON each AP. */
@@ -1931,8 +1948,18 @@ static void fs_test_thread(void *arg) {
                 /* 5e: launch the PRISM shell as init's child (execve-based
                  * respawn is deferred — ADR-024 §D5). It reads commands from the
                  * console; init reaps it on exit. */
-                struct tcb *pr = user_boot_from_sfs(cap, smnt, "PRISM.ELF",
-                                                    prism_elf, prism_elf_end, 0);
+                /* DDR-957 follow-on: PRISM now resolves `run <path>` against SFS,
+                 * but /EXECTEST.ELF was only ever placed on the FAT32 root
+                 * (fat_place_exec_image at the mnt call site). smoke-shell
+                 * backgrounds it twice and asserts Done(0); without a copy here it
+                 * exits 127 and the job-control assertions fail. The helper is
+                 * mount-generic, so the same bytes go onto the SFS volume. */
+                fat_place_exec_image(cap, smnt);
+                /* DDR-957 (FEAT-E): PRISM roots at the SFS volume. Its ELF was
+                 * already loaded FROM there; without this it resolved every
+                 * path against the FAT default, where fat32 has no rename op. */
+                struct tcb *pr = user_boot_from_sfs_rooted(cap, smnt, "PRISM.ELF",
+                                                    prism_elf, prism_elf_end, 0, smnt);
                 if (pr && it)
                     pr->parent_pid = it->pid;
 
