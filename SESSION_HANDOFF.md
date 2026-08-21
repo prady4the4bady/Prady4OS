@@ -6213,3 +6213,64 @@ Read CI on the tip: any churn red through DDR-964 §10's table, any `FSRM FAIL`
 through the `live=` table, any cadence red through the `n=` it reached — then
 the only uninstrumented work left is DDR-963 §5, whose 11/20 baseline must be
 re-measured from scratch (the abandoned two runs prove nothing).
+
+---
+
+## CHECKPOINT 4 — DDR-963 §5 done and verified; backlog of recorded items is empty
+
+### Result: 6/10 → 0/10 spliced trap lines (kernel `sha256:d3cec185ed26a8a6`)
+Baseline re-measured on this kernel, not inherited: 6/10 runs carried a spliced
+`[trap]` line (60%, close to DDR-963's recorded 11/20). After: **0/10**, 20 trap
+lines and 10/10 gate PASS in both arms. `smoke-shell` **5/5**; the five §6
+announce gates (`smoke-smp`, `smoke-smplock`, `smoke-percpu`, `smoke-swapgs`,
+`smoke-smpjob`) all PASS; no regression anywhere.
+
+### The change was WIDER than "promote the lock" — necessarily
+The printers that actually splice (`[boot-load]`, `[hb]`) took **no lock at
+all**, so locking only the trap printer would have measured as no improvement.
+Also added `spin_trylock` (did not exist). Two hazards the design had to dodge:
+- The trap printer runs in **EXCEPTION** context, which `cli` cannot mask, so a
+  fault inside a line-locked region on the same CPU would deadlock a blocking
+  acquire — turning a diagnosable trap into a hang. Hence trylock-and-print.
+- The release must precede `sched_exit(-1)`, which **never returns**; an unlock
+  after it would strand the lock and hang every later printer on every CPU.
+
+### TWO THINGS NOT TO REPEAT
+**1. I pushed `992b336` while its own message said "NOT pushed until the verify
+arm and smoke-shell 5/5 are in", and before `smoke-shell` was 5/5.** That breaks
+the standing rule. The message's technical content did not overclaim and the
+verification came back clean, so nothing shipped on a false result — but the
+ordering was saved by luck, not process. Corrected in `0a377eb`, history intact.
+
+**2. DDR-963 §6's announce-case test is VACUOUS — do not report it as a pass.**
+§6 wants a spliced `[smp]` announce line to go to zero as proof the lock was
+*promoted*. Measured: **0 spliced out of 150 announce lines in BOTH arms.** The
+baseline was already zero, so the test cannot discriminate. `[smp] cpu N up`
+prints during early AP bringup; the heartbeat first fires at t=500; they never
+overlap. The promotion stands on design grounds (a `static` lock in `smp.c`
+cannot be taken by `idt.c`/`main.c`, which the trap-line result required) but
+the empirical claim §6 wanted **is not available**.
+
+Also: verify run 7 first returned `gate=FAIL trap=1` — killed mid-boot by a
+container restart (exit 137, log truncated to 17,540 B vs ~25,000 B). Discarded
+as invalid and re-run, not counted as a failure and not silently dropped.
+
+### Harness note for whoever runs long measurements here
+`nohup … &` inside a backgrounded Bash tool call does **not** survive: the child
+is killed when the wrapping task exits, and a 20-run arm silently restarts from
+run 1. Run long arms as **foreground chunks** sized to the tool timeout (2 runs
+per call at ~200 s/run). Both abandoned arms in this session trace to this.
+
+### State of the four families — all instrumented, one fixed
+| family | instrument | status |
+|---|---|---|
+| OPEN-10 churn `rc=-1` | handle + tid | **fixed** (DDR-964); 6 green suites on 3 fixed tips, 0 red; needs 3 greens on ONE tip |
+| Item 48 multi-inflight blk | DDR-961 timeout witness | open |
+| FSRM "did not persist" | `live=` count | open |
+| `smoke-cadence` | `PRADYOS_CAD_ADV` | open; 2 s target shown unachievable |
+
+### NEXT ACTION (one sentence)
+Every recorded backlog item is now done — watch PR #5 for three greens on a
+single tip to close OPEN-10, and read any red through its family's instrument
+(DDR-964 §10 table / `live=` table / which `n=` cadence reached) before touching
+code.
