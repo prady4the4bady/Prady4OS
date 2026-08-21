@@ -6432,3 +6432,36 @@ order the teardown after the users, rather than hope. Designing it needs care �
 the self-tests are deliberately destructive and must not run against a root any
 probe still holds — so it is recorded for a session that can verify it, not
 bolted on at the end of this one.
+
+### FSRM addendum — the call site, and why the fix is not a one-liner
+
+The umount is deliberate and self-documenting (`main.c:2093-2095`):
+
+```c
+/* Slice 4g: journal abort/commit/crash-replay (destructive —
+ * reformats the disk, so release the VFS mount first). */
+vfs_unmount(smnt);
+```
+
+So a ring-3 probe still running does not merely lose its mount — **the volume
+underneath it is reformatted**. That is worse than the previous entry implied and
+explains the signature exactly: create and write succeed against the live root,
+then the reopen finds a freshly formatted disk.
+
+It also explains why `live` never exceeds 1 *by design*: SFS permits one mount
+per device, so the root MUST be released before a self-test can mount. The
+umount cannot simply be deleted.
+
+**Fix design (not implemented here).** Bound the destructive block on its users:
+before `vfs_unmount(smnt)`, wait — with a deadline, in the `g_ticks + N` idiom
+already used throughout this thread — until no live user thread still has
+`root_mnt == smnt`. That needs a small scheduler helper to count matching
+threads over the ring (read-only, under the existing `irq_save` discipline that
+`sched_create`'s ring insert and `sched_snapshot` already use).
+
+**Deliberately not landed in this session.** It adds a scheduler API and reorders
+a boot phase; done hastily that is precisely the "push that turns CI red" this
+repo's rules warn about, and the honest verification (the FSRM red is a CI
+intermittent never reproduced locally) is more than a tail-end change can carry.
+The diagnosis, the call site and the design are recorded so the next session
+starts at implementation rather than re-derivation.
