@@ -6331,3 +6331,31 @@ prerequisites (§6.1's intermittents) are not yet CI-green.
 Wait for CI on `7b76c80`/`faadd72`; if Item 48's signature stays away, §6.1 is
 close to green and the FSRM ordering fix is the last blocker before §6.2 —
 otherwise read each red through its family's instrument before touching code.
+
+---
+
+## STATUS UPDATE — Item 48's fix has its first CI green
+
+`7b76c804` (DDR-966) came back **green on both check suites** (ids 88197587721
+and 88197576498), covering the shards that carry the multi-inflight family
+(0/3/4/5). That is the first CI evidence on that fix. It is **one** clean pass,
+not closure — the family is intermittent, so absence over several runs is what
+counts.
+
+Current state of the four families:
+
+| family | fix | CI evidence |
+|---|---|---|
+| OPEN-10 | DDR-964 | green on every fixed tip, 0 red since |
+| `smoke-cadence` | DDR-965 | `d5c1e19` both suites green, incl. shard 5 |
+| Item 48 | DDR-966 | `7b76c804` both suites green (first) |
+| FSRM | **not built** | design + UAF hazard recorded |
+
+### A promotion detail worth knowing before anyone acts on §3
+§3 requires *"three CI greens on the **same** tip"*. A push produces **two**
+suites per commit (the push event and the pull_request event), so two greens on
+one SHA is the natural maximum — a third requires an explicit workflow re-run on
+that same SHA. Do not read "both suites green" as satisfying §3, and do not read
+greens on consecutive different tips as satisfying it either (§3 rules that out
+explicitly). Whoever promotes should re-run the workflow once more on the final
+tip rather than assume the count is met.
