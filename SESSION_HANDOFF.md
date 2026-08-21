@@ -6096,3 +6096,66 @@ markers per DDR-964 §10's table before touching anything, and otherwise the
 remaining recorded items are DDR-963 §5 (promote `g_announce_lock` from `smp.c`
 to `console.h`, verify 11/20 → 0/20) and the `smoke-cadence` advance-period
 instrument.
+
+---
+
+## CHECKPOINT 2 — fourth intermittent family found and instrumented (`3c1111d`)
+
+### What happened after the DDR-964 checkpoint
+A queued PR notification carried a shard-1 red on `239f300` whose signature
+matched **none** of the three characterised families:
+
+```
+[sfs] umount ctx=0x0000000007C3C000 caller=0xFFFFFFFF8002A91C
+FSRM FAIL: created file did not persist
+```
+
+`smoke-rqstress-liveness`'s **own** sentinel passed (`[smp] rqstress OK`); it
+died on a *forbidden* sentinel from an unrelated probe (DDR-791). That is now
+the third distinct way this gate family can go red — the rule stands: **read the
+signature, not the gate name.**
+
+Predates the DDR-964 fix, so it is not a regression from that work.
+
+### The instrument, and the correction it forced
+`live=` now rides the existing DDR-953 mount/umount lines: SFS contexts mounted
+and not yet umounted, counted atomically.
+
+Measured on three passing runs — and it **refuted my own first write-up**. I had
+recorded that the `sfs.c` self-tests mount the same device *while* the ring-3
+probe holds the root. They do not: all ten self-test pairs complete **before**
+the root is mounted at all, the root is never umounted, `live` never exceeds 1,
+and the two contexts sit in different allocator regions (`0x07C4…` / `0x0109…`).
+
+The write-up was corrected in the same commit as the instrument rather than left
+standing. **The anomaly is the ORDERING, not the coexistence:** in the failing
+run a self-test umount landed *after* PRISM was up and init was reaping
+services, inverting the ordering every passing run shows.
+
+Next capture resolves it three ways: `live>=2` → genuine coexistence;
+`live=1` with the **root** ctx being umounted → a lifetime bug (DDR-953);
+`live=1` with a self-test ctx late → explain the ordering.
+
+No fix (§6.0-B). Not conflated with DDR-964 (§6.0-C): that family fails at
+*create* with `rc=-1`; this one creates and writes successfully, then fails the
+reopen.
+
+### A measurement I deliberately abandoned — say so rather than hide it
+I started the DDR-963 §5 baseline (20× `smoke-smpuser` with a splice detector)
+and **killed it after 2 runs**. Measured pace was ~3.5 min/run → ~70 min during
+which nothing else could build or run QEMU without contaminating it. DDR-963 §5
+itself says "nothing currently failing depends on it", while the FSRM family is
+live and newly found. **The 11/20 baseline is therefore still unmeasured on a
+current kernel** — anyone resuming it should re-run from scratch, not trust the
+two runs on disk (`build/gatelogs/d963_base_[12].log`).
+
+### Repo state
+Branch `dev/phase1-seyp3n`, tip `3c1111d`, pushed, tree clean, PR #5 (draft).
+CodeRabbit reports "Review skipped — Draft detected"; that is expected and needs
+no action while the PR is intentionally a draft.
+
+### NEXT ACTION (one sentence)
+Watch PR #5 for three consecutive greens on the same tip to close OPEN-10, read
+any churn red through DDR-964 §10's table and any `FSRM FAIL` through the
+`live=` table above, and — only when neither is pending — restart the DDR-963 §5
+baseline from scratch.
