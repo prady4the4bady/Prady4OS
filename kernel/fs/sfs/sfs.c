@@ -373,12 +373,17 @@ static int sfs_txn_abort(void *ctx) {
     return 0;                       /* superblock untouched: nothing persisted   */
 }
 
+/* Live SFS contexts (mounted, not yet umounted). Diagnostic only — see the
+ * `live=` comment at the mount site. */
+static int g_sfs_live;
+
 static void sfs_umount(void *ctx) {
     /* DDR-953 STEP 1-A: record every ctx death so the stale pointer seen by
      * sfs_bd_guard can be matched against the ctx that was freed, and by whom.
      * Paired with the [sfs] mount line below. Diagnostic only. */
     kputs("[sfs] umount ctx="); kputhex((uint64_t)(uintptr_t)ctx);
     kputs(" caller="); kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+    kputs(" live="); kputdec((uint64_t)__atomic_sub_fetch(&g_sfs_live, 1, __ATOMIC_SEQ_CST));
     kputs("\r\n");
     kfree(ctx);
 }
@@ -1279,6 +1284,20 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
     kputs("[sfs] mount ctx="); kputhex((uint64_t)(uintptr_t)c);
     kputs(" bd=");             kputhex((uint64_t)(uintptr_t)c->bd);
     kputs(" caller=");         kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+    /* `live` is the count of SFS contexts mounted and not yet umounted. It is
+     * the discriminator for the FSRM family (`FSRM FAIL: created file did not
+     * persist`, build_status "A FOURTH intermittent family"): the ring-3 FSRM
+     * probe holds the root mount while the sfs.c self-tests mount their OWN
+     * context on the SAME block device and write to it. Two contexts carry two
+     * independent superblock / free-tree / allocator states, so concurrent
+     * writes clobber each other's metadata and an already-created file becomes
+     * unfindable on reopen — which is what that probe reports.
+     *
+     * live >= 2 at the failure means the contexts genuinely coexisted;
+     * live == 1 throughout refutes the shared-device reading and points at a
+     * ctx-lifetime bug instead (DDR-953). Atomic because mounts happen on
+     * several CPUs and a torn count would be worse than no count. */
+    kputs(" live=");           kputdec((uint64_t)__atomic_add_fetch(&g_sfs_live, 1, __ATOMIC_SEQ_CST));
     kputs("\r\n");
     *ctx = c;
     return 0;

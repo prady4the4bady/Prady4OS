@@ -6088,3 +6088,48 @@ which is nonsense as a caller of `sfs_umount`. The failing binary was
 `239f300` built with `BSP_LIVENESS=1`; this build is `f11d6c7` without it.
 Standing rule §8 applies: an address does not identify a binary. The resolution
 was discarded rather than reported.
+
+### FSRM family — instrument built, and it CORRECTED the hypothesis
+
+The `live=` instrument named above is now in `sfs.c`: every DDR-953 mount/umount
+line carries a count of SFS contexts mounted and not yet umounted (atomic —
+mounts happen on several CPUs).
+
+Measured on **passing** runs (kernel `sha256:3173f624b8f207db`; one
+`smoke-rqstress-liveness` + two `smoke-percpu-sched`, all PASS with
+`PRADYOS_FSRM_OK`):
+
+```
+[sfs] mount  ctx=0x0000000007C48000 live=1     ] ten self-test pairs,
+[sfs] umount ctx=0x0000000007C48000 live=0     ] strictly serial, ctx recycled
+   … ×10 …
+[sfs] mount  ctx=0x0000000001092000 live=1     <- persistent root, mounted LAST
+persistent root provisioned
+```
+
+11 mounts, 10 umounts. **`live` never exceeds 1 in any run.**
+
+**This corrects the hypothesis recorded above.** That entry said the self-tests
+mount their own context on the same device *while* the ring-3 probe holds the
+root. On a normal boot they do not: all ten self-test mounts complete and umount
+**before the root is mounted at all**, and the root is then never umounted. The
+two contexts do not normally coexist, and they use visibly different allocator
+regions (`0x07C4…` vs `0x0109…`).
+
+So "two contexts writing one volume" is not a standing property of the design —
+which makes the failing capture *more* interesting, not less. In that run the
+umount landed **after** PRISM was up and init was reaping services, i.e. a
+self-test umount occurred during userspace, inverting the ordering every passing
+run shows. The anomaly to explain is now the **ordering**, not the coexistence.
+
+The instrument discriminates this directly on the next capture:
+
+| observation at the failure | reading |
+|---|---|
+| `live=2` (or higher) | root and a self-test ctx genuinely coexisted — shared-device writes |
+| `live=1`, root ctx being umounted | the root's own ctx was freed under the probe — a lifetime bug (DDR-953) |
+| `live=1`, self-test ctx umounted late | the self-test sequence ran late; explain the ordering, not the sharing |
+
+Still no fix (§6.0-B), and still not conflated with DDR-964: that family fails at
+*create* with `rc=-1`, this one creates and writes successfully and fails the
+reopen.
