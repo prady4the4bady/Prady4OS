@@ -6465,3 +6465,30 @@ repo's rules warn about, and the honest verification (the FSRM red is a CI
 intermittent never reproduced locally) is more than a tail-end change can carry.
 The diagnosis, the call site and the design are recorded so the next session
 starts at implementation rather than re-derivation.
+
+### FSRM fix design refined — and a use-after-free the obvious implementation walks into
+
+Sizing the fix found a trap worth recording before anyone writes it.
+
+The users to wait for are three, all in `fs_test_thread`: `fp` (fsrm, 1926),
+`tp` (ftruncate, 1958) and `rn` (rename-sfs, 1975), each `->root_mnt = smnt`.
+
+**The obvious implementation is wrong.** `main.c:611` already polls a TCB's
+state directly (`while (g_cw_thread->state != THREAD_BLOCKED …)`), so the
+natural move is to hoist the three pointers and wait for `THREAD_ZOMBIE`. That
+is a **use-after-free**: `sched_start_reaper()` reclaims orphaned zombies, so
+the TCB can be freed while the waiter is dereferencing it. The existing
+`crosswake_proof` precedent is safe only because its thread is *blocked*, never
+exiting — which does not generalise to probes whose whole job is to exit.
+
+**UAF-free route:** record each probe's `pid` at spawn and poll
+`sched_find_pid(pid)`, which is documented as "live thread by pid, or NULL" and
+therefore returns NULL once the thread is gone. Bound it with the usual
+`g_ticks + N` deadline and fall through on expiry, so the worst case is exactly
+today's behaviour rather than a new hang.
+
+Still not landed, and the reason is evidential rather than difficulty: the FSRM
+red is a CI intermittent that has never reproduced locally, so even a complete
+local green would show only "no regression", not "fixed". Landing a boot-phase
+reorder on that basis buys little and risks much. Recorded so the next session
+starts from the safe design instead of rediscovering the reaper hazard.
