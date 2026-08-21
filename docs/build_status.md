@@ -5750,3 +5750,32 @@ named.
 state alongside `rc` at this site, so the next occurrence says *which*
 capability was missing and whether the table was intact. That is an instrument,
 not a fix, and belongs with OPEN-10 rather than in this PR.
+
+## `smoke-cadence` recurrence on `e5697fa` — and a hypothesis of mine, refuted
+
+Shard 5 failed again at `smoke-cadence`, same signature: `no full auto cycle`,
+guest alive and cycling (`PRADYOS_PRETRANSITION` repeatedly, heartbeats to
+**t=11500**), `PRADYOS_CADENCE_OK` never printed. Identical to the `9e0ee66`
+failure, including the tick depth — which is the measurement that already
+refuted "raise the timeout". Not re-diagnosed; the analysis above stands.
+
+**Refuted: "only pull_request-event runs fail."** After the first two reds I
+noted that both were `pull_request`-event runs while every `push`-event run on
+this branch had been green, and floated runner contention between the duplicate
+runs as a possible systematic bias. **`e5697fa`'s failure is a `push`-event run**
+(`32502821559`), so that pattern was coincidence across two observations, not a
+property of the event type. Recorded because the claim was carried into a
+check-in message where it could have sent the next session down a dead end.
+
+What survives from that observation is narrower and still useful: **the same
+SHA has been seen to pass and fail concurrently** (`9e0ee66` for cadence,
+`97ea55a` for OPEN-10). That is evidence of non-determinism, which is all it was
+ever used for — it is not evidence about *which* event type is implicated.
+
+**Rate, stated with its denominator:** `smoke-cadence` has now failed **2 times**
+in the runs observed on this branch this session (`9e0ee66` pull_request-event,
+`e5697fa` push-event), against roughly a dozen-plus shard-5 executions across
+~9 commits × 2 event types. That is a loose bound, not a measured rate — the
+exact per-run denominator was not tracked, and saying "about 10%" without having
+counted every shard-5 execution would be the kind of number this file already
+warns about.
