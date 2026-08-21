@@ -6014,3 +6014,85 @@ Confirm PR #5's CI and merge it to `dev/phase1`, then add the OPEN-10 capability
 instrument above — it is now the highest-value open item, because one more
 capture would name the missing capability outright, where DDR-963 §5 still needs
 a 20-run verification for a hazard nothing currently depends on.
+
+---
+
+## CHECKPOINT — OPEN-10 ROOT-CAUSED AND FIXED (DDR-964, commit `df3d4cd`)
+
+The "NEXT ACTION" above — add the OPEN-10 capability instrument — was done, and
+the instrument paid off immediately: it named the mechanism on the first
+reproduction. **OPEN-10's root cause is found, fixed, and reproduced on demand.**
+
+### How the recurrence cleared the stopping rule
+`8184897` had just set a rule that further recurrences of a characterised
+intermittent would NOT be recorded unless they carried something new. Shard 2 on
+`aec6ad1` (`smoke-percpu-sched`) carried the familiar signature — but the same
+boot also showed `[user] SFS write failed for PRISM.ELF`, which had **never**
+failed in any of 20+ retained `build/gatelogs/` runs. Two independent SFS
+failures in one boot is "evidence bearing on a root cause", the one condition
+the rule admits. The rule worked as intended: it suppressed noise and still let
+the informative capture through.
+
+### The defect (full analysis: `docs/ddr/DDR-964-*.md`)
+`sched_create()` calls `rq_push` **before it returns**, so a kernel thread is
+runnable the moment the caller holds the pointer. Eight sites in `main.c` then
+minted a capability into `->arg` afterwards, guarded only by `cli`, whose
+comment claimed the capability was "fully set before the timer can schedule it"
+— **single-CPU reasoning**. `cli` masks the BSP's timer, not the other three
+CPUs, which steal the thread and enter it early. It runs with the `arg = 0` the
+create was called with, so every `vfs_create` returns `-EPERM` (`== -1`) from
+its first call: `[sfs] churn FAIL op=create iter=0 rc=-1`.
+
+`iter=0` was never coincidence — the loop halts at the first failure, so any
+failure reports the lowest iteration reached. That is what eliminated every
+transient explanation and pointed at "bad before the loop started".
+
+### Two readings that inverted under checking — both worth remembering
+1. **`[sched] steal local=796 remote=0` does NOT mean "no cross-CPU stealing".**
+   In `steal_pass` `same` compares **NUMA nodes**, and `if (c == self) continue`
+   makes every counted steal cross-CPU. QEMU presents one node, so `remote=0` is
+   expected and `local=796` means 796 cross-CPU steals. The line that looked
+   like decisive counter-evidence was decisive *confirming* evidence.
+2. **The stolen thread does NOT read uninitialised garbage.** DDR-964's first
+   draft predicted §0.6 stack residue; `sched_create_state` writes
+   `t->arg = arg` and every site passes `0`, so it reads a well-defined
+   `CAP_NULL`. The reproduction forced this correction *before* the DDR shipped.
+   Consequence: `h=0` is shared with the unchecked-`cap_table_create` path, so
+   the two are separated by the new `[fs] FAILED to …` markers, not the handle.
+
+### Reproduced on demand — a first for OPEN-10
+Reverting the `fs_test_thread` spawn to `sched_create` and widening the window
+produced the CI signature exactly:
+`[sfs] churn FAIL op=create iter=0 rc=-1 h=0 idx=0 gen=0 tid=11`.
+Reverting restored a byte-identical kernel (`sha256:c5f76441babbaf91`) and
+`[sfs] btree churn OK`. **OPEN-10 now has a local reproduction recipe** — if it
+ever needs re-testing, that mutation is the way.
+
+### Gate evidence — kernel `sha256:c5f76441babbaf91` (R1)
+`smoke-percpu-sched` 4/4 **with the churn block actually reached** (one earlier
+run passed without reaching it — a vacuous green, caught and re-run),
+`smoke-shell` **5/5**, `smoke-smpuser`, `smoke-blkmq`, `smoke-blk-integrity`,
+`smoke-rqstress-liveness`, `smoke-rename`, `smoke-rename-sfs`,
+`ci-probe-rodata-check`, `ci-shard-check` all PASS.
+Size 1,053,054 ≤ 1,572,864.
+
+### Status — NOT closed
+Proven against the reproduction, **not** against CI's intermittent. OPEN-10
+stays open until three consecutive CI greens on the same tip (§3). A recurrence
+**with** a `[fs] FAILED to …` marker, or with a well-formed handle, reopens it
+on a different mechanism (DDR-964 §11).
+
+### Watch for a possible knock-on
+Item 48's confirmed root cause is `sched_create` NULL return under heap pressure
+(§0.2 / DDR-934). `sched_create` can now return NULL in one *additional* case —
+`cap_table_create()` failing. That is strictly better than the old silent
+NULL-cap-table thread, and every caller already prints a loud marker, but if a
+new `FAILED to spawn` line appears in a red, it is this path, not new pressure.
+
+### NEXT ACTION (one sentence)
+Watch PR #5's CI for three consecutive greens on tip `df3d4cd` to close OPEN-10;
+if a red carries the churn signature, read the handle and the `[fs] FAILED`
+markers per DDR-964 §10's table before touching anything, and otherwise the
+remaining recorded items are DDR-963 §5 (promote `g_announce_lock` from `smp.c`
+to `console.h`, verify 11/20 → 0/20) and the `smoke-cadence` advance-period
+instrument.
