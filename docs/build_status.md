@@ -5446,3 +5446,55 @@ green.
 `kernel.bin` with this probe embedded is **1,053,054 B** — the exact figure
 DDR-958 recorded as *"4,478 B over"* the old 1 MiB window. It now builds, boots
 and gates, with **519,810 B spare — room for 63 more probe ELFs.**
+
+## Session 2026-08-21 (cont.) — BUG-1: investigated, does NOT reproduce, no fix pushed
+
+BUG-1 is the CI-only BSP wedge inside the DDR-763 B+tree churn loop
+(`main.c:2131-2160`), historically ~1-in-32 on `smoke-fs` (shard 5).
+
+### CI history — nothing to extract
+No `smoke-fs` failure exists to analyse. The **last six** CI runs on
+`dev/phase1` are all `success`, including both runs on PR #4's `0410e66` (22/22
+checks) and the run on the `9b4f60f` push. The most recent failure of any kind
+is `32272722318` (`e5b097a0`, 2026-08-19), already root-caused as the
+`shard_check` job failing on an unassigned `smoke-fs-liveness` — not BUG-1.
+
+### Local reproduction attempt — instrument live, wedge absent
+Built with `BSP_LIVENESS=1` (90 TUs compiled with the flag; kernel
+`3f49c7b94645a60142e45392ccadfb90`), `smoke-fs` ×3:
+
+| run | verdict | churn markers | last |
+|---|---|---|---|
+| 1 | PASS | **40** | `[bsp] churn iter=39` |
+| 2 | PASS | **40** | `[bsp] churn iter=39` |
+| 3 | PASS | **40** | `[bsp] churn iter=39` |
+
+All 40 iterations complete every run. The BSP does not wedge.
+
+### A methodological trap worth recording — the first attempt was vacuous
+The first pass at this greped `make smoke-fs` output for `[bsp] churn iter=` and
+found **zero**, which reads exactly like "the churn block never executed". It is
+not: `boot_test.sh` **deletes the serial capture on every exit path** unless
+`KEEP_SERIAL=1` is set, so make's output never contains guest serial at all. The
+correct invocation is:
+
+```
+KEEP_SERIAL=1 SERIAL_LOG=build/gatelogs/<name>.log make smoke-fs
+```
+
+This is the same trap DDR-957 §7 recorded ("the first attempt to check this
+grepped the make output rather than the serial log, and returned a misleading
+zero"). It has now cost two sessions. **Zero markers from a make log is not
+evidence of anything.**
+
+### Verdict — recorded, not fixed
+No speculative fix pushed, per the standing rule. Note what these runs do and do
+not establish: including the incidental ones, `smoke-fs` ran **7 times clean**
+this session. At the historical ~1-in-32 CI rate, P(7 clean | bug fully present)
+≈ **0.80** — so seven clean runs is close to no evidence at all, and that is
+before accounting for the fact that BUG-1 has *never* reproduced on any local
+host. **Local runs cannot bound this defect.** BUG-1 stays open; watch shard 5
+on future CI runs.
+
+The clean kernel was rebuilt afterwards and reproduces md5
+`78544f73b2b43c625260875530e0467c`.
