@@ -6154,3 +6154,92 @@ max is 94, next free **95**. Model `vfs_rename` on `vfs_unlink`'s
 `mnt_lock_live()` pattern (DDR-954), `sfs_rename` on `sfs_unlink`'s journal
 transaction, PRISM `mv` on the `rm` builtin. Gate `smoke-rename` with sentinels
 RENAME_SRC_OK / RENAME_MV_OK / RENAME_DST_OK / RENAME_SRC_GONE, shard 4, 20/20.
+
+---
+
+## 2026-08-21 — DDR-958 `fat32_rename` SHIPPED; DDR-959 vacuous guard fixed
+
+**Branch: `dev/phase1-seyp3n`** (this session's designated branch), based on
+`9b4f60f`. Three commits. `dev/phase1` untouched.
+
+### Environment note for whoever continues
+This ran in a **remote Linux container, not WSL**. The container starts with a
+bare clone: `nasm`, `qemu-system-x86`, `mtools` and `dosfstools` are NOT
+installed and the `third_party/musl` + `third_party/lwip` submodules are NOT
+initialised. `make image` fails on the musl submodule until:
+
+```
+apt-get update && apt-get install -y --no-install-recommends \
+    nasm qemu-system-x86 mtools dosfstools
+git submodule update --init --depth 1 third_party/musl third_party/lwip
+```
+
+There is **no `/dev/kvm`**, so every gate runs under TCG: `smoke-rename` takes
+~95 s wall, `smoke-shell` ~120 s, `fs_regression.sh` ~6 min. Timeout windows in
+the tree were adequate at every gate run this session — nothing needed raising.
+
+`node tools/graph_mcp/server.js primer` needs `npm ci` in `tools/graph_mcp`
+first (`sql.js` absent on a fresh clone).
+
+### What shipped
+
+**DDR-958 — `fat32_rename`.** `mv` now works for shell users. DDR-956 shipped
+`SYS_RENAME`/`vfs_rename`/`sfs_rename`/PRISM `mv` with no fat32 backend, so
+every shell `mv` returned `-ENOSYS`. The implementation copies the source's
+32-byte directory record into a free slot with only the 11 name bytes replaced,
+then tombstones the original — never rewriting the 8.3 name in place, which
+would leave a long-named file answering to its OLD name through stale VFAT
+fragments. Semantics match `sfs_rename`. Two no-behaviour-change extractions:
+`dir_alloc_slot`, `dirent_tombstone`.
+
+Gate **`smoke-rename`** (shard 4, 90 s) drives PRISM's `mv` over the serial
+console in `smoke-shell`'s shape. Seven arms, all green. Mutation-tested both
+ways (DDR-958 §10): unwiring `.rename` fails at arm 1; the in-place 8.3 rewrite
+passes arms 1–4 and then prints the corruption verbatim —
+`cat /RENLFN.TXT` and `cat /LongFileName.txt` BOTH return the contents.
+
+**DDR-959 — `ci-probe-rodata-check` was vacuous.** Found while validating the
+above. `strtonum()` is a gawk extension that aborts on mawk (the default `awk`
+here and on `ubuntu-latest`), and the awk field numbers were off by one for
+every section numbered 0–9. The DDR-826 guard has never been able to report
+anything. Fixed and two-arm verified. **Every "probe-rodata-check: OK" in this
+repo's history before `e81b5c6` carries no information.**
+
+### Measured this session (kernel `6a254f13…`, `kernel.bin` 1,044,862 B)
+`make image` rc=0 / 0 warnings · `smoke-rename` PASS (7/7) · `smoke-shell` PASS ·
+`smoke-fs` PASS · `fs_regression.sh` **9/9** · `smoke-blkmq` rc=0 ·
+`smoke-rqstress-liveness` rc=0 · `smoke-blk-integrity` rc=0 ·
+`ci-shard-check` OK 146/6/6 · `ci-probe-rodata-check` OK 56 ELFs ·
+`ci-start-align-check` OK 39 entries.
+
+### THE NEW BLOCKER — the 1 MiB boot window is 3,714 B from full
+
+`kernel.bin` is **1,044,862 B** against the 1 MiB stage-2 read window
+(`Makefile:589`, DDR-733 as raised by DDR-827). Every embedded probe ELF costs a
+page-aligned **8 KiB**. Embedding `renametest.elf` produced **1,053,054 B —
+4,478 B over**, which is why DDR-958's gate goes through PRISM instead and why
+`user/renametest.c` was deleted rather than left unbuildable (recoverable from
+git history at `dcbb53e^`).
+
+**No further embedded probe can be added until the window is raised.** That is
+the stage-2 chunk count in `boot/stage2/stage2.asm` plus the image size, against
+the 2 MiB PT_HI runtime ceiling — a boot-path change under a binding ADR. It
+needs its own DDR and is now the gating infrastructure item.
+
+### Known-open, deliberately not touched
+- **`sfs_rename` is still ungated.** PRISM is FAT-rooted so a shell gate cannot
+  reach the SFS root; gating it needs the probe ELF, i.e. the boot window above.
+  Stated in DDR-958 §8 rather than papered over.
+- **`tools/ci/` carries ~30 one-shot `patch_*.py` / `fix_*.py` / `revert_*.py`
+  scripts** from previous sessions whose patches have already been applied
+  (`patch_rename_*.py`, `patch_feat_e.py`, `fix_prism_kputs.py`, …). They are
+  dead by CLAUDE.md §3 and are a trap for anyone grepping for how a change was
+  made. Sweeping them is a standalone cleanup commit.
+- DDR-957's FEAT-E (root PRISM at SFS) remains where §11 left it: the ordering
+  fix is validated and necessary, the fixture migration is not done. `mv` no
+  longer depends on it.
+
+### NEXT ACTION (one sentence)
+Open `docs/BUILD_TRACKER.md` / CLAUDE.md §6.2 and start the next unblocked item
+— but write the boot-window DDR first if that item needs a new probe ELF,
+because the budget is 3,714 B and one probe costs 8,192 B.
