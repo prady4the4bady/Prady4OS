@@ -5394,3 +5394,55 @@ including the embedded probe ELFs, past the old 1 MiB mark: **1,556,862 B**.
 Same kernel byte-for-byte; only the chunk count differs. Arm B reproduces
 DDR-827's signature deliberately. Pad removed, chunk count restored, rebuilt
 kernel reproduces md5 `6a254f13…`, `make smoke` green again.
+
+## Session 2026-08-21 (cont.) — DDR-962: `sfs_rename` is gated
+
+The half of DDR-956 that never had a gate. `sfs_rename` has been implemented and
+callable since DDR-956; DDR-958's `smoke-rename` drives PRISM's `mv`, which
+reaches only the FAT root, so it proved `fat32_rename` and said nothing about
+SFS. Closing that needed an embedded ring-3 probe, which needed DDR-960's window
+raise. **This is the first thing the raise bought.**
+
+`user/renametest.c` — freestanding, no writable globals — is spawned SFS-rooted
+behind `probe_enabled("rename-sfs")`, the same shape as the DDR-866 ftruncate
+probe beside it and opt-in for the same reason: it creates files on the shared
+SFS root.
+
+Three arms:
+- **`PRADYOS_SFS_RENAME_OK`** — the destination reads back the source's *exact
+  bytes* and the source stops opening. Reading the payload rather than just
+  opening the destination is what distinguishes "a name exists" from "the same
+  inode was re-keyed", which is what `sfs_rename` claims (two `bt_insert`s, one
+  `sfs_commit`, inode reused not copied).
+- **`PRADYOS_SFS_RENAME_ENOENT`** — renaming an absent path fails. The
+  stub-catcher.
+- **`PRADYOS_SFS_RENAME_LFN`** — a long source name is retired. This mirrors
+  `smoke-rename` arm 6 in intent, not mechanism: SFS has no VFAT fragment chain
+  to corrupt, so what a long name exercises is the leaf-slot name copy,
+  `name_len`, and FNV1a32 keying of a name outside the 8.3 shape. Unlike FAT the
+  probe creates its own fixture, so the arm cannot go vacuous through a missing
+  one.
+
+Gate `smoke-rename-sfs`, **shard 5** (not 4 — `smoke-rename` is there, and both
+carry forbidden sentinels that make them burn their full window). **146 → 147
+gates.**
+
+### R8 two-arm — the gate can fail
+`sfs_rename` stubbed to `return 0`:
+```
+[smoke] FAIL — required pattern 'PRADYOS_SFS_RENAME_OK' not found.
+SFS RENAME FAIL: destination does not exist after rename
+```
+Caught at arm 1, naming the actual defect. Stub reverted, rebuilt, gate re-run
+green.
+
+### Measured (kernel `78544f73b2b43c625260875530e0467c`, `kernel.bin` 1,053,054 B)
+`make image` rc=0 / 0 warnings · `smoke-rename-sfs` **PASS 3/3** ·
+`smoke-rename` PASS · **`smoke-shell` 5/5** · `fs_regression.sh` **9/9**, uaf=0 ·
+`smoke-blkmq` PASS · `smoke-rqstress-liveness` PASS · `smoke-blk-integrity` PASS ·
+`ci-shard-check` OK 147/6/6 · `ci-probe-rodata-check` OK · `ci-start-align-check` OK.
+
+### The DDR-960 loop, closed
+`kernel.bin` with this probe embedded is **1,053,054 B** — the exact figure
+DDR-958 recorded as *"4,478 B over"* the old 1 MiB window. It now builds, boots
+and gates, with **519,810 B spare — room for 63 more probe ELFs.**

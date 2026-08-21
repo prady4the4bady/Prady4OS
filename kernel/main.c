@@ -367,6 +367,8 @@ extern const unsigned char stackdemand_elf[];         /* ADR-038: demand-paged s
 extern const unsigned char stackdemand_elf_end[];
 extern const unsigned char ftrunctest_elf[];          /* fs: ftruncate probe (DDR-866) */
 extern const unsigned char ftrunctest_elf_end[];
+extern const unsigned char renametest_elf[];          /* fs: SFS rename probe (DDR-962) */
+extern const unsigned char renametest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
@@ -1911,6 +1913,25 @@ static void fs_test_thread(void *arg) {
                         tp->root_mnt = smnt;          /* SFS root before unblock */
                         sched_unblock(tp);
                         kputs("[user] ELF loaded (embedded); ftruncate probe spawned\r\n");
+                    }
+                }
+                /* DDR-962: SYS_RENAME on the SFS root. sfs_rename shipped in
+                 * DDR-956 and has never been gated -- PRISM is FAT-rooted, so
+                 * DDR-958's shell-driven smoke-rename proves fat32_rename only.
+                 * Rooted at smnt for the same reason the ftruncate probe above
+                 * is, and opt-in (DDR-804) for the same reason too: it creates
+                 * files on the shared SFS root, so running it every boot would
+                 * leave its droppings in every other gate's log. */
+                if (probe_enabled("rename-sfs")) {
+                    struct tcb *rn = 0;
+                    uint64_t rnlen = (uint64_t)(renametest_elf_end - renametest_elf);
+                    if (elf_load((void *)(uintptr_t)renametest_elf, rnlen,
+                                 "RENAMETEST", &rn) == ELF_OK && rn) {
+                        rn->root_mnt = smnt;          /* SFS root before unblock */
+                        sched_unblock(rn);
+                        kputs("[user] ELF loaded (embedded); SFS rename probe spawned\r\n");
+                    } else {
+                        kputs("[user] SFS rename probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-870 (items 44/45): RDTSC benchmark of the syscall and

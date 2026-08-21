@@ -164,6 +164,15 @@ ftrunctest_elf:
     incbin "build/ftrunctest.elf"
 ftrunctest_elf_end:
 
+; DDR-962: SYS_RENAME probe on the SFS root (gate smoke-rename-sfs). Fits only
+; because DDR-960 raised the stage-2 read window; see that DDR before adding
+; another of these.
+global renametest_elf
+global renametest_elf_end
+renametest_elf:
+    incbin "build/renametest.elf"
+renametest_elf_end:
+
 ; DDR-870: perf benchmark probe (Group 8 items 44/45)
 global benchtest_elf
 global benchtest_elf_end
