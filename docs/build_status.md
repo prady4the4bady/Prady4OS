@@ -5314,3 +5314,22 @@ md5 with `smoke-rename` green again.
 - **Mutant B** (the in-place 8.3 name rewrite) passes arms 1–4 and produces the
   predicted corruption in the log: `cat /RENLFN.TXT` and `cat /LongFileName.txt`
   both return the contents. One file, two names. Fails at arm 6b and arm 5a.
+
+### DDR-959 — `ci-probe-rodata-check` was vacuous (found while validating DDR-958)
+
+The DDR-826 guard has never been able to report anything. Two defects in one
+awk line: `strtonum()` is a gawk extension and aborts the program on mawk (the
+default `awk` on this host and on `ubuntu-latest`), and the field numbers were
+off by one for every section numbered 0-9, because `readelf` prints those as
+`[ 3]` with an inner space. Probe ELFs have four sections, so none ever lined
+up. It printed `OK — N ELFs, none carry a writable allocated section` as a fixed
+string.
+
+Fixed and two-arm verified: the tree still reports OK (56 ELFs, no false
+positive), and a two-line probe with one mutable global linked against
+`user/user.ld` now FAILs it naming `.data (8 bytes)` — where the old parser
+printed `function strtonum never defined` and passed it.
+
+**Every "probe-rodata-check: OK" in this repo's history before this commit
+carries no information.** Second instance of the CLAUDE.md §0.3 vacuous-guard
+failure mode.

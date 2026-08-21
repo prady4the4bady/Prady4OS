@@ -42,8 +42,36 @@ for elf in "$ROOT"/build/*.elf; do
         continue
     fi
 
-    bad="$(readelf -SW "$elf" 2>/dev/null | tr -s ' ' \
-           | awk '/ WA / { if (strtonum("0x" $6) > 0) print $2 " (" strtonum("0x" $6) " bytes)" }')"
+    # Parsing note — this awk was rewritten because the previous one reported
+    # nothing on ANY input, i.e. this whole check was passing vacuously:
+    #
+    #   1. `strtonum()` is a GNU-awk extension. On mawk (the default /usr/bin/awk
+    #      on Ubuntu, so on this host AND on ubuntu-latest runners) it is
+    #      undefined, and awk aborts the program with "function strtonum never
+    #      defined" on the first matching line. The check then printed its OK
+    #      line regardless of what the ELFs contained.
+    #   2. The field numbers were off by one for every section numbered 0-9.
+    #      readelf prints those as `[ 3]` with an inner space, which splits into
+    #      two fields, so `$2` was the index remnant `3]` and `$6` was the file
+    #      OFFSET, not the size. Only sections 10+ lined up. Probe ELFs have
+    #      four sections, so none of them ever did.
+    #
+    # Fixed by stripping the bracketed index before splitting (fields then start
+    # at Name unconditionally) and parsing the hex size in portable awk. Flags
+    # are matched as a set rather than the literal " WA ", so `WAT` (.tdata) is
+    # caught too.
+    bad="$(readelf -SW "$elf" 2>/dev/null | sed -E 's/^ *\[ *[0-9]+\] *//' \
+           | awk 'function hex(s,   i,c,v,n) {
+                      n = 0; s = tolower(s);
+                      for (i = 1; i <= length(s); i++) {
+                          c = substr(s, i, 1);
+                          v = index("0123456789abcdef", c);
+                          if (v == 0) return -1;
+                          n = n * 16 + (v - 1);
+                      }
+                      return n;
+                  }
+                  $7 ~ /W/ && $7 ~ /A/ { if (hex($5) > 0) print $1 " (" hex($5) " bytes)" }')"
     if [ -n "$bad" ]; then
         echo "probe-rodata-check: FAIL — $(basename "$elf") has writable allocated" >&2
         echo "                    section(s) but NO writable PT_LOAD to hold them:" >&2
