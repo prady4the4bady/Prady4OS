@@ -6274,3 +6274,60 @@ Every recorded backlog item is now done — watch PR #5 for three greens on a
 single tip to close OPEN-10, and read any red through its family's instrument
 (DDR-964 §10 table / `live=` table / which `n=` cadence reached) before touching
 code.
+
+---
+
+## CHECKPOINT 5 — all four families diagnosed; three fixed, one designed-not-built
+
+| family | status | evidence |
+|---|---|---|
+| OPEN-10 churn `rc=-1` | **FIXED** (DDR-964) | reproduced on demand; many green suites since, 0 red |
+| `smoke-cadence` | **FIXED** (DDR-965) | `d5c1e19` both suites green, incl. shard 5 where it failed |
+| Item 48 multi-inflight blk | **FIX PUSHED** (DDR-966) | local gates green; CI pending on `7b76c80` |
+| FSRM "did not persist" | **ROOT-CAUSED, not fixed** | see below |
+
+### FSRM — diagnosed, and it refuted my own two earlier readings
+`fs_test_thread` spawns ring-3 probes rooted at `smnt` (`main.c:1923-1926`) and
+then, **further down the same thread**, umounts that very root to run its
+self-tests (`main.c:2093-2106`), one of which its own comment calls
+*destructive*. Passing log: mount ctx=0x7C48000 (170) → fsrm spawned (293) →
+`PRADYOS_FSRM_OK` (304) → **umount of that same ctx (358)**, an unpaired umount
+closing the line-170 mount, then ten self-test pairs recycling the address.
+
+**Only whether the probe finishes before line 358 separates pass from fail.**
+
+Two of my own readings died here, both worth remembering:
+- I first wrote that two SFS contexts coexist on one device. Wrong — there is
+  only ever one, which is why `live` never exceeds 1. **Lifetime, not
+  coexistence.**
+- My discriminator table listed this branch (`live=1`, root ctx umounted, a
+  DDR-953-class lifetime bug) as the least likely. It is the one that holds.
+
+**Not fixed deliberately.** The sequence is dangerous on *every* boot, passing
+ones included — the same standing DDR-964 had pre-fix — but the self-tests are
+intentionally destructive and must not run against a root any probe still holds.
+That ordering fix needs a session that can verify it, not a bolt-on.
+
+### Item 48 — §0.2's stated root cause is refuted (DDR-966)
+§0.2/§6.1 say the cause is `sched_create` returning NULL under heap pressure.
+Every capture reads `spawned=2/2`: **both creates succeeded**, so DDR-934's own
+counter refutes it. No `KASSERT` was added — asserting on a condition the data
+says does not occur trades a diagnosable FAIL for a panic. The real gap: of the
+three proofs that spawn workers and wait, only `rqstress_proof` calls
+`smp_resched_all()`. Added to the other two.
+
+### An error to not repeat
+`smoke-blkmq-trace` failed once **with stdout discarded**, so its signature is
+gone; it then passed 5/5 with output retained. Never run a gate that can fail
+with its output thrown away — same class as the vacuous checks in build_status.
+
+### Repo state
+Branch `dev/phase1-seyp3n`, tip `faadd72`. PR #5 open, DRAFT, base `dev/phase1`.
+`smoke-shell` 5/5 on the current kernel. Recorded backlog empty; §6.2 is
+deliberately NOT started because §6.0 forbids beginning an item whose
+prerequisites (§6.1's intermittents) are not yet CI-green.
+
+### NEXT ACTION (one sentence)
+Wait for CI on `7b76c80`/`faadd72`; if Item 48's signature stays away, §6.1 is
+close to green and the FSRM ordering fix is the last blocker before §6.2 —
+otherwise read each red through its family's instrument before touching code.
