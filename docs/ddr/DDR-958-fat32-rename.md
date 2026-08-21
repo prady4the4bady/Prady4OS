@@ -217,3 +217,46 @@ All on this host (QEMU 8.2.2, TCG, no KVM), kernel `6a254f13b9fd2b9fc9e8f2597eca
 `fs_regression.sh` is the regression check the §7 extractions require: it covers
 every FS gate, and `fat32_create` / `fat32_unlink` are on the path of all of
 them.
+
+---
+
+## 10. Mutation testing — the gate is not vacuous
+
+Two mutants were built, run, and reverted. Each was measured, not reasoned
+about; the kernel was rebuilt after the revert and reproduces the same md5
+(`6a254f13b9fd2b9fc9e8f2597eca9767`) with `smoke-rename` green again (a revert
+is not verified until the gate is re-run).
+
+### Mutant A — `.rename` unwired from `fat32_ops`
+Reproduces the DDR-956 §7 state exactly: `vfs_rename` returns `-ENOSYS` and the
+log fills with `mv: cannot rename …` for every path. The gate **FAILS at arm 1**.
+
+This is also the concrete reason DDR-956 withdrew its ENOENT-only gate: arm 4
+alone **PASSES under mutant A**, because "renaming an absent path must fail" is
+satisfied when nothing can be renamed at all. Arm 1 is what makes arm 4
+meaningful.
+
+### Mutant B — the §2 implementation: overwrite the 8.3 name in place
+Arms 1–4 **PASS**. The predicted long-name corruption then appears verbatim in
+the serial log:
+
+```
+prism> MARK-LFN-6r2
+prism> long name read worksprism> long name read works
+```
+
+Both `cat /RENLFN.TXT` **and** `cat /LongFileName.txt` return the file's
+contents — one file answering to two names, its VFAT fragments still spelling
+the name it was renamed away from. The gate **FAILS at arm 6b** (`the OLD long
+name still resolves after mv`), and separately at **arm 5a**, since an in-place
+rewrite cannot replace an occupied destination.
+
+| | arm 1 | arm 2 | arm 3 | arm 4 | arm 5a | arm 6a | arm 6b |
+|---|---|---|---|---|---|---|---|
+| shipped | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| mutant A | **FAIL** | — | — | PASS | — | — | — |
+| mutant B | PASS | PASS | PASS | PASS | **FAIL** | PASS | **FAIL** |
+
+Mutant B is the whole justification for §3: the wrong implementation is the
+cheap-looking one, it passes four of seven arms, and the one arm that catches it
+needed a fixture with a real VFAT long name to exist at all.

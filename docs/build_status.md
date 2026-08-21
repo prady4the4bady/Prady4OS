@@ -5302,3 +5302,15 @@ rather than papered over: the `.rename` op is proven on FAT only.
 | `make ci-shard-check` | OK — 146 gates / 6 shards / 6 excluded |
 | `make ci-probe-rodata-check` | OK — 56 ELFs |
 | `make ci-start-align-check` | OK — 39 entry points |
+
+### Mutation testing (DDR-958 §10) — the gate discriminates
+
+Two mutants built, run and reverted; kernel rebuilt after the revert to the same
+md5 with `smoke-rename` green again.
+
+- **Mutant A** (`.rename` unwired) reproduces the DDR-956 §7 state and fails at
+  arm 1. Arm 4 *passes* under it — which is exactly why DDR-956 withdrew an
+  ENOENT-only gate as vacuous.
+- **Mutant B** (the in-place 8.3 name rewrite) passes arms 1–4 and produces the
+  predicted corruption in the log: `cat /RENLFN.TXT` and `cat /LongFileName.txt`
+  both return the contents. One file, two names. Fails at arm 6b and arm 5a.
