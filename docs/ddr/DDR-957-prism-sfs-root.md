@@ -119,3 +119,57 @@ for an unproven `mv`, which is a net regression: `smoke-shell` is one of the 145
 green gates and job control is a shipped feature. Reverting the rooting is NOT
 the answer either — DDR-956 §7 shows `mv` is unusable without it. The correct
 close is to finish diagnosing item 2 above.
+
+---
+
+## 8. Ordering hypothesis REFUTED — the failure is inside execve
+
+STEP 1's prime suspect (SFS placement happening after PRISM is unblocked) is
+**wrong**, established from line numbers rather than inference:
+
+| event | line |
+|---|---|
+| `int smnt = vfs_mount(2)` | `main.c:1206` |
+| `fat_place_exec_image(cap, smnt)` | `main.c:1957` |
+| `user_boot_from_sfs_rooted(…, smnt)` — PRISM launch | `main.c:1961` |
+
+Placement precedes the launch and `smnt` is valid at that point. The serial log
+agrees: `[exec] placed /EXECTEST.ELF` at log line **311**, `PRISM_READY` at
+**322**.
+
+### Ruled out, with evidence
+1. **File absent from SFS** — three `[exec] placed` lines.
+2. **Placement ordered after unblock** — line numbers above.
+3. **File not visible to the shell** — PRISM's own `ls /` lists `EXECTEST.ELF`
+   (4 occurrences in the serial log).
+
+So `vfs_open` succeeds and the failure is *later*, inside `sys_execve`.
+
+### Where 127 comes from
+`user/prism.c:283` — the forked child runs `SYS_EXECVE` and, if it returns,
+calls `SYS_EXIT(127)`. So 127 means **execve itself failed**, not fork and not
+a missing file.
+
+`sys_exec.c:49-95` has exactly four failure exits after the path is copied in:
+- `-ENOENT` — `vfs_open` failed. Ruled out (`ls` sees the file).
+- `-ENOEXEC` — `vf.size == 0 || vf.size > EXEC_MAX`.
+- `-ENOMEM` — `kmalloc(isize)` failed.
+- `-EIO` — `vfs_read(...) != isize`, i.e. a short read.
+
+**`-ENOEXEC` via `vf.size == 0` is the leading candidate**: the file exists and
+lists, but a freshly-opened SFS inode reporting size 0 would produce exactly this
+signature — visible in `ls`, openable, and unexecutable. `fat_place_exec_image`
+verifies its `vfs_write` returned `elen`, so the bytes were accepted; that does
+not prove the inode's size field was committed for a subsequent open.
+
+### Next step (do NOT guess past this)
+Add a temporary diagnostic to `sys_execve` printing which of the four exits was
+taken, plus `vf.size`, then re-run `smoke-shell`. One boot settles it. Note that
+`fat_place_exec_image` does **not** raise `fs_write_budget` the way the churn and
+`fs_write_test` paths do — worth checking whether the ADR-032 token bucket is
+implicated once the exit code is known.
+
+### Halt condition honoured
+One fix attempt was made (placing the ELF on SFS). It did not turn the gate
+green, so per the standing instruction this stops here rather than iterating
+blindly. FEAT-E remains unpushed and `smoke-shell` remains regressed.
