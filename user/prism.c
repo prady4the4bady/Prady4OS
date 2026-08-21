@@ -27,6 +27,7 @@
 #define SIGTERM    15
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
 #define SYS_GETPROCS 67     /* DDR-743: (index, struct procinfo*) -> 1 | 0(end) | -errno */
+#define SYS_RENAME  95   /* DDR-956 */
 #define SYS_UNLINK   68     /* DDR-744: (path) -> 0 | -errno */
 #define O_WRONLY     0x1    /* DDR-745: touch open mode */
 #define O_CREAT      0x40
@@ -545,7 +546,7 @@ int main(void) {
         }
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps jobs fg kill agent action setname touch rm uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps jobs fg kill agent action setname touch rm mv uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -603,6 +604,15 @@ int main(void) {
                 if (fd < 0) printf("touch: cannot create %s\n", argv[1]);
                 else { nsi(SYS_CLOSE, fd, 0, 0); printf("touch: %s\n", argv[1]); }
             }
+        } else if (!strcmp(cmd, "mv")) {
+            /* DDR-956: rename within the shell root mount. Both paths go to
+             * SYS_RENAME unchanged -- there is no cross-mount form to reject,
+             * because a process only ever sees t->root_mnt. */
+            if (argc < 3) printf("mv: usage: mv <old> <new>\n");
+            else if (nsi(SYS_RENAME, (long)argv[1], (long)argv[2], 0) == 0)
+                printf("mv: %s -> %s\n", argv[1], argv[2]);
+            else
+                printf("mv: cannot rename %s\n", argv[1]);
         } else if (!strcmp(cmd, "rm")) {
             /* DDR-745: remove a file (or empty dir) from the root. */
             if (argc < 2) printf("rm: usage: rm <path>\n");
