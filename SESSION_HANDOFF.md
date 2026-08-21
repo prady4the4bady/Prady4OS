@@ -6159,3 +6159,57 @@ Watch PR #5 for three consecutive greens on the same tip to close OPEN-10, read
 any churn red through DDR-964 §10's table and any `FSRM FAIL` through the
 `live=` table above, and — only when neither is pending — restart the DDR-963 §5
 baseline from scratch.
+
+---
+
+## CHECKPOINT 3 — all four families now have instruments (`544538b`)
+
+### `smoke-cadence` — the last family without a diagnostic now has one
+`PRADYOS_CAD_ADV` prints each advance's observed period against the target.
+Three PASSING runs / 18 advances:
+
+**Steady-state period ~11.3 s against a 2000 ms target — a 5.6× overshoot, and
+a PLATEAU, not a drift.** Every run converges to 11.15–11.47 s and stays.
+(I first read run A as "growing without bound"; that was wrong, corrected in the
+record — 11.3 s is a floor.)
+
+The floor has a mechanism: `cadence_tick()` runs once per FRAME and each advance
+renders a 12-frame `set_ambiance` plus the pre-transition pulse's render/present
+pairs, so the period cannot be shorter than one transition animation whatever
+the knob says. **The 'k' hotkey's 2 s cadence has never been achievable.** Four
+advances need ~34–45 s inside a `timeout 120` window.
+
+### The previous refutation rested on a metric that cannot discriminate
+It was recorded that raise-the-timeout was REFUTED because guest tick depth
+(t=11500) matched between passing local and failing CI runs. **That metric is
+vacuous here:** QEMU is killed by `timeout 120` in *both* outcomes — a passing
+local run ends `terminating on signal 15 … (timeout)` exactly as the failures do
+— so both reach the same tick depth whether or not the cadence completed. Equal
+tick depth is what a pass *and* a fail both look like.
+
+What survives: cadence is `vdso_ns()` wall-clock paced and frame-throughput
+driven, which is a different quantity from guest tick depth. Still no fix
+(§6.0-B) — the data supports several remedies and choosing needs a failing
+capture showing which `n` CI reaches. The instrument makes the next red say so.
+
+### State of the four families
+| family | instrument | status |
+|---|---|---|
+| OPEN-10 churn `rc=-1` | handle + tid at failure | **root-caused & fixed** (DDR-964); needs 3 CI greens to close |
+| Item 48 multi-inflight blk | DDR-961 timeout witness | open |
+| FSRM "did not persist" | `live=` context count | open, hypothesis corrected by the instrument |
+| `smoke-cadence` | `PRADYOS_CAD_ADV` | open, 2 s target shown unachievable |
+
+### Repo state
+Branch `dev/phase1-seyp3n`, tip `544538b`, pushed, tree clean. PR #5 open, DRAFT,
+base `dev/phase1` @ `0410e66`, `mergeable_state: unstable` = **checks pending,
+no merge conflict**. All 22 checks were queued on `48f9224` at last look; none
+red. A scope-update comment was posted to PR #5 (the body still says "Nine
+commits" against 24 — the body itself was left alone rather than risk a lossy
+10 KB rewrite). Check-in routine re-armed for 20:25 UTC with corrected facts.
+
+### NEXT ACTION (one sentence)
+Read CI on the tip: any churn red through DDR-964 §10's table, any `FSRM FAIL`
+through the `live=` table, any cadence red through the `n=` it reached — then
+the only uninstrumented work left is DDR-963 §5, whose 11/20 baseline must be
+re-measured from scratch (the abandoned two runs prove nothing).
