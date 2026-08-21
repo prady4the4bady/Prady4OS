@@ -5977,8 +5977,40 @@ until a capture survives.
 - ADR-038: 0/3.
 - NSI max live 94, next free 95. FEAT-B (SYS_RENAME + mv) still absent.
 
+### RESULT — OPEN-10 narrowed from three candidates to one (the session's best find)
+
+CI shard 3 on `97ea55a` failed at `smoke-blkmq` with
+`[sfs] churn FAIL op=create iter=0 rc=-1` — **OPEN-10**
+(`BUILD_TRACKER.md:117`), identical to the one prior real capture, and **not**
+from this branch (shard 3 passed on `5cbe616`; docs-only diff; OPEN-10 predates
+the branch and nothing here touches capability tables).
+
+DDR-884 had left it *"three candidates remain and the evidence does not separate
+them"* (`-EEXIST` / `-ENOSPC` / ADR-032 budget) after a 45-run campaign with **0
+hits**. DDR-888 then split `vfs_create`'s preconditions and DDR-891 split
+`sfs_create`'s two bare `-1`s. **This is the first occurrence after both
+landed**, which is exactly what that instrumentation was for.
+
+`EPERM` is **1**, so `-EPERM` *is* `-1`; `sfs_create` returns only
+`0`/`-ENOENT`/`-ENOSPC` (the `-1` at `sfs.c:775` is in `sfs_dir_walk`, a
+different function). The value space is disjoint, so:
+
+> **`rc=-1` ⟺ `cap_ok(cap, CAP_FS_WRITE)` returned false**
+> for `vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2)` at `main.c:2190`.
+
+All three DDR-884 candidates are eliminated *by the value itself*; the churn
+block also sets `fs_write_budget = ~0ull` right before the loop, independently
+agreeing the budget is not implicated. `BUILD_TRACKER.md`'s row now reads
+**NARROWED**.
+
+**No fix attempted** — one observation, no mechanism, and a speculative patch
+would be "validated" only by a rare failure not recurring. **Next diagnostic:**
+print the `cap` handle and owning `cap_table` state alongside `rc` at that site,
+so the next occurrence names *which* capability was missing and whether the
+table was intact. Instrument, not fix.
+
 ### NEXT ACTION (one sentence)
-Confirm PR #5's CI and merge it to `dev/phase1`, then implement DDR-963 §5
-(promote `g_announce_lock` to `console.h`, take it in `idt.c`'s trap printer)
-and verify against its §6 denominator — 11/20 spliced trap lines must become
-0/20.
+Confirm PR #5's CI and merge it to `dev/phase1`, then add the OPEN-10 capability
+instrument above — it is now the highest-value open item, because one more
+capture would name the missing capability outright, where DDR-963 §5 still needs
+a 20-run verification for a hazard nothing currently depends on.
