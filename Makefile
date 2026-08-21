@@ -2720,7 +2720,11 @@ smoke-cadence: $(IMG) fat-image sfs-image
 	@echo "[cadence] auto-ambiance gate (GPU + sendkey k -> test cadence)..."
 	@rm -f build/cadence.log /tmp/pcadence.sock
 	@bash tools/qemu_runner/input_inject.sh build/cadence.log /tmp/pcadence.sock PRADYOS_FOCUS "k" &
-	@timeout 120 qemu-system-x86_64 -machine q35 \
+	@# DDR-965: 120 -> 180. The failing capture showed boot+arm consuming ~65 s of
+	@# the old window ([hb] t=6500 immediately precedes CAD_ADV n=1), leaving ~55 s
+	@# for four advances that needed ~51-57 s — it missed by seconds. The animation
+	@# shrink alone does not close that; this does.
+	@timeout 180 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \

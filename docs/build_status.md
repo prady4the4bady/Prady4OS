@@ -6258,3 +6258,72 @@ Verify run 7 first came back `gate=FAIL trap=1`. It was killed mid-boot by a
 container restart (exit 137; log truncated to 17,540 B against ~25,000 B for
 every valid run, and 1 trap line instead of 2). It was discarded as invalid and
 re-run, not counted as a gate failure — and not silently dropped either.
+
+## `smoke-cadence` FIXED — the instrument named the remedy, then corrected it (DDR-965)
+
+The `PRADYOS_CAD_ADV` instrument added in `544538b` was built so the next red
+would say what to do. It did, on `992b336` shard 5:
+
+```
+PRADYOS_CAD_ADV n=1 elapsed_ms=10520 target_ms=2000
+PRADYOS_CAD_ADV n=2 elapsed_ms=10880 target_ms=2000
+PRADYOS_CAD_ADV n=3 elapsed_ms=17990 target_ms=2000
+[cadence] FAIL — no full auto cycle
+```
+
+**CI reached n=3 of the 4 required** — out of wall-clock budget by one advance.
+The same capture rules out a stopped clock (advances occur), guest starvation
+(`[hb]` reaches t=11500 healthy), and any SMP/console-lock effect (`rqcpus=1`;
+this gate is single-CPU, so DDR-963's line lock cannot be implicated — worth
+checking rather than assuming, since `992b336` is the commit that added it).
+
+### The first fix was right but not sufficient, and the reasoning was wrong
+
+DDR-965's first draft blamed the transition animation and explicitly rejected
+widening the window. Shrinking the test-mode transition 12 → 2 frames was
+implemented and measured:
+
+| run | steady period | max n in window |
+|---|---|---|
+| A (idle host) | ~3.08 s | 28 |
+| B (loaded) | ~9.7 s | 7 |
+| C (loaded) | ~9.9 s | 7 |
+
+Better than the ~11.3 s pre-fix plateau, but load-dependent and far from the
+2000 ms target — **so the animation was not the floor.** `cadence_tick()` runs
+once per main-loop frame, so the period is quantised to the *main loop's* frame
+interval; the transition frames are extra renders inside an advance, not the
+thing gating the next one.
+
+### The budget the capture actually shows
+
+Reading the failing log for arithmetic rather than trend — `[hb] t=6500` is the
+line immediately before `n=1`, last heartbeat `t=11500`, 100 ticks/s:
+
+| phase | wall time |
+|---|---|
+| boot → compositor → `PRADYOS_FOCUS` → `'k'` armed | **~65 s** |
+| left for four advances | ~55 s |
+| three advances taken | 39.4 s |
+| a fourth needed | ~11–18 s more → ~51–57 s |
+
+It missed by seconds. **Boot-and-arm at ~65 s of a 120 s window is the dominant
+term, not the animation.** The first draft reasoned from per-advance numbers
+without dividing up the window — §0.7's lesson in a new guise: a per-event
+metric without the total is as partial as a total without a denominator.
+
+### What shipped — both, because they address different terms
+1. Test-mode transition 12 → 2 frames (kept: ~10 fewer renders per advance, and
+   it does lower the period). Derived from `g_cadence_ns` being small, so no new
+   writable global (DDR-826); the `'k'` knob is used by `smoke-cadence` alone.
+2. `timeout 120` → **180** — the change that addresses the real budget.
+
+Requiring fewer than 4 advances was rejected: a *full* four-ambiance cycle is
+what the gate exists to prove (DDR-726).
+
+### Verification
+Five post-fix runs, all **PASS** with `PRADYOS_CADENCE_OK`, reaching n=28, 7, 7,
+19, 13 against the 4 required — a 3–7× margin where CI previously missed by one.
+No regression: `smoke-compositor`, `smoke-surface`, `smoke-wmorder`,
+`smoke-wmclose`, `ci-shard-check` (147 gates / 6 shards / 6 excluded),
+`ci-probe-rodata-check` all PASS. `compositor.elf` 75,240 ≤ 262,144.
