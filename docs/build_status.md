@@ -6385,3 +6385,50 @@ logged above. Recorded as unexplained rather than assumed benign.
 reproduced locally, so a local green cannot prove this fix — only that nothing
 regressed. Confirmation is the absence of the signature in CI over time
 (DDR-966 §6).
+
+## FSRM root-caused — the SFS root is umounted under live ring-3 probes
+
+The `live=` instrument's discriminator table resolved, and it picked the branch I
+had argued *against*. Ordering from a passing `smoke-percpu-sched` log:
+
+```
+170: [sfs] mount   ctx=0x0000000007C48000 live=1     <- smnt, the probes' SFS root
+293: [user] ELF loaded (embedded); SFS-rooted fsrm probe spawned
+304: PRADYOS_FSRM_OK                                  <- probe finishes
+358: [sfs] umount  ctx=0x0000000007C48000 live=0     <- THE SAME ctx, torn down
+359: [sfs] mount   ctx=0x0000000007C48000 live=1     ] self-tests, address recycled
+   … ten pairs …
+371: [sfs] journal abort/commit/replay OK
+```
+
+The sequence at 358 **begins with an unpaired umount**, so it closes the mount
+from line 170 — the root itself. `fs_test_thread` spawns ring-3 probes rooted at
+`smnt` (`main.c:1923-1926`, `fp->root_mnt = smnt; sched_unblock(fp)`) and then,
+further down the same thread, **umounts that root** to run its self-tests
+(`main.c:2093-2106`) — one of which its own comment calls *destructive*.
+
+**The only thing separating a pass from a fail is whether the probe finishes
+before line 358.** On a fast boot it does (304 < 358, as above); on a slow or
+interleaved one it does not, and the reopen at step (2) of `user/fsrmtest.c`
+fails against a root that no longer exists — `FSRM FAIL: created file did not
+persist`, with create and write having already succeeded.
+
+### Two corrections to earlier entries in this log
+1. The first FSRM write-up said the self-tests mount their own context on the
+   same device *while* the probe holds the root, i.e. two contexts coexisting.
+   **Wrong** — there is only ever one context, which is why `live` never exceeds
+   1. The defect is lifetime, not coexistence.
+2. This DDR's own discriminator table listed `live=1` + root ctx umounted as the
+   *least* expected branch (a DDR-953-class lifetime bug). It is the branch that
+   actually holds. The instrument earned its keep by ruling out the reading I
+   thought most likely.
+
+### Status — diagnosed, NOT fixed
+No fix here (§6.0-B). The failing capture still has not been seen directly; what
+is established is that the dangerous sequence exists on **every** boot, including
+passing ones, and that only scheduling luck separates the outcomes. That is the
+same standing DDR-964 had before its fix, and the remedy is the same shape:
+order the teardown after the users, rather than hope. Designing it needs care —
+the self-tests are deliberately destructive and must not run against a root any
+probe still holds — so it is recorded for a session that can verify it, not
+bolted on at the end of this one.
