@@ -5779,3 +5779,46 @@ in the runs observed on this branch this session (`9e0ee66` pull_request-event,
 exact per-run denominator was not tracked, and saying "about 10%" without having
 counted every shard-5 execution would be the kind of number this file already
 warns about.
+
+## OPEN-10 second capture this session — `rc=-1` reproduces, on a different gate
+
+Shard **2** failed on `3f98e0a` at **`smoke-percpu-sched`** (`QEMU_SMP=4`,
+`gate_shards.txt:86`) with the identical signature:
+
+```
+[sfs] churn FAIL op=create iter=0 rc=-1
+[sfs] btree churn FAIL
+```
+
+Different shard, different gate, same `op=create iter=0 rc=-1`. This is exactly
+what OPEN-10's tracker entry describes — *"`btree churn FAIL` during **unrelated
+`-smp 4` gates**"* — and it is the second capture in this session after
+`smoke-blkmq` on shard 3.
+
+### Why this matters more than a recurrence count
+The §"OPEN-10 captured again" analysis concluded, from **one** observation, that
+`rc=-1` is provably the `cap_ok(cap, CAP_FS_WRITE)` branch. A single sample
+supporting a decisive-looking conclusion is exactly the shape that should invite
+suspicion. **It now reproduces**: two independent captures, two different gates,
+two different shards, the same value. The discrimination does not rest on one
+reading.
+
+Historical context for the rate: OPEN-10 had **one** real capture in its entire
+history, and a 45-run campaign found **0** hits (DDR-884). This session produced
+**two** in a few hours of CI. That is a large apparent change, but note what it
+is *not* — this session did not touch capability tables, and every capture sits
+on a commit whose kernel is byte-identical to a passing one. The likelier
+reading is that this branch simply ran a great many `-smp 4` gates in a short
+window, not that anything made OPEN-10 more frequent. Recorded as an observation
+with that caveat attached rather than as a rate change.
+
+### Also, on the non-determinism evidence
+`e5697fa` now joins the same-SHA-both-verdicts set: its **push**-event suite
+failed at `smoke-cadence` while its **pull_request**-event suite passed. Note
+the event types are *reversed* relative to `9e0ee66` and `97ea55a`, which is a
+third independent nail in the "only pull_request runs fail" idea already
+refuted above.
+
+No fix attempted, unchanged: the next step remains the capability instrument
+(print the `cap` handle and owning `cap_table` state alongside `rc` at
+`main.c:2190`), which two captures now make clearly worth landing.
