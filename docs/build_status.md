@@ -5881,3 +5881,49 @@ cascade into `blk integrity FAIL reference-read`.
 *before* DDR-961), not on the DDR-961 kernel, before that work was pushed. CI
 covered it on `3120170` and the three runs above cover it now, but the local
 pre-push batch had a hole in it.
+
+## Item 48 family recurred on a different gate — and my own characterisation was too narrow
+
+`smoke-msixap` (**shard 5**, `gate_shards.txt:133`) failed on `aec6ad1` with the
+signature identical to the `smoke-blk-integrity` failure recorded above:
+
+```
+[blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
+[vblk] compl wait timeout          (x3)
+[smp] blk integrity FAIL reference-read
+```
+
+**Correction to what I wrote one section earlier.** I labelled this family
+"shard 0 / `smoke-blk-integrity`". That is too narrow — the same failure just
+landed on a different gate on a different shard. The family is not shard- or
+gate-specific: it is **any `-smp 4` gate that exercises the multi-inflight blk
+path**, which by the shard manifest spans at least
+
+| gate | shard |
+|---|---|
+| `smoke-blk-integrity` | 0 |
+| `smoke-blkmq` | 3 |
+| `smoke-blkmq-trace` | 4 |
+| `smoke-msixap` | 5 |
+
+That mirrors OPEN-10's own wording — *"during unrelated `-smp 4` gates"* — and
+is the same over-narrow-then-corrected pattern as the DDR-963 exposure claim
+earlier today. Recorded rather than silently widened.
+
+Note `smoke-blkmq` can fail *either* way: it produced the OPEN-10 churn signature
+on shard 3 earlier, and shares the multi-inflight assertion that fails here. The
+gate name alone does not identify which family a red belongs to — **read the
+signature**.
+
+No `[sub-approve] TIMEOUT` in this instance, so DDR-961's bcast witness did not
+fire; the stall was evidently shorter than its 500-tick deadline. That the
+witness is silent here and loud in the `ca0abca` instance is itself useful: it
+distinguishes stall *durations* rather than merely stall presence.
+
+### Stopping rule for this record
+Three intermittent families are now characterised (`smoke-cadence`, OPEN-10, and
+this one). **Further recurrences will not be recorded individually** — they add
+run-count without adding information, and a build-status that logs every
+instance of a known-open defect becomes noise that hides the findings. A
+recurrence gets written up only if it carries something new: a different
+signature, a new gate family, or evidence bearing on a root cause.
