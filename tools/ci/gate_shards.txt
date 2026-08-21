@@ -165,6 +165,7 @@
 2	smoke-auditchain-tamper	120
 3	smoke-invariants	120
 4	smoke-ftruncate	90
+4	smoke-rename	90
 4	smoke-stack-demand	150
 0	smoke-bench	90
 2	smoke-ahci	90

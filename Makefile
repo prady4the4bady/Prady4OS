@@ -214,7 +214,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -1039,6 +1039,92 @@ smoke-fsrm: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_FSRM_OK')" \
 	FORBIDDEN_SENTINEL="FSRM FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-958: fat32_rename, driven through PRISM's `mv` builtin.
+#
+# WHY THE SHELL AND NOT A PROBE ELF. The natural shape is user/renametest.c
+# spawned behind probe_enabled, and it was built that way first. It does not
+# fit: every embedded probe costs a page-aligned 8 KiB inside kernel.bin, which
+# sits 3,714 B under the 1 MiB stage-2 read window (Makefile:589, DDR-733 as
+# raised by DDR-827). Adding it produced a 1,053,054 B kernel — 4,478 B over.
+# Raising the window is a boot-path change needing its own DDR, so the gate
+# goes through the shell instead, which costs zero image bytes AND tests the
+# user-visible feature: DDR-956 shipped `mv` non-functional because fat32 had
+# no rename op, and this is the gate that proves it works.
+#
+# Only the FAT root is covered here, because PRISM runs on the default (FAT)
+# mount. sfs_rename stays where DDR-956 left it -- implemented, ungated -- and
+# gating it needs the probe ELF, i.e. the boot window above. DDR-958 sec.8.
+#
+# Structured exactly like smoke-shell: one FIFO feeds the guest UART once
+# PRISM_READY appears, then every assertion greps the captured serial log.
+# Everything from `@SHIN=` to `) & \` is ONE shell command -- keep make
+# comments out of the continuation block (see the note above smoke-shell).
+smoke-rename: $(IMG) fat-image sfs-image
+	@echo "[rename] booting PRISM; exercising mv on the FAT root..."
+	@SHIN=$$(mktemp -u /tmp/pradyos_rename.XXXXXX); rm -f build/rename_serial.log; mkfifo "$$SHIN"; \
+	( exec > "$$SHIN"; \
+	  for i in $$(seq 1 300); do grep -q PRISM_READY build/rename_serial.log 2>/dev/null && break; sleep 0.1; done; \
+	  printf 'echo rename-payload-3v7 > /RENSRC.TXT\n'; sleep 0.6; \
+	  printf 'mv /RENSRC.TXT /RENDST.TXT\n'; sleep 0.8; \
+	  printf 'cat /RENDST.TXT\n'; sleep 0.6; \
+	  printf 'cat /RENSRC.TXT\n'; sleep 0.6; \
+	  printf 'mv /NOSUCH9z.TXT /RENX.TXT\n'; sleep 0.8; \
+	  printf 'echo dst-original-8k4 > /RENOVR.TXT\n'; sleep 0.6; \
+	  printf 'echo src-payload-8k4 > /RENSRC2.TXT\n'; sleep 0.6; \
+	  printf 'mv /RENSRC2.TXT /RENOVR.TXT\n'; sleep 0.8; \
+	  printf 'echo MARK-OVR-8k4\n'; sleep 0.5; \
+	  printf 'cat /RENOVR.TXT\n'; sleep 0.6; \
+	  printf 'mv /LongFileName.txt /RENLFN.TXT\n'; sleep 0.8; \
+	  printf 'echo MARK-LFN-6r2\n'; sleep 0.5; \
+	  printf 'cat /RENLFN.TXT\n'; sleep 0.6; \
+	  printf 'cat /LongFileName.txt\n'; sleep 0.6; \
+	  printf 'exit\n'; sleep 0.5 ) & \
+	timeout 90 qemu-system-x86_64 -M q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=disk1 -device virtio-blk-pci,drive=disk1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=disk2 -device virtio-blk-pci,drive=disk2 \
+	    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+	    -serial stdio -display none -monitor none < "$$SHIN" > build/rename_serial.log 2>/dev/null || true; \
+	rm -f "$$SHIN"
+	@grep -q "PRISM_READY" build/rename_serial.log || { echo "[rename] FAIL: no PRISM_READY"; tail -30 build/rename_serial.log; exit 1; }
+	@# 1. The rename itself. PRISM prints this line only when SYS_RENAME
+	@#    returned 0, so a -ENOSYS fat32 (the DDR-956 state) fails here first.
+	@grep -q 'mv: /RENSRC.TXT -> /RENDST.TXT' build/rename_serial.log || { echo "[rename] FAIL: mv did not report success (DDR-958)"; tail -40 build/rename_serial.log; exit 1; }
+	@# 2. The DATA followed the name. Asserting only that the destination opens
+	@#    would pass for a rename that created an empty entry and dropped the
+	@#    cluster chain -- the payload is what proves first_clus/size carried.
+	@grep -q 'rename-payload-3v7' build/rename_serial.log || { echo "[rename] FAIL: destination does not hold the source's bytes (DDR-958)"; tail -40 build/rename_serial.log; exit 1; }
+	@# 3. The source is gone. A copy-style implementation reaches 1 and 2 and
+	@#    fails here.
+	@grep -q 'cat: cannot open /RENSRC.TXT' build/rename_serial.log || { echo "[rename] FAIL: source still readable after mv (DDR-958)"; tail -40 build/rename_serial.log; exit 1; }
+	@# 4. Stub-catcher: renaming an absent path must FAIL. A handler returning 0
+	@#    unconditionally passes 1-3 and cannot pass this.
+	@grep -q 'mv: cannot rename /NOSUCH9z.TXT' build/rename_serial.log || { echo "[rename] FAIL: mv of an absent path did not fail (DDR-958)"; tail -40 build/rename_serial.log; exit 1; }
+	@# 5. An existing destination is REPLACED, not refused and not appended to
+	@#    (DDR-958 sec.4, matching sfs_rename). Positional: the marker is printed
+	@#    after the mv, so only the lines below it can satisfy this.
+	@sed -n '/MARK-OVR-8k4/,$$p' build/rename_serial.log | grep -q 'src-payload-8k4' || { echo "[rename] FAIL: overwritten destination does not hold the source's bytes (DDR-958)"; tail -40 build/rename_serial.log; exit 1; }
+	@sed -n '/MARK-OVR-8k4/,$$p' build/rename_serial.log | grep -q 'dst-original-8k4' && { echo "[rename] FAIL: overwritten destination still holds its old bytes (DDR-958)"; tail -40 build/rename_serial.log; exit 1; } || true
+	@# 6. THE LONG-NAME ARM -- the reason DDR-958 exists. /LongFileName.txt is
+	@#    the FAT image's only VFAT long-named file (fat-image target). Renaming
+	@#    it by overwriting the 8.3 name in place leaves the LFN fragments
+	@#    spelling the OLD name, and dir_scan prefers the long name -- so the
+	@#    file keeps answering to the name it was renamed away from. Arms 1-5
+	@#    all pass under that bug because they use short names only.
+	@sed -n '/MARK-LFN-6r2/,$$p' build/rename_serial.log | grep -q 'long name read works' || { echo "[rename] FAIL: long-named file unreadable under its new name (DDR-958)"; tail -40 build/rename_serial.log; exit 1; }
+	@sed -n '/MARK-LFN-6r2/,$$p' build/rename_serial.log | grep -q 'cat: cannot open /LongFileName.txt' || { echo "[rename] FAIL: the OLD long name still resolves after mv (DDR-958)"; tail -40 build/rename_serial.log; exit 1; }
+	@# 7. No fault attributable to this run. fat32_rename walks and rewrites
+	@#    directory sectors; a bad slot offset shows up as a fault, not a wrong
+	@#    string, and every assertion above would still pass.
+	@#    SCOPED, deliberately: two boot probes fault ON PURPOSE every boot --
+	@#    WXVIOL.ELF writes to its own text to prove W^X, and METRIC.ELF writes
+	@#    the read-only metric page. A blanket '#PF' grep fails on those and
+	@#    says nothing about rename. So: no kernel-level [BUG]/PANIC anywhere,
+	@#    and no user trap at all once PRISM is up, which is where every mv runs.
+	@! grep -qE '\[BUG\]|PANIC' build/rename_serial.log || { echo "[rename] FAIL: kernel BUG/PANIC during the rename run"; tail -40 build/rename_serial.log; exit 1; }
+	@sed -n '/PRISM_READY/,$$p' build/rename_serial.log | grep -q '\[trap\]' && { echo "[rename] FAIL: user fault after PRISM came up (DDR-958)"; tail -40 build/rename_serial.log; exit 1; } || true
+	@echo "[rename] PASS — fat32_rename: move, replace, absent-path refusal, long-name retirement"
 
 # DDR-748 system-introspection gate: the SYS_SYSINFO probe reads CPU vendor/brand,
 # feature bits, CPU count, uptime, and free-frame count, validates them, and prints

@@ -5230,3 +5230,75 @@ busy-waiting agent. Arm B disproves it.
   proven code-clean" is RETRACTED: it now reproduces locally. Not root-caused; the
   last observation (log ending truncated mid-token after `PRADYOS_MODE_SOVEREIGN`)
   was made on a build that FAILED `build_freshness.sh` and is a lead only.
+
+## Session 2026-08-21 — `fat32_rename` (DDR-958): `mv` works for shell users
+
+**DDR-956 shipped `mv` non-functional.** `SYS_RENAME` (NSI 95), `vfs_rename`,
+`sfs_rename` and PRISM's `mv` builtin all landed, but `fat32_ops` declared no
+`.rename`, so `vfs_rename` returned `-ENOSYS` for every path PRISM can name —
+PRISM runs on the FAT default root. DDR-957 measured the other unblock (root
+PRISM at SFS) to a dead end: boot reordering **plus** migrating `/EXECTEST.ELF`,
+`/HELLO.TXT` and `/BIG8K.TXT` onto the post-reformat volume, then re-verifying
+~20 `smoke-shell` assertions. `fat32_rename` is the smaller path and is what
+shipped here.
+
+**Implementation — copy the record, do not rewrite the name in place.**
+The tempting one-sector shape (overwrite the 11 name bytes of the 8.3 entry)
+corrupts every long-named file: the VFAT fragments still spell the OLD name and
+`dir_scan` prefers the long name over the 8.3 name, so the file answers to the
+name it was renamed away from. Instead the source's 32-byte record is copied
+verbatim into a free slot in the destination directory with only bytes 0–10
+replaced, then the original is tombstoned. Attributes, timestamps, first cluster
+and size carry across for free, and no LFN is ever written. Cross-directory
+moves work unchanged; directory rename is refused (a cross-parent move would
+need a `..` rewrite), matching `fat32_unlink`'s regular-files-only rule.
+
+Semantics match `sfs_rename` deliberately, so `mv` means one thing on every
+volume: existing regular-file destination replaced, directory destination
+refused, same-record rename a no-op (decided by comparing resolved
+`(ent_clus, ent_off)`, not path strings — `comp_key` folds `foo.txt` and
+`FOO.TXT` to one key). FAT has no journal, so the write order is chosen so the
+worst interruption loses only the file the rename was going to destroy; the
+reverse order would leave the file reachable under neither name. Both windows
+are documented in DDR-958 §6 and in the code.
+
+Two helpers were extracted, no behaviour change: `dir_alloc_slot` (the tail of
+`fat32_create`) and `dirent_tombstone` (the tail of `fat32_unlink`).
+
+**Gate — `smoke-rename`, shard 4, 90 s.** Driven through PRISM's `mv` over the
+serial console in `smoke-shell`'s shape. Seven arms: rename reports success;
+the payload reads back from the destination; the source stops opening; an
+absent path FAILS (the stub-catcher); an existing destination is replaced with
+its old bytes gone; **the old long name stops resolving**; and no `[BUG]`/
+`PANIC` plus no user trap after `PRISM_READY`. Arms 5 and 6 are positional
+(a marker is echoed after the `mv`; only lines below it count).
+
+Arm 7 is scoped on purpose — `WXVIOL.ELF` and `METRIC.ELF` fault every boot by
+design, so a blanket `#PF` grep fails on those and says nothing about rename.
+
+**The probe-ELF route was tried first and does not fit.** Every embedded probe
+costs a page-aligned 8 KiB in `kernel.bin`, which sits 3,714 B under the 1 MiB
+stage-2 read window (`Makefile:589`). With `renametest.elf` embedded the kernel
+came to **1,053,054 B — 4,478 B over**, the same wall DDR-956 recorded. The
+wiring was reverted and `user/renametest.c` deleted rather than left unbuildable
+in the tree; it is recoverable from git history. **Raising the boot window
+(stage-2 chunk count + image size, against the 2 MiB PT_HI ceiling) is now the
+gating infrastructure item for any further embedded probe** and needs its own
+DDR.
+
+**`sfs_rename` remains ungated.** PRISM is FAT-rooted, so a shell-driven gate
+cannot reach the SFS root, and reaching it needs the probe ELF above. Stated
+rather than papered over: the `.rename` op is proven on FAT only.
+
+### Measured (QEMU 8.2.2 TCG, no KVM; kernel `6a254f13b9fd2b9fc9e8f2597eca9767`, `kernel.bin` 1,044,862 B)
+
+| check | result |
+|---|---|
+| `make image` | rc=0, 0 warnings (`-Werror`, clang + nasm) |
+| `make smoke-rename` | PASS — all 7 arms |
+| `make smoke-shell` | PASS — full assertion line |
+| `make smoke-fs` | PASS — 14 FS patterns |
+| `tools/ci/fs_regression.sh` | 9/9 PASS, uaf=0 on every gate |
+| `make ci-shard-check` | OK — 146 gates / 6 shards / 6 excluded |
+| `make ci-probe-rodata-check` | OK — 56 ELFs |
+| `make ci-start-align-check` | OK — 39 entry points |

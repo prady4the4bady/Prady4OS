@@ -462,32 +462,25 @@ static void write_new_entry(uint8_t *de, const char *key) {
     wr16(de, 24, date);                          /* write date */
 }
 
-/* Create an empty regular file at `path` (fails if it already exists). */
-static int fat32_create(void *ctx, const char *path, struct vfs_file *out) {
-    struct fat32_ctx *c = (struct fat32_ctx *)ctx;
-    char key[11];
-    const char *leaf; int leaf_len;
-    uint32_t dir = resolve_parent(c, path, key, &leaf, &leaf_len);
-    if (!dir)
-        return -1;
-    struct dirent_info ex;
-    if (dir_scan(c, dir, leaf, leaf_len, 0, 0, &ex) == 0)
-        return -1;                               /* already exists */
-
+/* Reserve a free 32-byte directory slot in the chain starting at `dir`,
+ * extending the directory by one zeroed cluster when every slot is taken.
+ * Returns 0 and fills *slot_clus / *slot_off, or -1 if the disk is full.
+ *
+ * DDR-958 §7: shared by fat32_create and fat32_rename. Callers must re-read the
+ * slot's sector afterwards -- rd_data hands out c->scratch, the single per-mount
+ * page that alloc_cluster and zero_cluster also use, so any pointer taken before
+ * this call is stale when it returns. */
+static int dir_alloc_slot(struct fat32_ctx *c, uint32_t dir,
+                          uint32_t *slot_clus, uint16_t *slot_off) {
     uint32_t clus = dir, last = dir;
     while (valid_chain(clus)) {
         last = clus;
         for (uint32_t s = 0; s < c->spc; s++) {
-            uint32_t sec = clus_first_sector(c, clus) + s;
-            uint8_t *b = rd_data(c, sec);
+            uint8_t *b = rd_data(c, clus_first_sector(c, clus) + s);
             for (int e = 0; e < 16; e++) {
-                uint8_t *de = b + e * 32;
-                if (de[0] == 0x00 || de[0] == 0xE5) {
-                    write_new_entry(de, key);
-                    c->bd->write(c->bd, sec, b, 1);
-                    out->cookie = 0; out->size = 0;
-                    out->dirent_clus = clus;
-                    out->dirent_off  = (uint16_t)(s * 512 + e * 32);
+                if (b[e * 32] == 0x00 || b[e * 32] == 0xE5) {
+                    *slot_clus = clus;
+                    *slot_off  = (uint16_t)(s * 512 + e * 32);
                     return 0;
                 }
             }
@@ -500,12 +493,33 @@ static int fat32_create(void *ctx, const char *path, struct vfs_file *out) {
         return -1;
     zero_cluster(c, nc);
     fat_set(c, last, nc);
-    uint32_t sec = clus_first_sector(c, nc);
+    *slot_clus = nc;
+    *slot_off  = 0;
+    return 0;
+}
+
+/* Create an empty regular file at `path` (fails if it already exists). */
+static int fat32_create(void *ctx, const char *path, struct vfs_file *out) {
+    struct fat32_ctx *c = (struct fat32_ctx *)ctx;
+    char key[11];
+    const char *leaf; int leaf_len;
+    uint32_t dir = resolve_parent(c, path, key, &leaf, &leaf_len);
+    if (!dir)
+        return -1;
+    struct dirent_info ex;
+    if (dir_scan(c, dir, leaf, leaf_len, 0, 0, &ex) == 0)
+        return -1;                               /* already exists */
+
+    uint32_t slot_clus; uint16_t slot_off;
+    if (dir_alloc_slot(c, dir, &slot_clus, &slot_off) != 0)
+        return -1;
+    uint32_t sec = clus_first_sector(c, slot_clus) + slot_off / 512;
     uint8_t *b = rd_data(c, sec);
-    write_new_entry(b, key);
+    write_new_entry(b + slot_off % 512, key);
     c->bd->write(c->bd, sec, b, 1);
     out->cookie = 0; out->size = 0;
-    out->dirent_clus = nc; out->dirent_off = 0;
+    out->dirent_clus = slot_clus;
+    out->dirent_off  = slot_off;
     return 0;
 }
 
@@ -595,6 +609,18 @@ static int fat32_write(void *ctx, struct vfs_file *f, uint64_t off, const void *
     return (int)len;
 }
 
+/* Mark the directory entry at (ent_clus, ent_off) deleted. The cluster chain is
+ * NOT touched -- a caller that must also release it does so itself. Any VFAT
+ * long-name fragments preceding the entry are left as orphans, which dir_scan
+ * handles: it clears its accumulated name when it steps over this 0xE5 byte, so
+ * the fragments cannot be attributed to a later entry. (DDR-958 §3/§7.) */
+static int dirent_tombstone(struct fat32_ctx *c, uint32_t ent_clus, uint16_t ent_off) {
+    uint32_t sec = clus_first_sector(c, ent_clus) + ent_off / 512;
+    uint8_t *b = rd_data(c, sec);
+    b[ent_off % 512] = 0xE5;
+    return c->bd->write(c->bd, sec, b, 1);
+}
+
 /* Delete a regular file: free its chain and tombstone its directory entry. */
 static int fat32_unlink(void *ctx, const char *path) {
     struct fat32_ctx *c = (struct fat32_ctx *)ctx;
@@ -610,10 +636,82 @@ static int fat32_unlink(void *ctx, const char *path) {
         return -1;                               /* regular files only */
     if (valid_chain(di.first_clus))
         free_chain(c, di.first_clus);
-    uint32_t sec = clus_first_sector(c, di.ent_clus) + di.ent_off / 512;
+    return dirent_tombstone(c, di.ent_clus, di.ent_off);
+}
+
+/* Rename/move a regular file within one mount (DDR-958).
+ *
+ * The source's directory entry is COPIED to the destination and the original is
+ * tombstoned; the name bytes of the source record are never rewritten in place.
+ * That is what keeps a long-named file correct: its VFAT fragments still spell
+ * the OLD name, and an in-place 8.3 rewrite would leave dir_scan matching that
+ * old name and not the new one (DDR-956 §7, DDR-958 §2). Copying the whole
+ * 32-byte record also carries attributes, timestamps, first cluster and size
+ * across without restamping them, which is what POSIX rename requires.
+ *
+ * Semantics follow sfs_rename exactly so `mv` means one thing on every volume:
+ * an existing regular-file destination is replaced, a directory destination is
+ * refused, and naming the same entry twice is a no-op. */
+static int fat32_rename(void *ctx, const char *old_path, const char *new_path) {
+    struct fat32_ctx *c = (struct fat32_ctx *)ctx;
+    char okey[11], nkey[11];
+    const char *oleaf, *nleaf; int olen, nlen;
+
+    uint32_t odir = resolve_parent(c, old_path, okey, &oleaf, &olen);
+    uint32_t ndir = resolve_parent(c, new_path, nkey, &nleaf, &nlen);
+    if (!odir || !ndir)
+        return -1;                               /* missing source/dest parent */
+
+    struct dirent_info od;
+    if (dir_scan(c, odir, oleaf, olen, 0, 0, &od) != 0)
+        return -1;                               /* source does not exist */
+    if (od.attr & ATTR_DIRECTORY)
+        return -1;                               /* regular files only (DDR-958 §5) */
+
+    /* Same directory record under both names -- e.g. `mv foo.txt FOO.TXT`, which
+     * comp_key folds to one 8.3 key. Compared by entry location, not by path
+     * string, because the strings differ while the record does not. */
+    struct dirent_info nd;
+    int have_dst = (dir_scan(c, ndir, nleaf, nlen, 0, 0, &nd) == 0);
+    if (have_dst) {
+        if (nd.ent_clus == od.ent_clus && nd.ent_off == od.ent_off)
+            return 0;                            /* POSIX no-op */
+        if (nd.attr & ATTR_DIRECTORY)
+            return -1;                           /* never clobber a directory */
+    }
+
+    /* Read the source record before anything moves; rd_data's buffer is reused
+     * by every step below. */
+    uint8_t ent[32];
+    uint8_t *ob = rd_data(c, clus_first_sector(c, od.ent_clus) + od.ent_off / 512);
+    memcpy(ent, ob + od.ent_off % 512, 32);
+    for (int i = 0; i < 11; i++)
+        ent[i] = (uint8_t)nkey[i];               /* only the name changes */
+
+    /* FAT has no journal, so this is three sector writes and a crash can land
+     * between them. Removing the destination FIRST means the worst interruption
+     * loses only the file the rename was going to destroy anyway; tombstoning
+     * the source first would instead leave it reachable under neither name. It
+     * also frees the destination's own slot for dir_alloc_slot to hand straight
+     * back, so a same-directory mv never puts a duplicate key on disk.
+     * (DDR-958 §6.) */
+    if (have_dst) {
+        if (valid_chain(nd.first_clus))
+            free_chain(c, nd.first_clus);
+        if (dirent_tombstone(c, nd.ent_clus, nd.ent_off) != 0)
+            return -1;
+    }
+
+    uint32_t slot_clus; uint16_t slot_off;
+    if (dir_alloc_slot(c, ndir, &slot_clus, &slot_off) != 0)
+        return -1;
+    uint32_t sec = clus_first_sector(c, slot_clus) + slot_off / 512;
     uint8_t *b = rd_data(c, sec);
-    b[di.ent_off % 512] = 0xE5;
-    return c->bd->write(c->bd, sec, b, 1);
+    memcpy(b + slot_off % 512, ent, 32);
+    if (c->bd->write(c->bd, sec, b, 1) != 0)
+        return -1;
+
+    return dirent_tombstone(c, od.ent_clus, od.ent_off);
 }
 
 /* Release a mount's per-volume resources (the 3 scratch pages + the context). */
@@ -633,6 +731,7 @@ static const struct vfs_fs_ops fat32_ops = {
     .read    = fat32_read,
     .write   = fat32_write,
     .unlink  = fat32_unlink,
+    .rename  = fat32_rename,                     /* DDR-958 */
     .readdir = fat32_readdir,
     .umount  = fat32_umount,
 };
