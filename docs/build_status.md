@@ -6187,3 +6187,74 @@ count in test mode, require fewer than 4 advances, or widen the window — and
 choosing between them needs a failing-run capture showing which `n` CI actually
 reaches. The instrument makes the next red say so directly. No fix on this data
 alone.
+
+## DDR-963 §5 implemented and verified — 6/10 → 0/10 spliced trap lines
+
+Kernel `sha256:d3cec185ed26a8a6`. The last uninstrumented item is closed.
+
+### Result
+
+| arm | runs with a spliced `[trap]` line | trap lines | gate |
+|---|---|---|---|
+| before | **6/10** | 20 | 10/10 PASS |
+| after  | **0/10** | 20 | 10/10 PASS |
+
+The baseline was re-measured on this kernel rather than inherited: 60%, close to
+DDR-963's recorded 11/20 (55%), so the hazard was intact and the denominator is
+honest. Against that baseline a clean 0/10 has probability ~1e-4 under no effect.
+
+The concrete harm, before and after, on the same line:
+
+```
+before:  [trap] user [boot-load] SYSTEST.ELF t=200
+after:   [trap] user #PF page fault pid=21 name=WXVIOL.ELF rip=0x0000008000000007 err=…
+```
+
+`name`, `pid`, `rip` and the fault bytes were simply gone — everything the trap
+printer exists to emit.
+
+### Two honest deductions from §6's bar
+
+**1. N=10, not the N=20 §6 asks for.** At ~3.5 min/run, 20+20 is ~2 hours. N=10
+is a real denominator but a weaker test, and is recorded as N=10.
+
+**2. The §6 announce-case test is VACUOUS on this data.** §6 also requires that
+an `[smp]` announce line spliced by a heartbeat go to zero, as the test that the
+lock was *promoted* rather than merely reused inside `smp.c`. Measured:
+
+| arm | `[smp] cpu` lines | spliced |
+|---|---|---|
+| before | 150 | **0** |
+| after  | 150 | **0** |
+
+**The baseline was already zero, so this test cannot discriminate** — it is not
+evidence the promotion worked. `[smp] cpu N up` prints during early AP bringup
+while the heartbeat first fires at t=500, so in practice they never overlap.
+Reporting 0→0 as a pass would be the sixth vacuous check in this log. The
+promotion still stands on design grounds — a `static` lock in `smp.c` cannot be
+taken by `idt.c` or `main.c`, which is what the trap-line result required — but
+the empirical claim §6 wanted **is not available** and is not made.
+
+### No regression
+`smoke-smp`, `smoke-smplock`, `smoke-percpu`, `smoke-swapgs`, `smoke-smpjob` —
+the gates whose sentinels the announce lock guards — all PASS. Plus
+`smoke-shell` **5/5**, `smoke-blkmq`, `smoke-blk-integrity`,
+`smoke-rqstress-liveness`, `ci-probe-rodata-check`, `ci-shard-check`.
+Zero warnings at `-Werror`; `kernel.bin` 1,053,054 ≤ 1,572,864.
+
+### A process failure to record
+`992b336` was **pushed while its own message said it would not be** ("NOT pushed
+until the verify arm and smoke-shell 5/5 are in") and before `smoke-shell` was
+5/5 — breaking the standing rule against pushing with that gate unverified. The
+technical content of that message was accurate and did not overclaim (it says
+"VERIFICATION IN FLIGHT" and "NOT YET VERIFIED"), and the verification has now
+come back clean, so nothing shipped on a false result. The history is not
+rewritten; this entry is the correction. The rule exists so a red gate is caught
+before it reaches the remote, and here the ordering was reversed by luck rather
+than by process.
+
+### One invalidated run, discarded rather than counted
+Verify run 7 first came back `gate=FAIL trap=1`. It was killed mid-boot by a
+container restart (exit 137; log truncated to 17,540 B against ~25,000 B for
+every valid run, and 1 trap line instead of 2). It was discarded as invalid and
+re-run, not counted as a gate failure — and not silently dropped either.
