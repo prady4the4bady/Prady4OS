@@ -5333,3 +5333,64 @@ printed `function strtonum never defined` and passed it.
 **Every "probe-rodata-check: OK" in this repo's history before this commit
 carries no information.** Second instance of the CLAUDE.md §0.3 vacuous-guard
 failure mode.
+
+## Session 2026-08-21 (cont.) — DDR-960: the stage-2 read window, 1 MiB → 1.5 MiB
+
+**PR #4 merged first** (all 22 CI checks green on `0410e66`): `dev/phase1`
+fast-forwarded `9b4f60f → 0410e66`, shipping DDR-958 `fat32_rename` and DDR-959.
+
+**The blocker this clears.** `kernel.bin` was 1,044,862 B against a 1,048,576 B
+read window — **3,714 B of headroom** — and every embedded ring-3 probe ELF
+costs a page-aligned 8,192 B. No new probe fit. DDR-958 hit this and routed its
+gate through PRISM, leaving `sfs_rename` ungated; DDR-956 hit it first; and
+`tools/ci/revert_rename_embed.py` records a *third* attempt that came up 382 B
+short. Probe ELFs are this project's only mechanism for gating a syscall, so
+the window blocked the gating of every future syscall, not just rename.
+
+**Governing prior art, corrected.** There is **no ADR** for the load window —
+ADR-033 is "third-party fetch source". It has always been governed by DDR-733
+(relocation to 4 MiB, 24 chunks) and DDR-827 (24 → 32). DDR-960 raises it to 48
+chunks = 1,572,864 B, and ADR-039 will record the ceiling as a standing contract
+so the number stops living only in DDRs.
+
+**What did and did not move.** Chunk count (`stage2.asm:199`) and the Makefile
+size gate moved. The **disk image did not**: from LBA 17 a 2 MiB image holds
+2,088,448 B, which covers up to 63 chunks, so DDR-827's `truncate -s 2M` already
+suffices — the first raise in this chain that does not need it, and the comment
+claiming otherwise is now corrected. PT_HI did not move either: image + BSS is
+1,196,288 B against a 2 MiB span, i.e. **900,864 B of headroom**, two orders of
+magnitude more slack than the window had. That asymmetry is why this is a
+chunk-count change and not a page-table change.
+
+48 rather than more is set by one invariant: **the size gate must never admit an
+image PT_HI cannot map.** A full 48-chunk window plus current BSS is 1,724,288 B,
+still 372,864 B under the ceiling. At 56 that margin is 110,720 B; at 64 the
+window alone equals the whole 2 MiB span, leaving zero room for BSS.
+
+Also recorded: PT_HI's 2 MiB span is implemented a **second** time, independently,
+in `boot/uefi/loader.c:81-93`. Any future extension must move both files.
+
+### Measured (kernel `6a254f13…`, `kernel.bin` 1,044,862 B)
+`make image` rc=0 / 0 warnings · `smoke` PASS · `smoke-user` PASS · `smoke-fs`
+PASS · **`smoke-smpuser` 5/5 with 0 `[BUG]`/`PANIC`/`#GP`/`[trap]` lines in all
+five logs** · `ci-shard-check` OK 146/6/6 · `ci-probe-rodata-check` OK 56 ELFs ·
+`ci-start-align-check` OK 39 entries.
+
+**Boot time is unchanged: 0.38 s to the kernel sentinel at both 32 and 48
+chunks**, 5 runs each with no variance. The 16 extra INT 13h round trips and
+512 KiB of extra `rep movsd` are below measurement resolution.
+
+### The check that actually matters — a >1 MiB kernel, two arms
+Everything above ran on a kernel the OLD window already covered, so none of it
+can distinguish a working raise from a no-op — DDR-827's own lesson. A temporary
+500 KiB `.rodata` pad linked early in `console.c` pushed every later section,
+including the embedded probe ELFs, past the old 1 MiB mark: **1,556,862 B**.
+
+| arm | chunks | result |
+|---|---|---|
+| A | 48 | `smoke`, `smoke-user` (7 patterns), `smoke-fs` (14 patterns) all **PASS** |
+| B | 32 | `smoke` and `smoke-user` **FAIL** — *sentinel not found*: the image does not boot at all |
+
+Same kernel byte-for-byte; only the chunk count differs. Arm B reproduces
+DDR-827's signature deliberately. Pad removed, chunk count restored, rebuilt
+kernel reproduces md5 `6a254f13…`, `make smoke` green again.

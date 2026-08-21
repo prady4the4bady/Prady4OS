@@ -138,21 +138,37 @@ enable_a20:
 ; registers and reset their cached limits; INT 13h itself runs with IF as the
 ; BIOS left it.
 ;
-; DDR-827: 32 chunks = 1 MiB read window (was 24 = 768 KiB). ACC is the first
-; feature needing the whole crypto stack resident, and linking it took kernel.bin
-; 12,646 bytes past the old window — the image built, the size gate caught it,
-; and the image did not boot because the TAIL of the kernel was never read.
+; DDR-960: 48 chunks = 1.5 MiB read window (was 32 = 1 MiB, DDR-827; 24 = 768 KiB
+; before that, DDR-733). kernel.bin had reached 1,044,862 B against the 1 MiB
+; window — 3,714 bytes of headroom — and every embedded ring-3 probe ELF costs a
+; page-aligned 8,192 B, so no new probe fit. DDR-958 hit exactly that and had to
+; route its gate through PRISM, which left sfs_rename ungated.
 ;
-; Three coupled numbers, all three moved together or none:
-;   1. this chunk count            32 x 64 x 512 = 1,048,576 B read
-;   2. the disk image size         1 MiB -> 2 MiB (from LBA 17 a 1 MiB image
-;                                  holds only 1,039,872 B, LESS than the new
-;                                  window, so stage 2 would read past its end)
-;   3. the Makefile size gate      786,432 -> 1,048,576
-; The PT_HI higher-half mapping spans 2 MiB, so the runtime ceiling stays
-; image + BSS <= 2 MiB; measured headroom at the time of this change was
-; 1,253,504 bytes, so 32 chunks does not approach it. All enforced by the
-; Makefile.
+; The read is a FIXED count: stage 2 always reads and copies the whole window
+; whatever the kernel's actual size, so the tail lands as garbage in the head of
+; BSS — harmless, boot.asm zeroes BSS after the copy.
+;
+; Coupled numbers, and which of them actually moved this time:
+;   1. this chunk count            48 x 64 x 512 = 1,572,864 B read   [CHANGED]
+;   2. the Makefile size gate      1,048,576 -> 1,572,864             [CHANGED]
+;   3. the disk image size         2 MiB, UNCHANGED. From LBA 17 a 2 MiB image
+;                                  holds 2,088,448 B, comfortably past this
+;                                  window; DDR-827 already grew it. This is the
+;                                  first raise in the chain that does NOT need
+;                                  the image to move — do not grow it reflexively.
+;   4. DDR-831 scratch sector 4095 UNCHANGED. 48 chunks read through LBA 3089,
+;                                  and a maximal kernel at the new size gate also
+;                                  ends at LBA 3089. Any count <= 63 stays clear.
+;
+; The runtime ceiling is unchanged and is NOT this window: PT_HI below maps a
+; 2 MiB span, so image + BSS <= 2 MiB. Measured at the time of this change,
+; image + BSS = 1,196,288 B, i.e. 900,864 B of headroom -- two orders of
+; magnitude more slack than the window had, which is why this is a chunk-count
+; change and not a page-table change. If the window were ever FILLED, image + BSS
+; would be 1,724,288 B, still 372,864 B under PT_HI: the size gate can never
+; admit an image PT_HI cannot map. That invariant is what caps this at 48 rather
+; than 56 or 64 -- at 64 the window alone equals the whole 2 MiB span, leaving
+; zero room for BSS. All enforced by the Makefile.
 ;
 ; go_unreal: cache a 4 GiB limit into DS and ES (clobbers AX; call with IF off).
 go_unreal:
@@ -180,7 +196,7 @@ load_kernel:
     mov si, msg_ldk
     call puts16
     mov dword [kdst], KERNEL_PHYS
-    mov cx, 32                      ; DDR-827: 24->32 chunks = 1 MiB read window
+    mov cx, 48                      ; DDR-960: 32->48 chunks = 1.5 MiB read window
 .chunk:
     push cx
     mov si, kernel_dap              ; read 64 sectors -> bounce @0x10000

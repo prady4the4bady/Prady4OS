@@ -582,7 +582,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 1048576 || { echo "kernel.bin exceeds 1 MiB — the stage-2 read window (32x64 sectors from LBA 17, DDR-733 as raised by DDR-827). Raise the chunk count in boot/stage2/stage2.asm and grow the 1 MiB disk image together (mind the 2 MiB PT_HI runtime ceiling checked next)."; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 1572864 || { echo "kernel.bin exceeds 1.5 MiB — the stage-2 read window (48x64 sectors from LBA 17; DDR-733, raised by DDR-827 then DDR-960). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 48 chunks a full window plus BSS still fits with 372,864 B to spare, and past ~56 it does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
 	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
 	 test $$phys -le $$(( 0x600000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x600000 — the 2 MiB PT_HI higher-half span (DDR-733). Extend PT_HI in boot/stage2/stage2.asm (second PT) before growing further."; exit 1; }
@@ -590,8 +590,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
 #   LBA 0  stage1 (512 B MBR)   LBA 1  stage2 (<= 16 sectors)   LBA 17  kernel
-# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 24x64 sectors of the
-# kernel from LBA 17 to 4 MiB (DDR-733) — LBAs hard-coded in the asm, match here.
+# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 48x64 sectors of the
+# kernel from LBA 17 to 4 MiB (DDR-733, window raised by DDR-960) — LBAs
+# hard-coded in the asm, match here.
 image: $(IMG)
 
 $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
@@ -600,7 +601,11 @@ $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 	@test "$$(wc -c < $(STAGE1_BIN))" -eq 512 || { echo "stage1.bin is not 512 bytes (got $$(wc -c < $(STAGE1_BIN)))"; exit 1; }
 	$(NASM) $(NASM_WERROR) -f bin $(STAGE2_SRC) -o $(STAGE2_BIN)
 	@test "$$(wc -c < $(STAGE2_BIN))" -le 8192 || { echo "stage2.bin exceeds 8 KiB; Stage 1 only loads 16 sectors"; exit 1; }
-	truncate -s 2M $(IMG)          # DDR-827: 1M->2M; must move with the stage2 chunk count
+	truncate -s 2M $(IMG)          # DDR-827: 1M->2M. DDR-960: this does NOT have to
+	                               # move with every chunk-count raise — from LBA 17
+	                               # a 2 MiB image holds 2,088,448 B, so it covers up
+	                               # to 63 chunks. The 48-chunk window reads to LBA
+	                               # 3089, clear of DDR-831's scratch sector 4095.
 	dd if=$(STAGE1_BIN) of=$(IMG) bs=512 seek=0  conv=notrunc status=none
 	dd if=$(STAGE2_BIN) of=$(IMG) bs=512 seek=1  conv=notrunc status=none
 	dd if=$(KERNEL_BIN) of=$(IMG) bs=512 seek=17 conv=notrunc status=none
