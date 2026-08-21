@@ -16,6 +16,28 @@
  * for the ADR-029 APs). Call sites unchanged. */
 #include "spinlock.h"
 static spinlock_t g_console_lock = SPINLOCK_INIT;
+
+/* DDR-963 §5. Distinct from g_console_lock and always taken OUTSIDE it. */
+static spinlock_t g_line_lock = SPINLOCK_INIT;
+
+uint64_t console_line_lock(void) {
+    return spin_lock_irqsave(&g_line_lock);
+}
+
+/* Masks interrupts first, then tries once. On failure interrupts are restored
+ * and the caller prints anyway — a spliced line is a cosmetic loss, whereas a
+ * trap printer that blocks turns a diagnosable fault into a hang. */
+int console_line_trylock(uint64_t *fl) {
+    uint64_t f;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    if (spin_trylock(&g_line_lock)) { *fl = f; return 1; }
+    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+    return 0;
+}
+
+void console_line_unlock(uint64_t fl) {
+    spin_unlock_irqrestore(&g_line_lock, fl);
+}
 static inline uint64_t irq_save(void) {
     return spin_lock_irqsave(&g_console_lock);
 }

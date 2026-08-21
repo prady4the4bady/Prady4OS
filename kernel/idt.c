@@ -174,6 +174,7 @@ static void timer_tick(struct regs *r) {
                                        * stall (a g_ticks-bounded wait is only as
                                        * bounded as the timer). Evidence only:
                                        * no gate asserts on it. */
+        uint64_t hbfl = console_line_lock();      /* DDR-963 §5 */
         kputs("[hb] t="); kputdec(now);
         { extern uint64_t g_thre_drops, g_rx_drops;
           kputs(" thre_drops="); kputdec(g_thre_drops);
@@ -267,6 +268,7 @@ static void timer_tick(struct regs *r) {
            * steady state pays only the fixed-width numeric fields. */
           if (rd > 8u) { kputs(" cur="); kputs(sched_current_name()); } }
         kputs("\r\n");
+        console_line_unlock(hbfl);                /* DDR-963 §5 */
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
         signal_deliver(r);            /* to the ring-3 thread we're returning to */
@@ -352,6 +354,13 @@ void isr_dispatch(struct regs *r) {
         return;
 
     if (r->vector < 32 && (r->cs & 3) == 3) {
+        /* DDR-963 §5: try, never block. This runs in EXCEPTION context, and a
+         * fault taken INSIDE a line-locked region on this same CPU would
+         * deadlock a blocking acquire — turning a diagnosable trap into a hang,
+         * which is strictly worse than the splice being fixed. On a failed
+         * acquire we print anyway and accept the spliced line. */
+        uint64_t trfl = 0;
+        int trheld = console_line_trylock(&trfl);
         kputs("[trap] user ");
         kputs(name);
         kputs(" pid=");
@@ -406,6 +415,10 @@ void isr_dispatch(struct regs *r) {
             }
         }
         kputs(" — killing process\r\n");
+        /* Release BEFORE sched_exit: it never returns, so an unlock placed
+         * after it would strand the lock held forever and hang every later
+         * printer on every CPU. */
+        if (trheld) console_line_unlock(trfl);
         sched_exit(-1);                  /* zombie (status -1) + switches away; never returns */
     }
 

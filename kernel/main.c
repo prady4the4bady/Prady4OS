@@ -505,7 +505,9 @@ static struct tcb *user_boot_from_sfs_rooted(cap_t cap, int smnt, const char *fn
      * against SFS, so a missed virtio-blk completion under -smp 4 would park it
      * here forever. Without this print the ~440-line window between the last
      * spawn and stamp C cannot be narrowed from a serial log alone. */
-    kputs("[boot-load] "); kputs(fname); kputs(" t="); kputdec(g_ticks); kputs("\r\n");
+    { uint64_t blfl = console_line_lock();       /* DDR-963 §5 */
+      kputs("[boot-load] "); kputs(fname); kputs(" t="); kputdec(g_ticks); kputs("\r\n");
+      console_line_unlock(blfl); }
     uint64_t elen = (uint64_t)(elf_end - elf);
     struct vfs_file ef;
     if (vfs_create(cap, smnt, fname, &ef) != 0 ||

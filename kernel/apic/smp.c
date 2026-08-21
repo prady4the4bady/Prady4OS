@@ -37,7 +37,9 @@ extern void gdt_init(void);   /* arch/x86_64/cpu.asm — load the shared gdt64 *
 extern const uint8_t ap_tramp_start[], ap_tramp_end[];
 
 static volatile uint32_t g_online = 1;      /* the BSP */
-static spinlock_t g_announce_lock = SPINLOCK_INIT;
+/* DDR-963 §5: the private announce lock is gone; these sites now take the
+ * shared console line lock from console.h, so an [smp] announce can no longer
+ * be spliced by a printer outside this file (the §3 partial case). */
 
 /* ~N ticks of PIT/APIC time (10 ms each); IF is on, so g_ticks advances. */
 static void delay_ticks(uint64_t n) {
@@ -63,13 +65,13 @@ void smp_ap_entry(uint32_t idx) {
      * installs this CPU's real GS base. */
     gdt_init();
     percpu_init_cpu(idx);          /* GS base: %gs state usable from here on */
-    spin_lock(&g_announce_lock);
+    { uint64_t anfl = console_line_lock();
     kputs("[smp] cpu ");
     kputdec(idx);
     kputs(" up id=");
     kputdec(lapic_apic_id_at(idx));
     kputs("\r\n");
-    spin_unlock(&g_announce_lock);
+    console_line_unlock(anfl); }
 
     /* ADR-030 stage 1: exercise the freshly locked allocators from this CPU —
      * a PMM page and a slab object, allocated and returned — proving the lock
@@ -79,19 +81,19 @@ void smp_ap_entry(uint32_t idx) {
     int ok = (page != 0) && (obj != 0);
     if (obj)  kfree(obj);
     if (page) pmm_free_page(page);
-    spin_lock(&g_announce_lock);
+    { uint64_t anfl = console_line_lock();
     kputs("[smp] cpu ");
     kputdec(idx);
     kputs(ok ? " locks OK\r\n" : " locks FAIL\r\n");
-    spin_unlock(&g_announce_lock);
+    console_line_unlock(anfl); }
 
     /* ADR-030 stage 2 (DDR-SMP-2): round-trip this CPU's identity (init'd above). */
     struct percpu *pc = this_cpu();
-    spin_lock(&g_announce_lock);
+    { uint64_t anfl = console_line_lock();
     kputs("[smp] cpu ");
     kputdec(idx);
     kputs(pc && pc->cpu_idx == idx ? " percpu OK\r\n" : " percpu FAIL\r\n");
-    spin_unlock(&g_announce_lock);
+    console_line_unlock(anfl); }
 
     /* ADR-031 cap-1: this CPU's own TSS + GDT descriptor + TR. RSP0 is a
      * placeholder (0) — unused until a ring-3 thread runs here (cap-4); it is
@@ -99,11 +101,11 @@ void smp_ap_entry(uint32_t idx) {
     tss_init_cpu(idx, 0);
     uint16_t tr;
     __asm__ volatile("str %0" : "=r"(tr));
-    spin_lock(&g_announce_lock);
+    { uint64_t anfl = console_line_lock();
     kputs("[smp] cpu ");
     kputdec(idx);
     kputs(tr == (uint16_t)(0x28 + idx * 0x10) ? " tss OK\r\n" : " tss FAIL\r\n");
-    spin_unlock(&g_announce_lock);
+    console_line_unlock(anfl); }
     __atomic_add_fetch(&g_online, 1, __ATOMIC_SEQ_CST);
 
     /* ADR-031 cap-2b: leave the park loop and JOIN THE SCHEDULER. Load this AP's
