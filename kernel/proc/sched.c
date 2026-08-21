@@ -882,7 +882,19 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->arg = arg;
     t->name = name;
     t->name_buf[0] = 0;             /* DDR-756: empty until SYS_SETNAME (kmalloc !zero) */
+    /* DDR-964 §8: cap_table_create() is a kmalloc and returns NULL on failure.
+     * Unchecked, it left a thread running with ->caps == NULL, against which
+     * every cap_authorize() returns 0 — so every FS write came back -EPERM
+     * (== -1) permanently, with nothing printed. A thread with no capability
+     * table is not viable; fail the create the way the kstack allocation above
+     * already does. Callers treat NULL as "failed to spawn" and say so
+     * (DDR-949). */
     t->caps = cap_table_create();
+    if (!t->caps) {
+        kfree((void *)(uintptr_t)base);
+        kfree(t);
+        return 0;
+    }
     t->fs_write_budget = FS_WRITE_BUDGET_DEFAULT;   /* ADR-032: full bucket */
     t->fs_budget_tick  = g_ticks;                   /* kmalloc !zero */
     t->is_user = 0;            /* kmalloc does not zero — init the user fields */
@@ -953,6 +965,19 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
 
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name) {
     return sched_create_state(entry, arg, name, THREAD_READY);
+}
+
+/* DDR-964: a kernel thread that is NOT runnable when this returns.
+ *
+ * sched_create() rq_pushes before it returns, so a caller that finishes
+ * initialising the thread afterwards — notably ->arg, which thread_trampoline
+ * reads as the entry argument — races every other CPU's rq_steal. Masking
+ * interrupts does not help: cli silences the caller's own timer, not the other
+ * three CPUs. This is the same create-then-init race sched_create_user already
+ * avoids for cr3/user_rip (DDR-SMP-3c-cap-2a D3), and the remedy is the same:
+ * create BLOCKED, finish initialising, then sched_unblock(). */
+struct tcb *sched_create_blocked(thread_fn entry, void *arg, const char *name) {
+    return sched_create_state(entry, arg, name, THREAD_BLOCKED);
 }
 
 /* Kernel-side launch for a ring-3 thread: set the ring-0 stack the CPU will use

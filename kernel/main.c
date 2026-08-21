@@ -201,15 +201,22 @@ static void ipc_sender_thread(void *arg) {
 
 static void ipc_demo(void) {
     ipc_endpoint_init(&demo_ep, DEMO_EP_ID);
-    struct tcb *recv = sched_create(ipc_receiver_thread, 0, "recv");
-    struct tcb *send = sched_create(ipc_sender_thread, 0, "send");
+    /* DDR-964: BLOCKED until ->arg holds the capability. sched_create() is
+     * already on a run queue when it returns, so another CPU's rq_steal can
+     * enter the thread before the mint below and read an unwritten ->arg. */
+    struct tcb *recv = sched_create_blocked(ipc_receiver_thread, 0, "recv");
+    struct tcb *send = sched_create_blocked(ipc_sender_thread, 0, "send");
     if (!recv || !send) {
         kputs("NEXUS: ipc_demo — thread create failed\r\n");
+        if (recv) sched_destroy(recv);   /* never ran: still BLOCKED */
+        if (send) sched_destroy(send);
         return;
     }
     /* Mint each thread a single, resource-bound capability with only its right. */
     recv->arg = (void *)(uintptr_t)cap_create(recv->caps, RES_IPC, DEMO_EP_ID, CAP_IPC_RECV);
     send->arg = (void *)(uintptr_t)cap_create(send->caps, RES_IPC, DEMO_EP_ID, CAP_IPC_SEND);
+    sched_unblock(recv);
+    sched_unblock(send);
     kputs("NEXUS: IPC demo — capability-gated recv/send threads\r\n");
 }
 
@@ -258,14 +265,19 @@ static void ring_consumer_thread(void *arg) {
 
 static void ring_demo(void) {
     ipc_ring_init(&demo_ring, RING_EP_ID);
-    struct tcb *prod = sched_create(ring_producer_thread, 0, "prod");
-    struct tcb *cons = sched_create(ring_consumer_thread, 0, "cons");
+    /* DDR-964: BLOCKED until ->arg holds the capability (see ipc_demo). */
+    struct tcb *prod = sched_create_blocked(ring_producer_thread, 0, "prod");
+    struct tcb *cons = sched_create_blocked(ring_consumer_thread, 0, "cons");
     if (!prod || !cons) {
         kputs("NEXUS: ring_demo — thread create failed\r\n");
+        if (prod) sched_destroy(prod);   /* never ran: still BLOCKED */
+        if (cons) sched_destroy(cons);
         return;
     }
     prod->arg = (void *)(uintptr_t)cap_create(prod->caps, RES_IPC, RING_EP_ID, CAP_IPC_SEND);
     cons->arg = (void *)(uintptr_t)cap_create(cons->caps, RES_IPC, RING_EP_ID, CAP_IPC_RECV);
+    sched_unblock(prod);
+    sched_unblock(cons);
     kputs("NEXUS: async SPSC ring demo — producer + consumer\r\n");
 }
 
@@ -321,16 +333,25 @@ static void publisher_thread(void *arg) {
 
 static void bus_demo(void) {
     bcast_bus_init(&demo_bus, BUS_EP_ID);
-    struct tcb *a = sched_create(sub_approvals_thread, 0, "sub-approve");
-    struct tcb *b = sched_create(sub_alerts_thread, 0, "sub-alert");
-    struct tcb *p = sched_create(publisher_thread, 0, "pub");
+    /* DDR-964: BLOCKED until ->arg holds the capability (see ipc_demo). The
+     * publisher is unblocked LAST so both subscribers are registered before it
+     * can broadcast. */
+    struct tcb *a = sched_create_blocked(sub_approvals_thread, 0, "sub-approve");
+    struct tcb *b = sched_create_blocked(sub_alerts_thread, 0, "sub-alert");
+    struct tcb *p = sched_create_blocked(publisher_thread, 0, "pub");
     if (!a || !b || !p) {
         kputs("NEXUS: bus_demo — thread create failed\r\n");
+        if (a) sched_destroy(a);         /* never ran: still BLOCKED */
+        if (b) sched_destroy(b);
+        if (p) sched_destroy(p);
         return;
     }
     a->arg = (void *)(uintptr_t)cap_create(a->caps, RES_IPC, BUS_EP_ID, CAP_IPC_RECV);
     b->arg = (void *)(uintptr_t)cap_create(b->caps, RES_IPC, BUS_EP_ID, CAP_IPC_RECV);
     p->arg = (void *)(uintptr_t)cap_create(p->caps, RES_IPC, BUS_EP_ID, CAP_BROADCAST);
+    sched_unblock(a);
+    sched_unblock(b);
+    sched_unblock(p);
     kputs("NEXUS: broadcast bus demo — 2 filtered subscribers + publisher\r\n");
 }
 
@@ -2207,6 +2228,22 @@ static void fs_test_thread(void *arg) {
                                     kputs(" rc=");
                                     if (rc < 0) { kputs("-"); kputdec((uint64_t)(-rc)); }
                                     else        { kputdec((uint64_t)rc); }
+                                    /* DDR-964 §10: rc=-1 is vfs_create's -EPERM
+                                     * branch, i.e. THIS handle did not authorize.
+                                     * The handle itself says why, and the three
+                                     * readings are disjoint: a large index or a
+                                     * stale generation means the thread entered
+                                     * before ->arg was written (the §5 race);
+                                     * h=0 means cap_create returned CAP_NULL
+                                     * (§8); a well-formed handle that is still
+                                     * refused means neither, and needs its own
+                                     * DDR. Failure path only — no hot-path
+                                     * volume, so it cannot evict gate markers
+                                     * from the log ring the way DDR-790 did. */
+                                    kputs(" h="); kputdec((uint64_t)cap);
+                                    kputs(" idx="); kputdec((uint64_t)(cap & 0xFFFFFFFFu));
+                                    kputs(" gen="); kputdec((uint64_t)(cap >> 32));
+                                    kputs(" tid="); kputdec((uint64_t)current_thread->tid);
                                     kputs("\r\n");
                                     churn_ok = 0;
                                 }
@@ -2408,11 +2445,25 @@ static void sched_demo(void) {
     if (!sched_create(blk_test_thread, 0, "blk"))
         kputs("[blk] FAILED to spawn blk_test_thread\r\n");
     sched_start_reaper();                     /* 5b-9: reclaim orphaned zombie procs */
-    struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
-    if (fst)
-        fst->arg = (void *)(uintptr_t)cap_create(fst->caps, RES_FILE, FS_RES_ID,
-                                                 CAP_FS_READ | CAP_FS_WRITE |
-                                                 CAP_FS_SFS_READ | CAP_FS_SFS_ADMIN);
+    /* DDR-964 §5: this is the OPEN-10 spawn. Created BLOCKED so ->arg holds the
+     * capability before any CPU can enter fs_test_thread — the cli above masks
+     * only the BSP's timer, and the boot log shows 796 cross-CPU steals. A
+     * stolen-early thread entered with ->arg still holding the 0 passed to the
+     * create (sched.c:882), so every vfs_create it made returned -EPERM (== -1)
+     * from its first one: `[sfs] churn FAIL op=create iter=0 rc=-1`. Reproduced
+     * on demand by reverting this line to sched_create (DDR-964 §10). */
+    struct tcb *fst = sched_create_blocked(fs_test_thread, 0, "fs");
+    if (!fst) {
+        kputs("[fs] FAILED to spawn fs_test_thread\r\n");
+    } else {
+        cap_t fc = cap_create(fst->caps, RES_FILE, FS_RES_ID,
+                              CAP_FS_READ | CAP_FS_WRITE |
+                              CAP_FS_SFS_READ | CAP_FS_SFS_ADMIN);
+        if (fc == CAP_NULL)              /* table full: every FS op would be -EPERM */
+            kputs("[fs] FAILED to mint fs capability\r\n");
+        fst->arg = (void *)(uintptr_t)fc;
+        sched_unblock(fst);
+    }
     __asm__ volatile("sti");
     kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk + VFS live\r\n");
 

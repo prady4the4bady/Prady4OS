@@ -196,6 +196,11 @@ int         sched_snapshot(int index, struct procinfo *out);
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
+/* DDR-964: create a kernel thread BLOCKED, so the caller can finish setting
+ * fields the entry point reads (notably ->arg) before any CPU can run it.
+ * sched_create() is already runnable on return and races rq_steal. The caller
+ * MUST sched_unblock() the returned thread. */
+struct tcb *sched_create_blocked(thread_fn entry, void *arg, const char *name);
 struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user_stack);
 /* fork (5b slice 8): clone `parent` into a ready ring-3 child whose AS is
  * `child_cr3`, resuming at `entry`/`user_rsp` (RAX=0 via enter_user_mode). Copies

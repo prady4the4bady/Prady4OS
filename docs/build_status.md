@@ -5927,3 +5927,92 @@ run-count without adding information, and a build-status that logs every
 instance of a known-open defect becomes noise that hides the findings. A
 recurrence gets written up only if it carries something new: a different
 signature, a new gate family, or evidence bearing on a root cause.
+
+## OPEN-10 ROOT-CAUSED and fixed — the create-then-init race (DDR-964)
+
+The stopping rule above was applied and cleared. Shard 2 on `aec6ad1`
+(`smoke-percpu-sched`, check run 96856099938) carried the familiar OPEN-10
+signature, which alone would have been a silent recurrence. But the same boot
+also showed, 40 lines earlier:
+
+```
+[boot-load] PRISM.ELF t=158
+[user] SFS write failed for PRISM.ELF
+```
+
+`[boot-load] PRISM.ELF` appears in 20+ retained logs under `build/gatelogs/`;
+that write had **never** failed in any of them. Two independent SFS failures in
+one boot, one never seen before, is evidence bearing on root cause — the one
+condition the rule admits. Full analysis in `docs/ddr/DDR-964-*.md`.
+
+### The defect
+
+`sched_create()` calls `rq_push` **before it returns** (`sched.c:938-942`), so a
+kernel thread is runnable the moment the caller gets the pointer. Eight sites in
+`main.c` (211, 212, 267, 268, 331, 332, 333, 2413) then mint a capability into
+`->arg` *afterwards*. The guard was `cli` (`main.c:2399`), whose comment reads
+"so each thread's capability (->arg) is fully set before the timer can schedule
+it" — **single-CPU reasoning**. `cli` masks the BSP's timer, not the other three
+CPUs, which can take the thread via `rq_steal` and enter it early. It then runs
+with the `arg = 0` the create was called with (`sched.c:882`), so every
+`vfs_create` returns `-EPERM` — which **is** `-1`, since `EPERM == 1` — from its
+first call onward: `[sfs] churn FAIL op=create iter=0 rc=-1`.
+
+`iter=0` was never a coincidence: the loop is `for (i = 0; churn_ok && i < 40;)`,
+so it halts at the first failure and any failure reports the lowest iteration
+reached. It means the capability was bad *before the loop*, which is what
+eliminated every transient explanation.
+
+### The counter-evidence that inverted
+
+The failing log shows `[sched] steal local=796 remote=0`, which reads as "no
+cross-CPU stealing". It is not: in `steal_pass` (`sched.c:579-601`) `same`
+compares **NUMA nodes**, and `if (c == self) continue` means *every* counted
+steal is cross-CPU. QEMU presents one node, so `local=796` means 796 cross-CPU
+steals in that boot. The line confirms the exposure rather than refuting it.
+
+### Reproduced on demand — a first for OPEN-10
+
+Reverting the `fs_test_thread` spawn to `sched_create` and widening the window
+produced the CI signature exactly, locally:
+
+```
+[sfs] churn FAIL op=create iter=0 rc=-1 h=0 idx=0 gen=0 tid=11
+```
+
+Reverting the mutation restored a byte-identical kernel
+(`sha256:c5f76441babbaf91`) and `[sfs] btree churn OK`.
+
+**A correction the reproduction forced:** DDR-964 first predicted the stolen
+thread would read uninitialised garbage per §0.6. It does not —
+`sched_create_state` writes `t->arg = arg` and every site passes `0`, so the
+handle is a well-defined `CAP_NULL`. That makes `h=0` shared with the unchecked
+`cap_table_create()` path, so the two are separated by the new
+`[fs] FAILED to …` markers, not by the handle.
+
+### What shipped
+
+- `sched_create_blocked()` — returns a BLOCKED kernel thread; all eight sites
+  convert to create → init `->arg` → `sched_unblock`. Same remedy
+  `sched_create_user` already used for cr3/user_rip (DDR-SMP-3c-cap-2a D3).
+- `cap_table_create()` NULL checked at `sched.c:885` (was unchecked; a NULL cap
+  table silently made every capability check fail — the §0.6 class).
+- Failure-path-only instrument printing the handle and tid at the churn site.
+
+### Gate evidence — kernel `sha256:c5f76441babbaf91` (R1)
+
+| gate | result |
+|---|---|
+| `smoke-percpu-sched` | 4/4 green with `btree churn OK` reached |
+| `smoke-shell` | **5/5** |
+| `smoke-smpuser` | PASS (AP bringup — the sensitive path) |
+| `smoke-blkmq`, `smoke-blk-integrity`, `smoke-rqstress-liveness` | PASS |
+| `smoke-rename`, `smoke-rename-sfs` | PASS |
+| `ci-probe-rodata-check`, `ci-shard-check` | PASS |
+| size | 1,053,054 B ≤ 1,572,864 |
+
+**Not claimed as closed.** The fix is proven against the reproduction, not
+against CI's intermittent. OPEN-10 stays open until the promotion requirement
+already in force is met: three consecutive CI greens on the same tip (§3). A
+recurrence *with* a `[fs] FAILED to …` marker, or with a well-formed handle,
+reopens it on a different mechanism (DDR-964 §11).
