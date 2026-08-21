@@ -5621,3 +5621,46 @@ touch, and the one obvious patch is refuted above. The next step is an
 instrument, not a fix — log `g_cad_advances` and the observed advance period
 alongside the tick count, so the wall-clock-vs-tick divergence can be measured
 rather than inferred. That belongs in its own DDR.
+
+## Session 2026-08-21 (cont.) — DDR-963: console line atomicity, with TWO corrections to my own earlier note
+
+Written up properly after reading the code rather than reasoning from the
+observation. Both corrections narrow claims already pushed in commits `0a9b312`
+and `9e0ee66` and in PR #5's body; the overstated versions stand in that history
+and are corrected here.
+
+**The finding stands:** a *logical* console line assembled from multiple `kputs`
+calls can be spliced by another CPU. `idt.c:355-363` builds the trap line from
+~10 calls; the console lock is released between each. Observed in **11 of 20**
+`smoke-smpuser` runs.
+
+### Correction 1 — the exposure is much narrower than "every gate"
+I wrote that "any gate matching a whole line is intermittently exposed".
+`boot_test.sh:520` matches with **`grep -qF` — a literal substring search over
+the whole file**, not a line match. A splice breaks a gate only when it lands
+*inside the sentinel's own text*, which is far rarer than the 11/20 rate at
+which splices happen somewhere. Bounded set: 20 gates run `QEMU_SMP=4`; ring-3
+sentinels (musl `printf` + `fflush` → one `kwrite`) are **immune**.
+`smoke-user` requires the exact string observed spliced but runs single-CPU —
+luck, not design.
+
+### Correction 2 — the kernel already solved this, and the fix is small
+I described the fix as "holding the console lock across a whole logical line, a
+change to the console hot path and its lock ordering". `kernel/apic/smp.c:40`
+already defines `static spinlock_t g_announce_lock` and holds it across exactly
+this kind of multi-call line, at 4 sites. So the problem is **recognised and
+solved in one file** — the mechanism just isn't reusable, because the lock is
+`static`. The fix is to promote it to `console.h` and take it in the other
+multi-call printers, starting with the trap path. That nests strictly outside
+the existing per-call `g_console_lock`; no change to `kputc` or the UART path.
+
+Protection is partial even where used: `g_announce_lock` excludes other
+announcers, not heartbeats or boot-load stamps.
+
+### Not the cause of anything currently failing
+Checked explicitly against `smoke-cadence`'s CI red and **ruled out** — that
+sentinel is a single buffered `printf` + `fflush`. Recorded as a latent hazard
+with a demonstrated mechanism and a falsifiable denominator (11/20 → must be
+0/20), not as an explanation for a known intermittent. **Not implemented this
+session:** a new cross-file lock in the fault path needs its own N-run
+verification, and nothing failing depends on it.
