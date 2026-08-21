@@ -5685,6 +5685,13 @@ Shard 3 **passed** on `5cbe616`; `97ea55a` differs from it by
 byte-identical. More decisively, OPEN-10 is a **tracked pre-existing defect**
 with an identical earlier capture predating this branch entirely.
 
+**Corroborated after the fact:** `97ea55a`'s *push-event* suite subsequently
+completed **success** — the same commit whose *pull_request-event* suite failed
+at shard 3. One commit, both verdicts, concurrently, exactly as `9e0ee66` behaved
+for `smoke-cadence`. That is the stronger form of the argument below: not merely
+"a neighbouring commit passed" but "this SHA passed the identical gate set in a
+parallel run", which no property of the commit can explain.
+
 Stated honestly: a docs-only diff rules out the *last commit*, not the whole
 branch. The branch does change SMP-visible kernel behaviour (DDR-961). What
 rules the branch out is that OPEN-10 was captured with this exact signature
