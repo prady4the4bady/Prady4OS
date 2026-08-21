@@ -264,3 +264,30 @@ things would reopen it:
 Closure is the promotion requirement already in force: three consecutive CI
 greens on the same tip (§3). Until then OPEN-10 stays open in
 `docs/build_status.md`, with this DDR as its diagnosis.
+
+## 12. Audit — the eight sites were the complete set
+
+A fix for one instance of a race class is worth little if siblings remain, so
+the whole kernel was swept for the pattern: a thread created READY (runnable on
+return) whose fields are then written by the caller.
+
+Method: for every `X = sched_create…(…)` in `kernel/**/*.c`, look ahead 30 lines
+for an assignment `X->field =`, excluding comparisons (`==`, `!=`, `<=`, `>=`)
+and excluding creates that already return BLOCKED (`sched_create_blocked`,
+`sched_create_user`, `sched_create_user_clone`).
+
+Result: **clean** — after this change no READY-created thread has any field
+assigned after creation. The eight sites in §7 were the complete population.
+
+One near-miss is worth naming because a careless sweep flags it: `main.c:624`
+is `while (g_cw_thread->state == THREAD_BLOCKED …)`, a comparison, not an
+assignment. A regex matching `->\w+\s*=` reports it as a write on a running
+thread — a false positive, and a reminder to exclude comparison operators before
+believing such a list.
+
+The sweep covers direct writes through the returned pointer. It does not prove
+the absence of initialisation performed indirectly (passing the fresh pointer to
+a helper). That path is already governed for the one caller that uses it:
+`user_boot_from_sfs_rooted` sets `->root_mnt` *before* unblocking, internally,
+and DDR-957 records why a caller assigning it on the returned pointer would race
+(`main.c:1831`).
