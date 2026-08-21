@@ -6243,3 +6243,99 @@ needs its own DDR and is now the gating infrastructure item.
 Open `docs/BUILD_TRACKER.md` / CLAUDE.md §6.2 and start the next unblocked item
 — but write the boot-window DDR first if that item needs a new probe ELF,
 because the budget is 3,714 B and one probe costs 8,192 B.
+
+---
+
+## 2026-08-21 (session 2) — boot window raised, sfs_rename gated, IPC/bcast bounded
+
+**Branch `dev/phase1-seyp3n`, PR #5** (draft) → `dev/phase1`.
+PR #4 was merged first; `dev/phase1` went `9b4f60f → 0410e66`.
+
+### Environment — a fresh container needs this before `make image`
+```
+apt-get update && apt-get install -y --no-install-recommends \
+    nasm qemu-system-x86 mtools dosfstools
+git submodule update --init --depth 1 third_party/musl third_party/lwip
+cd tools/graph_mcp && npm ci        # graph primer needs sql.js
+```
+**No `/dev/kvm`** — everything runs under TCG. Timings on this host:
+`smoke-rename`/`smoke-rename-sfs` ~95 s, `smoke-shell` ~120 s, `smoke-smpuser`
+~150 s, `fs_regression.sh` ~6 min, `smoke-smpuser` N=20 ~55 min.
+
+**`make` does not track `KCFLAGS` changes.** `make BSP_LIVENESS=1 image` after a
+normal build is a no-op — it prints "Nothing to be done". Force it with
+`rm -f build/*.o build/kernel.elf build/kernel.bin` first, and again to restore.
+
+### Shipped this session
+| | |
+|---|---|
+| **DDR-960** | stage-2 read window 1 MiB → 1.5 MiB (32 → 48 chunks) |
+| **DDR-962** | `sfs_rename` gated — `smoke-rename-sfs`, shard 5. 146 → **147 gates** |
+| **ADR-039** | the window + PT_HI ceiling recorded as a binding contract |
+| **DDR-961** | `ipc_recv` / `bcast_wait` bounded — 20/20, zero panics |
+| chore | 39 applied one-shot `patch_*`/`fix_*`/`revert_*` scripts removed |
+| BUG-1 | investigated, does **not** reproduce, no speculative fix |
+
+`kernel.bin` **1,053,054 B** against the new 1,572,864 B gate — **519,810 B
+spare, room for ~63 more embedded probe ELFs.**
+
+### The measurement lesson of this session — FOUR vacuous checks in one day
+Every one reported success or a plausible number **without having observed
+anything**. Treat this as a pattern in this tree's tooling, not four slips:
+
+1. **DDR-959** — `ci-probe-rodata-check` used gawk's `strtonum()`, undefined on
+   mawk (the default `awk` here *and* on `ubuntu-latest`), and its awk field
+   numbers were off by one for every section numbered 0-9. It printed
+   "OK — N ELFs" as a fixed string. **Every such OK before `e81b5c6` carries no
+   information.**
+2. **BUG-1 first attempt** — greped `make smoke-fs` output for `[bsp] churn
+   iter=` and found zero, which reads exactly like "the block never ran".
+   `boot_test.sh` **deletes the serial capture on every exit path** unless
+   `KEEP_SERIAL=1`. Use
+   `KEEP_SERIAL=1 SERIAL_LOG=<path> make <gate>`. Same trap DDR-957 §7 recorded;
+   it has now cost two sessions.
+3. **DDR-961 first scoring pass** — `grep -c` already prints `0`; the `|| echo 0`
+   fallback appended a second zero, the arithmetic died, the loop stopped after
+   run 1, **and the script still printed `1/20 PASS`**.
+4. **DDR-961 second scoring pass** — line-based `grep -v WXVIOL|METRIC` scored
+   11 "unexpected traps" that were the deliberate boot faults, mangled by SMP
+   console interleaving (see the open item below).
+
+### OPEN — a serial line can be split by another CPU under `-smp 4`
+`[trap] user …` is assembled from ~10 separate `kputs`/`kputdec` calls
+(`idt.c:355-363`). Each call **is** serialised — `irq_save()` in `console.c` is
+a shadowing local taking `g_console_lock` (ADR-030 stage 1) — but the lock is
+**released between calls**, so another CPU splices output mid-line:
+
+```
+[trap] user [boot-load] SYSTEST.ELF t=#PF page fault pid=180
+```
+
+Observed in **11 of 20** `smoke-smpuser` runs. **Every gate in this tree asserts
+on serial patterns**, so any gate matching a whole line is intermittently
+exposed under SMP. This is a live candidate contributor to the
+intermittent-failure classes this project keeps chasing — including BUG-1.
+Fixing it means holding the console lock across a whole logical line, touching
+the console hot path and its lock ordering (`klog_lock` nests inside, the
+console lock outside). **Needs its own DDR. Next free: DDR-963.**
+
+### Also open, unchanged
+- **BUG-1** — no `smoke-fs` failure exists to analyse (last six CI runs green).
+  Locally 40/40 churn markers, 3/3 runs, no wedge. But `smoke-fs` ran 7× clean
+  this session and at ~1-in-32 P(7 clean | bug present) ≈ 0.80, so that bounds
+  nothing, and BUG-1 has never reproduced on any local host. Watch shard 5.
+- **`fat32_rename`** — directory rename refused, cross-directory unsupported,
+  LFN fragments left as orphans (DDR-958).
+- **FEAT-E / DDR-957** — PRISM at SFS root. Needs fixture migration + boot
+  reordering + ~20 `smoke-shell` assertions re-verified. `mv` no longer depends
+  on it.
+- **`tools/ci/_shell3.sh`** — unreferenced, badly named, but a reusable
+  "run smoke-shell 3×" loop rather than an applied one-shot, so out of the
+  sweep's scope.
+- PT_HI extension past 2 MiB, when it comes, must change **both**
+  `boot/stage2/stage2.asm` and `boot/uefi/loader.c` (ADR-039).
+
+### NEXT ACTION (one sentence)
+Confirm PR #5's CI is green and merge it to `dev/phase1`, then write DDR-963 for
+the per-line console atomicity finding above — it is the highest-value open item
+because it plausibly underlies several intermittents at once.
