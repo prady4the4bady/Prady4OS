@@ -6133,3 +6133,57 @@ The instrument discriminates this directly on the next capture:
 Still no fix (§6.0-B), and still not conflated with DDR-964: that family fails at
 *create* with `rc=-1`, this one creates and writes successfully and fails the
 reopen.
+
+## `smoke-cadence` instrumented — the 2 s test cadence is unachievable by construction
+
+The remaining family with no diagnostic now has one. `PRADYOS_CAD_ADV` prints
+each advance with the period actually observed against the target
+(`user/compositor.c`, ring-3 `printf`+`fflush` so it is one `kwrite` and cannot
+be spliced — DDR-963 §4).
+
+Measured, kernel `sha256:6ef8fc69c6798602`, three PASSING runs / 18 advances:
+
+| run | n=1 | n=2 | n=3 | n=4 | n=5 | n=6 |
+|---|---|---|---|---|---|---|
+| A | 4500 | 9000 | 11280 | 11380 | — | — |
+| B | 2240 | 11270 | 11470 | 11300 | 11150 | 11360 |
+| C | 4430 | 9020 | 11260 | 11260 | 11400 | 10760 |
+
+(`elapsed_ms`, time since the previous advance; `target_ms` = 2000 throughout.)
+
+**The steady-state period is ~11.3 s against a 2 s target — a 5.6× overshoot,
+and it is a plateau, not a drift.** Every run converges to 11.15–11.47 ms×10³
+and stays there. The first period is short only because it begins mid-frame.
+(An initial reading of these numbers as "growing without bound" was wrong and is
+corrected here: 11.3 s is a floor the loop cannot go below.)
+
+The floor has a mechanism: `cadence_tick()` runs once per FRAME, and each
+advance itself renders a 12-frame `set_ambiance` transition plus the
+pre-transition pulse's ~8 render/present pairs. The period therefore cannot be
+shorter than one full transition animation, whatever the cadence knob is set to.
+**The 'k' hotkey's 2 s cadence has never been achievable**; ~11.3 s is the real
+floor. Four advances need ~34–45 s of wall clock, on top of boot and arming,
+inside a `timeout 120` window.
+
+### This retires the metric the previous refutation rested on
+
+The earlier analysis recorded *"raise-the-timeout is REFUTED — same guest tick
+depth (t=11500) in passing local and failing CI runs"*. That observation is
+real but **cannot discriminate**, and the instrument shows why: QEMU is killed
+by `timeout 120` in **both** outcomes — a passing local run here ended
+`terminating on signal 15 from pid … (timeout)` exactly as the failing CI runs
+do. Both consume the full 120 s window, so both reach the same tick depth
+whether or not the cadence completed. Equal tick depth is what you would see in
+a pass *and* a fail; it was never evidence either way.
+
+What survives: the cadence is paced by `vdso_ns()` wall clock and driven by
+frame throughput, which is not the same quantity as guest tick depth. A runner
+that renders more slowly gets fewer advances in the same 120 s, and the gate
+prints "no full auto cycle".
+
+### Still not fixed (§6.0-B)
+The data now supports several different remedies — cut the transition frame
+count in test mode, require fewer than 4 advances, or widen the window — and
+choosing between them needs a failing-run capture showing which `n` CI actually
+reaches. The instrument makes the next red say so directly. No fix on this data
+alone.

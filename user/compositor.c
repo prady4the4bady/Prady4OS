@@ -747,7 +747,25 @@ static void cadence_tick(void) {
         g_cad_start_ns = now;               /* DDR-895: restart the period here */
         g_cad_pre_said = 0;
         set_ambiance((g_cur_amb + 1) & 3, 12);
-        if (++g_cad_advances == 4) {        /* one full automatic cycle */
+        ++g_cad_advances;
+        /* smoke-cadence instrument. That gate fails as "no full auto cycle" —
+         * CADENCE_OK missing — while CADENCE_TEST and PRETRANSITION both pass,
+         * so the knob armed and at least one period nearly completed. The clock
+         * is therefore advancing and the question is only the RATE: how many
+         * advances happened, and how long each actually took against the 2 s
+         * test target.
+         *
+         * cadence_tick() runs once per FRAME, so an advance cannot be observed
+         * sooner than the next frame. elapsed_ms >> target_ms means the
+         * compositor is not being scheduled frames often enough to close four
+         * periods inside the gate's window — a starvation reading, not a clock
+         * one. elapsed_ms ~= target_ms with n < 4 means it simply ran out of
+         * wall time. Four lines per run at most; ring-3 printf+fflush is one
+         * kwrite, so this cannot be spliced (DDR-963 §4). */
+        printf("PRADYOS_CAD_ADV n=%d elapsed_ms=%llu target_ms=%llu\n",
+               g_cad_advances, g_cad_iter / 1000000ULL, g_cadence / 1000000ULL);
+        fflush(stdout);
+        if (g_cad_advances == 4) {          /* one full automatic cycle */
             printf("PRADYOS_CADENCE_OK\n");
             fflush(stdout);
         }
