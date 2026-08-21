@@ -5664,3 +5664,82 @@ with a demonstrated mechanism and a falsifiable denominator (11/20 → must be
 0/20), not as an explanation for a known intermittent. **Not implemented this
 session:** a new cross-file lock in the fault path needs its own N-run
 verification, and nothing failing depends on it.
+
+## Session 2026-08-21 (cont.) — OPEN-10 captured again, and `rc=-1` is now PROVEN to be the capability branch
+
+`build-and-boot (shard 3)` failed on `97ea55a` at **`smoke-blkmq`**:
+
+```
+[sfs] churn FAIL op=create iter=0 rc=-1
+[sfs] btree churn FAIL
+shard 3: FAILED at smoke-blkmq after 1 of 21 gates
+```
+
+This is **OPEN-10** (`BUILD_TRACKER.md:117`, *"`btree churn FAIL` during unrelated
+`-smp 4` gates"*) — `smoke-blkmq` runs `QEMU_SMP=4`. Identical signature to the
+one prior real capture: `op=create iter=0`.
+
+### Not introduced by this branch
+Shard 3 **passed** on `5cbe616`; `97ea55a` differs from it by
+`SESSION_HANDOFF.md` alone (**0** non-`.md` files), so the kernel is
+byte-identical. More decisively, OPEN-10 is a **tracked pre-existing defect**
+with an identical earlier capture predating this branch entirely.
+
+Stated honestly: a docs-only diff rules out the *last commit*, not the whole
+branch. The branch does change SMP-visible kernel behaviour (DDR-961). What
+rules the branch out is that OPEN-10 was captured with this exact signature
+before any of it existed — and that nothing here touches capability tables.
+
+### The valuable part — three sessions of "unactionable rc=-1", resolved
+
+Prior state (DDR-884): the probe discarded the return code, leaving `-EEXIST`,
+`-ENOSPC` and an ADR-032 write-budget refusal indistinguishable. *"No fix
+attempted: three candidates remain and the evidence does not separate them."*
+A 45-run capture campaign found **0 hits**.
+
+Two later DDRs split the value, and **this is the first occurrence after both
+landed**:
+
+- **DDR-888** split `vfs_create`'s preconditions: `-EPERM` for the capability
+  check, `-EINVAL` for a bad mount, `-EIO` for the DDR-954 revalidation
+  (`vfs.c:147-165`).
+- **DDR-891** split `sfs_create`'s two bare `-1`s into `-ENOENT` (parent
+  unresolvable) and `-ENOSPC` (no inode/extent, or name clash) — its comment
+  names this exact string as *"unactionable for three sessions"*
+  (`sfs.c:748-766`).
+
+With both in place the value space is now disjoint:
+
+| return | meaning | layer |
+|---|---|---|
+| **-1** (`-EPERM`) | **`cap_ok(cap, CAP_FS_WRITE)` returned false** | `vfs_create` |
+| -22 (`-EINVAL`) | bad mount id / no create op | `vfs_create` |
+| -5 (`-EIO`) | mount died under the call (DDR-954) | `vfs_create` |
+| -2 (`-ENOENT`) | parent path unresolvable | `sfs_create` |
+| -28 (`-ENOSPC`) | no free inode/extent, or name clash | `sfs_create` |
+
+`EPERM` is **1** (`errno.h:9`), so `-EPERM` *is* `-1`. `sfs_create` returns only
+`0`/`-ENOENT`/`-ENOSPC` — the `return -1` at `sfs.c:775` is inside
+`sfs_dir_walk`, a different function, and is not reachable from this path.
+
+**Therefore `rc=-1` on `vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2)`
+(`main.c:2190`) can only be the `!cap_ok(cap, CAP_FS_WRITE)` branch.**
+
+OPEN-10 narrows from three candidates to **one**: at churn iteration 0 the
+BSP's capability check for `CAP_FS_WRITE` failed. It is **not** `-EEXIST`, not
+`-ENOSPC`, and not an ADR-032 budget refusal — all three of DDR-884's candidates
+are eliminated by the value itself. Note the churn block sets
+`fs_write_budget = ~0ull` immediately before the loop, which independently
+agrees that the budget is not implicated.
+
+### No fix attempted, and why
+One observation, no mechanism. Whether the `cap` value is stale or the cap table
+is being mutated concurrently is not decidable from a single capture, and a
+speculative patch would be "validated" only by a rare failure not recurring —
+indistinguishable from having fixed nothing, which is the trap DDR-884 already
+named.
+
+**Next diagnostic:** print the `cap` handle value and the owning `cap_table`
+state alongside `rc` at this site, so the next occurrence says *which*
+capability was missing and whether the table was intact. That is an instrument,
+not a fix, and belongs with OPEN-10 rather than in this PR.
