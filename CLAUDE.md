@@ -6,6 +6,34 @@ PRADYOSSovereign Edition: a from-scratch, bare-metal, AI-native OS for x86_64.
 
 ---
 
+## ⚡ OPERATOR DIRECTIVE — 2026-08-22 (HIGHEST PRIORITY — OVERRIDES ALL PRIOR HOLDS)
+
+**The operator has issued the following standing order:**
+
+1. **LIFT the PR #5 merge hold immediately.** The prior instruction blocking the
+   merge is CANCELLED. Merge PR #5 the moment it has 3 consecutive CI greens on
+   the same tip SHA. Do NOT wait for further operator confirmation.
+2. **FIX ALL OPEN ISSUES listed in §OPEN ISSUES below.** Do not mark any issue
+   as "passive" or "watch CI". Actively root-cause and fix every one.
+3. **WORK IN PARALLEL across Groups A–H.** Do not block Group C/D/E/F/G work
+   while waiting for CI on a Group A/B item. Use CI-wait windows to advance
+   other groups. The only hard sequencing constraints are:
+   - FSRM (Item 1) must be CI-green before PR #5 merges.
+   - B#3 virtio-blk SMP stall must be fixed before ISO.
+   - Demand-paged stack (Group A) before spawning >13 processes.
+   - FAT32 multi-cluster fix (Group B) before PRISM `run` re-enable (Group D).
+4. **BEST QUALITY — ZERO WARNINGS, ZERO ERRORS.** Every commit must be
+   warning-clean at `-Werror`. No exceptions. No `#pragma GCC diagnostic ignore`
+   unless already present. Fix the root cause.
+5. **DEADLINE is HARD: 2026-08-24 23:59 UTC.** There is no extension. ISO must
+   exist and be testable. `v1.0.0` must be tagged on `main`. Work continuously.
+
+**This directive was set by the operator on 2026-08-22 and supersedes every
+prior hold, pause, or "wait for confirmation" instruction in this file or in
+SESSION_HANDOFF.md.**
+
+---
+
 ## MANDATORY FIRST ACTIONS EVERY SESSION (do in this exact order)
 
 1. `gh auth switch --user prady4the4bady` — prevents 403 push failures.
@@ -36,11 +64,26 @@ between tasks.** The only valid stop conditions are:
 
 **For everything else: keep going.** These are NOT stop conditions:
 - "I finished a task" → start the next task.
-- "I am waiting for CI" → work on code reading / DDRs.
+- "I am waiting for CI" → work on code reading / DDRs / parallel group items.
 - "I am not sure what to do next" → read §BACKLOG and start next item.
 - "I should report progress" → keep working.
 - "Context is high" → checkpoint per §CHECKPOINT and continue.
 - "The user hasn't confirmed" → §5d forbids waiting.
+
+### PARALLEL WORK PROTOCOL
+
+When CI is running on a Group A/B item:
+- Advance Group C (networking) code in a scratch branch
+- Advance Group D (userspace) DDR writing
+- Advance Group E (compositor) code — these are not CI-gated locally
+- Advance Group F (AETHER agent) probes that do not touch scheduler
+- Write DDRs for Group G (assembly optimization) — profile first
+
+When a CI result comes back:
+- If green: merge the parallel work into `dev/phase1-seyp3n`, run gates, push
+- If red: fix the red first, then resume parallel work
+
+The goal is **zero idle time**. There is always something to advance.
 
 ### CHECKPOINT PROTOCOL (context high — do NOT stop)
 
@@ -80,6 +123,7 @@ between tasks.** The only valid stop conditions are:
 17. **Performance claims need a denominator** — total AND per-event metric always.
 18. **An address does not identify a binary** when every binary loads at the same
     base. Confirm the ELF before disassembling.
+19. **ZERO WARNINGS, ZERO ERRORS at `-Werror`.** Fix root causes — never suppress.
 
 ---
 
@@ -160,20 +204,24 @@ were fixed in DDR-964.
 
 ---
 
-## OPEN ISSUES — status at handoff
+## OPEN ISSUES — ALL MUST BE ACTIVELY FIXED (operator directive 2026-08-22)
+
+**Do NOT treat any issue as passive. Every issue must be actively root-caused
+and fixed before the ISO. "Watch CI" is no longer a valid action.**
 
 | Issue | Symptom | Cause | Action |
 |---|---|---|---|
-| **FSRM** | `created file did not persist` | `fs_test_thread` umounts SFS root while ring-3 `fsrmtest` still running on it | **ITEM 1 — BLOCKING**. Poll `sched_find_pid()` in bounded loop before destructive umount. UAF trap: do NOT poll `THREAD_ZOMBIE` directly. Gate: `smoke-fsrm` 20/20. |
-| **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | One CI capture shard 2, no local repro | **ITEM 2**. Instrument: `[aether] roster_check rqdepth=%d`, `agent_sched_begin`/`agent_sched_end`. Push. Wait for CI. Fix only from real artefact. |
-| **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel | Unknown | Passive — watch CI. |
-| **OPEN-2** | `smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake` intermittent reds | All `QEMU_SMP=4` gates — DDR-863 | Passive. |
-| **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | Item-47 lost-thread failure seen through SFS probe — DDR-880 | `smoke-sfs-btree-smp4` excluded. Watch CI. |
-| **OPEN-11** | `smoke-sha256`, `smoke-rqstress-liveness` | Scratch LBA 1500 overwrote kernel image | **CLOSED — DDR-831.** LBA now 4095. Do not revisit. |
-| **Uninit PID** | `AGENT_OOM_KILLED` prints garbage PID | Uninitialised PID field in OOM path | Fix in Group A (demand-paged stack). |
-| **FAT32 large-file** | `execve` of large musl ELF corrupts | multi-cluster `read_cluster_chain` bug (ADR-024) | Fix in Group B. |
-| **Dependabot** | 5 alerts (2 high, 3 moderate) | Third-party deps | Human decision — flag but do not block. |
-| **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | Still open — fix before ISO. |
+| **FSRM** | `created file did not persist` | `fs_test_thread` umounts SFS root while ring-3 `fsrmtest` still running on it | **ITEM 1 — BLOCKING PR#5**. Poll `sched_find_pid()` in bounded loop before destructive umount. UAF trap: do NOT poll `THREAD_ZOMBIE` directly. Gate: `smoke-fsrm` 20/20. |
+| **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | One CI capture shard 2 | **ITEM 2 — ACTIVE FIX REQUIRED.** Read the DDR-968 artefact. Root-cause and fix. Do not wait for another CI red. |
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel | Unknown | **ACTIVE FIX.** Add instrumentation to `surfdestroy` path. Get a failing artefact. Root-cause and fix. |
+| **OPEN-2** | `smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake` intermittent | All `QEMU_SMP=4` gates — DDR-863 | **ACTIVE FIX.** These are SMP timing issues. Reproduce at `-smp 4` locally. Apply targeted fix from DDR-863. |
+| **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | Item-47 lost-thread failure seen through SFS probe | **ACTIVE FIX.** `smoke-sfs-btree-smp4` excluded. Reproduce, root-cause via DDR-880. Fix before ISO. |
+| **OPEN-11** | `smoke-sha256`, `smoke-rqstress-liveness` | Scratch LBA 1500 overwrote kernel image | **CLOSED — DDR-831.** Do not revisit. |
+| **Uninit PID** | `AGENT_OOM_KILLED` prints garbage PID | Uninitialised PID field in OOM path | **Fix in Group A** alongside demand-paged stack. |
+| **FAT32 large-file** | `execve` of large musl ELF corrupts | multi-cluster `read_cluster_chain` bug (ADR-024) | **Fix in Group B.** Do not wait. |
+| **Dependabot** | 5 alerts (2 high, 3 moderate) | Third-party deps | **Triage and fix the 2 high-severity ones.** Moderate: fix if quick, else log. |
+| **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | **MUST be fixed before ISO.** This is BLOCKING the release. Active work required. |
+| **smoke-smpuser B#3** | `[smp] user on AP OK` never appears | Scheduler starvation (DDR-777 branch B) | **Measure g_ticks stamps at main.c:1134 and main.c:1311.** Gap predicts which branch. Fix from artefact. |
 
 ---
 
@@ -192,19 +240,20 @@ were fixed in DDR-964.
   Attribution stays open; awaiting a CI red to read.
 - Overall completion: ~79% (~66+ items remain across all groups)
 
-**ITEM 3 (merge PR #5) is HELD by explicit operator instruction** given in
-session, overriding the ordering below: engineering work proceeds, but PR #5 is
-**not** merged, `dev/phase1` is **not** promoted to `main`, and `v1.0.0` is
-**not** tagged, until the operator says otherwise. A future session must not
-merge on the strength of §BACKLOG alone.
+**PR #5 MERGE HOLD: LIFTED (operator directive 2026-08-22).**
+Merge as soon as 3 consecutive CI greens on the same tip SHA. No further
+operator confirmation required.
 
 ---
 
-## BACKLOG — WORK IN THIS EXACT ORDER
+## BACKLOG — WORK IN THIS ORDER, PARALLELIZE ACROSS GROUPS WHEN CI IS RUNNING
 
 Do not start item N+1 until item N is CI-green (3 greens on same tip SHA).
 After EACH group: re-run the FULL gate suite before advancing.
 Zero uncommitted stale files at the end of every group.
+
+**PARALLELISM RULE:** When CI is running on any item, immediately begin code
+work on the next group's items in a scratch branch. Merge when CI clears.
 
 ---
 
@@ -226,18 +275,20 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 
 ### ITEM 2 — Resolve smoke-agents (preempt frozen / rqdepth=11)
 
-1. Add `[aether] roster_check rqdepth=%d` at the roster publish stall point
-2. Add `[aether] agent_sched_begin` / `agent_sched_end` brackets
-3. Push, wait for CI capture
-4. Fix only with a named mechanism from a real artefact
-5. If 3 CI runs pass clean with no recurrence → record as "not reproduced,
-   instrumented" and move on
+**Active fix required — do not wait for another CI red:**
+1. Read the DDR-968 artefact now — the instrumentation is already live.
+2. Root-cause the rqdepth=11 stall from the existing witness data.
+3. Fix the scheduler/AETHER interaction causing the freeze.
+4. Gate: `smoke-agents` 3× CI green.
+5. If the artefact is ambiguous after 2 independent approaches: add one more
+   instrument, push, harvest next CI run, then fix.
 
 ### ITEM 3 — Merge PR #5 into `dev/phase1`
 
 - 3 consecutive CI greens on the SAME tip SHA (`gh run rerun` for the third)
 - `ci-shard-check` green, `ci-probe-rodata-check` green
 - Remove draft status, then **squash-merge** into `dev/phase1`
+- **HOLD IS LIFTED** — merge immediately when greens are confirmed.
 
 ---
 
@@ -260,6 +311,8 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | Per-CPU `sched_exit` / zombie reap under full SMP | — | existing SMP gates |
 | `smoke-rqstress` determinism | 20× green before moving on | `smoke-rqstress` 20× |
 | Spinlock contention instrumentation | `lock_stat` hold-time + contention counts | `smoke-lockstat` |
+| **B#3 virtio-blk SMP stall fix** | **BLOCKING ISO.** Root-cause the `-smp 4` completion stall per DDR-806. Measure g_ticks stamps first. | `smoke-smp` 20× |
+| **smoke-smpuser fix** | Measure g_ticks at main.c:1134 and main.c:1311. Branch (B) = large gap → scheduler starvation fix. | `smoke-smpuser` |
 
 ---
 
@@ -268,20 +321,19 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | Item | Detail | Gate |
 |---|---|---|
 | Provisioned SFS as default boot root | Gate `sfs_format` at `main.c:1128` behind `probe_enabled()`. Update the 12 gates asserting on `[sfs]` self-test sentinels. | `smoke-sfs-boot-root` |
-| FAT32 multi-cluster read fix | `execve` of large musl-C ELF corrupts — root-cause via `read_cluster_chain` for >1-cluster ELFs. Probe: `fat32_multicluster.c`, pattern 7n+3 across cluster boundary. (Open since ADR-024) | `smoke-fat32-multicluster` |
+| **FAT32 multi-cluster read fix** | `execve` of large musl-C ELF corrupts — root-cause via `read_cluster_chain` for >1-cluster ELFs. Probe: `fat32_multicluster.c`, pattern 7n+3 across cluster boundary. (Open since ADR-024) **ACTIVE FIX.** | `smoke-fat32-multicluster` |
 | SFS on-disk free-tree persistence | — | `smoke-sfs-persist` |
 | SFS B+tree CoW GC | — | `smoke-sfs-gc` |
 | SFS extent overflow / large files | — | `smoke-sfs-largefile` |
 | `mkfs.sfs` >512 slots / deeper trees | — | `smoke-sfs-deepslot` |
 | SFS free-space quotas / per-mount limits | — | `smoke-sfs-quota` |
-| B#4 SFS default root | Same as first item above | — |
 | B#6 ext4 write | — | `smoke-ext4-write` |
 | B#9 I/O APIC (storage path) | Depends on Group A I/O APIC item | `smoke-ioapic` |
 | B#10 NUMA affinity | — | `smoke-numa` |
 | B#14 NAS 3-lane storage scheduler | — | `smoke-nas` |
 | B#15 PMM policy | — | `smoke-pmmpolicy` |
 | B#1 NVMe IRQ | On hold until B#3 SMP is fully stable (DDR-774a/b/c) — resume when safe | `smoke-nvmeirq` |
-| B#3 virtio-blk SMP stall | Fix the `-smp 4` completion stall (DDR-806) before ISO | `smoke-smp` 20× |
+| **OPEN-10 B+tree SMP fix** | `btree churn FAIL` from lost-thread via SFS probe. Root-cause via DDR-880. Active fix required. | `smoke-sfs-btree-smp4` |
 
 ---
 
@@ -309,12 +361,11 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | `SYS_MPROTECT` | — | `smoke-mprotect` |
 | `SYS_POLL` | — | `smoke-poll` |
 | `SYS_FUTEX` | — | `smoke-futex` |
-| `pthread` / ring-3 threading | `clone(CLONE_VM\|CLONE_FILES\|CLONE_THREAD)` | `smoke-pthreads` |
+| `pthread` / ring-3 threading | `clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)` | `smoke-pthreads` |
 | 6-arg `sys_mmap` ABI widening | — | `smoke-mmap6` |
 | `mmap` file-backed mappings | page-fault handler, dirty tracking, `msync` | `smoke-mmap-file` |
 | Dynamic linking | `ld.so` / musl dynamic linker, `.so` in ELF loader | `smoke-dynlink` |
 | `io_uring` completions | `OP_FSYNC`, `OP_OPENAT`, eventfd, SQE chaining | `smoke-iouring` |
-| `epoll` blocking wait | Park caller, wake on readiness | see epoll above |
 | `SYS_SIGACTION` full POSIX | `SA_RESTART`, `SA_SIGINFO`, `sigprocmask`, `sigaltstack`, `SIGCHLD` | `smoke-sigaction` |
 | PRISM `ls -R` / `ps` full | open-fd listing, recursive ls, signal-mask display | `smoke-prism-ls` |
 | B#12 PRISM job control | `$?`/SIGPIPE ✅ — remaining: full job control, `&`, `wait`, `fg`/`bg` | `smoke-jobctl` |
@@ -337,6 +388,7 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | Compositor double-map `PTE_SW_SHARED` audit | — | `smoke-sharedpte` |
 | OKLab horizon bands / animated mesh | DDR-716 deferred mesh + horizon bands | `smoke-horizon` |
 | vDSO callable reader (`vdso_entry.asm`) | ring-3 seqlock reader (IMP-C) | `smoke-vdso-read` |
+| **OPEN-1 fix** | `smoke-surfdestroy` intermittent. Add instrumentation. Get artefact. Root-cause. Fix. Active. | `smoke-surfdestroy` 20× |
 
 ---
 
@@ -369,17 +421,18 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | F#74 capability discovery | ⬜ not started | `smoke-capdiscovery` |
 | F#75 lineage memory | ⬜ not started | `smoke-lineage` |
 | F#76 tamper-evident ledger | ⬜ not started | `smoke-ledger` |
-| Section G: 4 remaining roster slots | subconscious, ai_scientist, architect, tournament — add kernel roster slot first, then skill.md, then gate | `smoke-g-slots` |
-| `CAP_OCR` (1<<19) wiring + enforcement gate | Needs OCR path. If no feasible path by deadline: log as "deferred, CAP defined" | `smoke-capocr` |
+| Section G: 4 remaining roster slots | subconscious, ai_scientist, architect, tournament | `smoke-g-slots` |
+| `CAP_OCR` (1<<19) wiring + enforcement gate | — | `smoke-capocr` |
 | `CAP_EXEC` (1<<20) wiring | Wire so `shell_agent` (PRAX) is spawnable | `smoke-capexec` |
 | `CAP_SCENE` (1<<22) wiring | Wire so `vision_agent` (IRIS) is spawnable | `smoke-capscene` |
-| `CAP_NET_BROWSE` (1<<23) wiring | Wire so `research_agent` (LUMYN) is spawnable. NOTE: `ACTION_BROWSE_WEB` deferred (DDR-793) but the cap enforcement gate is not | `smoke-capnetbrowse` |
+| `CAP_NET_BROWSE` (1<<23) wiring | Wire so `research_agent` (LUMYN) is spawnable | `smoke-capnetbrowse` |
 | Make PRAX (shell_agent) spawnable | After CAP_EXEC wired | `smoke-prax` |
 | Make LUMYN (research_agent) spawnable | After CAP_NET_BROWSE wired | `smoke-lumyn` |
 | Make AHNIS (ocr_agent) spawnable | After CAP_OCR wired | `smoke-ahnis` |
 | Make IRIS (vision_agent) spawnable | After CAP_SCENE wired | `smoke-iris` |
 | RUFLO (healer_agent) spawnable | — | `smoke-ruflo` |
-| S3 + S7 invariant arms | Depend on F#66–F#72 — build those first | extend `smoke-invariants` |
+| S3 + S7 invariant arms | Depend on F#66–F#72 | extend `smoke-invariants` |
+| **OPEN-2 SMP intermittent fix** | `smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake`. Root-cause DDR-863 SMP issues. Active fix. | 20× each |
 
 ---
 
@@ -464,9 +517,11 @@ Every box must be checked before the deadline:
 - [ ] `docs/AETHER_MASTER_FEATURES.md` fully up to date
 - [ ] `docs/BUILD_TRACKER.md` fully up to date
 - [ ] `SESSION_HANDOFF.md` updated on every commit
-- [ ] PR #5 squash-merged into `dev/phase1` (3 CI greens)
+- [ ] PR #5 squash-merged into `dev/phase1` (3 CI greens) ← HOLD LIFTED
 - [ ] `dev/phase1` fast-forwarded to `main` (3 CI greens on same tip)
 - [ ] All Groups A–H CI-green or pre-approved-excepted
+- [ ] All open issues (OPEN-1, OPEN-2, OPEN-10, B#3, FSRM, smoke-agents, uninit-PID,
+      FAT32 multi-cluster, Dependabot highs) CLOSED
 - [ ] x86_64 ISO built and bootable
 - [ ] aarch64 ISO built and bootable
 - [ ] riscv64 ISO built and bootable
@@ -476,7 +531,7 @@ Every box must be checked before the deadline:
 **ISO must be testable by 2026-08-24. v1.0.0 tag on main by 2026-08-24 23:59 UTC.**
 **After v1.0.0 is tagged: begin Phase 10 (Quantum Layer) immediately.**
 
-**Begin with Phase 1 Item 1 (FSRM fix). Do not stop.**
+**Begin with Phase 1 Item 1 (FSRM fix). Parallelize across groups. Do not stop.**
 
 ---
 
