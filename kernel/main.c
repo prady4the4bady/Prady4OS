@@ -2851,7 +2851,7 @@ void kmain(struct boot_info *bi) {
     fwcfg_init();
 
     /* Phase 3: hardware discovery + first device driver. */
-    acpi_init();
+    acpi_init((uint64_t)bi->acpi_rsdp);   /* DDR-978: 0 on the BIOS path */
     numa_init();      /* DDR-882 (item 17a): SRAT topology, needs ACPI first */
     pmm_numa_rebucket();  /* 17b: re-file the free lists onto their nodes */
     /* DDR-882 (item 17b) probe. Parsing SRAT proves nothing about ALLOCATION:

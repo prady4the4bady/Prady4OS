@@ -27,7 +27,7 @@ struct e820_entry { uint64_t base, len; uint32_t type, acpi; };
 struct boot_info {
     uint32_t magic, e820_count;
     char     cpu_vendor[16];
-    uint32_t long_mode, reserved;
+    uint32_t long_mode, acpi_rsdp;   /* DDR-978: was `reserved` */
     struct e820_entry e820[];
 };
 _Static_assert(sizeof(struct e820_entry) == 24, "e820 entry must stay 24 bytes");
@@ -145,14 +145,66 @@ static void load_kernel(EFI_BOOT_SERVICES *bs, EFI_HANDLE image) {
  * anything else as free hands the PMM memory the firmware still owns
  * (DDR-886 §3.4).
  */
+/* DDR-978: the ACPI RSDP, from the EFI Configuration Table.
+ *
+ * The kernel's other discovery path scans 0xE0000..0xFFFFF, which is where
+ * SeaBIOS puts the RSDP and where OVMF does not. Without this the kernel finds
+ * no ACPI at all under UEFI: no MCFG (so PCIe enumerates NOTHING -- no disk, no
+ * net, no GPU), no MADT (no APs), no FADT (no S5 poweroff). Measured in
+ * DDR-978 §3.
+ *
+ * Prefer the ACPI 2.0 GUID (XSDT-capable) and fall back to ACPI 1.0. Returns 0
+ * if absent, or if the address does not fit the 32-bit handoff field -- refusing
+ * is correct there, because a truncated pointer would send the kernel to a wild
+ * address whereas 0 simply restores the legacy scan. */
+static int guid_eq(const EFI_GUID *a, const EFI_GUID *b) {
+    const unsigned char *x = (const unsigned char *)a, *y = (const unsigned char *)b;
+    for (int i = 0; i < 16; i++)
+        if (x[i] != y[i]) return 0;
+    return 1;
+}
+
+static uint32_t find_acpi_rsdp(void) {
+    if (!ST || !ST->config_table)
+        return 0;
+    EFI_GUID g20 = EFI_ACPI_20_TABLE_GUID;
+    EFI_GUID g10 = EFI_ACPI_10_TABLE_GUID;
+    void *best = 0;
+    for (uint64_t i = 0; i < ST->num_table_entries; i++) {
+        EFI_CONFIGURATION_TABLE *e = &ST->config_table[i];
+        if (guid_eq(&e->vendor_guid, &g20)) { best = e->vendor_table; break; }
+        if (guid_eq(&e->vendor_guid, &g10) && !best) best = e->vendor_table;
+    }
+    uint64_t pa = (uint64_t)(uintptr_t)best;
+    if (!pa || pa > 0xFFFFFFFFull)
+        return 0;
+    return (uint32_t)pa;
+}
+
+/* DDR-978: the loader zeroed cpu_vendor and never filled it, so a UEFI boot
+ * printed "NEXUS: boot_info OK vendor=" with an empty string while the BIOS path
+ * printed AuthenticAMD. CPUID leaf 0 returns the 12-char vendor in EBX,EDX,ECX
+ * -- the same order stage2.asm:338-341 stores it in. */
+static void fill_cpu_vendor(char out[16]) {
+    uint32_t a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0));
+    (void)a;
+    const uint32_t w[3] = { b, d, c };
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 4; j++)
+            out[i * 4 + j] = (char)((w[i] >> (8 * j)) & 0xFF);
+    out[12] = 0; out[13] = 0; out[14] = 0; out[15] = 0;
+}
+
 static uint32_t fill_boot_info(EFI_MEMORY_DESCRIPTOR *map, uint64_t map_size,
                                uint64_t desc_size) {
     struct boot_info *bi = (struct boot_info *)BOOT_INFO_PHYS;
     bi->magic = BOOT_MAGIC;
     bi->long_mode = 1;
-    bi->reserved = 0;
+    bi->acpi_rsdp = find_acpi_rsdp();        /* DDR-978; 0 => kernel scans */
     for (int i = 0; i < 16; i++)
         bi->cpu_vendor[i] = 0;
+    fill_cpu_vendor(bi->cpu_vendor);         /* DDR-978: was left empty */
 
     uint32_t n = 0;
     /* desc_size, NOT sizeof(EFI_MEMORY_DESCRIPTOR) — the firmware reports its

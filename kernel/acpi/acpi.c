@@ -38,8 +38,34 @@ static const struct rsdp *find_rsdp(void) {
     return 0;
 }
 
-void acpi_init(void) {
-    const struct rsdp *r = find_rsdp();
+/* DDR-978: validate a loader-supplied RSDP before trusting it. Same signature
+ * and checksum test find_rsdp() applies to the legacy window, so a garbage,
+ * truncated or stale value is rejected and we fall back rather than following a
+ * wild pointer into whatever is mapped there. */
+static const struct rsdp *validate_rsdp(uint64_t pa) {
+    if (!pa)
+        return 0;
+    const char *p = (const char *)(uintptr_t)pa;
+    if (memcmp(p, "RSD PTR ", 8) != 0 || sum8(p, 20) != 0)
+        return 0;
+    return (const struct rsdp *)p;
+}
+
+void acpi_init(uint64_t rsdp_hint) {
+    /* DDR-978: prefer the address the boot loader handed us. UEFI firmware
+     * publishes the RSDP through the EFI Configuration Table and is NOT obliged
+     * to mirror it into 0xE0000..0xFFFFF -- OVMF does not -- so on the UEFI path
+     * the legacy scan below finds nothing and the kernel ends up with no MCFG
+     * (PCIe enumerates zero devices), no MADT and no FADT. The BIOS path passes
+     * 0 here and is unaffected. */
+    const struct rsdp *r = validate_rsdp(rsdp_hint);
+    if (r) {
+        kputs("ACPI: RSDP from loader\r\n");
+    } else {
+        if (rsdp_hint)
+            kputs("ACPI: loader RSDP rejected (bad signature/checksum)\r\n");
+        r = find_rsdp();
+    }
     if (!r) {
         kputs("ACPI: RSDP not found\r\n");
         return;

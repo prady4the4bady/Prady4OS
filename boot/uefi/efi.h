@@ -85,7 +85,24 @@ typedef struct {
     void *std_err;
     void *runtime_services;
     EFI_BOOT_SERVICES *boot_services;
+    /* DDR-978: the two UEFI-spec fields that follow boot_services. This struct
+     * previously stopped above, so the ACPI RSDP the firmware publishes here was
+     * unreachable -- see DDR-978 §3.1. Read-only extension into a table the
+     * firmware already provides; nothing before these offsets moves. */
+    uint64_t num_table_entries;
+    struct EFI_CONFIGURATION_TABLE *config_table;
 } EFI_SYSTEM_TABLE;
+
+typedef struct EFI_CONFIGURATION_TABLE {
+    EFI_GUID vendor_guid;
+    void    *vendor_table;
+} EFI_CONFIGURATION_TABLE;
+
+/* ACPI 2.0+ points at an XSDT-capable RSDP; ACPI 1.0 is the RSDT-only fallback. */
+#define EFI_ACPI_20_TABLE_GUID \
+    { 0x8868e871, 0xe4f1, 0x11d3, { 0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81 } }
+#define EFI_ACPI_10_TABLE_GUID \
+    { 0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } }
 
 /* Loaded image -> the device we were loaded from, so the kernel can be read off
  * the same volume rather than a hard-coded one. */

@@ -1077,10 +1077,21 @@ smoke-iso-userspace: iso
 	@if grep -qiE '\[panic\]|KERNEL PANIC' build/iso_user.log; then echo "[iso-user] FAIL: kernel panic"; tail -30 build/iso_user.log; exit 1; fi
 	@echo "[iso-user] PASS — ISO boots a live OS: SFS root + PRISM + AETHER agent + write/read/delete round-trip"
 
+# DDR-978: the old assertions were `[uefi] handoff` + the E820 line, and BOTH are
+# true of a machine with ZERO PCI devices. That is exactly what this gate was
+# passing on: under OVMF the kernel found no RSDP (firmware publishes it via the
+# EFI Configuration Table, not the legacy 0xE0000 window), so no MCFG, so PCIe
+# enumerated NOTHING -- no disk, no net, no GPU -- and no MADT, so no APs. The
+# ISO "worked" only because DDR-972's ramdisk fallback fires on blk_count()==0,
+# the very condition the defect creates. Fourth vacuous gate in this project
+# (DDR-971, DDR-973 sec.6, DDR-880's harness-echo detector).
+#
+# The FORBIDDEN sentinels are the discriminating half: each is the literal line
+# the broken path printed, so a regression fails here instead of passing.
 smoke-uefi: esp-image
 	TIMEOUT_S=90 QEMU_UEFI=1 \
-	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010')" \
-	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL')" \
+	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010\nACPI: RSDP from loader\nACPI: FADT ok\nPCIe: ECAM')" \
+	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL\nACPI: RSDP not found\nPCIe: no MCFG table\nACPI: loader RSDP rejected')" \
 	    bash tools/qemu_runner/boot_test.sh $(ESP_IMG)
 
 smoke-numa-alloc: $(IMG) fat-image sfs-image
