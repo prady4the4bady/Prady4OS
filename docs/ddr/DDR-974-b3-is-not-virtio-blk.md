@@ -97,7 +97,33 @@ ships — so the rates are not directly comparable and the table says which is
 which. The lost-thread signature is visible either way, because the
 `[boot-stamp]` prints are unconditional.
 
-### 3.1 Result — TO BE FILLED FROM THE CAMPAIGN
+### 3.1 Result — 20/20 pass, and the lost-thread signature did NOT recur
+
+| gate | runs | result |
+|---|---|---|
+| `smoke-rqstress` (`QEMU_SMP=4`, canonical kernel) | **20** | **20 pass / 0 fail** |
+
+Signature check on all 20 kept serial logs (`build/gatelogs/rq_serial<N>.log`),
+not just the gate's exit code:
+
+```text
+run  1..20   A=1  C=1  B=1   [smp] rqstress OK = 1     (all 20, no exceptions)
+runs deviating from A=1 C=1 B=1 rqstressOK=1 : 0
+churn FAIL      0/20
+rqstress FAIL   0/20
+[BUG]           0/20
+```
+
+**Item 47's lost-thread signature (`A` present, `B` absent) did not occur once in
+20 runs.** Every boot reached all three stamps and printed the proof. Against
+DDR-878's 2/40 (5%) baseline on the `BSP_LIVENESS` build, 0/20 on the canonical
+kernel is consistent with DDR-964 having closed item 47 along with OPEN-10 —
+though 0/20 alone would occur ~36% of the time even at an unchanged 5% rate, so
+this supports that reading without establishing it. It is **not** grounds to
+call item 47 fixed; it is grounds to stop treating it as the active blocker.
+
+**But the same 20 logs contain something this DDR did not go looking for**, and
+it changes §5 — see the correction there and DDR-976.
 
 Per-run serial logs are kept at `build/gatelogs/rq_serial<N>.log`. For any
 failure, the diagnosis is already instrumented and needs no new probe:
@@ -143,9 +169,32 @@ All four land in the same commit as §3.1's numbers, once the campaign finishes.
    hypothesis, in the one place a future reader is most likely to trust it. The
    instrument itself is useful and stays; only the framing changes. To correct.
 
-## 5. What would reopen a virtio-blk diagnosis
+## 5. What would reopen a virtio-blk diagnosis — **IT HAS BEEN REOPENED**
 
-A `[vblk] slot wait list depth>=2` line, a `[vblk] compl wait timeout` or
-`[vblk] slot wait timeout`, or a stall whose last `[boot-load]` line names a load
-that is still mid-I/O. None of those has been seen. Absent one, changing
-`virtio_blk.c` for B#3 would be a fix without a mechanism — §NON-NEGOTIABLE 3.
+> **CORRECTION, same session, a few hours after this DDR was committed.** This
+> section originally read: *"A `[vblk] slot wait list depth>=2` line, a
+> `[vblk] compl wait timeout` or `[vblk] slot wait timeout` … **None of those has
+> been seen.**"* That last sentence was **wrong**, and it was wrong at the moment
+> I wrote it — I had not looked. The §3 campaign then looked, and found
+> `[vblk] compl wait timeout` in **17 of 20 runs, 301 occurrences in total**.
+> The condition this section set for reopening a virtio-blk diagnosis is met.
+> See **DDR-976** for the measurement and what it does and does not show.
+
+The trigger conditions, restated: a `[vblk] slot wait list depth>=2` line
+(**still 0/20** — DDR-878's precondition witness genuinely does not fire), a
+`[vblk] compl wait timeout` (**301/20 runs — FIRING**), a
+`[vblk] slot wait timeout` (**still 0/20**), or a stall whose last `[boot-load]`
+line names a load that is still mid-I/O.
+
+**What §1–§4 of this DDR still hold.** DDR-878 ruled out *one specific defect* —
+the single `slot_waiter` pointer — as the cause of the *lost-thread flake*, and
+that ruling stands: the precondition witness fires zero times here too, and the
+lost-thread signature did not recur in 20 runs (§3.1). What DDR-878 never
+measured, and what this DDR wrongly generalised from it, is **the completion
+timeout rate on an ordinary `-smp 4` boot**. "The block *gates* are green" and
+"block I/O never times out" are different claims. The first is true; the second
+is false.
+
+So the B#3 row's *mechanism* is no longer refuted — it is, on this evidence,
+closer to right than the correction I was in the middle of making. §4's planned
+edits are withdrawn pending DDR-976.
