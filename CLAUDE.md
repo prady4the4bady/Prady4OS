@@ -94,10 +94,17 @@ reentrant calls. **Do NOT revert this pattern.**
 - **Item 47 (g_ticks stall):** NEVER guess a fix. Capture from
   `[boot-load]`/`[boot-stamp]` instrument first. Gap≈0 → LAPIC not firing.
   Gap large+advancing → scheduler starvation.
-- **Item 48 (virtio-blk workers-late):** per DDR-966: root cause was
-  `sched_create_blocked()` — 8 sites in `main.c`. Already fixed. If
-  `workers-late` reappears: `reason=workers-late` → scheduling issue;
-  `reason=checksum-mismatch` → driver bug.
+- **Item 48 (virtio-blk workers-late):** two DDRs were conflated here; the
+  repo's own DDRs are authoritative. DDR-966 is **not** `sched_create_blocked()`.
+  - **DDR-966 (Item 48)** — `blkmq_proof` and `smp_blk_integrity` spawned workers
+    and never called `smp_resched_all()`, so idle APs stayed halted while the BSP
+    burned its deadline. `spawned=2/2` in every capture REFUTES the older
+    `sched_create`-NULL attribution, and no KASSERT was added.
+  - **DDR-964 (OPEN-10)** — that is the `sched_create_blocked()` DDR, 8 sites in
+    `main.c`, a create-then-init race. Different defect, different item.
+  If `workers-late` reappears: `reason=workers-late` → scheduling issue;
+  `reason=checksum-mismatch` → driver bug (and only then is a virtio-blk change
+  permitted).
 
 ### §INV.3 — Stray-QEMU (DDR-823)
 `pgrep qemu-system-x86_64` → **zero matches always** (15-char comm truncation).
@@ -172,14 +179,24 @@ were fixed in DDR-964.
 
 ## CURRENT BUILD STATE
 
-- PR #5 tip: `778416c` — draft, 42 commits
+- PR #5 tip: `ea4601e` — draft, base `dev/phase1`
 - `make image` → zero warnings, **147 gates**, `kernel.bin` 1,053,054 B ✅
 - NSI max: **93**. Next free: **94**. Gate count: **147** assigned, 6 excluded.
 - Three intermittents fixed: OPEN-10 (DDR-964), smoke-cadence (DDR-965),
   Item 48 (DDR-966)
-- FSRM: root-caused, **not yet fixed** ← blocking PR merge
-- smoke-agents preempt frozen: one CI capture, instrumentation not yet added
+- FSRM: **FIXED — DDR-967**, `smoke-fsrm` 20/20 local, 0 wait expiries
+  (kernel `612cde9b9761319e`). Local green is no-regression only; FSRM has never
+  reproduced locally, so closure is still CI over time.
+- smoke-agents: **instrumented — DDR-968**, no fix (§6.0-B). The witness
+  predicate now prints as `PRADYOS_AGENT_WITNESS_WAIT pid= disp= state= n=`.
+  Attribution stays open; awaiting a CI red to read.
 - Overall completion: ~79% (~66+ items remain across all groups)
+
+**ITEM 3 (merge PR #5) is HELD by explicit operator instruction** given in
+session, overriding the ordering below: engineering work proceeds, but PR #5 is
+**not** merged, `dev/phase1` is **not** promoted to `main`, and `v1.0.0` is
+**not** tagged, until the operator says otherwise. A future session must not
+merge on the strength of §BACKLOG alone.
 
 ---
 

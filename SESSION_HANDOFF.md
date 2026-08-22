@@ -6359,3 +6359,70 @@ that same SHA. Do not read "both suites green" as satisfying §3, and do not rea
 greens on consecutive different tips as satisfying it either (§3 rules that out
 explicitly). Whoever promotes should re-run the workflow once more on the final
 tip rather than assume the count is met.
+
+---
+
+## CHECKPOINT — ITEM 1 (FSRM) and ITEM 2 (smoke-agents) both shipped
+
+Branch `dev/phase1-seyp3n`, tip `ea4601e`. PR #5 open, DRAFT, base `dev/phase1`.
+
+### What landed
+
+| commit | item | what |
+|---|---|---|
+| `b0c7c20` | ITEM 1 | **DDR-967** — `fs_test_thread` records each SFS-rooted probe's pid and waits on `sched_find_pid()` before the destructive umount+reformat |
+| `ea4601e` | ITEM 2 | **DDR-968** — the `smoke-agents` witness predicate is printed; **no fix** |
+
+`ab239c2` (the operator's CLAUDE.md v2) landed on the branch between the two;
+`ea4601e` is rebased on top of it. Nothing was force-pushed.
+
+### Measurements (R1)
+
+**DDR-967**, kernel `612cde9b9761319e` (1,053,054 B): `smoke-fsrm` **20/20**,
+`smoke-ftruncate` PASS, `smoke-rename-sfs` PASS, `smoke-shell` **5/5**, §7
+hygiene set green. **`expired=0` across all 28 runs** — the load-bearing number,
+because it says the bounded wait's fall-through never fires and so is not
+quietly restoring the old ordering.
+
+**DDR-968**, kernel `9601985a5c5bc75c` (1,053,054 B): `smoke-agents` 4/4,
+`smoke-shell` **5/5**, `smoke-compositor`, `smoke-agentpanel`,
+`smoke-agentmetrics`, and the §7 hygiene set all green.
+
+### Three things a next session should not have to re-derive
+
+1. **The DDR-968 instrument was verified by disarming the predicate.** A green
+   boot arms the witness on its first evaluation and prints **zero** lines, so a
+   passing gate exercises none of the new code. It was proved separately with a
+   throwaway build (`dispatches >= 1000000`), which produced the specified 24
+   lines at 128-frame spacing and a real post-mortem read
+   (`pid=82 disp=1 state=0`). Throwaway reverted; revert verified by hash.
+2. **A fifth-signature discriminator has decayed.** `build_status` compares CI's
+   failing `rqdepth=11` against a local passing max of 6. On the current kernel a
+   *passing* local run reaches **12**. Queue depth no longer discriminates;
+   only the frozen `preempt` counter does. Read the next red against that alone.
+3. **Never run `smoke-agent-live` in a regression sweep.** It is CI-excluded
+   (`tools/ci/shard_check.sh:41`, needs a live Ollama endpoint), it fails
+   correctly without one, and its recipe *deletes `build/kernel.bin`* and
+   rebuilds with `AETHER_TEST_MODE=0` — silently replacing the kernel under
+   measurement. It did exactly that here; the canonical image was rebuilt and
+   hash-checked before the remaining gates ran.
+
+### CLAUDE.md v2 corrections made in this session
+
+`§INV.2` attributed Item 48 to `sched_create_blocked()` "per DDR-966". That
+conflates two DDRs: DDR-966 is the missing `smp_resched_all()` in `blkmq_proof`
+and `smp_blk_integrity`; `sched_create_blocked()` (8 sites) is **DDR-964**, a
+different defect under a different item. Corrected in place, with the repo's
+DDRs cited as authoritative. The stale CURRENT BUILD STATE block was refreshed.
+
+### ITEM 3 is HELD — do not merge
+
+The operator instructed **engineering only, no merge** in session. PR #5 stays a
+draft, `dev/phase1` is not promoted to `main`, and `v1.0.0` is not tagged, until
+the operator lifts that. This overrides the §BACKLOG ordering, which still lists
+ITEM 3 as next. A future session must not merge on the strength of that file.
+
+### NEXT ACTION (one sentence)
+CI is running on `b0c7c20`/`ea4601e`; while it does, begin PHASE 2 GROUP A's
+first item (demand-paged user stack, gate `smoke-lazystack`) with its DDR
+written before any code, per §NON-NEGOTIABLES 5.
