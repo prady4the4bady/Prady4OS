@@ -6548,3 +6548,20 @@ exists in the heartbeat: if `preempt` is frozen while `rqdepth` stays high, the
 scheduler is not preempting and this belongs with the DDR-936/947 run-queue
 work, not with the DDR-914 sampling race — those are different defects wearing
 the same missing sentinel.
+
+### Fifth-signature addendum — the same SHA passed concurrently
+
+`9231eab`'s **other** check suite came back fully green (all shards) while the
+one above was failing `smoke-agents` on shard 2. The same kernel, the same
+commit, both outcomes at once.
+
+That does not identify the defect, but it does move the attribution question:
+`9231eab` is **not deterministically broken**, which is what a regression
+introduced by this branch's changes would look like. Combined with 5/5 local
+passes and the absence of the frozen-`preempt` state locally, the weight is on a
+pre-existing intermittent surfacing under CI-runner conditions rather than on
+these commits — while still falling short of clearing them outright.
+
+This is the same non-determinism already recorded as the only surviving fact
+after "only pull_request-event runs fail" was refuted: the same SHA has been
+seen to pass and fail concurrently.
