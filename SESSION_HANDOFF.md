@@ -6651,3 +6651,109 @@ no PCI devices at all.
 - `[hb] … cputicks[c0,c1,c2,c3]` — per-CPU liveness, every boot, every `-smp`.
 
 ### Gate count 149. DDR free range: **DDR-980+** (973-979 allocated this session).
+
+---
+
+## CHECKPOINT 2026-08-22 23:2x UTC — DDR-981: B#3 and OPEN-2 are FIXED
+
+**Commit `d7a2912` on `dev/phase1-seyp3n` (PR #6).** This supersedes the
+"CPU 3 freeze — DDR-976/977" row in the intermittents table above and the
+"budget re-runs" caveat in Release state item 3: that intermittent was the
+dominant one, and it is gone.
+
+### Root cause
+
+`yield()` spun with `RFLAGS.IF` clear. `SYSCALL` entry masks interrupts via
+`MSR_SFMASK` (`syscall.c:229`) and the entry path deliberately never re-enables
+them (`syscall_entry.asm:46`). So every yield-spin reachable from ring 3 was a
+masked spin — `mnt_lock` (`vfs.c:27`), both pipe waits and the blocking console
+read (`sys_io.c:57/268/293`, i.e. PRISM's read loop), and `sys_yield`.
+`context_switch` preserves per-thread RFLAGS, so the mask is carried **across**
+the switch: two such threads on one CPU hand off to each other forever and never
+reach idle's `sti; hlt`. That CPU runs normally with interrupts off — its timer
+tick stops and block completions routed at it are never serviced.
+
+**Neither virtio-blk nor the LAPIC.** DDR-974/976/977 each cleared one wrong
+subsystem; this names the actual one.
+
+### How, so the method is reusable
+
+NMI, because it is the one interrupt that still reaches a CPU with IF clear. The
+AP stashes into its own `percpu` and the **BSP** prints — an AP wedged holding
+`g_line_lock` must never print. Three arms, each answering what the previous one
+could not:
+
+1. one shot → `masked=0 swen=1 isr48=0 irr48=1 tpr=0 if=0` refutes three of
+   DDR-977 §5's four candidates and confirms the fourth in one line;
+2. four shots + frame-pointer walk → pid and RSP **alternate**, so the CPU is
+   running-and-masked, not spinning (a single sample cannot tell these apart —
+   this is the DDR-977 §8 blind spot recurring, see DDR-981 §8);
+3. latch the first IF-clear `yield()` → `sys_yield`, which points at SFMASK.
+
+### Fix, and the one deliberately not taken
+
+An interrupt window in `yield()` — the one choke point all five sites share.
+Fixing `sys_yield` alone would **not** have fixed the observed livelock, whose
+threads were in `mnt_lock` under `vfs_read`. `sti` at SYSCALL entry is the
+textbook fix and is deliberately deferred post-1.0: the syscall layer is written
+against non-reentrancy (`sys_exec.c:10` depends on it for its CR3 swap).
+
+### Evidence
+
+| | boots | frozen AP | `compl wait timeout` |
+|---|---|---|---|
+| before | 14 | **6** | 5–11 per frozen boot, 0 otherwise |
+| after | **20** | **0** | **0** |
+
+`ymask` ≈ 6.1M/boot is the denominator (R17). Kernel
+`d4b39c96a98ba2fead60d3eb23f37b9f4b5b739500f94f9eb401702552b83b22` (R1). Logs in
+`build/gatelogs/apfreeze-fixed-{a,b}/`. Mutation-checked: fix removed →
+`smoke-blk-integrity` RED on the first run, named by `[apfreeze]`.
+
+### Gate lesson — worth carrying forward
+
+`smoke-smp` and `smoke-rqstress` each measured **20/20** at `-smp 4` while this
+defect was live. **The gates did not catch it.** The evidence was
+`[vblk] compl wait timeout` sitting in serial logs nothing asserted on.
+`[apfreeze]` is now in `GLOBAL_FORBIDDEN`, chosen over ~20 recipe edits because
+it preserves every gate's DDR-785 early-exit eligibility. Stated limit: a gate
+that early-exits before ~tick 1000 will not see the line — which does not bite,
+since every SMP/block gate the freeze reddens already burns its full window.
+
+### Instruments now live (replaces the list above)
+
+- `[vblk] compl wait timeout unit= dest_cpu= dest_dticks= … ticks[…] on_cpu= lba=`
+- `[apfreeze] cpu= ticks= rip= cs= rflags= if= rsp= lvt= masked= svr= swen= tpr= isr48= irr48= pid= shot= bt=`
+  — **failure-path only**, ≤4 NMIs/boot, and in `GLOBAL_FORBIDDEN`.
+- `[hb] … ymask=` — masked-yield counter; the denominator for any "no freeze" claim.
+- The `[hb] cputicks[…]` instrument was removed by DDR-980 and stays removed.
+
+### CURRENT_ACTIVE_TASK — release sequence
+
+1. **CI on `d7a2912`.** The two suites that were in flight on `ccf81fb` are
+   superseded by this push; the 3-green accumulation restarts here. That is the
+   right trade: the greens being chased were on a kernel still carrying the
+   defect that made them probabilistic.
+2. 3 greens on one PR-#6 tip (§INV.15: a push yields 2 suites; the third needs
+   an explicit re-run on the same SHA) → squash-merge into `dev/phase1`.
+3. 3 greens on `dev/phase1` → fast-forward `main`.
+4. Re-run the DDR-978 manual ISO walkthrough on **main's own** ISO. `main` is
+   still `7c6c67a` and carries neither DDR-972 nor DDR-978, so tagging before
+   the merge would tag the DDR-971 image.
+5. Tag `v1.0.0`.
+
+### Still open (unchanged by this commit)
+
+- **OPEN-1** `smoke-surfdestroy` intermittent — needs an artefact.
+- **OPEN-12** ring-0 panic — 1/~24, 0/10 local; `run_shard.sh` now merges
+  streams so the next artefact is readable.
+- **OPEN-13** kheap double-free — `objsize=0x80` is a generic class; narrowing
+  needs per-object alloc/free return addresses, which must be opt-in.
+- `smoke-wmmax` intermittent, and its §INV.5 violation (hardcoded
+  `ABSX=5311 ABSY=5588` / `ABSX=15424 ABSY=725`) — repair as an invariant fix
+  with its own before/after run.
+- `lapic_timer_ap_arm()`'s silent `if (!g_lapic || g_timer_count == 0) return;`
+  — latent, not implicated here (a silent return gives ticks=0, and every frozen
+  AP had ticked into the hundreds first).
+
+### Gate count 149. DDR free range: **DDR-982+** (974-981 allocated this session).
