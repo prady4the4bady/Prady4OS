@@ -7097,3 +7097,73 @@ headroom, which bounds the first option.
 
 Also recorded: `xorriso` and OVMF were absent from the build container, so
 `make iso` had never been run here before today.
+
+---
+
+## The ISO now boots an OS — DDR-972 (fixes DDR-971)
+
+Kernel sha256 `9763ce7bb259de7e`. ISO unchanged in size (52,805,632 B) because
+nothing is embedded.
+
+### The fix is much smaller than DDR-971 §8 estimated
+
+DDR-971 sized three options against `kernel.bin`'s 519,810 B of headroom on the
+assumption a root image had to be **embedded**. Re-reading the build removed
+that assumption: `sfs-image` is `dd if=/dev/zero ... count=16` with the comment
+*"16 MiB blank — kernel formats in place"*. The SFS root is a blank device the
+kernel formats at boot, so nothing needs embedding — no `kernel.bin` growth, no
+stage-2 window raise, no PT_HI change, no loader contract, no build tooling.
+
+`kernel/drivers/blk/ramdisk.c`: a `blk_device` over one contiguous
+`pmm_alloc_pages()` allocation. Registered from `kmain` **only when
+`blk_count() == 0`**.
+
+### The guard was verified, not assumed
+
+Every gate boots through `boot_test.sh`, which attaches at least one
+virtio-blk disk, so the branch is unreachable for all of them. Checked rather
+than trusted: **`grep -c ramdisk` on a disk-backed `smoke-shell` boot returns 0**.
+
+### A correction measurement forced
+
+The first version registered one ramdisk. It mounted and the FS layer worked —
+`[fs] wrote /KOUT.TXT (17 bytes)`, verbatim readback, `created+deleted /TMP.TXT
+OK` — and **PRISM still did not start**, because userspace bring-up is gated on
+`blk_count() > 2` and uses `blk_get(2)`. Rather than relax a gate every other
+boot traverses, the fix mirrors the expected topology: blk0 small blank
+(stand-in for the unmountable boot disk), blk1 4 MiB SFS root, blk2 4 MiB blank
+scratch. No shared code changed.
+
+Worth recording: the single-ramdisk version *looked* correct — mount succeeded,
+files round-tripped. Only asking for `PRISM_READY` exposed it.
+
+### Result
+
+| DDR-971 probe | before | after |
+|---|---|---|
+| `[blk] no block device` | present | **gone** |
+| `mounted` | 0 | **3** |
+| `PRISM_READY` | 0 | **1** |
+| `aetherd` | 0 | **2** |
+| `[user] ELF loaded` | 0 | **26** |
+| serial length | 145 lines | **387 lines** |
+
+Observed over the ISO's own console: `uname` → `AuthenticAMD "QEMU Virtual CPU
+version 2.5+" cpus=1`; `free` → `total=114556K free=101992K used=12564K` (the
+`used` figure includes this fix's ~8.25 MiB); `ps` → a real table with
+`PRISM.ELF` pid 42 ppid 40 and `INIT.ELF` pid 40; a write→list→read→delete
+round-trip on the ISO's own root; the full AETHER chain through
+`aetherd: reaped PID=81 exit=0`; `PRADYOS_NET_LO_OK`; `PRADYOS_GPU_FB_OK
+1024x768 BGRA scanout0`.
+
+### New gate — the reason this cannot silently reopen
+
+`smoke-iso-userspace` (shard 1; **148 gates** now) drives PRISM over the ISO and
+asserts what the commands *do*. `smoke-iso-x86` keeps its narrower original job.
+Measured: `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity`, `smoke-fsrm`, `ci-shard-check`, `ci-probe-rodata-check`
+all green; build warning-clean at `-Werror`.
+
+**Limit:** the ramdisk root is volatile. Writes do not survive power-off. That is
+correct for a live ISO and belongs in the release notes rather than being
+implied otherwise.

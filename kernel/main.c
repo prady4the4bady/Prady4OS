@@ -475,6 +475,7 @@ void net_init(void);                             /* NET-B: lwip-port/pradyos_net
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
 void aether_selftest(void);
 void aether_sectest(void);
+int  ramdisk_init(unsigned order);    /* DDR-972: memory-backed root for the ISO */
 /* DDR-842: probe-gated audit-chain fault injection. main.c declares aether
  * entry points locally rather than including aether.h (see the three above). */
 void aether_audit_tamper(void);
@@ -2916,6 +2917,49 @@ void kmain(struct boot_info *bi) {
         if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
             nvme_init(d->bus, d->dev, d->func);
     }
+    /* DDR-972: no real disk means the ISO. Every one of the 147 gates boots
+     * through boot_test.sh, which attaches at least one virtio-blk-pci device,
+     * so blk_count() is never 0 for any of them and this branch is UNREACHABLE
+     * under the gate suite — that is the safety argument for the change, not a
+     * hope. The ISO is the only configuration that gets here.
+     *
+     * DDR-971 measured what happens without it: NEXUS KERNEL OK, then
+     * "[blk] no block device" / "[fs] no mountable filesystem found", then
+     * rqdepth=1 curpid=0 forever. Give the kernel a memory-backed root and the
+     * existing bring-up runs unchanged — fs_test_thread's vfs_mount loop finds
+     * it with no edit at all. */
+    if (blk_count() == 0) {
+        /* Mirror the DISK TOPOLOGY the boot path already expects, rather than
+         * relaxing the shared `blk_count() > 2` gate below — that gate is on
+         * the path all 147 gates traverse, and editing it to suit the ISO would
+         * put every one of them at risk to save three allocations.
+         *
+         *   blk0  small, left BLANK  — stands in for the boot disk, which is an
+         *                              MBR image and is not mountable either;
+         *                              fs_test_thread's loop skips it exactly as
+         *                              it skips the real one.
+         *   blk1  4 MiB, SFS         — the root PRISM and init get.
+         *   blk2  4 MiB, left BLANK  — the SFS scratch volume; the existing
+         *                              `blk_count() > 2` block formats it itself
+         *                              and later reformats it destructively.
+         *
+         * Order 6 = 256 KiB, order 10 = 4 MiB; ~8.25 MiB total against ~110 MiB
+         * free. */
+        ramdisk_init(6);                             /* blk0: boot-disk stand-in */
+        int rd_root = ramdisk_init(10);              /* blk1: the root           */
+        ramdisk_init(10);                            /* blk2: SFS scratch        */
+        if (rd_root >= 0) {
+            struct blk_device *rbd = blk_get((unsigned)rd_root);
+            /* Same call the SFS self-tests already make on blk_get(2). A blank
+             * device is what sfs-image ships too ("kernel formats in place"),
+             * so this is the established path, not a new one. */
+            if (rbd && sfs_format(rbd) == 0)
+                kputs("[ramdisk] formatted SFS — ISO root ready\r\n");
+            else
+                kputs("[ramdisk] SFS format FAILED — root unusable\r\n");
+        }
+    }
+
     rng_init();                          /* DDR-816: entropy, fail-closed */
     rng_selftest();                      /* DDR-816: two draws must differ */
     net_init();                          /* NET-B: bring up lwIP over virtio-net */

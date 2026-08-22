@@ -157,7 +157,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
-               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
+               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c \
                kernel/drivers/net/virtio_net.c kernel/drivers/net/e1000e.c kernel/drivers/net/netbuf.c \
                kernel/drivers/gpu/virtio_gpu.c \
                kernel/drivers/nvme/nvme.c kernel/drivers/ahci/ahci.c \
@@ -181,7 +181,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -216,7 +216,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -535,6 +535,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_pci.c   -o build/virtio_pci.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk.c             -o build/blk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/blk/ramdisk.c         -o build/ramdisk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/virtio_net.c     -o build/virtio_net.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/netbuf.c         -o build/netbuf.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/virtio_gpu.c     -o build/virtio_gpu.o
@@ -988,6 +989,71 @@ smoke-iso-x86: iso
 	@grep -q '\[uefi\] handoff' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm loader did not hand off"; tail -20 build/iso_uefi.log; exit 1; }
 	@grep -q 'NEXUS KERNEL OK' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm did not reach the kernel"; tail -20 build/iso_uefi.log; exit 1; }
 	@echo "[iso] UEFI arm OK — one ISO, both boot paths, same sentinel"
+
+# DDR-972 (fixes DDR-971): the ISO must boot an OS, not just a kernel.
+#
+# smoke-iso-x86 asserts NEXUS KERNEL OK, which prints at line 30 of 145 — about
+# 60 lines before userspace starts. DDR-971 measured an ISO that passed that
+# gate and then idled forever at rqdepth=1 curpid=0 with no PRISM, no aetherd
+# and no filesystem. This gate is what would have caught it, and what stops it
+# reopening: it drives the SHELL over the ISO's serial console and asserts on
+# what the commands actually DO.
+#
+# Fixtures differ from smoke-shell deliberately: the ISO root is a freshly
+# formatted SFS ramdisk and starts EMPTY, so there is no /HELLO.TXT to list.
+# The file this asserts on is one the gate creates itself, which is a stronger
+# check anyway — it proves a write reached the root and was read back.
+smoke-iso-userspace: iso
+	@echo "[iso-user] booting the ISO and driving PRISM..."
+	@SHIN=$$(mktemp -u /tmp/pradyos_iso.XXXXXX); rm -f build/iso_user.log; mkfifo "$$SHIN"; \
+	( exec > "$$SHIN"; \
+	  for i in $$(seq 1 600); do grep -q PRISM_READY build/iso_user.log 2>/dev/null && break; sleep 0.1; done; \
+	  sleep 1; \
+	  printf 'echo iso-live-marker-3f7\n'; sleep 0.6; \
+	  printf 'uname\n'; sleep 0.6; \
+	  printf 'free\n'; sleep 0.6; \
+	  printf 'uptime\n'; sleep 0.6; \
+	  printf 'ps\n'; sleep 0.6; \
+	  printf 'echo iso-file-content-9k2 > /ISOTEST.TXT\n'; sleep 0.8; \
+	  printf 'ls /\n'; sleep 0.8; \
+	  printf 'cat /ISOTEST.TXT\n'; sleep 0.8; \
+	  printf 'rm /ISOTEST.TXT\n'; sleep 0.8; \
+	  printf 'exit\n'; sleep 0.5 ) & \
+	timeout 180 qemu-system-x86_64 -machine q35 -cdrom $(ISO_IMG) -boot d \
+	    -device virtio-gpu-pci \
+	    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+	    -no-reboot -display none -monitor none \
+	    -serial stdio < "$$SHIN" > build/iso_user.log 2>/dev/null || true; \
+	rm -f "$$SHIN"
+	@# 1. the root actually mounted — the DDR-971 failure was its absence
+	@grep -q 'ramdisk. formatted SFS' build/iso_user.log || { echo "[iso-user] FAIL: no ramdisk root"; tail -20 build/iso_user.log; exit 1; }
+	@grep -qE '\[fs\] mounted' build/iso_user.log || { echo "[iso-user] FAIL: nothing mounted"; tail -20 build/iso_user.log; exit 1; }
+	@# 2. userspace came up
+	@grep -q 'PRISM_READY' build/iso_user.log || { echo "[iso-user] FAIL: PRISM never started"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'aetherd:' build/iso_user.log || { echo "[iso-user] FAIL: AETHER daemon never started"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'PRADYOS_AGENT_DONE' build/iso_user.log || { echo "[iso-user] FAIL: agent did not complete"; tail -30 build/iso_user.log; exit 1; }
+	@# 3. the shell RESPONDS — echo proves the console read a command and ran it
+	@grep -qF 'iso-live-marker-3f7' build/iso_user.log || { echo "[iso-user] FAIL: shell did not execute echo"; tail -30 build/iso_user.log; exit 1; }
+	@# 4. introspection builtins return their documented SHAPES, not just exit 0
+	@grep -qE 'uname: .*cpus='  build/iso_user.log || { echo "[iso-user] FAIL: uname"; exit 1; }
+	@grep -qE 'mem: total=[0-9]+K free=[0-9]+K used=[0-9]+K' build/iso_user.log || { echo "[iso-user] FAIL: free"; exit 1; }
+	@grep -qE 'uptime: [0-9]+s' build/iso_user.log || { echo "[iso-user] FAIL: uptime"; exit 1; }
+	@grep -qE 'PID +PPID S U +CPUms +DISP NAME' build/iso_user.log || { echo "[iso-user] FAIL: ps header"; exit 1; }
+	@# 5. a real write/read/delete round-trip on the ISO's own root. Three
+	@#    assertions, none sufficient alone: the file must LIST (it was created),
+	@#    its CONTENT must read back (the write reached the medium), and rm must
+	@#    confirm (delete works). A root that mounted read-only would pass none.
+	@grep -qE '(^|prism> )ISOTEST\.TXT$$' build/iso_user.log || { echo "[iso-user] FAIL: created file not listed"; tail -30 build/iso_user.log; exit 1; }
+	@grep -qF 'iso-file-content-9k2' build/iso_user.log || { echo "[iso-user] FAIL: content did not read back"; tail -30 build/iso_user.log; exit 1; }
+	@grep -qF 'rm: removed /ISOTEST.TXT' build/iso_user.log || { echo "[iso-user] FAIL: rm did not remove"; tail -30 build/iso_user.log; exit 1; }
+	@# 6. the graphics stack initialises from the ISO when a GPU is present, and
+	@#    a ring-3 client completes a surface lifecycle against it.
+	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; exit 1; }
+	@# 7. lwIP carries real loopback traffic — not just "the NIC linked up".
+	@grep -q 'PRADYOS_NET_LO_OK' build/iso_user.log || { echo "[iso-user] FAIL: no lwIP loopback traffic"; tail -30 build/iso_user.log; exit 1; }
+	@if grep -qiE '\[panic\]|KERNEL PANIC' build/iso_user.log; then echo "[iso-user] FAIL: kernel panic"; tail -30 build/iso_user.log; exit 1; fi
+	@echo "[iso-user] PASS — ISO boots a live OS: SFS root + PRISM + AETHER agent + write/read/delete round-trip"
 
 smoke-uefi: esp-image
 	TIMEOUT_S=90 QEMU_UEFI=1 \

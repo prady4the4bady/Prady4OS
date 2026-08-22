@@ -1,6 +1,6 @@
 # DDR-971 — Manual end-to-end verification of the built ISO: it boots a kernel, not an OS
 
-Status: ACCEPTED — **verification FAILED**. Number verified free in **both**
+Status: ACCEPTED — **verification FAILED; RESOLVED by DDR-972** (see §10). Number verified free in **both**
 `docs/ddr/` and `docs/decisions/` (§INV.4).
 Subject: `build/pradyos.iso` built from `main` @ `7c6c67a`.
 
@@ -151,3 +151,45 @@ tag — which is the substantive reason the tag waits rather than a procedural o
   configuration bug rather than a packaging gap. The ESP is a FAT image the UEFI
   loader reads via firmware services **before** handoff; the kernel has no
   driver that can reach it afterwards.
+
+
+## 10. RESOLVED — DDR-972
+
+Fixed by a PMM-backed ramdisk root (DDR-972). The walkthrough was re-run on the
+rebuilt ISO, kernel sha256 `9763ce7bb259de7e`:
+
+| DDR-971 probe | before | after |
+|---|---|---|
+| `[blk] no block device` | present | **gone** |
+| `mounted` | 0 | **3** |
+| `PRISM_READY` | 0 | **1** |
+| `prism>` | 0 | present |
+| `aetherd` | 0 | **2** |
+| `[user] ELF loaded` | 0 | **26** |
+| serial log length | 145 lines | **387 lines** |
+
+Items 3–6, previously **BLOCKED**, are now genuinely exercised — over the ISO's
+own serial console, asserting on what each command *did*:
+
+| check | observed |
+|---|---|
+| `echo` | `iso-live-marker-3f7` |
+| `uname` | `AuthenticAMD "QEMU Virtual CPU version 2.5+" cpus=1` |
+| `free` | `mem: total=114556K free=101992K used=12564K` |
+| `uptime` | `uptime: 4s` |
+| `ps` | real table: `PRISM.ELF` pid 42 ppid 40, `INIT.ELF` pid 40, `SURFTEST.ELF`, `reaper`, with CPUms/DISP populated |
+| write → list → read → delete | `ISOTEST.TXT` listed, `iso-file-content-9k2` read back, `rm: removed /ISOTEST.TXT` |
+| AETHER | `aetherd: spawned agent PID=81` → `AGENT_START` → `AGENT_VERIFIED` → `AGENT_DONE` → `reaped PID=81 exit=0`, `PRADYOS_AGENT_METRICS_OK` |
+| networking | `[net] lwIP up 10.0.2.15/24`, `PRADYOS_NET_LO_OK` (real loopback traffic, not just link-up) |
+| compositor | `PRADYOS_GPU_FB_OK 1024x768 BGRA scanout0`, `PRADYOS_SURFACE_CLIENT_OK a=0 b=1` |
+
+`free` reporting `used=12564K` is itself corroboration: it includes the ~8.25 MiB
+of ramdisk this fix allocates.
+
+**The gap that let this through is now closed by a gate.** `smoke-iso-userspace`
+(shard 1, 148 gates total) drives PRISM over the ISO and asserts the above.
+`smoke-iso-x86` keeps its original, narrower job — proving the loader handoff.
+
+**`v1.0.0` is still not tagged in this change.** The walkthrough passes; the
+release decision is the operator's, and the ramdisk root's volatility (§DDR-972 §4)
+belongs in the release notes first.
