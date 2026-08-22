@@ -6774,7 +6774,7 @@ project has retracted two confidently-derived root causes already (§0.1, §0.2)
 While the witness is unarmed the compositor now emits, at most 24 times, 128
 frames apart:
 
-```
+```text
 PRADYOS_AGENT_WITNESS_WAIT pid=<u> disp=<u> state=<u> n=<frames>
 ```
 
@@ -6785,7 +6785,7 @@ green gate proves nothing about the instrument. It was therefore proved
 separately: a throwaway local build with the predicate disarmed
 (`dispatches >= 1000000`) produced exactly the specified behaviour —
 
-```
+```text
 PRADYOS_AGENT_WITNESS_WAIT pid=82 disp=1 state=0 n=1
 PRADYOS_AGENT_WITNESS_WAIT pid=82 disp=1 state=0 n=129
 … 24 lines, last n=2945
@@ -6844,7 +6844,7 @@ Nothing is merged; PR #5 stays a draft.
 `CLAUDE.md` GROUP A carried *"`AGENT_OOM_KILLED` path has uninitialised PID
 field"*, and `SESSION_HANDOFF.md` cited it as corroboration for OPEN-11:
 
-```
+```text
 AGENT_OOM_KILLED PID=2742943744      <-- garbage PID (0xA37Fxxxx)
 ```
 

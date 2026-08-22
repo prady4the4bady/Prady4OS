@@ -211,8 +211,14 @@ DDR-771 raised the limit from 4 to 8 and remapped block MSI-X to vectors 56–63
 (clear of net@54 / input@55). IDT stubs + gate loop extend to 64. Do NOT
 reallocate vectors 50–53 to block devices — they are now free.
 
-### §INV.18 — Kernel load window: 24 chunks / 768 KiB; kernel at 4 MiB (DDR-733)
-The stage-2 unreal-mode bounce loader reads 24×64-sector chunks into a 0x10000
+### §INV.18 — Kernel load window: **48 chunks / 1.5 MiB**; kernel at 4 MiB (DDR-733 → DDR-827 → DDR-960)
+**Corrected 2026-08-22.** This invariant read "24 chunks / 768 KiB", which is two
+raises out of date (DDR-827 took it to 32, DDR-960 to 48) — and dangerous here,
+because §INV is the section a session is told to trust *without re-deriving*, and
+the current 1,053,054 B kernel is already larger than the 768 KiB "ceiling" it
+claimed. Authoritative source: `boot/stage2/stage2.asm:199` (`mov cx, 48`) and
+the Makefile size gate at 1,572,864 B.
+The stage-2 unreal-mode bounce loader reads 48×64-sector chunks into a 0x10000
 bounce buffer and copies up to `KERNEL_PHYS = 0x400000`. The BSS ceiling
 (`__bss_end`) is enforced by an `nm`-based Makefile check. File-size alone is
 insufficient — the binding quantity is file+BSS vs the 2 MiB PT_HI span.
@@ -301,7 +307,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 | **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | One CI capture shard 2 | **ITEM 2 — ACTIVE FIX REQUIRED.** Read the DDR-968 artefact. Root-cause and fix. Do not wait for another CI red. |
 | **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel | Unknown | **ACTIVE FIX.** Add instrumentation to `surfdestroy` path. Get a failing artefact. Root-cause and fix. |
 | **OPEN-2** | `smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake` intermittent | All `QEMU_SMP=4` gates — DDR-863 | **ACTIVE FIX.** These are SMP timing issues. Reproduce at `-smp 4` locally. Apply targeted fix from DDR-863. |
-| **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | Item-47 lost-thread failure seen through SFS probe | **ACTIVE FIX.** `smoke-sfs-btree-smp4` excluded. Reproduce, root-cause via DDR-880. Fix before ISO. |
+| **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | **ROOT-CAUSED — the create-then-init race, DDR-964.** `rc=-1` is `-EPERM` (`EPERM==1`) from `cap_ok(cap, CAP_FS_WRITE)`: `sched_create()` made a thread runnable before its caller minted the capability into `->arg`, so a thread picked early ran with `CAP_NULL`. NOT a separate defect from the row at §CURRENT BUILD STATE — this symptom **is** OPEN-10 and DDR-964 is its fix; the two rows contradicted each other and this one was the stale half. | **FIXED (DDR-964), pending CI promotion evidence.** `smoke-sfs-btree-smp4` stays excluded until greens accumulate. |
 | **OPEN-11** | `smoke-sha256`, `smoke-rqstress-liveness` | Scratch LBA 1500 overwrote kernel image | **CLOSED — DDR-831.** Do not revisit. |
 | ~~Uninit PID~~ | ~~`AGENT_OOM_KILLED` prints garbage PID~~ | **NOT garbage — it is `AE_TEST_PID` (`0xA37E0000`), the self-test's deliberate sentinel, `#define`d at `aether.c:14`** | **CLOSED as a non-bug, DDR-969.** Do not reopen. |
 | **FAT32 large-file** | `execve` of large musl ELF corrupts | multi-cluster `read_cluster_chain` bug (ADR-024) | **Fix in Group B.** Do not wait. |
@@ -313,9 +319,13 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 
 ## CURRENT BUILD STATE
 
-- **Gate count: 105** (DDR-772 extended smoke-nvme; ADR-032 added smoke-fs-budget)
-- **NSI max: 74** (`SYS_MEMINFO`). **Next free: 75.** Table size: 128.
-- **`kernel.bin`**: ~545 KiB (headroom ~236 KiB to 768 KiB PT_HI ceiling)
+- **Gate count: 147** assigned across 6 shards, 6 excluded (`ci-shard-check`,
+  verified 2026-08-22). The "105" this line used to carry was long stale.
+- **NSI max: 93** (`SYS_VERIFY_AUDIT`). **Next free: 94.** Table size: 128.
+  (This line used to say 74 / `SYS_MEMINFO`, contradicting §INV.14 in the same
+  file. §INV.14 was right.)
+- **`kernel.bin`**: **1,053,054 B** against the 1,572,864 B size gate — 519,810 B
+  of headroom. The old "~545 KiB, 768 KiB ceiling" was stale in both terms.
 - **DDR free range: DDR-936+**
 - `make image` → zero warnings, `-Werror` enforced ✅
 - PR #5 tip: `ea4601e` — draft, base `dev/phase1`
@@ -416,7 +426,7 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | B#14 NAS 3-lane storage scheduler | — | `smoke-nas` |
 | B#15 PMM policy | — | `smoke-pmmpolicy` |
 | B#1 NVMe IRQ | On hold until B#3 SMP is fully stable — resume when safe | `smoke-nvmeirq` |
-| **OPEN-10 B+tree SMP fix** | `btree churn FAIL` from lost-thread via SFS probe. Root-cause via DDR-880. Active fix required. | `smoke-sfs-btree-smp4` |
+| ~~OPEN-10 B+tree SMP fix~~ | **FIXED — DDR-964** (create-then-init race; see §OPEN ISSUES). Pending CI promotion evidence only. Do NOT re-root-cause. | `smoke-sfs-btree-smp4` |
 
 ---
 
@@ -444,7 +454,7 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | `SYS_MPROTECT` | — | `smoke-mprotect` |
 | `SYS_POLL` | — | `smoke-poll` |
 | `SYS_FUTEX` | — | `smoke-futex` |
-| `pthread` / ring-3 threading | `clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)` | `smoke-pthreads` |
+| `pthread` / ring-3 threading | `clone(CLONE_VM\|CLONE_FILES\|CLONE_THREAD)` | `smoke-pthreads` |
 | 6-arg `sys_mmap` ABI widening | — | `smoke-mmap6` |
 | `mmap` file-backed mappings | page-fault handler, dirty tracking, `msync` | `smoke-mmap-file` |
 | Dynamic linking | `ld.so` / musl dynamic linker, `.so` in ELF loader | `smoke-dynlink` |

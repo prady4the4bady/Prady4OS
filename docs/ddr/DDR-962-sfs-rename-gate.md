@@ -73,7 +73,7 @@ Gate count: 146 → **147**, 6 shards, 6 excluded.
 `sfs_rename` was stubbed to `return 0` without doing anything, the kernel
 rebuilt, and the gate re-run:
 
-```
+```text
 [smoke] FAIL — required pattern 'PRADYOS_SFS_RENAME_OK' not found.
 SFS RENAME FAIL: destination does not exist after rename
 ```

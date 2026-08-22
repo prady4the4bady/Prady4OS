@@ -163,7 +163,7 @@ attempt was *19/20* and the single failure carried the two panics that mattered.
 A run can pass its sentinel check while having panicked in a thread the gate
 does not assert on.
 
-```
+```text
 ==== DDR-961 N=20: 20 PASS / 0 FAIL | panics=0 ipc_timeouts=0 | kernel 26effe65 ====
 ```
 

@@ -12,7 +12,7 @@ gate family, or evidence bearing on a root cause.
 `aec6ad1`, shard 2, `smoke-percpu-sched` (check run 96856099938) failed with the
 familiar OPEN-10 signature:
 
-```
+```text
 [sfs] churn FAIL op=create iter=0 rc=-1
 [sfs] btree churn FAIL
 ```
@@ -20,7 +20,7 @@ familiar OPEN-10 signature:
 That alone would be a silent recurrence. But 40 lines above it, in the same
 boot:
 
-```
+```text
 [boot-load] PRISM.ELF t=158
 [user] SFS write failed for PRISM.ELF
 ```
@@ -217,7 +217,7 @@ Mutation: revert the `fs_test_thread` spawn to `sched_create` (READY on return)
 and widen the window between create and mint with a spin delay. Nothing else
 changed; the instrument stayed in.
 
-```
+```text
 [sfs] churn FAIL op=create iter=0 rc=-1 h=0 idx=0 gen=0 tid=11
 [sfs] btree churn FAIL
 ```

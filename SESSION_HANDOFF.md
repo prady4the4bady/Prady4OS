@@ -6423,6 +6423,16 @@ the operator lifts that. This overrides the §BACKLOG ordering, which still list
 ITEM 3 as next. A future session must not merge on the strength of that file.
 
 ### NEXT ACTION (one sentence)
-CI is running on `b0c7c20`/`ea4601e`; while it does, begin PHASE 2 GROUP A's
-first item (demand-paged user stack, gate `smoke-lazystack`) with its DDR
-written before any code, per §NON-NEGOTIABLES 5.
+~~begin PHASE 2 GROUP A's first item (demand-paged user stack,
+`smoke-lazystack`)~~ — **superseded twice.** That item is already built
+(ADR-038, gate `smoke-stack-demand`; `smoke-lazystack` does not exist), and the
+operator has since authorized the full merge path. The next action is the
+**merge sequence**: three CI greens on the SAME tip SHA — a push yields only two
+suites (push + pull_request), so the third needs an explicit workflow re-run on
+that SHA (§INV.15) — then squash-merge PR #5 into `dev/phase1`, three greens on
+that tip, fast-forward `main`, tag `v1.0.0`.
+
+**Operator authorization, recorded explicitly** (this is the exception to the
+"do not start Phase 2 before the gate" ordering): the merge hold set earlier in
+session was lifted by the operator, who confirmed the full merge → promote → tag
+path. Any push by another actor resets the green count on the new tip.

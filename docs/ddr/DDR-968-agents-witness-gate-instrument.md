@@ -9,7 +9,7 @@ none is proposed.
 
 `smoke-agents` requires three sentinels:
 
-```
+```text
 PRADYOS_AGENTS_OK
 AGENT KRYOS active
 AGENT SOLIN inactive
@@ -58,7 +58,7 @@ project has retracted twice before (§0.1, §0.2).
 
 While the witness has not fired, the compositor emits:
 
-```
+```text
 PRADYOS_AGENT_WITNESS_WAIT pid=<u> disp=<u> state=<u> n=<frames>
 ```
 
@@ -69,7 +69,11 @@ Constraints it is built to:
   is unaffected.
 - **Near-zero cost on green runs.** The witness normally arms within the first
   frames, after which `metrics_said` skips the block entirely; a passing boot
-  emits zero or one of these lines.
+  emits zero of these lines in practice (measured: 0 across a 424-line capture).
+  **Corrected:** an earlier draft said "zero or one", which the code does not
+  guarantee — the print is gated on `(wit_frames++ & 127) == 0` with a 24-line
+  cap, so a boot whose witness arms *late* can emit up to 24. Zero is the
+  measured typical case, not a bound. The bound is 24.
 - **Prints even when frozen.** Deliberately *not* print-on-change-only: a frozen
   predicate is the signal, and a single line followed by silence is
   indistinguishable from a stopped loop. The rising `n=` is what separates them.
@@ -85,8 +89,8 @@ Constraints it is built to:
 
 | capture | reading | belongs with |
 |---|---|---|
-| `disp=0` with `n` rising | the agent never ran — scheduler did not pick it | DDR-936/947 run-queue work |
-| `disp>=1` yet no `AGENT` lines | the witness predicate is wrong, not the scheduler | its own DDR, in the DDR-914/737 line |
+| `disp=0` with `n` rising | **no switch-in was observed** — read `state` before assigning a cause (0 = dead/never-spawned slot, 1 = ready/running, 2 = blocked). Only `state` 1 with `disp=0` actually implicates the pick. | DDR-936/947 run-queue work |
+| `pid!=0` and `disp>=1`, complete capture, still no `AGENT` lines | the witness predicate or the output path, not the scheduler | its own DDR, in the DDR-914/737 line |
 | `pid=0` | the roster slot was never claimed despite a successful spawn | `sys_spawn_agent` slot bookkeeping |
 | no `WITNESS_WAIT` at all, no `AGENT` lines | the compositor loop stopped | not an agent defect |
 
@@ -105,6 +109,6 @@ reproduce locally, so both arms would pass and discriminate nothing.
 
 The instrument is correct if it does **not** perturb the gates. `smoke-agents`
 green locally (it already is, 5/5 previously) plus the §7 hygiene set,
-`ci-probe-rodata-check` included. Since a passing run emits at most one of these
+`ci-probe-rodata-check` included. Since a passing run emits at most 24 of these
 lines, a green local run proves only that; the line's value is realised on a CI
 red, and closure of the fifth signature waits on that capture.

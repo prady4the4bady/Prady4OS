@@ -14,7 +14,7 @@ measured defect found in the same function.
 
 and `SESSION_HANDOFF.md` cites it as corroborating evidence for OPEN-11:
 
-```
+```text
 AGENT_OOM_KILLED PID=2742943744      <-- garbage PID (0xA37Fxxxx)
 AETHER_SEC_OOM_OK
 ```
