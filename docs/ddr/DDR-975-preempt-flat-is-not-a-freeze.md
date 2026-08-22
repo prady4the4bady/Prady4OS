@@ -183,3 +183,73 @@ first click was on target), but it is exactly the latent fragility the invariant
 exists to prevent: DDR-719 §D2 already had to relocate `smoke-drag`'s hardcoded
 click once when the title-bar box order changed. Worth fixing on its own merits,
 separately from the resize-ack defect.
+
+
+---
+
+## 8. CORRECTION to §7 — a second occurrence fails at a DIFFERENT arm
+
+`smoke-wmmax` failed again in CI (run `32598036823`, shard 5, head `ff56d47`).
+The capture does **not** match §7:
+
+```text
+[wmmax] FAIL — restore click did not un-maximize      <- the THIRD assertion
+PRADYOS_WM_MAX id=1                                    present
+PRADYOS_EV_RESIZE_OK w=512 h=512                       PRESENT this time
+```
+
+§7 concluded, from the single capture then available, that the defect was "the
+surface client's handling of the WM resize event" and that the run consumed its
+whole window because the second injection is armed on `EV_RESIZE_OK`. **That is
+not what this occurrence does.** Here `EV_RESIZE_OK` *is* emitted, the second
+injection therefore *did* fire, and the failure is the **restore/un-maximize**
+click producing no `PRADYOS_WM_UNMAX id=1`.
+
+So the gate has **at least two distinct failure points**, and §7 described only
+the first. §7 is not retracted — its reading of that capture is still correct,
+and its reasoning about the assertion ordering still holds — but its scope was
+too broad: it named a defect where it should have named *one observed stopping
+point*. Two captures, two different arms.
+
+### 8.1 Leading candidate for the restore arm — the §INV.5 violation
+
+§7 already flagged that both injections use hardcoded absolute coordinates and
+called it "latent fragility ... not the cause here". For **this** arm it is a
+live candidate, because the restore click is aimed at a box that has *moved*:
+
+- DDR-719 §D2's own description of the gate is "a second injection **at the
+  relocated box**" — the window was just resized to 512×512, so its title bar,
+  and every box on it, is somewhere new.
+- The gate hardcodes `ABSX=15424 ABSY=725` for that second click.
+- The same failing capture prints the live geometry:
+  `PRADYOS_WM_GEOM id=1 title=BETA close=16335,726 min=15887,726 …` — i.e. the
+  authoritative coordinates were *right there in the log*, unread by the gate.
+
+§INV.5 exists for exactly this: *"Geometry in gates: `PRADYOS_WM_GEOM` fields.
+Never hardcoded pixel coords."* A hardcoded restore coordinate that lands on the
+max box only when the post-maximize geometry happens to agree with a constant
+would fail exactly like this — intermittently, on the third assertion, with the
+first two passing.
+
+**Not confirmed, and it did not reproduce.** `smoke-wmmax` run locally **8/8
+pass**, zero failures — so there is no local capture in which to test the
+hypothesis. It predicts the restore click misses a relocated box; nothing in
+either CI capture directly shows where that box was at click time.
+
+**Therefore no fix ships here**, and specifically the injector is *not* rewritten
+on this reasoning. Rewriting a gate's coordinate scheme against a failure that
+cannot be observed would mean validating the change only against the passing
+case — which proves the gate still passes, not that the defect is gone. That is
+the shape of every attribution this project has had to retract (DDR-966,
+DDR-969, DDR-973, and §7 above, one section earlier in this very DDR).
+
+**What is nonetheless true independent of this defect:** the hardcoded
+coordinates violate §INV.5, which exists precisely because DDR-719 §D2 already
+had to relocate `smoke-drag`'s hardcoded click once when the box order changed.
+That is worth fixing on its own merits, as an invariant repair rather than a bug
+fix, and it should be done when it can be validated — i.e. alongside a
+reproduction, or as a deliberate harness change with its own before/after run.
+
+**Rate, for whoever picks this up:** 2 CI failures observed across ~24 shard-5
+executions, at two *different* assertions, with 8/8 and (§7) same-SHA green
+siblings. Any campaign needs to be long enough to see both arms.
