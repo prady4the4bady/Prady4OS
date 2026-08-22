@@ -546,31 +546,55 @@ green on shard 2 since. With no artefact there is no named mechanism, and
 item reopens on the first witness line: `disp=0` would confirm DDR-968 §2's
 reading (agent thread exists, never switched in), `disp>0` would refute it.
 
-## Dependabot triage (STEP 4, 2026-08-22)
+## Dependabot triage (STEP 4, 2026-08-22) — COMPLETE
 
-**Measured, not assumed.** `npm audit` against the committed
-`tools/graph_mcp/package-lock.json` (97 packages) reports
-`{info:0, low:0, moderate:0, high:0, critical:0, total:0}` — the npm surface is
-clean at every severity. `tests/toolchain/hello_rs/Cargo.toml` declares **no
-dependencies at all**, so it cannot carry an advisory. The only other scannable
-manifest is the root `Dockerfile` (`FROM ubuntu:24.04`).
+The alerts turned out to be readable after all, from the wrong direction: this
+session has no Dependabot-alert API tool, but Dependabot's own **open pull
+requests** name every package and advisory. Both were found and triaged.
 
-**What could not be done from this session:** the GitHub *Dependabot security
-alert* list itself is not readable here — this session has GitHub MCP tools for
-Actions, PRs, issues and code, but none for Dependabot alerts. So the "5 alerts
-(2 high, 3 moderate)" figure in `CLAUDE.md` could not be enumerated or matched
-to a package. It is stated as unresolved rather than quietly closed: the npm
-result above is evidence about the npm surface, **not** proof that the alert
-count is zero, and the two are not interchangeable.
+### PR #2 — the security alerts. Already remediated; the PR is stale.
 
-**Real defect found and fixed:** `.github/dependabot.yml` pointed its npm
-ecosystem at `directory: "/"`, where there is no `package.json`. `directory:` is
-a literal path, not a glob, so Dependabot's npm version updates for this repo
-had **never scanned anything** — the actual manifest is `tools/graph_mcp/`. That
-is now corrected. A `github-actions` ecosystem was added too: the workflows pin
-`actions/checkout@v5` and `actions/setup-python@v5` by major tag, which silently
-absorbs whatever the action owner pushes to that tag, and nothing was watching.
+`chore(deps): Bump the npm_and_yarn group across 1 directory with 2 updates`,
+opened 2026-08-04 against `dev/phase1`, targeting `/tools/graph_mcp`:
 
-Note the distinction, because it decides what the fix is worth: version updates
-(that file) and security alerts (the dependency graph) are **separate systems**.
-Correcting the path does not clear, explain, or close any existing alert.
+| package | PR asks | advisories it cites | lockfile today |
+|---|---|---|---|
+| `@hono/node-server` | 1.19.14 → 2.1.0 | GHSA-9mqv-5hh9-4cgg — unauthenticated memory-leak DoS via an aborted WebSocket handshake (`upgradeWebSocket`; a missing/malformed `Sec-WebSocket-Key` leaked the `IncomingMessage` and left a promise pending). Fixed in 2.0.10. | **2.1.0** ✅ |
+| `fast-uri` | 3.1.2 → 3.1.5 | GHSA-4c8g-83qw-93j6 (3.1.3), GHSA-v2hh-gcrm-f6hx (3.1.4), GHSA-7p8r-x3mc-p8w7 (3.1.5 — literal backslash accepted in the URI authority) | **3.1.5** ✅ |
+
+Two packages, five advisories between them — which is where "5 alerts (2 high,
+3 moderate)" comes from. **`tools/graph_mcp/package-lock.json` already carries
+versions at or above every fix**, which is exactly why `npm audit` reports
+`{info:0, low:0, moderate:0, high:0, critical:0}` across all 97 packages. The
+remediation landed in the lockfile independently of the PR; PR #2 is superseded
+and its base (`dev/phase1` @ `fd876cd`) is far behind `main`.
+
+**Left open rather than closed.** Closing another actor's PR on the operator's
+repository is their call, not this session's, and nothing depends on it.
+
+### PR #3 — `ubuntu` 24.04 → 26.04. Declined, with a reason.
+
+Not a security update — a plain docker version bump. **It should not be merged**,
+because it contradicts the Dockerfile's own stated purpose:
+
+> The base is pinned to the same distro the project already builds on
+> (Ubuntu 24.04, per CLAUDE.md), so container and WSL builds agree.
+
+The image exists to remove toolchain drift between the container and the WSL
+host. Moving the container to 26.04 while the host stays on 24.04 reintroduces
+precisely the drift it was built to eliminate, and would do so five days from
+the deadline with a full toolchain change (clang, lld, nasm, QEMU) underneath a
+147-gate suite. Revisit after v1.0.0, together with the WSL environment.
+
+### Config defect found and fixed on the way
+
+`.github/dependabot.yml` pointed its npm ecosystem at `directory: "/"`, where
+there is no `package.json` — `directory:` is a literal path, not a glob, so npm
+**version** updates had never scanned anything. Now `/tools/graph_mcp`. A
+`github-actions` ecosystem was added too: the workflows pin `actions/checkout@v5`
+and `actions/setup-python@v5` by major tag, which silently absorbs whatever the
+action owner pushes to that tag, and nothing was watching it.
+
+This did not affect the alerts above: **security** updates come from the
+repository dependency graph and fire regardless of that file, which is why PR #2
+existed at all despite the broken path. The two are separate systems.

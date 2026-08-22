@@ -5,18 +5,25 @@
 # npm half of this file had never scanned anything. `directory:` is a literal
 # path, not a glob, so the fix is to name the real directory.
 #
-# NOTE for whoever triages the security alerts: version updates (this file) and
-# security alerts are separate systems. Alerts come from the repository
-# dependency graph and fire whether or not this file is correct, so fixing the
-# path here does not by itself clear or explain any existing alert.
+# NOTE: version updates (this file) and security alerts are separate systems.
+# Alerts come from the repository dependency graph and fire whether or not this
+# file is correct — which is why Dependabot PR #2 existed despite the broken
+# path above. Fixing the path does not clear or explain any existing alert.
 #
 # Current dependency surface, for reference:
 #   tools/graph_mcp/package-lock.json  — 97 packages; `npm audit` reports
 #                                        0 vulnerabilities at every severity
-#                                        (measured 2026-08-22).
+#                                        (measured 2026-08-22). The advisories
+#                                        Dependabot PR #2 raises are already
+#                                        remediated here: @hono/node-server is
+#                                        at 2.1.0 and fast-uri at 3.1.5.
 #   tests/toolchain/hello_rs/Cargo.toml — no dependencies at all, so no cargo
 #                                        ecosystem entry is warranted.
-#   Dockerfile (repo root)             — FROM ubuntu:24.04.
+#   Dockerfile (repo root)             — FROM ubuntu:24.04, pinned ON PURPOSE
+#                                        to match the WSL host so container and
+#                                        host builds agree. Dependabot PR #3
+#                                        (24.04 -> 26.04) is declined for that
+#                                        reason; see docs/BUILD_TRACKER.md.
 version: 2
 updates:
   - package-ecosystem: "npm"

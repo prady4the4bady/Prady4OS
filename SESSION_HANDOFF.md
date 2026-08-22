@@ -6554,19 +6554,26 @@ not redundant with A and B — it is the only arm issuing a read above 4 KiB.
 
 1. Watch PR #6 to green; drive it to merge.
 2. Release notes for the ramdisk root's volatility, then tag `v1.0.0`.
-3. STEP 4 — Dependabot: **partially done.** The npm surface is measurably clean
-   (`npm audit` on `tools/graph_mcp/package-lock.json`, 97 packages: 0 vulns at
-   every severity), `hello_rs` has no dependencies, and the only other manifest
-   is the root `Dockerfile` (`ubuntu:24.04`). A real defect was found and fixed:
-   `.github/dependabot.yml` pointed its npm ecosystem at `/`, which has no
-   `package.json`, so npm version updates had never scanned anything — it now
-   names `/tools/graph_mcp`, and a `github-actions` ecosystem was added because
-   the workflows pin `actions/checkout@v5` / `actions/setup-python@v5` by major
-   tag with nothing watching them.
-   **What is still open, and why:** the Dependabot *alert* list cannot be read
-   from a Claude Code session — there is no Dependabot-alert MCP tool here (the
-   GitHub tools cover Actions, PRs, issues, code). So the "2 high, 3 moderate"
-   could not be matched to packages. **A clean `npm audit` is not the same claim
-   as "zero alerts"** — version updates and the dependency-graph alert feed are
-   separate systems. Someone with the GitHub UI needs to name the two highs.
+3. STEP 4 — Dependabot: **DONE.** The alert list has no API tool in this
+   session, but Dependabot's own open PRs name everything. **PR #2** is the
+   security one: `@hono/node-server` 1.19.14→2.1.0 (GHSA-9mqv-5hh9-4cgg —
+   unauthenticated memory-leak DoS via an aborted WebSocket handshake) and
+   `fast-uri` 3.1.2→3.1.5 (GHSA-4c8g-83qw-93j6, GHSA-v2hh-gcrm-f6hx,
+   GHSA-7p8r-x3mc-p8w7), both in `/tools/graph_mcp`. Two packages, five
+   advisories — that is the "5 alerts (2 high, 3 moderate)".
+   **They are already fixed:** the committed `package-lock.json` carries 2.1.0
+   and 3.1.5, at or above every fix, which is why `npm audit` reports 0 vulns at
+   every severity across 97 packages. PR #2 is superseded (its base is
+   `dev/phase1` @ `fd876cd`); left open — closing the operator's PR is their
+   call. **PR #3 (docker `ubuntu` 24.04→26.04) is DECLINED and should stay
+   declined:** not a security update, and the Dockerfile pins 24.04 on purpose
+   so container and WSL builds agree — moving the container alone reintroduces
+   the drift the image exists to remove, and swapping clang/lld/nasm/QEMU under
+   a 149-gate suite days before the deadline is not a change to make now.
+   Config defect fixed on the way: `.github/dependabot.yml` pointed npm at `/`,
+   which has no `package.json`, so npm *version* updates had never scanned
+   anything; now `/tools/graph_mcp`, plus a `github-actions` ecosystem (the
+   workflows pin by major tag with nothing watching). That path bug never
+   affected the alerts — security updates come from the dependency graph, which
+   is why PR #2 existed despite it.
 4. STEP 5 — Group A–H backlog; B#3 virtio-blk SMP stall is the ISO blocker.
