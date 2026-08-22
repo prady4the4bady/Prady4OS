@@ -142,8 +142,11 @@ shipped kernel; it returns `-EIO` rather than retrying; the completion vector is
 routed to an AP whenever `ncpu > 1`; and the uniprocessor configuration, where it
 is routed to the BSP, does not show it.
 
-**Not established.** *Why* the AP does not service the completion inside 5 s. At
-least three candidates remain open, and they need different fixes:
+**Not established** *(at the time this DDR was written — **DDR-977 has since
+answered it, and all three candidates below are refuted**: CPU 3 stops taking its
+own LAPIC timer interrupt entirely, so this is an AP-liveness defect that the
+block layer merely reports)*. *Why* the AP does not service the completion inside
+5 s. At the time, three candidates were open:
 
 1. the AP is halted and the MSI-X is not waking it promptly;
 2. the AP is busy or briefly interrupt-masked in a long region;

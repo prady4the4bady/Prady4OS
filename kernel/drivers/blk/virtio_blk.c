@@ -16,6 +16,7 @@
 #include "sched.h"
 #include "irq.h"
 #include "lapic.h"   /* DDR-714C1: lapic_id() — MSI-X destination (the BSP) */
+#include "percpu.h" /* DDR-976: read the destination AP's tick counter */
 
 extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 
@@ -67,6 +68,12 @@ struct vblk {
                                        * across CPUs (short, non-sleeping sections) */
     volatile int          compl_ap;
     volatile int          slot_free;  /* DDR-955: 1 when a slot just freed */   /* proof: a completion ran on a non-BSP CPU */
+    /* DDR-976 sec.7: identify WHERE this device's completions were pointed, so a
+     * timeout can say whether that CPU was alive. Set once at init, read only on
+     * the failure path. g_inst is static (BSS), so these are zero before init —
+     * unit 0 / cpu 0 is also the correct uniprocessor answer. */
+    unsigned              unit;
+    uint32_t              dest_cpu_idx;
 };
 
 /* DDR-878: one-shot witness that two submitters really do wait at once. */
@@ -266,11 +273,62 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     virtq_publish(&v->vq, head);
     virtio_pci_notify(&v->dev, &v->vq, 0);
 
+    /* DDR-976 sec.7: sample the DESTINATION CPU's tick counter before blocking.
+     * On a timeout the delta answers the one question the bare message could
+     * not: was the CPU this device's MSI-X points at even alive during the wait?
+     * dt ~= the deadline means the AP was ticking and simply never ran the
+     * completion (a delivery/handler problem); dt ~= 0 means that CPU was not
+     * taking interrupts at all (a halted/wedged AP). Failure path only — the
+     * healthy path pays one percpu read, and prints nothing, so this cannot
+     * shift the timing it measures the way DDR-947's instrument did. */
+    uint64_t dest_t0 = 0;
+    { struct percpu *dp = percpu_get(v->dest_cpu_idx);
+      if (dp) dest_t0 = dp->ticks; }
     while (!v->req[s].done) {
         if (sched_block_timeout(&v->compl_lock,
                                 &v->req[s].done,
                                 500) == -ETIMEDOUT) {
-            kputs("[vblk] compl wait timeout\r\n");
+            uint64_t dest_t1 = 0;
+            { struct percpu *dp = percpu_get(v->dest_cpu_idx);
+              if (dp) dest_t1 = dp->ticks; }
+            struct percpu *me = this_cpu();
+            kputs("[vblk] compl wait timeout unit=");
+            kputdec((uint64_t)v->unit);
+            kputs(" dest_cpu=");
+            kputdec((uint64_t)v->dest_cpu_idx);
+            kputs(" dest_dticks=");
+            kputdec(dest_t1 - dest_t0);
+            /* DDR-976: the ABSOLUTE counters too. A zero delta alone is
+             * ambiguous -- it is equally consistent with "that CPU stopped
+             * ticking" and with "percpu_get(dest) does not point at that CPU's
+             * real percpu, so we read a permanent 0". dest_abs large-but-frozen
+             * means the first; dest_abs==0 while bsp_abs is in the thousands
+             * means the second, and the instrument itself is what is wrong. */
+            kputs(" dest_abs=");
+            kputdec(dest_t1);
+            kputs(" bsp_abs=");
+            kputdec(me ? me->ticks : 0);
+            kputs(" dest_present=");
+            { struct percpu *dq = percpu_get(v->dest_cpu_idx);
+              kputdec(dq ? (uint64_t)dq->present : 9u); }
+            /* DDR-976: EVERY cpu's absolute tick count, not just the dest's.
+             * "only unit 2 times out" is not by itself evidence that CPU 3 is
+             * the sick one -- unit 2 is the SFS scratch disk the self-tests
+             * hammer, so it may simply be the only device with enough traffic to
+             * expose a fault that all the APs share. This line settles which:
+             * one frozen counter among moving ones, or all APs frozen. */
+            kputs(" ticks[");
+            for (unsigned _c = 0; _c < 4u; _c++) {
+                struct percpu *cp = percpu_get(_c);
+                if (_c) kputs(",");
+                kputdec(cp ? cp->ticks : 0);
+            }
+            kputs("]");
+            kputs(" on_cpu=");
+            kputdec(me ? (uint64_t)me->cpu_idx : 99u);
+            kputs(" lba=");
+            kputdec(lba);
+            kputs("\r\n");
             v->req[s].used = 0;
             v->req[s].waiter = 0;
             slot_wake_one(v);
@@ -339,8 +397,13 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     for (int i = 0; i < 256; i++)
         v->head2slot[i] = -1;
     unsigned ncpu = lapic_cpu_count();
-    uint32_t dest = (ncpu > 1) ? lapic_apic_id_at(1 + (unit % (ncpu - 1)))
-                               : lapic_id();
+    /* DDR-976 sec.4: the index starts at 1, so with ncpu>1 this is ALWAYS an AP
+     * and never the BSP. Keep the index (not just the APIC id) so a completion
+     * timeout can read that CPU's percpu tick counter. */
+    uint32_t dest_idx = (ncpu > 1) ? (1 + (unit % (ncpu - 1))) : 0;
+    uint32_t dest = (ncpu > 1) ? lapic_apic_id_at(dest_idx) : lapic_id();
+    v->unit         = unit;
+    v->dest_cpu_idx = dest_idx;
     int msix = (virtio_pci_msix_setup(&v->dev, vec, dest, 1) == 0);
     if (msix) {
         msix_register(vec, vblk_msix_fn[unit]);
