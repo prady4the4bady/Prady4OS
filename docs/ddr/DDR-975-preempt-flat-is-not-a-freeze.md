@@ -135,3 +135,51 @@ separates the two cases that currently look identical.
 Not applied in this DDR: it touches `sched.c`, and a 20× `smoke-rqstress`
 campaign (DDR-974 §3) is measuring the current `kernel.bin`. Changing the kernel
 mid-campaign would put two binaries under one measurement, which R1 forbids.
+
+---
+
+## 7. Addendum — what the wmmax failure actually narrows to
+
+Read against the recipe (`Makefile`, `smoke-wmmax`), the capture says more than
+"the gate failed". The recipe asserts three strings in order, each with
+`|| { echo …; exit 1; }`:
+
+```make
+@grep -q "PRADYOS_WM_MAX id=1"              … || { echo "[wmmax] FAIL — max box click did not maximize"; … }
+@grep -q "PRADYOS_EV_RESIZE_OK w=512 h=512" … || { echo "[wmmax] FAIL — client did not honor maximize"; … }
+@grep -q "PRADYOS_WM_UNMAX id=1"            … || { echo "[wmmax] FAIL — restore click did not un-maximize"; … }
+```
+
+CI printed the **second** message. Because the first check exits on failure, its
+having been passed is implied: **`PRADYOS_WM_MAX id=1` was present.** So
+
+- the click landed on the max box and **the window manager did maximize**; and
+- the **client never emitted `PRADYOS_EV_RESIZE_OK w=512 h=512`.**
+
+(The absence of `PRADYOS_WM_MAX` from the `tail -20` in the log proves nothing
+either way — that line is emitted early, far outside a 20-line tail. The ordering
+of the assertions is the evidence, not the tail.)
+
+This also explains why the run consumed its whole 120 s window rather than
+failing fast. The **second** mouse injection is armed on that very string:
+
+```make
+@ABSX=15424 ABSY=725 bash tools/qemu_runner/mouse_inject.sh … "PRADYOS_EV_RESIZE_OK w=512" &
+```
+
+No `EV_RESIZE_OK` ⇒ the restore click is never injected ⇒ `PRADYOS_WM_UNMAX`
+could not have appeared either. The gate reports the **first** failure of a
+cascade, not three independent ones.
+
+So the defect to chase is narrow: the surface client's handling of the WM's
+resize event (the DDR-718 "client re-commits with KEEP" path), not hit-testing,
+not the injector, and not the scheduler.
+
+**A separate §INV.5 violation, noted but not the cause here.** Both injections
+use hardcoded absolute coordinates — `ABSX=5311 ABSY=5588` and
+`ABSX=15424 ABSY=725` — where §INV.5 requires geometry to come from
+`PRADYOS_WM_GEOM` fields. That did not cause this failure (`WM_MAX` fired, so the
+first click was on target), but it is exactly the latent fragility the invariant
+exists to prevent: DDR-719 §D2 already had to relocate `smoke-drag`'s hardcoded
+click once when the title-bar box order changed. Worth fixing on its own merits,
+separately from the resize-ack defect.
