@@ -77,3 +77,9 @@ void percpu_init_bsp(void);
 
 /* The calling CPU's percpu entry, resolved by LAPIC id; NULL before init. */
 struct percpu *this_cpu(void);
+
+/* DDR-981: the slot whose apic_id matches, or NULL. Unlike this_cpu() this does
+ * NOT read %gs, so it is safe from NMI context — where an NMI landing in the
+ * one-instruction swapgs window at SYSCALL entry/exit would leave the user's GS
+ * base active while CS still reads ring 0. */
+struct percpu *percpu_by_apic_id(uint32_t id);

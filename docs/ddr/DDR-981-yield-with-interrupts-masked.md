@@ -237,3 +237,48 @@ running-and-masked, and I only avoided concluding "it is spinning in `mnt_lock`"
 because §2.1's repeat sampling showed the pid alternating. One sample of a
 running system is a sample, not a state. The multi-shot arm ships for that
 reason.
+
+---
+
+## 9. A defect this DDR's own instrument introduced, found by re-reading the diff
+
+The first version of the NMI handler called `this_cpu()`. That is wrong, and it
+is wrong in a way worth writing down because the rest of the kernel gets to
+assume the opposite.
+
+`this_cpu()` reads `%gs:0`, and `current_thread` is `this_cpu()->current`
+(`sched.h:244`), so both depend on the GS base matching the current privilege
+level. `isr_common` maintains that: it decides whether to `swapgs` by testing
+CS in the saved frame (`test qword [rsp + 144], 3`), which is correct for every
+*synchronous* exception and every maskable interrupt.
+
+It is not correct for an NMI, because `syscall_entry.asm` has a **one-
+instruction window at each end** in which CS already reads ring 0 while the
+**user's** GS base is still active:
+
+- entry: between the `syscall` instruction (which loads the kernel CS from
+  `STAR`) and `syscall_entry`'s very first instruction, which is the `swapgs`;
+- exit: between the closing `swapgs` and the `o64 sysret`.
+
+An NMI landing in either window presents CS = 0x08, so `isr_common` correctly
+declines to swap — and the handler then runs with the user's GS base. In this
+kernel that base is **0** (`percpu.c`: *"KERNEL_GS_BASE starts 0 = the user's
+view"*), so `this_cpu()` would read linear address 0 from ring 0 and return
+whatever is there, after which the handler writes its dump fields through it.
+
+This is the classic NMI-vs-swapgs race. It did not exist here before, for the
+simple reason that **this kernel had no NMI source until this probe added one** —
+which is exactly the kind of assumption an instrument can silently invalidate.
+
+**Fix:** resolve the slot from the LAPIC id, which is an MMIO register read and
+does not depend on GS at all (`percpu_by_apic_id()`), and take the pid from that
+slot's own `->current` rather than via `current_thread`. A 16-entry scan of
+kernel BSS, at most four times per boot.
+
+**Why this was not left as a documented risk.** The window is two instructions
+wide and the probe fires at most four times per boot at a CPU that has been
+frozen for 500+ ticks, so the odds are tiny. But **OPEN-12 is an open,
+undiagnosed ring-0 panic**, and shipping a second possible source of ring-0
+faults into `v1.0.0` would make that investigation strictly harder — a future
+capture could not be attributed without first excluding this. Cheap fix, and it
+keeps OPEN-12's evidence clean.

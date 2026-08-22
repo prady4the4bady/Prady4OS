@@ -87,6 +87,29 @@ struct percpu *percpu_get(uint32_t cpu_idx) {
     return (cpu_idx < PERCPU_MAX) ? &g_percpu[cpu_idx] : 0;
 }
 
+/* DDR-981 §9: resolve a CPU's slot from its LAPIC id instead of %gs.
+ *
+ * Every other caller in the kernel can use this_cpu(), because they all run
+ * with a GS base consistent with their CPL. The NMI handler cannot: NMI is
+ * asynchronous, and `syscall_entry.asm` has a one-instruction window at each
+ * end -- between the `syscall` that sets CS to ring 0 and its first `swapgs`,
+ * and between the closing `swapgs` and `sysret` -- in which CS reads as ring 0
+ * while the USER's GS base is still active. isr_common's swapgs decision is
+ * made from CS (`test [rsp+144], 3`), so it correctly declines to swap, and
+ * this_cpu() would then read %gs:0 against a user GS base of 0, i.e. linear
+ * address 0 in ring 0. That is the classic NMI-vs-swapgs race, and this kernel
+ * had no NMI source before the AP-freeze probe introduced one.
+ *
+ * The LAPIC id comes from an MMIO register and does not depend on GS at all, so
+ * this is correct in that window. A 16-entry scan of kernel BSS, run at most
+ * four times per boot. Returns NULL if no slot claims the id. */
+struct percpu *percpu_by_apic_id(uint32_t id) {
+    for (unsigned i = 0; i < PERCPU_MAX; i++)
+        if (g_percpu[i].present && g_percpu[i].apic_id == id)
+            return &g_percpu[i];
+    return 0;
+}
+
 struct percpu *this_cpu(void) {
     struct percpu *p;
     __asm__ volatile("mov %%gs:0, %0" : "=r"(p));   /* self pointer (DDR-SMP-3a) */

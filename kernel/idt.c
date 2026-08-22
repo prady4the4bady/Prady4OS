@@ -394,8 +394,13 @@ void isr_dispatch(struct regs *r) {
      * the BSP relay it from the heartbeat. No EOI — NMI is not an APIC
      * interrupt, and IRET is what re-opens the NMI window. */
     if (r->vector == 2) {
-        extern uint32_t sched_current_pid(void);
-        struct percpu *npc = this_cpu();
+        /* DDR-981 §9: resolve by LAPIC id, NOT this_cpu(). NMI is asynchronous
+         * and syscall_entry.asm has a one-instruction window at each end where
+         * CS reads ring 0 while the USER's GS base is still active; this_cpu()
+         * (and current_thread, which is this_cpu()->current) would then read
+         * %gs:0 against a user GS base of 0 — linear address 0, in ring 0.
+         * The LAPIC id is an MMIO read and does not depend on GS. */
+        struct percpu *npc = percpu_by_apic_id(lapic_id());
         if (npc && npc->nmi_dump == 1) {
             npc->d_rip    = r->rip;
             npc->d_rsp    = r->rsp;
@@ -404,7 +409,9 @@ void isr_dispatch(struct regs *r) {
             npc->d_cs     = (uint32_t)r->cs;
             lapic_snapshot(&npc->d_lvt, &npc->d_tpr, &npc->d_svr,
                            &npc->d_isr48, &npc->d_irr48);
-            npc->d_pid    = sched_current_pid();
+            /* Same reason: read the pid out of the slot we just resolved
+             * safely, never via current_thread (which is %gs-relative). */
+            npc->d_pid    = npc->current ? npc->current->tid : 0u;
             /* Frame-pointer walk. The kernel is built -fno-omit-frame-pointer,
              * so [rbp] = caller rbp and [rbp+8] = return address. Bound every
              * link to the 16 KiB stack this frame is on (8-aligned, above rsp,
