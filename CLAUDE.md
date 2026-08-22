@@ -384,7 +384,7 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 
 | Item | Detail | Gate |
 |---|---|---|
-| Demand-paged user stack | Lazy 8 MiB mapping — map only top page + guard, fault the rest. Drops 2048 frames/process to ~2; lifts the ~13-process ceiling. Do NOT give QEMU more RAM. | `smoke-lazystack` |
+| ~~Demand-paged user stack~~ | **ALREADY BUILT — ADR-038.** `vmm_stack_fault()` (`vmm_cow.c:144`) faults the stack in a page at a time; `USER_STACK_EAGER_PAGES = 8` is measured, not guessed (the ADR's own A/B: 30/30 eager vs 0/30 at one page, because `vmm_user_range_ok` validates syscall pointers WITHOUT faulting); guard page below `USER_STACK_BOT`. Gate is **`smoke-stack-demand`** (3 arms: grow, syscall-on-grown-page, guard-kill with a post-kill liveness witness) — `smoke-lazystack` does not exist. Do NOT rebuild. | `smoke-stack-demand` ✅ |
 | I/O APIC migration | DDR-714 stage D — disable 8259, route ISA IRQs through I/O APIC | `smoke-ioapic` |
 | SMEP / SMAP | `CLAC`/`STAC` around every copyin/copyout | `smoke-smep` |
 | Kernel W^X identity-alias removal | `vmm_protect_kernel()` — remove identity alias (DDR-757 residual) | `smoke-wx` |

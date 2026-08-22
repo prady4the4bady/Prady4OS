@@ -38,6 +38,20 @@ int console_line_trylock(uint64_t *fl) {
 void console_line_unlock(uint64_t fl) {
     spin_unlock_irqrestore(&g_line_lock, fl);
 }
+
+/* DDR-970: for the kernel-panic path ONLY. A ring-0 fault taken inside a
+ * line-locked region skips the ring-3 trylock branch and halts in `cli; hlt`
+ * still holding g_line_lock, so every other CPU's next console_line_lock()
+ * spins forever with interrupts already masked -- a diagnosable panic becomes a
+ * silent whole-machine hang.
+ *
+ * Releasing a lock the caller may not hold is defensible here and nowhere else:
+ * the path is terminal, nothing after it depends on the lock's integrity, and
+ * the lock protects cosmetic line atomicity only. No flag restore -- a panicking
+ * CPU keeps interrupts masked. */
+void console_line_force_release(void) {
+    spin_unlock(&g_line_lock);
+}
 static inline uint64_t irq_save(void) {
     return spin_lock_irqsave(&g_console_lock);
 }

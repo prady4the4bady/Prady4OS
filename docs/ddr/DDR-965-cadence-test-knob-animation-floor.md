@@ -9,7 +9,7 @@ DDR-964's sibling instrument (`PRADYOS_CAD_ADV`, commit `544538b`) was added so
 the next `smoke-cadence` red would name its own remedy. It did, on `992b336`,
 shard 5:
 
-```
+```text
 PRADYOS_CAD_ADV n=1 elapsed_ms=10520 target_ms=2000
 PRADYOS_CAD_ADV n=2 elapsed_ms=10880 target_ms=2000
 PRADYOS_CAD_ADV n=3 elapsed_ms=17990 target_ms=2000

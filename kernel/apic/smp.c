@@ -39,7 +39,13 @@ extern const uint8_t ap_tramp_start[], ap_tramp_end[];
 static volatile uint32_t g_online = 1;      /* the BSP */
 /* DDR-963 §5: the private announce lock is gone; these sites now take the
  * shared console line lock from console.h, so an [smp] announce can no longer
- * be spliced by a printer outside this file (the §3 partial case). */
+ * be spliced by a printer that ACQUIRES that lock (the §3 partial case).
+ *
+ * DDR-970: not by every printer. The ring-3 trap printer uses
+ * console_line_trylock() and deliberately prints anyway when the lock is held
+ * (a blocking acquire there would turn a fault into a hang), so an exception
+ * line can still splice an [smp] announce. The guarantee covers blocking
+ * callers only. */
 
 /* ~N ticks of PIT/APIC time (10 ms each); IF is on, so g_ticks advances. */
 static void delay_ticks(uint64_t n) {

@@ -429,6 +429,15 @@ void isr_dispatch(struct regs *r) {
         return;
     }
 
+    /* DDR-970: a ring-0 fault reaches here having SKIPPED the ring-3 trylock
+     * branch above, so if this CPU was inside a line-locked region -- the [hb]
+     * heartbeat or an [smp] announce -- it still holds g_line_lock and is about
+     * to halt forever holding it. Every other CPU's next console_line_lock()
+     * would then spin with interrupts already masked, turning a diagnosable
+     * panic into a silent machine-wide hang. Drop it before printing: the path
+     * is terminal and the lock guards only cosmetic line atomicity. */
+    console_line_force_release();
+
     kputs("\r\n*** NEXUS KERNEL PANIC ***\r\n");
     kputs("component: NEXUS isr\r\n");
     kputs("exception: ");

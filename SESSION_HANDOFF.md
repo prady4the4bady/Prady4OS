@@ -6349,7 +6349,7 @@ Current state of the four families:
 | OPEN-10 | DDR-964 | green on every fixed tip, 0 red since |
 | `smoke-cadence` | DDR-965 | `d5c1e19` both suites green, incl. shard 5 |
 | Item 48 | DDR-966 | `7b76c804` both suites green (first) |
-| FSRM | **not built** | design + UAF hazard recorded |
+| FSRM | **DDR-967 (built)** | `b0c7c20` both suites green; 20/20 local, 0 wait expiries. Not closure — FSRM has never reproduced locally, so it stays CI-over-time. |
 
 ### A promotion detail worth knowing before anyone acts on §3
 §3 requires *"three CI greens on the **same** tip"*. A push produces **two**

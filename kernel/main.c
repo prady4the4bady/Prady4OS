@@ -1977,7 +1977,13 @@ static void fs_test_thread(void *arg) {
                  * leave its droppings in every other gate's log. */
                 if (probe_enabled("rename-sfs")) {
                     struct tcb *rn = 0;
-                    uint64_t rnlen = (uint64_t)(renametest_elf_end - renametest_elf);
+                    /* DDR-970: cast to uintptr_t first. These are two distinct
+                     * linker symbols, so subtracting them as pointers is
+                     * undefined (C11 6.5.6). 29 pre-existing sites in this file
+                     * share the idiom and are left alone -- see DDR-970 §4 --
+                     * but this PR should not add a 30th. */
+                    uint64_t rnlen = (uint64_t)(uintptr_t)renametest_elf_end -
+                                     (uint64_t)(uintptr_t)renametest_elf;
                     if (elf_load((void *)(uintptr_t)renametest_elf, rnlen,
                                  "RENAMETEST", &rn) == ELF_OK && rn) {
                         rn->root_mnt = smnt;          /* SFS root before unblock */
@@ -2506,10 +2512,20 @@ static void sched_demo(void) {
         cap_t fc = cap_create(fst->caps, RES_FILE, FS_RES_ID,
                               CAP_FS_READ | CAP_FS_WRITE |
                               CAP_FS_SFS_READ | CAP_FS_SFS_ADMIN);
-        if (fc == CAP_NULL)              /* table full: every FS op would be -EPERM */
+        if (fc == CAP_NULL) {
+            /* DDR-970: do NOT run it. "every FS op would be -EPERM" understates
+             * the damage -- fs_test_thread's self-test block calls
+             * sfs_format(sbd) directly on the block device, which is not
+             * capability-gated, so a thread without its capability would still
+             * reformat the disk while doing nothing useful. Destroy the
+             * still-blocked TCB, matching the three sibling DDR-964 sites
+             * (main.c:211, 273, 344). */
             kputs("[fs] FAILED to mint fs capability\r\n");
-        fst->arg = (void *)(uintptr_t)fc;
-        sched_unblock(fst);
+            sched_destroy(fst);
+        } else {
+            fst->arg = (void *)(uintptr_t)fc;
+            sched_unblock(fst);
+        }
     }
     __asm__ volatile("sti");
     kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk + VFS live\r\n");

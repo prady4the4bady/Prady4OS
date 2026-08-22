@@ -770,11 +770,16 @@ static void cadence_tick(void) {
          * compositor is not being scheduled frames often enough to close four
          * periods inside the gate's window — a starvation reading, not a clock
          * one. elapsed_ms ~= target_ms with n < 4 means it simply ran out of
-         * wall time. Four lines per run at most; ring-3 printf+fflush is one
-         * kwrite, so this cannot be spliced (DDR-963 §4). */
-        printf("PRADYOS_CAD_ADV n=%d elapsed_ms=%llu target_ms=%llu\n",
-               g_cad_advances, g_cad_iter / 1000000ULL, g_cadence / 1000000ULL);
-        fflush(stdout);
+         * wall time. Four lines per run at most -- DDR-970: the bound is now
+         * ENFORCED; advances continue past 4 in a 180 s run and the printf used
+         * to fire on every one, so the comment was false and the log grew
+         * without bound. ring-3 printf+fflush is one kwrite, so this cannot be
+         * spliced (DDR-963 §4). */
+        if (g_cad_advances <= 4) {
+            printf("PRADYOS_CAD_ADV n=%d elapsed_ms=%llu target_ms=%llu\n",
+                   g_cad_advances, g_cad_iter / 1000000ULL, g_cadence / 1000000ULL);
+            fflush(stdout);
+        }
         if (g_cad_advances == 4) {          /* one full automatic cycle */
             printf("PRADYOS_CADENCE_OK\n");
             fflush(stdout);

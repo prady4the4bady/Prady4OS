@@ -14,7 +14,7 @@ DDR-934 added the spawn counter precisely so *"never created"* could be told
 from *"created but never ran"* — both of which surface as `done=0x0`. Every
 capture since reports:
 
-```
+```text
 [blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
 ```
 

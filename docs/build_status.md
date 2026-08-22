@@ -6932,3 +6932,97 @@ with a post-kill liveness witness). `CLAUDE.md` lists it as unbuilt against a
 gate name (`smoke-lazystack`) that does not exist.
 
 Nothing is merged; PR #5 stays a draft.
+
+---
+
+## CodeRabbit review on PR #5 — two real defects this branch introduced (DDR-970)
+
+The bot posted 16 actionable comments and **Merge Risk: High**. Bot findings are
+bug reports: each was verified against current code. Two are genuine defects
+from this branch, two more are real-but-smaller, and the rest are doc staleness.
+One is declined with a reason.
+
+### 1. A ring-0 fault strands `g_line_lock` forever (Major)
+
+DDR-963 gave the ring-3 trap printer `console_line_trylock()` precisely so a
+fault inside a line-locked region could not deadlock. **The ring-0 path has no
+such guard.** A kernel fault skips that branch entirely and ends in
+
+```text
+kputs("halting.\r\n");
+for (;;) __asm__ volatile("cli; hlt");
+```
+
+still holding the lock if it was held. Every other CPU's next
+`console_line_lock()` is `spin_lock_irqsave` — spinning forever with interrupts
+already masked. A diagnosable panic becomes a silent machine-wide hang.
+
+The branch **widened** this rather than inventing it: `g_console_lock` has
+always had a one-call version. What changed is the window — a ~20-call line held
+on **every timer tick** by `[hb]`, plus the four `[smp]` announce sites.
+
+Fixed with `console_line_force_release()` at the top of the panic block.
+Releasing a lock you may not hold is defensible only here: the path is terminal,
+nothing downstream depends on the lock's integrity, and it guards *cosmetic line
+atomicity*. The alternative failure destroys the panic's diagnostic value
+outright. An IPI halt of the other CPUs is the more complete answer and was
+**rejected for this PR** — a new cross-CPU mechanism on the panic path, in a PR
+that is not about panics, testable by no existing gate. It is noted against the
+GROUP A `#MC` item.
+
+### 2. Capability-mint failure still started `fs_test_thread`
+
+`main.c:2509` reported `CAP_NULL` and then unblocked the thread anyway. **The
+consequence is worse than the code's own comment says.** "Every FS op would be
+-EPERM" holds for the VFS path, but `fs_test_thread`'s self-test block calls
+`sfs_format(sbd)` **directly on the block device**, which is not
+capability-gated — so a thread that failed to get its capability would still
+reformat the disk while doing nothing useful.
+
+This was my own omission, and inconsistent with the same file: the other three
+DDR-964 conversion sites (`main.c:211`, `273`, `344`) all `sched_destroy(...)`
+on the error path, commented *"never ran: still BLOCKED"*. Now so does this one.
+
+### 3. `PRADYOS_CAD_ADV` was unbounded
+
+The comment claimed "four lines per run at most"; the `printf` fired on every
+advance, so a 180 s run grew the log without bound. Bounded to match the comment.
+
+### 4. Linker-symbol UB — fixed the one line this PR adds, not all 30
+
+`renametest_elf_end - renametest_elf` subtracts pointers into distinct array
+objects (C11 6.5.6). Cppcheck is right, **and `grep -c "_elf_end - "
+kernel/main.c` returns 30** — it is the house idiom, all pre-existing. The bot
+flagged only line 1980 because that is the only one in this PR's diff. Fixed
+that one: the PR should not add a 30th instance, and should not silently rewrite
+29 untouched lines either. The sweep is recorded for its own commit.
+
+### 5. Declined
+
+**Docstring coverage 35% vs an 80% threshold.** That threshold is a CodeRabbit
+default, not this repo's rule. This codebase documents with block comments
+carrying measurements and DDR references; 26 stub docstrings would lower the
+signal, not raise it.
+
+### Measurement (R1 — kernel sha256 `9b9b70c8ca52ec12`, 1,053,054 B)
+
+| gate | result |
+|---|---|
+| `smoke-cadence` | PASS — **CAD_ADV lines = 4** (bound holds), `PRADYOS_CADENCE_OK` = 1 |
+| `smoke-fsrm` | PASS |
+| `smoke-aether-sec` | PASS |
+| `smoke-rename-sfs` | PASS |
+| `smoke-shell` | **5/5** |
+| `ci-probe-rodata-check` / `ci-shard-check` | PASS |
+| `smoke-blkmq` / `smoke-rqstress-liveness` / `smoke-blk-integrity` | PASS |
+
+Build warning-clean at `-Werror`.
+
+**The honest limit, and it is the important line here.** The two real defects
+live on failure paths **no gate exercises** — a kernel panic, and an exhausted
+capability table. A fully green suite proves *no regression*; it does not prove
+either fix works. The one claim the gates do settle is the cadence bound, which
+is why its two counts are quoted rather than just "PASS": a bound applied to the
+wrong statement would have silenced `PRADYOS_CADENCE_OK`, and did not.
+
+Nothing is merged.

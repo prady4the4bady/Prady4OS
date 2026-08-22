@@ -1,4 +1,4 @@
-# DDR-967 — FSRM: the SFS root is umounted (and reformatted) under live ring-3 probes
+# DDR-967 — FSRM: the SFS root is unmounted (and reformatted) under live ring-3 probes
 
 Status: ACCEPTED. Written before the code it governs (R16).
 Number verified free in **both** `docs/ddr/` and `docs/decisions/` (§0.4).
@@ -39,7 +39,7 @@ persist` — because the volume beneath it was reformatted.
 Two readings died getting here, recorded so they are not retried:
 - It is **not** two SFS contexts coexisting. There is only ever one, which is
   why the `live=` instrument never exceeds 1. **Lifetime, not coexistence.**
-- The `live=` discriminator table ranked "root ctx umounted" the *least* likely
+- The `live=` discriminator table ranked "root ctx unmounted" the *least* likely
   branch. It is the one that holds.
 
 ## 2. Why the obvious fix is a use-after-free

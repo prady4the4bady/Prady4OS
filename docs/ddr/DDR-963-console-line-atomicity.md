@@ -1,7 +1,11 @@
 # DDR-963 — multi-call console lines are not atomic under SMP
 
-Status: ACCEPTED (finding + design). **Not implemented** — this DDR exists to
-record measured evidence and a design before any code, per R16.
+Status: ACCEPTED. **IMPLEMENTED** — `console_line_lock` / `_trylock` /
+`_unlock` in `kernel/console.c:19-40`, callers in `kernel/apic/smp.c` (four
+`[smp]` announce sites) and `kernel/idt.c` (the `[hb]` heartbeat and the ring-3
+`[trap]` printer). The header below was written before the code, per R16, and
+the "not implemented" wording is kept only where it is marked as superseded.
+DDR-970 later force-releases this lock on the kernel-panic path.
 Number verified free in **both** `docs/ddr/` and `docs/decisions/` (§0.4).
 
 ## 1. Observation
@@ -9,7 +13,7 @@ Number verified free in **both** `docs/ddr/` and `docs/decisions/` (§0.4).
 While scoring DDR-961's `smoke-smpuser` N=20 run, **11 of 20** serial logs
 contained a `[trap]` line spliced by another CPU's output:
 
-```
+```text
 [trap] user [boot-load] SYSTEST.ELF t=#PF page fault pid=180
 ```
 
@@ -121,9 +125,12 @@ several `kputs` calls nests strictly outside it: lock order
 that takes them in reverse. No change to `kputc`, the UART busy-wait, or the
 `klog_lock` nesting the file already documents.
 
-**Deliberately not done in this session.** It is a new cross-file lock in the
-fault path, it needs its own N-run verification that no line is spliced, and
-nothing currently failing depends on it. §4 is the reason it is not urgent.
+~~**Deliberately not done in this session.**~~ **SUPERSEDED — it was built.**
+The reasoning below stood at the time of writing and is kept for the record;
+the lock landed later in the same cohort, and DDR-970 then fixed the case this
+paragraph's caution was pointing at: a ring-0 fault inside a line-locked region
+strands the lock and hangs every other CPU. The caution was right; the answer
+was a panic-path force-release rather than not building it.
 
 ## 6. Verification this will require
 

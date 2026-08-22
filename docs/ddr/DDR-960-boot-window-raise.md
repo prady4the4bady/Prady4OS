@@ -63,7 +63,8 @@ The binding runtime quantity is **image + BSS**, not `kernel.bin` alone: BSS is
 | `__bss_start` phys | `0x4FF180` |
 | `__bss_end` phys | `0x524100` |
 | BSS size | 151,424 B |
-| **image + BSS** | **1,196,288 B** |
+| _(1,044,862 + 151,424 = 1,196,286; the span is 2 B more — the alignment gap between `kernel.bin` and `__bss_start`, and it is the span, not the sum, that the Makefile's PT_HI check uses)_ | |
+| **load span, `KERNEL_PHYS` → `__bss_end`** | **1,196,288 B** |
 | PT_HI top | `0x600000` |
 | **headroom to PT_HI** | **900,864 B** |
 
@@ -113,8 +114,9 @@ the number is not new to this boot path.
 - **Bounce buffer** — unchanged at `0x10000`, still 32 KiB per chunk.
 
 The one genuine coupling is the **disk**, and it is the coupling DDR-827 warned
-about: from LBA 17, N chunks read through LBA `17 + 64N`. At 48 that is LBA
-**3089**. The image is already 2 MiB (4096 sectors) from DDR-827, so **the image
+about: from LBA 17, N chunks read through LBA `17 + 64N` **exclusive**. At 48
+that is last sector **3088**, exclusive end **3089**. Every "ends at LBA X" in
+this DDR is the exclusive end; the last sector actually read is X-1. The image is already 2 MiB (4096 sectors) from DDR-827, so **the image
 does not need to grow this time** — the first change in this chain where that is
 true. It is stated explicitly so nobody assumes the two must always move together.
 
@@ -173,8 +175,8 @@ QEMU 8.2.2, TCG, no KVM. Kernel `6a254f13b9fd2b9fc9e8f2597eca9767`,
 | `make smoke-user` | PASS — 7 FS patterns |
 | `make smoke-fs` | PASS — 14 FS patterns |
 | `make smoke-smpuser` ×5 | **5/5 PASS**, and **0** `[BUG]`/`PANIC`/`#GP`/`[trap]` lines in all five logs |
-| boot-to-sentinel, 32 chunks | 0.38 s (5 runs, no variance) |
-| boot-to-sentinel, 48 chunks | **0.38 s** (5 runs, no variance) |
+| boot-to-sentinel, 32 chunks | 1.90 s total / **0.38 s per run**, n=5 (no variance) |
+| boot-to-sentinel, 48 chunks | 1.90 s total / **0.38 s per run**, n=5 (no variance) |
 
 **Boot time did not change measurably.** 16 extra INT 13h round trips plus
 512 KiB more `rep movsd` are below the resolution of the boot-to-sentinel
@@ -192,7 +194,8 @@ A temporary 500 KiB initialised `.rodata` pad was linked into `console.c` —
 early in the link order, so it pushes every later section, **including the
 embedded probe ELFs in `user_image.o`**, past the old 1 MiB mark. Resulting
 kernel: **1,556,862 B** — 508,286 B past the old window, 16,002 B inside the new
-one, ending at LBA 3058 (clear of DDR-831's scratch sector 4095).
+one, last sector LBA 3057 / exclusive end LBA 3058 (clear of DDR-831's scratch
+sector 4095).
 
 | arm | chunk count | result |
 |---|---|---|
