@@ -276,7 +276,22 @@ early_exit_eligible=0
 #     is correct behaviour in gates that mount no SFS config.
 #   msix unavailable          — a device-capability report; only the MSI-X gate
 #     is entitled to treat its absence as a failure.
+#
+# DDR-981 appended '[apfreeze]': the BSP prints that line only after an AP has
+# stopped taking its own LAPIC timer interrupt, which was B#3's root cause and,
+# per DDR-977 sec.8.2, OPEN-2's block-touching gates. It never appears on a
+# healthy boot, so it belongs here rather than in any one gate's
+# FORBIDDEN_SENTINEL -- and putting it here keeps every gate's DDR-785 early-exit
+# eligibility, which adding it to ~20 recipes would have destroyed.
+#
+# Its known limit, stated rather than glossed, is the same one recorded above:
+# the freeze happens near tick 300 and the dump prints at the first heartbeat a
+# full window later (~tick 1000), so a gate that early-exits before then will not
+# see it. That gap does not bite where it matters -- every SMP and block gate the
+# freeze actually reddens already declares a FORBIDDEN_SENTINEL and therefore
+# burns its full window.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
+    '[apfreeze]' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
     'FSRM FAIL' 'KILL FAIL' 'ROOTMOUNT FAIL' 'SETNAME FAIL' 'SFSROOT FAIL' \
     'SURFDESTROY FAIL' 'SYSINFO FAIL' 'TIME FAIL' \

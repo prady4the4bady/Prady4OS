@@ -7205,3 +7205,88 @@ operation.
 
 **Still open:** why CPU 3 stops taking interrupts. DDR-977 §5 lists the
 candidates and specifies the next instrument. Do not patch `virtio_blk.c`.
+
+---
+
+## 2026-08-22 — DDR-981: B#3 root cause found and fixed (`yield()` ran with IF clear)
+
+**Status: CLOSED.** B#3 and OPEN-2's block-touching gates are fixed.
+
+### What it actually was
+
+Not virtio-blk (DDR-878/DDR-974 were right to clear it) and not the LAPIC.
+`SYSCALL` entry clears `RFLAGS.IF` via `MSR_SFMASK` (`syscall.c:229`), and the
+entry path never re-enables it — `syscall_entry.asm:46` states the invariant
+outright: *"No nesting: SFMASK clears IF, so a syscall is never interrupted."*
+Every yield-spin loop reachable from ring 3 therefore spun with interrupts
+masked, and `context_switch` preserves each thread's RFLAGS, so the mask travels
+*across the context switch*. Two such threads on one CPU hand the CPU to each
+other through `schedule()` forever and never reach the idle loop's `sti; hlt`
+that would have cleared it.
+
+The CPU is not halted, not starved, not broken: it runs normally, with `IF`
+clear, permanently. Its timer tick never arrives (`pc->ticks` freezes) and any
+block completion MSI-X routed at it is never serviced — a 5 s wait, then `-EIO`.
+
+Affected call sites: `mnt_lock` (`vfs.c:27`), pipe write (`sys_io.c:57`), pipe
+read (`sys_io.c:268`), blocking console read (`sys_io.c:293` — PRISM's read
+loop), `sys_yield` (`syscall.c:155`). `kernel/main.c`'s yields are kernel
+threads, already interruptible, unaffected.
+
+### How it was named
+
+An NMI probe, because NMI is the one interrupt that still reaches a CPU with
+`IF` clear. The BSP notices an AP whose `pc->ticks` did not advance across a
+full 500-tick heartbeat and NMIs it; the AP stashes its state into its own
+`percpu` and the BSP relays it (the AP must not print — it may hold
+`g_line_lock`).
+
+One line refutes three of DDR-977 §5's four candidates and confirms the fourth:
+
+```text
+[apfreeze] cpu=3 ticks=322 rip=… if=0 lvt=0x20030 masked=0 svr=0x1FF swen=1
+           tpr=0x0 isr48=0 irr48=1 pid=89
+```
+
+LVT unmasked, LAPIC software-enabled, no stuck in-service vector, TPR zero, and
+a timer interrupt **pending and undelivered** — leaving `IF` as the only
+possible blocker. Repeat sampling then showed the pid and RSP alternating
+between two threads, i.e. the CPU was *running and merely masked*, not spinning.
+A third latch caught the first masked `yield()` at `sys_yield`, which points
+straight at SFMASK.
+
+### The fix
+
+An interrupt window in `yield()` — the one choke point all five sites share.
+Fixing `sys_yield` alone would not have fixed the observed livelock, whose
+threads were in `mnt_lock` under `vfs_read`. Enabling interrupts at SYSCALL
+entry is the textbook fix and is deliberately **not** taken here: the syscall
+layer is written against non-reentrancy (`sys_exec.c:10` depends on it for its
+CR3 swap), and that is not a change to make three days before the deadline.
+Recorded as post-1.0. In-tree precedent for the narrow version:
+`virtio_gpu.c:78-95` already saves RFLAGS and `sti`s around its used-ring wait
+for exactly this reason.
+
+### Measured
+
+| | boots | frozen AP | `compl wait timeout` |
+|---|---|---|---|
+| before | 14 | **6** | 5–11 per frozen boot, 0 otherwise |
+| after | **20** | **0** | **0** |
+
+Denominator (§NON-NEGOTIABLE 17): `ymask` ≈ **6.1M** masked yields per boot, so
+a green run cannot have avoided the fixed path. Kernel under test
+`d4b39c96a98ba2fead60d3eb23f37b9f4b5b739500f94f9eb401702552b83b22` (R1).
+Mutation-checked: removing the fix reddens `smoke-blk-integrity` on the first
+run, named by `[apfreeze]`.
+
+### Gate lesson
+
+`smoke-smp` and `smoke-rqstress` each measured **20/20** at `-smp 4` while this
+defect was live. The gates did not catch it — the evidence was
+`[vblk] compl wait timeout` sitting in serial logs nothing asserted on.
+`[apfreeze]` is now in `GLOBAL_FORBIDDEN` (`boot_test.sh`), which is append-only
+per §NON-NEGOTIABLE 6 and preserves every gate's DDR-785 early-exit eligibility.
+Stated limit: a gate that early-exits before ~tick 1000 will not see the line —
+which does not bite, because every SMP/block gate the freeze actually reddens
+already declares a `FORBIDDEN_SENTINEL` and burns its full window.

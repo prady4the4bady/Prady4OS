@@ -45,6 +45,20 @@ struct percpu {
     struct tcb *prev;
     volatile uint8_t idle;  /* rq-3: 1 while this CPU is in the idle-loop hlt wait —
                              * a directed wake IPI (smp_resched_one) breaks it. */
+
+    /* DDR-981: AP-freeze NMI probe. Appended AFTER every asm-consumed offset
+     * (the u_* block is static-asserted in percpu.c), so this cannot move them.
+     * Protocol: the BSP latches ONE stalled AP per boot, sets nmi_dump = 1 and
+     * NMIs it; that AP's NMI handler fills the d_* fields and release-stores
+     * nmi_dump = 2; the BSP prints from its own heartbeat and stores 3.
+     * The AP never prints — it may be wedged holding g_line_lock, which is the
+     * whole reason this is a stash-and-relay rather than a dump-in-place. */
+    volatile uint8_t nmi_dump;  /* 0 idle | 1 armed | 2 filled | 3 printed */
+    uint8_t  d_shot;            /* which sample this is (1..DUMP_SHOTS) */
+    uint8_t  d_btn;             /* how many d_bt[] entries are valid */
+    uint64_t d_rip, d_rsp, d_rbp, d_rflags;
+    uint64_t d_bt[4];           /* return addresses, walked from the frame chain */
+    uint32_t d_cs, d_lvt, d_tpr, d_svr, d_isr48, d_irr48, d_pid;
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */
