@@ -6677,3 +6677,62 @@ re-runs on the final tip. Nothing here is merged and PR #5 stays a draft.
 
 FSRM remains root-caused-but-unbuilt, and `smoke-agents` remains open with
 attribution unresolved; neither is affected by this result.
+
+---
+
+## FSRM fix landed — DDR-967, and what 20/20 does and does not prove
+
+The design in "FSRM fix design refined" above is now built. `fs_test_thread`
+records each SFS-rooted probe's **pid** at spawn (`smnt_pid[3]`, locals — no new
+writable global, DDR-826) and, immediately before the destructive block that
+reformats the volume, waits until every recorded pid is gone:
+
+```c
+uint64_t dl = g_ticks + 400;
+for (int i = 0; i < 3; i++)
+    while (smnt_pid[i] && sched_find_pid(smnt_pid[i]) && g_ticks < dl)
+        yield();
+if (g_ticks >= dl)
+    kputs("[sfs] DDR-967 wait expired; umounting with a probe still live\r\n");
+```
+
+By pid, not by TCB pointer — that is the whole point of the addendum above.
+Polling `->state` for `THREAD_ZOMBIE` races `sched_start_reaper()` freeing the
+TCB underneath the poll; `sched_find_pid()` (`sched.h:235`, "live thread by pid,
+or NULL") cannot. The wait falls **through** on expiry to exactly today's
+behaviour, and announces when it does, so an intermittently-red gate cannot
+become a gate that wedges. Pids left 0 are probes `probe_enabled()` never
+started and are skipped.
+
+### Measurement (R1 — kernel sha256 `612cde9b9761319e`, 1,053,054 B)
+
+| gate | result | wait expiries |
+|---|---|---|
+| `smoke-fsrm` | **20/20 PASS** | 0 |
+| `smoke-ftruncate` | PASS | 0 |
+| `smoke-rename-sfs` | PASS | 0 |
+| `smoke-shell` | **5/5 PASS** | — |
+| `ci-probe-rodata-check` | PASS | — |
+| `ci-shard-check` | PASS | — |
+| `smoke-blkmq` | PASS | — |
+| `smoke-rqstress-liveness` | PASS | — |
+| `smoke-blk-integrity` | PASS | — |
+
+Build warning-clean at `-Werror` (clang + nasm); no `[BUG]` line in any of the
+retained gate logs. `smoke-ftruncate` and `smoke-rename-sfs` are in the table
+because those two probes share `smnt` and the new wait covers them too.
+
+**`expired=0` across all 28 runs is the load-bearing number, not the 20 passes.**
+It says the wait is always satisfied well inside 400 ticks, so the fall-through
+is a safety net that never fires rather than a path that quietly restores the
+old behaviour — which is the way a bounded wait usually fails to be a fix.
+
+**What 20/20 does not prove.** FSRM has never reproduced locally, so a local
+green cannot show the race is gone; 20/20 shows no regression and no hang. What
+makes this more than a hypothesis is §"FSRM root-caused" above: the dangerous
+umount-under-live-probe sequence is visible in *every* passing log, green ones
+included, so the fix removes a real ordering hazard whether or not CI has yet
+caught it on this branch. Closure stays with CI over time.
+
+`smoke-agents` is untouched by this and remains the one open signature of the
+five, attribution unresolved. Nothing is merged; PR #5 stays a draft.

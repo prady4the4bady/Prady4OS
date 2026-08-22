@@ -1251,6 +1251,12 @@ static void fs_test_thread(void *arg) {
         struct blk_device *sbd = blk_get(2);
         if (sbd && sfs_format(sbd) == 0) {
             int smnt = vfs_mount(2);
+            /* DDR-967: pids of the ring-3 probes rooted at smnt (fsrm,
+             * ftruncate, rename-sfs). The destructive self-test block further
+             * down REFORMATS this volume, so it waits on these before
+             * umounting. 0 = that probe was never spawned. Locals, not a
+             * writable global (DDR-826). */
+            uint32_t smnt_pid[3] = { 0, 0, 0 };
             if (smnt >= 0) {
                 kputs("[sfs] mounted ");
                 kputs(vfs_fs_name(smnt));
@@ -1924,6 +1930,7 @@ static void fs_test_thread(void *arg) {
                     if (elf_load((void *)(uintptr_t)fsrmtest_elf, flen,
                                  "FSRMTEST", &fp) == ELF_OK && fp) {
                         fp->root_mnt = smnt;          /* SFS root before unblock  */
+                        smnt_pid[0] = fp->pid;        /* DDR-967: wait on it below */
                         sched_unblock(fp);
                         kputs("[user] ELF loaded (embedded); SFS-rooted fsrm probe spawned\r\n");
                     }
@@ -1956,6 +1963,7 @@ static void fs_test_thread(void *arg) {
                     if (elf_load((void *)(uintptr_t)ftrunctest_elf, tlen,
                                  "FTRUNCTEST", &tp) == ELF_OK && tp) {
                         tp->root_mnt = smnt;          /* SFS root before unblock */
+                        smnt_pid[1] = tp->pid;        /* DDR-967 */
                         sched_unblock(tp);
                         kputs("[user] ELF loaded (embedded); ftruncate probe spawned\r\n");
                     }
@@ -1973,6 +1981,7 @@ static void fs_test_thread(void *arg) {
                     if (elf_load((void *)(uintptr_t)renametest_elf, rnlen,
                                  "RENAMETEST", &rn) == ELF_OK && rn) {
                         rn->root_mnt = smnt;          /* SFS root before unblock */
+                        smnt_pid[2] = rn->pid;        /* DDR-967 */
                         sched_unblock(rn);
                         kputs("[user] ELF loaded (embedded); SFS rename probe spawned\r\n");
                     } else {
@@ -2088,6 +2097,34 @@ static void fs_test_thread(void *arg) {
                     kputs(virtio_blk_completed_on_ap()
                               ? "[blk] msix on AP OK\r\n"
                               : "[blk] msix on AP FAIL\r\n");
+                }
+
+                /* DDR-967: the block below REFORMATS the volume, and the three
+                 * ring-3 probes above are rooted on it (->root_mnt = smnt) and
+                 * runnable from their sched_unblock. Until now nothing waited
+                 * for them, so whether a probe finished before this umount was
+                 * pure scheduling luck — that is the FSRM "created file did not
+                 * persist" race: create and write succeed, then the reopen finds
+                 * a freshly formatted disk.
+                 *
+                 * Waited BY PID, not by TCB pointer. Polling ->state for
+                 * THREAD_ZOMBIE is a use-after-free: sched_start_reaper() can
+                 * free a zombie's TCB mid-poll. sched_find_pid() is documented
+                 * "live thread by pid, or NULL", so it goes NULL once the thread
+                 * is gone. (The main.c:611 crosswake precedent polls a TCB
+                 * safely only because that thread blocks and never exits.)
+                 *
+                 * Bounded, and falls THROUGH on expiry to exactly today's
+                 * behaviour: an intermittently-failing gate must not become a
+                 * gate that wedges. A pid of 0 is a probe that was never
+                 * spawned (probe_enabled) and is skipped. */
+                {
+                    uint64_t dl = g_ticks + 400;
+                    for (int i = 0; i < 3; i++)
+                        while (smnt_pid[i] && sched_find_pid(smnt_pid[i]) && g_ticks < dl)
+                            yield();
+                    if (g_ticks >= dl)
+                        kputs("[sfs] DDR-967 wait expired; umounting with a probe still live\r\n");
                 }
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
