@@ -6607,3 +6607,46 @@ infrastructure kill leaves the step `in_progress`, the job with a
 `completed_at`, and the logs unavailable. **Check the step status before reading
 anything into a shard-level red** — this one would otherwise read as a
 mysterious hang in whichever gate happened to be running.
+
+## Tip `957a341` is fully green — and the third run for §3 was triggered
+
+PR #5 now reports `mergeable_state: "clean"` (was `unstable`): all 22 checks
+green on the tip, no conflict, 40 commits. Both suites — the push event and the
+pull_request event — came back green on `957a341`, which carries all three
+shipped fixes (DDR-964, DDR-965, DDR-966).
+
+**Two suites is not three.** §3 requires three CI greens on the *same* tip, and
+a push produces only two suites per commit, so the count stalls at 2/3 by
+construction. A third requires an explicit workflow re-run on that SHA, which
+has now been triggered (`rerun_workflow_run` on run `32546023824`).
+
+That re-run is **evidence, not promotion** — it changes no code, merges nothing,
+and leaves PR #5 a draft. Its outcome is the point either way:
+
+- **green** → a third independent green on this kernel, and the §6.1 evidence
+  bar for the three fixed families is met *for this kernel*.
+- **red** → an intermittent survived, and the capture is worth more than the
+  green would have been. Read it through its family's discriminator before
+  touching anything.
+
+### A correction to how that third green counts
+
+This entry first claimed the re-run would give "three greens on one tip". It
+does not, and the reason is worth stating so the promoter is not misled:
+**this commit itself moves the tip.** Any subsequent commit — including a
+docs-only one like this — supersedes `957a341`, so its three greens become
+historical rather than tip-current.
+
+Briefly holding this commit unpushed was considered and rejected: it would only
+help if the branch stopped at `957a341`, and it cannot, because this write-up
+has to land.
+
+What the `957a341` re-run genuinely provides is a **third independent run of
+this kernel** — real evidence about the three fixed families, since `957a341`
+and this commit are byte-identical in `kernel.bin` (docs-only diff). What it is
+not is a promotion credential. **Whoever promotes must re-run on the final tip**
+to satisfy §3 literally; two suites per push means that count always stalls at
+2/3 without an explicit re-run.
+
+Promotion itself (fast-forwarding `main`) remains out of scope here and is not
+performed.
