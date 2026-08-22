@@ -6436,3 +6436,34 @@ that tip, fast-forward `main`, tag `v1.0.0`.
 "do not start Phase 2 before the gate" ordering): the merge hold set earlier in
 session was lifted by the operator, who confirmed the full merge → promote → tag
 path. Any push by another actor resets the green count on the new tip.
+
+---
+
+## STOP-THE-RELEASE FINDING — the ISO boots a kernel, not an OS (DDR-971)
+
+`main` is at `7c6c67a` (PR #5 merged and promoted; three greens on the PR tip
+and three on `dev/phase1`). **`v1.0.0` is NOT tagged and must not be** until the
+finding below is fixed.
+
+First real end-to-end walkthrough of `build/pradyos.iso` (52,805,632 B, sha256
+`8a5e6507e18954e1`): both `smoke-iso-x86` arms pass, and the image is unusable.
+The kernel reaches `NEXUS KERNEL OK`, reports `[blk] no block device` /
+`[fs] no mountable filesystem found`, and idles at `rqdepth=1 curpid=0`.
+
+Control arm (same `kernel.bin`, normal 3-disk boot) shows 4 mounts, PRISM_READY,
+50 prompts, aetherd, 26 ELF loads. **The kernel is fine; the packaging is not.**
+
+The ISO ships `pradyos.img` + `esp.img` only. `fat.img`/`sfs.img` are separate
+virtio-blk disks the gates attach. After handoff the kernel cannot read the
+ATAPI CD it booted from, and there is no ramdisk facility. The gate is green
+because `NEXUS KERNEL OK` prints at line 30 of 145, ~60 lines before userspace.
+
+**Do not read `smoke-iso-x86` green as "the ISO works".** It proves the loader
+handoff only — which is what DDR-896 built it to prove.
+
+Next: implement a root the kernel can reach after handoff (DDR-971 §8; ramdisk
+`blk_device` recommended, 519,810 B of kernel headroom bounds it), then redo the
+DDR-971 walkthrough, then tag.
+
+Note: `xorriso` and OVMF had to be apt-installed in the build container — the
+ISO target had never been run in this environment.

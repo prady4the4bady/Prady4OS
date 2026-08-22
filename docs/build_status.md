@@ -7026,3 +7026,74 @@ is why its two counts are quoted rather than just "PASS": a bound applied to the
 wrong statement would have silenced `PRADYOS_CADENCE_OK`, and did not.
 
 Nothing is merged.
+
+---
+
+## The ISO boots a kernel, not an OS — first real end-to-end walkthrough (DDR-971)
+
+`make iso` on `main` @ `7c6c67a` produces `build/pradyos.iso`, 52,805,632 B,
+sha256 `8a5e6507e18954e1`. `make smoke-iso-x86` passes both arms. **And the
+image is not usable.**
+
+Reading the whole 145-line BIOS serial instead of grepping it:
+
+```text
+[ahci] controller ready, disks=0
+[blk] no block device
+[fs] no mountable filesystem found
+```
+
+followed by 23 heartbeats at `rqdepth=1 curpid=0` with `preempt` advancing — a
+healthy scheduler with nothing to run. The UEFI arm is identical.
+
+### The control arm is what makes this safe to state
+
+Same commit, same `kernel.bin`, booted by `smoke-shell` with the three
+virtio-blk disks the normal gates attach:
+
+| probe | normal boot | ISO boot |
+|---|---|---|
+| `mounted` | 4 | **0** |
+| `PRISM_READY` | 1 | **0** |
+| `prism>` | 50 | **0** |
+| `aetherd` | 4 | **0** |
+| `[user] ELF loaded` | 26 | **0** |
+| `AGENT ROSTER slots=` | 1 | **0** |
+
+**The kernel is fine; the ISO packaging is the defect.**
+
+### Root cause
+
+The ISO carries `pradyos.img` (2 MiB boot disk) and `esp.img` (50 MiB ESP) and
+nothing else. The root filesystems are *separate disks* — `fat.img` (64 MiB) and
+`sfs.img` (16 MiB) — attached as extra virtio-blk devices by `boot_test.sh`, and
+the ISO ships neither. After handoff the kernel speaks only virtio-blk, AHCI and
+NVMe; the CD is ATAPI, hence `disks=0`. There is no ramdisk/initrd facility
+(`grep -rln "ramdisk\|initrd" kernel/` is empty; `blk_register()` has two
+implementors, virtio_blk and nvme). The ISO is a kernel-only boot medium.
+
+### Why the gate is green
+
+`smoke-iso-x86` asserts `NEXUS KERNEL OK`, which prints at **line 30 of 145** —
+about 60 lines before userspace would start. Every assertion it makes is true.
+DDR-896 wrote it deliberately to prove "the same unmodified kernel reaches the
+same state through a different loader", and it proves exactly that. The error
+was reading it as evidence the ISO is *usable*.
+
+Same class as the vacuous checks already catalogued here: an assertion that
+cannot separate the working system from the broken one.
+
+### Consequence
+
+**`v1.0.0` is not tagged.** The tag was conditioned on a manual pass; the manual
+pass failed. Shell, AETHER, networking and compositor checks are recorded as
+**BLOCKED**, not passed — they are separately evidenced on the normal boot path,
+but not from the ISO.
+
+A fix needs a root the kernel can reach after handoff: a ramdisk `blk_device`
+behind the existing `blk_register()` seam (recommended), a stage-2 second
+payload, or ATAPI+ISO9660 support. See DDR-971 §8. `kernel.bin` has 519,810 B of
+headroom, which bounds the first option.
+
+Also recorded: `xorriso` and OVMF were absent from the build container, so
+`make iso` had never been run here before today.
