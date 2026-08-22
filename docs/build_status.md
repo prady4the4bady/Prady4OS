@@ -6492,3 +6492,59 @@ red is a CI intermittent that has never reproduced locally, so even a complete
 local green would show only "no regression", not "fixed". Landing a boot-phase
 reorder on that basis buys little and risks much. Recorded so the next session
 starts from the safe design instead of rediscovering the reaper hazard.
+
+## A FIFTH signature — `smoke-agents` missing `AGENT KRYOS active` (shard 2, `9231eab`)
+
+Not one of the four families, and **not new to the project**: `build_status`
+line 5111 records the identical `required pattern 'AGENT KRYOS active' not
+found`, and DDR-914 (2026-08-13) fixed one race class in this gate — *"a
+sampling race, not a liveness bug"*: `roster_active()` is instantaneous by
+design, the compositor reported only an observed *change*, and on a slow TCG
+runner the agent's whole 0→1→0 lifecycle fell between two frames.
+
+### What the capture shows
+`PRADYOS_AGENTS_OK` **printed** (twice); the gate died on the other two required
+sentinels. `aetherd: spawned agent PID=81` printed, then nothing from the agent.
+The runtime state after that point is the interesting part:
+
+```
+[hb] t=3500 … rqdepth=11 rqcpus=1 … preempt=1514 … cur=COMPOSIT.ELF
+[hb] t=4000 … rqdepth=11 rqcpus=1 … preempt=1514 … cur=COMPOSIT.ELF
+   … unchanged through t=14500 …
+```
+
+`preempt` is **frozen at 1514 across 23 consecutive heartbeats (~11 s)** with
+`rqdepth` pinned at 11 and only `COMPOSIT.ELF`/`AETHERD` ever current.
+
+### Local comparison — the failing state does not occur here
+Five local runs on the same kernel, all **PASS** with all three sentinels:
+
+| | CI (failing) | local (5/5 pass) |
+|---|---|---|
+| distinct `preempt` values across heartbeats | **1** (frozen) | **11** (advancing) |
+| max `rqdepth` | **11** | **6** |
+
+So this is not merely "slower locally" — the scheduler is demonstrably
+preempting and the queue staying shallow here, while in CI neither holds.
+
+### Attribution — deliberately left open
+It **cannot be pinned on this branch's changes** on the evidence available, and
+it **cannot be cleared** either. Note the reason a local A/B was *not* run:
+the failure mode does not reproduce locally at all, so both arms of
+pre-change vs post-change would pass 5/5 and discriminate nothing. That would be
+a vacuous measurement of exactly the kind catalogued above, so it was skipped
+rather than performed for the appearance of rigour.
+
+What can be said: `smoke-cadence`'s DDR-965 change is gated on the `'k'` test
+knob and cannot affect this gate; DDR-966 touches only the two blk proofs; the
+DDR-964 conversion covers kernel demo threads, not the ring-3 agent spawn. The
+one change with a plausible timing surface here is DDR-963's line lock, which
+holds IRQs off across the ~20-call `[hb]` line — but this gate is single-CPU
+(`rqcpus=1`), so that lock is uncontended, and the local runs show preemption
+healthy with it in place.
+
+**No fix (§6.0-B).** The discriminating instrument for a recurrence already
+exists in the heartbeat: if `preempt` is frozen while `rqdepth` stays high, the
+scheduler is not preempting and this belongs with the DDR-936/947 run-queue
+work, not with the DDR-914 sampling race — those are different defects wearing
+the same missing sentinel.
