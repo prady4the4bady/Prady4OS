@@ -6650,3 +6650,30 @@ to satisfy §3 literally; two suites per push means that count always stalls at
 
 Promotion itself (fast-forwarding `main`) remains out of scope here and is not
 performed.
+
+### Outcome — the re-run came back GREEN (three green runs of this kernel)
+
+`run_attempt: 2` of run `32546023824` on `957a341` completed
+**`conclusion: success`** (started 04:01:52, finished 04:38:36). Counting the
+two event-triggered suites plus this re-run, that kernel now has **three green
+runs**:
+
+| run | event | attempt | result |
+|---|---|---|---|
+| `32546021867` | push | 1 | green |
+| `32546023824` | pull_request | 1 | green |
+| `32546023824` | pull_request | **2 (re-run)** | **green** |
+
+All 22 checks, all six shards, on the kernel carrying DDR-964, DDR-965 and
+DDR-966. `kernel.bin` is byte-identical to the current tip `eaca9c1` (docs-only
+diff), so this is three clean runs of the code that is on the branch now.
+
+**What this does and does not establish.** It is a genuine three-run result for
+the three fixed families on this kernel — the strongest evidence any of them has
+had, and notably none of the five characterised signatures appeared in any of
+the three. It is **not** §3 satisfied for promotion: §3 wants three greens on
+the *tip*, and the tip has since moved to `eaca9c1`. Whoever promotes still
+re-runs on the final tip. Nothing here is merged and PR #5 stays a draft.
+
+FSRM remains root-caused-but-unbuilt, and `smoke-agents` remains open with
+attribution unresolved; neither is affected by this result.
