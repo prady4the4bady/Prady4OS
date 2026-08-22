@@ -151,6 +151,13 @@ fsrmtest_elf:
     incbin "build/fsrmtest.elf"
 fsrmtest_elf_end:
 
+; DDR-973: FAT32 multi-cluster read regression probe (rooted at the FAT mount).
+global fat32mctest_elf
+global fat32mctest_elf_end
+fat32mctest_elf:
+    incbin "build/fat32mctest.elf"
+fat32mctest_elf_end:
+
 ; DDR-866: ring-3 ftruncate probe (Group 3 item 20)
 global stackdemand_elf
 global stackdemand_elf_end

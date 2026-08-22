@@ -83,6 +83,29 @@ its 5d startup self-check (fork a child that `_exit(42)`, reap it) so `smoke-ini
 stays green.
 **Deferred:** init-driven `fork`+`execve` **respawn** (needs the FAT32 large-read
 / execve-of-large-musl-C fix). Tracked in `build_status.md`.
+
+> **Addendum 2026-08-22 (DDR-973) — the FAT32 attribution is refuted; the
+> deferral is narrower than it reads.**
+>
+> "Root cause is most likely FAT32 multi-cluster reads" was a hypothesis, never a
+> measurement, and it does not hold. `run /CMUSL.ELF` — the same large musl-C
+> ELF this section names, 30,488 B spanning **60** FAT32 clusters — execve's
+> from the FAT root cleanly and prints `PRADYOS_MUSL_OK` with status 0. The
+> function the backlog inherited from this paragraph, `read_cluster_chain`, has
+> never existed in this repo; the reader is `fat32_read`. Two fixtures already
+> disproved a shallow chain bug before DDR-973 was written: `/BIG8K.TXT` (16
+> clusters, read byte-exact through a pipe by `smoke-shell`) and
+> `/EXECTEST.ELF` (9 clusters, through the full `sys_execve` path).
+>
+> `smoke-fat32-multicluster` now holds this permanently: 65,536 B / 128 clusters
+> verified byte-for-byte, 6 cluster-boundary straddles, plus this section's own
+> case as arm C.
+>
+> **What is still deferred is only the init-driven respawn itself** — init
+> `fork`+`execve`ing PRISM and restarting it on abnormal exit. That is unbuilt
+> work, not a blocked-on-a-kernel-bug item. PRISM's own `run` builtin is *not*
+> disabled: `user/prism.c` dispatches it, and `smoke-shell` exercises
+> `run /EXECTEST.ELF` twice plus `jobs`/`fg`.
 - *Aside (general fork fix shipped here):* forked children previously resumed
   with only RIP/RSP/RAX set (other GP regs zeroed — a documented `sys_fork`
   limitation). 5e exposed it (init's non-inlined `nsi` faulted on `rbp=0`) and

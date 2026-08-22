@@ -73,6 +73,8 @@ USER_ROOTMNT_SRC := user/rootmounttest.c  # fs: per-process root-mount probe (DD
 USER_ROOTMNT_ELF := build/rootmounttest.elf
 USER_FSRM_SRC := user/fsrmtest.c          # fs: ring-3 file lifecycle probe (DDR-744)
 USER_FSRM_ELF := build/fsrmtest.elf
+USER_FAT32MC_SRC := user/fat32mctest.c    # DDR-973: FAT32 multi-cluster read regression probe
+USER_FAT32MC_ELF := build/fat32mctest.elf
 USER_STACKD_SRC := user/stackdemand.c     # ADR-038: demand-paged stack probe
 USER_STACKD_ELF := build/stackdemand.elf
 USER_FTRUNC_SRC := user/ftrunctest.c      # fs: ring-3 ftruncate probe (DDR-866)
@@ -216,7 +218,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -400,6 +402,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ROOTMNT_ELF) build/rootmounttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FSRM_SRC) -o build/fsrmtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FSRM_ELF) build/fsrmtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_FAT32MC_SRC) -o build/fat32mctest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FAT32MC_ELF) build/fat32mctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_STACKD_SRC) -o build/stackdemand.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/stackdemand.o $(MUSL_LIB) -o $(USER_STACKD_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FTRUNC_SRC) -o build/ftrunctest.o
@@ -481,7 +485,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -635,7 +639,10 @@ $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 # write test creates /KOUT.TXT, which must not already exist on a second run.
 FAT_IMG := build/fat.img
 
-fat-image:
+# DDR-973: depends on the kernel build because that is what produces
+# $(USER_CMUSL_ELF), which the recipe now mcopy's onto the volume. Without
+# this a parallel `make -j smoke-...` could run the recipe before the ELF exists.
+fat-image: $(KERNEL_BIN)
 	@mkdir -p build
 	dd if=/dev/zero of=$(FAT_IMG) bs=1M count=64 status=none
 	mkfs.fat -F 32 -n PRADYOS $(FAT_IMG) >/dev/null
@@ -655,10 +662,25 @@ fat-image:
 	for i in $$(seq 1 200); do printf 'pipe payload line %03d 0123456789abcdef\n' $$i >> build/big8k.txt; done
 	printf 'BIGTAIL-e5v\n' >> build/big8k.txt
 	mcopy -i $(FAT_IMG) build/big8k.txt ::/BIG8K.TXT
+	# DDR-973: the FAT32 multi-cluster read fixtures. mkfs.fat -F32 over 64 MiB
+	# lands on 1 sector per cluster, so 64 KiB is 128 clusters and the 30,488-byte
+	# cmusl image is 60 -- both well past the 16-cluster reach of /BIG8K.TXT.
+	# byte n = (7n + 3 + 31*(n >> 8)) & 0xFF. The 31*(n>>8) term is load-bearing:
+	# plain (7n+3)&0xFF has period 256, so with 512-byte clusters every cluster
+	# would hold IDENTICAL bytes and a chain repeat would read back perfectly --
+	# a mutant proving exactly that passed the first cut of this gate (DDR-973 sec.6).
+	# 31 is invertible mod 256, so all 256 blocks of the 64 KiB file are distinct.
+	# python3 (not printf) because the data contains NULs, which command
+	# substitution would eat; mkfs.fat + mtools are already hard deps of this recipe.
+	python3 -c "import sys; sys.stdout.buffer.write(bytes(((7*n+3+31*(n>>8))&0xFF) for n in range(65536)))" > build/bigpat.bin
+	mcopy -i $(FAT_IMG) build/bigpat.bin ::/BIGPAT.BIN
+	# Arm C's target: the LARGE musl-C ELF ADR-024 sec.D5 named. Copied, not rebuilt,
+	# so the gate execve's the same image the kernel already loads from SFS at boot.
+	mcopy -i $(FAT_IMG) $(USER_CMUSL_ELF) ::/CMUSL.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
 	# FAT /AETHER.CFG (DDR-732/734) is retired here.
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT)"
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT, /BIGPAT.BIN, /CMUSL.ELF)"
 
 # A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
 # place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
@@ -1136,6 +1158,46 @@ smoke-rename-sfs: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SFS_RENAME_OK\nPRADYOS_SFS_RENAME_ENOENT\nPRADYOS_SFS_RENAME_LFN')" \
 	FORBIDDEN_SENTINEL="$$(printf 'SFS RENAME FAIL\n[vblk] compl wait timeout\n[vblk] slot wait timeout')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-973: FAT32 multi-cluster reads. ADR-024 sec.D5 deferred init-driven
+# execve-respawn on the report that "execve of a large musl-C ELF read from FAT32
+# corrupts the loaded image", attributed only as "most likely FAT32 multi-cluster
+# reads". That attribution was never measured, and the function the backlog names
+# (`read_cluster_chain`) does not exist in this repo -- the reader is fat32_read.
+# The defect did not reproduce: `run /CMUSL.ELF` (30,488 B = 60 clusters) execve'd
+# clean. This gate makes that refutation permanent and byte-exact. DDR-973 sec.3-5.
+#
+# mkfs.fat -F32 over 64 MiB gives 1 sector per cluster, so /BIGPAT.BIN (65,536 B)
+# is 128 clusters -- 8x the reach of /BIG8K.TXT, the deepest chain any existing
+# gate reads. Arm A scans every byte against (7n + 3 + 31*(n>>8)) & 0xFF -- see the
+# fat-image recipe for why the second term is load-bearing -- arm B re-walks the
+# chain from the head 6 more times at cluster-edge offsets, arm C is ADR-024's case.
+#
+# WHY THE COUNT ASSERTION BELOW. Arm C execve's /CMUSL.ELF, which prints the same
+# PRADYOS_MUSL_OK the boot's SFS-loaded copy does (main.c CMUSL.ELF). A plain
+# EXTRA_SENTINEL would therefore pass on the boot copy alone and prove nothing
+# about arm C. The denominator is 1 (that boot copy), so the gate demands 2 (R17).
+smoke-fat32-multicluster: $(IMG) fat-image sfs-image
+	@rm -f build/fat32mc_serial.log
+	TIMEOUT_S=90 QEMU_PROBES=fat32mc \
+	KEEP_SERIAL=1 SERIAL_LOG=build/fat32mc_serial.log \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_FAT32_MC_OK bytes=65536 clusters=128 straddles=6')" \
+	FORBIDDEN_SENTINEL="FAT32MC FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@# Arm C: the execve'd copy must be the SECOND occurrence. One means arm C's
+	@# execve never landed -- exactly the ADR-024 symptom -- and the gate fails.
+	@# grep -c prints "0" AND exits 1 when there is no match, so `|| echo 0` would
+	@# make n="0 0" and the -lt test a syntax error. `|| true` keeps grep's own count;
+	@# the :- default covers a missing file, where grep prints nothing and exits 2.
+	@n=$$(grep -acF 'PRADYOS_MUSL_OK' build/fat32mc_serial.log 2>/dev/null || true); n=$${n:-0}; \
+	  if [ "$$n" -lt 2 ]; then \
+	    echo "[smoke] FAIL: arm C -- PRADYOS_MUSL_OK appeared $$n time(s), want 2"; \
+	    echo "[smoke]   1 = boot's SFS-loaded cmusl only; the FAT32 execve of"; \
+	    echo "[smoke]   /CMUSL.ELF (30,488 B, 60 clusters) did not produce a running image."; \
+	    grep -anF 'FAT32MC FAIL' build/fat32mc_serial.log | head -5; \
+	    exit 1; \
+	  fi; \
+	  echo "[smoke] fat32-multicluster: 65536 B / 128 clusters verified, 6 straddles, arm C execve OK ($$n/2 MUSL_OK)"
 
 # DDR-958: fat32_rename, driven through PRISM's `mv` builtin.
 #

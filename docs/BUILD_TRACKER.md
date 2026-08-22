@@ -504,3 +504,73 @@ All three are registered in `tools/ci/gate_shards.txt` and absent from the
 A failing gate fails its whole shard, so the two most recent full-suite CI
 greens (`0253fbe`, `fbb868f`) are direct evidence that all three passed in both
 runs. No separate re-run is needed to establish CI confirmation.
+
+## FAT32 multi-cluster reads — closed as a refutation (DDR-973, 2026-08-22)
+
+The Group B item "FAT32 multi-cluster read fix — `execve` of large musl-C ELF
+corrupts — root-cause via `read_cluster_chain`" is closed **without a code
+change to `fat32_read`**, because there is no defect to fix.
+
+| what the backlog said | what was measured |
+|---|---|
+| the bug is in `read_cluster_chain` | that function has never existed in this repo; the reader is `fat32_read` (`kernel/fs/fat32/fat32.c:309`) |
+| `execve` of a large musl-C ELF from FAT32 corrupts | `run /CMUSL.ELF` — 30,488 B = **60 clusters** — execve'd clean, printed `PRADYOS_MUSL_OK`, exited 0 |
+| multi-cluster reads are broken | `/BIG8K.TXT` (16 clusters) has been read byte-exact by `smoke-shell` through a pipe, and `/EXECTEST.ELF` (9 clusters) through the full `sys_execve` path, for months |
+
+The source of the claim is ADR-024 §D5, which hedged it at the time ("root cause
+is **most likely** FAT32 multi-cluster reads"). The hedge was dropped as the item
+was copied forward into `build_status.md` and then `CLAUDE.md`, where it became a
+named function to repair. ADR-024 now carries an addendum saying so.
+
+**Shipped instead:** `smoke-fat32-multicluster` (shard 3, 90 s) + probe
+`user/fat32mctest.c` + fixture `/BIGPAT.BIN` (64 KiB = 128 clusters). Three arms:
+a byte-exact scan of all 65,536 bytes, 6 cluster-boundary straddles, and
+ADR-024's own execve case. Mutation-checked both ways (DDR-973 §6) — including
+one mutant that **passed the first cut of the gate**, because the specified
+`(7n+3)&0xFF` pattern has period 256 and every 512-byte cluster on the volume
+was therefore identical. The shipped pattern is `(7n + 3 + 31*(n>>8)) & 0xFF`.
+
+**Still deferred (unchanged, and unblocked by the above):** init-driven
+`fork`+`execve` **respawn** of PRISM. That is unbuilt work. PRISM's `run`
+builtin itself is not disabled and never was.
+
+## smoke-agents — not reproduced since instrumentation (DDR-968, 2026-08-22)
+
+`[DEFERRED: not reproduced]`. The `PRADYOS_AGENT_WITNESS_WAIT pid= disp= state=
+n=` instrument has been live since `ea4601e` and has never printed — by design,
+it emits only while the witness is unarmed, so a green boot produces none of it.
+`smoke-agents` is gating (shard 2, absent from the `shard_check.sh` EXCLUDE
+list), so a recurrence would fail its whole check suite; 18 suites have been
+green on shard 2 since. With no artefact there is no named mechanism, and
+§NON-NEGOTIABLE 3 forbids a speculative fix. The instrument stays armed and the
+item reopens on the first witness line: `disp=0` would confirm DDR-968 §2's
+reading (agent thread exists, never switched in), `disp>0` would refute it.
+
+## Dependabot triage (STEP 4, 2026-08-22)
+
+**Measured, not assumed.** `npm audit` against the committed
+`tools/graph_mcp/package-lock.json` (97 packages) reports
+`{info:0, low:0, moderate:0, high:0, critical:0, total:0}` — the npm surface is
+clean at every severity. `tests/toolchain/hello_rs/Cargo.toml` declares **no
+dependencies at all**, so it cannot carry an advisory. The only other scannable
+manifest is the root `Dockerfile` (`FROM ubuntu:24.04`).
+
+**What could not be done from this session:** the GitHub *Dependabot security
+alert* list itself is not readable here — this session has GitHub MCP tools for
+Actions, PRs, issues and code, but none for Dependabot alerts. So the "5 alerts
+(2 high, 3 moderate)" figure in `CLAUDE.md` could not be enumerated or matched
+to a package. It is stated as unresolved rather than quietly closed: the npm
+result above is evidence about the npm surface, **not** proof that the alert
+count is zero, and the two are not interchangeable.
+
+**Real defect found and fixed:** `.github/dependabot.yml` pointed its npm
+ecosystem at `directory: "/"`, where there is no `package.json`. `directory:` is
+a literal path, not a glob, so Dependabot's npm version updates for this repo
+had **never scanned anything** — the actual manifest is `tools/graph_mcp/`. That
+is now corrected. A `github-actions` ecosystem was added too: the workflows pin
+`actions/checkout@v5` and `actions/setup-python@v5` by major tag, which silently
+absorbs whatever the action owner pushes to that tag, and nothing was watching.
+
+Note the distinction, because it decides what the fix is worth: version updates
+(that file) and security alerts (the dependency graph) are **separate systems**.
+Correcting the path does not clear, explain, or close any existing alert.

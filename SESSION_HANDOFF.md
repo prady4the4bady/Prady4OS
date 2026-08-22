@@ -6467,3 +6467,106 @@ DDR-971 walkthrough, then tag.
 
 Note: `xorriso` and OVMF had to be apt-installed in the build container — the
 ISO target had never been run in this environment.
+
+---
+
+## CHECKPOINT 2026-08-22 — ISO root fixed (DDR-972); two backlog items closed as refutations (DDR-973, DDR-968)
+
+### The DDR-971 stop-the-release finding is RESOLVED
+
+`DDR-972` shipped a PMM-backed ramdisk `blk_device`
+(`kernel/drivers/blk/ramdisk.c`) behind a `blk_count() == 0` guard in `kmain`.
+On a normal 3-disk boot the guard is false and nothing changes (verified
+empirically: `grep -c ramdisk` on a disk-backed capture = 0). On the ISO, where
+the kernel cannot read the ATAPI CD it booted from, it registers three devices
+mirroring the disk topology — blk0 boot-disk stand-in, blk1 the root (formatted
+in place by `sfs_format`), blk2 SFS scratch — because userspace bring-up is
+gated on `blk_count() > 2` and roots at `blk_get(2)`. Mirroring the topology was
+chosen over relaxing that gate, which all 147 gates traverse. New gate
+`smoke-iso-userspace` boots the ISO and asserts the full stack: mount, PRISM,
+aetherd, agent lifecycle, file create/read/rm, GPU, surfaces, TCP loopback.
+
+**`v1.0.0` is still not tagged.** The DDR-971 walkthrough now passes, but the
+tag was deliberately not applied in the DDR-972 change. The ramdisk root is
+volatile — that belongs in the release notes before tagging.
+
+### ITEM 2 / smoke-agents — CLOSED as not reproduced (no code change)
+
+The DDR-968 instrument (`PRADYOS_AGENT_WITNESS_WAIT pid= disp= state= n=`) has
+been live since `ea4601e` and has never printed. That is the measurement, not a
+gap: the line is emitted only while the witness is **unarmed**, so a green boot
+emits zero of them by construction (DDR-968 §3, measured 0 across a 424-line
+capture). `smoke-agents` is a **gating** test — `tools/ci/gate_shards.txt` puts
+it on shard 2 and it is absent from `shard_check.sh`'s EXCLUDE list — so any
+recurrence would have failed its whole check suite. 18 suites have been green on
+shard 2 since. There is no red artefact, therefore no named mechanism, therefore
+§NON-NEGOTIABLE 3 forbids a fix. Instrument stays armed.
+
+**Reopen on the first witness line.** `disp=0` confirms DDR-968 §2's reading
+(the agent thread exists and was never switched in); `disp>0` refutes it and
+points at sampling instead.
+
+### FAT32 multi-cluster — CLOSED as a refutation + a new gate (DDR-973)
+
+The backlog said: "`execve` of large musl ELF corrupts — multi-cluster
+`read_cluster_chain` bug (ADR-024)". Both halves are wrong.
+
+- **`read_cluster_chain` has never existed in this repo.** The reader is
+  `fat32_read` (`kernel/fs/fat32/fat32.c:309`).
+- **The symptom does not reproduce.** `run /CMUSL.ELF` — the same large musl-C
+  ELF ADR-024 §D5 names, 30,488 B spanning **60** clusters — execve'd from the
+  FAT root, printed `PRADYOS_MUSL_OK`, exited 0. Control `/EXECTEST.ELF` in the
+  same capture also 0.
+- ADR-024 hedged the attribution at the time ("root cause is **most likely**").
+  The hedge was lost as the item was copied into `build_status.md` and then
+  `CLAUDE.md`, where it hardened into a named function to repair.
+
+Shipped instead: `smoke-fat32-multicluster` (shard 3, 90 s), probe
+`user/fat32mctest.c`, fixture `/BIGPAT.BIN` (64 KiB = 128 clusters). Arm A scans
+all 65,536 bytes; arm B does 6 cluster-boundary straddles via `lseek`; arm C is
+ADR-024's own execve case, asserted by **count** (`PRADYOS_MUSL_OK` must appear
+twice — the boot's SFS-loaded copy is the denominator).
+
+**Read DDR-973 §6 before touching this gate.** Its first cut was **vacuous**: a
+mutant that re-read cluster 63 instead of advancing PASSED, because the pattern
+CLAUDE.md specifies — `(7n+3) & 0xFF` — has period 256 and this volume's
+clusters are 512 B, so every cluster on the disk held identical bytes. The
+shipped pattern is `(7n + 3 + 31*(n>>8)) & 0xFF`; 31 is invertible mod 256, so
+no two 256-byte windows in the file are equal. Do not "simplify" it back.
+
+Second mutant (cap `fat32_read` at 16 KiB) fails arm C alone, proving arm C is
+not redundant with A and B — it is the only arm issuing a read above 4 KiB.
+
+### Also corrected in this checkpoint
+
+- **PRISM `run` is not disabled and never was.** `user/prism.c` dispatches it,
+  `smoke-shell` runs `run /EXECTEST.ELF` twice plus `jobs`/`fg`. ADR-024
+  deferred only **init-driven fork+execve RESPAWN of PRISM**, which is unbuilt
+  work, not a blocked item. Group D row corrected, not closed.
+- `CLAUDE.md` build state: gate count 147 → **149**, `kernel.bin` 1,053,054 →
+  **1,061,246 B** (each embedded probe costs a page-aligned 8,192 B), DDR free
+  range **974+**, PR #5 line updated (it was still saying "draft, base
+  dev/phase1" after the merge).
+- `docs/AETHER_MASTER_FEATURES.md` was **not** touched: neither item changes a
+  feature it tracks. Said here so the omission is not read as an oversight.
+
+### Next
+
+1. Watch PR #6 to green; drive it to merge.
+2. Release notes for the ramdisk root's volatility, then tag `v1.0.0`.
+3. STEP 4 — Dependabot: **partially done.** The npm surface is measurably clean
+   (`npm audit` on `tools/graph_mcp/package-lock.json`, 97 packages: 0 vulns at
+   every severity), `hello_rs` has no dependencies, and the only other manifest
+   is the root `Dockerfile` (`ubuntu:24.04`). A real defect was found and fixed:
+   `.github/dependabot.yml` pointed its npm ecosystem at `/`, which has no
+   `package.json`, so npm version updates had never scanned anything — it now
+   names `/tools/graph_mcp`, and a `github-actions` ecosystem was added because
+   the workflows pin `actions/checkout@v5` / `actions/setup-python@v5` by major
+   tag with nothing watching them.
+   **What is still open, and why:** the Dependabot *alert* list cannot be read
+   from a Claude Code session — there is no Dependabot-alert MCP tool here (the
+   GitHub tools cover Actions, PRs, issues, code). So the "2 high, 3 moderate"
+   could not be matched to packages. **A clean `npm audit` is not the same claim
+   as "zero alerts"** — version updates and the dependency-graph alert feed are
+   separate systems. Someone with the GitHub UI needs to name the two highs.
+4. STEP 5 — Group A–H backlog; B#3 virtio-blk SMP stall is the ISO blocker.

@@ -406,6 +406,8 @@ extern const unsigned char renametest_elf[];          /* fs: SFS rename probe (D
 extern const unsigned char renametest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
+extern const unsigned char fat32mctest_elf[];         /* DDR-973: FAT32 multi-cluster read probe */
+extern const unsigned char fat32mctest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
@@ -1956,6 +1958,40 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] ELF loaded (embedded); stackdemand probe spawned\r\n");
                     } else {
                         kputs("[user] stackdemand probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-973: FAT32 multi-cluster read regression probe.
+                 *
+                 * Rooted at `mnt` -- the FAT32 volume -- not `smnt`, because the
+                 * FAT reader is what is under test. Every other probe in this
+                 * block roots at SFS, so this one states it: `mnt` is the stable
+                 * FAT mount chosen at the top of this function and made the
+                 * process root by vfs_set_default_mnt (main.c:1128), and it is
+                 * NOT reformatted by the destructive self-tests below.
+                 *
+                 * Opt-in (DDR-804) for the reason the ftruncate probe beside it
+                 * is: its arm C execve's /CMUSL.ELF, whose PRADYOS_MUSL_OK would
+                 * otherwise appear a second time in every other gate's log. The
+                 * gate asserts that marker's COUNT, so the extra copy is the
+                 * signal -- it must not be background noise.
+                 *
+                 * root_mnt is set BEFORE sched_unblock (DDR-957 ordering): this
+                 * uses the raw elf_load path, so the assignment and the unblock
+                 * are separate statements and the order is the whole point. */
+                if (probe_enabled("fat32mc")) {
+                    struct tcb *fm = 0;
+                    /* DDR-970: cast to uintptr_t first -- two distinct linker
+                     * symbols, so subtracting them as pointers is undefined
+                     * (C11 6.5.6). */
+                    uint64_t fmlen = (uint64_t)(uintptr_t)fat32mctest_elf_end -
+                                     (uint64_t)(uintptr_t)fat32mctest_elf;
+                    if (elf_load((void *)(uintptr_t)fat32mctest_elf, fmlen,
+                                 "FAT32MC", &fm) == ELF_OK && fm) {
+                        fm->root_mnt = mnt;           /* FAT root before unblock */
+                        sched_unblock(fm);
+                        kputs("[user] ELF loaded (embedded); FAT-rooted multi-cluster probe spawned\r\n");
+                    } else {
+                        kputs("[user] FAT32 multi-cluster probe FAILED to load\r\n");
                     }
                 }
                 if (probe_enabled("ftruncate")) {

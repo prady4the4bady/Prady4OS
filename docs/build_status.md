@@ -307,10 +307,14 @@ in the child / PRISM's `run`). PRISM is launched by the kernel via the proven SF
 `elf_load` path as **init's child** (init reaps it). New gate **`smoke-shell`**
 (in CI): feeds `echo`/`help`/`exit` through a FIFO once `PRISM_READY` shows, and
 checks the builtin output with no panic.
-**Deferred (ADR-024):** init `fork`+`execve` **respawn** of PRISM — `execve` of a
-large musl-C ELF from FAT32 corrupts (likely FAT32 multi-cluster read; SFS large
-read is fine), a separate kernel fix; also `ls`/`ps` full impl, RX line
-discipline/echo, pipes/redirection/quoting/job-control/scripting.
+**Deferred (ADR-024):** init `fork`+`execve` **respawn** of PRISM — unbuilt
+work, not a blocked item. ~~`execve` of a large musl-C ELF from FAT32 corrupts
+(likely FAT32 multi-cluster read; SFS large read is fine), a separate kernel
+fix~~ **refuted 2026-08-22, DDR-973:** that attribution was a hypothesis, never
+measured. `run /CMUSL.ELF` (30,488 B = 60 FAT32 clusters) execve's clean, and
+`smoke-fat32-multicluster` now verifies 65,536 B / 128 clusters byte-for-byte
+every run. Also still open: `ls`/`ps` full impl, RX line discipline/echo,
+pipes/redirection/quoting/job-control/scripting.
 **NET-B (lwIP TCP/IP) COMPLETE:** lwIP 2.2.1 (pinned `third_party/lwip`, raw API,
 `NO_SYS=1`, kmalloc-backed) is linked into the kernel via `build/lwip/liblwip.a`
 (built `-w -nostdlibinc`) plus the first-party port `third_party/lwip-port/lwip_port.c`
