@@ -6577,3 +6577,77 @@ not redundant with A and B — it is the only arm issuing a read above 4 KiB.
    affected the alerts — security updates come from the dependency graph, which
    is why PR #2 existed despite it.
 4. STEP 5 — Group A–H backlog; B#3 virtio-blk SMP stall is the ISO blocker.
+
+---
+
+## CHECKPOINT 2026-08-22 (late) — STEP 1-5 done; B#3 root-caused; UEFI had no PCIe
+
+Branch `dev/phase1-seyp3n`, PR #6, 13 commits. `main` is STILL `7c6c67a` and
+**`v1.0.0` is still untagged** — read §"Release state" below before tagging.
+
+### The five STEP items are all closed
+
+| step | outcome |
+|---|---|
+| 1 — manual ISO verify | **DONE — DDR-978.** Found and FIXED a major UEFI defect (below). Both firmware arms now pass a real driven-shell walkthrough. |
+| 2 — smoke-agents | **Closed, not reproduced.** DDR-968's witness prints only on a failing boot and has never printed across 18+ green shard-2 suites. No artefact ⇒ §NON-NEGOTIABLE 3 forbids a fix. |
+| 3 — FAT32 multi-cluster | **Closed as a REFUTATION + gate — DDR-973.** `read_cluster_chain` never existed; `run /CMUSL.ELF` (60 clusters) execve's clean. Shipped `smoke-fat32-multicluster`. |
+| 4 — Dependabot | **Closed — the 5 alerts are already remediated.** PR #2 names them; the lockfile already carries the fixed versions. PR #3 (ubuntu 26.04) declined with reasons. |
+| 5 — backlog | B#3 root-caused (below); three intermittents characterised. |
+
+### B#3 is NOT a virtio-blk defect — DDR-976/977
+
+`[vblk] compl wait timeout` fires **17/20** boots at `-smp 4` and **0/10** at
+`-smp 1`. Not cosmetic: `submit()` returns **`-EIO`**, so each is a failed I/O.
+
+Root cause: **CPU 3 stops taking its own LAPIC timer interrupt** early in boot
+and never resumes. Across 4 boots / 60 timeouts, `ticks[c0,c1,c2,c3]` shows CPUs
+0/1/2 advancing exactly +500 per 5 s deadline while CPU 3 is frozen at one value.
+virtio-blk is the VICTIM — `virtio_blk.c:342` routes unit 2's vector to CPU 3, so
+it is the only subsystem blocking on a deadline waiting for a dead CPU. **This is
+why DDR-878 found the block layer clean and was right to.**
+
+**Do NOT patch `virtio_blk.c` for B#3.** Why CPU 3 wedges is still unknown;
+DDR-977 §5 lists the candidates and specifies the next instrument.
+
+**B#3 does not block the ISO.** Only 20 of 149 gates set `QEMU_SMP`, and neither
+ISO gate does — the ISO boots uniprocessor, where the defect cannot occur.
+
+### The UEFI ISO had ZERO PCI devices — DDR-978
+
+`find_rsdp()` scanned only the legacy 0xE0000 window; OVMF publishes the RSDP via
+the EFI Configuration Table, which the loader never read. Cascade: no RSDP → no
+MCFG (**PCIe enumerated nothing**), no MADT (no APs), no FADT (no poweroff). The
+ISO booted under UEFI *only* because DDR-972's ramdisk fallback fires on
+`blk_count()==0` — the condition this defect creates.
+
+Fixed via the existing spare `boot_info.reserved` → `acpi_rsdp` (stage2 zeroes
+the header, so the BIOS path is unchanged by construction; the kernel validates
+signature+checksum so a bad value degrades to the scan). Measured 0 → 10 devices
+on ESP, 0 → 7 on the ISO, with GPU/net/compositor all appearing.
+`smoke-uefi` hardened and **mutation-checked** — it was passing on a machine with
+no PCI devices at all.
+
+### Three intermittents, all with same-SHA green siblings (none are regressions)
+
+| issue | rate | state |
+|---|---|---|
+| `smoke-wmmax` | 2 / ~24 shard-5 runs, **at two different assertions** | DDR-975 §7 (resize-ack) and §8 (restore click). 8/8 local pass. Leading candidate: the injector's hardcoded coords vs §INV.5. **Not fixed — cannot validate against a failure that will not reproduce.** |
+| **OPEN-12** ring-0 panic | 1 / ~24, `component: NEXUS isr`, t≈185 | DDR-979. 0/10 local. Artefact was DESTROYED by make's stderr interleaving mid-line over the `exception:/vector=/RIP=` block; `run_shard.sh` now merges the streams so the next one is readable. |
+| CPU 3 freeze | ~17/20 at `-smp 4` | DDR-976/977 above. |
+
+### Release state — what remains
+
+1. **`main` is `7c6c67a`** and carries **neither** DDR-972's ramdisk root **nor**
+   DDR-978's UEFI fix. Tagging `main` today would tag the DDR-971 image.
+2. Sequence: get 3 greens on one PR-#6 tip → merge → re-run the DDR-978
+   walkthrough on **main's own** ISO → then tag `v1.0.0`.
+3. The two intermittents above make 3-consecutive-greens probabilistic; budget
+   re-runs.
+
+### Instruments now live (all failure-path or once-per-500-ticks)
+
+- `[vblk] compl wait timeout unit= dest_cpu= dest_dticks= dest_abs= bsp_abs= dest_present= ticks[…] on_cpu= lba=`
+- `[hb] … cputicks[c0,c1,c2,c3]` — per-CPU liveness, every boot, every `-smp`.
+
+### Gate count 149. DDR free range: **DDR-980+** (973-979 allocated this session).
