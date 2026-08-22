@@ -267,6 +267,27 @@ static void timer_tick(struct regs *r) {
            * baseline — exactly the case it was added to diagnose — so the
            * steady state pays only the fixed-width numeric fields. */
           if (rd > 8u) { kputs(" cur="); kputs(sched_current_name()); } }
+        /* DDR-977 sec.5: per-CPU liveness, independent of any device routing.
+         *
+         * The DDR-976 evidence came from the virtio-blk timeout path, which only
+         * ever names CPU 3 because virtio_blk.c:342 routes a vector there ONLY
+         * when ncpu==4 (dest = 1 + unit % (ncpu-1)). So "no timeouts at -smp 2/3"
+         * could not distinguish "no CPU wedged" from "the wedged CPU had no
+         * device pointed at it". This line removes that confound: it reports
+         * every CPU's own LAPIC-timer tick count on every heartbeat, at every
+         * -smp, whether or not anything is waiting on that CPU. A counter that
+         * stops advancing while the others climb is a wedged CPU, full stop.
+         *
+         * Fixed-width numerics on a line that already prints once per 500 ticks
+         * -- the DDR-947 hazard was a variable-length kputs of a thread NAME in
+         * the timer ISR, which is why cur= above is gated behind rd>8. */
+        { kputs(" cputicks[");
+          for (unsigned _c = 0; _c < 4u; _c++) {
+              struct percpu *cp = percpu_get(_c);
+              if (_c) kputs(",");
+              kputdec(cp && cp->present ? cp->ticks : 0);
+          }
+          kputs("]"); }
         kputs("\r\n");
         console_line_unlock(hbfl);                /* DDR-963 §5 */
     }

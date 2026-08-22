@@ -7171,3 +7171,37 @@ all green; build warning-clean at `-Werror`.
 **Limit:** the ramdisk root is volatile. Writes do not survive power-off. That is
 correct for a live ISO and belongs in the release notes rather than being
 implied otherwise.
+
+
+## B#3 root-caused 2026-08-22 — an AP-liveness defect, not a virtio-blk one (DDR-976/977)
+
+`[vblk] compl wait timeout` fires in **17 of 20** `-smp 4` boots (301 occurrences,
+up to 28 in one boot) and **0 of 10** at `-smp 1`. It is not cosmetic: `submit()`
+does not retry, it returns **`-EIO`**, so each one is a failed block I/O.
+
+**It is not a block-layer bug.** An instrument printing every CPU's tick counter
+at each timeout shows, across 4 boots and 60 timeouts:
+
+```text
+ticks[cpu0,cpu1,cpu2,cpu3] = [916,872,870,369] -> [1416,1372,1370,369]
+```
+
+CPUs 0/1/2 advance exactly +500 per 5 s deadline; **CPU 3 is frozen**. `pc->ticks`
+is incremented only from a CPU's own LAPIC timer interrupt, so CPU 3 has stopped
+being interrupted altogether. virtio-blk is merely the subsystem that *notices*,
+because `virtio_blk.c:342` routes unit 2's completion vector to CPU 3 and it is
+the only code blocking on a deadline waiting for that CPU. DDR-878's finding that
+the block layer is clean was correct.
+
+**Why the gates never caught it.** Only two gates treat the string as forbidden,
+and one of them — `smoke-blk-timeout`, built by DDR-955 *specifically* to prove
+"the deadline does NOT fire on healthy I/O" — sets no `QEMU_SMP` and so runs
+uniprocessor. `smoke-smp` and `smoke-rqstress` both measured **20/20** at
+`-smp 4` while the timeouts were happening underneath them.
+
+**This does not block the ISO.** Neither ISO gate sets `QEMU_SMP`, and the ISO
+boots uniprocessor, where the defect does not occur. It blocks multiprocessor
+operation.
+
+**Still open:** why CPU 3 stops taking interrupts. DDR-977 §5 lists the
+candidates and specifies the next instrument. Do not patch `virtio_blk.c`.

@@ -126,3 +126,68 @@ cannot, because it executes only after a deadline has already expired.
 The two gates that treat `[vblk] compl wait timeout` as a `FORBIDDEN_SENTINEL`
 (`smoke-blk-timeout`, `smoke-rename-sfs`) match on substring, and the new line
 still begins with that exact text, so both keep working unchanged.
+
+
+---
+
+## 7. Addendum — the window is tighter, and a confound I had to remove
+
+### 7.1 A confound in "it only happens at `-smp 4`"
+
+`-smp 2` (0/5 boots) and `-smp 3` (0/5) show no timeouts, against 21/24 at
+`-smp 4`. The tempting conclusion — "the defect is specific to the 4-CPU
+configuration" — **does not follow**, and the reason is in §3's own routing
+formula: `dest_idx = 1 + (unit % (ncpu - 1))`. At `ncpu = 2` every device points
+at CPU 1; at `ncpu = 3`, CPUs 1-2. **CPU 3 is only ever given a block vector when
+`ncpu == 4`.** So at `-smp 2/3` a wedged CPU 3 would produce exactly the same
+observation as a healthy one: nothing is waiting on it, so nothing times out.
+
+The block-timeout path can only ever report on the CPU it happens to point at.
+Every conclusion drawn from it inherits that blind spot.
+
+### 7.2 The instrument that removes it
+
+`kernel/idt.c` — the heartbeat now prints `cputicks[c0,c1,c2,c3]`, every CPU's own
+LAPIC-timer tick count, on every heartbeat, at every `-smp`, independent of any
+device routing. A counter that stops while the others climb is a wedged CPU, and
+now it is visible whether or not anything is waiting on it.
+
+Fixed-width numerics on a line already printed once per 500 ticks. The DDR-947
+hazard was a *variable-length* `kputs` of a thread NAME inside the timer ISR
+(which moved the failure rate it measured, 2/12 → 9/14); that is why `cur=`
+remains gated behind `rd > 8` and this does not need to be.
+
+### 7.3 What it shows — with a clean negative control
+
+Three `-smp 4` boots, heartbeat at t=500 onward:
+
+| boot | timeouts | `t=500` | `t=1000` | `t=1500` | `t=2000` |
+|---|---|---|---|---|---|
+| 1 | **0** | `[500,457,455,`**`451`**`]` | `[1000,955,954,`**`950`**`]` | `[1500,…,`**`1450`**`]` | `[2000,…,`**`1950`**`]` |
+| 2 | 9 | `[500,483,482,`**`355`**`]` | `[1000,983,982,`**`355`**`]` | `[1500,…,`**`355`**`]` | `[2000,…,`**`355`**`]` |
+| 3 | 17 | `[500,483,481,`**`303`**`]` | `[1000,982,981,`**`303`**`]` | `[1500,…,`**`303`**`]` | `[2000,…,`**`303`**`]` |
+
+**Boot 1 is the control this investigation had been missing**: a `-smp 4` boot in
+which CPU 3 tracks the others (+500 per heartbeat, a steady ~10% lag from its
+later bringup) and in which there are **zero** timeouts. The correlation is exact
+in both directions — CPU 3 alive ⇒ no timeouts; CPU 3 frozen ⇒ timeouts.
+
+**And the window is much tighter than §1 said.** §1 put the freeze "a few hundred
+ticks in". It is in fact **before the first heartbeat** — CPU 3 is already frozen
+at t=500, at its own tick 303-355, i.e. inside the first ~3 seconds. Scaling by
+the healthy lag, that is global tick ≈ 310-330, which in these boots falls just
+after `[smp] user on AP OK` (t=287) and `[boot-load] PRISM.ELF` (t=282).
+
+That is **not** enough to blame the user-on-AP probe: the healthy boot passes the
+same milestone and survives. It bounds *when*, not *what*.
+
+### 7.4 One-off anomaly, recorded and not diagnosed
+
+One `-smp 3` boot (`build/gatelogs/live3.log`) produced 445 lines of normal boot
+output, `[smp] rqstress OK`, and **zero heartbeats** — i.e. global ticking stopped
+before t=500 while output continued. I suspected my own new instrument; two
+`-smp 3` re-runs on the same kernel gave 23 heartbeats each, and `percpu_get` is
+bounds-checked against `PERCPU_MAX = 16` with `g_percpu[PERCPU_MAX]`, so index 3
+is in range. **The instrument is not the cause.** This is a separate, unreproduced
+event that looks like the *BSP* side of the same class. Recorded here so it is not
+lost, not merged into this defect on a resemblance.
