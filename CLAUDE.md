@@ -190,7 +190,11 @@ Do NOT duplicate them. PRISM `ls` and `ps` use them already.
 must change both in the same commit.
 
 ### §INV.14 — Current NSI state
-NSI max: **93** (`SYS_VERIFY_AUDIT`). Next free: **94**. Table size: **128**.
+Last shipped: **NSI 74** (`SYS_MEMINFO`). Next free: **75**. Table size: **128**.
+(Full NSI map: 0–46 Layer-2..6 syscalls; 47=`SYS_MOUSE_POLL`; 48–63=surface;
+64=`SYS_AGENT_ROSTER`; 65=`SYS_NET_ALLOW`; 66=`SYS_GETDENTS`;
+67=`SYS_GETPROCS`; 68=`SYS_UNLINK`; 69=`SYS_POWEROFF`; 70=`SYS_REBOOT`;
+71=`SYS_SYSINFO`; 72=`SYS_TIME`; 73=`SYS_DMESG`; 74=`SYS_MEMINFO`.)
 
 ### §INV.15 — Three CI greens rule
 A push yields exactly 2 suites per commit (push + pull_request events). A third
@@ -201,6 +205,88 @@ satisfy the 3-green rule.
 Do NOT use `sched_create()` when a kernel thread needs its `->arg` set before it
 runs. Use `sched_create_blocked()` → set arg → `sched_unblock()`. Eight sites
 were fixed in DDR-964.
+
+### §INV.17 — VBLK_MAX is 8; MSI-X block vectors are 56–63
+DDR-771 raised the limit from 4 to 8 and remapped block MSI-X to vectors 56–63
+(clear of net@54 / input@55). IDT stubs + gate loop extend to 64. Do NOT
+reallocate vectors 50–53 to block devices — they are now free.
+
+### §INV.18 — Kernel load window: 24 chunks / 768 KiB; kernel at 4 MiB (DDR-733)
+The stage-2 unreal-mode bounce loader reads 24×64-sector chunks into a 0x10000
+bounce buffer and copies up to `KERNEL_PHYS = 0x400000`. The BSS ceiling
+(`__bss_end`) is enforced by an `nm`-based Makefile check. File-size alone is
+insufficient — the binding quantity is file+BSS vs the 2 MiB PT_HI span.
+
+### §INV.19 — ADR-032 FS write budget is a token-bucket rate limit
+Supersedes the old per-thread lifetime cap. `vfs_write` lazily refills from
+elapsed ticks. The kernel self-test bypass (`~0ull`) is preserved. Do NOT
+reintroduce a lifetime cap.
+
+### §INV.20 — SFS B+tree delete uses tombstones
+`inode_num == 0` is the tombstone sentinel (root inode = 1, next ≥ 2 — never
+valid). Lookup treats tombstone as not-found; `dir_walk` skips it; create
+recycles it. There is NO B+tree structural delete. Do not implement one.
+
+### §INV.21 — SFS free-space allocator: exact-fit extent runs only
+`alloc_run(n)` uses EXACT-fit from `free_runs[256]`, never split. First-fit
+splitting fragments extent runs — `write_extent` always allocates contiguous
+blocks via `alloc_run(nblocks)`. The bump pointer advances when the free list
+is empty.
+
+### §INV.22 — mkfs.sfs bulk-loads ≤14 slots into one leaf; >14 uses multi-leaf B+tree
+DDR-773 implemented bulk-load for the host tool. The kernel SFS reader supports
+multi-leaf already. `MKFS_MAX_SLOTS = 512`.
+
+---
+
+## COMPLETED LAYERS SUMMARY (do NOT rebuild)
+
+| Layer | Status | Key ADRs / DDRs |
+|---|---|---|
+| Layer 1 (boot) | ✅ COMPLETE | ADR-001/002 |
+| Layer 2 (NEXUS kernel core) | ✅ COMPLETE | ADR-003/007/009/010/011/012 |
+| Layer 3 (drivers) | ✅ COMPLETE | ADR-013/014/020 |
+| Layer 4 (FS) | ✅ COMPLETE | ADR-015/017/018/019 |
+| Layer 5a (ELF loader + W^X) | ✅ COMPLETE | ADR-021 |
+| Layer 5b (POSIX syscalls 1–16) | ✅ COMPLETE | ADR-022 |
+| Layer 5b IMP-A..D | ✅ COMPLETE | DDR-Spectre/Meltdown/PMM/vDSO/COW |
+| Layer 5 NET-A/B (virtio-net + lwIP) | ✅ COMPLETE | ADR-027 |
+| Layer 5 PROC-A..E (pipes/epoll/signals/io_uring/musl) | ✅ COMPLETE | ADR-023 |
+| Layer 5d (PRISM shell) | ✅ COMPLETE | ADR-024 |
+| Layer 6 (AETHER + ring-3 socket NSI) | ✅ COMPLETE | ADR-026/027 |
+| Layer 7 (compositor DDR-701..730) | ✅ COMPLETE | DDR-701..730 |
+| SMP (ADR-029/030/031) | ✅ COMPLETE (cap-4) | DDR-714/SMP-2/3a/3b/3c-alpha/3c-B/cap-1..4 |
+| MSI-X (DDR-714 C1..C3) | ✅ COMPLETE | DDR-714 |
+| Multi-in-flight block I/O (DDR-BLK-1) | ✅ COMPLETE | DDR-BLK-1 |
+| Per-CPU runqueues + work stealing (rq-1) | ✅ COMPLETE | DDR-SMP-rq-1 |
+| Reschedule IPIs (rq-3) | ✅ COMPLETE | DDR-SMP-rq-3 |
+| g_sched_lock off switch path (rq-2) | ✅ COMPLETE | DDR-SMP-rq-2 |
+| Surface lifecycle (DDR-729) | ✅ COMPLETE | DDR-729 |
+| Live agent metrics (DDR-730/735/737) | ✅ COMPLETE | DDR-730/735/737 |
+| Kernel W^X (DDR-757) | ✅ COMPLETE | DDR-757 |
+| Syscall-fuzz gate (DDR-758) | ✅ COMPLETE | DDR-758 |
+| SMP block-read integrity (DDR-759) | ✅ COMPLETE | DDR-759 |
+| SFS hierarchical dirs (DDR-738) | ✅ COMPLETE | DDR-738 |
+| SFS unlink + rmdir (DDR-741) | ✅ COMPLETE | DDR-741 |
+| SYS_GETDENTS / SYS_GETPROCS / SYS_UNLINK | ✅ COMPLETE | DDR-742/743/744 |
+| PRISM touch/rm/uname/date/uptime/dmesg/free/kill/setname | ✅ COMPLETE | DDR-745/751/752/755/756 |
+| ACPI poweroff + reboot (DDR-746/747) | ✅ COMPLETE | DDR-746/747 |
+| SYS_SYSINFO/TIME/DMESG/MEMINFO (DDR-748..752) | ✅ COMPLETE | DDR-748..752 |
+| TCP loopback self-test (DDR-753) | ✅ COMPLETE | DDR-753 |
+| ps CPU accounting (DDR-754) | ✅ COMPLETE | DDR-754 |
+| CAP_NET allowlist (DDR-731/734) | ✅ COMPLETE | DDR-731/734 |
+| AETHER config on SFS (DDR-760/761/770) | ✅ COMPLETE | DDR-760/761/770 |
+| SFS free-space reclamation (DDR-762-v2) | ✅ COMPLETE | DDR-762-v2 |
+| SFS B+tree churn correctness (DDR-763) | ✅ COMPLETE | DDR-763 |
+| Ring-3 VFS write 4 KiB chunk (DDR-764) | ✅ COMPLETE | DDR-764 |
+| NVMe bring-up + I/O queue (DDR-765/766) | ✅ COMPLETE | DDR-765/766 |
+| host mkfs.sfs single + multi-leaf (DDR-767/773) | ✅ COMPLETE | DDR-767/773 |
+| Cross-reboot SFS persistence (DDR-768/769) | ✅ COMPLETE | DDR-768/769 |
+| Persistent SFS root from host image (DDR-770) | ✅ COMPLETE | DDR-770 |
+| VBLK_MAX 4→8 + MSI-X remap (DDR-771) | ✅ COMPLETE | DDR-771 |
+| ADR-032 FS write budget token-bucket | ✅ COMPLETE | ADR-032 |
+| NVMe PRP2 + PRP list (DDR-772) | ✅ COMPLETE | DDR-772 |
+| Section 3D daemon features #45–#65 (21/21) | ✅ COMPLETE | DDR-846..856 |
 
 ---
 
@@ -217,7 +303,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 | **OPEN-2** | `smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake` intermittent | All `QEMU_SMP=4` gates — DDR-863 | **ACTIVE FIX.** These are SMP timing issues. Reproduce at `-smp 4` locally. Apply targeted fix from DDR-863. |
 | **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | Item-47 lost-thread failure seen through SFS probe | **ACTIVE FIX.** `smoke-sfs-btree-smp4` excluded. Reproduce, root-cause via DDR-880. Fix before ISO. |
 | **OPEN-11** | `smoke-sha256`, `smoke-rqstress-liveness` | Scratch LBA 1500 overwrote kernel image | **CLOSED — DDR-831.** Do not revisit. |
-| ~~Uninit PID~~ | ~~`AGENT_OOM_KILLED` prints garbage PID~~ | **NOT garbage — it is `AE_TEST_PID` (`0xA37E0000`), the self-test's deliberate sentinel, `#define`d at `aether.c:14`** | **CLOSED as a non-bug, DDR-969.** Do not reopen: the line is a *required* sentinel of `smoke-aether-sec` and prints on every boot. A real defect found in the same function WAS fixed — `aether_sectest`'s 10,432-byte frame on a 16,384-byte kernel stack. |
+| ~~Uninit PID~~ | ~~`AGENT_OOM_KILLED` prints garbage PID~~ | **NOT garbage — it is `AE_TEST_PID` (`0xA37E0000`), the self-test's deliberate sentinel, `#define`d at `aether.c:14`** | **CLOSED as a non-bug, DDR-969.** Do not reopen. |
 | **FAT32 large-file** | `execve` of large musl ELF corrupts | multi-cluster `read_cluster_chain` bug (ADR-024) | **Fix in Group B.** Do not wait. |
 | **Dependabot** | 5 alerts (2 high, 3 moderate) | Third-party deps | **Triage and fix the 2 high-severity ones.** Moderate: fix if quick, else log. |
 | **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | **MUST be fixed before ISO.** This is BLOCKING the release. Active work required. |
@@ -227,17 +313,15 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 
 ## CURRENT BUILD STATE
 
+- **Gate count: 105** (DDR-772 extended smoke-nvme; ADR-032 added smoke-fs-budget)
+- **NSI max: 74** (`SYS_MEMINFO`). **Next free: 75.** Table size: 128.
+- **`kernel.bin`**: ~545 KiB (headroom ~236 KiB to 768 KiB PT_HI ceiling)
+- **DDR free range: DDR-936+**
+- `make image` → zero warnings, `-Werror` enforced ✅
 - PR #5 tip: `ea4601e` — draft, base `dev/phase1`
-- `make image` → zero warnings, **147 gates**, `kernel.bin` 1,053,054 B ✅
-- NSI max: **93**. Next free: **94**. Gate count: **147** assigned, 6 excluded.
-- Three intermittents fixed: OPEN-10 (DDR-964), smoke-cadence (DDR-965),
-  Item 48 (DDR-966)
-- FSRM: **FIXED — DDR-967**, `smoke-fsrm` 20/20 local, 0 wait expiries
-  (kernel `612cde9b9761319e`). Local green is no-regression only; FSRM has never
-  reproduced locally, so closure is still CI over time.
-- smoke-agents: **instrumented — DDR-968**, no fix (§6.0-B). The witness
-  predicate now prints as `PRADYOS_AGENT_WITNESS_WAIT pid= disp= state= n=`.
-  Attribution stays open; awaiting a CI red to read.
+- Three intermittents fixed: OPEN-10 (DDR-964), smoke-cadence (DDR-965), Item 48 (DDR-966)
+- FSRM: **FIXED — DDR-967**, `smoke-fsrm` 20/20 local
+- smoke-agents: **instrumented — DDR-968**, no fix yet; awaiting CI artefact
 - Overall completion: ~79% (~66+ items remain across all groups)
 
 **PR #5 MERGE HOLD: LIFTED (operator directive 2026-08-22).**
@@ -301,10 +385,9 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | Item | Detail | Gate |
 |---|---|---|
 | Demand-paged user stack | Lazy 8 MiB mapping — map only top page + guard, fault the rest. Drops 2048 frames/process to ~2; lifts the ~13-process ceiling. Do NOT give QEMU more RAM. | `smoke-lazystack` |
-| ~~Uninit PID fix~~ | **NON-BUG — CLOSED, DDR-969.** `AGENT_OOM_KILLED PID=2742943744` is `AE_TEST_PID`, `#define`d as `0xA37E0000u` at `aether.c:14` and printed in decimal by `kputdec`. Nothing is uninitialised. In its place DDR-969 fixed a real defect found in the same function: `aether_sectest`'s frame was **10,432 B of the 16,384 B kernel stack** (a `struct tcb` local); the TCB is now heap-allocated and the frame is 48 B. | `smoke-aether-sec` ✅ |
 | I/O APIC migration | DDR-714 stage D — disable 8259, route ISA IRQs through I/O APIC | `smoke-ioapic` |
 | SMEP / SMAP | `CLAC`/`STAC` around every copyin/copyout | `smoke-smep` |
-| Kernel W^X | `vmm_protect_kernel()` — remove identity alias | `smoke-wx` |
+| Kernel W^X identity-alias removal | `vmm_protect_kernel()` — remove identity alias (DDR-757 residual) | `smoke-wx` |
 | `#MC` machine-check handler | Panic with full register state | `smoke-mc` |
 | KASLR | After W^X is CI-green | `smoke-kaslr` |
 | Scheduler timed-block | `sched_block_on_timeout(&lk, deadline)` — implement AFTER g_ticks is CI-proven reliable | `smoke-schedtimeout` |
@@ -332,7 +415,7 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | B#10 NUMA affinity | — | `smoke-numa` |
 | B#14 NAS 3-lane storage scheduler | — | `smoke-nas` |
 | B#15 PMM policy | — | `smoke-pmmpolicy` |
-| B#1 NVMe IRQ | On hold until B#3 SMP is fully stable (DDR-774a/b/c) — resume when safe | `smoke-nvmeirq` |
+| B#1 NVMe IRQ | On hold until B#3 SMP is fully stable — resume when safe | `smoke-nvmeirq` |
 | **OPEN-10 B+tree SMP fix** | `btree churn FAIL` from lost-thread via SFS probe. Root-cause via DDR-880. Active fix required. | `smoke-sfs-btree-smp4` |
 
 ---
@@ -382,7 +465,7 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | Alt-Tab with modifier plumbing | Upgrade from plain Tab (DDR-720) | `smoke-alttab` |
 | Ctrl+Alt+T | Launch PRISM terminal window | `smoke-ctrlaltt` |
 | Per-window restore from dock | DDR-717 restores all; add per-tile | `smoke-perrestore` |
-| Window maximize | Full-screen at real display size (DDR-719 caps at 512×512) | `smoke-maximize` |
+| Window maximize at real display size | DDR-719 caps at 512×512; lift to real geometry | `smoke-maximize` |
 | Pointer resize handles — all edges | DDR-718 covers bottom-right only | `smoke-resizeall` |
 | `SURF_EV_CLOSE` notification | Owner saves state before forced close | `smoke-surfclose` |
 | Compositor double-map `PTE_SW_SHARED` audit | — | `smoke-sharedpte` |
@@ -502,6 +585,8 @@ For each: add a one-line entry in `docs/BUILD_TRACKER.md` as `[DEFERRED: reason]
 | Cloud bridge activation | "deferred post-1.0 (DDR-793)" |
 | Rust rewrite | "not in scope" |
 | `CAP_OCR`, `CAP_SCENE` if no hardware path | "capability bit defined, enforcement deferred — no subsystem path" |
+| SFS block reclamation on-disk | "in-memory reclaim shipped (DDR-762-v2); on-disk free-tree deferred post-1.0" |
+| NVMe completion IRQ | "poll-mode sufficient for ISO; DDR-774a/b/c deferred until B#3 SMP stable" |
 
 ---
 
@@ -520,7 +605,7 @@ Every box must be checked before the deadline:
 - [ ] PR #5 squash-merged into `dev/phase1` (3 CI greens) ← HOLD LIFTED
 - [ ] `dev/phase1` fast-forwarded to `main` (3 CI greens on same tip)
 - [ ] All Groups A–H CI-green or pre-approved-excepted
-- [ ] All open issues (OPEN-1, OPEN-2, OPEN-10, B#3, FSRM, smoke-agents, uninit-PID,
+- [ ] All open issues (OPEN-1, OPEN-2, OPEN-10, B#3, FSRM, smoke-agents,
       FAT32 multi-cluster, Dependabot highs) CLOSED
 - [ ] x86_64 ISO built and bootable
 - [ ] aarch64 ISO built and bootable
@@ -569,3 +654,5 @@ Every box must be checked before the deadline:
 - Cloud bridge activation (DDR-793)
 - CMake/Makefile hybrid (DDR-843)
 - `ACTION_BROWSE_WEB` (DDR-793)
+- SFS on-disk free-tree persistence (DDR-762-v2 shipped in-memory reclaim)
+- NVMe completion IRQ (DDR-774a/b/c — after B#3 SMP stable)
