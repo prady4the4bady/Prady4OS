@@ -1,4 +1,9 @@
-# DDR-977 — B#3 root-caused: **CPU 3 stops taking timer interrupts**; virtio-blk is the victim
+# DDR-977 — B#3 root-caused: **an AP stops taking timer interrupts**; virtio-blk is the victim
+
+> **§8 CORRECTS THIS DDR'S TITLE AND FRAMING.** §1-§7 say "CPU 3" throughout,
+> from a uniform local sample. A later CI capture shows **CPU 1** frozen instead.
+> The defect is *an AP* freezing early in boot; which one varies with which
+> device happens to be routed at it. Read §8 before acting on §1-§7.
 
 Status: ACCEPTED (root-cause localisation + instrument). **No fix in this DDR.**
 Number verified free in **both** `docs/ddr/` and `docs/decisions/` (§INV.4).
@@ -191,3 +196,86 @@ bounds-checked against `PERCPU_MAX = 16` with `g_percpu[PERCPU_MAX]`, so index 3
 is in range. **The instrument is not the cause.** This is a separate, unreproduced
 event that looks like the *BSP* side of the same class. Recorded here so it is not
 lost, not merged into this defect on a resemblance.
+
+---
+
+## 8. CORRECTION — it is not CPU 3. **Any AP can freeze**, and this unifies OPEN-2
+
+CI run `32600567390`, shard 3, head `848861b` (docs-only), gate **`smoke-resched`**:
+
+```text
+[hb] t=500  … cputicks[500,213,482,480]
+[blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
+[vblk] compl wait timeout unit=0 dest_cpu=1 dest_dticks=0 dest_abs=213
+       bsp_abs=788  ticks[788,213,770,768]  on_cpu=0 lba=1
+[hb] t=1000 … cputicks[1000,213,982,980]
+[vblk] compl wait timeout unit=0 dest_cpu=1 dest_dticks=0 dest_abs=213
+       bsp_abs=1188 ticks[1188,213,1170,1168] on_cpu=0 lba=0
+[smp] blk integrity FAIL reference-read
+```
+
+**CPU 1 is frozen at 213** while CPUs 0, 2 and 3 advance normally (+400 between
+the two timeouts, +500 per heartbeat).
+
+### 8.1 What this corrects
+
+§1-§7 of this DDR say "CPU 3" throughout, because every capture I had — 4 boots,
+60 timeouts, all local — showed `dest_cpu=3`. **That was a property of my
+sample, not of the defect.** The title is wrong and the framing was too narrow:
+
+> **The defect is that an AP freezes early in boot. *Which* AP varies.**
+
+Why my sample was uniform: locally, only `unit=2` ever timed out, and
+`dest_idx = 1 + (unit % (ncpu-1))` sends unit 2 to CPU 3. Unit 2 is the SFS
+scratch disk the self-tests hammer, so it was the device most likely to catch a
+frozen CPU — and it can only ever catch CPU 3. §7.1 already warned that the
+block-timeout path "can only ever report on the CPU it happens to point at" and
+that "every conclusion drawn from it inherits that blind spot". **This is that
+blind spot, and I fell into it anyway** — I removed the confound for the
+`-smp 2/3` question and did not re-apply the same reasoning to "which CPU".
+
+Here it is `unit=0`, and `1 + (0 % 3) = 1` → CPU 1. Different device, different
+AP, same freeze.
+
+The freeze timing is consistent with §7.3: CPU 1 stopped at its own tick **213**,
+already frozen by the first heartbeat (t=500), i.e. inside the first ~3 seconds —
+the same window in which CPU 3 froze at 298-369.
+
+### 8.2 What this unifies — OPEN-2 is downstream of B#3
+
+`CLAUDE.md` lists **OPEN-2** as four intermittent `QEMU_SMP=4` gates:
+`smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake`.
+
+This capture is `smoke-resched` failing, and the failure chain is fully visible:
+
+1. CPU 1 stops taking its timer interrupt (`dest_dticks=0`, `dest_abs` pinned).
+2. Unit 0's completion MSI-X is routed to CPU 1, so its completions are never
+   serviced → two `compl wait timeout`s → `submit()` returns `-EIO`.
+3. `[blk] multi-inflight FAIL done=0x0 spawned=2/2` — both workers spawned, zero
+   completions.
+4. `[smp] blk integrity FAIL reference-read`.
+
+So `smoke-resched` did not fail on a scheduler defect; it failed on block I/O
+that could not complete because an AP was dead. **OPEN-2's block-touching gates
+are B#3 seen through different sentinels.**
+
+This is a *measured* unification, not a resemblance: the same capture contains
+the frozen counter, the routing that points at it, the timeout, and the gate's
+own failure line. Contrast DDR-880, which unified OPEN-10 with item 47 on a
+shared signature and was corrected by DDR-884 for exactly that reason.
+
+**Not claimed:** that *all four* OPEN-2 gates are this. `smoke-crosswake` and
+`smoke-msixap` have not been captured with the instrument, and a gate that does
+no block I/O could fail for its own reasons. The prediction is specific and
+testable: a failing capture of those gates should contain a
+`compl wait timeout … dest_dticks=0` with a frozen entry in `ticks[…]`.
+
+### 8.3 Note on the removed instrument (DDR-980)
+
+The `cputicks[…]` heartbeat was removed one commit before this capture landed,
+and this capture used it. That does not reverse DDR-980: the **kept** `[vblk]`
+instrument carries `ticks[…]` too, and it is what supplies the frozen-counter
+evidence above at each timeout. What is lost is the *always-on* view — a boot in
+which an AP freezes and **no device is routed to it** now shows nothing. For
+OPEN-2's block-touching gates that gap does not bite. Re-add the heartbeat
+version behind an opt-in flag if a non-block gate needs it.
