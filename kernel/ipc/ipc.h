@@ -27,6 +27,10 @@ void ipc_endpoint_init(struct ipc_endpoint *e, uint64_t res_id);
 
 /* 0 on success, -1 if the capability does not authorize the operation. */
 int  ipc_send(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, const uint64_t *msg);
+/* DDR-961: 0 = message received into *out; -1 = capability denied (UNCHANGED,
+ * existing callers rely on it); -ETIMEDOUT = deadline expired, *out
+ * untouched. A timeout is a value this interface never returned before, so
+ * the two failure modes can no longer be confused. */
 int  ipc_recv(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, uint64_t *out);
 
 /* --- Async lock-free SPSC ring (one producer, one consumer) ----------------

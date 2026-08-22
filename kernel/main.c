@@ -163,12 +163,20 @@ static void ipc_receiver_thread(void *arg) {
     uint64_t buf[IPC_MSG_WORDS];
 
     kputs("[recv] blocking on endpoint (no message yet)\r\n");
-    if (ipc_recv(current_thread->caps, cap, &demo_ep, buf) == 0) {
+    /* DDR-961: three-way now that the wait is bounded. -1 is still "cap denied";
+     * -ETIMEDOUT is new and must not be folded into it -- a bounded wait that
+     * hides its own expiry is worse than an unbounded one. The timeout prints a
+     * string no gate asserts on, so an expiry turns the affected gate red rather
+     * than passing quietly. */
+    int rr = ipc_recv(current_thread->caps, cap, &demo_ep, buf);
+    if (rr == 0) {
         kputs("[recv] received: ");
         kputhex(buf[0]);
         kputs(" ");
         kputhex(buf[1]);
         kputs("\r\n");
+    } else if (rr == -ETIMEDOUT) {
+        kputs("[recv] TIMEOUT\r\n");
     } else {
         kputs("[recv] DENIED\r\n");
     }
@@ -193,15 +201,22 @@ static void ipc_sender_thread(void *arg) {
 
 static void ipc_demo(void) {
     ipc_endpoint_init(&demo_ep, DEMO_EP_ID);
-    struct tcb *recv = sched_create(ipc_receiver_thread, 0, "recv");
-    struct tcb *send = sched_create(ipc_sender_thread, 0, "send");
+    /* DDR-964: BLOCKED until ->arg holds the capability. sched_create() is
+     * already on a run queue when it returns, so another CPU's rq_steal can
+     * enter the thread before the mint below and read an unwritten ->arg. */
+    struct tcb *recv = sched_create_blocked(ipc_receiver_thread, 0, "recv");
+    struct tcb *send = sched_create_blocked(ipc_sender_thread, 0, "send");
     if (!recv || !send) {
         kputs("NEXUS: ipc_demo — thread create failed\r\n");
+        if (recv) sched_destroy(recv);   /* never ran: still BLOCKED */
+        if (send) sched_destroy(send);
         return;
     }
     /* Mint each thread a single, resource-bound capability with only its right. */
     recv->arg = (void *)(uintptr_t)cap_create(recv->caps, RES_IPC, DEMO_EP_ID, CAP_IPC_RECV);
     send->arg = (void *)(uintptr_t)cap_create(send->caps, RES_IPC, DEMO_EP_ID, CAP_IPC_SEND);
+    sched_unblock(recv);
+    sched_unblock(send);
     kputs("NEXUS: IPC demo — capability-gated recv/send threads\r\n");
 }
 
@@ -250,14 +265,19 @@ static void ring_consumer_thread(void *arg) {
 
 static void ring_demo(void) {
     ipc_ring_init(&demo_ring, RING_EP_ID);
-    struct tcb *prod = sched_create(ring_producer_thread, 0, "prod");
-    struct tcb *cons = sched_create(ring_consumer_thread, 0, "cons");
+    /* DDR-964: BLOCKED until ->arg holds the capability (see ipc_demo). */
+    struct tcb *prod = sched_create_blocked(ring_producer_thread, 0, "prod");
+    struct tcb *cons = sched_create_blocked(ring_consumer_thread, 0, "cons");
     if (!prod || !cons) {
         kputs("NEXUS: ring_demo — thread create failed\r\n");
+        if (prod) sched_destroy(prod);   /* never ran: still BLOCKED */
+        if (cons) sched_destroy(cons);
         return;
     }
     prod->arg = (void *)(uintptr_t)cap_create(prod->caps, RES_IPC, RING_EP_ID, CAP_IPC_SEND);
     cons->arg = (void *)(uintptr_t)cap_create(cons->caps, RES_IPC, RING_EP_ID, CAP_IPC_RECV);
+    sched_unblock(prod);
+    sched_unblock(cons);
     kputs("NEXUS: async SPSC ring demo — producer + consumer\r\n");
 }
 
@@ -274,7 +294,10 @@ static void sub_approvals_thread(void *arg) {
     subs_ready++;
     for (int i = 0; i < 2; i++) {
         struct bcast_event e;
-        bcast_wait(&sub_a, &e);
+        if (bcast_wait(&sub_a, &e) == -ETIMEDOUT) {   /* DDR-961 */
+            kputs("[sub-approve] TIMEOUT\r\n");
+            return;                                   /* e is UNFILLED — do not read it */
+        }
         kputs("[sub-approve] event type=");
         kputhex(e.type);
         kputs(" payload=");
@@ -289,7 +312,10 @@ static void sub_alerts_thread(void *arg) {
     bcast_subscribe(current_thread->caps, cap, &demo_bus, &sub_b, EVT_RESOURCE_ALERT);
     subs_ready++;
     struct bcast_event e;
-    bcast_wait(&sub_b, &e);
+    if (bcast_wait(&sub_b, &e) == -ETIMEDOUT) {       /* DDR-961 */
+        kputs("[sub-alert] TIMEOUT\r\n");
+        return;                                       /* e is UNFILLED — do not read it */
+    }
     kputs("[sub-alert] event type=");
     kputhex(e.type);
     kputs("\r\n[sub-alert] done (got only ALERT)\r\n");
@@ -307,16 +333,25 @@ static void publisher_thread(void *arg) {
 
 static void bus_demo(void) {
     bcast_bus_init(&demo_bus, BUS_EP_ID);
-    struct tcb *a = sched_create(sub_approvals_thread, 0, "sub-approve");
-    struct tcb *b = sched_create(sub_alerts_thread, 0, "sub-alert");
-    struct tcb *p = sched_create(publisher_thread, 0, "pub");
+    /* DDR-964: BLOCKED until ->arg holds the capability (see ipc_demo). The
+     * publisher is unblocked LAST so both subscribers are registered before it
+     * can broadcast. */
+    struct tcb *a = sched_create_blocked(sub_approvals_thread, 0, "sub-approve");
+    struct tcb *b = sched_create_blocked(sub_alerts_thread, 0, "sub-alert");
+    struct tcb *p = sched_create_blocked(publisher_thread, 0, "pub");
     if (!a || !b || !p) {
         kputs("NEXUS: bus_demo — thread create failed\r\n");
+        if (a) sched_destroy(a);         /* never ran: still BLOCKED */
+        if (b) sched_destroy(b);
+        if (p) sched_destroy(p);
         return;
     }
     a->arg = (void *)(uintptr_t)cap_create(a->caps, RES_IPC, BUS_EP_ID, CAP_IPC_RECV);
     b->arg = (void *)(uintptr_t)cap_create(b->caps, RES_IPC, BUS_EP_ID, CAP_IPC_RECV);
     p->arg = (void *)(uintptr_t)cap_create(p->caps, RES_IPC, BUS_EP_ID, CAP_BROADCAST);
+    sched_unblock(a);
+    sched_unblock(b);
+    sched_unblock(p);
     kputs("NEXUS: broadcast bus demo — 2 filtered subscribers + publisher\r\n");
 }
 
@@ -367,6 +402,8 @@ extern const unsigned char stackdemand_elf[];         /* ADR-038: demand-paged s
 extern const unsigned char stackdemand_elf_end[];
 extern const unsigned char ftrunctest_elf[];          /* fs: ftruncate probe (DDR-866) */
 extern const unsigned char ftrunctest_elf_end[];
+extern const unsigned char renametest_elf[];          /* fs: SFS rename probe (DDR-962) */
+extern const unsigned char renametest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
@@ -468,7 +505,9 @@ static struct tcb *user_boot_from_sfs_rooted(cap_t cap, int smnt, const char *fn
      * against SFS, so a missed virtio-blk completion under -smp 4 would park it
      * here forever. Without this print the ~440-line window between the last
      * spawn and stamp C cannot be narrowed from a serial log alone. */
-    kputs("[boot-load] "); kputs(fname); kputs(" t="); kputdec(g_ticks); kputs("\r\n");
+    { uint64_t blfl = console_line_lock();       /* DDR-963 §5 */
+      kputs("[boot-load] "); kputs(fname); kputs(" t="); kputdec(g_ticks); kputs("\r\n");
+      console_line_unlock(blfl); }
     uint64_t elen = (uint64_t)(elf_end - elf);
     struct vfs_file ef;
     if (vfs_create(cap, smnt, fname, &ef) != 0 ||
@@ -700,6 +739,13 @@ static void blkmq_proof(void) {
     unsigned mq_spawned = 0;
     if (sched_create(blkmq_reader, (void *)0, "mq0")) mq_spawned++;
     if (sched_create(blkmq_reader, (void *)1, "mq1")) mq_spawned++;
+    /* DDR-966: kick the APs, matching rqstress_proof. sched_create enqueues on
+     * the CALLING CPU's run queue, so another CPU only collects a fresh worker
+     * when it next runs its scheduler — and an idle AP sits in hlt until its
+     * own timer tick. Without this the BSP burns the deadline below in yield()
+     * while runnable workers wait on halted APs, which is exactly the captured
+     * `done=0x0 spawned=2/2`: created, never run. */
+    smp_resched_all();
     uint64_t dl = g_ticks + 200;
     while ((g_mq_done & 3u) != 3u && !(g_mq_done >> 8) && g_ticks < dl)
         yield();
@@ -785,6 +831,7 @@ static void smp_blk_integrity(void) {
     if (sched_create(blkint_worker, (void *)1, "bi1")) bi_spawned++;
     if (sched_create(blkint_worker, (void *)2, "bi2")) bi_spawned++;
     if (sched_create(blkint_worker, (void *)3, "bi3")) bi_spawned++;
+    smp_resched_all();                      /* DDR-966: see blkmq_proof */
     uint64_t dl = g_ticks + 400;
     while ((g_blkint_done & 0xfu) != 0xfu && g_ticks < dl)
         yield();
@@ -1204,6 +1251,12 @@ static void fs_test_thread(void *arg) {
         struct blk_device *sbd = blk_get(2);
         if (sbd && sfs_format(sbd) == 0) {
             int smnt = vfs_mount(2);
+            /* DDR-967: pids of the ring-3 probes rooted at smnt (fsrm,
+             * ftruncate, rename-sfs). The destructive self-test block further
+             * down REFORMATS this volume, so it waits on these before
+             * umounting. 0 = that probe was never spawned. Locals, not a
+             * writable global (DDR-826). */
+            uint32_t smnt_pid[3] = { 0, 0, 0 };
             if (smnt >= 0) {
                 kputs("[sfs] mounted ");
                 kputs(vfs_fs_name(smnt));
@@ -1877,6 +1930,7 @@ static void fs_test_thread(void *arg) {
                     if (elf_load((void *)(uintptr_t)fsrmtest_elf, flen,
                                  "FSRMTEST", &fp) == ELF_OK && fp) {
                         fp->root_mnt = smnt;          /* SFS root before unblock  */
+                        smnt_pid[0] = fp->pid;        /* DDR-967: wait on it below */
                         sched_unblock(fp);
                         kputs("[user] ELF loaded (embedded); SFS-rooted fsrm probe spawned\r\n");
                     }
@@ -1909,8 +1963,35 @@ static void fs_test_thread(void *arg) {
                     if (elf_load((void *)(uintptr_t)ftrunctest_elf, tlen,
                                  "FTRUNCTEST", &tp) == ELF_OK && tp) {
                         tp->root_mnt = smnt;          /* SFS root before unblock */
+                        smnt_pid[1] = tp->pid;        /* DDR-967 */
                         sched_unblock(tp);
                         kputs("[user] ELF loaded (embedded); ftruncate probe spawned\r\n");
+                    }
+                }
+                /* DDR-962: SYS_RENAME on the SFS root. sfs_rename shipped in
+                 * DDR-956 and has never been gated -- PRISM is FAT-rooted, so
+                 * DDR-958's shell-driven smoke-rename proves fat32_rename only.
+                 * Rooted at smnt for the same reason the ftruncate probe above
+                 * is, and opt-in (DDR-804) for the same reason too: it creates
+                 * files on the shared SFS root, so running it every boot would
+                 * leave its droppings in every other gate's log. */
+                if (probe_enabled("rename-sfs")) {
+                    struct tcb *rn = 0;
+                    /* DDR-970: cast to uintptr_t first. These are two distinct
+                     * linker symbols, so subtracting them as pointers is
+                     * undefined (C11 6.5.6). 29 pre-existing sites in this file
+                     * share the idiom and are left alone -- see DDR-970 §4 --
+                     * but this PR should not add a 30th. */
+                    uint64_t rnlen = (uint64_t)(uintptr_t)renametest_elf_end -
+                                     (uint64_t)(uintptr_t)renametest_elf;
+                    if (elf_load((void *)(uintptr_t)renametest_elf, rnlen,
+                                 "RENAMETEST", &rn) == ELF_OK && rn) {
+                        rn->root_mnt = smnt;          /* SFS root before unblock */
+                        smnt_pid[2] = rn->pid;        /* DDR-967 */
+                        sched_unblock(rn);
+                        kputs("[user] ELF loaded (embedded); SFS rename probe spawned\r\n");
+                    } else {
+                        kputs("[user] SFS rename probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-870 (items 44/45): RDTSC benchmark of the syscall and
@@ -2022,6 +2103,34 @@ static void fs_test_thread(void *arg) {
                     kputs(virtio_blk_completed_on_ap()
                               ? "[blk] msix on AP OK\r\n"
                               : "[blk] msix on AP FAIL\r\n");
+                }
+
+                /* DDR-967: the block below REFORMATS the volume, and the three
+                 * ring-3 probes above are rooted on it (->root_mnt = smnt) and
+                 * runnable from their sched_unblock. Until now nothing waited
+                 * for them, so whether a probe finished before this umount was
+                 * pure scheduling luck — that is the FSRM "created file did not
+                 * persist" race: create and write succeed, then the reopen finds
+                 * a freshly formatted disk.
+                 *
+                 * Waited BY PID, not by TCB pointer. Polling ->state for
+                 * THREAD_ZOMBIE is a use-after-free: sched_start_reaper() can
+                 * free a zombie's TCB mid-poll. sched_find_pid() is documented
+                 * "live thread by pid, or NULL", so it goes NULL once the thread
+                 * is gone. (The main.c:611 crosswake precedent polls a TCB
+                 * safely only because that thread blocks and never exits.)
+                 *
+                 * Bounded, and falls THROUGH on expiry to exactly today's
+                 * behaviour: an intermittently-failing gate must not become a
+                 * gate that wedges. A pid of 0 is a probe that was never
+                 * spawned (probe_enabled) and is skipped. */
+                {
+                    uint64_t dl = g_ticks + 400;
+                    for (int i = 0; i < 3; i++)
+                        while (smnt_pid[i] && sched_find_pid(smnt_pid[i]) && g_ticks < dl)
+                            yield();
+                    if (g_ticks >= dl)
+                        kputs("[sfs] DDR-967 wait expired; umounting with a probe still live\r\n");
                 }
 
                 /* Slice 4g: journal abort/commit/crash-replay (destructive —
@@ -2172,6 +2281,22 @@ static void fs_test_thread(void *arg) {
                                     kputs(" rc=");
                                     if (rc < 0) { kputs("-"); kputdec((uint64_t)(-rc)); }
                                     else        { kputdec((uint64_t)rc); }
+                                    /* DDR-964 §10: rc=-1 is vfs_create's -EPERM
+                                     * branch, i.e. THIS handle did not authorize.
+                                     * The handle itself says why, and the three
+                                     * readings are disjoint: a large index or a
+                                     * stale generation means the thread entered
+                                     * before ->arg was written (the §5 race);
+                                     * h=0 means cap_create returned CAP_NULL
+                                     * (§8); a well-formed handle that is still
+                                     * refused means neither, and needs its own
+                                     * DDR. Failure path only — no hot-path
+                                     * volume, so it cannot evict gate markers
+                                     * from the log ring the way DDR-790 did. */
+                                    kputs(" h="); kputdec((uint64_t)cap);
+                                    kputs(" idx="); kputdec((uint64_t)(cap & 0xFFFFFFFFu));
+                                    kputs(" gen="); kputdec((uint64_t)(cap >> 32));
+                                    kputs(" tid="); kputdec((uint64_t)current_thread->tid);
                                     kputs("\r\n");
                                     churn_ok = 0;
                                 }
@@ -2373,11 +2498,35 @@ static void sched_demo(void) {
     if (!sched_create(blk_test_thread, 0, "blk"))
         kputs("[blk] FAILED to spawn blk_test_thread\r\n");
     sched_start_reaper();                     /* 5b-9: reclaim orphaned zombie procs */
-    struct tcb *fst = sched_create(fs_test_thread, 0, "fs");
-    if (fst)
-        fst->arg = (void *)(uintptr_t)cap_create(fst->caps, RES_FILE, FS_RES_ID,
-                                                 CAP_FS_READ | CAP_FS_WRITE |
-                                                 CAP_FS_SFS_READ | CAP_FS_SFS_ADMIN);
+    /* DDR-964 §5: this is the OPEN-10 spawn. Created BLOCKED so ->arg holds the
+     * capability before any CPU can enter fs_test_thread — the cli above masks
+     * only the BSP's timer, and the boot log shows 796 cross-CPU steals. A
+     * stolen-early thread entered with ->arg still holding the 0 passed to the
+     * create (sched.c:882), so every vfs_create it made returned -EPERM (== -1)
+     * from its first one: `[sfs] churn FAIL op=create iter=0 rc=-1`. Reproduced
+     * on demand by reverting this line to sched_create (DDR-964 §10). */
+    struct tcb *fst = sched_create_blocked(fs_test_thread, 0, "fs");
+    if (!fst) {
+        kputs("[fs] FAILED to spawn fs_test_thread\r\n");
+    } else {
+        cap_t fc = cap_create(fst->caps, RES_FILE, FS_RES_ID,
+                              CAP_FS_READ | CAP_FS_WRITE |
+                              CAP_FS_SFS_READ | CAP_FS_SFS_ADMIN);
+        if (fc == CAP_NULL) {
+            /* DDR-970: do NOT run it. "every FS op would be -EPERM" understates
+             * the damage -- fs_test_thread's self-test block calls
+             * sfs_format(sbd) directly on the block device, which is not
+             * capability-gated, so a thread without its capability would still
+             * reformat the disk while doing nothing useful. Destroy the
+             * still-blocked TCB, matching the three sibling DDR-964 sites
+             * (main.c:211, 273, 344). */
+            kputs("[fs] FAILED to mint fs capability\r\n");
+            sched_destroy(fst);
+        } else {
+            fst->arg = (void *)(uintptr_t)fc;
+            sched_unblock(fst);
+        }
+    }
     __asm__ volatile("sti");
     kputs("NEXUS: scheduler + IPC + ring-3 + virtio-blk + VFS live\r\n");
 

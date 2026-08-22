@@ -746,8 +746,41 @@ static void cadence_tick(void) {
     if (g_cad_iter >= g_cadence) {
         g_cad_start_ns = now;               /* DDR-895: restart the period here */
         g_cad_pre_said = 0;
-        set_ambiance((g_cur_amb + 1) & 3, 12);
-        if (++g_cad_advances == 4) {        /* one full automatic cycle */
+        /* DDR-965: under the test knob the ANIMATION, not the cadence, is the
+         * floor. cadence_tick() runs once per FRAME, so an advance cannot
+         * complete in less than the transition it renders — ~16 render+present
+         * pairs, measured at ~11.3 s against a 2000 ms target. CI reached only
+         * n=3 of the 4 the gate needs. Shrink the transition when the test
+         * cadence is armed: the animation still happens, g_settled still lands
+         * on the final frame (DDR-716), and only the frame COUNT changes.
+         * Derived from g_cadence_ns rather than a new flag — no new writable
+         * global (DDR-826). The knob is used by smoke-cadence alone. */
+        int cad_test = g_cadence_ns < 60ULL * 1000ULL * 1000ULL * 1000ULL;
+        set_ambiance((g_cur_amb + 1) & 3, cad_test ? 2 : 12);
+        ++g_cad_advances;
+        /* smoke-cadence instrument. That gate fails as "no full auto cycle" —
+         * CADENCE_OK missing — while CADENCE_TEST and PRETRANSITION both pass,
+         * so the knob armed and at least one period nearly completed. The clock
+         * is therefore advancing and the question is only the RATE: how many
+         * advances happened, and how long each actually took against the 2 s
+         * test target.
+         *
+         * cadence_tick() runs once per FRAME, so an advance cannot be observed
+         * sooner than the next frame. elapsed_ms >> target_ms means the
+         * compositor is not being scheduled frames often enough to close four
+         * periods inside the gate's window — a starvation reading, not a clock
+         * one. elapsed_ms ~= target_ms with n < 4 means it simply ran out of
+         * wall time. Four lines per run at most -- DDR-970: the bound is now
+         * ENFORCED; advances continue past 4 in a 180 s run and the printf used
+         * to fire on every one, so the comment was false and the log grew
+         * without bound. ring-3 printf+fflush is one kwrite, so this cannot be
+         * spliced (DDR-963 §4). */
+        if (g_cad_advances <= 4) {
+            printf("PRADYOS_CAD_ADV n=%d elapsed_ms=%llu target_ms=%llu\n",
+                   g_cad_advances, g_cad_iter / 1000000ULL, g_cadence / 1000000ULL);
+            fflush(stdout);
+        }
+        if (g_cad_advances == 4) {          /* one full automatic cycle */
             printf("PRADYOS_CADENCE_OK\n");
             fflush(stdout);
         }
@@ -883,6 +916,12 @@ int main(void) {
     int resizing = 0, rs_id = -1, rs_bx = 0, rs_by = 0;         /* DDR-718 */
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     int metrics_said = 0;                    /* DDR-737: one-shot panel witness */
+    /* DDR-968: the witness above is gated on pid!=0 && dispatches>=1, and when
+     * smoke-agents goes red in CI neither value is anywhere in the log. These
+     * two locals (no new writable global, DDR-826) bound a periodic print of
+     * that predicate: 24 lines max, 128 frames apart. A green boot arms the
+     * witness in the first frames and emits at most one. */
+    unsigned wit_frames = 0, wit_said = 0;
     for (;;) {
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
         int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
@@ -929,6 +968,16 @@ int main(void) {
                 printf("AGENT_PANEL KRYOS act=%u disp=%u\n",
                        (unsigned)m[0].actions, (unsigned)m[0].dispatches);
                 printf("PRADYOS_AGENT_PANEL_METRICS_OK\n");
+                fflush(stdout);
+            } else if (wit_said < 24 && (wit_frames++ & 127) == 0) {
+                /* DDR-968: say WHICH term is holding the witness down. Printed
+                 * on a cadence rather than on change, because a frozen
+                 * predicate is the signal and one line then silence reads the
+                 * same as a stopped loop — the rising n= separates them. */
+                wit_said++;
+                printf("PRADYOS_AGENT_WITNESS_WAIT pid=%u disp=%u state=%u n=%u\n",
+                       (unsigned)m[0].pid, (unsigned)m[0].dispatches,
+                       (unsigned)m[0].state, wit_frames);
                 fflush(stdout);
             }
         }

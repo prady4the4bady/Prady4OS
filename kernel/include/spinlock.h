@@ -22,6 +22,14 @@ static inline void spin_unlock(spinlock_t *l) {
     __atomic_clear(&l->v, __ATOMIC_RELEASE);
 }
 
+/* Non-blocking acquire: 1 = taken, 0 = busy. For contexts that must make
+ * progress even when the lock is held — notably the trap printer, which runs
+ * in EXCEPTION context and would otherwise deadlock against a line-locked
+ * region interrupted by a fault on its own CPU (DDR-963 §5). */
+static inline int spin_trylock(spinlock_t *l) {
+    return !__atomic_test_and_set(&l->v, __ATOMIC_ACQUIRE);
+}
+
 /* IRQ-save variant: also masks local interrupts so the holder cannot be
  * preempted mid-critical-section (the ADR-016 discipline, now lock-backed). */
 static inline uint64_t spin_lock_irqsave(spinlock_t *l) {

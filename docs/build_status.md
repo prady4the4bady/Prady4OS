@@ -5333,3 +5333,1696 @@ printed `function strtonum never defined` and passed it.
 **Every "probe-rodata-check: OK" in this repo's history before this commit
 carries no information.** Second instance of the CLAUDE.md §0.3 vacuous-guard
 failure mode.
+
+## Session 2026-08-21 (cont.) — DDR-960: the stage-2 read window, 1 MiB → 1.5 MiB
+
+**PR #4 merged first** (all 22 CI checks green on `0410e66`): `dev/phase1`
+fast-forwarded `9b4f60f → 0410e66`, shipping DDR-958 `fat32_rename` and DDR-959.
+
+**The blocker this clears.** `kernel.bin` was 1,044,862 B against a 1,048,576 B
+read window — **3,714 B of headroom** — and every embedded ring-3 probe ELF
+costs a page-aligned 8,192 B. No new probe fit. DDR-958 hit this and routed its
+gate through PRISM, leaving `sfs_rename` ungated; DDR-956 hit it first; and
+`tools/ci/revert_rename_embed.py` records a *third* attempt that came up 382 B
+short. Probe ELFs are this project's only mechanism for gating a syscall, so
+the window blocked the gating of every future syscall, not just rename.
+
+**Governing prior art, corrected.** There is **no ADR** for the load window —
+ADR-033 is "third-party fetch source". It has always been governed by DDR-733
+(relocation to 4 MiB, 24 chunks) and DDR-827 (24 → 32). DDR-960 raises it to 48
+chunks = 1,572,864 B, and ADR-039 will record the ceiling as a standing contract
+so the number stops living only in DDRs.
+
+**What did and did not move.** Chunk count (`stage2.asm:199`) and the Makefile
+size gate moved. The **disk image did not**: from LBA 17 a 2 MiB image holds
+2,088,448 B, which covers up to 63 chunks, so DDR-827's `truncate -s 2M` already
+suffices — the first raise in this chain that does not need it, and the comment
+claiming otherwise is now corrected. PT_HI did not move either: image + BSS is
+1,196,288 B against a 2 MiB span, i.e. **900,864 B of headroom**, two orders of
+magnitude more slack than the window had. That asymmetry is why this is a
+chunk-count change and not a page-table change.
+
+48 rather than more is set by one invariant: **the size gate must never admit an
+image PT_HI cannot map.** A full 48-chunk window plus current BSS is 1,724,288 B,
+still 372,864 B under the ceiling. At 56 that margin is 110,720 B; at 64 the
+window alone equals the whole 2 MiB span, leaving zero room for BSS.
+
+Also recorded: PT_HI's 2 MiB span is implemented a **second** time, independently,
+in `boot/uefi/loader.c:81-93`. Any future extension must move both files.
+
+### Measured (kernel `6a254f13…`, `kernel.bin` 1,044,862 B)
+`make image` rc=0 / 0 warnings · `smoke` PASS · `smoke-user` PASS · `smoke-fs`
+PASS · **`smoke-smpuser` 5/5 with 0 `[BUG]`/`PANIC`/`#GP`/`[trap]` lines in all
+five logs** · `ci-shard-check` OK 146/6/6 · `ci-probe-rodata-check` OK 56 ELFs ·
+`ci-start-align-check` OK 39 entries.
+
+**Boot time is unchanged: 0.38 s to the kernel sentinel at both 32 and 48
+chunks**, 5 runs each with no variance. The 16 extra INT 13h round trips and
+512 KiB of extra `rep movsd` are below measurement resolution.
+
+### The check that actually matters — a >1 MiB kernel, two arms
+Everything above ran on a kernel the OLD window already covered, so none of it
+can distinguish a working raise from a no-op — DDR-827's own lesson. A temporary
+500 KiB `.rodata` pad linked early in `console.c` pushed every later section,
+including the embedded probe ELFs, past the old 1 MiB mark: **1,556,862 B**.
+
+| arm | chunks | result |
+|---|---|---|
+| A | 48 | `smoke`, `smoke-user` (7 patterns), `smoke-fs` (14 patterns) all **PASS** |
+| B | 32 | `smoke` and `smoke-user` **FAIL** — *sentinel not found*: the image does not boot at all |
+
+Same kernel byte-for-byte; only the chunk count differs. Arm B reproduces
+DDR-827's signature deliberately. Pad removed, chunk count restored, rebuilt
+kernel reproduces md5 `6a254f13…`, `make smoke` green again.
+
+## Session 2026-08-21 (cont.) — DDR-962: `sfs_rename` is gated
+
+The half of DDR-956 that never had a gate. `sfs_rename` has been implemented and
+callable since DDR-956; DDR-958's `smoke-rename` drives PRISM's `mv`, which
+reaches only the FAT root, so it proved `fat32_rename` and said nothing about
+SFS. Closing that needed an embedded ring-3 probe, which needed DDR-960's window
+raise. **This is the first thing the raise bought.**
+
+`user/renametest.c` — freestanding, no writable globals — is spawned SFS-rooted
+behind `probe_enabled("rename-sfs")`, the same shape as the DDR-866 ftruncate
+probe beside it and opt-in for the same reason: it creates files on the shared
+SFS root.
+
+Three arms:
+- **`PRADYOS_SFS_RENAME_OK`** — the destination reads back the source's *exact
+  bytes* and the source stops opening. Reading the payload rather than just
+  opening the destination is what distinguishes "a name exists" from "the same
+  inode was re-keyed", which is what `sfs_rename` claims (two `bt_insert`s, one
+  `sfs_commit`, inode reused not copied).
+- **`PRADYOS_SFS_RENAME_ENOENT`** — renaming an absent path fails. The
+  stub-catcher.
+- **`PRADYOS_SFS_RENAME_LFN`** — a long source name is retired. This mirrors
+  `smoke-rename` arm 6 in intent, not mechanism: SFS has no VFAT fragment chain
+  to corrupt, so what a long name exercises is the leaf-slot name copy,
+  `name_len`, and FNV1a32 keying of a name outside the 8.3 shape. Unlike FAT the
+  probe creates its own fixture, so the arm cannot go vacuous through a missing
+  one.
+
+Gate `smoke-rename-sfs`, **shard 5** (not 4 — `smoke-rename` is there, and both
+carry forbidden sentinels that make them burn their full window). **146 → 147
+gates.**
+
+### R8 two-arm — the gate can fail
+`sfs_rename` stubbed to `return 0`:
+```
+[smoke] FAIL — required pattern 'PRADYOS_SFS_RENAME_OK' not found.
+SFS RENAME FAIL: destination does not exist after rename
+```
+Caught at arm 1, naming the actual defect. Stub reverted, rebuilt, gate re-run
+green.
+
+### Measured (kernel `78544f73b2b43c625260875530e0467c`, `kernel.bin` 1,053,054 B)
+`make image` rc=0 / 0 warnings · `smoke-rename-sfs` **PASS 3/3** ·
+`smoke-rename` PASS · **`smoke-shell` 5/5** · `fs_regression.sh` **9/9**, uaf=0 ·
+`smoke-blkmq` PASS · `smoke-rqstress-liveness` PASS · `smoke-blk-integrity` PASS ·
+`ci-shard-check` OK 147/6/6 · `ci-probe-rodata-check` OK · `ci-start-align-check` OK.
+
+### The DDR-960 loop, closed
+`kernel.bin` with this probe embedded is **1,053,054 B** — the exact figure
+DDR-958 recorded as *"4,478 B over"* the old 1 MiB window. It now builds, boots
+and gates, with **519,810 B spare — room for 63 more probe ELFs.**
+
+## Session 2026-08-21 (cont.) — BUG-1: investigated, does NOT reproduce, no fix pushed
+
+BUG-1 is the CI-only BSP wedge inside the DDR-763 B+tree churn loop
+(`main.c:2131-2160`), historically ~1-in-32 on `smoke-fs` (shard 5).
+
+### CI history — nothing to extract
+No `smoke-fs` failure exists to analyse. The **last six** CI runs on
+`dev/phase1` are all `success`, including both runs on PR #4's `0410e66` (22/22
+checks) and the run on the `9b4f60f` push. The most recent failure of any kind
+is `32272722318` (`e5b097a0`, 2026-08-19), already root-caused as the
+`shard_check` job failing on an unassigned `smoke-fs-liveness` — not BUG-1.
+
+### Local reproduction attempt — instrument live, wedge absent
+Built with `BSP_LIVENESS=1` (90 TUs compiled with the flag; kernel
+`3f49c7b94645a60142e45392ccadfb90`), `smoke-fs` ×3:
+
+| run | verdict | churn markers | last |
+|---|---|---|---|
+| 1 | PASS | **40** | `[bsp] churn iter=39` |
+| 2 | PASS | **40** | `[bsp] churn iter=39` |
+| 3 | PASS | **40** | `[bsp] churn iter=39` |
+
+All 40 iterations complete every run. The BSP does not wedge.
+
+### A methodological trap worth recording — the first attempt was vacuous
+The first pass at this greped `make smoke-fs` output for `[bsp] churn iter=` and
+found **zero**, which reads exactly like "the churn block never executed". It is
+not: `boot_test.sh` **deletes the serial capture on every exit path** unless
+`KEEP_SERIAL=1` is set, so make's output never contains guest serial at all. The
+correct invocation is:
+
+```
+KEEP_SERIAL=1 SERIAL_LOG=build/gatelogs/<name>.log make smoke-fs
+```
+
+This is the same trap DDR-957 §7 recorded ("the first attempt to check this
+grepped the make output rather than the serial log, and returned a misleading
+zero"). It has now cost two sessions. **Zero markers from a make log is not
+evidence of anything.**
+
+### Verdict — recorded, not fixed
+No speculative fix pushed, per the standing rule. Note what these runs do and do
+not establish: including the incidental ones, `smoke-fs` ran **7 times clean**
+this session. At the historical ~1-in-32 CI rate, P(7 clean | bug fully present)
+≈ **0.80** — so seven clean runs is close to no evidence at all, and that is
+before accounting for the fact that BUG-1 has *never* reproduced on any local
+host. **Local runs cannot bound this defect.** BUG-1 stays open; watch shard 5
+on future CI runs.
+
+The clean kernel was rebuilt afterwards and reproduces md5
+`78544f73b2b43c625260875530e0467c`.
+
+## Session 2026-08-21 (cont.) — DDR-961: `ipc_recv` / `bcast_wait` bounded
+
+Completes the half of DDR-955 that shipped as partial. DDR-955 converted both
+sites at 100 ticks, measured 19/20 with two lwIP `#GP` panics, reverted them,
+and attributed the panics to "a corrupt bcast buffer".
+
+**That attribution does not survive inspection, and correcting it is the
+substance of this change.** `struct bcast_event` is `{type, payload}` and every
+caller does nothing with it but `kputs`/`kputhex`, so an unfilled event prints
+garbage hex. There is no path from those call sites into lwIP's heap.
+
+**The mechanism that does fit is a stale waiter pointer.** Both sites register
+the current thread as *the* waiter and rely on the waker to clear it —
+`bcast_publish` and `ipc_send` each do `s->waiter = 0` before `sched_unblock`.
+On a timeout there is no waker, so nothing clears it, and all three call sites
+then run to completion and exit. The TCB is freed and recycled; a later publish
+reads the dangling pointer and calls `sched_unblock()` through it, writing a
+state field into whatever now owns that allocation. lwIP's PCB pool is the
+largest consumer of that heap. That is a use-after-free introduced **by** the
+timeout conversion, not by the return-type defects — which is why no threshold
+change could have fixed it. **Clearing the registration on the timeout path is
+the load-bearing part; the signature fixes make a timeout reportable.**
+
+- `ipc_recv` → `-ETIMEDOUT` as a distinct code; `-1` still means "cap denied",
+  so the one existing caller's `== 0` test keeps its exact meaning.
+- `bcast_wait` → `void` becomes `int`, so an early return can no longer hand
+  back an unfilled out-parameter undetectably.
+- Both → clear the registration before returning, under the lock
+  `sched_block_timeout` re-acquires, guarded by `== current_thread` so a
+  publisher that won the race does not have its clear undone.
+- Deadline 500 ticks, matching the virtio-blk sites DDR-955 shipped green rather
+  than the 100 it measured red.
+
+Caller audit complete — three sites, all in `kernel/main.c` (166, 277, 292),
+each handling `-ETIMEDOUT` explicitly with a distinct printed string. Those
+strings are deliberately **not** in any gate's sentinel list: a timeout prints
+something other than the asserted sentinel, so an expiry turns the affected gate
+red rather than passing quietly.
+
+### Measured (kernel `26effe65daa046ff7c9257a6d5a1f423`)
+**`smoke-smpuser` N=20: 20/20 PASS, panics=0, ipc_timeouts=0.** Exactly 2
+`[trap]` lines in every run, all accounted for as the deliberate `WXVIOL.ELF`
+and `METRIC.ELF` boot faults. Full-length `smoke-fs` serial capture shows every
+IPC/bcast demo sentinel intact.
+
+### Two scoring bugs found on the way — both produced plausible wrong numbers
+1. `grep -c` already prints `0`; a `|| echo 0` fallback appended a **second**
+   zero, the arithmetic died, and the loop stopped after run 1 **while still
+   printing `1/20 PASS`**. A verdict was reported for a loop that never ran.
+2. **Line-based grep is unreliable on SMP serial output.** The `[trap] user …`
+   line is built from ~10 separate `kputs`/`kputdec` calls (`idt.c:355-363`).
+   Each call is serialised (`irq_save()` in `console.c` is a shadowing local
+   taking `g_console_lock`, ADR-030 stage 1) but the lock is **released between
+   calls**, so another CPU splices output mid-line:
+   `[trap] user [boot-load] SYSTEST.ELF t=#PF page fault pid=180`.
+   11 of 20 runs had the `WXVIOL` trap mangled this way, which defeated a
+   `grep -v WXVIOL` exclusion and scored as "unexpected".
+
+### Finding exposed, deliberately NOT fixed
+**A serial line assembled from multiple `kputs` calls can be split by another
+CPU under `-smp 4`.** Per-call atomicity holds; per-line atomicity does not.
+Every gate here asserts on serial patterns, so any gate matching a whole line is
+intermittently exposed under SMP — a candidate contributor to the
+intermittent-failure classes this project keeps chasing. Fixing it means holding
+the console lock across a whole logical line, a change to the console hot path
+and its lock ordering; it needs its own DDR.
+
+## Session 2026-08-21 (cont.) — `smoke-cadence` CI red on PR #5: NOT this PR, and NOT a timeout
+
+`build-and-boot (shard 5)` failed on `9e0ee66` at **`smoke-cadence`**
+(`[cadence] FAIL — no full auto cycle`, run `32494290321`). Investigated before
+touching anything, because shard 5 also carries `smoke-fs` (BUG-1's home) and
+the new `smoke-rename-sfs` — it was neither.
+
+### It is not caused by this PR — three independent lines
+1. **The failing SHA differs from a passing SHA by documentation only.**
+   `git diff --name-only 3120170..9e0ee66` yields **0** non-`.md` files; the
+   kernel is byte-identical. Shard 5 **passed** at `3120170`.
+2. **The same commit passed and failed concurrently.** Two CI runs on
+   `9e0ee66`: the `push`-event run `32494286674` → **success**; the
+   `pull_request`-event run `32494290321` → **failure**. Same SHA, same runner
+   image, minutes apart. CI itself demonstrates the non-determinism, so no
+   re-run was spent to establish it.
+3. **It passes locally** on a kernel whose md5 (`26effe65…`) matches the CI
+   SHA's kernel exactly: `[cadence] PASS — full automatic ambiance cycle`.
+
+This reproduces the pattern already recorded for this gate:
+`| smoke-cadence | PASS | FAIL | CI-environment only |`, same failure string
+`no full auto cycle`, on `23755ad` — long before this branch.
+
+### But "CI-environment only ⇒ slow runner ⇒ raise the window" is REFUTED
+The obvious patch is to raise `timeout 120`. **The measurement says that would
+not fix it.**
+
+| | local (PASS) | CI (FAIL) |
+|---|---|---|
+| `PRADYOS_CADENCE_OK` | appears just after **t=9000** | never |
+| highest heartbeat tick | **t=11500** | **t=11500** |
+
+The guest reached the **same tick depth in both runs**. It was not starved of
+guest time, so the window was not too short — the cadence state machine simply
+did not complete 4 advances.
+
+Mechanism, from the source: the gate's final sentinel fires only at
+`++g_cad_advances == 4` (`user/compositor.c:750`), and advances are paced by
+`g_cad_start_ns` against `now` — **vDSO wall-clock nanoseconds (DDR-895), not
+ticks.** Under a contended runner the guest's real-time progress and its tick
+accumulation diverge, so the same tick depth can carry fewer wall-clock-paced
+advances. That is the thing to measure.
+
+**Console interleaving is ruled out as the cause here**, despite being this
+session's other finding: `PRADYOS_CADENCE_OK` is a single buffered
+`printf` + `fflush` (`compositor.c:751-752`), i.e. one `kwrite` emitted as a
+single locked unit, so it cannot be split mid-token the way a multi-`kputs`
+line can.
+
+### Not fixed here, and the next diagnostic named
+No patch pushed: this is a pre-existing intermittent in a gate this PR does not
+touch, and the one obvious patch is refuted above. The next step is an
+instrument, not a fix — log `g_cad_advances` and the observed advance period
+alongside the tick count, so the wall-clock-vs-tick divergence can be measured
+rather than inferred. That belongs in its own DDR.
+
+## Session 2026-08-21 (cont.) — DDR-963: console line atomicity, with TWO corrections to my own earlier note
+
+Written up properly after reading the code rather than reasoning from the
+observation. Both corrections narrow claims already pushed in commits `0a9b312`
+and `9e0ee66` and in PR #5's body; the overstated versions stand in that history
+and are corrected here.
+
+**The finding stands:** a *logical* console line assembled from multiple `kputs`
+calls can be spliced by another CPU. `idt.c:355-363` builds the trap line from
+~10 calls; the console lock is released between each. Observed in **11 of 20**
+`smoke-smpuser` runs.
+
+### Correction 1 — the exposure is much narrower than "every gate"
+I wrote that "any gate matching a whole line is intermittently exposed".
+`boot_test.sh:520` matches with **`grep -qF` — a literal substring search over
+the whole file**, not a line match. A splice breaks a gate only when it lands
+*inside the sentinel's own text*, which is far rarer than the 11/20 rate at
+which splices happen somewhere. Bounded set: 20 gates run `QEMU_SMP=4`; ring-3
+sentinels (musl `printf` + `fflush` → one `kwrite`) are **immune**.
+`smoke-user` requires the exact string observed spliced but runs single-CPU —
+luck, not design.
+
+### Correction 2 — the kernel already solved this, and the fix is small
+I described the fix as "holding the console lock across a whole logical line, a
+change to the console hot path and its lock ordering". `kernel/apic/smp.c:40`
+already defines `static spinlock_t g_announce_lock` and holds it across exactly
+this kind of multi-call line, at 4 sites. So the problem is **recognised and
+solved in one file** — the mechanism just isn't reusable, because the lock is
+`static`. The fix is to promote it to `console.h` and take it in the other
+multi-call printers, starting with the trap path. That nests strictly outside
+the existing per-call `g_console_lock`; no change to `kputc` or the UART path.
+
+Protection is partial even where used: `g_announce_lock` excludes other
+announcers, not heartbeats or boot-load stamps.
+
+### Not the cause of anything currently failing
+Checked explicitly against `smoke-cadence`'s CI red and **ruled out** — that
+sentinel is a single buffered `printf` + `fflush`. Recorded as a latent hazard
+with a demonstrated mechanism and a falsifiable denominator (11/20 → must be
+0/20), not as an explanation for a known intermittent. **Not implemented this
+session:** a new cross-file lock in the fault path needs its own N-run
+verification, and nothing failing depends on it.
+
+## Session 2026-08-21 (cont.) — OPEN-10 captured again, and `rc=-1` is now PROVEN to be the capability branch
+
+`build-and-boot (shard 3)` failed on `97ea55a` at **`smoke-blkmq`**:
+
+```
+[sfs] churn FAIL op=create iter=0 rc=-1
+[sfs] btree churn FAIL
+shard 3: FAILED at smoke-blkmq after 1 of 21 gates
+```
+
+This is **OPEN-10** (`BUILD_TRACKER.md:117`, *"`btree churn FAIL` during unrelated
+`-smp 4` gates"*) — `smoke-blkmq` runs `QEMU_SMP=4`. Identical signature to the
+one prior real capture: `op=create iter=0`.
+
+### Not introduced by this branch
+Shard 3 **passed** on `5cbe616`; `97ea55a` differs from it by
+`SESSION_HANDOFF.md` alone (**0** non-`.md` files), so the kernel is
+byte-identical. More decisively, OPEN-10 is a **tracked pre-existing defect**
+with an identical earlier capture predating this branch entirely.
+
+**Corroborated after the fact:** `97ea55a`'s *push-event* suite subsequently
+completed **success** — the same commit whose *pull_request-event* suite failed
+at shard 3. One commit, both verdicts, concurrently, exactly as `9e0ee66` behaved
+for `smoke-cadence`. That is the stronger form of the argument below: not merely
+"a neighbouring commit passed" but "this SHA passed the identical gate set in a
+parallel run", which no property of the commit can explain.
+
+Stated honestly: a docs-only diff rules out the *last commit*, not the whole
+branch. The branch does change SMP-visible kernel behaviour (DDR-961). What
+rules the branch out is that OPEN-10 was captured with this exact signature
+before any of it existed — and that nothing here touches capability tables.
+
+### The valuable part — three sessions of "unactionable rc=-1", resolved
+
+Prior state (DDR-884): the probe discarded the return code, leaving `-EEXIST`,
+`-ENOSPC` and an ADR-032 write-budget refusal indistinguishable. *"No fix
+attempted: three candidates remain and the evidence does not separate them."*
+A 45-run capture campaign found **0 hits**.
+
+Two later DDRs split the value, and **this is the first occurrence after both
+landed**:
+
+- **DDR-888** split `vfs_create`'s preconditions: `-EPERM` for the capability
+  check, `-EINVAL` for a bad mount, `-EIO` for the DDR-954 revalidation
+  (`vfs.c:147-165`).
+- **DDR-891** split `sfs_create`'s two bare `-1`s into `-ENOENT` (parent
+  unresolvable) and `-ENOSPC` (no inode/extent, or name clash) — its comment
+  names this exact string as *"unactionable for three sessions"*
+  (`sfs.c:748-766`).
+
+With both in place the value space is now disjoint:
+
+| return | meaning | layer |
+|---|---|---|
+| **-1** (`-EPERM`) | **`cap_ok(cap, CAP_FS_WRITE)` returned false** | `vfs_create` |
+| -22 (`-EINVAL`) | bad mount id / no create op | `vfs_create` |
+| -5 (`-EIO`) | mount died under the call (DDR-954) | `vfs_create` |
+| -2 (`-ENOENT`) | parent path unresolvable | `sfs_create` |
+| -28 (`-ENOSPC`) | no free inode/extent, or name clash | `sfs_create` |
+
+`EPERM` is **1** (`errno.h:9`), so `-EPERM` *is* `-1`. `sfs_create` returns only
+`0`/`-ENOENT`/`-ENOSPC` — the `return -1` at `sfs.c:775` is inside
+`sfs_dir_walk`, a different function, and is not reachable from this path.
+
+**Therefore `rc=-1` on `vfs_create(cap, root_smnt, "/CHURN.TMP", &cf2)`
+(`main.c:2190`) can only be the `!cap_ok(cap, CAP_FS_WRITE)` branch.**
+
+OPEN-10 narrows from three candidates to **one**: at churn iteration 0 the
+BSP's capability check for `CAP_FS_WRITE` failed. It is **not** `-EEXIST`, not
+`-ENOSPC`, and not an ADR-032 budget refusal — all three of DDR-884's candidates
+are eliminated by the value itself. Note the churn block sets
+`fs_write_budget = ~0ull` immediately before the loop, which independently
+agrees that the budget is not implicated.
+
+### No fix attempted, and why
+One observation, no mechanism. Whether the `cap` value is stale or the cap table
+is being mutated concurrently is not decidable from a single capture, and a
+speculative patch would be "validated" only by a rare failure not recurring —
+indistinguishable from having fixed nothing, which is the trap DDR-884 already
+named.
+
+**Next diagnostic:** print the `cap` handle value and the owning `cap_table`
+state alongside `rc` at this site, so the next occurrence says *which*
+capability was missing and whether the table was intact. That is an instrument,
+not a fix, and belongs with OPEN-10 rather than in this PR.
+
+## `smoke-cadence` recurrence on `e5697fa` — and a hypothesis of mine, refuted
+
+Shard 5 failed again at `smoke-cadence`, same signature: `no full auto cycle`,
+guest alive and cycling (`PRADYOS_PRETRANSITION` repeatedly, heartbeats to
+**t=11500**), `PRADYOS_CADENCE_OK` never printed. Identical to the `9e0ee66`
+failure, including the tick depth — which is the measurement that already
+refuted "raise the timeout". Not re-diagnosed; the analysis above stands.
+
+**Refuted: "only pull_request-event runs fail."** After the first two reds I
+noted that both were `pull_request`-event runs while every `push`-event run on
+this branch had been green, and floated runner contention between the duplicate
+runs as a possible systematic bias. **`e5697fa`'s failure is a `push`-event run**
+(`32502821559`), so that pattern was coincidence across two observations, not a
+property of the event type. Recorded because the claim was carried into a
+check-in message where it could have sent the next session down a dead end.
+
+What survives from that observation is narrower and still useful: **the same
+SHA has been seen to pass and fail concurrently** (`9e0ee66` for cadence,
+`97ea55a` for OPEN-10). That is evidence of non-determinism, which is all it was
+ever used for — it is not evidence about *which* event type is implicated.
+
+**Rate, stated with its denominator:** `smoke-cadence` has now failed **2 times**
+in the runs observed on this branch this session (`9e0ee66` pull_request-event,
+`e5697fa` push-event), against roughly a dozen-plus shard-5 executions across
+~9 commits × 2 event types. That is a loose bound, not a measured rate — the
+exact per-run denominator was not tracked, and saying "about 10%" without having
+counted every shard-5 execution would be the kind of number this file already
+warns about.
+
+## OPEN-10 second capture this session — `rc=-1` reproduces, on a different gate
+
+Shard **2** failed on `3f98e0a` at **`smoke-percpu-sched`** (`QEMU_SMP=4`,
+`gate_shards.txt:86`) with the identical signature:
+
+```
+[sfs] churn FAIL op=create iter=0 rc=-1
+[sfs] btree churn FAIL
+```
+
+Different shard, different gate, same `op=create iter=0 rc=-1`. This is exactly
+what OPEN-10's tracker entry describes — *"`btree churn FAIL` during **unrelated
+`-smp 4` gates**"* — and it is the second capture in this session after
+`smoke-blkmq` on shard 3.
+
+### Why this matters more than a recurrence count
+The §"OPEN-10 captured again" analysis concluded, from **one** observation, that
+`rc=-1` is provably the `cap_ok(cap, CAP_FS_WRITE)` branch. A single sample
+supporting a decisive-looking conclusion is exactly the shape that should invite
+suspicion. **It now reproduces**: two independent captures, two different gates,
+two different shards, the same value. The discrimination does not rest on one
+reading.
+
+Historical context for the rate: OPEN-10 had **one** real capture in its entire
+history, and a 45-run campaign found **0** hits (DDR-884). This session produced
+**two** in a few hours of CI. That is a large apparent change, but note what it
+is *not* — this session did not touch capability tables, and every capture sits
+on a commit whose kernel is byte-identical to a passing one. The likelier
+reading is that this branch simply ran a great many `-smp 4` gates in a short
+window, not that anything made OPEN-10 more frequent. Recorded as an observation
+with that caveat attached rather than as a rate change.
+
+### Also, on the non-determinism evidence
+`e5697fa` now joins the same-SHA-both-verdicts set: its **push**-event suite
+failed at `smoke-cadence` while its **pull_request**-event suite passed. Note
+the event types are *reversed* relative to `9e0ee66` and `97ea55a`, which is a
+third independent nail in the "only pull_request runs fail" idea already
+refuted above.
+
+No fix attempted, unchanged: the next step remains the capability instrument
+(print the `cap` handle and owning `cap_table` state alongside `rc` at
+`main.c:2190`), which two captures now make clearly worth landing.
+
+## `smoke-blk-integrity` red on shard 0 — Item 48 family, and DDR-961's timeout WITNESSED it
+
+Shard 0 failed on `ca0abca`:
+
+```
+[sub-approve] TIMEOUT
+[blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
+[vblk] compl wait timeout          (x3)
+[smp] blk integrity FAIL reference-read
+```
+
+`[sub-approve] TIMEOUT` is a string **this session introduced** (DDR-961's
+`bcast_wait` timeout path). Its first appearance in the wild is on a failing
+gate, so it needed ruling in or out as a cause rather than waved off.
+
+### It is a witness, not the cause
+- **No mechanism.** `bcast_wait` timing out cannot stop virtio-blk workers
+  completing. The bcast demo threads share no state with the block layer; the
+  timeout path clears `s->waiter` under the lock and returns.
+- **Same kernel already passed this gate in CI.** `3120170` carries the DDR-961
+  code and its shard 0 — which includes `smoke-blk-integrity` — was **green**
+  (run `32488429624`). `ca0abca` is docs-only from it (**0** non-`.md` files),
+  so the kernel is byte-identical.
+- **Passes locally.** 3/3 PASS on kernel `26effe65…`, with `[sub-approve]
+  TIMEOUT` firing **0** times — as it did in all 20 `smoke-smpuser` runs.
+- The failure itself is the **Item 48 / workers-late family**: workers spawned
+  2/2 but `done=0`, with three `[vblk] compl wait timeout`s. CLAUDE.md §0.2 is
+  explicit that `workers-late` is *"a scheduling issue, NOT a driver bug"*.
+
+### The finding worth keeping
+**A second, unrelated subsystem independently reported a stall in the same
+window.** `bcast_wait` waited its full 500 ticks without a publisher waking it,
+at the same moment the block workers failed to run. That is corroborating
+evidence for the scheduling-stall root cause §0.2 asserts for Item 48, arriving
+from a completely independent code path — the bcast demo has nothing to do with
+blk.
+
+DDR-961's timeouts were added to make an expiry legible. They turn out to double
+as a **system-wide stall detector**: an unrelated thread announcing "nothing woke
+me for 500 ticks" is exactly the witness Item 48 has lacked. Worth exploiting
+deliberately rather than treating as log noise.
+
+### Calibration on the deadline, and on the vblk timeouts
+500 ticks is reachable under CI load — this is the first observation of that,
+against 0 in 20 local `smoke-smpuser` runs and 0 in 3 local `smoke-blk-integrity`
+runs. Not a reason to change it: the deadline fired exactly when the system was
+genuinely stalled, which is what a bound is *for*.
+
+Separately, and worth knowing before anyone reads a `[vblk] compl wait timeout`
+as a failure: two of the three **passing** local runs contained **15** and **10**
+of them. They are common and tolerated; they only fail the gate when they
+cascade into `blk integrity FAIL reference-read`.
+
+### Gap in my own verification, owned
+`smoke-blk-integrity` was run locally on kernel `78544f73` (the STEP 2 batch,
+*before* DDR-961), not on the DDR-961 kernel, before that work was pushed. CI
+covered it on `3120170` and the three runs above cover it now, but the local
+pre-push batch had a hole in it.
+
+## Item 48 family recurred on a different gate — and my own characterisation was too narrow
+
+`smoke-msixap` (**shard 5**, `gate_shards.txt:133`) failed on `aec6ad1` with the
+signature identical to the `smoke-blk-integrity` failure recorded above:
+
+```
+[blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
+[vblk] compl wait timeout          (x3)
+[smp] blk integrity FAIL reference-read
+```
+
+**Correction to what I wrote one section earlier.** I labelled this family
+"shard 0 / `smoke-blk-integrity`". That is too narrow — the same failure just
+landed on a different gate on a different shard. The family is not shard- or
+gate-specific: it is **any `-smp 4` gate that exercises the multi-inflight blk
+path**, which by the shard manifest spans at least
+
+| gate | shard |
+|---|---|
+| `smoke-blk-integrity` | 0 |
+| `smoke-blkmq` | 3 |
+| `smoke-blkmq-trace` | 4 |
+| `smoke-msixap` | 5 |
+
+That mirrors OPEN-10's own wording — *"during unrelated `-smp 4` gates"* — and
+is the same over-narrow-then-corrected pattern as the DDR-963 exposure claim
+earlier today. Recorded rather than silently widened.
+
+Note `smoke-blkmq` can fail *either* way: it produced the OPEN-10 churn signature
+on shard 3 earlier, and shares the multi-inflight assertion that fails here. The
+gate name alone does not identify which family a red belongs to — **read the
+signature**.
+
+No `[sub-approve] TIMEOUT` in this instance, so DDR-961's bcast witness did not
+fire; the stall was evidently shorter than its 500-tick deadline. That the
+witness is silent here and loud in the `ca0abca` instance is itself useful: it
+distinguishes stall *durations* rather than merely stall presence.
+
+### Stopping rule for this record
+Three intermittent families are now characterised (`smoke-cadence`, OPEN-10, and
+this one). **Further recurrences will not be recorded individually** — they add
+run-count without adding information, and a build-status that logs every
+instance of a known-open defect becomes noise that hides the findings. A
+recurrence gets written up only if it carries something new: a different
+signature, a new gate family, or evidence bearing on a root cause.
+
+## OPEN-10 ROOT-CAUSED and fixed — the create-then-init race (DDR-964)
+
+The stopping rule above was applied and cleared. Shard 2 on `aec6ad1`
+(`smoke-percpu-sched`, check run 96856099938) carried the familiar OPEN-10
+signature, which alone would have been a silent recurrence. But the same boot
+also showed, 40 lines earlier:
+
+```
+[boot-load] PRISM.ELF t=158
+[user] SFS write failed for PRISM.ELF
+```
+
+`[boot-load] PRISM.ELF` appears in 20+ retained logs under `build/gatelogs/`;
+that write had **never** failed in any of them. Two independent SFS failures in
+one boot, one never seen before, is evidence bearing on root cause — the one
+condition the rule admits. Full analysis in `docs/ddr/DDR-964-*.md`.
+
+### The defect
+
+`sched_create()` calls `rq_push` **before it returns** (`sched.c:938-942`), so a
+kernel thread is runnable the moment the caller gets the pointer. Eight sites in
+`main.c` (211, 212, 267, 268, 331, 332, 333, 2413) then mint a capability into
+`->arg` *afterwards*. The guard was `cli` (`main.c:2399`), whose comment reads
+"so each thread's capability (->arg) is fully set before the timer can schedule
+it" — **single-CPU reasoning**. `cli` masks the BSP's timer, not the other three
+CPUs, which can take the thread via `rq_steal` and enter it early. It then runs
+with the `arg = 0` the create was called with (`sched.c:882`), so every
+`vfs_create` returns `-EPERM` — which **is** `-1`, since `EPERM == 1` — from its
+first call onward: `[sfs] churn FAIL op=create iter=0 rc=-1`.
+
+`iter=0` was never a coincidence: the loop is `for (i = 0; churn_ok && i < 40;)`,
+so it halts at the first failure and any failure reports the lowest iteration
+reached. It means the capability was bad *before the loop*, which is what
+eliminated every transient explanation.
+
+### The counter-evidence that inverted
+
+The failing log shows `[sched] steal local=796 remote=0`, which reads as "no
+cross-CPU stealing". It is not: in `steal_pass` (`sched.c:579-601`) `same`
+compares **NUMA nodes**, and `if (c == self) continue` means *every* counted
+steal is cross-CPU. QEMU presents one node, so `local=796` means 796 cross-CPU
+steals in that boot. The line confirms the exposure rather than refuting it.
+
+### Reproduced on demand — a first for OPEN-10
+
+Reverting the `fs_test_thread` spawn to `sched_create` and widening the window
+produced the CI signature exactly, locally:
+
+```
+[sfs] churn FAIL op=create iter=0 rc=-1 h=0 idx=0 gen=0 tid=11
+```
+
+Reverting the mutation restored a byte-identical kernel
+(`sha256:c5f76441babbaf91`) and `[sfs] btree churn OK`.
+
+**A correction the reproduction forced:** DDR-964 first predicted the stolen
+thread would read uninitialised garbage per §0.6. It does not —
+`sched_create_state` writes `t->arg = arg` and every site passes `0`, so the
+handle is a well-defined `CAP_NULL`. That makes `h=0` shared with the unchecked
+`cap_table_create()` path, so the two are separated by the new
+`[fs] FAILED to …` markers, not by the handle.
+
+### What shipped
+
+- `sched_create_blocked()` — returns a BLOCKED kernel thread; all eight sites
+  convert to create → init `->arg` → `sched_unblock`. Same remedy
+  `sched_create_user` already used for cr3/user_rip (DDR-SMP-3c-cap-2a D3).
+- `cap_table_create()` NULL checked at `sched.c:885` (was unchecked; a NULL cap
+  table silently made every capability check fail — the §0.6 class).
+- Failure-path-only instrument printing the handle and tid at the churn site.
+
+### Gate evidence — kernel `sha256:c5f76441babbaf91` (R1)
+
+| gate | result |
+|---|---|
+| `smoke-percpu-sched` | 4/4 green with `btree churn OK` reached |
+| `smoke-shell` | **5/5** |
+| `smoke-smpuser` | PASS (AP bringup — the sensitive path) |
+| `smoke-blkmq`, `smoke-blk-integrity`, `smoke-rqstress-liveness` | PASS |
+| `smoke-rename`, `smoke-rename-sfs` | PASS |
+| `ci-probe-rodata-check`, `ci-shard-check` | PASS |
+| size | 1,053,054 B ≤ 1,572,864 |
+
+**Not claimed as closed.** The fix is proven against the reproduction, not
+against CI's intermittent. OPEN-10 stays open until the promotion requirement
+already in force is met: three consecutive CI greens on the same tip (§3). A
+recurrence *with* a `[fs] FAILED to …` marker, or with a well-formed handle,
+reopens it on a different mechanism (DDR-964 §11).
+
+## A FOURTH intermittent family — `FSRM FAIL: created file did not persist`
+
+Shard 1 on `239f300` (`smoke-rqstress-liveness`, check run 96859678133) failed
+with a signature matching **none** of the three characterised families, so the
+stopping rule requires it be recorded.
+
+```
+[sfs] umount ctx=0x0000000007C3C000 caller=0xFFFFFFFF8002A91C
+FSRM FAIL: created file did not persist
+```
+
+### Read the signature, not the gate name
+`smoke-rqstress-liveness`'s own required sentinel **passed** — `[smp] rqstress
+OK` is in the log. The gate died on a *forbidden* sentinel (DDR-791: forbidden
+in every gate, not only the one that owns it) raised by an unrelated probe.
+This is the third distinct reason this gate family can go red, and reinforces
+the rule recorded above: the gate name does not identify the defect.
+
+### What the probe actually proved
+`user/fsrmtest.c` fails at step (2). Steps (1) and (2) are adjacent:
+
+```c
+long fd = nsi(SYS_OPEN, path, O_CREAT | O_WRONLY, 0);   /* succeeded */
+if (nsi(SYS_WRITE, fd, payload, plen) != plen) fail("write short");  /* succeeded */
+nsi(SYS_CLOSE, fd, 0, 0);
+long rf = nsi(SYS_OPEN, path, O_RDONLY, 0);
+if (rf < 0) fail("created file did not persist");       /* FAILED HERE */
+```
+
+So the create **and** the write both succeeded and only the immediately
+following reopen failed. This is not a capability failure (that would fail step
+1) and not a short write (step 1 checks it). Something invalidated the file
+between the close and the reopen.
+
+### Leading hypothesis — two SFS contexts writing one volume
+The line immediately preceding the failure is an SFS **umount**. `sfs_umount`
+(`sfs.c:376`) is called only from the SFS self-tests inside `sfs.c`
+(lines 1442, 1448, 1449, 1454, 1477, 1531, 1556, 1568). Those self-tests mount
+their **own** context on the same block device and write to it —
+`sfs_create(c, "VER", &f)`, `sfs_write(c, &f, 0, pa, 4096)`.
+
+Two independent SFS contexts on one device, each with its own in-memory
+superblock, free-tree and allocator state, both writing, will clobber one
+another's metadata. The ring-3 FSRM probe holds the root mount; a self-test
+mount writing concurrently would make an already-created file unfindable on
+reopen — exactly what is observed. Under one CPU these serialise; under
+`-smp 4` they interleave, which is why this is SMP-only. That run also shows
+`[sched] steal local=5531 remote=0` — far above the 796 seen in the shard-2
+capture, i.e. an unusually interleaved boot.
+
+**This is a hypothesis, not a finding.** Per §6.0-B it is recorded without a
+fix. It is *not* the DDR-964 race: that fails at create with `rc=-1`, and here
+the create succeeded.
+
+### Explicitly not caused by the DDR-964 work
+This failure is on `239f300`, which predates the DDR-964 fix (`f11d6c7`). It is
+pre-existing, not a regression from the `sched_create_blocked` conversion.
+
+### The discriminating instrument (not yet built)
+Print the *root* mount's ctx alongside each self-test mount/umount, and have the
+FSRM probe report which ctx served its failing open. If the probe's root ctx was
+never umounted, the shared-device-write reading is confirmed and the fix is to
+serialise or isolate the self-test mounts. If the root ctx itself was freed, it
+is a lifetime bug and belongs with DDR-953's stale-ctx work instead.
+
+### A resolution NOT to trust
+`caller=0xFFFFFFFF8002A91C` resolves inside `vfs_rename` in a **local** build —
+which is nonsense as a caller of `sfs_umount`. The failing binary was
+`239f300` built with `BSP_LIVENESS=1`; this build is `f11d6c7` without it.
+Standing rule §8 applies: an address does not identify a binary. The resolution
+was discarded rather than reported.
+
+### FSRM family — instrument built, and it CORRECTED the hypothesis
+
+The `live=` instrument named above is now in `sfs.c`: every DDR-953 mount/umount
+line carries a count of SFS contexts mounted and not yet umounted (atomic —
+mounts happen on several CPUs).
+
+Measured on **passing** runs (kernel `sha256:3173f624b8f207db`; one
+`smoke-rqstress-liveness` + two `smoke-percpu-sched`, all PASS with
+`PRADYOS_FSRM_OK`):
+
+```
+[sfs] mount  ctx=0x0000000007C48000 live=1     ] ten self-test pairs,
+[sfs] umount ctx=0x0000000007C48000 live=0     ] strictly serial, ctx recycled
+   … ×10 …
+[sfs] mount  ctx=0x0000000001092000 live=1     <- persistent root, mounted LAST
+persistent root provisioned
+```
+
+11 mounts, 10 umounts. **`live` never exceeds 1 in any run.**
+
+**This corrects the hypothesis recorded above.** That entry said the self-tests
+mount their own context on the same device *while* the ring-3 probe holds the
+root. On a normal boot they do not: all ten self-test mounts complete and umount
+**before the root is mounted at all**, and the root is then never umounted. The
+two contexts do not normally coexist, and they use visibly different allocator
+regions (`0x07C4…` vs `0x0109…`).
+
+So "two contexts writing one volume" is not a standing property of the design —
+which makes the failing capture *more* interesting, not less. In that run the
+umount landed **after** PRISM was up and init was reaping services, i.e. a
+self-test umount occurred during userspace, inverting the ordering every passing
+run shows. The anomaly to explain is now the **ordering**, not the coexistence.
+
+The instrument discriminates this directly on the next capture:
+
+| observation at the failure | reading |
+|---|---|
+| `live=2` (or higher) | root and a self-test ctx genuinely coexisted — shared-device writes |
+| `live=1`, root ctx being umounted | the root's own ctx was freed under the probe — a lifetime bug (DDR-953) |
+| `live=1`, self-test ctx umounted late | the self-test sequence ran late; explain the ordering, not the sharing |
+
+Still no fix (§6.0-B), and still not conflated with DDR-964: that family fails at
+*create* with `rc=-1`, this one creates and writes successfully and fails the
+reopen.
+
+## `smoke-cadence` instrumented — the 2 s test cadence is unachievable by construction
+
+The remaining family with no diagnostic now has one. `PRADYOS_CAD_ADV` prints
+each advance with the period actually observed against the target
+(`user/compositor.c`, ring-3 `printf`+`fflush` so it is one `kwrite` and cannot
+be spliced — DDR-963 §4).
+
+Measured, kernel `sha256:6ef8fc69c6798602`, three PASSING runs / 18 advances:
+
+| run | n=1 | n=2 | n=3 | n=4 | n=5 | n=6 |
+|---|---|---|---|---|---|---|
+| A | 4500 | 9000 | 11280 | 11380 | — | — |
+| B | 2240 | 11270 | 11470 | 11300 | 11150 | 11360 |
+| C | 4430 | 9020 | 11260 | 11260 | 11400 | 10760 |
+
+(`elapsed_ms`, time since the previous advance; `target_ms` = 2000 throughout.)
+
+**The steady-state period is ~11.3 s against a 2 s target — a 5.6× overshoot,
+and it is a plateau, not a drift.** Every run converges to 11.15–11.47 ms×10³
+and stays there. The first period is short only because it begins mid-frame.
+(An initial reading of these numbers as "growing without bound" was wrong and is
+corrected here: 11.3 s is a floor the loop cannot go below.)
+
+The floor has a mechanism: `cadence_tick()` runs once per FRAME, and each
+advance itself renders a 12-frame `set_ambiance` transition plus the
+pre-transition pulse's ~8 render/present pairs. The period therefore cannot be
+shorter than one full transition animation, whatever the cadence knob is set to.
+**The 'k' hotkey's 2 s cadence has never been achievable**; ~11.3 s is the real
+floor. Four advances need ~34–45 s of wall clock, on top of boot and arming,
+inside a `timeout 120` window.
+
+### This retires the metric the previous refutation rested on
+
+The earlier analysis recorded *"raise-the-timeout is REFUTED — same guest tick
+depth (t=11500) in passing local and failing CI runs"*. That observation is
+real but **cannot discriminate**, and the instrument shows why: QEMU is killed
+by `timeout 120` in **both** outcomes — a passing local run here ended
+`terminating on signal 15 from pid … (timeout)` exactly as the failing CI runs
+do. Both consume the full 120 s window, so both reach the same tick depth
+whether or not the cadence completed. Equal tick depth is what you would see in
+a pass *and* a fail; it was never evidence either way.
+
+What survives: the cadence is paced by `vdso_ns()` wall clock and driven by
+frame throughput, which is not the same quantity as guest tick depth. A runner
+that renders more slowly gets fewer advances in the same 120 s, and the gate
+prints "no full auto cycle".
+
+### Still not fixed (§6.0-B)
+The data now supports several different remedies — cut the transition frame
+count in test mode, require fewer than 4 advances, or widen the window — and
+choosing between them needs a failing-run capture showing which `n` CI actually
+reaches. The instrument makes the next red say so directly. No fix on this data
+alone.
+
+## DDR-963 §5 implemented and verified — 6/10 → 0/10 spliced trap lines
+
+Kernel `sha256:d3cec185ed26a8a6`. The last uninstrumented item is closed.
+
+### Result
+
+| arm | runs with a spliced `[trap]` line | trap lines | gate |
+|---|---|---|---|
+| before | **6/10** | 20 | 10/10 PASS |
+| after  | **0/10** | 20 | 10/10 PASS |
+
+The baseline was re-measured on this kernel rather than inherited: 60%, close to
+DDR-963's recorded 11/20 (55%), so the hazard was intact and the denominator is
+honest. Against that baseline a clean 0/10 has probability ~1e-4 under no effect.
+
+The concrete harm, before and after, on the same line:
+
+```
+before:  [trap] user [boot-load] SYSTEST.ELF t=200
+after:   [trap] user #PF page fault pid=21 name=WXVIOL.ELF rip=0x0000008000000007 err=…
+```
+
+`name`, `pid`, `rip` and the fault bytes were simply gone — everything the trap
+printer exists to emit.
+
+### Two honest deductions from §6's bar
+
+**1. N=10, not the N=20 §6 asks for.** At ~3.5 min/run, 20+20 is ~2 hours. N=10
+is a real denominator but a weaker test, and is recorded as N=10.
+
+**2. The §6 announce-case test is VACUOUS on this data.** §6 also requires that
+an `[smp]` announce line spliced by a heartbeat go to zero, as the test that the
+lock was *promoted* rather than merely reused inside `smp.c`. Measured:
+
+| arm | `[smp] cpu` lines | spliced |
+|---|---|---|
+| before | 150 | **0** |
+| after  | 150 | **0** |
+
+**The baseline was already zero, so this test cannot discriminate** — it is not
+evidence the promotion worked. `[smp] cpu N up` prints during early AP bringup
+while the heartbeat first fires at t=500, so in practice they never overlap.
+Reporting 0→0 as a pass would be the sixth vacuous check in this log. The
+promotion still stands on design grounds — a `static` lock in `smp.c` cannot be
+taken by `idt.c` or `main.c`, which is what the trap-line result required — but
+the empirical claim §6 wanted **is not available** and is not made.
+
+### No regression
+`smoke-smp`, `smoke-smplock`, `smoke-percpu`, `smoke-swapgs`, `smoke-smpjob` —
+the gates whose sentinels the announce lock guards — all PASS. Plus
+`smoke-shell` **5/5**, `smoke-blkmq`, `smoke-blk-integrity`,
+`smoke-rqstress-liveness`, `ci-probe-rodata-check`, `ci-shard-check`.
+Zero warnings at `-Werror`; `kernel.bin` 1,053,054 ≤ 1,572,864.
+
+### A process failure to record
+`992b336` was **pushed while its own message said it would not be** ("NOT pushed
+until the verify arm and smoke-shell 5/5 are in") and before `smoke-shell` was
+5/5 — breaking the standing rule against pushing with that gate unverified. The
+technical content of that message was accurate and did not overclaim (it says
+"VERIFICATION IN FLIGHT" and "NOT YET VERIFIED"), and the verification has now
+come back clean, so nothing shipped on a false result. The history is not
+rewritten; this entry is the correction. The rule exists so a red gate is caught
+before it reaches the remote, and here the ordering was reversed by luck rather
+than by process.
+
+### One invalidated run, discarded rather than counted
+Verify run 7 first came back `gate=FAIL trap=1`. It was killed mid-boot by a
+container restart (exit 137; log truncated to 17,540 B against ~25,000 B for
+every valid run, and 1 trap line instead of 2). It was discarded as invalid and
+re-run, not counted as a gate failure — and not silently dropped either.
+
+## `smoke-cadence` FIXED — the instrument named the remedy, then corrected it (DDR-965)
+
+The `PRADYOS_CAD_ADV` instrument added in `544538b` was built so the next red
+would say what to do. It did, on `992b336` shard 5:
+
+```
+PRADYOS_CAD_ADV n=1 elapsed_ms=10520 target_ms=2000
+PRADYOS_CAD_ADV n=2 elapsed_ms=10880 target_ms=2000
+PRADYOS_CAD_ADV n=3 elapsed_ms=17990 target_ms=2000
+[cadence] FAIL — no full auto cycle
+```
+
+**CI reached n=3 of the 4 required** — out of wall-clock budget by one advance.
+The same capture rules out a stopped clock (advances occur), guest starvation
+(`[hb]` reaches t=11500 healthy), and any SMP/console-lock effect (`rqcpus=1`;
+this gate is single-CPU, so DDR-963's line lock cannot be implicated — worth
+checking rather than assuming, since `992b336` is the commit that added it).
+
+### The first fix was right but not sufficient, and the reasoning was wrong
+
+DDR-965's first draft blamed the transition animation and explicitly rejected
+widening the window. Shrinking the test-mode transition 12 → 2 frames was
+implemented and measured:
+
+| run | steady period | max n in window |
+|---|---|---|
+| A (idle host) | ~3.08 s | 28 |
+| B (loaded) | ~9.7 s | 7 |
+| C (loaded) | ~9.9 s | 7 |
+
+Better than the ~11.3 s pre-fix plateau, but load-dependent and far from the
+2000 ms target — **so the animation was not the floor.** `cadence_tick()` runs
+once per main-loop frame, so the period is quantised to the *main loop's* frame
+interval; the transition frames are extra renders inside an advance, not the
+thing gating the next one.
+
+### The budget the capture actually shows
+
+Reading the failing log for arithmetic rather than trend — `[hb] t=6500` is the
+line immediately before `n=1`, last heartbeat `t=11500`, 100 ticks/s:
+
+| phase | wall time |
+|---|---|
+| boot → compositor → `PRADYOS_FOCUS` → `'k'` armed | **~65 s** |
+| left for four advances | ~55 s |
+| three advances taken | 39.4 s |
+| a fourth needed | ~11–18 s more → ~51–57 s |
+
+It missed by seconds. **Boot-and-arm at ~65 s of a 120 s window is the dominant
+term, not the animation.** The first draft reasoned from per-advance numbers
+without dividing up the window — §0.7's lesson in a new guise: a per-event
+metric without the total is as partial as a total without a denominator.
+
+### What shipped — both, because they address different terms
+1. Test-mode transition 12 → 2 frames (kept: ~10 fewer renders per advance, and
+   it does lower the period). Derived from `g_cadence_ns` being small, so no new
+   writable global (DDR-826); the `'k'` knob is used by `smoke-cadence` alone.
+2. `timeout 120` → **180** — the change that addresses the real budget.
+
+Requiring fewer than 4 advances was rejected: a *full* four-ambiance cycle is
+what the gate exists to prove (DDR-726).
+
+### Verification
+Five post-fix runs, all **PASS** with `PRADYOS_CADENCE_OK`, reaching n=28, 7, 7,
+19, 13 against the 4 required — a 3–7× margin where CI previously missed by one.
+No regression: `smoke-compositor`, `smoke-surface`, `smoke-wmorder`,
+`smoke-wmclose`, `ci-shard-check` (147 gates / 6 shards / 6 excluded),
+`ci-probe-rodata-check` all PASS. `compositor.elf` 75,240 ≤ 262,144.
+
+## Item 48 — §0.2's stated root cause is REFUTED by its own instrument (DDR-966)
+
+`CLAUDE.md` §0.2/§6.1 record Item 48's confirmed root cause as *"`sched_create`
+NULL return under heap pressure (DDR-934) — add NULL-check + KASSERT"*. **The
+captures no longer support that.** DDR-934 added the spawn counter precisely to
+separate "never created" from "created but never ran", and every capture since
+reads:
+
+```
+[blk] multi-inflight FAIL done=0x0000000000000000 spawned=2/2
+```
+
+`spawned=2/2` means both `sched_create` calls **succeeded**. The NULL-return
+hypothesis is refuted by the very counter added to test it. That is the
+diagnostic working as designed; §0.2's attribution is the stale half of it.
+
+The NULL checks stay — they are what makes the discrimination possible — but
+they are not the fix, and **no `KASSERT` was added**: asserting on a condition
+the data says does not occur would trade a diagnosable FAIL line for a panic.
+
+### The surviving reading — a missing AP kick
+
+§0.2's other half stands (*a scheduling issue, NOT a driver bug*). Of the three
+proofs that spawn kernel workers and wait:
+
+| proof | spawns | kicks the APs? |
+|---|---|---|
+| `rqstress_proof` | 8 × 3 waves | **yes** — `smp_resched_all()` |
+| `blkmq_proof` | 2 | **no** |
+| `smp_blk_integrity` | 4 | **no** |
+
+`sched_create` enqueues on the **calling** CPU's run queue, so another CPU only
+collects a fresh worker when it next runs its scheduler — and an idle AP sits in
+`hlt` until its own timer tick. Meanwhile the BSP spins in
+`while (… && g_ticks < dl) yield()`. Runnable workers, a BSP burning its
+deadline, halted APs: `done=0x0` with `spawned=2/2`.
+
+Fixed by adding `smp_resched_all()` after the spawns in both proofs — the
+pattern §6.1 names. Not a virtio-blk change (§0.2/§6.0-D forbid one without
+`reason=checksum-mismatch`); it touches neither driver nor block layer.
+
+### Verification — and a capture I lost
+Kernel `sha256:328a9c33ef3316d1`. `smoke-blkmq`, `smoke-blk-integrity` (both
+printing OK), `smoke-msixap`, `smoke-percpu-sched`, `smoke-rqstress-liveness`,
+`smoke-shell` **5/5**, `ci-probe-rodata-check`, `ci-shard-check` all PASS.
+
+**`smoke-blkmq-trace` failed once and I did not capture why** — it was run with
+stdout discarded, so the signature is gone. It then passed **5/5** with output
+retained. That gate is in the Item 48 family (shard 4) so a pre-existing
+intermittent is the likely reading, but *likely* is not *known*, and discarding
+output on a gate that can fail is the same error class as the vacuous checks
+logged above. Recorded as unexplained rather than assumed benign.
+
+**Item 48 is NOT claimed closed.** It is intermittent in CI and has never
+reproduced locally, so a local green cannot prove this fix — only that nothing
+regressed. Confirmation is the absence of the signature in CI over time
+(DDR-966 §6).
+
+## FSRM root-caused — the SFS root is umounted under live ring-3 probes
+
+The `live=` instrument's discriminator table resolved, and it picked the branch I
+had argued *against*. Ordering from a passing `smoke-percpu-sched` log:
+
+```
+170: [sfs] mount   ctx=0x0000000007C48000 live=1     <- smnt, the probes' SFS root
+293: [user] ELF loaded (embedded); SFS-rooted fsrm probe spawned
+304: PRADYOS_FSRM_OK                                  <- probe finishes
+358: [sfs] umount  ctx=0x0000000007C48000 live=0     <- THE SAME ctx, torn down
+359: [sfs] mount   ctx=0x0000000007C48000 live=1     ] self-tests, address recycled
+   … ten pairs …
+371: [sfs] journal abort/commit/replay OK
+```
+
+The sequence at 358 **begins with an unpaired umount**, so it closes the mount
+from line 170 — the root itself. `fs_test_thread` spawns ring-3 probes rooted at
+`smnt` (`main.c:1923-1926`, `fp->root_mnt = smnt; sched_unblock(fp)`) and then,
+further down the same thread, **umounts that root** to run its self-tests
+(`main.c:2093-2106`) — one of which its own comment calls *destructive*.
+
+**The only thing separating a pass from a fail is whether the probe finishes
+before line 358.** On a fast boot it does (304 < 358, as above); on a slow or
+interleaved one it does not, and the reopen at step (2) of `user/fsrmtest.c`
+fails against a root that no longer exists — `FSRM FAIL: created file did not
+persist`, with create and write having already succeeded.
+
+### Two corrections to earlier entries in this log
+1. The first FSRM write-up said the self-tests mount their own context on the
+   same device *while* the probe holds the root, i.e. two contexts coexisting.
+   **Wrong** — there is only ever one context, which is why `live` never exceeds
+   1. The defect is lifetime, not coexistence.
+2. This DDR's own discriminator table listed `live=1` + root ctx umounted as the
+   *least* expected branch (a DDR-953-class lifetime bug). It is the branch that
+   actually holds. The instrument earned its keep by ruling out the reading I
+   thought most likely.
+
+### Status — diagnosed, NOT fixed
+No fix here (§6.0-B). The failing capture still has not been seen directly; what
+is established is that the dangerous sequence exists on **every** boot, including
+passing ones, and that only scheduling luck separates the outcomes. That is the
+same standing DDR-964 had before its fix, and the remedy is the same shape:
+order the teardown after the users, rather than hope. Designing it needs care —
+the self-tests are deliberately destructive and must not run against a root any
+probe still holds — so it is recorded for a session that can verify it, not
+bolted on at the end of this one.
+
+### FSRM addendum — the call site, and why the fix is not a one-liner
+
+The umount is deliberate and self-documenting (`main.c:2093-2095`):
+
+```c
+/* Slice 4g: journal abort/commit/crash-replay (destructive —
+ * reformats the disk, so release the VFS mount first). */
+vfs_unmount(smnt);
+```
+
+So a ring-3 probe still running does not merely lose its mount — **the volume
+underneath it is reformatted**. That is worse than the previous entry implied and
+explains the signature exactly: create and write succeed against the live root,
+then the reopen finds a freshly formatted disk.
+
+It also explains why `live` never exceeds 1 *by design*: SFS permits one mount
+per device, so the root MUST be released before a self-test can mount. The
+umount cannot simply be deleted.
+
+**Fix design (not implemented here).** Bound the destructive block on its users:
+before `vfs_unmount(smnt)`, wait — with a deadline, in the `g_ticks + N` idiom
+already used throughout this thread — until no live user thread still has
+`root_mnt == smnt`. That needs a small scheduler helper to count matching
+threads over the ring (read-only, under the existing `irq_save` discipline that
+`sched_create`'s ring insert and `sched_snapshot` already use).
+
+**Deliberately not landed in this session.** It adds a scheduler API and reorders
+a boot phase; done hastily that is precisely the "push that turns CI red" this
+repo's rules warn about, and the honest verification (the FSRM red is a CI
+intermittent never reproduced locally) is more than a tail-end change can carry.
+The diagnosis, the call site and the design are recorded so the next session
+starts at implementation rather than re-derivation.
+
+### FSRM fix design refined — and a use-after-free the obvious implementation walks into
+
+Sizing the fix found a trap worth recording before anyone writes it.
+
+The users to wait for are three, all in `fs_test_thread`: `fp` (fsrm, 1926),
+`tp` (ftruncate, 1958) and `rn` (rename-sfs, 1975), each `->root_mnt = smnt`.
+
+**The obvious implementation is wrong.** `main.c:611` already polls a TCB's
+state directly (`while (g_cw_thread->state != THREAD_BLOCKED …)`), so the
+natural move is to hoist the three pointers and wait for `THREAD_ZOMBIE`. That
+is a **use-after-free**: `sched_start_reaper()` reclaims orphaned zombies, so
+the TCB can be freed while the waiter is dereferencing it. The existing
+`crosswake_proof` precedent is safe only because its thread is *blocked*, never
+exiting — which does not generalise to probes whose whole job is to exit.
+
+**UAF-free route:** record each probe's `pid` at spawn and poll
+`sched_find_pid(pid)`, which is documented as "live thread by pid, or NULL" and
+therefore returns NULL once the thread is gone. Bound it with the usual
+`g_ticks + N` deadline and fall through on expiry, so the worst case is exactly
+today's behaviour rather than a new hang.
+
+Still not landed, and the reason is evidential rather than difficulty: the FSRM
+red is a CI intermittent that has never reproduced locally, so even a complete
+local green would show only "no regression", not "fixed". Landing a boot-phase
+reorder on that basis buys little and risks much. Recorded so the next session
+starts from the safe design instead of rediscovering the reaper hazard.
+
+## A FIFTH signature — `smoke-agents` missing `AGENT KRYOS active` (shard 2, `9231eab`)
+
+Not one of the four families, and **not new to the project**: `build_status`
+line 5111 records the identical `required pattern 'AGENT KRYOS active' not
+found`, and DDR-914 (2026-08-13) fixed one race class in this gate — *"a
+sampling race, not a liveness bug"*: `roster_active()` is instantaneous by
+design, the compositor reported only an observed *change*, and on a slow TCG
+runner the agent's whole 0→1→0 lifecycle fell between two frames.
+
+### What the capture shows
+`PRADYOS_AGENTS_OK` **printed** (twice); the gate died on the other two required
+sentinels. `aetherd: spawned agent PID=81` printed, then nothing from the agent.
+The runtime state after that point is the interesting part:
+
+```
+[hb] t=3500 … rqdepth=11 rqcpus=1 … preempt=1514 … cur=COMPOSIT.ELF
+[hb] t=4000 … rqdepth=11 rqcpus=1 … preempt=1514 … cur=COMPOSIT.ELF
+   … unchanged through t=14500 …
+```
+
+`preempt` is **frozen at 1514 across 23 consecutive heartbeats (~11 s)** with
+`rqdepth` pinned at 11 and only `COMPOSIT.ELF`/`AETHERD` ever current.
+
+### Local comparison — the failing state does not occur here
+Five local runs on the same kernel, all **PASS** with all three sentinels:
+
+| | CI (failing) | local (5/5 pass) |
+|---|---|---|
+| distinct `preempt` values across heartbeats | **1** (frozen) | **11** (advancing) |
+| max `rqdepth` | **11** | **6** |
+
+So this is not merely "slower locally" — the scheduler is demonstrably
+preempting and the queue staying shallow here, while in CI neither holds.
+
+### Attribution — deliberately left open
+It **cannot be pinned on this branch's changes** on the evidence available, and
+it **cannot be cleared** either. Note the reason a local A/B was *not* run:
+the failure mode does not reproduce locally at all, so both arms of
+pre-change vs post-change would pass 5/5 and discriminate nothing. That would be
+a vacuous measurement of exactly the kind catalogued above, so it was skipped
+rather than performed for the appearance of rigour.
+
+What can be said: `smoke-cadence`'s DDR-965 change is gated on the `'k'` test
+knob and cannot affect this gate; DDR-966 touches only the two blk proofs; the
+DDR-964 conversion covers kernel demo threads, not the ring-3 agent spawn. The
+one change with a plausible timing surface here is DDR-963's line lock, which
+holds IRQs off across the ~20-call `[hb]` line — but this gate is single-CPU
+(`rqcpus=1`), so that lock is uncontended, and the local runs show preemption
+healthy with it in place.
+
+**No fix (§6.0-B).** The discriminating instrument for a recurrence already
+exists in the heartbeat: if `preempt` is frozen while `rqdepth` stays high, the
+scheduler is not preempting and this belongs with the DDR-936/947 run-queue
+work, not with the DDR-914 sampling race — those are different defects wearing
+the same missing sentinel.
+
+### Fifth-signature addendum — the same SHA passed concurrently
+
+`9231eab`'s **other** check suite came back fully green (all shards) while the
+one above was failing `smoke-agents` on shard 2. The same kernel, the same
+commit, both outcomes at once.
+
+That does not identify the defect, but it does move the attribution question:
+`9231eab` is **not deterministically broken**, which is what a regression
+introduced by this branch's changes would look like. Combined with 5/5 local
+passes and the absence of the frozen-`preempt` state locally, the weight is on a
+pre-existing intermittent surfacing under CI-runner conditions rather than on
+these commits — while still falling short of clearing them outright.
+
+This is the same non-determinism already recorded as the only surviving fact
+after "only pull_request-event runs fail" was refuted: the same SHA has been
+seen to pass and fail concurrently.
+
+## A red that is NOT a gate failure — shard 4 on `d571d84` was an infrastructure timeout
+
+`build-and-boot (shard 4)` reported `failure` on `d571d84` with **no gate
+signature at all**. It is not a sixth family, and a future session should not go
+looking for one.
+
+The job's own step list is the evidence — the shard step never finished:
+
+```
+"Run shard 4":               status in_progress, started 01:24:50
+job completed_at:            02:19:25          <- killed with the step running
+"Post Run actions/checkout": pending
+```
+
+`get_job_logs` returns **HTTP 404** and the check run carries empty
+`output.title/summary/text`, both consistent with a job terminated abnormally
+rather than a gate exiting non-zero.
+
+### The same shard on the same SHA passed concurrently
+
+Two runs exist for `d571d84` (push event and pull_request event):
+
+| run | shard 4 step | duration | outcome |
+|---|---|---|---|
+| `32543182100` | **completed** | 01:23:56 → 01:56:45 = **32.8 min** | **success** |
+| `32543179772` | **in_progress** at kill | 01:24:50 → 02:19:25 = **54.6 min** | failure, logs 404 |
+
+Sibling shards in the failing run finished normally (shard 0: 35 min, shard 1:
+34, shard 3: 32, shard 5: 32). Only shard 4 ran long, and only in that one run.
+
+**Reading: runner timeout or loss.** Same commit, same shard, same workflow —
+one instance completed in 33 minutes and passed. No code-level explanation is
+needed or available, and none should be invented.
+
+### How to tell this class apart next time
+A gate failure prints a signature and exits non-zero, so the shard step
+**completes** with `conclusion: failure` and the log names the gate. An
+infrastructure kill leaves the step `in_progress`, the job with a
+`completed_at`, and the logs unavailable. **Check the step status before reading
+anything into a shard-level red** — this one would otherwise read as a
+mysterious hang in whichever gate happened to be running.
+
+## Tip `957a341` is fully green — and the third run for §3 was triggered
+
+PR #5 now reports `mergeable_state: "clean"` (was `unstable`): all 22 checks
+green on the tip, no conflict, 40 commits. Both suites — the push event and the
+pull_request event — came back green on `957a341`, which carries all three
+shipped fixes (DDR-964, DDR-965, DDR-966).
+
+**Two suites is not three.** §3 requires three CI greens on the *same* tip, and
+a push produces only two suites per commit, so the count stalls at 2/3 by
+construction. A third requires an explicit workflow re-run on that SHA, which
+has now been triggered (`rerun_workflow_run` on run `32546023824`).
+
+That re-run is **evidence, not promotion** — it changes no code, merges nothing,
+and leaves PR #5 a draft. Its outcome is the point either way:
+
+- **green** → a third independent green on this kernel, and the §6.1 evidence
+  bar for the three fixed families is met *for this kernel*.
+- **red** → an intermittent survived, and the capture is worth more than the
+  green would have been. Read it through its family's discriminator before
+  touching anything.
+
+### A correction to how that third green counts
+
+This entry first claimed the re-run would give "three greens on one tip". It
+does not, and the reason is worth stating so the promoter is not misled:
+**this commit itself moves the tip.** Any subsequent commit — including a
+docs-only one like this — supersedes `957a341`, so its three greens become
+historical rather than tip-current.
+
+Briefly holding this commit unpushed was considered and rejected: it would only
+help if the branch stopped at `957a341`, and it cannot, because this write-up
+has to land.
+
+What the `957a341` re-run genuinely provides is a **third independent run of
+this kernel** — real evidence about the three fixed families, since `957a341`
+and this commit are byte-identical in `kernel.bin` (docs-only diff). What it is
+not is a promotion credential. **Whoever promotes must re-run on the final tip**
+to satisfy §3 literally; two suites per push means that count always stalls at
+2/3 without an explicit re-run.
+
+Promotion itself (fast-forwarding `main`) remains out of scope here and is not
+performed.
+
+### Outcome — the re-run came back GREEN (three green runs of this kernel)
+
+`run_attempt: 2` of run `32546023824` on `957a341` completed
+**`conclusion: success`** (started 04:01:52, finished 04:38:36). Counting the
+two event-triggered suites plus this re-run, that kernel now has **three green
+runs**:
+
+| run | event | attempt | result |
+|---|---|---|---|
+| `32546021867` | push | 1 | green |
+| `32546023824` | pull_request | 1 | green |
+| `32546023824` | pull_request | **2 (re-run)** | **green** |
+
+All 22 checks, all six shards, on the kernel carrying DDR-964, DDR-965 and
+DDR-966. `kernel.bin` is byte-identical to the current tip `eaca9c1` (docs-only
+diff), so this is three clean runs of the code that is on the branch now.
+
+**What this does and does not establish.** It is a genuine three-run result for
+the three fixed families on this kernel — the strongest evidence any of them has
+had, and notably none of the five characterised signatures appeared in any of
+the three. It is **not** §3 satisfied for promotion: §3 wants three greens on
+the *tip*, and the tip has since moved to `eaca9c1`. Whoever promotes still
+re-runs on the final tip. Nothing here is merged and PR #5 stays a draft.
+
+FSRM remains root-caused-but-unbuilt, and `smoke-agents` remains open with
+attribution unresolved; neither is affected by this result.
+
+---
+
+## FSRM fix landed — DDR-967, and what 20/20 does and does not prove
+
+The design in "FSRM fix design refined" above is now built. `fs_test_thread`
+records each SFS-rooted probe's **pid** at spawn (`smnt_pid[3]`, locals — no new
+writable global, DDR-826) and, immediately before the destructive block that
+reformats the volume, waits until every recorded pid is gone:
+
+```c
+uint64_t dl = g_ticks + 400;
+for (int i = 0; i < 3; i++)
+    while (smnt_pid[i] && sched_find_pid(smnt_pid[i]) && g_ticks < dl)
+        yield();
+if (g_ticks >= dl)
+    kputs("[sfs] DDR-967 wait expired; umounting with a probe still live\r\n");
+```
+
+By pid, not by TCB pointer — that is the whole point of the addendum above.
+Polling `->state` for `THREAD_ZOMBIE` races `sched_start_reaper()` freeing the
+TCB underneath the poll; `sched_find_pid()` (`sched.h:235`, "live thread by pid,
+or NULL") cannot. The wait falls **through** on expiry to exactly today's
+behaviour, and announces when it does, so an intermittently-red gate cannot
+become a gate that wedges. Pids left 0 are probes `probe_enabled()` never
+started and are skipped.
+
+### Measurement (R1 — kernel sha256 `612cde9b9761319e`, 1,053,054 B)
+
+| gate | result | wait expiries |
+|---|---|---|
+| `smoke-fsrm` | **20/20 PASS** | 0 |
+| `smoke-ftruncate` | PASS | 0 |
+| `smoke-rename-sfs` | PASS | 0 |
+| `smoke-shell` | **5/5 PASS** | — |
+| `ci-probe-rodata-check` | PASS | — |
+| `ci-shard-check` | PASS | — |
+| `smoke-blkmq` | PASS | — |
+| `smoke-rqstress-liveness` | PASS | — |
+| `smoke-blk-integrity` | PASS | — |
+
+Build warning-clean at `-Werror` (clang + nasm); no `[BUG]` line in any of the
+retained gate logs. `smoke-ftruncate` and `smoke-rename-sfs` are in the table
+because those two probes share `smnt` and the new wait covers them too.
+
+**`expired=0` across all 28 runs is the load-bearing number, not the 20 passes.**
+It says the wait is always satisfied well inside 400 ticks, so the fall-through
+is a safety net that never fires rather than a path that quietly restores the
+old behaviour — which is the way a bounded wait usually fails to be a fix.
+
+**What 20/20 does not prove.** FSRM has never reproduced locally, so a local
+green cannot show the race is gone; 20/20 shows no regression and no hang. What
+makes this more than a hypothesis is §"FSRM root-caused" above: the dangerous
+umount-under-live-probe sequence is visible in *every* passing log, green ones
+included, so the fix removes a real ordering hazard whether or not CI has yet
+caught it on this branch. Closure stays with CI over time.
+
+`smoke-agents` is untouched by this and remains the one open signature of the
+five, attribution unresolved. Nothing is merged; PR #5 stays a draft.
+
+---
+
+## `smoke-agents` — DDR-968 instruments the witness gate (no fix)
+
+The fifth signature stays open and no fix ships. What ships is the missing
+measurement, because the failing capture never printed the values the sentinel
+depends on.
+
+### Splitting the three sentinels was the step not previously taken
+
+`smoke-agents` wants `PRADYOS_AGENTS_OK`, `AGENT KRYOS active` and
+`AGENT SOLIN inactive`. The shard-2 red on `9231eab` printed the **first, twice**
+and lost the other two — and those come from *two different blocks* of the
+compositor loop:
+
+| sentinel | fires when |
+|---|---|
+| `PRADYOS_AGENTS_OK` | the `SYS_AGENT_ROSTER` snapshot differs from the last |
+| `AGENT <NAME> …` ×8 | `m[0].pid != 0 && m[0].dispatches >= 1` (DDR-737/914 witness) |
+
+So the compositor was **iterating and doing syscalls** — the first sentinel
+requires a fresh roster round trip — while the witness never armed. "The
+compositor died" and "the compositor never ran" are both ruled out, which a bare
+missing-sentinel report leaves open.
+
+Reading the kernel side, `pid` is claimed at `sys_aether.c:198-203` the instant
+the spawn hook returns and is retained post-mortem (DDR-735), and the log
+contains `aetherd: spawned agent PID=81`. That points hard at
+`dispatches == 0` — the agent existed and was never switched in. **That is an
+inference, not a measurement, and it is why no fix ships** (§6.0-B). This
+project has retracted two confidently-derived root causes already (§0.1, §0.2).
+
+### The instrument, and proof that it fires
+
+While the witness is unarmed the compositor now emits, at most 24 times, 128
+frames apart:
+
+```text
+PRADYOS_AGENT_WITNESS_WAIT pid=<u> disp=<u> state=<u> n=<frames>
+```
+
+A green boot arms the witness on the *first* evaluation, so it emits **zero**
+lines — measured, on a 424-line retained serial capture. That is the intended
+cost, but it also means the print path never executes on a passing run, so a
+green gate proves nothing about the instrument. It was therefore proved
+separately: a throwaway local build with the predicate disarmed
+(`dispatches >= 1000000`) produced exactly the specified behaviour —
+
+```text
+PRADYOS_AGENT_WITNESS_WAIT pid=82 disp=1 state=0 n=1
+PRADYOS_AGENT_WITNESS_WAIT pid=82 disp=1 state=0 n=129
+… 24 lines, last n=2945
+```
+
+24 lines, 128-frame spacing, and a real post-mortem read (`state=0` with
+`disp=1` retained by `agent_metrics_reap`). The throwaway was reverted and the
+revert verified by kernel hash returning to `9601985a5c5bc75c`, then by re-running
+the gate.
+
+**An instrument that has never emitted a line is not a verified instrument.**
+Recording this because the obvious version of this task — add the print, watch
+the gate stay green, ship — would have shipped a print with an untested branch.
+
+### A recorded discriminator has decayed — do not reuse it
+
+The fifth-signature table above compares CI-failing against local-passing:
+
+| | CI (failing, `9231eab`) | local then | **local now, passing** |
+|---|---|---|---|
+| distinct `preempt` values | 1 (frozen) | 11 (advancing) | 8 (advancing) |
+| max `rqdepth` | 11 | 6 | **12** |
+
+On the current kernel a *passing* local run reaches `rqdepth=12`, above the
+failing capture's 11. The queue-depth half of that comparison no longer
+discriminates anything — the branch has added threads since the baseline was
+taken, so this is drift, not a contradiction of the old measurement. **Only the
+frozen `preempt` survives as a discriminator**, and the next red should be read
+against that alone.
+
+### Measurement (R1 — kernel sha256 `9601985a5c5bc75c`, 1,053,054 B)
+
+`smoke-agents` 4/4, `smoke-shell` 5/5, `smoke-compositor`, `smoke-agentpanel`,
+`smoke-agentmetrics`, `ci-probe-rodata-check`, `ci-shard-check`, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity` — all PASS. Build warning-clean
+at `-Werror`.
+
+`smoke-agent-live` was also run and **failed — correctly, and it is not a
+regression**: it is one of the six CI-excluded gates
+(`tools/ci/shard_check.sh:41`, *"developer-run only: needs a live Ollama
+endpoint"*), and it reported `PRADYOS_AGENT_LIVE_FAIL (no Ollama at
+10.0.2.2:11434?)`. Noted because that target begins by deleting
+`build/kernel.bin` and rebuilding with `AETHER_TEST_MODE=0`, so it silently
+replaces the kernel under measurement; the canonical image was rebuilt and its
+hash re-checked before the remaining gates ran. A future session should not run
+it as part of a regression sweep.
+
+Nothing is merged; PR #5 stays a draft.
+
+---
+
+## GROUP A — one backlog item closed as a non-bug, one real defect found behind it (DDR-969)
+
+### "Uninit PID fix" was never a bug
+
+`CLAUDE.md` GROUP A carried *"`AGENT_OOM_KILLED` path has uninitialised PID
+field"*, and `SESSION_HANDOFF.md` cited it as corroboration for OPEN-11:
+
+```text
+AGENT_OOM_KILLED PID=2742943744      <-- garbage PID (0xA37Fxxxx)
+```
+
+It is not garbage. `aether.c:14` reads:
+
+```c
+#define AE_TEST_PID 0xA37E0000u   /* a pid no real process uses, for self-test slots */
+```
+
+`0xA37E0000 == 2742943744`, and `log_pid` prints it with `kputdec`. The producer
+is `aether_sectest` arm (c), whose throwaway TCB is `memset`-zeroed and assigned
+`fake.pid = AE_TEST_PID` two lines before the charge; the next line of that same
+log, `AETHER_SEC_OOM_OK`, is the arm's success sentinel. `smoke-aether-sec`
+*requires* `AGENT_OOM_KILLED`, so the line prints on every boot by design.
+
+Confirmed against a live capture on today's kernel, not just by reading the
+`#define`: a fresh `smoke-aether-sec` run prints `AGENT_OOM_KILLED
+PID=2742943744` on a kernel where every TCB field is initialised.
+
+Two consequences. The backlog item is **closed as a non-bug**. And OPEN-11 loses
+this piece of evidence — *"the OOM path is being taken for real"* did not follow
+from a line the self-test emits unconditionally. OPEN-11's conclusion is
+unaffected, because the eager 8 MiB stack was established independently by
+`pmmfree` measurement (DDR-943/944), but the corroboration was spurious.
+
+**A value that looks like garbage was structured** — high bits set, low 16 bits
+zero — and structure is the clue. Nobody grepped the constant.
+
+### The real defect, in the same function
+
+`aether_sectest` declared its throwaway `struct tcb` **as a local**:
+
+| quantity | value |
+|---|---|
+| `sizeof(struct tcb)` | 10,304 B (`FPU_STATE_MAX` alone is 4,096 — DDR-872) |
+| `aether_sectest` frame | **10,432 B** (`sub $0x28c0,%rsp`) |
+| kernel stack (`STACK_SIZE`) | 16,384 B |
+| share of one kernel stack | **~64 %** |
+
+An audit of every `sub $imm,%rsp ≥ 1 KiB` across all kernel objects makes it a
+**2.4× outlier** — next largest are `sfs_set_tag` 4,432, `sys_dmesg` 4,176,
+`sfs_get_tag` 4,160, `fs_test_thread` 3,024. It is called unconditionally from
+`main.c:2908`, not behind `probe_enabled()`.
+
+Why the nominal 5,952 B of headroom is thinner than it looks: `idt.c:65` sets
+`idt[v].ist = 0` for **every** vector, so there is no IST and the LAPIC timer's
+entire handler chain — `sched_tick` → `schedule()` — lands on this same stack.
+There is no guard page below a kernel stack and the build uses
+`-fno-stack-protector`, so an overflow would not trap; `kstack_base` comes from
+`kmalloc(STACK_SIZE)`, so an overrun scribbles the kernel heap. Silent
+corruption presenting later and elsewhere — the class this project keeps chasing.
+
+**No claim is made that this ever actually overflowed.** It evidently has not.
+This is a bound restored, not a red chased, which is why it does not conflict
+with §NON-NEGOTIABLES 3: that rule guards against guessing at an observed
+failure, and here the artefact is a static measurement with exact numbers.
+
+### Fix and measurement (R1 — kernel sha256 `c83a62cc9428ba36`, 1,053,054 B)
+
+The TCB is now `kmalloc`/`kfree`d. On allocation failure both arms are **skipped
+with an explicit `AETHER_SEC_OOM_SKIP` line rather than faked**, so the gate
+fails loudly — correct for a test that did not run.
+
+| check | before | after |
+|---|---|---|
+| `aether_sectest` frame | 10,432 B | **48 B** (`sub $0x30,%rsp`) |
+| largest kernel frame in tree | `aether_sectest` | `sfs_set_tag` 4,432 B |
+
+`smoke-aether-sec` PASS with **all six** sentinels present and
+`AETHER_SEC_OOM_SKIP` count 0; `smoke-aether`, `smoke-aether-queue`,
+`smoke-shell` **5/5**, `ci-probe-rodata-check`, `ci-shard-check`, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity` all green. Build warning-clean
+at `-Werror`.
+
+The disassembly row is the load-bearing evidence, not the green gate: the gate
+passed *before* the fix too, so it cannot distinguish the change from no change.
+
+### Also closed: GROUP A's first item was already built
+
+"Demand-paged user stack" is complete under **ADR-038** — `vmm_stack_fault()`
+(`vmm_cow.c:144`), `USER_STACK_EAGER_PAGES = 8` (measured, not guessed: 30/30
+vs 0/30 in the ADR's own A/B), guard page below `USER_STACK_BOT`, and a
+three-arm gate `smoke-stack-demand` (grow / syscall-on-grown-page / guard-kill
+with a post-kill liveness witness). `CLAUDE.md` lists it as unbuilt against a
+gate name (`smoke-lazystack`) that does not exist.
+
+Nothing is merged; PR #5 stays a draft.
+
+---
+
+## CodeRabbit review on PR #5 — two real defects this branch introduced (DDR-970)
+
+The bot posted 16 actionable comments and **Merge Risk: High**. Bot findings are
+bug reports: each was verified against current code. Two are genuine defects
+from this branch, two more are real-but-smaller, and the rest are doc staleness.
+One is declined with a reason.
+
+### 1. A ring-0 fault strands `g_line_lock` forever (Major)
+
+DDR-963 gave the ring-3 trap printer `console_line_trylock()` precisely so a
+fault inside a line-locked region could not deadlock. **The ring-0 path has no
+such guard.** A kernel fault skips that branch entirely and ends in
+
+```text
+kputs("halting.\r\n");
+for (;;) __asm__ volatile("cli; hlt");
+```
+
+still holding the lock if it was held. Every other CPU's next
+`console_line_lock()` is `spin_lock_irqsave` — spinning forever with interrupts
+already masked. A diagnosable panic becomes a silent machine-wide hang.
+
+The branch **widened** this rather than inventing it: `g_console_lock` has
+always had a one-call version. What changed is the window — a ~20-call line held
+on **every timer tick** by `[hb]`, plus the four `[smp]` announce sites.
+
+Fixed with `console_line_force_release()` at the top of the panic block.
+Releasing a lock you may not hold is defensible only here: the path is terminal,
+nothing downstream depends on the lock's integrity, and it guards *cosmetic line
+atomicity*. The alternative failure destroys the panic's diagnostic value
+outright. An IPI halt of the other CPUs is the more complete answer and was
+**rejected for this PR** — a new cross-CPU mechanism on the panic path, in a PR
+that is not about panics, testable by no existing gate. It is noted against the
+GROUP A `#MC` item.
+
+### 2. Capability-mint failure still started `fs_test_thread`
+
+`main.c:2509` reported `CAP_NULL` and then unblocked the thread anyway. **The
+consequence is worse than the code's own comment says.** "Every FS op would be
+-EPERM" holds for the VFS path, but `fs_test_thread`'s self-test block calls
+`sfs_format(sbd)` **directly on the block device**, which is not
+capability-gated — so a thread that failed to get its capability would still
+reformat the disk while doing nothing useful.
+
+This was my own omission, and inconsistent with the same file: the other three
+DDR-964 conversion sites (`main.c:211`, `273`, `344`) all `sched_destroy(...)`
+on the error path, commented *"never ran: still BLOCKED"*. Now so does this one.
+
+### 3. `PRADYOS_CAD_ADV` was unbounded
+
+The comment claimed "four lines per run at most"; the `printf` fired on every
+advance, so a 180 s run grew the log without bound. Bounded to match the comment.
+
+### 4. Linker-symbol UB — fixed the one line this PR adds, not all 30
+
+`renametest_elf_end - renametest_elf` subtracts pointers into distinct array
+objects (C11 6.5.6). Cppcheck is right, **and `grep -c "_elf_end - "
+kernel/main.c` returns 30** — it is the house idiom, all pre-existing. The bot
+flagged only line 1980 because that is the only one in this PR's diff. Fixed
+that one: the PR should not add a 30th instance, and should not silently rewrite
+29 untouched lines either. The sweep is recorded for its own commit.
+
+### 5. Declined
+
+**Docstring coverage 35% vs an 80% threshold.** That threshold is a CodeRabbit
+default, not this repo's rule. This codebase documents with block comments
+carrying measurements and DDR references; 26 stub docstrings would lower the
+signal, not raise it.
+
+### Measurement (R1 — kernel sha256 `9b9b70c8ca52ec12`, 1,053,054 B)
+
+| gate | result |
+|---|---|
+| `smoke-cadence` | PASS — **CAD_ADV lines = 4** (bound holds), `PRADYOS_CADENCE_OK` = 1 |
+| `smoke-fsrm` | PASS |
+| `smoke-aether-sec` | PASS |
+| `smoke-rename-sfs` | PASS |
+| `smoke-shell` | **5/5** |
+| `ci-probe-rodata-check` / `ci-shard-check` | PASS |
+| `smoke-blkmq` / `smoke-rqstress-liveness` / `smoke-blk-integrity` | PASS |
+
+Build warning-clean at `-Werror`.
+
+**The honest limit, and it is the important line here.** The two real defects
+live on failure paths **no gate exercises** — a kernel panic, and an exhausted
+capability table. A fully green suite proves *no regression*; it does not prove
+either fix works. The one claim the gates do settle is the cadence bound, which
+is why its two counts are quoted rather than just "PASS": a bound applied to the
+wrong statement would have silenced `PRADYOS_CADENCE_OK`, and did not.
+
+Nothing is merged.
