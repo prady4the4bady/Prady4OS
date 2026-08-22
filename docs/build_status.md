@@ -6565,3 +6565,45 @@ these commits — while still falling short of clearing them outright.
 This is the same non-determinism already recorded as the only surviving fact
 after "only pull_request-event runs fail" was refuted: the same SHA has been
 seen to pass and fail concurrently.
+
+## A red that is NOT a gate failure — shard 4 on `d571d84` was an infrastructure timeout
+
+`build-and-boot (shard 4)` reported `failure` on `d571d84` with **no gate
+signature at all**. It is not a sixth family, and a future session should not go
+looking for one.
+
+The job's own step list is the evidence — the shard step never finished:
+
+```
+"Run shard 4":               status in_progress, started 01:24:50
+job completed_at:            02:19:25          <- killed with the step running
+"Post Run actions/checkout": pending
+```
+
+`get_job_logs` returns **HTTP 404** and the check run carries empty
+`output.title/summary/text`, both consistent with a job terminated abnormally
+rather than a gate exiting non-zero.
+
+### The same shard on the same SHA passed concurrently
+
+Two runs exist for `d571d84` (push event and pull_request event):
+
+| run | shard 4 step | duration | outcome |
+|---|---|---|---|
+| `32543182100` | **completed** | 01:23:56 → 01:56:45 = **32.8 min** | **success** |
+| `32543179772` | **in_progress** at kill | 01:24:50 → 02:19:25 = **54.6 min** | failure, logs 404 |
+
+Sibling shards in the failing run finished normally (shard 0: 35 min, shard 1:
+34, shard 3: 32, shard 5: 32). Only shard 4 ran long, and only in that one run.
+
+**Reading: runner timeout or loss.** Same commit, same shard, same workflow —
+one instance completed in 33 minutes and passed. No code-level explanation is
+needed or available, and none should be invented.
+
+### How to tell this class apart next time
+A gate failure prints a signature and exits non-zero, so the shard step
+**completes** with `conclusion: failure` and the log names the gate. An
+infrastructure kill leaves the step `in_progress`, the job with a
+`completed_at`, and the logs unavailable. **Check the step status before reading
+anything into a shard-level red** — this one would otherwise read as a
+mysterious hang in whichever gate happened to be running.
