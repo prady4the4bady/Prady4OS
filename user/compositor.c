@@ -911,6 +911,12 @@ int main(void) {
     int resizing = 0, rs_id = -1, rs_bx = 0, rs_by = 0;         /* DDR-718 */
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     int metrics_said = 0;                    /* DDR-737: one-shot panel witness */
+    /* DDR-968: the witness above is gated on pid!=0 && dispatches>=1, and when
+     * smoke-agents goes red in CI neither value is anywhere in the log. These
+     * two locals (no new writable global, DDR-826) bound a periodic print of
+     * that predicate: 24 lines max, 128 frames apart. A green boot arms the
+     * witness in the first frames and emits at most one. */
+    unsigned wit_frames = 0, wit_said = 0;
     for (;;) {
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
         int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
@@ -957,6 +963,16 @@ int main(void) {
                 printf("AGENT_PANEL KRYOS act=%u disp=%u\n",
                        (unsigned)m[0].actions, (unsigned)m[0].dispatches);
                 printf("PRADYOS_AGENT_PANEL_METRICS_OK\n");
+                fflush(stdout);
+            } else if (wit_said < 24 && (wit_frames++ & 127) == 0) {
+                /* DDR-968: say WHICH term is holding the witness down. Printed
+                 * on a cadence rather than on change, because a frozen
+                 * predicate is the signal and one line then silence reads the
+                 * same as a stopped loop — the rising n= separates them. */
+                wit_said++;
+                printf("PRADYOS_AGENT_WITNESS_WAIT pid=%u disp=%u state=%u n=%u\n",
+                       (unsigned)m[0].pid, (unsigned)m[0].dispatches,
+                       (unsigned)m[0].state, wit_frames);
                 fflush(stdout);
             }
         }

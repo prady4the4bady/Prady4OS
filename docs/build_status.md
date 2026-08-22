@@ -6736,3 +6736,101 @@ caught it on this branch. Closure stays with CI over time.
 
 `smoke-agents` is untouched by this and remains the one open signature of the
 five, attribution unresolved. Nothing is merged; PR #5 stays a draft.
+
+---
+
+## `smoke-agents` — DDR-968 instruments the witness gate (no fix)
+
+The fifth signature stays open and no fix ships. What ships is the missing
+measurement, because the failing capture never printed the values the sentinel
+depends on.
+
+### Splitting the three sentinels was the step not previously taken
+
+`smoke-agents` wants `PRADYOS_AGENTS_OK`, `AGENT KRYOS active` and
+`AGENT SOLIN inactive`. The shard-2 red on `9231eab` printed the **first, twice**
+and lost the other two — and those come from *two different blocks* of the
+compositor loop:
+
+| sentinel | fires when |
+|---|---|
+| `PRADYOS_AGENTS_OK` | the `SYS_AGENT_ROSTER` snapshot differs from the last |
+| `AGENT <NAME> …` ×8 | `m[0].pid != 0 && m[0].dispatches >= 1` (DDR-737/914 witness) |
+
+So the compositor was **iterating and doing syscalls** — the first sentinel
+requires a fresh roster round trip — while the witness never armed. "The
+compositor died" and "the compositor never ran" are both ruled out, which a bare
+missing-sentinel report leaves open.
+
+Reading the kernel side, `pid` is claimed at `sys_aether.c:198-203` the instant
+the spawn hook returns and is retained post-mortem (DDR-735), and the log
+contains `aetherd: spawned agent PID=81`. That points hard at
+`dispatches == 0` — the agent existed and was never switched in. **That is an
+inference, not a measurement, and it is why no fix ships** (§6.0-B). This
+project has retracted two confidently-derived root causes already (§0.1, §0.2).
+
+### The instrument, and proof that it fires
+
+While the witness is unarmed the compositor now emits, at most 24 times, 128
+frames apart:
+
+```
+PRADYOS_AGENT_WITNESS_WAIT pid=<u> disp=<u> state=<u> n=<frames>
+```
+
+A green boot arms the witness on the *first* evaluation, so it emits **zero**
+lines — measured, on a 424-line retained serial capture. That is the intended
+cost, but it also means the print path never executes on a passing run, so a
+green gate proves nothing about the instrument. It was therefore proved
+separately: a throwaway local build with the predicate disarmed
+(`dispatches >= 1000000`) produced exactly the specified behaviour —
+
+```
+PRADYOS_AGENT_WITNESS_WAIT pid=82 disp=1 state=0 n=1
+PRADYOS_AGENT_WITNESS_WAIT pid=82 disp=1 state=0 n=129
+… 24 lines, last n=2945
+```
+
+24 lines, 128-frame spacing, and a real post-mortem read (`state=0` with
+`disp=1` retained by `agent_metrics_reap`). The throwaway was reverted and the
+revert verified by kernel hash returning to `9601985a5c5bc75c`, then by re-running
+the gate.
+
+**An instrument that has never emitted a line is not a verified instrument.**
+Recording this because the obvious version of this task — add the print, watch
+the gate stay green, ship — would have shipped a print with an untested branch.
+
+### A recorded discriminator has decayed — do not reuse it
+
+The fifth-signature table above compares CI-failing against local-passing:
+
+| | CI (failing, `9231eab`) | local then | **local now, passing** |
+|---|---|---|---|
+| distinct `preempt` values | 1 (frozen) | 11 (advancing) | 8 (advancing) |
+| max `rqdepth` | 11 | 6 | **12** |
+
+On the current kernel a *passing* local run reaches `rqdepth=12`, above the
+failing capture's 11. The queue-depth half of that comparison no longer
+discriminates anything — the branch has added threads since the baseline was
+taken, so this is drift, not a contradiction of the old measurement. **Only the
+frozen `preempt` survives as a discriminator**, and the next red should be read
+against that alone.
+
+### Measurement (R1 — kernel sha256 `9601985a5c5bc75c`, 1,053,054 B)
+
+`smoke-agents` 4/4, `smoke-shell` 5/5, `smoke-compositor`, `smoke-agentpanel`,
+`smoke-agentmetrics`, `ci-probe-rodata-check`, `ci-shard-check`, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity` — all PASS. Build warning-clean
+at `-Werror`.
+
+`smoke-agent-live` was also run and **failed — correctly, and it is not a
+regression**: it is one of the six CI-excluded gates
+(`tools/ci/shard_check.sh:41`, *"developer-run only: needs a live Ollama
+endpoint"*), and it reported `PRADYOS_AGENT_LIVE_FAIL (no Ollama at
+10.0.2.2:11434?)`. Noted because that target begins by deleting
+`build/kernel.bin` and rebuilding with `AETHER_TEST_MODE=0`, so it silently
+replaces the kernel under measurement; the canonical image was rebuilt and its
+hash re-checked before the remaining gates ran. A future session should not run
+it as part of a regression sweep.
+
+Nothing is merged; PR #5 stays a draft.
