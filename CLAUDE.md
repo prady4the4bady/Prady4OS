@@ -217,7 +217,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 | **OPEN-2** | `smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake` intermittent | All `QEMU_SMP=4` gates — DDR-863 | **ACTIVE FIX.** These are SMP timing issues. Reproduce at `-smp 4` locally. Apply targeted fix from DDR-863. |
 | **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | Item-47 lost-thread failure seen through SFS probe | **ACTIVE FIX.** `smoke-sfs-btree-smp4` excluded. Reproduce, root-cause via DDR-880. Fix before ISO. |
 | **OPEN-11** | `smoke-sha256`, `smoke-rqstress-liveness` | Scratch LBA 1500 overwrote kernel image | **CLOSED — DDR-831.** Do not revisit. |
-| **Uninit PID** | `AGENT_OOM_KILLED` prints garbage PID | Uninitialised PID field in OOM path | **Fix in Group A** alongside demand-paged stack. |
+| ~~Uninit PID~~ | ~~`AGENT_OOM_KILLED` prints garbage PID~~ | **NOT garbage — it is `AE_TEST_PID` (`0xA37E0000`), the self-test's deliberate sentinel, `#define`d at `aether.c:14`** | **CLOSED as a non-bug, DDR-969.** Do not reopen: the line is a *required* sentinel of `smoke-aether-sec` and prints on every boot. A real defect found in the same function WAS fixed — `aether_sectest`'s 10,432-byte frame on a 16,384-byte kernel stack. |
 | **FAT32 large-file** | `execve` of large musl ELF corrupts | multi-cluster `read_cluster_chain` bug (ADR-024) | **Fix in Group B.** Do not wait. |
 | **Dependabot** | 5 alerts (2 high, 3 moderate) | Third-party deps | **Triage and fix the 2 high-severity ones.** Moderate: fix if quick, else log. |
 | **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | **MUST be fixed before ISO.** This is BLOCKING the release. Active work required. |
@@ -301,7 +301,7 @@ Three probes affected: `fp` (fsrm, ~line 1926), `tp` (ftruncate, ~line 1958),
 | Item | Detail | Gate |
 |---|---|---|
 | Demand-paged user stack | Lazy 8 MiB mapping — map only top page + guard, fault the rest. Drops 2048 frames/process to ~2; lifts the ~13-process ceiling. Do NOT give QEMU more RAM. | `smoke-lazystack` |
-| Uninit PID fix | `AGENT_OOM_KILLED` path has uninitialised PID field — fix and verify | existing `smoke-aether-sec` |
+| ~~Uninit PID fix~~ | **NON-BUG — CLOSED, DDR-969.** `AGENT_OOM_KILLED PID=2742943744` is `AE_TEST_PID`, `#define`d as `0xA37E0000u` at `aether.c:14` and printed in decimal by `kputdec`. Nothing is uninitialised. In its place DDR-969 fixed a real defect found in the same function: `aether_sectest`'s frame was **10,432 B of the 16,384 B kernel stack** (a `struct tcb` local); the TCB is now heap-allocated and the frame is 48 B. | `smoke-aether-sec` ✅ |
 | I/O APIC migration | DDR-714 stage D — disable 8259, route ISA IRQs through I/O APIC | `smoke-ioapic` |
 | SMEP / SMAP | `CLAC`/`STAC` around every copyin/copyout | `smoke-smep` |
 | Kernel W^X | `vmm_protect_kernel()` — remove identity alias | `smoke-wx` |

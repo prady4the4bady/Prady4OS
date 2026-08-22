@@ -10,6 +10,7 @@
 #include "string.h"
 #include "console.h"
 #include "irq.h"      /* g_ticks */
+#include "kheap.h"    /* DDR-969: the self-test TCB is heap-allocated, not a local */
 
 #define AE_TEST_PID 0xA37E0000u   /* a pid no real process uses, for self-test slots */
 
@@ -52,19 +53,36 @@ void aether_sectest(void) {
     for (int i = 0; i < AETHER_AUDIT_LEN + 1; i++)
         aether_audit(AE_TEST_PID, ACTION_PRINT, (uint64_t)i, AR_SUBMIT);
 
-    /* (c) OOM cap: a throwaway agent TCB over its cap -> kill decision + log. */
-    struct tcb fake;
-    memset(&fake, 0, sizeof fake);
-    fake.is_agent = 1; fake.pid = AE_TEST_PID; fake.mem_limit = 4096;
-    if (aether_mem_charge(&fake, 8192) < 0)
-        kputs("AETHER_SEC_OOM_OK\r\n");                  /* AGENT_OOM_KILLED already logged */
+    /* (c) OOM cap and (d) rate limit both drive a throwaway agent TCB.
+     *
+     * DDR-969: it is HEAP-allocated, not a local. `struct tcb` is 10,304 bytes
+     * (FPU_STATE_MAX alone is 4,096 -- DDR-872), and as a local it made this
+     * function's frame 10,432 of the 16,384-byte kernel stack: 64%, and a 2.4x
+     * outlier over the next-largest kernel frame in the tree. There is no IST
+     * (idt.c:65 sets ist=0 for every vector), so the LAPIC timer's whole
+     * handler chain -- sched_tick, schedule() -- lands on this same stack; and
+     * with no guard page and -fno-stack-protector, an overrun silently
+     * scribbles the kernel heap that kstack_base came from. */
+    struct tcb *fake = (struct tcb *)kmalloc(sizeof *fake);
+    if (!fake) {
+        /* Skip the two arms rather than fake their sentinels. smoke-aether-sec
+         * requires AGENT_OOM_KILLED and AGENT_RATE_LIMITED, so the gate fails
+         * loudly -- which is correct for a test that did not run. */
+        kputs("AETHER_SEC_OOM_SKIP alloc failed\r\n");
+    } else {
+        memset(fake, 0, sizeof *fake);
+        fake->is_agent = 1; fake->pid = AE_TEST_PID; fake->mem_limit = 4096;
+        if (aether_mem_charge(fake, 8192) < 0)
+            kputs("AETHER_SEC_OOM_OK\r\n");              /* AGENT_OOM_KILLED already logged */
 
-    /* (d) Rate limit: >60 syscalls in one window -> kill decision + log. */
-    fake.sc_window_start = g_ticks; fake.sc_count = 0;
-    int rate_killed = 0;
-    for (int i = 0; i < (int)AETHER_RATE_MAX + 5; i++)
-        if (aether_rate_check(&fake) < 0) { rate_killed = 1; break; }
-    if (rate_killed) kputs("AETHER_SEC_RATE_OK\r\n");    /* AGENT_RATE_LIMITED logged */
+        /* (d) Rate limit: >60 syscalls in one window -> kill decision + log. */
+        fake->sc_window_start = g_ticks; fake->sc_count = 0;
+        int rate_killed = 0;
+        for (int i = 0; i < (int)AETHER_RATE_MAX + 5; i++)
+            if (aether_rate_check(fake) < 0) { rate_killed = 1; break; }
+        if (rate_killed) kputs("AETHER_SEC_RATE_OK\r\n"); /* AGENT_RATE_LIMITED logged */
+        kfree(fake);
+    }
 
     /* (e) No self-escalation: raising one's own mem cap is rejected. */
     if (aether_set_mem_limit(AE_TEST_PID, (256ull << 20) + AETHER_MEM_DEFAULT) < 0)

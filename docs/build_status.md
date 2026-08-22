@@ -6834,3 +6834,101 @@ hash re-checked before the remaining gates ran. A future session should not run
 it as part of a regression sweep.
 
 Nothing is merged; PR #5 stays a draft.
+
+---
+
+## GROUP A — one backlog item closed as a non-bug, one real defect found behind it (DDR-969)
+
+### "Uninit PID fix" was never a bug
+
+`CLAUDE.md` GROUP A carried *"`AGENT_OOM_KILLED` path has uninitialised PID
+field"*, and `SESSION_HANDOFF.md` cited it as corroboration for OPEN-11:
+
+```
+AGENT_OOM_KILLED PID=2742943744      <-- garbage PID (0xA37Fxxxx)
+```
+
+It is not garbage. `aether.c:14` reads:
+
+```c
+#define AE_TEST_PID 0xA37E0000u   /* a pid no real process uses, for self-test slots */
+```
+
+`0xA37E0000 == 2742943744`, and `log_pid` prints it with `kputdec`. The producer
+is `aether_sectest` arm (c), whose throwaway TCB is `memset`-zeroed and assigned
+`fake.pid = AE_TEST_PID` two lines before the charge; the next line of that same
+log, `AETHER_SEC_OOM_OK`, is the arm's success sentinel. `smoke-aether-sec`
+*requires* `AGENT_OOM_KILLED`, so the line prints on every boot by design.
+
+Confirmed against a live capture on today's kernel, not just by reading the
+`#define`: a fresh `smoke-aether-sec` run prints `AGENT_OOM_KILLED
+PID=2742943744` on a kernel where every TCB field is initialised.
+
+Two consequences. The backlog item is **closed as a non-bug**. And OPEN-11 loses
+this piece of evidence — *"the OOM path is being taken for real"* did not follow
+from a line the self-test emits unconditionally. OPEN-11's conclusion is
+unaffected, because the eager 8 MiB stack was established independently by
+`pmmfree` measurement (DDR-943/944), but the corroboration was spurious.
+
+**A value that looks like garbage was structured** — high bits set, low 16 bits
+zero — and structure is the clue. Nobody grepped the constant.
+
+### The real defect, in the same function
+
+`aether_sectest` declared its throwaway `struct tcb` **as a local**:
+
+| quantity | value |
+|---|---|
+| `sizeof(struct tcb)` | 10,304 B (`FPU_STATE_MAX` alone is 4,096 — DDR-872) |
+| `aether_sectest` frame | **10,432 B** (`sub $0x28c0,%rsp`) |
+| kernel stack (`STACK_SIZE`) | 16,384 B |
+| share of one kernel stack | **~64 %** |
+
+An audit of every `sub $imm,%rsp ≥ 1 KiB` across all kernel objects makes it a
+**2.4× outlier** — next largest are `sfs_set_tag` 4,432, `sys_dmesg` 4,176,
+`sfs_get_tag` 4,160, `fs_test_thread` 3,024. It is called unconditionally from
+`main.c:2908`, not behind `probe_enabled()`.
+
+Why the nominal 5,952 B of headroom is thinner than it looks: `idt.c:65` sets
+`idt[v].ist = 0` for **every** vector, so there is no IST and the LAPIC timer's
+entire handler chain — `sched_tick` → `schedule()` — lands on this same stack.
+There is no guard page below a kernel stack and the build uses
+`-fno-stack-protector`, so an overflow would not trap; `kstack_base` comes from
+`kmalloc(STACK_SIZE)`, so an overrun scribbles the kernel heap. Silent
+corruption presenting later and elsewhere — the class this project keeps chasing.
+
+**No claim is made that this ever actually overflowed.** It evidently has not.
+This is a bound restored, not a red chased, which is why it does not conflict
+with §NON-NEGOTIABLES 3: that rule guards against guessing at an observed
+failure, and here the artefact is a static measurement with exact numbers.
+
+### Fix and measurement (R1 — kernel sha256 `c83a62cc9428ba36`, 1,053,054 B)
+
+The TCB is now `kmalloc`/`kfree`d. On allocation failure both arms are **skipped
+with an explicit `AETHER_SEC_OOM_SKIP` line rather than faked**, so the gate
+fails loudly — correct for a test that did not run.
+
+| check | before | after |
+|---|---|---|
+| `aether_sectest` frame | 10,432 B | **48 B** (`sub $0x30,%rsp`) |
+| largest kernel frame in tree | `aether_sectest` | `sfs_set_tag` 4,432 B |
+
+`smoke-aether-sec` PASS with **all six** sentinels present and
+`AETHER_SEC_OOM_SKIP` count 0; `smoke-aether`, `smoke-aether-queue`,
+`smoke-shell` **5/5**, `ci-probe-rodata-check`, `ci-shard-check`, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity` all green. Build warning-clean
+at `-Werror`.
+
+The disassembly row is the load-bearing evidence, not the green gate: the gate
+passed *before* the fix too, so it cannot distinguish the change from no change.
+
+### Also closed: GROUP A's first item was already built
+
+"Demand-paged user stack" is complete under **ADR-038** — `vmm_stack_fault()`
+(`vmm_cow.c:144`), `USER_STACK_EAGER_PAGES = 8` (measured, not guessed: 30/30
+vs 0/30 in the ADR's own A/B), guard page below `USER_STACK_BOT`, and a
+three-arm gate `smoke-stack-demand` (grow / syscall-on-grown-page / guard-kill
+with a post-kill liveness witness). `CLAUDE.md` lists it as unbuilt against a
+gate name (`smoke-lazystack`) that does not exist.
+
+Nothing is merged; PR #5 stays a draft.
