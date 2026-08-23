@@ -269,6 +269,30 @@ ci-start-align-check:
 ci-shard-check:
 	bash tools/ci/shard_check.sh
 
+# Operator directive 2026-08-23 §6.3 — risk-tiered fast lane.
+#
+#   make smoke-fast GATE=smoke-wmmax           # COUNT defaults from the tier
+#   make smoke-fast GATE=smoke-smp COUNT=20    # explicit override
+#
+# The default COUNT comes from the gate's risk tier in tools/ci/gate_shards.txt
+# (4th column): `fast` -> 5, `strict` -> 20. A gate that is not in the manifest
+# defaults to 20, and so does anything the allow-list did not explicitly mark
+# visual — the tier annotation fails safe, so this target can never quietly
+# weaken a scheduler/SMP/security campaign to N=5.
+#
+# Runs through tools/ci/campaign.sh, so the run survives its invoking shell and
+# reports progress in build/campaign_status.txt (§6.1).
+.PHONY: smoke-fast
+smoke-fast:
+	@test -n "$(GATE)" || { echo "usage: make smoke-fast GATE=<smoke-target> [COUNT=<n>]"; exit 1; }
+	@tier=$$(awk -F'\t' -v g="$(GATE)" '$$2==g {print $$4}' tools/ci/gate_shards.txt); \
+	 if [ -z "$$tier" ]; then tier=strict; echo "[smoke-fast] $(GATE) not in the manifest -> assuming strict"; fi; \
+	 n="$(COUNT)"; \
+	 if [ -z "$$n" ]; then if [ "$$tier" = fast ]; then n=5; else n=20; fi; fi; \
+	 echo "[smoke-fast] $(GATE) tier=$$tier count=$$n"; \
+	 bash tools/ci/campaign.sh start "$(GATE)" "$$n" && \
+	 bash tools/ci/campaign.sh wait
+
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
 	@echo "  make setup            # install the toolchain (WSL2/Ubuntu)"

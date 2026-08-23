@@ -15,7 +15,7 @@ SHARD="${1:?usage: run_shard.sh <shard-index>}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MANIFEST="$ROOT/tools/ci/gate_shards.txt"
 
-mapfile -t GATES < <(awk -F'\t' -v s="$SHARD" '/^[0-9]/ && NF==3 && $1==s { print $2 }' "$MANIFEST")
+mapfile -t GATES < <(awk -F'\t' -v s="$SHARD" '/^[0-9]/ && NF>=3 && $1==s { print $2 }' "$MANIFEST")
 
 if [ "${#GATES[@]}" -eq 0 ]; then
     echo "run_shard: FAIL — shard $SHARD has no gates. A shard index with no" >&2

@@ -1,6 +1,17 @@
 # tools/ci/gate_shards.txt — DDR-817 CI gate partition.
 #
-# Format:  <shard>  <make-target>  <secs>
+# Format:  <shard>  <make-target>  <secs>  <risk-tier>
+#
+# risk-tier (operator directive 2026-08-23 §6.3): `strict` gates keep the
+# N=20 rule — scheduler, SMP, block/IRQ delivery, capabilities, memory
+# safety, crypto, boot. `fast` gates may use N=5-8 per §4.2. STRICT IS THE
+# DEFAULT, via an explicit allow-list of purely visual / window-management
+# gates: anything not on that list is strict, so a NEW gate is strict until
+# someone deliberately says otherwise. A keyword-exclusion default was tried
+# first and silently demoted smoke-x25519 (crypto), smoke-e1000e (a network
+# driver) and smoke-numa (memory model) to fast — an allow-list fails safe,
+# a deny-list does not.
+# This is an annotation, not an enforcement point — `make smoke-fast` reads it.
 #
 # WHY THIS FILE EXISTS, twice over:
 #
@@ -30,152 +41,152 @@
 # worst case. They are inputs to the packing only; nothing asserts against them
 # at runtime. They are recorded so a future re-balance has evidence in the file
 # rather than re-deriving it from the API.
-0	smoke-blk-integrity	181
-0	smoke-smpuser	180
-0	smoke-compositor	120
-0	smoke-motion	120
-0	smoke-smplock	120
-0	smoke-wmmin	120
-0	smoke-hkdf	90
-0	smoke-rootmount	90
-0	smoke-sfsroot	90
-0	smoke-shell	61
-0	smoke-fpu	60
-0	smoke-serialflood	60
-0	smoke-ambiance	30
-0	smoke-backdrop	28
-0	smoke-init	27
-0	smoke-sysiouring	24
-0	smoke-sysproc	23
-1	smoke-rqstress-liveness	181
-1	smoke-surfdestroy	180
-1	smoke-drag	120
-1	smoke-mouse	120
-1	smoke-sovereign-egress	120
-1	smoke-capnet	91
-1	smoke-sfs-dirs	91
-1	smoke-input	90
-1	smoke-setname	90
-1	smoke-sha256	90
-1	smoke-fs-budget	60
-1	smoke-winops	37
-1	smoke-reboot	31
-1	smoke-aether-sfsroot	28
-1	smoke-fs-sfs-rw	27
-1	smoke-glassblur	25
-1	smoke-sysfork	23
-1	smoke-fs-rw	2
-1	smoke-mkfs-sfs	2
-1	smoke	1
-1	smoke-aether-sec	1
-1	smoke-apic	1
-1	smoke-cowfork	1
-1	smoke-crosswake	1
-1	smoke-gpu	1
-1	smoke-net-fuzz	1
-1	smoke-smpjob	1
-1	smoke-uaccess	1
-1	smoke-aether-queue	0
-1	smoke-mitigations	0
-1	smoke-net-lo	0
-1	smoke-pmm-poison	0
-2	smoke-smppreempt	181
-2	smoke-agentmetrics	150
-2	smoke-percpu	121
-2	smoke-egress-audit	120
-2	smoke-percpu-sched	120
-2	smoke-swapgs	120
-2	smoke-time	91
-2	smoke-lockbox	90
-2	smoke-sfs-btree	90
-2	smoke-sigpipe	90
-2	smoke-kill	60
-2	smoke-agents	34
-2	smoke-font	31
-2	smoke-aether	28
-2	smoke-user	28
-2	smoke-flip	25
-2	smoke-sysfile	23
-2	smoke-syswait	23
-3	smoke-blkmq	180
-3	smoke-rqstress	180
-3	smoke-agent-click	120
-3	smoke-evresize	120
-3	smoke-resched	120
-3	smoke-sysexec	120
-3	smoke-aethercfg	90
-3	smoke-netallow	90
-3	smoke-sfs-gc	90
-3	smoke-sysinfo	90
-3	smoke-net	60
-3	smoke-fs-ext4	29
-3	smoke-gradient	28
-3	smoke-syscallfuzz	26
-3	smoke-vdso	24
-3	smoke-syssignal	23
-4	smoke-blkmq-trace	180
-4	smoke-rtc-smp	180
-4	smoke-alttab	120
-4	smoke-focus	120
-4	smoke-scroll	120
-4	smoke-wmclose	120
-4	smoke-dmesg	90
-4	smoke-privacy-netfilter	90
-4	smoke-sfs-persist	90
-4	smoke-vfs-bigwrite	90
-4	smoke-net-tcp-lo	60
-4	smoke-agentpanel	33
-4	smoke-poweroff	30
-4	smoke-mode	28
-4	smoke-visual	26
-4	smoke-sysepoll	23
-4	smoke-sysmmap	23
-5	smoke-msixap	180
-5	smoke-smpsched	180
-5	smoke-cadence	120
-5	smoke-metric	120
-5	smoke-smp	120
-5	smoke-wmmax	120
-5	smoke-fsrm	90
-5	smoke-rng	90
-5	smoke-sfs-unlink	90
-5	smoke-wxkernel	90
-5	smoke-nvme	60
-5	smoke-decor	31
-5	smoke-surface	31
-5	smoke-fs	28
-5	smoke-fb	26
-5	smoke-sysio	24
-5	smoke-syspipe	23
-3	smoke-sha512	90
-3	smoke-x25519	90
-4	smoke-aead	90
-5	smoke-ed25519	150
-5	smoke-acc	150
-1	smoke-ags	120
-2	smoke-acc-rotate	120
-0	smoke-vault	120
-1	smoke-agentmem	120
-2	smoke-checkpoint	120
-3	smoke-spawndepth	120
-4	smoke-actiondag	120
-5	smoke-chipset	120
-0	smoke-coderewrite	120
-1	smoke-auditchain	120
-2	smoke-auditchain-tamper	120
-3	smoke-invariants	120
-4	smoke-ftruncate	90
-4	smoke-rename	90
-5	smoke-rename-sfs	90
-4	smoke-stack-demand	150
-0	smoke-bench	90
-2	smoke-ahci	90
-3	smoke-e1000e	90
-4	smoke-numa	90
-5	smoke-numa-alloc	90
-0	smoke-uefi	90
-1	smoke-iso-x86	240
-1	smoke-iso-userspace	300
-2	smoke-wmorder	120
-0	smoke-blk-timeout	120
-3	smoke-fat32-multicluster	90
+0	smoke-iso-userspace	300	strict
+0	smoke-motion	120	fast
+0	smoke-evresize	120	fast
+0	smoke-wmmax	120	fast
+0	smoke-auditchain	120	strict
+0	smoke-sfsroot	90	strict
+0	smoke-sysinfo	90	strict
+0	smoke-x25519	90	strict
+0	smoke-uefi	90	strict
+0	smoke-agents	34	strict
+0	smoke-syscallfuzz	26	strict
+0	smoke-sysfork	23	strict
+0	smoke-sysepoll	23	strict
+1	smoke-iso-x86	240	strict
+1	smoke-compositor	120	fast
+1	smoke-egress-audit	120	strict
+1	smoke-wmclose	120	fast
+1	smoke-spawndepth	120	strict
+1	smoke-sfs-dirs	91	strict
+1	smoke-aethercfg	90	strict
+1	smoke-sfs-unlink	90	strict
+1	smoke-e1000e	90	strict
+1	smoke-net	60	strict
+1	smoke-surface	31	strict
+1	smoke-init	27	strict
+1	smoke-fb	26	strict
+1	smoke-apic	1	strict
+1	smoke-smpjob	1	strict
+2	smoke-blk-integrity	181	strict
+2	smoke-acc	150	strict
+2	smoke-mouse	120	strict
+2	smoke-focus	120	fast
+2	smoke-agentmem	120	strict
+2	smoke-blk-timeout	120	strict
+2	smoke-netallow	90	strict
+2	smoke-wxkernel	90	strict
+2	smoke-numa	90	strict
+2	smoke-net-tcp-lo	60	strict
+2	smoke-ambiance	30	fast
+2	smoke-aether-sfsroot	28	strict
+2	smoke-glassblur	25	fast
+2	smoke	1	strict
+2	smoke-cowfork	1	strict
+2	smoke-uaccess	1	strict
+3	smoke-rqstress-liveness	181	strict
+3	smoke-stack-demand	150	strict
+3	smoke-sovereign-egress	120	strict
+3	smoke-scroll	120	fast
+3	smoke-checkpoint	120	strict
+3	smoke-capnet	91	strict
+3	smoke-input	90	strict
+3	smoke-dmesg	90	strict
+3	smoke-aead	90	strict
+3	smoke-fat32-multicluster	90	strict
+3	smoke-fs-ext4	29	strict
+3	smoke-aether	28	strict
+3	smoke-flip	25	strict
+3	smoke-aether-sec	1	strict
+3	smoke-crosswake	1	strict
+3	smoke-aether-queue	0	strict
+3	smoke-mitigations	0	strict
+3	smoke-net-lo	0	strict
+3	smoke-pmm-poison	0	strict
+4	smoke-smppreempt	181	strict
+4	smoke-percpu	121	strict
+4	smoke-smplock	120	strict
+4	smoke-resched	120	strict
+4	smoke-ags	120	strict
+4	smoke-auditchain-tamper	120	strict
+4	smoke-setname	90	strict
+4	smoke-privacy-netfilter	90	strict
+4	smoke-ftruncate	90	strict
+4	smoke-shell	61	strict
+4	smoke-winops	37	strict
+4	smoke-backdrop	28	strict
+4	smoke-visual	26	strict
+4	smoke-syswait	23	strict
+5	smoke-smpuser	180	strict
+5	smoke-rtc-smp	180	strict
+5	smoke-percpu-sched	120	strict
+5	smoke-cadence	120	strict
+5	smoke-actiondag	120	strict
+5	smoke-time	91	strict
+5	smoke-sfs-gc	90	strict
+5	smoke-sha512	90	strict
+5	smoke-numa-alloc	90	strict
+5	smoke-nvme	60	strict
+5	smoke-poweroff	30	strict
+5	smoke-user	28	strict
+5	smoke-sysiouring	24	strict
+5	smoke-sysmmap	23	strict
+6	smoke-surfdestroy	180	strict
+6	smoke-msixap	180	strict
+6	smoke-swapgs	120	strict
+6	smoke-metric	120	strict
+6	smoke-chipset	120	strict
+6	smoke-hkdf	90	strict
+6	smoke-sha256	90	strict
+6	smoke-sfs-persist	90	strict
+6	smoke-rename	90	strict
+6	smoke-fpu	60	strict
+6	smoke-agentpanel	33	strict
+6	smoke-fs-sfs-rw	27	strict
+6	smoke-sysfile	23	strict
+6	smoke-syspipe	23	strict
+7	smoke-blkmq	180	strict
+7	smoke-smpsched	180	strict
+7	smoke-agent-click	120	strict
+7	smoke-smp	120	strict
+7	smoke-coderewrite	120	strict
+7	smoke-rootmount	90	strict
+7	smoke-lockbox	90	strict
+7	smoke-vfs-bigwrite	90	strict
+7	smoke-rename-sfs	90	strict
+7	smoke-serialflood	60	strict
+7	smoke-reboot	31	strict
+7	smoke-gradient	28	strict
+7	smoke-vdso	24	strict
+7	smoke-fs-rw	2	strict
+7	smoke-gpu	1	strict
+8	smoke-rqstress	180	strict
+8	smoke-agentmetrics	150	strict
+8	smoke-wmmin	120	fast
+8	smoke-sysexec	120	strict
+8	smoke-acc-rotate	120	strict
+8	smoke-invariants	120	strict
+8	smoke-sfs-btree	90	strict
+8	smoke-fsrm	90	strict
+8	smoke-bench	90	strict
+8	smoke-fs-budget	60	strict
+8	smoke-font	31	strict
+8	smoke-mode	28	strict
+8	smoke-sysio	24	strict
+8	smoke-mkfs-sfs	2	strict
+8	smoke-net-fuzz	1	strict
+9	smoke-blkmq-trace	180	strict
+9	smoke-ed25519	150	strict
+9	smoke-drag	120	fast
+9	smoke-alttab	120	fast
+9	smoke-vault	120	strict
+9	smoke-wmorder	120	fast
+9	smoke-sigpipe	90	strict
+9	smoke-rng	90	strict
+9	smoke-ahci	90	strict
+9	smoke-kill	60	strict
+9	smoke-decor	31	strict
+9	smoke-fs	28	strict
+9	smoke-sysproc	23	strict
+9	smoke-syssignal	23	strict

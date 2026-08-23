@@ -40,11 +40,32 @@ but treat every item below as REQUIRED, not optional, including the ones
 previously marked "not started":
 
 ### Backend / kernel (Group A, B, C)
-- Close B#3 (the CPU-3 AP-liveness freeze, DDR-977) with an actual fix, not
-  just a diagnosis. This is the last known correctness blocker. As of
-  2026-08-22 the mechanism is known (CPU 3 stops taking its own LAPIC timer
-  interrupt early in boot and never resumes) but the cause is not — do not
-  patch virtio_blk.c, that subsystem is behaving correctly.
+- ~~Close B#3 (the CPU-3 AP-liveness freeze, DDR-977) with an actual fix~~
+  **DONE — 2026-08-22 23:0x UTC, DDR-981, commit `d7a2912`.** This directive was
+  written from the 08-22 state, before the fix landed; recorded here so no
+  session re-derives it (which is exactly what §6.2 exists to prevent).
+  - **Cause:** `SYSCALL` entry clears `RFLAGS.IF` via `MSR_SFMASK`
+    (`syscall.c:229`) and the entry path deliberately never re-enables it
+    (`syscall_entry.asm:46`). So every yield-spin reachable from ring 3 spun
+    with interrupts MASKED — `mnt_lock`, both pipe waits, the blocking console
+    read (PRISM's own read loop), and `sys_yield`. `context_switch` preserves
+    per-thread RFLAGS, so the mask is carried ACROSS the switch: two such
+    threads on one CPU hand off to each other forever and never reach idle's
+    `sti; hlt`. That CPU runs normally with interrupts off — its timer tick
+    stops and any block completion MSI-X routed at it is never serviced.
+  - **Two framings in the text above are superseded.** It is not "CPU 3" —
+    *any* AP freezes, and which one varies with device routing (DDR-977 §8).
+    And the CPU is not stalled or halted; it is executing normally, just never
+    interrupted.
+  - **The instruction not to patch `virtio_blk.c` was correct** — that
+    subsystem was behaving correctly throughout. The fix is an interrupt window
+    in `yield()` (`sched.c`), the one choke point all five call sites share.
+  - **Evidence:** 20/20 boots at `-smp 4`, 0 frozen APs, 0 `compl wait timeout`
+    (before: 6/14 boots frozen, 5–11 timeouts each, 0 on every unfrozen boot).
+    `ymask` ≈ 6.1M masked yields/boot is the denominator. Mutation-checked.
+    `[apfreeze]` added to `GLOBAL_FORBIDDEN` so a recurrence is a named red.
+  - **OPEN-2 closed with it** for its block-touching gates (DDR-977 §8.2 chain).
+    Not claimed for `smoke-crosswake`/`smoke-msixap`, which do no block I/O.
 - Demand-paged stack (ALREADY BUILT — ADR-038, do not rebuild), I/O APIC
   migration, SMEP/SMAP, kernel W^X residual, `#MC` handler, KASLR, scheduler
   timed-block, lock contention instrumentation.

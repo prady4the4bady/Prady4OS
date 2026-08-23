@@ -6757,3 +6757,90 @@ since every SMP/block gate the freeze reddens already burns its full window.
   AP had ticked into the hundreds first).
 
 ### Gate count 149. DDR free range: **DDR-982+** (974-981 allocated this session).
+
+---
+
+## CHECKPOINT 2026-08-23 00:2x UTC — operator directive 2026-08-23 read; §6 playbook built
+
+The operator pushed `9f13676` + `8ebf8e9` to this branch: deadline moves to
+**2026-08-28 23:59 UTC**, the PRE-APPROVED EXCEPTIONS table is **suspended** for
+x86_64 v1.0.0 scope, and §6 adds a concrete automation playbook.
+
+### The directive's #1 backend item was already done
+
+It reads *"Close B#3 … with an actual fix, not just a diagnosis. This is the
+last known correctness blocker … the mechanism is known but the cause is not."*
+That was the 08-22 state. **B#3 was fixed at `d7a2912` (DDR-981)** a few hours
+before the directive landed. Annotated in the directive file itself so no
+session re-derives it. Two of its framings are superseded: it is not "CPU 3"
+(any AP; DDR-977 §8) and the CPU is not stalled (it runs normally, just never
+interrupted). Its instruction *not* to patch `virtio_blk.c` was **correct** —
+the fix is in `sched.c`; the only virtio_blk edit since is the diagnostic
+`dest_cpu_idx` field, not driver logic.
+
+### §6 playbook — 6 of 7 built and self-tested
+
+| item | artefact | verified |
+|---|---|---|
+| §6.1 persistent campaign runner | `tools/ci/campaign.sh` | end-to-end: `smoke-blkmq x2`, detached via `setsid`, pollable mid-run, `state=done pass=2 fail=0` |
+| §6.2 failure auto-classifier | `tools/ci/classify_failure.sh` | 3 arms on **real** logs: MATCH on a genuine `[apfreeze]` capture, CLEAN on a passing boot, NEW SIGNATURE on an unknown |
+| §6.3 risk tier + fast lane | 4th column in `gate_shards.txt`, `make smoke-fast` | tier lookup: wmmax→fast/5, smp→strict/20, unknown→strict/20 |
+| §6.4 shard matrix 6 → 10 | LPT repack + workflow matrix | **makespan 38.6 → 20.8 min**; 149 gates preserved; `ci-shard-check` OK |
+| §6.5 status dashboard | `tools/ci/status_report.sh` | output pasted below |
+| §6.6 task queue | `docs/NEXT_TASK_QUEUE.md` | 110 items, dependency-ordered |
+| §6.7 skip unchanged images | — | **NOT DONE — named, not silently deferred** (see the queue for the reasoning) |
+
+**Two mistakes caught during this, worth recording.** First, the risk tier
+started as a keyword *deny*-list and silently marked `smoke-x25519` (crypto),
+`smoke-e1000e` (a network driver) and `smoke-numa` (memory) as `fast` — a
+deny-list fails open. It is now an explicit allow-list of 13 visual/WM gates;
+everything else, including every future gate, is strict. Second,
+`ci-shard-check` failed on the new `smoke-fast` target and it was **right** to:
+that target is a runner, not a gate. Excluded with a stated reason rather than
+by widening the check.
+
+### Numbers (generated — §4.5, do not hand-tally)
+
+Run `tools/ci/status_report.sh`; latest:
+
+- **149 gates / 10 shards / 20.8 min makespan / 13 fast-tier / 136 strict**
+- **Backlog A–H: 9 done, 101 open, 110 total** — this is the honest count
+  against the directive's *full* scope, and most of it is Groups E (12 UI items)
+  and F (34 agent-layer items), both of which the directive makes mandatory.
+- Open issues: OPEN-1, OPEN-12, OPEN-13 open; OPEN-2 + B#3 closed (DDR-981)
+- kernel.bin 1,065,350 B / 1,572,864 B gate
+
+### CURRENT_ACTIVE_TASK
+
+Pop from `docs/NEXT_TASK_QUEUE.md`. Top of queue is the release path: PR #6 →
+3 greens → merge → `main` → re-verify the ISO **on main's own tip** → tag.
+Then Group E's DDR batch (§4.3 says write that cluster's DDRs in one pass).
+## Generated status — 2026-08-23T00:23:03Z
+
+### Gates
+- 149 gates across 10 shards; makespan 20.8 min; 13 fast-tier / 136 strict-tier
+
+### Backlog by Group (CLAUDE.md tables)
+
+| Group | done | open | total |
+|---|---:|---:|---:|
+| A | 2 | 10 | 12 |
+| B | 2 | 12 | 14 |
+| C | 0 | 6 | 6 |
+| D | 2 | 14 | 16 |
+| E | 0 | 12 | 12 |
+| F | 3 | 34 | 37 |
+| G | 0 | 6 | 6 |
+| H | 0 | 7 | 7 |
+| **all** | **9** | **101** | **110** |
+
+### Open issues
+- OPEN-1: OPEN
+- OPEN-12: OPEN
+- OPEN-13: OPEN
+- OPEN-2: closed
+
+### Kernel
+- kernel.bin 1065350 B / 1572864 B gate (507514 B headroom)
+- sha256 2db55a7b79780806676d41aaa09aa1bfa7aba5ac525ff4fe1772480344be40d7
+- HEAD 44ccce8 on dev/phase1-seyp3n

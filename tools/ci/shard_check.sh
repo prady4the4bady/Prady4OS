@@ -38,7 +38,11 @@ MAKEFILE="$ROOT/Makefile"
 # and evicts smoke-dmesg's required marker (DDR-790). It must never run in the
 # shared-image shard matrix. Remove this exclusion when BUG-1 closes and the
 # target is deleted.
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4 smoke-fs-liveness"
+# smoke-fast (directive §6.3) is NOT a gate — it is a RUNNER that invokes some
+# other gate COUNT times via tools/ci/campaign.sh. It boots nothing of its own,
+# so assigning it to a shard would make CI run an argument-less campaign that
+# immediately errors out. Excluded as infrastructure, not as a skipped test.
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4 smoke-fs-liveness smoke-fast"
 
 excluded() {
     local t="$1" e
@@ -49,7 +53,7 @@ excluded() {
 [ -f "$MANIFEST" ] || { echo "shard-check: missing $MANIFEST" >&2; exit 1; }
 
 # Manifest targets (field 2 of the tab-separated, non-comment lines).
-assigned="$(awk -F'\t' '/^[0-9]/ && NF==3 { print $2 }' "$MANIFEST")"
+assigned="$(awk -F'\t' '/^[0-9]/ && NF>=3 { print $2 }' "$MANIFEST")"
 
 rc=0
 
