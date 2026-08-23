@@ -919,6 +919,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
     t->forked = 0;                 /* 5e: normal launch unless a fork sets fork_regs */
     t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
+    t->agent_caps = 0;             /* DDR-982: no action authority unless granted per
+                                    * roster slot. NON-NEGOTIABLE 10 — kmalloc does not
+                                    * zero, and a garbage mask here would grant an agent
+                                    * every capability at once. */
     t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
     t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
     t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does

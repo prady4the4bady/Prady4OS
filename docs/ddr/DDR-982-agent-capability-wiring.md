@@ -93,3 +93,104 @@ separate sandbox is required first. That is a security-posture decision of the
 same kind DDR-793 made for the cloud bridge, and it is not mine to make
 unilaterally. Sections A–D above are buildable and correct either way; only
 the *content* of `ACTION_EXEC_CODE` depends on the answer.
+
+---
+
+## 5. CORRECTION — §2(C) as written cannot be built, and the repo already argued why
+
+Implementing §2 turned up a documented decision that contradicts this DDR's own
+reasoning. Recording it rather than quietly working around it.
+
+### 5.1 The four action types do not exist, deliberately
+
+`aether.h:22-30`:
+
+> *Six further 3C types are deliberately ABSENT until their subsystem exists —
+> CAPTURE_FRAME / SCAN_ENVIRONMENT / QUERY_SCENE (post-L7, `CAP_SCENE`),
+> PARSE_DOCUMENT (64 MiB OCR model), EXEC_CODE (sandboxed interpreter),
+> BROWSE_WEB (headless browser + deferred cloud bridge). **Declaring an enum
+> value with no enforcement is worse than omitting it: an agent could submit one
+> and the kernel would queue an action nothing implements.***
+
+So there is no `ACTION_PARSE_DOCUMENT` to gate on `CAP_OCR`, and likewise for the
+other three. §2(C) said "enforcement at action dispatch"; there is nothing at
+dispatch to enforce against.
+
+### 5.2 That rationale is the inverse of §2's, and it is the better one here
+
+§2 argued: ship the boundary now, implementations later — a denial path with an
+audit record is a real capability. `aether.h` argues: a *type* with no subsystem
+is worse than no type, because the kernel would accept and queue work nothing
+performs.
+
+Both are coherent, but they are about different objects, and on the object in
+question `aether.h` is right. My argument holds for a **capability bit** whose
+check runs and denies. It does not hold for an **action type**, because
+declaring one creates a submission path that succeeds and enqueues a record that
+never completes — an agent would see `AE_PENDING` forever, which is worse than
+`-EPERM`. The capability boundary I wanted is real; the vehicle I chose for it
+is not available without also creating that failure mode.
+
+There is a wire-format cost too, and DDR-832/DDR-842 already priced it:
+`action_type` crosses the ring boundary in every audit record and queue entry.
+Appending is safe; the four types would have to be appended in a fixed order and
+pinned with `_Static_assert`s like the existing ones. That is not free and
+should not be spent to gate actions three of which cannot be implemented.
+
+### 5.3 What is built and kept (A and B), and what is withdrawn (C, D)
+
+**Kept — built, compiles clean, `kernel.bin` 1,065,350 B unchanged:**
+
+- **(A)** `CAP_OCR` (1<<19), `CAP_EXEC` (1<<20), `CAP_SCENE` (1<<22),
+  `CAP_NET_BROWSE` (1<<23) in `cap.h`. Bit 21 is `CAP_REWRITE`, which is why the
+  directive names exactly these four.
+- **(B)** `tcb.agent_caps`, a per-agent authority mask, explicitly zeroed in
+  `sched_create` (§NON-NEGOTIABLE 10 — `kmalloc` does not zero, and a garbage
+  mask would grant an agent every capability at once).
+
+**(B) is worth having on its own merits, independent of this DDR's purpose.**
+`aether_spawn_agent_hook` (`main.c:970`) currently marks *every* agent
+identically `is_agent = 1; is_net = 1`. All eight roster agents hold identical
+authority today — precisely the condition a capability system exists to prevent.
+Per-agent authority is the prerequisite for fixing that, whatever gates it.
+
+**Withdrawn pending a decision:** §2(C) enforcement and §2(D) `smoke-capagent`.
+Both require the action types to exist. A gate written now could only assert
+that a bit can be set and read back, which is a test of `uint32_t`, not of a
+capability system — the DDR-973 vacuity lesson applied to my own proposal.
+
+### 5.4 One more thing found while implementing: a create-then-init race
+
+`sys_spawn_agent` (`sys_aether.c:183`) already receives the roster slot as `a3`,
+so no ABI change is needed to grant per-slot authority. But it calls
+`g_spawn_hook(task)` — which ends in `sched_unblock(ut)` — and only *then*
+records the slot. **The agent is runnable before its slot is known**, so any
+per-slot authority minted afterwards would land after the first run.
+
+That is the DDR-964 create-then-init race in a second place, and the hook's own
+comment already states the requirement it violates: *"marks the new process
+CAP_AGENT so it is rate-limited"* … `ut->is_agent = 1; /* authority BEFORE the
+first run */`. The fix is §INV.16's pattern — pass the slot into the hook, mint
+authority, then `sched_unblock` from the caller. **Not fixed here**, because it
+is only observable once there is per-slot authority to race against, and that
+depends on the decision below. Recorded so it is not rediscovered.
+
+### 5.5 The decision, now sharper than §4
+
+§4 asked whether PRAX may drive `sys_execve` under `CAP_EXEC`. The real question
+is one level up:
+
+> **Should the four absent action types be declared, accepting that three of
+> them can only ever return "not implemented", in order to have a capability
+> boundary to enforce?**
+
+- **Declare them** → §2(C)/(D) become buildable, the four agents become
+  spawnable-with-distinct-authority, and three action types exist that always
+  fail. Costs four wire-format slots and reverses `aether.h`'s stated decision.
+- **Leave them absent** → `aether.h` stands, (A)+(B) ship as the groundwork, and
+  Group F's four agent rows stay honestly blocked on their subsystems rather
+  than on capability plumbing.
+
+I lean to **leave them absent** and say so plainly in the Group F rows, per
+directive §2's "name it explicitly with a reason". But this reverses a
+documented repo decision either way, so it is the operator's call, not mine.
