@@ -43,6 +43,24 @@ serial_rm() {
     rm -f "$@"
 }
 
+# DDR-988 sec.11. The SERIAL_LOG default was moved out of /tmp above so a failing
+# gate's capture would survive -- but every failure path still called serial_rm,
+# which deletes it whenever KEEP_SERIAL is unset. Relocating the file and then
+# deleting it anyway fixes nothing: a failed gate is exactly the run whose
+# capture is the only evidence, and CI never sets KEEP_SERIAL, so in CI the
+# artefact was destroyed 100% of the time. That is the other half of why the
+# DDR-985 run-16 panic stopped at "#PF page fault" with no vector=/RIP=/CR2=.
+#
+# A failed gate now KEEPS its capture unconditionally and prints the path, so the
+# evidence is named in the gate output instead of having to be guessed at. Only
+# the PASS path deletes. KEEP_SERIAL still forces retention on a passing run.
+serial_keep_fail() {
+    for __f in "$@"; do
+        [ -s "$__f" ] && echo "[boot_test] FAIL — capture kept: $__f"
+    done
+    return 0
+}
+
 # DDR-823 / OPEN-9. QEMU's own startup errors go to STDERR, which this harness
 # used to leave uncaptured. When QEMU refuses to start — most often because a
 # leaked qemu-system-x86_64 from a previous run still holds the image's write
@@ -59,7 +77,7 @@ QEMU_ERR="$(mktemp)"
 if [ ! -f "$IMG" ]; then
     echo "[smoke] no bootable image at '$IMG' yet — expected during Phase 0."
     echo "[smoke] SKIP (nothing to boot)."
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 0
 fi
 
@@ -93,7 +111,7 @@ if command -v pgrep >/dev/null 2>&1; then
         echo "[smoke] Inspect before killing -- it may be a gate you started:"
         stray_csv="$(echo "$stray" | paste -sd, -)"
         echo "[smoke]     ps -o pid,etime,args -p $stray_csv"
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 3
     fi
 else
@@ -159,7 +177,7 @@ if [ -n "${QEMU_UEFI:-}" ]; then
     if [ ! -f "$OVMF_CODE" ] || [ ! -f "$OVMF_VARS_SRC" ]; then
         echo "[smoke] OVMF not installed ($OVMF_CODE) — cannot test the UEFI path."
         echo "[smoke] FAIL (missing firmware, not a kernel failure)."
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
     OVMF_VARS="$(mktemp)"
@@ -502,7 +520,7 @@ if [ -s "$QEMU_ERR" ] && grep -qiE "Failed to get \"?write\"? lock|Is another pr
     echo "[smoke] Do NOT run two QEMU gates concurrently — they share this image."
     echo "[smoke] --- qemu stderr ---"
     sed 's/^/[smoke]   /' "$QEMU_ERR"
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 3
 fi
 
@@ -514,7 +532,7 @@ if [ -s "$QEMU_ERR" ] && ! [ -s "$SERIAL_LOG" ] && grep -q "^qemu-system-x86_64:
     echo "[smoke] HOST-ENV FAIL — QEMU refused to start; no serial output was produced."
     echo "[smoke] This is not a kernel failure. QEMU stderr:"
     sed 's/^/[smoke]   /' "$QEMU_ERR"
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 3
 fi
 
@@ -523,14 +541,14 @@ fi
 # after the required-pattern checks would let a gate report "PASS" for a boot in
 # which something broke.
 if ! check_global_forbidden; then
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"
     cat "$SERIAL_LOG"
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 # Each non-empty line of EXTRA_SENTINEL is a literal pattern that must also appear.
@@ -541,7 +559,7 @@ while IFS= read -r pat; do
     if ! grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — required pattern '$pat' not found. Serial output was:"
         cat "$SERIAL_LOG"
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF
@@ -553,7 +571,7 @@ while IFS= read -r pat; do
     if grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — forbidden pattern '$pat' appeared. Serial output was:"
         cat "$SERIAL_LOG"
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF

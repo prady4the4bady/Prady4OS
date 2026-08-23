@@ -305,3 +305,64 @@ only a 20× `smoke-surfdestroy` campaign on the merged tip would be.
 
 This is the same discipline DDR-985 applied to itself when its own hypothesis
 failed, and it should not have lapsed two documents later.
+
+## 11. A failed gate now keeps its serial capture
+
+DDR-987 moved `SERIAL_LOG`'s default out of `/tmp` (§NON-NEGOTIABLE 7) so a
+failing gate's capture would survive. That fix was **half of one**, and the
+review caught the missing half: every failure path in `boot_test.sh` still
+called `serial_rm`, which deletes the capture whenever `KEEP_SERIAL` is unset.
+
+Relocating a file and then deleting it anyway fixes nothing. Worse, the deletion
+is worst exactly where it hurts most:
+
+- A **failed** gate is precisely the run whose capture is the only evidence.
+- **CI never sets `KEEP_SERIAL`**, so in CI the artefact was destroyed 100% of
+  the time — every CI failure this project has tried to diagnose was diagnosed
+  without the capture that existed and was thrown away.
+
+This is the other half of why the DDR-985 run-16 panic reached
+`exception: #PF page fault` and no further: the `vector=`, `RIP=` and `CR2=`
+lines were written to a file that the failure path then removed. I recorded the
+`/tmp` default as *the* cause at the time. It was one of two, and the second one
+is the one that matters in CI.
+
+**Change:** the nine failure sites call `serial_keep_fail()`, which keeps the
+capture unconditionally and prints its path so the evidence is *named in the
+gate output* rather than left to be guessed at. Only the single PASS site still
+deletes. `KEEP_SERIAL=1` still forces retention on a passing run, so no existing
+diagnostic workflow changes.
+
+The asymmetry is deliberate: a passing gate's capture is worth nothing and
+accumulating one per gate per run would fill the disk, while a failing gate's
+capture is sometimes the only thing standing between a defect and another round
+of guessing.
+
+### 11.1 A methodology error in the campaign that measured this
+
+The `smoke-evresize` 20× campaign run alongside this work is **not** a clean 20×
+on one binary, and it should not be quoted as one. `smoke-evresize` depends on
+`$(IMG)`, so when I edited `lwip_port.c` / `sys_socket.c` mid-campaign, run 4
+rebuilt the kernel. The honest split:
+
+| runs | kernel | result |
+|---|---|---|
+| 1–3 | `4ef7bd008c4c969d` (pre-§10) | 3/3 pass |
+| 4–20 | `e3919140872fd2ea` (post-§10) | 17/17 pass |
+
+I had explicitly guarded against editing `boot_test.sh` mid-run, having broken a
+gate that way earlier the same session — and then edited C sources the gate's
+own prerequisites rebuild, which is the hazard §INV.10 exists to name. Guarding
+one instance of a class and missing another is how §11 of DDR-987 went wrong
+too.
+
+Two things follow, and only two:
+
+1. **17/17 on `e3919140872fd2ea` is a real result** for the code being pushed,
+   and it incidentally proves that code compiles `-Werror`-clean and boots.
+2. It does **not** show DDR-988 fixed the CI `smoke-evresize` failure. That
+   failure has never reproduced locally — 20 boots here, 0 failures, versus 1 in
+   3 CI runs on `3f6dbff`. Consistent with the OPEN-12 family of CI-only
+   intermittents, and **not attributed to this work**. The `[hb]` heartbeat now
+   carries `net_skip=`, so a recurrence can implicate or exonerate lwIP directly
+   instead of leaving it open.
