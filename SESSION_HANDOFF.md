@@ -7042,3 +7042,73 @@ looking at the directory afterwards.
 - DDR free range: **DDR-990+** (989 allocated).
 - Still owed: DDR-987 §5's two-CPU `connect`/`close` hammer probe — the only
   thing that could positively prove the lwIP fix. Unwritten.
+
+## Checkpoint 2026-08-23 (final) — PR #13 MERGED, dev/phase1 recovered
+
+**CURRENT_ACTIVE_TASK: OPEN-1 verification — 20x `smoke-surfdestroy` on `2cd7db9`.**
+
+### State
+
+- `dev/phase1` = **`2cd7db9`** (PR #13 squash-merged). **Recovered — no longer red.**
+- `main` = `ace232f`, clean, **UNTAGGED** (operator hold, DDR-985). Untouched.
+- Merge evidence: **60/60 CI jobs green on `84563f7`, four independent runs.**
+  Kernel `e3919140872fd2ea`, 1,069,450 B, warning-clean at `-Werror`.
+
+### Do NOT promote to main yet
+
+Three greens on `dev/phase1` are required before ff to `main`, and separately the
+operator hold on `v1.0.0` stands until the OPEN-1 `#PF` is closed (DDR-985).
+**A green suite is NOT that closure** — see below.
+
+### The next real task, and why a green suite does not substitute for it
+
+**OPEN-1 is OPEN.** DDR-988 §10.4 and CLAUDE.md both now say this explicitly,
+because both files previously overstated it. What is established: a real
+cross-CPU lwIP use-after-free existed and is fixed (`#GP`,
+`RAX=0xDDDDDDDDDDDDDDDD` in `tcp_output`). What is NOT established: that OPEN-1's
+`#PF` is that same defect. At a ~1/20 base rate in one gate, four green suites
+are entirely consistent with the defect still being present.
+
+Two things would settle it, in priority order:
+
+1. **20x `smoke-surfdestroy` on `2cd7db9`.** This is the direct measurement.
+   Prior measurement was 19/20 on `d31b4023b0f74d06` @ `46ece3f`.
+   Use `KEEP_SERIAL=1`; failed captures are now preserved automatically
+   (DDR-988 §11) under `build/gatelogs/*.fail-<pid>`.
+2. **DDR-987 §5's two-CPU `connect`/`close` hammer probe — STILL UNWRITTEN.**
+   The only thing that could POSITIVELY prove the lwIP fix rather than fail to
+   disprove it. Nothing in this session substitutes for it.
+
+### DDR-989 — root-caused, deliberately unimplemented
+
+The `smoke-evresize` / `smoke-agentpanel` stalls (same defect, two gates, two
+commits). `rq_pop` picks smallest `dbg_vruntime` — NOT FIFO, and the comment
+above it saying FIFO is stale and actively misleading. `sched_charge_elapsed` is
+reachable only from `sched_tick`, so CPU time is sampled at 100 Hz; a thread
+yielding ~1074x/tick accrues ~0 vruntime and wins every pick, while quantum
+resets on each voluntary switch so `g_preempt_try` freezes.
+**Run DDR-989 §4's measurement BEFORE fixing.** It states what CONFIRMS and what
+REFUTES — if those pids' vruntime advances normally and is merely lower, the
+cause is weighting and the fix is the OPPOSITE one. Task #26.
+
+**lwIP is exonerated for this family** by the DDR-988 counters
+(`net_skip=0 net_rxdrop=0` on the agentpanel failure). Do not re-attribute it to
+lwIP without a non-zero `net_skip`.
+
+### Process rules earned this session
+
+- **§11.4: any change under `tools/qemu_runner/` MUST run `smoke-selftest`
+  before push.** I chose local gates by what the C changes touched;
+  `boot_test.sh` is touched by every gate, including the one that tests it.
+- **A deletion in a harness is rarely only a deletion.** Removing `serial_rm`
+  from failure paths silently removed run isolation (8 shards red), and the
+  follow-up fix misclassified the one `exit 0` SKIP among nine sites. "The gate
+  still passes" caught neither.
+- **Reading a comment is not verifying a fact.** I amplified a stale
+  `boot_test.sh` comment ("the concurrency group cancels runs") into a DDR and a
+  public reply. There is no `concurrency:` block in `.github/workflows/`.
+  Retracted; the source comment is corrected.
+- **Don't move the tip while chasing three greens.** Five pushes orphaned five
+  in-flight suites. Batch, then dispatch.
+
+### DDR free range: **DDR-990+**
