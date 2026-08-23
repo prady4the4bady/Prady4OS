@@ -88,8 +88,14 @@ Extend the existing block — same line, two new fields:
 [kheap] double-free ptr=0x… objsize=0x80 freed_by=0x… now_by=0x…
 ```
 
-`freed_by` = the recorded first free. `now_by` = `__builtin_return_address(0)`
-in `cache_free`.
+`freed_by` = the recorded first free. `now_by` = the CURRENT free's site —
+**the same `site` argument threaded in from the public `kfree()`/`pool_free()`
+boundary**, not `__builtin_return_address(0)` inside `cache_free`. An earlier
+draft of this section said the latter, which would have compared two different
+stack frames: `cache_free` is `static` and reached via `kfree_locked` and
+`pool_free`, so the builtin there names an internal wrapper. Comparing a caller
+address against a wrapper address would make §6's equality test meaningless.
+Both fields now come from the same boundary.
 
 **Reading it (§NON-NEGOTIABLE 18).** These are kernel text addresses, and every
 build of this kernel loads at the same base, so an address alone does not

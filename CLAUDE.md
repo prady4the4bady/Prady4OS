@@ -203,9 +203,18 @@ have duplicated a live NSI. Verify against `syscall.h`, not against this line.
 71=`SYS_SYSINFO`; 72=`SYS_TIME`; 73=`SYS_DMESG`; 74=`SYS_MEMINFO`.)
 
 ### §INV.15 — Three CI greens rule
-A push yields exactly 2 suites per commit (push + pull_request events). A third
-green requires `gh run rerun` on the same SHA. "Both suites green" does NOT
-satisfy the 3-green rule.
+A push yields at most 2 suites per commit (push + pull_request events), and the
+`pull_request` suite does NOT always fire — verify, do not assume two.
+"Both suites green" does NOT satisfy the 3-green rule.
+
+**The third green comes from `workflow_dispatch`, not `gh run rerun`.**
+`.github/workflows/ci.yml:6-13` carries a `workflow_dispatch:` trigger and says
+why in its own comment: *"`gh run rerun` needs admin rights the project PAT does
+not have, and any other way to start a run is a push, which changes the SHA.
+workflow_dispatch lets a second, independent run be started on the same commit."*
+This line previously mandated `gh run rerun`, which the project cannot execute.
+Independent dispatched runs are also STRONGER evidence than re-attempts of one
+run. **Corrected 2026-08-23.**
 
 ### §INV.16 — `sched_create_blocked()` is the pattern for kernel threads
 Do NOT use `sched_create()` when a kernel thread needs its `->arg` set before it

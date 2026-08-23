@@ -17,10 +17,16 @@ EXTRA_SENTINEL="${EXTRA_SENTINEL:-}"
 # "post-exec (BUG)" line that proves execve wrongly returned. Empty by default.
 FORBIDDEN_SENTINEL="${FORBIDDEN_SENTINEL:-}"
 TIMEOUT_S="${TIMEOUT_S:-30}"
-# Serial capture file. Defaults to a private mktemp; override SERIAL_LOG=<path>
-# when the host's /tmp is unreliable (e.g. some WSL setups wipe /tmp mid-run,
-# corrupting long-timeout gates). CI leaves this unset — the default is used.
-SERIAL_LOG="${SERIAL_LOG:-$(mktemp)}"
+# Serial capture file. §NON-NEGOTIABLE 7: gate logs live under build/gatelogs/,
+# NEVER /tmp -- WSL wipes it mid-run and corrupts long-timeout gates. This used
+# to default to $(mktemp), i.e. /tmp, while the comment right here admitted /tmp
+# was unreliable. That default plus the unconditional delete below is why the
+# DDR-985 run-16 panic reached "#PF page fault" and no further: the vector=,
+# RIP= and CR2= lines existed and were thrown away. Override SERIAL_LOG=<path>
+# to place it elsewhere; CI leaves it unset and gets the repo-local default.
+__bt_root="$(cd "$(dirname "$0")/../.." && pwd)"
+mkdir -p "$__bt_root/build/gatelogs"
+SERIAL_LOG="${SERIAL_LOG:-$__bt_root/build/gatelogs/serial-$$.log}"
 
 # DDR-777 / BUG-1 diagnostics: KEEP_SERIAL=1 preserves the serial capture.
 #
