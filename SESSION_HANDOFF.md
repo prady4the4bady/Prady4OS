@@ -6978,3 +6978,67 @@ every heartbeat, so a recurrence will settle it.
 
 **State:** `main` = `ace232f`, clean and UNTAGGED (operator hold, DDR-985).
 `dev/phase1` = `23432af`, still RED — recovery is this branch, not yet merged.
+
+## Checkpoint 2026-08-23 (later) — PR #13 at `8d9fa4a`
+
+**CURRENT_ACTIVE_TASK: watch CI on `8d9fa4a`; 3 greens on that tip, then merge PR #13.**
+
+### What landed since `cb69da4`
+
+| commit | what |
+|---|---|
+| `cb69da4` | DDR-988 deferred lwIP work: drain-on-release, non-blocking RX |
+| `1e345d3` | DDR-988 §10: 3 socket-handle defects + stop overstating OPEN-1 |
+| `b383bef` | DDR-988 §11: a failed gate keeps its serial capture |
+| `2d3e6f0` | DDR-989: evresize/agentpanel = vruntime sampling starvation |
+| `de4a2e2` | DDR-988 §11.2: restore run isolation §11 silently removed |
+| `8d9fa4a` | DDR-988 §11.5: SKIP is not FAIL; empty captures removed |
+
+Kernel unchanged across the last three: **`e3919140872fd2ea`**, 1,069,450 B.
+
+### The two results worth carrying forward
+
+**1. The DDR-988 counters exonerated lwIP on their first CI failure.**
+`smoke-agentpanel` (shard 6, `cb69da4`) failed with `net_skip=0 net_defer=3
+net_rxdrop=0` — the timer never found `g_net_lock` contended, nothing dropped.
+The `smoke-evresize` failure on `3f6dbff` could only be left open because that
+build predates the reader. **Do not re-attribute this family to lwIP without a
+non-zero `net_skip`.**
+
+**2. DDR-989 — root cause of BOTH stalls, NOT implemented.**
+`rq_pop` picks smallest `dbg_vruntime` (NOT FIFO — the comment above it saying
+FIFO is stale and actively misleading). `sched_charge_elapsed` is reachable only
+from `sched_tick` against `current_thread`, so CPU time is **sampled at 100 Hz**.
+A thread yielding ~1074x/tick is never current at a sample instant, accrues ~0
+vruntime, and wins every pick forever; each voluntary switch resets quantum so
+`g_preempt_try` freezes and no timer preemption breaks it. Explains `preempt`/
+`supp` both flat, `rqdepth` pinned, two-pid alternation.
+**Before fixing: run DDR-989 §4's measurement.** It says what CONFIRMS and what
+REFUTES — if those pids' vruntime advances normally and is merely lower, the
+cause is weighting and the fix is the opposite one. Task #26.
+
+### Harness: three defects of mine, in sequence
+
+§11 (keep failed captures) reddened **8 of 10 shards** at `smoke-selftest` —
+deleting the capture had silently been providing run isolation for a harness
+reusing one `SERIAL_LOG` path. Fixing that, I misclassified the one `exit 0`
+SKIP among nine converted sites as a failure, and left empty captures neither
+kept nor deleted. All fixed, mutation-checked both ways.
+
+**New standing rule (DDR-988 §11.4): any change under `tools/qemu_runner/` must
+run `smoke-selftest` before push.** I picked local gates by what the C changes
+touched; `boot_test.sh` is touched by every gate.
+
+**Pattern worth remembering:** a deletion in a harness is rarely only a deletion,
+and "the gate still passes" caught none of the three — one needed CI, one needed
+looking at the directory afterwards.
+
+### State
+
+- `main` = `ace232f`, clean, **UNTAGGED** (operator hold, DDR-985). Unaffected.
+- `dev/phase1` = `23432af`, still RED. PR #13 is the recovery, not yet merged.
+- **OPEN-1 is OPEN.** A green suite is NOT grounds to close it (DDR-988 §10.4);
+  only a 20x `smoke-surfdestroy` on the merged tip is.
+- DDR free range: **DDR-990+** (989 allocated).
+- Still owed: DDR-987 §5's two-CPU `connect`/`close` hammer probe — the only
+  thing that could positively prove the lwIP fix. Unwritten.

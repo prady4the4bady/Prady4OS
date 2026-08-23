@@ -155,7 +155,7 @@ reentrant calls. **Do NOT revert this pattern.**
 Correct form ALWAYS: `pgrep -f "[q]emu-system-x86_64"` (bracket avoids self-match).
 
 ### §INV.4 — DDR number collision
-Free range: **DDR-989+** (936-988 are allocated; 985/986/987/988 landed 2026-08-23).
+Free range: **DDR-990+** (936-989 are allocated; 985/986/987/988/989 landed 2026-08-23).
 Before allocating ANY DDR number:
 `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` — must return empty in BOTH dirs.
 
@@ -369,7 +369,7 @@ could positively prove the lwIP fix. It is still unwritten. |
   right" was wrong too. `user/prism.c` ships against 95.
 - **`kernel.bin`**: **1,065,350 B** against the 1,572,864 B size gate — 507,514 B
   of headroom (DDR-973's probe costs the page-aligned 8,192 B every embedded probe does; DDR-981's NMI probe costs 4,104 B). The old "~545 KiB, 768 KiB ceiling" was stale in both terms.
-- **DDR free range: DDR-989+** (936-988 allocated; 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work)
+- **DDR free range: DDR-990+** (936-989 allocated; 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work, 989 = vruntime sampling starvation)
 - `make image` → zero warnings, `-Werror` enforced ✅
 - PR #5: **MERGED** as `7c6c67a`. PR #6: **MERGED 2026-08-23** as **`ace232f`**
   into `dev/phase1` (3 greens on tip `46ece3f` per §INV.15; the squashed tree is
