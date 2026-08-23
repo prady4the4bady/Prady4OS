@@ -21,7 +21,8 @@ set -u
 # Ordered most-specific first: [apfreeze] must win over the block symptoms it
 # causes, or a recurrence of B#3 would be filed under its own downstream effect.
 SIGS=(
-"AP freeze (B#3 / OPEN-2 root cause)|DDR-981|[apfreeze]"
+"OPEN-14 SFS unlink/rmdir intermittent|DDR-984|[sfs] unlink/rmdir FAIL"
+"AP freeze — CHECK FOR A PANIC ABOVE IT FIRST (DDR-979 sec.3)|DDR-981|[apfreeze]"
 "OPEN-13 kheap double-free|DDR-980 §2|KHEAP PANIC: kfree: double free"
 "OPEN-12 ring-0 panic|DDR-979|component: NEXUS isr"
 "B#3 downstream: completion timeout|DDR-981 §7|[vblk] compl wait timeout"

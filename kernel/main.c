@@ -1364,28 +1364,58 @@ static void fs_test_thread(void *arg) {
 
                 /* DDR-741: unlink (files) + rmdir (empty dirs) via tombstones. */
                 {
-                    int ok = 1;
+                    /* DDR-984: this probe used to collapse twelve assertions into
+                     * one `ok` flag and print a single word, so a failure said
+                     * only THAT it broke, never WHICH step or with what rc. That
+                     * is the DDR-824 lesson (the op= line naming the broken
+                     * operation contains none of the forbidden string, so it was
+                     * never printed) applied to a second probe — and it cost a
+                     * real CI capture: shard 4 on 0480657 reddened smoke-percpu
+                     * via GLOBAL_FORBIDDEN with nothing to diagnose, and 6/6
+                     * local re-runs did not reproduce it.
+                     *
+                     * Record the first failing step and its return code instead.
+                     * FAILURE PATH ONLY: the healthy boot still prints the same
+                     * single OK line, so no gate parser changes and no extra
+                     * steady-state output. */
+                    int ok = 1, badstep = 0; long badrc = 0;
                     struct vfs_file f;
+                    long rc;
+#define SFS_UNLINK_STEP(n, expr, want)                                        \
+                    do { rc = (long)(expr);                                   \
+                         if (ok && !(want)) { ok = 0; badstep = (n); badrc = rc; } \
+                    } while (0)
                     /* (1) create -> unlink -> gone from open + readdir. */
-                    if (vfs_create(cap, smnt, "/A.TXT", &f) != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/A.TXT") != 0) ok = 0;
-                    if (vfs_open(cap, smnt, "/A.TXT", &f) == 0) ok = 0;   /* must be gone */
+                    SFS_UNLINK_STEP(1, vfs_create(cap, smnt, "/A.TXT", &f), rc == 0);
+                    SFS_UNLINK_STEP(2, vfs_unlink(cap, smnt, "/A.TXT"), rc == 0);
+                    SFS_UNLINK_STEP(3, vfs_open(cap, smnt, "/A.TXT", &f), rc != 0);  /* must be gone */
                     /* (2) re-create the tombstoned name. */
-                    if (vfs_create(cap, smnt, "/A.TXT", &f) != 0) ok = 0;
-                    if (vfs_open(cap, smnt, "/A.TXT", &f) != 0) ok = 0;   /* back */
+                    SFS_UNLINK_STEP(4, vfs_create(cap, smnt, "/A.TXT", &f), rc == 0);
+                    SFS_UNLINK_STEP(5, vfs_open(cap, smnt, "/A.TXT", &f), rc == 0);  /* back */
                     /* (3) rmdir requires empty: /D/E/F -> /D not empty; leaf-first. */
-                    if (vfs_create(cap, smnt, "/D/E/F", &f) != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/D") == 0) ok = 0;         /* ENOTEMPTY */
-                    if (vfs_unlink(cap, smnt, "/D/E/F") != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/D/E") != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/D") != 0) ok = 0;
+                    SFS_UNLINK_STEP(6, vfs_create(cap, smnt, "/D/E/F", &f), rc == 0);
+                    SFS_UNLINK_STEP(7, vfs_unlink(cap, smnt, "/D"), rc != 0);        /* ENOTEMPTY */
+                    SFS_UNLINK_STEP(8, vfs_unlink(cap, smnt, "/D/E/F"), rc == 0);
+                    SFS_UNLINK_STEP(9, vfs_unlink(cap, smnt, "/D/E"), rc == 0);
+                    SFS_UNLINK_STEP(10, vfs_unlink(cap, smnt, "/D"), rc == 0);
                     char nm[256]; uint32_t sz; int saw_d = 0;
                     for (int i = 0; vfs_readdir(cap, smnt, "/", i, nm, &sz) == 0; i++)
                         if (nm[0]=='D'&&!nm[1]) saw_d = 1;
-                    if (saw_d) ok = 0;                                    /* /D gone from readdir */
+                    SFS_UNLINK_STEP(11, saw_d, rc == 0);                  /* /D gone from readdir */
                     /* (4) absent name. */
-                    if (vfs_unlink(cap, smnt, "/NOPE") == 0) ok = 0;
-                    kputs(ok ? "[sfs] unlink/rmdir OK\r\n" : "[sfs] unlink/rmdir FAIL\r\n");
+                    SFS_UNLINK_STEP(12, vfs_unlink(cap, smnt, "/NOPE"), rc != 0);
+#undef SFS_UNLINK_STEP
+                    if (ok) {
+                        kputs("[sfs] unlink/rmdir OK\r\n");
+                    } else {
+                        /* step= names WHICH assertion; rc= is what it returned.
+                         * Printed BEFORE the summary line the gates match on, so
+                         * GLOBAL_FORBIDDEN's 40-lines-of-context window carries
+                         * it (DDR-824). */
+                        kputs("[sfs] unlink/rmdir detail step="); kputdec((uint64_t)badstep);
+                        kputs(" rc="); kputdec((uint64_t)badrc); kputs("\r\n");
+                        kputs("[sfs] unlink/rmdir FAIL\r\n");
+                    }
                 }
 
                 /* Phase 5a: write each embedded static ELF to SFS, read it BACK
