@@ -382,7 +382,26 @@ struct proxy_sock {
     uint16_t head, tail;           /* head: producer (IRQ); tail: consumer (syscall) */
     volatile uint8_t state;
     uint8_t used;
+    /* DDR-987 sec.10. The owner lives HERE, not in sys_socket.c, so that the
+     * authority check and the operation happen under one lock. Previously
+     * sock_denied() read g_sock_owner[slot] unlocked and the syscall called
+     * psock_* afterwards, so another cpu could close and reuse the slot in
+     * between and the operation landed on a different connection. `gen` is
+     * monotonic and rides in the handle, so even the SAME owner reconnecting
+     * cannot be reached through a stale handle. */
+    uint32_t owner;                /* pid that claimed the slot; 0 = unowned */
+    uint32_t gen;                  /* generation of this claim; 0 = never live */
 };
+
+/* Handle = (gen << 3) | slot. PSOCK_N is 8, so the slot is exactly 3 bits and a
+ * decode can never be out of range. g_psock_gen starts at 1, so a handle of 0 --
+ * which user/capnettest.c passes deliberately -- carries gen 0 and matches no
+ * live slot. Ring 3 treats the handle as opaque (agent_base.c only tests < 0). */
+#define PSOCK_SLOT_BITS 3
+#define PSOCK_H(g, sl)  ((int)(((g) << PSOCK_SLOT_BITS) | (uint32_t)(sl)))
+#define PSOCK_SLOT(h)   ((int)((uint32_t)(h) & ((1u << PSOCK_SLOT_BITS) - 1u)))
+#define PSOCK_GEN(h)    ((uint32_t)(h) >> PSOCK_SLOT_BITS)
+static uint32_t g_psock_gen = 1;
 static struct proxy_sock g_ps[PSOCK_N];
 
 static uint16_t ps_avail(struct proxy_sock *s) { return (uint16_t)((s->head - s->tail) & PSOCK_MASK); }
@@ -422,8 +441,33 @@ static err_t ps_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
     return ERR_OK;
 }
 
+/* DDR-987 sec.10. Resolve a handle to its slot, with authority, UNDER THE LOCK.
+ * Errno shape is load-bearing and matches the pre-existing DDR-731 contract that
+ * user/capnettest.c gates on:
+ *   - a handle naming a slot this caller does not own -> PSOCK_DENIED (-EPERM),
+ *     INCLUDING an unused slot. capnettest passes handle 0 while owning nothing
+ *     and requires exactly -EPERM, so "not yours" must outrank "not open".
+ *   - a slot the caller DOES own but whose generation no longer matches, or that
+ *     is closed -> PSOCK_STALE (-EBADF). That is a stale handle, not a denial.
+ * Sovereign bypasses the owner test only; a stale handle still fails for it. */
+#define PSOCK_DENIED (-2)
+#define PSOCK_STALE  (-1)
+
+static int psock_resolve(int h, uint32_t owner, int sovereign,
+                         struct proxy_sock **out) {
+    if (h < 0)
+        return PSOCK_STALE;
+    struct proxy_sock *s = &g_ps[PSOCK_SLOT(h)];
+    if (!sovereign && s->owner != owner)
+        return PSOCK_DENIED;
+    if (!s->used || s->gen != PSOCK_GEN(h))
+        return PSOCK_STALE;
+    *out = s;
+    return 0;
+}
+
 /* Open a connection to host (big-endian a.b.c.d packed) : port. Returns slot. */
-int psock_connect(uint32_t host, uint16_t port) {
+int psock_connect(uint32_t host, uint16_t port, uint32_t owner) {
     if (!g_net_ready) return -1;
 
     /* DDR-987 sec.2: the scan-and-claim MUST be inside the lock. Unlocked, two
@@ -449,9 +493,11 @@ int psock_connect(uint32_t host, uint16_t port) {
     s->head = s->tail = 0;
     s->used = 1;
     s->state = PS_CONNECTING;
+    s->owner = owner;                 /* DDR-987 sec.10: claimed under the lock */
+    s->gen   = g_psock_gen++;         /* monotonic; never reuses a live handle */
     s->pcb = tcp_new();
     if (!s->pcb) {
-        s->rx = 0; s->used = 0; s->state = PS_CLOSED;   /* release the slot under the lock */
+        s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
         spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
         pmm_free_page((uint64_t)(uintptr_t)rxpage);     /* free the page AFTER release */
         return -1;
@@ -470,33 +516,37 @@ int psock_connect(uint32_t host, uint16_t port) {
          * (used stayed 1) and the RX page. Roll the whole claim back under the
          * lock; free the page after release, as everywhere else here. */
         tcp_abort(s->pcb);
-        s->pcb = 0; s->rx = 0; s->used = 0; s->state = PS_CLOSED;
+        s->pcb = 0; s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
         spin_unlock_irqrestore(&g_net_lock, fl);
         pmm_free_page((uint64_t)(uintptr_t)rxpage);
         return -1;
     }
+    int handle = PSOCK_H(s->gen, slot);             /* DDR-987 sec.10 */
     spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
-    return slot;
+    return handle;
 }
 
-int psock_state(int slot) {
-    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
-    return g_ps[slot].state;
+int psock_state(int h, uint32_t owner, int sovereign) {
+    struct proxy_sock *s;
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);   /* DDR-987 sec.10 */
+    int rc = psock_resolve(h, owner, sovereign, &s);
+    if (rc == 0) rc = (int)s->state;
+    spin_unlock_irqrestore(&g_net_lock, fl);
+    return rc;
 }
 
 /* Drain up to len bytes into kbuf. Returns bytes copied (0 if the ring is empty);
  * the caller distinguishes EOF/timeout via psock_state(). */
-int psock_read(int slot, uint8_t *kbuf, int len) {
-    if (slot < 0 || slot >= PSOCK_N) return -1;
-    struct proxy_sock *s = &g_ps[slot];
+int psock_read(int h, uint32_t owner, int sovereign, uint8_t *kbuf, int len) {
+    struct proxy_sock *s;
     uint64_t fl;
     fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
-    /* DDR-987 sec.2: revalidate INSIDE the lock. The pre-lock check was a TOCTOU
-     * window -- psock_close on another cpu could retire the slot and free s->rx
-     * between the check and the acquire, leaving this loop reading a freed page. */
-    if (!s->used || !s->rx) {
+    /* DDR-987 sec.10: authority AND liveness resolved under the same lock that
+     * guards the operation, so a close+reuse on another cpu cannot slip between. */
+    int rc = psock_resolve(h, owner, sovereign, &s);
+    if (rc != 0 || !s->rx) {
         spin_unlock_irqrestore(&g_net_lock, fl);
-        return -1;
+        return (rc != 0) ? rc : PSOCK_STALE;
     }
     int n = 0;
     while (n < len && s->tail != s->head) {
@@ -507,17 +557,18 @@ int psock_read(int slot, uint8_t *kbuf, int len) {
     return n;
 }
 
-int psock_write(int slot, const uint8_t *kbuf, int len) {
-    if (slot < 0 || slot >= PSOCK_N) return -1;
-    struct proxy_sock *s = &g_ps[slot];
+int psock_write(int h, uint32_t owner, int sovereign, const uint8_t *kbuf, int len) {
+    struct proxy_sock *s;
     uint64_t fl;
     fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
-    /* DDR-987 sec.2: revalidate INSIDE the lock -- the pre-lock used/state/pcb
-     * check could pass and psock_close then detach the pcb before the acquire,
-     * so tcp_sndbuf() would run on a freed pcb. */
-    if (!s->used || s->state != PS_OPEN || !s->pcb) {
+    int rc = psock_resolve(h, owner, sovereign, &s);   /* DDR-987 sec.10 */
+    if (rc != 0) {
         spin_unlock_irqrestore(&g_net_lock, fl);
-        return -1;
+        return rc;
+    }
+    if (s->state != PS_OPEN || !s->pcb) {
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        return PSOCK_STALE;
     }
     u16_t snd = tcp_sndbuf(s->pcb);
     if (len > (int)snd) len = (int)snd;
@@ -530,19 +581,17 @@ int psock_write(int slot, const uint8_t *kbuf, int len) {
     return (e == ERR_OK) ? len : -1;
 }
 
-int psock_close(int slot) {
-    if (slot < 0 || slot >= PSOCK_N) return -1;
-    struct proxy_sock *s = &g_ps[slot];
+int psock_close(int h, uint32_t owner, int sovereign) {
+    struct proxy_sock *s;
     uint64_t fl;
     fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
-    /* DDR-987 sec.9: revalidate INSIDE the lock, as psock_read/psock_write
-     * already do. Without it: cpu A passes the pre-lock `used` test, cpu B
-     * closes and retires the slot, cpu C connects and claims the SAME slot, and
-     * cpu A then acquires the lock and tears down cpu C's pcb and RX page. The
-     * sec.2 fix applied this rule to read and write and missed close. */
-    if (!s->used) {
+    /* DDR-987 sec.9 + sec.10: resolve authority AND generation inside the lock.
+     * sec.9 stopped cpu A tearing down cpu C's replacement socket after a
+     * close+reuse; sec.10 additionally stops it when C is the same owner. */
+    int rc = psock_resolve(h, owner, sovereign, &s);
+    if (rc != 0) {
         spin_unlock_irqrestore(&g_net_lock, fl);
-        return -1;
+        return rc;
     }
     if (s->pcb) {
         tcp_arg(s->pcb, NULL);
@@ -557,10 +606,25 @@ int psock_close(int slot) {
      * while s->used was still 1, so a concurrent psock_read could copy out of a
      * page already returned to the PMM. */
     uint8_t *rxpage = s->rx;
-    s->rx = 0; s->used = 0; s->state = PS_CLOSED;
+    s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
     spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     if (rxpage) pmm_free_page((uint64_t)(uintptr_t)rxpage);
     return 0;
+}
+
+/* DDR-987 sec.10 + DDR-731 exit reap. Owned by the port now that `owner` lives
+ * on the slot: close every slot this pid holds. Each close re-enters the lock,
+ * which is correct -- the lock is not held across the loop, so an ISR waiting on
+ * it is never blocked for more than one teardown (sec.8's rule). */
+void psock_reap_owner(uint32_t pid) {
+    for (int i = 0; i < PSOCK_N; i++) {
+        uint64_t fl = spin_lock_irqsave(&g_net_lock);
+        int live = (g_ps[i].used && g_ps[i].owner == pid);
+        int h = live ? PSOCK_H(g_ps[i].gen, i) : -1;
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        if (live)
+            psock_close(h, pid, 0);
+    }
 }
 
 /* ---- entry points (declared in pradyos_net.h) ---------------------------- */

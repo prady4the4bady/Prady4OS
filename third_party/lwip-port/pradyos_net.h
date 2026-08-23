@@ -10,9 +10,14 @@ void net_poll_tick(void);  /* drive lwIP timers; call from the PIT tick (~every 
 /* Ring-3 proxy sockets (ADR-027). The kernel owns the lwIP PCB; ring 3 holds the
  * returned slot index. Plain ints/buffers only (no lwIP types) so the syscall
  * layer can call these without the lwIP include surface. */
-int psock_connect(uint32_t host_be, uint16_t port);    /* -> slot(0..7) | -1 */
-int psock_state(int slot);                              /* PS_* (0=CLOSED..4=ERR) | -1 */
-int psock_read(int slot, uint8_t *kbuf, int len);       /* bytes drained (0 if empty) | -1 */
-int psock_write(int slot, const uint8_t *kbuf, int len);/* bytes written | -1 */
-int psock_close(int slot);                              /* 0 | -1 */
+/* DDR-987 sec.10: every proxy-socket call carries the caller's identity, because
+ * authority must be checked under the same lock as the operation. The returned
+ * value is an opaque HANDLE ((gen << 3) | slot), not a bare slot index.
+ * Errors: -1 stale/bad handle (-EBADF), -2 not this caller's slot (-EPERM). */
+int psock_connect(uint32_t host_be, uint16_t port, uint32_t owner);
+int psock_state(int h, uint32_t owner, int sovereign);
+int psock_read(int h, uint32_t owner, int sovereign, uint8_t *kbuf, int len);
+int psock_write(int h, uint32_t owner, int sovereign, const uint8_t *kbuf, int len);
+int psock_close(int h, uint32_t owner, int sovereign);
+void psock_reap_owner(uint32_t pid);
 #endif

@@ -376,3 +376,70 @@ the owner under `g_net_lock` in all three operations. That changes the
 slot-handle contract across the syscall/lwIP-port boundary, so it is recorded
 here for a decision rather than taken unilaterally inside a PR whose remit is the
 ring-0 panic.
+
+---
+
+## 10. Slot reuse — the cross-layer TOCTOU, fixed (operator decision)
+
+Raised in the second review round and deferred in §9.4 as out of remit. The
+operator's call was to fix it before merging rather than tag over it, so §9.4's
+design is now built.
+
+### The defect
+
+`sock_denied()` (`sys_socket.c`) read `g_sock_owner[slot]` **with no lock**, and
+the syscall then called `psock_*` afterwards. Between those two points another
+cpu could close the socket and a third could claim the same numeric slot, so the
+operation landed on a **different connection** than the one whose ownership was
+approved. A slot index cannot identify a connection across reuse. That is a
+CAP_NET isolation break (DDR-731).
+
+Pre-existing: the window predates the lock. §2 narrowed it by moving the claim
+inside `g_net_lock`, but narrowing a race is not closing one.
+
+### The fix — delete the unlocked check rather than guard it
+
+The authority read and the operation were in **different layers with no common
+lock**, so no amount of re-checking in `sys_socket.c` could make them atomic.
+The owner therefore moves onto the object it describes:
+
+- `struct proxy_sock` gains `owner` (claiming pid) and `gen` (monotonic).
+- `g_sock_owner[]` and `sock_denied()` are **deleted**.
+- `psock_resolve()` validates handle -> slot, generation, and owner **inside
+  `g_net_lock`**, in the same critical section as the operation it authorises.
+- Every entry point (`read`/`write`/`close`/`state`) takes the caller's pid and
+  sovereign flag and resolves through it. `psock_reap_owner()` moves here too.
+
+The handle becomes `(gen << 3) | slot`. `PSOCK_N` is 8, so the slot is exactly
+3 bits and a decode is never out of range. Ring 3 treats it as opaque —
+`agent_base.c` only tests `fd < 0`, and every range check was kernel-side.
+
+`gen` is what a bare owner check would miss: owner alone rejects a *different*
+process reusing the slot, but not the **same** process reconnecting. The
+generation rejects both.
+
+### The error shape is load-bearing — and it is not the tidy one
+
+`user/capnettest.c:53-54` passes **raw handle 0**, owning nothing, and requires
+exactly `-EPERM`. So the ordering must be:
+
+| handle | result | why |
+|---|---|---|
+| in range, not the caller's — **including an unused slot** | `-EPERM` | "not yours" outranks "not open" (DDR-731) |
+| the caller's own slot, stale `gen` or closed | `-EBADF` | a stale handle is not a denial |
+| sovereign | owner test bypassed; `gen`/`used` still enforced | administration, not impersonation |
+
+Resolving an unused slot to `-EBADF` — the semantically tidier answer — turns
+`smoke-capnet` red. The gate encodes a real decision from DDR-731 and it wins.
+
+### Verification
+
+`smoke-capnet` (the CAP_NET ownership gate) passes, which is the one that could
+have caught an errno regression. Plus the network, egress, agent, shell and SMP
+gates; see the commit.
+
+**Not claimed:** that this makes the socket layer race-free. It closes the
+authority-vs-operation window and slot reuse. It does not audit `ps_recv` /
+`ps_err` / `ps_connected` re-entrancy (§6), and there is still no gate that
+exercises close+reuse from two cpus — the hammer probe of §5 remains the missing
+piece for both this and the original race.
