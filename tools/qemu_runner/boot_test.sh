@@ -64,15 +64,19 @@ serial_rm() {
 # the PASS path deletes. KEEP_SERIAL still forces retention on a passing run.
 serial_keep_fail() {
     for __f in "$@"; do
-        [ -s "$__f" ] || continue
+        [ -e "$__f" ] || continue
+        # An EMPTY capture preserves nothing. sec.11 leaked one per SKIP/host-env
+        # exit because it only skipped them; it must remove them.
+        if [ ! -s "$__f" ]; then rm -f "$__f"; continue; fi
         # Copy to a unique name: the path itself may be reused (and now
         # truncated) by the very next gate, which would destroy the evidence
         # this function exists to preserve.
         __k="${__f}.fail-$$"
         if cp -f "$__f" "$__k" 2>/dev/null; then
             echo "[boot_test] FAIL — capture kept: $__k"
+            rm -f "$__f"          # evidence now lives in the .fail copy
         else
-            echo "[boot_test] FAIL — capture kept: $__f"
+            echo "[boot_test] FAIL — capture kept: $__f"   # copy failed: keep it
         fi
     done
     return 0
@@ -99,7 +103,7 @@ QEMU_ERR="$__bt_root/build/gatelogs/qemuerr-$$.log"
 if [ ! -f "$IMG" ]; then
     echo "[smoke] no bootable image at '$IMG' yet — expected during Phase 0."
     echo "[smoke] SKIP (nothing to boot)."
-    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
+    serial_rm "$SERIAL_LOG" "$QEMU_ERR"   # DDR-988 sec.11.5: SKIP is not a FAIL
     exit 0
 fi
 

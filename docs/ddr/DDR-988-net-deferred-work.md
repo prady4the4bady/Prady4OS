@@ -427,3 +427,50 @@ and `boot_test.sh` is touched by **every** gate, including the one whose only
 job is to test `boot_test.sh` itself. A harness change needs the harness's own
 gate, and that is not something to rediscover next time: **any change under
 `tools/qemu_runner/` must run `smoke-selftest` before push.**
+
+### 11.5 SKIP is not FAIL — and an empty capture preserves nothing
+
+The 11.2 fix was verified by its own gate and still shipped two defects, both
+found by checking a detail the gates do not assert on: three zero-byte
+`qemuerr-*.log` files left behind by seven **passing** gates.
+
+**Cause 1 — I converted the call sites by pattern, not by meaning.** §11 replaced
+every `serial_rm "$SERIAL_LOG" "$QEMU_ERR"` except the last with
+`serial_keep_fail`, on the assumption that "not the final PASS site" implies
+"failure site". It does not. Classifying the nine by the exit code that follows:
+
+| exit | sites | failure? |
+|---|---|---|
+| `exit 0` | 1 (the `SKIP (nothing to boot)` path) | **no** |
+| `exit 1` / `exit 3` | 8 | yes |
+
+The SKIP path is a clean no-op — no image to boot yet, "expected during Phase 0"
+— and §11 made it announce `FAIL — capture kept` and leak an empty file. Exactly
+one of the nine was misclassified, which is what makes a mechanical
+find-and-replace across exit paths a bad way to change exit-path semantics.
+
+**Cause 2 — `serial_keep_fail` skipped empty files instead of removing them.**
+It tested `[ -s "$__f" ] || continue`, so a zero-byte capture was neither kept
+nor deleted. Every host-env failure (QEMU refused to start, OVMF missing) and
+every SKIP left a 0-byte file in `build/gatelogs/`. An empty capture preserves
+nothing by definition; keeping it is not caution, it is litter, and litter in
+the evidence directory makes real captures harder to find.
+
+**Fixes:** the SKIP path returns to `serial_rm`; `serial_keep_fail` removes
+empty files, and on a successful copy removes the original (the evidence lives
+in the `.fail-<pid>` copy, which the next run's truncate cannot reach).
+
+**Verified both directions again:**
+
+- `smoke-selftest` 7/7; `smoke-net`, `smoke-capnet`, `smoke-shell` green, with
+  **0** leftover files.
+- A deliberately failed gate keeps **both** captures under unique names:
+  `serial-28255.log.fail-28255` (7,879 B) and `qemuerr-28255.log.fail-28255`
+  (70 B) — the latter being exactly the file §11.3 moved out of `/tmp`, now
+  actually surviving a failure.
+
+**The pattern across 11.2 and 11.5 is worth naming.** Both were caused by
+changing a cleanup path without enumerating what that path was doing: 11.2 lost
+run isolation, 11.5 lost the SKIP/FAIL distinction. A deletion in a harness is
+rarely only a deletion, and "the gate still passes" did not catch either one —
+11.2 needed CI and 11.5 needed looking at the directory afterwards.
