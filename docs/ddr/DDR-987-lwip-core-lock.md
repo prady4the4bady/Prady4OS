@@ -164,3 +164,67 @@ length can resolve.
   from inside the lock and must not call back into locked entry points.
 - Not claimed: any performance figure. A global lock over the stack is a
   throughput ceiling; measuring it is post-1.0 work.
+
+---
+
+## 7. The first cut was incomplete — two defects found in review
+
+Recorded here rather than silently amended, because the *kind* of miss matters:
+this DDR's whole thesis is "an unguarded lwIP entry point", and the first cut
+**left another unguarded entry point**.
+
+### 7.1 P0 — the virtio RX ISR was still bypassing the lock
+
+`kernel/drivers/net/virtio_net.c:183` registers `net_complete` on **MSI-X vector
+54**; `net_complete` (`:60`) calls `g_rx_cb(...)` at `:76`, and that callback is
+`pradyos_netif_rx`, which runs `pbuf_alloc` / `pbuf_take` / `g_netif.input()`
+(→ `ethernet_input` → `ip_input` → `tcp_input`) — **lwIP core, from an
+interrupt, unlocked**. `net_irq` (INTx, `:90`) reaches the same code.
+
+§4 locked the *timer* ISR and missed the *network RX* ISR, which is the more
+frequent of the two. An RX interrupt on cpu B could enter `tcp_input` while cpu
+A held `g_net_lock` in `tcp_output` — exactly the race this DDR exists to close.
+
+**The fix has a trap.** The lock CANNOT go inside `pradyos_netif_rx`:
+`net_fuzz_test()` (`:298`, `:306`) calls it from **inside `net_init()`'s locked
+region**, and `g_net_lock` is not recursive — wrapping the callee would
+self-deadlock at boot. So the lock goes in an ISR-only wrapper,
+`pradyos_netif_rx_isr`, which is what `virtio_net_set_rx()` now registers; the
+raw function stays for callers that already hold the lock.
+
+Checked for the reverse recursion and there is none: `netif_poll_all` is lwIP's
+own loopback-queue drain (`netif.c:1322`), not a virtio path, so
+`net_poll_tick` → `netif_poll_all` cannot re-enter the RX callback. And a cpu
+holding the lock has interrupts disabled locally (`irqsave`), so it cannot take
+its own RX interrupt.
+
+### 7.2 P1 — the proxy-socket slots were not serialized
+
+Three TOCTOU windows, all outside the lock:
+
+| site | window |
+|---|---|
+| `psock_connect` | scanned and claimed `g_ps[slot]` **before** acquiring — two cpus could pick the same `!used` slot, both `tcp_new()`, both return the same slot number: one pcb leaked, two owners for one `proxy_sock` |
+| `psock_read` / `psock_write` | validated `used` / `state` / `pcb` **before** acquiring — `psock_close` on another cpu could retire the slot in between, so the loop read a freed RX page or `tcp_sndbuf()` ran on a detached pcb |
+| `psock_close` | freed `s->rx` **after** releasing, while `used` was still 1 — a concurrent `psock_read` could copy out of a page already returned to the PMM |
+
+All four now claim, validate and retire **under** the lock; page frees moved
+after release (never free while holding it). Lock order gains `net -> pmm`,
+consistent with the existing `net -> heap` (kmalloc reaches the PMM anyway).
+
+### 7.3 What review confirmed as already sound
+
+- `psock_connect` has one acquire and one release on each of its two paths.
+- `ps_recv` / `ps_err` / `ps_connected` do not re-enter a locked `psock_*` /
+  `net_*` entry point; their lwIP calls run inside the caller's critical section.
+- No `heap -> net` edge exists, so the `net -> heap` order has no cycle.
+- No yield, scheduler wait, `copyin` or `copyout` inside any locked region.
+
+### 7.4 The lesson worth keeping
+
+Two independent misses in one change, both of the same shape: *an entry point
+nobody enumerated*. Before declaring a lock complete, enumerate entry points
+**from the callee outward** — every registration (`msix_register`,
+`virtio_net_set_rx`, `irq` hooks), not just the call sites that are easy to grep
+from the top. §INV.23's sibling lesson: a guard that is present is not the same
+as a guard that is sufficient.
