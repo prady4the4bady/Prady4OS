@@ -142,6 +142,27 @@ if geom_title:
 
 rounds = 0
 while True:
+    # DDR-983: RE-RESOLVE before every click, not just once.
+    #
+    # Resolving once is correct only for a target that never moves. smoke-wmmax's
+    # second injection targets the max box AFTER the window has been maximized
+    # and relocated to (8,26) at 512x512 — a different place entirely. Its
+    # readiness sentinel (the client's PRADYOS_EV_RESIZE_OK) fires when the
+    # CLIENT acks the resize, which is before the compositor has necessarily
+    # re-composited and re-emitted PRADYOS_WM_GEOM for the moved window. A
+    # resolve at that instant returns the PRE-move coordinates and every
+    # subsequent retry re-clicks that same stale point: measured, the gate
+    # failed "restore click did not un-maximize" with both injectors reporting
+    # the identical mx=5317,5596.
+    #
+    # resolve_geometry() already takes the NEWEST matching line ("newest wins:
+    # layout can change"), so re-running it per round is exactly what that
+    # comment anticipated — the caller was the part that assumed a static
+    # target. A failed re-resolve keeps the previous coordinates rather than
+    # falling back to a default pixel, preserving the no-guessed-coordinate
+    # property established above.
+    if geom_title:
+        resolve_geometry()
     click()
     rounds += 1
 
