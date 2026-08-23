@@ -89,6 +89,12 @@ void idt_load_ap(void) {
     idt_load(&g_idtr);
 }
 
+/* DDR-979 §6: panic-printer arbitration. g_panic_claimed is the one-winner
+ * latch; g_panic_extra counts CPUs that panicked while the winner was printing
+ * and therefore stayed silent. Both are read by the heartbeat. */
+uint32_t g_panic_claimed;
+uint64_t g_panic_extra;
+
 static void dump_line(const char *label, uint64_t v) {
     kputs(label);
     kputhex(v);
@@ -279,6 +285,11 @@ static void timer_tick(struct regs *r) {
          * cost DDR-980 removed was per-CPU work plus ~30 chars, not this. */
         { extern uint64_t g_yield_masked;
           kputs(" ymask="); kputdec(g_yield_masked); }
+        /* DDR-979 §6: panics that stayed silent so the winner's dump stayed
+         * readable. Nonzero means MORE THAN ONE CPU panicked this boot — which
+         * the old unserialised printer showed only as a garbled dump. */
+        { extern uint64_t g_panic_extra;
+          if (g_panic_extra) { kputs(" panics_silent="); kputdec(g_panic_extra); } }
         /* DDR-890: how much did switch_wait_offcpu_sched spin in this window?
          * spins is the total across CPUs; max/cpu name the busiest one. This is
          * the data that decides whether the DDR-887 preemption-suppression
@@ -606,6 +617,32 @@ void isr_dispatch(struct regs *r) {
      * panic into a silent machine-wide hang. Drop it before printing: the path
      * is terminal and the lock guards only cosmetic line atomicity. */
     console_line_force_release();
+
+    /* DDR-979 §6: only the FIRST panicking CPU prints.
+     *
+     * The release above is required (DDR-970: a ring-0 fault skips the ring-3
+     * trylock branch, so a CPU halting here could still hold g_line_lock and
+     * hang the machine) — but it leaves the dump completely unserialised, and
+     * dump_line is three separate unlocked calls. Two CPUs panicking at once
+     * then interleave inside kputhex, and since a hex digit is 4 bits, four
+     * interleaved digits are a 16-bit shift: that is how OPEN-12's capture came
+     * back with RIP=0x0000FFFFFFFF8001 and RBP == RSP >> 16, which reads exactly
+     * like a misaligned exception frame and is not one.
+     *
+     * Re-locking would reinstate the deadlock DDR-970 removed. Claiming instead
+     * keeps that property and makes the dump readable, which is the
+     * precondition for diagnosing the #GP at all. Losers print NOTHING — even a
+     * one-line "me too" would interleave with the winner's dump and reintroduce
+     * the problem — and instead bump a counter the heartbeat surfaces, so a
+     * second panic is recorded rather than silently dropped. */
+    {
+        uint32_t expected = 0;
+        if (!__atomic_compare_exchange_n(&g_panic_claimed, &expected, 1u, 0,
+                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            __atomic_add_fetch(&g_panic_extra, 1, __ATOMIC_RELAXED);
+            for (;;) __asm__ volatile("cli; hlt");
+        }
+    }
 
     kputs("\r\n*** NEXUS KERNEL PANIC ***\r\n");
     kputs("component: NEXUS isr\r\n");

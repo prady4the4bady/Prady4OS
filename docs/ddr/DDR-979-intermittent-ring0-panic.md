@@ -188,3 +188,58 @@ distinguishable:
 Discriminator: have the panic path print `(uint64_t)r` itself and
 `r->vector`/`r->err_code` (known-good fields) alongside `%rsp % 16`. If `r` is
 8-aligned while the printed `RSP` is not, it is candidate 2.
+
+### 5. CORRECTION to §1 — the frame is probably fine; the CONSOLE is unlocked
+
+§1 concluded "the frame is being read 2 bytes off". That is not established, and
+a simpler explanation fits the same evidence better. Recording the correction
+because the two readings lead to completely different fixes.
+
+**The dumper cannot independently be misaligned.** `dump_line` prints `r->rip`,
+`r->rsp` … — plain struct member reads off the `r` the dispatcher was handed.
+There is no pointer arithmetic to get wrong. So §1's reading requires `r` itself
+to be misaligned, i.e. a genuine stack bug.
+
+**But the panic path prints with no console lock, by design.** DDR-970 added
+`console_line_force_release()` immediately before the dump, for a good reason
+quoted in the code: a ring-0 fault skips the ring-3 trylock branch, so a CPU
+that was mid-`[hb]` still holds `g_line_lock` and is about to halt forever
+holding it, which would turn a diagnosable panic into a machine-wide hang.
+
+The consequence was not carried forward: **from that point the dump is
+completely unserialised**, and `dump_line` is three separate unlocked calls
+(`kputs` label, `kputhex` value, `kputs` newline). §2 established that **two
+panics occurred in this boot**. Two CPUs in `kputhex` at once interleave
+character by character, and hex digits are exactly 4 bits each — so four
+interleaved digits *are* a 16-bit shift. `RIP=0x0000FFFFFFFF8001` is 4 digits
+from one stream followed by 12 from the other, and `RBP == RSP >> 16` is the
+same splice seen twice.
+
+**Both hypotheses predict a 16-bit shift**, which is why §1 looked convincing.
+The console one additionally explains why the log shows one dump's tail
+(`backtrace: / halting.`) immediately before the other's header, and it needs no
+new defect — only a consequence of a fix already in the tree.
+
+§1's *operational* conclusion stands unchanged and is the important part: **no
+register value in that dump names anything.** What changes is the repair.
+
+### 6. The fix — one printer, not one lock
+
+Re-locking the panic path would reintroduce exactly the deadlock DDR-970
+removed. Instead, let only the **first** CPU to panic print:
+
+- claim with an atomic CAS on a `g_panic_claimed` latch;
+- the winner prints the full dump as today, still after
+  `console_line_force_release()`, so DDR-970's property is untouched;
+- losers print **nothing** and halt — a one-line "me too" marker would
+  interleave with the winner's dump and reintroduce the problem it is meant to
+  avoid;
+- so that a second panic is not silently lost, losers bump a counter surfaced as
+  one fixed-width numeric on the existing `[hb]` line (the same justification
+  `ymask` carries: a global read on a line already printed once per 500 ticks).
+
+This makes every future OPEN-12 capture readable, which is the precondition for
+diagnosing it at all — and it is why no fix for the #GP itself is attempted in
+this DDR. The vector (0x0D) and error code (0) remain the only trustworthy
+fields, and they come from `r->vector`/`r->err_code`, printed before the
+interleave has much chance to start.
