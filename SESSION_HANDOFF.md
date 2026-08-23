@@ -6844,3 +6844,87 @@ Then Group E's DDR batch (§4.3 says write that cluster's DDRs in one pass).
 - kernel.bin 1065350 B / 1572864 B gate (507514 B headroom)
 - sha256 2db55a7b79780806676d41aaa09aa1bfa7aba5ac525ff4fe1772480344be40d7
 - HEAD 44ccce8 on dev/phase1-seyp3n
+
+---
+
+## CHECKPOINT 2026-08-23 ~03:15 UTC — tip `c487b17`
+
+### A process problem to fix FIRST next session
+
+**Nine pushes in ~4 hours meant CodeRabbit never completed a single review** —
+every attempt ended "head commit changed during the review" or hit the rate
+limit — and **the 3-green count reset nine times.** Both are self-inflicted and
+both block the release path.
+
+**Next session: land at most one push, then HOLD.** The release needs 3 greens
+on ONE SHA (§INV.15: a push yields 2 suites; the third needs an explicit re-run
+on that same SHA). Nothing below is more urgent than that.
+
+### Done this session
+
+| commit | what |
+|---|---|
+| `44ccce8` | CodeRabbit review: 4 code fixes (NMI frame walk guard, ramdisk `lba+count` overflow, ACPI extended-checksum validation, `dest_cpu_idx` after MSI-X) + 4 doc corrections |
+| `cb5a732` | directive §6 automation: campaign runner, failure classifier, risk tiers, **shard matrix 6→10 (makespan 38.6→20.8 min)**, status dashboard, task queue |
+| `afd1a7f`/`d47122c` | DDR-982 — capability bits + `tcb.agent_caps`; enforcement withdrawn (see below) |
+| `91525e2`/`96a948e` | DDR-983 — §INV.5: publish `mx=`, re-resolve geometry per click |
+| `0480657`/`c487b17` | DDR-979 — OPEN-12 artefact read, then **corrected**; one-winner panic printer |
+
+### Two corrections I made to my own work — read these before trusting the DDRs
+
+1. **DDR-982 §5.** I designed enforcement at action dispatch, then found
+   `aether.h:22-30` states the six 3C action types are *deliberately absent*:
+   "declaring an enum value with no enforcement is worse than omitting it."
+   There is nothing to enforce against. A and B shipped; C and D withdrawn.
+2. **DDR-979 §5.** I read OPEN-12's garbled register dump as a 2-byte-misaligned
+   exception frame. Wrong — `console_line_force_release()` (DDR-970) leaves the
+   panic printer unserialised, and two concurrent panics interleave inside
+   `kputhex`; a hex digit is 4 bits, so four interleaved digits ARE the 16-bit
+   shift. Both hypotheses predicted the same signature.
+
+### OPEN-12 — the artefact is finally readable
+
+DDR-979's `run_shard.sh 2>&1` worked. **#GP, vector 0x0D, error 0, on an AP,
+which halts it. Two panics in the boot.** Nothing else in that dump is
+trustworthy. Fix shipped: first CPU to panic claims a latch and prints; losers
+stay silent and bump `panics_silent=` on the heartbeat.
+
+**Not gated** — reproducing two concurrent panics means reproducing OPEN-12
+(~1/24 runs). Verified by inspection + no-regression only; the proof is the next
+capture coming back readable.
+
+### `[apfreeze]` has a false-attribution mode
+
+It fired on `44ccce8` and I first read it as a B#3 regression. It was not: the
+AP had **panicked and halted**, so its ticks stopped and the detector NMI'd it
+inside the panic printer. **Refined reopen condition for B#3: an `[apfreeze]`
+with NO preceding kernel panic, whose RIP resolves into a spin or scheduler path
+rather than `isr_dispatch`.**
+
+Resolving that RIP also needed the **`BSP_LIVENESS=1`** build, not the default —
+`smoke-rqstress-liveness` rebuilds with it and `main.o` links before `idt.o`, so
+`timer_tick` moves `0x9be0`→`0x9c10`. §NON-NEGOTIABLE 18, live.
+
+### Still open for the operator (blocks 4 Group F rows)
+
+**DDR-982 §5.5:** should the four absent action types be declared, accepting
+three that can only return "not implemented", to have a boundary to enforce? I
+lean **no** — that is `aether.h`'s documented position — but it reverses a repo
+decision either way.
+
+### Numbers (`tools/ci/status_report.sh`)
+
+- 149 gates / 10 shards / **20.8 min makespan** / 13 fast-tier / 136 strict
+- Backlog A–H: **9 done, 101 open, 110 total**; bulk is Group F (34) and E (12)
+- Open issues: OPEN-1, OPEN-12, OPEN-13 · Closed: B#3+OPEN-2, OPEN-10, FSRM
+- `kernel.bin` 1,065,350 B / 1,572,864 B gate · warning-clean at `-Werror`
+
+### Named, not silently deferred (directive §2)
+
+- §6.7 (skip regenerating unchanged disk images) — reasoning in the queue file
+- `smoke-agents` still targets a hardcoded pointer coordinate: it clicks an
+  agent **card**, not a window, so there is no `PRADYOS_WM_GEOM` to derive from
+- `docs/AETHER_MASTER_FEATURES.md` unchanged — nothing this session touched a
+  feature it tracks
+
+### DDR free range: **DDR-984+** (974-983 allocated). Gate count 149.
