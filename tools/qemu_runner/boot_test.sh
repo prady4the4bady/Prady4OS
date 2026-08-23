@@ -27,6 +27,14 @@ TIMEOUT_S="${TIMEOUT_S:-30}"
 __bt_root="$(cd "$(dirname "$0")/../.." && pwd)"
 mkdir -p "$__bt_root/build/gatelogs"
 SERIAL_LOG="${SERIAL_LOG:-$__bt_root/build/gatelogs/serial-$$.log}"
+# DDR-988 sec.11.2: TRUNCATE the capture before booting. Until sec.11 every exit
+# path deleted it, so a harness that reuses one SERIAL_LOG path got isolation as
+# a side effect of the cleanup. Keeping failed captures removed that side effect
+# and selftest.sh -- which reuses "$WORK/serial.log" for every case -- began
+# matching the PREVIOUS case's forbidden pattern in the window before the stub
+# qemu truncates the file. Isolation must not be a side effect of cleanup: a
+# gate may never inherit an earlier run's serial content, whatever the path.
+: > "$SERIAL_LOG" 2>/dev/null || true
 
 # DDR-777 / BUG-1 diagnostics: KEEP_SERIAL=1 preserves the serial capture.
 #
@@ -56,7 +64,16 @@ serial_rm() {
 # the PASS path deletes. KEEP_SERIAL still forces retention on a passing run.
 serial_keep_fail() {
     for __f in "$@"; do
-        [ -s "$__f" ] && echo "[boot_test] FAIL — capture kept: $__f"
+        [ -s "$__f" ] || continue
+        # Copy to a unique name: the path itself may be reused (and now
+        # truncated) by the very next gate, which would destroy the evidence
+        # this function exists to preserve.
+        __k="${__f}.fail-$$"
+        if cp -f "$__f" "$__k" 2>/dev/null; then
+            echo "[boot_test] FAIL — capture kept: $__k"
+        else
+            echo "[boot_test] FAIL — capture kept: $__f"
+        fi
     done
     return 0
 }
@@ -72,7 +89,12 @@ serial_keep_fail() {
 # failure, it reproduces "5/5" for as long as the orphan lives, and it clears on
 # its own when the orphan is reaped — which is exactly the OPEN-9 signature that
 # twice caused a working change to be blamed and reverted.
-QEMU_ERR="$(mktemp)"
+# DDR-988 sec.11.3: QEMU_ERR was $(mktemp), i.e. /tmp -- the same
+# §NON-NEGOTIABLE 7 violation DDR-987 fixed for SERIAL_LOG and missed here. It
+# matters more now that sec.11 PRESERVES this file on failure: keeping evidence
+# in the directory the rules call unreliable is not keeping it.
+QEMU_ERR="$__bt_root/build/gatelogs/qemuerr-$$.log"
+: > "$QEMU_ERR" 2>/dev/null || QEMU_ERR="$(mktemp)"
 
 if [ ! -f "$IMG" ]; then
     echo "[smoke] no bootable image at '$IMG' yet — expected during Phase 0."

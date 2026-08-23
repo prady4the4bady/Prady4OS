@@ -366,3 +366,64 @@ Two things follow, and only two:
    intermittents, and **not attributed to this work**. The `[hb]` heartbeat now
    carries `net_skip=`, so a recurrence can implicate or exonerate lwIP directly
    instead of leaving it open.
+
+## 11.2 The keep-on-fail change broke run isolation — caught by CI
+
+§11 reddened **eight of ten shards** on `2d3e6f0`, all deterministically at
+`smoke-selftest`:
+
+```text
+FAIL: clean boot is unaffected by the global list — exit 1, expected 0
+[smoke] FAIL — a probe reported 'AGENT_METRICS FAIL' during this gate's boot.
+```
+
+That is `boot_test.sh`'s own DDR-785 self-test, and the diagnosis is that the
+failing case matched a forbidden pattern belonging to a **different, earlier
+case**.
+
+**Mechanism.** `selftest.sh` reuses one path — `SERIAL_LOG="$WORK/serial.log"` —
+for all seven cases. Until §11, every exit path deleted that file, so each case
+started from nothing. **Isolation was a side effect of the cleanup.** §11 kept
+failed captures and thereby removed the side effect, leaving a window between
+`boot_test.sh` beginning its scan and the stub qemu's `: > "$log"` truncation.
+In that window the previous case's content is live and matchable.
+
+This is worth stating plainly: the deletion had two jobs, and only one of them
+was documented. I removed it for the documented reason without asking what else
+it was holding up.
+
+**Fix — both halves, because either alone is wrong:**
+
+1. **Truncate `SERIAL_LOG` at startup.** A gate may never inherit an earlier
+   run's serial content, whatever the path and whoever wrote it. Isolation is
+   now explicit rather than a by-product of cleanup.
+2. **Keep the failed capture under a unique name** (`<path>.fail-<pid>`).
+   Without this, (1) would have the next gate truncate away the very evidence
+   §11 exists to preserve — trading one silent data loss for another.
+
+**Mutation-checked in both directions**, since a fix that satisfies the gate
+without preserving evidence would be worse than no fix:
+
+- `smoke-selftest`: 7/7 pass — isolation restored.
+- A deliberately failed gate (bogus sentinel) prints
+  `[boot_test] FAIL — capture kept: …/serial-18001.log.fail-18001` and leaves a
+  **7,681-byte** capture on disk — evidence still preserved.
+
+### 11.3 `QEMU_ERR` was in `/tmp` all along
+
+Verifying 11.2 surfaced a second one: `QEMU_ERR="$(mktemp)"` — the same
+§NON-NEGOTIABLE 7 violation DDR-987 fixed for `SERIAL_LOG` and did not notice
+one line further down. It was harmless while the file was always deleted; it is
+not harmless now that §11 preserves it on failure, because keeping evidence in
+the directory the rules call unreliable is not keeping it. `QEMU_ERR` now lives
+under `build/gatelogs/` with a `mktemp` fallback if that is unwritable.
+
+### 11.4 What this says about the local gate set
+
+The regression was deterministic — eight of ten shards, first run — and my local
+run missed it because `smoke-selftest` was not in the twelve gates I chose. I
+picked gates by *what the C changes touched* (sockets, network, shell, block)
+and `boot_test.sh` is touched by **every** gate, including the one whose only
+job is to test `boot_test.sh` itself. A harness change needs the harness's own
+gate, and that is not something to rediscover next time: **any change under
+`tools/qemu_runner/` must run `smoke-selftest` before push.**
