@@ -919,6 +919,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
     t->forked = 0;                 /* 5e: normal launch unless a fork sets fork_regs */
     t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
+    t->agent_caps = 0;             /* DDR-982: no action authority unless granted per
+                                    * roster slot. NON-NEGOTIABLE 10 — kmalloc does not
+                                    * zero, and a garbage mask here would grant an agent
+                                    * every capability at once. */
     t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
     t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
     t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does
@@ -1333,13 +1337,66 @@ void sched_tick(void) {
     }
 }
 
+/* DDR-981: how many yields arrived with interrupts already masked, i.e. how
+ * many times the window below was actually needed. A gate observable, and the
+ * denominator for the claim that this path is exercised at all (R17). */
+uint64_t g_yield_masked;
+
 void yield(void) {
     if (!current_thread)
         return;
     sched_charge_elapsed(current_thread);
     current_thread->dbg_yields++;
     current_thread->quantum = current_thread->quantum_reset;
+
+    /* DDR-981 — the B#3 / OPEN-2 fix. Every yield() caller is a spin-until-
+     * condition loop, and every condition it spins on is set by another thread
+     * or by an interrupt handler. So a yield() that cannot take an interrupt is
+     * not a yield: it is a livelock.
+     *
+     * That is not hypothetical. SYSCALL entry clears IF via MSR_SFMASK
+     * (syscall.c) and the entry path deliberately never re-enables it
+     * (syscall_entry.asm: "No nesting: SFMASK clears IF, so a syscall is never
+     * interrupted"). Every yield-spin reachable from ring 3 therefore spun with
+     * interrupts masked: mnt_lock (vfs.c), both pipe waits and the blocking
+     * console read (sys_io.c), and sys_yield itself. Two such threads on one CPU
+     * hand off to each other through schedule() forever — context_switch
+     * preserves each thread's RFLAGS, so the mask is carried across the switch
+     * and the CPU never reaches the idle loop's `sti; hlt` that would clear it.
+     * The measured consequence (DDR-981 §2): that CPU's LAPIC timer tick stops,
+     * its pc->ticks freezes, and any virtio-blk completion MSI-X routed to it is
+     * never serviced -- which is exactly B#3's "virtio-blk SMP completion stall"
+     * and, per DDR-977 §8.2, OPEN-2's block-touching gates.
+     *
+     * Open a real interrupt window across the reschedule and close it again, so
+     * the caller's SFMASK contract is byte-for-byte restored on return.
+     * virtio_gpu.c's used-ring wait already does exactly this for the same
+     * reason (an in-syscall wait that needs IF=1); this generalises it to the
+     * one choke point every yield-spin goes through.
+     *
+     * Safe here specifically: yield() is thread context, never an ISR (no
+     * interrupt handler in this tree calls it -- they call schedule() via
+     * sched_tick), and no yield() caller holds a spinlock across the call. The
+     * latter is not a new requirement: holding a spinlock across a context
+     * switch was already forbidden (vfs.c:20-24 records why mnt_lock is a
+     * sleep-mutex for precisely that reason).
+     *
+     * schedule() masks again immediately via local_irq_save(), so the enabled
+     * window is a couple of instructions on the way in, plus the resumed thread
+     * running interruptible until the `cli` below. A tick landing in that window
+     * is ordinary preemption, which schedule() is already non-reentrant against
+     * (see its header comment, which explicitly contemplates a voluntary
+     * schedule() with interrupts enabled). */
+    uint64_t yf;
+    __asm__ volatile("pushfq; pop %0" : "=r"(yf) :: "memory");
+    if (yf & 0x200u) {                 /* already interruptible: kernel threads */
+        schedule();
+        return;
+    }
+    __atomic_add_fetch(&g_yield_masked, 1, __ATOMIC_RELAXED);
+    __asm__ volatile("sti" ::: "memory");
     schedule();
+    __asm__ volatile("cli" ::: "memory");   /* restore the caller's IF=0 exactly */
 }
 
 /* Block the current thread until something calls sched_unblock on it. Callers

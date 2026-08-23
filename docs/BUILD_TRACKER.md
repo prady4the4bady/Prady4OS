@@ -112,10 +112,11 @@ SHA-512 (code + gate) were mis-recorded as absent.
 |---|---|---|---|
 | **OPEN-1** | `smoke-surfdestroy` intermittently misses its sentinel | unknown | open, passive |
 | ~~OPEN-11~~ **CLOSED** | `smoke-sha256` (and `smoke-rqstress-liveness`) failed after the first run on a fresh image | **ROOT-CAUSED AND FIXED — DDR-831.** `blk_selftest` wrote its scratch sector at a hardcoded LBA 1500, chosen when the kernel was capped at 512 sectors; DDR-827 grew the kernel to ~1666 sectors, so the self-test wrote *into the kernel image*, and QEMU persisted it — corrupting the probe ELFs in `.rodata` for every later boot | **CLOSED — CONFIRMED BY CI.** Run 30944847959 on `93ceee7`: all 11 jobs green, with `PASS smoke-sha256 (90s)` and `PASS smoke-rqstress-liveness (180s)` actually executed. The build guard printed `kernel ends at LBA 1666, scratch sector 4095 — clear` — 1666 > the old literal 1500, direct confirmation of the overlap. Locally 20/20 + 5/5. |
-| **OPEN-2** | historical intermittent CI reds | partly OPEN-1/10. **DDR-828 removed the largest contributor**: 7 of 8 reds on 2026-08-03 were a stale 60 s window on `smoke-syscallfuzz`, not a defect. | open — `smoke-resched`, `smoke-blkmq-trace`, **`smoke-msixap` (2026-08-07, run 31139497587)**, a SECOND `smoke-blkmq-trace` (run 31149744394) and **`smoke-crosswake` (2026-08-07, runs 31142981014 / 31142982460)**. The crosswake occurrence has the cleanest evidence yet: **re-run on the identical SHA `e51584a` with no code change PASSED**, so it is intermittent by demonstration, not by assumption. **DDR-863: all four intermittent gates run `QEMU_SMP=4` - 20 of 138 gates - and none of the 118 single-CPU gates has ever flaked.** |
+| ~~**OPEN-2**~~ | ~~historical intermittent CI reds~~ | **CLOSED 2026-08-22 — DDR-981**, as downstream of B#3. DDR-863's observation was right and its inference wrong: all four gates do run `QEMU_SMP=4`, but the shared cause is not "SMP timing" — it is that `yield()` spun with `RFLAGS.IF` clear, so a CPU running two yield-spinning ring-3 threads stopped taking interrupts entirely and never serviced the block completions those gates wait on. DDR-977 §8.2 measured the full chain in one `smoke-resched` capture. | **CLOSED for the block-touching gates.** NOT claimed for `smoke-crosswake`/`smoke-msixap`, which do no block I/O — reservation kept from DDR-977 §8.2. `[apfreeze]` is now in `GLOBAL_FORBIDDEN`, so a recurrence is a named failure rather than a flake. |
 | **OPEN-9** | `smoke-shell` fails locally, passes CI, identical binary | **leaked QEMU holding the image write-lock** | **misattribution FIXED (DDR-823)**; **pre-flight guard + orphan CAUSE fixed (DDR-951)** — `INT`/`TERM` trap reaps our own QEMU on cancellation, which is where orphans came from; pre-flight `pgrep -f "[q]emu…"` now exits 3 before burning the window. Root cause still not caught live on a `smoke-shell` failure |
 | **OPEN-10** | `'btree churn FAIL'` during unrelated `-smp 4` gates | **ROOT-CAUSED + FIXED — DDR-964.** The narrowing below stands (`rc=-1` is `-EPERM` from the `cap_ok(cap, CAP_FS_WRITE)` branch in `vfs_create`, with all three DDR-884 candidates eliminated by the value); the cause behind it is a **create-then-init race** — `sched_create()` made a thread runnable before its caller had minted the capability into `->arg`, so a thread that got picked early ran with `CAP_NULL`. Fixed by `sched_create_blocked()` → set arg → `sched_unblock()` at 8 sites in `main.c`. Reproduced on demand for the first time, which is what distinguishes this from the earlier narrowing. | **fix landed, pending CI promotion evidence** |
-| **B#3 / DDR-806** | `-smp 4` virtio-blk completion stall | timer/IRQ delivery under SMP | open — last 🔴 in Phase 3 |
+| **ISO not self-contained** | `make iso` produces a bootable image that reaches `NEXUS KERNEL OK` and then idles with `[blk] no block device` / `[fs] no mountable filesystem found` — no PRISM, no aetherd, no compositor, no networking | The ISO carries only `pradyos.img` + `esp.img`; the root filesystems are separate virtio-blk disks the gates attach and the ISO omits. Post-handoff the kernel speaks only virtio-blk/AHCI/NVMe, and the CD is ATAPI (`disks=0`). No ramdisk/initrd facility exists. | **OPEN — blocks v1.0.0. DDR-971.** Control arm proves the kernel is fine. Fix needs a root reachable after handoff: ramdisk `blk_device` behind `blk_register()` (recommended), stage-2 second payload, or ATAPI+ISO9660. |
+| ~~**B#3 / DDR-806**~~ | ~~`-smp 4` virtio-blk completion stall~~ | **CLOSED 2026-08-22 — DDR-981.** Not virtio-blk, not the LAPIC, not "timer/IRQ delivery under SMP": `SYSCALL` entry clears IF via `MSR_SFMASK` and never restores it, so every yield-spin reachable from ring 3 spun masked, and `context_switch` carried the mask across switches until the CPU never took another interrupt. Fixed with an interrupt window in `yield()`. 20/20 at `-smp 4`, 0 `compl wait timeout`; mutation-checked. | ✅ |
 | **smoke-x25519** | ~~probe does not reach its sentinel~~ | was host contamination + a stale artefact (DDR-822/823) | **RESOLVED — 4/4 clean-host passes, now in shard 3.** Unblocks Ed25519 → ACC → AGS once green in `main` |
 | OPEN-7 | per-boot probe selection | — | CLOSED (DDR-804) |
 | OPEN-8 | console input loss | — | CLOSED (DDR-809) |
@@ -230,7 +231,7 @@ Status key: ✅ done · 🔵 in progress · ⬜ not started · 🔒 blocked
 | 5 | DDR-813 ACC (NSI 77/78) | 🔒 needs 4 + `smoke-aead` |
 | 6 | DDR-814 AGS (NSI 79/80) | 🔒 needs 4 |
 | 7 | DDR-815 ACC rotation (NSI 81) | 🔒 needs 5 |
-| 8 | B#3 `-smp 4` virtio-blk stall | ⬜ **do before more OPEN-10 work** |
+| 8 | ~~B#3 `-smp 4` virtio-blk stall~~ | ✅ **DONE — DDR-981** (and it was never a virtio-blk stall) |
 
 ### Group 1 — tracker & build-system integrity (x86_64 v1.0.0)
 
@@ -503,3 +504,133 @@ All three are registered in `tools/ci/gate_shards.txt` and absent from the
 A failing gate fails its whole shard, so the two most recent full-suite CI
 greens (`0253fbe`, `fbb868f`) are direct evidence that all three passed in both
 runs. No separate re-run is needed to establish CI confirmation.
+
+## FAT32 multi-cluster reads — closed as a refutation (DDR-973, 2026-08-22)
+
+The Group B item "FAT32 multi-cluster read fix — `execve` of large musl-C ELF
+corrupts — root-cause via `read_cluster_chain`" is closed **without a code
+change to `fat32_read`**, because there is no defect to fix.
+
+| what the backlog said | what was measured |
+|---|---|
+| the bug is in `read_cluster_chain` | that function has never existed in this repo; the reader is `fat32_read` (`kernel/fs/fat32/fat32.c:309`) |
+| `execve` of a large musl-C ELF from FAT32 corrupts | `run /CMUSL.ELF` — 30,488 B = **60 clusters** — execve'd clean, printed `PRADYOS_MUSL_OK`, exited 0 |
+| multi-cluster reads are broken | `/BIG8K.TXT` (16 clusters) has been read byte-exact by `smoke-shell` through a pipe, and `/EXECTEST.ELF` (9 clusters) through the full `sys_execve` path, for months |
+
+The source of the claim is ADR-024 §D5, which hedged it at the time ("root cause
+is **most likely** FAT32 multi-cluster reads"). The hedge was dropped as the item
+was copied forward into `build_status.md` and then `CLAUDE.md`, where it became a
+named function to repair. ADR-024 now carries an addendum saying so.
+
+**Shipped instead:** `smoke-fat32-multicluster` (shard 3, 90 s) + probe
+`user/fat32mctest.c` + fixture `/BIGPAT.BIN` (64 KiB = 128 clusters). Three arms:
+a byte-exact scan of all 65,536 bytes, 6 cluster-boundary straddles, and
+ADR-024's own execve case. Mutation-checked both ways (DDR-973 §6) — including
+one mutant that **passed the first cut of the gate**, because the specified
+`(7n+3)&0xFF` pattern has period 256 and every 512-byte cluster on the volume
+was therefore identical. The shipped pattern is `(7n + 3 + 31*(n>>8)) & 0xFF`.
+
+**Still deferred (unchanged, and unblocked by the above):** init-driven
+`fork`+`execve` **respawn** of PRISM. That is unbuilt work. PRISM's `run`
+builtin itself is not disabled and never was.
+
+## smoke-agents — not reproduced since instrumentation (DDR-968, 2026-08-22)
+
+`[DEFERRED: not reproduced]`. The `PRADYOS_AGENT_WITNESS_WAIT pid= disp= state=
+n=` instrument has been live since `ea4601e` and has never printed — by design,
+it emits only while the witness is unarmed, so a green boot produces none of it.
+`smoke-agents` is gating (shard 2, absent from the `shard_check.sh` EXCLUDE
+list), so a recurrence would fail its whole check suite; 18 suites have been
+green on shard 2 since. With no artefact there is no named mechanism, and
+§NON-NEGOTIABLE 3 forbids a speculative fix. The instrument stays armed and the
+item reopens on the first witness line: `disp=0` would confirm DDR-968 §2's
+reading (agent thread exists, never switched in), `disp>0` would refute it.
+
+## Dependabot triage (STEP 4, 2026-08-22) — COMPLETE
+
+The alerts turned out to be readable after all, from the wrong direction: this
+session has no Dependabot-alert API tool, but Dependabot's own **open pull
+requests** name every package and advisory. Both were found and triaged.
+
+### PR #2 — the security alerts. Already remediated; the PR is stale.
+
+`chore(deps): Bump the npm_and_yarn group across 1 directory with 2 updates`,
+opened 2026-08-04 against `dev/phase1`, targeting `/tools/graph_mcp`:
+
+| package | PR asks | advisories it cites | lockfile today |
+|---|---|---|---|
+| `@hono/node-server` | 1.19.14 → 2.1.0 | GHSA-9mqv-5hh9-4cgg — unauthenticated memory-leak DoS via an aborted WebSocket handshake (`upgradeWebSocket`; a missing/malformed `Sec-WebSocket-Key` leaked the `IncomingMessage` and left a promise pending). Fixed in 2.0.10. | **2.1.0** ✅ |
+| `fast-uri` | 3.1.2 → 3.1.5 | GHSA-4c8g-83qw-93j6 (3.1.3), GHSA-v2hh-gcrm-f6hx (3.1.4), GHSA-7p8r-x3mc-p8w7 (3.1.5 — literal backslash accepted in the URI authority) | **3.1.5** ✅ |
+
+Two packages, five advisories between them — which is where "5 alerts (2 high,
+3 moderate)" comes from. **`tools/graph_mcp/package-lock.json` already carries
+versions at or above every fix**, which is exactly why `npm audit` reports
+`{info:0, low:0, moderate:0, high:0, critical:0}` across all 97 packages. The
+remediation landed in the lockfile independently of the PR; PR #2 is superseded
+and its base (`dev/phase1` @ `fd876cd`) is far behind `main`.
+
+**Left open rather than closed.** Closing another actor's PR on the operator's
+repository is their call, not this session's, and nothing depends on it.
+
+### PR #3 — `ubuntu` 24.04 → 26.04. Declined, with a reason.
+
+Not a security update — a plain docker version bump. **It should not be merged**,
+because it contradicts the Dockerfile's own stated purpose:
+
+> The base is pinned to the same distro the project already builds on
+> (Ubuntu 24.04, per CLAUDE.md), so container and WSL builds agree.
+
+The image exists to remove toolchain drift between the container and the WSL
+host. Moving the container to 26.04 while the host stays on 24.04 reintroduces
+precisely the drift it was built to eliminate, and would do so five days from
+the deadline with a full toolchain change (clang, lld, nasm, QEMU) underneath a
+147-gate suite. Revisit after v1.0.0, together with the WSL environment.
+
+### Config defect found and fixed on the way
+
+`.github/dependabot.yml` pointed its npm ecosystem at `directory: "/"`, where
+there is no `package.json` — `directory:` is a literal path, not a glob, so npm
+**version** updates had never scanned anything. Now `/tools/graph_mcp`. A
+`github-actions` ecosystem was added too: the workflows pin `actions/checkout@v5`
+and `actions/setup-python@v5` by major tag, which silently absorbs whatever the
+action owner pushes to that tag, and nothing was watching it.
+
+This did not affect the alerts above: **security** updates come from the
+repository dependency graph and fire regardless of that file, which is why PR #2
+existed at all despite the broken path. The two are separate systems.
+
+---
+
+## 2026-08-22 — B#3 and OPEN-2 closed (DDR-981)
+
+`yield()` spun with `RFLAGS.IF` clear. `SYSCALL` entry masks interrupts via
+`MSR_SFMASK` (`syscall.c:229`) and the entry path deliberately never re-enables
+them (`syscall_entry.asm:46`: *"No nesting: SFMASK clears IF, so a syscall is
+never interrupted"*), so every yield-spin loop reachable from ring 3 was a
+masked spin: `mnt_lock` (`vfs.c:27`), both pipe waits and the blocking console
+read (`sys_io.c:57/268/293`) — PRISM's own read loop — and `sys_yield`.
+`context_switch` preserves per-thread RFLAGS, so two such threads on one CPU
+hand off to each other forever and never reach the idle loop's `sti; hlt`. That
+CPU then runs normally with interrupts off: its LAPIC timer tick stops, and any
+virtio-blk completion MSI-X routed at it is never serviced.
+
+Named by an NMI probe (NMI being the one interrupt that still reaches a CPU with
+IF clear). The dump refutes three of DDR-977 §5's four candidates and confirms
+the fourth in one line: `masked=0 swen=1 isr48=0 irr48=1 tpr=0 if=0`.
+
+Fix: an interrupt window in `yield()` — the single choke point all five call
+sites share. Fixing `sys_yield` alone would not have worked; the threads in the
+capture were in `mnt_lock` under `vfs_read`.
+
+Result at `-smp 4`: **20/20 boots, 0 frozen APs, 0 `compl wait timeout`**
+(before: 6/14 boots frozen, 5–11 timeouts each, 0 on every unfrozen boot).
+Denominator `ymask` ≈ 6.1M masked yields per boot. Mutation-checked: removing
+the fix reddens `smoke-blk-integrity` on the first run.
+
+Gate lesson worth keeping: `smoke-smp` and `smoke-rqstress` both measured 20/20
+at `-smp 4` while this defect was live. The gates did not catch it; the evidence
+sat in serial logs nobody asserted on. `[apfreeze]` is now in `GLOBAL_FORBIDDEN`
+so that class of silent failure is a named red.
+
+`docs/AETHER_MASTER_FEATURES.md` is deliberately unchanged: neither B#3 nor
+OPEN-2 is a feature it tracks.

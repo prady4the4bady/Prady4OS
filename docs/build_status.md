@@ -307,10 +307,14 @@ in the child / PRISM's `run`). PRISM is launched by the kernel via the proven SF
 `elf_load` path as **init's child** (init reaps it). New gate **`smoke-shell`**
 (in CI): feeds `echo`/`help`/`exit` through a FIFO once `PRISM_READY` shows, and
 checks the builtin output with no panic.
-**Deferred (ADR-024):** init `fork`+`execve` **respawn** of PRISM — `execve` of a
-large musl-C ELF from FAT32 corrupts (likely FAT32 multi-cluster read; SFS large
-read is fine), a separate kernel fix; also `ls`/`ps` full impl, RX line
-discipline/echo, pipes/redirection/quoting/job-control/scripting.
+**Deferred (ADR-024):** init `fork`+`execve` **respawn** of PRISM — unbuilt
+work, not a blocked item. ~~`execve` of a large musl-C ELF from FAT32 corrupts
+(likely FAT32 multi-cluster read; SFS large read is fine), a separate kernel
+fix~~ **refuted 2026-08-22, DDR-973:** that attribution was a hypothesis, never
+measured. `run /CMUSL.ELF` (30,488 B = 60 FAT32 clusters) execve's clean, and
+`smoke-fat32-multicluster` now verifies 65,536 B / 128 clusters byte-for-byte
+every run. Also still open: `ls`/`ps` full impl, RX line discipline/echo,
+pipes/redirection/quoting/job-control/scripting.
 **NET-B (lwIP TCP/IP) COMPLETE:** lwIP 2.2.1 (pinned `third_party/lwip`, raw API,
 `NO_SYS=1`, kmalloc-backed) is linked into the kernel via `build/lwip/liblwip.a`
 (built `-w -nostdlibinc`) plus the first-party port `third_party/lwip-port/lwip_port.c`
@@ -7026,3 +7030,263 @@ is why its two counts are quoted rather than just "PASS": a bound applied to the
 wrong statement would have silenced `PRADYOS_CADENCE_OK`, and did not.
 
 Nothing is merged.
+
+---
+
+## The ISO boots a kernel, not an OS — first real end-to-end walkthrough (DDR-971)
+
+`make iso` on `main` @ `7c6c67a` produces `build/pradyos.iso`, 52,805,632 B,
+sha256 `8a5e6507e18954e1`. `make smoke-iso-x86` passes both arms. **And the
+image is not usable.**
+
+Reading the whole 145-line BIOS serial instead of grepping it:
+
+```text
+[ahci] controller ready, disks=0
+[blk] no block device
+[fs] no mountable filesystem found
+```
+
+followed by 23 heartbeats at `rqdepth=1 curpid=0` with `preempt` advancing — a
+healthy scheduler with nothing to run. The UEFI arm is identical.
+
+### The control arm is what makes this safe to state
+
+Same commit, same `kernel.bin`, booted by `smoke-shell` with the three
+virtio-blk disks the normal gates attach:
+
+| probe | normal boot | ISO boot |
+|---|---|---|
+| `mounted` | 4 | **0** |
+| `PRISM_READY` | 1 | **0** |
+| `prism>` | 50 | **0** |
+| `aetherd` | 4 | **0** |
+| `[user] ELF loaded` | 26 | **0** |
+| `AGENT ROSTER slots=` | 1 | **0** |
+
+**The kernel is fine; the ISO packaging is the defect.**
+
+### Root cause
+
+The ISO carries `pradyos.img` (2 MiB boot disk) and `esp.img` (50 MiB ESP) and
+nothing else. The root filesystems are *separate disks* — `fat.img` (64 MiB) and
+`sfs.img` (16 MiB) — attached as extra virtio-blk devices by `boot_test.sh`, and
+the ISO ships neither. After handoff the kernel speaks only virtio-blk, AHCI and
+NVMe; the CD is ATAPI, hence `disks=0`. There is no ramdisk/initrd facility
+(`grep -rln "ramdisk\|initrd" kernel/` is empty; `blk_register()` has two
+implementors, virtio_blk and nvme). The ISO is a kernel-only boot medium.
+
+### Why the gate is green
+
+`smoke-iso-x86` asserts `NEXUS KERNEL OK`, which prints at **line 30 of 145** —
+about 60 lines before userspace would start. Every assertion it makes is true.
+DDR-896 wrote it deliberately to prove "the same unmodified kernel reaches the
+same state through a different loader", and it proves exactly that. The error
+was reading it as evidence the ISO is *usable*.
+
+Same class as the vacuous checks already catalogued here: an assertion that
+cannot separate the working system from the broken one.
+
+### Consequence
+
+**`v1.0.0` is not tagged.** The tag was conditioned on a manual pass; the manual
+pass failed. Shell, AETHER, networking and compositor checks are recorded as
+**BLOCKED**, not passed — they are separately evidenced on the normal boot path,
+but not from the ISO.
+
+A fix needs a root the kernel can reach after handoff: a ramdisk `blk_device`
+behind the existing `blk_register()` seam (recommended), a stage-2 second
+payload, or ATAPI+ISO9660 support. See DDR-971 §8. `kernel.bin` has 519,810 B of
+headroom, which bounds the first option.
+
+Also recorded: `xorriso` and OVMF were absent from the build container, so
+`make iso` had never been run here before today.
+
+---
+
+## The ISO now boots an OS — DDR-972 (fixes DDR-971)
+
+Kernel sha256 `9763ce7bb259de7e`. ISO unchanged in size (52,805,632 B) because
+nothing is embedded.
+
+### The fix is much smaller than DDR-971 §8 estimated
+
+DDR-971 sized three options against `kernel.bin`'s 519,810 B of headroom on the
+assumption a root image had to be **embedded**. Re-reading the build removed
+that assumption: `sfs-image` is `dd if=/dev/zero ... count=16` with the comment
+*"16 MiB blank — kernel formats in place"*. The SFS root is a blank device the
+kernel formats at boot, so nothing needs embedding — no `kernel.bin` growth, no
+stage-2 window raise, no PT_HI change, no loader contract, no build tooling.
+
+`kernel/drivers/blk/ramdisk.c`: a `blk_device` over one contiguous
+`pmm_alloc_pages()` allocation. Registered from `kmain` **only when
+`blk_count() == 0`**.
+
+### The guard was verified, not assumed
+
+Every gate boots through `boot_test.sh`, which attaches at least one
+virtio-blk disk, so the branch is unreachable for all of them. Checked rather
+than trusted: **`grep -c ramdisk` on a disk-backed `smoke-shell` boot returns 0**.
+
+### A correction measurement forced
+
+The first version registered one ramdisk. It mounted and the FS layer worked —
+`[fs] wrote /KOUT.TXT (17 bytes)`, verbatim readback, `created+deleted /TMP.TXT
+OK` — and **PRISM still did not start**, because userspace bring-up is gated on
+`blk_count() > 2` and uses `blk_get(2)`. Rather than relax a gate every other
+boot traverses, the fix mirrors the expected topology: blk0 small blank
+(stand-in for the unmountable boot disk), blk1 4 MiB SFS root, blk2 4 MiB blank
+scratch. No shared code changed.
+
+Worth recording: the single-ramdisk version *looked* correct — mount succeeded,
+files round-tripped. Only asking for `PRISM_READY` exposed it.
+
+### Result
+
+| DDR-971 probe | before | after |
+|---|---|---|
+| `[blk] no block device` | present | **gone** |
+| `mounted` | 0 | **3** |
+| `PRISM_READY` | 0 | **1** |
+| `aetherd` | 0 | **2** |
+| `[user] ELF loaded` | 0 | **26** |
+| serial length | 145 lines | **387 lines** |
+
+Observed over the ISO's own console: `uname` → `AuthenticAMD "QEMU Virtual CPU
+version 2.5+" cpus=1`; `free` → `total=114556K free=101992K used=12564K` (the
+`used` figure includes this fix's ~8.25 MiB); `ps` → a real table with
+`PRISM.ELF` pid 42 ppid 40 and `INIT.ELF` pid 40; a write→list→read→delete
+round-trip on the ISO's own root; the full AETHER chain through
+`aetherd: reaped PID=81 exit=0`; `PRADYOS_NET_LO_OK`; `PRADYOS_GPU_FB_OK
+1024x768 BGRA scanout0`.
+
+### New gate — the reason this cannot silently reopen
+
+`smoke-iso-userspace` (shard 1; **148 gates** now) drives PRISM over the ISO and
+asserts what the commands *do*. `smoke-iso-x86` keeps its narrower original job.
+Measured: `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity`, `smoke-fsrm`, `ci-shard-check`, `ci-probe-rodata-check`
+all green; build warning-clean at `-Werror`.
+
+**Limit:** the ramdisk root is volatile. Writes do not survive power-off. That is
+correct for a live ISO and belongs in the release notes rather than being
+implied otherwise.
+
+
+## B#3 root-caused 2026-08-22 — an AP-liveness defect, not a virtio-blk one (DDR-976/977)
+
+`[vblk] compl wait timeout` fires in **17 of 20** `-smp 4` boots (301 occurrences,
+up to 28 in one boot) and **0 of 10** at `-smp 1`. It is not cosmetic: `submit()`
+does not retry, it returns **`-EIO`**, so each one is a failed block I/O.
+
+**It is not a block-layer bug.** An instrument printing every CPU's tick counter
+at each timeout shows, across 4 boots and 60 timeouts:
+
+```text
+ticks[cpu0,cpu1,cpu2,cpu3] = [916,872,870,369] -> [1416,1372,1370,369]
+```
+
+CPUs 0/1/2 advance exactly +500 per 5 s deadline; **CPU 3 is frozen**. `pc->ticks`
+is incremented only from a CPU's own LAPIC timer interrupt, so CPU 3 has stopped
+being interrupted altogether. virtio-blk is merely the subsystem that *notices*,
+because `virtio_blk.c:342` routes unit 2's completion vector to CPU 3 and it is
+the only code blocking on a deadline waiting for that CPU. DDR-878's finding that
+the block layer is clean was correct.
+
+**Why the gates never caught it.** Only two gates treat the string as forbidden,
+and one of them — `smoke-blk-timeout`, built by DDR-955 *specifically* to prove
+"the deadline does NOT fire on healthy I/O" — sets no `QEMU_SMP` and so runs
+uniprocessor. `smoke-smp` and `smoke-rqstress` both measured **20/20** at
+`-smp 4` while the timeouts were happening underneath them.
+
+**This does not block the ISO.** Neither ISO gate sets `QEMU_SMP`, and the ISO
+boots uniprocessor, where the defect does not occur. It blocks multiprocessor
+operation.
+
+**Still open:** why CPU 3 stops taking interrupts. DDR-977 §5 lists the
+candidates and specifies the next instrument. Do not patch `virtio_blk.c`.
+
+---
+
+## 2026-08-22 — DDR-981: B#3 root cause found and fixed (`yield()` ran with IF clear)
+
+**Status: CLOSED.** B#3 and OPEN-2's block-touching gates are fixed.
+
+### What it actually was
+
+Not virtio-blk (DDR-878/DDR-974 were right to clear it) and not the LAPIC.
+`SYSCALL` entry clears `RFLAGS.IF` via `MSR_SFMASK` (`syscall.c:229`), and the
+entry path never re-enables it — `syscall_entry.asm:46` states the invariant
+outright: *"No nesting: SFMASK clears IF, so a syscall is never interrupted."*
+Every yield-spin loop reachable from ring 3 therefore spun with interrupts
+masked, and `context_switch` preserves each thread's RFLAGS, so the mask travels
+*across the context switch*. Two such threads on one CPU hand the CPU to each
+other through `schedule()` forever and never reach the idle loop's `sti; hlt`
+that would have cleared it.
+
+The CPU is not halted, not starved, not broken: it runs normally, with `IF`
+clear, permanently. Its timer tick never arrives (`pc->ticks` freezes) and any
+block completion MSI-X routed at it is never serviced — a 5 s wait, then `-EIO`.
+
+Affected call sites: `mnt_lock` (`vfs.c:27`), pipe write (`sys_io.c:57`), pipe
+read (`sys_io.c:268`), blocking console read (`sys_io.c:293` — PRISM's read
+loop), `sys_yield` (`syscall.c:155`). `kernel/main.c`'s yields are kernel
+threads, already interruptible, unaffected.
+
+### How it was named
+
+An NMI probe, because NMI is the one interrupt that still reaches a CPU with
+`IF` clear. The BSP notices an AP whose `pc->ticks` did not advance across a
+full 500-tick heartbeat and NMIs it; the AP stashes its state into its own
+`percpu` and the BSP relays it (the AP must not print — it may hold
+`g_line_lock`).
+
+One line refutes three of DDR-977 §5's four candidates and confirms the fourth:
+
+```text
+[apfreeze] cpu=3 ticks=322 rip=… if=0 lvt=0x20030 masked=0 svr=0x1FF swen=1
+           tpr=0x0 isr48=0 irr48=1 pid=89
+```
+
+LVT unmasked, LAPIC software-enabled, no stuck in-service vector, TPR zero, and
+a timer interrupt **pending and undelivered** — leaving `IF` as the only
+possible blocker. Repeat sampling then showed the pid and RSP alternating
+between two threads, i.e. the CPU was *running and merely masked*, not spinning.
+A third latch caught the first masked `yield()` at `sys_yield`, which points
+straight at SFMASK.
+
+### The fix
+
+An interrupt window in `yield()` — the one choke point all five sites share.
+Fixing `sys_yield` alone would not have fixed the observed livelock, whose
+threads were in `mnt_lock` under `vfs_read`. Enabling interrupts at SYSCALL
+entry is the textbook fix and is deliberately **not** taken here: the syscall
+layer is written against non-reentrancy (`sys_exec.c:10` depends on it for its
+CR3 swap), and that is not a change to make three days before the deadline.
+Recorded as post-1.0. In-tree precedent for the narrow version:
+`virtio_gpu.c:78-95` already saves RFLAGS and `sti`s around its used-ring wait
+for exactly this reason.
+
+### Measured
+
+| | boots | frozen AP | `compl wait timeout` |
+|---|---|---|---|
+| before | 14 | **6** | 5–11 per frozen boot, 0 otherwise |
+| after | **20** | **0** | **0** |
+
+Denominator (§NON-NEGOTIABLE 17): `ymask` ≈ **6.1M** masked yields per boot, so
+a green run cannot have avoided the fixed path. Kernel under test
+`d4b39c96a98ba2fead60d3eb23f37b9f4b5b739500f94f9eb401702552b83b22` (R1).
+Mutation-checked: removing the fix reddens `smoke-blk-integrity` on the first
+run, named by `[apfreeze]`.
+
+### Gate lesson
+
+`smoke-smp` and `smoke-rqstress` each measured **20/20** at `-smp 4` while this
+defect was live. The gates did not catch it — the evidence was
+`[vblk] compl wait timeout` sitting in serial logs nothing asserted on.
+`[apfreeze]` is now in `GLOBAL_FORBIDDEN` (`boot_test.sh`), which is append-only
+per §NON-NEGOTIABLE 6 and preserves every gate's DDR-785 early-exit eligibility.
+Stated limit: a gate that early-exits before ~tick 1000 will not see the line —
+which does not bite, because every SMP/block gate the freeze actually reddens
+already declares a `FORBIDDEN_SENTINEL` and burns its full window.

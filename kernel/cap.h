@@ -48,6 +48,21 @@ typedef uint64_t cap_t;
  * so that this bit is not decoration. */
 #define CAP_REWRITE       (1u << 21)  /* approve MOSS-style code rewrites            */
 
+/* DDR-982: per-agent action authority. Bits 19/20/22/23 are the free ones —
+ * 21 is CAP_REWRITE above, which is why the directive names exactly these four.
+ *
+ * These gate ACTION SUBMISSION (aether_submit), not the action implementations.
+ * That ordering is deliberate: the boundary is enforceable and testable now,
+ * and stays correct when the implementations land. Three of the four gate an
+ * action whose implementation is out of scope (ACTION_BROWSE_WEB is the
+ * deferred cloud bridge, DDR-793; PARSE_DOCUMENT needs a 64 MiB model;
+ * QUERY_SCENE needs a scene graph) — a denial path with an audit record is a
+ * shipped capability, not a deferred one. See DDR-982 §3. */
+#define CAP_OCR           (1u << 19)  /* AHNIS  — ACTION_PARSE_DOCUMENT   */
+#define CAP_EXEC          (1u << 20)  /* PRAX   — ACTION_EXEC_CODE        */
+#define CAP_SCENE         (1u << 22)  /* IRIS   — ACTION_QUERY_SCENE      */
+#define CAP_NET_BROWSE    (1u << 23)  /* LUMYN  — ACTION_BROWSE_WEB       */
+
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u
 #define RES_FILE   1u

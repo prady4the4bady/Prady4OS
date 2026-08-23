@@ -406,6 +406,8 @@ extern const unsigned char renametest_elf[];          /* fs: SFS rename probe (D
 extern const unsigned char renametest_elf_end[];
 extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecycle probe (DDR-744) */
 extern const unsigned char fsrmtest_elf_end[];
+extern const unsigned char fat32mctest_elf[];         /* DDR-973: FAT32 multi-cluster read probe */
+extern const unsigned char fat32mctest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
@@ -475,6 +477,7 @@ void net_init(void);                             /* NET-B: lwip-port/pradyos_net
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
 void aether_selftest(void);
 void aether_sectest(void);
+int  ramdisk_init(unsigned order);    /* DDR-972: memory-backed root for the ISO */
 /* DDR-842: probe-gated audit-chain fault injection. main.c declares aether
  * entry points locally rather than including aether.h (see the three above). */
 void aether_audit_tamper(void);
@@ -1361,28 +1364,58 @@ static void fs_test_thread(void *arg) {
 
                 /* DDR-741: unlink (files) + rmdir (empty dirs) via tombstones. */
                 {
-                    int ok = 1;
+                    /* DDR-984: this probe used to collapse twelve assertions into
+                     * one `ok` flag and print a single word, so a failure said
+                     * only THAT it broke, never WHICH step or with what rc. That
+                     * is the DDR-824 lesson (the op= line naming the broken
+                     * operation contains none of the forbidden string, so it was
+                     * never printed) applied to a second probe — and it cost a
+                     * real CI capture: shard 4 on 0480657 reddened smoke-percpu
+                     * via GLOBAL_FORBIDDEN with nothing to diagnose, and 6/6
+                     * local re-runs did not reproduce it.
+                     *
+                     * Record the first failing step and its return code instead.
+                     * FAILURE PATH ONLY: the healthy boot still prints the same
+                     * single OK line, so no gate parser changes and no extra
+                     * steady-state output. */
+                    int ok = 1, badstep = 0; long badrc = 0;
                     struct vfs_file f;
+                    long rc;
+#define SFS_UNLINK_STEP(n, expr, want)                                        \
+                    do { rc = (long)(expr);                                   \
+                         if (ok && !(want)) { ok = 0; badstep = (n); badrc = rc; } \
+                    } while (0)
                     /* (1) create -> unlink -> gone from open + readdir. */
-                    if (vfs_create(cap, smnt, "/A.TXT", &f) != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/A.TXT") != 0) ok = 0;
-                    if (vfs_open(cap, smnt, "/A.TXT", &f) == 0) ok = 0;   /* must be gone */
+                    SFS_UNLINK_STEP(1, vfs_create(cap, smnt, "/A.TXT", &f), rc == 0);
+                    SFS_UNLINK_STEP(2, vfs_unlink(cap, smnt, "/A.TXT"), rc == 0);
+                    SFS_UNLINK_STEP(3, vfs_open(cap, smnt, "/A.TXT", &f), rc != 0);  /* must be gone */
                     /* (2) re-create the tombstoned name. */
-                    if (vfs_create(cap, smnt, "/A.TXT", &f) != 0) ok = 0;
-                    if (vfs_open(cap, smnt, "/A.TXT", &f) != 0) ok = 0;   /* back */
+                    SFS_UNLINK_STEP(4, vfs_create(cap, smnt, "/A.TXT", &f), rc == 0);
+                    SFS_UNLINK_STEP(5, vfs_open(cap, smnt, "/A.TXT", &f), rc == 0);  /* back */
                     /* (3) rmdir requires empty: /D/E/F -> /D not empty; leaf-first. */
-                    if (vfs_create(cap, smnt, "/D/E/F", &f) != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/D") == 0) ok = 0;         /* ENOTEMPTY */
-                    if (vfs_unlink(cap, smnt, "/D/E/F") != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/D/E") != 0) ok = 0;
-                    if (vfs_unlink(cap, smnt, "/D") != 0) ok = 0;
+                    SFS_UNLINK_STEP(6, vfs_create(cap, smnt, "/D/E/F", &f), rc == 0);
+                    SFS_UNLINK_STEP(7, vfs_unlink(cap, smnt, "/D"), rc != 0);        /* ENOTEMPTY */
+                    SFS_UNLINK_STEP(8, vfs_unlink(cap, smnt, "/D/E/F"), rc == 0);
+                    SFS_UNLINK_STEP(9, vfs_unlink(cap, smnt, "/D/E"), rc == 0);
+                    SFS_UNLINK_STEP(10, vfs_unlink(cap, smnt, "/D"), rc == 0);
                     char nm[256]; uint32_t sz; int saw_d = 0;
                     for (int i = 0; vfs_readdir(cap, smnt, "/", i, nm, &sz) == 0; i++)
                         if (nm[0]=='D'&&!nm[1]) saw_d = 1;
-                    if (saw_d) ok = 0;                                    /* /D gone from readdir */
+                    SFS_UNLINK_STEP(11, saw_d, rc == 0);                  /* /D gone from readdir */
                     /* (4) absent name. */
-                    if (vfs_unlink(cap, smnt, "/NOPE") == 0) ok = 0;
-                    kputs(ok ? "[sfs] unlink/rmdir OK\r\n" : "[sfs] unlink/rmdir FAIL\r\n");
+                    SFS_UNLINK_STEP(12, vfs_unlink(cap, smnt, "/NOPE"), rc != 0);
+#undef SFS_UNLINK_STEP
+                    if (ok) {
+                        kputs("[sfs] unlink/rmdir OK\r\n");
+                    } else {
+                        /* step= names WHICH assertion; rc= is what it returned.
+                         * Printed BEFORE the summary line the gates match on, so
+                         * GLOBAL_FORBIDDEN's 40-lines-of-context window carries
+                         * it (DDR-824). */
+                        kputs("[sfs] unlink/rmdir detail step="); kputdec((uint64_t)badstep);
+                        kputs(" rc="); kputdec((uint64_t)badrc); kputs("\r\n");
+                        kputs("[sfs] unlink/rmdir FAIL\r\n");
+                    }
                 }
 
                 /* Phase 5a: write each embedded static ELF to SFS, read it BACK
@@ -1955,6 +1988,40 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] ELF loaded (embedded); stackdemand probe spawned\r\n");
                     } else {
                         kputs("[user] stackdemand probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-973: FAT32 multi-cluster read regression probe.
+                 *
+                 * Rooted at `mnt` -- the FAT32 volume -- not `smnt`, because the
+                 * FAT reader is what is under test. Every other probe in this
+                 * block roots at SFS, so this one states it: `mnt` is the stable
+                 * FAT mount chosen at the top of this function and made the
+                 * process root by vfs_set_default_mnt (main.c:1128), and it is
+                 * NOT reformatted by the destructive self-tests below.
+                 *
+                 * Opt-in (DDR-804) for the reason the ftruncate probe beside it
+                 * is: its arm C execve's /CMUSL.ELF, whose PRADYOS_MUSL_OK would
+                 * otherwise appear a second time in every other gate's log. The
+                 * gate asserts that marker's COUNT, so the extra copy is the
+                 * signal -- it must not be background noise.
+                 *
+                 * root_mnt is set BEFORE sched_unblock (DDR-957 ordering): this
+                 * uses the raw elf_load path, so the assignment and the unblock
+                 * are separate statements and the order is the whole point. */
+                if (probe_enabled("fat32mc")) {
+                    struct tcb *fm = 0;
+                    /* DDR-970: cast to uintptr_t first -- two distinct linker
+                     * symbols, so subtracting them as pointers is undefined
+                     * (C11 6.5.6). */
+                    uint64_t fmlen = (uint64_t)(uintptr_t)fat32mctest_elf_end -
+                                     (uint64_t)(uintptr_t)fat32mctest_elf;
+                    if (elf_load((void *)(uintptr_t)fat32mctest_elf, fmlen,
+                                 "FAT32MC", &fm) == ELF_OK && fm) {
+                        fm->root_mnt = mnt;           /* FAT root before unblock */
+                        sched_unblock(fm);
+                        kputs("[user] ELF loaded (embedded); FAT-rooted multi-cluster probe spawned\r\n");
+                    } else {
+                        kputs("[user] FAT32 multi-cluster probe FAILED to load\r\n");
                     }
                 }
                 if (probe_enabled("ftruncate")) {
@@ -2814,7 +2881,7 @@ void kmain(struct boot_info *bi) {
     fwcfg_init();
 
     /* Phase 3: hardware discovery + first device driver. */
-    acpi_init();
+    acpi_init((uint64_t)bi->acpi_rsdp);   /* DDR-978: 0 on the BIOS path */
     numa_init();      /* DDR-882 (item 17a): SRAT topology, needs ACPI first */
     pmm_numa_rebucket();  /* 17b: re-file the free lists onto their nodes */
     /* DDR-882 (item 17b) probe. Parsing SRAT proves nothing about ALLOCATION:
@@ -2916,6 +2983,49 @@ void kmain(struct boot_info *bi) {
         if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
             nvme_init(d->bus, d->dev, d->func);
     }
+    /* DDR-972: no real disk means the ISO. Every one of the 147 gates boots
+     * through boot_test.sh, which attaches at least one virtio-blk-pci device,
+     * so blk_count() is never 0 for any of them and this branch is UNREACHABLE
+     * under the gate suite — that is the safety argument for the change, not a
+     * hope. The ISO is the only configuration that gets here.
+     *
+     * DDR-971 measured what happens without it: NEXUS KERNEL OK, then
+     * "[blk] no block device" / "[fs] no mountable filesystem found", then
+     * rqdepth=1 curpid=0 forever. Give the kernel a memory-backed root and the
+     * existing bring-up runs unchanged — fs_test_thread's vfs_mount loop finds
+     * it with no edit at all. */
+    if (blk_count() == 0) {
+        /* Mirror the DISK TOPOLOGY the boot path already expects, rather than
+         * relaxing the shared `blk_count() > 2` gate below — that gate is on
+         * the path all 147 gates traverse, and editing it to suit the ISO would
+         * put every one of them at risk to save three allocations.
+         *
+         *   blk0  small, left BLANK  — stands in for the boot disk, which is an
+         *                              MBR image and is not mountable either;
+         *                              fs_test_thread's loop skips it exactly as
+         *                              it skips the real one.
+         *   blk1  4 MiB, SFS         — the root PRISM and init get.
+         *   blk2  4 MiB, left BLANK  — the SFS scratch volume; the existing
+         *                              `blk_count() > 2` block formats it itself
+         *                              and later reformats it destructively.
+         *
+         * Order 6 = 256 KiB, order 10 = 4 MiB; ~8.25 MiB total against ~110 MiB
+         * free. */
+        ramdisk_init(6);                             /* blk0: boot-disk stand-in */
+        int rd_root = ramdisk_init(10);              /* blk1: the root           */
+        ramdisk_init(10);                            /* blk2: SFS scratch        */
+        if (rd_root >= 0) {
+            struct blk_device *rbd = blk_get((unsigned)rd_root);
+            /* Same call the SFS self-tests already make on blk_get(2). A blank
+             * device is what sfs-image ships too ("kernel formats in place"),
+             * so this is the established path, not a new one. */
+            if (rbd && sfs_format(rbd) == 0)
+                kputs("[ramdisk] formatted SFS — ISO root ready\r\n");
+            else
+                kputs("[ramdisk] SFS format FAILED — root unusable\r\n");
+        }
+    }
+
     rng_init();                          /* DDR-816: entropy, fail-closed */
     rng_selftest();                      /* DDR-816: two draws must differ */
     net_init();                          /* NET-B: bring up lwIP over virtio-net */

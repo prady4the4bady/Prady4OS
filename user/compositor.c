@@ -1046,10 +1046,23 @@ int main(void) {
                 int gmaxbox = gtx + (int)surfs[gi].w - 3 * CLOSEBOX - 8;
                 int gdx = gtx + (gmaxbox - gtx) / 2;
                 int gdy = gty + TITLEBAR / 2;
-                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d rz=%d,%d dg=%d,%d\n",
+                /* DDR-983: publish the MAX box too. `gmaxbox` above is already
+                 * the exact `bx` from max_box_hit() (x + w - 3*CLOSEBOX - 8),
+                 * and gby is the shared box-centre y that close/min use — so
+                 * the emitted target cannot drift from what the hit-test
+                 * accepts, which is the property DDR-894 established for rz=.
+                 * It was computed here for the drag point's left edge and never
+                 * published, which is why smoke-wmmax still hardcoded pixels
+                 * against §INV.5 while wmclose did not.
+                 * APPENDED, never inserted: drag_inject.sh isolates fields by
+                 * name (${geom##*dg=}) and mouse_inject.sh scans tokens with
+                 * startswith(field + "="), so a trailing field is safe for both;
+                 * "mx=" also cannot prefix-collide with "min=". */
+                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d rz=%d,%d dg=%d,%d mx=%d,%d\n",
                        surfs[gi].id, surfs[gi].title[0] ? surfs[gi].title : "-",
                        tab_x(gcx), tab_y(gby), tab_x(gmx), tab_y(gby),
-                       tab_x(grx), tab_y(gry), tab_x(gdx), tab_y(gdy));
+                       tab_x(grx), tab_y(gry), tab_x(gdx), tab_y(gdy),
+                       tab_x(gmaxbox + CLOSEBOX / 2), tab_y(gby));
             }
             for (long i = composited; i < ns; i++)
                 printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);

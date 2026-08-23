@@ -19,7 +19,11 @@ struct acpi_sdt_header {
     uint32_t creator_revision;
 } __attribute__((packed));
 
-void acpi_init(void);                                       /* locate RSDP + RSDT/XSDT */
+/* DDR-978: `rsdp_hint` is the physical RSDP address the boot loader found, or 0.
+ * UEFI must supply it (firmware publishes the RSDP via the EFI Configuration
+ * Table, not the legacy 0xE0000 window); BIOS passes 0 and the legacy scan runs.
+ * The value is validated (signature + checksum) before use. */
+void acpi_init(uint64_t rsdp_hint);                         /* locate RSDP + RSDT/XSDT */
 const struct acpi_sdt_header *acpi_find_table(const char sig[4]);   /* NULL if absent */
 
 /* DDR-746: FADT (FACP) power management. acpi_power_init parses the PM1x_CNT

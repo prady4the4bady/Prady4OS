@@ -15,7 +15,7 @@ SHARD="${1:?usage: run_shard.sh <shard-index>}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MANIFEST="$ROOT/tools/ci/gate_shards.txt"
 
-mapfile -t GATES < <(awk -F'\t' -v s="$SHARD" '/^[0-9]/ && NF==3 && $1==s { print $2 }' "$MANIFEST")
+mapfile -t GATES < <(awk -F'\t' -v s="$SHARD" '/^[0-9]/ && NF>=3 && $1==s { print $2 }' "$MANIFEST")
 
 if [ "${#GATES[@]}" -eq 0 ]; then
     echo "run_shard: FAIL — shard $SHARD has no gates. A shard index with no" >&2
@@ -31,7 +31,20 @@ for g in "${GATES[@]}"; do
     count=$((count + 1))
     echo "::group::[$count/${#GATES[@]}] make $g"
     start=$SECONDS
-    if make -C "$ROOT" "$g"; then
+    # DDR-979: merge make's stderr into the SAME file description as its stdout.
+    # Without this the two are separate fds into one pipe with no ordering
+    # guarantee, and a failing gate's serial dump interleaves MID-LINE with
+    # make's own error. That is how the only capture of the intermittent ring-0
+    # panic was destroyed at capture time:
+    #
+    #   component: NEXUS isr
+    #   make: *** [Makefile:2307: smoke-blk-integrity] Error 1
+    #   exception: make: Leaving directory '...'
+    #
+    # -- the "exception: <name> vector= error= RIP=" block, i.e. the only lines
+    # that identify the fault, overwritten by make's. Costs nothing and makes the
+    # next occurrence diagnosable.
+    if make -C "$ROOT" "$g" 2>&1; then
         echo "PASS $g ($((SECONDS - start))s)"
     else
         rc=$?

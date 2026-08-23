@@ -56,6 +56,24 @@ struct boot_info {
     uint32_t e820_count;       /* number of valid e820[] entries */
     char     cpu_vendor[16];   /* CPUID leaf 0 vendor string, NUL-terminated */
     uint32_t long_mode;        /* 1 if CPUID 80000001h EDX.29 set */
-    uint32_t reserved;
+    /* DDR-978: physical address of the ACPI RSDP, or 0 if the loader did not
+     * find one. Was `reserved`; same offset (28), same size, header stays 32 B.
+     *
+     * WHY IT IS NEEDED. The kernel's only other discovery path scans the legacy
+     * BIOS window 0xE0000..0xFFFFF (acpi.c). UEFI firmware is not obliged to put
+     * the RSDP there and OVMF does not -- it publishes it via the EFI
+     * Configuration Table. Without this field a UEFI boot finds no RSDP, hence
+     * no MCFG (no PCIe -> NO DEVICES AT ALL), no MADT (no APs) and no FADT (no
+     * S5 poweroff). Measured in DDR-978 §3.
+     *
+     * BIOS path is unaffected: stage2.asm zeroes the whole 32-byte header
+     * (stage2.asm:108-115) and never writes this, so it stays 0 and the kernel
+     * falls back to the legacy scan exactly as before.
+     *
+     * 32 bits is enough on x86_64 -- firmware ACPI tables live well below 4 GiB
+     * -- and the UEFI loader REFUSES to store an address >= 4 GiB rather than
+     * truncating it. The kernel validates the signature and checksum before
+     * trusting whatever arrives here, so a bad value degrades to the scan. */
+    uint32_t acpi_rsdp;
     struct e820_entry e820[];  /* e820_count entries follow the header */
 } __attribute__((packed));

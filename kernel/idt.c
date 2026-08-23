@@ -89,6 +89,12 @@ void idt_load_ap(void) {
     idt_load(&g_idtr);
 }
 
+/* DDR-979 §6: panic-printer arbitration. g_panic_claimed is the one-winner
+ * latch; g_panic_extra counts CPUs that panicked while the winner was printing
+ * and therefore stayed silent. Both are read by the heartbeat. */
+uint32_t g_panic_claimed;
+uint64_t g_panic_extra;
+
 static void dump_line(const char *label, uint64_t v) {
     kputs(label);
     kputhex(v);
@@ -147,6 +153,98 @@ void irq_register(unsigned irq, irq_handler_fn fn) {
  * the ordering of other memory from its value. */
 _Static_assert(sizeof(g_ticks) == 8, "DDR-889: g_ticks must stay 8 bytes (lock-free atomic add)");
 
+/* DDR-981 — the AP-freeze probe (B#3 / OPEN-2 root cause).
+ *
+ * DDR-977 established the mechanism — an AP stops taking its own LAPIC timer
+ * interrupt, permanently, inside the first ~3 s — but not the cause, and named
+ * four candidates that need different fixes: a cli region that never restores
+ * flags, a fault handler that never returns, a masked/reprogrammed timer LVT,
+ * and a LAPIC that no longer delivers. §NON-NEGOTIABLE 3 forbids fixing the
+ * first without the second, so this measures rather than repairs.
+ *
+ * Detector: a present non-BSP CPU whose own tick counter is unchanged across a
+ * whole 500-tick heartbeat window is not being interrupted (a healthy AP gains
+ * ~500). Latch fires ONCE per boot: one NMI, one dump, no storm.
+ *
+ * Cost on a healthy boot: this compare loop, once per 5 s, and nothing else —
+ * no UART output at all. That is the property DDR-980 removed the cputicks
+ * heartbeat for lacking: its cost was ~30 characters of slow UART inside the
+ * timer ISR on EVERY heartbeat, heavy enough (per DDR-947, 2/12 -> 9/14) to
+ * move the timing it was measuring. This prints only after a CPU has already
+ * frozen, which is the same failure-path-only discipline as DDR-977 §6.
+ *
+ * Called from timer_tick AFTER console_line_unlock, never inside it: the print
+ * arm takes the line lock itself. */
+static void ap_freeze_probe(void) {
+    enum { DUMP_SHOTS = 4 };              /* bounded: 4 NMIs per boot, no storm */
+    static uint64_t s_prev[PERCPU_MAX];   /* each AP's tick count last window */
+    static uint8_t  s_seen[PERCPU_MAX];   /* 1 once s_prev[i] is a real sample */
+    static int      s_victim = -1;        /* the one CPU we sample, once chosen */
+    static unsigned s_shots;              /* how many NMIs sent so far */
+
+    /* Relay arm first, so a dump armed last window is printed even if a second
+     * CPU freezes in this one. The AP release-stored 2; pair with an acquire. */
+    for (uint32_t i = 0; i < PERCPU_MAX; i++) {
+        struct percpu *pc = percpu_get(i);
+        if (!pc || __atomic_load_n(&pc->nmi_dump, __ATOMIC_ACQUIRE) != 2)
+            continue;
+        uint64_t fl = console_line_lock();
+        kputs("[apfreeze] cpu=");   kputdec(i);
+        kputs(" ticks=");           kputdec(pc->ticks);
+        kputs(" rip=");             kputhex(pc->d_rip);
+        kputs(" cs=");              kputhex(pc->d_cs);
+        kputs(" rflags=");          kputhex(pc->d_rflags);
+        kputs(" if=");              kputdec((pc->d_rflags >> 9) & 1u);
+        kputs(" rsp=");             kputhex(pc->d_rsp);
+        kputs(" lvt=");             kputhex(pc->d_lvt);
+        kputs(" masked=");          kputdec((pc->d_lvt >> 16) & 1u);
+        kputs(" svr=");             kputhex(pc->d_svr);
+        kputs(" swen=");            kputdec((pc->d_svr >> 8) & 1u);
+        kputs(" tpr=");             kputhex(pc->d_tpr);
+        kputs(" isr48=");           kputdec(pc->d_isr48);
+        kputs(" irr48=");           kputdec(pc->d_irr48);
+        kputs(" pid=");             kputdec(pc->d_pid);
+        kputs(" shot=");            kputdec(pc->d_shot);
+        kputs(" bt=");
+        for (unsigned k = 0; k < pc->d_btn; k++) {
+            if (k) kputs(",");
+            kputhex(pc->d_bt[k]);
+        }
+        kputs("\r\n");
+        console_line_unlock(fl);
+        __atomic_store_n(&pc->nmi_dump, (uint8_t)0, __ATOMIC_RELAXED);
+    }
+
+    if (s_shots >= DUMP_SHOTS)
+        return;
+    for (uint32_t i = 0; i < PERCPU_MAX; i++) {
+        struct percpu *pc = percpu_get(i);
+        if (!pc || !pc->present || pc->is_bsp)
+            continue;
+        uint64_t t = pc->ticks;
+        if (s_seen[i] && t == s_prev[i] && pc->nmi_dump == 0) {
+            /* Frozen for a full window. Sample it up to DUMP_SHOTS times, one
+             * per heartbeat, and stay on the FIRST frozen CPU (s_victim): a
+             * walking RIP across shots means the CPU is running and merely
+             * masked, a pinned RIP means it is spinning. That is the question
+             * a single shot cannot answer. */
+            if (s_victim >= 0 && s_victim != (int)i)
+                continue;
+            s_victim = (int)i;
+            pc->d_shot = (uint8_t)(++s_shots);
+            /* Arm before sending: the handler only consumes an NMI it was
+             * armed for, so an unsolicited machine NMI still panics. */
+            __atomic_store_n(&pc->nmi_dump, (uint8_t)1, __ATOMIC_RELEASE);
+            lapic_send_nmi(pc->apic_id);
+            /* Deliberately no wait here: this is the timer ISR. The dump is
+             * relayed by the next heartbeat's arm above, 5 s later. */
+            return;
+        }
+        s_prev[i] = t;
+        s_seen[i] = 1;
+    }
+}
+
 static void timer_tick(struct regs *r) {
     /* DDR-952: use THIS tick's value, never a re-read of the global.
      * DDR-889 made the increment atomic, which stopped ticks being LOST, but
@@ -179,6 +277,19 @@ static void timer_tick(struct regs *r) {
         { extern uint64_t g_thre_drops, g_rx_drops;
           kputs(" thre_drops="); kputdec(g_thre_drops);
           kputs(" rx_drops=");   kputdec(g_rx_drops); }
+        /* DDR-981: yields that arrived with IF already masked — i.e. how often
+         * the interrupt window in yield() was actually needed. This is the
+         * denominator for "the fix is exercised" (R17): a gate asserting no
+         * [apfreeze] proves nothing if ymask stayed 0. One fixed-width numeric
+         * read of one global, which is the class DDR-977 §7.2 justified; the
+         * cost DDR-980 removed was per-CPU work plus ~30 chars, not this. */
+        { extern uint64_t g_yield_masked;
+          kputs(" ymask="); kputdec(g_yield_masked); }
+        /* DDR-979 §6: panics that stayed silent so the winner's dump stayed
+         * readable. Nonzero means MORE THAN ONE CPU panicked this boot — which
+         * the old unserialised printer showed only as a garbled dump. */
+        { extern uint64_t g_panic_extra;
+          if (g_panic_extra) { kputs(" panics_silent="); kputdec(g_panic_extra); } }
         /* DDR-890: how much did switch_wait_offcpu_sched spin in this window?
          * spins is the total across CPUs; max/cpu name the busiest one. This is
          * the data that decides whether the DDR-887 preemption-suppression
@@ -267,14 +378,83 @@ static void timer_tick(struct regs *r) {
            * baseline — exactly the case it was added to diagnose — so the
            * steady state pays only the fixed-width numeric fields. */
           if (rd > 8u) { kputs(" cur="); kputs(sched_current_name()); } }
+        /* DDR-977 §5's per-CPU cputicks[] instrument lived here and was REMOVED
+         * — see DDR-980. It did its job (it produced the CPU-3 freeze evidence
+         * and the clean negative control), and keeping it was a bad trade: it
+         * added work and ~30 characters of slow UART output to the timer ISR
+         * every 500 ticks, which is precisely the hazard DDR-947 recorded when a
+         * timer-ISR instrument moved the failure rate it was measuring from
+         * 2/12 to 9/14. Re-add it behind an opt-in build flag if the CPU-3 work
+         * resumes; do not put it back on the default path. */
         kputs("\r\n");
         console_line_unlock(hbfl);                /* DDR-963 §5 */
+        ap_freeze_probe();                        /* DDR-981 — after the unlock */
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
         signal_deliver(r);            /* to the ring-3 thread we're returning to */
 }
 
 void isr_dispatch(struct regs *r) {
+    /* DDR-981: NMI (vector 2) as the AP-freeze probe. Only a CPU the BSP armed
+     * consumes it; an unsolicited NMI still falls through to the panic path
+     * below, so this cannot mask a real machine NMI.
+     *
+     * Nothing here takes a lock or touches the console: a wedged AP may be
+     * holding g_line_lock, and printing from this context would deadlock the
+     * one CPU still able to report. We stash into our own percpu slot and let
+     * the BSP relay it from the heartbeat. No EOI — NMI is not an APIC
+     * interrupt, and IRET is what re-opens the NMI window. */
+    if (r->vector == 2) {
+        /* DDR-981 §9: resolve by LAPIC id, NOT this_cpu(). NMI is asynchronous
+         * and syscall_entry.asm has a one-instruction window at each end where
+         * CS reads ring 0 while the USER's GS base is still active; this_cpu()
+         * (and current_thread, which is this_cpu()->current) would then read
+         * %gs:0 against a user GS base of 0 — linear address 0, in ring 0.
+         * The LAPIC id is an MMIO read and does not depend on GS. */
+        struct percpu *npc = percpu_by_apic_id(lapic_id());
+        if (npc && npc->nmi_dump == 1) {
+            npc->d_rip    = r->rip;
+            npc->d_rsp    = r->rsp;
+            npc->d_rbp    = r->rbp;
+            npc->d_rflags = r->rflags;
+            npc->d_cs     = (uint32_t)r->cs;
+            lapic_snapshot(&npc->d_lvt, &npc->d_tpr, &npc->d_svr,
+                           &npc->d_isr48, &npc->d_irr48);
+            /* Same reason: read the pid out of the slot we just resolved
+             * safely, never via current_thread (which is %gs-relative). */
+            npc->d_pid    = npc->current ? npc->current->tid : 0u;
+            /* Frame-pointer walk. The kernel is built -fno-omit-frame-pointer,
+             * so [rbp] = caller rbp and [rbp+8] = return address. Bound every
+             * link to the 16 KiB stack this frame is on (8-aligned, above rsp,
+             * within one STACK_SIZE) so a garbage rbp cannot fault us in NMI
+             * context, where a #PF would be the end of the report.
+             *
+             * KERNEL FRAMES ONLY. If this NMI interrupted ring 3, r->rsp and
+             * r->rbp are USER values and the bound above proves nothing — the
+             * whole range is then user memory, so a user-chosen in-range rbp
+             * could fault us or feed the report its own bytes. Same lesson as
+             * §9 one field up: an NMI must not assume what it interrupted.
+             * Every capture so far is cs=0x8, so this costs nothing real and
+             * removes the assumption. d_btn stays 0 for a ring-3 sample. */
+            npc->d_btn = 0;
+            if ((r->cs & 3u) == 0) {
+                uint64_t fp = r->rbp, lo = r->rsp, hi = r->rsp + 16384u;
+                for (unsigned k = 0; k < 4; k++) {
+                    if (fp < lo || fp >= hi || (fp & 7u))
+                        break;
+                    const uint64_t *f = (const uint64_t *)(uintptr_t)fp;
+                    npc->d_bt[k] = f[1];          /* return address */
+                    npc->d_btn = (uint8_t)(k + 1);
+                    uint64_t nfp = f[0];
+                    if (nfp <= fp)                /* frame chain must grow upward */
+                        break;
+                    fp = nfp;
+                }
+            }
+            __atomic_store_n(&npc->nmi_dump, (uint8_t)2, __ATOMIC_RELEASE);
+            return;
+        }
+    }
     /* AP wake IPI (DDR-SMP-3c-alpha): its only job is to break hlt; EOI + out. */
     if (r->vector == LAPIC_TIMER_VECTOR + 1) {
         lapic_eoi();
@@ -437,6 +617,32 @@ void isr_dispatch(struct regs *r) {
      * panic into a silent machine-wide hang. Drop it before printing: the path
      * is terminal and the lock guards only cosmetic line atomicity. */
     console_line_force_release();
+
+    /* DDR-979 §6: only the FIRST panicking CPU prints.
+     *
+     * The release above is required (DDR-970: a ring-0 fault skips the ring-3
+     * trylock branch, so a CPU halting here could still hold g_line_lock and
+     * hang the machine) — but it leaves the dump completely unserialised, and
+     * dump_line is three separate unlocked calls. Two CPUs panicking at once
+     * then interleave inside kputhex, and since a hex digit is 4 bits, four
+     * interleaved digits are a 16-bit shift: that is how OPEN-12's capture came
+     * back with RIP=0x0000FFFFFFFF8001 and RBP == RSP >> 16, which reads exactly
+     * like a misaligned exception frame and is not one.
+     *
+     * Re-locking would reinstate the deadlock DDR-970 removed. Claiming instead
+     * keeps that property and makes the dump readable, which is the
+     * precondition for diagnosing the #GP at all. Losers print NOTHING — even a
+     * one-line "me too" would interleave with the winner's dump and reintroduce
+     * the problem — and instead bump a counter the heartbeat surfaces, so a
+     * second panic is recorded rather than silently dropped. */
+    {
+        uint32_t expected = 0;
+        if (!__atomic_compare_exchange_n(&g_panic_claimed, &expected, 1u, 0,
+                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            __atomic_add_fetch(&g_panic_extra, 1, __ATOMIC_RELAXED);
+            for (;;) __asm__ volatile("cli; hlt");
+        }
+    }
 
     kputs("\r\n*** NEXUS KERNEL PANIC ***\r\n");
     kputs("component: NEXUS isr\r\n");

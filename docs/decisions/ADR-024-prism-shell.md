@@ -60,11 +60,22 @@ collects the child). Builtin set for 5e:
 - `cat <path>` — `open`/`read`/`write` a file to the console (real; uses existing
   NSI calls).
 - `run <path>` — fork+execve+wait an external ELF (real).
-- `ls` — **minimal stub** for 5e (prints a "pending SYS_GETDENTS" notice): the NSI
+- `ls` — **[HISTORICAL — 5e scope only; superseded, see below]** minimal stub for
+  5e (prints a "pending SYS_GETDENTS" notice): the NSI
   has no directory-enumeration call yet; adding `SYS_GETDENTS` is a focused
   follow-up, not part of the shell-bringup slice.
-- `ps` — **minimal stub** (prints the shell's own pid via `getpid` + a notice): a
+- `ps` — **[HISTORICAL — 5e scope only; superseded, see below]** minimal stub
+  (prints the shell's own pid via `getpid` + a notice): a
   real `ps` needs a process-table syscall (`SYS_PS`/procfs), deferred.
+
+> **CURRENT STATE (supersedes the two entries above).** `SYS_GETDENTS` (NSI 66)
+> and `SYS_GETPROCS` (NSI 67) are **shipped** (DDR-742/743), and PRISM's `ls` and
+> `ps` use them — neither is a stub any more. The two entries above describe the
+> 5e milestone as it stood, and are kept because the D5 discussion below refers
+> back to them; they are not a statement about the shipped shell. This matters
+> beyond tidiness: CLAUDE.md §INV.11 exists precisely because a session read a
+> stale "deferred" note here and started re-implementing calls that already
+> existed.
 - `exit` — terminate the shell cleanly (exit code 0).
 - Unknown command → `prism: unknown command: <cmd>` and reprompt (never crash).
 
@@ -83,6 +94,29 @@ its 5d startup self-check (fork a child that `_exit(42)`, reap it) so `smoke-ini
 stays green.
 **Deferred:** init-driven `fork`+`execve` **respawn** (needs the FAT32 large-read
 / execve-of-large-musl-C fix). Tracked in `build_status.md`.
+
+> **Addendum 2026-08-22 (DDR-973) — the FAT32 attribution is refuted; the
+> deferral is narrower than it reads.**
+>
+> "Root cause is most likely FAT32 multi-cluster reads" was a hypothesis, never a
+> measurement, and it does not hold. `run /CMUSL.ELF` — the same large musl-C
+> ELF this section names, 30,488 B spanning **60** FAT32 clusters — execve's
+> from the FAT root cleanly and prints `PRADYOS_MUSL_OK` with status 0. The
+> function the backlog inherited from this paragraph, `read_cluster_chain`, has
+> never existed in this repo; the reader is `fat32_read`. Two fixtures already
+> disproved a shallow chain bug before DDR-973 was written: `/BIG8K.TXT` (16
+> clusters, read byte-exact through a pipe by `smoke-shell`) and
+> `/EXECTEST.ELF` (9 clusters, through the full `sys_execve` path).
+>
+> `smoke-fat32-multicluster` now holds this permanently: 65,536 B / 128 clusters
+> verified byte-for-byte, 6 cluster-boundary straddles, plus this section's own
+> case as arm C.
+>
+> **What is still deferred is only the init-driven respawn itself** — init
+> `fork`+`execve`ing PRISM and restarting it on abnormal exit. That is unbuilt
+> work, not a blocked-on-a-kernel-bug item. PRISM's own `run` builtin is *not*
+> disabled: `user/prism.c` dispatches it, and `smoke-shell` exercises
+> `run /EXECTEST.ELF` twice plus `jobs`/`fg`.
 - *Aside (general fork fix shipped here):* forked children previously resumed
   with only RIP/RSP/RAX set (other GP regs zeroed — a documented `sys_fork`
   limitation). 5e exposed it (init's non-inlined `nsi` faulted on `rbp=0`) and
@@ -106,7 +140,8 @@ QEMU invocation (the existing `boot_test.sh` is output-only); all prior gates +
 - No new NSI number — `FD_CONSOLE` read is a behavior addition to `SYS_READ`;
   ADR-021 W^X and the append-only NSI are untouched.
 - Deferred (tracked here + `build_status.md`): RX interrupts/line discipline,
-  `SYS_READV` (musl stdin), `SYS_GETDENTS` (`ls`), process-table syscall (`ps`),
+  `SYS_READV` (musl stdin), ~~`SYS_GETDENTS` (`ls`), process-table syscall
+  (`ps`)~~ — both shipped since, as NSI 66 / 67,
   pipes/redirection/quoting/job-control/scripting/history, respawn rate-limiting.
 
 ## Build order after 5e

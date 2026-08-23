@@ -23,6 +23,8 @@
 #define LAPIC_SVR          0x0F0
 #define LAPIC_ICR_LO       0x300   /* write triggers the IPI (bit 12 = busy) */
 #define LAPIC_ICR_HI       0x310   /* destination LAPIC id in bits 56..63    */
+#define LAPIC_ISR_BASE     0x100   /* in-service bitmap, 8 dwords, 16B stride */
+#define LAPIC_IRR_BASE     0x200   /* interrupt-request bitmap, same shape    */
 #define LAPIC_LVT_TIMER    0x320
 #define LAPIC_TIMER_ICR    0x380   /* initial count  */
 #define LAPIC_TIMER_CCR    0x390   /* current count  */
@@ -74,6 +76,36 @@ void lapic_send_ipi(uint32_t dest_id, uint32_t icr_low) {
 
 void lapic_eoi(void) {
     lapic_wr(LAPIC_EOI, 0);
+}
+
+/* DDR-981: fire an NMI at one CPU. NMI is the only interrupt that still reaches
+ * a CPU spinning with IF clear or wedged with an un-EOI'd in-service vector —
+ * which is exactly the state we are trying to tell apart. Delivery mode 100b
+ * (0x400), level-assert (0x4000), edge; the vector field is ignored for NMI and
+ * the CPU vectors to 2 regardless. */
+void lapic_send_nmi(uint32_t dest_id) {
+    lapic_send_ipi(dest_id, 0x4400u);
+}
+
+/* DDR-981: the calling CPU's own LAPIC state, read from NMI context. Lives here
+ * because the register offsets do. ISR/IRR are 256-bit bitmaps in eight 16-byte
+ * -strided dwords; LAPIC_TIMER_VECTOR (48) is dword 48/32 == 1, bit 48%32 == 16.
+ *   svr bit 8 clear      -> the LAPIC is software-disabled
+ *   lvt bit 16 set       -> the timer LVT is masked
+ *   isr bit set          -> a timer interrupt was taken and never EOI'd
+ *   irr bit set, isr not -> it is pending and cannot be delivered (IF clear/TPR)
+ * Any of those distinguishes one DDR-977 §5 candidate from the others. */
+void lapic_snapshot(uint32_t *lvt, uint32_t *tpr, uint32_t *svr,
+                    uint32_t *isr48, uint32_t *irr48) {
+    if (!g_lapic) {
+        *lvt = *tpr = *svr = *isr48 = *irr48 = 0xFFFFFFFFu;
+        return;
+    }
+    *lvt = lapic_rd(LAPIC_LVT_TIMER);
+    *tpr = lapic_rd(LAPIC_TPR);
+    *svr = lapic_rd(LAPIC_SVR);
+    *isr48 = (lapic_rd(LAPIC_ISR_BASE + 0x10u) >> (LAPIC_TIMER_VECTOR % 32)) & 1u;
+    *irr48 = (lapic_rd(LAPIC_IRR_BASE + 0x10u) >> (LAPIC_TIMER_VECTOR % 32)) & 1u;
 }
 
 void lapic_ap_enable(void) {

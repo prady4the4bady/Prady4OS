@@ -43,3 +43,13 @@ uint32_t lapic_apic_id_at(unsigned i);
 /* Send an IPI: dest LAPIC id + the ICR low word (delivery mode/vector/level),
  * then wait for the delivery-status bit to clear (ADR-029 INIT-SIPI). */
 void lapic_send_ipi(uint32_t dest_id, uint32_t icr_low);
+
+/* DDR-981: fire an NMI at one LAPIC id — reaches a CPU that is not taking its
+ * ordinary interrupts, which is the whole point of the AP-freeze probe. */
+void lapic_send_nmi(uint32_t dest_id);
+
+/* DDR-981: the calling CPU's own LVT-timer / TPR / SVR, plus the in-service and
+ * request bits for LAPIC_TIMER_VECTOR. Safe from NMI context (MMIO reads only,
+ * no locks). All-ones in every field when the LAPIC is not mapped. */
+void lapic_snapshot(uint32_t *lvt, uint32_t *tpr, uint32_t *svr,
+                    uint32_t *isr48, uint32_t *irr48);

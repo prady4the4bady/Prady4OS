@@ -1,20 +1,46 @@
-# Basic `dependabot.yml` file with
-# minimum configuration for two package managers
-
+# Dependabot version updates for PRADYOS.
+#
+# 2026-08-22 correction: the npm entry pointed at `/`, where there is no
+# `package.json` — the project's only npm manifest is `tools/graph_mcp/`. So the
+# npm half of this file had never scanned anything. `directory:` is a literal
+# path, not a glob, so the fix is to name the real directory.
+#
+# NOTE: version updates (this file) and security alerts are separate systems.
+# Alerts come from the repository dependency graph and fire whether or not this
+# file is correct — which is why Dependabot PR #2 existed despite the broken
+# path above. Fixing the path does not clear or explain any existing alert.
+#
+# Current dependency surface, for reference:
+#   tools/graph_mcp/package-lock.json  — 97 packages; `npm audit` reports
+#                                        0 vulnerabilities at every severity
+#                                        (measured 2026-08-22). The advisories
+#                                        Dependabot PR #2 raises are already
+#                                        remediated here: @hono/node-server is
+#                                        at 2.1.0 and fast-uri at 3.1.5.
+#   tests/toolchain/hello_rs/Cargo.toml — no dependencies at all, so no cargo
+#                                        ecosystem entry is warranted.
+#   Dockerfile (repo root)             — FROM ubuntu:24.04, pinned ON PURPOSE
+#                                        to match the WSL host so container and
+#                                        host builds agree. Dependabot PR #3
+#                                        (24.04 -> 26.04) is declined for that
+#                                        reason; see docs/BUILD_TRACKER.md.
 version: 2
 updates:
-  # Enable version updates for npm
   - package-ecosystem: "npm"
-    # Look for `package.json` and `lock` files in the `root` directory
-    directory: "/"
-    # Check the npm registry for updates every day (weekdays)
+    directory: "/tools/graph_mcp"
     schedule:
       interval: "daily"
 
-  # Enable version updates for Docker
   - package-ecosystem: "docker"
-    # Look for a `Dockerfile` in the `root` directory
+    directory: "/"          # the Dockerfile really is at the repo root
+    schedule:
+      interval: "weekly"
+
+  # The CI workflows pin actions by major tag (actions/checkout@v5,
+  # actions/setup-python@v5). Without this ecosystem Dependabot never proposes
+  # bumps for them, and a major-tag pin silently absorbs whatever the action
+  # owner pushes to that tag.
+  - package-ecosystem: "github-actions"
     directory: "/"
-    # Check for updates once a week
     schedule:
       interval: "weekly"

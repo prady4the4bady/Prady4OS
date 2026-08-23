@@ -6436,3 +6436,495 @@ that tip, fast-forward `main`, tag `v1.0.0`.
 "do not start Phase 2 before the gate" ordering): the merge hold set earlier in
 session was lifted by the operator, who confirmed the full merge → promote → tag
 path. Any push by another actor resets the green count on the new tip.
+
+---
+
+## STOP-THE-RELEASE FINDING — the ISO boots a kernel, not an OS (DDR-971)
+
+`main` is at `7c6c67a` (PR #5 merged and promoted; three greens on the PR tip
+and three on `dev/phase1`). **`v1.0.0` is NOT tagged and must not be** until the
+finding below is fixed.
+
+First real end-to-end walkthrough of `build/pradyos.iso` (52,805,632 B, sha256
+`8a5e6507e18954e1`): both `smoke-iso-x86` arms pass, and the image is unusable.
+The kernel reaches `NEXUS KERNEL OK`, reports `[blk] no block device` /
+`[fs] no mountable filesystem found`, and idles at `rqdepth=1 curpid=0`.
+
+Control arm (same `kernel.bin`, normal 3-disk boot) shows 4 mounts, PRISM_READY,
+50 prompts, aetherd, 26 ELF loads. **The kernel is fine; the packaging is not.**
+
+The ISO ships `pradyos.img` + `esp.img` only. `fat.img`/`sfs.img` are separate
+virtio-blk disks the gates attach. After handoff the kernel cannot read the
+ATAPI CD it booted from, and there is no ramdisk facility. The gate is green
+because `NEXUS KERNEL OK` prints at line 30 of 145, ~60 lines before userspace.
+
+**Do not read `smoke-iso-x86` green as "the ISO works".** It proves the loader
+handoff only — which is what DDR-896 built it to prove.
+
+Next: implement a root the kernel can reach after handoff (DDR-971 §8; ramdisk
+`blk_device` recommended, 519,810 B of kernel headroom bounds it), then redo the
+DDR-971 walkthrough, then tag.
+
+Note: `xorriso` and OVMF had to be apt-installed in the build container — the
+ISO target had never been run in this environment.
+
+---
+
+## CHECKPOINT 2026-08-22 — ISO root fixed (DDR-972); two backlog items closed as refutations (DDR-973, DDR-968)
+
+### The DDR-971 stop-the-release finding is RESOLVED
+
+`DDR-972` shipped a PMM-backed ramdisk `blk_device`
+(`kernel/drivers/blk/ramdisk.c`) behind a `blk_count() == 0` guard in `kmain`.
+On a normal 3-disk boot the guard is false and nothing changes (verified
+empirically: `grep -c ramdisk` on a disk-backed capture = 0). On the ISO, where
+the kernel cannot read the ATAPI CD it booted from, it registers three devices
+mirroring the disk topology — blk0 boot-disk stand-in, blk1 the root (formatted
+in place by `sfs_format`), blk2 SFS scratch — because userspace bring-up is
+gated on `blk_count() > 2` and roots at `blk_get(2)`. Mirroring the topology was
+chosen over relaxing that gate, which all 147 gates traverse. New gate
+`smoke-iso-userspace` boots the ISO and asserts the full stack: mount, PRISM,
+aetherd, agent lifecycle, file create/read/rm, GPU, surfaces, TCP loopback.
+
+**`v1.0.0` is still not tagged.** The DDR-971 walkthrough now passes, but the
+tag was deliberately not applied in the DDR-972 change. The ramdisk root is
+volatile — that belongs in the release notes before tagging.
+
+### ITEM 2 / smoke-agents — CLOSED as not reproduced (no code change)
+
+The DDR-968 instrument (`PRADYOS_AGENT_WITNESS_WAIT pid= disp= state= n=`) has
+been live since `ea4601e` and has never printed. That is the measurement, not a
+gap: the line is emitted only while the witness is **unarmed**, so a green boot
+emits zero of them by construction (DDR-968 §3, measured 0 across a 424-line
+capture). `smoke-agents` is a **gating** test — `tools/ci/gate_shards.txt` puts
+it on shard 2 and it is absent from `shard_check.sh`'s EXCLUDE list — so any
+recurrence would have failed its whole check suite. 18 suites have been green on
+shard 2 since. There is no red artefact, therefore no named mechanism, therefore
+§NON-NEGOTIABLE 3 forbids a fix. Instrument stays armed.
+
+**Reopen on the first witness line.** `disp=0` confirms DDR-968 §2's reading
+(the agent thread exists and was never switched in); `disp>0` refutes it and
+points at sampling instead.
+
+### FAT32 multi-cluster — CLOSED as a refutation + a new gate (DDR-973)
+
+The backlog said: "`execve` of large musl ELF corrupts — multi-cluster
+`read_cluster_chain` bug (ADR-024)". Both halves are wrong.
+
+- **`read_cluster_chain` has never existed in this repo.** The reader is
+  `fat32_read` (`kernel/fs/fat32/fat32.c:309`).
+- **The symptom does not reproduce.** `run /CMUSL.ELF` — the same large musl-C
+  ELF ADR-024 §D5 names, 30,488 B spanning **60** clusters — execve'd from the
+  FAT root, printed `PRADYOS_MUSL_OK`, exited 0. Control `/EXECTEST.ELF` in the
+  same capture also 0.
+- ADR-024 hedged the attribution at the time ("root cause is **most likely**").
+  The hedge was lost as the item was copied into `build_status.md` and then
+  `CLAUDE.md`, where it hardened into a named function to repair.
+
+Shipped instead: `smoke-fat32-multicluster` (shard 3, 90 s), probe
+`user/fat32mctest.c`, fixture `/BIGPAT.BIN` (64 KiB = 128 clusters). Arm A scans
+all 65,536 bytes; arm B does 6 cluster-boundary straddles via `lseek`; arm C is
+ADR-024's own execve case, asserted by **count** (`PRADYOS_MUSL_OK` must appear
+twice — the boot's SFS-loaded copy is the denominator).
+
+**Read DDR-973 §6 before touching this gate.** Its first cut was **vacuous**: a
+mutant that re-read cluster 63 instead of advancing PASSED, because the pattern
+CLAUDE.md specifies — `(7n+3) & 0xFF` — has period 256 and this volume's
+clusters are 512 B, so every cluster on the disk held identical bytes. The
+shipped pattern is `(7n + 3 + 31*(n>>8)) & 0xFF`; 31 is invertible mod 256, so
+no two 256-byte windows in the file are equal. Do not "simplify" it back.
+
+Second mutant (cap `fat32_read` at 16 KiB) fails arm C alone, proving arm C is
+not redundant with A and B — it is the only arm issuing a read above 4 KiB.
+
+### Also corrected in this checkpoint
+
+- **PRISM `run` is not disabled and never was.** `user/prism.c` dispatches it,
+  `smoke-shell` runs `run /EXECTEST.ELF` twice plus `jobs`/`fg`. ADR-024
+  deferred only **init-driven fork+execve RESPAWN of PRISM**, which is unbuilt
+  work, not a blocked item. Group D row corrected, not closed.
+- `CLAUDE.md` build state: gate count 147 → **149**, `kernel.bin` 1,053,054 →
+  **1,061,246 B** (each embedded probe costs a page-aligned 8,192 B), DDR free
+  range **974+**, PR #5 line updated (it was still saying "draft, base
+  dev/phase1" after the merge).
+- `docs/AETHER_MASTER_FEATURES.md` was **not** touched: neither item changes a
+  feature it tracks. Said here so the omission is not read as an oversight.
+
+### Next
+
+1. Watch PR #6 to green; drive it to merge.
+2. Release notes for the ramdisk root's volatility, then tag `v1.0.0`.
+3. STEP 4 — Dependabot: **DONE.** The alert list has no API tool in this
+   session, but Dependabot's own open PRs name everything. **PR #2** is the
+   security one: `@hono/node-server` 1.19.14→2.1.0 (GHSA-9mqv-5hh9-4cgg —
+   unauthenticated memory-leak DoS via an aborted WebSocket handshake) and
+   `fast-uri` 3.1.2→3.1.5 (GHSA-4c8g-83qw-93j6, GHSA-v2hh-gcrm-f6hx,
+   GHSA-7p8r-x3mc-p8w7), both in `/tools/graph_mcp`. Two packages, five
+   advisories — that is the "5 alerts (2 high, 3 moderate)".
+   **They are already fixed:** the committed `package-lock.json` carries 2.1.0
+   and 3.1.5, at or above every fix, which is why `npm audit` reports 0 vulns at
+   every severity across 97 packages. PR #2 is superseded (its base is
+   `dev/phase1` @ `fd876cd`); left open — closing the operator's PR is their
+   call. **PR #3 (docker `ubuntu` 24.04→26.04) is DECLINED and should stay
+   declined:** not a security update, and the Dockerfile pins 24.04 on purpose
+   so container and WSL builds agree — moving the container alone reintroduces
+   the drift the image exists to remove, and swapping clang/lld/nasm/QEMU under
+   a 149-gate suite days before the deadline is not a change to make now.
+   Config defect fixed on the way: `.github/dependabot.yml` pointed npm at `/`,
+   which has no `package.json`, so npm *version* updates had never scanned
+   anything; now `/tools/graph_mcp`, plus a `github-actions` ecosystem (the
+   workflows pin by major tag with nothing watching). That path bug never
+   affected the alerts — security updates come from the dependency graph, which
+   is why PR #2 existed despite it.
+4. STEP 5 — Group A–H backlog; B#3 virtio-blk SMP stall is the ISO blocker.
+
+---
+
+## CHECKPOINT 2026-08-22 (late) — STEP 1-5 done; B#3 root-caused; UEFI had no PCIe
+
+Branch `dev/phase1-seyp3n`, PR #6, 13 commits. `main` is STILL `7c6c67a` and
+**`v1.0.0` is still untagged** — read §"Release state" below before tagging.
+
+### The five STEP items are all closed
+
+| step | outcome |
+|---|---|
+| 1 — manual ISO verify | **DONE — DDR-978.** Found and FIXED a major UEFI defect (below). Both firmware arms now pass a real driven-shell walkthrough. |
+| 2 — smoke-agents | **Closed, not reproduced.** DDR-968's witness prints only on a failing boot and has never printed across 18+ green shard-2 suites. No artefact ⇒ §NON-NEGOTIABLE 3 forbids a fix. |
+| 3 — FAT32 multi-cluster | **Closed as a REFUTATION + gate — DDR-973.** `read_cluster_chain` never existed; `run /CMUSL.ELF` (60 clusters) execve's clean. Shipped `smoke-fat32-multicluster`. |
+| 4 — Dependabot | **Closed — the 5 alerts are already remediated.** PR #2 names them; the lockfile already carries the fixed versions. PR #3 (ubuntu 26.04) declined with reasons. |
+| 5 — backlog | B#3 root-caused (below); three intermittents characterised. |
+
+### B#3 is NOT a virtio-blk defect — DDR-976/977
+
+`[vblk] compl wait timeout` fires **17/20** boots at `-smp 4` and **0/10** at
+`-smp 1`. Not cosmetic: `submit()` returns **`-EIO`**, so each is a failed I/O.
+
+Root cause: **CPU 3 stops taking its own LAPIC timer interrupt** early in boot
+and never resumes. Across 4 boots / 60 timeouts, `ticks[c0,c1,c2,c3]` shows CPUs
+0/1/2 advancing exactly +500 per 5 s deadline while CPU 3 is frozen at one value.
+virtio-blk is the VICTIM — `virtio_blk.c:342` routes unit 2's vector to CPU 3, so
+it is the only subsystem blocking on a deadline waiting for a dead CPU. **This is
+why DDR-878 found the block layer clean and was right to.**
+
+**Do NOT patch `virtio_blk.c` for B#3.** Why CPU 3 wedges is still unknown;
+DDR-977 §5 lists the candidates and specifies the next instrument.
+
+**B#3 does not block the ISO.** Only 20 of 149 gates set `QEMU_SMP`, and neither
+ISO gate does — the ISO boots uniprocessor, where the defect cannot occur.
+
+### The UEFI ISO had ZERO PCI devices — DDR-978
+
+`find_rsdp()` scanned only the legacy 0xE0000 window; OVMF publishes the RSDP via
+the EFI Configuration Table, which the loader never read. Cascade: no RSDP → no
+MCFG (**PCIe enumerated nothing**), no MADT (no APs), no FADT (no poweroff). The
+ISO booted under UEFI *only* because DDR-972's ramdisk fallback fires on
+`blk_count()==0` — the condition this defect creates.
+
+Fixed via the existing spare `boot_info.reserved` → `acpi_rsdp` (stage2 zeroes
+the header, so the BIOS path is unchanged by construction; the kernel validates
+signature+checksum so a bad value degrades to the scan). Measured 0 → 10 devices
+on ESP, 0 → 7 on the ISO, with GPU/net/compositor all appearing.
+`smoke-uefi` hardened and **mutation-checked** — it was passing on a machine with
+no PCI devices at all.
+
+### Three intermittents, all with same-SHA green siblings (none are regressions)
+
+| issue | rate | state |
+|---|---|---|
+| `smoke-wmmax` | 2 / ~24 shard-5 runs, **at two different assertions** | DDR-975 §7 (resize-ack) and §8 (restore click). 8/8 local pass. Leading candidate: the injector's hardcoded coords vs §INV.5. **Not fixed — cannot validate against a failure that will not reproduce.** |
+| **OPEN-12** ring-0 panic | 1 / ~24, `component: NEXUS isr`, t≈185 | DDR-979. 0/10 local. Artefact was DESTROYED by make's stderr interleaving mid-line over the `exception:/vector=/RIP=` block; `run_shard.sh` now merges the streams so the next one is readable. |
+| CPU 3 freeze | ~17/20 at `-smp 4` | DDR-976/977 above. |
+
+### Release state — what remains
+
+1. **`main` is `7c6c67a`** and carries **neither** DDR-972's ramdisk root **nor**
+   DDR-978's UEFI fix. Tagging `main` today would tag the DDR-971 image.
+2. Sequence: get 3 greens on one PR-#6 tip → merge → re-run the DDR-978
+   walkthrough on **main's own** ISO → then tag `v1.0.0`.
+3. The two intermittents above make 3-consecutive-greens probabilistic; budget
+   re-runs.
+
+### Instruments now live (all failure-path or once-per-500-ticks)
+
+- `[vblk] compl wait timeout unit= dest_cpu= dest_dticks= dest_abs= bsp_abs= dest_present= ticks[…] on_cpu= lba=`
+- `[hb] … cputicks[c0,c1,c2,c3]` — per-CPU liveness, every boot, every `-smp`.
+
+### Gate count 149. DDR free range: **DDR-980+** (973-979 allocated this session).
+
+---
+
+## CHECKPOINT 2026-08-22 23:2x UTC — DDR-981: B#3 and OPEN-2 are FIXED
+
+**Commit `d7a2912` on `dev/phase1-seyp3n` (PR #6).** This supersedes the
+"CPU 3 freeze — DDR-976/977" row in the intermittents table above and the
+"budget re-runs" caveat in Release state item 3: that intermittent was the
+dominant one, and it is gone.
+
+### Root cause
+
+`yield()` spun with `RFLAGS.IF` clear. `SYSCALL` entry masks interrupts via
+`MSR_SFMASK` (`syscall.c:229`) and the entry path deliberately never re-enables
+them (`syscall_entry.asm:46`). So every yield-spin reachable from ring 3 was a
+masked spin — `mnt_lock` (`vfs.c:27`), both pipe waits and the blocking console
+read (`sys_io.c:57/268/293`, i.e. PRISM's read loop), and `sys_yield`.
+`context_switch` preserves per-thread RFLAGS, so the mask is carried **across**
+the switch: two such threads on one CPU hand off to each other forever and never
+reach idle's `sti; hlt`. That CPU runs normally with interrupts off — its timer
+tick stops and block completions routed at it are never serviced.
+
+**Neither virtio-blk nor the LAPIC.** DDR-974/976/977 each cleared one wrong
+subsystem; this names the actual one.
+
+### How, so the method is reusable
+
+NMI, because it is the one interrupt that still reaches a CPU with IF clear. The
+AP stashes into its own `percpu` and the **BSP** prints — an AP wedged holding
+`g_line_lock` must never print. Three arms, each answering what the previous one
+could not:
+
+1. one shot → `masked=0 swen=1 isr48=0 irr48=1 tpr=0 if=0` refutes three of
+   DDR-977 §5's four candidates and confirms the fourth in one line;
+2. four shots + frame-pointer walk → pid and RSP **alternate**, so the CPU is
+   running-and-masked, not spinning (a single sample cannot tell these apart —
+   this is the DDR-977 §8 blind spot recurring, see DDR-981 §8);
+3. latch the first IF-clear `yield()` → `sys_yield`, which points at SFMASK.
+
+### Fix, and the one deliberately not taken
+
+An interrupt window in `yield()` — the one choke point all five sites share.
+Fixing `sys_yield` alone would **not** have fixed the observed livelock, whose
+threads were in `mnt_lock` under `vfs_read`. `sti` at SYSCALL entry is the
+textbook fix and is deliberately deferred post-1.0: the syscall layer is written
+against non-reentrancy (`sys_exec.c:10` depends on it for its CR3 swap).
+
+### Evidence
+
+| | boots | frozen AP | `compl wait timeout` |
+|---|---|---|---|
+| before | 14 | **6** | 5–11 per frozen boot, 0 otherwise |
+| after | **20** | **0** | **0** |
+
+`ymask` ≈ 6.1M/boot is the denominator (R17). Kernel
+`d4b39c96a98ba2fead60d3eb23f37b9f4b5b739500f94f9eb401702552b83b22` (R1). Logs in
+`build/gatelogs/apfreeze-fixed-{a,b}/`. Mutation-checked: fix removed →
+`smoke-blk-integrity` RED on the first run, named by `[apfreeze]`.
+
+### Gate lesson — worth carrying forward
+
+`smoke-smp` and `smoke-rqstress` each measured **20/20** at `-smp 4` while this
+defect was live. **The gates did not catch it.** The evidence was
+`[vblk] compl wait timeout` sitting in serial logs nothing asserted on.
+`[apfreeze]` is now in `GLOBAL_FORBIDDEN`, chosen over ~20 recipe edits because
+it preserves every gate's DDR-785 early-exit eligibility. Stated limit: a gate
+that early-exits before ~tick 1000 will not see the line — which does not bite,
+since every SMP/block gate the freeze reddens already burns its full window.
+
+### Instruments now live (replaces the list above)
+
+- `[vblk] compl wait timeout unit= dest_cpu= dest_dticks= … ticks[…] on_cpu= lba=`
+- `[apfreeze] cpu= ticks= rip= cs= rflags= if= rsp= lvt= masked= svr= swen= tpr= isr48= irr48= pid= shot= bt=`
+  — **failure-path only**, ≤4 NMIs/boot, and in `GLOBAL_FORBIDDEN`.
+- `[hb] … ymask=` — masked-yield counter; the denominator for any "no freeze" claim.
+- The `[hb] cputicks[…]` instrument was removed by DDR-980 and stays removed.
+
+### CURRENT_ACTIVE_TASK — release sequence
+
+1. **CI on `d7a2912`.** The two suites that were in flight on `ccf81fb` are
+   superseded by this push; the 3-green accumulation restarts here. That is the
+   right trade: the greens being chased were on a kernel still carrying the
+   defect that made them probabilistic.
+2. 3 greens on one PR-#6 tip (§INV.15: a push yields 2 suites; the third needs
+   an explicit re-run on the same SHA) → squash-merge into `dev/phase1`.
+3. 3 greens on `dev/phase1` → fast-forward `main`.
+4. Re-run the DDR-978 manual ISO walkthrough on **main's own** ISO. `main` is
+   still `7c6c67a` and carries neither DDR-972 nor DDR-978, so tagging before
+   the merge would tag the DDR-971 image.
+5. Tag `v1.0.0`.
+
+### Still open (unchanged by this commit)
+
+- **OPEN-1** `smoke-surfdestroy` intermittent — needs an artefact.
+- **OPEN-12** ring-0 panic — 1/~24, 0/10 local; `run_shard.sh` now merges
+  streams so the next artefact is readable.
+- **OPEN-13** kheap double-free — `objsize=0x80` is a generic class; narrowing
+  needs per-object alloc/free return addresses, which must be opt-in.
+- `smoke-wmmax` intermittent, and its §INV.5 violation (hardcoded
+  `ABSX=5311 ABSY=5588` / `ABSX=15424 ABSY=725`) — repair as an invariant fix
+  with its own before/after run.
+- `lapic_timer_ap_arm()`'s silent `if (!g_lapic || g_timer_count == 0) return;`
+  — latent, not implicated here (a silent return gives ticks=0, and every frozen
+  AP had ticked into the hundreds first).
+
+### Gate count 149. DDR free range: **DDR-982+** (974-981 allocated this session).
+
+---
+
+## CHECKPOINT 2026-08-23 00:2x UTC — operator directive 2026-08-23 read; §6 playbook built
+
+The operator pushed `9f13676` + `8ebf8e9` to this branch: deadline moves to
+**2026-08-28 23:59 UTC**, the PRE-APPROVED EXCEPTIONS table is **suspended** for
+x86_64 v1.0.0 scope, and §6 adds a concrete automation playbook.
+
+### The directive's #1 backend item was already done
+
+It reads *"Close B#3 … with an actual fix, not just a diagnosis. This is the
+last known correctness blocker … the mechanism is known but the cause is not."*
+That was the 08-22 state. **B#3 was fixed at `d7a2912` (DDR-981)** a few hours
+before the directive landed. Annotated in the directive file itself so no
+session re-derives it. Two of its framings are superseded: it is not "CPU 3"
+(any AP; DDR-977 §8) and the CPU is not stalled (it runs normally, just never
+interrupted). Its instruction *not* to patch `virtio_blk.c` was **correct** —
+the fix is in `sched.c`; the only virtio_blk edit since is the diagnostic
+`dest_cpu_idx` field, not driver logic.
+
+### §6 playbook — 6 of 7 built and self-tested
+
+| item | artefact | verified |
+|---|---|---|
+| §6.1 persistent campaign runner | `tools/ci/campaign.sh` | end-to-end: `smoke-blkmq x2`, detached via `setsid`, pollable mid-run, `state=done pass=2 fail=0` |
+| §6.2 failure auto-classifier | `tools/ci/classify_failure.sh` | 3 arms on **real** logs: MATCH on a genuine `[apfreeze]` capture, CLEAN on a passing boot, NEW SIGNATURE on an unknown |
+| §6.3 risk tier + fast lane | 4th column in `gate_shards.txt`, `make smoke-fast` | tier lookup: wmmax→fast/5, smp→strict/20, unknown→strict/20 |
+| §6.4 shard matrix 6 → 10 | LPT repack + workflow matrix | **makespan 38.6 → 20.8 min**; 149 gates preserved; `ci-shard-check` OK |
+| §6.5 status dashboard | `tools/ci/status_report.sh` | output pasted below |
+| §6.6 task queue | `docs/NEXT_TASK_QUEUE.md` | 110 items, dependency-ordered |
+| §6.7 skip unchanged images | — | **NOT DONE — named, not silently deferred** (see the queue for the reasoning) |
+
+**Two mistakes caught during this, worth recording.** First, the risk tier
+started as a keyword *deny*-list and silently marked `smoke-x25519` (crypto),
+`smoke-e1000e` (a network driver) and `smoke-numa` (memory) as `fast` — a
+deny-list fails open. It is now an explicit allow-list of 13 visual/WM gates;
+everything else, including every future gate, is strict. Second,
+`ci-shard-check` failed on the new `smoke-fast` target and it was **right** to:
+that target is a runner, not a gate. Excluded with a stated reason rather than
+by widening the check.
+
+### Numbers (generated — §4.5, do not hand-tally)
+
+Run `tools/ci/status_report.sh`; latest:
+
+- **149 gates / 10 shards / 20.8 min makespan / 13 fast-tier / 136 strict**
+- **Backlog A–H: 9 done, 101 open, 110 total** — this is the honest count
+  against the directive's *full* scope, and most of it is Groups E (12 UI items)
+  and F (34 agent-layer items), both of which the directive makes mandatory.
+- Open issues: OPEN-1, OPEN-12, OPEN-13 open; OPEN-2 + B#3 closed (DDR-981)
+- kernel.bin 1,065,350 B / 1,572,864 B gate
+
+### CURRENT_ACTIVE_TASK
+
+Pop from `docs/NEXT_TASK_QUEUE.md`. Top of queue is the release path: PR #6 →
+3 greens → merge → `main` → re-verify the ISO **on main's own tip** → tag.
+Then Group E's DDR batch (§4.3 says write that cluster's DDRs in one pass).
+## Generated status — 2026-08-23T00:23:03Z
+
+### Gates
+- 149 gates across 10 shards; makespan 20.8 min; 13 fast-tier / 136 strict-tier
+
+### Backlog by Group (CLAUDE.md tables)
+
+| Group | done | open | total |
+|---|---:|---:|---:|
+| A | 2 | 10 | 12 |
+| B | 2 | 12 | 14 |
+| C | 0 | 6 | 6 |
+| D | 2 | 14 | 16 |
+| E | 0 | 12 | 12 |
+| F | 3 | 34 | 37 |
+| G | 0 | 6 | 6 |
+| H | 0 | 7 | 7 |
+| **all** | **9** | **101** | **110** |
+
+### Open issues
+- OPEN-1: OPEN
+- OPEN-12: OPEN
+- OPEN-13: OPEN
+- OPEN-2: closed
+
+### Kernel
+- kernel.bin 1065350 B / 1572864 B gate (507514 B headroom)
+- sha256 2db55a7b79780806676d41aaa09aa1bfa7aba5ac525ff4fe1772480344be40d7
+- HEAD 44ccce8 on dev/phase1-seyp3n
+
+---
+
+## CHECKPOINT 2026-08-23 ~03:15 UTC — tip `c487b17`
+
+### A process problem to fix FIRST next session
+
+**Nine pushes in ~4 hours meant CodeRabbit never completed a single review** —
+every attempt ended "head commit changed during the review" or hit the rate
+limit — and **the 3-green count reset nine times.** Both are self-inflicted and
+both block the release path.
+
+**Next session: land at most one push, then HOLD.** The release needs 3 greens
+on ONE SHA (§INV.15: a push yields 2 suites; the third needs an explicit re-run
+on that same SHA). Nothing below is more urgent than that.
+
+### Done this session
+
+| commit | what |
+|---|---|
+| `44ccce8` | CodeRabbit review: 4 code fixes (NMI frame walk guard, ramdisk `lba+count` overflow, ACPI extended-checksum validation, `dest_cpu_idx` after MSI-X) + 4 doc corrections |
+| `cb5a732` | directive §6 automation: campaign runner, failure classifier, risk tiers, **shard matrix 6→10 (makespan 38.6→20.8 min)**, status dashboard, task queue |
+| `afd1a7f`/`d47122c` | DDR-982 — capability bits + `tcb.agent_caps`; enforcement withdrawn (see below) |
+| `91525e2`/`96a948e` | DDR-983 — §INV.5: publish `mx=`, re-resolve geometry per click |
+| `0480657`/`c487b17` | DDR-979 — OPEN-12 artefact read, then **corrected**; one-winner panic printer |
+
+### Two corrections I made to my own work — read these before trusting the DDRs
+
+1. **DDR-982 §5.** I designed enforcement at action dispatch, then found
+   `aether.h:22-30` states the six 3C action types are *deliberately absent*:
+   "declaring an enum value with no enforcement is worse than omitting it."
+   There is nothing to enforce against. A and B shipped; C and D withdrawn.
+2. **DDR-979 §5.** I read OPEN-12's garbled register dump as a 2-byte-misaligned
+   exception frame. Wrong — `console_line_force_release()` (DDR-970) leaves the
+   panic printer unserialised, and two concurrent panics interleave inside
+   `kputhex`; a hex digit is 4 bits, so four interleaved digits ARE the 16-bit
+   shift. Both hypotheses predicted the same signature.
+
+### OPEN-12 — the artefact is finally readable
+
+DDR-979's `run_shard.sh 2>&1` worked. **#GP, vector 0x0D, error 0, on an AP,
+which halts it. Two panics in the boot.** Nothing else in that dump is
+trustworthy. Fix shipped: first CPU to panic claims a latch and prints; losers
+stay silent and bump `panics_silent=` on the heartbeat.
+
+**Not gated** — reproducing two concurrent panics means reproducing OPEN-12
+(~1/24 runs). Verified by inspection + no-regression only; the proof is the next
+capture coming back readable.
+
+### `[apfreeze]` has a false-attribution mode
+
+It fired on `44ccce8` and I first read it as a B#3 regression. It was not: the
+AP had **panicked and halted**, so its ticks stopped and the detector NMI'd it
+inside the panic printer. **Refined reopen condition for B#3: an `[apfreeze]`
+with NO preceding kernel panic, whose RIP resolves into a spin or scheduler path
+rather than `isr_dispatch`.**
+
+Resolving that RIP also needed the **`BSP_LIVENESS=1`** build, not the default —
+`smoke-rqstress-liveness` rebuilds with it and `main.o` links before `idt.o`, so
+`timer_tick` moves `0x9be0`→`0x9c10`. §NON-NEGOTIABLE 18, live.
+
+### Still open for the operator (blocks 4 Group F rows)
+
+**DDR-982 §5.5:** should the four absent action types be declared, accepting
+three that can only return "not implemented", to have a boundary to enforce? I
+lean **no** — that is `aether.h`'s documented position — but it reverses a repo
+decision either way.
+
+### Numbers (`tools/ci/status_report.sh`)
+
+- 149 gates / 10 shards / **20.8 min makespan** / 13 fast-tier / 136 strict
+- Backlog A–H: **9 done, 101 open, 110 total**; bulk is Group F (34) and E (12)
+- Open issues: OPEN-1, OPEN-12, OPEN-13 · Closed: B#3+OPEN-2, OPEN-10, FSRM
+- `kernel.bin` 1,065,350 B / 1,572,864 B gate · warning-clean at `-Werror`
+
+### Named, not silently deferred (directive §2)
+
+- §6.7 (skip regenerating unchanged disk images) — reasoning in the queue file
+- `smoke-agents` still targets a hardcoded pointer coordinate: it clicks an
+  agent **card**, not a window, so there is no `PRADYOS_WM_GEOM` to derive from
+- `docs/AETHER_MASTER_FEATURES.md` unchanged — nothing this session touched a
+  feature it tracks
+
+### DDR free range: **DDR-984+** (974-983 allocated). Gate count 149.

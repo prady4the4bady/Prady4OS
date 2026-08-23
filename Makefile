@@ -73,6 +73,8 @@ USER_ROOTMNT_SRC := user/rootmounttest.c  # fs: per-process root-mount probe (DD
 USER_ROOTMNT_ELF := build/rootmounttest.elf
 USER_FSRM_SRC := user/fsrmtest.c          # fs: ring-3 file lifecycle probe (DDR-744)
 USER_FSRM_ELF := build/fsrmtest.elf
+USER_FAT32MC_SRC := user/fat32mctest.c    # DDR-973: FAT32 multi-cluster read regression probe
+USER_FAT32MC_ELF := build/fat32mctest.elf
 USER_STACKD_SRC := user/stackdemand.c     # ADR-038: demand-paged stack probe
 USER_STACKD_ELF := build/stackdemand.elf
 USER_FTRUNC_SRC := user/ftrunctest.c      # fs: ring-3 ftruncate probe (DDR-866)
@@ -157,7 +159,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
-               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c \
+               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c \
                kernel/drivers/net/virtio_net.c kernel/drivers/net/e1000e.c kernel/drivers/net/netbuf.c \
                kernel/drivers/gpu/virtio_gpu.c \
                kernel/drivers/nvme/nvme.c kernel/drivers/ahci/ahci.c \
@@ -181,7 +183,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -216,7 +218,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -266,6 +268,30 @@ ci-start-align-check:
 
 ci-shard-check:
 	bash tools/ci/shard_check.sh
+
+# Operator directive 2026-08-23 §6.3 — risk-tiered fast lane.
+#
+#   make smoke-fast GATE=smoke-wmmax           # COUNT defaults from the tier
+#   make smoke-fast GATE=smoke-smp COUNT=20    # explicit override
+#
+# The default COUNT comes from the gate's risk tier in tools/ci/gate_shards.txt
+# (4th column): `fast` -> 5, `strict` -> 20. A gate that is not in the manifest
+# defaults to 20, and so does anything the allow-list did not explicitly mark
+# visual — the tier annotation fails safe, so this target can never quietly
+# weaken a scheduler/SMP/security campaign to N=5.
+#
+# Runs through tools/ci/campaign.sh, so the run survives its invoking shell and
+# reports progress in build/campaign_status.txt (§6.1).
+.PHONY: smoke-fast
+smoke-fast:
+	@test -n "$(GATE)" || { echo "usage: make smoke-fast GATE=<smoke-target> [COUNT=<n>]"; exit 1; }
+	@tier=$$(awk -F'\t' -v g="$(GATE)" '$$2==g {print $$4}' tools/ci/gate_shards.txt); \
+	 if [ -z "$$tier" ]; then tier=strict; echo "[smoke-fast] $(GATE) not in the manifest -> assuming strict"; fi; \
+	 n="$(COUNT)"; \
+	 if [ -z "$$n" ]; then if [ "$$tier" = fast ]; then n=5; else n=20; fi; fi; \
+	 echo "[smoke-fast] $(GATE) tier=$$tier count=$$n"; \
+	 bash tools/ci/campaign.sh start "$(GATE)" "$$n" && \
+	 bash tools/ci/campaign.sh wait
 
 all:
 	@echo "PRADYOS — Phase 2a (NEXUS kernel entry: boot -> long mode -> ring 0 C)."
@@ -400,6 +426,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ROOTMNT_ELF) build/rootmounttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FSRM_SRC) -o build/fsrmtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FSRM_ELF) build/fsrmtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_FAT32MC_SRC) -o build/fat32mctest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FAT32MC_ELF) build/fat32mctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_STACKD_SRC) -o build/stackdemand.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/stackdemand.o $(MUSL_LIB) -o $(USER_STACKD_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FTRUNC_SRC) -o build/ftrunctest.o
@@ -481,7 +509,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -535,6 +563,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_pci.c   -o build/virtio_pci.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk.c             -o build/blk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/blk/ramdisk.c         -o build/ramdisk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/virtio_net.c     -o build/virtio_net.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/netbuf.c         -o build/netbuf.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/virtio_gpu.c     -o build/virtio_gpu.o
@@ -634,7 +663,10 @@ $(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
 # write test creates /KOUT.TXT, which must not already exist on a second run.
 FAT_IMG := build/fat.img
 
-fat-image:
+# DDR-973: depends on the kernel build because that is what produces
+# $(USER_CMUSL_ELF), which the recipe now mcopy's onto the volume. Without
+# this a parallel `make -j smoke-...` could run the recipe before the ELF exists.
+fat-image: $(KERNEL_BIN)
 	@mkdir -p build
 	dd if=/dev/zero of=$(FAT_IMG) bs=1M count=64 status=none
 	mkfs.fat -F 32 -n PRADYOS $(FAT_IMG) >/dev/null
@@ -654,10 +686,25 @@ fat-image:
 	for i in $$(seq 1 200); do printf 'pipe payload line %03d 0123456789abcdef\n' $$i >> build/big8k.txt; done
 	printf 'BIGTAIL-e5v\n' >> build/big8k.txt
 	mcopy -i $(FAT_IMG) build/big8k.txt ::/BIG8K.TXT
+	# DDR-973: the FAT32 multi-cluster read fixtures. mkfs.fat -F32 over 64 MiB
+	# lands on 1 sector per cluster, so 64 KiB is 128 clusters and the 30,488-byte
+	# cmusl image is 60 -- both well past the 16-cluster reach of /BIG8K.TXT.
+	# byte n = (7n + 3 + 31*(n >> 8)) & 0xFF. The 31*(n>>8) term is load-bearing:
+	# plain (7n+3)&0xFF has period 256, so with 512-byte clusters every cluster
+	# would hold IDENTICAL bytes and a chain repeat would read back perfectly --
+	# a mutant proving exactly that passed the first cut of this gate (DDR-973 sec.6).
+	# 31 is invertible mod 256, so all 256 blocks of the 64 KiB file are distinct.
+	# python3 (not printf) because the data contains NULs, which command
+	# substitution would eat; mkfs.fat + mtools are already hard deps of this recipe.
+	python3 -c "import sys; sys.stdout.buffer.write(bytes(((7*n+3+31*(n>>8))&0xFF) for n in range(65536)))" > build/bigpat.bin
+	mcopy -i $(FAT_IMG) build/bigpat.bin ::/BIGPAT.BIN
+	# Arm C's target: the LARGE musl-C ELF ADR-024 sec.D5 named. Copied, not rebuilt,
+	# so the gate execve's the same image the kernel already loads from SFS at boot.
+	mcopy -i $(FAT_IMG) $(USER_CMUSL_ELF) ::/CMUSL.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
 	# FAT /AETHER.CFG (DDR-732/734) is retired here.
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT)"
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT, /BIGPAT.BIN, /CMUSL.ELF)"
 
 # A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
 # place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
@@ -989,10 +1036,86 @@ smoke-iso-x86: iso
 	@grep -q 'NEXUS KERNEL OK' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm did not reach the kernel"; tail -20 build/iso_uefi.log; exit 1; }
 	@echo "[iso] UEFI arm OK — one ISO, both boot paths, same sentinel"
 
+# DDR-972 (fixes DDR-971): the ISO must boot an OS, not just a kernel.
+#
+# smoke-iso-x86 asserts NEXUS KERNEL OK, which prints at line 30 of 145 — about
+# 60 lines before userspace starts. DDR-971 measured an ISO that passed that
+# gate and then idled forever at rqdepth=1 curpid=0 with no PRISM, no aetherd
+# and no filesystem. This gate is what would have caught it, and what stops it
+# reopening: it drives the SHELL over the ISO's serial console and asserts on
+# what the commands actually DO.
+#
+# Fixtures differ from smoke-shell deliberately: the ISO root is a freshly
+# formatted SFS ramdisk and starts EMPTY, so there is no /HELLO.TXT to list.
+# The file this asserts on is one the gate creates itself, which is a stronger
+# check anyway — it proves a write reached the root and was read back.
+smoke-iso-userspace: iso
+	@echo "[iso-user] booting the ISO and driving PRISM..."
+	@SHIN=$$(mktemp -u /tmp/pradyos_iso.XXXXXX); rm -f build/iso_user.log; mkfifo "$$SHIN"; \
+	( exec > "$$SHIN"; \
+	  for i in $$(seq 1 600); do grep -q PRISM_READY build/iso_user.log 2>/dev/null && break; sleep 0.1; done; \
+	  sleep 1; \
+	  printf 'echo iso-live-marker-3f7\n'; sleep 0.6; \
+	  printf 'uname\n'; sleep 0.6; \
+	  printf 'free\n'; sleep 0.6; \
+	  printf 'uptime\n'; sleep 0.6; \
+	  printf 'ps\n'; sleep 0.6; \
+	  printf 'echo iso-file-content-9k2 > /ISOTEST.TXT\n'; sleep 0.8; \
+	  printf 'ls /\n'; sleep 0.8; \
+	  printf 'cat /ISOTEST.TXT\n'; sleep 0.8; \
+	  printf 'rm /ISOTEST.TXT\n'; sleep 0.8; \
+	  printf 'exit\n'; sleep 0.5 ) & \
+	timeout 180 qemu-system-x86_64 -machine q35 -cdrom $(ISO_IMG) -boot d \
+	    -device virtio-gpu-pci \
+	    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+	    -no-reboot -display none -monitor none \
+	    -serial stdio < "$$SHIN" > build/iso_user.log 2>/dev/null || true; \
+	rm -f "$$SHIN"
+	@# 1. the root actually mounted — the DDR-971 failure was its absence
+	@grep -q 'ramdisk. formatted SFS' build/iso_user.log || { echo "[iso-user] FAIL: no ramdisk root"; tail -20 build/iso_user.log; exit 1; }
+	@grep -qE '\[fs\] mounted' build/iso_user.log || { echo "[iso-user] FAIL: nothing mounted"; tail -20 build/iso_user.log; exit 1; }
+	@# 2. userspace came up
+	@grep -q 'PRISM_READY' build/iso_user.log || { echo "[iso-user] FAIL: PRISM never started"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'aetherd:' build/iso_user.log || { echo "[iso-user] FAIL: AETHER daemon never started"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'PRADYOS_AGENT_DONE' build/iso_user.log || { echo "[iso-user] FAIL: agent did not complete"; tail -30 build/iso_user.log; exit 1; }
+	@# 3. the shell RESPONDS — echo proves the console read a command and ran it
+	@grep -qF 'iso-live-marker-3f7' build/iso_user.log || { echo "[iso-user] FAIL: shell did not execute echo"; tail -30 build/iso_user.log; exit 1; }
+	@# 4. introspection builtins return their documented SHAPES, not just exit 0
+	@grep -qE 'uname: .*cpus='  build/iso_user.log || { echo "[iso-user] FAIL: uname"; exit 1; }
+	@grep -qE 'mem: total=[0-9]+K free=[0-9]+K used=[0-9]+K' build/iso_user.log || { echo "[iso-user] FAIL: free"; exit 1; }
+	@grep -qE 'uptime: [0-9]+s' build/iso_user.log || { echo "[iso-user] FAIL: uptime"; exit 1; }
+	@grep -qE 'PID +PPID S U +CPUms +DISP NAME' build/iso_user.log || { echo "[iso-user] FAIL: ps header"; exit 1; }
+	@# 5. a real write/read/delete round-trip on the ISO's own root. Three
+	@#    assertions, none sufficient alone: the file must LIST (it was created),
+	@#    its CONTENT must read back (the write reached the medium), and rm must
+	@#    confirm (delete works). A root that mounted read-only would pass none.
+	@grep -qE '(^|prism> )ISOTEST\.TXT$$' build/iso_user.log || { echo "[iso-user] FAIL: created file not listed"; tail -30 build/iso_user.log; exit 1; }
+	@grep -qF 'iso-file-content-9k2' build/iso_user.log || { echo "[iso-user] FAIL: content did not read back"; tail -30 build/iso_user.log; exit 1; }
+	@grep -qF 'rm: removed /ISOTEST.TXT' build/iso_user.log || { echo "[iso-user] FAIL: rm did not remove"; tail -30 build/iso_user.log; exit 1; }
+	@# 6. the graphics stack initialises from the ISO when a GPU is present, and
+	@#    a ring-3 client completes a surface lifecycle against it.
+	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; exit 1; }
+	@# 7. lwIP carries real loopback traffic — not just "the NIC linked up".
+	@grep -q 'PRADYOS_NET_LO_OK' build/iso_user.log || { echo "[iso-user] FAIL: no lwIP loopback traffic"; tail -30 build/iso_user.log; exit 1; }
+	@if grep -qiE '\[panic\]|KERNEL PANIC' build/iso_user.log; then echo "[iso-user] FAIL: kernel panic"; tail -30 build/iso_user.log; exit 1; fi
+	@echo "[iso-user] PASS — ISO boots a live OS: SFS root + PRISM + AETHER agent + write/read/delete round-trip"
+
+# DDR-978: the old assertions were `[uefi] handoff` + the E820 line, and BOTH are
+# true of a machine with ZERO PCI devices. That is exactly what this gate was
+# passing on: under OVMF the kernel found no RSDP (firmware publishes it via the
+# EFI Configuration Table, not the legacy 0xE0000 window), so no MCFG, so PCIe
+# enumerated NOTHING -- no disk, no net, no GPU -- and no MADT, so no APs. The
+# ISO "worked" only because DDR-972's ramdisk fallback fires on blk_count()==0,
+# the very condition the defect creates. Fourth vacuous gate in this project
+# (DDR-971, DDR-973 sec.6, DDR-880's harness-echo detector).
+#
+# The FORBIDDEN sentinels are the discriminating half: each is the literal line
+# the broken path printed, so a regression fails here instead of passing.
 smoke-uefi: esp-image
 	TIMEOUT_S=90 QEMU_UEFI=1 \
-	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010')" \
-	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL')" \
+	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010\nACPI: RSDP from loader\nACPI: FADT ok\nPCIe: ECAM')" \
+	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL\nACPI: RSDP not found\nPCIe: no MCFG table\nACPI: loader RSDP rejected')" \
 	    bash tools/qemu_runner/boot_test.sh $(ESP_IMG)
 
 smoke-numa-alloc: $(IMG) fat-image sfs-image
@@ -1070,6 +1193,46 @@ smoke-rename-sfs: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SFS_RENAME_OK\nPRADYOS_SFS_RENAME_ENOENT\nPRADYOS_SFS_RENAME_LFN')" \
 	FORBIDDEN_SENTINEL="$$(printf 'SFS RENAME FAIL\n[vblk] compl wait timeout\n[vblk] slot wait timeout')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-973: FAT32 multi-cluster reads. ADR-024 sec.D5 deferred init-driven
+# execve-respawn on the report that "execve of a large musl-C ELF read from FAT32
+# corrupts the loaded image", attributed only as "most likely FAT32 multi-cluster
+# reads". That attribution was never measured, and the function the backlog names
+# (`read_cluster_chain`) does not exist in this repo -- the reader is fat32_read.
+# The defect did not reproduce: `run /CMUSL.ELF` (30,488 B = 60 clusters) execve'd
+# clean. This gate makes that refutation permanent and byte-exact. DDR-973 sec.3-5.
+#
+# mkfs.fat -F32 over 64 MiB gives 1 sector per cluster, so /BIGPAT.BIN (65,536 B)
+# is 128 clusters -- 8x the reach of /BIG8K.TXT, the deepest chain any existing
+# gate reads. Arm A scans every byte against (7n + 3 + 31*(n>>8)) & 0xFF -- see the
+# fat-image recipe for why the second term is load-bearing -- arm B re-walks the
+# chain from the head 6 more times at cluster-edge offsets, arm C is ADR-024's case.
+#
+# WHY THE COUNT ASSERTION BELOW. Arm C execve's /CMUSL.ELF, which prints the same
+# PRADYOS_MUSL_OK the boot's SFS-loaded copy does (main.c CMUSL.ELF). A plain
+# EXTRA_SENTINEL would therefore pass on the boot copy alone and prove nothing
+# about arm C. The denominator is 1 (that boot copy), so the gate demands 2 (R17).
+smoke-fat32-multicluster: $(IMG) fat-image sfs-image
+	@rm -f build/fat32mc_serial.log
+	TIMEOUT_S=90 QEMU_PROBES=fat32mc \
+	KEEP_SERIAL=1 SERIAL_LOG=build/fat32mc_serial.log \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_FAT32_MC_OK bytes=65536 clusters=128 straddles=6')" \
+	FORBIDDEN_SENTINEL="FAT32MC FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@# Arm C: the execve'd copy must be the SECOND occurrence. One means arm C's
+	@# execve never landed -- exactly the ADR-024 symptom -- and the gate fails.
+	@# grep -c prints "0" AND exits 1 when there is no match, so `|| echo 0` would
+	@# make n="0 0" and the -lt test a syntax error. `|| true` keeps grep's own count;
+	@# the :- default covers a missing file, where grep prints nothing and exits 2.
+	@n=$$(grep -acF 'PRADYOS_MUSL_OK' build/fat32mc_serial.log 2>/dev/null || true); n=$${n:-0}; \
+	  if [ "$$n" -lt 2 ]; then \
+	    echo "[smoke] FAIL: arm C -- PRADYOS_MUSL_OK appeared $$n time(s), want 2"; \
+	    echo "[smoke]   1 = boot's SFS-loaded cmusl only; the FAT32 execve of"; \
+	    echo "[smoke]   /CMUSL.ELF (30,488 B, 60 clusters) did not produce a running image."; \
+	    grep -anF 'FAT32MC FAIL' build/fat32mc_serial.log | head -5; \
+	    exit 1; \
+	  fi; \
+	  echo "[smoke] fat32-multicluster: 65536 B / 128 clusters verified, 6 straddles, arm C execve OK ($$n/2 MUSL_OK)"
 
 # DDR-958: fat32_rename, driven through PRISM's `mv` builtin.
 #
@@ -2588,7 +2751,7 @@ smoke-wmclose: $(IMG) fat-image sfs-image
 smoke-wmmin: $(IMG) fat-image sfs-image
 	@echo "[wmmin] minimize gate: boot(GPU+tablet) + QMP click B's min box + sendkey r..."
 	@rm -f build/wmmin.log /tmp/pwmmin.sock /tmp/pwmminh.sock
-	@ABSX=5760 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmin.log /tmp/pwmmin.sock PRADYOS_AMBIANCE_OK PRADYOS_WM_MIN &
+	@GEOM_TITLE=BETA GEOM_FIELD=min bash tools/qemu_runner/mouse_inject.sh build/wmmin.log /tmp/pwmmin.sock PRADYOS_AMBIANCE_OK PRADYOS_WM_MIN &
 	@bash tools/qemu_runner/input_inject.sh build/wmmin.log /tmp/pwmminh.sock PRADYOS_WM_MIN "r" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
@@ -2609,8 +2772,8 @@ smoke-wmmin: $(IMG) fat-image sfs-image
 smoke-wmmax: $(IMG) fat-image sfs-image
 	@echo "[wmmax] maximize gate: boot(GPU+tablet) + QMP max-box click + restore click..."
 	@rm -f build/wmmax.log /tmp/pwmmax.sock
-	@ABSX=5311 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock PRADYOS_AMBIANCE_OK &
-	@ABSX=15424 ABSY=725 bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=512" &
+	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock PRADYOS_AMBIANCE_OK &
+	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=512" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \

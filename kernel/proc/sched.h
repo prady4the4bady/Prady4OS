@@ -118,6 +118,15 @@ struct tcb {
      * ~30 includers of sched.h keep their field offsets. Zero for non-agents
      * (kmalloc'd TCB is zeroed), so a 0 mem_limit lazily means 128 MiB. */
     uint32_t   is_agent;        /* 1 = CAP_AGENT process: rate-limited + mem-capped */
+    uint32_t   agent_caps;      /* DDR-982: per-agent action authority — a mask of
+                                 * CAP_OCR/CAP_EXEC/CAP_SCENE/CAP_NET_BROWSE.
+                                 * Follows the is_agent/is_net pattern (authority
+                                 * held BY the process) rather than the NCS handle
+                                 * pattern, because the ring-3 submit ABI is
+                                 * (type,payload,len) and carries no handle to
+                                 * check. Minted before the agent's first run.
+                                 * NON-NEGOTIABLE 10: kmalloc does not zero, so
+                                 * sched_create initialises this explicitly. */
     uint32_t   is_sovereign;    /* 1 = CAP_SOVEREIGN (operator/daemon): mode+approve */
     uint64_t   mem_limit;       /* hard cap in bytes; 0 -> AETHER_MEM_DEFAULT       */
     uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
