@@ -18,6 +18,23 @@
 #include "irq.h"          /* g_ticks */
 #include "string.h"
 #include "pmm.h"          /* proxy-socket RX rings come from the PMM pool */
+#include "spinlock.h"     /* DDR-987: the lwIP core lock */
+
+/* DDR-987. lwIP is built NO_SYS=1 / SYS_LIGHTWEIGHT_PROT=0, i.e. with NO internal
+ * locking, on the assumption recorded in lwipopts.h that this is a single core.
+ * That assumption died with ADR-029..031: socket syscalls run on ANY cpu and
+ * net_poll_tick() runs from the TIMER ISR (idt.c), where tcp_tmr / tcp_input --
+ * and tcp_abort from psock_close -- all FREE segs and pcbs. The local `cli` this
+ * file used guards only the current cpu, so a syscall on cpu A walked
+ * pcb->unsent inside tcp_output while cpu B freed it: a use-after-free that
+ * surfaced as a ring-0 #GP with RAX = 0xDDDDDDDDDDDDDDDD (kheap POISON_FREE)
+ * at tcp_output, reached from sys_sock_connect.
+ *
+ * A SPINLOCK, not a sleeping mutex: one holder is an ISR, where sleeping is
+ * illegal. Safe because no region below yields, and every one already ran with
+ * interrupts off. Lock order is net -> heap (lwIP allocates via kmalloc, which
+ * takes g_heap_lock); kheap never calls the net stack, so there is no cycle. */
+static spinlock_t g_net_lock = SPINLOCK_INIT;
 #include "virtio_net.h"
 #include "pradyos_net.h"
 
@@ -365,10 +382,10 @@ int psock_connect(uint32_t host, uint16_t port) {
     s->state = PS_CONNECTING;
 
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     s->pcb = tcp_new();
     if (!s->pcb) {
-        __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+        spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
         pmm_free_page((uint64_t)(uintptr_t)s->rx);
         s->rx = 0; s->used = 0; s->state = PS_CLOSED;
         return -1;
@@ -379,7 +396,7 @@ int psock_connect(uint32_t host, uint16_t port) {
     ip_addr_t ip;
     IP4_ADDR(&ip, (host >> 24) & 0xff, (host >> 16) & 0xff, (host >> 8) & 0xff, host & 0xff);
     err_t e = tcp_connect(s->pcb, &ip, port, ps_connected);
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     if (e != ERR_OK) { s->state = PS_ERR; return -1; }
     return slot;
 }
@@ -395,13 +412,13 @@ int psock_read(int slot, uint8_t *kbuf, int len) {
     if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
     struct proxy_sock *s = &g_ps[slot];
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     int n = 0;
     while (n < len && s->tail != s->head) {
         kbuf[n++] = s->rx[s->tail];
         s->tail = (uint16_t)((s->tail + 1) & PSOCK_MASK);
     }
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     return n;
 }
 
@@ -410,7 +427,7 @@ int psock_write(int slot, const uint8_t *kbuf, int len) {
     struct proxy_sock *s = &g_ps[slot];
     if (s->state != PS_OPEN || !s->pcb) return -1;
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     u16_t snd = tcp_sndbuf(s->pcb);
     if (len > (int)snd) len = (int)snd;
     err_t e = ERR_OK;
@@ -418,7 +435,7 @@ int psock_write(int slot, const uint8_t *kbuf, int len) {
         e = tcp_write(s->pcb, kbuf, (u16_t)len, TCP_WRITE_FLAG_COPY);
         if (e == ERR_OK) tcp_output(s->pcb);
     }
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     return (e == ERR_OK) ? len : -1;
 }
 
@@ -426,7 +443,7 @@ int psock_close(int slot) {
     if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
     struct proxy_sock *s = &g_ps[slot];
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     if (s->pcb) {
         tcp_arg(s->pcb, NULL);
         tcp_recv(s->pcb, NULL);
@@ -435,7 +452,7 @@ int psock_close(int slot) {
             tcp_abort(s->pcb);                   /* force teardown on a busy pcb */
         s->pcb = NULL;
     }
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     if (s->rx) pmm_free_page((uint64_t)(uintptr_t)s->rx);
     s->rx = 0; s->used = 0; s->state = PS_CLOSED;
     return 0;
@@ -449,7 +466,7 @@ void net_init(void) {
     /* Mask interrupts across init: after virtio_net_set_rx / g_net_ready, an RX or
      * PIT IRQ would otherwise re-enter lwIP (NO_SYS, not reentrant) mid-setup. */
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     lwip_init();                                 /* also creates the 127.0.0.1 loopif */
     ip4_addr_t ip, mask, gw;
     IP4_ADDR(&ip, 10, 0, 2, 15);
@@ -465,7 +482,7 @@ void net_init(void) {
     net_loopback_test();
     net_loopback_tcp_test();                     /* DDR-753: TCP client echo over loopback */
     net_fuzz_test();                             /* malformed-frame + SYN-flood hardening */
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
 }
 
 /* Called from the PIT tick (every ~100 ms): drive lwIP's timers and flush any
@@ -473,6 +490,12 @@ void net_init(void) {
 void net_poll_tick(void) {
     if (!g_net_ready)
         return;
+    /* DDR-987: this runs in the TIMER ISR and is the side that FREES --
+     * sys_check_timeouts -> tcp_tmr, netif_poll_all -> tcp_input. It had no
+     * cross-cpu guard at all, so it could free a seg out from under a syscall
+     * running tcp_output on another cpu. */
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
     sys_check_timeouts();
     netif_poll_all();
+    spin_unlock_irqrestore(&g_net_lock, fl);
 }
