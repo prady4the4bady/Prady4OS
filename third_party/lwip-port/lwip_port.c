@@ -124,6 +124,26 @@ static err_t pradyos_netif_init(struct netif *netif) {
  * boot. ISR callers get the wrapper; already-locked callers keep the raw one. */
 static void pradyos_netif_rx(const uint8_t *frame, uint32_t len);
 
+/* DDR-987 sec.8: one pump iteration under the lock, RELEASED between iterations.
+ * net_init() used to hold g_net_lock across net_loopback_tcp_test()'s 200-round
+ * loop and net_fuzz_test()'s 256-round loop. Under TCG that is hundreds of ms,
+ * and every OTHER cpu's timer ISR spins on the lock with interrupts off for the
+ * whole time -- so its per-cpu tick counter freezes and virtio-blk's tick-bounded
+ * completion wait expires. That is a regression this lock introduced, not a
+ * pre-existing one: the old `cli` never blocked another cpu. */
+static void net_pump_locked(void) {
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    netif_poll_all();
+    sys_check_timeouts();
+    spin_unlock_irqrestore(&g_net_lock, fl);
+}
+
+static void net_timeouts_locked(void) {
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    sys_check_timeouts();
+    spin_unlock_irqrestore(&g_net_lock, fl);
+}
+
 static void pradyos_netif_rx_isr(const uint8_t *frame, uint32_t len) {
     uint64_t fl = spin_lock_irqsave(&g_net_lock);
     pradyos_netif_rx(frame, len);
@@ -153,22 +173,32 @@ static void lo_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 }
 
 static void net_loopback_test(void) {
+    /* DDR-987 sec.8: net_init() no longer holds the lock across this test, so
+     * each lwIP burst takes it here. Setup and send are bounded; the pump is
+     * separate so the lock is never held across a poll loop. */
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
     struct udp_pcb *rx = udp_new();
-    if (!rx) return;
+    if (!rx) { spin_unlock_irqrestore(&g_net_lock, fl); return; }
     udp_bind(rx, IP_ADDR_ANY, 7);
     udp_recv(rx, lo_recv, NULL);
 
     struct udp_pcb *tx = udp_new();
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, 4, PBUF_RAM);
+    int sent = 0;
     if (tx && p) {
         memcpy(p->payload, "ping", 4);
         ip_addr_t lo;
         IP4_ADDR(&lo, 127, 0, 0, 1);
         udp_sendto(tx, p, &lo, 7);
-        netif_poll_all();                        /* deliver the queued loopback pbuf */
+        sent = 1;
     }
+    spin_unlock_irqrestore(&g_net_lock, fl);
+    if (sent)
+        net_pump_locked();                       /* DDR-987 sec.8: deliver the queued loopback pbuf */
+    fl = spin_lock_irqsave(&g_net_lock);
     if (p) pbuf_free(p);
     if (tx) udp_remove(tx);
+    spin_unlock_irqrestore(&g_net_lock, fl);
     /* rx pcb stays bound so later loopback traffic still echoes. */
 }
 
@@ -240,18 +270,23 @@ static err_t tcp_lo_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
 }
 
 static void net_loopback_tcp_test(void) {
+    /* DDR-987 sec.8: bounded setup under the lock; the 200-round pump below runs
+     * OUTSIDE it, one locked burst per iteration. Holding across the whole loop
+     * froze every other cpu's timer ISR on this lock. */
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
     struct tcp_pcb *pcb = tcp_new();
-    if (!pcb) return;
+    if (!pcb) { spin_unlock_irqrestore(&g_net_lock, fl); return; }
     tcp_recv(pcb, tcp_lo_recv);
     ip_addr_t lo;
     IP4_ADDR(&lo, 127, 0, 0, 1);
     if (tcp_connect(pcb, &lo, 8007, tcp_lo_connected) != ERR_OK) {
         tcp_close(pcb);
+        spin_unlock_irqrestore(&g_net_lock, fl);
         return;
     }
+    spin_unlock_irqrestore(&g_net_lock, fl);
     for (int i = 0; i < 200 && !g_tcp_lo_echoed; i++) {
-        netif_poll_all();
-        sys_check_timeouts();
+        net_pump_locked();                       /* DDR-987 sec.8: short burst, not a long hold */
     }
     kputs(g_tcp_lo_echoed ? "PRADYOS_NET_TCP_LO_OK\r\n"
                           : "PRADYOS_NET_TCP_LO_FAIL\r\n");
@@ -314,7 +349,7 @@ static void net_fuzz_test(void) {
         for (uint32_t j = 0; j < len && j < sizeof f; j++)
             f[j] = (uint8_t)(pradyos_lwip_rand() >> ((j & 3) * 8));
         if (len >= 14) { f[12] = 0x08; f[13] = 0x00; }   /* bias some toward IPv4 */
-        pradyos_netif_rx(f, len);
+        pradyos_netif_rx_isr(f, len);            /* DDR-987 sec.8 */
     }
     /* 2) SYN flood from distinct src ports/IPs to a CLOSED port: every segment
      *    is fully parsed + checksum-verified, then answered with RST and freed —
@@ -322,10 +357,10 @@ static void net_fuzz_test(void) {
      *    lingers to disturb the :8007 echo gate). Survival is the pass criterion. */
     for (int i = 0; i < 256; i++) {
         int n = build_syn(f, (uint16_t)(0x8000 + i), (uint8_t)(100 + (i & 0x3f)));
-        pradyos_netif_rx(f, (uint32_t)n);
-        if ((i & 0x1f) == 0) sys_check_timeouts();       /* drive the RST/timer path */
+        pradyos_netif_rx_isr(f, (uint32_t)n);     /* DDR-987 sec.8 */
+        if ((i & 0x1f) == 0) net_timeouts_locked();      /* DDR-987 sec.8 */
     }
-    sys_check_timeouts();
+    net_timeouts_locked();                       /* DDR-987 sec.8 */
     kputs("PRADYOS_NET_FUZZ_OK\r\n");
 }
 
@@ -528,10 +563,13 @@ void net_init(void) {
     tcp_echo_init();                             /* TCP echo on :8007 (smoke-net) */
     g_net_ready = 1;
     kputs("[net] lwIP up 10.0.2.15/24\r\n");
+    /* DDR-987 sec.8: release BEFORE the self-tests. Holding across their pump
+     * loops stalls every other cpu's timer ISR on this lock (see net_pump_locked).
+     * The tests take the lock themselves, one iteration at a time. */
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     net_loopback_test();
     net_loopback_tcp_test();                     /* DDR-753: TCP client echo over loopback */
     net_fuzz_test();                             /* malformed-frame + SYN-flood hardening */
-    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
 }
 
 /* Called from the PIT tick (every ~100 ms): drive lwIP's timers and flush any

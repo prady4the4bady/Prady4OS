@@ -228,3 +228,75 @@ nobody enumerated*. Before declaring a lock complete, enumerate entry points
 `virtio_net_set_rx`, `irq` hooks), not just the call sites that are easy to grep
 from the top. §INV.23's sibling lesson: a guard that is present is not the same
 as a guard that is sufficient.
+
+---
+
+## 8. The lock itself caused a regression — a long hold stalls other CPUs
+
+Caught by `smoke-surfdestroy` on the §7 build, before anything was pushed:
+
+```
+[vblk] compl wait timeout unit=0 dest_cpu=1 dest_dticks=0 dest_abs=312
+       bsp_abs=312 dest_present=1 ticks[331,312,311,308] on_cpu=1 lba=3
+[smp] blk integrity FAIL checksum-mismatch done=0x807 spawned=4/4 prog=64,64,64,54
+```
+
+`dest_dticks=0` — the destination cpu stopped advancing its tick counter during
+the wait. That is the `compl wait timeout` signature DDR-981 was supposed to have
+retired, reappearing on a build that carries DDR-981. It is not a DDR-981
+recurrence: **this lock caused it.**
+
+### The mechanism
+
+`kernel/idt.c:259-267` increments `g_ticks` and then calls `net_poll_tick()`
+**inside the timer ISR**. §4 made `net_poll_tick` take `g_net_lock`. A cpu that
+blocks there spins with interrupts disabled, so it cannot take its *next* timer
+interrupt and its per-cpu tick counter freezes. virtio-blk's completion deadline
+is tick-bounded, so it expires and the read returns `-EIO` → checksum mismatch.
+
+And §4 gave it something long to block on: `net_init()` held the lock across
+`net_loopback_test()`, `net_loopback_tcp_test()` (a **200**-round pump) and
+`net_fuzz_test()` (a **256**-round loop). Under TCG that is hundreds of
+milliseconds with every other cpu's timer ISR spinning.
+
+### The error in §4's reasoning, stated plainly
+
+§4 considered exactly this and cleared it with:
+
+> "every one of them already ran with interrupts off today, so this adds no hold
+> time that was not already there."
+
+That is true for the cpu **holding** the lock and false for every **other** cpu.
+`cli` disables interrupts locally and never blocked another core; a global
+spinlock does. The hold time was indeed unchanged — what changed is who waits on
+it. A guard's cost is not only what it stops the holder doing.
+
+### The fix: never hold across a poll loop
+
+- `net_init()` releases the lock **before** the three self-tests.
+- Each test takes it in short bursts: `net_pump_locked()` (one
+  `netif_poll_all` + `sys_check_timeouts` per iteration), `net_timeouts_locked()`,
+  and `pradyos_netif_rx_isr()` for the fuzz frames.
+- Bounded setup/teardown inside the tests (`udp_new`/`udp_bind`/`tcp_new`/
+  `tcp_connect`/`pbuf_free`/`udp_remove`) keeps its own short critical section,
+  so no lwIP call is left unlocked.
+
+Verified by grep that every remaining bare `sys_check_timeouts`,
+`netif_poll_all` and `pradyos_netif_rx` sits inside a locking helper or
+`net_poll_tick`.
+
+### The rule this earns
+
+**Never hold a lock that an ISR contends for across a bounded-but-long loop.**
+"Bounded" is not "short". `net_loopback_tcp_test`'s 200 rounds are bounded and
+still long enough to expire a 5-second block deadline on another cpu. When an
+interrupt handler can wait on a lock, the hold time budget is set by the most
+timing-sensitive thing any *other* cpu does in its ISR — here, advancing ticks.
+
+### Measurement
+
+`smoke-blk-integrity` x6 and `smoke-surfdestroy` x6 on the fixed build, counting
+`compl wait timeout` occurrences per boot. Prior evidence for comparison: the
+§7 build produced the timeout above on its first `smoke-surfdestroy`, and
+DDR-981's own campaign measured **0** timeouts in 20 boots at `-smp 4` before
+this lock existed.
