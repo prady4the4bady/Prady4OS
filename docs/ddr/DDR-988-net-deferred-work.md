@@ -98,6 +98,10 @@ round loops that used to hold it. Therefore for deferred work pending at time T:
 Either way the work is serviced in bounded time, and the bound does not depend
 on a future trylock happening to win. That is the guarantee §11 did not have.
 
+**CORRECTION (§12.1): the clause "no holder yields, sleeps or blocks" above is
+FALSE** — holders block on `g_console_lock` and `g_heap_lock`. The conclusion
+survives but only conditionally; read §12.2 before relying on this paragraph.
+
 **The residual window, stated honestly:** the RX ISR enqueues without
 `g_net_lock`, so a frame landing between a holder's drain and its unlock is not
 seen by that drain. It waits for the next acquire — at most one poll period
@@ -116,9 +120,12 @@ because the next acquire drains unconditionally.
 
 ### 4.3 Lock order
 
-`g_net_lock` → `g_net_rxq_lock` → `g_heap_lock`. The RX ISR takes only
-`g_net_rxq_lock`, and the rxq lock is held across a `memcpy` and two index
-updates with no calls out. No cycle.
+**INCOMPLETE AS FIRST WRITTEN — see §12.1 for the corrected order.** This said
+`g_net_lock → g_net_rxq_lock → g_heap_lock`, omitting that a holder also reaches
+`g_console_lock` (via `kputs` in the lwIP echo callbacks) and `g_pmm_lock` (via
+`kmalloc`). The RX ISR part is accurate: it takes only `g_net_rxq_lock`, held
+across a `memcpy` and two index updates with no calls out. There is no cycle,
+but the order to reason from is §12.1's, not this one.
 
 ## 5. Counters (R17 — a denominator, and a reader)
 
@@ -474,3 +481,108 @@ changing a cleanup path without enumerating what that path was doing: 11.2 lost
 run isolation, 11.5 lost the SKIP/FAIL distinction. A deletion in a harness is
 rarely only a deletion, and "the gate still passes" did not catch either one —
 11.2 needed CI and 11.5 needed looking at the directory afterwards.
+
+## 12. The §4.1 liveness argument was overstated — corrected
+
+I asked for §4.1 to be attacked rather than accepted. It did not survive intact.
+
+### 12.1 The documented lock order is incomplete, and the "no holder blocks" claim is false
+
+§4.1 asserts:
+
+> Every acquire of `g_net_lock` is followed by a release in bounded time: no
+> holder yields, sleeps or blocks.
+
+**The last clause is false.** Holders block on other spinlocks, on two paths I
+did not enumerate:
+
+1. **console.** `net_drain_locked()` calls `pradyos_netif_rx()` *while holding
+   `g_net_lock`* (that is the whole design). That enters lwIP's receive path,
+   which reaches `tcp_echo_recv()` and `tcp_echo_accept()` — and both call
+   `kputs()`, which takes `g_console_lock` with a **blocking**
+   `spin_lock_irqsave` (`console.c:56`). So a `g_net_lock` holder can spin,
+   interrupts disabled, waiting on another CPU's console output.
+2. **heap → pmm.** lwIP allocation under the lock (`pbuf_alloc`, `tcp_seg`)
+   routes through `kmalloc`/`kfree`, which take `g_heap_lock`, which can reach
+   the PMM lock.
+
+The real order is therefore not `net → rxq → heap` but:
+
+```text
+g_net_lock → g_console_lock
+g_net_lock → g_rxq_lock
+g_net_lock → g_heap_lock → g_pmm_lock
+```
+
+§4.3 is corrected to this. Recording an incomplete lock order is worse than
+recording none: the next person reasoning about a deadlock will trust it.
+
+### 12.2 What survives, stated precisely
+
+The conclusion is not overturned, but its *justification* is now conditional
+rather than absolute:
+
+- **Claimed before:** holds are bounded because holders never block.
+- **True:** holds are bounded **provided every nested lock's holder is itself
+  bounded.** Console, heap and PMM holders do not yield and do not call back
+  into lwIP, so the composite is still bounded — but that is a claim about three
+  other subsystems, not a property of this design, and it must be re-checked
+  whenever any of them changes.
+
+**No deadlock cycle exists.** Nothing takes `g_console_lock` and then enters
+lwIP. The nearest candidate is `idt.c`, which calls `net_poll_tick()` at
+`ticks % 10` and the `[hb]` heartbeat at `ticks % 500`; on the tick where both
+fire they run **sequentially, not nested**, and `net_poll_tick` has released
+before the heartbeat takes the console lock.
+
+**The real residual cost** is latency, not liveness: because the drain runs
+under the lock, a network RX drain can now wait on serial output, which under
+TCG is slow. §11's `net_defer` counter is the denominator if this ever needs
+measuring.
+
+### 12.3 What I am NOT doing here, and why
+
+The suggested deeper fix — forbid console output from callbacks reached under
+`g_net_lock`, and make the deferred-work executor independent of any holder that
+can block on heap or PMM — is correct in principle and **out of scope for this
+PR**:
+
+- `PRADYOS_NET_TCP_OK` / `PRADYOS_NET_TCP_READY` are **gate sentinels**.
+  Removing those `kputs` calls silently guts `smoke-net`, which is exactly the
+  vacuous-gate failure mode §9 caught the hard way.
+- Deferring them (flag under the lock, print outside) is a real change to gate
+  timing, days from a release, in a PR whose job is to *recover* a red branch.
+- An independent executor means a kernel worker thread — a larger change than
+  the defect it addresses, and unmeasured.
+
+Recorded as owed work rather than done badly. The same reasoning as DDR-989 §6:
+a recovery PR is the wrong vehicle for a subsystem change, and PR #12 is what
+happens when that line is crossed.
+
+### 12.4 Also fixed: the INT/TERM trap discarded the capture
+
+`boot_test.sh` installed `trap 'kill "$qemu_pid"; exit 130' INT TERM`, which
+bypassed `serial_keep_fail` entirely — a cancelled run threw away its serial log
+at exactly the moment that log is most likely to hold the only useful diagnosis.
+
+And cancellation is **routine here, by that trap's own comment**: the workflow
+concurrency group cancels the older run whenever two dispatches land on one ref,
+which is precisely what happens while chasing the 3-green rule. "The original
+file is left in place" is not a defence either — §11.2 now truncates
+`SERIAL_LOG` at the start of the next run, and a cancelled CI workspace is
+discarded without an artifact upload.
+
+`on_interrupt()` now reaps QEMU, stops the QMP watcher if one is running,
+preserves both captures via `serial_keep_fail`, prints their paths, and exits
+130. Verified by sending SIGTERM to a live gate: `INTERRUPTED` printed, both
+captures kept (7,879 B serial + 70 B qemuerr), `rc=130`.
+
+### 12.5 Confirmed by review: retired-owner PID reuse is safe
+
+The §10.2 change I was least sure of was independently checked, and the check
+found the mechanism I had not: `sched.c:1514-1519` calls `socket_reap_pid()`
+**before** the thread becomes a zombie, so a PID cannot be recycled while it
+still owns a live proxy socket. The residual effect is exactly what §10.2
+claimed and no more — a recycled PID can distinguish its predecessor's retired
+slot from another PID's slot, an information disclosure about retired-slot state
+and not an authorization bypass, since `!used` still blocks every operation.

@@ -494,7 +494,25 @@ qemu_pid=$!
 # lock until someone notices. That orphan is exactly what the pre-flight check
 # above trips over on the NEXT run -- so this trap removes the CAUSE, while the
 # check above only contains the symptom.
-trap 'kill "$qemu_pid" 2>/dev/null; exit 130' INT TERM
+# DDR-988 sec.12.2: the trap must ALSO preserve the capture. It used to just kill
+# and exit 130, bypassing serial_keep_fail entirely — so a cancelled run threw
+# away its serial log exactly when that log is most likely to hold the only
+# useful diagnosis. And cancellation is ROUTINE here, by this comment's own
+# account: the workflow concurrency group cancels the older run whenever two
+# dispatches land on one ref, which is precisely what happens while chasing the
+# 3-green rule. The original file is left in place, but sec.11.2 now truncates
+# SERIAL_LOG at the start of the NEXT run, and a cancelled CI workspace is
+# discarded without an artifact upload — so "left in place" is not preserved.
+on_interrupt() {
+    kill "$qemu_pid" 2>/dev/null
+    wait "$qemu_pid" 2>/dev/null
+    # declared below this trap, so it may legitimately be unset when we fire
+    [ -n "${qmp_watcher_pid:-}" ] && kill "$qmp_watcher_pid" 2>/dev/null
+    echo "[smoke] INTERRUPTED (SIGINT/SIGTERM) — preserving the capture."
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
+    exit 130
+}
+trap on_interrupt INT TERM
 
 # DDR-887 watcher: fire ~5 s before the hard timeout, while QEMU is still alive,
 # and append the vCPU dump to the serial capture so it lands in the artifact.
