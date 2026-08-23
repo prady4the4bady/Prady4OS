@@ -156,3 +156,90 @@ this deadline:
 
 This is the one chance to get this right. Build everything, report honestly,
 and do not let the deadline slip a second time.
+
+---
+
+## 6. AUTOMATION & SPEED PLAYBOOK — specific to what has actually been slow
+
+This section is grounded in this project's OWN build logs, not generic advice.
+The recorded slowdowns are: long QEMU boot/verify cycles (90–180s per gate,
+30–70 minutes for an N=20 campaign), background measurement processes dying
+silently when their wrapper exits (re-running from scratch), re-diagnosing
+INTERMITTENTS that were already fully characterized in a prior session, and
+CI shard count not growing as gate count grows (149 gates, still 6 shards).
+Fix these specifically:
+
+### 6.1 — Fix the background-measurement harness first
+Multiple sessions lost 30+ minutes each when `nohup ... &` inside a
+backgrounded shell call died the moment its wrapper process exited, silently
+restarting a long N-run campaign from run 1 (documented in this project's own
+SESSION_HANDOFF history). Before running ANY N=10+ verification campaign:
+write a small persistent runner script under `tools/ci/` that:
+  - writes its PID and current run number to a status file on every iteration
+  - can be polled (`cat build/campaign_status.txt`) without holding a
+    foreground shell
+  - survives the invoking process exiting (proper `setsid`/`disown`, not bare
+    `nohup &` inside a call that itself gets torn down)
+This alone reclaims hours already lost twice to the identical failure mode.
+
+### 6.2 — Auto-classify CI failures against the known-signature table
+This project already maintains a table of every characterized intermittent
+(OPEN-10, `smoke-cadence`, Item 48/B#3, FSRM, etc.) with their exact grep
+signatures. Turn that table into a script,
+`tools/ci/classify_failure.sh <serial.log>`, that greps a failing log against
+every KNOWN signature and prints either "matches <name>, do not re-diagnose,
+see <DDR>" or "NEW SIGNATURE — investigate." This directly prevents the
+repeated pattern in this project's own history of re-deriving a conclusion a
+prior session already reached.
+
+### 6.3 — A fast-lane verification tier, wired into the Makefile
+Per section 4.2 of the base directive: add `make smoke-fast N=<gate>
+COUNT=<n>` as a real Makefile target (not just a policy statement) that runs
+a gate COUNT times and reports pass rate, defaulting to N=5 for anything
+tagged non-scheduler/non-SMP/non-security in `tools/ci/gate_shards.txt`. Make
+the risk tier a real annotation in that file (a third column), not something
+that has to be remembered.
+
+### 6.4 — Widen the CI shard matrix now, not reactively
+149 gates on 6 shards is already denser than the 147/6 split that motivated
+DDR-817's original sharding work. Rebalance to 8–10 shards using the same
+longest-processing-time-first packing DDR-817 already uses
+(`tools/ci/gate_shards.txt` duration column) — this is a mechanical, low-risk
+change that cuts wall-clock CI time proportionally, and it should happen once,
+now, rather than being deferred until the matrix is visibly the bottleneck.
+
+### 6.5 — A generated status dashboard, not manual tallying
+Every session currently hand-writes its progress summary into
+`SESSION_HANDOFF.md`. Add `tools/ci/status_report.sh` that greps
+`docs/BUILD_TRACKER.md` / `docs/AETHER_MASTER_FEATURES.md` for
+checked/unchecked items per group and emits a numeric table
+(shipped-this-session / remaining-per-group / total-against-286). Run it as
+the LAST step of every commit that closes a backlog item, and paste its
+output into `SESSION_HANDOFF.md` rather than reconstructing the count by
+memory. This is also what should be read to answer "what's the status" —
+including from outside a Claude Code session — without needing to re-derive
+it from commit history each time.
+
+### 6.6 — Use verification dead-time for the OTHER groups, concretely
+The existing rule ("task-switch during CI-wait, never idle-stop") is correct
+but abstract. Make it concrete: maintain a literal file,
+`docs/NEXT_TASK_QUEUE.md`, as a FIFO of ready-to-start items across Groups
+A–H. The moment any long QEMU campaign starts (which blocks further QEMU use
+on the same machine), pop the next item off that queue and start its DDR or
+code-reading phase — not "whatever seems next," a literal queue that survives
+across sessions so nothing is re-picked or forgotten.
+
+### 6.7 — Stop regenerating disk images that have not changed
+`fat-image` / `sfs-image` / `esp-image` recipes currently regenerate from
+scratch on every gate invocation that depends on them. Where the fixture set
+is unchanged between two gate runs in the same session, this is pure
+wall-clock cost. Add a content-hash check (hash of the recipe's declared
+inputs) so `make fat-image` is a no-op when nothing that feeds it changed —
+standard Make dependency tracking, but currently the recipes are `.PHONY` and
+always re-run. This is safe because a stale image is caught by the gate's own
+assertions failing, not silently accepted.
+
+**None of this changes verification RIGOR** — N=20 stays N=20 where it
+matters, every gate still needs a real artefact before a fix ships. This
+section only removes time that was being spent on infrastructure friction,
+not on the judgment calls this project's discipline exists to protect.
