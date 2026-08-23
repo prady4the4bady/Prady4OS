@@ -488,9 +488,15 @@ qemu_pid=$!
 # DDR-951 -- reap our own child on interruption, not only on the timeout path.
 # The normal path kills $qemu_pid when the window expires, so a run that
 # completes leaks nothing. An INTERRUPTED run is the actual leak source: this
-# project's CI cancels runs routinely (the workflow concurrency group cancels
-# the older run whenever two dispatches land on one ref), and Ctrl-C does the
-# same locally. The shell dies, QEMU is orphaned, and it holds the image write
+# project's CI can cancel runs (a human cancelling a job, runner eviction), and
+# Ctrl-C does the same locally.
+# DDR-988 sec.12.4: this comment used to claim "CI cancels runs ROUTINELY (the
+# workflow concurrency group cancels the older run whenever two dispatches land
+# on one ref)". That is FALSE and it misled a later session into repeating it as
+# established fact. There is no `concurrency:` block anywhere under
+# .github/workflows/ -- grep finds none, and run 32657350756 stayed in_progress
+# across two subsequent pushes to the same ref, which a concurrency group would
+# have cancelled twice. Cancellation here is occasional, not routine. The shell dies, QEMU is orphaned, and it holds the image write
 # lock until someone notices. That orphan is exactly what the pre-flight check
 # above trips over on the NEXT run -- so this trap removes the CAUSE, while the
 # check above only contains the symptom.

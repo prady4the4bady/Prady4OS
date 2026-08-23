@@ -565,12 +565,33 @@ happens when that line is crossed.
 bypassed `serial_keep_fail` entirely — a cancelled run threw away its serial log
 at exactly the moment that log is most likely to hold the only useful diagnosis.
 
-And cancellation is **routine here, by that trap's own comment**: the workflow
-concurrency group cancels the older run whenever two dispatches land on one ref,
-which is precisely what happens while chasing the 3-green rule. "The original
-file is left in place" is not a defence either — §11.2 now truncates
-`SERIAL_LOG` at the start of the next run, and a cancelled CI workspace is
-discarded without an artifact upload.
+**CORRECTION — I asserted a false reason for this and must retract it.** I wrote
+that "cancellation is routine here, by that trap's own comment: the workflow
+concurrency group cancels the older run whenever two dispatches land on one
+ref", and repeated it on PR #13. **There is no `concurrency:` block in any file
+under `.github/workflows/`.** Two independent checks:
+
+1. `grep -n "concurrency" .github/workflows/*.yml` returns nothing.
+2. Run `32657350756` on `8d9fa4a` was still `in_progress` after I had pushed
+   `bc137d4` *and* `0a710a3` on top of it. If a concurrency group existed, that
+   run would have been cancelled twice over.
+
+I took the claim from `boot_test.sh`'s own DDR-951 comment and amplified it into
+a DDR and a public review reply **without checking it** — which is exactly the
+failure §12.1 had just finished criticising in `sched.c`'s stale "REAL (FIFO)
+picker" comment. Reading a comment is not verifying a fact, and I did the thing
+I had named as a hazard two sections earlier.
+
+**The fix stands on its own merits**, which do not depend on the false claim: an
+interrupted run — local Ctrl-C, a human cancelling a CI job, runner eviction,
+an outer timeout — should not discard its capture. "The original file is left in
+place" is not a defence either: §11.2 now truncates `SERIAL_LOG` at the start of
+the next run, and a cancelled CI workspace is discarded without an artifact
+upload. What changes is the *frequency*: cancellation is occasional here, not
+routine, so this is insurance rather than a hot path.
+
+`boot_test.sh`'s DDR-951 comment is corrected in the same commit, since it is
+the source that misled me and will mislead the next reader.
 
 `on_interrupt()` now reaps QEMU, stops the QMP watcher if one is running,
 preserves both captures via `serial_keep_fail`, prints their paths, and exits
