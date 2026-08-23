@@ -109,7 +109,7 @@ hold, and is withdrawn.
 The gate missed `PRADYOS_SURFDESTROY_CHURN_OK` **because the kernel panicked**,
 not because a sentinel was late:
 
-```
+```text
 [sfs] 64K write/read byte-exact OK
 *** NEXUS KERNEL PANIC ***
 , grow component: NEXUS isr

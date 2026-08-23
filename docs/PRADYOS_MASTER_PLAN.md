@@ -337,11 +337,11 @@ not at EOF. This causes `2>>` to truncate the file. Fix is TASK 3 (DDR-782).
 | ID | Symptom | Status |
 |---|---|---|
 | **DDR-868 / TASK 3** | `smoke-shell` FAIL: `2>>` truncates instead of appending | **ACTIVE — kernel O_APPEND not implemented. Fix specified in §0 TASK 3 above.** |
-| **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel — a ring-0 `#PF` panic (DDR-985) | open, **ACTIVE — has a local reproducer** |
-| **OPEN-2** | Intermittent CI reds on `-smp 4` gates | open — DDR-863 |
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel — observed signature is a ring-0 panic (`#PF` locally, `#GP` in the DDR-987 capture) | **ROOT-CAUSED — DDR-987**: unlocked lwIP core re-entered across CPUs -> use-after-free. Fix pending merge |
+| ~~OPEN-2~~ | Intermittent CI reds on `-smp 4` gates | **CLOSED — DDR-981** (`yield()` spun with `RFLAGS.IF` clear; DDR-863 was the wrong lead) |
 | **OPEN-9** | `smoke-shell` fails locally / passes CI (QEMU lock-hold) | root cause not yet caught; **not the same failure as DDR-868** |
-| **OPEN-10** | item-47 lost-thread failure seen through `smoke-sfs-btree-smp4` | open, gates promotion |
-| **B#3 / DDR-806** | `-smp 4` thread loss | open — see §4 |
+| ~~OPEN-10~~ | item-47 lost-thread failure seen through `smoke-sfs-btree-smp4` | **FIXED — DDR-964** (create-then-init race; `rc=-1` was `-EPERM` from `cap_ok`) |
+| ~~B#3 / DDR-806~~ | `-smp 4` thread loss | **CLOSED — DDR-981.** 20/20 at `-smp 4`, 0 timeouts, mutation-checked |
 | ~~OPEN-7~~ | Per-boot probe selection | CLOSED (DDR-804) |
 | ~~OPEN-8~~ | Console input loss | CLOSED (DDR-809) |
 | ~~OPEN-11~~ | `smoke-sha256` after fresh image | CLOSED (DDR-831) |

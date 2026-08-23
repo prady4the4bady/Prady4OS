@@ -13,7 +13,7 @@ DDR-979 (the CI capture), §INV.23.
 (hash verified against `build/kernel.elf` **before** resolving any address —
 §NON-NEGOTIABLE 18).
 
-```
+```text
 exception #GP   vector 0x0D   error 0x0   CS=0x08 (ring 0)   RFLAGS=0x82 (IF=0)
 RIP  0xFFFFFFFF80047509   tcp_output
 RAX  0xDDDDDDDDDDDDDDDD
@@ -300,3 +300,79 @@ timing-sensitive thing any *other* cpu does in its ISR — here, advancing ticks
 §7 build produced the timeout above on its first `smoke-surfdestroy`, and
 DDR-981's own campaign measured **0** timeouts in 20 boots at `-smp 4` before
 this lock existed.
+
+---
+
+## 9. Second review round — three more defects, one dispute
+
+### 9.1 `psock_close` did not revalidate under the lock
+
+§2 introduced the rule "revalidate inside the lock" and applied it to
+`psock_read` and `psock_write` — and not to `psock_close`. The window it leaves:
+
+1. cpu A passes the pre-lock `used` test.
+2. cpu B closes and retires the slot.
+3. cpu C connects and claims the **same** slot.
+4. cpu A takes the lock and tears down **cpu C's** pcb and RX page.
+
+Fixed. This is the third defect in this DDR of the same shape: a rule stated
+correctly and then applied to some of its sites. §2 missed the RX ISR, §8 missed
+the other CPUs, §9.1 missed the third `psock_*` entry point. **Enumerate the
+sites, then apply; do not apply while enumerating.**
+
+### 9.2 A failed `tcp_connect()` leaked the pcb, the slot and the RX page
+
+lwIP's contract: only `ERR_OK` transfers pcb ownership to the stack; on any
+error the attempt was never enqueued and the **caller still owns the pcb**. The
+old path did:
+
+```c
+if (e != ERR_OK) { s->state = PS_ERR; return -1; }
+```
+
+— leaving the pcb allocated, `used` still 1, and the RX page unfreed, forever.
+Pre-existing (the `cli` version did the same), not a regression from §4.
+
+Fixed: `tcp_abort(s->pcb)` and full slot rollback under the lock, page freed
+after release.
+
+### 9.3 Disputed: "sync the current-state values to §INV.14 / §INV.18 / §INV.4"
+
+The review is right that §CURRENT BUILD STATE contradicts those invariants, and
+right that a wrong NSI record risks a duplicate allocation. It is wrong about
+which side is stale. Measured:
+
+| value | §INV said | build state said | **measured** | source |
+|---|---|---|---|---|
+| NSI max | 74 | 93 | **95** | `kernel/syscall/syscall.h:170`, shipped by `user/prism.c:30` |
+| `kernel.bin` | 1,053,054 B | 1,065,350 B | **1,065,350 B** | `stat` on the tested build |
+| DDR free | 936+ | 987+ | **988+** | `ls docs/ddr docs/decisions` |
+
+Reverting NSI to 74 — the change the finding asked for — would have been the
+worst of the three options and would have caused exactly the duplicate-NSI harm
+it warns about. All three now carry measured values, and §INV.14/18/4 were
+corrected rather than the fresh lines being overwritten.
+
+**The general point.** An invariant block is only authoritative while someone
+maintains it. §INV.14 had drifted 21 NSI numbers behind the header it describes.
+When an invariant and a measurement disagree, measure again — do not assume the
+document labelled "hard-won" is the current one.
+
+### 9.4 Deferred, and NOT this PR's to fix: slot-reuse across the ownership check
+
+`sock_denied()` (`kernel/syscall/sys_socket.c:64`) reads `g_sock_owner[slot]`
+with no lock; the syscall then calls `psock_read/write/close` afterwards. Between
+the two, another cpu can close and reuse the numeric slot, so the operation lands
+on a **different connection** than the one whose ownership was checked. A slot
+index alone cannot identify a connection across reuse.
+
+This is real and it is a CAP_NET isolation defect (DDR-731). It is **not** a
+regression from this DDR — the window predates it, and §2's move of the claim
+inside the lock narrowed it rather than widening it.
+
+The fix is a generation-bearing handle: a `gen` on each `proxy_sock`, bumped on
+claim, carried in the handle the syscall layer holds, and validated together with
+the owner under `g_net_lock` in all three operations. That changes the
+slot-handle contract across the syscall/lwIP-port boundary, so it is recorded
+here for a decision rather than taken unilaterally inside a PR whose remit is the
+ring-0 panic.

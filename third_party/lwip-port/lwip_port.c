@@ -349,7 +349,7 @@ static void net_fuzz_test(void) {
         for (uint32_t j = 0; j < len && j < sizeof f; j++)
             f[j] = (uint8_t)(pradyos_lwip_rand() >> ((j & 3) * 8));
         if (len >= 14) { f[12] = 0x08; f[13] = 0x00; }   /* bias some toward IPv4 */
-        pradyos_netif_rx_isr(f, len);            /* DDR-987 sec.8 */
+        pradyos_netif_rx_isr(f, len);            /* DDR-987 sec.8: locking wrapper */
     }
     /* 2) SYN flood from distinct src ports/IPs to a CLOSED port: every segment
      *    is fully parsed + checksum-verified, then answered with RST and freed —
@@ -462,8 +462,20 @@ int psock_connect(uint32_t host, uint16_t port) {
     ip_addr_t ip;
     IP4_ADDR(&ip, (host >> 24) & 0xff, (host >> 16) & 0xff, (host >> 8) & 0xff, host & 0xff);
     err_t e = tcp_connect(s->pcb, &ip, port, ps_connected);
+    if (e != ERR_OK) {
+        /* DDR-987 sec.9: lwIP's contract is that a FAILED tcp_connect() did not
+         * enqueue the attempt and the caller still owns the pcb -- only ERR_OK
+         * transfers it to the stack (then the connected/err callback owns it).
+         * The old path just set PS_ERR and returned, leaking the pcb, the slot
+         * (used stayed 1) and the RX page. Roll the whole claim back under the
+         * lock; free the page after release, as everywhere else here. */
+        tcp_abort(s->pcb);
+        s->pcb = 0; s->rx = 0; s->used = 0; s->state = PS_CLOSED;
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        pmm_free_page((uint64_t)(uintptr_t)rxpage);
+        return -1;
+    }
     spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
-    if (e != ERR_OK) { s->state = PS_ERR; return -1; }
     return slot;
 }
 
@@ -519,10 +531,19 @@ int psock_write(int slot, const uint8_t *kbuf, int len) {
 }
 
 int psock_close(int slot) {
-    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
+    if (slot < 0 || slot >= PSOCK_N) return -1;
     struct proxy_sock *s = &g_ps[slot];
     uint64_t fl;
     fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
+    /* DDR-987 sec.9: revalidate INSIDE the lock, as psock_read/psock_write
+     * already do. Without it: cpu A passes the pre-lock `used` test, cpu B
+     * closes and retires the slot, cpu C connects and claims the SAME slot, and
+     * cpu A then acquires the lock and tears down cpu C's pcb and RX page. The
+     * sec.2 fix applied this rule to read and write and missed close. */
+    if (!s->used) {
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        return -1;
+    }
     if (s->pcb) {
         tcp_arg(s->pcb, NULL);
         tcp_recv(s->pcb, NULL);
