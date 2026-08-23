@@ -27,6 +27,14 @@ TIMEOUT_S="${TIMEOUT_S:-30}"
 __bt_root="$(cd "$(dirname "$0")/../.." && pwd)"
 mkdir -p "$__bt_root/build/gatelogs"
 SERIAL_LOG="${SERIAL_LOG:-$__bt_root/build/gatelogs/serial-$$.log}"
+# DDR-988 sec.11.2: TRUNCATE the capture before booting. Until sec.11 every exit
+# path deleted it, so a harness that reuses one SERIAL_LOG path got isolation as
+# a side effect of the cleanup. Keeping failed captures removed that side effect
+# and selftest.sh -- which reuses "$WORK/serial.log" for every case -- began
+# matching the PREVIOUS case's forbidden pattern in the window before the stub
+# qemu truncates the file. Isolation must not be a side effect of cleanup: a
+# gate may never inherit an earlier run's serial content, whatever the path.
+: > "$SERIAL_LOG" 2>/dev/null || true
 
 # DDR-777 / BUG-1 diagnostics: KEEP_SERIAL=1 preserves the serial capture.
 #
@@ -43,6 +51,37 @@ serial_rm() {
     rm -f "$@"
 }
 
+# DDR-988 sec.11. The SERIAL_LOG default was moved out of /tmp above so a failing
+# gate's capture would survive -- but every failure path still called serial_rm,
+# which deletes it whenever KEEP_SERIAL is unset. Relocating the file and then
+# deleting it anyway fixes nothing: a failed gate is exactly the run whose
+# capture is the only evidence, and CI never sets KEEP_SERIAL, so in CI the
+# artefact was destroyed 100% of the time. That is the other half of why the
+# DDR-985 run-16 panic stopped at "#PF page fault" with no vector=/RIP=/CR2=.
+#
+# A failed gate now KEEPS its capture unconditionally and prints the path, so the
+# evidence is named in the gate output instead of having to be guessed at. Only
+# the PASS path deletes. KEEP_SERIAL still forces retention on a passing run.
+serial_keep_fail() {
+    for __f in "$@"; do
+        [ -e "$__f" ] || continue
+        # An EMPTY capture preserves nothing. sec.11 leaked one per SKIP/host-env
+        # exit because it only skipped them; it must remove them.
+        if [ ! -s "$__f" ]; then rm -f "$__f"; continue; fi
+        # Copy to a unique name: the path itself may be reused (and now
+        # truncated) by the very next gate, which would destroy the evidence
+        # this function exists to preserve.
+        __k="${__f}.fail-$$"
+        if cp -f "$__f" "$__k" 2>/dev/null; then
+            echo "[boot_test] FAIL — capture kept: $__k"
+            rm -f "$__f"          # evidence now lives in the .fail copy
+        else
+            echo "[boot_test] FAIL — capture kept: $__f"   # copy failed: keep it
+        fi
+    done
+    return 0
+}
+
 # DDR-823 / OPEN-9. QEMU's own startup errors go to STDERR, which this harness
 # used to leave uncaptured. When QEMU refuses to start — most often because a
 # leaked qemu-system-x86_64 from a previous run still holds the image's write
@@ -54,12 +93,17 @@ serial_rm() {
 # failure, it reproduces "5/5" for as long as the orphan lives, and it clears on
 # its own when the orphan is reaped — which is exactly the OPEN-9 signature that
 # twice caused a working change to be blamed and reverted.
-QEMU_ERR="$(mktemp)"
+# DDR-988 sec.11.3: QEMU_ERR was $(mktemp), i.e. /tmp -- the same
+# §NON-NEGOTIABLE 7 violation DDR-987 fixed for SERIAL_LOG and missed here. It
+# matters more now that sec.11 PRESERVES this file on failure: keeping evidence
+# in the directory the rules call unreliable is not keeping it.
+QEMU_ERR="$__bt_root/build/gatelogs/qemuerr-$$.log"
+: > "$QEMU_ERR" 2>/dev/null || QEMU_ERR="$(mktemp)"
 
 if [ ! -f "$IMG" ]; then
     echo "[smoke] no bootable image at '$IMG' yet — expected during Phase 0."
     echo "[smoke] SKIP (nothing to boot)."
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_rm "$SERIAL_LOG" "$QEMU_ERR"   # DDR-988 sec.11.5: SKIP is not a FAIL
     exit 0
 fi
 
@@ -93,7 +137,7 @@ if command -v pgrep >/dev/null 2>&1; then
         echo "[smoke] Inspect before killing -- it may be a gate you started:"
         stray_csv="$(echo "$stray" | paste -sd, -)"
         echo "[smoke]     ps -o pid,etime,args -p $stray_csv"
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 3
     fi
 else
@@ -159,7 +203,7 @@ if [ -n "${QEMU_UEFI:-}" ]; then
     if [ ! -f "$OVMF_CODE" ] || [ ! -f "$OVMF_VARS_SRC" ]; then
         echo "[smoke] OVMF not installed ($OVMF_CODE) — cannot test the UEFI path."
         echo "[smoke] FAIL (missing firmware, not a kernel failure)."
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
     OVMF_VARS="$(mktemp)"
@@ -444,13 +488,37 @@ qemu_pid=$!
 # DDR-951 -- reap our own child on interruption, not only on the timeout path.
 # The normal path kills $qemu_pid when the window expires, so a run that
 # completes leaks nothing. An INTERRUPTED run is the actual leak source: this
-# project's CI cancels runs routinely (the workflow concurrency group cancels
-# the older run whenever two dispatches land on one ref), and Ctrl-C does the
-# same locally. The shell dies, QEMU is orphaned, and it holds the image write
+# project's CI can cancel runs (a human cancelling a job, runner eviction), and
+# Ctrl-C does the same locally.
+# DDR-988 sec.12.4: this comment used to claim "CI cancels runs ROUTINELY (the
+# workflow concurrency group cancels the older run whenever two dispatches land
+# on one ref)". That is FALSE and it misled a later session into repeating it as
+# established fact. There is no `concurrency:` block anywhere under
+# .github/workflows/ -- grep finds none, and run 32657350756 stayed in_progress
+# across two subsequent pushes to the same ref, which a concurrency group would
+# have cancelled twice. Cancellation here is occasional, not routine. The shell dies, QEMU is orphaned, and it holds the image write
 # lock until someone notices. That orphan is exactly what the pre-flight check
 # above trips over on the NEXT run -- so this trap removes the CAUSE, while the
 # check above only contains the symptom.
-trap 'kill "$qemu_pid" 2>/dev/null; exit 130' INT TERM
+# DDR-988 sec.12.2: the trap must ALSO preserve the capture. It used to just kill
+# and exit 130, bypassing serial_keep_fail entirely — so a cancelled run threw
+# away its serial log exactly when that log is most likely to hold the only
+# useful diagnosis. And cancellation is ROUTINE here, by this comment's own
+# account: the workflow concurrency group cancels the older run whenever two
+# dispatches land on one ref, which is precisely what happens while chasing the
+# 3-green rule. The original file is left in place, but sec.11.2 now truncates
+# SERIAL_LOG at the start of the NEXT run, and a cancelled CI workspace is
+# discarded without an artifact upload — so "left in place" is not preserved.
+on_interrupt() {
+    kill "$qemu_pid" 2>/dev/null
+    wait "$qemu_pid" 2>/dev/null
+    # declared below this trap, so it may legitimately be unset when we fire
+    [ -n "${qmp_watcher_pid:-}" ] && kill "$qmp_watcher_pid" 2>/dev/null
+    echo "[smoke] INTERRUPTED (SIGINT/SIGTERM) — preserving the capture."
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
+    exit 130
+}
+trap on_interrupt INT TERM
 
 # DDR-887 watcher: fire ~5 s before the hard timeout, while QEMU is still alive,
 # and append the vCPU dump to the serial capture so it lands in the artifact.
@@ -502,7 +570,7 @@ if [ -s "$QEMU_ERR" ] && grep -qiE "Failed to get \"?write\"? lock|Is another pr
     echo "[smoke] Do NOT run two QEMU gates concurrently — they share this image."
     echo "[smoke] --- qemu stderr ---"
     sed 's/^/[smoke]   /' "$QEMU_ERR"
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 3
 fi
 
@@ -514,7 +582,7 @@ if [ -s "$QEMU_ERR" ] && ! [ -s "$SERIAL_LOG" ] && grep -q "^qemu-system-x86_64:
     echo "[smoke] HOST-ENV FAIL — QEMU refused to start; no serial output was produced."
     echo "[smoke] This is not a kernel failure. QEMU stderr:"
     sed 's/^/[smoke]   /' "$QEMU_ERR"
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 3
 fi
 
@@ -523,14 +591,14 @@ fi
 # after the required-pattern checks would let a gate report "PASS" for a boot in
 # which something broke.
 if ! check_global_forbidden; then
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"
     cat "$SERIAL_LOG"
-    serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+    serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
     exit 1
 fi
 # Each non-empty line of EXTRA_SENTINEL is a literal pattern that must also appear.
@@ -541,7 +609,7 @@ while IFS= read -r pat; do
     if ! grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — required pattern '$pat' not found. Serial output was:"
         cat "$SERIAL_LOG"
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF
@@ -553,7 +621,7 @@ while IFS= read -r pat; do
     if grep -qF "$pat" "$SERIAL_LOG"; then
         echo "[smoke] FAIL — forbidden pattern '$pat' appeared. Serial output was:"
         cat "$SERIAL_LOG"
-        serial_rm "$SERIAL_LOG" "$QEMU_ERR"
+        serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
         exit 1
     fi
 done <<EOF

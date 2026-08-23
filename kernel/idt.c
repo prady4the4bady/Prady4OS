@@ -277,6 +277,14 @@ static void timer_tick(struct regs *r) {
         { extern uint64_t g_thre_drops, g_rx_drops;
           kputs(" thre_drops="); kputdec(g_thre_drops);
           kputs(" rx_drops=");   kputdec(g_rx_drops); }
+        /* DDR-988 sec.5: the lwIP deferral counters had no reader at all, which
+         * made them not a measurement. net_skip/net_defer are expected non-zero
+         * (the cost of never blocking an ISR); net_rxdrop is the one that must
+         * stay at ~0 -- it means the deferred-RX ring is undersized. */
+        { extern uint64_t g_net_tick_skipped, g_net_rx_deferred, g_net_rx_dropped;
+          kputs(" net_skip=");   kputdec(g_net_tick_skipped);
+          kputs(" net_defer=");  kputdec(g_net_rx_deferred);
+          kputs(" net_rxdrop="); kputdec(g_net_rx_dropped); }
         /* DDR-981: yields that arrived with IF already masked — i.e. how often
          * the interrupt window in yield() was actually needed. This is the
          * denominator for "the fix is exercised" (R17): a gate asserting no

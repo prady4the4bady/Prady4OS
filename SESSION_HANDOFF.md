@@ -6928,3 +6928,117 @@ decision either way.
   feature it tracks
 
 ### DDR free range: **DDR-984+** (974-983 allocated). Gate count 149.
+
+## Checkpoint 2026-08-23 — DDR-988: lwIP deferred work (supersedes DDR-987 §11)
+
+**Why:** I requested an adversarial review of PR #13 naming timer starvation as
+the risk I most wanted attacked. It falsified DDR-987 §11's central claim. Three
+of its four findings were correct; the fourth was a factual error of mine.
+
+**What was wrong with §11 (the trylock-only fix):**
+1. It dropped a contended timer tick on the reasoning "the holder is inside lwIP
+   so the timer work is being done". False — only 2 of ~8 lock holders call
+   `sys_check_timeouts()`; `psock_read`/`write`/`close` and RX never do.
+2. It left the RX ISR **blocking** on `g_net_lock` — the same freeze mechanism it
+   removed from the timer, on a path `net_complete()` enters up to 64x per IRQ.
+3. `g_net_tick_skipped` was a plain `++` from ISRs on several cpus, and nothing
+   read it. Not a measurement.
+4. It said the poll runs "at 100 Hz / 10 ms". `idt.c:266` gates it on
+   `(g_ticks % 10) == 0` at 100 Hz PIT = **~10 Hz / >=100 ms**, 10x the cost.
+
+**Fix (DDR-988):** deferred work drained by whoever *releases* `g_net_lock`.
+- Timer: sets a coalesced flag, then trylocks. Contended => deferred, not lost.
+- RX ISR: never touches `g_net_lock`; copies into a 16-slot ring under its own
+  trylock. Ring full or contended => counted drop, never a wait.
+- `net_unlock()` = drain-then-release, so pending work is serviced within one
+  holder's critical section. Liveness no longer depends on winning a trylock.
+- Counters atomic + read by the `[hb]` heartbeat.
+
+**§9 — the counter caught a vacuous gate on its first readable boot.**
+`net_rxdrop=613`. `net_fuzz_test()` is a synchronous self-test but injected via
+the ISR wrapper, so 613 of its 768 frames were dropped and never reached lwIP —
+and `smoke-net-fuzz` **still passed**, because its criterion is survival and
+dropping a frame survives reliably. Fixed with `net_inject_locked()`.
+Measured after: `net_skip=0 net_defer=2 net_rxdrop=0`, kernel `4ef7bd008c4c969d`.
+
+**Gates:** 16 green pre-§9 (9 network + capnet/blkmq/rqstress-liveness/
+blk-integrity/shell/surfdestroy/agents); 8 re-run green post-§9. Build
+warning-clean at `-Werror`; kernel.bin 1,069,450 B / 1,572,864 B.
+`ci-shard-check` and `ci-probe-rodata-check` green.
+
+**CI evidence on `3f6dbff` (trylock-only): 2 green / 1 FAILED** — which is why it
+was not merged. The failure was `smoke-evresize`, a compositor gate with no
+network activity: `g_ticks` and `ymask` advancing, no `[apfreeze]`, but
+`preempt=1702` and `btnedge=3` frozen from t=4000 to t=11500. That is the
+DDR-968 `rqdepth`-stall family, not a network signature, and shard 0 passed on
+the other two runs of the identical tree. **Not attributed to the lwIP work, and
+not claimed fixed by DDR-988.** That log predates the heartbeat reader, so lwIP
+could be neither implicated nor exonerated; the new build carries `net_skip=` in
+every heartbeat, so a recurrence will settle it.
+
+**State:** `main` = `ace232f`, clean and UNTAGGED (operator hold, DDR-985).
+`dev/phase1` = `23432af`, still RED — recovery is this branch, not yet merged.
+
+## Checkpoint 2026-08-23 (later) — PR #13 at `8d9fa4a`
+
+**CURRENT_ACTIVE_TASK: watch CI on `8d9fa4a`; 3 greens on that tip, then merge PR #13.**
+
+### What landed since `cb69da4`
+
+| commit | what |
+|---|---|
+| `cb69da4` | DDR-988 deferred lwIP work: drain-on-release, non-blocking RX |
+| `1e345d3` | DDR-988 §10: 3 socket-handle defects + stop overstating OPEN-1 |
+| `b383bef` | DDR-988 §11: a failed gate keeps its serial capture |
+| `2d3e6f0` | DDR-989: evresize/agentpanel = vruntime sampling starvation |
+| `de4a2e2` | DDR-988 §11.2: restore run isolation §11 silently removed |
+| `8d9fa4a` | DDR-988 §11.5: SKIP is not FAIL; empty captures removed |
+
+Kernel unchanged across the last three: **`e3919140872fd2ea`**, 1,069,450 B.
+
+### The two results worth carrying forward
+
+**1. The DDR-988 counters exonerated lwIP on their first CI failure.**
+`smoke-agentpanel` (shard 6, `cb69da4`) failed with `net_skip=0 net_defer=3
+net_rxdrop=0` — the timer never found `g_net_lock` contended, nothing dropped.
+The `smoke-evresize` failure on `3f6dbff` could only be left open because that
+build predates the reader. **Do not re-attribute this family to lwIP without a
+non-zero `net_skip`.**
+
+**2. DDR-989 — root cause of BOTH stalls, NOT implemented.**
+`rq_pop` picks smallest `dbg_vruntime` (NOT FIFO — the comment above it saying
+FIFO is stale and actively misleading). `sched_charge_elapsed` is reachable only
+from `sched_tick` against `current_thread`, so CPU time is **sampled at 100 Hz**.
+A thread yielding ~1074x/tick is never current at a sample instant, accrues ~0
+vruntime, and wins every pick forever; each voluntary switch resets quantum so
+`g_preempt_try` freezes and no timer preemption breaks it. Explains `preempt`/
+`supp` both flat, `rqdepth` pinned, two-pid alternation.
+**Before fixing: run DDR-989 §4's measurement.** It says what CONFIRMS and what
+REFUTES — if those pids' vruntime advances normally and is merely lower, the
+cause is weighting and the fix is the opposite one. Task #26.
+
+### Harness: three defects of mine, in sequence
+
+§11 (keep failed captures) reddened **8 of 10 shards** at `smoke-selftest` —
+deleting the capture had silently been providing run isolation for a harness
+reusing one `SERIAL_LOG` path. Fixing that, I misclassified the one `exit 0`
+SKIP among nine converted sites as a failure, and left empty captures neither
+kept nor deleted. All fixed, mutation-checked both ways.
+
+**New standing rule (DDR-988 §11.4): any change under `tools/qemu_runner/` must
+run `smoke-selftest` before push.** I picked local gates by what the C changes
+touched; `boot_test.sh` is touched by every gate.
+
+**Pattern worth remembering:** a deletion in a harness is rarely only a deletion,
+and "the gate still passes" caught none of the three — one needed CI, one needed
+looking at the directory afterwards.
+
+### State
+
+- `main` = `ace232f`, clean, **UNTAGGED** (operator hold, DDR-985). Unaffected.
+- `dev/phase1` = `23432af`, still RED. PR #13 is the recovery, not yet merged.
+- **OPEN-1 is OPEN.** A green suite is NOT grounds to close it (DDR-988 §10.4);
+  only a 20x `smoke-surfdestroy` on the merged tip is.
+- DDR free range: **DDR-990+** (989 allocated).
+- Still owed: DDR-987 §5's two-CPU `connect`/`close` hammer probe — the only
+  thing that could positively prove the lwIP fix. Unwritten.

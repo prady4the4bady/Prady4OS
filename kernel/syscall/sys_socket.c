@@ -67,7 +67,14 @@ int netallow_add(uint32_t host_be, uint16_t port) {
 
 /* Map the port's error shape onto errno. -2 = not this caller's slot (DDR-731
  * per-slot ownership, what user/capnettest.c gates on); -1 = stale/bad handle. */
-static long sock_err(int rc) { return (rc == -2) ? -EPERM : -EBADF; }
+/* DDR-988 sec.10: three distinct proxy-socket failures, three distinct errnos.
+ * -2 PSOCK_DENIED = not this caller's slot; -3 PSOCK_EIO = the send itself
+ * failed; anything else = a stale/closed handle. */
+static long sock_err(int rc) {
+    if (rc == -2) return -EPERM;
+    if (rc == -3) return -EIO;
+    return -EBADF;
+}
 
 static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
@@ -166,8 +173,9 @@ static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6)
     /* DDR-987 sec.10: authority is checked inside psock_write, under the lock. */
     int n = psock_write((int)a1, current_thread->pid,
                         current_thread->is_sovereign, kbuf, len);
-    if (n == -2) return -EPERM;               /* DDR-731: not this caller's slot */
-    return (n < 0) ? -EIO : (long)n;
+    /* DDR-988 sec.10: was `(n < 0) ? -EIO : n`, which flattened a STALE handle
+     * into -EIO -- the read and close paths return -EBADF for the same case. */
+    return (n < 0) ? sock_err(n) : (long)n;
 }
 
 static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) {
