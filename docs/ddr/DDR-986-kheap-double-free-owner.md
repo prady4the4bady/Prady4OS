@@ -64,7 +64,14 @@ Object layout while free (`kheap.c:32`, `:102`, `:153`):
 | 16..23 | **unused** — currently `POISON_FREE` |
 
 So the freeing return address goes at offset 16, written after the `memset` and
-beside the canary re-arm. No new global, no new lock, no allocation: it reuses
+beside the canary re-arm.
+
+**Captured at the public boundary, not inside `cache_free`.** `cache_free` is
+static and reached via `kfree_locked` and `pool_free`, so
+`__builtin_return_address(0)` *inside it* would name those internal wrappers, not
+the caller that freed. The design therefore reads the address in the public
+`kfree()` / `pool_free()` entry points and threads it down as an explicit `site`
+argument. No new global, no new lock, no allocation: it reuses
 bytes the free path already dirties. (§DDR-826 concerns writable globals in
 probe ELFs; this is kernel text, and adds none.)
 
@@ -77,12 +84,18 @@ covered. A 16-byte double free would still print only `ptr=`/`objsize=`.
 
 Extend the existing block — same line, two new fields:
 
-```
+```text
 [kheap] double-free ptr=0x… objsize=0x80 freed_by=0x… now_by=0x…
 ```
 
-`freed_by` = the recorded first free. `now_by` = `__builtin_return_address(0)`
-in `cache_free`.
+`freed_by` = the recorded first free. `now_by` = the CURRENT free's site —
+**the same `site` argument threaded in from the public `kfree()`/`pool_free()`
+boundary**, not `__builtin_return_address(0)` inside `cache_free`. An earlier
+draft of this section said the latter, which would have compared two different
+stack frames: `cache_free` is `static` and reached via `kfree_locked` and
+`pool_free`, so the builtin there names an internal wrapper. Comparing a caller
+address against a wrapper address would make §6's equality test meaningless.
+Both fields now come from the same boundary.
 
 **Reading it (§NON-NEGOTIABLE 18).** These are kernel text addresses, and every
 build of this kernel loads at the same base, so an address alone does not
@@ -99,10 +112,17 @@ next OPEN-13 occurrence from "some 128-byte object, somewhere" into two named
 call sites. Only then does §NON-NEGOTIABLE 3 permit a fix.
 
 Two outcomes are worth predicting now, so the reading is not motivated later:
-- `freed_by == now_by` -> one site freeing twice: a missing NULL-after-free or a
-  retry path re-entering.
-- `freed_by != now_by` -> two owners believe they own the object: a refcount or
-  handoff defect, and the pair names both halves.
+- `freed_by == now_by` -> **hypothesis:** one site freeing twice (a missing
+  NULL-after-free, or a retry path re-entering).
+- `freed_by != now_by` -> **hypothesis:** two owners each believe they own the
+  object (a refcount or handoff defect).
+
+**Neither is proof, and the DDR must not be read as saying so.** Equal addresses
+can mean two logical owners funnelling through one shared helper; different
+addresses can mean one owner reached via two wrappers. A return address names a
+*call site*, not an owner. Treat the pair as a lead that narrows where to look,
+and require a call stack or an explicit owner tag before a fix is authorised
+(§NON-NEGOTIABLE 3).
 
 **Not claimed:** that OPEN-13 is an SMP race. The capture is a single event on
 one shard; `kfree` takes `g_heap_lock` (`spin_lock_irqsave`), so the free list

@@ -27,7 +27,11 @@
  * the pid that connected it (0 = free), set at connect, cleared at close/reap.
  * Single check point for WRITE/READ/CLOSE: owner or the sovereign operator. */
 #define SOCK_SLOTS 8
-static uint32_t g_sock_owner[SOCK_SLOTS];
+/* DDR-987 sec.10: g_sock_owner[] and sock_denied() are GONE. They were the
+ * time-of-check half of a cross-layer TOCTOU -- the owner was read here without
+ * a lock and psock_* ran afterwards, so a close+reuse on another cpu left the
+ * operation on a different connection. Ownership now lives on the slot in
+ * lwip_port.c and is validated under g_net_lock together with the operation. */
 
 /* DDR-734 — per-host egress allowlist for CAP_NET callers. Bounded, append-only
  * (no runtime revocation surface — policy changes are a config edit + reboot),
@@ -61,11 +65,9 @@ int netallow_add(uint32_t host_be, uint16_t port) {
     return 0;
 }
 
-static int sock_denied(int slot) {
-    if (slot < 0 || slot >= SOCK_SLOTS)
-        return 0;                           /* out of range: let psock_* -EBADF it */
-    return g_sock_owner[slot] != current_thread->pid && !current_thread->is_sovereign;
-}
+/* Map the port's error shape onto errno. -2 = not this caller's slot (DDR-731
+ * per-slot ownership, what user/capnettest.c gates on); -1 = stale/bad handle. */
+static long sock_err(int rc) { return (rc == -2) ? -EPERM : -EBADF; }
 
 static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
@@ -148,32 +150,29 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
                      AR_NET_CONNECT);
     }
 
-    int slot = psock_connect((uint32_t)a1, (uint16_t)a2);
-    if (slot >= 0 && slot < SOCK_SLOTS)
-        g_sock_owner[slot] = current_thread->pid;
-    return (slot < 0) ? -EMFILE : (long)slot;     /* no free socket / net down */
+    int h = psock_connect((uint32_t)a1, (uint16_t)a2, current_thread->pid);
+    return (h < 0) ? -EMFILE : (long)h;           /* no free socket / net down */
 }
 
 static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a4;
-    if (sock_denied((int)a1))
-        return -EPERM;                        /* DDR-731: not this caller's slot */
     int len = (int)a3;
     if (len <= 0) return 0;
     if (len > SOCK_IO_MAX) len = SOCK_IO_MAX;
     uint8_t kbuf[SOCK_IO_MAX];
     if (copyin(kbuf, (const void __user *)a2, (size_t)len) < 0)
         return -EFAULT;
-    int n = psock_write((int)a1, kbuf, len);
+    /* DDR-987 sec.10: authority is checked inside psock_write, under the lock. */
+    int n = psock_write((int)a1, current_thread->pid,
+                        current_thread->is_sovereign, kbuf, len);
+    if (n == -2) return -EPERM;               /* DDR-731: not this caller's slot */
     return (n < 0) ? -EIO : (long)n;
 }
 
 static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
-    int slot = (int)a1;
-    if (sock_denied(slot))
-        return -EPERM;                        /* DDR-731: not this caller's slot */
+    int slot = (int)a1;                       /* opaque handle (DDR-987 sec.10) */
     int len = (int)a3;
     unsigned timeout_ms = (unsigned)a4;
     if (len <= 0) return 0;
@@ -182,17 +181,19 @@ static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) 
 
     uint64_t deadline = g_ticks + (timeout_ms + 9u) / 10u;   /* PIT @100 Hz */
     for (;;) {
-        int n = psock_read(slot, kbuf, len);
+        int n = psock_read(slot, current_thread->pid,
+                           current_thread->is_sovereign, kbuf, len);
         if (n < 0)
-            return -EBADF;
+            return sock_err(n);               /* -EPERM vs -EBADF (DDR-731) */
         if (n > 0) {
             if (copyout((void __user *)a2, kbuf, (size_t)n) < 0)
                 return -EFAULT;
             return (long)n;
         }
-        int st = psock_state(slot);
+        int st = psock_state(slot, current_thread->pid,
+                             current_thread->is_sovereign);
         if (st < 0)
-            return -EBADF;
+            return sock_err(st);
         if (st == PS_CLOSING)
             return 0;                              /* ring drained + peer closed = EOF */
         if (st == PS_ERR)
@@ -208,13 +209,10 @@ static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) 
 static long sys_sock_close(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
-    int slot = (int)a1;
-    if (sock_denied(slot))
-        return -EPERM;                        /* DDR-731: not this caller's slot */
-    if (psock_close(slot) < 0)
-        return -EBADF;
-    if (slot >= 0 && slot < SOCK_SLOTS)
-        g_sock_owner[slot] = 0;
+    int rc = psock_close((int)a1, current_thread->pid,
+                         current_thread->is_sovereign);
+    if (rc < 0)
+        return sock_err(rc);                  /* -EPERM vs -EBADF (DDR-731) */
     return 0;
 }
 
@@ -222,11 +220,7 @@ static long sys_sock_close(long a1, long a2, long a3, long a4, long a5, long a6)
  * the exiting pid owns, so a process that dies mid-connection never leaks one
  * of the 8 slots. Called from sched_exit. */
 void socket_reap_pid(uint32_t pid) {
-    for (int s = 0; s < SOCK_SLOTS; s++)
-        if (g_sock_owner[s] == pid) {
-            psock_close(s);
-            g_sock_owner[s] = 0;
-        }
+    psock_reap_owner(pid);                    /* DDR-987 sec.10: under g_net_lock */
 }
 
 /* DDR-734: sovereign-only, append an egress rule. -EPERM (audited) otherwise;

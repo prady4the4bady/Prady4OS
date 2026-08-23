@@ -18,6 +18,23 @@
 #include "irq.h"          /* g_ticks */
 #include "string.h"
 #include "pmm.h"          /* proxy-socket RX rings come from the PMM pool */
+#include "spinlock.h"     /* DDR-987: the lwIP core lock */
+
+/* DDR-987. lwIP is built NO_SYS=1 / SYS_LIGHTWEIGHT_PROT=0, i.e. with NO internal
+ * locking, on the assumption recorded in lwipopts.h that this is a single core.
+ * That assumption died with ADR-029..031: socket syscalls run on ANY cpu and
+ * net_poll_tick() runs from the TIMER ISR (idt.c), where tcp_tmr / tcp_input --
+ * and tcp_abort from psock_close -- all FREE segs and pcbs. The local `cli` this
+ * file used guards only the current cpu, so a syscall on cpu A walked
+ * pcb->unsent inside tcp_output while cpu B freed it: a use-after-free that
+ * surfaced as a ring-0 #GP with RAX = 0xDDDDDDDDDDDDDDDD (kheap POISON_FREE)
+ * at tcp_output, reached from sys_sock_connect.
+ *
+ * A SPINLOCK, not a sleeping mutex: one holder is an ISR, where sleeping is
+ * illegal. Safe because no region below yields, and every one already ran with
+ * interrupts off. Lock order is net -> heap (lwIP allocates via kmalloc, which
+ * takes g_heap_lock); kheap never calls the net stack, so there is no cycle. */
+static spinlock_t g_net_lock = SPINLOCK_INIT;
 #include "virtio_net.h"
 #include "pradyos_net.h"
 
@@ -94,6 +111,45 @@ static err_t pradyos_netif_init(struct netif *netif) {
 
 /* wire -> lwIP: called from the virtio-net IRQ with one Ethernet frame. Copies
  * it into a pooled pbuf and injects it; never reads past `len` (ADR-025 §D6). */
+/* DDR-987 sec.2 (found in review of the first cut). virtio-net's completion
+ * handler is registered on MSI-X vector 54 and calls this callback straight from
+ * the ISR -- pbuf_alloc / netif.input -> ethernet_input -> ip_input -> tcp_input
+ * is lwIP CORE. The first cut of DDR-987 locked the timer ISR and missed this
+ * one, leaving the very race it set out to close: an RX interrupt on cpu B
+ * entering tcp_input while cpu A held g_net_lock in tcp_output.
+ *
+ * The lock goes in a WRAPPER, not in pradyos_netif_rx itself, because
+ * net_fuzz_test() calls the raw function from inside net_init()'s locked region
+ * and g_net_lock is not recursive -- wrapping the callee would self-deadlock at
+ * boot. ISR callers get the wrapper; already-locked callers keep the raw one. */
+static void pradyos_netif_rx(const uint8_t *frame, uint32_t len);
+
+/* DDR-987 sec.8: one pump iteration under the lock, RELEASED between iterations.
+ * net_init() used to hold g_net_lock across net_loopback_tcp_test()'s 200-round
+ * loop and net_fuzz_test()'s 256-round loop. Under TCG that is hundreds of ms,
+ * and every OTHER cpu's timer ISR spins on the lock with interrupts off for the
+ * whole time -- so its per-cpu tick counter freezes and virtio-blk's tick-bounded
+ * completion wait expires. That is a regression this lock introduced, not a
+ * pre-existing one: the old `cli` never blocked another cpu. */
+static void net_pump_locked(void) {
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    netif_poll_all();
+    sys_check_timeouts();
+    spin_unlock_irqrestore(&g_net_lock, fl);
+}
+
+static void net_timeouts_locked(void) {
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    sys_check_timeouts();
+    spin_unlock_irqrestore(&g_net_lock, fl);
+}
+
+static void pradyos_netif_rx_isr(const uint8_t *frame, uint32_t len) {
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    pradyos_netif_rx(frame, len);
+    spin_unlock_irqrestore(&g_net_lock, fl);
+}
+
 static void pradyos_netif_rx(const uint8_t *frame, uint32_t len) {
     if (len < 14 || len > 1514)
         return;                                  /* not a plausible Ethernet frame */
@@ -117,22 +173,32 @@ static void lo_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 }
 
 static void net_loopback_test(void) {
+    /* DDR-987 sec.8: net_init() no longer holds the lock across this test, so
+     * each lwIP burst takes it here. Setup and send are bounded; the pump is
+     * separate so the lock is never held across a poll loop. */
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
     struct udp_pcb *rx = udp_new();
-    if (!rx) return;
+    if (!rx) { spin_unlock_irqrestore(&g_net_lock, fl); return; }
     udp_bind(rx, IP_ADDR_ANY, 7);
     udp_recv(rx, lo_recv, NULL);
 
     struct udp_pcb *tx = udp_new();
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, 4, PBUF_RAM);
+    int sent = 0;
     if (tx && p) {
         memcpy(p->payload, "ping", 4);
         ip_addr_t lo;
         IP4_ADDR(&lo, 127, 0, 0, 1);
         udp_sendto(tx, p, &lo, 7);
-        netif_poll_all();                        /* deliver the queued loopback pbuf */
+        sent = 1;
     }
+    spin_unlock_irqrestore(&g_net_lock, fl);
+    if (sent)
+        net_pump_locked();                       /* DDR-987 sec.8: deliver the queued loopback pbuf */
+    fl = spin_lock_irqsave(&g_net_lock);
     if (p) pbuf_free(p);
     if (tx) udp_remove(tx);
+    spin_unlock_irqrestore(&g_net_lock, fl);
     /* rx pcb stays bound so later loopback traffic still echoes. */
 }
 
@@ -204,18 +270,23 @@ static err_t tcp_lo_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
 }
 
 static void net_loopback_tcp_test(void) {
+    /* DDR-987 sec.8: bounded setup under the lock; the 200-round pump below runs
+     * OUTSIDE it, one locked burst per iteration. Holding across the whole loop
+     * froze every other cpu's timer ISR on this lock. */
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
     struct tcp_pcb *pcb = tcp_new();
-    if (!pcb) return;
+    if (!pcb) { spin_unlock_irqrestore(&g_net_lock, fl); return; }
     tcp_recv(pcb, tcp_lo_recv);
     ip_addr_t lo;
     IP4_ADDR(&lo, 127, 0, 0, 1);
     if (tcp_connect(pcb, &lo, 8007, tcp_lo_connected) != ERR_OK) {
         tcp_close(pcb);
+        spin_unlock_irqrestore(&g_net_lock, fl);
         return;
     }
+    spin_unlock_irqrestore(&g_net_lock, fl);
     for (int i = 0; i < 200 && !g_tcp_lo_echoed; i++) {
-        netif_poll_all();
-        sys_check_timeouts();
+        net_pump_locked();                       /* DDR-987 sec.8: short burst, not a long hold */
     }
     kputs(g_tcp_lo_echoed ? "PRADYOS_NET_TCP_LO_OK\r\n"
                           : "PRADYOS_NET_TCP_LO_FAIL\r\n");
@@ -278,7 +349,7 @@ static void net_fuzz_test(void) {
         for (uint32_t j = 0; j < len && j < sizeof f; j++)
             f[j] = (uint8_t)(pradyos_lwip_rand() >> ((j & 3) * 8));
         if (len >= 14) { f[12] = 0x08; f[13] = 0x00; }   /* bias some toward IPv4 */
-        pradyos_netif_rx(f, len);
+        pradyos_netif_rx_isr(f, len);            /* DDR-987 sec.8: locking wrapper */
     }
     /* 2) SYN flood from distinct src ports/IPs to a CLOSED port: every segment
      *    is fully parsed + checksum-verified, then answered with RST and freed —
@@ -286,10 +357,10 @@ static void net_fuzz_test(void) {
      *    lingers to disturb the :8007 echo gate). Survival is the pass criterion. */
     for (int i = 0; i < 256; i++) {
         int n = build_syn(f, (uint16_t)(0x8000 + i), (uint8_t)(100 + (i & 0x3f)));
-        pradyos_netif_rx(f, (uint32_t)n);
-        if ((i & 0x1f) == 0) sys_check_timeouts();       /* drive the RST/timer path */
+        pradyos_netif_rx_isr(f, (uint32_t)n);     /* DDR-987 sec.8 */
+        if ((i & 0x1f) == 0) net_timeouts_locked();      /* DDR-987 sec.8 */
     }
-    sys_check_timeouts();
+    net_timeouts_locked();                       /* DDR-987 sec.8 */
     kputs("PRADYOS_NET_FUZZ_OK\r\n");
 }
 
@@ -311,7 +382,26 @@ struct proxy_sock {
     uint16_t head, tail;           /* head: producer (IRQ); tail: consumer (syscall) */
     volatile uint8_t state;
     uint8_t used;
+    /* DDR-987 sec.10. The owner lives HERE, not in sys_socket.c, so that the
+     * authority check and the operation happen under one lock. Previously
+     * sock_denied() read g_sock_owner[slot] unlocked and the syscall called
+     * psock_* afterwards, so another cpu could close and reuse the slot in
+     * between and the operation landed on a different connection. `gen` is
+     * monotonic and rides in the handle, so even the SAME owner reconnecting
+     * cannot be reached through a stale handle. */
+    uint32_t owner;                /* pid that claimed the slot; 0 = unowned */
+    uint32_t gen;                  /* generation of this claim; 0 = never live */
 };
+
+/* Handle = (gen << 3) | slot. PSOCK_N is 8, so the slot is exactly 3 bits and a
+ * decode can never be out of range. g_psock_gen starts at 1, so a handle of 0 --
+ * which user/capnettest.c passes deliberately -- carries gen 0 and matches no
+ * live slot. Ring 3 treats the handle as opaque (agent_base.c only tests < 0). */
+#define PSOCK_SLOT_BITS 3
+#define PSOCK_H(g, sl)  ((int)(((g) << PSOCK_SLOT_BITS) | (uint32_t)(sl)))
+#define PSOCK_SLOT(h)   ((int)((uint32_t)(h) & ((1u << PSOCK_SLOT_BITS) - 1u)))
+#define PSOCK_GEN(h)    ((uint32_t)(h) >> PSOCK_SLOT_BITS)
+static uint32_t g_psock_gen = 1;
 static struct proxy_sock g_ps[PSOCK_N];
 
 static uint16_t ps_avail(struct proxy_sock *s) { return (uint16_t)((s->head - s->tail) & PSOCK_MASK); }
@@ -351,26 +441,65 @@ static err_t ps_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
     return ERR_OK;
 }
 
+/* DDR-987 sec.10. Resolve a handle to its slot, with authority, UNDER THE LOCK.
+ * Errno shape is load-bearing and matches the pre-existing DDR-731 contract that
+ * user/capnettest.c gates on:
+ *   - a handle naming a slot this caller does not own -> PSOCK_DENIED (-EPERM),
+ *     INCLUDING an unused slot. capnettest passes handle 0 while owning nothing
+ *     and requires exactly -EPERM, so "not yours" must outrank "not open".
+ *   - a slot the caller DOES own but whose generation no longer matches, or that
+ *     is closed -> PSOCK_STALE (-EBADF). That is a stale handle, not a denial.
+ * Sovereign bypasses the owner test only; a stale handle still fails for it. */
+#define PSOCK_DENIED (-2)
+#define PSOCK_STALE  (-1)
+
+static int psock_resolve(int h, uint32_t owner, int sovereign,
+                         struct proxy_sock **out) {
+    if (h < 0)
+        return PSOCK_STALE;
+    struct proxy_sock *s = &g_ps[PSOCK_SLOT(h)];
+    if (!sovereign && s->owner != owner)
+        return PSOCK_DENIED;
+    if (!s->used || s->gen != PSOCK_GEN(h))
+        return PSOCK_STALE;
+    *out = s;
+    return 0;
+}
+
 /* Open a connection to host (big-endian a.b.c.d packed) : port. Returns slot. */
-int psock_connect(uint32_t host, uint16_t port) {
+int psock_connect(uint32_t host, uint16_t port, uint32_t owner) {
     if (!g_net_ready) return -1;
+
+    /* DDR-987 sec.2: the scan-and-claim MUST be inside the lock. Unlocked, two
+     * cpus could see the same !used slot, both set used=1, both tcp_new(), and
+     * both return the same slot number -- one pcb leaked and two owners for one
+     * proxy_sock. Page allocation stays outside so the hold covers only the
+     * claim; the RX ring is attached under the lock below. Lock order is
+     * net -> pmm, matching the existing net -> heap (kmalloc reaches pmm). */
+    uint8_t *rxpage = (uint8_t *)(uintptr_t)pmm_alloc_page();
+    if (!rxpage) return -1;
+
+    uint64_t fl;
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     int slot = -1;
     for (int i = 0; i < PSOCK_N; i++) if (!g_ps[i].used) { slot = i; break; }
-    if (slot < 0) return -1;
+    if (slot < 0) {
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        pmm_free_page((uint64_t)(uintptr_t)rxpage);
+        return -1;
+    }
     struct proxy_sock *s = &g_ps[slot];
-    s->rx = (uint8_t *)(uintptr_t)pmm_alloc_page();
-    if (!s->rx) return -1;
+    s->rx = rxpage;
     s->head = s->tail = 0;
     s->used = 1;
     s->state = PS_CONNECTING;
-
-    uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    s->owner = owner;                 /* DDR-987 sec.10: claimed under the lock */
+    s->gen   = g_psock_gen++;         /* monotonic; never reuses a live handle */
     s->pcb = tcp_new();
     if (!s->pcb) {
-        __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
-        pmm_free_page((uint64_t)(uintptr_t)s->rx);
-        s->rx = 0; s->used = 0; s->state = PS_CLOSED;
+        s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
+        spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
+        pmm_free_page((uint64_t)(uintptr_t)rxpage);     /* free the page AFTER release */
         return -1;
     }
     tcp_arg(s->pcb, s);
@@ -379,38 +508,68 @@ int psock_connect(uint32_t host, uint16_t port) {
     ip_addr_t ip;
     IP4_ADDR(&ip, (host >> 24) & 0xff, (host >> 16) & 0xff, (host >> 8) & 0xff, host & 0xff);
     err_t e = tcp_connect(s->pcb, &ip, port, ps_connected);
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
-    if (e != ERR_OK) { s->state = PS_ERR; return -1; }
-    return slot;
+    if (e != ERR_OK) {
+        /* DDR-987 sec.9: lwIP's contract is that a FAILED tcp_connect() did not
+         * enqueue the attempt and the caller still owns the pcb -- only ERR_OK
+         * transfers it to the stack (then the connected/err callback owns it).
+         * The old path just set PS_ERR and returned, leaking the pcb, the slot
+         * (used stayed 1) and the RX page. Roll the whole claim back under the
+         * lock; free the page after release, as everywhere else here. */
+        tcp_abort(s->pcb);
+        s->pcb = 0; s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        pmm_free_page((uint64_t)(uintptr_t)rxpage);
+        return -1;
+    }
+    int handle = PSOCK_H(s->gen, slot);             /* DDR-987 sec.10 */
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
+    return handle;
 }
 
-int psock_state(int slot) {
-    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
-    return g_ps[slot].state;
+int psock_state(int h, uint32_t owner, int sovereign) {
+    struct proxy_sock *s;
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);   /* DDR-987 sec.10 */
+    int rc = psock_resolve(h, owner, sovereign, &s);
+    if (rc == 0) rc = (int)s->state;
+    spin_unlock_irqrestore(&g_net_lock, fl);
+    return rc;
 }
 
 /* Drain up to len bytes into kbuf. Returns bytes copied (0 if the ring is empty);
  * the caller distinguishes EOF/timeout via psock_state(). */
-int psock_read(int slot, uint8_t *kbuf, int len) {
-    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
-    struct proxy_sock *s = &g_ps[slot];
+int psock_read(int h, uint32_t owner, int sovereign, uint8_t *kbuf, int len) {
+    struct proxy_sock *s;
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
+    /* DDR-987 sec.10: authority AND liveness resolved under the same lock that
+     * guards the operation, so a close+reuse on another cpu cannot slip between. */
+    int rc = psock_resolve(h, owner, sovereign, &s);
+    if (rc != 0 || !s->rx) {
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        return (rc != 0) ? rc : PSOCK_STALE;
+    }
     int n = 0;
     while (n < len && s->tail != s->head) {
         kbuf[n++] = s->rx[s->tail];
         s->tail = (uint16_t)((s->tail + 1) & PSOCK_MASK);
     }
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     return n;
 }
 
-int psock_write(int slot, const uint8_t *kbuf, int len) {
-    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
-    struct proxy_sock *s = &g_ps[slot];
-    if (s->state != PS_OPEN || !s->pcb) return -1;
+int psock_write(int h, uint32_t owner, int sovereign, const uint8_t *kbuf, int len) {
+    struct proxy_sock *s;
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
+    int rc = psock_resolve(h, owner, sovereign, &s);   /* DDR-987 sec.10 */
+    if (rc != 0) {
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        return rc;
+    }
+    if (s->state != PS_OPEN || !s->pcb) {
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        return PSOCK_STALE;
+    }
     u16_t snd = tcp_sndbuf(s->pcb);
     if (len > (int)snd) len = (int)snd;
     err_t e = ERR_OK;
@@ -418,15 +577,22 @@ int psock_write(int slot, const uint8_t *kbuf, int len) {
         e = tcp_write(s->pcb, kbuf, (u16_t)len, TCP_WRITE_FLAG_COPY);
         if (e == ERR_OK) tcp_output(s->pcb);
     }
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     return (e == ERR_OK) ? len : -1;
 }
 
-int psock_close(int slot) {
-    if (slot < 0 || slot >= PSOCK_N || !g_ps[slot].used) return -1;
-    struct proxy_sock *s = &g_ps[slot];
+int psock_close(int h, uint32_t owner, int sovereign) {
+    struct proxy_sock *s;
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
+    /* DDR-987 sec.9 + sec.10: resolve authority AND generation inside the lock.
+     * sec.9 stopped cpu A tearing down cpu C's replacement socket after a
+     * close+reuse; sec.10 additionally stops it when C is the same owner. */
+    int rc = psock_resolve(h, owner, sovereign, &s);
+    if (rc != 0) {
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        return rc;
+    }
     if (s->pcb) {
         tcp_arg(s->pcb, NULL);
         tcp_recv(s->pcb, NULL);
@@ -435,10 +601,30 @@ int psock_close(int slot) {
             tcp_abort(s->pcb);                   /* force teardown on a busy pcb */
         s->pcb = NULL;
     }
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
-    if (s->rx) pmm_free_page((uint64_t)(uintptr_t)s->rx);
-    s->rx = 0; s->used = 0; s->state = PS_CLOSED;
+    /* DDR-987 sec.2: detach the ring and retire the slot UNDER the lock, then
+     * free the page after release. Previously the page was freed after unlock
+     * while s->used was still 1, so a concurrent psock_read could copy out of a
+     * page already returned to the PMM. */
+    uint8_t *rxpage = s->rx;
+    s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
+    if (rxpage) pmm_free_page((uint64_t)(uintptr_t)rxpage);
     return 0;
+}
+
+/* DDR-987 sec.10 + DDR-731 exit reap. Owned by the port now that `owner` lives
+ * on the slot: close every slot this pid holds. Each close re-enters the lock,
+ * which is correct -- the lock is not held across the loop, so an ISR waiting on
+ * it is never blocked for more than one teardown (sec.8's rule). */
+void psock_reap_owner(uint32_t pid) {
+    for (int i = 0; i < PSOCK_N; i++) {
+        uint64_t fl = spin_lock_irqsave(&g_net_lock);
+        int live = (g_ps[i].used && g_ps[i].owner == pid);
+        int h = live ? PSOCK_H(g_ps[i].gen, i) : -1;
+        spin_unlock_irqrestore(&g_net_lock, fl);
+        if (live)
+            psock_close(h, pid, 0);
+    }
 }
 
 /* ---- entry points (declared in pradyos_net.h) ---------------------------- */
@@ -449,7 +635,7 @@ void net_init(void) {
     /* Mask interrupts across init: after virtio_net_set_rx / g_net_ready, an RX or
      * PIT IRQ would otherwise re-enter lwIP (NO_SYS, not reentrant) mid-setup. */
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     lwip_init();                                 /* also creates the 127.0.0.1 loopif */
     ip4_addr_t ip, mask, gw;
     IP4_ADDR(&ip, 10, 0, 2, 15);
@@ -458,14 +644,17 @@ void net_init(void) {
     netif_add(&g_netif, &ip, &mask, &gw, NULL, pradyos_netif_init, netif_input);
     netif_set_default(&g_netif);
     netif_set_up(&g_netif);
-    virtio_net_set_rx(pradyos_netif_rx);         /* RX IRQ -> lwIP */
+    virtio_net_set_rx(pradyos_netif_rx_isr);     /* DDR-987 sec.2: RX IRQ -> lwIP, LOCKED */
     tcp_echo_init();                             /* TCP echo on :8007 (smoke-net) */
     g_net_ready = 1;
     kputs("[net] lwIP up 10.0.2.15/24\r\n");
+    /* DDR-987 sec.8: release BEFORE the self-tests. Holding across their pump
+     * loops stalls every other cpu's timer ISR on this lock (see net_pump_locked).
+     * The tests take the lock themselves, one iteration at a time. */
+    spin_unlock_irqrestore(&g_net_lock, fl);        /* DDR-987 */
     net_loopback_test();
     net_loopback_tcp_test();                     /* DDR-753: TCP client echo over loopback */
     net_fuzz_test();                             /* malformed-frame + SYN-flood hardening */
-    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
 }
 
 /* Called from the PIT tick (every ~100 ms): drive lwIP's timers and flush any
@@ -473,6 +662,12 @@ void net_init(void) {
 void net_poll_tick(void) {
     if (!g_net_ready)
         return;
+    /* DDR-987: this runs in the TIMER ISR and is the side that FREES --
+     * sys_check_timeouts -> tcp_tmr, netif_poll_all -> tcp_input. It had no
+     * cross-cpu guard at all, so it could free a seg out from under a syscall
+     * running tcp_output on another cpu. */
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
     sys_check_timeouts();
     netif_poll_all();
+    spin_unlock_irqrestore(&g_net_lock, fl);
 }

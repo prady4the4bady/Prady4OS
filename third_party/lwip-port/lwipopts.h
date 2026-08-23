@@ -12,7 +12,11 @@
 
 /* --- system / threading ------------------------------------------------- */
 #define NO_SYS                      1
-#define SYS_LIGHTWEIGHT_PROT        0   /* single core; lwIP calls are serialized */
+#define SYS_LIGHTWEIGHT_PROT        0   /* DDR-987: lwIP still has no internal locking;
+                                         * serialization is now g_net_lock in
+                                         * lwip_port.c, NOT "single core" -- that
+                                         * assumption died with ADR-029..031 and
+                                         * cost us OPEN-1 / OPEN-12. */
 #define LWIP_NETCONN                0
 #define LWIP_SOCKET                 0
 #define LWIP_TIMERS                 1

@@ -155,7 +155,8 @@ reentrant calls. **Do NOT revert this pattern.**
 Correct form ALWAYS: `pgrep -f "[q]emu-system-x86_64"` (bracket avoids self-match).
 
 ### §INV.4 — DDR number collision
-Free range: **DDR-936+**. Before allocating ANY DDR number:
+Free range: **DDR-988+** (936-987 are allocated; 985/986/987 landed 2026-08-23).
+Before allocating ANY DDR number:
 `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` — must return empty in BOTH dirs.
 
 ### §INV.5 — Geometry in gates
@@ -190,16 +191,30 @@ Do NOT duplicate them. PRISM `ls` and `ps` use them already.
 must change both in the same commit.
 
 ### §INV.14 — Current NSI state
-Last shipped: **NSI 74** (`SYS_MEMINFO`). Next free: **75**. Table size: **128**.
+Last shipped: **NSI 95** (`SYS_RENAME`). Next free: **96**. Table size: **128**.
+**Corrected 2026-08-23.** This read "74 (`SYS_MEMINFO`) / next 75", and §CURRENT
+BUILD STATE read "93 / next 94"; BOTH were wrong. `kernel/syscall/syscall.h:168-170`
+defines 93 `SYS_VERIFY_AUDIT`, 94 `SYS_FTRUNCATE`, 95 `SYS_RENAME`, and
+`user/prism.c:30` ships against 95. Allocating from either stale figure would
+have duplicated a live NSI. Verify against `syscall.h`, not against this line.
 (Full NSI map: 0–46 Layer-2..6 syscalls; 47=`SYS_MOUSE_POLL`; 48–63=surface;
 64=`SYS_AGENT_ROSTER`; 65=`SYS_NET_ALLOW`; 66=`SYS_GETDENTS`;
 67=`SYS_GETPROCS`; 68=`SYS_UNLINK`; 69=`SYS_POWEROFF`; 70=`SYS_REBOOT`;
 71=`SYS_SYSINFO`; 72=`SYS_TIME`; 73=`SYS_DMESG`; 74=`SYS_MEMINFO`.)
 
 ### §INV.15 — Three CI greens rule
-A push yields exactly 2 suites per commit (push + pull_request events). A third
-green requires `gh run rerun` on the same SHA. "Both suites green" does NOT
-satisfy the 3-green rule.
+A push yields at most 2 suites per commit (push + pull_request events), and the
+`pull_request` suite does NOT always fire — verify, do not assume two.
+"Both suites green" does NOT satisfy the 3-green rule.
+
+**The third green comes from `workflow_dispatch`, not `gh run rerun`.**
+`.github/workflows/ci.yml:6-13` carries a `workflow_dispatch:` trigger and says
+why in its own comment: *"`gh run rerun` needs admin rights the project PAT does
+not have, and any other way to start a run is a push, which changes the SHA.
+workflow_dispatch lets a second, independent run be started on the same commit."*
+This line previously mandated `gh run rerun`, which the project cannot execute.
+Independent dispatched runs are also STRONGER evidence than re-attempts of one
+run. **Corrected 2026-08-23.**
 
 ### §INV.16 — `sched_create_blocked()` is the pattern for kernel threads
 Do NOT use `sched_create()` when a kernel thread needs its `->arg` set before it
@@ -217,7 +232,8 @@ raises out of date (DDR-827 took it to 32, DDR-960 to 48) — and dangerous here
 because §INV is the section a session is told to trust *without re-deriving*, and
 the current 1,053,054 B kernel is already larger than the 768 KiB "ceiling" it
 claimed. Authoritative source: `boot/stage2/stage2.asm:199` (`mov cx, 48`) and
-the Makefile size gate at 1,572,864 B.
+the Makefile size gate at 1,572,864 B. The current `kernel.bin` measures
+**1,065,350 B** (this section previously carried a stale 1,053,054 B).
 The stage-2 unreal-mode bounce loader reads 48×64-sector chunks into a 0x10000
 bounce buffer and copies up to `KERNEL_PHYS = 0x400000`. The BSS ceiling
 (`__bss_end`) is enforced by an `nm`-based Makefile check. File-size alone is
@@ -320,7 +336,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 |---|---|---|---|
 | **FSRM** | `created file did not persist` | `fs_test_thread` umounts SFS root while ring-3 `fsrmtest` still running on it | **ITEM 1 — BLOCKING PR#5**. Poll `sched_find_pid()` in bounded loop before destructive umount. UAF trap: do NOT poll `THREAD_ZOMBIE` directly. Gate: `smoke-fsrm` 20/20. |
 | **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | One CI capture, shard 2, `9231eab` (DDR-968 §1) — never seen again | **NOT REPRODUCED; instrument armed and merged (DDR-968).** The `PRADYOS_AGENT_WITNESS_WAIT pid= disp= state= n=` line prints only while the witness is UNARMED, so a green boot emits none of it: **there is no red artefact to read.** `smoke-agents` is gating (shard 2, not in the CI exclude list), so a recurrence would have reddened its whole suite; 18 suites have been green on shard 2 since the instrument landed at `ea4601e`. This is ITEM 2 step 5 — record and move on. Reopen the moment a `PRADYOS_AGENT_WITNESS_WAIT` line appears; `disp=0` then confirms the DDR-968 §2 reading (thread exists, never switched in) and `disp>0` refutes it. |
-| **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | **At least one instance is a ring-0 `#PF` panic — DDR-985.** Measured **19/20** local (kernel `d31b4023b0f74d06` @ `46ece3f`). Run 16: `component: NEXUS isr` / `exception: #PF page fault`, after `[sfs] 64K write/read byte-exact OK`. **NOT the DDR-981 signature** — no `[apfreeze]` and no `compl wait timeout` in any of the 20 runs, so do not read it as a B#3 recurrence. | **ACTIVE — it now has a local reproducer.** This is the FIRST local reproduction of an OPEN-12-class panic (DDR-979 had it CI-only, 0/10 local). Capture a full dump with **`KEEP_SERIAL=1`**: the 19/20 campaign lost `vector=`/`RIP=`/`CR2=` because `boot_test.sh:23` defaults `SERIAL_LOG` to `mktemp` and `:35` deletes it. Do NOT record the cause as "unknown" any more, and do NOT close it. |
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | **At least one instance is a ring-0 `#PF` panic — DDR-985.** Measured **19/20** local (kernel `d31b4023b0f74d06` @ `46ece3f`). Run 16: `component: NEXUS isr` / `exception: #PF page fault`, after `[sfs] 64K write/read byte-exact OK`. **NOT the DDR-981 signature** — no `[apfreeze]` and no `compl wait timeout` in any of the 20 runs, so do not read it as a B#3 recurrence. | **ROOT-CAUSED — DDR-987.** The lwIP core is built with NO internal locking (`NO_SYS=1`, `SYS_LIGHTWEIGHT_PROT=0`) on a stale "single core" assumption; socket syscalls and `net_poll_tick()` (TIMER ISR) re-enter it concurrently across CPUs, freeing a `tcp_seg` under a walker -> use-after-free. Fix: `g_net_lock`. **ACTIVE until merged.** This is the FIRST local reproduction of an OPEN-12-class panic (DDR-979 had it CI-only, 0/10 local). Capture a full dump with **`KEEP_SERIAL=1`**: the 19/20 campaign lost `vector=`/`RIP=`/`CR2=` because `boot_test.sh:23` defaults `SERIAL_LOG` to `mktemp` and `:35` deletes it. Do NOT record the cause as "unknown" any more, and do NOT close it. |
 | ~~OPEN-2~~ | ~~`smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake` intermittent~~ | **CLOSED — DDR-981**, via B#3. DDR-977 §8.2 had already measured the whole chain in one `smoke-resched` capture (frozen AP → unit 0's MSI-X routed at it → two `compl wait timeout`s → `[blk] multi-inflight FAIL done=0x0` → `[smp] blk integrity FAIL`); DDR-981 names the cause of the freeze and fixes it. These never failed on a scheduler defect and DDR-863 was the wrong lead. | **CLOSED for the block-touching gates.** NOT claimed for `smoke-crosswake`/`smoke-msixap`, which do no block I/O and could fail for their own reasons — the same reservation DDR-977 §8.2 made, kept. `[apfreeze]` is now in `GLOBAL_FORBIDDEN`, so a recurrence names itself instead of hiding in a flake. Reopen on the first `[apfreeze]` line in CI. |
 | **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | **ROOT-CAUSED — the create-then-init race, DDR-964.** `rc=-1` is `-EPERM` (`EPERM==1`) from `cap_ok(cap, CAP_FS_WRITE)`: `sched_create()` made a thread runnable before its caller minted the capability into `->arg`, so a thread picked early ran with `CAP_NULL`. NOT a separate defect from the row at §CURRENT BUILD STATE — this symptom **is** OPEN-10 and DDR-964 is its fix; the two rows contradicted each other and this one was the stale half. | **FIXED (DDR-964), pending CI promotion evidence.** `smoke-sfs-btree-smp4` stays excluded until greens accumulate. |
 | **OPEN-11** | `smoke-sha256`, `smoke-rqstress-liveness` | Scratch LBA 1500 overwrote kernel image | **CLOSED — DDR-831.** Do not revisit. |
@@ -338,12 +354,13 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 
 - **Gate count: 149** assigned across **10** shards, **7** excluded (`ci-shard-check`,
   verified 2026-08-23; shard matrix widened 6 -> 10, makespan 38.6 -> 20.8 min; 147 -> 148 smoke-iso-userspace DDR-972 -> 149 smoke-fat32-multicluster DDR-973). The "105" this line used to carry was long stale.
-- **NSI max: 93** (`SYS_VERIFY_AUDIT`). **Next free: 94.** Table size: 128.
-  (This line used to say 74 / `SYS_MEMINFO`, contradicting §INV.14 in the same
-  file. §INV.14 was right.)
+- **NSI max: 95** (`SYS_RENAME`). **Next free: 96.** Table size: 128.
+  Measured from `kernel/syscall/syscall.h:168-170`. This line previously said 93
+  and §INV.14 said 74 — both wrong, and the older note claiming "§INV.14 was
+  right" was wrong too. `user/prism.c` ships against 95.
 - **`kernel.bin`**: **1,065,350 B** against the 1,572,864 B size gate — 507,514 B
   of headroom (DDR-973's probe costs the page-aligned 8,192 B every embedded probe does; DDR-981's NMI probe costs 4,104 B). The old "~545 KiB, 768 KiB ceiling" was stale in both terms.
-- **DDR free range: DDR-987+** (936-986 allocated; 985 = OPEN-1 refutation, 986 = OPEN-13 instrument design)
+- **DDR free range: DDR-988+** (936-987 allocated; 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock)
 - `make image` → zero warnings, `-Werror` enforced ✅
 - PR #5: **MERGED** as `7c6c67a`. PR #6: **MERGED 2026-08-23** as **`ace232f`**
   into `dev/phase1` (3 greens on tip `46ece3f` per §INV.15; the squashed tree is
@@ -652,7 +669,7 @@ For each: add a one-line entry in `docs/BUILD_TRACKER.md` as `[DEFERRED: reason]
 
 ---
 
-## WHAT "DONE" MEANS — DEADLINE 2026-08-24 23:59 UTC
+## WHAT "DONE" MEANS — DEADLINE 2026-08-28 23:59 UTC
 
 Every box must be checked before the deadline:
 
@@ -677,7 +694,9 @@ Every box must be checked before the deadline:
 - [ ] `v1.0.0` tagged on `main`
 - [ ] Zero open issues, zero warnings, zero unlogged exclusions
 
-**ISO must be testable by 2026-08-24. v1.0.0 tag on main by 2026-08-24 23:59 UTC.**
+**ISO must be testable, and `v1.0.0` tagged on `main`, by 2026-08-28 23:59 UTC**
+(extended from 2026-08-24 by `docs/OPERATOR_DIRECTIVE_2026-08-23.md` §1 — that
+directive supersedes the older date wherever this file still implies it).
 **After v1.0.0 is tagged: begin Phase 10 (Quantum Layer) immediately.**
 
 **Begin with Phase 1 Item 1 (FSRM fix). Parallelize across groups. Do not stop.**
