@@ -1,0 +1,152 @@
+# DDR-990 — the two-CPU `connect`/`close` hammer: design
+
+**Status:** DESIGN. Not implemented. Owed since DDR-987 §5.
+**Relates:** DDR-987 (the lwIP core lock), DDR-988 (deferred work), OPEN-1.
+
+---
+
+## 1. The measurement that prompted this, and what it is worth
+
+`smoke-surfdestroy`, 20 runs, kernel `e3919140872fd2ea` (the PR #13 merged tip,
+verified byte-identical to `dev/phase1` `2cd7db9` apart from a docs file):
+
+```text
+20/20 pass, 0 fail
+```
+
+Prior baseline: **19/20** on `d31b4023b0f74d06` @ `46ece3f` (DDR-985).
+
+**This is not proof, and the improvement is not statistically meaningful.**
+At the measured base rate of ~1 failure in 20 runs (p ≈ 0.05):
+
+```text
+P(0 failures in 20 | defect unchanged) = 0.95^20 ≈ 0.358
+```
+
+So a clean 20-run sweep happens **roughly one time in three even if the defect
+is entirely untouched**. The campaign has ~64% power. And 19/20 → 20/20 is one
+fewer failure in twenty trials, comfortably inside noise for p ≈ 0.05.
+
+To reach 95% confidence of catching a 1/20 defect by sampling alone:
+
+```text
+0.95^n < 0.05  =>  n > ln(0.05)/ln(0.95) ≈ 58.4   =>  ~59 clean runs
+```
+
+Sixty boots is ~2 hours of QEMU to reach a conclusion that is still only
+"probably absent". That is the wrong instrument.
+
+## 2. Why sampling is the wrong instrument here
+
+`smoke-surfdestroy` does not target the DDR-987 defect. It exercises surface
+churn and trips the race only incidentally, which is exactly why its rate is
+~1/20 rather than ~1/1. Sampling an incidental trigger is expensive and weak.
+
+The defect has a **named mechanism** (DDR-987): cpu A walks `pcb->unsent` inside
+`tcp_output`, reached from `sys_sock_connect`, while cpu B frees that seg via
+`tcp_abort` from `psock_close` (or via `tcp_tmr`/`tcp_input` from the timer
+ISR). A probe that drives that shape directly should reproduce in seconds, not
+in one boot out of twenty.
+
+That converts the question from "did we fail to see it?" to "does it still
+happen when we try to make it happen?", which is answerable.
+
+## 3. Design
+
+`user/nethammer.c`, a freestanding ring-3 probe (raw syscalls, no writable
+globals per DDR-826, stack buffers inside the 8 eager pages of ADR-038).
+
+**Spawned TWICE**, as two processes, followed by `smp_resched_all()` so the idle
+APs pick them up (the DDR-966 lesson: workers spawned without it sit on halted
+APs while the BSP burns the deadline). On `-smp 4` the two land on different
+CPUs, which is the whole point — a single-CPU hammer proves nothing about a
+cross-CPU race.
+
+Each instance loops `N` times:
+
+1. `SYS_SOCK_CONNECT(0x7F000001, 8007)` — loopback to the in-kernel TCP echo
+   server that `net_init` already binds (`lwip_port.c:374`). Loopback completes
+   without hardware and drives the full `tcp_connect` → `tcp_output` → seg-alloc
+   path.
+2. `SYS_SOCK_CLOSE(fd)` immediately, whatever came back — including on failure,
+   so a handle is never leaked and the `tcp_abort` teardown path is hit on the
+   same cadence as the connect path.
+
+The two instances therefore interleave *allocate* and *free* of `tcp_seg` /
+`pcb` on two CPUs with no phase relationship — the DDR-987 shape, on purpose.
+
+**Sentinel:** `PRADYOS_NETHAMMER_OK id=<0|1> iters=<n> conn_ok=<n> conn_err=<n>`
+— printed only after all `N` iterations complete. Per R17 the counts are the
+denominator: `conn_ok` alone would hide a run where every connect was refused
+and the probe therefore exercised nothing.
+
+**Pass criterion:** both instances print their sentinel and the kernel survives.
+Panics are already caught — `GLOBAL_FORBIDDEN` fails any gate on a panic banner,
+and DDR-988 §11 now preserves the serial capture of a failing run.
+
+## 4. The falsifiability requirement — the part that decides whether this is worth anything
+
+**A hammer that passes on both the fixed and the unfixed kernel proves nothing.**
+That is the DDR-988 §9 failure mode exactly: `smoke-net-fuzz` was green while
+613 of its 768 frames never reached lwIP, because its pass criterion was
+survival and dropping a frame survives reliably.
+
+So this probe is **not** to be recorded as evidence until it has been
+mutation-checked in both directions:
+
+| kernel | required outcome |
+|---|---|
+| `g_net_lock` **reverted** (DDR-987 backed out) | **MUST panic or corrupt**, within a bounded `N` |
+| current (`g_net_lock` present) | must complete `N` iterations clean |
+
+If the reverted kernel survives the hammer, **the probe is too weak and must be
+strengthened before it is trusted** — raise `N`, add a third instance, or
+shorten the connect/close spacing. Recording a green hammer as proof without
+that check would be worse than not having the probe, because it would look like
+the closure OPEN-1 has been waiting for.
+
+`N` is to be chosen from the *reverted-kernel* reproduction: pick `N` at ~10x
+the iteration count at which the unfixed kernel first faults, so the fixed
+kernel's clean run has real power behind it.
+
+## 5. Credential choice — and the audit-churn trap
+
+`sys_sock_connect` (`sys_socket.c`) gates in this order: privacy mode → CAP_NET
+→ egress allowlist, with `is_sovereign` bypassing the last two.
+
+- **Sovereign** is the easy path, and is **wrong here.** Every sovereign connect
+  writes an `AR_SOVEREIGN_BYPASS` audit record (DDR-800). At hammer rates that
+  is thousands of records, which churns the audit ring and perturbs the very
+  timing being measured. An instrument must not dominate what it measures — the
+  DDR-947 lesson, where printing a thread name every heartbeat moved the failure
+  rate from 2/12 to 9/14.
+- **Therefore `is_net = 1`, not sovereign**, using the
+  `elf_load` → set flag → `sched_unblock` pattern (`main.c` ~1526, since
+  `user_boot_from_sfs` cannot grant `is_net`).
+
+**Open implementation point:** `netallow_check(127.0.0.1, 8007)` must pass, or
+the probe gets an audited `-EPERM` and hammers nothing — a vacuous probe with a
+green sentinel. Resolve at implementation by either confirming loopback is
+already on the boot allowlist, or adding that one row. **Verify by asserting
+`conn_err == 0`**, which is precisely why §3 prints both counters.
+
+## 6. Gating
+
+Opt-in via `probe_enabled("nethammer")` (DDR-804), registered as its own gate
+`smoke-nethammer` at `QEMU_SMP=4`. Not spawned in every boot: a probe that
+hammers the network stack in all 149 gates would add load and jitter to every
+one of them for no benefit — the same reasoning `main.c` already records for the
+privacy-netfilter probe.
+
+## 7. What this will and will not establish
+
+**Will**, once mutation-checked: that the specific cross-CPU
+allocate/free race DDR-987 named no longer reproduces under direct pressure.
+That is the positive evidence DDR-987 §5 says is missing and that no amount of
+`smoke-surfdestroy` sampling can supply.
+
+**Will not:** close OPEN-1 by itself. OPEN-1's artefact is a `#PF`; DDR-987's is
+a `#GP` with `RAX=0xDDDDDDDDDDDDDDDD`. That they are the same defect has never
+been established (DDR-985 refuted its own Claim A). A green hammer plus a clean
+20x `smoke-surfdestroy` together are a strong case, and still a case — not a
+proof. Say so when recording it.

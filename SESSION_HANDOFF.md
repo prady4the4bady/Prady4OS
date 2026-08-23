@@ -7071,13 +7071,32 @@ are entirely consistent with the defect still being present.
 
 Two things would settle it, in priority order:
 
-1. **20x `smoke-surfdestroy` on `2cd7db9`.** This is the direct measurement.
-   Prior measurement was 19/20 on `d31b4023b0f74d06` @ `46ece3f`.
-   Use `KEEP_SERIAL=1`; failed captures are now preserved automatically
-   (DDR-988 §11) under `build/gatelogs/*.fail-<pid>`.
-2. **DDR-987 §5's two-CPU `connect`/`close` hammer probe — STILL UNWRITTEN.**
-   The only thing that could POSITIVELY prove the lwIP fix rather than fail to
-   disprove it. Nothing in this session substitutes for it.
+1. ~~20x `smoke-surfdestroy`~~ — **DONE: 20/20, 0 fail**, kernel
+   `e3919140872fd2ea` (prior baseline 19/20 on `d31b4023b0f74d06` @ `46ece3f`).
+   **NOT proof, and NOT a meaningful improvement.** At p≈1/20,
+   `0.95^20 ≈ 0.358` — a clean sweep happens ~1 time in 3 even if the defect is
+   untouched (~64% power), and 19/20 -> 20/20 is one fewer failure in twenty
+   trials, inside noise. Sampling to 95% confidence would need ~59 clean runs.
+   Recorded with the arithmetic in DDR-990 §1.
+2. **The two-CPU `connect`/`close` hammer — DESIGNED (DDR-990), NOT BUILT.**
+   Still the only thing that could POSITIVELY prove the lwIP fix rather than
+   fail to disprove it. DDR-990 has the full design: `user/nethammer.c` spawned
+   TWICE with `is_net=1` (NOT sovereign — sovereign audits every connect and the
+   churn would perturb the measurement), loopback to the in-kernel echo server
+   at 127.0.0.1:8007, `smp_resched_all()` after spawn, opt-in via
+   `probe_enabled("nethammer")`, gate `smoke-nethammer` at `QEMU_SMP=4`.
+
+   **READ DDR-990 §4 BEFORE TRUSTING A GREEN RESULT.** The probe MUST be
+   mutation-checked: on a kernel with `g_net_lock` REVERTED it must panic within
+   a bounded N. If the unfixed kernel survives it, the probe is too weak and
+   must be strengthened before its green means anything. A hammer that passes
+   both ways is the DDR-988 §9 vacuous-gate failure again, and worse, because it
+   would look like the closure OPEN-1 is waiting for.
+
+   **Open implementation point (DDR-990 §5):** confirm
+   `netallow_check(127.0.0.1, 8007)` passes, or the probe gets an audited
+   `-EPERM` and hammers nothing while still printing its sentinel. Assert
+   `conn_err == 0`.
 
 ### DDR-989 — root-caused, deliberately unimplemented
 
