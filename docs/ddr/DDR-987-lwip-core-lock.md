@@ -448,6 +448,30 @@ piece for both this and the original race.
 
 ## 11. The timer ISR must never block — the §8 fix was incomplete
 
+> **SUPERSEDED IN PART BY DDR-988. Read this section with two corrections.**
+>
+> 1. **Its liveness argument is false.** §11 below justifies dropping a
+>    contended tick with "the timer work it would do is being done". That is
+>    wrong: most holders of `g_net_lock` (`psock_read`, `psock_write`,
+>    `psock_close`, RX) never call `sys_check_timeouts()`, so a tick skipped
+>    behind one of them was lost outright, with no retry and no bound. DDR-988
+>    §2 has the measurement; DDR-988 §4 replaces the mechanism — deferred work
+>    is now drained by whoever *releases* the lock, so a contended tick is
+>    deferred rather than dropped.
+> 2. **Its cadence figure is wrong.** §11 says this runs "at 100 Hz" and that a
+>    skip costs "at most 10 ms". `idt.c:266` gates `net_poll_tick()` on
+>    `(g_ticks % 10) == 0` against a 100 Hz PIT, so the real rate is **~10 Hz**
+>    and a lost opportunity costs **≥100 ms** — ten times what was claimed, and
+>    the reason correction 1 is a defect rather than a latency nit. See DDR-988 §6.
+>
+> §11 also kept the blocking acquire in the RX ISR on the grounds that its
+> critical section was "a bounded pbuf_alloc + input". It is the whole lwIP
+> receive path, entered up to 64 times per IRQ — the same freeze mechanism §11
+> removed from the timer, left on the busier path. DDR-988 §3 closes it.
+>
+> What §11 got right and DDR-988 keeps: the timer ISR must never block.
+
+
 §8 said "never hold a lock that an ISR contends for across a bounded-but-long
 loop" and shortened the hold times. That was the right rule and the wrong
 depth: it left the ISR **on the contention path**. The fix is that the ISR must
