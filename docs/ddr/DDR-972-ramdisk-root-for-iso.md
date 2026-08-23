@@ -40,7 +40,23 @@ The fix is a block device backed by memory rather than a disk.
 ## 3. Decision
 
 `kernel/drivers/blk/ramdisk.c` — a `struct blk_device` whose backing store is a
-physically contiguous PMM allocation:
+physically contiguous PMM allocation.
+
+> **Read this first: the SHIPPED topology is three of these, not one.** The
+> single-device design described in this section mounted fine but did not start
+> PRISM, because the userspace bring-up block is gated on `blk_count() > 2` and
+> uses `blk_get(2)`. What ships is:
+>
+> | device | role |
+> |---|---|
+> | `blk0` | small blank stand-in for the (unmountable) boot disk |
+> | `blk1` | 4 MiB SFS root — the filesystem userspace actually runs on |
+> | `blk2` | 4 MiB blank scratch — **this is the one `sfs_format()` formats**, and the one `blk_get(2)` returns |
+>
+> So the "finds it with no change at all" claim below is about `blk2`. See
+> *One design correction found by measurement* for how that was discovered.
+
+The per-device properties are the same in either topology:
 
 - `pmm_alloc_pages(order)` for **order 10 = 1024 frames = 4 MiB**. `pmmfree` at
   this point is 28,171 frames (~110 MiB), so the cost is 3.6% of free memory.

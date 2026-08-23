@@ -416,9 +416,17 @@ void isr_dispatch(struct regs *r) {
              * so [rbp] = caller rbp and [rbp+8] = return address. Bound every
              * link to the 16 KiB stack this frame is on (8-aligned, above rsp,
              * within one STACK_SIZE) so a garbage rbp cannot fault us in NMI
-             * context, where a #PF would be the end of the report. */
+             * context, where a #PF would be the end of the report.
+             *
+             * KERNEL FRAMES ONLY. If this NMI interrupted ring 3, r->rsp and
+             * r->rbp are USER values and the bound above proves nothing — the
+             * whole range is then user memory, so a user-chosen in-range rbp
+             * could fault us or feed the report its own bytes. Same lesson as
+             * §9 one field up: an NMI must not assume what it interrupted.
+             * Every capture so far is cs=0x8, so this costs nothing real and
+             * removes the assumption. d_btn stays 0 for a ring-3 sample. */
             npc->d_btn = 0;
-            {
+            if ((r->cs & 3u) == 0) {
                 uint64_t fp = r->rbp, lo = r->rsp, hi = r->rsp + 16384u;
                 for (unsigned k = 0; k < 4; k++) {
                     if (fp < lo || fp >= hi || (fp & 7u))

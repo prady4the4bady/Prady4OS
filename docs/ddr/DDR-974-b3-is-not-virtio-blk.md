@@ -182,7 +182,9 @@ All four land in the same commit as §3.1's numbers, once the campaign finishes.
 
 The trigger conditions, restated: a `[vblk] slot wait list depth>=2` line
 (**still 0/20** — DDR-878's precondition witness genuinely does not fire), a
-`[vblk] compl wait timeout` (**301/20 runs — FIRING**), a
+`[vblk] compl wait timeout` (**FIRING — 17 of 20 runs affected, 301
+occurrences in total**; the two numbers are different quantities and this line
+used to run them together as "301/20 runs", which reads as an impossible rate), a
 `[vblk] slot wait timeout` (**still 0/20**), or a stall whose last `[boot-load]`
 line names a load that is still mid-I/O.
 

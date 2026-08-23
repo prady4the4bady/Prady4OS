@@ -34,7 +34,10 @@ static unsigned  g_rd_n;
 
 static int rd_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
     struct rd *r = (struct rd *)bd->drv;
-    if (lba + count > bd->capacity_sectors)
+    /* Overflow-safe: `lba + count` wraps for a large lba (lba=UINT64_MAX,
+     * count=1 sums to 0 and would pass), so bound lba first and then express
+     * the remaining room as a subtraction that cannot wrap. */
+    if (lba > bd->capacity_sectors || count > bd->capacity_sectors - lba)
         return -1;
     memcpy(buf, (const void *)(uintptr_t)(r->base + lba * SECTOR), count * SECTOR);
     return 0;
@@ -42,7 +45,10 @@ static int rd_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t coun
 
 static int rd_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count) {
     struct rd *r = (struct rd *)bd->drv;
-    if (lba + count > bd->capacity_sectors)
+    /* Overflow-safe: `lba + count` wraps for a large lba (lba=UINT64_MAX,
+     * count=1 sums to 0 and would pass), so bound lba first and then express
+     * the remaining room as a subtraction that cannot wrap. */
+    if (lba > bd->capacity_sectors || count > bd->capacity_sectors - lba)
         return -1;
     memcpy((void *)(uintptr_t)(r->base + lba * SECTOR), buf, count * SECTOR);
     return 0;

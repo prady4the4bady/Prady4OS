@@ -61,7 +61,7 @@ make: *** [Makefile:2307: smoke-blk-integrity] Error 1
 exception: make: Leaving directory '/home/runner/work/Prady4OS/Prady4OS'
 ```
 
-`exception: ` is guest serial on **stdout**; `make: ***` is make's **stderr**.
+`exception:` is guest serial on **stdout**; `make: ***` is make's **stderr**.
 Two separate file descriptions writing one pipe with no ordering guarantee, so
 they interleave — here **mid-line**, overwriting the exception name, vector,
 error code and RIP. The only lines that identify the fault are exactly the lines

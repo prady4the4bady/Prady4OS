@@ -402,9 +402,14 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
      * timeout can read that CPU's percpu tick counter. */
     uint32_t dest_idx = (ncpu > 1) ? (1 + (unit % (ncpu - 1))) : 0;
     uint32_t dest = (ncpu > 1) ? lapic_apic_id_at(dest_idx) : lapic_id();
-    v->unit         = unit;
-    v->dest_cpu_idx = dest_idx;
+    v->unit = unit;
     int msix = (virtio_pci_msix_setup(&v->dev, vec, dest, 1) == 0);
+    /* Record the CPU that will ACTUALLY take this device's completions, which
+     * is only the planned AP if MSI-X setup succeeded. On the legacy-IRQ
+     * fallback the line is delivered to the BSP, so reporting `dest_idx` there
+     * would have the timeout message name an innocent AP — and a misleading
+     * dest_cpu= is exactly what cost DDR-974/976/977 three rounds. */
+    v->dest_cpu_idx = msix ? dest_idx : 0;
     if (msix) {
         msix_register(vec, vblk_msix_fn[unit]);
     } else {

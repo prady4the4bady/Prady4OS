@@ -60,11 +60,22 @@ collects the child). Builtin set for 5e:
 - `cat <path>` — `open`/`read`/`write` a file to the console (real; uses existing
   NSI calls).
 - `run <path>` — fork+execve+wait an external ELF (real).
-- `ls` — **minimal stub** for 5e (prints a "pending SYS_GETDENTS" notice): the NSI
+- `ls` — **[HISTORICAL — 5e scope only; superseded, see below]** minimal stub for
+  5e (prints a "pending SYS_GETDENTS" notice): the NSI
   has no directory-enumeration call yet; adding `SYS_GETDENTS` is a focused
   follow-up, not part of the shell-bringup slice.
-- `ps` — **minimal stub** (prints the shell's own pid via `getpid` + a notice): a
+- `ps` — **[HISTORICAL — 5e scope only; superseded, see below]** minimal stub
+  (prints the shell's own pid via `getpid` + a notice): a
   real `ps` needs a process-table syscall (`SYS_PS`/procfs), deferred.
+
+> **CURRENT STATE (supersedes the two entries above).** `SYS_GETDENTS` (NSI 66)
+> and `SYS_GETPROCS` (NSI 67) are **shipped** (DDR-742/743), and PRISM's `ls` and
+> `ps` use them — neither is a stub any more. The two entries above describe the
+> 5e milestone as it stood, and are kept because the D5 discussion below refers
+> back to them; they are not a statement about the shipped shell. This matters
+> beyond tidiness: CLAUDE.md §INV.11 exists precisely because a session read a
+> stale "deferred" note here and started re-implementing calls that already
+> existed.
 - `exit` — terminate the shell cleanly (exit code 0).
 - Unknown command → `prism: unknown command: <cmd>` and reprompt (never crash).
 
@@ -129,7 +140,8 @@ QEMU invocation (the existing `boot_test.sh` is output-only); all prior gates +
 - No new NSI number — `FD_CONSOLE` read is a behavior addition to `SYS_READ`;
   ADR-021 W^X and the append-only NSI are untouched.
 - Deferred (tracked here + `build_status.md`): RX interrupts/line discipline,
-  `SYS_READV` (musl stdin), `SYS_GETDENTS` (`ls`), process-table syscall (`ps`),
+  `SYS_READV` (musl stdin), ~~`SYS_GETDENTS` (`ls`), process-table syscall
+  (`ps`)~~ — both shipped since, as NSI 66 / 67,
   pipes/redirection/quoting/job-control/scripting/history, respawn rate-limiting.
 
 ## Build order after 5e

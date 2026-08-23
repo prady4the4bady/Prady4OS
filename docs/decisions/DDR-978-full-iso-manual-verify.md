@@ -126,7 +126,7 @@ That is a read-only extension into a table the firmware already provides.
 ## 5. Gate — the vacuity is the real defect
 
 `smoke-uefi` gains assertions that a deviceless boot cannot satisfy:
-`ACPI: ` root table found, `PCIe: ECAM`, and `[net] virtio-net up`. A UEFI boot
+`ACPI:` root table found, `PCIe: ECAM`, and `[net] virtio-net up`. A UEFI boot
 that enumerates nothing must fail the gate, not pass it.
 
 ## 5.1 Fix verified — measured, both arms

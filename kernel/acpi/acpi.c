@@ -29,26 +29,44 @@ static uint8_t sum8(const void *p, uint32_t n) {
 }
 
 /* Scan the BIOS area for the RSDP (QEMU/SeaBIOS place it in 0xE0000..0xFFFFF). */
+/* Signature + BOTH checksums. The ACPI 1.0 checksum covers only the first 20
+ * bytes, which stop at rsdt_address — it says nothing about `xsdt_address`,
+ * the very field acpi_init() dereferences for revision >= 2. ACPI 6.x §5.2.5.3
+ * puts that field under the EXTENDED checksum, taken over the whole structure,
+ * so a revision-2 RSDP is only trustworthy once that sums to zero too. The spec
+ * fixes the revision-2 structure at 36 bytes (== sizeof(struct rsdp)), so a
+ * length that disagrees is malformed rather than a future extension to tolerate.
+ *
+ * Shared by both discovery paths deliberately: validating only the loader hint
+ * would let the legacy scan re-admit the same malformed table on fallback. */
+static int rsdp_ok(const char *p) {
+    if (memcmp(p, "RSD PTR ", 8) != 0 || sum8(p, 20) != 0)
+        return 0;
+    const struct rsdp *r = (const struct rsdp *)p;
+    if (r->revision >= 2 &&
+        (r->length != (uint32_t)sizeof(struct rsdp) ||
+         sum8(p, sizeof(struct rsdp)) != 0))
+        return 0;
+    return 1;
+}
+
 static const struct rsdp *find_rsdp(void) {
     for (uint64_t a = 0xE0000; a < 0x100000; a += 16) {
         const char *p = (const char *)(uintptr_t)a;
-        if (memcmp(p, "RSD PTR ", 8) == 0 && sum8(p, 20) == 0)
+        if (rsdp_ok(p))
             return (const struct rsdp *)p;
     }
     return 0;
 }
 
-/* DDR-978: validate a loader-supplied RSDP before trusting it. Same signature
- * and checksum test find_rsdp() applies to the legacy window, so a garbage,
+/* DDR-978: validate a loader-supplied RSDP before trusting it, so a garbage,
  * truncated or stale value is rejected and we fall back rather than following a
  * wild pointer into whatever is mapped there. */
 static const struct rsdp *validate_rsdp(uint64_t pa) {
     if (!pa)
         return 0;
     const char *p = (const char *)(uintptr_t)pa;
-    if (memcmp(p, "RSD PTR ", 8) != 0 || sum8(p, 20) != 0)
-        return 0;
-    return (const struct rsdp *)p;
+    return rsdp_ok(p) ? (const struct rsdp *)p : 0;
 }
 
 void acpi_init(uint64_t rsdp_hint) {
