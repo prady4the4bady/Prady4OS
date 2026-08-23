@@ -235,7 +235,7 @@ as a guard that is sufficient.
 
 Caught by `smoke-surfdestroy` on the §7 build, before anything was pushed:
 
-```
+```text
 [vblk] compl wait timeout unit=0 dest_cpu=1 dest_dticks=0 dest_abs=312
        bsp_abs=312 dest_present=1 ticks[331,312,311,308] on_cpu=1 lba=3
 [smp] blk integrity FAIL checksum-mismatch done=0x807 spawned=4/4 prog=64,64,64,54

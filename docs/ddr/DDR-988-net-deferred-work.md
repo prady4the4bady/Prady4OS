@@ -129,7 +129,7 @@ now `__atomic_add_fetch(..., __ATOMIC_RELAXED)` and are printed by the existing
 `[hb]` heartbeat (`idt.c`, every ~5 s, evidence-only, no gate asserts on it)
 alongside `thre_drops` / `rx_drops`:
 
-```
+```text
 [hb] t=<n> ... net_skip=<n> net_defer=<n> net_rxdrop=<n>
 ```
 
@@ -180,7 +180,7 @@ and the audit was a precondition for this DDR, since `net_drain_locked()` calls
 `net_rxdrop` earned its place on the first boot it was readable. The `[hb]`
 heartbeat printed:
 
-```
+```text
 [hb] t=3500 ... net_skip=0 net_defer=137 net_rxdrop=613 ...
 ```
 
@@ -216,7 +216,7 @@ owed.
 
 Same gate, post-fix kernel `4ef7bd008c4c969d`, `KEEP_SERIAL=1`:
 
-```
+```text
 net_skip=0 net_defer=2 net_rxdrop=0
 ```
 
@@ -233,3 +233,75 @@ matters is that `net_rxdrop` is 0, and it is.
 boot. That is consistent with the fix but is **not** evidence for it: with no
 network load there is little to contend over. Per §8 this remains unmeasured
 under load.
+
+## 10. Socket-handle defects found in the same review
+
+The PR #13 review also raised four findings against the DDR-987 §10 handle work.
+Three were real defects I introduced; one was a documentation contradiction.
+
+### 10.1 A stale write handle returned `-EIO` instead of `-EBADF`
+
+`psock_write()` ended `return (e == ERR_OK) ? len : -1;` — and `-1` **is**
+`PSOCK_STALE`. So a genuine `tcp_write()` failure and a dead handle were the
+same value at the source, and `sys_sock_write` then flattened everything
+negative to `-EIO`, discarding the `-EBADF` that `psock_read` and `psock_close`
+both document for a stale handle. A ring-3 caller could not distinguish "your
+socket is gone, reopen it" from "the send failed, retry it".
+
+Three distinct failures now carry three distinct codes:
+
+| code | meaning | errno |
+|---|---|---|
+| `PSOCK_DENIED` (-2) | not this caller's slot | `-EPERM` |
+| `PSOCK_EIO` (-3) | the operation itself failed | `-EIO` |
+| `PSOCK_STALE` (-1) | stale/closed handle | `-EBADF` |
+
+`sock_err()` maps all three, and `sys_sock_write` routes through it.
+
+### 10.2 The previous owner got `-EPERM` for its own stale handle
+
+`psock_close()` cleared `s->owner = 0`, leaving the slot owned by nobody. A
+later call by the process that had *just closed the handle* then failed the
+owner check in `psock_resolve()` **before** reaching the generation check, so it
+got `PSOCK_DENIED` (`-EPERM`) where the header promises `PSOCK_STALE`
+(`-EBADF`). Use-after-close of one's own fd is an ordinary application bug and
+must report as a bad handle, not as a permission violation — the latter sends a
+programmer hunting a capability problem that does not exist.
+
+Fix: **stop clearing `s->owner` on close.** Retaining the retired owner until
+the slot is reallocated produces exactly the documented split at no extra state
+— the previous owner matches on owner, then trips `!s->used` and gets STALE;
+an unrelated caller still mismatches and gets DENIED. Safe because
+`psock_reap_owner()` gates on `used` (a retired slot is never re-closed) and
+`psock_connect()` overwrites `owner` when it reallocates.
+
+The two `psock_connect` rollback sites still clear `owner`, and should: there
+the caller never received a handle at all, so the slot is genuinely unclaimed.
+
+### 10.3 The header contradicted itself about what ring 3 holds
+
+`pradyos_net.h` opened with "ring 3 holds the returned **slot index**" and then,
+four lines later, "the returned value is an opaque HANDLE `((gen << 3) | slot)`,
+**not a bare slot index**." A caller who believed the first half and used the
+value as an array index would address the wrong slot — handle 9 is slot 1, not
+slot 9. The stale half is removed.
+
+### 10.4 OPEN-1 was recorded as root-caused when it is not
+
+`docs/PRADYOS_MASTER_PLAN.md` and `CLAUDE.md` both carried OPEN-1 as
+"**ROOT-CAUSED — DDR-987**". That overstates what is established, and it
+contradicts this repo's own records: DDR-985 refuted its own Claim A, and
+DDR-987 §5 says the gate suite cannot prove the fix at a ~1/20 base rate.
+
+The precise position, now recorded in both files:
+
+- **Established:** a real cross-CPU lwIP use-after-free exists and is fixed. Its
+  artefact is a `#GP` with `RAX=0xDDDDDDDDDDDDDDDD` (kheap `POISON_FREE`) in
+  `tcp_output`, reached from `sys_sock_connect`.
+- **Not established:** that OPEN-1's `#PF` is that same defect.
+
+OPEN-1 stays **OPEN**, and a green CI suite is not evidence for closing it —
+only a 20× `smoke-surfdestroy` campaign on the merged tip would be.
+
+This is the same discipline DDR-985 applied to itself when its own hypothesis
+failed, and it should not have lapsed two documents later.

@@ -589,6 +589,12 @@ static err_t ps_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
  * Sovereign bypasses the owner test only; a stale handle still fails for it. */
 #define PSOCK_DENIED (-2)
 #define PSOCK_STALE  (-1)
+/* DDR-988 sec.10: a genuine tcp_write() failure needs its OWN code. sec.10 had
+ * psock_write return -1 for it, which IS PSOCK_STALE, so a caller could not
+ * tell "your handle is dead" from "the send failed" -- and sys_sock_write
+ * flattened both to -EIO, losing the -EBADF the read and close paths document
+ * for a stale handle. */
+#define PSOCK_EIO    (-3)
 
 static int psock_resolve(int h, uint32_t owner, int sovereign,
                          struct proxy_sock **out) {
@@ -715,7 +721,7 @@ int psock_write(int h, uint32_t owner, int sovereign, const uint8_t *kbuf, int l
         if (e == ERR_OK) tcp_output(s->pcb);
     }
     net_unlock(fl);        /* DDR-987 */
-    return (e == ERR_OK) ? len : -1;
+    return (e == ERR_OK) ? len : PSOCK_EIO;   /* DDR-988 sec.10 */
 }
 
 int psock_close(int h, uint32_t owner, int sovereign) {
@@ -743,7 +749,18 @@ int psock_close(int h, uint32_t owner, int sovereign) {
      * while s->used was still 1, so a concurrent psock_read could copy out of a
      * page already returned to the PMM. */
     uint8_t *rxpage = s->rx;
-    s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
+    /* DDR-988 sec.10: do NOT clear s->owner here. Clearing it left the slot
+     * owned by nobody, so the caller that had just closed the handle failed the
+     * OWNER check before ever reaching the generation check, and got
+     * PSOCK_DENIED (-EPERM) for its own stale handle where the header promises
+     * PSOCK_STALE (-EBADF). Retaining the retired owner until the slot is
+     * reallocated gives exactly the documented split at no extra state: the
+     * previous owner matches, then trips !used -> STALE; an unrelated caller
+     * still mismatches -> DENIED. Safe because psock_reap_owner gates on `used`
+     * (a retired slot is never re-closed) and psock_connect overwrites owner
+     * when it reallocates. The connect-rollback sites above still clear it:
+     * there the caller never received a handle at all. */
+    s->rx = 0; s->used = 0; s->state = PS_CLOSED;
     net_unlock(fl);        /* DDR-987 */
     if (rxpage) pmm_free_page((uint64_t)(uintptr_t)rxpage);
     return 0;

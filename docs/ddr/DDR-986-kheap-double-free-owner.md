@@ -69,9 +69,22 @@ beside the canary re-arm.
 **Captured at the public boundary, not inside `cache_free`.** `cache_free` is
 static and reached via `kfree_locked` and `pool_free`, so
 `__builtin_return_address(0)` *inside it* would name those internal wrappers, not
-the caller that freed. The design therefore reads the address in the public
-`kfree()` / `pool_free()` entry points and threads it down as an explicit `site`
-argument. No new global, no new lock, no allocation: it reuses
+the caller that freed.
+
+**Correction (review of PR #13): `pool_free` is not a public boundary either.**
+An earlier draft of this section named `kfree()` / `pool_free()` as the two
+capture points. `kheap.c:274` declares `static void pool_free(...)`, and its
+only callers are the three one-line public wrappers at `:280`, `:282`, `:284`:
+`pcb_free`, `cap_free`, `ipc_free`. Capturing inside `pool_free` would therefore
+record a return address inside one of *those*, not the caller that actually
+freed the object — the exact mistake this paragraph was written to avoid, made
+one level further down. It would only appear to work when the compiler happens
+to inline the wrapper, which is not something an instrument may depend on.
+
+The capture points are therefore the genuinely public ones — **`kfree()`,
+`pcb_free()`, `cap_free()`, `ipc_free()`** — each reading
+`__builtin_return_address(0)` and threading it down as an explicit `site`
+argument through `pool_free` and `kfree_locked` into `cache_free`. No new global, no new lock, no allocation: it reuses
 bytes the free path already dirties. (§DDR-826 concerns writable globals in
 probe ELFs; this is kernel text, and adds none.)
 
@@ -89,8 +102,8 @@ Extend the existing block — same line, two new fields:
 ```
 
 `freed_by` = the recorded first free. `now_by` = the CURRENT free's site —
-**the same `site` argument threaded in from the public `kfree()`/`pool_free()`
-boundary**, not `__builtin_return_address(0)` inside `cache_free`. An earlier
+**the same `site` argument threaded in from the public
+`kfree()` / `pcb_free()` / `cap_free()` / `ipc_free()` boundary**, not `__builtin_return_address(0)` inside `cache_free`. An earlier
 draft of this section said the latter, which would have compared two different
 stack frames: `cache_free` is `static` and reached via `kfree_locked` and
 `pool_free`, so the builtin there names an internal wrapper. Comparing a caller

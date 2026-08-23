@@ -337,7 +337,7 @@ not at EOF. This causes `2>>` to truncate the file. Fix is TASK 3 (DDR-782).
 | ID | Symptom | Status |
 |---|---|---|
 | **DDR-868 / TASK 3** | `smoke-shell` FAIL: `2>>` truncates instead of appending | **ACTIVE — kernel O_APPEND not implemented. Fix specified in §0 TASK 3 above.** |
-| **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel — observed signature is a ring-0 panic (`#PF` locally, `#GP` in the DDR-987 capture) | **ROOT-CAUSED — DDR-987**: unlocked lwIP core re-entered across CPUs -> use-after-free. Fix pending merge |
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses sentinel — observed signature is a ring-0 panic (`#PF` locally, `#GP` in the DDR-987 capture) | **MECHANISM root-caused and FIXED (DDR-987/988); the ATTRIBUTION is a HYPOTHESIS, unverified.** A real cross-CPU lwIP use-after-free exists and is fixed — its artefact is a `#GP` with `RAX=0xDDDDDDDDDDDDDDDD` (kheap poison) in `tcp_output`. That OPEN-1's `#PF` is the SAME defect is not established: DDR-985 refuted its own Claim A, and DDR-987 §5 says the gate suite cannot prove the fix at a ~1/20 base rate. **OPEN-1 stays OPEN** until `smoke-surfdestroy` verifies it (20x, post-merge). Do not close it on the strength of a green suite. |
 | ~~OPEN-2~~ | Intermittent CI reds on `-smp 4` gates | **CLOSED — DDR-981** (`yield()` spun with `RFLAGS.IF` clear; DDR-863 was the wrong lead) |
 | **OPEN-9** | `smoke-shell` fails locally / passes CI (QEMU lock-hold) | root cause not yet caught; **not the same failure as DDR-868** |
 | ~~OPEN-10~~ | item-47 lost-thread failure seen through `smoke-sfs-btree-smp4` | **FIXED — DDR-964** (create-then-init race; `rc=-1` was `-EPERM` from `cap_ok`) |
