@@ -2751,7 +2751,7 @@ smoke-wmclose: $(IMG) fat-image sfs-image
 smoke-wmmin: $(IMG) fat-image sfs-image
 	@echo "[wmmin] minimize gate: boot(GPU+tablet) + QMP click B's min box + sendkey r..."
 	@rm -f build/wmmin.log /tmp/pwmmin.sock /tmp/pwmminh.sock
-	@ABSX=5760 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmin.log /tmp/pwmmin.sock PRADYOS_AMBIANCE_OK PRADYOS_WM_MIN &
+	@GEOM_TITLE=BETA GEOM_FIELD=min bash tools/qemu_runner/mouse_inject.sh build/wmmin.log /tmp/pwmmin.sock PRADYOS_AMBIANCE_OK PRADYOS_WM_MIN &
 	@bash tools/qemu_runner/input_inject.sh build/wmmin.log /tmp/pwmminh.sock PRADYOS_WM_MIN "r" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
@@ -2772,8 +2772,8 @@ smoke-wmmin: $(IMG) fat-image sfs-image
 smoke-wmmax: $(IMG) fat-image sfs-image
 	@echo "[wmmax] maximize gate: boot(GPU+tablet) + QMP max-box click + restore click..."
 	@rm -f build/wmmax.log /tmp/pwmmax.sock
-	@ABSX=5311 ABSY=5588 bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock PRADYOS_AMBIANCE_OK &
-	@ABSX=15424 ABSY=725 bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=512" &
+	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock PRADYOS_AMBIANCE_OK &
+	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=512" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
