@@ -443,3 +443,82 @@ authority-vs-operation window and slot reuse. It does not audit `ps_recv` /
 `ps_err` / `ps_connected` re-entrancy (§6), and there is still no gate that
 exercises close+reuse from two cpus — the hammer probe of §5 remains the missing
 piece for both this and the original race.
+
+---
+
+## 11. The timer ISR must never block — the §8 fix was incomplete
+
+§8 said "never hold a lock that an ISR contends for across a bounded-but-long
+loop" and shortened the hold times. That was the right rule and the wrong
+depth: it left the ISR **on the contention path**. The fix is that the ISR must
+not wait at all.
+
+### How it was caught, and why local testing missed it
+
+Merged as `23432af` after three CI greens on the byte-identical tree
+(`8d72cdb`, tree `9f1a23dd`). Then `dev/phase1` CI came back **1 green, 2
+failed**:
+
+```text
+[vblk] compl wait timeout unit=2 dest_cpu=3 dest_dticks=0 dest_abs=162
+       bsp_abs=17685 ticks[17685,17665,17664,162] on_cpu=0
+[hb] ymask=0 panics_silent=2 spins=23958889 calls=5851 bails=5851
+     rqdepth=0 rqcpus=0
+shard 2: FAILED at smoke-blk-integrity after 1 of 16 gates
+```
+
+The evidence separates cleanly, and the split is the diagnosis:
+
+| where | result |
+|---|---|
+| local, merged tree | **26/26 clean** (8 blk-integrity + 12 blk-integrity + 6 surfdestroy) |
+| CI, `8d72cdb` | 3/3 green |
+| CI, `23432af` — same tree | **1/3**; a cpu frozen at tick 162, ~24M spins |
+| CI, `46ece3f` / `ace232f` — before this work | `smoke-blk-integrity` green |
+
+A gate that was green in CI is now red in ~⅓ of CI runs while staying perfectly
+clean locally. That is not the ~2.4% historical intermittent; it is a new,
+environment-sensitive defect, and it is this DDR's.
+
+### The mechanism
+
+`net_poll_tick()` runs in the **timer ISR**, at 100 Hz, on **every** cpu. §4
+made it block on `g_net_lock`. A cpu that has to wait spins with interrupts
+disabled, so it cannot take its own next timer interrupt: its per-cpu tick
+counter freezes. virtio-blk's completion deadline is tick-bounded, so it expires
+and the read returns `-EIO`. `dest_dticks=0` with `dest_abs=162` against
+`bsp_abs=17685` is exactly that, and `spins=23958889` is the waiting.
+
+Hold time was never the whole variable — **who waits** is. On this container the
+critical sections are short enough that nobody waits long. Under TCG on a shared
+CI runner every section stretches, and the ISR waits.
+
+### The fix
+
+`net_poll_tick` uses `spin_trylock`. If another cpu is already inside lwIP, the
+timer work this tick would do **is being done by that cpu**; skipping loses
+nothing and costs at most one tick (10 ms) of timer latency. The guarantee
+bought is absolute: no cpu can ever have its tick counter frozen by lwIP
+contention, because the ISR never waits.
+
+`g_net_tick_skipped` counts the skips, so the tradeoff has a denominator (R17)
+instead of an assertion.
+
+**RX keeps the blocking acquire.** Dropping a received frame is a real loss, not
+a deferral, and `pradyos_netif_rx_isr`'s critical section is a bounded
+`pbuf_alloc` + `netif.input` — not the unbounded `sys_check_timeouts` +
+`netif_poll_all` pair that `net_poll_tick` runs.
+
+### The process failure, recorded
+
+This DDR has said since §5 that these gates **cannot prove** the fix at the
+observed base rate — that a green campaign is a non-refutation. That caveat was
+written about `smoke-surfdestroy` and then not applied to the merge decision:
+three greens on the PR head were treated as sufficient. They were not, and the
+same paragraph already said why.
+
+**Rule earned: a green count is evidence about the environment it ran in.** 26/26
+local runs said nothing about a shared TCG runner, and CI's three greens on
+`8d72cdb` were themselves inside the ~⅓ failure rate this defect carries. Where
+a defect is environment-sensitive, promotion needs greens from the environment
+that exhibits it.

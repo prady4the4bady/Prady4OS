@@ -35,6 +35,10 @@
  * interrupts off. Lock order is net -> heap (lwIP allocates via kmalloc, which
  * takes g_heap_lock); kheap never calls the net stack, so there is no cycle. */
 static spinlock_t g_net_lock = SPINLOCK_INIT;
+/* DDR-987 sec.11: timer ticks that skipped lwIP because another cpu held the
+ * lock. Non-zero is expected and healthy; it is the cost side of never blocking
+ * an ISR. Exposed so the tradeoff has a measured denominator, not an assertion. */
+uint64_t g_net_tick_skipped;
 #include "virtio_net.h"
 #include "pradyos_net.h"
 
@@ -662,12 +666,30 @@ void net_init(void) {
 void net_poll_tick(void) {
     if (!g_net_ready)
         return;
-    /* DDR-987: this runs in the TIMER ISR and is the side that FREES --
-     * sys_check_timeouts -> tcp_tmr, netif_poll_all -> tcp_input. It had no
-     * cross-cpu guard at all, so it could free a seg out from under a syscall
-     * running tcp_output on another cpu. */
-    uint64_t fl = spin_lock_irqsave(&g_net_lock);
-    sys_check_timeouts();
-    netif_poll_all();
-    spin_unlock_irqrestore(&g_net_lock, fl);
+    /* DDR-987 sec.11: TRYLOCK, not lock. This runs in the TIMER ISR at 100 Hz on
+     * EVERY cpu. sec.4 made it block on g_net_lock, which put the ISR on the
+     * contention path: a cpu that had to wait spun with interrupts disabled and
+     * so could not take its own next timer interrupt -- its per-cpu tick counter
+     * froze, and virtio-blk's tick-bounded deadline expired ([vblk] compl wait
+     * timeout, dest_dticks=0). sec.8 shortened the hold times, which was enough
+     * on fast hardware (26/26 local runs clean) and NOT enough in CI, where TCG
+     * on a shared runner stretches every critical section: 2 of 3 runs on
+     * 23432af froze a cpu at tick 162 with ~24M recorded spins.
+     *
+     * Polling is best-effort by nature. If another cpu is already inside lwIP,
+     * the timer work it would do is being done; skipping this tick loses
+     * nothing and costs at most 10 ms of timer latency. What it buys is that the
+     * ISR NEVER blocks, so no cpu can have its tick counter frozen by lwIP
+     * contention. RX keeps the blocking acquire -- dropping a received frame is
+     * a real loss, and its critical section is a bounded pbuf_alloc + input. */
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    if (spin_trylock(&g_net_lock)) {
+        sys_check_timeouts();
+        netif_poll_all();
+        spin_unlock(&g_net_lock);
+    } else {
+        g_net_tick_skipped++;          /* denominator for the tradeoff (R17) */
+    }
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
 }
