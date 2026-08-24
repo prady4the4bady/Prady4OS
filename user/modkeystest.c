@@ -51,6 +51,7 @@ static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     int a_ascii = 0, b_f1 = 0, c_up = 0, d_ctrl_c = 0, e_released = 0;
+    int f_chord_text = 0;   /* DDR-992 §2 violation: a chord delivered TEXT */
     int saw_ctrl_down = 0;
 
     wr("PRADYOS_MODKEYS_WAIT\n");
@@ -60,8 +61,15 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     for (int spin = 0; spin < 400000; spin++) {
         char cbuf[64];
         long n = nsi(SYS_INPUT_POLL, (long)cbuf, sizeof cbuf, 0);
-        for (long i = 0; i < n; i++)
+        for (long i = 0; i < n; i++) {
             if (cbuf[i] == 'a') a_ascii = 1;          /* arm A */
+            /* arm F (DDR-992 §2): the harness injects ctrl-c, and a chord is
+             * not text. A bare 'c' on the byte stream means the driver emitted
+             * a letter for a chord — which is how one keypress arrives twice
+             * and Super+M gets undone by the plain-'m' branch. Nothing else in
+             * this gate's key sequence produces a 'c'. */
+            if (cbuf[i] == 'c') f_chord_text = 1;
+        }
 
         struct key_ev evs[32];
         long m = nsi(SYS_KEY_POLL, (long)evs, 32, 0);
@@ -91,6 +99,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (!b_f1)      { wr("MODKEYS FAIL: arm B — F1 never arrived (0x40 cap still dropping it)\n");      nsi(SYS_EXIT, 1, 0, 0); }
     if (!c_up)      { wr("MODKEYS FAIL: arm C — Arrow-Up never arrived (0xE0 prefix not decoded)\n");   nsi(SYS_EXIT, 1, 0, 0); }
     if (!d_ctrl_c)  { wr("MODKEYS FAIL: arm D — Ctrl+C had no KMOD_CTRL in its own event\n");           nsi(SYS_EXIT, 1, 0, 0); }
+    if (f_chord_text){ wr("MODKEYS FAIL: arm F — Ctrl+C delivered a bare 'c' on NSI 46; a chord must not also type text (DDR-992)\n"); nsi(SYS_EXIT, 1, 0, 0); }
     if (!e_released){ wr("MODKEYS FAIL: arm E — no unmodified key after Ctrl; modifier latched\n");     nsi(SYS_EXIT, 1, 0, 0); }
 
     wr("PRADYOS_MODKEYS_OK\n");

@@ -192,3 +192,4 @@
 9	smoke-syssignal	23	strict
 3	smoke-nethammer	240	strict
 7	smoke-modkeys	120	strict
+8	smoke-superkey	120	strict

@@ -148,6 +148,17 @@ void ps2kbd_isr(void) {
      * consumer of NSI 46 must not start seeing each key twice. */
     if (!down)
         return;
+    /* DDR-992 §2: a chord is not text. Ctrl+C is an interrupt, not the letter
+     * 'c'; Super+M is a mode toggle, not the letter 'm'. Without this, one
+     * keypress arrives twice — as a chord on NSI 96 and as a bare letter on
+     * NSI 46 — and a consumer acts on both, which is how Super+M would flip the
+     * mode and then immediately have the plain-'m' branch force it back.
+     * Special-casing 'm' cannot work: the byte stream carries no modifier
+     * state, which is why DDR-991 added a second ring at all.
+     * SHIFT is deliberately excluded — Shift IS a text modifier, and selecting
+     * the shifted glyph is exactly what map_upper is for. */
+    if (g_mods & (KMOD_CTRL | KMOD_ALT | KMOD_META))
+        return;
     uint16_t nh = (uint16_t)((g_head + 1) & (KBD_RING - 1));
     if (nh != g_tail) {                          /* drop on full */
         g_ring[g_head] = c;

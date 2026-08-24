@@ -19,6 +19,11 @@
 #define SYS_FB_MAP      44
 #define SYS_FB_FLUSH    45
 #define SYS_INPUT_POLL  46
+#define SYS_KEY_POLL    96          /* DDR-991: structured key events */
+
+/* DDR-991 ABI — must match kernel/drivers/input/ps2kbd.h. */
+#define KMOD_META  0x08u
+struct key_ev { unsigned char code, mods, down, ascii; };
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
@@ -1073,6 +1078,26 @@ int main(void) {
             fflush(stdout);
             composited = ns;
             last_focus = cur_focus;
+        }
+        /* DDR-992: Super+M — a physical sovereign-mode TOGGLE. Read the chord
+         * stream before the byte stream: the driver no longer emits text for a
+         * non-Shift chord (DDR-992 §2), so these are disjoint and Super+M can
+         * no longer be undone by the plain-'m' branch below. */
+        {
+            struct key_ev kev[16];
+            long ne = nsi(SYS_KEY_POLL, (long)kev, 16, 0);
+            for (long i = 0; i < ne; i++) {
+                if (!kev[i].down)
+                    continue;
+                if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
+                    int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
+                    int nxt = cur ? 0 : 1;
+                    nsi(SYS_SET_MODE, nxt, 0, 0);
+                    printf("PRADYOS_SUPERKEY_TOGGLE from=%d to=%d\n", cur, nxt);
+                    fflush(stdout);
+                    render_and_announce(nxt);
+                }
+            }
         }
         long n = nsi(SYS_INPUT_POLL, (long)keys, (long)sizeof keys, 0);
         for (long i = 0; i < n; i++) {

@@ -2604,6 +2604,25 @@ smoke-sha256: $(IMG) fat-image sfs-image
 #          modifier latches down forever and a phantom Ctrl turns ordinary
 #          typing into control codes — and that regression passes every other
 #          arm, which is why this one exists.
+# DDR-992: Super+M sovereign toggle. Four arms — see the DDR. Arm D is the one
+# that matters most for regressions: a chord must NOT also deliver text on
+# NSI 46, or one keypress arrives twice and Super+M flips the mode and then has
+# the plain-'m' branch force it straight back.
+smoke-superkey: $(IMG) fat-image sfs-image
+	@echo "[superkey] Super+M toggle: boot(GPU) + sendkey m / meta_l-m x2 / ctrl-c..."
+	@rm -f build/superkey.log /tmp/psuper.sock
+	@bash tools/qemu_runner/input_inject.sh build/superkey.log /tmp/psuper.sock \
+	    PRADYOS_AMBIANCE_OK "m meta_l-m meta_l-m ctrl-c" &
+	@timeout 120 qemu-system-x86_64 -machine q35 -device virtio-gpu-pci \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -monitor unix:/tmp/psuper.sock,server,nowait \
+	    -serial file:build/superkey.log -display none -no-reboot || true
+	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=0 to=1" build/superkey.log || { echo "[superkey] FAIL — arm B: Super+M did not toggle Manual->Sovereign"; grep -a "SUPERKEY\|MODE" build/superkey.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=1 to=0" build/superkey.log || { echo "[superkey] FAIL — arm C: second Super+M did not toggle back (is it a toggle?)"; grep -a "SUPERKEY" build/superkey.log | tail -10; exit 1; }
+	@echo "[superkey] PASS — toggles both ways"
+
 smoke-modkeys: $(IMG) fat-image sfs-image
 	@echo "[modkeys] input gate: boot + sendkey a/f1/up/ctrl-c/b -> IRQ1 -> NSI 46 + 96..."
 	@rm -f build/modkeys.log /tmp/pmodkeys.sock

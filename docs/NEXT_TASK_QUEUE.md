@@ -35,7 +35,11 @@ Batch their DDRs in one pass first (§4.3), then implement.
       `smoke-modkeys` 5 arms, mutation-checked. Adds NSI 96 SYS_KEY_POLL.
       **Unblocks the next three items** (they need KMOD_* state a byte stream
       cannot carry).
-- [ ] Super+M physical sovereign-mode toggle (`SYS_SET_MODE`)
+- [x] Super+M physical sovereign-mode toggle (`SYS_SET_MODE`) — DDR-992,
+      `smoke-superkey` toggles both ways. NOTE the gate's stated limit: it
+      proves toggling, NOT strict alternation (4 unsynchronised injector
+      rounds). Also fixes a latent bug — a chord no longer types text, so
+      Ctrl+C stopped delivering a literal 'c'.
 - [ ] Alt-Tab with real modifier plumbing (upgrade from plain Tab, DDR-720)
 - [ ] Ctrl+Alt+T launches a PRISM terminal window
 - [ ] Per-window restore from dock (DDR-717 restores all)
@@ -55,8 +59,15 @@ Batch their DDRs in one pass first (§4.3), then implement.
       itself. Re-check whether it still reproduces at all before instrumenting.
 
 ### Group F — AETHER roster (11 agents unbuilt)
-- [ ] Wire `CAP_OCR` (1<<19), `CAP_EXEC` (1<<20), `CAP_SCENE` (1<<22),
-      `CAP_NET_BROWSE` (1<<23) — **do these first**, they unblock four agents
+- [ ] **BLOCKED — operator decision.** Wire `CAP_OCR`/`CAP_EXEC`/`CAP_SCENE`/
+      `CAP_NET_BROWSE`. Read DDR-982 §5.5 BEFORE popping this. Bits (A) and
+      the `agent_caps` field (B) are ALREADY BUILT; enforcement (C) and its
+      gate (D) were WITHDRAWN because the four action types do not exist and
+      declaring them reverses a documented decision in `aether.h`. A gate
+      written now could only assert a uint32_t round-trips. **Unblocked by:**
+      an operator ruling on DDR-982 §5.5. DDR-982 §5.4 also records a
+      create-then-init race in `sys_spawn_agent` that becomes observable the
+      moment per-slot authority exists.
 - [ ] PRAX (shell_agent) spawnable — BLOCKED on `CAP_EXEC`
 - [ ] LUMYN (research_agent) spawnable — BLOCKED on `CAP_NET_BROWSE`
 - [ ] AHNIS (ocr_agent) spawnable — BLOCKED on `CAP_OCR`
