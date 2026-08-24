@@ -302,9 +302,31 @@ not one of the four this DDR instrumented. It is not ring-3 reachable, so it is
 outside OPEN-1 route 1's scope — but §6's inventory said "four", and four is
 wrong. Found by hanging a boot on it (DDR-996 §8.3).
 
-### 8.4 Unrelated, recorded not diagnosed
+### 8.4 A SECOND mnt_lock capture, and a THIRD unrelated signature
 
-Shard 8 of the same run failed `smoke-invariants` with a different signature:
-`rqdepth=14` and `preempt=1212` frozen across t=7000..11500, INIT/PRISM
-alternating, **no `[yieldstall]` line**. So it is not a `mnt_lock` stall. Passes
-locally on the tip. No named mechanism, so no fix — §NON-NEGOTIABLE 3.
+**`mnt_lock`, capture 2** — run 32705586225, shard 2, `smoke-acc`, `b5ad0e2`:
+`site=mnt_lock spins=52491 ticks=500 pid=43 cpu=0`, immediately after
+`[sfs] freelist persist OK`. Same shape as capture 1 (shard 9, `smoke-vault`,
+pid 45, 68,981 spins): both land exactly on the 500-tick threshold, both follow
+heavy SFS activity, both ~105-138 spins/tick. Two gates, two pids, one site —
+this is reproducible, not a one-off, which is why §8.1's RESOLVED line matters:
+the next CI run answers "slow or stuck" for both.
+
+**A third, DIFFERENT signature — recorded, NOT diagnosed.** Two gates failed with
+no `[yieldstall]` line at all, so `mnt_lock` is not involved:
+
+| gate | shard | `preempt` | note |
+|---|---|---|---|
+| `smoke-invariants` | 8 | 1212, frozen t=7000..11500 | `rqdepth=14`, INIT/PRISM alternating |
+| `smoke-poweroff` | 5 | 1509, frozen t=10500..11500 | `rqdepth=5`, `curpid` varies (18/41/40) |
+
+The shared feature is a **frozen `preempt` counter while `curpid` keeps
+changing** — threads are still switching voluntarily, but timer-driven
+preemption has stopped. That is suggestive and it is not a diagnosis: two
+heartbeat samples cannot distinguish "preemption stopped" from "nothing needed
+preempting". Both gates pass locally on the tip.
+
+No named mechanism, therefore no fix — §NON-NEGOTIABLE 3. Written down so the
+next occurrence is recognised as the third recurrence rather than investigated
+from scratch, and so it is not mistaken for the `mnt_lock` stall above (which it
+demonstrably is not — different gates, no sentinel, different counters).
