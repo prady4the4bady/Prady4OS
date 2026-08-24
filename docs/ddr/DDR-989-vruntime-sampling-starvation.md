@@ -544,6 +544,29 @@ FAILED on `1159c9d`, PASSED on `e4c71e8`, FAILED on `67f25a9` — and every comm
 since `e4c71e8` is docs-only or an above-1e12 print that healthy boots never
 reach, so the kernel is unchanged across that pass and both failures.
 
+**Four data points, one kernel** (updated after `44074f3` went green on BOTH
+suites):
+
+| commit | `smoke-nethammer` |
+|---|---|
+| `1159c9d` | FAILED |
+| `e4c71e8` | PASSED |
+| `67f25a9` | FAILED |
+| `44074f3` | PASSED (both suites) |
+
+Everything from `e4c71e8` onward is docs-only or an above-1e12 print that a
+healthy boot never reaches, so the KERNEL IS BYTE-IDENTICAL across that
+pass/fail/pass/pass. Two conclusions, both now firm:
+
+1. **Not caused by any change in this branch.** An identical binary cannot
+   alternate; the variable is the environment.
+2. **The "budget too tight under CI load" hypothesis is strengthened, not
+   proven.** Alternating pass/fail on one binary is exactly what a 240 s ceiling
+   on a heavy probe produces when runner speed varies — but it is equally what
+   any load-sensitive race produces, so this ranks the hypothesis, it does not
+   confirm it. Measure the actual completion time across runs before touching
+   either the budget or the code.
+
 Recorded, NOT diagnosed (§NON-NEGOTIABLE 3). What the capture shows, for whoever
 picks it up:
 
