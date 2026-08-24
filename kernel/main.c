@@ -408,6 +408,8 @@ extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecyc
 extern const unsigned char fsrmtest_elf_end[];
 extern const unsigned char fat32mctest_elf[];         /* DDR-973: FAT32 multi-cluster read probe */
 extern const unsigned char fat32mctest_elf_end[];
+extern const unsigned char nethammer_elf[];           /* DDR-990: two-CPU connect/close hammer */
+extern const unsigned char nethammer_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
@@ -1555,6 +1557,51 @@ static void fs_test_thread(void *arg) {
                  * SYS_METRIC_READ is sovereign-gated — the record is the
                  * owner's ground truth, so a non-sovereign reader gets
                  * -EPERM and an audit entry. */
+                /* DDR-990: the two-CPU connect/close hammer. Opt-in via DDR-804
+                 * and gated for a reason: it issues 20,000 connect/close pairs
+                 * per instance, so spawning it in all 149 gates would add load
+                 * and jitter to every one of them for no benefit — the same
+                 * reasoning recorded above for the privacy-netfilter probe.
+                 *
+                 * TWO instances, because a single-CPU hammer proves NOTHING
+                 * about a cross-CPU race. smp_resched_all() after spawning is
+                 * the DDR-966 lesson: workers spawned without it sit on halted
+                 * APs while the BSP burns the deadline, and both hammers would
+                 * end up serialised on one CPU — a green run that measured the
+                 * wrong thing entirely.
+                 *
+                 * is_net = 1 and NOT sovereign. Sovereign would bypass the
+                 * allowlist for free, but it audits every connect
+                 * (AR_SOVEREIGN_BYPASS, DDR-800); at 40,000 connects that churn
+                 * would dominate the timing this probe exists to measure —
+                 * DDR-947's lesson, where printing a thread name per heartbeat
+                 * moved a failure rate from 2/12 to 9/14.
+                 *
+                 * The allowlist row is seeded HERE rather than assumed. Without
+                 * it every connect returns an audited -EPERM, the probe hammers
+                 * nothing, and it still prints its OK sentinel — a green result
+                 * from a probe that never entered lwIP. The gate asserts
+                 * conn_err=0, which is what turns that from a hope into a
+                 * check (DDR-990 §5). */
+                if (probe_enabled("nethammer")) {
+                    int netallow_add(uint32_t host_be, uint16_t port);
+                    (void)netallow_add(0x7F000001u, 8007);   /* 127.0.0.1:8007 */
+                    uint64_t nhlen = (uint64_t)(nethammer_elf_end - nethammer_elf);
+                    int spawned = 0;
+                    for (int nh_i = 0; nh_i < 2; nh_i++) {
+                        struct tcb *nh = 0;
+                        if (elf_load((void *)(uintptr_t)nethammer_elf, nhlen,
+                                     "NETHAMMER", &nh) == ELF_OK && nh) {
+                            nh->is_net = 1;      /* CAP_NET, deliberately not sovereign */
+                            sched_unblock(nh);
+                            spawned++;
+                        }
+                    }
+                    smp_resched_all();           /* DDR-966: wake idle APs to take them */
+                    kputs("[user] ELF loaded (embedded); net hammer spawned=");
+                    kputdec((uint64_t)spawned);
+                    kputs("/2\r\n");
+                }
                 /* DDR-818: HKDF RFC 5869 vector probe, opt-in via DDR-804. */
                 if (probe_enabled("hkdf")) {
                     struct tcb *hk = 0;

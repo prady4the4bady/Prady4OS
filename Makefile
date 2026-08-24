@@ -75,6 +75,8 @@ USER_FSRM_SRC := user/fsrmtest.c          # fs: ring-3 file lifecycle probe (DDR
 USER_FSRM_ELF := build/fsrmtest.elf
 USER_FAT32MC_SRC := user/fat32mctest.c    # DDR-973: FAT32 multi-cluster read regression probe
 USER_FAT32MC_ELF := build/fat32mctest.elf
+USER_NETHAMMER_SRC := user/nethammer.c    # DDR-990: two-CPU connect/close hammer
+USER_NETHAMMER_ELF := build/nethammer.elf
 USER_STACKD_SRC := user/stackdemand.c     # ADR-038: demand-paged stack probe
 USER_STACKD_ELF := build/stackdemand.elf
 USER_FTRUNC_SRC := user/ftrunctest.c      # fs: ring-3 ftruncate probe (DDR-866)
@@ -428,6 +430,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FSRM_ELF) build/fsrmtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FAT32MC_SRC) -o build/fat32mctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FAT32MC_ELF) build/fat32mctest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_NETHAMMER_SRC) -o build/nethammer.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_NETHAMMER_ELF) build/nethammer.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_STACKD_SRC) -o build/stackdemand.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/stackdemand.o $(MUSL_LIB) -o $(USER_STACKD_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FTRUNC_SRC) -o build/ftrunctest.o
@@ -509,7 +513,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -2566,6 +2570,31 @@ smoke-sha256: $(IMG) fat-image sfs-image
 # covering something the others cannot: TC2's 82-byte OKM is the only one that
 # forces the expand loop past T(1), and TC3 is the only one exercising the
 # NULL-salt branch (HashLen zero bytes, not an empty string).
+# DDR-990: the two-CPU connect/close hammer — the POSITIVE proof of the DDR-987
+# lwIP fix that the gate suite cannot supply. smoke-surfdestroy surfaces that
+# defect at ~1 run in 20, so a clean 20-run campaign has only ~64% power
+# (0.95^20 = 0.358); reaching 95% by sampling needs ~59 boots. This drives the
+# named mechanism directly instead: two ring-3 instances on two CPUs issuing
+# 20,000 connect/close pairs each, interleaving tcp_seg allocate and free with
+# no phase relationship.
+#
+# QEMU_SMP=4 is load-bearing. On one CPU the two instances serialise and the
+# probe measures nothing about a CROSS-CPU race while still printing OK.
+#
+# conn_err=0 is asserted, not hoped for. If the egress allowlist lacks
+# 127.0.0.1:8007 every connect returns an audited -EPERM, the hammer never
+# enters lwIP, and it still reaches its sentinel. That is DDR-988 sec.9's
+# vacuous gate exactly (smoke-net-fuzz green while 613 of 768 frames were
+# dropped), so the absence of errors is checked rather than assumed.
+#
+# BOTH pids must finish: a run where one instance died and the other completed
+# is a single-CPU run wearing a green result. Two OK lines are required.
+smoke-nethammer: $(IMG) fat-image sfs-image
+	TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=nethammer \
+	EXTRA_SENTINEL="$$(printf 'net hammer spawned=2/2\nPRADYOS_NETHAMMER_OK\nconn_err=0')" \
+	FORBIDDEN_SENTINEL="$$(printf 'NETHAMMER FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-hkdf: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=hkdf \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_HKDF_VECTORS_OK')" \

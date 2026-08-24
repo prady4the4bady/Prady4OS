@@ -190,3 +190,4 @@
 9	smoke-fs	28	strict
 9	smoke-sysproc	23	strict
 9	smoke-syssignal	23	strict
+3	smoke-nethammer	240	strict

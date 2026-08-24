@@ -150,3 +150,89 @@ a `#GP` with `RAX=0xDDDDDDDDDDDDDDDD`. That they are the same defect has never
 been established (DDR-985 refuted its own Claim A). A green hammer plus a clean
 20x `smoke-surfdestroy` together are a strong case, and still a case — not a
 proof. Say so when recording it.
+
+---
+
+# IMPLEMENTED — the mutation check, and what it establishes
+
+§4 said this probe is only evidence once mutation-checked in both directions.
+It has been. This section is the result.
+
+## 8. The mutation
+
+**The mutation removes exactly one property and nothing else.** Local interrupts
+are still masked precisely as the pre-DDR-987 code masked them, `g_net_rxq_lock`
+is untouched, and `net_unlock()` still drains. The only thing withdrawn is *two
+CPUs cannot be inside lwIP at once* — the property DDR-987 added and the one
+this probe claims to test. 13 acquires, 1 release, 1 trylock and 1 bare unlock
+were neutered; `-Werror` then flagged `g_net_lock` as unused, which is itself
+confirmation that no use survived.
+
+Both kernels were built and their hashes compared, so neither run could have
+been a stale binary:
+
+| kernel | hash |
+|---|---|
+| fixed | `abb6b8f582727b6e` |
+| mutant (mutual exclusion removed) | `ad3686405d4912d0` |
+
+## 9. Result
+
+| kernel | outcome |
+|---|---|
+| **fixed** | both instances complete. `conn_ok=20000 conn_err=0` **each** — 40,000 connect/close pairs across two CPUs, zero faults |
+| **mutant** | `*** NEXUS KERNEL PANIC ***` — `#GP general protection`, vector `0x0D` |
+
+The mutant's panic is the DDR-987 defect by its own signature:
+
+```text
+exception: #GP general protection  vector=0x0D
+RIP=0xFFFFFFFF80044454        ->  tcp_new_port + 0x2d
+RDI=0xDDDDDDDDDDDDDDDD        ->  kheap POISON_FREE, in the first-argument register
+RFLAGS=0x86                   ->  IF clear, as the port's own cli leaves it
+```
+
+`tcp_new_port` is reached from `tcp_connect` and walks lwIP's pcb lists. Holding
+freed-object poison while walking that list is one CPU reading a pcb the other
+CPU had already freed — the mechanism DDR-987 named, caught in the act. DDR-987's
+original capture carried the same `0xDD` poison in `RAX` rather than `RDI`;
+same value, same exception class, different argument slot.
+
+**Speed, which is the whole point.** No `NETHAMMER_PROG` line was emitted at all
+before the panic, and progress prints every 1000 iterations — so the mutant
+faults in **under 1000 iterations per instance**, against 20,000 clean on the
+fixed kernel. Compare the incidental route: `smoke-surfdestroy` surfaces this at
+~1 boot in 20. Driving the named mechanism directly is more than an order of
+magnitude faster at exposing it.
+
+`ITERS = 20000` is therefore **>20x** the mutant's fault bound, comfortably past
+the ~10x §4 asked for. Stated as a bound rather than a point estimate because
+that is what was measured: the first fault happened somewhere below 1000, and
+the instrument cannot say where below.
+
+## 10. What this does and does not close
+
+**Establishes, positively:** the cross-CPU allocate/free race DDR-987 named does
+not reproduce under 40,000 directly-driven connect/close pairs on two CPUs,
+where removing the fix reproduces it in under 1000. That is the evidence DDR-987
+§5 said was missing and that no amount of `smoke-surfdestroy` sampling could
+supply — the difference between failing to disprove and demonstrating.
+
+**Does not establish:** that OPEN-1's `#PF` was this defect. OPEN-1's artefact is
+a page fault; this one and DDR-987's are `#GP`. DDR-985 refuted its own Claim A
+on exactly this point and it has not been re-established since. The honest
+position is unchanged and is now backed by better evidence on one half of it:
+
+- the lwIP use-after-free: **root-caused, fixed, and now positively proven**;
+- OPEN-1's `#PF` being that same defect: **still a hypothesis**.
+
+What has changed is that OPEN-1 no longer has a *known live* cross-CPU
+use-after-free sitting behind it. Combined with 20/20 on `smoke-surfdestroy`
+(§1), the remaining possibilities are that OPEN-1 was this defect and is now
+gone, or that it is something else not yet seen. Neither is proven; the second
+is the one to watch for, and `[hb]`'s `net_skip`/`net_rxdrop` counters (DDR-988
+§5) will exonerate or implicate lwIP immediately if it recurs.
+
+**Recommendation on the tag:** this closes the DDR-987 question the hold was
+waiting on, but it does not close OPEN-1 by itself, and the operator's hold was
+placed on the `#PF`. That decision stays with the operator.
