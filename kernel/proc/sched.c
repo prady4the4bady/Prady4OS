@@ -152,6 +152,14 @@ static void sched_place(struct tcb *t) {
  * distinguish "never enqueued" from "enqueued but never picked". */
 static volatile uint32_t g_ub_cas_fail;   /* sched_unblock: state was not BLOCKED */
 static volatile uint32_t g_ub_rqon_skip;  /* rq_push: rq_on was already set */
+/* DDR-996 §5: how many TCBs reached sched_free_tcb STILL LINKED on a runqueue.
+ * Not a health counter — it is the gate's proof that the dangerous state really
+ * arises. A gate asserting only "no panic" would be green with or without the
+ * fix (DDR-988 §9), so smoke-rqfree asserts this is NON-ZERO under a spawn/exit
+ * storm. In steady state on a fixed kernel it simply counts caught corpses. */
+volatile uint32_t g_rqfree_caught;
+/* DDR-996 §5 arm B: freed TCBs still referenced by a runqueue. MUST be 0. */
+volatile uint32_t g_rqfree_leaked;
 static volatile uint32_t g_ub_last_state; /* the state actually observed by a failed CAS */
 
 void sched_take_unblock_stats(uint32_t *cas_out, uint32_t *rqon_out, uint32_t *state_out) {
@@ -270,6 +278,76 @@ static struct tcb *fair_candidate(struct rq *q, uint32_t *depth_out) {
     if (depth_out)
         *depth_out = depth;
     return best;
+}
+
+/* DDR-996 §5 arm B: are the runqueues still walkable? Returns 1 if every link
+ * is a plausible kernel pointer, 0 if any is not.
+ *
+ * Deliberately does NOT dereference a suspect pointer — the whole failure being
+ * tested for is a dereference of PMM_POISON, and a checker that faults the same
+ * way it is meant to detect is not a checker. It inspects the POINTER VALUE:
+ * a freed page's link reads back as 0xDEADBEEFDEADBEEF, which is non-canonical
+ * and fails the kernel-half test long before anything touches it. Bounded, so a
+ * cycle introduced by corruption terminates instead of hanging the gate. */
+/* DDR-996 §5 arm B (v2): is this EXACT pointer still linked in any runqueue?
+ *
+ * The first version of arm B checked the queues for non-canonical links and the
+ * mutant SURVIVED it — `caught=16` and a clean walk. The reason is that kfree()
+ * returns a TCB to its slab cache, so the dangling pointer stays perfectly
+ * canonical; PMM_POISON only appears once that page is recycled to the physical
+ * allocator, which is many frees later. The poison in the CI artefact was the
+ * eventual symptom, not the invariant.
+ *
+ * So this tests the invariant itself — "no runqueue references a freed TCB" —
+ * and the caller checks immediately after each destroy, before any allocation
+ * can reuse the address and mask it. Compares pointer VALUES; never dereferences
+ * the freed TCB. */
+static int rq_references(const struct tcb *t) {
+    for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+        struct rq *q = &g_rq[c];
+        uint64_t fl = spin_lock_irqsave(&q->lock);
+        int hit = 0;
+        struct tcb *e = q->head;
+        for (uint32_t n = 0; e && n < 4096u; n++) {
+            if (e == t) { hit = 1; break; }
+            e = e->rq_next;
+        }
+        spin_unlock_irqrestore(&q->lock, fl);
+        if (hit)
+            return 1;
+    }
+    return 0;
+}
+
+int sched_rq_walk_ok(void) {
+    int ok = 1;
+    for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+        struct rq *q = &g_rq[c];
+        uint64_t fl = spin_lock_irqsave(&q->lock);
+        struct tcb *e = q->head;
+        for (uint32_t n = 0; e && n < 4096u; n++) {
+            /* NOT a high-half test. The first draft rejected anything below
+             * 0xFFFFFFFF80000000 and immediately flagged a perfectly good TCB at
+             * 0x07C64000 — this kernel's heap and kstacks are identity-mapped
+             * LOW, which the artefact itself shows (RSP=0x07DABDD8 in the panic).
+             * The property that actually distinguishes a freed link is that
+             * PMM_POISON is non-canonical, which is why the fault was #GP and
+             * not #PF. So test canonicality, plus the poison word itself for a
+             * clearer message. */
+            uint64_t v  = (uint64_t)(uintptr_t)e;
+            uint64_t hi = v >> 47;
+            if (v == 0xDEADBEEFDEADBEEFull || (hi != 0ull && hi != 0x1FFFFull)) {
+                kputs("[rqfree] BAD link cpu="); kputdec(c);
+                kputs(" ptr="); kputhex((uint64_t)(uintptr_t)e);
+                kputs("\r\n");
+                ok = 0;
+                break;
+            }
+            e = e->rq_next;
+        }
+        spin_unlock_irqrestore(&q->lock, fl);
+    }
+    return ok;
 }
 
 static struct tcb *rq_unlink(struct rq *q, struct tcb *want) {
@@ -1093,6 +1171,49 @@ static void sched_free_tcb(struct tcb *t) {
      * before freeing that stack — this is what replaces rq-1's
      * lock-held-across-the-exit-switch (DDR-SMP-exit-stack-race). */
     switch_wait_offcpu(t);
+
+    /* DDR-996: and off the RUNQUEUE, which nothing above waits for. A thread
+     * carries two independent links — the all-threads ring (->next) and a
+     * per-CPU ready FIFO (->rq_next). sched_exit() marks itself ZOMBIE and
+     * leaves the FIFO link intact; both reap paths then call
+     * sched_ring_unlink(), which walks ONLY ->next. So a thread reaped before
+     * some rq_take() pass happens to pop it was freed while still linked, the
+     * page was stamped with PMM_POISON, and the next walker read that poison
+     * out of ->rq_next: either dereferencing it (fair_candidate, the #GP in
+     * CI run 32702096039) or writing it into q->head, which corrupts that
+     * CPU's queue for good.
+     *
+     * Safe to do here and nowhere earlier: by this point t is already off the
+     * all-threads ring, so no walker can discover it to re-push it. The queue
+     * is the last reference, and rq_unlink() clears rq_next and rq_on as it
+     * goes, so removing it here is final.
+     *
+     * rq_on is a bare flag — the TCB does not record WHICH cpu queued it — so
+     * this scans. That costs O(PERCPU_MAX x len) at reap time only, and is
+     * guarded by one atomic load in the common case where the thread was
+     * already popped. Adding a t->rq_cpu field would be cheaper here and worse
+     * everywhere else: §NON-NEGOTIABLE 10 (kmalloc does not zero) makes each
+     * new struct tcb field an initialiser bug waiting to happen. */
+    if (__atomic_load_n(&t->rq_on, __ATOMIC_ACQUIRE)) {
+        for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+            struct rq *q = &g_rq[c];
+            uint64_t qfl = spin_lock_irqsave(&q->lock);
+            struct tcb *prev = 0;
+            for (struct tcb *e = q->head; e; e = e->rq_next) {
+                if (e == t) {
+                    if (prev) prev->rq_next = t->rq_next;
+                    else      q->head       = t->rq_next;
+                    if (q->tail == t) q->tail = prev;
+                    t->rq_next = 0;
+                    __atomic_store_n(&t->rq_on, 0, __ATOMIC_RELEASE);
+                    __atomic_add_fetch(&g_rqfree_caught, 1, __ATOMIC_RELAXED);
+                    break;
+                }
+                prev = e;
+            }
+            spin_unlock_irqrestore(&q->lock, qfl);
+        }
+    }
     for (int i = 0; i < FD_MAX; i++)
         fd_free(t, i);
     if (t->caps)
@@ -1643,6 +1764,53 @@ static void reaper_thread(void *arg) {
         }
         yield();
     }
+}
+
+/* DDR-996 §5: force the freed-while-queued window deterministically.
+ *
+ * The CI artefact arose from a spawn/exit storm (init respawning a failing
+ * service), which is rare by nature. This drives the IDENTICAL path —
+ * sched_free_tcb reached with rq_on still set — without depending on a race:
+ * create a thread, make it runnable so it is pushed onto a runqueue, and
+ * destroy it before it is ever dispatched. That is a real scenario in its own
+ * right (spawn-failure cleanup), and it is the same defect: a TCB freed while a
+ * queue still points at it.
+ *
+ * IRQs off across the unblock/destroy pair so THIS cpu cannot reschedule into
+ * the victim. Another cpu may still steal and run it, which is why the gate
+ * asserts caught > 0 rather than caught == n — the point is that the state
+ * ARISES, and an exact count would be asserting the absence of work stealing.
+ *
+ * Lives here rather than in main.c because irq_save() is file-local to the
+ * scheduler, and because poking at rq membership belongs next to the code that
+ * owns it. Returns how many victims were created. */
+static void rqfree_victim_thread(void *arg) {
+    (void)arg;
+    sched_exit(0);      /* only reached if a cpu steals it before we destroy it */
+}
+
+int sched_rqfree_probe(int n) {
+    int made = 0;
+    for (int i = 0; i < n; i++) {
+        struct tcb *v = sched_create_blocked(rqfree_victim_thread, 0, "rqfvic");
+        if (!v)
+            break;
+        made++;
+        /* NO irq_save around this pair. The first draft held IRQs off to stop
+         * this cpu rescheduling into the victim — and hung the boot for ~22 s,
+         * because sched_free_tcb -> switch_wait_offcpu (sched.c:479) is an
+         * UNBOUNDED spin, and spinning with IF clear is exactly the DDR-981
+         * livelock. The window does not need the mask: unblock and destroy are
+         * adjacent, so the victim is usually still unpicked. */
+        sched_unblock(v);      /* -> rq_push: now linked, rq_on = 1 */
+        sched_destroy(v);      /* the wait4 reap path, verbatim     */
+        /* Checked HERE, inside the loop, because nothing has allocated since
+         * the free — so a hit is unambiguously a dangling reference rather than
+         * a recycled address that happens to match. */
+        if (rq_references(v))
+            __atomic_add_fetch(&g_rqfree_leaked, 1, __ATOMIC_RELAXED);
+    }
+    return made;
 }
 
 void sched_start_reaper(void) {

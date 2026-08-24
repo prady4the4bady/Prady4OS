@@ -220,6 +220,8 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
 /* Unlink a never-run / reaped thread from the ready ring and free its kstack,
  * cap table, open files, and TCB. Not for the currently running thread. */
 void        sched_destroy(struct tcb *t);
+int         sched_rq_walk_ok(void);   /* DDR-996 §5 arm B: runqueue links sane? */
+int         sched_rqfree_probe(int n); /* DDR-996 §5 arm A: force the window   */
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_ap_enter(void);                               /* cap-2b: AP joins the scheduler (never returns) */

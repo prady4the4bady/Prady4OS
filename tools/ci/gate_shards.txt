@@ -194,3 +194,4 @@
 7	smoke-modkeys	120	strict
 8	smoke-superkey	120	strict
 9	smoke-yieldstall	120	strict
+9	smoke-rqfree	120	strict

@@ -2694,6 +2694,36 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 #
 # The waiter is RELEASED afterwards and must exit: a detector that wedges the
 # boot it is diagnosing is worse than none. Both sentinels are asserted.
+# DDR-996: a TCB freed while still linked on a runqueue.
+#
+# The trap this gate exists to avoid: assert "no panic" and call it done. A boot
+# WITHOUT the defect also does not panic, and the window is rare, so such a gate
+# is green either way — the DDR-988 §9 vacuous-gate failure mode. So arm A
+# asserts the dangerous state actually AROSE (caught > 0), not merely that
+# nothing blew up.
+#
+#   A  caught > 0 — TCBs really did reach sched_free_tcb still queued, and the
+#      fix engaged. caught == 0 means the probe stopped reproducing the
+#      condition and the gate says so instead of passing quietly.
+#   B  the runqueues are still walkable afterwards, and the boot does not #GP.
+#      sched_rq_walk_ok() inspects POINTER VALUES rather than dereferencing —
+#      a checker that faults the same way it is meant to detect is not a checker.
+smoke-rqfree: $(IMG) fat-image sfs-image
+	@echo "[rqfree] TCB-freed-while-queued gate (DDR-996)..."
+	@mkdir -p build/gatelogs
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/rqfree.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_PROBES=rqfree \
+	EXTRA_SENTINEL="PRADYOS_RQFREE_OK" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -qa 'RQFREE FAIL' build/gatelogs/rqfree.log && { echo "[rqfree] FAIL — arm B:"; grep -a 'RQFREE FAIL\|BAD link\|leaked=' build/gatelogs/rqfree.log; exit 1; } || true
+	@l=$$(grep -ao '\[rqfree\] leaked=[0-9]*' build/gatelogs/rqfree.log | tail -1 | sed 's/.*leaked=//'); \
+	 [ -n "$$l" ] || { echo "[rqfree] FAIL — arm B never reported"; exit 1; }; \
+	 [ "$$l" -eq 0 ] || { echo "[rqfree] FAIL — arm B: $$l freed TCBs are STILL referenced by a runqueue"; exit 1; }
+	@c=$$(grep -ao '\[rqfree\] made=[0-9]* caught=[0-9]*' build/gatelogs/rqfree.log | tail -1 | sed 's/.*caught=//'); \
+	 [ -n "$$c" ] || { echo "[rqfree] FAIL — probe never reported"; tail -20 build/gatelogs/rqfree.log; exit 1; }; \
+	 [ "$$c" -gt 0 ] || { echo "[rqfree] FAIL — arm A: caught=0, the probe is no longer reproducing the freed-while-queued window; this gate would pass vacuously"; exit 1; }; \
+	 echo "[rqfree] PASS — arm A caught=$$c freed-while-queued TCBs, arm B queues intact"
+
 smoke-yieldstall: $(IMG) fat-image sfs-image
 	@mkdir -p build/gatelogs
 	@# SKIP_GLOBAL_FORBIDDEN: `[yieldstall]` is in GLOBAL_FORBIDDEN so a stall in

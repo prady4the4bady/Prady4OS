@@ -1569,6 +1569,38 @@ static void fs_test_thread(void *arg) {
                  * SYS_METRIC_READ is sovereign-gated — the record is the
                  * owner's ground truth, so a non-sovereign reader gets
                  * -EPERM and an audit entry. */
+                /* DDR-996: force the freed-while-queued window deterministically.
+                 * The CI artefact arose from a spawn/exit storm (init respawning
+                 * a failing service), which is rare by nature. This drives the
+                 * IDENTICAL path — sched_free_tcb reached with rq_on still set —
+                 * without depending on a race: create a thread, make it runnable
+                 * so it is pushed onto a runqueue, and destroy it before it is
+                 * ever dispatched. That is a real scenario in its own right
+                 * (spawn-failure cleanup), and it is the same defect: a TCB
+                 * freed while a queue still points at it.
+                 *
+                 * IRQs off across the unblock/destroy pair so this CPU cannot
+                 * reschedule into the victim. Another CPU may still steal and
+                 * run it, which is why the gate asserts caught > 0 rather than
+                 * caught == N — the point is that the state ARISES, and an
+                 * exact count would be asserting the absence of work stealing. */
+                if (probe_enabled("rqfree")) {
+                    extern volatile uint32_t g_rqfree_caught, g_rqfree_leaked;
+                    int made = sched_rqfree_probe(16);
+                    kputs("[rqfree] made=");   kputdec((uint64_t)made);
+                    kputs(" caught=");
+                    kputdec((uint64_t)__atomic_load_n(&g_rqfree_caught, __ATOMIC_RELAXED));
+                    kputs("\r\n");
+                    /* Arm B: the queues must still be walkable afterwards. On an
+                     * unfixed kernel this is where the poison surfaces. */
+                    kputs("[rqfree] leaked=");
+                    kputdec((uint64_t)__atomic_load_n(&g_rqfree_leaked, __ATOMIC_RELAXED));
+                    kputs("\r\n");
+                    if (__atomic_load_n(&g_rqfree_leaked, __ATOMIC_RELAXED) != 0 || !sched_rq_walk_ok())
+                        kputs("RQFREE FAIL: a runqueue still points at a freed TCB\r\n");
+                    else
+                        kputs("PRADYOS_RQFREE_OK\r\n");
+                }
                 /* DDR-994: the yield-stall detector. Two arms, and arm A
                  * alone would be vacuous — it proves the reporter works, not
                  * that anything CALLS it. See vfs.c for why arm B uses a
