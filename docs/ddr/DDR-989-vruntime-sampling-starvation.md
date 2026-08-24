@@ -498,3 +498,62 @@ Branch state: green on four consecutive commits — `364286e`, `e4c71e8`,
 `8d765e6`, `31535f2`. Note §INV.15 still applies for promotion: three greens
 must be on the SAME tip sha, so a consistently-green branch is not itself a
 promotion credential.
+
+
+---
+
+## 9.10 DIRECT CI confirmation — and §9.7 was too pessimistic
+
+§9.7 said `headvr` "is structurally unobservable in a green CI log". That is
+true and it is also incomplete: `boot_test.sh` dumps the serial on **FAILURE**,
+so a RED run shows it. Run 32733111805, shard 3, `67f25a9` (a docs-only commit,
+so the kernel is `e4c71e8`'s fixed one) failed `smoke-nethammer` and printed
+five consecutive heartbeats:
+
+```
+headvr=417450358  headpk=1624719  vrjn=0
+headvr=427855053  headpk=2771338  vrjn=0
+headvr=437703711  headpk=2819800  vrjn=0
+headvr=447562732  headpk=2978529  vrjn=0
+headvr=457428013  headpk=1763078  vrjn=0
+```
+
+**The fix is confirmed in CI by direct measurement**, not by inference:
+
+| quantity | unfixed (`1159c9d`) | fixed (`67f25a9`) |
+|---|---|---|
+| `headvr` | 126,100,790,075,346,602 (~1.26e17) | ~4.2e8 - 4.6e8 |
+| `vrjn` | (instrument absent) | **0** across every sample |
+| `headpk` | 1,668,754 | 1.6M -> 2.9M, climbing |
+
+4.2e8 sits just under §9.8's computed 240 s ceiling of ~7.0e8, which is the
+value that section predicted from `cycles/1024` — the arithmetic and the
+measurement agree. `headvr` advances ~10M per 500 ticks: normal accumulation,
+not a jump. No starvation: the head is picked throughout.
+
+## 9.11 …and `smoke-nethammer` STILL failed. The inflation was never its cause.
+
+The same run failed. §9.7 flagged "one green nethammer run does not prove the
+inflation caused its failure" and refused the attribution; this settles it in
+the other direction — **the inflation is fixed and nethammer still times out**,
+so the two are independent. Had that attribution been accepted when it was
+convenient, this would now look like a regression instead of a separate defect.
+
+`smoke-nethammer` is INTERMITTENT and **not** caused by anything in this DDR:
+FAILED on `1159c9d`, PASSED on `e4c71e8`, FAILED on `67f25a9` — and every commit
+since `e4c71e8` is docs-only or an above-1e12 print that healthy boots never
+reach, so the kernel is unchanged across that pass and both failures.
+
+Recorded, NOT diagnosed (§NON-NEGOTIABLE 3). What the capture shows, for whoever
+picks it up:
+
+- it runs the full 240 s budget to t=23500 and does not finish; the probe is
+  2 x 20,000 connect/close pairs at `QEMU_SMP=4`, so "the budget is simply too
+  tight under CI load" is a live hypothesis and must be tested before any code
+  change is considered;
+- `max=2509629` on `cpu=2` with `bails=0` — one `switch_wait_offcpu` spin of
+  2.5M iterations that did not bail. That is the **fifth unbounded spin**
+  DDR-994 §8.3 flagged as missing from its inventory of four. Suggestive, not a
+  diagnosis: `calls=101693` against `spins=2682874` averages 26 spins/call, so
+  the 2.5M is one outlier and could as easily be a symptom of the stall as its
+  cause.
