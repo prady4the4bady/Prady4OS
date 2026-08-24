@@ -78,6 +78,30 @@ serial_keep_fail() {
         else
             echo "[boot_test] FAIL — capture kept: $__f"   # copy failed: keep it
         fi
+        # DDR-989 sec.9.14: PRINT the qemu stderr, do not merely name it.
+        #
+        # Naming a path is useless in CI: the file lives on a runner that is
+        # destroyed with the job, so "capture kept: /home/runner/..." is a
+        # dead reference to anyone reading the log afterwards. A smoke-nethammer
+        # failure was undiagnosable for exactly this reason -- every sentinel
+        # present, no verdict line, and the one file that would have explained
+        # it unreachable.
+        #
+        # This is DDR-979's lesson applied again: that DDR merged make's stderr
+        # into the job log (2>&1) precisely so the NEXT panic would be readable
+        # instead of guessed at, and it worked -- DDR-996 was root-caused from
+        # the first capture after it landed.
+        #
+        # Only the qemuerr file is dumped. The serial log is already echoed by
+        # the harness and is thousands of lines; bounded to the last 40 so a
+        # runaway stderr cannot flood the job output.
+        case "${__f##*/}" in
+            qemuerr*)
+                echo "[boot_test] --- qemu stderr (last 40 lines) ---"
+                tail -40 "$__k" 2>/dev/null || tail -40 "$__f" 2>/dev/null
+                echo "[boot_test] --- end qemu stderr ---"
+                ;;
+        esac
     done
     return 0
 }
