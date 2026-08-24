@@ -685,3 +685,37 @@ frozen counters mean nothing.
 - `PRADYOS_INPUT_TIMEOUT` / `sys_exit(1) pid=25` appears at t~10500. That is
   `user/inputtest.c:42`, which times out waiting for injected keys this gate
   never sends — expected here, and almost certainly a red herring.
+
+
+---
+
+## 9.14 Four leads eliminated by measurement — including two of my own
+
+A LOCAL `smoke-nethammer` run (full log, greppable — not a tail) **PASSES**, and
+comparing it against the CI failure kills every hypothesis raised so far:
+
+| lead | verdict | evidence |
+|---|---|---|
+| "budget too tight" (§9.11) | **DEAD** | the hammer finishes in <10 s; the window is never the constraint |
+| "the hammer hangs" (§9.12) | **DEAD, retracted §9.13** | both instances complete, 40,000 pairs, `conn_err=0` |
+| "it burned the full 240 s, so something hung" | **DEAD** | a PASSING local run ALSO runs to t=23500. The gate always burns the full window — `boot_test.sh` must scan the whole boot for forbidden sentinels (DDR-791), so it cannot exit early. **This was a premise in both §9.11 and §9.12 and it was never evidence of anything.** |
+| `PRADYOS_INPUT_TIMEOUT` is the trigger | **DEAD** | it is NOT in `GLOBAL_FORBIDDEN`, and it appears in the PASSING local log. Benign, exactly as §9.12 guessed but did not verify. |
+| a MISSING sentinel | **DEAD** | all four are present in the CI capture. `NEXUS KERNEL OK` is line 29 of the local log — emitted long before the hammer (line 268), so it was in the CI head too. |
+
+Local sentinel counts on the passing run: `NEXUS KERNEL OK` 1,
+`net hammer spawned=2/2` 1, `PRADYOS_NETHAMMER_OK` 2, `conn_err=0` 2.
+
+### What remains genuinely unknown
+
+Every sentinel is present and no forbidden one is known to have fired, yet CI
+reported FAIL. **I do not know why, and I am not going to guess again** — this
+DDR already carries one retraction from inferring past the evidence.
+
+The missing datum is precise and small: `boot_test.sh` prints a `[smoke] FAIL —
+<reason>` line immediately before `[boot_test] FAIL — capture kept`. That line
+was NOT inside the tail window fetched from the CI job. **Fetch it.** It names
+the failing condition directly and ends this line of speculation in one read.
+
+Until it is read, the only defensible statement is: `smoke-nethammer` fails
+intermittently in CI, passes locally, is not caused by the hammer probe, not by
+the timeout budget, not by a missing sentinel, and not by `PRADYOS_INPUT_TIMEOUT`.
