@@ -159,6 +159,9 @@ static volatile uint32_t g_ub_rqon_skip;  /* rq_push: rq_on was already set */
  * storm. In steady state on a fixed kernel it simply counts caught corpses. */
 /* DDR-994 §8: stalls reported that have NOT yet resolved. */
 volatile uint32_t g_yieldstall_open;
+/* DDR-989 §8.4: first absurd vruntime charge — latched, printed by the heartbeat. */
+volatile uint64_t g_vrjump_d, g_vrjump_vtin, g_vrjump_now;
+volatile uint32_t g_vrjump_pid, g_vrjump_stampcp, g_vrjump_chargcp, g_vrjump_n;
 volatile uint32_t g_rqfree_caught;
 /* DDR-996 §5 arm B: freed TCBs still referenced by a runqueue. MUST be 0. */
 volatile uint32_t g_rqfree_leaked;
@@ -250,7 +253,59 @@ static void sched_charge_elapsed(struct tcb *t) {
     if (!t || !t->vt_in)
         return;
     uint64_t now = sched_rdtsc();
-    uint64_t d   = (now > t->vt_in) ? (now - t->vt_in) : 0;
+    /* DDR-989 §9: ONE read of vt_in, into a local. The bug this fixes was two.
+     *
+     * `(now > t->vt_in) ? (now - t->vt_in) : 0` loads t->vt_in TWICE, and the
+     * field is plain memory. sched_charge_elapsed runs from yield() with
+     * interrupts enabled, so a timer tick between the two loads can re-enter
+     * the scheduler, re-dispatch THIS SAME thread, and stamp a NEWER vt_in in
+     * rq_pop (`t->vt_in = sched_rdtsc()`). The guard then passes on the OLD
+     * value while the subtraction uses the NEW one, and `now - vt_in_new`
+     * underflows to ~2^64.
+     *
+     * Measured, not deduced (DDR-989 §8.4): d=18446744073709405858, i.e.
+     * 2^64 - 145758, with now=53378320782 and vt_in=53378466540 — a difference
+     * of exactly 145758, on pid 0 (the idle thread, the most re-dispatched
+     * thread there is) with the stamping and charging cpu BOTH 0. Same cpu, so
+     * this is not the unsynced-TSC story §8.4 proposed; that is refuted.
+     *
+     * One underflowed charge adds ~2^64/1024 = 2^54 to dbg_vruntime, which
+     * g_dbg_floor latches as a monotonic maximum, which every later thread is
+     * clamped to on create/wake — and the queue head then sits permanently
+     * above the incumbents and is never picked again. That is the whole
+     * starvation, from one torn read. */
+    uint64_t in  = t->vt_in;
+    uint64_t d   = (now > in) ? (now - in) : 0;
+    /* DDR-989 §8.4: catch the poisoned charge IN THE ACT.
+     *
+     * §8.3 measured the consequence — one charge of ~1.8e19 cycles lifts
+     * g_dbg_floor to ~2^54 and starves the queue head forever — but not the
+     * cause. A slice is microseconds; 2^40 cycles is ~6 minutes at 3 GHz, so
+     * nothing legitimate crosses it.
+     *
+     * RECORDS, does not print: this runs from schedule() and yield(), on hot
+     * paths and under locks, and DDR-980 removed a heartbeat print for exactly
+     * that reason. The values are latched once and the heartbeat emits them.
+     * It also does NOT clamp d — §NON-NEGOTIABLE 3 forbids the semantic change
+     * before an artefact names the cause, and clamping would destroy the
+     * evidence this exists to collect.
+     *
+     * vt_cpu vs the charging cpu is the actual hypothesis under test: vt_in is
+     * stamped in rq_pop on one cpu and differenced here on another, and the
+     * `now > vt_in` guard rejects only BACKWARDS deltas — an unsynced forward
+     * TSC passes straight through. If the two cpus differ on the captured
+     * event, that is the mechanism; if they are the SAME cpu, it is refuted and
+     * the cause is elsewhere. */
+    if (d > (1ull << 40) &&
+        __atomic_add_fetch(&g_vrjump_n, 1u, __ATOMIC_RELAXED) == 1u) {
+        struct percpu *pc = this_cpu();
+        g_vrjump_d       = d;
+        g_vrjump_vtin    = in;
+        g_vrjump_now     = now;
+        g_vrjump_pid     = t->pid;
+        g_vrjump_stampcp = t->vt_cpu;
+        g_vrjump_chargcp = pc ? pc->cpu_idx : 0xFFFFFFFFu;
+    }
     t->vt_in = now;
     uint32_t w = t->weight ? t->weight : 1024u;
     t->dbg_vruntime += ((d >> 10) * 1024u) / w;
@@ -557,7 +612,8 @@ static struct tcb *rq_pop(int cpu) {
     struct tcb *t = fair ? rq_unlink(q, fair) : rq_take(q);
     if (t) {
         t->dbg_picks++;
-        t->vt_in = sched_rdtsc();
+        t->vt_in  = sched_rdtsc();
+        t->vt_cpu = (uint32_t)cpu;        /* DDR-989 §8.4: who stamped it */
         sched_trace_note(t, fair, depth, (uint32_t)cpu);
     }
     spin_unlock_irqrestore(&q->lock, fl);
@@ -1007,6 +1063,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->vt_in           = 0;
     t->dbg_yields      = 0;
     t->sched_woke      = 0;
+    t->vt_cpu          = 0;          /* DDR-989 §8.4 / §NON-NEGOTIABLE 10 */
     t->dbg_vruntime    = g_dbg_floor;
     t->dbg_v_at_create = g_dbg_floor;
     t->dbg_v_at_wake   = 0;

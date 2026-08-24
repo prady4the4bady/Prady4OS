@@ -1,8 +1,8 @@
 # DDR-989 — `smoke-evresize` / `smoke-agentpanel`: vruntime is sampled, so a sub-tick yielder is never charged
 
-**Status:** §4 MEASURED. **The §3 sampling hypothesis is REFUTED by its own test.**
-Starvation mechanism now measured (§8); the cause of the trigger is NOT yet known.
-Fix still **not implemented** — deliberately. Locally reproducible as of 2026-08-24.
+**Status:** ROOT-CAUSED AND FIXED (§9). The §3 sampling hypothesis is REFUTED by
+its own §4 test; the real cause is a torn double read of `vt_in`, proven in the
+disassembly. Locally reproducible before the fix; 8/8 clean after.
 **Artefacts:** 2 independent CI captures (below). Never reproduced locally.
 **Supersedes nothing.** Relates: DDR-947 (the `preempt=`/`supp=` procedure),
 DDR-968 (the smoke-agents witness), task #26.
@@ -296,3 +296,100 @@ evresize instance is now explained: preemption is not broken, the fair picker is
 correctly choosing the same low-vruntime thread every time. Whether the other two
 share this cause is **not** established — they were not sampled. Do not merge
 them into this row without their own `curvr`/`headvr` numbers.
+
+
+---
+
+## 9. ROOT CAUSE: `vt_in` was read twice, and the second read could be newer
+
+### 9.1 The artefact
+
+§8.4's instrument caught the poisoned charge on its first local reproduction:
+
+```
+vrjd=18446744073709405858  vrjvtin=53378466540  vrjnow=53378320782
+vrjpid=0  vrjstamp=0  vrjcharg=0
+```
+
+Three facts, and each kills a candidate:
+
+- `d = 2^64 - 145758`. Not a huge elapsed time — an **unsigned underflow**.
+- `vt_in - now = 53378466540 - 53378320782 = 145758`, **exactly** the same number.
+  So `d` is `-(vt_in - now)` wrapped: at subtraction time `now` was BELOW `vt_in`.
+- `vrjstamp == vrjcharg == 0` — the same cpu stamped and charged. **§8.4's
+  unsynced-cross-cpu-TSC hypothesis is REFUTED**, by the field added to test it.
+
+`vrjpid=0` is the idle thread: the most frequently re-dispatched thread there is,
+and therefore the one most exposed to the window below.
+
+### 9.2 Why the guard did not stop it
+
+```c
+uint64_t d = (now > t->vt_in) ? (now - t->vt_in) : 0;
+```
+
+reads `t->vt_in` **twice**, and `vt_in` is plain memory. `sched_charge_elapsed`
+runs from `yield()` with interrupts enabled, so between the two reads a timer
+tick can re-enter the scheduler, re-dispatch **this same thread**, and stamp a
+NEWER `vt_in` in `rq_pop` (`sched.c:560`). The comparison then passes against the
+OLD value while the subtraction uses the NEW one, and `now - vt_in_new`
+underflows.
+
+The guard is not wrong. It is simply not atomic with the operation it guards.
+
+### 9.3 Proven in the emitted code, not just argued
+
+Whether the compiler actually emits two loads is the crux — if it cached
+`vt_in` in a register the race could not exist and this whole story would be
+wrong. It does not cache it. Counting memory references to `vt_in` (struct
+offset `0x27e8`) in `sched_charge_elapsed`:
+
+| build | refs | which |
+|---|---|---|
+| double read (mutant `a548de06bdea1adc`) | **4** | `cmpq $0x0,0x27e8(%rax)` (null guard), `mov 0x27e8(%rax),%rax`, **`cmp 0x27e8(%rcx),%rax`**, **`sub 0x27e8(%rcx),%rax`** |
+| single read (fixed `073a1e2a43eee51d`) | **2** | `cmpq $0x0,...` (null guard), `mov 0x27e8(%rax),%rax` |
+
+The mutant's compare and subtract each re-read memory **independently**. That is
+the race, present in the instruction stream. The fix collapses both to the one
+register copy.
+
+**This is why no execution-based mutation campaign was run to completion.** The
+defect is ~1/6 per boot locally, so a 4-run mutant campaign (0/4 observed) has
+P(miss) = 0.48 and proves nothing either way — it is NOT a refutation, only an
+underpowered sample. The disassembly is a statement about the binary rather than
+about a probability, and it settles the question that sampling could not.
+
+### 9.4 The fix
+
+Read once into a local:
+
+```c
+uint64_t in = t->vt_in;
+uint64_t d  = (now > in) ? (now - in) : 0;
+```
+
+Deliberately NOT a clamp on `d`. Clamping would hide the underflow instead of
+preventing it, and would leave the torn read in place to corrupt something else
+later.
+
+### 9.5 Chain from one torn read to permanent starvation
+
+1. one charge lands with `d ~= 2^64`;
+2. `dbg_vruntime += (d >> 10) * 1024 / w` adds ~`2^54`;
+3. `g_dbg_floor` latches it — it is a monotonic maximum (`sched.c:257-258`);
+4. every later thread is clamped to that floor on create/wake (`:138-142`);
+5. the queue head then sits ~3.4e14 **above** the incumbents, `fair_candidate`
+   picks the LOWER vruntime, and at ~8e7/500 ticks the gap needs ~2M ticks to
+   close. `headpk` pinned at 1447 while `curpk` passes 1.7M.
+
+One torn read, and the scheduler never picks that thread again.
+
+### 9.6 Evidence, stated with its limits
+
+- Fixed kernel `073a1e2a43eee51d`: **8/8** `smoke-evresize` clean, zero `vrjn`
+  events. At a ~1/6 base rate that is ~77% power on its own — supporting, not
+  conclusive, and it is §9.3 that carries the argument.
+- Gates: `smoke-shell` 5/5, `smoke-evresize`, `smoke-rqfree`, `smoke-yieldstall`
+  all PASS.
+- The `vrjn` instrument stays in. On a fixed kernel an underflow is impossible,
+  so any future `vrjn>0` is a real regression and names itself.

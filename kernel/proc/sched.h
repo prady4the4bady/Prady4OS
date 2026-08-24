@@ -154,6 +154,9 @@ struct tcb {
     uint32_t   dbg_ticks;       /* ticks charged while running                 */
     uint32_t   weight;
     uint64_t   vt_in;
+    uint32_t   vt_cpu;         /* DDR-989 §8.4: cpu that STAMPED vt_in. Tests the
+                                * cross-CPU-TSC hypothesis; init in sched_create
+                                * (§NON-NEGOTIABLE 10 — kmalloc does not zero).  */
     uint32_t   dbg_yields;
     uint32_t   sched_woke;
     uint32_t   dbg_ebadf_seen;  /* DDR-946: first -EBADF write already reported */

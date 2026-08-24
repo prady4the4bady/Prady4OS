@@ -362,6 +362,22 @@ static void timer_tick(struct regs *r) {
           kputs(" hpid=");   kputdec(hp);
           kputs(" headvr="); kputdec(hv);
           kputs(" headpk="); kputdec(hk); }
+        /* DDR-989 §8.4: the poisoned charge, latched by sched_charge_elapsed.
+         * vrjn>0 means one was caught; stampcp != chargcp is the cross-CPU TSC
+         * mechanism, stampcp == chargcp refutes it. */
+        { extern volatile uint64_t g_vrjump_d, g_vrjump_vtin, g_vrjump_now;
+          extern volatile uint32_t g_vrjump_pid, g_vrjump_stampcp,
+                                   g_vrjump_chargcp, g_vrjump_n;
+          uint32_t vn = __atomic_load_n(&g_vrjump_n, __ATOMIC_RELAXED);
+          kputs(" vrjn="); kputdec(vn);
+          if (vn) {
+              kputs(" vrjd=");     kputdec(g_vrjump_d);
+              kputs(" vrjvtin=");  kputdec(g_vrjump_vtin);
+              kputs(" vrjnow=");   kputdec(g_vrjump_now);
+              kputs(" vrjpid=");   kputdec(g_vrjump_pid);
+              kputs(" vrjstamp="); kputdec(g_vrjump_stampcp);
+              kputs(" vrjcharg="); kputdec(g_vrjump_chargcp);
+          } }
         /* DDR-944: rqq = CPUs holding queue entries, rqpres = CPUs marked
          * present. Any bit set in rqq but clear in rqpres is a queue that
          * neither its own CPU nor any stealer will ever drain.
