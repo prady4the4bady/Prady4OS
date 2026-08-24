@@ -584,7 +584,7 @@ picks it up:
 
 ---
 
-## 9.12 The nethammer "budget" hypothesis is REFUTED. It is a HANG.
+## 9.12 [WITHDRAWN — WRONG. See §9.13.] The nethammer "budget" hypothesis is REFUTED. It is a HANG.
 
 §9.11 ranked "budget too tight under CI load" as the live hypothesis and said to
 measure completion time before touching anything. Measured — and it is wrong.
@@ -629,3 +629,59 @@ pid and the iteration. The last PROG line before the freeze gives the exact
 iteration each instance died on, and whether both instances stopped or only one.
 That is a log-scroll, not new code — and it should be read BEFORE any change to
 timeouts, lwIP, or the scheduler.
+
+
+---
+
+## 9.13 §9.12 IS WRONG, AND I RETRACT IT. The hammer completes fine.
+
+§9.12 concluded "stuck, not slow" from 21 heartbeats containing no
+`NETHAMMER_PROG` lines. **That inference is wrong.** Reading further back in the
+same log:
+
+```
+NETHAMMER_PROG pid=37 i=20000
+PRADYOS_NETHAMMER_OK pid=37 iters=20000 conn_ok=20000 conn_err=0
+[user] sys_exit(0) pid=37 writes=114 — thread terminating
+NETHAMMER_PROG pid=38 i=20000
+PRADYOS_NETHAMMER_OK pid=38 iters=20000 conn_ok=20000 conn_err=0
+[user] sys_exit(0) pid=38 writes=114 — thread terminating
+[hb] t=1000 ...
+```
+
+**Both instances COMPLETED — 40,000 connect/close pairs, `conn_err=0`, both
+sentinels printed, both exited cleanly — before `t=1000`.** There were no PROG
+lines in the later window because there was nothing left to progress. The probe
+is healthy. The `pmmfree`/`net_skip`/`net_defer` counters were flat for exactly
+the same reason: the network work was already over.
+
+### The error, named, because it is one this repo keeps making
+
+I read a TAIL window and inferred a freeze from an absence, when the event that
+explained the absence — successful completion — sat just outside the window I
+had fetched. §INV.8 ("check elapsed vs window BEFORE reading code") and DDR-979
+§5/§6 ("do not conclude a dump is corrupt from interleaving alone") are the same
+lesson in different costumes: **an absence in a partial capture is not evidence
+of an absence in the run.** I should have fetched the head of the log before
+writing §9.12, not after.
+
+Both of §9.12's confident claims are withdrawn: the hammer is not stuck, and its
+frozen counters mean nothing.
+
+### What IS established, and what is now open
+
+- **Established:** the hammer probe works. 40,000 pairs, zero errors, both pids,
+  under 10 seconds. `smoke-nethammer`'s failure is NOT in the code DDR-990 wrote.
+- **Established:** the boot then ran ~235 s more (to t=23500, against
+  `TIMEOUT_S=240`) and timed out. All three of the gate's `EXTRA_SENTINEL`s
+  (`net hammer spawned=2/2`, `PRADYOS_NETHAMMER_OK`, `conn_err=0`) appear in the
+  log, and `main.c:1711` emits the spawn line in exactly that form.
+- **OPEN, and NOT to be guessed at:** what the boot was still waiting for. Since
+  every extra sentinel is present, the unmet one is most likely the PRIMARY
+  sentinel `NEXUS KERNEL OK` — i.e. the kernel self-test sequence did not
+  finish — but **that is a hypothesis formed from the tail again**, and this
+  section exists because of exactly that mistake. Read the HEAD of
+  `nethammer.log.fail-*` first.
+- `PRADYOS_INPUT_TIMEOUT` / `sys_exit(1) pid=25` appears at t~10500. That is
+  `user/inputtest.c:42`, which times out waiting for injected keys this gate
+  never sends — expected here, and almost certainly a red herring.
