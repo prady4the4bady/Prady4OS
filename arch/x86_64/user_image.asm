@@ -166,6 +166,13 @@ nethammer_elf:
     incbin "build/nethammer.elf"
 nethammer_elf_end:
 
+; DDR-991: PS/2 modifier / extended-key probe (Group E input foundation).
+global modkeystest_elf
+global modkeystest_elf_end
+modkeystest_elf:
+    incbin "build/modkeystest.elf"
+modkeystest_elf_end:
+
 ; DDR-866: ring-3 ftruncate probe (Group 3 item 20)
 global stackdemand_elf
 global stackdemand_elf_end

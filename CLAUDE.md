@@ -155,7 +155,7 @@ reentrant calls. **Do NOT revert this pattern.**
 Correct form ALWAYS: `pgrep -f "[q]emu-system-x86_64"` (bracket avoids self-match).
 
 ### §INV.4 — DDR number collision
-Free range: **DDR-991+** (936-990 are allocated; 985/986/987/988/989/990 landed 2026-08-23).
+Free range: **DDR-992+** (936-991 are allocated; 985-991 landed 2026-08-23/24).
 Before allocating ANY DDR number:
 `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` — must return empty in BOTH dirs.
 
@@ -191,7 +191,7 @@ Do NOT duplicate them. PRISM `ls` and `ps` use them already.
 must change both in the same commit.
 
 ### §INV.14 — Current NSI state
-Last shipped: **NSI 95** (`SYS_RENAME`). Next free: **96**. Table size: **128**.
+Last shipped: **NSI 96** (`SYS_KEY_POLL`, DDR-991). Next free: **97**. Table size: **128**.
 **Corrected 2026-08-23.** This read "74 (`SYS_MEMINFO`) / next 75", and §CURRENT
 BUILD STATE read "93 / next 94"; BOTH were wrong. `kernel/syscall/syscall.h:168-170`
 defines 93 `SYS_VERIFY_AUDIT`, 94 `SYS_FTRUNCATE`, 95 `SYS_RENAME`, and
@@ -363,13 +363,13 @@ could positively prove the lwIP fix. It is still unwritten. |
 
 - **Gate count: 149** assigned across **10** shards, **7** excluded (`ci-shard-check`,
   verified 2026-08-23; shard matrix widened 6 -> 10, makespan 38.6 -> 20.8 min; 147 -> 148 smoke-iso-userspace DDR-972 -> 149 smoke-fat32-multicluster DDR-973). The "105" this line used to carry was long stale.
-- **NSI max: 95** (`SYS_RENAME`). **Next free: 96.** Table size: 128.
+- **NSI max: 96** (`SYS_KEY_POLL`, DDR-991). **Next free: 97.** Table size: 128.
   Measured from `kernel/syscall/syscall.h:168-170`. This line previously said 93
   and §INV.14 said 74 — both wrong, and the older note claiming "§INV.14 was
   right" was wrong too. `user/prism.c` ships against 95.
 - **`kernel.bin`**: **1,065,350 B** against the 1,572,864 B size gate — 507,514 B
   of headroom (DDR-973's probe costs the page-aligned 8,192 B every embedded probe does; DDR-981's NMI probe costs 4,104 B). The old "~545 KiB, 768 KiB ceiling" was stale in both terms.
-- **DDR free range: DDR-991+** (936-990 allocated; 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work, 989 = vruntime sampling starvation, 990 = net hammer probe DESIGN)
+- **DDR free range: DDR-992+** (936-991 allocated; 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work, 989 = vruntime sampling starvation, 990 = net hammer probe BUILT+mutation-checked, 991 = PS/2 modifiers + NSI 96)
 - `make image` → zero warnings, `-Werror` enforced ✅
 - PR #5: **MERGED** as `7c6c67a`. PR #6: **MERGED 2026-08-23** as **`ace232f`**
   into `dev/phase1` (3 greens on tip `46ece3f` per §INV.15; the squashed tree is

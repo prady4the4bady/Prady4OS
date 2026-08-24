@@ -77,6 +77,8 @@ USER_FAT32MC_SRC := user/fat32mctest.c    # DDR-973: FAT32 multi-cluster read re
 USER_FAT32MC_ELF := build/fat32mctest.elf
 USER_NETHAMMER_SRC := user/nethammer.c    # DDR-990: two-CPU connect/close hammer
 USER_NETHAMMER_ELF := build/nethammer.elf
+USER_MODKEYS_SRC := user/modkeystest.c     # DDR-991: modifier / extended-key probe
+USER_MODKEYS_ELF := build/modkeystest.elf
 USER_STACKD_SRC := user/stackdemand.c     # ADR-038: demand-paged stack probe
 USER_STACKD_ELF := build/stackdemand.elf
 USER_FTRUNC_SRC := user/ftrunctest.c      # fs: ring-3 ftruncate probe (DDR-866)
@@ -432,6 +434,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FAT32MC_ELF) build/fat32mctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_NETHAMMER_SRC) -o build/nethammer.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_NETHAMMER_ELF) build/nethammer.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_MODKEYS_SRC) -o build/modkeystest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MODKEYS_ELF) build/modkeystest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_STACKD_SRC) -o build/stackdemand.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/stackdemand.o $(MUSL_LIB) -o $(USER_STACKD_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FTRUNC_SRC) -o build/ftrunctest.o
@@ -513,7 +517,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -2589,6 +2593,33 @@ smoke-sha256: $(IMG) fat-image sfs-image
 #
 # BOTH pids must finish: a run where one instance died and the other completed
 # is a single-CPU run wearing a green result. Two OK lines are required.
+# DDR-991: PS/2 modifier / extended-key gate. Real keys via QEMU's HMP sendkey
+# (genuine IRQ1 path), five arms — see user/modkeystest.c. The two that carry
+# the most weight:
+#   arm C  Arrow-Up. Arrows are INVISIBLE on the DDR-703 driver: an arrow is
+#          `E0 48`, the prefix was swallowed as a break code (0xE0 has bit 7
+#          set) and 0x48 was then dropped by `sc >= 0x40`. Arrival IS the proof
+#          that 0xE0 is decoded.
+#   arm E  an unmodified key AFTER a Ctrl chord. Without break-code handling a
+#          modifier latches down forever and a phantom Ctrl turns ordinary
+#          typing into control codes — and that regression passes every other
+#          arm, which is why this one exists.
+smoke-modkeys: $(IMG) fat-image sfs-image
+	@echo "[modkeys] input gate: boot + sendkey a/f1/up/ctrl-c/b -> IRQ1 -> NSI 46 + 96..."
+	@rm -f build/modkeys.log /tmp/pmodkeys.sock
+	@bash tools/qemu_runner/input_inject.sh build/modkeys.log /tmp/pmodkeys.sock \
+	    PRADYOS_MODKEYS_WAIT "a f1 up ctrl-c b" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -monitor unix:/tmp/pmodkeys.sock,server,nowait \
+	    -fw_cfg name=opt/org.pradyos/probes,string=modkeys \
+	    -serial file:build/modkeys.log -display none -no-reboot || true
+	@grep -qa "MODKEYS FAIL" build/modkeys.log && { echo "[modkeys] FAIL:"; grep -a "MODKEYS FAIL" build/modkeys.log; exit 1; } || true
+	@grep -qa PRADYOS_MODKEYS_OK build/modkeys.log || { echo "[modkeys] FAIL — probe never reported OK"; tail -25 build/modkeys.log; exit 1; }
+	@echo "[modkeys] PASS — all five arms"
+
 smoke-nethammer: $(IMG) fat-image sfs-image
 	TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=nethammer \
 	EXTRA_SENTINEL="$$(printf 'net hammer spawned=2/2\nPRADYOS_NETHAMMER_OK\nconn_err=0')" \

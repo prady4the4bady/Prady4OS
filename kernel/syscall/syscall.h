@@ -166,6 +166,7 @@
 /* DDR-866 (item 20): set an open file's length. Grows with zeros, shrinks by
  * discarding the tail. Appended at 94 — the next free NSI, per DDR-832. */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */
+#define SYS_KEY_POLL       96  /* (buf, max) -> count of struct key_ev (DDR-991)   */
 #define SYS_FTRUNCATE      94  /* (fd, len) -> 0 | -EBADF|-EINVAL|-EPERM|-EIO  */
 #define SYS_VERIFY_AUDIT   93  /* (bad_idx_ptr) -> 0 intact | -EACCES broken | -EPERM */
 

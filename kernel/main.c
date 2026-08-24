@@ -410,6 +410,8 @@ extern const unsigned char fat32mctest_elf[];         /* DDR-973: FAT32 multi-cl
 extern const unsigned char fat32mctest_elf_end[];
 extern const unsigned char nethammer_elf[];           /* DDR-990: two-CPU connect/close hammer */
 extern const unsigned char nethammer_elf_end[];
+extern const unsigned char modkeystest_elf[];         /* DDR-991: modifier / extended-key probe */
+extern const unsigned char modkeystest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
@@ -1557,6 +1559,19 @@ static void fs_test_thread(void *arg) {
                  * SYS_METRIC_READ is sovereign-gated — the record is the
                  * owner's ground truth, so a non-sovereign reader gets
                  * -EPERM and an audit entry. */
+                /* DDR-991: PS/2 modifier / extended-key probe. Opt-in — it
+                 * announces PRADYOS_MODKEYS_WAIT and then spins polling for
+                 * injected keys, so running it in every gate would add a
+                 * spinning process to all 150 boots for no benefit. */
+                if (probe_enabled("modkeys")) {
+                    struct tcb *mk = 0;
+                    uint64_t mklen = (uint64_t)(modkeystest_elf_end - modkeystest_elf);
+                    if (elf_load((void *)(uintptr_t)modkeystest_elf, mklen,
+                                 "MODKEYS", &mk) == ELF_OK && mk) {
+                        sched_unblock(mk);
+                        kputs("[user] ELF loaded (embedded); modkeys probe spawned\r\n");
+                    }
+                }
                 /* DDR-990: the two-CPU connect/close hammer. Opt-in via DDR-804
                  * and gated for a reason: it issues 20,000 connect/close pairs
                  * per instance, so spawning it in all 149 gates would add load
