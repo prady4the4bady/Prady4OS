@@ -55,5 +55,7 @@ struct key_ev {
 };
 
 void ps2kbd_isr(void);                 /* IRQ1 handler body: read 0x60, decode */
+void ps2kbd_feed(uint8_t sc);          /* DDR-993 §2: the decode, byte in hand */
+int  ps2kbd_selftest(void);            /* DDR-993 §3: 0 = pass, else step number */
 int  ps2kbd_pop(char *buf, int max);   /* DDR-703 ASCII stream — UNCHANGED */
 int  ps2kbd_pop_ev(struct key_ev *buf, int max);   /* DDR-991 structured events */

@@ -17,7 +17,7 @@ DDR-968 (the smoke-agents witness), task #26.
 | `rqdepth=` | 10, pinned | 10, pinned |
 | `rqcpus=` | 1 | 1 |
 | `curpid=` | alternates 18 `COMPOSIT.ELF` / 42 `AETHERD` | alternates 18 `COMPOSIT.ELF` / 42 `AETHERD` |
-| `ymask` | +3.24M over the window | +1.6M over the window (~1074/tick) |
+| `ymask` | +3.24M over 7500 ticks (**~432/tick**) | +1.6M over 3000 ticks (**~533/tick**) |
 | `net_skip`/`net_rxdrop` | (no reader yet) | **0 / 0** |
 
 Same two pids, same pinned depth, same frozen counters, two different gates,
@@ -58,8 +58,35 @@ Compose them. A thread that yields sub-tick is essentially never the current
 thread when the tick fires, so `dbg_vruntime` never advances, however much CPU
 it actually consumed. `fair_candidate` picks smallest vruntime. Therefore:
 
-1. Pids 18 and 42 yield ~1074 times per tick — three orders of magnitude below
-   the sampling period.
+1. The system yields **~432/tick** (evresize) and **~533/tick** (agentpanel) —
+   two to three orders of magnitude above the 100 Hz sampling rate, so yields
+   land overwhelmingly between samples rather than on them.
+
+   > **CORRECTION (DDR-993).** This step read "Pids 18 and 42 yield ~1074 times
+   > per tick", and BOTH halves of that were wrong.
+   >
+   > **(a) The arithmetic.** 1074 is `3.24M / 3000` — `evresize`'s numerator
+   > divided by `agentpanel`'s span. The windows differ: `evresize` is
+   > t=4000..11500 (7500 ticks) and `agentpanel` is t=11500..14500 (3000
+   > ticks). Neither gate ever measured 1074. The §1 table now carries both
+   > denominators inline so the two columns cannot be crossed again — which is
+   > §NON-NEGOTIABLE 17 applied to this document's own numbers, having quoted
+   > that rule at other people's.
+   >
+   > **(b) The attribution.** `ymask` is the DDR-981 **system-wide** counter of
+   > yields taken with `RFLAGS.IF` clear. It is not per-pid, so it cannot say
+   > that pids 18 and 42 yielded anything. Attributing it to them assumed the
+   > conclusion — that those two threads monopolise the CPU — which is what §3
+   > is trying to establish.
+   >
+   > What survives is weaker and still sufficient for a hypothesis: `curpid=`
+   > alternates between exactly those two pids across every sample in both
+   > captures, so they *are* current at essentially every sample instant, and
+   > the aggregate yield rate is far above 100 Hz. That is consistent with the
+   > mechanism. It does not measure either thread's residency, and §4's
+   > confirming measurement — a **per-thread** yield count and `dbg_vruntime`
+   > readout — is what would settle it. Until that runs, this remains a
+   > hypothesis, exactly as the status line says.
 2. Their vruntime stays frozen near zero. Every other `THREAD_READY` thread has
    been charged at least once and so is strictly larger.
 3. `fair_candidate` returns one of those two on **every** pick. The ten queued

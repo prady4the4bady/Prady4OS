@@ -48,6 +48,26 @@ concurrency group cancels the older run whenever two dispatches land on one ref,
 which is the documented reason a serialised dispatch discipline exists. Ctrl-C
 does the same locally.
 
+> **CORRECTION (DDR-988 §12.4, DDR-993).** The two sentences above are FALSE and
+> this is where the claim originated. There is no `concurrency:` block anywhere
+> under `.github/workflows/` — `grep -n concurrency .github/workflows/*.yml`
+> returns nothing — and run `32657350756` stayed `in_progress` across two
+> subsequent pushes to the same ref, which a concurrency group would have
+> cancelled twice. Interruption here is **occasional** (a human cancelling a
+> job, runner eviction, local Ctrl-C), not routine.
+>
+> The claim was copied from here into `boot_test.sh`'s trap comment, from there
+> into DDR-988 §12.2, and from there into a public PR comment, each time as
+> established fact. DDR-988 §12.4 retracted its own copy and f45f266 corrected
+> one of the two copies in `boot_test.sh`; neither traced the claim back to this
+> document, so it went on being true-looking at its source for three more
+> sessions. **The conclusion below is unaffected** — the trap is worth having
+> for an occasional interruption exactly as much as for a routine one, since the
+> orphan it prevents costs the same either way. Only the stated frequency was
+> wrong.
+
+
+
 Fix: `trap 'kill "$qemu_pid" 2>/dev/null; exit 130' INT TERM` immediately after
 the child is spawned. This removes the cause; the pre-flight check above only
 contains the symptom. Both are kept — the trap cannot help against an orphan

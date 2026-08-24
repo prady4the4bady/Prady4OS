@@ -2585,6 +2585,17 @@ smoke-sha256: $(IMG) fat-image sfs-image
 # QEMU_SMP=4 is load-bearing. On one CPU the two instances serialise and the
 # probe measures nothing about a CROSS-CPU race while still printing OK.
 #
+# DDR-993, on a fair review question: this gate records NO cpu ids, so nothing
+# in a green run proves the two instances ran on different cpus. Adding ids
+# would need a new NSI purely for gate bookkeeping, and it would still be the
+# weaker evidence. The strong evidence is the MUTATION result: on a kernel with
+# g_net_lock reverted this probe faults (#GP at tcp_new_port+0x2d,
+# RDI=0xDDDDDDDDDDDDDDDD) inside 1000 iterations. That defect is reachable ONLY
+# by two cpus in the lwIP core at once — a serialised pair cannot produce it —
+# so the fault IS the proof of concurrency, established rather than assumed.
+# What a green run alone shows is that the pairs completed, which is why the
+# conn_err and two-pid assertions below exist.
+#
 # conn_err=0 is asserted, not hoped for. If the egress allowlist lacks
 # 127.0.0.1:8007 every connect returns an audited -EPERM, the hammer never
 # enters lwIP, and it still reaches its sentinel. That is DDR-988 sec.9's
@@ -2592,10 +2603,25 @@ smoke-sha256: $(IMG) fat-image sfs-image
 # dropped), so the absence of errors is checked rather than assumed.
 #
 # BOTH pids must finish: a run where one instance died and the other completed
-# is a single-CPU run wearing a green result. Two OK lines are required.
+# is a single-CPU run wearing a green result.
+#
+# DDR-993: this comment said "Two OK lines are required" and that was NOT what
+# the recipe did. EXTRA_SENTINEL lines are literal patterns checked for
+# PRESENCE (boot_test.sh:610), never for count, so ONE instance printing
+# PRADYOS_NETHAMMER_OK satisfied it and the surviving-instance case the comment
+# describes would have gone green. The requirement is now enforced instead of
+# asserted in prose: SERIAL_LOG is pinned so the capture survives the run, and
+# the count of DISTINCT pids on OK lines must be exactly 2. Distinct pids, not
+# two lines — one instance cannot pass by printing twice.
+#
+# This is the same defect class as the conn_err=0 assertion four paragraphs up,
+# which exists because a probe that never entered lwIP still reached its
+# sentinel. Both are DDR-988 sec.9: a gate is worth only what it CHECKS, and a
+# comment claiming a check that the recipe does not perform is worse than no
+# comment, because it stops the next reader from looking.
 # DDR-991: PS/2 modifier / extended-key gate. Real keys via QEMU's HMP sendkey
-# (genuine IRQ1 path), five arms — see user/modkeystest.c. The two that carry
-# the most weight:
+# (genuine IRQ1 path), six ring-3 arms — see user/modkeystest.c. The two that
+# carry the most weight:
 #   arm C  Arrow-Up. Arrows are INVISIBLE on the DDR-703 driver: an arrow is
 #          `E0 48`, the prefix was swallowed as a break code (0xE0 has bit 7
 #          set) and 0x48 was then dropped by `sc >= 0x40`. Arrival IS the proof
@@ -2604,6 +2630,14 @@ smoke-sha256: $(IMG) fat-image sfs-image
 #          modifier latches down forever and a phantom Ctrl turns ordinary
 #          typing into control codes — and that regression passes every other
 #          arm, which is why this one exists.
+# DDR-993: a SEVENTH arm, and the only one that does not go through sendkey.
+#   The paired-modifier defect needs two keys of one pair held at once and then
+#   ONE released; HMP `sendkey` couples every press to its own release, so that
+#   sequence cannot be injected AT ALL. It is asserted in ring 0 instead, by
+#   ps2kbd_selftest() driving raw scancodes through ps2kbd_feed(), and its
+#   sentinel is PRADYOS_MODKEYS_PAIR_OK. Checked separately below, because a
+#   kernel arm that silently stopped running would otherwise leave the gate
+#   green on six arms and call it seven.
 # DDR-992: Super+M sovereign toggle. Four arms — see the DDR. Arm D is the one
 # that matters most for regressions: a chord must NOT also deliver text on
 # NSI 46, or one keypress arrives twice and Super+M flips the mode and then has
@@ -2637,13 +2671,22 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 	    -serial file:build/modkeys.log -display none -no-reboot || true
 	@grep -qa "MODKEYS FAIL" build/modkeys.log && { echo "[modkeys] FAIL:"; grep -a "MODKEYS FAIL" build/modkeys.log; exit 1; } || true
 	@grep -qa PRADYOS_MODKEYS_OK build/modkeys.log || { echo "[modkeys] FAIL — probe never reported OK"; tail -25 build/modkeys.log; exit 1; }
-	@echo "[modkeys] PASS — all five arms"
+	@grep -qa PRADYOS_MODKEYS_PAIR_OK build/modkeys.log || { echo "[modkeys] FAIL — DDR-993 kernel arm absent or failed (paired modifier / make-break identity)"; grep -a "MODKEYS" build/modkeys.log | tail -10; exit 1; }
+	@echo "[modkeys] PASS — six ring-3 arms + the DDR-993 kernel arm"
 
 smoke-nethammer: $(IMG) fat-image sfs-image
+	@mkdir -p build/gatelogs
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/nethammer.log KEEP_SERIAL=1 \
 	TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=nethammer \
 	EXTRA_SENTINEL="$$(printf 'net hammer spawned=2/2\nPRADYOS_NETHAMMER_OK\nconn_err=0')" \
 	FORBIDDEN_SENTINEL="$$(printf 'NETHAMMER FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@n=$$(grep -ao 'PRADYOS_NETHAMMER_OK pid=[0-9]*' build/gatelogs/nethammer.log \
+	      | sort -u | wc -l); \
+	 test "$$n" -eq 2 || { echo "[nethammer] FAIL — $$n distinct pid(s) reported OK, need exactly 2;"; \
+	   echo "  one instance completing is a single-CPU run wearing a green result (DDR-990)."; \
+	   grep -a 'NETHAMMER' build/gatelogs/nethammer.log | tail -10; exit 1; }
+	@echo "[nethammer] PASS — 2 distinct pids, 40,000 connect/close pairs, conn_err=0"
 
 smoke-hkdf: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=hkdf \

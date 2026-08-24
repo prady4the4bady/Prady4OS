@@ -1,6 +1,8 @@
 # DDR-990 — the two-CPU `connect`/`close` hammer: design
 
-**Status:** DESIGN. Not implemented. Owed since DDR-987 §5.
+**Status:** IMPLEMENTED and mutation-checked in both directions — see §10-§12.
+(This line read "DESIGN. Not implemented." until DDR-993; the §8-§12 results were
+appended without updating it, so the document contradicted itself at the top.)
 **Relates:** DDR-987 (the lwIP core lock), DDR-988 (deferred work), OPEN-1.
 
 ---

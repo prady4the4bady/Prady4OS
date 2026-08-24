@@ -2,8 +2,21 @@
  *
  * Announces PRADYOS_MODKEYS_WAIT, then drains BOTH input NSIs while the harness
  * injects real keys through QEMU's HMP `sendkey` (genuine IRQ1 path, same as
- * smoke-input). Five arms, each targeting something the DDR-703 driver could
- * not do:
+ * smoke-input). SIX arms here, each targeting something the DDR-703 driver could
+ * not do — plus a SEVENTH that is deliberately NOT here.
+ *
+ * DDR-993 §5: the paired-modifier arm (two keys of one pair held at once, then
+ * ONE released) cannot live in this file, because `sendkey` emits a press and
+ * its release as one indivisible action and so cannot hold a key. It runs in
+ * ring 0 instead — ps2kbd_selftest(), sentinel PRADYOS_MODKEYS_PAIR_OK. Do not
+ * try to add it here; the limitation is the harness, not the probe.
+ *
+ * And a warning about this file's own coverage, measured rather than assumed:
+ * ALL SIX arms below pass on a kernel with the DDR-993 defect present. Arm E was
+ * documented as "the arm that matters most … a latched-modifier regression
+ * passes every other arm here", and that claim was true only of the regression
+ * it imagined. Adding an arm here does not make the gate stronger against
+ * anything `sendkey` cannot express.
  *
  *   A  plain 'a' still arrives on SYS_INPUT_POLL (46)  — the OLD ABI is intact.
  *      This arm is why the byte stream was left alone: PRISM and the shell read
@@ -16,6 +29,9 @@
  *      literally invisible today, so their arrival IS the assertion.
  *   D  Ctrl+C reports KMOD_CTRL set IN THE SAME EVENT as the 'c' — not read
  *      afterwards, which would race the release (DDR-991 §3).
+ *   F  (DDR-992 §2) Ctrl+C delivers NO bare 'c' on the byte stream. A chord is
+ *      not text: without this one keypress arrives twice, and Super+M would flip
+ *      the mode and then have the plain-'m' branch force it straight back.
  *   E  a later plain key reports mods == 0. This is the §4 release edge, and it
  *      is the arm that matters most: without break-code handling a modifier
  *      latches down forever after one press, and a phantom Ctrl silently turns

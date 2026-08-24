@@ -634,3 +634,53 @@ so that class of silent failure is a named red.
 
 `docs/AETHER_MASTER_FEATURES.md` is deliberately unchanged: neither B#3 nor
 OPEN-2 is a feature it tracks.
+
+---
+
+## DDR-991/992/993 — Group E input foundation, and a review that found what the gates could not
+
+**Shipped:** `SYS_KEY_POLL` (NSI 96), extended-scancode decode, modifier
+tracking, Super+M sovereign toggle, and the paired-modifier fix.
+**Gates:** `smoke-modkeys` (six ring-3 arms + one kernel arm), `smoke-superkey`.
+
+DDR-991 lifted two limits in the DDR-703 driver that had to move together: the
+missing `0xE0` case (an extended key's prefix has bit 7 set, so it was swallowed
+as a break code and the following byte decoded as an unprefixed make — right-Ctrl
+delivered a bare left-Ctrl) and the `sc >= 0x40` cap that dropped every function
+key and arrow. DDR-992 added the Super+M toggle and, with it, the rule that a
+chord must not also deliver text on NSI 46.
+
+**DDR-993 is the part worth reading.** CodeRabbit's review of PR #14 found a real
+defect neither DDR's gate could see: `mods_set` wrote the aggregate bit
+unconditionally, so releasing one side of a paired modifier cleared it while the
+other side was still held. For Shift that is a wrong glyph. For Ctrl/Alt/Meta it
+disables DDR-992's chord suppression — so **a chord starts typing text again**,
+the exact regression DDR-992 existed to prevent, one commit after it landed.
+
+Two lessons, both measured rather than argued:
+
+1. **DDR-991 §6 claimed arm E was "the arm that matters most … a latched-modifier
+   regression passes every other arm here."** True of the regression it imagined
+   (a modifier stuck down), false of the one that shipped. Arm E presses one Ctrl
+   key, so the buggy line and the correct line agree. The mutation check passed
+   against a defect it could not express. **Measured:** both DDR-993 mutants
+   still print `PRADYOS_MODKEYS_OK` — all six ring-3 arms pass on a broken
+   kernel.
+
+2. **The missing arm was not unwritten, it was UNWRITABLE.** QEMU's HMP `sendkey`
+   emits a press and its release as one indivisible action; two keys of a pair
+   held at once is not a sequence it can express. The fix was structural: split
+   the decode from the port read (`ps2kbd_feed`), and assert it in ring 0.
+
+Fix: only the eight physical keys carry state; the `KMOD_*` aggregate is
+**recomputed** from them on every edge, so it cannot disagree with its sides by
+construction. Separately, `key_ev.code` now comes from the unshifted map — it had
+carried the shifted glyph, so one physical key's make and break disagreed
+whenever Shift was released between them.
+
+Mutation-checked both ways: M1 (aggregate reverted) fails at selftest step 3,
+M2 (code identity reverted) at step 11, gate exit 2 in both cases; three distinct
+kernel hashes so no run measured a stale binary.
+
+`docs/AETHER_MASTER_FEATURES.md` is deliberately unchanged: the input driver is
+Layer 7 plumbing, not an AETHER feature it tracks.

@@ -40,6 +40,14 @@ Batch their DDRs in one pass first (§4.3), then implement.
       proves toggling, NOT strict alternation (4 unsynchronised injector
       rounds). Also fixes a latent bug — a chord no longer types text, so
       Ctrl+C stopped delivering a literal 'c'.
+- [x] DDR-993 (2026-08-24): paired-modifier aggregate fix. CodeRabbit found a
+      real defect in DDR-991 that its own gate could not see — releasing one side
+      of a pair cleared the AGGREGATE while the other was held, which disables
+      DDR-992's chord suppression, so **a chord types text again**. Fixed by
+      deriving the aggregate from per-side state. **Read DDR-993 §5 before
+      writing any input gate**: all six ring-3 arms pass on the broken kernel,
+      and the missing arm was UNWRITABLE — `sendkey` cannot hold a key — so it
+      lives in ring 0 as `ps2kbd_selftest()` / `PRADYOS_MODKEYS_PAIR_OK`.
 - [ ] Alt-Tab with real modifier plumbing (upgrade from plain Tab, DDR-720)
 - [ ] Ctrl+Alt+T launches a PRISM terminal window
 - [ ] Per-window restore from dock (DDR-717 restores all)
@@ -57,6 +65,19 @@ Batch their DDRs in one pass first (§4.3), then implement.
       bug. That stall point is the same function DDR-981 caught frozen, and
       `[apfreeze]` is now a `GLOBAL_FORBIDDEN` sentinel, so a recurrence names
       itself. Re-check whether it still reproduces at all before instrumenting.
+- [ ] **DDR-994 — a detector for OPEN-1 route 1 (the silent hang).** DDR-990 §12
+      established OPEN-1 is at least THREE signatures: (1) the CI route, a hang
+      in `sys_read`/`vfs_read` with **no panic at all**; (2) the local `#PF`
+      (1/20, DDR-985); (3) the hammer's `#GP`. DDR-990's hammer closed route 3,
+      which was never OPEN-1's own artefact, and **no panic-based detector can
+      address route 1 — a hang prints nothing.** The DDR-981 NMI dump machinery
+      (`idt.c:167-237`, `406-462`) is bounded, latched and per-CPU, so the
+      PAYLOAD is reusable; the TRIGGER is not, because it fires on "this CPU's
+      g_ticks stopped" and in route 1 the CPU runs normally while a thread waits
+      forever. Needed: a probe-liveness trigger (an expected progress sentinel
+      failing to advance within N ticks). **This is the only thing that can
+      close OPEN-1, and OPEN-1 is the operator's stated precondition for tagging
+      v1.0.0** — so it sits on the release critical path, not in Group E.
 
 ### Group F — AETHER roster (11 agents unbuilt)
 - [ ] **BLOCKED — operator decision.** Wire `CAP_OCR`/`CAP_EXEC`/`CAP_SCENE`/

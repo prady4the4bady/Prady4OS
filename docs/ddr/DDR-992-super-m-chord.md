@@ -113,3 +113,31 @@ The change is narrow by construction — it suppresses the byte only while
 **Ctrl, Alt or Meta** is held, and Shift is deliberately excluded because Shift
 is a text modifier. Unmodified typing, which is all any existing gate sends, is
 bit-for-bit unaffected.
+
+---
+
+## 8. The suppression is only as correct as the aggregate (DDR-993)
+
+Written after the fact, because it is not obvious from §2 and it cost a real
+defect.
+
+§2's suppression is one line:
+
+```c
+if (g_mods & (KMOD_CTRL | KMOD_ALT | KMOD_META))
+    return;                       /* a chord is not text */
+```
+
+Everything in this DDR therefore rests on `g_mods` being **true while the key is
+physically held**. It was not. DDR-991's `mods_set` cleared the aggregate on the
+break of *either* side of a pair, so releasing one Ctrl while the other was held
+made `KMOD_CTRL` read 0 — and this line stopped firing. **A chord typed text
+again**, which is precisely what §1 called the conflict and §2 called fixed.
+
+The defect predates this DDR by one commit, so nothing here caused it; but this
+DDR is what turned a wrong-glyph bug into a correctness hole, and neither DDR's
+gate could see it (DDR-993 §5 — all six ring-3 arms pass on the broken kernel).
+
+Fixed in DDR-993 by deriving the aggregate from per-side state so it cannot
+disagree with its sides. **The dependency is worth stating plainly: a change to
+modifier tracking is a change to chord suppression.**

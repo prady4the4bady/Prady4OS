@@ -96,6 +96,12 @@ break leaves a phantom modifier held — and a phantom Ctrl turns ordinary typin
 into control codes. §6's gate asserts the release edge explicitly for that
 reason, not just the press.
 
+> **DDR-993:** correctly identified as the riskiest part, and it is where the
+> defect landed — but in a shape this section did not anticipate. The danger was
+> assumed to be a break that never arrives. What shipped was a break that
+> arrives and clears **too much**: one side's release clearing the aggregate for
+> both. See §6's correction.
+
 ## 5. Scope
 
 This DDR delivers the *foundation* only: extended-scancode decode, modifier
@@ -117,6 +123,23 @@ is the shared half they all failed on.
 - **D** Ctrl+C reports `KMOD_CTRL` set *in the same event* as `KEY_C`.
 - **E** after Ctrl is released, the next key reports `mods == 0` — the §4
   release edge. Without this arm a latched-modifier regression passes.
+
+> **CORRECTION (DDR-993 §5).** Arm E's claim is narrower than it reads, and the
+> gap was real. It presses ONE Ctrl key, so it can only catch a modifier stuck
+> **down**. The regression that actually shipped was the opposite shape — the
+> aggregate `KMOD_CTRL` clearing while the *other* Ctrl was still held, because
+> `mods_set` wrote it unconditionally on every break. Arm E cannot express two
+> keys of a pair held at once, so it passed. **Measured: all six ring-3 arms
+> here pass on a kernel carrying that defect.**
+>
+> Worse, that shape is not cosmetic. DDR-992's chord suppression keys off
+> `KMOD_CTRL|KMOD_ALT|KMOD_META`, so an aggregate reading clear while held means
+> **a chord starts typing text again** — the regression DDR-992 landed to
+> prevent, one commit later.
+>
+> The arm could not have been written here: QEMU's `sendkey` couples every press
+> to its own release and cannot hold a key. DDR-993 splits `ps2kbd_feed` out of
+> the ISR and asserts it in ring 0 instead (`PRADYOS_MODKEYS_PAIR_OK`).
 
 ---
 

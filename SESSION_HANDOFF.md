@@ -7114,7 +7114,49 @@ cause is weighting and the fix is the OPPOSITE one. Task #26.
 (`net_skip=0 net_rxdrop=0` on the agentpanel failure). Do not re-attribute it to
 lwIP without a non-zero `net_skip`.
 
-### Process rules earned this session
+**DDR-989's own arithmetic was wrong and is corrected (DDR-993).** The "~1074
+yields/tick" above is `3.24M / 3000` — `evresize`'s numerator over
+`agentpanel`'s span. Real rates: **~432/tick** (evresize, 3.24M over 7500 ticks)
+and **~533/tick** (agentpanel, 1.6M over 3000). And `ymask` is the DDR-981
+**system-wide** counter, so it cannot attribute yields to pids 18 and 42 at all
+— that assumed the conclusion. What survives: `curpid=` alternates between
+exactly those two pids at every sample, and the aggregate rate is far above
+100 Hz. Consistent with the mechanism, not a measurement of it. §4 still gates
+the fix.
+
+### Process rules earned 2026-08-24
+
+**Two distinct hazards showed up stacked on one failure. I diagnosed the
+second one first and was half wrong; both are recorded so the next session
+separates them.**
+
+- **`for i in $(seq 1 900); do pgrep ... || break; done` is not a wait.** It
+  spins 900 times in milliseconds and then falls through with QEMU still
+  running. Both `smoke-blkmq` and `smoke-selftest` then hit
+  `HOST-ENV FAIL -- STALE QEMU HOLDS IMAGE LOCK`, exit 3 — the
+  §NON-NEGOTIABLE 12 pre-flight working exactly as designed, refusing a run
+  that would have contended for the image. **`until ! pgrep -f
+  "[q]emu-system-x86_64" >/dev/null; do sleep 2; done`** is the wait. An
+  `exit 3` HOST-ENV refusal says nothing about the kernel — read the banner
+  before treating it as a gate result.
+
+- **Do not edit `tools/qemu_runner/` while a gate is running.** `bash` reads a
+  script lazily by byte offset, so appending a `GLOBAL_FORBIDDEN` line mid-run
+  shifted the offset under a process already executing it and it resumed
+  mid-token: `line 582: al_keep_fail: command not found` — that is
+  `serial_keep_fail`, sheared, on the stale-QEMU error path above.
+
+  **Correction to my own first reading:** I concluded from the shearing that
+  "the gate failure was real, the defect was not." Wrong on the causation. The
+  gate failed because of the stale QEMU; the live edit only garbled the message
+  it printed on the way out. The tell was there to be read — line 582 sits
+  inside the pre-flight refusal block, so the error text named its own cause and
+  I attributed it to the corruption sitting on top. §11.4 already requires
+  re-running `smoke-selftest` after a `tools/qemu_runner/` change; add: make the
+  edit when nothing is running, and re-run from an idle machine before drawing
+  any conclusion at all.
+
+### Process rules earned earlier
 
 - **§11.4: any change under `tools/qemu_runner/` MUST run `smoke-selftest`
   before push.** I chose local gates by what the C changes touched;
@@ -7130,4 +7172,98 @@ lwIP without a non-zero `net_skip`.
 - **Don't move the tip while chasing three greens.** Five pushes orphaned five
   in-flight suites. Batch, then dispatch.
 
-### DDR free range: **DDR-990+**
+### This session (2026-08-24): CodeRabbit review on PR #14 → DDR-993
+
+**One claimed-CRITICAL finding was FALSE and was refuted, not applied.**
+CodeRabbit reported duplicate `struct net_rxq_ent` / `g_net_rxq` definitions at
+`lwip_port.c:152-155` and concluded "this file cannot build". There is exactly
+one definition of each; lines 185-207 are uses. Every local build has been
+warning-clean at `-Werror`. **Verify a review finding against the code before
+acting on it** — a confident tone is not evidence, in either direction.
+
+**Two findings were real and are fixed (DDR-993).**
+1. `mods_set` cleared the paired-modifier AGGREGATE unconditionally, so
+   releasing one Shift/Ctrl/Alt/Meta cleared it while the other was held. For
+   Ctrl/Alt/Meta this disables DDR-992's chord suppression — **a chord starts
+   typing text again**, one commit after DDR-992 shipped to prevent exactly that.
+   Fix: the aggregate is now RECOMPUTED from per-side state on every edge, so it
+   cannot disagree with its sides by construction.
+2. `key_ev.code` carried the shifted glyph, so one physical key's make and break
+   disagreed whenever Shift was released between them. `code` is now the
+   unshifted identity; `ascii` keeps the glyph.
+
+**The finding behind the finding — read this before writing another gate.**
+DDR-991 §6 claimed arm E was "the arm that matters most … a latched-modifier
+regression passes every other arm here." That was true of the regression it
+imagined and false of the one that shipped. **Measured, not argued: both DDR-993
+mutants still print `PRADYOS_MODKEYS_OK` — all six ring-3 arms pass on a broken
+kernel.** A mutation check only tests the sequences the harness can produce.
+
+And the missing arm was **unwritable**, not merely unwritten: QEMU's HMP
+`sendkey` couples every press to its own release, so "two keys of a pair held at
+once" cannot be injected at all. That is why the decode was split from the port
+read (`ps2kbd_feed`) and asserted in ring 0 via `ps2kbd_selftest()`, sentinel
+`PRADYOS_MODKEYS_PAIR_OK`, checked by its own grep so a kernel arm that stopped
+running cannot leave the gate green on six arms while reporting seven.
+
+Mutation results (R1 hashes): fixed `ff6bc6b1371f94c1` pass; M1 `b771cc4def3064c4`
+step 3, exit 2; M2 `d89d5a4a6fd3a0f0` step 11, exit 2.
+
+**Also corrected this session, all from the same review:**
+- `smoke-nethammer`'s comment claimed "Two OK lines are required"; EXTRA_SENTINEL
+  checks PRESENCE, never count, so one surviving instance passed. Now enforced:
+  exactly 2 DISTINCT pids on OK lines.
+- The "concurrency group cancels runs" claim was retracted in f45f266 — but only
+  in one of the two paragraphs in `boot_test.sh`, and never at its SOURCE,
+  DDR-951. Both now corrected. **A retraction that does not grep for its own
+  claim is half a retraction.**
+- CLAUDE.md's OPEN-1 row spanned 10 physical lines, so 9 of them fell outside the
+  Markdown table. Collapsed to one line and refreshed: DDR-990's hammer proves
+  the lwIP fix but does **not** close OPEN-1 (§12 — route 1 is a silent hang, and
+  no panic-based detector sees it).
+- Gate count in CLAUDE.md was 149; `ci-shard-check` measures **152**. Re-measure,
+  don't increment.
+- DDR-990's status line still read "DESIGN. Not implemented." while §8-§12 held
+  its results.
+- 33 `(uint64_t)(X_end - X)` pointer subtractions between separate extern arrays
+  → cast through `uintptr_t`. CodeRabbit flagged 2 of them; fixing 2 of 33 would
+  have been worse than fixing none. Hash-verified as semantics-preserving.
+
+### Next task is DDR-994, and the lead is already found — do not re-derive
+
+**OPEN-1 route 1 (the silent hang) has a concrete suspect.** `mnt_lock`
+(`kernel/fs/vfs/vfs.c:25`) is an UNBOUNDED yield-spin:
+
+```c
+static void mnt_lock(struct vfs_mount *m) {
+    while (__atomic_exchange_n(&m->busy, 1, __ATOMIC_ACQUIRE))
+        yield();
+}
+```
+
+DDR-981 fixed the interrupt masking INSIDE `yield()`, which is why the CPU no
+longer freezes — but it never bounded the spin. A holder that never releases (or
+that hangs itself) leaves the waiter spinning forever: **cpu busy, thread never
+progresses, nothing printed, no panic.** That is exactly OPEN-1 route 1's
+signature, and the queue already records that its one captured failure hung at
+`SYSFSTAT OK` -> `SYSREAD OK`, i.e. inside `sys_read`/`vfs_read`.
+
+This is a far more direct instrument than the NMI watchdog first considered: the
+DDR-981 NMI machinery triggers on "this cpu stopped taking interrupts", and in
+route 1 the cpu is fine.
+
+**Design constraint (§NON-NEGOTIABLE 3): DDR-994 must REPORT, not repair.**
+Emit a named sentinel on deadline expiry (`[mntstall] mnt= holder= waiter=
+ticks=`), add it to `GLOBAL_FORBIDDEN` so a recurrence names itself, and keep
+spinning. Changing the locking semantics without a captured artefact would be
+a fix without a named mechanism.
+
+**Correction found while researching this:** the Group A row "Scheduler
+timed-block — implement AFTER g_ticks is CI-proven reliable" is STALE. It is
+built: **`sched_block_timeout()`** (`sched.c:1434`, DDR-955), expiry sweep at
+`sched.c:1287`, `block_deadline` + `wake_timed_out` in `struct tcb`, four
+callers (`virtio_blk.c:232/288`, `bcast.c:78`, `ipc.c:65`). The backlog's
+`sched_block_on_timeout` was a placeholder name that never existed. CLAUDE.md
+corrected.
+
+### DDR free range: **DDR-995+** (994 claimed by the above)

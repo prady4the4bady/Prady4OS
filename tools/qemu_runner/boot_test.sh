@@ -343,6 +343,7 @@ early_exit_eligible=0
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
     '[apfreeze]' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
+    'FAT32MC FAIL' 'MODKEYS FAIL' 'NETHAMMER FAIL' \
     'FSRM FAIL' 'KILL FAIL' 'ROOTMOUNT FAIL' 'SETNAME FAIL' 'SFSROOT FAIL' \
     'SURFDESTROY FAIL' 'SYSINFO FAIL' 'TIME FAIL' \
     'PRIVACYNET FAIL' 'PRADYOS_SOVEREIGN_BYPASSED' \
@@ -490,25 +491,31 @@ qemu_pid=$!
 # completes leaks nothing. An INTERRUPTED run is the actual leak source: this
 # project's CI can cancel runs (a human cancelling a job, runner eviction), and
 # Ctrl-C does the same locally.
-# DDR-988 sec.12.4: this comment used to claim "CI cancels runs ROUTINELY (the
-# workflow concurrency group cancels the older run whenever two dispatches land
-# on one ref)". That is FALSE and it misled a later session into repeating it as
-# established fact. There is no `concurrency:` block anywhere under
-# .github/workflows/ -- grep finds none, and run 32657350756 stayed in_progress
-# across two subsequent pushes to the same ref, which a concurrency group would
-# have cancelled twice. Cancellation here is occasional, not routine. The shell dies, QEMU is orphaned, and it holds the image write
-# lock until someone notices. That orphan is exactly what the pre-flight check
-# above trips over on the NEXT run -- so this trap removes the CAUSE, while the
-# check above only contains the symptom.
+# When a run IS interrupted the shell dies, QEMU is orphaned, and it holds the
+# image write lock until someone notices. That orphan is exactly what the
+# pre-flight check above trips over on the NEXT run -- so this trap removes the
+# CAUSE, while the check above only contains the symptom.
+#
+# DDR-988 sec.12.4 / DDR-993: this comment twice claimed "CI cancels runs
+# ROUTINELY (the workflow concurrency group cancels the older run whenever two
+# dispatches land on one ref)". That is FALSE. There is no `concurrency:` block
+# anywhere under .github/workflows/ -- grep finds none -- and run 32657350756
+# stayed in_progress across two subsequent pushes to the same ref, which a
+# concurrency group would have cancelled twice. Cancellation here is occasional
+# (a human cancelling a job, runner eviction, local Ctrl-C), not routine.
+# The claim was retracted once, in f45f266, but only in the paragraph above:
+# the sec.12.2 paragraph below restated it word for word and survived, which is
+# how a review caught it still sitting here. A retraction that does not grep for
+# its own claim is half a retraction.
+#
 # DDR-988 sec.12.2: the trap must ALSO preserve the capture. It used to just kill
-# and exit 130, bypassing serial_keep_fail entirely — so a cancelled run threw
+# and exit 130, bypassing serial_keep_fail entirely — so an interrupted run threw
 # away its serial log exactly when that log is most likely to hold the only
-# useful diagnosis. And cancellation is ROUTINE here, by this comment's own
-# account: the workflow concurrency group cancels the older run whenever two
-# dispatches land on one ref, which is precisely what happens while chasing the
-# 3-green rule. The original file is left in place, but sec.11.2 now truncates
-# SERIAL_LOG at the start of the NEXT run, and a cancelled CI workspace is
-# discarded without an artifact upload — so "left in place" is not preserved.
+# useful diagnosis. Occasional is reason enough: the runs most worth capturing
+# are the long ones, which are the likeliest to be cancelled. The original file
+# is left in place, but sec.11.2 now truncates SERIAL_LOG at the start of the
+# NEXT run, and a cancelled CI workspace is discarded without an artifact
+# upload — so "left in place" is not preserved.
 on_interrupt() {
     kill "$qemu_pid" 2>/dev/null
     wait "$qemu_pid" 2>/dev/null

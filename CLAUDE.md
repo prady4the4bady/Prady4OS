@@ -155,7 +155,7 @@ reentrant calls. **Do NOT revert this pattern.**
 Correct form ALWAYS: `pgrep -f "[q]emu-system-x86_64"` (bracket avoids self-match).
 
 ### §INV.4 — DDR number collision
-Free range: **DDR-993+** (936-992 are allocated; 985-992 landed 2026-08-23/24).
+Free range: **DDR-995+** (936-993 allocated; 994 CLAIMED for the OPEN-1 route-1 detector, see SESSION_HANDOFF).
 Before allocating ANY DDR number:
 `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` — must return empty in BOTH dirs.
 
@@ -336,16 +336,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 |---|---|---|---|
 | **FSRM** | `created file did not persist` | `fs_test_thread` umounts SFS root while ring-3 `fsrmtest` still running on it | **ITEM 1 — BLOCKING PR#5**. Poll `sched_find_pid()` in bounded loop before destructive umount. UAF trap: do NOT poll `THREAD_ZOMBIE` directly. Gate: `smoke-fsrm` 20/20. |
 | **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | One CI capture, shard 2, `9231eab` (DDR-968 §1) — never seen again | **NOT REPRODUCED; instrument armed and merged (DDR-968).** The `PRADYOS_AGENT_WITNESS_WAIT pid= disp= state= n=` line prints only while the witness is UNARMED, so a green boot emits none of it: **there is no red artefact to read.** `smoke-agents` is gating (shard 2, not in the CI exclude list), so a recurrence would have reddened its whole suite; 18 suites have been green on shard 2 since the instrument landed at `ea4601e`. This is ITEM 2 step 5 — record and move on. Reopen the moment a `PRADYOS_AGENT_WITNESS_WAIT` line appears; `disp=0` then confirms the DDR-968 §2 reading (thread exists, never switched in) and `disp>0` refutes it. |
-| **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | **At least one instance is a ring-0 `#PF` panic — DDR-985.** Measured **19/20** local (kernel `d31b4023b0f74d06` @ `46ece3f`). Run 16: `component: NEXUS isr` / `exception: #PF page fault`, after `[sfs] 64K write/read byte-exact OK`. **NOT the DDR-981 signature** — no `[apfreeze]` and no `compl wait timeout` in any of the 20 runs, so do not read it as a B#3 recurrence. | **MECHANISM root-caused and FIXED (DDR-987 + DDR-988); the ATTRIBUTION to OPEN-1 is a HYPOTHESIS, unverified — see the end of this cell.** The lwIP core is built with NO internal locking (`NO_SYS=1`, `SYS_LIGHTWEIGHT_PROT=0`) on a stale "single core" assumption; socket syscalls and `net_poll_tick()` (TIMER ISR) re-enter it concurrently across CPUs, freeing a `tcp_seg` under a walker -> use-after-free. Fix: `g_net_lock`. **ACTIVE until merged.** This is the FIRST local reproduction of an OPEN-12-class panic (DDR-979 had it CI-only, 0/10 local). Capture a full dump with **`KEEP_SERIAL=1`**: the 19/20 campaign lost `vector=`/`RIP=`/`CR2=` because `boot_test.sh:23` defaults `SERIAL_LOG` to `mktemp` and `:35` deletes it. Do NOT record the cause as "unknown" any more, and do NOT close it.
-**What is and is not established (DDR-988 sec.8):** a real cross-CPU lwIP
-use-after-free exists and is fixed — its artefact is a `#GP` with
-`RAX=0xDDDDDDDDDDDDDDDD` (kheap poison) in `tcp_output`, reached from
-`sys_sock_connect`. That OPEN-1's `#PF` is the SAME defect is NOT established:
-DDR-985 refuted its own Claim A, and DDR-987 sec.5 says the gate suite cannot
-prove the fix at a ~1/20 base rate. A green CI suite is therefore NOT evidence
-that OPEN-1 is closed — only a 20x `smoke-surfdestroy` campaign on the merged
-tip is, and the two-CPU `connect`/`close` hammer probe is the only thing that
-could positively prove the lwIP fix. It is still unwritten. |
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | **At least one instance is a ring-0 `#PF` — DDR-985.** Measured **19/20** local (kernel `d31b4023b0f74d06` @ `46ece3f`). Run 16: `component: NEXUS isr` / `exception: #PF page fault`, after `[sfs] 64K write/read byte-exact OK`. **NOT the DDR-981 signature** — no `[apfreeze]` and no `compl wait timeout` in any of the 20 runs, so do not read it as a B#3 recurrence. | **STILL OPEN. The lwIP defect is fixed and PROVEN; OPEN-1 is NOT closed by it.** DDR-987/988 fixed a real cross-CPU lwIP use-after-free (`g_net_lock`), and DDR-990's two-CPU hammer POSITIVELY proves that fix: 40,000 connect/close pairs clean on the fixed kernel, `#GP` at `tcp_new_port+0x2d` with `RDI=0xDDDDDDDDDDDDDDDD` in <1000 iterations on the reverted one — mutation-checked both ways. **But DDR-990 §12 established that this does not close OPEN-1.** OPEN-1 is at least THREE signatures: (1) the CI route — a HANG in `sys_read`/`vfs_read` with **no panic at all**, (2) the local `#PF` (1/20, DDR-985), (3) the hammer's `#GP`. The hammer closed route 3, which was never OPEN-1's own artefact, and **no panic-based detector addresses route 1** — a hang prints nothing to detect. A green CI suite is not evidence here and never was: at a ~1/20 base rate a clean 20-run campaign has ~64% power (0.95²⁰ = 0.358), so a clean sweep happens one time in three even if the defect is untouched. Closing route 1 needs an instrument for a silent hang, which does not yet exist. |
 | ~~OPEN-2~~ | ~~`smoke-resched`, `smoke-blkmq-trace`, `smoke-msixap`, `smoke-crosswake` intermittent~~ | **CLOSED — DDR-981**, via B#3. DDR-977 §8.2 had already measured the whole chain in one `smoke-resched` capture (frozen AP → unit 0's MSI-X routed at it → two `compl wait timeout`s → `[blk] multi-inflight FAIL done=0x0` → `[smp] blk integrity FAIL`); DDR-981 names the cause of the freeze and fixes it. These never failed on a scheduler defect and DDR-863 was the wrong lead. | **CLOSED for the block-touching gates.** NOT claimed for `smoke-crosswake`/`smoke-msixap`, which do no block I/O and could fail for their own reasons — the same reservation DDR-977 §8.2 made, kept. `[apfreeze]` is now in `GLOBAL_FORBIDDEN`, so a recurrence names itself instead of hiding in a flake. Reopen on the first `[apfreeze]` line in CI. |
 | **OPEN-10** | `btree churn FAIL` during unrelated SMP gates | **ROOT-CAUSED — the create-then-init race, DDR-964.** `rc=-1` is `-EPERM` (`EPERM==1`) from `cap_ok(cap, CAP_FS_WRITE)`: `sched_create()` made a thread runnable before its caller minted the capability into `->arg`, so a thread picked early ran with `CAP_NULL`. NOT a separate defect from the row at §CURRENT BUILD STATE — this symptom **is** OPEN-10 and DDR-964 is its fix; the two rows contradicted each other and this one was the stale half. | **FIXED (DDR-964), pending CI promotion evidence.** `smoke-sfs-btree-smp4` stays excluded until greens accumulate. |
 | **OPEN-11** | `smoke-sha256`, `smoke-rqstress-liveness` | Scratch LBA 1500 overwrote kernel image | **CLOSED — DDR-831.** Do not revisit. |
@@ -361,8 +352,13 @@ could positively prove the lwIP fix. It is still unwritten. |
 
 ## CURRENT BUILD STATE
 
-- **Gate count: 149** assigned across **10** shards, **7** excluded (`ci-shard-check`,
-  verified 2026-08-23; shard matrix widened 6 -> 10, makespan 38.6 -> 20.8 min; 147 -> 148 smoke-iso-userspace DDR-972 -> 149 smoke-fat32-multicluster DDR-973). The "105" this line used to carry was long stale.
+- **Gate count: 152** assigned across **10** shards, **7** excluded — measured by
+  `make ci-shard-check` on 2026-08-24, not carried forward. This line read "149"
+  (and, before that, "105"); both were stale. Shard matrix widened 6 -> 10,
+  makespan 38.6 -> 20.8 min. Recent additions: 147 -> 148 `smoke-iso-userspace`
+  (DDR-972), 149 `smoke-fat32-multicluster` (DDR-973), then `smoke-nethammer`
+  (DDR-990), `smoke-modkeys` (DDR-991), `smoke-superkey` (DDR-992) -> 152.
+  **Re-measure rather than increment this** — it has been wrong three times.
 - **NSI max: 96** (`SYS_KEY_POLL`, DDR-991). **Next free: 97.** Table size: 128.
   Measured from `kernel/syscall/syscall.h:168-170`. This line previously said 93
   and §INV.14 said 74 — both wrong, and the older note claiming "§INV.14 was
@@ -478,7 +474,7 @@ armed; the issue reopens on the first `PRADYOS_AGENT_WITNESS_WAIT` line.
 | Kernel W^X identity-alias removal | `vmm_protect_kernel()` — remove identity alias (DDR-757 residual) | `smoke-wx` |
 | `#MC` machine-check handler | Panic with full register state | `smoke-mc` |
 | KASLR | After W^X is CI-green | `smoke-kaslr` |
-| Scheduler timed-block | `sched_block_on_timeout(&lk, deadline)` — implement AFTER g_ticks is CI-proven reliable | `smoke-schedtimeout` |
+| ~~Scheduler timed-block~~ | **ALREADY BUILT — DDR-955.** The name in this row is a placeholder that never existed; the shipped call is **`sched_block_timeout(spinlock_t *lk, volatile int *done, uint64_t timeout_ticks)`** (`sched.c:1434`), same locking contract as `sched_block_on` (called with `lk` held, returns with it held), returning `-ETIMEDOUT`. The expiry sweep is in `sched_tick` (`sched.c:1287`) and `struct tcb` carries `block_deadline` + `wake_timed_out`. Four callers: `virtio_blk.c:232` and `:288`, `bcast.c:78`, `ipc.c:65`. **Do NOT rebuild.** The genuinely unbounded wait is elsewhere and is now tracked as DDR-994: `mnt_lock` (`vfs/vfs.c:25`) is a bare `while (exchange(&m->busy,1)) yield();` with no deadline at all — DDR-981 fixed the interrupt masking inside `yield()` but never bounded the spin, which is exactly OPEN-1 route 1's signature (cpu busy, thread never progresses, nothing printed). | `smoke-schedtimeout` (unwritten; the four call sites are gated by their own gates) |
 | Per-CPU `sched_exit` / zombie reap under full SMP | — | existing SMP gates |
 | `smoke-rqstress` determinism | 20× green before moving on | `smoke-rqstress` 20× |
 | Spinlock contention instrumentation | `lock_stat` hold-time + contention counts | `smoke-lockstat` |
