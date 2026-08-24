@@ -7364,3 +7364,73 @@ The paired-modifier finding in the same review was REAL and is DDR-993.
 Group E remainder (Ctrl+Alt+T, per-window restore, maximize at real geometry,
 resize handles all edges, `SURF_EV_CLOSE`, OKLab horizon, vDSO reader,
 `PTE_SW_SHARED` audit), then Group F's 11 unbuilt agents.
+
+---
+
+## Checkpoint — 2026-08-24 ~09:20 UTC, tip `858a721`
+
+### Shipped this block (all pushed, tree clean)
+
+| DDR | What | State |
+|---|---|---|
+| 993 | paired-modifier aggregate: `g_mods` DERIVED from per-side state | gated (kernel arm), mutation-checked |
+| 994 | yield-stall detector; **§8** adds RESOLVED + un-forbids the sentinel | gated, **fired in CI twice** |
+| 995 | Alt+Tab bound via NSI 96; bare Tab returned to applications | gated (3 arms), mutation-checked both ways |
+| 996 | **TCB freed while still linked on a runqueue** — ring-0 `#GP` | gated, mutation-checked (leaked 16 vs 0) |
+
+### The one open question, and how it gets answered
+
+DDR-994's detector fired on **two** CI captures, same site:
+
+| gate | shard | pid | spins | ticks |
+|---|---|---|---|---|
+| `smoke-vault` | 9 | 45 | 68,981 | 500 |
+| `smoke-acc`   | 2 | 43 | 52,491 | 500 |
+
+Both exactly on the threshold, both after heavy SFS activity, ~105-138 spins/tick
+against a measured turnover of ~255/tick. **That fits a deadlock and heavy
+legitimate contention equally well, and the opening line alone cannot separate
+them.** Do not read these as OPEN-1 confirmed.
+
+`yield_stall_done()` (be2f824) now emits `[yieldstall] RESOLVED site=... spins=...
+ticks=...`. **The next CI run decides it:**
+
+- opening line **with** a RESOLVED partner -> the wait was slow, not stuck. Not
+  OPEN-1; raise `YIELD_STALL_TICKS` and move on.
+- opening line **with no** partner -> a genuine hang. Root-cause it, and re-add
+  `'[yieldstall]'` to `GLOBAL_FORBIDDEN` in `tools/qemu_runner/boot_test.sh`
+  (the rationale comment there says exactly this).
+
+The real stall does NOT reproduce locally — it is CI/TCG-only. The instrument
+itself is verified end-to-end by `smoke-yieldstall` arm B, which shows both
+halves on a deliberately armed stall (opened t=500, RESOLVED t=694).
+
+### Recorded, NOT diagnosed — a third signature
+
+`smoke-invariants` (shard 8, `preempt=1212` frozen t=7000..11500) and
+`smoke-poweroff` (shard 5, `preempt=1509` frozen t=10500..11500). Both have **no
+`[yieldstall]` line**, so this is not the `mnt_lock` stall. Shared feature: a
+frozen `preempt` counter while `curpid` keeps changing. Both pass locally. No
+named mechanism -> no fix (§NON-NEGOTIABLE 3). DDR-994 §8.4.
+
+### Corrections worth carrying forward
+
+- `switch_wait_offcpu` (`sched.c:479`) is a **FIFTH** unbounded yield-free spin.
+  DDR-994 §6 said four. Found by hanging a boot on it.
+- **A mutation result without a distinct kernel hash is not a result.** DDR-996's
+  first mutant "survived" only because removing the code left `prev` unused,
+  `-Werror` failed the build, and the previous binary was still on disk.
+- Kernel heap and kstacks are identity-mapped **LOW** (`RSP=0x07DABDD8` in the
+  panic). Do not write high-half pointer checks.
+
+### Next, in order
+
+1. Act on the RESOLVED verdict above — it is the gating question for OPEN-1.
+2. Group E remainder: Ctrl+Alt+T, per-window restore from dock, resize handles
+   all edges, `SURF_EV_CLOSE`. All compositor-only, low risk.
+3. **Maximize at real display geometry is NOT low risk** — the 512 cap is
+   `SURFACE_DIM_MAX` in `sys_surface.c:17` (buffer <= 1 MiB). A real display is
+   ~3 MiB/surface: a PMM budget change touching many gates. Size it before
+   starting; do not treat it as a compositor tweak.
+4. `v1.0.0` stays UNTAGGED. OPEN-1 is not closed, and DDR-990 §12 established
+   the hammer cannot close it.
