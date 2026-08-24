@@ -711,10 +711,18 @@ Every sentinel is present and no forbidden one is known to have fired, yet CI
 reported FAIL. **I do not know why, and I am not going to guess again** — this
 DDR already carries one retraction from inferring past the evidence.
 
-The missing datum is precise and small: `boot_test.sh` prints a `[smoke] FAIL —
-<reason>` line immediately before `[boot_test] FAIL — capture kept`. That line
-was NOT inside the tail window fetched from the CI job. **Fetch it.** It names
-the failing condition directly and ends this line of speculation in one read.
+The missing datum was thought to be a `[smoke] FAIL — <reason>` line. **It is
+not: that line does not exist in the CI output.** A 150-line window covering
+everything from `NETHAMMER_PROG i=8000` to the end contains no `[smoke] FAIL`
+AND no `[smoke] PASS` — `boot_test.sh` went straight to
+`[boot_test] FAIL — capture kept` with no verdict printed. A passing local run
+DOES print `[smoke] PASS`.
+
+So the failure is not a sentinel mismatch at all — the harness never reached its
+verdict. **The file to read is `qemuerr-*.log.fail-*`**, which `boot_test.sh`
+keeps beside the serial capture precisely for this: it holds QEMU's own stderr.
+A QEMU that died or was killed before the verdict explains every observation
+here — all sentinels present, no reason line, capture kept.
 
 Until it is read, the only defensible statement is: `smoke-nethammer` fails
 intermittently in CI, passes locally, is not caused by the hammer probe, not by
