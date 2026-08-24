@@ -2726,16 +2726,10 @@ smoke-rqfree: $(IMG) fat-image sfs-image
 
 smoke-yieldstall: $(IMG) fat-image sfs-image
 	@mkdir -p build/gatelogs
-	@# SKIP_GLOBAL_FORBIDDEN: `[yieldstall]` is in GLOBAL_FORBIDDEN so a stall in
-	@# ANY other gate reddens it and names itself — that is the whole point of the
-	@# sentinel. But THIS gate emits it deliberately, twice, and would therefore
-	@# fail itself. The exemption costs this one 7 s boot its global coverage;
-	@# what remains is not nothing — boot_test.sh still requires 'NEXUS KERNEL OK'
-	@# plus both EXTRA_SENTINELs, so a panic or a wedge here still fails by
-	@# absence. Narrowing the exemption to a single pattern would need a
-	@# per-gate allow-list boot_test.sh does not have; not worth inventing for
-	@# one gate days from a deadline.
-	SKIP_GLOBAL_FORBIDDEN=1 \
+	@# DDR-994 §8: `[yieldstall]` is NO LONGER in GLOBAL_FORBIDDEN (see
+	@# boot_test.sh for why — one 5 s wait is not yet shown to be fatal). This
+	@# gate deliberately PROVOKES a stall, so it asserts the sentinel is
+	@# PRESENT; nothing about it depends on the global list any more.
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/yieldstall.log KEEP_SERIAL=1 \
 	TIMEOUT_S=120 QEMU_PROBES=yieldstall \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_YIELDSTALL_RELEASED\nPRADYOS_YIELDSTALL_WAITER_DONE')" \

@@ -37,6 +37,9 @@ static void mnt_lock(struct vfs_mount *m) {
         if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
             yield_stall_note("mnt_lock", n, g_ticks - t0, &noted);
     }
+    /* DDR-994 §8: we got in. If we had reported a stall, say it ENDED — a slow
+     * wait and a stuck one are indistinguishable from the opening line alone. */
+    yield_stall_done("mnt_lock", n, g_ticks - t0, &noted);
 }
 static void mnt_unlock(struct vfs_mount *m) {
     __atomic_store_n(&m->busy, 0, __ATOMIC_RELEASE);

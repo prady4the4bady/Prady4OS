@@ -157,6 +157,8 @@ static volatile uint32_t g_ub_rqon_skip;  /* rq_push: rq_on was already set */
  * arises. A gate asserting only "no panic" would be green with or without the
  * fix (DDR-988 §9), so smoke-rqfree asserts this is NON-ZERO under a spawn/exit
  * storm. In steady state on a fixed kernel it simply counts caught corpses. */
+/* DDR-994 §8: stalls reported that have NOT yet resolved. */
+volatile uint32_t g_yieldstall_open;
 volatile uint32_t g_rqfree_caught;
 /* DDR-996 §5 arm B: freed TCBs still referenced by a runqueue. MUST be 0. */
 volatile uint32_t g_rqfree_leaked;
@@ -1484,6 +1486,7 @@ void yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *not
     if (*noted)
         return;
     *noted = 1;
+    __atomic_add_fetch(&g_yieldstall_open, 1, __ATOMIC_RELAXED);
     struct percpu *pc = this_cpu();
     uint64_t fl = console_line_lock();
     kputs("[yieldstall] site=");   kputs(site);
@@ -1495,6 +1498,32 @@ void yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *not
     kputs(" ticks=");              kputdec(ticks);
     kputs(" pid=");                kputdec(current_thread ? current_thread->pid : 0);
     kputs(" cpu=");                kputdec(pc ? pc->cpu_idx : 0);
+    kputs("\r\n");
+    console_line_unlock(fl);
+}
+
+/* DDR-994 §8 — did the wait actually END?
+ *
+ * The first CI capture (run 32702146725, smoke-vault: `site=mnt_lock
+ * spins=68981 ticks=500 pid=45`) proved the reporter fires on a real 5-second
+ * wait — but it CANNOT distinguish a genuine deadlock from heavy legitimate
+ * contention, and that distinction is the whole question. mnt_lock is held
+ * across real block I/O, the SFS self-test cycles it dozens of times, and CI
+ * runs under TCG, so a long-but-finite wait is entirely plausible. 68,981 spins
+ * over 500 ticks is ~138/tick against a measured turnover of ~255/tick: the
+ * thread is being scheduled and spinning, which fits BOTH readings.
+ *
+ * So the waiter now says when it got in. A `RESOLVED` line means the wait was
+ * slow, not stuck — the opposite conclusion from silence, and unavailable from
+ * a one-shot report. `g_yieldstall_open` is the count that never resolved. */
+void yield_stall_done(const char *site, uint32_t spins, uint64_t ticks, int *noted) {
+    if (!*noted)
+        return;                      /* never crossed the threshold: say nothing */
+    __atomic_sub_fetch(&g_yieldstall_open, 1, __ATOMIC_RELAXED);
+    uint64_t fl = console_line_lock();
+    kputs("[yieldstall] RESOLVED site="); kputs(site);
+    kputs(" spins=");                    kputdec(spins);
+    kputs(" ticks=");                    kputdec(ticks);
     kputs("\r\n");
     console_line_unlock(fl);
 }

@@ -237,6 +237,7 @@ void        sched_block(void);                                  /* block current
 #define YIELD_STALL_SPINS 20000u  /* enough spins to mean "not just contended" */
 #define YIELD_STALL_TICKS 500u    /* ...AND 5 s at 100 Hz. Neither alone suffices. */    /* ...AND 5 s at 100 Hz. Neither alone suffices. */
 void        yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *noted);
+void        yield_stall_done(const char *site, uint32_t spins, uint64_t ticks, int *noted);
 
 void        sched_block_on(spinlock_t *lk);
 int         sched_block_timeout(spinlock_t *lk, volatile int *done,

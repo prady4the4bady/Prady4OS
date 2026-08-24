@@ -62,6 +62,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
                     if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
                         yield_stall_note("pipe_write", n, g_ticks - t0, &noted);
                 }
+                yield_stall_done("pipe_write", n, g_ticks - t0, &noted);
             }
             if (pipe_readers(e->pipe) <= 0) {
                 /* DDR-805: no readers left, so this write can never complete.
@@ -280,6 +281,7 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
                         if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
                             yield_stall_note("pipe_read", n, g_ticks - t0, &noted);
                     }
+                    yield_stall_done("pipe_read", n, g_ticks - t0, &noted);
                 }
             long r = pipe_read(e->pipe, kbuf, chunk);
             if (r <= 0)

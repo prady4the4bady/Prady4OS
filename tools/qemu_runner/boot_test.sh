@@ -340,11 +340,26 @@ early_exit_eligible=0
 # see it. That gap does not bite where it matters -- every SMP and block gate the
 # freeze actually reddens already declares a FORBIDDEN_SENTINEL and therefore
 # burns its full window.
+# DDR-994 sec.8 -- `[yieldstall]` is deliberately NOT in this list.
+#
+# It was added here when the detector shipped, on the assumption that any
+# 5-second yield-spin is pathological. The first real capture (run 32702146725,
+# smoke-vault: `site=mnt_lock spins=68981 ticks=500 pid=45`) shows that
+# assumption is not yet established: mnt_lock is held across real block I/O, the
+# SFS self-test cycles mount/umount dozens of times, and CI runs under TCG, so a
+# long-but-FINITE wait is entirely plausible. 138 spins/tick against a measured
+# turnover of ~255/tick fits a deadlock and heavy contention equally well.
+#
+# Forbidding it therefore reddens gates on a signal that has not been shown to
+# be fatal -- inventing a failure rather than detecting one. The detector now
+# emits a matching `[yieldstall] RESOLVED` line (sched.c), so a stuck wait is
+# distinguishable from a slow one by the ABSENCE of that line. Re-add
+# `[yieldstall]` here only once a capture shows an OPENED stall with no RESOLVED
+# partner -- that is a hang, and then it belongs in this list.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
     '[apfreeze]' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
     'FAT32MC FAIL' 'MODKEYS FAIL' 'NETHAMMER FAIL' \
-    '[yieldstall]' \
     'FSRM FAIL' 'KILL FAIL' 'ROOTMOUNT FAIL' 'SETNAME FAIL' 'SFSROOT FAIL' \
     'SURFDESTROY FAIL' 'SYSINFO FAIL' 'TIME FAIL' \
     'PRIVACYNET FAIL' 'PRADYOS_SOVEREIGN_BYPASSED' \

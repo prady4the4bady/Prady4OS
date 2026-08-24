@@ -240,3 +240,71 @@ that one 7-second boot loses global-list coverage. What remains is not nothing �
 panic or a wedge in this gate still fails it by absence. A narrower exemption
 would need a per-gate allow-list that `boot_test.sh` does not have, which is not
 worth inventing for one gate days from a deadline.
+
+---
+
+## 8. FIRST CAPTURE — the detector fired, and it corrects this DDR
+
+CI run 32702146725, shard 9, `smoke-vault`, commit `70081d8`:
+
+```
+[sfs] umount ctx=0x07C2A000 ... live=0
+[sfs] mount  ctx=0x07C2A000 ... live=1      (x many — the SFS self-tests)
+[sfs] persistent root provisioned
+[hb] t=3000 ... rqdepth=8 curpid=81
+[yieldstall] site=mnt_lock spins=68981 ticks=500 pid=45 cpu=0
+```
+
+**§6's precommitment was: "if the next occurrence prints no `[yieldstall]` line
+the hypothesis is refuted."** It printed, and it named `mnt_lock` — the site this
+DDR singled out as sitting directly on the `vfs_read` path where OPEN-1's CI
+captures hang. A thread waited more than five seconds on a mount mutex while the
+SFS self-test cycled that same context.
+
+### 8.1 What this does NOT establish — and the one-shot report is why
+
+The opening line **cannot distinguish a deadlock from heavy legitimate
+contention**, and that is exactly the question:
+
+- `mnt_lock` is held across real block I/O.
+- The self-test cycles mount/umount dozens of times in a row.
+- CI runs under TCG, where each of those is slow.
+- 68,981 spins over 500 ticks is ~138/tick against §6's measured turnover of
+  ~255/tick — the waiter is being scheduled and spinning normally. That fits a
+  deadlock and a slow-but-finite wait *equally well*.
+
+A long wait that ENDS is not OPEN-1. Silence after the report could mean either
+"still stuck" or "got in one tick later and said nothing", and the instrument as
+shipped could not tell them apart — a gap in the design, not in the capture.
+
+**Fix: the waiter now reports when it gets in.** `yield_stall_done()` emits
+`[yieldstall] RESOLVED site=... spins=... ticks=...`, and `g_yieldstall_open`
+counts reports with no matching resolution. An opened stall with **no RESOLVED
+partner** is a hang; one with a partner was merely slow. Wired at all three
+instrumented sites.
+
+### 8.2 `[yieldstall]` REMOVED from GLOBAL_FORBIDDEN
+
+It was added there when the detector shipped, on the assumption that any 5 s
+yield-spin is pathological. This capture shows that assumption is not
+established, and while it stands, the sentinel reddens gates on a signal not
+shown to be fatal — inventing failures rather than detecting them. That is a
+regression introduced by DDR-994 itself, and `smoke-vault` is the gate it broke.
+
+Re-add it only once a capture shows an OPENED stall with no RESOLVED partner.
+The rationale is recorded in `boot_test.sh` beside the `[apfreeze]` note so the
+next session does not "restore" it as an oversight.
+
+### 8.3 A fifth unbounded spin, not in §6's count
+
+`switch_wait_offcpu` (`sched.c:479`) is a fifth unbounded yield-free spin and is
+not one of the four this DDR instrumented. It is not ring-3 reachable, so it is
+outside OPEN-1 route 1's scope — but §6's inventory said "four", and four is
+wrong. Found by hanging a boot on it (DDR-996 §8.3).
+
+### 8.4 Unrelated, recorded not diagnosed
+
+Shard 8 of the same run failed `smoke-invariants` with a different signature:
+`rqdepth=14` and `preempt=1212` frozen across t=7000..11500, INIT/PRISM
+alternating, **no `[yieldstall]` line**. So it is not a `mnt_lock` stall. Passes
+locally on the tip. No named mechanism, so no fix — §NON-NEGOTIABLE 3.
