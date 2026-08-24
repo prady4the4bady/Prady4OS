@@ -478,3 +478,23 @@ The sentinel can only fire on a boot that lives long enough to emit a heartbeat
 acceptable — every observation of the inflation so far came from a long boot
 (t=11500 locally, t=23500 in CI shard 3) — but it means a green short gate is
 not evidence of absence.
+
+
+### 9.9 The sentinel rode a green suite (2026-08-24)
+
+`31535f2` — the commit that adds `[vrinflate]` to `GLOBAL_FORBIDDEN` — completed
+**green**. The sentinel stayed silent across a full suite: no false positives,
+no shard reddened by it.
+
+That was the specific risk worth watching, and it is worth naming why. Earlier
+the same day I added `[yieldstall]` to the same list on a signal never shown to
+be fatal, and it reddened shards 2, 5, 8 and 9 — inventing failures rather than
+detecting them, and costing a cycle to diagnose and revert. The difference is
+not luck: `[yieldstall]` fired on behaviour that is merely *slow*, while
+`[vrinflate]` fires only on a value that the §9.4 fix makes **impossible**, with
+a bound measured at ~4e6x the observed healthy value rather than guessed.
+
+Branch state: green on four consecutive commits — `364286e`, `e4c71e8`,
+`8d765e6`, `31535f2`. Note §INV.15 still applies for promotion: three greens
+must be on the SAME tip sha, so a consistently-green branch is not itself a
+promotion credential.
