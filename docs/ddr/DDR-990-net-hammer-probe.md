@@ -236,3 +236,28 @@ is the one to watch for, and `[hb]`'s `net_skip`/`net_rxdrop` counters (DDR-988
 **Recommendation on the tag:** this closes the DDR-987 question the hold was
 waiting on, but it does not close OPEN-1 by itself, and the operator's hold was
 placed on the `#PF`. That decision stays with the operator.
+
+## 11. Confidence campaign on the fixed kernel
+
+`smoke-nethammer` x5, kernel `2dce56527cd84d5c`: **5/5 pass, 0 fail.**
+Cumulative: **200,000 connect/close pairs** across two CPUs, zero faults.
+
+A hash note, because it matters and would otherwise look like an inconsistency:
+§9's mutation pair was `abb6b8f582727b6e` (fixed) vs `ad3686405d4912d0`
+(mutant). This campaign ran on `2dce56527cd84d5c`, which is `abb6b8f5` **plus
+the per-instance self-assertion added to the probe** after the mutation check —
+a ring-3 change inside `nethammer.c` only. No kernel or lwIP code differs
+between `abb6b8f5` and `2dce5652`, so the mutation result carries over intact.
+The self-assertion was added because `EXTRA_SENTINEL` can only test that
+`conn_err=0` appears *somewhere*, which one clean instance would satisfy while
+the other errored out.
+
+**What 5 runs buy here, and why it is not the 20 the §NON-NEGOTIABLE 2 rule
+asks of intermittent gates.** That rule exists for gates whose failure is
+probabilistic per boot; this one's is not. The mutant faults in <1000 iterations
+of 20,000, i.e. the detector fires in essentially every run where the defect is
+present — §9 is the measurement of that. So repetitions here are not raising
+the chance of *catching* a 1/20 event; they are guarding against a rarer
+interleaving than the one the mutant exposes. 5 x 40,000 pairs is a reasonable
+budget for that, and the gate runs on every CI shard-3 boot thereafter, which is
+where the long-run sampling actually accumulates.
