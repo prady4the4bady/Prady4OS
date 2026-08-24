@@ -261,3 +261,40 @@ the chance of *catching* a 1/20 event; they are guarding against a rarer
 interleaving than the one the mutant exposes. 5 x 40,000 pairs is a reasonable
 budget for that, and the gate runs on every CI shard-3 boot thereafter, which is
 where the long-run sampling actually accumulates.
+
+## 12. OPEN-1 is under-specified — it is at least THREE signatures, not one
+
+Checking `docs/NEXT_TASK_QUEUE.md`'s OPEN-1 entry against DDR-985 turned up
+something that changes what "closing OPEN-1" even means. DDR-985 §-table and its
+line 136 distinguish **two** failure routes itself, and this DDR adds a third:
+
+| # | route | artefact | where seen |
+|---|---|---|---|
+| 1 | **hang**, no panic at all — stops after `SYSFSTAT OK`, next expected is `SYSREAD OK`, i.e. inside `sys_read` -> `vfs_read` -> SFS | *no exception* | CI |
+| 2 | ring-0 **`#PF`** page fault, much later, after `[sfs] 64K write/read byte-exact OK` | `#PF` | local, 1/20 (DDR-985) |
+| 3 | ring-0 **`#GP`**, `RAX`/`RDI` = `0xDDDDDDDDDDDDDDDD` in `tcp_output`/`tcp_new_port` | `#GP` | DDR-987 capture; reproduced on demand by this probe's mutant (§9) |
+
+"OPEN-1" names a *gate symptom* — `smoke-surfdestroy` misses
+`PRADYOS_SURFDESTROY_CHURN_OK` — and at least three distinct mechanisms can
+produce that symptom. Treating it as one defect is what let DDR-985's Claim A be
+written in the first place, and it is why the "is it fixed?" question keeps
+resisting a clean answer.
+
+**Consequence for the release decision, stated plainly:**
+
+- Route 3 is now **positively closed** (§9): proven present without the lock,
+  proven absent with it, on demand rather than by sampling.
+- Route 2 has **not reproduced in 20/20** on the fixed kernel (§1) — evidence,
+  at ~64% power, not proof.
+- Route 1 is a **hang with no panic**, so neither this probe nor any panic-based
+  detector addresses it, and `20/20` says only that it did not recur in twenty
+  boots. The queue's own note says to re-check whether it still reproduces
+  before instrumenting; §1's campaign is that re-check, and it did not.
+
+So the hammer does **not** close OPEN-1, and no amount of hammering could:
+it is the wrong instrument for a hang. What would settle route 1 is a watchdog
+on the `SYSFSTAT OK` -> `SYSREAD OK` transition, which does not exist. That is
+the honest next instrument, and it is not built.
+
+**Do not record OPEN-1 as closed on the strength of §9.** It closes one of three
+routes, and the one it closes is the one that was never OPEN-1's own artefact.
