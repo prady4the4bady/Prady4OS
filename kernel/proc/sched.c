@@ -323,22 +323,32 @@ void sched_vr_sample(uint32_t *cur_pid, uint64_t *cur_vr, uint32_t *cur_pk,
     }
     /* First READY entry on any queue: the thread the fair picker would take and
      * the FIFO picker is passing over. That is the starved side of §4. */
+    /* LOCK-FREE, and bounded — deliberately, matching sched_rq_depth() right
+     * below, whose comment gives the reason: "a corrupt list must not hang the
+     * ISR". This runs from the heartbeat, i.e. in the timer interrupt handler.
+     *
+     * The first draft took spin_lock_irqsave(&q->lock) here. Cross-CPU that
+     * only adds ISR latency (rq_push holds the lock with interrupts off, so a
+     * same-CPU self-deadlock is not possible) — but it means the timer ISR can
+     * block on a lock held by a CPU that is itself wedged, which is EXACTLY the
+     * condition this instrument exists to observe. A diagnostic that can hang
+     * inside the fault it is diagnosing is worse than no diagnostic.
+     *
+     * The cost of dropping the lock is a possibly-torn read: a stale pid or a
+     * vruntime from a thread being unlinked concurrently. For a per-500-tick
+     * sample compared against a baseline that is an acceptable trade, and it is
+     * the trade the neighbouring counter already makes. */
     for (uint32_t c = 0; c < PERCPU_MAX; c++) {
-        struct rq *q = &g_rq[c];
-        uint64_t fl = spin_lock_irqsave(&q->lock);
-        struct tcb *e = q->head;
+        struct tcb *e = g_rq[c].head;
         for (uint32_t n = 0; e && n < 4096u; n++) {
             if (e->state == THREAD_READY && e != current_thread) {
                 *head_pid = e->pid;
                 *head_vr  = e->dbg_vruntime;
                 *head_pk  = e->dbg_picks;
-                break;
+                return;
             }
             e = e->rq_next;
         }
-        spin_unlock_irqrestore(&q->lock, fl);
-        if (*head_pid)
-            return;
     }
 }
 

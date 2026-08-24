@@ -1,7 +1,8 @@
 # DDR-989 — `smoke-evresize` / `smoke-agentpanel`: vruntime is sampled, so a sub-tick yielder is never charged
 
-**Status:** root-cause HYPOTHESIS with a named mechanism. Fix **not implemented**;
-**§4's measurement IS implemented** (2026-08-24) — see §7.
+**Status:** §4 MEASURED. **The §3 sampling hypothesis is REFUTED by its own test.**
+Starvation mechanism now measured (§8); the cause of the trigger is NOT yet known.
+Fix still **not implemented** — deliberately. Locally reproducible as of 2026-08-24.
 **Artefacts:** 2 independent CI captures (below). Never reproduced locally.
 **Supersedes nothing.** Relates: DDR-947 (the `preempt=`/`supp=` procedure),
 DDR-968 (the smoke-agents witness), task #26.
@@ -205,3 +206,93 @@ The stall has never reproduced locally and did not here either (`smoke-evresize`
 passes locally and finishes before the first heartbeat, so it emits no sample at
 all). The data therefore comes from the next CI recurrence. Nothing is fixed
 until it arrives.
+
+
+---
+
+## 8. §4 ran. The hypothesis this DDR was built on is REFUTED.
+
+**And the stall reproduced LOCALLY** (`smoke-evresize`, kernel
+`48c6e69484e2683f`), which §1 recorded as never having happened. That alone
+changes the economics of everything below — it no longer needs a CI lottery.
+
+### 8.1 The data
+
+Consecutive heartbeats, one boot, chronological:
+
+```
+curvr=1819383            curpk=4534     hpid=18  headvr=1821743             headpk=13
+curvr=13510798893996098  curpk=1233     hpid=0   headvr=18014398511325305   headpk=4460
+curvr=17676247155079426  curpk=29818    hpid=40  headvr=18014398511337535   headpk=1447
+curvr=17676247148374979  curpk=125087   hpid=40  headvr=18014398511337535   headpk=1447
+...                                              headvr=18014398511337535   headpk=1447
+```
+
+### 8.2 Applying §4's rule, unmodified
+
+§4: *"Refutes: if 18/42's vruntime advances normally and is simply lower, the
+cause is weighting or entry clamping (H1/H2), not sampling — an opposite fix."*
+
+`curvr` **advances** across every sample and is simply **lower** than `headvr`.
+It is not frozen. **That is §4's refutation clause, met exactly.** The §3
+sampling story — a sub-tick yielder never charged — does not describe this boot,
+and the §5 candidate fixes derived from it must not be applied. Writing the
+refutation criterion down before looking is what makes this a result rather than
+a rationalisation.
+
+The starvation itself is real and confirmed: `headpk` is **pinned at 1447**
+across every subsequent sample while `curpk` climbs past 1.7 million. Pid 40 is
+never picked. `rqdepth=10`.
+
+### 8.3 The mechanism that IS measured
+
+The first sample is **healthy**: `curvr=1,819,383`, `headvr=1,821,743` — within
+0.13%, exactly the §7 baseline shape. Between sample 1 and sample 2 the whole
+vruntime space jumps by **ten orders of magnitude**, to ~1.8e16 ≈ **2^54**. It
+does not creep there; it arrives in one step.
+
+`sched_charge_elapsed` accumulates `((d >> 10) * 1024) / w` where `d` is a **TSC
+cycle delta**, so vruntime ~= cycles/1024 at default weight. `curvr = 1.77e16`
+implies ~1.8e19 cycles charged in a single event — that is 2^64-scale, i.e. one
+charge with a `d` near the full width of the counter, not real elapsed time.
+
+`g_dbg_floor` is a monotonic maximum (`sched.c:257-258`), and threads are clamped
+to it on create and wake (`:138-142`). So one poisoned charge raises the floor to
+~2^54 permanently, and thereafter:
+
+- pid 40 sits at **exactly** the floor, `headvr=18014398511337535`, unchanged
+  forever — it is never charged because it is never picked;
+- the running threads sit ~3.4e14 **below** it, having been clamped at a slightly
+  earlier floor;
+- `fair_candidate` picks the LOWER vruntime, so the incumbents win every time;
+- at the observed ~8e7 per 500 ticks, closing a 3.4e14 gap needs ~2 million
+  ticks. Never, in gate terms.
+
+**That is the starvation, and it is now measured rather than hypothesised.**
+
+### 8.4 What produced the poisoned charge is NOT established
+
+Two obvious candidates were checked and **both are refuted** — recorded so they
+are not re-tried:
+
+- **`dbg_vruntime` uninitialised** (§NON-NEGOTIABLE 10). No: it is set to
+  `g_dbg_floor` at `sched.c:1010`.
+- **`vt_in` uninitialised.** No: set to 0 at `sched.c:1007`, and
+  `sched_charge_elapsed` returns early on `!vt_in`, so the first charge is
+  skipped by design.
+
+A remaining hypothesis, NOT established and not to be acted on without
+measurement: `vt_in` is stamped on one CPU (`sched.c:560`) and differenced on
+another (`:253`), and TSCs need not agree across vCPUs under TCG. The `now >
+vt_in` guard only rejects a *backwards* delta; a forwards jump of arbitrary size
+passes straight through. Confirming that needs the raw `d` and the two CPU ids
+at the charge, which is one more instrument — the same discipline as §4.
+
+### 8.5 Consequence for the sibling failures
+
+DDR-994 §8.4 catalogued a "preempt-frozen" signature across `smoke-evresize`
+(shard 0), `smoke-invariants` (shard 8) and `smoke-poweroff` (shard 5). The
+evresize instance is now explained: preemption is not broken, the fair picker is
+correctly choosing the same low-vruntime thread every time. Whether the other two
+share this cause is **not** established — they were not sampled. Do not merge
+them into this row without their own `curvr`/`headvr` numbers.
