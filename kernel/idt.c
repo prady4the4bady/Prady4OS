@@ -347,6 +347,21 @@ static void timer_tick(struct regs *r) {
           sched_rq_depth(&rd, &rc2);
           kputs(" rqdepth="); kputdec(rd);
           kputs(" rqcpus=");  kputdec(rc2); }
+        /* DDR-989 §4: the confirming/refuting measurement. cur_* is the thread
+         * holding the CPU, head_* the first READY thread it is passing over.
+         * cur_vr frozen while cur_pk climbs, with head_vr larger and head_pk
+         * flat, CONFIRMS sampling starvation; cur_vr advancing normally
+         * REFUTES it and points at weighting instead. Must precede any fix. */
+        { extern void sched_vr_sample(uint32_t *, uint64_t *, uint32_t *,
+                                      uint32_t *, uint64_t *, uint32_t *);
+          uint32_t cp = 0, ck = 0, hp = 0, hk = 0;
+          uint64_t cv = 0, hv = 0;
+          sched_vr_sample(&cp, &cv, &ck, &hp, &hv, &hk);
+          kputs(" curvr=");  kputdec(cv);
+          kputs(" curpk=");  kputdec(ck);
+          kputs(" hpid=");   kputdec(hp);
+          kputs(" headvr="); kputdec(hv);
+          kputs(" headpk="); kputdec(hk); }
         /* DDR-944: rqq = CPUs holding queue entries, rqpres = CPUs marked
          * present. Any bit set in rqq but clear in rqpres is a queue that
          * neither its own CPU nor any stealer will ever drain.

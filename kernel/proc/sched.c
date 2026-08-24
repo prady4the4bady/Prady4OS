@@ -291,6 +291,57 @@ static struct tcb *fair_candidate(struct rq *q, uint32_t *depth_out) {
  * a freed page's link reads back as 0xDEADBEEFDEADBEEF, which is non-canonical
  * and fails the kernel-half test long before anything touches it. Bounded, so a
  * cycle introduced by corruption terminates instead of hanging the gate. */
+/* ---- DDR-989 §4: the confirming/refuting measurement -----------------------
+ *
+ * DDR-989 root-caused smoke-evresize/smoke-agentpanel to vruntime being SAMPLED,
+ * so a sub-tick yielder is never charged and monopolises the CPU. It has stood
+ * unimplemented on purpose: §4 says the mechanism is read from source and
+ * "consistency is not proof", and forbids a fix until an artefact ties the two
+ * together. §NON-NEGOTIABLE 3.
+ *
+ * This is that instrument, and nothing more. It REPORTS; it changes no
+ * scheduling decision. §4 asks for exactly two comparisons per heartbeat:
+ * vruntime and pick-count for the RUNNING thread, and the same for the queue
+ * HEAD that is not being picked.
+ *
+ *   CONFIRMS  cur_vr frozen (or far slower than wall time) while cur_pk climbs,
+ *             AND head_vr strictly larger with head_pk flat.
+ *   REFUTES   cur_vr advancing normally and merely lower -> weighting or entry
+ *             clamping (H1/H2), an OPPOSITE fix.
+ *   REFUTES   head_pk climbing too -> the queued threads ARE being picked and
+ *             the stall is downstream of the scheduler entirely.
+ *
+ * Reads under each queue's lock and copies out scalars; touches no list. */
+void sched_vr_sample(uint32_t *cur_pid, uint64_t *cur_vr, uint32_t *cur_pk,
+                     uint32_t *head_pid, uint64_t *head_vr, uint32_t *head_pk) {
+    *cur_pid = *cur_pk = *head_pid = *head_pk = 0;
+    *cur_vr  = *head_vr = 0;
+    if (current_thread) {
+        *cur_pid = current_thread->pid;
+        *cur_vr  = current_thread->dbg_vruntime;
+        *cur_pk  = current_thread->dbg_picks;
+    }
+    /* First READY entry on any queue: the thread the fair picker would take and
+     * the FIFO picker is passing over. That is the starved side of §4. */
+    for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+        struct rq *q = &g_rq[c];
+        uint64_t fl = spin_lock_irqsave(&q->lock);
+        struct tcb *e = q->head;
+        for (uint32_t n = 0; e && n < 4096u; n++) {
+            if (e->state == THREAD_READY && e != current_thread) {
+                *head_pid = e->pid;
+                *head_vr  = e->dbg_vruntime;
+                *head_pk  = e->dbg_picks;
+                break;
+            }
+            e = e->rq_next;
+        }
+        spin_unlock_irqrestore(&q->lock, fl);
+        if (*head_pid)
+            return;
+    }
+}
+
 /* DDR-996 §5 arm B (v2): is this EXACT pointer still linked in any runqueue?
  *
  * The first version of arm B checked the queues for non-canonical links and the

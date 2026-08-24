@@ -1,6 +1,7 @@
 # DDR-989 — `smoke-evresize` / `smoke-agentpanel`: vruntime is sampled, so a sub-tick yielder is never charged
 
-**Status:** root-cause HYPOTHESIS with a named mechanism. **Not implemented.**
+**Status:** root-cause HYPOTHESIS with a named mechanism. Fix **not implemented**;
+**§4's measurement IS implemented** (2026-08-24) — see §7.
 **Artefacts:** 2 independent CI captures (below). Never reproduced locally.
 **Supersedes nothing.** Relates: DDR-947 (the `preempt=`/`supp=` procedure),
 DDR-968 (the smoke-agents witness), task #26.
@@ -159,3 +160,48 @@ The stale "REAL (FIFO) picker" comment at `sched.c:~220` should be corrected in
 whichever change lands first that touches that file. It actively misleads:
 anyone reasoning about starvation from that comment will conclude the queue is
 round-robin and rule out exactly the mechanism that is occurring.
+
+
+---
+
+## 7. §4's instrument is live (2026-08-24), with a healthy baseline
+
+A third CI capture arrived — run 32707039014, shard 0, `smoke-evresize`,
+`858a721` — matching this DDR's own artefacts closely: `preempt=1850` frozen
+across t=9500..11500, `rqdepth=10`, and `curpid` alternating **18
+(COMPOSIT.ELF) / 42 (AETHERD)**, the same two pids §2 names. No `[yieldstall]`
+line, so it is not the DDR-994 `mnt_lock` stall.
+
+§4 said the instrument "must land before any fix". It has: `sched_vr_sample()`
+(`sched.c`) feeds five new heartbeat fields — `curvr`, `curpk`, `hpid`,
+`headvr`, `headpk` — giving vruntime and pick-count for the running thread and
+for the first READY thread it is passing over. It REPORTS ONLY; no scheduling
+decision changes, and the fix in §5 stays unapplied.
+
+**Healthy baseline, measured now** (kernel `35d5c127579cb48a`, `smoke-yieldstall`,
+a boot with no stall):
+
+```
+curvr=1652563 curpk=17857  hpid=22 headvr=1652536 headpk=1947
+curvr=2912327 curpk=50621  hpid=22 headvr=2912203 headpk=25877
+```
+
+Two properties make the comparison sharp:
+
+1. `curvr` and `headvr` track each other to within ~0.008% (1,652,563 vs
+   1,652,536). Vruntime is being charged to the running thread.
+2. `headpk` climbs hard (1,947 -> 25,877). The queued thread is being picked.
+
+So §4's three outcomes are now separable against real numbers rather than
+against an assumption about what "normal" looks like:
+
+| observation at the stall | verdict |
+|---|---|
+| `curvr` frozen while `curpk` climbs; `headvr` > `curvr`; `headpk` flat | **CONFIRMS** sampling starvation (§3) |
+| `curvr` advancing normally, merely lower than `headvr` | **REFUTES** — weighting/entry clamping (H1/H2), an opposite fix |
+| `headpk` climbing too | **REFUTES** — queued threads are picked; stall is downstream of the scheduler |
+
+The stall has never reproduced locally and did not here either (`smoke-evresize`
+passes locally and finishes before the first heartbeat, so it emits no sample at
+all). The data therefore comes from the next CI recurrence. Nothing is fixed
+until it arrives.
