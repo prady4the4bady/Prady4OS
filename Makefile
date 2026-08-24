@@ -2674,6 +2674,48 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 	@grep -qa PRADYOS_MODKEYS_PAIR_OK build/modkeys.log || { echo "[modkeys] FAIL — DDR-993 kernel arm absent or failed (paired modifier / make-break identity)"; grep -a "MODKEYS" build/modkeys.log | tail -10; exit 1; }
 	@echo "[modkeys] PASS — six ring-3 arms + the DDR-993 kernel arm"
 
+# DDR-994: the yield-stall detector — the instrument for OPEN-1 route 1, which
+# is a HANG with no panic and which nothing in this repo could previously see.
+# [apfreeze] (DDR-981) triggers on "this cpu stopped taking interrupts"; in
+# route 1 the cpu is FINE and one THREAD waits forever, so that detector is
+# structurally blind to it.
+#
+# TWO arms, because arm A alone would be vacuous — it proves the reporter works,
+# not that any real call site invokes it. That is DDR-988 sec.9 exactly, and
+# DDR-993 sec.5 is the freshest reminder that a check only tests what it can
+# express (all six of smoke-modkeys' ring-3 arms passed on a broken kernel).
+#   arm A  the reporter fires ONCE per wait, not once per spin: called 3x with
+#          one `noted`, exactly ONE site=selftest line must appear. A reporter
+#          that printed every iteration would move the timing it measures.
+#   arm B  through the REAL mnt_lock, against a private scratch mount — so the
+#          site=mnt_lock line proves the detector is WIRED to the call site.
+#          Takes ~7 s by design (YIELD_STALL_TICKS is 500 = 5 s at 100 Hz),
+#          which is why the whole thing is opt-in via DDR-804.
+#
+# The waiter is RELEASED afterwards and must exit: a detector that wedges the
+# boot it is diagnosing is worse than none. Both sentinels are asserted.
+smoke-yieldstall: $(IMG) fat-image sfs-image
+	@mkdir -p build/gatelogs
+	@# SKIP_GLOBAL_FORBIDDEN: `[yieldstall]` is in GLOBAL_FORBIDDEN so a stall in
+	@# ANY other gate reddens it and names itself — that is the whole point of the
+	@# sentinel. But THIS gate emits it deliberately, twice, and would therefore
+	@# fail itself. The exemption costs this one 7 s boot its global coverage;
+	@# what remains is not nothing — boot_test.sh still requires 'NEXUS KERNEL OK'
+	@# plus both EXTRA_SENTINELs, so a panic or a wedge here still fails by
+	@# absence. Narrowing the exemption to a single pattern would need a
+	@# per-gate allow-list boot_test.sh does not have; not worth inventing for
+	@# one gate days from a deadline.
+	SKIP_GLOBAL_FORBIDDEN=1 \
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/yieldstall.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_PROBES=yieldstall \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_YIELDSTALL_RELEASED\nPRADYOS_YIELDSTALL_WAITER_DONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -qa '\[yieldstall\] site=selftest' build/gatelogs/yieldstall.log || { echo "[yieldstall] FAIL — arm A: reporter never fired"; tail -20 build/gatelogs/yieldstall.log; exit 1; }
+	@n=$$(grep -ac '\[yieldstall\] site=selftest' build/gatelogs/yieldstall.log); \
+	 test "$$n" -eq 1 || { echo "[yieldstall] FAIL — arm A: reporter fired $$n times, must be exactly 1 (once per wait, not per spin)"; exit 1; }
+	@grep -qa '\[yieldstall\] site=mnt_lock' build/gatelogs/yieldstall.log || { echo "[yieldstall] FAIL — arm B: the detector is NOT wired to mnt_lock (arm A can pass without this)"; grep -a yieldstall build/gatelogs/yieldstall.log; exit 1; }
+	@echo "[yieldstall] PASS — reporter fires once (arm A) AND is wired to mnt_lock (arm B)"
+
 smoke-nethammer: $(IMG) fat-image sfs-image
 	@mkdir -p build/gatelogs
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/nethammer.log KEEP_SERIAL=1 \

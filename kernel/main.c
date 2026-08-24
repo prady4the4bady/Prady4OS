@@ -411,6 +411,16 @@ extern const unsigned char fat32mctest_elf_end[];
 extern const unsigned char nethammer_elf[];           /* DDR-990: two-CPU connect/close hammer */
 extern const unsigned char nethammer_elf_end[];
 int ps2kbd_selftest(void);                           /* DDR-993 §3: paired-modifier kernel arm */
+
+/* DDR-994 §6 arm B: spins in the REAL mnt_lock against a held scratch mount,
+ * so the [yieldstall] line it emits proves the detector is wired to the call
+ * site rather than merely callable. Exits once the arming thread releases. */
+static void yieldstall_waiter_thread(void *arg) {
+    (void)arg;
+    vfs_yieldstall_wait();
+    kputs("PRADYOS_YIELDSTALL_WAITER_DONE\r\n");
+    sched_exit(0);
+}
 extern const unsigned char modkeystest_elf[];         /* DDR-991: modifier / extended-key probe */
 extern const unsigned char modkeystest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
@@ -1559,6 +1569,41 @@ static void fs_test_thread(void *arg) {
                  * SYS_METRIC_READ is sovereign-gated — the record is the
                  * owner's ground truth, so a non-sovereign reader gets
                  * -EPERM and an audit entry. */
+                /* DDR-994: the yield-stall detector. Two arms, and arm A
+                 * alone would be vacuous — it proves the reporter works, not
+                 * that anything CALLS it. See vfs.c for why arm B uses a
+                 * private scratch mount rather than a live one.
+                 *
+                 * Opt-in (DDR-804): arm B holds a waiter spinning for ~7 s by
+                 * design, which the other 152 gates must not pay for. */
+                if (probe_enabled("yieldstall")) {
+                    /* Arm A — the reporter fires ONCE, not once per spin. Called
+                     * three times with one `noted`; exactly one line must appear.
+                     * A reporter that printed every iteration would bury the
+                     * boot in UART traffic and move the timing it measures,
+                     * which is why DDR-980 removed the cputicks heartbeat. */
+                    int noted = 0;
+                    yield_stall_note("selftest", 12345u, 678u, &noted);
+                    yield_stall_note("selftest", 99999u, 999u, &noted);
+                    yield_stall_note("selftest", 11111u, 111u, &noted);
+
+                    /* Arm B — through the REAL mnt_lock. Arm the scratch mount
+                     * as held, spawn a waiter, let it cross the threshold, then
+                     * release it so the boot continues. */
+                    vfs_yieldstall_arm(1);
+                    struct tcb *ys = sched_create_blocked(yieldstall_waiter_thread, 0, "yieldstall");
+                    if (ys) {
+                        sched_unblock(ys);
+                        /* YIELD_STALL_TICKS is 500 (5 s); wait past it with
+                         * margin, then release. The waiter reports at the
+                         * threshold and exits once the lock is free. */
+                        uint64_t deadline = g_ticks + 700;
+                        while (g_ticks < deadline)
+                            yield();
+                        vfs_yieldstall_arm(0);
+                        kputs("PRADYOS_YIELDSTALL_RELEASED\r\n");
+                    }
+                }
                 /* DDR-991: PS/2 modifier / extended-key probe. Opt-in — it
                  * announces PRADYOS_MODKEYS_WAIT and then spins polling for
                  * injected keys, so running it in every gate would add a

@@ -1,6 +1,6 @@
 # DDR-994 — A detector for the wait that never ends (OPEN-1 route 1)
 
-**Status:** DESIGN. Not implemented.
+**Status:** IMPLEMENTED and mutation-checked. Gate green. See §8.
 **Relates:** OPEN-1 (route 1), DDR-981 (the AP freeze), DDR-990 §12 (the three
 signatures), DDR-955 (`sched_block_timeout`), DDR-968/986 (instrument-only DDRs).
 **Gate:** `smoke-yieldstall` (new) + `[yieldstall]` in `GLOBAL_FORBIDDEN`.
@@ -36,8 +36,9 @@ a flake.
 
 ## 2. The mechanism, named
 
-`yield()` appears at 26 sites. Four are reachable from ring 3, and **all four are
-unbounded**:
+`yield()` appears at 26 sites. Five are reachable from ring 3; one of those,
+`sys_yield` (`syscall.c:155`), is a bare call that returns immediately and is not
+a wait at all. The other **four are spin-waits, and all four are unbounded**:
 
 | site | waits for | bounded? |
 |---|---|---|
@@ -149,8 +150,22 @@ written against a real capture.
 
 **Mutation check (required, both directions):** remove the `yield_stall_note`
 call from `mnt_lock` — arm B must fail while arm A still passes. Raise
-`YIELD_STALL_TICKS` above the arm's hold — both must fail. A detector that
+`YIELD_STALL_TICKS` above the arm's hold — arm B must fail. A detector that
 survives either mutation is decoration.
+
+> **CORRECTION, made after running them.** This paragraph originally predicted
+> that raising the threshold would fail **both** arms. That was wrong about my
+> own design, and the measurement said so: M2 fails arm B and **arm A still
+> passes**. It cannot do otherwise — arm A calls `yield_stall_note` *directly*
+> with literal values, so it never reaches a threshold test; the thresholds live
+> at the three call sites, not in the reporter. Predicting a mutant's outcome is
+> not the same as knowing it, which is the entire reason §6 requires running
+> them. The corrected expectation is above, and §8 records what was measured.
+>
+> The result is better than the prediction: neither mutant kills arm A, and that
+> asymmetry is the design working. Arm A is a unit test of the reporter, arm B
+> is a wiring test of the call site. Two properties, two arms, and the mutants
+> separate them cleanly.
 
 ## 7. What this does NOT claim
 
@@ -167,3 +182,61 @@ survives either mutation is decoration.
   three spins are a different shape: they hold no lock and wait on a condition,
   and converting them to blocking waits is a real design change — a later DDR,
   not this one.
+
+---
+
+## 8. Results
+
+Kernel hashes per R1. Four distinct hashes, so no run measured a stale binary.
+
+| kernel | hash | arm A | arm B | gate |
+|---|---|---|---|---|
+| instrumented | `037ad1d6a8b046b1` | fires once | `site=mnt_lock` | **PASS** |
+| M1 — call removed from `mnt_lock` | `652c09d4d7236655` | **passes** | absent | FAIL |
+| M2 — `YIELD_STALL_TICKS` 500 -> 5000 | `7d37400fc8679ad0` | **passes** | absent | FAIL |
+
+Both mutants leave arm A green and kill arm B, which is exactly the vacuity
+§6 was written against: **an instrument that is never called still passes arm
+A.** Had this gate shipped with arm A alone it would have been green on a
+detector wired to nothing.
+
+The live capture:
+
+```
+[yieldstall] site=selftest spins=12345 ticks=678 pid=0 cpu=0
+[yieldstall] site=mnt_lock spins=127344 ticks=500 pid=0 cpu=0
+PRADYOS_YIELDSTALL_RELEASED
+PRADYOS_YIELDSTALL_WAITER_DONE
+```
+
+**The denominator (§NON-NEGOTIABLE 17): `mnt_lock` spins ≈ 127,344 / 500 ticks
+≈ 255 spins per tick.** That is the first measurement this repo has of how fast
+a `yield()` spin actually turns over, and it calibrates `YIELD_STALL_SPINS`:
+20,000 spins is ~78 ticks of spinning, comfortably below the 500-tick arm, so
+the tick threshold is the binding one at these sites. Both are kept — a site
+that spins far slower would be caught by ticks alone, and one that spins far
+faster inside a single tick must not trip on spins alone.
+
+Restoring the fix reproduced `037ad1d6a8b046b1` byte-for-byte, so the revert is
+verified rather than assumed (§NON-NEGOTIABLE 16).
+
+`WAITER_DONE` is asserted for a reason: a detector that wedged the boot it is
+diagnosing would be worse than none, so the arm proves the waiter is *released*
+and exits.
+
+## 9. Gate registration and one exemption
+
+`smoke-yieldstall`, shard 9, `strict`, 120 s. Gate count 152 -> **153**.
+
+`[yieldstall]` is in `GLOBAL_FORBIDDEN`, so a stall in **any** other gate reddens
+it and names itself — the DDR-981 lesson, where the defect was live while
+`smoke-smp` and `smoke-rqstress` both measured 20/20 and the only evidence sat
+in a serial log nobody asserted on.
+
+That forces one exemption: this gate emits the sentinel deliberately, twice, so
+it would fail itself. It runs with `SKIP_GLOBAL_FORBIDDEN=1`. **Stated cost:**
+that one 7-second boot loses global-list coverage. What remains is not nothing —
+`boot_test.sh` still requires `NEXUS KERNEL OK` and both `EXTRA_SENTINEL`s, so a
+panic or a wedge in this gate still fails it by absence. A narrower exemption
+would need a per-gate allow-list that `boot_test.sh` does not have, which is not
+worth inventing for one gate days from a deadline.

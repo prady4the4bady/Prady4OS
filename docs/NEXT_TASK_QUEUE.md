@@ -65,7 +65,7 @@ Batch their DDRs in one pass first (§4.3), then implement.
       bug. That stall point is the same function DDR-981 caught frozen, and
       `[apfreeze]` is now a `GLOBAL_FORBIDDEN` sentinel, so a recurrence names
       itself. Re-check whether it still reproduces at all before instrumenting.
-- [ ] **DDR-994 — a detector for OPEN-1 route 1 (the silent hang).** DDR-990 §12
+- [x] **DDR-994 — a detector for OPEN-1 route 1 (the silent hang).** DONE 2026-08-24: `smoke-yieldstall` (shard 9), `[yieldstall]` in `GLOBAL_FORBIDDEN`, mutation-checked both ways. It REPORTS, it does not repair — the next OPEN-1 occurrence either names its stall site or refutes the hypothesis by printing nothing. Original design note follows. DDR-990 §12
       established OPEN-1 is at least THREE signatures: (1) the CI route, a hang
       in `sys_read`/`vfs_read` with **no panic at all**; (2) the local `#PF`
       (1/20, DDR-985); (3) the hammer's `#GP`. DDR-990's hammer closed route 3,

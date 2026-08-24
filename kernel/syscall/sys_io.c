@@ -12,6 +12,7 @@
 #include "fd.h"
 #include "vfs.h"
 #include "pipe.h"
+#include "irq.h"                /* DDR-994: g_ticks for the yield-stall window */
 #include "signal.h"              /* DDR-805: SIGPIPE on a readerless pipe write */
 #include "console.h"
 #include "uaccess.h"
@@ -53,8 +54,15 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
              * drain the ring, so waiting could never succeed and we fail with
              * -EPIPE. yield() matches the FD_CONSOLE blocking read already in
              * this file. */
-            while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0)
-                yield();
+            /* DDR-994: instrumented, not bounded. A reader that exists but
+             * never reads leaves this spinning forever. */
+            {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
+                while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0) {
+                    yield();
+                    if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
+                        yield_stall_note("pipe_write", n, g_ticks - t0, &noted);
+                }
+            }
             if (pipe_readers(e->pipe) <= 0) {
                 /* DDR-805: no readers left, so this write can never complete.
                  * Raise SIGPIPE on ourselves — syscall context, own TCB, so no
@@ -264,8 +272,15 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
              * genuine EOF. Only wait when we have delivered nothing yet, so a
              * partially-satisfied read returns promptly. */
             if (total == 0)
-                while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0)
-                    yield();
+                /* DDR-994: instrumented, not bounded. A writer that exists
+                 * but never writes leaves this spinning forever. */
+                {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
+                    while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0) {
+                        yield();
+                        if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
+                            yield_stall_note("pipe_read", n, g_ticks - t0, &noted);
+                    }
+                }
             long r = pipe_read(e->pipe, kbuf, chunk);
             if (r <= 0)
                 break;                            /* empty + no writers = EOF */

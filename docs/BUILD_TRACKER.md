@@ -684,3 +684,46 @@ kernel hashes so no run measured a stale binary.
 
 `docs/AETHER_MASTER_FEATURES.md` is deliberately unchanged: the input driver is
 Layer 7 plumbing, not an AETHER feature it tracks.
+
+---
+
+## DDR-994 — the instrument for OPEN-1 route 1
+
+**Shipped:** `yield_stall_note()`, three instrumented yield-spins, `smoke-yieldstall`
+(shard 9), `[yieldstall]` in `GLOBAL_FORBIDDEN`. Gate count 152 -> 153.
+
+OPEN-1 route 1 is a **hang with no panic**, and every instrument this repo had was
+keyed to something being printed or something faulting. `[apfreeze]` (DDR-981)
+triggers on "this cpu stopped taking interrupts"; in route 1 the cpu is fine —
+`g_ticks` advances, other threads run, one thread waits forever — so that
+detector is structurally blind to it.
+
+`yield()` has 26 call sites. Five are ring-3 reachable; `sys_yield`
+(`syscall.c:155`) is a bare call that returns immediately, not a wait. The other
+**four are spin-waits and all four are unbounded**. DDR-981 fixed the interrupt masking *inside* `yield()` but never
+bounded the spin. `mnt_lock` (`vfs/vfs.c:27`) sits directly on the `vfs_read`
+path where the captures hang.
+
+**Three sites instrumented, one deliberately not.** The console read
+(`sys_io.c:293`) waits for a keystroke and is *legitimately* unbounded — PRISM
+sits in it for the whole of every boot. A duration-based watchdog would fire in
+all 153 gates on day one and be switched off within the day. The discriminator
+is what is waited on, not how long: three sites wait on state owned by another
+thread in this system; the console waits on the outside world. That asymmetry is
+also why this cannot be a hook inside `yield()`, which does not know its caller.
+
+**It reports, it does not repair.** There is a named mechanism but no captured
+artefact of it firing, so §NON-NEGOTIABLE 3 forbids changing locking semantics.
+Bailing out of `mnt_lock` on a deadline would turn a hang into a silent `-EIO` on
+a live mount — it would look like a fix and destroy the evidence.
+
+**Mutation-checked, and the mutants taught something.** Both M1 (call removed
+from `mnt_lock`) and M2 (threshold raised past the arm) kill arm B and leave arm
+A green. That asymmetry is the design working — arm A unit-tests the reporter,
+arm B tests the wiring — and it is exactly the vacuity the two-arm structure was
+written against: **an instrument wired to nothing still passes arm A.** DDR-994
+§6 had predicted M2 would fail both arms; that prediction was wrong about its own
+design and is corrected in place.
+
+**First measured denominator for a yield-spin:** `mnt_lock` turns over
+≈127,344 spins / 500 ticks ≈ **255 spins per tick**.

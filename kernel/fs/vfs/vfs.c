@@ -22,9 +22,21 @@ static struct vfs_mount g_mounts[VFS_MAX_MOUNTS];
  * FS op it guards descends into blk submit() which sched_block()s, and a
  * spinlock held across a block deadlocks spinners. Lock order is always
  * mount -> blk, never reversed. No IRQ touches `busy`, so no cli/sti. */
+/* DDR-994: instrumented, NOT bounded. The spin is unchanged — if the holder
+ * never releases, this still waits forever, exactly as before. What changed is
+ * that it now says so once, instead of hanging in silence. This site is the
+ * reason DDR-994 exists: it sits directly on the vfs_read path where OPEN-1's
+ * CI captures hang, and a mount mutex is held by another THREAD, so if that
+ * thread is stuck nobody will ever release it. */
 static void mnt_lock(struct vfs_mount *m) {
-    while (__atomic_exchange_n(&m->busy, 1, __ATOMIC_ACQUIRE))
+    uint32_t n = 0;
+    uint64_t t0 = g_ticks;
+    int noted = 0;
+    while (__atomic_exchange_n(&m->busy, 1, __ATOMIC_ACQUIRE)) {
         yield();
+        if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
+            yield_stall_note("mnt_lock", n, g_ticks - t0, &noted);
+    }
 }
 static void mnt_unlock(struct vfs_mount *m) {
     __atomic_store_n(&m->busy, 0, __ATOMIC_RELEASE);
@@ -49,6 +61,31 @@ static int mnt_lock_live(struct vfs_mount *m) {
         return 0;
     }
     return 1;
+}
+
+/* ---- DDR-994 sec.6 arm B: prove the detector is WIRED, not merely callable ---
+ * Arm A drives yield_stall_note() directly, and would pass even if no real call
+ * site ever invoked it — DDR-988 sec.9's vacuous gate, and DDR-993 sec.5 is the
+ * freshest reminder that a check only tests what it can express. So this arm
+ * goes through the REAL mnt_lock.
+ *
+ * The scratch mount is deliberately NOT one of g_mounts: mnt_lock touches only
+ * `busy`, so a private struct exercises the identical code path while being
+ * incapable of stalling a live filesystem. The waiter spins exactly as a real
+ * caller would, reports once at the threshold, and is released by the arming
+ * thread afterwards — a hang that ENDS, so the gate cannot wedge the boot.
+ *
+ * Opt-in via probe_enabled() (DDR-804): this arm burns a cpu for ~7 s by
+ * design, which the other 152 gates must not pay for. */
+static struct vfs_mount g_yieldstall_scratch;
+
+void vfs_yieldstall_arm(int hold) {
+    __atomic_store_n(&g_yieldstall_scratch.busy, hold ? 1 : 0, __ATOMIC_RELEASE);
+}
+
+void vfs_yieldstall_wait(void) {
+    mnt_lock(&g_yieldstall_scratch);      /* the real thing, not a copy of it */
+    mnt_unlock(&g_yieldstall_scratch);
 }
 
 static int g_default_mnt = -1;          /* process root mount (5b, ADR-022) */

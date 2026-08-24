@@ -7140,7 +7140,13 @@ separates them.**
   `exit 3` HOST-ENV refusal says nothing about the kernel — read the banner
   before treating it as a gate result.
 
-- **Do not edit `tools/qemu_runner/` while a gate is running.** `bash` reads a
+- **Do not edit `tools/qemu_runner/` while a gate is running.**
+  **I then did it AGAIN, an hour after writing this rule down**, appending
+  `[yieldstall]` to `GLOBAL_FORBIDDEN` while `smoke-yieldstall` was mid-boot.
+  That run's result had to be discarded and re-run. Writing a rule in the
+  handoff is not the same as following it: before touching anything under
+  `tools/qemu_runner/`, run `pgrep -f "[q]emu-system-x86_64"` first, every time.
+ `bash` reads a
   script lazily by byte offset, so appending a `GLOBAL_FORBIDDEN` line mid-run
   shifted the offset under a process already executing it and it resumed
   mid-token: `line 582: al_keep_fail: command not found` — that is
@@ -7229,7 +7235,47 @@ step 3, exit 2; M2 `d89d5a4a6fd3a0f0` step 11, exit 2.
   → cast through `uintptr_t`. CodeRabbit flagged 2 of them; fixing 2 of 33 would
   have been worse than fixing none. Hash-verified as semantics-preserving.
 
-### Next task is DDR-994, and the lead is already found — do not re-derive
+### DDR-994 is BUILT (2026-08-24) — `smoke-yieldstall`, shard 9
+
+`yield()` has 26 call sites. Five are ring-3 reachable; `sys_yield`
+(`syscall.c:155`) is a bare call, not a wait. The other **four are spin-waits and
+all four are unbounded**.
+Three are now instrumented; the fourth is deliberately not (below). The
+sentinel is `[yieldstall] site= spins= ticks= pid= cpu=`, in
+`GLOBAL_FORBIDDEN`, so a stall in ANY gate names itself.
+
+**It REPORTS, it does not repair.** Named mechanism, no captured artefact, so
+§NON-NEGOTIABLE 3 forbids a semantic change. The spin continues exactly as
+before; it just says so once. Bailing out of `mnt_lock` on a deadline would turn
+a hang into a silent `-EIO` on a live mount — it would look like a fix and
+destroy the evidence. **The fix is a later DDR, written against a real capture.**
+
+**Do NOT instrument `sys_io.c:293`.** That console read waits for a keystroke
+and is legitimately unbounded — PRISM sits in it every boot. A duration
+watchdog there fires in all 153 gates on day one and gets switched off. The
+discriminator is *what* is waited on, not how long.
+
+**Mutation results (4 distinct hashes):** instrumented `037ad1d6a8b046b1` PASS;
+M1 (call removed from `mnt_lock`) `652c09d4d7236655`; M2 (threshold 500->5000)
+`7d37400fc8679ad0`. Both mutants kill arm B and **leave arm A green** — an
+instrument wired to nothing still passes arm A, which is precisely why arm B
+exists. I had precommitted in DDR-994 §6 that M2 would fail both; that was
+wrong about my own design (arm A calls the reporter directly, bypassing the
+threshold) and is corrected in the DDR. **Predicting a mutant is not knowing it.**
+
+**First measured yield-spin denominator: `mnt_lock` ≈ 255 spins/tick**
+(127,344 spins over 500 ticks). This calibrates the thresholds — 20,000 spins is
+~78 ticks, so ticks is the binding threshold at these sites.
+
+`smoke-yieldstall` runs with `SKIP_GLOBAL_FORBIDDEN=1`, because it emits the
+sentinel deliberately and would otherwise fail itself. Cost stated in §9: that
+one 7 s boot loses global-list coverage, but still fails by absence on a panic.
+
+**What is NOT claimed:** not a fix, and not that `mnt_lock` IS OPEN-1. If the
+next occurrence prints no `[yieldstall]` line, the hypothesis is refuted — which
+is a real result, the same shape as DDR-985 refuting its own Claim A.
+
+### The original DDR-994 lead — kept for context
 
 **OPEN-1 route 1 (the silent hang) has a concrete suspect.** `mnt_lock`
 (`kernel/fs/vfs/vfs.c:25`) is an UNBOUNDED yield-spin:

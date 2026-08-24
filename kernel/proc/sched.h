@@ -229,6 +229,13 @@ void        sched_block(void);                                  /* block current
  * BLOCKED *while `lk` is held*, releases `lk`, switches away, and re-takes `lk`
  * on return — so a waker serialized after the release always sees BLOCKED and
  * its sched_unblock CAS cannot be lost. IRQs stay as the caller left them. */
+/* DDR-994: report a wait that has gone on too long. Fires ONCE per wait (the
+ * `noted` flag), then the caller keeps spinning — this REPORTS, it does not
+ * repair. Thresholds below; both must be crossed. */
+#define YIELD_STALL_SPINS 20000u  /* enough spins to mean "not just contended" */
+#define YIELD_STALL_TICKS 500u    /* ...AND 5 s at 100 Hz. Neither alone suffices. */    /* ...AND 5 s at 100 Hz. Neither alone suffices. */
+void        yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *noted);
+
 void        sched_block_on(spinlock_t *lk);
 int         sched_block_timeout(spinlock_t *lk, volatile int *done,
                                 uint64_t timeout_ticks);

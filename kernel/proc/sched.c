@@ -1342,6 +1342,42 @@ void sched_tick(void) {
  * denominator for the claim that this path is exercised at all (R17). */
 uint64_t g_yield_masked;
 
+/* ---- DDR-994: the wait that never ends -----------------------------------
+ * OPEN-1 route 1 is a HANG with no panic, and every other instrument in this
+ * kernel is keyed to something being printed or something faulting. [apfreeze]
+ * (DDR-981) triggers on "this cpu stopped taking interrupts"; in route 1 the
+ * cpu is FINE -- g_ticks advances, other threads run, ONE thread waits forever.
+ * So this reports on the wait itself.
+ *
+ * DDR-994 sec.5 -- IT REPORTS, IT DOES NOT REPAIR. There is a named mechanism
+ * but no captured artefact of it firing, so §NON-NEGOTIABLE 3 forbids changing
+ * locking semantics here. The caller keeps spinning after this returns. Bailing
+ * out of mnt_lock on a deadline would turn a hang into a silent -EIO on a live
+ * mount: it would look like a fix and destroy the evidence.
+ *
+ * `noted` makes this fire ONCE per wait rather than once per spin -- a stall
+ * that printed every iteration would bury the boot in UART traffic and change
+ * the timing it is measuring, which is exactly why DDR-980 removed the cputicks
+ * heartbeat. Failure-path-only, like DDR-981 and DDR-977 sec.6. */
+void yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *noted) {
+    if (*noted)
+        return;
+    *noted = 1;
+    struct percpu *pc = this_cpu();
+    uint64_t fl = console_line_lock();
+    kputs("[yieldstall] site=");   kputs(site);
+    /* Both numbers, always: a loaded cpu can legitimately spin many times
+     * inside one tick, and a LOW spin count across many ticks means the thread
+     * is barely being scheduled -- a different defect (DDR-989's). One number
+     * cannot tell those apart, and §NON-NEGOTIABLE 17 wants the denominator. */
+    kputs(" spins=");              kputdec(spins);
+    kputs(" ticks=");              kputdec(ticks);
+    kputs(" pid=");                kputdec(current_thread ? current_thread->pid : 0);
+    kputs(" cpu=");                kputdec(pc ? pc->cpu_idx : 0);
+    kputs("\r\n");
+    console_line_unlock(fl);
+}
+
 void yield(void) {
     if (!current_thread)
         return;
