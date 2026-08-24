@@ -580,3 +580,52 @@ picks it up:
   diagnosis: `calls=101693` against `spins=2682874` averages 26 spins/call, so
   the 2.5M is one outlier and could as easily be a symptom of the stall as its
   cause.
+
+
+---
+
+## 9.12 The nethammer "budget" hypothesis is REFUTED. It is a HANG.
+
+§9.11 ranked "budget too tight under CI load" as the live hypothesis and said to
+measure completion time before touching anything. Measured — and it is wrong.
+
+Run 32738530107, shard 3, `a5d76d2`. The failing capture carries **21
+consecutive heartbeats, t=13500 -> t=23500 — 100 seconds of wall time — with
+ZERO `NETHAMMER_PROG` lines.** `user/nethammer.c` prints one every 1000
+iterations, so a probe merely running slowly would still emit them steadily. It
+emits none.
+
+**Not slow. Stuck.** Three counters corroborate, all frozen across the whole
+window while the rest of the system moves:
+
+| frozen | moving |
+|---|---|
+| `pmmfree=27413` (a live hammer churns pcb alloc/free continuously) | `preempt` 5595 -> 10644 |
+| `net_skip=21` | `hpid` varies (27/51/55/56) |
+| `net_defer=3` | `headvr` advances ~10M/500 ticks |
+
+So the machine is scheduling normally and the network probe alone has stopped.
+Had the budget hypothesis been acted on — raising `TIMEOUT_S` — it would have
+converted a real hang into a longer green wait and buried it. That is the second
+time today that refusing a convenient attribution paid: §9.11 declined to blame
+the vruntime inflation, and this declines to blame the clock.
+
+### What this is NOT (yet) claimed to be
+
+No `[yieldstall]` line appears, so it is **not** the `mnt_lock` stall of DDR-994.
+
+It IS a hang with no panic, on the network path, in a probe built to hammer
+connect/close — which is the SHAPE of OPEN-1's route 1 (DDR-990 §12: "a HANG in
+`sys_read`/`vfs_read` with no panic"). **Asserting they are the same defect would
+be colour-matching** — the exact error CLAUDE.md's OPEN-13 row warns about, and
+which §9.11 was careful to avoid an hour ago. Route 1's captures hang in the VFS
+read path; this one hangs with the hammer's own counters frozen. Same shape,
+unproven identity.
+
+### Next step for whoever picks it up
+
+The probe already has the instrument needed: `NETHAMMER_PROG pid= i=` names the
+pid and the iteration. The last PROG line before the freeze gives the exact
+iteration each instance died on, and whether both instances stopped or only one.
+That is a log-scroll, not new code — and it should be read BEFORE any change to
+timeouts, lwIP, or the scheduler.
