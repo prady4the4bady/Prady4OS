@@ -431,3 +431,50 @@ Two further honesty notes:
   heartbeat — and is the honest way to make this checkable in CI. Not added here
   because the disassembly in §9.3 already settles the mechanism, and a new gate
   arm days from a deadline needs its own mutation check.
+
+
+---
+
+## 9.8 `[vrinflate]` — making the fix observable in CI
+
+§9.7's gap: a GREEN ci log never prints a heartbeat (`boot_test.sh` echoes the
+serial only on failure), so `headvr` returning to health was verifiable locally
+and by disassembly but **not observable in CI at all**. This closes it, in the
+`[apfreeze]` shape rather than as a gate arm: the heartbeat emits
+`[vrinflate] curvr=… headvr=…` when either exceeds `1e12`, and `[vrinflate]` is
+in `GLOBAL_FORBIDDEN`, so any gate whose boot hits it goes red and names itself.
+
+**Why this one is entitled to a GLOBAL_FORBIDDEN slot when `[yieldstall]` was
+not** (§8.2): a 5 s yield-spin was never shown to be fatal, so forbidding it
+invented failures. Inflated vruntime is different — after §9.4 the underflow
+that produced it is *impossible*, so an occurrence is a genuine regression. That
+is exactly the bar §8.2 set for re-adding a sentinel, applied to a different one.
+
+Threshold headroom, measured not guessed: vruntime is ~cycles/1024, so a 240 s
+gate at 3 GHz reaches ~7.0e8, and a healthy boot at t=500 measured
+**`headvr=238174`**. `1e12` is ~1400x the gate ceiling and ~4e6x the observed
+value.
+
+### Verification, decomposed
+
+The two questions were tangled and are separated here:
+
+- **A — does the detector work?** Deterministic, and it PASSES. With the
+  threshold temporarily lowered to 1000, a healthy boot (`headvr=238174`) fires
+  the sentinel and `boot_test.sh` correctly reddens the gate:
+  `[smoke] FAIL — a probe reported '[vrinflate]' during this gate's boot.`
+  Print -> GLOBAL_FORBIDDEN scan -> red, end to end. Threshold restored
+  afterwards; kernel hash back to `de52208dd262cd2d`.
+- **B — does the defect still occur on an unfixed kernel?** Inherently
+  probabilistic and **NOT established by campaign**: the double-read mutant went
+  0/9 across two campaigns. At a ~1/6 base rate P(0 in 9) = 0.19, so that is an
+  underpowered sample, **not** a refutation, and it is recorded as such rather
+  than dressed up. §9.3's disassembly is what settles the mechanism.
+
+### Known limitation, stated up front
+
+The sentinel can only fire on a boot that lives long enough to emit a heartbeat
+(500 ticks). Short passing gates print none, so they are not covered. That is
+acceptable — every observation of the inflation so far came from a long boot
+(t=11500 locally, t=23500 in CI shard 3) — but it means a green short gate is
+not evidence of absence.

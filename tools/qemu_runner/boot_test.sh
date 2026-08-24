@@ -358,6 +358,7 @@ early_exit_eligible=0
 # partner -- that is a hang, and then it belongs in this list.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
     '[apfreeze]' \
+    '[vrinflate]' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
     'FAT32MC FAIL' 'MODKEYS FAIL' 'NETHAMMER FAIL' \
     'FSRM FAIL' 'KILL FAIL' 'ROOTMOUNT FAIL' 'SETNAME FAIL' 'SFSROOT FAIL' \
