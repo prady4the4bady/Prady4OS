@@ -3110,13 +3110,39 @@ smoke-flip: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf '[gpu] page-flip OK\nPRADYOS_COMPOSITOR_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
-# Window-cycling gate (DDR-720): Tab is a compositor hotkey — each press raises
-# the bottom-most visible window (focus + top). Two Tabs must cycle two
-# DIFFERENT windows (A and B swap as each raise buries the other).
+# Window-cycling gate (DDR-720, rebound by DDR-995): ALT+Tab is the compositor
+# hotkey; a bare Tab belongs to the focused application.
+#
+# THREE arms, and arm C is the one that makes this non-vacuous. DDR-720's gate
+# injected a bare `tab` and asserted the cycle — after DDR-995 that is exactly
+# the WRONG behaviour, so the assertion is kept verbatim and re-pointed at
+# `alt-tab`, with two arms added for what could not previously be expressed:
+#
+#   A  alt-tab twice -> >=2 PRADYOS_WM_CYCLE over >=2 distinct ids  (DDR-720's
+#      assertion, unchanged except for the key).
+#   B  a plain tab reaches the focused app (PRADYOS_FOCUS_KEY code=9). Under
+#      DDR-720 the compositor swallowed every Tab, so NO application could ever
+#      receive one — this arm cannot pass on the old code.
+#   C  the plain tab does NOT also cycle. Without C, a compositor that bound
+#      BOTH Tab and Alt+Tab passes A and B together and the defect survives in
+#      half. DDR-995 §5 M1 is exactly that mutant.
+#
+# Ordering is load-bearing: alt-tab FIRST, then the plain tab, so the cycle
+# count can be compared before and after (arm C is a delta, not an absolute).
 smoke-alttab: $(IMG) fat-image sfs-image
-	@echo "[alttab] Tab window-cycling gate (GPU + sendkey tab -> WM_CYCLE)..."
-	@rm -f build/alttab.log /tmp/palttab.sock
-	@bash tools/qemu_runner/input_inject.sh build/alttab.log /tmp/palttab.sock PRADYOS_FOCUS "tab" &
+	@echo "[alttab] Alt+Tab cycling + plain-Tab-to-focus gate (DDR-995)..."
+	@# TWO SEQUENTIAL BOOTS, and that is deliberate. The obvious one-boot form —
+	@# inject "alt-tab alt-tab tab" and check the cycles all pre-date the Tab —
+	@# does NOT work: input_inject.sh repeats the whole key sequence 4 times
+	@# (`for _round in range(4)`), so after round 1 a plain Tab always precedes
+	@# the next Alt+Tab and the ordering carries no information. Splitting the
+	@# runs turns arm C from a fragile delta into an absolute: in a boot where
+	@# ONLY a plain Tab was ever pressed, the correct number of window cycles is
+	@# exactly zero. Never concurrent (§NON-NEGOTIABLE 12) — run 2 starts after
+	@# run 1 exits.
+	@rm -f build/alttab.log build/alttab-plain.log /tmp/palttab.sock /tmp/palttab2.sock
+	@echo "[alttab] run 1/2 — Alt+Tab (arm A)"
+	@bash tools/qemu_runner/input_inject.sh build/alttab.log /tmp/palttab.sock PRADYOS_FOCUS "alt-tab" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -3126,9 +3152,31 @@ smoke-alttab: $(IMG) fat-image sfs-image
 	    -serial file:build/alttab.log -display none -no-reboot || true
 	@n=$$(grep -ac PRADYOS_WM_CYCLE build/alttab.log || true); \
 	 d=$$(grep -ao 'PRADYOS_WM_CYCLE id=[0-9]*' build/alttab.log | sort -u | wc -l); \
-	 [ "$$n" -ge 2 ] || { echo "[alttab] FAIL — fewer than 2 cycles ($$n)"; tail -20 build/alttab.log; exit 1; }; \
-	 [ "$$d" -ge 2 ] || { echo "[alttab] FAIL — cycling did not rotate windows"; tail -20 build/alttab.log; exit 1; }; \
-	 echo "[alttab] PASS — $$n cycles over $$d windows"
+	 [ "$$n" -ge 2 ] || { echo "[alttab] FAIL — arm A: fewer than 2 Alt+Tab cycles ($$n)"; tail -20 build/alttab.log; exit 1; }; \
+	 [ "$$d" -ge 2 ] || { echo "[alttab] FAIL — arm A: cycling did not rotate windows"; tail -20 build/alttab.log; exit 1; }; \
+	 echo "[alttab] arm A PASS — $$n cycles over $$d windows"
+	@echo "[alttab] run 2/2 — plain Tab (arms B + C)"
+	@bash tools/qemu_runner/input_inject.sh build/alttab-plain.log /tmp/palttab2.sock PRADYOS_FOCUS "tab" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/palttab2.sock,server,nowait \
+	    -serial file:build/alttab-plain.log -display none -no-reboot || true
+	@# Arm B: DDR-720 swallowed every Tab unconditionally, so no application on
+	@# the system could ever receive one. This cannot pass on the old compositor.
+	@grep -qa 'PRADYOS_FOCUS_KEY .*code=9$$' build/alttab-plain.log || { \
+	   echo "[alttab] FAIL — arm B: a plain Tab never reached the focused app"; \
+	   grep -a PRADYOS_FOCUS_KEY build/alttab-plain.log | tail -5; exit 1; }
+	@echo "[alttab] arm B PASS — plain Tab delivered to focus"
+	@# Arm C: only a plain Tab was pressed in this boot, so zero cycles. Without
+	@# it, a compositor binding BOTH Tab and Alt+Tab passes A and B together and
+	@# the defect survives in half (DDR-995 §5 M1 is exactly that mutant).
+	@c=$$(grep -ac PRADYOS_WM_CYCLE build/alttab-plain.log || true); \
+	 [ "$$c" -eq 0 ] || { echo "[alttab] FAIL — arm C: plain Tab ALSO cycled ($$c times); it belongs to the focused app only"; exit 1; }; \
+	 echo "[alttab] arm C PASS — plain Tab did not cycle"
+	@echo "[alttab] PASS — all three arms"
 
 # Layer-7 named-agent panel gate (DDR-707): the compositor renders the 8 named
 # agent cards and reports the roster; the AETHER daemon's spawn lights KRYOS

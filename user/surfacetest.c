@@ -110,9 +110,13 @@ int main(void) {
     long grace_start = -1;          /* DDR-911: wall-clock start of C's grace */
     for (;;) {
         long ka = nsi(SYS_SURFACE_GETKEY, a, 0, 0);
-        if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", a, (char)ka); fflush(stdout); }
+        /* DDR-995: `code=` added because a literal tab is not greppable, and
+         * arm B asserts that a PLAIN Tab now reaches the focused application —
+         * which DDR-720's unconditional hotkey made impossible. smoke-focus
+         * matches only the bare PRADYOS_FOCUS_KEY prefix, so it is unaffected. */
+        if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c code=%ld\n", a, (char)ka, ka); fflush(stdout); }
         long kb = nsi(SYS_SURFACE_GETKEY, b, 0, 0);
-        if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", b, (char)kb); fflush(stdout); }
+        if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c code=%ld\n", b, (char)kb, kb); fflush(stdout); }
 
         /* DDR-718: honor compositor resize requests on B — resize, re-map,
          * redraw at the new size, re-commit at the same position. */

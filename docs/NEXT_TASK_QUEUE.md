@@ -48,7 +48,10 @@ Batch their DDRs in one pass first (§4.3), then implement.
       writing any input gate**: all six ring-3 arms pass on the broken kernel,
       and the missing arm was UNWRITABLE — `sendkey` cannot hold a key — so it
       lives in ring 0 as `ps2kbd_selftest()` / `PRADYOS_MODKEYS_PAIR_OK`.
-- [ ] Alt-Tab with real modifier plumbing (upgrade from plain Tab, DDR-720)
+- [x] Alt-Tab with real modifier plumbing (DDR-995) — Alt+Tab cycles; a plain Tab
+      now reaches the focused app, which DDR-720's unconditional hotkey made
+      impossible for ANY application. 3-arm gate, mutation-checked both ways
+      (M1 — bound to both — passes arms A+B and is caught only by arm C).
 - [ ] Ctrl+Alt+T launches a PRISM terminal window
 - [ ] Per-window restore from dock (DDR-717 restores all)
 - [ ] Window maximize at real display size (DDR-719 caps at 512×512).

@@ -22,7 +22,9 @@
 #define SYS_KEY_POLL    96          /* DDR-991: structured key events */
 
 /* DDR-991 ABI — must match kernel/drivers/input/ps2kbd.h. */
+#define KMOD_ALT   0x04u          /* DDR-995: Alt+Tab window cycling */
 #define KMOD_META  0x08u
+#define KEY_TAB    0x09u
 struct key_ev { unsigned char code, mods, down, ascii; };
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
@@ -1089,6 +1091,29 @@ int main(void) {
             for (long i = 0; i < ne; i++) {
                 if (!kev[i].down)
                     continue;
+                /* DDR-995: Alt+Tab cycles windows. DDR-720 bound this to a
+                 * BARE Tab on the byte stream, which meant no application on
+                 * this system could ever receive a Tab character — the branch
+                 * was unconditional and terminal, so it never reached the focus
+                 * routing below. The byte stream carries no modifier state, so
+                 * the chord could not be told from the keystroke until DDR-991
+                 * added this ring; DDR-992 then stopped a non-Shift chord from
+                 * emitting text at all, which makes the two cases disjoint at
+                 * the source rather than merely distinguishable here. */
+                if (kev[i].code == KEY_TAB && (kev[i].mods & KMOD_ALT)) {
+                    int low_id = -1;
+                    int low_z = 0x7FFFFFFF;
+                    for (long k = 0; k < ns; k++) {
+                        if (g_min_mask & (1u << surfs[k].id)) continue;   /* DDR-717 */
+                        if (surfs[k].z < low_z) { low_z = surfs[k].z; low_id = (int)surfs[k].id; }
+                    }
+                    if (low_id >= 0) {
+                        nsi(SYS_SURFACE_RAISE, low_id, 0, 0);
+                        printf("PRADYOS_WM_CYCLE id=%d\n", low_id);
+                        fflush(stdout);
+                        recompose_scene();
+                    }
+                }
                 if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
                     int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
                     int nxt = cur ? 0 : 1;
@@ -1132,24 +1157,6 @@ int main(void) {
                 g_cad_pre_said = 0;
                 printf("PRADYOS_CADENCE_TEST\n");
                 fflush(stdout);
-            }
-            else if (c == '\t') {                            /* DDR-720: cycle windows —
-                                                              * raise the bottom-most
-                                                              * visible surface (Tab is a
-                                                              * compositor hotkey, not
-                                                              * forwarded to the focus) */
-                int low_id = -1;
-                int low_z = 0x7FFFFFFF;
-                for (long i = 0; i < ns; i++) {
-                    if (g_min_mask & (1u << surfs[i].id)) continue;
-                    if (surfs[i].z < low_z) { low_z = surfs[i].z; low_id = (int)surfs[i].id; }
-                }
-                if (low_id >= 0) {
-                    nsi(SYS_SURFACE_RAISE, low_id, 0, 0);
-                    printf("PRADYOS_WM_CYCLE id=%d\n", low_id);
-                    fflush(stdout);
-                    recompose_scene();
-                }
             }
             else if (focus_id >= 0)                          /* DDR-708: route to focus */
                 nsi(SYS_SURFACE_SENDKEY, focus_id, (long)c, 0);
