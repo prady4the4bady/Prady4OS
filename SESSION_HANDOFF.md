@@ -7313,3 +7313,54 @@ callers (`virtio_blk.c:232/288`, `bcast.c:78`, `ipc.c:65`). The backlog's
 corrected.
 
 ### DDR free range: **DDR-995+** (994 claimed by the above)
+
+## CHECKPOINT 2026-08-24 — DDR-993/994/995 (tip `f74e5c5`)
+
+**Branch:** `dev/phase1-seyp3n` @ `f74e5c5`, pushed. PR #14 open (draft), subscribed.
+**Kernel:** `82fcac7d3117c63b`, 1,085,834 B against the 1,572,864 B gate.
+**Gates:** 153 across 10 shards, 7 excluded (`ci-shard-check` OK).
+
+### Landed this session
+
+- **DDR-993** — paired-modifier aggregate. `mods_set()` cleared the AGGREGATE bit
+  (KMOD_SHIFT) on ONE side's break, so releasing right Shift with left still held
+  read as no-Shift. Worse for Ctrl/Alt: a still-held Ctrl stops suppressing chords
+  and starts typing text. Fixed structurally — only the 8 physical keys have state
+  (`g_side`), `g_mods` is RECOMPUTED from it. A derived aggregate cannot disagree
+  with its sides. Also split `ps2kbd_feed()` out of the ISR: `sendkey` couples
+  press to release, so the two-keys-held sequence was UNWRITABLE as a ring-3 arm.
+  Kernel self-test drives raw scancodes; 12 steps.
+- **DDR-994** — detector for OPEN-1 route 1 (a HANG with no panic; every other
+  instrument keys on a fault or a print). `yield_stall_note()` on 3 unbounded
+  yield-spins (`mnt_lock`, both pipe waits). **Reports, does not repair** —
+  §NON-NEGOTIABLE 3, and bailing out of `mnt_lock` on a deadline would turn a hang
+  into a silent -EIO and destroy the evidence. `[yieldstall]` in GLOBAL_FORBIDDEN.
+- **DDR-995** — Alt+Tab. DDR-720's bare-Tab hotkey meant **no application could
+  ever receive a Tab**. Now Alt+Tab cycles and Tab reaches the focused surface.
+
+### CodeRabbit PR #14 review — one claim REFUTED, do not re-fix
+
+Its CRITICAL ("duplicate `struct net_rxq_ent`/`g_net_rxq` at lwip_port.c:152-155,
+so this file cannot build") is **a false positive**: 152 and 155 are the only
+definitions, 185–207 are uses, and the file builds warning-clean at `-Werror`.
+The paired-modifier finding in the same review was REAL and is DDR-993.
+
+### Still open — the release gate has NOT moved
+
+- **`v1.0.0` remains untagged, deliberately.** The operator's condition is that
+  OPEN-1 be closed by the hammer probe's evidence, not a green CI streak.
+  **DDR-990 §12 established the hammer CANNOT close it**: OPEN-1 is at least three
+  signatures, and the hammer closed route 3 (`#GP`), which was never OPEN-1's own
+  artefact. Route 1 is a hang that prints nothing, so no panic-based detector
+  reaches it — that is what DDR-994 is for, and it has not yet caught anything.
+  A green suite is not evidence here: at ~1/20 a clean 20-run sweep has ~64% power.
+- **OPEN-12, OPEN-13** — unchanged, still one capture each.
+- **Task #26 / DDR-989** — root-caused, deliberately unimplemented pending its
+  §4 confirming measurement.
+- **CAP_OCR/EXEC/SCENE/NET_BROWSE** — BLOCKED on an operator ruling (DDR-982 §5.5).
+
+### Next
+
+Group E remainder (Ctrl+Alt+T, per-window restore, maximize at real geometry,
+resize handles all edges, `SURF_EV_CLOSE`, OKLab horizon, vDSO reader,
+`PTE_SW_SHARED` audit), then Group F's 11 unbuilt agents.
