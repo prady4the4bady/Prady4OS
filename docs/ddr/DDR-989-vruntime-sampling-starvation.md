@@ -393,3 +393,41 @@ One torn read, and the scheduler never picks that thread again.
   all PASS.
 - The `vrjn` instrument stays in. On a fixed kernel an underflow is impossible,
   so any future `vrjn>0` is a real regression and names itself.
+
+### 9.7 CI evidence (2026-08-24), and what it does NOT show
+
+`e4c71e8` (the fix) is **fully green: 30/30 jobs across both suites** — ten
+shards, both arch-bootstraps, aether-layer, code-graph, shard-check.
+
+The pointed comparison is shard 3. On `1159c9d` (unfixed) it FAILED at
+`smoke-nethammer`, and its heartbeat carried the inflation this DDR is about:
+
+```
+headvr=126100790075346602   headpk=1668754   preempt=10512
+```
+
+— i.e. ~1.26e17 against a healthy ~1e6, independent of the local reproduction
+and on a different gate. On `e4c71e8` the same shard reports:
+
+```
+[nethammer] PASS — 2 distinct pids, 40,000 connect/close pairs, conn_err=0
+shard 3: ALL PASS — 20 gates
+```
+
+**What is NOT shown, and cannot be from a green run:** `headvr` itself.
+`boot_test.sh` echoes the serial log only on FAILURE, so a passing job never
+prints a heartbeat — the healthy value is structurally unobservable in a green
+CI log. So the CI evidence is "the gate that failed while exhibiting the
+inflation now passes", which is consistent with the fix and is NOT a direct
+measurement of `headvr` returning to ~1e6.
+
+Two further honesty notes:
+
+- One green run of `smoke-nethammer` is not proof that the inflation caused its
+  failure. That attribution was flagged unproven when the failure was first read
+  and it stays unproven; the gate may pass for unrelated reasons.
+- The direct CI measurement would need `headvr` asserted by a gate rather than
+  observed in a log. That is a cheap future arm — assert `headvr < 1e12` at the
+  heartbeat — and is the honest way to make this checkable in CI. Not added here
+  because the disassembly in §9.3 already settles the mechanism, and a new gate
+  arm days from a deadline needs its own mutation check.
