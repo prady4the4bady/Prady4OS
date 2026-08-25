@@ -56,6 +56,13 @@ if [ -n "${DG_ID:-}" ]; then
 fi
 
 if [ -n "${RZ_ID:-}" ]; then
+    # DDR-997: which handle. Default `rz` = the DDR-718 SE corner, so
+    # smoke-evresize is untouched. The seven new handles (rzn rzs rzw rze rznw
+    # rzne rzsw) are published by the same compositor expressions the hit-test
+    # uses. Every one of these names is a UNIQUE substring of the geometry line:
+    # none of them contains another as a substring, and none contains "rz=", so
+    # the ${geom##*FIELD=} parse below still isolates exactly one field.
+    rzf="${RZ_FIELD:-rz}"
     # Require the line to actually CARRY rz=. Serial output from other threads
     # interleaves mid-line in this tree, so a matching-but-truncated
     # "PRADYOS_WM_GEOM id=1 …" is a real possibility; taking tail -1 blindly
@@ -63,19 +70,19 @@ if [ -n "${RZ_ID:-}" ]; then
     # log text as a variable name (observed: "PRADYOS_WM_GEOM: unbound variable").
     geom=""
     for _ in $(seq 1 600); do
-        geom=$(grep -a "PRADYOS_WM_GEOM id=${RZ_ID} " "$log" 2>/dev/null | grep -a "rz=" | tail -1)
+        geom=$(grep -a "PRADYOS_WM_GEOM id=${RZ_ID} " "$log" 2>/dev/null | grep -a "${rzf}=" | tail -1)
         [ -n "$geom" ] && break
         sleep 0.1
     done
     if [ -z "$geom" ]; then
-        echo "[drag_inject] FAIL — no complete PRADYOS_WM_GEOM (with rz=) for id=${RZ_ID}"
+        echo "[drag_inject] FAIL — no complete PRADYOS_WM_GEOM (with ${rzf}=) for id=${RZ_ID}"
         exit 1
     fi
     # DDR-935: same field-isolation fix as the dg= parse above. This one was
     # ACTIVELY BROKEN by DDR-929 appending dg= after rz= on the same line:
     # SY=${rz##*,} then returned dg's Y (5596 instead of 8416), so the resize
     # click landed on the wrong row and missed the 14-pixel corner.
-    rz=${geom##*rz=}
+    rz=${geom##*${rzf}=}
     rz=${rz%% *}
     SX=${rz%%,*}
     SY=${rz##*,}
@@ -83,13 +90,13 @@ if [ -n "${RZ_ID:-}" ]; then
     # here, not as a confusing bash arithmetic error 20 lines later.
     case "$SX$SY" in
         ''|*[!0-9]*)
-            echo "[drag_inject] FAIL — malformed rz in: $geom"
+            echo "[drag_inject] FAIL — malformed ${rzf} in: $geom"
             exit 1 ;;
     esac
     export SX SY
     export EX="$(( SX + ${RZ_DX:-3296} ))"
     export EY="$(( SY + ${RZ_DY:-2686} ))"
-    echo "[drag_inject] DDR-894: observed rz for id=${RZ_ID}: start=${SX},${SY} end=${EX},${EY}"
+    echo "[drag_inject] DDR-894: observed ${rzf} for id=${RZ_ID}: start=${SX},${SY} end=${EX},${EY}"
 fi
 
 # Optional SX/SY/EX/EY abs-coordinate overrides (DDR-718); defaults = the

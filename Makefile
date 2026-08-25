@@ -3001,6 +3001,38 @@ smoke-evresize: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_EV_RESIZE_OK build/evresize.log || { echo "[evresize] FAIL — client did not honor the resize"; echo "--- press/geom lines (DDR-937) ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG_START|PRADYOS_RESIZE_REQ|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)|PRADYOS_EV_RESIZE_OK|PRADYOS_AGENT_TRIGGER' build/evresize.log || echo "(none)"; echo "--- tail 200 ---"; tail -200 build/evresize.log; exit 1; }
 	@echo "[evresize] PASS — $$(grep -a PRADYOS_EV_RESIZE_OK build/evresize.log | head -1)"
 
+# Layer-7 all-edges resize gate (DDR-997): DDR-718 could only resize from the
+# bottom-right corner, where the origin holds still and one event carries the
+# whole change. A W or N drag must BOTH move the origin and change the size,
+# through two non-atomic syscalls — that is why the item needed a DDR.
+#
+# Four drags in one boot, every start AND end point derived from the
+# compositor's own published handles (§INV.5): rzw= and rze= bracket the window,
+# so "drag the west edge past the 32 px floor" is expressed as "drag rzw to
+# rze's column" and holds at any window size.
+#
+# The load-bearing arms are W and N. They assert the FIXED-EDGE equality
+# (x+w == x0+w0), which is what §4's clamp-before-origin rule buys. A gate that
+# only checked "the width changed" would pass both the M1 mutant (resize without
+# the move) and the M2 mutant (clamp after deriving the origin) — DDR-997 §7.
+smoke-resizeall: $(IMG) fat-image sfs-image
+	@echo "[resizeall] all-edges resize gate: boot(GPU+tablet) + QMP E/S/W/N drags..."
+	@rm -f build/resizeall.log /tmp/prsall.sock
+	@RZ_ID=1 RZ_ARMS="e s w n" bash tools/qemu_runner/resize_inject.sh build/resizeall.log /tmp/prsall.sock PRADYOS_AMBIANCE_OK &
+	@timeout 180 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/prsall.sock,server,nowait \
+	    -serial file:build/resizeall.log -display none -no-reboot || true
+	@grep -q "PRADYOS_WM_GEOM id=1 .*rzw=" build/resizeall.log || { echo "[resizeall] FAIL — compositor never published the DDR-997 handles"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_COMPOSITOR_OK' build/resizeall.log | tail -5; exit 1; }
+	@# DDR-937: on failure, dump the press-dispatch lines. Every press branch
+	@# but the resize bands prints a distinct sentinel, so the log names which
+	@# branch swallowed the click instead of leaving "no FIX line" ambiguous.
+	@python3 tools/qemu_runner/resize_check.py build/resizeall.log 1 e s w n || { echo "--- press/geom lines ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG|PRADYOS_RESIZE_(REQ|FIX)|PRADYOS_EV_RESIZE_OK|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)' build/resizeall.log || echo "(none)"; exit 1; }
+	@echo "[resizeall] PASS — E/S/W/N drags all held their fixed edge"
+
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
 # frames; the compositor announces each ambiance's first settled backdrop and

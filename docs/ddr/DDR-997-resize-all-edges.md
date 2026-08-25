@@ -1,6 +1,6 @@
 # DDR-997 — resize from any edge, not just the bottom-right corner
 
-**Status:** DESIGN. Not implemented.
+**Status:** IMPLEMENTED, GATED, MUTATION-CHECKED (M1/M2/M3 all caught).
 **Extends:** DDR-718 (bottom-right 14x14 resize corner), DDR-894 (`rz=` geometry).
 **Gate:** `smoke-resizeall` (new), alongside the existing `smoke-evresize`.
 
@@ -130,3 +130,128 @@ them. A test that only asserted "width changed" would pass both mutants.
 - No minimum-size negotiation with the client: 32 px is imposed, as DDR-718 does.
 - The 512 ceiling stays. Lifting it is `SURFACE_DIM_MAX` and a PMM budget change
   across many gates — sized separately, deliberately not bundled here.
+
+
+---
+
+## 9. Implementation — what was measured
+
+Kernel hash **`6f0da11f2ef4a123`**, `kernel.bin` 1,085,834 B against the
+1,572,864 B gate. `make image` warning-clean at `-Werror`.
+
+`smoke-resizeall` drives four drags in ONE boot and passes:
+
+```
+arm e OK — (140,140 64x64)   -> (140,140 157x64),  1 observation(s)
+arm s OK — (140,140 157x64)  -> (140,140 157x117), 1 observation(s)
+arm w OK — (140,140 157x117) -> (265,140 32x117),  1 observation(s)
+arm n OK — (265,140 32x117)  -> (265,225 32x32),   1 observation(s)
+```
+
+The two load-bearing equalities hold exactly: `140+157 = 297 = 265+32` (W) and
+`140+117 = 257 = 225+32` (N). Both shrink arms reached the 32 px floor, so the
+clamp is genuinely exercised rather than merely present.
+
+### 9.1 The FIX line had to report the OBSERVED origin, not the intended one
+
+The first version emitted `x=`/`y=` from the compositor's own `newx`/`newy`.
+Under M1 — drop the `SYS_SURFACE_MOVE` and change nothing else — `newx` is still
+computed and would still have been printed, so **the gate would have passed a
+window that never moved**. That is the identical decorative-arm mistake DDR-996's
+first arm B made, caught here before it was believed rather than after.
+
+The fix is a re-poll: `SYS_SURFACE_POLL` after the move, reporting the surface's
+actual `x`/`y`. `w`/`h` stay the REQUESTED values, because the client honours the
+resize asynchronously (that round-trip is `smoke-evresize`'s job). Mixing an
+observed origin with a requested size is deliberate and is exactly the property
+under test — the origin actually moved to must complement the width actually
+asked for.
+
+### 9.2 Mutation results — three mutants, three distinct kernel hashes
+
+| Mutant | Kernel hash | Result |
+|---|---|---|
+| (none) | `6f0da11f2ef4a123` | `smoke-resizeall` PASS, `smoke-drag` PASS |
+| **M1** — drop the move on a W/N drag | `34ef019aa3fdccd5` | W and N FAIL, **E and S still pass** |
+| **M2** — clamp after deriving the origin | `c683670acf34792a` | W and N FAIL |
+| **M3** — resize hit-test before the title bar | `018e1777db0547fb` | **`smoke-drag` FAILs** |
+
+M1 and M2 fail with **different** signatures, so the gate discriminates them
+rather than merely reporting "something is wrong":
+
+- M1: `x+w=172, was x0+w0=297` — the origin never moved, so the right edge
+  travelled LEFT by the amount the width shrank. The dedicated
+  `origin did NOT move` check also fires.
+- M2: `x+w=322, was x0+w0=297` — the origin moved to the UNCLAMPED pointer
+  position and then the width was floored under it, so the right edge overshot
+  RIGHT by exactly `32 - 7 = 25`. The `origin did NOT move` check correctly does
+  NOT fire here: the origin did move, just to the wrong place.
+
+E and S surviving M1 is the point §7 makes: an arm that only asserted "the width
+changed" would have passed both mutants.
+
+### 9.3 M3 is NOT vacuous, and the reason is worth recording
+
+§2 says the title bar must be hit-tested first. On a single surface that
+requirement is now structural rather than ordered: the title bar occupies
+`y-TITLEBAR .. y` and the N band occupies `y .. y+RZBAND`, so the two regions are
+**disjoint** and no ordering can change the outcome. Reading only that, M3 looks
+untestable.
+
+The ambiguity is **cross-surface**, and it is real in the shipped layout. ALPHA
+sits at (100,100) 64x64, so its east band is `x >= 150` over `y 100..164`. BETA
+sits at (140,140), so its published title-bar drag point `dg=` is (150,131) —
+**inside ALPHA's east band**. Under M3 the press therefore grabs ALPHA's east
+edge instead of moving BETA, and `smoke-drag` fails with `drag did not start on
+the title bar` while the log carries the giveaway:
+
+```
+PRADYOS_RESIZE_FIX id=0 edge=8 x0=100 y0=100 w0=64 h0=64 x=100 y=100 w=300 h=64
+```
+
+id=0 is ALPHA, `edge=8` is `RZ_E`. Predicted from the published geometry before
+the run, then confirmed by it.
+
+### 9.4 One bug found in the gate itself, by the serial log
+
+The first `smoke-resizeall` run had E, W and N green and **S failing on every
+attempt** — a suspicious pattern, since S is the easiest arm (origin fixed, one
+dimension). The compositor's own `PRADYOS_BTN_STATE` lines (DDR-941) settled it
+without touching the resize code: the compositor observed **6 of the 10 injected
+button edges**, and the missing pair was S's.
+
+Cause was in the injector, not the kernel. It waited for "any new
+`PRADYOS_WM_GEOM` line" between arms; in the capture that wait was satisfied by
+an unrelated republish (GAMMA closing) **before the E arm's resize had even
+committed**, so the S drag was injected while the compositor was still inside E's
+client round-trip and recompose. `SYS_MOUSE_POLL` reads current state rather than
+an event queue (DDR-941), so a press and a release that both fall inside one busy
+window are not queued — they are simply never seen. The wait now requires a geom
+line published *after* this arm's own drags.
+
+This is §INV.8's lesson in a different costume: the failure was a claim about
+timing, and reading the timing instrument first was cheaper than reading the code.
+
+### 9.5 Geometry republish was stale, repo-wide
+
+`PRADYOS_WM_GEOM` was emitted only when the surface COUNT or the focus changed,
+so after any move or resize the last published line described a window that had
+since moved. `smoke-evresize` never noticed because it does one drag and stops.
+Four drags in a row do notice. The publish condition now also fires on a rect
+change, tracked exactly (per-slot `x/y/w/h`), not hashed — a hash collision here
+would silently republish nothing.
+
+### 9.6 Regressions checked
+
+`smoke-evresize`, `smoke-drag`, `smoke-wmclose`, `smoke-wmmax`, `smoke-wmmin`,
+`smoke-mouse`, `smoke-agent-click`, `smoke-shell` (5/5), `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity` — all PASS on
+`6f0da11f2ef4a123`. `ci-shard-check` OK at **155 gates / 10 shards / 7 excluded**;
+`ci-probe-rodata-check` OK.
+
+### 9.7 What this does NOT claim
+
+The four arms exercise one surface at 1024x768 with a client that honours resize
+requests. Not covered: a client that ignores or partially honours a request, a
+window dragged off-screen (`SYS_SURFACE_MOVE` clamping is untested here), and
+simultaneous drags on two surfaces. The 512 ceiling stays untouched per §8.
