@@ -7434,3 +7434,87 @@ named mechanism -> no fix (§NON-NEGOTIABLE 3). DDR-994 §8.4.
    starting; do not treat it as a compositor tweak.
 4. `v1.0.0` stays UNTAGGED. OPEN-1 is not closed, and DDR-990 §12 established
    the hammer cannot close it.
+
+---
+
+## CHECKPOINT 2026-08-25 — DDR-997 shipped (resize from any edge)
+
+Branch `dev/phase1-seyp3n` @ **`cbc8a88`**, pushed. PR #14 already tracks this
+branch (its title still names DDR-990 — it is the standing branch PR).
+
+Kernel **`6f0da11f2ef4a123`**, 1,085,834 B, warning-clean at `-Werror`.
+`ci-shard-check` **155 gates / 10 shards / 7 excluded**. `ci-probe-rodata-check` OK.
+
+### What shipped
+
+Eight 14 px resize regions per window (N/S/E/W + four corners). SE unchanged
+bit-for-bit — `RZ_S|RZ_E` reduces to exactly DDR-718's predicate, and it is the
+one path with a green gate. New gate `smoke-resizeall` (shard 9, 180 s), new
+injector `tools/qemu_runner/resize_inject.sh`, new checker
+`tools/qemu_runner/resize_check.py`. `drag_inject.sh` gained `RZ_FIELD`.
+
+Four drags in ONE boot, both fixed-edge equalities exact:
+`140+157 = 297 = 265+32` (W), `140+117 = 257 = 225+32` (N).
+
+Mutations, three distinct kernel hashes, all caught:
+`M1` drop the move `34ef019aa3fdccd5` (W/N fail, **E/S still pass**),
+`M2` clamp after origin `c683670acf34792a` (W/N fail, **different signature**),
+`M3` resize before title `018e1777db0547fb` (**`smoke-drag` fails**).
+
+### Three things worth carrying forward
+
+1. **A gate that reports INTENT is decoration.** The `PRADYOS_RESIZE_FIX` line
+   first printed the compositor's own `newx`/`newy`. Under M1 — drop the
+   `SYS_SURFACE_MOVE`, change nothing else — `newx` is still computed and would
+   still have been printed, so the gate would have passed a window that never
+   moved. It now re-polls and reports the OBSERVED origin. Same mistake as
+   DDR-996's first arm B; caught before it was believed this time.
+
+2. **`PRADYOS_WM_GEOM` was stale repo-wide.** It was republished only when the
+   surface COUNT or the focus changed, so after any move or resize the last
+   published line described a window that had since moved. One drag never
+   notices (which is why `smoke-evresize` never did); four in a row do. The
+   publish condition now also fires on a rect change, tracked exactly per slot,
+   not hashed.
+
+3. **`PRADYOS_BTN_STATE` diagnosed a gate bug the code could not.** The first run
+   had E/W/N green and S red every time — a suspicious pattern, S being the
+   easiest arm. The compositor observed **6 of the 10 injected button edges** and
+   the missing pair was S's. The injector was proceeding on an unrelated geom
+   republish (GAMMA closing) while the compositor was still inside the previous
+   arm's recompose, and `SYS_MOUSE_POLL` reads state rather than an event queue
+   (DDR-941) — a press and release inside one busy window are never seen.
+   §INV.8 in a different costume: the failure was a claim about timing.
+
+### M3 is cross-surface, not on-surface
+
+On one surface the title bar (`y-TITLEBAR..y`) and the N band (`y..y+RZBAND`) are
+**disjoint**, so no ordering can change the outcome — stronger than the ordering
+§2 asked for. The real ambiguity is between surfaces, and it exists in the
+shipped layout: ALPHA at (100,100) 64x64 has an east band at `x>=150`, and
+BETA's published `dg=` is (150,131) — inside it. Under M3 the press resizes
+ALPHA (`PRADYOS_RESIZE_FIX id=0 edge=8 ... w=300`) instead of moving BETA.
+Predicted from the published geometry, then confirmed.
+
+### Regressions green on the shipped hash
+
+`smoke-evresize`, `smoke-drag`, `smoke-wmclose`, `smoke-wmmax`, `smoke-wmmin`,
+`smoke-mouse`, `smoke-agent-click`, `smoke-shell` 5/5, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity`.
+
+### Next, in order
+
+1. **`SURF_EV_CLOSE`** (DDR-998, next free number) — the tractable Group E item.
+   `SYS_SURFACE_CLOSE` force-closes today and the owner gets no chance to save
+   state. The machinery exists: `SYS_SURFACE_SENDEV` type 1 is resize, so type 2
+   is close. Deterministically gateable.
+2. **Ctrl+Alt+T is NOT a compositor tweak** — correcting the previous handoff,
+   which listed it as "compositor-only, low risk" beside the resize work. A
+   *PRISM terminal window* needs a terminal emulator surface (glyph grid,
+   scrollback) plus PRISM's stdio rebound off the serial console onto a pipe.
+   That is a new client binary, not a key binding. Size it before starting.
+3. Per-window restore from dock still needs a dock — the largest Group E option.
+4. Maximize at real display geometry remains NOT low risk (`SURFACE_DIM_MAX`,
+   `sys_surface.c:17`; a PMM budget change touching many gates).
+5. `v1.0.0` stays UNTAGGED. OPEN-1 is not closed, and DDR-990 §12 established
+   the hammer cannot close it.
