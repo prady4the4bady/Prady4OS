@@ -20,6 +20,6 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "sql.js": "^1.10.0",
     "tree-sitter-wasms": "^0.1.11",
-    "web-tree-sitter": "0.22.6"
+    "web-tree-sitter": "0.26.13"
   }
 }
