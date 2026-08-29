@@ -117,3 +117,79 @@ ship, which is the operator's call and not mine to make silently.
 What will **not** happen is OPEN-1 being marked closed on a green streak.
 DDR-985 §Claim-A was written that way once, and §3's arithmetic is why it was
 wrong.
+
+
+---
+
+## 8. E2 step 1 RESULT — `mnt_lock` does stall organically, and the captures are PRE-DDR-989
+
+The grep was worth doing before writing code. `[yieldstall]` has fired outside
+its own gate, on real ring-3 pids, in **two independent captures**:
+
+```
+build/gatelogs/lf-smoke-evresize.out :
+  [yieldstall] site=mnt_lock spins=24589 ticks=500 pid=45 cpu=0
+build/gatelogs/vrj-6.out :
+  [yieldstall] site=mnt_lock spins=27998 ticks=501 pid=43 cpu=0
+```
+
+Four things about these, in the order they matter:
+
+1. **They are not the detector's own arm.** `smoke-yieldstall`'s arm B holds
+   `mnt_lock` deliberately and reports `pid=0`. These are `pid=45` and `pid=43`,
+   and the adjacent heartbeats name `cur=AETHERD` at exactly those pids — the
+   AETHER daemon is the thread spinning.
+2. **Neither ever RESOLVED.** `OPENED: 1, RESOLVED: 0` in both files. The
+   reporter prints a RESOLVED partner when the spin ends; there is none. So the
+   wait did not end for the rest of the boot.
+3. **Both boots FAILED**, both with `[evresize] FAIL — client did not honor the
+   resize`, and in both the `preempt` counter freezes at the stall and never
+   moves again (1606 → 1630, then flat; 1594 → 1618, then flat) while `curpid`
+   keeps changing. That is the "frozen `preempt` with a live `curpid`" third
+   signature recorded in the handoff and never explained.
+4. **And the kernel in both had the DDR-989 defect LIVE.** `vrj-6.out` carries
+   `vrjn=1 vrjd=18446744073709405858` — that is the DDR-989 §9 instrument
+   reporting the poisoned charge — and both show `curvr ≈ 1.79e16` against
+   `headvr = 1.80e16`. A run on today's fixed kernel shows `vrjn=0` and
+   `curvr ≈ 1.9e7`: **nine orders of magnitude** apart. These captures predate
+   the fix.
+
+### 8.1 What this is, and what it is not
+
+It **is** the first organic evidence that DDR-994's `mnt_lock` hypothesis names
+a real contention: an unbounded `yield()` spin that, at least once, never ended.
+
+It is **not** OPEN-1 route 1. Route 1 is `smoke-surfdestroy` hanging inside
+`sys_read`; this is `smoke-evresize` failing a resize round-trip with the guest
+still alive. Same lock, different gate, different symptom. Asserting they are one
+defect on the strength of a shared lock name would be exactly the colour-matching
+this file's §1 warns about, and which DDR-985's Claim A already did once.
+
+### 8.2 The candidate explanation, and why it may already be gone
+
+Inflated `vruntime` starves whoever holds `mnt_lock`; a waiter then spins in an
+unbounded `yield()` loop forever. That composes the two known defects rather than
+requiring a third: DDR-989 supplies the starvation, DDR-994 supplies the
+unbounded wait. It also explains the frozen `preempt` — the runqueue stops making
+progress — without needing a new mechanism.
+
+If that is right, **DDR-989's fix removed the trigger** and organic `mnt_lock`
+stalls should no longer occur. That is a prediction, and it is falsifiable.
+
+### 8.3 The measurement is already running
+
+E1's campaign (`smoke-surfdestroy` × 60, kernel `a9cd9ed1114994b8`) writes one
+log per run under `build/gatelogs/campaign/`. Grepping those 60 logs for
+`[yieldstall] site=mnt_lock` with no RESOLVED partner tests §8.2 **at no extra
+cost** — the same campaign answers E1 and E2 step 2 at once.
+
+- Zero unresolved organic stalls in 60 boots → §8.2 supported, and the route-1
+  watchdog may not need building at all.
+- Any unresolved organic stall on the fixed kernel → §8.2 is refuted, the
+  `mnt_lock` wait is independently unbounded, and bounding it becomes the fix
+  with a named mechanism behind it.
+
+Either way this stops being a guess. **Do not write the watchdog until this
+campaign reports** — DDR-990 §12 called the watchdog "the honest next
+instrument", and it may turn out to be an instrument for a defect that no longer
+exists.
