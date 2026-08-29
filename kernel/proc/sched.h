@@ -205,6 +205,11 @@ struct procinfo {
 /* Fill *out with the index-th thread in the scheduler ring (walked under
  * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */
 int         sched_snapshot(int index, struct procinfo *out);
+/* DDR-1001: wait4's child lookup, walking the all-threads ring UNDER
+ * g_sched_lock. sys_wait.c cannot take that lock (it is file-local to sched.c),
+ * which is why the walk lives here rather than there. */
+struct tcb *sched_find_child(struct tcb *parent, int pid,
+                             struct tcb **has_live, int *any, int *ringbad);
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);

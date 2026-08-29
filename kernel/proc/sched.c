@@ -1347,6 +1347,52 @@ static void sched_free_tcb(struct tcb *t) {
  * circular ring under g_sched_lock (create/exit/reap mutate it on any CPU),
  * copies pure values into *out. A create/exit racing between indices only
  * adds/drops a row — fine for a best-effort `ps`. */
+/* DDR-1001 — find the caller's reapable child, walking the ring UNDER the lock.
+ *
+ * sys_wait4 used to do this walk itself, in sys_wait.c, taking NO lock at all,
+ * while sched_ring_unlink relinks the ring holding g_sched_lock. A lock only
+ * excludes participants who take it, so the reader could follow a `->next`
+ * mid-relink and never come back to `parent` — an unbounded loop reached from
+ * ring 3 with IF clear (SYSCALL entry), which nothing can preempt. That is the
+ * measured [apfreeze] of DDR-1001: bt[1] = sys_wait4+0x4f, the return address
+ * after `callq find_zombie_child`.
+ *
+ * `sched_snapshot` above already established the correct pattern for this exact
+ * traversal; this is the same thing for wait4's predicate. Moving the walk here
+ * is what lets it take the lock at all — g_sched_lock is file-local.
+ *
+ * The bound is belt-and-braces, not the fix: under the lock the ring is
+ * consistent and the walk terminates. If it ever does not, the ring is corrupt
+ * for some other reason, and reporting that beats hanging forever.
+ *
+ * NOT fixed here, and deliberately not claimed: the returned pointer is used
+ * after this returns (and after the lock drops), so a concurrent reap could
+ * still free it. That lifetime question is pre-existing, separate, and needs
+ * its own change — this one stops the CPU wedging.
+ */
+#define WAIT4_RING_MAX 1024u   /* ~10x any observed live-thread count */
+
+struct tcb *sched_find_child(struct tcb *parent, int pid,
+                             struct tcb **has_live, int *any, int *ringbad) {
+    *has_live = 0; *any = 0; *ringbad = 0;
+    if (!parent) return 0;
+    struct tcb *found = 0;
+    uint64_t fl = irq_save();
+    unsigned n = 0;
+    struct tcb *t = parent->next;
+    while (t && t != parent) {
+        if (++n > WAIT4_RING_MAX) { *ringbad = 1; break; }
+        if (t->parent_pid == parent->pid && (pid == -1 || (int)t->pid == pid)) {
+            *any = 1;
+            if (t->state == THREAD_ZOMBIE) { found = t; break; }
+            if (!*has_live) *has_live = t;
+        }
+        t = t->next;
+    }
+    irq_restore(fl);
+    return found;
+}
+
 int sched_snapshot(int index, struct procinfo *out) {
     if (index < 0 || !current_thread)
         return 0;

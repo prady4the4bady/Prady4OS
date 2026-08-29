@@ -1,7 +1,6 @@
 # DDR-1001 — `[apfreeze]` is back: an unlocked ring walk in `sys_wait4`
 
-**Status:** ROOT-CAUSE SITE IDENTIFIED from a real CI artefact. Fix NOT yet
-implemented (§7 says why, and when).
+**Status:** FIXED, gated, M1 mutation-checked. Kernel `60b35c96d70253f5`.
 **Reopens:** OPEN-2 / B#3, which DDR-981 closed. CLAUDE.md's own instruction is
 *"Reopen on the first `[apfreeze]` line in CI."* This is that line.
 **Distinct from DDR-981:** same *symptom*, different *site* — this path never
@@ -155,3 +154,64 @@ output at all**; this is a hang in `sys_wait4` that *announces itself* through
 fired. They may share the "unbounded unlocked walk" shape — `mnt_lock` is DDR-994's
 candidate for route 1 — but a shared shape is not a shared defect, and treating
 it as one is the colour-matching this file's neighbours keep warning about.
+
+
+---
+
+## 9. The fix — and the project already had the right pattern
+
+§7 planned "bound the walk, then lock the reader". Reading further changed the
+order and the emphasis, for the better: **`sched_snapshot` already walks this
+exact ring under `g_sched_lock`** (`sched.c`, for `SYS_GETPROCS`). The project
+knows how to traverse the all-threads ring safely; `sys_wait4` simply wasn't
+doing it.
+
+So the fix is not a new invention, it is making wait4 follow the existing
+convention:
+
+* `find_zombie_child` is **deleted from `sys_wait.c`**.
+* `sched_find_child()` replaces it **in `sched.c`**, walking under
+  `irq_save()` (= `spin_lock_irqsave(&g_sched_lock)`), exactly as
+  `sched_snapshot` does.
+* The walk had to move files at all because `g_sched_lock` is `static` to
+  `sched.c` — `sys_wait.c` could not have taken it where it was.
+
+The bound (`WAIT4_RING_MAX = 1024`, ~10x any observed live-thread count) stays,
+but its role is now belt-and-braces rather than the fix: under the lock the ring
+is consistent and the walk terminates. If it ever doesn't, the ring is corrupt
+for some other reason, and `[ringwalk] wait4 ring inconsistent pid=<n>` reports
+that instead of wedging a CPU.
+
+### 9.1 M1 — mutation-checked
+
+| build | kernel | result |
+|---|---|---|
+| fixed | `60b35c96d70253f5` | `smoke-smpuser` PASS, `smoke-shell` 5/5 PASS |
+| **M1** — `WAIT4_RING_MAX = 1` | `8cb987c18ddebb17` | `smoke-smpuser` **FAIL**, and the sentinel fires: `[ringwalk] wait4 ring inconsistent pid=39` |
+
+Distinct hashes both ways. The detector is live and reports; it is not
+decoration.
+
+### 9.2 `[ringwalk]` added to `GLOBAL_FORBIDDEN`
+
+Deliberately, and with the DDR-994 lesson in mind. `[yieldstall]` was *removed*
+from that list because a resolved stall is survivable and it reddened four shards
+on a signal never shown to be fatal. `[ringwalk]` is different: under the lock,
+exceeding a bound set at ~10x any observed thread count cannot happen unless the
+ring is genuinely corrupt. It is fatal by construction, so a recurrence should
+name itself rather than hide.
+
+### 9.3 What is NOT fixed, and is not claimed to be
+
+The pointer `sched_find_child` returns is used **after** the lock drops —
+`live->waiter = self`, `child->exit_status`, `sched_destroy(child)`. A concurrent
+reap could still free it in that window. That lifetime question is **pre-existing,
+separate, and untouched here**; this change stops the CPU wedging, which is what
+the artefact showed.
+
+Nor is the *race* itself mutation-checkable by a deterministic gate: the failure
+needed a concurrent relink at a precise moment and appeared once in CI across
+many runs. M1 proves the bound and its sentinel work; the lock is justified by
+matching `sched_snapshot`'s established pattern, not by a reproduction. Saying
+which of the two is demonstrated and which is reasoned matters more than the
+green result.

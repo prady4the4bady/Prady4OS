@@ -381,6 +381,12 @@ early_exit_eligible=0
 # `[yieldstall]` here only once a capture shows an OPENED stall with no RESOLVED
 # partner -- that is a hang, and then it belongs in this list.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
+    # DDR-1001: the wait4 ring walk exceeded its bound, which under g_sched_lock
+    # is impossible unless the ring is genuinely corrupt. Unlike [yieldstall]
+    # (removed from this list in DDR-994 because a resolved stall is survivable),
+    # this one is fatal by construction: the walk is bounded at ~10x any observed
+    # live-thread count, so exceeding it is never benign.
+    '[ringwalk]'
     '[apfreeze]' \
     '[vrinflate]' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
