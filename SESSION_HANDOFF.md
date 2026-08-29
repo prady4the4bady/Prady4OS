@@ -7518,3 +7518,66 @@ Predicted from the published geometry, then confirmed.
    `sys_surface.c:17`; a PMM budget change touching many gates).
 5. `v1.0.0` stays UNTAGGED. OPEN-1 is not closed, and DDR-990 §12 established
    the hammer cannot close it.
+
+---
+
+## CHECKPOINT 2026-08-25 (2) — DDR-997 CI fix + DDR-998 shipped
+
+Branch `dev/phase1-seyp3n` @ **`ca85e35`**, pushed. Kernel **`a9cd9ed1114994b8`**,
+1,089,930 B. `ci-shard-check` **156 / 10 shards / 7 excluded**.
+
+### smoke-resizeall was RED in CI on `cbc8a88`, and the OS was not at fault
+
+Shard 9 failed twice. Arm E passed; S/W/N failed. **The fixed-edge assertions had
+already held on the failing run** — `147 + 150 = 297 = 140 + 157`. What failed
+were the clamp checks, because every arm committed at its own drag **START**
+coordinate: `neww = (x0+w0) - ms.x` with `ms.x = 147` is the press point.
+
+The injector released on a fixed 0.45 s sleep, betting the compositor had polled
+in between. It had not. Fixed with `PRADYOS_RESIZE_TRACK` (one line per drag,
+emitted when the compositor first sees the pointer off the press point); the
+injector now waits for that line before releasing.
+
+**This is the third time in two days that a fixed sleep against
+`SYS_MOUSE_POLL` has produced a false failure** (DDR-910 the click, DDR-997 §9.4
+the press, §10 the drag). The pattern is worth naming: `SYS_MOUSE_POLL` reads
+CURRENT STATE, not an event queue, so anything that happens entirely between two
+compositor polls did not happen as far as the guest is concerned. Any new
+pointer-driven gate must wait on a printed witness, never on a duration.
+
+Also worth keeping: **the clamp checks earned their place.** Without them the run
+would have passed on the fixed-edge equality alone while silently no longer
+exercising the M2 mutant — and the check that fired said exactly that in its own
+failure text.
+
+### DDR-998 — `SURF_EV_CLOSE`, ask then force
+
+Event type **4** (1/2/3 were already resize/scroll/composited — the
+`struct surf_event` comment named only type 1, which is how a duplicate ships).
+
+`arm A OK — asked@432, saved@433, owner closed@437`
+`arm B OK — forced after 3 s / 64 frames of unused grace` — the **frames** floor
+bound, not the seconds.
+
+M1b (`ae958140c859d692`) and M2 (`833fedd88b4b4b4a`) fail **different arms**,
+which is what shows the arms test the two halves independently. **M3 is recorded
+UNMEASURED**: the shipped layout cannot recycle a slot inside the grace on
+demand, so the mutated line would never execute and a "pass" would mean nothing.
+
+### The bug the free path hid from the alloc path
+
+`s->gen++` in `sys_surface_create` is correct in isolation. `surf_take_free`
+clears the slot with a **whole-struct byte wipe**, which would have taken `gen`
+with it — every tenancy back at 1, and a generation counter that counts to one
+silently agrees with every stale request it exists to reject. Found by reading
+the FREE path after writing the ALLOC path. No reachable test would have caught
+it.
+
+### Next
+
+1. Watch CI on `ca85e35` (shard 9 = resizeall, shard 8 = surfclose).
+2. Group E remainder, in rough cost order: compositor double-map
+   `PTE_SW_SHARED` audit; OKLab horizon bands; vDSO callable reader; then
+   per-window restore from dock (needs a dock) and Ctrl+Alt+T (needs a terminal
+   emulator surface — NOT a key binding, see the previous checkpoint).
+3. `v1.0.0` stays UNTAGGED — OPEN-1 is not closed.
