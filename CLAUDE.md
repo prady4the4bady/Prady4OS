@@ -400,7 +400,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
   since. There is no red capture to read. Per ITEM 2 step 5: recorded as
   not-reproduced, instrument left armed.
 - Overall completion: ~79% (~66+ items remain across all groups)
-- **OPEN-1 is NOT closed.** 19/20; the one failure is a ring-0 `#PF` (DDR-985).
+- **OPEN-1: routes 2 and 3 CLOSED; route 1 remains open (DDR-1000 §9).** E1 measured **60/60 clean** on kernel `5349db4d791cc2ab`, one hash — `0.95^60 = 0.046`, so route 2 (the ring-0 `#PF`, base rate 1/20) is closed at 95% power against a threshold set BEFORE the run. Route 3 closed by DDR-990 §9. Route 1 is a **CI-only hang** and this campaign was local, so it is untouched; and the `[yieldstall]` scan does NOT bear on it — the organic stalls were in `smoke-evresize`, and `smoke-surfdestroy` emits zero `[yieldstall]` lines, i.e. never engages that path. Next test named: an evresize campaign under `yieldstall_scan.py`.
 
 **PR #5 MERGE HOLD: LIFTED (operator directive 2026-08-22).**
 Merge as soon as 3 consecutive CI greens on the same tip SHA. No further

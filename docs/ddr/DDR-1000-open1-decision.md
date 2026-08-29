@@ -193,3 +193,81 @@ Either way this stops being a guess. **Do not write the watchdog until this
 campaign reports** — DDR-990 §12 called the watchdog "the honest next
 instrument", and it may turn out to be an instrument for a defect that no longer
 exists.
+
+---
+
+## 9. E1 COMPLETE — 60/60, and the decision
+
+Kernel **`5349db4d791cc2ab`**, ledger `build/gatelogs/campaign/smoke-surfdestroy.ledger.txt`:
+
+```
+campaign_chunk: smoke-surfdestroy now 60/60 — pass=60 fail=0 distinct_kernels=1
+```
+
+**60 runs, zero failures, exactly one kernel hash.** The single-hash check is not
+ceremony: an earlier attempt at this campaign was contaminated when the tree was
+edited under it, and the hash column is what makes that detectable instead of
+silent (R1).
+
+### 9.1 Route 2 — CLOSED at 95% power
+
+Measured base rate 1/20 (DDR-985). `0.95⁶⁰ = 0.046`, so if the ring-0 `#PF` were
+still present at its measured rate, a clean 60-run campaign would occur under 5%
+of the time. That is the threshold §3 set **before** running, not one chosen
+after seeing the result.
+
+### 9.2 Route 3 — CLOSED (DDR-990 §9), unchanged
+
+### 9.3 Route 1 — NOT closed, and the E2 scan does NOT bear on it
+
+`yieldstall_scan.py` over all 60 logs:
+
+```
+scanned=60  with_yieldstall=0
+organic_unresolved=0  synthetic_unresolved=0
+```
+
+The scanner's own verdict says "CONSISTENT, not proven". **It is weaker than
+that, and saying so matters more than the clean result reads.**
+
+The pre-fix organic `mnt_lock` stalls (§8) were captured in **`smoke-evresize`**
+(shard 0) and a DDR-989 vruntime capture — **not** in `smoke-surfdestroy`
+(shard 6). And `smoke-surfdestroy` emits **zero** `[yieldstall]` lines even in a
+single log, i.e. the instrument never engages on that gate at all.
+
+So 60 clean surfdestroy logs are not evidence about `mnt_lock`; they are 60
+observations of a gate that does not exercise the path. Reading them as support
+for §8.2 would be the same error as citing a passing test that never ran the
+code — which is precisely what DDR-973 §6 and DDR-996 each caught once.
+
+There is a second, independent reason route 1 stays open: **route 1 has only ever
+been observed in CI, and this campaign is local.** 60 local runs bound the local
+rate; they say little about a signature that has never reproduced off a CI runner.
+
+What *is* true and worth recording: `smoke-surfdestroy` (shard 6) has been green
+in every full-suite CI success since the DDR-981/987/989 fixes — `ca85e35`,
+`b3573b9`, `2dbcbe8`, `0611a59`, `513ce6b`, `e1259ab`. No recurrence. But route
+1's rate was never measured, so a run of greens cannot be converted into a power
+figure the way §3 did for route 2.
+
+### 9.4 The decision
+
+**OPEN-1 closes for routes 2 and 3. Route 1 remains OPEN**, now with its scope
+narrowed to exactly one thing: a **CI-only hang** in `sys_read`/`vfs_read` with
+no artefact, no local reproduction, and no recurrence in six CI suites.
+
+Two things would settle it, in cost order:
+
+1. **An `smoke-evresize` campaign under `yieldstall_scan.py`.** That is the gate
+   where organic stalls were actually captured, so it is the test §8.2 needs and
+   this campaign was not. Cheap — the tooling already exists.
+2. The `SYSFSTAT OK` → `SYSREAD OK` watchdog DDR-990 §12 named, if (1) comes
+   back clean and route 1 still needs an instrument.
+
+### 9.5 Release position
+
+`v1.0.0` is no longer blocked on routes 2 or 3. Route 1 is a documented,
+CI-only, non-reproducing intermittent with a named next test. Whether that ships
+is the operator's call and is stated for them rather than decided here — but the
+honest summary is that OPEN-1 is now **one narrow open question**, not the
+three-signature tangle DDR-990 §12 found.
