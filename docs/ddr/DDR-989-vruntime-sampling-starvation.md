@@ -727,3 +727,71 @@ here — all sentinels present, no reason line, capture kept.
 Until it is read, the only defensible statement is: `smoke-nethammer` fails
 intermittently in CI, passes locally, is not caused by the hammer probe, not by
 the timeout budget, not by a missing sentinel, and not by `PRADYOS_INPUT_TIMEOUT`.
+
+
+---
+
+## §9.15 — the `smoke-nethammer` dump the 2026-08-29 directive asked for does not exist
+
+The directive §2 says to read the `qemuerr` dump "now captured on failure
+(commit `8c3af93`)" before writing new code. That was the right instruction, and
+the reason it cannot be followed is itself the finding:
+
+**`smoke-nethammer` has not failed since `8c3af93` landed, so no dump was ever
+written.**
+
+Checked, not assumed:
+
+* `smoke-nethammer` is **shard 3** (`tools/ci/gate_shards.txt:193`, 240 s, strict).
+* Since `8c3af93`: `cbc8a88`'s suite failed on **shard 9** (`smoke-resizeall` —
+  my own new gate, DDR-997 §10, since fixed), not shard 3. `df473cb`'s suite was
+  a **full success**, so shard 3 was green. `ca85e35` and `b3573b9` are in flight.
+* No `qemuerr-*.log.fail-*` for nethammer exists anywhere under `build/`.
+
+### The stored `build/gatelogs/nethammer.log` is a PASSING run, not the failure
+
+Worth stating because I nearly mined it for a cause. Swept **literally** against
+all **71** `GLOBAL_FORBIDDEN` patterns plus the gate's own `NETHAMMER FAIL`:
+**zero hits**. All five required sentinels present (`net hammer spawned=2/2`,
+two `PRADYOS_NETHAMMER_OK`, two `conn_err=0`) and two distinct pids (37, 38). By
+the gate's own criteria that log passes.
+
+A method note, because it cost a wrong answer for one step: `grep -c
+"[apfreeze]"` reports a hit on nearly every line, because `[apfreeze]` is a
+**character class** in basic regex, not a literal — it matched 430 of ~430
+heartbeats. Use `grep -F` for any sentinel containing brackets. Same class of
+mistake as §INV.3's `pgrep` bracket form, in the opposite direction.
+
+### How much do the greens prove? Not much yet
+
+The six recorded data points on a byte-identical kernel were
+FAIL/PASS/FAIL/PASS/PASS/FAIL — **3/6 ≈ 50%**. Against that rate, two or three
+consecutive greens has probability `0.5² = 0.25` to `0.5³ = 0.125`. Mildly
+encouraging; **nowhere near** closure. At 50% a run of two greens turns up every
+fourth pair by chance alone.
+
+Not fixed, not reproduced, instrument armed and silent. Same shape as ITEM 2 /
+`smoke-agents` (DDR-968), and §NON-NEGOTIABLE 3 gives the same answer: **no fix
+without a named mechanism from a real failing artefact.**
+
+### One candidate, stated but NOT acted on
+
+The vruntime fix in this DDR (`e4c71e8`) landed inside the same window as the
+last nethammer failures, and the passing log carries `vrjn=0` — the instrument
+reporting zero poisoned charges. Inflated `vruntime` starving a thread would
+produce exactly "the probe completes but the boot does not finish cleanly",
+which is what the nethammer failures looked like.
+
+DDR-1000 §8.2 raises the *same* candidate for the organic `mnt_lock` stalls. It
+would be tidy if one fix explained both. Tidiness is not evidence, and §9.12's
+retraction in this very file is what happens when an absence is read as a
+conclusion. Recorded, not claimed.
+
+### Not changing the 240 s
+
+`early_exit_eligible=0` whenever `FORBIDDEN_SENTINEL` is set
+(`boot_test.sh:324-325`), so this gate burns its full 240 s even when it passes —
+the probes finish by t≈1000 while the log runs to t≈23500. That looks like an
+obvious speed win under the directive's §5 and it is **correct as it stands**:
+exiting early would stop watching for `NETHAMMER FAIL` before the boot is over,
+which is exactly what a forbidden-sentinel check must not do.
