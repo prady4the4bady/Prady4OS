@@ -40,16 +40,28 @@ def main():
         return 1
 
     masks = [int(x) for x in RX.findall(text)]
+    done = len(re.findall(r"PRADYOS_NETHAMMER_OK", text))
+    # A completion line that STARTS but carries no cpumask= was truncated by an
+    # interleaving print (§INV.23) — measured once, DDR-990 §14. That is a
+    # MEASUREMENT failure, not a CPU-placement failure, and reporting it as
+    # "never ran on 2 CPUs" would send the next reader hunting the scheduler
+    # for a console bug.
+    if done > len(masks):
+        print("[nethammer] FAIL — %d completion line(s) but only %d carry "
+              "cpumask=." % (done, len(masks)))
+        print("            A line was TRUNCATED mid-field, not a same-CPU "
+              "run. Look for a foreign print spliced into it (INV.23); "
+              "DDR-990 S14 made the line a single write to close this "
+              "probe's own seams.")
+        for ln in text.splitlines():
+            if "PRADYOS_NETHAMMER_OK" in ln and "cpumask=" not in ln:
+                print("            truncated: %s" % ln.strip()[:160])
+        return 1
     if not masks:
         # Distinguish "no cpumask field" from "no completions at all": the
         # former means an old probe binary against a new gate, which is a
         # different problem from a hammer that never finished.
-        done = len(re.findall(r"PRADYOS_NETHAMMER_OK", text))
-        if done:
-            print("[nethammer] FAIL — %d completion(s) carry no cpumask= field. "
-                  "The probe binary predates DDR-990 §13; rebuild." % done)
-        else:
-            print("[nethammer] FAIL — no PRADYOS_NETHAMMER_OK at all.")
+        print("[nethammer] FAIL — no PRADYOS_NETHAMMER_OK at all.")
         return 1
 
     union = 0

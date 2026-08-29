@@ -357,13 +357,82 @@ It also distinguishes "completions carry no `cpumask=` field" (an old probe
 binary against a new gate) from "no completions at all" — different problems,
 and reporting one as the other would send the next reader in the wrong direction.
 
-### 13.3 NOT yet claimed
+### 13.3 MEASURED — and the answer is stronger than the assertion required
 
-The kernel builds warning-clean with this change (`dea965ff3c7d86b1`) and the
-checker is unit-tested, but **`smoke-nethammer` has not been run against it
-yet** — local QEMU was occupied by the OPEN-1 campaign (§NON-NEGOTIABLE 12
-forbids two concurrent instances). Until it runs, this is a written assertion,
-not a measured one. In particular it is unknown whether the two instances
-*actually* land on distinct CPUs under this scheduler — if they do not, this
-change converts a silently-vacuous green into an honest red, which is the point,
-but it would then be a real failure to fix rather than a formality.
+Kernel **`5349db4d791cc2ab`**:
+
+```
+[nethammer] cpumask union=0xf over 2 instance(s) -> 4 distinct CPU(s)
+            instance 0: cpumask=0xf (4 cpu(s))
+            instance 1: cpumask=0xf (4 cpu(s))
+[nethammer] PASS — 2 distinct pids on >=2 distinct CPUs, 40,000 connect/close
+```
+
+Not merely two CPUs between them: **each instance individually ran on all four**.
+The scheduler migrates them freely, so the two hammers are interleaving across
+every CPU pair, which is the strongest form of the cross-CPU exercise this DDR
+claims. Before this section that was an assumption; it is now a number in a log.
+
+
+---
+
+## 14. §14 — the first run of §13 failed, and it exposed an older bug
+
+The cross-CPU assertion's very first run reported:
+
+```
+[nethammer] cpumask union=0x8 over 1 instance(s) -> 1 distinct CPU(s)
+[nethammer] FAIL — the hammer instances never ran on 2 distinct CPUs.
+```
+
+One instance, on one CPU. The pid check had already passed with **two**, so the
+two counts disagreed — and the log said why:
+
+```
+PRADYOS_NETHAMMER_OK pid=37 iters=20000 conn_ok=20000 conn_err=0 cpumask=8
+PRADYOS_NETHAMMER_OK pid=38 iters=20000 conn_ok=20000 conn_err=[user] ELF loaded (embedded); SFS-rooted fsrm probe spawned
+```
+
+pid=38's line was **truncated mid-field** by a kernel print landing between this
+probe's `conn_err=` write and the value meant to follow it. Not a placement
+failure — a measurement failure (§INV.23).
+
+### 14.1 The older bug it exposed
+
+The completion line was **six separate `write()` calls**, so under SMP there
+were five windows for another CPU to interleave. That is not cosmetic, because
+the gate's `conn_err=0` sentinel is a substring search over the whole log: a
+truncated line contributes nothing, and the check still passes on the *other*
+instance's copy.
+
+That is exactly the hole this probe's own comment set out to close —
+
+> "The gate can only test that the string `conn_err=0` appears SOMEWHERE, which
+> one clean instance would satisfy while the other errored out"
+
+— reopened, not by the logic, but by the console. It had been latent since the
+probe was written and nothing had ever surfaced it. The cross-CPU assertion
+surfaced it on its first run, before it had produced a single true result.
+
+### 14.2 Fix
+
+A line builder: fields accumulate into a stack buffer and the whole line goes out
+in **one** `SYS_WRITE`. Applied to the OK line and to both FAIL lines — a
+truncated FAIL is a missed failure, which is worse.
+
+This does not make the console globally atomic; a single long line could still in
+principle be split. It removes the five seams this probe was creating itself.
+
+### 14.3 The checker now tells the two apart
+
+Reporting a truncation as "never ran on 2 CPUs" would send the next reader
+hunting the scheduler for a console bug. `nethammer_check.py` compares the count
+of completion lines against the count carrying `cpumask=`, and when they differ
+says so explicitly and prints the offending line. Three-way controls, all
+verified before the real run:
+
+| input | verdict |
+|---|---|
+| `cpumask=2` + `cpumask=4` | pass, 2 CPUs |
+| `cpumask=2` + `cpumask=2` | fail, same-CPU |
+| complete line + truncated line | fail, **TRUNCATED**, quotes the line |

@@ -80,6 +80,39 @@ static inline unsigned long cpu_bit(void) {
 static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
 static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
 
+/* DDR-990 §14: a LINE BUILDER, because one field per write() is not atomic.
+ *
+ * Measured, not anticipated: pid=38's completion line came back as
+ *   PRADYOS_NETHAMMER_OK pid=38 iters=20000 conn_ok=20000 conn_err=[user] ELF …
+ * — a kernel print landed between this probe's `conn_err=` write and the value
+ * that belonged after it. Six writes per line under SMP means five windows for
+ * another CPU to interleave (§INV.23).
+ *
+ * That is not merely cosmetic. The gate's `conn_err=0` sentinel is a substring
+ * search over the whole log, so a truncated line contributes nothing and the
+ * check still passes on the OTHER instance's copy — the exact "one clean
+ * instance satisfying the check while the other errored" hole this probe's own
+ * comment set out to close, reopened by the console rather than by the logic.
+ *
+ * One write per line closes the windows this probe controls. It does not make
+ * the console globally atomic — a single long line could still in principle be
+ * split — but it removes the five self-inflicted seams. */
+struct lb { char b[192]; int n; };
+static void lb_s(struct lb *l, const char *s) {
+    while (*s && l->n < (int)sizeof l->b - 1) l->b[l->n++] = *s++;
+}
+static void lb_d(struct lb *l, unsigned long v) {
+    char t[24]; int i = 24;
+    if (!v) t[--i] = '0';
+    while (v) { t[--i] = (char)('0' + (v % 10u)); v /= 10u; }
+    while (i < 24 && l->n < (int)sizeof l->b - 1) l->b[l->n++] = t[i++];
+}
+static void lb_flush(struct lb *l) {
+    if (l->n < (int)sizeof l->b) l->b[l->n++] = '\n';
+    nsi(SYS_WRITE, 1, (long)l->b, l->n);      /* ONE syscall, whole line */
+    l->n = 0;
+}
+
 /* Decimal, into a caller-supplied stack buffer — no writable globals. */
 static void wrdec(unsigned long v) {
     char b[24];
@@ -139,26 +172,32 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
      * run. Each instance therefore checks its own counters, so a failure is
      * attributable to a pid instead of merely present in the boot. */
     if (conn_err != 0) {
-        wr("NETHAMMER FAIL: pid="); wrdec(pid);
-        wr(" conn_err="); wrdec(conn_err);
-        wr(" — the hammer never entered lwIP (allowlist row missing?)\n");
+        struct lb l; l.n = 0;
+        lb_s(&l, "NETHAMMER FAIL: pid="); lb_d(&l, pid);
+        lb_s(&l, " conn_err="); lb_d(&l, conn_err);
+        lb_s(&l, " — the hammer never entered lwIP (allowlist row missing?)");
+        lb_flush(&l);
         nsi(SYS_EXIT, 1, 0, 0);
         for (;;) { }
     }
     if (conn_ok != ITERS) {
-        wr("NETHAMMER FAIL: pid="); wrdec(pid);
-        wr(" conn_ok="); wrdec(conn_ok);
-        wr(" != iters\n");
+        struct lb l; l.n = 0;
+        lb_s(&l, "NETHAMMER FAIL: pid="); lb_d(&l, pid);
+        lb_s(&l, " conn_ok="); lb_d(&l, conn_ok);
+        lb_s(&l, " != iters");
+        lb_flush(&l);
         nsi(SYS_EXIT, 1, 0, 0);
         for (;;) { }
     }
 
-    wr("PRADYOS_NETHAMMER_OK pid="); wrdec(pid);
-    wr(" iters="); wrdec(ITERS);
-    wr(" conn_ok="); wrdec(conn_ok);
-    wr(" conn_err="); wrdec(conn_err);
-    wr(" cpumask="); wrdec(cpu_mask);      /* DDR-990 §13 */
-    wr("\n");
+    /* DDR-990 §14: one write, not six. */
+    struct lb l; l.n = 0;
+    lb_s(&l, "PRADYOS_NETHAMMER_OK pid="); lb_d(&l, pid);
+    lb_s(&l, " iters=");    lb_d(&l, ITERS);
+    lb_s(&l, " conn_ok=");  lb_d(&l, conn_ok);
+    lb_s(&l, " conn_err="); lb_d(&l, conn_err);
+    lb_s(&l, " cpumask=");  lb_d(&l, cpu_mask);      /* DDR-990 §13 */
+    lb_flush(&l);
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }
