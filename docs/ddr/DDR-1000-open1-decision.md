@@ -271,3 +271,51 @@ CI-only, non-reproducing intermittent with a named next test. Whether that ships
 is the operator's call and is stated for them rather than decided here — but the
 honest summary is that OPEN-1 is now **one narrow open question**, not the
 three-signature tangle DDR-990 §12 found.
+
+---
+
+## 10. §10 — CORRECTION: the E2 scan in §9.3 was VACUOUS
+
+§9.3 reported `scanned=60 with_yieldstall=0` and reasoned that the result did not
+bear on route 1 because `smoke-surfdestroy` is the wrong gate. That reasoning was
+right. It was also not the worst problem, and the worse one was mine.
+
+**The scan read the wrong files.** `campaign_chunk.sh` keeps one file per run,
+and that file is `make` **output**. The guest's serial capture goes somewhere
+else entirely — for `smoke-evresize`, `build/evresize.log`, which every run
+overwrites. Verified on a completed run:
+
+```
+lines: 45
+serial markers ([smoke] prefix): 0
+hb lines: 0
+```
+
+Zero. So the scan could not have found `[yieldstall]` even in a boot that emitted
+it. "No organic unresolved stall across 60 logs" was a statement about nothing.
+
+### 10.1 Why this matters more than the wasted scan
+
+This is the same defect class this file keeps catching in *other people's* work
+and in my own code — a check that can only ever return the answer you were hoping
+for. DDR-996's first arm B, DDR-990's cross-CPU gate, DDR-997's clamp assertion:
+each was caught before it was believed. This one I walked into.
+
+**The conclusion in §9.3 survives**, because route 1 was not closed and the scan
+was explicitly not used as evidence for closing it. Had it been load-bearing, this
+would have been a false close — which is the entire failure mode §3 exists to
+prevent, arriving by a different door.
+
+### 10.2 Fix
+
+`campaign_chunk.sh` takes an optional serial-log path and snapshots each run's
+capture to `<gate>.<i>.serial.log` **before** the next run truncates it. The
+evresize campaign restarts from zero with snapshots on; its first four runs are
+**discarded, not counted**, because they have no retrievable serial evidence — a
+run whose artefact cannot be read is not an observation.
+
+### 10.3 What this does not change
+
+Route 1 is still open, still CI-only, still without a local reproduction. The
+evresize campaign is still the right next test — it is now merely a test that can
+actually return an answer.

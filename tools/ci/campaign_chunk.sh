@@ -17,7 +17,15 @@
 # progress from the logs on disk rather than from a live process. Run it again
 # and it picks up where it stopped, however it stopped.
 #
-#   usage: campaign_chunk.sh <gate> <target-N> [budget-seconds]
+#   usage: campaign_chunk.sh <gate> <target-N> [budget-seconds] [serial-log]
+#
+# SERIAL-LOG SNAPSHOT (measured, DDR-1000 §10). The per-run file this script
+# keeps is `make` OUTPUT, and make output contains NONE of the guest's serial
+# capture — verified: 0 lines matching `[smoke]` or `[hb]` in a completed run.
+# Scanning those files for a guest-side sentinel like `[yieldstall]` therefore
+# cannot find one even when it is there, which made a 60-run scan vacuous.
+# Pass the gate's serial path (e.g. build/evresize.log) and each run's capture
+# is snapshotted to <gate>.<i>.serial.log before the next run overwrites it.
 #
 # It refuses to start while any QEMU is live (§NON-NEGOTIABLE 12, bracket form
 # per §INV.3), and it records the kernel hash of every run so a campaign that
@@ -28,6 +36,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 gate="${1:?usage: campaign_chunk.sh <gate> <target-N> [budget-seconds]}"
 target="${2:?target N}"
 budget="${3:-480}"                       # default 8 min: fits a 10 min ceiling
+serial="${4:-}"                          # gate's serial capture, snapshot per run
 
 LOGDIR="$ROOT/build/gatelogs/campaign"
 LEDGER="$LOGDIR/$gate.ledger.txt"        # one line per completed run
@@ -65,6 +74,11 @@ while [ "$done_n" -lt "$target" ]; do
     # Hash AFTER the run too: `make` may rebuild, and a campaign that silently
     # spans two kernels is not a campaign.
     kh2=$(sha256sum "$ROOT/build/kernel.bin" 2>/dev/null | cut -c1-16)
+    # Snapshot the guest capture BEFORE the next run truncates it. Without this
+    # the only per-run artefact is make output, which carries no serial lines.
+    if [ -n "$serial" ] && [ -f "$ROOT/$serial" ]; then
+        cp "$ROOT/$serial" "$LOGDIR/$gate.$i.serial.log" 2>/dev/null || true
+    fi
     printf '%d\t%s\t%s\t%s\t%s\n' "$i" "$verdict" "$kh" "$kh2" "$(date -u +%FT%TZ)" \
         >>"$LEDGER"
     done_n=$i
