@@ -380,13 +380,24 @@ early_exit_eligible=0
 # distinguishable from a slow one by the ABSENCE of that line. Re-add
 # `[yieldstall]` here only once a capture shows an OPENED stall with no RESOLVED
 # partner -- that is a hang, and then it belongs in this list.
+# DDR-1001: '[ringwalk]' means the wait4 ring walk exceeded its bound, which
+# under g_sched_lock is impossible unless the ring is genuinely corrupt. Unlike
+# [yieldstall] (removed from this list in DDR-994 because a resolved stall is
+# survivable), this one is fatal by construction: the walk is bounded at ~10x
+# any observed live-thread count, so exceeding it is never benign.
+#
+# THIS COMMENT LIVES ABOVE THE ASSIGNMENT, AND MUST STAY THERE. DDR-1001 first
+# wrote it BETWEEN `printf '%s\n' \` and the first pattern. A backslash-newline
+# splices the lines before the comment is stripped, so `#` then swallowed the
+# whole argument list -- and '[ringwalk]' and '[apfreeze]', left without
+# continuations, were RUN as commands ("[ringwalk]: command not found", to a
+# stderr nobody reads). GLOBAL_FORBIDDEN was the empty string on every gate in
+# the repo for four commits. Nothing looked broken: an empty forbidden list
+# fails nothing, it just silently stops catching. smoke-selftest case 5 is what
+# found it, on all 10 shards at once, which is exactly the job DDR-791 built it
+# for. Do not put a comment inside this printf.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
-    # DDR-1001: the wait4 ring walk exceeded its bound, which under g_sched_lock
-    # is impossible unless the ring is genuinely corrupt. Unlike [yieldstall]
-    # (removed from this list in DDR-994 because a resolved stall is survivable),
-    # this one is fatal by construction: the walk is bounded at ~10x any observed
-    # live-thread count, so exceeding it is never benign.
-    '[ringwalk]'
+    '[ringwalk]' \
     '[apfreeze]' \
     '[vrinflate]' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
