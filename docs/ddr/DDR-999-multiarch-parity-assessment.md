@@ -123,3 +123,68 @@ starting position, and estimates can be wrong. What is *not* an estimate: the
 204 lines, the 50/172 x86-coupled files, the absent abstraction layer (ADR-034
 decision 2, in writing), and the missing local QEMU binaries. Those are facts,
 and they are what the conclusion rests on.
+
+---
+
+## 8. CORRECTION to §6.1 — "ISO packaging, hours" was wrong
+
+§6 ranked **"aarch64/riscv64 ISO packaging (already in Group H) — U-Boot /
+OpenSBI wrapping of the existing boot-only kernel. Hours, and the deliverable is
+a bootable image"** as the cheapest achievable non-x86 increment.
+
+That estimate does not survive contact with the code, and it is corrected here
+rather than left to be discovered by whoever tries it on the last day.
+
+### 8.1 Both arch kernels are `-kernel` payloads, not bootable images
+
+`kernel/arch/aarch64/boot.S` says so in its own header:
+
+> "QEMU `-machine virt -kernel <ELF>` honours the ELF entry point and **enters
+> with the MMU off**. Everything here is the minimum to reach C safely: park
+> every core but the primary, install a stack, jump."
+
+So the entry contract is *QEMU's ELF loader*. There is **no PE/COFF header and no
+EFI stub** in either arch. `kernel/arch/riscv64/` has the same three files and
+the same shape.
+
+An ISO is not a kernel image. For firmware to boot one it must carry an EFI
+System Partition holding an **EFI application**, and neither kernel is one.
+Wrapping these ELFs in an ISO produces a file that no firmware will start.
+
+### 8.2 The tooling isn't there either, and the x86 path does not generalise
+
+Measured in this container: `/usr/lib/grub/` is absent, and there is no
+`qemu-efi-aarch64` / AAVMF firmware. Note also that the **x86 ISO does not use
+GRUB** — `make iso` is `xorriso -as mkisofs -b boot/pradyos.img -hard-disk-boot
+-eltorito-alt-boot -e boot/esp.img`, i.e. El Torito over a raw disk image plus a
+prebuilt ESP. That recipe works because x86 firmware boots raw images and the
+repo already builds an ESP. Neither premise holds on aarch64 or riscv64.
+
+### 8.3 The corrected estimate
+
+Making these bootable as ISOs requires, per arch: a PE/COFF-wrapped EFI stub
+entry, an ESP built around it, and EDK2/U-Boot firmware to test against. **That
+is a port task, not packaging** — the same category §5 already ruled out for the
+window, arrived at from the other direction.
+
+### 8.4 What IS verified, and it is not nothing
+
+Both boot gates pass, now measured **locally** rather than only in CI —
+`qemu-system-aarch64` and `qemu-system-riscv64` were installed in this container
+for the purpose:
+
+```
+=== smoke-aarch64 ===  PASS   PRADYOS BOOT OK / NEXUS KERNEL OK
+=== smoke-riscv64 ===  PASS   [riscv64] PASS — saw 'NEXUS KERNEL OK'
+```
+
+So the boot-only slice is real and reproducible off a CI runner. What is wrong is
+only the claim that turning it into a bootable ISO is hours of packaging.
+
+### 8.5 Why this correction exists
+
+§7 of this file is titled "What I am NOT claiming". §6.1 quietly claimed
+something anyway — a deliverable ("a bootable image") and a cost ("hours") that
+nobody had checked against `boot.S`. It is exactly the kind of estimate that
+consumes a deadline's last day, which is why it is corrected in the file that
+made it rather than in a new one.

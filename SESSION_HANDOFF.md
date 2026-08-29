@@ -7789,3 +7789,87 @@ DDR-1000 §8's unexplained signature — and was one step from being root-caused
 one. Capturing the injector's own narration (`build/resizeall.inject.log`, added
 in `951f570`) named it in a single line. **Before deleting on the strength of a
 grep, grep for the READS, not just the write.**
+
+---
+
+## CHECKPOINT 2026-08-29 21:40 UTC — PR #14 MERGED
+
+**PR #14 squash-merged into `dev/phase1` as `4d54d9a`.** Merged on three
+CONFIRMED greens on ONE tip (`d0a85b5`), and all three were **independent** runs
+rather than re-attempts — which §INV.15 says is the stronger evidence:
+
+| run | event | result |
+|---|---|---|
+| 33272639659 | push | completed, 0 of 15 failed |
+| 33272641911 | pull_request | completed, 0 of 15 failed |
+| 33274262876 | workflow_dispatch | completed, 0 of 15 failed |
+
+The squashed tree is **byte-identical** to the tested tip — both
+`bb01cf51593241b37301915eadaec47b428b02b3`. Checked, not assumed: after a squash
+the 79 commits look "unmerged" by ancestry while every byte is already in the
+base, and the tree hash is what tells those apart.
+
+### RELEASE CANDIDATE — verified on the kernel that actually ships
+
+Kernel **`bb9c6187a30bb0dd`**, 1,098,122 B against the 1,572,864 B gate
+(474,742 B headroom).
+
+- `smoke-iso-x86` **PASS** — BIOS and UEFI arms, one ISO
+- `smoke-iso-userspace` **PASS** — the ISO boots a live OS: SFS root + PRISM +
+  AETHER agent + write/read/delete round-trip
+- ISO **`1f3ca48c73c51c5b`**, 52,805,632 B
+
+An earlier verification on `60b35c96d70253f5` (ISO `3a88c6e2878bd86f`) is
+**superseded** — DDR-1004 changed the kernel after it, and verifying one kernel
+while shipping another is a claim that was never tested.
+
+### Also measured, and not previously recorded anywhere
+
+- `smoke-rqstress` **20/20** on `60b35c96d70253f5`, one hash — which is why the
+  DDR-1004 defect could not be reproduced into a diagnosis and had to be read out
+  of the source.
+- Post-fix, **3/3 runs print `[smp] resched OK`, not SKIP** — the check that
+  matters, because a disabled test also passes.
+- `smoke-selftest` 7/7, `smoke-shell`, `smoke-blkmq`, `smoke-blk-integrity`,
+  `smoke-rqstress-liveness` all PASS on the new kernel.
+- **`qemu-system-aarch64` and `qemu-system-riscv64` are now installed in this
+  container** (apt). `smoke-aarch64` and `smoke-riscv64` both PASS **locally** —
+  previously CI-only.
+
+### Correction landed: DDR-999 §8
+
+§6.1 called aarch64/riscv64 ISO packaging *"Hours, and the deliverable is a
+bootable image"*. **That was wrong.** Both arch kernels are bare ELFs entered via
+QEMU `-kernel` with the MMU off (`kernel/arch/*/boot.S` says so itself) — no
+PE/COFF header, no EFI stub — and no GRUB or EDK2 firmware is installed. The x86
+recipe does not generalise either: it is El Torito over a raw disk image plus a
+prebuilt ESP, which works only because x86 firmware boots raw images. Making
+these bootable is a **port task, not packaging**. Corrected in the file that made
+the claim.
+
+### CI shape changed — shard 9 is now the bottleneck
+
+Shard 9 runs **~28 min** because DDR-997 §13.4 raised its QEMU cap 180s → 340s,
+so the suite is ~30 min end to end. That was the right trade (a failing run that
+reports beats one SIGTERM'd mid-arm) but it means "the suite is slow" is now
+expected, not a symptom. Do not read it as a hang.
+
+### NEXT
+
+1. `dev/phase1` → `main`, needing its own 3 greens on one tip. The ISO is already
+   verified on this exact kernel, so re-verify only if the tree changes.
+2. **Do NOT tag `v1.0.0`** — that hold is the operator's to lift.
+3. CodeRabbit was still "Review in progress" on `d0a85b5` at merge time,
+   unchanged for ~15 min on a 79-commit PR. It is **not** one of the merge
+   criteria (§PHASE 1 ITEM 3), and `dev/phase1` is an intermediate branch, so any
+   finding it produces can still be addressed before the `main` promotion. Check
+   for it.
+4. Backlog: Group E remainder (Ctrl+Alt+T needs a terminal-emulator surface, NOT
+   a key binding; per-window restore needs a dock; OKLab horizon bands; vDSO
+   callable reader) and Group F's 11 unbuilt agents.
+
+### Still open, unchanged
+
+OPEN-1 route 1 (CI-only hang, no artefact), OPEN-12, OPEN-13, and the
+`ptnode_in_use` fork underflow (DDR-1003 — recorded unfixed for want of an
+artefact; §5.1 warns the obvious gate shape would pass while testing nothing).
