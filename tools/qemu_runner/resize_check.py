@@ -92,12 +92,37 @@ def main():
         return 2
     path, sid, arms = sys.argv[1], sys.argv[2], sys.argv[3:]
     recs = parse(path, sid)
+    # DDR-997 §13.4 — an arm that never ran is not an arm that failed.
+    #
+    # The injector abandons arms once its total budget is spent and names them
+    # in a sidecar beside the log. Without this the gate printed "FAIL — arm n:
+    # no PRADYOS_RESIZE_FIX line" for an arm the harness never injected, in the
+    # same words a genuinely broken arm produces (CI run 33247210328). Those are
+    # different facts and a reader cannot separate them from the old message.
+    #
+    # It still exits non-zero: a run that could not test every arm has not
+    # passed. What changes is that it says WHY, so nobody root-causes the
+    # compositor for a budget overrun.
+    skipped = set()
+    try:
+        with open(path + ".skipped", "r") as fh:
+            skipped = {a.strip() for a in fh.read().split() if a.strip()}
+    except OSError:
+        pass
     want = {"e": RZ_E, "s": RZ_S, "w": RZ_W, "n": RZ_N}
     # An E drag must not also carry W, etc. — otherwise a corner grab would be
     # scored as an edge drag and the origin assertions would be wrong.
     excl = {"e": RZ_W, "s": RZ_N, "w": RZ_E, "n": RZ_S}
     rc = 0
     for arm in arms:
+        if arm in skipped:
+            print("[resizeall] INCOMPLETE — arm %s NEVER RAN: the injector's "
+                  "budget was exhausted before it started. This is not a "
+                  "failure of the arm and says nothing about the compositor; "
+                  "it means the run needed more time than the gate allows "
+                  "(DDR-997 §13.4)." % arm)
+            rc = 1
+            continue
         cands = [r for r in recs
                  if (r["edge"] & want[arm]) and not (r["edge"] & excl[arm])]
         if not cands:

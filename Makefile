@@ -3024,9 +3024,17 @@ smoke-evresize: $(IMG) fat-image sfs-image
 # the move) and the M2 mutant (clamp after deriving the origin) — DDR-997 §7.
 smoke-resizeall: $(IMG) fat-image sfs-image
 	@echo "[resizeall] all-edges resize gate: boot(GPU+tablet) + QMP E/S/W/N drags..."
-	@rm -f build/resizeall.log /tmp/prsall.sock
-	@RZ_ID=1 RZ_ARMS="e s w n" bash tools/qemu_runner/resize_inject.sh build/resizeall.log /tmp/prsall.sock PRADYOS_AMBIANCE_OK &
-	@timeout 180 qemu-system-x86_64 -machine q35 \
+	@rm -f build/resizeall.log build/resizeall.log.skipped /tmp/prsall.sock
+	@# DDR-997 §13.4: the injection budget and the guest cap are ONE decision.
+	@# 4 arms x 3 rounds x (TRACK_WAIT_S 20 + FIX_WAIT_S 8) is 336s, against a
+	@# cap that must also cover a ~49s boot (measured, CI run 33247210328). The
+	@# old `timeout 180` therefore SIGTERM'd any run that retried, mid-arm,
+	@# which is how arm n came to print FAIL without ever executing. RZ_BUDGET_S
+	@# bounds injection and the cap is set above budget + boot + margin, so the
+	@# injector always gets to report instead of being killed. A healthy run is
+	@# unaffected -- every wait breaks early, so it still finishes in ~60s.
+	@RZ_ID=1 RZ_ARMS="e s w n" RZ_BUDGET_S=240 RZ_CAP_S=340 bash tools/qemu_runner/resize_inject.sh build/resizeall.log /tmp/prsall.sock PRADYOS_AMBIANCE_OK 2>&1 | tee build/resizeall.inject.log &
+	@timeout 340 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
@@ -3037,7 +3045,7 @@ smoke-resizeall: $(IMG) fat-image sfs-image
 	@# DDR-937: on failure, dump the press-dispatch lines. Every press branch
 	@# but the resize bands prints a distinct sentinel, so the log names which
 	@# branch swallowed the click instead of leaving "no FIX line" ambiguous.
-	@python3 tools/qemu_runner/resize_check.py build/resizeall.log 1 e s w n || { echo "--- press/geom lines ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG|PRADYOS_RESIZE_(REQ|FIX)|PRADYOS_EV_RESIZE_OK|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)' build/resizeall.log || echo "(none)"; exit 1; }
+	@python3 tools/qemu_runner/resize_check.py build/resizeall.log 1 e s w n || { echo "--- injector narration (DDR-997 §13.4) ---"; cat build/resizeall.inject.log 2>/dev/null || echo "(none)"; echo "--- press/geom lines ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG|PRADYOS_RESIZE_(REQ|FIX)|PRADYOS_EV_RESIZE_OK|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)' build/resizeall.log || echo "(none)"; exit 1; }
 	@echo "[resizeall] PASS — E/S/W/N drags all held their fixed edge"
 
 # Layer-7 graceful-close gate (DDR-998): SYS_SURFACE_CLOSE destroys a surface
