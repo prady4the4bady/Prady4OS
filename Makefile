@@ -2752,7 +2752,14 @@ smoke-nethammer: $(IMG) fat-image sfs-image
 	 test "$$n" -eq 2 || { echo "[nethammer] FAIL — $$n distinct pid(s) reported OK, need exactly 2;"; \
 	   echo "  one instance completing is a single-CPU run wearing a green result (DDR-990)."; \
 	   grep -a 'NETHAMMER' build/gatelogs/nethammer.log | tail -10; exit 1; }
-	@echo "[nethammer] PASS — 2 distinct pids, 40,000 connect/close pairs, conn_err=0"
+	@# DDR-990 §13 (CodeRabbit, PR #14). Two distinct PIDs prove two instances
+	@# FINISHED; they do not prove the two ever ran on different CPUs. QEMU_SMP=4
+	@# offers four vCPUs, it does not place threads. A two-CPU race probe whose
+	@# instances both ran on one CPU is a green gate testing nothing — exactly the
+	@# "false confidence in the race fix" the review named.
+	@python3 tools/qemu_runner/nethammer_check.py build/gatelogs/nethammer.log \
+	 || { grep -a 'PRADYOS_NETHAMMER_OK' build/gatelogs/nethammer.log; exit 1; }
+	@echo "[nethammer] PASS — 2 distinct pids on >=2 distinct CPUs, 40,000 connect/close pairs, conn_err=0"
 
 smoke-hkdf: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=hkdf \

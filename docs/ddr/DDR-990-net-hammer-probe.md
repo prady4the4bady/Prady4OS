@@ -300,3 +300,70 @@ the honest next instrument, and it is not built.
 
 **Do not record OPEN-1 as closed on the strength of §9.** It closes one of three
 routes, and the one it closes is the one that was never OPEN-1's own artefact.
+
+
+---
+
+## 13. §13 — the gate proved two PIDs, not two CPUs (CodeRabbit, PR #14)
+
+The review found a real gap and it is the one that mattered most in the batch:
+
+> `EXTRA_SENTINEL` checks only whether each pattern appears. […] `QEMU_SMP=4`
+> only enables four vCPUs; the gate does not record the CPU used by each worker.
+
+Half of it was already answered — the recipe counts **distinct PIDs** and
+requires exactly 2, so "one completion passes" is not reachable. The other half
+stood, and it is the load-bearing half:
+
+**Two distinct PIDs prove two instances FINISHED. Nothing proved they ever ran
+on different CPUs.** `QEMU_SMP=4` offers four vCPUs; it does not place threads.
+This DDR's entire claim is a **cross-CPU** use-after-free — one CPU walking
+`pcb->unsent` inside `tcp_output` while another frees it. Two instances that
+happened to share one CPU cannot exercise that race at all, and the gate would
+go green having tested nothing. "A validation gate that may provide false
+confidence in the race fix" is a fair description of that, and it applies to the
+strongest positive result in this file.
+
+### 13.1 The fix, and why CPUID rather than a syscall
+
+Each instance ORs its own CPU's bit into `cpu_mask` and prints
+`cpumask=<n>` alongside its completion line. `tools/qemu_runner/nethammer_check.py`
+takes the **union** across instances and requires ≥2 distinct CPUs.
+
+CPUID leaf 1 returns the initial APIC ID in `EBX[31:24]` and **is not a
+privileged instruction**, so a ring-3 probe reads it directly — no new NSI, no
+kernel change, nothing added to the syscall surface for a test-only need.
+
+Sampled **every iteration**, not once at exit, because a thread can migrate: a
+single reading at the end reports where the instance *finished*, not where it
+*ran*. A mask accumulates the whole history.
+
+The cap at bit 7 is deliberate: the mask prints as a decimal and `QEMU_SMP` here
+is 4, so a wider machine saturates rather than wrapping an APIC id onto another
+CPU's bit. Saturating over-reports the CPU count in a way that could only make
+the gate *harder* to pass, never easier.
+
+### 13.2 Validated both directions
+
+The checker was tested against synthetic logs before being wired in, because a
+checker that can only say yes is decoration:
+
+| input | union | verdict |
+|---|---|---|
+| `cpumask=2` + `cpumask=4` | `0x6` → 2 CPUs | **pass**, exit 0 |
+| `cpumask=2` + `cpumask=2` | `0x2` → 1 CPU | **fail**, exit 1 |
+
+It also distinguishes "completions carry no `cpumask=` field" (an old probe
+binary against a new gate) from "no completions at all" — different problems,
+and reporting one as the other would send the next reader in the wrong direction.
+
+### 13.3 NOT yet claimed
+
+The kernel builds warning-clean with this change (`dea965ff3c7d86b1`) and the
+checker is unit-tested, but **`smoke-nethammer` has not been run against it
+yet** — local QEMU was occupied by the OPEN-1 campaign (§NON-NEGOTIABLE 12
+forbids two concurrent instances). Until it runs, this is a written assertion,
+not a measured one. In particular it is unknown whether the two instances
+*actually* land on distinct CPUs under this scheduler — if they do not, this
+change converts a silently-vacuous green into an honest red, which is the point,
+but it would then be a real failure to fix rather than a formality.

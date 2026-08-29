@@ -63,6 +63,20 @@ static inline long nsi4(long n, long a1, long a2, long a3, long a4) {
 }
 static inline long nsi(long n, long a1, long a2, long a3) { return nsi4(n, a1, a2, a3, 0); }
 
+/* DDR-990 §13: which CPU is this instance on, as a bit. CPUID leaf 1 returns
+ * the initial APIC ID in EBX[31:24] and is NOT privileged, so a ring-3 probe
+ * can read it with no syscall and no kernel change. Capped at bit 7 because the
+ * mask is printed as a decimal and QEMU_SMP here is 4 — a wider machine would
+ * still be reported, just saturated, which is honest rather than wrapping onto
+ * another CPU's bit. */
+static inline unsigned long cpu_bit(void) {
+    unsigned int a = 1, b = 0, c = 0, d = 0;
+    __asm__ volatile("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    unsigned apic = (b >> 24) & 0xFFu;
+    if (apic > 7u) apic = 7u;
+    return 1UL << apic;
+}
+
 static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
 static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
 
@@ -79,6 +93,7 @@ static void wrdec(unsigned long v) {
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     unsigned long pid = (unsigned long)nsi(SYS_GETPID, 0, 0, 0);
     unsigned long conn_ok = 0, conn_err = 0;
+    unsigned long cpu_mask = 0;      /* DDR-990 §13 */
 
     wr("NETHAMMER_START pid="); wrdec(pid);
     wr(" iters="); wrdec(ITERS);
@@ -99,6 +114,18 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
              * timeout that looks like something else. */
             conn_err++;
         }
+        /* DDR-990 §13 (CodeRabbit, PR #14): sample WHICH cpu this instance is
+         * running on. The gate asserted two distinct PIDs, which proves two
+         * instances finished — it does NOT prove they ever ran at the same
+         * time on different CPUs, and a two-CPU race probe that both instances
+         * run on one CPU is a green gate testing nothing.
+         *
+         * CPUID leaf 1, EBX[31:24] is the initial APIC ID, and CPUID is not a
+         * privileged instruction — so this needs no syscall and no kernel
+         * change. Sampled every iteration and accumulated into a MASK because
+         * a thread can migrate: one reading at exit would report where it
+         * ended, not where it ran. */
+        cpu_mask |= cpu_bit();
         if (((i + 1) % PROGRESS_EVERY) == 0) {
             wr("NETHAMMER_PROG pid="); wrdec(pid);
             wr(" i="); wrdec(i + 1);
@@ -130,6 +157,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     wr(" iters="); wrdec(ITERS);
     wr(" conn_ok="); wrdec(conn_ok);
     wr(" conn_err="); wrdec(conn_err);
+    wr(" cpumask="); wrdec(cpu_mask);      /* DDR-990 §13 */
     wr("\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
