@@ -7720,3 +7720,72 @@ load-bearing number, not the PASS.
 2. Then: undraft PR #14, 3 greens on ONE tip (third via `workflow_dispatch`).
 3. Route 1: evresize campaign under `yieldstall_scan.py`.
 4. `v1.0.0` no longer blocked on OPEN-1 routes 2/3.
+
+---
+
+## CHECKPOINT 2026-08-29 (tip `edcdbc2`)
+
+### THE ONE THING TO KNOW
+
+**`GLOBAL_FORBIDDEN` was the empty string from `89f71cc` to `951f570`.** Every
+gate ran without the global safety net for four commits. Fixed at `edcdbc2`;
+cause and reproduction in that commit message and in CLAUDE.md
+§NON-NEGOTIABLE 6, which now carries the hazard and a one-line verification.
+
+**Consequence: no green between `89f71cc` and `951f570` counts toward §INV.15.**
+The three-greens-on-one-tip count restarts at `edcdbc2`. `a74e086` (10:30 UTC)
+was the last fully green run before the window: 0 of 15 jobs failed.
+
+Found by `smoke-selftest` case 5, on all 10 shards, on a DOCS-ONLY commit — which
+is what proved the defect predated it. That meta-test earned its existence.
+
+### Work landed this session
+
+| tip | what |
+|---|---|
+| `bb84583` | DDR-1002 precommit + DDR-997 §13 (a defect in my own §12 fix) |
+| `fd2bb85` | DDR-1002 RESULT — null on its own design |
+| `951f570` | DDR-997 §13.4 — injection budget + "never ran" verdict |
+| `edcdbc2` | GLOBAL_FORBIDDEN restored |
+
+### DDR-1002 — the two-arm evresize campaign, and why it concluded nothing
+
+Arm B (DDR-989's torn read restored, kernel `42459dce865c71c6`), 20/20:
+
+- `k_B` = **0/20** organic unresolved `mnt_lock` stalls (the precommitted measure)
+- tear actually fired: **4/20**, with DDR-989's exact signature
+- tear fired *inside the gate's assertion window*: **1/20**
+
+The mutation is faithful — two loads of `t->vt_in` confirmed in the disassembly
+(`cmp 0x27e8(%rcx),%rax` … `sub 0x27e8(%rcx),%rax`, no CSE), and the fixed kernel
+reads `vrjn=0` on the same live instrument. But 3 of the 4 tears fired AFTER the
+gate stopped asserting, so effective N ≈ 1. **`k_B=0` is a verdict on the design,
+not on §8.2.** §8.2 remains neither supported nor refuted; OPEN-1 route 1 is
+untouched (it is CI-only; this was local). Arm A stopped at 8/60 deliberately.
+
+Do NOT re-run this shape. DDR-1002 §9.5 names what a design with power needs.
+
+### Still open
+
+- **OPEN-1 route 1** — CI-only hang, no artefact, no local reproduction.
+- **OPEN-12, OPEN-13** — unchanged.
+- **DDR-997 §13.3 — the dropped press.** Did NOT reproduce locally after §13.4
+  (arm w committed correctly, all four arms green first try, zero retries). The
+  first post-`edcdbc2` CI result is what to read it against.
+- **PR #14** still draft, 74 commits, base `dev/phase1`. Needs 3 greens on ONE
+  tip — count restarts at `edcdbc2`, third green via `workflow_dispatch` (§INV.15;
+  `gh run rerun` needs rights the project PAT lacks).
+- **`v1.0.0` untagged.** Routes 2/3 are closed but the operator placed the hold
+  and lifting it is their call, not mine.
+
+### Practice note earned the hard way, twice today
+
+Both of today's self-inflicted defects were *deletions justified by a grep*: the
+`printf` comment (grep found no problem because the damage was syntactic) and
+`deadline = ...` in `resize_inject.sh`, removed as dead code when the read was
+100 lines below the write. The second one then looked exactly like a compositor
+that had stopped seeing presses — `btnedge` stuck at 1, `preempt` flat, which is
+DDR-1000 §8's unexplained signature — and was one step from being root-caused as
+one. Capturing the injector's own narration (`build/resizeall.inject.log`, added
+in `951f570`) named it in a single line. **Before deleting on the strength of a
+grep, grep for the READS, not just the write.**

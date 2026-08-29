@@ -105,7 +105,15 @@ The goal is **zero idle time**. There is always something to advance.
 3. **No fix without a named mechanism from a real failing artefact.**
 4. **`smoke-shell` 5/5 locally before every push.**
 5. **DDR before code.** Write the design doc, commit it, then implement.
-6. **`GLOBAL_FORBIDDEN` is append-only.** Never remove a sentinel.
+6. **`GLOBAL_FORBIDDEN` is append-only.** Never remove a sentinel. **And never
+   put a comment inside its `printf`** — a backslash-newline splices lines before
+   comments are stripped, so `#` eats the whole argument list and the variable
+   becomes the EMPTY STRING. That happened at `89f71cc` and went unnoticed for
+   four commits, because an empty list fails nothing; it just stops catching.
+   Comments go ABOVE the assignment. Verify after any edit:
+   `source <(sed -n '/^GLOBAL_FORBIDDEN=/,/reset stuck.)"$/p' tools/qemu_runner/boot_test.sh)`
+   then count the lines — it must be ~70, not 0. `smoke-selftest` case 5 is the
+   gate that catches this; it is why that meta-test exists (DDR-791).
 7. **Gate logs go under `build/gatelogs/`.** Never `/tmp` — WSL wipes it.
 8. **DDR numbers: DDR-936+ only.** Verify unoccupied in both `docs/ddr/` AND
    `docs/decisions/` before allocating.
