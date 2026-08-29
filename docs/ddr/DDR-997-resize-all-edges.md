@@ -444,3 +444,84 @@ The timeout was raised to 20 s in §11 but its message still printed
 "no RESIZE_TRACK within 6s". A diagnostic that misreports its own threshold is
 how an investigation gets sent to the wrong place — it is now derived from the
 constant.
+
+---
+
+## 13. §12's fix made the FAILING path worse, and CI said so — `a74e086` is incomplete
+
+§12 raised `TRACK_WAIT_S` from 6 s to 20 s and added an 8 s `FIX_WAIT_S`, so a
+retry could no longer be triggered before the commit had reached the log. That
+reasoning still holds. **The arithmetic around it did not**, and CI run
+33247210328 (shard 9, `6b3ffbb`) is the artefact — a commit that PREDATES
+`a74e086`, so it shows the old timings, but it shows the shape of the problem
+with the new ones written into it.
+
+### 13.1 The budget does not fit
+
+The gate caps the guest at `timeout 180` (`Makefile:3029`). Measured from that
+job's own timestamps, boot to first injection is **49 s** (11:21:30 → 11:22:19),
+leaving ~131 s for four arms.
+
+| | per round | 4 arms × 3 rounds, worst case |
+|---|---|---|
+| before §12 | 6 s | 72 s — fits |
+| after §12 | 20 + 8 = 28 s | **336 s — does not fit** |
+
+So a run that needs to retry is now guaranteed to be SIGTERM'd rather than to
+report. That is not a hypothetical: the `6b3ffbb` job died exactly that way —
+
+```
+qemu-system-x86_64: terminating on signal 15 from pid 13642 (timeout)
+[resizeall] FAIL — arm w: no PRADYOS_RESIZE_FIX line with edge&4 for id=1
+[resizeall] FAIL — arm n: no PRADYOS_RESIZE_FIX line with edge&1 for id=1
+```
+
+Arm w was mid-drag when the guest was killed and **arm n never ran at all**. Its
+"FAIL" is therefore not a measurement of arm n; it is the absence of one, printed
+in the same words a real failure would use. A gate that cannot distinguish "this
+arm is broken" from "this arm never executed" is the vacuity trap DDR-973 §6 and
+DDR-996 each caught once, in a new costume.
+
+### 13.2 The waits are upper bounds, which is why this survived review
+
+On a healthy run `RESIZE_TRACK` arrives in well under a second and both loops
+break early, so the happy path costs almost nothing and the change looks free.
+The cost appears only once something is already wrong — precisely the run whose
+diagnosis matters most. "It is fast when it passes" is not a defence of a
+timeout budget.
+
+### 13.3 The dropped press, which is a separate and still-open question
+
+One thing in that log is NOT explained by retry timing, and is recorded here so
+it is not lost. Arm w pressed at QMP `4708,8458` and released at `9288,8458`.
+At 1024×768 those map to guest **(147,198)** and **(290,198)** — the scale is
+confirmed by the gate's own `PRADYOS_MOUSE_OK 290 198` and, for arm s,
+`PRADYOS_MOUSE_OK 172 257` against `end=5509,10976`.
+
+BETA was then `x0=140 w0=157`, spanning x 140…297, so with `RZBAND 14` the west
+band is 140…154 and the east band is 283…297. The press at 147 is **west**. The
+committed line was
+
+```
+PRADYOS_RESIZE_FIX id=1 edge=8 x0=140 y0=140 w0=157 h0=117 x=140 y=140 w=150 h=117
+```
+
+`edge=8` is `RZ_E`, and `neww = ms.x - x0 = 290 - 140 = 150` reproduces the
+published `w=150` exactly. So the compositor did not latch the west press at
+all: it saw the **release** at 290, in the east band, and treated it as a fresh
+east-edge press. A lost press, not a misclassified one.
+
+Whether §12's fix also cures that is **unknown and must not be assumed** — §12
+changed when the harness retries, not whether the guest observes a press. The
+first post-`a74e086` CI result should be read for arms w and n specifically, and
+this section is the prediction to check it against.
+
+### 13.4 What is owed
+
+1. Raise the guest ceiling so a retrying run can finish and report, and derive
+   the injector's total budget from it rather than letting SIGTERM arbitrate.
+2. Make an arm that never executed say so, distinctly from an arm that failed.
+
+Neither is done at the time of writing: the QEMU host is committed to the
+DDR-1002 arm-B campaign, and editing the Makefile under a running campaign is
+the contamination R1 exists to prevent.

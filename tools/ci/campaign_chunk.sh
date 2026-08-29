@@ -39,7 +39,12 @@ budget="${3:-480}"                       # default 8 min: fits a 10 min ceiling
 serial="${4:-}"                          # gate's serial capture, snapshot per run
 
 LOGDIR="$ROOT/build/gatelogs/campaign"
-LEDGER="$LOGDIR/$gate.ledger.txt"        # one line per completed run
+# DDR-1002: a two-arm campaign runs the SAME gate on two different kernels, so
+# the ledger cannot be keyed on the gate name alone — arm B would append to arm
+# A's ledger and the single-hash check would then fire on a mix that is correct
+# by design. CAMPAIGN_TAG separates them; unset keeps the historical filename.
+tag="${CAMPAIGN_TAG:-}"
+LEDGER="$LOGDIR/$gate${tag:+.$tag}.ledger.txt"   # one line per completed run
 mkdir -p "$LOGDIR"
 
 if pgrep -f "[q]emu-system-x86_64" >/dev/null; then
@@ -66,7 +71,7 @@ while [ "$done_n" -lt "$target" ]; do
     fi
     i=$(( done_n + 1 ))
     kh=$(sha256sum "$ROOT/build/kernel.bin" 2>/dev/null | cut -c1-16)
-    if make -C "$ROOT" "$gate" >"$LOGDIR/$gate.$i.log" 2>&1; then
+    if make -C "$ROOT" "$gate" >"$LOGDIR/$gate${tag:+.$tag}.$i.log" 2>&1; then
         verdict=PASS
     else
         verdict=FAIL
@@ -77,7 +82,7 @@ while [ "$done_n" -lt "$target" ]; do
     # Snapshot the guest capture BEFORE the next run truncates it. Without this
     # the only per-run artefact is make output, which carries no serial lines.
     if [ -n "$serial" ] && [ -f "$ROOT/$serial" ]; then
-        cp "$ROOT/$serial" "$LOGDIR/$gate.$i.serial.log" 2>/dev/null || true
+        cp "$ROOT/$serial" "$LOGDIR/$gate${tag:+.$tag}.$i.serial.log" 2>/dev/null || true
     fi
     printf '%d\t%s\t%s\t%s\t%s\n' "$i" "$verdict" "$kh" "$kh2" "$(date -u +%FT%TZ)" \
         >>"$LEDGER"
