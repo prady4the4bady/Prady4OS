@@ -7648,3 +7648,75 @@ substring search and a truncated line just doesn't contribute. Fixed with one
 3. Then: undraft PR #14 → 3 greens on one tip → merge to `dev/phase1`.
 4. Operator's cleanup addendum (branch/PR pruning) is explicitly **LAST**, only
    after the release is verified. Nothing to do there yet.
+
+---
+
+## CHECKPOINT 2026-08-29 (2) — E1 done, OPEN-1 decided, OPEN-2 fixed again
+
+Tip `89f71cc`. Kernel **`60b35c96d70253f5`**. shard-check 156/10/7, probe-rodata OK.
+
+### E1 campaign COMPLETE — 60/60, one kernel hash
+
+`smoke-surfdestroy` ×60 on `5349db4d791cc2ab`, **zero failures**.
+**OPEN-1 route 2 CLOSES at 95% power** (`0.95^60 = 0.046`, threshold set in
+DDR-1000 §3 *before* the run). Route 3 already closed. **Route 1 stays open** —
+it is CI-only and this campaign was local.
+
+**The clean `yieldstall_scan` does NOT support the mnt_lock hypothesis**, and
+that needed saying: the organic stalls were captured in `smoke-evresize`
+(shard 0); the campaign ran `smoke-surfdestroy` (shard 6), which emits **zero**
+`[yieldstall]` lines — the instrument never engages there. 60 clean logs of a
+gate that never runs the code is not evidence. Next test named: an
+**evresize campaign under `yieldstall_scan.py`**.
+
+### OPEN-2 / B#3 reopened AND fixed the same day (DDR-1001)
+
+`[apfreeze]` fired in CI on `smoke-smpuser`. Resolved to `sys_wait4 + 0x4f` — the
+return address after `callq find_zombie_child` — an unbounded, **unlocked** walk
+of the all-threads ring, reached with `if=0` so nothing could preempt it.
+
+**The fix was conformance, not invention:** `sched_snapshot` already walks that
+exact ring under `g_sched_lock`. `sys_wait4` just wasn't. Walk moved into
+`sched.c` as `sched_find_child()` (it had to move — `g_sched_lock` is `static`
+there). M1 mutation-checked: `8cb987c18ddebb17` fails and fires
+`[ringwalk] wait4 ring inconsistent pid=39`.
+
+`[ringwalk]` **added** to `GLOBAL_FORBIDDEN` — the opposite call from
+`[yieldstall]`, which DDR-994 *removed*. The difference is principled: a resolved
+yield stall is survivable; exceeding a bound at ~10x any observed thread count
+under a lock cannot happen unless the ring is corrupt.
+
+### THE session's biggest lesson: report latency (DDR-997 §12)
+
+`smoke-resizeall` broke three times, all one root cause — **asking before the
+answer exists**:
+
+| § | checked too early |
+|---|---|
+| §9.4 | the **press** — released before the compositor had polled |
+| §10 | the **drag** — released before it had seen the move |
+| §12 | the **commit** — retried before it had logged it |
+
+`SYS_MOUSE_POLL` reads current state, not an event queue, and the serial log is
+written asynchronously. **Any new gate touching the compositor must wait for a
+printed witness, never a duration.** §11's diagnosis (stale handles) was right
+about the symptom and wrong about the cause: the handles were stale *because the
+retry happened*. Now 3/3 local runs PASS with **0 retries** — zero retries is the
+load-bearing number, not the PASS.
+
+### CI state
+
+- Every shard-9 red so far predates the §12 fix (`a74e086`). Expected.
+- `0bc0c74` suite A died at `smoke-blkmq-trace` (gate 1); suite B reached gate 17.
+  So **blkmq-trace is intermittent**, and it **passes locally** — no named
+  mechanism, so no fix (§NON-NEGOTIABLE 3).
+- Green on both suites: `ca85e35`, `b3573b9`, `2dbcbe8`, `0611a59`, `513ce6b`,
+  `e1259ab`. Different SHAs, so §INV.15 is still unsatisfied.
+
+### Next
+
+1. Watch `89f71cc` (or later) — first tip carrying BOTH the §12 resizeall fix and
+   DDR-1001. If shard 9 is green there, the resizeall saga is closed.
+2. Then: undraft PR #14, 3 greens on ONE tip (third via `workflow_dispatch`).
+3. Route 1: evresize campaign under `yieldstall_scan.py`.
+4. `v1.0.0` no longer blocked on OPEN-1 routes 2/3.
