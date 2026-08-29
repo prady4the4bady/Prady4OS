@@ -155,7 +155,7 @@ reentrant calls. **Do NOT revert this pattern.**
 Correct form ALWAYS: `pgrep -f "[q]emu-system-x86_64"` (bracket avoids self-match).
 
 ### §INV.4 — DDR number collision
-Free range: **DDR-999+** (936-998 allocated; 998 = SURF_EV_CLOSE, IMPLEMENTED + gated (M3 unmeasured); 997 = resize from any edge, IMPLEMENTED + gated + mutation-checked; 994 = the OPEN-1 route-1 yield-stall detector, IMPLEMENTED + gated; 995 = Alt+Tab, IMPLEMENTED + gated; 996 = TCB freed while queued, FIXED + gated + mutation-checked).
+Free range: **DDR-1001+** (936-1000 allocated; 999 = multi-arch parity ASSESSMENT (answer: not achievable), 1000 = OPEN-1 DECISION (does not close; E1/E2 named); 998 = SURF_EV_CLOSE, IMPLEMENTED + gated (M3 unmeasured); 997 = resize from any edge, IMPLEMENTED + gated + mutation-checked; 994 = the OPEN-1 route-1 yield-stall detector, IMPLEMENTED + gated; 995 = Alt+Tab, IMPLEMENTED + gated; 996 = TCB freed while queued, FIXED + gated + mutation-checked).
 Before allocating ANY DDR number:
 `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` — must return empty in BOTH dirs.
 
@@ -369,7 +369,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
   right" was wrong too. `user/prism.c` ships against 95.
 - **`kernel.bin`**: **1,065,350 B** against the 1,572,864 B size gate — 507,514 B
   of headroom (DDR-973's probe costs the page-aligned 8,192 B every embedded probe does; DDR-981's NMI probe costs 4,104 B). The old "~545 KiB, 768 KiB ceiling" was stale in both terms.
-- **DDR free range: DDR-999+** (936-998 allocated; 998 = SURF_EV_CLOSE ask-then-force, IMPLEMENTED+gated+M1b/M2-mutation-checked (M3 unmeasured); 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work, 989 = vruntime sampling starvation, 990 = net hammer probe BUILT+mutation-checked, 991 = PS/2 modifiers + NSI 96, 992 = Super+M chord, 993 = modifier aggregate DERIVED, 994 = OPEN-1 route-1 detector IMPLEMENTED+gated, 995 = Alt+Tab rebind IMPLEMENTED+gated+mutation-checked, 996 = TCB freed while queued FIXED+gated, 997 = resize from any edge IMPLEMENTED+gated+mutation-checked). **This file carries the free range in TWO places (§INV.4 and here) and they have disagreed before — update both.**
+- **DDR free range: DDR-1001+** (936-1000 allocated; 999 = multi-arch parity assessment, 1000 = OPEN-1 decision; 998 = SURF_EV_CLOSE ask-then-force, IMPLEMENTED+gated+M1b/M2-mutation-checked (M3 unmeasured); 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work, 989 = vruntime sampling starvation, 990 = net hammer probe BUILT+mutation-checked, 991 = PS/2 modifiers + NSI 96, 992 = Super+M chord, 993 = modifier aggregate DERIVED, 994 = OPEN-1 route-1 detector IMPLEMENTED+gated, 995 = Alt+Tab rebind IMPLEMENTED+gated+mutation-checked, 996 = TCB freed while queued FIXED+gated, 997 = resize from any edge IMPLEMENTED+gated+mutation-checked). **This file carries the free range in TWO places (§INV.4 and here) and they have disagreed before — update both.**
 - `make image` → zero warnings, `-Werror` enforced ✅
 - PR #5: **MERGED** as `7c6c67a`. PR #6: **MERGED 2026-08-23** as **`ace232f`**
   into `dev/phase1` (3 greens on tip `46ece3f` per §INV.15; the squashed tree is
