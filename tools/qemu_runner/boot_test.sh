@@ -78,6 +78,30 @@ serial_keep_fail() {
         else
             echo "[boot_test] FAIL — capture kept: $__f"   # copy failed: keep it
         fi
+        # DDR-989 sec.9.14: PRINT the qemu stderr, do not merely name it.
+        #
+        # Naming a path is useless in CI: the file lives on a runner that is
+        # destroyed with the job, so "capture kept: /home/runner/..." is a
+        # dead reference to anyone reading the log afterwards. A smoke-nethammer
+        # failure was undiagnosable for exactly this reason -- every sentinel
+        # present, no verdict line, and the one file that would have explained
+        # it unreachable.
+        #
+        # This is DDR-979's lesson applied again: that DDR merged make's stderr
+        # into the job log (2>&1) precisely so the NEXT panic would be readable
+        # instead of guessed at, and it worked -- DDR-996 was root-caused from
+        # the first capture after it landed.
+        #
+        # Only the qemuerr file is dumped. The serial log is already echoed by
+        # the harness and is thousands of lines; bounded to the last 40 so a
+        # runaway stderr cannot flood the job output.
+        case "${__f##*/}" in
+            qemuerr*)
+                echo "[boot_test] --- qemu stderr (last 40 lines) ---"
+                tail -40 "$__k" 2>/dev/null || tail -40 "$__f" 2>/dev/null
+                echo "[boot_test] --- end qemu stderr ---"
+                ;;
+        esac
     done
     return 0
 }
@@ -340,9 +364,44 @@ early_exit_eligible=0
 # see it. That gap does not bite where it matters -- every SMP and block gate the
 # freeze actually reddens already declares a FORBIDDEN_SENTINEL and therefore
 # burns its full window.
+# DDR-994 sec.8 -- `[yieldstall]` is deliberately NOT in this list.
+#
+# It was added here when the detector shipped, on the assumption that any
+# 5-second yield-spin is pathological. The first real capture (run 32702146725,
+# smoke-vault: `site=mnt_lock spins=68981 ticks=500 pid=45`) shows that
+# assumption is not yet established: mnt_lock is held across real block I/O, the
+# SFS self-test cycles mount/umount dozens of times, and CI runs under TCG, so a
+# long-but-FINITE wait is entirely plausible. 138 spins/tick against a measured
+# turnover of ~255/tick fits a deadlock and heavy contention equally well.
+#
+# Forbidding it therefore reddens gates on a signal that has not been shown to
+# be fatal -- inventing a failure rather than detecting one. The detector now
+# emits a matching `[yieldstall] RESOLVED` line (sched.c), so a stuck wait is
+# distinguishable from a slow one by the ABSENCE of that line. Re-add
+# `[yieldstall]` here only once a capture shows an OPENED stall with no RESOLVED
+# partner -- that is a hang, and then it belongs in this list.
+# DDR-1001: '[ringwalk]' means the wait4 ring walk exceeded its bound, which
+# under g_sched_lock is impossible unless the ring is genuinely corrupt. Unlike
+# [yieldstall] (removed from this list in DDR-994 because a resolved stall is
+# survivable), this one is fatal by construction: the walk is bounded at ~10x
+# any observed live-thread count, so exceeding it is never benign.
+#
+# THIS COMMENT LIVES ABOVE THE ASSIGNMENT, AND MUST STAY THERE. DDR-1001 first
+# wrote it BETWEEN `printf '%s\n' \` and the first pattern. A backslash-newline
+# splices the lines before the comment is stripped, so `#` then swallowed the
+# whole argument list -- and '[ringwalk]' and '[apfreeze]', left without
+# continuations, were RUN as commands ("[ringwalk]: command not found", to a
+# stderr nobody reads). GLOBAL_FORBIDDEN was the empty string on every gate in
+# the repo for four commits. Nothing looked broken: an empty forbidden list
+# fails nothing, it just silently stops catching. smoke-selftest case 5 is what
+# found it, on all 10 shards at once, which is exactly the job DDR-791 built it
+# for. Do not put a comment inside this printf.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
+    '[ringwalk]' \
     '[apfreeze]' \
+    '[vrinflate]' \
     'AGENT_METRICS FAIL' 'BIGWRITE FAIL' 'CAPNET FAIL' 'DMESG FAIL' \
+    'FAT32MC FAIL' 'MODKEYS FAIL' 'NETHAMMER FAIL' \
     'FSRM FAIL' 'KILL FAIL' 'ROOTMOUNT FAIL' 'SETNAME FAIL' 'SFSROOT FAIL' \
     'SURFDESTROY FAIL' 'SYSINFO FAIL' 'TIME FAIL' \
     'PRIVACYNET FAIL' 'PRADYOS_SOVEREIGN_BYPASSED' \
@@ -490,25 +549,31 @@ qemu_pid=$!
 # completes leaks nothing. An INTERRUPTED run is the actual leak source: this
 # project's CI can cancel runs (a human cancelling a job, runner eviction), and
 # Ctrl-C does the same locally.
-# DDR-988 sec.12.4: this comment used to claim "CI cancels runs ROUTINELY (the
-# workflow concurrency group cancels the older run whenever two dispatches land
-# on one ref)". That is FALSE and it misled a later session into repeating it as
-# established fact. There is no `concurrency:` block anywhere under
-# .github/workflows/ -- grep finds none, and run 32657350756 stayed in_progress
-# across two subsequent pushes to the same ref, which a concurrency group would
-# have cancelled twice. Cancellation here is occasional, not routine. The shell dies, QEMU is orphaned, and it holds the image write
-# lock until someone notices. That orphan is exactly what the pre-flight check
-# above trips over on the NEXT run -- so this trap removes the CAUSE, while the
-# check above only contains the symptom.
+# When a run IS interrupted the shell dies, QEMU is orphaned, and it holds the
+# image write lock until someone notices. That orphan is exactly what the
+# pre-flight check above trips over on the NEXT run -- so this trap removes the
+# CAUSE, while the check above only contains the symptom.
+#
+# DDR-988 sec.12.4 / DDR-993: this comment twice claimed "CI cancels runs
+# ROUTINELY (the workflow concurrency group cancels the older run whenever two
+# dispatches land on one ref)". That is FALSE. There is no `concurrency:` block
+# anywhere under .github/workflows/ -- grep finds none -- and run 32657350756
+# stayed in_progress across two subsequent pushes to the same ref, which a
+# concurrency group would have cancelled twice. Cancellation here is occasional
+# (a human cancelling a job, runner eviction, local Ctrl-C), not routine.
+# The claim was retracted once, in f45f266, but only in the paragraph above:
+# the sec.12.2 paragraph below restated it word for word and survived, which is
+# how a review caught it still sitting here. A retraction that does not grep for
+# its own claim is half a retraction.
+#
 # DDR-988 sec.12.2: the trap must ALSO preserve the capture. It used to just kill
-# and exit 130, bypassing serial_keep_fail entirely — so a cancelled run threw
+# and exit 130, bypassing serial_keep_fail entirely — so an interrupted run threw
 # away its serial log exactly when that log is most likely to hold the only
-# useful diagnosis. And cancellation is ROUTINE here, by this comment's own
-# account: the workflow concurrency group cancels the older run whenever two
-# dispatches land on one ref, which is precisely what happens while chasing the
-# 3-green rule. The original file is left in place, but sec.11.2 now truncates
-# SERIAL_LOG at the start of the NEXT run, and a cancelled CI workspace is
-# discarded without an artifact upload — so "left in place" is not preserved.
+# useful diagnosis. Occasional is reason enough: the runs most worth capturing
+# are the long ones, which are the likeliest to be cancelled. The original file
+# is left in place, but sec.11.2 now truncates SERIAL_LOG at the start of the
+# NEXT run, and a cancelled CI workspace is discarded without an artifact
+# upload — so "left in place" is not preserved.
 on_interrupt() {
     kill "$qemu_pid" 2>/dev/null
     wait "$qemu_pid" 2>/dev/null

@@ -7042,3 +7042,750 @@ looking at the directory afterwards.
 - DDR free range: **DDR-990+** (989 allocated).
 - Still owed: DDR-987 §5's two-CPU `connect`/`close` hammer probe — the only
   thing that could positively prove the lwIP fix. Unwritten.
+
+## Checkpoint 2026-08-23 (final) — PR #13 MERGED, dev/phase1 recovered
+
+**CURRENT_ACTIVE_TASK: OPEN-1 verification — 20x `smoke-surfdestroy` on `2cd7db9`.**
+
+### State
+
+- `dev/phase1` = **`2cd7db9`** (PR #13 squash-merged). **Recovered — no longer red.**
+- `main` = `ace232f`, clean, **UNTAGGED** (operator hold, DDR-985). Untouched.
+- Merge evidence: **60/60 CI jobs green on `84563f7`, four independent runs.**
+  Kernel `e3919140872fd2ea`, 1,069,450 B, warning-clean at `-Werror`.
+
+### Do NOT promote to main yet
+
+Three greens on `dev/phase1` are required before ff to `main`, and separately the
+operator hold on `v1.0.0` stands until the OPEN-1 `#PF` is closed (DDR-985).
+**A green suite is NOT that closure** — see below.
+
+### The next real task, and why a green suite does not substitute for it
+
+**OPEN-1 is OPEN.** DDR-988 §10.4 and CLAUDE.md both now say this explicitly,
+because both files previously overstated it. What is established: a real
+cross-CPU lwIP use-after-free existed and is fixed (`#GP`,
+`RAX=0xDDDDDDDDDDDDDDDD` in `tcp_output`). What is NOT established: that OPEN-1's
+`#PF` is that same defect. At a ~1/20 base rate in one gate, four green suites
+are entirely consistent with the defect still being present.
+
+Two things would settle it, in priority order:
+
+1. ~~20x `smoke-surfdestroy`~~ — **DONE: 20/20, 0 fail**, kernel
+   `e3919140872fd2ea` (prior baseline 19/20 on `d31b4023b0f74d06` @ `46ece3f`).
+   **NOT proof, and NOT a meaningful improvement.** At p≈1/20,
+   `0.95^20 ≈ 0.358` — a clean sweep happens ~1 time in 3 even if the defect is
+   untouched (~64% power), and 19/20 -> 20/20 is one fewer failure in twenty
+   trials, inside noise. Sampling to 95% confidence would need ~59 clean runs.
+   Recorded with the arithmetic in DDR-990 §1.
+2. **The two-CPU `connect`/`close` hammer — DESIGNED (DDR-990), NOT BUILT.**
+   Still the only thing that could POSITIVELY prove the lwIP fix rather than
+   fail to disprove it. DDR-990 has the full design: `user/nethammer.c` spawned
+   TWICE with `is_net=1` (NOT sovereign — sovereign audits every connect and the
+   churn would perturb the measurement), loopback to the in-kernel echo server
+   at 127.0.0.1:8007, `smp_resched_all()` after spawn, opt-in via
+   `probe_enabled("nethammer")`, gate `smoke-nethammer` at `QEMU_SMP=4`.
+
+   **READ DDR-990 §4 BEFORE TRUSTING A GREEN RESULT.** The probe MUST be
+   mutation-checked: on a kernel with `g_net_lock` REVERTED it must panic within
+   a bounded N. If the unfixed kernel survives it, the probe is too weak and
+   must be strengthened before its green means anything. A hammer that passes
+   both ways is the DDR-988 §9 vacuous-gate failure again, and worse, because it
+   would look like the closure OPEN-1 is waiting for.
+
+   **Open implementation point (DDR-990 §5):** confirm
+   `netallow_check(127.0.0.1, 8007)` passes, or the probe gets an audited
+   `-EPERM` and hammers nothing while still printing its sentinel. Assert
+   `conn_err == 0`.
+
+### DDR-989 — root-caused, deliberately unimplemented
+
+The `smoke-evresize` / `smoke-agentpanel` stalls (same defect, two gates, two
+commits). `rq_pop` picks smallest `dbg_vruntime` — NOT FIFO, and the comment
+above it saying FIFO is stale and actively misleading. `sched_charge_elapsed` is
+reachable only from `sched_tick`, so CPU time is sampled at 100 Hz; a thread
+yielding ~1074x/tick accrues ~0 vruntime and wins every pick, while quantum
+resets on each voluntary switch so `g_preempt_try` freezes.
+**Run DDR-989 §4's measurement BEFORE fixing.** It states what CONFIRMS and what
+REFUTES — if those pids' vruntime advances normally and is merely lower, the
+cause is weighting and the fix is the OPPOSITE one. Task #26.
+
+**lwIP is exonerated for this family** by the DDR-988 counters
+(`net_skip=0 net_rxdrop=0` on the agentpanel failure). Do not re-attribute it to
+lwIP without a non-zero `net_skip`.
+
+**DDR-989's own arithmetic was wrong and is corrected (DDR-993).** The "~1074
+yields/tick" above is `3.24M / 3000` — `evresize`'s numerator over
+`agentpanel`'s span. Real rates: **~432/tick** (evresize, 3.24M over 7500 ticks)
+and **~533/tick** (agentpanel, 1.6M over 3000). And `ymask` is the DDR-981
+**system-wide** counter, so it cannot attribute yields to pids 18 and 42 at all
+— that assumed the conclusion. What survives: `curpid=` alternates between
+exactly those two pids at every sample, and the aggregate rate is far above
+100 Hz. Consistent with the mechanism, not a measurement of it. §4 still gates
+the fix.
+
+### Process rules earned 2026-08-24
+
+**Two distinct hazards showed up stacked on one failure. I diagnosed the
+second one first and was half wrong; both are recorded so the next session
+separates them.**
+
+- **`for i in $(seq 1 900); do pgrep ... || break; done` is not a wait.** It
+  spins 900 times in milliseconds and then falls through with QEMU still
+  running. Both `smoke-blkmq` and `smoke-selftest` then hit
+  `HOST-ENV FAIL -- STALE QEMU HOLDS IMAGE LOCK`, exit 3 — the
+  §NON-NEGOTIABLE 12 pre-flight working exactly as designed, refusing a run
+  that would have contended for the image. **`until ! pgrep -f
+  "[q]emu-system-x86_64" >/dev/null; do sleep 2; done`** is the wait. An
+  `exit 3` HOST-ENV refusal says nothing about the kernel — read the banner
+  before treating it as a gate result.
+
+- **Do not edit `tools/qemu_runner/` while a gate is running.**
+  **I then did it AGAIN, an hour after writing this rule down**, appending
+  `[yieldstall]` to `GLOBAL_FORBIDDEN` while `smoke-yieldstall` was mid-boot.
+  That run's result had to be discarded and re-run. Writing a rule in the
+  handoff is not the same as following it: before touching anything under
+  `tools/qemu_runner/`, run `pgrep -f "[q]emu-system-x86_64"` first, every time.
+ `bash` reads a
+  script lazily by byte offset, so appending a `GLOBAL_FORBIDDEN` line mid-run
+  shifted the offset under a process already executing it and it resumed
+  mid-token: `line 582: al_keep_fail: command not found` — that is
+  `serial_keep_fail`, sheared, on the stale-QEMU error path above.
+
+  **Correction to my own first reading:** I concluded from the shearing that
+  "the gate failure was real, the defect was not." Wrong on the causation. The
+  gate failed because of the stale QEMU; the live edit only garbled the message
+  it printed on the way out. The tell was there to be read — line 582 sits
+  inside the pre-flight refusal block, so the error text named its own cause and
+  I attributed it to the corruption sitting on top. §11.4 already requires
+  re-running `smoke-selftest` after a `tools/qemu_runner/` change; add: make the
+  edit when nothing is running, and re-run from an idle machine before drawing
+  any conclusion at all.
+
+### Process rules earned earlier
+
+- **§11.4: any change under `tools/qemu_runner/` MUST run `smoke-selftest`
+  before push.** I chose local gates by what the C changes touched;
+  `boot_test.sh` is touched by every gate, including the one that tests it.
+- **A deletion in a harness is rarely only a deletion.** Removing `serial_rm`
+  from failure paths silently removed run isolation (8 shards red), and the
+  follow-up fix misclassified the one `exit 0` SKIP among nine sites. "The gate
+  still passes" caught neither.
+- **Reading a comment is not verifying a fact.** I amplified a stale
+  `boot_test.sh` comment ("the concurrency group cancels runs") into a DDR and a
+  public reply. There is no `concurrency:` block in `.github/workflows/`.
+  Retracted; the source comment is corrected.
+- **Don't move the tip while chasing three greens.** Five pushes orphaned five
+  in-flight suites. Batch, then dispatch.
+
+### This session (2026-08-24): CodeRabbit review on PR #14 → DDR-993
+
+**One claimed-CRITICAL finding was FALSE and was refuted, not applied.**
+CodeRabbit reported duplicate `struct net_rxq_ent` / `g_net_rxq` definitions at
+`lwip_port.c:152-155` and concluded "this file cannot build". There is exactly
+one definition of each; lines 185-207 are uses. Every local build has been
+warning-clean at `-Werror`. **Verify a review finding against the code before
+acting on it** — a confident tone is not evidence, in either direction.
+
+**Two findings were real and are fixed (DDR-993).**
+1. `mods_set` cleared the paired-modifier AGGREGATE unconditionally, so
+   releasing one Shift/Ctrl/Alt/Meta cleared it while the other was held. For
+   Ctrl/Alt/Meta this disables DDR-992's chord suppression — **a chord starts
+   typing text again**, one commit after DDR-992 shipped to prevent exactly that.
+   Fix: the aggregate is now RECOMPUTED from per-side state on every edge, so it
+   cannot disagree with its sides by construction.
+2. `key_ev.code` carried the shifted glyph, so one physical key's make and break
+   disagreed whenever Shift was released between them. `code` is now the
+   unshifted identity; `ascii` keeps the glyph.
+
+**The finding behind the finding — read this before writing another gate.**
+DDR-991 §6 claimed arm E was "the arm that matters most … a latched-modifier
+regression passes every other arm here." That was true of the regression it
+imagined and false of the one that shipped. **Measured, not argued: both DDR-993
+mutants still print `PRADYOS_MODKEYS_OK` — all six ring-3 arms pass on a broken
+kernel.** A mutation check only tests the sequences the harness can produce.
+
+And the missing arm was **unwritable**, not merely unwritten: QEMU's HMP
+`sendkey` couples every press to its own release, so "two keys of a pair held at
+once" cannot be injected at all. That is why the decode was split from the port
+read (`ps2kbd_feed`) and asserted in ring 0 via `ps2kbd_selftest()`, sentinel
+`PRADYOS_MODKEYS_PAIR_OK`, checked by its own grep so a kernel arm that stopped
+running cannot leave the gate green on six arms while reporting seven.
+
+Mutation results (R1 hashes): fixed `ff6bc6b1371f94c1` pass; M1 `b771cc4def3064c4`
+step 3, exit 2; M2 `d89d5a4a6fd3a0f0` step 11, exit 2.
+
+**Also corrected this session, all from the same review:**
+- `smoke-nethammer`'s comment claimed "Two OK lines are required"; EXTRA_SENTINEL
+  checks PRESENCE, never count, so one surviving instance passed. Now enforced:
+  exactly 2 DISTINCT pids on OK lines.
+- The "concurrency group cancels runs" claim was retracted in f45f266 — but only
+  in one of the two paragraphs in `boot_test.sh`, and never at its SOURCE,
+  DDR-951. Both now corrected. **A retraction that does not grep for its own
+  claim is half a retraction.**
+- CLAUDE.md's OPEN-1 row spanned 10 physical lines, so 9 of them fell outside the
+  Markdown table. Collapsed to one line and refreshed: DDR-990's hammer proves
+  the lwIP fix but does **not** close OPEN-1 (§12 — route 1 is a silent hang, and
+  no panic-based detector sees it).
+- Gate count in CLAUDE.md was 149; `ci-shard-check` measures **152**. Re-measure,
+  don't increment.
+- DDR-990's status line still read "DESIGN. Not implemented." while §8-§12 held
+  its results.
+- 33 `(uint64_t)(X_end - X)` pointer subtractions between separate extern arrays
+  → cast through `uintptr_t`. CodeRabbit flagged 2 of them; fixing 2 of 33 would
+  have been worse than fixing none. Hash-verified as semantics-preserving.
+
+### DDR-994 is BUILT (2026-08-24) — `smoke-yieldstall`, shard 9
+
+`yield()` has 26 call sites. Five are ring-3 reachable; `sys_yield`
+(`syscall.c:155`) is a bare call, not a wait. The other **four are spin-waits and
+all four are unbounded**.
+Three are now instrumented; the fourth is deliberately not (below). The
+sentinel is `[yieldstall] site= spins= ticks= pid= cpu=`, in
+`GLOBAL_FORBIDDEN`, so a stall in ANY gate names itself.
+
+**It REPORTS, it does not repair.** Named mechanism, no captured artefact, so
+§NON-NEGOTIABLE 3 forbids a semantic change. The spin continues exactly as
+before; it just says so once. Bailing out of `mnt_lock` on a deadline would turn
+a hang into a silent `-EIO` on a live mount — it would look like a fix and
+destroy the evidence. **The fix is a later DDR, written against a real capture.**
+
+**Do NOT instrument `sys_io.c:293`.** That console read waits for a keystroke
+and is legitimately unbounded — PRISM sits in it every boot. A duration
+watchdog there fires in all 153 gates on day one and gets switched off. The
+discriminator is *what* is waited on, not how long.
+
+**Mutation results (4 distinct hashes):** instrumented `037ad1d6a8b046b1` PASS;
+M1 (call removed from `mnt_lock`) `652c09d4d7236655`; M2 (threshold 500->5000)
+`7d37400fc8679ad0`. Both mutants kill arm B and **leave arm A green** — an
+instrument wired to nothing still passes arm A, which is precisely why arm B
+exists. I had precommitted in DDR-994 §6 that M2 would fail both; that was
+wrong about my own design (arm A calls the reporter directly, bypassing the
+threshold) and is corrected in the DDR. **Predicting a mutant is not knowing it.**
+
+**First measured yield-spin denominator: `mnt_lock` ≈ 255 spins/tick**
+(127,344 spins over 500 ticks). This calibrates the thresholds — 20,000 spins is
+~78 ticks, so ticks is the binding threshold at these sites.
+
+`smoke-yieldstall` runs with `SKIP_GLOBAL_FORBIDDEN=1`, because it emits the
+sentinel deliberately and would otherwise fail itself. Cost stated in §9: that
+one 7 s boot loses global-list coverage, but still fails by absence on a panic.
+
+**What is NOT claimed:** not a fix, and not that `mnt_lock` IS OPEN-1. If the
+next occurrence prints no `[yieldstall]` line, the hypothesis is refuted — which
+is a real result, the same shape as DDR-985 refuting its own Claim A.
+
+### The original DDR-994 lead — kept for context
+
+**OPEN-1 route 1 (the silent hang) has a concrete suspect.** `mnt_lock`
+(`kernel/fs/vfs/vfs.c:25`) is an UNBOUNDED yield-spin:
+
+```c
+static void mnt_lock(struct vfs_mount *m) {
+    while (__atomic_exchange_n(&m->busy, 1, __ATOMIC_ACQUIRE))
+        yield();
+}
+```
+
+DDR-981 fixed the interrupt masking INSIDE `yield()`, which is why the CPU no
+longer freezes — but it never bounded the spin. A holder that never releases (or
+that hangs itself) leaves the waiter spinning forever: **cpu busy, thread never
+progresses, nothing printed, no panic.** That is exactly OPEN-1 route 1's
+signature, and the queue already records that its one captured failure hung at
+`SYSFSTAT OK` -> `SYSREAD OK`, i.e. inside `sys_read`/`vfs_read`.
+
+This is a far more direct instrument than the NMI watchdog first considered: the
+DDR-981 NMI machinery triggers on "this cpu stopped taking interrupts", and in
+route 1 the cpu is fine.
+
+**Design constraint (§NON-NEGOTIABLE 3): DDR-994 must REPORT, not repair.**
+Emit a named sentinel on deadline expiry (`[mntstall] mnt= holder= waiter=
+ticks=`), add it to `GLOBAL_FORBIDDEN` so a recurrence names itself, and keep
+spinning. Changing the locking semantics without a captured artefact would be
+a fix without a named mechanism.
+
+**Correction found while researching this:** the Group A row "Scheduler
+timed-block — implement AFTER g_ticks is CI-proven reliable" is STALE. It is
+built: **`sched_block_timeout()`** (`sched.c:1434`, DDR-955), expiry sweep at
+`sched.c:1287`, `block_deadline` + `wake_timed_out` in `struct tcb`, four
+callers (`virtio_blk.c:232/288`, `bcast.c:78`, `ipc.c:65`). The backlog's
+`sched_block_on_timeout` was a placeholder name that never existed. CLAUDE.md
+corrected.
+
+### DDR free range: **DDR-995+** (994 claimed by the above)
+
+## CHECKPOINT 2026-08-24 — DDR-993/994/995 (tip `f74e5c5`)
+
+**Branch:** `dev/phase1-seyp3n` @ `f74e5c5`, pushed. PR #14 open (draft), subscribed.
+**Kernel:** `82fcac7d3117c63b`, 1,085,834 B against the 1,572,864 B gate.
+**Gates:** 153 across 10 shards, 7 excluded (`ci-shard-check` OK).
+
+### Landed this session
+
+- **DDR-993** — paired-modifier aggregate. `mods_set()` cleared the AGGREGATE bit
+  (KMOD_SHIFT) on ONE side's break, so releasing right Shift with left still held
+  read as no-Shift. Worse for Ctrl/Alt: a still-held Ctrl stops suppressing chords
+  and starts typing text. Fixed structurally — only the 8 physical keys have state
+  (`g_side`), `g_mods` is RECOMPUTED from it. A derived aggregate cannot disagree
+  with its sides. Also split `ps2kbd_feed()` out of the ISR: `sendkey` couples
+  press to release, so the two-keys-held sequence was UNWRITABLE as a ring-3 arm.
+  Kernel self-test drives raw scancodes; 12 steps.
+- **DDR-994** — detector for OPEN-1 route 1 (a HANG with no panic; every other
+  instrument keys on a fault or a print). `yield_stall_note()` on 3 unbounded
+  yield-spins (`mnt_lock`, both pipe waits). **Reports, does not repair** —
+  §NON-NEGOTIABLE 3, and bailing out of `mnt_lock` on a deadline would turn a hang
+  into a silent -EIO and destroy the evidence. `[yieldstall]` in GLOBAL_FORBIDDEN.
+- **DDR-995** — Alt+Tab. DDR-720's bare-Tab hotkey meant **no application could
+  ever receive a Tab**. Now Alt+Tab cycles and Tab reaches the focused surface.
+
+### CodeRabbit PR #14 review — one claim REFUTED, do not re-fix
+
+Its CRITICAL ("duplicate `struct net_rxq_ent`/`g_net_rxq` at lwip_port.c:152-155,
+so this file cannot build") is **a false positive**: 152 and 155 are the only
+definitions, 185–207 are uses, and the file builds warning-clean at `-Werror`.
+The paired-modifier finding in the same review was REAL and is DDR-993.
+
+### Still open — the release gate has NOT moved
+
+- **`v1.0.0` remains untagged, deliberately.** The operator's condition is that
+  OPEN-1 be closed by the hammer probe's evidence, not a green CI streak.
+  **DDR-990 §12 established the hammer CANNOT close it**: OPEN-1 is at least three
+  signatures, and the hammer closed route 3 (`#GP`), which was never OPEN-1's own
+  artefact. Route 1 is a hang that prints nothing, so no panic-based detector
+  reaches it — that is what DDR-994 is for, and it has not yet caught anything.
+  A green suite is not evidence here: at ~1/20 a clean 20-run sweep has ~64% power.
+- **OPEN-12, OPEN-13** — unchanged, still one capture each.
+- **Task #26 / DDR-989** — root-caused, deliberately unimplemented pending its
+  §4 confirming measurement.
+- **CAP_OCR/EXEC/SCENE/NET_BROWSE** — BLOCKED on an operator ruling (DDR-982 §5.5).
+
+### Next
+
+Group E remainder (Ctrl+Alt+T, per-window restore, maximize at real geometry,
+resize handles all edges, `SURF_EV_CLOSE`, OKLab horizon, vDSO reader,
+`PTE_SW_SHARED` audit), then Group F's 11 unbuilt agents.
+
+---
+
+## Checkpoint — 2026-08-24 ~09:20 UTC, tip `858a721`
+
+### Shipped this block (all pushed, tree clean)
+
+| DDR | What | State |
+|---|---|---|
+| 993 | paired-modifier aggregate: `g_mods` DERIVED from per-side state | gated (kernel arm), mutation-checked |
+| 994 | yield-stall detector; **§8** adds RESOLVED + un-forbids the sentinel | gated, **fired in CI twice** |
+| 995 | Alt+Tab bound via NSI 96; bare Tab returned to applications | gated (3 arms), mutation-checked both ways |
+| 996 | **TCB freed while still linked on a runqueue** — ring-0 `#GP` | gated, mutation-checked (leaked 16 vs 0) |
+
+### The one open question, and how it gets answered
+
+DDR-994's detector fired on **two** CI captures, same site:
+
+| gate | shard | pid | spins | ticks |
+|---|---|---|---|---|
+| `smoke-vault` | 9 | 45 | 68,981 | 500 |
+| `smoke-acc`   | 2 | 43 | 52,491 | 500 |
+
+Both exactly on the threshold, both after heavy SFS activity, ~105-138 spins/tick
+against a measured turnover of ~255/tick. **That fits a deadlock and heavy
+legitimate contention equally well, and the opening line alone cannot separate
+them.** Do not read these as OPEN-1 confirmed.
+
+`yield_stall_done()` (be2f824) now emits `[yieldstall] RESOLVED site=... spins=...
+ticks=...`. **The next CI run decides it:**
+
+- opening line **with** a RESOLVED partner -> the wait was slow, not stuck. Not
+  OPEN-1; raise `YIELD_STALL_TICKS` and move on.
+- opening line **with no** partner -> a genuine hang. Root-cause it, and re-add
+  `'[yieldstall]'` to `GLOBAL_FORBIDDEN` in `tools/qemu_runner/boot_test.sh`
+  (the rationale comment there says exactly this).
+
+The real stall does NOT reproduce locally — it is CI/TCG-only. The instrument
+itself is verified end-to-end by `smoke-yieldstall` arm B, which shows both
+halves on a deliberately armed stall (opened t=500, RESOLVED t=694).
+
+### Recorded, NOT diagnosed — a third signature
+
+`smoke-invariants` (shard 8, `preempt=1212` frozen t=7000..11500) and
+`smoke-poweroff` (shard 5, `preempt=1509` frozen t=10500..11500). Both have **no
+`[yieldstall]` line**, so this is not the `mnt_lock` stall. Shared feature: a
+frozen `preempt` counter while `curpid` keeps changing. Both pass locally. No
+named mechanism -> no fix (§NON-NEGOTIABLE 3). DDR-994 §8.4.
+
+### Corrections worth carrying forward
+
+- `switch_wait_offcpu` (`sched.c:479`) is a **FIFTH** unbounded yield-free spin.
+  DDR-994 §6 said four. Found by hanging a boot on it.
+- **A mutation result without a distinct kernel hash is not a result.** DDR-996's
+  first mutant "survived" only because removing the code left `prev` unused,
+  `-Werror` failed the build, and the previous binary was still on disk.
+- Kernel heap and kstacks are identity-mapped **LOW** (`RSP=0x07DABDD8` in the
+  panic). Do not write high-half pointer checks.
+
+### Next, in order
+
+1. Act on the RESOLVED verdict above — it is the gating question for OPEN-1.
+2. Group E remainder: Ctrl+Alt+T, per-window restore from dock, resize handles
+   all edges, `SURF_EV_CLOSE`. All compositor-only, low risk.
+3. **Maximize at real display geometry is NOT low risk** — the 512 cap is
+   `SURFACE_DIM_MAX` in `sys_surface.c:17` (buffer <= 1 MiB). A real display is
+   ~3 MiB/surface: a PMM budget change touching many gates. Size it before
+   starting; do not treat it as a compositor tweak.
+4. `v1.0.0` stays UNTAGGED. OPEN-1 is not closed, and DDR-990 §12 established
+   the hammer cannot close it.
+
+---
+
+## CHECKPOINT 2026-08-25 — DDR-997 shipped (resize from any edge)
+
+Branch `dev/phase1-seyp3n` @ **`cbc8a88`**, pushed. PR #14 already tracks this
+branch (its title still names DDR-990 — it is the standing branch PR).
+
+Kernel **`6f0da11f2ef4a123`**, 1,085,834 B, warning-clean at `-Werror`.
+`ci-shard-check` **155 gates / 10 shards / 7 excluded**. `ci-probe-rodata-check` OK.
+
+### What shipped
+
+Eight 14 px resize regions per window (N/S/E/W + four corners). SE unchanged
+bit-for-bit — `RZ_S|RZ_E` reduces to exactly DDR-718's predicate, and it is the
+one path with a green gate. New gate `smoke-resizeall` (shard 9, 180 s), new
+injector `tools/qemu_runner/resize_inject.sh`, new checker
+`tools/qemu_runner/resize_check.py`. `drag_inject.sh` gained `RZ_FIELD`.
+
+Four drags in ONE boot, both fixed-edge equalities exact:
+`140+157 = 297 = 265+32` (W), `140+117 = 257 = 225+32` (N).
+
+Mutations, three distinct kernel hashes, all caught:
+`M1` drop the move `34ef019aa3fdccd5` (W/N fail, **E/S still pass**),
+`M2` clamp after origin `c683670acf34792a` (W/N fail, **different signature**),
+`M3` resize before title `018e1777db0547fb` (**`smoke-drag` fails**).
+
+### Three things worth carrying forward
+
+1. **A gate that reports INTENT is decoration.** The `PRADYOS_RESIZE_FIX` line
+   first printed the compositor's own `newx`/`newy`. Under M1 — drop the
+   `SYS_SURFACE_MOVE`, change nothing else — `newx` is still computed and would
+   still have been printed, so the gate would have passed a window that never
+   moved. It now re-polls and reports the OBSERVED origin. Same mistake as
+   DDR-996's first arm B; caught before it was believed this time.
+
+2. **`PRADYOS_WM_GEOM` was stale repo-wide.** It was republished only when the
+   surface COUNT or the focus changed, so after any move or resize the last
+   published line described a window that had since moved. One drag never
+   notices (which is why `smoke-evresize` never did); four in a row do. The
+   publish condition now also fires on a rect change, tracked exactly per slot,
+   not hashed.
+
+3. **`PRADYOS_BTN_STATE` diagnosed a gate bug the code could not.** The first run
+   had E/W/N green and S red every time — a suspicious pattern, S being the
+   easiest arm. The compositor observed **6 of the 10 injected button edges** and
+   the missing pair was S's. The injector was proceeding on an unrelated geom
+   republish (GAMMA closing) while the compositor was still inside the previous
+   arm's recompose, and `SYS_MOUSE_POLL` reads state rather than an event queue
+   (DDR-941) — a press and release inside one busy window are never seen.
+   §INV.8 in a different costume: the failure was a claim about timing.
+
+### M3 is cross-surface, not on-surface
+
+On one surface the title bar (`y-TITLEBAR..y`) and the N band (`y..y+RZBAND`) are
+**disjoint**, so no ordering can change the outcome — stronger than the ordering
+§2 asked for. The real ambiguity is between surfaces, and it exists in the
+shipped layout: ALPHA at (100,100) 64x64 has an east band at `x>=150`, and
+BETA's published `dg=` is (150,131) — inside it. Under M3 the press resizes
+ALPHA (`PRADYOS_RESIZE_FIX id=0 edge=8 ... w=300`) instead of moving BETA.
+Predicted from the published geometry, then confirmed.
+
+### Regressions green on the shipped hash
+
+`smoke-evresize`, `smoke-drag`, `smoke-wmclose`, `smoke-wmmax`, `smoke-wmmin`,
+`smoke-mouse`, `smoke-agent-click`, `smoke-shell` 5/5, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity`.
+
+### Next, in order
+
+1. **`SURF_EV_CLOSE`** (DDR-998, next free number) — the tractable Group E item.
+   `SYS_SURFACE_CLOSE` force-closes today and the owner gets no chance to save
+   state. The machinery exists: `SYS_SURFACE_SENDEV` type 1 is resize, so type 2
+   is close. Deterministically gateable.
+2. **Ctrl+Alt+T is NOT a compositor tweak** — correcting the previous handoff,
+   which listed it as "compositor-only, low risk" beside the resize work. A
+   *PRISM terminal window* needs a terminal emulator surface (glyph grid,
+   scrollback) plus PRISM's stdio rebound off the serial console onto a pipe.
+   That is a new client binary, not a key binding. Size it before starting.
+3. Per-window restore from dock still needs a dock — the largest Group E option.
+4. Maximize at real display geometry remains NOT low risk (`SURFACE_DIM_MAX`,
+   `sys_surface.c:17`; a PMM budget change touching many gates).
+5. `v1.0.0` stays UNTAGGED. OPEN-1 is not closed, and DDR-990 §12 established
+   the hammer cannot close it.
+
+---
+
+## CHECKPOINT 2026-08-25 (2) — DDR-997 CI fix + DDR-998 shipped
+
+Branch `dev/phase1-seyp3n` @ **`ca85e35`**, pushed. Kernel **`a9cd9ed1114994b8`**,
+1,089,930 B. `ci-shard-check` **156 / 10 shards / 7 excluded**.
+
+### smoke-resizeall was RED in CI on `cbc8a88`, and the OS was not at fault
+
+Shard 9 failed twice. Arm E passed; S/W/N failed. **The fixed-edge assertions had
+already held on the failing run** — `147 + 150 = 297 = 140 + 157`. What failed
+were the clamp checks, because every arm committed at its own drag **START**
+coordinate: `neww = (x0+w0) - ms.x` with `ms.x = 147` is the press point.
+
+The injector released on a fixed 0.45 s sleep, betting the compositor had polled
+in between. It had not. Fixed with `PRADYOS_RESIZE_TRACK` (one line per drag,
+emitted when the compositor first sees the pointer off the press point); the
+injector now waits for that line before releasing.
+
+**This is the third time in two days that a fixed sleep against
+`SYS_MOUSE_POLL` has produced a false failure** (DDR-910 the click, DDR-997 §9.4
+the press, §10 the drag). The pattern is worth naming: `SYS_MOUSE_POLL` reads
+CURRENT STATE, not an event queue, so anything that happens entirely between two
+compositor polls did not happen as far as the guest is concerned. Any new
+pointer-driven gate must wait on a printed witness, never on a duration.
+
+Also worth keeping: **the clamp checks earned their place.** Without them the run
+would have passed on the fixed-edge equality alone while silently no longer
+exercising the M2 mutant — and the check that fired said exactly that in its own
+failure text.
+
+### DDR-998 — `SURF_EV_CLOSE`, ask then force
+
+Event type **4** (1/2/3 were already resize/scroll/composited — the
+`struct surf_event` comment named only type 1, which is how a duplicate ships).
+
+`arm A OK — asked@432, saved@433, owner closed@437`
+`arm B OK — forced after 3 s / 64 frames of unused grace` — the **frames** floor
+bound, not the seconds.
+
+M1b (`ae958140c859d692`) and M2 (`833fedd88b4b4b4a`) fail **different arms**,
+which is what shows the arms test the two halves independently. **M3 is recorded
+UNMEASURED**: the shipped layout cannot recycle a slot inside the grace on
+demand, so the mutated line would never execute and a "pass" would mean nothing.
+
+### The bug the free path hid from the alloc path
+
+`s->gen++` in `sys_surface_create` is correct in isolation. `surf_take_free`
+clears the slot with a **whole-struct byte wipe**, which would have taken `gen`
+with it — every tenancy back at 1, and a generation counter that counts to one
+silently agrees with every stale request it exists to reject. Found by reading
+the FREE path after writing the ALLOC path. No reachable test would have caught
+it.
+
+### Next
+
+1. Watch CI on `ca85e35` (shard 9 = resizeall, shard 8 = surfclose).
+2. Group E remainder, in rough cost order: compositor double-map
+   `PTE_SW_SHARED` audit; OKLab horizon bands; vDSO callable reader; then
+   per-window restore from dock (needs a dock) and Ctrl+Alt+T (needs a terminal
+   emulator surface — NOT a key binding, see the previous checkpoint).
+3. `v1.0.0` stays UNTAGGED — OPEN-1 is not closed.
+
+---
+
+## CHECKPOINT 2026-08-29 — operator directive answered; CI green on `ca85e35`
+
+Tip `0c22334`. Kernel **`5349db4d791cc2ab`**. `ci-shard-check` 156/10/7 OK.
+
+### CI: the red I introduced is fixed and CONFIRMED
+
+`cbc8a88` failed shard 9 twice (`smoke-resizeall`, my own new gate).
+**`ca85e35` is green on BOTH suites** — so the DDR-997 §10 `RESIZE_TRACK` fix
+works in CI, and DDR-998's new `smoke-surfclose` passes there too.
+
+### Directive 2026-08-29 — both blocking questions answered in writing
+
+* **§4 multi-arch → DDR-999: NOT achievable.** 115 lines (aarch64) + 89
+  (riscv64) against 27,217 (x86_64); no abstraction layer (ADR-034 decision 2
+  says so in writing); 50/172 files x86-coupled. And the measured multiplier:
+  `qemu-system-aarch64`/`riscv64` are **not installed here**, so every non-x86
+  iteration costs a CI round trip — a ~40× slower loop. Apple Silicon has no CI
+  path at all, so it is not a schedule problem.
+* **§3 OPEN-1 → DDR-1000: does NOT close.** Base rate 1/20 ⇒ `0.95²⁰ = 0.358`,
+  so a clean 20-run happens one time in three even untouched. N=59 for 95%.
+* **§2 nethammer → DDR-989 §9.15: no dump exists**, it has not failed since
+  `8c3af93`. At the measured ~3/6 rate, 2–3 greens is p≈0.25–0.125 — not a fix.
+
+### The E2 grep found something real
+
+`[yieldstall]` fired **outside its own gate**, on real ring-3 pids (45, 43, both
+`cur=AETHERD`), **never RESOLVED**, on failing `smoke-evresize` boots with
+`preempt` frozen — the unexplained third signature. But both captures carry
+`vrjn=1` / `curvr≈1.8e16`: the DDR-989 defect LIVE. Today's kernel shows
+`vrjn=0` / `curvr≈1.9e7`. So the candidate composes two KNOWN defects rather
+than needing a third, and may already be gone. **Not** claimed to be OPEN-1
+route 1 — same lock, different gate, different symptom.
+
+### DDR-990 §13/§14 — the review was right, and the fix found an older bug
+
+Two distinct PIDs proved two instances FINISHED, not that they ran on different
+CPUs. Now each ORs its CPUID APIC bit per iteration; the union must cover ≥2.
+
+Its FIRST run failed — and the cause was a **truncated line**: the completion
+line was SIX `write()` calls, so under SMP another CPU spliced a print into it.
+That silently weakened the ORIGINAL gate too, because `conn_err=0` is a
+substring search and a truncated line just doesn't contribute. Fixed with one
+`SYS_WRITE` per line. Then measured: **`cpumask union=0xf`, each instance on all
+4 CPUs** — the cross-CPU claim is now a number, not an assumption.
+
+### TWO RULES LEARNED THE HARD WAY THIS SESSION
+
+1. **Do not edit the tree while a campaign runs.** `campaign.sh` rebuilds each
+   iteration, so a source edit silently changes the kernel under it. I did this
+   and had to discard 4 runs. While a campaign is live: docs and analysis only.
+2. **Do not push in a burst.** Six pushes queued 10 CI runs and kept moving the
+   tip, which makes §INV.15's three-greens-on-ONE-SHA impossible to accumulate.
+   Batch, then hold.
+
+### Next
+
+1. **HOLD pushes** until the queue drains and `0c22334` has its 2 suites; the
+   3rd green comes from **`workflow_dispatch`**, not `gh run rerun` (§INV.15).
+2. E1 campaign: `smoke-surfdestroy` ×60 on `5349db4d791cc2ab`, then
+   `python3 tools/ci/yieldstall_scan.py build/gatelogs/campaign/*.log` to settle
+   DDR-1000 §8.2/§8.3 and decide OPEN-1 against §6's checklist.
+3. Then: undraft PR #14 → 3 greens on one tip → merge to `dev/phase1`.
+4. Operator's cleanup addendum (branch/PR pruning) is explicitly **LAST**, only
+   after the release is verified. Nothing to do there yet.
+
+---
+
+## CHECKPOINT 2026-08-29 (2) — E1 done, OPEN-1 decided, OPEN-2 fixed again
+
+Tip `89f71cc`. Kernel **`60b35c96d70253f5`**. shard-check 156/10/7, probe-rodata OK.
+
+### E1 campaign COMPLETE — 60/60, one kernel hash
+
+`smoke-surfdestroy` ×60 on `5349db4d791cc2ab`, **zero failures**.
+**OPEN-1 route 2 CLOSES at 95% power** (`0.95^60 = 0.046`, threshold set in
+DDR-1000 §3 *before* the run). Route 3 already closed. **Route 1 stays open** —
+it is CI-only and this campaign was local.
+
+**The clean `yieldstall_scan` does NOT support the mnt_lock hypothesis**, and
+that needed saying: the organic stalls were captured in `smoke-evresize`
+(shard 0); the campaign ran `smoke-surfdestroy` (shard 6), which emits **zero**
+`[yieldstall]` lines — the instrument never engages there. 60 clean logs of a
+gate that never runs the code is not evidence. Next test named: an
+**evresize campaign under `yieldstall_scan.py`**.
+
+### OPEN-2 / B#3 reopened AND fixed the same day (DDR-1001)
+
+`[apfreeze]` fired in CI on `smoke-smpuser`. Resolved to `sys_wait4 + 0x4f` — the
+return address after `callq find_zombie_child` — an unbounded, **unlocked** walk
+of the all-threads ring, reached with `if=0` so nothing could preempt it.
+
+**The fix was conformance, not invention:** `sched_snapshot` already walks that
+exact ring under `g_sched_lock`. `sys_wait4` just wasn't. Walk moved into
+`sched.c` as `sched_find_child()` (it had to move — `g_sched_lock` is `static`
+there). M1 mutation-checked: `8cb987c18ddebb17` fails and fires
+`[ringwalk] wait4 ring inconsistent pid=39`.
+
+`[ringwalk]` **added** to `GLOBAL_FORBIDDEN` — the opposite call from
+`[yieldstall]`, which DDR-994 *removed*. The difference is principled: a resolved
+yield stall is survivable; exceeding a bound at ~10x any observed thread count
+under a lock cannot happen unless the ring is corrupt.
+
+### THE session's biggest lesson: report latency (DDR-997 §12)
+
+`smoke-resizeall` broke three times, all one root cause — **asking before the
+answer exists**:
+
+| § | checked too early |
+|---|---|
+| §9.4 | the **press** — released before the compositor had polled |
+| §10 | the **drag** — released before it had seen the move |
+| §12 | the **commit** — retried before it had logged it |
+
+`SYS_MOUSE_POLL` reads current state, not an event queue, and the serial log is
+written asynchronously. **Any new gate touching the compositor must wait for a
+printed witness, never a duration.** §11's diagnosis (stale handles) was right
+about the symptom and wrong about the cause: the handles were stale *because the
+retry happened*. Now 3/3 local runs PASS with **0 retries** — zero retries is the
+load-bearing number, not the PASS.
+
+### CI state
+
+- Every shard-9 red so far predates the §12 fix (`a74e086`). Expected.
+- `0bc0c74` suite A died at `smoke-blkmq-trace` (gate 1); suite B reached gate 17.
+  So **blkmq-trace is intermittent**, and it **passes locally** — no named
+  mechanism, so no fix (§NON-NEGOTIABLE 3).
+- Green on both suites: `ca85e35`, `b3573b9`, `2dbcbe8`, `0611a59`, `513ce6b`,
+  `e1259ab`. Different SHAs, so §INV.15 is still unsatisfied.
+
+### Next
+
+1. Watch `89f71cc` (or later) — first tip carrying BOTH the §12 resizeall fix and
+   DDR-1001. If shard 9 is green there, the resizeall saga is closed.
+2. Then: undraft PR #14, 3 greens on ONE tip (third via `workflow_dispatch`).
+3. Route 1: evresize campaign under `yieldstall_scan.py`.
+4. `v1.0.0` no longer blocked on OPEN-1 routes 2/3.
+
+---
+
+## CHECKPOINT 2026-08-29 (tip `edcdbc2`)
+
+### THE ONE THING TO KNOW
+
+**`GLOBAL_FORBIDDEN` was the empty string from `89f71cc` to `951f570`.** Every
+gate ran without the global safety net for four commits. Fixed at `edcdbc2`;
+cause and reproduction in that commit message and in CLAUDE.md
+§NON-NEGOTIABLE 6, which now carries the hazard and a one-line verification.
+
+**Consequence: no green between `89f71cc` and `951f570` counts toward §INV.15.**
+The three-greens-on-one-tip count restarts at `edcdbc2`. `a74e086` (10:30 UTC)
+was the last fully green run before the window: 0 of 15 jobs failed.
+
+Found by `smoke-selftest` case 5, on all 10 shards, on a DOCS-ONLY commit — which
+is what proved the defect predated it. That meta-test earned its existence.
+
+### Work landed this session
+
+| tip | what |
+|---|---|
+| `bb84583` | DDR-1002 precommit + DDR-997 §13 (a defect in my own §12 fix) |
+| `fd2bb85` | DDR-1002 RESULT — null on its own design |
+| `951f570` | DDR-997 §13.4 — injection budget + "never ran" verdict |
+| `edcdbc2` | GLOBAL_FORBIDDEN restored |
+
+### DDR-1002 — the two-arm evresize campaign, and why it concluded nothing
+
+Arm B (DDR-989's torn read restored, kernel `42459dce865c71c6`), 20/20:
+
+- `k_B` = **0/20** organic unresolved `mnt_lock` stalls (the precommitted measure)
+- tear actually fired: **4/20**, with DDR-989's exact signature
+- tear fired *inside the gate's assertion window*: **1/20**
+
+The mutation is faithful — two loads of `t->vt_in` confirmed in the disassembly
+(`cmp 0x27e8(%rcx),%rax` … `sub 0x27e8(%rcx),%rax`, no CSE), and the fixed kernel
+reads `vrjn=0` on the same live instrument. But 3 of the 4 tears fired AFTER the
+gate stopped asserting, so effective N ≈ 1. **`k_B=0` is a verdict on the design,
+not on §8.2.** §8.2 remains neither supported nor refuted; OPEN-1 route 1 is
+untouched (it is CI-only; this was local). Arm A stopped at 8/60 deliberately.
+
+Do NOT re-run this shape. DDR-1002 §9.5 names what a design with power needs.
+
+### Still open
+
+- **OPEN-1 route 1** — CI-only hang, no artefact, no local reproduction.
+- **OPEN-12, OPEN-13** — unchanged.
+- **DDR-997 §13.3 — the dropped press.** Did NOT reproduce locally after §13.4
+  (arm w committed correctly, all four arms green first try, zero retries). The
+  first post-`edcdbc2` CI result is what to read it against.
+- **PR #14** still draft, 74 commits, base `dev/phase1`. Needs 3 greens on ONE
+  tip — count restarts at `edcdbc2`, third green via `workflow_dispatch` (§INV.15;
+  `gh run rerun` needs rights the project PAT lacks).
+- **`v1.0.0` untagged.** Routes 2/3 are closed but the operator placed the hold
+  and lifting it is their call, not mine.
+
+### Practice note earned the hard way, twice today
+
+Both of today's self-inflicted defects were *deletions justified by a grep*: the
+`printf` comment (grep found no problem because the damage was syntactic) and
+`deadline = ...` in `resize_inject.sh`, removed as dead code when the read was
+100 lines below the write. The second one then looked exactly like a compositor
+that had stopped seeing presses — `btnedge` stuck at 1, `preempt` flat, which is
+DDR-1000 §8's unexplained signature — and was one step from being root-caused as
+one. Capturing the injector's own narration (`build/resizeall.inject.log`, added
+in `951f570`) named it in a single line. **Before deleting on the strength of a
+grep, grep for the READS, not just the write.**

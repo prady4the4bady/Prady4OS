@@ -408,6 +408,21 @@ extern const unsigned char fsrmtest_elf[];            /* fs: ring-3 file lifecyc
 extern const unsigned char fsrmtest_elf_end[];
 extern const unsigned char fat32mctest_elf[];         /* DDR-973: FAT32 multi-cluster read probe */
 extern const unsigned char fat32mctest_elf_end[];
+extern const unsigned char nethammer_elf[];           /* DDR-990: two-CPU connect/close hammer */
+extern const unsigned char nethammer_elf_end[];
+int ps2kbd_selftest(void);                           /* DDR-993 §3: paired-modifier kernel arm */
+
+/* DDR-994 §6 arm B: spins in the REAL mnt_lock against a held scratch mount,
+ * so the [yieldstall] line it emits proves the detector is wired to the call
+ * site rather than merely callable. Exits once the arming thread releases. */
+static void yieldstall_waiter_thread(void *arg) {
+    (void)arg;
+    vfs_yieldstall_wait();
+    kputs("PRADYOS_YIELDSTALL_WAITER_DONE\r\n");
+    sched_exit(0);
+}
+extern const unsigned char modkeystest_elf[];         /* DDR-991: modifier / extended-key probe */
+extern const unsigned char modkeystest_elf_end[];
 extern const unsigned char egressaudittest_elf[];     /* DDR-801: per-destination egress audit */
 extern const unsigned char egressaudittest_elf_end[];
 extern const unsigned char sovegresstest_elf[];       /* DDR-800: sovereign-egress audit */
@@ -511,7 +526,7 @@ static struct tcb *user_boot_from_sfs_rooted(cap_t cap, int smnt, const char *fn
     { uint64_t blfl = console_line_lock();       /* DDR-963 §5 */
       kputs("[boot-load] "); kputs(fname); kputs(" t="); kputdec(g_ticks); kputs("\r\n");
       console_line_unlock(blfl); }
-    uint64_t elen = (uint64_t)(elf_end - elf);
+    uint64_t elen = (uint64_t)((uintptr_t)elf_end - (uintptr_t)elf);
     struct vfs_file ef;
     if (vfs_create(cap, smnt, fname, &ef) != 0 ||
         vfs_write(cap, &ef, 0, elf, (uint32_t)elen) != (int)elen) {
@@ -914,6 +929,43 @@ static void smpresched_proof(void) {
     dl = g_ticks + 50;
     while (g_rp_thread && g_rp_thread->state != THREAD_BLOCKED && g_ticks < dl)
         yield();
+
+    /* DDR-1004: ESTABLISH the precondition instead of assuming the settle loop
+     * produced it.
+     *
+     * sched_unblock kicks a CPU only `if (c != self && o && o->present &&
+     * o->idle)` (sched.c:1825) -- and says so: "the timer remains the backstop
+     * if none is (visibly) idle". The IPI is best-effort BY DESIGN. The 20-tick
+     * settle above was only ever a hope that some AP would be idle by now; it
+     * never checked. When none was, zero IPIs were sent, the thread still ran on
+     * the timer backstop, and this proof printed FAIL on a correct system.
+     *
+     * That is DDR-883's finding recurring. DDR-883 narrowed the IPI term to
+     * cpu_count > 2, but the real precondition is "an idle non-self CPU was
+     * visible at unblock", not a CPU count -- so the false failure survived at
+     * 4 CPUs, where it is rare enough to look like a flake. Measured: 1 CI
+     * failure in 3 runs on tip 30a19ce (`ipis=0 ran=1`, shard 8), 0 in 20 local
+     * runs on the same kernel 60b35c96d70253f5.
+     *
+     * So: wait for an idle non-self CPU, and record whether we ever saw one.
+     * This is deliberately NOT a way to make the arm always pass -- see the
+     * SKIP branch below, which refuses to report OK when the IPI path was not
+     * exercised. */
+    int idle_seen = 0;
+    dl = g_ticks + 50;
+    while (g_ticks < dl && !idle_seen) {
+        struct percpu *self_pc = this_cpu();
+        int self_idx = self_pc ? (int)self_pc->cpu_idx : 0;
+        for (int c = 0; c < PERCPU_MAX; c++) {
+            struct percpu *o = percpu_get((uint32_t)c);
+            if (c != self_idx && o && o->present && o->idle) {
+                idle_seen = 1;
+                break;
+            }
+        }
+        if (!idle_seen)
+            yield();
+    }
     sched_unblock(g_rp_thread);                  /* enqueue here + kick an idle AP */
     dl = g_ticks + 50;
     while (!g_rp_ran && g_ticks < dl)
@@ -931,13 +983,33 @@ static void smpresched_proof(void) {
      * opposite actions.
      */
     int ipi_expected = (lapic_cpu_count() > 2);
-    if (g_rp_ran && (!ipi_expected || g_resched_ipis > before)) {
+    /* DDR-1004: three outcomes, not two.
+     *
+     * The IPI is only owed when an idle non-self CPU was actually visible. If
+     * none ever was, this boot did not exercise the rq-3 path at all, and both
+     * OK and FAIL would be lies -- OK would silently stop testing the kick
+     * (the vacuity trap DDR-973 §6 and DDR-996 each caught once), FAIL would
+     * blame the scheduler for a precondition the harness failed to create.
+     *
+     * SKIP carries neither "OK" nor "FAIL", so it trips no gate sentinel and no
+     * GLOBAL_FORBIDDEN entry, and a run of them is visible in the log as the
+     * coverage gap it is.
+     *
+     * NOTE the residual race, stated rather than hidden: `idle_seen` is sampled
+     * just before sched_unblock, and a CPU can leave idle in between. That
+     * window is far narrower than the old unconditional assertion, but it is
+     * not zero -- so a FAIL with idle=1 is strong evidence and not yet proof. */
+    if (g_rp_ran && ipi_expected && !idle_seen && g_resched_ipis == before) {
+        kputs("[smp] resched SKIP no-idle-ap ran=1\r\n");
+    } else if (g_rp_ran && (!ipi_expected || g_resched_ipis > before)) {
         kputs("[smp] resched OK\r\n");
     } else {
         kputs("[smp] resched FAIL ipis=");
         kputdec(g_resched_ipis - before);
         kputs(" ran=");
         kputdec((uint64_t)g_rp_ran);
+        kputs(" idle=");                  /* DDR-1004: was the IPI even owed? */
+        kputdec((uint64_t)idle_seen);
         kputs("\r\n");
     }
 }
@@ -970,7 +1042,7 @@ static uint32_t g_aether_daemon_pid;
 static long aether_spawn_agent_hook(const char *task) {
     (void)task;
     struct tcb *ut = 0;
-    uint64_t len = (uint64_t)(agent_base_elf_end - agent_base_elf);
+    uint64_t len = (uint64_t)((uintptr_t)agent_base_elf_end - (uintptr_t)agent_base_elf);
     if (elf_load((void *)(uintptr_t)agent_base_elf, len, "AGENT", &ut) != ELF_OK || !ut)
         return -1;
     ut->is_agent = 1;                  /* authority BEFORE the first run */
@@ -986,7 +1058,7 @@ static long aether_spawn_agent_hook(const char *task) {
  * SYS_EXECVE("/EXECTEST.ELF"). The FAT32 disk is rebuilt fresh for every gate
  * run, so the file never pre-exists. */
 static void fat_place_exec_image(cap_t cap, int mnt) {
-    uint64_t elen = (uint64_t)(exectest_elf_end - exectest_elf);
+    uint64_t elen = (uint64_t)((uintptr_t)exectest_elf_end - (uintptr_t)exectest_elf);
     struct vfs_file ef;
     if (vfs_create(cap, mnt, "/EXECTEST.ELF", &ef) != 0 ||
         vfs_write(cap, &ef, 0, exectest_elf, (uint32_t)elen) != (int)elen)
@@ -1529,8 +1601,7 @@ static void fs_test_thread(void *arg) {
                  * elf_load + set-flag-before-unblock pattern (cap-2a D3). */
                 {
                     struct tcb *ea = 0;
-                    uint64_t ealen = (uint64_t)(egressaudittest_elf_end
-                                                - egressaudittest_elf);
+                    uint64_t ealen = (uint64_t)((uintptr_t)egressaudittest_elf_end - (uintptr_t)egressaudittest_elf);
                     if (elf_load((void *)(uintptr_t)egressaudittest_elf, ealen,
                                  "EGRESSAUD", &ea) == ELF_OK && ea) {
                         ea->is_net = 1;          /* CAP_NET, no sovereign */
@@ -1555,10 +1626,153 @@ static void fs_test_thread(void *arg) {
                  * SYS_METRIC_READ is sovereign-gated — the record is the
                  * owner's ground truth, so a non-sovereign reader gets
                  * -EPERM and an audit entry. */
+                /* DDR-996: force the freed-while-queued window deterministically.
+                 * The CI artefact arose from a spawn/exit storm (init respawning
+                 * a failing service), which is rare by nature. This drives the
+                 * IDENTICAL path — sched_free_tcb reached with rq_on still set —
+                 * without depending on a race: create a thread, make it runnable
+                 * so it is pushed onto a runqueue, and destroy it before it is
+                 * ever dispatched. That is a real scenario in its own right
+                 * (spawn-failure cleanup), and it is the same defect: a TCB
+                 * freed while a queue still points at it.
+                 *
+                 * IRQs off across the unblock/destroy pair so this CPU cannot
+                 * reschedule into the victim. Another CPU may still steal and
+                 * run it, which is why the gate asserts caught > 0 rather than
+                 * caught == N — the point is that the state ARISES, and an
+                 * exact count would be asserting the absence of work stealing. */
+                if (probe_enabled("rqfree")) {
+                    extern volatile uint32_t g_rqfree_caught, g_rqfree_leaked;
+                    int made = sched_rqfree_probe(16);
+                    kputs("[rqfree] made=");   kputdec((uint64_t)made);
+                    kputs(" caught=");
+                    kputdec((uint64_t)__atomic_load_n(&g_rqfree_caught, __ATOMIC_RELAXED));
+                    kputs("\r\n");
+                    /* Arm B: the queues must still be walkable afterwards. On an
+                     * unfixed kernel this is where the poison surfaces. */
+                    kputs("[rqfree] leaked=");
+                    kputdec((uint64_t)__atomic_load_n(&g_rqfree_leaked, __ATOMIC_RELAXED));
+                    kputs("\r\n");
+                    if (__atomic_load_n(&g_rqfree_leaked, __ATOMIC_RELAXED) != 0 || !sched_rq_walk_ok())
+                        kputs("RQFREE FAIL: a runqueue still points at a freed TCB\r\n");
+                    else
+                        kputs("PRADYOS_RQFREE_OK\r\n");
+                }
+                /* DDR-994: the yield-stall detector. Two arms, and arm A
+                 * alone would be vacuous — it proves the reporter works, not
+                 * that anything CALLS it. See vfs.c for why arm B uses a
+                 * private scratch mount rather than a live one.
+                 *
+                 * Opt-in (DDR-804): arm B holds a waiter spinning for ~7 s by
+                 * design, which the other 152 gates must not pay for. */
+                if (probe_enabled("yieldstall")) {
+                    /* Arm A — the reporter fires ONCE, not once per spin. Called
+                     * three times with one `noted`; exactly one line must appear.
+                     * A reporter that printed every iteration would bury the
+                     * boot in UART traffic and move the timing it measures,
+                     * which is why DDR-980 removed the cputicks heartbeat. */
+                    int noted = 0;
+                    yield_stall_note("selftest", 12345u, 678u, &noted);
+                    yield_stall_note("selftest", 99999u, 999u, &noted);
+                    yield_stall_note("selftest", 11111u, 111u, &noted);
+
+                    /* Arm B — through the REAL mnt_lock. Arm the scratch mount
+                     * as held, spawn a waiter, let it cross the threshold, then
+                     * release it so the boot continues. */
+                    vfs_yieldstall_arm(1);
+                    struct tcb *ys = sched_create_blocked(yieldstall_waiter_thread, 0, "yieldstall");
+                    if (ys) {
+                        sched_unblock(ys);
+                        /* YIELD_STALL_TICKS is 500 (5 s); wait past it with
+                         * margin, then release. The waiter reports at the
+                         * threshold and exits once the lock is free. */
+                        uint64_t deadline = g_ticks + 700;
+                        while (g_ticks < deadline)
+                            yield();
+                        vfs_yieldstall_arm(0);
+                        kputs("PRADYOS_YIELDSTALL_RELEASED\r\n");
+                    }
+                }
+                /* DDR-991: PS/2 modifier / extended-key probe. Opt-in — it
+                 * announces PRADYOS_MODKEYS_WAIT and then spins polling for
+                 * injected keys, so running it in every gate would add a
+                 * spinning process to all 150 boots for no benefit. */
+                if (probe_enabled("modkeys")) {
+                    struct tcb *mk = 0;
+                    /* DDR-993 §3: the paired-modifier arm runs HERE, in ring 0,
+                     * and not as a sixth arm of the ring-3 probe. QEMU's HMP
+                     * `sendkey` couples every press to its own release, so the
+                     * one sequence that reaches the defect — two keys of a pair
+                     * held at once, then ONE released — cannot be injected at
+                     * all. Driving ps2kbd_feed directly is the only way to
+                     * assert it, which is why DDR-993 §2 split the decode out
+                     * of the port read. Runs before the probe is spawned and
+                     * before any key is injected; it restores every byte of
+                     * decoder state either way. */
+                    int kst = ps2kbd_selftest();
+                    if (kst) {
+                        kputs("MODKEYS FAIL: kernel arm — ps2kbd_selftest step ");
+                        kputdec((uint64_t)kst);
+                        kputs(" (paired modifier / make-break identity)\r\n");
+                    } else {
+                        kputs("PRADYOS_MODKEYS_PAIR_OK\r\n");
+                    }
+                    uint64_t mklen = (uint64_t)((uintptr_t)modkeystest_elf_end - (uintptr_t)modkeystest_elf);
+                    if (elf_load((void *)(uintptr_t)modkeystest_elf, mklen,
+                                 "MODKEYS", &mk) == ELF_OK && mk) {
+                        sched_unblock(mk);
+                        kputs("[user] ELF loaded (embedded); modkeys probe spawned\r\n");
+                    }
+                }
+                /* DDR-990: the two-CPU connect/close hammer. Opt-in via DDR-804
+                 * and gated for a reason: it issues 20,000 connect/close pairs
+                 * per instance, so spawning it in all 149 gates would add load
+                 * and jitter to every one of them for no benefit — the same
+                 * reasoning recorded above for the privacy-netfilter probe.
+                 *
+                 * TWO instances, because a single-CPU hammer proves NOTHING
+                 * about a cross-CPU race. smp_resched_all() after spawning is
+                 * the DDR-966 lesson: workers spawned without it sit on halted
+                 * APs while the BSP burns the deadline, and both hammers would
+                 * end up serialised on one CPU — a green run that measured the
+                 * wrong thing entirely.
+                 *
+                 * is_net = 1 and NOT sovereign. Sovereign would bypass the
+                 * allowlist for free, but it audits every connect
+                 * (AR_SOVEREIGN_BYPASS, DDR-800); at 40,000 connects that churn
+                 * would dominate the timing this probe exists to measure —
+                 * DDR-947's lesson, where printing a thread name per heartbeat
+                 * moved a failure rate from 2/12 to 9/14.
+                 *
+                 * The allowlist row is seeded HERE rather than assumed. Without
+                 * it every connect returns an audited -EPERM, the probe hammers
+                 * nothing, and it still prints its OK sentinel — a green result
+                 * from a probe that never entered lwIP. The gate asserts
+                 * conn_err=0, which is what turns that from a hope into a
+                 * check (DDR-990 §5). */
+                if (probe_enabled("nethammer")) {
+                    int netallow_add(uint32_t host_be, uint16_t port);
+                    (void)netallow_add(0x7F000001u, 8007);   /* 127.0.0.1:8007 */
+                    uint64_t nhlen = (uint64_t)((uintptr_t)nethammer_elf_end - (uintptr_t)nethammer_elf);
+                    int spawned = 0;
+                    for (int nh_i = 0; nh_i < 2; nh_i++) {
+                        struct tcb *nh = 0;
+                        if (elf_load((void *)(uintptr_t)nethammer_elf, nhlen,
+                                     "NETHAMMER", &nh) == ELF_OK && nh) {
+                            nh->is_net = 1;      /* CAP_NET, deliberately not sovereign */
+                            sched_unblock(nh);
+                            spawned++;
+                        }
+                    }
+                    smp_resched_all();           /* DDR-966: wake idle APs to take them */
+                    kputs("[user] ELF loaded (embedded); net hammer spawned=");
+                    kputdec((uint64_t)spawned);
+                    kputs("/2\r\n");
+                }
                 /* DDR-818: HKDF RFC 5869 vector probe, opt-in via DDR-804. */
                 if (probe_enabled("hkdf")) {
                     struct tcb *hk = 0;
-                    uint64_t hklen = (uint64_t)(hkdftest_elf_end - hkdftest_elf);
+                    uint64_t hklen = (uint64_t)((uintptr_t)hkdftest_elf_end - (uintptr_t)hkdftest_elf);
                     if (elf_load((void *)(uintptr_t)hkdftest_elf, hklen,
                                  "HKDFTEST", &hk) == ELF_OK && hk) {
                         sched_unblock(hk);
@@ -1568,7 +1782,7 @@ static void fs_test_thread(void *arg) {
                 /* DDR-820: X25519 RFC 7748 vector probe, opt-in via DDR-804. */
                 if (probe_enabled("x25519")) {
                     struct tcb *xk = 0;
-                    uint64_t xklen = (uint64_t)(x25519test_elf_end - x25519test_elf);
+                    uint64_t xklen = (uint64_t)((uintptr_t)x25519test_elf_end - (uintptr_t)x25519test_elf);
                     if (elf_load((void *)(uintptr_t)x25519test_elf, xklen,
                                  "X25519", &xk) == ELF_OK && xk) {
                         sched_unblock(xk);
@@ -1578,7 +1792,7 @@ static void fs_test_thread(void *arg) {
                 /* DDR-821: SHA-512 FIPS 180-4 vector probe, opt-in via DDR-804. */
                 if (probe_enabled("sha512")) {
                     struct tcb *s5 = 0;
-                    uint64_t s5len = (uint64_t)(sha512test_elf_end - sha512test_elf);
+                    uint64_t s5len = (uint64_t)((uintptr_t)sha512test_elf_end - (uintptr_t)sha512test_elf);
                     if (elf_load((void *)(uintptr_t)sha512test_elf, s5len,
                                  "SHA512", &s5) == ELF_OK && s5) {
                         sched_unblock(s5);
@@ -1591,7 +1805,7 @@ static void fs_test_thread(void *arg) {
                  * ungated. */
                 if (probe_enabled("aead")) {
                     struct tcb *ae = 0;
-                    uint64_t aelen = (uint64_t)(aeadtest_elf_end - aeadtest_elf);
+                    uint64_t aelen = (uint64_t)((uintptr_t)aeadtest_elf_end - (uintptr_t)aeadtest_elf);
                     if (elf_load((void *)(uintptr_t)aeadtest_elf, aelen,
                                  "AEAD", &ae) == ELF_OK && ae) {
                         sched_unblock(ae);
@@ -1601,7 +1815,7 @@ static void fs_test_thread(void *arg) {
                 /* DDR-821: Ed25519 RFC 8032 vector probe, opt-in via DDR-804. */
                 if (probe_enabled("ed25519")) {
                     struct tcb *ed = 0;
-                    uint64_t edlen = (uint64_t)(ed25519test_elf_end - ed25519test_elf);
+                    uint64_t edlen = (uint64_t)((uintptr_t)ed25519test_elf_end - (uintptr_t)ed25519test_elf);
                     if (elf_load((void *)(uintptr_t)ed25519test_elf, edlen,
                                  "ED25519", &ed) == ELF_OK && ed) {
                         sched_unblock(ed);
@@ -1611,7 +1825,7 @@ static void fs_test_thread(void *arg) {
                 /* DDR-813: ACC envelope gate, opt-in via DDR-804. */
                 if (probe_enabled("acc")) {
                     struct tcb *ac = 0;
-                    uint64_t aclen = (uint64_t)(acctest_elf_end - acctest_elf);
+                    uint64_t aclen = (uint64_t)((uintptr_t)acctest_elf_end - (uintptr_t)acctest_elf);
                     if (elf_load((void *)(uintptr_t)acctest_elf, aclen,
                                  "ACCTEST", &ac) == ELF_OK && ac) {
                         sched_unblock(ac);
@@ -1620,7 +1834,7 @@ static void fs_test_thread(void *arg) {
                 }
                 if (probe_enabled("lockbox")) {
                     struct tcb *lb = 0;
-                    uint64_t lblen = (uint64_t)(lockboxtest_elf_end - lockboxtest_elf);
+                    uint64_t lblen = (uint64_t)((uintptr_t)lockboxtest_elf_end - (uintptr_t)lockboxtest_elf);
                     if (elf_load((void *)(uintptr_t)lockboxtest_elf, lblen,
                                  "LOCKBOX", &lb) == ELF_OK && lb) {
                         lb->is_sovereign = 1;
@@ -1634,7 +1848,7 @@ static void fs_test_thread(void *arg) {
                  * gate would assert nothing. */
                 if (probe_enabled("invariants")) {
                     struct tcb *iv = 0;
-                    uint64_t l = (uint64_t)(invarianttest_elf_end - invarianttest_elf);
+                    uint64_t l = (uint64_t)((uintptr_t)invarianttest_elf_end - (uintptr_t)invarianttest_elf);
                     int rc = elf_load((void *)(uintptr_t)invarianttest_elf, l, "INVARIANT", &iv);
                     if (rc == ELF_OK && iv) {
                         iv->is_agent = 1;
@@ -1650,7 +1864,7 @@ static void fs_test_thread(void *arg) {
                 /* DDR-842 item 6: FOUR roles. The capability split IS the
                  * feature, and no single privilege level can test it. */
                 if (probe_enabled("coderewrite")) {
-                    uint64_t l = (uint64_t)(coderewritetest_elf_end - coderewritetest_elf);
+                    uint64_t l = (uint64_t)((uintptr_t)coderewritetest_elf_end - (uintptr_t)coderewritetest_elf);
                     struct tcb *ag = 0, *ap = 0, *so = 0, *rw = 0;
                     if (elf_load((void *)(uintptr_t)coderewritetest_elf, l, "CRW_AG", &ag) == ELF_OK && ag) {
                         ag->is_agent = 1; ag->is_memory = 1; sched_unblock(ag);
@@ -1674,7 +1888,7 @@ static void fs_test_thread(void *arg) {
                     if (probe_enabled("audittamper"))
                         aether_audit_tamper();
                     struct tcb *ac = 0;
-                    uint64_t l = (uint64_t)(auditchaintest_elf_end - auditchaintest_elf);
+                    uint64_t l = (uint64_t)((uintptr_t)auditchaintest_elf_end - (uintptr_t)auditchaintest_elf);
                     int rc = elf_load((void *)(uintptr_t)auditchaintest_elf, l, "AUDITCHAIN", &ac);
                     if (rc == ELF_OK && ac) {
                         ac->is_sovereign = 1;
@@ -1691,7 +1905,7 @@ static void fs_test_thread(void *arg) {
                  * drive this gate alone. Both hold CAP_MEMORY to rendezvous on
                  * the action ids. */
                 if (probe_enabled("actiondag")) {
-                    uint64_t dlen = (uint64_t)(actiondagtest_elf_end - actiondagtest_elf);
+                    uint64_t dlen = (uint64_t)((uintptr_t)actiondagtest_elf_end - (uintptr_t)actiondagtest_elf);
                     struct tcb *d_ag = 0, *d_sov = 0;
                     if (elf_load((void *)(uintptr_t)actiondagtest_elf, dlen,
                                  "DAG_A", &d_ag) == ELF_OK && d_ag) {
@@ -1717,7 +1931,7 @@ static void fs_test_thread(void *arg) {
                  * at depth 0 forever and the gate would prove nothing. */
                 if (probe_enabled("spawndepth")) {
                     struct tcb *sd = 0;
-                    uint64_t sdlen = (uint64_t)(spawndepthtest_elf_end - spawndepthtest_elf);
+                    uint64_t sdlen = (uint64_t)((uintptr_t)spawndepthtest_elf_end - (uintptr_t)spawndepthtest_elf);
                     int sdrc = elf_load((void *)(uintptr_t)spawndepthtest_elf, sdlen,
                                         "SPAWNDEPTH", &sd);
                     if (sdrc == ELF_OK && sd) {
@@ -1736,7 +1950,7 @@ static void fs_test_thread(void *arg) {
                  * deliberately NOT an agent: agents are capped at 60 syscalls/s
                  * and its yield loop would be killed at 137 mid-gate. */
                 if (probe_enabled("ckpt")) {
-                    uint64_t clen = (uint64_t)(ckpttest_elf_end - ckpttest_elf);
+                    uint64_t clen = (uint64_t)((uintptr_t)ckpttest_elf_end - (uintptr_t)ckpttest_elf);
                     struct tcb *c_ctl = 0, *c_tgt = 0, *c_deny = 0;
                     if (elf_load((void *)(uintptr_t)ckpttest_elf, clen,
                                  "CKPT_T", &c_tgt) == ELF_OK && c_tgt) {
@@ -1766,7 +1980,7 @@ static void fs_test_thread(void *arg) {
                  * CAP_MEMORY, the other does not — because the capability check
                  * is half of what is under test. */
                 if (probe_enabled("agentmem")) {
-                    uint64_t mlen = (uint64_t)(agentmemtest_elf_end - agentmemtest_elf);
+                    uint64_t mlen = (uint64_t)((uintptr_t)agentmemtest_elf_end - (uintptr_t)agentmemtest_elf);
                     struct tcb *m_cap = 0, *m_no = 0;
                     int mrc_c = elf_load((void *)(uintptr_t)agentmemtest_elf, mlen,
                                          "AGENTMEM_C", &m_cap);
@@ -1796,7 +2010,7 @@ static void fs_test_thread(void *arg) {
                  * privilege for the same reason as the rotation probe: the
                  * capability split is part of what is under test. */
                 if (probe_enabled("vault")) {
-                    uint64_t vlen = (uint64_t)(vaulttest_elf_end - vaulttest_elf);
+                    uint64_t vlen = (uint64_t)((uintptr_t)vaulttest_elf_end - (uintptr_t)vaulttest_elf);
                     struct tcb *v_sov = 0, *v_ag = 0;
                     int vrc_s = elf_load((void *)(uintptr_t)vaulttest_elf, vlen,
                                          "VAULT_S", &v_sov);
@@ -1828,7 +2042,7 @@ static void fs_test_thread(void *arg) {
                  * rotate's return code (-ENOENT vs -EPERM), so no argument
                  * channel is needed. */
                 if (probe_enabled("accrot")) {
-                    uint64_t arlen = (uint64_t)(accrottest_elf_end - accrottest_elf);
+                    uint64_t arlen = (uint64_t)((uintptr_t)accrottest_elf_end - (uintptr_t)accrottest_elf);
                     struct tcb *ar_sov = 0, *ar_ag = 0;
                     int rc_sov = elf_load((void *)(uintptr_t)accrottest_elf, arlen,
                                           "ACCROT_S", &ar_sov);
@@ -1857,7 +2071,7 @@ static void fs_test_thread(void *arg) {
                  * because arm 1 calls SYS_GOAL_SIGN, which is CAP_SOVEREIGN. */
                 if (probe_enabled("ags")) {
                     struct tcb *ag = 0;
-                    uint64_t aglen = (uint64_t)(agstest_elf_end - agstest_elf);
+                    uint64_t aglen = (uint64_t)((uintptr_t)agstest_elf_end - (uintptr_t)agstest_elf);
                     int agrc = elf_load((void *)(uintptr_t)agstest_elf, aglen,
                                         "AGS", &ag);
                     if (agrc == ELF_OK && ag) {
@@ -1875,7 +2089,7 @@ static void fs_test_thread(void *arg) {
                 }
                 if (probe_enabled("sha256")) {
                     struct tcb *sh = 0;
-                    uint64_t shlen = (uint64_t)(sha256test_elf_end - sha256test_elf);
+                    uint64_t shlen = (uint64_t)((uintptr_t)sha256test_elf_end - (uintptr_t)sha256test_elf);
                     /* OPEN-11: this spawn used to be `if (... == ELF_OK && sh)`
                      * with no else, so a failed load printed NOTHING and the gate
                      * timed out looking like the probe had run and stayed silent.
@@ -1895,7 +2109,7 @@ static void fs_test_thread(void *arg) {
                 }
                 if (probe_enabled("sigpipe")) {
                     struct tcb *sp = 0;
-                    uint64_t splen = (uint64_t)(sigpipetest_elf_end - sigpipetest_elf);
+                    uint64_t splen = (uint64_t)((uintptr_t)sigpipetest_elf_end - (uintptr_t)sigpipetest_elf);
                     if (elf_load((void *)(uintptr_t)sigpipetest_elf, splen,
                                  "SIGPIPE", &sp) == ELF_OK && sp) {
                         sched_unblock(sp);
@@ -1904,8 +2118,7 @@ static void fs_test_thread(void *arg) {
                 }
                 if (probe_enabled("privnet")) {
                     struct tcb *pn = 0;
-                    uint64_t pnlen = (uint64_t)(privacynettest_elf_end
-                                                - privacynettest_elf);
+                    uint64_t pnlen = (uint64_t)((uintptr_t)privacynettest_elf_end - (uintptr_t)privacynettest_elf);
                     if (elf_load((void *)(uintptr_t)privacynettest_elf, pnlen,
                                  "PRIVNET", &pn) == ELF_OK && pn) {
                         pn->is_net = 1;
@@ -1937,7 +2150,7 @@ static void fs_test_thread(void *arg) {
                  * resolves against the selected root. Exercised by smoke-rootmount. */
                 if (ext4_mnt >= 0) {
                     struct tcb *rmp = 0;
-                    uint64_t rlen = (uint64_t)(rootmounttest_elf_end - rootmounttest_elf);
+                    uint64_t rlen = (uint64_t)((uintptr_t)rootmounttest_elf_end - (uintptr_t)rootmounttest_elf);
                     if (elf_load((void *)(uintptr_t)rootmounttest_elf, rlen,
                                  "ROOTMNT", &rmp) == ELF_OK && rmp) {
                         rmp->root_mnt = ext4_mnt;     /* select before unblock (cap-2a D3) */
@@ -1959,7 +2172,7 @@ static void fs_test_thread(void *arg) {
                 kputs("[boot-stamp] C ext4-done t="); kputdec(g_ticks); kputs("\r\n");
                 {
                     struct tcb *fp = 0;
-                    uint64_t flen = (uint64_t)(fsrmtest_elf_end - fsrmtest_elf);
+                    uint64_t flen = (uint64_t)((uintptr_t)fsrmtest_elf_end - (uintptr_t)fsrmtest_elf);
                     if (elf_load((void *)(uintptr_t)fsrmtest_elf, flen,
                                  "FSRMTEST", &fp) == ELF_OK && fp) {
                         fp->root_mnt = smnt;          /* SFS root before unblock  */
@@ -1981,7 +2194,7 @@ static void fs_test_thread(void *arg) {
                  * boot and every other gate's log. */
                 if (probe_enabled("stackdemand")) {
                     struct tcb *sp2 = 0;
-                    uint64_t slen = (uint64_t)(stackdemand_elf_end - stackdemand_elf);
+                    uint64_t slen = (uint64_t)((uintptr_t)stackdemand_elf_end - (uintptr_t)stackdemand_elf);
                     if (elf_load((void *)(uintptr_t)stackdemand_elf, slen,
                                  "STACKDEMAND", &sp2) == ELF_OK && sp2) {
                         sched_unblock(sp2);
@@ -2026,7 +2239,7 @@ static void fs_test_thread(void *arg) {
                 }
                 if (probe_enabled("ftruncate")) {
                     struct tcb *tp = 0;
-                    uint64_t tlen = (uint64_t)(ftrunctest_elf_end - ftrunctest_elf);
+                    uint64_t tlen = (uint64_t)((uintptr_t)ftrunctest_elf_end - (uintptr_t)ftrunctest_elf);
                     if (elf_load((void *)(uintptr_t)ftrunctest_elf, tlen,
                                  "FTRUNCTEST", &tp) == ELF_OK && tp) {
                         tp->root_mnt = smnt;          /* SFS root before unblock */
@@ -2067,7 +2280,7 @@ static void fs_test_thread(void *arg) {
                  * if it ran on every boot. */
                 if (probe_enabled("bench")) {
                     struct tcb *bp = 0;
-                    uint64_t blen2 = (uint64_t)(benchtest_elf_end - benchtest_elf);
+                    uint64_t blen2 = (uint64_t)((uintptr_t)benchtest_elf_end - (uintptr_t)benchtest_elf);
                     if (elf_load((void *)(uintptr_t)benchtest_elf, blen2,
                                  "BENCHTEST", &bp) == ELF_OK && bp) {
                         sched_unblock(bp);
@@ -2113,7 +2326,7 @@ static void fs_test_thread(void *arg) {
                  * below, so it reads /etc/aether/config from the SFS volume. */
                 struct tcb *dm = 0;
                 {
-                    uint64_t dlen = (uint64_t)(aether_daemon_elf_end - aether_daemon_elf);
+                    uint64_t dlen = (uint64_t)((uintptr_t)aether_daemon_elf_end - (uintptr_t)aether_daemon_elf);
                     if (elf_load((void *)(uintptr_t)aether_daemon_elf, dlen,
                                  "AETHERD", &dm) == ELF_OK && dm) {
                         dm->is_sovereign = 1;         /* authority before first run */
@@ -2241,7 +2454,7 @@ static void fs_test_thread(void *arg) {
                                           (uint32_t)(sizeof CFGTEXT - 1));
                         }
                         struct tcb *sp = 0;
-                        uint64_t splen = (uint64_t)(sfsroottest_elf_end - sfsroottest_elf);
+                        uint64_t splen = (uint64_t)((uintptr_t)sfsroottest_elf_end - (uintptr_t)sfsroottest_elf);
                         if (elf_load((void *)(uintptr_t)sfsroottest_elf, splen,
                                      "SFSROOT", &sp) == ELF_OK && sp) {
                             sp->root_mnt = root_smnt;   /* clean SFS root before unblock */
@@ -2252,7 +2465,7 @@ static void fs_test_thread(void *arg) {
                          * SFS root (2 extents via the 4 KiB write chunk; the old
                          * 256 B chunk short-wrote at ~1 KiB). */
                         struct tcb *bw = 0;
-                        uint64_t bwlen = (uint64_t)(bigwritetest_elf_end - bigwritetest_elf);
+                        uint64_t bwlen = (uint64_t)((uintptr_t)bigwritetest_elf_end - (uintptr_t)bigwritetest_elf);
                         if (elf_load((void *)(uintptr_t)bigwritetest_elf, bwlen,
                                      "BIGWRITE", &bw) == ELF_OK && bw) {
                             bw->root_mnt = root_smnt;

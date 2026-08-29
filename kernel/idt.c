@@ -347,6 +347,52 @@ static void timer_tick(struct regs *r) {
           sched_rq_depth(&rd, &rc2);
           kputs(" rqdepth="); kputdec(rd);
           kputs(" rqcpus=");  kputdec(rc2); }
+        /* DDR-989 §4: the confirming/refuting measurement. cur_* is the thread
+         * holding the CPU, head_* the first READY thread it is passing over.
+         * cur_vr frozen while cur_pk climbs, with head_vr larger and head_pk
+         * flat, CONFIRMS sampling starvation; cur_vr advancing normally
+         * REFUTES it and points at weighting instead. Must precede any fix. */
+        { extern void sched_vr_sample(uint32_t *, uint64_t *, uint32_t *,
+                                      uint32_t *, uint64_t *, uint32_t *);
+          uint32_t cp = 0, ck = 0, hp = 0, hk = 0;
+          uint64_t cv = 0, hv = 0;
+          sched_vr_sample(&cp, &cv, &ck, &hp, &hv, &hk);
+          kputs(" curvr=");  kputdec(cv);
+          kputs(" curpk=");  kputdec(ck);
+          kputs(" hpid=");   kputdec(hp);
+          kputs(" headvr="); kputdec(hv);
+          kputs(" headpk="); kputdec(hk);
+          /* DDR-989 §9.8: vruntime inflation names itself.
+           *
+           * §9.7 recorded that a GREEN ci log cannot show headvr at all —
+           * boot_test.sh echoes the serial only on failure — so the fix was
+           * verifiable locally and by disassembly but not observable in CI.
+           * This closes that: vruntime is ~cycles/1024, so a 240 s gate at
+           * 3 GHz reaches ~7e8; 1e12 is over 1000x that. Nothing legitimate
+           * crosses it, and after the §9.4 fix the underflow that produced
+           * ~2^54 is impossible — so a hit is a real regression, which is
+           * exactly the bar §8.2 set for putting a sentinel in
+           * GLOBAL_FORBIDDEN (and which [yieldstall] did NOT meet). */
+          if (cv > 1000000000000ull || hv > 1000000000000ull) {
+              kputs(" [vrinflate] curvr="); kputdec(cv);
+              kputs(" headvr=");            kputdec(hv);
+          } }
+        /* DDR-989 §8.4: the poisoned charge, latched by sched_charge_elapsed.
+         * vrjn>0 means one was caught; stampcp != chargcp is the cross-CPU TSC
+         * mechanism, stampcp == chargcp refutes it. */
+        { extern volatile uint64_t g_vrjump_d, g_vrjump_vtin, g_vrjump_now;
+          extern volatile uint32_t g_vrjump_pid, g_vrjump_stampcp,
+                                   g_vrjump_chargcp, g_vrjump_n;
+          uint32_t vn = __atomic_load_n(&g_vrjump_n, __ATOMIC_RELAXED);
+          kputs(" vrjn="); kputdec(vn);
+          if (vn) {
+              kputs(" vrjd=");     kputdec(g_vrjump_d);
+              kputs(" vrjvtin=");  kputdec(g_vrjump_vtin);
+              kputs(" vrjnow=");   kputdec(g_vrjump_now);
+              kputs(" vrjpid=");   kputdec(g_vrjump_pid);
+              kputs(" vrjstamp="); kputdec(g_vrjump_stampcp);
+              kputs(" vrjcharg="); kputdec(g_vrjump_chargcp);
+          } }
         /* DDR-944: rqq = CPUs holding queue entries, rqpres = CPUs marked
          * present. Any bit set in rqq but clear in rqpres is a queue that
          * neither its own CPU nor any stealer will ever drain.

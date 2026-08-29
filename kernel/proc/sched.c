@@ -152,6 +152,19 @@ static void sched_place(struct tcb *t) {
  * distinguish "never enqueued" from "enqueued but never picked". */
 static volatile uint32_t g_ub_cas_fail;   /* sched_unblock: state was not BLOCKED */
 static volatile uint32_t g_ub_rqon_skip;  /* rq_push: rq_on was already set */
+/* DDR-996 §5: how many TCBs reached sched_free_tcb STILL LINKED on a runqueue.
+ * Not a health counter — it is the gate's proof that the dangerous state really
+ * arises. A gate asserting only "no panic" would be green with or without the
+ * fix (DDR-988 §9), so smoke-rqfree asserts this is NON-ZERO under a spawn/exit
+ * storm. In steady state on a fixed kernel it simply counts caught corpses. */
+/* DDR-994 §8: stalls reported that have NOT yet resolved. */
+volatile uint32_t g_yieldstall_open;
+/* DDR-989 §8.4: first absurd vruntime charge — latched, printed by the heartbeat. */
+volatile uint64_t g_vrjump_d, g_vrjump_vtin, g_vrjump_now;
+volatile uint32_t g_vrjump_pid, g_vrjump_stampcp, g_vrjump_chargcp, g_vrjump_n;
+volatile uint32_t g_rqfree_caught;
+/* DDR-996 §5 arm B: freed TCBs still referenced by a runqueue. MUST be 0. */
+volatile uint32_t g_rqfree_leaked;
 static volatile uint32_t g_ub_last_state; /* the state actually observed by a failed CAS */
 
 void sched_take_unblock_stats(uint32_t *cas_out, uint32_t *rqon_out, uint32_t *state_out) {
@@ -240,7 +253,59 @@ static void sched_charge_elapsed(struct tcb *t) {
     if (!t || !t->vt_in)
         return;
     uint64_t now = sched_rdtsc();
-    uint64_t d   = (now > t->vt_in) ? (now - t->vt_in) : 0;
+    /* DDR-989 §9: ONE read of vt_in, into a local. The bug this fixes was two.
+     *
+     * `(now > t->vt_in) ? (now - t->vt_in) : 0` loads t->vt_in TWICE, and the
+     * field is plain memory. sched_charge_elapsed runs from yield() with
+     * interrupts enabled, so a timer tick between the two loads can re-enter
+     * the scheduler, re-dispatch THIS SAME thread, and stamp a NEWER vt_in in
+     * rq_pop (`t->vt_in = sched_rdtsc()`). The guard then passes on the OLD
+     * value while the subtraction uses the NEW one, and `now - vt_in_new`
+     * underflows to ~2^64.
+     *
+     * Measured, not deduced (DDR-989 §8.4): d=18446744073709405858, i.e.
+     * 2^64 - 145758, with now=53378320782 and vt_in=53378466540 — a difference
+     * of exactly 145758, on pid 0 (the idle thread, the most re-dispatched
+     * thread there is) with the stamping and charging cpu BOTH 0. Same cpu, so
+     * this is not the unsynced-TSC story §8.4 proposed; that is refuted.
+     *
+     * One underflowed charge adds ~2^64/1024 = 2^54 to dbg_vruntime, which
+     * g_dbg_floor latches as a monotonic maximum, which every later thread is
+     * clamped to on create/wake — and the queue head then sits permanently
+     * above the incumbents and is never picked again. That is the whole
+     * starvation, from one torn read. */
+    uint64_t in  = t->vt_in;
+    uint64_t d   = (now > in) ? (now - in) : 0;
+    /* DDR-989 §8.4: catch the poisoned charge IN THE ACT.
+     *
+     * §8.3 measured the consequence — one charge of ~1.8e19 cycles lifts
+     * g_dbg_floor to ~2^54 and starves the queue head forever — but not the
+     * cause. A slice is microseconds; 2^40 cycles is ~6 minutes at 3 GHz, so
+     * nothing legitimate crosses it.
+     *
+     * RECORDS, does not print: this runs from schedule() and yield(), on hot
+     * paths and under locks, and DDR-980 removed a heartbeat print for exactly
+     * that reason. The values are latched once and the heartbeat emits them.
+     * It also does NOT clamp d — §NON-NEGOTIABLE 3 forbids the semantic change
+     * before an artefact names the cause, and clamping would destroy the
+     * evidence this exists to collect.
+     *
+     * vt_cpu vs the charging cpu is the actual hypothesis under test: vt_in is
+     * stamped in rq_pop on one cpu and differenced here on another, and the
+     * `now > vt_in` guard rejects only BACKWARDS deltas — an unsynced forward
+     * TSC passes straight through. If the two cpus differ on the captured
+     * event, that is the mechanism; if they are the SAME cpu, it is refuted and
+     * the cause is elsewhere. */
+    if (d > (1ull << 40) &&
+        __atomic_add_fetch(&g_vrjump_n, 1u, __ATOMIC_RELAXED) == 1u) {
+        struct percpu *pc = this_cpu();
+        g_vrjump_d       = d;
+        g_vrjump_vtin    = in;
+        g_vrjump_now     = now;
+        g_vrjump_pid     = t->pid;
+        g_vrjump_stampcp = t->vt_cpu;
+        g_vrjump_chargcp = pc ? pc->cpu_idx : 0xFFFFFFFFu;
+    }
     t->vt_in = now;
     uint32_t w = t->weight ? t->weight : 1024u;
     t->dbg_vruntime += ((d >> 10) * 1024u) / w;
@@ -270,6 +335,137 @@ static struct tcb *fair_candidate(struct rq *q, uint32_t *depth_out) {
     if (depth_out)
         *depth_out = depth;
     return best;
+}
+
+/* DDR-996 §5 arm B: are the runqueues still walkable? Returns 1 if every link
+ * is a plausible kernel pointer, 0 if any is not.
+ *
+ * Deliberately does NOT dereference a suspect pointer — the whole failure being
+ * tested for is a dereference of PMM_POISON, and a checker that faults the same
+ * way it is meant to detect is not a checker. It inspects the POINTER VALUE:
+ * a freed page's link reads back as 0xDEADBEEFDEADBEEF, which is non-canonical
+ * and fails the kernel-half test long before anything touches it. Bounded, so a
+ * cycle introduced by corruption terminates instead of hanging the gate. */
+/* ---- DDR-989 §4: the confirming/refuting measurement -----------------------
+ *
+ * DDR-989 root-caused smoke-evresize/smoke-agentpanel to vruntime being SAMPLED,
+ * so a sub-tick yielder is never charged and monopolises the CPU. It has stood
+ * unimplemented on purpose: §4 says the mechanism is read from source and
+ * "consistency is not proof", and forbids a fix until an artefact ties the two
+ * together. §NON-NEGOTIABLE 3.
+ *
+ * This is that instrument, and nothing more. It REPORTS; it changes no
+ * scheduling decision. §4 asks for exactly two comparisons per heartbeat:
+ * vruntime and pick-count for the RUNNING thread, and the same for the queue
+ * HEAD that is not being picked.
+ *
+ *   CONFIRMS  cur_vr frozen (or far slower than wall time) while cur_pk climbs,
+ *             AND head_vr strictly larger with head_pk flat.
+ *   REFUTES   cur_vr advancing normally and merely lower -> weighting or entry
+ *             clamping (H1/H2), an OPPOSITE fix.
+ *   REFUTES   head_pk climbing too -> the queued threads ARE being picked and
+ *             the stall is downstream of the scheduler entirely.
+ *
+ * Reads under each queue's lock and copies out scalars; touches no list. */
+void sched_vr_sample(uint32_t *cur_pid, uint64_t *cur_vr, uint32_t *cur_pk,
+                     uint32_t *head_pid, uint64_t *head_vr, uint32_t *head_pk) {
+    *cur_pid = *cur_pk = *head_pid = *head_pk = 0;
+    *cur_vr  = *head_vr = 0;
+    if (current_thread) {
+        *cur_pid = current_thread->pid;
+        *cur_vr  = current_thread->dbg_vruntime;
+        *cur_pk  = current_thread->dbg_picks;
+    }
+    /* First READY entry on any queue: the thread the fair picker would take and
+     * the FIFO picker is passing over. That is the starved side of §4. */
+    /* LOCK-FREE, and bounded — deliberately, matching sched_rq_depth() right
+     * below, whose comment gives the reason: "a corrupt list must not hang the
+     * ISR". This runs from the heartbeat, i.e. in the timer interrupt handler.
+     *
+     * The first draft took spin_lock_irqsave(&q->lock) here. Cross-CPU that
+     * only adds ISR latency (rq_push holds the lock with interrupts off, so a
+     * same-CPU self-deadlock is not possible) — but it means the timer ISR can
+     * block on a lock held by a CPU that is itself wedged, which is EXACTLY the
+     * condition this instrument exists to observe. A diagnostic that can hang
+     * inside the fault it is diagnosing is worse than no diagnostic.
+     *
+     * The cost of dropping the lock is a possibly-torn read: a stale pid or a
+     * vruntime from a thread being unlinked concurrently. For a per-500-tick
+     * sample compared against a baseline that is an acceptable trade, and it is
+     * the trade the neighbouring counter already makes. */
+    for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+        struct tcb *e = g_rq[c].head;
+        for (uint32_t n = 0; e && n < 4096u; n++) {
+            if (e->state == THREAD_READY && e != current_thread) {
+                *head_pid = e->pid;
+                *head_vr  = e->dbg_vruntime;
+                *head_pk  = e->dbg_picks;
+                return;
+            }
+            e = e->rq_next;
+        }
+    }
+}
+
+/* DDR-996 §5 arm B (v2): is this EXACT pointer still linked in any runqueue?
+ *
+ * The first version of arm B checked the queues for non-canonical links and the
+ * mutant SURVIVED it — `caught=16` and a clean walk. The reason is that kfree()
+ * returns a TCB to its slab cache, so the dangling pointer stays perfectly
+ * canonical; PMM_POISON only appears once that page is recycled to the physical
+ * allocator, which is many frees later. The poison in the CI artefact was the
+ * eventual symptom, not the invariant.
+ *
+ * So this tests the invariant itself — "no runqueue references a freed TCB" —
+ * and the caller checks immediately after each destroy, before any allocation
+ * can reuse the address and mask it. Compares pointer VALUES; never dereferences
+ * the freed TCB. */
+static int rq_references(const struct tcb *t) {
+    for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+        struct rq *q = &g_rq[c];
+        uint64_t fl = spin_lock_irqsave(&q->lock);
+        int hit = 0;
+        struct tcb *e = q->head;
+        for (uint32_t n = 0; e && n < 4096u; n++) {
+            if (e == t) { hit = 1; break; }
+            e = e->rq_next;
+        }
+        spin_unlock_irqrestore(&q->lock, fl);
+        if (hit)
+            return 1;
+    }
+    return 0;
+}
+
+int sched_rq_walk_ok(void) {
+    int ok = 1;
+    for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+        struct rq *q = &g_rq[c];
+        uint64_t fl = spin_lock_irqsave(&q->lock);
+        struct tcb *e = q->head;
+        for (uint32_t n = 0; e && n < 4096u; n++) {
+            /* NOT a high-half test. The first draft rejected anything below
+             * 0xFFFFFFFF80000000 and immediately flagged a perfectly good TCB at
+             * 0x07C64000 — this kernel's heap and kstacks are identity-mapped
+             * LOW, which the artefact itself shows (RSP=0x07DABDD8 in the panic).
+             * The property that actually distinguishes a freed link is that
+             * PMM_POISON is non-canonical, which is why the fault was #GP and
+             * not #PF. So test canonicality, plus the poison word itself for a
+             * clearer message. */
+            uint64_t v  = (uint64_t)(uintptr_t)e;
+            uint64_t hi = v >> 47;
+            if (v == 0xDEADBEEFDEADBEEFull || (hi != 0ull && hi != 0x1FFFFull)) {
+                kputs("[rqfree] BAD link cpu="); kputdec(c);
+                kputs(" ptr="); kputhex((uint64_t)(uintptr_t)e);
+                kputs("\r\n");
+                ok = 0;
+                break;
+            }
+            e = e->rq_next;
+        }
+        spin_unlock_irqrestore(&q->lock, fl);
+    }
+    return ok;
 }
 
 static struct tcb *rq_unlink(struct rq *q, struct tcb *want) {
@@ -416,7 +612,8 @@ static struct tcb *rq_pop(int cpu) {
     struct tcb *t = fair ? rq_unlink(q, fair) : rq_take(q);
     if (t) {
         t->dbg_picks++;
-        t->vt_in = sched_rdtsc();
+        t->vt_in  = sched_rdtsc();
+        t->vt_cpu = (uint32_t)cpu;        /* DDR-989 §8.4: who stamped it */
         sched_trace_note(t, fair, depth, (uint32_t)cpu);
     }
     spin_unlock_irqrestore(&q->lock, fl);
@@ -866,6 +1063,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->vt_in           = 0;
     t->dbg_yields      = 0;
     t->sched_woke      = 0;
+    t->vt_cpu          = 0;          /* DDR-989 §8.4 / §NON-NEGOTIABLE 10 */
     t->dbg_vruntime    = g_dbg_floor;
     t->dbg_v_at_create = g_dbg_floor;
     t->dbg_v_at_wake   = 0;
@@ -1093,6 +1291,49 @@ static void sched_free_tcb(struct tcb *t) {
      * before freeing that stack — this is what replaces rq-1's
      * lock-held-across-the-exit-switch (DDR-SMP-exit-stack-race). */
     switch_wait_offcpu(t);
+
+    /* DDR-996: and off the RUNQUEUE, which nothing above waits for. A thread
+     * carries two independent links — the all-threads ring (->next) and a
+     * per-CPU ready FIFO (->rq_next). sched_exit() marks itself ZOMBIE and
+     * leaves the FIFO link intact; both reap paths then call
+     * sched_ring_unlink(), which walks ONLY ->next. So a thread reaped before
+     * some rq_take() pass happens to pop it was freed while still linked, the
+     * page was stamped with PMM_POISON, and the next walker read that poison
+     * out of ->rq_next: either dereferencing it (fair_candidate, the #GP in
+     * CI run 32702096039) or writing it into q->head, which corrupts that
+     * CPU's queue for good.
+     *
+     * Safe to do here and nowhere earlier: by this point t is already off the
+     * all-threads ring, so no walker can discover it to re-push it. The queue
+     * is the last reference, and rq_unlink() clears rq_next and rq_on as it
+     * goes, so removing it here is final.
+     *
+     * rq_on is a bare flag — the TCB does not record WHICH cpu queued it — so
+     * this scans. That costs O(PERCPU_MAX x len) at reap time only, and is
+     * guarded by one atomic load in the common case where the thread was
+     * already popped. Adding a t->rq_cpu field would be cheaper here and worse
+     * everywhere else: §NON-NEGOTIABLE 10 (kmalloc does not zero) makes each
+     * new struct tcb field an initialiser bug waiting to happen. */
+    if (__atomic_load_n(&t->rq_on, __ATOMIC_ACQUIRE)) {
+        for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+            struct rq *q = &g_rq[c];
+            uint64_t qfl = spin_lock_irqsave(&q->lock);
+            struct tcb *prev = 0;
+            for (struct tcb *e = q->head; e; e = e->rq_next) {
+                if (e == t) {
+                    if (prev) prev->rq_next = t->rq_next;
+                    else      q->head       = t->rq_next;
+                    if (q->tail == t) q->tail = prev;
+                    t->rq_next = 0;
+                    __atomic_store_n(&t->rq_on, 0, __ATOMIC_RELEASE);
+                    __atomic_add_fetch(&g_rqfree_caught, 1, __ATOMIC_RELAXED);
+                    break;
+                }
+                prev = e;
+            }
+            spin_unlock_irqrestore(&q->lock, qfl);
+        }
+    }
     for (int i = 0; i < FD_MAX; i++)
         fd_free(t, i);
     if (t->caps)
@@ -1106,6 +1347,52 @@ static void sched_free_tcb(struct tcb *t) {
  * circular ring under g_sched_lock (create/exit/reap mutate it on any CPU),
  * copies pure values into *out. A create/exit racing between indices only
  * adds/drops a row — fine for a best-effort `ps`. */
+/* DDR-1001 — find the caller's reapable child, walking the ring UNDER the lock.
+ *
+ * sys_wait4 used to do this walk itself, in sys_wait.c, taking NO lock at all,
+ * while sched_ring_unlink relinks the ring holding g_sched_lock. A lock only
+ * excludes participants who take it, so the reader could follow a `->next`
+ * mid-relink and never come back to `parent` — an unbounded loop reached from
+ * ring 3 with IF clear (SYSCALL entry), which nothing can preempt. That is the
+ * measured [apfreeze] of DDR-1001: bt[1] = sys_wait4+0x4f, the return address
+ * after `callq find_zombie_child`.
+ *
+ * `sched_snapshot` above already established the correct pattern for this exact
+ * traversal; this is the same thing for wait4's predicate. Moving the walk here
+ * is what lets it take the lock at all — g_sched_lock is file-local.
+ *
+ * The bound is belt-and-braces, not the fix: under the lock the ring is
+ * consistent and the walk terminates. If it ever does not, the ring is corrupt
+ * for some other reason, and reporting that beats hanging forever.
+ *
+ * NOT fixed here, and deliberately not claimed: the returned pointer is used
+ * after this returns (and after the lock drops), so a concurrent reap could
+ * still free it. That lifetime question is pre-existing, separate, and needs
+ * its own change — this one stops the CPU wedging.
+ */
+#define WAIT4_RING_MAX 1024u   /* ~10x any observed live-thread count */
+
+struct tcb *sched_find_child(struct tcb *parent, int pid,
+                             struct tcb **has_live, int *any, int *ringbad) {
+    *has_live = 0; *any = 0; *ringbad = 0;
+    if (!parent) return 0;
+    struct tcb *found = 0;
+    uint64_t fl = irq_save();
+    unsigned n = 0;
+    struct tcb *t = parent->next;
+    while (t && t != parent) {
+        if (++n > WAIT4_RING_MAX) { *ringbad = 1; break; }
+        if (t->parent_pid == parent->pid && (pid == -1 || (int)t->pid == pid)) {
+            *any = 1;
+            if (t->state == THREAD_ZOMBIE) { found = t; break; }
+            if (!*has_live) *has_live = t;
+        }
+        t = t->next;
+    }
+    irq_restore(fl);
+    return found;
+}
+
 int sched_snapshot(int index, struct procinfo *out) {
     if (index < 0 || !current_thread)
         return 0;
@@ -1341,6 +1628,69 @@ void sched_tick(void) {
  * many times the window below was actually needed. A gate observable, and the
  * denominator for the claim that this path is exercised at all (R17). */
 uint64_t g_yield_masked;
+
+/* ---- DDR-994: the wait that never ends -----------------------------------
+ * OPEN-1 route 1 is a HANG with no panic, and every other instrument in this
+ * kernel is keyed to something being printed or something faulting. [apfreeze]
+ * (DDR-981) triggers on "this cpu stopped taking interrupts"; in route 1 the
+ * cpu is FINE -- g_ticks advances, other threads run, ONE thread waits forever.
+ * So this reports on the wait itself.
+ *
+ * DDR-994 sec.5 -- IT REPORTS, IT DOES NOT REPAIR. There is a named mechanism
+ * but no captured artefact of it firing, so §NON-NEGOTIABLE 3 forbids changing
+ * locking semantics here. The caller keeps spinning after this returns. Bailing
+ * out of mnt_lock on a deadline would turn a hang into a silent -EIO on a live
+ * mount: it would look like a fix and destroy the evidence.
+ *
+ * `noted` makes this fire ONCE per wait rather than once per spin -- a stall
+ * that printed every iteration would bury the boot in UART traffic and change
+ * the timing it is measuring, which is exactly why DDR-980 removed the cputicks
+ * heartbeat. Failure-path-only, like DDR-981 and DDR-977 sec.6. */
+void yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *noted) {
+    if (*noted)
+        return;
+    *noted = 1;
+    __atomic_add_fetch(&g_yieldstall_open, 1, __ATOMIC_RELAXED);
+    struct percpu *pc = this_cpu();
+    uint64_t fl = console_line_lock();
+    kputs("[yieldstall] site=");   kputs(site);
+    /* Both numbers, always: a loaded cpu can legitimately spin many times
+     * inside one tick, and a LOW spin count across many ticks means the thread
+     * is barely being scheduled -- a different defect (DDR-989's). One number
+     * cannot tell those apart, and §NON-NEGOTIABLE 17 wants the denominator. */
+    kputs(" spins=");              kputdec(spins);
+    kputs(" ticks=");              kputdec(ticks);
+    kputs(" pid=");                kputdec(current_thread ? current_thread->pid : 0);
+    kputs(" cpu=");                kputdec(pc ? pc->cpu_idx : 0);
+    kputs("\r\n");
+    console_line_unlock(fl);
+}
+
+/* DDR-994 §8 — did the wait actually END?
+ *
+ * The first CI capture (run 32702146725, smoke-vault: `site=mnt_lock
+ * spins=68981 ticks=500 pid=45`) proved the reporter fires on a real 5-second
+ * wait — but it CANNOT distinguish a genuine deadlock from heavy legitimate
+ * contention, and that distinction is the whole question. mnt_lock is held
+ * across real block I/O, the SFS self-test cycles it dozens of times, and CI
+ * runs under TCG, so a long-but-finite wait is entirely plausible. 68,981 spins
+ * over 500 ticks is ~138/tick against a measured turnover of ~255/tick: the
+ * thread is being scheduled and spinning, which fits BOTH readings.
+ *
+ * So the waiter now says when it got in. A `RESOLVED` line means the wait was
+ * slow, not stuck — the opposite conclusion from silence, and unavailable from
+ * a one-shot report. `g_yieldstall_open` is the count that never resolved. */
+void yield_stall_done(const char *site, uint32_t spins, uint64_t ticks, int *noted) {
+    if (!*noted)
+        return;                      /* never crossed the threshold: say nothing */
+    __atomic_sub_fetch(&g_yieldstall_open, 1, __ATOMIC_RELAXED);
+    uint64_t fl = console_line_lock();
+    kputs("[yieldstall] RESOLVED site="); kputs(site);
+    kputs(" spins=");                    kputdec(spins);
+    kputs(" ticks=");                    kputdec(ticks);
+    kputs("\r\n");
+    console_line_unlock(fl);
+}
 
 void yield(void) {
     if (!current_thread)
@@ -1607,6 +1957,53 @@ static void reaper_thread(void *arg) {
         }
         yield();
     }
+}
+
+/* DDR-996 §5: force the freed-while-queued window deterministically.
+ *
+ * The CI artefact arose from a spawn/exit storm (init respawning a failing
+ * service), which is rare by nature. This drives the IDENTICAL path —
+ * sched_free_tcb reached with rq_on still set — without depending on a race:
+ * create a thread, make it runnable so it is pushed onto a runqueue, and
+ * destroy it before it is ever dispatched. That is a real scenario in its own
+ * right (spawn-failure cleanup), and it is the same defect: a TCB freed while a
+ * queue still points at it.
+ *
+ * IRQs off across the unblock/destroy pair so THIS cpu cannot reschedule into
+ * the victim. Another cpu may still steal and run it, which is why the gate
+ * asserts caught > 0 rather than caught == n — the point is that the state
+ * ARISES, and an exact count would be asserting the absence of work stealing.
+ *
+ * Lives here rather than in main.c because irq_save() is file-local to the
+ * scheduler, and because poking at rq membership belongs next to the code that
+ * owns it. Returns how many victims were created. */
+static void rqfree_victim_thread(void *arg) {
+    (void)arg;
+    sched_exit(0);      /* only reached if a cpu steals it before we destroy it */
+}
+
+int sched_rqfree_probe(int n) {
+    int made = 0;
+    for (int i = 0; i < n; i++) {
+        struct tcb *v = sched_create_blocked(rqfree_victim_thread, 0, "rqfvic");
+        if (!v)
+            break;
+        made++;
+        /* NO irq_save around this pair. The first draft held IRQs off to stop
+         * this cpu rescheduling into the victim — and hung the boot for ~22 s,
+         * because sched_free_tcb -> switch_wait_offcpu (sched.c:479) is an
+         * UNBOUNDED spin, and spinning with IF clear is exactly the DDR-981
+         * livelock. The window does not need the mask: unblock and destroy are
+         * adjacent, so the victim is usually still unpicked. */
+        sched_unblock(v);      /* -> rq_push: now linked, rq_on = 1 */
+        sched_destroy(v);      /* the wait4 reap path, verbatim     */
+        /* Checked HERE, inside the loop, because nothing has allocated since
+         * the free — so a hit is unambiguously a dangling reference rather than
+         * a recycled address that happens to match. */
+        if (rq_references(v))
+            __atomic_add_fetch(&g_rqfree_leaked, 1, __ATOMIC_RELAXED);
+    }
+    return made;
 }
 
 void sched_start_reaper(void) {

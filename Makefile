@@ -75,6 +75,10 @@ USER_FSRM_SRC := user/fsrmtest.c          # fs: ring-3 file lifecycle probe (DDR
 USER_FSRM_ELF := build/fsrmtest.elf
 USER_FAT32MC_SRC := user/fat32mctest.c    # DDR-973: FAT32 multi-cluster read regression probe
 USER_FAT32MC_ELF := build/fat32mctest.elf
+USER_NETHAMMER_SRC := user/nethammer.c    # DDR-990: two-CPU connect/close hammer
+USER_NETHAMMER_ELF := build/nethammer.elf
+USER_MODKEYS_SRC := user/modkeystest.c     # DDR-991: modifier / extended-key probe
+USER_MODKEYS_ELF := build/modkeystest.elf
 USER_STACKD_SRC := user/stackdemand.c     # ADR-038: demand-paged stack probe
 USER_STACKD_ELF := build/stackdemand.elf
 USER_FTRUNC_SRC := user/ftrunctest.c      # fs: ring-3 ftruncate probe (DDR-866)
@@ -428,6 +432,10 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FSRM_ELF) build/fsrmtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FAT32MC_SRC) -o build/fat32mctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_FAT32MC_ELF) build/fat32mctest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_NETHAMMER_SRC) -o build/nethammer.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_NETHAMMER_ELF) build/nethammer.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_MODKEYS_SRC) -o build/modkeystest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MODKEYS_ELF) build/modkeystest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_STACKD_SRC) -o build/stackdemand.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/stackdemand.o $(MUSL_LIB) -o $(USER_STACKD_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_FTRUNC_SRC) -o build/ftrunctest.o
@@ -509,7 +517,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -2566,6 +2574,193 @@ smoke-sha256: $(IMG) fat-image sfs-image
 # covering something the others cannot: TC2's 82-byte OKM is the only one that
 # forces the expand loop past T(1), and TC3 is the only one exercising the
 # NULL-salt branch (HashLen zero bytes, not an empty string).
+# DDR-990: the two-CPU connect/close hammer — the POSITIVE proof of the DDR-987
+# lwIP fix that the gate suite cannot supply. smoke-surfdestroy surfaces that
+# defect at ~1 run in 20, so a clean 20-run campaign has only ~64% power
+# (0.95^20 = 0.358); reaching 95% by sampling needs ~59 boots. This drives the
+# named mechanism directly instead: two ring-3 instances on two CPUs issuing
+# 20,000 connect/close pairs each, interleaving tcp_seg allocate and free with
+# no phase relationship.
+#
+# QEMU_SMP=4 is load-bearing. On one CPU the two instances serialise and the
+# probe measures nothing about a CROSS-CPU race while still printing OK.
+#
+# DDR-993, on a fair review question: this gate records NO cpu ids, so nothing
+# in a green run proves the two instances ran on different cpus. Adding ids
+# would need a new NSI purely for gate bookkeeping, and it would still be the
+# weaker evidence. The strong evidence is the MUTATION result: on a kernel with
+# g_net_lock reverted this probe faults (#GP at tcp_new_port+0x2d,
+# RDI=0xDDDDDDDDDDDDDDDD) inside 1000 iterations. That defect is reachable ONLY
+# by two cpus in the lwIP core at once — a serialised pair cannot produce it —
+# so the fault IS the proof of concurrency, established rather than assumed.
+# What a green run alone shows is that the pairs completed, which is why the
+# conn_err and two-pid assertions below exist.
+#
+# conn_err=0 is asserted, not hoped for. If the egress allowlist lacks
+# 127.0.0.1:8007 every connect returns an audited -EPERM, the hammer never
+# enters lwIP, and it still reaches its sentinel. That is DDR-988 sec.9's
+# vacuous gate exactly (smoke-net-fuzz green while 613 of 768 frames were
+# dropped), so the absence of errors is checked rather than assumed.
+#
+# BOTH pids must finish: a run where one instance died and the other completed
+# is a single-CPU run wearing a green result.
+#
+# DDR-993: this comment said "Two OK lines are required" and that was NOT what
+# the recipe did. EXTRA_SENTINEL lines are literal patterns checked for
+# PRESENCE (boot_test.sh:610), never for count, so ONE instance printing
+# PRADYOS_NETHAMMER_OK satisfied it and the surviving-instance case the comment
+# describes would have gone green. The requirement is now enforced instead of
+# asserted in prose: SERIAL_LOG is pinned so the capture survives the run, and
+# the count of DISTINCT pids on OK lines must be exactly 2. Distinct pids, not
+# two lines — one instance cannot pass by printing twice.
+#
+# This is the same defect class as the conn_err=0 assertion four paragraphs up,
+# which exists because a probe that never entered lwIP still reached its
+# sentinel. Both are DDR-988 sec.9: a gate is worth only what it CHECKS, and a
+# comment claiming a check that the recipe does not perform is worse than no
+# comment, because it stops the next reader from looking.
+# DDR-991: PS/2 modifier / extended-key gate. Real keys via QEMU's HMP sendkey
+# (genuine IRQ1 path), six ring-3 arms — see user/modkeystest.c. The two that
+# carry the most weight:
+#   arm C  Arrow-Up. Arrows are INVISIBLE on the DDR-703 driver: an arrow is
+#          `E0 48`, the prefix was swallowed as a break code (0xE0 has bit 7
+#          set) and 0x48 was then dropped by `sc >= 0x40`. Arrival IS the proof
+#          that 0xE0 is decoded.
+#   arm E  an unmodified key AFTER a Ctrl chord. Without break-code handling a
+#          modifier latches down forever and a phantom Ctrl turns ordinary
+#          typing into control codes — and that regression passes every other
+#          arm, which is why this one exists.
+# DDR-993: a SEVENTH arm, and the only one that does not go through sendkey.
+#   The paired-modifier defect needs two keys of one pair held at once and then
+#   ONE released; HMP `sendkey` couples every press to its own release, so that
+#   sequence cannot be injected AT ALL. It is asserted in ring 0 instead, by
+#   ps2kbd_selftest() driving raw scancodes through ps2kbd_feed(), and its
+#   sentinel is PRADYOS_MODKEYS_PAIR_OK. Checked separately below, because a
+#   kernel arm that silently stopped running would otherwise leave the gate
+#   green on six arms and call it seven.
+# DDR-992: Super+M sovereign toggle. Four arms — see the DDR. Arm D is the one
+# that matters most for regressions: a chord must NOT also deliver text on
+# NSI 46, or one keypress arrives twice and Super+M flips the mode and then has
+# the plain-'m' branch force it straight back.
+smoke-superkey: $(IMG) fat-image sfs-image
+	@echo "[superkey] Super+M toggle: boot(GPU) + sendkey m / meta_l-m x2 / ctrl-c..."
+	@rm -f build/superkey.log /tmp/psuper.sock
+	@bash tools/qemu_runner/input_inject.sh build/superkey.log /tmp/psuper.sock \
+	    PRADYOS_AMBIANCE_OK "m meta_l-m meta_l-m ctrl-c" &
+	@timeout 120 qemu-system-x86_64 -machine q35 -device virtio-gpu-pci \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -monitor unix:/tmp/psuper.sock,server,nowait \
+	    -serial file:build/superkey.log -display none -no-reboot || true
+	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=0 to=1" build/superkey.log || { echo "[superkey] FAIL — arm B: Super+M did not toggle Manual->Sovereign"; grep -a "SUPERKEY\|MODE" build/superkey.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=1 to=0" build/superkey.log || { echo "[superkey] FAIL — arm C: second Super+M did not toggle back (is it a toggle?)"; grep -a "SUPERKEY" build/superkey.log | tail -10; exit 1; }
+	@echo "[superkey] PASS — toggles both ways"
+
+smoke-modkeys: $(IMG) fat-image sfs-image
+	@echo "[modkeys] input gate: boot + sendkey a/f1/up/ctrl-c/b -> IRQ1 -> NSI 46 + 96..."
+	@rm -f build/modkeys.log /tmp/pmodkeys.sock
+	@bash tools/qemu_runner/input_inject.sh build/modkeys.log /tmp/pmodkeys.sock \
+	    PRADYOS_MODKEYS_WAIT "a f1 up ctrl-c b" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -monitor unix:/tmp/pmodkeys.sock,server,nowait \
+	    -fw_cfg name=opt/org.pradyos/probes,string=modkeys \
+	    -serial file:build/modkeys.log -display none -no-reboot || true
+	@grep -qa "MODKEYS FAIL" build/modkeys.log && { echo "[modkeys] FAIL:"; grep -a "MODKEYS FAIL" build/modkeys.log; exit 1; } || true
+	@grep -qa PRADYOS_MODKEYS_OK build/modkeys.log || { echo "[modkeys] FAIL — probe never reported OK"; tail -25 build/modkeys.log; exit 1; }
+	@grep -qa PRADYOS_MODKEYS_PAIR_OK build/modkeys.log || { echo "[modkeys] FAIL — DDR-993 kernel arm absent or failed (paired modifier / make-break identity)"; grep -a "MODKEYS" build/modkeys.log | tail -10; exit 1; }
+	@echo "[modkeys] PASS — six ring-3 arms + the DDR-993 kernel arm"
+
+# DDR-994: the yield-stall detector — the instrument for OPEN-1 route 1, which
+# is a HANG with no panic and which nothing in this repo could previously see.
+# [apfreeze] (DDR-981) triggers on "this cpu stopped taking interrupts"; in
+# route 1 the cpu is FINE and one THREAD waits forever, so that detector is
+# structurally blind to it.
+#
+# TWO arms, because arm A alone would be vacuous — it proves the reporter works,
+# not that any real call site invokes it. That is DDR-988 sec.9 exactly, and
+# DDR-993 sec.5 is the freshest reminder that a check only tests what it can
+# express (all six of smoke-modkeys' ring-3 arms passed on a broken kernel).
+#   arm A  the reporter fires ONCE per wait, not once per spin: called 3x with
+#          one `noted`, exactly ONE site=selftest line must appear. A reporter
+#          that printed every iteration would move the timing it measures.
+#   arm B  through the REAL mnt_lock, against a private scratch mount — so the
+#          site=mnt_lock line proves the detector is WIRED to the call site.
+#          Takes ~7 s by design (YIELD_STALL_TICKS is 500 = 5 s at 100 Hz),
+#          which is why the whole thing is opt-in via DDR-804.
+#
+# The waiter is RELEASED afterwards and must exit: a detector that wedges the
+# boot it is diagnosing is worse than none. Both sentinels are asserted.
+# DDR-996: a TCB freed while still linked on a runqueue.
+#
+# The trap this gate exists to avoid: assert "no panic" and call it done. A boot
+# WITHOUT the defect also does not panic, and the window is rare, so such a gate
+# is green either way — the DDR-988 §9 vacuous-gate failure mode. So arm A
+# asserts the dangerous state actually AROSE (caught > 0), not merely that
+# nothing blew up.
+#
+#   A  caught > 0 — TCBs really did reach sched_free_tcb still queued, and the
+#      fix engaged. caught == 0 means the probe stopped reproducing the
+#      condition and the gate says so instead of passing quietly.
+#   B  the runqueues are still walkable afterwards, and the boot does not #GP.
+#      sched_rq_walk_ok() inspects POINTER VALUES rather than dereferencing —
+#      a checker that faults the same way it is meant to detect is not a checker.
+smoke-rqfree: $(IMG) fat-image sfs-image
+	@echo "[rqfree] TCB-freed-while-queued gate (DDR-996)..."
+	@mkdir -p build/gatelogs
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/rqfree.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_PROBES=rqfree \
+	EXTRA_SENTINEL="PRADYOS_RQFREE_OK" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -qa 'RQFREE FAIL' build/gatelogs/rqfree.log && { echo "[rqfree] FAIL — arm B:"; grep -a 'RQFREE FAIL\|BAD link\|leaked=' build/gatelogs/rqfree.log; exit 1; } || true
+	@l=$$(grep -ao '\[rqfree\] leaked=[0-9]*' build/gatelogs/rqfree.log | tail -1 | sed 's/.*leaked=//'); \
+	 [ -n "$$l" ] || { echo "[rqfree] FAIL — arm B never reported"; exit 1; }; \
+	 [ "$$l" -eq 0 ] || { echo "[rqfree] FAIL — arm B: $$l freed TCBs are STILL referenced by a runqueue"; exit 1; }
+	@c=$$(grep -ao '\[rqfree\] made=[0-9]* caught=[0-9]*' build/gatelogs/rqfree.log | tail -1 | sed 's/.*caught=//'); \
+	 [ -n "$$c" ] || { echo "[rqfree] FAIL — probe never reported"; tail -20 build/gatelogs/rqfree.log; exit 1; }; \
+	 [ "$$c" -gt 0 ] || { echo "[rqfree] FAIL — arm A: caught=0, the probe is no longer reproducing the freed-while-queued window; this gate would pass vacuously"; exit 1; }; \
+	 echo "[rqfree] PASS — arm A caught=$$c freed-while-queued TCBs, arm B queues intact"
+
+smoke-yieldstall: $(IMG) fat-image sfs-image
+	@mkdir -p build/gatelogs
+	@# DDR-994 §8: `[yieldstall]` is NO LONGER in GLOBAL_FORBIDDEN (see
+	@# boot_test.sh for why — one 5 s wait is not yet shown to be fatal). This
+	@# gate deliberately PROVOKES a stall, so it asserts the sentinel is
+	@# PRESENT; nothing about it depends on the global list any more.
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/yieldstall.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_PROBES=yieldstall \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_YIELDSTALL_RELEASED\nPRADYOS_YIELDSTALL_WAITER_DONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -qa '\[yieldstall\] site=selftest' build/gatelogs/yieldstall.log || { echo "[yieldstall] FAIL — arm A: reporter never fired"; tail -20 build/gatelogs/yieldstall.log; exit 1; }
+	@n=$$(grep -ac '\[yieldstall\] site=selftest' build/gatelogs/yieldstall.log); \
+	 test "$$n" -eq 1 || { echo "[yieldstall] FAIL — arm A: reporter fired $$n times, must be exactly 1 (once per wait, not per spin)"; exit 1; }
+	@grep -qa '\[yieldstall\] site=mnt_lock' build/gatelogs/yieldstall.log || { echo "[yieldstall] FAIL — arm B: the detector is NOT wired to mnt_lock (arm A can pass without this)"; grep -a yieldstall build/gatelogs/yieldstall.log; exit 1; }
+	@echo "[yieldstall] PASS — reporter fires once (arm A) AND is wired to mnt_lock (arm B)"
+
+smoke-nethammer: $(IMG) fat-image sfs-image
+	@mkdir -p build/gatelogs
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/nethammer.log KEEP_SERIAL=1 \
+	TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=nethammer \
+	EXTRA_SENTINEL="$$(printf 'net hammer spawned=2/2\nPRADYOS_NETHAMMER_OK\nconn_err=0')" \
+	FORBIDDEN_SENTINEL="$$(printf 'NETHAMMER FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@n=$$(grep -ao 'PRADYOS_NETHAMMER_OK pid=[0-9]*' build/gatelogs/nethammer.log \
+	      | sort -u | wc -l); \
+	 test "$$n" -eq 2 || { echo "[nethammer] FAIL — $$n distinct pid(s) reported OK, need exactly 2;"; \
+	   echo "  one instance completing is a single-CPU run wearing a green result (DDR-990)."; \
+	   grep -a 'NETHAMMER' build/gatelogs/nethammer.log | tail -10; exit 1; }
+	@# DDR-990 §13 (CodeRabbit, PR #14). Two distinct PIDs prove two instances
+	@# FINISHED; they do not prove the two ever ran on different CPUs. QEMU_SMP=4
+	@# offers four vCPUs, it does not place threads. A two-CPU race probe whose
+	@# instances both ran on one CPU is a green gate testing nothing — exactly the
+	@# "false confidence in the race fix" the review named.
+	@python3 tools/qemu_runner/nethammer_check.py build/gatelogs/nethammer.log \
+	 || { grep -a 'PRADYOS_NETHAMMER_OK' build/gatelogs/nethammer.log; exit 1; }
+	@echo "[nethammer] PASS — 2 distinct pids on >=2 distinct CPUs, 40,000 connect/close pairs, conn_err=0"
+
 smoke-hkdf: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=hkdf \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_HKDF_VECTORS_OK')" \
@@ -2813,6 +3008,75 @@ smoke-evresize: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_EV_RESIZE_OK build/evresize.log || { echo "[evresize] FAIL — client did not honor the resize"; echo "--- press/geom lines (DDR-937) ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG_START|PRADYOS_RESIZE_REQ|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)|PRADYOS_EV_RESIZE_OK|PRADYOS_AGENT_TRIGGER' build/evresize.log || echo "(none)"; echo "--- tail 200 ---"; tail -200 build/evresize.log; exit 1; }
 	@echo "[evresize] PASS — $$(grep -a PRADYOS_EV_RESIZE_OK build/evresize.log | head -1)"
 
+# Layer-7 all-edges resize gate (DDR-997): DDR-718 could only resize from the
+# bottom-right corner, where the origin holds still and one event carries the
+# whole change. A W or N drag must BOTH move the origin and change the size,
+# through two non-atomic syscalls — that is why the item needed a DDR.
+#
+# Four drags in one boot, every start AND end point derived from the
+# compositor's own published handles (§INV.5): rzw= and rze= bracket the window,
+# so "drag the west edge past the 32 px floor" is expressed as "drag rzw to
+# rze's column" and holds at any window size.
+#
+# The load-bearing arms are W and N. They assert the FIXED-EDGE equality
+# (x+w == x0+w0), which is what §4's clamp-before-origin rule buys. A gate that
+# only checked "the width changed" would pass both the M1 mutant (resize without
+# the move) and the M2 mutant (clamp after deriving the origin) — DDR-997 §7.
+smoke-resizeall: $(IMG) fat-image sfs-image
+	@echo "[resizeall] all-edges resize gate: boot(GPU+tablet) + QMP E/S/W/N drags..."
+	@rm -f build/resizeall.log build/resizeall.log.skipped /tmp/prsall.sock
+	@# DDR-997 §13.4: the injection budget and the guest cap are ONE decision.
+	@# 4 arms x 3 rounds x (TRACK_WAIT_S 20 + FIX_WAIT_S 8) is 336s, against a
+	@# cap that must also cover a ~49s boot (measured, CI run 33247210328). The
+	@# old `timeout 180` therefore SIGTERM'd any run that retried, mid-arm,
+	@# which is how arm n came to print FAIL without ever executing. RZ_BUDGET_S
+	@# bounds injection and the cap is set above budget + boot + margin, so the
+	@# injector always gets to report instead of being killed. A healthy run is
+	@# unaffected -- every wait breaks early, so it still finishes in ~60s.
+	@RZ_ID=1 RZ_ARMS="e s w n" RZ_BUDGET_S=240 RZ_CAP_S=340 bash tools/qemu_runner/resize_inject.sh build/resizeall.log /tmp/prsall.sock PRADYOS_AMBIANCE_OK 2>&1 | tee build/resizeall.inject.log &
+	@timeout 340 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/prsall.sock,server,nowait \
+	    -serial file:build/resizeall.log -display none -no-reboot || true
+	@grep -q "PRADYOS_WM_GEOM id=1 .*rzw=" build/resizeall.log || { echo "[resizeall] FAIL — compositor never published the DDR-997 handles"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_COMPOSITOR_OK' build/resizeall.log | tail -5; exit 1; }
+	@# DDR-937: on failure, dump the press-dispatch lines. Every press branch
+	@# but the resize bands prints a distinct sentinel, so the log names which
+	@# branch swallowed the click instead of leaving "no FIX line" ambiguous.
+	@python3 tools/qemu_runner/resize_check.py build/resizeall.log 1 e s w n || { echo "--- injector narration (DDR-997 §13.4) ---"; cat build/resizeall.inject.log 2>/dev/null || echo "(none)"; echo "--- press/geom lines ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG|PRADYOS_RESIZE_(REQ|FIX)|PRADYOS_EV_RESIZE_OK|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)' build/resizeall.log || echo "(none)"; exit 1; }
+	@echo "[resizeall] PASS — E/S/W/N drags all held their fixed edge"
+
+# Layer-7 graceful-close gate (DDR-998): SYS_SURFACE_CLOSE destroys a surface
+# before its owner runs another instruction, so a close-box click gave the owner
+# no chance to flush state. The compositor now ASKS (SURF_EV_CLOSE, type 4) and
+# FORCES only after a bounded grace. Authority is unchanged — the owner may
+# delay within the grace, never veto.
+#
+# Two owners, two halves, one boot. ALPHA is courteous: it drains type 4, prints
+# PRADYOS_SURF_SAVED and closes itself (owner=1). BETA is not: its handler acts
+# only on types 1 and 2, so its type 4 is dropped and the compositor must force
+# it at the deadline (owner=0).
+#
+# Both clicks come from the compositor's published close= handle (§INV.5), and
+# both injector runs poll for their own outcome rather than clicking a fixed
+# number of times (DDR-910).
+smoke-surfclose: $(IMG) fat-image sfs-image
+	@echo "[surfclose] graceful-close gate: boot(GPU+tablet) + QMP close ALPHA then BETA..."
+	@rm -f build/surfclose.log /tmp/psfcl.sock
+	@( GEOM_TITLE=ALPHA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/surfclose.log /tmp/psfcl.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=0 owner=1"; \
+	   GEOM_TITLE=BETA  GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/surfclose.log /tmp/psfcl.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=1 owner=0" ) &
+	@timeout 180 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/psfcl.sock,server,nowait \
+	    -serial file:build/surfclose.log -display none -no-reboot || true
+	@python3 tools/qemu_runner/surfclose_check.py build/surfclose.log || { echo "--- close/geom lines ---"; grep -aE "PRADYOS_WM_GEOM|PRADYOS_WM_CLOSE|PRADYOS_SURF_SAVED|PRADYOS_MOUSE_OK|PRADYOS_SURFACE_GONE" build/surfclose.log || echo "(none)"; exit 1; }
+	@echo "[surfclose] PASS — ALPHA saved then self-closed; BETA was forced at the deadline"
+
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
 # frames; the compositor announces each ambiance's first settled backdrop and
@@ -2946,13 +3210,39 @@ smoke-flip: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf '[gpu] page-flip OK\nPRADYOS_COMPOSITOR_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
-# Window-cycling gate (DDR-720): Tab is a compositor hotkey — each press raises
-# the bottom-most visible window (focus + top). Two Tabs must cycle two
-# DIFFERENT windows (A and B swap as each raise buries the other).
+# Window-cycling gate (DDR-720, rebound by DDR-995): ALT+Tab is the compositor
+# hotkey; a bare Tab belongs to the focused application.
+#
+# THREE arms, and arm C is the one that makes this non-vacuous. DDR-720's gate
+# injected a bare `tab` and asserted the cycle — after DDR-995 that is exactly
+# the WRONG behaviour, so the assertion is kept verbatim and re-pointed at
+# `alt-tab`, with two arms added for what could not previously be expressed:
+#
+#   A  alt-tab twice -> >=2 PRADYOS_WM_CYCLE over >=2 distinct ids  (DDR-720's
+#      assertion, unchanged except for the key).
+#   B  a plain tab reaches the focused app (PRADYOS_FOCUS_KEY code=9). Under
+#      DDR-720 the compositor swallowed every Tab, so NO application could ever
+#      receive one — this arm cannot pass on the old code.
+#   C  the plain tab does NOT also cycle. Without C, a compositor that bound
+#      BOTH Tab and Alt+Tab passes A and B together and the defect survives in
+#      half. DDR-995 §5 M1 is exactly that mutant.
+#
+# Ordering is load-bearing: alt-tab FIRST, then the plain tab, so the cycle
+# count can be compared before and after (arm C is a delta, not an absolute).
 smoke-alttab: $(IMG) fat-image sfs-image
-	@echo "[alttab] Tab window-cycling gate (GPU + sendkey tab -> WM_CYCLE)..."
-	@rm -f build/alttab.log /tmp/palttab.sock
-	@bash tools/qemu_runner/input_inject.sh build/alttab.log /tmp/palttab.sock PRADYOS_FOCUS "tab" &
+	@echo "[alttab] Alt+Tab cycling + plain-Tab-to-focus gate (DDR-995)..."
+	@# TWO SEQUENTIAL BOOTS, and that is deliberate. The obvious one-boot form —
+	@# inject "alt-tab alt-tab tab" and check the cycles all pre-date the Tab —
+	@# does NOT work: input_inject.sh repeats the whole key sequence 4 times
+	@# (`for _round in range(4)`), so after round 1 a plain Tab always precedes
+	@# the next Alt+Tab and the ordering carries no information. Splitting the
+	@# runs turns arm C from a fragile delta into an absolute: in a boot where
+	@# ONLY a plain Tab was ever pressed, the correct number of window cycles is
+	@# exactly zero. Never concurrent (§NON-NEGOTIABLE 12) — run 2 starts after
+	@# run 1 exits.
+	@rm -f build/alttab.log build/alttab-plain.log /tmp/palttab.sock /tmp/palttab2.sock
+	@echo "[alttab] run 1/2 — Alt+Tab (arm A)"
+	@bash tools/qemu_runner/input_inject.sh build/alttab.log /tmp/palttab.sock PRADYOS_FOCUS "alt-tab" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -2962,9 +3252,31 @@ smoke-alttab: $(IMG) fat-image sfs-image
 	    -serial file:build/alttab.log -display none -no-reboot || true
 	@n=$$(grep -ac PRADYOS_WM_CYCLE build/alttab.log || true); \
 	 d=$$(grep -ao 'PRADYOS_WM_CYCLE id=[0-9]*' build/alttab.log | sort -u | wc -l); \
-	 [ "$$n" -ge 2 ] || { echo "[alttab] FAIL — fewer than 2 cycles ($$n)"; tail -20 build/alttab.log; exit 1; }; \
-	 [ "$$d" -ge 2 ] || { echo "[alttab] FAIL — cycling did not rotate windows"; tail -20 build/alttab.log; exit 1; }; \
-	 echo "[alttab] PASS — $$n cycles over $$d windows"
+	 [ "$$n" -ge 2 ] || { echo "[alttab] FAIL — arm A: fewer than 2 Alt+Tab cycles ($$n)"; tail -20 build/alttab.log; exit 1; }; \
+	 [ "$$d" -ge 2 ] || { echo "[alttab] FAIL — arm A: cycling did not rotate windows"; tail -20 build/alttab.log; exit 1; }; \
+	 echo "[alttab] arm A PASS — $$n cycles over $$d windows"
+	@echo "[alttab] run 2/2 — plain Tab (arms B + C)"
+	@bash tools/qemu_runner/input_inject.sh build/alttab-plain.log /tmp/palttab2.sock PRADYOS_FOCUS "tab" &
+	@timeout 120 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci \
+	    -monitor unix:/tmp/palttab2.sock,server,nowait \
+	    -serial file:build/alttab-plain.log -display none -no-reboot || true
+	@# Arm B: DDR-720 swallowed every Tab unconditionally, so no application on
+	@# the system could ever receive one. This cannot pass on the old compositor.
+	@grep -qa 'PRADYOS_FOCUS_KEY .*code=9$$' build/alttab-plain.log || { \
+	   echo "[alttab] FAIL — arm B: a plain Tab never reached the focused app"; \
+	   grep -a PRADYOS_FOCUS_KEY build/alttab-plain.log | tail -5; exit 1; }
+	@echo "[alttab] arm B PASS — plain Tab delivered to focus"
+	@# Arm C: only a plain Tab was pressed in this boot, so zero cycles. Without
+	@# it, a compositor binding BOTH Tab and Alt+Tab passes A and B together and
+	@# the defect survives in half (DDR-995 §5 M1 is exactly that mutant).
+	@c=$$(grep -ac PRADYOS_WM_CYCLE build/alttab-plain.log || true); \
+	 [ "$$c" -eq 0 ] || { echo "[alttab] FAIL — arm C: plain Tab ALSO cycled ($$c times); it belongs to the focused app only"; exit 1; }; \
+	 echo "[alttab] arm C PASS — plain Tab did not cycle"
+	@echo "[alttab] PASS — all three arms"
 
 # Layer-7 named-agent panel gate (DDR-707): the compositor renders the 8 named
 # agent cards and reports the roster; the AETHER daemon's spawn lights KRYOS

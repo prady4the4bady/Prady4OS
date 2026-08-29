@@ -634,3 +634,96 @@ so that class of silent failure is a named red.
 
 `docs/AETHER_MASTER_FEATURES.md` is deliberately unchanged: neither B#3 nor
 OPEN-2 is a feature it tracks.
+
+---
+
+## DDR-991/992/993 — Group E input foundation, and a review that found what the gates could not
+
+**Shipped:** `SYS_KEY_POLL` (NSI 96), extended-scancode decode, modifier
+tracking, Super+M sovereign toggle, and the paired-modifier fix.
+**Gates:** `smoke-modkeys` (six ring-3 arms + one kernel arm), `smoke-superkey`.
+
+DDR-991 lifted two limits in the DDR-703 driver that had to move together: the
+missing `0xE0` case (an extended key's prefix has bit 7 set, so it was swallowed
+as a break code and the following byte decoded as an unprefixed make — right-Ctrl
+delivered a bare left-Ctrl) and the `sc >= 0x40` cap that dropped every function
+key and arrow. DDR-992 added the Super+M toggle and, with it, the rule that a
+chord must not also deliver text on NSI 46.
+
+**DDR-993 is the part worth reading.** CodeRabbit's review of PR #14 found a real
+defect neither DDR's gate could see: `mods_set` wrote the aggregate bit
+unconditionally, so releasing one side of a paired modifier cleared it while the
+other side was still held. For Shift that is a wrong glyph. For Ctrl/Alt/Meta it
+disables DDR-992's chord suppression — so **a chord starts typing text again**,
+the exact regression DDR-992 existed to prevent, one commit after it landed.
+
+Two lessons, both measured rather than argued:
+
+1. **DDR-991 §6 claimed arm E was "the arm that matters most … a latched-modifier
+   regression passes every other arm here."** True of the regression it imagined
+   (a modifier stuck down), false of the one that shipped. Arm E presses one Ctrl
+   key, so the buggy line and the correct line agree. The mutation check passed
+   against a defect it could not express. **Measured:** both DDR-993 mutants
+   still print `PRADYOS_MODKEYS_OK` — all six ring-3 arms pass on a broken
+   kernel.
+
+2. **The missing arm was not unwritten, it was UNWRITABLE.** QEMU's HMP `sendkey`
+   emits a press and its release as one indivisible action; two keys of a pair
+   held at once is not a sequence it can express. The fix was structural: split
+   the decode from the port read (`ps2kbd_feed`), and assert it in ring 0.
+
+Fix: only the eight physical keys carry state; the `KMOD_*` aggregate is
+**recomputed** from them on every edge, so it cannot disagree with its sides by
+construction. Separately, `key_ev.code` now comes from the unshifted map — it had
+carried the shifted glyph, so one physical key's make and break disagreed
+whenever Shift was released between them.
+
+Mutation-checked both ways: M1 (aggregate reverted) fails at selftest step 3,
+M2 (code identity reverted) at step 11, gate exit 2 in both cases; three distinct
+kernel hashes so no run measured a stale binary.
+
+`docs/AETHER_MASTER_FEATURES.md` is deliberately unchanged: the input driver is
+Layer 7 plumbing, not an AETHER feature it tracks.
+
+---
+
+## DDR-994 — the instrument for OPEN-1 route 1
+
+**Shipped:** `yield_stall_note()`, three instrumented yield-spins, `smoke-yieldstall`
+(shard 9), `[yieldstall]` in `GLOBAL_FORBIDDEN`. Gate count 152 -> 153.
+
+OPEN-1 route 1 is a **hang with no panic**, and every instrument this repo had was
+keyed to something being printed or something faulting. `[apfreeze]` (DDR-981)
+triggers on "this cpu stopped taking interrupts"; in route 1 the cpu is fine —
+`g_ticks` advances, other threads run, one thread waits forever — so that
+detector is structurally blind to it.
+
+`yield()` has 26 call sites. Five are ring-3 reachable; `sys_yield`
+(`syscall.c:155`) is a bare call that returns immediately, not a wait. The other
+**four are spin-waits and all four are unbounded**. DDR-981 fixed the interrupt masking *inside* `yield()` but never
+bounded the spin. `mnt_lock` (`vfs/vfs.c:27`) sits directly on the `vfs_read`
+path where the captures hang.
+
+**Three sites instrumented, one deliberately not.** The console read
+(`sys_io.c:293`) waits for a keystroke and is *legitimately* unbounded — PRISM
+sits in it for the whole of every boot. A duration-based watchdog would fire in
+all 153 gates on day one and be switched off within the day. The discriminator
+is what is waited on, not how long: three sites wait on state owned by another
+thread in this system; the console waits on the outside world. That asymmetry is
+also why this cannot be a hook inside `yield()`, which does not know its caller.
+
+**It reports, it does not repair.** There is a named mechanism but no captured
+artefact of it firing, so §NON-NEGOTIABLE 3 forbids changing locking semantics.
+Bailing out of `mnt_lock` on a deadline would turn a hang into a silent `-EIO` on
+a live mount — it would look like a fix and destroy the evidence.
+
+**Mutation-checked, and the mutants taught something.** Both M1 (call removed
+from `mnt_lock`) and M2 (threshold raised past the arm) kill arm B and leave arm
+A green. That asymmetry is the design working — arm A unit-tests the reporter,
+arm B tests the wiring — and it is exactly the vacuity the two-arm structure was
+written against: **an instrument wired to nothing still passes arm A.** DDR-994
+§6 had predicted M2 would fail both arms; that prediction was wrong about its own
+design and is corrected in place.
+
+**First measured denominator for a yield-spin:** `mnt_lock` turns over
+≈127,344 spins / 500 ticks ≈ **255 spins per tick**.

@@ -19,6 +19,13 @@
 #define SYS_FB_MAP      44
 #define SYS_FB_FLUSH    45
 #define SYS_INPUT_POLL  46
+#define SYS_KEY_POLL    96          /* DDR-991: structured key events */
+
+/* DDR-991 ABI — must match kernel/drivers/input/ps2kbd.h. */
+#define KMOD_ALT   0x04u          /* DDR-995: Alt+Tab window cycling */
+#define KMOD_META  0x08u
+#define KEY_TAB    0x09u
+struct key_ev { unsigned char code, mods, down, ascii; };
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
@@ -33,7 +40,13 @@
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; int wheel; };   /* DDR-725 */
-struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; char title[16]; };
+/* DDR-998: `gen` APPENDED. This struct is declared TWICE — here and at
+ * kernel/syscall/sys_surface.c — and SYS_SURFACE_POLL copies out
+ * count * sizeof(struct surface_info) into THIS array, so a size disagreement
+ * silently overruns the buffer below rather than failing to build. Both
+ * declarations must change in the SAME commit (§INV.13's PT_HI lesson). */
+struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; char title[16];
+                      unsigned gen; };
 /* DDR-735 (kernel-mirrored): counts are retained post-mortem; pid stays set for
  * a spawned-then-exited slot (state 0), so "ran, now done" is renderable. */
 struct agent_metric { unsigned pid, state; unsigned long mem_used, actions, run_ticks, dispatches; };
@@ -597,6 +610,24 @@ static void draw_str_inter(const char *s, int x, int y,
 
 #define TITLEBAR  18
 #define CLOSEBOX  12                 /* close box size; inset 4 px from the right */
+
+/* DDR-997: resize handles on every edge, not just the bottom-right corner.
+ * 14 px is DDR-718's corner size, kept so the hit target does not change size
+ * between the old handle and the new ones. */
+/* DDR-998: ask the owner to close, then force. Both clocks must expire.
+ * Seconds alone are too coarse (a click just before a boundary would grant a
+ * grace of nearly zero); frames alone are scheduling-dependent, which is what
+ * DDR-911 removed from surfacetest.c after item 16 changed it. */
+#define SURF_EV_CLOSE        4
+#define CLOSE_GRACE_SECS     2
+#define CLOSE_GRACE_FRAMES   64
+#define CLOSE_PENDING_MAX    8
+
+#define RZBAND    14
+#define RZ_N      0x1
+#define RZ_S      0x2
+#define RZ_W      0x4
+#define RZ_E      0x8
 static void draw_window(const unsigned char *sva, const struct surface_info *s) {
     /* DDR-724: decorations — a soft drop shadow (right+bottom strips, blended)
      * and a 1px frame: accent-colored when focused, neutral gray otherwise. */
@@ -914,6 +945,20 @@ int main(void) {
     int focus_id = -1, last_focus = -2;       /* focused surface (DDR-708) */
     int dragging = 0, drag_id = -1, drag_ox = 0, drag_oy = 0;   /* DDR-710 */
     int resizing = 0, rs_id = -1, rs_bx = 0, rs_by = 0;         /* DDR-718 */
+    /* DDR-997: the drag's ORIGINAL geometry plus which edges it grabbed.
+     * A W or N drag derives both the new size and the new origin from the
+     * edge that must hold still, so w0/h0 are needed at commit, not just
+     * the origin DDR-718 recorded. */
+    int rs_w0 = 0, rs_h0 = 0, rs_edge = 0;
+    /* DDR-997 §9.8: the press point, and a one-shot witness that the
+     * compositor has OBSERVED the pointer somewhere else. SYS_MOUSE_POLL
+     * reads current state rather than an event queue (DDR-941), so a gate
+     * that releases after a fixed sleep is betting the compositor polled
+     * in between. In CI it did not, and every arm committed at its own
+     * START coordinate. One line per drag turns that bet into a
+     * precondition the injector can wait for — DDR-910's rule, applied to
+     * the drag phase instead of the click. */
+    int rs_px = 0, rs_py = 0, rs_moved = 0;
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     int metrics_said = 0;                    /* DDR-737: one-shot panel witness */
     /* DDR-968: the witness above is gated on pid!=0 && dispatches>=1, and when
@@ -922,6 +967,30 @@ int main(void) {
      * that predicate: 24 lines max, 128 frames apart. A green boot arms the
      * witness in the first frames and emits at most one. */
     unsigned wit_frames = 0, wit_said = 0;
+    /* DDR-997: the geometry block below was republished only when the surface
+     * COUNT or the focus changed, so after a move or a resize the last
+     * PRADYOS_WM_GEOM line described a window that had since moved. That was
+     * survivable while the only gate reading it (smoke-evresize) did one drag
+     * and stopped; smoke-resizeall drives four in a row and needs the handles
+     * refreshed between them. Keep the last published rect per slot and treat a
+     * change as a publish trigger — exact, not hashed, because a hash collision
+     * here would silently republish nothing. */
+    /* DDR-998: close requests awaiting the owner. (id, gen) not id alone — a
+     * slot freed inside the grace can be re-taken by a DIFFERENT process, and
+     * forcing on id alone would destroy a window that merely inherited the
+     * number (§NON-NEGOTIABLE 18, one level up). */
+    int  cp_id[CLOSE_PENDING_MAX];
+    unsigned cp_gen[CLOSE_PENDING_MAX];
+    long cp_secs[CLOSE_PENDING_MAX];
+    unsigned cp_frame[CLOSE_PENDING_MAX];
+    int  cp_n = 0;
+    unsigned cp_frames = 0;               /* compositor frames, for the floor */
+    short pub_x[16], pub_y[16];
+    unsigned short pub_w[16], pub_h[16];
+    for (int i = 0; i < 16; i++) {          /* impossible values: force pass 1 */
+        pub_x[i] = pub_y[i] = -32768;
+        pub_w[i] = pub_h[i] = 0xFFFF;
+    }
     for (;;) {
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
         int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
@@ -989,7 +1058,18 @@ int main(void) {
         int cur_focus = -1;
         for (long i = 0; i < ns; i++) if (surfs[i].focused) cur_focus = (int)surfs[i].id;
         focus_id = cur_focus;
-        if (ns != composited || cur_focus != last_focus) { /* grew, shrank, or focus moved */
+        int geom_moved = 0;                            /* DDR-997 */
+        for (long i = 0; i < ns && i < 16; i++) {
+            if (pub_x[i] != (short)surfs[i].x || pub_y[i] != (short)surfs[i].y ||
+                pub_w[i] != (unsigned short)surfs[i].w ||
+                pub_h[i] != (unsigned short)surfs[i].h) {
+                pub_x[i] = (short)surfs[i].x;  pub_y[i] = (short)surfs[i].y;
+                pub_w[i] = (unsigned short)surfs[i].w;
+                pub_h[i] = (unsigned short)surfs[i].h;
+                geom_moved = 1;
+            }
+        }
+        if (ns != composited || cur_focus != last_focus || geom_moved) { /* grew, shrank, moved, or focus */
             render((int)nsi(SYS_GET_MODE, 0, 0, 0));
             for (long i = 0; i < ns; i++) {                 /* z-order: bottom..top */
                 if (g_min_mask & (1u << surfs[i].id)) continue;          /* DDR-717 */
@@ -1058,11 +1138,32 @@ int main(void) {
                  * name (${geom##*dg=}) and mouse_inject.sh scans tokens with
                  * startswith(field + "="), so a trailing field is safe for both;
                  * "mx=" also cannot prefix-collide with "min=". */
-                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d rz=%d,%d dg=%d,%d mx=%d,%d\n",
+                /* DDR-997 §5: publish the seven NEW resize handles the same
+                 * way rz= publishes the SE corner — one field per handle, each
+                 * the CENTRE of its hit region, derived from the same
+                 * expressions the hit-test uses so the emitted target cannot
+                 * drift from what is accepted. `rz=` keeps meaning SE, so every
+                 * existing parser is untouched.
+                 * APPENDED, never inserted, for the reason recorded above; and
+                 * none of the new names contains the substring "rz=" (rzn=,
+                 * rzs=, rzw=, rze=, rznw=, rzne=, rzsw= all break it), so
+                 * drag_inject.sh's ${geom##*rz=} still isolates the SE field. */
+                int gw = (int)surfs[gi].w, gh = (int)surfs[gi].h;
+                int gy0 = surfs[gi].y;
+                int gmidx = gtx + gw / 2, gmidy = gy0 + gh / 2;
+                int gl = gtx + RZBAND / 2, gr = gtx + gw - RZBAND / 2;
+                int gt = gy0 + RZBAND / 2, gb2 = gy0 + gh - RZBAND / 2;
+                printf("PRADYOS_WM_GEOM id=%u title=%s close=%d,%d min=%d,%d rz=%d,%d dg=%d,%d mx=%d,%d "
+                       "rzn=%d,%d rzs=%d,%d rzw=%d,%d rze=%d,%d "
+                       "rznw=%d,%d rzne=%d,%d rzsw=%d,%d\n",
                        surfs[gi].id, surfs[gi].title[0] ? surfs[gi].title : "-",
                        tab_x(gcx), tab_y(gby), tab_x(gmx), tab_y(gby),
                        tab_x(grx), tab_y(gry), tab_x(gdx), tab_y(gdy),
-                       tab_x(gmaxbox + CLOSEBOX / 2), tab_y(gby));
+                       tab_x(gmaxbox + CLOSEBOX / 2), tab_y(gby),
+                       tab_x(gmidx), tab_y(gt),   tab_x(gmidx), tab_y(gb2),
+                       tab_x(gl),    tab_y(gmidy), tab_x(gr),   tab_y(gmidy),
+                       tab_x(gl),    tab_y(gt),   tab_x(gr),    tab_y(gt),
+                       tab_x(gl),    tab_y(gb2));
             }
             for (long i = composited; i < ns; i++)
                 printf("PRADYOS_SURFACE_OK %u\n", surfs[i].id);
@@ -1073,6 +1174,49 @@ int main(void) {
             fflush(stdout);
             composited = ns;
             last_focus = cur_focus;
+        }
+        /* DDR-992: Super+M — a physical sovereign-mode TOGGLE. Read the chord
+         * stream before the byte stream: the driver no longer emits text for a
+         * non-Shift chord (DDR-992 §2), so these are disjoint and Super+M can
+         * no longer be undone by the plain-'m' branch below. */
+        {
+            struct key_ev kev[16];
+            long ne = nsi(SYS_KEY_POLL, (long)kev, 16, 0);
+            for (long i = 0; i < ne; i++) {
+                if (!kev[i].down)
+                    continue;
+                /* DDR-995: Alt+Tab cycles windows. DDR-720 bound this to a
+                 * BARE Tab on the byte stream, which meant no application on
+                 * this system could ever receive a Tab character — the branch
+                 * was unconditional and terminal, so it never reached the focus
+                 * routing below. The byte stream carries no modifier state, so
+                 * the chord could not be told from the keystroke until DDR-991
+                 * added this ring; DDR-992 then stopped a non-Shift chord from
+                 * emitting text at all, which makes the two cases disjoint at
+                 * the source rather than merely distinguishable here. */
+                if (kev[i].code == KEY_TAB && (kev[i].mods & KMOD_ALT)) {
+                    int low_id = -1;
+                    int low_z = 0x7FFFFFFF;
+                    for (long k = 0; k < ns; k++) {
+                        if (g_min_mask & (1u << surfs[k].id)) continue;   /* DDR-717 */
+                        if (surfs[k].z < low_z) { low_z = surfs[k].z; low_id = (int)surfs[k].id; }
+                    }
+                    if (low_id >= 0) {
+                        nsi(SYS_SURFACE_RAISE, low_id, 0, 0);
+                        printf("PRADYOS_WM_CYCLE id=%d\n", low_id);
+                        fflush(stdout);
+                        recompose_scene();
+                    }
+                }
+                if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
+                    int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
+                    int nxt = cur ? 0 : 1;
+                    nsi(SYS_SET_MODE, nxt, 0, 0);
+                    printf("PRADYOS_SUPERKEY_TOGGLE from=%d to=%d\n", cur, nxt);
+                    fflush(stdout);
+                    render_and_announce(nxt);
+                }
+            }
         }
         long n = nsi(SYS_INPUT_POLL, (long)keys, (long)sizeof keys, 0);
         for (long i = 0; i < n; i++) {
@@ -1107,24 +1251,6 @@ int main(void) {
                 g_cad_pre_said = 0;
                 printf("PRADYOS_CADENCE_TEST\n");
                 fflush(stdout);
-            }
-            else if (c == '\t') {                            /* DDR-720: cycle windows —
-                                                              * raise the bottom-most
-                                                              * visible surface (Tab is a
-                                                              * compositor hotkey, not
-                                                              * forwarded to the focus) */
-                int low_id = -1;
-                int low_z = 0x7FFFFFFF;
-                for (long i = 0; i < ns; i++) {
-                    if (g_min_mask & (1u << surfs[i].id)) continue;
-                    if (surfs[i].z < low_z) { low_z = surfs[i].z; low_id = (int)surfs[i].id; }
-                }
-                if (low_id >= 0) {
-                    nsi(SYS_SURFACE_RAISE, low_id, 0, 0);
-                    printf("PRADYOS_WM_CYCLE id=%d\n", low_id);
-                    fflush(stdout);
-                    recompose_scene();
-                }
             }
             else if (focus_id >= 0)                          /* DDR-708: route to focus */
                 nsi(SYS_SURFACE_SENDKEY, focus_id, (long)c, 0);
@@ -1206,10 +1332,37 @@ int main(void) {
                                 break;
                             }
                             if (close_box_hit(&sf[i], ms.x, ms.y)) {   /* DDR-715 */
-                                nsi(SYS_SURFACE_CLOSE, (long)sf[i].id, 0, 0);
-                                printf("PRADYOS_WM_CLOSE id=%u\n", sf[i].id);
-                                fflush(stdout);
-                                closed = 1;                  /* shrink detector recomposites */
+                                /* DDR-998: ASK first. The owner gets a bounded
+                                 * grace to flush state and close itself; the
+                                 * retire pass below forces it if it does not.
+                                 * Authority is unchanged — the owner may delay
+                                 * within the grace, never veto. */
+                                int dup = 0;
+                                for (int q = 0; q < cp_n; q++)
+                                    if (cp_id[q] == (int)sf[i].id) dup = 1;
+                                if (!dup && cp_n < CLOSE_PENDING_MAX) {
+                                    nsi(SYS_SURFACE_SENDEV, (long)sf[i].id,
+                                        SURF_EV_CLOSE, 0);
+                                    cp_id[cp_n]    = (int)sf[i].id;
+                                    cp_gen[cp_n]   = sf[i].gen;
+                                    cp_secs[cp_n]  = nsi(SYS_CLOCK, 0, 0, 0);
+                                    cp_frame[cp_n] = cp_frames;
+                                    cp_n++;
+                                    printf("PRADYOS_WM_CLOSE_REQ id=%u gen=%u\n",
+                                           sf[i].id, sf[i].gen);
+                                    fflush(stdout);
+                                } else if (!dup) {
+                                    /* Table full: fall back to DDR-715's
+                                     * immediate close rather than ignoring the
+                                     * click. A desktop that stops responding to
+                                     * its close box is worse than a discourteous
+                                     * one. */
+                                    nsi(SYS_SURFACE_CLOSE, (long)sf[i].id, 0, 0);
+                                    printf("PRADYOS_WM_CLOSE id=%u owner=0 full=1\n",
+                                           sf[i].id);
+                                    fflush(stdout);
+                                    closed = 1;
+                                }
                                 break;
                             }
                             hit = (int)sf[i].id;
@@ -1225,17 +1378,41 @@ int main(void) {
                         printf("PRADYOS_DRAG_START id=%d\n", hit);
                         fflush(stdout);
                     } else {
-                        /* DDR-718: bottom-right 14x14 corner starts a resize drag. */
+                        /* DDR-718: bottom-right 14x14 corner starts a resize drag.
+                         * DDR-997: so does any other edge. Eight regions, all
+                         * RZBAND px thick — N/S/E/W strips and the four corners
+                         * where two strips overlap. SE is unchanged bit-for-bit
+                         * (RZ_S|RZ_E reduces to exactly the old predicate), which
+                         * matters because it is the one path with a green gate.
+                         * This runs only when the title-bar loop above found no
+                         * hit, so move keeps priority over resize on an ambiguous
+                         * pixel (DDR-997 §2) — the M3 mutation is that ordering. */
                         int rz = -1;
                         for (long i = n - 1; i >= 0; i--) {
                             if (g_min_mask & (1u << sf[i].id)) continue;
-                            int cx0 = sf[i].x + (int)sf[i].w - 14, cy0 = sf[i].y + (int)sf[i].h - 14;
-                            if (ms.x >= cx0 && ms.x < sf[i].x + (int)sf[i].w &&
-                                ms.y >= cy0 && ms.y < sf[i].y + (int)sf[i].h) {
-                                rz = (int)sf[i].id;
-                                rs_bx = sf[i].x; rs_by = sf[i].y;
-                                break;
-                            }
+                            int rx = sf[i].x, ry = sf[i].y;
+                            int rw = (int)sf[i].w, rh = (int)sf[i].h;
+                            if (ms.x < rx || ms.x >= rx + rw ||
+                                ms.y < ry || ms.y >= ry + rh) continue;
+                            int m = 0;
+                            if (ms.x <  rx + RZBAND)      m |= RZ_W;
+                            if (ms.x >= rx + rw - RZBAND) m |= RZ_E;
+                            if (ms.y <  ry + RZBAND)      m |= RZ_N;
+                            if (ms.y >= ry + rh - RZBAND) m |= RZ_S;
+                            /* A window narrower than 2*RZBAND has overlapping
+                             * strips; take the nearer edge rather than both,
+                             * which would otherwise pin the size to the clamp. */
+                            if ((m & RZ_W) && (m & RZ_E))
+                                m &= ~((ms.x - rx < rw / 2) ? RZ_E : RZ_W);
+                            if ((m & RZ_N) && (m & RZ_S))
+                                m &= ~((ms.y - ry < rh / 2) ? RZ_S : RZ_N);
+                            if (!m) continue;                /* interior: plain click */
+                            rz = (int)sf[i].id;
+                            rs_bx = rx; rs_by = ry;
+                            rs_w0 = rw; rs_h0 = rh;
+                            rs_edge = m;
+                            rs_px = ms.x; rs_py = ms.y; rs_moved = 0;
+                            break;
                         }
                         if (rz >= 0) {
                             resizing = 1; rs_id = rz;
@@ -1252,6 +1429,11 @@ int main(void) {
                 nsi(SYS_SURFACE_MOVE, drag_id, ms.x - drag_ox, ms.y - drag_oy);
                 recompose_drag(ms.x, ms.y);
             } else if (resizing && ms.buttons) {             /* resize-drag (DDR-718) */
+                if (!rs_moved && (ms.x != rs_px || ms.y != rs_py)) {
+                    rs_moved = 1;                            /* DDR-997 §9.8 */
+                    printf("PRADYOS_RESIZE_TRACK id=%d x=%d y=%d\n", rs_id, ms.x, ms.y);
+                    fflush(stdout);
+                }
                 recompose_drag(ms.x, ms.y);                  /* cursor tracks the corner */
             } else if (up && dragging) {                     /* drop */
                 dragging = 0;
@@ -1260,15 +1442,112 @@ int main(void) {
                 recompose_drag(ms.x, ms.y);
             } else if (up && resizing) {                     /* resize commit (DDR-718) */
                 resizing = 0;
-                int neww = ms.x - rs_bx, newh = ms.y - rs_by;
+                int x0 = rs_bx, y0 = rs_by, w0 = rs_w0, h0 = rs_h0;
+                int newx = x0, newy = y0, neww = w0, newh = h0;
+                /* DDR-997 §4: derive the SIZE from the edge that must hold
+                 * still, clamp it, and only THEN place the origin. Clamping
+                 * after deriving the origin leaves the origin where the
+                 * unclamped drag put it, so a window dragged past the 32 px
+                 * floor keeps sliding with its width pinned and the edge
+                 * separates from the pointer. That is the M2 mutation. */
+                if (rs_edge & RZ_E) neww = ms.x - x0;
+                if (rs_edge & RZ_S) newh = ms.y - y0;
+                if (rs_edge & RZ_W) neww = (x0 + w0) - ms.x;
+                if (rs_edge & RZ_N) newh = (y0 + h0) - ms.y;
                 if (neww < 32) neww = 32; if (neww > 512) neww = 512;
                 if (newh < 32) newh = 32; if (newh > 512) newh = 512;
+                if (rs_edge & RZ_W) newx = (x0 + w0) - neww;
+                if (rs_edge & RZ_N) newy = (y0 + h0) - newh;
+                /* DDR-997 §3: MOVE first, then resize. The two are separate
+                 * syscalls and the pair is not atomic; move-then-resize leaves
+                 * the window at its new position with its old size for one
+                 * frame, which is the shape a plain move already produces.
+                 * Resize-then-move would first grow AWAY from the pointer. */
+                if (newx != x0 || newy != y0) {
+                    nsi(SYS_SURFACE_MOVE, rs_id, newx, newy);
+                    printf("PRADYOS_DRAG id=%d x=%d y=%d\n", rs_id, newx, newy);
+                }
                 nsi(SYS_SURFACE_SENDEV, rs_id, 1, ((long)neww << 16) | (long)newh);
                 printf("PRADYOS_RESIZE_REQ id=%d w=%d h=%d\n", rs_id, neww, newh);
+                /* Re-poll so the line below reports the surface's ACTUAL origin
+                 * rather than the origin this code intended. Without this the
+                 * M1 mutation — drop the MOVE, keep everything else — is
+                 * invisible: newx is still computed and would still be printed,
+                 * so the gate would pass on a window that never moved. That is
+                 * the same decorative-arm mistake DDR-996's first arm B made.
+                 * SYS_SURFACE_MOVE is synchronous, so x/y here are settled;
+                 * w/h stay the REQUESTED values because the client honours the
+                 * resize asynchronously (that round-trip is smoke-evresize's
+                 * job). Mixing the two is deliberate and is exactly the
+                 * property under test: the origin actually moved to must
+                 * complement the width actually asked for. */
+                struct surface_info chk[16];
+                long cn = nsi(SYS_SURFACE_POLL, (long)chk, 16, 0);
+                int obsx = -1, obsy = -1;      /* not found -> fails the assert */
+                for (long ci = 0; ci < cn; ci++)
+                    if ((int)chk[ci].id == rs_id) { obsx = chk[ci].x; obsy = chk[ci].y; }
+                /* DDR-997 §6: the load-bearing assertion is the FIXED-EDGE
+                 * equality (x+w == x0+w0 for a W drag), not "width changed" —
+                 * a width-only check passes on a broken origin. Publish both
+                 * the before and after geometry on one line so the gate can
+                 * assert the invariant without reconstructing it from
+                 * elsewhere. Separate sentinel, so RESIZE_REQ's existing
+                 * parsers are untouched. */
+                printf("PRADYOS_RESIZE_FIX id=%d edge=%d x0=%d y0=%d w0=%d h0=%d "
+                       "x=%d y=%d w=%d h=%d\n",
+                       rs_id, rs_edge, x0, y0, w0, h0, obsx, obsy, neww, newh);
                 fflush(stdout);
                 recompose_scene();                           /* client recommits async */
             }
             prev_btn = ms.buttons;
+        }
+        /* DDR-998: retire pending close requests. Three outcomes, and the third
+         * is the one that needs the generation counter. */
+        cp_frames++;
+        for (int q = 0; q < cp_n; ) {
+            int live = -1;
+            for (long k = 0; k < ns; k++)
+                if ((int)surfs[k].id == cp_id[q]) { live = (int)k; break; }
+            int drop = 0;
+            if (live < 0) {
+                /* Gone: the owner honoured the request and closed itself. */
+                printf("PRADYOS_WM_CLOSE id=%d owner=1\n", cp_id[q]);
+                fflush(stdout);
+                drop = 1;
+            } else if (surfs[live].gen != cp_gen[q]) {
+                /* The slot was freed and RE-TAKEN inside the grace. The window
+                 * standing here now is a different tenancy that merely
+                 * inherited the id; forcing on the id alone would destroy an
+                 * innocent process's window. Drop the request and say so once —
+                 * silence here would hide a real lifecycle event. */
+                printf("PRADYOS_WM_CLOSE_STALE id=%d was=%u now=%u\n",
+                       cp_id[q], cp_gen[q], surfs[live].gen);
+                fflush(stdout);
+                drop = 1;
+            } else {
+                long now = nsi(SYS_CLOCK, 0, 0, 0);
+                long el  = now - cp_secs[q];
+                if (el < 0) el += 24 * 3600;             /* midnight wrap */
+                if (el >= CLOSE_GRACE_SECS &&
+                    (cp_frames - cp_frame[q]) >= CLOSE_GRACE_FRAMES) {
+                    nsi(SYS_SURFACE_CLOSE, (long)cp_id[q], 0, 0);
+                    /* Denominator, not just a verdict (§NON-NEGOTIABLE 17):
+                     * how much grace the owner actually burned without using. */
+                    printf("PRADYOS_WM_CLOSE id=%d owner=0 secs=%ld frames=%u\n",
+                           cp_id[q], el, cp_frames - cp_frame[q]);
+                    fflush(stdout);
+                    drop = 1;
+                }
+            }
+            if (drop) {
+                for (int r = q; r < cp_n - 1; r++) {
+                    cp_id[r]  = cp_id[r + 1];  cp_gen[r]   = cp_gen[r + 1];
+                    cp_secs[r] = cp_secs[r + 1]; cp_frame[r] = cp_frame[r + 1];
+                }
+                cp_n--;
+            } else {
+                q++;
+            }
         }
         cadence_tick();                     /* DDR-726: auto ambiance cadence */
         nsi(SYS_YIELD, 0, 0, 0);

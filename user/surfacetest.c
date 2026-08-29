@@ -20,7 +20,10 @@
 
 #define SYS_TIME              72     /* DDR-749: (struct rtc_time*) -> 0 | -EFAULT */
 
-struct surf_event { unsigned short type, arg0, arg1; };   /* type 1 = RESIZE_REQ */
+/* 1 = RESIZE_REQ (DDR-718), 2 = SCROLL (DDR-725), 3 = COMPOSITED (DDR-911),
+ * 4 = CLOSE (DDR-998). */
+struct surf_event { unsigned short type, arg0, arg1; };
+#define SURF_EV_CLOSE 4
 
 /* Mirror of kernel struct rtc_time (rtc.h) — DDR-749. */
 struct rtc_time {
@@ -107,12 +110,36 @@ int main(void) {
     }
 
     int closed = 0;
+    int a_closed = 0;               /* DDR-998: A honoured its close request */
     long grace_start = -1;          /* DDR-911: wall-clock start of C's grace */
     for (;;) {
-        long ka = nsi(SYS_SURFACE_GETKEY, a, 0, 0);
-        if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", a, (char)ka); fflush(stdout); }
+        /* DDR-998: A is the COURTEOUS owner — it drains SURF_EV_CLOSE, flushes
+         * state (stood in for by the SAVED line), and closes itself. B is the
+         * DISCOURTEOUS one: its handler below dequeues events but acts only on
+         * types 1 and 2, so a type 4 there is dropped on the floor and the
+         * compositor must force it. Two owners, two halves of the protocol,
+         * one boot. */
+        if (!a_closed) {
+            struct surf_event aev;
+            aev.type = 0;
+            if (nsi(SYS_SURFACE_GETEV, a, (long)&aev, 0) == 0 &&
+                aev.type == SURF_EV_CLOSE) {
+                printf("PRADYOS_SURF_SAVED id=%ld\n", a);
+                fflush(stdout);         /* flush BEFORE the close: the ordering
+                                         * of these two lines is the assertion */
+                nsi(SYS_SURFACE_CLOSE, a, 0, 0);
+                a_closed = 1;
+                continue;               /* A's fd is gone; skip its key poll */
+            }
+        }
+        long ka = a_closed ? -1 : nsi(SYS_SURFACE_GETKEY, a, 0, 0);
+        /* DDR-995: `code=` added because a literal tab is not greppable, and
+         * arm B asserts that a PLAIN Tab now reaches the focused application —
+         * which DDR-720's unconditional hotkey made impossible. smoke-focus
+         * matches only the bare PRADYOS_FOCUS_KEY prefix, so it is unaffected. */
+        if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c code=%ld\n", a, (char)ka, ka); fflush(stdout); }
         long kb = nsi(SYS_SURFACE_GETKEY, b, 0, 0);
-        if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", b, (char)kb); fflush(stdout); }
+        if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c code=%ld\n", b, (char)kb, kb); fflush(stdout); }
 
         /* DDR-718: honor compositor resize requests on B — resize, re-map,
          * redraw at the new size, re-commit at the same position. */

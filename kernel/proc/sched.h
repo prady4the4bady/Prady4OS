@@ -154,6 +154,9 @@ struct tcb {
     uint32_t   dbg_ticks;       /* ticks charged while running                 */
     uint32_t   weight;
     uint64_t   vt_in;
+    uint32_t   vt_cpu;         /* DDR-989 §8.4: cpu that STAMPED vt_in. Tests the
+                                * cross-CPU-TSC hypothesis; init in sched_create
+                                * (§NON-NEGOTIABLE 10 — kmalloc does not zero).  */
     uint32_t   dbg_yields;
     uint32_t   sched_woke;
     uint32_t   dbg_ebadf_seen;  /* DDR-946: first -EBADF write already reported */
@@ -202,6 +205,11 @@ struct procinfo {
 /* Fill *out with the index-th thread in the scheduler ring (walked under
  * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */
 int         sched_snapshot(int index, struct procinfo *out);
+/* DDR-1001: wait4's child lookup, walking the all-threads ring UNDER
+ * g_sched_lock. sys_wait.c cannot take that lock (it is file-local to sched.c),
+ * which is why the walk lives here rather than there. */
+struct tcb *sched_find_child(struct tcb *parent, int pid,
+                             struct tcb **has_live, int *any, int *ringbad);
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
@@ -220,6 +228,11 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
 /* Unlink a never-run / reaped thread from the ready ring and free its kstack,
  * cap table, open files, and TCB. Not for the currently running thread. */
 void        sched_destroy(struct tcb *t);
+int         sched_rq_walk_ok(void);   /* DDR-996 §5 arm B: runqueue links sane? */
+/* DDR-989 §4: vruntime + pick-count for the running thread and the queue head. */
+void        sched_vr_sample(uint32_t *cur_pid, uint64_t *cur_vr, uint32_t *cur_pk,
+                            uint32_t *head_pid, uint64_t *head_vr, uint32_t *head_pk);
+int         sched_rqfree_probe(int n); /* DDR-996 §5 arm A: force the window   */
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_ap_enter(void);                               /* cap-2b: AP joins the scheduler (never returns) */
@@ -229,6 +242,14 @@ void        sched_block(void);                                  /* block current
  * BLOCKED *while `lk` is held*, releases `lk`, switches away, and re-takes `lk`
  * on return — so a waker serialized after the release always sees BLOCKED and
  * its sched_unblock CAS cannot be lost. IRQs stay as the caller left them. */
+/* DDR-994: report a wait that has gone on too long. Fires ONCE per wait (the
+ * `noted` flag), then the caller keeps spinning — this REPORTS, it does not
+ * repair. Thresholds below; both must be crossed. */
+#define YIELD_STALL_SPINS 20000u  /* enough spins to mean "not just contended" */
+#define YIELD_STALL_TICKS 500u    /* ...AND 5 s at 100 Hz. Neither alone suffices. */    /* ...AND 5 s at 100 Hz. Neither alone suffices. */
+void        yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *noted);
+void        yield_stall_done(const char *site, uint32_t spins, uint64_t ticks, int *noted);
+
 void        sched_block_on(spinlock_t *lk);
 int         sched_block_timeout(spinlock_t *lk, volatile int *done,
                                 uint64_t timeout_ticks);
