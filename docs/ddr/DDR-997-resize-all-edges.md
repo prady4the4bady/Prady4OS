@@ -362,3 +362,85 @@ not touch the kernel — deliberately, because the OPEN-1 E1 campaign is mid-fli
 and owns the only QEMU (§NON-NEGOTIABLE 12). The embedded Python parses and the
 shell lints, but **`smoke-resizeall` has not been run against it**. It is not
 claimed fixed until it has.
+
+---
+
+## 12. §12 — §11's diagnosis was right about the symptom and WRONG about the cause
+
+§11 blamed stale handles and fixed them by re-resolving per round. That change
+was correct but not sufficient, and the reason is worse than the bug it patched:
+**the retries should never have happened at all.**
+
+### 12.1 The measurement that settled it
+
+After §11, the gate began failing **locally** — which is progress, because it made
+the failure debuggable off CI. The log said everything:
+
+```
+PRADYOS_RESIZE_TRACK id=1 x=297 y=172        <- the compositor DID see the drag
+PRADYOS_RESIZE_FIX  id=1 edge=8 x0=140 w0=64 -> w=157   <- round 0 COMMITTED correctly
+[resize_inject] arm=e round 1 re-resolved start=6309,7348   <- ...and it retried anyway
+```
+
+Round 0 of arm E worked. The injector retried regardless, because the retry
+decision —
+
+```python
+drag(sx, sy, ex, ey)
+if fix_count(bit) > before_fix:   # checked IMMEDIATELY
+    break
+```
+
+— was evaluated the instant `drag()` returned. The compositor commits on the
+release and then has to get the line out; checking at once scores a **successful**
+round as failed. The retry then dragged against geometry that had not been
+republished yet, producing exactly the wrong-arm observations §11 attributed to
+stale handles.
+
+The handles were stale **because the retry happened**, not the other way round.
+
+### 12.2 The fix
+
+Poll for the commit (bounded, `FIX_WAIT_S = 8 s`) before deciding to retry; and
+when a retry *is* justified, wait for a `PRADYOS_WM_GEOM` line published **after**
+that round before re-resolving. §9.4 already established that rule — it was
+applied between ARMS and never between ROUNDS.
+
+### 12.3 The pattern, now three deep
+
+This is the **third** appearance of one mistake in this file, and naming it is
+worth more than any of the individual fixes:
+
+| § | what was checked too early |
+|---|---|
+| §9.4 | the **press** — released before the compositor had polled |
+| §10 | the **drag** — released before the compositor had seen the move |
+| §12 | the **commit** — retried before the compositor had logged it |
+
+`SYS_MOUSE_POLL` reads current state, not an event queue (DDR-941), and the
+serial log is written asynchronously. Every interaction with this compositor has
+a *report latency*, and every place the gate tests a condition it must first wait
+for the report. Three separate bugs, one root: **asking before the answer exists.**
+
+### 12.4 Measured
+
+Kernel `5349db4d791cc2ab`, three consecutive local runs:
+
+```
+run 1: PASS — 0 retries
+run 2: PASS — 0 retries
+run 3: PASS — 0 retries
+```
+
+**Zero retries** is the load-bearing number, not the PASS. Before this fix even
+the passing runs churned through retries — the buggy path was being entered every
+time and merely getting away with it. Now round 0 succeeds and is recognised as
+succeeding, so the retry path is not entered at all locally. Under CI load
+retries will still occur, and they will now be correct.
+
+### 12.5 Also fixed: a message that lied
+
+The timeout was raised to 20 s in §11 but its message still printed
+"no RESIZE_TRACK within 6s". A diagnostic that misreports its own threshold is
+how an investigation gets sent to the wrong place — it is now derived from the
+constant.

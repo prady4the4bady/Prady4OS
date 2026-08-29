@@ -42,6 +42,8 @@ arm_to  = float(os.environ["ARM_TIMEOUT_S"])
 
 # Edge bits — must match user/compositor.c's RZ_N/S/W/E.
 RZ_N, RZ_S, RZ_W, RZ_E = 1, 2, 4, 8
+TRACK_WAIT_S = 20.0     # how long to wait for the compositor to SEE the drag
+FIX_WAIT_S   = 8.0      # how long to wait for its commit to reach the log
 NEED = {"e": RZ_E, "s": RZ_S, "w": RZ_W, "n": RZ_N}
 
 
@@ -143,7 +145,7 @@ def drag(sx, sy, ex, ey):
     # 6 s was measured too short on a loaded CI runner: every arm reported
     # "no RESIZE_TRACK within 6s" and released blind, which is exactly the
     # garbage observation this wait exists to prevent (DDR-997 §11).
-    stop = time.monotonic() + 20.0
+    stop = time.monotonic() + TRACK_WAIT_S
     while time.monotonic() < stop:
         if track_count() > before_track:
             seen = True
@@ -153,7 +155,8 @@ def drag(sx, sy, ex, ey):
         # Do not release blind: a release the compositor scores at the press
         # point produces a self-consistent but WRONG-DISTANCE commit, which is
         # exactly the CI failure this replaced. Say so and let the arm retry.
-        print("[resize_inject] no RESIZE_TRACK within 6s — compositor never "
+        print("[resize_inject] no RESIZE_TRACK within %gs — compositor never "
+              % TRACK_WAIT_S +
               "observed the drag; retrying this round")
         sys.stdout.flush()
     time.sleep(0.25)                            # let the position settle
@@ -230,8 +233,36 @@ for arm in arms:
                   % (arm, _round, sx, sy, ex, ey))
             sys.stdout.flush()
         drag(sx, sy, ex, ey)
-        if fix_count(bit) > before_fix:
+        # MEASURED (DDR-997 §12): this used to test fix_count IMMEDIATELY after
+        # drag() returned. The compositor commits on the release and then has to
+        # get the line out; checking at once scores a SUCCESSFUL round as failed
+        # and triggers a retry — and the retry then drags against geometry that
+        # has not been republished yet, producing the wrong-arm observations
+        # §11 blamed on stale handles. §11's diagnosis was right about the
+        # symptom and wrong about the cause: the handles were stale because the
+        # retry should never have happened.
+        #
+        # Poll for the commit instead. Third instance in this file of the same
+        # mistake: checking a condition before the system has had a chance to
+        # report it (§9.4 the press, §10 the drag, here the commit).
+        got = False
+        fix_stop = time.monotonic() + FIX_WAIT_S
+        while time.monotonic() < fix_stop:
+            if fix_count(bit) > before_fix:
+                got = True
+                break
+            time.sleep(0.2)
+        if got:
             break
+        # Only now is a retry justified. Wait for geometry published AFTER this
+        # round before re-resolving, or the next round inherits the stale rect.
+        tail_r = len(log_lines())
+        gtag = "PRADYOS_WM_GEOM id=%s " % sid
+        gstop = time.monotonic() + 10.0
+        while time.monotonic() < gstop:
+            if any(gtag in ln for ln in log_lines()[tail_r:]):
+                break
+            time.sleep(0.2)
     # MEASURED, not assumed: the first version of this loop waited for "any new
     # geom line", and the S arm then failed every time while E/W/N passed. The
     # serial log named the reason — the compositor observed only 6 of the 10
