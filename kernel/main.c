@@ -929,6 +929,43 @@ static void smpresched_proof(void) {
     dl = g_ticks + 50;
     while (g_rp_thread && g_rp_thread->state != THREAD_BLOCKED && g_ticks < dl)
         yield();
+
+    /* DDR-1004: ESTABLISH the precondition instead of assuming the settle loop
+     * produced it.
+     *
+     * sched_unblock kicks a CPU only `if (c != self && o && o->present &&
+     * o->idle)` (sched.c:1825) -- and says so: "the timer remains the backstop
+     * if none is (visibly) idle". The IPI is best-effort BY DESIGN. The 20-tick
+     * settle above was only ever a hope that some AP would be idle by now; it
+     * never checked. When none was, zero IPIs were sent, the thread still ran on
+     * the timer backstop, and this proof printed FAIL on a correct system.
+     *
+     * That is DDR-883's finding recurring. DDR-883 narrowed the IPI term to
+     * cpu_count > 2, but the real precondition is "an idle non-self CPU was
+     * visible at unblock", not a CPU count -- so the false failure survived at
+     * 4 CPUs, where it is rare enough to look like a flake. Measured: 1 CI
+     * failure in 3 runs on tip 30a19ce (`ipis=0 ran=1`, shard 8), 0 in 20 local
+     * runs on the same kernel 60b35c96d70253f5.
+     *
+     * So: wait for an idle non-self CPU, and record whether we ever saw one.
+     * This is deliberately NOT a way to make the arm always pass -- see the
+     * SKIP branch below, which refuses to report OK when the IPI path was not
+     * exercised. */
+    int idle_seen = 0;
+    dl = g_ticks + 50;
+    while (g_ticks < dl && !idle_seen) {
+        struct percpu *self_pc = this_cpu();
+        int self_idx = self_pc ? (int)self_pc->cpu_idx : 0;
+        for (int c = 0; c < PERCPU_MAX; c++) {
+            struct percpu *o = percpu_get((uint32_t)c);
+            if (c != self_idx && o && o->present && o->idle) {
+                idle_seen = 1;
+                break;
+            }
+        }
+        if (!idle_seen)
+            yield();
+    }
     sched_unblock(g_rp_thread);                  /* enqueue here + kick an idle AP */
     dl = g_ticks + 50;
     while (!g_rp_ran && g_ticks < dl)
@@ -946,13 +983,33 @@ static void smpresched_proof(void) {
      * opposite actions.
      */
     int ipi_expected = (lapic_cpu_count() > 2);
-    if (g_rp_ran && (!ipi_expected || g_resched_ipis > before)) {
+    /* DDR-1004: three outcomes, not two.
+     *
+     * The IPI is only owed when an idle non-self CPU was actually visible. If
+     * none ever was, this boot did not exercise the rq-3 path at all, and both
+     * OK and FAIL would be lies -- OK would silently stop testing the kick
+     * (the vacuity trap DDR-973 §6 and DDR-996 each caught once), FAIL would
+     * blame the scheduler for a precondition the harness failed to create.
+     *
+     * SKIP carries neither "OK" nor "FAIL", so it trips no gate sentinel and no
+     * GLOBAL_FORBIDDEN entry, and a run of them is visible in the log as the
+     * coverage gap it is.
+     *
+     * NOTE the residual race, stated rather than hidden: `idle_seen` is sampled
+     * just before sched_unblock, and a CPU can leave idle in between. That
+     * window is far narrower than the old unconditional assertion, but it is
+     * not zero -- so a FAIL with idle=1 is strong evidence and not yet proof. */
+    if (g_rp_ran && ipi_expected && !idle_seen && g_resched_ipis == before) {
+        kputs("[smp] resched SKIP no-idle-ap ran=1\r\n");
+    } else if (g_rp_ran && (!ipi_expected || g_resched_ipis > before)) {
         kputs("[smp] resched OK\r\n");
     } else {
         kputs("[smp] resched FAIL ipis=");
         kputdec(g_resched_ipis - before);
         kputs(" ran=");
         kputdec((uint64_t)g_rp_ran);
+        kputs(" idle=");                  /* DDR-1004: was the IPI even owed? */
+        kputdec((uint64_t)idle_seen);
         kputs("\r\n");
     }
 }
