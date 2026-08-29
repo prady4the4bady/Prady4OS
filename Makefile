@@ -3033,6 +3033,35 @@ smoke-resizeall: $(IMG) fat-image sfs-image
 	@python3 tools/qemu_runner/resize_check.py build/resizeall.log 1 e s w n || { echo "--- press/geom lines ---"; grep -aE 'PRADYOS_WM_GEOM|PRADYOS_MOUSE_OK|PRADYOS_DRAG|PRADYOS_RESIZE_(REQ|FIX)|PRADYOS_EV_RESIZE_OK|PRADYOS_WM_(MIN|MAX|UNMAX|CLOSE)' build/resizeall.log || echo "(none)"; exit 1; }
 	@echo "[resizeall] PASS — E/S/W/N drags all held their fixed edge"
 
+# Layer-7 graceful-close gate (DDR-998): SYS_SURFACE_CLOSE destroys a surface
+# before its owner runs another instruction, so a close-box click gave the owner
+# no chance to flush state. The compositor now ASKS (SURF_EV_CLOSE, type 4) and
+# FORCES only after a bounded grace. Authority is unchanged — the owner may
+# delay within the grace, never veto.
+#
+# Two owners, two halves, one boot. ALPHA is courteous: it drains type 4, prints
+# PRADYOS_SURF_SAVED and closes itself (owner=1). BETA is not: its handler acts
+# only on types 1 and 2, so its type 4 is dropped and the compositor must force
+# it at the deadline (owner=0).
+#
+# Both clicks come from the compositor's published close= handle (§INV.5), and
+# both injector runs poll for their own outcome rather than clicking a fixed
+# number of times (DDR-910).
+smoke-surfclose: $(IMG) fat-image sfs-image
+	@echo "[surfclose] graceful-close gate: boot(GPU+tablet) + QMP close ALPHA then BETA..."
+	@rm -f build/surfclose.log /tmp/psfcl.sock
+	@( GEOM_TITLE=ALPHA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/surfclose.log /tmp/psfcl.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=0 owner=1"; \
+	   GEOM_TITLE=BETA  GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/surfclose.log /tmp/psfcl.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=1 owner=0" ) &
+	@timeout 180 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/psfcl.sock,server,nowait \
+	    -serial file:build/surfclose.log -display none -no-reboot || true
+	@python3 tools/qemu_runner/surfclose_check.py build/surfclose.log || { echo "--- close/geom lines ---"; grep -aE "PRADYOS_WM_GEOM|PRADYOS_WM_CLOSE|PRADYOS_SURF_SAVED|PRADYOS_MOUSE_OK|PRADYOS_SURFACE_GONE" build/surfclose.log || echo "(none)"; exit 1; }
+	@echo "[surfclose] PASS — ALPHA saved then self-closed; BETA was forced at the deadline"
+
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
 # frames; the compositor announces each ambiance's first settled backdrop and

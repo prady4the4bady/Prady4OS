@@ -155,7 +155,7 @@ reentrant calls. **Do NOT revert this pattern.**
 Correct form ALWAYS: `pgrep -f "[q]emu-system-x86_64"` (bracket avoids self-match).
 
 ### §INV.4 — DDR number collision
-Free range: **DDR-998+** (936-997 allocated; 997 = resize from any edge, IMPLEMENTED + gated + mutation-checked; 994 = the OPEN-1 route-1 yield-stall detector, IMPLEMENTED + gated; 995 = Alt+Tab, IMPLEMENTED + gated; 996 = TCB freed while queued, FIXED + gated + mutation-checked).
+Free range: **DDR-999+** (936-998 allocated; 998 = SURF_EV_CLOSE, IMPLEMENTED + gated (M3 unmeasured); 997 = resize from any edge, IMPLEMENTED + gated + mutation-checked; 994 = the OPEN-1 route-1 yield-stall detector, IMPLEMENTED + gated; 995 = Alt+Tab, IMPLEMENTED + gated; 996 = TCB freed while queued, FIXED + gated + mutation-checked).
 Before allocating ANY DDR number:
 `ls docs/ddr/ docs/decisions/ | grep DDR-<N>` — must return empty in BOTH dirs.
 
@@ -354,14 +354,14 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
 
 ## CURRENT BUILD STATE
 
-- **Gate count: 155** assigned across **10** shards, **7** excluded — measured by
+- **Gate count: 156** assigned across **10** shards, **7** excluded — measured by
   `make ci-shard-check` on 2026-08-25, not carried forward. This line read "149"
   (and, before that, "105"); both were stale. Shard matrix widened 6 -> 10,
   makespan 38.6 -> 20.8 min. Recent additions: 147 -> 148 `smoke-iso-userspace`
   (DDR-972), 149 `smoke-fat32-multicluster` (DDR-973), then `smoke-nethammer`
   (DDR-990), `smoke-modkeys` (DDR-991), `smoke-superkey` (DDR-992) -> 152,
   then `smoke-yieldstall` (DDR-994) -> 153, `smoke-rqfree` (DDR-996) -> 154,
-  `smoke-resizeall` (DDR-997) -> 155.
+  `smoke-resizeall` (DDR-997) -> 155, `smoke-surfclose` (DDR-998) -> 156.
   **Re-measure rather than increment this** — it has been wrong three times.
 - **NSI max: 96** (`SYS_KEY_POLL`, DDR-991). **Next free: 97.** Table size: 128.
   Measured from `kernel/syscall/syscall.h:168-170`. This line previously said 93
@@ -369,7 +369,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
   right" was wrong too. `user/prism.c` ships against 95.
 - **`kernel.bin`**: **1,065,350 B** against the 1,572,864 B size gate — 507,514 B
   of headroom (DDR-973's probe costs the page-aligned 8,192 B every embedded probe does; DDR-981's NMI probe costs 4,104 B). The old "~545 KiB, 768 KiB ceiling" was stale in both terms.
-- **DDR free range: DDR-998+** (936-997 allocated; 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work, 989 = vruntime sampling starvation, 990 = net hammer probe BUILT+mutation-checked, 991 = PS/2 modifiers + NSI 96, 992 = Super+M chord, 993 = modifier aggregate DERIVED, 994 = OPEN-1 route-1 detector IMPLEMENTED+gated, 995 = Alt+Tab rebind IMPLEMENTED+gated+mutation-checked, 996 = TCB freed while queued FIXED+gated, 997 = resize from any edge IMPLEMENTED+gated+mutation-checked). **This file carries the free range in TWO places (§INV.4 and here) and they have disagreed before — update both.**
+- **DDR free range: DDR-999+** (936-998 allocated; 998 = SURF_EV_CLOSE ask-then-force, IMPLEMENTED+gated+M1b/M2-mutation-checked (M3 unmeasured); 985 = OPEN-1 refutation, 986 = OPEN-13 instrument, 987 = lwIP core lock, 988 = lwIP deferred work, 989 = vruntime sampling starvation, 990 = net hammer probe BUILT+mutation-checked, 991 = PS/2 modifiers + NSI 96, 992 = Super+M chord, 993 = modifier aggregate DERIVED, 994 = OPEN-1 route-1 detector IMPLEMENTED+gated, 995 = Alt+Tab rebind IMPLEMENTED+gated+mutation-checked, 996 = TCB freed while queued FIXED+gated, 997 = resize from any edge IMPLEMENTED+gated+mutation-checked). **This file carries the free range in TWO places (§INV.4 and here) and they have disagreed before — update both.**
 - `make image` → zero warnings, `-Werror` enforced ✅
 - PR #5: **MERGED** as `7c6c67a`. PR #6: **MERGED 2026-08-23** as **`ace232f`**
   into `dev/phase1` (3 greens on tip `46ece3f` per §INV.15; the squashed tree is
@@ -555,7 +555,7 @@ armed; the issue reopens on the first `PRADYOS_AGENT_WITNESS_WAIT` line.
 | Per-window restore from dock | DDR-717 restores all; add per-tile | `smoke-perrestore` |
 | Window maximize at real display size | DDR-719 caps at 512×512; lift to real geometry | `smoke-maximize` |
 | ~~Pointer resize handles — all edges~~ | **DONE — DDR-997.** Eight regions, 14 px; SE unchanged bit-for-bit. A W/N drag needs a MOVE *and* a resize through two non-atomic syscalls — move first, and clamp the size BEFORE deriving the origin (clamping after leaves the fixed edge sliding). Mutation-checked M1/M2/M3, three distinct kernel hashes; M3 fails `smoke-drag` because BETA's published `dg=` sits inside ALPHA's east band. Also fixed here: `PRADYOS_WM_GEOM` was republished only on a surface-count or focus change, so it was stale after any move or resize. | `smoke-resizeall` ✅ |
-| `SURF_EV_CLOSE` notification | Owner saves state before forced close | `smoke-surfclose` |
+| ~~`SURF_EV_CLOSE` notification~~ | **DONE — DDR-998.** Event type 4 (1/2/3 were already resize/scroll/composited). The compositor ASKS, then forces after a bounded grace; the owner may delay, never veto. A surface id does not identify a surface — 16 slots recycle immediately — so `struct surface` gained a generation counter, and `surf_take_free`'s whole-struct wipe had to be taught to preserve it. M1b/M2 mutation-checked on distinct hashes and they fail DIFFERENT arms; M3 (recycle guard) recorded UNMEASURED with its reason. | `smoke-surfclose` ✅ |
 | Compositor double-map `PTE_SW_SHARED` audit | — | `smoke-sharedpte` |
 | OKLab horizon bands / animated mesh | DDR-716 deferred mesh + horizon bands | `smoke-horizon` |
 | vDSO callable reader (`vdso_entry.asm`) | ring-3 seqlock reader (IMP-C) | `smoke-vdso-read` |

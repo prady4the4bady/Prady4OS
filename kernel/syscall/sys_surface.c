@@ -26,7 +26,13 @@
 
 #define SURFACE_KQ 32                          /* per-surface key ring (DDR-708) */
 #define SURFACE_EQ 8                           /* per-surface event ring (DDR-718) */
-struct surf_event { uint16_t type, arg0, arg1; };   /* type 1 = RESIZE_REQ(w,h) */
+/* Event types, ALL of them — this comment used to name only type 1, which is
+ * how a duplicate number gets shipped (DDR-998 §2):
+ *   1 = RESIZE_REQ(w,h)   DDR-718
+ *   2 = SCROLL(delta)     DDR-725
+ *   3 = COMPOSITED        DDR-911
+ *   4 = CLOSE             DDR-998 — "save your state, you are about to go" */
+struct surf_event { uint16_t type, arg0, arg1; };
 struct surface {
     uint64_t phys;
     uint32_t w, h, npages;
@@ -38,12 +44,23 @@ struct surface {
     char     title[16];                         /* window title, NUL-terminated (DDR-715) */
     struct surf_event eq[SURFACE_EQ];           /* compositor->owner events (DDR-718) */
     uint8_t  eq_head, eq_tail;
+    /* DDR-998: bumped on every allocation of this slot. An id does NOT identify
+     * a surface — 16 slots are recycled immediately by surf_take_free, so a
+     * deferred action holding only an id can land on a different process's
+     * window that merely inherited the number. Holders pair (id, gen). */
+    uint32_t gen;
 };
 static struct surface g_surf[SURFACE_MAX];
 static int32_t g_z_top;                         /* monotonic stacking counter */
 static spinlock_t g_surf_lock = SPINLOCK_INIT;  /* DDR-729: guards g_surf slot lifecycle */
 
-struct surface_info { uint32_t id, w, h; int32_t x, y, z; uint32_t focused; char title[16]; };
+/* DDR-998: `gen` APPENDED. This struct is declared TWICE — here and at
+ * user/compositor.c:43 — and sys_surface_poll copies out
+ * count * sizeof(struct surface_info) into the caller's array, so a size
+ * disagreement silently overruns the compositor's stack buffer. Both
+ * declarations must change in the SAME commit (§INV.13's PT_HI lesson). */
+struct surface_info { uint32_t id, w, h; int32_t x, y, z; uint32_t focused; char title[16];
+                      uint32_t gen; };
 
 static unsigned order_for(uint64_t npages) {
     unsigned o = 0;
@@ -60,7 +77,14 @@ static int surf_take_free(struct surface *s, uint64_t *phys, unsigned *order) {
         return 1;
     *phys  = s->phys;
     *order = order_for(s->npages);
+    /* DDR-998: this wipe is whole-struct, so it would take `gen` with it and
+     * every tenancy would come back as gen 1 — a generation counter that
+     * counts to one is not a generation counter. Save and restore it across
+     * the clear. Found by reading the FREE path after writing the bump in the
+     * ALLOC path; the bump alone looks correct in isolation. */
+    uint32_t keep_gen = s->gen;
     for (unsigned i = 0; i < sizeof *s; i++) ((uint8_t *)s)[i] = 0;   /* clears used */
+    s->gen = keep_gen;
     return 0;
 }
 
@@ -89,6 +113,10 @@ static long sys_surface_create(long a1, long a2, long a3, long a4, long a5, long
         return -EMFILE;
     }
     struct surface *s = &g_surf[id];
+    /* DDR-998: bump BEFORE anything else in this slot becomes visible. `gen` is
+     * the only field deliberately NOT reset here — it must survive the slot's
+     * reuse, since its whole job is to tell one tenancy from the next. */
+    s->gen++;
     s->phys = phys; s->w = w; s->h = h; s->npages = (uint32_t)npages;
     s->owner_pid = current_thread->pid; s->x = s->y = 0;
     s->z = ++g_z_top; s->focused = 0;
@@ -185,6 +213,7 @@ static long sys_surface_poll(long a1, long a2, long a3, long a4, long a5, long a
             buf[n].id = (uint32_t)i; buf[n].w = g_surf[i].w; buf[n].h = g_surf[i].h;
             buf[n].x = g_surf[i].x;  buf[n].y = g_surf[i].y;
             buf[n].z = g_surf[i].z;  buf[n].focused = g_surf[i].focused;
+            buf[n].gen = g_surf[i].gen;                      /* DDR-998 */
             for (int c = 0; c < 16; c++) buf[n].title[c] = g_surf[i].title[c];
             n++;
         }

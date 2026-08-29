@@ -116,10 +116,44 @@ def btn(down):
         {"type": "btn", "data": {"button": "left", "down": down}}]}})
 
 
+def track_count():
+    return sum(1 for ln in log_lines()
+               if "PRADYOS_RESIZE_TRACK id=%s " % sid in ln)
+
+
 def drag(sx, sy, ex, ey):
+    """Press on the handle, drag, and release ONLY once the compositor has been
+    seen at the new position.
+
+    The fixed 0.45 s that used to sit before the release was a bet that the
+    compositor polled in between. It holds locally and LOST IN CI: every arm
+    committed at its own START coordinate (measured — DDR-997 §9.8), because
+    SYS_MOUSE_POLL reads current state rather than an event queue (DDR-941), so
+    a pointer move that falls entirely between two polls is never observed at
+    all. PRADYOS_RESIZE_TRACK is one line per drag saying the compositor has
+    now seen the pointer away from the press point; waiting for it turns the
+    bet into a precondition. DDR-910's rule — poll for the outcome, never a
+    fixed wait — applied to the drag phase instead of the click.
+    """
+    before_track = track_count()
     absmove(sx, sy); time.sleep(0.35)           # over the handle
     btn(True);       time.sleep(0.45)           # press: latches the edge mask
-    absmove(ex, ey); time.sleep(0.45)           # drag, button held
+    absmove(ex, ey)                             # drag, button held
+    seen = False
+    stop = time.monotonic() + 6.0
+    while time.monotonic() < stop:
+        if track_count() > before_track:
+            seen = True
+            break
+        time.sleep(0.1)
+    if not seen:
+        # Do not release blind: a release the compositor scores at the press
+        # point produces a self-consistent but WRONG-DISTANCE commit, which is
+        # exactly the CI failure this replaced. Say so and let the arm retry.
+        print("[resize_inject] no RESIZE_TRACK within 6s — compositor never "
+              "observed the drag; retrying this round")
+        sys.stdout.flush()
+    time.sleep(0.25)                            # let the position settle
     btn(False);      time.sleep(0.6)            # release: commit
 
 

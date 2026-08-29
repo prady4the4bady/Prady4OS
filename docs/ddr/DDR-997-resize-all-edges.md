@@ -255,3 +255,44 @@ The four arms exercise one surface at 1024x768 with a client that honours resize
 requests. Not covered: a client that ignores or partially honours a request, a
 window dragged off-screen (`SYS_SURFACE_MOVE` clamping is untested here), and
 simultaneous drags on two surfaces. The 512 ceiling stays untouched per §8.
+
+
+---
+
+## 10. §9.8 — the gate's first CI run was RED, and the OS was not at fault
+
+`cbc8a88` failed shard 9 twice. Arm E passed; S, W and N failed. The measured
+cause is in the injector, and the fixed-edge assertions had already held:
+
+```
+arm w: line: edge=4 x0=140 y0=140 w0=157 h0=57 x=147 y=140 w=150 h=57
+```
+
+`147 + 150 = 297 = 140 + 157`. The invariant §6 calls load-bearing was satisfied
+on the failing run. What failed were the auxiliary clamp checks — `w` was 150,
+not the 32 px floor — because **every arm committed at its own drag START
+coordinate**: `neww = (x0+w0) - ms.x` with `ms.x = 147` is exactly the press
+point. Arm E was the exception because it happened to be observed at its end.
+
+The injector released after a fixed 0.45 s, betting the compositor had polled in
+between. `SYS_MOUSE_POLL` reads current state rather than an event queue
+(DDR-941), so a pointer move falling entirely between two polls is never
+observed at all — the bet holds on a quiet local machine and loses on a loaded
+CI runner. This is the *same* defect class as §9.4, one phase later: there the
+press was missed, here the drag was.
+
+Fix: `PRADYOS_RESIZE_TRACK id=N x=X y=Y`, one line per drag, emitted the first
+time the compositor sees the pointer away from the press point. The injector
+waits for it before releasing. A duration becomes a precondition — DDR-910's
+rule ("poll for the outcome, never a fixed wait") applied to the drag phase
+instead of the click.
+
+Two things worth keeping:
+
+1. **The clamp checks earned their place.** Without them the run would have
+   passed on the fixed-edge equality alone while silently no longer exercising
+   M2. The check that fired said so in its own failure text.
+2. **The local run now takes CI's path.** After the fix the S arm resolves
+   `6982,8416` — the post-E geometry, which is what CI resolved and the earlier
+   local runs did not. The reproduction is no longer weaker than the environment
+   it is defending against.

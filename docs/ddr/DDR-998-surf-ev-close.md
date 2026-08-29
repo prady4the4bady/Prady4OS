@@ -1,6 +1,6 @@
 # DDR-998 — `SURF_EV_CLOSE`: let the owner save state before a forced close
 
-**Status:** DESIGN.
+**Status:** IMPLEMENTED, GATED. M1b and M2 mutation-checked; **M3 UNMEASURED** (§10.3).
 **Extends:** DDR-711 (`SYS_SURFACE_CLOSE`), DDR-715 (close box), DDR-718 (event
 ring), DDR-729 (surface lifecycle), DDR-911 (the type-3 composited event).
 **Gate:** `smoke-surfclose` (new).
@@ -133,3 +133,81 @@ Two arms in one boot, both driven from the published `close=` handle (§INV.5):
 - The kernel does not enforce the deadline. Force-close authority already lives
   in the compositor (DDR-715) and splitting it across two layers would give two
   places to get the recycle check wrong.
+
+
+---
+
+## 10. Implementation — what was measured
+
+Kernel **`a9cd9ed1114994b8`**, `kernel.bin` 1,089,930 B against the 1,572,864 B
+gate, warning-clean at `-Werror`. `ci-shard-check` **156 gates / 10 shards / 7
+excluded**; `ci-probe-rodata-check` OK.
+
+`smoke-surfclose` passes both arms in one boot:
+
+```
+arm A OK — asked@432, saved@433, owner closed@440
+arm B OK — forced after 3 s / 64 frames of unused grace
+```
+
+Arm B's numbers are the denominator (§NON-NEGOTIABLE 17): the **frames** floor is
+what bound, not the seconds — 3 s had already elapsed by frame 64. Both halves of
+§5's two-clock rule are therefore live, and the frame floor is the one currently
+doing the work.
+
+### 10.1 A bug the FREE path hid from the ALLOC path
+
+`s->gen++` in `sys_surface_create` looks correct in isolation. It is not, because
+`surf_take_free` clears the slot with a whole-struct byte wipe — which takes
+`gen` with it. Every tenancy would then have come back as `gen == 1`, and a
+generation counter that counts to one is not a generation counter: the recycle
+guard would have silently agreed with every stale request it was written to
+reject.
+
+Found by reading the free path *after* writing the bump, not by testing — and it
+is not clear any reachable test would have caught it, which is the argument for
+reading both ends of a lifecycle rather than the one you are editing.
+
+### 10.2 Mutation results
+
+| Mutant | Kernel hash | Result |
+|---|---|---|
+| (none) | `a9cd9ed1114994b8` | both arms PASS |
+| **M1b** — zero grace (ask, then force in the same frame) | `ae958140c859d692` | **arm A fails**, arm B still passes |
+| **M2** — no deadline (ask, never force) | `833fedd88b4b4b4a` | **arm B fails**, arm A still passes |
+
+The two mutants fail *different arms*, which is the property that matters: it
+shows the arms are testing the two halves of the protocol independently rather
+than both riding on one signal. M1b's failure line names what happened —
+`ALPHA was FORCED instead: PRADYOS_WM_CLOSE id=0 owner=0 secs=2 frames=1` —
+so the grace collapsing to one frame is visible, not merely inferred.
+
+M1 as §8 originally wrote it (force immediately, no event at all) is the
+pre-DDR-998 code path; it fails arm A on the absence of `WM_CLOSE_REQ` and
+`SURF_SAVED` rather than on order, so M1b is the stronger form and the one run.
+
+### 10.3 M3 is UNMEASURED, and why
+
+M3 requires a surface slot to be freed and **re-taken by a different process**
+inside the grace window. The shipped layout cannot produce that on demand: GAMMA
+frees slot 2 and nothing claims it, so no recycle occurs and the generation
+branch is never entered. Manufacturing one needs a new probe that races a
+`SURFACE_CREATE` against another client's exit.
+
+So the guard is reasoned, not demonstrated. Recording it as unmeasured rather
+than claiming a check that was not run: §8 pre-authorised exactly this outcome,
+and a mutation "passed" by never executing the mutated line is the failure mode
+DDR-973 §6 and DDR-996 both hit.
+
+### 10.4 Regressions green on the shipped hash
+
+`smoke-surfclose`, `smoke-evresize`, `smoke-drag`, `smoke-wmclose`,
+`smoke-focus`, `smoke-resizeall`, `smoke-shell` 5/5.
+
+### 10.5 NOT claimed
+
+One boot, one grace constant, two owners. Not covered: more than
+`CLOSE_PENDING_MAX` (8) simultaneous pending closes — the overflow path falls
+back to DDR-715's immediate close and is unexercised — a client that drains the
+event and then hangs without closing (indistinguishable here from BETA, which
+never drains), and the recycle guard of §10.3.

@@ -40,7 +40,13 @@ struct key_ev { unsigned char code, mods, down, ascii; };
 
 struct fb_info { unsigned width, height, stride, bpp; };
 struct mouse_state { int x, y; unsigned buttons; int wheel; };   /* DDR-725 */
-struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; char title[16]; };
+/* DDR-998: `gen` APPENDED. This struct is declared TWICE — here and at
+ * kernel/syscall/sys_surface.c — and SYS_SURFACE_POLL copies out
+ * count * sizeof(struct surface_info) into THIS array, so a size disagreement
+ * silently overruns the buffer below rather than failing to build. Both
+ * declarations must change in the SAME commit (§INV.13's PT_HI lesson). */
+struct surface_info { unsigned id, w, h; int x, y, z; unsigned focused; char title[16];
+                      unsigned gen; };
 /* DDR-735 (kernel-mirrored): counts are retained post-mortem; pid stays set for
  * a spawned-then-exited slot (state 0), so "ran, now done" is renderable. */
 struct agent_metric { unsigned pid, state; unsigned long mem_used, actions, run_ticks, dispatches; };
@@ -608,6 +614,15 @@ static void draw_str_inter(const char *s, int x, int y,
 /* DDR-997: resize handles on every edge, not just the bottom-right corner.
  * 14 px is DDR-718's corner size, kept so the hit target does not change size
  * between the old handle and the new ones. */
+/* DDR-998: ask the owner to close, then force. Both clocks must expire.
+ * Seconds alone are too coarse (a click just before a boundary would grant a
+ * grace of nearly zero); frames alone are scheduling-dependent, which is what
+ * DDR-911 removed from surfacetest.c after item 16 changed it. */
+#define SURF_EV_CLOSE        4
+#define CLOSE_GRACE_SECS     2
+#define CLOSE_GRACE_FRAMES   64
+#define CLOSE_PENDING_MAX    8
+
 #define RZBAND    14
 #define RZ_N      0x1
 #define RZ_S      0x2
@@ -935,6 +950,15 @@ int main(void) {
      * edge that must hold still, so w0/h0 are needed at commit, not just
      * the origin DDR-718 recorded. */
     int rs_w0 = 0, rs_h0 = 0, rs_edge = 0;
+    /* DDR-997 §9.8: the press point, and a one-shot witness that the
+     * compositor has OBSERVED the pointer somewhere else. SYS_MOUSE_POLL
+     * reads current state rather than an event queue (DDR-941), so a gate
+     * that releases after a fixed sleep is betting the compositor polled
+     * in between. In CI it did not, and every arm committed at its own
+     * START coordinate. One line per drag turns that bet into a
+     * precondition the injector can wait for — DDR-910's rule, applied to
+     * the drag phase instead of the click. */
+    int rs_px = 0, rs_py = 0, rs_moved = 0;
     unsigned char last_roster[8] = {0xFF};   /* force a first-read print */
     int metrics_said = 0;                    /* DDR-737: one-shot panel witness */
     /* DDR-968: the witness above is gated on pid!=0 && dispatches>=1, and when
@@ -951,6 +975,16 @@ int main(void) {
      * refreshed between them. Keep the last published rect per slot and treat a
      * change as a publish trigger — exact, not hashed, because a hash collision
      * here would silently republish nothing. */
+    /* DDR-998: close requests awaiting the owner. (id, gen) not id alone — a
+     * slot freed inside the grace can be re-taken by a DIFFERENT process, and
+     * forcing on id alone would destroy a window that merely inherited the
+     * number (§NON-NEGOTIABLE 18, one level up). */
+    int  cp_id[CLOSE_PENDING_MAX];
+    unsigned cp_gen[CLOSE_PENDING_MAX];
+    long cp_secs[CLOSE_PENDING_MAX];
+    unsigned cp_frame[CLOSE_PENDING_MAX];
+    int  cp_n = 0;
+    unsigned cp_frames = 0;               /* compositor frames, for the floor */
     short pub_x[16], pub_y[16];
     unsigned short pub_w[16], pub_h[16];
     for (int i = 0; i < 16; i++) {          /* impossible values: force pass 1 */
@@ -1298,10 +1332,37 @@ int main(void) {
                                 break;
                             }
                             if (close_box_hit(&sf[i], ms.x, ms.y)) {   /* DDR-715 */
-                                nsi(SYS_SURFACE_CLOSE, (long)sf[i].id, 0, 0);
-                                printf("PRADYOS_WM_CLOSE id=%u\n", sf[i].id);
-                                fflush(stdout);
-                                closed = 1;                  /* shrink detector recomposites */
+                                /* DDR-998: ASK first. The owner gets a bounded
+                                 * grace to flush state and close itself; the
+                                 * retire pass below forces it if it does not.
+                                 * Authority is unchanged — the owner may delay
+                                 * within the grace, never veto. */
+                                int dup = 0;
+                                for (int q = 0; q < cp_n; q++)
+                                    if (cp_id[q] == (int)sf[i].id) dup = 1;
+                                if (!dup && cp_n < CLOSE_PENDING_MAX) {
+                                    nsi(SYS_SURFACE_SENDEV, (long)sf[i].id,
+                                        SURF_EV_CLOSE, 0);
+                                    cp_id[cp_n]    = (int)sf[i].id;
+                                    cp_gen[cp_n]   = sf[i].gen;
+                                    cp_secs[cp_n]  = nsi(SYS_CLOCK, 0, 0, 0);
+                                    cp_frame[cp_n] = cp_frames;
+                                    cp_n++;
+                                    printf("PRADYOS_WM_CLOSE_REQ id=%u gen=%u\n",
+                                           sf[i].id, sf[i].gen);
+                                    fflush(stdout);
+                                } else if (!dup) {
+                                    /* Table full: fall back to DDR-715's
+                                     * immediate close rather than ignoring the
+                                     * click. A desktop that stops responding to
+                                     * its close box is worse than a discourteous
+                                     * one. */
+                                    nsi(SYS_SURFACE_CLOSE, (long)sf[i].id, 0, 0);
+                                    printf("PRADYOS_WM_CLOSE id=%u owner=0 full=1\n",
+                                           sf[i].id);
+                                    fflush(stdout);
+                                    closed = 1;
+                                }
                                 break;
                             }
                             hit = (int)sf[i].id;
@@ -1350,6 +1411,7 @@ int main(void) {
                             rs_bx = rx; rs_by = ry;
                             rs_w0 = rw; rs_h0 = rh;
                             rs_edge = m;
+                            rs_px = ms.x; rs_py = ms.y; rs_moved = 0;
                             break;
                         }
                         if (rz >= 0) {
@@ -1367,6 +1429,11 @@ int main(void) {
                 nsi(SYS_SURFACE_MOVE, drag_id, ms.x - drag_ox, ms.y - drag_oy);
                 recompose_drag(ms.x, ms.y);
             } else if (resizing && ms.buttons) {             /* resize-drag (DDR-718) */
+                if (!rs_moved && (ms.x != rs_px || ms.y != rs_py)) {
+                    rs_moved = 1;                            /* DDR-997 §9.8 */
+                    printf("PRADYOS_RESIZE_TRACK id=%d x=%d y=%d\n", rs_id, ms.x, ms.y);
+                    fflush(stdout);
+                }
                 recompose_drag(ms.x, ms.y);                  /* cursor tracks the corner */
             } else if (up && dragging) {                     /* drop */
                 dragging = 0;
@@ -1433,6 +1500,54 @@ int main(void) {
                 recompose_scene();                           /* client recommits async */
             }
             prev_btn = ms.buttons;
+        }
+        /* DDR-998: retire pending close requests. Three outcomes, and the third
+         * is the one that needs the generation counter. */
+        cp_frames++;
+        for (int q = 0; q < cp_n; ) {
+            int live = -1;
+            for (long k = 0; k < ns; k++)
+                if ((int)surfs[k].id == cp_id[q]) { live = (int)k; break; }
+            int drop = 0;
+            if (live < 0) {
+                /* Gone: the owner honoured the request and closed itself. */
+                printf("PRADYOS_WM_CLOSE id=%d owner=1\n", cp_id[q]);
+                fflush(stdout);
+                drop = 1;
+            } else if (surfs[live].gen != cp_gen[q]) {
+                /* The slot was freed and RE-TAKEN inside the grace. The window
+                 * standing here now is a different tenancy that merely
+                 * inherited the id; forcing on the id alone would destroy an
+                 * innocent process's window. Drop the request and say so once —
+                 * silence here would hide a real lifecycle event. */
+                printf("PRADYOS_WM_CLOSE_STALE id=%d was=%u now=%u\n",
+                       cp_id[q], cp_gen[q], surfs[live].gen);
+                fflush(stdout);
+                drop = 1;
+            } else {
+                long now = nsi(SYS_CLOCK, 0, 0, 0);
+                long el  = now - cp_secs[q];
+                if (el < 0) el += 24 * 3600;             /* midnight wrap */
+                if (el >= CLOSE_GRACE_SECS &&
+                    (cp_frames - cp_frame[q]) >= CLOSE_GRACE_FRAMES) {
+                    nsi(SYS_SURFACE_CLOSE, (long)cp_id[q], 0, 0);
+                    /* Denominator, not just a verdict (§NON-NEGOTIABLE 17):
+                     * how much grace the owner actually burned without using. */
+                    printf("PRADYOS_WM_CLOSE id=%d owner=0 secs=%ld frames=%u\n",
+                           cp_id[q], el, cp_frames - cp_frame[q]);
+                    fflush(stdout);
+                    drop = 1;
+                }
+            }
+            if (drop) {
+                for (int r = q; r < cp_n - 1; r++) {
+                    cp_id[r]  = cp_id[r + 1];  cp_gen[r]   = cp_gen[r + 1];
+                    cp_secs[r] = cp_secs[r + 1]; cp_frame[r] = cp_frame[r + 1];
+                }
+                cp_n--;
+            } else {
+                q++;
+            }
         }
         cadence_tick();                     /* DDR-726: auto ambiance cadence */
         nsi(SYS_YIELD, 0, 0, 0);
