@@ -140,7 +140,10 @@ def drag(sx, sy, ex, ey):
     btn(True);       time.sleep(0.45)           # press: latches the edge mask
     absmove(ex, ey)                             # drag, button held
     seen = False
-    stop = time.monotonic() + 6.0
+    # 6 s was measured too short on a loaded CI runner: every arm reported
+    # "no RESIZE_TRACK within 6s" and released blind, which is exactly the
+    # garbage observation this wait exists to prevent (DDR-997 §11).
+    stop = time.monotonic() + 20.0
     while time.monotonic() < stop:
         if track_count() > before_track:
             seen = True
@@ -195,11 +198,37 @@ for arm in arms:
     before_fix = fix_count(bit)
     print("[resize_inject] arm=%s start=%d,%d end=%d,%d" % (arm, sx, sy, ex, ey))
     sys.stdout.flush()
-    # Three rounds: a missed press phase still lands. Each PRADYOS_RESIZE_FIX
-    # line carries its own before/after geometry, so a repeat is a second
-    # independent observation rather than a corruption of the first.
+    # Three rounds: a missed press phase still lands.
+    #
+    # MEASURED (DDR-997 §11): geometry used to be resolved ONCE per arm and
+    # reused by every round. When a round partly landed, the next round dragged
+    # from coordinates that were correct BEFORE the window moved — so a retry
+    # hit a different band and logged a legitimate-looking but wrong-arm
+    # observation. In CI that produced `edge=8 … w0=150 → w=143`, an E-arm
+    # "shrink", from a retry after the W arm had already moved the window.
+    #
+    # Re-resolving per ROUND makes every round a fresh, correct drag, which is
+    # what lets the checker keep its "every observation must hold" rule: that
+    # rule is right for independent repeats and wrong for retries against stale
+    # geometry. Fixing the generator is the honest fix; loosening the checker
+    # would have hidden this instead.
     deadline = time.monotonic() + arm_to
     for _round in range(3):
+        if _round:                              # round 0 already resolved above
+            g = newest_geom(need, time.monotonic() + arm_to)
+            if g is None:
+                break
+            if arm == "e":
+                sx, sy = g["rze"]; ex, ey = sx + grow_x, sy
+            elif arm == "s":
+                sx, sy = g["rzs"]; ex, ey = sx, sy + grow_y
+            elif arm == "w":
+                sx, sy = g["rzw"]; ex, ey = g["rze"][0], sy
+            else:
+                sx, sy = g["rzn"]; ex, ey = sx, g["rzs"][1]
+            print("[resize_inject] arm=%s round %d re-resolved start=%d,%d end=%d,%d"
+                  % (arm, _round, sx, sy, ex, ey))
+            sys.stdout.flush()
         drag(sx, sy, ex, ey)
         if fix_count(bit) > before_fix:
             break

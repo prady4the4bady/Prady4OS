@@ -296,3 +296,69 @@ Two things worth keeping:
    `6982,8416` — the post-E geometry, which is what CI resolved and the earlier
    local runs did not. The reproduction is no longer weaker than the environment
    it is defending against.
+
+---
+
+## 11. §11 — CI red again, and this time the gate's *generator* was wrong
+
+`smoke-resizeall` failed shard 9 on `0c22334`. Three arms red, one green. The
+injector's own output named the trigger before any code reading was needed:
+
+```
+[resize_inject] no RESIZE_TRACK within 6s — compositor never observed the drag; retrying this round
+```
+
+— once for E, twice for S, twice for W, once for N.
+
+### 11.1 What actually went wrong (two defects, both mine)
+
+**(a) Geometry was resolved once per ARM and reused by every round.** When a
+round partly landed, the window moved; the next round then dragged from
+coordinates that had been correct *before* that move, hitting a different band.
+That is where this line came from:
+
+```
+[resizeall] FAIL — arm e: E drag did not widen: w0=150 w=143
+            line: edge=8 x0=147 y0=140 w0=150 h0=57 x=147 y=140 w=143 h=57
+```
+
+`x0=147, w0=150` is the geometry *after the W arm had already moved and shrunk
+the window* — so this is an E-arm **retry**, logged as a shrink. The arm's own
+first observation was correct and is in the same log:
+`edge=8 x0=140 y0=140 w0=64 h0=64 → w=157`.
+
+**(b) The 6 s `RESIZE_TRACK` window is too short on a loaded runner.** §10 added
+that wait precisely so a release could not happen before the compositor had
+observed the drag — but on timeout it warned and released anyway, which is the
+blind release it exists to prevent. Locally 6 s was ample; in CI it never once
+sufficed.
+
+### 11.2 The fix, and the one I deliberately did NOT make
+
+Re-resolve the handles **per round**, and widen the TRACK window to 20 s.
+
+The tempting alternative was to loosen the checker — score only each arm's
+*first* observation and ignore retries. That would have turned this log green
+without changing anything real, and it would have discarded the rule that makes
+the checker worth having ("every observation must hold; one good drag does not
+excuse a bad one"). That rule is **correct for independent repeats and wrong
+only for retries against stale geometry**, so the honest repair is to stop
+generating stale-geometry retries. Fixing the generator keeps the assertion at
+full strength; loosening the checker would have hidden the defect it caught.
+
+### 11.3 What this says about §10
+
+§10's conclusion — "a duration becomes a precondition" — was right in direction
+and under-sized in magnitude. The precondition was real; the timeout on it was
+still a duration, and I picked it from local timing. The measured lesson is
+narrower than "poll, don't sleep": **a fallback that fires on timeout inherits
+every problem of the sleep it replaced**, unless the fallback itself is safe.
+Here it was not: it released blind.
+
+### 11.4 NOT yet validated
+
+The fix is injector-side only (`tools/qemu_runner/resize_inject.sh`), so it does
+not touch the kernel — deliberately, because the OPEN-1 E1 campaign is mid-flight
+and owns the only QEMU (§NON-NEGOTIABLE 12). The embedded Python parses and the
+shell lints, but **`smoke-resizeall` has not been run against it**. It is not
+claimed fixed until it has.
