@@ -7581,3 +7581,70 @@ it.
    per-window restore from dock (needs a dock) and Ctrl+Alt+T (needs a terminal
    emulator surface — NOT a key binding, see the previous checkpoint).
 3. `v1.0.0` stays UNTAGGED — OPEN-1 is not closed.
+
+---
+
+## CHECKPOINT 2026-08-29 — operator directive answered; CI green on `ca85e35`
+
+Tip `0c22334`. Kernel **`5349db4d791cc2ab`**. `ci-shard-check` 156/10/7 OK.
+
+### CI: the red I introduced is fixed and CONFIRMED
+
+`cbc8a88` failed shard 9 twice (`smoke-resizeall`, my own new gate).
+**`ca85e35` is green on BOTH suites** — so the DDR-997 §10 `RESIZE_TRACK` fix
+works in CI, and DDR-998's new `smoke-surfclose` passes there too.
+
+### Directive 2026-08-29 — both blocking questions answered in writing
+
+* **§4 multi-arch → DDR-999: NOT achievable.** 115 lines (aarch64) + 89
+  (riscv64) against 27,217 (x86_64); no abstraction layer (ADR-034 decision 2
+  says so in writing); 50/172 files x86-coupled. And the measured multiplier:
+  `qemu-system-aarch64`/`riscv64` are **not installed here**, so every non-x86
+  iteration costs a CI round trip — a ~40× slower loop. Apple Silicon has no CI
+  path at all, so it is not a schedule problem.
+* **§3 OPEN-1 → DDR-1000: does NOT close.** Base rate 1/20 ⇒ `0.95²⁰ = 0.358`,
+  so a clean 20-run happens one time in three even untouched. N=59 for 95%.
+* **§2 nethammer → DDR-989 §9.15: no dump exists**, it has not failed since
+  `8c3af93`. At the measured ~3/6 rate, 2–3 greens is p≈0.25–0.125 — not a fix.
+
+### The E2 grep found something real
+
+`[yieldstall]` fired **outside its own gate**, on real ring-3 pids (45, 43, both
+`cur=AETHERD`), **never RESOLVED**, on failing `smoke-evresize` boots with
+`preempt` frozen — the unexplained third signature. But both captures carry
+`vrjn=1` / `curvr≈1.8e16`: the DDR-989 defect LIVE. Today's kernel shows
+`vrjn=0` / `curvr≈1.9e7`. So the candidate composes two KNOWN defects rather
+than needing a third, and may already be gone. **Not** claimed to be OPEN-1
+route 1 — same lock, different gate, different symptom.
+
+### DDR-990 §13/§14 — the review was right, and the fix found an older bug
+
+Two distinct PIDs proved two instances FINISHED, not that they ran on different
+CPUs. Now each ORs its CPUID APIC bit per iteration; the union must cover ≥2.
+
+Its FIRST run failed — and the cause was a **truncated line**: the completion
+line was SIX `write()` calls, so under SMP another CPU spliced a print into it.
+That silently weakened the ORIGINAL gate too, because `conn_err=0` is a
+substring search and a truncated line just doesn't contribute. Fixed with one
+`SYS_WRITE` per line. Then measured: **`cpumask union=0xf`, each instance on all
+4 CPUs** — the cross-CPU claim is now a number, not an assumption.
+
+### TWO RULES LEARNED THE HARD WAY THIS SESSION
+
+1. **Do not edit the tree while a campaign runs.** `campaign.sh` rebuilds each
+   iteration, so a source edit silently changes the kernel under it. I did this
+   and had to discard 4 runs. While a campaign is live: docs and analysis only.
+2. **Do not push in a burst.** Six pushes queued 10 CI runs and kept moving the
+   tip, which makes §INV.15's three-greens-on-ONE-SHA impossible to accumulate.
+   Batch, then hold.
+
+### Next
+
+1. **HOLD pushes** until the queue drains and `0c22334` has its 2 suites; the
+   3rd green comes from **`workflow_dispatch`**, not `gh run rerun` (§INV.15).
+2. E1 campaign: `smoke-surfdestroy` ×60 on `5349db4d791cc2ab`, then
+   `python3 tools/ci/yieldstall_scan.py build/gatelogs/campaign/*.log` to settle
+   DDR-1000 §8.2/§8.3 and decide OPEN-1 against §6's checklist.
+3. Then: undraft PR #14 → 3 greens on one tip → merge to `dev/phase1`.
+4. Operator's cleanup addendum (branch/PR pruning) is explicitly **LAST**, only
+   after the release is verified. Nothing to do there yet.
