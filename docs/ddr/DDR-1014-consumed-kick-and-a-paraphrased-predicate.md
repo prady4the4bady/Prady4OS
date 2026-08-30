@@ -167,3 +167,48 @@ context — the gates most likely to notice a mistake there.
 improve anything; it can only be shown not to break anything, which is what §5.2
 does. A gate that measured enqueue-to-run latency across an AP unblock would make
 §2 demonstrable rather than merely correct-by-reading, and it does not exist.
+
+
+---
+
+## 6. A SECOND artefact, on the pre-fix kernel — and a possible consolidation
+
+Forty minutes after §1's capture, the identical line appeared again:
+
+```
+[smoke]   [smp] resched FAIL ipis=0 ran=1 idle=1
+shard 5: FAILED at smoke-smpuser after 1 of 14 gates
+```
+
+CI on **`6a6c07e`** — docs-only, so kernel `ba6ac01fe015b2a4`, i.e. **before** the
+fix in §2/§3 (which is `c9740c9a61332f37`).
+
+Two things worth keeping.
+
+**It reddened a different gate.** §1's occurrence took `smoke-percpu-sched` at
+gate 3 of 14; this one took `smoke-smpuser` at gate 1 of 14. Neither owns the
+assertion — both were caught by `resched FAIL` being a `GLOBAL_FORBIDDEN` entry,
+so the failure surfaces in whichever gate on that shard happens to run first.
+**The gate name in a `resched FAIL` report carries no information about the
+defect**, which is worth knowing before anyone tries to correlate one.
+
+### 6.1 This may fold one of DDR-1009's four signatures into this defect
+
+DDR-1009 §1 recorded four distinct CI signatures, the first being *"shard 5
+`smoke-smpuser` (timeout, gate 1/14)"* on `81274f4`. **That is the same shard, the
+same gate, and the same position as the occurrence above.**
+
+If it was also a `resched FAIL`, then DDR-1009's four signatures are three, and
+one of them is now fixed.
+
+**This is not claimed.** The `81274f4` job log was truncated before the guest
+lines and only its tail survives, so the actual sentinel is unknown; and a
+`GLOBAL_FORBIDDEN` hit and a genuine timeout look identical at the tail (both end
+in `terminating on signal 15 … (timeout)`, because `boot_test.sh` kills QEMU on a
+forbidden hit too). Matching on shard-plus-gate-plus-position alone is exactly the
+colour-matching DDR-975 §7 and DDR-1010 §2 each had to retract.
+
+**What would settle it:** `resched FAIL` on the fixed kernel should stop. If
+shard 5 goes quiet across the next several suite-runs on `c9740c9a61332f37` or
+later, the consolidation is likely; if `smoke-smpuser` keeps failing there, it was
+a different thing and DDR-1009's signature #1 stands on its own.
