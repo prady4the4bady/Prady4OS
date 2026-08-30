@@ -1051,3 +1051,29 @@ already names three of those eight as human-gated.
 
 DDR-1013 §2.1 specifies what implementing one actually requires, and notes that
 the eight fall into two policy classes whose gates must differ.
+
+### DDR-1010 §9 — the campaign result: 36/36 clean, and why that is not a closure
+
+Kernel `9623c163cd479043`, one hash on **both sides of every run**: **36 runs,
+36 PASS, 36/36 serial captures kept, zero `gs FAIL`, zero `apfreeze`.**
+
+`smoke-blk-integrity` runs through `boot_test.sh`, so all three strings are
+`GLOBAL_FORBIDDEN` entries and PASS implies their absence. The detector is shown
+live two ways: every capture carries `[percpu] gs OK (syscall ctx)` from the
+one-shot probe, and the continuous probe is proven by the `if (0)` mutant
+(`6c81563d46114d5c`), not by its silence — it prints only on failure by design.
+
+**What this establishes:** the local per-run rate on this kernel is below ~8% at
+95% confidence (`0.92³⁶ ≈ 0.049` — the power figure derived *before* the run).
+
+**What it does not:** that the defect is gone. It reproduced on the **first** run
+of an earlier session; one failure in four cannot separate p=0.25 from p=0.05.
+Nothing since has touched `swapgs`, percpu, or the syscall entry discipline. And
+the probe itself adds a `this_cpu()` read plus a compare to **every syscall** —
+work added to exactly the timing-sensitive path where the race lives, so it may
+perturb what it measures.
+
+**Next experiment, if one runs (§9.3):** not another 36 here — campaign the
+**pre-probe** kernel `29c792a8b8f3b056`, the one the failure was observed on.
+Either answer is informative and neither is assumed. The source defect remains
+**not named**.

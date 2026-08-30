@@ -334,3 +334,73 @@ The other bespoke recipes were not audited. `smoke-shell` was chosen because it
 is a mandatory pre-push gate; a full sweep of which gates do and do not apply the
 global list is unbuilt work, and the count above (`0`) is the query that would
 do it.
+
+
+---
+
+## 9. MEASURED — the §7 campaign, 36/36 clean, and what that is worth
+
+Kernel **`9623c163cd479043`**, one hash recorded on **both sides of every run**
+(the ledger's dual-hash column, which caught two mid-campaign rebuilds earlier
+today).
+
+```
+36 runs, 36 PASS, 36/36 serial snapshots kept
+gs FAIL captures:  0
+apfreeze captures: 0
+```
+
+`smoke-blk-integrity` runs through `boot_test.sh`, so `[apfreeze]`,
+`[percpu] gs FAIL` and `[percpu] current FAIL` are all `GLOBAL_FORBIDDEN`
+entries — PASS implies their absence without needing the captures. The captures
+were nevertheless kept (36/36, against 3/20 before the path fix) so the boots can
+be read for anything else.
+
+### 9.1 The detector was live, and that is shown two ways
+
+A silent detector and a working one look identical in a clean run, so neither is
+assumed:
+
+1. **The one-shot probe printed on all 36.** Every capture contains
+   `[percpu] gs OK (syscall ctx)`, so `sys_getpid` was reached and the GS check
+   executed and passed on each boot.
+2. **The continuous probe is proven by mutation, not by silence.** It prints only
+   on failure by design, so its quiet here proves nothing on its own. What proves
+   it works is §8's `if (0)` mutant (kernel `6c81563d46114d5c`), which made a
+   healthy kernel emit
+   `[percpu] gs FAIL (syscall ctx) apic=0 num=6 gs0=… want=…` with `gs0 == want`.
+
+### 9.2 What 36/36 establishes, and what it does not
+
+**Establishes:** the local per-run rate on this kernel is below ~8% at 95%
+confidence — `0.92³⁶ ≈ 0.049`, which is the power figure §1.1 derived *before*
+the campaign was run, from CI's observed ≈0.08.
+
+**Does NOT establish that the defect is gone**, and three things say so:
+
+- **It reproduced on the FIRST run** of an earlier session on kernel
+  `29c792a8b8f3b056` (§5), then 3 more passed. One failure in four is a single
+  event; it cannot separate p=0.25 from p=0.05, so "the rate fell" is not a
+  comparison these sample sizes support.
+- **The mechanism is untouched.** Nothing in DDR-1010, DDR-1012 or DDR-1013
+  changed `swapgs`, percpu, or the syscall entry path's discipline. A defect
+  whose cause is unaddressed does not stop existing because a sample came back
+  clean.
+- **The instrument may perturb what it measures.** §7's probe adds a
+  `this_cpu()` read and a compare to the top of **every syscall**. The failure is
+  a timing-sensitive race in the syscall entry path, and that is precisely where
+  work was added. 0/36 on a kernel carrying the probe is therefore weaker
+  evidence about the *un*probed kernel than the arithmetic alone suggests.
+
+### 9.3 The next experiment, if one is run
+
+Not another 36 on this kernel. The question §9.2 raises is answerable: campaign
+`smoke-blk-integrity` on **`29c792a8b8f3b056`** — the pre-probe kernel, and the
+one on which the failure was actually observed. If it fails there at a rate the
+probe kernel does not show, the probe perturbs the race and the instrument needs
+rethinking. If it too comes back clean, the 1-in-4 was a small-sample artefact
+and the local rate was always low.
+
+**Either answer is worth having and neither is assumed here.** What ships today
+is: a located mechanism, an armed continuous detector, and a bounded local rate.
+The source defect is still **not named**.
