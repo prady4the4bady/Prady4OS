@@ -8488,3 +8488,67 @@ failure mode DDR-1002 and DDR-1012 were written about.
 project). PR #17 comment 5471708345 records all of the above; **do not comment
 again** for a recurrence of this same signature. If it does recur, the next step
 is an instrument on the compositor's pointer-poll path — NOT a timeout bump.
+
+---
+
+## CHECKPOINT 2026-08-30 23:4x UTC — DDR-1023: pre-probe campaign 0/20
+
+### The result
+
+Kernel **`29c792a8b8f3b056`** (rebuilt bit-for-bit from `d7d2794`, the commit
+before DDR-1010's probe landed at `f9bdfeb`), `smoke-blk-integrity`, **N=20,
+thresholds fixed before starting**:
+
+**20/20 pass. Zero failures. One hash across all 40 recorded values, zero drift.**
+
+**DDR-1010 §9.2's perturbation hypothesis is NOT supported.** The probe is not
+what made its 36/36 campaign clean — the kernel *without* the probe is clean too.
+
+The two campaigns bound their own binaries and **must not be pooled**
+(DDR-1009 §8.3 permits pooling only across an identical binary):
+
+| kernel | campaign | bound at 95% |
+|---|---|---|
+| `9623c163cd479043` post-probe | 36/36 | rate < 8% |
+| `29c792a8b8f3b056` pre-probe | 20/20 | rate < 14% |
+
+At the originally-observed 25%, `P(0 in 20) = 0.0032`.
+
+### What this changes
+
+**OPEN-2 is NOT closed.** What changed is where the evidence lives:
+
+- **The local reproduction route is EXHAUSTED** — 56 clean runs across the two
+  kernels that matter, including the exact binary the failure was first observed
+  on. **Do not re-run this shape.**
+- **The "~1 in 4" figure was one session's small sample and has not held up.
+  Stop quoting it as a rate.**
+- The live evidence is **CI-side**, and DDR-1019 already showed one CI
+  `[apfreeze]` was a **panic symptom**, not a scheduler defect — so part of the
+  historical "OPEN-2 rate" was never one defect. At least three producers share
+  that sentinel.
+
+### A methodology defect in my own campaign — recorded because it nearly landed
+
+The runner copied "the capture" by globbing `build/*.log.fail-*` and
+`build/blkint.log`. **Neither exists on a passing run**, so it fell back to
+make's stdout: all 20 files are **3010 B, identical size, zero `[hb]` lines**.
+
+I then grepped them for `apfreeze|gs FAIL|NEXUS KERNEL PANIC`, got nothing, and
+was about to report that as evidence. **It would have been vacuous** — those
+strings cannot appear in make output either way.
+
+The claim stands only on the independent argument: `smoke-blk-integrity` goes
+through `boot_test.sh`, all three sentinels are `GLOBAL_FORBIDDEN` entries, and
+**all 20 runs returned rc=0**, so none fired.
+
+Same class as the five in-gate instances this session — but in **campaign
+tooling**. **Next campaign: point `SERIAL_LOG` at a per-run path and assert the
+file contains boot output before scanning it.**
+
+### NEXT for OPEN-2 (CI-side only)
+
+1. Watch every CI heartbeat for `panic_stage=`. `stage=1` = DDR-1019's case again
+   and narrows the question to `kputs`; `loser_vec` names the second exception.
+2. On any new `[apfreeze]`, resolve its RIP against **its own binary** first.
+3. The v1.0.0 tag is HELD by operator decision; STEP 3 is not to be started.

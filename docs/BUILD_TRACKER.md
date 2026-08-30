@@ -1415,6 +1415,38 @@ F#74 is blocked by a decision already taken (DDR-982's withdrawn per-slot
 enforcement). The other eight are deferred above with reasons.
 **Nothing in Group F is now both buildable and unlogged.** It does NOT claim
 Group F is feature-complete — eight agents and an NL UI are genuinely absent.
+
+---
+
+## DDR-1023 — pre-probe campaign: 0/20, and the local route is exhausted
+
+**CAMPAIGN RUN, null result, no code change.** Kernel `29c792a8b8f3b056`
+(rebuilt bit-for-bit from `d7d2794`, the commit before the probe landed),
+`smoke-blk-integrity`, **N=20, thresholds fixed before starting**.
+
+**20/20 pass, zero failures, one hash across all 40 recorded values, zero drift.**
+
+**DDR-1010 §9.2's perturbation hypothesis is NOT supported.** The probe is not
+what made that 36/36 campaign clean — the kernel without it is clean too. The two
+campaigns bound their own binaries and **must not be pooled** (DDR-1009 §8.3):
+36/36 → rate < 8%; 20/20 → rate < 14%; both 95%. At the originally-observed 25%,
+`P(0 in 20) = 0.0032`.
+
+**OPEN-2 is not closed** — what changed is where the evidence lives. The local
+reproduction route is **exhausted** (56 clean runs across both kernels, including
+the exact binary the failure was first seen on); the live evidence is CI-side,
+where DDR-1019 showed one `[apfreeze]` was a panic symptom and armed the
+instrument for the next. **The "~1 in 4" figure should not be quoted again.**
+
+**Methodology defect recorded (mine).** The runner's captures were **make
+output, not serial logs** — 3010 B each, zero `[hb]` lines — because the glob for
+a capture file matches nothing on a passing run. A grep for `apfreeze` over them
+was therefore vacuous, and I nearly reported it as evidence. The §3 claim stands
+only on rc=0 plus `GLOBAL_FORBIDDEN` (all three sentinels are in that list and
+this gate uses `boot_test.sh`). Same class as the five in-gate instances this
+session — it recurs in **campaign tooling** too. Next campaign: point
+`SERIAL_LOG` at a per-run path and assert the file contains boot output before
+scanning it.
  `READ_FILE` (1015) · `DELETE_FILE` (1016) ·
 `QUERY_MEMORY` (1018) · `REWRITE_AGENT_CODE` (842) · `PROPOSE_HYPOTHESIS` +
 `EVOLVE_GENOME` (1020); `SEND_IPC` and `RUN_EXPERIMENT` deferred.
