@@ -224,11 +224,27 @@ to OPEN-2 has an exact signature match on an older kernel.
 - **The two frozen CPUs are not both explained.** `ticks[11330,186,184,11279]`
   shows CPU 1 *and* CPU 2 stopped, at 186 and 184. Only one `[apfreeze]` CPU
   (cpu=1) is in the capture. Whether CPU 2 froze for the same reason is unknown.
-- **17 of 20 campaign serial captures were lost.** The resumed chunk did not
-  snapshot them, so only runs 1–3 have `.serial.log` files. The `[apfreeze]`
-  conclusion survives (§1), but nothing else about those boots can be read. This
-  is the DDR-1000 §10 lesson recurring in a new form: the snapshot was configured
-  for the first chunk and not carried into the resume.
+- **17 of 20 campaign serial captures were lost — and the mechanism is now
+  known.** `campaign_chunk.sh` snapshotted with
+
+  ```sh
+  if [ -n "$serial" ] && [ -f "$ROOT/$serial" ]; then
+  ```
+
+  It prepends `$ROOT/` **unconditionally**, so an *absolute* serial path becomes
+  `/home/user/Prady4OS//home/user/Prady4OS/build/...`, which never exists — and
+  the copy silently did nothing. The first chunk was invoked with a **relative**
+  path and kept its captures; the resumed chunk used an absolute one and kept
+  none. That is the whole of it: not a resume bug, a path-handling bug that only
+  a relative path hides.
+
+  Fixed here — both forms accepted, and a run whose capture path resolves to
+  nothing now prints a WARNING naming the path instead of dropping it quietly. A
+  silent no-op there is indistinguishable from a clean run with nothing to
+  record, which is the same "reads as covered" failure as §4 and §8.
+
+  The `[apfreeze]` conclusion in §1 survives regardless, because it rests on the
+  ledger's PASS lines rather than on the captures.
 - **The rate is not measured.** One failure in four on one kernel is an
   observation, not a rate.
 
