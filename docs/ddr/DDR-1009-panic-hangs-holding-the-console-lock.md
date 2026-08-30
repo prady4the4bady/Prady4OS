@@ -318,3 +318,31 @@ them is conservative rather than generous.
 row is an unremarkable outcome even if the failure rate were unchanged at 25%.
 It is recorded as a tally to be continued, not as a result — which is the same
 discipline §1.1 applies to the three-green rule.
+
+### 8.2 The tally continued, and it did not stay clean
+
+The next kernel, `9623c163cd479043` (DDR-1012's horizon bands), spans `6d4db94`
+and `63c8ead` — the latter is Markdown-only, verified by `git diff --name-only`:
+
+| tip | runs | green | failed |
+|---|---|---|---|
+| `6d4db94` | push, pull_request | 2 | 0 |
+| `63c8ead` | push | 0 | **1** |
+
+**`smoke-nethammer`, shard 3, failed at gate 20 of 20** — the same gate at the
+same position as the `93a4a1f` failure in §1's table, on a *different* kernel.
+
+Two things follow, and the second is the one that matters.
+
+1. **It is not this PR's.** `63c8ead` changes two Markdown files; the same kernel
+   went green on both runs of the immediately preceding SHA.
+2. **The signature outlived the kernel it was first seen on.** §1 recorded it on
+   `bb9c6187a30bb0dd`; it now recurs on `9623c163cd479043`, across every change
+   this session made. So it is not something DDR-1009's console-lock fix, or
+   DDR-1010's probe, touched — consistent with §5's refusal to attribute the
+   other three signatures to that fix.
+
+The §8.1 caution was written in advance and is now discharged the way it should
+be: six greens *was* an unremarkable run, and the seventh run failed. Nothing
+here supports a claim that the failure rate has improved on the successor
+kernels.
