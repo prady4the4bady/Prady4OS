@@ -670,7 +670,7 @@ void isr_dispatch(struct regs *r) {
      * would then spin with interrupts already masked, turning a diagnosable
      * panic into a silent machine-wide hang. Drop it before printing: the path
      * is terminal and the lock guards only cosmetic line atomicity. */
-    console_line_force_release();
+    console_panic_force_release();          /* DDR-1009: g_line_lock AND g_console_lock */
 
     /* DDR-979 §6: only the FIRST panicking CPU prints.
      *

@@ -34,6 +34,7 @@ done
 
 SOCK="$sock" LOGFILE="$log" EXPECT="$expect" \
 GEOM_TITLE="${GEOM_TITLE:-}" GEOM_FIELD="${GEOM_FIELD:-close}" \
+GEOM_LINE="${GEOM_LINE:-PRADYOS_WM_GEOM}" \
 ABSX="${ABSX:-16000}" ABSY="${ABSY:-12000}" \
 INJECT_TIMEOUT_S="${INJECT_TIMEOUT_S:-60}" python3 - <<'PY'
 import os, socket, json, time
@@ -45,6 +46,10 @@ ax       = int(os.environ.get("ABSX", "16000"))
 ay       = int(os.environ.get("ABSY", "12000"))
 geom_title = os.environ.get("GEOM_TITLE", "")
 geom_field = os.environ.get("GEOM_FIELD", "close")
+# DDR-1008: which published line carries the geometry. Defaults to the literal
+# this resolver used to hardcode, so every existing caller is unchanged; the dock
+# publishes PRADYOS_WM_DOCK instead, with the same `title=` / `field=x,y` shape.
+geom_line = os.environ.get("GEOM_LINE", "PRADYOS_WM_GEOM")
 deadline = time.monotonic() + float(os.environ.get("INJECT_TIMEOUT_S", "60"))
 
 s = None
@@ -90,7 +95,7 @@ def resolve_geometry():
     except OSError:
         return False
     for ln in reversed(lines):                 # newest wins: layout can change
-        if "PRADYOS_WM_GEOM" not in ln or ("title=" + geom_title) not in ln:
+        if geom_line not in ln or ("title=" + geom_title) not in ln:
             continue
         for tok in ln.split():
             if tok.startswith(geom_field + "="):
@@ -135,8 +140,8 @@ def click():
 if geom_title:
     while not resolve_geometry():
         if time.monotonic() >= deadline:
-            print("[inject] TIMEOUT — no PRADYOS_WM_GEOM for title=%s"
-                  % geom_title)
+            print("[inject] TIMEOUT — no %s for title=%s"
+                  % (geom_line, geom_title))
             raise SystemExit(0)
         time.sleep(0.2)
 

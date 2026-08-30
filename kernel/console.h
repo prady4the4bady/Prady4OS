@@ -28,4 +28,4 @@ void kvga_line(const char *s, int row);   /* write a string to one VGA text row 
 uint64_t console_line_lock(void);            /* returns saved flags */
 int      console_line_trylock(uint64_t *fl); /* 1 = taken (never blocks) */
 void     console_line_unlock(uint64_t fl);
-void     console_line_force_release(void);   /* DDR-970: kernel-panic path ONLY */
+void     console_panic_force_release(void);  /* DDR-970/1009: panic path ONLY */

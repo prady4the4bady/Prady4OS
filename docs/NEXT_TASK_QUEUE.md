@@ -76,8 +76,33 @@ Batch their DDRs in one pass first (§4.3), then implement.
       now reaches the focused app, which DDR-720's unconditional hotkey made
       impossible for ANY application. 3-arm gate, mutation-checked both ways
       (M1 — bound to both — passes arms A+B and is caught only by arm C).
-- [ ] Ctrl+Alt+T launches a PRISM terminal window
-- [ ] Per-window restore from dock (DDR-717 restores all)
+- [ ] **BLOCKED — Ctrl+Alt+T launches a PRISM terminal window.** Detecting the
+      chord is ~5 lines (the DDR-995 pattern over NSI 96; `KMOD_CTRL` is already
+      delivered to ring 3, `ps2kbd.c:108`). **The launch is the feature, and two
+      pieces it needs do not exist.** (1) There is no windowed terminal: the only
+      `SYS_SURFACE_*` clients in the tree are `surfacetest.c` and
+      `surfdestroytest.c`, and PRISM writes to fd 1 — the serial console — with
+      no surface code at all. A terminal-in-a-window is a text-rendering client
+      plus a channel to a shell, not a binding. (2) There is no way to TELL a
+      spawned client what to attach to: `sys_exec.c:47` reads
+      `(void)uargv; (void)uenvp;  /* baseline: argv[0] = path only */`, so a pipe
+      fd or surface id cannot be passed as an argument. **Unblocked by:** a
+      windowed terminal client, plus Group D's `argv`/`envp` marshalling (or an
+      agreed inherited-fd convention). Marked BLOCKED per rule 4 rather than
+      silently skipped.
+- [x] Per-window restore from dock — DDR-1008, `smoke-perrestore` (shard 4).
+      A dock strip of tiles along the bottom, one per minimized window, drawn
+      OVER the windows and present only while `g_min_mask != 0`; clicking a tile
+      restores that window and leaves the others minimized. Tiles are ordered by
+      ascending surface id, NOT by z-order — poll order is z-sorted and reshuffles
+      on every raise, which is both bad UI and the untestable target DDR-910 was
+      written about. **The gate minimizes TWO windows and restores ONE**: the
+      obvious one-window version is vacuous, because DDR-717's `g_min_mask = 0`
+      passes it. Publication could not be folded into the block that emits
+      `PRADYOS_WM_GEOM` — that block is guarded on surface count, focus and
+      geometry, and minimizing changes none of the three, so a dock line emitted
+      there would never appear after a minimize. Found by reading the republish
+      condition, not from a failing run.
 - [x] Window maximize at real display size — DDR-1007, `smoke-wmmax` green for
       the NEW reason (`compositor asked for 798x728`, 4.3× the old area), M1/M2
       mutation-checked on distinct hashes. The blocker was never the compositor:
@@ -203,6 +228,30 @@ Batch their DDRs in one pass first (§4.3), then implement.
 - [ ] Phase 9.1–9.6 assembly optimisation — profile first, each needs a measured baseline
 - [ ] `prad` package manager (NSI 88–90; 87 is `SYS_READ_AUDIT`, §INV.12)
 - [ ] Full invariant suite S1–S8
+
+### Found while working the queue — release-decision items
+- [x] **DDR-1009 — the release candidate fails 1 CI suite in 4.** Every commit
+      from `d0a85b5` to `93a4a1f`, and `fa29506`, is Markdown-only (verified by
+      `git diff --name-only` and by rebuilding `bb9c6187a30bb0dd` bit-for-bit in
+      a clean worktree), so twelve CI suite-runs share ONE kernel binary:
+      **9 green, 3 failed, at four distinct gates with four distinct
+      signatures** (`smoke-smpuser` timeout, `smoke-msixap` panic-then-hang,
+      `smoke-nethammer` timeout at 20/20, `smoke-smppreempt` `[apfreeze]`).
+      **§NON-NEGOTIABLE 1 is satisfiable by luck at that rate** — 0.75³ ≈ 42% —
+      and this kernel has already passed it twice (`d0a85b5`, `4b0b542`, 3/3
+      each). Read the DDR before writing anything about CI being green.
+- [x] **DDR-1009 fix — the panic path force-releases the wrong lock.** DDR-970
+      force-releases `g_line_lock`; `kputs` takes `g_console_lock`, a different
+      lock. DDR-979's latch then halts the losing CPU in `for(;;) cli; hlt`
+      holding whatever it held. Artefact: `smoke-msixap` printed
+      `*** NEXUS KERNEL PANIC ***` and **not one further byte** for ~100 s until
+      `timeout` killed QEMU — `idt.c:702` is the very next statement. NOT
+      claimed to explain the other three signatures.
+- [x] **DDR-1009 detector — `NEXUS KERNEL PANIC` added to `GLOBAL_FORBIDDEN`.**
+      One emitter, zero consumers: a ring-0 panic was caught only when it
+      happened to break a gate's assertion or run out its clock. Note the
+      §NON-NEGOTIABLE 6 verification command in CLAUDE.md keys on the LAST list
+      entry, so appending breaks it — it was updated in the same commit.
 
 ### Infrastructure (directive §6) — status
 - [x] §6.1 persistent campaign runner — `tools/ci/campaign.sh`

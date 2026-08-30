@@ -760,3 +760,71 @@ and requests 512 satisfied the old `grep "w=512 h=512"` and fails now.
 Unmeasured, and recorded as such: the Manual-mode work-area arm (the gate boots
 Sovereign), the predicted 2.2× per-window blit cost, and `smoke-wmmax`'s
 DDR-975 §8 intermittency — untouched and not claimed fixed.
+
+---
+
+## DDR-1008 — Per-window restore from a dock (Group E)
+
+**DONE.** `smoke-perrestore` (shard 4, fast). DDR-717 shipped minimize with one
+restore-**all** keystroke; the dock restores one window at a time.
+
+A strip of tiles along the bottom, one per minimized window, drawn **over** the
+windows and present only while `g_min_mask != 0`. Tiles are ordered by ascending
+surface id, **not** z-order — `SYS_SURFACE_POLL` is z-sorted and reshuffles on
+every raise, which is bad UI and an untestable target (DDR-910's finding). The
+dock is an overlay and deliberately does **not** shrink DDR-1007's work area, or
+a maximized window would resize itself whenever an unrelated window was
+minimized. Sovereign-only: Manual already draws window buttons in its own
+taskbar, so wiring those is a separate change, recorded as not done.
+
+**The gate minimizes TWO windows and restores ONE.** The obvious one-window
+version is vacuous — DDR-717's `g_min_mask = 0` passes it. The load-bearing
+assertion is the last: after restoring BETA, the dock must still publish exactly
+one tile and it must be ALPHA (`PRADYOS_WM_DOCK n=1 id=0 title=ALPHA`); a
+restore-all implementation publishes `n=0`.
+
+**Found by reading, not by a failing run:** publication could not be folded into
+the block that emits `PRADYOS_WM_GEOM`, which is guarded on
+`ns != composited || cur_focus != last_focus || geom_moved`. Minimizing changes
+none of the three, so a dock line emitted there would never appear after a
+minimize — the only moment it matters.
+
+`mouse_inject.sh` gained one backward-compatible variable, `GEOM_LINE`
+(default `PRADYOS_WM_GEOM`), so a gate can resolve coordinates out of the dock
+line instead. §INV.5 holds: no gate hardcodes a pixel.
+
+---
+
+## DDR-1009 — 1 CI suite in 4 fails on the release candidate; one failure names a mechanism
+
+**THE MEASUREMENT IS THE HEADLINE.** Every commit from `d0a85b5` to `93a4a1f`,
+and `fa29506`, is Markdown-only — verified by `git diff --name-only` and by
+rebuilding `bb9c6187a30bb0dd` bit-for-bit in a clean worktree. Twelve CI
+suite-runs therefore share **one kernel binary**: **9 green, 3 failed**, at four
+gates with four signatures (`smoke-smpuser` timeout; `smoke-msixap`
+panic-then-hang; `smoke-nethammer` timeout at 20/20; `smoke-smppreempt`
+`[apfreeze]`). **§NON-NEGOTIABLE 1 is satisfiable by luck at 25%** — `0.75³ ≈
+42%` — and this kernel has already passed it **twice**.
+
+**The fix.** DDR-970 force-releases `g_line_lock` on the panic path. `kputs` —
+which the panic printer itself calls — takes `g_console_lock`, a *different*
+lock. Nothing released it. DDR-979's one-winner latch then made it worse: the
+losing CPU halts in `for(;;) cli; hlt` still holding whatever it held. Artefact:
+`smoke-msixap` printed `*** NEXUS KERNEL PANIC ***` and **not one further byte**
+for ~100 s until `timeout` killed QEMU, with `idt.c:702` the very next statement.
+`console_line_force_release` → `console_panic_force_release`, releasing both.
+Ruled out on the way: `kputc`'s UART wait is bounded (`CONSOLE_THRE_MAX`), so it
+cannot hang.
+
+**The detector gap.** `*** NEXUS KERNEL PANIC ***` had one emitter and **zero**
+consumers — no gate grepped for it, so a ring-0 panic was caught only when it
+happened to break an assertion or run out a clock. Added to `GLOBAL_FORBIDDEN`
+(now 71 entries). Note the §NON-NEGOTIABLE 6 verification command keys on the
+**last** list entry, so appending breaks it; CLAUDE.md was updated in the same
+commit and now says so explicitly.
+
+**NOT claimed:** that the lock fix explains the other three signatures (they
+produced no panic banner at all), nor that the four are four separate defects,
+nor that OPEN-1 route 1 is closed — though the `SYSFSTAT OK` stopping point
+recurring *with a panic* does show DDR-994's "route 1 prints nothing" framing is
+too strong.

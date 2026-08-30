@@ -222,7 +222,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -2959,6 +2959,40 @@ smoke-wmmin: $(IMG) fat-image sfs-image
 	@grep -q "PRADYOS_WM_MIN id=1" build/wmmin.log || { echo "[wmmin] FAIL — min box click did not minimize"; tail -20 build/wmmin.log; exit 1; }
 	@grep -q PRADYOS_WM_RESTORE build/wmmin.log || { echo "[wmmin] FAIL — r did not restore"; tail -20 build/wmmin.log; exit 1; }
 	@echo "[wmmin] PASS — $$(grep -a PRADYOS_WM_MIN build/wmmin.log | head -1) + restore"
+
+# Layer-7 PER-WINDOW restore gate (DDR-1008). DDR-717 shipped minimize with a
+# single restore-ALL keystroke; the dock restores one window at a time.
+#
+# THE GATE MINIMIZES TWO WINDOWS AND RESTORES ONE, and that is the whole design.
+# Minimizing one and clicking its tile would be VACUOUS: `g_min_mask = 0` --
+# DDR-717's restore-all wearing this feature's name -- passes it. The load-bearing
+# assertion is the LAST one: after restoring BETA, the dock must still list
+# exactly one tile and it must be ALPHA. A restore-all implementation publishes
+# `n=0` there and fails. (Same vacuity shape as DDR-973 §6's chain-repeat mutant.)
+#
+# Coordinates come from what the compositor published (§INV.5): `min=` out of
+# PRADYOS_WM_GEOM for the two min-box clicks, `tile=` out of PRADYOS_WM_DOCK for
+# the dock click -- the latter via GEOM_LINE, added to mouse_inject.sh in the
+# same commit and defaulting to the literal it used to hardcode.
+smoke-perrestore: $(IMG) fat-image sfs-image
+	@echo "[perrestore] dock gate: minimize BETA + ALPHA, restore ONLY BETA from its tile..."
+	@rm -f build/perrestore.log /tmp/pperr.sock
+	@GEOM_TITLE=BETA GEOM_FIELD=min bash tools/qemu_runner/mouse_inject.sh build/perrestore.log /tmp/pperr.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_MIN id=1" &
+	@GEOM_TITLE=ALPHA GEOM_FIELD=min bash tools/qemu_runner/mouse_inject.sh build/perrestore.log /tmp/pperr.sock "PRADYOS_WM_MIN id=1" "PRADYOS_WM_DOCK n=2" &
+	@GEOM_LINE=PRADYOS_WM_DOCK GEOM_TITLE=BETA GEOM_FIELD=tile bash tools/qemu_runner/mouse_inject.sh build/perrestore.log /tmp/pperr.sock "PRADYOS_WM_DOCK n=2" "PRADYOS_WM_UNMIN id=1" &
+	@timeout 150 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pperr.sock,server,nowait \
+	    -serial file:build/perrestore.log -display none -no-reboot || true
+	@grep -q "PRADYOS_WM_MIN id=1" build/perrestore.log || { echo "[perrestore] FAIL — BETA never minimized"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_MIN id=0" build/perrestore.log || { echo "[perrestore] FAIL — ALPHA never minimized"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_DOCK n=2" build/perrestore.log || { echo "[perrestore] FAIL — dock never listed both minimized windows"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_UNMIN id=1" build/perrestore.log || { echo "[perrestore] FAIL — dock tile click did not restore BETA"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_DOCK n=1 id=0 title=ALPHA" build/perrestore.log || { echo "[perrestore] FAIL — restoring BETA did not leave ALPHA minimized (restore-all, not per-window)"; grep -a PRADYOS_WM_DOCK build/perrestore.log | tail -8; exit 1; }
+	@echo "[perrestore] PASS — $$(grep -a PRADYOS_WM_UNMIN build/perrestore.log | head -1), ALPHA still docked"
 
 # Layer-7 maximize gate (DDR-719, retargeted by DDR-1007): click B's max box ->
 # the compositor saves geometry, requests the WORK AREA via the event channel

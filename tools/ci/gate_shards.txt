@@ -197,3 +197,4 @@
 9	smoke-rqfree	120	strict
 9	smoke-resizeall	180	strict
 8	smoke-surfclose	180	strict
+4	smoke-perrestore	180	fast

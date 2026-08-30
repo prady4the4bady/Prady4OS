@@ -744,6 +744,124 @@ static int max_box_hit(const struct surface_info *s, int x, int y) {
     return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
 }
 
+/* ---- DDR-1008: the dock -- per-window restore -------------------------------
+ *
+ * DDR-717 shipped minimize complete on the HIDE side and left restore as one
+ * keystroke: `r` clears the whole mask. A user with three windows who minimizes
+ * one and wants it back has to un-minimize all three, and until they do there is
+ * nothing on screen saying the window still exists.
+ *
+ * The dock is a strip of tiles along the bottom, one per minimized window,
+ * drawn OVER the windows and present only while g_min_mask != 0.
+ *
+ * Three decisions, each with a cheaper wrong version:
+ *
+ *  - Tiles are ordered by ASCENDING SURFACE ID, not by z-order. SURFACE_POLL
+ *    returns z-sorted and z changes on every raise, so poll order would
+ *    reshuffle the dock when an unrelated window is clicked -- bad UI, and an
+ *    untestable target. DDR-910's finding was exactly that a gate silently
+ *    encoding window order broke when fair-share scheduling changed it.
+ *
+ *  - The dock is an OVERLAY and does not shrink DDR-1007's work area. If it did,
+ *    a maximized window would resize itself whenever an unrelated window was
+ *    minimized.
+ *
+ *  - SOVEREIGN ONLY. Manual already draws window buttons in its own taskbar
+ *    (render_manual), so a second strip above the first would be two docks.
+ *    Wiring those existing buttons to this same restore path is the Manual
+ *    answer and is a separate change -- recorded as not done, not skipped. */
+#define DOCK_TILE_W  96
+#define DOCK_TILE_H  24
+#define DOCK_GAP     4
+#define DOCK_MARGIN  8
+
+static int dock_tile_x(int slot) { return DOCK_MARGIN + slot * (DOCK_TILE_W + DOCK_GAP); }
+static int dock_tile_y(void)     { return (int)g_fi.height - DOCK_TILE_H - DOCK_MARGIN; }
+
+/* Fill `out` with the ids of minimized surfaces in ascending-id order; returns
+ * the count. Ids come from the live poll, so a minimized surface that has since
+ * been destroyed contributes no tile. */
+static int dock_ids(const struct surface_info *sf, long n, unsigned *out, int max) {
+    int cnt = 0;
+    for (unsigned id = 0; id < 16 && cnt < max; id++) {
+        if (!(g_min_mask & (1u << id))) continue;
+        for (long i = 0; i < n; i++)
+            if (sf[i].id == id) { out[cnt++] = id; break; }
+    }
+    return cnt;
+}
+
+static void draw_dock(const struct surface_info *sf, long n) {
+    if (!g_min_mask) return;
+    unsigned ids[16];
+    int cnt = dock_ids(sf, n, ids, 16);
+    int ty = dock_tile_y();
+    for (int k = 0; k < cnt; k++) {
+        int tx = dock_tile_x(k);
+        if (tx + DOCK_TILE_W > (int)g_fi.width) break;      /* dock is full */
+        glass_card((unsigned)tx, (unsigned)ty, DOCK_TILE_W, DOCK_TILE_H);
+        for (long i = 0; i < n; i++)
+            if (sf[i].id == ids[k] && sf[i].title[0])
+                draw_str(sf[i].title, tx + 8, ty + 9, 1, 0xE0, 0xE0, 0xF0);
+    }
+}
+
+/* Which dock tile is under (x,y), or -1. Mirrors draw_dock's layout exactly --
+ * one expression per coordinate, shared with the renderer through dock_tile_x /
+ * dock_tile_y so the clickable target cannot drift from the drawn one. */
+static int dock_hit(const struct surface_info *sf, long n, int x, int y) {
+    if (!g_min_mask) return -1;
+    unsigned ids[16];
+    int cnt = dock_ids(sf, n, ids, 16);
+    int ty = dock_tile_y();
+    if (y < ty || y >= ty + DOCK_TILE_H) return -1;
+    for (int k = 0; k < cnt; k++) {
+        int tx = dock_tile_x(k);
+        if (tx + DOCK_TILE_W > (int)g_fi.width) break;   /* same cut draw_dock makes */
+        if (x >= tx && x < tx + DOCK_TILE_W)
+            return (int)ids[k];
+    }
+    return -1;
+}
+
+/* DDR-1008 §3: publish tile centres in TABLET coordinates (§INV.5), latched on
+ * g_min_mask so the log carries one burst per change rather than one per frame.
+ *
+ * This CANNOT be folded into the block that emits PRADYOS_WM_GEOM. That block is
+ * guarded by `ns != composited || cur_focus != last_focus || geom_moved`, and
+ * minimizing changes none of the three -- not the surface count, not focus, not
+ * any surface's x/y/w/h. A dock line emitted only from there would never appear
+ * after a minimize, which is the only moment it matters. Found by reading the
+ * republish condition, not by a failing run.
+ *
+ * `n=` repeats on every line deliberately: it is what lets a gate assert that
+ * restoring one window left the others minimized, which is the whole difference
+ * between this and DDR-717's restore-all. */
+static unsigned g_dock_pub_mask = 0xFFFFu;      /* force a first publish */
+static void publish_dock(const struct surface_info *sf, long n) {
+    if (g_min_mask == g_dock_pub_mask) return;
+    g_dock_pub_mask = g_min_mask;
+    unsigned ids[16];
+    int cnt = dock_ids(sf, n, ids, 16);
+    int ty = dock_tile_y();
+    if (cnt == 0) {
+        printf("PRADYOS_WM_DOCK n=0\n");
+        fflush(stdout);
+        return;
+    }
+    for (int k = 0; k < cnt; k++) {
+        if (dock_tile_x(k) + DOCK_TILE_W > (int)g_fi.width) break;  /* undrawn */
+        const char *t = "-";
+        for (long i = 0; i < n; i++)
+            if (sf[i].id == ids[k] && sf[i].title[0]) t = sf[i].title;
+        printf("PRADYOS_WM_DOCK n=%d id=%u title=%s tile=%d,%d\n",
+               cnt, ids[k], t,
+               tab_x(dock_tile_x(k) + DOCK_TILE_W / 2),
+               tab_y(ty + DOCK_TILE_H / 2));
+    }
+    fflush(stdout);
+}
+
 
 /* A small white cursor block at (x,y), clamped to the screen. */
 static void draw_cursor(int x, int y) {
@@ -934,6 +1052,7 @@ static void recompose_drag(int cx, int cy) {
         long sva = nsi(SYS_SURFACE_CMAP, (long)sf[i].id, 0, 0);
         if (sva > 0) draw_window((const unsigned char *)sva, &sf[i]);
     }
+    draw_dock(sf, n);                    /* DDR-1008: overlay, above the windows */
     draw_cursor(cx, cy);
     present();
 }
@@ -948,7 +1067,9 @@ static void recompose_scene(void) {
         long sva = nsi(SYS_SURFACE_CMAP, (long)sf[i].id, 0, 0);
         if (sva > 0) draw_window((const unsigned char *)sva, &sf[i]);
     }
+    draw_dock(sf, n);                    /* DDR-1008: overlay, above the windows */
     present();
+    publish_dock(sf, n);                 /* DDR-1008 §3: latched on g_min_mask */
 }
 
 int main(void) {
@@ -1135,7 +1256,9 @@ int main(void) {
                     }
                 }
             }
+            draw_dock(surfs, ns);        /* DDR-1008: overlay, above the windows */
             present();
+            publish_dock(surfs, ns);     /* DDR-1008 §3 */
             if (ns > 0) {
                 printf("PRADYOS_ZORDER");
                 for (long i = 0; i < ns; i++) printf(" %u", surfs[i].id);
@@ -1332,8 +1455,34 @@ int main(void) {
             int up = !ms.buttons && prev_btn;
             if (down) {
                 click_ripple(ms.x, ms.y);                    /* DDR-727: ripple */
-                int card = agent_card_hit(ms.x, ms.y);       /* DDR-713: card first */
-                if (card >= 0) {                             /* trigger the agent via AETHER */
+                /* DDR-1008: the dock is drawn OVER the windows and the agent
+                 * panel, so it must be hit-tested first or a tile that is
+                 * visibly on top would be unclickable wherever it overlaps. */
+                int dock_id = -1;
+                if (g_min_mask) {
+                    struct surface_info dsf[16];
+                    long dn = nsi(SYS_SURFACE_POLL, (long)dsf, 16, 0);
+                    dock_id = dock_hit(dsf, dn, ms.x, ms.y);
+                    if (dock_id >= 0) {
+                        /* Clear ONLY this window's bit. `g_min_mask = 0` here
+                         * would be DDR-717's restore-all wearing this feature's
+                         * name -- and would pass a gate that only checks the
+                         * clicked window came back. See DDR-1008 §4. */
+                        g_min_mask &= ~(1u << (unsigned)dock_id);
+                        nsi(SYS_SURFACE_RAISE, (long)dock_id, 0, 0);   /* raise + focus */
+                        /* NOT "PRADYOS_WM_RESTORE_ONE": DDR-717 already prints
+                         * PRADYOS_WM_RESTORE, and `grep -q PRADYOS_WM_RESTORE`
+                         * in smoke-wmmin would match that as a PREFIX. Named
+                         * after UNMAX instead, which collides with nothing. */
+                        printf("PRADYOS_WM_UNMIN id=%d\n", dock_id);
+                        fflush(stdout);
+                        recompose_scene();
+                    }
+                }
+                int card = (dock_id >= 0) ? -1 : agent_card_hit(ms.x, ms.y);  /* DDR-713 */
+                if (dock_id >= 0) {
+                    /* handled above; fall through to the frame's tail */
+                } else if (card >= 0) {                             /* trigger the agent via AETHER */
                     long pid = nsi(SYS_SPAWN_AGENT, 0, (long)g_agents[card], card);
                     printf("PRADYOS_AGENT_TRIGGER name=%s slot=%d pid=%ld\n",
                            g_agents[card], card, pid);

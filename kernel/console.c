@@ -49,8 +49,34 @@ void console_line_unlock(uint64_t fl) {
  * the path is terminal, nothing after it depends on the lock's integrity, and
  * the lock protects cosmetic line atomicity only. No flag restore -- a panicking
  * CPU keeps interrupts masked. */
-void console_line_force_release(void) {
+/* DDR-1009: RELEASE BOTH LOCKS, and the name now says so.
+ *
+ * DDR-970's reasoning above is correct and was applied to exactly one lock.
+ * `kputs` -- which is what the panic printer itself calls -- does NOT take
+ * g_line_lock. It takes g_console_lock (declared 3 lines apart from it, and
+ * explicitly "Distinct from g_console_lock") for the whole string via
+ * irq_save()/irq_restore(). So nothing force-released the lock the panic path
+ * actually needs.
+ *
+ * DDR-979's one-winner latch then made that strictly worse: a CPU that LOSES the
+ * latch halts in `for(;;) cli; hlt` (idt.c:697) still holding whatever it held.
+ * If it was faulted out of a kputs, that is g_console_lock -- and the winner's
+ * next kputs spins on it forever with interrupts already masked. Measured
+ * artefact (DDR-1009 §2): CI run on 81274f4, shard 6, smoke-msixap printed
+ * "*** NEXUS KERNEL PANIC ***" and then not one further byte for the rest of the
+ * gate's window. idt.c:702 is the very next statement.
+ *
+ * This is called BEFORE the latch (idt.c:673), so one edit covers both the
+ * winner and the loser.
+ *
+ * The cost is the same one DDR-970 already accepted and is worth restating:
+ * releasing a lock another CPU may legitimately hold lets its output interleave
+ * with the dump. §INV.23 already requires every reader to reconstruct panic
+ * fields BY NAME rather than by line position, for exactly this reason. A
+ * garbled dump beats no dump and a hung machine. */
+void console_panic_force_release(void) {
     spin_unlock(&g_line_lock);
+    spin_unlock(&g_console_lock);
 }
 static inline uint64_t irq_save(void) {
     return spin_lock_irqsave(&g_console_lock);

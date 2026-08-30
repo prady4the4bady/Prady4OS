@@ -298,6 +298,11 @@ All entries below are **shipped**.
 - Sovereign/Manual mode toggle (DDR-701); compositor w/ 8×8 font (DDR-704)
 - Per-client surfaces `SYS_SURFACE_*` (DDR-706); z-order/focus/key routing (DDR-708)
 - Sun-driven OKLab ambiances (DDR-709); window drag/close/resize/minimize/maximize (DDR-710/711/717/719)
+- Per-window restore from a DOCK (DDR-1008): a strip of tiles along the bottom,
+  one per minimized window, drawn over the windows and present only while
+  something is minimized. Clicking a tile restores THAT window; DDR-717's `r`
+  (restore-all) still works. Tiles are ordered by surface id, not z-order, so
+  the dock does not reshuffle when an unrelated window is raised.
 - Maximize fills the mode-aware WORK AREA, not a hardcoded 512x512 (DDR-1007):
   798x728 at a 1024x768 scanout in Sovereign, clearing the accent bar and the
   agent panel; Manual clears its menu bar and taskbar instead. Raising the cap

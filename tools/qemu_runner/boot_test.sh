@@ -396,6 +396,13 @@ early_exit_eligible=0
 # fails nothing, it just silently stops catching. smoke-selftest case 5 is what
 # found it, on all 10 shards at once, which is exactly the job DDR-791 built it
 # for. Do not put a comment inside this printf.
+# DDR-1009 APPENDED 'NEXUS KERNEL PANIC'. It had ONE emitter (kernel/idt.c:701)
+# and ZERO consumers: no gate grepped for it, so a ring-0 panic was caught only
+# when it happened to break a gate's own assertion or run out its clock. A panic
+# on a boot that had already printed its sentinel PASSED. Same hole DDR-981
+# recorded for '[vblk] compl wait timeout'. Verified safe before adding: no gate
+# in the tree expects a kernel panic, and the string appears zero times in
+# locally-green captures.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
     '[ringwalk]' \
     '[apfreeze]' \
@@ -422,7 +429,8 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'msix on AP FAIL' 'multi-inflight FAIL' 'percpu FAIL' 'resched FAIL' \
     'rqstress FAIL' 'tss FAIL' 'unlink/rmdir FAIL' 'user on AP FAIL' \
     'controller not ready' 'create-iocq failed' 'create-iosq failed' \
-    'identify-ctrl failed' 'identify-ns failed' 'reset stuck')"
+    'identify-ctrl failed' 'identify-ns failed' 'reset stuck' \
+    'NEXUS KERNEL PANIC')"
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 
 # Fails the run when any probe reported a failure, whichever gate is running.
