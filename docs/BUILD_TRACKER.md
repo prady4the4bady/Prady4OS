@@ -930,3 +930,43 @@ it on `SYSFSTAT` and everything before. So the next route-1 occurrence
 discriminates: a `[percpu] gs FAIL … num=M` line means route 1 IS OPEN-2 and
 names the syscall that lost GS; its absence means it is not, and this time the
 silence is a measurement. No previous route-1 capture had that property.
+
+---
+
+## DDR-1012 — DAWN/DUSK horizon bands (Group E)
+
+**DONE.** `smoke-horizon` (shard 2, fast), M1 mutation-checked. Kernel
+`9623c163cd479043`, 1,102,218 B, `-Werror` clean.
+
+DAWN was the **only** ambiance with no backdrop at all — `render_backdrop`'s arm
+was a bare `break` with the comment "motes carry it". It now carries a rose band
+at 62% of height; DUSK's sun-bloom at (85%, 90%) now rises out of an amber band
+at 88% instead of floating above nothing.
+
+**The gate measures pixels, and that is the point.** `horizon_band` samples the
+same centre pixel on entry and exit and the compositor publishes both:
+
+```
+[horizon] DAWN pre=18092C post=412546
+[horizon] DUSK pre=290E00 post=582C0D
+```
+
+M1 (blend loop deleted, sentinel kept, kernel `a2dccf7ad726ed55`) gives
+`pre == post` and FAILS — **while `boot_test.sh`'s `EXTRA_SENTINEL` check PASSED
+on that same mutant.** A sentinel-only gate, the shape every other Layer-7
+backdrop gate uses, would have reported PASS on a compositor that drew nothing.
+
+The first version of the assertion compared the band centre against a row above
+it. That is vacuous against `render()`'s per-row vertical gradient (DDR-723) —
+two different rows differ whether or not a band was drawn. Replaced before the
+gate was ever executed.
+
+**Animation assessed and NOT built** (§5), logged as
+`[DEFERRED: animation — cannot be gated inside a 120 s window; costs per-frame
+work on a compositor with two open scheduling defects]`. A 120 s nebula drift
+does not fit a 120 s gate, and a "two frames 20 s apart differ" assertion passes
+on any per-frame noise.
+
+Regression: `smoke-backdrop`, `smoke-ambiance`, `smoke-gradient`,
+`smoke-cadence`, `smoke-shell` all PASS; `ci-shard-check` OK (158/10/7);
+`ci-probe-rodata-check` OK (61 ELFs).

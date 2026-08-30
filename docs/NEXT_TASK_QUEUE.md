@@ -150,7 +150,21 @@ Batch their DDRs in one pass first (§4.3), then implement.
       generation counter and `surf_take_free`'s whole-struct wipe had to be
       taught to preserve it. M1b/M2 mutation-checked on distinct hashes, failing
       different arms; M3 (recycle guard) recorded UNMEASURED with its reason.
-- [ ] OKLab horizon bands / animated mesh (DDR-716 deferred)
+- [x] OKLab horizon bands — DDR-1012, `smoke-horizon` (shard 2, fast),
+      M1 mutation-checked. DAWN was the **only** ambiance with no backdrop at all
+      (`render_backdrop`'s arm was a bare `break`); it now carries a rose band at
+      62%, and DUSK's sun-bloom rises out of an amber band at 88% instead of
+      floating. **The gate measures pixels, not a sentinel**: the compositor
+      samples the same centre pixel before and after the band and publishes both,
+      and M1 (blend loop deleted, sentinel kept) FAILS on `pre == post` — while
+      `boot_test.sh`'s sentinel check PASSED on that same mutant, which is the
+      shape every other backdrop gate uses. The first version of the assertion
+      compared two different rows and was vacuous against `render()`'s per-row
+      gradient; replaced before it ever ran.
+      **The animation is assessed and NOT built** (DDR-1012 §5): a 120 s drift
+      does not fit a 120 s gate window, and it would add permanent per-frame work
+      to a compositor with two open scheduling defects. Logged as deferred with
+      that reason.
 - [x] vDSO ring-3 clock reader — **row was wrong, corrected by DDR-1005; no code
       owed for 1.0.** The reader EXISTS and is GATED: `user/systest.asm:41/346`
       loads `VDSO_VA` and prints `VDSO: clock ns=`, which `smoke-vdso` asserts

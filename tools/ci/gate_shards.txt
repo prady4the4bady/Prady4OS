@@ -198,3 +198,4 @@
 9	smoke-resizeall	180	strict
 8	smoke-surfclose	180	strict
 4	smoke-perrestore	180	fast
+2	smoke-horizon	90	fast

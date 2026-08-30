@@ -222,7 +222,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -3132,6 +3132,30 @@ smoke-surfclose: $(IMG) fat-image sfs-image
 smoke-backdrop: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_BACKDROP DAY\nPRADYOS_BACKDROP DUSK\nPRADYOS_BACKDROP NIGHT\nPRADYOS_BACKDROP_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# Layer-7 horizon-band gate (DDR-1012): DAWN and DUSK grow a full-width horizon
+# band in render_backdrop. DAWN previously had NO backdrop at all (a bare
+# `break`); DUSK's sun-bloom now rises out of a band instead of floating.
+#
+# THE ASSERTION IS A PIXEL MEASUREMENT, not a sentinel grep. The compositor
+# samples the SAME centre pixel before and after the band and publishes both, so
+# an implementation that prints the line and draws nothing FAILS. Comparing two
+# different rows would not do: render() lays a per-row vertical gradient
+# (DDR-723), so two rows differ whether or not a band was drawn -- that version
+# of this gate was vacuous and was replaced before it ever ran.
+smoke-horizon: $(IMG) fat-image sfs-image
+	@rm -f build/horizon.log
+	@SERIAL_LOG=build/horizon.log KEEP_SERIAL=1 TIMEOUT_S=90 QEMU_GPU=1 \
+	  EXTRA_SENTINEL="$$(printf 'PRADYOS_HORIZON DAWN\nPRADYOS_HORIZON DUSK\nPRADYOS_HORIZON_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; for a in DAWN DUSK; do \
+	   ln=$$(grep -ao "PRADYOS_HORIZON $$a y=[0-9]* pre=[0-9A-F]* post=[0-9A-F]*" build/horizon.log | head -1); \
+	   test -n "$$ln" || { echo "[horizon] FAIL — no measured line for $$a"; exit 1; }; \
+	   pre=$${ln##*pre=}; pre=$${pre%% *}; post=$${ln##*post=}; \
+	   echo "[horizon] $$a pre=$$pre post=$$post"; \
+	   test "$$pre" != "$$post" || { echo "[horizon] FAIL — $$a centre pixel unchanged across the band draw; the band is a no-op"; exit 1; }; \
+	 done
+	@echo "[horizon] PASS — DAWN and DUSK bands measured in the framebuffer"
 
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on

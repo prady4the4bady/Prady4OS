@@ -215,6 +215,51 @@ static void radial_glow(int cx, int cy, int r,
     }
 }
 
+/* DDR-1012: a full-width horizon band, centred on row cy, alpha falling off
+ * quadratically from peak_a at the centre to 0 at cy +/- half. Same shape as
+ * radial_glow's falloff and the same blend_px primitive, in one axis.
+ *
+ * Cost is 2*half*width blends -- ~90k at half=44 on a 1024-wide screen, i.e.
+ * CHEAPER than one radial (a 300px disc is ~280k). It inherits DDR-716 D3's
+ * guard: backdrops draw only on settled frames, never mid-OKLab-lerp. */
+/* DDR-1012 §4: read one pixel back out of the framebuffer, packed RGB, so the
+ * compositor can publish what it actually DREW rather than what it intended.
+ * A gate that only greps a sentinel tests a printf -- the vacuity trap DDR-973 §6
+ * and DDR-1008 each caught once. */
+static unsigned fb_sample(unsigned x, unsigned y) {
+    if (!g_fb || x >= g_fi.width || y >= g_fi.height) return 0;
+    const unsigned char *p = g_fb + (unsigned long)y * g_fi.stride + (unsigned long)x * 4;
+    return ((unsigned)p[2] << 16) | ((unsigned)p[1] << 8) | (unsigned)p[0];
+}
+
+static unsigned g_hz_pre, g_hz_post;    /* DDR-1012 §4: the band's own witness */
+static void horizon_band(int cy, int half,
+                         unsigned char cr, unsigned char cg, unsigned char cb, float peak_a) {
+    /* Sample the centre pixel BEFORE and AFTER, and publish both.
+     *
+     * The first version of this gate compared the band centre against a row
+     * above the band. That is VACUOUS: render() lays a per-row vertical gradient
+     * (DDR-723), so two different rows differ whether or not a band was drawn --
+     * the assertion would have passed on a no-op band. Same pixel, before and
+     * after, is the only comparison that isolates THIS draw. Caught by reading
+     * the assertion against render()'s gradient, before the gate was ever run. */
+    g_hz_pre = fb_sample((unsigned)(g_fi.width / 2), (unsigned)cy);
+    int y0 = cy - half, y1 = cy + half;
+    if (y0 < 0) y0 = 0;
+    if (y1 > (int)g_fi.height) y1 = (int)g_fi.height;
+    float h2 = (float)half * (float)half;
+    for (int y = y0; y < y1; y++) {
+        float dy = (float)(y - cy);
+        float a = peak_a * (1.0f - (dy * dy) / h2);
+        if (a <= 0.0f) continue;
+        for (unsigned x = 0; x < g_fi.width; x++)
+            blend_px(x, (unsigned)y, cb, cg, cr, a);
+    }
+    /* AFTER the band and before any caller draws over it -- DUSK's sun-bloom is
+     * laid down next and would otherwise contaminate the reading. */
+    g_hz_post = fb_sample((unsigned)(g_fi.width / 2), (unsigned)cy);
+}
+
 /* The settled per-ambiance backdrop (DDR-716, brief §1). Drawn only on settled
  * frames (not mid-OKLab-lerp — D3's perf guard); announces each ambiance's
  * first settled render and PRADYOS_BACKDROP_OK once all four have been seen. */
@@ -222,20 +267,45 @@ static int g_settled = 1;                 /* cleared during ambiance transitions
 static void render_backdrop(void) {
     unsigned w = g_fi.width, h = g_fi.height;
     switch (g_cur_amb) {
-    case 0:                                        /* DAWN: motes carry it */
+    case 0:                                        /* DAWN: motes + horizon band */
+        /* DDR-1012: DAWN was the ONLY ambiance with no backdrop at all -- this
+         * arm was a bare `break`. The rose band at 62% is its signature. */
+        horizon_band((int)(h * 62 / 100), 44, 0xFF, 0xA8, 0xC0, 0.18f);
         break;
     case 1:                                        /* DAY: 3-node gradient mesh */
         radial_glow((int)(w / 4),     (int)(h / 4),     (int)(w * 30 / 100), 0x8F, 0xC8, 0xFF, 0.20f);
         radial_glow((int)(w / 2),     (int)(h * 2 / 3), (int)(w * 25 / 100), 0xFF, 0xFF, 0xFF, 0.12f);
         radial_glow((int)(w * 3 / 4), (int)(h / 3),     (int)(w * 28 / 100), 0x1E, 0x50, 0xA0, 0.18f);
         break;
-    case 2:                                        /* DUSK: sun-bloom at 85%,90% */
+    case 2:                                        /* DUSK: horizon band + sun-bloom */
+        /* DDR-1012: the band goes down FIRST, at 88%, so the bloom centred at
+         * 90% rises out of it instead of floating above nothing. */
+        horizon_band((int)(h * 88 / 100), 40, 0xFF, 0x9A, 0x3C, 0.22f);
         radial_glow((int)(w * 85 / 100), (int)(h * 90 / 100), (int)(w * 35 / 100), 0xFF, 0x78, 0x1E, 0.25f);
         break;
     default:                                       /* NIGHT: two nebulas */
         radial_glow((int)(w * 30 / 100), (int)(h * 40 / 100), (int)(w * 600 / 1024), 0x12, 0x00, 0x24, 0.30f);
         radial_glow((int)(w * 70 / 100), (int)(h * 60 / 100), (int)(w * 500 / 1024), 0x00, 0x12, 0x20, 0.30f);
         break;
+    }
+    /* DDR-1012 §4: publish what was DRAWN, not that drawing was attempted.
+     * `in` samples the band centre, `out` samples 8 px clear of its top edge --
+     * ABOVE, deliberately: below the band DUSK's sun-bloom overlaps and would
+     * move the reference. The gate asserts in != out, which a no-op band fails. */
+    static unsigned char hz_said[4];
+    static int hz_ok_said;
+    if ((g_cur_amb == 0 || g_cur_amb == 2) && !hz_said[g_cur_amb]) {
+        int hcy   = (g_cur_amb == 0) ? (int)(h * 62 / 100) : (int)(h * 88 / 100);
+        int hhalf = (g_cur_amb == 0) ? 44 : 40;
+        hz_said[g_cur_amb] = 1;
+        (void)hhalf;
+        printf("PRADYOS_HORIZON %s y=%d pre=%06X post=%06X\n",
+               AMB[g_cur_amb].name, hcy, g_hz_pre, g_hz_post);
+        if (!hz_ok_said && hz_said[0] && hz_said[2]) {
+            hz_ok_said = 1;
+            printf("PRADYOS_HORIZON_OK\n");
+        }
+        fflush(stdout);
     }
     static unsigned char seen[4];
     static int all_announced;
