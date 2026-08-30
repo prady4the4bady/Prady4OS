@@ -225,3 +225,47 @@ its suites. The honest reading for the release notes is therefore **not** "CI is
 green" but: *the candidate fails roughly one CI suite in four, at four distinct
 gates, and three of those four have no named cause.* Whether that ships is the
 operator's call, not this file's — but it must be the stated basis for it.
+
+---
+
+## 7. MEASURED
+
+Kernel **`29c792a8b8f3b056`**, warning-clean at `-Werror`.
+
+### 7.1 The lock fix
+
+`console_line_force_release` → `console_panic_force_release`, releasing
+`g_line_lock` **and** `g_console_lock`, called at `idt.c:673` — before DDR-979's
+latch, so one edit covers both the winner and the loser.
+
+Gates on the new kernel: `smoke-selftest` PASS, `smoke-shell` PASS,
+`smoke-blkmq` PASS, `smoke-blk-integrity` PASS, `smoke-rqstress-liveness` PASS,
+`smoke-wmmin` PASS, `smoke-perrestore` PASS; `ci-shard-check` OK,
+`ci-probe-rodata-check` OK.
+
+**What that does NOT show.** These prove the change is not a regression. They do
+**not** show the fix works, because none of them panics — the defect it addresses
+is reachable only from a ring-0 fault, which no gate produces on purpose.
+Confirmation can only come from the next CI panic printing a *complete* dump
+where this one printed a banner and stopped. Stated here so a run of green gates
+is not later read as evidence the mechanism was proven.
+
+### 7.2 The detector — verified non-vacuous, both directions
+
+Adding a pattern to a list proves nothing; the list has been silently empty
+before (§NON-NEGOTIABLE 6). So the matcher was run against a synthetic capture
+and against a real green one:
+
+```
+synthetic log containing "*** NEXUS KERNEL PANIC ***"
+  -> MATCHED: NEXUS KERNEL PANIC        (detector fires)
+a green smoke-shell capture
+  -> no pattern matched                 (no false positive)
+```
+
+`GLOBAL_FORBIDDEN` parses to **71** lines with the documented `sed` range, which
+is the §NON-NEGOTIABLE 6 check — and that range had to be updated in the same
+commit, because it terminates on the **last entry in the list** and appending
+moved it. A stale terminator makes `sed` emit nothing, the count reads 0, and the
+check silently reports the exact catastrophe it exists to detect. CLAUDE.md now
+says so explicitly at the invariant.

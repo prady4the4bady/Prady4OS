@@ -132,3 +132,72 @@ prefix-collide with any existing field name.
    path, it does not replace `r`.
 5. Kernel hash recorded with every measurement (R1); `-Werror` clean; kernel.bin
    under 1,572,864 B.
+
+---
+
+## 7. MEASURED
+
+Kernel **`29c792a8b8f3b056`**, warning-clean at `-Werror`, `kernel.bin`
+1,098,122 B against the 1,572,864 B gate.
+
+### 7.1 `smoke-perrestore` green, and green through step 5
+
+```
+[inject] observed 'PRADYOS_WM_MIN id=1' after 1 click(s)
+[inject] geometry for ALPHA: min=4484,3887
+[inject] observed 'PRADYOS_WM_DOCK n=2' after 3 click(s)
+[inject] geometry for BETA: tile=4996,31955
+[inject] observed 'PRADYOS_WM_UNMIN id=1' after 2 click(s)
+[perrestore] PASS — PRADYOS_WM_UNMIN id=1, ALPHA still docked
+```
+
+The published dock lines show the id ordering doing its job, and show why
+DDR-983's per-click re-resolve is load-bearing here:
+
+```
+PRADYOS_WM_DOCK n=1 id=1 title=BETA  tile=1793,31955     <- BETA alone: slot 0
+PRADYOS_WM_DOCK n=2 id=0 title=ALPHA tile=1793,31955     <- ALPHA takes slot 0
+PRADYOS_WM_DOCK n=2 id=1 title=BETA  tile=4996,31955     <- BETA moves to slot 1
+```
+
+BETA's tile **moves** when ALPHA is minimized. An injector that resolved once
+would have clicked 1793 forever and never restored BETA. It re-resolves before
+every click and took the newest line, which is exactly the case DDR-983 was
+written for.
+
+### 7.2 M1 — restore-all, the mutant the gate exists to catch
+
+`g_min_mask &= ~(1u << dock_id)` → `g_min_mask = 0`, print unchanged. Kernel
+`4f6d76d427c5a42f` (distinct hash, verified — DDR-1002 §3's stale-binary trap).
+
+```
+PRADYOS_WM_MIN id=1                                  step 1  PASS
+PRADYOS_WM_MIN id=0                                  step 2  PASS
+PRADYOS_WM_DOCK n=2 id=0 title=ALPHA                 step 3  PASS
+PRADYOS_WM_UNMIN id=1                                step 4  PASS
+PRADYOS_WM_DOCK n=0                                  step 5  FAIL
+make: *** [Makefile:2988: smoke-perrestore] Error 1
+```
+
+**Steps 1–4 pass and step 5 fails** — precisely the asymmetry §4 predicted, and
+the demonstration that the gate tests *granularity* rather than restoration. The
+obvious one-window gate would have passed this mutant outright.
+
+Kernel restored to `29c792a8b8f3b056` and re-verified by hash after the revert
+(§NON-NEGOTIABLE 16: a revert is not verified until the binary is re-checked).
+
+### 7.3 M2 — z-order tiles
+
+**Not run**, and §6 said in advance it would not be run as a pass/fail: with two
+minimized windows, id order and poll order frequently agree, so the mutant is not
+reliably caught. Recorded as a stated coverage limit rather than presented as a
+clean sheet.
+
+### 7.4 Regression and hygiene
+
+`smoke-wmmin` PASS — DDR-717's restore-all keystroke still works; the dock adds a
+path rather than replacing `r`. `smoke-selftest` PASS (its case 5 is the
+`GLOBAL_FORBIDDEN` non-emptiness meta-test), `smoke-shell` PASS, `smoke-blkmq`
+PASS, `smoke-blk-integrity` PASS, `smoke-rqstress-liveness` PASS;
+`ci-shard-check` OK (**157** gates / 10 shards / 7 excluded),
+`ci-probe-rodata-check` OK (61 ELFs).
