@@ -8202,3 +8202,55 @@ garbled-dump problem was created. Named, measured, left for a decision
 2. Three 3C types left: `PROPOSE_HYPOTHESIS`, `REWRITE_AGENT_CODE`,
    `EVOLVE_GENOME`. `SEND_IPC` is blocked (DDR-1017 §1).
 3. STEP 3 (`main` + `v1.0.0`) stays LAST, per the operator's ordering.
+
+---
+
+## CHECKPOINT 2026-08-30 20:2x UTC — CI verified on five tips; PR #17 answered
+
+### CI: five consecutive suite-runs green, 15/15 jobs each
+
+| tip | run | jobs |
+|---|---|---|
+| `5d2efd5` (DDR-1016) | 33326233523 | 15/15 |
+| `f8d8094` (DDR-1014 §6.2) | 33326327397 | 15/15 |
+| `19bd46d` (DDR-1017) | 33328482306 | 15/15 |
+| `8a7112a` (DDR-1018) | 33330250876 | 15/15 |
+| `51463c9` (DDR-1019) | 33331405827 | 15/15 |
+
+**`shard-check` recovered on `5d2efd5`** — the `force_align_arg_pointer` fix
+worked, and **shard 1 passed in CI with the new `smoke-actiondel`**. Both
+questions the 18:35 check-in asked are answered.
+
+**Do NOT pool these five.** They are five different kernels (only `f8d8094` is
+docs-only, over `5d2efd5`). §INV.15 still applies: promotion needs 3 greens on
+ONE tip, and only `push` fired on each of these — no `pull_request` run, which
+is exactly the "verify, do not assume" case §INV.15 warns about. The third green
+comes from `workflow_dispatch`.
+
+### PR #17 answered
+
+Comment 5471292532 covers both reds: the `shard-check` alignment defect (fixed,
+green since `5d2efd5`) and the shard-9 `[apfreeze]` (DDR-1019 — diagnosed,
+instrumented, deliberately not fixed, with the reason). No further comment is
+owed for either; do not re-comment on a recurrence of the same two.
+
+### Where the release stands
+
+- **STEP 1 (OPEN-2 / the AP freeze) — still open.** DDR-1019 removed one wrong
+  reading of it (the shard-9 `[apfreeze]` is a panic symptom, not a scheduler
+  defect) and armed the instrument that will name the next one. It did NOT name
+  the exception. PR #17 correctly stays draft.
+- **STEP 2 — done** (DDR-1011: route 1 OPEN at the deadline, with wording).
+- **STEP 4 — Section 3C is 4 of 8, 1 blocked.** Shipped: READ_FILE (1015),
+  DELETE_FILE (1016), SPAWN_PROCESS (1017), QUERY_MEMORY (1018). Blocked:
+  SEND_IPC (no ring-3 IPC surface — DDR-1017 §1). Remaining:
+  PROPOSE_HYPOTHESIS, REWRITE_AGENT_CODE, EVOLVE_GENOME.
+- **STEP 3 — last, per the operator's ordering.**
+
+### NEXT
+
+1. Watch any CI heartbeat for `panic_stage=`. `stage=1` = DDR-1019 again and the
+   question narrows to `kputs`; `loser_vec` names the second exception.
+2. Finish 3C: PROPOSE_HYPOTHESIS (DDR-1015 shape), then REWRITE_AGENT_CODE and
+   EVOLVE_GENOME (DDR-1016/1017 force-pending shape — budget for the rate limit).
+3. Then STEP 3.
