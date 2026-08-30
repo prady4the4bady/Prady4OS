@@ -453,6 +453,8 @@ extern const unsigned char actionreadtest_elf[];      /* DDR-1015: 3C ACTION_REA
 extern const unsigned char actionreadtest_elf_end[];
 extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DELETE_FILE */
 extern const unsigned char actiondeltest_elf_end[];
+extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
+extern const unsigned char actionspawntest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -2311,6 +2313,31 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] 3C ACTION_DELETE_FILE probe spawned (agent, SFS-rooted)\r\n");
                     } else {
                         kputs("[user] ACTIONDEL probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1017: Section 3C ACTION_SPAWN_PROCESS, the second
+                 * force-pending type. FAT-rooted (like the actionread probe and
+                 * unlike actiondel): it touches no files, so it neither needs
+                 * the writable SFS root nor belongs in smnt_pid -- adding it to
+                 * that wait would make the destructive umount block on a probe
+                 * that has nothing to do with it.
+                 *
+                 * It FORKS, deliberately: the control arm proves fork+reap work
+                 * in this boot, which is what makes "no child after the action"
+                 * evidence rather than a tautology. The child exits immediately,
+                 * so nothing outlives the probe. */
+                if (probe_enabled("actionspawn")) {
+                    struct tcb *as = 0;
+                    uint64_t aslen = (uint64_t)(uintptr_t)actionspawntest_elf_end -
+                                     (uint64_t)(uintptr_t)actionspawntest_elf;
+                    if (elf_load((void *)(uintptr_t)actionspawntest_elf, aslen,
+                                 "ACTIONSPAWN", &as) == ELF_OK && as) {
+                        as->is_agent = 1;
+                        as->root_mnt = mnt;           /* FAT root before unblock */
+                        sched_unblock(as);
+                        kputs("[user] 3C ACTION_SPAWN_PROCESS probe spawned (agent)\r\n");
+                    } else {
+                        kputs("[user] ACTIONSPAWN probe FAILED to load\r\n");
                     }
                 }
                 if (probe_enabled("ftruncate")) {

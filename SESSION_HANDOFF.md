@@ -7962,3 +7962,72 @@ forbidden scan clean), `smoke-blkmq`, `smoke-rqstress-liveness`,
    (`SPAWN_PROCESS` is force-pending and also already exists as a spawn-depth
    probe; check `spawndepthtest.c` before writing a new one.)
 3. STEP 3 (`main` promotion + `v1.0.0`) stays LAST, per the operator's ordering.
+
+---
+
+## CHECKPOINT 2026-08-30 18:0x UTC — DDR-1017, and a 3C type that cannot be built
+
+### DDR-1017 — `ACTION_SPAWN_PROCESS` (3 of 8)
+
+`smoke-actionspawn`, shard 2, fast. Kernel **`30658af9358ab055`**, 1,118,602 B,
+`-Werror` clean. `PRADYOS_ACTIONSPAWN_OK id=258 st=1 ctrl=1 post=-10`.
+
+Force-pending, DDR-1016's shape, but the effect is asked of the **kernel** —
+`wait4(-1, &st, WNOHANG)` returning `-10` (`-ECHILD`). `-11` or a positive pid
+means a fork happened on a PENDING action.
+
+| mutant | kernel | result | arm |
+|---|---|---|---|
+| M1 probe forks on PENDING | `5cd2db8a5d2a68ca` | `post=45` | `post` only |
+| M2 kernel drops SPAWN_PROCESS from `forces_pending()` | `a09869767ad0ef1a` | `st=2` | `st` only |
+| M3 control child wrong exit status | `1ea29f035d1b296f` | `ctrl=0` | `ctrl` only |
+
+M1/M2 mutate the system, M3 mutates the gate's own control. M1 was **re-run
+against the shipped probe** after the ctrl refactor; the earlier M1 measured a
+draft that no longer exists.
+
+### READ THIS BEFORE PLANNING MORE 3C WORK
+
+**`ACTION_SEND_IPC` cannot be built as a probe.** `ipc_send`/`ipc_recv` are
+kernel-internal and capability-gated (they take a `struct cap_table *`), and
+there is **no `SYS_IPC_*` in `syscall.h`**. So an approved `SEND_IPC` has no
+executor in any ring. It **is** in the enum, so an agent can submit it and the
+kernel can approve it today with nothing able to act on it. Building it means a
+new NSI (97 free), a capability check and a nameable endpoint — kernel ABI and a
+security-surface decision, not probe work. **`QUERY_MEMORY` is unchecked for the
+same gap.** Do not budget either as "one more probe". DDR-1017 §1.
+
+So Section 3C is **3 of 8, with 1 blocked** — not "5 to go".
+
+### The dead-arm class, twice in two DDRs
+
+DDR-1016 §5: the gate's `st` could only ever be 1, because `aether_poll` frees
+the slot on a terminal verdict so the second poll always returned `-ESRCH`.
+DDR-1017 §4: `ctrl` was a literal `1`, because every control mismatch `fail()`d
+before the line printed. **A field whose only reachable value is the passing one
+is decoration, not measurement.** Both fixed; M2 and M3 respectively exist to
+show each arm can now fail.
+
+### A gate-parse defect, and one latent
+
+`${ln##*st=}` strips to the LAST `st=` — and `post=` ends in `st=`, so the
+actionspawn gate read `st` out of `post` and failed a correct measurement. Both
+gates now anchor each field on its leading space. DDR-1016's parsed correctly
+only because no field of its happened to end in `st`.
+
+### Gates on `30658af9358ab055` (one hash, verified before and after each)
+
+`smoke-actionspawn`, `smoke-actiondel`, `smoke-actionread`, `smoke-spawndepth`,
+`smoke-shell`, `smoke-blkmq`, `smoke-rqstress-liveness`, `smoke-blk-integrity`
+— all PASS. `hygiene_check.sh` ALL THREE PASSED: 161 gates / 10 shards /
+7 excluded, 64 probe ELFs, 46 entry points.
+
+### NEXT
+
+1. A check-in is armed for ~18:35 UTC on 5d2efd5/f8d8094 CI: shard-check must be
+   GREEN again (it was red on `8ad4012`/`6894062`) and shard 1 must pass with the
+   new `smoke-actiondel`. **5d2efd5 changes the kernel, so it does NOT pool with
+   DDR-1014 §6.2's five green suite-runs — start a fresh tally.**
+2. Remaining 3C: `PROPOSE_HYPOTHESIS` (DDR-1015 shape), `REWRITE_AGENT_CODE` and
+   `EVOLVE_GENOME` (DDR-1016/1017 shape). `SEND_IPC`/`QUERY_MEMORY` blocked above.
+3. STEP 3 (`main` promotion + `v1.0.0`) stays LAST, per the operator's ordering.

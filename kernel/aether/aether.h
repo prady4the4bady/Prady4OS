@@ -37,6 +37,7 @@ enum aether_action {
 _Static_assert(ACTION_WRITE_FILE    == 1, "action wire format: WRITE_FILE is 1");
 _Static_assert(ACTION_PRINT         == 2, "action wire format: PRINT is 2");
 _Static_assert(ACTION_SPAWN_PROCESS == 3, "action wire format: SPAWN_PROCESS is 3");
+/* DDR-1017 hand-copies this one too, in user/actionspawntest.c. */
 /* DDR-1015: pin the first 3C type too. user/actionreadtest.c hand-copies this
  * number across the ring boundary, and DDR-1013 §1 found actiondagtest.c had
  * drifted to a wrong one with no gate able to see it. Pinning it here means the

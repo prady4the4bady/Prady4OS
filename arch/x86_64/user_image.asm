@@ -305,6 +305,14 @@ actiondeltest_elf:
     incbin "build/actiondeltest.elf"
 actiondeltest_elf_end:
 
+; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
+; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
+global actionspawntest_elf
+global actionspawntest_elf_end
+actionspawntest_elf:
+    incbin "build/actionspawntest.elf"
+actionspawntest_elf_end:
+
 global coderewritetest_elf
 global coderewritetest_elf_end
 coderewritetest_elf:

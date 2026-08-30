@@ -1192,3 +1192,44 @@ says PENDING; M2 reports `st=2` and the gate names the defect.
 without `force_align_arg_pointer`. `ci-start-align-check` catches it and runs in
 CI, but CLAUDE.md's hygiene list names only two of the three static checks — so
 run `tools/ci/hygiene_check.sh`, not the list. Six types remain.
+
+---
+
+## DDR-1017 — Section 3C `ACTION_SPAWN_PROCESS` (3 of 8), and a blocked type
+
+**DONE.** `smoke-actionspawn` (shard 2, fast), M1/M2/M3 on distinct kernel
+hashes. Kernel `30658af9358ab055`, 1,118,602 B, `-Werror` clean.
+`PRADYOS_ACTIONSPAWN_OK id=258 st=1 ctrl=1 post=-10`.
+
+**`ACTION_SEND_IPC` is BLOCKED, not skipped.** `ipc_send`/`ipc_recv` are
+kernel-internal and capability-gated (they take a `struct cap_table *`), and
+there is **no `SYS_IPC_*`** — so no agent can execute an approved SEND_IPC. It is
+in the enum, so it can be submitted and approved today with no way to act on it.
+Building it needs a new NSI (97 free) plus a capability check and a nameable
+endpoint: new kernel ABI and a security-surface decision, not a probe.
+`QUERY_MEMORY` needs the same check before it is budgeted as probe work.
+
+**The effect is asked of the kernel**, since a filesystem cannot witness a
+process: `wait4(-1, &st, WNOHANG)` → `-10` (`-ECHILD`) required; `-11` or any
+positive pid means a fork happened on a PENDING action.
+
+**`ctrl` had to be made computed.** The first draft `fail()`d on control
+mismatch and printed a literal `ctrl=1`, so the gate's ctrl check could never
+fire — the same dead arm DDR-1016 §5 found. **M3 exists to prove it is live.**
+Class worth naming: *a field whose only reachable value is the passing one is
+decoration, not measurement.*
+
+| mutant | kernel | result | arm |
+|---|---|---|---|
+| M1 probe forks on PENDING | `5cd2db8a5d2a68ca` | `post=45` | `post` only |
+| M2 kernel drops SPAWN_PROCESS from `forces_pending()` | `a09869767ad0ef1a` | `st=2` | `st` only |
+| M3 control child wrong exit status | `1ea29f035d1b296f` | `ctrl=0` | `ctrl` only |
+
+M1/M2 mutate the system; M3 mutates the gate's own control. M1 was re-run against
+the shipped probe after the ctrl refactor — a mutation result on code that was
+not shipped is not a result.
+
+**Also fixed:** `${ln##*st=}` read `st` out of `post=` (both end in `st=`), which
+is how the gate first failed on a correct measurement. Both this gate and
+DDR-1016's now anchor every field on its leading space; DDR-1016's parsed
+correctly only by luck of field naming. Five types remain, two of them blocked.

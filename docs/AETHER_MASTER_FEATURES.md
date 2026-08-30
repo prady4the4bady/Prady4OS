@@ -505,7 +505,7 @@ first-use always manual-gate) · `ACTION_QUERY_SCENE` (post-L7 NL query) ·
 be modified by the experimenting agent) · `ACTION_EVOLVE_GENOME` (force-PENDING,
 rewrites `genome.md` across generations, `CAP_SOVEREIGN` veto window)
 
-**Build status — 2 of 8 declared types shipped end to end.** A 3C type is
+**Build status — 3 of 8 declared types shipped end to end; 1 BLOCKED.** A 3C type is
 implemented in RING 3 (DDR-1013 §2.1): the kernel is the policy engine, the
 agent the executor, so "implemented" means a probe that proposes, waits for the
 verdict, and acts only afterwards — plus a gate that asserts the *effect*.
@@ -514,8 +514,11 @@ verdict, and acts only afterwards — plus a gate that asserts the *effect*.
 |---|---|---|---|
 | `ACTION_READ_FILE` | shipped | `smoke-actionread` (asserts the content) | DDR-1015 |
 | `ACTION_DELETE_FILE` | shipped, force-pending | `smoke-actiondel` (asserts PENDING + the file survives) | DDR-1016 |
-| `SEND_IPC` · `QUERY_MEMORY` · `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` | not started | — | follow DDR-1015's shape |
-| `SPAWN_PROCESS` · `REWRITE_AGENT_CODE` · `EVOLVE_GENOME` | not started | — | follow DDR-1016's shape; see its §4 on the rate limit |
+| `ACTION_SPAWN_PROCESS` | shipped, force-pending | `smoke-actionspawn` (asserts PENDING + `wait4(WNOHANG)` sees no child) | DDR-1017 |
+| `SEND_IPC` | **BLOCKED** — no ring-3 IPC surface exists, so no agent can execute an approved one; needs a new NSI + capability check, i.e. kernel ABI, not a probe | — | DDR-1017 §1 |
+| `QUERY_MEMORY` | not started, and **unchecked** for the same gap as SEND_IPC | — | DDR-1017 §1 |
+| `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` | not started | — | follow DDR-1015's shape |
+| `REWRITE_AGENT_CODE` · `EVOLVE_GENOME` | not started, force-pending | — | follow DDR-1016/1017's shape; see DDR-1016 §4 on the rate limit |
 
 The remaining six 3C types in the list above (`EXEC_CODE`, `PARSE_DOCUMENT`,
 `BROWSE_WEB`, `CAPTURE_FRAME`, `SCAN_ENVIRONMENT`, `QUERY_SCENE`) are

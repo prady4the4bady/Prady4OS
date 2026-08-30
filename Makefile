@@ -131,6 +131,8 @@ USER_AREAD_SRC := user/actionreadtest.c  # DDR-1015: Section 3C ACTION_READ_FILE
 USER_AREAD_ELF := build/actionreadtest.elf
 USER_ADEL_SRC := user/actiondeltest.c    # DDR-1016: Section 3C ACTION_DELETE_FILE
 USER_ADEL_ELF := build/actiondeltest.elf
+USER_ASPW_SRC := user/actionspawntest.c  # DDR-1017: Section 3C ACTION_SPAWN_PROCESS
+USER_ASPW_ELF := build/actionspawntest.elf
 USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
@@ -226,7 +228,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-actionspawn smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -511,6 +513,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AREAD_ELF) build/actionreadtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ADEL_SRC) -o build/actiondeltest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ADEL_ELF) build/actiondeltest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_ASPW_SRC) -o build/actionspawntest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ASPW_ELF) build/actionspawntest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
@@ -3195,13 +3199,44 @@ smoke-actiondel: $(IMG) fat-image sfs-image
 	 ln=$$(grep -ao "PRADYOS_ACTIONDEL_OK id=[0-9]* st=-*[0-9]* ctrl=[0-9]* keep=[0-9]*" build/actiondel.log | head -1); \
 	 test -n "$$ln" || { echo "[actiondel] FAIL — no measured line in the capture"; exit 1; }; \
 	 echo "[actiondel] $$ln"; \
-	 st=$${ln##*st=}; st=$${st%% *}; \
-	 ctrl=$${ln##*ctrl=}; ctrl=$${ctrl%% *}; \
-	 keep=$${ln##*keep=}; \
+	 st=$${ln##* st=}; st=$${st%% *}; \
+	 ctrl=$${ln##* ctrl=}; ctrl=$${ctrl%% *}; \
+	 keep=$${ln##* keep=}; \
 	 test "$$ctrl" = "1" || { echo "[actiondel] FAIL — control unlink did not remove /ADELCTRL, so keep= proves nothing"; exit 1; }; \
 	 test "$$st" = "1" || { echo "[actiondel] FAIL — verdict st=$$st, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
 	 test "$$keep" = "1" || { echo "[actiondel] FAIL — /ADELKEEP was deleted on a PENDING action; the agent acted on its own say-so"; exit 1; }
 	@echo "[actiondel] PASS — force-pending, and the unapproved delete did not happen"
+
+# Section 3C ACTION_SPAWN_PROCESS gate (DDR-1017). Force-pending like
+# smoke-actiondel, but the effect is asked of the KERNEL rather than the
+# filesystem: `wait4(-1, &st, WNOHANG)` walks the real thread ring.
+#
+#   ctrl=1    THE CONTROL. The probe forked a child of its own, no action
+#             involved, and reaped it -- pid AND exit status both matched.
+#             Without this, post=-10 would also be what a broken fork produces,
+#             and M1 would pass.
+#   st=1      AE_PENDING. SPAWN_PROCESS is in aether_action_forces_pending()
+#             (DDR-842 S4) and there is no approver in a gate boot.
+#   post=-10  -ECHILD: this process has NO children. -11 (-EAGAIN, a child
+#             exists and has not exited) and any positive pid both mean a
+#             process appeared on a PENDING action -- the exact defect.
+smoke-actionspawn: $(IMG) fat-image sfs-image
+	@rm -f build/actionspawn.log
+	@SERIAL_LOG=build/actionspawn.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actionspawn \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONSPAWN_OK id=')" \
+	FORBIDDEN_SENTINEL="ACTIONSPAWN FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONSPAWN_OK id=[0-9]* st=-*[0-9]* ctrl=[0-9]* post=-*[0-9]*" build/actionspawn.log | head -1); \
+	 test -n "$$ln" || { echo "[actionspawn] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actionspawn] $$ln"; \
+	 st=$${ln##* st=}; st=$${st%% *}; \
+	 ctrl=$${ln##* ctrl=}; ctrl=$${ctrl%% *}; \
+	 post=$${ln##* post=}; \
+	 test "$$ctrl" = "1" || { echo "[actionspawn] FAIL — the control fork/reap did not work, so post= proves nothing"; exit 1; }; \
+	 test "$$st" = "1" || { echo "[actionspawn] FAIL — verdict st=$$st, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
+	 test "$$post" = "-10" || { echo "[actionspawn] FAIL — wait4(WNOHANG) returned $$post, expected -10 (-ECHILD); a process appeared on a PENDING action"; exit 1; }
+	@echo "[actionspawn] PASS — force-pending, and no process appeared for it"
 
 # Layer-7 horizon-band gate (DDR-1012): DAWN and DUSK grow a full-width horizon
 # band in render_backdrop. DAWN previously had NO backdrop at all (a bare
