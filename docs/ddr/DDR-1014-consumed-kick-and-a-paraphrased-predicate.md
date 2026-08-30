@@ -212,3 +212,38 @@ colour-matching DDR-975 §7 and DDR-1010 §2 each had to retract.
 shard 5 goes quiet across the next several suite-runs on `c9740c9a61332f37` or
 later, the consolidation is likely; if `smoke-smpuser` keeps failing there, it was
 a different thing and DDR-1009's signature #1 stands on its own.
+### 6.2 MEASURED — five suite-runs on the fixed kernel, shard 5 quiet
+
+Checked 2026-08-30 ~17:30 UTC, both events on every SHA at or after the fix:
+
+| tip | event | jobs | result |
+|---|---|---|---|
+| `792f162` | push | 15/15 | green |
+| `792f162` | pull_request | 15/15 | green |
+| `438afdb` | push | 15/15 | green |
+| `438afdb` | pull_request | 15/15 | green |
+| `6e5427a` | push | 15/15 | green |
+
+**These five pool onto ONE kernel binary.** `git diff --name-only` shows
+`438afdb` and `6e5427a` change **only** `docs/ddr/*.md` relative to `792f162`, so
+the DDR-1009 §8.3 pooling discipline permits it — this is the same argument that
+turned three SHAs into twelve suite-runs there, applied honestly in the other
+direction. Kernel `c9740c9a61332f37`.
+
+**Zero `resched FAIL`, and shard 5 green in all five.** On the pre-fix kernel
+`ba6ac01fe015b2a4` it fired twice within 40 minutes.
+
+**What this does and does not establish.** It answers the question §6.1 posed —
+shard 5 went quiet — and it is the outcome the consolidation hypothesis
+predicts. It does **not** establish a rate. Against DDR-1009's measured 25%
+per-suite failure on the *previous* binary, five clean runs would occur by luck
+with probability `0.75^5 = 0.24`; and that 25% pooled four different signatures,
+only one of which is this defect, so it is not even the right prior. **The
+consolidation of DDR-1009 signature #1 into this defect remains LIKELY, not
+shown** — settling it needs the `81274f4` sentinel, which is lost, or a much
+longer quiet run. Do not upgrade the wording without one.
+
+**What would reopen it:** a single `[smp] resched FAIL` line on
+`c9740c9a61332f37` or later. DDR-1004 §6.1's narrow timing window is then the
+remaining candidate, and it is **not** proof-grade — instrument before changing
+anything.

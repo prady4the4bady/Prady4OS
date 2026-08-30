@@ -7917,22 +7917,36 @@ the first says PENDING.
 
 `ci-start-align-check` failed on this branch naming **`user/actionreadtest.c`** —
 DDR-1015's probe, shipped at `8ad4012` with a `_start` lacking
-`force_align_arg_pointer`. **So `8ad4012` and the two commits after it will show
-a red hygiene job.** That red is this defect and it is fixed on this tip; it is
-not a new intermittent, and it should not be root-caused as one.
+`force_align_arg_pointer`.
+
+**CONFIRMED in CI, and it is exactly two commits: `8ad4012` and `6894062`.** The
+`8ad4012` push run (33323140959) has **1 failed job of 15: `shard-check`** — the
+job whose step 4 is "User entry-point stack alignment (DDR-823)". Every other job
+is green. (An earlier draft of this note said "the two commits after it", which
+was off by one: only `6894062` follows it before the fix.) That red is this
+defect, it is fixed on this tip, and it must not be root-caused as a new
+intermittent.
 
 Root cause of the miss: CLAUDE.md §HYGIENE GATES named **two of the three**
 static checks. CI runs all three (`ci.yml:35`) and so does
 `tools/ci/hygiene_check.sh`. **The list has been replaced by the script** in
 CLAUDE.md item 2 — run the script.
 
-### The armed check-in question is STILL UNANSWERABLE
+### The armed check-in question: ANSWERED — recorded in DDR-1014 §6.2
 
-"Did DDR-1014 stop `[smp] resched FAIL ipis=0 ran=1 idle=1`?" — **no data.** As
-of 17:07 UTC every CI run at or after `792f162` (the fix) is still `queued` or
-`in_progress`: five commits x two events, serialized behind each other. Zero
-completed suite-runs on kernel `c9740c9a61332f37`. Do not record an answer in
-DDR-1014 §6.1 until at least one completes; re-check both events per SHA.
+"Did DDR-1014 stop `[smp] resched FAIL ipis=0 ran=1 idle=1`?" — **shard 5 went
+quiet.** Five suite-runs at or after the fix, both events per SHA, all
+**15/15 green**: `792f162` (push + PR), `438afdb` (push + PR), `6e5427a` (push).
+Zero `resched FAIL`. The pre-fix kernel fired it twice in 40 minutes.
+
+Those five **pool onto one kernel binary** — `438afdb` and `6e5427a` are
+docs-only against `792f162` (`git diff --name-only`), the DDR-1009 §8.3 discipline
+applied in the honest direction. Kernel `c9740c9a61332f37`.
+
+**Not a rate.** `0.75^5 = 0.24` against DDR-1009's 25%, and that 25% pooled four
+signatures of which this is one — so the DDR-1009 signature-#1 consolidation
+stays **LIKELY, not shown**. Reopen on a single `resched FAIL` line; DDR-1004
+§6.1 is then the candidate and is not proof-grade.
 
 ### Gates run on `bf6f7c80ed07040f` (one hash, verified before and after each)
 
