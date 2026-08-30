@@ -241,7 +241,14 @@ Batch their DDRs in one pass first (§4.3), then implement.
 - [ ] F#66 `architect_agent` / F#67 `healer_agent` (RUFLO) / F#69 `inventor_agent`
 - [ ] F#70 `tournament_agent` / F#71 subconscious world model / F#72 `verifier_agent`
 - [ ] F#73 sovereign NL UI / F#74 capability discovery / F#75 lineage memory
-- [ ] F#76 tamper-evident ledger / F#68 metric lockbox e2e
+- [x] **F#76 tamper-evident ledger — ALREADY SHIPPED + GATED TWICE** (DDR-1022):
+      `SYS_READ_AUDIT` (37) + `SYS_VERIFY_AUDIT` (93), `smoke-auditchain`
+      (shard 0, strict) AND `smoke-auditchain-tamper` (shard 4, strict).
+- [x] **F#68 metric lockbox — ALREADY SHIPPED + GATED** (DDR-1022):
+      `user/lockboxtest.c` via `SYS_METRIC_READ` (76), gate `smoke-lockbox`
+      (shard 7, strict), DDR-812. `smoke-lockbox-e2e` does not exist and is not
+      needed. **Both rows said otherwise — grep before declaring anything
+      unbuilt (DDR-1020 §1, DDR-1021, DDR-1022 §1).**
 - [ ] Section 3C actions: READ_FILE, DELETE_FILE, SEND_IPC, QUERY_MEMORY,
       REWRITE_AGENT_CODE, PROPOSE_HYPOTHESIS, RUN_EXPERIMENT, EVOLVE_GENOME.
       **Scoped by DDR-1013 §2.1 — read it before starting.** These are RING-3

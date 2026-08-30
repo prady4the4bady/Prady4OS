@@ -8384,3 +8384,61 @@ wasted slot rather than an unguarded action. Post-1.0 decision.
    got that wrong from memory, and DDR-1021 is what doing it right looks like.
 2. STEP 1 (OPEN-2) still open; DDR-1019's instrument is armed.
 3. STEP 3 (`main` + `v1.0.0`) stays last.
+
+---
+
+## CHECKPOINT 2026-08-30 22:0x UTC — DDR-1022: Group F assessed, tracker wrong twice
+
+### Two items were already shipped and gated
+
+- **F#68 metric lockbox** — tracker said *"kernel ✅ Python ✅, e2e wiring
+  unverified"*. It is **shipped and gated**: `user/lockboxtest.c` via
+  `SYS_METRIC_READ` (NSI 76), verification before any bytes are copied, gate
+  **`smoke-lockbox`** (shard 7, strict), DDR-812. `smoke-lockbox-e2e` does not
+  exist and is not needed.
+- **F#76 tamper-evident ledger** — tracker said *"⬜ not started"*. It is
+  **shipped and gated twice**: `SYS_READ_AUDIT` (37) + `SYS_VERIFY_AUDIT` (93),
+  `smoke-auditchain` (shard 0, strict) AND `smoke-auditchain-tamper` (shard 4,
+  strict). Intact *and* tampered is what "tamper-evident" asks for.
+
+That is the **fourth** instance in this session of something declared unbuilt
+without grepping. **Grep first — always.**
+
+### The structural fact that reframes "11 unbuilt agents"
+
+**There is exactly ONE agent program: `user/agent_base.c`.** The roster is a
+generic array of active-bits and a slot is filled by `SYS_SPAWN_AGENT` (NSI 35)
+launching that template with a task string; the kernel holds **no per-agent
+identity** (grep for KRYOS/PRAX/RUFLO in `kernel/aether/*.c` → nothing).
+
+So F#66–F#76 are **domain behaviours, not programs**. Shipping eight stubs would
+produce eight vacuous gates — the trap this session hit five times.
+
+### Group F final state
+
+- Section 3C — CLOSED (6 shipped + 2 deferred, DDR-1021)
+- Section 3D — COMPLETE 21/21
+- F#68, F#76 — shipped + gated (above)
+- F#74 capability discovery — **deferred**: `agent_caps` exists on `struct tcb`
+  but is initialised to 0, never granted, and has no read syscall; building it
+  reverses DDR-982's deliberately withdrawn per-slot enforcement
+- F#66/67/69/70/71/72/73/75 — **deferred**, reasons logged in BUILD_TRACKER
+- PRAX/LUMYN/AHNIS/IRIS — deferred on four pre-approved action-type deferrals
+
+**Nothing in Group F is now both buildable and unlogged.** This does NOT claim
+Group F is feature-complete — eight agents and an NL UI are genuinely absent and
+the roster will show empty slots. It claims each item is either shipped and
+gated, or deferred with a reason where the release checklist can see it.
+
+### CI
+
+`cf14fb3` green, 15/15 — **six consecutive suite-runs**. `cf14fb3` is docs-only
+over `51463c9`, so those two pool onto kernel `6836dc723f31fc3e`.
+
+### NEXT
+
+1. Check-in armed 23:03 UTC for `8eaab34`/`54c74bd` CI, and for `panic_stage=`
+   in any heartbeat (DDR-1019's instrument).
+2. STEP 1 (OPEN-2) remains the open release blocker; PR #17 stays draft.
+3. STEP 3 last: 3 independent greens on ONE tip → ff `main` → re-verify the ISO
+   on main's own build → tag `v1.0.0`.

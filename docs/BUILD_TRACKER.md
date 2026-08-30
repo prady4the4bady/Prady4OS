@@ -1001,6 +1001,9 @@ ticked. Logged here verbatim from the table, reasons unchanged.
 - NVMe completion IRQ — `[DEFERRED: poll-mode sufficient for ISO; DDR-774a/b/c deferred until B#3 SMP stable]`
 - `ACTION_SEND_IPC` — `[DEFERRED: no ring-3 IPC surface — ipc_send/ipc_recv are kernel-internal and capability-gated and there is no SYS_IPC_*, so an approved SEND_IPC has no executor in any ring; building it is new kernel ABI plus a security decision (DDR-1017 §1)]`
 - `ACTION_RUN_EXPERIMENT` — `[DEFERRED: no implementation at any ring — CAP_EXEC is a #define checked nowhere (zero matches in kernel/*.c, no is_exec on struct tcb), there is no experiment subsystem, and the metric lockbox is CAP_SOVEREIGN read-only by design so an agent cannot record a result; it is ACTION_EXEC_CODE's deferral under another name (DDR-1021)]`
+- F#74 capability discovery — `[DEFERRED: agent_caps exists on struct tcb (DDR-982) but is initialised to 0 and never granted, and there is no syscall to read it; building it reverses DDR-982's deliberately withdrawn per-slot enforcement (DDR-1022 §4)]`
+- F#66 architect_agent / F#67 healer_agent (RUFLO) / F#69 inventor_agent / F#70 tournament_agent / F#71 subconscious world model / F#72 verifier_agent / F#75 lineage memory — `[DEFERRED: domain behaviour with no subsystem behind it; there is exactly ONE agent program (user/agent_base.c) and the named agents are roster slots, so each of these is a behaviour rather than plumbing. A stub would gate vacuously, and F#75's gate would duplicate smoke-agentmem (DDR-1022 §2/§5)]`
+- F#73 sovereign NL UI — `[DEFERRED: needs a natural-language surface; blocked on the same two missing pieces as Ctrl+Alt+T — no windowed terminal client, and sys_exec.c:47 discards argv/envp so a spawned client cannot be told what to attach to (DDR-1022 §5)]`
 
 ### This resolves DDR-982 §5.5 without a new operator ruling
 
@@ -1382,7 +1385,37 @@ Both are now logged in the deferrals list above, so §WHAT "DONE" MEANS's *"zero
 unlogged exclusions"* holds for Section 3C.
 
 **Section 3C final: 6 shipped and gated, 2 deferred with reasons, 0
-buildable-and-unbuilt.** `READ_FILE` (1015) · `DELETE_FILE` (1016) ·
+buildable-and-unbuilt.**
+
+---
+
+## DDR-1022 — Group F assessed; TWO items were already shipped and gated
+
+**ASSESSMENT, no code change.** Grepped before budgeting, per DDR-1021's method —
+and the grep contradicted this tracker **twice**:
+
+- **F#68 metric lockbox e2e** — this file said *"kernel ✅ Python ✅, e2e wiring
+  unverified"*. It is **shipped and gated**: `user/lockboxtest.c` reads via
+  `SYS_METRIC_READ` (NSI 76), verification happens before any bytes are copied
+  (`-ETAMPER` yields nothing), gate **`smoke-lockbox`** (shard 7, strict),
+  DDR-812. `smoke-lockbox-e2e` does not exist and is not needed.
+- **F#76 tamper-evident ledger** — this file said *"⬜ not started"*. It is
+  **shipped and gated twice**: `SYS_READ_AUDIT` (37) + `SYS_VERIFY_AUDIT` (93),
+  with `smoke-auditchain` (shard 0, strict) AND `smoke-auditchain-tamper`
+  (shard 4, strict). Gated intact *and* tampered is what "tamper-evident" asks.
+
+**The structural fact that reframes "11 unbuilt agents":** there is exactly ONE
+agent program, `user/agent_base.c`. The roster is generic active-bits and a slot
+is filled by `SYS_SPAWN_AGENT` launching that template with a task; the kernel
+holds no per-agent identity. So the remaining items are **domain behaviours, not
+programs** — and a stub agent produces a vacuous gate, the trap this session hit
+five times.
+
+F#74 is blocked by a decision already taken (DDR-982's withdrawn per-slot
+enforcement). The other eight are deferred above with reasons.
+**Nothing in Group F is now both buildable and unlogged.** It does NOT claim
+Group F is feature-complete — eight agents and an NL UI are genuinely absent.
+ `READ_FILE` (1015) · `DELETE_FILE` (1016) ·
 `QUERY_MEMORY` (1018) · `REWRITE_AGENT_CODE` (842) · `PROPOSE_HYPOTHESIS` +
 `EVOLVE_GENOME` (1020); `SEND_IPC` and `RUN_EXPERIMENT` deferred.
 
