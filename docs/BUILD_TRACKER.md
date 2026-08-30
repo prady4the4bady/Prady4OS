@@ -1021,3 +1021,33 @@ are themselves pre-approved deferrals (a sandboxed interpreter, a cloud bridge,
 a 64 MiB OCR model, a scene graph). Declaring the bits would not make any of
 them work; it would add three action types that can only return "not
 implemented". The queue rows are corrected to say that.
+
+---
+
+## DDR-1013 — a probe constant drifted from the wire format; and what 3C work really is
+
+**FIX.** `user/actiondagtest.c` defined `ACTION_PRINT 1`. `aether.h` pins the
+wire format with `_Static_assert`s — `ACTION_WRITE_FILE == 1`,
+`ACTION_PRINT == 2` — so every action `smoke-actiondag` submitted was queued and
+**audited as a file write** while every line of the probe called it a print.
+
+**No gate caught it, and the reason is the useful part.** `smoke-actiondag`
+asserts two sentinels, and the DAG logic it tests is type-agnostic. The one
+type-sensitive predicate in the submit path is
+`aether_action_forces_pending()` — and `WRITE_FILE` and `PRINT` are **both
+outside** that set, so they behave identically there. The bug was invisible by
+coincidence, not by being harmless: add `WRITE_FILE` to that set, or repoint the
+probe, and the gate changes meaning silently.
+
+**SCOPE CORRECTION, recorded because I nearly acted on the wrong reading.** The
+eight declared Section-3C action types are referenced nowhere but the enum and
+that predicate, which looks like the kernel approving actions nothing
+implements. It is not. `agent_base.c` states the architecture: the agent
+*proposes*, the kernel rules, **the agent executes**. There is no kernel-side
+executor for `ACTION_WRITE_FILE` either. So a declared type with a policy entry
+and no ring-3 implementer is an unused vocabulary entry, and the submit-time
+rejection I was about to add would have broken the force-pending policy that
+already names three of those eight as human-gated.
+
+DDR-1013 §2.1 specifies what implementing one actually requires, and notes that
+the eight fall into two policy classes whose gates must differ.

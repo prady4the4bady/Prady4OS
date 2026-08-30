@@ -243,7 +243,19 @@ Batch their DDRs in one pass first (§4.3), then implement.
 - [ ] F#73 sovereign NL UI / F#74 capability discovery / F#75 lineage memory
 - [ ] F#76 tamper-evident ledger / F#68 metric lockbox e2e
 - [ ] Section 3C actions: READ_FILE, DELETE_FILE, SEND_IPC, QUERY_MEMORY,
-      REWRITE_AGENT_CODE, PROPOSE_HYPOTHESIS, RUN_EXPERIMENT, EVOLVE_GENOME
+      REWRITE_AGENT_CODE, PROPOSE_HYPOTHESIS, RUN_EXPERIMENT, EVOLVE_GENOME.
+      **Scoped by DDR-1013 §2.1 — read it before starting.** These are RING-3
+      work, not kernel work: the kernel is the policy engine and the agent
+      executes after approval (there is no kernel executor for
+      `ACTION_WRITE_FILE` either). Each type needs (a) a probe that submits,
+      polls, and performs the operation on approval, and (b) a gate asserting the
+      whole pipeline including the effect, not just a sentinel. **The eight split
+      into two policy classes:** `DELETE_FILE`, `REWRITE_AGENT_CODE` and
+      `EVOLVE_GENOME` are in `aether_action_forces_pending()`, so their gates must
+      assert the action stays PENDING in sovereign mode and needs an explicit
+      approve — a gate expecting auto-approval there asserts the opposite of
+      DDR-842's design. `READ_FILE` is the natural first: non-destructive, so it
+      auto-approves in sovereign mode.
 - [ ] S3 + S7 invariant arms — BLOCKED on F#66–F#72
 
 ### Group D — userspace
