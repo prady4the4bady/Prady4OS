@@ -108,26 +108,78 @@ The chain is then mechanical, and every link is in the capture:
 Step 5 is DDR-977 §8.2's chain exactly. **The block layer and the scheduler are
 both innocent, again, and this time the first domino is visible.**
 
-## 4. The detector gap that hid it for this long
+### 3.1 The GS base was ZERO — the read landed on the real-mode IVT
 
-`GLOBAL_FORBIDDEN` already carried `'percpu FAIL'`. It does **not** match either
-line above: the printed strings are `[percpu] gs FAIL (syscall ctx)` and
-`[percpu] current FAIL (syscall ctx)` — there is a word in between.
-`'percpu FAIL'` matches only the SMP-boot form `[smp] cpu N percpu FAIL`.
+This is worth pinning down, because "GS is wrong" and "GS is the USER's" are
+different defects with different fixes.
 
-So the only gate that would notice is `smoke-swapgs`, which names `gs FAIL` in
-its own `FORBIDDEN_SENTINEL` (`Makefile:2886`). In every other gate the kernel
-could announce a broken SWAPGS invariant and be believed.
+`this_cpu()` is one instruction, `mov %gs:0, %rax` (`percpu.c:113`). The panic
+block reports `RAX = RDI = 0x0000FF53F000F000`. With a **GS base of 0** that read
+takes linear address 0 — which in the identity map is the **real-mode interrupt
+vector table**, an array of `offset:segment` pairs. `F000:F053` is a BIOS entry
+point, and `0x0000FF53F000F000` is exactly two such vectors packed into a
+quadword.
 
-That is what happened here: the boot said `gs FAIL`, then `#GP`'d, then froze two
-CPUs, and the gate finally failed **three symptoms downstream** on
-`blk integrity FAIL reference-read`. Every previous OPEN-2 investigation started
-from that third symptom.
+So `this_cpu()` did not return a stale or randomly corrupted pointer. **It
+returned the IVT**, which means the GS base was 0 — i.e. the **user's** GS base
+was still active while executing a syscall in ring 0.
 
-**An entry that looks like it covers a family and covers one member is worse than
-no entry, because it reads as covered.** `'[percpu] gs FAIL'` and
-`'[percpu] current FAIL'` are now their own entries (71 → 73). Verified safe: no
-gate expects either string, and `smoke-swapgs` already treats them as failures.
+That is precisely the state `percpu.c:95-100` (DDR-981 §9) describes for the
+SYSCALL swapgs windows: *"CS reads as ring 0 while the USER's GS base is still
+active … this_cpu() would then read %gs:0 against a user GS base of 0, i.e.
+linear address 0 in ring 0."* The predicted symptom and the observed one match
+bit for bit.
+
+**What that does NOT settle.** DDR-981 §9 reasons that `isr_common`'s CS-based
+swapgs decision is *consistently* wrong in those windows — it declines to swap on
+entry and declines again on exit — so an NMI landing there should be balanced and
+leave GS as it found it. And the ordering in this capture argues against the NMI
+prober being the trigger at all: `[percpu] gs FAIL` appears at log line 202,
+while the first `[apfreeze]` NMI is at line 409. **The corruption precedes any
+NMI in this boot.**
+
+So the window is identified and the *state* is identified; the event that leaves
+the kernel in it is not. Do not "fix the NMI race" on this evidence — DDR-981
+already reasoned it balanced, and the artefact does not contradict that.
+
+## 4. CORRECTION — the detector gap I first claimed here was NOT real
+
+**This section originally said** that `GLOBAL_FORBIDDEN` carried only
+`'percpu FAIL'`, that it could not match `[percpu] gs FAIL (syscall ctx)`, and
+that therefore *"only `smoke-swapgs` would notice"* — so the primary event went
+unseen and the gate failed three symptoms downstream.
+
+**That is wrong, and it was wrong when written.** The list already carried a bare
+`'gs FAIL'` entry, at position 54, well before this DDR:
+
+```
+$ git show d7d2794^:tools/qemu_runner/boot_test.sh | awk '/^GLOBAL_FORBIDDEN=/{f=1} f{print} f && /\)"$/{exit}' \
+    | grep -o "'[^']*'" | tr -d "'" | grep -niE "gs |percpu"
+54:gs FAIL
+60:percpu FAIL
+```
+
+`[percpu] gs FAIL (syscall ctx)` contains the substring `gs FAIL`, so **every**
+gate running through `boot_test.sh` already caught it. I grepped the list for
+`percpu`, found only `percpu FAIL`, and concluded coverage was missing without
+checking whether a *differently worded* entry covered the same string. The
+failing `smoke-blk-integrity` boot did not hide its primary event; the global
+list would have failed it on `gs FAIL` alone.
+
+Found by the scanner in §8 printing **both** `gs FAIL` and `[percpu] gs FAIL` as
+hits on the same line — i.e. the tool built to close the gap demonstrated the gap
+was not there.
+
+### 4.1 What of the two additions survives
+
+| entry | verdict |
+|---|---|
+| `'[percpu] gs FAIL'` | **redundant** with the pre-existing `'gs FAIL'`. Kept, because §NON-NEGOTIABLE 6 makes the list append-only, but it buys nothing and is recorded here as such rather than left to look load-bearing. |
+| `'[percpu] current FAIL'` | **genuine new coverage.** No pre-existing entry matches it: `'percpu FAIL'` does not (there is a word between), and there is no bare `'current FAIL'`. |
+
+So one real hole was closed, not two, and the narrative that OPEN-2 hid behind a
+missing sentinel does not hold. What DID hide it is in §8 — and that one is
+measured, not inferred.
 
 ## 5. Is this a regression from DDR-1008/1009? No mechanism, and the site predates them
 
@@ -195,3 +247,74 @@ directly:
 3. Then campaign `smoke-blk-integrity` at **N ≥ 36** (§1.1's power figure), with
    `SERIAL_LOG` pinned and `KEEP_SERIAL=1` **verified on the resume**, not just
    the first chunk.
+
+---
+
+## 8. The detector gap that IS real: `smoke-shell` applies no global sentinels
+
+§4 retracted an inferred gap. This one is measured.
+
+`smoke-shell` drives QEMU itself through a FIFO — it feeds PRISM a command
+stream — and **never calls `boot_test.sh`**:
+
+```
+$ awk '/^smoke-shell:/{f=1} f && /boot_test\.sh/{c++} f && /^$/{f=0} END{print c+0}' Makefile
+0
+```
+
+`GLOBAL_FORBIDDEN` lives inside `boot_test.sh` and is applied by it. So
+`smoke-shell` applied **none of the 73 sentinels**: not `[apfreeze]`, not
+`*** NEXUS KERNEL PANIC ***`, not `gs FAIL`.
+
+That matters more than it sounds, because `smoke-shell` is **hygiene gate 8** —
+CLAUDE.md requires `smoke-shell` 5/5 locally before *every* push. The gate a
+session is told to trust last before pushing was blind to every global detector.
+
+**Measured, not argued.** The §7 probe was built with a deliberate non-vacuity
+mutant (`if (0)` in place of the health check) so that a healthy kernel prints
+the failure line. That kernel — `6c81563d46114d5c` — printed:
+
+```
+[percpu] gs FAIL (syscall ctx) apic=0 num=6 gs0=0xFFFFFFFF80136D60 want=0xFFFFFFFF80136D60
+```
+
+and **`smoke-shell` reported PASS.** A kernel announcing a broken SWAPGS
+discipline on every syscall passed the last gate before a push.
+
+### 8.1 The fix, and why it is fail-loud
+
+`tools/qemu_runner/scan_forbidden.sh <log> [label]` extracts `GLOBAL_FORBIDDEN`
+from `boot_test.sh` and greps a capture with it; `smoke-shell` now runs it over
+`build/shell_serial.log` before declaring PASS.
+
+The extraction **refuses to report clean if it recovers fewer than 60 patterns.**
+That is not defensive padding — it is the §NON-NEGOTIABLE 6 failure mode applied
+to the reader instead of the writer. That rule exists because the list was
+silently EMPTY for four commits and nothing noticed, since an empty list fails
+nothing. A scanner that extracts zero patterns and prints "clean" would
+reintroduce exactly that, one level up. It also uses an `awk` range ending at the
+closing `)"` rather than a `sed` range keyed on the final entry — the keyed form
+is what broke twice today when entries were appended.
+
+Verified **three** ways: FAIL (naming each pattern) against the mutant capture;
+clean, 73 patterns, against the healthy one; and — the arm that matters — a
+deliberately broken extractor exits non-zero with *"Refusing to report a clean
+scan against nothing"* rather than printing clean.
+
+One bug found by that count. The first version reported **74** patterns against a
+list of 73: `grep -o "'[^']*'"` was also capturing `printf`'s own format string,
+`'%s\n'`, off the assignment line. Harmless in practice — no serial log contains
+a literal `%s\n` — but a scanner whose pattern count does not match the list it
+claims to apply cannot be audited, which is the entire point of the fail-loud
+threshold. The `awk` guard now skips the assignment line.
+
+### 8.2 What is still not covered
+
+`smoke-selftest` also does not call `boot_test.sh`, but that is correct — it is
+the meta-test *of* `boot_test.sh` and invokes it under controlled conditions.
+Not a gap.
+
+The other bespoke recipes were not audited. `smoke-shell` was chosen because it
+is a mandatory pre-push gate; a full sweep of which gates do and do not apply the
+global list is unbuilt work, and the count above (`0`) is the query that would
+do it.

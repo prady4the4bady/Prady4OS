@@ -1626,6 +1626,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# proves the message travelled on fd 2 (fd 1 pointed elsewhere in that command).
 	@grep -qF "cat: cannot open /NOPE9k2.TXT" build/shell_serial.log || { echo "[shell] FAIL: stderr not redirected to the 2> file (DDR-784)"; tail -30 build/shell_serial.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
+	@bash tools/qemu_runner/scan_forbidden.sh build/shell_serial.log shell
 	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB), clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)

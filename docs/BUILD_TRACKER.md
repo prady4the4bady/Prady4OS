@@ -867,3 +867,34 @@ settling nothing, p ≈ 0.40.
 **Source defect NOT named. No fix attempted.** Next instrument in DDR-1010 §7:
 make the SWAPGS probe continuous (it is one-shot on the first `sys_getpid`),
 record the CPU index, then campaign `smoke-blk-integrity` at N ≥ 36.
+
+### DDR-1010 addendum — the continuous SWAPGS probe, and two corrections
+
+**Instrument built (§7).** `gs_discipline_check()` runs at the top of
+`syscall_dispatch`, **before** anything dereferences `current_thread` — which
+matters, because the rate-limit check on the next line is itself a
+`current_thread->is_agent` read, and on the DDR-1010 boot that read went through
+a GS base of 0 into the real-mode IVT. The always-on cost is `this_cpu()` plus a
+compare; `lapic_id()` (an MMIO read) runs only *after* the cheap check has
+already failed, so a healthy boot pays nothing. Latched per LAPIC id, because the
+percpu index is exactly what is unusable when this fires.
+
+Non-vacuity checked with an `if (0)` mutant so a healthy kernel reports:
+`[percpu] gs FAIL (syscall ctx) apic=0 num=6 gs0=0xFFFFFFFF80136D60
+want=0xFFFFFFFF80136D60` — `gs0 == want` proves both sides of the cross-reference
+resolve, which is the basis of the whole diagnostic.
+
+**Correction 1 (§4).** The claimed detector gap was not real: `GLOBAL_FORBIDDEN`
+already carried a bare `gs FAIL`, so every `boot_test.sh` gate caught the primary
+event. Retracted in place.
+
+**Correction 2 (§8), and it is the real gap.** `smoke-shell` never calls
+`boot_test.sh` and so applied **none** of the 73 sentinels — while being the gate
+CLAUDE.md requires 5/5 before every push. The mutant kernel above **passed** it.
+Fixed by `scan_forbidden.sh`, which refuses to report clean if it recovers fewer
+than 60 patterns.
+
+Kernel `4b3181f13b2d76aa`, 1,098,122 B, `-Werror` clean. smoke-swapgs,
+smoke-blkmq, smoke-blk-integrity, smoke-rqstress-liveness, smoke-selftest,
+smoke-shell, smoke-perrestore all PASS; ci-shard-check OK (157/10/7);
+ci-probe-rodata-check OK (61 ELFs).

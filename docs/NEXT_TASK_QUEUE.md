@@ -256,14 +256,25 @@ Batch their DDRs in one pass first (§4.3), then implement.
       `*** NEXUS KERNEL PANIC ***` and **not one further byte** for ~100 s until
       `timeout` killed QEMU — `idt.c:702` is the very next statement. NOT
       claimed to explain the other three signatures.
-- [x] **DDR-1010 detector — `[percpu] gs FAIL` / `[percpu] current FAIL` added
-      to `GLOBAL_FORBIDDEN`** (71 → 73). The list already carried `percpu FAIL`,
-      which does **not** match either — the printed strings have a word in
-      between, so `percpu FAIL` matches only `[smp] cpu N percpu FAIL`. Only
-      `smoke-swapgs` was catching them. That is why OPEN-2 always looked like a
-      block or scheduler bug: the kernel announced a broken SWAPGS invariant and
-      the gate failed three symptoms later. An entry that looks like it covers a
-      family and covers one member is worse than none.
+- [x] **DDR-1010 §8 — `smoke-shell` applied NO global sentinels.** It drives
+      QEMU through its own FIFO and never calls `boot_test.sh`, where
+      `GLOBAL_FORBIDDEN` lives. It is **hygiene gate 8** — required 5/5 before
+      every push — and it was blind to all 73 sentinels. Measured, not argued: a
+      kernel mutated to print `[percpu] gs FAIL` on every syscall
+      (`6c81563d46114d5c`) **passed `smoke-shell`**. Fixed with
+      `tools/qemu_runner/scan_forbidden.sh`, wired into the recipe, verified
+      three ways — hits named, clean at 73 patterns, and a broken extractor
+      exiting non-zero rather than reporting clean (the §NON-NEGOTIABLE 6 failure
+      mode applied to the reader).
+- [x] **DDR-1010 §4 — a detector gap I claimed and then RETRACTED.** I wrote that
+      `GLOBAL_FORBIDDEN` could not match `[percpu] gs FAIL (syscall ctx)`. It
+      already carried a bare `gs FAIL` at position 54, so every `boot_test.sh`
+      gate caught it all along. I had grepped the list for `percpu` and never
+      checked whether a differently-worded entry covered the same string. Of the
+      two entries added, `[percpu] current FAIL` is genuine new coverage and
+      `[percpu] gs FAIL` is redundant — kept only because the list is
+      append-only, and recorded as redundant rather than left looking
+      load-bearing.
 - [x] **DDR-1009 detector — `NEXUS KERNEL PANIC` added to `GLOBAL_FORBIDDEN`.**
       One emitter, zero consumers: a ring-0 panic was caught only when it
       happened to break a gate's assertion or run out its clock. Note the

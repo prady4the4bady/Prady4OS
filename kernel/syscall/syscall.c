@@ -1,6 +1,7 @@
 /* kernel/syscall/syscall.c — NSI dispatch table, handlers, and MSR setup. */
 #include "syscall.h"
 #include "console.h"
+#include "lapic.h"    /* DDR-1010: lapic_id() -- GS-independent CPU identity */
 #include "cap.h"
 #include "sched.h"
 #include "uaccess.h"   /* validated user-pointer copy path (ADR-022); used by 5b syscalls */
@@ -84,10 +85,57 @@ void syscall_register(unsigned num, syscall_fn fn) {
     table[num] = fn;
 }
 
+/* DDR-1010 §7: the SWAPGS discipline check, made CONTINUOUS and CPU-identifying.
+ *
+ * The DDR-SMP-3a probe in sys_getpid below is ONE-SHOT (`static int gs_checked`)
+ * and fires on the first sys_getpid of the whole boot. It caught OPEN-2 only
+ * because that boot's corruption happened to be early; it cannot bound WHEN GS
+ * goes bad, and it prints no CPU index.
+ *
+ * This runs at the top of every syscall, BEFORE anything dereferences
+ * current_thread -- which matters, because the rate-limit check below is itself
+ * a `current_thread->is_agent` read, and on the DDR-1010 boot that read went
+ * through a GS base of 0 into the real-mode IVT.
+ *
+ * COST: the always-on part is the two instructions of this_cpu() plus a compare.
+ * The expensive identification -- lapic_id() is an MMIO read -- runs ONLY after
+ * the cheap check has already failed, so a healthy boot pays nothing for it.
+ *
+ * percpu_by_apic_id() is the right cross-reference precisely because it does not
+ * read %gs (percpu.c:104): it can name the CPU when %gs cannot.
+ *
+ * Latched per CPU slot so a wedged CPU cannot flood the log; the latch is keyed
+ * on the LAPIC id, not on the (unusable) percpu index. */
+static uint32_t g_gsfail_seen;                  /* bitmask of apic_ids reported */
+
+static void gs_discipline_check(long num) {
+    struct percpu *pc = this_cpu();
+    if (pc && pc->self == pc)
+        return;                                  /* healthy: the common path */
+
+    uint32_t aid = lapic_id();
+    if (aid < 32 && (g_gsfail_seen & (1u << aid)))
+        return;                                  /* already reported this CPU */
+    if (aid < 32)
+        g_gsfail_seen |= 1u << aid;
+
+    struct percpu *real = percpu_by_apic_id(aid);
+    kputs("[percpu] gs FAIL (syscall ctx) apic=");
+    kputdec(aid);
+    kputs(" num=");
+    kputdec((uint64_t)num);
+    kputs(" gs0=");
+    kputhex((uint64_t)(uintptr_t)pc);            /* kputhex emits its own 0x (§INV.9) */
+    kputs(" want=");
+    kputhex((uint64_t)(uintptr_t)real);
+    kputs("\r\n");
+}
+
 long syscall_dispatch(long num, long a1, long a2, long a3, long a4,
                       long a5, long a6) {
     if (num < 0 || num >= MAX_SYSCALLS || !table[num])
         return -ENOSYS;
+    gs_discipline_check(num);                    /* DDR-1010: before any deref */
     /* AETHER rate limit (ADR-026 D7): agent processes get 60 syscalls / 1 s; an
      * over-budget agent is cleanly killed here and never reaches the handler.
      * Non-agents (init, PRISM, kernel) are exempt, so existing gates are intact.
