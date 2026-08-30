@@ -1077,3 +1077,45 @@ perturb what it measures.
 **pre-probe** kernel `29c792a8b8f3b056`, the one the failure was observed on.
 Either answer is informative and neither is assumed. The source defect remains
 **not named**.
+
+---
+
+## DDR-1014 — `sched_unblock` spent its one kick on a CPU that never receives one
+
+**FIXED, two defects, one found by reading and one by a CI artefact.**
+
+**The kernel defect.** `smp_resched_one` declines for the BSP and said nothing
+about it; `sched_unblock` `break`s out of its search **on the call**, not on a
+delivery. So an unblock running on an AP that finds the BSP idle first sends
+nothing and stops looking — any idle AP later in the list waits a full timer
+tick, which is exactly the latency rq-3 exists to remove. Reachable in ordinary
+operation: `virtio_blk.c:102/198` call `sched_unblock` from MSI-X interrupt
+context on whichever CPU the vector is routed to. A latency defect, not a
+correctness one — the timer backstop holds, so nothing hangs and nothing
+announced it. Fixed by having `smp_resched_one` report a *delivered* IPI and
+breaking only on that.
+
+**The probe defect, and the artefact.** CI on `72a474a` (one Markdown file over
+`483e853`, so the identical kernel) reddened **`smoke-percpu-sched`** with
+`[smp] resched FAIL ipis=0 ran=1 idle=1` — a gate that does not own that
+assertion, caught because `resched FAIL` is a `GLOBAL_FORBIDDEN` entry (DDR-791
+working). DDR-1004's proof scanned for an idle non-self CPU **without** the
+kernel's fourth clause, `!is_bsp`, so whenever the BSP was the idle one it
+expected an IPI the kernel would never send. Deterministic, no timing needed.
+
+**This corrects DDR-1004 §6.1**, which predicted a residual and named the wrong
+mechanism — a timing race (real, but narrow) rather than a predicate mismatch.
+The `idle=` field DDR-1004 added is what made the CI line readable, so the
+instrument worked; what it read out was not what §6.1 expected.
+
+**Non-vacuity, the load-bearing check:** narrowing `idle_seen` could have made it
+always false and retired the assertion into permanent `SKIP`. Three consecutive
+`[smp] resched OK` on `smoke-rqstress` with the capture pinned say otherwise.
+
+Kernel `c9740c9a61332f37`, `-Werror` clean. `smoke-percpu-sched`, `smoke-rqstress`,
+`smoke-resched`, `smoke-smppreempt`, `smoke-crosswake`, `smoke-smpsched`,
+`smoke-blk-integrity`, `smoke-blkmq`, `smoke-shell` all PASS; `ci-shard-check` OK
+(158/10/7); `ci-probe-rodata-check` OK.
+
+**Not measured:** the latency the fix recovers. No gate times a wake, so it can
+only be shown not to break anything.

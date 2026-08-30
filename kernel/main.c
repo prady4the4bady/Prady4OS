@@ -958,7 +958,22 @@ static void smpresched_proof(void) {
         int self_idx = self_pc ? (int)self_pc->cpu_idx : 0;
         for (int c = 0; c < PERCPU_MAX; c++) {
             struct percpu *o = percpu_get((uint32_t)c);
-            if (c != self_idx && o && o->present && o->idle) {
+            /* DDR-1014: `!o->is_bsp` MATCHES THE KERNEL. smp_resched_one
+             * declines to kick the BSP, so a BSP counted as an idle candidate
+             * here made the proof expect an IPI the kernel would never send --
+             * `ipis=0 ran=1 idle=1`, a FAIL on a correct system. That is the
+             * artefact this fix has: CI run on 72a474a, shard 5, reddening
+             * smoke-percpu-sched (which does not even own the assertion --
+             * `resched FAIL` is a GLOBAL_FORBIDDEN entry, DDR-791).
+             *
+             * DDR-1004 §6.1 predicted a residual here and named the wrong one:
+             * it described a timing race (a CPU leaving idle between the sample
+             * and the call). That window is real but narrow. THIS one needs no
+             * timing at all -- it is a predicate mismatch, and it fires whenever
+             * the BSP is the idle CPU. The two loops must ask the same question
+             * or the proof is not testing the kernel, it is testing a paraphrase
+             * of it. */
+            if (c != self_idx && o && o->present && o->idle && !o->is_bsp) {
                 idle_seen = 1;
                 break;
             }

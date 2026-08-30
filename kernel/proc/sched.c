@@ -1822,11 +1822,19 @@ void sched_unblock(struct tcb *t) {
         /* rq-3: kick an idle CPU so it steals this thread NOW rather than on its
          * next 10 ms tick. Directed IPI to the first idling non-self CPU; the
          * timer remains the backstop if none is (visibly) idle. */
+        /* DDR-1014: `break` on the CALL was wrong -- smp_resched_one silently
+         * declines for the BSP, so an unblock running on an AP that found the
+         * BSP idle first consumed its one kick, sent nothing, and stopped
+         * looking. Any idle AP later in the list then waited a full timer tick,
+         * which is exactly the latency rq-3 exists to remove. Reachable in
+         * ordinary operation: virtio_blk's completion path calls sched_unblock
+         * from MSI-X interrupt context on whichever CPU the vector is routed to.
+         * Break on a DELIVERED kick, not on an attempted one. */
         for (int c = 0; c < PERCPU_MAX; c++) {
             struct percpu *o = percpu_get((uint32_t)c);
             if (c != self && o && o->present && o->idle) {
-                smp_resched_one((uint32_t)c);
-                break;
+                if (smp_resched_one((uint32_t)c))
+                    break;
             }
         }
     } else {
