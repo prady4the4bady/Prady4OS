@@ -404,3 +404,27 @@ and the local rate was always low.
 **Either answer is worth having and neither is assumed here.** What ships today
 is: a located mechanism, an armed continuous detector, and a bounded local rate.
 The source defect is still **not named**.
+
+### 9.4 §9.3 was STARTED and deliberately NOT completed — 1 run, not 36
+
+The pre-probe campaign ran **one** run on `29c792a8b8f3b056` (PASS, single hash
+both sides) and was then stopped. Recorded here so the ledger on disk is not read
+as a completed experiment.
+
+Two reasons, in order:
+
+1. **A live CI failure outranked it.** `smoke-percpu-sched` went red on `72a474a`
+   with `[smp] resched FAIL ipis=0 ran=1 idle=1`, which turned out to be a real
+   scheduler defect plus a false-failure predicate (DDR-1014). That needed the
+   same QEMU, and a red release candidate outranks a follow-up experiment.
+2. **Its subject is now two kernels old.** §9.3 compares `29c792a8b8f3b056`
+   against `9623c163cd479043`; HEAD is `c9740c9a61332f37` and carries a
+   `sched_unblock` change. The comparison would still answer the
+   probe-perturbation question, but it would not tell the release anything about
+   the binary actually being promoted.
+
+**The §9.2 caveat therefore stands unresolved**: 0/36 was measured on a kernel
+carrying a probe that adds work to the syscall entry path, and no experiment has
+yet separated "the local rate is low" from "the instrument moved the race". That
+is a known gap, not a closed one, and it should be stated as such wherever the
+36/36 figure is quoted.
