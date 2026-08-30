@@ -70,7 +70,13 @@ __attribute__((noreturn)) static void fail(const char *why, long v) {
     for (;;) { }
 }
 
-void _start(void) {
+/* force_align_arg_pointer: a process entry point is entered with RSP 16-byte
+ * aligned, but the compiler assumes the call convention's RSP == 8 (mod 16).
+ * Without it the frame is off by 8 and the first aligned SSE stack access #GPs.
+ * DDR-1016 caught this by running ci-start-align-check, which DDR-1015 did not:
+ * CLAUDE.md's hygiene list names only two of the three static checks, and CI
+ * runs all three (ci.yml:35). Run tools/ci/hygiene_check.sh, not the list. */
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     static const char path[] = "/HELLO.TXT";
 
     /* 1. PROPOSE. The payload is the path the action concerns. */

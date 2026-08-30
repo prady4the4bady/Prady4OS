@@ -1151,3 +1151,44 @@ happen, the one case where the two orders differ observably. That is also the
 natural shape for the `DELETE_FILE` gate, which needs a PENDING assertion anyway.
 
 Seven types remain; three of those are force-pending.
+
+---
+
+## DDR-1016 — Section 3C `ACTION_DELETE_FILE`, and the ordering (2 of 8)
+
+**DONE.** `smoke-actiondel` (shard 1, fast), M1/M2 mutation-checked on distinct
+kernel hashes. Kernel `bf6f7c80ed07040f`, 1,114,506 B, `-Werror` clean.
+
+The **first force-pending** type, so the gate asserts the OPPOSITE of
+`smoke-actionread`: the verdict must stay `AE_PENDING` and the file must
+**survive**. `PRADYOS_ACTIONDEL_OK id=258 st=1 ctrl=1 keep=1`.
+
+**This closes DDR-1015's unmeasured ordering**, exactly where §5 predicted: a
+read leaves no trace so both orders print the same line, but a delete does, so
+act-then-ask is visible in the filesystem. `keep=1` is that measurement.
+
+**`ctrl=1` is the control.** The probe deletes a second file outright, no action
+involved, through the same `SYS_UNLINK` — without it a broken unlink would make
+`keep=1` true for the wrong reason and M1 would pass.
+
+**A force-pending probe cannot busy-poll.** Measured: the first draft copied
+DDR-1015's loop and the kernel killed the agent (`AGENT_RATE_LIMITED PID=37`,
+new in that capture, absent from the baseline). `AETHER_RATE_MAX` is 60
+syscalls/second; DDR-1015's loop is safe only because an auto-approved action
+breaks it on iteration 1. The fix is a **ring-3 spin** between two polls — zero
+syscalls, still preemptible. The other three force-pending types will hit this.
+
+**The `st` arm was dead until M2 found it.** `aether_poll` frees the slot on any
+terminal verdict, so an unconditional second poll returned `-ESRCH` and the
+printed `st` could only ever be 1. Now the second poll happens only if the first
+says PENDING; M2 reports `st=2` and the gate names the defect.
+
+| mutant | kernel | result | arm |
+|---|---|---|---|
+| M1 probe acts before the verdict | `4075ae6e2d6015b1` | `keep=0` FAIL | `keep` only |
+| M2 kernel drops DELETE_FILE from `forces_pending()` | `7c86311198e18e7a` | `st=2` FAIL | `st` only |
+
+**Also fixed here:** `user/actionreadtest.c` (DDR-1015) shipped a `_start`
+without `force_align_arg_pointer`. `ci-start-align-check` catches it and runs in
+CI, but CLAUDE.md's hygiene list names only two of the three static checks — so
+run `tools/ci/hygiene_check.sh`, not the list. Six types remain.

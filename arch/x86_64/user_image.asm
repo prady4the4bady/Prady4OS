@@ -296,6 +296,15 @@ actionreadtest_elf:
     incbin "build/actionreadtest.elf"
 actionreadtest_elf_end:
 
+; DDR-1016: Section 3C ACTION_DELETE_FILE -- the first FORCE-PENDING type, so its
+; gate asserts the opposite of the one above: the verdict stays PENDING and the
+; file survives.
+global actiondeltest_elf
+global actiondeltest_elf_end
+actiondeltest_elf:
+    incbin "build/actiondeltest.elf"
+actiondeltest_elf_end:
+
 global coderewritetest_elf
 global coderewritetest_elf_end
 coderewritetest_elf:

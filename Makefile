@@ -129,6 +129,8 @@ USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
 USER_DAG_ELF := build/actiondagtest.elf
 USER_AREAD_SRC := user/actionreadtest.c  # DDR-1015: Section 3C ACTION_READ_FILE
 USER_AREAD_ELF := build/actionreadtest.elf
+USER_ADEL_SRC := user/actiondeltest.c    # DDR-1016: Section 3C ACTION_DELETE_FILE
+USER_ADEL_ELF := build/actiondeltest.elf
 USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
@@ -224,7 +226,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -507,6 +509,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DAG_ELF) build/actiondagtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AREAD_SRC) -o build/actionreadtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AREAD_ELF) build/actionreadtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_ADEL_SRC) -o build/actiondeltest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ADEL_ELF) build/actiondeltest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
@@ -3160,6 +3164,44 @@ smoke-actionread: $(IMG) fat-image sfs-image
 	 test "$$n" -gt 0 || { echo "[actionread] FAIL — approved read returned $$n bytes"; exit 1; }; \
 	 test "$$first" = "P" || { echo "[actionread] FAIL — first byte '$$first', expected 'P' from /HELLO.TXT; the read did not happen or hit the wrong file"; exit 1; }
 	@echo "[actionread] PASS — proposed, approved, then read"
+
+# Section 3C ACTION_DELETE_FILE gate (DDR-1016). The FIRST force-pending type,
+# so this gate asserts the OPPOSITE of smoke-actionread above: the verdict must
+# STAY PENDING and the file must SURVIVE.
+#
+# THREE numbers, and all three are load-bearing:
+#   st=1    AE_PENDING. aether_action_forces_pending() keeps DELETE_FILE out of
+#           sovereign-mode auto-approval (DDR-842 S4), and there is no approver
+#           in this boot. st=2 would mean the force-pending list stopped working;
+#           st=4 would mean the action EXPIRED instead, which is a different
+#           fact and is reported as its own number rather than folded into
+#           "not approved".
+#   ctrl=1  THE CONTROL. The probe deleted a second file, /ADELCTRL, outright
+#           through the same SYS_UNLINK, with no action involved. Without this,
+#           a broken unlink would make keep=1 true for the wrong reason and the
+#           gate would measure nothing.
+#   keep=1  The target /ADELKEEP is still there. This is the ORDERING evidence
+#           DDR-1015 §5 recorded as unmeasured: a read leaves no trace, so
+#           act-then-ask and ask-then-act print the same line for READ_FILE. A
+#           delete does leave a trace, so here the two orders differ in the
+#           filesystem and the gate can see which one happened.
+smoke-actiondel: $(IMG) fat-image sfs-image
+	@rm -f build/actiondel.log
+	@SERIAL_LOG=build/actiondel.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actiondel \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONDEL_OK id=')" \
+	FORBIDDEN_SENTINEL="ACTIONDEL FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONDEL_OK id=[0-9]* st=-*[0-9]* ctrl=[0-9]* keep=[0-9]*" build/actiondel.log | head -1); \
+	 test -n "$$ln" || { echo "[actiondel] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actiondel] $$ln"; \
+	 st=$${ln##*st=}; st=$${st%% *}; \
+	 ctrl=$${ln##*ctrl=}; ctrl=$${ctrl%% *}; \
+	 keep=$${ln##*keep=}; \
+	 test "$$ctrl" = "1" || { echo "[actiondel] FAIL — control unlink did not remove /ADELCTRL, so keep= proves nothing"; exit 1; }; \
+	 test "$$st" = "1" || { echo "[actiondel] FAIL — verdict st=$$st, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
+	 test "$$keep" = "1" || { echo "[actiondel] FAIL — /ADELKEEP was deleted on a PENDING action; the agent acted on its own say-so"; exit 1; }
+	@echo "[actiondel] PASS — force-pending, and the unapproved delete did not happen"
 
 # Layer-7 horizon-band gate (DDR-1012): DAWN and DUSK grow a full-width horizon
 # band in render_backdrop. DAWN previously had NO backdrop at all (a bare

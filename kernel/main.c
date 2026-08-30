@@ -451,6 +451,8 @@ extern const unsigned char actiondagtest_elf[];       /* DDR-839: DAG action que
 extern const unsigned char actiondagtest_elf_end[];
 extern const unsigned char actionreadtest_elf[];      /* DDR-1015: 3C ACTION_READ_FILE */
 extern const unsigned char actionreadtest_elf_end[];
+extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DELETE_FILE */
+extern const unsigned char actiondeltest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -1348,7 +1350,7 @@ static void fs_test_thread(void *arg) {
              * down REFORMATS this volume, so it waits on these before
              * umounting. 0 = that probe was never spawned. Locals, not a
              * writable global (DDR-826). */
-            uint32_t smnt_pid[3] = { 0, 0, 0 };
+            uint32_t smnt_pid[4] = { 0, 0, 0, 0 };   /* DDR-1016: +actiondel */
             if (smnt >= 0) {
                 kputs("[sfs] mounted ");
                 kputs(vfs_fs_name(smnt));
@@ -2281,6 +2283,36 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] ACTIONREAD probe FAILED to load\r\n");
                     }
                 }
+                /* DDR-1016: Section 3C ACTION_DELETE_FILE -- the FIRST
+                 * force-pending type. Rooted at the SFS mount, not the FAT one:
+                 * this probe creates and deletes files, so it needs the writable
+                 * CoW root, and root_mnt is set BEFORE sched_unblock for the
+                 * DDR-957 ordering reason.
+                 *
+                 * Its pid goes in smnt_pid so the destructive umount below waits
+                 * for it (DDR-967) -- without that, the umount can land while the
+                 * probe still holds the root and the failure reads as a delete
+                 * bug rather than a teardown race.
+                 *
+                 * is_agent, and no approver anywhere in this boot: that is the
+                 * measurement. aether_action_forces_pending() keeps DELETE_FILE
+                 * PENDING even in sovereign mode (DDR-842 S4), so the gate
+                 * asserts the verdict never arrives and the file survives. */
+                if (probe_enabled("actiondel")) {
+                    struct tcb *ad = 0;
+                    uint64_t adlen = (uint64_t)(uintptr_t)actiondeltest_elf_end -
+                                     (uint64_t)(uintptr_t)actiondeltest_elf;
+                    if (elf_load((void *)(uintptr_t)actiondeltest_elf, adlen,
+                                 "ACTIONDEL", &ad) == ELF_OK && ad) {
+                        ad->is_agent  = 1;
+                        ad->root_mnt  = smnt;         /* SFS root before unblock */
+                        smnt_pid[3]   = ad->pid;      /* DDR-967 */
+                        sched_unblock(ad);
+                        kputs("[user] 3C ACTION_DELETE_FILE probe spawned (agent, SFS-rooted)\r\n");
+                    } else {
+                        kputs("[user] ACTIONDEL probe FAILED to load\r\n");
+                    }
+                }
                 if (probe_enabled("ftruncate")) {
                     struct tcb *tp = 0;
                     uint64_t tlen = (uint64_t)((uintptr_t)ftrunctest_elf_end - (uintptr_t)ftrunctest_elf);
@@ -2450,7 +2482,11 @@ static void fs_test_thread(void *arg) {
                  * spawned (probe_enabled) and is skipped. */
                 {
                     uint64_t dl = g_ticks + 400;
-                    for (int i = 0; i < 3; i++)
+                    /* DDR-1016: bound derived from the array, not restated.
+                     * Widening smnt_pid and leaving a literal 3 here would drop
+                     * the new probe out of the wait silently -- the exact drift
+                     * class DDR-1013 found in a probe constant. */
+                    for (int i = 0; i < (int)(sizeof smnt_pid / sizeof smnt_pid[0]); i++)
                         while (smnt_pid[i] && sched_find_pid(smnt_pid[i]) && g_ticks < dl)
                             yield();
                     if (g_ticks >= dl)

@@ -43,6 +43,16 @@ _Static_assert(ACTION_SPAWN_PROCESS == 3, "action wire format: SPAWN_PROCESS is 
  * KERNEL stops building if the enum shifts, which is the only cross-check the
  * build currently has between a probe's constants and this header. */
 _Static_assert(ACTION_READ_FILE     == 5, "action wire format: READ_FILE is 5");
+/* DDR-1016: and the first force-pending 3C type. user/actiondeltest.c hand-copies
+ * this one, and its gate asserts the action stays PENDING -- an assertion that
+ * would silently become vacuous if the number drifted onto a type that is not in
+ * aether_action_forces_pending() below. */
+_Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6");
+/* DDR-1016: and the first force-pending 3C type. user/actiondeltest.c hand-copies
+ * this one, and its gate asserts the action stays PENDING -- an assertion that
+ * would silently become vacuous if the number drifted onto a type that is not in
+ * aether_action_forces_pending() below. */
+_Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must

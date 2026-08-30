@@ -489,7 +489,9 @@ checklist for that specific item.
 `CAP_SCENE` (1<<22, post-L7 only) · `CAP_NET_BROWSE` (1<<23)
 
 ### 3C — New action types (#31–44)
-`ACTION_READ_FILE` · `ACTION_DELETE_FILE` (force-PENDING in manual mode) ·
+`ACTION_READ_FILE` · `ACTION_DELETE_FILE` (force-PENDING in **every** mode,
+sovereign included — DDR-842 S4; the older "in manual mode" here was wrong, and a
+gate written from it would have asserted the opposite of the design) ·
 `ACTION_EXEC_CODE` (sandboxed interpreter, 32 MiB cap) · `ACTION_SEND_IPC`
 (agent-to-agent via NAS IPC, peer-token gated) · `ACTION_PARSE_DOCUMENT`
 (OCR→Markdown, 64 MiB cap, local model) · `ACTION_BROWSE_WEB` (headless browser) ·
@@ -502,6 +504,23 @@ first-use always manual-gate) · `ACTION_QUERY_SCENE` (post-L7 NL query) ·
 (`CAP_EXEC`; metric function lives in a `CAP_SOVEREIGN`-locked SFS path — **cannot**
 be modified by the experimenting agent) · `ACTION_EVOLVE_GENOME` (force-PENDING,
 rewrites `genome.md` across generations, `CAP_SOVEREIGN` veto window)
+
+**Build status — 2 of 8 declared types shipped end to end.** A 3C type is
+implemented in RING 3 (DDR-1013 §2.1): the kernel is the policy engine, the
+agent the executor, so "implemented" means a probe that proposes, waits for the
+verdict, and acts only afterwards — plus a gate that asserts the *effect*.
+
+| type | state | gate | DDR |
+|---|---|---|---|
+| `ACTION_READ_FILE` | shipped | `smoke-actionread` (asserts the content) | DDR-1015 |
+| `ACTION_DELETE_FILE` | shipped, force-pending | `smoke-actiondel` (asserts PENDING + the file survives) | DDR-1016 |
+| `SEND_IPC` · `QUERY_MEMORY` · `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` | not started | — | follow DDR-1015's shape |
+| `SPAWN_PROCESS` · `REWRITE_AGENT_CODE` · `EVOLVE_GENOME` | not started | — | follow DDR-1016's shape; see its §4 on the rate limit |
+
+The remaining six 3C types in the list above (`EXEC_CODE`, `PARSE_DOCUMENT`,
+`BROWSE_WEB`, `CAPTURE_FRAME`, `SCAN_ENVIRONMENT`, `QUERY_SCENE`) are
+deliberately **absent from the enum** until their subsystem exists — see
+`aether.h`, and CLAUDE.md §PRE-APPROVED EXCEPTIONS where each is logged.
 
 ### 3D — Ring-3/daemon-only (#45–65, no kernel changes)
 Per-agent `skill.md` (300–2000 tokens) · SkillOpt training loop

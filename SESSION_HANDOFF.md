@@ -7873,3 +7873,78 @@ expected, not a symptom. Do not read it as a hang.
 OPEN-1 route 1 (CI-only hang, no artefact), OPEN-12, OPEN-13, and the
 `ptnode_in_use` fork underflow (DDR-1003 — recorded unfixed for want of an
 artefact; §5.1 warns the obvious gate shape would pass while testing nothing).
+
+---
+
+## CHECKPOINT 2026-08-30 17:2x UTC — DDR-1016, and an incoming CI red I caused
+
+### DDR-1016 — Section 3C `ACTION_DELETE_FILE` (2 of 8)
+
+`smoke-actiondel`, shard 1, fast. Kernel **`bf6f7c80ed07040f`**, 1,114,506 B,
+`-Werror` clean. `PRADYOS_ACTIONDEL_OK id=258 st=1 ctrl=1 keep=1`.
+
+The **first force-pending** type, so the gate asserts the OPPOSITE of
+`smoke-actionread`: the verdict stays `AE_PENDING` and the file **survives**.
+That also **closes the ordering DDR-1015 §5 recorded as unmeasured**, in the
+place §5 predicted: a read leaves no trace so both orders print the same line,
+but a delete does.
+
+Mutation-checked both ways, on distinct kernel hashes, and **each mutant fails
+exactly one arm** — so neither arm is carrying the other:
+
+| mutant | kernel | result |
+|---|---|---|
+| M1 probe acts before the verdict | `4075ae6e2d6015b1` | `keep=0` → FAIL (`keep` only) |
+| M2 kernel drops `DELETE_FILE` from `forces_pending()` | `7c86311198e18e7a` | `st=2` → FAIL (`st` only) |
+
+### Two findings a later session should not have to re-derive
+
+**A force-pending probe cannot busy-poll.** `AETHER_RATE_MAX` is 60 syscalls per
+100 ticks and the kernel KILLS the agent over it. DDR-1015's 20000-iteration
+loop is safe only because an auto-approved action breaks it on iteration 1 — a
+force-pending one never breaks it. The first draft was killed:
+`AGENT_RATE_LIMITED PID=37`, new in that capture, absent from the baseline. Fix:
+a **ring-3 spin** between two polls — zero syscalls, still preemptible, so real
+time passes and the sliding window drains. `SPAWN_PROCESS`,
+`REWRITE_AGENT_CODE` and `EVOLVE_GENOME` will all hit this.
+
+**The gate's `st` arm was dead until M2 exposed it.** `aether_poll` frees the
+slot on any terminal verdict, so an unconditional second poll returns `-ESRCH`
+and the printed `st` could only ever be `1`. Now the second poll happens only if
+the first says PENDING.
+
+### An incoming CI red, and it is mine
+
+`ci-start-align-check` failed on this branch naming **`user/actionreadtest.c`** —
+DDR-1015's probe, shipped at `8ad4012` with a `_start` lacking
+`force_align_arg_pointer`. **So `8ad4012` and the two commits after it will show
+a red hygiene job.** That red is this defect and it is fixed on this tip; it is
+not a new intermittent, and it should not be root-caused as one.
+
+Root cause of the miss: CLAUDE.md §HYGIENE GATES named **two of the three**
+static checks. CI runs all three (`ci.yml:35`) and so does
+`tools/ci/hygiene_check.sh`. **The list has been replaced by the script** in
+CLAUDE.md item 2 — run the script.
+
+### The armed check-in question is STILL UNANSWERABLE
+
+"Did DDR-1014 stop `[smp] resched FAIL ipis=0 ran=1 idle=1`?" — **no data.** As
+of 17:07 UTC every CI run at or after `792f162` (the fix) is still `queued` or
+`in_progress`: five commits x two events, serialized behind each other. Zero
+completed suite-runs on kernel `c9740c9a61332f37`. Do not record an answer in
+DDR-1014 §6.1 until at least one completes; re-check both events per SHA.
+
+### Gates run on `bf6f7c80ed07040f` (one hash, verified before and after each)
+
+`smoke-actiondel`, `smoke-actionread`, `smoke-aether`, `smoke-shell` (73-pattern
+forbidden scan clean), `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity` — all PASS. `hygiene_check.sh` ALL THREE PASSED
+(160 gates / 10 shards / 7 excluded; 63 probe ELFs; 45 entry points).
+
+### NEXT
+
+1. Answer the check-in once CI completes (both events, every SHA from `792f162`).
+2. Six 3C types remain — four on DDR-1015's shape, three on DDR-1016's.
+   (`SPAWN_PROCESS` is force-pending and also already exists as a spawn-depth
+   probe; check `spawndepthtest.c` before writing a new one.)
+3. STEP 3 (`main` promotion + `v1.0.0`) stays LAST, per the operator's ordering.
