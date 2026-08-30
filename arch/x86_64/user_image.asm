@@ -289,6 +289,13 @@ actiondagtest_elf:
     incbin "build/actiondagtest.elf"
 actiondagtest_elf_end:
 
+; DDR-1015: Section 3C ACTION_READ_FILE, end to end (submit -> verdict -> read).
+global actionreadtest_elf
+global actionreadtest_elf_end
+actionreadtest_elf:
+    incbin "build/actionreadtest.elf"
+actionreadtest_elf_end:
+
 global coderewritetest_elf
 global coderewritetest_elf_end
 coderewritetest_elf:

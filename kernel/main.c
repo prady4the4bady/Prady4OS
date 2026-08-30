@@ -449,6 +449,8 @@ extern const unsigned char auditchaintest_elf[];      /* DDR-842: audit chain ga
 extern const unsigned char auditchaintest_elf_end[];
 extern const unsigned char actiondagtest_elf[];       /* DDR-839: DAG action queue */
 extern const unsigned char actiondagtest_elf_end[];
+extern const unsigned char actionreadtest_elf[];      /* DDR-1015: 3C ACTION_READ_FILE */
+extern const unsigned char actionreadtest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -2250,6 +2252,33 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] ELF loaded (embedded); FAT-rooted multi-cluster probe spawned\r\n");
                     } else {
                         kputs("[user] FAT32 multi-cluster probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1015: Section 3C ACTION_READ_FILE, end to end. Rooted at
+                 * the FAT mount so the approved read has a real file to open,
+                 * and root_mnt is set BEFORE sched_unblock for the DDR-957
+                 * ordering reason spelled out above.
+                 *
+                 * is_agent, deliberately: an agent is the actor that holds no
+                 * authority of its own, which is the property the pipeline
+                 * exists to enforce. Sovereign mode is the ADR-026 D2 default
+                 * (aether_queue.c:37), and ACTION_READ_FILE is not in
+                 * aether_action_forces_pending(), so it auto-approves and this
+                 * probe needs no second privileged actor -- unlike the four
+                 * force-pending types, whose gates must assert PENDING instead
+                 * (DDR-1013 §2.1). */
+                if (probe_enabled("actionread")) {
+                    struct tcb *ar = 0;
+                    uint64_t arlen = (uint64_t)(uintptr_t)actionreadtest_elf_end -
+                                     (uint64_t)(uintptr_t)actionreadtest_elf;
+                    if (elf_load((void *)(uintptr_t)actionreadtest_elf, arlen,
+                                 "ACTIONREAD", &ar) == ELF_OK && ar) {
+                        ar->is_agent = 1;
+                        ar->root_mnt = mnt;           /* FAT root before unblock */
+                        sched_unblock(ar);
+                        kputs("[user] 3C ACTION_READ_FILE probe spawned (agent, FAT-rooted)\r\n");
+                    } else {
+                        kputs("[user] ACTIONREAD probe FAILED to load\r\n");
                     }
                 }
                 if (probe_enabled("ftruncate")) {

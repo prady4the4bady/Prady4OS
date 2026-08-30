@@ -199,3 +199,4 @@
 8	smoke-surfclose	180	strict
 4	smoke-perrestore	180	fast
 2	smoke-horizon	90	fast
+1	smoke-actionread	120	fast

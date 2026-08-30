@@ -1119,3 +1119,35 @@ Kernel `c9740c9a61332f37`, `-Werror` clean. `smoke-percpu-sched`, `smoke-rqstres
 
 **Not measured:** the latency the fix recovers. No gate times a wake, so it can
 only be shown not to break anything.
+
+---
+
+## DDR-1015 — Section 3C `ACTION_READ_FILE`, end to end (1 of 8)
+
+**DONE.** `smoke-actionread` (shard 1, fast), M1 mutation-checked. Kernel
+`b0e4ccb83d4bb7ac`, 1,106,314 B, `-Werror` clean.
+
+Built to DDR-1013 §2.1's shape, which corrected the wrong reading of this work:
+a 3C type is **ring-3** work, because the kernel is the policy engine and the
+agent is the executor — there is no kernel-side executor for `ACTION_WRITE_FILE`
+either. The probe proposes, waits for the verdict, and only then opens and reads.
+
+**The gate asserts the effect:** `PRADYOS_ACTIONREAD_OK id=258 n=25 first=P` —
+25 bytes is exactly `len("PRADYOS filesystem works!")`, the content of
+`/HELLO.TXT`. **M1** (read skipped, kernel `6edc2e3889fd847b`) keeps `first='P'`
+deliberately so only the byte-count arm can catch it, and it does: `n=0` → FAIL.
+The sentinel and the first-byte check both passed on a probe that never read.
+
+**`ACTION_READ_FILE == 5` is now pinned** by `_Static_assert` beside the three
+existing wire-format pins, because DDR-1013 §1 found `actiondagtest.c` had
+drifted to a wrong constant with no gate able to see it. The kernel now stops
+building if the enum shifts.
+
+**NOT proven: the ordering.** The gate shows the pipeline ran and the read
+happened, not that the read happened *after* approval — and the ordering is the
+authority property. Recorded unmeasured with its reason. §5 names what would
+measure it: submit an action the policy **rejects** and assert the read does not
+happen, the one case where the two orders differ observably. That is also the
+natural shape for the `DELETE_FILE` gate, which needs a PENDING assertion anyway.
+
+Seven types remain; three of those are force-pending.
