@@ -327,7 +327,19 @@ and `63c8ead` — the latter is Markdown-only, verified by `git diff --name-only
 | tip | runs | green | failed |
 |---|---|---|---|
 | `6d4db94` | push, pull_request | 2 | 0 |
-| `63c8ead` | push | 0 | **1** |
+| `63c8ead` | push **green**, pull_request **FAILED** | 1 | **1** |
+| | **4** | **3** | **1** |
+
+**CORRECTION.** This table first read "`63c8ead` | push | 0 | 1", i.e. one run
+which failed. Wrong: `63c8ead` had **two** runs, and the **push** one passed —
+it is the **pull_request** run that went red. The wake notification carried a
+`check_run_id` and a shard number but not the event, and I filled in the event
+rather than looking it up. Corrected against the run list.
+
+The error made the case *weaker* than the evidence supports, which is worth
+noting: **the same commit, same kernel, went green on one event and red on the
+other.** That is an intermittent by definition, and it is a stronger refutation
+of "this PR caused it" than the version I first wrote.
 
 **`smoke-nethammer`, shard 3, failed at gate 20 of 20** — the same gate at the
 same position as the `93a4a1f` failure in §1's table, on a *different* kernel.
@@ -346,3 +358,28 @@ The §8.1 caution was written in advance and is now discharged the way it should
 be: six greens *was* an unremarkable run, and the seventh run failed. Nothing
 here supports a claim that the failure rate has improved on the successor
 kernels.
+
+
+### 8.3 The other successor kernels, and why these tallies must NOT be pooled
+
+Two more kernels have accumulated runs, both verified single-binary by
+`git diff --name-only` (a change to `tools/ci/campaign_chunk.sh` is harness, not
+kernel):
+
+| kernel | tips | runs | green | failed |
+|---|---|---|---|---|
+| `4b3181f13b2d76aa` | `f9bdfeb`, `5595470`, `233c81c` | 6 | 6 | 0 |
+| `ba6ac01fe015b2a4` | `483e853`, `72a474a` | in flight | — | — |
+
+So the four successor kernels stand at 6/6, 6/6, 3/4, and pending.
+
+**It is tempting to pool them — 15 runs, 1 failure, ~7% against `bb9c6187a30bb0dd`'s
+25% — and that would be the exact error §1 was careful to avoid.** §1's number is
+good *because* all twelve runs share one binary; the moment you pool across
+different binaries you are no longer measuring a kernel, you are averaging four
+of them, and a difference between them is precisely the thing at issue.
+
+Per kernel, none has the runs to say anything: `0.75⁶ ≈ 0.18` means six greens is
+unremarkable at the old rate, and 3-of-4 tells you nothing at all. **No claim is
+made that the failure rate has improved.** The release decision still needs a
+run of suites on the binary actually promoted, counted the way §1 counts.
