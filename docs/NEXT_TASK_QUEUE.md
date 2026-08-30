@@ -49,11 +49,20 @@ can be read against each other.
       AP wedges in `isr_dispatch` with `if=0`. The block-integrity failure is the
       third symptom, not the defect. Source defect NOT named; no fix attempted
       (§NON-NEGOTIABLE 3). Next instrument: DDR-1010 §7.
-- [ ] **STEP 2 — decide OPEN-1 route 1 explicitly.** PR #17 relaxes what an
-      earlier note in this file asserted: route 1 need not be *closed* to tag.
-      It must be *decided* — "if it cannot be closed with real evidence before
-      the deadline, say so explicitly in the release notes rather than leaving
-      it ambiguous."
+- [x] **STEP 2 — DECIDED, DDR-1011.** Route 1 is **OPEN at the deadline** and the
+      release notes must say so; DDR-1011 §4 carries the exact wording. It is not
+      closed and not claimed harmless. Routes 2 and 3 are closed on measured
+      evidence (DDR-1000 §9, DDR-990 §9).
+      **The tempting merge with OPEN-2 is explicitly REFUSED** (§2): both
+      captures die inside the same short stretch of `systest`'s syscalls and both
+      panic, but a healthy boot shows the one-shot GS probe fires only *after*
+      `SYSREAD OK` — and the route-1 capture died **before** it ever ran. Its
+      silence about GS is not evidence. The stopping points are also two syscalls
+      apart.
+      **What changed today:** DDR-1010 §7's continuous probe now runs on every
+      syscall, so the NEXT route-1 occurrence discriminates — a
+      `[percpu] gs FAIL` line means it IS OPEN-2 (and `num=` says which syscall
+      lost GS); its absence means it is not, and this time the silence counts.
 - [ ] **STEP 4 — Group E / Group F backlog below.** Moved ahead of STEP 3 by the
       operator.
 - [ ] **STEP 3 — promote and tag** (LAST): 3 independent greens on ONE tip →

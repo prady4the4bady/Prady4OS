@@ -898,3 +898,35 @@ Kernel `4b3181f13b2d76aa`, 1,098,122 B, `-Werror` clean. smoke-swapgs,
 smoke-blkmq, smoke-blk-integrity, smoke-rqstress-liveness, smoke-selftest,
 smoke-shell, smoke-perrestore all PASS; ci-shard-check OK (157/10/7);
 ci-probe-rodata-check OK (61 ELFs).
+
+---
+
+## DDR-1011 — OPEN-1 route 1: the STEP 2 decision
+
+**DECIDED: route 1 is OPEN at the deadline**, and the release notes must say so.
+DDR-1011 §4 carries the exact wording. Routes 2 and 3 are closed on measured
+evidence (DDR-1000 §9 at 95% power; DDR-990 §9 mutation-proven both ways).
+
+**The merge with OPEN-2 is explicitly refused.** Both captures die inside the
+same short stretch of `systest`'s syscall sequence and both panic, which invites
+the inference that they are one defect. A healthy boot refutes it: the
+DDR-SMP-3a probe is one-shot on the first `sys_getpid`, which lands **after**
+`SYSREAD OK` —
+
+```
+200: SYSIO EFAULT OK   201: SYSOPEN OK   202: SYSFSTAT OK   203: SYSREAD OK
+206: [percpu] gs OK (syscall ctx)
+```
+
+— and the route-1 capture died **between `SYSFSTAT OK` and `SYSREAD OK`, before
+the probe ever ran.** Its silence about GS is not evidence of anything. The two
+stopping points are also two syscalls apart, and OPEN-2's boot never reached
+`SYSOPEN`. Matching on "same neighbourhood plus a panic" is the colour-matching
+DDR-975 §7, DDR-966, DDR-969 and DDR-973 each had to retract.
+
+**What changed today.** DDR-1010 §7 moved the GS check to every syscall, at the
+top of `syscall_dispatch`. A boot dying between `SYSFSTAT` and `SYSREAD` now runs
+it on `SYSFSTAT` and everything before. So the next route-1 occurrence
+discriminates: a `[percpu] gs FAIL … num=M` line means route 1 IS OPEN-2 and
+names the syscall that lost GS; its absence means it is not, and this time the
+silence is a measurement. No previous route-1 capture had that property.
