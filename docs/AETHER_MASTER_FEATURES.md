@@ -505,7 +505,7 @@ first-use always manual-gate) · `ACTION_QUERY_SCENE` (post-L7 NL query) ·
 be modified by the experimenting agent) · `ACTION_EVOLVE_GENOME` (force-PENDING,
 rewrites `genome.md` across generations, `CAP_SOVEREIGN` veto window)
 
-**Build status — 6 of the 8 Section-3C types shipped end to end; 1 BLOCKED; 1 unbuilt.** A 3C type is
+**Build status — Section 3C is CLOSED: 6 of 8 shipped and gated, 2 deferred with logged reasons (DDR-1021), 0 buildable-and-unbuilt.** A 3C type is
 implemented in RING 3 (DDR-1013 §2.1): the kernel is the policy engine, the
 agent the executor, so "implemented" means a probe that proposes, waits for the
 verdict, and acts only afterwards — plus a gate that asserts the *effect*.
@@ -517,7 +517,7 @@ verdict, and acts only afterwards — plus a gate that asserts the *effect*.
 | `ACTION_REWRITE_AGENT_CODE` | **shipped since DDR-842** — four capability roles, a real approver via `SYS_APPROVE_CODE_REWRITE` (NSI 86), a negative arm proving that call cannot approve a non-rewrite action, and the sov-only arm proving `CAP_REWRITE` is not decoration | `smoke-coderewrite` (shard 7, **strict**) | DDR-842 |
 | `ACTION_PROPOSE_HYPOTHESIS` | shipped | `smoke-actionhypo` (auto-approves, then logs and reads back) | DDR-1020 |
 | `ACTION_EVOLVE_GENOME` | shipped, force-pending | `smoke-actionhypo` (same boot: PENDING + genome untouched) | DDR-1020 |
-| `RUN_EXPERIMENT` | not started, and **not obviously buildable** — §3C specifies `CAP_EXEC` plus a `CAP_SOVEREIGN`-locked metric path, and `CAP_EXEC` is a logged pre-approved deferral. Check what exists before budgeting it | — | DDR-1020 §6 |
+| `RUN_EXPERIMENT` | **DEFERRED** — assessed, not buildable at any ring: `CAP_EXEC` is checked nowhere, there is no experiment subsystem, and the metric lockbox is `CAP_SOVEREIGN` read-only by design. Logged in BUILD_TRACKER | — | DDR-1021 |
 | `SEND_IPC` | **BLOCKED** — no ring-3 IPC surface exists, so no agent can execute an approved one; needs a new NSI + capability check, i.e. kernel ABI, not a probe | — | DDR-1017 §1 |
 | `ACTION_QUERY_MEMORY` | shipped | `smoke-actionquery` (asserts the seeded bytes come back) | DDR-1018 |
 | `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` | not started | — | follow DDR-1015's shape |

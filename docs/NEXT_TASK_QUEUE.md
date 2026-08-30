@@ -282,6 +282,14 @@ Batch their DDRs in one pass first (§4.3), then implement.
       DDR-1020 §1 records two DDRs that got this wrong from memory.
       NOTE `ACTION_SPAWN_PROCESS` is NOT one of the eight (it is pinned as a
       pre-existing type); DDR-1017 gated it anyway and that gate is worth having.
+      **CLOSED 2026-08-30 — DDR-1021.** `RUN_EXPERIMENT` assessed and DEFERRED:
+      `CAP_EXEC` is a `#define` checked NOWHERE (zero matches in `kernel/*.c`, no
+      `is_exec` on `struct tcb`), there is no experiment subsystem, and the
+      metric lockbox is `CAP_SOVEREIGN` read-only by design so the agent being
+      measured cannot record its own result. Both it and `SEND_IPC` are now
+      logged in BUILD_TRACKER's deferrals list.
+      **Section 3C final: 6 shipped and gated, 2 deferred with reasons, 0
+      buildable-and-unbuilt.**
 - [ ] S3 + S7 invariant arms — BLOCKED on F#66–F#72
 
 ### Group D — userspace

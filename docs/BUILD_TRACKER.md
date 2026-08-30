@@ -999,6 +999,8 @@ ticked. Logged here verbatim from the table, reasons unchanged.
 - `CAP_OCR` / `CAP_SCENE` with no hardware path — `[DEFERRED: capability bit defined, enforcement deferred — no subsystem path]`
 - SFS block reclamation on-disk — `[DEFERRED: in-memory reclaim shipped (DDR-762-v2); on-disk free-tree deferred post-1.0]`
 - NVMe completion IRQ — `[DEFERRED: poll-mode sufficient for ISO; DDR-774a/b/c deferred until B#3 SMP stable]`
+- `ACTION_SEND_IPC` — `[DEFERRED: no ring-3 IPC surface — ipc_send/ipc_recv are kernel-internal and capability-gated and there is no SYS_IPC_*, so an approved SEND_IPC has no executor in any ring; building it is new kernel ABI plus a security decision (DDR-1017 §1)]`
+- `ACTION_RUN_EXPERIMENT` — `[DEFERRED: no implementation at any ring — CAP_EXEC is a #define checked nowhere (zero matches in kernel/*.c, no is_exec on struct tcb), there is no experiment subsystem, and the metric lockbox is CAP_SOVEREIGN read-only by design so an agent cannot record a result; it is ACTION_EXEC_CODE's deferral under another name (DDR-1021)]`
 
 ### This resolves DDR-982 §5.5 without a new operator ruling
 
@@ -1359,3 +1361,35 @@ catches it.*
 **Dead-arm class, instances four and five**, now stated as a rule: **a probe
 should REPORT and let the gate JUDGE**; every `fail()` before the print silently
 removes an arm.
+
+---
+
+## DDR-1021 — `ACTION_RUN_EXPERIMENT` assessed: not buildable. Section 3C CLOSED.
+
+**ASSESSMENT, no code change.** Grepped before budgeting it, per DDR-1020 §6.
+All three things it needs are absent: `CAP_EXEC` is a `#define` in `cap.h:62`
+**checked nowhere** (zero matches in `kernel/*.c`, and no `is_exec` on
+`struct tcb` unlike the `is_memory`/`is_rewrite` fields that make CAP_MEMORY and
+CAP_REWRITE real); there is **no experiment subsystem** (`grep -rln experiment`
+returns nothing); and the metric lockbox is **`CAP_SOVEREIGN` read-only** by
+design, so the agent being measured cannot write its own result. It is
+`ACTION_EXEC_CODE`'s existing deferral under another name.
+
+Distinct from `SEND_IPC`, which *has* a working kernel-internal implementation
+and lacks only a ring-3 door. `RUN_EXPERIMENT` has none at any ring.
+
+Both are now logged in the deferrals list above, so §WHAT "DONE" MEANS's *"zero
+unlogged exclusions"* holds for Section 3C.
+
+**Section 3C final: 6 shipped and gated, 2 deferred with reasons, 0
+buildable-and-unbuilt.** `READ_FILE` (1015) · `DELETE_FILE` (1016) ·
+`QUERY_MEMORY` (1018) · `REWRITE_AGENT_CODE` (842) · `PROPOSE_HYPOTHESIS` +
+`EVOLVE_GENOME` (1020); `SEND_IPC` and `RUN_EXPERIMENT` deferred.
+
+**Residual recorded, not fixed:** both deferred types are IN `enum aether_action`,
+so an agent can submit either and `SEND_IPC` will auto-approve in sovereign mode
+with nothing to act on it — which contradicts `aether.h`'s own stated policy for
+the six types it deliberately omits. Not changed: the enum is append-only wire
+format (DDR-832) and the queue entry is bounded and audited (it expires via
+`AETHER_ACTION_TTL_TICKS`), so the cost is a wasted slot, not an unguarded
+action. Post-1.0 decision.

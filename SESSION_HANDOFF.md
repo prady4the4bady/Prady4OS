@@ -8325,3 +8325,62 @@ PASSED: 163 gates / 10 shards / 7 excluded, 66 probe ELFs, 48 entry points.
    blocked on pre-approved deferrals.
 3. STEP 1 (OPEN-2) still open — DDR-1019's instrument is armed for the next
    occurrence. STEP 3 stays last.
+
+---
+
+## CHECKPOINT 2026-08-30 21:3x UTC — DDR-1021: Section 3C is CLOSED
+
+### `RUN_EXPERIMENT` assessed, not built — and that is the right answer
+
+Grepped first, per DDR-1020 §6. All three things it needs are absent:
+
+- **`CAP_EXEC` is checked NOWHERE.** It is a `#define` at `cap.h:62`;
+  `grep -rn CAP_EXEC kernel/ --include=*.c` returns **zero** matches, and there
+  is no `is_exec` on `struct tcb` — unlike `is_memory` (DDR-836) and
+  `is_rewrite` (DDR-842), the fields that make those two capabilities real.
+- **No experiment subsystem.** `grep -rln experiment kernel/ user/` → nothing.
+- **No agent-writable metric sink.** The lockbox exists (DDR-812) but
+  `SYS_METRIC_READ` is `CAP_SOVEREIGN` and read-only — by design, since the
+  metric is the owner's ground truth and must not be writable by the agent being
+  measured.
+
+It is `ACTION_EXEC_CODE`'s existing deferral under another name. **Distinct from
+`SEND_IPC`**, which has a working kernel-internal implementation and lacks only a
+ring-3 door; `RUN_EXPERIMENT` has none at any ring.
+
+### Section 3C final state
+
+| type | state |
+|---|---|
+| `READ_FILE` | shipped — DDR-1015 |
+| `DELETE_FILE` | shipped — DDR-1016 |
+| `SEND_IPC` | **deferred**, logged — DDR-1017 §1 |
+| `QUERY_MEMORY` | shipped — DDR-1018 |
+| `REWRITE_AGENT_CODE` | shipped — DDR-842 |
+| `PROPOSE_HYPOTHESIS` | shipped — DDR-1020 |
+| `RUN_EXPERIMENT` | **deferred**, logged — DDR-1021 |
+| `EVOLVE_GENOME` | shipped — DDR-1020 |
+
+**6 shipped and gated, 2 deferred with logged reasons, 0 buildable-and-unbuilt.**
+Both deferrals are now in BUILD_TRACKER's list, so §WHAT "DONE" MEANS's *"zero
+unlogged exclusions"* holds for Section 3C.
+
+### Residual recorded, deliberately NOT fixed
+
+Both deferred types are **in `enum aether_action`**, so an agent can submit
+either today, and `SEND_IPC` will **auto-approve in sovereign mode** with nothing
+able to act on it. That contradicts `aether.h`'s own stated policy for the six
+types it deliberately omits (*"declaring an enum value with no enforcement is
+worse than omitting it"*). Left alone because the enum is append-only wire format
+(DDR-832) — removing a value renumbers everything after it — and the queue entry
+is bounded and audited, expiring via `AETHER_ACTION_TTL_TICKS`, so the cost is a
+wasted slot rather than an unguarded action. Post-1.0 decision.
+
+### NEXT
+
+1. Group F's F#66–F#76 (11 agents/subsystems). Four roster agents
+   (PRAX/LUMYN/AHNIS/IRIS) are blocked on pre-approved deferrals; **check each
+   against the tree before budgeting it** — DDR-1020 §1 records two DDRs that
+   got that wrong from memory, and DDR-1021 is what doing it right looks like.
+2. STEP 1 (OPEN-2) still open; DDR-1019's instrument is armed.
+3. STEP 3 (`main` + `v1.0.0`) stays last.
