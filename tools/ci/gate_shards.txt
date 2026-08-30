@@ -203,3 +203,4 @@
 1	smoke-actiondel	120	fast
 2	smoke-actionspawn	120	fast
 6	smoke-actionquery	120	fast
+3	smoke-actionhypo	120	fast

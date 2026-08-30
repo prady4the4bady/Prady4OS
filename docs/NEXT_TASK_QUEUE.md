@@ -267,6 +267,21 @@ Batch their DDRs in one pass first (§4.3), then implement.
       DDR-1015 §5 names what would: submit an action the policy REJECTS and assert
       the read does not happen. That is also the natural shape for the
       `DELETE_FILE` gate, which needs a PENDING assertion anyway.
+      **STATUS 2026-08-30 — 6 of 8 shipped, 1 BLOCKED, 1 remaining.**
+      `READ_FILE` DDR-1015 · `DELETE_FILE` DDR-1016 · `QUERY_MEMORY` DDR-1018 ·
+      `REWRITE_AGENT_CODE` **DDR-842, already shipped — `smoke-coderewrite`,
+      shard 7, strict** · `PROPOSE_HYPOTHESIS` + `EVOLVE_GENOME` DDR-1020
+      (`smoke-actionhypo`, one probe, both sides of the policy split).
+      `SEND_IPC` is **BLOCKED**: `ipc_send`/`ipc_recv` are kernel-internal and
+      capability-gated and there is no `SYS_IPC_*`, so an approved SEND_IPC has
+      no executor in any ring (DDR-1017 §1) — new kernel ABI plus a security
+      decision, not probe work. `RUN_EXPERIMENT` is the only one left and is
+      **not obviously buildable**: §3C wants `CAP_EXEC` plus a
+      `CAP_SOVEREIGN`-locked metric path, and `CAP_EXEC` is a logged
+      pre-approved deferral. **Grep before declaring any of these unbuilt** —
+      DDR-1020 §1 records two DDRs that got this wrong from memory.
+      NOTE `ACTION_SPAWN_PROCESS` is NOT one of the eight (it is pinned as a
+      pre-existing type); DDR-1017 gated it anyway and that gate is worth having.
 - [ ] S3 + S7 invariant arms — BLOCKED on F#66–F#72
 
 ### Group D — userspace

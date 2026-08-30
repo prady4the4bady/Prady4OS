@@ -321,6 +321,14 @@ actionquerytest_elf:
     incbin "build/actionquerytest.elf"
 actionquerytest_elf_end:
 
+; DDR-1020: 3C PROPOSE_HYPOTHESIS (auto-approving) and EVOLVE_GENOME
+; (force-pending) in ONE probe, so the policy split is compared in one boot.
+global actionhypotest_elf
+global actionhypotest_elf_end
+actionhypotest_elf:
+    incbin "build/actionhypotest.elf"
+actionhypotest_elf_end:
+
 global coderewritetest_elf
 global coderewritetest_elf_end
 coderewritetest_elf:

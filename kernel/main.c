@@ -457,6 +457,8 @@ extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPA
 extern const unsigned char actionspawntest_elf_end[];
 extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUERY_MEMORY */
 extern const unsigned char actionquerytest_elf_end[];
+extern const unsigned char actionhypotest_elf[];      /* DDR-1020: 3C HYPO + GENOME */
+extern const unsigned char actionhypotest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -1354,7 +1356,7 @@ static void fs_test_thread(void *arg) {
              * down REFORMATS this volume, so it waits on these before
              * umounting. 0 = that probe was never spawned. Locals, not a
              * writable global (DDR-826). */
-            uint32_t smnt_pid[4] = { 0, 0, 0, 0 };   /* DDR-1016: +actiondel */
+            uint32_t smnt_pid[5] = { 0, 0, 0, 0, 0 }; /* DDR-1020: +actionhypo */
             if (smnt >= 0) {
                 kputs("[sfs] mounted ");
                 kputs(vfs_fs_name(smnt));
@@ -2364,6 +2366,26 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] 3C ACTION_QUERY_MEMORY probe spawned (agent+CAP_MEMORY)\r\n");
                     } else {
                         kputs("[user] ACTIONQUERY probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1020: 3C PROPOSE_HYPOTHESIS + EVOLVE_GENOME in one probe.
+                 * SFS-rooted (it writes /HYPO.TXT and /GENOME.TXT) and therefore
+                 * in smnt_pid, so the destructive umount below waits for it
+                 * (DDR-967) rather than pulling the root out mid-write and
+                 * making a teardown race read as a policy failure. */
+                if (probe_enabled("actionhypo")) {
+                    struct tcb *ah = 0;
+                    uint64_t ahlen = (uint64_t)(uintptr_t)actionhypotest_elf_end -
+                                     (uint64_t)(uintptr_t)actionhypotest_elf;
+                    if (elf_load((void *)(uintptr_t)actionhypotest_elf, ahlen,
+                                 "ACTIONHYPO", &ah) == ELF_OK && ah) {
+                        ah->is_agent = 1;
+                        ah->root_mnt = smnt;          /* SFS root before unblock */
+                        smnt_pid[4]  = ah->pid;       /* DDR-967 */
+                        sched_unblock(ah);
+                        kputs("[user] 3C HYPOTHESIS+GENOME probe spawned (agent, SFS-rooted)\r\n");
+                    } else {
+                        kputs("[user] ACTIONHYPO probe FAILED to load\r\n");
                     }
                 }
                 if (probe_enabled("ftruncate")) {

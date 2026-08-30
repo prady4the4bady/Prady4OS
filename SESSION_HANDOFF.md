@@ -8254,3 +8254,74 @@ owed for either; do not re-comment on a recurrence of the same two.
 2. Finish 3C: PROPOSE_HYPOTHESIS (DDR-1015 shape), then REWRITE_AGENT_CODE and
    EVOLVE_GENOME (DDR-1016/1017 force-pending shape — budget for the rate limit).
 3. Then STEP 3.
+
+---
+
+## CHECKPOINT 2026-08-30 21:1x UTC — DDR-1020; Section 3C is 6 of 8
+
+### `PROPOSE_HYPOTHESIS` + `EVOLVE_GENOME`, one probe, one boot
+
+`smoke-actionhypo`, shard 3, fast. Kernel **`53fe179c85a7c3b5`**, 1,134,986 B.
+`PRADYOS_ACTIONHYPO_OK hst=2 hn=33 gst=1 gseed=9 gn=9`.
+
+Both types run in the **same boot** on opposite sides of the policy split, so
+`hst=2` beside `gst=1` is direct evidence that
+`aether_action_forces_pending()` discriminates — two separate gates could each
+have passed for unrelated reasons.
+
+Five arms, five mutants, six distinct kernel hashes, each landing on its arm:
+M1 `hn=0`, M2 `hst=1`, M3 `gst=2`, M4 `gn=17`, M5 `gseed=0`.
+
+### TWO ACCOUNTING ERRORS OF MINE, corrected
+
+1. **`ACTION_SPAWN_PROCESS` is NOT one of the eight 3C types** — `aether.h` pins
+   it under *"pre-existing action types"*. DDR-1017's gate is worth having but
+   does not advance the count.
+2. **`ACTION_REWRITE_AGENT_CODE` was already shipped and gated by DDR-842** —
+   `smoke-coderewrite`, shard 7, **strict**, four capability roles and a real
+   approver via NSI 86. It is the strongest gate of the whole set.
+
+So DDR-1017's "3 of 8" and DDR-1018's "4 of 8" were both wrong. **True tally:
+6 of 8 shipped, `SEND_IPC` blocked, `RUN_EXPERIMENT` remaining.** Both errors
+were the same mistake — declaring a type unbuilt from memory instead of
+grepping. **Grep first.**
+
+### M4 caught a gate arm I had already convinced myself was sound
+
+M4's first version rewrote `/GENOME.TXT` in place and the gate **PASSED**. Not
+because policy stopped it — because the write returned short (`put_rc=-1`).
+
+**Unexplained SFS behaviour, recorded and NOT fixed:** re-opening an existing
+file `O_CREAT|O_WRONLY` and writing it again returns short, for both a longer
+and an equal-length payload, while `unlink` + create succeeds. **The ADR-032
+write budget is excluded** — the unlink+create at the same point in the same boot
+worked. No mechanism named, so §NON-NEGOTIABLE 3 forbids a fix. Relevant to
+whoever builds the SFS overwrite path.
+
+**Lesson:** a mutant that fails to perform the defect is indistinguishable from a
+gate that catches it. Verify the mutant actually did the thing.
+
+### The dead-arm class — instances four and five, now a RULE
+
+After DDR-1016 §5 (`st`), DDR-1017 §4 (`ctrl`), DDR-1018 §3 (`st`), this DDR hit
+it twice more on `gseed`. State it as a rule and apply it by default:
+
+> **A probe should REPORT and let the gate JUDGE.** Reserve `fail()` for
+> conditions under which no meaningful line can be produced at all. Every
+> `fail()` before the print silently removes an arm from the gate.
+
+### Gates on `53fe179c85a7c3b5` (one hash, verified before and after each)
+
+`smoke-actionhypo`, `smoke-coderewrite`, `smoke-fsrm`, `smoke-shell`,
+`smoke-blkmq`, `smoke-blk-integrity` — all PASS. `hygiene_check.sh` ALL THREE
+PASSED: 163 gates / 10 shards / 7 excluded, 66 probe ELFs, 48 entry points.
+
+### NEXT
+
+1. `RUN_EXPERIMENT` — the last 3C type, and **check what exists first**: it wants
+   `CAP_EXEC` plus a `CAP_SOVEREIGN`-locked metric path, and `CAP_EXEC` is a
+   logged pre-approved deferral. It may be a deferral, not a build.
+2. Group F's F#66–F#76 agents; four roster agents (PRAX/LUMYN/AHNIS/IRIS) are
+   blocked on pre-approved deferrals.
+3. STEP 1 (OPEN-2) still open — DDR-1019's instrument is armed for the next
+   occurrence. STEP 3 stays last.

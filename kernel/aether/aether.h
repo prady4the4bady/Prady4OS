@@ -57,6 +57,16 @@ _Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6"
  * (DDR-1017 §1). Nothing hand-copies 7, and a pin whose probe does not exist
  * would read as a claim that one does. */
 _Static_assert(ACTION_QUERY_MEMORY  == 8, "action wire format: QUERY_MEMORY is 8");
+/* DDR-1020. Both hand-copied by user/actionhypotest.c, which runs them in ONE
+ * boot on opposite sides of the force-pending split below -- so a drift that
+ * moved either onto the wrong side would make that comparison vacuous. 9
+ * (REWRITE_AGENT_CODE) is hand-copied by user/coderewritetest.c and pinned for
+ * the same reason; 11 (RUN_EXPERIMENT) is deliberately unpinned, because nothing
+ * copies it yet and a pin whose probe does not exist reads as a claim that one
+ * does. */
+_Static_assert(ACTION_REWRITE_AGENT_CODE == 9, "action wire format: REWRITE_AGENT_CODE is 9");
+_Static_assert(ACTION_PROPOSE_HYPOTHESIS == 10, "action wire format: PROPOSE_HYPOTHESIS is 10");
+_Static_assert(ACTION_EVOLVE_GENOME      == 12, "action wire format: EVOLVE_GENOME is 12");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must

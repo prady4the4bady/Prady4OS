@@ -135,6 +135,8 @@ USER_ASPW_SRC := user/actionspawntest.c  # DDR-1017: Section 3C ACTION_SPAWN_PRO
 USER_ASPW_ELF := build/actionspawntest.elf
 USER_AQRY_SRC := user/actionquerytest.c  # DDR-1018: Section 3C ACTION_QUERY_MEMORY
 USER_AQRY_ELF := build/actionquerytest.elf
+USER_AHYP_SRC := user/actionhypotest.c   # DDR-1020: 3C HYPOTHESIS + EVOLVE_GENOME
+USER_AHYP_ELF := build/actionhypotest.elf
 USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
@@ -230,7 +232,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -519,6 +521,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ASPW_ELF) build/actionspawntest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AQRY_SRC) -o build/actionquerytest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AQRY_ELF) build/actionquerytest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AHYP_SRC) -o build/actionhypotest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AHYP_ELF) build/actionhypotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
@@ -3273,6 +3277,42 @@ smoke-actionquery: $(IMG) fat-image sfs-image
 	 test "$$n" = "24" || { echo "[actionquery] FAIL — read returned $$n bytes, expected 24; the approved read did not happen or the store lost the value"; exit 1; }; \
 	 test "$$first" = "Q" || { echo "[actionquery] FAIL — first byte '$$first', expected 'Q'; the read hit the wrong key"; exit 1; }
 	@echo "[actionquery] PASS — proposed, approved, then read the fact back"
+
+# Section 3C PROPOSE_HYPOTHESIS + EVOLVE_GENOME gate (DDR-1020). ONE probe, one
+# boot, both sides of the force-pending split -- which is the point: hst=2 beside
+# gst=1 shows aether_action_forces_pending() actually discriminates. Two separate
+# gates could each pass for their own unrelated reasons.
+#
+#   hst=2   PROPOSE_HYPOTHESIS auto-approved (it is NOT force-pending)
+#   hn=33   the hypothesis was logged and read back -- len of the seeded text.
+#           A probe that skipped the log still prints the sentinel; it cannot
+#           print the byte count.
+#   gst=1   EVOLVE_GENOME stayed AE_PENDING (DDR-842 S4: force-pending in every
+#           mode, and there is no approver in a gate boot)
+#   gseed=9 THE CONTROL: the genome was written and is readable. Without it,
+#           gn=9 "unchanged" would also be what a broken write produces.
+#   gn=9    the genome is untouched -- the unapproved evolution did not happen.
+smoke-actionhypo: $(IMG) fat-image sfs-image
+	@rm -f build/actionhypo.log
+	@SERIAL_LOG=build/actionhypo.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actionhypo \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONHYPO_OK hst=')" \
+	FORBIDDEN_SENTINEL="ACTIONHYPO FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONHYPO_OK hst=-*[0-9]* hn=-*[0-9]* gst=-*[0-9]* gseed=-*[0-9]* gn=-*[0-9]*" build/actionhypo.log | head -1); \
+	 test -n "$$ln" || { echo "[actionhypo] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actionhypo] $$ln"; \
+	 hst=$${ln##* hst=}; hst=$${hst%% *}; \
+	 hn=$${ln##* hn=}; hn=$${hn%% *}; \
+	 gst=$${ln##* gst=}; gst=$${gst%% *}; \
+	 gseed=$${ln##* gseed=}; gseed=$${gseed%% *}; \
+	 gn=$${ln##* gn=}; \
+	 test "$$gseed" = "9" || { echo "[actionhypo] FAIL — genome seed readback $$gseed, expected 9; the control write did not land, so gn= proves nothing"; exit 1; }; \
+	 test "$$hst" = "2" || { echo "[actionhypo] FAIL — hypothesis verdict $$hst, expected 2 (AE_APPROVED); PROPOSE_HYPOTHESIS is not force-pending"; exit 1; }; \
+	 test "$$hn" = "33" || { echo "[actionhypo] FAIL — hypothesis readback $$hn bytes, expected 33; the approved log did not happen"; exit 1; }; \
+	 test "$$gst" = "1" || { echo "[actionhypo] FAIL — genome verdict $$gst, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
+	 test "$$gn" = "9" || { echo "[actionhypo] FAIL — genome is $$gn bytes, expected 9; it was evolved on a PENDING action"; exit 1; }
+	@echo "[actionhypo] PASS — hypothesis approved and logged; genome pending and untouched"
 
 # Layer-7 horizon-band gate (DDR-1012): DAWN and DUSK grow a full-width horizon
 # band in render_backdrop. DAWN previously had NO backdrop at all (a bare

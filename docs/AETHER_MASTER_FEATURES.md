@@ -505,7 +505,7 @@ first-use always manual-gate) · `ACTION_QUERY_SCENE` (post-L7 NL query) ·
 be modified by the experimenting agent) · `ACTION_EVOLVE_GENOME` (force-PENDING,
 rewrites `genome.md` across generations, `CAP_SOVEREIGN` veto window)
 
-**Build status — 4 of 8 declared types shipped end to end; 1 BLOCKED.** A 3C type is
+**Build status — 6 of the 8 Section-3C types shipped end to end; 1 BLOCKED; 1 unbuilt.** A 3C type is
 implemented in RING 3 (DDR-1013 §2.1): the kernel is the policy engine, the
 agent the executor, so "implemented" means a probe that proposes, waits for the
 verdict, and acts only afterwards — plus a gate that asserts the *effect*.
@@ -514,11 +514,24 @@ verdict, and acts only afterwards — plus a gate that asserts the *effect*.
 |---|---|---|---|
 | `ACTION_READ_FILE` | shipped | `smoke-actionread` (asserts the content) | DDR-1015 |
 | `ACTION_DELETE_FILE` | shipped, force-pending | `smoke-actiondel` (asserts PENDING + the file survives) | DDR-1016 |
-| `ACTION_SPAWN_PROCESS` | shipped, force-pending | `smoke-actionspawn` (asserts PENDING + `wait4(WNOHANG)` sees no child) | DDR-1017 |
+| `ACTION_REWRITE_AGENT_CODE` | **shipped since DDR-842** — four capability roles, a real approver via `SYS_APPROVE_CODE_REWRITE` (NSI 86), a negative arm proving that call cannot approve a non-rewrite action, and the sov-only arm proving `CAP_REWRITE` is not decoration | `smoke-coderewrite` (shard 7, **strict**) | DDR-842 |
+| `ACTION_PROPOSE_HYPOTHESIS` | shipped | `smoke-actionhypo` (auto-approves, then logs and reads back) | DDR-1020 |
+| `ACTION_EVOLVE_GENOME` | shipped, force-pending | `smoke-actionhypo` (same boot: PENDING + genome untouched) | DDR-1020 |
+| `RUN_EXPERIMENT` | not started, and **not obviously buildable** — §3C specifies `CAP_EXEC` plus a `CAP_SOVEREIGN`-locked metric path, and `CAP_EXEC` is a logged pre-approved deferral. Check what exists before budgeting it | — | DDR-1020 §6 |
 | `SEND_IPC` | **BLOCKED** — no ring-3 IPC surface exists, so no agent can execute an approved one; needs a new NSI + capability check, i.e. kernel ABI, not a probe | — | DDR-1017 §1 |
 | `ACTION_QUERY_MEMORY` | shipped | `smoke-actionquery` (asserts the seeded bytes come back) | DDR-1018 |
 | `PROPOSE_HYPOTHESIS` · `RUN_EXPERIMENT` | not started | — | follow DDR-1015's shape |
-| `REWRITE_AGENT_CODE` · `EVOLVE_GENOME` | not started, force-pending | — | follow DDR-1016/1017's shape; see DDR-1016 §4 on the rate limit |
+
+**Two corrections to DDR-1017/1018's accounting.** (1) `ACTION_SPAWN_PROCESS` is
+**not one of the eight** — `aether.h` pins it under *"pre-existing action types"*
+and the DDR-842 3C block begins at `READ_FILE`. DDR-1017's gate for it is real
+and useful, but it does not advance the 3C count, so "3 of 8" and "4 of 8" in
+those two DDRs were both wrong. (2) `REWRITE_AGENT_CODE` was **already shipped
+and gated by DDR-842**; DDR-1017 §7 and DDR-1018 §7 each listed it as remaining
+without checking. Both DDRs asserted a type was unbuilt from memory instead of
+grepping — the same failure that DDR-1018 §1 corrected for `QUERY_MEMORY`.
+**Check the tree before declaring a type unbuilt.**
+
 
 The remaining six 3C types in the list above (`EXEC_CODE`, `PARSE_DOCUMENT`,
 `BROWSE_WEB`, `CAPTURE_FRAME`, `SCAN_ENVIRONMENT`, `QUERY_SCENE`) are

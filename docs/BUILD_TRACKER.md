@@ -1318,3 +1318,44 @@ halts the machine before any heartbeat, and `*(volatile uint64_t *)0x8 = 0` does
 `sched_tick`, DDR-1010's through `sys_mmap`, this one is the halt loop. Resolve
 the RIP against its own binary before matching on the sentinel name.
 A latch-liveness watchdog is named in §8 and deliberately NOT built.
+
+---
+
+## DDR-1020 — `PROPOSE_HYPOTHESIS` + `EVOLVE_GENOME`; 3C is 6 of 8
+
+**DONE.** `smoke-actionhypo` (shard 3, fast). Kernel `53fe179c85a7c3b5`,
+1,134,986 B, `-Werror` clean.
+`PRADYOS_ACTIONHYPO_OK hst=2 hn=33 gst=1 gseed=9 gn=9`.
+
+**One probe, one boot, both sides of the policy split.** `PROPOSE_HYPOTHESIS` is
+auto-approving, `EVOLVE_GENOME` is force-pending, so `hst=2` beside `gst=1` shows
+`aether_action_forces_pending()` actually discriminates — a comparison two
+separate gates could not make.
+
+**Two accounting corrections.** `ACTION_SPAWN_PROCESS` is **not** one of the
+eight (pinned as pre-existing), and `ACTION_REWRITE_AGENT_CODE` was **already
+shipped and gated by DDR-842** (`smoke-coderewrite`, shard 7, strict — four
+capability roles and a real approver via NSI 86). DDR-1017 §7 and DDR-1018 §7
+were wrong on both. **True tally: 6 of 8 shipped, `SEND_IPC` blocked,
+`RUN_EXPERIMENT` remaining.**
+
+| mutant | kernel | result | arm |
+|---|---|---|---|
+| M1 skip the approved log | `35157cf009afe975` | `hn=0` | `hn` |
+| M2 force HYPOTHESIS pending | `977cbdef336a287f` | `hst=1 hn=0` | `hst` |
+| M3 drop GENOME from `forces_pending()` | `ee069299dd4fec34` | `gst=2` | `gst` only |
+| M4 evolve on a PENDING verdict | `26236c25931f9fe2` | `gn=17` | `gn` only |
+| M5 genome seed never lands | `f56434e9e879f639` | `gseed=0 gn=0` | `gseed` |
+
+**M4 caught a gate arm I had convinced myself was sound.** Its first version
+rewrote `/GENOME.TXT` in place and the gate **passed** — because the write
+returned short (`put_rc=-1`), not because policy stopped it. A same-length
+rewrite failed too; only unlink-then-recreate succeeded. **Unexplained SFS
+behaviour, recorded and NOT fixed** — the ADR-032 write budget is excluded,
+since the unlink+create at the same point in the same boot succeeded. Lesson:
+*a mutant that fails to perform the defect is indistinguishable from a gate that
+catches it.*
+
+**Dead-arm class, instances four and five**, now stated as a rule: **a probe
+should REPORT and let the gate JUDGE**; every `fail()` before the print silently
+removes an arm.
