@@ -828,3 +828,42 @@ produced no panic banner at all), nor that the four are four separate defects,
 nor that OPEN-1 route 1 is closed — though the `SYSFSTAT OK` stopping point
 recurring *with a panic* does show DDR-994's "route 1 prints nothing" framing is
 too strong.
+
+---
+
+## DDR-1010 — OPEN-2 reproduced locally; the cause is a broken SWAPGS discipline
+
+**The campaign DDR-1006 prescribed returned a clean null, and it was the wrong
+gate.** `smoke-smppreempt` measured **20/20 PASS** on `bb9c6187a30bb0dd`, zero
+`[apfreeze]`. That null was pre-registered as meaning "CI-only" — but it had only
+**19% power** (`0.92²⁰ ≈ 0.19` against CI's observed ≈0.08/run), and
+**`smoke-blk-integrity` reproduces the defect locally, ~1 in 4.**
+
+**The primary event is not the scheduler.** Four lines before the freeze:
+`[percpu] gs FAIL (syscall ctx)` and `[percpu] current FAIL (syscall ctx)` — the
+DDR-SMP-3a probe reporting a broken SWAPGS discipline at a **ring-3 syscall
+entry**. `current_thread` then resolves into ROM (`pid=0xF000F053`), a later
+`sys_mmap` → `vmm_map_in` → `map_core` `#GP`s on it, and the CPU wedges in
+`isr_dispatch` with `if=0`, ticks frozen at 186 while the BSP reaches 17500. The
+frozen AP's block completions time out, producing the
+`[smp] blk integrity FAIL reference-read` that every previous OPEN-2
+investigation started from.
+
+Backtrace resolves fully — `isr_dispatch <- isr_common.gs_kernel_in <- map_core
+<- vmm_map_in <- sys_mmap` — at the **same RIP** as DDR-1006's CI capture but
+from a **different caller**, so the wedge point is `isr_dispatch`, not the timer
+path DDR-1006 inferred.
+
+**Detector gap closed.** `GLOBAL_FORBIDDEN` carried `percpu FAIL`, which does not
+match either printed string. Only `smoke-swapgs` noticed. Both are now their own
+entries (71 → 73).
+
+**Not a regression from DDR-1008/1009**, on mechanism rather than counts: the RIP
+matches a capture taken on `bb9c6187a30bb0dd` before either change existed, the
+failing path is untouched by the diff, and the boot failed on its own
+pre-existing sentinel. The A/B counts (1/4 vs 0/6) are explicitly recorded as
+settling nothing, p ≈ 0.40.
+
+**Source defect NOT named. No fix attempted.** Next instrument in DDR-1010 §7:
+make the SWAPGS probe continuous (it is one-shot on the first `sys_getpid`),
+record the CPU index, then campaign `smoke-blk-integrity` at N ≥ 36.

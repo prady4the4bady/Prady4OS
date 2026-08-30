@@ -38,8 +38,17 @@ can be read against each other.
 - [~] **STEP 1 — the active blocker.** DDR-1006: `[apfreeze]` on the merge tip
       `fa29506`, at an AP timer-ISR site DDR-981 does not cover. So that tip has
       **2 greens, not 3**, and the promotion does not proceed on it.
-      Reproduction campaign per DDR-1006 §7 (`smoke-smppreempt` N=20 on kernel
-      `bb9c6187a30bb0dd`, `SERIAL_LOG` pinned + `KEEP_SERIAL=1`).
+      **DONE — DDR-1010, and it found the cause.** The prescribed campaign ran:
+      `smoke-smppreempt` **20/20 PASS** on `bb9c6187a30bb0dd`, zero `[apfreeze]`.
+      That null is NOT "CI-only" as DDR-1006 §7 pre-registered — it had only
+      **19% power** (CI rate ≈ 0.08/run, `0.92²⁰ ≈ 0.19`), and it was the wrong
+      gate. **`smoke-blk-integrity` reproduces it locally, ~1 in 4**, with a full
+      backtrace. The primary event is `[percpu] gs FAIL (syscall ctx)` — a broken
+      **SWAPGS discipline** at a ring-3 syscall entry; `current_thread` then
+      resolves into ROM, `sys_mmap` → `vmm_map_in` → `map_core` `#GP`s, and the
+      AP wedges in `isr_dispatch` with `if=0`. The block-integrity failure is the
+      third symptom, not the defect. Source defect NOT named; no fix attempted
+      (§NON-NEGOTIABLE 3). Next instrument: DDR-1010 §7.
 - [ ] **STEP 2 — decide OPEN-1 route 1 explicitly.** PR #17 relaxes what an
       earlier note in this file asserted: route 1 need not be *closed* to tag.
       It must be *decided* — "if it cannot be closed with real evidence before
@@ -247,6 +256,14 @@ Batch their DDRs in one pass first (§4.3), then implement.
       `*** NEXUS KERNEL PANIC ***` and **not one further byte** for ~100 s until
       `timeout` killed QEMU — `idt.c:702` is the very next statement. NOT
       claimed to explain the other three signatures.
+- [x] **DDR-1010 detector — `[percpu] gs FAIL` / `[percpu] current FAIL` added
+      to `GLOBAL_FORBIDDEN`** (71 → 73). The list already carried `percpu FAIL`,
+      which does **not** match either — the printed strings have a word in
+      between, so `percpu FAIL` matches only `[smp] cpu N percpu FAIL`. Only
+      `smoke-swapgs` was catching them. That is why OPEN-2 always looked like a
+      block or scheduler bug: the kernel announced a broken SWAPGS invariant and
+      the gate failed three symptoms later. An entry that looks like it covers a
+      family and covers one member is worse than none.
 - [x] **DDR-1009 detector — `NEXUS KERNEL PANIC` added to `GLOBAL_FORBIDDEN`.**
       One emitter, zero consumers: a ring-0 panic was caught only when it
       happened to break a gate's assertion or run out its clock. Note the

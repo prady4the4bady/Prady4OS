@@ -396,6 +396,18 @@ early_exit_eligible=0
 # fails nothing, it just silently stops catching. smoke-selftest case 5 is what
 # found it, on all 10 shards at once, which is exactly the job DDR-791 built it
 # for. Do not put a comment inside this printf.
+# DDR-1010 APPENDED '[percpu] gs FAIL' and '[percpu] current FAIL'. The list
+# ALREADY carried 'percpu FAIL' -- which does NOT match either of them, because
+# the printed strings are '[percpu] gs FAIL (syscall ctx)' and '[percpu] current
+# FAIL (syscall ctx)': there is a word between. 'percpu FAIL' matches only the
+# SMP-boot form '[smp] cpu N percpu FAIL'. So the SWAPGS-discipline probe
+# (syscall.c:140-147) could announce a broken kernel invariant and only
+# smoke-swapgs, which names 'gs FAIL' in its own FORBIDDEN_SENTINEL, would
+# notice. Measured (DDR-1010): a smoke-blk-integrity boot printed both, then
+# #GP'd in vmm_map_in, froze two APs, and the gate failed three symptoms later
+# on 'blk integrity FAIL reference-read'. An entry that looks like it covers a
+# family and covers one member of it is worse than no entry, because it reads
+# as covered.
 # DDR-1009 APPENDED 'NEXUS KERNEL PANIC'. It had ONE emitter (kernel/idt.c:701)
 # and ZERO consumers: no gate grepped for it, so a ring-0 panic was caught only
 # when it happened to break a gate's own assertion or run out its clock. A panic
@@ -430,7 +442,8 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'rqstress FAIL' 'tss FAIL' 'unlink/rmdir FAIL' 'user on AP FAIL' \
     'controller not ready' 'create-iocq failed' 'create-iosq failed' \
     'identify-ctrl failed' 'identify-ns failed' 'reset stuck' \
-    'NEXUS KERNEL PANIC')"
+    'NEXUS KERNEL PANIC' \
+    '[percpu] gs FAIL' '[percpu] current FAIL')"
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 
 # Fails the run when any probe reported a failure, whichever gate is running.
