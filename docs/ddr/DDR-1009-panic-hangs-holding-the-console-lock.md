@@ -296,3 +296,25 @@ records that no gate can confirm it.
 So the release decision needs its own evidence on whatever tip is actually
 promoted, pooled the same way: count suite-runs across every SHA that shares that
 kernel binary, not greens on one SHA.
+
+### 8.1 Running tally on the successor kernel `29c792a8b8f3b056`
+
+Pooling by the same rule, `462b713` → `9c172c8` → `d7d2794` all carry the DDR-1008
+/ DDR-1009 kernel — the diffs between them are Markdown plus, at `d7d2794`,
+`tools/qemu_runner/boot_test.sh`, which changes the *harness* and not the binary:
+
+| tip | runs | green | failed |
+|---|---|---|---|
+| `462b713` | push, pull_request | 2 | 0 |
+| `9c172c8` | push, pull_request | 2 | 0 |
+| `d7d2794` | push, pull_request | 2 | 0 |
+| | **6** | **6** | **0** |
+
+The last two ran under a **strictly stricter** sentinel list than the first four
+(`d7d2794` added `NEXUS KERNEL PANIC` and the two `[percpu]` entries), so pooling
+them is conservative rather than generous.
+
+**This is not yet evidence the rate improved.** `0.75⁶ ≈ 0.18`, so six greens in a
+row is an unremarkable outcome even if the failure rate were unchanged at 25%.
+It is recorded as a tally to be continued, not as a result — which is the same
+discipline §1.1 applies to the three-green rule.
