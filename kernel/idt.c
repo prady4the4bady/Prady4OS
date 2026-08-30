@@ -95,6 +95,30 @@ void idt_load_ap(void) {
 uint32_t g_panic_claimed;
 uint64_t g_panic_extra;
 
+/* DDR-1019. The one-winner latch above has NO LIVENESS GUARANTEE: it is claimed
+ * with a CAS before the dump and never released, and losers print nothing by
+ * design. So if the winner stalls before or during its dump, the machine emits
+ * NO panic output at all, every later panic is silenced, and the only visible
+ * symptom is CPUs frozen in the loser's `cli; hlt` -- which is read as an
+ * `[apfreeze]` scheduler defect. That is exactly what a CI capture on 6894062
+ * (shard 9, smoke-blkmq-trace) showed: panics_silent=1 from the first heartbeat,
+ * no banner for a further 1000 ticks, and an [apfreeze] whose RIP resolves to
+ * the halt loop below.
+ *
+ * These two do not change the panic path's behaviour; they make the NEXT
+ * occurrence say what happened.
+ *
+ *  - g_panic_stage: how far the winner got. 0 = claimed but printed nothing.
+ *  - g_panic_loser_*: what the FIRST loser was, recorded rather than printed --
+ *    printing from a loser would reintroduce the interleaving DDR-979 §6
+ *    removed, which is the whole reason losers are silent.
+ */
+uint64_t g_panic_stage;
+uint32_t g_panic_loser_taken;
+uint32_t g_panic_loser_cpu;
+uint32_t g_panic_loser_vec;
+uint64_t g_panic_loser_rip;
+
 static void dump_line(const char *label, uint64_t v) {
     kputs(label);
     kputhex(v);
@@ -297,7 +321,17 @@ static void timer_tick(struct regs *r) {
          * readable. Nonzero means MORE THAN ONE CPU panicked this boot — which
          * the old unserialised printer showed only as a garbled dump. */
         { extern uint64_t g_panic_extra;
-          if (g_panic_extra) { kputs(" panics_silent="); kputdec(g_panic_extra); } }
+          if (g_panic_extra) { kputs(" panics_silent="); kputdec(g_panic_extra);
+            /* DDR-1019: panics_silent alone says a panic happened and nothing
+             * was printed; these say WHICH panic and how far the winner got.
+             * stage=1 means the winner claimed the latch and never reached the
+             * banner -- the case that has been read as a scheduler freeze. */
+            { extern uint64_t g_panic_stage; extern uint32_t g_panic_loser_cpu;
+              extern uint32_t g_panic_loser_vec; extern uint64_t g_panic_loser_rip;
+              kputs(" panic_stage="); kputdec(g_panic_stage);
+              kputs(" loser_cpu=");   kputdec(g_panic_loser_cpu);
+              kputs(" loser_vec=");   kputdec(g_panic_loser_vec);
+              kputs(" loser_rip=");   kputhex(g_panic_loser_rip); } } }
         /* DDR-890: how much did switch_wait_offcpu_sched spin in this window?
          * spins is the total across CPUs; max/cpu name the busiest one. This is
          * the data that decides whether the DDR-887 preemption-suppression
@@ -694,11 +728,23 @@ void isr_dispatch(struct regs *r) {
         if (!__atomic_compare_exchange_n(&g_panic_claimed, &expected, 1u, 0,
                                          __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
             __atomic_add_fetch(&g_panic_extra, 1, __ATOMIC_RELAXED);
+            /* DDR-1019: record, do not print. First loser wins the slot, so a
+             * third CPU cannot overwrite the one the heartbeat will report.
+             * lapic_id() rather than this_cpu(): a ring-0 fault can arrive with
+             * a GS base that does not belong to this CPU, and that is one of the
+             * things worth being able to see here (DDR-981 §9, DDR-1010). */
+            if (__atomic_exchange_n(&g_panic_loser_taken, 1u, __ATOMIC_SEQ_CST) == 0) {
+                g_panic_loser_cpu = lapic_id();
+                g_panic_loser_vec = (uint32_t)r->vector;
+                g_panic_loser_rip = r->rip;
+            }
             for (;;) __asm__ volatile("cli; hlt");
         }
+        g_panic_stage = 1;                  /* claimed; nothing printed yet */
     }
 
     kputs("\r\n*** NEXUS KERNEL PANIC ***\r\n");
+    g_panic_stage = 2;                      /* banner out: the console works */
     kputs("component: NEXUS isr\r\n");
     kputs("exception: ");
     kputs(name);
@@ -708,6 +754,7 @@ void isr_dispatch(struct regs *r) {
     kputhex(r->err_code);
     kputs("\r\n");
 
+    g_panic_stage = 3;                      /* exception identified */
     dump_line("RIP=", r->rip);
     dump_line("CS =", r->cs);
     dump_line("RFLAGS=", r->rflags);

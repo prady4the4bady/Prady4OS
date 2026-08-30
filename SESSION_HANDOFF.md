@@ -8108,3 +8108,97 @@ the check.**
    campaign the PRE-probe kernel `29c792a8b8f3b056`. It monopolises QEMU for
    hours, which is why gate work has been going first.
 3. STEP 3 (`main` + `v1.0.0`) stays LAST, per the operator's ordering.
+
+---
+
+## CHECKPOINT 2026-08-30 19:5x UTC — DDR-1019: `[apfreeze]` was a panic symptom
+
+### This is the STEP 1 finding, and it changes how OPEN-2 must be read
+
+CI failed on `6894062`, shard 9, `smoke-blkmq-trace` (run 33323162053) with
+`[apfreeze] cpu=3 ticks=262 rip=0xFFFFFFFF8000A2F8 if=0`.
+
+I rebuilt that exact CI kernel bit-for-bit in the worktree (`b0e4ccb83d4bb7ac`,
+1,106,314 B — the size the job log reports) and disassembled the RIP:
+
+```
+0xffffffff8000a2f6:  cli
+0xffffffff8000a2f7:  hlt
+0xffffffff8000a2f8:  jmp 0xffffffff8000a2f6      <-- the frozen RIP
+```
+
+That is `idt.c:697`, the **losing branch of DDR-979's one-winner panic latch**.
+**CPU 3 panicked**, lost the CAS, and halted itself with interrupts off by
+design. The `if=0`, the frozen ticks, the two `[vblk] compl wait timeout
+dest_cpu=3`, and the gate failure are all **downstream of a panic** — there is
+nothing scheduler-shaped on this path to find.
+
+**And the winner printed nothing.** `g_panic_extra` increments only on losing the
+CAS, so a winner existed. But `NEXUS KERNEL PANIC` is in `GLOBAL_FORBIDDEN` (73
+patterns at that commit) and `smoke-blkmq-trace` goes through `boot_test.sh`, so
+a banner would have killed the run at that line — instead it ran ~1000 more
+ticks. The latch is claimed **before** the dump and never released: a winner that
+cannot print silences every later panic and leaves only frozen CPUs.
+
+**Not DDR-1010's SWAPGS path.** That continuous probe is in this kernel
+(`syscall.c:111`, called at `:138`) and printed **zero** `gs FAIL` lines. The
+instrument built for that hypothesis correctly excluded itself.
+
+### `[apfreeze]` HAS AT LEAST THREE PRODUCERS — stop matching on the name
+
+- DDR-1006: RIP backtraces `schedule <- sched_tick <- isr_dispatch` (AP timer ISR)
+- DDR-1010: RIP backtraces through `sys_mmap` / `vmm_map_in`
+- DDR-1019: RIP **is** the panic-loser halt loop
+
+**Resolve the RIP against its own binary before reading one as another.** Note
+the offsets differ per binary: `+0x938` in the CI kernel, `+0x990` in mine.
+
+### Instrument built and PROVEN (not just added)
+
+`g_panic_stage` (how far the winner got: 1=claimed, 2=banner out, 3=exception
+identified) and the first loser's `cpu`/`vec`/`rip` — **recorded, not printed**,
+because a loser that printed would reintroduce the interleaving DDR-979 removed.
+All four surface only inside the existing `if (g_panic_extra)` heartbeat block,
+so a healthy boot emits zero extra bytes.
+
+**M-B reproduces the CI shape locally.** An AP forced down the loser branch
+(`ud2` from `sched_tick`, latch pre-claimed), kernel `640fdd2c17451143`, `-smp 4`:
+
+```
+panics_silent=1 panic_stage=0 loser_cpu=3 loser_vec=6 loser_rip=0xFFFFFFFF800122D4
+[apfreeze] cpu=3 ticks=250 rip=0xFFFFFFFF8000A5B0 … if=0
+NEXUS KERNEL PANIC: 0 occurrences
+```
+
+`loser_vec=6` = `#UD` as injected; `loser_rip` = `sched_tick + 0x74`, the
+injection site.
+
+**Two failed injections, recorded because they are reusable:** injecting on the
+**BSP** halts the machine before any heartbeat prints, and
+`*(volatile uint64_t *)0x8 = 0` does **not** fault — page 0 is mapped writable.
+`ud2` is the reliable ring-0 injector.
+
+### NO fix to the panic path, deliberately
+
+The mechanism explains the **signature**, not the exception behind it. What is
+still unknown: which exception the winner took, and why it stalled between
+`idt.c:699` and `:701` (the only code there is `kputs`;
+`console_panic_force_release()` already ran at `:673`). A latch watchdog would
+have produced a dump here — and would re-open the interleaving DDR-979 closed.
+Redesigning the panic path on one artefact days from a release is how the
+garbled-dump problem was created. Named, measured, left for a decision
+(DDR-1019 §8).
+
+### Gates on `6836dc723f31fc3e` (one hash, verified before and after each)
+
+`smoke-blkmq-trace` (**the gate that failed in CI**), `smoke-blk-integrity`,
+`smoke-shell`, `smoke-blkmq` — all PASS. `hygiene_check.sh` ALL THREE PASSED.
+
+### NEXT
+
+1. Watch for `panic_stage=` in any CI heartbeat. `stage=1` = this again and the
+   question narrows to `kputs`; `stage>=2` with no banner = a capture problem;
+   `loser_vec` names the second exception.
+2. Three 3C types left: `PROPOSE_HYPOTHESIS`, `REWRITE_AGENT_CODE`,
+   `EVOLVE_GENOME`. `SEND_IPC` is blocked (DDR-1017 §1).
+3. STEP 3 (`main` + `v1.0.0`) stays LAST, per the operator's ordering.

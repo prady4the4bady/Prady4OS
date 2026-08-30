@@ -1272,3 +1272,49 @@ reason.
 shipped in `5d2efd5` — legal C11, so nothing failed and no gate could see it.
 From restoring the header after a mutation and re-applying the edit on top;
 `git diff` was the check that would have caught it. Three types remain.
+
+---
+
+## DDR-1019 — the shard-9 `[apfreeze]` is a PANIC SYMPTOM
+
+**MECHANISM NAMED + instrument built and mutation-proven. No fix.**
+Kernel `6836dc723f31fc3e`, 1,126,794 B, `-Werror` clean.
+
+CI run 33323162053, shard 9, `smoke-blkmq-trace`, `6894062`.
+`[apfreeze] cpu=3 rip=0xFFFFFFFF8000A2F8 if=0` — and that RIP, resolved against
+the CI binary **rebuilt bit-for-bit** (`b0e4ccb83d4bb7ac`), is the
+`for(;;) cli; hlt` at `idt.c:697`: the LOSING branch of DDR-979's one-winner
+panic latch. **That CPU panicked.** The frozen ticks, `if=0`, the two
+`[vblk] compl wait timeout dest_cpu=3` and the gate failure are all downstream.
+
+**The winner printed nothing.** `g_panic_extra` increments only on losing the
+CAS, so a winner existed — but `NEXUS KERNEL PANIC` is in `GLOBAL_FORBIDDEN` and
+`smoke-blkmq-trace` goes through `boot_test.sh`, so a banner would have killed
+the run there; it ran ~1000 more ticks instead. The latch is claimed **before**
+the dump and never released, so a winner that cannot print silences every later
+panic and leaves only frozen CPUs. DDR-979 traded a garbled dump for a readable
+one; the failure mode it introduced is **no dump**.
+
+**Not DDR-1010's SWAPGS path** — that probe is in this kernel and printed zero
+`gs FAIL` lines, i.e. the instrument excluded itself.
+
+**Instrument:** `g_panic_stage` (how far the winner got) plus the first loser's
+`cpu`/`vec`/`rip`, **recorded not printed** — a loser that printed would
+reintroduce the interleaving DDR-979 removed — surfaced only inside the existing
+`if (g_panic_extra)` heartbeat block, so a healthy boot emits nothing extra.
+
+**M-B proves it and reproduces the CI shape locally.** An AP forced down the
+loser branch (`ud2` from `sched_tick`, latch pre-claimed), kernel
+`640fdd2c17451143` at `-smp 4`:
+`panics_silent=1 panic_stage=0 loser_cpu=3 loser_vec=6 loser_rip=0xFFFFFFFF800122D4`,
+`[apfreeze] cpu=3 … if=0`, zero banners. `loser_vec=6` is `#UD` as injected and
+`loser_rip` is `sched_tick + 0x74`, the injection site.
+
+Two failed injection attempts are recorded as reusable: injecting on the **BSP**
+halts the machine before any heartbeat, and `*(volatile uint64_t *)0x8 = 0` does
+**not** fault — page 0 is mapped writable.
+
+**`[apfreeze]` has at least three producers.** DDR-1006's RIP backtraces through
+`sched_tick`, DDR-1010's through `sys_mmap`, this one is the halt loop. Resolve
+the RIP against its own binary before matching on the sentinel name.
+A latch-liveness watchdog is named in §8 and deliberately NOT built.
