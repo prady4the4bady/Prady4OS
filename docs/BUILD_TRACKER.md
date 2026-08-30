@@ -970,3 +970,54 @@ on any per-frame noise.
 Regression: `smoke-backdrop`, `smoke-ambiance`, `smoke-gradient`,
 `smoke-cadence`, `smoke-shell` all PASS; `ci-shard-check` OK (158/10/7);
 `ci-probe-rodata-check` OK (61 ELFs).
+
+---
+
+## Pre-approved exceptions — the DEFERRED log CLAUDE.md requires
+
+CLAUDE.md's §PRE-APPROVED EXCEPTIONS says, of each item: *"add a one-line entry
+in `docs/BUILD_TRACKER.md` as `[DEFERRED: reason]`"*. **Seventeen items were
+listed and none had been logged.** That is not cosmetic: §WHAT "DONE" MEANS
+requires *"All items CI-green or carrying a logged pre-approved exception"* and
+*"zero unlogged exclusions"*, so the checklist could not have been honestly
+ticked. Logged here verbatim from the table, reasons unchanged.
+
+- Intel HDA audio — `[DEFERRED: deferred, optional — no QEMU HDA path in CI]`
+- Wayland/wlroots compositor — `[DEFERRED: superseded by shipped custom C framebuffer compositor]`
+- CMake/Makefile hybrid — `[DEFERRED: deferred post-1.0, awaiting operator sign-off (DDR-843)]`
+- Apple Silicon / m1n1 — `[DEFERRED: deferred post-1.0 — aarch64 ISO uses U-Boot path]`
+- `ACTION_CAPTURE_FRAME` — `[DEFERRED: post-L7, no hardware path]`
+- `ACTION_SCAN_ENVIRONMENT` — `[DEFERRED: post-L7, needs SLAM3R]`
+- `ACTION_QUERY_SCENE` — `[DEFERRED: post-L7, no scene graph]`
+- `ACTION_PARSE_DOCUMENT` — `[DEFERRED: needs 64 MiB OCR model, no model-shipping path]`
+- `ACTION_EXEC_CODE` — `[DEFERRED: needs sandboxed interpreter subsystem]`
+- `ACTION_BROWSE_WEB` — `[DEFERRED: deferred post-1.0 (DDR-793) — cloud bridge is a security-posture change]`
+- `arch/aarch64` full port — `[DEFERRED: boot-only scope per ADR-034 — ISO uses boot-only kernel]`
+- `arch/riscv64` full port — `[DEFERRED: boot-only scope per ADR-034 — ISO uses boot-only kernel]`
+- Cloud bridge activation — `[DEFERRED: deferred post-1.0 (DDR-793)]`
+- Rust rewrite — `[DEFERRED: not in scope]`
+- `CAP_OCR` / `CAP_SCENE` with no hardware path — `[DEFERRED: capability bit defined, enforcement deferred — no subsystem path]`
+- SFS block reclamation on-disk — `[DEFERRED: in-memory reclaim shipped (DDR-762-v2); on-disk free-tree deferred post-1.0]`
+- NVMe completion IRQ — `[DEFERRED: poll-mode sufficient for ISO; DDR-774a/b/c deferred until B#3 SMP stable]`
+
+### This resolves DDR-982 §5.5 without a new operator ruling
+
+DDR-982 §5.5 asked whether the four absent action types should be declared just
+to have a capability boundary to enforce, and said *"this reverses a documented
+repo decision either way, so it is the operator's call, not mine."* It is
+already the operator's call, made in advance, in two rows of this same table:
+
+- `CAP_OCR` / `CAP_SCENE` → **"capability bit defined, enforcement deferred — no
+  subsystem path"**. DDR-982 §2 records that bits (A) and the `agent_caps` field
+  (B) are already built and that enforcement (C) plus its gate (D) were
+  withdrawn. **That is exactly the pre-approved state.**
+- each of `ACTION_PARSE_DOCUMENT`, `ACTION_QUERY_SCENE`, `ACTION_EXEC_CODE` and
+  `ACTION_BROWSE_WEB` is separately listed as deferred with its own reason — so
+  "leave them absent", which DDR-982 §5.5 leaned to, is the standing decision.
+
+**Consequence for the Group F rows.** PRAX, LUMYN, AHNIS and IRIS stay unbuilt,
+but they are **not blocked on a ruling** — they are blocked on subsystems that
+are themselves pre-approved deferrals (a sandboxed interpreter, a cloud bridge,
+a 64 MiB OCR model, a scene graph). Declaring the bits would not make any of
+them work; it would add three action types that can only return "not
+implemented". The queue rows are corrected to say that.

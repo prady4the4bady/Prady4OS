@@ -215,8 +215,18 @@ Batch their DDRs in one pass first (§4.3), then implement.
       been local, which is why 60 clean local runs say nothing about it.
 
 ### Group F — AETHER roster (11 agents unbuilt)
-- [ ] **BLOCKED — operator decision.** Wire `CAP_OCR`/`CAP_EXEC`/`CAP_SCENE`/
-      `CAP_NET_BROWSE`. Read DDR-982 §5.5 BEFORE popping this. Bits (A) and
+- [x] **RESOLVED — the ruling already existed; no operator decision is owed.**
+      Wire `CAP_OCR`/`CAP_EXEC`/`CAP_SCENE`/`CAP_NET_BROWSE`: DDR-982 §5.5 called
+      this "the operator's call, not mine", but CLAUDE.md's PRE-APPROVED
+      EXCEPTIONS table had already made it — `CAP_OCR`/`CAP_SCENE` are logged as
+      **"capability bit defined, enforcement deferred — no subsystem path"**,
+      which is exactly DDR-982 §2's shipped state (bits + `agent_caps` built,
+      enforcement and gate withdrawn), and each of the four action types is
+      separately listed as deferred with its own reason. So "leave them absent",
+      which §5.5 leaned to, is the standing decision. Now logged in
+      BUILD_TRACKER as the table requires — 17 exceptions were listed and **none**
+      had been logged, which §WHAT "DONE" MEANS needs for "zero unlogged
+      exclusions". Bits (A) and
       the `agent_caps` field (B) are ALREADY BUILT; enforcement (C) and its
       gate (D) were WITHDRAWN because the four action types do not exist and
       declaring them reverses a documented decision in `aether.h`. A gate
@@ -224,10 +234,10 @@ Batch their DDRs in one pass first (§4.3), then implement.
       an operator ruling on DDR-982 §5.5. DDR-982 §5.4 also records a
       create-then-init race in `sys_spawn_agent` that becomes observable the
       moment per-slot authority exists.
-- [ ] PRAX (shell_agent) spawnable — BLOCKED on `CAP_EXEC`
-- [ ] LUMYN (research_agent) spawnable — BLOCKED on `CAP_NET_BROWSE`
-- [ ] AHNIS (ocr_agent) spawnable — BLOCKED on `CAP_OCR`
-- [ ] IRIS (vision_agent) spawnable — BLOCKED on `CAP_SCENE`
+- [ ] PRAX (shell_agent) — blocked on `ACTION_EXEC_CODE`, a pre-approved deferral ("needs sandboxed interpreter subsystem"), not on capability plumbing
+- [ ] LUMYN (research_agent) — blocked on `ACTION_BROWSE_WEB` / the cloud bridge, both pre-approved deferrals (DDR-793)
+- [ ] AHNIS (ocr_agent) — blocked on `ACTION_PARSE_DOCUMENT`, a pre-approved deferral ("needs 64 MiB OCR model, no model-shipping path")
+- [ ] IRIS (vision_agent) — blocked on `ACTION_QUERY_SCENE`, a pre-approved deferral ("post-L7, no scene graph")
 - [ ] F#66 `architect_agent` / F#67 `healer_agent` (RUFLO) / F#69 `inventor_agent`
 - [ ] F#70 `tournament_agent` / F#71 subconscious world model / F#72 `verifier_agent`
 - [ ] F#73 sovereign NL UI / F#74 capability discovery / F#75 lineage memory
