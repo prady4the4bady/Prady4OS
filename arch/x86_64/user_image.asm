@@ -313,6 +313,14 @@ actionspawntest_elf:
     incbin "build/actionspawntest.elf"
 actionspawntest_elf_end:
 
+; DDR-1018: Section 3C ACTION_QUERY_MEMORY -- auto-approving (DDR-1015 shape),
+; executed through the CAP_MEMORY agent-memory NSI 82/83.
+global actionquerytest_elf
+global actionquerytest_elf_end
+actionquerytest_elf:
+    incbin "build/actionquerytest.elf"
+actionquerytest_elf_end:
+
 global coderewritetest_elf
 global coderewritetest_elf_end
 coderewritetest_elf:

@@ -1233,3 +1233,42 @@ not shipped is not a result.
 is how the gate first failed on a correct measurement. Both this gate and
 DDR-1016's now anchor every field on its leading space; DDR-1016's parsed
 correctly only by luck of field naming. Five types remain, two of them blocked.
+
+---
+
+## DDR-1018 — Section 3C `ACTION_QUERY_MEMORY` (4 of 8), correcting DDR-1017 §1
+
+**DONE.** `smoke-actionquery` (shard 6, fast), M1/M2 on distinct kernel hashes.
+Kernel `c928493492bba59e`, 1,126,794 B, `-Werror` clean.
+`PRADYOS_ACTIONQUERY_OK id=258 st=2 n=24 first=Q`.
+
+**CORRECTION.** DDR-1017 §1 flagged `QUERY_MEMORY` as possibly blocked like
+`SEND_IPC`. It is **not**: `SYS_MEMORY_WRITE` (82) / `SYS_MEMORY_READ` (83),
+CAP_MEMORY, shipped in DDR-836 and already exercised by `user/agentmemtest.c`.
+So it follows DDR-1015's auto-approving shape. **`SEND_IPC` stays blocked**,
+re-checked by an exhaustive grep of every `#define SYS_` for
+`ipc|chan|msg|endpoint|bcast|send|recv|port` — only socket-connect, two
+surface-send calls and net-allow, none an agent-to-agent channel.
+Section 3C is **4 of 8, 1 blocked, 3 to go.**
+
+**The dead-arm class, a third time, caught before the mutants ran.** The draft
+`fail()`d on any non-APPROVED verdict, so the printed `st` could only ever be 2.
+Now reported, not asserted. The poll was also bounded to DDR-1016's two-poll
+shape — and M2 proves that mattered: under a permanently-PENDING verdict the
+20000-iteration loop would have hit `AETHER_RATE_MAX` and had the agent killed
+before printing anything.
+
+| mutant | kernel | result | arm |
+|---|---|---|---|
+| M1 claim success without reading (`first='Q'` kept) | `85d57430833c879d` | `n=0` | `n` only |
+| M2 kernel forces QUERY_MEMORY pending | `baccd11d421d0c5c` | `st=1 n=0 first=?` | `st` + `n` |
+
+M2 moving two arms is **correct, not sloppy**: for an auto-approving type a
+verdict that never arrives means the read must not happen, so they are coupled by
+design. `first=` is recorded as **not independently mutation-checked**, with the
+reason.
+
+**Also fixed:** `aether.h` carried the DDR-1016 `DELETE_FILE == 6` pin twice,
+shipped in `5d2efd5` — legal C11, so nothing failed and no gate could see it.
+From restoring the header after a mutation and re-applying the edit on top;
+`git diff` was the check that would have caught it. Three types remain.

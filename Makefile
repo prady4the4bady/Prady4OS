@@ -133,6 +133,8 @@ USER_ADEL_SRC := user/actiondeltest.c    # DDR-1016: Section 3C ACTION_DELETE_FI
 USER_ADEL_ELF := build/actiondeltest.elf
 USER_ASPW_SRC := user/actionspawntest.c  # DDR-1017: Section 3C ACTION_SPAWN_PROCESS
 USER_ASPW_ELF := build/actionspawntest.elf
+USER_AQRY_SRC := user/actionquerytest.c  # DDR-1018: Section 3C ACTION_QUERY_MEMORY
+USER_AQRY_ELF := build/actionquerytest.elf
 USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
@@ -228,7 +230,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-actionspawn smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -515,6 +517,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ADEL_ELF) build/actiondeltest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ASPW_SRC) -o build/actionspawntest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ASPW_ELF) build/actionspawntest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AQRY_SRC) -o build/actionquerytest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AQRY_ELF) build/actionquerytest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
@@ -3237,6 +3241,38 @@ smoke-actionspawn: $(IMG) fat-image sfs-image
 	 test "$$st" = "1" || { echo "[actionspawn] FAIL — verdict st=$$st, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
 	 test "$$post" = "-10" || { echo "[actionspawn] FAIL — wait4(WNOHANG) returned $$post, expected -10 (-ECHILD); a process appeared on a PENDING action"; exit 1; }
 	@echo "[actionspawn] PASS — force-pending, and no process appeared for it"
+
+# Section 3C ACTION_QUERY_MEMORY gate (DDR-1018). AUTO-APPROVING, so this is
+# DDR-1015's shape, not DDR-1016's: the verdict must ARRIVE (st=2, AE_APPROVED)
+# and the probe must then read the fact back.
+#
+# DDR-1017 §1 listed this type as "unchecked" for the gap that blocks SEND_IPC.
+# It is checked and it is NOT blocked: agent memory has a real ring-3 surface,
+# NSI 82/83 gated on CAP_MEMORY (DDR-836), already exercised by
+# user/agentmemtest.c. So an approved QUERY_MEMORY has an executor.
+#
+# THE ASSERTION IS THE CONTENT. A probe that skipped the read still prints the
+# sentinel; it cannot print the bytes. n=24 is len("Quorum reached at tick 7"),
+# the value the probe seeded with its own authority before submitting -- that
+# seed doubles as the control, since a read returning those bytes proves the
+# store works in this boot rather than silently swallowing writes.
+smoke-actionquery: $(IMG) fat-image sfs-image
+	@rm -f build/actionquery.log
+	@SERIAL_LOG=build/actionquery.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actionquery \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONQUERY_OK id=')" \
+	FORBIDDEN_SENTINEL="ACTIONQUERY FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONQUERY_OK id=[0-9]* st=-*[0-9]* n=[0-9]* first=." build/actionquery.log | head -1); \
+	 test -n "$$ln" || { echo "[actionquery] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actionquery] $$ln"; \
+	 st=$${ln##* st=}; st=$${st%% *}; \
+	 n=$${ln##* n=}; n=$${n%% *}; \
+	 first=$${ln##* first=}; \
+	 test "$$st" = "2" || { echo "[actionquery] FAIL — verdict st=$$st, expected 2 (AE_APPROVED); QUERY_MEMORY is not force-pending and sovereign mode should approve it"; exit 1; }; \
+	 test "$$n" = "24" || { echo "[actionquery] FAIL — read returned $$n bytes, expected 24; the approved read did not happen or the store lost the value"; exit 1; }; \
+	 test "$$first" = "Q" || { echo "[actionquery] FAIL — first byte '$$first', expected 'Q'; the read hit the wrong key"; exit 1; }
+	@echo "[actionquery] PASS — proposed, approved, then read the fact back"
 
 # Layer-7 horizon-band gate (DDR-1012): DAWN and DUSK grow a full-width horizon
 # band in render_backdrop. DAWN previously had NO backdrop at all (a bare

@@ -36,8 +36,10 @@ enum aether_action {
 /* Wire-format pins for the pre-existing action types (DDR-832 discipline). */
 _Static_assert(ACTION_WRITE_FILE    == 1, "action wire format: WRITE_FILE is 1");
 _Static_assert(ACTION_PRINT         == 2, "action wire format: PRINT is 2");
+/* SPAWN_PROCESS is also hand-copied by user/actionspawntest.c (DDR-1017), whose
+ * gate asserts it stays PENDING -- so a drift onto a type outside
+ * aether_action_forces_pending() below would make that assertion vacuous. */
 _Static_assert(ACTION_SPAWN_PROCESS == 3, "action wire format: SPAWN_PROCESS is 3");
-/* DDR-1017 hand-copies this one too, in user/actionspawntest.c. */
 /* DDR-1015: pin the first 3C type too. user/actionreadtest.c hand-copies this
  * number across the ring boundary, and DDR-1013 §1 found actiondagtest.c had
  * drifted to a wrong one with no gate able to see it. Pinning it here means the
@@ -49,11 +51,12 @@ _Static_assert(ACTION_READ_FILE     == 5, "action wire format: READ_FILE is 5");
  * would silently become vacuous if the number drifted onto a type that is not in
  * aether_action_forces_pending() below. */
 _Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6");
-/* DDR-1016: and the first force-pending 3C type. user/actiondeltest.c hand-copies
- * this one, and its gate asserts the action stays PENDING -- an assertion that
- * would silently become vacuous if the number drifted onto a type that is not in
- * aether_action_forces_pending() below. */
-_Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6");
+/* DDR-1018. NOTE ACTION_SEND_IPC == 7 sits between these two and is deliberately
+ * NOT pinned: ipc_send/ipc_recv are kernel-internal and capability-gated, and
+ * there is no SYS_IPC_*, so an approved SEND_IPC has no executor in any ring
+ * (DDR-1017 §1). Nothing hand-copies 7, and a pin whose probe does not exist
+ * would read as a claim that one does. */
+_Static_assert(ACTION_QUERY_MEMORY  == 8, "action wire format: QUERY_MEMORY is 8");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must

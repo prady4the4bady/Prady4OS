@@ -455,6 +455,8 @@ extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DEL
 extern const unsigned char actiondeltest_elf_end[];
 extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
 extern const unsigned char actionspawntest_elf_end[];
+extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUERY_MEMORY */
+extern const unsigned char actionquerytest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -2338,6 +2340,30 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] 3C ACTION_SPAWN_PROCESS probe spawned (agent)\r\n");
                     } else {
                         kputs("[user] ACTIONSPAWN probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1018: Section 3C ACTION_QUERY_MEMORY. Auto-approving (not
+                 * in aether_action_forces_pending), so it needs no second
+                 * privileged actor -- DDR-1015's shape.
+                 *
+                 * is_memory as well as is_agent: sys_memory_read/write require
+                 * CAP_MEMORY (sys_agentmem.c:20/48) and return -EPERM otherwise.
+                 * NOT is_sovereign, deliberately -- that ALSO satisfies the
+                 * check, and then the gate would say nothing about an ordinary
+                 * agent's authority, which is the whole subject. */
+                if (probe_enabled("actionquery")) {
+                    struct tcb *aq = 0;
+                    uint64_t aqlen = (uint64_t)(uintptr_t)actionquerytest_elf_end -
+                                     (uint64_t)(uintptr_t)actionquerytest_elf;
+                    if (elf_load((void *)(uintptr_t)actionquerytest_elf, aqlen,
+                                 "ACTIONQUERY", &aq) == ELF_OK && aq) {
+                        aq->is_agent  = 1;
+                        aq->is_memory = 1;            /* CAP_MEMORY, DDR-836 */
+                        aq->root_mnt  = mnt;
+                        sched_unblock(aq);
+                        kputs("[user] 3C ACTION_QUERY_MEMORY probe spawned (agent+CAP_MEMORY)\r\n");
+                    } else {
+                        kputs("[user] ACTIONQUERY probe FAILED to load\r\n");
                     }
                 }
                 if (probe_enabled("ftruncate")) {

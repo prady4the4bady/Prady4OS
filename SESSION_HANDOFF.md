@@ -8031,3 +8031,80 @@ only because no field of its happened to end in `st`.
 2. Remaining 3C: `PROPOSE_HYPOTHESIS` (DDR-1015 shape), `REWRITE_AGENT_CODE` and
    `EVOLVE_GENOME` (DDR-1016/1017 shape). `SEND_IPC`/`QUERY_MEMORY` blocked above.
 3. STEP 3 (`main` promotion + `v1.0.0`) stays LAST, per the operator's ordering.
+
+---
+
+## CHECKPOINT 2026-08-30 19:0x UTC — DDR-1018, and DDR-1017 §1 corrected
+
+### DDR-1018 — `ACTION_QUERY_MEMORY` (4 of 8)
+
+`smoke-actionquery`, shard 6, fast. Kernel **`c928493492bba59e`**, 1,126,794 B,
+`-Werror` clean. `PRADYOS_ACTIONQUERY_OK id=258 st=2 n=24 first=Q`.
+
+**CORRECTION to yesterday's checkpoint and DDR-1017 §1.** I flagged
+`QUERY_MEMORY` as possibly blocked like `SEND_IPC`. **It is not.**
+`SYS_MEMORY_WRITE` (82) and `SYS_MEMORY_READ` (83) have existed since DDR-836,
+gated on CAP_MEMORY, already exercised by `user/agentmemtest.c`. So it follows
+DDR-1015's auto-approving shape and it is now shipped.
+
+**`SEND_IPC` is still blocked**, and that was re-verified rather than assumed: an
+exhaustive grep of every `#define SYS_` for `ipc|chan|msg|endpoint|bcast|send|
+recv|port` returns only `SYS_SOCK_CONNECT`, `SYS_SURFACE_SENDKEY`,
+`SYS_SURFACE_SENDEV`, `SYS_NET_ALLOW` — none an agent-to-agent channel.
+
+**Section 3C is 4 of 8, 1 blocked, 3 to go.**
+
+| mutant | kernel | result | arm |
+|---|---|---|---|
+| M1 claim success without reading (`first='Q'` kept) | `85d57430833c879d` | `st=2 n=0 first=Q` | `n` only |
+| M2 kernel forces QUERY_MEMORY pending | `baccd11d421d0c5c` | `st=1 n=0 first=?` | `st` + `n` |
+
+M2 moving two arms is correct: for an auto-approving type a verdict that never
+arrives means the read must not happen, so they are coupled by design. `first=`
+is recorded as NOT independently mutation-checked, with the reason.
+
+### The dead-arm class — THIRD instance in three DDRs. Check for it by default.
+
+- DDR-1016 §5 — `st` unreachable (`aether_poll` frees the slot on a terminal
+  verdict, so the second poll always returned `-ESRCH`).
+- DDR-1017 §4 — `ctrl` a literal `1` (every control mismatch `fail()`d before
+  the line printed).
+- DDR-1018 §3 — `st` unreachable again (the probe refused to print a bad verdict).
+
+**A field whose only reachable value is the passing one is decoration, not
+measurement.** Before writing any new gate arm, ask what mutant makes that field
+print something else. If the answer is "none", the arm is fake.
+
+### And an auto-approving probe must still bound its poll
+
+DDR-1015's 20000-iteration loop is safe *only* while the action auto-approves and
+breaks on iteration 1. M2 removes exactly that condition — an unbounded loop
+would have spent 20000 syscalls against `AETHER_RATE_MAX = 60/100 ticks` and the
+agent would have been killed before printing. The bound is what makes the mutant
+readable, not defensive programming.
+
+### A duplicate `_Static_assert` shipped in `5d2efd5`
+
+`aether.h` carried DDR-1016's `DELETE_FILE == 6` pin twice, comment and all —
+from restoring the header after that DDR's M2 mutation and re-applying the pin on
+top. Legal C11, so nothing failed and no gate saw it. Removed. **Restoring a file
+from a scratch copy and then re-applying an edit is not idempotent; `git diff` is
+the check.**
+
+### Gates on `c928493492bba59e` (one hash, verified before and after each)
+
+`smoke-actionquery`, `smoke-agentmem`, `smoke-actionspawn`, `smoke-actiondel`,
+`smoke-actionread`, `smoke-shell`, `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity` — all PASS. `hygiene_check.sh` ALL THREE PASSED:
+162 gates / 10 shards / 7 excluded, 65 probe ELFs, 47 entry points.
+
+### NEXT
+
+1. Three 3C types left: `PROPOSE_HYPOTHESIS` (DDR-1015 shape, an SFS write),
+   `REWRITE_AGENT_CODE` and `EVOLVE_GENOME` (force-pending, DDR-1016/1017 shape).
+   `SEND_IPC` is not probe work.
+2. **STEP 1 (the DDR-1006/OPEN-2 AP freeze) is still the release blocker** and
+   PR #17 correctly stays draft for it. DDR-1010 §9.3 names the next experiment:
+   campaign the PRE-probe kernel `29c792a8b8f3b056`. It monopolises QEMU for
+   hours, which is why gate work has been going first.
+3. STEP 3 (`main` + `v1.0.0`) stays LAST, per the operator's ordering.
