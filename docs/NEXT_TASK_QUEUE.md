@@ -256,6 +256,17 @@ Batch their DDRs in one pass first (§4.3), then implement.
       approve — a gate expecting auto-approval there asserts the opposite of
       DDR-842's design. `READ_FILE` is the natural first: non-destructive, so it
       auto-approves in sovereign mode.
+      **`ACTION_READ_FILE` is DONE — DDR-1015**, `smoke-actionread` (shard 1,
+      fast), M1 mutation-checked. **Seven remain, three of them force-pending.**
+      The gate asserts the CONTENT (`n=25 first=P` from `/HELLO.TXT`), and M1
+      keeps `first='P'` deliberately so only the byte-count arm can catch a probe
+      that never read — which it does. `ACTION_READ_FILE == 5` is now pinned by
+      `_Static_assert`, after DDR-1013 §1 found a probe constant had drifted.
+      **It does NOT prove the read happened AFTER approval** — the ordering is the
+      authority property and no serial output distinguishes the two orders.
+      DDR-1015 §5 names what would: submit an action the policy REJECTS and assert
+      the read does not happen. That is also the natural shape for the
+      `DELETE_FILE` gate, which needs a PENDING assertion anyway.
 - [ ] S3 + S7 invariant arms — BLOCKED on F#66–F#72
 
 ### Group D — userspace
