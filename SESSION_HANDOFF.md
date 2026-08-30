@@ -8442,3 +8442,49 @@ over `51463c9`, so those two pool onto kernel `6836dc723f31fc3e`.
 2. STEP 1 (OPEN-2) remains the open release blocker; PR #17 stays draft.
 3. STEP 3 last: 3 independent greens on ONE tip → ff `main` → re-verify the ISO
    on main's own build → tag `v1.0.0`.
+
+---
+
+## CHECKPOINT 2026-08-30 22:5x UTC — a NEW intermittent: shard 2 `smoke-mouse`
+
+CI run 33338488689, shard 2, `smoke-mouse` (gate 3 of 18), tip `4fd2054`.
+`[mouse] FAIL — click did not reach ring 3`.
+
+**Not caused by that commit:** `4fd2054` is five `.md` files, so its kernel is
+`8eaab34`'s `53fe179c85a7c3b5` — a binary that had already passed a full suite.
+
+### What the capture shows, and what it rules out
+
+- **`btnedge=5` in every heartbeat**, and my local PASSING run reports **the same
+  `btnedge=5`**. That is the kernel's button-edge counter, so **the QMP click
+  reached the kernel in CI too.** This is not a lost or mistimed injection.
+- Boot healthy for the full 120 s: heartbeats to `t=11500`, surfaces up,
+  focus/close/zorder all printed. **No `[apfreeze]`, no `panics_silent`, no
+  `panic_stage`** — DDR-1019's instrument is in this kernel and stayed silent, so
+  the panic-latch path is excluded.
+- The gap is narrow: **the kernel saw the edges; ring 3 never printed
+  `PRADYOS_MOUSE_OK`.**
+- **Local reproduction: PASS** on the byte-identical kernel (hash verified before
+  and after), `PRADYOS_MOUSE_OK 500 281`.
+
+### A false lead, recorded so nobody repeats it
+
+The CI geometry looked wrong — `close=4932,3887`, far outside the 1024×768
+scanout. **It is not an anomaly:** the local passing run emits identical values.
+
+### Why no fix was pushed
+
+The obvious theory (a one-shot injection landing before the compositor polls) is
+**ruled out by the code**: `mouse_inject.sh` polls for the outcome — DDR-910
+rewrote it exactly so it would not settle for a fixed delay — waiting up to 60 s
+for readiness then retrying ~50 rounds. With `btnedge=5`, the injector worked.
+
+That leaves "the compositor did not report inside the window", for which there is
+**no named mechanism**, so §NON-NEGOTIABLE 3 forbids a fix. Widening the timeout
+or adding retries would make the symptom vanish while measuring less — the exact
+failure mode DDR-1002 and DDR-1012 were written about.
+
+**Re-run triggered once** via `workflow_dispatch` (§INV.15's mechanism for this
+project). PR #17 comment 5471708345 records all of the above; **do not comment
+again** for a recurrence of this same signature. If it does recur, the next step
+is an instrument on the compositor's pointer-poll path — NOT a timeout bump.
