@@ -684,9 +684,57 @@ static int min_box_hit(const struct surface_info *s, int x, int y) {
     return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
 }
 
+/* DDR-1007: the work area — the part of the screen a window may occupy.
+ *
+ * "Maximize at real display size" cannot mean the whole framebuffer, because the
+ * compositor draws chrome a maximized window must not cover, and the chrome
+ * DIFFERS BY MODE. DDR-893 made Manual a structurally different desktop rather
+ * than a restyle, so this has to branch on the mode or it is wrong in one of
+ * them:
+ *
+ *   Sovereign (mode != 0): 6 px accent bar on top; agent panel occupying the
+ *                          right 210 px (render_agent_panel / agent_card_hit).
+ *   Manual    (mode == 0): MANUAL_MENUBAR_H on top, MANUAL_TASKBAR_H at the
+ *                          bottom, and NO agent panel.
+ *
+ * Returns the area in framebuffer coordinates. Callers place window CONTENT
+ * TITLEBAR px below ay, because draw_window puts the title bar at s->y - TITLEBAR. */
+#define WA_MARGIN 8
+static void work_area(int mode, int *ax, int *ay, int *aw, int *ah) {
+    int W = (int)g_fi.width, H = (int)g_fi.height;
+    int top, bot, right;
+    if (mode) {                                  /* Sovereign */
+        top   = 6;                               /* accent bar (render()) */
+        bot   = H;
+        right = (g_fi.width >= 220) ? W - 210 : W;   /* mirrors render_agent_panel */
+    } else {                                     /* Manual */
+        top   = MANUAL_MENUBAR_H;
+        bot   = H - MANUAL_TASKBAR_H;
+        right = W;
+    }
+    *ax = WA_MARGIN;
+    *ay = top + WA_MARGIN;
+    *aw = right - *ax - WA_MARGIN;
+    *ah = bot   - *ay - WA_MARGIN;
+    if (*aw < 32) *aw = 32;
+    if (*ah < 32) *ah = 32;
+}
+
+/* The largest surface the compositor will ever ask for, in one axis. Clamped to
+ * SURFACE_DIM_MAX so a larger scanout degrades to the biggest legal surface
+ * instead of getting -EINVAL from sys_surface_resize. */
+#define SURFACE_DIM_MAX 1024                     /* MUST track sys_surface.c:17 */
+static int wa_clamp(int v) {
+    if (v < 32) return 32;
+    if (v > SURFACE_DIM_MAX) return SURFACE_DIM_MAX;
+    return v;
+}
+
 /* Maximize (DDR-719): saved per-id geometry + a toggle mask. The compositor
  * requests the size via the DDR-718 event channel and repositions the window;
- * the owner redraws. 512 = SURFACE_DIM_MAX (the largest legal surface). */
+ * the owner redraws. DDR-1007: the size is now the work area, not a hardcoded
+ * 512 -- that constant was SURFACE_DIM_MAX, which covered 26% of a 1024x768
+ * screen. */
 static unsigned g_max_mask;
 static int mx_x[16], mx_y[16];
 static unsigned short mx_w[16], mx_h[16];
@@ -1307,10 +1355,23 @@ int main(void) {
                                     mx_x[id] = sf[i].x; mx_y[id] = sf[i].y;
                                     mx_w[id] = (unsigned short)sf[i].w;
                                     mx_h[id] = (unsigned short)sf[i].h;
-                                    nsi(SYS_SURFACE_SENDEV, (long)id, 1, (512L << 16) | 512L);
-                                    nsi(SYS_SURFACE_MOVE, (long)id, 8, 26);
+                                    /* DDR-1007: fill the work area. The CONTENT
+                                     * origin is TITLEBAR below the area top,
+                                     * because the title bar is drawn above y. */
+                                    int ax, ay, aw, ah;
+                                    work_area((int)nsi(SYS_GET_MODE, 0, 0, 0),
+                                              &ax, &ay, &aw, &ah);
+                                    int mw = wa_clamp(aw);
+                                    int mh = wa_clamp(ah - TITLEBAR);
+                                    nsi(SYS_SURFACE_SENDEV, (long)id, 1,
+                                        ((long)mw << 16) | (long)mh);
+                                    nsi(SYS_SURFACE_MOVE, (long)id, ax, ay + TITLEBAR);
                                     g_max_mask |= 1u << id;
-                                    printf("PRADYOS_WM_MAX id=%u\n", id);
+                                    /* DDR-1007 §5: publish the size we ASKED
+                                     * for, so the gate asserts the client's ack
+                                     * against it instead of against a constant
+                                     * the gate already knew (§INV.5). */
+                                    printf("PRADYOS_WM_MAX id=%u w=%d h=%d\n", id, mw, mh);
                                 } else {                               /* restore */
                                     nsi(SYS_SURFACE_SENDEV, (long)id, 1,
                                         ((long)mx_w[id] << 16) | (long)mx_h[id]);
@@ -1454,8 +1515,9 @@ int main(void) {
                 if (rs_edge & RZ_S) newh = ms.y - y0;
                 if (rs_edge & RZ_W) neww = (x0 + w0) - ms.x;
                 if (rs_edge & RZ_N) newh = (y0 + h0) - ms.y;
-                if (neww < 32) neww = 32; if (neww > 512) neww = 512;
-                if (newh < 32) newh = 32; if (newh > 512) newh = 512;
+                /* DDR-1007 §4: same ceiling as maximize. Leaving this at 512
+                 * would let a user maximize to a size they cannot then drag to. */
+                neww = wa_clamp(neww); newh = wa_clamp(newh);
                 if (rs_edge & RZ_W) newx = (x0 + w0) - neww;
                 if (rs_edge & RZ_N) newy = (y0 + h0) - newh;
                 /* DDR-997 §3: MOVE first, then resize. The two are separate

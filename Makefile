@@ -2960,15 +2960,23 @@ smoke-wmmin: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_WM_RESTORE build/wmmin.log || { echo "[wmmin] FAIL — r did not restore"; tail -20 build/wmmin.log; exit 1; }
 	@echo "[wmmin] PASS — $$(grep -a PRADYOS_WM_MIN build/wmmin.log | head -1) + restore"
 
-# Layer-7 maximize gate (DDR-719): click B's max box -> the compositor saves
-# geometry, requests 512x512 via the event channel + moves B to (8,26)
-# (PRADYOS_WM_MAX, client PRADYOS_EV_RESIZE_OK w=512 h=512); a second injection
-# at the relocated box (keyed on the client's ack) restores (PRADYOS_WM_UNMAX).
+# Layer-7 maximize gate (DDR-719, retargeted by DDR-1007): click B's max box ->
+# the compositor saves geometry, requests the WORK AREA via the event channel
+# and moves B there (PRADYOS_WM_MAX id=1 w=W h=H, client PRADYOS_EV_RESIZE_OK
+# w=W h=H); a second injection at the relocated box (keyed on the client's ack)
+# restores (PRADYOS_WM_UNMAX).
+#
+# DDR-1007 §5: the size assertion reads W/H OUT OF the compositor's own
+# PRADYOS_WM_MAX line rather than hardcoding them (§INV.5). That is strictly
+# stronger than the old `w=512 h=512` grep: it checks the owner honoured the
+# size actually requested, where before it checked the owner printed a number
+# the gate already knew. A compositor asking 798 and a client acking 512 passed
+# the old form and fails this one.
 smoke-wmmax: $(IMG) fat-image sfs-image
 	@echo "[wmmax] maximize gate: boot(GPU+tablet) + QMP max-box click + restore click..."
 	@rm -f build/wmmax.log /tmp/pwmmax.sock
 	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock PRADYOS_AMBIANCE_OK &
-	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=512" &
+	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -2976,8 +2984,13 @@ smoke-wmmax: $(IMG) fat-image sfs-image
 	    -device virtio-gpu-pci -device virtio-tablet-pci \
 	    -qmp unix:/tmp/pwmmax.sock,server,nowait \
 	    -serial file:build/wmmax.log -display none -no-reboot || true
-	@grep -q "PRADYOS_WM_MAX id=1" build/wmmax.log || { echo "[wmmax] FAIL — max box click did not maximize"; tail -20 build/wmmax.log; exit 1; }
-	@grep -q "PRADYOS_EV_RESIZE_OK w=512 h=512" build/wmmax.log || { echo "[wmmax] FAIL — client did not honor maximize"; tail -20 build/wmmax.log; exit 1; }
+	@grep -q "PRADYOS_WM_MAX id=1 w=" build/wmmax.log || { echo "[wmmax] FAIL — max box click did not maximize"; tail -20 build/wmmax.log; exit 1; }
+	@set -e; \
+	 wh=$$(grep -ao "PRADYOS_WM_MAX id=1 w=[0-9][0-9]* h=[0-9][0-9]*" build/wmmax.log | head -1); \
+	 w=$${wh##*w=}; w=$${w%% *}; h=$${wh##*h=}; \
+	 echo "[wmmax] compositor asked for $${w}x$${h}"; \
+	 test "$$w" -gt 512 || { echo "[wmmax] FAIL — maximize target $${w}x$${h} did not exceed the OLD SURFACE_DIM_MAX cap of 512; DDR-1007 did not take effect"; exit 1; }; \
+	 grep -q "PRADYOS_EV_RESIZE_OK w=$$w h=$$h" build/wmmax.log || { echo "[wmmax] FAIL — client did not honor maximize (compositor asked $${w}x$${h})"; tail -20 build/wmmax.log; exit 1; }
 	@grep -q "PRADYOS_WM_UNMAX id=1" build/wmmax.log || { echo "[wmmax] FAIL — restore click did not un-maximize"; tail -20 build/wmmax.log; exit 1; }
 	@echo "[wmmax] PASS — $$(grep -a PRADYOS_WM_UNMAX build/wmmax.log | head -1)"
 

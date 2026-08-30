@@ -727,3 +727,36 @@ design and is corrected in place.
 
 **First measured denominator for a yield-spin:** `mnt_lock` turns over
 ≈127,344 spins / 500 ticks ≈ **255 spins per tick**.
+
+---
+
+## DDR-1007 — Window maximize at real display size (Group E)
+
+**DONE.** `smoke-wmmax` green for the new reason; M1/M2 mutation-checked on
+distinct kernel hashes. Kernel `92eb02028af0a929`.
+
+Maximize asked for **512×512** on a **1024×768** screen — 26% of the display.
+It now fills a mode-aware **work area**: 798×728 in Sovereign (clearing the 6 px
+accent bar and the 210 px agent panel), the menu bar and taskbar in Manual.
+**4.3× the area.**
+
+**The blocker was never the compositor.** 512 was `SURFACE_DIM_MAX`, and
+`SURFACE_VA_SLOT` was pinned to it *undocumented* at exactly 512×512×4 = 1 MiB.
+`sys_surface_map` maps `s->npages` pages at `BASE + id*SLOT` with **no check that
+npages fits the slot**, so raising the dimension cap alone would have mapped
+surface *N*'s buffer across surface *N+1*'s window — inside the compositor, which
+maps surfaces owned by **other processes**. A cross-window data leak that panics
+nothing and trips no sentinel. §INV.13's PT_HI lesson in a new place.
+
+Three limits are now explicit (`SURFACE_DIM_MAX`, `SURFACE_BYTES_MAX`,
+`SURFACE_VA_SLOT`) and tied by `_Static_assert`. **M2 proves the tie fires:**
+putting the VA slot back to 1 MiB is a *build* error, not a runtime mystery.
+
+**The gate stopped hardcoding geometry (§INV.5).** It reads `w`/`h` out of the
+compositor's own `PRADYOS_WM_MAX id=1 w=798 h=728` and asserts the client's ack
+matches. **M1 shows this is strictly stronger:** a compositor that publishes 798
+and requests 512 satisfied the old `grep "w=512 h=512"` and fails now.
+
+Unmeasured, and recorded as such: the Manual-mode work-area arm (the gate boots
+Sovereign), the predicted 2.2× per-window blit cost, and `smoke-wmmax`'s
+DDR-975 §8 intermittency — untouched and not claimed fixed.

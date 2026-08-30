@@ -298,6 +298,11 @@ All entries below are **shipped**.
 - Sovereign/Manual mode toggle (DDR-701); compositor w/ 8×8 font (DDR-704)
 - Per-client surfaces `SYS_SURFACE_*` (DDR-706); z-order/focus/key routing (DDR-708)
 - Sun-driven OKLab ambiances (DDR-709); window drag/close/resize/minimize/maximize (DDR-710/711/717/719)
+- Maximize fills the mode-aware WORK AREA, not a hardcoded 512x512 (DDR-1007):
+  798x728 at a 1024x768 scanout in Sovereign, clearing the accent bar and the
+  agent panel; Manual clears its menu bar and taskbar instead. Raising the cap
+  required SURFACE_VA_SLOT to move with it (1 MiB -> 4 MiB) — the two were
+  pinned to each other undocumented, and are now tied by _Static_assert.
 - Glass blur, gradients, particle field, decorations, alt-tab, page flip, scroll, spring/ripple, Inter font
   (DDR-712/720/721/722/723/724/725/726/727/728)
 - Surface destroy lifecycle safety (DDR-729); agent-card click → `SYS_SPAWN_AGENT` (DDR-713)
