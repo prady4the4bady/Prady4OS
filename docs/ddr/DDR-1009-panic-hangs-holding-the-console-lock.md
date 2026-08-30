@@ -269,3 +269,30 @@ commit, because it terminates on the **last entry in the list** and appending
 moved it. A stale terminator makes `sed` emit nothing, the count reads 0, and the
 check silently reports the exact catastrophe it exists to detect. CLAUDE.md now
 says so explicitly at the invariant.
+
+---
+
+## 8. The measurement is about `bb9c6187a30bb0dd`, NOT about the current tip
+
+Worth stating plainly, because §1's table is the kind of number that gets quoted
+without its subject.
+
+`37d220a` (DDR-1007) and `462b713` (DDR-1008/1009) change **code**, so each is a
+different kernel — `92eb02028af0a929` and `29c792a8b8f3b056`. The twelve-run
+denominator does not transfer to them, in either direction:
+
+- It is **not** evidence the current tip is bad. Nothing measured here ran on it.
+- It is **not** discharged by the current tip going green. `37d220a` is 2/2
+  (push + pull_request), and §1.1's whole point is that a short run of greens is
+  weak evidence at this failure rate — `0.75² ≈ 56%` even if the rate were
+  unchanged.
+
+Neither DDR-1007 nor DDR-1008 touches the scheduler, SMP, the block layer or
+lwIP, which is where three of the four signatures live, so there is no reason to
+expect the rate to have moved. **DDR-1009's fix is the one change that could
+plausibly affect one of them** — the `smoke-msixap` hang — and §7.1 already
+records that no gate can confirm it.
+
+So the release decision needs its own evidence on whatever tip is actually
+promoted, pooled the same way: count suite-runs across every SHA that shares that
+kernel binary, not greens on one SHA.
