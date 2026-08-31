@@ -8842,3 +8842,85 @@ all three PASSED (`ci-shard-check` caught the missing shard entry first).
 
 `v1.0.0` stays untagged and STEP 3 unstarted, per the operator decision to hold
 the tag while OPEN-2 is root-caused.
+
+---
+
+## CHECKPOINT — DDR-1028: the readiness sentinel every pointer gate trusted is wrong
+
+**FIXED + measured 6/6 against a pooled ~6/14.** Kernel `aad7b4c7a2e1a776`.
+
+### A claim I withdrew
+
+A CI wake reported `smoke-wmclose` failing on shard 1 of `003dec1`. Locally
+`b4c2aca` failed it and `f238169` passed, and **I called DDR-1027 a regression on
+that basis — one pass against one fail.** Three more runs each inverted it:
+`f238169` 1/4, `b4c2aca` 2/4, i.e. the OLDER build fails more. And the CI failure
+was on `003dec1`, which predates DDR-1026 and DDR-1027 both.
+
+### The mechanism, and it is the same one as DDR-1025/1026
+
+`PRADYOS_AMBIANCE_OK` is printed at `compositor.c:1184` with its own comment
+reading "loop is about to start". Every pointer gate's injector waits on it. The
+measured gap to the compositor's first `SYS_MOUSE_POLL` is **~10 s**:
+
+```
+t=500 … t=6000   mpoll=0     <- ring 3 has not polled the pointer once
+t=6000                       <- GAMMA's last geometry; surfacetest's C self-closes
+t=6500           mpoll=2     <- the FIRST pointer poll
+```
+
+`smoke-mouse` survives that only because DDR-1026's latch holds the press.
+`smoke-wmclose` cannot — its target self-destructs inside the gap:
+
+```
+433  last GAMMA geometry
+436  PRADYOS_SURFACE_OK 2      <- already out of the live set
+443  first PRADYOS_MOUSE_OK    <- the FIRST click to reach ring 3
+```
+
+The gate then reports "close box click did not close" about a window that no
+longer exists, and clicks the ghost 45 more times, because `resolve_geometry()`
+reads an append-only serial log in which a dead window's geometry lives forever.
+
+**This is DDR-911's own failure returning.** Its comment already describes "49
+correct clicks hit a surface that had already gone", and its `GRACE_SECS 4` was
+sized on "the injector lands its click in about a second" — measured against a
+sentinel that does not mean what it looks like.
+
+### Fix, in two separately measured parts
+
+| build | kernel | `smoke-wmclose` |
+|---|---|---|
+| `f238169` | `56a4c4a35c92cfc5` | 1 / 4 |
+| `b4c2aca` | `0d1bcd234707e56d` | 2 / 4 |
+| + `PRADYOS_INPUT_READY` | `f36de18e4b2eade0` | 3 / 6 |
+| + `GRACE_SECS` 4→12 | `aad7b4c7a2e1a776` | **6 / 6** |
+
+`PRADYOS_INPUT_READY` prints from *inside* the branch that just polled the
+pointer, so it cannot be true early. Alone it is a coin flip — the injector's
+first click and C's expiry land in the same heartbeat bucket. `GRACE_SECS 12` is
+derived from a passing run needing 8 press edges at ~1.2 s per round. The 4 s
+build IS the mutation of part 2, and is the 3/6 row.
+
+### Deliberately not changed
+
+**`smoke-mouse` still waits on `PRADYOS_AMBIANCE_OK`** — pointing it at
+`PRADYOS_INPUT_READY` would land its clicks while ring 3 is polling and remove
+the only coverage DDR-1026's latch has.
+
+### Open, named, not fixed
+
+**Why the compositor takes ~10 s to reach its first pointer poll.** `mpoll` goes
+2 → 161 → 767 → 1678 across heartbeats: the loop runs, early iterations are
+enormously slow, then accelerate. A desktop ignoring the mouse for ten seconds
+after drawing itself is a real defect. No mechanism named, so no fix.
+
+Residual: `resolve_geometry()` cannot tell a live target from a ghost. Repair
+named (reject geometry older than the last `PRADYOS_SURFACE_GONE`), not built —
+it changes tooling eight green gates depend on.
+
+### Gates
+
+`smoke-wmclose` 6/6; `smoke-winops`, `smoke-surface`, `smoke-ctrlaltt`,
+`smoke-mouse`, `smoke-drag`, `smoke-focus` all PASS. `hygiene_check.sh` ALL
+THREE PASSED.

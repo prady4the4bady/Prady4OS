@@ -295,6 +295,11 @@ All entries below are **shipped**.
 ### Layer 7 UI / Sovereign desktop
 - VirtIO-GPU framebuffer (ADR-028); ring-3 FB surface `SYS_FB_INFO/MAP/FLUSH` (DDR-702)
 - PS/2 keyboard `SYS_INPUT_POLL` (DDR-703); virtio-input pointer `SYS_MOUSE_POLL` (DDR-705)
+  - DDR-1028: the compositor publishes `PRADYOS_INPUT_READY` on its first
+    successful pointer poll. `PRADYOS_AMBIANCE_OK` means "loop is about to
+    start" and is ~10 s earlier — every pointer-gate injector had been firing
+    into a compositor that was not yet reading the pointer. NOT a fix for that
+    10 s itself, which is unexplained and open.
   - DDR-1027: **Ctrl+Alt+T launches a PRISM terminal window.** `user/term.c`
     owns a surface, runs PRISM over a pipe pair (`fork`+`execve`, not
     `SYS_SPAWN_AGENT`), renders with the Inter atlas, and forwards the keys the

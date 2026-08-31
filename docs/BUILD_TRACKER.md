@@ -1666,3 +1666,90 @@ gate that drives it was re-verified on `0d1bcd234707e56d`: `smoke-compositor`,
 `smoke-surface`, `smoke-agents`, `smoke-shell` — all PASS. `hygiene_check.sh`
 all three PASSED; `ci-shard-check` caught the missing `gate_shards.txt` entry
 first, which is the check doing its job.
+
+
+## DDR-1028 — `PRADYOS_AMBIANCE_OK` does not mean the pointer is being serviced
+
+**FIXED + measured (6/6 against a pooled ~6/14).** Kernel `aad7b4c7a2e1a776`.
+
+The common cause behind DDR-1025, DDR-1026 and an intermittent `smoke-wmclose`.
+Every pointer gate's injector waits on `PRADYOS_AMBIANCE_OK`, printed at
+`compositor.c:1184` with its own comment reading *"loop is about to start"*.
+Measured, there is a **~10 s gap** before the compositor's first
+`SYS_MOUSE_POLL`:
+
+```
+t=500 … t=6000   mpoll=0     <- ring 3 has not polled the pointer once
+t=6000                       <- GAMMA's last geometry; window C self-closes here
+t=6500           mpoll=2     <- the FIRST pointer poll
+```
+
+`smoke-mouse` survives that gap only because DDR-1026's latch holds the press.
+`smoke-wmclose` cannot: its target destroys itself inside it —
+
+```
+433  last GAMMA geometry
+436  PRADYOS_SURFACE_OK 2      <- already out of the live set
+443  first PRADYOS_MOUSE_OK    <- the FIRST click to reach ring 3
+```
+
+so the gate reported "close box click did not close" about a window that no
+longer existed, then clicked the ghost 45 more times because
+`mouse_inject.sh`'s resolver reads an append-only log in which dead windows'
+geometry lives forever.
+
+**This is DDR-911's own failure returning.** Its comment already describes *"49
+correct clicks hit a surface that had already gone"*, and its `GRACE_SECS 4` was
+sized on *"the injector lands its click in about a second"* — an estimate taken
+against a sentinel that does not mean what it looks like, so nothing in the tree
+could show the number was wrong.
+
+### The fix, in two separately measured parts
+
+| build | kernel | `smoke-wmclose` |
+|---|---|---|
+| `f238169` | `56a4c4a35c92cfc5` | 1 / 4 |
+| `b4c2aca` | `0d1bcd234707e56d` | 2 / 4 |
+| + `PRADYOS_INPUT_READY` | `f36de18e4b2eade0` | 3 / 6 |
+| + `GRACE_SECS` 4→12 | `aad7b4c7a2e1a776` | **6 / 6** |
+
+`PRADYOS_INPUT_READY` is printed from *inside* the branch that has just polled
+the pointer, so it cannot be true early. Alone it is still a coin flip: the
+injector's first click and C's 4 s expiry land in the same heartbeat bucket.
+`GRACE_SECS 12` is derived — a *passing* run needs 8 press edges at ~1.2 s per
+injector round — and `smoke-winops` (`TIMEOUT_S=90`) still observes the shrink.
+`0.43⁶ = 0.006`, so 6/6 is not the dice. The 4-second build is the mutation of
+part 2 and has been run: it is the 3/6 row.
+
+### A claim withdrawn
+
+I called DDR-1027 a regression on this gate from **one** local pass against
+**one** local fail. Three more runs each inverted it — the older build fails
+*more* — and the CI failure that started the investigation was on `003dec1`,
+which predates DDR-1026 and DDR-1027 both.
+
+### Deliberately not changed
+
+`smoke-mouse` still waits on `PRADYOS_AMBIANCE_OK`: pointing it at
+`PRADYOS_INPUT_READY` would land its five clicks while ring 3 is polling and
+remove the only coverage DDR-1026's press-edge latch has. The other pointer
+gates are green and are left alone; the sentinel is there for any that flake.
+
+### Not fixed, not understood
+
+**Why the compositor takes ~10 s to reach its first pointer poll.** `mpoll` goes
+2 → 161 → 767 → 1678 across successive heartbeats: the loop is running and its
+early iterations are enormously slow, then accelerate. A desktop that ignores
+the mouse for ten seconds after drawing itself is a real product defect. No
+mechanism named, so §NON-NEGOTIABLE 3 forbids a fix. Left open.
+
+**Residual:** `resolve_geometry()` still cannot tell a live target from a ghost.
+The repair — reject a `PRADYOS_WM_GEOM` line older than the last
+`PRADYOS_SURFACE_GONE` — is named and not built: it changes tooling eight green
+gates depend on. Post-1.0.
+
+### Gates
+
+`smoke-wmclose` 6/6; `smoke-winops`, `smoke-surface`, `smoke-ctrlaltt`,
+`smoke-mouse`, `smoke-drag`, `smoke-focus` all PASS. `hygiene_check.sh` ALL
+THREE PASSED.

@@ -3024,7 +3024,16 @@ smoke-visual: $(IMG) fat-image sfs-image
 smoke-wmclose: $(IMG) fat-image sfs-image
 	@echo "[wmclose] title + close-button gate: boot(GPU+tablet) + QMP click GAMMA's close box..."
 	@rm -f build/wmclose.log /tmp/pwmclose.sock
-	@GEOM_TITLE=GAMMA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=" &
+	@# DDR-1028: wait for PRADYOS_INPUT_READY, not PRADYOS_AMBIANCE_OK. Ambiance
+	@# is printed at compositor.c:1184 with the comment "loop is about to start"
+	@# and says nothing about the pointer being serviced. Measured on a failing
+	@# run of this very gate: ambiance at t=5500, mpoll STILL 0 at t=6000, first
+	@# poll at t=6500 -- so a full second of injected clicks went into a
+	@# compositor that had not read the pointer once. GAMMA's own 4 s grace
+	@# (surfacetest.c:209) expired inside that gap, and the 45 retries then
+	@# clicked a window that no longer existed, which this gate reported as
+	@# "close box click did not close".
+	@GEOM_TITLE=GAMMA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_INPUT_READY "PRADYOS_WM_CLOSE id=" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \

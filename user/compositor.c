@@ -32,6 +32,9 @@ struct key_ev { unsigned char code, mods, down, ascii; };
 
 /* DDR-1027: how many terminals this compositor has launched. */
 static int g_terms;
+
+/* DDR-1028: has the first successful SYS_MOUSE_POLL been announced? */
+static int g_input_said;
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
@@ -1554,6 +1557,26 @@ int main(void) {
          * a button-down elsewhere is a plain click. */
         struct mouse_state ms;
         if (nsi(SYS_MOUSE_POLL, (long)&ms, 0, 0) == 0) {
+            /* DDR-1028: the FIRST successful pointer poll, announced once.
+             *
+             * Every pointer gate's injector waits for PRADYOS_AMBIANCE_OK and
+             * then starts clicking. That sentinel is printed at compositor.c:1184
+             * -- "loop is about to start" -- and it does NOT mean the pointer is
+             * being serviced. Measured on smoke-wmclose: ambiance at t=5500 and
+             * mpoll STILL 0 at t=6000, with the first poll at t=6500. Ring 3 had
+             * not read the pointer once in the first 60 s of guest time, so a
+             * full second of injected clicks went into a compositor that was not
+             * looking. smoke-mouse survives that only because DDR-1026's latch
+             * holds the press until someone finally polls; smoke-wmclose cannot,
+             * because its target self-closes inside the gap.
+             *
+             * This is the honest readiness signal: it is printed from inside the
+             * branch that just read the pointer, so it cannot be true early. */
+            if (!g_input_said) {
+                g_input_said = 1;
+                printf("PRADYOS_INPUT_READY\n");
+                fflush(stdout);
+            }
             if (ms.wheel && focus_id >= 0) {             /* DDR-725: scroll to focus —
                                                           * type 2, delta in arg1
                                                           * (a3 packs arg0<<16|arg1) */
