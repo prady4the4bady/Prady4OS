@@ -8861,7 +8861,10 @@ was on `003dec1`, which predates DDR-1026 and DDR-1027 both.
 
 `PRADYOS_AMBIANCE_OK` is printed at `compositor.c:1184` with its own comment
 reading "loop is about to start". Every pointer gate's injector waits on it. The
-measured gap to the compositor's first `SYS_MOUSE_POLL` is **~10 s**:
+gap to the compositor's first `SYS_MOUSE_POLL`:
+**[CORRECTED BY DDR-1029 — this read "~10 s", from reading `g_ticks` buckets as
+wall seconds. A `SYS_CLOCK` stamp says ONE second. The fix below stands: it rests
+on ordering and on measured outcomes, not on the magnitude.]**
 
 ```
 t=500 … t=6000   mpoll=0     <- ring 3 has not polled the pointer once
@@ -8910,10 +8913,13 @@ the only coverage DDR-1026's latch has.
 
 ### Open, named, not fixed
 
-**Why the compositor takes ~10 s to reach its first pointer poll.** `mpoll` goes
-2 → 161 → 767 → 1678 across heartbeats: the loop runs, early iterations are
-enormously slow, then accelerate. A desktop ignoring the mouse for ten seconds
-after drawing itself is a real defect. No mechanism named, so no fix.
+~~**Why the compositor takes ~10 s to reach its first pointer poll.**~~
+**ANSWERED AND CORRECTED — DDR-1029.** There is no 10 s post-loop gap; that
+figure came from reading `g_ticks` buckets as wall seconds, and the loop's early
+iterations are NOT slow. The cost is **28 wall seconds BEFORE the loop**, in
+`set_ambiance`'s 6-frame transitions: 30 full-screen 1024×768 renders at ~0.93 s
+each. Not fixed — the announce renders back `PRADYOS_AMBIANCE` sentinels that
+gates assert, so cutting them would make those assertions vacuous.
 
 Residual: `resolve_geometry()` cannot tell a live target from a ghost. Repair
 named (reject geometry older than the last `PRADYOS_SURFACE_GONE`), not built —
@@ -8924,3 +8930,67 @@ it changes tooling eight green gates depend on.
 `smoke-wmclose` 6/6; `smoke-winops`, `smoke-surface`, `smoke-ctrlaltt`,
 `smoke-mouse`, `smoke-drag`, `smoke-focus` all PASS. `hygiene_check.sh` ALL
 THREE PASSED.
+
+
+---
+
+## CHECKPOINT — DDR-1029: 30 full-screen renders before the loop; DDR-1028 corrected
+
+**MEASURED + instrument armed. No fix.** Kernel `086fb267171c136b`.
+Pushed as `1d926e4`; this handoff entry follows it (the append in that commit hit
+a bad anchor and was silently dropped — checked and repaired, not assumed).
+
+### Two of my own claims, corrected
+
+DDR-1028 said there was a "measured ~10 s gap" between `PRADYOS_AMBIANCE_OK` and
+the first `SYS_MOUSE_POLL`, and that the loop's "early iterations are enormously
+slow, then accelerate". **Both wrong, from one mistake: reading `g_ticks` buckets
+as wall seconds.** The datum was 1000 ticks between two heartbeats, converted at
+a nominal 100 Hz that does not hold under TCG.
+
+A `SYS_CLOCK` stamp correlated against the heartbeats in the same log:
+
+```
+412  [hb] t=5000
+415  PRADYOS_AMBIANCE_OK                  s=19183
+441  PRADYOS_LOOPSTAMP i=1 at=pre-mouse   s=19184
+442  PRADYOS_INPUT_READY
+455  [hb] t=6000
+```
+
+**One wall second**, inside a single heartbeat interval — and iterations 1, 2, 3
+all complete within it. DDR-1028's fix is unaffected: it rests on an ordering
+fact and on outcomes that were measured, not inferred (1/4, 2/4, 3/6, 6/6).
+
+### Where the time actually goes
+
+```
+pre-ambiance 19351  DAWN 19357  DAY 19362  DUSK 19367  NIGHT 19374  post 19379
+```
+
+**28 wall seconds, all before the loop**, and not five renders:
+`set_ambiance(idx, frames)` (`compositor.c:990`) draws a `frames`-step OKLab
+transition, so 4 announce + 1 settle = **5 × 6 = 30 full-screen 1024×768
+render+present, ~0.93 s each**.
+
+### Why no fix
+
+The 24 announce renders each emit `PRADYOS_AMBIANCE <name>` and gates assert
+those sentinels; cutting the renders while keeping the prints makes every one of
+those assertions **vacuous** — the failure DDR-1012 removed from `smoke-horizon`
+and DDR-973 from `smoke-fat32-multicluster`. Options named (leave it / lower
+`frames` / assert on framebuffer readback); two of the three move timing eight
+green gates depend on.
+
+### The instrument
+
+`PRADYOS_LOOPSTAMP i=<iter> at=<phase> s=<secs>`, bounded to 3 iterations —
+eleven lines a boot. Unbounded it would print thousands of lines a second and
+slow the loop it measures (DDR-941's rule). `SYS_CLOCK`'s one-second resolution
+suits a ~28 s quantity and is recorded as too coarse to separate iterations 1–3:
+a limit, not a result.
+
+### Gates
+
+`smoke-wmclose`, `smoke-mouse`, `smoke-ctrlaltt`, `smoke-winops` PASS;
+`hygiene_check.sh` ALL THREE PASSED.
