@@ -84,7 +84,55 @@ Also checked and excluded: `virtio_input_state()` does **not** consume on read
 (`virtio_input.c`) — it returns `g_buttons` and leaves it set, so a held button
 is not cleared by the act of polling.
 
-## 5. What is NOT established
+## 5. ANSWERED — `mpollwin=0`. Ring 3 does not poll while the button is down.
+
+Two further counters settle §5's question, and they contradict what §4 let me
+infer.
+
+- **`btnhold`** — the widest press→release span, in guest ticks.
+- **`mpollwin`** — `sys_mouse_poll_count()` sampled at the press edge and again
+  at the release: literally *"how many times did ring 3 ask while the button was
+  down"*.
+
+On a **FAILING** run (kernel `1d5122b64499d4d7`, reproduced locally):
+
+```
+btnedge=5 mpoll=96227 mbtn=0 btn1drain=0 btnhold=20 mpollwin=0
+```
+
+And the matching CI failure on `249da47` (kernel `2605f6d2b571e746`), the first
+CI run carrying these counters:
+
+```
+btnedge=5 mpoll=159842 mbtn=0 btn1drain=0
+```
+
+**`btnhold=20` ticks is 200 ms** — the button is held for exactly the interval
+the injector holds it, so the window is *not* sub-millisecond as §4 suggested.
+**`mpoll` is ~96,000–160,000** — ring 3 polls roughly 750–1,400 times a second.
+**`mpollwin=0`** — and **not one** of those polls falls inside the window, five
+presses running.
+
+Those three cannot all be true of a uniformly-polling client: ~150 polls should
+land in each 200 ms press. **Ring 3 is not polling during the press window at
+all**, however much it polls overall — the two are anti-correlated.
+
+**`mpoll` being large also excludes the other family outright:** this is not
+"the compositor stopped asking" or a liveness failure. It asks constantly, just
+never then.
+
+**Why it stops polling exactly then is a RING-3 question and is not answered
+here.** The natural suspect is the compositor's own per-event work — the same
+QMP sequence delivers absolute motion before the click, and a full composite
+could span the window — but that is a hypothesis, not a measurement, and the two
+hypotheses I have already formed in this DDR were both wrong.
+
+**What IS established, and it is enough to justify the repair:** a state-only
+`SYS_MOUSE_POLL` cannot deliver a click to a client that is not looking during
+the press, *whatever* keeps it from looking. That is the API defect DDR-941
+described as "invisible BY CONSTRUCTION", now measured rather than reasoned.
+
+## 5b. What is still NOT established
 
 **Why only one press in five is ever visible to a poll.** With ~1,800 polls/s and
 a 200 ms hold, a press should span roughly 350 polls, and five presses ~1,750.

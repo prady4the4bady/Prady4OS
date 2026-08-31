@@ -382,6 +382,10 @@ static void timer_tick(struct regs *r) {
           kputs(" mbtn=");  kputdec(sys_mouse_poll_btn_count()); }
         { extern uint32_t virtio_input_btn_same_drain(void);
           kputs(" btn1drain="); kputdec(virtio_input_btn_same_drain()); }
+        { extern uint32_t virtio_input_btn_hold_max(void);
+          kputs(" btnhold="); kputdec(virtio_input_btn_hold_max()); }
+        { extern uint32_t virtio_input_mpoll_win(void);
+          kputs(" mpollwin="); kputdec(virtio_input_mpoll_win()); }
         /* DDR-942: rqdepth = entries still sitting in ready queues, rqcpus =
          * how many CPUs hold at least one. Depth staying >0 while a probe
          * reports "never ran" means the queue is not being drained. */

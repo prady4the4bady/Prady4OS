@@ -47,6 +47,31 @@ static int g_up;
 static volatile int      g_abs_x, g_abs_y;   /* raw axis value [0, 32767] */
 static volatile uint32_t g_buttons;          /* bit0 = left, bit1 = right, bit2 = middle */
 static volatile uint32_t g_btn_edges;        /* DDR-941: press edges seen by the driver */
+/* DDR-1025 §5 follow-up: HOW LONG is the button actually down, in guest ticks?
+ * The injector holds it for 200 ms (20 ticks at 100 Hz), yet a PASSING run sees
+ * exactly one poll out of ~205,000 observe it -- which is a window about one
+ * poll wide, not 20 ticks. These record the press tick and the widest
+ * press->release span seen, so "the window is genuinely sub-tick" and "ring 3
+ * was looking elsewhere for 200 ms" stop being indistinguishable. */
+static volatile uint64_t g_btn_down_tick;
+static volatile uint32_t g_btn_hold_max;
+uint32_t virtio_input_btn_hold_max(void) {
+    return __atomic_load_n(&g_btn_hold_max, __ATOMIC_RELAXED);
+}
+
+/* THE decisive counter. btnhold says the button is down for ~21 ticks (210 ms),
+ * and mpoll says ring 3 polls ~750 times a second -- so ~150 polls should fall
+ * inside each press. mbtn=0 says none of them saw it. Those cannot both be true
+ * unless ring 3 is not polling DURING the window, however much it polls overall.
+ * mpollwin samples the syscall counter at the press and again at the release:
+ * it is exactly "how many times ring 3 asked while the button was down". */
+extern uint32_t sys_mouse_poll_count(void);
+static volatile uint32_t g_mpoll_at_press;
+static volatile uint32_t g_mpoll_win_max;
+uint32_t virtio_input_mpoll_win(void) {
+    return __atomic_load_n(&g_mpoll_win_max, __ATOMIC_RELAXED);
+}
+
 
 /* DDR-941: read-only accessor (NOT draining — the compositor-side count it is
  * compared against is cumulative too, and a drained counter cannot be compared
@@ -80,8 +105,16 @@ static void fold_event(const struct virtio_input_event *e) {
              * count against the compositor's PRADYOS_BTN_STATE transitions is
              * what separates "the event never arrived" from "it arrived and was
              * coalesced before ring 3 looked". */
-            if (e->value && !(g_buttons & bit))
+            if (e->value && !(g_buttons & bit)) {
                 __atomic_add_fetch(&g_btn_edges, 1, __ATOMIC_RELAXED);
+                g_btn_down_tick  = g_ticks;                  /* DDR-1025 §5 */
+                g_mpoll_at_press = sys_mouse_poll_count();
+            } else if (!e->value && (g_buttons & bit) && g_btn_down_tick) {
+                uint64_t held = g_ticks - g_btn_down_tick;
+                if (held > g_btn_hold_max) g_btn_hold_max = (uint32_t)held;
+                uint32_t win = sys_mouse_poll_count() - g_mpoll_at_press;
+                if (win > g_mpoll_win_max) g_mpoll_win_max = win;
+            }
             if (e->value) g_buttons |= bit; else g_buttons &= ~bit;
         }
         break;
@@ -99,6 +132,7 @@ static volatile uint32_t g_btn_same_drain;
 uint32_t virtio_input_btn_same_drain(void) {
     return __atomic_load_n(&g_btn_same_drain, __ATOMIC_RELAXED);
 }
+
 
 /* Completion body, shared by INTx and MSI-X (DDR-714C2). */
 static void input_complete(void) {
