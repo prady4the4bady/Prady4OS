@@ -8635,3 +8635,60 @@ the *identical commit* passing is the cleanest demonstration that this is
 intermittent. **No rate is claimed** — 5 runs with 1 failure gives a 95% interval
 of roughly [0.5%, 72%], which is useless. Keep accumulating; the tally is free
 while the kernel does not change.
+
+---
+
+## CHECKPOINT 2026-08-31 01:0x UTC — DDR-1025: the mouse gate's real margin
+
+### `smoke-mouse` has been passing on ONE observation out of FIVE
+
+Second shard-2 failure, again on a documentation-only commit. PR #17 comment
+5471708345 had committed to instrumenting rather than retrying if it recurred, so
+two counters went in beside `btnedge` in the heartbeat.
+
+**On a PASSING run:** `btnedge=5 mpoll=205573 mbtn=1 btn1drain=0`
+
+Five press edges reached the driver. Across **~205,000** ring-3 polls, **exactly
+one** ever returned a button down. **The pointer path drops four of five injected
+clicks even when the gate is green.** A CI run where zero get through is the same
+behaviour one draw further into the tail — it needs no new defect, and it fully
+explains **2 failures in 6 suite-runs** on kernel `53fe179c85a7c3b5`.
+
+**This gate has never had the margin its green implied.**
+
+### `btn1drain=0` refuted my own hypothesis
+
+I thought press and release were being coalesced into one virtqueue drain —
+DDR-941's "invisible BY CONSTRUCTION" case. The counter says they are **never**
+coalesced. The instrument was built to test that idea and killed it, the same
+service DDR-1010's probe did when it excluded its own SWAPGS path.
+
+Also checked and excluded: `virtio_input_state()` does **not** consume on read;
+and a local run with the click hold cut 200 ms → 4 ms still **passed** with
+`PRADYOS_BTN_STATE buttons=1`, so "the press was too brief" would need CI to be
+~50× slower than local.
+
+### NOT established
+
+**Why only one press in five is visible to a poll.** ~1,800 polls/s over a 200 ms
+hold should span ~350 polls; five presses ~1,750. One was seen. Nothing above
+accounts for that gap, so §NON-NEGOTIABLE 3 forbids a fix.
+
+### The fix that is NOT being made
+
+An **edge latch** in `SYS_MOUSE_POLL` — remember a press occurred since the last
+poll — would repair it, and it is a genuine product improvement: a desktop whose
+pointer path drops 80% of clicks is a defect a user hits, not just a flaky gate.
+DDR-941's note is really a statement that the current API *cannot express a
+click*.
+
+Not done here because it is a **kernel ABI semantic change**, resting on a
+mechanism §5 says is not understood, with the release tag held. **A timeout or
+retry bump is explicitly not the alternative** — that makes the symptom vanish
+while measuring less (DDR-1002, DDR-1012).
+
+### Gates on `2605f6d2b571e746`
+
+`smoke-mouse`, `smoke-input`, `smoke-compositor` — all PASS, one hash verified
+before and after each. `hygiene_check.sh` ALL THREE PASSED. Size unchanged at
+1,134,986 B; the counters print only inside the existing heartbeat line.

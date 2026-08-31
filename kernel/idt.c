@@ -373,6 +373,15 @@ static void timer_tick(struct regs *r) {
           kputs(" rqmiss="); kputdec(rm);
           kputs(" rqmst=");  kputdec(rs);
           kputs(" btnedge="); kputdec(virtio_input_btn_edges()); }
+        /* DDR-1025: beside btnedge, what ring 3 actually asked for and got.
+         * btnedge rising while mbtn stays 0 means the press never crossed the
+         * ring boundary; mpoll frozen means ring 3 stopped asking at all. */
+        { extern uint32_t sys_mouse_poll_count(void);
+          extern uint32_t sys_mouse_poll_btn_count(void);
+          kputs(" mpoll="); kputdec(sys_mouse_poll_count());
+          kputs(" mbtn=");  kputdec(sys_mouse_poll_btn_count()); }
+        { extern uint32_t virtio_input_btn_same_drain(void);
+          kputs(" btn1drain="); kputdec(virtio_input_btn_same_drain()); }
         /* DDR-942: rqdepth = entries still sitting in ready queues, rqcpus =
          * how many CPUs hold at least one. Depth staying >0 while a probe
          * reports "never ran" means the queue is not being drained. */

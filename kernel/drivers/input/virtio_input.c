@@ -89,16 +89,35 @@ static void fold_event(const struct virtio_input_event *e) {
     }
 }
 
+/* DDR-1025: does a single IRQ drain carry BOTH the press and the release?
+ * SYS_MOUSE_POLL exposes current state, not an event queue (DDR-941), so if one
+ * drain sets and then clears the button, ring 3 can NEVER observe it -- not
+ * because it polled too slowly, but because there was no instant between the two
+ * at which it could have looked. The 200 ms the injector waits between the two
+ * QMP commands is irrelevant if the guest drains both in one go. */
+static volatile uint32_t g_btn_same_drain;
+uint32_t virtio_input_btn_same_drain(void) {
+    return __atomic_load_n(&g_btn_same_drain, __ATOMIC_RELAXED);
+}
+
 /* Completion body, shared by INTx and MSI-X (DDR-714C2). */
 static void input_complete(void) {
     uint32_t len;
     int head;
     int budget = 256;                     /* bound work per IRQ */
+    int saw_press = 0;                    /* DDR-1025 */
     while (budget-- > 0 && (head = virtq_pop_used(&g_vq, &len)) >= 0) {
         uint64_t buf = g_vq.desc[head].addr;
         virtq_free_chain(&g_vq, head);
-        if (len >= sizeof(struct virtio_input_event))
+        if (len >= sizeof(struct virtio_input_event)) {
+            uint32_t b0 = g_buttons;
             fold_event((const struct virtio_input_event *)(uintptr_t)buf);
+            /* DDR-1025: a press then a release inside ONE drain leaves no
+             * instant at which ring 3 could have polled a button-down state. */
+            if (!b0 && g_buttons) saw_press = 1;
+            if (saw_press && b0 && !g_buttons)
+                __atomic_add_fetch(&g_btn_same_drain, 1, __ATOMIC_RELAXED);
+        }
         struct virtq_buf rb = { buf, sizeof(struct virtio_input_event), 1 };  /* re-arm */
         int h = virtq_add(&g_vq, &rb, 1);
         if (h >= 0)

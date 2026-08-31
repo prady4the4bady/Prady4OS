@@ -1483,6 +1483,38 @@ chosen for being the heaviest `kfree` traffic in the suite).
 
 **OPEN-13 is NOT closed.** One capture, no mechanism named. The change is that
 the next occurrence names two call sites instead of a generic size class.
+
+---
+
+## DDR-1025 — `smoke-mouse` has been passing on a 1-in-5 margin
+
+**MEASURED, no fix.** Kernel `2605f6d2b571e746`, 1,134,986 B, `-Werror` clean.
+
+`smoke-mouse` failed on shard 2 on two documentation-only commits, and a
+`workflow_dispatch` re-run of the identical commit passed — **2 failures in 6
+suite-runs** on kernel `53fe179c85a7c3b5`. Two counters were added instead of a
+retry, as PR #17 comment 5471708345 committed to.
+
+**On a PASSING run:** `btnedge=5 mpoll=205573 mbtn=1 btn1drain=0`. Five press
+edges reached the driver; across ~205,000 ring-3 polls **exactly one** returned a
+button down. **The pointer path drops four of five clicks even when the gate is
+green** — so a run where zero get through needs no new defect, and this gate has
+never had the margin its green implied.
+
+**`btn1drain=0` refuted my own hypothesis:** press and release are never
+coalesced into one virtqueue drain, so DDR-941's "invisible BY CONSTRUCTION"
+case is not what happens here. `virtio_input_state()` does not consume on read
+either. A local experiment shortening the click hold 200 ms → 4 ms still passed.
+
+**Why one press in five is visible is NOT established** (~1,800 polls/s over a
+200 ms hold should span ~350 polls), so §NON-NEGOTIABLE 3 forbids a fix. The
+repair would be an **edge latch** in `SYS_MOUSE_POLL` — a genuine product
+improvement, since a desktop dropping 80% of clicks is user-visible — but it is a
+kernel ABI semantic change resting on an unexplained mechanism, and a
+timeout/retry bump is explicitly not the alternative.
+
+`smoke-mouse`, `smoke-input`, `smoke-compositor` all PASS; `hygiene_check.sh`
+all three PASSED.
  `READ_FILE` (1015) · `DELETE_FILE` (1016) ·
 `QUERY_MEMORY` (1018) · `REWRITE_AGENT_CODE` (842) · `PROPOSE_HYPOTHESIS` +
 `EVOLVE_GENOME` (1020); `SEND_IPC` and `RUN_EXPERIMENT` deferred.

@@ -51,15 +51,36 @@ static long sys_key_poll(long a1, long a2, long a3, long a4, long a5, long a6) {
     return n;
 }
 
+/* DDR-1025: how many times ring 3 has ASKED for pointer state, and how many of
+ * those answers carried a button down. The heartbeat already prints btnedge --
+ * press edges the DRIVER saw -- and a CI failure of smoke-mouse showed
+ * btnedge=5 with ZERO PRADYOS_BTN_STATE lines from the compositor across ~50 s.
+ * That leaves exactly two families, and these two counters separate them:
+ *
+ *   mpoll frozen        -> ring 3 stopped asking. A compositor liveness problem.
+ *   mpoll rising, mbtn 0 -> it asked and the answer had no button. The state was
+ *                           lost between the driver's edge count and this read.
+ *
+ * Counted here rather than in the driver because the question is about what
+ * crosses the ring boundary, which is exactly this function. */
+static volatile uint32_t g_mouse_polls;
+static volatile uint32_t g_mouse_poll_btn;
+
+uint32_t sys_mouse_poll_count(void)     { return __atomic_load_n(&g_mouse_polls, __ATOMIC_RELAXED); }
+uint32_t sys_mouse_poll_btn_count(void) { return __atomic_load_n(&g_mouse_poll_btn, __ATOMIC_RELAXED); }
+
 static long sys_mouse_poll(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
+    __atomic_add_fetch(&g_mouse_polls, 1, __ATOMIC_RELAXED);
     struct mouse_state ms;
     int x, y;
     uint32_t btn;
     if (virtio_input_state(&x, &y, &btn) != 0)
         return -ENODEV;
     ms.x = x; ms.y = y; ms.buttons = btn;
+    if (btn)
+        __atomic_add_fetch(&g_mouse_poll_btn, 1, __ATOMIC_RELAXED);
     ms.wheel = virtio_input_wheel();      /* DDR-725: detents since last poll */
     if (copyout((void __user *)a1, &ms, sizeof ms) < 0)
         return -EFAULT;
