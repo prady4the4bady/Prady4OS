@@ -1519,6 +1519,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'action approve 1\n'; sleep 0.6; \
 	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
 	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
+	  printf 'run /ARGTEST.ELF alpha beta\n'; sleep 1.5; \
 	  printf 'jobs\n'; sleep 0.6; \
 	  printf 'fg %%1\n'; sleep 1.5; \
 	  printf 'jobs\n'; sleep 1.2; \
@@ -1537,6 +1538,13 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# BOTH names must survive in the file. If `2>>` were wired to O_TRUNC the
 	@# second command would overwrite the first, leaving only NOPE55b — which a
 	@# mere "the file is non-empty" check would happily accept.
+	@# DDR-1032b: the shell now hands `run` its arguments through to execve. This
+	@# is the END-TO-END arm -- PRISM -> fork -> execve -> the kernel's marshaller
+	@# -> a real program reading its own stack. smoke-execve-argv covers the kernel
+	@# half with a purpose-built launcher; this covers the half a user actually
+	@# types, which the launcher cannot: it calls execve directly.
+	@grep -q 'PRADYOS_ARGV=alpha' build/shell_serial.log || { echo "[shell] FAIL: run did not pass its arguments through execve (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log || echo '(no PRADYOS_ARG lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'PRADYOS_ARGV=beta' build/shell_serial.log || { echo "[shell] FAIL: run truncated its argument vector (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@# DDR-888 (item 36): the agent DSL. PRISM holds neither CAP_AGENT nor

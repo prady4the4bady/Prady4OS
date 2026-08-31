@@ -9178,3 +9178,23 @@ left `kernel.bin` bit-identical and the gate re-ran the old image. Fixed.
 
 **Not done:** no auxv beyond `AT_PAGESZ`; PRISM still calls `execve(path, 0, 0)`,
 so passing shell arguments through `run` is a further change on top of this.
+
+### DDR-1032b — PRISM's `run` passes its arguments through
+
+Shipped with DDR-1032 rather than deferred: a kernel marshaller with no caller is
+untested where it matters. `do_run`/`do_run_bg` now take the run's own
+NULL-terminated vector (`av[0]` = the path, doubling as the child's `argv[0]`,
+the `execv(3)` convention), bounded by PRISM's existing 16-slot `argv[]`.
+
+`smoke-shell` gained the end-to-end arm `run /ARGTEST.ELF alpha beta`, asserting
+**both** `alpha` and `beta` — the second catches a vector passed but truncated.
+This is the half `smoke-execve-argv` cannot cover: its launcher calls `execve`
+directly, so it never exercises the path a user types.
+
+Measured: `PRADYOS_ARGC=3 / /ARGTEST.ELF / alpha / beta`, and no `PRADYOS_ENVP`
+line, because PRISM has no environment — correct, and visible.
+M3 (PRISM back to `execve(path, 0, 0)`, kernel `d042b1efbb0ca110`) fails exactly
+that arm: `ARGC=1`, no `alpha`/`beta`.
+
+Clean kernel `5c90a1c0bfcc5455`. `smoke-shell`, `smoke-execve-argv`,
+`smoke-sysexec` PASS; `hygiene_check.sh` all three PASSED.

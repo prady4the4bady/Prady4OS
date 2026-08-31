@@ -276,23 +276,27 @@ static void job_record(long pid, const char *cmdline) {
     printf("[%d] %ld\n", j->id, pid);
 }
 
-static void do_run_bg(const char *path) {
+/* DDR-1032b: `av` is the run's own NULL-terminated vector -- av[0] is the path
+ * and doubles as the child's argv[0], which is the execv(3) convention. Before
+ * DDR-1032 the kernel discarded argv entirely, so `run /X a b` and `run /X` were
+ * the same call; passing a vector here is what makes them differ. */
+static void do_run_bg(char *const *av) {
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid == 0) {
-        nsi(SYS_EXECVE, (long)path, 0, 0);
+        nsi(SYS_EXECVE, (long)av[0], (long)av, 0);
         nsi(SYS_EXIT, 127, 0, 0);
     }
     if (kid < 0) {
         fprintf(stderr, "run: fork failed\n");
         return;
     }
-    job_record(kid, path);              /* parent does NOT wait — that is `&` */
+    job_record(kid, av[0]);             /* parent does NOT wait — that is `&` */
 }
 
-static void do_run(const char *path) {
+static void do_run(char *const *av) {
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid == 0) {
-        nsi(SYS_EXECVE, (long)path, 0, 0);
+        nsi(SYS_EXECVE, (long)av[0], (long)av, 0);
         nsi(SYS_EXIT, 127, 0, 0);          /* execve failed: child gives up */
     }
     if (kid < 0) {
@@ -570,9 +574,18 @@ int main(void) {
             if (argc < 2) do_cat_stdin();        /* DDR-780: `... | cat` */
             else do_cat(argv[1]);
         } else if (!strcmp(cmd, "run")) {
-            if (argc < 2) fprintf(stderr, "run: usage: run <path> [&]\n");
-            else if (background) do_run_bg(argv[1]);   /* DDR-881 */
-            else do_run(argv[1]);
+            if (argc < 2) fprintf(stderr, "run: usage: run <path> [args...] [&]\n");
+            else {
+                /* DDR-1032b: hand the child everything after `run`, path first.
+                 * Bounded by argv[]'s own 16 slots, less one for the NULL. */
+                char *rv[16];
+                int n = 0;
+                for (int i = 1; i < argc && argv[i] && n < 15; i++)
+                    rv[n++] = argv[i];
+                rv[n] = 0;
+                if (background) do_run_bg(rv);         /* DDR-881 */
+                else do_run(rv);
+            }
         } else if (!strcmp(cmd, "ls")) {
             const char *dir = (argc > 1) ? argv[1] : "/";   /* DDR-742 */
             char nm[256];
