@@ -35,6 +35,7 @@ static int g_terms;
 
 /* DDR-1028: has the first successful SYS_MOUSE_POLL been announced? */
 static int g_input_said;
+
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
@@ -70,6 +71,33 @@ static inline long nsi(long n, long a1, long a2, long a3) {
                      : "a"(n), "D"(a1), "S"(a2), "d"(a3)
                      : "rcx", "r11", "memory");
     return r;
+}
+
+/* DDR-1029 instrument: where do the first loop iterations spend their time?
+ *
+ * DDR-1028 measured a ~10 s gap between PRADYOS_AMBIANCE_OK and this
+ * compositor's FIRST SYS_MOUSE_POLL, and named it as the common cause behind
+ * DDR-1025, DDR-1026 and an intermittent smoke-wmclose -- but it did not
+ * establish WHERE the time goes, so §NON-NEGOTIABLE 3 forbade a fix. mpoll
+ * climbing 2 -> 161 -> 767 -> 1678 across successive heartbeats says the loop is
+ * running and its early iterations are enormously slow, then accelerate.
+ *
+ * SYS_CLOCK is seconds, which is coarse -- and it is the right resolution here
+ * precisely because the thing being measured is ~10 s. A finer clock would add
+ * a vDSO dependency to answer a question whole seconds already answer.
+ *
+ * Bounded to the first LOOPSTAMP_ITERS iterations so this cannot become a
+ * per-frame print: an unconditional stamp would emit thousands of lines a
+ * second and slow the very loop it measures, which is the mistake DDR-941's
+ * on-change PRADYOS_BTN_STATE rule exists to prevent. */
+#define LOOPSTAMP_ITERS 3
+static int g_loop_iter;
+static void loopstamp(const char *phase) {
+    if (g_loop_iter > LOOPSTAMP_ITERS)
+        return;
+    printf("PRADYOS_LOOPSTAMP i=%d at=%s s=%ld\n",
+           g_loop_iter, phase, nsi(SYS_CLOCK, 0, 0, 0));
+    fflush(stdout);
 }
 
 /* ---- 8x8 font: only the glyphs the mode labels use (MSB = leftmost pixel) --- */
@@ -1178,12 +1206,15 @@ int main(void) {
 
     /* DDR-709: one-time demo cycle through the 4 ambiances (OKLab transitions),
      * then settle on the time-of-day ambiance from the RTC. */
+    loopstamp("pre-ambiance");        /* DDR-1029: five full-screen renders follow */
     for (int k = 0; k < 4; k++) {
         set_ambiance(k, 6);
         printf("PRADYOS_AMBIANCE %s\n", AMB[k].name);
         fflush(stdout);
+        loopstamp(AMB[k].name);       /* DDR-1029: cost of ONE ambiance render */
     }
     set_ambiance(ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0)), 6);   /* settle on time-of-day */
+    loopstamp("post-ambiance");
     printf("PRADYOS_AMBIANCE_OK\n");                               /* loop is about to start */
     fflush(stdout);
 
@@ -1240,6 +1271,8 @@ int main(void) {
         pub_w[i] = pub_h[i] = 0xFFFF;
     }
     for (;;) {
+        g_loop_iter++;
+        loopstamp("top");
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
         int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
         if (amb != g_cur_amb) set_ambiance(amb, 8);
@@ -1429,6 +1462,7 @@ int main(void) {
          * stream before the byte stream: the driver no longer emits text for a
          * non-Shift chord (DDR-992 §2), so these are disjoint and Super+M can
          * no longer be undone by the plain-'m' branch below. */
+        loopstamp("pre-keys");
         {
             struct key_ev kev[16];
             long ne = nsi(SYS_KEY_POLL, (long)kev, 16, 0);
@@ -1555,6 +1589,7 @@ int main(void) {
         /* Pointer (DDR-705/710): button-down on a window title bar starts a drag
          * (raise+focus, then move the window to follow the pointer until release);
          * a button-down elsewhere is a plain click. */
+        loopstamp("pre-mouse");
         struct mouse_state ms;
         if (nsi(SYS_MOUSE_POLL, (long)&ms, 0, 0) == 0) {
             /* DDR-1028: the FIRST successful pointer poll, announced once.

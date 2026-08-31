@@ -1675,8 +1675,10 @@ first, which is the check doing its job.
 The common cause behind DDR-1025, DDR-1026 and an intermittent `smoke-wmclose`.
 Every pointer gate's injector waits on `PRADYOS_AMBIANCE_OK`, printed at
 `compositor.c:1184` with its own comment reading *"loop is about to start"*.
-Measured, there is a **~10 s gap** before the compositor's first
-`SYS_MOUSE_POLL`:
+There is a gap before the compositor's first `SYS_MOUSE_POLL`:
+**[DDR-1029 CORRECTS THE SIZE: this paragraph originally read "~10 s", from
+reading `g_ticks` buckets as wall seconds. A `SYS_CLOCK` stamp says ONE second.
+The fix below is unaffected — it rests on ordering and on measured outcomes.]**
 
 ```
 t=500 … t=6000   mpoll=0     <- ring 3 has not polled the pointer once
@@ -1753,3 +1755,58 @@ gates depend on. Post-1.0.
 `smoke-wmclose` 6/6; `smoke-winops`, `smoke-surface`, `smoke-ctrlaltt`,
 `smoke-mouse`, `smoke-drag`, `smoke-focus` all PASS. `hygiene_check.sh` ALL
 THREE PASSED.
+
+
+## DDR-1029 — the compositor's boot cost is 30 full-screen renders
+
+**MEASURED + instrument armed. No fix.** Kernel `086fb267171c136b`.
+**Corrects DDR-1028 §2.1 and §4.**
+
+DDR-1028 claimed a "~10 s gap" between `PRADYOS_AMBIANCE_OK` and the first
+`SYS_MOUSE_POLL`, and that the loop's "early iterations are enormously slow,
+then accelerate". Both came from **reading `g_ticks` buckets as wall seconds** —
+the datum was 1000 ticks between two heartbeats, converted at a nominal 100 Hz
+that does not hold under TCG. A `SYS_CLOCK` stamp correlated against the
+heartbeats in the same log:
+
+```
+412  [hb] t=5000
+415  PRADYOS_AMBIANCE_OK                              s=19183
+441  PRADYOS_LOOPSTAMP i=1 at=pre-mouse               s=19184
+442  PRADYOS_INPUT_READY
+455  [hb] t=6000
+```
+
+**One wall second, inside a single heartbeat interval** — and iterations 1, 2, 3
+all complete within it. DDR-1028's fix is unaffected: it rests on an ordering
+fact and on measured outcomes (1/4, 2/4, 3/6, 6/6), not on the magnitude.
+
+**The real cost**, stamped per step:
+
+```
+pre-ambiance 19351  DAWN 19357  DAY 19362  DUSK 19367  NIGHT 19374  post 19379
+```
+
+28 wall seconds, all before the loop. And not five renders:
+`set_ambiance(idx, frames)` (`compositor.c:990`) draws a `frames`-step OKLab
+transition, so 4 announce + 1 settle = **5 × 6 = 30 full-screen 1024×768
+render+present at ~0.93 s each**. Nothing about the frame loop is pathological;
+the desktop takes half a minute to become ready, and every pointer gate's
+injector, readiness sentinel and `surfacetest`'s self-closing window C are
+sequenced against that.
+
+**No fix.** The 24 announce renders each emit `PRADYOS_AMBIANCE <name>` and
+gates assert those sentinels; cutting the renders while keeping the prints would
+make every one of those assertions vacuous — the failure DDR-1012 removed from
+`smoke-horizon` and DDR-973 from `smoke-fat32-multicluster`. Options named
+(leave it / lower `frames` / assert on framebuffer readback); none is a one-line
+change days from a release, and two of them move timing eight green gates depend
+on.
+
+Instrument bounded to 3 iterations (unbounded it would print thousands of lines
+a second and slow the loop it measures — DDR-941's rule). `SYS_CLOCK`'s
+one-second resolution is right for a ~28 s quantity and is recorded as too
+coarse to separate iterations 1–3: a limit, not a result.
+
+Gates: `smoke-wmclose`, `smoke-mouse`, `smoke-ctrlaltt`, `smoke-winops` PASS;
+`hygiene_check.sh` all three PASSED.
