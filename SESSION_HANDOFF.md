@@ -8692,3 +8692,79 @@ while measuring less (DDR-1002, DDR-1012).
 `smoke-mouse`, `smoke-input`, `smoke-compositor` — all PASS, one hash verified
 before and after each. `hygiene_check.sh` ALL THREE PASSED. Size unchanged at
 1,134,986 B; the counters print only inside the existing heartbeat line.
+
+---
+
+## CHECKPOINT — DDR-1026: the press-edge latch, and DDR-1025 §5 corrected
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `56a4c4a35c92cfc5`,
+1,134,986 B, `-Werror` clean.
+
+### The correction
+
+The section above says "why only one press in five is visible to a poll" is not
+established, and reasons from ~1,800 polls/s. **That reasoning is wrong, and the
+first run of the latch kernel shows why.** `mpoll` is cumulative over the whole
+boot; the failure is at the start of it:
+
+```
+btnedge=3 mpoll=0 mbtn=0     <- THREE presses landed. Ring 3 has polled 0 times.
+btnedge=5 mpoll=1 mbtn=1     <- the first poll of the ENTIRE boot, after all five
+```
+
+Ring 3 was not missing each window. It had not polled once. All five injected
+clicks land before the compositor's input loop takes its first sample, and the
+~1,000 polls/s begins afterwards. `mpollwin=0` was a tautology over a cumulative
+counter, not an anti-correlation.
+
+`smoke-mouse` fires its clicks on `PRADYOS_AMBIANCE_OK` — the ambiance render
+finishing, not input being serviced — and `mouse_inject.sh` has carried DDR-910's
+outcome-driven retry for precisely this situation since DDR-910, which this gate
+alone never adopted.
+
+### Why the latch shipped anyway, rather than the retry argument
+
+Passing `PRADYOS_MOUSE_OK` as the injector's `$4` would green the gate by
+clicking until one landed, and leave the behaviour untouched: a real user's
+clicks in that window would still be gone. That is the retry bump the section
+above rules out, and the ruling still holds.
+
+`g_btn_latch`: one word, set on the same edge that increments `g_btn_edges`,
+drained read-and-clear at the syscall. `virtio_input_state()` stays **pure** —
+`virtio_input_wheel()` (DDR-725) has used read-and-clear since Layer 7 for the
+same reason. The injector is deliberately **not** changed, so the dead-window
+case the latch exists for stays inside the gate.
+
+### Measurements
+
+| build | kernel | result |
+|---|---|---|
+| fixed | `56a4c4a35c92cfc5` | **PASS 4/4**, identical `mbtn=1 mouse_ok=1` |
+| M1 (drain, do not deliver) | `698ac2d1ceaad30d` | **FAIL**, `mbtn=0 mouse_ok=0` |
+
+4/4 identical, where the gate used to fail ~2 runs in 6: a latch cannot be lost
+to timing.
+
+**Sixth dead-arm instance, and this one was measured, not reasoned.**
+`mouse_ok >= 1` implies `mbtn >= 1`, so with the ring-3 arm first the new
+kernel-side arm could never fire — M1's first run tripped `PRADYOS_MOUSE_OK` and
+never reached it. The kernel arm now runs first; the pair splits the failure.
+
+### Residual, recorded not fixed
+
+Bitmask, not counter: repeated clicks between two polls still coalesce, and a
+missed **release** is still missed (that needs an event queue). The latched press
+reports the current pointer position, not the position at the press edge.
+
+### Gates on `56a4c4a35c92cfc5`
+
+`smoke-mouse` 4/4, `smoke-drag`, `smoke-agent-click`, `smoke-resizeall`,
+`smoke-shell` 5/5 (73 forbidden patterns), `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity` — all PASS.
+`hygiene_check.sh` ALL THREE PASSED.
+
+### Unchanged
+
+`v1.0.0` stays untagged and STEP 3 (`main` promotion) unstarted, per the
+operator decision to hold the tag while OPEN-2 is root-caused. OPEN-1, OPEN-12,
+OPEN-13 remain open with their instruments armed.

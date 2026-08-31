@@ -47,6 +47,14 @@ static int g_up;
 static volatile int      g_abs_x, g_abs_y;   /* raw axis value [0, 32767] */
 static volatile uint32_t g_buttons;          /* bit0 = left, bit1 = right, bit2 = middle */
 static volatile uint32_t g_btn_edges;        /* DDR-941: press edges seen by the driver */
+/* DDR-1026: press edges NOT YET REPORTED to ring 3. SYS_MOUSE_POLL exposes
+ * current state, not an event queue (DDR-941), so a press is observable only if
+ * a poll happens to land inside the 200 ms it is held -- and DDR-1025 measured
+ * mpollwin=0: across five presses, ZERO of ring 3's ~1,000 polls per second
+ * fell inside a window. Polling harder is not the lever. This bit is set on the
+ * same edge that increments g_btn_edges and drained read-and-clear at the
+ * syscall, so a completed press+release still reaches ring 3 as one click. */
+static volatile uint32_t g_btn_latch;
 /* DDR-1025 §5 follow-up: HOW LONG is the button actually down, in guest ticks?
  * The injector holds it for 200 ms (20 ticks at 100 Hz), yet a PASSING run sees
  * exactly one poll out of ~205,000 observe it -- which is a window about one
@@ -79,6 +87,15 @@ uint32_t virtio_input_mpoll_win(void) {
 uint32_t virtio_input_btn_edges(void) {
     return __atomic_load_n(&g_btn_edges, __ATOMIC_RELAXED);
 }
+
+/* DDR-1026: read-and-clear the pending press edges. Read-and-clear on a driver
+ * accessor is the established pattern here, not a new one -- virtio_input_wheel()
+ * (DDR-725) has worked this way since Layer 7, for the same reason: detents
+ * accumulate between polls and would otherwise be lost. virtio_input_state()
+ * stays PURE; a read-only view that mutates is a trap for the next reader. */
+uint32_t virtio_input_btn_latch(void) {
+    return __atomic_exchange_n(&g_btn_latch, 0, __ATOMIC_SEQ_CST);
+}
 static volatile int      g_wheel;            /* DDR-725: accumulated wheel detents */
 
 static void fold_event(const struct virtio_input_event *e) {
@@ -107,6 +124,7 @@ static void fold_event(const struct virtio_input_event *e) {
              * coalesced before ring 3 looked". */
             if (e->value && !(g_buttons & bit)) {
                 __atomic_add_fetch(&g_btn_edges, 1, __ATOMIC_RELAXED);
+                __atomic_or_fetch(&g_btn_latch, bit, __ATOMIC_SEQ_CST);  /* DDR-1026 */
                 g_btn_down_tick  = g_ticks;                  /* DDR-1025 §5 */
                 g_mpoll_at_press = sys_mouse_poll_count();
             } else if (!e->value && (g_buttons & bit) && g_btn_down_tick) {

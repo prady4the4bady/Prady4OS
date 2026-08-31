@@ -2010,6 +2010,32 @@ smoke-mouse: $(IMG) fat-image sfs-image
 	    -qmp unix:/tmp/pmouse.sock,server,nowait \
 	    -serial file:build/mouse.log -display none -no-reboot || true
 	@grep -q "\[input\] virtio pointer up" build/mouse.log || { echo "[mouse] FAIL — pointer driver did not come up"; tail -20 build/mouse.log; exit 1; }
+	@# ORDER MATTERS. This kernel-side arm runs BEFORE the PRADYOS_MOUSE_OK arm
+	@# below, and that is what keeps both of them live. mouse_ok>=1 IMPLIES
+	@# mbtn>=1, so with the ring-3 arm first the kernel one can never be the
+	@# thing that fires -- decoration, not measurement (DDR-1016 §5, 1017 §4,
+	@# 1018 §3, 1020 §5, 1023 §5, and measured again here: M1 tripped the
+	@# MOUSE_OK arm and never reached this one). Checked first, the two split
+	@# the failure cleanly: mbtn=0 means the syscall never delivered the press;
+	@# mbtn>=1 with no MOUSE_OK means it delivered and ring 3 did not act.
+	@# DDR-1026: the delivery counters, always printed, and asserted on the
+	@# KERNEL side as well as the ring-3 side. mbtn is what SYS_MOUSE_POLL
+	@# actually returned; PRADYOS_MOUSE_OK is what the compositor acted on.
+	@#
+	@# The thresholds are 1, not 5, and that is a measurement, not slack: the
+	@# injector fires all five clicks into a window in which ring 3 has polled
+	@# ZERO times (measured: btnedge=3 at mpoll=0, and the first poll of the
+	@# whole boot arrives at btnedge=5). The press-edge latch collapses those
+	@# five edges into one pending bit, so exactly one click is deliverable and
+	@# demanding more would assert something the injection timing cannot supply.
+	@# What the latch DOES guarantee is that the count is never zero, which is
+	@# the flake: without it the five presses land in a dead window and nothing
+	@# survives to be polled.
+	@mb=$$(grep -ao ' mbtn=[0-9]*' build/mouse.log | tail -1 | tr -dc '0-9'); \
+	  ok=$$(grep -ac PRADYOS_MOUSE_OK build/mouse.log); \
+	  echo "[mouse] delivery: mbtn=$${mb:-<none>} mouse_ok=$$ok (5 clicks injected)"; \
+	  [ -n "$$mb" ] || { echo "[mouse] FAIL — no heartbeat mbtn= counter in the log"; tail -20 build/mouse.log; exit 1; }; \
+	  [ "$$mb" -ge 1 ] || { echo "[mouse] FAIL — SYS_MOUSE_POLL never returned a button-down for 5 injected clicks (DDR-1026 latch)"; grep -ao 'btnedge=[0-9]* mpoll=[0-9]* mbtn=[0-9]*' build/mouse.log | tail -3; exit 1; }
 	@grep -q PRADYOS_MOUSE_OK build/mouse.log || { echo "[mouse] FAIL — click did not reach ring 3"; tail -20 build/mouse.log; exit 1; }
 	@grep -q PRADYOS_RIPPLE_OK build/mouse.log || { echo "[mouse] FAIL — no click ripple (DDR-727)"; tail -20 build/mouse.log; exit 1; }
 	@echo "[mouse] PASS — $$(grep -a PRADYOS_MOUSE_OK build/mouse.log | head -1)"

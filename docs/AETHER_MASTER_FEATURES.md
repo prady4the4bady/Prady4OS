@@ -295,6 +295,12 @@ All entries below are **shipped**.
 ### Layer 7 UI / Sovereign desktop
 - VirtIO-GPU framebuffer (ADR-028); ring-3 FB surface `SYS_FB_INFO/MAP/FLUSH` (DDR-702)
 - PS/2 keyboard `SYS_INPUT_POLL` (DDR-703); virtio-input pointer `SYS_MOUSE_POLL` (DDR-705)
+  - DDR-1026: `SYS_MOUSE_POLL` carries a **press-edge latch** — a press that
+    completed since the last poll is still delivered, so a click made before the
+    compositor's first input sample (or between two samples) is not lost. Bitmask,
+    not a counter: repeated clicks between two polls still coalesce, and a missed
+    release is still missed. Gated by `smoke-mouse` (kernel arm `mbtn>=1` first,
+    then `PRADYOS_MOUSE_OK`), mutation-checked M1.
 - Sovereign/Manual mode toggle (DDR-701); compositor w/ 8×8 font (DDR-704)
 - Per-client surfaces `SYS_SURFACE_*` (DDR-706); z-order/focus/key routing (DDR-708)
 - Sun-driven OKLab ambiances (DDR-709); window drag/close/resize/minimize/maximize (DDR-710/711/717/719)

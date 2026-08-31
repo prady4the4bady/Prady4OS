@@ -1507,7 +1507,10 @@ case is not what happens here. `virtio_input_state()` does not consume on read
 either. A local experiment shortening the click hold 200 ms → 4 ms still passed.
 
 **Why one press in five is visible is NOT established** (~1,800 polls/s over a
-200 ms hold should span ~350 polls), so §NON-NEGOTIABLE 3 forbids a fix. The
+200 ms hold should span ~350 polls), so §NON-NEGOTIABLE 3 forbids a fix.
+**[ANSWERED — DDR-1026. The reading in this paragraph is wrong: `mpoll` is
+cumulative over the whole boot, and ring 3 had not polled ONCE when the clicks
+landed. See the DDR-1026 section below.]** The
 repair would be an **edge latch** in `SYS_MOUSE_POLL` — a genuine product
 improvement, since a desktop dropping 80% of clicks is user-visible — but it is a
 kernel ABI semantic change resting on an unexplained mechanism, and a
@@ -1526,3 +1529,64 @@ the six types it deliberately omits. Not changed: the enum is append-only wire
 format (DDR-832) and the queue entry is bounded and audited (it expires via
 `AETHER_ACTION_TTL_TICKS`), so the cost is a wasted slot, not an unguarded
 action. Post-1.0 decision.
+
+
+## DDR-1026 — the `SYS_MOUSE_POLL` press-edge latch
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `56a4c4a35c92cfc5`,
+1,134,986 B, `-Werror` clean.
+
+**This corrects DDR-1025 §5 on its central reading.** `mpollwin=0` was never an
+anti-correlation between ring 3's poll cadence and the injector. `mpoll` is
+**cumulative over the whole boot**, and the failure is at the start of it:
+
+```
+btnedge=0 mpoll=0 mbtn=0     <- ... eleven heartbeats like this ...
+btnedge=3 mpoll=0 mbtn=0     <- THREE presses landed. Ring 3 has polled 0 times.
+btnedge=5 mpoll=1 mbtn=1     <- the first poll of the entire boot, after all five
+btnedge=5 mpoll=3481 mbtn=1
+```
+
+Ring 3 was not missing each 200 ms window — **it had not polled once.** All five
+clicks are injected before the compositor's input loop takes its first sample,
+so a counter summed over 80 s said nothing about the six seconds that mattered.
+`smoke-mouse` fires on `PRADYOS_AMBIANCE_OK`, which means the ambiance render
+finished, not that input is being serviced; `mouse_inject.sh` has carried
+DDR-910's outcome-driven retry for exactly this situation, and this gate alone
+never adopted it.
+
+**The fix is still the latch, not the retry argument.** Retrying would green the
+gate by clicking until one landed, while a real user's clicks in that window
+stayed gone. `SYS_MOUSE_POLL` exposes current state, not an event queue
+(DDR-941), and a state poll cannot represent an edge that has already ended —
+the driver saw all five presses, and ring 3 asked correctly, just late.
+
+One word of state (`g_btn_latch`) set on the same edge that increments
+`g_btn_edges`, drained read-and-clear at the syscall. `virtio_input_state()`
+stays **pure**; `virtio_input_wheel()` (DDR-725) has used read-and-clear since
+Layer 7 for the same reason.
+
+| build | kernel | result |
+|---|---|---|
+| fixed | `56a4c4a35c92cfc5` | **PASS 4/4**, identical `mbtn=1 mouse_ok=1` |
+| M1 (drain, do not deliver) | `698ac2d1ceaad30d` | **FAIL**, `mbtn=0 mouse_ok=0` |
+
+4/4 identical is the result worth stating: the gate used to fail ~2 runs in 6
+with `mbtn` reading 0 or 1 unpredictably. A latch cannot be lost to timing.
+
+**Sixth dead-arm instance, and measured rather than reasoned.** `mouse_ok >= 1`
+implies `mbtn >= 1`, so with the ring-3 arm first the new kernel-side arm could
+never be the thing that fires — M1's first run tripped `PRADYOS_MOUSE_OK` and
+never reached it. The kernel arm now runs **first**, and the pair splits the
+failure: `mbtn=0` means the syscall never delivered; `mbtn>=1` with no
+`PRADYOS_MOUSE_OK` means it delivered and ring 3 did not act.
+
+**Residual, recorded not fixed:** the latch is a bitmask, not a counter, so
+repeated clicks between two polls still coalesce into one, and a missed
+**release** is still missed — that needs an event queue, a far larger ABI
+change. The latched press is also reported at the current pointer position, not
+the position at the press edge.
+
+`smoke-mouse` 4/4, `smoke-drag`, `smoke-agent-click`, `smoke-resizeall`,
+`smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity` all PASS; `hygiene_check.sh` all three PASSED.

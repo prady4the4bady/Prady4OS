@@ -78,6 +78,13 @@ static long sys_mouse_poll(long a1, long a2, long a3, long a4, long a5, long a6)
     uint32_t btn;
     if (virtio_input_state(&x, &y, &btn) != 0)
         return -ENODEV;
+    /* DDR-1026: OR in any press edge that completed since the last poll. Without
+     * this a click is observable only if a poll lands inside the ~200 ms the
+     * button is held, and DDR-1025 measured mpollwin=0 -- five presses, zero
+     * polls inside a window, against ~1,000 polls a second. The latch is
+     * read-and-clear, so the edge is reported to exactly one poll and the next
+     * one sees the live state again: a down followed by an up, i.e. one click. */
+    btn |= virtio_input_btn_latch();
     ms.x = x; ms.y = y; ms.buttons = btn;
     if (btn)
         __atomic_add_fetch(&g_mouse_poll_btn, 1, __ATOMIC_RELAXED);
