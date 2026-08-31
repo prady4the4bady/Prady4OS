@@ -8994,3 +8994,50 @@ a limit, not a result.
 
 `smoke-wmclose`, `smoke-mouse`, `smoke-ctrlaltt`, `smoke-winops` PASS;
 `hygiene_check.sh` ALL THREE PASSED.
+
+---
+
+## CHECKPOINT — DDR-1030: the resched proof's second sample (instrument, no fix)
+
+**INSTRUMENT BUILT + mutation-proven. Verdict deliberately unchanged.**
+Clean kernel `55446cb042530e80`.
+
+CI on `bdb41c7`, shard 3, `smoke-rqstress-liveness`:
+`[smp] resched FAIL ipis=0 ran=1 idle=1`. That gate does not own the assertion —
+`resched FAIL` is `GLOBAL_FORBIDDEN` (DDR-791) — so it killed shard 3 at gate 1
+of 21.
+
+**Not this PR's.** `ran=1` says the property under test held. The signature
+predates every change here (DDR-1004 built the predicate; DDR-1014 fixed one
+cause of this exact shape, citing CI on `72a474a` shard 5). And the gate boots
+with no virtio-tablet, so DDR-1026's latch never executes, while DDR-1027/1028
+are ring-3 and run after SMP bring-up. 3/3 non-vacuous local PASS — captures
+carry `resched OK`, not `SKIP`.
+
+**The mechanism is already in the code's own comment:** `idle_seen` is sampled
+just before `sched_unblock`, and a CPU can leave idle in between; no kick is then
+owed, and a correct system FAILs.
+
+**One sample cannot settle it,** because a genuinely broken kick prints the same
+three fields — the thread is picked up by the next timer tick and still reports
+`ran=1`. So this is NOT turned into `SKIP`: that would green the gate and delete
+DDR-1014's coverage, the trade DDR-1012 and DDR-973 each had to undo.
+
+Built instead: a **second idleness sample** immediately after `sched_unblock`,
+asking the identical question of the identical CPU (`self_idx` hoisted so the two
+loops cannot drift — the mismatch DDR-1014 already fixed once). Printed only in
+the FAIL branch as `idle2=`.
+
+| reading | meaning |
+|---|---|
+| `idle=1 idle2=0` | precondition evaporated — sampling artefact |
+| `idle=1 idle2=1` | AP idle at both instants, no IPI — real scheduler defect |
+
+Mutation-proven by forcing the FAIL branch (`else if (0 && …)`, kernel
+`234adcfec677a702`): printed `ipis=1 ran=1 idle=1 idle2=1`. `idle2=1` on a
+healthy boot is what makes `idle2=0` in a real failure informative.
+
+**Closes nothing.** No fix, no rate bound (one CI occurrence, no local repro in
+5 attempts). `resched FAIL` can still redden any gate it lands in.
+
+Gates: `smoke-rqstress-liveness` 2/2 PASS; `hygiene_check.sh` ALL THREE PASSED.

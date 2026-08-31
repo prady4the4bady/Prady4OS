@@ -962,10 +962,12 @@ static void smpresched_proof(void) {
      * SKIP branch below, which refuses to report OK when the IPI path was not
      * exercised. */
     int idle_seen = 0;
+    /* DDR-1030: hoisted out of the loop so the second sample after
+     * sched_unblock asks the same question of the same CPU. */
+    struct percpu *self_pc0 = this_cpu();
+    int self_idx = self_pc0 ? (int)self_pc0->cpu_idx : 0;
     dl = g_ticks + 50;
     while (g_ticks < dl && !idle_seen) {
-        struct percpu *self_pc = this_cpu();
-        int self_idx = self_pc ? (int)self_pc->cpu_idx : 0;
         for (int c = 0; c < PERCPU_MAX; c++) {
             struct percpu *o = percpu_get((uint32_t)c);
             /* DDR-1014: `!o->is_bsp` MATCHES THE KERNEL. smp_resched_one
@@ -992,6 +994,31 @@ static void smpresched_proof(void) {
             yield();
     }
     sched_unblock(g_rp_thread);                  /* enqueue here + kick an idle AP */
+    /* DDR-1030 instrument. The comment below already names this residual -- a
+     * CPU can leave idle between the sample above and this call, so no kick is
+     * owed and the proof FAILs a correct system. CI on bdb41c7, shard 3, printed
+     * exactly that shape: `ipis=0 ran=1 idle=1`, in smoke-rqstress-liveness,
+     * which does not even own the assertion (`resched FAIL` is GLOBAL_FORBIDDEN,
+     * DDR-791) -- and `ran=1` says the property under test HELD.
+     *
+     * One sample cannot separate that from a genuinely missing kick, because
+     * both print idle=1 ipis=0 ran=1. A SECOND sample, taken here, can: an AP
+     * still idle at this instant means the kick really was owed and really was
+     * not delivered; an AP no longer idle means the precondition evaporated and
+     * the FAIL is an artefact of when the first sample was taken.
+     *
+     * Recorded, not acted on -- the verdict is deliberately unchanged. Turning
+     * this case into SKIP would delete the coverage DDR-1014 built, since a
+     * genuinely broken kick also prints ran=1 (the thread is picked up a timer
+     * tick later instead). The next occurrence decides which it is. */
+    int idle_after = 0;
+    for (int c = 0; c < PERCPU_MAX; c++) {
+        struct percpu *o = percpu_get((uint32_t)c);
+        if (c != self_idx && o && o->present && o->idle && !o->is_bsp) {
+            idle_after = 1;
+            break;
+        }
+    }
     dl = g_ticks + 50;
     while (!g_rp_ran && g_ticks < dl)
         yield();
@@ -1035,6 +1062,8 @@ static void smpresched_proof(void) {
         kputdec((uint64_t)g_rp_ran);
         kputs(" idle=");                  /* DDR-1004: was the IPI even owed? */
         kputdec((uint64_t)idle_seen);
+        kputs(" idle2=");                 /* DDR-1030: ...and was it STILL owed? */
+        kputdec((uint64_t)idle_after);
         kputs("\r\n");
     }
 }

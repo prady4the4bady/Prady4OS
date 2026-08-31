@@ -1810,3 +1810,36 @@ coarse to separate iterations 1–3: a limit, not a result.
 
 Gates: `smoke-wmclose`, `smoke-mouse`, `smoke-ctrlaltt`, `smoke-winops` PASS;
 `hygiene_check.sh` all three PASSED.
+
+
+## DDR-1030 — `resched FAIL ipis=0 ran=1 idle=1`: an instrument, not a fix
+
+**INSTRUMENT BUILT + mutation-proven. NO fix; verdict deliberately unchanged.**
+Clean kernel `55446cb042530e80`.
+
+CI on `bdb41c7`, shard 3, killed `smoke-rqstress-liveness` at gate 1 of 21 —
+a gate that does not own the assertion (`resched FAIL` is `GLOBAL_FORBIDDEN`,
+DDR-791).
+
+**Not this PR's:** `ran=1` means the property under test held; DDR-1004 built the
+predicate and DDR-1014 already fixed one cause of this exact shape (citing CI on
+`72a474a`, shard 5); and the gate boots with no virtio-tablet, so DDR-1026's
+latch never runs. 3/3 non-vacuous local PASS (`resched OK`, not `SKIP`).
+
+**The mechanism is in the code's own comment:** `idle_seen` is sampled just
+before `sched_unblock` and a CPU can leave idle in between, so no kick is owed
+and a correct system FAILs.
+
+**One sample cannot settle it** — a genuinely broken kick prints the same three
+fields, since the thread is then picked up by the next timer tick and still
+reports `ran=1`. Turning this into `SKIP` would green the gate and delete
+DDR-1014's coverage; DDR-1012 and DDR-973 each had to undo that trade.
+
+Built: a **second idleness sample** after `sched_unblock`, identical question,
+identical CPU (`self_idx` hoisted so the loops cannot drift). `idle=1 idle2=0` =
+sampling artefact; `idle=1 idle2=1` = the kick was owed and missing.
+Mutation-proven by forcing the FAIL branch (kernel `234adcfec677a702`):
+`ipis=1 ran=1 idle=1 idle2=1`.
+
+Closes nothing: no fix, no rate bound. Gates: `smoke-rqstress-liveness` 2/2 PASS;
+`hygiene_check.sh` all three PASSED.
