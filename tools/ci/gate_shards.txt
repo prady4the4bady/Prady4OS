@@ -54,6 +54,7 @@
 0	smoke-syscallfuzz	26	strict
 0	smoke-sysfork	23	strict
 0	smoke-sysepoll	23	strict
+0	smoke-ctrlaltt	180	strict
 1	smoke-iso-x86	240	strict
 1	smoke-compositor	120	fast
 1	smoke-egress-audit	120	strict

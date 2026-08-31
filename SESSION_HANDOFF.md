@@ -8768,3 +8768,77 @@ reports the current pointer position, not the position at the press edge.
 `v1.0.0` stays untagged and STEP 3 (`main` promotion) unstarted, per the
 operator decision to hold the tag while OPEN-2 is root-caused. OPEN-1, OPEN-12,
 OPEN-13 remain open with their instruments armed.
+
+---
+
+## CHECKPOINT — DDR-1027: Ctrl+Alt+T launches a PRISM terminal window
+
+**IMPLEMENTED + GATED + mutation-checked (M1/M2/M3).** The last unbuilt Group E
+row. Kernel `0d1bcd234707e56d`, `term.elf` `55ad497f47b6d64a`, `-Werror` clean.
+
+Also, before this: **`f238169` is CI GREEN**, including shard 2 — the shard that
+carries `smoke-mouse`, which had failed on the previous four tips. That is the
+confirmation for DDR-1026's latch.
+
+### What the Group E row understated
+
+"Ctrl+Alt+T — Launch PRISM terminal window" reads like a keybinding. PRISM reads
+fd 0 and writes fd 1, so it is a serial shell; every existing surface client
+draws coloured rectangles. **There was no terminal window in the tree to
+launch.** Three pieces, all on shipped primitives: the chord off the DDR-991
+event ring; `user/term.c`, a client owning a surface and running PRISM over a
+pipe pair; and `/TERM.ELF` + `/PRISM.ELF` on the FAT volume, because `execve`
+resolves against the process root — the volume `/EXECTEST.ELF` already sits on.
+
+### The one missing primitive
+
+**No `O_NONBLOCK`, no `fcntl` in this kernel.** A plain `read()` on PRISM's
+stdout pipe blocks whenever PRISM is quiet, and the window would then stop
+draining its own key ring — accepting input only just after output.
+`SYS_EPOLL_WAIT` with timeout 0 is the replacement. It is the design's only
+non-obvious shape, and worth knowing before reading `term.c`.
+
+`fork`+`execve`, **not** `SYS_SPAWN_AGENT`: that is the AETHER roster path and
+would consume a fixed slot and mint agent capabilities for what is an
+application.
+
+### Arm E — a mutation plan that had to become a permanent arm
+
+The design proposed proving the chord by injecting bare `alt-t` and asserting no
+second spawn. **Unrunnable:** `input_inject.sh` replays its whole key list four
+times and the compositor caps terminals at four, so a chord-less build and the
+correct one both report four spawns. The compositor now prints
+`PRADYOS_TERM_CHORD mods= spawn=` for every `'t'` press and arm E fails on any
+`spawn=1` whose `mods` lacks `KMOD_CTRL`. Clean: **8 t-presses, 4 spawns**,
+alternating `mods=6 spawn=1` / `mods=4 spawn=0`.
+
+### Mutants — each fails exactly one arm
+
+| mutant | change | binding hash | outcome |
+|---|---|---|---|
+| — | clean | kernel `0d1bcd234707e56d` / `term.elf` `55ad497f47b6d64a` | **PASS** |
+| M1 | compositor tests `KMOD_ALT` only | kernel `c2462fb0de8231c9` | **FAIL arm E** |
+| M2 | child skips `dup2(from_sh[1], 1)` | `term.elf` `67158f82326cf9ae` | **FAIL arm C** |
+| M3 | terminal skips `SURFACE_RAISE` | `term.elf` `56028a4dbfe993f8` | **FAIL arm D** |
+
+**Record `term.elf`'s hash, not just the kernel's, for anything in `user/term.c`.**
+It is not embedded in the kernel image, so M2 and M3 leave `kernel.bin`
+bit-identical to the clean build.
+
+### Scope explicitly not taken
+
+No ANSI/VT parsing, no colour, no cursor; no resize handling; no `SIGCHLD` reap.
+Not ADR-024 §D5's init-driven PRISM respawn, which stays unbuilt.
+
+### Gates
+
+`smoke-ctrlaltt` (shard 0, strict, 180 s) PASS. The compositor changed, so every
+gate driving it was re-verified on `0d1bcd234707e56d`: `smoke-compositor`,
+`smoke-focus`, `smoke-superkey`, `smoke-modkeys`, `smoke-drag`, `smoke-mouse`,
+`smoke-surface`, `smoke-agents`, `smoke-shell` — all PASS. `hygiene_check.sh`
+all three PASSED (`ci-shard-check` caught the missing shard entry first).
+
+### Unchanged
+
+`v1.0.0` stays untagged and STEP 3 unstarted, per the operator decision to hold
+the tag while OPEN-2 is root-caused.

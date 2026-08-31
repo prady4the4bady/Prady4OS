@@ -295,6 +295,13 @@ All entries below are **shipped**.
 ### Layer 7 UI / Sovereign desktop
 - VirtIO-GPU framebuffer (ADR-028); ring-3 FB surface `SYS_FB_INFO/MAP/FLUSH` (DDR-702)
 - PS/2 keyboard `SYS_INPUT_POLL` (DDR-703); virtio-input pointer `SYS_MOUSE_POLL` (DDR-705)
+  - DDR-1027: **Ctrl+Alt+T launches a PRISM terminal window.** `user/term.c`
+    owns a surface, runs PRISM over a pipe pair (`fork`+`execve`, not
+    `SYS_SPAWN_AGENT`), renders with the Inter atlas, and forwards the keys the
+    compositor routes to the focused window. An **epoll** client with timeout 0,
+    because this kernel has no `O_NONBLOCK` and a blocking pipe read would stop
+    the window draining its key ring. No ANSI/VT parsing, no resize, no reap.
+    Gated by `smoke-ctrlaltt` (5 arms), mutation-checked M1/M2/M3.
   - DDR-1026: `SYS_MOUSE_POLL` carries a **press-edge latch** — a press that
     completed since the last poll is still delivered, so a click made before the
     compositor's first input sample (or between two samples) is not lost. Bitmask,

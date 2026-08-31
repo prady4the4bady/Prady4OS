@@ -1590,3 +1590,79 @@ the position at the press edge.
 `smoke-mouse` 4/4, `smoke-drag`, `smoke-agent-click`, `smoke-resizeall`,
 `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 `smoke-blk-integrity` all PASS; `hygiene_check.sh` all three PASSED.
+
+
+## DDR-1027 — Ctrl+Alt+T launches a PRISM terminal window
+
+**IMPLEMENTED + GATED + mutation-checked (M1/M2/M3).** The last unbuilt Group E
+row. Kernel `0d1bcd234707e56d`, `term.elf` `55ad497f47b6d64a`, `-Werror` clean.
+
+**The row understated the work.** PRISM reads fd 0 and writes fd 1
+(`prism.c:96`, `:175`), which today are the serial console, and every existing
+surface client draws coloured rectangles. There was no terminal *window*
+anywhere in the tree to launch. Three pieces, all on shipped primitives:
+
+- the chord, off the DDR-991 event ring (`SYS_KEY_POLL`), because the byte
+  stream carries no modifier state and DDR-992 already stops a non-Shift chord
+  emitting text — so nothing on this system loses the letter `t`;
+- `user/term.c`, a client that owns a surface, forks PRISM over a pipe pair,
+  renders with the Inter atlas and forwards the keys the compositor routes to
+  the focused window;
+- `/TERM.ELF` and `/PRISM.ELF` placed on the FAT volume, because `execve`
+  resolves against the **process** root — the same volume `/EXECTEST.ELF` sits
+  on and systest's `execve` is already proven against.
+
+**The one missing primitive.** There is no `O_NONBLOCK` and no `fcntl` in this
+kernel. A plain `read()` on PRISM's stdout pipe would block whenever PRISM had
+nothing to say, and the window would stop draining its own key ring — it would
+accept input only just after output. `SYS_EPOLL_WAIT` with **timeout 0** is the
+replacement, and it is the design's only non-obvious shape.
+
+**`fork`+`execve`, not `SYS_SPAWN_AGENT`.** That is the AETHER roster path: it
+would consume a fixed roster slot, mint agent capabilities, and list a terminal
+in `SYS_AGENT_ROSTER` as an autonomous agent. A terminal is an application.
+
+### Arm E, and the mutation plan that did not survive
+
+The design proposed testing the chord by injecting a bare `alt-t` and asserting
+no second spawn. **Unrunnable:** `input_inject.sh` replays its whole key list
+four times and the compositor caps terminals at four, so a chord-less build and
+the correct one both report four spawns. Counting proves nothing.
+
+The compositor now reports every `'t'` press with its modifier byte:
+
+```
+PRADYOS_TERM_CHORD mods=6 spawn=1      <- Ctrl(2)|Alt(4): spawned
+PRADYOS_TERM_CHORD mods=4 spawn=0      <- Alt only: did not
+```
+
+and arm E fails on any `spawn=1` whose `mods` lacks `KMOD_CTRL`. That is a
+permanent arm re-checked every CI run, not a one-off. Clean build measured:
+**8 t-presses, 4 spawns**, strictly alternating.
+
+| mutant | change | binding hash | outcome |
+|---|---|---|---|
+| — | clean | kernel `0d1bcd234707e56d` / `term.elf` `55ad497f47b6d64a` | **PASS** |
+| M1 | compositor tests `KMOD_ALT` only | kernel `c2462fb0de8231c9` | **FAIL at arm E** |
+| M2 | child skips `dup2(from_sh[1], 1)` | `term.elf` `67158f82326cf9ae` | **FAIL at arm C** |
+| M3 | terminal skips `SURFACE_RAISE` | `term.elf` `56028a4dbfe993f8` | **FAIL at arm D** |
+
+**Hash attribution.** `term.elf` is not embedded in the kernel image, so M2 and
+M3 leave `kernel.bin` bit-identical to the clean build. A result recorded
+against the kernel hash alone would read as two outcomes from one binary — for
+anything in `user/term.c` the binding artefact is `build/term.elf`.
+
+### Scope explicitly not taken
+
+No ANSI/VT parsing, no colour, no cursor rendering; no resize handling (the grid
+is sized once); no `SIGCHLD` reap. This is **not** ADR-024 §D5's init-driven
+PRISM respawn, which remains unbuilt.
+
+### Gates
+
+`smoke-ctrlaltt` (shard 0, strict, 180 s) PASS. The compositor changed, so every
+gate that drives it was re-verified on `0d1bcd234707e56d`: `smoke-compositor`,
+`smoke-focus`, `smoke-superkey`, `smoke-modkeys`, `smoke-drag`, `smoke-mouse`,
+`smoke-surface`, `smoke-agents`, `smoke-shell` — all PASS. `hygiene_check.sh`
+all three PASSED; `ci-shard-check` caught the missing `gate_shards.txt` entry
+first, which is the check doing its job.

@@ -63,6 +63,8 @@ USER_COMP_SRC    := user/compositor.c     # L7: in-house sovereign-desktop compo
 USER_COMP_ELF    := build/compositor.elf
 USER_SURF_SRC    := user/surfacetest.c    # L7: per-client surface test window (DDR-706)
 USER_SURF_ELF    := build/surfacetest.elf
+USER_TERM_SRC    := user/term.c           # L7: PRISM terminal window (DDR-1027)
+USER_TERM_ELF    := build/term.elf
 USER_SURFDESTROY_SRC := user/surfdestroytest.c  # L7: surface lifecycle/destroy test (DDR-729)
 USER_SURFDESTROY_ELF := build/surfdestroytest.elf
 USER_AGENTMETRICS_SRC := user/agentmetricstest.c  # L7: per-agent live metrics probe (DDR-730)
@@ -232,7 +234,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-ctrlaltt smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -428,6 +430,12 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/compositor.o $(MUSL_LIB) -o $(USER_COMP_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SURF_SRC) -o build/surfacetest.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/surfacetest.o $(MUSL_LIB) -o $(USER_SURF_ELF)
+	# DDR-1027: the PRISM terminal window. musl-linked like the compositor -- it
+	# uses printf for its sentinels and the Inter atlas for glyphs. NOT embedded in
+	# the kernel image (no user_image.asm entry): it is spawned on demand by execve
+	# from the FAT root, so the kernel never needs its own copy.
+	$(CC) $(USER_C_CFLAGS) -c $(USER_TERM_SRC) -o build/term.o
+	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/term.o $(MUSL_LIB) -o $(USER_TERM_ELF)
 	# DDR-729/730: freestanding (no musl) so each stays a few KiB inside the kernel
 	# image budget — links against user.ld's single R+X segment (no writable globals).
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SURFDESTROY_SRC) -o build/surfdestroytest.o
@@ -537,7 +545,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -729,10 +737,18 @@ fat-image: $(KERNEL_BIN)
 	# Arm C's target: the LARGE musl-C ELF ADR-024 sec.D5 named. Copied, not rebuilt,
 	# so the gate execve's the same image the kernel already loads from SFS at boot.
 	mcopy -i $(FAT_IMG) $(USER_CMUSL_ELF) ::/CMUSL.ELF
+	# DDR-1027: Ctrl+Alt+T execve's /TERM.ELF from the compositor, and the terminal
+	# then execve's /PRISM.ELF as its child. Both resolve against the PROCESS root,
+	# which is the FAT volume (vfs_set_default_mnt) -- the same root /EXECTEST.ELF
+	# sits on and that systest's execve is already proven against. PRISM.ELF also
+	# exists on the SFS root, written there by user_boot_from_sfs at boot; this is a
+	# second copy on the volume execve actually resolves against, not a move.
+	mcopy -i $(FAT_IMG) $(USER_TERM_ELF) ::/TERM.ELF
+	mcopy -i $(FAT_IMG) $(USER_PRISM_ELF) ::/PRISM.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
 	# FAT /AETHER.CFG (DDR-732/734) is retired here.
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT, /BIGPAT.BIN, /CMUSL.ELF)"
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT, /BIGPAT.BIN, /CMUSL.ELF, /TERM.ELF, /PRISM.ELF)"
 
 # A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
 # place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
@@ -2689,6 +2705,41 @@ smoke-sha256: $(IMG) fat-image sfs-image
 # that matters most for regressions: a chord must NOT also deliver text on
 # NSI 46, or one keypress arrives twice and Super+M flips the mode and then has
 # the plain-'m' branch force it straight back.
+# Layer-7 terminal gate (DDR-1027): boot GPU; inject Ctrl+Alt+T; the compositor
+# forks+execve's /TERM.ELF, which creates a surface, runs PRISM over a pipe pair,
+# and forwards the keys the compositor routes to it. Four arms, one per link in
+# that chain -- none implied by another (DDR-1027 §6). The trailing plain keys
+# are what arm D reads: they reach the raised terminal, not the compositor.
+smoke-ctrlaltt: $(IMG) fat-image sfs-image
+	@echo "[ctrlaltt] terminal gate: boot(GPU) + sendkey ctrl-alt-t + typed keys -> /TERM.ELF -> PRISM..."
+	@rm -f build/ctrlaltt.log /tmp/pcat.sock
+	@bash tools/qemu_runner/input_inject.sh build/ctrlaltt.log /tmp/pcat.sock \
+	    PRADYOS_AMBIANCE_OK "ctrl-alt-t alt-t u n a m e ret" &
+	@timeout 180 qemu-system-x86_64 -machine q35 -device virtio-gpu-pci \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -monitor unix:/tmp/pcat.sock,server,nowait \
+	    -serial file:build/ctrlaltt.log -display none -no-reboot || true
+	@grep -qa "PRADYOS_TERM_SPAWN pid=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm A: Ctrl+Alt+T did not reach the compositor, or fork/execve failed"; grep -a "TERM_\|boot-load" build/ctrlaltt.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_TERM_OK id=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm B: the terminal ran but could not create/map/commit its surface"; grep -a "TERM_" build/ctrlaltt.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_TERM_RX n=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm C: nothing came back from PRISM down the pipe (fork/dup2/execve path)"; grep -a "TERM_" build/ctrlaltt.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_TERM_TX ch=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm D: typed keys never reached the window (focus routing or the surface key ring)"; grep -a "TERM_\|FOCUS" build/ctrlaltt.log | tail -10; exit 1; }
+	@# Arm E, the NEGATIVE arm: is the chord actually a chord? Arms A-D all pass
+	@# on a compositor that spawns a terminal for any bare 't', which is why the
+	@# injector also sends alt-t. It cannot be checked by COUNTING spawns --
+	@# input_inject.sh replays its whole key list four times and the compositor
+	@# caps terminals at four, so both the correct build and a chord-less one
+	@# would report four. PRADYOS_TERM_CHORD carries the modifier byte of every
+	@# 't' press and whether it spawned, so the defect is named directly: a
+	@# spawn=1 whose mods lack KMOD_CTRL (0x02).
+	@grep -qa "PRADYOS_TERM_CHORD mods=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm E: no PRADYOS_TERM_CHORD line; the 't' presses never reached the compositor's key ring"; grep -a "TERM_" build/ctrlaltt.log | tail -10; exit 1; }
+	@bad=$$(grep -ao "PRADYOS_TERM_CHORD mods=[0-9]* spawn=1" build/ctrlaltt.log \
+	          | awk -F'mods=' '{split($$2,a," "); if (int(a[1]) % 4 < 2) print}' | head -3); \
+	  [ -z "$$bad" ] || { echo "[ctrlaltt] FAIL — arm E: a 't' press with no Ctrl held spawned a terminal (DDR-1027 M1)"; echo "$$bad"; exit 1; }
+	@echo "[ctrlaltt] chord: $$(grep -ac 'PRADYOS_TERM_CHORD' build/ctrlaltt.log) t-press(es), $$(grep -ac 'PRADYOS_TERM_SPAWN' build/ctrlaltt.log) spawn(s)"
+	@echo "[ctrlaltt] PASS — $$(grep -a PRADYOS_TERM_OK build/ctrlaltt.log | head -1); $$(grep -a PRADYOS_TERM_RX build/ctrlaltt.log | head -1)"
+
 smoke-superkey: $(IMG) fat-image sfs-image
 	@echo "[superkey] Super+M toggle: boot(GPU) + sendkey m / meta_l-m x2 / ctrl-c..."
 	@rm -f build/superkey.log /tmp/psuper.sock

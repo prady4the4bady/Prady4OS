@@ -15,6 +15,8 @@
 #define SYS_GET_MODE    29
 #define SYS_SET_MODE    30
 #define SYS_SPAWN_AGENT 35
+#define SYS_EXECVE      14          /* DDR-1027: Ctrl+Alt+T spawns /TERM.ELF */
+#define SYS_FORK        15
 #define SYS_FB_INFO     43
 #define SYS_FB_MAP      44
 #define SYS_FB_FLUSH    45
@@ -22,10 +24,14 @@
 #define SYS_KEY_POLL    96          /* DDR-991: structured key events */
 
 /* DDR-991 ABI — must match kernel/drivers/input/ps2kbd.h. */
+#define KMOD_CTRL  0x02u          /* DDR-1027: Ctrl+Alt+T terminal */
 #define KMOD_ALT   0x04u          /* DDR-995: Alt+Tab window cycling */
 #define KMOD_META  0x08u
 #define KEY_TAB    0x09u
 struct key_ev { unsigned char code, mods, down, ascii; };
+
+/* DDR-1027: how many terminals this compositor has launched. */
+static int g_terms;
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
@@ -1448,6 +1454,53 @@ int main(void) {
                         fflush(stdout);
                         recompose_scene();
                     }
+                }
+                /* DDR-1027: Ctrl+Alt+T launches a PRISM terminal window.
+                 * fork+execve, NOT SYS_SPAWN_AGENT: that is the AETHER roster
+                 * path and would consume a fixed roster slot, mint agent
+                 * capabilities, and make a terminal show up in
+                 * SYS_AGENT_ROSTER as an autonomous agent. A terminal is an
+                 * application; fork+execve is the door PRISM's own `run` uses.
+                 *
+                 * Read from the DDR-991 event ring for the reason DDR-995
+                 * records: the byte stream carries no modifier state. DDR-992
+                 * went further and stopped a non-Shift chord emitting text at
+                 * all, so Ctrl+Alt+T produces no 't' byte and nothing on this
+                 * system loses the letter t. */
+                if (kev[i].code == 't') {
+                    /* Reported for EVERY 't' press, chord or not, with the
+                     * modifier byte and whether it spawned. A gate that only
+                     * saw successful spawns could not tell "Ctrl+Alt+T works"
+                     * from "any T spawns a terminal" -- and it cannot recover
+                     * that from spawn COUNTS either, because input_inject.sh
+                     * replays its whole key list four times and the cap below
+                     * clamps the total. This line makes the discrimination
+                     * itself observable: a spawn=1 whose mods lack KMOD_CTRL is
+                     * the defect, named. */
+                    int spawned = 0;
+                    if ((kev[i].mods & KMOD_CTRL) && (kev[i].mods & KMOD_ALT)) {
+                        /* Bounded so a stuck key cannot fork the machine
+                         * flat. The gate does reach this cap: the injector
+                         * replays its list four times, and four Ctrl+Alt+T
+                         * presses are four terminals, which is what a user
+                         * pressing it four times should get. */
+                        if (g_terms < 4) {
+                            long tp = nsi(SYS_FORK, 0, 0, 0);
+                            if (tp == 0) {
+                                nsi(SYS_EXECVE, (long)"/TERM.ELF", 0, 0);
+                                nsi(SYS_EXIT, 127, 0, 0);
+                            }
+                            if (tp > 0) {
+                                g_terms++;
+                                spawned = 1;
+                                printf("PRADYOS_TERM_SPAWN pid=%ld n=%d\n", tp, g_terms);
+                                fflush(stdout);
+                            }
+                        }
+                    }
+                    printf("PRADYOS_TERM_CHORD mods=%u spawn=%d\n",
+                           (unsigned)kev[i].mods, spawned);
+                    fflush(stdout);
                 }
                 if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
                     int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
