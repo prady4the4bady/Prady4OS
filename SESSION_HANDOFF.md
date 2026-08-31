@@ -8552,3 +8552,86 @@ file contains boot output before scanning it.**
    and narrows the question to `kputs`; `loser_vec` names the second exception.
 2. On any new `[apfreeze]`, resolve its RIP against **its own binary** first.
 3. The v1.0.0 tag is HELD by operator decision; STEP 3 is not to be started.
+
+---
+
+## CHECKPOINT 2026-08-31 00:1x UTC — DDR-1024: OPEN-13 instrument built
+
+### DDR-986 was designed and never built
+
+`grep __builtin_return_address kernel/mm/kheap.c` returned **nothing**. OPEN-13
+has one capture, in CI, never locally — the same shape DDR-1023 just established
+for OPEN-2 — so an instrument is the only thing that makes the next one readable.
+
+Built to DDR-986's design including both of its self-corrections. Kernel
+**`0e9dfefadf54d6ba`**, 1,134,986 B (unchanged — the store lands in existing
+free-object space), `-Werror` clean.
+
+### What it does, and the one detail that is load-bearing
+
+The freeing return address is captured at the **PUBLIC boundary** — `kfree`,
+`pcb_free`, `cap_free`, `ipc_free` — and threaded through
+`kfree_locked`/`pool_free` into `cache_free(c, ptr, site)`.
+
+**Not** `__builtin_return_address(0)` inside `cache_free`: that function is
+`static` and reached through two different wrappers, so the builtin there names
+`kfree_locked` or `pool_free`, and `freed_by`/`now_by` would then be two
+different stack frames — making any comparison between them meaningless.
+
+Stored at **offset 16** of a free object (`next@0`, `canary@8`), after the
+`memset` and inside a line it already touched. Guarded by `obj_size >= 24`, so
+the 16-byte class and the dedicated `cap` cache keep today's output. OPEN-13 is
+the 128 class, so the one case on record is covered.
+
+**On whenever `KHEAP_DEBUG` is on, not opt-in** — an opt-in instrument would be
+OFF in CI, the only place OPEN-13 has ever appeared, guaranteeing its own
+uselessness. The cost argument holds: `cache_free` already walks the whole free
+list and `memset`s 128 bytes on every `kfree` under `KHEAP_DEBUG`.
+
+### M1 — proven
+
+Mutant `18ecdfe77265e799`, a deliberate 128-class double free:
+
+```
+[kheap] double-free ptr=0x0000000007FD1BA0 objsize=0x0000000000000080
+        freed_by=0xFFFFFFFF800052DC now_by=0xFFFFFFFF800052F4
+```
+
+Resolved against **that exact binary**: `fs_test_thread + 0x2FBC` and
+`+ 0x2FD4`, `0x18` apart — the two injected call sites. Both fields populated,
+distinct, and resolving to real code.
+
+The original capture gave only `objsize=0x80`, which DDR-980 rightly noted is a
+**generic** kmalloc class (any `kmalloc(65..128)`), so size→structure did not
+resolve. Two call sites do.
+
+### OPEN-13 is NOT closed
+
+One capture, from CI, on a docs-only commit, no mechanism named. This must not be
+reported as a fix. When the next one appears: **resolve BOTH addresses against
+the exact kernel binary that produced the log** — every build loads at the same
+base, so an address alone does not identify a build (§NON-NEGOTIABLE 18).
+
+### Gates on `0e9dfefadf54d6ba`
+
+`smoke-shell` (73-pattern scan clean), `smoke-blkmq`, `smoke-fsrm`,
+`smoke-blk-integrity` — all PASS, one hash verified before and after each.
+The last two were chosen deliberately: heaviest `kfree` traffic in the suite, so
+they exercise the new store on the common path, not just the detector branch.
+`hygiene_check.sh` ALL THREE PASSED.
+
+### smoke-mouse pooled tally (kernel `53fe179c85a7c3b5`, all tips docs-only)
+
+| tip | event | result |
+|---|---|---|
+| `8eaab34` | push | green |
+| `54c74bd` | push | green |
+| `4fd2054` | push | **FAILED** (shard 2 `smoke-mouse`) |
+| `4fd2054` | **workflow_dispatch** | **green** |
+| `eb6493f` | push | green |
+
+**4 green, 1 failure across 5 suite-runs on ONE binary.** The dispatch re-run of
+the *identical commit* passing is the cleanest demonstration that this is
+intermittent. **No rate is claimed** — 5 runs with 1 failure gives a 95% interval
+of roughly [0.5%, 72%], which is useless. Keep accumulating; the tally is free
+while the kernel does not change.

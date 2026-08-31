@@ -1447,6 +1447,42 @@ this gate uses `boot_test.sh`). Same class as the five in-gate instances this
 session — it recurs in **campaign tooling** too. Next campaign: point
 `SERIAL_LOG` at a per-run path and assert the file contains boot output before
 scanning it.
+
+---
+
+## DDR-1024 — OPEN-13: DDR-986's instrument, built and proven
+
+**IMPLEMENTED + mutation-proven. NOT a fix.** Kernel `0e9dfefadf54d6ba`,
+1,134,986 B (unchanged — the store lands in existing free-object space),
+`-Werror` clean.
+
+DDR-986 designed this in full and it was **never built** — zero
+`__builtin_return_address` in `kheap.c`. OPEN-13 has one capture, in CI, never
+locally, so an instrument is the only thing that makes the next one readable.
+
+**The site is captured at the PUBLIC boundary** (`kfree`, `pcb_free`,
+`cap_free`, `ipc_free`) and threaded through `kfree_locked`/`pool_free` into
+`cache_free(c, ptr, site)`. That is DDR-986 §4/§5's correction and it is
+load-bearing: `cache_free` is `static` behind two wrappers, so a builtin inside
+it would name a wrapper and make `freed_by`/`now_by` two different stack frames.
+
+Stored at **offset 16** of a free object (`next@0`, `canary@8`), after the
+`memset`, in a line the `memset` already touched. Guarded by `obj_size >= 24`,
+so the 16-byte class and the dedicated `cap` cache keep today's output. **On
+whenever `KHEAP_DEBUG` is** — opt-in would be OFF in CI, the only place OPEN-13
+has ever appeared.
+
+**M1** (deliberate 128-class double free, kernel `18ecdfe77265e799`):
+`objsize=0x80 freed_by=0xFFFFFFFF800052DC now_by=0xFFFFFFFF800052F4`, resolving
+against that exact binary to `fs_test_thread + 0x2FBC` and `+ 0x2FD4` — the two
+injected call sites, `0x18` apart.
+
+Gates on the baseline, one hash verified before and after each: `smoke-shell`,
+`smoke-blkmq`, `smoke-fsrm`, `smoke-blk-integrity` — all PASS (the last two
+chosen for being the heaviest `kfree` traffic in the suite).
+
+**OPEN-13 is NOT closed.** One capture, no mechanism named. The change is that
+the next occurrence names two call sites instead of a generic size class.
  `READ_FILE` (1015) · `DELETE_FILE` (1016) ·
 `QUERY_MEMORY` (1018) · `REWRITE_AGENT_CODE` (842) · `PROPOSE_HYPOTHESIS` +
 `EVOLVE_GENOME` (1020); `SEND_IPC` and `RUN_EXPERIMENT` deferred.
