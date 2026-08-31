@@ -175,6 +175,11 @@ struct tcb {
                                  * LINEAGE, not on is_agent — fork does not inherit
                                  * authority flags, so a cap on is_agent would be
                                  * escaped by one fork. */
+    uint32_t   is_ipc;          /* DDR-1033: may use the ring-3 IPC door (NSI 98/99).
+                                 * Kernel-set at spawn, never mintable by the
+                                 * process. Zeroed in sched_create: kmalloc does
+                                 * not zero (§NON-NEGOTIABLE 10). */
+    cap_t      ipc_cap;         /* DDR-1033: the RES_IPC handle minted beside it */
     uint32_t   is_rewrite;      /* DDR-842: CAP_REWRITE — code-rewrite approval.
                                  * Meaningless without is_sovereign; the syscall
                                  * requires BOTH. Granted at spawn only. */

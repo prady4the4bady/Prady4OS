@@ -9198,3 +9198,60 @@ that arm: `ARGC=1`, no `alpha`/`beta`.
 
 Clean kernel `5c90a1c0bfcc5455`. `smoke-shell`, `smoke-execve-argv`,
 `smoke-sysexec` PASS; `hygiene_check.sh` all three PASSED.
+
+---
+
+## CHECKPOINT — DDR-1033: the ring-3 IPC door (NSI 98/99)
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `715520928e873aab`.
+Gate `smoke-sendipc`, shard 7, strict. Gate count 166 -> **167**;
+NSI max 97 -> **99**, next free 100.
+
+Built on the operator instruction in PR #17. Closes the `ACTION_SEND_IPC` gap
+DDR-1017 recorded as blocked.
+
+**DDR-1017 understated what already worked.** `ipc_send`/`ipc_recv` are complete
+*and already capability-gated* — `CAP_IPC_SEND` (bit 7) and `CAP_IPC_RECV`
+(bit 8) exist and are checked inside them, and `ipc_recv` already has DDR-961's
+bounded form. The missing pieces were the **door** and the **addressing**.
+
+Addressing = the roster slot index, the same identifier `SYS_AGENT_ROSTER` uses.
+
+**Two layers, second one's limit stated:** `is_ipc` (may this process use the
+door at all — kernel-set at spawn, never mintable, zeroed in `sched_create`) and
+the capability handle. All slot endpoints share ONE `res_id`, so the capability
+grants "IPC at all", not per-slot policy. Coarse, and recorded as such.
+
+### Arm B was passing for the wrong reason — the first M1 proved it
+
+The deny process was originally spawned with neither the flag nor the
+capability. A mutant that defeated `is_ipc` **still** produced `rc=-1`, because
+`cap_authorize` refused it anyway: **`is_ipc` could have been deleted outright
+and the gate would still have gone green.** Seventh dead-arm instance, and the
+first found by a mutant rather than by reading.
+
+Fixed by spawning the deny process with `ipc_grant()` and then clearing
+`is_ipc` — it holds the capability and lacks only the door.
+
+**Carry this:** two independent checks in series each mask the other's absence,
+and a fixture that trips both at once cannot tell you which is load-bearing.
+
+| mutant | kernel | outcome |
+|---|---|---|
+| clean | `715520928e873aab` | PASS, five sentinels |
+| M1 drop `is_ipc` | `8853aecb812532ba` | FAIL arm B — both print `rc=0` |
+| M2 copy one word | `5d1805213ae89c84` | FAIL arm C |
+| M3 widen the slot bound | `484e9b390aed1d7a` | FAIL arm D |
+
+M3 also shows the slot check is the only thing between a ring-3 integer and an
+out-of-bounds `g_agent_ep[99]`.
+
+**Not done:** the AETHER action path does not yet call this, so an approved
+`SEND_IPC` has no automatic effect yet. For the pre-launch checklist.
+
+### Operator instruction status (PR #17 comment, 2026-08-31)
+
+1. SEND_IPC — **DONE** (this DDR).
+2. RUN_EXPERIMENT — next.
+3. `docs/PRE_LAUNCH_CHECKLIST.md` — after, per the order posted in my reply.
+4. Branding/licensing item — goes in that checklist.

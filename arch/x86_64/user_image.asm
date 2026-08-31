@@ -321,6 +321,13 @@ argvtest_elf:
     incbin "build/argvtest.elf"
 argvtest_elf_end:
 
+; DDR-1033: ring-3 IPC door probe. Spawned TWICE -- granted and un-granted.
+global ipctest_elf
+global ipctest_elf_end
+ipctest_elf:
+    incbin "build/ipctest.elf"
+ipctest_elf_end:
+
 ; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
 ; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
 global actionspawntest_elf

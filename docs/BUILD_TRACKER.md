@@ -1968,3 +1968,56 @@ and the gate re-ran the old image, reproducing an already-fixed fault.
 
 Gate count 165 → **166**. Gates: `smoke-execve-argv`, `smoke-shell`,
 `smoke-sysexec`, `smoke-mprotect` PASS; `hygiene_check.sh` all three PASSED.
+
+
+## DDR-1033 — `SYS_IPC_SEND` / `SYS_IPC_RECV` (NSI 98/99): the ring-3 IPC door
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `715520928e873aab`.
+Gate `smoke-sendipc` (shard 7, strict). Closes the `ACTION_SEND_IPC` gap
+DDR-1017 recorded as blocked. Built on operator instruction, PR #17.
+
+DDR-1017 was right that there is no ring-3 door, and understated how much
+already worked: `ipc_send`/`ipc_recv` are complete **and already
+capability-gated** (`CAP_IPC_SEND` bit 7 / `CAP_IPC_RECV` bit 8 exist and are
+checked inside them), and `ipc_recv` already carries DDR-961's bounded form.
+The genuinely missing pieces were the **door** and the **addressing** — nothing
+let one agent name another's roster slot.
+
+Addressing is the roster slot index, the same identifier `SYS_AGENT_ROSTER`
+already uses, so no new namespace is invented.
+
+**Two layers, and an honest limit on the second.** `is_ipc` on `struct tcb`
+answers "may this process use the door at all" — kernel-set at spawn, never
+mintable, explicitly zeroed in `sched_create`. The capability handle is minted
+beside it. But every slot endpoint shares **one** `res_id`, so the capability
+grants "IPC at all", **not** "send to slot 3 but not slot 5". Real, but coarse;
+per-slot `res_id`s are the extension if policy is ever wanted.
+
+| mutant | change | kernel | outcome |
+|---|---|---|---|
+| — | clean | `715520928e873aab` | **PASS**, five sentinels |
+| M1 | drop the `is_ipc` check | `8853aecb812532ba` | FAIL at arm B — both processes print `rc=0` |
+| M2 | copy one word instead of four | `5d1805213ae89c84` | FAIL at arm C |
+| M3 | widen the slot bound past the array | `484e9b390aed1d7a` | FAIL at arm D |
+
+**Arm B was passing for the wrong reason, and the first M1 proved it.** The deny
+process was originally spawned with neither the flag nor the capability, so a
+mutant that defeated `is_ipc` *still* produced `rc=-1` — `cap_authorize` refused
+it anyway. `is_ipc` could have been deleted outright with the gate still green.
+Seventh dead-arm instance, and the **first found by a mutant rather than by
+reading**. Fixed by spawning the deny process with `ipc_grant()` and then
+clearing `is_ipc`, so it holds the capability and lacks only the door.
+
+The lesson worth carrying: two independent checks in series each mask the
+other's absence, and a fixture that trips both at once cannot tell you which one
+is load-bearing.
+
+M3 is also worth reading: with the bound widened, a ring-3 integer indexes
+`g_agent_ep[99]` directly. The slot check is the only thing between userspace and
+an out-of-bounds array read.
+
+**Not done:** the AETHER action path does not yet *call* this, so an approved
+`SEND_IPC` still has no automatic effect. Recorded in the pre-launch checklist.
+
+Gate count 166 → **167**. NSI max 97 → **99**. Gates: `smoke-sendipc`,
+`smoke-aether`, `smoke-agents`, `smoke-shell` PASS; `hygiene_check.sh` all three.

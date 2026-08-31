@@ -294,6 +294,12 @@ All entries below are **shipped**.
 
 ### Layer 7 UI / Sovereign desktop
 - VirtIO-GPU framebuffer (ADR-028); ring-3 FB surface `SYS_FB_INFO/MAP/FLUSH` (DDR-702)
+- DDR-1033: **`SYS_IPC_SEND` / `SYS_IPC_RECV` (NSI 98/99)** — the ring-3 IPC
+  door, closing DDR-1017's `ACTION_SEND_IPC` gap. One endpoint per roster slot,
+  addressed by slot index. Two layers: `is_ipc` (the door) and the capability
+  handle (coarse — one shared `res_id`, no per-slot policy). Gated by
+  `smoke-sendipc` (5 sentinels, granted **and** refused), M1/M2/M3
+  mutation-checked. The action path does not yet call it.
 - DDR-1032: **`execve` argv/envp marshalling** — they were previously `(void)`-cast
   away and `argc` hardcoded to 1, so an `execve` with arguments succeeded and
   delivered none. Strings are flattened into a kernel blob before the caller's

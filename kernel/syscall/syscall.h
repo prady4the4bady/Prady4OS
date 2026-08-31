@@ -167,6 +167,8 @@
  * discarding the tail. Appended at 94 — the next free NSI, per DDR-832. */
 #define SYS_KEY_POLL       96  /* (buf, max) -> count of struct key_ev (DDR-991)   */
 #define SYS_MPROTECT       97  /* (addr, len, prot) -> 0 | -EINVAL|-EACCES|-ENOMEM (DDR-1031) */
+#define SYS_IPC_SEND       98  /* (slot, const uint64_t msg[4]) -> 0 | -EPERM|-EINVAL|-EFAULT (DDR-1033) */
+#define SYS_IPC_RECV       99  /* (slot, uint64_t out[4], timeout_ticks) -> 0 | -EPERM|-EINVAL|-EFAULT|-ETIMEDOUT */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */
 #define SYS_FTRUNCATE      94  /* (fd, len) -> 0 | -EBADF|-EINVAL|-EPERM|-EIO  */
 #define SYS_VERIFY_AUDIT   93  /* (bad_idx_ptr) -> 0 intact | -EACCES broken | -EPERM */

@@ -457,6 +457,8 @@ extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT 
 extern const unsigned char mprotecttest_elf_end[];
 extern const unsigned char argvtest_elf[];            /* DDR-1032: execve argv/envp */
 extern const unsigned char argvtest_elf_end[];
+extern const unsigned char ipctest_elf[];             /* DDR-1033: ring-3 IPC door */
+extern const unsigned char ipctest_elf_end[];
 extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
 extern const unsigned char actionspawntest_elf_end[];
 extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUERY_MEMORY */
@@ -2384,6 +2386,43 @@ static void fs_test_thread(void *arg) {
                     } else {
                         kputs("[user] ARGVTEST probe FAILED to load\r\n");
                     }
+                }
+                /* DDR-1033: the ring-3 IPC door, spawned TWICE. is_ipc is a
+                 * PER-PROCESS flag, so one process cannot exercise both the
+                 * granted and the refused path -- and without the refused one
+                 * the gate could be hardcoded open and still pass. The second
+                 * spawn is deliberately NOT granted. */
+                if (probe_enabled("ipc")) {
+                    uint64_t iplen = (uint64_t)(uintptr_t)ipctest_elf_end -
+                                     (uint64_t)(uintptr_t)ipctest_elf;
+                    struct tcb *ig = 0, *ing = 0;
+                    if (elf_load((void *)(uintptr_t)ipctest_elf, iplen,
+                                 "IPCGRANT", &ig) == ELF_OK && ig) {
+                        ipc_grant(ig);                 /* the door, kernel-side only */
+                        sched_unblock(ig);
+                    } else {
+                        kputs("[user] IPC granted probe FAILED to load\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)ipctest_elf, iplen,
+                                 "IPCDENY", &ing) == ELF_OK && ing) {
+                        /* THE DENY PROCESS HOLDS THE CAPABILITY AND NOT THE
+                         * FLAG, and that is the whole point of this arm.
+                         *
+                         * Spawning it with neither made the arm pass for the
+                         * WRONG REASON: ipc_send's own cap_authorize refuses a
+                         * process with no handle, so `is_ipc` could have been
+                         * deleted outright and the gate would still have gone
+                         * green. Measured -- a mutant that defeated the is_ipc
+                         * check still produced rc=-1. Granting the capability
+                         * and then shutting the door is what makes arm B a test
+                         * of the door rather than of the capability. */
+                        ipc_grant(ing);
+                        ing->is_ipc = 0;
+                        sched_unblock(ing);
+                    } else {
+                        kputs("[user] IPC un-granted probe FAILED to load\r\n");
+                    }
+                    kputs("[user] ring-3 IPC door probes spawned (granted + un-granted)\r\n");
                 }
                 /* DDR-1017: Section 3C ACTION_SPAWN_PROCESS, the second
                  * force-pending type. FAT-rooted (like the actionread probe and
