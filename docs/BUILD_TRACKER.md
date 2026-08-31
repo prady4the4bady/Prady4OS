@@ -1843,3 +1843,20 @@ Mutation-proven by forcing the FAIL branch (kernel `234adcfec677a702`):
 
 Closes nothing: no fix, no rate bound. Gates: `smoke-rqstress-liveness` 2/2 PASS;
 `hygiene_check.sh` all three PASSED.
+
+
+## Release candidate re-verified on the current tip (2026-08-31)
+
+The RC evidence in §CURRENT BUILD STATE was recorded against `ace232f`. The tree
+has moved **43 commits** since, so it was stale. Re-run on kernel
+`55446cb042530e80`:
+
+- `smoke-iso-x86` **PASS** — BIOS arm OK and UEFI arm OK, one ISO, both boot
+  paths, same sentinel.
+- `smoke-iso-userspace` **PASS** — the ISO boots a live OS: SFS root + PRISM +
+  AETHER agent + write/read/delete round-trip.
+
+ISO 52,805,632 B. `hygiene_check.sh` all three PASSED; `smoke-shell` 5/5.
+
+PR #17's merge conflict against `dev/phase1` (`fa29506`) is resolved in merge
+commit `35291db` — documentation only, kernel bit-identical before and after.

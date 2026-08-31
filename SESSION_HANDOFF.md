@@ -9041,3 +9041,47 @@ healthy boot is what makes `idle2=0` in a real failure informative.
 5 attempts). `resched FAIL` can still redden any gate it lands in.
 
 Gates: `smoke-rqstress-liveness` 2/2 PASS; `hygiene_check.sh` ALL THREE PASSED.
+
+---
+
+## CHECKPOINT — PR #17 unblocked (merge conflict), and the RC re-verified on the current tip
+
+### The conflict, resolved
+
+The check-in found GitHub reporting PR #17 as `mergeable_state=dirty`. One
+conflict, in `SESSION_HANDOFF.md`, where both sides had appended to this log.
+
+Resolved as a **union with the shape asserted, not eyeballed**: the resolver
+checked that the base side of the hunk was empty (`=======` and `>>>>>>>`
+adjacent) before dropping it, so none of `fa29506`'s 84 handoff lines could be
+lost — and its checkpoint headings plus
+`docs/ddr/DDR-999-multiarch-parity-assessment.md` were then confirmed present in
+the merged tree (they had auto-merged in other hunks).
+
+The merge brings in documentation only, so the kernel must be unchanged, and it
+is: rebuilt to `55446cb042530e80`, **bit-identical** to the pre-merge build.
+Merge commit `35291db`.
+
+### Release candidate re-verified — kernel `55446cb042530e80`
+
+The RC was last verified on `ace232f`. The tree has moved **43 commits** since,
+so that evidence was stale. Re-run on the current tip:
+
+| gate | result |
+|---|---|
+| `smoke-iso-x86` | **PASS** — BIOS arm OK **and** UEFI arm OK, one ISO, both boot paths, same sentinel |
+| `smoke-iso-userspace` | **PASS** — the ISO boots a live OS: SFS root + PRISM + AETHER agent + write/read/delete round-trip |
+
+ISO `build/pradyos.iso`, 52,805,632 B. `hygiene_check.sh` all three PASSED;
+`smoke-shell` 5/5.
+
+### CI state at this check-in
+
+`04e01e5`, `e7f0010`, `1d926e4` all green; `b4c2aca` and `f238169` green;
+`bdb41c7` was the DDR-1030 `resched FAIL` (instrumented, not this PR's).
+
+### Unchanged
+
+`v1.0.0` stays untagged and STEP 3 unstarted, per the operator decision to hold
+the tag while OPEN-2 is root-caused. Accumulating greens on one tip is
+deliberately NOT being pursued as promotion prep.
