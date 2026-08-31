@@ -9085,3 +9085,50 @@ ISO `build/pradyos.iso`, 52,805,632 B. `hygiene_check.sh` all three PASSED;
 `v1.0.0` stays untagged and STEP 3 unstarted, per the operator decision to hold
 the tag while OPEN-2 is root-caused. Accumulating greens on one tip is
 deliberately NOT being pursued as promotion prep.
+
+---
+
+## CHECKPOINT — DDR-1031: `SYS_MPROTECT` (NSI 97)
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `0bf4d1df5502b2cb`.
+Gate `smoke-mprotect`, shard 5, strict. Gate count 164 -> **165**; NSI max
+96 -> **97**, next free 98.
+
+Adds `vmm_protect_range` — the vmm had no way to change a mapping's permissions
+while keeping its frame.
+
+**The trap, and why the implementation looks the way it does.** A PTE carries
+`PTE_SW_COW` (0x200) and `PTE_SW_SHARED` (0x400). Rebuilding it as
+`frame | flags` clears both — breaking DDR-1003's invariant and making
+`vmm_cow_fault` return early (`vmm_cow.c:115`), so the page is never copied.
+Preserved verbatim, with the cache attributes.
+
+**Three refusals, each with a reason:** W+X (`-EACCES`, DDR-757); write on a COW
+page (`-EACCES` — the hardware RO bit *is* the copy trigger; removing write is
+allowed); `PROT_NONE` (`-EINVAL` — an absent user page collides with ADR-038's
+demand-paged stack). Two-pass, so a partly-unmapped range changes nothing.
+
+**The probe forks** — a write to a read-only page is fatal, so the child takes
+it and the parent reads `st=-1` from `wait4` versus an explicit `exit(7)` had
+the store succeeded. It protects **before** forking on purpose: `fork` COWs only
+*writable* pages, so forking first would have made the child's store a COW fault
+that succeeds, and arm B would report "enforced" on a kernel with none.
+
+| mutant | kernel | outcome |
+|---|---|---|
+| clean | `0bf4d1df5502b2cb` | **PASS**, five arms |
+| M1 drop software-bit preservation | `d7dce7a13f82d86c` | FAIL at arm E only |
+| M3 drop the W^X refusal | `e1239532af6f99db` | FAIL at arm D only |
+| M2 drop `invlpg` | `a5b1e4dbd1107888` | **PASSED — no arm caught it** |
+
+**Two things the design got wrong, both corrected in DDR-1031 §6/§7.** Arm E was
+missing entirely, and the original M1 plan was unrunnable for the same reason it
+was proposed. And M2 passed: arm B is decided by the *child's* page tables, not
+the parent's TLB, and arm C's write succeeds under a stale writable entry too.
+**The `invlpg` is uncovered** and cannot be covered by a probe that must survive
+to print — a missing invalidation is only visible as a write that should have
+faulted and did not, and there is no `SIGSEGV` handler on this path
+(`idt.c:703` goes straight to `sched_exit(-1)`).
+
+Gates: `smoke-mprotect`, `smoke-cowfork`, `smoke-sysmmap`, `smoke-shell` PASS;
+`hygiene_check.sh` all three PASSED.

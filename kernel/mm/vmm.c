@@ -213,6 +213,60 @@ int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags)
     return map_core(pml4_phys & PTE_ADDR, virt, phys, flags);
 }
 
+/* DDR-1031: locate the leaf PTE for `virt` without creating anything. Returns a
+ * pointer into the page table, or 0 if any level is absent or is a large page. */
+static uint64_t *leaf_pte(uint64_t pml4_phys, uint64_t virt) {
+    uint64_t *pml4 = table_at(pml4_phys);
+    uint64_t pdpt_p = descend(pml4, idx(virt, 4), 0, 0);
+    if (!pdpt_p) return 0;
+    uint64_t pd_p = descend(table_at(pdpt_p), idx(virt, 3), 0, 0);
+    if (!pd_p) return 0;
+    uint64_t pt_p = descend(table_at(pd_p), idx(virt, 2), 0, 0);
+    if (!pt_p) return 0;
+    return &table_at(pt_p)[idx(virt, 1)];
+}
+
+int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t flags) {
+    pml4_phys &= PTE_ADDR;
+    uint64_t start = va & ~0xFFFull;
+    uint64_t end   = (va + len + 0xFFFull) & ~0xFFFull;
+
+    /* PASS 1 -- validate the WHOLE range before touching anything. A half-applied
+     * protection change is worse than a rejected one: the caller has no way to
+     * discover where it stopped, and POSIX callers do not expect to unwind it. */
+    for (uint64_t p = start; p < end; p += 0x1000ull) {
+        uint64_t *pte = leaf_pte(pml4_phys, p);
+        if (!pte) return -1;
+        uint64_t e = *pte;
+        if (!(e & PTE_PRESENT) || !(e & VMM_USER))
+            return -1;
+        /* DDR-1031 §3b: the hardware RO bit IS copy-on-write's trigger. Granting
+         * write on a COW page would not make it writable -- it would let this
+         * process write a frame another still shares, with no copy and no fault.
+         * Removing write from a COW page is harmless and stays allowed. */
+        if ((flags & VMM_RW) && (e & PTE_SW_COW))
+            return -2;
+    }
+
+    /* PASS 2 -- apply. The frame, both SOFTWARE bits and the cache attributes are
+     * carried over verbatim; only the permission bits are replaced. Rebuilding
+     * the PTE as `frame | flags` would clear PTE_SW_SHARED (breaking DDR-1003's
+     * invariant) and PTE_SW_COW (making vmm_cow_fault return early at
+     * vmm_cow.c:115, so the page is never copied). */
+    uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;
+    for (uint64_t p = start; p < end; p += 0x1000ull) {
+        uint64_t *pte = leaf_pte(pml4_phys, p);
+        uint64_t e = *pte;
+        *pte = (e & PTE_ADDR)
+             | (e & (PTE_SW_COW | PTE_SW_SHARED | VMM_PWT | VMM_PCD))
+             | PTE_PRESENT | VMM_USER
+             | (flags & VMM_RW)
+             | nx;
+        invlpg(p);
+    }
+    return 0;
+}
+
 int vmm_unmap(uint64_t virt) {
     uint64_t *pml4 = table_at(read_cr3() & PTE_ADDR);
 

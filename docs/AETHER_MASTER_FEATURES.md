@@ -294,6 +294,11 @@ All entries below are **shipped**.
 
 ### Layer 7 UI / Sovereign desktop
 - VirtIO-GPU framebuffer (ADR-028); ring-3 FB surface `SYS_FB_INFO/MAP/FLUSH` (DDR-702)
+- DDR-1031: **`SYS_MPROTECT` (NSI 97)** — change an existing user mapping's
+  permissions, keeping its frames (`vmm_protect_range`). Preserves `PTE_SW_COW`
+  and `PTE_SW_SHARED`. Refuses W+X, write-on-COW, and `PROT_NONE`, each for a
+  stated reason. Gated by `smoke-mprotect` (5 arms), M1/M3 mutation-checked;
+  the `invlpg` is recorded as uncovered.
 - PS/2 keyboard `SYS_INPUT_POLL` (DDR-703); virtio-input pointer `SYS_MOUSE_POLL` (DDR-705)
   - DDR-1028: the compositor publishes `PRADYOS_INPUT_READY` on its first
     successful pointer poll. `PRADYOS_AMBIANCE_OK` means "loop is about to

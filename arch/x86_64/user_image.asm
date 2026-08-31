@@ -305,6 +305,14 @@ actiondeltest_elf:
     incbin "build/actiondeltest.elf"
 actiondeltest_elf_end:
 
+; DDR-1031: SYS_MPROTECT (NSI 97) probe -- four arms, one forks so the child
+; takes the protection fault.
+global mprotecttest_elf
+global mprotecttest_elf_end
+mprotecttest_elf:
+    incbin "build/mprotecttest.elf"
+mprotecttest_elf_end:
+
 ; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
 ; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
 global actionspawntest_elf

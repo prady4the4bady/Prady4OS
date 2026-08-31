@@ -453,6 +453,8 @@ extern const unsigned char actionreadtest_elf[];      /* DDR-1015: 3C ACTION_REA
 extern const unsigned char actionreadtest_elf_end[];
 extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DELETE_FILE */
 extern const unsigned char actiondeltest_elf_end[];
+extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT */
+extern const unsigned char mprotecttest_elf_end[];
 extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
 extern const unsigned char actionspawntest_elf_end[];
 extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUERY_MEMORY */
@@ -2346,6 +2348,22 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] 3C ACTION_DELETE_FILE probe spawned (agent, SFS-rooted)\r\n");
                     } else {
                         kputs("[user] ACTIONDEL probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1031: SYS_MPROTECT. FAT-rooted and NOT in smnt_pid -- it
+                 * touches no files, so it neither needs the writable SFS root
+                 * nor belongs in the DDR-967 umount wait. Not an agent: it
+                 * exercises a plain POSIX syscall, not the AETHER surface. */
+                if (probe_enabled("mprotect")) {
+                    struct tcb *mp = 0;
+                    uint64_t mplen = (uint64_t)(uintptr_t)mprotecttest_elf_end -
+                                     (uint64_t)(uintptr_t)mprotecttest_elf;
+                    if (elf_load((void *)(uintptr_t)mprotecttest_elf, mplen,
+                                 "MPROTECT", &mp) == ELF_OK && mp) {
+                        sched_unblock(mp);
+                        kputs("[user] SYS_MPROTECT probe spawned\r\n");
+                    } else {
+                        kputs("[user] MPROTECT probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-1017: Section 3C ACTION_SPAWN_PROCESS, the second

@@ -1860,3 +1860,59 @@ ISO 52,805,632 B. `hygiene_check.sh` all three PASSED; `smoke-shell` 5/5.
 
 PR #17's merge conflict against `dev/phase1` (`fa29506`) is resolved in merge
 commit `35291db` — documentation only, kernel bit-identical before and after.
+
+
+## DDR-1031 — `SYS_MPROTECT` (NSI 97)
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `0bf4d1df5502b2cb`,
+`-Werror` clean. Group D. Gate `smoke-mprotect` (shard 5, strict, 120 s).
+
+Adds `vmm_protect_range` — the primitive the vmm did not have. `vmm_map`,
+`vmm_unmap`, `vmm_resolve` and `vmm_user_range_ok` all existed; nothing changed
+a mapping's permissions while **keeping its frame**.
+
+**The trap.** A PTE here carries `PTE_SW_COW` (0x200) and `PTE_SW_SHARED`
+(0x400). Rebuilding it as `frame | flags` clears both: that breaks DDR-1003's
+shared-frame invariant, and makes `vmm_cow_fault` return early
+(`vmm_cow.c:115` tests exactly that bit) so the page is **never copied**. Both
+bits and the cache attributes are preserved verbatim.
+
+**Three refusals, each with a reason.** `PROT_WRITE|PROT_EXEC` → `-EACCES`
+(W^X, DDR-757). `PROT_WRITE` on a COW page → `-EACCES`: the hardware RO bit *is*
+the copy trigger, so granting write would let one process write a frame another
+still shares, with no copy and no fault — removing write is allowed.
+`PROT_NONE` → `-EINVAL`: an absent user page collides with ADR-038's
+demand-paged stack, which faults absent pages *in* rather than reporting them.
+Two-pass, so a partly-unmapped range changes nothing.
+
+**The probe forks** because a write to a read-only page is fatal — the child
+takes the fault and the parent reads `st=-1` from `wait4` (a ring-3 fault is
+`sched_exit(-1)`, `idt.c:703`), versus an explicit `exit(7)` if the store had
+succeeded. Two distinct values, so "enforced" is never inferred from silence.
+And it protects **before** forking on purpose: `fork` COWs only *writable*
+pages (`vmm_cow.c:87-92`), so forking first would have made the child's store a
+COW fault that succeeds — arm B would report "enforced" on a kernel with none.
+
+| mutant | change | kernel | outcome |
+|---|---|---|---|
+| — | clean | `0bf4d1df5502b2cb` | **PASS**, five arms |
+| M1 | drop the software-bit preservation | `d7dce7a13f82d86c` | **FAIL at arm E only** |
+| M3 | drop the W^X refusal | `e1239532af6f99db` | **FAIL at arm D only** |
+| M2 | drop `invlpg` | `a5b1e4dbd1107888` | **PASSED — no arm caught it** |
+
+**Arm E was missing from the design,** and the original M1 plan was unrunnable
+for the same reason it was proposed: `smoke-cowfork` cannot see a dropped COW
+tag, because `vmm_protect_range` is reached only through `mprotect`. The fix is
+the asymmetry above — RO on a COW page is allowed, RW refused — so a dropped tag
+turns `-EACCES` into `0`.
+
+**M2 passed every arm, and the design's prediction for it was wrong.** Arm B is
+decided by the *child's* page tables, not the parent's TLB; arm C's write
+succeeds under a stale *writable* entry too. The `invlpg` is **uncovered**, and
+cannot be covered by a probe of this shape: a missing invalidation is only
+visible as a write that should have faulted and did not, and the observer dies.
+There is no `SIGSEGV` handler on this path. Recorded as an uncovered line, not
+claimed as tested.
+
+Gates: `smoke-mprotect`, `smoke-cowfork`, `smoke-sysmmap`, `smoke-shell` all
+PASS; `hygiene_check.sh` all three PASSED.
