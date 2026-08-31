@@ -9132,3 +9132,49 @@ faulted and did not, and there is no `SIGSEGV` handler on this path
 
 Gates: `smoke-mprotect`, `smoke-cowfork`, `smoke-sysmmap`, `smoke-shell` PASS;
 `hygiene_check.sh` all three PASSED.
+
+---
+
+## CHECKPOINT — DDR-1032: `execve` argv/envp marshalling
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `64aaecffaeeb2800`,
+`argtest.elf` `4e42203e5c9a5518`. Gate `smoke-execve-argv`, shard 6, strict.
+Gate count 165 -> **166**.
+
+`sys_execve` read `uargv`/`uenvp` and `(void)`-cast them away; `elf_build_image`
+hardcoded `argc=1, argv[0]=path`. So an `execve` **with** arguments succeeded and
+delivered none — DDR-877's "worse than incomplete".
+
+**Ordering is the design.** The strings live in the caller's address space, which
+`execve` is about to destroy, so they are copied into a kernel blob before
+`elf_build_image`. That is why `struct exec_args` is a flat blob, not a pointer
+array. `args == NULL` takes the original code verbatim, so all ~65 boot probes
+and PRISM's `run` are unchanged.
+
+**The receiver is assembly on purpose** — `argc`/`argv`/`envp` arrive on the
+stack at entry, and `force_align_arg_pointer` (on every C probe, DDR-823) moves
+RSP, so `__builtin_frame_address` cannot find `argc`.
+
+**The alignment arm caught a bug in my own code.** The frame is 7 fixed slots
+plus one per string, so RSP is 16-aligned only when that total is EVEN. The first
+draft padded on EVEN — inverted — and shipped a misaligned stack for
+`argc=3, envc=1`. An assembly receiver cannot feel that; all six other arms
+passed. `PRADYOS_ARGV_ALIGN` measures RSP at entry and read `bad`.
+
+| mutant | kernel | outcome |
+|---|---|---|
+| clean | `64aaecffaeeb2800` | PASS, seven arms |
+| M1 discard argv | `b18b9276d19e5497` | FAIL — `ARGC=1` |
+| M2 invert the pad | `311f76bf9d6cf990` | FAIL at the alignment arm only |
+
+**Two hygiene catches and a latent build defect.**
+`ci-probe-rodata-check` rejected `argvtest.elf` ("writable allocated") because
+`static const char *argv[]` holds addresses; built on the stack instead.
+`argtest.asm` first staged a digit in `.data` and took `#PF err=0x7` — these
+probes get a single R+X segment.
+And **`USER_ALL_SRCS` omitted `user/*.asm`**, so editing any assembly probe
+rebuilt nothing, including the `incbin`'d ones. Measured: an `argtest.asm` edit
+left `kernel.bin` bit-identical and the gate re-ran the old image. Fixed.
+
+**Not done:** no auxv beyond `AT_PAGESZ`; PRISM still calls `execve(path, 0, 0)`,
+so passing shell arguments through `run` is a further change on top of this.

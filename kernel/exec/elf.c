@@ -115,6 +115,7 @@ static uint64_t load_page(uint64_t as, uint64_t va, uint64_t flags,
 }
 
 int elf_build_image(const void *image, uint64_t image_len, const char *name,
+                    const struct exec_args *args,
                     uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp) {
     if (!image || image_len < sizeof(struct elf64_ehdr) ||
         !out_as || !out_entry || !out_rsp)
@@ -218,20 +219,67 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     uint64_t nlen = kstrlen(prog) + 1;
 
     uint64_t sp = PAGE_SIZE;
-    sp -= nlen;
-    memcpy(kp + sp, prog, (size_t)nlen);
-    uint64_t argv0_uva = top_uva + sp;
+
+    /* DDR-1032: lay the marshalled strings down first and remember each one's
+     * USER virtual address, then build the pointer arrays above them. With no
+     * args this reduces to exactly the previous frame -- argc=1, argv[0]=path --
+     * which is why every existing probe keeps booting unchanged. */
+    uint64_t uva[EXEC_ARG_MAX_ENTRIES];
+    unsigned nstr = 0;
+    unsigned nargc, nenvc;
+
+    if (args && args->argc && args->blob &&
+        (unsigned)(args->argc + args->envc) <= EXEC_ARG_MAX_ENTRIES &&
+        args->blob_len <= EXEC_ARG_MAX_BYTES) {
+        sp -= args->blob_len;
+        memcpy(kp + sp, args->blob, (size_t)args->blob_len);
+        /* Walk the copy, not the source: the offsets are identical and this
+         * cannot run off the end, because blob_len bounds it. */
+        uint64_t base = sp;
+        for (uint32_t o = 0; o < args->blob_len && nstr < EXEC_ARG_MAX_ENTRIES; ) {
+            uva[nstr++] = top_uva + base + o;
+            while (o < args->blob_len && kp[base + o]) o++;
+            o++;                                   /* step over the NUL */
+        }
+        nargc = args->argc;
+        nenvc = args->envc;
+        if (nargc + nenvc > nstr) {                /* blob short of its own counts */
+            nargc = nstr; nenvc = 0;
+        }
+    } else {
+        sp -= nlen;
+        memcpy(kp + sp, prog, (size_t)nlen);
+        uva[0] = top_uva + sp;
+        nstr = 1; nargc = 1; nenvc = 0;
+    }
     sp &= ~15ull;                                  /* 16-align the structure end */
+
+    /* The frame is 7 fixed slots (4 auxv + 2 terminators + argc) plus one per
+     * string. Each is 8 bytes, so RSP lands 16-aligned only when that TOTAL is
+     * EVEN -- pad one slot when it is odd. The pad goes first, at the highest
+     * address, where nothing reads it.
+     *
+     * The old fixed frame was 7+1+0 = 8, already even, which is why no pad ever
+     * existed and why getting this backwards was easy: the first draft padded on
+     * EVEN and shipped a misaligned stack for argc=3/envc=1 (11 slots). Nothing
+     * in the assembly receiver can feel that, so `PRADYOS_ARGV_ALIGN` was added
+     * to measure RSP at entry -- it read `bad`, which is how this was caught. */
+    if (((7u + nargc + nenvc) & 1u) != 0u) { sp -= 8; *(uint64_t *)(kp + sp) = 0; }
 
     /* push high->low so the final (lowest) slot is argc; RSP stays 16-aligned */
     sp -= 8; *(uint64_t *)(kp + sp) = 0;           /* auxv[1].val  (AT_NULL)     */
     sp -= 8; *(uint64_t *)(kp + sp) = AT_NULL;     /* auxv[1].type               */
     sp -= 8; *(uint64_t *)(kp + sp) = PAGE_SIZE;   /* auxv[0].val                */
     sp -= 8; *(uint64_t *)(kp + sp) = AT_PAGESZ;   /* auxv[0].type               */
-    sp -= 8; *(uint64_t *)(kp + sp) = 0;           /* envp[0] = NULL             */
-    sp -= 8; *(uint64_t *)(kp + sp) = 0;           /* argv[1] = NULL             */
-    sp -= 8; *(uint64_t *)(kp + sp) = argv0_uva;   /* argv[0]                    */
-    sp -= 8; *(uint64_t *)(kp + sp) = 1;           /* argc                       */
+    sp -= 8; *(uint64_t *)(kp + sp) = 0;           /* envp terminator            */
+    for (unsigned i = nenvc; i-- > 0; ) {
+        sp -= 8; *(uint64_t *)(kp + sp) = uva[nargc + i];
+    }
+    sp -= 8; *(uint64_t *)(kp + sp) = 0;           /* argv terminator            */
+    for (unsigned i = nargc; i-- > 0; ) {
+        sp -= 8; *(uint64_t *)(kp + sp) = uva[i];
+    }
+    sp -= 8; *(uint64_t *)(kp + sp) = nargc;       /* argc                       */
     uint64_t user_rsp = top_uva + sp;
 
     vdso_map_user(as);          /* IMP-C: read-only vDSO clock page in every user AS */
@@ -249,7 +297,7 @@ int elf_load(const void *image, uint64_t image_len, const char *name,
         return ELF_E_ARGS;
 
     uint64_t as, entry, user_rsp;
-    int rc = elf_build_image(image, image_len, name, &as, &entry, &user_rsp);
+    int rc = elf_build_image(image, image_len, name, 0, &as, &entry, &user_rsp);
     if (rc != ELF_OK)
         return rc;
 

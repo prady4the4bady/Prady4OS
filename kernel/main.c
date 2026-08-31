@@ -455,6 +455,8 @@ extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DEL
 extern const unsigned char actiondeltest_elf_end[];
 extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT */
 extern const unsigned char mprotecttest_elf_end[];
+extern const unsigned char argvtest_elf[];            /* DDR-1032: execve argv/envp */
+extern const unsigned char argvtest_elf_end[];
 extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
 extern const unsigned char actionspawntest_elf_end[];
 extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUERY_MEMORY */
@@ -2364,6 +2366,23 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] SYS_MPROTECT probe spawned\r\n");
                     } else {
                         kputs("[user] MPROTECT probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1032: SYS_EXECVE argv/envp. FAT-rooted -- it execve's
+                 * /ARGTEST.ELF, which is placed on the FAT volume because execve
+                 * resolves against the PROCESS root (the same reason
+                 * /EXECTEST.ELF lives there). Not in smnt_pid: it touches no
+                 * files on the SFS root. */
+                if (probe_enabled("argv")) {
+                    struct tcb *av = 0;
+                    uint64_t avlen = (uint64_t)(uintptr_t)argvtest_elf_end -
+                                     (uint64_t)(uintptr_t)argvtest_elf;
+                    if (elf_load((void *)(uintptr_t)argvtest_elf, avlen,
+                                 "ARGVTEST", &av) == ELF_OK && av) {
+                        sched_unblock(av);
+                        kputs("[user] execve argv/envp probe spawned\r\n");
+                    } else {
+                        kputs("[user] ARGVTEST probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-1017: Section 3C ACTION_SPAWN_PROCESS, the second

@@ -294,6 +294,12 @@ All entries below are **shipped**.
 
 ### Layer 7 UI / Sovereign desktop
 - VirtIO-GPU framebuffer (ADR-028); ring-3 FB surface `SYS_FB_INFO/MAP/FLUSH` (DDR-702)
+- DDR-1032: **`execve` argv/envp marshalling** — they were previously `(void)`-cast
+  away and `argc` hardcoded to 1, so an `execve` with arguments succeeded and
+  delivered none. Strings are flattened into a kernel blob before the caller's
+  address space is replaced. `args == NULL` takes the original path verbatim, so
+  every boot probe is unchanged. Gated by `smoke-execve-argv` (7 arms, one of
+  which measures RSP alignment at entry), M1/M2 mutation-checked.
 - DDR-1031: **`SYS_MPROTECT` (NSI 97)** — change an existing user mapping's
   permissions, keeping its frames (`vmm_protect_range`). Preserves `PTE_SW_COW`
   and `PTE_SW_SHARED`. Refuses W+X, write-on-COW, and `PROT_NONE`, each for a

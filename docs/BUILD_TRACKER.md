@@ -1916,3 +1916,55 @@ claimed as tested.
 
 Gates: `smoke-mprotect`, `smoke-cowfork`, `smoke-sysmmap`, `smoke-shell` all
 PASS; `hygiene_check.sh` all three PASSED.
+
+
+## DDR-1032 — `execve` argv/envp marshalling
+
+**IMPLEMENTED + GATED + mutation-checked.** Kernel `64aaecffaeeb2800`,
+`argtest.elf` `4e42203e5c9a5518`. Gate `smoke-execve-argv` (shard 6, strict).
+
+`sys_execve` read `uargv`/`uenvp` and threw them away with a `(void)` cast, and
+`elf_build_image` hardcoded `argc=1, argv[0]=path`. So `execve` with arguments
+**succeeded and delivered none** — the shape DDR-877 called "worse than
+incomplete" for `mmap`'s dropped `fd`/`offset`.
+
+**Ordering is the design.** The strings live in the caller's address space,
+which `execve` is about to destroy, so they are copied into a kernel blob before
+`elf_build_image` and long before the CR3 switch. Hence a flat blob rather than
+a pointer array. Bounds: 32 entries, 1024 bytes, `-E2BIG` past either (a new
+errno; POSIX's code for this was absent).
+
+**Backward compatibility is structural:** `args == NULL` takes the original code
+verbatim, and every existing caller passes NULL — `elf_load` for ~65 boot probes
+and PRISM's `run`. `smoke-shell`, `smoke-sysexec`, `smoke-user` confirm it.
+
+**The receiver is assembly on purpose:** `argc`/`argv`/`envp` arrive on the stack
+at entry, and every C probe carries `force_align_arg_pointer` (DDR-823), which
+realigns RSP — `__builtin_frame_address` cannot find `argc`.
+
+**The alignment arm caught a bug in this DDR's own code.** The frame is 7 fixed
+slots plus one per string; RSP is 16-aligned only when that total is even. The
+first draft padded on **even** — exactly inverted — and shipped a misaligned
+stack for `argc=3, envc=1`. An assembly receiver cannot feel that, so all six
+other arms passed. `PRADYOS_ARGV_ALIGN` measures RSP at entry and read `bad`.
+
+| mutant | change | kernel | outcome |
+|---|---|---|---|
+| — | clean | `64aaecffaeeb2800` | **PASS**, seven arms |
+| M1 | `sys_execve` discards argv again | `b18b9276d19e5497` | FAIL — `ARGC=1`, `argv[0]=/ARGTEST.ELF` |
+| M2 | invert the alignment pad | `311f76bf9d6cf990` | FAIL at the alignment arm only |
+
+**Two hygiene catches.** `ci-probe-rodata-check` rejected the first
+`argvtest.elf` — `static const char *argv[]` holds addresses and lands in
+writable data, which these single-R+X-segment probes cannot have; built on the
+stack instead. And `argtest.asm`'s first draft staged a digit in `.data` and took
+a `#PF err=0x7`.
+
+**A latent build defect, fixed.** `USER_ALL_SRCS` listed `user/*.c` and
+`user/*.h` but **not `user/*.asm`**, so editing any assembly probe rebuilt
+nothing — including the `incbin`'d ones whose content genuinely changes
+`kernel.bin`. Measured: an edit to `argtest.asm` left the kernel bit-identical
+and the gate re-ran the old image, reproducing an already-fixed fault.
+
+Gate count 165 → **166**. Gates: `smoke-execve-argv`, `smoke-shell`,
+`smoke-sysexec`, `smoke-mprotect` PASS; `hygiene_check.sh` all three PASSED.

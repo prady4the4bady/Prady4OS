@@ -313,6 +313,14 @@ mprotecttest_elf:
     incbin "build/mprotecttest.elf"
 mprotecttest_elf_end:
 
+; DDR-1032: SYS_EXECVE argv/envp launcher. Its target /ARGTEST.ELF lives on the
+; FAT volume (execve resolves against the process root), not in this image.
+global argvtest_elf
+global argvtest_elf_end
+argvtest_elf:
+    incbin "build/argvtest.elf"
+argvtest_elf_end:
+
 ; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
 ; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
 global actionspawntest_elf
