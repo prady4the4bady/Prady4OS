@@ -779,6 +779,7 @@ directive supersedes the older date wherever this file still implies it).
 
 ## ORIENTATION
 
+- **Pre-launch checklist (every deferred/open item, one document): `docs/PRE_LAUNCH_CHECKLIST.md`**
 - Status: `docs/build_status.md`
 - Feature state: `docs/AETHER_MASTER_FEATURES.md` (Sections A–H)
 - Full backlog: `docs/BUILD_TRACKER.md`

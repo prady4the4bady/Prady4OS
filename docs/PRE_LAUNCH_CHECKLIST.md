@@ -1,0 +1,419 @@
+# PRADYOS — PRE-LAUNCH CHECKLIST
+
+**One document for everything that is deferred, open, uncovered, or awaiting an
+operator decision.** Created 2026-09-01 on operator instruction (PR #17), item 3:
+*"Consolidate every deferred item into one document — what it is, why deferred,
+whether the operator must decide before user testing."*
+
+## How to read this
+
+Every row carries three things, and the third is the point of the document:
+
+| Column | Means |
+|---|---|
+| **What** | The thing itself, named precisely enough to find in the tree. |
+| **Why deferred / open** | The mechanism or the missing subsystem. Not "no time". |
+| **Operator decision before user testing?** | **YES** = a person must choose before anyone outside this repo boots the ISO. **NO** = it is recorded, bounded, and safe to carry into user testing as-is. |
+
+A **NO** is not a claim that the item is unimportant. It is a claim that shipping
+without it does not create a decision a user's experience depends on, and that
+the item is written down here rather than lost.
+
+**Nothing in this document is a fix.** Where a defect is open, it is open; where
+a line is uncovered, it is uncovered. §NON-NEGOTIABLE 3 forbids a fix without a
+named mechanism from a real failing artefact, and several rows below exist
+precisely because that bar has not been met.
+
+---
+
+## SECTION 1 — OPERATOR DECISIONS REQUIRED BEFORE USER TESTING
+
+These are the only rows marked YES. Everything else in this document is
+recorded, not blocking.
+
+### 1.1 — Placeholder branding / logo art must be replaced or licensed
+
+**Status: OPEN — operator decision required. Nothing in the repository ships
+art today, and that is the good news; the exposure is upstream of the tree.**
+
+Measured 2026-09-01:
+
+- `find` across the whole working tree for `*.png`, `*.svg`, `*scorpion*`,
+  `*logo*` returns **zero files**. There is no `assets/` directory.
+- `grep -rni "scorpion|logo|brand|trademark|wordmark"` over all `.md`/`.c`/`.h`
+  returns **no branding art reference** — every hit is either the CPUID
+  *processor brand string* (`sys_proc.c:137`, `prism.c:51`, `sysinfotest.c`),
+  an unrelated identifier, or `TELOPT_LOGOUT` in vendored musl.
+- The single design-side reference is `docs/design/LAYER7_UI_UX_BRIEF.md`:
+  line 59 specifies a **logo** in the top-left sidebar, and line 104 specifies
+  `assets/icons/{sovereign,system}/` (16 "Sovereign Glyphs", 1x/2x + `.json`).
+  **Neither exists.** The brief describes art that was never produced, so the
+  shipped compositor renders no mark at all.
+
+**So the risk is not in the ISO — it is in the design references.** Any
+AI-generated placeholder mark (the scorpion logo, or anything like it) used in
+briefs, mockups, screenshots, README art, or promotional material carries
+copyright/provenance exposure that a shipped binary would not.
+
+**The decision the operator must make, before any public release or user
+testing that produces screenshots:**
+
+1. **Commission or draw an original simple mark** (a geometric wordmark needs no
+   illustration and no model), **or**
+2. **Buy a properly licensed asset** with a licence file committed beside it,
+   **or**
+3. **Ship with no mark at all** — which is the current, and safest, state.
+
+Option 3 is what the tree does today and requires no work. Options 1 and 2
+require the operator to act; neither can be decided by an implementer.
+
+**Whichever is chosen, the same rule applies to the 16 Sovereign Glyphs** in the
+brief §6. They are unbuilt. If they are ever built by a generative tool, they
+inherit this same item.
+
+**Do not treat this as closed until an explicit operator answer is recorded
+here.** This section exists so the item cannot be lost, which was the operator's
+stated reason for asking for it.
+
+### 1.2 — `v1.0.0` is deliberately untagged, and `main` promotion is unstarted
+
+**Status: HELD BY OPERATOR DECISION. Not an oversight.**
+
+`dev/phase1` was fast-forwarded to `ace232f` and the release candidate was
+verified on it (BIOS + UEFI ISO arms, plus `smoke-iso-userspace`, which boots a
+live OS: SFS root + PRISM + an AETHER agent + a write/read/delete round-trip).
+The tag was then **held**, on an explicit decision, because the OPEN-1 campaign
+had just found a locally reproducible ring-0 `#PF` (DDR-985, 1/20).
+
+Since then the picture changed but the hold was not lifted:
+
+- Route 2 (that `#PF`) is **CLOSED** at 95% power — 60/60 clean on one kernel
+  hash `5349db4d791cc2ab`, against a threshold fixed before the run (DDR-1000).
+- Route 3 is **CLOSED** (DDR-990 §9, mutation-checked both ways).
+- **Route 1 is still open**, and it is CI-only, so no local campaign can close it.
+
+**The operator must decide whether the original reason for the hold still
+holds.** It was "root-cause the `#PF` before tagging"; that `#PF` is closed. What
+remains open is a different signature that a local campaign structurally cannot
+settle. Continuing to hold is defensible; so is tagging with route 1 named in
+the release notes (DDR-1011 §4 already drafted that wording). **An implementer
+should not make this call**, which is why it sits in Section 1.
+
+---
+
+## SECTION 2 — OPEN DEFECTS
+
+None of these is closable by effort alone. Each is waiting on evidence, and each
+has an armed instrument that makes the next occurrence diagnostic.
+
+| # | Symptom | State | Operator decision? |
+|---|---|---|---|
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | Routes 2 and 3 **CLOSED** (DDR-1000, DDR-990). **Route 1 OPEN**: a CI-only hang whose recorded stopping point is `SYSFSTAT OK`. DDR-1009 §2 found a capture stopping at exactly that point on a *different* gate that **panicked** — so route 1 is not always silent, and DDR-994's "a hang prints nothing" framing is too strong. A stopping point is not a cause. Local reproduction is structurally unable to settle it. | NO — but see §1.2, which is the decision this feeds |
+| **OPEN-2** | `[apfreeze]` in CI | **The label covers at least THREE distinct producers** (DDR-1019). Resolve any new RIP against its own binary before matching: DDR-1019's is the panic-arbitration *loser's* halt loop at `idt.c:697`; DDR-1006's runs through `sched_tick`; DDR-1010's through `sys_mmap`. The original (DDR-981, `yield()` spinning with IF clear) is genuinely fixed. **Local reproduction is EXHAUSTED** — 56 clean runs across the two kernels that matter (36/36 post-probe, 20/20 pre-probe, DDR-1023), including the exact binary the failure was first seen on. The old "~1 in 4" was one session's small sample and has not held up; stop quoting it as a rate. | NO |
+| **OPEN-12** | `*** NEXUS KERNEL PANIC *** / component: NEXUS isr` | **Root-cause candidate found and fixed** (DDR-996): `sched_exit` left a thread linked on its per-CPU runqueue and both reap paths unlinked only the all-threads ring, so a TCB could be freed while a queue still pointed at it. 16/16 victims measured, mutation-checked. **NOT closed**: OPEN-12's *original* capture lost its RIP to the interleaving DDR-979 later fixed, so identity is unproven and matching on `component:` alone would be colour-matching. Closes on a clean campaign, not on the fix. | NO |
+| **OPEN-13** | `[kheap] double-free … objsize=0x80` → KHEAP PANIC | **Instrument BUILT and mutation-proven** (DDR-1024): the line now carries `freed_by=` and `now_by=`, the first and second frees' return addresses, captured at the public `kfree`/`pcb_free`/`cap_free`/`ipc_free` boundary. `objsize=0x80` is a generic 128-byte class, not a dedicated cache, so "size class → structure" does not resolve. **One CI capture, no mechanism named — NOT a fix.** The next occurrence is diagnostic: resolve BOTH addresses against the exact binary that produced the log. | NO |
+| **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | **NOT REPRODUCED since instrumentation** (DDR-968, live since `ea4601e`). The witness line prints only on a *failing* boot, so a green boot emits none of it — there is no red artefact to read. The gate is gating (shard 2, not excluded), so a recurrence would redden its suite. Reopens on the first `PRADYOS_AGENT_WITNESS_WAIT` line. | NO |
+
+---
+
+## SECTION 3 — CORRECTIONS: DEFERRAL ENTRIES THAT ARE NOW STALE
+
+`docs/BUILD_TRACKER.md` §"Pre-approved exceptions" still carries three
+`[DEFERRED]` entries for work that **has since shipped**. They are corrected
+here; the tracker rows themselves are superseded by this section.
+
+| Tracker entry | Correction |
+|---|---|
+| `ACTION_SEND_IPC` — *"no ring-3 IPC surface … there is no `SYS_IPC_*`"* | **BUILT — DDR-1033.** `SYS_IPC_SEND` / `SYS_IPC_RECV` are NSI 98/99, gated by `smoke-sendipc`, mutation-checked M1/M2/M3 on distinct kernel hashes. Addressing is by roster slot (the same index `SYS_AGENT_ROSTER` already uses, so no new namespace). Two layers: `is_ipc` on `struct tcb` (kernel-set at spawn, never mintable, zeroed in `sched_create` per §NON-NEGOTIABLE 10) plus a `RES_IPC` capability handle. **See §4.1 for what it still does NOT do.** |
+| `F#73 sovereign NL UI` — *"blocked on … no windowed terminal client, and `sys_exec.c:47` discards argv/envp"* | **Both blockers are gone.** The windowed terminal client is `user/term.c` (DDR-1027, `smoke-ctrlaltt`); argv/envp marshalling is DDR-1032 (`smoke-execve-argv`), with PRISM's `run` passing arguments through (DDR-1032b). F#73 itself remains unbuilt, but it is now unbuilt *work*, not a blocked item. |
+| `ACTION_RUN_EXPERIMENT` — *"`CAP_EXEC` is a `#define` checked nowhere … no `is_exec` on `struct tcb`"* | **Still accurate as of this writing.** Re-measured 2026-09-01: `is_exec` returns zero matches in the kernel, and `CAP_EXEC` appears only inside a comment at `sched.h:122`. This is the operator's item 2 and is in progress; this row updates when it lands or when it is reported as not making the bar. |
+
+---
+
+## SECTION 4 — MEASURED, RECORDED, NOT FIXED
+
+Residuals that were found by measurement during this work, stated rather than
+quietly carried. Each is bounded and none blocks user testing.
+
+### 4.1 — The AETHER action path does not yet call `SYS_IPC_SEND`
+
+DDR-1033 built the ring-3 door. It did **not** wire the AETHER executor to it.
+So an approved `ACTION_SEND_IPC` still has **no automatic effect** — a process
+must call the syscall itself. This is the honest residual of that DDR and is
+recorded here so "SEND_IPC is shipped" is not read as more than it is.
+
+### 4.2 — The IPC capability is coarse by construction, and the limit is stated not implied
+
+Every roster-slot endpoint shares one `res_id`, so the capability grants *"IPC
+at all"*, **not** *"send to slot 3 but not slot 5"*. That is a real check and a
+coarse one. Per-slot `res_id`s are the extension if policy is ever wanted.
+Deliberate, documented in DDR-1033, not a gap discovered later.
+
+### 4.3 — `ACTION_SEND_IPC` auto-approves in sovereign mode with nothing to act on it
+
+Both deferred action types are **in** the enum, so `SEND_IPC` auto-approves in
+sovereign mode. This contradicts `aether.h`'s own policy for the six types it
+omits. Left alone deliberately: the enum is append-only wire format, and the
+entry is bounded and audited (DDR-1021).
+
+### 4.4 — `vmm_protect_range`'s `invlpg` is UNCOVERED
+
+DDR-1031 M2 (drop the `invlpg`) **passed every arm**, and the DDR's own
+prediction was wrong: arm B is decided by the child's page tables, not the
+parent's TLB, and arm C's write succeeds under a stale writable entry too. A
+missing invalidation is only visible as a write that should have faulted and did
+not — and on this kernel the observer dies (`idt.c:703` goes straight to
+`sched_exit`; there is no SIGSEGV handler). **Recorded as an uncovered line, not
+claimed as tested.** A probe of this shape cannot cover it.
+
+### 4.5 — `ptnode_in_use` underflows on every fork
+
+DDR-1003: it counts `++` per **frame** but `--` per **mapping**, and
+`vmm_cow_fault` drops its old ref with `pmm_free_page` and no `--`. Read-only
+text pages are shared with no COW at all, so they can never rebalance. **Not
+fixed**: no gate reads it across a fork, so there is no artefact
+(§NON-NEGOTIABLE 3). DDR-1003 §5.1 says what a gate must do — **and warns that
+the obvious leak-gate shape is balanced and would pass.**
+
+### 4.6 — The compositor takes ~28 wall seconds to become ready
+
+DDR-1029, measured with a `SYS_CLOCK` stamp: **30 full-screen 1024×768
+render+present operations at ~0.93 s each**, all inside `set_ambiance`
+(`compositor.c:990`) — 4 announce transitions + 1 settle × 6 frames. Nothing
+about the frame loop is pathological. **No fix**: the 24 announce renders each
+emit a `PRADYOS_AMBIANCE <name>` sentinel and gates assert on those, so cutting
+the renders while keeping the prints would make every one of those assertions
+vacuous — the exact failure DDR-1012 removed from `smoke-horizon` and DDR-973
+from `smoke-fat32-multicluster`. Options named (leave it / lower `frames` /
+assert on framebuffer readback); none is a one-line change.
+
+**This is user-visible.** A desktop that takes half a minute to appear is a
+legitimate first-impression concern for user testing. It is a *known cost with a
+named mechanism*, not a defect, which is why it is NO rather than YES — but the
+operator should know it before showing the desktop to anyone.
+
+### 4.7 — The mouse press latch coalesces, and a missed RELEASE is still missed
+
+DDR-1026's latch is a **bitmask, not a counter**. Repeated clicks between two
+polls still coalesce, and a release edge that ends between polls is still lost.
+Fixing that needs an event queue, not a latch. `SYS_MOUSE_POLL` exposes current
+state by design (DDR-941).
+
+### 4.8 — `mouse_inject.sh` cannot tell a live window from a ghost
+
+The serial log is append-only, so `resolve_geometry` still resolves the last
+published geometry for a window that has since closed — and clicks it. Measured
+at 45 clicks on a dead window in one capture (DDR-1028). The repair is named,
+not built. Gate-harness only; no product impact.
+
+### 4.9 — SFS in-place rewrite of an existing file returns short
+
+DDR-1020 M4: a plain rewrite of an existing SFS file returns short for both a
+longer *and* an equal-length payload, while `unlink` + recreate succeeds. The
+ADR-032 write budget is **excluded** as the cause, because the `unlink`+create
+succeeded at the same point. **Unexplained, unfixed.** A mutant that fails to
+perform its own defect is indistinguishable from a gate that catches it — this
+was found that way.
+
+### 4.10 — `resched FAIL ipis=0 ran=1 idle=1` is a documented sampling race
+
+DDR-1030. The property under test **held** (`ran=1` — the unblocked thread ran);
+the IPI term is a stronger claim about mechanism layered on top. `idle_seen` is
+sampled just before `sched_unblock` and a CPU can leave idle in between, so no
+kick is owed and a correct system FAILs. **Deliberately not turned into SKIP** —
+that would green the gate and delete the coverage DDR-1014 built, the trade
+DDR-1012 and DDR-973 each had to undo. A second sample (`idle2=`) is armed and
+mutation-proven, so the next occurrence self-diagnoses: `idle2=0` means
+sampling artefact, `idle2=1` means a real scheduler defect.
+
+---
+
+## SECTION 5 — DEFERRED FEATURES
+
+### 5.1 — Pre-approved exceptions (CLAUDE.md §PRE-APPROVED EXCEPTIONS)
+
+These were approved for deferral in advance. All are logged in
+`docs/BUILD_TRACKER.md`; reasons reproduced here unchanged. **None requires an
+operator decision before user testing** — they were already decided.
+
+| Item | Why deferred |
+|---|---|
+| Intel HDA audio | optional — no QEMU HDA path in CI |
+| Wayland/wlroots compositor | superseded by the shipped custom C framebuffer compositor |
+| CMake/Makefile hybrid | post-1.0, awaiting operator sign-off (DDR-843) |
+| Apple Silicon / m1n1 | post-1.0 — the aarch64 ISO uses the U-Boot path |
+| `arch/aarch64` full port | **boot-only scope per ADR-034** — the ISO uses the boot-only kernel |
+| `arch/riscv64` full port | boot-only scope per ADR-034 |
+| Cloud bridge activation | post-1.0 (DDR-793) — a security-posture change, not a feature toggle |
+| `ACTION_BROWSE_WEB` | needs the cloud bridge above; outbound egress from an agent-capable OS is a posture decision |
+| `ACTION_CAPTURE_FRAME` | post-L7, no hardware path |
+| `ACTION_SCAN_ENVIRONMENT` | post-L7, needs SLAM3R |
+| `ACTION_QUERY_SCENE` | post-L7, no scene graph |
+| `ACTION_PARSE_DOCUMENT` | needs a 64 MiB OCR model; no model-shipping path exists |
+| `ACTION_EXEC_CODE` | needs a sandboxed interpreter subsystem |
+| `CAP_OCR` / `CAP_SCENE` | capability bit defined, enforcement deferred — no subsystem behind it |
+| SFS on-disk free-tree | in-memory reclaim shipped (DDR-762-v2); on-disk persistence post-1.0 |
+| NVMe completion IRQ | poll-mode is sufficient for the ISO (DDR-774a/b/c) |
+| Rust rewrite | not in scope |
+
+**Multi-arch is the one worth reading twice.** ADR-034 scoped aarch64 and
+riscv64 as **boot-only**, and DDR-999 assessed full parity and concluded it is
+**not achievable** in this timeframe. The ISOs for those architectures package a
+kernel that boots and does not run userspace. If the release is described to
+users as "multi-architecture", that description must carry the boot-only
+qualifier. **That is a wording decision, and it belongs with §1.2.**
+
+### 5.2 — Group F: AETHER agent behaviours
+
+**The structural fact first, because the tracker got this wrong twice
+(DDR-1022):** there is exactly **ONE** agent program, `user/agent_base.c`. The
+roster is generic active-bits, and a slot is filled by `SYS_SPAWN_AGENT`
+launching that template with a task. The kernel holds no per-agent identity. So
+*"11 unbuilt agents"* means **11 domain behaviours, not 11 programs** — and a
+stub would gate vacuously.
+
+Also corrected by DDR-1022, having been listed as unbuilt when they were not:
+
+- **F#68 metric lockbox** — **SHIPPED + GATED** (`smoke-lockbox`, shard 7,
+  strict, DDR-812).
+- **F#76 tamper-evident ledger** — **SHIPPED + GATED TWICE**
+  (`smoke-auditchain` shard 0 + `smoke-auditchain-tamper` shard 4, both strict).
+
+Deferred behaviours: F#66 `architect_agent`, F#67 `healer_agent` (RUFLO), F#69
+`inventor_agent`, F#70 `tournament_agent`, F#71 subconscious world model, F#72
+`verifier_agent`, F#75 lineage memory — each a behaviour with no subsystem
+behind it; F#75's gate would duplicate `smoke-agentmem`.
+
+**F#74 capability discovery is blocked differently, and deliberately.**
+`agent_caps` exists on `struct tcb` (DDR-982) but is initialised to 0, never
+granted, and has no syscall to read it. Building it **reverses DDR-982's
+deliberately withdrawn per-slot enforcement**. That withdrawal was a decision,
+so un-deferring F#74 is also a decision — but it is post-1.0 either way, so it
+is not in Section 1.
+
+**Section 3C action types close at 6 shipped + 2 deferred + 0
+buildable-and-unbuilt**, and that tally has been wrong twice (DDR-1017 said
+"3 of 8", DDR-1018 said "4 of 8"; both were wrong because
+`ACTION_SPAWN_PROCESS` is not one of the eight and `ACTION_REWRITE_AGENT_CODE`
+was already gated by DDR-842). Shipped: `READ_FILE`, `DELETE_FILE`,
+`QUERY_MEMORY`, `REWRITE_AGENT_CODE`, `PROPOSE_HYPOTHESIS`, `EVOLVE_GENOME`.
+`SEND_IPC` — see §3 and §4.1. `RUN_EXPERIMENT` — see §3.
+
+### 5.3 — Unbuilt backlog by group
+
+Measured 2026-09-01 by grepping the Makefile for each named target, because
+declaring something unbuilt without grepping has been wrong four times in this
+project. **MISSING = no such target exists.** Every row here is post-1.0 work,
+none blocks user testing, and none requires an operator decision.
+
+**Group A — kernel completeness (all MISSING):** `smoke-ioapic` (I/O APIC
+migration, DDR-714 stage D), `smoke-smep` (SMEP/SMAP `CLAC`/`STAC`), `smoke-wx`
+(kernel W^X identity-alias removal, DDR-757 residual), `smoke-mc` (`#MC`
+handler), `smoke-kaslr`, `smoke-lockstat`, `smoke-schedtimeout`.
+
+> **Two Group A rows are ALREADY BUILT and must not be rebuilt.** The
+> demand-paged user stack is **ADR-038** (`vmm_stack_fault`, `vmm_cow.c:144`;
+> `USER_STACK_EAGER_PAGES = 8` is measured, not guessed), gated by
+> `smoke-stack-demand` — `smoke-lazystack` does not exist. And "scheduler
+> timed-block" is **DDR-955**: the shipped call is `sched_block_timeout()`
+> (`sched.c:1434`) with four callers. The genuinely unbounded wait is elsewhere
+> and is tracked as DDR-994: `mnt_lock` (`vfs.c:25`) is a bare
+> `while (exchange(&m->busy,1)) yield();` with no deadline.
+
+**Group B — storage (`smoke-sfs-persist`, `smoke-sfs-gc`, `smoke-numa` EXIST;
+the rest MISSING):** `smoke-sfs-boot-root` (provisioned SFS as default boot
+root — this one blocks the Group F audit-persistence row), `smoke-sfs-largefile`,
+`smoke-sfs-deepslot`, `smoke-sfs-quota`, `smoke-ext4-write`, `smoke-nas`,
+`smoke-pmmpolicy`, `smoke-nvmeirq`.
+
+**Group C — networking (all MISSING):** `smoke-epoll` (proxy-socket
+epoll/select), `smoke-udp`, `smoke-netrevoke` (`SYS_NET_REVOKE` / CAP_NET policy
+reload), `smoke-tap`, `smoke-ipv6`, `smoke-tls`.
+
+**Group D — userspace (all MISSING except as noted):** `smoke-readline`,
+`smoke-pipes`, `smoke-poll`, `smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
+(6-arg `mmap` ABI), `smoke-mmap-file`, `smoke-dynlink`, `smoke-iouring`,
+`smoke-sigaction`, `smoke-prism-ls`, `smoke-jobctl`.
+**Shipped since the backlog was written:** `SYS_MPROTECT` (DDR-1031,
+`smoke-mprotect`) and `execve` argv/envp (DDR-1032, `smoke-execve-argv`).
+**PRISM `run` was never disabled** — DDR-973 §7; what ADR-024 §D5 deferred is
+narrower: init-driven fork+execve *respawn* of PRISM.
+
+**Group E — compositor (`smoke-alttab`, `smoke-perrestore`, `smoke-horizon`
+EXIST):** `smoke-maximize` and `smoke-sharedpte` are MISSING. Maximize at real
+display size shipped as DDR-1007 under a different gate name; `smoke-sharedpte`
+is DDR-1003 §5.1's unbuilt gate — see §4.5, and note the warning there that the
+obvious shape would pass vacuously.
+**Shipped since:** all-edge resize (DDR-997), `SURF_EV_CLOSE` (DDR-998),
+per-window dock restore (DDR-1008), horizon bands (DDR-1012), Ctrl+Alt+T
+terminal (DDR-1027). The **vDSO callable reader row was a false gap** — DDR-1005:
+the ring-3 reader exists and is gated by `smoke-vdso` (shard 7, strict); only
+`vdso_entry.asm` is unbuilt, and that is a security-posture change (the user view
+is deliberately `VMM_NX`), not a checkbox.
+
+**Group F gates (all MISSING):** `smoke-auditpersist` (needs the SFS boot root
+above), `smoke-agentexec`, `smoke-agentconc`, `smoke-rosterctd`, `smoke-capocr`,
+`smoke-capexec`, `smoke-capscene`, `smoke-capnetbrowse`, and the five
+spawnability gates that depend on them. `smoke-agentmetrics` EXISTS.
+
+**Group G — assembly optimization (6 of 7 items unstarted):** hot-path `kputc`,
+context-switch critical path, TLB shootdown batching, virtio-blk doorbell
+batching, IPC fast path, page-table walker SIMD. Each requires **profile first**;
+none has a baseline, so none has a claim attached to it. Per §NON-NEGOTIABLE 17,
+a performance claim needs a denominator — there is nothing to report yet.
+
+**Group H — release:** `smoke-iso-aarch64`, `smoke-iso-riscv64`, and
+`smoke-prad` (the `prad` package manager, NSI 88–90 — **not** 87, which is
+`SYS_READ_AUDIT`) are MISSING. The x86_64 ISO is built and verified.
+
+### 5.4 — Gates excluded from the CI shard matrix
+
+**7 excluded, each with a stated reason in `tools/ci/shard_check.sh`.** An
+unexplained exclusion is how a gate goes missing, so they are reproduced here.
+
+| Gate | Reason |
+|---|---|
+| `smoke-aarch64`, `smoke-riscv64` | run by the `arch-bootstrap` matrix job, not `build-and-boot` |
+| `smoke-selftest` | DDR-785 self-tests the boot harness. It must run BEFORE any gate that trusts the harness, so it is a setup step in **every** shard rather than one gate in one shard |
+| `smoke-sfs-btree-smp4` | DDR-824 OPEN-10 reproduction surface. Registering it now would make CI red on a known-open defect and block unrelated promotions. **Register it when OPEN-10 is fixed** — DDR-964 fixed the cause; this is waiting on promotion evidence, not on work |
+| `smoke-agent-live` | developer-run only: needs a live Ollama endpoint on the host, so CI stays in test mode (ADR-027) |
+| `smoke-fs-liveness` | DDR-777/BUG-1 diagnostic. It rebuilds the kernel with `BSP_LIVENESS=1`, whose churn fills the 4 KiB dmesg ring and evicts `smoke-dmesg`'s required marker (DDR-790) |
+| `smoke-fast` | **not a gate** — a runner that invokes another gate N times via `campaign.sh`. Excluded as infrastructure, not as a skipped test |
+
+---
+
+## SECTION 6 — RELEASE-GATE STATE
+
+Measured 2026-09-01, not carried forward:
+
+| Quantity | Value | Source |
+|---|---|---|
+| Gates assigned | **167** across **10** shards | `make ci-shard-check` |
+| Gates excluded | **7**, each with a reason | §5.4 |
+| NSI max | **99** (`SYS_IPC_RECV`), next free **100**, table size 128 | `kernel/syscall/syscall.h` |
+| DDR free range | **DDR-1034+** | §INV.4 |
+| `kernel.bin` | **1,155,466 B** against the 1,572,864 B gate — 417,398 B headroom | measured at `e9455b7`; CLAUDE.md §CURRENT BUILD STATE still carries the pre-DDR-1033 figure 1,134,986 |
+| Warnings at `-Werror` | **zero** | `make image` |
+| x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS** | `smoke-iso-userspace` |
+| aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — see §5.1 | DDR-999 |
+| `v1.0.0` | **untagged, held** | §1.2 |
+| `main` promotion | **unstarted** | §1.2 |
+
+---
+
+## SECTION 7 — WHAT THIS DOCUMENT DOES NOT DO
+
+It does not close anything. Specifically:
+
+- It does not turn OPEN-1, OPEN-2, OPEN-12 or OPEN-13 into resolved issues. Each
+  is waiting on evidence, and three of the four have armed instruments whose
+  whole purpose is that the *next* occurrence is diagnostic rather than another
+  colour-match.
+- It does not claim the deferred items are unimportant. It claims they are
+  **written down and decidable**, which is the difference between a deferral and
+  a gap.
+- It does not substitute for the operator decisions in Section 1. Those two rows
+  — branding/licensing, and the `v1.0.0` hold — are the reason this document was
+  asked for, and neither can be answered by an implementer.
+
+**Update this file in the same commit as any change to what it records.**

@@ -9255,3 +9255,63 @@ out-of-bounds `g_agent_ep[99]`.
 2. RUN_EXPERIMENT — next.
 3. `docs/PRE_LAUNCH_CHECKLIST.md` — after, per the order posted in my reply.
 4. Branding/licensing item — goes in that checklist.
+
+---
+
+## docs/PRE_LAUNCH_CHECKLIST.md — operator instruction items 3 and 4 (2026-09-01)
+
+One document for everything deferred, open, uncovered, or awaiting a decision.
+Docs-only; no kernel change, so `kernel.bin` is untouched.
+
+**The document's whole design is the third column**: every row says whether an
+operator must decide before user testing. Only **two** rows are YES, and both
+are things an implementer must not decide alone:
+
+1. **Branding / logo licensing.** Measured first rather than assumed: the tree
+   ships **zero** image assets (`find` for `*.png`/`*.svg`/`*scorpion*`/`*logo*`
+   returns nothing; there is no `assets/` directory), and every
+   `grep` hit for "brand" is the CPUID *processor brand string* or vendored musl's
+   `TELOPT_LOGOUT`. The only reference is `docs/design/LAYER7_UI_UX_BRIEF.md`
+   line 59 (a sidebar logo) and line 104 (`assets/icons/{sovereign,system}/`,
+   16 Sovereign Glyphs) — **both describe art that was never produced.** So the
+   copyright exposure is in the design references and any promotional material,
+   not in the ISO. Three options recorded; option 3 (ship no mark) is the current
+   state and needs no work.
+2. **The `v1.0.0` hold.** The hold's stated reason was "root-cause the ring-0
+   `#PF` before tagging". That `#PF` is route 2 and it is **CLOSED** at 95% power
+   (60/60, DDR-1000). What remains is route 1, which is CI-only and which no
+   local campaign can settle. Whether the hold still applies is a decision, not
+   a measurement.
+
+**Three deferral entries in BUILD_TRACKER were STALE and are corrected in §3:**
+`ACTION_SEND_IPC` (shipped, DDR-1033), and both blockers named under F#73
+(windowed terminal DDR-1027, argv/envp DDR-1032). `ACTION_RUN_EXPERIMENT` is
+still accurate — re-measured today: `is_exec` has zero matches in the kernel and
+`CAP_EXEC` appears only inside a comment at `sched.h:122`. A supersession note
+was added above the tracker's log rather than editing its rows, because it is a
+log.
+
+**§5.3 was measured, not transcribed.** Every backlog gate name was grepped
+against the Makefile before being called MISSING — declaring something unbuilt
+without grepping has been wrong four times in this project, and it caught three
+more false gaps here: `smoke-sfs-persist`, `smoke-sfs-gc` and `smoke-numa` all
+EXIST while the backlog lists them as open, and the demand-paged stack
+(ADR-038, `smoke-stack-demand`) and scheduler timed-block (DDR-955,
+`sched_block_timeout`) are both already built under names the backlog does not use.
+
+**§4 records ten residuals rather than carrying them silently**, including the
+one DDR-1033 itself named: the AETHER action path does not call `SYS_IPC_SEND`,
+so an approved `SEND_IPC` still has no automatic effect. Also §4.6 — the
+compositor's ~28 s to first paint (DDR-1029) — marked NO but flagged as
+user-visible, because a desktop that takes half a minute to appear is a real
+first-impression concern even though it is a known cost with a named mechanism.
+
+`hygiene_check.sh`: all three PASSED. `ci-shard-check` 167 gates / 10 shards /
+7 excluded.
+
+### Operator instruction status (PR #17 comment, 2026-08-31)
+
+1. SEND_IPC — **DONE** (DDR-1033, `e9455b7`).
+2. RUN_EXPERIMENT — **NEXT**, and the largest of the three.
+3. `docs/PRE_LAUNCH_CHECKLIST.md` — **DONE** (this commit).
+4. Branding/licensing — **DONE**, recorded as §1.1, an open operator decision.
