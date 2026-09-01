@@ -94,7 +94,12 @@ Batch their DDRs in one pass first (§4.3), then implement.
       now reaches the focused app, which DDR-720's unconditional hotkey made
       impossible for ANY application. 3-arm gate, mutation-checked both ways
       (M1 — bound to both — passes arms A+B and is caught only by arm C).
-- [ ] **BLOCKED — Ctrl+Alt+T launches a PRISM terminal window.** Detecting the
+- [x] **DONE — DDR-1027. Ctrl+Alt+T launches a PRISM terminal window.** Both
+      named blockers are gone: `user/term.c` is the windowed terminal (an epoll
+      client, because this kernel has no `O_NONBLOCK`), and DDR-1032 marshals
+      argv/envp. Gate `smoke-ctrlaltt`, arms A-E, M1/M2/M3. Original blocked
+      text kept below for the reasoning, which was correct when written.
+- [x] ~~BLOCKED — Ctrl+Alt+T launches a PRISM terminal window.~~ Detecting the
       chord is ~5 lines (the DDR-995 pattern over NSI 96; `KMOD_CTRL` is already
       delivered to ring 3, `ps2kbd.c:108`). **The launch is the feature, and two
       pieces it needs do not exist.** (1) There is no windowed terminal: the only
@@ -249,8 +254,15 @@ Batch their DDRs in one pass first (§4.3), then implement.
       (shard 7, strict), DDR-812. `smoke-lockbox-e2e` does not exist and is not
       needed. **Both rows said otherwise — grep before declaring anything
       unbuilt (DDR-1020 §1, DDR-1021, DDR-1022 §1).**
-- [ ] Section 3C actions: READ_FILE, DELETE_FILE, SEND_IPC, QUERY_MEMORY,
-      REWRITE_AGENT_CODE, PROPOSE_HYPOTHESIS, RUN_EXPERIMENT, EVOLVE_GENOME.
+- [x] **Section 3C actions: ALL EIGHT NOW SHIPPED AND GATED.** READ_FILE
+      (DDR-1015), DELETE_FILE (1016), QUERY_MEMORY (1018), PROPOSE_HYPOTHESIS +
+      EVOLVE_GENOME (1020), REWRITE_AGENT_CODE (already gated by DDR-842),
+      **SEND_IPC (DDR-1033, NSI 98/99)** and **RUN_EXPERIMENT (DDR-1034, NSI
+      100/101)** — the last two had been recorded as not-buildable by DDR-1017
+      §1 and DDR-1021, and both of those deferrals are now superseded.
+      **Residual for both:** the AETHER action path does not call either, so an
+      approved SEND_IPC / RUN_EXPERIMENT still has no automatic effect.
+      Original scoping note kept:
       **Scoped by DDR-1013 §2.1 — read it before starting.** These are RING-3
       work, not kernel work: the kernel is the policy engine and the agent
       executes after approval (there is no kernel executor for
@@ -302,10 +314,20 @@ Batch their DDRs in one pass first (§4.3), then implement.
 ### Group D — userspace
 - [ ] init-driven fork+execve **respawn** of PRISM (the only genuinely unbuilt
       part of ADR-024 §D5 — `run` itself was never disabled, DDR-973 §7)
-- [ ] `argv`/`envp` marshalling in `sys_execve`
+- [x] `argv`/`envp` marshalling in `sys_execve` — **DDR-1032**, `smoke-execve-argv`.
+      Plus DDR-1032b: PRISM's `run` passes its arguments through. Also fixed a
+      latent build defect — `USER_ALL_SRCS` omitted `user/*.asm`, so editing any
+      assembly probe rebuilt nothing.
 - [ ] PRISM readline / line discipline / echo
 - [ ] pipes, redirection, quoting, job control (`&`, `wait`, `fg`/`bg`), scripting
-- [ ] `SYS_MPROTECT`, `SYS_POLL`, `SYS_FUTEX`
+- [x] `SYS_MPROTECT` — **DDR-1031** (NSI 97) + `vmm_protect_range`,
+      `smoke-mprotect`, M1/M3. **Its `invlpg` is UNCOVERED and recorded as
+      such**: M2 (drop it) passed every arm, because a missing invalidation is
+      only visible as a write that should have faulted and did not — and on
+      this kernel the observer dies (`idt.c:703` goes straight to
+      `sched_exit`, no SIGSEGV handler). Not coverable by a probe of that
+      shape; needs a different observer, not a bigger probe.
+- [ ] `SYS_POLL`, `SYS_FUTEX`
 - [ ] pthreads (`clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)`)
 - [ ] 6-arg `sys_mmap` ABI, file-backed `mmap` + `msync`
 - [ ] dynamic linking (`ld.so`), full `io_uring`, full POSIX `sigaction`
@@ -384,3 +406,42 @@ Batch their DDRs in one pass first (§4.3), then implement.
       and a forced rebuild whenever `$(KERNEL_BIN)` changes; ~30 min, low
       payoff per run compared to §6.4's makespan halving. Do it after the
       release path is clear.
+
+---
+
+## Appended 2026-09-01 — residuals named by the operator, with their true state
+
+Appended at the bottom per rule 3. Each carries what is actually known, because
+two of the three were named using a framing a later DDR has since corrected.
+
+- [ ] **`vmm_protect_range`'s `invlpg` is uncovered.** Recorded in the Group D
+      row above. **Not a matter of writing a bigger probe** — DDR-1031 M2 passed
+      every arm, and the reason is structural: a missing TLB invalidation shows
+      up only as a write that should have faulted and did not, and the process
+      that would observe it dies (`idt.c:703` → `sched_exit`, no SIGSEGV
+      handler). Needs a different *observer* — a second process, or a kernel-side
+      readback — not more arms. Unstarted.
+
+- [ ] **The desktop takes ~28 wall seconds to become ready.** The operator named
+      this as "the ~10s post-boot pointer-poll delay", which is **DDR-1028's
+      framing and DDR-1029 corrected it**: the "~10 s" came from reading `g_ticks`
+      buckets as wall seconds under TCG. A `SYS_CLOCK` stamp shows the gap from
+      `PRADYOS_AMBIANCE_OK` to the first poll is **one** second, and the real cost
+      is **28 s of 30 full-screen 1024×768 renders** inside `set_ambiance`
+      (`compositor.c:990`) — 4 announce transitions + 1 settle × 6 frames at
+      ~0.93 s each, **all before the frame loop**. Nothing about the loop is slow.
+      **The blocker is a gate-design one, not a perf one:** the 24 announce
+      renders each emit a `PRADYOS_AMBIANCE <name>` sentinel that gates assert on,
+      so lowering `frames` while keeping the prints makes every one of those
+      assertions vacuous — the exact failure DDR-1012 removed from
+      `smoke-horizon` and DDR-973 from `smoke-fat32-multicluster`. **So this needs
+      framebuffer-readback assertions FIRST** (the DDR-1012 pattern), then the
+      render count can drop. Two pieces, in that order.
+
+- [ ] **`mouse_inject.sh`'s `resolve_geometry` cannot tell a live window from a
+      ghost.** The serial log is append-only, so it resolves the last published
+      geometry for a window that has since closed — measured at 45 clicks on a
+      dead window in one capture (DDR-1028). Harness-only; no product impact.
+      Repair named, not built: the compositor would need to publish a
+      destruction record the parser can consume, so "last geometry seen" stops
+      meaning "currently on screen".
