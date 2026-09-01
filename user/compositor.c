@@ -1026,6 +1026,13 @@ static unsigned long long vdso_ns(void) {
 /* Period per ambiance, in NANOSECONDS. 900 s is the brief's cadence, stated
  * directly instead of as "1 500 000 iterations, which is about 900 s if the
  * compositor gets a typical share of a typical CPU". */
+/* DDR-1036: the set of surfaces published on the PREVIOUS frame, so a
+ * disappearance can be named. Keyed by id; title carried because that is what
+ * mouse_inject.sh matches on. */
+static unsigned g_pub_id[16];
+static char     g_pub_title[16][16];
+static long     g_pub_n;
+
 static unsigned long long g_cadence_ns = 900ULL * 1000ULL * 1000ULL * 1000ULL;
 static unsigned long long g_cad_start_ns;   /* 0 = not yet armed */
 static int g_cad_pre_said, g_cad_advances;
@@ -1337,6 +1344,43 @@ int main(void) {
         struct surface_info surfs[16];
         long ns = nsi(SYS_SURFACE_POLL, (long)surfs, 16, 0);
         int cur_focus = -1;
+
+        /* DDR-1036: tell the log when a window GOES AWAY.
+         *
+         * mouse_inject.sh resolves its click target from the newest
+         * PRADYOS_WM_GEOM for a title (DDR-910, which correctly removed
+         * hardcoded pixels). But the serial log is APPEND-ONLY, so a destroyed
+         * window's last geometry line is still sitting there and nothing in it
+         * says the window is gone -- measured at 45 clicks on a dead window in
+         * one capture (DDR-1028). That is how smoke-wmclose once reported
+         * "close box click did not close" about a window that no longer existed.
+         *
+         * A separate LINE, not a field on WM_GEOM: a gone window emits no
+         * WM_GEOM at all, which is precisely the symptom, so the record cannot
+         * ride on the line whose absence is the problem.
+         *
+         * Emitted OUTSIDE the re-composite branch below. A close does change
+         * `ns`, so that branch would fire -- but the diff is cheap and making it
+         * unconditional means the record does not depend on the branch's
+         * conditions staying what they are today.
+         *
+         * Keyed on ID, not on the poll index: the whole point is that an entry
+         * disappeared, which shifts every index after it (unlike pub_x[] above,
+         * which compares by position). */
+        for (long pi = 0; pi < g_pub_n; pi++) {
+            int still_here = 0;
+            for (long i = 0; i < ns; i++)
+                if (surfs[i].id == g_pub_id[pi]) { still_here = 1; break; }
+            if (!still_here)
+                printf("PRADYOS_WM_GONE id=%u title=%s\n",
+                       g_pub_id[pi], g_pub_title[pi][0] ? g_pub_title[pi] : "-");
+        }
+        g_pub_n = ns < 16 ? ns : 16;
+        for (long i = 0; i < g_pub_n; i++) {
+            g_pub_id[i] = surfs[i].id;
+            for (int c = 0; c < 16; c++) g_pub_title[i][c] = surfs[i].title[c];
+            g_pub_title[i][15] = 0;
+        }
         for (long i = 0; i < ns; i++) if (surfs[i].focused) cur_focus = (int)surfs[i].id;
         focus_id = cur_focus;
         int geom_moved = 0;                            /* DDR-997 */

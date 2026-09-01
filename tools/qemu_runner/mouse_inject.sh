@@ -95,7 +95,25 @@ def resolve_geometry():
     except OSError:
         return False
     for ln in reversed(lines):                 # newest wins: layout can change
-        if geom_line not in ln or ("title=" + geom_title) not in ln:
+        if ("title=" + geom_title) not in ln:
+            continue
+        # DDR-1036: the newest record for this title decides, over BOTH record
+        # types. The serial log is append-only, so a destroyed window's last
+        # PRADYOS_WM_GEOM is still present and says nothing about being gone --
+        # which is how this script came to click a dead window 45 times in one
+        # capture (DDR-1028), and how smoke-wmclose came to report "close box
+        # click did not close" about a window that no longer existed.
+        #
+        # Returning False rather than raising: the caller's wait loop already
+        # treats False as "not ready yet" and retries to its deadline, so a
+        # window that is about to be RECREATED is waited for (recycled slots
+        # emit GONE then a fresh GEOM, and newest-wins then reports live), while
+        # one that never returns times out with the existing [inject] TIMEOUT
+        # message instead of silently clicking empty space.
+        if "PRADYOS_WM_GONE" in ln:
+            print("[inject] target gone title=%s — not clicking" % geom_title)
+            return False
+        if geom_line not in ln:
             continue
         for tok in ln.split():
             if tok.startswith(geom_field + "="):
