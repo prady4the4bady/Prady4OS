@@ -978,9 +978,12 @@ Regression: `smoke-backdrop`, `smoke-ambiance`, `smoke-gradient`,
 > **SUPERSEDED IN PART — see `docs/PRE_LAUNCH_CHECKLIST.md` §3.** Three entries
 > below are now stale: `ACTION_SEND_IPC` shipped as DDR-1033 (NSI 98/99,
 > `smoke-sendipc`), and both blockers named under F#73 are gone (DDR-1027
-> windowed terminal, DDR-1032 argv/envp). `ACTION_RUN_EXPERIMENT` is still
-> accurate as written, re-measured 2026-09-01. The rows are left verbatim
-> because this is a log; the checklist carries the corrections.
+> windowed terminal, DDR-1032 argv/envp). `ACTION_RUN_EXPERIMENT` is **also now
+> stale** — DDR-1034 built it: a bounded integer stack machine with no memory
+> opcodes at all, `CAP_EXEC` promoted from an unchecked `#define` to a real
+> `RES_EXEC` capability paired with `is_exec` on `struct tcb`, and a **separate**
+> kernel-written results ring that does not touch the DDR-812 lockbox. The rows
+> are left verbatim because this is a log; the checklist carries the corrections.
 
 CLAUDE.md's §PRE-APPROVED EXCEPTIONS says, of each item: *"add a one-line entry
 in `docs/BUILD_TRACKER.md` as `[DEFERRED: reason]`"*. **Seventeen items were

@@ -141,6 +141,8 @@ USER_ARGV_SRC  := user/argvtest.c        # DDR-1032: execve argv/envp launcher
 USER_ARGV_ELF  := build/argvtest.elf
 USER_IPC_SRC   := user/ipctest.c         # DDR-1033: ring-3 IPC door (NSI 98/99)
 USER_IPC_ELF   := build/ipctest.elf
+USER_EXP_SRC   := user/exptest.c         # DDR-1034: bounded experiment executor
+USER_EXP_ELF   := build/exptest.elf
 USER_ASPW_SRC := user/actionspawntest.c  # DDR-1017: Section 3C ACTION_SPAWN_PROCESS
 USER_ASPW_ELF := build/actionspawntest.elf
 USER_AQRY_SRC := user/actionquerytest.c  # DDR-1018: Section 3C ACTION_QUERY_MEMORY
@@ -207,7 +209,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o
@@ -546,6 +548,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGV_ELF) build/argvtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_IPC_SRC) -o build/ipctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_IPC_ELF) build/ipctest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_EXP_SRC) -o build/exptest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_EXP_ELF) build/exptest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ASPW_SRC) -o build/actionspawntest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ASPW_ELF) build/actionspawntest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AQRY_SRC) -o build/actionquerytest.o
@@ -646,6 +650,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_agentmem.c -o build/sys_agentmem.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_checkpoint.c -o build/sys_checkpoint.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_rewrite.c -o build/sys_rewrite.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/aether/experiment.c -o build/experiment.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_experiment.c -o build/sys_experiment.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_audit.c -o build/sys_audit.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
@@ -3336,6 +3342,24 @@ smoke-sendipc: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="IPCTEST FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[sendipc] PASS — $$(grep -a PRADYOS_IPC_RT build/ipc.log | head -1)"
+
+# DDR-1034: the bounded experiment executor. Five arms, and the sentinel list is
+# where each bound is asserted BY VALUE rather than by absence:
+#   CALC rc=0 v=42 -- a real computation ran (6*7 in the machine, not a stub)
+#   GATE rc=0 AND rc=-1 -- both spawns; the deny side holds CAP_EXEC and lacks
+#     only is_exec, so a mutant that drops the is_exec check turns -1 into 0
+#   LOOP rc=-40 (-ELOOP) -- the step cap was REACHED, which only EXP_JNZ makes
+#     possible; without it the cap would be a bound whose only reachable value
+#     is the passing one
+#   OVF rc=-75 (-EOVERFLOW) -- operand-stack bound
+#   REC st=0 v=42 steps=4 -- the store holds what the KERNEL computed
+smoke-runexp: $(IMG) fat-image sfs-image
+	@rm -f build/runexp.log
+	@SERIAL_LOG=build/runexp.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=exp \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_EXP_CALC rc=0 v=42\nPRADYOS_EXP_GATE rc=0\nPRADYOS_EXP_GATE rc=-1\nPRADYOS_EXP_LOOP rc=-40\nPRADYOS_EXP_OVF rc=-75\nPRADYOS_EXP_REC rc=0 st=0 v=42 steps=4\nPRADYOS_EXP_OK')" \
+	FORBIDDEN_SENTINEL="EXPTEST FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[runexp] PASS — $$(grep -a PRADYOS_EXP_REC build/runexp.log | head -1)"
 
 smoke-execve-argv: $(IMG) fat-image sfs-image
 	@rm -f build/argv.log

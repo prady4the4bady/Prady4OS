@@ -180,6 +180,12 @@ struct tcb {
                                  * process. Zeroed in sched_create: kmalloc does
                                  * not zero (§NON-NEGOTIABLE 10). */
     cap_t      ipc_cap;         /* DDR-1033: the RES_IPC handle minted beside it */
+    uint32_t   is_exec;         /* DDR-1034: may use the bounded experiment
+                                 * executor (NSI 100/101). Kernel-set at spawn,
+                                 * never mintable by the process -- the same
+                                 * shape as is_ipc. Zeroed in sched_create:
+                                 * kmalloc does not zero (NON-NEGOTIABLE 10). */
+    cap_t      exec_cap;        /* DDR-1034: the RES_EXEC handle minted beside it */
     uint32_t   is_rewrite;      /* DDR-842: CAP_REWRITE — code-rewrite approval.
                                  * Meaningless without is_sovereign; the syscall
                                  * requires BOTH. Granted at spawn only. */

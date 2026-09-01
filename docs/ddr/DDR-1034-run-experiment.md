@@ -92,9 +92,25 @@ added, and the reason is stated rather than left implied:
 of those four changes something the operator would want to see first — a new
 process, a deleted file, rewritten code, a mutated genome. An approved
 `RUN_EXPERIMENT` cannot do any of that. Its worst case is consuming
-`EXP_MAX_STEPS` of CPU inside one syscall, which is bounded, preemptible, and no
-worse than the same arithmetic loop written in the agent's own address space —
-which needs no approval at all.
+`EXP_MAX_STEPS` of CPU inside one syscall, which is bounded and no worse than
+the same arithmetic loop written in the agent's own address space — which needs
+no approval at all.
+
+**CORRECTION to this section's first draft, which said "bounded, preemptible".
+It is bounded; it is NOT preemptible.** `syscall_init` does
+`wrmsr(MSR_SFMASK, 0x200)` (`syscall.c:279`), so **`RFLAGS.IF` is clear for the
+whole of a syscall** — the DDR-981 mechanism. The executor therefore runs with
+interrupts masked, and `EXP_MAX_STEPS` is not merely an anti-hang convenience:
+**it is the only thing bounding a ring-3-supplied loop running with interrupts
+off.** Without it, an agent submitting `PUSH 1; JNZ -11` wedges the CPU exactly
+as DDR-981 described, which is what M2 measures rather than assumes.
+
+That makes the size of the bound a real quantity, not a round number. 4096 steps
+of integer ops is the interrupt-off window this design accepts; the evidence that
+it is tolerable is that arm C runs the full 4096 every clean boot and no gate has
+produced an `[apfreeze]` or a missed tick from it. That is a measurement of *this*
+budget, not a licence to raise it — **raising `EXP_MAX_STEPS` lengthens an
+interrupt-off window and must be re-measured, not assumed.**
 
 Adding a human gate to an action that cannot escape its own stack frame would be
 security theatre, and it would also make the probe harder for no gain. If the

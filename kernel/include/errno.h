@@ -31,3 +31,5 @@
 #define ETAMPER       133  /* DDR-812: record hash failed verification */
 #define ENOKEY        126  /* DDR-834: key derivation failed (Linux value) */
 #define ETIMEDOUT     110  /* DDR-955: timed-block wait expired */
+#define ELOOP          40  /* DDR-1034: bounded executor hit its step cap  */
+#define EOVERFLOW      75  /* DDR-1034: operand stack would overflow       */

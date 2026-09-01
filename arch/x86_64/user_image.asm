@@ -328,6 +328,14 @@ ipctest_elf:
     incbin "build/ipctest.elf"
 ipctest_elf_end:
 
+; DDR-1034: bounded experiment executor probe. Spawned TWICE -- the deny side
+; holds CAP_EXEC and lacks only is_exec, so neither check can mask the other.
+global exptest_elf
+global exptest_elf_end
+exptest_elf:
+    incbin "build/exptest.elf"
+exptest_elf_end:
+
 ; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
 ; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
 global actionspawntest_elf

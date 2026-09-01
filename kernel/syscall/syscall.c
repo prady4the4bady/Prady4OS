@@ -31,6 +31,7 @@ void sys_vault_register(void);    /* kernel/syscall/sys_vault.c (DDR-834) */
 void sys_agentmem_register(void); /* kernel/syscall/sys_agentmem.c (DDR-836) */
 void sys_checkpoint_register(void); /* kernel/syscall/sys_checkpoint.c (DDR-837) */
 void sys_rewrite_register(void);  /* kernel/syscall/sys_rewrite.c (DDR-842) */
+void sys_experiment_register(void); /* kernel/syscall/sys_experiment.c (DDR-1034) */
 void sys_audit_register(void);    /* kernel/syscall/sys_audit.c (DDR-842) */
 
 #define MAX_SYSCALLS 128  /* NSI-v2 table size (ADR-022). Raised 80->128 in the
@@ -254,6 +255,7 @@ void syscall_init(void) {
     sys_agentmem_register();              /* SYS_MEMORY_WRITE / SYS_MEMORY_READ (DDR-836) */
     sys_checkpoint_register();            /* SYS_CHECKPOINT_AGENT / SYS_RESUME_AGENT (DDR-837) */
     sys_rewrite_register();               /* SYS_APPROVE_CODE_REWRITE (DDR-842) */
+    sys_experiment_register();            /* SYS_RUN_EXPERIMENT / SYS_EXP_RESULT (DDR-1034) */
     sys_audit_register();                 /* SYS_READ_AUDIT (DDR-842) */
     sys_acc_register();                   /* SYS_ACC_SEAL / SYS_ACC_OPEN (DDR-813,
                                            * linkable since DDR-827 raised the

@@ -169,6 +169,12 @@
 #define SYS_MPROTECT       97  /* (addr, len, prot) -> 0 | -EINVAL|-EACCES|-ENOMEM (DDR-1031) */
 #define SYS_IPC_SEND       98  /* (slot, const uint64_t msg[4]) -> 0 | -EPERM|-EINVAL|-EFAULT (DDR-1033) */
 #define SYS_IPC_RECV       99  /* (slot, uint64_t out[4], timeout_ticks) -> 0 | -EPERM|-EINVAL|-EFAULT|-ETIMEDOUT */
+/* DDR-1034: the bounded experiment executor. 100 runs a program in a stack
+ * machine with no memory opcodes and a hard step cap (is_exec + CAP_EXEC); 101
+ * reads the kernel-written results store, whose only writer is the executor
+ * (is_exec or CAP_SOVEREIGN -- write integrity, not read privacy). */
+#define SYS_RUN_EXPERIMENT 100 /* (code, len, int64_t *out) -> 0 | -EPERM|-EINVAL|-EFAULT|-ELOOP|-EOVERFLOW */
+#define SYS_EXP_RESULT     101 /* (idx, exp_result_t *out)  -> 0 | -EPERM|-EINVAL|-ENOENT|-EFAULT */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */
 #define SYS_FTRUNCATE      94  /* (fd, len) -> 0 | -EBADF|-EINVAL|-EPERM|-EIO  */
 #define SYS_VERIFY_AUDIT   93  /* (bad_idx_ptr) -> 0 intact | -EACCES broken | -EPERM */

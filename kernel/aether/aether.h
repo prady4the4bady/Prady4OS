@@ -61,11 +61,14 @@ _Static_assert(ACTION_QUERY_MEMORY  == 8, "action wire format: QUERY_MEMORY is 8
  * boot on opposite sides of the force-pending split below -- so a drift that
  * moved either onto the wrong side would make that comparison vacuous. 9
  * (REWRITE_AGENT_CODE) is hand-copied by user/coderewritetest.c and pinned for
- * the same reason; 11 (RUN_EXPERIMENT) is deliberately unpinned, because nothing
- * copies it yet and a pin whose probe does not exist reads as a claim that one
- * does. */
+ * the same reason. 11 (RUN_EXPERIMENT) WAS deliberately unpinned on that rule --
+ * nothing copied it, and a pin whose probe does not exist reads as a claim that
+ * one does. DDR-1034 built that probe (user/exptest.c), so the pin is now owed
+ * and is below; this comment is updated in the same commit rather than left to
+ * become false. */
 _Static_assert(ACTION_REWRITE_AGENT_CODE == 9, "action wire format: REWRITE_AGENT_CODE is 9");
 _Static_assert(ACTION_PROPOSE_HYPOTHESIS == 10, "action wire format: PROPOSE_HYPOTHESIS is 10");
+_Static_assert(ACTION_RUN_EXPERIMENT     == 11, "action wire format: RUN_EXPERIMENT is 11");
 _Static_assert(ACTION_EVOLVE_GENOME      == 12, "action wire format: EVOLVE_GENOME is 12");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is

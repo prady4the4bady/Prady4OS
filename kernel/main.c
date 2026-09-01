@@ -459,6 +459,9 @@ extern const unsigned char argvtest_elf[];            /* DDR-1032: execve argv/e
 extern const unsigned char argvtest_elf_end[];
 extern const unsigned char ipctest_elf[];             /* DDR-1033: ring-3 IPC door */
 extern const unsigned char ipctest_elf_end[];
+void exec_grant(struct tcb *t);                       /* DDR-1034: sys_experiment.c */
+extern const unsigned char exptest_elf[];             /* DDR-1034: bounded executor */
+extern const unsigned char exptest_elf_end[];
 extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
 extern const unsigned char actionspawntest_elf_end[];
 extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUERY_MEMORY */
@@ -2423,6 +2426,35 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] IPC un-granted probe FAILED to load\r\n");
                     }
                     kputs("[user] ring-3 IPC door probes spawned (granted + un-granted)\r\n");
+                }
+                /* DDR-1034: the bounded experiment executor, spawned TWICE for
+                 * the same reason and with the same fixture shape. is_exec is
+                 * PER-PROCESS, so one process cannot exercise both paths. */
+                if (probe_enabled("exp")) {
+                    uint64_t xplen = (uint64_t)(uintptr_t)exptest_elf_end -
+                                     (uint64_t)(uintptr_t)exptest_elf;
+                    struct tcb *xg = 0, *xng = 0;
+                    if (elf_load((void *)(uintptr_t)exptest_elf, xplen,
+                                 "EXPGRANT", &xg) == ELF_OK && xg) {
+                        exec_grant(xg);                /* the door, kernel-side only */
+                        sched_unblock(xg);
+                    } else {
+                        kputs("[user] EXP granted probe FAILED to load\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)exptest_elf, xplen,
+                                 "EXPDENY", &xng) == ELF_OK && xng) {
+                        /* HOLDS THE CAPABILITY, LACKS ONLY THE DOOR -- built
+                         * this way from the start because DDR-1033 measured the
+                         * alternative: with neither, cap_authorize refuses the
+                         * call on its own and the is_exec check could be
+                         * deleted outright with the gate still green. */
+                        exec_grant(xng);
+                        xng->is_exec = 0;
+                        sched_unblock(xng);
+                    } else {
+                        kputs("[user] EXP un-granted probe FAILED to load\r\n");
+                    }
+                    kputs("[user] experiment executor probes spawned (granted + un-granted)\r\n");
                 }
                 /* DDR-1017: Section 3C ACTION_SPAWN_PROCESS, the second
                  * force-pending type. FAT-rooted (like the actionread probe and
