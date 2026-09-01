@@ -186,15 +186,13 @@ before a print, per the rule the dead-arm class produced.
 | **D** | operand-stack overflow is refused | `PRADYOS_EXP_OVF rc=-75` |
 | **E** | the results store recorded what the KERNEL computed, not what the agent said | `PRADYOS_EXP_REC st=0 v=42 steps=4` |
 
-| Mutant | Change | Must fail |
+| Mutant | Change | Predicted |
 |---|---|---|
-| **M1** | delete the `is_exec` check | **B** — the deny process holds the capability, so `cap_authorize` cannot save the arm |
-| **M2** | delete the step cap | **C** — and the gate must time out cleanly rather than hang the kernel; the loop is preemptible |
-| **M3** | delete the stack-bound check | **D** |
+| **M1** | delete the `is_exec` check | fails **B** — the deny process holds the capability, so `cap_authorize` cannot save the arm |
+| **M2** | delete the step cap | fails **C** |
+| **M3** | delete the stack-bound check | fails **D** |
 
-Each mutant is recorded against its own kernel hash (R1). M2 additionally
-demonstrates the bound is the only thing between a ring-3 program and an
-unbounded kernel loop, which is the claim §3 makes.
+Each mutant is recorded against its own kernel hash (R1).
 
 ## §8 — What this does NOT do
 
@@ -206,3 +204,103 @@ unbounded kernel loop, which is the claim §3 makes.
   across boot.
 - `smoke-lockbox` must still pass unchanged. If it does not, this design has
   touched something it promised not to.
+
+
+---
+
+## §9 — MEASURED
+
+Clean build **`f4724a14578eddc3`**, `make image` rc=0, zero warnings at
+`-Werror`, `hygiene_check.sh` all three PASSED, `ci-shard-check` 168 gates /
+10 shards / 7 excluded.
+
+```
+PRADYOS_EXP_CALC rc=0 v=42        <- allow process
+PRADYOS_EXP_GATE rc=0
+PRADYOS_EXP_LOOP rc=-40
+PRADYOS_EXP_OVF  rc=-75
+PRADYOS_EXP_REC  rc=0 st=0 v=42 steps=4
+PRADYOS_EXP_OK
+PRADYOS_EXP_CALC rc=-1 v=0        <- deny process: holds CAP_EXEC, lacks is_exec
+PRADYOS_EXP_GATE rc=-1
+```
+
+| mutant | kernel | gate | outcome |
+|---|---|---|---|
+| clean | `f4724a14578eddc3` | PASS | all five arms |
+| **M1** drop the `is_exec` check | `8200fd7a8c5f6d9e` | **FAIL** | `required pattern 'PRADYOS_EXP_GATE rc=-1' not found` — the deny process printed `rc=0 v=42`, i.e. it ran the program. Arm B is a test of the door, exactly as intended. |
+| **M2** drop the step cap | `b5fef6dda491b787` | **FAIL** | see below — **not** what §7 predicted |
+| **M3** drop the stack bound | `7014d721be9a7971` | **FAIL** | `required pattern 'PRADYOS_EXP_OVF rc=-75' not found` — arm D printed `rc=-22` (`-EINVAL`). Every other arm still passed, so M3 lands on exactly one arm. See §9.2: the errno is the least of it. |
+
+### §9.1 — M2 did NOT fail arm C, and what it did instead is the stronger result
+
+§7 predicted M2 would fail arm C by returning something other than `-ELOOP`.
+**It never returned at all.** The M2 capture's last line of the entire boot is:
+
+```
+PRADYOS_EXP_CALC rc=0 v=42
+PRADYOS_EXP_GATE rc=0
+```
+
+and then nothing — no arm C, no arm D, no deny process, no further probes, no
+end-of-boot sentinel, for the remaining ~110 s until `timeout` killed QEMU. The
+gate failed on the **first** missing pattern in its list, which is arm B's
+`rc=-1`, not arm C's.
+
+**That is §4's correction demonstrated rather than argued.** `MSR_SFMASK` clears
+`RFLAGS.IF` for the whole syscall (`syscall.c:279`), so the unbounded `JNZ` loop
+runs with interrupts masked: the CPU cannot take a timer tick, cannot be
+preempted, and cannot reach any other thread — including the deny process, which
+is why arm B is what goes missing. `EXP_MAX_STEPS` is not an anti-hang
+convenience. It is the only thing between a ring-3-supplied loop and a wedged
+CPU, and it is the DDR-981 mechanism reachable from an ordinary agent action.
+
+**A second observation, recorded because it is a limit and not a result:** the
+M2 capture contains **zero `[apfreeze]` lines**. That detector is printed by the
+heartbeat on a CPU that is still running; with the only CPU wedged, nothing can
+print, including the thing that exists to name this failure. So a missing step
+cap produces **total silence, not a diagnosable error** — the same shape as
+OPEN-1 route 1. Do not read "no `[apfreeze]`" here as "no freeze".
+
+**The prediction in §7 was wrong and is left in place above rather than
+rewritten**, so the record shows what was expected against what was measured.
+The mutant still does its job — the gate rejects it — but it rejects it for a
+different and more serious reason than the one designed for.
+
+### §9.2 — M3: the operand-stack bound is not input validation, it is a kernel stack bounds check
+
+M3 fails arm D as designed, and the *shape* of the failure is worth stating
+plainly because the arm's name understates what the bound does.
+
+`st` is `int64_t st[EXP_STACK_N]` — **a local array on the kernel stack**, and
+`sp` is advanced by a program supplied from ring 3. With the `DUP` bound
+deleted, arm D's 40 `DUP`s walk `sp` from 1 to 41 and write `st[32]`..`st[40]`
+**past the end of that array, on the kernel stack, with attacker-chosen
+repetition count.** The observed `-EINVAL` is not the check working by another
+route; it is what happened to be returned after the overflow had already
+scribbled over adjacent kernel stack, and it should be read as an accident of
+this particular layout, not as a graceful degradation.
+
+So `if (sp >= EXP_STACK_N)` is the only thing between a ring-3 program and a
+kernel stack smash. Two consequences, recorded rather than left implicit:
+
+1. **The bound is checked on every opcode that grows the stack** — `PUSH` and
+   `DUP` — and a future opcode that pushes must add it too. There is no single
+   choke point, because the machine's growth sites are per-opcode.
+2. **The arm's sentinel asserts the errno, which is a proxy.** A gate cannot
+   observe "did not overflow the kernel stack" directly; it observes "returned
+   `-EOVERFLOW` instead of running on". That is a real check and an indirect
+   one, and it is written down as indirect here rather than dressed up as a
+   memory-safety proof.
+
+### §9.3 — Summary of what each mutant established
+
+| mutant | designed to show | actually showed |
+|---|---|---|
+| M1 | arm B tests the door, not the capability | exactly that — the deny process ran the program |
+| M2 | the step cap returns `-ELOOP` | **more**: without it the CPU wedges with `IF` clear and the boot goes silent — no arm C, no arm D, no other process, and **no `[apfreeze]`**, because nothing is left running to print it |
+| M3 | the stack bound returns `-EOVERFLOW` | **more**: it is the bounds check on a kernel-stack array indexed by ring-3 input |
+
+Two of three mutants demonstrated something stronger than the arm they were
+written for. Both surprises point the same way — these bounds are load-bearing
+for kernel integrity, not just for tidy return codes.

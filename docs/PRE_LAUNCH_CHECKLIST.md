@@ -28,8 +28,12 @@ precisely because that bar has not been met.
 
 ## SECTION 1 — OPERATOR DECISIONS REQUIRED BEFORE USER TESTING
 
-These are the only rows marked YES. Everything else in this document is
-recorded, not blocking.
+**§1.1 and §1.2 are the only rows in this document marked YES** — the two
+decisions a person must make. §1.3 and §1.4 sit here because they are
+*operator-owned* rather than open: §1.3 is a triage whose merges are the
+operator's action to take, and §1.4 is a decision the operator has already made
+and which is recorded so it is not re-opened by a later session. Everything
+outside Section 1 is recorded, not blocking.
 
 ### 1.1 — Placeholder branding / logo art must be replaced or licensed
 
@@ -99,6 +103,104 @@ settle. Continuing to hold is defensible; so is tagging with route 1 named in
 the release notes (DDR-1011 §4 already drafted that wording). **An implementer
 should not make this call**, which is why it sits in Section 1.
 
+### 1.3 — Six dependency PRs: triage recorded, merging is the operator's action
+
+**Operator instruction (PR #17, 2026-09-01):** each open dependency PR needs
+*"merged (if low-risk and CI-green), or explicitly deferred with a reason."*
+
+**One structural fact decides most of this, measured rather than assumed:**
+`tools/graph_mcp` runs in its **own CI job** (`ci.yml:196-205` — `npm ci` then
+`node server.js selftest`). It is referenced nowhere in the Makefile and by no
+`smoke-*` gate. So its npm dependencies **cannot affect a gate result or the
+shipped OS image**; their blast radius is a developer graph tool.
+
+| PR | What | Disposition | Reason |
+|---|---|---|---|
+| **#2** | npm group: `@hono/node-server`, `fast-uri` | **CLOSE — superseded** | Already remediated. `package-lock.json` carries 2.1.0 and 3.1.5, at or above every advisory's fix, and `npm audit` reports 0 vulnerabilities at every severity. Its base is `fd876cd`, far behind `main`. Merging it would be a no-op at best. |
+| **#3** | Docker `ubuntu` 24.04 → 26.04 | **DEFER post-1.0** | Not security. `Dockerfile:17` pins 24.04 **deliberately**, so container and WSL builds agree; changing the whole toolchain under 168 gates days from release reintroduces exactly the drift the image exists to remove. |
+| **#7** | `actions/checkout` 5 → 7 | **DEFER until after the CI efficiency work** | Used at 5 sites in `ci.yml`. Any `ci.yml` change alters the environment every gate runs in, and §NON-NEGOTIABLE 1 needs **3 greens on one tip SHA** — so merging this resets accumulated release evidence for no release-relevant gain. It also touches the same file the operator's own item 5 (caching + shared build artifact) will rewrite, so merging now buys a conflict. |
+| **#8** | `actions/setup-python` 5 → 7 | **DEFER — same reason as #7** | Same file, same evidence-reset argument. |
+| **#9** | `sql.js` 1.14.1 → 1.14.2 | **SAFE TO MERGE** | A patch bump, and `package.json:21` already declares `^1.10.0`, so 1.14.2 is **inside the existing range** — this only moves the lockfile pin. Dev-tool scope, cannot reach a gate. |
+| **#15** | `web-tree-sitter` 0.22.6 → 0.26.13 | **HOLD — the only one with real breakage risk** | `package.json:23` pins it **exactly** (`"0.22.6"`, no caret), so this is a genuine minor-series jump in a WASM parser whose API changed across those versions. It can break `node server.js selftest`. Still **not release-blocking** — the graph tool is not in the OS — but it should be merged and watched deliberately, not swept in with the others. |
+
+**Why I have recorded dispositions rather than merged anything.** These PRs
+target `dev/phase1`; this session's mandate is `dev/phase1-seyp3n` and forbids
+pushing to another branch without explicit permission. Merging is therefore the
+operator's action. The instruction asked for a decision *"recorded somewhere"*,
+and this is that record. **#9 is the one I would merge today**; #2 I would close.
+
+### 1.4 — DDR-1019's panic-latch watchdog: DECIDED, deferred, not built
+
+**This is a closed decision, not an open question.** Recorded here because it
+was left open by DDR-1019 and the operator closed it explicitly (PR #17,
+2026-09-01).
+
+**What it would have been.** DDR-1019 established that one producer of
+`[apfreeze]` is the *losing* branch of DDR-979's one-winner panic latch: the
+latch is claimed **before** the dump and never released, so a winner that cannot
+print silences every later panic and leaves only frozen CPUs. The named repair
+is a latch-liveness watchdog, so a losing CPU's crash is not silently swallowed.
+
+**The decision: do not build it on this timeline.** The reason, verbatim in
+substance from the operator: the risk of reintroducing the garbled-dump
+interleaving that DDR-979 fixed, days from release, outweighs a nicer crash
+message for a failure mode already being chased by other means — the SWAPGS
+probe (DDR-1010) and the two other `[apfreeze]` producers already distinguished
+(DDR-1006's `sched_tick` path, DDR-1010's `sys_mmap` path).
+
+**What remains true and must not be lost:** before reading any new `[apfreeze]`
+as a known producer, **resolve its RIP against its own binary** (§INV.18). Three
+producers share the label. That discipline is the mitigation now, in place of
+the watchdog.
+
+### 1.5 — CI efficiency refactor: CONFIRMED SAFE, with two hazards that must be handled
+
+The operator asked for explicit confirmation **before** implementation, and for
+any structural reason the workflow is shaped this way to be stated rather than
+silently changed. Queued as item 5 (after this checklist and RUN_EXPERIMENT);
+this is the confirmation, not the change.
+
+**The redundancy is real, and larger than described.** Every one of the 10
+`build-and-boot` shards independently runs (`ci.yml:80-119`): `apt-get install`
+of the full toolchain, `rustup toolchain install nightly` + component + target,
+`make toolchain-check`, `make smoke-selftest`, `make musl`, `make lwip`,
+`make image`, `make ci-probe-rodata-check`, then its own shard. So it is **10
+identical kernel compiles per CI run**, plus 10 apt installs and 10 rustup
+installs.
+
+**No structural reason blocks sharing the build.** Checked rather than assumed:
+no gate assigned to a shard rebuilds the kernel or alters its flags. The one
+gate that does — `smoke-fs-liveness`, which rebuilds with `BSP_LIVENESS=1` — is
+**already excluded from the matrix for exactly that reason** (DDR-777/790). So
+the premise holds.
+
+**Hazard 1 — `make` is mtime-driven, and this is the failure that matters.**
+Each `smoke-*` target has `$(IMG) fat-image sfs-image` as prerequisites.
+`actions/download-artifact` does not reliably preserve mtimes, so a downloaded
+`build/pradyos.img` can appear *older* than the checked-out sources and make
+will rebuild it — either silently keeping the cost, or worse, **producing a
+different binary than the build job tested**. That second outcome is not a
+performance regression, it is a correctness one: this project's statistical
+arguments (DDR-1009's twelve-run table, DDR-1023's 20/20, DDR-1010's 36/36) all
+rest on knowing which runs shared one binary.
+
+**Which is why the refactor should make that structural rather than weaken it:**
+have the build job publish `sha256sum build/kernel.bin`, and have each shard
+**assert the hash it downloaded matches** before running a single gate. Today
+"all 10 shards ran the same binary" is inferred from them compiling the same
+source; afterwards it would be *checked*. That is a net gain in rigor, not a
+trade against it.
+
+**Hazard 2 — `smoke-selftest` must stay per-shard.** It is a setup step in every
+shard **by deliberate design** (DDR-785): a shard whose gates trust the boot
+harness must have checked the harness first. It is host-only and cheap. Do not
+fold it into the build job.
+
+**Unchanged, as instructed:** `fail-fast: false`, the 3-independent-greens rule,
+and every gate's timeout, sentinels and test logic. Toolchain caching (apt +
+rustup) carries neither hazard — it cannot change what is built — and is the
+safer half to do first.
+
 ---
 
 ## SECTION 2 — OPEN DEFECTS
@@ -112,6 +214,8 @@ has an armed instrument that makes the next occurrence diagnostic.
 | **OPEN-2** | `[apfreeze]` in CI | **The label covers at least THREE distinct producers** (DDR-1019). Resolve any new RIP against its own binary before matching: DDR-1019's is the panic-arbitration *loser's* halt loop at `idt.c:697`; DDR-1006's runs through `sched_tick`; DDR-1010's through `sys_mmap`. The original (DDR-981, `yield()` spinning with IF clear) is genuinely fixed. **Local reproduction is EXHAUSTED** — 56 clean runs across the two kernels that matter (36/36 post-probe, 20/20 pre-probe, DDR-1023), including the exact binary the failure was first seen on. The old "~1 in 4" was one session's small sample and has not held up; stop quoting it as a rate. | NO |
 | **OPEN-12** | `*** NEXUS KERNEL PANIC *** / component: NEXUS isr` | **Root-cause candidate found and fixed** (DDR-996): `sched_exit` left a thread linked on its per-CPU runqueue and both reap paths unlinked only the all-threads ring, so a TCB could be freed while a queue still pointed at it. 16/16 victims measured, mutation-checked. **NOT closed**: OPEN-12's *original* capture lost its RIP to the interleaving DDR-979 later fixed, so identity is unproven and matching on `component:` alone would be colour-matching. Closes on a clean campaign, not on the fix. | NO |
 | **OPEN-13** | `[kheap] double-free … objsize=0x80` → KHEAP PANIC | **Instrument BUILT and mutation-proven** (DDR-1024): the line now carries `freed_by=` and `now_by=`, the first and second frees' return addresses, captured at the public `kfree`/`pcb_free`/`cap_free`/`ipc_free` boundary. `objsize=0x80` is a generic 128-byte class, not a dedicated cache, so "size class → structure" does not resolve. **One CI capture, no mechanism named — NOT a fix.** The next occurrence is diagnostic: resolve BOTH addresses against the exact binary that produced the log. | NO |
+| **`smoke-nethammer` intermittent** | timeout at 20/20 in one CI shard-3 run (DDR-1009's twelve-run table) | **Root cause NOT established.** It is one of the four signatures in the DDR-1009 pooled measurement — twelve independent CI suite-runs of one provably identical kernel binary, 9 green / 3 failed, at four gates with four different signatures. Named here so it lives in one place rather than only in a CI comment thread. **Not a release blocker** on its own reasoning: the gate is strict and gating, so a recurrence reddens its suite and cannot pass silently. | NO |
+| **`resched FAIL ipis=0 ran=1 idle=1`** | intermittent, `smoke-rqstress-liveness` | **A documented sampling ambiguity with no rate bound.** The property under test HELD (`ran=1` — the unblocked thread ran); the IPI term is a stronger claim layered on top, and `idle_seen` is sampled just before `sched_unblock`, so a CPU can leave idle in between and a correct system FAILs. **Deliberately not collapsed to SKIP** — that would green the gate and delete the coverage DDR-1014 built, the trade DDR-1012 and DDR-973 each had to undo. A second sample (`idle2=`) is armed and mutation-proven, so the next occurrence self-diagnoses: `idle2=0` = sampling artefact, `idle2=1` = a real scheduler defect. **No rate has been measured**, and that gap is the honest limit here. | NO |
 | **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | **NOT REPRODUCED since instrumentation** (DDR-968, live since `ea4601e`). The witness line prints only on a *failing* boot, so a green boot emits none of it — there is no red artefact to read. The gate is gating (shard 2, not excluded), so a recurrence would redden its suite. Reopens on the first `PRADYOS_AGENT_WITNESS_WAIT` line. | NO |
 
 ---
@@ -262,6 +366,29 @@ riscv64 as **boot-only**, and DDR-999 assessed full parity and concluded it is
 kernel that boots and does not run userspace. If the release is described to
 users as "multi-architecture", that description must carry the boot-only
 qualifier. **That is a wording decision, and it belongs with §1.2.**
+
+### 5.1b — Two scope confirmations from the operator, one of which contradicts `CLAUDE.md`
+
+**Rust rewrite: deferred to a future release.** The project stays in C for v1.
+This matches the existing `[DEFERRED: not in scope]` entry; no conflict.
+
+**Quantum layer: the operator states no quantum scope exists in this project —
+*"it was never a real requirement"*.** That is a change of record, not a
+restatement, and it must be reconciled rather than assumed:
+
+`CLAUDE.md` **§PHASE 3** currently reads *"Quantum Layer (Phase 10) — BUILD
+IMMEDIATELY AFTER v1.0.0"* and *"The quantum layer is NOT deferred
+indefinitely"*, and specifies four items with gates (QAL syscalls behind
+`CAP_QUANTUM`, a virtual 5-qubit QPU, a QAOA scheduler, a hybrid API). §WHAT
+"DONE" MEANS also ends with *"After v1.0.0 is tagged: begin Phase 10."*
+
+**Nothing has been built toward it** — no `SYS_QPU_*`, no `CAP_QUANTUM`, no
+`smoke-qpu*` — so there is no work to unwind, and this costs the release
+nothing. But `CLAUDE.md` is the governing document every session is told to
+follow in full, and it currently mandates work the operator says was never
+required. **Flagged rather than silently resolved:** the operator's statement is
+recorded here as authoritative, and `CLAUDE.md` §PHASE 3 should be struck in the
+same pass that acts on §1.2, so the two sources stop disagreeing.
 
 ### 5.2 — Group F: AETHER agent behaviours
 
