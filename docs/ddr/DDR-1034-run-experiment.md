@@ -304,3 +304,25 @@ kernel stack smash. Two consequences, recorded rather than left implicit:
 Two of three mutants demonstrated something stronger than the arm they were
 written for. Both surprises point the same way — these bounds are load-bearing
 for kernel integrity, not just for tidy return codes.
+
+### §9.4 — Regression, including the constraint this design was given
+
+Re-run on the restored clean tree, which rebuilds to **`f4724a14578eddc3`** —
+**bit-identical to the pre-mutation clean build**, so the mutants left nothing
+behind.
+
+| gate | rc | why it is in this list |
+|---|---|---|
+| `smoke-runexp` | **0** | the new gate, re-verified after restoration |
+| **`smoke-lockbox`** | **0** | **the operator's constraint.** DDR-812's sovereign read-only lockbox must not be weakened — "an agent must never grade itself". This design does not touch, extend or read it, and this is the check of that from outside rather than by inspection. Its `FORBIDDEN_SENTINEL` includes `PRADYOS_LOCKBOX_STUB`, so a hollowed-out lockbox cannot pass it. |
+| `smoke-auditchain` | **0** | the tamper-evident ledger (F#76), the other thing an agent must not be able to rewrite |
+| `smoke-aether` | **0** | the action queue this type is declared in |
+| `smoke-shell` | **0** | §NON-NEGOTIABLE 4, and it reports its full 5/5 arm list |
+
+`hygiene_check.sh`: all three PASSED. `ci-shard-check`: 168 gates / 10 shards /
+7 excluded. `make image` rc=0, **zero** warnings at `-Werror`.
+
+**What §9.4 does NOT establish.** These are regression runs at N=1 each, not
+campaigns. They show the change did not break the lockbox, the ledger, the
+action queue or the shell in one boot apiece. They are not a rate bound on
+anything, and nothing here bears on OPEN-1, OPEN-2, OPEN-12 or OPEN-13.

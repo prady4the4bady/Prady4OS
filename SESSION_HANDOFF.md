@@ -9315,3 +9315,74 @@ first-impression concern even though it is a known cost with a named mechanism.
 2. RUN_EXPERIMENT — **NEXT**, and the largest of the three.
 3. `docs/PRE_LAUNCH_CHECKLIST.md` — **DONE** (this commit).
 4. Branding/licensing — **DONE**, recorded as §1.1, an open operator decision.
+
+---
+
+## DDR-1034 — ACTION_RUN_EXPERIMENT (operator instruction item 2) — 2026-09-01
+
+NSI 100/101. Supersedes DDR-1021's deferral, and says why that deferral's
+conclusion was wrong: it assumed "run an experiment" needs a general
+interpreter. It does not. It needs something the kernel runs on the agent's
+behalf whose outcome the agent cannot forge — a constraint on the RESULTS
+STORE, not on the executor. The design splits on exactly that line.
+
+**The sandbox is the instruction set, not a guard.** No LOAD, no STORE, no
+addressing mode, so "no memory access outside its own stack" cannot be lost by
+deleting a check. No DIV — a #DE in ring 0 is fatal, so the opcode is absent
+rather than guarded.
+
+**CAP_EXEC stops being decorative.** It was a #define checked nowhere (its only
+other kernel occurrence was inside a comment at sched.h:122). Now a real
+RES_EXEC capability checked by cap_authorize, paired with is_exec on struct tcb,
+kernel-set via exec_grant, zeroed in sched_create per NON-NEGOTIABLE 10.
+
+**JNZ is in the opcode set on purpose.** Without a branch no program can exceed
+its own length, so the step cap would be a bound whose only reachable value is
+the passing one — the dead-arm class, and it would have been the eighth
+instance. The branch exists so the bound is measurable.
+
+| build | kernel | outcome |
+|---|---|---|
+| clean | `f4724a14578eddc3` | PASS, five arms |
+| M1 drop `is_exec` | `8200fd7a8c5f6d9e` | FAIL arm B — deny process ran the program |
+| M2 drop step cap | `b5fef6dda491b787` | FAIL — boot goes silent, see below |
+| M3 drop stack bound | `7014d721be9a7971` | FAIL arm D (`rc=-22` not `-75`) |
+
+**TWO OF THREE MUTANTS SHOWED MORE THAN THEIR ARM.** M2 did not fail arm C as
+designed — it never returned at all. MSR_SFMASK clears RFLAGS.IF for the whole
+syscall (syscall.c:279), so an unbounded JNZ loop runs with interrupts masked:
+the CPU cannot tick, cannot be preempted, cannot reach the deny process, which
+is why arm B is what goes missing. **Zero [apfreeze] lines in that capture** —
+that detector prints from a CPU still running, so a missing step cap produces
+total silence, the OPEN-1 route 1 shape. Do not read "no apfreeze" as "no
+freeze". M3: `st` is `int64_t st[32]` ON THE KERNEL STACK indexed by ring-3
+input, so the bound is a kernel stack bounds check, not input validation; the
+-EINVAL is an accident of layout.
+
+**Corrected mid-run:** §4 said "bounded, preemptible". Bounded yes, preemptible
+no. That makes EXP_MAX_STEPS load-bearing and its SIZE a quantity to re-measure
+if raised. §7's wrong M2 prediction is left beside the measurement, not
+rewritten.
+
+Regression on the restored tree (rebuilds bit-identical to the clean hash):
+`smoke-runexp`, **`smoke-lockbox`** (the operator's constraint — the DDR-812
+lockbox is untouched, checked from outside), `smoke-auditchain`, `smoke-aether`,
+`smoke-shell` 5/5 — all rc=0. hygiene_check all three PASSED. Gates 167 -> 168.
+
+**Not done:** the AETHER action path does not call this, so an approved
+RUN_EXPERIMENT has no automatic effect. Same residual as DDR-1033's SEND_IPC.
+Both are in the pre-launch checklist §4.1.
+
+### Operator instruction status (PR #17)
+
+1. SEND_IPC — DONE (DDR-1033).
+2. RUN_EXPERIMENT — **DONE** (DDR-1034).
+3. `docs/PRE_LAUNCH_CHECKLIST.md` — DONE, plus the four later additions:
+   dependency-PR triage (1.3), DDR-1019 watchdog decided-deferred (1.4), CI
+   refactor confirmed safe with two hazards (1.5), and `smoke-nethammer` +
+   `resched FAIL` as named known-unknowns.
+4. Branding/licensing — DONE, checklist §1.1, an open operator decision.
+
+**Next in the operator's stated order: item 5, the CI efficiency refactor**
+(toolchain caching + shared build artifact). The safety confirmation they asked
+for is written up in checklist §1.5 and posted to the PR.
