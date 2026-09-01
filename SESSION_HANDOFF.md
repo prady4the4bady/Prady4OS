@@ -9386,3 +9386,58 @@ Both are in the pre-launch checklist §4.1.
 **Next in the operator's stated order: item 5, the CI efficiency refactor**
 (toolchain caching + shared build artifact). The safety confirmation they asked
 for is written up in checklist §1.5 and posted to the PR.
+
+---
+
+## DDR-1035 — CI builds the kernel ONCE (operator instruction item 5) — 2026-09-01
+
+Ten shards each ran apt + `rustup toolchain install nightly` + `make musl` +
+`make lwip` + `make image`. Nine of those compiles were redundant.
+
+**Three facts made it safe, each checked not assumed.** (1) `$(KERNEL_BIN)`
+(Makefile:408) has NO per-object prerequisites — the whole compile is one
+recipe — so a touched download is genuinely up to date to make. (2) No sharded
+gate rebuilds the kernel; the one that does, `smoke-fs-liveness`, is ALREADY
+excluded for that reason (DDR-777/790). (3) **Rust has exactly one consumer** —
+`make toolchain-check` (Makefile:335-344), in no shard, and `kernel.bin` does
+not depend on `RUST_LIB`. So the shards install NO rustup: a removal, not a
+cache, which is why there is no `actions/cache` step for it.
+
+**THE HAZARD IS REAL AND WAS MEASURED BOTH WAYS.** make is mtime-driven and
+`download-artifact` does not preserve mtimes, so without a `touch` the
+downloaded kernel.bin looks OLDER than the checked-out sources and gets rebuilt
+— silently keeping the cost, or worse running gates against a DIFFERENT binary.
+
+| tree state | `make -n image` |
+|---|---|
+| touched current | `Nothing to be done` (and `make -n smoke-runexp` = 0 kernel build lines) |
+| one source touched newer | **253** build lines, full rebuild |
+
+**The property this STRENGTHENS.** "All ten shards ran the same binary" was
+INFERRED from compiling the same sources — and DDR-1009's twelve-run table,
+DDR-1023's 20/20 and DDR-1010's 36/36 all reason from it. It is now CHECKED: the
+build job publishes `kernel.sha256`, every shard runs `sha256sum -c` BEFORE its
+gates (catches a bad/mis-nested download) and AGAIN with `if: always()` after
+(catches a rebuild underneath the gates). The after-check runs on red shards on
+purpose — "gates were red" and "gates ran a different binary" are different
+findings.
+
+Unchanged deliberately: `fail-fast: false`, the 3-green rule + workflow_dispatch,
+every gate's timeout/sentinels/logic, `smoke-selftest` staying per-shard
+(DDR-785: a shard trusting the harness must check the harness first), and the
+shards' apt list otherwise identical so no gate loses a tool.
+
+Images are NOT uploaded — fat-image/sfs-image are .PHONY and regenerate anyway,
+`$(IMG)` rebuilds from kernel.bin with nasm+dd. ~38 MB tree vs ~185 MB of images.
+
+**NOT YET PROVEN IN CI.** The evidence above is local. It does not show that
+upload/download round-trips the tree at the expected path. If the artifact nests
+differently the hash assertion fails LOUDLY on the first shard rather than
+corrupting a result — chosen deliberately, but a prediction until a run confirms.
+
+### Operator instruction status (PR #17)
+
+1. SEND_IPC — DONE (DDR-1033). 2. RUN_EXPERIMENT — DONE (DDR-1034).
+3. Checklist — DONE + four later additions. 4. Branding — DONE (§1.1).
+5. CI efficiency — **DONE (DDR-1035), pending its first CI run.**
+Next: item 6, Groups A-D from `docs/NEXT_TASK_QUEUE.md`.
