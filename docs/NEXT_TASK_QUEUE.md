@@ -327,7 +327,17 @@ Batch their DDRs in one pass first (§4.3), then implement.
       this kernel the observer dies (`idt.c:703` goes straight to
       `sched_exit`, no SIGSEGV handler). Not coverable by a probe of that
       shape; needs a different observer, not a bigger probe.
-- [ ] `SYS_POLL`, `SYS_FUTEX`
+- [x] `SYS_POLL` — **DDR-1037** (NSI 102), `smoke-poll`, M1/M2/M3 on distinct
+      hashes. Shares ONE readiness predicate with epoll rather than a parallel
+      copy, which exposed and fixed a correctness bug: the predicate returned 0
+      for `FD_VFS`, so `epoll_wait()` on a regular file was answering wrongly.
+- [ ] **BLOCKED — `SYS_FUTEX` (DDR-1038).** Not deferred for time: a futex word
+      cannot be shared between any two schedulable entities here. No
+      `CLONE_VM`/`CLONE_THREAD` (zero matches), `MAP_SHARED` explicitly refused
+      at `sys_mmap.c:83`, and `fork` COWs writable pages so the word un-shares on
+      the first write. **Unblocked by EITHER pthreads/`clone(CLONE_VM)` OR
+      `MAP_SHARED` anonymous mmap** — both already in this queue. Build it after
+      one of those, not before.
 - [ ] pthreads (`clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)`)
 - [ ] 6-arg `sys_mmap` ABI, file-backed `mmap` + `msync`
 - [ ] dynamic linking (`ld.so`), full `io_uring`, full POSIX `sigaction`
