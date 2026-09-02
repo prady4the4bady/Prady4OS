@@ -21,6 +21,7 @@
 #include "lapic.h"
 #include "fault_expect.h"  /* DDR-1040: the one-shot expected-fault latch */
 #include "cpu_mitigations.h"  /* DDR-1044: cpu_rdmsr for the #MC bank decode */
+#include "lock_stat.h"        /* DDR-1047: contended-lock dump on [apfreeze] */
 #include <stdint.h>
 
 struct idt_entry {
@@ -207,6 +208,7 @@ static void ap_freeze_probe(void) {
     static uint8_t  s_seen[PERCPU_MAX];   /* 1 once s_prev[i] is a real sample */
     static int      s_victim = -1;        /* the one CPU we sample, once chosen */
     static unsigned s_shots;              /* how many NMIs sent so far */
+    static int      s_lockstat_done;      /* DDR-1047: dump the lock table once */
 
     /* Relay arm first, so a dump armed last window is printed even if a second
      * CPU freezes in this one. The AP release-stored 2; pair with an acquire. */
@@ -239,6 +241,26 @@ static void ap_freeze_probe(void) {
         kputs("\r\n");
         console_line_unlock(fl);
         __atomic_store_n(&pc->nmi_dump, (uint8_t)0, __ATOMIC_RELAXED);
+
+        /* DDR-1047: an [apfreeze] says a CPU stopped making progress; it does
+         * not say WHAT it was waiting for. Dump the contended locks here --
+         * this is the moment the data exists to answer that, and printing it
+         * anywhere else would be a baseline nobody reads. Emitted only on the
+         * freeze path, so a healthy boot prints none of it (DDR-941's rule that
+         * an unbounded instrument slows the thing it measures).
+         *
+         * ONCE PER BOOT, and this loop is why: it runs per frozen CPU, so a
+         * 4-CPU freeze would print four copies of a table that is GLOBAL, not
+         * per-CPU -- four identical answers to one question, on the path where
+         * a log most needs to stay readable (DDR-1043). The FIRST freeze is
+         * also the one carrying the causal information; later ones are
+         * downstream, the same reading DDR-1019 established for panics. The
+         * cost is that a second dump's DELTA (which lock kept accumulating
+         * while a CPU was stuck) is not available -- stated, not overlooked. */
+        if (!s_lockstat_done) {
+            s_lockstat_done = 1;
+            lock_stat_dump();
+        }
     }
 
     if (s_shots >= DUMP_SHOTS)

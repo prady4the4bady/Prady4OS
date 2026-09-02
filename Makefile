@@ -214,7 +214,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/virtio_blk.o build/ramdisk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
-               build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o
+               build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
@@ -622,6 +622,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/arch/x86_64/pstate.c -o build/pstate.o
 	$(CC) $(KCFLAGS) -c kernel/apic/smp.c        -o build/smp.o
 	$(CC) $(KCFLAGS) -c kernel/apic/percpu.c     -o build/percpu.o
+	$(CC) $(KCFLAGS) -c kernel/lock_stat.c       -o build/lock_stat.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio.c       -o build/virtio.o
@@ -3408,6 +3409,12 @@ smoke-evresize: $(IMG) fat-image sfs-image
 # that, so now something can.
 ci-aptprepare-selftest:
 	@bash tools/ci/apt_prepare_selftest.sh
+
+# DDR-1048: prove the local runner-environment sandbox can still tell a broken
+# apt sources tree from a good one. If it ever stops discriminating, every
+# "verified locally" claim made with it is worthless.
+ci-runnerenv-selftest:
+	@bash tools/ci/runner_env.sh selftest
 
 ci-resizecheck-selftest:
 	@d=tools/qemu_runner/testdata; rc=0; \
