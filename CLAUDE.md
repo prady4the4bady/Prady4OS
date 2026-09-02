@@ -381,7 +381,9 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
   then `smoke-yieldstall` (DDR-994) -> 153, `smoke-rqfree` (DDR-996) -> 154,
   `smoke-resizeall` (DDR-997) -> 155, `smoke-surfclose` (DDR-998) -> 156.
   **Re-measure rather than increment this** — it has been wrong three times.
-- **NSI max: 99** (`SYS_IPC_RECV`, DDR-1033). **Next free: 100.** Table size: 128.
+- **NSI max: 102** (`SYS_POLL`, DDR-1037). **Next free: 103.** Table size: 128.
+  100 = `SYS_RUN_EXPERIMENT`, 101 = `SYS_EXP_RESULT` (DDR-1034); 102 = `SYS_POLL`
+  (DDR-1037) — **NOT** `SYS_POLL_RESULT` (32), which is the AETHER action poll.
   Measured from `kernel/syscall/syscall.h:168-170`. This line previously said 93
   and §INV.14 said 74 — both wrong, and the older note claiming "§INV.14 was
   right" was wrong too. `user/prism.c` ships against 95.

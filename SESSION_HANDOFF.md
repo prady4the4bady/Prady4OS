@@ -9441,3 +9441,108 @@ corrupting a result — chosen deliberately, but a prediction until a run confir
 3. Checklist — DONE + four later additions. 4. Branding — DONE (§1.1).
 5. CI efficiency — **DONE (DDR-1035), pending its first CI run.**
 Next: item 6, Groups A-D from `docs/NEXT_TASK_QUEUE.md`.
+
+---
+
+## DDR-1036 / 1037 / 1038 + three CI findings — 2026-09-02
+
+### DDR-1036 — the ghost-window click, BOTH halves now covered
+
+`mouse_inject.sh` took its target from the newest `PRADYOS_WM_GEOM` for a title,
+but the serial log is append-only, so a destroyed window's last geometry is still
+there and says nothing about being gone — 45 clicks on a dead window in one
+capture (DDR-1028). Compositor now emits `PRADYOS_WM_GONE id= title=`; the parser
+lets the newest record for a title decide across BOTH line types.
+
+| half | gate | mutant | result |
+|---|---|---|---|
+| compositor publishes | `smoke-surfclose` | M1 delete the print | FAIL, 0 GONE lines |
+| parser refuses | `smoke-ghostclick` | M2 ignore the record | FAIL, resolves dead geometry |
+
+**§5 CLAIMED COVERAGE IT DID NOT HAVE** and §5.1 corrects it: it asserted
+`smoke-wmclose` already covered this. It did not — DDR-1028 *fixed* the timing
+that made window C a ghost, so the earlier fix removed the scenario this one
+needs, and I reasoned from pre-fix behaviour. Both planned mutants would have
+passed every gate.
+
+**`smoke-ghostclick` needed TWO injectors and the first draft could never pass:**
+ALPHA becomes a ghost BECAUSE an injector clicks its close box. With only the
+waiting injector, nothing closed ALPHA. **The event that creates the ghost is the
+click the gate refuses to make.** Read what makes a window close before writing a
+gate that depends on it closing.
+
+**HARNESS DEFECT, fixed but only half:** `mouse_inject.sh`'s readiness loop
+polled 60 s then **injected anyway**. A sentinel that never appears does not fail
+a gate — the injector proceeds and clicks whatever geometry is lying in the log,
+the exact stale-target behaviour DDR-1036 exists to prevent. Ceiling is now
+`READY_TIMEOUT_S` (default 60, unchanged for the seven callers). **The
+fall-through is DELIBERATELY unchanged** — making it fatal is right long-term but
+seven gates may depend on proceeding. Checklist §4.7b.
+
+### DDR-1037 — `SYS_POLL` (NSI 102), and a bug it exposed in epoll
+
+poll and epoll now share ONE predicate (`fd_ready_mask`); `fd_ready` is a
+`mask & events` wrapper. **That sharing FIXED A SHIPPING BUG:** the predicate
+returned 0 for `FD_VFS`, so `epoll_wait()` on a regular file was answering
+WRONGLY — POSIX says a regular file never blocks.
+
+clean `a411e1b1b765e15e`; M1 `0651ff30097d4617` / M2 `ac5415b49449cae3` /
+M3 `f51b29901b3c8b10`, each missing a DIFFERENT sentinel (arms C / E / A), so no
+mutant carries another.
+
+**ARM E CAUGHT ITS OWN FIRST DRAFT — a near-miss on a vacuous arm, NOT a caught
+implementation bug.** It reported `waited=0`; `poll()` was correct and the probe
+measured nothing, because `SYS_TIME` (72) takes a `struct rtc_time *` and returns
+0/-EFAULT. `SYS_CLOCK` (57) returns seconds as a value. Recoverable only because
+the arm asserts a MEASURED QUANTITY, not the return value.
+
+**TWO HARNESS DEFECTS:** `-Werror` rejected M2/M3 (deleting the deadline check
+orphans `deadline`) — **a mutant that does not build is not a mutant**, and
+`BUILD FAILED` reads like it was tested. And my restore sat behind an early
+`return`, so M3's patch landed on M2's still-present mutation. Same class as
+DDR-1036's concurrent-QEMU race: **a cleanup step reachable only on the success
+path.**
+
+### DDR-1038 — `SYS_FUTEX` assessed NOT buildable; the BLOCKER is named
+
+No `CLONE_VM`/`CLONE_THREAD` (zero matches), `MAP_SHARED` refused at
+`sys_mmap.c:83`, `fork` COWs writable pages so the word un-shares on the first
+write. A futex word cannot be shared between any two schedulable entities here.
+**Unblocked by EITHER pthreads/`clone(CLONE_VM)` OR `MAP_SHARED` anonymous
+mmap** — both already in the queue. Not a time problem; a dependency.
+
+### Three CI findings, and what the DDR-1035 assertion bought
+
+1. **`smoke-resizeall` (shard 9)** — the `if: always()` hash assertion printed
+   `kernel.bin: OK` **on the red shard**, so "gates were red" and "gates ran a
+   different binary" stayed separate findings. That is what the refactor was for.
+2. **`smoke-nethammer` (shard 3)** — ruled out by bit-identity:
+   `git diff --name-only` showed zero kernel sources changed.
+3. **`smoke-rtc-smp` (shard 5) — OPEN-2, third occurrence.** RIP resolved BEFORE
+   matching, per DDR-1019: `0xFFFFFFFF8000AE37` -> `isr_dispatch`,
+   `bt` -> `isr_common.gs_kernel_in`, panic backtrace
+   `schedule <- sched_ap_enter <- smp_ap_entry` = **DDR-1006's AP-timer-ISR
+   site**, NOT DDR-1019's halt loop, NOT DDR-1010's `sys_mmap` path. Second
+   confirmation: DDR-1019's producer sets `g_panic_extra` -> `panic_stage=` in a
+   heartbeat, and none carries it. **ATTRIBUTION LIMIT STATED:** unlike (2),
+   `kernel.bin` was NOT bit-identical (this tip shipped `SYS_POLL`), so this rests
+   on mechanism, not proof. And §INV.18: resolved against a LOCAL rebuild;
+   CI's published hash could not be read from the job log, so identity rests on
+   DDR-1023's reproducibility, not a direct comparison.
+
+### The pattern worth carrying
+
+**Most of this session's errors were measuring the wrong thing, not building the
+wrong thing** — grepping make's stdout instead of the serial log (DDR-1023's own
+error, repeated), an assertion string missing the `id=` field, a readiness
+sentinel that never matched, a `pgrep` racing a loop that starts QEMUs, and
+differencing two return codes from an out-pointer syscall. In four of five the
+code under test was fine. **Arms that assert a measured quantity rather than a
+return value are what made these recoverable.**
+
+### State
+
+170 gates / 10 shards / 7 excluded. NSI max **102**. DDR free range **1039+**.
+Tree clean at `b785050`. Operator items 1-5 all complete; item 6 (Groups A-D)
+in progress — `SYS_MPROTECT` + `SYS_POLL` shipped, `SYS_FUTEX` blocked with a
+named dependency.
