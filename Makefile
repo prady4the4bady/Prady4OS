@@ -143,6 +143,8 @@ USER_IPC_SRC   := user/ipctest.c         # DDR-1033: ring-3 IPC door (NSI 98/99)
 USER_IPC_ELF   := build/ipctest.elf
 USER_EXP_SRC   := user/exptest.c         # DDR-1034: bounded experiment executor
 USER_EXP_ELF   := build/exptest.elf
+USER_POLL_SRC  := user/polltest.c        # DDR-1037: POSIX poll() (NSI 102)
+USER_POLL_ELF  := build/polltest.elf
 USER_ASPW_SRC := user/actionspawntest.c  # DDR-1017: Section 3C ACTION_SPAWN_PROCESS
 USER_ASPW_ELF := build/actionspawntest.elf
 USER_AQRY_SRC := user/actionquerytest.c  # DDR-1018: Section 3C ACTION_QUERY_MEMORY
@@ -244,7 +246,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -550,6 +552,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_IPC_ELF) build/ipctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_EXP_SRC) -o build/exptest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_EXP_ELF) build/exptest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_POLL_SRC) -o build/polltest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_POLL_ELF) build/polltest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ASPW_SRC) -o build/actionspawntest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ASPW_ELF) build/actionspawntest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AQRY_SRC) -o build/actionquerytest.o
@@ -3405,6 +3409,27 @@ smoke-runexp: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="EXPTEST FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[runexp] PASS — $$(grep -a PRADYOS_EXP_REC build/runexp.log | head -1)"
+
+# DDR-1037: POSIX poll(). The sentinel list asserts VALUES, not presence:
+#   EMPTY n=0        -- an empty pipe is not readable
+#   IN n=1 rev=1     -- after a write it is, and revents carries POLLIN
+#   NVAL n=1 rev=32  -- a bad fd is POLLNVAL, which is the arm a silent
+#                       "return 0 for anything I do not recognise" would fail
+#   FILE n=1 rev=5   -- POLLIN|POLLOUT on a regular file. This one is a
+#                       CORRECTNESS check: the pre-DDR-1037 predicate returned 0
+#                       for FD_VFS, so epoll_wait on a file answered wrongly too.
+#   TMO n=0 waited=  -- the timeout elapsed. Asserted as elapsed SECONDS rather
+#                       than as "returned 0", because a poll() that ignored its
+#                       timeout would also return 0 (DDR-1037 §5).
+smoke-poll: $(IMG) fat-image sfs-image
+	@rm -f build/poll.log
+	@SERIAL_LOG=build/poll.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=poll \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_POLL_EMPTY n=0\nPRADYOS_POLL_IN n=1 rev=1\nPRADYOS_POLL_NVAL n=1 rev=32\nPRADYOS_POLL_FILE n=1 rev=5\nPRADYOS_POLL_TMO n=0 waited=\nPRADYOS_POLL_OK')" \
+	FORBIDDEN_SENTINEL="POLLTEST FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -aq "PRADYOS_POLL_TMO n=0 waited=0" build/poll.log && { \
+	    echo "[poll] FAIL — the 2 s timeout did not elapse (waited=0): poll() is ignoring it"; exit 1; } || true
+	@echo "[poll] PASS — $$(grep -a PRADYOS_POLL_TMO build/poll.log | head -1)"
 
 smoke-execve-argv: $(IMG) fat-image sfs-image
 	@rm -f build/argv.log

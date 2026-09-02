@@ -13,9 +13,18 @@
 #include "uaccess.h"
 #include "kheap.h"
 #include "errno.h"
+#include "irq.h"        /* DDR-1037: g_ticks, for poll()'s timeout deadline */
 
 #define EPOLL_MAX        64
 #define EPOLLIN          0x001u
+/* DDR-1037: POSIX poll() bits. IN/OUT/ERR/HUP share the EPOLL values by design
+ * on Linux, which is what lets fd_ready_mask serve both callers. */
+#define POLLIN           0x001u
+#define POLLOUT          0x004u
+#define POLLERR          0x008u
+#define POLLHUP          0x010u
+#define POLLNVAL         0x020u
+#define POLL_MAX_FDS     32
 #define EPOLL_CTL_ADD    1
 #define EPOLL_CTL_DEL    2
 #define EPOLL_CTL_MOD    3
@@ -45,16 +54,47 @@ static struct epoll *epoll_of(struct tcb *t, int epfd) {
     return e->epoll;
 }
 
-/* Is `fd` currently ready for the requested events? Baseline: EPOLLIN on a pipe
- * read-end with buffered data. */
-static uint32_t fd_ready(struct tcb *t, int fd, uint32_t events) {
+/* DDR-1037: the kernel's ONE readiness predicate, shared by epoll_wait and poll.
+ *
+ * Two predicates that can disagree about the same fd is the drift this codebase
+ * guards against elsewhere, so poll() does not get a parallel copy -- it calls
+ * this. Returns a POSIX-shaped mask (POLLIN/POLLOUT/POLLHUP); the EPOLL bit
+ * values coincide with the POLL ones for IN/OUT/ERR/HUP, which is why one mask
+ * serves both callers.
+ *
+ * `revents` is NOT filtered by `events` here: POSIX says POLLHUP/POLLERR/POLLNVAL
+ * are reported whether or not they were requested. Callers that want the
+ * requested-only view mask it themselves. */
+static uint32_t fd_ready_mask(struct tcb *t, int fd) {
     struct fd_entry *e = fd_get(t, fd);
     if (!e)
         return 0;
-    if ((events & EPOLLIN) && e->kind == FD_PIPE && e->flags != PIPE_WRITE_END
-        && pipe_has_data(e->pipe))
-        return EPOLLIN;
-    return 0;
+    switch (e->kind) {
+    case FD_PIPE:
+        if (e->flags == PIPE_WRITE_END)
+            return (pipe_full(e->pipe) ? 0u : POLLOUT)
+                 | (pipe_readers(e->pipe) ? 0u : POLLERR);
+        return (pipe_has_data(e->pipe) ? POLLIN : 0u)
+             | (pipe_writers(e->pipe) ? 0u : POLLHUP);
+    case FD_VFS:
+        /* POSIX: a regular file NEVER blocks, so it is always ready both ways.
+         * The pre-DDR-1037 predicate returned 0 here, which made epoll_wait on a
+         * file fd answer WRONGLY rather than narrowly -- a correctness fix, not
+         * an extension. */
+        return POLLIN | POLLOUT;
+    case FD_CONSOLE:
+        /* Writable always. NOT readable-reportable: this kernel has no
+         * console-input predicate under any name, so stdin can only ever be
+         * reported not-ready. Saying otherwise would be a guess (DDR-1037 §3). */
+        return POLLOUT;
+    default:
+        return 0;                    /* FD_EPOLL and anything else: not pollable */
+    }
+}
+
+/* epoll's view: the requested bits only, in EPOLL terms. */
+static uint32_t fd_ready(struct tcb *t, int fd, uint32_t events) {
+    return fd_ready_mask(t, fd) & events;
 }
 
 static long sys_epoll_create(long a_size, long a2, long a3, long a4, long a5, long a6) {
@@ -151,7 +191,80 @@ static long sys_epoll_wait(long a_epfd, long a_events, long a_max, long a_timeou
     return n;
 }
 
+/* DDR-1037: POSIX poll(). Lives here, beside epoll, so both share one readiness
+ * predicate rather than keeping two that can disagree. */
+struct pollfd {
+    int   fd;
+    short events;
+    short revents;
+} __attribute__((packed));
+_Static_assert(sizeof(struct pollfd) == 8, "pollfd layout");
+
+static long sys_poll(long a_fds, long a_nfds, long a_timeout, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (a_nfds < 0 || a_nfds > POLL_MAX_FDS)
+        return -EINVAL;
+    unsigned nfds = (unsigned)a_nfds;
+    if (nfds == 0)
+        return 0;
+
+    struct pollfd fds[POLL_MAX_FDS];
+    if (copyin(fds, (const void __user *)(uintptr_t)a_fds, nfds * sizeof fds[0]) < 0)
+        return -EFAULT;
+
+    /* The deadline is computed ONCE, before the loop: recomputing it per pass
+     * would make a timeout that never expires (each pass resetting its own
+     * deadline) -- the shape DDR-1037 §5 asks arm E to catch. */
+    int      timeout = (int)a_timeout;
+    uint64_t deadline = (timeout > 0)
+        ? g_ticks + ((uint64_t)timeout / 10u) + 1u   /* ms -> 100 Hz ticks */
+        : 0;
+
+    for (;;) {
+        int ready = 0;
+        for (unsigned i = 0; i < nfds; i++) {
+            if (fds[i].fd < 0) {                 /* POSIX: ignored, revents 0 */
+                fds[i].revents = 0;
+                continue;
+            }
+            if (!fd_get(t, fds[i].fd)) {         /* POSIX: bad fd is POLLNVAL */
+                fds[i].revents = (short)POLLNVAL;
+                ready++;
+                continue;
+            }
+            uint32_t m = fd_ready_mask(t, fds[i].fd);
+            /* POLLHUP/POLLERR/POLLNVAL are reported unrequested (POSIX); the
+             * readable/writable bits are filtered to what was asked for. */
+            uint32_t want = (uint32_t)(unsigned short)fds[i].events
+                          | POLLERR | POLLHUP;
+            fds[i].revents = (short)(m & want);
+            if (fds[i].revents)
+                ready++;
+        }
+        if (ready > 0 || timeout == 0)
+            break;
+        if (timeout > 0 && g_ticks >= deadline)
+            break;                               /* expired: return 0 */
+        /* timeout < 0 blocks until something is ready. That is an unbounded
+         * wait, and DDR-1037 §4 says so rather than burying it: the difference
+         * from DDR-994's defect class is that blocking forever is the caller's
+         * explicit request, and yield() carries an interrupt window since
+         * DDR-981, so the CPU is not wedged. */
+        yield();
+    }
+
+    int n = 0;
+    for (unsigned i = 0; i < nfds; i++)
+        if (fds[i].revents)
+            n++;
+    if (copyout((void __user *)(uintptr_t)a_fds, fds, nfds * sizeof fds[0]) < 0)
+        return -EFAULT;
+    return n;
+}
+
 void epoll_register(void) {
+    syscall_register(SYS_POLL, sys_poll);           /* DDR-1037 */
     syscall_register(SYS_EPOLL_CREATE, sys_epoll_create);
     syscall_register(SYS_EPOLL_CTL,    sys_epoll_ctl);
     syscall_register(SYS_EPOLL_WAIT,   sys_epoll_wait);

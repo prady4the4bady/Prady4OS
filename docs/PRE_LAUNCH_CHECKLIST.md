@@ -468,6 +468,16 @@ root — this one blocks the Group F audit-persistence row), `smoke-sfs-largefil
 `smoke-sfs-deepslot`, `smoke-sfs-quota`, `smoke-ext4-write`, `smoke-nas`,
 `smoke-pmmpolicy`, `smoke-nvmeirq`.
 
+**Group D update (DDR-1037):** `smoke-poll` now EXISTS — `SYS_POLL` (NSI 102)
+shipped, mutation-checked M1/M2/M3 on distinct kernel hashes. Two limits recorded
+rather than papered over: **console `POLLIN` is unimplementable here** (this
+kernel has no console-input predicate under any name, so `poll()` on stdin can
+only report not-ready), and **`timeout < 0` has no gate arm** (blocking forever
+needs a second process to unblock it; the probe is single-threaded). It also
+**fixed a correctness bug in `epoll_wait()`**: the shared readiness predicate
+returned 0 for `FD_VFS`, so epoll on a regular file was answering wrongly —
+POSIX says a regular file never blocks.
+
 **Group C — networking (all MISSING):** `smoke-epoll` (proxy-socket
 epoll/select), `smoke-udp`, `smoke-netrevoke` (`SYS_NET_REVOKE` / CAP_NET policy
 reload), `smoke-tap`, `smoke-ipv6`, `smoke-tls`.

@@ -210,3 +210,4 @@
 3	smoke-actionhypo	120	fast
 8	smoke-runexp	120	strict
 9	smoke-ghostclick	180	strict
+2	smoke-poll	120	strict

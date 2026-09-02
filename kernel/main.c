@@ -460,6 +460,8 @@ extern const unsigned char argvtest_elf_end[];
 extern const unsigned char ipctest_elf[];             /* DDR-1033: ring-3 IPC door */
 extern const unsigned char ipctest_elf_end[];
 void exec_grant(struct tcb *t);                       /* DDR-1034: sys_experiment.c */
+extern const unsigned char polltest_elf[];            /* DDR-1037: POSIX poll() */
+extern const unsigned char polltest_elf_end[];
 extern const unsigned char exptest_elf[];             /* DDR-1034: bounded executor */
 extern const unsigned char exptest_elf_end[];
 extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
@@ -2455,6 +2457,21 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] EXP un-granted probe FAILED to load\r\n");
                     }
                     kputs("[user] experiment executor probes spawned (granted + un-granted)\r\n");
+                }
+                /* DDR-1037: POSIX poll(). One process -- unlike is_ipc/is_exec
+                 * there is no per-process door here, so a second un-granted
+                 * spawn would exercise nothing. */
+                if (probe_enabled("poll")) {
+                    uint64_t plen = (uint64_t)(uintptr_t)polltest_elf_end -
+                                    (uint64_t)(uintptr_t)polltest_elf;
+                    struct tcb *pp = 0;
+                    if (elf_load((void *)(uintptr_t)polltest_elf, plen,
+                                 "POLLTEST", &pp) == ELF_OK && pp) {
+                        sched_unblock(pp);
+                        kputs("[user] poll probe spawned\r\n");
+                    } else {
+                        kputs("[user] POLLTEST probe FAILED to load\r\n");
+                    }
                 }
                 /* DDR-1017: Section 3C ACTION_SPAWN_PROCESS, the second
                  * force-pending type. FAT-rooted (like the actionread probe and

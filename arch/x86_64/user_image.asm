@@ -336,6 +336,13 @@ exptest_elf:
     incbin "build/exptest.elf"
 exptest_elf_end:
 
+; DDR-1037: POSIX poll() probe.
+global polltest_elf
+global polltest_elf_end
+polltest_elf:
+    incbin "build/polltest.elf"
+polltest_elf_end:
+
 ; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
 ; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
 global actionspawntest_elf

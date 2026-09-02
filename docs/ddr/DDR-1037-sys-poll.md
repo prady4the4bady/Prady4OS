@@ -96,3 +96,91 @@ return value.
   kinds, so they are outside this table entirely.
 - **No console input**, per §3 — the missing predicate is a real gap and is
   listed in the pre-launch checklist rather than worked around.
+
+
+## §7 — Measured
+
+### §7.1 — Clean and mutants
+
+Clean, kernel **`a411e1b1b765e15e`**:
+
+```
+PRADYOS_POLL_EMPTY n=0
+PRADYOS_POLL_IN    n=1 rev=1
+PRADYOS_POLL_NVAL  n=1 rev=32
+PRADYOS_POLL_FILE  n=1 rev=5
+PRADYOS_POLL_TMO   n=0 waited=2
+PRADYOS_POLL_OK
+```
+
+| mutant | kernel | rc | missing sentinel — each lands on ITS OWN arm |
+|---|---|---|---|
+| **M1** drop the `POLLNVAL` branch | `0651ff30097d4617` | 2 | `PRADYOS_POLL_NVAL n=1 rev=32` (arm C) |
+| **M2** drop the timeout deadline | `ac5415b49449cae3` | 2 | `PRADYOS_POLL_TMO n=0 waited=` (arm E) |
+| **M3** report every fd ready | `f51b29901b3c8b10` | 2 | `PRADYOS_POLL_EMPTY n=0` (arm A) |
+
+Three distinct missing sentinels means no mutant is carrying another. The tree
+rebuilds to the clean hash after restoration, so nothing leaked between runs.
+
+`waited=2` is the arm that matters most: the 2 s timeout genuinely elapsed. M2
+removes only the deadline check and the gate then never sees the sentinel at all,
+because the probe loops until the boot window expires.
+
+### §7.2 — Arm E caught its OWN first draft, and that is the point
+
+The first clean run reported **`PRADYOS_POLL_TMO n=0 waited=0`** and the gate
+failed with *"the 2 s timeout did not elapse: poll() is ignoring it"*.
+
+**`poll()` was correct. The probe was measuring nothing.** It stamped `SYS_TIME`
+(NSI 72), which takes a `struct rtc_time *` out-pointer and returns `0`/`-EFAULT`
+— so the probe differenced two identical return codes. `SYS_CLOCK` (NSI 57) is
+the call that returns seconds **as a value**, and it is what DDR-1029 used.
+
+This is a **near-miss on a vacuous arm, not a caught implementation bug**, and it
+is worth separating the two: the code under test never had the defect the arm
+appeared to report. What made it recoverable is that arm E asserts a *measured
+quantity* rather than the return value. `n=0` was correct output; `waited=0` was
+the measurement admitting it could not tell a `poll()` that waited from one that
+did not. An arm that only checked `n=0` would have gone green over an unverified
+timeout.
+
+### §7.3 — Two harness defects that would have produced misleading results
+
+**(a) `-Werror` rejected the mutants.** Deleting the deadline check leaves
+`deadline` unused, so M2 and M3 did not compile. **A mutant that does not build
+is not a mutant**, and `BUILD FAILED` scans past as though it had been tested.
+Fixed with `(void)deadline;`, which keeps the mutation faithful — only the
+behaviour is removed, not the variable.
+
+**(b) The restore sat behind an early `return`.** On a build failure the harness
+returned before restoring, so M2's mutation was still in the file when M3's patch
+applied on top — which is why M3 reported the *same* `deadline` error for a
+mutation unrelated to `deadline`. Had both compiled, M3 would silently have been
+testing M2+M3 together and a pass would have proved nothing about either. The
+restore is now unconditional.
+
+Same class as DDR-1036 §8.2's concurrent-QEMU race: **a cleanup step reachable
+only on the success path.** Both were caught because the results made no sense,
+not because anything asserted them.
+
+### §7.4 — What is NOT covered
+
+- `timeout < 0` (block forever) has **no arm**. A gate that blocks until
+  something becomes ready needs a second process to make it ready, and the probe
+  is single-threaded. Recorded as uncovered, not claimed as tested.
+- `POLLHUP` on a pipe whose writers have closed is implemented and unexercised —
+  the probe never closes the write end.
+- Console `POLLIN` is unimplementable here (§3) and therefore untested by
+  construction.
+
+### §7.5 — Regression, and the one that mattered
+
+| gate | rc | why |
+|---|---|---|
+| `smoke-poll` | 0 | the new gate |
+| **`smoke-sysepoll`** | **0** | **the one that mattered.** `fd_ready()` is no longer the predicate — it is a `mask & events` wrapper over `fd_ready_mask()`, so epoll's behaviour changed too, deliberately (`FD_VFS` now reports ready). A red here would have been a real finding about the shared predicate, not something to tune around. |
+| `smoke-syspipe` | 0 | pipes are the other kind the predicate answers for |
+| `smoke-shell` | 0 | §NON-NEGOTIABLE 4 |
+
+`hygiene_check.sh`: all three PASSED. `ci-shard-check`: **170** gates / 10 shards
+/ 7 excluded. `make image` rc=0, zero warnings at `-Werror`.
