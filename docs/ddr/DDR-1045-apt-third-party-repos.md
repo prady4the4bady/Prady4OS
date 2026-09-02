@@ -39,40 +39,93 @@ straw.
 
 ---
 
-## §3 — The fix, and the argument that it is safe
+## §3 — THE FIRST FIX WAS WRONG AND BROKE EVERY JOB
 
-`tools/ci/apt_prepare.sh`, called by all four steps: remove
-`/etc/apt/sources.list.d/*`, then `apt-get update`.
+The first version removed `/etc/apt/sources.list.d/*` wholesale, on this stated
+assumption — quoted from its own comment:
+
+> "the Ubuntu archives in /etc/apt/sources.list remain"
+
+**That is false on Ubuntu 24.04.** Noble ships the archives in deb822 form at
+`/etc/apt/sources.list.d/ubuntu.sources`, and `/etc/apt/sources.list` is a stub.
+So the script deleted the archives themselves, `apt-get update` then succeeded
+against nothing, and every job died with:
+
+```
+E: Unable to locate package llvm
+E: Unable to locate package nasm
+```
+
+CI run 33650542691: **build, shard-check, arch-bootstrap (aarch64) and
+arch-bootstrap (riscv64) all failed**, in both the push and PR suites. The fix
+was strictly worse than the failure it replaced — one broken job became four.
+
+**The assumption was never checked against the target image.** That is the whole
+lesson: the claim was specific, load-bearing, trivially checkable, and asserted
+in a comment as if it were established.
+
+## §4 — The fix, and the argument that it is safe
+
+`tools/ci/apt_prepare.sh`, called by all four steps. It classifies **by content,
+not by path**: a file referencing an Ubuntu archive host
+(`archive|security|ports.ubuntu.com`, or `ubuntu.com/ubuntu`) is kept; anything
+else is removed. That covers both layouts — noble's `ubuntu.sources` and the
+legacy `sources.list` — without needing to know which one the image uses.
 
 **Every package these workflows install comes from the Ubuntu archives** —
 clang, lld, llvm, nasm, make, qemu-system-*, dosfstools, mtools, e2fsprogs,
-ovmf, xorriso, grub-*. Not one comes from a vendor repository. The runner image
-ships those repos for other people's workflows; here they are pure liability and
-they are the only thing that has ever broken this step.
+ovmf, xorriso, grub-*. Not one comes from a vendor repository, so nothing needed
+is lost.
 
-### §3.1 — What this deliberately does NOT do
+**Two guards, because this script has already been wrong once:**
 
-It does **not** write `apt-get update || true`. That would have been one
-character cheaper and it would also hide **the Ubuntu archives** being
-unreachable — and a toolchain installed against a stale index is a genuinely
-different build, which is exactly the kind of thing this project spends DDRs
-chasing afterwards. Update stays fatal. Only the unused repositories go away,
-and the script prints each one it removes so a future reader can see what the
-environment actually had.
+1. Refuse to proceed if no Ubuntu source survives the filter — rather than
+   updating against an empty index, which is exactly how the first version
+   failed.
+2. After updating, assert `clang` resolves. It is installed by all four callers,
+   so if the index is unusable this says why *here*, instead of every caller
+   failing later with a confusing "Unable to locate package".
 
-If a workflow ever needs a vendor package it must re-add that repository itself,
-and then it owns that repository's availability.
+### §4.1 — What this deliberately does NOT do
 
----
+It does **not** write `apt-get update || true`. That would be one character
+cheaper and would also hide **the Ubuntu archives** being unreachable — and a
+toolchain installed against a stale index is a genuinely different build. Update
+stays fatal; only the unused repositories go away.
 
-## §4 — What is not claimed
+## §5 — Verified locally this time
 
-- **This is not a fix for a code defect**, because there was none to fix. It
-  removes a failure mode that has nothing to do with the kernel.
-- **It does not make CI immune to apt.** The Ubuntu archives can still be
-  unreachable, and that will still fail the job — deliberately (§3.1).
-- **No local verification is possible.** The failure is a property of the GitHub
-  runner image, not of this container. What was verified locally: the script
-  parses (`bash -n`), the workflow still parses as YAML, all four call sites are
-  routed through it, and no bare `apt-get update` remains in `ci.yml`. The real
-  test is the next CI run.
+`tools/ci/apt_prepare_selftest.sh`, wired into `hygiene_check.sh` (now **five**
+checks) and `make ci-aptprepare-selftest`. The script's directory, main list and
+`rm` are overridable, purely so the classifier can be exercised without root and
+without a runner image.
+
+| fixture | asserts |
+|---|---|
+| **noble layout** — `ubuntu.sources` beside `microsoft-prod.list` | `ubuntu.sources` **survives**, microsoft removed, exit 0 |
+| **third-party only** | the guard **refuses**, non-zero — no update against an empty index |
+| **legacy layout** — archives in `sources.list` | proceeds, exit 0 |
+
+Fixture 1 *is* the regression test for the mistake: it reproduces the exact
+layout that broke.
+
+**Mutation-checked.** Reinstating the shipped behaviour (`if false` — remove
+everything) fails fixture 1 twice over, and its output is the defect verbatim:
+
+```
+[apt_prepare] REMOVE (third-party):    .../ubuntu.sources
+[apt_prepare] FAIL: no Ubuntu archive source survived the filter.
+FAIL 1: DELETED ubuntu.sources -- this is the bug that broke CI
+```
+
+## §6 — What is still not claimed
+
+- **This fixes no code defect**, because there was none. It removes a failure
+  mode unrelated to the kernel.
+- **CI is not immune to apt.** The Ubuntu archives can still be unreachable, and
+  that will still fail the job — deliberately (§4.1).
+- **The fixtures are not the runner image.** They encode what noble's layout is
+  *believed* to be; the real environment is still only observable in CI. The
+  difference from the first attempt is that the belief is now written down as an
+  executable test that a mutation demonstrably fails, instead of a sentence in a
+  comment.
