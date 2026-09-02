@@ -16,6 +16,12 @@ static inline void cpu_wrmsr(uint32_t msr, uint64_t val) {
         : : "c"(msr), "a"((uint32_t)(val)), "d"((uint32_t)((val) >> 32)) : "memory");
 }
 
+static inline uint64_t cpu_rdmsr(uint32_t msr) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 static inline void cpu_cpuid(uint32_t leaf, uint32_t subleaf,
                              uint32_t *eax, uint32_t *ebx,
                              uint32_t *ecx, uint32_t *edx) {

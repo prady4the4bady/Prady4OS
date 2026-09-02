@@ -9778,3 +9778,58 @@ halted CPU's RIP still names its halt site (how DDR-1019 resolved the shard-9
 
 DDR free range **1044+**.
 
+## CHECKPOINT 2026-09-02 — DDR-1044: #MC, the machine check that was never delivered
+
+The Group A row said "Panic with full register state" — and `idt.c` **already
+did that**: vector 18 is named in `exc_name` and every CPL-0 exception below 32
+panics with a full dump. The row's stated deliverable existed.
+
+**The real defect is upstream, and it was measured before anything was written.**
+With `CR4.MCE` clear a machine check raises no exception at all. QEMU says it
+outright when one is injected:
+
+```
+{"return": "CPU 0: MCE capability is not enabled, raising triple fault"}
+```
+
+and the serial log **stops mid-boot** — no banner, no registers, nothing. On real
+hardware that is a box lost to a memory fault with zero diagnostic.
+
+Ships SDM §15.8 init in order (CPUID `.MCE` + `.MCA`, `MCG_CTL`, per-bank
+`MCi_CTL` all-ones then `MCi_STATUS` **cleared** — a stale `VAL` from firmware
+would make the first `#MC` report a pre-boot fault — then `CR4.MCE` last, read
+back), per-CPU on every AP. Plus a bank decode printed **before** the register
+dump, because `MCG_STATUS.RIPV` is how a reader knows whether to trust the RIP.
+
+**`smoke-mce` (shard 4) is the one gate whose pass condition is a panic**, so it
+runs QEMU directly. Coverage is not dropped: arm E asserts exactly one banner,
+arm F runs the full 73-pattern scan over a copy with that single line filtered —
+the `smoke-shell` gap DDR-1010 closed is not reopened.
+
+**Measured** — clean kernel `ec90cc611e86c0c4`:
+
+| | mutation | kernel.bin | result |
+|---|---|---|---|
+| M1 | `CR4.MCE` never set | `421a302ee622288d` | rc=2, arm A (injector's own reply is the diagnosis) |
+| M2 | report `banks`=0 | `327206a4ee104937` | rc=2, arm A — **not** D |
+| M3 | decode reads `MCi_CTL` not `MCi_STATUS` | `82a088c871e1aaef` | rc=2, **arm D alone** |
+
+M2 landing on A left arm D unproven, hence M3. Its log is the argument for
+asserting exact values: `MCi_CTL` is all-ones, so `VAL` reads set on *every* bank
+and the "only VAL banks" filter prints nine spurious lines whose first is
+plausible enough to pass a shape check.
+
+Gate cost cut **131 s → 13 s** by an early kill — the kernel halts after the
+panic, so QEMU never exits on its own. Readiness is polled, not slept.
+
+Gate count **172 → 173**. DDR free range **1045+**. Regression on the clean
+kernel: `hygiene_check.sh` ALL FOUR; `smoke-mce`, `smoke-smep`, `smoke-smap`,
+`smoke-shell`, `smoke-blkmq`, `smoke-rqstress-liveness`, `smoke-mitigations` rc=0.
+
+**Not done, named:** no recovery (every `#MC` is fatal, including a `RIPV=1`
+restartable one), no CMCI or correctable-bank polling, and the AP path is
+compiled but unexercised — the gate injects into CPU 0 only.
+
+**Group A remaining:** I/O APIC migration, KASLR, kernel W^X identity-alias
+removal, `lock_stat`.
+

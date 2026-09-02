@@ -20,6 +20,7 @@
 #include "ps2kbd.h"
 #include "lapic.h"
 #include "fault_expect.h"  /* DDR-1040: the one-shot expected-fault latch */
+#include "cpu_mitigations.h"  /* DDR-1044: cpu_rdmsr for the #MC bank decode */
 #include <stdint.h>
 
 struct idt_entry {
@@ -503,6 +504,7 @@ static volatile uint64_t g_fe_lo, g_fe_hi, g_fe_resume;
 static volatile uint32_t g_fe_armed, g_fe_hit, g_fe_vec, g_fe_err;
 
 unsigned smp_online(void);      /* kernel/apic/smp.c */
+extern volatile uint32_t g_mce_report;   /* DDR-1044: kernel/apic/smp.c */
 
 int fault_expect_arm(uint64_t lo, uint64_t hi, uint64_t resume) {
     uint64_t fl;
@@ -831,6 +833,49 @@ void isr_dispatch(struct regs *r) {
     kputs("  error=");
     kputhex(r->err_code);
     kputs("\r\n");
+
+    /* DDR-1044: a #MC's register dump says WHERE the CPU was, not WHAT the
+     * hardware reported. The machine-check banks carry that, and they are the
+     * only place it exists — MCG_STATUS says whether RIP/EIP are even valid,
+     * and each bank's STATUS/ADDR/MISC names the unit and the address. Printed
+     * BEFORE the register dump because MCG_STATUS.RIPV is how a reader knows
+     * whether to trust the RIP that follows.
+     *
+     * Bounded by MCG_CAP's own bank count, and only banks with STATUS.VAL (bit
+     * 63) are printed — an all-banks dump on a 32-bank CPU would bury the one
+     * line that matters under 31 zeros. */
+    if (r->vector == 18) {
+        uint32_t rep = g_mce_report;         /* what cpu_enable_mce found */
+        uint64_t st  = cpu_rdmsr(0x17Au);    /* IA32_MCG_STATUS */
+        kputs("MCE: mcg_status=");
+        kputhex(st);
+        kputs(" ripv=");
+        kputdec((st & 1ull) ? 1u : 0u);      /* bit0 RIPV: is RIP trustworthy? */
+        kputs(" eipv=");
+        kputdec((st & 2ull) ? 1u : 0u);
+        kputs(" mcip=");
+        kputdec((st & 4ull) ? 1u : 0u);
+        kputs("\r\n");
+        unsigned banks = (rep >> 8) & 0xFFu;
+        for (unsigned i = 0; i < banks; i++) {
+            uint64_t bs = cpu_rdmsr(0x401u + 4u * i);
+            if (!(bs & (1ull << 63)))        /* STATUS.VAL — nothing logged here */
+                continue;
+            kputs("MCE: bank=");
+            kputdec(i);
+            kputs(" status=");
+            kputhex(bs);
+            if (bs & (1ull << 58)) {         /* ADDRV */
+                kputs(" addr=");
+                kputhex(cpu_rdmsr(0x402u + 4u * i));
+            }
+            if (bs & (1ull << 59)) {         /* MISCV */
+                kputs(" misc=");
+                kputhex(cpu_rdmsr(0x403u + 4u * i));
+            }
+            kputs("\r\n");
+        }
+    }
 
     g_panic_stage = 3;                      /* exception identified */
     dump_line("RIP=", r->rip);

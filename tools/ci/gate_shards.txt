@@ -204,6 +204,7 @@
 9	smoke-resizeall	180	strict
 8	smoke-surfclose	180	strict
 4	smoke-perrestore	180	fast
+4	smoke-mce	15	strict
 2	smoke-horizon	90	fast
 1	smoke-actionread	120	fast
 1	smoke-actiondel	120	fast

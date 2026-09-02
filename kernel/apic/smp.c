@@ -140,6 +140,73 @@ unsigned cpu_enable_smap(void) {
     return 1u | (on << 1);
 }
 
+/* DDR-1044: MACHINE-CHECK (#MC, vector 18).
+ *
+ * MEASURED FIRST, and it is the whole reason this exists. With CR4.MCE clear,
+ * a machine check does NOT raise #MC -- it takes the machine down. QEMU says so
+ * in as many words when one is injected:
+ *
+ *     "CPU 0: MCE capability is not enabled, raising triple fault"
+ *
+ * and the serial log simply STOPS mid-boot: no panic, no banner, no registers,
+ * nothing. On real hardware that is a box that dies silently on a memory or
+ * cache fault with zero diagnostic. idt.c's panic path already knows vector 18
+ * by name and already prints a full register dump; CR4.MCE is what makes that
+ * path REACHABLE.
+ *
+ * SDM Vol.3 §15.8 initialisation order, and each step earns its place:
+ *   1. CPUID.1:EDX.MCE (bit 7) must be set or CR4.MCE #GPs.
+ *   2. CPUID.1:EDX.MCA (bit 14) gates the MCG and MCi bank MSRs -- without it
+ *      the banks do not exist and rdmsr on them #GPs, so a CPU with MCE but
+ *      no MCA gets the CR4 bit and no bank programming.
+ *   3. MCG_CTL, if MCG_CAP.CTL_P, enables the reporting machinery globally.
+ *   4. Per bank: CTL all-ones (report everything), then STATUS cleared -- a
+ *      stale VAL bit left from firmware would make the first #MC report a fault
+ *      that happened before this kernel booted.
+ *   5. CR4.MCE last, so nothing can be delivered before the banks are sane.
+ *
+ * Per-CPU: CR4 and every MCi_* MSR are per-logical-processor, so every AP runs
+ * this too (smp_ap_entry, beside cpu_enable_sse/smep/smap). */
+#define MSR_IA32_MCG_CAP     0x179u
+#define MSR_IA32_MCG_STATUS  0x17Au
+#define MSR_IA32_MCG_CTL     0x17Bu
+#define MSR_IA32_MC0_CTL     0x400u
+
+/* Published so the #MC panic decode knows how many banks to walk. Written by
+ * every CPU with the same value; BSS, so zero until the BSP runs. */
+volatile uint32_t g_mce_report;
+
+unsigned cpu_enable_mce(void) {
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+    cpu_cpuid(1, 0, &a, &b, &c, &d);
+    unsigned have_mce = (d & (1u << 7)) != 0;      /* CPUID.1:EDX.MCE */
+    unsigned have_mca = (d & (1u << 14)) != 0;     /* CPUID.1:EDX.MCA */
+    if (!have_mce)
+        return 0;
+
+    unsigned banks = 0;
+    if (have_mca) {
+        uint64_t cap = cpu_rdmsr(MSR_IA32_MCG_CAP);
+        banks = (unsigned)(cap & 0xFFu);
+        if (cap & (1ull << 8))                      /* MCG_CAP.CTL_P */
+            cpu_wrmsr(MSR_IA32_MCG_CTL, ~0ull);
+        for (unsigned i = 0; i < banks; i++) {
+            cpu_wrmsr(MSR_IA32_MC0_CTL + 4u * i, ~0ull);        /* MCi_CTL    */
+            cpu_wrmsr(MSR_IA32_MC0_CTL + 4u * i + 1u, 0ull);    /* MCi_STATUS */
+        }
+    }
+
+    uint64_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ull << 6);                             /* CR4.MCE */
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));  /* read BACK, do not assume */
+
+    unsigned rep = 1u | ((cr4 & (1ull << 6)) ? 2u : 0u) | (banks << 8);
+    g_mce_report = rep;
+    return rep;
+}
+
 void smp_ap_entry(uint32_t idx);
 void smp_ap_entry(uint32_t idx) {
     /* DDR-SMP-3c-cap-1 D3: leave the 3-entry trampoline GDT for the shared
@@ -208,6 +275,7 @@ void smp_ap_entry(uint32_t idx) {
     cpu_enable_sse();
     cpu_enable_smep();      /* DDR-1040: CR4 is per-CPU; the BSP set its own in kmain */
     cpu_enable_smap();      /* DDR-1041: likewise per-CPU */
+    cpu_enable_mce();       /* DDR-1044: CR4.MCE + the MCA banks, also per-CPU */
     vmm_enable_nxe_ap();
     syscall_init_ap();
     sched_ap_enter();

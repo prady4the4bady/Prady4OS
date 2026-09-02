@@ -3241,6 +3241,18 @@ static void smep_selftest(void) {
      * experiment (DDR-1041 §3) needs the syscall path and the ring-3 probes to
      * run WITH it, and those all come later; turning it on any earlier only
      * widens the window without widening the coverage. */
+    /* DDR-1044: CR4.MCE + the MCA banks. Without this a machine check does not
+     * raise #MC at all — it triple-faults, and the log stops mid-line with no
+     * banner and no registers (measured, DDR-1044 §2). */
+    unsigned mcerep = cpu_enable_mce();
+    kputs("PRADYOS_MCE cpuid=");
+    kputdec(mcerep & 1u);
+    kputs(" cr4=");
+    kputdec((mcerep >> 1) & 1u);
+    kputs(" banks=");
+    kputdec((mcerep >> 8) & 0xFFu);
+    kputs("\r\n");
+
     unsigned smaprep = cpu_enable_smap();
     kputs("PRADYOS_SMAP cpuid=");
     kputdec(smaprep & 1u);

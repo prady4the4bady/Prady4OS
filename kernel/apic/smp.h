@@ -25,6 +25,12 @@ unsigned cpu_enable_smep(void);
  * Same two-bit report as cpu_enable_smep. */
 unsigned cpu_enable_smap(void);
 
+/* DDR-1044: SDM §15.8 machine-check init on THIS CPU -- MCG_CTL, every bank's
+ * CTL/STATUS, then CR4.MCE. Report: bit 0 = CPUID.1:EDX.MCE, bit 1 = CR4.MCE
+ * reads back set, bits 15:8 = MCA bank count. WITHOUT this a machine check
+ * triple-faults instead of raising #MC -- measured, DDR-1044 §2. */
+unsigned cpu_enable_mce(void);
+
 /* AP work dispatch (DDR-SMP-3c-alpha): post a kernel function to an idle AP's
  * single-slot mailbox and wake it via IPI; poll completion with smp_job_done. */
 int smp_run_on(uint32_t cpu_idx, void (*fn)(void));

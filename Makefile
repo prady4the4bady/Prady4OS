@@ -246,7 +246,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -1785,6 +1785,70 @@ smoke-smep: $(IMG) fat-image sfs-image
 # dereferences a raw user pointer anywhere else" -- from a documented contract
 # into one the hardware checks. Arm B proves the hardware refuses; arm C proves
 # the shield the real copy path uses actually works. Neither implies the other.
+# DDR-1044 machine-check gate. THE ONE GATE WHOSE PASS CONDITION IS A PANIC.
+#
+# Measured before a line was written: with CR4.MCE clear, an injected machine
+# check does NOT raise #MC. QEMU says so in as many words -- "CPU 0: MCE
+# capability is not enabled, raising triple fault" -- and the serial log stops
+# mid-boot with no banner, no registers, nothing. So this gate is not testing a
+# print; it is testing that the exception is DELIVERED at all.
+#
+# It runs QEMU directly rather than through boot_test.sh, because the expected
+# outcome is a `*** NEXUS KERNEL PANIC ***` and that string is in
+# GLOBAL_FORBIDDEN (DDR-1009). Coverage is NOT dropped: arm E asserts there is
+# exactly ONE banner, and arm F runs the full global scan over a copy with that
+# single expected line removed -- so every other sentinel still applies, which
+# is the gap DDR-1010 closed for smoke-shell and must not be reopened here.
+smoke-mce: $(IMG) fat-image sfs-image
+	@echo "[mce] machine-check gate: boot, inject a bank-0 MCE through QMP, expect #MC..."
+	@rm -f build/mce.log build/mce.inject.log /tmp/prmce.sock
+	@( python3 tools/qemu_runner/mce_inject.py /tmp/prmce.sock build/mce.log 90 \
+	     2>&1 | tee build/mce.inject.log ) &
+	@# EARLY KILL. After the panic the kernel halts, so QEMU never exits on its
+	@# own and the run would burn the whole window -- measured at 131 s, against
+	@# shard totals of ~1400 s. Poll for the last line the gate needs and stop
+	@# there. `timeout` remains the hard ceiling; this loop only ever stops
+	@# things earlier, which is DDR-785's argument for the same shape.
+	@timeout 120 qemu-system-x86_64 -M q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -qmp unix:/tmp/prmce.sock,server,nowait \
+	    -serial file:build/mce.log -display none -no-reboot & \
+	  qpid=$$!; \
+	  for i in $$(seq 1 480); do \
+	    kill -0 $$qpid 2>/dev/null || break; \
+	    grep -aq '^MCE: bank=0 ' build/mce.log 2>/dev/null && { sleep 1; kill $$qpid 2>/dev/null; break; }; \
+	    sleep 0.25; \
+	  done; \
+	  wait $$qpid 2>/dev/null || true
+	@# A: CPUID says the CPU has MCE, CR4.MCE READS BACK set, and the MCA banks
+	@#    were found. banks=0 would mean the decode in arm D has nothing to walk,
+	@#    so it is asserted here rather than being discovered as a silent skip.
+	@grep -aqE '^PRADYOS_MCE cpuid=1 cr4=1 banks=[1-9]' build/mce.log || { echo "[mce] FAIL: CR4.MCE not enabled, or no MCA banks (DDR-1044 arm A)"; grep -a 'PRADYOS_MCE' build/mce.log || echo '(no PRADYOS_MCE line at all)'; exit 1; }
+	@# B: the exception was DELIVERED as #MC. Without CR4.MCE this line cannot
+	@#    exist -- the guest triple-faults and the log simply ends.
+	@grep -aq 'exception: #MC machine check  vector=0x0000000000000012' build/mce.log || { echo "[mce] FAIL: the injected machine check did not arrive as #MC (DDR-1044 arm B)"; echo '--- injector ---'; cat build/mce.inject.log 2>/dev/null; echo '--- log tail ---'; tail -20 build/mce.log; exit 1; }
+	@# C: MCG_STATUS was read and decoded. mcip=1 says a machine check was in
+	@#    progress, which is what separates "we printed a template" from "we read
+	@#    the hardware".
+	@grep -aqE '^MCE: mcg_status=0x[0-9A-F]+ ripv=1 eipv=0 mcip=1' build/mce.log || { echo "[mce] FAIL: MCG_STATUS not decoded, or does not match the injected 0x5 (DDR-1044 arm C)"; grep -a '^MCE:' build/mce.log || echo '(no MCE: lines)'; exit 1; }
+	@# D: THE BANK ROUND-TRIP, and this is the arm that makes the decode a
+	@#    measurement. The injected status/addr/misc are fixed and known, so the
+	@#    gate asserts the EXACT values back out. A decode that printed plausible
+	@#    numbers from the wrong MSR offsets would pass a shape check and fails
+	@#    this one.
+	@grep -aq 'MCE: bank=0 status=0xBD80000000000000 addr=0x0000000000001234 misc=0x000000000000008C' build/mce.log || { echo "[mce] FAIL: bank 0 did not decode back the injected record (DDR-1044 arm D)"; grep -a '^MCE:' build/mce.log || echo '(no MCE: lines)'; exit 1; }
+	@# E: exactly ONE panic. More than one means something else also died and
+	@#    arm F's filter would hide it.
+	@n=$$(grep -ac 'NEXUS KERNEL PANIC' build/mce.log); \
+	  if [ "$$n" != "1" ]; then echo "[mce] FAIL: expected exactly 1 panic banner, saw $$n (DDR-1044 arm E)"; exit 1; fi
+	@# F: every OTHER global sentinel still applies. Only the single expected
+	@#    banner is filtered -- not the whole scan.
+	@grep -av 'NEXUS KERNEL PANIC' build/mce.log > build/mce.filtered.log
+	@bash tools/qemu_runner/scan_forbidden.sh build/mce.filtered.log mce
+	@echo "[mce] PASS — CR4.MCE + MCA banks enabled, injected machine check delivered as #MC (vector 0x12), bank 0 decoded back byte-exact, one panic only, rest of the boot clean."
+
 smoke-smap: $(IMG) fat-image sfs-image
 	@echo "[smap] booting with -cpu qemu64,+smep,+smap (the default model has neither -- DDR-1040 §2)..."
 	@rm -f build/smap_serial.log
