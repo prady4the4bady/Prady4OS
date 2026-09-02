@@ -104,6 +104,7 @@ on `PATH`, so no root and no real index are involved.
 | update clean, packages resolve | installs, rc=0 |
 | **update FAILS**, packages resolve | **still installs, rc=0** — the vendor-403 case, the reason this exists |
 | update clean, a package has **no candidate** | **refuses**, rc≠0, names the cause, installs nothing |
+| **apt-cache prints NOTHING** | **refuses** — real apt's answer for an *unknown* package |
 | no arguments | usage error, never a silent no-op |
 
 **Mutants, each landing on its own fixture:**
@@ -112,9 +113,33 @@ on `PATH`, so no root and no real index are involved.
 |---|---|---|
 | M1 | drop the resolve check | fixture 3 — *"proceeded with an UNUSABLE index — attempt 1's bug"* |
 | M2 | make the update failure fatal again | fixture 2 — *"a vendor-repo update failure must NOT fail the job"* |
+| M3 | drop **only** the empty-output branch | fixture 5 — fixture 3 still passes, so the two shapes are independently covered |
 
-M1 is attempt 1's defect reproduced; M2 is the original failure reproduced. The
-fixtures are the two things that went wrong, encoded.
+M1 is attempt 1's defect reproduced; M2 is the original failure reproduced.
+
+### §5.1 — Checking real apt closed a gap in this test
+
+`apt-cache policy` was run against **real apt** rather than assumed, and it has
+**two** failure shapes, not one:
+
+```
+$ apt-cache policy clang
+  Candidate: 1:18.0-59~exp2
+$ apt-cache policy definitely-not-a-real-package-xyz
+                                    <- NOTHING. Not "Candidate: (none)".
+```
+
+`Candidate: (none)` is what a *known* package with nothing installable prints; an
+**unknown** package prints empty output. `apt_prepare.sh` handles both — the
+`elif` branch exists for exactly this — but the stub originally only ever emitted
+the first shape, so **the branch covering real apt's actual behaviour for a
+missing package was never exercised**. Fixture 5 and M3 close it.
+
+Given this DDR is about two fixes shipped on unchecked assumptions about the
+environment, checking this one before trusting it seemed the minimum. It was a
+real gap: without fixture 5 a script that ignored empty output would have passed
+the whole suite and then failed in CI on any absent package or name typo,
+printing `index OK` immediately before apt said `Unable to locate package`.
 
 ## §6 — What is still not claimed
 
