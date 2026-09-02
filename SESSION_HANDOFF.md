@@ -9833,3 +9833,58 @@ compiled but unexercised — the gate injects into CPU 0 only.
 **Group A remaining:** I/O APIC migration, KASLR, kernel W^X identity-alias
 removal, `lock_stat`.
 
+## CHECKPOINT 2026-09-02 — DDR-1046: kernel text was writable through the identity alias
+
+PR #17 is **fully green** on `4a3e915` — all 32 check runs, both suites, all 20
+shards, including shard 9 (`smoke-resizeall`, the DDR-1042 fix) and shard 7
+(`smoke-smp`). The DDR-1045 apt saga is closed.
+
+**The Group A W^X row turned out to be a real hole, not a checkbox.** The kernel
+image is mapped twice — the higher half (protected and audited) and a 2 MiB
+identity PD entry that `stage2.asm` builds as `0x83` = P|RW|PS. DDR-757 set NX
+there and **left RW**, saying so in its own comment: *"RW kept (documented
+residue)"*. So kernel text was writable through a physical address.
+
+**And the audit could not see it.** `vmm_protect_kernel`'s verdict loop walks
+only the higher-half PTEs, so it printed `[wx] kernel W^X OK` on a kernel with
+writable text. The gate that exists to catch writable text reported success —
+that blind spot is why the residue survived.
+
+**Measured before changing anything**, because the 2 MiB page also covers
+rodata/data/BSS and a blanket RO could plausibly fault a legitimate write:
+
+```
+PRADYOS_WX_ALIAS present=1 rw=0 nx=1
+[wx] kernel W^X OK
+423 lines, steady state t=14500, no fault      (baseline: 416-418 at t=14500)
+```
+
+Nothing writes the kernel image through a physical address. Two supporting facts
+checked **in source**, not reasoned: `PMM_MIN_PHYS` is 16 MiB (no allocated frame
+in that page), and the page tables are at `0x300000` — PD entry 1, a different
+page — so `table_at()` is untouched.
+
+**The readback is not decoration** (§2.1): the first measurement showed only that
+nothing crashed, which cannot distinguish "the alias is read-only" from "the
+write-protect never applied".
+
+**Measured** — clean kernel `762004ab9a1bef13`:
+
+| | mutation | kernel.bin | result |
+|---|---|---|---|
+| M1 | keep RW — **literally the pre-fix tree** | `11d7f0c3793d308c` | rc=2, `kernel W^X FAIL` |
+| M2 | no NX on the alias | `1b99da4fc0550449` | rc=2, `kernel W^X FAIL` |
+
+M1 fails through the **audit**, not merely the new sentinel — the same kernel
+that used to print `W^X OK` is now rejected.
+
+Regression: `hygiene_check.sh` ALL FIVE; `smoke-wxkernel`, `smoke-smep`,
+`smoke-smap`, `smoke-shell`, `smoke-blkmq`, `smoke-mitigations`, `smoke-uaccess`
+all rc=0. DDR free range **1047+**.
+
+**Not done, named:** the alias is RO+NX, **not removed** as the row's title says.
+Unmapping it depends on the page tables staying in a different 2 MiB page — a
+property of today's layout, not a guarantee.
+
+**Group A remaining:** I/O APIC migration, KASLR, `lock_stat`.
+

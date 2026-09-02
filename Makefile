@@ -1888,9 +1888,15 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # audits that no text PTE is writable and no non-text PTE is executable, printing
 # [wx] kernel W^X OK. The whole boot (incl. SMP gates elsewhere) runs against the
 # hardened tables, so this doubles as a no-regression witness.
+# DDR-1046 added the second sentinel. The aggregate verdict now COVERS the
+# identity alias (the audit checks it), so '[wx] kernel W^X OK' alone would
+# catch a regression — but it would not say WHICH property broke, and the alias
+# is the one that was silently wrong for as long as DDR-757 has existed. The
+# explicit line makes rw=/nx= visible in every capture and lets a mutant be
+# attributed instead of guessed at.
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK')" \
+	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1')" \
 	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

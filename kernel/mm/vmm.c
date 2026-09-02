@@ -93,6 +93,7 @@ void vmm_protect_kernel(void) {
     uint64_t pt = table_at(pd)[0] & PTE_ADDR;
     if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[0]\r\n"); return; }
 
+    uint64_t alias_pte  = 0;   /* DDR-1046: the identity-alias PD entry, read back */
     uint64_t *ptes      = table_at(pt);
     uint64_t text_end   = (uint64_t)(uintptr_t)__text_end;
     uint64_t rodata_end = (uint64_t)(uintptr_t)__rodata_end;
@@ -112,21 +113,60 @@ void vmm_protect_kernel(void) {
         ptes[i] = e;
     }
 
-    /* Identity alias 0x400000..0x600000: PML4[0] -> PDPT[0] -> PD entry 2
-     * (2 MiB page). NX kills execute-via-alias; RW kept (documented residue). */
-    if (g_nx_ok) {
+    /* DDR-1046 — THE IDENTITY ALIAS, and the residue DDR-757 documented.
+     *
+     * The kernel image is mapped TWICE: in the higher half (protected above,
+     * text RX / rodata R+NX / data RW+NX) and identity-mapped at 0x400000 by a
+     * single 2 MiB PD entry that stage2.asm builds as 0x83 = PRESENT|RW|PS.
+     * DDR-757 set NX here, killing execute-via-alias, and left RW — its own
+     * comment said so: "RW kept (documented residue)".
+     *
+     * SO KERNEL TEXT WAS WRITABLE THROUGH THE ALIAS. W^X was half-enforced: a
+     * stray write through a physical address could patch kernel code, and the
+     * audit below could not see it, because it only walks the higher-half PTEs.
+     *
+     * MEASURED BEFORE CHANGING IT, not assumed safe: with RW cleared the boot
+     * is line-for-line normal (423 lines, steady state at t=14500, no fault),
+     * so nothing writes the kernel image through a physical address. Two facts
+     * make that unsurprising and both were checked rather than reasoned:
+     * PMM_MIN_PHYS is 16 MiB so no allocated frame lives in this 2 MiB page,
+     * and the page tables sit at 0x300000 — PD entry 1, a different page — so
+     * table_at()'s identity access is untouched.
+     *
+     * The readback is not decoration. "I cleared the bit" and "the bit is
+     * clear" are different claims, and a measurement showing only that nothing
+     * crashed cannot tell them apart. */
+    {
         uint64_t lo_pdpt = pml4[0] & PTE_ADDR;
         if (lo_pdpt) {
             uint64_t lo_pd = table_at(lo_pdpt)[0] & PTE_ADDR;
-            if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT))
-                table_at(lo_pd)[2] |= VMM_NX;
+            if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT)) {
+                if (g_nx_ok)
+                    table_at(lo_pd)[2] |= VMM_NX;      /* no execute-via-alias */
+                table_at(lo_pd)[2] &= ~VMM_RW;         /* no write-via-alias   */
+                alias_pte = table_at(lo_pd)[2];        /* read BACK, audited below */
+            }
         }
     }
 
     /* Full TLB flush (non-global entries), then audit what is actually live. */
     __asm__ volatile("mov %0, %%cr3" : : "r"(g_kernel_pml4) : "memory");
 
+    kputs("PRADYOS_WX_ALIAS present=");
+    kputdec((alias_pte & PTE_PRESENT) ? 1u : 0u);
+    kputs(" rw=");
+    kputdec((alias_pte & VMM_RW) ? 1u : 0u);
+    kputs(" nx=");
+    kputdec((alias_pte & VMM_NX) ? 1u : 0u);
+    kputs("\r\n");
+
     int ok = 1;
+    /* DDR-1046: the alias is part of W^X and is audited with everything else.
+     * Without this the verdict said OK on a kernel whose text was writable
+     * through the alias — which is exactly how the residue survived. */
+    if (!(alias_pte & PTE_PRESENT))      ok = 0;   /* the alias must still exist */
+    if (alias_pte & VMM_RW)              ok = 0;   /* writable kernel image      */
+    if (g_nx_ok && !(alias_pte & VMM_NX)) ok = 0;  /* executable kernel image    */
     for (unsigned i = 0; i < 512; i++) {
         uint64_t e = ptes[i];
         if (!(e & PTE_PRESENT))
