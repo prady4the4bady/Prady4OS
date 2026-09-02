@@ -9640,3 +9640,56 @@ Group A row carried, does not exist — the real one is `smoke-wxkernel`.
 with no `stac` anywhere, and every unshielded kernel dereference of a user page
 faults and names its own RIP. That enumerates the sites exactly. The latch built
 here is what makes the experiment survivable.
+
+## CHECKPOINT 2026-09-02 — DDR-1041 SMAP, IMPLEMENTED + gated + M1/M2/M3
+
+Group A's `SMEP / SMAP` row is now **closed on both halves**.
+
+SMAP (CR4 bit 21) is as much a *test of a claim* as a mitigation: `uaccess.h`'s
+header has always asserted "the kernel NEVER dereferences a raw user pointer
+anywhere else". SMAP makes a violation a `#PF` that names its own RIP.
+
+**The enumeration was MEASURED, not grepped.** 84 `__user` annotations sit
+outside `uaccess.c`; reading that list is how six false gaps were produced this
+session. Instead: turn SMAP on and let every unshielded site fault.
+
+- Full boot with SMAP on: **416 lines vs 418 baseline**, identical steady state
+  at `t=14500`. No panic.
+- **19 user-pointer-dense gates re-run with `+smap`: all rc=0.**
+
+**The contract holds** — no `stac` was needed anywhere outside `uaccess.c`.
+
+**The sweep's own vacuity check is the part worth carrying.** Three gates
+(`smoke-poll`, `smoke-mprotect`, `smoke-execve-argv`) first reported no SMAP
+marker, and their `rc=0` would have been worthless. Benign cause (they set their
+own `SERIAL_LOG`), but the check is the point: DDR-1023 recorded a campaign whose
+central grep was vacuous for exactly this shape.
+
+**Measured** — clean kernel `5970a8506c66c115`:
+
+| | mutation | kernel.bin | result |
+|---|---|---|---|
+| M1 | CR4 bit never set | `aa2e5c127abe9756` | rc=2, arm A |
+| M2 | shield bodies emptied | `13cae5521e75272f` | rc=2, **panic** |
+| M3 | probe page not `VMM_USER` | `eb0e0c749e99408c` | rc=2, **arm B alone** |
+
+M3 is load-bearing: it leaves A/C/D/E passing. M2 corrected §5's own draft — it
+never reaches arm C's assertion, it panics at the read arm C was going to check;
+and `smoke-fs` on the M2 kernel then died with `#PF error=0x01`, so the claim
+about real traffic is measured rather than predicted.
+
+**NOT FIXED, named:** an interrupt taken between `uaccess_begin` and
+`uaccess_end` runs with **AC still set** — the CPU clears IF on an interrupt
+gate, not AC — so SMAP is off inside that window. A `copyin` of a large buffer is
+long enough to be preempted at 100 Hz. Linux clears AC on kernel entry for
+exactly this reason. Left because fixing it means touching `isr_common`, which is
+load-bearing for DDR-981, DDR-1006, DDR-1010 and the still-open OPEN-2.
+
+Gate count **171 -> 172** (`smoke-smap`, shard 0). DDR free range **1042+**.
+Regression on the clean kernel: `hygiene_check.sh` ALL THREE PASSED;
+`smoke-smep`, `smoke-smap`, `smoke-shell`, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-uaccess` all rc=0.
+
+**Group A remaining:** I/O APIC migration, `#MC` handler, KASLR, kernel W^X
+identity-alias removal, `lock_stat`. Then Groups B–D per operator item 6.
+

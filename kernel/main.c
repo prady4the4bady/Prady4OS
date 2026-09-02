@@ -3236,6 +3236,18 @@ static void smep_selftest(void) {
     kputdec((rep >> 1) & 1u);
     kputs("\r\n");
 
+    /* DDR-1041: SMAP, enabled HERE and not earlier. Everything before this
+     * point in the boot runs without it, deliberately — the enumeration
+     * experiment (DDR-1041 §3) needs the syscall path and the ring-3 probes to
+     * run WITH it, and those all come later; turning it on any earlier only
+     * widens the window without widening the coverage. */
+    unsigned smaprep = cpu_enable_smap();
+    kputs("PRADYOS_SMAP cpuid=");
+    kputdec(smaprep & 1u);
+    kputs(" cr4=");
+    kputdec((smaprep >> 1) & 1u);
+    kputs("\r\n");
+
     uint64_t save_cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(save_cr3));
 
@@ -3293,6 +3305,86 @@ static void smep_selftest(void) {
      * produce the same lines above; only a witness printed afterwards separates
      * them, and this is it. */
     kputs("PRADYOS_SMEP_ALIVE\r\n");
+
+    vmm_destroy_address_space(as);
+}
+
+/* DDR-1041: SMAP enforcement + the shielded path, in one probe.
+ *
+ * Unlike SMEP the violation here is a DATA access, so the faulting RIP IS the
+ * load instruction — which is why this helper exports labels around the load
+ * itself, where smep_probe_jmp had to window the TARGET instead. On resume EAX
+ * is undefined and that is fine: the probe cares whether it faulted, not what
+ * it read. Arm 2 is the one that reads a value, and it takes the shielded path.
+ */
+__asm__(".pushsection .text\n"
+        ".globl smap_probe_read\n"
+        ".type  smap_probe_read,@function\n"
+        "smap_probe_read:\n"
+        "  movzbl (%rdi), %eax\n"
+        ".globl smap_read_hi\n"
+        "smap_read_hi:\n"
+        "  ret\n"
+        ".size  smap_probe_read,.-smap_probe_read\n"
+        ".popsection\n");
+unsigned smap_probe_read(uint64_t uaddr);
+extern char smap_probe_read_sym[] __asm__("smap_probe_read");
+extern char smap_read_hi[];
+
+static void smap_selftest(void) {
+    uint64_t save_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(save_cr3));
+
+    uint64_t as = vmm_new_address_space();
+    if (!as) { kputs("PRADYOS_SMAP_SKIP no-as\r\n"); return; }
+    void *fd = ptnode_alloc();
+    if (!fd) { kputs("PRADYOS_SMAP_SKIP no-frame\r\n"); vmm_destroy_address_space(as); return; }
+
+    *(volatile unsigned char *)fd = 0x5A;          /* seeded via the identity view (U=0) */
+
+    const uint64_t UVA_D = VMM_USER_MIN + 0x3000;
+    vmm_map_in(as, UVA_D, (uint64_t)(uintptr_t)fd, VMM_USER | VMM_RW | VMM_NX);
+
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    __asm__ volatile("mov %0, %%cr3" :: "r"(as) : "memory");
+
+    /* ARM 1 — UNSHIELDED. No stac, so with SMAP on the CPU must refuse. */
+    uint32_t vec = 0, err = 0;
+    int fired = 0;
+    int armed = fault_expect_arm((uint64_t)(uintptr_t)smap_probe_read_sym,
+                                 (uint64_t)(uintptr_t)smap_read_hi,
+                                 (uint64_t)(uintptr_t)smap_read_hi);
+    if (armed) {
+        (void)smap_probe_read(UVA_D);
+        fired = fault_expect_taken(&vec, &err);
+    }
+
+    /* ARM 2 — SHIELDED, the path copyin/copyout actually take. If stac were a
+     * no-op this read would fault with no latch armed, i.e. panic — so this arm
+     * cannot silently pass. It is what proves the shield WORKS, as distinct
+     * from proving the hardware refuses. */
+    uaccess_begin();
+    unsigned got = *(const volatile unsigned char *)(uintptr_t)UVA_D;
+    uaccess_end();
+
+    __asm__ volatile("mov %0, %%cr3" :: "r"(save_cr3) : "memory");
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+
+    if (!armed) {
+        kputs("PRADYOS_SMAP_SKIP not-armed\r\n");
+    } else if (fired) {
+        kputs("PRADYOS_SMAP_ENFORCED vec=");
+        kputdec(vec);
+        kputs(" err=");
+        kputhex(err);              /* kputhex emits its own 0x (INV.9) */
+        kputs("\r\n");
+    } else {
+        kputs("PRADYOS_SMAP_READ_ALLOWED\r\n");
+    }
+    kputs(got == 0x5A ? "PRADYOS_SMAP_SHIELDED_OK\r\n"
+                      : "PRADYOS_SMAP_SHIELDED_BAD\r\n");
+    kputs("PRADYOS_SMAP_ALIVE\r\n");
 
     vmm_destroy_address_space(as);
 }
@@ -3501,6 +3593,7 @@ void kmain(struct boot_info *bi) {
     cap_test();
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
     smep_selftest();                     /* DDR-1040: SMEP enable + ENFORCEMENT proof */
+    smap_selftest();                     /* DDR-1041: SMAP enforcement + shielded path */
 
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
     metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */

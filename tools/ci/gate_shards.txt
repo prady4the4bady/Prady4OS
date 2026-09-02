@@ -55,6 +55,7 @@
 0	smoke-sysfork	23	strict
 0	smoke-sysepoll	23	strict
 0	smoke-ctrlaltt	180	strict
+0	smoke-smap	10	strict
 5	smoke-mprotect	120	strict
 6	smoke-execve-argv	120	strict
 7	smoke-sendipc	120	strict

@@ -246,7 +246,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -1774,6 +1774,46 @@ smoke-smep: $(IMG) fat-image sfs-image
 	@grep -aq '^PRADYOS_SMEP cpuid=0 cr4=0' build/smep_default.log || { echo "[smep] FAIL: the default CPU model did not take the no-op path (DDR-1040 arm E)"; grep -a 'PRADYOS_SMEP' build/smep_default.log || echo '(no PRADYOS_SMEP lines at all)'; exit 1; }
 	@grep -aq '^PRADYOS_SMEP_EXECUTED' build/smep_default.log || { echo "[smep] FAIL: without SMEP the user page should have EXECUTED (DDR-1040 arm E)"; grep -aE 'PRADYOS_SMEP_(ENFORCED|EXECUTED|SKIP)' build/smep_default.log || echo '(no outcome line)'; exit 1; }
 	@echo "[smep] PASS — +smep: CPUID+CR4 set, ring-0 fetch of a user page refused (#PF err=0x11), latch resumed; default model: no-op path, page executed. Boot clean on both."
+
+# DDR-1041 SMAP gate. Same CPU-model pinning as smoke-smep and for the same
+# measured reason (DDR-1040 §2): the TCG default reports smap=false, so on the
+# model every other gate runs the feature is a no-op and an "enabled" assertion
+# would be unreachable-passing.
+#
+# What makes this gate worth having rather than a duplicate of smoke-smep: SMAP
+# is the mechanism that turns uaccess.h's HEADER COMMENT -- "the kernel NEVER
+# dereferences a raw user pointer anywhere else" -- from a documented contract
+# into one the hardware checks. Arm B proves the hardware refuses; arm C proves
+# the shield the real copy path uses actually works. Neither implies the other.
+smoke-smap: $(IMG) fat-image sfs-image
+	@echo "[smap] booting with -cpu qemu64,+smep,+smap (the default model has neither -- DDR-1040 §2)..."
+	@rm -f build/smap_serial.log
+	@KEEP_SERIAL=1 SERIAL_LOG=build/smap_serial.log QEMU_CPU="qemu64,+smep,+smap" TIMEOUT_S=120 \
+	    EXTRA_SENTINEL="PRADYOS_SMAP_ALIVE" bash tools/qemu_runner/boot_test.sh $(IMG)
+	@# A: detected and set, read back from CR4 rather than inferred.
+	@grep -aq '^PRADYOS_SMAP cpuid=1 cr4=1' build/smap_serial.log || { echo "[smap] FAIL: SMAP not detected/enabled on a +smap CPU (DDR-1041 arm A)"; grep -a 'PRADYOS_SMAP' build/smap_serial.log || echo '(no PRADYOS_SMAP lines at all)'; exit 1; }
+	@# B: an UNSHIELDED ring-0 read of a user page was refused. err=0x01 is the
+	@#    SMAP data signature: bit 0 P=1 (present), bit 1 W/R=0 (read), bit 2
+	@#    U/S=0 (supervisor), bit 4 I/D=0 (data) -- distinct from SMEP's 0x11.
+	@#    [[:space:]]*$$ not $$: the console prints CRLF (DDR-1040 §7.1).
+	@grep -aqE '^PRADYOS_SMAP_ENFORCED vec=14 err=0x0*1[[:space:]]*$$' build/smap_serial.log || { echo "[smap] FAIL: unshielded ring-0 read of a user page was NOT refused (DDR-1041 arm B)"; grep -aE 'PRADYOS_SMAP_(ENFORCED|READ_ALLOWED|SKIP)' build/smap_serial.log || echo '(no outcome line)'; exit 1; }
+	@# C: the SHIELDED read -- the path copyin/copyout actually take -- returned
+	@#    the seeded byte. This is the arm that catches stac being a no-op, and
+	@#    it cannot pass silently: an unshielded read with no latch armed panics.
+	@grep -aq '^PRADYOS_SMAP_SHIELDED_OK' build/smap_serial.log || { echo "[smap] FAIL: the stac-shielded read did not work (DDR-1041 arm C)"; grep -a 'PRADYOS_SMAP_SHIELDED' build/smap_serial.log || echo '(no shielded line)'; exit 1; }
+	@# D: liveness AFTER the fault -- "enforced" and "died there" print the same
+	@#    B line; only a later witness separates them (DDR-1040 arm C).
+	@sed -n '/^PRADYOS_SMAP_ENFORCED/,$$p' build/smap_serial.log | grep -aq '^PRADYOS_SMAP_ALIVE' || { echo "[smap] FAIL: no liveness witness AFTER the fault (DDR-1041 arm D)"; tail -30 build/smap_serial.log; exit 1; }
+	@# E: THE WHOLE BOOT ran with SMAP on. This is the arm that carries DDR-1041
+	@#    §3's enumeration into CI: every copyin/copyout the boot performs -- the
+	@#    ~65 ring-3 probes, the syscall path, the FS self-tests -- runs shielded,
+	@#    and any unshielded kernel dereference of a user page would panic here
+	@#    rather than being found by reading 84 __user annotations.
+	@bash tools/qemu_runner/scan_forbidden.sh build/smap_serial.log smap
+	@grep -aq '\[uaccess\] copyin good page OK' build/smap_serial.log || { echo "[smap] FAIL: copyin did not work under SMAP (DDR-1041 arm E)"; grep -a '\[uaccess\]' build/smap_serial.log || echo '(no uaccess lines)'; exit 1; }
+	@grep -aq '\[uaccess\] copyinstr OK' build/smap_serial.log || { echo "[smap] FAIL: copyinstr did not work under SMAP (DDR-1041 arm E)"; grep -a '\[uaccess\]' build/smap_serial.log; exit 1; }
+	@if grep -aq 'fexpect. refused' build/smap_serial.log; then echo "[smap] FAIL: the latch refused to arm (DDR-1040 §4)"; grep -a 'fexpect' build/smap_serial.log; exit 1; fi
+	@echo "[smap] PASS — CR4.SMAP set, unshielded ring-0 read of a user page refused (#PF err=0x01), stac-shielded read works, copyin/copyinstr green under SMAP, boot clean."
 
 smoke-uaccess: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \

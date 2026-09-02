@@ -20,6 +20,11 @@ unsigned smp_online(void);
  * gate that exercises the feature pins its own -cpu. */
 unsigned cpu_enable_smep(void);
 
+/* DDR-1041: set CR4.SMAP on THIS CPU when CPUID reports it, and publish
+ * g_smap_on so uaccess_begin/end may emit stac/clac (which are #UD without it).
+ * Same two-bit report as cpu_enable_smep. */
+unsigned cpu_enable_smap(void);
+
 /* AP work dispatch (DDR-SMP-3c-alpha): post a kernel function to an idle AP's
  * single-slot mailbox and wake it via IPI; poll completion with smp_job_done. */
 int smp_run_on(uint32_t cpu_idx, void (*fn)(void));

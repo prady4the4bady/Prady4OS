@@ -105,6 +105,41 @@ unsigned cpu_enable_smep(void) {
     return 1u | ((cr4 & (1ull << 20)) ? 2u : 0u);
 }
 
+/* DDR-1041: SMAP. CR4 bit 21 makes a ring-0 DATA access through a user
+ * translation fault unless EFLAGS.AC is set. uaccess.h's header comment has
+ * always CLAIMED that copyin/copyout/copyinstr are the only places the kernel
+ * dereferences a user pointer; SMAP is what turns that claim into something the
+ * hardware checks, so a violation is a fault that names its own RIP rather than
+ * a defect someone has to catch in review.
+ *
+ * The flag is read by uaccess_begin/uaccess_end, which must NOT emit stac/clac
+ * on a CPU without SMAP — those instructions are #UD there, and the TCG default
+ * does not have SMAP (DDR-1040 §2). It is written before any AP runs and only
+ * ever set, so no ordering beyond a plain store is owed. */
+volatile unsigned g_smap_on;            /* BSS: zero until enabled */
+
+unsigned cpu_enable_smap(void) {
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                             : "a"(7), "c"(0));
+    unsigned have = (b & (1u << 20)) != 0;     /* CPUID.(7,0):EBX.SMAP */
+    if (!have)
+        return 0;
+
+    uint64_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ull << 21);                       /* CR4.SMAP */
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+
+    /* Publish the flag only once the bit is actually set: uaccess_begin reads
+     * it to decide whether stac is legal, and a flag set ahead of the bit would
+     * be a lie in the one direction that faults. */
+    unsigned on = (cr4 & (1ull << 21)) ? 1u : 0u;
+    if (on) g_smap_on = 1;
+    return 1u | (on << 1);
+}
+
 void smp_ap_entry(uint32_t idx);
 void smp_ap_entry(uint32_t idx) {
     /* DDR-SMP-3c-cap-1 D3: leave the 3-entry trampoline GDT for the shared
@@ -172,6 +207,7 @@ void smp_ap_entry(uint32_t idx) {
      * and the SYSCALL MSRs (EFER.SCE + STAR/LSTAR/SFMASK; #UD without). */
     cpu_enable_sse();
     cpu_enable_smep();      /* DDR-1040: CR4 is per-CPU; the BSP set its own in kmain */
+    cpu_enable_smap();      /* DDR-1041: likewise per-CPU */
     vmm_enable_nxe_ap();
     syscall_init_ap();
     sched_ap_enter();
