@@ -39,93 +39,89 @@ straw.
 
 ---
 
-## §3 — THE FIRST FIX WAS WRONG AND BROKE EVERY JOB
+## §3 — TWO FAILED FIXES, BOTH FROM GUESSING AT THE RUNNER IMAGE
 
-The first version removed `/etc/apt/sources.list.d/*` wholesale, on this stated
-assumption — quoted from its own comment:
+The pattern matters more than either bug, so both are recorded.
+
+**Attempt 1 — removed `/etc/apt/sources.list.d/*` wholesale**, on this
+assumption, quoted from its own comment:
 
 > "the Ubuntu archives in /etc/apt/sources.list remain"
 
-**That is false on Ubuntu 24.04.** Noble ships the archives in deb822 form at
-`/etc/apt/sources.list.d/ubuntu.sources`, and `/etc/apt/sources.list` is a stub.
-So the script deleted the archives themselves, `apt-get update` then succeeded
-against nothing, and every job died with:
+False on Ubuntu 24.04: noble ships them as deb822 at
+`/etc/apt/sources.list.d/ubuntu.sources`, and `sources.list` is a stub. So it
+deleted the archives, `apt-get update` succeeded against nothing, and CI run
+33650542691 failed **build, shard-check, aarch64 and riscv64** with
+`E: Unable to locate package llvm`. One broken job became four.
+
+**Attempt 2 — kept files whose CONTENT matched an Ubuntu archive host.** Better
+shaped, and still a guess about a file this environment cannot read. The
+runner's real `ubuntu.sources` did not match the pattern:
 
 ```
-E: Unable to locate package llvm
-E: Unable to locate package nasm
+[apt_prepare] REMOVE (third-party):    /etc/apt/sources.list.d/ubuntu.sources
+[apt_prepare] FAIL: no Ubuntu archive source survived the filter.
 ```
 
-CI run 33650542691: **build, shard-check, arch-bootstrap (aarch64) and
-arch-bootstrap (riscv64) all failed**, in both the push and PR suites. The fix
-was strictly worse than the failure it replaced — one broken job became four.
+The guard worked exactly as designed — it refused rather than updating an empty
+index, so this time nothing was silently broken. But the arch jobs still failed
+(CI 33650946252). **The guard converted a wrong guess into a loud refusal
+instead of a silent catastrophe, which is the only reason attempt 2 was better
+than attempt 1.**
 
-**The assumption was never checked against the target image.** That is the whole
-lesson: the claim was specific, load-bearing, trivially checkable, and asserted
-in a comment as if it were established.
+Both attempts share one root cause: **a claim about the runner image, asserted
+without being able to check it.** Twice.
 
-## §4 — The fix, and the argument that it is safe
+## §4 — The fix that assumes nothing
 
-`tools/ci/apt_prepare.sh`, called by all four steps. It classifies **by content,
-not by path**: a file referencing an Ubuntu archive host
-(`archive|security|ports.ubuntu.com`, or `ubuntu.com/ubuntu`) is kept; anything
-else is removed. That covers both layouts — noble's `ubuntu.sources` and the
-legacy `sources.list` — without needing to know which one the image uses.
+`apt_prepare.sh <package>...`. It does not read, classify, or delete any
+repository file. It:
 
-**Every package these workflows install comes from the Ubuntu archives** —
-clang, lld, llvm, nasm, make, qemu-system-*, dosfstools, mtools, e2fsprogs,
-ovmf, xorriso, grub-*. Not one comes from a vendor repository, so nothing needed
-is lost.
+1. runs `apt-get update` and **tolerates failure**, because a vendor-repo 403 is
+   not this project's problem and is the only thing that has ever broken here;
+2. then **proves the index usable** by resolving every package the caller
+   actually needs;
+3. then installs them.
 
-**Two guards, because this script has already been wrong once:**
+The post-check is what makes step 1 safe, and it is the proper answer to the
+objection the earlier versions were built around — *"`|| true` would also hide
+the Ubuntu archives being unreachable."* It would, **unless something afterwards
+checks**. Something does now, and it checks the thing that actually matters —
+can we install what this job needs? — rather than inferring it from a filename
+or a URI pattern.
 
-1. Refuse to proceed if no Ubuntu source survives the filter — rather than
-   updating against an empty index, which is exactly how the first version
-   failed.
-2. After updating, assert `clang` resolves. It is installed by all four callers,
-   so if the index is unusable this says why *here*, instead of every caller
-   failing later with a confusing "Unable to locate package".
+A missing candidate fails loudly and says it is *not* a vendor 403, so the next
+reader is not sent down the wrong path.
 
-### §4.1 — What this deliberately does NOT do
+## §5 — Verified locally, with stubs, and mutation-checked
 
-It does **not** write `apt-get update || true`. That would be one character
-cheaper and would also hide **the Ubuntu archives** being unreachable — and a
-toolchain installed against a stale index is a genuinely different build. Update
-stays fatal; only the unused repositories go away.
-
-## §5 — Verified locally this time
-
-`tools/ci/apt_prepare_selftest.sh`, wired into `hygiene_check.sh` (now **five**
-checks) and `make ci-aptprepare-selftest`. The script's directory, main list and
-`rm` are overridable, purely so the classifier can be exercised without root and
-without a runner image.
+`tools/ci/apt_prepare_selftest.sh` — wired into `hygiene_check.sh` (now **five**
+checks) and `make ci-aptprepare-selftest`. `apt-get` and `apt-cache` are stubbed
+on `PATH`, so no root and no real index are involved.
 
 | fixture | asserts |
 |---|---|
-| **noble layout** — `ubuntu.sources` beside `microsoft-prod.list` | `ubuntu.sources` **survives**, microsoft removed, exit 0 |
-| **third-party only** | the guard **refuses**, non-zero — no update against an empty index |
-| **legacy layout** — archives in `sources.list` | proceeds, exit 0 |
+| update clean, packages resolve | installs, rc=0 |
+| **update FAILS**, packages resolve | **still installs, rc=0** — the vendor-403 case, the reason this exists |
+| update clean, a package has **no candidate** | **refuses**, rc≠0, names the cause, installs nothing |
+| no arguments | usage error, never a silent no-op |
 
-Fixture 1 *is* the regression test for the mistake: it reproduces the exact
-layout that broke.
+**Mutants, each landing on its own fixture:**
 
-**Mutation-checked.** Reinstating the shipped behaviour (`if false` — remove
-everything) fails fixture 1 twice over, and its output is the defect verbatim:
+| | mutation | fails |
+|---|---|---|
+| M1 | drop the resolve check | fixture 3 — *"proceeded with an UNUSABLE index — attempt 1's bug"* |
+| M2 | make the update failure fatal again | fixture 2 — *"a vendor-repo update failure must NOT fail the job"* |
 
-```
-[apt_prepare] REMOVE (third-party):    .../ubuntu.sources
-[apt_prepare] FAIL: no Ubuntu archive source survived the filter.
-FAIL 1: DELETED ubuntu.sources -- this is the bug that broke CI
-```
+M1 is attempt 1's defect reproduced; M2 is the original failure reproduced. The
+fixtures are the two things that went wrong, encoded.
 
 ## §6 — What is still not claimed
 
-- **This fixes no code defect**, because there was none. It removes a failure
-  mode unrelated to the kernel.
-- **CI is not immune to apt.** The Ubuntu archives can still be unreachable, and
-  that will still fail the job — deliberately (§4.1).
-- **The fixtures are not the runner image.** They encode what noble's layout is
-  *believed* to be; the real environment is still only observable in CI. The
-  difference from the first attempt is that the belief is now written down as an
-  executable test that a mutation demonstrably fails, instead of a sentence in a
-  comment.
+- **This fixes no code defect**, because there was none.
+- **CI is not immune to apt.** If the Ubuntu archives are genuinely unreachable,
+  the resolve check fails the job — deliberately.
+- **The stubs are not apt.** They exercise this script's decision logic, not
+  apt's behaviour. What is different from attempts 1 and 2 is that the script no
+  longer depends on any belief about the runner image, so there is no longer a
+  guess for the environment to falsify.

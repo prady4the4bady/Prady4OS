@@ -40,9 +40,7 @@ jobs:
       # it: this job installs no toolchain otherwise, and "it was there last
       # time" is not a build dependency.
       - name: Toolchain for the CMake parity check
-        run: |
-          bash tools/ci/apt_prepare.sh      # DDR-1045
-          sudo apt-get install -y --no-install-recommends clang
+        run: bash tools/ci/apt_prepare.sh clang      # DDR-1045
 
       # Fails if CMake's captured copy has drifted from the Makefile. Unlike the
       # dev host (no cmake), ubuntu-latest ships it, so this genuinely exercises
@@ -96,8 +94,7 @@ jobs:
 
       - name: Install toolchain
         run: |
-          bash tools/ci/apt_prepare.sh      # DDR-1045
-          sudo apt-get install -y --no-install-recommends clang lld llvm nasm make
+          bash tools/ci/apt_prepare.sh clang lld llvm nasm make      # DDR-1045
           rustup toolchain install nightly --profile minimal
           rustup component add rust-src --toolchain nightly
           rustup target add x86_64-unknown-none --toolchain nightly
@@ -168,11 +165,10 @@ jobs:
       # no gate can lose a tool it quietly depended on.
       - name: Install toolchain
         run: |
-          bash tools/ci/apt_prepare.sh      # DDR-1045
-          sudo apt-get install -y --no-install-recommends \
+          bash tools/ci/apt_prepare.sh \
             clang lld llvm nasm make qemu-system-x86 \
             dosfstools mtools e2fsprogs \
-            ovmf xorriso grub-pc-bin grub-efi-amd64-bin
+            ovmf xorriso grub-pc-bin grub-efi-amd64-bin      # DDR-1045
 
       - name: Download build tree
         id: fetch
@@ -279,9 +275,7 @@ jobs:
       # objects fine.
       - name: Install clang/lld and QEMU for ${{ matrix.arch }}
         run: |
-          bash tools/ci/apt_prepare.sh      # DDR-1045
-          sudo apt-get install -y -qq --no-install-recommends \
-            clang lld make ${{ matrix.qemu_pkg }}
+          bash tools/ci/apt_prepare.sh clang lld make ${{ matrix.qemu_pkg }}      # DDR-1045
 
       # Every tool is checked with `command -v` and the whole step is `set -e`.
       # The previous version piped `--version` into `head`, which returns HEAD's

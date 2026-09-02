@@ -1,89 +1,86 @@
 #!/usr/bin/env bash
-# apt_prepare.sh — DDR-1045: make `apt-get update` survive the runner image's
-# third-party repositories, WITHOUT deleting the Ubuntu archives.
+# apt_prepare.sh — DDR-1045: install packages without the runner image's
+# third-party repositories being able to fail the whole job.
 #
-# ORIGINAL FAILURE (CI 33636643304, arch-bootstrap aarch64, tip 0a1d0ae -- a
-# commit whose diff is one Markdown file):
+# usage: apt_prepare.sh <package>...
+#
+# THE FAILURE (CI 33636643304, arch-bootstrap aarch64, tip 0a1d0ae -- a commit
+# whose diff is one Markdown file):
 #
 #   E: Failed to fetch https://packages.microsoft.com/repos/azure-cli/dists/
 #      noble/InRelease  403  Forbidden
 #   ##[error]Process completed with exit code 100
 #
 # `apt-get update` exits non-zero when ANY configured repository fails and the
-# step runs under `set -e`, so a vendor repo no workflow here uses was a single
-# point of failure for every toolchain install.
+# steps run under `set -e`, so a vendor repo no workflow here uses was a single
+# point of failure for every toolchain install -- four steps in ci.yml.
 #
-# THE FIRST FIX WAS WRONG, AND THIS COMMENT EXISTS SO IT IS NOT REPEATED. It
-# removed /etc/apt/sources.list.d/* wholesale, on the stated assumption that
-# "the Ubuntu archives in /etc/apt/sources.list remain". THAT IS FALSE ON UBUNTU
-# 24.04: noble ships the archives in deb822 form at
-# /etc/apt/sources.list.d/ubuntu.sources, and /etc/apt/sources.list is a stub.
-# So the script deleted the archives, `apt-get update` then succeeded against
-# nothing, and every job failed with
+# TWO FAILED ATTEMPTS PRECEDED THIS ONE, BOTH FROM GUESSING AT THE RUNNER IMAGE
+# INSTEAD OF CHECKING IT. They are recorded because the pattern matters more
+# than either bug:
 #
-#   E: Unable to locate package llvm
-#   E: Unable to locate package nasm
+#   1. Remove /etc/apt/sources.list.d/* wholesale, assuming "the Ubuntu archives
+#      in /etc/apt/sources.list remain". FALSE on Ubuntu 24.04 -- noble ships
+#      them as deb822 at sources.list.d/ubuntu.sources. Deleted the archives;
+#      every package became unavailable; build + shard-check + aarch64 + riscv64
+#      all failed (CI 33650542691).
+#   2. Keep files whose CONTENT matches an Ubuntu archive host. The runner's real
+#      ubuntu.sources did not match the pattern -- so the guard correctly refused
+#      and the arch jobs still failed (CI 33650946252). Still a guess about a
+#      file this environment cannot read.
 #
-# on CI 33650542691 -- worse than the failure it replaced, because it broke all
-# four jobs instead of one. The assumption was never checked against the image.
+# SO THIS VERSION ASSUMES NOTHING ABOUT THE SOURCES AT ALL. It does not read,
+# classify, or delete any repository file. Instead:
 #
-# So: classify by CONTENT, not by path. A file that references an Ubuntu archive
-# host is kept; anything else goes. Every package these workflows install --
-# clang, lld, llvm, nasm, make, qemu-system-*, dosfstools, mtools, e2fsprogs,
-# ovmf, xorriso, grub-* -- comes from those archives, so nothing needed is lost.
+#   - `apt-get update` is allowed to fail, because a vendor repo 403 is not this
+#     project's problem and is the only thing that has ever broken here;
+#   - and then the index is PROVED USABLE by resolving every package the caller
+#     actually needs, before installing them.
 #
-# TWO GUARDS, because this script has already been wrong once:
-#   - refuse to proceed if no Ubuntu source survives the filter;
-#   - after updating, assert a package every caller installs actually resolves.
-# Both fail loudly. `apt-get update` itself stays fatal: a blanket `|| true`
-# would also hide the Ubuntu archives being unreachable, and a toolchain built
-# against a stale index is a different build.
-set -euo pipefail
+# That post-check is what makes tolerating the update failure safe, and it is the
+# answer to the objection the earlier versions were built around: "|| true would
+# also hide the Ubuntu archives being unreachable". It would -- unless something
+# afterwards checks. Something does, and it checks the exact thing that matters
+# (can we install what this job needs?) rather than inferring it from a filename
+# or a URI pattern.
+set -uo pipefail
 
-# Overridable so the classification can be tested without root and without a
-# real runner image -- see tools/ci/apt_prepare_selftest.sh. This script has
-# already been wrong once in a way no local check would have caught, and the
-# fixtures are the only verification available before CI sees it.
-SRCDIR="${APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
-MAINLIST="${APT_MAIN_LIST:-/etc/apt/sources.list}"
-RM="${APT_RM:-sudo rm -f}"
+if [ "$#" -eq 0 ]; then
+    echo "[apt_prepare] usage: apt_prepare.sh <package>..." >&2
+    exit 2
+fi
 
-kept=0
-removed=0
-shopt -s nullglob
-for f in "$SRCDIR"/*; do
-    [ -f "$f" ] || continue
-    if grep -qE '(archive|security|ports)\.ubuntu\.com|ubuntu\.com/ubuntu' "$f"; then
-        echo "[apt_prepare] KEEP   (Ubuntu archive): $f"
-        kept=$((kept + 1))
-    else
-        echo "[apt_prepare] REMOVE (third-party):    $f"
-        $RM "$f"
-        removed=$((removed + 1))
+SUDO="${APT_SUDO-sudo}"
+
+# Tolerated: individual repositories may 403. Not tolerated silently -- the
+# outcome is reported, and the resolve check below is what decides.
+if $SUDO apt-get update; then
+    echo "[apt_prepare] apt-get update: clean"
+else
+    echo "[apt_prepare] apt-get update reported errors (a vendor repo is usually" \
+         "the cause); continuing to the resolve check, which is what actually decides"
+fi
+
+# PROVE the index is usable for exactly what this job installs. A package with
+# no candidate means the archives themselves are missing or stale, and failing
+# HERE names the cause instead of leaving the caller with a bare
+# "E: Unable to locate package".
+missing=""
+for p in "$@"; do
+    if apt-cache policy "$p" 2>/dev/null | grep -q 'Candidate: (none)'; then
+        missing="$missing $p"
+    elif ! apt-cache policy "$p" 2>/dev/null | grep -q 'Candidate:'; then
+        missing="$missing $p"
     fi
 done
-
-# /etc/apt/sources.list still carries the archives on older images; on noble it
-# is a stub and ubuntu.sources above is the real one. Either satisfies this.
-if [ "$kept" -eq 0 ] && ! grep -qE '^\s*deb\s' "$MAINLIST" 2>/dev/null; then
-    echo "[apt_prepare] FAIL: no Ubuntu archive source survived the filter." >&2
-    echo "[apt_prepare] Refusing to update against an empty index -- that is how" >&2
-    echo "[apt_prepare] the first version of this script broke every job." >&2
+if [ -n "$missing" ]; then
+    echo "[apt_prepare] FAIL: no candidate for:$missing" >&2
+    echo "[apt_prepare] The package index is unusable -- this is NOT a vendor-repo" >&2
+    echo "[apt_prepare] 403, it means the Ubuntu archives are missing or stale." >&2
+    echo "[apt_prepare] Configured sources:" >&2
+    ls -la /etc/apt/sources.list.d/ >&2 || true
     exit 1
 fi
-echo "[apt_prepare] kept $kept Ubuntu source file(s), removed $removed third-party file(s)"
+echo "[apt_prepare] index OK — every requested package resolves:$(printf ' %s' "$@")"
 
-[ -n "${APT_PREPARE_SELFTEST:-}" ] && { echo "[apt_prepare] selftest: stopping before apt"; exit 0; }
-
-sudo apt-get update
-
-# Post-check: clang is installed by all four callers. If it does not resolve,
-# the index is wrong and every caller is about to fail with a confusing
-# "Unable to locate package" -- say why here instead.
-if apt-cache policy clang 2>/dev/null | grep -q 'Candidate: (none)'; then
-    echo "[apt_prepare] FAIL: 'clang' has no candidate after update -- the package" >&2
-    echo "[apt_prepare] index is not usable. Sources still configured:" >&2
-    ls -la "$SRCDIR" >&2 || true
-    exit 1
-fi
-echo "[apt_prepare] index OK (clang resolves)"
+$SUDO apt-get install -y --no-install-recommends "$@"

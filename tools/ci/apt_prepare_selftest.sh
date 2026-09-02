@@ -1,59 +1,65 @@
 #!/usr/bin/env bash
-# apt_prepare_selftest.sh — DDR-1045: fixtures for apt_prepare.sh's classifier.
+# apt_prepare_selftest.sh — DDR-1045: fixtures for apt_prepare.sh.
 #
-# This exists because the first version of apt_prepare.sh BROKE EVERY CI JOB. It
-# deleted /etc/apt/sources.list.d/* on the stated assumption that the Ubuntu
-# archives live in /etc/apt/sources.list -- false on Ubuntu 24.04, where noble
-# ships them as deb822 at /etc/apt/sources.list.d/ubuntu.sources. No local check
-# existed, so the assumption reached CI unverified.
+# This exists because apt_prepare.sh was WRONG TWICE, both times by guessing at
+# the runner image instead of checking it (see that script's header). Neither
+# guess could be caught locally, so the current version guesses nothing -- and
+# the property that replaced the guessing is testable, which is the point.
 #
-# Fixture 1 reproduces the exact noble layout that broke: ubuntu.sources beside
-# microsoft-prod.list. It is the regression test for that mistake.
+# THE PROPERTY UNDER TEST: a failing `apt-get update` is tolerated, but an
+# unusable index is NOT -- the resolve check decides, and it checks exactly the
+# packages the caller asked for. apt-get/apt-cache are stubbed on PATH, so no
+# root and no real index are involved.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 rc=0
 
-mk_noble() {                      # the Ubuntu 24.04 layout, deb822
-    mkdir -p "$1"
-    cat > "$1/ubuntu.sources" <<'SRC'
-Types: deb
-URIs: http://azure.archive.ubuntu.com/ubuntu/
-Suites: noble noble-updates noble-backports
-Components: main restricted universe multiverse
-SRC
-    cat > "$1/microsoft-prod.list" <<'SRC'
-deb [arch=amd64] https://packages.microsoft.com/ubuntu/24.04/prod noble main
-SRC
+# $1 = apt-get update exit code, $2 = "ok" | "none" for apt-cache policy
+mkstubs() {
+    local d="$tmp/bin"; rm -rf "$d"; mkdir -p "$d"
+    cat > "$d/apt-get" <<STUB
+#!/usr/bin/env bash
+if [ "\$1" = "update" ]; then exit $1; fi
+if [ "\$1" = "install" ]; then shift; echo "STUB-INSTALL \$*" >> "$tmp/installed"; exit 0; fi
+exit 0
+STUB
+    cat > "$d/apt-cache" <<STUB
+#!/usr/bin/env bash
+if [ "$2" = "none" ]; then echo "  Candidate: (none)"; else echo "  Candidate: 1.0"; fi
+STUB
+    chmod +x "$d/apt-get" "$d/apt-cache"
+    echo "$d"
 }
 
-# --- 1: noble layout. ubuntu.sources MUST survive; microsoft MUST go. --------
-d="$tmp/noble/sources.list.d"; mk_noble "$d"; : > "$tmp/noble/sources.list"
-APT_PREPARE_SELFTEST=1 APT_SOURCES_DIR="$d" APT_MAIN_LIST="$tmp/noble/sources.list" \
-    APT_RM="rm -f" bash tools/ci/apt_prepare.sh >"$tmp/o1" 2>&1
-if [ $? -ne 0 ]; then echo "FAIL 1: exited non-zero on a valid noble layout"; cat "$tmp/o1"; rc=1; fi
-[ -f "$d/ubuntu.sources" ]     || { echo "FAIL 1: DELETED ubuntu.sources -- this is the bug that broke CI"; rc=1; }
-[ -f "$d/microsoft-prod.list" ] && { echo "FAIL 1: kept the third-party repo that 403'd"; rc=1; }
+run() { APT_SUDO="" PATH="$1:$PATH" bash tools/ci/apt_prepare.sh "${@:2}"; }
 
-# --- 2: only third-party sources -> must REFUSE, not update an empty index ---
-d2="$tmp/empty/sources.list.d"; mkdir -p "$d2"; : > "$tmp/empty/sources.list"
-cat > "$d2/microsoft-prod.list" <<'SRC'
-deb [arch=amd64] https://packages.microsoft.com/ubuntu/24.04/prod noble main
-SRC
-APT_PREPARE_SELFTEST=1 APT_SOURCES_DIR="$d2" APT_MAIN_LIST="$tmp/empty/sources.list" \
-    APT_RM="rm -f" bash tools/ci/apt_prepare.sh >"$tmp/o2" 2>&1
-[ $? -eq 0 ] && { echo "FAIL 2: proceeded with NO Ubuntu source -- the guard did not fire"; cat "$tmp/o2"; rc=1; }
+# --- 1: update clean, packages resolve -> install, rc=0 ----------------------
+: > "$tmp/installed"; d=$(mkstubs 0 ok)
+run "$d" clang nasm >"$tmp/o1" 2>&1
+[ $? -ne 0 ] && { echo "FAIL 1: clean update + resolvable packages should succeed"; cat "$tmp/o1"; rc=1; }
+grep -q 'STUB-INSTALL .*clang' "$tmp/installed" || { echo "FAIL 1: never installed"; rc=1; }
 
-# --- 3: legacy layout, archives in /etc/apt/sources.list -> must proceed -----
-d3="$tmp/legacy/sources.list.d"; mkdir -p "$d3"
-echo 'deb http://archive.ubuntu.com/ubuntu jammy main' > "$tmp/legacy/sources.list"
-cat > "$d3/azure-cli.list" <<'SRC'
-deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ noble main
-SRC
-APT_PREPARE_SELFTEST=1 APT_SOURCES_DIR="$d3" APT_MAIN_LIST="$tmp/legacy/sources.list" \
-    APT_RM="rm -f" bash tools/ci/apt_prepare.sh >"$tmp/o3" 2>&1
-[ $? -ne 0 ] && { echo "FAIL 3: refused a legacy layout whose archives are in sources.list"; cat "$tmp/o3"; rc=1; }
+# --- 2: update FAILS but packages resolve -> must still install, rc=0 --------
+#     This is the vendor-repo 403 case, i.e. the whole reason this script exists.
+: > "$tmp/installed"; d=$(mkstubs 100 ok)
+run "$d" clang nasm >"$tmp/o2" 2>&1
+[ $? -ne 0 ] && { echo "FAIL 2: a vendor-repo update failure must NOT fail the job"; cat "$tmp/o2"; rc=1; }
+grep -q 'STUB-INSTALL .*nasm' "$tmp/installed" || { echo "FAIL 2: tolerated the failure but never installed"; rc=1; }
 
-[ $rc -eq 0 ] && echo "apt_prepare-selftest OK — noble layout preserved, third-party removed, empty-index refused, legacy layout accepted"
+# --- 3: update clean but a package has NO candidate -> must REFUSE -----------
+#     This is the failure mode attempt 1 shipped: an empty/stale index. Loudly.
+: > "$tmp/installed"; d=$(mkstubs 0 none)
+run "$d" clang nasm >"$tmp/o3" 2>&1
+[ $? -eq 0 ] && { echo "FAIL 3: proceeded with an UNUSABLE index -- attempt 1's bug"; cat "$tmp/o3"; rc=1; }
+grep -q 'STUB-INSTALL' "$tmp/installed" && { echo "FAIL 3: installed anyway"; rc=1; }
+grep -q 'no candidate for' "$tmp/o3" || { echo "FAIL 3: did not name the cause"; rc=1; }
+
+# --- 4: no arguments -> usage error, never a silent no-op -------------------
+d=$(mkstubs 0 ok)
+run "$d" >"$tmp/o4" 2>&1
+[ $? -eq 2 ] || { echo "FAIL 4: empty package list should be a usage error"; rc=1; }
+
+[ $rc -eq 0 ] && echo "apt_prepare-selftest OK — 403 tolerated, unusable index refused, install happens, empty args rejected"
 exit $rc
