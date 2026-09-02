@@ -686,17 +686,62 @@ deterministic test.
 
 ---
 
-## PHASE 3 — Quantum Layer (Phase 10) — BUILD IMMEDIATELY AFTER v1.0.0
+## PHASE 3 — SPECULATIVE FUTURE RESEARCH (NOT a backlog item)
 
-**The quantum layer is NOT deferred indefinitely. Build it right after the ISO
-ships and `v1.0.0` is tagged. Do NOT pull it forward before v1.0.0.**
+**OPERATOR DECISION 2026-09-02 (PR #17), Part A. This section previously read
+"Quantum Layer (Phase 10) — BUILD IMMEDIATELY AFTER v1.0.0" and asserted "The
+quantum layer is NOT deferred indefinitely." That is CANCELLED.**
 
-| Item | Detail | Gate |
-|---|---|---|
-| QAL (Quantum Abstraction Layer) | Kernel API: `SYS_QPU_SUBMIT`, `SYS_QPU_READ`, `SYS_QPU_STATUS`. Gate behind `CAP_QUANTUM`. | `smoke-qpu` |
-| Virtual QPU emulator | Software 5-qubit QPU for CI. State vector simulation, H/CNOT/T/S/Rz gates. No real hardware required. | `smoke-qpu-sim` |
-| QAOA scheduler | Quantum Approximate Optimization Algorithm for process scheduling hints. Runs on virtual QPU. | `smoke-qaoa` |
-| Hybrid classical-quantum API | ring-3 hybrid programs: submit circuit, block for result, continue classically. `user/qaoatest.c`. | `smoke-hybrid-api` |
+Literal quantum-hardware integration is a **speculative future-research note**,
+not an active backlog item, and it is not scheduled for any release. The reason
+is architectural, not a matter of priority:
+
+> Quantum hardware is reached over a remote cloud API with queue-time latency
+> measured in seconds to minutes. This kernel schedules at microsecond scale. No
+> version of that integration improves this OS's own efficiency, now or
+> foreseeably.
+
+So `SYS_QPU_SUBMIT` / `SYS_QPU_READ` / `SYS_QPU_STATUS`, `CAP_QUANTUM`, the
+virtual 5-qubit QPU, the QAOA scheduler and the hybrid API are **withdrawn from
+the plan**. Nothing was ever built toward them (zero `SYS_QPU_*`, zero
+`CAP_QUANTUM`, zero `user/qaoatest.c`), so nothing is being removed — only a
+commitment that should not have been made. Do NOT build them, and do NOT treat
+their absence as an open gap.
+
+**This is a doc-only correction; no functional code changes.**
+
+### What IS in scope, and it is a different thing entirely
+
+**POST-QUANTUM SECURITY is MANDATORY v1 SCOPE** — operator decision 2026-09-02
+(PR #17), Part B, which supersedes the earlier sequencing. It is *cryptography
+that resists a future quantum adversary*, running entirely on this CPU. It has
+nothing to do with quantum hardware and is not blocked by anything above.
+
+Build against NIST's finalized standards — **ML-KEM (FIPS 203)** and **ML-DSA
+(FIPS 204)**. Candidate applications, in the operator's own order:
+
+| candidate | where it lands |
+|---|---|
+| ML-DSA-signed tamper-evident ledger | F#76's audit chain (`smoke-auditchain`) |
+| PQC-signed capability tokens | the agent capability system |
+| ML-KEM key exchange for `SEND_IPC` | only if agent messaging ever crosses machines |
+
+**Same bar as everything else: mutation-checked, zero warnings at `-Werror`, a
+real non-vacuous gate.** If it genuinely cannot be built to that bar in the time
+available, **say so explicitly and name the exact blocker** — the way DDR-1038
+handled `SYS_FUTEX` (a futex needs a shared-memory word; this kernel has no
+`CLONE_VM`, no `MAP_SHARED` file backing, and fork COWs everything writable, so
+the two sides would wait on two different physical words). An honest, specific
+blocker is an acceptable outcome. Silence, or filler, is not.
+
+### Queue position — explicit (operator, 2026-09-02)
+
+1. **OPEN-2** (the AP-freeze bug) — first, still the active blocker.
+2. Remaining `docs/PRE_LAUNCH_CHECKLIST.md` items.
+3. `RUN_EXPERIMENT`-adjacent work and the Groups A–F backlog, as sequenced.
+4. **Post-Quantum Security** — here, before the final step.
+5. **ISO build, verification, `main` promotion, `v1.0.0` tag** — last, exactly as
+   STEP 3 already requires.
 
 ---
 
@@ -754,7 +799,9 @@ Every box must be checked before the deadline:
 **ISO must be testable, and `v1.0.0` tagged on `main`, by 2026-08-28 23:59 UTC**
 (extended from 2026-08-24 by `docs/OPERATOR_DIRECTIVE_2026-08-23.md` §1 — that
 directive supersedes the older date wherever this file still implies it).
-**After v1.0.0 is tagged: begin Phase 10 (Quantum Layer) immediately.**
+**Post-Quantum Security (ML-KEM / ML-DSA) is MANDATORY v1 scope and lands
+BEFORE the ISO — see §PHASE 3. Quantum *hardware* integration is withdrawn from
+the plan entirely (operator, 2026-09-02, PR #17).**
 
 **Begin with Phase 1 Item 1 (FSRM fix). Parallelize across groups. Do not stop.**
 
@@ -798,7 +845,9 @@ directive supersedes the older date wherever this file still implies it).
 
 ## DEFERRED — DO NOT PULL FORWARD BEFORE v1.0.0
 
-- Phase 10 quantum layer — build AFTER v1.0.0 is tagged
+- Quantum *hardware* integration — WITHDRAWN, not deferred (operator 2026-09-02,
+  §PHASE 3). Post-quantum *cryptography* is the opposite: mandatory v1 scope,
+  before the ISO.
 - `arch/aarch64` / `arch/riscv64` full ports (boot-only scope, ISOs use that)
 - Apple Silicon / m1n1
 - Rust rewrite of any component

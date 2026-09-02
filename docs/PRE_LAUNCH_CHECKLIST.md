@@ -383,28 +383,46 @@ kernel that boots and does not run userspace. If the release is described to
 users as "multi-architecture", that description must carry the boot-only
 qualifier. **That is a wording decision, and it belongs with §1.2.**
 
-### 5.1b — Two scope confirmations from the operator, one of which contradicts `CLAUDE.md`
+### 5.1b — Two scope confirmations from the operator (the `CLAUDE.md` contradiction is now RESOLVED)
 
 **Rust rewrite: deferred to a future release.** The project stays in C for v1.
 This matches the existing `[DEFERRED: not in scope]` entry; no conflict.
 
-**Quantum layer: the operator states no quantum scope exists in this project —
-*"it was never a real requirement"*.** That is a change of record, not a
-restatement, and it must be reconciled rather than assumed:
+**Quantum layer: RESOLVED 2026-09-02 — operator decision on PR #17, Part A.**
+This item was previously flagged as an unreconciled contradiction between the
+operator's statement and `CLAUDE.md` §PHASE 3. It is now settled, and settled in
+a more precise way than "no quantum scope exists":
 
-`CLAUDE.md` **§PHASE 3** currently reads *"Quantum Layer (Phase 10) — BUILD
-IMMEDIATELY AFTER v1.0.0"* and *"The quantum layer is NOT deferred
-indefinitely"*, and specifies four items with gates (QAL syscalls behind
-`CAP_QUANTUM`, a virtual 5-qubit QPU, a QAOA scheduler, a hybrid API). §WHAT
-"DONE" MEANS also ends with *"After v1.0.0 is tagged: begin Phase 10."*
+**Quantum *hardware* integration is WITHDRAWN — a speculative future-research
+note, not a backlog item.** The operator's reason is architectural, not
+priority: quantum hardware is reached over a remote cloud API with queue-time
+latency of seconds to minutes, against a kernel that schedules at microsecond
+scale, so no version of it improves this OS's own efficiency. `CLAUDE.md`
+§PHASE 3 has been rewritten to say so; `docs/BUILD_TRACKER.md` row 10 is marked
+WITHDRAWN. Nothing was ever built toward it — no `SYS_QPU_*`, no `CAP_QUANTUM`,
+no `smoke-qpu*` — so nothing is unwound. **The two sources no longer disagree.**
 
-**Nothing has been built toward it** — no `SYS_QPU_*`, no `CAP_QUANTUM`, no
-`smoke-qpu*` — so there is no work to unwind, and this costs the release
-nothing. But `CLAUDE.md` is the governing document every session is told to
-follow in full, and it currently mandates work the operator says was never
-required. **Flagged rather than silently resolved:** the operator's statement is
-recorded here as authoritative, and `CLAUDE.md` §PHASE 3 should be struck in the
-same pass that acts on §1.2, so the two sources stop disagreeing.
+**Post-quantum *cryptography* is the opposite ruling, and it is MANDATORY v1
+SCOPE.** Same comment, Part B, which explicitly supersedes the earlier
+sequencing. Build against NIST's finalized standards — **ML-KEM (FIPS 203)** and
+**ML-DSA (FIPS 204)** — to the same bar as everything else here:
+mutation-checked, zero warnings, a real non-vacuous gate. Candidates named by the
+operator: ML-DSA-signed tamper-evident ledger (F#76's audit chain), PQC-signed
+capability tokens, ML-KEM key exchange for `SEND_IPC` if agent messaging ever
+crosses machines.
+
+**If it cannot be built to that bar in the time available, the required output is
+an explicit, specific blocker** — the DDR-1038 shape, which named exactly why
+`SYS_FUTEX` is unbuildable here (no `CLONE_VM`, no `MAP_SHARED` file backing,
+fork COWs everything writable, so the two sides would wait on two different
+physical words). An honest blocker is an acceptable outcome; filler is not.
+
+**Queue position, from the operator, explicit:** OPEN-2 → the rest of this
+checklist → `RUN_EXPERIMENT`-adjacent + Groups A–F → **PQC** → ISO, `main`
+promotion, `v1.0.0` tag. PQC lands *before* the ISO is built, not after.
+
+**STATUS: this sub-item is CLOSED as a contradiction and REOPENED as scope.**
+It is no longer a docs discrepancy; it is a feature with a queue position.
 
 ### 5.2 — Group F: AETHER agent behaviours
 

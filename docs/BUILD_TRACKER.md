@@ -76,7 +76,7 @@ were re-verified this session (see §2).
 | 7 | AETHER Agent Runtime | 50 | 41 | 8 | 1 | 82% |
 | 8 | Sovereign Desktop | 30 | 27 | 1 | 2 | 90% |
 | 9 | Assembly Optimization | 7 | 1 | 2 | 4 | 14% |
-| 10 | Quantum Layer | 4 | 0 | 0 | 4 | FUTURE |
+| 10 | ~~Quantum Layer~~ | 0 | 0 | 0 | 0 | **WITHDRAWN 2026-09-02** — operator decision (PR #17, Part A): quantum *hardware* integration is a speculative future-research note, not a backlog item. Remote cloud API with queue-time latency is incompatible with microsecond kernel scheduling. Nothing was ever built toward it, so nothing is removed. **Post-quantum *cryptography* (ML-KEM/ML-DSA) is the opposite: mandatory v1 scope, before the ISO** — CLAUDE.md §PHASE 3. |
 | **Total** | | **286** | **217** | **25** | **28** | **76%** |
 
 Phase 0 rose because 0.2/0.3 (aarch64/riscv64 cross-compile) are ⚠️→✅ for the
