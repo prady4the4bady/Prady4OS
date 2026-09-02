@@ -27,7 +27,11 @@ exit 0
 STUB
     cat > "$d/apt-cache" <<STUB
 #!/usr/bin/env bash
-if [ "$2" = "none" ]; then echo "  Candidate: (none)"; else echo "  Candidate: 1.0"; fi
+case "$2" in
+  none)  echo "  Candidate: (none)" ;;   # known package, nothing installable
+  empty) : ;;                            # UNKNOWN package: real apt prints NOTHING
+  *)     echo "  Candidate: 1.0" ;;
+esac
 STUB
     chmod +x "$d/apt-get" "$d/apt-cache"
     echo "$d"
@@ -56,10 +60,20 @@ run "$d" clang nasm >"$tmp/o3" 2>&1
 grep -q 'STUB-INSTALL' "$tmp/installed" && { echo "FAIL 3: installed anyway"; rc=1; }
 grep -q 'no candidate for' "$tmp/o3" || { echo "FAIL 3: did not name the cause"; rc=1; }
 
+# --- 5: apt-cache prints NOTHING (real apt's answer for an unknown package) --
+#     MEASURED against real apt, and it is not what fixture 3 exercises: an
+#     unknown package produces EMPTY output, not "Candidate: (none)". The stub
+#     originally only ever emitted the latter, so the branch that handles real
+#     apt's actual behaviour was untested. This closes that.
+: > "$tmp/installed"; d=$(mkstubs 0 empty)
+run "$d" clang nasm >"$tmp/o5" 2>&1
+[ $? -eq 0 ] && { echo "FAIL 5: empty apt-cache output treated as resolvable"; cat "$tmp/o5"; rc=1; }
+grep -q 'STUB-INSTALL' "$tmp/installed" && { echo "FAIL 5: installed an unknown package"; rc=1; }
+
 # --- 4: no arguments -> usage error, never a silent no-op -------------------
 d=$(mkstubs 0 ok)
 run "$d" >"$tmp/o4" 2>&1
 [ $? -eq 2 ] || { echo "FAIL 4: empty package list should be a usage error"; rc=1; }
 
-[ $rc -eq 0 ] && echo "apt_prepare-selftest OK — 403 tolerated, unusable index refused, install happens, empty args rejected"
+[ $rc -eq 0 ] && echo "apt_prepare-selftest OK — 403 tolerated; unusable index refused in BOTH real-apt shapes ((none) and empty); install happens; empty args rejected"
 exit $rc
