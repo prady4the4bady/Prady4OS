@@ -189,3 +189,46 @@ source.** §INV.5 makes the same point for `PRADYOS_WM_GEOM` parsers — isolate
 the field, do not assume two fields are adjacent. The fixed pattern
 (`PRADYOS_WM_GONE .*title=ALPHA`) also survives a future field being appended,
 which the concatenated form would not have.
+
+## §8 — Measured
+
+### §8.1 — The arm works, and M1 proves it
+
+| build | compositor | `smoke-surfclose` | log | `PRADYOS_WM_GONE` |
+|---|---|---|---|---|
+| clean | `d2ea4c4401b0ee46` | **PASS** — "WM_GONE published" | 33 520 B | **3** (ALPHA id=0, GAMMA id=2, BETA id=1) |
+| **M1** — compositor print deleted | `85ac81c5f5ce1799` | **FAIL** at `Makefile:3270` | 33 437 B | **0** |
+
+M1 fails at **the new arm's own line**, with the arm's own diagnostic
+(`no WM_GONE lines at all`), on a **full, healthy boot** — the log is within
+0.3 % of the clean run's size, so this is a real catch rather than a boot that
+never produced output. Before this arm existed, M1 passed every gate in the tree.
+
+Kernel hashes differ between the two (`f7b1ee59198c3919` vs
+`2cea60d33557d5fc`) only because `compositor.elf` is embedded; the binding
+artefact for a compositor-side change is the **compositor** hash, per DDR-1027.
+
+**Still uncovered:** `resolve_geometry`'s refusal branch (§5.1). M2 — keep the
+print, ignore it in the parser — remains uncatchable, because no gate points the
+injector at a ghost. Not run, and not counted.
+
+### §8.2 — A process error that VOIDED a first set of results
+
+The first attempt at §8.1 produced `clean rc=2` and `M1 rc=2`. Read naively that
+is "the mutant failed as designed" — and it was **wrong**, because the *clean*
+build failed too, with `build/surfclose.log` at **0 bytes**.
+
+Cause: two background jobs. One was looping `smoke-perrestore` three times; the
+other waited for QEMU to go idle and then ran `smoke-surfclose`. A single
+`pgrep` landed in the gap **between** two runs of the loop, read "idle", and
+started a second QEMU alongside the third perrestore run — the concurrency
+§NON-NEGOTIABLE 12 forbids. The empty capture was contention, not a defect.
+
+**The lesson is narrower than "check for QEMU", which §INV.3 already says.** A
+point-in-time check against a *loop that starts new instances* is not a check at
+all. The fix used for the re-run: require **8 consecutive idle samples** before
+proceeding. Better still, do not have two QEMU-using jobs in flight at once.
+
+Both void readings were discarded rather than reported. A mutant result is only
+meaningful against a clean run taken under the same conditions — which is why
+the clean arm is in the table above and not assumed from an earlier session.
