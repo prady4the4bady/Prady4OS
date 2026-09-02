@@ -424,6 +424,49 @@ promotion, `v1.0.0` tag. PQC lands *before* the ISO is built, not after.
 **STATUS: this sub-item is CLOSED as a contradiction and REOPENED as scope.**
 It is no longer a docs discrepancy; it is a feature with a queue position.
 
+#### 5.1b.1 — PQC pre-assessment: four facts, measured 2026-09-02
+
+Gathered now rather than at queue position 4, because one of them changes the
+whole gate design and finding it late would waste the build.
+
+**1. There is no SHA-3 anywhere in the tree.** `kernel/crypto/` holds SHA-256,
+SHA-512, X25519, Ed25519, HKDF, AEAD — and zero Keccak / SHAKE / SHA-3.
+**Both** ML-KEM and ML-DSA are built on SHAKE128/256 for expansion, sampling and
+hashing, so a Keccak-f[1600] core is a *prerequisite*, not an extra. It is
+bounded work (~200 lines plus round constants) but it is the first thing.
+
+**2. Size is not the constraint.** `kernel.bin` is 1,175,946 B against the
+1,572,864 B gate — **396,918 B of headroom**. ML-DSA-44 code plus its tables fit
+comfortably. (Signature 2420 B, public key 1312 B, so the *data* is small too.)
+
+**3. Authoritative sources are reachable, by exactly one route.**
+`raw.githubusercontent.com` serves arbitrary public files (measured: 200,
+13,617 B for the Dilithium reference `sign.c`). The GitHub **API** is scoped to
+this repository and returns 403 for others, and **csrc.nist.gov is blocked by the
+proxy entirely** (403 CONNECT / no route). So reference code and test vectors must
+come through `raw.githubusercontent.com`, and any path must be probed rather than
+assumed — several plausible KAT paths returned 404 while a known file returned
+200, i.e. the repo layout is not what a guess produces.
+
+**4. THE GATE MUST BE KNOWN-ANSWER, NOT ROUND-TRIP. This is the load-bearing
+constraint and it is why this note exists.** A gate that signs a message and
+then verifies the signature **passes on a completely wrong implementation** —
+any self-consistent homegrown scheme satisfies sign→verify, including one that
+is not ML-DSA at all and offers none of its security. That is precisely the
+dead-arm class this project has now hit nine times: a field whose only reachable
+value is the passing one.
+
+Conformance to FIPS 204 can only be shown against **fixed known-answer
+vectors**: a pinned seed and message, with the expected public key, secret key
+and signature (or their hashes) committed to the repository and asserted
+byte-exact — the same shape DDR-1044 arm D used for the machine-check bank
+decode, and for the same reason.
+
+**Consequence for planning:** the build order is Keccak/SHAKE → KAT acquisition
+and pinning → ML-DSA → the application (ledger signing / capability tokens). If
+the KAT step cannot be completed, the honest output is a DDR-1038-shaped blocker
+naming *that* — not an unverified implementation with a round-trip gate.
+
 ### 5.2 — Group F: AETHER agent behaviours
 
 **The structural fact first, because the tracker got this wrong twice
