@@ -173,6 +173,7 @@ jobs:
             ovmf xorriso grub-pc-bin grub-efi-amd64-bin
 
       - name: Download build tree
+        id: fetch
         uses: actions/download-artifact@v4
         with:
           name: build-tree
@@ -206,8 +207,17 @@ jobs:
       # rebuilt the kernel underneath the gates. Runs even when the shard fails,
       # because "the gates were red" and "the gates ran a different binary" are
       # different findings and the second one must not be hidden by the first.
+      #
+      # GUARDED ON THE DOWNLOAD, not on `always()` alone. A shard can die BEFORE
+      # the artifact arrives — the toolchain install is an apt fetch and the
+      # runner image carries third-party repos that have returned 403 — and an
+      # unguarded assertion then adds `cd: build: No such file or directory` on
+      # top of the real error, which is a second failure message masking the
+      # first. The condition still holds on a RED shard, which is the case this
+      # assertion exists for; it just does not fire when there was never a
+      # binary to assert about.
       - name: Assert the binary did not change while the gates ran
-        if: always()
+        if: always() && steps.fetch.outcome == 'success'
         run: cd build && sha256sum -c kernel.sha256
 
   # AETHER host-side Python agent layer. Separate job from build-and-boot: it

@@ -112,3 +112,44 @@ on the first shard rather than corrupting a result — that failure mode was
 chosen deliberately, but it is a prediction until a run confirms it.
 
 Nothing here bears on OPEN-1, OPEN-2, OPEN-12 or OPEN-13.
+
+
+## §8 — A flaw in §4's assertion, found by an infrastructure failure
+
+**Symptom.** Shard 3 on `f0f0fa9` (a docs-only commit) died at *Install
+toolchain*: `apt-get update` exited 100 because `packages.microsoft.com` returned
+**403 Forbidden** — a third-party repository pre-configured on the GitHub runner
+image, unrelated to this project. No gate ran.
+
+**The flaw is mine.** The after-the-fact assertion was `if: always()` alone, so
+it fired on a job that had died *before* the artifact was downloaded and printed
+
+```
+cd: build: No such file or directory
+```
+
+— a **second failure message on top of the real one**, in the position a reader
+looks for the cause. An assertion that reports its own inapplicability as a
+failure is worse than one that stays quiet: it costs a reader the very thing
+§4 was written to protect, namely being able to tell two findings apart.
+
+**Fix:** the download step gains `id: fetch`, and the assertion becomes
+
+```yaml
+if: always() && steps.fetch.outcome == 'success'
+```
+
+This keeps the property §4 exists for — **it still runs on a RED shard**, which
+is the case that matters — and stops it firing when there was never a binary to
+assert about.
+
+**Generalising, because this is the third instance in two DDRs:** a step that
+only makes sense after some earlier step succeeded must say so. DDR-1037 §7.3(b)
+had a restore behind an early `return`; DDR-1036 §8.2 had an idle check that
+raced a loop. Here it is the inverse — a step that runs when it should not —
+but the root is the same: **the guard and the thing it guards were written at
+different times, and nobody asserted the relationship.**
+
+**Not changed:** CLAUDE.md's re-run rule already covers this case ("if it died
+before any test body ran — checkout, install, runner loss"), so an apt 403 is a
+permitted re-run and not a gate failure to root-cause.
