@@ -1538,6 +1538,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'fg %%1\n'; sleep 1.5; \
 	  printf 'jobs\n'; sleep 1.2; \
 	  printf 'kill %%99\n'; sleep 0.6; \
+	  printf 'echo erasX\177e-ok-3m7\n'; sleep 0.6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 120 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -1702,9 +1703,27 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# `cat /ERR9k2.TXT` therefore fails before this change and passes after, and
 	@# proves the message travelled on fd 2 (fd 1 pointed elsewhere in that command).
 	@grep -qF "cat: cannot open /NOPE9k2.TXT" build/shell_serial.log || { echo "[shell] FAIL: stderr not redirected to the 2> file (DDR-784)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-1039: ERASE. readline() used to append EVERY non-newline byte, so a
+	@# backspace landed IN the command buffer. The fed line is
+	@# `echo erasX<0x7F>e-ok-3m7`: honoured, the DEL removes the X and the shell
+	@# runs `echo erase-ok-3m7`; ignored, echo prints the literal
+	@# `erasX<0x7F>e-ok-3m7`, which does NOT contain the marker.
+	@#
+	@# Both directions are asserted because neither alone is sufficient in the
+	@# general case: presence of the marker could in principle be produced by a
+	@# shell that stripped the byte without decrementing (it would print
+	@# `erasXe-ok-3m7`, no marker — but a strip-and-decrement-twice bug would
+	@# print `eraXe-...`), and absence of `erasX` could be produced by a shell
+	@# that dropped the whole line. Requiring both pins the position exactly.
+	@#
+	@# A `help`-based arm would have been VACUOUS: `help` is already fed at the
+	@# top of this same session, so its output is in the log either way. The
+	@# marker exists only in the ERASED form.
+	@grep -qaF "erase-ok-3m7" build/shell_serial.log || { echo "[shell] FAIL: backspace not honoured — erased form never ran (DDR-1039)"; tail -30 build/shell_serial.log; exit 1; }
+	@if grep -qaF "erasX" build/shell_serial.log; then echo "[shell] FAIL: the erase byte was stored in the command buffer (DDR-1039)"; tail -30 build/shell_serial.log; exit 1; fi
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
 	@bash tools/qemu_runner/scan_forbidden.sh build/shell_serial.log shell
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB), clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039), clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

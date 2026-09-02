@@ -9546,3 +9546,52 @@ return value are what made these recoverable.**
 Tree clean at `b785050`. Operator items 1-5 all complete; item 6 (Groups A-D)
 in progress — `SYS_MPROTECT` + `SYS_POLL` shipped, `SYS_FUTEX` blocked with a
 named dependency.
+
+## CHECKPOINT 2026-09-02 — DDR-1039 PRISM erase, IMPLEMENTED + gated + M1
+
+`user/prism.c` `readline()` appended every non-newline byte, so `0x7F`/`0x08`
+landed **in** the command buffer: a user who typed `hepl`, backspaced twice and
+typed `lp` sent `hepl\x7f\x7flp`, which matches no builtin. Invisible to all
+170 gates because every gate injects byte-perfect lines.
+
+Fixed: both `0x7F` (DEL) and `0x08` (BS) decrement `n` when `n > 0`, and are
+never stored. **No echo** — PRISM shares COM1 with the kernel, so echoing typed
+input would put it into the serial log 170 gates assert on, and without termios
+the host terminal's own echo would double it (DDR-1039 §2).
+
+**Gate:** an arm on `smoke-shell`, not a new gate. The fed line is
+`echo erasX<0x7F>e-ok-3m7`; the erased form prints `erase-ok-3m7`, a marker that
+appears nowhere else in the suite, and the literal form contains `erasX`. Both
+directions asserted.
+
+**The DDR's own first arm was vacuous and §3.1 records it:** it proposed feeding
+`hepl\x7f\x7flp` and asserting the `help` output, but `smoke-shell` already
+feeds a plain `help` earlier in the same session — that assertion passes on a
+shell with no erase handling at all. Ninth dead-arm instance; the first caught in
+design text before any code was written.
+
+**Measured**
+
+| build | `kernel.bin` | `smoke-shell` |
+|---|---|---|
+| clean | `8212d26ef58544b0` | rc=0, **PASS 5/5** |
+| M1 (`if (0)`) | `a411e1b1b765e15e` | rc=2, `FAIL: backspace not honoured` |
+
+M1's log carries the defect verbatim: `prism> erasX^?e-ok-3m7`. The clean tree
+rebuilt bit-for-bit to `8212d26ef58544b0` after the revert.
+
+Hygiene on `8212d26ef58544b0`: `hygiene_check.sh` ALL THREE PASSED;
+`smoke-blkmq` rc=0, `smoke-rqstress-liveness` rc=0, `smoke-blk-integrity` rc=0.
+`kernel.bin` 1,171,850 B / 1,572,864 B.
+
+**Recorded uncovered:** the column-zero guard. From outside the shell, erasing
+nothing and erasing at column zero are identical.
+
+**Also in this commit:** the DDR free range advanced **1034 -> 1040** in BOTH
+places §INV.4 warns about — 1034..1039 were all allocated while both lines still
+read `DDR-1034+`, which is the collision hazard that invariant exists to prevent.
+
+**Next:** operator item 6 remainder (Groups A-D). Genuinely unbuilt: full POSIX
+`sigaction`, `io_uring` `OP_FSYNC`/`OP_OPENAT`, file-backed `mmap` + `msync`,
+pthreads / `clone(CLONE_VM)`, dynamic linking, PRISM job control, `prism-ls`.
+File-backed mmap and pthreads each unblock `SYS_FUTEX` (DDR-1038).

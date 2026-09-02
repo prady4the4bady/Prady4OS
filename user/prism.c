@@ -102,6 +102,28 @@ static int readline(char *buf, int max) {
             buf[n] = 0;
             return n;
         }
+        /* DDR-1039: ERASE. 0x7F (DEL) and 0x08 (BS) both arrive from real
+         * terminals depending on the emulator, so both are honoured. Before
+         * this, every byte was appended verbatim — a backspace landed IN the
+         * command, so hepl<BS><BS>lp parsed as hepl\x7f\x7flp and matched no
+         * builtin. Invisible to the suite (every gate injects byte-perfect
+         * lines and none has ever typed a typo) and visible to a human on the
+         * first mistake.
+         *
+         * At column zero this does nothing: n must not underflow, and there is
+         * nothing of the user's to erase — the prompt is not theirs to delete.
+         * That guard is UNCOVERED by the gate and DDR-1039 §4 says so: from
+         * outside the shell, erasing at column zero and erasing nothing look
+         * identical.
+         *
+         * No echo is emitted. sys_io.c:301 states there is no line discipline
+         * in the console read either, and adding echo would put typed input
+         * into the serial log that every gate asserts on (DDR-1039 §2). */
+        if (c == 0x7F || c == 0x08) {
+            if (n > 0)
+                n--;
+            continue;
+        }
         if (n < max - 1)
             buf[n++] = c;
     }
