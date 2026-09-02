@@ -8,6 +8,18 @@
  * (delays ride g_ticks). Safe no-op when only one CPU is listed. */
 void smp_start_aps(void);
 
+/* DDR-1040: CPUs currently running (1 before smp_start_aps). Read by the
+ * expected-fault latch, which is single-CPU by precondition. */
+unsigned smp_online(void);
+
+/* DDR-1040: set CR4.SMEP on THIS CPU when CPUID reports it. Per-CPU state, so
+ * every AP calls it too (smp_ap_entry, beside cpu_enable_sse). Returns a
+ * two-bit report: bit 0 = CPUID says the CPU has SMEP, bit 1 = CR4.SMEP is now
+ * set. The default QEMU CPU model (qemu64) reports NEITHER — measured, DDR-1040
+ * §2 — so 0 is the correct and expected answer on 169 of the 170 gates, and the
+ * gate that exercises the feature pins its own -cpu. */
+unsigned cpu_enable_smep(void);
+
 /* AP work dispatch (DDR-SMP-3c-alpha): post a kernel function to an idle AP's
  * single-slot mailbox and wake it via IPI; poll completion with smp_job_done. */
 int smp_run_on(uint32_t cpu_idx, void (*fn)(void));

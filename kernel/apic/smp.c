@@ -37,6 +37,12 @@ extern void gdt_init(void);   /* arch/x86_64/cpu.asm — load the shared gdt64 *
 extern const uint8_t ap_tramp_start[], ap_tramp_end[];
 
 static volatile uint32_t g_online = 1;      /* the BSP */
+
+/* DDR-1040: how many CPUs are running. The fault latch refuses to arm unless
+ * this is 1 — a latch armed while an AP is live could swallow that AP's fault
+ * instead of the probe's, and a swallowed fault resumes at an address that
+ * means nothing to the CPU that took it. */
+unsigned smp_online(void) { return (unsigned)g_online; }
 /* DDR-963 §5: the private announce lock is gone; these sites now take the
  * shared console line lock from console.h, so an [smp] announce can no longer
  * be spliced by a printer that ACQUIRES that lock (the §3 partial case).
@@ -62,6 +68,43 @@ static void delay_200us(void) {
 
 /* C entry for a freshly long-moded AP (jumped to from the trampoline with its
  * cpu index in RDI and a private stack). Announce, mark online, park. */
+
+/* DDR-1040: SMEP. CR4 bit 20 makes a ring-0 INSTRUCTION FETCH through a page
+ * whose translation has U/S = user fault — the mitigation for the oldest
+ * kernel-exploit primitive there is: corrupt a function pointer, aim it at a
+ * page the attacker already owns in their own address space, and the kernel
+ * executes it with full privilege. Nothing else here prevents that;
+ * vmm_protect_kernel (DDR-757) audits the kernel's OWN PTEs and says nothing
+ * about user ones.
+ *
+ * Safe by construction in this tree (DDR-1040 §3): stage2.asm builds the low
+ * identity map with 0x83 and the higher half with 0x3 — U=0 at every level —
+ * and VMM_USER_MIN >> 39 == 1, so every user mapping lives in PML4 slot 1,
+ * disjoint from the identity map (slot 0) and the kernel (slot 511). No address
+ * the kernel executes from can have U=1.
+ *
+ * CR4 is PER-CPU, so this runs on the BSP and again on every AP. Guarded on
+ * CPUID: writing a reserved CR4 bit #GPs, and the default QEMU model does not
+ * have SMEP. */
+unsigned cpu_enable_smep(void) {
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                             : "a"(7), "c"(0));
+    unsigned have = (b & (1u << 7)) != 0;      /* CPUID.(7,0):EBX.SMEP */
+    if (!have)
+        return 0;                              /* bit 0 clear, bit 1 clear */
+
+    uint64_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ull << 20);                       /* CR4.SMEP */
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
+
+    /* Read it BACK. "I wrote the bit" and "the bit is set" are different
+     * claims, and the gate asserts the second one. */
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    return 1u | ((cr4 & (1ull << 20)) ? 2u : 0u);
+}
+
 void smp_ap_entry(uint32_t idx);
 void smp_ap_entry(uint32_t idx) {
     /* DDR-SMP-3c-cap-1 D3: leave the 3-entry trampoline GDT for the shared
@@ -128,6 +171,7 @@ void smp_ap_entry(uint32_t idx) {
      * musl uses XMM; #UD without), EFER.NXE (W^X NX pages fault RSVD without),
      * and the SYSCALL MSRs (EFER.SCE + STAR/LSTAR/SFMASK; #UD without). */
     cpu_enable_sse();
+    cpu_enable_smep();      /* DDR-1040: CR4 is per-CPU; the BSP set its own in kmain */
     vmm_enable_nxe_ap();
     syscall_init_ap();
     sched_ap_enter();

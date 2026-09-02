@@ -9595,3 +9595,48 @@ read `DDR-1034+`, which is the collision hazard that invariant exists to prevent
 `sigaction`, `io_uring` `OP_FSYNC`/`OP_OPENAT`, file-backed `mmap` + `msync`,
 pthreads / `clone(CLONE_VM)`, dynamic linking, PRISM job control, `prism-ls`.
 File-backed mmap and pthreads each unblock `SYS_FUTEX` (DDR-1038).
+
+## CHECKPOINT 2026-09-02 — DDR-1040 SMEP, IMPLEMENTED + gated + M1/M2/M3
+
+Group A's `SMEP / SMAP` row was genuinely unbuilt (zero `SMEP`/`SMAP`/`stac`/
+`clac` in `kernel/`). **SMEP is now built and gated. SMAP is not — DDR-1041.**
+
+**The vacuity trap was measured before any code was written.** The TCG default
+`qemu64` reports `smep=false` *and* `smap=false` (QMP
+`query-cpu-model-expansion`), so a correct CPUID-guarded implementation is a
+permanent no-op on the CPU all 170 gates run on. `smoke-smep` therefore pins
+`-cpu qemu64,+smep`, and arm E re-boots on the default model to assert the no-op
+path. Both boots sequential, never concurrent.
+
+**Enablement and enforcement are different claims.** A ring-0 `#PF` is fatal here
+(`idt.c` has no fixup table), so without new machinery the only assertable claim
+would be a CR4 readback — decoration. This ships the **one-shot expected-fault
+latch** (`kernel/fault_expect.h`): one-shot, RIP-windowed, single-CPU by
+*enforced* precondition (it refuses to arm with IF set or an AP online), in BSS.
+The probe `jmp`s rather than `call`s, because the SMEP violation is the
+instruction fetch **at the target**, so the faulting RIP is `UVA_X` itself.
+
+**Measured** — clean kernel `6e76c5d7fc35d6f7`, 1,175,946 B:
+
+| | mutation | kernel.bin | result |
+|---|---|---|---|
+| M1 | CR4 bit never set | `8f7d05860deaefc6` | rc=2, arm A (and B would fail) |
+| M2 | probe page not `VMM_USER` | `2d622ac7ca93295b` | rc=2, **arm B alone** |
+| M3 | RIP-window check removed | `4a674c4e973b15db` | **rc=0 — passes everything** |
+
+M2 failing B alone is what proves the arms are independent. M3 makes the RIP
+window **measured-uncovered**, not assumed-covered.
+
+Regression on the clean kernel: `hygiene_check.sh` ALL THREE PASSED;
+`smoke-shell`, `smoke-blkmq`, `smoke-rqstress-liveness`, `smoke-blk-integrity`,
+`smoke-uaccess`, `smoke-wxkernel`, `smoke-mitigations`, `smoke-smpuser` all rc=0.
+Gate count **167 -> 171** (re-measured, not incremented). DDR free range **1041+**.
+
+**Two corrections carried:** arm B's first form used a bare `$` anchor and failed
+on a *correct* kernel (the console prints CRLF); and `smoke-wx`, the gate name the
+Group A row carried, does not exist — the real one is `smoke-wxkernel`.
+
+**Next: DDR-1041 (SMAP).** The method is fixed and it is not a grep: enable SMAP
+with no `stac` anywhere, and every unshielded kernel dereference of a user page
+faults and names its own RIP. That enumerates the sites exactly. The latch built
+here is what makes the experiment survivable.

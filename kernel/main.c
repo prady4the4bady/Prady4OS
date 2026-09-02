@@ -33,6 +33,7 @@
 #include "pdrive.h"        /* DDR-890: PRADYOS Drive workspace FS */
 #include "pstate.h"        /* DDR-892: CPU frequency scaling */
 #include "smp.h"
+#include "fault_expect.h"   /* DDR-1040: the one-shot expected-fault latch */
 #include "percpu.h"
 #include "pcie.h"
 #include "blk.h"
@@ -3190,6 +3191,112 @@ static void uaccess_selftest(void) {
     vmm_destroy_address_space(as);   /* frees the AS + both data frames (leaf pages) */
 }
 
+
+/* DDR-1040: SMEP. Two claims, and they are NOT the same claim:
+ *   1. the bit is set      -> printed as PRADYOS_SMEP cpuid= cr4=
+ *   2. the CPU ENFORCES it -> proved by fetching an instruction from a user
+ *                             page at ring 0
+ * A gate asserting only (1) would be decoration. Making (2) observable needs
+ * the expected-fault latch (kernel/fault_expect.h), because a ring-0 #PF is
+ * otherwise fatal here.
+ *
+ * WHY jmp AND NOT call. The SMEP violation is the INSTRUCTION FETCH at the
+ * target, so the faulting RIP is UVA_X itself, not the transfer instruction —
+ * a `call` would already have pushed its return address before faulting, and
+ * resuming past it would leave RSP 8 bytes low. `jmp` pushes nothing, so both
+ * outcomes leave the stack identical:
+ *   SMEP on  -> fault at UVA_X, latch resumes at smep_call_hi (a `ret`)
+ *   SMEP off -> the user page's own 0xC3 executes and returns
+ * and both land back in this function through the same `ret`.
+ *
+ * The transfer lives in its own asm block rather than inline-with-labels so the
+ * armed window is exact and no compiler scheduling decision can move the
+ * instruction out from between two C labels.
+ *
+ * Runs beside uaccess_selftest, well before smp_start_aps(), so exactly one CPU
+ * exists — the latch's precondition, which it refuses to arm without. */
+__asm__(".pushsection .text\n"
+        ".globl smep_probe_jmp\n"
+        ".type  smep_probe_jmp,@function\n"
+        "smep_probe_jmp:\n"
+        "  jmp *%rdi\n"                 /* SysV: first arg in RDI            */
+        ".globl smep_call_hi\n"
+        "smep_call_hi:\n"
+        "  ret\n"                       /* the latch's resume point          */
+        ".size  smep_probe_jmp,.-smep_probe_jmp\n"
+        ".popsection\n");
+void smep_probe_jmp(uint64_t target);
+extern char smep_call_hi[];
+
+static void smep_selftest(void) {
+    unsigned rep = cpu_enable_smep();
+    kputs("PRADYOS_SMEP cpuid=");
+    kputdec(rep & 1u);
+    kputs(" cr4=");
+    kputdec((rep >> 1) & 1u);
+    kputs("\r\n");
+
+    uint64_t save_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(save_cr3));
+
+    uint64_t as = vmm_new_address_space();
+    if (!as) { kputs("PRADYOS_SMEP_SKIP no-as\r\n"); return; }
+    void *fx = ptnode_alloc();
+    if (!fx) { kputs("PRADYOS_SMEP_SKIP no-frame\r\n"); vmm_destroy_address_space(as); return; }
+
+    /* 0xC3 = ret, seeded through the IDENTITY view, whose translation has U=0 —
+     * which is why seeding it is not itself an SMAP question (DDR-1040 §8). */
+    *(volatile unsigned char *)fx = 0xC3;
+
+    const uint64_t UVA_X = VMM_USER_MIN + 0x2000;
+    /* The one line that differs from every other mapping in this tree:
+     * VMM_USER and NOT VMM_NX, i.e. present + user + executable. M2 drops the
+     * VMM_USER, and arm B must then fail — that is what proves the arm measures
+     * user-ness rather than "some fault happened". */
+    vmm_map_in(as, UVA_X, (uint64_t)(uintptr_t)fx, VMM_USER);
+
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    __asm__ volatile("mov %0, %%cr3" :: "r"(as) : "memory");
+
+    uint32_t vec = 0, err = 0;
+    int fired = 0;
+    /* Window = the single byte we are about to fetch. Tighter than a code range
+     * and exactly the event under test: a ring-0 fault anywhere else still
+     * panics, which is the whole point of having a window. */
+    int armed = fault_expect_arm(UVA_X, UVA_X + 1,
+                                 (uint64_t)(uintptr_t)smep_call_hi);
+    if (armed) {
+        smep_probe_jmp(UVA_X);
+        fired = fault_expect_taken(&vec, &err);
+    }
+
+    __asm__ volatile("mov %0, %%cr3" :: "r"(save_cr3) : "memory");
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+
+    if (!armed) {
+        kputs("PRADYOS_SMEP_SKIP not-armed\r\n");
+    } else if (fired) {
+        kputs("PRADYOS_SMEP_ENFORCED vec=");
+        kputdec(vec);
+        kputs(" err=");
+        kputhex(err);           /* kputhex emits its own 0x (INV.9) */
+        kputs("\r\n");
+    } else {
+        /* The user page's `ret` RAN. Either SMEP is absent (the default CPU
+         * model), or the bit was never set (M1), or the page was not user (M2).
+         * All three are real outcomes and arm A separates the first from the
+         * other two. */
+        kputs("PRADYOS_SMEP_EXECUTED\r\n");
+    }
+    /* Printed AFTER the fault. "Enforced" and "died at exactly that instruction"
+     * produce the same lines above; only a witness printed afterwards separates
+     * them, and this is it. */
+    kputs("PRADYOS_SMEP_ALIVE\r\n");
+
+    vmm_destroy_address_space(as);
+}
+
 static void vmm_test(void) {
     const uint64_t va = 0xFFFF800000000000ull;   /* unused PML4 slot (256) */
     uint64_t pg = pmm_alloc_page();
@@ -3393,6 +3500,7 @@ void kmain(struct boot_info *bi) {
     vmm_test();
     cap_test();
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
+    smep_selftest();                     /* DDR-1040: SMEP enable + ENFORCEMENT proof */
 
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
     metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */

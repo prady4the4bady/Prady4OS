@@ -246,7 +246,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -1729,6 +1729,52 @@ smoke-shell: $(IMG) fat-image sfs-image
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a
 # wild pointer (-> EFAULT), a read-only page write (-> EFAULT, W^X), and a valid
 # string. All four lines must appear AND the kernel must survive the two faults.
+# DDR-1040 SMEP gate. THIS GATE PINS ITS OWN CPU MODEL AND THAT IS THE WHOLE
+# POINT: the TCG default (qemu64) reports smep=false -- measured through QMP
+# query-cpu-model-expansion before a line of the feature was written, DDR-1040
+# §2 -- so on the model every other gate runs, the CPUID guard correctly takes
+# the no-op path and the feature never executes. A "SMEP enabled" assertion on
+# the default model would have been unreachable-passing forever.
+#
+# Four arms, and arm C is the one this design would be wrong without.
+smoke-smep: $(IMG) fat-image sfs-image
+	@echo "[smep] booting with -cpu qemu64,+smep (the default model has no SMEP -- DDR-1040 §2)..."
+	@rm -f build/smep_serial.log
+	@KEEP_SERIAL=1 SERIAL_LOG=build/smep_serial.log QEMU_CPU="qemu64,+smep" TIMEOUT_S=120 \
+	    EXTRA_SENTINEL="PRADYOS_SMEP_ALIVE" bash tools/qemu_runner/boot_test.sh $(IMG)
+	@# A: the feature was DETECTED and the bit is actually SET. cr4= is read back
+	@#    from CR4 after the write, not inferred from having written it.
+	@grep -aq '^PRADYOS_SMEP cpuid=1 cr4=1' build/smep_serial.log || { echo "[smep] FAIL: SMEP not detected/enabled on a +smep CPU (DDR-1040 arm A)"; grep -a 'PRADYOS_SMEP' build/smep_serial.log || echo '(no PRADYOS_SMEP lines at all)'; exit 1; }
+	@# B: the CPU actually REFUSED the fetch, with the SMEP error code --
+	@#    bit 0 P=1 (the page IS present; a plain unmapped page would read 0x10)
+	@#    and bit 4 I/D=1 (instruction fetch), U/S=0 (supervisor access).
+	@#    The code is asserted, not just the presence of a fault: "something
+	@#    faulted" and "SMEP faulted" are different claims.
+	@#    [[:space:]]*$$ not $$: the kernel prints CRLF, so a bare end-anchor
+	@#    never matches — measured, this arm failed on a line that was correct.
+	@grep -aqE '^PRADYOS_SMEP_ENFORCED vec=14 err=0x0*11[[:space:]]*$$' build/smep_serial.log || { echo "[smep] FAIL: ring-0 fetch from a user page was NOT refused (DDR-1040 arm B)"; grep -aE 'PRADYOS_SMEP_(ENFORCED|EXECUTED|SKIP)' build/smep_serial.log || echo '(no outcome line at all)'; exit 1; }
+	@# C: the latch RESUMED. "Enforced" and "died at exactly that instruction"
+	@#    produce identical A and B lines; only a witness printed AFTERWARDS
+	@#    separates them, so position is the discriminator, not presence.
+	@sed -n '/^PRADYOS_SMEP_ENFORCED/,$$p' build/smep_serial.log | grep -aq '^PRADYOS_SMEP_ALIVE' || { echo "[smep] FAIL: no liveness witness AFTER the fault — the kernel may have died at it (DDR-1040 arm C)"; tail -30 build/smep_serial.log; exit 1; }
+	@# D: no collateral. If anything else in the boot executed a user page, SMEP
+	@#    would now fault on it for real, and these would catch it.
+	@bash tools/qemu_runner/scan_forbidden.sh build/smep_serial.log smep
+	@if grep -aq 'fexpect. refused' build/smep_serial.log; then echo "[smep] FAIL: the latch refused to arm — its precondition was violated (DDR-1040 §4)"; grep -a 'fexpect' build/smep_serial.log; exit 1; fi
+	@# E: THE NO-OP PATH, on the DEFAULT model, asserted rather than assumed. A
+	@#    build that set CR4.SMEP unconditionally would #GP on a CPU without the
+	@#    feature, or report cr4=1 beside cpuid=0; both are caught here. This is
+	@#    also the arm that keeps §2's measurement honest -- it states, in a
+	@#    gate, that the other 170 gates run on a CPU where SMEP does not exist.
+	@#    Sequential, never concurrent (§NON-NEGOTIABLE 12).
+	@echo "[smep] arm E: re-booting on the DEFAULT model (no SMEP) to assert the no-op path..."
+	@rm -f build/smep_default.log
+	@KEEP_SERIAL=1 SERIAL_LOG=build/smep_default.log TIMEOUT_S=120 \
+	    EXTRA_SENTINEL="PRADYOS_SMEP_ALIVE" bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -aq '^PRADYOS_SMEP cpuid=0 cr4=0' build/smep_default.log || { echo "[smep] FAIL: the default CPU model did not take the no-op path (DDR-1040 arm E)"; grep -a 'PRADYOS_SMEP' build/smep_default.log || echo '(no PRADYOS_SMEP lines at all)'; exit 1; }
+	@grep -aq '^PRADYOS_SMEP_EXECUTED' build/smep_default.log || { echo "[smep] FAIL: without SMEP the user page should have EXECUTED (DDR-1040 arm E)"; grep -aE 'PRADYOS_SMEP_(ENFORCED|EXECUTED|SKIP)' build/smep_default.log || echo '(no outcome line)'; exit 1; }
+	@echo "[smep] PASS — +smep: CPUID+CR4 set, ring-0 fetch of a user page refused (#PF err=0x11), latch resumed; default model: no-op path, page executed. Boot clean on both."
+
 smoke-uaccess: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)

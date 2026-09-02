@@ -19,6 +19,7 @@
 #include "signal.h"
 #include "ps2kbd.h"
 #include "lapic.h"
+#include "fault_expect.h"  /* DDR-1040: the one-shot expected-fault latch */
 #include <stdint.h>
 
 struct idt_entry {
@@ -495,6 +496,63 @@ static void timer_tick(struct regs *r) {
         signal_deliver(r);            /* to the ring-3 thread we're returning to */
 }
 
+/* ---- DDR-1040: the one-shot expected-fault latch ------------------------- *
+ * See kernel/fault_expect.h for why every limit here is deliberate. All state
+ * is static, hence BSS, hence zero — no initialiser is owed anywhere. */
+static volatile uint64_t g_fe_lo, g_fe_hi, g_fe_resume;
+static volatile uint32_t g_fe_armed, g_fe_hit, g_fe_vec, g_fe_err;
+
+unsigned smp_online(void);      /* kernel/apic/smp.c */
+
+int fault_expect_arm(uint64_t lo, uint64_t hi, uint64_t resume) {
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0" : "=r"(fl));
+    /* The three preconditions are ENFORCED, not documented. A latch armed with
+     * interrupts live, or with an AP running, could swallow a fault that is not
+     * the probe's — and a swallowed fault is worse than a panic, because the
+     * kernel then continues at a resume address that means nothing to it. */
+    if (fl & (1ull << 9)) {
+        kputs("[fexpect] refused: IF set\r\n");
+        return 0;
+    }
+    if (smp_online() != 1) {
+        kputs("[fexpect] refused: APs online\r\n");
+        return 0;
+    }
+    if (hi <= lo) {
+        kputs("[fexpect] refused: empty window\r\n");
+        return 0;
+    }
+    g_fe_lo = lo; g_fe_hi = hi; g_fe_resume = resume;
+    g_fe_hit = 0; g_fe_vec = 0; g_fe_err = 0;
+    __atomic_store_n(&g_fe_armed, 1, __ATOMIC_SEQ_CST);
+    return 1;
+}
+
+int fault_expect_taken(uint32_t *vec_out, uint32_t *err_out) {
+    __atomic_store_n(&g_fe_armed, 0, __ATOMIC_SEQ_CST);
+    if (vec_out) *vec_out = g_fe_vec;
+    if (err_out) *err_out = g_fe_err;
+    return (int)g_fe_hit;
+}
+
+/* Consulted from isr_dispatch BEFORE anything else looks at a CPL-0 fault.
+ * Returns 1 if this fault was expected and `r` has been rewritten to resume. */
+static int fault_expect_consume(struct regs *r) {
+    if (!__atomic_load_n(&g_fe_armed, __ATOMIC_SEQ_CST))
+        return 0;
+    if ((r->cs & 3) != 0)                      /* ring 3 has its own paths */
+        return 0;
+    if (r->rip < g_fe_lo || r->rip >= g_fe_hi) /* not the instruction we armed */
+        return 0;
+    g_fe_vec = (uint32_t)r->vector;
+    g_fe_err = (uint32_t)r->err_code;
+    g_fe_hit = 1;
+    __atomic_store_n(&g_fe_armed, 0, __ATOMIC_SEQ_CST);  /* one shot */
+    r->rip = g_fe_resume;
+    return 1;
+}
+
 void isr_dispatch(struct regs *r) {
     /* DDR-981: NMI (vector 2) as the AP-freeze probe. Only a CPU the BSP armed
      * consumes it; an unsolicited NMI still falls through to the panic path
@@ -605,6 +663,13 @@ void isr_dispatch(struct regs *r) {
         pic_eoi(r->vector);                     /* EOI after the handler */
         return;
     }
+
+    /* DDR-1040: an expected ring-0 fault resumes instead of panicking. Placed
+     * here — after every interrupt path has returned, before every fault path —
+     * so it can only ever affect a CPU exception, and only the one instruction
+     * a caller explicitly armed. */
+    if (r->vector < 32 && fault_expect_consume(r))
+        return;
 
     const char *name = (r->vector < 32) ? exc_name[r->vector] : "unknown";
 
