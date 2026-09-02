@@ -26,8 +26,23 @@ sock="$2"
 sentinel="${3:-PRADYOS_COMPOSITOR_OK}"
 expect="${4:-}"
 
-# Readiness: poll, never a fixed wait. 60s ceiling.
-for _ in $(seq 1 600); do
+# Readiness: poll, never a fixed wait.
+#
+# DDR-1036: the ceiling is a PARAMETER now, because 60 s is not enough for every
+# scenario. A gate whose sentinel fires only after a window has been created,
+# composited and then destroyed is waiting on the far side of the compositor's
+# ~28 s startup (DDR-1029), and 60 s put smoke-ghostclick's sentinel outside the
+# window entirely.
+#
+# NOTE WHAT THIS LOOP DOES ON EXPIRY, because it is not obvious and it cost a
+# debugging round: it FALLS THROUGH and injects anyway. A sentinel that never
+# appears therefore does not fail loudly — the injector proceeds and clicks
+# against whatever geometry happens to be in the log, which is exactly the
+# stale-target behaviour DDR-1036 exists to prevent. Left as-is rather than made
+# fatal: other gates may depend on the fall-through, and changing it days from a
+# release is a wider blast radius than this DDR is taking. Recorded, not fixed.
+ready_iters=$(( ${READY_TIMEOUT_S:-60} * 10 ))
+for _ in $(seq 1 "$ready_iters"); do
     grep -q "$sentinel" "$log" 2>/dev/null && break
     sleep 0.1
 done
@@ -77,6 +92,9 @@ def cmd(obj):
 cmd({"execute": "qmp_capabilities"})
 
 
+gone_told = False   # DDR-1036: one refusal line per run, not per poll
+
+
 def resolve_geometry():
     """DDR-910: take the click target from what the compositor SAYS it drew.
 
@@ -111,7 +129,15 @@ def resolve_geometry():
         # one that never returns times out with the existing [inject] TIMEOUT
         # message instead of silently clicking empty space.
         if "PRADYOS_WM_GONE" in ln:
-            print("[inject] target gone title=%s — not clicking" % geom_title)
+            # BOUNDED: resolve_geometry is called from a 0.2 s poll loop and
+            # again before every click, so an unconditional print here would
+            # emit thousands of identical lines and slow the thing it reports on
+            # — DDR-941's rule. Printed once; the state is not transient, so one
+            # line is the whole story.
+            global gone_told
+            if not gone_told:
+                gone_told = True
+                print("[inject] target gone title=%s — not clicking" % geom_title)
             return False
         if geom_line not in ln:
             continue

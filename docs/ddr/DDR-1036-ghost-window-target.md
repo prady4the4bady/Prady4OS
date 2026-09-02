@@ -232,3 +232,62 @@ proceeding. Better still, do not have two QEMU-using jobs in flight at once.
 Both void readings were discarded rather than reported. A mutant result is only
 meaningful against a clean run taken under the same conditions — which is why
 the clean arm is in the table above and not assumed from an earlier session.
+
+## §9 — `smoke-ghostclick`: the parser half, and what building it turned up
+
+§5.1 recorded the parser's refusal branch as uncovered and named the gate that
+would cover it. Built as `smoke-ghostclick` (shard 9, strict; 169 gates).
+
+### §9.1 — Measured
+
+| build | `smoke-ghostclick` | ghost injector said |
+|---|---|---|
+| clean | **PASS** | `target gone title=ALPHA — not clicking`, then a clean `TIMEOUT` |
+| **M2** — parser ignores the `WM_GONE` record | **FAIL** at `Makefile:3312` | `geometry for ALPHA: close=4932,3887` (it resolved a dead window) |
+
+Serial ordering on the passing run: `PRADYOS_WM_GEOM …title=ALPHA` at line 437,
+`PRADYOS_WM_GONE id=0 title=ALPHA` at 459 — newest-wins reaches the GONE first.
+The closer injector reports `observed 'PRADYOS_WM_CLOSE id=0 owner=1' after 6
+click(s)`, so the ghost is created by a real close, not by teardown.
+
+With M1 (DDR-1036 §8.1) both halves are now covered: the compositor's record and
+the parser's refusal, each with a mutant that lands on its own gate.
+
+### §9.2 — The gate needed TWO injectors, and the first draft could never pass
+
+**In this scenario ALPHA becomes a ghost BECAUSE an injector clicks its close
+box.** The first draft had only the waiting injector, so nothing ever closed
+ALPHA and the sentinel could not fire: *the event that creates the ghost is the
+click the gate is about to refuse to make.* ALPHA did eventually disappear — at
+line 486 of a 494-line log, during end-of-boot teardown — which is exactly why
+this read as a timing problem through two rounds of plausible, wrong fixes.
+
+Read `smoke-surfclose`'s recipe for *what makes the window close* before writing
+a gate that depends on it closing.
+
+### §9.3 — Two harness defects found on the way, one fixed and one deliberately not
+
+**(a) An assertion pattern that cannot match.** The compositor prints
+`PRADYOS_WM_GONE id=0 title=ALPHA`; the first assertion was
+`PRADYOS_WM_GONE title=ALPHA` — the two halves concatenated with the `id=` field
+between them dropped. The `smoke-surfclose` arm happened to use
+`PRADYOS_WM_GONE .*title=ALPHA` and was fine; this gate had the flaw twice, in
+the assertion *and* in the readiness sentinel. Same shape as DDR-1013's drifted
+probe constant: **nothing cross-checks an assertion string against the format
+actually emitted.**
+
+**(b) `mouse_inject.sh`'s readiness loop FALLS THROUGH SILENTLY.** It polled for
+60 s and then injected anyway, so a sentinel that never appears does not fail —
+the injector proceeds and clicks against whatever geometry is in the log. That
+is the stale-target behaviour this DDR exists to prevent, sitting in the harness
+the whole time, and it is what made the first two runs confusing.
+
+- **Fixed:** the ceiling is now `READY_TIMEOUT_S` (default 60, unchanged for the
+  seven existing callers; this gate uses its own value).
+- **NOT fixed, deliberately:** the fall-through itself. Making an expired
+  sentinel fatal is the right long-term shape, but the other gates may depend on
+  proceeding, and changing that days from a release is a wider blast radius than
+  this DDR is taking. **Recorded as a residual, not silently carried.**
+
+`smoke-wmclose` was re-run green after the harness change, since the default
+path is shared by seven gates.

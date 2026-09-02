@@ -303,6 +303,21 @@ polls still coalesce, and a release edge that ends between polls is still lost.
 Fixing that needs an event queue, not a latch. `SYS_MOUSE_POLL` exposes current
 state by design (DDR-941).
 
+### 4.7b — `mouse_inject.sh`'s readiness sentinel falls through silently
+
+Found while building `smoke-ghostclick` (DDR-1036 §9.3b). The injector polls for
+its readiness sentinel and, on expiry, **injects anyway** — so a sentinel that
+never appears does not fail the gate; the injector proceeds and clicks against
+whatever geometry happens to be in the log. A gate whose readiness condition
+silently never held still reports a pass or a normal-looking failure.
+
+The ceiling is now a parameter (`READY_TIMEOUT_S`, default 60 — unchanged for
+the seven existing callers). **The fall-through is deliberately unchanged:**
+making an expired sentinel fatal is the right shape, but the other gates may
+depend on proceeding and changing that days from a release is a wider blast
+radius than the DDR that found it should take. Post-1.0, and it needs each of
+the seven callers checked rather than a blanket change.
+
 ### 4.8 — `mouse_inject.sh` cannot tell a live window from a ghost
 
 The serial log is append-only, so `resolve_geometry` still resolves the last

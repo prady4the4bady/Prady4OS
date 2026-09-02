@@ -244,7 +244,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-horizon smoke-ctrlaltt smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -3276,6 +3276,42 @@ smoke-surfclose: $(IMG) fat-image sfs-image
 	@# so the parser's refusal path is still unexercised.
 	@grep -aq "PRADYOS_WM_GONE .*title=ALPHA" build/surfclose.log || { 	    echo "[surfclose] FAIL — no PRADYOS_WM_GONE for ALPHA (DDR-1036)"; 	    grep -a "PRADYOS_WM_GONE" build/surfclose.log || echo "(no WM_GONE lines at all)"; exit 1; }
 	@echo "[surfclose] PASS — ALPHA saved then self-closed; BETA was forced at the deadline; WM_GONE published"
+
+# DDR-1036 §5.1 — the arm smoke-surfclose CANNOT provide.
+#
+# surfclose covers the compositor half (it asserts PRADYOS_WM_GONE is
+# published). It cannot cover the PARSER half, because its injector targets
+# ALPHA while ALPHA is still there — every existing pointer gate is built to
+# click a window that exists, which is exactly why DDR-1036 §5 was wrong to
+# claim an existing gate already covered this.
+#
+# The scenario is made deterministic by the readiness sentinel rather than by
+# timing: the injector's third argument is what it waits for before resolving,
+# and here that is `PRADYOS_WM_GONE id=0 title=ALPHA` — the line the compositor
+# actually prints, id field included: the injector does a LITERAL substring
+# match, so a sentinel with the id elided never fires. That exact mistake made
+# the first run of this gate fail, which is the gate working. So it starts at the instant
+# ALPHA is *confirmed gone*. Its very first resolve must therefore hit a ghost.
+# No sleeps, no grace window, no dependence on how fast the compositor is
+# (DDR-1029 measured that at ~28 s, which is why a timing-based version of this
+# gate would be a coin flip).
+#
+# ASSERTED ON THE INJECTOR'S OWN OUTPUT FILE, captured explicitly. The refusal
+# is printed by mouse_inject.sh to stdout, NOT to the serial log — and grepping
+# the wrong file is how DDR-1023, and DDR-1036 §5.1, each recorded a vacuous
+# measurement. The serial-log assertion below is separate and checks that the
+# scenario actually happened.
+smoke-ghostclick: $(IMG) fat-image sfs-image
+	@echo "[ghostclick] ghost-target gate: injector starts AFTER ALPHA is gone; it must refuse to click..."
+	@rm -f build/ghostclick.log build/ghostclick.inject.log build/ghostclick.close.log /tmp/pghost.sock
+	@# TWO injectors, sequential, and the first is not optional. The first draft of this gate had only the ghost injector and could never have worked: in this scenario ALPHA becomes a ghost BECAUSE an injector clicks its close box, so with only the waiting injector nothing ever closed ALPHA and the sentinel could not fire. The thing that creates the ghost is the click the gate is about to refuse to make.
+	@( GEOM_TITLE=ALPHA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/ghostclick.log /tmp/pghost.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=0 owner=1" > build/ghostclick.close.log 2>&1; GEOM_TITLE=ALPHA GEOM_FIELD=close INJECT_TIMEOUT_S=25 READY_TIMEOUT_S=60 bash tools/qemu_runner/mouse_inject.sh build/ghostclick.log /tmp/pghost.sock "PRADYOS_WM_GONE id=0 title=ALPHA" > build/ghostclick.inject.log 2>&1 ) &
+	@timeout 180 qemu-system-x86_64 -machine q35 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 	    -device virtio-gpu-pci -device virtio-tablet-pci 	    -qmp unix:/tmp/pghost.sock,server,nowait 	    -serial file:build/ghostclick.log -display none -no-reboot || true
+	@wait
+	@grep -aq "PRADYOS_WM_GONE .*title=ALPHA" build/ghostclick.log || { 	    echo "[ghostclick] FAIL — the scenario never happened: no WM_GONE for ALPHA"; 	    grep -a "PRADYOS_WM_GONE" build/ghostclick.log || echo "(no WM_GONE lines at all)"; exit 1; }
+	@grep -aq "target gone title=ALPHA" build/ghostclick.inject.log || { 	    echo "[ghostclick] FAIL — injector did NOT refuse a ghost target (DDR-1036 parser half)"; 	    echo "--- injector output ---"; cat build/ghostclick.inject.log; exit 1; }
+	@grep -aq "geometry for ALPHA" build/ghostclick.inject.log && { 	    echo "[ghostclick] FAIL — injector RESOLVED a dead window and would have clicked it"; 	    echo "--- injector output ---"; cat build/ghostclick.inject.log; exit 1; } || true
+	@echo "[ghostclick] PASS — ALPHA gone, injector refused, no geometry resolved for a ghost"
 
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
