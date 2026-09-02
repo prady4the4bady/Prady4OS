@@ -9693,3 +9693,54 @@ Regression on the clean kernel: `hygiene_check.sh` ALL THREE PASSED;
 **Group A remaining:** I/O APIC migration, `#MC` handler, KASLR, kernel W^X
 identity-alias removal, `lock_stat`. Then Groups B–D per operator item 6.
 
+## CHECKPOINT 2026-09-02 — DDR-1042: `smoke-resizeall` failed arm e on arm w's record
+
+CI run 33623855907, shard 9, tip `87321b0`. **The compositor was correct.**
+
+Arm e had succeeded — `edge=8 w0=64 -> w=157`, origin held, four lines earlier in
+the same capture. The record it was failed on is a *second* `edge=8` commit from
+**arm w's abandoned round**: its west press was missed (the injector said so —
+`no RESIZE_TRACK within 20s`), but the pointer had already been dragged to
+`9288,8458`, BETA's **east** handle at that moment, so the compositor committed a
+legitimate east resize `157 -> 150`. The retry then did arm w correctly.
+
+**Defect:** a `RESIZE_FIX` line does not say which arm produced it — the arm is
+inferred from the edge bitmask — and the checker required every clause of every
+same-edge record. Its docstring's reasoning ("a repeated drag is a second
+independent observation") is true for a repeat of the *same* arm and false across
+arms. This is worse than a flake: it makes a specific, plausible, false
+accusation against a correct subsystem, with a real log line behind it.
+
+**Fix:** `check()` was two jobs under one name. Split into `invariant()` — the
+fixed edge held, DDR-997's real property, what M1/M2 break, **must hold for every
+record** — and `liveness()` — the injector performed the drag it intended, a
+property of the harness, **must hold for at least one**. Output now prints
+`N live of M observation(s)`.
+
+**Measured without QEMU.** The 17 FIX/REQ/GEOM lines were lifted verbatim from the
+CI job log into a fixture, so the regression test *is* the failing artefact.
+
+| fixture | old | new |
+|---|---|---|
+| `resize_crossarm_pass.log` (real CI capture) | rc=1 | **rc=0** |
+| `resize_m1_w.log` | rc=1 | rc=1 |
+| `resize_m2_e.log` | rc=1 | rc=1 |
+| `resize_dead_e.log` | rc=1 | rc=1 |
+
+The three negative fixtures are the load-bearing half: without them, "made the
+failure go away" (drop the `w > w0` clause) and "fixed the checker" are
+indistinguishable. `make smoke-resizeall` rc=0 locally, all four arms.
+
+`ci-resizecheck-selftest` is wired into `tools/ci/hygiene_check.sh` (**ALL FOUR**
+now), per that file's own rule that a list of names drifts and the script cannot.
+
+**Attribution NOT established and not claimed.** The checker defect predates
+`87321b0` and this gate has failed on shard 9 before — but DDR-1040 is not
+literally zero perturbation on the CI CPU model, since `smep_selftest` still
+builds and tears down an address space during a boot whose known failure mode is
+a missed press. Whether that made the retry more likely is unknown.
+
+**Left open:** the injector can still miss a press and still commits a real
+resize wherever the pointer landed; repair is in `resize_inject.sh`'s
+press-confirmation, larger than this failure justifies.
+
