@@ -199,7 +199,19 @@ jobs:
       - name: Boot-harness self-test (DDR-785 early exit)
         run: make smoke-selftest
 
+      # DDR-1043: QEMU_QMP_DIAG arms boot_test.sh's vCPU-dump watcher. It was
+      # implemented long ago and NOTHING IN THE REPO EVER SET IT, so the one
+      # instrument that can answer "the kernel printed a panic banner and then
+      # not one further byte for 100 s -- what was the CPU doing?" was switched
+      # off in CI, the only place that failure has ever been observed
+      # (DDR-1009 sec.2, DDR-1019, OPEN-1, OPEN-12).
+      #
+      # Free on healthy runs: the watcher fires 5 s before the hard timeout and
+      # ONLY when the run has not yet satisfied its own sentinels, i.e. only on
+      # a run that is already going to fail.
       - name: Run shard ${{ matrix.shard }}
+        env:
+          QEMU_QMP_DIAG: 1
         run: bash tools/ci/run_shard.sh ${{ matrix.shard }}
 
       # The same assertion after the fact. The first one proves the download was

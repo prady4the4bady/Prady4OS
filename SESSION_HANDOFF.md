@@ -9744,3 +9744,37 @@ a missed press. Whether that made the retry more likely is unknown.
 resize wherever the pointer landed; repair is in `resize_inject.sh`'s
 press-confirmation, larger than this failure justifies.
 
+## CHECKPOINT 2026-09-02 — DDR-1043: the silent-panic instrument was never armed
+
+CI run 33627355396, shard 7, tip `c656037`: `smoke-smp` printed
+`*** NEXUS KERNEL PANIC ***` after `SYSLSEEK OK` and then **nothing** to the
+timeout kill. Nothing truncated it — `boot_test.sh` doesn't kill mid-run on a
+forbidden pattern. **The signature is already on record:** DDR-1009 §2 captured
+it on `81274f4`, a Markdown-only commit, so it predates every code change here.
+
+**Defect 1 — the instrument was never armed.** `boot_test.sh` has long carried a
+DDR-887 QMP vCPU-dump watcher gated on `QEMU_QMP_DIAG`, and nothing in the repo
+ever set it. Armed in `ci.yml`, narrowed to fire only when
+`all_required_present()` is false — so it costs nothing on healthy runs and uses
+the same predicate as the early-exit loop.
+
+**Defect 2 — it would have been corrupted anyway.** The dump was appended to
+`$SERIAL_LOG`, which QEMU holds open via `-serial file:` and writes at its own
+offset **without `O_APPEND`** — so the guest overwrites it. Measured on the first
+armed run: header and the whole `info cpus` section gone, register text resuming
+mid-line (`00000000246`), `grep -c QMP` = 0 on a log that visibly contains
+registers. Fixed with a sidecar, printed from all four failure paths, and cleared
+beside the `SERIAL_LOG` truncation so a reused path can't print a stale dump.
+
+**Measured both directions:** never-appearing sentinel → intact dump, printed;
+healthy full-window gate (`smoke-blk-timeout`) → zero. `smoke-selftest` rc=0.
+
+**No fix to the panic path, no attribution of the shard-7 failure.** 3/3 local
+`smoke-smp` runs on the identical kernel are clean, which bounds nothing.
+
+**Residual:** the dump is ~280 s late for a panic at t≈60 s in a 340 s window. A
+halted CPU's RIP still names its halt site (how DDR-1019 resolved the shard-9
+`[apfreeze]`), but this is not a fault-time snapshot.
+
+DDR free range **1044+**.
+

@@ -35,6 +35,12 @@ SERIAL_LOG="${SERIAL_LOG:-$__bt_root/build/gatelogs/serial-$$.log}"
 # qemu truncates the file. Isolation must not be a side effect of cleanup: a
 # gate may never inherit an earlier run's serial content, whatever the path.
 : > "$SERIAL_LOG" 2>/dev/null || true
+# DDR-1043: the QMP sidecar must be cleared with the capture it belongs to.
+# It is not truncated by the line above, so a run reusing this SERIAL_LOG path
+# would print the PREVIOUS run's registers as if they were its own — a stale
+# artefact presented as current, which is the exact failure mode this whole
+# instrument exists to remove.
+rm -f "${SERIAL_LOG}.qmpdump" 2>/dev/null || true
 
 # DDR-777 / BUG-1 diagnostics: KEEP_SERIAL=1 preserves the serial capture.
 #
@@ -451,6 +457,7 @@ check_global_forbidden() {
     while IFS= read -r pat; do
         [ -z "$pat" ] && continue
         if grep -qF "$pat" "$SERIAL_LOG" 2>/dev/null; then
+            report_qmpdump
             echo "[smoke] FAIL — a probe reported '$pat' during this gate's boot."
             echo "[smoke] (DDR-791: forbidden in every gate, not only the one that owns it.)"
             echo "[smoke] --- matching lines ---"
@@ -478,6 +485,16 @@ EOF
 }
 
 # True once $SENTINEL and every non-empty EXTRA_SENTINEL line are in the log.
+# DDR-1043: surface the QMP vCPU dump in the JOB LOG, not only on the runner's
+# disk. A sidecar file nobody prints is a sidecar file nobody reads -- the CI
+# artefacts that mattered (DDR-1009 §2, DDR-1019) were read out of job logs.
+report_qmpdump() {
+    [ -s "${SERIAL_LOG}.qmpdump" ] || return 0
+    echo "[smoke] --- DDR-1043 QMP vCPU dump (taken ~5 s before the timeout kill) ---"
+    cat "${SERIAL_LOG}.qmpdump"
+    echo "[smoke] --- end QMP vCPU dump ---"
+}
+
 all_required_present() {
     grep -q "$SENTINEL" "$SERIAL_LOG" 2>/dev/null || return 1
     while IFS= read -r pat; do
@@ -608,13 +625,40 @@ trap on_interrupt INT TERM
 
 # DDR-887 watcher: fire ~5 s before the hard timeout, while QEMU is still alive,
 # and append the vCPU dump to the serial capture so it lands in the artifact.
+#
+# DDR-1043 — ARMED IN CI, AND NARROWED SO ARMING IS CHEAP.
+#
+# This watcher was fully implemented and NOTHING IN THE REPO EVER SET
+# QEMU_QMP_DIAG. So the one instrument that can answer "the kernel printed a
+# panic banner and then nothing for 100 s -- what was the CPU doing?" has been
+# switched off in CI, which is the only place that failure has ever been seen
+# (DDR-1009 §2, DDR-1019, OPEN-1, OPEN-12). Same shape as DDR-986/DDR-1024: a
+# diagnostic designed and then not reached, and DDR-1010's rule that an opt-in
+# instrument is guaranteed OFF where it matters.
+#
+# The narrowing is what makes arming it globally free: fire ONLY if the run has
+# not yet satisfied its own sentinels. A healthy full-window gate (~39 of them
+# declare FORBIDDEN_SENTINEL and so cannot early-exit) is already going to pass,
+# and appending a register dump to its log is pure noise. A run still missing a
+# sentinel 5 s before the kill is one that is about to fail, and its register
+# state is exactly what nobody has ever had. Predicate reuse is deliberate:
+# all_required_present() is the same function the early-exit loop consults, so
+# the two cannot disagree about what "done" means.
 qmp_watcher_pid=""
 if [ -n "${QEMU_QMP_DIAG:-}" ]; then
     (
         sleep "$(( TIMEOUT_S > 5 ? TIMEOUT_S - 5 : 1 ))"
-        if kill -0 "$qemu_pid" 2>/dev/null; then
-            python3 "$(dirname "$0")/qmp_cpudump.py" "$QMP_SOCK" "$SERIAL_LOG" \
-                >>"$SERIAL_LOG" 2>&1 || true
+        if kill -0 "$qemu_pid" 2>/dev/null && ! all_required_present; then
+            # DDR-1043: a SIDECAR, not $SERIAL_LOG. QEMU holds that file open
+            # through `-serial file:` and writes at its OWN tracked offset,
+            # without O_APPEND. Anything appended here is therefore overwritten
+            # by the guest's next serial output -- measured: a dump written into
+            # the serial log lost its header and its whole `info cpus` section,
+            # and the surviving register text began mid-line ("00000000246").
+            # The instrument would have produced a corrupted artefact on the
+            # first failure it was ever armed for.
+            python3 "$(dirname "$0")/qmp_cpudump.py" "$QMP_SOCK" "${SERIAL_LOG}.qmpdump" \
+                >>"${SERIAL_LOG}.qmpdump" 2>&1 || true
         fi
     ) &
     qmp_watcher_pid=$!
@@ -682,6 +726,7 @@ if ! check_global_forbidden; then
 fi
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
+    report_qmpdump
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"
     cat "$SERIAL_LOG"
     serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
@@ -693,6 +738,7 @@ while IFS= read -r pat; do
     [ -z "$pat" ] && continue
     extra_count=$((extra_count + 1))
     if ! grep -qF "$pat" "$SERIAL_LOG"; then
+        report_qmpdump
         echo "[smoke] FAIL — required pattern '$pat' not found. Serial output was:"
         cat "$SERIAL_LOG"
         serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
@@ -705,6 +751,7 @@ EOF
 while IFS= read -r pat; do
     [ -z "$pat" ] && continue
     if grep -qF "$pat" "$SERIAL_LOG"; then
+        report_qmpdump
         echo "[smoke] FAIL — forbidden pattern '$pat' appeared. Serial output was:"
         cat "$SERIAL_LOG"
         serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
