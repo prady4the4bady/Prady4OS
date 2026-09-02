@@ -318,7 +318,13 @@ Batch their DDRs in one pass first (§4.3), then implement.
       Plus DDR-1032b: PRISM's `run` passes its arguments through. Also fixed a
       latent build defect — `USER_ALL_SRCS` omitted `user/*.asm`, so editing any
       assembly probe rebuilt nothing.
-- [ ] PRISM readline / line discipline / echo
+- [ ] PRISM line discipline — **`readline()` ALREADY EXISTS** (`prism.c:92`), so
+      this row is narrower than its title. What exists: byte-at-a-time read,
+      `\r` stripped, terminate on `\n`. What does NOT: no backspace, no editing,
+      no history, no terminal echo control. **NAME COLLISION, and it is the
+      `SYS_POLL`/`SYS_POLL_RESULT` trap again:** the `echo` in this row's title
+      is *terminal echo*, but PRISM already has an `echo` BUILTIN (`prism.c:569`)
+      — a grep for "echo" finds the wrong thing and makes the row look done.
 - [ ] pipes, redirection, quoting, job control (`&`, `wait`, `fg`/`bg`), scripting
 - [x] `SYS_MPROTECT` — **DDR-1031** (NSI 97) + `vmm_protect_range`,
       `smoke-mprotect`, M1/M3. **Its `invlpg` is UNCOVERED and recorded as
@@ -339,8 +345,28 @@ Batch their DDRs in one pass first (§4.3), then implement.
       `MAP_SHARED` anonymous mmap** — both already in this queue. Build it after
       one of those, not before.
 - [ ] pthreads (`clone(CLONE_VM|CLONE_FILES|CLONE_THREAD)`)
-- [ ] 6-arg `sys_mmap` ABI, file-backed `mmap` + `msync`
+- [x] **6-arg `sys_mmap` ABI — ALREADY DONE, DDR-877.** `sys_mmap.c` takes the
+      real POSIX six-argument form; `fd` and `offset` are READ and honestly
+      REJECTED (`-ENOSYS` / `-EINVAL`) rather than silently discarded. The DDR's
+      own words: the 4-arg form was "worse than incomplete — a caller passing fd
+      and offset had them silently discarded and got anonymous zero pages back".
+      **Do NOT rebuild.** Only file-backed `mmap` + `msync` remain, below.
+- [ ] file-backed `mmap` + `msync` — genuinely unbuilt; `sys_mmap.c:83` refuses
+      non-anonymous and `MAP_SHARED`. **Also one of the two unblockers for
+      `SYS_FUTEX` (DDR-1038).**
 - [ ] dynamic linking (`ld.so`), full `io_uring`, full POSIX `sigaction`
+
+> **A MISSING GATE NAME IS NOT A MISSING FEATURE, and this queue lists gate
+> names.** Checked 2026-09-02: `smoke-mmap6` does not exist, yet the 6-arg mmap
+> ABI shipped in DDR-877; `smoke-readline` does not exist, yet `readline()` is at
+> `prism.c:92`. Two of the five false gaps found this session came from reading a
+> row title instead of grepping the tree. **Grep the implementation, not the
+> gate name, before starting any row here.**
+>
+> Verified genuinely unbuilt on the same pass: full POSIX `sigaction`
+> (`SA_RESTART`/`SA_SIGINFO`/`sigprocmask`/`sigaltstack`/`SIGCHLD` — zero
+> matches), and `io_uring` `OP_FSYNC`/`OP_OPENAT` (only `OP_READ`/`OP_WRITE`
+> exist, `sys_io_uring.c:24-25`).
 
 ### Group A / B / C — kernel, storage, net
 - [ ] I/O APIC migration (Group A + B#9 share this)
