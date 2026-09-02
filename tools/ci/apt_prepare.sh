@@ -65,13 +65,29 @@ fi
 # no candidate means the archives themselves are missing or stale, and failing
 # HERE names the cause instead of leaving the caller with a bare
 # "E: Unable to locate package".
+# DDR-1048: the output is captured ONCE into a variable and matched as a STRING.
+# It used to be two `apt-cache policy | grep -q` pipelines, and that was a RACE
+# that could fail CI on a package which resolves perfectly well:
+#
+#   grep -q exits at the FIRST match and closes the pipe, so apt-cache is killed
+#   by SIGPIPE and exits 141. This script runs under `set -o pipefail`, so the
+#   pipeline is NON-ZERO even though grep matched. The `!` branch then reads that
+#   as "no Candidate:" and marks the package missing. Measured on a real Ubuntu
+#   24.04 host: PIPESTATUS=(141 0) for clang on one run, for nasm and xorriso on
+#   another -- WHICH package loses the race varies, so it is an intermittent red.
+#
+# It was invisible to the stub selftest because the stubs emit a few bytes from a
+# shell function, so grep -q drains them before exiting and SIGPIPE never fires.
+# Only running against real apt showed it (DDR-1048).
 missing=""
 for p in "$@"; do
-    if apt-cache policy "$p" 2>/dev/null | grep -q 'Candidate: (none)'; then
-        missing="$missing $p"
-    elif ! apt-cache policy "$p" 2>/dev/null | grep -q 'Candidate:'; then
-        missing="$missing $p"
-    fi
+    pol="$(apt-cache policy "$p" 2>/dev/null)"
+    case "$pol" in
+        "")                  missing="$missing $p" ;;   # unknown: apt printed nothing
+        *"Candidate: (none)"*) missing="$missing $p" ;; # known, uninstallable
+        *"Candidate:"*)      : ;;                       # resolves
+        *)                   missing="$missing $p" ;;
+    esac
 done
 if [ -n "$missing" ]; then
     echo "[apt_prepare] FAIL: no candidate for:$missing" >&2

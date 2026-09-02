@@ -9888,3 +9888,180 @@ property of today's layout, not a guarantee.
 
 **Group A remaining:** I/O APIC migration, KASLR, `lock_stat`.
 
+
+---
+
+## CHECKPOINT 2026-09-02 — DDR-1047: spinlock contention accounting (`lock_stat`)
+
+The Group A `lock_stat` row, **narrowed on purpose**: it asks for hold-time *and*
+contention counts; this ships contention counts and **WAIT TIME**, and drops hold
+time.
+
+**Why the narrowing is the design, not a shortfall.** Contention and wait are
+observable *entirely in the slow path*, so an uncontended acquire pays **nothing**.
+Hold time needs an `rdtsc` **pair** on every acquisition of the kernel's hottest
+primitive. That is refused for a specific reason: **OPEN-2 is a timing-sensitive
+AP freeze**, and DDR-1010 recorded this exact hazard about its own probe — *"it
+adds work to the very syscall path where the race lives, so it may perturb what
+it measures."* **Opt-in is not the escape** (DDR-1010, confirmed literally by
+DDR-1043 for the QMP dump: an opt-in instrument is guaranteed OFF in CI, the only
+place OPEN-2 has appeared). And for the question the instrument exists to answer —
+*which lock is a wedged AP stuck on?* — wait time is the direct measurement
+anyway. **A frozen CPU is one that is WAITING.**
+
+Fast path unchanged: one test-and-set plus a branch, no more than the original
+loop. **Side table, not fields in `spinlock_t`** — that struct is one byte, is
+embedded in others (`sched.c:91`, `virtio_blk.c:66`), and `percpu.h`'s offsets are
+assembly-visible and static-asserted because `syscall_entry.asm` reads them. The
+table is lock-free by necessity (taking a lock to record lock statistics would
+recurse) and **re-checks a slot after a lost CAS**, or one lock occupies two slots
+and both counts are half the truth. BSS, so §NON-NEGOTIABLE 10 does not arise.
+
+Printed from **exactly one place** — the `[apfreeze]` path (`idt.c`), confirmed by
+disassembly — and **once per boot**: that loop runs per frozen CPU, so a 4-CPU
+freeze would otherwise print four copies of a table that is *global*, on the path
+where a log most needs to stay readable (DDR-1043).
+
+**M1 forced proof** — kernel `d9e97ff0069500e2`, one temporary line in the `[hb]`
+heartbeat, `-smp 4`, boot reached `t=5000`, `overflow=0`, 14 contended locks,
+addresses resolved against that same binary:
+
+| lock | hits | waitavg (cycles) | waitmax (cycles) |
+|---|---:|---:|---:|
+| `g_sched_lock` | 1,902,380 | 16,566 | 74,803,712 |
+| `g_rq+0x30` | 4,269 | 3,791 | 5,576,810 |
+| `g_rq+0x18` | 3,793 | 4,132 | 5,038,874 |
+| `g_rq` | 2,769 | 4,112 | 5,276,894 |
+| `g_rq+0x48` | 1,293 | 2,362 | 432,594 |
+| `g_rtc_lock` | 936 | 70,292 | 4,239,658 |
+| `g_inst+0xC48` | 465 | 62,073 | 1,131,488 |
+| `g_inst+0x828` | 154 | 57,732 | 246,616 |
+| `g_pmm_lock` | 69 | 88,857 | 1,424,096 |
+| `g_surf_lock` | 47 | 9,538 | 181,506 |
+| `g_console_lock` | 39 | 1,149,644 | 4,176,648 |
+| `g_heap_lock` | 8 | 10,254 | 29,014 |
+| `g_inst+0x1068` | 3 | 53,548 | 60,028 |
+| `g_net_lock` | 1 | 177,316 | 177,316 |
+
+**`g_sched_lock` dominates by ~450x** (1,902,380 against 4,269 for the busiest
+runqueue lock) — the per-CPU runqueue split did its job; the global lock is what
+remains. `g_console_lock` is the opposite shape: 39 acquisitions but a
+1.15M-cycle *average* wait, a rarely-taken lock held across something slow.
+Reverting M1 returns `1bdd581fc269516b` bit-for-bit.
+
+**One boot is one sample and the spread is not small** — an earlier M1 run on a
+different binary read 2,021,160 hits / 14.65M worst wait against 1,902,380 /
+74.8M here. The *ordering* is stable across runs; the magnitudes are not. Read
+the rank, not the digits, unless a number has been reproduced.
+
+**No fix proposed.** A busy lock on a *healthy* boot is not a failing artefact
+(§NON-NEGOTIABLE 3).
+
+**Fixed in my own first draft:** every counter was cast to `(unsigned)` although
+`kputdec` takes a `uint64_t` — bought nothing, and would have **silently printed a
+wrong number** past 2^32, which `g_sched_lock` reaches on a long boot.
+
+**NOT COVERED, found by enumeration not assumed absent:**
+- `sched.c:787` is a **trylock** in the work-stealing victim scan. It never waits,
+  so there is nothing to time — correctly out of scope; steal-path rq contention
+  is invisible here.
+- **`vfs.c:34` `mnt_lock` is not a `spinlock_t` at all** but a sleep-mutex over a
+  bare `busy` byte. **So the one lock CLAUDE.md's own Group A row and DDR-994 name
+  as the unbounded wait on OPEN-1 route 1's path is the prime suspect this
+  instrument cannot see.** Left out because the quantities are **not
+  commensurable** — a spin-wait is cycles this CPU burned, a yield-wait is wall
+  time during which the CPU ran other threads, and one `waitavg` column holding
+  both invites a specific, plausible, wrong comparison with a real number behind
+  it (the DDR-1042 failure mode). DDR-994's threshold instrument covers the
+  *stuck* case there; `lock_stat` would have covered the *cumulative* one, and
+  only the first exists.
+
+**No `smoke-lockstat`, deliberately.** The dump prints only on `[apfreeze]`, which
+is in `GLOBAL_FORBIDDEN`, so a gate would either assert on output reachable only
+in an already-failing run (the dead-arm class) or require shipping M1 as product.
+Proven instead by the forced dump on a recorded hash — the DDR-1030 / DDR-1024
+standard. **Do NOT create `smoke-lockstat`**, for the reason DDR-1039 recorded for
+`smoke-readline` and DDR-1005 for `smoke-vdso-read`.
+
+Regression on the shipped kernel `1bdd581fc269516b`: `hygiene_check.sh` **ALL SIX**; and the six-gate suite `smoke-shell`, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity`, `smoke-smp`, `smoke-smppreempt`
+all rc=0, with `kernel_after` recorded equal to `kernel` so the gates provably
+ran the binary being shipped (the DDR-1035 assertion, applied locally).
+
+DDR free range **1049+** (DDR-1048 below).
+
+**Group A remaining:** I/O APIC migration, KASLR.
+
+---
+
+## CHECKPOINT 2026-09-02 — DDR-1048: checking a runner assumption locally
+
+**Operator instruction (PR #17): new top priority, ahead of resuming OPEN-2.**
+Build a way to verify an environment-dependent assumption about the CI runner
+BEFORE pushing, because DDR-1045 took three attempts and two of them broke every
+toolchain-installing job by guessing at the runner image.
+
+**The finding reframes the task.** This development host is **already Ubuntu
+24.04.4 — the same release as `ubuntu-latest`** — and `/etc/apt/sources.list`
+here is a pure comment stub whose own text reads *"Ubuntu sources have moved to
+`/etc/apt/sources.list.d/ubuntu.sources`, which uses the deb822 format."* That is
+the exact file that refutes DDR-1045 attempt 1's premise, and it was on this disk
+unread. A five-second `cat` would have stopped the change that deleted the
+archives on four CI jobs. **The gap was never a missing environment — it was not
+looking at the one already running.**
+
+Built `tools/ci/runner_env.sh`: `report` / `sandbox` / `update` / `resolve` /
+`break-attempt1` / `selftest`. **The isolation is what makes `resolve` mean
+anything** — `Dir::State::status` points at an empty file, because otherwise
+`apt-cache policy` answers from dpkg's *installed* set and a package already on
+the box resolves however broken the sources are. **The first draft passed for
+exactly that reason**, arm B reporting `llvm` resolving with every source file
+deleted.
+
+**Verified to the operator's bar** by reproducing a real past failure: arm A
+(intact) resolves clang/lld/llvm/nasm/xorriso; arm B (`break-attempt1`) reports
+all five `UNKNOWN (apt printed nothing)` — which **is** CI 33650542691's `Unable
+to locate package llvm`, locally, in seconds, no CI run spent. It also confirms
+against real apt the empty-output no-candidate shape DDR-1045 had to add fixture
+5 and M3 for.
+
+**A real defect found on first use and fixed.** The shipped `apt_prepare.sh`, run
+against real apt for the first time, printed `FAIL: no candidate for: nasm
+xorriso` while `apt-cache policy nasm` showed `Candidate: 2.16.01-1build1`.
+Mechanism measured, not guessed: `apt-cache policy clang | grep -q 'Candidate:'`
+gives `PIPESTATUS=(141 0)` — `grep -q` exits at the first match and closes the
+pipe, `apt-cache` dies of SIGPIPE, and under `set -o pipefail` the pipeline is
+non-zero **although grep matched**, so the `!` branch marks a resolvable package
+missing. A race; which package loses it varies per run. Fixed by capturing the
+output once and matching it as a string: **0/20 failures**, against every observed
+run failing for the old form. **Invisible to the stub selftest** because stubs
+emit a few bytes from a shell function, so `grep -q` drains them before exiting —
+*a stub reproduces the interface, not the timing.*
+
+**Not claimed:** CI has been green with the racy form, and this does not claim CI
+was about to break. Why the race has not fired on the runner is **not
+established** — a pipe-buffer explanation was proposed and then **refuted by
+measurement** (`apt-cache policy llvm` is 211 bytes, far inside the 64 KiB
+buffer).
+
+**A DDR-1045 premise that does not reproduce:** *"apt-get update exits non-zero if
+ANY configured repo fails"* is false here — update exits **rc=0 with four 403
+Forbidden** vendor responses, and also with zero sources configured. The DDR-1045
+*fix* is unaffected (it tolerates a failing update, then proves the index usable
+by resolving), but its stated rationale is partly unverified and the runner's
+observed exit 100 is left unexplained rather than explained away.
+
+**Limits, printed by the tool itself:** this host is **not** the runner image —
+vendor repos differ (docker/deadsnakes/ondrej here, `packages.microsoft.com`
+there), so apt *layout and behaviour* are answerable and *which vendor repos the
+runner carries* is not. A container of the real runner image is **not** built:
+`docker pull` reaches the registry but CloudFront blob fetches are refused 403 by
+this environment's proxy, and the proxy's status endpoint and README are
+unreadable from here — recorded as a blocker, not worked around.
+
+**Nothing about OPEN-2 yet.** The operator framed this as possibly helping
+OPEN-2's diagnosis; so far it does not. OPEN-2 needs CI-side *runtime* artefacts,
+and this addresses build-environment *configuration*. Not claimed.
+
+`hygiene_check.sh` is now **ALL SIX** (`ci-runnerenv-selftest` added, which fails
+if arm A and arm B ever agree — i.e. if the sandbox stops discriminating).
