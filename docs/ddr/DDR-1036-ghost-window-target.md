@@ -113,6 +113,56 @@ acts on it", which §7's dead-arm rule requires, because a single mutant that
 defeats both cannot say which half is load-bearing. That is DDR-1033's lesson,
 and DDR-1034 §2 applied it; it applies here too.
 
+## §5.1 — CORRECTION: §5 claimed coverage this design did not have
+
+**§5 above is wrong and is corrected here rather than edited away.** It said
+*"No new gate. `smoke-wmclose` is already the scenario — `surfacetest`'s window C
+self-closes"*, and asserted an arm on `[inject] target gone`. Measured after
+implementing:
+
+| gate | `PRADYOS_WM_GONE` | `[inject] target gone` |
+|---|---|---|
+| `smoke-surfclose` | **3** (ALPHA id=0, GAMMA id=2, BETA id=1) | 0 |
+| the other six | 1 each | 0 |
+
+So **the compositor half works** — the record is published in every one of the
+seven gates — but **the parser's refusal path is never taken**, and, worse,
+**no gate asserted on any of it.** Both mutants in §5 would therefore have
+passed every gate. That is the dead-arm class, in a DDR that cites the dead-arm
+class.
+
+**Why §5's reasoning failed, and it is not a slip:** DDR-1028 *fixed* the timing
+that made window C a ghost (`PRADYOS_INPUT_READY` + `GRACE_SECS` 4 → 12, 6/6
+from a pooled ~6/14). The click now lands while C still exists. **The earlier fix
+removed the scenario this fix needs**, and §5 asserted the scenario still existed
+without checking. Two changes to the same subsystem, the second reasoning from
+the first's pre-fix behaviour.
+
+**A methodology defect on top of it, and it is DDR-1023's exactly.** The first
+measurement I made of this reported "zero `PRADYOS_WM_GONE` in all seven gates"
+— from grepping `build/gatelogs/g_smoke-*.out`, which is **make's stdout**, not
+the serial capture. The serial logs are `build/surfclose.log` and friends. That
+grep was vacuous and briefly supported the opposite conclusion. DDR-1023 §
+recorded this same error and required "a future campaign must point SERIAL_LOG
+at a per-run path and assert the file contains boot output before scanning it."
+**Scan the serial log, never the make log.**
+
+### What is now covered, and what is not
+
+- **COVERED:** `smoke-surfclose` asserts `PRADYOS_WM_GONE .*title=ALPHA`. Deleting
+  the compositor print now reddens that gate. This is the arm that should have
+  existed from the start.
+- **NOT COVERED:** the parser's refusal. No gate points the injector at a title
+  whose newest record is `WM_GONE`, so `resolve_geometry`'s new branch is
+  unexercised and its mutant (§5 M2) remains uncatchable. **Recorded as
+  uncovered, not claimed as tested** — the same treatment DDR-1031 gave its
+  `invlpg`.
+- **What would cover it:** a gate that creates a surface, waits for its
+  `WM_GEOM`, destroys it, and only then starts the injector against that title,
+  asserting `[inject] target gone` and a clean `[inject] TIMEOUT` rather than a
+  click. That is a new gate, not an arm on an existing one, because every
+  existing pointer gate is built to click a window that is *there*.
+
 ## §6 — What this does NOT do
 
 - It does not make the compositor's geometry publishing transactional. A window
@@ -122,3 +172,20 @@ and DDR-1034 §2 applied it; it applies here too.
   as such.
 - It does not touch the kernel, any syscall, or the input path.
 - It has no bearing on OPEN-1, OPEN-2, OPEN-12 or OPEN-13.
+
+
+## §5.2 — The arm's first draft was itself wrong, and that is worth recording
+
+The assertion was first written as `grep -aq "PRADYOS_WM_GONE title=ALPHA"`.
+The emitted line is `PRADYOS_WM_GONE id=0 title=ALPHA` — **`id=` sits between
+the two halves**, so the pattern could never match and the arm would have made
+`smoke-surfclose` permanently red rather than testing anything.
+
+Caught by checking the predicate against a real capture before committing, not
+by running the gate. That check costs nothing and should be routine: **a new
+sentinel assertion is a claim about exact bytes, so match it against a capture
+that already exists rather than against what the `printf` looks like in the
+source.** §INV.5 makes the same point for `PRADYOS_WM_GEOM` parsers — isolate
+the field, do not assume two fields are adjacent. The fixed pattern
+(`PRADYOS_WM_GONE .*title=ALPHA`) also survives a future field being appended,
+which the concatenated form would not have.

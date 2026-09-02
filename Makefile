@@ -3266,7 +3266,16 @@ smoke-surfclose: $(IMG) fat-image sfs-image
 	    -qmp unix:/tmp/psfcl.sock,server,nowait \
 	    -serial file:build/surfclose.log -display none -no-reboot || true
 	@python3 tools/qemu_runner/surfclose_check.py build/surfclose.log || { echo "--- close/geom lines ---"; grep -aE "PRADYOS_WM_GEOM|PRADYOS_WM_CLOSE|PRADYOS_SURF_SAVED|PRADYOS_MOUSE_OK|PRADYOS_SURFACE_GONE" build/surfclose.log || echo "(none)"; exit 1; }
-	@echo "[surfclose] PASS — ALPHA saved then self-closed; BETA was forced at the deadline"
+	@# DDR-1036 arm. This gate destroys three surfaces, so it is the one place
+	@# PRADYOS_WM_GONE is emitted deterministically -- measured: ALPHA(0),
+	@# GAMMA(2), BETA(1), all three, every run. Asserting it here is what makes
+	@# the compositor half of DDR-1036 testable at all: without this line the
+	@# print could be deleted outright and every gate would stay green, which is
+	@# the dead-arm class this project has hit repeatedly. NOTE what this does
+	@# NOT cover -- see DDR-1036 §5.1: no gate points the INJECTOR at a ghost,
+	@# so the parser's refusal path is still unexercised.
+	@grep -aq "PRADYOS_WM_GONE .*title=ALPHA" build/surfclose.log || { 	    echo "[surfclose] FAIL — no PRADYOS_WM_GONE for ALPHA (DDR-1036)"; 	    grep -a "PRADYOS_WM_GONE" build/surfclose.log || echo "(no WM_GONE lines at all)"; exit 1; }
+	@echo "[surfclose] PASS — ALPHA saved then self-closed; BETA was forced at the deadline; WM_GONE published"
 
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
