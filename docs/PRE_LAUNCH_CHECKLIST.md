@@ -453,6 +453,40 @@ deferred is the cutover.
 
 ---
 
+### 4.15 — KASLR: deferred on sequencing, not on a blocker
+
+DDR-1051, and unlike §4.14 this is **a judgment call, not an absent subsystem**.
+KASLR is buildable here. The stated precondition is met — W^X is CI-green.
+
+Measured costs: the kernel is `-fno-pic -fno-pie -mcmodel=kernel` at a pinned
+`KERNEL_VBASE`, and `llvm-readelf -S build/kernel.elf` reports **zero relocation
+sections**, so a virtual slide needs a relink *and* a boot-time relocation
+applier that does not exist. It must land in **both** boot paths in one commit
+(§INV.13 — PT_HI is implemented twice) or one arm of `smoke-iso-x86` breaks.
+
+**The reason for deferral is neither of those.** KASLR would degrade the one
+diagnostic discipline every open defect depends on: §INV.18 and DDR-1019 both
+require resolving a RIP against its own binary, `[apfreeze]` has **three**
+producers told apart *only* by RIP, and OPEN-1, OPEN-2, OPEN-12 and OPEN-13 are
+all read that way. Under a slide, every future CI artefact needs the slide value
+to interpret — so the kernel must print it. Printing it every boot returns it to
+the attacker; printing it only under a debug flag means **CI stops testing the
+configuration that ships**, which is DDR-1040's vacuity trap.
+
+The marginal value is also low *here*: W^X including the identity alias
+(DDR-1046), SMEP (DDR-1040) and SMAP (DDR-1041) are shipped and green, and they
+remove the primitives KASLR only makes harder to aim.
+
+**Physical-only KASLR** (randomise `KERNEL_PHYS`, keep `KERNEL_VIRT`) needs no
+relocations and leaves RIP resolution intact — recorded as the cheaper buildable
+variant. But it defends a physical-write primitive DDR-1046 has just removed by
+making the alias RO+NX.
+
+**Revisit once OPEN-1/2/12/13 close.** **Not claimed:** that KASLR is
+unimportant, or that this kernel is hardened without it.
+
+---
+
 ## SECTION 5 — DEFERRED FEATURES
 
 ### 5.1 — Pre-approved exceptions (CLAUDE.md §PRE-APPROVED EXCEPTIONS)
