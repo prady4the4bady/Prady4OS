@@ -11,6 +11,8 @@
  * are told apart by the VALUE, not by which sentinels are missing.
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_EXIT      4
 #define SYS_WRITE     6
 #define SYS_IPC_SEND 98
@@ -56,7 +58,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* ARM A / ARM B -- the same call, reported by value. rc=0 in the granted
      * process; rc=-EPERM in the un-granted one. */
     long rc = nsi(SYS_IPC_SEND, SLOT, (long)msg, 0);
-    wr("PRADYOS_IPC_GATE rc="); wrdec(rc); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_IPC_GATE rc=");    /* DDR-1056 */
+      ul_d(&u, rc); ul_s(&u, "\n"); wr(ul_end(&u)); }
     if (rc != 0) {
         if (rc != -EPERM) fail("refused, but not with EPERM", rc);
         nsi(SYS_EXIT, 0, 0, 0);            /* the un-granted run ends here */
@@ -66,7 +69,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* ARM D -- slot bounds. */
     long b = nsi(SYS_IPC_SEND, BAD_SLOT, (long)msg, 0);
     if (b != -EINVAL) fail("out-of-range slot was accepted", b);
-    wr("PRADYOS_IPC_SLOT rc="); wrdec(b); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_IPC_SLOT rc=");    /* DDR-1056 */
+      ul_d(&u, b); ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     /* ARM C -- the payload round-trips. FIRST AND LAST word, because
      * IPC_MSG_WORDS is 4 and a copy that moved only msg[0] would otherwise read
@@ -76,8 +80,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long r2 = nsi(SYS_IPC_RECV, SLOT, (long)out, 0);
     if (r2 != 0) fail("recv", r2);
     if (out[0] != 11 || out[3] != 44) fail("payload did not round-trip", (long)out[3]);
-    wr("PRADYOS_IPC_RT w0="); wrdec((long)out[0]);
-    wr(" w3="); wrdec((long)out[3]); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_IPC_RT w0=");      /* DDR-1056 */
+      ul_d(&u, (long)out[0]); ul_s(&u, " w3="); ul_d(&u, (long)out[3]);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     wr("PRADYOS_IPC_OK\n");
     nsi(SYS_EXIT, 0, 0, 0);

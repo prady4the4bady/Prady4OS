@@ -33,6 +33,8 @@
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_WRITE          6
 #define SYS_EXIT           4
 #define SYS_FORK          15
@@ -123,15 +125,12 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     int st2 = 0;
     long post = nsi(SYS_WAIT4, -1, (long)&st2, WNOHANG);
 
-    wr("PRADYOS_ACTIONSPAWN_OK id=");
-    wrdec(id);
-    wr(" st=");
-    wrdec(st);
-    wr(" ctrl=");
-    wrdec(ctrl_ok);
-    wr(" post=");
-    wrdec(post);
-    wr("\n");
+    { uline u; ul_init(&u);                       /* DDR-1056: ONE write */
+      ul_s(&u, "PRADYOS_ACTIONSPAWN_OK id="); ul_d(&u, id);
+      ul_s(&u, " st=");   ul_d(&u, st);
+      ul_s(&u, " ctrl="); ul_d(&u, ctrl_ok);
+      ul_s(&u, " post="); ul_d(&u, post);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     nsi(SYS_EXIT, (st == AE_PENDING && post == NEG_ECHILD) ? 0 : 1, 0, 0);
     for (;;) { }

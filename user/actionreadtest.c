@@ -26,6 +26,8 @@
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_WRITE          6
 #define SYS_READ           5
 #define SYS_OPEN           7
@@ -108,13 +110,11 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
 
     /* 4. VERIFY THE BYTES. This is what makes the gate non-vacuous: a probe that
      * skipped step 3 still prints an OK line, but cannot print the content. */
-    wr("PRADYOS_ACTIONREAD_OK id=");
-    wrdec(id);
-    wr(" n=");
-    wrdec(n);
-    wr(" first=");
-    { char c[2]; c[0] = buf[0]; c[1] = 0; wr(c); }
-    wr("\n");
+    { uline u; ul_init(&u);                       /* DDR-1056: ONE write */
+      ul_s(&u, "PRADYOS_ACTIONREAD_OK id="); ul_d(&u, id);
+      ul_s(&u, " n=");     ul_d(&u, n);
+      ul_s(&u, " first="); ul_c(&u, buf[0]);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }

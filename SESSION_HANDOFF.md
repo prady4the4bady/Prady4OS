@@ -10199,3 +10199,59 @@ likely (**not established** — that CI log does not dump the raw lines) the
 commit. `user/include/uline.h` and the conversions are drafted at
 `/tmp/.../scratchpad/{uline.h,convert_ring3.py}`; the gate's failure path also
 needs a diagnostic dump so the next occurrence is decidable.
+
+---
+
+## CHECKPOINT — DDR-1056: the same splice one ring out (2026-09-03)
+
+DDR-1055 asked all 268 `EXTRA_SENTINEL` patterns whether one literal carried
+them. **A gate asserts in two places**, and that sweep covered only the first:
+the Makefile post-check `grep` matches the *whole* measured line.
+
+`user/actiondeltest.c:172` builds its line from nine `wr()`/`wrdec()` calls, and
+**that is eleven `write(2)`s** — `wrdec` emits one digit per write, so `id=258`
+costs three on its own. Eleven console-lock acquisitions, ten gaps.
+
+**Three paths, every one read out of this tree rather than recalled:**
+1. probe lines built from many `wr()` calls;
+2. **musl's `fflush` emits TWO console writes** — `__stdio_write` always passes
+   two iovecs and `sys_writev` calls `fd_write_user` per iovec, so every
+   musl-linked program is exposed (compositor, PRISM, `term`, `cmusl`,
+   `agent_base`, `init`). stdout is *fully* buffered here: `__stdout_write`
+   falls back to `lbf = -1` when `ioctl(TIOCGWINSZ)` fails and this kernel
+   registers **no** `SYS_IOCTL`;
+3. `fd_write_user`'s 256-byte chunking — recorded, not fixed.
+
+**Fix:** `user/include/uline.h` (one write per measured line) plus an
+`FD_CONSOLE` gather in `sys_writev`, sized **256 — `fd_write_user`'s own chunk
+size, not musl's 1024 `BUFSIZ`**, because a larger buffer would hold
+`g_console_lock` and interrupts across four times today's maximum UART busy-wait
+on the hottest output path: the cost DDR-1047 refused.
+
+**Proved deterministically, because there is nothing to race.** This defect does
+not reproduce locally, so a rate campaign would measure nothing. The kernel
+already counts what the fix changes (DDR-948's `writes=`): the actiondel probe
+went **13 -> 3**, exactly -10, same gate rc=0 and same measured line both sides.
+
+| | value |
+|---|---|
+| kernel | `7ff8150dd2697358` |
+| `kernel.bin` | 1,204,618 B / 1,572,864 B gate |
+| build | rc=0, zero warnings at `-Werror` |
+| `hygiene_check.sh` | ALL SIX |
+| regression | **16/16 rc=0**, `kernel_after == kernel` |
+| `GLOBAL_FORBIDDEN` | 75 -> **76** (`[uline] TRUNC`) |
+
+Also fixed: `smoke-actiondel`'s failure path dumped nothing, which is exactly why
+the `c8c93ed` CI log cannot settle whether that failure was this defect.
+
+**NOT proven, and named:** the `sys_writev` gather has no counter of its own and
+**no mutation covers it** — a mutant reverting it passes every gate, because the
+split it reintroduces is invisible unless a race is won. `smoke-actiondel` and
+`smoke-surfclose` remain **unattributed**.
+
+**NEXT:** the third §NON-NEGOTIABLE 1 green on the final tip via
+`workflow_dispatch` (§INV.15 — `gh run rerun` needs admin rights the project PAT
+does not have). Then the operator queue resumes at DDR-1054, the ML-DSA-44 keyGen
+C port, whose header and verified Python oracle (`tools/ci/mldsa_ref.py`,
+byte-exact against ACVP tcId 1-5) are already in the tree.

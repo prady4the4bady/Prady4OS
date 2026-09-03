@@ -13,6 +13,8 @@
  * class, seven instances deep in this project.
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_EXIT            4
 #define SYS_WRITE           6
 #define SYS_RUN_EXPERIMENT 100
@@ -90,13 +92,15 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     code[p++] = OP_HALT;
 
     long rc = nsi(SYS_RUN_EXPERIMENT, (long)code, (long)p, (long)&v);
-    wr("PRADYOS_EXP_CALC rc="); wrdec(rc);
-    wr(" v="); wrdec((long)v); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_EXP_CALC rc=");    /* DDR-1056 */
+      ul_d(&u, rc); ul_s(&u, " v="); ul_d(&u, (long)v);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
     if (rc != 0) {
         /* The deny process. Print the gate line and stop: every arm below needs
          * the door, so continuing would report refusals as if they were bounds
          * checks. */
-        wr("PRADYOS_EXP_GATE rc="); wrdec(rc); wr("\n");
+        { uline u; ul_init(&u); ul_s(&u, "PRADYOS_EXP_GATE rc="); /* DDR-1056 */
+          ul_d(&u, rc); ul_s(&u, "\n"); wr(ul_end(&u)); }
         nsi(SYS_EXIT, 0, 0, 0);
         for (;;) { }
     }
@@ -112,7 +116,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     code[p++] = (unsigned char)(-11);  /* -> pc 11 + (-11) = 0          */
     code[p++] = OP_HALT;
     rc = nsi(SYS_RUN_EXPERIMENT, (long)code, (long)p, (long)&v);
-    wr("PRADYOS_EXP_LOOP rc="); wrdec(rc); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_EXP_LOOP rc=");    /* DDR-1056 */
+      ul_d(&u, rc); ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     /* ---- ARM D: operand-stack overflow is refused ------------------------
      * One PUSH then DUP past EXP_STACK_N (32). Expect -EOVERFLOW (75). */
@@ -122,7 +127,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         code[p++] = OP_DUP;
     code[p++] = OP_HALT;
     rc = nsi(SYS_RUN_EXPERIMENT, (long)code, (long)p, (long)&v);
-    wr("PRADYOS_EXP_OVF rc="); wrdec(rc); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_EXP_OVF rc=");     /* DDR-1056 */
+      ul_d(&u, rc); ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     /* ---- ARM E: the store recorded what the KERNEL computed ---------------
      * Slot 0 is arm A's run: status 0, value 42, and 4 retired instructions

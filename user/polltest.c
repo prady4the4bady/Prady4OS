@@ -10,6 +10,8 @@
  * differenced two SYS_TIME return codes and so measured nothing.
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_EXIT     4
 #define SYS_WRITE    6
 #define SYS_OPEN     7
@@ -65,20 +67,23 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* ---- ARM A: empty pipe, timeout 0 -> nothing ready ------------------- */
     p[0].fd = pfd[0]; p[0].events = POLLIN; p[0].revents = 0;
     long n = nsi(SYS_POLL, (long)p, 1, 0);
-    wr("PRADYOS_POLL_EMPTY n="); wrdec(n); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_POLL_EMPTY n=");   /* DDR-1056 */
+      ul_d(&u, n); ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     /* ---- ARM B: after a write, the read end is POLLIN --------------------- */
     nsi(SYS_WRITE, pfd[1], (long)"x", 1);
     p[0].fd = pfd[0]; p[0].events = POLLIN; p[0].revents = 0;
     n = nsi(SYS_POLL, (long)p, 1, 0);
-    wr("PRADYOS_POLL_IN n="); wrdec(n);
-    wr(" rev="); wrdec((long)p[0].revents); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_POLL_IN n=");      /* DDR-1056 */
+      ul_d(&u, n); ul_s(&u, " rev="); ul_d(&u, (long)p[0].revents);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     /* ---- ARM C: a bad fd is POLLNVAL, not silence ------------------------- */
     p[0].fd = 4242; p[0].events = POLLIN; p[0].revents = 0;
     n = nsi(SYS_POLL, (long)p, 1, 0);
-    wr("PRADYOS_POLL_NVAL n="); wrdec(n);
-    wr(" rev="); wrdec((long)p[0].revents); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_POLL_NVAL n=");    /* DDR-1056 */
+      ul_d(&u, n); ul_s(&u, " rev="); ul_d(&u, (long)p[0].revents);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     /* ---- ARM D: a regular file is ALWAYS ready (POSIX) --------------------
      * The pre-DDR-1037 predicate returned 0 here, so this arm is a correctness
@@ -87,10 +92,12 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (ffd >= 0) {
         p[0].fd = (int)ffd; p[0].events = POLLIN | POLLOUT; p[0].revents = 0;
         n = nsi(SYS_POLL, (long)p, 1, 0);
-        wr("PRADYOS_POLL_FILE n="); wrdec(n);
-        wr(" rev="); wrdec((long)p[0].revents); wr("\n");
+        { uline u; ul_init(&u); ul_s(&u, "PRADYOS_POLL_FILE n="); /* DDR-1056 */
+          ul_d(&u, n); ul_s(&u, " rev="); ul_d(&u, (long)p[0].revents);
+          ul_s(&u, "\n"); wr(ul_end(&u)); }
     } else {
-        wr("PRADYOS_POLL_FILE open_rc="); wrdec(ffd); wr("\n");
+        { uline u; ul_init(&u); ul_s(&u, "PRADYOS_POLL_FILE open_rc=");
+          ul_d(&u, ffd); ul_s(&u, "\n"); wr(ul_end(&u)); }
     }
 
     /* ---- ARM E: a positive timeout ACTUALLY ELAPSES -----------------------
@@ -100,8 +107,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     p[0].fd = pfd[0]; p[0].events = POLLOUT; p[0].revents = 0;   /* read end never POLLOUT */
     n = nsi(SYS_POLL, (long)p, 1, 2000);                          /* 2 s */
     long t1 = nsi(SYS_CLOCK, 0, 0, 0);
-    wr("PRADYOS_POLL_TMO n="); wrdec(n);
-    wr(" waited="); wrdec(t1 - t0); wr("\n");
+    { uline u; ul_init(&u); ul_s(&u, "PRADYOS_POLL_TMO n=");     /* DDR-1056 */
+      ul_d(&u, n); ul_s(&u, " waited="); ul_d(&u, t1 - t0);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     wr("PRADYOS_POLL_OK\n");
     nsi(SYS_EXIT, 0, 0, 0);

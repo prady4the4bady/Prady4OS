@@ -227,16 +227,19 @@ ln=$(grep -ao "PRADYOS_ACTIONDEL_OK id=[0-9]* st=-*[0-9]* ctrl=[0-9]* keep=[0-9]
 test -n "$ln" || { echo "[actiondel] FAIL — no measured line in the capture"; exit 1; }
 ```
 
-and `user/actiondeltest.c:172` builds that line from **nine** calls:
+and `user/actiondeltest.c:172` builds that line from nine calls — which is
+**eleven `write(2)`s**, because `wrdec` emits one digit per write, so `id=258`
+alone costs three (measured in DDR-1056, correcting this paragraph):
 
 ```c
 wr("PRADYOS_ACTIONDEL_OK id="); wrdec(id); wr(" st="); wrdec(st);
 wr(" ctrl="); wrdec(ctrl_gone); wr(" keep="); wrdec(keep_present); wr("\n");
 ```
 
-Every probe in the tree rolls its own `wr()` as one `SYS_WRITE`, so nine calls
-are nine `write(2)`s, nine `kwrite`s, nine separate `g_console_lock`
-acquisitions — the ring-0 defect exactly, one ring out.
+Every probe in the tree rolls its own `wr()` as one `SYS_WRITE`, and most carry
+the same digit-at-a-time `wrdec`, so this is **eleven** `write(2)`s, eleven
+`kwrite`s, eleven separate `g_console_lock` acquisitions and **ten gaps** — the
+ring-0 defect exactly, one ring out, and worse per line.
 
 **This is very likely the `smoke-actiondel` failure recorded in
 `docs/PRE_LAUNCH_CHECKLIST.md` §4.14** — `[actiondel] FAIL — no measured line in

@@ -451,6 +451,7 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'NEXUS KERNEL PANIC' \
     'panic_stage=' \
     '[kline] TRUNC' \
+    '[uline] TRUNC' \
     '[percpu] gs FAIL' '[percpu] current FAIL')"
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 

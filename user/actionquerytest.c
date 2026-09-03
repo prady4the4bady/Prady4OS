@@ -30,6 +30,8 @@
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_WRITE          6
 #define SYS_EXIT           4
 #define SYS_YIELD          3
@@ -117,15 +119,12 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     }
 
     /* 5. VERIFY THE BYTES. */
-    wr("PRADYOS_ACTIONQUERY_OK id=");
-    wrdec(id);
-    wr(" st=");
-    wrdec(st);
-    wr(" n=");
-    wrdec((long)outlen);
-    wr(" first=");
-    { char c[2]; c[0] = (char)out[0]; c[1] = 0; wr(c); }
-    wr("\n");
+    { uline u; ul_init(&u);                       /* DDR-1056: ONE write */
+      ul_s(&u, "PRADYOS_ACTIONQUERY_OK id="); ul_d(&u, id);
+      ul_s(&u, " st=");    ul_d(&u, st);
+      ul_s(&u, " n=");     ul_d(&u, (long)outlen);
+      ul_s(&u, " first="); ul_c(&u, (char)out[0]);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }

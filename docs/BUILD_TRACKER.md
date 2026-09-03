@@ -2099,8 +2099,73 @@ Gate count unchanged. `kernel.bin` 1,192,330 → **1,196,426 B** against the
 **Also found and NOT fixed here — the same defect one ring out (DDR-1055 §9).**
 Gates assert in two places, and the sweep above covered only the first: the
 Makefile post-check `grep`s match the *whole* measured line, and ring-3 probes
-build those from many `wr()` calls — `user/actiondeltest.c:172` uses **nine**,
-which is nine `write(2)`s. That is very likely (**not established**) the
+build those from many `wr()` calls — `user/actiondeltest.c:172` uses nine,
+which is **eleven** `write(2)`s, because `wrdec` emits one digit per write, so
+`id=258` costs three on its own (measured in DDR-1056). That is very likely (**not established**) the
 `smoke-actiondel` "no measured line in the capture" failure that landed on the
 same docs-only commit as the third nethammer timeout. Fixed separately, with its
 own gate evidence.
+
+---
+
+## DDR-1056 — the same splice one ring out: ring-3 measured lines, and musl's two-iovec fflush
+
+DDR-1055 asked all 268 `EXTRA_SENTINEL` patterns whether any single literal
+carried them, and fixed the ring-0 composites. That sweep had a hole: **a gate
+asserts in two places**, and the second is the Makefile recipe's post-check
+`grep`, which matches the *whole* measured line.
+
+`PRADYOS_ACTIONDEL_OK id=` does sit in one literal, so the sweep called it safe.
+The post-check does not care: `user/actiondeltest.c:172` builds that line from
+nine `wr()`/`wrdec()` calls, and **that is eleven `write(2)`s**, because `wrdec`
+emits one digit per write — `id=258` costs three on its own. Eleven console-lock
+acquisitions, **ten gaps**, and the wider the number the more gaps.
+
+**Three distinct splice paths, all measured from this tree, not recalled:**
+
+1. Probe lines built from many `wr()` calls (the actiondel case, plus
+   `actionhypo`/`actionquery`/`actionread`/`actionspawn`/`fat32mc` and the
+   `polltest`/`exptest`/`ipctest` measured lines).
+2. **musl's `fflush` emits TWO console writes, not one.** `__stdio_write` always
+   passes two iovecs — the buffered bytes and the new bytes — and `sys_writev`
+   calls `fd_write_user` per iovec, i.e. a separate `kwrite` and a separate
+   console-lock acquisition each. Every musl-linked program is affected: the
+   compositor, PRISM, `term`, `cmusl`, `agent_base`, `init`. (stdout is *fully*
+   buffered here, checked in-tree: `__stdout_write` falls back to `lbf = -1`
+   when `ioctl(TIOCGWINSZ)` fails, and this kernel registers no `SYS_IOCTL` at
+   all — so bytes do accumulate between flushes and the two-iovec case is the
+   normal one.)
+3. `fd_write_user` chunks the console at 256 bytes. Recorded, not fixed.
+
+**Fix.** `user/include/uline.h` builds the line and hands it to the probe's own
+`wr()` — one call, one write. `sys_writev` on an `FD_CONSOLE` fd gathers into one
+buffer and issues a single `kwrite`. **The gather is 256 bytes, deliberately
+`fd_write_user`'s own chunk size and not musl's 1024-byte `BUFSIZ`:** a larger
+buffer would hold `g_console_lock`, and therefore interrupts, across four times
+today's maximum UART busy-wait on the hottest output path, which is exactly the
+cost DDR-1047 refused near a timing-sensitive AP freeze. At 256 the masked
+window is unchanged and every measured line still fits (the longest is ~90 B).
+
+**Proved deterministically, because there is nothing to race.** Unlike DDR-1055
+this defect does not reproduce locally, so a rate campaign would measure nothing.
+What the fix changes is countable, and the kernel already counts it — DDR-948's
+`writes=` on the `sys_exit` line. The actiondel probe went **13 -> 3**: exactly
+-10, eleven writes for the measured line collapsing to one, its two other writes
+unchanged. Same gate rc=0 and the same measured line on both sides.
+
+**Regression 16/16 rc=0**, `kernel_after == kernel`. `kernel.bin` 1,196,426 ->
+**1,204,618 B**. `GLOBAL_FORBIDDEN` 75 -> **76** (`[uline] TRUNC`).
+
+**Also fixed in passing — a gate diagnosability defect.** `smoke-actiondel`'s
+failure path printed only `no measured line in the capture` and dumped nothing,
+which is precisely why the `c8c93ed` CI log cannot settle whether that failure
+was this defect: a spliced line and a probe that never ran look identical from
+outside. It now dumps what it found, as `smoke-nethammer` already did — which is
+why DDR-1055 was diagnosable at all.
+
+**NOT proven, and named rather than glossed:** the `sys_writev` gather has no
+counter of its own (`dbg_writes` increments once per `writev` however many
+iovecs it fans out to), and no mutation covers it — a mutant reverting it would
+pass every gate, because the split it reintroduces is invisible unless a race is
+won. The `smoke-actiondel` and `smoke-surfclose` CI failures remain
+**unattributed**; what changed is that the next occurrence is decidable.

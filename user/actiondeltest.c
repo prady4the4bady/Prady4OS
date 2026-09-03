@@ -52,6 +52,8 @@
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_WRITE          6
 #define SYS_READ           5
 #define SYS_OPEN           7
@@ -169,15 +171,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* 5. THE EFFECT MUST NOT HAVE HAPPENED. */
     int keep_present = present(keep);
 
-    wr("PRADYOS_ACTIONDEL_OK id=");
-    wrdec(id);
-    wr(" st=");
-    wrdec(st);
-    wr(" ctrl=");
-    wrdec(ctrl_gone);
-    wr(" keep=");
-    wrdec(keep_present);
-    wr("\n");
+    /* DDR-1056: ONE write. The gate greps this line WHOLE, and nine writes
+     * are nine console-lock acquisitions with eight gaps for another CPU. */
+    { uline u; ul_init(&u);
+      ul_s(&u, "PRADYOS_ACTIONDEL_OK id="); ul_d(&u, id);
+      ul_s(&u, " st=");   ul_d(&u, st);
+      ul_s(&u, " ctrl="); ul_d(&u, ctrl_gone);
+      ul_s(&u, " keep="); ul_d(&u, keep_present);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     /* Tidy up: leave the SFS root as we found it, so a later boot of the same
      * image does not inherit /ADELKEEP. The gate has already been given its

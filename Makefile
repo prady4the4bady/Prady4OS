@@ -3689,7 +3689,12 @@ smoke-actiondel: $(IMG) fat-image sfs-image
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@set -e; \
 	 ln=$$(grep -ao "PRADYOS_ACTIONDEL_OK id=[0-9]* st=-*[0-9]* ctrl=[0-9]* keep=[0-9]*" build/actiondel.log | head -1); \
-	 test -n "$$ln" || { echo "[actiondel] FAIL — no measured line in the capture"; exit 1; }; \
+	 test -n "$$ln" || { echo "[actiondel] FAIL — no measured line in the capture"; \
+	   echo "  DDR-1056: dump what IS there. A spliced line and a probe that never"; \
+	   echo "  ran look identical from a bare failure message, which is exactly why"; \
+	   echo "  the c8c93ed CI log could not settle which one happened."; \
+	   grep -a "PRADYOS_ACTIONDEL" build/actiondel.log || echo "  (no PRADYOS_ACTIONDEL lines at all)"; \
+	   exit 1; }; \
 	 echo "[actiondel] $$ln"; \
 	 st=$${ln##* st=}; st=$${st%% *}; \
 	 ctrl=$${ln##* ctrl=}; ctrl=$${ctrl%% *}; \

@@ -28,6 +28,8 @@
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_WRITE          6
 #define SYS_READ           5
 #define SYS_OPEN           7
@@ -149,17 +151,13 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
                                        * line printed and take the gseed arm
                                        * with it (measured -- M5). */
 
-    wr("PRADYOS_ACTIONHYPO_OK hst=");
-    wrdec(hst);
-    wr(" hn=");
-    wrdec(hn);
-    wr(" gst=");
-    wrdec(gst);
-    wr(" gseed=");
-    wrdec(gseed);
-    wr(" gn=");
-    wrdec(gn);
-    wr("\n");
+    { uline u; ul_init(&u);                       /* DDR-1056: ONE write */
+      ul_s(&u, "PRADYOS_ACTIONHYPO_OK hst="); ul_d(&u, hst);
+      ul_s(&u, " hn=");    ul_d(&u, hn);
+      ul_s(&u, " gst=");   ul_d(&u, gst);
+      ul_s(&u, " gseed="); ul_d(&u, gseed);
+      ul_s(&u, " gn=");    ul_d(&u, gn);
+      ul_s(&u, "\n"); wr(ul_end(&u)); }
 
     nsi(SYS_EXIT, (hst == AE_APPROVED && gst == AE_PENDING) ? 0 : 1, 0, 0);
     for (;;) { }
