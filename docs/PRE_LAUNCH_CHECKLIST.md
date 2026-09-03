@@ -153,6 +153,20 @@ as a known producer, **resolve its RIP against its own binary** (§INV.18). Thre
 producers share the label. That discipline is the mitigation now, in place of
 the watchdog.
 
+**UPDATE 2026-09-03 — DDR-1049 closes the DETECTION half, not the watchdog.**
+The decision above stands: the latch is still claimed before the dump and still
+never released, so a winner that cannot print still silences every *later* panic.
+What changed is that such a run can no longer pass. DDR-1019's `panic_stage`
+field was gated behind `g_panic_extra`, which increments **only in the loser
+branch of the CAS** — so a *lone* silent panic printed nothing at all: no banner
+(no `GLOBAL_FORBIDDEN` trip), no `panics_silent=`, no `panic_stage=`, and on a
+PASS `boot_test.sh` deletes the capture. **The run went green with a panicked CPU
+in it.** The predicate is now `g_panic_extra || g_panic_stage` (the winner sets
+`g_panic_stage` the instant it claims the latch), and `panic_stage=` is in
+`GLOBAL_FORBIDDEN`, so a claimed panic fails its gate either way. M1 proven,
+173 gates × 2 CI suites green with the pattern live. **The watchdog is still not
+built and is still the right deferral.**
+
 ### 1.5 — CI efficiency refactor: CONFIRMED SAFE, with two hazards that must be handled
 
 The operator asked for explicit confirmation **before** implementation, and for
@@ -211,7 +225,7 @@ has an armed instrument that makes the next occurrence diagnostic.
 | # | Symptom | State | Operator decision? |
 |---|---|---|---|
 | **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | Routes 2 and 3 **CLOSED** (DDR-1000, DDR-990). **Route 1 OPEN**: a CI-only hang whose recorded stopping point is `SYSFSTAT OK`. DDR-1009 §2 found a capture stopping at exactly that point on a *different* gate that **panicked** — so route 1 is not always silent, and DDR-994's "a hang prints nothing" framing is too strong. A stopping point is not a cause. Local reproduction is structurally unable to settle it. | NO — but see §1.2, which is the decision this feeds |
-| **OPEN-2 — third CI occurrence, resolved to DDR-1006's site** | `smoke-rtc-smp`, shard 5, `7392d0e` (2026-09-02) | **RIP RESOLVED BEFORE MATCHING, per DDR-1019's rule.** `rip=0xFFFFFFFF8000AE37` → **`isr_dispatch`**; `bt=0xFFFFFFFF8000027A` → **`isr_common.gs_kernel_in`**; the separate panic dump's backtrace is `schedule` ← `sched_ap_enter` ← `smp_ap_entry`. That is **DDR-1006's AP-timer-ISR shape** — **not** DDR-1019's `idt.c:697` halt loop and **not** DDR-1010's `sys_mmap` path. **Second, independent confirmation it is not DDR-1019's:** that producer sets `g_panic_extra`, which surfaces `panic_stage=` in the heartbeat block, and no heartbeat in this capture carries it. Accompanied by `[vblk] compl wait timeout unit=2 dest_cpu=3 dest_dticks=0` — cpu 3 frozen at `ticks=72` with `if=0`, the DDR-981 signature, at a site DDR-981 does not cover. **Attribution limit, stated:** unlike the `smoke-nethammer` case, `kernel.bin` was **not** bit-identical to the previous tip — `7392d0e` shipped `SYS_POLL`. So this is not exonerated by diff. What can be said: `sys_poll` is not on the AP timer ISR path, `smoke-rtc-smp` uses neither poll nor epoll, and the signature predates the change. **Symbol resolution caveat (§INV.18):** resolved against a *local* rebuild of `7392d0e` (`a411e1b1b765e15e`); CI's published hash could not be read back out of the job log, so binary identity rests on DDR-1023's established bit-for-bit reproducibility rather than on a direct comparison. | NO |
+| **OPEN-2 — third CI occurrence, resolved to DDR-1006's site** | `smoke-rtc-smp`, shard 5, `7392d0e` (2026-09-02) | **RIP RESOLVED BEFORE MATCHING, per DDR-1019's rule.** `rip=0xFFFFFFFF8000AE37` → **`isr_dispatch`**; `bt=0xFFFFFFFF8000027A` → **`isr_common.gs_kernel_in`**; the separate panic dump's backtrace is `schedule` ← `sched_ap_enter` ← `smp_ap_entry`. That is **DDR-1006's AP-timer-ISR shape** — **not** DDR-1019's `idt.c:697` halt loop and **not** DDR-1010's `sys_mmap` path. **Second, independent confirmation it is not DDR-1019's:** that producer sets `g_panic_extra`, which surfaces `panic_stage=` in the heartbeat block, and no heartbeat in this capture carries it. **DDR-1049 makes this test strictly stronger for FUTURE captures, and narrows what it proved for THIS one:** at the time, absence of `panic_stage=` excluded only a panic in which something *lost* the CAS — it could not exclude a lone silent winner, because the field was gated behind `g_panic_extra`. Since DDR-1049 the field prints whenever the latch is claimed at all, so from now on its absence excludes *any* claimed panic. The conclusion for this capture is unchanged (DDR-1019's producer is by definition a loser, so `g_panic_extra` would have been set) — but the reasoning was narrower than it read. Accompanied by `[vblk] compl wait timeout unit=2 dest_cpu=3 dest_dticks=0` — cpu 3 frozen at `ticks=72` with `if=0`, the DDR-981 signature, at a site DDR-981 does not cover. **Attribution limit, stated:** unlike the `smoke-nethammer` case, `kernel.bin` was **not** bit-identical to the previous tip — `7392d0e` shipped `SYS_POLL`. So this is not exonerated by diff. What can be said: `sys_poll` is not on the AP timer ISR path, `smoke-rtc-smp` uses neither poll nor epoll, and the signature predates the change. **Symbol resolution caveat (§INV.18):** resolved against a *local* rebuild of `7392d0e` (`a411e1b1b765e15e`); CI's published hash could not be read back out of the job log, so binary identity rests on DDR-1023's established bit-for-bit reproducibility rather than on a direct comparison. | NO |
 | **OPEN-2** | `[apfreeze]` in CI | **The label covers at least THREE distinct producers** (DDR-1019). Resolve any new RIP against its own binary before matching: DDR-1019's is the panic-arbitration *loser's* halt loop at `idt.c:697`; DDR-1006's runs through `sched_tick`; DDR-1010's through `sys_mmap`. The original (DDR-981, `yield()` spinning with IF clear) is genuinely fixed. **Local reproduction is EXHAUSTED** — 56 clean runs across the two kernels that matter (36/36 post-probe, 20/20 pre-probe, DDR-1023), including the exact binary the failure was first seen on. The old "~1 in 4" was one session's small sample and has not held up; stop quoting it as a rate. | NO |
 | **OPEN-12** | `*** NEXUS KERNEL PANIC *** / component: NEXUS isr` | **Root-cause candidate found and fixed** (DDR-996): `sched_exit` left a thread linked on its per-CPU runqueue and both reap paths unlinked only the all-threads ring, so a TCB could be freed while a queue still pointed at it. 16/16 victims measured, mutation-checked. **NOT closed**: OPEN-12's *original* capture lost its RIP to the interleaving DDR-979 later fixed, so identity is unproven and matching on `component:` alone would be colour-matching. Closes on a clean campaign, not on the fix. | NO |
 | **OPEN-13** | `[kheap] double-free … objsize=0x80` → KHEAP PANIC | **Instrument BUILT and mutation-proven** (DDR-1024): the line now carries `freed_by=` and `now_by=`, the first and second frees' return addresses, captured at the public `kfree`/`pcb_free`/`cap_free`/`ipc_free` boundary. `objsize=0x80` is a generic 128-byte class, not a dedicated cache, so "size class → structure" does not resolve. **One CI capture, no mechanism named — NOT a fix.** The next occurrence is diagnostic: resolve BOTH addresses against the exact binary that produced the log. | NO |
@@ -345,6 +359,60 @@ that would green the gate and delete the coverage DDR-1014 built, the trade
 DDR-1012 and DDR-973 each had to undo. A second sample (`idle2=`) is armed and
 mutation-proven, so the next occurrence self-diagnoses: `idle2=0` means
 sampling artefact, `idle2=1` means a real scheduler defect.
+
+---
+
+### 4.11 — `lock_stat` cannot see `mnt_lock`, the OPEN-1 route 1 prime suspect
+
+DDR-1047 ships spinlock contention accounting (hit counts and **wait time**;
+hold time deliberately dropped — an always-on `rdtsc` pair in `spin_lock` could
+*move* OPEN-2 rather than measure it, which is the hazard DDR-1010 recorded about
+its own probe). Two sites are **not** covered, both found by enumeration:
+
+- `sched.c:787` is a **trylock** in the work-stealing victim scan. It never
+  waits, so there is nothing to time — correctly out of scope. Consequence:
+  steal-path runqueue contention is invisible.
+- **`vfs.c:34` `mnt_lock` is not a `spinlock_t` at all** but a sleep-mutex over a
+  bare `busy` byte. So the one lock CLAUDE.md's own Group A row and DDR-994 name
+  as the unbounded wait on **OPEN-1 route 1's path** is the prime suspect this
+  instrument cannot see.
+
+Not folded in because the quantities are **not commensurable**: a spin-wait is
+cycles this CPU burned, a yield-wait is wall time during which the CPU ran other
+threads. One `waitavg` column holding both invites a specific, plausible, wrong
+comparison with a real number behind it — the DDR-1042 failure mode exactly.
+DDR-994's threshold instrument covers the *stuck* case there; `lock_stat` would
+have covered the *cumulative* one, and only the first exists.
+
+**No `smoke-lockstat`, deliberately** — the dump prints only on `[apfreeze]`,
+which is in `GLOBAL_FORBIDDEN`, so any assertion on it is unreachable on a green
+run. Do not create that gate.
+
+### 4.12 — `apt_prepare.sh`'s SIGPIPE race: fixed, cause of its CI silence unexplained
+
+DDR-1048. The shipped resolve check was `apt-cache policy "$p" | grep -q
+'Candidate:'` under `set -o pipefail`. `grep -q` exits at the first match and
+closes the pipe, `apt-cache` dies of SIGPIPE (141), and the pipeline is non-zero
+**although grep matched** — so a package that resolves fine is marked missing.
+Measured `PIPESTATUS=(141 0)`; which package loses the race varies per run.
+Fixed by capturing the output once and matching it as a string: **0/20 failures**
+against every observed run failing for the old form.
+
+**What is NOT established:** CI has been **green** with the racy form, and this
+does not claim CI was about to break. Why the race has not fired on the runner is
+unexplained. A pipe-buffer explanation was proposed and then **refuted by
+measurement** (`apt-cache policy llvm` is 211 bytes, far inside the 64 KiB
+buffer). Recorded as an open question rather than given a plausible answer.
+
+### 4.13 — A DDR-1045 premise that does not reproduce
+
+DDR-1045 states *"apt-get update exits non-zero if ANY configured repo fails"*.
+Measured on Ubuntu 24.04 (DDR-1048): `apt-get update` exits **rc=0 with four 403
+Forbidden** vendor responses, and also with **zero** sources configured. The
+DDR-1045 *fix* is unaffected — it tolerates a failing update and then proves the
+index usable by resolving every requested package — but its stated rationale is
+partly unverified, and the runner's observed exit 100 is left unexplained rather
+than explained away.
 
 ---
 
@@ -598,15 +666,15 @@ unexplained exclusion is how a gate goes missing, so they are reproduced here.
 
 ## SECTION 6 — RELEASE-GATE STATE
 
-Measured 2026-09-01, not carried forward:
+Re-measured 2026-09-03 at `32cb8ad`. **Re-measure rather than increment** — the gate count has been wrong three times.
 
 | Quantity | Value | Source |
 |---|---|---|
-| Gates assigned | **167** across **10** shards | `make ci-shard-check` |
+| Gates assigned | **173** across **10** shards | `make ci-shard-check`, re-measured 2026-09-03 |
 | Gates excluded | **7**, each with a reason | §5.4 |
-| NSI max | **99** (`SYS_IPC_RECV`), next free **100**, table size 128 | `kernel/syscall/syscall.h` |
-| DDR free range | **DDR-1034+** | §INV.4 |
-| `kernel.bin` | **1,155,466 B** against the 1,572,864 B gate — 417,398 B headroom | measured at `e9455b7`; CLAUDE.md §CURRENT BUILD STATE still carries the pre-DDR-1033 figure 1,134,986 |
+| NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h:181` |
+| DDR free range | **DDR-1050+** | §INV.4 |
+| `kernel.bin` | **1,175,946 B** against the 1,572,864 B gate — 396,918 B headroom | measured at `32cb8ad` |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS** | `smoke-iso-userspace` |
 | aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — see §5.1 | DDR-999 |
