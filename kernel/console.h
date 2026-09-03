@@ -12,6 +12,23 @@ void kputhex(uint64_t v);                 /* "0x" + 16 hex digits to COM1 */
 void kputdec(uint64_t v);                 /* unsigned decimal to COM1 */
 void kvga_line(const char *s, int row);   /* write a string to one VGA text row */
 
+/* DDR-1055: assemble a multi-part line and emit it as ONE kwrite.
+ *
+ * Use this -- not several kputs/kputdec calls, and not console_line_lock() --
+ * for any line a gate asserts on.  kwrite holds g_console_lock for the whole
+ * buffer and every printer in the tree takes that lock, so a kline is atomic
+ * against ALL of them, including the ring-3 write(2) path that the line lock
+ * below does not exclude.  Overflow emits '[kline] TRUNC' (GLOBAL_FORBIDDEN)
+ * rather than silently shortening the line. */
+#define KLINE_MAX 256
+typedef struct { char b[KLINE_MAX]; unsigned n; unsigned trunc; } kline;
+void kline_init(kline *k);
+void kline_c(kline *k, char c);
+void kline_s(kline *k, const char *s);
+void kline_d(kline *k, uint64_t v);          /* unsigned decimal          */
+void kline_x(kline *k, uint64_t v);          /* "0x" + 16 hex digits      */
+void kline_emit(kline *k);                   /* one kwrite; resets the buffer */
+
 /* DDR-963 §5: line-granularity console lock.
  *
  * kputc/kputs/kputhex/kputdec are each individually atomic (g_console_lock,

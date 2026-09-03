@@ -625,9 +625,10 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
 
 /* DDR-SMP-3c-alpha: the boot-time AP-dispatch proof — runs ON each AP. */
 static void smp_test_job(void) {
-    kputs("[smp] cpu ");
-    kputdec(this_cpu()->cpu_idx);
-    kputs(" job OK\r\n");
+    kline k; kline_init(&k);                         /* DDR-1055 */
+    kline_s(&k, "[smp] cpu ");
+    kline_d(&k, this_cpu()->cpu_idx);
+    kline_s(&k, " job OK\r\n"); kline_emit(&k);
 }
 
 /* DDR-SMP-3c-locks-1: cross-CPU wake proof — a BSP thread blocks; an AP job
@@ -1286,9 +1287,12 @@ static void fs_test_thread(void *arg) {
     {
         struct rtc_time t;
         rtc_now(&t);
-        kputs("[rtc] ");
-        kputdec(t.year); kputs("-"); kputdec(t.month); kputs("-"); kputdec(t.day);
-        kputs(" "); kputdec(t.hour); kputs(":"); kputdec(t.minute); kputs("\r\n");
+        kline k; kline_init(&k);                     /* DDR-1055 */
+        kline_s(&k, "[rtc] ");
+        kline_d(&k, t.year); kline_c(&k, '-'); kline_d(&k, t.month);
+        kline_c(&k, '-');    kline_d(&k, t.day);
+        kline_c(&k, ' ');    kline_d(&k, t.hour); kline_c(&k, ':');
+        kline_d(&k, t.minute); kline_s(&k, "\r\n"); kline_emit(&k);
     }
     fs_write_test(cap, mnt);
     fat_place_exec_image(cap, mnt);   /* 5b slice 7: /EXECTEST.ELF for systest's execve */
@@ -1833,9 +1837,14 @@ static void fs_test_thread(void *arg) {
                         }
                     }
                     smp_resched_all();           /* DDR-966: wake idle APs to take them */
-                    kputs("[user] ELF loaded (embedded); net hammer spawned=");
-                    kputdec((uint64_t)spawned);
-                    kputs("/2\r\n");
+                    /* DDR-1055: `net hammer spawned=2/2` is a REQUIRED gate
+                     * sentinel and was assembled from three unlocked calls; a
+                     * ring-3 probe's write landed between them and produced
+                     * `... spawned=PRADYOS_SOVEGRESS_AUDITED`. One kwrite. */
+                    { kline k; kline_init(&k);
+                      kline_s(&k, "[user] ELF loaded (embedded); net hammer spawned=");
+                      kline_d(&k, (uint64_t)spawned);
+                      kline_s(&k, "/2\r\n"); kline_emit(&k); }
                 }
                 /* DDR-818: HKDF RFC 5869 vector probe, opt-in via DDR-804. */
                 if (probe_enabled("hkdf")) {
@@ -2757,8 +2766,10 @@ static void fs_test_thread(void *arg) {
 
                 /* Slice 4i: inline LZ4 + metadata tags (destructive). */
                 int lr = sfs_selftest_lz4(sbd);
-                kputs("[sfs] lz4+tags ");
-                kputs(lr == 7 ? "compress/readback/tag OK\r\n" : "FAIL\r\n");
+                { kline k; kline_init(&k);           /* DDR-1055 */
+                  kline_s(&k, "[sfs] lz4+tags ");
+                  kline_s(&k, lr == 7 ? "compress/readback/tag OK\r\n" : "FAIL\r\n");
+                  kline_emit(&k); }
 
                 /* DDR-760: persistent SFS root (SFS-as-root half 2/2). The
                  * destructive tests above left blk2 dirty + unmounted; reformat it
@@ -3522,9 +3533,10 @@ static void print_boot_info(const struct boot_info *bi) {
     kputs("  long_mode=");
     kputhex(bi->long_mode);
     kputs("\r\n");
-    kputs("NEXUS: E820 map, entries=");
-    kputhex(bi->e820_count);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "NEXUS: E820 map, entries=");
+      kline_x(&k, bi->e820_count);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
     for (uint32_t i = 0; i < bi->e820_count; i++) {
         kputs("  base=");
         kputhex(bi->e820[i].base);
@@ -3652,9 +3664,11 @@ void kmain(struct boot_info *bi) {
         } else {
             uint64_t a = pmm_alloc_pages_node(1, 0);
             uint32_t got = a ? numa_node_of(a) : 0xFFFFFFFFu;
-            kputs("[numa] alloc node1 -> node");
-            kputdec(got);
-            kputs(a && got == 1 ? " OK\r\n" : " MISMATCH\r\n");
+            { kline k; kline_init(&k);               /* DDR-1055 */
+              kline_s(&k, "[numa] alloc node1 -> node");
+              kline_d(&k, got);
+              kline_s(&k, a && got == 1 ? " OK\r\n" : " MISMATCH\r\n");
+              kline_emit(&k); }
             if (a)
                 pmm_free_page(a);
         }
@@ -3701,9 +3715,10 @@ void kmain(struct boot_info *bi) {
             if (smp_job_done(i))
                 jobs++;
         }
-        kputs("[smp] jobs done=");
-        kputdec(jobs);
-        kputs("\r\n");
+        { kline k; kline_init(&k);                   /* DDR-1055 */
+          kline_s(&k, "[smp] jobs done=");
+          kline_d(&k, jobs);
+          kline_s(&k, "\r\n"); kline_emit(&k); }
         g_smp_have_aps = (jobs > 0);     /* cross-wake proof runs later, once
                                             the scheduler is up (DDR D5) */
     }

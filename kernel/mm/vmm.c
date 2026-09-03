@@ -152,13 +152,14 @@ void vmm_protect_kernel(void) {
     /* Full TLB flush (non-global entries), then audit what is actually live. */
     __asm__ volatile("mov %0, %%cr3" : : "r"(g_kernel_pml4) : "memory");
 
-    kputs("PRADYOS_WX_ALIAS present=");
-    kputdec((alias_pte & PTE_PRESENT) ? 1u : 0u);
-    kputs(" rw=");
-    kputdec((alias_pte & VMM_RW) ? 1u : 0u);
-    kputs(" nx=");
-    kputdec((alias_pte & VMM_NX) ? 1u : 0u);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "PRADYOS_WX_ALIAS present=");
+      kline_d(&k, (alias_pte & PTE_PRESENT) ? 1u : 0u);
+      kline_s(&k, " rw=");
+      kline_d(&k, (alias_pte & VMM_RW) ? 1u : 0u);
+      kline_s(&k, " nx=");
+      kline_d(&k, (alias_pte & VMM_NX) ? 1u : 0u);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
 
     int ok = 1;
     /* DDR-1046: the alias is part of W^X and is audited with everything else.

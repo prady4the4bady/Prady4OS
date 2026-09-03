@@ -2031,3 +2031,68 @@ an out-of-bounds array read.
 
 Gate count 166 → **167**. NSI max 97 → **99**. Gates: `smoke-sendipc`,
 `smoke-aether`, `smoke-agents`, `smoke-shell` PASS; `hygiene_check.sh` all three.
+
+---
+
+## DDR-1055 — a required gate sentinel was spliced by another CPU's printer
+
+`smoke-nethammer` had been red on CI shard 3 four times, every one of them on a
+commit that provably cannot change `kernel.bin` (`kernel.bin: OK` from DDR-1035's
+hash assertion on the red shard). Reproduced locally 1 in 3 on an idle machine.
+Root cause, from `build/gatelogs/nethammer.log.fail-3786`:
+
+```
+[user] ELF loaded (embedded); net hammer spawned=PRADYOS_SOVEGRESS_AUDITED
+```
+
+`kernel/main.c:1836` built the required sentinel `net hammer spawned=2/2` from
+THREE unlocked console calls, and a ring-3 probe's `write(2)`
+(`user/sovegresstest.c:82`) landed between two of them. Every character the
+kernel meant to print is on the wire; the line a gate can match is not. That is
+why every red capture had unbroken heartbeats, no panic and no `[apfreeze]`.
+
+**`console_line_lock()` did not cover this, although `console.h` presents it as
+the answer.** It excludes only other holders of `g_line_lock`, and `kwrite` — the
+ring-3 `write(2)` path and the busiest printer in the system — never took it.
+Four sites in the whole tree held that lock. The DDR-1046 shape: a control that
+cannot see the case it exists for reads exactly like a control that works.
+
+**Fix: one `kwrite`, not one more lock.** `kline` (`kernel/console.{h,c}`)
+assembles the line into a stack buffer and emits it with a single `kwrite`, which
+holds `g_console_lock` for the whole buffer — and every printer in the tree takes
+that lock, so the line is atomic against all of them. Locking the composite
+instead would still leave it open to any bare `kputs` from another CPU.
+
+Rejected deliberately: making `kwrite` take `g_line_lock` (an IRQ-masked
+acquisition on the hottest output path, contending with the timer ISR — the cost
+DDR-1047 refused for the same OPEN-2 reason), and a per-CPU recursion guard (it
+needs a CPU id at every `kputs` from the first boot print; `lapic_id()` is invalid
+before the LAPIC is mapped and the GS-based id is what DDR-1010 caught being
+*wrong*, so a broken GS would corrupt the console exactly when it is the last
+diagnostic left).
+
+**Scope measured, not read.** All 268 `EXTRA_SENTINEL` patterns were asked one
+question — does any single string literal in the tree contain it? 186 do (safe);
+82 do not, and of those **16 are ring-0 composites**, every one confirmed *not*
+inside a `console_line_lock` region by a source-order depth scan. 21 sites
+converted, including the four AP announces in `smp.c` whose line lock is removed
+as ineffective. `kernel/idt.c:748` is deliberately untouched: it uses
+`console_line_trylock` and prints anyway, because a trap printer that blocks
+turns a diagnosable fault into a hang.
+
+Overflow is loud, not silent: `[kline] TRUNC` is emitted on overflow and added to
+`GLOBAL_FORBIDDEN` — inserted BEFORE the final list line per §NON-NEGOTIABLE 6, so
+the documented verification command's `sed` terminator did not move (74 → 75,
+CLAUDE.md's stated count updated in the same commit).
+
+Gate count unchanged. `kernel.bin` 1,192,330 → **1,196,426 B** against the
+1,572,864 B gate. Zero warnings at `-Werror`; `hygiene_check.sh` ALL SIX.
+
+**Also found and NOT fixed here — the same defect one ring out (DDR-1055 §9).**
+Gates assert in two places, and the sweep above covered only the first: the
+Makefile post-check `grep`s match the *whole* measured line, and ring-3 probes
+build those from many `wr()` calls — `user/actiondeltest.c:172` uses **nine**,
+which is nine `write(2)`s. That is very likely (**not established**) the
+`smoke-actiondel` "no measured line in the capture" failure that landed on the
+same docs-only commit as the third nethammer timeout. Fixed separately, with its
+own gate evidence.

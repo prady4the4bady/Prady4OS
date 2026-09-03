@@ -216,13 +216,14 @@ void smp_ap_entry(uint32_t idx) {
      * installs this CPU's real GS base. */
     gdt_init();
     percpu_init_cpu(idx);          /* GS base: %gs state usable from here on */
-    { uint64_t anfl = console_line_lock();
-    kputs("[smp] cpu ");
-    kputdec(idx);
-    kputs(" up id=");
-    kputdec(lapic_apic_id_at(idx));
-    kputs("\r\n");
-    console_line_unlock(anfl); }
+    /* DDR-1055: was console_line_lock()'d, which excludes only other holders
+     * of that lock -- not kwrite, the ring-3 write(2) path. One kwrite does. */
+    { kline k; kline_init(&k);
+      kline_s(&k, "[smp] cpu ");
+      kline_d(&k, idx);
+      kline_s(&k, " up id=");
+      kline_d(&k, lapic_apic_id_at(idx));
+      kline_s(&k, "\r\n"); kline_emit(&k); }
 
     /* ADR-030 stage 1: exercise the freshly locked allocators from this CPU —
      * a PMM page and a slab object, allocated and returned — proving the lock
@@ -232,19 +233,19 @@ void smp_ap_entry(uint32_t idx) {
     int ok = (page != 0) && (obj != 0);
     if (obj)  kfree(obj);
     if (page) pmm_free_page(page);
-    { uint64_t anfl = console_line_lock();
-    kputs("[smp] cpu ");
-    kputdec(idx);
-    kputs(ok ? " locks OK\r\n" : " locks FAIL\r\n");
-    console_line_unlock(anfl); }
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[smp] cpu ");
+      kline_d(&k, idx);
+      kline_s(&k, ok ? " locks OK\r\n" : " locks FAIL\r\n");
+      kline_emit(&k); }
 
     /* ADR-030 stage 2 (DDR-SMP-2): round-trip this CPU's identity (init'd above). */
     struct percpu *pc = this_cpu();
-    { uint64_t anfl = console_line_lock();
-    kputs("[smp] cpu ");
-    kputdec(idx);
-    kputs(pc && pc->cpu_idx == idx ? " percpu OK\r\n" : " percpu FAIL\r\n");
-    console_line_unlock(anfl); }
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[smp] cpu ");
+      kline_d(&k, idx);
+      kline_s(&k, pc && pc->cpu_idx == idx ? " percpu OK\r\n" : " percpu FAIL\r\n");
+      kline_emit(&k); }
 
     /* ADR-031 cap-1: this CPU's own TSS + GDT descriptor + TR. RSP0 is a
      * placeholder (0) — unused until a ring-3 thread runs here (cap-4); it is
@@ -252,11 +253,11 @@ void smp_ap_entry(uint32_t idx) {
     tss_init_cpu(idx, 0);
     uint16_t tr;
     __asm__ volatile("str %0" : "=r"(tr));
-    { uint64_t anfl = console_line_lock();
-    kputs("[smp] cpu ");
-    kputdec(idx);
-    kputs(tr == (uint16_t)(0x28 + idx * 0x10) ? " tss OK\r\n" : " tss FAIL\r\n");
-    console_line_unlock(anfl); }
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[smp] cpu ");
+      kline_d(&k, idx);
+      kline_s(&k, tr == (uint16_t)(0x28 + idx * 0x10) ? " tss OK\r\n" : " tss FAIL\r\n");
+      kline_emit(&k); }
     __atomic_add_fetch(&g_online, 1, __ATOMIC_SEQ_CST);
 
     /* ADR-031 cap-2b: leave the park loop and JOIN THE SCHEDULER. Load this AP's
@@ -377,9 +378,10 @@ void smp_start_aps(void) {
         }
     }
 
-    kputs("[smp] cpus online=");
-    kputdec(g_online);
-    kputs("/");
-    kputdec(total);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[smp] cpus online=");
+      kline_d(&k, g_online);
+      kline_c(&k, '/');
+      kline_d(&k, total);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
 }

@@ -291,9 +291,10 @@ static void port_setup(volatile uint8_t *pbase) {
     blk_register(&d->bd);
     g_ndisks++;
 
-    kputs("[ahci] port disk, sectors=");
-    kputdec(sectors);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[ahci] port disk, sectors=");
+      kline_d(&k, sectors);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
 }
 
 void ahci_init(uint8_t bus, uint8_t dev, uint8_t func) {

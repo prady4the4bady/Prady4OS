@@ -309,6 +309,59 @@ void kputdec(uint64_t v) {
     irq_restore(fl);
 }
 
+/* ---- DDR-1055: single-call line assembly -------------------------------
+ *
+ * A logical line built from several kputs/kputdec/kputhex calls is NOT atomic,
+ * and console_line_lock() does not make it so: it excludes only OTHER holders
+ * of g_line_lock, and the busiest printer in this system -- kwrite, the ring-3
+ * write(2) path -- never took it.  A ring-3 probe on another CPU could
+ * therefore land its whole line between two of ours, and did:
+ *
+ *     [user] ELF loaded (embedded); net hammer spawned=PRADYOS_SOVEGRESS_AUDITED
+ *
+ * every character the kernel meant to print, in a line no gate can match.
+ *
+ * Assemble here and emit with ONE kwrite.  kwrite holds g_console_lock for the
+ * whole buffer, and EVERY printer in the tree takes that lock, so the result is
+ * atomic against all of them -- which is a strictly stronger guarantee than the
+ * line lock can give, and needs no new locking discipline at the call site.
+ *
+ * Overflow is LOUD, never silent: a truncated sentinel is the same failure this
+ * exists to remove, so it emits its own '[kline] TRUNC' line, which is in
+ * GLOBAL_FORBIDDEN.  KLINE_MAX is 256 against a longest current user of ~60. */
+void kline_init(kline *k) { k->n = 0; k->trunc = 0; }
+
+void kline_c(kline *k, char c) {
+    if (k->n + 1u >= (unsigned)KLINE_MAX) { k->trunc = 1; return; }
+    k->b[k->n++] = c;
+}
+
+void kline_s(kline *k, const char *s) {
+    if (!s) s = "(null)";
+    while (*s) kline_c(k, *s++);
+}
+
+void kline_d(kline *k, uint64_t v) {
+    char t[20];
+    int i = 0;
+    if (v == 0) { kline_c(k, '0'); return; }
+    while (v) { t[i++] = (char)('0' + (v % 10)); v /= 10; }
+    while (i) kline_c(k, t[--i]);
+}
+
+void kline_x(kline *k, uint64_t v) {
+    static const char digits[] = "0123456789ABCDEF";
+    kline_c(k, '0'); kline_c(k, 'x');
+    for (int shift = 60; shift >= 0; shift -= 4)
+        kline_c(k, digits[(v >> shift) & 0xF]);
+}
+
+void kline_emit(kline *k) {
+    if (k->n) kwrite(k->b, k->n);
+    if (k->trunc) kwrite("[kline] TRUNC\r\n", 15);
+    k->n = 0; k->trunc = 0;
+}
+
 void kvga_line(const char *s, int row) {
     volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
     vga += (uint64_t)row * 80;

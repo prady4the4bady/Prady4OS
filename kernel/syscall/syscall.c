@@ -214,18 +214,22 @@ static long sys_exit(long a1, long a2, long a3, long a4, long a5, long a6) {
      * triggered agent exiting before it printed anything (so it DID run), or
      * an unrelated thread (so the agent never ran). Those are opposite
      * conclusions about the same log. */
-    kputs("[user] sys_exit(");
-    kputdec((uint64_t)a1);
-    kputs(") pid=");
-    kputdec((uint64_t)current_thread->pid);
     /* DDR-948: write ATTEMPTS by this thread. On an A1 failure (agent exits 0
      * with no AGENT_START and no EBADF), writes=0 means main was never entered
      * — the defect is pre-main in the crt/ELF entry; writes>0 means the writes
      * were attempted and accepted yet produced no serial output, putting the
-     * defect downstream of fd_write_user. Two different subsystems. */
-    kputs(" writes=");
-    kputdec((uint64_t)current_thread->dbg_writes);
-    kputs(" — thread terminating\r\n");
+     * defect downstream of fd_write_user. Two different subsystems.
+     *
+     * DDR-1055: ONE kwrite. This line is printed from ring-3 exit context with
+     * every other CPU running, i.e. the most concurrent printer in the tree. */
+    { kline k; kline_init(&k);
+      kline_s(&k, "[user] sys_exit(");
+      kline_d(&k, (uint64_t)a1);
+      kline_s(&k, ") pid=");
+      kline_d(&k, (uint64_t)current_thread->pid);
+      kline_s(&k, " writes=");
+      kline_d(&k, (uint64_t)current_thread->dbg_writes);
+      kline_s(&k, " — thread terminating\r\n"); kline_emit(&k); }
     sched_exit((int)a1);       /* zombie w/ status; does not return */
     return 0;
 }

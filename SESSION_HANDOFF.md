@@ -10129,3 +10129,63 @@ green run — whether it *did* is unknowable, since past green runs' captures ar
 already deleted. And a panic that faults between entering the panic path and
 winning the CAS is still invisible; that window is a few instructions and is not
 covered.
+
+---
+
+## CHECKPOINT — DDR-1055: the console line splice (2026-09-03)
+
+**The recurring `smoke-nethammer` red is root-caused and fixed.** Both the
+pre-launch checklist row and my PR #17 comment said "root cause NOT established";
+both are corrected in this commit.
+
+`kernel/main.c:1836` assembled the gate's required sentinel from three unlocked
+console calls, and a ring-3 probe's `write(2)` landed between two of them —
+`build/gatelogs/nethammer.log.fail-3786`:
+
+```
+[user] ELF loaded (embedded); net hammer spawned=PRADYOS_SOVEGRESS_AUDITED
+```
+
+Local rate on the pre-fix tree: 1 fail in 3 on an idle machine. CI: four shard-3
+failures, every one on a commit that cannot change `kernel.bin`, each shard
+printing `kernel.bin: OK`.
+
+**Carry this:** `console_line_lock()` (DDR-963 §5) exists for exactly this
+problem and `console.h` describes it as the answer, but it excludes only other
+holders of `g_line_lock` — and `kwrite`, the ring-3 write path and the busiest
+printer in the system, never took it. Fix is **one `kwrite`** (`kline`), which is
+atomic against every printer because they all take `g_console_lock`; that is
+strictly stronger than the line lock and touches no hot path.
+
+21 sites converted, chosen by measuring all 268 `EXTRA_SENTINEL` patterns against
+every string literal in the tree (186 safe / 82 not / 16 ring-0 composites), each
+confirmed outside a line-lock region by a depth scan. `idt.c:748` deliberately
+left on `console_line_trylock` — a trap printer that blocks turns a fault into a
+hang.
+
+`[kline] TRUNC` added to `GLOBAL_FORBIDDEN`, inserted BEFORE the final list line
+so §NON-NEGOTIABLE 6's terminator did not move: **74 before, 75 after, not 0.**
+
+| | value |
+|---|---|
+| kernel (fixed) | `5f0a2f60d56fbd9b` |
+| `kernel.bin` | 1,196,426 B / 1,572,864 B gate |
+| build | rc=0, zero warnings at `-Werror` |
+| `hygiene_check.sh` | ALL SIX, hash unchanged before and after |
+
+**IN FLIGHT at the time of this commit — do not read the DDR's §8 as final.** A
+20-run `smoke-nethammer` campaign on that one binary is running
+(`build/gatelogs/ddr1055/campaign.txt`); 2 of 20 complete, both rc=0 with the
+sentinel intact and non-vacuous captures (46-47 heartbeat lines each). The
+regression suite — one gate per converted site plus the hygiene gates, with
+`smoke-selftest` load-bearing because this edits `GLOBAL_FORBIDDEN` — has NOT run
+yet. **Next session: finish both, then fill in DDR-1055 §8 and this table.**
+
+**NEXT, already scoped (DDR-1056, task #39):** the same defect one ring out.
+Gates also assert via Makefile post-check greps of the WHOLE line, and probes
+build those from many `wr()` calls — `user/actiondeltest.c:172` uses nine. Very
+likely (**not established** — that CI log does not dump the raw lines) the
+`smoke-actiondel` "no measured line in the capture" failure on the same docs-only
+commit. `user/include/uline.h` and the conversions are drafted at
+`/tmp/.../scratchpad/{uline.h,convert_ring3.py}`; the gate's failure path also
+needs a diagnostic dump so the next occurrence is decidable.
