@@ -485,6 +485,8 @@ extern const unsigned char agstest_elf[];             /* DDR-814: AGS goal signi
 extern const unsigned char agstest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
 extern const unsigned char sha256test_elf_end[];
+extern const unsigned char shaketest_elf[];           /* DDR-1052: FIPS 202 KATs */
+extern const unsigned char shaketest_elf_end[];
 extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe */
 extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
@@ -2170,6 +2172,24 @@ static void fs_test_thread(void *arg) {
                         kputdec((uint64_t)(int64_t)shrc);
                         kputs(" free_frames=");
                         kputhex(pmm_free_page_count());
+                        kputs("\r\n");
+                    }
+                }
+                if (probe_enabled("shake")) {
+                    struct tcb *sk = 0;
+                    uint64_t sklen = (uint64_t)((uintptr_t)shaketest_elf_end - (uintptr_t)shaketest_elf);
+                    /* OPEN-11's lesson, applied: a load that fails must SAY so.
+                     * A silent failed spawn looks exactly like a probe that ran
+                     * and stayed quiet, and the gate then times out blaming the
+                     * wrong thing. */
+                    int skrc = elf_load((void *)(uintptr_t)shaketest_elf, sklen,
+                                        "SHAKE", &sk);
+                    if (skrc == ELF_OK && sk) {
+                        sched_unblock(sk);
+                        kputs("[user] ELF loaded (embedded); FIPS 202 SHAKE vector probe spawned\r\n");
+                    } else {
+                        kputs("[user] SHAKE probe elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)skrc);
                         kputs("\r\n");
                     }
                 }

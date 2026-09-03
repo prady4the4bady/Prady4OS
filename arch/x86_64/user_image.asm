@@ -396,6 +396,14 @@ sha256test_elf:
     incbin "build/sha256test.elf"
 sha256test_elf_end:
 
+; DDR-1052: FIPS 202 SHA-3/SHAKE known-answer probe. Keccak is the prerequisite
+; for ML-KEM and ML-DSA, both of which are built on SHAKE128/256.
+global shaketest_elf
+global shaketest_elf_end
+shaketest_elf:
+    incbin "build/shaketest.elf"
+shaketest_elf_end:
+
 global sigpipetest_elf
 global sigpipetest_elf_end
 sigpipetest_elf:

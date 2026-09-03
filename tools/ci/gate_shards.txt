@@ -145,6 +145,7 @@
 6	smoke-chipset	120	strict
 6	smoke-hkdf	90	strict
 6	smoke-sha256	90	strict
+6	smoke-shake	90	strict
 6	smoke-sfs-persist	90	strict
 6	smoke-rename	90	strict
 6	smoke-fpu	60	strict
