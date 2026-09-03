@@ -2034,6 +2034,42 @@ Gate count 166 → **167**. NSI max 97 → **99**. Gates: `smoke-sendipc`,
 
 ---
 
+## DDR-1034 … DDR-1053 — index (recovered 2026-09-03)
+
+**Why this block exists.** §NON-NEGOTIABLE 11 requires this file updated in the
+same commit as the code. It was not, for **twenty consecutive DDRs** — 1034
+through 1053 had no entry here at all, while their DDR files, gates and code all
+shipped. That is a real defect in the project's memory rather than a cosmetic
+one: six of the twenty are **assessed-and-not-built decisions**, and a decision
+nobody can find in the tracker is a blocker the next session re-derives from
+scratch. Recorded compactly — one line of finding plus the gate — with the DDR
+file as the authority for detail. Recovered as an index, not rewritten as prose,
+because inventing twenty retrospective narratives would be worse than a pointer.
+
+| DDR | finding | gate |
+|---|---|---|
+| **1034** | `SYS_RUN_EXPERIMENT`/`SYS_EXP_RESULT` (NSI 100/101) + a **bounded** stack machine (no LOAD/STORE/DIV by design). §4 first said "bounded, preemptible" and that was **wrong**: `MSR_SFMASK` clears `RFLAGS.IF` for the whole syscall, so nothing preempts it and `EXP_MAX_STEPS=4096` is load-bearing. | `smoke-runexp` |
+| **1035** | **CI builds once.** Ten shards each compiled the same kernel; a `build` job now does it and shards `sha256sum -c` the binary **before and after** the gates. That assertion earned itself three times, printing `kernel.bin: OK` on red shards so "the gates were red" and "the shard ran a different binary" stayed separate findings. | CI workflow |
+| **1036** | **Ghost windows** — the compositor never announced a window's *destruction*, so `mouse_inject.sh` resolved geometry from an append-only log and clicked a surface already gone. `PRADYOS_WM_GONE` keyed on **id, not poll index**. §5's claim that `smoke-wmclose` already covered this was **wrong and the DDR corrects itself**. | `smoke-ghostclick` |
+| **1037** | `SYS_POLL` (NSI 102) — **generalised** the readiness predicate rather than duplicating it (`fd_ready_mask()` shared with `epoll_wait`). Deadline computed **once** before the loop. Arm E nearly shipped vacuous. | `smoke-poll` |
+| **1038** | `SYS_FUTEX` **ASSESSED and NOT BUILT.** A futex is a shared-memory word and this kernel has no way for two threads to share one — no `CLONE_VM`, no `MAP_SHARED` file backing, and fork COWs everything writable, so the two sides would wait on **two different physical words**. Buildable the moment either lands. | — |
+| **1039** | **PRISM erase.** `readline()` appended every non-newline byte, so a backspace landed *in* the buffer. Invisible to all 170 gates because every gate injects byte-perfect lines. The DDR's own first arm was **vacuous** and it says so. | `smoke-shell` (erase arm) |
+| **1040** | **SMEP** + the one-shot expected-fault latch. **The vacuity trap was measured before a line was written:** the TCG default `qemu64` reports `smep=false`, so a correct implementation would have been a permanent no-op. M3 **passes every arm** — the RIP-window check is measured-uncovered. | `smoke-smep` |
+| **1041** | **SMAP.** The enumeration was **measured, not grepped** — SMAP on with no `stac` anywhere; the `uaccess.h` contract HOLDS. **Not fixed and named:** an interrupt inside the window runs with **AC still set**. | `smoke-smap` |
+| **1042** | `smoke-resizeall`'s checker **failed arm e using a record arm w produced** — worse than a flake, a specific plausible **false accusation** against a correct subsystem with a real log line behind it. `check()` split into `invariant()` (every record) and `liveness()` (at least one). | `ci-resizecheck-selftest` |
+| **1043** | **The silent-panic instrument was never armed, and would have been corrupted if it were.** `QEMU_QMP_DIAG` was set by nothing in the tree; and the dump was appended to `$SERIAL_LOG`, which QEMU holds open **without `O_APPEND`**, so the guest's next output overwrote it. Sidecar + narrowed arming. | CI workflow |
+| **1044** | **`#MC`.** The row was half right — `idt.c` already knew vector 18; **the real defect was upstream: with `CR4.MCE` clear a machine check raises no exception at all.** M2 landed on arm A not D, hence M3, which fails arm D alone. | `smoke-mce` |
+| **1045** | A **markdown-only commit reddened the aarch64 job** — a vendor repo 403 in the runner image. **Two failed fixes, and the pattern is the point:** both asserted a claim about the runner image that could not be checked. The shipped fix **assumes nothing** — tolerate a failing `update`, then *prove* the index usable by resolving. | `ci-aptprepare-selftest` |
+| **1046** | **Kernel text was writable through the identity alias**, and **the audit could not see it** — the verdict loop walks only the higher-half PTEs, so it printed `W^X OK` on a kernel with writable text. M1 **is** the pre-fix tree. | `smoke-wxkernel` |
+| **1047** | **`lock_stat`** — contention counts and wait time; **hold time deliberately dropped** (an `rdtsc` pair on the hottest primitive could *move* OPEN-2 rather than measure it). `g_sched_lock` dominates by **~450x**. **Not gated, deliberately.** **Cannot see `mnt_lock`**, the OPEN-1 route 1 prime suspect. | none (by design) |
+| **1048** | A **local** way to check a runner-environment assumption. The finding reframes the task: **this host is already Ubuntu 24.04.4** and the file refuting DDR-1045 attempt 1 was on this disk unread. Found a real defect on first use — a `grep -q` **SIGPIPE race** under `pipefail` marking a resolvable package missing. | `ci-runnerenv-selftest` |
+| **1049** | **A lone silent panic left a green run**, and the field built to name it could not print: `panic_stage` was gated behind `g_panic_extra`, which increments **only in the loser branch**. Every channel empty, gate sentinels all present, **run green with a panicked CPU in it.** `panic_stage=` added to `GLOBAL_FORBIDDEN`. | `smoke-selftest` |
+| **1050** | **I/O APIC stage D ASSESSED and NOT BUILT.** Most of it exists (DDR-874). **Blocker: there is no ACPI `_PRT` parser**, so the three PCI INTx fallbacks cannot be routed correctly, and a wrong GSI looks exactly like a dead device. And **the benefit is already delivered** — MSI-X provides affinity for every device carrying real traffic. | — |
+| **1051** | **KASLR ASSESSED and NOT BUILT** — a **sequencing judgment**, not a blocker. Zero relocation sections, so a virtual slide needs a relink *and* an applier. The deferral reason is that KASLR **degrades the one diagnostic discipline every open defect depends on**: `[apfreeze]` has three producers told apart *only* by RIP. | — |
+| **1052** | **Keccak-f[1600] / SHA-3 / SHAKE** — the ML-KEM/ML-DSA prerequisite. Constants **derived and proved**, not transcribed: **the first generator produced `RC[0]=0x03` instead of `0x01`**. Vector selection is the design — M2 **passes vectors 1–6 and fails 7**. | `smoke-shake` |
+| **1053** | **FIPS 204 ML-DSA vectors acquired — the predicted blocker does not exist**, correcting DDR-1052 §7. Both premises hold, the conclusion does not: NIST publishes ACVP in **its own GitHub repo**, which is reachable. Provenance is a **committed tool**, and re-running it regenerates the headers **bit-identically**. | — |
+
+
 ## DDR-1055 — a required gate sentinel was spliced by another CPU's printer
 
 `smoke-nethammer` had been red on CI shard 3 four times, every one of them on a

@@ -265,6 +265,162 @@ All entries below are **shipped**.
 - Host `mkfs.sfs` tool (DDR-767) + multi-leaf B+tree bulk load (DDR-773); ext4 read-only (ADR-019); per-process root mount (DDR-739)
 - NVMe controller + block I/O (DDR-765/766); NVMe PRP2/PRP-list (DDR-772); `VBLK_MAX` 4→8 (DDR-771)
 
+#### CPU mitigations, machine check, and kernel memory protection (2026-09)
+
+- **SMEP (DDR-1040)** — `CR4.MEP` (bit 20), CPUID-guarded, set on the BSP and on
+  every AP. Ships `kernel/fault_expect.h`, a one-shot RIP-windowed expected-fault
+  latch, without which enforcement is unobservable (a ring-0 `#PF` is fatal here —
+  `idt.c` has no fixup table — so "the CR4 bit is set" would be the only assertable
+  claim). **The vacuity trap was measured first:** the TCG default `qemu64` reports
+  `smep=false`, so a correct CPUID-guarded implementation is a permanent no-op on
+  the CPU every gate runs on. `smoke-smep` therefore pins its own
+  `-cpu qemu64,+smep`, and arm E re-boots on the default model to assert the
+  no-op path. M2 fails arm B alone; **M3 passes every arm — the latch's RIP-window
+  check is measured-uncovered, not assumed-covered.** Gate: `smoke-smep` (shard 5).
+- **SMAP (DDR-1041)** — `CR4.MAP` (bit 21). `stac`/`clac` are a **runtime branch**
+  on `g_smap_on`, never unconditional (both are `#UD` without SMAP). The window
+  opens *after* `vmm_user_range_ok`, and in `copyinstr` wraps the **single byte**
+  rather than the loop, so AC is never held across the page-boundary revalidation.
+  **The enumeration was measured, not grepped:** SMAP on with no `stac` anywhere,
+  and a full boot is line-for-line equivalent to baseline (416 vs 418 lines) with
+  19 user-pointer-dense gates all rc=0 — `uaccess.h`'s contract HOLDS and no `stac`
+  was needed outside `uaccess.c`. **NOT FIXED and named:** an interrupt taken
+  between `uaccess_begin` and `uaccess_end` runs its handler with **AC still set**
+  (the CPU clears IF on an interrupt gate, not AC), so SMAP is off inside that
+  window. Left alone because fixing it means touching `isr_common`, load-bearing
+  for DDR-981/1006/1010 and the still-open OPEN-2. Gate: `smoke-smap` (shard 0).
+- **`#MC` machine check (DDR-1044)** — `idt.c` already knew vector 18 and already
+  panicked with a register dump; **the real defect was upstream: with `CR4.MCE`
+  clear a machine check raises no exception at all.** QEMU says so outright
+  ("MCE capability is not enabled, raising triple fault") and the serial log stops
+  mid-boot with no banner — on real hardware, a box lost to a memory fault with
+  zero diagnostic. Ships SDM §15.8 init in order, `MCi_STATUS` cleared (a stale
+  firmware VAL would make the first `#MC` report a pre-boot fault), `CR4.MCE` last
+  and read **back**. `MCG_STATUS` prints *before* the register dump because RIPV is
+  how a reader knows whether to trust the RIP that follows. **NOT DONE:** no
+  recovery — every `#MC` is fatal, including a RIPV=1 restartable one; no CMCI or
+  correctable-bank polling; the AP path is compiled but unexercised.
+  Gate: `smoke-mce` (shard 4).
+- **Kernel W^X through the identity alias (DDR-1046)** — the kernel image is
+  mapped **twice**, and only one copy was protected. DDR-757 set NX on the 2 MiB
+  identity PD entry and **left RW** ("RW kept (documented residue)"), so kernel
+  text was writable through a physical address. **And the audit could not see it:**
+  `vmm_protect_kernel`'s verdict loop walks only the higher-half PTEs, so it
+  printed `[wx] kernel W^X OK` on a kernel with writable text — the blind spot is
+  why the residue survived. The entry is now read **back** and printed
+  (`PRADYOS_WX_ALIAS present=1 rw=0 nx=1`), because a measurement showing only that
+  nothing crashed cannot distinguish "the alias is RO" from "the write-protect
+  never applied". **M1 is literally the pre-fix tree** and now fails through the
+  AUDIT, not merely the new sentinel. **NOT DONE:** the alias is made RO+NX, **not
+  removed** — unmapping it rests on the page tables staying in a different 2 MiB
+  page, a property of today's layout rather than a guarantee.
+  Gate: `smoke-wxkernel`.
+- **Spinlock contention accounting `lock_stat` (DDR-1047)** — contention counts and
+  **wait time**; hold time is **deliberately dropped**, because contention and wait
+  are observable entirely in the slow path (an uncontended acquire pays nothing)
+  whereas hold time needs an `rdtsc` pair on every acquisition of the kernel's
+  hottest primitive — and OPEN-2 is a timing-sensitive AP freeze that such a probe
+  could *move* rather than measure. Side table, not fields in `spinlock_t` (that
+  struct is one byte, is embedded in others, and `percpu.h`'s offsets are
+  assembly-visible and static-asserted). M1 forced-proof: `g_sched_lock` dominates
+  by **~450x** (1,902,380 hits vs 4,269 for the busiest runqueue lock). **NOT
+  GATED, deliberately** — the dump prints only on `[apfreeze]`, which is in
+  `GLOBAL_FORBIDDEN`, so any assertion on it is unreachable on a green run.
+  **NOT COVERED:** `mnt_lock` (`vfs.c:34`) is not a `spinlock_t` at all but a
+  sleep-mutex over a bare byte, so the one lock DDR-994 names as the unbounded
+  wait on OPEN-1 route 1's path is invisible here.
+- **Ring-0 console line splice (DDR-1055)** — a required gate sentinel was
+  assembled from three unlocked `kputs`/`kputdec` calls and a ring-3 `write(2)`
+  landed between two of them, producing every character the kernel meant to print
+  in a line no gate can match. Root cause of the recurring `smoke-nethammer` red.
+  **`console_line_lock()` did not cover this and `console.h` said it did** — it
+  excludes only other holders of `g_line_lock`, and `kwrite`, the busiest printer
+  in the system, never took it. The fix is **one `kwrite`, not one more lock**:
+  a single `kwrite` holds `g_console_lock` for the whole buffer, and every printer
+  takes that lock. Scope measured, not read: all 268 `EXTRA_SENTINEL` patterns
+  checked, 21 sites converted; `idt.c:748` deliberately untouched (a trap printer
+  that blocks turns a fault into a hang). Overflow is loud — `[kline] TRUNC` in
+  `GLOBAL_FORBIDDEN`.
+
+#### Post-quantum cryptographic primitives (FIPS 202 / FIPS 204, 2026-09)
+
+**Mandatory v1 scope per CLAUDE.md §PHASE 3.** The whole set shares one design
+constraint: **a gate that checks an implementation against its own output proves
+nothing**, because any self-consistent wrong implementation passes. Every expected
+value below is generated by an implementation that is *not* this one and pinned
+byte-exact.
+
+- **Keccak-f[1600] / SHA-3 / SHAKE (DDR-1052)** — there was no SHA-3 anywhere in
+  the tree, and both ML-KEM and ML-DSA are built on SHAKE, so this is a
+  **prerequisite, not an extra**. Expected values come from Python `hashlib`, and
+  hashlib is not merely trusted either — the empty-input digests were cross-checked
+  against the **published FIPS 202 constants**, so the chain terminates in public
+  knowledge. **The constants are derived and proved, not transcribed:** the 24
+  round constants and rho offsets were generated from the FIPS 202 definitions and
+  the permutation re-implemented in Python and checked against hashlib *before a
+  line of C* — and **the first generator produced `RC[0]=0x03` instead of `0x01`**,
+  exactly the silent total break that hand-transcribing 24 magic 64-bit constants
+  produces. **Vector selection is the design:** 1–6 are the standard empty/`abc`
+  values and catch almost nothing; 7–12 are the **absorb rate boundaries**, where
+  `pad10*1` and multi-block absorb go wrong; 13–14 **squeeze past the rate**; 15 is
+  a **streaming** arm (1/7/160/1-byte chunks), because a one-shot-only vector set
+  never calls `update()` twice. M2 (a pad bug firing only when `len % rate ==
+  rate-1`) **passes vectors 1–6 and fails 7** — which is why the boundary vectors
+  exist. Gate: `smoke-shake` (shard 6).
+- **ML-DSA-44 keyGen (DDR-1054)** — byte-exact against **NIST's own ACVP vectors**,
+  chosen because keyGen is *deterministic*: one seed → one key pair, so a mismatch
+  is unambiguous, whereas sign-then-verify passes on any self-consistent wrong
+  implementation. **No magic constants:** the 256 twiddles are computed as
+  `zeta^brv8(i)` and the invNTT scale as `256^(q-2) mod q` by Fermat, which
+  evaluates to `8347681` — the literal the reference implementations carry
+  (**checked, not assumed**). All mutable state is caller-owned (21,288 B scratch),
+  which is load-bearing twice: it delivers the reentrancy `mldsa.h` claims, and
+  `user/user.ld` gives a probe a single R+X `PT_LOAD`, so any writable section
+  would link fine and **fault on first store**. **The KATs do not cover
+  Power2Round's boundary — measured:** `r0 == 2^(D-1)` occurs in **0 of 2048**
+  coefficients, so mutant M3 flipping `>` to `>=` **passed the ACVP arm outright**;
+  a direct 10-case boundary arm was added, reporting a *negative* index so the two
+  arms cannot be confused in a log. Gate: `smoke-mldsa` (shard 0).
+- **ML-DSA-44 Sign_internal (DDR-1057)** — the predicted blocker did not exist:
+  FIPS 204 signs with a random `rnd` by default and a randomized signature can only
+  be checked by verifying it, **but ACVP publishes deterministic groups**
+  (`rnd` = 32 zero bytes) with `signatureInterface=internal, externalMu=false` —
+  Sign_internal itself, so a mismatch localises to the signing algorithm. Python
+  oracle first, then the C. Vectors chosen for messages of 1 B and 273 B, because a
+  set whose messages all fit one SHAKE block never exercises multi-block absorption
+  in `mu = H(tr || M)`. **Two branches the KATs do not cover, both measured:**
+  Decompose's `lo == GAMMA2` occurs in **0 of 28,672** calls, so mutant S4 flipping
+  `>` to `>=` **passed the KAT arm** (fixed with 12 direct Alg. 36 cases); and the
+  `hint_total > OMEGA` rejection is **not fixable by a unit arm** (it needs a
+  crafted `sk`, which is not a KAT) — recorded uncovered, but since it is the only
+  thing keeping HintBitPack inside the 2420-byte signature, the encoder now
+  **re-checks the bound at the write** and returns −1. Rejection loop bounded at
+  1000 (unbounded would violate S2).
+- **ML-DSA-44 Verify_internal (DDR-1058)** — completes the primitive set. **The
+  vector set is mostly negative and that is the point:** ACVP's group is 3
+  signatures that must verify and **12 that must not**, so an implementation that
+  always answers "valid" passes every positive test — sign-then-verify in disguise.
+  Both verdicts are kept and the generator **refuses a one-sided set**; V1 (always
+  accept) fails at vector 3, V2 (always reject) at vector 1. **Coverage measured
+  per guard:** hint-encoding validation catches tcIds 107/113/119, but **the
+  `||z||∞ < γ1−β` bound catches none of the twelve** — and that was measured
+  *before* the test was written: forging an out-of-range `z` gives "verify WITH
+  bound = False, WITHOUT = False", because altering `z` changes `w1'` and therefore
+  `c~'`, so the hash comparison rejects it either way. A test asserting "rejected"
+  would pass on an implementation with **no bound check at all**. Recorded
+  **measured-uncovered** with the reason rather than given a decorative test.
+- **NOT CLAIMED, for the whole set:** the kernel does **not** contain ML-DSA —
+  `mldsa.c` is compiled into the ring-3 probe only; there is **no application**
+  (the audit ledger is still SHA-256 and nothing calls these in anger); ML-DSA-44
+  only; internal interface only; and **nothing about constant-time behaviour**,
+  which matters most for signing — the reduction is a 64-bit `%` and the rejection
+  loop's iteration count is itself secret-dependent, so this must not be used
+  against an adversary who can measure it until that is addressed. See **DDR-1059**
+  for why the signed ledger is assessed and deliberately not built: the blocker is
+  **key custody**, not crypto — there is no TPM/PCR/secure boot, and
+  `sys_vault.c:22` holds `g_owner_seed` as 32 literal bytes compiled into the
+  image, so **anyone holding the ISO holds the private key**.
+
 ### Userspace / Syscalls / Shell
 - Static ELF64 loader + per-process W^X AS (ADR-021); musl libc v1.2.5 (ADR-023;
   fetched from a GitHub mirror per **ADR-033** — same pinned commit, upstream
@@ -280,8 +436,53 @@ All entries below are **shipped**.
 - PRISM builtins: help echo cat run ls ps kill setname touch rm uname date uptime dmesg free mode exit
   — `ls` enumerates via `SYS_GETDENTS` (DDR-742) and `ps` via `SYS_GETPROCS` (DDR-743) (was mis-tracked as planned in Section B#8 until 2026-07-24)
 - Lazy per-thread FPU save/restore, user-only (DDR-740); copyin/copyout (EFAULT never panics)
-- NSI 1–75 shipped; `SYS_GETDENTS` (66), `SYS_GETPROCS`, `SYS_POWEROFF`/`REBOOT` (69/70)
+- NSI **1–102** shipped; max is **102** (`SYS_POLL`, DDR-1037), next free **103**,
+  table size 128. **Corrected 2026-09-03** — this line read "NSI 1–75", which was
+  27 allocations stale. Verify against `kernel/syscall/syscall.h`, never against a
+  prose line: CLAUDE.md §INV.14 and §CURRENT BUILD STATE have each been wrong here
+  before, and allocating from a stale figure duplicates a live NSI.
+  `SYS_GETDENTS` (66), `SYS_GETPROCS` (67), `SYS_POWEROFF`/`REBOOT` (69/70)
 - `SYS_SYSINFO`/`TIME`/`DMESG`/`MEMINFO` (71–74), `SYS_SETNAME` (75), TCP loopback echo, kill end-to-end
+- **`SYS_POLL` (NSI 102, DDR-1037)** — and it **generalised** the readiness
+  predicate rather than duplicating it: `fd_ready_mask()` is now the kernel's
+  single answer to "is this fd ready", shared by `epoll_wait` and `poll`, so the
+  two cannot drift. **NOT** `SYS_POLL_RESULT` (32), which is the AETHER action
+  poll — a name collision worth knowing. Deadline computed **once** before the
+  loop (recomputing it inside would make a poll with a timeout never expire under
+  load). Gate: `smoke-poll`.
+- **PRISM erase (DDR-1039)** — `readline()` appended **every** non-newline byte,
+  so a backspace landed *in* the command buffer and `hepl`+2 erases parsed as
+  `hepl\x7f\x7flp`, matching no builtin. **Invisible to all 170 gates for one
+  reason: every gate injects byte-perfect lines and none has ever typed a typo.**
+  The DDR's own first arm was vacuous and it says so — it proposed asserting
+  `help` output, but `smoke-shell` already feeds a plain `help` earlier in the same
+  session, so that assertion passes on a shell with no erase handling at all. The
+  shipped arm asserts **both directions** (`erase-ok-3m7` present, `erasX` absent),
+  because presence alone cannot separate erase from strip. **Echo deliberately
+  excluded:** PRISM shares COM1 with the kernel, so echoing typed input would
+  inject it into the serial log every gate asserts on. Column-zero guard recorded
+  **uncovered** — from outside the shell, erasing nothing and erasing at column
+  zero are identical. Gate: the erase arm on `smoke-shell` (no `smoke-readline`
+  exists, and none should be built).
+- **Ring-3 composite sentinel splice (DDR-1056)** — the same defect as DDR-1055,
+  one ring out: gates also assert via Makefile post-check greps of a **whole** line,
+  and probes build those from many `wr()` calls — `actiondeltest.c:172` uses nine,
+  which is **eleven** `write(2)`s because `wrdec` emits **one digit per write**.
+  Three paths measured from the tree: probe lines built from many `wr()`; **musl's
+  `fflush` emitting two console writes** because `__stdio_write` always passes two
+  iovecs and `sys_writev` calls `fd_write_user` per iovec (so every musl program is
+  affected, and stdout is fully buffered here because no `SYS_IOCTL` is
+  registered); and `fd_write_user`'s 256-byte chunking, recorded not fixed. Fix:
+  `user/include/uline.h` (one write per measured line) plus an `FD_CONSOLE` gather
+  in `sys_writev`, sized **256 = `fd_write_user`'s own chunk size** and *not*
+  musl's 1024 `BUFSIZ`, because a larger buffer would hold `g_console_lock` and
+  interrupts across 4x today's maximum UART busy-wait on the hottest output path.
+  **Proved deterministically** (it does not reproduce locally, so a rate campaign
+  would measure nothing): the `actiondel` probe went 13 writes → 3, exactly −10.
+  **NOT PROVEN:** the gather has no counter of its own and no mutation covers it —
+  a mutant reverting it passes every gate, since the split is invisible unless a
+  race is won.
+
 
 ### AETHER agent layer (kernel plumbing)
 - Kernel action queue + append-only audit log (ADR-026); per-process mem cap + syscall rate limit

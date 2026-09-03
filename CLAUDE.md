@@ -842,7 +842,18 @@ the plan entirely (operator, 2026-09-02, PR #17).**
 - Full backlog: `docs/BUILD_TRACKER.md`
 - Decisions: `docs/decisions/ADR-*.md`
 - Session state: `SESSION_HANDOFF.md` (repo root — NOT docs/)
-- DDR numbering: `docs/ddr/DDR-NUMBERING-MAP.md` (free range: DDR-936+)
+- DDR numbering: **allocate by §NON-NEGOTIABLE 8's command, not from this line.**
+  Free range is **DDR-1060+** (§INV.4 and §CURRENT BUILD STATE carry it too;
+  all three must be updated together). **Corrected 2026-09-03** — this line
+  read `docs/ddr/DDR-NUMBERING-MAP.md` *(free range: DDR-936+)* and BOTH halves
+  were wrong. There is no file at that path; the real one is
+  `docs/decisions/DDR-NUMBERING-MAP-2026-08.md`, and it is a **historical record
+  of the 2026-08-16 renumbering incident**, not a live index — its own
+  "Next free: DDR-934" is explicitly scoped *at the time of writing*. The stated
+  range was worse than stale: **123 of the 124 numbers in 936..1059 are occupied**
+  (measured), so a session trusting it and taking the first number would land on
+  `DDR-936-unblocked-thread-never-runs.md` — the exact two-files-one-number
+  ambiguity that map was written to correct.
 - Graph: `tools/graph_mcp/CLAUDE_GRAPH_USAGE.md`
 
 ---

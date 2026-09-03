@@ -10441,3 +10441,93 @@ audit chain" is TRUE. "Post-quantum signed audit ledger" would be FALSE.
 **NEXT:** the third §NON-NEGOTIABLE 1 green on the final tip via
 `workflow_dispatch`. PQC scope is otherwise closed for v1 unless the operator
 takes route 3.
+
+---
+
+## CHECKPOINT 2026-09-03 — three greens banked on `f268d47`; a §NON-NEGOTIABLE 11 gap found and closed
+
+### 1. §NON-NEGOTIABLE 1 is satisfied on the final tip — with DDR-1009's caveat
+
+Three independent green `pradyos-ci` suites on **`f268d47`**, 16/16 jobs each:
+
+| event | run id |
+|---|---|
+| `push` | 33807696386 |
+| `pull_request` | 33807702447 |
+| `workflow_dispatch` | 33810564994 |
+
+Per §INV.15 the third came from `workflow_dispatch`, not `gh run rerun`.
+
+**Do not report this as "3 greens, promote."** Zero failures in three suites
+bounds the per-suite failure rate only below **63%** at 95%. The better number is
+available and is still weak: `f268d47` is **docs-only** on top of `3d5443e`
+(`git diff --name-only`), so the *same* `kernel.bin` — `46016bc8c7c7fa3b`, the
+binary the full regression and `smoke-iso-x86` ran against — has **five** green
+suites across the two SHAs, which bounds it below **45%**. DDR-1009 measured
+**25% per-suite** on an earlier binary and recorded that this kernel cleared the
+3-green criterion **twice** at that rate. These greens do not show the kernel is
+healthy; they fail to show it is not.
+
+### 2. `docs/AETHER_MASTER_FEATURES.md` stopped recording at DDR-1034
+
+§NON-NEGOTIABLE 11 requires `AETHER_MASTER_FEATURES.md` **and** `BUILD_TRACKER.md`
+updated in the same commit as the code. Measured, not assumed: **fourteen shipped,
+CI-green items were absent** — 1037 `SYS_POLL`, 1039 PRISM erase, 1040 SMEP,
+1041 SMAP, 1044 `#MC`, 1046 the W^X identity alias, 1047 `lock_stat`, 1052
+Keccak/SHA-3, 1054/1057/1058 the three ML-DSA-44 stages, 1055/1056 the two
+console-splice fixes. **Four of those commits are mine this session**, so this is
+not only an inherited gap.
+
+Now recorded in Section A under two new subsections, each entry carrying the
+finding *and* its NOT-CLAIMED limits — the ML-DSA block states plainly that the
+**kernel does not contain ML-DSA** (the probe does), that there is **no
+application**, and that **nothing is claimed about constant-time behaviour**.
+
+Also corrected there: the line reading **"NSI 1–75 shipped"**, 27 allocations
+stale. Measured against `kernel/syscall/syscall.h`: max is **102** (`SYS_POLL`),
+next free **103**. CLAUDE.md §INV.14 and §CURRENT BUILD STATE have each been
+wrong on this figure before; allocating from a prose line duplicates a live NSI.
+
+### 3. `docs/BUILD_TRACKER.md` was missing TWENTY consecutive DDRs
+
+Worse than the first count suggested: **DDR-1034 through DDR-1053 had no entry
+at all** (mentions inside other sections are not entries). 1054–1059 are tracked.
+
+**Six of the twenty are assessed-and-not-built decisions** — 1038 `SYS_FUTEX`,
+1050 I/O APIC stage D, 1051 KASLR among them — and a decision nobody can find in
+the tracker is a blocker the next session re-derives from scratch. That is the
+cost, and it is why this was closed rather than only reported.
+
+Recovered as a **compact index**, one line of finding plus the gate per DDR, with
+the DDR file as the authority. Deliberately **not** rewritten as twenty
+retrospective narratives: inventing that prose after the fact would be worse than
+a pointer.
+
+### 4. `CLAUDE.md` §ORIENTATION's DDR-numbering pointer was wrong in both halves
+
+It read ``docs/ddr/DDR-NUMBERING-MAP.md`` *(free range: DDR-936+)*.
+
+- **No file exists at that path.** The real one is
+  `docs/decisions/DDR-NUMBERING-MAP-2026-08.md`, and it is a **historical record
+  of the 2026-08-16 renumbering incident**, not a live index — its own
+  "Next free: DDR-934" is explicitly scoped *at the time of writing*.
+- **The stated range was worse than stale: 123 of the 124 numbers in 936..1059
+  are occupied** (measured). A session trusting it and taking the first number
+  would have landed on `DDR-936-unblocked-thread-never-runs.md` — the exact
+  two-files-one-number ambiguity that map was written to correct.
+
+Line now points at §NON-NEGOTIABLE 8's verification command as the authority and
+names the free range as **DDR-1060+**, matching §INV.4 and §CURRENT BUILD STATE.
+All three sites now agree; they have disagreed before.
+
+### 5. IN FLIGHT — `smoke-sfs-btree-smp4`, 30-run campaign
+
+The exclusion at `tools/ci/shard_check.sh:45` says *"Register it when OPEN-10 is
+fixed."* DDR-964 fixed OPEN-10. **But 8/8 is not evidence:**
+`open10_campaign.sh`'s own header records the pre-fix rate as **2/30 = 6.7%**,
+and `P(0 in 8 | p=0.067) = 0.58` — eight clean runs are more likely than not with
+**nothing** fixed. Running 30 on kernel `46016bc8c7c7fa3b` before touching the
+`EXCLUDE` list. **Do not register it on the 8/8 figure.**
+
+**NEXT:** finish that campaign, then decide the registration on its result.
+`v1.0.0` stays untagged and `main` promotion unstarted — operator decisions.
