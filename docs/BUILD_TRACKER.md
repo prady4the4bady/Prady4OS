@@ -2228,3 +2228,56 @@ nothing about constant-time behaviour; and **the kernel does not contain
 ML-DSA** — `mldsa.c` is compiled into the ring-3 probe only, exactly as
 `keccak.c` also is for `shaketest`, because nothing needs it until the ledger
 does.
+
+---
+
+## DDR-1057 — ML-DSA-44 Sign_internal (FIPS 204), IMPLEMENTED + gated + S1/S4
+
+DDR-1054 shipped keyGen and closed with "nothing is post-quantum *authenticated*
+yet". Signing exists now.
+
+**The predicted blocker did not exist, for the third time.** FIPS 204 signs with
+a random `rnd` by default, and a randomized signature can only be checked by
+verifying it — which passes on any self-consistent wrong implementation. But
+ACVP publishes **deterministic** groups (`rnd` = 32 zero bytes), and among them
+`signatureInterface: internal, externalMu: false` — `ML-DSA.Sign_internal`
+itself, no message-encoding wrapper, no pre-hash, so a mismatch localises to the
+signing algorithm. `tools/ci/mldsa_sign_ref.py` (Python oracle, byte-exact vs
+ACVP) was written and verified **before** any C — the DDR-1052 discipline.
+
+Re-running the fetcher regenerated the **keyGen header bit-identically**, which
+is the property a provenance tool should have and is worth checking.
+
+**Vectors chosen, not taken:** tcId 110 (message **1 byte**) and 118 (**273
+bytes**). Shortest-first because the headers are large, but not only shortest: a
+set whose messages all fit one SHAKE block never exercises multi-block
+absorption in `mu = H(tr || M)`.
+
+**TWO branches the KATs do not cover, both measured.** `Decompose`'s
+`lo == GAMMA2` occurs in **0 of 28,672 calls** (~0.15 expected), so mutant S4
+(`>` → `>=`) **passed the KAT arm** — the DDR-1054 `Power2Round` shape in a
+different function; fixed with 12 direct FIPS 204 Alg. 36 cases including
+`r = q-1` for the special branch. And the `hint_total > OMEGA` rejection:
+defeating it still passes, because for well-formed keys the hint weight never
+nears 80. That one is **not fixable by a unit arm** — reaching it needs a crafted
+secret key, which is not a known-answer test — and is recorded uncovered. What
+was done instead is a memory-safety guard: that check is the only thing keeping
+`HintBitPack` inside the 2420-byte signature, so the encoder now re-checks the
+bound **at the write** and returns -1. An untested guard on a fixed-size buffer
+write is worth not relying on.
+
+Rejection loop **bounded at 1000** (expected ~4.25) — FIPS 204 states no cap and
+an unbounded loop is an S2 violation here (DDR-961/994).
+
+S1 (`rnd` non-zero, `ab06e1593d5ea1c5`) and S4 (`0d3f5e7782071cef`) redden
+`smoke-mldsa` on **different arms**; revert returns `9d3a813c3910ac1f`
+bit-for-bit. Regression 8/8 rc=0. `kernel.bin` 1,229,194 → **1,249,674 B**.
+Gate window 120 → 180 s.
+
+**NOT CLAIMED:** no `sigVer` — this OS can produce a post-quantum signature and
+cannot yet check one; no application (ledger still SHA-256), and the kernel does
+not contain ML-DSA (the probe does); deterministic mode only; and **nothing
+about constant-time behaviour**, which matters most for signing — the reduction
+is a 64-bit `%` and the rejection loop's iteration count is itself
+secret-dependent, so this must not be used against an adversary who can measure
+it until that is addressed.

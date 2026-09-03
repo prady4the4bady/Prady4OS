@@ -673,6 +673,30 @@ claim; and the kernel itself does not contain ML-DSA — the probe does. The
 signed-ledger application named in CLAUDE.md §PHASE 3 is blocked on signing and
 on nothing else; those vectors are at the same reachable source.
 
+#### 5.1b.5 — STEP 4 IS DONE: ML-DSA-44 signing implemented and gated (DDR-1057)
+
+`ML-DSA.Sign_internal` (FIPS 204 Alg. 7), deterministic variant, byte-exact
+against NIST's own ACVP vectors. `smoke-mldsa` now asserts both
+`PRADYOS_MLDSA44_KEYGEN_OK` and `PRADYOS_MLDSA44_SIGN_OK`.
+
+**The predicted blocker did not exist, for the third time in this section.**
+FIPS 204's default `rnd` is random and a randomized signature can only be checked
+by verifying it — fact 4's trap. ACVP publishes **deterministic** groups, and
+among them `signatureInterface: internal, externalMu: false`, i.e. Sign_internal
+itself. Python oracle first, C second.
+
+**Two branches NIST's vectors do not cover, both measured**: `Decompose`'s
+`lo == GAMMA2` (0 of 28,672 calls — a mutant flipping the comparison passed the
+KAT arm; now covered by 12 direct cases) and the `hint_total > OMEGA` rejection
+(not reachable without a crafted key; recorded uncovered, and the encoder now
+re-checks its buffer bound at the write rather than relying on it).
+
+**Remaining in PQC scope:** `sigVer` — this OS can produce a post-quantum
+signature and cannot yet check one — and then the application, an ML-DSA-signed
+audit ledger on F#76's chain, which is what §PHASE 3 actually names. Both are
+unblocked; the sigVer vectors are at the same reachable ACVP source. **And a
+constant-time review, which matters most for signing and has not been done.**
+
 ### 5.2 — Group F: AETHER agent behaviours
 
 **The structural fact first, because the tracker got this wrong twice

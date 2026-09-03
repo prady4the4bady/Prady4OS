@@ -55,21 +55,25 @@ static unsigned brv8(unsigned x) {
     return r;
 }
 
+static void tables_fill(uint32_t *zetas, uint32_t *ninv) {
+    for (unsigned i = 0; i < 256; i++)
+        zetas[i] = modpow(ZETA_ROOT, (uint32_t)brv8(i));
+    *ninv = modpow(256, (uint32_t)(Q - 2));      /* Fermat inverse */
+}
+
 static void tables_init(mldsa44_scratch *sc) {
     if (sc->tables_ready) return;
-    for (unsigned i = 0; i < 256; i++)
-        sc->zetas[i] = modpow(ZETA_ROOT, (uint32_t)brv8(i));
-    sc->ninv = modpow(256, (uint32_t)(Q - 2));    /* Fermat inverse */
+    tables_fill(sc->zetas, &sc->ninv);
     sc->tables_ready = 1;
 }
 
 /* ---- NTT / inverse NTT over Z_q[X]/(X^256+1) --------------------------- */
 
-static void ntt(const mldsa44_scratch *sc, int32_t w[MLDSA_N]) {
+static void ntt(const uint32_t *zetas, int32_t w[MLDSA_N]) {
     unsigned m = 0, len = 128;
     for (;;) {
         for (unsigned start = 0; start < MLDSA_N; start += 2u * len) {
-            uint32_t z = sc->zetas[++m];
+            uint32_t z = zetas[++m];
             for (unsigned j = start; j < start + len; j++) {
                 uint32_t t = modmul(z, (uint32_t)w[j + len]);
                 w[j + len] = (int32_t)(((uint32_t)w[j] + (uint32_t)Q - t) % Q);
@@ -81,11 +85,11 @@ static void ntt(const mldsa44_scratch *sc, int32_t w[MLDSA_N]) {
     }
 }
 
-static void intt(const mldsa44_scratch *sc, int32_t w[MLDSA_N]) {
+static void intt(const uint32_t *zetas, uint32_t ninv, int32_t w[MLDSA_N]) {
     unsigned m = 256, len = 1;
     while (len < MLDSA_N) {
         for (unsigned start = 0; start < MLDSA_N; start += 2u * len) {
-            uint32_t z = (uint32_t)Q - sc->zetas[--m];
+            uint32_t z = (uint32_t)Q - zetas[--m];
             for (unsigned j = start; j < start + len; j++) {
                 uint32_t t = (uint32_t)w[j];
                 uint32_t u = (uint32_t)w[j + len];
@@ -96,7 +100,7 @@ static void intt(const mldsa44_scratch *sc, int32_t w[MLDSA_N]) {
         len <<= 1;
     }
     for (unsigned j = 0; j < MLDSA_N; j++)
-        w[j] = (int32_t)modmul((uint32_t)w[j], sc->ninv);
+        w[j] = (int32_t)modmul((uint32_t)w[j], ninv);
 }
 
 /* ---- sampling ---------------------------------------------------------- */
@@ -164,7 +168,7 @@ static void power2round(uint32_t r, int32_t *t1, int32_t *t0) {
 }
 
 /* SimpleBitPack: little-endian bit stream, `bits` per coefficient. */
-static void bitpack(const int32_t *a, unsigned bits, uint8_t *out) {
+static void bitpack_simple(const int32_t *a, unsigned bits, uint8_t *out) {
     uint32_t acc = 0;
     unsigned nb = 0, o = 0;
     for (unsigned i = 0; i < MLDSA_N; i++) {
@@ -210,7 +214,7 @@ int mldsa44_keygen(const uint8_t seed[MLDSA44_SEED_BYTES],
             int32_t v = sc->s1[s][j];
             sc->s1hat[s][j] = (v < 0) ? (v + Q) : v;
         }
-        ntt(sc, sc->s1hat[s]);
+        ntt(sc->zetas, sc->s1hat[s]);
     }
 
     /* t = A*s1 + s2, one row at a time. A is expanded ON THE FLY -- holding
@@ -225,7 +229,7 @@ int mldsa44_keygen(const uint8_t seed[MLDSA44_SEED_BYTES],
                               + modmul((uint32_t)sc->aij[j],
                                        (uint32_t)sc->s1hat[s][j])) % Q);
         }
-        intt(sc, sc->acc);
+        intt(sc->zetas, sc->ninv, sc->acc);
         for (j = 0; j < MLDSA_N; j++) {
             int32_t v = sc->s2[r][j];
             uint32_t t = ((uint32_t)sc->acc[j] + (uint32_t)((v < 0) ? (v + Q) : v)) % Q;
@@ -236,7 +240,7 @@ int mldsa44_keygen(const uint8_t seed[MLDSA44_SEED_BYTES],
     /* pk = rho || SimpleBitPack(t1, 10 bits) */
     for (j = 0; j < 32u; j++) pk[j] = rho[j];
     o = 32;
-    for (r = 0; r < MLDSA_K; r++) { bitpack(sc->t1[r], 10, pk + o); o += 320; }
+    for (r = 0; r < MLDSA_K; r++) { bitpack_simple(sc->t1[r], 10, pk + o); o += 320; }
 
     /* sk = rho || K || tr || s1 || s2 || t0, with tr = H(pk, 64). */
     for (j = 0; j < 32u; j++) sk[j] = rho[j];
@@ -245,15 +249,15 @@ int mldsa44_keygen(const uint8_t seed[MLDSA44_SEED_BYTES],
     o = 128;
     for (s = 0; s < MLDSA_L; s++) {
         for (j = 0; j < MLDSA_N; j++) packbuf[j] = ETA - sc->s1[s][j];
-        bitpack(packbuf, 3, sk + o); o += 96;
+        bitpack_simple(packbuf, 3, sk + o); o += 96;
     }
     for (r = 0; r < MLDSA_K; r++) {
         for (j = 0; j < MLDSA_N; j++) packbuf[j] = ETA - sc->s2[r][j];
-        bitpack(packbuf, 3, sk + o); o += 96;
+        bitpack_simple(packbuf, 3, sk + o); o += 96;
     }
     for (r = 0; r < MLDSA_K; r++) {
         for (j = 0; j < MLDSA_N; j++) packbuf[j] = (1 << (D - 1)) - sc->t0[r][j];
-        bitpack(packbuf, 13, sk + o); o += 416;
+        bitpack_simple(packbuf, 13, sk + o); o += 416;
     }
     return 0;
 }
@@ -320,6 +324,367 @@ int mldsa44_selftest(mldsa44_scratch *sc) {
             if (pk[i] != MLDSA44_KATS[v].pk[i]) return (int)v + 1;
         for (unsigned i = 0; i < MLDSA44_SK_BYTES; i++)
             if (sk[i] != MLDSA44_KATS[v].sk[i]) return (int)v + 1;
+    }
+    return 0;
+}
+
+/* ========================================================================
+ * DDR-1057 — ML-DSA.Sign_internal (FIPS 204 Alg. 7), deterministic variant.
+ *
+ * Every stage below has a ground-truth value from tools/ci/mldsa_sign_ref.py,
+ * which reproduces NIST's ACVP deterministic sigGen vectors byte-exactly. That
+ * is the DDR-1052 discipline: prove it in Python, where a wrong intermediate is
+ * visible, before porting to freestanding C where the only feedback is a
+ * 2420-byte answer that either matches or does not.
+ * ======================================================================== */
+#include "mldsa_sig_kat.h"
+
+#define TAU        39
+#define GAMMA1     (1 << 17)
+#define GAMMA2     ((Q - 1) / 88)          /* 95232 */
+#define OMEGA      80
+#define BETA       (TAU * ETA)             /* 78 */
+#define CTILDE_LEN 32u                     /* lambda/4, lambda = 128 */
+
+/* An unbounded rejection loop is an S2 violation in this codebase (DDR-961,
+ * DDR-994). The expected iteration count for ML-DSA-44 is about 4.25; 1000 is
+ * far beyond any plausible run and still a hard ceiling. */
+#define SIGN_MAX_ITERS 1000
+
+static unsigned bitlen_u(uint32_t x) {
+    unsigned n = 0;
+    while (x) { n++; x >>= 1; }
+    return n;
+}
+
+/* SimpleBitUnpack: `bits`-wide little-endian fields out of a byte stream. */
+static void simple_bitunpack(const uint8_t *in, unsigned bits, int32_t *out) {
+    uint32_t acc = 0;
+    unsigned nb = 0, i = 0, n = 0;
+    while (n < MLDSA_N) {
+        while (nb < bits) { acc |= (uint32_t)in[i++] << nb; nb += 8; }
+        out[n++] = (int32_t)(acc & ((1u << bits) - 1u));
+        acc >>= bits; nb -= bits;
+    }
+}
+
+/* BitUnpack(v, a, b): coefficients are b - z, z a bitlen(a+b)-wide field. */
+static void bitunpack(const uint8_t *in, uint32_t a, uint32_t b, int32_t *out) {
+    unsigned bits = bitlen_u(a + b);
+    simple_bitunpack(in, bits, out);
+    for (unsigned i = 0; i < MLDSA_N; i++) out[i] = (int32_t)b - out[i];
+}
+
+/* BitPack(w, a, b): the inverse. `w` is CENTERED, in [-a, b]. */
+static void bitpack_ab(const int32_t *w, uint32_t a, uint32_t b, uint8_t *out) {
+    unsigned bits = bitlen_u(a + b);
+    uint32_t acc = 0;
+    unsigned nb = 0, o = 0;
+    for (unsigned i = 0; i < MLDSA_N; i++) {
+        acc |= ((uint32_t)((int32_t)b - w[i]) & ((1u << bits) - 1u)) << nb;
+        nb += bits;
+        while (nb >= 8u) { out[o++] = (uint8_t)(acc & 0xFFu); acc >>= 8; nb -= 8u; }
+    }
+    if (nb) out[o] = (uint8_t)(acc & 0xFFu);
+}
+
+/* Decompose (FIPS 204 Alg. 36). r1 = HighBits, r0 = LowBits (centered). */
+static void decompose(uint32_t r, int32_t *r1, int32_t *r0) {
+    uint32_t rp = r % (uint32_t)Q;
+    int32_t  lo = (int32_t)(rp % (2u * (uint32_t)GAMMA2));
+    if (lo > GAMMA2) lo -= 2 * GAMMA2;
+    if ((int32_t)rp - lo == Q - 1) { *r1 = 0; *r0 = lo - 1; return; }
+    *r1 = ((int32_t)rp - lo) / (2 * GAMMA2);
+    *r0 = lo;
+}
+
+/* Infinity norm of a poly held as residues mod q: min(c, q-c) per coefficient. */
+static uint32_t inf_norm(const int32_t *p) {
+    uint32_t worst = 0;
+    for (unsigned i = 0; i < MLDSA_N; i++) {
+        uint32_t c = (uint32_t)p[i] % (uint32_t)Q;
+        uint32_t v = (c > (uint32_t)Q - c) ? (uint32_t)Q - c : c;
+        if (v > worst) worst = v;
+    }
+    return worst;
+}
+
+/* SampleInBall (FIPS 204 Alg. 29). STREAMED: the rejection `while j > i` loop
+ * has no fixed byte budget, so a fixed squeeze would be a bound by luck. */
+static void sample_in_ball(const uint8_t ct[CTILDE_LEN], int32_t *c) {
+    keccak_ctx x;
+    uint8_t sgn[8];
+    uint64_t bits = 0;
+    unsigned i;
+
+    for (i = 0; i < MLDSA_N; i++) c[i] = 0;
+    shake256_init(&x);
+    keccak_update(&x, ct, CTILDE_LEN);
+    keccak_squeeze(&x, sgn, 8);
+    for (i = 0; i < 8u; i++) bits |= (uint64_t)sgn[i] << (8u * i);
+
+    for (i = MLDSA_N - TAU; i < MLDSA_N; i++) {
+        uint8_t j;
+        do { keccak_squeeze(&x, &j, 1); } while (j > i);
+        c[i] = c[j];
+        c[j] = (bits & 1u) ? (Q - 1) : 1;      /* 1 - 2*bit, as a residue */
+        bits >>= 1;
+    }
+}
+
+/* MakeHint (FIPS 204 Alg. 39): does adding z move r into a different HighBits? */
+static uint8_t make_hint(uint32_t z, uint32_t r) {
+    int32_t r1, r0, v1, v0;
+    decompose(r, &r1, &r0);
+    decompose((uint32_t)(((uint64_t)r + z) % (uint64_t)Q), &v1, &v0);
+    return (uint8_t)(v1 != r1);
+}
+
+/* Pointwise multiply-accumulate in the NTT domain. */
+static void pointwise(int32_t *dst, const int32_t *a, const int32_t *b) {
+    for (unsigned j = 0; j < MLDSA_N; j++)
+        dst[j] = (int32_t)modmul((uint32_t)a[j], (uint32_t)b[j]);
+}
+
+int mldsa44_sign_internal(const uint8_t sk[MLDSA44_SK_BYTES],
+                          const uint8_t *msg, unsigned long msglen,
+                          uint8_t sig[MLDSA44_SIG_BYTES],
+                          mldsa44_sign_scratch *sc)
+{
+    const uint8_t *rho = sk, *kk = sk + 32, *tr = sk + 64;
+    uint8_t mu[64], rhopp[64], ctilde[CTILDE_LEN];
+    uint8_t rnd[32];
+    keccak_ctx x;
+    unsigned r, s, j, o, iter;
+
+    if (!sc->tables_ready) { tables_fill(sc->zetas, &sc->ninv); sc->tables_ready = 1; }
+
+    /* skDecode. s1/s2 are eta-centered; t0 is 2^(d-1)-centered. */
+    o = 128;
+    for (s = 0; s < MLDSA_L; s++) {
+        bitunpack(sk + o, ETA, ETA, sc->s1h[s]); o += 96;
+        for (j = 0; j < MLDSA_N; j++)
+            if (sc->s1h[s][j] < 0) sc->s1h[s][j] += Q;
+        ntt(sc->zetas, sc->s1h[s]);
+    }
+    for (r = 0; r < MLDSA_K; r++) {
+        bitunpack(sk + o, ETA, ETA, sc->s2h[r]); o += 96;
+        for (j = 0; j < MLDSA_N; j++)
+            if (sc->s2h[r][j] < 0) sc->s2h[r][j] += Q;
+        ntt(sc->zetas, sc->s2h[r]);
+    }
+    for (r = 0; r < MLDSA_K; r++) {
+        bitunpack(sk + o, (1u << (D - 1)) - 1u, 1u << (D - 1), sc->t0h[r]); o += 416;
+        for (j = 0; j < MLDSA_N; j++)
+            if (sc->t0h[r][j] < 0) sc->t0h[r][j] += Q;
+        ntt(sc->zetas, sc->t0h[r]);
+    }
+
+    /* mu = H(tr || M, 64); rho'' = H(K || rnd || mu, 64), rnd = 0^32. */
+    shake256_init(&x);
+    keccak_update(&x, tr, 64);
+    keccak_update(&x, msg, (size_t)msglen);
+    keccak_squeeze(&x, mu, 64);
+
+    for (j = 0; j < 32u; j++) rnd[j] = 0;
+    shake256_init(&x);
+    keccak_update(&x, kk, 32);
+    keccak_update(&x, rnd, 32);
+    keccak_update(&x, mu, 64);
+    keccak_squeeze(&x, rhopp, 64);
+
+    for (iter = 0; iter < SIGN_MAX_ITERS; iter++) {
+        unsigned kappa = iter * MLDSA_L;
+        unsigned w1bits = bitlen_u((uint32_t)((Q - 1) / (2 * GAMMA2) - 1));  /* 6 */
+        unsigned hint_total = 0;
+        int reject = 0;
+
+        /* y = ExpandMask(rho'', kappa) */
+        for (s = 0; s < MLDSA_L; s++) {
+            uint8_t v[32 * 18];
+            uint8_t idx[2];
+            unsigned m = kappa + s;
+            shake256_init(&x);
+            keccak_update(&x, rhopp, 64);
+            idx[0] = (uint8_t)(m & 0xFFu); idx[1] = (uint8_t)(m >> 8);
+            keccak_update(&x, idx, 2);
+            keccak_squeeze(&x, v, sizeof v);
+            bitunpack(v, GAMMA1 - 1, GAMMA1, sc->y[s]);
+            for (j = 0; j < MLDSA_N; j++) {
+                sc->yh[s][j] = sc->y[s][j] < 0 ? sc->y[s][j] + Q : sc->y[s][j];
+                sc->y[s][j]  = sc->yh[s][j];
+            }
+            ntt(sc->zetas, sc->yh[s]);
+        }
+
+        /* w = NTT^-1(A . NTT(y)); w1 = HighBits(w) */
+        for (r = 0; r < MLDSA_K; r++) {
+            for (j = 0; j < MLDSA_N; j++) sc->acc[j] = 0;
+            for (s = 0; s < MLDSA_L; s++) {
+                rej_ntt_poly(rho, (uint8_t)s, (uint8_t)r, sc->aij);
+                for (j = 0; j < MLDSA_N; j++)
+                    sc->acc[j] = (int32_t)(((uint32_t)sc->acc[j]
+                                  + modmul((uint32_t)sc->aij[j],
+                                           (uint32_t)sc->yh[s][j])) % Q);
+            }
+            intt(sc->zetas, sc->ninv, sc->acc);
+            for (j = 0; j < MLDSA_N; j++) {
+                int32_t r1, r0;
+                sc->w[r][j] = sc->acc[j];
+                decompose((uint32_t)sc->acc[j], &r1, &r0);
+                sc->w1[r][j] = r1;
+            }
+            bitpack_simple(sc->w1[r], w1bits, sc->w1enc + r * 192);
+        }
+
+        /* c~ = H(mu || w1Encode(w1)); c = SampleInBall(c~) */
+        shake256_init(&x);
+        keccak_update(&x, mu, 64);
+        keccak_update(&x, sc->w1enc, MLDSA_K * 192);
+        keccak_squeeze(&x, ctilde, CTILDE_LEN);
+        sample_in_ball(ctilde, sc->c);
+        for (j = 0; j < MLDSA_N; j++) sc->ch[j] = sc->c[j];
+        ntt(sc->zetas, sc->ch);
+
+        /* z = y + c*s1 */
+        for (s = 0; s < MLDSA_L; s++) {
+            pointwise(sc->cs1[s], sc->ch, sc->s1h[s]);
+            intt(sc->zetas, sc->ninv, sc->cs1[s]);
+            for (j = 0; j < MLDSA_N; j++)
+                sc->z[s][j] = (int32_t)(((uint32_t)sc->y[s][j]
+                                        + (uint32_t)sc->cs1[s][j]) % Q);
+        }
+        for (s = 0; s < MLDSA_L; s++)
+            if (inf_norm(sc->z[s]) >= (uint32_t)(GAMMA1 - BETA)) reject = 1;
+
+        /* r0 = LowBits(w - c*s2) */
+        for (r = 0; r < MLDSA_K && !reject; r++) {
+            pointwise(sc->cs2[r], sc->ch, sc->s2h[r]);
+            intt(sc->zetas, sc->ninv, sc->cs2[r]);
+            for (j = 0; j < MLDSA_N; j++) {
+                int32_t r1, r0;
+                uint32_t v = ((uint32_t)sc->w[r][j] + (uint32_t)Q
+                              - (uint32_t)sc->cs2[r][j]) % (uint32_t)Q;
+                decompose(v, &r1, &r0);
+                if ((uint32_t)(r0 < 0 ? -r0 : r0) >= (uint32_t)(GAMMA2 - BETA))
+                    reject = 1;
+            }
+        }
+        if (reject) continue;
+
+        /* Recompute cs2 for every row -- the loop above may have exited early. */
+        for (r = 0; r < MLDSA_K; r++) {
+            pointwise(sc->cs2[r], sc->ch, sc->s2h[r]);
+            intt(sc->zetas, sc->ninv, sc->cs2[r]);
+            pointwise(sc->ct0[r], sc->ch, sc->t0h[r]);
+            intt(sc->zetas, sc->ninv, sc->ct0[r]);
+        }
+        for (r = 0; r < MLDSA_K; r++)
+            if (inf_norm(sc->ct0[r]) >= (uint32_t)GAMMA2) reject = 1;
+        if (reject) continue;
+
+        for (r = 0; r < MLDSA_K; r++) {
+            for (j = 0; j < MLDSA_N; j++) {
+                uint32_t negct0 = ((uint32_t)Q - (uint32_t)sc->ct0[r][j]) % (uint32_t)Q;
+                uint32_t rv = (((uint32_t)sc->w[r][j] + (uint32_t)Q
+                                - (uint32_t)sc->cs2[r][j]) % (uint32_t)Q
+                               + (uint32_t)sc->ct0[r][j]) % (uint32_t)Q;
+                sc->hint[r][j] = make_hint(negct0, rv);
+                hint_total += sc->hint[r][j];
+            }
+        }
+        if (hint_total > OMEGA) continue;
+
+        /* sigEncode(c~, z mod+- q, h) */
+        for (j = 0; j < CTILDE_LEN; j++) sig[j] = ctilde[j];
+        o = CTILDE_LEN;
+        for (s = 0; s < MLDSA_L; s++) {
+            for (j = 0; j < MLDSA_N; j++)
+                if (sc->z[s][j] > Q / 2) sc->z[s][j] -= Q;
+            bitpack_ab(sc->z[s], GAMMA1 - 1, GAMMA1, sig + o);
+            o += 576;
+        }
+        for (j = 0; j < (unsigned)(OMEGA + MLDSA_K); j++) sig[o + j] = 0;
+        {   unsigned at = 0;
+            for (r = 0; r < MLDSA_K; r++) {
+                for (j = 0; j < MLDSA_N; j++)
+                    if (sc->hint[r][j]) {
+                        /* The `hint_total > OMEGA` test above is what keeps this
+                         * in bounds -- and the pinned vectors NEVER trigger it
+                         * (measured: a mutant defeating that test still passes
+                         * the KAT arm), so it is an untested guard on a write
+                         * into a fixed 2420-byte buffer. Re-check here rather
+                         * than trust it: past OMEGA the index run would overrun
+                         * into the per-row counts and then past the signature. */
+                        if (at >= (unsigned)OMEGA) return -1;
+                        sig[o + at++] = (uint8_t)j;
+                    }
+                sig[o + OMEGA + r] = (uint8_t)at;
+            }
+        }
+        return 0;
+    }
+    return -1;                       /* bound reached; see SIGN_MAX_ITERS */
+}
+
+static const struct {
+    const uint8_t *sk, *msg, *sig;
+    unsigned msglen;
+} MLDSA44_SIG_KATS[MLDSA44_SIG_KAT_COUNT] = {
+    { MLDSA44_SIGSK_110, MLDSA44_SIGMSG_110, MLDSA44_SIG_110, MLDSA44_SIGMSGLEN_110 },
+    { MLDSA44_SIGSK_118, MLDSA44_SIGMSG_118, MLDSA44_SIG_118, MLDSA44_SIGMSGLEN_118 },
+};
+_Static_assert(MLDSA44_SIG_KAT_COUNT == 2,
+               "mldsa_sig_kat.h gained or lost vectors; extend the table above");
+
+/* Decompose boundary arm. THE SIGNING KATs DO NOT COVER THIS, measured the same
+ * way DDR-1054 measured Power2Round's: `lo == GAMMA2` exactly occurs in 0 of the
+ * 28,672 decompose calls across both pinned vectors (~0.15 expected), so a
+ * mutant flipping this comparison from `>` to `>=` passes the KAT arm outright.
+ * These twelve cases are generated from FIPS 204 Alg. 36 and bracket the
+ * boundary from both sides; r = q-1 additionally covers the special branch where
+ * r+ - r0 == q-1. */
+static const struct { uint32_t r; int32_t r1, r0; } DECOMP_VEC[] = {
+    {        0u, 0,      0 },
+    {        1u, 0,      1 },
+    {    95231u, 0,  95231 },
+    {    95232u, 0,  95232 },   /* the boundary itself: lo == GAMMA2        */
+    {    95233u, 1, -95231 },   /* one past it, where the branch DOES fire  */
+    {   190464u, 1,      0 },
+    {   190465u, 1,      1 },
+    {   285696u, 1,  95232 },   /* the boundary again, one limb up          */
+    {   380928u, 2,      0 },
+    {  8380416u, 0,     -1 },   /* q-1: the r+ - r0 == q-1 special branch   */
+    {  8285185u, 0, -95232 },
+    {  1234567u, 6,  91783 },
+};
+
+static int decompose_selftest(void) {
+    for (unsigned i = 0; i < sizeof DECOMP_VEC / sizeof DECOMP_VEC[0]; i++) {
+        int32_t r1 = 0, r0 = 0;
+        decompose(DECOMP_VEC[i].r, &r1, &r0);
+        if (r1 != DECOMP_VEC[i].r1 || r0 != DECOMP_VEC[i].r0) return (int)i + 1;
+    }
+    return 0;
+}
+
+unsigned mldsa44_sig_kat_count(void) { return MLDSA44_SIG_KAT_COUNT; }
+unsigned mldsa44_decomp_count(void) {
+    return (unsigned)(sizeof DECOMP_VEC / sizeof DECOMP_VEC[0]);
+}
+
+int mldsa44_sign_selftest(mldsa44_sign_scratch *sc) {
+    /* Boundary arm first: deterministic, instant, and a failure here localises
+     * far better than a 2420-byte mismatch. NEGATIVE index, so the two arms
+     * cannot be confused in a log. */
+    { int d = decompose_selftest(); if (d) return -d; }
+
+    for (unsigned v = 0; v < MLDSA44_SIG_KAT_COUNT; v++) {
+        if (mldsa44_sign_internal(MLDSA44_SIG_KATS[v].sk, MLDSA44_SIG_KATS[v].msg,
+                                  MLDSA44_SIG_KATS[v].msglen, sc->sig, sc) != 0)
+            return (int)v + 1;
+        for (unsigned i = 0; i < MLDSA44_SIG_BYTES; i++)
+            if (sc->sig[i] != MLDSA44_SIG_KATS[v].sig[i]) return (int)v + 1;
     }
     return 0;
 }

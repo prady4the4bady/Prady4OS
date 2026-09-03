@@ -66,6 +66,34 @@ void _start(void) {
         ul_d(&u, (long)mldsa44_p2r_count());
         ul_c(&u, '\n');
         wr(ul_end(&u)); }
+
+    /* DDR-1057: signing. A separate scope so the two scratches need not be live
+     * at once -- 21 KiB + 54 KiB would still fit the 8 MiB demand-paged stack,
+     * but there is no reason to ask for both. */
+    {
+        mldsa44_sign_scratch ss;
+        int sbad;
+        ss.tables_ready = 0;
+        sbad = mldsa44_sign_selftest(&ss);
+        if (sbad != 0) {
+            uline u; ul_init(&u);
+            ul_s(&u, "PRADYOS_MLDSA_SIGN_STUB first_bad=");
+            ul_d(&u, sbad);
+            ul_s(&u, sbad < 0 ? " arm=decompose\n" : " arm=acvp_sig\n");
+            wr(ul_end(&u));
+            wr("MLDSA FAIL\n");
+            nsi(SYS_EXIT, 1, 0, 0);
+            for (;;) { }
+        }
+        {   uline u; ul_init(&u);
+            ul_s(&u, "PRADYOS_MLDSA44_SIGN_OK acvp=");
+            ul_d(&u, (long)mldsa44_sig_kat_count());
+            ul_s(&u, " dec=");
+            ul_d(&u, (long)mldsa44_decomp_count());
+            ul_c(&u, '\n');
+            wr(ul_end(&u)); }
+    }
+
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }

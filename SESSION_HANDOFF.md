@@ -10306,3 +10306,48 @@ kernel does not contain ML-DSA (the probe does, as with `keccak.c`/`shaketest`).
 lacks). Then either ML-DSA sigGen/sigVer (same reachable ACVP source, 5.0 MB and
 3.1 MB, not yet fetched) toward the signed ledger, or the remaining checklist
 items.
+
+---
+
+## CHECKPOINT — DDR-1057: ML-DSA-44 signing shipped and gated (2026-09-03)
+
+DDR-1054 closed with "nothing is post-quantum *authenticated* yet". Signing
+exists now: `ML-DSA.Sign_internal` (FIPS 204 Alg. 7), deterministic, byte-exact
+against NIST's own ACVP vectors.
+
+**The predicted blocker did not exist, for the third time.** FIPS 204's default
+`rnd` is random, and a randomized signature can only be checked by verifying it —
+which passes on any self-consistent wrong implementation. ACVP publishes
+**deterministic** groups, and among them `signatureInterface: internal,
+externalMu: false`: Sign_internal itself, no wrapper, no pre-hash.
+
+Python oracle FIRST (`tools/ci/mldsa_sign_ref.py`, byte-exact vs ACVP), C second.
+Re-running the fetcher regenerated the keyGen header **bit-identically**.
+
+**TWO branches the KATs do not cover, both measured:**
+- `Decompose`'s `lo == GAMMA2`: **0 of 28,672 calls** (~0.15 expected), so mutant
+  S4 (`>` → `>=`) **passed the KAT arm** — DDR-1054's Power2Round shape in a
+  different function. Fixed: 12 direct FIPS 204 Alg. 36 cases, negative index.
+- The `hint_total > OMEGA` rejection: defeating it still passes. **Not fixable by
+  a unit arm** (needs a crafted sk, which is not a KAT) — recorded uncovered. But
+  it is the only thing keeping `HintBitPack` inside the 2420-byte signature, so
+  the encoder now re-checks the bound **at the write** and returns -1.
+
+| | kernel | gate |
+|---|---|---|
+| clean | `9d3a813c3910ac1f` | rc=0, both sentinels |
+| S1 (`rnd` non-zero) | `ab06e1593d5ea1c5` | **rc=1** `first_bad=1 arm=acvp_sig` |
+| S4 (`>` → `>=`) | `0d3f5e7782071cef` | **rc=1** `first_bad=-4 arm=decompose` |
+
+Revert bit-for-bit. Regression 8/8 rc=0. `kernel.bin` 1,229,194 → **1,249,674 B**
+against the 1,572,864 gate (323,190 B headroom). Rejection loop bounded at 1000.
+
+**NOT DONE:** no `sigVer` — this OS can produce a post-quantum signature and
+cannot yet check one; no application (ledger still SHA-256); the kernel does not
+contain ML-DSA (the probe does); deterministic mode only; and **no constant-time
+review**, which matters most for signing — the reduction is a 64-bit `%` and the
+rejection loop's iteration count is secret-dependent.
+
+**NEXT:** `sigVer` (same reachable ACVP source), then the signed ledger. Also
+still outstanding: the third §NON-NEGOTIABLE 1 green on the final tip via
+`workflow_dispatch`.

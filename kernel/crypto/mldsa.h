@@ -53,6 +53,52 @@ typedef struct {
     int32_t t0[MLDSA_K][MLDSA_N];
 } mldsa44_scratch;
 
+/* ---- signing (DDR-1057) ------------------------------------------------
+ *
+ * ML-DSA.Sign_internal (FIPS 204 Alg. 7), DETERMINISTIC variant: rnd is 32 zero
+ * bytes, so one (sk, message) maps to exactly one signature and the answer is an
+ * ACVP constant. FIPS 204's default is a RANDOM rnd, and a randomized signature
+ * can only be checked by verifying it -- which passes on any self-consistent
+ * wrong implementation. Determinism is what makes this testable, and it is also
+ * what a reproducible audit ledger wants.
+ *
+ * Scratch is caller-owned for the same two reasons as keyGen's: reentrancy, and
+ * a ring-3 probe that must have NO writable allocated section (DDR-826). ~54 KiB
+ * -- larger than the 32 KiB ADR-038 maps eagerly, but the user stack is 8 MiB
+ * and demand-paged, so the frame simply faults itself in. */
+#define MLDSA44_SIG_BYTES 2420u
+
+typedef struct {
+    uint32_t zetas[256];
+    uint32_t ninv;
+    int      tables_ready;
+
+    int32_t s1h[MLDSA_L][MLDSA_N], s2h[MLDSA_K][MLDSA_N], t0h[MLDSA_K][MLDSA_N];
+    int32_t y[MLDSA_L][MLDSA_N],  yh[MLDSA_L][MLDSA_N];
+    int32_t w[MLDSA_K][MLDSA_N],  w1[MLDSA_K][MLDSA_N];
+    int32_t cs1[MLDSA_L][MLDSA_N], cs2[MLDSA_K][MLDSA_N], ct0[MLDSA_K][MLDSA_N];
+    int32_t z[MLDSA_L][MLDSA_N];
+    int32_t c[MLDSA_N], ch[MLDSA_N], aij[MLDSA_N], acc[MLDSA_N];
+    uint8_t hint[MLDSA_K][MLDSA_N];
+    uint8_t w1enc[MLDSA_K * 192];
+    uint8_t sig[MLDSA44_SIG_BYTES];
+} mldsa44_sign_scratch;
+
+/* Returns 0 on success, or -1 if the rejection loop exceeded its bound.
+ * The bound is not decoration: FIPS 204 states no iteration cap, the expected
+ * count for ML-DSA-44 is about 4.25, and an unbounded loop in this codebase is
+ * an S2 violation (DDR-961/994). */
+int mldsa44_sign_internal(const uint8_t sk[MLDSA44_SK_BYTES],
+                          const uint8_t *msg, unsigned long msglen,
+                          uint8_t sig[MLDSA44_SIG_BYTES],
+                          mldsa44_sign_scratch *scratch);
+
+/* Known-answer self-test against the pinned deterministic ACVP Sign_internal
+ * vectors (mldsa_sig_kat.h). Returns 0, or the 1-based failing vector index. */
+int mldsa44_sign_selftest(mldsa44_sign_scratch *scratch);
+unsigned mldsa44_sig_kat_count(void);
+unsigned mldsa44_decomp_count(void);
+
 /* seed -> (pk, sk). Returns 0. Deterministic; no RNG is consulted. */
 int mldsa44_keygen(const uint8_t seed[MLDSA44_SEED_BYTES],
                    uint8_t pk[MLDSA44_PK_BYTES],

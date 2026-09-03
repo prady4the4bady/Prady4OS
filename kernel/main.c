@@ -2215,7 +2215,7 @@ static void fs_test_thread(void *arg) {
                                         "MLDSA", &md);
                     if (mdrc == ELF_OK && md) {
                         sched_unblock(md);
-                        kputs("[user] ELF loaded (embedded); FIPS 204 ML-DSA-44 keyGen probe spawned\r\n");
+                        kputs("[user] ELF loaded (embedded); FIPS 204 ML-DSA-44 keyGen+sign probe spawned\r\n");
                     } else {
                         kline k; kline_init(&k);          /* DDR-1055 */
                         kline_s(&k, "[user] MLDSA probe elf_load FAILED rc=");
