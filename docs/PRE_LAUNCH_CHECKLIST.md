@@ -635,6 +635,44 @@ shipped kernel so the *gate* is proven: `rc=2`, capture carrying
 FIPS 204 vectors cannot be obtained through the one measured route, the required
 output is a DDR-1038-shaped blocker naming that — not a round-trip gate.
 
+#### 5.1b.3 — STEP 2 IS DONE: the vectors exist, and the predicted blocker did not (DDR-1053)
+
+The paragraph above was right about both premises and **wrong about the
+conclusion**. NIST publishes the ACVP vectors in **its own GitHub repository**,
+and `raw.githubusercontent.com` is reachable — a fact §5.1b.1 had already
+measured but not pursued. `tools/ci/fetch_mldsa_kat.py` regenerates
+`kernel/crypto/mldsa_kat.h` from `usnistgov/ACVP-Server`, refusing any vector
+whose shape is not seed 32 / pk 1312 / sk 2560, so a file that parses but is the
+wrong thing is not silently accepted. `tools/ci/mldsa_ref.py` is a verified
+Python oracle reproducing tcId 1-5 byte-exactly.
+
+#### 5.1b.4 — STEP 3 IS DONE: ML-DSA-44 keyGen implemented and gated (DDR-1054)
+
+`kernel/crypto/mldsa.c`, gated by **`smoke-mldsa`** (shard 0, strict). Gate count
+174 → **175**; `kernel.bin` 1,204,618 → **1,229,194 B**.
+
+**Fact 4 honoured again, and harder:** the expected values are NIST's own, and
+keyGen was chosen *because* it is deterministic — a sign-then-verify gate would
+pass on any self-consistent wrong implementation. Nothing is transcribed: the
+twiddles are derived as `zeta^brv8(i)` and the invNTT scale as `256^(q-2) mod q`,
+which **evaluates to 8347681**, the literal the reference carries.
+
+**The finding worth carrying: the KATs do not cover Power2Round's boundary.**
+Measured, not assumed — `r0 == 2^(D-1)` occurs in **0 of 2048 coefficients**
+across both vectors, so a mutant flipping that comparison **passed the ACVP arm
+outright**. A direct 10-case boundary arm now covers it, reporting a negative
+index so the two arms stay distinguishable. A second mutant passed and is an
+**equivalent** one — at ML-DSA-44 `k == l == 4`.
+
+M1 and M3 both redden the gate on the **shipped kernel**, on different arms, and
+the revert is bit-for-bit.
+
+**NOT DONE:** no `sigGen`/`sigVer`, so the audit ledger is still SHA-256 and
+nothing here is post-quantum *authenticated*; ML-DSA-44 only; no constant-time
+claim; and the kernel itself does not contain ML-DSA — the probe does. The
+signed-ledger application named in CLAUDE.md §PHASE 3 is blocked on signing and
+on nothing else; those vectors are at the same reachable source.
+
 ### 5.2 — Group F: AETHER agent behaviours
 
 **The structural fact first, because the tracker got this wrong twice

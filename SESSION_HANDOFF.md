@@ -10255,3 +10255,54 @@ split it reintroduces is invisible unless a race is won. `smoke-actiondel` and
 does not have). Then the operator queue resumes at DDR-1054, the ML-DSA-44 keyGen
 C port, whose header and verified Python oracle (`tools/ci/mldsa_ref.py`,
 byte-exact against ACVP tcId 1-5) are already in the tree.
+
+---
+
+## CHECKPOINT — DDR-1054: ML-DSA-44 keyGen shipped and gated (2026-09-03)
+
+Step 3 of Post-Quantum Security, which §PHASE 3 makes **mandatory v1 scope,
+before the ISO**. DDR-1053 ended "NO ML-DSA IMPLEMENTATION SHIPS"; one does now.
+
+`kernel/crypto/mldsa.c` — ML-DSA-44 **keyGen**, byte-exact against NIST's own
+ACVP vectors. keyGen because it is DETERMINISTIC: one seed maps to exactly one
+`(pk, sk)`, whereas sign-then-verify passes on any self-consistent wrong
+implementation.
+
+**Nothing transcribed.** Twiddles derived as `zeta^brv8(i)`; the invNTT scale as
+`256^(q-2) mod q`, **which evaluates to 8347681** — the literal the reference
+implementations carry, checked rather than assumed. DDR-1052's lesson.
+
+**All mutable state is caller-owned** (21,288 B scratch, tables and selftest
+buffers included). Load-bearing twice: the reentrancy `mldsa.h` always claimed,
+and `user/user.ld`'s single R+X PT_LOAD means any writable section would link
+cleanly and fault on first store (DDR-826).
+
+**THE FINDING: the KATs do not cover Power2Round's boundary.** Measured —
+`r0 == 2^(D-1)` in **0 of 2048 coefficients** across both vectors — so M3
+(`>` → `>=`) **passed the ACVP arm outright**. A direct 10-case boundary arm now
+covers it and reports a NEGATIVE index so the arms stay distinguishable. M4
+passed too and is an **equivalent mutant**: at ML-DSA-44 `k == l == 4`.
+
+| | kernel | gate |
+|---|---|---|
+| clean | `bd921648b60ae930` | rc=0, `PRADYOS_MLDSA44_KEYGEN_OK acvp=2 p2r=10` |
+| M1 (zeta 1753→1754) | `8e7a4ac795c9e71f` | **rc=1**, `first_bad=1 arm=acvp_kat` |
+| M3 (`>` → `>=`) | `4923b1e5d7af82de` | **rc=1**, `first_bad=-4 arm=power2round` |
+
+Revert returns `bd921648b60ae930` bit-for-bit. Sentinel read back out of a
+431-line capture (rc=0 alone is worthless, DDR-1041). Counts are **reported by
+the probe**, not literals, plus a `_Static_assert` on the table size.
+
+Gate count 174 → **175** (`smoke-mldsa`, shard 0, strict). `kernel.bin`
+1,204,618 → **1,229,194 B**. Regression 8/8 rc=0, `kernel_after == kernel`.
+`hygiene_check.sh` ALL SIX incl. `ci-probe-rodata-check` on the new probe.
+
+**NOT DONE:** no `sigGen`/`sigVer` — nothing is post-quantum *authenticated* yet
+and the ledger is still SHA-256; ML-DSA-44 only; no constant-time claim; the
+kernel does not contain ML-DSA (the probe does, as with `keccak.c`/`shaketest`).
+
+**NEXT:** the third §NON-NEGOTIABLE 1 green on the final tip via
+`workflow_dispatch` (§INV.15 — `gh run rerun` needs admin rights the project PAT
+lacks). Then either ML-DSA sigGen/sigVer (same reachable ACVP source, 5.0 MB and
+3.1 MB, not yet fetched) toward the signed ledger, or the remaining checklist
+items.

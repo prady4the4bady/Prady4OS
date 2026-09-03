@@ -2169,3 +2169,62 @@ iovecs it fans out to), and no mutation covers it — a mutant reverting it woul
 pass every gate, because the split it reintroduces is invisible unless a race is
 won. The `smoke-actiondel` and `smoke-surfclose` CI failures remain
 **unattributed**; what changed is that the next occurrence is decidable.
+
+---
+
+## DDR-1054 — ML-DSA-44 (FIPS 204) key generation, IMPLEMENTED + gated + M1/M3
+
+Step 3 of Post-Quantum Security, which CLAUDE.md §PHASE 3 makes **mandatory v1
+scope, landing before the ISO**. DDR-1053 closed with "NO ML-DSA IMPLEMENTATION
+SHIPS IN THIS CHANGE". One does now.
+
+**keyGen only, and byte-exact against NIST's OWN ACVP vectors.** keyGen is
+DETERMINISTIC — one 32-byte seed maps to exactly one `(pk, sk)` — so a mismatch
+is unambiguous. The alternative, a sign-then-verify round trip, passes on **any**
+self-consistent wrong implementation: the dead-arm class, which this project has
+hit nine or more times.
+
+**NO MAGIC CONSTANTS.** The 256 twiddle factors are computed as
+`zeta^brv8(i) mod q` from `zeta = 1753`, and the inverse-NTT scale as
+`256^(q-2) mod q` by Fermat — **which evaluates to 8347681, the literal the
+reference implementations carry.** That equality was checked, not assumed. This
+is DDR-1052's lesson applied: its first hand-rolled Keccak constant generator
+produced `RC[0] = 0x03` instead of `0x01`.
+
+**All mutable state is caller-owned** (21,288 B scratch, derived tables and
+selftest buffers included; not one `static` mutable object). Load-bearing twice:
+it delivers the reentrancy `mldsa.h` always claimed, and `user/user.ld` gives
+each probe a single R+X PT_LOAD, so any writable allocated section would link
+cleanly and **fault on its first store** (DDR-826 — how `smoke-ed25519` once
+failed with "sentinel not found", which reads as "the crypto is wrong" and was
+nothing of the kind).
+
+**THE KATs DO NOT COVER Power2Round's BOUNDARY, and that was measured.**
+Mutant M3 (`r0 > 2^(D-1)` → `>=`) **passed the ACVP arm outright**: `r0` equals
+`2^(D-1)` exactly in **0 of the 2048 coefficients** across both vectors, against
+~0.125 expected hits per key. A direct 10-case boundary arm was added; it
+reports a **negative** index so a boundary failure can never be read as a vector
+failure. M4 (`s1`/`s2` index base `L` → `K`) also passed and is an **equivalent
+mutant, not a gap**: at ML-DSA-44 `k == l == 4`.
+
+**Two-sided proof.** The host harness links the SHIPPED `mldsa.c` and reproduces
+`tools/ci/mldsa_ref.py` byte-exactly on a seed in no vector file. On the running
+OS, `smoke-mldsa` (shard 0, strict) prints
+`PRADYOS_MLDSA44_KEYGEN_OK acvp=2 p2r=10` — read back out of a 431-line capture,
+because rc=0 alone is worthless (DDR-1041). Mutants on the **shipped kernel**:
+M1 (`zeta` 1753→1754, `8e7a4ac795c9e71f`) and M3 (`4923b1e5d7af82de`) both
+redden the gate on **different arms**; reverting returns `bd921648b60ae930`
+bit-for-bit. Counts are **reported by the probe**, not literals, and a
+`_Static_assert` on the table size means a regenerated header cannot silently
+shrink coverage.
+
+Regression 8/8 rc=0, `kernel_after == kernel`. Gate count 174 → **175**.
+`kernel.bin` 1,204,618 → **1,229,194 B** against the 1,572,864 B gate. Zero
+warnings at `-Werror`; `hygiene_check.sh` ALL SIX.
+
+**NOT CLAIMED:** no `sigGen`/`sigVer`, so nothing here is post-quantum
+*authenticated* yet and the audit ledger still uses SHA-256; ML-DSA-44 only;
+nothing about constant-time behaviour; and **the kernel does not contain
+ML-DSA** — `mldsa.c` is compiled into the ring-3 probe only, exactly as
+`keccak.c` also is for `shaketest`, because nothing needs it until the ledger
+does.

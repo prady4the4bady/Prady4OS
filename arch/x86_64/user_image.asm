@@ -404,6 +404,13 @@ shaketest_elf:
     incbin "build/shaketest.elf"
 shaketest_elf_end:
 
+; DDR-1054: FIPS 204 ML-DSA-44 keyGen, against NIST's own ACVP vectors.
+global mldsatest_elf
+global mldsatest_elf_end
+mldsatest_elf:
+    incbin "build/mldsatest.elf"
+mldsatest_elf_end:
+
 global sigpipetest_elf
 global sigpipetest_elf_end
 sigpipetest_elf:

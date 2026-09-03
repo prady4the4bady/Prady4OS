@@ -163,6 +163,8 @@ USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
 USER_SHA256_ELF := build/sha256test.elf
 USER_SHAKE_SRC  := user/shaketest.c      # DDR-1052: FIPS 202 SHA-3/SHAKE KAT probe
 USER_SHAKE_ELF  := build/shaketest.elf
+USER_MLDSA_SRC  := user/mldsatest.c      # DDR-1054: FIPS 204 ML-DSA-44 keyGen KAT probe
+USER_MLDSA_ELF  := build/mldsatest.elf
 USER_SIGPIPE_SRC := user/sigpipetest.c    # DDR-805: SIGPIPE probe (DDR-804 opt-in)
 USER_SIGPIPE_ELF := build/sigpipetest.elf
 USER_PRIVNET_SRC := user/privacynettest.c # DDR-802: privacy netfilter probe (DDR-804 opt-in)
@@ -507,6 +509,9 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/keccak.c -o build/keccak_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_SHAKE_SRC) -o build/shaketest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHAKE_ELF) build/shaketest.o build/keccak_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/mldsa.c -o build/mldsa_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -Iuser/include -c $(USER_MLDSA_SRC) -o build/mldsatest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MLDSA_ELF) build/mldsatest.o build/mldsa_user.o build/keccak_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_LOCKBOX_SRC) -o build/lockboxtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_LOCKBOX_ELF) build/lockboxtest.o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/hkdf.c -o build/hkdf_user.o
@@ -2865,6 +2870,22 @@ smoke-shake: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=shake \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHAKE_VECTORS_OK n=15')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SHAKE_STUB\nSHAKE FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1054: FIPS 204 ML-DSA-44 keyGen against NIST's OWN ACVP vectors.
+#
+# The counts are REPORTED BY THE PROBE, not hard-coded here: a gate asserting a
+# literal `acvp=2` would keep passing after the vector table shrank, which is
+# the dead-arm class. mldsa.c carries a _Static_assert on the table size so a
+# regenerated header cannot silently reduce coverage either.
+#
+# p2r=10 is the Power2Round boundary arm, and it is not decoration: the ACVP
+# vectors do NOT reach r0 == 2^(D-1) -- measured, 0 hits in 2048 coefficients --
+# so a mutant flipping that comparison passes the KAT arm outright (DDR-1054 M3).
+smoke-mldsa: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=mldsa \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MLDSA44_KEYGEN_OK acvp=2 p2r=10')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_MLDSA_STUB\nMLDSA FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-sha256: $(IMG) fat-image sfs-image

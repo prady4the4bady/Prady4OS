@@ -487,6 +487,8 @@ extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vector
 extern const unsigned char sha256test_elf_end[];
 extern const unsigned char shaketest_elf[];           /* DDR-1052: FIPS 202 KATs */
 extern const unsigned char shaketest_elf_end[];
+extern const unsigned char mldsatest_elf[];           /* DDR-1054: FIPS 204 KATs */
+extern const unsigned char mldsatest_elf_end[];
 extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe */
 extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
@@ -2200,6 +2202,25 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] SHAKE probe elf_load FAILED rc=");
                         kputdec((uint64_t)(int64_t)skrc);
                         kputs("\r\n");
+                    }
+                }
+                if (probe_enabled("mldsa")) {
+                    struct tcb *md = 0;
+                    uint64_t mdlen = (uint64_t)((uintptr_t)mldsatest_elf_end
+                                                - (uintptr_t)mldsatest_elf);
+                    /* OPEN-11's lesson: a load that fails must SAY so. A silent
+                     * failed spawn is indistinguishable from a probe that ran
+                     * and stayed quiet, and the gate then blames the crypto. */
+                    int mdrc = elf_load((void *)(uintptr_t)mldsatest_elf, mdlen,
+                                        "MLDSA", &md);
+                    if (mdrc == ELF_OK && md) {
+                        sched_unblock(md);
+                        kputs("[user] ELF loaded (embedded); FIPS 204 ML-DSA-44 keyGen probe spawned\r\n");
+                    } else {
+                        kline k; kline_init(&k);          /* DDR-1055 */
+                        kline_s(&k, "[user] MLDSA probe elf_load FAILED rc=");
+                        kline_d(&k, (uint64_t)(int64_t)mdrc);
+                        kline_s(&k, "\r\n"); kline_emit(&k);
                     }
                 }
                 if (probe_enabled("sigpipe")) {
