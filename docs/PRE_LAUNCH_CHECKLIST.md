@@ -416,6 +416,42 @@ than explained away.
 
 ---
 
+### 4.14 — I/O APIC stage D: deferred, and the blocker is an absent ACPI `_PRT` parser
+
+DDR-1050. The Group A row reads as unbuilt work; most of it is built. DDR-874's
+`kernel/apic/ioapic.c` ships MADT parsing, MMIO mapping, `ioapic_route()` and an
+Interrupt Source Override table, live at `gsi_base=0 redirs=24 overrides=5`.
+**Stage D is the cutover only.**
+
+Three findings, all from measurement rather than reading the row:
+
+1. **The scope is not one line.** Four sites claim ISA IRQs — `console.c:236`
+   (**IRQ4, COM1 RX, unconditional** — the path every gate uses to feed PRISM),
+   `idt.c:694` (IRQ1 keyboard), and **PCI INTx fallbacks** in `virtio_net`,
+   `virtio_input` and `virtio_blk`.
+2. **The blocker.** There is **no ACPI `_PRT` parser**. A MADT ISO table
+   describes *ISA* overrides, not which GSI a PCI device's INTA# lands on, so
+   those three fallbacks cannot be routed correctly. They are dormant here
+   (every virtio device takes MSI-X, measured: vec 54, 56–59) — but **dormant is
+   not absent**; the fallback exists for a machine without usable MSI-X.
+3. **The benefit is already delivered.** `ioapic.c`'s own header says the I/O
+   APIC exists so per-CPU affinity has somewhere to be expressed — and MSI-X
+   already provides that for every device carrying real traffic (DDR-714C1/C3,
+   DDR-771). Stage D would additionally move only the PS/2 keyboard and COM1
+   serial: two low-rate lines whose affinity nobody needs, on the highest-risk
+   path in the tree.
+
+DDR-1050 §5 records the safe subset and its two traps so they need not be
+re-derived: the **EOI must flip to `lapic_eoi()`** (`idt.c:700` calls `pic_eoi`
+unconditionally, so the second keystroke would never arrive), with the flag set
+*before* the line is armed; and a gate asserting "keys still work" **passes with
+the 8259 still in charge**, so it needs a GSI marker plus a PIC-mask readback.
+
+**Not a defect report** — DDR-874's work stands and is exercised. What is
+deferred is the cutover.
+
+---
+
 ## SECTION 5 — DEFERRED FEATURES
 
 ### 5.1 — Pre-approved exceptions (CLAUDE.md §PRE-APPROVED EXCEPTIONS)
