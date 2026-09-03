@@ -93,6 +93,40 @@ int mldsa44_sign_internal(const uint8_t sk[MLDSA44_SK_BYTES],
                           uint8_t sig[MLDSA44_SIG_BYTES],
                           mldsa44_sign_scratch *scratch);
 
+/* ---- verification (DDR-1058) -------------------------------------------
+ *
+ * Its own scratch, NOT signing's under different names: verify's polynomials
+ * mean different things (t1, z-hat) and reusing `s1h`/`yh` for them would make
+ * the code read as something it is not. In crypto that is how a subtle wrong
+ * answer gets shipped. ~27 KiB. */
+typedef struct {
+    uint32_t zetas[256];
+    uint32_t ninv;
+    int      tables_ready;
+
+    int32_t z[MLDSA_L][MLDSA_N], zh[MLDSA_L][MLDSA_N];
+    int32_t t1[MLDSA_K][MLDSA_N], t1h[MLDSA_K][MLDSA_N];
+    int32_t w1[MLDSA_K][MLDSA_N];
+    int32_t acc[MLDSA_N], aij[MLDSA_N], c[MLDSA_N], ch[MLDSA_N];
+    uint8_t hint[MLDSA_K][MLDSA_N];
+    uint8_t w1enc[MLDSA_K * 192];
+} mldsa44_verify_scratch;
+
+/* 1 = the signature verifies, 0 = it does not. A malformed signature (bad hint
+ * encoding, out-of-range z) is a 0, never a fault. */
+int mldsa44_verify_internal(const uint8_t pk[MLDSA44_PK_BYTES],
+                            const uint8_t *msg, unsigned long msglen,
+                            const uint8_t sig[MLDSA44_SIG_BYTES],
+                            mldsa44_verify_scratch *scratch);
+
+/* Known-answer self-test over the pinned ACVP Verify_internal vectors, which
+ * carry BOTH verdicts. Returns 0, or the 1-based index of the first vector
+ * whose verdict was wrong -- in EITHER direction, so an implementation that
+ * always accepts and one that always rejects both fail. */
+int mldsa44_verify_selftest(mldsa44_verify_scratch *scratch);
+unsigned mldsa44_ver_kat_count(void);
+unsigned mldsa44_usehint_count(void);
+
 /* Known-answer self-test against the pinned deterministic ACVP Sign_internal
  * vectors (mldsa_sig_kat.h). Returns 0, or the 1-based failing vector index. */
 int mldsa44_sign_selftest(mldsa44_sign_scratch *scratch);

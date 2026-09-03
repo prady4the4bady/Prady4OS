@@ -94,6 +94,31 @@ void _start(void) {
             wr(ul_end(&u)); }
     }
 
+    /* DDR-1058: verification. Its own scope and its own scratch (~27 KiB). */
+    {
+        mldsa44_verify_scratch vs;
+        int vbad;
+        vs.tables_ready = 0;
+        vbad = mldsa44_verify_selftest(&vs);
+        if (vbad != 0) {
+            uline u; ul_init(&u);
+            ul_s(&u, "PRADYOS_MLDSA_VER_STUB first_bad=");
+            ul_d(&u, vbad);
+            ul_s(&u, vbad < 0 ? " arm=usehint\n" : " arm=acvp_ver\n");
+            wr(ul_end(&u));
+            wr("MLDSA FAIL\n");
+            nsi(SYS_EXIT, 1, 0, 0);
+            for (;;) { }
+        }
+        {   uline u; ul_init(&u);
+            ul_s(&u, "PRADYOS_MLDSA44_VERIFY_OK acvp=");
+            ul_d(&u, (long)mldsa44_ver_kat_count());
+            ul_s(&u, " uh=");
+            ul_d(&u, (long)mldsa44_usehint_count());
+            ul_c(&u, '\n');
+            wr(ul_end(&u)); }
+    }
+
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }

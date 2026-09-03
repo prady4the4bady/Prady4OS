@@ -2884,8 +2884,8 @@ smoke-shake: $(IMG) fat-image sfs-image
 # so a mutant flipping that comparison passes the KAT arm outright (DDR-1054 M3).
 smoke-mldsa: $(IMG) fat-image sfs-image
 	TIMEOUT_S=180 QEMU_PROBES=mldsa \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_MLDSA44_KEYGEN_OK acvp=2 p2r=10\nPRADYOS_MLDSA44_SIGN_OK acvp=2 dec=12')" \
-	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_MLDSA_STUB\nPRADYOS_MLDSA_SIGN_STUB\nMLDSA FAIL')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MLDSA44_KEYGEN_OK acvp=2 p2r=10\nPRADYOS_MLDSA44_SIGN_OK acvp=2 dec=12\nPRADYOS_MLDSA44_VERIFY_OK acvp=5 uh=13')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_MLDSA_STUB\nPRADYOS_MLDSA_SIGN_STUB\nPRADYOS_MLDSA_VER_STUB\nMLDSA FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-sha256: $(IMG) fat-image sfs-image

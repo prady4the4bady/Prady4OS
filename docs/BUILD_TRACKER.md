@@ -2281,3 +2281,45 @@ about constant-time behaviour**, which matters most for signing — the reductio
 is a 64-bit `%` and the rejection loop's iteration count is itself
 secret-dependent, so this must not be used against an adversary who can measure
 it until that is addressed.
+
+---
+
+## DDR-1058 — ML-DSA-44 Verify_internal: the primitive set is COMPLETE
+
+keyGen (DDR-1054) + sign (DDR-1057) + verify (here), all against NIST's own
+ACVP vectors, all gated by `smoke-mldsa` (shard 0, strict).
+
+**The verify vector set is mostly NEGATIVE, and that is the point.** ACVP's
+ML-DSA-44 `Verify_internal` group is **3 signatures that must verify and 12 that
+must not** — so an implementation that always answers "valid" passes every
+positive test, which is sign-then-verify in disguise. Both verdicts are pinned
+and the generator refuses a one-sided set. V1 (always accept) fails at vector 3;
+V2 (always reject) fails at vector 1.
+
+**Coverage measured per guard, not assumed.** Hint-encoding validation catches
+tcIds 107/113/119 (V4 fails), real coverage of the checks that stop a verifier
+being fed arbitrary bytes. **The `||z||inf < gamma1 - beta` bound catches none of
+the twelve.**
+
+**THE FINDING: that bound cannot be covered by a synthetic vector either, and it
+was measured before the test was written.** Forging an out-of-range `z` gives
+`verify WITH bound = False, WITHOUT = False` — altering `z` changes `w1'` and
+therefore `c~'`, so the hash comparison rejects it either way, and a test
+asserting "rejected" would pass on an implementation with **no bound check at
+all**. Dead-arm class, second time caught in *design* rather than after shipping.
+Recorded measured-uncovered with the reason.
+
+**UseHint's `r0 == 0` boundary** is likewise unreached (V5 passes all five) — the
+third function in a row after Power2Round and Decompose, so these direct arms are
+now routine. 13 cases from FIPS 204 Alg. 40.
+
+Own scratch (27,400 B), not signing's under different names. V1
+(`6d026ed03832b65c`) and V5 (`336448d366164153`) redden the gate on different
+arms; revert `46016bc8c7c7fa3b` bit-for-bit. **Regression 9/9 including
+`smoke-iso-x86` (BIOS + UEFI)**, which matters because `kernel.bin` is now
+**1,278,346 B** against §INV.18's 1.5 MiB load window (294,518 B headroom).
+
+**NOT CLAIMED:** no application — the ledger is still SHA-256 and nothing calls
+these in anger; the primitive set is complete, the *use* of it is not built. The
+`||z||inf` bound is untested and is a real FIPS 204 step. Internal interface
+only; ML-DSA-44 only.

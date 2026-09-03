@@ -697,6 +697,28 @@ audit ledger on F#76's chain, which is what §PHASE 3 actually names. Both are
 unblocked; the sigVer vectors are at the same reachable ACVP source. **And a
 constant-time review, which matters most for signing and has not been done.**
 
+#### 5.1b.6 — STEP 5 IS DONE: the ML-DSA-44 primitive set is COMPLETE (DDR-1058)
+
+`Verify_internal` shipped and gated; `smoke-mldsa` asserts all three sentinels.
+
+**The verify vector set is mostly NEGATIVE and that is what makes it worth
+having:** 3 must verify, 12 must not, so an always-accept implementation passes
+every positive test. Both verdicts are pinned; a mutant that always accepts and
+one that always rejects both fail.
+
+**Two guards measured as uncovered, one of them unfixably so.** The hint-encoding
+validation IS covered (three pinned rejects are malformed hints). The
+`||z||inf < gamma1 - beta` bound is NOT, by any of NIST's twelve negatives — and
+a synthetic forgery cannot cover it either: **measured before writing the test**,
+an out-of-range `z` is rejected by the hash comparison whether or not the bound
+exists, so such a test would pass on an implementation with no bound at all.
+Recorded, not decorated.
+
+**Remaining in PQC scope: the APPLICATION.** §PHASE 3 names an ML-DSA-signed
+tamper-evident ledger on F#76's audit chain. The primitives are done and gated;
+the ledger still uses SHA-256 and nothing calls ML-DSA in anger. Also still
+outstanding: a constant-time review of signing, and the `||z||inf` gap above.
+
 ### 5.2 — Group F: AETHER agent behaviours
 
 **The structural fact first, because the tracker got this wrong twice

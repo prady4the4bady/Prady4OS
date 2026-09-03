@@ -688,3 +688,197 @@ int mldsa44_sign_selftest(mldsa44_sign_scratch *sc) {
     }
     return 0;
 }
+
+/* ========================================================================
+ * DDR-1058 — ML-DSA.Verify_internal (FIPS 204 Alg. 8).
+ *
+ * The ACVP sigVer set is 3 signatures that must verify and 12 that must not,
+ * so the NEGATIVE cases are the load-bearing half: an implementation that
+ * always answers "valid" passes every positive test. The pinned set keeps both
+ * verdicts for exactly that reason.
+ * ======================================================================== */
+#include "mldsa_ver_kat.h"
+
+/* HintBitUnpack (FIPS 204 Alg. 21). Returns 0 on a MALFORMED encoding, which is
+ * a rejection and not a fault: indices must strictly increase within a row, the
+ * per-row cumulative counts must be non-decreasing and at most OMEGA, and the
+ * unused tail must be zero. Those checks are the reason a verifier cannot be
+ * fed an arbitrary byte string. */
+static int hint_bit_unpack(const uint8_t *y, uint8_t h[MLDSA_K][MLDSA_N]) {
+    unsigned index = 0, i, j;
+
+    for (i = 0; i < MLDSA_K; i++)
+        for (j = 0; j < MLDSA_N; j++) h[i][j] = 0;
+
+    for (i = 0; i < MLDSA_K; i++) {
+        unsigned end = y[OMEGA + i];
+        if (end < index || end > (unsigned)OMEGA) return 0;
+        {   unsigned first = index;
+            while (index < end) {
+                if (index > first && y[index - 1] >= y[index]) return 0;
+                h[i][y[index]] = 1;
+                index++;
+            }
+        }
+    }
+    for (i = index; i < (unsigned)OMEGA; i++)
+        if (y[i] != 0) return 0;
+    return 1;
+}
+
+/* UseHint (FIPS 204 Alg. 40). */
+static int32_t use_hint(uint8_t hbit, uint32_t r) {
+    int32_t mm = (Q - 1) / (2 * GAMMA2);
+    int32_t r1, r0;
+    decompose(r, &r1, &r0);
+    if (!hbit) return r1;
+    if (r0 > 0) return (r1 + 1) % mm;
+    return (r1 - 1 + mm) % mm;
+}
+
+int mldsa44_verify_internal(const uint8_t pk[MLDSA44_PK_BYTES],
+                            const uint8_t *msg, unsigned long msglen,
+                            const uint8_t sig[MLDSA44_SIG_BYTES],
+                            mldsa44_verify_scratch *sc)
+{
+    const uint8_t *rho = pk;
+    uint8_t tr[64], mu[64], ct2[CTILDE_LEN];
+    keccak_ctx x;
+    unsigned r, s, j, o;
+    unsigned w1bits = bitlen_u((uint32_t)((Q - 1) / (2 * GAMMA2) - 1));
+
+    if (!sc->tables_ready) { tables_fill(sc->zetas, &sc->ninv); sc->tables_ready = 1; }
+
+    /* pkDecode */
+    o = 32;
+    for (r = 0; r < MLDSA_K; r++) { simple_bitunpack(pk + o, 10, sc->t1[r]); o += 320; }
+
+    /* sigDecode. z first, then the hint -- a malformed hint is a rejection. */
+    o = CTILDE_LEN;
+    for (s = 0; s < MLDSA_L; s++) {
+        bitunpack(sig + o, GAMMA1 - 1, GAMMA1, sc->z[s]); o += 576;
+    }
+    if (!hint_bit_unpack(sig + o, sc->hint)) return 0;
+
+    /* ||z||inf < gamma1 - beta, on the CENTERED values sigDecode produced. */
+    for (s = 0; s < MLDSA_L; s++)
+        for (j = 0; j < MLDSA_N; j++) {
+            int32_t v = sc->z[s][j] < 0 ? -sc->z[s][j] : sc->z[s][j];
+            if (v >= GAMMA1 - BETA) return 0;
+        }
+
+    /* mu = H(H(pk, 64) || M, 64) */
+    shake256(pk, MLDSA44_PK_BYTES, tr, 64);
+    shake256_init(&x);
+    keccak_update(&x, tr, 64);
+    keccak_update(&x, msg, (size_t)msglen);
+    keccak_squeeze(&x, mu, 64);
+
+    sample_in_ball(sig, sc->c);           /* c~ is the first CTILDE_LEN bytes */
+    for (j = 0; j < MLDSA_N; j++) sc->ch[j] = sc->c[j];
+    ntt(sc->zetas, sc->ch);
+
+    for (s = 0; s < MLDSA_L; s++) {
+        for (j = 0; j < MLDSA_N; j++)
+            sc->zh[s][j] = sc->z[s][j] < 0 ? sc->z[s][j] + Q : sc->z[s][j];
+        ntt(sc->zetas, sc->zh[s]);
+    }
+    for (r = 0; r < MLDSA_K; r++) {
+        for (j = 0; j < MLDSA_N; j++)
+            sc->t1h[r][j] = (int32_t)(((uint64_t)sc->t1[r][j] << D) % (uint64_t)Q);
+        ntt(sc->zetas, sc->t1h[r]);
+    }
+
+    /* w'approx = NTT^-1(A.z-hat - c-hat.(t1 * 2^d)); w1' = UseHint(h, w'approx) */
+    for (r = 0; r < MLDSA_K; r++) {
+        for (j = 0; j < MLDSA_N; j++) sc->acc[j] = 0;
+        for (s = 0; s < MLDSA_L; s++) {
+            rej_ntt_poly(rho, (uint8_t)s, (uint8_t)r, sc->aij);
+            for (j = 0; j < MLDSA_N; j++)
+                sc->acc[j] = (int32_t)(((uint32_t)sc->acc[j]
+                              + modmul((uint32_t)sc->aij[j],
+                                       (uint32_t)sc->zh[s][j])) % Q);
+        }
+        for (j = 0; j < MLDSA_N; j++) {
+            uint32_t t = modmul((uint32_t)sc->ch[j], (uint32_t)sc->t1h[r][j]);
+            sc->acc[j] = (int32_t)(((uint32_t)sc->acc[j] + (uint32_t)Q - t) % Q);
+        }
+        intt(sc->zetas, sc->ninv, sc->acc);
+        for (j = 0; j < MLDSA_N; j++)
+            sc->w1[r][j] = use_hint(sc->hint[r][j], (uint32_t)sc->acc[j]);
+        bitpack_simple(sc->w1[r], w1bits, sc->w1enc + r * 192);
+    }
+
+    shake256_init(&x);
+    keccak_update(&x, mu, 64);
+    keccak_update(&x, sc->w1enc, MLDSA_K * 192);
+    keccak_squeeze(&x, ct2, CTILDE_LEN);
+
+    for (j = 0; j < CTILDE_LEN; j++)
+        if (ct2[j] != sig[j]) return 0;
+    return 1;
+}
+
+static const struct {
+    const uint8_t *pk, *msg, *sig;
+    unsigned msglen;
+    int expect;
+} MLDSA44_VER_KATS[MLDSA44_VER_KAT_COUNT] = {
+    { MLDSA44_VPK_116, MLDSA44_VMSG_116, MLDSA44_VSIG_116, MLDSA44_VMSGLEN_116, MLDSA44_VOK_116 },
+    { MLDSA44_VPK_114, MLDSA44_VMSG_114, MLDSA44_VSIG_114, MLDSA44_VMSGLEN_114, MLDSA44_VOK_114 },
+    { MLDSA44_VPK_120, MLDSA44_VMSG_120, MLDSA44_VSIG_120, MLDSA44_VMSGLEN_120, MLDSA44_VOK_120 },
+    { MLDSA44_VPK_107, MLDSA44_VMSG_107, MLDSA44_VSIG_107, MLDSA44_VMSGLEN_107, MLDSA44_VOK_107 },
+    { MLDSA44_VPK_117, MLDSA44_VMSG_117, MLDSA44_VSIG_117, MLDSA44_VMSGLEN_117, MLDSA44_VOK_117 },
+};
+_Static_assert(MLDSA44_VER_KAT_COUNT == 5,
+               "mldsa_ver_kat.h gained or lost vectors; extend the table above");
+
+/* UseHint boundary arm. The ACVP verify vectors do NOT reach r0 == 0 with the
+ * hint bit set -- measured: a mutant flipping `r0 > 0` to `r0 >= 0` passes all
+ * five. Same shape as DDR-1054's Power2Round and DDR-1057's Decompose, now in a
+ * third function, which is why these arms are becoming a habit rather than a
+ * one-off. r = 190464 is the boundary: r0 == 0 exactly, so h=1 must take the
+ * r0 <= 0 branch and yield 0, where the mutant yields 2. */
+static const struct { uint8_t h; uint32_t r; int32_t want; } USEHINT_VEC[] = {
+    { 0,        0u,  0 },
+    { 0,        1u,  0 },
+    { 1,        0u, 43 },
+    { 1,        1u,  1 },
+    { 1,   190464u,  0 },   /* r0 == 0 exactly, hint set: THE boundary */
+    { 1,   190465u,  2 },
+    { 1,   190463u,  0 },
+    { 0,   190464u,  1 },
+    { 1,   285696u,  2 },
+    { 1,  8380416u, 43 },   /* q-1, where Decompose takes its special branch */
+    { 1,   380928u,  1 },
+    { 0,  1234567u,  6 },
+    { 1,  1234567u,  7 },
+};
+
+static int usehint_selftest(void) {
+    for (unsigned i = 0; i < sizeof USEHINT_VEC / sizeof USEHINT_VEC[0]; i++)
+        if (use_hint(USEHINT_VEC[i].h, USEHINT_VEC[i].r) != USEHINT_VEC[i].want)
+            return (int)i + 1;
+    return 0;
+}
+
+unsigned mldsa44_ver_kat_count(void) { return MLDSA44_VER_KAT_COUNT; }
+unsigned mldsa44_usehint_count(void) {
+    return (unsigned)(sizeof USEHINT_VEC / sizeof USEHINT_VEC[0]);
+}
+
+int mldsa44_verify_selftest(mldsa44_verify_scratch *sc) {
+    /* Boundary arm first, NEGATIVE index -- see DDR-1058 §4. */
+    { int u = usehint_selftest(); if (u) return -u; }
+
+    for (unsigned v = 0; v < MLDSA44_VER_KAT_COUNT; v++) {
+        int got = mldsa44_verify_internal(MLDSA44_VER_KATS[v].pk,
+                                          MLDSA44_VER_KATS[v].msg,
+                                          MLDSA44_VER_KATS[v].msglen,
+                                          MLDSA44_VER_KATS[v].sig, sc);
+        /* BOTH directions. A verifier that always accepts fails the REJECT
+         * vectors; one that always rejects fails the ACCEPT vectors. */
+        if (got != MLDSA44_VER_KATS[v].expect) return (int)v + 1;
+    }
+    return 0;
+}

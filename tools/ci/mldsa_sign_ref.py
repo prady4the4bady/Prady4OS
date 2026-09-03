@@ -154,3 +154,79 @@ def sign_internal(sk, msg, rnd=bytes(32)):
             kappa += L; continue
         zc = [[(c if c <= Q // 2 else c - Q) for c in p] for p in z]
         return ct + b''.join(bitpack(p, GAMMA1 - 1, GAMMA1) for p in zc) + hint_bit_pack(h)
+
+
+# ---- Verify_internal (FIPS 204 Alg. 8) ------------------------------------
+#
+# The ACVP sigVer set is 3 signatures that must VERIFY and 12 that must NOT, so
+# the negative cases are the load-bearing half: an implementation that always
+# answers "valid" fails twelve of fifteen, and one that always answers "invalid"
+# fails three. That is what makes a verify gate non-vacuous, and it is why the
+# pinned set below keeps both kinds.
+
+def pkdecode(pk):
+    rho = pk[:32]
+    t1 = []
+    o = 32
+    for _ in range(K):
+        t1.append(simple_bitunpack(pk[o:o+320], 10)); o += 320
+    return rho, t1
+
+def hint_bit_unpack(y):
+    h = [[0] * N for _ in range(K)]
+    index = 0
+    for i in range(K):
+        if y[OMEGA + i] < index or y[OMEGA + i] > OMEGA:
+            return None
+        first = index
+        while index < y[OMEGA + i]:
+            if index > first and y[index - 1] >= y[index]:
+                return None                      # indices must strictly increase
+            h[i][y[index]] = 1
+            index += 1
+    for i in range(index, OMEGA):
+        if y[i] != 0:
+            return None                          # padding must be zero
+    return h
+
+def sigdecode(sig):
+    ct = sig[:LAMBDA_BYTES]
+    o = LAMBDA_BYTES
+    z = []
+    for _ in range(L):
+        z.append(bitunpack(sig[o:o+576], GAMMA1 - 1, GAMMA1)); o += 576
+    h = hint_bit_unpack(sig[o:o + OMEGA + K])
+    return ct, z, h
+
+def use_hint(h, r):
+    mm = (Q - 1) // (2 * GAMMA2)
+    r1, r0 = decompose(r)
+    if h == 1:
+        return (r1 + 1) % mm if r0 > 0 else (r1 - 1) % mm
+    return r1
+
+def verify_internal(pk, msg, sig):
+    if len(sig) != 2420 or len(pk) != 1312:
+        return False
+    rho, t1 = pkdecode(pk)
+    ct, z, h = sigdecode(sig)
+    if h is None:
+        return False
+    if max(max(abs(c) for c in p) for p in z) >= GAMMA1 - BETA:
+        return False
+    A = [[m.rej_ntt_poly(rho + bytes([s, r])) for s in range(L)] for r in range(K)]
+    tr = shake256(pk, 64)
+    mu = shake256(tr + msg, 64)
+    c = sample_in_ball(ct)
+    ch = m.ntt(c)
+    zh = [m.ntt([x % Q for x in p]) for p in z]
+    t1h = [m.ntt([(x << D) % Q for x in p]) for p in t1]
+    w1 = []
+    for r in range(K):
+        acc = [0] * N
+        for s in range(L):
+            for j in range(N): acc[j] = (acc[j] + A[r][s][j] * zh[s][j]) % Q
+        for j in range(N): acc[j] = (acc[j] - ch[j] * t1h[r][j]) % Q
+        wa = m.intt(acc)
+        w1.append([use_hint(h[r][j], wa[j]) for j in range(N)])
+    return ct == shake256(mu + w1_encode(w1), LAMBDA_BYTES)

@@ -10351,3 +10351,50 @@ rejection loop's iteration count is secret-dependent.
 **NEXT:** `sigVer` (same reachable ACVP source), then the signed ledger. Also
 still outstanding: the third §NON-NEGOTIABLE 1 green on the final tip via
 `workflow_dispatch`.
+
+---
+
+## CHECKPOINT — DDR-1058: the ML-DSA-44 primitive set is COMPLETE (2026-09-03)
+
+keyGen (DDR-1054) + Sign_internal (DDR-1057) + Verify_internal (here), all
+against NIST's own ACVP vectors, all gated by `smoke-mldsa` (shard 0, strict).
+
+**The verify vector set is mostly NEGATIVE and that is the point:** 3 signatures
+must verify, 12 must not. An always-accept implementation passes every positive
+test — sign-then-verify in disguise. Both verdicts are pinned; the generator
+refuses a one-sided set. V1 (always accept) fails at vector 3, V2 (always reject)
+at vector 1.
+
+**Coverage measured per guard.** Hint-encoding validation IS covered (tcIds
+107/113/119 are malformed hints; V4 fails). The `||z||inf < gamma1 - beta` bound
+is **not** — by any of the twelve.
+
+**THE FINDING, and it was measured BEFORE the test was written:** a synthetic
+out-of-range-`z` forgery cannot cover that bound either. `verify WITH bound =
+False, WITHOUT = False` — altering `z` changes `w1'` and hence `c~'`, so the hash
+comparison rejects it regardless, and a test asserting "rejected" would pass on
+an implementation with **no bound at all**. Dead-arm class, second time caught in
+design rather than after shipping. Recorded measured-uncovered, not decorated.
+
+**UseHint's `r0 == 0`** boundary unreached as well (V5 passes all five) — third
+function in a row after Power2Round and Decompose. 13 direct FIPS 204 Alg. 40
+cases; `r = 190464` is the boundary where the mutant yields 2 instead of 0.
+
+| | kernel | gate |
+|---|---|---|
+| clean | `46016bc8c7c7fa3b` | rc=0, all three sentinels |
+| V1 (always accept) | `6d026ed03832b65c` | **rc=1** `first_bad=3 arm=acvp_ver` |
+| V5 (`r0 > 0` -> `>=`) | `336448d366164153` | **rc=1** `first_bad=-3 arm=usehint` |
+
+Revert bit-for-bit. **Regression 9/9 including `smoke-iso-x86` (BIOS + UEFI)** —
+which matters, because `kernel.bin` is now **1,278,346 B** against §INV.18's
+1.5 MiB stage-2 load window: **294,518 B of headroom**, and this session has
+spent ~82 KB of it. Watch that number.
+
+**NOT DONE:** the APPLICATION. §PHASE 3 names an ML-DSA-signed tamper-evident
+ledger on F#76's audit chain; the ledger is still SHA-256 and nothing calls
+ML-DSA in anger. Also open: a constant-time review of signing, and the
+`||z||inf` coverage gap above.
+
+**NEXT:** the signed-ledger application, then the third §NON-NEGOTIABLE 1 green
+on the final tip via `workflow_dispatch`.
