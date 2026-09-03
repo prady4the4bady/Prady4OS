@@ -10173,13 +10173,23 @@ so §NON-NEGOTIABLE 6's terminator did not move: **74 before, 75 after, not 0.**
 | build | rc=0, zero warnings at `-Werror` |
 | `hygiene_check.sh` | ALL SIX, hash unchanged before and after |
 
-**IN FLIGHT at the time of this commit — do not read the DDR's §8 as final.** A
-20-run `smoke-nethammer` campaign on that one binary is running
-(`build/gatelogs/ddr1055/campaign.txt`); 2 of 20 complete, both rc=0 with the
-sentinel intact and non-vacuous captures (46-47 heartbeat lines each). The
-regression suite — one gate per converted site plus the hygiene gates, with
-`smoke-selftest` load-bearing because this edits `GLOBAL_FORBIDDEN` — has NOT run
-yet. **Next session: finish both, then fill in DDR-1055 §8 and this table.**
+**PROVEN — both measurements are in (this supersedes the "IN FLIGHT" note in the
+`bf784f7` commit message, which was honest at the time).**
+
+- **Campaign: `smoke-nethammer` 20/20 PASS** on the one binary, `kernel_after ==
+  kernel`, captures 38,212-38,717 B with 47 `[hb]` lines each (non-vacuous),
+  `sentinel_intact` 20/20, `spliced` 0/20. Against the pre-fix 1-in-3 that is
+  `(2/3)^20 = 3.0e-4`; at a conservative 10% it would be `0.9^20 = 0.12`, so 20
+  clean runs is decisive against the observed rate and only suggestive against a
+  much rarer one. Stated that way rather than as "the defect is gone".
+- **Regression: 18/18 gates rc=0**, `kernel_after == kernel`, one gate per
+  converted print site plus the hygiene gates. `smoke-selftest` is the
+  load-bearing one — DDR-791's meta-test for a silently broken
+  `GLOBAL_FORBIDDEN`, which is the list this edits.
+- **CI on `bf784f7`: both suites green** (push 33779267674, PR 33779273206),
+  including shard 3 where `smoke-nethammer` runs. Two of the three
+  §NON-NEGOTIABLE 1 greens; the third `workflow_dispatch` is deliberately held
+  until the tip is final, since DDR-1056 is still to land.
 
 **NEXT, already scoped (DDR-1056, task #39):** the same defect one ring out.
 Gates also assert via Makefile post-check greps of the WHOLE line, and probes

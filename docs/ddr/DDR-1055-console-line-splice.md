@@ -175,7 +175,38 @@ documented trade, not an oversight.
 | build | `make image` rc=0, zero warnings at `-Werror` |
 | `GLOBAL_FORBIDDEN` | 74 -> 75, terminator untouched |
 | pre-fix local rate | 1 fail / 3 runs, artefact `nethammer.log.fail-3786` |
-| campaign | *filled in below from `build/gatelogs/ddr1055/campaign.txt`* |
+| campaign | **20/20 PASS**, one binary, `kernel_after == kernel` |
+| per-run capture | 38,212-38,717 B, **47 `[hb]` lines each** (non-vacuous) |
+| `sentinel_intact` | 20/20 | 
+| `spliced` | **0/20** |
+
+`(2/3)^20 = 3.0e-4` against the pre-fix 1-in-3. Even at a conservative 10% the
+bound is `0.9^20 = 0.12`, so 20 clean runs is decisive against the observed rate
+and merely suggestive against a much rarer one — stated that way rather than as
+"the defect is gone".
+
+**Regression — one gate per converted print site, plus the hygiene gates.**
+18 of 18 rc=0, `kernel_after == kernel`, zero failures:
+`smoke-selftest`, `smoke-shell`, `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity`, `smoke-smp`, `smoke-smpjob`, `smoke-user`,
+`smoke-wxkernel`, `smoke-numa`, `smoke-numa-alloc`, `smoke-nvme`, `smoke-ahci`,
+`smoke-e1000e`, `smoke-net-lo`, `smoke-fs`, `smoke-mkfs-sfs`, `smoke-uefi`.
+
+Every converted site is covered by exactly one of those, which is why the list
+is what it is rather than a round number: `smoke-smpjob` carries `[smp] cpu N
+job OK`, `smoke-smp` the four AP announces and `cpus online=4/4`, `smoke-user`
+`[user] sys_exit(` and `[sfs] lz4+tags`, `smoke-fs` `[rtc] 20`, `smoke-mkfs-sfs`
+`[acpi] DSDT _S3_`, `smoke-uefi` `NEXUS: E820 map, entries=`, and so on. A
+botched conversion fails its own gate loudly rather than quietly changing a line
+nobody reads.
+
+**`smoke-selftest` is the load-bearing one.** It is DDR-791's meta-test for a
+silently broken `GLOBAL_FORBIDDEN`, and this change edits that list.
+
+**CI, independently:** both suites on the fix commit `bf784f7` are green
+(push run 33779267674, PR run 33779273206), including shard 3 where
+`smoke-nethammer` runs. That is two of the three §NON-NEGOTIABLE 1 greens; one
+green run is not a rate and is not offered as one.
 
 
 ---

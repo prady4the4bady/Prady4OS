@@ -2085,6 +2085,14 @@ Overflow is loud, not silent: `[kline] TRUNC` is emitted on overflow and added t
 the documented verification command's `sed` terminator did not move (74 → 75,
 CLAUDE.md's stated count updated in the same commit).
 
+**Measured.** Campaign: `smoke-nethammer` **20/20 PASS** on one binary
+(`5f0a2f60d56fbd9b`, `kernel_after == kernel`), every capture non-vacuous (47
+`[hb]` lines), `sentinel_intact` 20/20, `spliced` 0/20 — `(2/3)^20 = 3.0e-4`
+against the pre-fix 1-in-3. Regression: **18/18 gates rc=0**, one per converted
+print site plus the hygiene gates, with `smoke-selftest` load-bearing because
+this edits `GLOBAL_FORBIDDEN`. CI on `bf784f7`: **both suites green**, including
+shard 3 where `smoke-nethammer` runs.
+
 Gate count unchanged. `kernel.bin` 1,192,330 → **1,196,426 B** against the
 1,572,864 B gate. Zero warnings at `-Werror`; `hygiene_check.sh` ALL SIX.
 
