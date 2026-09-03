@@ -2323,3 +2323,37 @@ arms; revert `46016bc8c7c7fa3b` bit-for-bit. **Regression 9/9 including
 these in anger; the primitive set is complete, the *use* of it is not built. The
 `||z||inf` bound is untested and is a real FIPS 204 step. Internal interface
 only; ML-DSA-44 only.
+
+---
+
+## DDR-1059 — the ML-DSA-signed ledger: ASSESSED and NOT BUILT, blocker named
+
+§PHASE 3's first-named PQC application. **Not built, deliberately**, per that
+section's own instruction to name the exact blocker rather than ship filler.
+
+**Every candidate blocker was measured so none can be offered later:** the crypto
+is built and gated (DDR-1054/1057/1058); keygen **0.26 ms**, sign **0.39 ms**,
+verify **0.27 ms**; `mldsa.o` ~60 KB against **294,518 B** of `kernel.bin`
+headroom; and the correct shape is ONE signature over the chain head, since
+`chain[i] = SHA-256(chain[i-1] || fields)` already binds the whole log.
+
+**THE BLOCKER IS KEY CUSTODY.** A signature beats a hash only if the adversary
+lacks the private key and the verifier learns the public key independently of the
+artefact. Neither holds: `grep` finds no TPM, no PCRs, no secure boot, and
+`kernel/syscall/sys_vault.c:22` holds `g_owner_seed` as **32 literal bytes in the
+image**, which `ags_sign` signs with today. Anyone holding the ISO holds the
+private key. A signed ledger could be edited, re-chained, re-signed, and would
+verify — no assurance gained, considerable assurance *implied*. The DDR-1046
+shape.
+
+**This also kills the consolation prize:** swapping AGS's Ed25519 for ML-DSA is
+equally empty, because an attacker with the key never needs to break the scheme.
+
+**Three routes named**, cheapest last: a hardware root of trust; first-boot keygen
+into a protected store (circular until the first exists); or out-of-band
+publication of the public key at install time — buildable in an afternoon, a
+narrower and honest claim, and a **decision** (DDR-793 class) rather than a task.
+
+**Release-note wording is given explicitly**, because the difference matters:
+"post-quantum signature primitives, NIST-vector-verified, and a tamper-evident
+audit chain" is true; "post-quantum signed audit ledger" would be false.

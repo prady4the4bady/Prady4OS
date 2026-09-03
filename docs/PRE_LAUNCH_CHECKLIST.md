@@ -719,6 +719,31 @@ tamper-evident ledger on F#76's audit chain. The primitives are done and gated;
 the ledger still uses SHA-256 and nothing calls ML-DSA in anger. Also still
 outstanding: a constant-time review of signing, and the `||z||inf` gap above.
 
+#### 5.1b.7 — THE APPLICATION IS BLOCKED, and the blocker is key custody (DDR-1059)
+
+§PHASE 3's first-named application is an ML-DSA-signed tamper-evident ledger.
+**Assessed and deliberately not built.**
+
+Everything that would normally be the blocker was measured so it cannot be
+offered as the reason later: the crypto is built and gated; keygen 0.26 ms /
+sign 0.39 ms / verify 0.27 ms; `mldsa.o` ~60 KB against 294 KB of headroom; and
+the right shape is ONE signature over the chain head, not 4096.
+
+**The blocker is that there is no key custody.** No TPM, no PCRs, no secure boot
+— and `kernel/syscall/sys_vault.c:22` holds `g_owner_seed` as 32 literal bytes
+compiled into the image, which `ags_sign` already signs with. **Anyone holding
+the ISO holds the private key.** A ledger signed with it could be edited,
+re-chained, re-signed, and would verify — no assurance over the existing SHA-256
+chain, while looking stronger. Security theatre.
+
+Three unblocking routes are named in the DDR; the cheapest real one is
+out-of-band publication of the public key at install time, which is a
+**deployment decision** (the DDR-793 class), not a coding task.
+
+**Release-note wording:** "post-quantum signature primitives,
+NIST-vector-verified, and a tamper-evident audit chain" is TRUE. "Post-quantum
+signed audit ledger" would be FALSE.
+
 ### 5.2 — Group F: AETHER agent behaviours
 
 **The structural fact first, because the tracker got this wrong twice

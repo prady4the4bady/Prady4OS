@@ -10398,3 +10398,46 @@ ML-DSA in anger. Also open: a constant-time review of signing, and the
 
 **NEXT:** the signed-ledger application, then the third §NON-NEGOTIABLE 1 green
 on the final tip via `workflow_dispatch`.
+
+---
+
+## CHECKPOINT — DDR-1059: the signed ledger is BLOCKED on key custody (2026-09-03)
+
+§PHASE 3's first-named PQC application, **assessed and deliberately not built**,
+following that section's own instruction to name the exact blocker.
+
+**Every candidate blocker was measured first**, so none can be offered later as
+the reason: the crypto is built and gated; **keygen 0.26 ms, sign 0.39 ms,
+verify 0.27 ms**; `mldsa.o` ~60 KB against 294,518 B of headroom; and the right
+shape is ONE signature over the chain head, not 4096.
+
+**THE BLOCKER IS KEY CUSTODY, and it is structural.** A signature beats a hash
+only if the adversary lacks the private key AND the verifier learns the public
+key independently of the artefact. Neither holds here:
+
+- no TPM, no PCRs, no secure boot — nothing to anchor a key to;
+- **`kernel/syscall/sys_vault.c:22` holds `g_owner_seed` as 32 LITERAL BYTES in
+  the image**, and `ags_sign` signs with it today. Anyone holding the ISO holds
+  the private key. The vault inherits this — `K_vault` is HKDF'd from that seed.
+
+So a signed ledger could be edited, re-chained, re-signed with the key from the
+image, and would verify: **no assurance over the existing SHA-256 chain, while
+looking considerably stronger.** Security theatre, the DDR-1046 shape.
+
+**This also kills the obvious consolation prize:** swapping AGS's Ed25519 for
+ML-DSA is equally empty — with the key in the image the attacker never needs to
+break the scheme, quantum or not.
+
+**Three unblocking routes, cheapest last:** a hardware root of trust; first-boot
+keygen into a protected store (circular until the first exists); or **out-of-band
+publication of the public key at install time** — buildable in an afternoon, a
+narrower and honest claim, and a DECISION for the operator (the DDR-793
+security-posture class), not a coding task.
+
+**Release-note wording, because the difference is load-bearing:**
+"post-quantum signature primitives, NIST-vector-verified, and a tamper-evident
+audit chain" is TRUE. "Post-quantum signed audit ledger" would be FALSE.
+
+**NEXT:** the third §NON-NEGOTIABLE 1 green on the final tip via
+`workflow_dispatch`. PQC scope is otherwise closed for v1 unless the operator
+takes route 3.
