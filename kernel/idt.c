@@ -342,15 +342,29 @@ static void timer_tick(struct regs *r) {
         { extern uint64_t g_yield_masked;
           kputs(" ymask="); kputdec(g_yield_masked); }
         /* DDR-979 §6: panics that stayed silent so the winner's dump stayed
-         * readable. Nonzero means MORE THAN ONE CPU panicked this boot — which
-         * the old unserialised printer showed only as a garbled dump. */
-        { extern uint64_t g_panic_extra;
-          if (g_panic_extra) { kputs(" panics_silent="); kputdec(g_panic_extra);
-            /* DDR-1019: panics_silent alone says a panic happened and nothing
-             * was printed; these say WHICH panic and how far the winner got.
-             * stage=1 means the winner claimed the latch and never reached the
-             * banner -- the case that has been read as a scheduler freeze. */
-            { extern uint64_t g_panic_stage; extern uint32_t g_panic_loser_cpu;
+         * readable. panics_silent nonzero means MORE THAN ONE CPU panicked this
+         * boot — which the old unserialised printer showed only as a garbled
+         * dump.
+         *
+         * DDR-1049: THE PREDICATE IS g_panic_stage, NOT g_panic_extra, and that
+         * is the whole point of this block. g_panic_extra is incremented ONLY in
+         * the loser branch of the panic CAS, so it is zero whenever exactly one
+         * CPU panicked. g_panic_stage is set by the WINNER the instant it claims
+         * the latch. Gating on g_panic_extra therefore printed panic_stage only
+         * when there had been a SECOND panic -- so `stage=1`, the value DDR-1019
+         * added to name "the winner claimed the latch and never reached the
+         * banner", COULD NOT PRINT IN THE ONE CASE IT WAS BUILT FOR. A lone
+         * silent panic left no trace at all: no banner (so `NEXUS KERNEL PANIC`
+         * never trips GLOBAL_FORBIDDEN), no heartbeat field, and on a passing
+         * gate boot_test.sh deletes the serial capture. The run went GREEN.
+         *
+         * `panic_stage=` is now in GLOBAL_FORBIDDEN, so any claimed panic fails
+         * its gate whether or not the winner lived to print the banner. */
+        { extern uint64_t g_panic_extra; extern uint64_t g_panic_stage;
+          if (g_panic_extra || g_panic_stage) {
+            kputs(" panics_silent="); kputdec(g_panic_extra);
+            /* DDR-1019: these say WHICH panic and how far the winner got. */
+            { extern uint32_t g_panic_loser_cpu;
               extern uint32_t g_panic_loser_vec; extern uint64_t g_panic_loser_rip;
               kputs(" panic_stage="); kputdec(g_panic_stage);
               kputs(" loser_cpu=");   kputdec(g_panic_loser_cpu);

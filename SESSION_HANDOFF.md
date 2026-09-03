@@ -10065,3 +10065,67 @@ and this addresses build-environment *configuration*. Not claimed.
 
 `hygiene_check.sh` is now **ALL SIX** (`ci-runnerenv-selftest` added, which fails
 if arm A and arm B ever agree — i.e. if the sandbox stops discriminating).
+
+---
+
+## CHECKPOINT 2026-09-03 — DDR-1049: a lone silent panic left a GREEN run
+
+**OPEN-2 work.** `panic_stage` — the field DDR-1019 added specifically to say
+*"the winner claimed the panic latch and never reached the banner"* — was printed
+only when `g_panic_extra != 0`, and **`g_panic_extra` increments only in the
+LOSER branch of the panic CAS**. So the field could not print in the one case it
+was built for: a single CPU that panics and dies before its banner.
+
+**Every evidence channel was empty in that case.** No `*** NEXUS KERNEL PANIC ***`
+(the winner never got there, so `GLOBAL_FORBIDDEN` never tripped); no
+`panics_silent=` (nothing lost the CAS); no `panic_stage=` (gated behind the
+same counter); and on a PASS `boot_test.sh` deletes the serial capture, which CI
+never overrides. **The run went green with a panicked CPU in it.**
+
+This matters for the release decision specifically: DDR-1009 already recorded this
+kernel satisfying the 3-green rule twice at a measured 25% per-suite failure rate.
+A green run that can hide a panic makes green weaker still.
+
+**Fix:** gate the heartbeat block on `g_panic_extra || g_panic_stage`.
+`g_panic_stage` is set by the WINNER the instant it claims the latch, before
+anything is printed. `panics_silent=` keeps its old meaning and is still printed
+as a value rather than as the gate.
+
+**Detector:** `panic_stage=` added to `GLOBAL_FORBIDDEN`, so a claimed panic fails
+its gate whether or not the winner lived to print the banner — the precedent
+DDR-981 set with `[apfreeze]`. The panic path's behaviour is unchanged; a silent
+panic now names itself instead of passing.
+
+**§NON-NEGOTIABLE 6 handled deliberately:** that rule warns the documented
+verification command's `sed` range ends at the list's LAST entry, so appending
+breaks the very check that detects breakage. `panic_stage=` was inserted BEFORE
+the final line, leaving the terminator untouched. Running CLAUDE.md's command
+verbatim: **73 before, 74 after, not 0.** CLAUDE.md's stated count updated in the
+same commit.
+
+**Measured.** Baseline on the pre-fix kernel `1bdd581fc269516b`: 3 healthy boots,
+29 heartbeats each, **zero** `panics_silent`, `panic_stage` or `apfreeze` lines —
+`grep -oiE 'panic[a-z_]*'` over a full capture returns nothing at all, so the new
+forbidden pattern cannot redden a healthy gate.
+
+| | kernel | result |
+|---|---|---|
+| control (healthy boot, fixed tree) | `091542611c3e4545` | rc=0, 29 heartbeats, **0** `panic_stage` lines |
+| M1 (`g_panic_stage = 1` forced, no panic) | `1efd516bac35f22b` | **rc=1**, caught by the GLOBAL scan |
+
+M1's capture carries `panics_silent=0 panic_stage=1` — one panic, winner claimed
+the latch, printed nothing. **Under the old predicate that line could not have
+been emitted at all.** Reverting M1 returns `091542611c3e4545` bit-for-bit.
+
+Regression: `hygiene_check.sh` ALL SIX; `smoke-shell`, `smoke-blkmq`,
+`smoke-rqstress-liveness`, `smoke-blk-integrity`, `smoke-smp`, `smoke-smppreempt`
+and **`smoke-selftest`** all rc=0, with `kernel_after` equal to `kernel`.
+`smoke-selftest` is the load-bearing one — it is the meta-test DDR-791 built to
+catch a silently broken `GLOBAL_FORBIDDEN`, and this change edits that list.
+
+**What this does NOT do:** it fixes no panic and names no cause (§NON-NEGOTIABLE
+3); it does not close OPEN-2, only removes one way OPEN-2 could have hidden in a
+green run — whether it *did* is unknowable, since past green runs' captures are
+already deleted. And a panic that faults between entering the panic path and
+winning the CAS is still invisible; that window is a few instructions and is not
+covered.

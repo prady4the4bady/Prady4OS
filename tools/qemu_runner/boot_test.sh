@@ -449,6 +449,7 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'controller not ready' 'create-iocq failed' 'create-iosq failed' \
     'identify-ctrl failed' 'identify-ns failed' 'reset stuck' \
     'NEXUS KERNEL PANIC' \
+    'panic_stage=' \
     '[percpu] gs FAIL' '[percpu] current FAIL')"
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 
