@@ -341,6 +341,24 @@ All entries below are **shipped**.
   checked, 21 sites converted; `idt.c:748` deliberately untouched (a trap printer
   that blocks turns a fault into a hang). Overflow is loud — `[kline] TRUNC` in
   `GLOBAL_FORBIDDEN`.
+- **`lock_stat` made able to see a frozen CPU (DDR-1060)** — the DDR-1047
+  instrument recorded its slot only **after** acquiring the lock, so a wedged AP,
+  which never acquires, contributed nothing: it measured *completed* waits, the
+  complement of the case it exists for. Fixed by claiming the slot and
+  incrementing a live `waiters` count **before** the spin, so a frozen CPU leaves
+  a permanent +1 on exactly the lock it is stuck on; and by fixing the printer's
+  `if (!hits) continue;`, which would have skipped that very line. **Per-lock,
+  not per-CPU, by design** — a per-CPU field needs `this_cpu()` (`%gs:0`, and
+  DDR-1010 caught a broken SWAPGS discipline as one of OPEN-2's own producers) or
+  `lapic_id()` (invalid pre-LAPIC, DDR-1055's reason for refusing exactly this).
+  **`mnt_lock` is now visible**, closing PRE_LAUNCH_CHECKLIST §4.11's named gap,
+  while keeping DDR-1047's unit boundary: spin and yield waits get different line
+  shapes, never one column. M1/M0 two-sided on recorded hashes — the pre-fix tree
+  under the same arm reports eleven other locks and omits the wedged one
+  entirely. **No gate, deliberately** (the dump is reachable only on a run
+  already failing). **NOT CLAIMED:** no defect fixed, no cause named; OPEN-1 and
+  OPEN-2 untouched.
+
 
 #### Post-quantum cryptographic primitives (FIPS 202 / FIPS 204, 2026-09)
 

@@ -4,6 +4,7 @@
 #include "sched.h"      /* current_thread for the capability check + write budget */
 #include "irq.h"        /* ADR-032: g_ticks for the token-bucket refill */
 #include "errno.h"      /* DDR-888: distinct precondition codes from vfs_create */
+#include "../../lock_stat.h"   /* DDR-1060: mnt_lock visibility on [apfreeze] */
 
 static const struct vfs_fs_ops *g_fs[VFS_MAX_FS];
 static unsigned                 g_nfs;
@@ -28,17 +29,27 @@ static struct vfs_mount g_mounts[VFS_MAX_MOUNTS];
  * reason DDR-994 exists: it sits directly on the vfs_read path where OPEN-1's
  * CI captures hang, and a mount mutex is held by another THREAD, so if that
  * thread is stuck nobody will ever release it. */
+/* DDR-1060 §5: also accounted in the lock_stat side table, so that on an
+ * [apfreeze] this lock is VISIBLE -- PRE_LAUNCH_CHECKLIST §4.11 records that it
+ * was not, and it is the prime suspect on OPEN-1 route 1's path. Only the live
+ * waiter count and a completed-wait count; no cycles, because a yield wait is
+ * wall time and a spin wait is burned cycles, and DDR-1047 was right that the
+ * two must not share a column. begin() is called only once we know we are
+ * actually going to wait, so an uncontended mnt_lock costs nothing. */
 static void mnt_lock(struct vfs_mount *m) {
     uint32_t n = 0;
     uint64_t t0 = g_ticks;
     int noted = 0;
+    int waiting = 0;
     while (__atomic_exchange_n(&m->busy, 1, __ATOMIC_ACQUIRE)) {
+        if (!waiting) { waiting = 1; lock_wait_begin(&m->busy); }
         yield();
         if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
             yield_stall_note("mnt_lock", n, g_ticks - t0, &noted);
     }
     /* DDR-994 §8: we got in. If we had reported a stall, say it ENDED — a slow
      * wait and a stuck one are indistinguishable from the opening line alone. */
+    if (waiting) lock_wait_end(&m->busy);
     yield_stall_done("mnt_lock", n, g_ticks - t0, &noted);
 }
 static void mnt_unlock(struct vfs_mount *m) {

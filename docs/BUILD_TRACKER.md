@@ -2393,3 +2393,74 @@ narrower and honest claim, and a **decision** (DDR-793 class) rather than a task
 **Release-note wording is given explicitly**, because the difference matters:
 "post-quantum signature primitives, NIST-vector-verified, and a tamper-evident
 audit chain" is true; "post-quantum signed audit ledger" would be false.
+
+
+---
+
+## DDR-1060 — `lock_stat` recorded only CPUs that eventually ACQUIRE
+
+**IMPLEMENTED + M1/M0 forced proof. No gate, deliberately.**
+
+`spin_lock_contended()` ran the spin loop **first** and claimed its slot
+**second**, so every counter was written only after the lock was acquired. A
+wedged AP — which by definition never acquires — contributed **nothing**. The
+instrument DDR-1006 §7 names as OPEN-2's next step was structurally blind to
+frozen CPUs, and `lock_stat.h`'s own header states the purpose it could not
+serve. It measured **completed** waits: the complement of the set it was built
+for. Dead-arm class, and the first instance found in a **diagnostic** rather
+than a gate.
+
+**DDR-1047's M1 could not have caught it** — that forced proof ran on a
+*healthy* boot (t=5000, nothing frozen), where every waiter eventually acquires
+and the table looks exactly right. **A diagnostic proven only on the healthy
+path is proven only for the healthy path.**
+
+**Second half, in the printer:** `if (!hits) continue;` would have skipped a
+lock whose only interaction is a CPU stuck on it (`hits == 0`). Both halves had
+to move together or the fix is decorative.
+
+**Fix:** claim the slot and increment a live `waiters` count **before** the
+spin; decrement after acquiring. A frozen CPU leaves a permanent **+1 on exactly
+the lock it is stuck on**. Per-**lock**, not per-CPU, and that is the design: a
+per-CPU `waiting_on` needs to know which CPU is running, and both routes are
+documented hazards *on this path* — `this_cpu()` reads `%gs:0` and DDR-1010
+caught a broken SWAPGS discipline as one of OPEN-2's own producers, while
+`lapic_id()` is invalid pre-LAPIC (DDR-1055's reason for refusing a per-CPU
+console guard). The `[apfreeze]` line already prints `cpu=`/`rip=`/`bt=`.
+
+**`mnt_lock` is now visible** (`lock_wait_begin/end`) — PRE_LAUNCH_CHECKLIST
+§4.11's named gap, the prime suspect on OPEN-1 route 1's path. **DDR-1047's unit
+boundary is preserved exactly**: spin waits are cycles burned, yield waits are
+wall time during which the CPU ran other threads, so the two get **different
+line shapes**, never a shared column. `waiters` alone carries both, because a
+count is dimensionless.
+
+**Proof, two-sided, on recorded hashes.** M1 (`d36f7d0e0f359824`): the BSP holds
+a dedicated lock while a kernel thread on another CPU attempts it; the dump
+prints `lock=0xFFFFFFFF8013CF74 hits=0 waitavg=0 waitmax=0 waiters=1`. **M0 —
+the same arm on the pre-fix tree** (`1a74d7a0c959b9bb`) — reports **eleven other
+locks and that address is absent entirely**. M0 is the load-bearing half:
+without it, "the new column prints a number" and "the instrument now sees the
+frozen CPU" are indistinguishable. Revert returns `c33afa79f60abdcb` bit-for-bit.
+
+**No gate:** the dump prints only on `[apfreeze]`, which is in
+`GLOBAL_FORBIDDEN`, so an assertion on it would be unreachable-passing on every
+green run — with some irony, the exact defect this fixes. Do **not** create
+`smoke-lockstat` (precedent: DDR-1039, DDR-1005).
+
+**NOT CLAIMED:** no kernel defect is fixed and no cause is named. OPEN-1 and
+OPEN-2 are untouched. This changes what a *future* freeze can say, nothing about
+any past one. A frozen CPU with **zero** `waiters` anywhere is now a readable
+answer — it means the freeze is *not* a lock wait — which the instrument
+previously could not produce in either direction.
+
+**§9 — companion process gap, caused by this session.**
+`tools/ci/open10_campaign.sh` invokes `make`, so it rebuilds mid-campaign.
+Editing `kernel/lock_stat.c` at 22:58:48 during a campaign begun at 22:47:14
+rebuilt `kernel.bin` at 22:59:40 **between recorded runs**, with nothing in the
+report saying so. **That campaign is VOID and is not reported.** DDR-1023 had
+already written the rule — *"hash-verified before AND after every run"* — and
+never implemented it in the tool, which is the failure mode itself: a discipline
+that lives only in a document. The tool now pins the hash, prints
+`kernel_pinned=`, checks before and after every run, and **aborts rather than
+warns**.

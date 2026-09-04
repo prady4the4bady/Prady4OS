@@ -32,6 +32,14 @@
  * percpu.c because syscall_entry.asm reads them). A side table keyed by lock
  * address changes no layout at all, so that whole class of risk does not arise.
  *
+ * DDR-1060 CORRECTS THE ORDERING THIS FILE ORIGINALLY SHIPPED. The paragraph
+ * above is right that "a frozen CPU is one that is WAITING" -- but the first
+ * implementation recorded everything AFTER the lock was acquired, so it counted
+ * only COMPLETED waits and was blind to the wedged AP, i.e. to the exact case
+ * named here as its purpose. The slot is now claimed BEFORE the spin and a live
+ * `waiters` count is incremented there, so a frozen CPU leaves a permanent +1
+ * on the lock it is stuck on. The fast path is still untouched.
+ *
  * The table is lock-free by necessity: taking a lock to record lock statistics
  * would recurse. Insert is a CAS on an empty key; everything else is a relaxed
  * add. Bounded at LOCK_STAT_SLOTS with an overflow counter, so a kernel with
@@ -42,10 +50,27 @@
 
 #define LOCK_STAT_SLOTS 32
 
+/* DDR-1060: a slot's unit. Spin waits are cycles this CPU burned; yield waits
+ * are wall time during which it ran other threads. The two are NOT
+ * commensurable -- DDR-1047 kept mnt_lock out of this table rather than put
+ * both into one waitavg column, and the dump keeps that boundary by giving each
+ * kind its own line shape instead of a shared column. */
+#define LS_KIND_SPIN  0
+#define LS_KIND_YIELD 1
+
 /* The contended path of spin_lock. Out of line on purpose: the fast path stays
  * one test-and-set plus a branch, which is no more than the original spin loop
  * emitted at each call site. */
 void spin_lock_contended(void *lock);
+
+/* DDR-1060 §5: account a wait on something that is NOT a spinlock_t -- a
+ * sleep-mutex spun on with yield(), of which mnt_lock (kernel/fs/vfs/vfs.c) is
+ * the one that matters: DDR-994 and PRE_LAUNCH_CHECKLIST §4.11 name it as the
+ * unbounded wait on OPEN-1 route 1's path, and it was the lock this table could
+ * not see. Contributes to the live waiter count and to a completed-wait count,
+ * and to NO cycle column. Call end() only after the wait succeeds. */
+void lock_wait_begin(void *lock);
+void lock_wait_end(void *lock);
 
 /* Print the contended locks. SLOT ORDER, not sorted: this runs on the freeze
  * path, and a sort is work added at the worst possible moment for the sake of

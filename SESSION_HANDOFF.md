@@ -10531,3 +10531,113 @@ and `P(0 in 8 | p=0.067) = 0.58` — eight clean runs are more likely than not w
 
 **NEXT:** finish that campaign, then decide the registration on its result.
 `v1.0.0` stays untagged and `main` promotion unstarted — operator decisions.
+
+---
+
+## CHECKPOINT 2026-09-04 — DDR-1060: the instrument built for OPEN-2 could not see a frozen CPU
+
+### 1. The defect
+
+`spin_lock_contended()` ran the spin loop **first** and claimed its `lock_stat`
+slot **second**, so every counter was written only *after* the lock was
+acquired. A wedged AP — which by definition never acquires — contributed
+**nothing to any of it**. `lock_stat.h`'s own header names the purpose
+(*"which lock is a wedged AP stuck on?" … "a frozen CPU is one that is
+WAITING"*); the implementation measured **completed** waits, the complement of
+that set.
+
+Dead-arm class, and the **first instance found in a diagnostic rather than a
+gate**. It matters because DDR-1006 §7 names this instrument as OPEN-2's next
+step: *"the honest next instrument is more state at the freeze (which lock,
+which loop iteration)."*
+
+**Second half, in the printer:** `if (!hits) continue;` would have skipped a
+lock whose only interaction is a CPU stuck on it (`hits == 0`) — the one line
+worth printing. Both halves had to move together.
+
+### 2. Why DDR-1047's proof could not have caught it
+
+Its M1 was a forced dump **on a healthy boot** (reached t=5000, nothing frozen).
+On a healthy boot every waiter eventually acquires, so the table is fully
+populated and looks exactly right. That proof was sound for the plumbing —
+counters wired, addresses resolve, no narrowing — and could not have been a
+proof that the instrument answers its question, because the scenario in the
+question never occurred.
+
+**Carry this: a diagnostic proven only on the healthy path is proven only for
+the healthy path.**
+
+### 3. The fix, and why it names the LOCK and not the CPU
+
+Claim the slot and increment a live `waiters` count **before** the spin;
+decrement after acquiring. A frozen CPU leaves a permanent **+1 on exactly the
+lock it is stuck on**.
+
+Per-lock is the design, not a shortfall. A per-CPU `waiting_on` needs to know
+which CPU is executing, and **both** routes are documented hazards *on this very
+path*: `this_cpu()` reads `%gs:0`, and **DDR-1010 caught a broken SWAPGS
+discipline as one of OPEN-2's own producers** — writing through a bad GS pointer
+while investigating that bug would corrupt memory; and `lapic_id()` is invalid
+pre-LAPIC, which is exactly why **DDR-1055 refused a per-CPU console guard**.
+The `[apfreeze]` line already prints `cpu=`/`rip=`/`bt=`, so nothing is lost.
+
+**Fast path untouched** (one test-and-set plus a branch). The contended path now
+pays a bounded ≤32-slot scan before spinning — stated, not hidden.
+
+### 4. `mnt_lock` is now visible, and DDR-1047's unit boundary is kept
+
+PRE_LAUNCH_CHECKLIST §4.11 recorded it as the prime suspect on OPEN-1 route 1's
+path and invisible to this table. DDR-1047's reason for excluding it was
+**correct and is preserved**: a spin wait is cycles this CPU burned, a yield
+wait is wall time during which it ran other threads. So the two get **different
+line shapes**, never a shared column. What made it addable is that `waiters` is
+a **dimensionless count** — commensurable where cycles are not.
+
+### 5. Proof — two-sided, on recorded hashes
+
+| arm | kernel | result |
+|---|---|---|
+| **M1** BSP holds a lock, a thread on another CPU attempts it, dump while it spins | `d36f7d0e0f359824` | `lock=0xFFFFFFFF8013CF74 hits=0 waitavg=0 waitmax=0 waiters=1` |
+| **M0** the SAME arm on the PRE-FIX tree | `1a74d7a0c959b9bb` | eleven other locks reported; **that address absent entirely** |
+| revert | `c33afa79f60abdcb` | **bit-for-bit** |
+
+**M0 is the load-bearing half** — without it, "the new column prints a number"
+and "the instrument now sees the frozen CPU" are indistinguishable.
+
+Regression **10/10 rc=0** on `c33afa79f60abdcb` (`selftest shell fs fs-sfs-rw
+blkmq smp smppreempt rqstress-liveness blk-integrity yieldstall`), with
+`kernel_after == kernel`. Hygiene all six rc=0.
+
+**No gate, deliberately.** The dump prints only on `[apfreeze]`, which is in
+`GLOBAL_FORBIDDEN`, so any assertion on it is unreachable on a green run — with
+some irony, the exact defect this fixes. Do **not** create `smoke-lockstat`.
+
+### 6. NOT CLAIMED
+
+**No kernel defect is fixed and no cause is named.** OPEN-1 and OPEN-2 are
+untouched. This changes what a *future* freeze can tell us and says nothing
+about any past one — the captures that would have carried the data were deleted
+at the time. It does not establish that a lock is involved in either issue; a
+frozen CPU with **zero** `waiters` anywhere is now a real answer meaning the
+freeze is *not* a lock wait, which the instrument could not produce in either
+direction before.
+
+### 7. A campaign of mine was VOID, and the tool now prevents it (DDR-1060 §9)
+
+`tools/ci/open10_campaign.sh` invokes `make`, so it rebuilds mid-campaign. I
+edited `kernel/lock_stat.c` at 22:58:48 during a campaign begun 22:47:14;
+`kernel.bin` was rebuilt at **22:59:40, between recorded runs**, and nothing in
+the report said so. **That campaign is void and is not reported — it is not
+"5/5 clean", it is one count over two binaries.**
+
+**DDR-1023 had already written the rule** — *"hash-verified before AND after
+every run"* — and never implemented it in the tool. A discipline that lives only
+in a document is one every session must remember unaided. The tool now pins the
+hash, prints `kernel_pinned=`, checks before and after every run, and **aborts
+rather than warns**.
+
+**NEXT:** re-run the `smoke-sfs-btree-smp4` campaign on one pinned binary before
+deciding its registration (task #42). **Do not register it on the earlier 8/8**
+— `open10_campaign.sh`'s own header records the pre-fix rate as 2/30, and
+`P(0 in 8 | p=0.067) = 0.58`. `v1.0.0` stays untagged and `main` promotion
+unstarted — operator decisions.

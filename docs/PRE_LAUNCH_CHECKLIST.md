@@ -365,6 +365,24 @@ sampling artefact, `idle2=1` means a real scheduler defect.
 
 ### 4.11 — `lock_stat` cannot see `mnt_lock`, the OPEN-1 route 1 prime suspect
 
+**UPDATED 2026-09-04 — DDR-1060 CLOSES THIS, and found a larger defect in the
+same instrument.** `mnt_lock` is now accounted via `lock_wait_begin/end`, so it
+is visible in the `[apfreeze]` dump. DDR-1047's reasoning for leaving it out was
+correct and is **preserved rather than overridden**: a spin wait is cycles this
+CPU burned and a yield wait is wall time during which it ran other threads, so
+the two are still never in one column — they get **different line shapes**. What
+made it addable is that `waiters` is a **dimensionless count**, and a count is
+commensurable across both where cycles are not.
+
+**The larger defect:** `spin_lock_contended()` recorded its slot only *after*
+acquiring, so the table only ever described CPUs that eventually won — it was
+blind to the wedged AP it exists for. Fixed in the same change; M0 (the pre-fix
+tree under a forced wedge) reports eleven other locks and omits the stuck one
+entirely. **Still not claimed:** no cause is named for OPEN-1 or OPEN-2.
+
+*(Original entry follows.)*
+
+
 DDR-1047 ships spinlock contention accounting (hit counts and **wait time**;
 hold time deliberately dropped — an always-on `rdtsc` pair in `spin_lock` could
 *move* OPEN-2 rather than measure it, which is the hazard DDR-1010 recorded about
