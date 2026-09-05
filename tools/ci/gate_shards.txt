@@ -138,6 +138,7 @@
 5	smoke-sysiouring	24	strict
 5	smoke-sysmmap	23	strict
 5	smoke-smep	10	strict
+5	smoke-sfs-btree-smp4	180	strict
 6	smoke-surfdestroy	180	strict
 6	smoke-msixap	180	strict
 6	smoke-swapgs	120	strict

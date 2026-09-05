@@ -17,9 +17,37 @@
 set -u
 cd "$(dirname "$0")/../.."
 N="${1:-30}"
-TS=$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p build/artifacts
-OUT="build/artifacts/open10-$TS.txt"
+
+# DDR-1060 §10: RESUMABLE, because in this environment a campaign CANNOT run
+# unattended to completion.
+#
+# Measured, three times: a 30-run campaign launched in the background is killed
+# after 1-5 runs when the session goes idle -- the container executes only while
+# a turn is live, and `setsid` does not change that (attempt 3 died after ONE
+# run exactly as attempts 1 and 2 did). Restarting from zero each time threw
+# away every completed run; three attempts produced 7 runs and a usable N of 0.
+#
+# So the unit of work is a CHUNK, and the report is the accumulator. Pass an
+# existing report as $2 to continue it: the pin is re-checked against that
+# report's own kernel_pinned line, so a resume onto a different binary is
+# refused for the same reason a mid-campaign rebuild is (a count over two
+# binaries is not a measurement). N is the TARGET TOTAL, not the chunk size --
+# the loop stops as soon as the report holds N runs, so repeated invocations
+# converge instead of overshooting.
+# TS names this CHUNK's per-run capture files. It must be set on BOTH paths:
+# the script runs under `set -u`, and the resume path originally left it unset,
+# so the first use inside the loop killed the chunk after printing "resuming:"
+# and recording nothing. Per-chunk rather than per-campaign is correct anyway --
+# a resumed chunk must not overwrite an earlier chunk's captures.
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+OUT="${2:-}"
+if [ -n "$OUT" ] && [ -f "$OUT" ]; then
+    RESUME=1
+else
+    OUT="build/artifacts/open10-$TS.txt"
+    RESUME=0
+fi
 fails=0
 
 # DDR-1060 §9: PIN THE BINARY, AND CHECK IT EVERY RUN.
@@ -43,7 +71,23 @@ if [ ! -f build/kernel.bin ]; then
     exit 2
 fi
 PIN=$(sha256sum build/kernel.bin | cut -d" " -f1)
-echo "kernel_pinned=$PIN" | tee -a "$OUT"
+if [ "$RESUME" = "1" ]; then
+    WAS=$(sed -n 's/^kernel_pinned=//p' "$OUT" | head -1)
+    if [ "$WAS" != "$PIN" ]; then
+        echo "open10_campaign: REFUSING to resume onto a different binary" >&2
+        echo "  report pinned=$WAS" >&2
+        echo "  on disk      =$PIN" >&2
+        echo "  Pooling runs across two binaries measures nothing. Start a new" >&2
+        echo "  campaign, or rebuild the pinned binary first (DDR-1060 §10)." >&2
+        exit 4
+    fi
+    done_n=$(grep -c "^run=" "$OUT" 2>/dev/null || true)
+    [ -z "$done_n" ] && done_n=0
+    echo "resuming: $done_n of $N already recorded, kernel=$PIN" | tee -a "$OUT"
+else
+    done_n=0
+    echo "kernel_pinned=$PIN" | tee -a "$OUT"
+fi
 
 hash_check() {   # $1 = when (before|after), $2 = run index
     local now
@@ -59,7 +103,11 @@ hash_check() {   # $1 = when (before|after), $2 = run index
     fi
 }
 
-for i in $(seq 1 "$N"); do
+if [ "$done_n" -ge "$N" ]; then
+    echo "TOTAL fails=? / $N  kernel=$PIN  ALREADY COMPLETE  report=$OUT" | tee -a "$OUT"
+    exit 0
+fi
+for i in $(seq $((done_n + 1)) "$N"); do
     start=$(date +%s)
     # boot_test.sh unlinks its SERIAL_LOG on every exit path, so the capture has
     # to be mirrored WHILE the run is live (same pattern as gate_evidence.sh).
@@ -88,4 +136,7 @@ for i in $(seq 1 "$N"); do
         grep -a 'boot-stamp' "$log" 2>/dev/null | tee -a "$OUT"
     fi
 done
-echo "TOTAL fails=$fails / $N  kernel=$PIN  report=$OUT" | tee -a "$OUT"
+# fails counts THIS CHUNK; the report is the accumulator, so recount it.
+tot_runs=$(grep -c "^run=" "$OUT" 2>/dev/null || true); [ -z "$tot_runs" ] && tot_runs=0
+tot_fail=$(grep -c "verdict=FAIL" "$OUT" 2>/dev/null || true); [ -z "$tot_fail" ] && tot_fail=0
+echo "TOTAL fails=$tot_fail / $tot_runs (target $N)  kernel=$PIN  report=$OUT" | tee -a "$OUT"

@@ -10641,3 +10641,96 @@ deciding its registration (task #42). **Do not register it on the earlier 8/8**
 — `open10_campaign.sh`'s own header records the pre-fix rate as 2/30, and
 `P(0 in 8 | p=0.067) = 0.58`. `v1.0.0` stays untagged and `main` promotion
 unstarted — operator decisions.
+
+---
+
+## CHECKPOINT 2026-09-05 — DDR-1061: the gate registered, the campaign stopped as null-on-design
+
+### 1. Registered
+
+`smoke-sfs-btree-smp4` is now on **shard 5** (180 s, strict). Matrix: **176
+gates / 6 excluded** (was 175 / 7). Shard 5 budget 1376 → 1556 s, still under
+shard 9's 1965 s. `ci-shard-check` green; hygiene all six rc=0.
+
+**On the exclusion's own stated condition.** `shard_check.sh` has said since
+DDR-824: *"Register it when OPEN-10 is fixed."* DDR-964 fixed it and **named the
+mechanism** — a create-then-init race making `cap_ok(CAP_FS_WRITE)` return
+`-EPERM`, because `sched_create()` made a thread runnable before its caller
+minted the capability into `->arg` — mutation-checked at eight sites. **That
+condition asks for a fixed mechanism, not a bounded rate.** The old CLAUDE.md
+wording ("stays excluded until greens accumulate") asked for evidence the
+exclusion never required, and §2 is why that evidence is unobtainable.
+
+### 2. The campaign cannot answer the question at any reachable N
+
+Computed **before** spending the hours, not after. 0 failures in *n* runs gives a
+95% upper bound of `1 − 0.05^(1/n)`:
+
+| n | 95% bound | P(0 in n \| p=0.067) |
+|---|---|---|
+| 20 | 13.9% | 0.250 |
+| 30 | 9.5% | 0.125 |
+| **44** | **6.6%** | 0.047 |
+
+The pre-fix rate in `open10_campaign.sh`'s own header is **2/30 = 6.7%**. So
+n=44 merely *reaches* it — no margin, and no power to separate "fixed" from
+"still 6.7%". At a cleanly-timed **182 s/run** that is ~2.3 hours of
+**foreground** execution, and foreground is the only option (§3).
+
+**DDR-1002's shape — a campaign null on its own design — caught before the runs
+were spent rather than after. Do not run it.**
+
+### 3. Environment constraint, now recorded (DDR-1060 §10)
+
+**An unattended campaign is not possible here.** Three attempts, each killed
+after 1–5 runs when the session went idle; `setsid` did not help (attempt 3 died
+after exactly one run). This container executes only while a turn is live.
+
+`open10_campaign.sh` is therefore **resumable**: pass an existing report as `$2`
+and it re-checks that report's own `kernel_pinned` line against the binary on
+disk, refuses a resume onto a different one, and continues numbering. `N` is the
+**target total**, so repeated chunk invocations converge instead of overshooting.
+
+**A defect I introduced and fixed in the same session:** the first resume patch
+left `TS` unset on the resume path, and the script runs under `set -u`, so the
+chunk printed `resuming:` and died at the first use inside the loop — 570 s spent
+recording nothing. `TS` is now set on both paths, per chunk (so a resumed chunk
+cannot overwrite an earlier chunk's captures).
+
+Also worth carrying: my earlier "campaign RUNNING" reading was
+`pgrep -f "open10_campaign"` matching **my own shell command line** — the §INV.3
+self-match trap, which I avoid for QEMU by habit and walked straight into here.
+Use `ps -eo pid,cmd | grep -F <name> | grep -v " grep "`, or the bracket form.
+
+### 4. Measured, and explicitly not the basis for the decision
+
+**3 runs, 0 failures, kernel `c33afa79f60abdcb`**, hash-verified before *and*
+after every run by DDR-1060 §9's pin, one report. Reported so its absence is not
+mistaken for an untried experiment. **3/3 bounds the rate below 63% and that is
+all it does.**
+
+### 5. Residual risk, stated
+
+If the defect is not in fact fixed, every CI suite becomes measurably likelier to
+be red, degrading the §NON-NEGOTIABLE 1 three-green criterion the release depends
+on. Registered anyway because the exclusion pre-authorises exactly this; because
+a gate held out of the matrix is coverage nobody is getting for a defect the
+project believes fixed (the DDR-1046 / DDR-1049 / DDR-1060 rot); because **if it
+reddens, that capture IS the measurement** the campaign provably cannot produce;
+and because un-registering is one line while the release is HELD, so no promotion
+is in flight for a red to block.
+
+**NOT CLAIMED:** that the defect is proven gone.
+
+**If it reddens:** do **not** re-run the local campaign. Read the CI capture —
+DDR-964's fix is about *when* `->arg` is minted, so a recurrence means a
+`sched_create()` site was missed, not that the analysis was wrong. Un-register
+and reopen OPEN-10 with the capture attached.
+
+### 6. CI state
+
+`d3d0837` (DDR-1060) has **two greens** — push `33824767668`, pull_request
+`33824771348` — and a third was dispatched via `workflow_dispatch` per §INV.15.
+This commit moves the tip, so that count restarts; it was never feeding an
+imminent promotion. `v1.0.0` untagged, `main` promotion unstarted — operator
+decisions.

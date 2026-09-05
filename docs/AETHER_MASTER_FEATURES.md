@@ -359,6 +359,17 @@ All entries below are **shipped**.
   already failing). **NOT CLAIMED:** no defect fixed, no cause named; OPEN-1 and
   OPEN-2 untouched.
 
+- **`smoke-sfs-btree-smp4` registered (DDR-1061)** — the OPEN-10 reproduction
+  surface (DDR-824) was excluded with the note *"register it when OPEN-10 is
+  fixed"*; DDR-964 fixed it, naming the mechanism and mutation-checking it, so
+  the gate is now on shard 5 and the matrix is 176 gates / 6 excluded. **The rate
+  campaign was stopped as null on its own design:** n=44 merely *reaches* the
+  historical 6.7% failure rate, at 182 s per run, foreground-only — no reachable
+  N settles it, and that was computed before the hours were spent rather than
+  after (DDR-1002's shape, caught earlier). 3/3 measured on a pinned binary and
+  explicitly **not** the basis for the decision. **NOT CLAIMED:** that the defect
+  is proven gone; if the gate reddens, that capture is the measurement.
+
 
 #### Post-quantum cryptographic primitives (FIPS 202 / FIPS 204, 2026-09)
 

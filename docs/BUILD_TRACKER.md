@@ -2464,3 +2464,48 @@ never implemented it in the tool, which is the failure mode itself: a discipline
 that lives only in a document. The tool now pins the hash, prints
 `kernel_pinned=`, checks before and after every run, and **aborts rather than
 warns**.
+
+
+---
+
+## DDR-1061 — `smoke-sfs-btree-smp4` registered, and the rate campaign stopped as null-on-design
+
+**REGISTERED** on shard 5 (180 s, strict). Gate count 175 → **176**, excluded
+7 → **6**. Shard 5 budget 1376 → 1556 s, still under shard 9's 1965 s.
+
+**Registered on the exclusion's OWN stated condition.** `shard_check.sh` has said
+since DDR-824: *"Register it when OPEN-10 is fixed."* OPEN-10 is fixed —
+**DDR-964** named the mechanism (a create-then-init race making
+`cap_ok(CAP_FS_WRITE)` return `-EPERM`, because `sched_create()` made a thread
+runnable before its caller minted the capability into `->arg`) and
+mutation-checked the fix at eight sites. **The condition asks for a fixed
+mechanism, not a bounded rate**, and that distinction is the whole decision.
+
+**The rate campaign cannot answer the question at any reachable N — computed
+before spending the hours, not after.** With 0 failures in *n* runs the 95% upper
+bound is `1 − 0.05^(1/n)`: n=20 → 13.9%, n=30 → 9.5%, **n=44 → 6.6%**, which
+merely *reaches* the 2/30 = 6.7% pre-fix rate `open10_campaign.sh`'s own header
+records — no margin, and no power at all to distinguish "fixed" from "still
+6.7%". At a cleanly-timed **182 s per run** that is ~2.3 hours of **foreground**
+execution, and foreground is the only option (DDR-1060 §10: three background
+campaigns each died after 1–5 runs, `setsid` included). **This is DDR-1002's
+shape** — null on its own design — with the difference that DDR-1002 found out
+after spending the runs. **Do not run this campaign.**
+
+**Measured:** 3 runs, 0 failures, kernel `c33afa79f60abdcb`, hash-verified before
+and after each run by DDR-1060 §9's pin. Recorded so its absence is not mistaken
+for an untried experiment — **not** as the basis for the decision, since 3/3
+bounds the rate below 63% and nothing more.
+
+**Residual risk, stated:** if the defect is not in fact fixed, every suite becomes
+measurably likelier to be red, degrading the §NON-NEGOTIABLE 1 criterion the
+release depends on. Registered anyway because the exclusion pre-authorises it,
+because a gate held out of the matrix is coverage nobody is getting (the
+DDR-1046/1049/1060 rot), because **if it reddens that is the measurement** the
+campaign provably cannot produce, and because un-registering is one line while
+the release is HELD so no promotion is in flight for a red to block.
+
+**NOT CLAIMED:** that the defect is proven gone. **If it reddens:** read the CI
+capture, do not re-run the campaign; DDR-964's fix is about *when* `->arg` is
+minted, so a recurrence means a `sched_create()` site was missed — un-register
+and reopen OPEN-10 with the capture.
