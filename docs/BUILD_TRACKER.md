@@ -2509,3 +2509,60 @@ the release is HELD so no promotion is in flight for a red to block.
 capture, do not re-run the campaign; DDR-964's fix is about *when* `->arg` is
 minted, so a recurrence means a `sched_create()` site was missed — un-register
 and reopen OPEN-10 with the capture.
+
+
+---
+
+## DDR-1062 — OPEN-2: the first CI-side rate bound; DDR-1009's 25% refuted
+
+**MEASURED. OPEN-2 remains OPEN — no mechanism named, no fix.** Docs only.
+
+**Why it is possible now.** DDR-1023 established the local route is exhausted and
+the evidence is CI-side. What made counting CI greens *mean* anything is
+**DDR-1049**: before it, a lone CPU that panicked and died before its banner left
+every channel empty, so a run could go green with a panicked CPU in it. From
+`32cb8ad` (2026-09-03) `panic_stage=` is set by the **winner** and sits in
+`GLOBAL_FORBIDDEN`, so a green suite now genuinely asserts no CPU claimed the
+latch. Detectors verified armed; `GLOBAL_FORBIDDEN` reads **76**, matching
+§NON-NEGOTIABLE 6's count, so the list is intact rather than silently emptied.
+
+**Measured:** 42 `pradyos-ci` suites at/after that commit, 19 distinct SHAs,
+push/PR/dispatch. **Zero `[apfreeze]`, zero `panic_stage=`, zero `gs FAIL`.**
+
+**All 42 count, including the 4 reds** — a red suite still ran the global
+forbidden scan, so an `[apfreeze]` would have named itself; counting only the 38
+greens understates the evidence.
+
+**Every red attributed, none an AP freeze** (the load-bearing check — a red left
+unread could *be* the artefact): `c8c93ed` ×2 `smoke-actiondel` (DDR-1056 splice
+class), `b7ff2a3` `smoke-nethammer` (DDR-1055's console splice, since fixed),
+`1efbb49` `smoke-surfclose` (splice class). `b7ff2a3`'s capture was **read**:
+heartbeats clean to `t=23500`, `ymask` climbing, `rqcpus=2`, `preempt` advancing
+— a healthy SMP kernel timing out on a sentinel match, not a frozen CPU.
+
+**Bound:** 0 in 42 ⇒ **95% upper bound 6.9% per suite**.
+P(0 in 42 | p=0.25) = **5.7 × 10⁻⁶**, so DDR-1009's figure is refuted;
+P(0 in 42 | p=0.10) = 0.012. Per-suite is the right unit — it is what DDR-1009
+measured. This supplies the replacement number the "stop quoting ~1 in 4"
+warning always lacked.
+
+**NOT CLAIMED:** OPEN-2 is not closed; a rate under 6.9% is still a rate; these
+are 42 suites over 19 SHAs, **not 42 binaries**; and DDR-1049's own residual (a
+panic faulting before it *wins* the CAS) stays invisible.
+
+**Instrument set now complete for discrimination:** panic loser → `panic_stage=`;
+AP timer ISR → `[apfreeze]` + `rip=`/`bt=`; SWAPGS → `gs FAIL`; and DDR-1060's
+`waiters=` completes it, the **negative** reading being the valuable half — a
+frozen CPU with zero waiters anywhere means the freeze is *not* a lock wait.
+Reachability checked, not assumed: the dump is ordered after the `[apfreeze]`
+line, and NMI is non-maskable so it lands even on the `cli; hlt` producer.
+
+**DDR-1006 §7's "which loop iteration" — assessed, deliberately NOT built.** It
+needs always-on per-iteration counters on exactly the paths where the race lives
+— the cost DDR-1047 refused, because an instrument that can *move* OPEN-2 is
+worse than none; opt-in is not the escape (DDR-1010/1043: guaranteed OFF in CI,
+the only place it appears); and `rip=`/`bt=` already name the site while
+`waiters=` answers what it waited on.
+
+**Next: nothing until an artefact appears.** Local route exhausted, CI route
+armed and self-diagnosing, rate too low to manufacture occurrences.

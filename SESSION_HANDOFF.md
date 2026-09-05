@@ -10734,3 +10734,85 @@ and reopen OPEN-10 with the capture attached.
 This commit moves the tip, so that count restarts; it was never feeding an
 imminent promotion. `v1.0.0` untagged, `main` promotion unstarted — operator
 decisions.
+
+---
+
+## CHECKPOINT 2026-09-05 — OPEN-2 resumed: the first CI-side rate bound (DDR-1062)
+
+### 1. What was done
+
+Per the operator queue, OPEN-2 is item 1. **No fix — no artefact, so
+§NON-NEGOTIABLE 3 forbids one.** What was missing and is now supplied is a
+**number**: the CI-side occurrence rate, which is where DDR-1023 established the
+evidence lives.
+
+**42 `pradyos-ci` suites** at/after `32cb8ad` (DDR-1049's detector), 19 distinct
+SHAs, push/PR/dispatch. **Zero `[apfreeze]`, zero `panic_stage=`, zero
+`gs FAIL`.** 95% upper bound **6.9% per suite**; DDR-1009's **25% is refuted at
+p = 5.7 × 10⁻⁶**; even 10% is unlikely (p = 0.012).
+
+### 2. Why the window starts at DDR-1049 and not earlier
+
+Before it, a lone CPU that panicked and died before its banner left **every
+channel empty** — a run could go green with a panicked CPU in it. DDR-1049 made
+`panic_stage=` printable by the *winner* and put it in `GLOBAL_FORBIDDEN`. Only
+from that commit does a green suite assert what it appears to.
+
+Verified armed: `apfreeze`, `panic_stage=`, `gs FAIL`, `NEXUS KERNEL PANIC`, and
+`GLOBAL_FORBIDDEN` reads **76**, matching §NON-NEGOTIABLE 6 — so the list is
+intact, not silently emptied.
+
+### 3. The check that mattered — every red read, not assumed
+
+Four of the 42 were red, and **a red left unread could have been the artefact**:
+
+| SHA | gate | attribution |
+|---|---|---|
+| `c8c93ed` ×2 | `smoke-actiondel` | DDR-1056 splice class, unattributed |
+| `b7ff2a3` | `smoke-nethammer` | DDR-1055's console splice — since fixed |
+| `1efbb49` | `smoke-surfclose` | splice class, unattributed |
+
+`b7ff2a3`'s capture was read directly: heartbeats clean to `t=23500`, `ymask`
+climbing, `rqcpus=2`, `preempt` advancing, `pmmfree` flat — a **healthy SMP
+kernel that timed out on a sentinel match**, i.e. DDR-1055 exactly, not a frozen
+CPU. **All 42 count as observations**, reds included: a red suite still ran the
+global forbidden scan.
+
+### 4. Instrument set is now complete for discrimination
+
+Each of DDR-1019's three producers self-identifies — panic loser →
+`panic_stage=`; AP timer ISR → `[apfreeze]` + `rip=`/`bt=`; SWAPGS → `gs FAIL` —
+and **DDR-1060's `waiters=` completes it**. The *negative* reading is the
+valuable half: a frozen CPU with zero waiters anywhere means the freeze is **not
+a lock wait**, which the instrument could not say in either direction before.
+Reachability was checked rather than assumed: the dump is ordered after the
+`[apfreeze]` line, and **NMI is non-maskable**, so it lands even on the
+`cli; hlt` producer.
+
+### 5. DDR-1006 §7's "which loop iteration" — assessed, NOT built
+
+It needs always-on per-iteration counters on exactly the paths where the race
+lives — the cost DDR-1047 refused, because an instrument that can **move**
+OPEN-2 is worse than none. Opt-in is not the escape (DDR-1010/1043: guaranteed
+OFF in CI, the only place it appears). And `rip=`/`bt=` already name the site
+while `waiters=` answers what it was waiting on.
+
+### 6. NOT CLAIMED
+
+**OPEN-2 is not closed.** No mechanism is named. A rate under 6.9% is still a
+rate, and 42 observations cannot separate "fixed" from "rare". These are 42
+suites over **19 SHAs, not 42 binaries** — many are docs-only and share a
+kernel; pooling per-suite is DDR-1009's own method but must not be reported as
+42 binaries. DDR-1049's residual (a panic faulting before it *wins* the CAS)
+stays invisible. Nothing is claimed about `main`.
+
+### 7. NEXT
+
+**Nothing further on OPEN-2 until an artefact appears** — local route exhausted
+(DDR-1023), CI route armed and self-diagnosing, rate too low to manufacture
+occurrences. On the next `[apfreeze]`: resolve the RIP **against its own binary**
+(§INV.18), then read `waiters=` for lock-wait vs not and `panic_stage=` for panic
+vs genuine freeze.
+
+Queue moves to item 2: remaining `docs/PRE_LAUNCH_CHECKLIST.md` items.
+`v1.0.0` untagged, `main` promotion unstarted — operator decisions.

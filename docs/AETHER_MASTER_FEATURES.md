@@ -370,6 +370,17 @@ All entries below are **shipped**.
   explicitly **not** the basis for the decision. **NOT CLAIMED:** that the defect
   is proven gone; if the gate reddens, that capture is the measurement.
 
+- **OPEN-2 bounded on the CI side (DDR-1062)** — 42 `pradyos-ci` suites since
+  DDR-1049's detector landed, across 19 SHAs, with **zero** `[apfreeze]`,
+  `panic_stage=` or `gs FAIL`. All four reds in that window are attributed to the
+  DDR-1055/1056 console-splice class, none an AP freeze — checked by reading the
+  captures, because a red left unread could be the artefact. **95% upper bound
+  6.9% per suite**, and DDR-1009's 25% is refuted at p = 5.7 × 10⁻⁶. The
+  discrimination set is now complete: each of the three `[apfreeze]` producers
+  self-identifies, and DDR-1060's `waiters=` answers "was it a lock wait at all".
+  **NOT CLAIMED:** OPEN-2 is not closed and no mechanism is named; a rate under
+  6.9% is still a rate, and these are 42 suites over 19 SHAs, not 42 binaries.
+
 
 #### Post-quantum cryptographic primitives (FIPS 202 / FIPS 204, 2026-09)
 
