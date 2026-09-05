@@ -596,6 +596,16 @@ bounded work (~200 lines plus round constants) but it is the first thing.
 1,572,864 B gate — **396,918 B of headroom**. ML-DSA-44 code plus its tables fit
 comfortably. (Signature 2420 B, public key 1312 B, so the *data* is small too.)
 
+> *Borne out, and the numbers here are the PRE-work ones — left as written
+> because this is a dated assessment, not a live figure.* The primitives landed
+> (DDR-1052/1054/1057/1058) and `kernel.bin` is now **1,278,346 B**, i.e. the
+> work cost **102,400 B** and left **294,518 B**. The prediction was right; note
+> that it consumed **26%** of the headroom it was measuring, so "size is not the
+> constraint" is a statement about ML-DSA-44 specifically and must not be
+> re-used as a general claim about what still fits. See §6 for the live figures.
+> **This pairing is also how a stale headroom got into `CLAUDE.md`:** the size
+> was updated there and the subtraction was not.
+
 **3. Authoritative sources are reachable, by exactly one route.**
 `raw.githubusercontent.com` serves arbitrary public files (measured: 200,
 13,617 B for the Dilithium reference `sign.c`). The GitHub **API** is scoped to
@@ -877,14 +887,23 @@ a performance claim needs a denominator — there is nothing to report yet.
 
 ### 5.4 — Gates excluded from the CI shard matrix
 
-**7 excluded, each with a stated reason in `tools/ci/shard_check.sh`.** An
+**6 excluded, each with a stated reason in `tools/ci/shard_check.sh`.** An
 unexplained exclusion is how a gate goes missing, so they are reproduced here.
+
+**UPDATED 2026-09-05 — DDR-1061 registered `smoke-sfs-btree-smp4`, so its row is
+gone and the count is 7 -> 6.** Its stated condition was *"register it when
+OPEN-10 is fixed"*, and DDR-964 fixed OPEN-10 with a named mechanism and a
+mutation-checked fix at 8 sites. The row below used to add *"this is waiting on
+promotion evidence, not on work"* — **that clause was never part of the
+exclusion's condition**, and DDR-1061 §2 shows no reachable N could have supplied
+it: at 182 s a run, foreground-only, n=44 merely *reaches* the historical 6.7%
+pre-fix rate with no margin. The gate is now on shard 5 (strict, 180 s); if it
+reddens, **that capture is the measurement**.
 
 | Gate | Reason |
 |---|---|
 | `smoke-aarch64`, `smoke-riscv64` | run by the `arch-bootstrap` matrix job, not `build-and-boot` |
 | `smoke-selftest` | DDR-785 self-tests the boot harness. It must run BEFORE any gate that trusts the harness, so it is a setup step in **every** shard rather than one gate in one shard |
-| `smoke-sfs-btree-smp4` | DDR-824 OPEN-10 reproduction surface. Registering it now would make CI red on a known-open defect and block unrelated promotions. **Register it when OPEN-10 is fixed** — DDR-964 fixed the cause; this is waiting on promotion evidence, not on work |
 | `smoke-agent-live` | developer-run only: needs a live Ollama endpoint on the host, so CI stays in test mode (ADR-027) |
 | `smoke-fs-liveness` | DDR-777/BUG-1 diagnostic. It rebuilds the kernel with `BSP_LIVENESS=1`, whose churn fills the 4 KiB dmesg ring and evicts `smoke-dmesg`'s required marker (DDR-790) |
 | `smoke-fast` | **not a gate** — a runner that invokes another gate N times via `campaign.sh`. Excluded as infrastructure, not as a skipped test |
@@ -893,15 +912,23 @@ unexplained exclusion is how a gate goes missing, so they are reproduced here.
 
 ## SECTION 6 — RELEASE-GATE STATE
 
-Re-measured 2026-09-03 at `32cb8ad`. **Re-measure rather than increment** — the gate count has been wrong three times.
+Re-measured 2026-09-05 at `0089e08`. **Re-measure rather than increment** — the gate count has been wrong three times.
+
+**And re-derive, do not carry forward.** The `kernel.bin` row previously paired a
+size with a headroom figure computed from a *different, earlier* size; the same
+error was live in `CLAUDE.md` §CURRENT BUILD STATE, where the size had been
+updated as ML-DSA landed and the subtraction beside it had not — overstating the
+remaining budget by **102,400 B** in the one file sessions are told to trust
+without re-deriving. Both are corrected here and there. A derived quantity is
+stale the moment its input changes.
 
 | Quantity | Value | Source |
 |---|---|---|
-| Gates assigned | **173** across **10** shards | `make ci-shard-check`, re-measured 2026-09-03 |
-| Gates excluded | **7**, each with a reason | §5.4 |
+| Gates assigned | **176** across **10** shards | `make ci-shard-check`, re-measured 2026-09-05 |
+| Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h:181` |
-| DDR free range | **DDR-1050+** | §INV.4 |
-| `kernel.bin` | **1,175,946 B** against the 1,572,864 B gate — 396,918 B headroom | measured at `32cb8ad` |
+| DDR free range | **DDR-1063+** | §INV.4 |
+| `kernel.bin` | **1,278,346 B** against the 1,572,864 B gate — **294,518 B** headroom | measured at `0089e08`, hash `c33afa79f60abdcb` |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS** | `smoke-iso-userspace` |
 | aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — see §5.1 | DDR-999 |

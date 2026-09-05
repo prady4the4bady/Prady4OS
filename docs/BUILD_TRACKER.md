@@ -2566,3 +2566,81 @@ the only place it appears); and `rip=`/`bt=` already name the site while
 
 **Next: nothing until an artefact appears.** Local route exhausted, CI route
 armed and self-diagnosing, rate too low to manufacture occurrences.
+
+---
+
+## DDR-1063 — a live-state table carried a derived quantity, and its input moved without it
+
+**Status:** FIXED (both documents) + GATED (`ci-docstate-check`) + M0/M1/M2/M3.
+`kernel.bin` **UNCHANGED**, `c33afa79f60abdcb`, 1,278,346 B — no kernel source is
+touched; the gate is a static text check.
+
+**The defect.** `CLAUDE.md` §CURRENT BUILD STATE read *"**1,278,346 B** against
+the 1,572,864 B size gate — 396,918 B of headroom"*. But
+`1,572,864 − 1,278,346 = 294,518`; the stated figure is `1,572,864 − 1,175,946`,
+the headroom of the **pre**-post-quantum kernel. The size was updated as ML-DSA
+landed (DDR-1052 → 1054 → 1057 → 1058) and **the subtraction beside it was not**,
+so the file **overstated the remaining budget by 102,400 B** — roughly the entire
+ML-DSA landing. `docs/PRE_LAUNCH_CHECKLIST.md` §6 carried the same pair one
+revision further back, along with a stale gate count (173/7) and DDR free range
+(1050+). DDR-1058 had computed 294,518 B correctly in its own text, so the project
+held both numbers at once and the wrong one was in the file §MANDATORY FIRST
+ACTIONS makes every session read.
+
+**Why no gate saw it.** `Makefile:697` enforces the ceiling against the
+**binary**. It says nothing about what a **document** claims, so the doc could
+state any number and all 176 gates stay green. And none of `hygiene_check.sh`'s
+six checks reads a claim in a document — they cover shards, probe rodata, `_start`
+alignment, the resize checker and apt. Not the DDR-1046 shape (a control blind to
+its own case); this is the case with **no control at all**.
+
+**Why it matters.** Headroom is what a session uses to decide whether a subsystem
+fits *before building it* — DDR-1051, DDR-1058 and DDR-1059 all size candidate
+work against it. §INV.18's binding quantity is file **+ BSS** against the 2 MiB
+`PT_HI` span, so overrunning it is a **boot** failure found at QEMU time, after
+the work is written.
+
+**The fix, and what was deliberately not built.** Rejected: assert the stated size
+equals `wc -c build/kernel.bin`. That reddens on every commit changing the kernel
+before the docs are updated — i.e. on correct in-progress work — and a check that
+reddens on correct work gets `|| true`'d, not obeyed. Shipped instead:
+`tools/ci/docstate_check.py` asserts **internal consistency only**,
+`size + headroom == ceiling`, with the ceiling **read from `Makefile:697`** so it
+cannot drift from the gate it describes. It makes no currency claim.
+
+**Vacuity handled in design, not after.** A regex check over prose that matches
+nothing passes forever — the dead-arm class, twelfth-plus instance. So it
+**counts its findings and FAILS on zero**, and prints every pairing with
+`file:line` so a reader can confirm it looked where they think.
+
+**Proof, four arms, three failure modes.** M1 is not synthetic — it is the literal
+pre-fix `CLAUDE.md`, and it fails naming the line and `off by +102400` while the
+two *correct* pairings in the same run stay green, so the arm discriminates. M0 on
+the fixed tree: `OK - 3 pairing(s) checked, 0 inconsistent`. M2 drifts the wording
+past the pattern and the check **must not pass** — without it, "wired up" and
+"matches nothing" are the same `rc`. M3 quotes a ceiling the Makefile does not
+enforce, and **found a defect in the checker's own first draft**: it printed
+*"recompute headroom"* for a ceiling drift, the wrong remedy; the two now report
+separately. Measured counts, not predicted — the DDR's draft said 2 pairings and
+there are **3**, the extra being §5.1b.1's dated pre-work assessment, which
+correctly *passes* because it is self-consistent for its own date.
+
+**Also corrected.** Checklist §5.4: `smoke-sfs-btree-smp4` row removed, 7 → **6
+excluded**, and the clause *"waiting on promotion evidence, not on work"*
+**retracted** — never part of the exclusion's stated condition, and DDR-1061 §2
+shows no reachable N could supply it. Checklist §6 re-measured at `0089e08`: 176
+gates, 6 excluded, DDR range 1063+, 1,278,346 B / **294,518 B** with the hash.
+§5.1b.1 fact 2 left as written (a dated assessment whose prediction was borne out)
+and annotated: the work cost 102,400 B, **26% of the headroom it was measuring**.
+`build_status.md` and this file are dated append-only logs and are deliberately
+**not** inputs to the check. Hygiene **ALL SIX → ALL SEVEN**; `CLAUDE.md`'s
+hygiene item updated to match, that item having drifted from the script before.
+
+**NOT CLAIMED:** the documented numbers are not thereby *correct* — a stale but
+self-consistent pair still passes, which is exactly what checklist §6 was;
+currency remains §NON-NEGOTIABLE 11's human discipline. No kernel defect is fixed
+and no open issue moves. The check covers **one** derived quantity; gate counts,
+NSI max and the DDR free range are equally derivable and are not checked, because
+each needs a different oracle. And the 102,400 B error's downstream effect was not
+measured — DDR-1058 used the right figure, so the claim is that a wrong number sat
+in the trusted file, not that it caused harm.

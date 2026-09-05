@@ -381,6 +381,27 @@ All entries below are **shipped**.
   **NOT CLAIMED:** OPEN-2 is not closed and no mechanism is named; a rate under
   6.9% is still a rate, and these are 42 suites over 19 SHAs, not 42 binaries.
 
+- **Live-state documentation consistency gated (DDR-1063)** — `CLAUDE.md`
+  §CURRENT BUILD STATE stated `kernel.bin`'s **post**-quantum size beside the
+  **pre**-quantum headroom: the size was updated as ML-DSA landed and the
+  subtraction beside it was not, **overstating the remaining kernel budget by
+  102,400 B** for four commits, in the one file every session is told to trust
+  *without re-deriving*. Headroom is not decoration — it is what a session uses to
+  decide whether a subsystem fits before building it, and §INV.18's real bound is
+  a **boot** failure, not a compile error. **No existing gate could see it:** the
+  `Makefile` size gate checks the *binary* against the ceiling and says nothing
+  about what a *document* claims, and none of `hygiene_check.sh`'s six checks read
+  a document at all. New `ci-docstate-check` (hygiene → **ALL SEVEN**, plus the
+  `shard-check` CI job) asserts `size + headroom == ceiling`, with the ceiling read
+  from `Makefile:697` rather than hardcoded. It asserts **consistency, not
+  currency** — requiring the doc to match every build would redden on correct
+  in-progress work and get removed (DDR-1063 §5.1). Fails on **zero** pairings
+  found, so a future rewording cannot silently retire it. M1 is the literal
+  pre-fix `CLAUDE.md`; M2 is the vacuity arm; M3 (ceiling drift) found a wrong
+  remedy message in the checker's own first draft. **NOT CLAIMED:** this does not
+  make the documented numbers *correct* — a stale but self-consistent pair still
+  passes, which is exactly what the checklist's §6 was.
+
 
 #### Post-quantum cryptographic primitives (FIPS 202 / FIPS 204, 2026-09)
 

@@ -34,6 +34,17 @@ jobs:
       - name: User entry-point stack alignment (DDR-823)
         run: make ci-start-align-check
 
+      # DDR-1063: the live-state tables state kernel.bin's size and its headroom
+      # side by side, and the size was updated as ML-DSA landed while the
+      # subtraction beside it was not -- so CLAUDE.md overstated the remaining
+      # budget by 102,400 B for four commits, in the file every session is told
+      # to trust without re-deriving. The Makefile size gate checks the BINARY
+      # against the ceiling and can say nothing about what the docs claim, so all
+      # 176 gates stayed green. Runs here because it needs no toolchain: python3,
+      # the Makefile (for the ceiling) and two checked-in documents.
+      - name: Live-state doc consistency (DDR-1063)
+        run: make ci-docstate-check
+
       # DDR-859/862. The hybrid takes its flags AND its compiler from the
       # Makefile, so configure needs the Makefile's clang to exist. Installed
       # explicitly rather than relying on the runner image happening to carry
