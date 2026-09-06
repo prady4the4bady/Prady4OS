@@ -1169,6 +1169,22 @@ about what can be PROVED rather than about what is built.** Six rows, not seven
   `vmm_unmap` and `vmm_protect_range` leaves a stale writable translation on
   another CPU — and **nothing in the tree would notice**. A shootdown is a
   **prerequisite of `CLONE_VM`**, not a Phase 9 item.
+  **THE TRIP-WIRE IS NOW A CHECK — DDR-1077.** *"Nothing in the tree would
+  notice"* was left as a paragraph, which DDR-1071 §4 had already measured to be
+  the shape that goes stale. `ci-cr3-writers-check` (hygiene **ALL SEVEN → ALL
+  EIGHT**, plus `ci.yml`'s `shard-check` job) pins the **set of `->cr3`
+  assignment sites** — the carrier of the third fact, per **file and count**,
+  never by line number (DDR-1073 §5) — and fails **iff** that set changes **AND**
+  no shootdown exists, so building the prerequisite first is permitted while
+  shipping the sharing without one is not. Plus an **unconditional** zero-writers
+  clause found while building fixture 5: under the bare conjunction, zero writers
+  plus any file containing "shootdown" **reported success**, which is the
+  `GLOBAL_FORBIDDEN` catastrophe at `89f71cc` — a broken measurement, not a
+  changed tree. Six fixtures, **three must-FAIL**; M1 fails fixture 3 alone, M2
+  fixture 6 alone. **It is a tripwire, not a verdict** — it cannot read a
+  semantic claim, so it says the premise's carrier moved, go and look. No
+  shootdown is built, no defect is fixed, `kernel.bin` untouched, 177 gates
+  unchanged.
 - **9.6 — the real gap was `memset`, not SIMD. NOW BUILT — DDR-1076.**
   `memcpy` routed to `fast_memcpy` (ERMS, DDR-871) while `memset` stayed a
   byte loop, paid on **every `kfree`** (`kheap.c:174`, `KHEAP_DEBUG`

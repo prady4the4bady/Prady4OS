@@ -10,6 +10,12 @@
 # of them could see that CLAUDE.md's stated kernel.bin headroom was 102,400 B
 # wrong for four commits because the size beside it had been updated and the
 # subtraction had not.
+# DDR-1077 added an eighth: ci-cr3-writers-check. It guards a PREMISE rather
+# than an artefact -- DDR-1075 sec.3 established that the missing cross-CPU TLB
+# shootdown is safe only because no two threads share an address space, and
+# recorded that nothing in the tree would notice if that stopped being true.
+# The other seven could not: the premise is carried by the set of ->cr3
+# assignment sites, which no gate, counter or assertion reads.
 # RULE 24 (file, not inline): written as an inline `for t in ...; do make $t;
 # done` through `wsl bash -c`, $t expands EMPTY. The loop then runs plain `make`
 # three times, reports rc=0 three times, and writes every redirect to the same
@@ -18,7 +24,7 @@
 cd "$(dirname "$0")/../.." || exit 2
 mkdir -p build/gatelogs
 fail=0
-for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check; do
+for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check; do
     out="build/gatelogs/${t}.out"
     make "$t" > "$out" 2>&1
     rc=$?
@@ -30,5 +36,5 @@ for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizechec
         tail -20 "$out"
     fi
 done
-[ "$fail" -eq 0 ] && echo "hygiene_check: ALL SEVEN PASSED"
+[ "$fail" -eq 0 ] && echo "hygiene_check: ALL EIGHT PASSED"
 exit "$fail"

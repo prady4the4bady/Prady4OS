@@ -11616,3 +11616,97 @@ all rc=0 with `kernel_after == kernel`. Hygiene **ALL SEVEN**.
 always correct and merely slow, and §2 describes what a *future* broadcast
 defect would do, not a present bug; `memmove` untouched (DDR-871's forward-copy
 reason); no open issue moves (OPEN-1/2/12/13 untouched).
+
+---
+
+## DDR-1077 — a tripwire for the premise that makes the missing TLB shootdown safe (2026-09-06)
+
+**DDR-1075 §3.2 named a gap and did not close it.** It measured that this
+kernel has **no cross-CPU TLB invalidation at all**, that the absence is
+**correct today** on four facts — the fragile one being that **no two threads
+share an address space** — and that Group D's `pthread`/`clone(CLONE_VM)` row
+**deletes that premise**, after which every `vmm_unmap` (`sys_mmap.c:67`,
+`sys_surface.c:388`/`:448`) and every `vmm_protect_range` leaves a stale
+writable translation on another CPU, silent and timing-dependent, on the same
+SMP paths OPEN-2 lives in — **and nothing in the tree would notice.**
+
+**The warning lived only in a document.** DDR-1071 §4 had already measured that
+shape: *"correction is a side effect of adjacent work rather than a process."*
+This builds the noticing. **It does NOT build a shootdown.**
+
+**PINNED ON `->cr3`, NOT ON `CLONE_VM`.** Grepping `CLONE_VM` pins a
+*spelling* — DDR-1073 §5's line-number lesson one level up — and a future
+session could share an address space under any name. Every way of sharing one
+must **assign a `cr3` somewhere**, so the pin is the **set of `cr3` assignment
+sites**, per **FILE and COUNT, never by line number**: `kernel/exec/elf.c 1`,
+`kernel/proc/sched.c 2`, `kernel/syscall/sys_exec.c 1` (measured, not carried).
+
+**THE CONDITION IS A CONJUNCTION AND THAT IS THE WHOLE DESIGN:**
+`FAIL iff (the set differs from the pin) AND (no cross-CPU TLB invalidation
+exists)`. Each single-term version is wrong in a way this project has already
+been bitten by — *"a new `cr3` writer is banned"* reddens on **correct** work
+(a session building the shootdown *first* and then `CLONE_VM` would be blocked
+by the very check meant to protect that ordering, DDR-1071 §5's refused shape),
+and *"a shootdown must exist"* fails **today**, so it would be silenced on day
+one. All four truth-table cases are stated. It fires in **both** directions
+deliberately: a *removed* writer is harmless and fails anyway, because a
+tripwire that only fires one way is half a tripwire.
+
+**A THIRD CLAUSE WAS FOUND WHILE BUILDING THE FIXTURES, AND THE BARE
+CONJUNCTION WAS WRONG (§3.3).** **Zero** `cr3` writers plus any file containing
+the word "shootdown" **reported SUCCESS** — and zero does not mean the tree
+changed, it means **the measurement broke**: precisely the `GLOBAL_FORBIDDEN`
+catastrophe at `89f71cc` (§NON-NEGOTIABLE 6), where an empty list failed
+nothing and simply stopped catching for four commits. Zero is now an
+**unconditional** failure checked before the conjunction, whose message says
+*fix the pattern, do not adjust the pin*. Fixture 5 plants a shootdown
+deliberately, so it proves the clause is unconditional rather than riding on
+the conjunction. **Recorded rather than quietly fixed:** the design was written
+down first and the design was incomplete.
+
+**IT IS NOT A VERDICT.** It cannot tell whether a new `cr3` writer actually
+*shares* an address space — that is semantic, and DDR-1071 §5 / DDR-1072 §2
+both established that nothing in the tree can read a semantic claim. Its
+failure message says the premise's carrier has **moved, go and look**, and
+names both branches (fresh AS → update the pin; shared `cr3` → the shootdown is
+a **prerequisite**, build it first).
+
+**NOT THE DEAD-ARM CLASS, BUT ONLY BECAUSE THE FIXTURES SAY SO.** It passes on
+today's tree and will forever if nothing changes, so from outside *"the check
+is quiet"* and *"the check is dead"* are the same observation — the same shape
+as `ci-probe-rodata-check` and `ci-start-align-check`. **Six fixtures, three
+must-FAIL and that is the load-bearing half:** (1) the **REAL tree** PASS —
+without it the other five prove only that the checker works on trees the
+selftest wrote, not that the pin matches reality; (2) a 5th writer, no
+shootdown, **FAIL**, the dangerous case; (3) the same 5th writer **with** a
+shootdown, PASS, the correct ordering permitted; (4) pinned set, no shootdown,
+PASS, vacuity; (5) **ZERO** writers with a shootdown planted, **FAIL**; (6) a
+writer **MOVED between files** with the total unchanged, **FAIL**.
+
+**MUTANTS LAND ON DIFFERENT FIXTURES** (the DDR-1044 M2/M3 check): **M1** (the
+shootdown term can never be satisfied) fails fixture **3 alone**; **M2**
+(compare the TOTAL count instead of per-file counts) fails fixture **6 alone**,
+printing `set unchanged` about a tree whose set plainly changed. Reverting each
+returns the baseline six-for-six.
+
+**Shipped:** `tools/ci/cr3_writers_check.sh` + `tools/ci/cr3_writers_selftest.sh`
+behind one `make ci-cr3-writers-check` that runs the check on the real tree and
+then the fixtures; wired into `tools/ci/hygiene_check.sh` (**ALL SEVEN → ALL
+EIGHT**) and into `.github/workflows/ci.yml`'s `shard-check` job beside the
+other three toolchain-free static checks. `TREE_ROOT` is overridable; fixture
+trees are built under `build/` (§NON-NEGOTIABLE 7 — never `/tmp`).
+
+Hygiene **ALL EIGHT PASSED**. `kernel.bin` **`fd913d083446b0d1`, unchanged** —
+no kernel source is touched, so the size/headroom pair stands and
+`ci-docstate-check` is unaffected.
+
+**NOT CLAIMED:** **no TLB shootdown is built** and none is designed —
+DDR-1075 §3.1's four facts still make the absence correct; **no defect is
+fixed** and there is no present bug, the premise holds today and this guards a
+*future* change; it cannot detect address-space sharing semantically; the
+shootdown term is a weak `grep -i` whose weakness is in the **safe** direction
+(one built under another name leaves the check firing on new writers — annoying,
+not dangerous); **177 gates unchanged**, `GLOBAL_FORBIDDEN` **76 unchanged**;
+no open issue moves (OPEN-1/2/12/13 untouched); no operator decision is taken
+and the `pthread`/`CLONE_VM` row is **not unblocked** — it now merely has
+something that will notice.

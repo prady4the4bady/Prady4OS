@@ -45,6 +45,20 @@ jobs:
       - name: Live-state doc consistency (DDR-1063)
         run: make ci-docstate-check
 
+      # DDR-1077: DDR-1075 sec.3 measured that this kernel has NO cross-CPU TLB
+      # invalidation and that the absence is CORRECT today, because no two
+      # threads share an address space. Group D's pthread / clone(CLONE_VM) row
+      # deletes that premise, after which every vmm_unmap and vmm_protect_range
+      # leaves a stale writable translation on another CPU -- silent,
+      # timing-dependent, on the same SMP paths OPEN-2 lives in -- and DDR-1075
+      # sec.3.2 recorded that NOTHING IN THE TREE WOULD NOTICE. The warning
+      # lived only in a document. Fires only when the ->cr3 writer set changes
+      # AND no shootdown exists, so the correct ordering is permitted. Runs
+      # here because it needs no toolchain: bash and grep over checked-in
+      # sources.
+      - name: cr3-writer set vs the missing TLB shootdown (DDR-1077)
+        run: make ci-cr3-writers-check
+
       # DDR-859/862. The hybrid takes its flags AND its compiler from the
       # Makefile, so configure needs the Makefile's clang to exist. Installed
       # explicitly rather than relying on the runner image happening to carry

@@ -430,7 +430,13 @@ M1/M2 on distinct hashes — and DDR-1075 §4.4's trap corrected, `rep stosb` be
 architectural so the dispatch default is a speed property not a correctness one); 9.5's mechanism is already
 shipped (DDR-873) with its single-copy claim blocked cross-AS; 9.3 has no
 subject (no TLB shootdown exists) and is a **prerequisite of Group D's
-`CLONE_VM` row**, not an optimisation; 9.4 is a `VIRTIO_RING_F_EVENT_IDX`
+`CLONE_VM` row**, not an optimisation — **and DDR-1077 turned that warning into
+a check**: `ci-cr3-writers-check` (hygiene ALL SEVEN → ALL EIGHT, plus
+`ci.yml`'s `shard-check` job) pins the set of `->cr3` assignment sites per file
+and count, and fails **iff** that set changes AND no shootdown exists, so the
+correct ordering is permitted while the dangerous one is not. Six fixtures,
+three must-FAIL; M1 fails fixture 3 alone, M2 fixture 6 alone. It is a
+tripwire, not a verdict — no shootdown is built and no defect is fixed; 9.4 is a `VIRTIO_RING_F_EVENT_IDX`
 negotiation, not assembly; 9.1/9.2 are wrong-instrument and at-floor. The
 group's “measurable speedup” criterion is unobtainable under TCG and is
 replaced by DDR-870's static instruction-count convention.** ·
