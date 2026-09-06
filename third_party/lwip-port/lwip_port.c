@@ -528,6 +528,15 @@ struct proxy_sock {
      * cannot be reached through a stale handle. */
     uint32_t owner;                /* pid that claimed the slot; 0 = unowned */
     uint32_t gen;                  /* generation of this claim; 0 = never live */
+    /* DDR-1070: the destination this slot was opened to, kept so a refusal on
+     * the I/O path can be audited with a real AETHER_DEST_ID rather than with a
+     * handle -- a handle is not a destination, and the write refusal has to
+     * join up with the connect record for the same conversation (sec.5.2).
+     * Stored from psock_connect's own arguments rather than re-derived from
+     * pcb->remote_ip, which would round-trip through lwIP's representation of a
+     * value the caller handed us verbatim. */
+    uint32_t host_be;              /* packed a.b.c.d, as the NSI takes it */
+    uint16_t port;
 };
 
 /* Handle = (gen << 3) | slot. PSOCK_N is 8, so the slot is exactly 3 bits and a
@@ -638,9 +647,11 @@ int psock_connect(uint32_t host, uint16_t port, uint32_t owner) {
     s->state = PS_CONNECTING;
     s->owner = owner;                 /* DDR-987 sec.10: claimed under the lock */
     s->gen   = g_psock_gen++;         /* monotonic; never reuses a live handle */
+    s->host_be = host; s->port = port;   /* DDR-1070: audit identity of the peer */
     s->pcb = tcp_new();
     if (!s->pcb) {
         s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
+        s->host_be = 0; s->port = 0;                    /* DDR-1070 */
         net_unlock(fl);        /* DDR-987 */
         pmm_free_page((uint64_t)(uintptr_t)rxpage);     /* free the page AFTER release */
         return -1;
@@ -660,6 +671,7 @@ int psock_connect(uint32_t host, uint16_t port, uint32_t owner) {
          * lock; free the page after release, as everywhere else here. */
         tcp_abort(s->pcb);
         s->pcb = 0; s->rx = 0; s->used = 0; s->state = PS_CLOSED; s->owner = 0;
+        s->host_be = 0; s->port = 0;                    /* DDR-1070 */
         net_unlock(fl);
         pmm_free_page((uint64_t)(uintptr_t)rxpage);
         return -1;
@@ -680,6 +692,21 @@ int psock_state(int h, uint32_t owner, int sovereign) {
 
 /* Drain up to len bytes into kbuf. Returns bytes copied (0 if the ring is empty);
  * the caller distinguishes EOF/timeout via psock_state(). */
+/* DDR-1070: the peer this handle is connected to, for the audit record on a
+ * privacy-refused I/O. Goes through psock_resolve under the lock, so it can
+ * never report a retired slot's destination (resolve requires `used` and a
+ * matching generation) and it applies the same ownership rule as every other
+ * operation. Returns 0 and fills the two out-params, or the psock error code. */
+int psock_dest(int h, uint32_t owner, int sovereign,
+               uint32_t *host_out, uint16_t *port_out) {
+    struct proxy_sock *s;
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    int rc = psock_resolve(h, owner, sovereign, &s);
+    if (rc == 0) { *host_out = s->host_be; *port_out = s->port; }
+    net_unlock(fl);
+    return rc;
+}
+
 int psock_read(int h, uint32_t owner, int sovereign, uint8_t *kbuf, int len) {
     struct proxy_sock *s;
     uint64_t fl;

@@ -2253,6 +2253,15 @@ static void fs_test_thread(void *arg) {
                     }
                 }
                 if (probe_enabled("privnet")) {
+                    /* DDR-1070 phase 4 opens a REAL socket to the in-kernel echo
+                     * server so egress can be tested on an already-open
+                     * connection. Seeded here so that connect takes the ORDINARY
+                     * policy-permitted path rather than the DDR-800 sovereign
+                     * bypass this probe would otherwise ride -- egress on a
+                     * socket no ordinary agent could have opened would be
+                     * testing the wrong connection. */
+                    int netallow_add(uint32_t host_be, uint16_t port);
+                    (void)netallow_add(0x7F000001u, 8007);   /* 127.0.0.1:8007 */
                     struct tcb *pn = 0;
                     uint64_t pnlen = (uint64_t)((uintptr_t)privacynettest_elf_end - (uintptr_t)privacynettest_elf);
                     if (elf_load((void *)(uintptr_t)privacynettest_elf, pnlen,

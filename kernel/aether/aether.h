@@ -30,7 +30,16 @@ enum aether_action {
      * one and the kernel would queue an action nothing implements. */
     ACTION_READ_FILE, ACTION_DELETE_FILE, ACTION_SEND_IPC, ACTION_QUERY_MEMORY,
     ACTION_REWRITE_AGENT_CODE, ACTION_PROPOSE_HYPOTHESIS,
-    ACTION_RUN_EXPERIMENT, ACTION_EVOLVE_GENOME
+    ACTION_RUN_EXPERIMENT, ACTION_EVOLVE_GENOME,
+    /* DDR-1070: egress THROUGH an already-open proxy socket, as distinct from
+     * opening one. Appended, never inserted, per this enum's own rule above.
+     * It exists so the audit trail can say WHICH operation privacy mode
+     * refused: reusing ACTION_NET_CONNECT would have recorded a blocked write
+     * as a blocked connect, and DDR-801's rule is that the record states the
+     * decision that was actually made. Audit-only -- nothing SUBMITS this type,
+     * so it never reaches the approval path and aether_action_forces_pending()
+     * is deliberately unchanged. */
+    ACTION_NET_EGRESS
 };
 
 /* Wire-format pins for the pre-existing action types (DDR-832 discipline). */
@@ -70,6 +79,8 @@ _Static_assert(ACTION_REWRITE_AGENT_CODE == 9, "action wire format: REWRITE_AGEN
 _Static_assert(ACTION_PROPOSE_HYPOTHESIS == 10, "action wire format: PROPOSE_HYPOTHESIS is 10");
 _Static_assert(ACTION_RUN_EXPERIMENT     == 11, "action wire format: RUN_EXPERIMENT is 11");
 _Static_assert(ACTION_EVOLVE_GENOME      == 12, "action wire format: EVOLVE_GENOME is 12");
+/* DDR-1070: audit-only, privacy-refused egress on an open socket. */
+_Static_assert(ACTION_NET_EGRESS         == 13, "action wire format: NET_EGRESS is 13");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must

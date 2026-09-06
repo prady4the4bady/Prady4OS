@@ -3164,3 +3164,59 @@ not a compiled measurement. **And the five missing Group C gate names are NOT
 another §7c instance** — DDR-1063 §7c established that a planning table naming a
 gate for work not yet done is doing its job, and counting these would inflate
 that class.
+
+---
+
+## DDR-1070 — privacy mode did not stop egress on an open socket
+
+**Status: FIXED + gated + M1/M2.** `aether_privacy_active()` was consulted in
+`sys_sock_connect` and **nowhere else**, so a proxy socket that was already open
+when the operator switched privacy mode on **kept sending and kept receiving**.
+Measured rather than reasoned: `grep privacy third_party/lwip-port/lwip_port.c`
+returns nothing at all, and both I/O syscalls check slot ownership only.
+
+DDR-802's own text, in the source at `sys_socket.c:93`, calls privacy mode *"the
+operator's explicit instruction that nothing leaves"* and orders it **ahead of the
+DDR-800 sovereign bypass** precisely so it is unconditional. The one operation it
+was not applied to is the one where data actually leaves — the DDR-1046 shape, a
+control that cannot see the case it exists for. Concrete rather than theoretical:
+`agent_base.c`'s live branch connects to `10.0.2.2:11434` and then writes a prompt
+and reads a response over that socket.
+
+**A NEW CLASS, NOT THE DEAD ARM.** `user/privacynettest.c` is a *good* probe —
+sovereign + CAP_NET on the reasoning that if privacy refuses this caller it
+refuses everyone, two destinations that discriminate different failures, three
+phases so a mode that latches on is caught, and audit-trail assertions including
+the *absence* of an `AR_SOVEREIGN_BYPASS` record to prove ordering. Every arm is
+live and every mutant of the connect path is caught. The defect is that **every
+one of its three phases calls `SYS_SOCK_CONNECT` and nothing else** — four
+connect calls, no other socket operation: its coverage is *connect*, the feature's
+claim is *nothing leaves*, and nothing recorded the difference. The dead-arm
+question is "can this arm fail?"; this one is "does the **set** of arms span the
+claim?", and the second is not answered by mutation-testing the first.
+
+**Fix:** the check in `sys_sock_write` and `sys_sock_read`, in the syscall layer.
+Deliberately **not** pushed under `g_net_lock` where DDR-987 §10 put the ownership
+check — that TOCTOU was about the *identity of the slot* (the owner could change
+meaning between check and use, landing the operation on a different connection);
+privacy is a global flag with no identity to change, and pushing it down would
+give the lwIP port an AETHER dependency it measurably does not have. The refusal
+is audited with the **peer**, not a handle: `struct proxy_sock` gained
+`host_be`/`port` set in `psock_connect` from the arguments already in hand, and
+`ACTION_NET_EGRESS` was appended to the action enum (13, `_Static_assert`-pinned)
+so a blocked write is not recorded as a blocked connect.
+
+**Gate: no new gate (177 unchanged)** — phase 4 on `smoke-privacy-netfilter`.
+**The obvious arm is vacuous and that was measured before it was written:**
+nothing routes to `192.0.2.1`, so that connect never leaves `PS_CONNECTING` and a
+write returns `-EBADF` *with or without the fix*. Phase 4 uses `127.0.0.1:8007`
+(the in-kernel echo server), proves the socket live by reading its echo back, and
+asserts the **exact** `-EPERM` in both directions.
+
+**NOT DONE, stated:** the connection is **not torn down** — see
+`docs/PRE_LAUNCH_CHECKLIST.md` §4.16 for why that is a decision for the operator
+rather than an oversight.
+
+**`SYS_NET_REVOKE` is a REFUSAL, not a gap** (DDR-1070 §6) — DDR-734's decision is
+in the source, and a revoke built before this fix would not have severed a live
+connection either.

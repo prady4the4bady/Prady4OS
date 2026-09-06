@@ -572,6 +572,39 @@ making the alias RO+NX.
 **Revisit once OPEN-1/2/12/13 close.** **Not claimed:** that KASLR is
 unimportant, or that this kernel is hardened without it.
 
+### 4.16 — Privacy mode refuses I/O but does not tear the connection down
+
+**DDR-1070 fixed the defect and this is the residual it deliberately left.**
+
+The defect: `aether_privacy_active()` was consulted in `sys_sock_connect` and
+nowhere else, so a proxy socket that was **already open** when the operator
+switched privacy mode on kept sending and kept receiving. Measured, not reasoned
+— `grep privacy third_party/lwip-port/lwip_port.c` returns nothing at all, and
+both I/O syscalls check slot ownership only. That matters concretely rather than
+theoretically: `agent_base.c`'s live branch connects to `10.0.2.2:11434` and then
+writes a prompt and reads a response over that socket. Fixed, gated on
+`smoke-privacy-netfilter` phase 4, M1/M2 mutation-checked.
+
+**What is NOT done:** privacy-on now refuses reads and writes, but it does **not
+close the socket** and sends no FIN or RST, so a stateful observer on the wire
+still sees an ESTABLISHED connection.
+
+**Why it was left, and it is a decision rather than an oversight.** DDR-802's own
+phase-3 rule is that privacy mode must be **releasable** — *"a privacy mode that
+cannot be switched off is a different defect, not a stricter version of this
+one"*. Refusing I/O is reversible and `PRIVACY_OFF` restores the same handle
+(phase 4d asserts exactly that); destroying connections is not, and the operator's
+toggle would become asymmetric and destructive. Whether the operator wants a
+destructive kill-switch is a **decision** in the DDR-793 security-posture class
+this project defers to them, not a gap to close unilaterally.
+
+`sys_sock_close` is also deliberately still permitted under privacy mode:
+refusing it would strand slots and leak the very connections the operator wants
+stopped.
+
+**Also recorded here:** `SYS_NET_REVOKE` (Group C) is a **refusal, not a gap** —
+see §5.3's Group C paragraph and DDR-1070 §6.
+
 ---
 
 ## SECTION 5 — DEFERRED FEATURES
@@ -931,9 +964,36 @@ needs a second process to unblock it; the probe is single-threaded). It also
 returned 0 for `FD_VFS`, so epoll on a regular file was answering wrongly —
 POSIX says a regular file never blocks.
 
-**Group C — networking (all MISSING):** `smoke-epoll` (proxy-socket
-epoll/select), `smoke-udp`, `smoke-netrevoke` (`SYS_NET_REVOKE` / CAP_NET policy
-reload), `smoke-tap`, `smoke-ipv6`, `smoke-tls`.
+**Group C — networking (all MISSING).** `smoke-epoll` (proxy-socket
+epoll/select) is **assessed with its blocker named — DDR-1069**: a proxy socket
+is not a file descriptor, so `epoll_ctl` has nothing to be handed, and the real
+open question is what `fork` should do with an inherited socket handle whose every
+operation would then return `-EPERM`. **`smoke-netrevoke` IS NOT A GAP EITHER — it
+is a REFUSAL, DDR-1070 §6**, the DDR-1068 §2 class a second time: `sys_socket.c:36`
+carries DDR-734's decision in the source (*"Bounded, append-only — **no runtime
+revocation surface**; policy changes are a config edit + reboot"*), `netallow_add`
+only appends, and `sys_socket_register()` registers five syscalls and no revoke.
+**And a revoke built before DDR-1070 would have been security theatre:**
+`netallow_check` is **connect-only**, so removing a rule would not have severed a
+live connection — DDR-1070 fixed that half (privacy mode now refuses I/O on an
+already-open socket) and is a **prerequisite** for a meaningful revoke rather than
+a substitute for one.
+
+**`smoke-udp` is also narrower than the row implies, measured 2026-09-06:** UDP
+is compiled into the stack (`lwipopts.h`: `LWIP_UDP 1`, `MEMP_NUM_UDP_PCB 8`) and
+a real loopback send-to-receive round trip **already runs and is gated** —
+`lwip_port.c:304`'s `net_loopback_test()` binds port 7, `udp_sendto`s `"ping"` to
+`127.0.0.1`, and the recv callback prints `PRADYOS_NET_LO_OK`, which
+**`smoke-net-lo` requires** (Makefile:2095). What is missing is the **ring-3
+door**: `sys_socket_register()` registers five TCP-proxy syscalls and there is no
+`SYS_UDP_*`. That is DDR-1033's SEND_IPC shape (a kernel-internal implementation
+lacking only a ring-3 surface), not a missing subsystem — and it inherits
+DDR-1069's two design questions, because `struct proxy_sock` holds a `tcp_pcb *`
+plus `PS_*` states, so a UDP handle needs its own table or a union, and the
+`fork` ownership question is the same one. **Not built, not started; recorded so
+the row is not read as "no UDP anywhere".**
+
+Remaining and genuinely unbuilt: `smoke-tap`, `smoke-ipv6`, `smoke-tls`.
 
 **Group D — userspace (all MISSING except as noted).** `smoke-poll` was listed
 here as MISSING while the DDR-1037 paragraph immediately above said it EXISTS —

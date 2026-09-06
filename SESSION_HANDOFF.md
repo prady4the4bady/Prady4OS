@@ -11134,3 +11134,80 @@ DDR-1009 pooling unit. No tip has 3 (the third needs `workflow_dispatch`), and
 nothing is pending merge: PR #17 is the operator's, `v1.0.0` and `main` are held.
 Later tips are still queued. Queue item 3 continues (Groups A–F). OPEN-2 untouched
 until an artefact appears (DDR-1062 §7).
+
+---
+
+## CHECKPOINT — DDR-1070: privacy mode did not stop egress on an open socket
+
+### 1. THE DEFECT
+
+`aether_privacy_active()` was consulted in `sys_sock_connect` and **nowhere
+else**, so a proxy socket that was **already open** when the operator switched
+privacy mode on **kept sending and kept receiving**. Measured, not reasoned:
+`grep privacy third_party/lwip-port/lwip_port.c` returns **nothing at all**, and
+both I/O syscalls check slot ownership only.
+
+DDR-802's own text, in the source at `sys_socket.c:93`, calls privacy mode *"the
+operator's explicit instruction that nothing leaves"* and orders it **ahead of
+the DDR-800 sovereign bypass** so it is unconditional. The one operation it was
+not applied to is the one where data actually leaves — the DDR-1046 shape.
+Concrete: `agent_base.c`'s live branch connects to `10.0.2.2:11434` and then
+writes a prompt and reads a response over that socket.
+
+### 2. WHY THE GATE MISSED IT — A NEW CLASS, NOT THE DEAD ARM
+
+`user/privacynettest.c` is a **good** probe: sovereign + CAP_NET, two
+discriminating destinations, three phases, and audit assertions including the
+*absence* of an `AR_SOVEREIGN_BYPASS` record to prove ordering. Every arm is
+live; every connect-path mutant is caught. The defect is that **every one of its
+three phases calls `SYS_SOCK_CONNECT` and nothing else** (four connect calls, no
+other socket operation) — its coverage is *connect*, the claim is *nothing
+leaves*, and nothing recorded the difference.
+
+> The dead-arm question is "can this arm fail?" This one is "does the **set** of
+> arms span the claim?" — and the second is not answered by mutation-testing the
+> first.
+
+### 3. FIX + GATE
+
+Check in `sys_sock_write`/`sys_sock_read`, in the **syscall layer** — deliberately
+not under `g_net_lock`, because DDR-987 §10's TOCTOU was about the *identity of
+the slot* and privacy is a global flag. Audited with the **peer** (new
+`host_be`/`port` on `struct proxy_sock` + `psock_dest()`), under a new
+`ACTION_NET_EGRESS` (13, `_Static_assert`-pinned) so a blocked write is not
+recorded as a blocked connect.
+
+**The obvious arm is vacuous and that was measured before it was written:**
+nothing routes to `192.0.2.1`, so a write there returns `-EBADF` with or without
+the fix. Phase 4 uses `127.0.0.1:8007`, proves the socket live via an echo
+round-trip, then asserts the **exact** `-EPERM` both ways, then that
+`PRIVACY_OFF` restores the **same handle**.
+
+| build | result |
+|---|---|
+| fixed `2c4868b2f5f0d00a` | rc=0 · `NET_TCP_READY` → **one** `NET_TCP_OK` (4a) → `PRIVACY_EGRESS_OK` → `PRIVACY_AUDIT_OK` |
+| M1 `59c0e350f7569108` (pre-fix behaviour) | rc=2 · **`phase 4b: write on an OPEN socket still permitted`** — and `NET_TCP_OK` again at line 322, the kernel's own echo server reporting 4b's bytes arriving **after** privacy went on |
+| M2 `1022410e09917bbe` (write path only) | rc=2 · **`phase 4c`, alone** — the two directions are independent arms |
+
+Revert rebuilds `2c4868b2f5f0d00a` **bit-for-bit**. Hygiene **ALL SEVEN**.
+`GLOBAL_FORBIDDEN` untouched (76) — deterministic defect, own gate both ways.
+**No new gate: 177 unchanged.**
+
+### 4. `SYS_NET_REVOKE` — A REFUSAL, NOT A GAP (second instance of the class)
+
+The Group C row that led here. `sys_socket.c:36` carries DDR-734's decision in
+the source (*"append-only — no runtime revocation surface"*); `netallow_add` only
+appends and `sys_socket_register()` registers five syscalls and no revoke. **And
+a revoke built before this fix would have been the DDR-1059 shape:**
+`netallow_check` is **connect-only**, so removing a rule would not have severed a
+live connection either. This fix is a **prerequisite** for a meaningful revoke,
+not a substitute. Row corrected in CLAUDE.md and checklist §5.3.
+
+### 5. NOT CLAIMED
+
+**The connection is not torn down** — privacy-on refuses I/O and sends no FIN or
+RST, so an observer still sees an ESTABLISHED connection. Deliberate: DDR-802's
+phase 3 requires privacy mode to be *releasable*, and a destructive kill-switch
+is an operator **decision** (checklist §4.16). `sys_sock_close` stays permitted.
+No open issue moves — OPEN-1/2/12/13 untouched. The live Ollama branch is
+unchanged and unexercised; the gate drives loopback.

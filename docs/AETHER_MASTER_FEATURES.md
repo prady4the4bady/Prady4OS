@@ -806,6 +806,7 @@ Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`).
 | F#68 metric lockbox (S3) | `aether/kernel/lockbox/metric_lockbox.py` | ✅ |
 | Privacy-mode netfilter hook (Python transport only) | `aether/platform/privacy/netfilter.py` | ✅ |
 | Privacy-mode netfilter — KERNEL (DDR-802, gated by `smoke-privacy-netfilter`) | `kernel/syscall/sys_socket.c`, `kernel/aether/aether_queue.c` | ✅ |
+| Privacy mode on an ALREADY-OPEN socket (DDR-1070) — `sys_sock_write`/`sys_sock_read` refuse with an audited `ACTION_NET_EGRESS`/`AR_PRIVACY_BLOCKED` record keyed on the peer taken off the slot. DDR-802 checked only `sys_sock_connect`, so a socket open when privacy went on kept sending. **Refuses I/O reversibly; does NOT tear the connection down** (checklist §4.16) | `kernel/syscall/sys_socket.c`, `third_party/lwip-port/lwip_port.c`, `user/privacynettest.c` | ✅ |
 | Per-boot probe selection via QEMU fw_cfg (DDR-804, closes OPEN-7) | `kernel/drivers/fwcfg/fwcfg.c` | ✅ |
 | Shared egress rate limiter (S2) | `aether/platform/ratelimit/shared_limiter.py` | ✅ |
 | Cloud bridge (built, **not enabled** — DDR-793 R1/R3) | `aether/cloud_bridge/transport.py` | ✅ |

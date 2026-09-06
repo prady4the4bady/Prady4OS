@@ -2735,9 +2735,18 @@ smoke-vfs-bigwrite: $(IMG) fat-image sfs-image
 # that does nothing fails here. It also proves ORDERING — a sovereign connect
 # to an off-allowlist port must NOT leave an AR_SOVEREIGN_BYPASS record, which
 # it would if the DDR-800 bypass ran ahead of the privacy check.
+# DDR-1070 adds PHASE 4: egress on an ALREADY-OPEN socket. Phases 1-3 all call
+# SYS_SOCK_CONNECT, so their coverage was *connect* while the feature's claim is
+# *nothing leaves* — every arm was live and none could see that privacy mode was
+# checked only in sys_sock_connect. Phase 4 uses 127.0.0.1:8007 (the in-kernel
+# echo server) because nothing routes to 192.0.2.1, so a write there returns
+# -EBADF with or without the check and an arm asserting "the write failed" would
+# be vacuous. It proves the socket LIVE via an echo round-trip first, then
+# asserts the EXACT -EPERM in both directions, then that PRIVACY_OFF restores
+# the SAME handle. PRADYOS_PRIVACY_EGRESS_OK is its sentinel.
 smoke-privacy-netfilter: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_PROBES=privnet \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_PRIVACY_DENIED_OK\nPRADYOS_PRIVACY_AUDIT_OK')" \
+	TIMEOUT_S=120 QEMU_PROBES=privnet \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_PRIVACY_DENIED_OK\nPRADYOS_PRIVACY_EGRESS_OK\nPRADYOS_PRIVACY_AUDIT_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRIVACYNET FAIL\nPRADYOS_SOVEREIGN_BYPASSED')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
