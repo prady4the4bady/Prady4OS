@@ -11071,3 +11071,66 @@ quotes (`"$?"` behaves as `$?` does). **No open issue moves.**
 two suites each. Nothing to do but let the queue drain.
 Queue item 3 continues (Groups A–F). OPEN-2 untouched until an artefact appears
 (DDR-1062 §7). `v1.0.0` untagged, `main` promotion unstarted — operator decisions.
+
+---
+
+## CHECKPOINT 2026-09-06 (d) — DDR-1068
+
+`kernel.bin` **`b68e241eaaa7b03b`**, **1,286,538 B unchanged** / 286,326 B
+headroom. Tip **`8c666a9`**. Gates **177**; `ci-probe-rodata-check` 75 → **76
+ELFs**. DDR free range **DDR-1069+**. Hygiene ALL SEVEN rc=0.
+
+### 1. A row that asked for what an earlier DDR refused
+
+Group D's B#12 read *"remaining: full job control, `&`, `wait`, `fg`/`bg`"*.
+Measured: **`&`, `jobs`, `fg`, `kill %n` are built and gated** (DDR-881/755), and
+**`smoke-jobctl` never existed** — seventh instance of the DDR-1063 §7c class.
+
+**The worse half: `bg` is a RECORDED REFUSAL.** DDR-881's scope statement sits in
+`user/prism.c:253` — *"would be a shell pretending to a capability the system
+does not have"* — and the tree confirms it: `kernel/proc/signal.h` defines **four**
+signals, so there is no `SIGTSTP` to send and no `SIGCONT` to resume from, and no
+`setpgid` anywhere. **A row listing a deliberate refusal as remaining work invites
+the next session to ship exactly that pretence.** Corrected in CLAUDE.md and the
+checklist; **scripting is what actually remains.**
+
+### 2. `wait` — and why both obvious gates are vacuous
+
+An ordering arm is **one-sided** (without `wait` the ordering is merely *likely*);
+a `reaped=N` count is worse, because `jobs_reap()` runs at **every prompt** so a
+**correct** `wait` reports `reaped=0` when nothing is still running — the same
+value a missing `wait` gives. One cause: **no probe was still running when the
+next line is typed.** Hence `user/slowtest.c` — wall-clock (`SYS_CLOCK`, per
+DDR-1029), yielding not spinning (DDR-1047's reason), bounded two ways because
+that clock wraps at midnight.
+
+### 3. M1 caught a vacuous arm in this DDR's own gate
+
+The first version slept **6 s** after `wait` while the probe runs 4 s — so the
+*injector* did the waiting and **the ordering arm passed with `wait` deleted**.
+Only `reaped=1` failed, so a single-arm gate would have shipped a passing check
+that proved nothing. Sleep is now **1 s**; the shell must do the blocking.
+
+| tree | capture |
+|---|---|
+| fixed `b68e241eaaa7b03b` | 904 `SLOW_DONE waited=4` · 906 `WAIT_OK reaped=1` · 907 `WAITMARK` |
+| M1 `cc8135a9463eefed` | **902 `WAITMARK`** · **904 `SLOW_DONE`** — inverted |
+
+Revert returns `b68e241eaaa7b03b` bit-for-bit; **M1's hash is exactly the
+DDR-1067 kernel**, which also proves the probe costs the image zero bytes.
+Regression **8/8**, hash-verified.
+
+### 4. NOT CLAIMED
+
+`bg` stays refused. Not POSIX job control. **`wait` takes no arguments.** No
+kernel change. No new gate. `reaped=` is **not** the discriminator — the ordering
+arm carries the claim. **No open issue moves.**
+
+### 5. CI
+
+All completed runs green: `0f46cf7`, `67ab53d`, `f9c9ab0` each **push + PR**, and
+`bea0d04` PR — **6+ green suites on kernel `a9d8bc93` across three SHAs**, the
+DDR-1009 pooling unit. No tip has 3 (the third needs `workflow_dispatch`), and
+nothing is pending merge: PR #17 is the operator's, `v1.0.0` and `main` are held.
+Later tips are still queued. Queue item 3 continues (Groups A–F). OPEN-2 untouched
+until an artefact appears (DDR-1062 §7).
