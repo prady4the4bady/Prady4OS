@@ -1092,3 +1092,26 @@ Neither submits the type. **Do not close either row by pointing at that gate.**
 decision — DDR-982 §5.3 — not unbuilt work.** `agent_caps` is written once and
 read nowhere, and `aether.h` deliberately omits the action types those bits
 gate. `CAP_EXEC` itself **is** enforced, for DDR-1034's experiment executor.
+
+---
+
+## Groups A/B record correction — DDR-1073 (2026-09-06)
+
+**B#10 NUMA affinity is shipped and gated**: SRAT topology (`smoke-numa`,
+shard 2 strict), per-node PMM free lists + node-targeted allocation
+(`smoke-numa-alloc`, shard 5 strict, DDR-882 17b), and DDR-885's NUMA-affine
+steal order in `rq_steal`.
+
+**One ordering claim is uncovered and is recorded as such.** No gate runs
+`QEMU_NUMA=1` and `QEMU_SMP` together — the two NUMA gates are single-CPU and
+`smoke-rqstress` is single-node — so the remote-steal pass is never taken and
+`g_steal_remote` is structurally zero wherever it is observed. Not a defect: the
+implementation is correct; the coverage is absent. The obvious `steal remote=N`
+arm would be vacuous (a correct kernel reports 0 whenever the local pass
+succeeds), so a gate for it needs work pinned to one node's CPUs.
+
+**Two SFS rows corrected rather than closed:** the **on-disk free tree** stays
+**deferred** (PRE-APPROVED EXCEPTIONS) and `smoke-sfs-persist` covers DDR-768/769
+cross-reboot persistence instead; **B+tree structural delete** stays **refused**
+(§INV.20 — tombstones are recycled by create) and `smoke-sfs-gc` covers
+DDR-762-v2 free-space extent reclamation instead.

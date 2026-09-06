@@ -11371,3 +11371,50 @@ recorded again, not fixed; OPEN-1/2/12/13 untouched.
 audit-ring SFS persistence (blocked on the Group B SFS boot root), agent
 respawn, concurrency arbitration, roster continuity. Group A and Group B tables
 have not had this audit.
+
+---
+
+## CHECKPOINT 2026-09-06 — DDR-1073: the Group A + B audit
+
+**Docs only. No code change; `kernel.bin` untouched (`2c4868b2f5f0d00a`,
+1,290,634 B / 282,230 B headroom), 177 gates, GLOBAL_FORBIDDEN 76.**
+
+Fourth table in the sweep (C -> D -> E -> F -> A/B). **This one found something
+other than a record error**, and that is the part to read first.
+
+**§2 — A REAL COVERAGE GAP.** DDR-885's NUMA-affine steal order is exercised by
+**no gate**. `numa_node_of_cpu` (`numa.c:194-198`) returns 0 with no SRAT entry,
+so without `QEMU_NUMA=1` every CPU is node 0, the same-node pass matches every
+victim and the second pass is **unreachable**. `grep -n QEMU_NUMA Makefile`
+returns **exactly two lines** and **neither sets `QEMU_SMP`** — both NUMA gates
+are single-CPU, so no stealing happens at all — while `smoke-rqstress`, the only
+gate asserting `[sched] steal local=`, runs `QEMU_SMP=4` with no NUMA. **The two
+conditions never coincide.** DDR-1070 class (does the set of arms span the
+claim?), not the dead-arm class. **Not fixed**, and the trap named in advance: a
+bare `steal remote=N` arm is the DDR-1068 `reaped=` shape. DDR-885 is not
+accused of being wrong.
+
+**§1 — B#10 NUMA affinity** is shipped at three layers and gated **twice at
+strict tier**, and the row carried no marker and named one gate of two.
+
+**§3/§4 — two more DDR-1072 §2 instances.** `smoke-sfs-persist` (shard 6,
+strict) is DDR-768/769 **cross-reboot** persistence, not the free tree — whose
+row is a **logged deferral** in PRE-APPROVED EXCEPTIONS, so closing it by that
+gate would over-claim *deferred* work, the worst consequence of this trap so far.
+`smoke-sfs-gc` (shard 5, strict) is DDR-762-v2 **free-space extent** GC; B+tree
+node collection is a **refusal** (§INV.20, corroborated in `sfs.c:614/633/788/
+1151-1156`).
+
+**§5 — A NEW STALENESS SHAPE.** The `smoke-smpuser` row prescribed a remedy, *at
+line numbers*, for an issue closed elsewhere in this same file — and the line
+numbers had **drifted** (`main.c:1134` is now an `elf_load`, `:1311` the RTC
+print). It would have had a session instrument two arbitrary places and read the
+difference as a diagnosis. **A row citing line numbers has an expiry date and
+nothing in the tree can check one.**
+
+**NOT CLAIMED:** no gate re-run this session; §2 is not fixed and no gate built
+for it; no pre-approved exception revisited; OPEN-1/2/12/13 untouched.
+
+**NEXT:** Groups G (assembly optimisation — every row needs a profile first, so
+none has a claim attached yet) and H (release) have not had this audit. Group H
+is release mechanics and is held by operator decision.

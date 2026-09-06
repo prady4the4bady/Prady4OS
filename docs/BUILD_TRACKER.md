@@ -3336,3 +3336,59 @@ survives only in the DOCUMENT**, exactly the boundary DDR-1063 built
 **Group F's genuinely open work** is the domain agents (F#66/67/69-75),
 audit-ring SFS persistence, agent respawn, concurrency arbitration and roster
 continuity. **The gate coverage did not change — only the record of it.**
+
+---
+
+## DDR-1073 — Groups A and B, and a steal order no gate exercises
+
+**2026-09-06. Docs only; `kernel.bin` untouched, 177 gates unchanged.**
+
+**B#10 NUMA affinity is shipped at three layers and gated twice at strict tier**,
+and its row carried no marker and named only one of the two gates: SRAT topology
+(`smoke-numa`, Makefile:1220, shard 2 strict), per-node PMM free lists and
+node-targeted allocation (DDR-882 17b; `smoke-numa-alloc`, :1215, shard 5
+strict), and DDR-885's NUMA-affine steal order in `rq_steal`.
+
+**THE FINDING — a coverage gap the project did not know it had.** Nothing
+exercises the remote-steal pass. `numa_node_of_cpu` (`numa.c:194-198`) returns
+**0** for any APIC id with no SRAT entry, so without `QEMU_NUMA=1` every CPU is
+node 0, the same-node pass matches every victim, and the second pass is
+**unreachable**. And the two conditions never coincide: `grep -n QEMU_NUMA
+Makefile` returns **exactly two lines**, and **neither sets `QEMU_SMP`**, so both
+NUMA gates run single-CPU (no stealing at all), while the only gate asserting the
+counters — `smoke-rqstress`, `[sched] steal local=` — runs `QEMU_SMP=4` with no
+NUMA, i.e. one node.
+
+This is the **DDR-1070 class**, not the dead-arm class: the arm can fail; the
+question is whether the *set* of arms spans the claim, and it does not, because
+on its own machine "NUMA-affine steal order" and "steal from whoever has work"
+are the same program. **Not fixed**, and the trap is named in advance: a bare
+`steal remote=N` count is the DDR-1068 `reaped=` shape, since a correct kernel
+legitimately reports `remote=0` whenever the local pass keeps succeeding.
+DDR-885 is **not** accused of being wrong — the order is implemented and reads
+correctly; what is missing is a gate that could tell if it stopped working.
+
+**Two more DDR-1072 §2 instances, and the first has the worst consequence yet.**
+"SFS on-disk free-tree persistence" names `smoke-sfs-persist` (shard 6, strict),
+which is DDR-768/769's **cross-reboot** proof and asserts nothing about the free
+tree — what it proves is already ✅ in §COMPLETED LAYERS, and the row's own
+subject is a **logged deferral** in PRE-APPROVED EXCEPTIONS. Closing it by its
+named gate would over-claim *deliberately deferred* work. "SFS B+tree CoW GC"
+names `smoke-sfs-gc` (shard 5, strict), which is DDR-762-v2's **free-space**
+extent GC; B+tree node collection is a **recorded refusal** (§INV.20,
+corroborated in `sfs.c:614/633/788/1151-1156`) — tombstones are recycled by
+create, so there is nothing to collect.
+
+**A new staleness shape.** Group A's `smoke-smpuser` row prescribed a remedy, at
+line numbers, for an issue closed elsewhere in the same file: the issue is closed
+as not-reproduced; the prescribed action was never runnable (`kprintf` does not
+exist, §INV.9); and the line numbers had **drifted** — `main.c:1134` is now an
+`elf_load` inside `aether_spawn_agent_hook`, `main.c:1311` the RTC print. Carry
+it apart from the §7b class: that one understates progress, this one **instructs
+a future session to instrument two arbitrary places and read the difference as a
+diagnosis**. A row citing line numbers has an expiry date and nothing in the tree
+can check one.
+
+**Genuinely unbuilt Group B rows** (SFS boot root, largefile, deepslot, quota,
+ext4 write, NAS, PMM policy, NVMe IRQ) have **no gate in the Makefile at all** —
+DDR-1063 §7c doing its job, and not counted here.
