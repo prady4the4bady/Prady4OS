@@ -267,6 +267,53 @@ not close the rest. Recorded here so the size of the residual is visible rather
 than implied: **five stale items were found in one sweep of one document**, and
 the check catches one shape of one of them.
 
+## 7c. THE WHOLE SURFACE MEASURED — and FIVE gate names that never existed
+
+The §7b findings were spot checks. **2026-09-06 the entire surface was measured**:
+every `` `smoke-*` `` name in `CLAUDE.md` (**116** distinct) against every
+`^smoke-*:` target in the Makefile (**182**).
+
+**59 named names have no target — and that number is NOT a defect count.** Most
+are legitimately-unbuilt backlog rows, which is correct and intended: a planning
+table naming a gate that does not exist yet is doing its job. **That distinction
+is the finding**, and it *confirms* §7b's reason for deferring the mechanical
+checker rather than refuting it: the check needs a machine-readable way to tell
+*"claimed to exist"* from *"named as future work"*, and no amount of grepping
+supplies that. The deferral was right for the reason given.
+
+**What the sweep does establish is a real pattern: FIVE gate names that have
+never existed, while the real gate did.** Each was found separately, by a
+different DDR, over months:
+
+| named in a planning table | the gate that actually exists | found by |
+|---|---|---|
+| `smoke-wx` | `smoke-wxkernel` | DDR-1040 |
+| `smoke-mc` | `smoke-mce` | DDR-1063 §7b |
+| `smoke-lazystack` | `smoke-stack-demand` | the Group A row itself |
+| `smoke-vdso-read` | `smoke-vdso` | DDR-1005 |
+| **`smoke-maximize`** | **`smoke-wmmax`** | **here** |
+
+The last is new and is the §7b shape exactly. CLAUDE.md's Group E row read
+*"DDR-719 caps at 512×512; lift to real geometry"* as if unbuilt, and §5.3 said
+maximize *"shipped as DDR-1007 under a different gate name"* **without naming
+it**. The gate is `smoke-wmmax`, whose Makefile header says *"Layer-7 maximize
+gate (DDR-719, **retargeted by DDR-1007**)"* — and it does not merely check that a
+window grew: it asserts **`w > 512`**, that the target exceeds the old
+`SURFACE_DIM_MAX` cap, with the failure message *"DDR-1007 did not take effect"*.
+The cap the row describes is the exact thing the gate proves is gone. It also
+asserts the **client honoured** the size, so a compositor publishing a geometry
+nothing acts on fails. **Verified in the Makefile, not inferred from the DDR.**
+
+**Why this matters more than a typo:** a wrong gate name in a planning table is
+not cosmetic — it is a row that reads as *unbuilt work*, so the cost is building
+something twice, or "fixing" something already fixed. Five instances is a class,
+not a slip, and the reason it recurs is structural: **the name is written when the
+work is planned and the gate is named when the work lands**, and nothing has ever
+reconciled the two.
+
+**Total for the document sweep: six stale items**, of which `ci-docstate-check`
+catches one shape of one.
+
 **A gate inventory is mechanically checkable and is NOT checked here**, which is
 the largest single piece of the residual. `ci-shard-check` already knows every
 `smoke-*` target in the Makefile and every one in the shard manifest, so a check

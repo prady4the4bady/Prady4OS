@@ -905,7 +905,7 @@ Remaining: `smoke-readline`,
 narrower: init-driven fork+execve *respawn* of PRISM.
 
 **Group E — compositor (`smoke-alttab`, `smoke-perrestore`, `smoke-horizon`
-EXIST):** `smoke-maximize` is MISSING. **`smoke-sharedpte` is now BUILT — DDR-1065** (shard 4): it produced the artefact DDR-1003 §5.1 designed it for (`after=0xFFFFFFFFFFFFFFFF` — the counter wrapped from ONE fork) and DDR-1003 §5.2's fix landed with it. Maximize at real
+EXIST):** **`smoke-maximize` HAS NEVER EXISTED and is not a gap** — measured 2026-09-06. Maximize at real display size shipped as DDR-1007 and is gated by **`smoke-wmmax`**, whose Makefile header reads *"Layer-7 maximize gate (DDR-719, retargeted by DDR-1007)"* and which asserts `w > 512` — that the target **exceeds the old `SURFACE_DIM_MAX` cap** — with the failure message *"DDR-1007 did not take effect"*, plus a client-honoured arm. This section previously said maximize *"shipped as DDR-1007 under a different gate name"* **without naming it**, which left the reader to re-derive it; the name is now here. **`smoke-sharedpte` is now BUILT — DDR-1065** (shard 4): it produced the artefact DDR-1003 §5.1 designed it for (`after=0xFFFFFFFFFFFFFFFF` — the counter wrapped from ONE fork) and DDR-1003 §5.2's fix landed with it. Maximize at real
 display size shipped as DDR-1007 under a different gate name; `smoke-sharedpte`
 is DDR-1003 §5.1's unbuilt gate — see §4.5, and note the warning there that the
 obvious shape would pass vacuously.
