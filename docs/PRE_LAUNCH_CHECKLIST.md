@@ -1042,8 +1042,28 @@ to resume. **Scripting is what actually remains of that row.**
 **PRISM `run` was never disabled** — DDR-973 §7; what ADR-024 §D5 deferred is
 narrower: init-driven fork+execve *respawn* of PRISM.
 
-**Group E — compositor (`smoke-alttab`, `smoke-perrestore`, `smoke-horizon`
-EXIST):** **`smoke-maximize` HAS NEVER EXISTED and is not a gap** — measured
+**Group E — compositor. EVERY GATE IN THIS TABLE EXISTS AND IS CI-REGISTERED,
+and FIVE ROWS SAID OTHERWISE — DDR-1071**, measured 2026-09-06 against the
+Makefile *and* `tools/ci/gate_shards.txt` rather than inferred from any DDR.
+`smoke-modkeys` (shard 7, **strict**), `smoke-superkey` (shard 8, **strict**),
+`smoke-alttab` (shard 9), `smoke-perrestore` (shard 4) and `smoke-horizon`
+(shard 2) all ship, none is excluded, so all five run on **every** CI suite —
+while their backlog rows carried no completion marker at all. Four are complete
+against what their row asks; **`smoke-horizon` is HALF** — the bands are gated
+(and measure PIXELS, DDR-1012, because a sentinel-only check passes on a mutant
+that draws nothing) and the **animated mesh is still deferred**, so that row is
+corrected rather than closed. **The structural point (DDR-1071 §4):** a backlog
+row is updated by whichever session happens to touch it and is never swept, so a
+row whose work finished cleanly and drew no follow-up is exactly the one that
+stays stale — the §7b class is what this discipline produces by default, not a
+run of individual oversights. **A checker was assessed and deliberately NOT
+built (§5):** `smoke-horizon` is the counterexample in the same finding — a gate
+can exist and be registered while the row is legitimately half done, so the rule
+would redden on correct in-progress state, which is exactly what DDR-1063 said
+gets a check removed. **Group E now reads as: everything shipped and gated
+except the animated mesh and OPEN-1.**
+
+**`smoke-maximize` HAS NEVER EXISTED and is not a gap** — measured
 2026-09-06. Maximize at real display size shipped as DDR-1007 and is gated by
 **`smoke-wmmax`**, whose Makefile header reads *"Layer-7 maximize gate (DDR-719,
 retargeted by DDR-1007)"* and which asserts `w > 512` — that the target

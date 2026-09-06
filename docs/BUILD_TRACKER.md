@@ -3220,3 +3220,47 @@ rather than an oversight.
 **`SYS_NET_REVOKE` is a REFUSAL, not a gap** (DDR-1070 §6) — DDR-734's decision is
 in the source, and a revoke built before this fix would not have severed a live
 connection either.
+
+---
+
+## DDR-1071 — five Group E rows presented shipped, CI-registered work as remaining
+
+**Docs-only.** The DDR-1063 §7b class (a stale row showing built work as
+remaining) at a scale not previously seen: **five instances in one table.**
+
+Measured against `Makefile` **and** `tools/ci/gate_shards.txt` rather than
+inferred from any DDR — DDR-1007's discipline. **All twelve Group E gates
+exist**, and five sit on rows carrying no completion marker at all:
+`smoke-modkeys` (shard 7, **strict**), `smoke-superkey` (shard 8, **strict**),
+`smoke-alttab` (shard 9), `smoke-perrestore` (shard 4), `smoke-horizon`
+(shard 2).
+
+**Existence is not the claim — registration is.** None is excluded, so all five
+run on **every** CI suite. This is coverage the project has been getting on every
+run while its own backlog said the work was not done.
+
+Four are complete against their row's own wording. `smoke-modkeys` was read in
+full rather than trusted, because the assert-vs-exercise distinction is the whole
+of DDR-1070: it asserts `PRADYOS_MODKEYS_OK`, requires DDR-993's
+`PRADYOS_MODKEYS_PAIR_OK` kernel arm, and treats `MODKEYS FAIL` as fatal.
+
+**The fifth is half right and is corrected, not closed.** Its row names bands
+*and* animated mesh; the bands are gated (and measure pixels, DDR-1012) while the
+**mesh remains deferred**. Marking it done would be the mirror of the defect
+this DDR reports.
+
+**The structural point:** the rows that *were* corrected were each corrected by
+the session that happened to work on them. Correction is a side effect of
+adjacent work rather than a process — so a row whose work finished cleanly and
+drew no follow-up is exactly the row that stays stale. The §7b class is what
+this update discipline produces by default, not a run of individual oversights.
+
+**A checker was assessed and deliberately NOT built.** The mechanical rule would
+have caught all five, but `smoke-horizon` is the counterexample inside the same
+finding: a gate can exist and be registered while the row is legitimately half
+done, so the rule reddens on correct in-progress state — exactly the criterion
+DDR-1063 set when it built `ci-docstate-check`. The distinguishing signal would
+have to be semantic, and nothing in the tree can read prose.
+
+**Group E now reads as: everything shipped and gated except the animated mesh
+and OPEN-1.** The gate coverage did not change — only the record of it.

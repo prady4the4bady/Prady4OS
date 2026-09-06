@@ -11249,3 +11249,67 @@ suggest a TLS shim exists — `grep -rniE 'mbedtls|ssl_|tls_handshake|X509'` ove
 send→receive round trip is **already gated** (`lwip_port.c:304` → recv callback
 prints `PRADYOS_NET_LO_OK`, required by `smoke-net-lo`). Missing is only the
 **ring-3 door** — DDR-1033's SEND_IPC shape, not a missing subsystem.
+
+---
+
+## CHECKPOINT — DDR-1071: five Group E rows presented shipped work as remaining
+
+**Docs-only. No code change; `kernel.bin` untouched.**
+
+### 1. MEASURED
+
+Every Group E gate name, against `Makefile` **and** `tools/ci/gate_shards.txt`
+rather than inferred from any DDR (DDR-1007's rule). **All twelve exist.** Five
+sit on rows carrying **no completion marker at all**:
+
+| row | gate | Makefile | shard | tier |
+|---|---|---|---|---|
+| PS/2 modifier keys | `smoke-modkeys` | :3094 | 7 | **strict** |
+| Super+M physical binding | `smoke-superkey` | :3079 | 8 | **strict** |
+| Alt-Tab with modifier plumbing | `smoke-alttab` | :4083 | 9 | fast |
+| Per-window restore from dock | `smoke-perrestore` | :3420 | 4 | fast |
+| OKLab horizon bands / animated mesh | `smoke-horizon` | :3925 | 2 | fast |
+
+**Existence is not the claim — registration is.** None is excluded, so all five
+run on **every** CI suite. Coverage the project has had all along while its own
+backlog said the work was not done.
+
+### 2. FOUR COMPLETE, ONE HALF
+
+`smoke-modkeys` was **read in full rather than trusted**, because assert-vs-
+exercise is the whole of DDR-1070: `MODKEYS FAIL` fatal, `PRADYOS_MODKEYS_OK`
+required, `PRADYOS_MODKEYS_PAIR_OK` (DDR-993's kernel arm) required.
+`smoke-alttab` **exceeds** its row and its header records why one boot would be
+vacuous — the reasoning DDR-1027 arm E and DDR-1068 M1 each reached alone.
+
+**`smoke-horizon` is HALF and is CORRECTED, not closed:** bands gated (measuring
+PIXELS, DDR-1012), **animated mesh still deferred**. Closing it would be the
+mirror of the defect being reported.
+
+### 3. THE STRUCTURAL POINT
+
+The rows that *were* corrected were corrected by whichever session happened to
+work on them. **Correction is a side effect of adjacent work, never a sweep** —
+so a row whose work finished cleanly and drew no follow-up is exactly the row
+that stays stale. The §7b class is what this discipline produces by default.
+
+### 4. CHECKER ASSESSED, DELIBERATELY NOT BUILT
+
+The rule "registered gate ⇒ row must carry a marker" would have caught all five
+— and would **redden on `smoke-horizon`**, correct in-progress state. That is
+precisely the criterion DDR-1063 set when building `ci-docstate-check`. The
+distinguishing signal is semantic and nothing in the tree can read prose. The
+strict-tier-only variant is recorded as buildable but rests on a convention
+rather than a promise.
+
+### 5. NOT CLAIMED
+
+**The five gates were not re-run here** — measured that they exist, are
+registered, are not excluded, and (for `smoke-modkeys`) assert both ways; their
+green status comes from CI, not from this session. `smoke-horizon`'s row stays
+open for the mesh. **OPEN-1 untouched** and still the one genuinely open Group E
+item. No new gate (177), no checker.
+
+**Group E now reads as: everything shipped and gated except the animated mesh
+and OPEN-1** — a materially different picture from five open rows days from a
+deadline. The coverage did not change, only the record of it.
