@@ -255,6 +255,11 @@ here; the tracker rows themselves are superseded by this section.
 Residuals that were found by measurement during this work, stated rather than
 quietly carried. Each is bounded and none blocks user testing.
 
+**A row that later gets fixed is struck through and kept, not deleted** — the
+measurement that found it is the reason the fix exists, and deleting it would
+make the section read as if the residual had never been there. §4.5 is the first
+such row (fixed by DDR-1065).
+
 ### 4.1 — The AETHER action path does not yet call `SYS_IPC_SEND`
 
 DDR-1033 built the ring-3 door. It did **not** wire the AETHER executor to it.
@@ -286,14 +291,34 @@ not — and on this kernel the observer dies (`idt.c:703` goes straight to
 `sched_exit`; there is no SIGSEGV handler). **Recorded as an uncovered line, not
 claimed as tested.** A probe of this shape cannot cover it.
 
-### 4.5 — `ptnode_in_use` underflows on every fork
+### 4.5 — ~~`ptnode_in_use` underflows on every fork~~ — **FIXED, DDR-1065**
 
-DDR-1003: it counts `++` per **frame** but `--` per **mapping**, and
-`vmm_cow_fault` drops its old ref with `pmm_free_page` and no `--`. Read-only
-text pages are shared with no COW at all, so they can never rebalance. **Not
-fixed**: no gate reads it across a fork, so there is no artefact
-(§NON-NEGOTIABLE 3). DDR-1003 §5.1 says what a gate must do — **and warns that
-the obvious leak-gate shape is balanced and would pass.**
+**CLOSED 2026-09-06.** DDR-1003 recorded the mechanism (`++` per **frame**, `--`
+per **mapping**) and could not fix it, because §NON-NEGOTIABLE 3 forbids a fix
+with no artefact and **no gate read the counter across a fork**. DDR-1065
+produced the artefact and then applied DDR-1003 §5.2's own narrow fix.
+
+**The artefact:** `SHAREDPTE before=0 after=18446744073709551615` —
+`0xFFFFFFFFFFFFFFFF`, i.e. **−1, wrapped from ONE fork**, because
+`kheap_outstanding()` is legitimately 0 at that point in boot. (DDR-1065's own
+draft said the wrap was undemonstrated and would need ~2^64 forks; reading the
+output refuted that, and it is recorded as a correction rather than rewritten.)
+
+**§5.1's warning was heeded, not overtaken.** The ordinary leak-gate shape —
+fork, child writes, both exit — is balanced and passes on the broken kernel, so
+`smoke-sharedpte`'s child **exits without writing**: the probe differs from
+`cow_selftest` by exactly one line, the omitted `vmm_cow_fault`, and that
+omission is what makes the arm live. It uses the real fork path, per DDR-1014's
+rule that a proof which paraphrases the kernel tests the paraphrase.
+
+**Fix:** `pmm_free_pages` returns 1 = released / 0 = reference dropped;
+`ptnode_free` decrements only on a real release. `void`→`int` is
+source-compatible absent `warn_unused_result`, so all **132** call sites stand.
+DDR-1003 §5.2's *other* candidate is named and **refused** — having
+`vmm_cow_fault` call `ptnode_free` would decrement where nothing was released and
+merely move the imbalance. **No leak is fixed and none existed**: frames were
+always released correctly; the counter was wrong. Gate `smoke-sharedpte`
+(shard 4, strict).
 
 ### 4.6 — The compositor takes ~28 wall seconds to become ready
 
@@ -905,10 +930,21 @@ Remaining: `smoke-readline`,
 narrower: init-driven fork+execve *respawn* of PRISM.
 
 **Group E — compositor (`smoke-alttab`, `smoke-perrestore`, `smoke-horizon`
-EXIST):** **`smoke-maximize` HAS NEVER EXISTED and is not a gap** — measured 2026-09-06. Maximize at real display size shipped as DDR-1007 and is gated by **`smoke-wmmax`**, whose Makefile header reads *"Layer-7 maximize gate (DDR-719, retargeted by DDR-1007)"* and which asserts `w > 512` — that the target **exceeds the old `SURFACE_DIM_MAX` cap** — with the failure message *"DDR-1007 did not take effect"*, plus a client-honoured arm. This section previously said maximize *"shipped as DDR-1007 under a different gate name"* **without naming it**, which left the reader to re-derive it; the name is now here. **`smoke-sharedpte` is now BUILT — DDR-1065** (shard 4): it produced the artefact DDR-1003 §5.1 designed it for (`after=0xFFFFFFFFFFFFFFFF` — the counter wrapped from ONE fork) and DDR-1003 §5.2's fix landed with it. Maximize at real
-display size shipped as DDR-1007 under a different gate name; `smoke-sharedpte`
-is DDR-1003 §5.1's unbuilt gate — see §4.5, and note the warning there that the
-obvious shape would pass vacuously.
+EXIST):** **`smoke-maximize` HAS NEVER EXISTED and is not a gap** — measured
+2026-09-06. Maximize at real display size shipped as DDR-1007 and is gated by
+**`smoke-wmmax`**, whose Makefile header reads *"Layer-7 maximize gate (DDR-719,
+retargeted by DDR-1007)"* and which asserts `w > 512` — that the target
+**exceeds the old `SURFACE_DIM_MAX` cap** — with the failure message *"DDR-1007
+did not take effect"*, plus a client-honoured arm. This section previously said
+maximize *"shipped as DDR-1007 under a different gate name"* **without naming
+it**, which left the reader to re-derive it; the name is now here.
+**`smoke-sharedpte` is now BUILT — DDR-1065** (shard 4). It produced the artefact
+DDR-1003 §5.1 designed it for — `after=0xFFFFFFFFFFFFFFFF`, the counter wrapped
+from **one** fork — and DDR-1003 §5.2's fix landed with it. **§4.5's warning that
+the obvious gate shape would pass vacuously was heeded, not overtaken:** a gate
+that merely forks and checks a balanced counter passes on the broken kernel, so
+the probe deliberately **omits** the `vmm_cow_fault` that would rebalance it, and
+that omission is what makes the arm live.
 **Shipped since:** all-edge resize (DDR-997), `SURF_EV_CLOSE` (DDR-998),
 per-window dock restore (DDR-1008), horizon bands (DDR-1012), Ctrl+Alt+T
 terminal (DDR-1027). The **vDSO callable reader row was a false gap** — DDR-1005:
