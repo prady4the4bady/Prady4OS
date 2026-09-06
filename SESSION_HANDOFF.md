@@ -10909,3 +10909,91 @@ Queue is on item 3: `RUN_EXPERIMENT`-adjacent work and the Groups A–F backlog,
 working from checklist §5.3 as corrected by §7b/§7c.
 CI owes greens on `0f46cf7` / `67ab53d` / `f9c9ab0`; §INV.15 needs 3 on one tip.
 `v1.0.0` untagged, `main` promotion unstarted — operator decisions.
+
+---
+
+## CHECKPOINT 2026-09-06 (b) — DDR-1066
+
+`kernel.bin` **`dde6c5d10748842d`**, **1,286,538 B** / **286,326 B** headroom.
+Tip **`aade22e`** on `dev/phase1-seyp3n`. Gates **177** (no new gate). DDR free
+range **DDR-1067+**. Hygiene ALL SEVEN rc=0.
+
+### 1. The finding
+
+`smoke-aether`'s Makefile comment claims *"queue -> daemon -> agent -> approve ->
+**execute** -> done"*. **The agent did not execute.** On `AE_APPROVED`
+`user/agent_base.c` `printf`'d the path and the data and made **no filesystem
+call** — `grep` for `SYS_OPEN`/`SYS_WRITE` in that file returned **nothing**, in
+either branch, and `AETHER_TEST_MODE` defaults to 1 so the CI branch is the one
+that printed.
+
+**The data string IS the sentinel.** `data` is `"PRADYOS_AGENT_VERIFIED"`, one of
+the gate's four required patterns — so the end-to-end gate asserted on a
+`.rodata` literal and **could not fail for the reason it exists**. Dead-arm
+class, thirteenth-plus instance, and **the first found in the product** rather
+than in a gate or an instrument. DDR-1022 established `agent_base.c` is the
+**only** agent program, so "AETHER executes approved actions" rested entirely on
+this file.
+
+**Not blocked, never wired** (checked in the tree): `elf.c:320-321` gives the
+agent `CAP_FS_WRITE` and the FAT32 root; `fat32_write` is wired. **And the path
+would have failed anyway** — the volume's only directory is `::/DOCS`, so there
+is no `/tmp`.
+
+### 2. Fix and proof
+
+Open/write/close, then **reopen without `O_CREAT`** and read back, printing the
+marker **from the read-back buffer**. The missing `O_CREAT` is load-bearing:
+`-ENOENT` on an absent file means a build that skipped the write cannot reach the
+print. **The existing sentinel becomes live with no edit to that arm.**
+
+**M1 and M2 do the same filesystem work — none — and that is the whole argument:**
+M1 (no write, print from the buffer, `248afcf994645ab5`) **FAILS** rc=2 with
+`AETHER_AGENT_EXEC_FAIL step=open_r rc=-2`; M2 (no write, print the **literal** —
+the pre-fix behaviour, `46aaf0304f395b6f`) **PASSES**. Baseline
+`a9d8bc933595ec0d` is M2's independent confirmation, green. Revert returns
+`dde6c5d10748842d` bit-for-bit.
+
+**M2 corrected this DDR's own design claim:** `PRADYOS_AGENT_EXEC_OK
+n=/first=/last=` does **not** convict — an agent holding the data computes all
+three without a filesystem. What convicts is the `-ENOENT` it cannot manufacture.
+
+### 3. An artefact recorded, not attributed — checklist §2 has the new row
+
+Regression 10 of 11 green, hash-verified before and after.
+**`smoke-blk-integrity` rc=2 with EVERY detector silent** — no `[apfreeze]`, no
+`panic_stage=`, no `gs FAIL`, no panic, no `resched FAIL`, no `compl wait
+timeout` — output ending **mid-line** at `[svc] exit`.
+
+**It is a STOP, not a slowdown, and that was measured** against a passing capture
+of the same gate on the same binary: both reach `PRISM.ELF` at essentially the
+same tick (**t=361 pass / t=386 red**); the pass then advances to **t=28,627**
+and the red produces **no further tick stamp at all**.
+
+**A timing reading was formed and discarded before being written down:** a
+*passing* run consumes 180 s of its 180 s window, which looks like zero margin —
+but this gate declares a `FORBIDDEN_SENTINEL`, so per DDR-1043 it is never
+early-exit eligible and **always runs the full window by design**.
+
+**Not OPEN-2** (DDR-1010's local reproduction on this same gate carried `gs
+FAIL`, absent here) and **not OPEN-1 route 1** (that is `smoke-surfdestroy`) —
+matching a *shape* is not the same defect (DDR-1019). Single permitted re-run:
+**green**. **Not exonerated either** — this change adds a FAT32 write to every
+boot, and "the diff is elsewhere" is not an argument (DDR-1042). One occurrence
+is not a rate; no campaign is run to make one. **No fix** (§NON-NEGOTIABLE 3).
+
+### 4. NOT CLAIMED
+
+`ACTION_SEND_IPC` is **still** unwired — checklist §4.1 corrected, not closed; it
+was right about SEND_IPC and far too narrow about the cause. **No kernel defect is
+fixed**: the policy engine, the capability check and the FAT32 writer were all
+correct. **No open issue moves.** The live (Ollama) branch is unchanged and
+unexercised. The agent executes the **one** action type it submits; dispatching
+the template on type is a larger change, not attempted.
+
+### 5. NEXT
+
+Queue item 3 continues (Groups A–F from the corrected checklist §5.3). OPEN-2
+stays untouched until an artefact appears (DDR-1062 §7). CI owes greens on
+`f9c9ab0` / `bea0d04` / `6cfbd8b` / `aade22e`; §INV.15 needs 3 on one tip.
+`v1.0.0` untagged, `main` promotion unstarted — operator decisions.
