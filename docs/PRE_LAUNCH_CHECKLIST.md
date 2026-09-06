@@ -828,15 +828,32 @@ was already gated by DDR-842). Shipped: `READ_FILE`, `DELETE_FILE`,
 
 ### 5.3 — Unbuilt backlog by group
 
-Measured 2026-09-01 by grepping the Makefile for each named target, because
-declaring something unbuilt without grepping has been wrong four times in this
-project. **MISSING = no such target exists.** Every row here is post-1.0 work,
-none blocks user testing, and none requires an operator decision.
+**RE-MEASURED 2026-09-05 at `c8b041b`** by grepping the Makefile for each named
+target, because declaring something unbuilt without grepping has been wrong four
+times in this project — and the 2026-09-01 measurement below had itself gone
+stale in four places, which is the DDR-1063 §7b pattern a fifth time. **MISSING =
+no such target exists.** Every row here is post-1.0 work, none blocks user
+testing, and none requires an operator decision.
 
-**Group A — kernel completeness (all MISSING):** `smoke-ioapic` (I/O APIC
-migration, DDR-714 stage D), `smoke-smep` (SMEP/SMAP `CLAC`/`STAC`), `smoke-wx`
-(kernel W^X identity-alias removal, DDR-757 residual), `smoke-mc` (`#MC`
-handler), `smoke-kaslr`, `smoke-lockstat`, `smoke-schedtimeout`.
+**Group A — kernel completeness. FOUR OF THE SEVEN CLAIMS BELOW WERE WRONG:**
+
+| target | measured | note |
+|---|---|---|
+| `smoke-smep` | **EXISTS** | DDR-1040, shard 5. Pins its own `-cpu qemu64,+smep` because the TCG default reports `smep=false`, so a CPUID-guarded implementation would have been a permanent no-op on the CPU every gate runs on |
+| `smoke-smap` | **EXISTS** | DDR-1041, shard 0 — **was not even listed here**; the old row folded SMAP into `smoke-smep` |
+| `smoke-mce` | **EXISTS** | DDR-1044, shard 4. The old row named it **`smoke-mc`**, which has never existed |
+| `smoke-wxkernel` | **EXISTS** | the real kernel-W^X gate; the old row named **`smoke-wx`**, which has never existed (DDR-1040 found the same wrong name in CLAUDE.md's Group A row). The DDR-757 residual it refers to is FIXED — DDR-1046 |
+| `smoke-ioapic` | MISSING | **assessed and deferred with the blocker named** — DDR-1050: no ACPI `_PRT` parser, so PCI INTx fallbacks cannot be routed |
+| `smoke-kaslr` | MISSING | **assessed and deferred** — DDR-1051, a sequencing judgment, not a blocker |
+| `smoke-lockstat` | MISSING | **deliberately not built** — DDR-1047/DDR-1060: the dump prints only on `[apfreeze]`, which is in `GLOBAL_FORBIDDEN`, so any assertion on it is unreachable-passing on a green run. **Do not create it** |
+| `smoke-schedtimeout` | MISSING | the primitive is **already built** (DDR-955 `sched_block_timeout()`); its four call sites are covered by their own gates |
+
+**Also new since the 2026-09-01 measurement and absent above:** `smoke-shake`
+(DDR-1052, Keccak/SHA-3/SHAKE, shard 6) and `smoke-mldsa` (DDR-1054/1057/1058,
+ML-DSA-44 keyGen + sign + verify, shard 0) both **EXIST** — the post-quantum
+primitive set §PHASE 3 makes mandatory v1 scope. And `smoke-sfs-btree-smp4`
+**EXISTS and is now registered** (DDR-1061, shard 5), so it has left the
+exclusion list (§5.4).
 
 > **Two Group A rows are ALREADY BUILT and must not be rebuilt.** The
 > demand-paged user stack is **ADR-038** (`vmm_stack_fault`, `vmm_cow.c:144`;
@@ -867,8 +884,16 @@ POSIX says a regular file never blocks.
 epoll/select), `smoke-udp`, `smoke-netrevoke` (`SYS_NET_REVOKE` / CAP_NET policy
 reload), `smoke-tap`, `smoke-ipv6`, `smoke-tls`.
 
-**Group D — userspace (all MISSING except as noted):** `smoke-readline`,
-`smoke-pipes`, `smoke-poll`, `smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
+**Group D — userspace (all MISSING except as noted).** `smoke-poll` was listed
+here as MISSING while the DDR-1037 paragraph immediately above said it EXISTS —
+**an internal contradiction inside this one section, now measured: it EXISTS**
+and is removed from the list. `smoke-readline` is MISSING **and should stay
+that way** (DDR-1039: the erase arm belongs on `smoke-shell`, where PRISM's line
+handling already runs; a separate gate would boot an OS to type one word).
+`smoke-futex` is MISSING with its blocker named (DDR-1038: a futex is a
+shared-memory word and this kernel has no way for two threads to share one).
+Remaining: `smoke-readline`,
+`smoke-pipes`, `smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
 (6-arg `mmap` ABI), `smoke-mmap-file`, `smoke-dynlink`, `smoke-iouring`,
 `smoke-sigaction`, `smoke-prism-ls`, `smoke-jobctl`.
 **Shipped since the backlog was written:** `SYS_MPROTECT` (DDR-1031,

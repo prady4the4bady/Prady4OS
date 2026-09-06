@@ -2646,8 +2646,16 @@ the top open defect), **DDR-1056 absent entirely** (it *fixed* the
 claiming the ghost-window repair was "named, not built"** when it is built and
 gated — `mouse_inject.sh:131` consumes `PRADYOS_WM_GONE` and refuses the click,
 `smoke-ghostclick` gates it, checked in the tree rather than assumed from the DDR
-text. All three corrected. **Four stale items in one sweep of one document, and
-the new check catches one shape of one of them** — recorded so the residual's
+text. **AND FOURTH: §5.3's gate inventory was wrong on four of its seven Group A
+claims** -- in the section that opens by saying it was measured by grepping the
+Makefile. Re-measured at `c8b041b`: `smoke-smep` and `smoke-smap` EXIST (DDR-1040/1041,
+the latter not even listed), `smoke-mce` EXISTS under a name the row got wrong
+(`smoke-mc` never existed), `smoke-wx` never existed either (the real gate is
+`smoke-wxkernel` -- the same wrong name DDR-1040 found in CLAUDE.md), two whole
+gates were absent (`smoke-shake`, `smoke-mldsa`), and Group D listed `smoke-poll`
+as MISSING three paragraphs after saying it EXISTS. All four corrected. **Five
+stale items in one sweep of one document, and the new check catches one shape of
+one of them** — recorded so the residual's
 size is visible rather than implied.
 
 **NOT CLAIMED:** the documented numbers are not thereby *correct* — a stale but

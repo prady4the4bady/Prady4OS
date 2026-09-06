@@ -226,7 +226,7 @@ destroy the record. The check's scope is the two **live-state** tables, and the
 distinction between a live table and a historical log is the whole reason the
 scope is a list of two files rather than a repo-wide sweep.
 
-## 7b. THREE MORE STALE ENTRIES IN THE SAME DOCUMENT — the thesis, confirmed
+## 7b. FOUR MORE STALE ENTRIES IN THE SAME DOCUMENT — the thesis, confirmed
 
 Sweeping `docs/PRE_LAUNCH_CHECKLIST.md` for the *same class* of defect (an entry
 not updated when the work it describes landed) found **three more**, in the
@@ -246,13 +246,38 @@ change to what it records."*
    `[inject] target gone title=… — not clicking`; `smoke-ghostclick` gates it.
    **Checked in the tree, not assumed from the DDR text.**
 
-All three are corrected. This is the same failure mode as §1 with a different
-quantity: a live-state document is only as good as the discipline that updates
+4. **§5.3's gate inventory was wrong on four of its seven Group A claims** — and
+   §5.3 is the section that *opens* by saying it was measured by grepping the
+   Makefile "because declaring something unbuilt without grepping has been wrong
+   four times in this project." Re-measured at `c8b041b`: `smoke-smep` **EXISTS**
+   (DDR-1040), `smoke-smap` **EXISTS** and was not even listed, `smoke-mce`
+   **EXISTS** under a name the row got wrong (`smoke-mc` has never existed), and
+   `smoke-wx` — the fourth name — **has never existed either**; the real gate is
+   `smoke-wxkernel`, the same wrong name DDR-1040 had already found in
+   CLAUDE.md's own Group A row. Two whole gates were missing from the section
+   (`smoke-shake`, `smoke-mldsa` — the post-quantum set §PHASE 3 makes mandatory
+   v1 scope), and **Group D contradicted itself inside one section**, listing
+   `smoke-poll` as MISSING three paragraphs after saying it EXISTS.
+
+All four are corrected. This is the same failure mode as §1 with different
+quantities: a live-state document is only as good as the discipline that updates
 it, and **nothing mechanical was checking any of it.** `ci-docstate-check` closes
 exactly one of these — the size/headroom pair — and §8 says plainly that it does
 not close the rest. Recorded here so the size of the residual is visible rather
-than implied: **four stale items were found in one sweep of one document**, and
+than implied: **five stale items were found in one sweep of one document**, and
 the check catches one shape of one of them.
+
+**A gate inventory is mechanically checkable and is NOT checked here**, which is
+the largest single piece of the residual. `ci-shard-check` already knows every
+`smoke-*` target in the Makefile and every one in the shard manifest, so a check
+that a *document's* claimed EXISTS/MISSING inventory matches the Makefile is
+buildable on machinery that already exists. It is not built in this change
+because the prose form is free (each claim is a bare target name in running
+text, not a table this session should reshape days from a release), and building
+it means first choosing a machine-readable form for those claims — a real design
+decision, not a line of code. **Named as buildable-and-not-built rather than
+left implicit**, so the next session inherits the option instead of re-deriving
+the gap.
 
 ## 8. NOT CLAIMED
 
