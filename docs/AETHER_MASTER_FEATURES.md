@@ -381,6 +381,33 @@ All entries below are **shipped**.
   **NOT CLAIMED:** OPEN-2 is not closed and no mechanism is named; a rate under
   6.9% is still a rate, and these are 42 suites over 19 SHAs, not 42 binaries.
 
+- **The rq-3 discriminator had the race it was built to settle (DDR-1064)** —
+  DDR-1030 added `idle2=` so a `resched FAIL` could separate a sampling artefact
+  from a real missed kick, and its §5 table read `idle=1 idle2=1` as "a scheduler
+  defect". **It does not establish that.** `idle_after` is sampled *after*
+  `sched_unblock` returns and `o->idle` is live, so a CPU can **enter** idle
+  between the kernel's kick loop and that sample: DDR-1030 closed DDR-1004's
+  window (a CPU *leaves* idle before the call) and **opened its mirror image**.
+  DDR-1030 also **contradicted itself** — its §6 says the opposite of its §5,
+  having generalised from a forced mutant that ran with `ipis=1`. The §5 reading
+  had been copied into three documents. **First real occurrence:** CI
+  34003737145, shard 4, `smoke-smppreempt`, `e9ed2c9` — a **docs-only** commit
+  with `kernel.bin: OK`, so a bit-identical binary, and `ran=1` says the property
+  under test held. Consistent with a correct kernel. **FIX:** `sched_unblock`
+  records what its own loop saw at the instant it ran — `kidle=` and `kkick=` —
+  **on the TCB, not in a global**, because it runs from MSI-X interrupt context
+  and another CPU's unblock would clobber a global between the proof's call and
+  its read; both fields get explicit initialisers in `sched_create`
+  (§NON-NEGOTIABLE 10). This applies DDR-1014's own rule one level down: it made
+  the two loops ask the same *question*, this makes them ask it at the same
+  *instant*. M1 forced-proof (`4786243a1f71a021`) printed
+  `ipis=1 ran=1 idle=1 idle2=1 kidle=1 kkick=1`; revert returns
+  `d19cd33755330510` bit-for-bit. **NOT CLAIMED:** no scheduler defect is named
+  or fixed; the verdict is deliberately unchanged (collapsing it to SKIP would
+  delete DDR-1014's coverage); no rate is measured; and the new fields are proven
+  **wired**, not proven on a genuinely failing path — the DDR-1060 limit,
+  recorded rather than glossed.
+
 - **Live-state documentation consistency gated (DDR-1063)** — `CLAUDE.md`
   §CURRENT BUILD STATE stated `kernel.bin`'s **post**-quantum size beside the
   **pre**-quantum headroom: the size was updated as ML-DSA landed and the

@@ -150,6 +150,17 @@ struct tcb {
     uint64_t   dbg_vruntime;    /* what vruntime WOULD be, if it were used     */
     uint64_t   dbg_v_at_create; /* floor at creation — H2's signature          */
     uint64_t   dbg_v_at_wake;   /* floor at last unblock — H2's signature      */
+    /* DDR-1064. What sched_unblock's OWN kick loop saw, AT THE INSTANT IT RAN.
+     * The rq-3 proof previously re-derived this from outside the call, which is
+     * racy in BOTH directions: a CPU can leave idle before the call (DDR-1004's
+     * race) or enter idle after it returns (DDR-1030's own, unnamed until now),
+     * so neither `idle=` nor `idle2=` can establish that a kick was owed.
+     * Recorded per-THREAD and not in a global, because sched_unblock runs from
+     * MSI-X interrupt context on the virtio-blk completion path (DDR-1014), so
+     * another CPU's unblock would clobber a global between the proof's call and
+     * its read. §NON-NEGOTIABLE 10: both are initialised in sched_create. */
+    uint8_t    dbg_ub_saw_idle; /* an idle non-self CPU was visible to the loop */
+    uint8_t    dbg_ub_kicked;   /* smp_resched_one actually DELIVERED a kick    */
     uint32_t   dbg_picks;       /* times chosen by the real (FIFO) picker      */
     uint32_t   dbg_ticks;       /* ticks charged while running                 */
     uint32_t   weight;

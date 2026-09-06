@@ -1848,6 +1848,11 @@ DDR-1014's coverage; DDR-1012 and DDR-973 each had to undo that trade.
 Built: a **second idleness sample** after `sched_unblock`, identical question,
 identical CPU (`self_idx` hoisted so the loops cannot drift). `idle=1 idle2=0` =
 sampling artefact; `idle=1 idle2=1` = the kick was owed and missing.
+**CORRECTED 2026-09-06 — DDR-1064: that second reading is WRONG.** `idle_after`
+is sampled after `sched_unblock` returns and `o->idle` is live, so a CPU can
+ENTER idle between the kernel's kick loop and the sample; DDR-1030 closed
+DDR-1004's window and opened its mirror image. Read `kidle=`/`kkick=` instead —
+recorded by `sched_unblock`'s own loop, at the instant it ran, on the TCB.
 Mutation-proven by forcing the FAIL branch (kernel `234adcfec677a702`):
 `ipis=1 ran=1 idle=1 idle2=1`.
 
@@ -2666,3 +2671,83 @@ NSI max and the DDR free range are equally derivable and are not checked, becaus
 each needs a different oracle. And the 102,400 B error's downstream effect was not
 measured — DDR-1058 used the right figure, so the claim is that a wrong number sat
 in the trusted file, not that it caused harm.
+
+---
+
+## DDR-1064 — the rq-3 discriminator had the same race it was built to settle
+
+**Status:** FINDING recorded + DDR-1030 CORRECTED (it contradicted itself) +
+instrument FIXED + M1 forced-proof. **No scheduler defect is named or fixed.**
+`kernel.bin` `c33afa79f60abdcb` → **`d19cd33755330510`**, still 1,278,346 B.
+
+**Trigger.** CI 34003737145, shard 4, `smoke-smppreempt`, tip `e9ed2c9`:
+`[smp] resched FAIL ipis=0 ran=1 idle=1 idle2=1` — **the first real `idle2=`
+reading ever produced**; every prior appearance in the repo is DDR-1030's design
+text or its forced mutant. `e9ed2c9` changes three `.md` files and nothing else,
+and the shard's own post-gate assertion printed `kernel.bin: OK`, so the binary
+is bit-identical to the green tip and the failure cannot be that commit's.
+`ran=1` says **the property under test HELD**.
+
+**DDR-1030 contradicted itself.** §5's table: `idle=1 idle2=1` = "a scheduler
+defect". §6, four paragraphs later: "`idle2=1` on a healthy boot is the expected
+reading, which is what makes `idle2=0` informative." §6 generalised from its own
+forced mutant, which ran with `ipis=1` — a *delivered* kick — whereas the FAIL
+branch's precondition is `ipis=0`.
+
+**And §5 is wrong too — the finding.** The kernel kicks from **inside**
+`sched_unblock` (`sched.c:1837`); the proof samples `idle_after` **after that
+call returns** (`main.c:1031`), and `o->idle` is live. So a CPU can **enter**
+idle between the kernel's loop and the sample: no kick was owed when the kernel
+looked, and a correct system still prints `idle2=1`. DDR-1030 closed DDR-1004's
+window (a CPU *leaves* idle before the call) and **opened its mirror image**.
+The instrument has the same class of race it was built to settle — the
+DDR-1046 / DDR-1060 shape a third time, a control that cannot see the case it
+exists for. **This capture is consistent with a correct kernel.**
+
+**The wrong reading had been copied into three documents** (`BUILD_TRACKER.md`,
+`PRE_LAUNCH_CHECKLIST.md` ×2). All corrected. A wrong reading in three places is
+how the next session convicts the scheduler on this capture with
+§NON-NEGOTIABLE 3 *satisfied on paper* and the mechanism never named.
+
+**Fix — ask the kernel, do not paraphrase it.** DDR-1014 already wrote the rule
+("the two loops must ask the same question or the proof is testing a paraphrase")
+and applied it to the **predicate**; the **instant** still did not match, and the
+proof cannot fix that from outside because every sample it takes is at the wrong
+time by construction. `sched_unblock` now records what its own loop saw, at the
+only instant that matters: `dbg_ub_saw_idle` (an idle non-self CPU was visible)
+and `dbg_ub_kicked` (`smp_resched_one` actually delivered). **On the TCB, not in
+a global** — `sched_unblock` runs from MSI-X interrupt context on the virtio-blk
+completion path (DDR-1014), so another CPU's unblock would clobber a global
+between the proof's call and its read. **§NON-NEGOTIABLE 10:** both fields get
+explicit initialisers in `sched_create`. **Cost:** two plain stores in the
+CAS-succeeded slow path, never the fast path, no `rdtsc` — deliberately not the
+cost DDR-1047 refused, which could have *moved* OPEN-2.
+
+`saw_idle` mirrors the **kernel's** predicate, not the proof's: the proof carries
+`!o->is_bsp` because `smp_resched_one` declines the BSP, and paraphrasing that
+here would reintroduce the drift DDR-1014 removed. A BSP-only-idle boot therefore
+reads `kidle=1 kkick=0` and is **correct**, which the proof's predicate cannot
+express at all.
+
+**Reading the line from now on:** `kidle=1 kkick=0` is the **only** reading that
+convicts; `kidle=0` exonerates whatever `idle=`/`idle2=` say; `kidle=1 kkick=1`
+with `ipis=0` would mean the counter, not the kick, is the defect.
+
+**M1 forced-proof** (`else if (0 && …)`, DDR-1030's own construction, kernel
+`4786243a1f71a021`): `[smp] resched FAIL ipis=1 ran=1 idle=1 idle2=1 kidle=1
+kkick=1` — the fields are wired, and on a healthy boot they agree with reality
+and say a kick *was* delivered. Reverting returns `d19cd33755330510`
+**bit-for-bit**.
+
+**The verdict is deliberately unchanged.** `resched FAIL` keeps its meaning and
+stays in `GLOBAL_FORBIDDEN`. Collapsing this to SKIP would green the gate and
+delete the coverage DDR-1014 built — the trade DDR-1012 and DDR-973 each had to
+undo, and DDR-1030 §3 refused once already.
+
+**NOT CLAIMED:** no scheduler defect is named or fixed; OPEN-1/2/12/13 untouched.
+The gate is not made deterministic — the FAIL can still fire on a correct system
+until the non-racy field replaces the racy one in the *verdict*, which this does
+not do, because changing a verdict on one capture is how coverage gets deleted.
+No rate is measured. And the new fields are proven **wired**, **not** proven on a
+genuinely failing path — the same limit DDR-1060 recorded about DDR-1047's M1,
+because no genuine missed kick can be manufactured locally.

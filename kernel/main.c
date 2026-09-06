@@ -1081,6 +1081,26 @@ static void smpresched_proof(void) {
         kputdec((uint64_t)idle_seen);
         kputs(" idle2=");                 /* DDR-1030: ...and was it STILL owed? */
         kputdec((uint64_t)idle_after);
+        /* DDR-1064. idle= and idle2= are BOTH racy and in opposite directions:
+         * a CPU can leave idle before sched_unblock (DDR-1004) or enter idle
+         * after it returns (DDR-1030's own race, unnamed until DDR-1064), so
+         * neither establishes that a kick was owed. These two are recorded by
+         * sched_unblock's OWN loop at the instant it ran, so they are not racy
+         * at all -- READ THESE, not idle=/idle2=, when diagnosing this line.
+         *   kidle=1 kkick=0 -> the kernel saw an idle CPU and delivered nothing:
+         *                      the only reading that convicts the scheduler.
+         *   kidle=0         -> no idle CPU was visible to the kernel; no kick
+         *                      was owed and the FAIL is a sampling artefact,
+         *                      whatever idle=/idle2= happen to say.
+         *   kidle=1 kkick=1 -> a kick WAS delivered; ipis= disagreeing then
+         *                      means the counter, not the kick, is the defect.
+         * The verdict deliberately still uses the old terms (DDR-1064 §6):
+         * changing a gate's verdict on one capture is how coverage gets deleted
+         * (DDR-1012, DDR-973, and DDR-1030 §3 refusing this once already). */
+        kputs(" kidle=");
+        kputdec((uint64_t)(g_rp_thread ? g_rp_thread->dbg_ub_saw_idle : 0));
+        kputs(" kkick=");
+        kputdec((uint64_t)(g_rp_thread ? g_rp_thread->dbg_ub_kicked : 0));
         kputs("\r\n");
     }
 }

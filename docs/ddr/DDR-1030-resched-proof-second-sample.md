@@ -71,7 +71,33 @@ The next occurrence is then self-diagnosing:
 | reading | meaning |
 |---|---|
 | `idle=1 idle2=0` | the precondition evaporated — the FAIL is the sampling artefact §3 describes |
-| `idle=1 idle2=1` | an AP was idle at both instants and no IPI was delivered — the kick really was owed and really was missing, a scheduler defect |
+| `idle=1 idle2=1` | an AP was idle at both instants and no IPI was delivered | 
+
+> ## CORRECTED 2026-09-06 — DDR-1064. BOTH ROWS ABOVE OVERSTATE, AND §6 BELOW
+> ## CONTRADICTS THEM.
+>
+> The `idle=1 idle2=1` row read *"the kick really was owed and really was
+> missing, a scheduler defect"*. **It does not establish that.** `idle_after` is
+> sampled AFTER `sched_unblock` returns, and `o->idle` is live, so a CPU can
+> **enter** idle between the kernel's kick loop and this sample — no kick was
+> owed when the kernel looked, and a correct system still prints `idle2=1`.
+> This DDR closed DDR-1004's window (a CPU *leaves* idle before the call) and
+> opened its mirror image. The instrument has the same class of race it was
+> built to settle.
+>
+> §6 below is wrong in the OPPOSITE direction: it says `idle2=1` is the expected
+> healthy reading and `idle2=0` is what is informative. It generalised from its
+> own forced mutant, which ran with `ipis=1` — a *delivered* kick — whereas the
+> FAIL branch's precondition is `ipis=0`.
+>
+> **Read `kidle=` / `kkick=` instead** (DDR-1064): `sched_unblock` now records
+> what its OWN loop saw at the instant it ran, on the TCB, so neither race
+> applies. `kidle=1 kkick=0` is the only reading that convicts.
+>
+> First real occurrence: CI 34003737145, shard 4, `smoke-smppreempt`, `e9ed2c9`
+> — `ipis=0 ran=1 idle=1 idle2=1`, on a docs-only commit with `kernel.bin: OK`.
+> Under this DDR's §5 that read as a scheduler defect. It is **not** evidence of
+> one.
 
 ## 6. Mutation check
 
