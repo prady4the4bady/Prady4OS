@@ -1142,6 +1142,38 @@ FAT32 multi-cluster defect was **refuted and gated** (DDR-973). A blocker
 presented as live is a different staleness from work presented as remaining —
 the first can suppress work that is actually unblocked.
 
+**Group B — the DDR-885 remote-steal coverage gap is CLOSED — DDR-1078, and
+DDR-1073 §2's reasoning was wrong in both halves.** That entry named the gap and
+**declined to build a gate**, judging it unbuildable; the conclusion (no
+coverage) was right, and the second half was wrong in the expensive direction —
+it declared the gap unbuildable, so nobody looked again.
+- **Those gates are not single-CPU.** `boot_test.sh`'s `QEMU_NUMA` block
+  **carries its own `-smp 2`** (:286); line 215 was read and the answer was
+  seventy lines further down the same file (`[apic] up id=0 cpus=2`).
+- **The real mechanism is one QEMU clause.** With `cpus=` omitted, QEMU 8.2 emits
+  **no SRAT Local APIC Affinity entry**, so `g_topo.cpu_node[]` stays `0xFF` and
+  `numa_node_of_cpu` returns its `0` default — two memory nodes, **one CPU
+  node**. Measured on two boots differing only in the `-numa` lines: shipped
+  `steal local=148 remote=0`; with `cpus=0`/`cpus=1` `local=0 remote=167`. **The
+  kernel is not implicated** — the memory topology was always parsed and the
+  type-0 parse is correct; it never ran.
+- **The vacuity trap is defeated by the topology, not by an API.** One CPU per
+  node leaves exactly one possible victim and it is always remote, so `local=0`
+  is **structurally required** and `remote > 0` says the second pass ran *and
+  succeeded*. Adding CPUs would weaken it.
+- **`smoke-numa-steal`** (shard 7, strict, 180 s). Its `FORBIDDEN_SENTINEL` is
+  deliberate here and deliberately absent from `smoke-numa`, whose sentinels land
+  at line ~75 and which keeps its rejection inside the required line to preserve
+  the DDR-785 early exit; this one's lands at ~364 of ~400.
+- **M2 is the finding.** M1 (the literal pre-fix topology) hits the required arm;
+  **M2 (delete the remote pass) hits the GLOBAL `cross-CPU FAIL` sentinel, not
+  this gate's arms** — on this topology the remote pass is the only steal path,
+  so it proves the pass is load-bearing and nothing about the gate; **M3 (pass
+  works, counter not incremented) hits the forbidden arm** and is the hole it
+  exists for. **No kernel change**; revert returns `kernel.bin` bit-for-bit.
+  **No defect is fixed and none is named** — DDR-885's order was always correct;
+  what was missing is a test that could tell if it stopped working.
+
 **Group G — assembly optimization: AUDITED, DDR-1075, and the rows were stale
 about what can be PROVED rather than about what is built.** Six rows, not seven
 (no seventh item exists in the tree). Corrections, each measured:

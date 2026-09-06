@@ -424,7 +424,14 @@ B#13 dynamic linker ⬜ · B#14 NAS scheduler ⬜ · B#15 PMM policy ⬜
 ### TASK 18–21
 
 18 `prad` package manager (NSI 87–89 — **renumber, 87 is taken by
-`SYS_READ_AUDIT`; use 88–90**) ⬜ · 19 Phase 9 assembly — **AUDITED DDR-1075; its one buildable row BUILT DDR-1076
+`SYS_READ_AUDIT`; use 88–90**) ⬜ · **NUMA remote-steal coverage CLOSED —
+DDR-1078** (`smoke-numa-steal`, shard 7 strict): DDR-885's remote pass had never
+once executed, because `boot_test.sh`'s `-numa` lines carried no `cpus=` clause,
+QEMU 8.2 therefore emitted no SRAT CPU affinity, and every CPU read as node 0 —
+not the "single-CPU" cause DDR-1073 §2 recorded, since that block carries its own
+`-smp 2`. One CPU per node makes the arm two-sided without an API to pin work:
+`local=0` becomes structurally required and `remote > 0` the positive half.
+M1/M2/M3 land in three different places; no kernel change · 19 Phase 9 assembly — **AUDITED DDR-1075; its one buildable row BUILT DDR-1076
 (`fast_memset`: ERMS `rep stosb` sharing DDR-871's probe, gated on `smoke-bench`,
 M1/M2 on distinct hashes — and DDR-1075 §4.4's trap corrected, `rep stosb` being
 architectural so the dispatch default is a speed property not a correctness one); 9.5's mechanism is already

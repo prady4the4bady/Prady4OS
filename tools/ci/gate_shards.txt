@@ -132,6 +132,7 @@
 5	smoke-sfs-gc	90	strict
 5	smoke-sha512	90	strict
 5	smoke-numa-alloc	90	strict
+7	smoke-numa-steal	180	strict
 5	smoke-nvme	60	strict
 5	smoke-poweroff	30	strict
 5	smoke-user	28	strict

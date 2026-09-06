@@ -1298,3 +1298,77 @@ direction; `kernel.bin` **untouched** and **177 gates unchanged**, so the
 size/headroom pair is unaffected; no open issue moves (OPEN-1/2/12/13
 untouched); and the `pthread`/`CLONE_VM` row is **not unblocked** — it now
 merely has something that will notice.
+
+---
+
+## The NUMA remote-steal arm had never executed — DDR-1078 (2026-09-06)
+
+**DDR-1073 §2 named this coverage gap and declined to build a gate**, judging it
+unbuildable. The conclusion (no coverage) was right; **both halves of the
+reasoning were wrong**, and the second in the expensive direction — it declared
+the gap unbuildable, so nobody looked again.
+
+**Fact one: those gates are not single-CPU.** `boot_test.sh`'s `QEMU_NUMA` block
+**carries its own `-smp 2`** (:286). DDR-1073 read line 215 and stopped; the
+answer was seventy lines further down the same file. The capture says
+`[apic] up id=0 cpus=2`.
+
+**Fact two — the real mechanism is one QEMU clause.** Two boots differing only
+in the `-numa` lines, each waiting for the steal print:
+
+| `-numa` form | measured |
+|---|---|
+| `-numa node,nodeid=0,memdev=nram0` (shipped) | `[sched] steal local=148 remote=0` |
+| `…,cpus=0` / `…,cpus=1` | `[sched] steal local=0 remote=167` |
+
+With `cpus=` omitted, **QEMU 8.2 emits no SRAT Local APIC Affinity entry**, so
+`g_topo.cpu_node[]` stays `0xFF` for every CPU and `numa_node_of_cpu` returns its
+`0` default — **two memory nodes and one CPU node**. `steal_pass(self, 0,
+same=1)` then matches every victim and the remote pass is unreachable:
+unreachable exactly as DDR-1073 said, **for a different reason** — not "one CPU"
+but "one node, because the firmware never said otherwise".
+
+**The kernel is not implicated anywhere.** `[numa] nodes=2 ranges=3 rejected=0`
+is correct in both boots — the *memory* topology was always parsed. The SRAT
+type-0 parse is correct and simply never ran.
+
+**The vacuity trap is defeated by the topology, not by an API.** DDR-1073's
+objection stands in general: a bare `remote=N` count discriminates nothing,
+because a correct kernel legitimately reports `remote=0` whenever the local pass
+keeps succeeding. **One CPU per node removes the alternative** — exactly one
+possible victim, always remote — so `local=0` is **structurally required** (any
+non-zero `local` means the node mapping broke) and `remote > 0` says the second
+pass ran *and succeeded*. Adding CPUs would weaken it.
+
+**Ships:** `cpus=0`/`cpus=1` in `NUMAOPT`, and **`smoke-numa-steal`** (shard 7,
+strict, 180 s) requiring `[sched] steal local=0 remote=` and forbidding
+`[sched] steal local=0 remote=0`. The forbidden sentinel is deliberate *here* and
+deliberately absent from `smoke-numa`: that gate's sentinels land at line ~75 and
+it keeps its rejection inside the required line to preserve the DDR-785 early
+exit; this one's lands at ~364 of ~400, so there is almost no tail to skip — and
+`remote > 0` cannot be written as a required substring.
+
+**Three mutants, three different places, and M2 is the finding.** **M1** (the
+literal pre-fix topology) hits the **required** arm, capture reading
+`local=148 remote=0`. **M2** (delete the remote pass) hits **not this gate's arms
+but the global `cross-CPU FAIL` sentinel** — on a one-CPU-per-node machine the
+remote pass is the *only* steal path, so deleting it stops cross-CPU scheduling
+outright; it proves the pass is load-bearing and **nothing about this gate**,
+recorded rather than presented as coverage. **M3** (pass still works, counter not
+incremented) hits the **forbidden** arm, and is exactly the hole that arm exists
+for: a machine that steals remotely and *reports zero*, on which the required
+pattern alone would pass. Revert returns `kernel.bin` to `fd913d083446b0d1`
+**bit-for-bit**.
+
+**Regression measured before the claim:** `smoke-numa` and `smoke-numa-alloc`
+both rc=0 under the pinned topology — checked because `cpus=` changes what the
+guest is told and `smoke-numa-alloc` asserts exact per-node page counts.
+
+**NOT CLAIMED:** **no defect is fixed and none is named** — DDR-885's steal order
+was always implemented correctly; what was missing is a test that could tell if
+it stopped working. `remote=167` is one boot, not a rate. Nothing is established
+about **hardware**: this measures what QEMU 8.2 puts in an SRAT, and real
+firmware supplies CPU affinity entries, so the shipped kernel path was already
+correct. The 4-CPU picture is unchanged (`smoke-rqstress` still runs one node).
+**No kernel change**, so the size/headroom pair stands; 177 gates → **178**;
+`GLOBAL_FORBIDDEN` **76 unchanged**; no open issue moves.

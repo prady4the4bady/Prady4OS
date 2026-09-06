@@ -281,8 +281,18 @@ if [ -n "${QEMU_NUMA:-}" ]; then
     NUMAOPT=(-m 512M
              -object memory-backend-ram,id=nram0,size=250M
              -object memory-backend-ram,id=nram1,size=262M
-             -numa node,nodeid=0,memdev=nram0
-             -numa node,nodeid=1,memdev=nram1
+             # DDR-1078: cpus= is LOAD-BEARING, not tidiness. Omit it and QEMU
+             # 8.2 emits NO SRAT Local APIC Affinity entry, so the guest's
+             # g_topo.cpu_node[] stays 0xFF and numa_node_of_cpu() returns its 0
+             # default for every CPU -- two memory nodes and ONE cpu node. The
+             # scheduler's remote-steal pass (sched.c:805) is then structurally
+             # unreachable, because steal_pass(self, 0, same=1) matches every
+             # victim. Measured: without cpus=, `[sched] steal local=148
+             # remote=0`; with it, `local=0 remote=167`. One CPU per node is also
+             # what makes smoke-numa-steal two-sided -- the same-node pass CANNOT
+             # succeed, so local=0 is required rather than merely likely.
+             -numa node,nodeid=0,memdev=nram0,cpus=0
+             -numa node,nodeid=1,memdev=nram1,cpus=1
              -smp 2)
 fi
 

@@ -252,7 +252,7 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -1232,6 +1232,34 @@ smoke-uefi: esp-image
 	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010\nACPI: RSDP from loader\nACPI: FADT ok\nPCIe: ECAM')" \
 	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL\nACPI: RSDP not found\nPCIe: no MCFG table\nACPI: loader RSDP rejected')" \
 	    bash tools/qemu_runner/boot_test.sh $(ESP_IMG)
+
+# DDR-1078: the FIRST gate ever to exercise DDR-885's remote-steal pass.
+# `rq_steal` tries same-node victims first and then anywhere, and until now the
+# second pass had NEVER executed: without a `cpus=` clause QEMU emits no SRAT
+# Local APIC Affinity entry, so every CPU read as node 0 and the same-node pass
+# matched every victim (boot_test.sh's NUMAOPT records the measurement).
+#
+# ONE CPU PER NODE IS THE DESIGN, and it defeats the vacuity trap DDR-1073 §2
+# named: a bare `remote=N` count discriminates nothing, because a correct kernel
+# legitimately reports remote=0 whenever the local pass keeps succeeding. With
+# CPU0 on node 0 and CPU1 on node 1 there is exactly one possible victim and it
+# is always remote, so `local=0` is STRUCTURALLY REQUIRED (any non-zero local
+# means the node mapping broke) and `remote > 0` says the second pass ran AND
+# succeeded. Adding CPUs would weaken it -- two on one node hands `local` a
+# legitimate non-zero value again.
+#
+# The FORBIDDEN sentinel is deliberate HERE and deliberately absent from
+# smoke-numa above. That gate keeps its rejection check inside the required line
+# because a FORBIDDEN pattern disables the DDR-785 early exit, and its sentinels
+# land at line ~75 of the boot. This one's lands at ~365, after rqstress_proof(),
+# so there is almost no early exit to lose -- and `remote > 0` cannot be written
+# as a required substring, so the forbidden form is the only way to assert the
+# positive half. Per DDR-1043 this gate runs its full window by design.
+smoke-numa-steal: $(IMG) fat-image sfs-image
+	TIMEOUT_S=180 QEMU_NUMA=1 \
+	EXTRA_SENTINEL='[sched] steal local=0 remote=' \
+	FORBIDDEN_SENTINEL='[sched] steal local=0 remote=0' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-numa-alloc: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_NUMA=1 QEMU_PROBES=numaalloc \
