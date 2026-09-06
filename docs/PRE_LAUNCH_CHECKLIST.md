@@ -1142,6 +1142,38 @@ FAT32 multi-cluster defect was **refuted and gated** (DDR-973). A blocker
 presented as live is a different staleness from work presented as remaining —
 the first can suppress work that is actually unblocked.
 
+**OPEN-2 — a FOURTH path to a frozen CPU, and the scan that hid it — DDR-1079.**
+CI 34051826587 shard 4, on a docs+host-script tip whose shard printed
+`kernel.bin: OK`. **DDR-1019's instrument fired on a real failure for the first
+time:** `panics_silent=1 panic_stage=3 loser_cpu=1 loser_vec=13
+loser_rip=0xFFFFFFFF8000C3A6` → `isr_dispatch+0xE86`, the `kputhex(bp[1])` load
+of the **panic backtrace walker**, which tested `bp != 0` and nothing else.
+- **`loser_vec=13` is the diagnosis.** A plain load faulting **#GP** rather than
+  #PF means a **non-canonical** address.
+- **The winner and the loser are the same CPU.** The RIP lies after
+  `g_panic_stage = 3`, reachable only by *winning* the CAS, and only one CPU can
+  win — so it printed banner, exception and registers, faulted in its own
+  backtrace, lost the CAS **to itself**, and halted forever. The CPU diagnosing
+  the machine became a frozen CPU; `dest_cpu=1` matches `loser_cpu=1`, its ticks
+  stop at 218 against the BSP's 1347, `rqcpus` 3 → 2.
+- **Fixed** by bounding the walk exactly as the NMI walker eleven lines up
+  already does, and by making it say *why* it stopped. `smoke-mce` **arm G**
+  asserts the backtrace for the first time — `>= 1` frames (the injection point
+  varies) **and** that `halting.` follows, which a mid-walk fault never reaches.
+- **THE SCAN HID IT, and that is the finding that reaches furthest.**
+  `check_global_forbidden` returned at the **first** matching pattern; this
+  capture matched `blk integrity FAIL` (pos 21, a **symptom**), `NEXUS KERNEL
+  PANIC` (28) and `panic_stage=` (29, **causes**). A run in which a CPU panicked
+  was reported as a block-integrity failure. **Captures ending in `blk integrity
+  FAIL` / `compl wait timeout` have been read as the primary event while a panic
+  pattern may have sat unreported in the same file.**
+- **OPEN-2 IS NOT CLOSED.** The original exception is **still unknown** — the
+  dump that would have named it is the thing that died. What changed is that the
+  next occurrence can say so.
+- Also: `tools/ci/sym_at.sh` used gawk's `strtonum()` and this host's awk is
+  **mawk**, so the one tool §INV.18 mandates for resolving a RIP **failed at the
+  moment it was needed**. Rewritten in `python3`.
+
 **Group B — the DDR-885 remote-steal coverage gap is CLOSED — DDR-1078, and
 DDR-1073 §2's reasoning was wrong in both halves.** That entry named the gap and
 **declined to build a gate**, judging it unbuildable; the conclusion (no

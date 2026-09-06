@@ -938,12 +938,63 @@ void isr_dispatch(struct regs *r) {
     dump_line("R15=", r->r15);
 
     kputs("backtrace:\r\n");
-    uint64_t *bp = (uint64_t *)r->rbp;
-    for (int i = 0; i < 8 && bp; i++) {
-        kputs("  ");
-        kputhex(bp[1]);              /* saved return address */
-        kputs("\r\n");
-        bp = (uint64_t *)bp[0];      /* previous frame */
+    /* DDR-1079: BOUNDED. This walk used to test `bp != 0` and nothing else, so a
+     * garbage frame pointer dereferenced straight through — and CI 34051826587
+     * shard 4 caught it doing exactly that: `loser_vec=13` (#GP, which for a
+     * plain `mov 0x8(%rax),%rdi` means a NON-CANONICAL address; a bad but
+     * canonical one would be #PF/14) at `loser_rip=0xFFFFFFFF8000C3A6` =
+     * isr_dispatch+0xE86, the `kputhex(bp[1])` load below.
+     *
+     * The consequence is worse than a truncated report. A fault HERE re-enters
+     * the panic path, loses the CAS to THIS CPU's own earlier claim, and halts
+     * in `for(;;) cli; hlt` — so the CPU that was diagnosing the machine becomes
+     * a frozen CPU, its ticks stop, and its MSI-X-routed block completions
+     * strand (`[vblk] compl wait timeout dest_cpu=`). The panic dump dies
+     * half-written at the point where it would have named the original fault.
+     *
+     * The checks are not invented here: the NMI walker at :638-651 in this same
+     * file already bounds every link and says why — "so a garbage rbp cannot
+     * fault us in NMI context, where a #PF would be the end of the report."
+     * That reasoning applies with more force on the panic path, where a fault is
+     * the end of the report AND costs the machine a CPU. 16384 is STACK_SIZE
+     * (sched.c:15), hardcoded here as the NMI walker already hardcodes it.
+     *
+     * Ring-3 guard for the NMI walker's stated reason: if the frame belongs to
+     * ring 3 then rsp/rbp are user values and the range bound proves nothing.
+     * Ring-3 faults do not reach this path today (:703 routes them to
+     * sched_exit), so this costs nothing and removes the assumption. */
+    if ((r->cs & 3u) == 0) {
+        uint64_t fp = r->rbp, lo = r->rsp, hi = r->rsp + 16384u;
+        int printed = 0;
+        for (int i = 0; i < 8; i++) {
+            if (fp < lo || fp >= hi || (fp & 7u)) {
+                /* Say WHY it stopped. A truncated chain and a chain that ended
+                 * cleanly are otherwise the same two lines, and the difference
+                 * is the whole diagnosis (DDR-1049's rule that an absence must
+                 * name itself). fp is PRINTED, never dereferenced. */
+                kputs("  <frame chain ends: fp=");
+                kputhex(fp);
+                kputs(">\r\n");
+                break;
+            }
+            const uint64_t *f = (const uint64_t *)(uintptr_t)fp;
+            kputs("  ");
+            kputhex(f[1]);              /* saved return address */
+            kputs("\r\n");
+            printed++;
+            uint64_t nfp = f[0];
+            if (nfp <= fp) {            /* chain must grow upward, and 0 ends it */
+                kputs("  <frame chain ends: fp=");
+                kputhex(nfp);
+                kputs(">\r\n");
+                break;
+            }
+            fp = nfp;
+        }
+        if (!printed)
+            kputs("  <no frames: rbp unusable>\r\n");
+    } else {
+        kputs("  <ring-3 frame: rbp not walked>\r\n");
     }
 
     kputs("halting.\r\n");

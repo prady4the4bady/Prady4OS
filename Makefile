@@ -1949,7 +1949,23 @@ smoke-mce: $(IMG) fat-image sfs-image
 	@#    banner is filtered -- not the whole scan.
 	@grep -av 'NEXUS KERNEL PANIC' build/mce.log > build/mce.filtered.log
 	@bash tools/qemu_runner/scan_forbidden.sh build/mce.filtered.log mce
-	@echo "[mce] PASS — CR4.MCE + MCA banks enabled, injected machine check delivered as #MC (vector 0x12), bank 0 decoded back byte-exact, one panic only, rest of the boot clean."
+	@# G (DDR-1079): THE PANIC BACKTRACE WALKER, ASSERTED FOR THE FIRST TIME.
+	@#    Nothing has ever checked it, and CI 34051826587 shard 4 caught it
+	@#    dereferencing a garbage frame pointer: #GP (vector 13 — non-canonical,
+	@#    since a bad-but-canonical address would be #PF) at isr_dispatch+0xE86,
+	@#    the `kputhex(bp[1])` load. A fault there re-enters the panic path, loses
+	@#    the CAS to this CPU's own earlier claim, and halts forever — the CPU
+	@#    diagnosing the machine becomes a frozen CPU.
+	@#    TWO halves, and the second is the one tied to the defect: at least one
+	@#    frame must print (the walk produced something), AND `halting.` must
+	@#    follow it (the winner REACHED THE END of its own dump). A walker that
+	@#    faults mid-walk never prints `halting.` — it halts as a panic loser,
+	@#    silently, exactly as the CI capture did.
+	@n=$$(awk '/^backtrace:/{f=1;next} f&&/^  0x/{c++} f&&!/^  /{exit} END{print c+0}' build/mce.log); \
+	  if [ "$${n:-0}" -lt 1 ]; then echo "[mce] FAIL: panic backtrace printed no frames (DDR-1079 arm G)"; sed -n '/^backtrace:/,+10p' build/mce.log; exit 1; fi; \
+	  echo "[mce] arm G: backtrace frames=$$n"
+	@grep -aq '^halting\.' build/mce.log || { echo "[mce] FAIL: the panic dump never reached 'halting.' — the walker did not survive its own backtrace (DDR-1079 arm G)"; sed -n '/^backtrace:/,+12p' build/mce.log; exit 1; }
+	@echo "[mce] PASS — CR4.MCE + MCA banks enabled, injected machine check delivered as #MC (vector 0x12), bank 0 decoded back byte-exact, one panic only, backtrace walked and the dump completed, rest of the boot clean."
 
 smoke-smap: $(IMG) fat-image sfs-image
 	@echo "[smap] booting with -cpu qemu64,+smep,+smap (the default model has neither -- DDR-1040 §2)..."

@@ -466,12 +466,48 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 
 # Fails the run when any probe reported a failure, whichever gate is running.
+#
+# DDR-1079: SCAN THE WHOLE LIST, DO NOT STOP AT THE FIRST MATCH. This returned at
+# the first matching pattern, and the list is roughly alphabetical, so a
+# DOWNSTREAM SYMPTOM reported ahead of its CAUSE hid the cause completely.
+# Measured on CI 34051826587 shard 4: the capture matched THREE patterns —
+# 'blk integrity FAIL' (position 21), 'NEXUS KERNEL PANIC' (28) and
+# 'panic_stage=' (29) — and the job log named only the first. A CPU had panicked
+# and the run reported a block-integrity failure, which is the DDR-824 defect one
+# level up: that fix added 40 lines of context because "printing ONLY the
+# matching lines threw away the diagnosis"; printing only the first PATTERN
+# throws it away the same way when several match.
+#
+# Every match is now named. The detailed block (matching lines + 40 lines of
+# context) still goes to the FIRST match, unchanged, so nothing a reader already
+# relies on is lost — deliberately NOT re-ranked by a hand-written cause/symptom
+# order, which would be one more list to keep in step and would drift.
 check_global_forbidden() {
+    __gf_hits=""
+    __gf_n=0
     while IFS= read -r pat; do
         [ -z "$pat" ] && continue
         if grep -qF "$pat" "$SERIAL_LOG" 2>/dev/null; then
+            __gf_n=$((__gf_n + 1))
+            __gf_hits="$__gf_hits$pat
+"
+        fi
+    done <<EOF
+$GLOBAL_FORBIDDEN
+EOF
+    if [ "$__gf_n" -gt 0 ]; then
+        pat="$(printf '%s' "$__gf_hits" | head -1)"
             report_qmpdump
             echo "[smoke] FAIL — a probe reported '$pat' during this gate's boot."
+            if [ "$__gf_n" -gt 1 ]; then
+                echo "[smoke] --- $__gf_n forbidden patterns matched this ONE capture (DDR-1079) ---"
+                printf '%s' "$__gf_hits" | while IFS= read -r p2; do
+                    [ -z "$p2" ] && continue
+                    echo "[smoke]   matched: $p2"
+                    grep -aF "$p2" "$SERIAL_LOG" | head -3 | sed 's/^/[smoke]     /'
+                done
+                echo "[smoke] --- a LATER pattern may name the CAUSE of an earlier one ---"
+            fi
             echo "[smoke] (DDR-791: forbidden in every gate, not only the one that owns it.)"
             echo "[smoke] --- matching lines ---"
             grep -aF "$pat" "$SERIAL_LOG" | head -5
@@ -490,10 +526,7 @@ check_global_forbidden() {
             echo "[smoke] --- 40 lines of context before the first match (the diagnosis usually lives here) ---"
             grep -aB40 -m1 -F "$pat" "$SERIAL_LOG" | sed 's/^/[smoke]   /'
             return 1
-        fi
-    done <<EOF
-$GLOBAL_FORBIDDEN
-EOF
+    fi
     return 0
 }
 

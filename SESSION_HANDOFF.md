@@ -11794,3 +11794,96 @@ both, and that is **recorded rather than guarded**, because a guard would be a
 second thing to keep in step for a combination nothing uses. **No kernel
 change**, so the size/headroom pair stands; `GLOBAL_FORBIDDEN` **76 unchanged**;
 no open issue moves (OPEN-1/2/12/13 untouched).
+
+---
+
+## DDR-1079 — the panic backtrace walker killed the CPU diagnosing the machine (2026-09-06)
+
+**Artefact:** CI 34051826587, shard 4, `smoke-smplock`, tip `8e3ae50` — a
+**docs + host-script commit** (no kernel source; `git diff --name-only` vs
+`da33f15` is ci.yml, four Markdown files, the DDR, two `tools/ci` scripts,
+`hygiene_check.sh`, and a Makefile target adding no build input), whose shard
+printed `kernel.bin: OK`. **DDR-1019's instrument firing on a real failure for
+the first time** with a resolvable RIP and a vector — its own capture was a
+forced `ud2` mutant.
+
+**MECHANISM.** `g_panic_loser_rip` is the **faulting RIP from the trap frame**
+(`idt.c:855`). `0xFFFFFFFF8000C3A6` resolves in the exact binary to
+`isr_dispatch+0xE86` = the `mov 0x8(%rax),%rdi` of `kputhex(bp[1])` in the
+**panic backtrace walker** (`idt.c:940-947`), which tested `bp != 0` **and
+nothing else**. **`loser_vec=13` is the whole diagnosis:** a plain load faulting
+**#GP** rather than #PF means a **non-canonical address**.
+
+**THE WINNER AND THE LOSER ARE THE SAME CPU, AND IT IS DEDUCIBLE.** The RIP lies
+*after* `g_panic_stage = 3` — a path a CPU reaches only by **winning** the CAS,
+and only one CPU can win. CPU 1 won, printed banner + exception + register dump,
+faulted in its own backtrace, and the re-entry **lost the CAS to itself** and ran
+`for(;;) cli; hlt`. `panics_silent=1` is one CPU re-entering its own panic.
+
+**CONSEQUENCE.** The CPU diagnosing the machine **becomes a frozen CPU**, and
+everything downstream is measured: `dest_cpu=1` matches `loser_cpu=1`, its ticks
+stop at 218 while the BSP reaches 1347, `rqcpus` 3 → 2, unit 0's MSI-X
+completions strand → `compl wait timeout` → `[blk] multi-inflight FAIL` →
+`[smp] blk integrity FAIL`. **The dump dies exactly where it would have named
+the original fault.**
+
+**FIX, NOT INVENTED HERE.** The NMI walker **eleven lines up in the same file**
+(`idt.c:638-651`) already bounds every link and states the reason. Same four
+checks (range `[rsp, rsp+16384)`, 8-alignment, upward growth, ring-3 guard),
+plus `<frame chain ends: fp=…>` so a truncated chain and a clean end stop being
+the same two lines — `fp` **printed, never dereferenced**.
+
+**PROOF.** Pre-fix behaviour is measured by **the CI capture itself**. Post-fix
+on `smoke-mce`, the one gate whose pass condition *is* a panic, where **nothing
+had ever asserted the backtrace**: one run gave a coherent 6-frame chain
+(`sha256_final+0x87 ← chain_step+0xc1 ← aether_audit+0x103 ← aether_sectest+0xbd
+← kmain+0x8ec ← kernel_entry.hang`) ending on `fp == 0`, **the natural end, not
+the bound**. Another gave 2 — the injection point varies — so **arm G asserts
+`>= 1`, not an exact count**, and its second half is the one tied to the defect:
+**`halting.` must follow**, which a mid-walk fault never reaches.
+**M2** (that walker's bound made impossible, **that walker only**, kernel
+`96a9071ff2060bea`) fails arm G alone; a first attempt mutated **both** walkers
+with one `sed` and was **discarded and redone** — attribution from a mutation
+that changed two things is the DDR-1042 failure mode. Revert returns
+`973959192d113bd9` **bit-for-bit**; `kernel.bin` **1,290,634 B, size
+unchanged**, so the size/headroom pair is untouched.
+
+**THE SECOND DEFECT, AND IT IS WHY THE FIRST TOOK THIS LONG TO SEE.**
+`check_global_forbidden` **returned at the first matching pattern**, and
+`GLOBAL_FORBIDDEN` is roughly alphabetical. This capture matched **three**:
+`blk integrity FAIL` (pos 21, a downstream **symptom**), `NEXUS KERNEL PANIC`
+(28) and `panic_stage=` (29, both **causes**) — and the scan returned before
+testing 28 or 29. **A run in which a CPU panicked was reported as a
+block-integrity failure.** DDR-824's defect one level up. **It bears on the whole
+OPEN-2 investigation:** captures ending in `blk integrity FAIL` /
+`compl wait timeout` have been read as the primary event while a panic pattern
+may have sat unreported in the same file. Every match is now named; the detailed
+block still goes to the first match, unchanged, and is **deliberately not
+re-ranked** by a hand-written cause/symptom order that would drift.
+
+**AN ABSENCE I NEARLY REASONED FROM:** `NEXUS KERNEL PANIC` appears **zero**
+times in the 187 KB job log — but the job log carries only the excerpt around the
+*reported* pattern, and the scan never tested that one. The absence is evidence
+about the **reporting**, not the run; the winner==loser deduction was re-derived
+without it.
+
+**A THIRD THING, FOUND BY NEEDING IT:** `tools/ci/sym_at.sh` used awk's
+`strtonum()`, a **gawk extension**, and this host's `/usr/bin/awk` is **mawk** —
+so the one tool §INV.18 and DDR-1019 mandate for resolving a RIP **failed at the
+exact moment it was needed**, and §2's resolution was done by hand. Rewritten in
+`python3` (already a hard build dependency), checked both ways.
+
+**Regression:** `smoke-selftest` (the DDR-791 meta-test that exists to catch a
+silently broken `GLOBAL_FORBIDDEN` — exactly the machinery edited here),
+`smoke-shell`, `smoke-mce`, `smoke-blk-integrity`, `smoke-smp` all rc=0, kernel
+hash unchanged. Hygiene **ALL EIGHT**. `GLOBAL_FORBIDDEN` verified **76**.
+
+**NOT CLAIMED: OPEN-2 IS NOT CLOSED and this is not a claim about it.** The
+**original exception CPU 1 panicked on is still unknown** — the dump that would
+have named it is the thing that died. No cause is named for the original panic
+(§NON-NEGOTIABLE 3); `loser_vec=13` is the vector of the **walker's** fault.
+This is a **fourth** path to a frozen CPU, reached only from inside the panic
+path — not a revision of DDR-1019's three `[apfreeze]` producers. Nothing is
+fixed about the garbage `rbp` itself. One occurrence, **no rate**. 178 gates
+unchanged (arm G is added to an existing gate); no open issue moves
+(OPEN-1/12/13 untouched).

@@ -1372,3 +1372,82 @@ firmware supplies CPU affinity entries, so the shipped kernel path was already
 correct. The 4-CPU picture is unchanged (`smoke-rqstress` still runs one node).
 **No kernel change**, so the size/headroom pair stands; 177 gates → **178**;
 `GLOBAL_FORBIDDEN` **76 unchanged**; no open issue moves.
+
+---
+
+## The panic backtrace walker killed the CPU diagnosing the machine — DDR-1079 (2026-09-06)
+
+**Artefact:** CI 34051826587, shard 4, `smoke-smplock`, tip `8e3ae50` — a
+**docs + host-script commit** touching no kernel source, whose shard printed
+`kernel.bin: OK`. **DDR-1019's instrument firing on a real failure for the first
+time** with a resolvable RIP and a vector; its own capture was a forced `ud2`.
+
+```
+[hb] t=500 … panics_silent=1 panic_stage=3 loser_cpu=1 loser_vec=13
+     loser_rip=0xFFFFFFFF8000C3A6 … rqcpus=3
+[vblk] compl wait timeout unit=0 dest_cpu=1 dest_dticks=0 dest_abs=218 bsp_abs=947
+[smp] blk integrity FAIL reference-read
+```
+
+**Mechanism.** `g_panic_loser_rip` is the **faulting RIP from the trap frame**,
+and it resolves in the exact binary to `isr_dispatch+0xE86` — the
+`mov 0x8(%rax),%rdi` of `kputhex(bp[1])` in the **panic backtrace walker**,
+which tested `bp != 0` **and nothing else**. `loser_vec=13` is the whole
+diagnosis: a plain load faulting **#GP** rather than #PF means a **non-canonical
+address**.
+
+**The winner and the loser are the same CPU, and that is deducible.** The RIP
+lies *after* `g_panic_stage = 3` — a path a CPU reaches only by **winning** the
+CAS, and only one CPU can win. So CPU 1 won, printed banner, exception line and
+register dump, then faulted in its own backtrace; the re-entry lost the CAS **to
+itself** and halted. `panics_silent=1` is one CPU re-entering its own panic.
+
+**The consequence is worse than a truncated report:** the CPU diagnosing the
+machine **becomes a frozen CPU**, and everything downstream is measured, not
+inferred — `dest_cpu=1` matches `loser_cpu=1`, its ticks stop at 218 while the
+BSP reaches 1347, `rqcpus` 3 → 2, completions strand. **The dump dies exactly
+where it would have named the original fault.**
+
+**The fix is not invented here.** The NMI walker **eleven lines up in the same
+file** already bounds every link and says why: *"so a garbage rbp cannot fault
+us in NMI context, where a #PF would be the end of the report."* That applies
+with more force on the panic path, where a fault is the end of the report **and
+costs the machine a CPU**. Same four checks, plus `<frame chain ends: fp=…>` so
+a truncated chain and a clean end stop being the same two lines — `fp` printed,
+never dereferenced.
+
+**Proof.** The pre-fix behaviour is measured by the **CI capture itself**.
+Post-fix on `smoke-mce`, the one gate whose pass condition *is* a panic, where
+**nothing had ever asserted the backtrace**: one run produced a coherent 6-frame
+chain (`sha256_final ← chain_step ← aether_audit ← aether_sectest ← kmain ←
+kernel_entry.hang`) ending on `fp == 0`, **the natural end, not the bound** —
+which is the evidence the bound does not truncate real chains. **Arm G** asserts
+`>= 1` frames (the injection point varies, so an exact count would flake) **and
+that `halting.` follows** — a walker that faults mid-walk never reaches it.
+**M2** (that walker's bound made impossible, *that walker only*) fails arm G
+alone; a first attempt mutated both walkers with one `sed` and was **discarded
+and redone**, because attribution from a mutation that changed two things is the
+DDR-1042 failure mode. `kernel.bin` **1,290,634 B, size unchanged**; revert
+returns it bit-for-bit.
+
+**The second defect, and it is why the first took this long to see.**
+`check_global_forbidden` **returned at the first matching pattern**, and the list
+is roughly alphabetical. This capture matched **three**: `blk integrity FAIL`
+(pos 21, a downstream **symptom**), `NEXUS KERNEL PANIC` (28) and `panic_stage=`
+(29, both **causes**) — and the scan returned before testing 28 or 29. **A run in
+which a CPU panicked was reported as a block-integrity failure.** This is
+DDR-824's defect one level up, and it bears on the whole OPEN-2 investigation.
+Every match is now named; the detailed block still goes to the first match,
+unchanged, and is **deliberately not re-ranked** by a hand-written cause/symptom
+order that would drift.
+
+**A third thing, found by needing it:** `tools/ci/sym_at.sh` used awk's
+`strtonum()`, a **gawk extension**, and this host's awk is **mawk** — so the one
+tool §INV.18 mandates for resolving a RIP failed at the exact moment it was
+needed. Rewritten in `python3`, already a hard build dependency.
+
+**NOT CLAIMED: OPEN-2 is not closed and the original exception is still
+unknown** — the dump that would have named it is the thing that died. No cause
+is named for the original panic. Nothing is fixed about the garbage `rbp`
+itself. One occurrence, no rate. `GLOBAL_FORBIDDEN` **76 unchanged** (no pattern
+added; the change is to how matches are *reported*); 178 gates unchanged.

@@ -424,7 +424,16 @@ B#13 dynamic linker ⬜ · B#14 NAS scheduler ⬜ · B#15 PMM policy ⬜
 ### TASK 18–21
 
 18 `prad` package manager (NSI 87–89 — **renumber, 87 is taken by
-`SYS_READ_AUDIT`; use 88–90**) ⬜ · **NUMA remote-steal coverage CLOSED —
+`SYS_READ_AUDIT`; use 88–90**) ⬜ · **PANIC BACKTRACE WALKER BOUNDED — DDR-1079**:
+it tested `bp != 0` and nothing else, and CI 34051826587 shard 4 caught it taking
+a **#GP** (non-canonical) at `isr_dispatch+0xE86` — the CPU that had won the panic
+CAS faulted in its own backtrace, lost the CAS to itself and halted forever, so
+the CPU diagnosing the machine became a frozen CPU and the dump died where it
+would have named the original fault. Bounded the way the NMI walker eleven lines
+up already is; `smoke-mce` arm G asserts the backtrace for the first time. **And
+the forbidden scan reported only the FIRST matching pattern**, so that run was
+reported as a block-integrity failure and the panic was never named — every match
+is now listed. **OPEN-2 is NOT closed**; the original exception is still unknown · **NUMA remote-steal coverage CLOSED —
 DDR-1078** (`smoke-numa-steal`, shard 7 strict): DDR-885's remote pass had never
 once executed, because `boot_test.sh`'s `-numa` lines carried no `cpus=` clause,
 QEMU 8.2 therefore emitted no SRAT CPU affinity, and every CPU read as node 0 —
