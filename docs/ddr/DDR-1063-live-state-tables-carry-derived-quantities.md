@@ -226,6 +226,34 @@ destroy the record. The check's scope is the two **live-state** tables, and the
 distinction between a live table and a historical log is the whole reason the
 scope is a list of two files rather than a repo-wide sweep.
 
+## 7b. THREE MORE STALE ENTRIES IN THE SAME DOCUMENT — the thesis, confirmed
+
+Sweeping `docs/PRE_LAUNCH_CHECKLIST.md` for the *same class* of defect (an entry
+not updated when the work it describes landed) found **three more**, in the
+document whose own stated purpose is *"every deferred/open item, one document"*
+and whose closing line already says *"Update this file in the same commit as any
+change to what it records."*
+
+1. **DDR-1062 was absent entirely** — OPEN-2's **first CI-side rate bound** (42
+   suites, zero occurrences, 95% upper bound 6.9%, DDR-1009's 25% refuted at
+   `p = 5.7e-6`). That is the single most important new fact about the project's
+   top open defect, and the one-document reference did not carry it.
+2. **DDR-1056 was absent entirely** — it *fixed* the `smoke-actiondel` splice
+   class, while the Section 2 row still read as though only a mechanism had been
+   named and the ring-3 fix were pending.
+3. **§4.8 said the ghost-window repair was "named, not built"** — it is built and
+   gated. `mouse_inject.sh:131` consumes `PRADYOS_WM_GONE` and prints
+   `[inject] target gone title=… — not clicking`; `smoke-ghostclick` gates it.
+   **Checked in the tree, not assumed from the DDR text.**
+
+All three are corrected. This is the same failure mode as §1 with a different
+quantity: a live-state document is only as good as the discipline that updates
+it, and **nothing mechanical was checking any of it.** `ci-docstate-check` closes
+exactly one of these — the size/headroom pair — and §8 says plainly that it does
+not close the rest. Recorded here so the size of the residual is visible rather
+than implied: **four stale items were found in one sweep of one document**, and
+the check catches one shape of one of them.
+
 ## 8. NOT CLAIMED
 
 - **This does not make the documented numbers correct** — it makes an

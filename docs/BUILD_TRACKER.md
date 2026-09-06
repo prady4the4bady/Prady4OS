@@ -2636,6 +2636,20 @@ and annotated: the work cost 102,400 B, **26% of the headroom it was measuring**
 **not** inputs to the check. Hygiene **ALL SIX → ALL SEVEN**; `CLAUDE.md`'s
 hygiene item updated to match, that item having drifted from the script before.
 
+**THE THESIS CONFIRMED IN THE SAME SWEEP (DDR-1063 §7b).** Checking
+`PRE_LAUNCH_CHECKLIST.md` for the same *class* of defect — an entry not updated
+when the work it describes landed — found **three more**, in the document whose
+own purpose is "every deferred/open item, one document": **DDR-1062 absent
+entirely** (OPEN-2's first CI-side rate bound, the most important new fact about
+the top open defect), **DDR-1056 absent entirely** (it *fixed* the
+`smoke-actiondel` splice class while the row still read as pending), and **§4.8
+claiming the ghost-window repair was "named, not built"** when it is built and
+gated — `mouse_inject.sh:131` consumes `PRADYOS_WM_GONE` and refuses the click,
+`smoke-ghostclick` gates it, checked in the tree rather than assumed from the DDR
+text. All three corrected. **Four stale items in one sweep of one document, and
+the new check catches one shape of one of them** — recorded so the residual's
+size is visible rather than implied.
+
 **NOT CLAIMED:** the documented numbers are not thereby *correct* — a stale but
 self-consistent pair still passes, which is exactly what checklist §6 was;
 currency remains §NON-NEGOTIABLE 11's human discipline. No kernel defect is fixed
