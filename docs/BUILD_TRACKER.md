@@ -2935,6 +2935,40 @@ FAT32 writer were all correct and complete. No open issue moves. The live
 action type it submits — dispatching the template on action type is a larger
 change and is not attempted.
 
+### DDR-1066 §8.4 NARROWED 2026-09-06 — the changed code did not execute in the failing boot
+
+The `smoke-blk-integrity` red recorded above was left **not attributed and not
+exonerated**. A cheap measurement narrows the second half of that, and it is
+worth the note because the first attempt at it was **vacuous**: scanning the
+regression's `build/gatelogs/reg*.log` files found almost nothing, because those
+are **make output, not serial captures** — the exact methodology defect DDR-1023
+§recorded, walked into again, and caught only by reading the counts instead of
+reporting them.
+
+Against the **serial** captures the answer is clean. The red capture contains
+**zero** `PRADYOS_AGENT_START`; the passing capture of the same gate on the same
+binary reaches it at **line 413 of 466**:
+
+```
+PASS  413: PRADYOS_AGENT_START task=test mode=test
+      414: PRADYOS_AGENT_EXEC_OK path=/AETHER.TXT n=22 first=P last=D
+      417: PRADYOS_AGENT_DONE
+RED   (351 lines, no AGENT_START anywhere)
+```
+
+DDR-1066's diff is **entirely inside the post-`AE_APPROVED` path**, reached only
+after that first line prints, so the boot stopped **before any of it could run**.
+**Still not fully exonerated:** `agent_base.elf` is embedded in `kernel.bin`, so a
+layout or size effect is not excluded — only a behavioural one.
+
+**Two further facts from the same sweep, since they answer a question worth
+asking:** across every serial capture on disk, `AETHER_AGENT_EXEC_FAIL` appears
+**zero** times, and `smoke-aether-sfsroot` — the gate whose SFS root could have
+made the new `/AETHER.TXT` write fail — **does not boot the agent template at
+all** (its capture has the AETHER self-test's own sentinels and no
+`PRADYOS_AGENT_START`). The executor is also confirmed working outside its own
+gate: `blkint-pass.log` carries `PRADYOS_AGENT_EXEC_OK`.
+
 ---
 
 ## DDR-1067 — PRISM had no quoting at all, and the obvious gate arm for it is vacuous

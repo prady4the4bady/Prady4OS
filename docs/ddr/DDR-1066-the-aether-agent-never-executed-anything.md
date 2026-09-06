@@ -331,12 +331,28 @@ information about margin here. The "no margin" reading was formed, checked, and
   here. Per DDR-1019, a matching *shape* is not the same defect: OPEN-1 route 1
   is also a silent hang, but that is `smoke-surfdestroy`, and reading this as
   that would be colour-matching.
-- **This change is not exonerated by the diff.** The stop is in the `[svc]`
-  restart loop and the boot never reached the block test, and DDR-1066 touches
-  only `user/agent_base.c` — but it **adds a FAT32 write to every boot**, and
-  "the diff is elsewhere" is not an argument (DDR-1042 is the record of what a
-  plausible-sounding attribution costs). Whether this change perturbs this gate
-  is **not established and not excluded**.
+- **The changed code did not execute in the failing boot — MEASURED 2026-09-06,
+  and this narrows the position below rather than replacing it.** The red
+  capture contains **zero** `PRADYOS_AGENT_START`, while the passing capture of
+  the same gate on the same binary reaches it at **line 413 of 466**:
+
+  ```
+  PASS  413: PRADYOS_AGENT_START task=test mode=test
+        414: PRADYOS_AGENT_EXEC_OK path=/AETHER.TXT n=22 first=P last=D
+        417: PRADYOS_AGENT_DONE
+  RED   (351 lines, no AGENT_START anywhere)
+  ```
+
+  DDR-1066's diff is **entirely inside the post-`AE_APPROVED` path of
+  `agent_base.c`**, which is reached only after that first line prints. So the
+  boot stopped **before any of this change could run**, and the new FAT32 write
+  never happened in that boot. That is a positive statement from the capture,
+  not the "the diff is elsewhere" hand-wave DDR-1042 warns about.
+- **Still not fully exonerated, and the residual is named.** `agent_base.elf` is
+  embedded in the kernel image, so `kernel.bin` differs from the pre-DDR-1066
+  build; a **layout or size** effect is not excluded by the above, only a
+  **behavioural** one. What is now established is narrow and worth having: the
+  changed code path is provably unreached in the failing run.
 - **One occurrence is not a rate**, and no local campaign is run to make it one:
   DDR-1023 recorded that route as exhausted for this gate's family, and DDR-1061
   §2 costed what a reachable N actually buys.
