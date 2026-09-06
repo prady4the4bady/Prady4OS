@@ -12018,3 +12018,41 @@ the host that built and verified the release candidate on both arms; and
 first tip at or after `595cd3e`, so DDR-1079's scan fix applies to any capture
 it produces — which is what DDR-1080 §6 said would be needed to tell whether the
 shard-4 SFS unlink failure was primary or downstream.
+
+---
+
+## CHECKPOINT — DDR-1082: the rqstress 20× costed and refused — 2026-09-06
+
+**Campaign NOT run.** One timed run was, as the cost measurement. No code change;
+`kernel.bin` `e638b8a7ee263944`, 1,290,634 B, unchanged. 178 gates,
+`GLOBAL_FORBIDDEN` 76, no open issue moves.
+
+Group A's last non-blocked row was "`smoke-rqstress` determinism — 20× green".
+Costed first, per DDR-1061.
+
+- **Cost, measured:** `rc=0` in **181 s**, hash verified before and after. The
+  gate declares a `FORBIDDEN_SENTINEL`, so per DDR-1043 it never early-exits and
+  burns its full window by design. 20 × 181 s = **60.3 min foreground**
+  (foreground is the only option, DDR-1060 §10).
+- **What it buys:** 13.9% single-binary bound at 95%.
+- **Already on record:** shard 8, strict, not excluded → every suite; DDR-1062's
+  42-suite window attributed all four reds elsewhere, so ≥42 green → <6.9%.
+  **Different claim, not strictly better** — DDR-1062 itself says 42 suites
+  across 19 SHAs, not 42 binaries, and the 20× rule is about one binary.
+- **The deciding fact:** `BUILD_TRACKER.md:679` (+ `SESSION_HANDOFF.md:6716`,
+  `build_status.md:7286`) records that `smoke-smp` and `smoke-rqstress` both
+  measured **20/20 while DDR-981's AP-freeze defect was live** — exactly the
+  class the row's 20× exists to detect. A green 20/20 here is on record as
+  silent for that class, and DDR-981's answer was a **detector** (`[apfreeze]`
+  into `GLOBAL_FORBIDDEN`), not a repetition count.
+- **Provenance checked:** `grep -niE 'rqstress'` over DDR-981's own file returns
+  nothing — its §5 records *its* 20-boot campaign; the gate lesson lives in the
+  three trackers. Not a contradiction. The `BUILD_TRACKER` paragraph is now
+  annotated as load-bearing for DDR-1082 §5.
+
+**Row RE-STATED, not closed.** Its coverage rests on per-suite CI plus
+`[apfreeze]`; neither is a single-binary determinism proof and DDR-1082 says so.
+
+**CI at checkpoint:** `0637693` (DDR-1081) green on **both** suites — push
+34058717308 and PR 34058718927. `b325d25` (DDR-1080) also green on both. Release
+stays held; no promotion in flight.

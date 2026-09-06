@@ -680,6 +680,15 @@ at `-smp 4` while this defect was live. The gates did not catch it; the evidence
 sat in serial logs nobody asserted on. `[apfreeze]` is now in `GLOBAL_FORBIDDEN`
 so that class of silent failure is a named red.
 
+**This paragraph is now load-bearing elsewhere — DDR-1082.** It is the recorded
+evidence that a green 20/20 on `smoke-rqstress` does **not** discriminate the
+SMP/scheduler failure class, which is why the Group A "`smoke-rqstress` 20×
+determinism" row's campaign was **costed and refused** rather than run: a
+measured 181 s per run (full window by design, DDR-1043) is 60.3 minutes of
+foreground QEMU for a 13.9% single-binary bound, reproducing a measurement
+already on record as silent. Do not delete or reword this without reading
+DDR-1082 §5.
+
 `docs/AETHER_MASTER_FEATURES.md` is deliberately unchanged: neither B#3 nor
 OPEN-2 is a feature it tracks.
 

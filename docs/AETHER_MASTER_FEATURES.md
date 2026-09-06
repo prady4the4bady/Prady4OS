@@ -1589,3 +1589,52 @@ unnecessary by construction; and `arch/aarch64/`, `arch/riscv64/` hold only
 proposed; nothing is claimed about the arch ports being wrong — ADR-034's scope
 is a recorded decision correctly implemented, and what is corrected is the rows'
 description of what remains.
+
+---
+
+## The rqstress 20× is costed, and known non-discriminating — DDR-1082 (2026-09-06)
+
+**The campaign is NOT run.** One timed run was, as the cost measurement. No code
+change, no gate change, no kernel change; `kernel.bin` `e638b8a7ee263944`
+unchanged; 178 gates unchanged; `GLOBAL_FORBIDDEN` 76 unchanged.
+
+DDR-1061's shape — a campaign costed *before* the hours are spent — reaching a
+stronger conclusion, because here the experiment has a recorded historical
+result.
+
+**Cost, measured not derived.** The gate declares a `FORBIDDEN_SENTINEL`, so per
+DDR-1043 it is never early-exit eligible and burns its full window by design.
+Measured: `rc=0` in **181 s**, kernel hash verified before and after. So
+20 × 181 s = **60.3 minutes of foreground QEMU**, foreground being the only
+option (DDR-1060 §10). It buys a **13.9%** single-binary bound at 95%.
+
+**Already on record:** the gate is shard 8, strict, not excluded, so it runs on
+every suite, and DDR-1062's audited 42-suite window attributed all four of its
+reds elsewhere — ≥42 green observations, <6.9%. **That is a different claim, not
+a strictly better one**, and DDR-1062's own §NOT CLAIMED says why: 42 suites
+across 19 SHAs, not 42 binaries, while the 20× rule exists to catch
+intermittency on *one* binary.
+
+**The deciding fact — this exact 20× has been run and it passed through a live
+defect.** `BUILD_TRACKER.md:679`, corroborated in `SESSION_HANDOFF.md:6716` and
+`build_status.md:7286`: *"`smoke-smp` and `smoke-rqstress` both measured 20/20 at
+`-smp 4` while this defect was live. The gates did not catch it."* The defect was
+DDR-981's AP freeze — exactly the class this row's 20× exists to detect. And
+DDR-981's answer was a **detector**, not a repetition count: `[apfreeze]` entered
+`GLOBAL_FORBIDDEN` *because* the 20× was silent.
+
+**Provenance checked rather than assumed:** `grep -niE 'rqstress'` over DDR-981's
+own file returns nothing — its §5 records *its* 20-boot campaign, and the gate
+lesson lives beside it in the three trackers. Not a contradiction; worth knowing.
+
+**Verdict:** do not run the 20× on this gate. The row is **re-stated** on what
+its coverage actually rests on — per-suite CI observations plus `[apfreeze]` —
+**not closed**. Neither is a single-binary determinism proof, and this does not
+pretend otherwise; what it establishes is that the stated remedy would not supply
+one either.
+
+**Not claimed:** `smoke-rqstress` is not claimed deterministic; no defect is
+named or fixed and none is alleged; DDR-981 is not accused of anything — its
+lesson is quoted to support the verdict; and the single run performed is reported
+so its absence is not mistaken for an untried experiment, not as support for the
+verdict.

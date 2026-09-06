@@ -1362,7 +1362,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **178** across **10** shards | `make ci-shard-check`, re-measured 2026-09-06 (DDR-1078 added `smoke-numa-steal`, shard 7, strict) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1082+** | §INV.4 |
+| DDR free range | **DDR-1083+** | §INV.4 |
 | `kernel.bin` | **1,290,634 B** against the 1,572,864 B gate — **282,230 B** headroom | measured 2026-09-06; **re-derived, not carried** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |
