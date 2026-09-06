@@ -1174,3 +1174,45 @@ not built**, and its default-path trap is recorded in DDR-1075 §4.4.
 
 No code change; `kernel.bin` untouched; 177 gates unchanged; no gate re-run
 and no profile run.
+
+---
+
+## `fast_memset` shipped, and a DDR-1075 correction — DDR-1076 (2026-09-06)
+
+**Group G row 9.6 is BUILT.** `memcpy` had routed through `fast_memcpy`
+(ERMS / `REP MOVSQ`) since DDR-871 while **`memset` stayed a byte-at-a-time
+loop** — paid on **every `kfree`** (`kheap.c:174` poisons the object, up to
+512 B, `KHEAP_DEBUG` unconditionally `1`) and on every slab growth.
+`arch/x86_64/fast_memset.asm` closes it with `rep stosb` under the **ERMS bit
+`fast_memcpy_init()` already probes** — the flag is **shared, not duplicated**,
+so the two consumers cannot drift.
+
+**COST is a static instruction count, not a speedup** (DDR-870's convention;
+per DDR-1075 §1 a speedup figure is not producible under TCG): 3 broadcast +
+2 dispatch + 1 branch, then 2 (ERMS) or 5 (fallback) instructions, against
+~4 instructions **per byte** before.
+
+**DDR-1075 §4.4 is CORRECTED.** It called the dispatch default a correctness
+requirement. `rep stosb`/`rep movsb` are **base x86_64 string instructions** —
+ERMS advertises that the microcode is *fast*, not that the instruction exists —
+so both arms are correct on every CPU and the default is a **speed** property.
+Stated as a correctness trap it would have sent a future session hunting a
+fault that cannot occur.
+
+**The real trap is the byte broadcast, and it is measured.** `rep stosq` fills
+from all eight lanes of RAX, and a broken broadcast is **correct for every zero
+fill**. This tree has **72 memset call sites** (73 grep hits, one the definition) **and exactly three non-zero fills**
+— and **none of the three has its bytes verified anywhere**: `POISON_FREE` is
+written and *never read*, and the other two are FS buffers checked only by
+return code. So such a defect would be invisible to all 177 gates and to the
+kheap debug machinery whose poison it corrupts.
+
+**M1 is the proof and its *passing* cases are the measurement:** with the
+broadcast broken it passed the whole ERMS pass and every zero-fill arm before
+failing at `n=8 fill=0xA7`. M2 (tail dropped) fails a **zero** fill at `n=1`,
+so the arms are independently live.
+
+Gated on **`smoke-bench`** (shard 8, strict) — no new gate, 177 unchanged;
+`cases=28` is computed by the probe, not a literal. `GLOBAL_FORBIDDEN` **76,
+unchanged** (deterministic check, own gate covers both directions — DDR-1065).
+`kernel.bin` size unchanged, so the size/headroom pair is untouched.

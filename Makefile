@@ -16,7 +16,7 @@ STAGE2_BIN := build/stage2.bin
 IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
-KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm arch/x86_64/fast_memcpy.asm arch/x86_64/ipc_copy.asm \
+KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm arch/x86_64/fast_memcpy.asm arch/x86_64/fast_memset.asm arch/x86_64/ipc_copy.asm \
                arch/x86_64/context.asm arch/x86_64/syscall_entry.asm \
                arch/x86_64/usermode.asm arch/x86_64/user_image.asm \
                arch/x86_64/ap_boot.asm
@@ -218,7 +218,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/ramdisk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
-               build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
+               build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
@@ -595,6 +595,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm           -o build/isr.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/context.asm       -o build/context.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/fast_memcpy.asm   -o build/fast_memcpy.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/fast_memset.asm   -o build/fast_memset.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/ipc_copy.asm      -o build/ipc_copy.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/syscall_entry.asm -o build/syscall_entry.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/usermode.asm      -o build/usermode.o
@@ -987,10 +988,30 @@ smoke-rootmount: $(IMG) fat-image sfs-image ext4-image
 # emulated time, so a hard cycle threshold would be asserting a property the
 # measurement cannot support — it would fail on a faster host and pass on a
 # slower one, for reasons unrelated to the code.
+# DDR-1076 added the memset arms. They live HERE rather than in a new gate for
+# the reason DDR-1039 recorded for smoke-readline and DDR-1070 for the privacy
+# arms: smoke-bench is already THE gate for the Group 8 asm string paths, and a
+# separate gate would boot an OS to check one function.
+#
+# 'cases=28' is 2 dispatch passes x 7 lengths x 2 fills, and the count is
+# COMPUTED BY THE PROBE (DDR-1054): an edit that silently drops arms changes the
+# printed value and fails here, which a bare 'PRADYOS_MEMSET_OK' could not catch.
+#
+# The 0xA7 fill is the load-bearing half and DDR-1076 sec.2 measured why: a broken
+# byte broadcast is correct for EVERY zero fill, and the three non-zero memset
+# call sites in this tree have their bytes verified nowhere -- kheap's
+# POISON_FREE is written and never read. Without a non-zero arm this gate would
+# pass on exactly the defect it exists to catch.
+#
+# PRADYOS_MEMSET_FAIL is forbidden here but deliberately NOT added to
+# GLOBAL_FORBIDDEN: the check is DETERMINISTIC and this gate asserts both
+# directions, so it cannot hide in a green run -- the DDR-1065 reasoning, as
+# against DDR-981/1049's intermittents. This gate already declares a forbidden
+# sentinel, so the addition costs no early-exit eligibility.
 smoke-bench: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=bench \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_BENCH_OK')" \
-	FORBIDDEN_SENTINEL="BENCH FAIL" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_BENCH_OK\nPRADYOS_MEMSET_OK cases=28')" \
+	FORBIDDEN_SENTINEL="$$(printf 'BENCH FAIL\nPRADYOS_MEMSET_FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-875 (Group 4 item 23): AHCI. Attaches an ich9-ahci controller with a real

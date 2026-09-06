@@ -3665,6 +3665,110 @@ static void cow_selftest(void) {
  * DDR-1014's rule is that a proof which paraphrases the kernel tests the
  * paraphrase. Deterministic and kernel-side — no ring-3, no reap poll, no
  * timing — so this is not an intermittent gate and its stated N is 1. */
+/* DDR-1076: memset correctness across BOTH dispatch paths.
+ *
+ * Runs beside the other boot self-tests, BEFORE smp_start_aps(), so it is
+ * single-CPU and the flag it borrows below cannot be observed by another CPU.
+ *
+ * WHY A NON-ZERO FILL IS THE ARM THAT MATTERS. `rep stosq` moves eight bytes
+ * per iteration out of RAX, so memset's byte must be broadcast into all eight
+ * lanes. A broken broadcast is CORRECT FOR EVERY ZERO FILL and wrong only for
+ * a non-zero one -- and this tree has 72 memset call sites (73 grep hits, one
+ * being string.c's own definition) with exactly THREE non-zero fills (kheap.c:174's POISON_FREE, main.c:1349's 0xB6,
+ * main.c:2911's 0x5A), none of whose bytes any gate verifies: POISON_FREE is
+ * written and NEVER READ, and the other two are FS write buffers checked only
+ * by return code. Such a defect would be invisible to all 177 gates and to
+ * the kheap debug machinery whose poison it corrupts. 0xA7 below stands in
+ * that gap, chosen distinct from all three shipped fills so a stray match in
+ * a log cannot be confused with one of them.
+ *
+ * WHY BOTH PASSES FORCE THE FLAG. `rep stosb` consumes AL only and is
+ * therefore IMMUNE to a broadcast bug, so a test that ran only the path this
+ * CPU happens to pick would, on the ERMS-advertising CI model, exercise the
+ * one path that cannot fail. Both values are therefore set explicitly --
+ * pass 0 = ERMS (`rep stosb`), pass 1 = fallback (`rep stosq` + tail) -- so
+ * coverage does not depend on the CPU model AND does not depend on this
+ * running after fast_memcpy_init() (it does not: the selftests are at the
+ * :375x block and that init is at :381x, so the flag is still 0 here).
+ *
+ * FORCING ERMS ON IS SAFE, and DDR-1076 sec.1 is why: `rep stosb` is a base
+ * x86_64 string instruction. ERMS advertises that the microcode is FAST, not
+ * that the instruction exists -- so the forced-on pass is correct on a
+ * pre-ERMS CPU, merely slower. That is the same fact which makes the shipped
+ * dispatch default a speed property rather than a correctness one, and it is
+ * what DDR-1075 sec.4.4 got wrong.
+ *
+ * Deliberately not a debug knob: an opt-in instrument is guaranteed OFF where
+ * it matters (DDR-1010/DDR-1043).
+ *
+ * THE PREPARATION MUST NOT USE THE FUNCTION UNDER TEST: the background is
+ * laid down with an explicit byte loop, because a broken memset would
+ * otherwise corrupt the very baseline the check is measured against. */
+extern uint64_t fast_memcpy_have_erms;          /* DDR-871's probe, shared */
+static uint8_t g_ms_buf[4098];                  /* guard | 4096 region | guard */
+
+static void memset_selftest(void) {
+    static const uint32_t ns[]    = { 0, 1, 7, 8, 9, 4095, 4096 };
+    static const uint8_t  fills[] = { 0x00, 0xA7 };
+    const uint8_t BG = 0x3C;                    /* background; distinct from both fills */
+
+    unsigned cases = 0;
+    int bad = 0;
+    uint32_t bad_n = 0, bad_off = 0;
+    unsigned bad_got = 0, bad_want = 0, bad_pass = 0;
+
+    for (unsigned pass = 0; pass < 2 && !bad; pass++) {
+        uint64_t saved = fast_memcpy_have_erms;
+        /* pass 0 -> REP STOSB, pass 1 -> REP STOSQ + tail. Both forced, so
+         * neither the CPU model nor the init order decides the coverage. */
+        fast_memcpy_have_erms = (pass == 0) ? 1u : 0u;
+
+        for (unsigned i = 0; i < sizeof ns / sizeof ns[0] && !bad; i++) {
+            for (unsigned f = 0; f < sizeof fills / sizeof fills[0] && !bad; f++) {
+                uint32_t n = ns[i];
+                uint8_t  c = fills[f];
+
+                for (uint32_t k = 0; k < sizeof g_ms_buf; k++)  /* NOT memset -- see header */
+                    g_ms_buf[k] = BG;
+
+                memset(&g_ms_buf[1], (int)c, (size_t)n);
+                cases++;
+
+                for (uint32_t k = 0; k < sizeof g_ms_buf && !bad; k++) {
+                    /* Inside the region: the fill. Everywhere else -- both
+                     * guards AND the bytes past n -- the background, so an
+                     * over-run, an under-run and an n=0 clobber are all
+                     * caught, not just a wrong value. */
+                    uint8_t want = (k >= 1 && k < 1 + n) ? c : BG;
+                    if (g_ms_buf[k] != want) {
+                        bad = 1;
+                        bad_pass = pass; bad_n = n; bad_off = k;
+                        bad_got = g_ms_buf[k]; bad_want = want;
+                    }
+                }
+            }
+        }
+        fast_memcpy_have_erms = saved;          /* restored on the failing path too */
+    }
+
+    /* One kline, not a run of kputs: a composite sentinel assembled from
+     * several unlocked calls can be spliced by another printer mid-line
+     * (DDR-1055), and this is the line a failure would be read from. */
+    kline k; kline_init(&k);
+    if (bad) {
+        kline_s(&k, "PRADYOS_MEMSET_FAIL pass="); kline_d(&k, bad_pass);
+        kline_s(&k, " n=");    kline_d(&k, bad_n);
+        kline_s(&k, " off=");  kline_d(&k, bad_off);
+        kline_s(&k, " got=");  kline_d(&k, bad_got);
+        kline_s(&k, " want="); kline_d(&k, bad_want);
+    } else {
+        /* cases is REPORTED by the probe, never a literal in the gate, so an
+         * edit that silently drops arms cannot leave the gate green (DDR-1054). */
+        kline_s(&k, "PRADYOS_MEMSET_OK cases="); kline_d(&k, cases);
+    }
+    kline_s(&k, "\r\n"); kline_emit(&k);
+}
+
 static void sharedpte_selftest(void) {
     uint64_t before = kheap_outstanding();
 
@@ -3762,6 +3866,7 @@ void kmain(struct boot_info *bi) {
     metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */
     cow_selftest();                      /* IMP-D: copy-on-write fork isolation */
     sharedpte_selftest();                /* DDR-1065: ptnode_in_use across a COW fork */
+    memset_selftest();                   /* DDR-1076: fast_memset, both dispatch paths */
 
     /* DDR-804: read the boot-time probe list before anything can consult it.
      * Two port reads, no wait, no allocation; fails closed when absent. */

@@ -1169,11 +1169,21 @@ about what can be PROVED rather than about what is built.** Six rows, not seven
   `vmm_unmap` and `vmm_protect_range` leaves a stale writable translation on
   another CPU — and **nothing in the tree would notice**. A shootdown is a
   **prerequisite of `CLONE_VM`**, not a Phase 9 item.
-- **9.6 — the real gap is `memset`, not SIMD.** `memcpy` routes to
-  `fast_memcpy` (ERMS, DDR-871); `memset` is a byte loop, paid on **every
-  `kfree`** (`kheap.c:174`, `KHEAP_DEBUG` unconditionally 1). `fast_memset`
-  via `rep stosb` under the ERMS bit `fast_memcpy_init()` already probes is
-  **the one buildable Group G item — not built**, trap in DDR-1075 §4.4.
+- **9.6 — the real gap was `memset`, not SIMD. NOW BUILT — DDR-1076.**
+  `memcpy` routed to `fast_memcpy` (ERMS, DDR-871) while `memset` stayed a
+  byte loop, paid on **every `kfree`** (`kheap.c:174`, `KHEAP_DEBUG`
+  unconditionally 1). Shipped as `arch/x86_64/fast_memset.asm` — `rep stosb`
+  under the ERMS bit `fast_memcpy_init()` already probes, the flag **shared**
+  rather than duplicated. Gated on `smoke-bench` (shard 8, strict; no new
+  gate, 177 unchanged); `cases=28` computed by the probe.
+  **DDR-1076 §1 CORRECTS DDR-1075 §4.4:** `rep stosb` is architectural — ERMS
+  is a speed hint — so the dispatch default is a **performance** property, not
+  a correctness one, and there is no fault there to hunt.
+  **The real trap is the byte broadcast**, and it is measured: 72 memset call
+  sites (73 grep hits, one the definition), **three** non-zero fills, **none** with its bytes verified anywhere
+  (`POISON_FREE` is written and never read), so a broadcast defect would be
+  invisible to all 177 gates. M1 passed every zero arm and the whole ERMS pass
+  before failing at `n=8 fill=0xA7`; M2 fails a *zero* fill at `n=1`.
 - **9.4** is a `VIRTIO_RING_F_EVENT_IDX` negotiation, not assembly; **9.1** is
   bounded by the UART, not by instruction count, and carries DDR-916's
   standing refusal; **9.2** is at its floor per DDR-870's own analysis.

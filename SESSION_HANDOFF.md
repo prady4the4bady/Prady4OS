@@ -11545,3 +11545,74 @@ emulated; `fast_memset` is not built and no decision is taken on whether it
 lands before the ISO; **§3 names no defect and fixes none** (the trip-wire is
 about a future change, not a present bug); `EVENT_IDX` is recorded, not
 scheduled; no open issue moves (OPEN-1/2/12/13 untouched).
+
+---
+
+## DDR-1076 — `fast_memset` built, and DDR-1075 §4.4 corrected (2026-09-06)
+
+**Group G's one buildable row (9.6) is BUILT**, and the DDR that identified it
+is corrected on the point it got wrong.
+
+**§1 — THE CORRECTION, and it was wrong in the direction that costs time.**
+DDR-1075 §4.4 said `fast_memcpy`'s dispatch default *"must be the safe generic
+path"*. **False as a correctness claim:** `rep stosb` / `rep movsb` are **base
+x86_64 string instructions**, and ERMS (CPUID.7:EBX bit 9) advertises only that
+the **microcode is fast** — not that the instruction exists. Both dispatch arms
+are correct on every CPU; a build taking the ERMS arm on a pre-ERMS machine
+would be correct and **slow**, not wrong. Stated as a correctness trap it would
+have sent a future session hunting a fault that **cannot occur**, on hardware CI
+does not run — the DDR-1074 shape one level down. What survives is the mutation
+observation: a mutant reversing the default *is* undetectable, and is also
+harmless.
+
+**§2 — THE REAL TRAP, measured.** `rep stosq` fills eight bytes per iteration
+from all eight lanes of RAX, so the byte must be broadcast
+(`c * 0x0101010101010101`). The classic error (movzx, no multiply) is
+**correct for every zero fill** — and this tree is almost entirely zero fills:
+**72 memset call sites** (73 grep hits, one being `string.c`'s own definition —
+counted, not carried), **exactly three non-zero**, and **none of the three has
+its bytes verified anywhere**. `grep -rn POISON_FREE` returns two lines, the
+`#define` and the write: it is **written and never read**, and the double-free
+detector checks `KHEAP_CANARY` at offset 8, written *after* the memset. The
+other two are FS write buffers whose assertions are return codes and B+tree
+behaviour. **So a broadcast defect would be invisible to all 177 gates and to
+the kheap debug machinery whose poison it corrupts.**
+
+**M1 IS THE ARGUMENT, AND ITS PASSING CASES ARE THE MEASUREMENT.** M1
+(`imul` dropped, `c3e8244cae53fa29`) fails **only** at
+`pass=1 n=8 off=2 got=0 want=167` — having passed the **entire ERMS pass**
+(`rep stosb` consumes AL and is immune, so a one-pass test would have exercised
+the one path that cannot fail), passed `n=0/1/7` in the fallback, and passed
+**`n=8` with fill `0x00`**. That single passing case is §2's claim reproduced
+rather than argued. `off=2 got=0` is the little-endian signature of
+`RAX=0x00000000000000A7` — the failure names its own mechanism. M2 (tail
+dropped, `99142d089c923e61`) fails `pass=1 n=1 off=1 got=60 want=0`, a **zero**
+fill with nothing written, so the two land on **different arms**.
+
+**A DESIGN ERROR WAS CAUGHT BEFORE THE FIRST BUILD:** the first version had
+pass 0 use whatever the CPU reported — but `memset_selftest()` runs in the
+`:375x` block and `fast_memcpy_init()` is at `:381x`, so the flag is still `0`
+and **both** passes would have taken the fallback. Both values are now forced.
+
+**Shipped:** `arch/x86_64/fast_memset.asm`, the ERMS flag **shared** with
+`fast_memcpy` rather than probed twice (DDR-1037's reasoning). COST is a
+**static instruction count** (DDR-870's convention): 3 broadcast + 2 dispatch +
+2 or 5, against ~4 instructions **per byte** before. **No speedup figure —
+TCG cannot produce one (DDR-1075 §1).**
+
+**Gate:** arms on **`smoke-bench`** (shard 8, strict). No new gate, **177
+unchanged**. `cases=28` is computed by the probe (DDR-1054).
+`PRADYOS_MEMSET_FAIL` is forbidden there but **deliberately not added to
+`GLOBAL_FORBIDDEN` (76 unchanged)** — deterministic check, own gate covers both
+directions (DDR-1065, as against DDR-981/1049's intermittents).
+
+`kernel.bin` **`fd913d083446b0d1`, 1,290,634 B — size UNCHANGED** (the
+additions fit inside existing page padding), so the size/headroom pair is
+untouched. Revert returns it **bit-for-bit**. Regression: `smoke-shell` 5/5,
+`smoke-blkmq`, `smoke-rqstress-liveness`, `smoke-blk-integrity`, `smoke-bench`
+all rc=0 with `kernel_after == kernel`. Hygiene **ALL SEVEN**.
+
+**NOT CLAIMED:** no performance measurement; **no defect fixed** — `memset` was
+always correct and merely slow, and §2 describes what a *future* broadcast
+defect would do, not a present bug; `memmove` untouched (DDR-871's forward-copy
+reason); no open issue moves (OPEN-1/2/12/13 untouched).
