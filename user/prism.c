@@ -783,6 +783,36 @@ int main(void) {
                 any = 1;
             }
             if (!any) printf("jobs: none\n");
+        } else if (!strcmp(cmd, "wait")) {                   /* DDR-1068 */
+            /* Block until every live background job has finished. Bounded by
+             * construction: the loop is over a FIXED table (NJOBS) and each
+             * SYS_WAIT4 targets a pid the shell itself forked, so there is no
+             * unbounded wait here of the DDR-961/994 kind.
+             *
+             * `reaped` counts jobs THIS call waited on, not jobs that ever ran:
+             * jobs_reap() runs at every prompt, so anything already finished is
+             * gone from the table before `wait` is typed. DDR-1068 §3 is why
+             * that number is NOT the gate's discriminator — a correct `wait`
+             * legitimately reports reaped=0 when nothing was still running, the
+             * same value a missing `wait` would produce. The gate asserts
+             * ORDERING against a job that is still alive (/SLOWTEST.ELF).
+             *
+             * NOT `bg`, and not by omission: DDR-881 refused it with the reason
+             * in this file's own job-control header — no setpgid, no controlling
+             * terminal, and no SIGTSTP/SIGCONT in kernel/proc/signal.h, so there
+             * is nothing suspended to resume. */
+            int reaped = 0;
+            for (int i = 0; i < NJOBS; i++) {
+                if (!jobs_tab[i].pid)
+                    continue;
+                int st = 0;
+                nsi(SYS_WAIT4, jobs_tab[i].pid, (long)&st, 0);
+                last_status = st;
+                jobs_tab[i].pid = 0; jobs_tab[i].id = 0; jobs_tab[i].done = 0;
+                reaped++;
+            }
+            printf("PRADYOS_WAIT_OK reaped=%d\n", reaped);
+            fflush(stdout);
         } else if (!strcmp(cmd, "fg")) {                     /* DDR-881 */
             struct job *j = (argc >= 2) ? job_by_spec(argv[1]) : 0;
             if (!j) {

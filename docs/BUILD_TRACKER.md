@@ -3035,3 +3035,69 @@ line handling already runs, the same reasoning DDR-1039 recorded for refusing
 behaves as `$?` does, the substitution being a whole-token suffix match applied
 *after* tokenizing). **Job control and scripting remain on the Group D row**,
 which is corrected rather than closed.
+
+---
+
+## DDR-1068 — PRISM `wait`, and a backlog row that asked for what an earlier DDR refused
+
+**Status:** IMPLEMENTED + gated on `smoke-shell` + M1. `kernel.bin`
+`cc8135a9463eefed` → **`b68e241eaaa7b03b`**, **1,286,538 B unchanged** (the new
+probe lives on the FAT volume). Gate count stays **177**;
+`ci-probe-rodata-check` 75 → **76 ELFs**.
+
+**The row was wrong in both directions.** Group D's B#12 read *"remaining: full
+job control, `&`, `wait`, `fg`/`bg`"*. Measured: **`&`, `jobs`, `fg` and
+`kill %n` are built** (DDR-881/755) **and gated** inside `smoke-shell`, and
+**`smoke-jobctl` has never existed** — the DDR-1063 §7c class, **seventh
+instance**.
+
+**The worse half: `bg` is a RECORDED REFUSAL, not unbuilt work.** DDR-881's scope
+statement is still in `user/prism.c:253`:
+
+> Claiming `bg` and `%1` suspension on a kernel with no setpgid and no
+> controlling terminal **would be a shell pretending to a capability the system
+> does not have.**
+
+Confirmed in the tree rather than taken from the comment: `kernel/proc/signal.h`
+defines **four** signals — `SIGKILL`, `SIGUSR1`, `SIGPIPE`, `SIGTERM` — so there
+is **no `SIGTSTP` to send and no `SIGCONT` to resume from**, and `grep` finds no
+`setpgid` anywhere. **A row listing a deliberate refusal as remaining work is
+worse than one listing something already built:** a stale "unbuilt" row costs a
+session the time to discover the work is done; this one invites a session to ship
+the exact pretence DDR-881 named — a `bg` that returns success while nothing
+resumes.
+
+**`wait` was the one genuine gap, and BOTH obvious gates are vacuous** — measured
+before either was written. An ordering arm (`run X & ; wait ; echo MARKER`) is
+**one-sided**: with `wait` the ordering is guaranteed, without it merely
+*likely*. A `reaped=N` count is worse: `jobs_reap()` runs at **every prompt** and
+`/EXECTEST.ELF` exits in milliseconds, so a **correct** `wait` legitimately
+reports `reaped=0` — the same value a missing `wait` produces. Both share one
+cause: **no probe in the tree is still running when the next line is typed.**
+Hence `user/slowtest.c` — duration-controlled via `SYS_CLOCK` (**wall** time, not
+ticks, per DDR-1029's correction), **yielding rather than spinning** (DDR-1047's
+reason: a busy loop perturbs a machine whose known failure modes are timing-
+sensitive), and bounded **two ways** because `SYS_CLOCK` wraps at midnight.
+
+**M1 THEN CAUGHT A VACUOUS ARM IN THIS DDR'S OWN GATE.** The first version slept
+**6 s** after `wait` while the probe runs 4 s — so the *injector* did the waiting
+and the ordering arm **passed with `wait` deleted**. The same class this DDR was
+written to avoid, reproduced one level up; only the `reaped=1` arm failed, so a
+single-arm gate would have shipped a passing check that proved nothing. The sleep
+is now **1 s** and the shell must do the blocking.
+
+**Two-sided after the correction:** fixed → `904 PRADYOS_SLOW_DONE waited=4` /
+`906 PRADYOS_WAIT_OK reaped=1` / `907 WAITMARK-7q4`; M1 → `902 WAITMARK-7q4` /
+`904 PRADYOS_SLOW_DONE` — **the ordering inverted**. `waited=4` confirms the
+probe ran its full interval, so the margin is measured, not assumed. Reverting
+returns `b68e241eaaa7b03b` bit-for-bit, and **M1's hash is exactly the DDR-1067
+kernel** — disabling `wait` returns PRISM to its pre-1068 form and the probe is
+not embedded, which also proves it costs the kernel image zero bytes.
+
+**NOT CLAIMED:** `bg` stays refused and this does not revisit that decision; this
+is not POSIX job control (no process groups, no controlling terminal); **`wait`
+takes no arguments** — POSIX `wait %n` is not implemented; no kernel change
+(`SYS_WAIT4` existed and `fg` already used it); no new gate; and **`reaped=` is
+not the discriminator** — it is deterministic only because the probe is still
+alive, and the ordering arm carries the claim. **Scripting is what actually
+remains of the B#12 row.**

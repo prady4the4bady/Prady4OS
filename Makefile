@@ -135,6 +135,8 @@ USER_ADEL_SRC := user/actiondeltest.c    # DDR-1016: Section 3C ACTION_DELETE_FI
 USER_ADEL_ELF := build/actiondeltest.elf
 USER_MPROT_SRC := user/mprotecttest.c    # DDR-1031: SYS_MPROTECT (NSI 97)
 USER_MPROT_ELF := build/mprotecttest.elf
+USER_SLOW_SRC  := user/slowtest.c        # DDR-1068: still running when `wait` runs
+USER_SLOW_ELF  := build/slowtest.elf
 USER_ARGT_SRC  := user/argtest.asm       # DDR-1032: execve argv/envp receiver
 USER_ARGT_ELF  := build/argtest.elf
 USER_ARGV_SRC  := user/argvtest.c        # DDR-1032: execve argv/envp launcher
@@ -554,6 +556,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ADEL_ELF) build/actiondeltest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_MPROT_SRC) -o build/mprotecttest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MPROT_ELF) build/mprotecttest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SLOW_SRC) -o build/slowtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SLOW_ELF) build/slowtest.o
 	nasm -Werror -f elf64 $(USER_ARGT_SRC) -o build/argtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGT_ELF) build/argtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ARGV_SRC) -o build/argvtest.o
@@ -584,7 +588,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -790,6 +794,7 @@ fat-image: $(KERNEL_BIN)
 	mcopy -i $(FAT_IMG) $(USER_PRISM_ELF) ::/PRISM.ELF
 	# DDR-1032: the execve argv/envp receiver, on the volume execve resolves against.
 	mcopy -i $(FAT_IMG) $(USER_ARGT_ELF) ::/ARGTEST.ELF
+	mcopy -i $(FAT_IMG) $(USER_SLOW_ELF) ::/SLOWTEST.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
 	# FAT /AETHER.CFG (DDR-732/734) is retired here.
@@ -1554,6 +1559,9 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'run /ARGTEST.ELF "gamma delta"\n'; sleep 1.5; \
 	  printf 'echo "q  9k2"\n'; sleep 0.6; \
 	  printf 'echo unterminated"\n'; sleep 0.6; \
+	  printf 'run /SLOWTEST.ELF &\n'; sleep 0.6; \
+	  printf 'wait\n'; sleep 1; \
+	  printf 'echo WAITMARK-7q4\n'; sleep 6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 120 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -1589,6 +1597,22 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@grep -q 'PRADYOS_ARGV=gamma delta' build/shell_serial.log || { echo "[shell] FAIL: quoted argument did not survive as ONE entry (DDR-1067)"; grep -a 'PRADYOS_ARG' build/shell_serial.log; exit 1; }
 	@grep -q 'q  9k2' build/shell_serial.log || { echo "[shell] FAIL: quoted run of spaces was collapsed (DDR-1067)"; grep -a '9k2' build/shell_serial.log || echo '(no 9k2 lines at all)'; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'prism: unterminated quote' build/shell_serial.log || { echo "[shell] FAIL: an unterminated quote was silently accepted (DDR-1067)"; tail -40 build/shell_serial.log; exit 1; }
+	@# THE SLEEP AFTER `wait` IS 1 s, NOT 6, AND M1 IS WHY. With 6 s the injector's
+	@# OWN SLEEP outlasted the 4 s probe, so the marker followed the job's line
+	@# even with `wait` deleted — the ordering arm passed on the mutant and was
+	@# VACUOUS. At 1 s the shell must do the blocking: `wait` holds the next line
+	@# in the serial buffer past the probe's exit, and without it the marker wins.
+	@# DDR-1068: `wait`. THE ORDERING IS THE ASSERTION, not the presence of a
+	@# line. /SLOWTEST.ELF runs ~4 s while the injector's next line arrives in
+	@# 0.6 s, so the job is STILL ALIVE when `wait` executes — which is the whole
+	@# reason that probe exists. Without it both obvious arms are vacuous
+	@# (DDR-1068 §3): an ordering arm on a fast child is one-sided, and a
+	@# `reaped=` count reads 0 for a CORRECT wait because jobs_reap() runs at
+	@# every prompt. With the job alive, reaped=1 is deterministic AND the
+	@# marker after `wait` must follow the probe's own line.
+	@grep -q 'PRADYOS_SLOW_DONE waited=' build/shell_serial.log || { echo "[shell] FAIL: the background job never ran (DDR-1068)"; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'PRADYOS_WAIT_OK reaped=1' build/shell_serial.log || { echo "[shell] FAIL: wait did not wait on the live background job (DDR-1068) — expected reaped=1"; grep -a 'PRADYOS_WAIT_OK\|PRADYOS_SLOW_DONE' build/shell_serial.log || echo '(neither line present)'; tail -40 build/shell_serial.log; exit 1; }
+	@sd=$$(grep -an 'PRADYOS_SLOW_DONE' build/shell_serial.log | head -1 | cut -d: -f1); 	 wm=$$(grep -an 'WAITMARK-7q4' build/shell_serial.log | grep -v 'prism> echo' | head -1 | cut -d: -f1); 	 test -n "$$sd" -a -n "$$wm" -a "$$sd" -lt "$$wm" || { echo "[shell] FAIL: `wait` did not block — the post-wait marker (line $$wm) did not follow the job's own line (line $$sd) (DDR-1068)"; grep -an 'PRADYOS_SLOW_DONE\|WAITMARK-7q4' build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@# DDR-888 (item 36): the agent DSL. PRISM holds neither CAP_AGENT nor
@@ -1752,7 +1776,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@if grep -qaF "erasX" build/shell_serial.log; then echo "[shell] FAIL: the erase byte was stored in the command buffer (DDR-1039)"; tail -30 build/shell_serial.log; exit 1; fi
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
 	@bash tools/qemu_runner/scan_forbidden.sh build/shell_serial.log shell
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039) + quoting(DDR-1067), clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039) + quoting(DDR-1067) + wait(DDR-1068), clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

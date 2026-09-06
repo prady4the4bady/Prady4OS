@@ -611,6 +611,23 @@ byte-exact.
   race is won.
 
 
+- **PRISM `wait` (DDR-1068)** — blocks until every live background job finishes;
+  `SYS_WAIT4` over the job table, which `fg` already used. **The row that asked
+  for it was wrong in both directions:** `&`, `jobs`, `fg` and `kill %n` were
+  already built (DDR-881/755) and gated, `smoke-jobctl` never existed, and
+  **`bg` is a recorded REFUSAL, not remaining work** — DDR-881 declined it
+  because there is no `setpgid`, no controlling terminal and no
+  `SIGTSTP`/`SIGCONT` (the kernel defines four signals), so nothing can be
+  suspended to resume. **Both obvious gate arms are vacuous:** an ordering arm on
+  a fast child is one-sided, and a `reaped=` count reads 0 for a *correct* `wait`
+  because `jobs_reap()` runs at every prompt — hence `user/slowtest.c`, a
+  duration-controlled background probe (wall-clock, yielding, bounded two ways).
+  **M1 then caught a vacuous arm in this DDR's own gate:** the injector's 6 s
+  sleep outlasted the 4 s probe, so the ordering passed with `wait` deleted; at
+  1 s the shell must do the blocking, and M1's capture now shows the ordering
+  **inverted**. Costs the kernel image **zero bytes** — the probe is on the FAT
+  volume, which M1's hash confirms by returning exactly the DDR-1067 kernel.
+
 - **PRISM quoting (DDR-1067)** — `tokenize()` split on runs of spaces and
   nothing else, so `echo "hello world"` passed **three** arguments with the quote
   characters still in them, and **a filename containing a space could not be

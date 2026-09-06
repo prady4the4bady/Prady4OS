@@ -954,7 +954,15 @@ remain of that Group D row.
 Remaining: `smoke-readline`,
 `smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
 (6-arg `mmap` ABI), `smoke-mmap-file`, `smoke-dynlink`, `smoke-iouring`,
-`smoke-sigaction`, `smoke-prism-ls`, `smoke-jobctl`.
+`smoke-sigaction`, `smoke-prism-ls`.
+**`smoke-jobctl` HAS NEVER EXISTED and is not a gap — DDR-1068 §1**, the seventh
+instance of this class: `&`, `jobs`, `fg` and `kill %n` are built (DDR-881/755)
+and gated inside `smoke-shell`, and **`wait` shipped 2026-09-06 (DDR-1068)** with
+a duration-controlled probe, because both obvious arms are vacuous. **`bg` is a
+RECORDED REFUSAL, not remaining work** — DDR-881 declined it in `prism.c:253`
+because there is no `setpgid`, no controlling terminal and no `SIGTSTP`/`SIGCONT`
+in `kernel/proc/signal.h` (four signals, checked), so there is nothing suspended
+to resume. **Scripting is what actually remains of that row.**
 **Shipped since the backlog was written:** `SYS_MPROTECT` (DDR-1031,
 `smoke-mprotect`) and `execve` argv/envp (DDR-1032, `smoke-execve-argv`).
 **PRISM `run` was never disabled** — DDR-973 §7; what ADR-024 §D5 deferred is
