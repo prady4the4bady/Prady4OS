@@ -2663,6 +2663,34 @@ stale items in one sweep of one document, and the new check catches one shape of
 one of them** — recorded so the residual's
 size is visible rather than implied.
 
+**THE WHOLE SURFACE THEN MEASURED (DDR-1063 §7c), 2026-09-06.** Every
+`` `smoke-*` `` name in `CLAUDE.md` (**116** distinct) against every `^smoke-*:`
+target in the Makefile (**182**). **59 named names have no target, and that is NOT
+a defect count** — most are legitimately-unbuilt backlog rows, which is a planning
+table doing its job. That distinction is itself the finding, and it **confirms**
+§7b's reason for deferring the mechanical gate-inventory checker rather than
+refuting it: the check needs a machine-readable way to separate *"claimed to
+exist"* from *"named as future work"*, and grepping cannot supply it. What the
+sweep does establish is a **class**: **five gate names that have never existed
+while the real gate did** — `smoke-wx`→`smoke-wxkernel` (DDR-1040),
+`smoke-mc`→`smoke-mce` (§7b), `smoke-lazystack`→`smoke-stack-demand` (the Group A
+row itself), `smoke-vdso-read`→`smoke-vdso` (DDR-1005), and **new here**
+`smoke-maximize`→**`smoke-wmmax`**. The last is the §7b shape exactly: CLAUDE.md's
+Group E row read *"DDR-719 caps at 512×512; lift to real geometry"* as if unbuilt
+and checklist §5.3 said maximize *"shipped as DDR-1007 under a different gate
+name"* **without naming it**, while `smoke-wmmax`'s Makefile header reads
+*"Layer-7 maximize gate (DDR-719, retargeted by DDR-1007)"* and it asserts
+**`w > 512`**, with the failure message *"DDR-1007 did not take effect"* — the very
+cap the row described is what the gate proves is gone — and it further asserts the
+client HONOURED the size, so a compositor publishing a geometry nothing acts on
+fails. **Verified in the Makefile, not inferred from the DDR.** **Why it is not a
+typo:** a wrong gate name reads as *unbuilt work*, so the cost is building
+something twice, or "fixing" something already fixed; five instances is a class,
+and the cause is structural — **the name is written when the work is planned and
+the gate is named when the work lands, and nothing has ever reconciled the two**.
+Both the CLAUDE.md Group E row and checklist §5.3 corrected. **Document sweep
+total: six stale items**, of which `ci-docstate-check` catches one shape of one.
+
 **NOT CLAIMED:** the documented numbers are not thereby *correct* — a stale but
 self-consistent pair still passes, which is exactly what checklist §6 was;
 currency remains §NON-NEGOTIABLE 11's human discipline. No kernel defect is fixed

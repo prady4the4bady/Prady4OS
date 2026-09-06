@@ -453,6 +453,19 @@ All entries below are **shipped**.
   remedy message in the checker's own first draft. **NOT CLAIMED:** this does not
   make the documented numbers *correct* — a stale but self-consistent pair still
   passes, which is exactly what the checklist's §6 was.
+  **Two document sweeps for the same class then found six more stale items**
+  (DDR-1063 §7b/§7c), five of them one shape: **a gate name in a planning table
+  that has never existed while the real gate did** — `smoke-wx`/`smoke-wxkernel`,
+  `smoke-mc`/`smoke-mce`, `smoke-lazystack`/`smoke-stack-demand`,
+  `smoke-vdso-read`/`smoke-vdso`, `smoke-maximize`/**`smoke-wmmax`**. Such a row
+  reads as *unbuilt work*, so the cost is building something twice; the cause is
+  structural — the name is written when the work is planned, the gate is named
+  when it lands, and nothing reconciles them. **A mechanical gate-inventory check
+  is buildable on `ci-shard-check`'s existing machinery and is deliberately NOT
+  built**, because 59 of the 116 `smoke-*` names in `CLAUDE.md` have no Makefile
+  target and **that is correct** — they are backlog rows, and no grep separates
+  "claimed to exist" from "named as future work". Named as the largest piece of
+  the residual rather than left implicit.
 
 
 #### Post-quantum cryptographic primitives (FIPS 202 / FIPS 204, 2026-09)
