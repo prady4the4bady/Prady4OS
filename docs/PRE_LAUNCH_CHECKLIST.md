@@ -910,6 +910,41 @@ was already gated by DDR-842). Shipped: `READ_FILE`, `DELETE_FILE`,
 `QUERY_MEMORY`, `REWRITE_AGENT_CODE`, `PROPOSE_HYPOTHESIS`, `EVOLVE_GENOME`.
 `SEND_IPC` — see §3 and §4.1. `RUN_EXPERIMENT` — see §3.
 
+**THIS SECTION WAS RIGHT AND `CLAUDE.md`'s GROUP F TABLE WAS NOT — DDR-1072.**
+Measured 2026-09-06 against the Makefile, `tools/ci/gate_shards.txt` and the
+probe sources: all six shipped types have a probe that submits **that exact
+type** and a gate that is sharded and not excluded — `smoke-actionread` (1),
+`smoke-actiondel` (1), `smoke-actionquery` (6), `smoke-coderewrite` (7,
+**strict**), `smoke-actionhypo` (3, both hypothesis and genome). Every one of
+those eight rows in the table carried `gate per type` with **no marker**, so the
+checklist and the table have disagreed about Section 3C since DDR-1021 and
+nothing in the tree could see it. The table is now corrected.
+
+**AND THE TWO DEFERRED TYPES ARE A TRAP — read this before closing either.**
+Each sits beside a **strict-tier, green, registered** gate whose *name* matches
+the type and whose *claim* is something else:
+
+- `smoke-sendipc` (shard 7) gates DDR-1033's ring-3 **door** (`SYS_IPC_SEND` /
+  `SYS_IPC_RECV`, NSI 98/99). `grep 'ACTION_SEND_IPC\|SUBMIT_ACTION'
+  user/ipctest.c` returns **one line — a comment saying the type was deferred**.
+- `smoke-runexp` (shard 8) drives `QEMU_PROBES=exp`, DDR-1034's bounded stack
+  machine. `grep -rn ACTION_RUN_EXPERIMENT kernel/ user/` outside `aether.h`
+  returns **one line — a header comment**.
+
+DDR-1071 §5 refused a mechanical "registered gate ⇒ row must carry a marker"
+checker because it would **redden on correct in-progress work** (a false
+negative). These two are the **false positive**, and it is the worse direction:
+a false negative is a red check someone investigates; a false positive is a row
+that silently stops being work.
+
+**`CAP_EXEC` is the one of the four that IS wired**, and to a different consumer
+than the backlog row names: `sys_experiment.c:35/:45` mint and `cap_authorize`
+it, gated by `smoke-runexp`, whose deny arm holds `CAP_EXEC` and lacks only
+`is_exec` (so the two checks are independently live). `ACTION_EXEC_CODE` / PRAX
+— the row's stated purpose — remains a pre-approved exception. The other three
+bits are read **nowhere**: `agent_caps` is written once (`sched.c:1122`, to 0),
+and `aether.h:24-30` deliberately omits the action types they gate.
+
 ### 5.3 — Unbuilt backlog by group
 
 **RE-MEASURED 2026-09-05 at `c8b041b`** by grepping the Makefile for each named
@@ -1085,10 +1120,25 @@ the ring-3 reader exists and is gated by `smoke-vdso` (shard 7, strict); only
 `vdso_entry.asm` is unbuilt, and that is a security-posture change (the user view
 is deliberately `VMM_NX`), not a checkbox.
 
-**Group F gates (all MISSING):** `smoke-auditpersist` (needs the SFS boot root
-above), `smoke-agentexec`, `smoke-agentconc`, `smoke-rosterctd`, `smoke-capocr`,
-`smoke-capexec`, `smoke-capscene`, `smoke-capnetbrowse`, and the five
-spawnability gates that depend on them. `smoke-agentmetrics` EXISTS.
+**Group F gates — NOT all missing in the same sense (corrected 2026-09-06,
+DDR-1072).** Genuinely unbuilt: `smoke-auditpersist` (needs the SFS boot root
+above), `smoke-agentexec`, `smoke-agentconc`, `smoke-rosterctd`. **Refused, not
+missing:** `smoke-capocr`, `smoke-capexec`, `smoke-capscene`,
+`smoke-capnetbrowse` and the five spawnability gates that depend on them —
+DDR-982 §5.3 **withdrew** enforcement and `smoke-capagent` pending an operator
+decision, because a gate written now *"could only assert that a bit can be set
+and read back, which is a test of `uint32_t`, not of a capability system."*
+Listing a recorded refusal beside genuine gaps is the DDR-1068 §2 class; the two
+need different actions (build vs. ask). `smoke-agentmetrics` EXISTS **and is
+registered** (shard 8, strict), as does `smoke-agentpanel` (shard 6, strict) —
+what is unbuilt on that row is the three named *visualisations* (CPU% sparkline,
+memory graph, action-rate histogram), not the metrics path.
+
+**One Group F row names a blocker that no longer exists:** agent
+`execve`-on-respawn reads *"needs FAT32 fix or SFS as agent root"*, and the
+FAT32 multi-cluster defect was **refuted and gated** (DDR-973). A blocker
+presented as live is a different staleness from work presented as remaining —
+the first can suppress work that is actually unblocked.
 
 **Group G — assembly optimization (6 of 7 items unstarted):** hot-path `kputc`,
 context-switch critical path, TLB shootdown batching, virtio-blk doorbell

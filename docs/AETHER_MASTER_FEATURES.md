@@ -1069,3 +1069,26 @@ self-improvement (F#72), the **metric lockbox** (F#68 / S3 — highest priority 
 Section D is confirmed built, which it now is), and the full 12-agent Section G
 roster. This is not a single task; it is an evolving capability goal tracked here.
 Decompose into bounded DDRs only when a concrete slice is chosen.
+
+---
+
+## Section 3C / Group F record correction — DDR-1072 (2026-09-06)
+
+**Section 3C stands at 6 shipped + 2 deferred**, unchanged in substance and
+corrected in the record: `READ_FILE`, `DELETE_FILE`, `QUERY_MEMORY`,
+`REWRITE_AGENT_CODE`, `PROPOSE_HYPOTHESIS` and `EVOLVE_GENOME` each have a
+ring-3 probe that submits **that exact type** and a gate that is in a shard and
+not excluded (`smoke-actionread`, `smoke-actiondel`, `smoke-actionquery`,
+`smoke-coderewrite` **strict**, `smoke-actionhypo`). `CLAUDE.md`'s Group F table
+carried all eight as `gate per type` with no marker.
+
+**`ACTION_SEND_IPC` and `ACTION_RUN_EXPERIMENT` remain deferred as ACTION
+TYPES**, and each sits beside a strict-tier green gate whose name matches it —
+`smoke-sendipc` (the DDR-1033 door) and `smoke-runexp` (the DDR-1034 executor).
+Neither submits the type. **Do not close either row by pointing at that gate.**
+
+**Per-agent capability enforcement (`CAP_OCR`/`CAP_SCENE`/`CAP_NET_BROWSE`, and
+`ACTION_EXEC_CODE` behind `CAP_EXEC`) is a WITHDRAWN item awaiting an operator
+decision — DDR-982 §5.3 — not unbuilt work.** `agent_caps` is written once and
+read nowhere, and `aether.h` deliberately omits the action types those bits
+gate. `CAP_EXEC` itself **is** enforced, for DDR-1034's experiment executor.

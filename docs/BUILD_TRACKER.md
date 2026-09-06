@@ -3264,3 +3264,75 @@ have to be semantic, and nothing in the tree can read prose.
 
 **Group E now reads as: everything shipped and gated except the animated mesh
 and OPEN-1.** The gate coverage did not change — only the record of it.
+
+---
+
+## DDR-1072 — the Group F table, and the false positive DDR-1071 did not name
+
+**2026-09-06. Docs only; `kernel.bin` untouched, 177 gates unchanged.**
+
+Group F had not had the audit Groups C, D and E each received. Measured against
+the **Makefile**, **`tools/ci/gate_shards.txt`** and — for the action types —
+**the probe sources, because a gate's name is not its claim**.
+
+**Six of the eight Section 3C rows carried `gate per type` with no marker while
+being shipped, gated and CI-registered:** `smoke-actionread` (Makefile:3680,
+shard 1), `smoke-actiondel` (:3793, shard 1), `smoke-actionquery` (:3861,
+shard 6), `smoke-coderewrite` (:2869, shard 7 **strict**), and
+`smoke-actionhypo` (:3893, shard 3) covering both `PROPOSE_HYPOTHESIS` and
+`EVOLVE_GENOME`. None is in `shard_check.sh:50`'s exclude set. This is the tally
+`CLAUDE.md`'s own DDR-1021 entry and `PRE_LAUNCH_CHECKLIST.md` §5.2 already
+recorded — the prose and the table have disagreed since DDR-1021 was written.
+
+**The two genuinely open rows are a trap, and that is the finding.** `SEND_IPC`
+and `RUN_EXPERIMENT` each sit beside a strict-tier, green, registered gate whose
+**name matches the type** and whose **claim is a different thing**:
+`smoke-sendipc` gates DDR-1033's ring-3 *door* (grep over `user/ipctest.c`
+returns one line — a comment saying the type was deferred), and `smoke-runexp`
+drives DDR-1034's stack machine (grep for `ACTION_RUN_EXPERIMENT` outside
+`aether.h` returns one line — a header comment).
+
+DDR-1071 §5 refused the mechanical rule *"a row whose named gate exists and is
+registered must carry a marker"* because it would **redden on `smoke-horizon`**,
+correct in-progress state — a **false negative**. Applied by name, which
+`gate per type` invites, the same rule **closes these two rows** — a **false
+positive**, and the worse direction: a false negative is a red check someone
+investigates, a false positive is a row that silently stops being work. A second
+independent reason the refusal was right, unavailable to DDR-1071.
+
+**The four `CAP_*` rows are a recorded refusal, not unbuilt work** (DDR-1068 §2
+class, instances 3-6). DDR-982 §5.3 kept the bits and `tcb.agent_caps` and
+**withdrew** enforcement and `smoke-capagent` pending an operator decision.
+Corroborated in the tree rather than taken from the DDR: `agent_caps` is written
+once (`sched.c:1122`, to 0) and **read nowhere**, and `aether.h:24-30`
+deliberately omits the action types those bits gate. Three of the four are also
+already in PRE-APPROVED EXCEPTIONS, so the same item sat in `CLAUDE.md` twice
+with the work copy not saying so.
+
+**`CAP_EXEC` is the exception and is half right** — `sys_experiment.c:35/:45`
+mint and `cap_authorize` it, gated by `smoke-runexp` whose deny arm holds
+`CAP_EXEC` and lacks only `is_exec`; but it is wired to DDR-1034's stack
+machine, not to the row's `ACTION_EXEC_CODE`/PRAX, which is itself a
+pre-approved exception. This retires the DDR-1021 claim that *"CAP_EXEC is a
+`#define` checked NOWHERE"* — true when written, false since DDR-1034.
+
+**Two more rows corrected.** The live-metrics panel's *plumbing* is gated twice
+(`smoke-agentmetrics` shard 8 strict, `smoke-agentpanel` shard 6 strict) while
+the three visualisations the row names are not built. And the agent-respawn row
+names a blocker that no longer exists (DDR-973 refuted and gated the FAT32
+defect) — **a different staleness**: work presented as remaining understates
+progress, a **blocker presented as live can suppress work that is unblocked**.
+
+**A negative finding, and the retracted version is why it is recorded.** A first
+sweep appeared to find `smoke-agentmetrics` in the Makefile and *not* in
+`gate_shards.txt` — the inverse defect, a built gate CI never runs. The **grep**
+was wrong (the shard file is `<shard>\t<target>`, so the target is not at line
+start). Re-measured it is shard 8 strict, and `tools/ci/shard_check.sh:73-84`
+**asserts** every Makefile `smoke-*` target is sharded or explicitly excluded —
+so *"exists but unregistered"* cannot survive `ci-shard-check`. **The §7b class
+survives only in the DOCUMENT**, exactly the boundary DDR-1063 built
+`ci-docstate-check` for and exactly the boundary it cannot cross.
+
+**Group F's genuinely open work** is the domain agents (F#66/67/69-75),
+audit-ring SFS persistence, agent respawn, concurrency arbitration and roster
+continuity. **The gate coverage did not change — only the record of it.**

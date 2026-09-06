@@ -11313,3 +11313,61 @@ item. No new gate (177), no checker.
 **Group E now reads as: everything shipped and gated except the animated mesh
 and OPEN-1** — a materially different picture from five open rows days from a
 deadline. The coverage did not change, only the record of it.
+
+---
+
+## CHECKPOINT 2026-09-06 — DDR-1072: the Group F table audit
+
+**Docs only. No code change; `kernel.bin` untouched (`2c4868b2f5f0d00a`,
+1,290,634 B / 282,230 B headroom), 177 gates, GLOBAL_FORBIDDEN 76.**
+
+Continued the audit pattern (Group C -> D -> E -> F): measure a backlog table
+against the **Makefile**, **`tools/ci/gate_shards.txt`** and, this time, **the
+probe sources** — because for the Section 3C rows a gate's name is not its
+claim, and that turned out to be the whole finding.
+
+**Six of eight Section 3C rows** presented shipped, gated, CI-registered work as
+remaining (`smoke-actionread` shard 1, `smoke-actiondel` 1, `smoke-actionquery`
+6, `smoke-coderewrite` 7 strict, `smoke-actionhypo` 3 for both hypothesis and
+genome). The checklist §5.2 and the DDR-1021 entry already had the right tally;
+the table never absorbed it.
+
+**The two open rows are a trap — the FALSE POSITIVE DDR-1071 did not name.**
+`smoke-sendipc` (shard 7, strict) and `smoke-runexp` (shard 8, strict) are both
+real, both green, and both cover the **door / executor**, not the action type:
+grep over `user/ipctest.c` returns one line (a comment saying SEND_IPC was
+deferred), and `ACTION_RUN_EXPERIMENT` outside `aether.h` returns one line (a
+header comment). DDR-1071 refused the mechanical checker because it would redden
+on correct in-progress work; these two show it would also **close two rows
+wrongly** — the worse direction, since a false negative gets investigated and a
+false positive silently stops being work.
+
+**Four `CAP_*` rows are a recorded refusal** (DDR-982 §5.3 withdrew enforcement
+and `smoke-capagent` pending an operator decision) — corroborated in the tree:
+`agent_caps` written once (`sched.c:1122`, to 0) and read nowhere, and
+`aether.h:24-30` deliberately omits the action types. **`CAP_EXEC` is the
+exception and is half right** — genuinely wired (`sys_experiment.c:35/:45`,
+gated by `smoke-runexp`), but to DDR-1034's stack machine, not to the row's
+`ACTION_EXEC_CODE`/PRAX. That retires DDR-1021's "checked NOWHERE" claim.
+
+**Also corrected:** the live-metrics row (plumbing gated twice, the three named
+visualisations unbuilt) and the agent-respawn row, which names a blocker DDR-973
+refuted — a **blocker presented as live**, a different staleness from work
+presented as remaining, and the more damaging of the two.
+
+**A retracted claim, recorded because the correction is stronger:** my first
+sweep appeared to find `smoke-agentmetrics` unregistered. The grep was wrong
+(the shard file is tab-separated, so the target is not at line start). It is
+shard 8 strict, and `shard_check.sh:73-84` asserts every Makefile `smoke-*` is
+sharded or excluded — so "exists but unregistered" cannot survive
+`ci-shard-check`, and **the §7b class survives only in the document**.
+
+**NOT CLAIMED:** no gate re-run this session; SEND_IPC / RUN_EXPERIMENT stay
+open as action types; no operator decision made on DDR-982 (C)/(D) — those rows
+are re-labelled, not resolved; DDR-982 §5.4's second create-then-init race is
+recorded again, not fixed; OPEN-1/2/12/13 untouched.
+
+**NEXT:** Group F's genuinely open work is the domain agents (F#66/67/69-75),
+audit-ring SFS persistence (blocked on the Group B SFS boot root), agent
+respawn, concurrency arbitration, roster continuity. Group A and Group B tables
+have not had this audit.
