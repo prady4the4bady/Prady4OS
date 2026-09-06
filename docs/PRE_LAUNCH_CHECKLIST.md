@@ -995,6 +995,20 @@ the row is not read as "no UDP anywhere".**
 
 Remaining and genuinely unbuilt: `smoke-tap`, `smoke-ipv6`, `smoke-tls`.
 
+**A NAMING COLLISION ON THAT LAST ONE, recorded before it misleads someone.**
+In this tree **`TLS` means Thread-Local Storage, not Transport Layer Security.**
+`user/tlstest.asm` is a PROC-D `SYS_SET_TLS` + `SYS_WRITEV` probe, and its
+sentinel `PRADYOS_TLS_OK WRITEV_OK` is a **required pattern of `smoke-user`**
+(Makefile:1472) — so a session grepping for "TLS" finds a green, shipped, gated
+`PRADYOS_TLS_OK` and could conclude a TLS shim exists. It does not:
+`grep -rniE 'mbedtls|ssl_|tls_handshake|X509'` over `kernel/`, `user/` and
+`third_party/lwip-port/` returns **nothing**. Same hazard class as DDR-1069's
+`fd(0..7)` (a proxy handle documented as a file descriptor) and DDR-1037's
+`SYS_POLL` vs `SYS_POLL_RESULT`. **`smoke-tls` is a planning name for unbuilt
+work and is NOT another DDR-1063 §7c instance** — §7c is about a name for work
+already *done*; counting this would inflate the class, the same call DDR-1069
+made for the other Group C names.
+
 **Group D — userspace (all MISSING except as noted).** `smoke-poll` was listed
 here as MISSING while the DDR-1037 paragraph immediately above said it EXISTS —
 **an internal contradiction inside this one section, now measured: it EXISTS**
