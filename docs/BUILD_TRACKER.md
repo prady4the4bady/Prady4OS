@@ -2675,7 +2675,9 @@ sweep does establish is a **class**: **five gate names that have never existed
 while the real gate did** — `smoke-wx`→`smoke-wxkernel` (DDR-1040),
 `smoke-mc`→`smoke-mce` (§7b), `smoke-lazystack`→`smoke-stack-demand` (the Group A
 row itself), `smoke-vdso-read`→`smoke-vdso` (DDR-1005), and **new here**
-`smoke-maximize`→**`smoke-wmmax`**. The last is the §7b shape exactly: CLAUDE.md's
+`smoke-maximize`→**`smoke-wmmax`** — and **DDR-1067 later found a sixth**,
+`smoke-pipes`→`smoke-shell`, so the count is stated with its date rather than as
+a total. The fifth is the §7b shape exactly: CLAUDE.md's
 Group E row read *"DDR-719 caps at 512×512; lift to real geometry"* as if unbuilt
 and checklist §5.3 said maximize *"shipped as DDR-1007 under a different gate
 name"* **without naming it**, while `smoke-wmmax`'s Makefile header reads
@@ -2932,3 +2934,70 @@ FAT32 writer were all correct and complete. No open issue moves. The live
 (Ollama) branch is unchanged and unexercised. And the agent executes the **one**
 action type it submits — dispatching the template on action type is a larger
 change and is not attempted.
+
+---
+
+## DDR-1067 — PRISM had no quoting at all, and the obvious gate arm for it is vacuous
+
+**Status:** IMPLEMENTED + gated on `smoke-shell` + M1 (the pre-fix tokenizer,
+verbatim). `kernel.bin` `dde6c5d10748842d` → **`cc8135a9463eefed`**,
+**1,286,538 B unchanged**. **No kernel change** — `tokenize()` is ring-3 shell
+code. Gate count stays **177**.
+
+**The row was stale before the work started.** Group D's *"PRISM pipes /
+redirection / quoting / job control / scripting"* named four things, and
+`smoke-shell`'s own PASS line — read, not assumed — already says *"redirect(> >>
+< 2>) + truncate/append + stderr + pipes(N-stage, >4KiB)"*. **Pipes and
+redirection were shipped and gated**, and `smoke-pipes`, the gate name that row
+carried, does not exist — the DDR-1063 §7c class again, sixth instance.
+
+**The defect.** `prism.c:176` split on runs of spaces and nothing else. So `echo
+"hello world"` passed **three** arguments with the quote characters still in
+them, and **a filename containing a space could not be named at all** — `touch
+"my file"` created two files, neither of them the one asked for. Newly reachable
+beyond the shell: DDR-1032b wired PRISM's `run` through to `execve`'s argv
+marshalling, so a quoting defect now propagates into the **child process**.
+
+**THE OBVIOUS GATE ARM IS VACUOUS, AND THAT WAS MEASURED BEFORE IT WAS WRITTEN**
+— third time this class has been caught in design text before any code
+(DDR-1039 §3.1, DDR-1058). The natural test is `echo "one two"` asserting `one
+two`; `prism.c:591` **joins argv with single spaces**, so quoted and unquoted
+print **byte-identical output** and the arm passes on a shell with no quoting
+whatsoever. The two arms that discriminate:
+
+- `run /ARGTEST.ELF "gamma delta"` → **`PRADYOS_ARGC=2`**, where the pre-existing
+  DDR-1032b arm four lines earlier runs the same probe unquoted and prints
+  `ARGC=3`, so the two counts cannot be confused in one log; plus
+  `PRADYOS_ARGV=gamma delta`, **one argv entry containing a space**, which no
+  unquoted line can produce. Both directions, per DDR-1039.
+- `echo "q  9k2"` with **two** internal spaces — the one thing the tokenizer
+  destroys and `echo`'s join cannot restore. Vacuity **checked**: `grep -c`
+  returns 1 on the passing capture, and the only other `9k2` line has no double
+  space.
+
+**Fix.** `'...'` and `"..."` both literal, stripped in place through a write
+cursor trailing the read cursor, so the result is never longer than the input and
+every caller is unchanged. **An unterminated quote returns -1 and the line does
+not run** — a typo must not execute a command the user did not write, and this
+shell has no continuation prompt to offer instead.
+
+**M1 is the pre-DDR-1067 tokenizer restored verbatim** (`2f89f3829acb888d`), not
+a synthetic defect, and its log carries all three halves: `PRADYOS_ARGC=3`
+**twice**; `prism> "q 9k2"` — one line showing that the quotes survived into the
+argument *and* that the space run was collapsed; and `prism> unterminated"`,
+silently accepted. Reverting returns `cc8135a9463eefed` bit-for-bit.
+
+**THIS DDR'S OWN FIRST DRAFT WAS WRONG AND CHECKING IT CAUGHT IT.** §4.1 claimed
+a quoted `">"` would become a literal argument, *"which is the correct shell
+behaviour"*. **False:** `|`, `>`, `>>`, `<` and `2>` are matched by `strcmp` on
+the token **after** the quotes are stripped (`prism.c:385`, `:469`), so `echo
+">"` still redirects. Making it literal needs a *was-quoted* flag threaded
+through two loops. **Recorded as a limitation rather than shipped as an
+unverified claim.**
+
+**NOT CLAIMED:** no new gate — the arms belong on `smoke-shell` where PRISM's
+line handling already runs, the same reasoning DDR-1039 recorded for refusing
+`smoke-readline`. No backslash escapes. No expansion inside double quotes (`"$?"`
+behaves as `$?` does, the substitution being a whole-token suffix match applied
+*after* tokenizing). **Job control and scripting remain on the Group D row**,
+which is corrected rather than closed.

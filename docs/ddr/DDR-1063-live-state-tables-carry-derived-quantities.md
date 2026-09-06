@@ -281,8 +281,11 @@ checker rather than refuting it: the check needs a machine-readable way to tell
 *"claimed to exist"* from *"named as future work"*, and no amount of grepping
 supplies that. The deferral was right for the reason given.
 
-**What the sweep does establish is a real pattern: FIVE gate names that have
-never existed, while the real gate did.** Each was found separately, by a
+**What the sweep does establish is a real pattern: gate names that have
+never existed, while the real gate did.** Five at the time of writing; **DDR-1067
+found a sixth** (`smoke-pipes` — pipes and redirection are gated inside
+`smoke-shell`, whose own PASS line says so), which is why the count is stated
+with its date rather than as a total. Each was found separately, by a
 different DDR, over months:
 
 | named in a planning table | the gate that actually exists | found by |
@@ -292,6 +295,7 @@ different DDR, over months:
 | `smoke-lazystack` | `smoke-stack-demand` | the Group A row itself |
 | `smoke-vdso-read` | `smoke-vdso` | DDR-1005 |
 | **`smoke-maximize`** | **`smoke-wmmax`** | **here** |
+| **`smoke-pipes`** | **`smoke-shell`** (pipes + redirection arms) | **DDR-1067** |
 
 The last is new and is the §7b shape exactly. CLAUDE.md's Group E row read
 *"DDR-719 caps at 512×512; lift to real geometry"* as if unbuilt, and §5.3 said

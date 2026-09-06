@@ -457,7 +457,8 @@ All entries below are **shipped**.
   (DDR-1063 §7b/§7c), five of them one shape: **a gate name in a planning table
   that has never existed while the real gate did** — `smoke-wx`/`smoke-wxkernel`,
   `smoke-mc`/`smoke-mce`, `smoke-lazystack`/`smoke-stack-demand`,
-  `smoke-vdso-read`/`smoke-vdso`, `smoke-maximize`/**`smoke-wmmax`**. Such a row
+  `smoke-vdso-read`/`smoke-vdso`, `smoke-maximize`/**`smoke-wmmax`**, and
+  `smoke-pipes`/`smoke-shell` (DDR-1067, a sixth found after that sweep). Such a row
   reads as *unbuilt work*, so the cost is building something twice; the cause is
   structural — the name is written when the work is planned, the gate is named
   when it lands, and nothing reconciles them. **A mechanical gate-inventory check
@@ -609,6 +610,22 @@ byte-exact.
   a mutant reverting it passes every gate, since the split is invisible unless a
   race is won.
 
+
+- **PRISM quoting (DDR-1067)** — `tokenize()` split on runs of spaces and
+  nothing else, so `echo "hello world"` passed **three** arguments with the quote
+  characters still in them, and **a filename containing a space could not be
+  named at all**; since DDR-1032b wired `run` through to `execve`'s argv
+  marshalling, the defect reached the child process too. `'...'` and `"..."` are
+  now stripped in place, and an **unterminated quote refuses to run the line**
+  rather than guessing at what was meant. **The obvious gate arm is vacuous and
+  that was measured before it was written:** PRISM's `echo` joins argv with
+  single spaces, so `echo "one two"` and `echo one two` print byte-identical
+  output. The live arms are `run /ARGTEST.ELF "gamma delta"` → `PRADYOS_ARGC=2`
+  (the pre-existing unquoted arm prints `ARGC=3`, so the two cannot be confused)
+  plus `PRADYOS_ARGV=gamma delta`, and `echo "q  9k2"` with two internal spaces —
+  the one thing the tokenizer destroys and `echo`'s join cannot restore. Not
+  done, stated: no backslash escapes, no expansion inside double quotes, and
+  **quoting does not protect the operators** (`echo ">"` still redirects).
 
 ### AETHER agent layer (kernel plumbing)
 - Kernel action queue + append-only audit log (ADR-026); per-process mem cap + syscall rate limit

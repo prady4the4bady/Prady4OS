@@ -1551,6 +1551,9 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'jobs\n'; sleep 1.2; \
 	  printf 'kill %%99\n'; sleep 0.6; \
 	  printf 'echo erasX\177e-ok-3m7\n'; sleep 0.6; \
+	  printf 'run /ARGTEST.ELF "gamma delta"\n'; sleep 1.5; \
+	  printf 'echo "q  9k2"\n'; sleep 0.6; \
+	  printf 'echo unterminated"\n'; sleep 0.6; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 120 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -1572,6 +1575,20 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# types, which the launcher cannot: it calls execve directly.
 	@grep -q 'PRADYOS_ARGV=alpha' build/shell_serial.log || { echo "[shell] FAIL: run did not pass its arguments through execve (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log || echo '(no PRADYOS_ARG lines at all)'; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'PRADYOS_ARGV=beta' build/shell_serial.log || { echo "[shell] FAIL: run truncated its argument vector (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log; exit 1; }
+	@# DDR-1067: QUOTING. `run /ARGTEST.ELF "gamma delta"` must deliver TWO argv
+	@# entries, the second containing a space -- a line no unquoted input can
+	@# produce. PRADYOS_ARGC=2 appears nowhere else: the arm four lines above
+	@# runs the same probe unquoted and prints ARGC=3, so the two counts cannot
+	@# be confused in one log, and both directions are asserted per DDR-1039.
+	@# The OBVIOUS arm here would be `echo "one two"` and it is VACUOUS: PRISM's
+	@# echo joins argv with single spaces (prism.c:591), so quoted and unquoted
+	@# print byte-identical output. Hence the ARGC arm, and hence the echo arm
+	@# below uses TWO internal spaces -- the one thing the tokenizer destroys
+	@# and echo's join cannot restore.
+	@grep -q 'PRADYOS_ARGC=2' build/shell_serial.log || { echo "[shell] FAIL: quoting did not group the argument (DDR-1067) — expected PRADYOS_ARGC=2"; grep -a 'PRADYOS_ARG' build/shell_serial.log || echo '(no PRADYOS_ARG lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'PRADYOS_ARGV=gamma delta' build/shell_serial.log || { echo "[shell] FAIL: quoted argument did not survive as ONE entry (DDR-1067)"; grep -a 'PRADYOS_ARG' build/shell_serial.log; exit 1; }
+	@grep -q 'q  9k2' build/shell_serial.log || { echo "[shell] FAIL: quoted run of spaces was collapsed (DDR-1067)"; grep -a '9k2' build/shell_serial.log || echo '(no 9k2 lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'prism: unterminated quote' build/shell_serial.log || { echo "[shell] FAIL: an unterminated quote was silently accepted (DDR-1067)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@# DDR-888 (item 36): the agent DSL. PRISM holds neither CAP_AGENT nor
@@ -1735,7 +1752,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@if grep -qaF "erasX" build/shell_serial.log; then echo "[shell] FAIL: the erase byte was stored in the command buffer (DDR-1039)"; tail -30 build/shell_serial.log; exit 1; fi
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
 	@bash tools/qemu_runner/scan_forbidden.sh build/shell_serial.log shell
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039), clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039) + quoting(DDR-1067), clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

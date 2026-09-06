@@ -172,7 +172,29 @@ static void expand_status(char **argv, int argc) {
     }
 }
 
-/* Split s in place on runs of spaces; fills argv (up to maxv), returns argc. */
+/* Split s in place on runs of spaces; fills argv (up to maxv), returns argc,
+ * or -1 on an unterminated quote.
+ *
+ * DDR-1067: this used to split on spaces ONLY, with no quote handling anywhere,
+ * so `echo "hello world"` passed THREE arguments (quotes included) and a
+ * filename containing a space could not be named at all. Since DDR-1032b wired
+ * PRISM's `run` through to execve's argv marshalling, the defect also reached
+ * the child process rather than stopping at the shell.
+ *
+ * '...' and "..." are both LITERAL here and are stripped. Writing is done
+ * through a separate cursor `w` that trails `s`, so the token is rebuilt in
+ * place: the result is never longer than the input, so no buffer is needed and
+ * every caller is unchanged.
+ *
+ * An unterminated quote returns -1 rather than being treated as terminated: a
+ * typo must not execute a command the user did not write, and this shell has no
+ * continuation prompt to offer instead.
+ *
+ * NOT DONE, stated rather than implied (DDR-1067 §4.1): no backslash escapes;
+ * no expansion inside double quotes (the `$?` substitution above is a
+ * whole-token suffix match applied AFTER this, so "$?" behaves as $? does);
+ * and quoting does NOT protect the operators -- `|`, `>`, `>>`, `<` and `2>`
+ * are matched by strcmp on the STRIPPED token, so `echo ">"` still redirects. */
 static int tokenize(char *s, char **argv, int maxv) {
     int argc = 0;
     while (*s && argc < maxv) {
@@ -181,8 +203,22 @@ static int tokenize(char *s, char **argv, int maxv) {
         if (!*s)
             break;
         argv[argc++] = s;
-        while (*s && *s != ' ')
-            s++;
+        char *w = s;                  /* write cursor, always <= s */
+        while (*s && *s != ' ') {
+            if (*s == '\'' || *s == '"') {
+                char q = *s++;
+                while (*s && *s != q)
+                    *w++ = *s++;
+                if (*s != q)
+                    return -1;        /* unterminated */
+                s++;                  /* consume the closing quote */
+            } else {
+                *w++ = *s++;
+            }
+        }
+        char *end = s;                /* where the unquoted scan stopped */
+        while (w < end)
+            *w++ = 0;                 /* erase what the quote strip left behind */
     }
     return argc;
 }
@@ -345,6 +381,16 @@ int main(void) {
         if (len < 0)                       /* EOF: controlled exit, init won't respawn */
             return 0;
         int argc = tokenize(line, argv, 16);
+        if (argc < 0) {                    /* DDR-1067: unterminated quote.
+                                            * Reported and NOT run -- a typo must
+                                            * not execute a command the user did
+                                            * not write, and there is no
+                                            * continuation prompt to offer. */
+            fprintf(stderr, "prism: unterminated quote\n");
+            fflush(stderr);
+            last_status = 2;
+            continue;
+        }
         if (argc == 0)
             continue;
         expand_status(argv, argc);         /* DDR-789: `$?` -> last exit status */

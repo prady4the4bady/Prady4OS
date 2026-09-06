@@ -943,8 +943,16 @@ that way** (DDR-1039: the erase arm belongs on `smoke-shell`, where PRISM's line
 handling already runs; a separate gate would boot an OS to type one word).
 `smoke-futex` is MISSING with its blocker named (DDR-1038: a futex is a
 shared-memory word and this kernel has no way for two threads to share one).
+**`smoke-pipes` HAS NEVER EXISTED and is not a gap — DDR-1067 §1**,
+measured 2026-09-06 the same way `smoke-maximize` was: **pipes and redirection
+are already shipped and gated inside `smoke-shell`**, whose own PASS line reads
+*"redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB)"*. That
+is the **sixth** instance of a planning table naming a gate that never existed
+while the real coverage was somewhere else. **Quoting shipped 2026-09-06 —
+DDR-1067**, also on `smoke-shell`; job control and scripting are what actually
+remain of that Group D row.
 Remaining: `smoke-readline`,
-`smoke-pipes`, `smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
+`smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
 (6-arg `mmap` ABI), `smoke-mmap-file`, `smoke-dynlink`, `smoke-iouring`,
 `smoke-sigaction`, `smoke-prism-ls`, `smoke-jobctl`.
 **Shipped since the backlog was written:** `SYS_MPROTECT` (DDR-1031,
