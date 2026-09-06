@@ -10997,3 +10997,77 @@ Queue item 3 continues (Groups A–F from the corrected checklist §5.3). OPEN-2
 stays untouched until an artefact appears (DDR-1062 §7). CI owes greens on
 `f9c9ab0` / `bea0d04` / `6cfbd8b` / `aade22e`; §INV.15 needs 3 on one tip.
 `v1.0.0` untagged, `main` promotion unstarted — operator decisions.
+
+---
+
+## CHECKPOINT 2026-09-06 (c) — DDR-1067
+
+`kernel.bin` **`cc8135a9463eefed`**, **1,286,538 B unchanged** / 286,326 B
+headroom. Tip **`62e5704`**. Gates **177** (no new gate). DDR free range
+**DDR-1068+**. Hygiene ALL SEVEN rc=0.
+
+### 1. The finding
+
+`tokenize()` (`prism.c:176`) split on runs of spaces and **nothing else** — no
+quote handling anywhere. `echo "hello world"` passed **three** arguments with the
+quote characters still in them, and **a filename containing a space could not be
+named at all**. Since DDR-1032b wired `run` through to `execve`'s argv
+marshalling, the defect propagated into the **child process** as well.
+
+### 2. The obvious gate arm is vacuous — measured before it was written
+
+The natural test is `echo "one two"`. `prism.c:591` **joins argv with single
+spaces**, so quoted and unquoted print **byte-identical output**: the arm passes
+on a shell with no quoting whatsoever. Third time this class has been caught in
+design text before any code (DDR-1039 §3.1, DDR-1058).
+
+The arms that discriminate: `run /ARGTEST.ELF "gamma delta"` → **`PRADYOS_ARGC=2`**
+(the pre-existing unquoted arm four lines earlier prints `ARGC=3`, so the counts
+cannot be confused) plus `PRADYOS_ARGV=gamma delta`, one entry containing a
+space; and `echo "q  9k2"` with **two** internal spaces — the one thing the
+tokenizer destroys and `echo`'s join cannot restore. Vacuity **checked**:
+`grep -c` returns 1, and the only other `9k2` line has no double space.
+
+### 3. Fix and proof
+
+`'...'` and `"..."` both literal, stripped in place through a write cursor
+trailing the read cursor. **An unterminated quote returns -1 and the line does
+not run** — a typo must not execute a command the user did not write.
+
+**M1 is the pre-fix tokenizer restored verbatim** (`2f89f3829acb888d`), and its
+log carries all three halves: `PRADYOS_ARGC=3` twice; `prism> "q 9k2"` (quotes
+survived **and** the space run collapsed, in one line); `prism> unterminated"`.
+Revert returns `cc8135a9463eefed` bit-for-bit. Regression **9/9**, hash-verified
+before and after, including `smoke-ctrlaltt` (PRISM over a pipe pair in a
+terminal window) and `smoke-iso-userspace` (PRISM driven from the shipped ISO).
+
+### 4. This DDR's own first draft was wrong, and checking it caught it
+
+§4.1 claimed a quoted `">"` would become a literal argument, *"which is the
+correct shell behaviour"*. **False** — the operators are matched by `strcmp` on
+the token **after** the quotes are stripped (`prism.c:385`, `:469`), so
+`echo ">"` still redirects. Recorded as a limitation rather than shipped as an
+unverified claim.
+
+### 5. A SIXTH never-existed gate name
+
+The Group D row named four things and **two were already built**: `smoke-shell`'s
+own PASS line reads *"redirect(> >> < 2>) + truncate/append + stderr +
+pipes(N-stage, >4KiB)"*. **`smoke-pipes` has never existed** — the DDR-1063 §7c
+class again, sixth instance, now recorded in that DDR's table with the count
+stated by date rather than as a total. Job control and scripting are what
+actually remain of that row.
+
+### 6. NOT CLAIMED
+
+No kernel change; no new gate; no backslash escapes; no expansion inside double
+quotes (`"$?"` behaves as `$?` does). **No open issue moves.**
+
+### 7. CI
+
+`0f46cf7` has **2 greens** (push + pull_request); §INV.15 needs a third from
+`workflow_dispatch`. Ten runs are **queued** behind it on `f9c9ab0` / `bea0d04` /
+`6cfbd8b` / `aade22e` / `c5ea6a3`, plus this tip — five pushes in under an hour,
+two suites each. Nothing to do but let the queue drain.
+Queue item 3 continues (Groups A–F). OPEN-2 untouched until an artefact appears
+(DDR-1062 §7). `v1.0.0` untagged, `main` promotion unstarted — operator decisions.
