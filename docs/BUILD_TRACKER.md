@@ -2751,3 +2751,72 @@ not do, because changing a verdict on one capture is how coverage gets deleted.
 No rate is measured. And the new fields are proven **wired**, **not** proven on a
 genuinely failing path — the same limit DDR-1060 recorded about DDR-1047's M1,
 because no genuine missed kick can be manufactured locally.
+
+---
+
+## DDR-1065 — `ptnode_in_use` underflows on every COW fork: artefact, then fix
+
+**Status:** GATE BUILT (`smoke-sharedpte`, shard 4, strict — the DDR-1003 §5.1
+design, unbuilt since that DDR) + FIXED (DDR-1003 §5.2's narrow version) + M1 =
+the literal pre-fix tree. `kernel.bin` `d19cd33755330510` → **`a9d8bc933595ec0d`**,
+1,278,346 → **1,282,442 B** (headroom recomputed to **290,422 B** in the same edit,
+per DDR-1063). Gates **176 → 177**.
+
+**Why now, when DDR-1003 deliberately did not.** It gave two reasons. The first —
+*"no gate observes this today, so there is no failing artefact, and
+§NON-NEGOTIABLE 3 forbids the fix"* — is **addressed by building the gate**, which
+is why gate and fix land together. The second — *"days before a release"* — has
+**expired**: the release is held indefinitely pending OPEN-1/2/12/13 with no
+promotion in flight, the same circumstance DDR-1061 used. Saying so beats quietly
+acting against a recorded decision. DDR-1003 also named the cost of leaving it:
+*"a loaded gun: the next person to add a leak gate spanning a fork will get a
+wrapped counter and a mystery."*
+
+**Mechanism, verified in the tree rather than taken from DDR-1003** (this session
+has repeatedly found DDR text that no longer matched): `ptnode_alloc` increments
+once per frame; `vmm_cow.c:101` `pmm_incref` — the kernel's **only** incref site,
+measured — raises the refcount with no second increment (correct, no new frame);
+`pmm.c:192` returns **without freeing** when refcount > 1; `ptnode_free`
+decremented **unconditionally**; and `vmm.c:371` skips only `PTE_SW_SHARED`
+(0x400) while a COW page carries `PTE_SW_COW` (0x200) — different bits — so the
+leaf is freed from **both** address spaces. **One `++`, two `--`, one release.**
+
+**The gate's design is the point.** DDR-1003 §5.1 warns the ordinary leak shape
+(fork, child **writes**, both exit) is balanced and would **pass** — a gate built
+the obvious way tests nothing, the dead-arm class again. So the probe's child
+**exits without writing**, and it uses the **real** fork path
+(`vmm_fork_address_space_cow`), differing from `cow_selftest` by exactly one line.
+Deterministic and kernel-side — no ring-3, no reap poll, no timing — so it is not
+an intermittent gate and its stated N is **1**.
+
+**MEASURED, two-sided:** pre-fix `e256aa4802882aa6` prints
+`SHAREDPTE before=0 after=18446744073709551615` — `0xFFFFFFFFFFFFFFFF`, **−1,
+wrapped from ONE fork**; fixed `a9d8bc933595ec0d` prints `before=0 after=0
+PRADYOS_SHAREDPTE_OK`. In the same capture the two pre-existing readers are
+unaffected (`kheap stress base=0x0 after=0x0`, `vmm unmap reclaim 0x0 -> 0x0`),
+re-verifying DDR-1003 §5's claim rather than assuming it.
+
+**THIS DDR'S OWN DRAFT WAS WRONG AND THE MEASUREMENT CORRECTED IT.** §5 first read
+*"the wrap itself is not demonstrated … needs ~2^64 forks."* It needs **one**,
+because `kheap_outstanding()` is legitimately 0 at that point in boot. Recorded as
+a correction rather than silently rewritten: I under-stated the defect, and
+reading the actual output is what caught it.
+
+**Fix:** `pmm_free_pages` returns 1 = released / 0 = reference dropped;
+`pmm_free_page` forwards; `ptnode_free` decrements only on a real release.
+`void`→`int` is source-compatible with no `warn_unused_result`, so all **132**
+existing call sites stand unchanged. DDR-1003 §5.2's **wrong** fix is named and
+refused: having `vmm_cow_fault` call `ptnode_free` would decrement where nothing
+was released and merely move the imbalance.
+
+**`GLOBAL_FORBIDDEN` deliberately NOT touched.** Both directions are covered on
+the gate's own shard (`EXTRA_SENTINEL` for the OK marker, `FORBIDDEN_SENTINEL` for
+the FAIL string). The precedents for a global entry — DDR-981's `[apfreeze]`,
+DDR-1049's `panic_stage=` — are **intermittent** defects that could hide in a green
+run; this one is deterministic and cannot, and §NON-NEGOTIABLE 6 documents how
+fragile that list's terminator is.
+
+**NOT CLAIMED:** no leak is fixed and none existed — frames were always released
+correctly, the **counter** was wrong; this is an accounting fix. The two existing
+`kheap_outstanding()` readers were never wrong. No open issue moves — OPEN-1,
+OPEN-2, OPEN-12, OPEN-13 untouched.

@@ -905,7 +905,7 @@ Remaining: `smoke-readline`,
 narrower: init-driven fork+execve *respawn* of PRISM.
 
 **Group E — compositor (`smoke-alttab`, `smoke-perrestore`, `smoke-horizon`
-EXIST):** `smoke-maximize` and `smoke-sharedpte` are MISSING. Maximize at real
+EXIST):** `smoke-maximize` is MISSING. **`smoke-sharedpte` is now BUILT — DDR-1065** (shard 4): it produced the artefact DDR-1003 §5.1 designed it for (`after=0xFFFFFFFFFFFFFFFF` — the counter wrapped from ONE fork) and DDR-1003 §5.2's fix landed with it. Maximize at real
 display size shipped as DDR-1007 under a different gate name; `smoke-sharedpte`
 is DDR-1003 §5.1's unbuilt gate — see §4.5, and note the warning there that the
 obvious shape would pass vacuously.
@@ -970,11 +970,11 @@ stale the moment its input changes.
 
 | Quantity | Value | Source |
 |---|---|---|
-| Gates assigned | **176** across **10** shards | `make ci-shard-check`, re-measured 2026-09-05 |
+| Gates assigned | **177** across **10** shards | `make ci-shard-check`, re-measured 2026-09-06 (DDR-1065 added `smoke-sharedpte`, shard 4) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h:181` |
 | DDR free range | **DDR-1063+** | §INV.4 |
-| `kernel.bin` | **1,278,346 B** against the 1,572,864 B gate — **294,518 B** headroom | measured at `0089e08`, hash `c33afa79f60abdcb` |
+| `kernel.bin` | **1,282,442 B** against the 1,572,864 B gate — **290,422 B** headroom | measured after DDR-1065, hash `a9d8bc933595ec0d` |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS** | `smoke-iso-userspace` |
 | aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — see §5.1 | DDR-999 |

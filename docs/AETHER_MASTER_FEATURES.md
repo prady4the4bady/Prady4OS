@@ -381,6 +381,31 @@ All entries below are **shipped**.
   **NOT CLAIMED:** OPEN-2 is not closed and no mechanism is named; a rate under
   6.9% is still a rate, and these are 42 suites over 19 SHAs, not 42 binaries.
 
+- **`ptnode_in_use` underflowed on every COW fork — artefact produced, then fixed
+  (DDR-1065)** — closing the `smoke-sharedpte` row unbuilt since DDR-1003.
+  `ptnode_alloc` increments **once** per frame; `pmm_incref` (the kernel's **only**
+  incref site) raises the refcount with no second increment — correct, no new
+  frame — but `free_subtree` `ptnode_free`s the leaf page from **both** address
+  spaces while `ptnode_free` decremented unconditionally and `pmm_free_pages` only
+  releases on the last reference. **One `++`, two `--`, one release.** A COW page
+  carries `PTE_SW_COW` (0x200), not `PTE_SW_SHARED` (0x400), so `vmm.c:371`'s skip
+  does not cover it — **verified in the tree, not taken from DDR-1003's text**.
+  **THE GATE HAD TO BE BUILT TO A SPECIFIC DESIGN:** DDR-1003 §5.1 warns the
+  *ordinary* leak shape (fork, child **writes**, both exit) is balanced and would
+  **pass**, so the probe's child **exits without writing** — one line different
+  from `cow_selftest`, using the **real** fork path per DDR-1014's rule that a
+  proof which paraphrases the kernel tests the paraphrase. **MEASURED:** pre-fix
+  `before=0 after=18446744073709551615` — `0xFFFFFFFFFFFFFFFF`, i.e. **−1, wrapped
+  from a single fork**, which also **refuted this DDR's own draft**, where I wrote
+  the wrap was undemonstrated and would need ~2^64 forks. Fix is DDR-1003 §5.2's
+  narrow version (`pmm_free_pages` returns released/not; `ptnode_free` decrements
+  only on a real release; `void`→`int` is source-compatible so all 132 call sites
+  stand), and §5.2's **wrong** fix is named and refused. M1 is the literal pre-fix
+  tree. `GLOBAL_FORBIDDEN` deliberately untouched: this defect is **deterministic**
+  and its own gate covers both directions, unlike DDR-981/1049's intermittents.
+  **NOT CLAIMED:** no leak is fixed and none existed — frames were always released,
+  the *counter* was wrong; no open issue moves.
+
 - **The rq-3 discriminator had the race it was built to settle (DDR-1064)** —
   DDR-1030 added `idle2=` so a `resched FAIL` could separate a sampling artefact
   from a real missed kick, and its §5 table read `idle=1 idle2=1` as "a scheduler

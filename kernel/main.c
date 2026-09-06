@@ -3620,6 +3620,57 @@ static void cow_selftest(void) {
     kputs(ok ? "[vmm] COW fork copy-on-write OK\r\n" : "[vmm] COW fork FAIL\r\n");
 }
 
+/* DDR-1065: ptnode_in_use underflows on every COW fork — the DDR-1003 §5.1 gate.
+ *
+ * ptnode_alloc increments ONCE per frame; on a COW fork pmm_incref raises the
+ * refcount without a second increment (correct — no new frame); but at teardown
+ * free_subtree ptnode_free's the leaf page from BOTH address spaces, and
+ * ptnode_free decrements UNCONDITIONALLY while pmm_free_pages only releases the
+ * frame on the last reference. One ++, two --, one release.
+ *
+ * THE CHILD MUST NOT WRITE, and that is the whole design (DDR-1003 §5.1): the
+ * ordinary leak shape (fork, child writes, both exit) is BALANCED and would
+ * PASS, so a gate built the obvious way tests nothing here. This differs from
+ * cow_selftest() above by exactly one thing — no vmm_cow_fault — which is the
+ * difference between the balanced case and the defective one.
+ *
+ * Uses the REAL fork path (vmm_fork_address_space_cow), not a reconstruction:
+ * DDR-1014's rule is that a proof which paraphrases the kernel tests the
+ * paraphrase. Deterministic and kernel-side — no ring-3, no reap poll, no
+ * timing — so this is not an intermittent gate and its stated N is 1. */
+static void sharedpte_selftest(void) {
+    uint64_t before = kheap_outstanding();
+
+    uint64_t parent = vmm_new_address_space();
+    if (!parent) { kputs("[vmm] SHAREDPTE FAIL (no AS)\r\n"); return; }
+    void *pf = ptnode_alloc();                      /* ptnode_in_use++  -- ONE */
+    if (!pf) { vmm_destroy_address_space(parent); kputs("[vmm] SHAREDPTE FAIL (no frame)\r\n"); return; }
+
+    uint64_t va = 0x8000000000ull;                  /* user range (PML4 slot 1) */
+    *(volatile uint64_t *)pf = 0xA5A5A5A5A5A5A5A5ull;
+    vmm_map_in(parent, va, (uint64_t)(uintptr_t)pf, VMM_USER | VMM_RW | VMM_NX);
+
+    uint64_t child = vmm_fork_address_space_cow(parent);   /* pmm_incref: 1 -> 2 */
+    if (!child) {
+        vmm_destroy_address_space(parent);
+        kputs("[vmm] SHAREDPTE FAIL (no fork)\r\n");
+        return;
+    }
+    /* DELIBERATELY NO vmm_cow_fault HERE. See the header. */
+    vmm_destroy_address_space(child);               /* -- ; refcount 2->1, NO release */
+    vmm_destroy_address_space(parent);              /* -- ; releases the frame      */
+
+    uint64_t after = kheap_outstanding();
+    /* Print both, unconditionally, so the gate JUDGES and the probe only REPORTS
+     * (DDR-1020's rule: a fail() before the print silently removes an arm). */
+    kputs("[vmm] SHAREDPTE before=");
+    kputdec(before);
+    kputs(" after=");
+    kputdec(after);
+    kputs(after == before ? "  PRADYOS_SHAREDPTE_OK\r\n"
+                          : "  SHAREDPTE FAIL (ptnode_in_use drifted)\r\n");
+}
+
 void kmain(struct boot_info *bi) {
     kputs("NEXUS: entered kmain (64-bit long mode, ring 0)\r\n");
 
@@ -3683,6 +3734,7 @@ void kmain(struct boot_info *bi) {
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
     metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */
     cow_selftest();                      /* IMP-D: copy-on-write fork isolation */
+    sharedpte_selftest();                /* DDR-1065: ptnode_in_use across a COW fork */
 
     /* DDR-804: read the boot-time probe list before anything can consult it.
      * Two port reads, no wait, no allocation; fails closed when absent. */

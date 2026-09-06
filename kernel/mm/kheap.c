@@ -333,7 +333,21 @@ void *ptnode_alloc(void) {
 void ptnode_free(void *p) {
     if (!p)
         return;
-    pmm_free_page((uint64_t)(uintptr_t)p);
+    /* DDR-1065. Decrement ONLY when a frame was actually released. This used to
+     * be unconditional, and on a COW fork that is wrong in a way that compounds:
+     * ptnode_alloc increments ONCE per frame, pmm_incref then raises the refcount
+     * with no second increment (correct -- no new frame), but free_subtree
+     * ptnode_free's the leaf page from BOTH address spaces. One ++, TWO --, one
+     * release: ptnode_in_use lost 1 per COW-shared frame and kheap_outstanding()
+     * wrapped. Measured before the fix: "SHAREDPTE before=0 after=
+     * 18446744073709551615" -- 0xFFFFFFFFFFFFFFFF, i.e. -1, from ONE fork.
+     *
+     * DDR-1003 §5.2 named the wrong fix explicitly and it is NOT taken here:
+     * do not have vmm_cow_fault call ptnode_free instead of pmm_free_page: that
+     * decrements on a path where nothing was released and moves the imbalance. */
+    int released = pmm_free_page((uint64_t)(uintptr_t)p);
+    if (!released)
+        return;
     uint64_t fl = spin_lock_irqsave(&g_heap_lock);
     ptnode_in_use--;
     spin_unlock_irqrestore(&g_heap_lock, fl);
