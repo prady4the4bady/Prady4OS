@@ -10816,3 +10816,96 @@ vs genuine freeze.
 
 Queue moves to item 2: remaining `docs/PRE_LAUNCH_CHECKLIST.md` items.
 `v1.0.0` untagged, `main` promotion unstarted — operator decisions.
+
+---
+
+## CHECKPOINT 2026-09-06 — DDR-1063 / DDR-1064 / DDR-1065
+
+`kernel.bin` **`a9d8bc933595ec0d`**, 1,278,346 B against the 1,572,864 B size
+gate — **294,518 B of headroom**. Branch `dev/phase1-seyp3n`, tip **`f9c9ab0`**.
+Gates **177** across 10 shards, 6 excluded. DDR free range **DDR-1066+**.
+Hygiene **ALL SEVEN** rc=0.
+
+### 1. DDR-1063 — a live-state table carried a derived quantity
+
+`CLAUDE.md` §CURRENT BUILD STATE stated the **post**-quantum kernel size beside
+the **pre**-quantum headroom, **overstating the remaining budget by 102,400 B**
+for four commits, in the file sessions are told to trust without re-deriving.
+**No gate could see it**: the Makefile size gate checks the *binary*; nothing in
+the tree read a *document*. New `ci-docstate-check` asserts
+`size + headroom == ceiling` with the ceiling **read from `Makefile:697`**,
+**consistency not currency** (a currency check reddens on correct in-progress
+work and gets removed), and **fails on zero pairings** so a rewording cannot
+retire it. M3 found a wrong remedy message in the checker's own draft.
+
+**§7b/§7c — two document sweeps for the same class, six more stale items**, five
+of them one shape: **a gate name in a planning table that never existed while the
+real gate did** — `smoke-wx`/`smoke-wxkernel`, `smoke-mc`/`smoke-mce`,
+`smoke-lazystack`/`smoke-stack-demand`, `smoke-vdso-read`/`smoke-vdso`, and new
+here `smoke-maximize`/**`smoke-wmmax`**. Cause is structural: the name is written
+when the work is *planned*, the gate is named when the work *lands*, and nothing
+reconciles them. **59 of 116 `smoke-*` names in `CLAUDE.md` have no Makefile
+target and that is CORRECT** — they are backlog rows; no grep separates "claimed
+to exist" from "named as future work", which is why the mechanical gate-inventory
+check is named buildable-and-not-built rather than attempted.
+
+### 2. DDR-1064 — the rq-3 discriminator had the race it was built to settle
+
+DDR-1030 added `idle2=` so a `resched FAIL` could separate a sampling artefact
+from a real missed kick — and **it contradicted itself** (§5 vs §6) and **both
+halves were wrong**: `idle_after` is sampled *after* `sched_unblock` returns and
+`o->idle` is live, so a CPU can enter idle between the kernel's kick loop and the
+sample. DDR-1030 closed DDR-1004's window and opened its mirror image. Fix:
+`sched_unblock` records what **its own loop** saw at the instant it ran
+(`kidle=`/`kkick=`), **on the TCB not a global** (it runs from MSI-X interrupt
+context), with explicit initialisers in `sched_create` per §NON-NEGOTIABLE 10.
+**`kidle=1 kkick=0` is the only reading that convicts.** M1 printed
+`kidle=1 kkick=1`; revert returns `d19cd33755330510` bit-for-bit.
+**No scheduler defect is named or fixed**; the fields are proven **wired**, not
+proven on a failing path.
+
+### 3. DDR-1065 — `ptnode_in_use` underflows on every COW fork
+
+The artefact DDR-1003 §5.1 designed and never built: new `sharedpte_selftest`
+prints `SHAREDPTE before=0 after=18446744073709551615` — **−1, wrapped from ONE
+fork**, because `kheap_outstanding()` is legitimately 0 at that point in boot.
+**This DDR's own draft said the wrap "needs ~2^64 forks"; the measurement
+refuted it** and that is recorded as a correction, not silently rewritten. Fix:
+`pmm_free_pages` returns 1 = released / 0 = reference dropped, `ptnode_free`
+decrements only on a real release; `void`→`int` is source-compatible, all **132**
+call sites stand. DDR-1003 §5.2's own proposed fix is named and **refused** — it
+would decrement where nothing was released and merely move the imbalance.
+New gate `smoke-sharedpte` (shard 4, strict) → gates **176 → 177**.
+**No leak is fixed and none existed** — frames were always released; the
+*counter* was wrong.
+
+### 4. A PROCESS GAP IN MY OWN COMMIT, NAMED
+
+`67ab53d` shipped §7c to the DDR, `CLAUDE.md` and the checklist but **not** to
+`BUILD_TRACKER.md`: the scripted append failed on a line-wrap mismatch in its
+anchor string, left the file untouched, and the following unconditional
+`git add -A && git commit` **succeeded anyway** — three files, no tracker entry,
+a §NON-NEGOTIABLE 11 violation that nothing reported. The mechanism generalises:
+**a failed scripted edit and "there was nothing to change" are indistinguishable
+to a later `git add -A`.** Fixed in `f9c9ab0`, which adds the entry to both
+required documents. Not proposed as a gate — surfaced, per the operator's
+standing instruction to report process gaps and not act on them unapproved.
+
+### 5. NOT CLAIMED
+
+`kernel.bin` is bit-identical across DDR-1063 and its two sweeps. **No open issue
+moves**: OPEN-1 (route 1), OPEN-2, OPEN-12, OPEN-13 all untouched, instruments
+armed. DDR-1064 changes only what the FAIL branch *prints*, so the instrumented
+kernel's green runs are **not** evidence of a fix. The documented numbers are not
+thereby *correct* — a stale but self-consistent pair still passes.
+
+### 6. NEXT
+
+Per DDR-1062 §7: **nothing further on OPEN-2 until an artefact appears.** On the
+next `[apfreeze]`, resolve the RIP against its own binary (§INV.18), then read
+`waiters=` (lock wait or not) and `panic_stage=` (panic or genuine freeze); on the
+next `resched FAIL`, `kidle=`/`kkick=` are now the fields to read.
+Queue is on item 3: `RUN_EXPERIMENT`-adjacent work and the Groups A–F backlog,
+working from checklist §5.3 as corrected by §7b/§7c.
+CI owes greens on `0f46cf7` / `67ab53d` / `f9c9ab0`; §INV.15 needs 3 on one tip.
+`v1.0.0` untagged, `main` promotion unstarted — operator decisions.
