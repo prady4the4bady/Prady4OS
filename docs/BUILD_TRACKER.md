@@ -417,14 +417,26 @@ B#13 dynamic linker ⬜ · B#14 NAS scheduler ⬜ · B#15 PMM policy ⬜
 | Target | Boot status | ISO status |
 |---|---|---|
 | x86_64 | ✅ boots, 118 gates | ⬜ multiboot2 + grub-mkrescue |
-| aarch64 | ✅ **boots in CI** | ⬜ EFI/U-Boot packaging |
-| riscv64 | ✅ **boots in CI** | ⬜ OpenSBI + U-Boot packaging |
+| aarch64 | ✅ **boots in CI — a 153-line boot-to-console slice** (DDR-1081 §1.4) | ⬜ EFI/U-Boot packaging — **but there is no OS to package**: `arch_main` brings up the PL011, prints the sentinel, and enters `for(;;) wfe`. No MMU, no PMM/VMM, no scheduler, no VFS, no userspace, by ADR-034's explicit boot-only scope |
+| riscv64 | ✅ **boots in CI — a 125-line boot-to-console slice** (DDR-1081 §1.4) | ⬜ OpenSBI + U-Boot packaging — same shape, ending in `for(;;) wfi` |
 | Apple Silicon | ⬜ | ⬜ m1n1 shim over the aarch64 kernel |
 
 ### TASK 18–21
 
 18 `prad` package manager (NSI 87–89 — **renumber, 87 is taken by
-`SYS_READ_AUDIT`; use 88–90**) ⬜ · **UNLINK/RENAME `rc=` NOW DISCRIMINATES — DDR-1080**:
+`SYS_VAULT_PUT`; use 88–90**) ⬜ · **NSI 87 ATTRIBUTION CORRECTED — DDR-1081 §1.7**:
+this read `SYS_READ_AUDIT`, and CLAUDE.md §INV.12 said the same. Measured in
+`kernel/syscall/syscall.h`: **87 is `SYS_VAULT_PUT`; `SYS_READ_AUDIT` is 37.**
+The conclusion held (87 is occupied, so `prad` must not take it) and the reason
+did not. Enumerating every `#define SYS_*`, the free numbers below 110 are
+`0, 88, 89, 90, 103…109` with 102 the max defined — so **88/89/90 are the only
+three free below 103**, exactly what `prad` needs · **GROUP H TABLE AUDITED —
+DDR-1081**: the release table named a gate that does not exist
+(`smoke-iso-x86_64`; the real one is `smoke-iso-x86`, shard 1, strict, and
+`smoke-iso-userspace` + `smoke-uefi` were absent from it entirely), a mechanism
+DDR-896 superseded with owner approval (multiboot2 + grub-mkrescue — neither
+appears anywhere in the tree), and an action §INV.15 records the project cannot
+execute (`gh run rerun`). Docs-only; no code change · **UNLINK/RENAME `rc=` NOW DISCRIMINATES — DDR-1080**:
 `vfs_unlink` collapsed mount-gone, no-op and no-capability into one bare `-1`,
 so the DDR-984 `rc=` field could not name which of three defect families fired.
 Split to `-ENODEV`/`-ENOSYS`/`-EPERM` — and `-EPERM` **is** `-1`, so the other

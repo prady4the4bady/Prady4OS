@@ -1508,3 +1508,84 @@ one occurrence, **no rate**; and **it is not established whether this failure
 was primary or downstream** — that run predates DDR-1079's scan fix, so the
 capture was scanned only until the first matching pattern. A tip at or after
 `595cd3e` will say. 178 gates unchanged; `GLOBAL_FORBIDDEN` 76 unchanged.
+
+---
+
+## Group H audited — the release table — DDR-1081 (2026-09-06)
+
+**Docs-only. No code change, no gate change, no kernel change.** `kernel.bin`
+untouched; 178 gates unchanged; `GLOBAL_FORBIDDEN` 76 unchanged; no open issue
+moves.
+
+Group H is the last of the eight backlog tables to be measured (E DDR-1071,
+F DDR-1072, A+B DDR-1073, G DDR-1075, H here), and the most stale of them — for
+a structural reason. The release is **held**: `v1.0.0` is untagged and the
+`main` promotion unstarted, both by operator decision. So no session has had
+reason to work adjacent to these rows since they were written, which is
+DDR-1071 §4's reading ("correction is a side effect of adjacent work rather
+than a process") in its strongest form.
+
+**Row 1 was wrong in both halves.** The named gate `smoke-iso-x86_64` does not
+exist; the real target is **`smoke-iso-x86`** (Makefile:1137, shard 1, 240 s,
+**strict**), which asserts BOTH boot paths off ONE ISO — BIOS via El Torito
+hard-disk emulation, then UEFI via OVMF pflash. Not the DDR-1063 §7c class: the
+work is done and the gate is CI-registered, so it is the DDR-1040 `smoke-wx`
+shape. And the row named the **weaker** of the two ISO gates —
+`smoke-iso-userspace` (DDR-972, shard 0, 300 s, strict) is absent from the table
+entirely, and exists precisely because `NEXUS KERNEL OK` prints at line 30 of
+145: DDR-971 measured an ISO that passed that sentinel and then idled forever
+with no PRISM, no aetherd and no filesystem. `smoke-uefi` is a third. The ISO is
+verified three ways on every suite; the release table recorded one of them, by a
+name that does not resolve.
+
+**The stated mechanism is a superseded design, and that is the expensive half.**
+"multiboot2 + grub-mkrescue" was withdrawn *with owner approval* (Makefile:1105,
+DDR-896: *"adding a third handoff contract that would hand control in 32-bit
+protected mode"*). A tree-wide grep for `grub-mkrescue|multiboot` returns
+**exactly that one comment**. A stale gate name costs a grep; a stale mechanism
+on a release row instructs the next session to build the contract DDR-896
+refused.
+
+**Rows 2 and 3 — "packaging only" — are literally true and materially
+misleading.** The kernels do boot in CI, and what boots is **278 lines across
+both** (aarch64 153, riscv64 125): bring up the UART, print the sentinel, halt
+on `wfe`/`wfi`. No MMU, no PMM/VMM, no scheduler, no VFS, no userspace, by
+ADR-034's explicit boot-only scope. **There is no OS to package**, so the
+§WHAT "DONE" MEANS boxes would certify an ISO whose payload prints four lines.
+CLAUDE.md's own §PRE-APPROVED EXCEPTIONS states the scope correctly — the same
+document holds both readings and the *work* copy is the misleading one, the
+DDR-1072 §3 shape on the release table.
+
+**Row 6 prescribed an action the project cannot execute.** `gh run rerun` —
+which §INV.15 of the same file, corrected 2026-08-23, says needs admin rights
+the project PAT does not have. The invariant was corrected and two other sites
+were not, on the last step before the tag: the DDR-1073 §5 shape.
+
+**§INV.12 names the wrong syscall for NSI 87** — it is `SYS_VAULT_PUT`;
+`SYS_READ_AUDIT` is 37. Conclusion right, reason wrong, in the section a session
+is told to trust without re-deriving. Measured: 88/89/90 are the *only* three
+free NSI below 103.
+
+**Row 5 is accurate in every particular**, stated because an audit that only
+reports errors is not an audit: `smoke-invariants` requires exactly
+`PRADYOS_INVARIANTS_OK S1,S2,S4,S5,S6,S8` and forbids `INVARIANT FAIL`, and the
+half of S5 that cannot be a runtime arm is covered at build time by
+`ci-audit-noerase-check`.
+
+**A third case for the checker DDR-1071 §5 and DDR-1072 §2 refused**, and the
+worst of the three: row 1's named gate is missing **and that is a defect**,
+while rows 2/3/4's named gates are missing **and that is correct** (§7c doing
+its job). The same mechanical signal is a defect on one row and correct
+behaviour on three others, and nothing mechanical separates them.
+
+**Recorded, not acted on** (operator's standing report-don't-act instruction):
+`ci.yml:196` still installs `grub-pc-bin grub-efi-amd64-bin` for the superseded
+design — measured, this host has neither and lacks `grub-mkrescue`, and it is
+the host that built and verified the release candidate on both arms, so they are
+unnecessary by construction; and `arch/aarch64/`, `arch/riscv64/` hold only
+`.gitkeep` while the code lives at `kernel/arch/<arch>/`.
+
+**Not claimed:** no gate was run for this DDR; no release action is taken or
+proposed; nothing is claimed about the arch ports being wrong — ADR-034's scope
+is a recorded decision correctly implemented, and what is corrected is the rows'
+description of what remains.

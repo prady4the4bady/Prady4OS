@@ -11954,3 +11954,67 @@ occurrence, no rate.** **Not established as primary or downstream:** that run
 predates DDR-1079's scan fix, so the capture was scanned only until the first
 matching pattern — a tip at or after `595cd3e` will say. `GLOBAL_FORBIDDEN` 76
 unchanged; 178 gates unchanged; no open issue moves.
+
+---
+
+## CHECKPOINT — DDR-1081: Group H audited (the release table) — 2026-09-06
+
+**Docs-only. No code change, no gate change, no kernel change.** `kernel.bin`
+1,290,634 B unchanged; 178 gates unchanged; `GLOBAL_FORBIDDEN` 76 unchanged; no
+open issue moves (OPEN-1/2/12/13 untouched).
+
+Group H was the last of the eight backlog tables to be measured (E DDR-1071,
+F DDR-1072, A+B DDR-1073, G DDR-1075, H here) and the most stale — for a
+structural reason: the release is **held** (`v1.0.0` untagged, `main` promotion
+unstarted, both operator decisions), so no session has had reason to work
+adjacent to these rows since they were written. DDR-1071 §4's reading in its
+strongest form.
+
+**What was wrong:**
+
+1. **Row 1's gate name does not exist.** `smoke-iso-x86_64` → 0 hits. The real
+   target is `smoke-iso-x86` (shard 1, 240 s, strict), and the row omitted
+   `smoke-iso-userspace` (shard 0, strict — the gate that proves the ISO boots
+   an **OS**, DDR-971/972) and `smoke-uefi` entirely. The ISO is verified three
+   ways on every suite; the table recorded one, by a name that does not resolve.
+2. **Row 1's stated mechanism is a superseded design.** "multiboot2 +
+   grub-mkrescue" was withdrawn *with owner approval* (Makefile:1105, DDR-896).
+   A tree-wide grep returns exactly that one comment. A stale mechanism on a
+   release row instructs the next session to build the third handoff contract
+   DDR-896 refused.
+3. **Rows 2/3 "packaging only" is literally true and materially misleading.**
+   278 lines across both arch ports; each prints a sentinel and halts. No MMU,
+   scheduler, VFS or userspace — ADR-034's explicit scope. There is no OS to
+   package. §PRE-APPROVED EXCEPTIONS states this correctly, so the same file
+   holds both readings and the *work* copy is the misleading one.
+4. **Row 6 prescribed `gh run rerun`**, which §INV.15 (corrected 2026-08-23)
+   records the project cannot execute. Two sites carried the uncorrected form —
+   the Group H row and PHASE 1 ITEM 3 — on the last step before the tag.
+5. **§INV.12 names the wrong syscall for NSI 87**: it is `SYS_VAULT_PUT`;
+   `SYS_READ_AUDIT` is 37. Conclusion right, reason wrong. Measured: 88/89/90
+   are the *only* three free NSI below 103.
+
+**Row 5 (`smoke-invariants`) is accurate in every particular** and is recorded
+as such, because an audit that only reports errors is not an audit.
+
+**Found while updating the record (DDR-1081 §5):** `PRE_LAUNCH_CHECKLIST` §6
+carried `kernel.bin 1,282,442 / 290,422` — the DDR-1065 kernel, two kernels out
+of date — and **`ci-docstate-check` reported OK**, because the pair sums to the
+ceiling exactly. That is DDR-1063's own stated limitation observed for the first
+time, in the file that records it. The check asserts an arithmetic identity and
+deliberately not currency; **passing it is not evidence a number is current.**
+Its third pairing (`1,175,946 / 396,918`, §5.1b.1) is *correct as written* —
+annotated as the pre-post-quantum figures — so only §6 was corrected and the
+checker is unaltered.
+
+**RECORDED, NOT ACTED ON** (operator's standing report-don't-act instruction):
+`ci.yml:196` still installs `grub-pc-bin grub-efi-amd64-bin` for the superseded
+design — measured, this host has neither and lacks `grub-mkrescue`, and it is
+the host that built and verified the release candidate on both arms; and
+`arch/aarch64/`, `arch/riscv64/` hold only `.gitkeep`.
+
+**CI state at checkpoint:** `b325d25` (DDR-1080) both suites still `in_progress`.
+`595cd3e` (DDR-1079) green on both. It remains the case that `b325d25` is the
+first tip at or after `595cd3e`, so DDR-1079's scan fix applies to any capture
+it produces — which is what DDR-1080 §6 said would be needed to tell whether the
+shard-4 SFS unlink failure was primary or downstream.

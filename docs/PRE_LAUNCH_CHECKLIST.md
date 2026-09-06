@@ -1339,16 +1339,35 @@ remaining budget by **102,400 B** in the one file sessions are told to trust
 without re-deriving. Both are corrected here and there. A derived quantity is
 stale the moment its input changes.
 
+**RE-MEASURED 2026-09-06 (DDR-1081), and three of these rows were stale — one of
+them in the way this section's own header warns about.** `ci-docstate-check`
+reported **OK** on the `kernel.bin` pair below while it was **two kernels out of
+date**, because the pair was *self-consistent*: 1,282,442 + 290,422 = 1,572,864
+exactly. That is DDR-1063's own stated limitation — *"a stale but self-consistent
+pair still passes"* — **observed for the first time, in the file that records it**.
+The check asserts an arithmetic identity, which is checkable; it cannot assert
+currency, and DDR-1063 refused to make it try because a currency check would
+redden on correct in-progress work and get removed. Nothing is wrong with the
+check. The lesson is that it is not a substitute for re-measuring.
+
+(The *other* pairing it reports, at §5.1b.1 line ~699, is **1,175,946 /
+396,918** — the pre-post-quantum figures — and that one is **correct as
+written**, because its surrounding text says in as many words that they are the
+PRE-work numbers, left deliberately. `ci-docstate-check` cannot tell a
+deliberately historical pair from a live-state one; here a human annotation
+does. Worth knowing before anyone "fixes" it.)
+
 | Quantity | Value | Source |
 |---|---|---|
-| Gates assigned | **177** across **10** shards | `make ci-shard-check`, re-measured 2026-09-06 (DDR-1065 added `smoke-sharedpte`, shard 4) |
+| Gates assigned | **178** across **10** shards | `make ci-shard-check`, re-measured 2026-09-06 (DDR-1078 added `smoke-numa-steal`, shard 7, strict) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
-| NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h:181` |
-| DDR free range | **DDR-1063+** | §INV.4 |
-| `kernel.bin` | **1,282,442 B** against the 1,572,864 B gate — **290,422 B** headroom | measured after DDR-1065, hash `a9d8bc933595ec0d` |
+| NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
+| DDR free range | **DDR-1082+** | §INV.4 |
+| `kernel.bin` | **1,290,634 B** against the 1,572,864 B gate — **282,230 B** headroom | measured 2026-09-06; **re-derived, not carried** |
 | Warnings at `-Werror` | **zero** | `make image` |
-| x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS** | `smoke-iso-userspace` |
-| aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — see §5.1 | DDR-999 |
+| x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |
+| aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — and "packaging only" understates it: **278 lines across both ports**, each printing a sentinel and halting on `wfe`/`wfi`, with no MMU, scheduler, VFS or userspace. **There is no OS to package** (DDR-1081 §1.4) | DDR-999, ADR-034, DDR-1081 |
+| Third CI green | from **`workflow_dispatch`** — **not `gh run rerun`**, which needs admin rights the project PAT does not have | §INV.15; the Group H row and PHASE 1 ITEM 3 both carried the uncorrected form until DDR-1081 §1.6 |
 | `v1.0.0` | **untagged, held** | §1.2 |
 | `main` promotion | **unstarted** | §1.2 |
 
