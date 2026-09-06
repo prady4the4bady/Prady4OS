@@ -22,6 +22,40 @@ thread ran. The IPI term is a stronger claim layered on top.
 lands in — here `smoke-smppreempt`, which does not own the assertion. That is
 working as designed and is not a second defect.
 
+## 1b. IT REPRODUCED, AND IT IS GATE-INDEPENDENT
+
+The `workflow_dispatch` re-run on the **identical SHA** came back red too —
+CI 34004069448, **shard 7**, `smoke-smpsched`, `kernel.bin: OK` again:
+
+```
+[smp] resched FAIL ipis=0 ran=1 idle=1 idle2=1
+```
+
+**Same binary, same signature, DIFFERENT shard and DIFFERENT gate.** Two
+independent suites on `e9ed2c9`, both red, at `smoke-smppreempt` (shard 4) and
+`smoke-smpsched` (shard 7).
+
+Two facts follow, and only two:
+
+1. **It is not a one-off.** The re-run is the test that separates a transient
+   from a real one (DDR-1055's standard), and this one *did* reproduce — unlike
+   `smoke-nethammer` and `smoke-actiondel`, which each came back 32/32 green.
+2. **The gate is incidental.** The rq-3 proof runs on every boot and
+   `resched FAIL` is in `GLOBAL_FORBIDDEN`, so it reddens whichever SMP gate
+   happens to boot first on a shard. Neither gate owns the assertion. Do not
+   read "shard 4" or "shard 7" as locating anything.
+
+**WHAT THIS IS NOT:** it is **not** a rate, and **not** evidence of a defect.
+The same binary was green across many suites on `0089e08`, `fe3c2d9` and
+`c8b041b`, and DDR-1062's 42-suite window recorded **zero** `resched FAIL`
+among its four attributed reds. Two occurrences clustered on one SHA's two runs
+is a **cluster**, and this DDR deliberately does not explain it — no mechanism is
+named and none is guessed. §4.10's "no rate has been measured" still stands.
+
+**Why it matters here:** a signature that reproduces on demand is one the
+DDR-1064 instrument will meet soon. `3c6c2f3` carries `kidle=`/`kkick=`, so the
+next occurrence answers the question these two captures cannot.
+
 ## 2. DDR-1030 CONTRADICTS ITSELF, and both halves are wrong
 
 Its §5 table:
