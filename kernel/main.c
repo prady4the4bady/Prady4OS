@@ -1087,13 +1087,31 @@ static void smpresched_proof(void) {
          * neither establishes that a kick was owed. These two are recorded by
          * sched_unblock's OWN loop at the instant it ran, so they are not racy
          * at all -- READ THESE, not idle=/idle2=, when diagnosing this line.
-         *   kidle=1 kkick=0 -> the kernel saw an idle CPU and delivered nothing:
-         *                      the only reading that convicts the scheduler.
-         *   kidle=0         -> no idle CPU was visible to the kernel; no kick
-         *                      was owed and the FAIL is a sampling artefact,
-         *                      whatever idle=/idle2= happen to say.
+         *   kidle=0         -> no idle non-self CPU was visible to the kernel;
+         *                      no kick was owed and the FAIL is a sampling
+         *                      artefact, whatever idle=/idle2= happen to say.
          *   kidle=1 kkick=1 -> a kick WAS delivered; ipis= disagreeing then
          *                      means the counter, not the kick, is the defect.
+         *   kidle=1 kkick=0 -> AMBIGUOUS. DDR-1074 CORRECTS THIS LINE, which
+         *                      used to read "the only reading that convicts the
+         *                      scheduler" -- it does not, and sched_unblock's
+         *                      own comment says so in the same commit: that
+         *                      loop carries NO !is_bsp filter, and
+         *                      smp_resched_one (smp.c:310) returns 0 for the
+         *                      BSP, so a BSP-ONLY-IDLE boot prints exactly this
+         *                      on a CORRECT kernel -- the DDR-1014 predicate
+         *                      mismatch re-armed as a diagnostic instruction.
+         *                      A genuinely missed kick prints it too, and these
+         *                      fields CANNOT separate the two. Resolve it from
+         *                      the capture's [hb] heartbeats and -smp width,
+         *                      not from this line.
+         *                      A third field (an idle non-BSP CPU was visible)
+         *                      was designed and REFUSED -- DDR-1074 sec.3: the
+         *                      mutation that would prove it is DDR-1014's own
+         *                      defect, which breaks on the idle BSP BEFORE
+         *                      reaching the idle AP, so the field reads 0 and
+         *                      FALSELY EXONERATES. Recording it soundly needs a
+         *                      post-loop scan, i.e. DDR-1030's race verbatim.
          * The verdict deliberately still uses the old terms (DDR-1064 §6):
          * changing a gate's verdict on one capture is how coverage gets deleted
          * (DDR-1012, DDR-973, and DDR-1030 §3 refusing this once already). */

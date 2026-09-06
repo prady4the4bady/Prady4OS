@@ -3392,3 +3392,47 @@ can check one.
 **Genuinely unbuilt Group B rows** (SFS boot root, largefile, deepslot, quota,
 ext4 write, NAS, PMM policy, NVMe IRQ) have **no gate in the Makefile at all** —
 DDR-1063 §7c doing its job, and not counted here.
+
+---
+
+## DDR-1074 — the first `kidle`/`kkick` capture, and a rule the instrument cannot deliver
+
+**2026-09-06. Comment-only; `kernel.bin` BIT-IDENTICAL (`2c4868b2f5f0d00a`,
+1,290,634 B, verified by rebuild).**
+
+**The artefact.** CI 34023281940, shard 7, `smoke-smp`, tip `0da019f` — a
+**docs-only** commit (one file, `SESSION_HANDOFF.md`) whose shard printed
+`kernel.bin: OK`, so the binary cannot have changed (DDR-1009 class):
+
+```
+[smp] resched FAIL ipis=0 ran=1 idle=1 idle2=1 kidle=0 kkick=0
+```
+
+**The first `resched FAIL` ever to carry DDR-1064's fields**, and it
+**exonerates**: `kidle=0` means `sched_unblock`'s own loop saw no idle non-self
+CPU at the instant it ran, so no kick was owed, `ipis=0` is correct, and `ran=1`
+says the property held. Consistent with a correct kernel; no defect named.
+
+**The finding.** `main.c`'s rule said *"`kidle=1 kkick=0` … the only reading
+that convicts the scheduler."* **False**, and `sched.c:1848-1854` said so in the
+same commit: `smp_resched_one` (`smp.c:310`) returns 0 for the BSP and the
+recording loop has **no `!is_bsp` filter**, so a **BSP-only-idle boot prints that
+on a correct kernel** — the DDR-1014 predicate mismatch re-armed one level up as
+a *diagnostic instruction*. DDR-1046/DDR-1070 shape, third instance in this
+lineage.
+
+**The obvious repair is refused, with the mutation walked through first.** A
+third field (an idle *kickable* CPU was visible) fails because the mutation that
+would prove it is DDR-1014's own defect — break-on-call hits the idle BSP,
+breaks, and **never reaches the idle AP**, so the field reads 0 and **falsely
+exonerates**. Sound recording needs a post-loop scan = DDR-1030's race verbatim.
+A `smp_resched_eligible()` refactor is likewise not built.
+
+**Verdict deliberately unchanged**, now on a measured limitation rather than only
+sample size: DDR-1064's objection was to collapsing to SKIP; the narrower change
+(FAIL only on the convicting reading) dodges that objection but **has no sound
+reading to gate on**.
+
+**Bears on the release:** `resched FAIL` is in `GLOBAL_FORBIDDEN`, so a correct
+kernel can redden any gate on any shard, degrading the 3-green criterion.
+**Two occurrences on record, no rate measured.**

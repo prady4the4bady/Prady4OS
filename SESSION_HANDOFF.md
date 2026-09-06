@@ -11418,3 +11418,59 @@ for it; no pre-approved exception revisited; OPEN-1/2/12/13 untouched.
 **NEXT:** Groups G (assembly optimisation — every row needs a profile first, so
 none has a claim attached yet) and H (release) have not had this audit. Group H
 is release mechanics and is held by operator decision.
+
+---
+
+## CHECKPOINT 2026-09-06 — DDR-1074: the first kidle/kkick capture
+
+**Comment-only. `kernel.bin` BIT-IDENTICAL — `2c4868b2f5f0d00a`, 1,290,634 B,
+verified by rebuild (`rm build/main.o; make image`, rc=0, zero warnings), which
+is the right proof for a comment-only change and leaves the size/headroom pair
+untouched.** 177 gates, GLOBAL_FORBIDDEN 76.
+
+**Triggered by a CI wake**, not by the audit sweep: `check_run.completed`
+failure, `build-and-boot (shard 7)`, run 34023281940, tip `0da019f`.
+
+**The capture is the first `resched FAIL` ever to carry DDR-1064's fields:**
+
+```
+[smp] resched FAIL ipis=0 ran=1 idle=1 idle2=1 kidle=0 kkick=0
+```
+
+`0da019f` is **docs-only** (one file, this handoff) and the shard printed
+`kernel.bin: OK`, so the binary cannot have changed. **`kidle=0` EXONERATES** —
+`sched_unblock`'s own loop saw no idle non-self CPU at the instant it ran, so no
+kick was owed, `ipis=0` is correct, `ran=1` says the property held. Consistent
+with a correct kernel. **No fix; §NON-NEGOTIABLE 3.**
+
+**THE FINDING, and it is why this took a DDR:** `main.c`'s rule beside the print
+said `kidle=1 kkick=0` was *"the only reading that convicts the scheduler."*
+**That is false, and `sched.c:1848-1854` said so in the same commit** —
+`smp_resched_one` (`smp.c:310`) returns 0 for the BSP and the recording loop
+carries **no `!is_bsp` filter**, so a **BSP-only-idle boot prints it on a correct
+kernel**. Wrong in the dangerous direction: it instructs a future session to
+convict on the DDR-1014 predicate mismatch, re-armed one level up as a
+*diagnostic instruction*.
+
+**I nearly built the wrong fix and walking the mutation caught it.** The obvious
+repair is a third field (an idle *kickable* CPU was visible). Its mutation proof
+would have to be DDR-1014's own defect — break-on-call — which hits the idle BSP,
+breaks there, and **never reaches the idle AP**, so the new field reads 0 and
+**falsely exonerates the very defect it was added to convict**. Sound recording
+needs a post-loop scan = DDR-1030's race verbatim. **Not built**, and DDR-1074 §3
+records the walk so the next session does not spend the change rediscovering it.
+
+**Verdict deliberately unchanged**, now on a measured limitation rather than
+sample size: DDR-1064's objection was to collapsing to SKIP; the narrower change
+(FAIL only on the convicting reading) dodges that objection but **has no sound
+reading to gate on**.
+
+**Bears on the release:** `resched FAIL` is in `GLOBAL_FORBIDDEN`, so a correct
+kernel can redden any gate on any shard. **Two occurrences on record (`e9ed2c9`,
+`0da019f`); NO rate measured** — DDR-1062's 42-suite window carried zero.
+
+**The wrong rule had been copied into `CLAUDE.md` (twice) and the checklist —
+all three corrected here.**
+
+**NOT CLAIMED:** no kernel defect named or fixed; no scheduler change; no open
+issue moves (not an `[apfreeze]`, not OPEN-2); no gate re-run for this DDR.

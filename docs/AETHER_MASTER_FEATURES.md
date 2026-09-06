@@ -1115,3 +1115,20 @@ succeeds), so a gate for it needs work pinned to one node's CPUs.
 cross-reboot persistence instead; **B+tree structural delete** stays **refused**
 (§INV.20 — tombstones are recycled by create) and `smoke-sfs-gc` covers
 DDR-762-v2 free-space extent reclamation instead.
+
+---
+
+## rq-3 resched proof — diagnostic rule corrected, DDR-1074 (2026-09-06)
+
+The `[smp] resched FAIL` line's own comment claimed `kidle=1 kkick=0` was *"the
+only reading that convicts the scheduler."* **It is ambiguous**: `smp_resched_one`
+returns 0 for the BSP and the recording loop carries no `!is_bsp` filter, so a
+**BSP-only-idle boot prints it on a correct kernel**. Corrected in place.
+
+Sound readings: **`kidle=0`** — no kick was owed, the FAIL is a sampling
+artefact; **`kidle=1 kkick=1`** — a kick was delivered, so a disagreeing `ipis=`
+indicts the counter. The first real capture (CI 34023281940, `smoke-smp`, a
+docs-only tip) read `kidle=0` and **exonerates**.
+
+Comment-only: `kernel.bin` bit-identical. The verdict is unchanged, so this
+GLOBAL_FORBIDDEN signature can still redden a gate on a correct kernel.
