@@ -11474,3 +11474,74 @@ all three corrected here.**
 
 **NOT CLAIMED:** no kernel defect named or fixed; no scheduler change; no open
 issue moves (not an `[apfreeze]`, not OPEN-2); no gate re-run for this DDR.
+
+---
+
+## DDR-1075 — Group G audited: a proof standard the project cannot meet (2026-09-06)
+
+Fifth backlog table audited after Groups E (DDR-1071), F (DDR-1072) and A+B
+(DDR-1073). **Group G is shaped differently from all three: its rows are not
+stale about what is built — they are stale about what can be PROVED.**
+
+**§1 — the acceptance criterion is unobtainable, and the substitute already
+existed.** The preamble demanded *"profile first … gate must show measurable
+speedup in a deterministic test."* The harness it asks to be built is already
+CI-registered — `user/benchtest.c` (DDR-870, "Group 8 items 44/45") and
+`smoke-bench` (`Makefile:990`, `gate_shards.txt` shard 8, 90 s, **strict**) —
+and its own header states the constraint: *"Under QEMU TCG the guest RDTSC
+counts EMULATED time … VALID for regression … INVALID as an absolute hardware
+claim."* `context.asm` repeats it (*"Do not quote it as 'cycles'"*). **The
+finding is the ordering:** DDR-870 established the honest substitute (the
+STATIC instruction/memory-traffic count, which is hardware-true and satisfies
+§NON-NEGOTIABLE 17) and the Group G table, written afterwards, asks for the
+thing the substitute exists to replace.
+
+**§3 — row 9.3 has NO SUBJECT, and carries the finding that matters.**
+`grep -rniE shootdown kernel/` returns **nothing**. The absence is currently
+**correct**, on four facts checked in the tree: no PCID/global pages;
+`sched.c:1540-1543` reloads CR3 on every AS change and `cr3 == 0` is the
+kernel master; **no two threads share an address space** (no `CLONE_VM`,
+DDR-1038); kernel-master present-entry changes all precede `smp_start_aps()`.
+**THE TRIP-WIRE — it bears on a DIFFERENT table:** the third fact is exactly
+what **Group D's `pthread`/`CLONE_VM` row deletes**, after which every
+`vmm_unmap` (`sys_mmap.c:67`, `sys_surface.c:388`/`:448`) and every
+`vmm_protect_range` leaves a stale writable translation on another CPU —
+silent, timing-dependent, on the same SMP paths OPEN-2 lives in — and
+**nothing in the tree would notice**. A shootdown is a **prerequisite of
+`CLONE_VM`**, not a Phase 9 optimisation; Group D's row lists no dependency.
+
+**§2 — row 9.5 is the `smoke-horizon` shape, CORRECTED not closed.**
+`ipc_copy.asm` (DDR-873) is shipped and wired (`ipc.c:43`/`:81`,
+`_Static_assert`-pinned), but the ring-3 path is **four** copies (`copyin` →
+`e->msg` → kernel `out[]` → `copyout`) and DDR-873 removed none. Single-copy
+is blocked on the receiver's destination being a user pointer in the
+**receiver's** address space — DDR-1038's cross-AS problem.
+
+**§4 — row 9.6 names the wrong instrument.** `memcpy` routes to `fast_memcpy`
+(ERMS, DDR-871); **`memset` is a byte-at-a-time loop** (`string.c:4`), paid on
+**every `kfree`** (`kheap.c:174`, up to 512 B, `KHEAP_DEBUG` unconditionally
+1) and per slab growth. `rep stosb` under the ERMS bit `fast_memcpy_init()`
+**already probes** is the matching mechanism — GP registers only, no new
+CPUID gate. **`fast_memset` is the ONE buildable Group G item and is NOT
+built**; the trap is named: `memset` runs before `fast_memcpy_init()`
+(`main.c:3721`), so the dispatch default must be the generic path, and **a
+mutant reversing the default passes every gate** because the CI CPU
+advertises ERMS — proving that arm needs its own `-cpu` pin (DDR-1040's
+`smoke-smep` shape).
+
+**§5** — 9.1 is bounded by the UART (~87 µs/byte) and carries DDR-916's
+standing refusal; 9.2 is at its floor per DDR-870 (17 instructions, and a
+reduction would drop saved state); 9.4 is a `VIRTIO_RING_F_EVENT_IDX`
+negotiation, not assembly, and hand-coalescing the doorbell is a liveness
+hazard. **§6** — the header's "6 of 7" is wrong; no seventh item exists.
+
+**NET: one buildable row out of six**, and the group's acceptance criterion
+needed replacing before any row could be closed honestly.
+
+**NOT CLAIMED:** no code change, `kernel.bin` untouched, 177 gates unchanged
+(Markdown only); **no gate re-run and NO PROFILE RUN** — every figure is a
+static count read out of the tree or one DDR-870 recorded and labelled
+emulated; `fast_memset` is not built and no decision is taken on whether it
+lands before the ISO; **§3 names no defect and fixes none** (the trip-wire is
+about a future change, not a present bug); `EVENT_IDX` is recorded, not
+scheduled; no open issue moves (OPEN-1/2/12/13 untouched).

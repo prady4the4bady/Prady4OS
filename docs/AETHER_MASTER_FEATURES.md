@@ -1132,3 +1132,45 @@ docs-only tip) read `kidle=0` and **exonerates**.
 
 Comment-only: `kernel.bin` bit-identical. The verdict is unchanged, so this
 GLOBAL_FORBIDDEN signature can still redden a gate on a correct kernel.
+
+---
+
+## Group G record correction — DDR-1075 (2026-09-06)
+
+Group G's rows are not stale about what is **built** — they are stale about
+what can be **proved**.
+
+**The acceptance criterion was unobtainable.** The preamble demanded a
+*"measurable speedup in a deterministic test"*, and `user/benchtest.c`
+(DDR-870) — the harness it asked to be built, already CI-registered as
+`smoke-bench`, shard 8, strict — states why that cannot be produced here:
+*"Under QEMU TCG the guest RDTSC counts EMULATED time … VALID for regression …
+INVALID as an absolute hardware claim."* The honest substitute is DDR-870's
+**static instruction and memory-traffic count**, which is hardware-true and
+satisfies §NON-NEGOTIABLE 17. The table was written after that convention and
+asks for the thing it exists to replace.
+
+**Row 9.5 — IPC single-copy: mechanism shipped, claim not delivered.**
+`ipc_copy.asm` (DDR-873) is wired at `ipc.c:43`/`:81`. The ring-3 path is
+**four** copies (`copyin` → `e->msg` → kernel `out[]` → `copyout`); DDR-873
+made two of them cheaper and removed none. A true single copy is blocked on
+the receiver's buffer being a user pointer in the **receiver's** address
+space — the cross-AS problem DDR-1038 named for `SYS_FUTEX`.
+
+**Row 9.3 — TLB shootdown: no subject, and a trip-wire for Group D.** There is
+no cross-CPU TLB invalidation in this kernel; the absence is correct today
+because no two threads share an address space, CR3 is reloaded on every AS
+change, and there is no PCID or global-page state to survive it. **Group D's
+`pthread`/`CLONE_VM` row deletes that premise**, and nothing in the tree would
+notice. A shootdown is a **prerequisite of `CLONE_VM`**, not a Phase 9
+optimisation.
+
+**Row 9.6 — the real gap is `memset`, not SIMD.** `memcpy` routes to
+`fast_memcpy` (ERMS, DDR-871); `memset` is a byte-at-a-time loop, paid on
+**every `kfree`** (`kheap.c:174`, `KHEAP_DEBUG` unconditionally 1). The
+matching instrument is `rep stosb` under the ERMS bit `fast_memcpy_init()`
+already probes — not SSE2. **`fast_memset` is the one buildable Group G item;
+not built**, and its default-path trap is recorded in DDR-1075 §4.4.
+
+No code change; `kernel.bin` untouched; 177 gates unchanged; no gate re-run
+and no profile run.

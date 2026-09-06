@@ -424,7 +424,14 @@ B#13 dynamic linker ⬜ · B#14 NAS scheduler ⬜ · B#15 PMM policy ⬜
 ### TASK 18–21
 
 18 `prad` package manager (NSI 87–89 — **renumber, 87 is taken by
-`SYS_READ_AUDIT`; use 88–90**) ⬜ · 19 Phase 9 assembly ⬜ ·
+`SYS_READ_AUDIT`; use 88–90**) ⬜ · 19 Phase 9 assembly — **AUDITED, DDR-1075:
+one buildable row of six (`fast_memset`, not built); 9.5's mechanism is already
+shipped (DDR-873) with its single-copy claim blocked cross-AS; 9.3 has no
+subject (no TLB shootdown exists) and is a **prerequisite of Group D's
+`CLONE_VM` row**, not an optimisation; 9.4 is a `VIRTIO_RING_F_EVENT_IDX`
+negotiation, not assembly; 9.1/9.2 are wrong-instrument and at-floor. The
+group's “measurable speedup” criterion is unobtainable under TCG and is
+replaced by DDR-870's static instruction-count convention.** ·
 20 security invariant gates S1–S8 ⬜ · 21 v1.0.0 release ⬜
 
 ---

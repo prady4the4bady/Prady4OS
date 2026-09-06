@@ -1142,11 +1142,45 @@ FAT32 multi-cluster defect was **refuted and gated** (DDR-973). A blocker
 presented as live is a different staleness from work presented as remaining —
 the first can suppress work that is actually unblocked.
 
-**Group G — assembly optimization (6 of 7 items unstarted):** hot-path `kputc`,
-context-switch critical path, TLB shootdown batching, virtio-blk doorbell
-batching, IPC fast path, page-table walker SIMD. Each requires **profile first**;
-none has a baseline, so none has a claim attached to it. Per §NON-NEGOTIABLE 17,
-a performance claim needs a denominator — there is nothing to report yet.
+**Group G — assembly optimization: AUDITED, DDR-1075, and the rows were stale
+about what can be PROVED rather than about what is built.** Six rows, not seven
+(no seventh item exists in the tree). Corrections, each measured:
+
+- **The acceptance criterion was unobtainable.** The group demanded a
+  *"measurable speedup in a deterministic test"* and "profile first". The
+  harness already exists and is CI-registered — `user/benchtest.c` (DDR-870)
+  and `smoke-bench` (`Makefile:990`, shard 8, **strict**) — and its own header
+  states why a speedup cannot be produced here: *"Under QEMU TCG the guest
+  RDTSC counts EMULATED time … VALID for regression … INVALID as an absolute
+  hardware claim."* §NON-NEGOTIABLE 17's denominator is satisfied by DDR-870's
+  **static instruction and memory-traffic count**, which is hardware-true. The
+  table asks for the thing that convention exists to replace.
+- **9.5 IPC fast path — mechanism SHIPPED** (`ipc_copy.asm`, DDR-873, wired at
+  `ipc.c:43`/`:81`), **claim NOT delivered**: the ring-3 path is **four**
+  copies and DDR-873 removed none. Single-copy is blocked on the receiver's
+  buffer being a user pointer in the **receiver's** address space — DDR-1038's
+  `SYS_FUTEX` problem, not an assembly question.
+- **9.3 TLB shootdown — NO SUBJECT, and a trip-wire for Group D.** No
+  cross-CPU TLB invalidation exists. The absence is correct today on four
+  measured facts (no PCID/global pages; CR3 reloaded on every AS change
+  including to/from the kernel master; **no two threads share an address
+  space**; kernel-master present-entry changes all precede AP bring-up).
+  **Group D's `pthread`/`CLONE_VM` row deletes the third**, after which every
+  `vmm_unmap` and `vmm_protect_range` leaves a stale writable translation on
+  another CPU — and **nothing in the tree would notice**. A shootdown is a
+  **prerequisite of `CLONE_VM`**, not a Phase 9 item.
+- **9.6 — the real gap is `memset`, not SIMD.** `memcpy` routes to
+  `fast_memcpy` (ERMS, DDR-871); `memset` is a byte loop, paid on **every
+  `kfree`** (`kheap.c:174`, `KHEAP_DEBUG` unconditionally 1). `fast_memset`
+  via `rep stosb` under the ERMS bit `fast_memcpy_init()` already probes is
+  **the one buildable Group G item — not built**, trap in DDR-1075 §4.4.
+- **9.4** is a `VIRTIO_RING_F_EVENT_IDX` negotiation, not assembly; **9.1** is
+  bounded by the UART, not by instruction count, and carries DDR-916's
+  standing refusal; **9.2** is at its floor per DDR-870's own analysis.
+
+**Still true: no performance claim is attached to any row**, and none is made
+here — no profile was run, and every figure in DDR-1075 is a static count read
+out of the tree.
 
 **Group H — release:** `smoke-iso-aarch64`, `smoke-iso-riscv64`, and
 `smoke-prad` (the `prad` package manager, NSI 88–90 — **not** 87, which is
