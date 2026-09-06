@@ -11203,7 +11203,29 @@ a revoke built before this fix would have been the DDR-1059 shape:**
 live connection either. This fix is a **prerequisite** for a meaningful revoke,
 not a substitute. Row corrected in CLAUDE.md and checklist §5.3.
 
-### 5. NOT CLAIMED
+### 5. REGRESSION — 14/14 GREEN, hash-verified
+
+Committed at `56ef906` with the sweep **in flight** and honestly said so; it has
+since completed. `kernel=2c4868b2f5f0d00a` … `kernel_after=2c4868b2f5f0d00a`, so
+no mid-sweep rebuild (DDR-1060 §9's rule):
+
+`smoke-privacy-netfilter` · `smoke-net` · `smoke-net-tcp-lo` · `smoke-net-lo` ·
+`smoke-netallow` · `smoke-capnet` · `smoke-sovereign-egress` ·
+`smoke-egress-audit` · `smoke-nethammer` · `smoke-aether` · `smoke-shell` ·
+`smoke-blkmq` · `smoke-rqstress-liveness` · `smoke-blk-integrity` — **all rc=0**.
+
+Three carry real weight for this change: **`smoke-capnet`** exercises the
+per-slot ownership path whose struct gained `host_be`/`port`;
+**`smoke-egress-audit`** parses the audit record layout the `ACTION_NET_EGRESS`
+append could have disturbed; **`smoke-nethammer`** drives 20,000 loopback
+connects through `psock_connect`. `smoke-shell` reported its full PASS line
+(…`+ erase(DDR-1039) + quoting(DDR-1067) + wait(DDR-1068), clean, no panic`).
+
+**`smoke-blk-integrity` is rc=0 here** — the gate that went red *unattributed*
+under DDR-1066 (checklist §2). **One green is not a rate and this does not close
+that row**; recorded as a datum, not as a resolution.
+
+### 6. NOT CLAIMED
 
 **The connection is not torn down** — privacy-on refuses I/O and sends no FIN or
 RST, so an observer still sees an ESTABLISHED connection. Deliberate: DDR-802's
@@ -11211,3 +11233,19 @@ phase 3 requires privacy mode to be *releasable*, and a destructive kill-switch
 is an operator **decision** (checklist §4.16). `sys_sock_close` stays permitted.
 No open issue moves — OPEN-1/2/12/13 untouched. The live Ollama branch is
 unchanged and unexercised; the gate drives loopback.
+
+### 7. ALSO RECORDED THIS SESSION (docs only, `ba2bb1b`)
+
+**`TLS` in this tree means Thread-Local Storage, not Transport Layer Security.**
+`user/tlstest.asm` is a PROC-D `SYS_SET_TLS` + `SYS_WRITEV` probe and its
+sentinel `PRADYOS_TLS_OK WRITEV_OK` is a **required pattern of `smoke-user`**
+(Makefile:1472), so grepping for "TLS" finds a green shipped gate and could
+suggest a TLS shim exists — `grep -rniE 'mbedtls|ssl_|tls_handshake|X509'` over
+`kernel/`, `user/` and `third_party/lwip-port/` returns **nothing**. DDR-1069's
+`fd(0..7)` hazard class. **Deliberately NOT counted as a DDR-1063 §7c instance**
+— §7c is about a name for work already done; `smoke-tls` names unbuilt work.
+
+**Group C UDP row corrected:** UDP is compiled in and a real loopback
+send→receive round trip is **already gated** (`lwip_port.c:304` → recv callback
+prints `PRADYOS_NET_LO_OK`, required by `smoke-net-lo`). Missing is only the
+**ring-3 door** — DDR-1033's SEND_IPC shape, not a missing subsystem.
