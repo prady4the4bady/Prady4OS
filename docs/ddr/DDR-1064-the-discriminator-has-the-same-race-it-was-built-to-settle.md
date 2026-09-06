@@ -31,15 +31,25 @@ CI 34004069448, **shard 7**, `smoke-smpsched`, `kernel.bin: OK` again:
 [smp] resched FAIL ipis=0 ran=1 idle=1 idle2=1
 ```
 
-**Same binary, same signature, DIFFERENT shard and DIFFERENT gate.** Two
-independent suites on `e9ed2c9`, both red, at `smoke-smppreempt` (shard 4) and
-`smoke-smpsched` (shard 7).
+**Same binary, same signature, DIFFERENT shard and DIFFERENT gate** —
+`smoke-smppreempt` (shard 4, push) and `smoke-smpsched` (shard 7, dispatch).
+
+**CORRECTED 2026-09-06 — THE DENOMINATOR IS 3, NOT 2.** `e9ed2c9` ran **three**
+`pradyos-ci` suites and the **pull_request suite (34003738958) was GREEN**. So it
+is **2 red of 3**, not two for two, and an earlier draft of this section said
+"two independent suites, both red" without saying a third had passed — which made
+the cluster look tighter than it is. **The signature is not deterministic on this
+binary.** It reproduces often enough that a re-run met it, and not so reliably
+that a suite cannot pass.
 
 Two facts follow, and only two:
 
 1. **It is not a one-off.** The re-run is the test that separates a transient
    from a real one (DDR-1055's standard), and this one *did* reproduce — unlike
    `smoke-nethammer` and `smoke-actiondel`, which each came back 32/32 green.
+   **But "reproduces" is not "deterministic":** the third suite on the same SHA
+   was green (above), so the honest statement is 2 of 3, and a re-run meeting it
+   is evidence of frequency rather than of certainty.
 2. **The gate is incidental.** The rq-3 proof runs on every boot and
    `resched FAIL` is in `GLOBAL_FORBIDDEN`, so it reddens whichever SMP gate
    happens to boot first on a shard. Neither gate owns the assertion. Do not
@@ -52,9 +62,17 @@ among its four attributed reds. Two occurrences clustered on one SHA's two runs
 is a **cluster**, and this DDR deliberately does not explain it — no mechanism is
 named and none is guessed. §4.10's "no rate has been measured" still stands.
 
-**Why it matters here:** a signature that reproduces on demand is one the
-DDR-1064 instrument will meet soon. `3c6c2f3` carries `kidle=`/`kkick=`, so the
-next occurrence answers the question these two captures cannot.
+**Why it matters here:** a signature this frequent is one the DDR-1064 instrument
+will meet soon. `3c6c2f3` carries `kidle=`/`kkick=`, so the next occurrence
+answers the question these two captures cannot.
+
+**FIRST RESULT ON THE INSTRUMENTED KERNEL, and it is a NEGATIVE:** `3c6c2f3`
+(kernel `d19cd33755330510`) ran **two suites, both GREEN**, so no `resched FAIL`
+occurred and **no `kidle=`/`kkick=` capture exists yet**. The instrument is armed
+and has not yet been met. Recorded so its silence reads as "not yet triggered"
+rather than "the fix made it go away" — **this change touches no scheduler
+behaviour**, only what the FAIL branch prints, so it cannot have removed the
+signature and must not be reported as having done so.
 
 ## 2. DDR-1030 CONTRADICTS ITSELF, and both halves are wrong
 
