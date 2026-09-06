@@ -3101,3 +3101,66 @@ takes no arguments** — POSIX `wait %n` is not implemented; no kernel change
 not the discriminator** — it is deterministic only because the probe is still
 alive, and the ordering arm carries the claim. **Scripting is what actually
 remains of the B#12 row.**
+
+---
+
+## DDR-1069 — epoll for proxy sockets: sockets are not file descriptors
+
+**Status:** ASSESSED, **not built**, blocker + measured sizing + the one real
+design question named. `kernel.bin` **untouched** — docs only.
+
+**The blocker is one sentence: a proxy socket is not a file descriptor**, so
+`epoll_ctl` has nothing to be handed. Measured: `kernel/proc/fd.h:27-29` defines
+**three** fd kinds (`FD_CONSOLE`/`FD_VFS`/`FD_PIPE`), there is **no `FD_SOCK`**,
+grep finds **no bridge** either way, and `fd_ready_mask()` — the single predicate
+DDR-1037 made shared by **both** `epoll_wait` and `poll` — switches on exactly
+those three.
+
+**A naming hazard, and very likely how the row came to be written.**
+`kernel/syscall/syscall.h:53` documents `SYS_SOCK_CONNECT` as returning
+*`fd(0..7)`*. **It is not an fd.** It indexes a separate 8-slot proxy table that
+`pradyos_net.h:18` explicitly calls opaque, so `SYS_SOCK_WRITE(fd, …)` and
+`SYS_WRITE(fd, …)` take integers from **two overlapping numbering spaces** —
+socket handle 3 and descriptor 3 are unrelated objects.
+
+**The assessment changed direction under measurement.** It began assuming the
+readiness predicate was the hard part. The `psock_*` surface is six functions
+with **no non-destructive readiness call** — `psock_read` *drains* the ring — but
+`lwip_port.c:695`'s `s->tail != s->head` **is** the predicate, already in the
+struct, so `psock_avail()` is roughly **six lines** reusing `psock_resolve` and
+the `g_net_lock` acquisition every other `psock_*` call performs.
+
+**The one real design question is `fork`, and it is a decision, not a
+difficulty.** `psock_resolve` checks `owner == pid` on **every** call (DDR-987
+§10, under the same lock as the operation) while `fd_fork_copy` deep-copies
+**every** entry — so a naive `FD_SOCK` hands a forked child an fd that
+`epoll_ctl` accepts and whose every read or write returns `-EPERM`. Three
+defensible answers are named (don't inherit / inherit and re-own / inherit
+as-is), and **the worst one arrives by default** if nobody chooses.
+
+**Safe build order recorded**, with step 3 load-bearing: **a converter NSI, NOT a
+change to `SYS_SOCK_CONNECT`** — six ring-3 programs call that syscall today
+(`sovegresstest`, `privacynettest`, `agent_base`, `nethammer`, `capnettest`,
+`egressaudittest`), so changing its return type touches all six and every gate
+behind them. Step 4 is the whole payoff and lands **once**, because
+`fd_ready_mask` serves `poll` as well. A peer already exists for the gate —
+`smoke-net-tcp-lo` (DDR-753) drives a TCP loopback conversation.
+
+**Not built because of what it touches against what needs it:** it modifies the
+single readiness answer for two syscalls plus the fd table's fork/close paths,
+and **nothing shipping needs it** — all six consumers use the blocking
+`SYS_SOCK_READ` with its own timeout, and the one program that would want
+multiplexing (`agent_base` **live** mode) is **excluded from CI**, so the feature
+would ship exercised by its own gate and by nothing else. Revisit when a ring-3
+program must wait on a socket and a pipe at once.
+
+**NOT CLAIMED:** the network stack is **not** broken and this is not a defect
+report — blocking socket I/O works and is gated (`smoke-net-tcp-lo`,
+`smoke-nethammer`, `smoke-capnet`); what is absent is readiness multiplexing. The
+**other five Group C rows are named as untouched, not blocked** — nothing is
+claimed about `smoke-udp`, `smoke-netrevoke`, `smoke-tap`, `smoke-ipv6` or
+`smoke-tls` either way. The six-line figure is an estimate from the code shape,
+not a compiled measurement. **And the five missing Group C gate names are NOT
+another §7c instance** — DDR-1063 §7c established that a planning table naming a
+gate for work not yet done is doing its job, and counting these would inflate
+that class.

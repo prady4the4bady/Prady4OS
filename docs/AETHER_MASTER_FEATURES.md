@@ -611,6 +611,22 @@ byte-exact.
   race is won.
 
 
+- **epoll for proxy sockets — ASSESSED, NOT BUILT (DDR-1069)** — **a proxy
+  socket is not a file descriptor**, so `epoll_ctl` has nothing to be handed:
+  three fd kinds exist (`FD_CONSOLE`/`FD_VFS`/`FD_PIPE`), there is no `FD_SOCK`,
+  and no bridge in either direction. `syscall.h:53` calling the connect return
+  value *`fd(0..7)`* is a **naming hazard** — it indexes a separate 8-slot table,
+  so socket handle 3 and descriptor 3 are unrelated objects. **Smaller than it
+  looks:** `psock_read` drains rather than peeks, but `s->tail != s->head` is
+  already the predicate, so `psock_avail()` is ~6 lines. **The real decision is
+  `fork`:** ownership is checked as `owner == pid` on every `psock_*` call while
+  `fd_fork_copy` copies every entry, so a naive `FD_SOCK` gives a child an fd
+  that always returns `-EPERM`. Deferred because it changes `fd_ready_mask` —
+  the single readiness answer for **both** `epoll_wait` and `poll` — plus the fd
+  table's fork/close paths, and **nothing shipping needs it**: all six socket
+  consumers use blocking reads, and the one that would want multiplexing is
+  excluded from CI.
+
 - **PRISM `wait` (DDR-1068)** — blocks until every live background job finishes;
   `SYS_WAIT4` over the job table, which `fg` already used. **The row that asked
   for it was wrong in both directions:** `&`, `jobs`, `fg` and `kill %n` were
