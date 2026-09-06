@@ -2081,8 +2081,20 @@ smoke-aether-queue: $(IMG) fat-image sfs-image
 # spawns the test agent (CAP_AGENT); the agent submits ACTION_WRITE_FILE which
 # sovereign mode auto-approves; the agent executes it and exits. End-to-end:
 # queue -> daemon -> agent -> approve -> execute -> done.
+#
+# DDR-1066: that last clause was FALSE until 2026-09-06 and this gate could not
+# see it. The agent printf'd the path and the data and made no filesystem call,
+# and `data` IS "PRADYOS_AGENT_VERIFIED" -- so the execute arm asserted on a
+# .rodata literal. It is now emitted from a READ-BACK BUFFER, which is why that
+# sentinel line is unchanged and yet the arm is now live. The two additions:
+#   - PRADYOS_AGENT_EXEC_OK asserted with EXACT values (DDR-1044's discipline),
+#     so a real write that stores the wrong length fails rather than matching a
+#     loose shape. n=22 is strlen("PRADYOS_AGENT_VERIFIED").
+#   - AETHER_AGENT_EXEC_FAIL forbidden, so a failed execution NAMES ITSELF
+#     instead of being detectable only as an absence.
 smoke-aether: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_QUEUE_OK\nPRADYOS_AETHER_DAEMON_OK\nPRADYOS_AGENT_VERIFIED\nPRADYOS_AGENT_DONE')" \
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_QUEUE_OK\nPRADYOS_AETHER_DAEMON_OK\nPRADYOS_AGENT_EXEC_OK path=/AETHER.TXT n=22 first=P last=D\nPRADYOS_AGENT_VERIFIED\nPRADYOS_AGENT_DONE')" \
+	FORBIDDEN_SENTINEL='AETHER_AGENT_EXEC_FAIL' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 slice 0 GPU gate (ADR-028): boot with a virtio-gpu-pci device; the

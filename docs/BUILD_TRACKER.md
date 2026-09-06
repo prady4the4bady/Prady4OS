@@ -2848,3 +2848,87 @@ fragile that list's terminator is.
 correctly, the **counter** was wrong; this is an accounting fix. The two existing
 `kheap_outstanding()` readers were never wrong. No open issue moves — OPEN-1,
 OPEN-2, OPEN-12, OPEN-13 untouched.
+
+---
+
+## DDR-1066 — the AETHER agent never executed anything, and the gate's execute arm was the string it printed
+
+**Status:** FINDING + FIXED + gated + M1/M2 on distinct hashes.
+`kernel.bin` `a9d8bc933595ec0d` → **`dde6c5d10748842d`**, 1,282,442 → 1,286,538 B
+(headroom 286,326 B). **No kernel defect is fixed and no open issue moves.**
+
+**The finding.** `smoke-aether`'s own Makefile comment states the claim — *"the
+agent submits `ACTION_WRITE_FILE` which sovereign mode auto-approves; **the agent
+executes it** and exits. End-to-end: queue -> daemon -> agent -> approve ->
+**execute** -> done."* The agent does not execute it. `user/agent_base.c:182` on
+`AE_APPROVED` did:
+
+```c
+    printf("AETHER_AGENT_EXEC WRITE_FILE %s\n%s\n", path, data);
+```
+
+and nothing else. `grep -n "SYS_OPEN\|SYS_WRITE\|SYS_CREAT" user/agent_base.c`
+returns **nothing**, in **either** branch, and `AETHER_TEST_MODE` defaults to 1 so
+the CI-exercised branch is the one that printed. **`data` is
+`"PRADYOS_AGENT_VERIFIED"` — one of the gate's four required sentinels** — so the
+end-to-end gate's execute arm asserted on a `.rodata` literal and **could not fail
+for the reason it exists**. The dead-arm class, thirteenth-plus instance and the
+**first found in the product** rather than in a gate or an instrument. The
+baseline capture reads `AETHER_AGENT_EXEC WRITE_FILE /tmp/aether_test.txt` then
+`PRADYOS_AGENT_VERIFIED` — which a human reads as a completed write.
+
+**Not blocked; never wired.** Checked in the tree, not assumed: `kernel/exec/elf.c:320-321`
+gives every `elf_load`ed process `CAP_FS_READ | CAP_FS_WRITE` and
+`root_mnt = vfs_default_mnt()` (the FAT volume), and `fat32_write` exists
+(`fat32.c:529`, wired at `:732`). **And the path would have failed anyway:** the
+FAT volume's only directory is `::/DOCS` — one `mmd` in the whole Makefile — so
+there is **no `/tmp`**, and a correct implementation of that exact path would have
+returned `-ENOENT`. That is the trap waiting for anyone who "just adds the write".
+
+**The discipline was already written down, in this repo, for this hazard.**
+`user/actionreadtest.c:101` says *"3. EXECUTE, and only now"* and *"4. VERIFY THE
+BYTES. This is what makes the gate non-vacuous: a probe that skipped step 3 still
+prints an OK line, but cannot print the content."* The 3C probes follow it; the
+one real agent did not — and DDR-1022 established `agent_base.c` is the **only**
+agent program, so "AETHER executes approved actions" rested entirely on this file.
+DDR-1013's scope correction **stands**: the kernel approves, the agent acts, and
+no kernel executor is added.
+
+**Fix.** Open/write/close, then **reopen without `O_CREAT`** and read back, and
+print the marker **from the read-back buffer**, never from `data`. The missing
+`O_CREAT` is load-bearing: `vfs_open` on an absent file returns `-ENOENT`, so a
+build that skipped the write cannot reach the print. **The existing sentinel
+becomes live with no edit to that arm** — the cleanest available proof it was
+dead.
+
+**M1 and M2 are the whole argument, and they do the same filesystem work: none.**
+M1 (no write, print from the buffer, `248afcf994645ab5`) **FAILS** rc=2 with
+`AETHER_AGENT_EXEC_FAIL step=open_r rc=-2` and *"required pattern
+'PRADYOS_AGENT_VERIFIED' not found"*. M2 (no write, print the **literal** — the
+pre-fix behaviour, `46aaf0304f395b6f`) **PASSES** rc=0. The only difference is
+where the printed bytes come from, and that alone decides whether the gate can
+see it. The baseline is M2's independent confirmation, being the pre-fix tree
+itself, green. Reverting returns `dde6c5d10748842d` **bit-for-bit**.
+
+**M2 CORRECTED A DESIGN CLAIM OF THIS DDR'S OWN.** §3.2 introduced
+`PRADYOS_AGENT_EXEC_OK … n= first= last=` as if it added discriminating power —
+**M2 prints it too, with correct values**, because an agent holding the data can
+compute all three without touching a filesystem. What convicts is the `-ENOENT`
+the agent cannot manufacture. `n=` is kept for the narrower claim it does cover:
+a **real** write that stores the wrong length. Also: `-Werror
+-Wunused-function` caught M2 dropping the error path, so a future change deleting
+every failure path from this executor **will not compile**.
+
+**Gate.** `smoke-aether` gains the **exact** pattern `PRADYOS_AGENT_EXEC_OK
+path=/AETHER.TXT n=22 first=P last=D` (DDR-1044's exact-value discipline) and
+`AETHER_AGENT_EXEC_FAIL` as a `FORBIDDEN_SENTINEL`, so a failed execution names
+itself rather than being detectable only as an absence. **No new gate** — the
+point is that the gate which already claimed this can now fail for that reason.
+
+**NOT CLAIMED:** `ACTION_SEND_IPC` is **still** unwired — checklist §4.1 is
+corrected, not closed; it was right about SEND_IPC and far too narrow about the
+cause. No kernel defect is fixed: the policy engine, the capability check and the
+FAT32 writer were all correct and complete. No open issue moves. The live
+(Ollama) branch is unchanged and unexercised. And the agent executes the **one**
+action type it submits — dispatching the template on action type is a larger
+change and is not attempted.

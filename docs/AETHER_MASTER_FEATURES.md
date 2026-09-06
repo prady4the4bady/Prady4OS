@@ -618,6 +618,25 @@ byte-exact.
 - `CAP_NET` allowlist, deny-by-default egress (DDR-734); agent CPU metrics (DDR-735/736)
 - Per-agent live metrics, post-mortem stable (DDR-730); `SYS_AGENT_ROSTER` 8 named slots (DDR-707)
 - 8 named agents KRYOS…SOLIN with UI panel cards + action pips (DDR-737)
+- **The agent now EXECUTES its approved action (DDR-1066)** — until 2026-09-06 it
+  did not. `user/agent_base.c` contained **zero** `SYS_OPEN` and **zero**
+  `SYS_WRITE` in either branch; on `AE_APPROVED` it `printf`'d the path and the
+  data, and the data string is `PRADYOS_AGENT_VERIFIED` — **one of
+  `smoke-aether`'s four required sentinels** — so the end-to-end gate's *execute*
+  arm asserted on a `.rodata` literal and could not fail for the reason it exists.
+  The dead-arm class, in the **product** rather than in a gate. Nothing blocked
+  it: `elf.c:320-321` gives the agent `CAP_FS_WRITE` and the FAT32 root, and
+  `fat32_write` is wired; and the old path `/tmp/aether_test.txt` would have
+  failed regardless, because the volume's only directory is `::/DOCS` and there is
+  **no `/tmp`**. The agent now writes, closes, **reopens without `O_CREAT`** and
+  reads back, printing the marker **from the read-back buffer** — so the sentinel
+  the gate always required now means what the gate's comment always said, with no
+  edit to that arm. **M1** (no write, print from the buffer) reddens
+  `smoke-aether` with `AETHER_AGENT_EXEC_FAIL step=open_r rc=-2`; **M2** (no
+  write, print the literal — the pre-fix behaviour) **passes**. They do the same
+  filesystem work — none — so the only difference is where the bytes came from.
+  `ACTION_SEND_IPC` is **still** unwired, and that is now the exception rather
+  than the rule.
 
 ### Layer 7 UI / Sovereign desktop
 - VirtIO-GPU framebuffer (ADR-028); ring-3 FB surface `SYS_FB_INFO/MAP/FLUSH` (DDR-702)

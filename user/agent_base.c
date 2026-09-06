@@ -13,6 +13,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include "uline.h"                 /* DDR-1056: one write(2) per measured line */
 
 #ifndef AETHER_TEST_MODE
 #define AETHER_TEST_MODE 1
@@ -21,6 +22,10 @@
 /* NSI numbers — keep in sync with kernel/syscall/syscall.h. */
 #define SYS_EXIT          4
 #define SYS_YIELD         3
+#define SYS_READ          5
+#define SYS_WRITE         6
+#define SYS_OPEN          7
+#define SYS_CLOSE         8
 #define SYS_SUBMIT_ACTION 31
 #define SYS_POLL_RESULT   32
 #define SYS_SOCK_CONNECT  39
@@ -32,6 +37,11 @@
 #define ACTION_WRITE_FILE 1
 #define AE_PENDING        1
 #define AE_APPROVED       2
+
+/* Open flags — same three fsrmtest.c uses, and the same values sys_open reads. */
+#define O_RDONLY          0x0
+#define O_WRONLY          0x1
+#define O_CREAT           0x40
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -133,6 +143,24 @@ static int ollama_generate(char *out, int outsz) {
 }
 #endif /* !AETHER_TEST_MODE */
 
+#if AETHER_TEST_MODE
+/* A failed round trip must NOT look like a successful one: this prints an
+ * explicit error naming the step and the errno, does NOT print `data`, and
+ * exits non-zero — so PRADYOS_AGENT_VERIFIED is absent and smoke-aether reddens
+ * rather than passing on a narration. */
+static void agent_exec_fail(const char *step, long rc) {
+    uline u; ul_init(&u);
+    ul_s(&u, "AETHER_AGENT_EXEC_FAIL step="); ul_s(&u, step);
+    ul_s(&u, " rc=");                         ul_d(&u, rc);
+    ul_s(&u, "\n");
+    printf("%s", ul_end(&u));
+    printf("PRADYOS_AGENT_DONE\n");
+    fflush(stdout);
+    nsi(SYS_EXIT, 1, 0, 0);
+    for (;;) { }
+}
+#endif
+
 int main(int argc, char **argv) {
     const char *task = (argc > 2) ? argv[2] : "test";
     printf("PRADYOS_AGENT_START task=%s mode=%s\n",
@@ -153,8 +181,19 @@ int main(int argc, char **argv) {
     nsi(SYS_EXIT, (n > 0) ? 0 : 1, 0, 0);
     return 0;
 #else
-    /* Test: a fixed model response -> ACTION_WRITE_FILE, submitted and executed. */
-    const char *path = "/tmp/aether_test.txt";
+    /* Test: a fixed model response -> ACTION_WRITE_FILE, submitted and executed.
+     *
+     * DDR-1066: this branch used to PRINT the path and the data on approval and
+     * perform no filesystem call at all — the file contained zero SYS_OPEN and
+     * zero SYS_WRITE — while this comment, the gate's comment and the log line
+     * `AETHER_AGENT_EXEC WRITE_FILE` all read as an execution. `data` is the
+     * string `smoke-aether` requires, so the gate's execute arm asserted on a
+     * .rodata literal and could not fail for the reason it exists.
+     *
+     * The path moved to the FAT32 root because there is no /tmp: the volume's
+     * only directory is ::/DOCS (Makefile `mmd`), so the old path could not have
+     * been written even by a correct implementation. */
+    const char *path = "/AETHER.TXT";
     const char *data = "PRADYOS_AGENT_VERIFIED";
 
     char payload[256];
@@ -179,10 +218,58 @@ int main(int argc, char **argv) {
         nsi(SYS_YIELD, 0, 0, 0);
     }
 
-    if (st == AE_APPROVED)
-        printf("AETHER_AGENT_EXEC WRITE_FILE %s\n%s\n", path, data);
-    else
+    if (st != AE_APPROVED) {
         printf("AETHER_AGENT_SKIP verdict=%ld\n", st);
+        printf("PRADYOS_AGENT_DONE\n");
+        fflush(stdout);
+        nsi(SYS_EXIT, 0, 0, 0);
+        return 1;                 /* SYS_EXIT does not return; this makes it
+                                   * impossible to fall into the write below */
+    }
+
+    /* EXECUTE, and only now — the shape user/actionreadtest.c:101 already used
+     * and this agent did not. The kernel approved; the agent acts (DDR-1013 §2:
+     * there is no kernel executor for ACTION_WRITE_FILE, and there should not
+     * be). */
+    size_t dwrite = strlen(data);
+    long wfd = nsi(SYS_OPEN, (long)path, O_CREAT | O_WRONLY, 0);
+    if (wfd < 0)
+        agent_exec_fail("open_w", wfd);
+    long wn = nsi(SYS_WRITE, wfd, (long)data, (long)dwrite);
+    nsi(SYS_CLOSE, wfd, 0, 0);
+    if (wn != (long)dwrite)
+        agent_exec_fail("write", wn);
+
+    /* READ BACK through a SECOND open, deliberately WITHOUT O_CREAT: vfs_open on
+     * a missing file returns -ENOENT, so a build that skipped the write above
+     * cannot reach the print below. That is what makes the arm live. */
+    char back[64];
+    for (size_t i = 0; i < sizeof back; i++) back[i] = 0;
+    long rfd = nsi(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (rfd < 0)
+        agent_exec_fail("open_r", rfd);
+    long rn = nsi(SYS_READ, rfd, (long)back, (long)(sizeof back - 1));
+    nsi(SYS_CLOSE, rfd, 0, 0);
+    if (rn <= 0)
+        agent_exec_fail("read", rn);
+    back[rn] = '\0';
+
+    /* The quantities, so presence of the marker alone is not the whole claim:
+     * a write that stores the wrong length changes n= and is caught (DDR-1039 —
+     * assert both directions). */
+    { uline u; ul_init(&u);
+      ul_s(&u, "PRADYOS_AGENT_EXEC_OK path="); ul_s(&u, path);
+      ul_s(&u, " n=");     ul_d(&u, rn);
+      ul_s(&u, " first="); ul_c(&u, back[0]);
+      ul_s(&u, " last=");  ul_c(&u, back[rn - 1]);
+      ul_s(&u, "\n");
+      printf("%s", ul_end(&u)); }
+
+    /* PRADYOS_AGENT_VERIFIED comes out of the READ-BACK BUFFER, never out of
+     * `data`. smoke-aether has always required that sentinel; emitting it from
+     * bytes that made a filesystem round trip is what turns the assertion the
+     * gate already makes into the one its comment always described. */
+    printf("AETHER_AGENT_EXEC WRITE_FILE %s\n%s\n", path, back);
     printf("PRADYOS_AGENT_DONE\n");
     fflush(stdout);
     nsi(SYS_EXIT, 0, 0, 0);
