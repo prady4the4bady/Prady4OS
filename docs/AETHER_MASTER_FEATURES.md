@@ -1451,3 +1451,60 @@ unknown** — the dump that would have named it is the thing that died. No cause
 is named for the original panic. Nothing is fixed about the garbage `rbp`
 itself. One occurrence, no rate. `GLOBAL_FORBIDDEN` **76 unchanged** (no pattern
 added; the change is to how matches are *reported*); 178 gates unchanged.
+
+---
+
+## Three unrelated failures behind one number — DDR-1080 (2026-09-06)
+
+**Instrument change only. No defect is fixed and no cause is named.**
+
+**Artefact:** CI 34053412311, shard 4, `smoke-smplock`, tip `5093ca9` — no
+kernel source change, `kernel.bin: OK`. `[sfs] unlink/rmdir detail step=9
+rc=-1`, where step 9 is `vfs_unlink("/D/E")`, removing a directory whose only
+file **step 8 had just removed successfully with the same `cap` and `mnt`**.
+Two different failures on the same gate, same binary, one run apart (DDR-1079
+was the panic-walker #GP).
+
+**The finding.** `vfs_unlink` collapsed **three unrelated defect families** into
+one bare `-1`: `!m` (mount gone — the umount-under-a-live-caller family,
+DDR-967/DDR-954), `!m->fs->unlink`, and `!cap_ok` (the capability race,
+DDR-964/OPEN-10, where `rc=-1` *is* `-EPERM`). And the field reporting it exists
+precisely to say what the failing step returned — DDR-984 added `step=`/`rc=`
+because the probe *"said only THAT it broke, never WHICH step or with what rc."*
+It fixed the `step=` half; **the `rc=` half was still ambiguous.** The
+DDR-1046/1060/1074 shape: an instrument that cannot discriminate the case it
+exists for.
+
+**What the artefact narrows — a narrowing, not a verdict.** Step 8 passed and
+step 9 failed one call apart with the same `cap` and `mnt`. `!m->fs->unlink` is
+constant and would have failed at step 2; the capability worked one line
+earlier. **`!m` is the only one of the three consistent with step 8 passing.**
+§NON-NEGOTIABLE 3 forbids a fix on that, and none is attempted.
+
+**The change** follows the file's own direction (`vfs_create` already takes
+distinct precondition codes — DDR-888; `vfs_rename` already split `-ENOSYS` —
+DDR-956): `!m → -ENODEV`, `!m->fs->unlink → -ENOSYS`, `!cap_ok → -EPERM`. And
+**`-EPERM` is `-1`**, so the capability case keeps its value while the other two
+move away — which is what makes `-1` discriminating rather than ambiguous from
+here on. `-ENODEV` vs `-EIO` is deliberate: gone *before* we looked vs
+`mnt_lock_live`'s died *while* we waited. Safe, measured: no caller compares
+against the literal `-1`, and no gate asserts an errno out of `SYS_UNLINK`.
+
+**Proof and its limit, stated.** `smoke-fs`, `smoke-fs-sfs-rw`, `smoke-smplock`,
+`smoke-shell`, `smoke-rename-sfs` all rc=0; hygiene ALL EIGHT; size unchanged.
+**There is no mutant, and that is a deliberate limitation** — the three arms are
+preconditions a healthy boot never takes, so forcing one proves the arm *prints
+a number*, not that the number *discriminates*. What it is worth is decided by
+the next real occurrence.
+
+**Recorded and NOT acted on:** the same fusion runs through **18** `return -1;`
+sites in `vfs.c` (`vfs_readdir` collapses three conditions in one line, as do
+the others). Only the two functions the artefact touched are changed; widening
+it is an ABI-visible sweep deserving its own decision.
+
+**NOT CLAIMED:** the SFS failure is **not explained**; not attributed to
+DDR-1078 nor exonerated ("the diff is elsewhere" is not an argument, DDR-1042);
+one occurrence, **no rate**; and **it is not established whether this failure
+was primary or downstream** — that run predates DDR-1079's scan fix, so the
+capture was scanned only until the first matching pattern. A tip at or after
+`595cd3e` will say. 178 gates unchanged; `GLOBAL_FORBIDDEN` 76 unchanged.

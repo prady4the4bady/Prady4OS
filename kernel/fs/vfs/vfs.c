@@ -276,9 +276,34 @@ int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint
 }
 
 int vfs_unlink(cap_t cap, int mnt, const char *path) {
+    /* DDR-1080: THREE conditions used to collapse into one bare `-1`, and CI
+     * 34053412311 shard 4 is what showed that costs a diagnosis. The DDR-984
+     * instrument printed `[sfs] unlink/rmdir detail step=9 rc=-1` -- step 9 is
+     * `vfs_unlink("/D/E")` -- and `-1` could equally mean the mount was gone,
+     * the fs had no unlink op, or the capability was refused. Three unrelated
+     * defect families behind one number, in the field whose whole purpose
+     * (DDR-984) is to say WHAT the failing step returned.
+     *
+     * Note -EPERM IS -1 (errno.h:9), so the capability case keeps its value and
+     * the OTHER TWO move away from it; that is what makes -1 discriminating
+     * from here on rather than ambiguous.
+     *
+     * -ENODEV and -EIO are deliberately different: -ENODEV means the mount was
+     * already gone when we looked, -EIO (mnt_lock_live, DDR-954) means it died
+     * while we waited. Same condition, two instants, and which one it is
+     * matters to a umount-under-a-live-caller race (the DDR-967/FSRM family).
+     *
+     * Safe: every caller in the tree tests == 0 or != 0 and not one compares
+     * against the literal -1 (measured, not assumed); no gate asserts a
+     * specific errno out of SYS_UNLINK. vfs_rename below already split -ENOSYS
+     * out this way (DDR-956), so this follows the file's own direction. */
     struct vfs_mount *m = mnt_get(mnt);
-    if (!m || !m->fs->unlink || !cap_ok(cap, CAP_FS_WRITE))
-        return -1;
+    if (!m)
+        return -ENODEV;                 /* mount gone before we looked */
+    if (!m->fs->unlink)
+        return -ENOSYS;                 /* fs has no unlink op */
+    if (!cap_ok(cap, CAP_FS_WRITE))
+        return -EPERM;                  /* == -1, unchanged */
     if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->unlink(m->ctx, path);
     mnt_unlock(m);
@@ -292,9 +317,13 @@ int vfs_unlink(cap_t cap, int mnt, const char *path) {
  * (sys_file.c) and no path->mount resolution exists anywhere in the tree, so a
  * caller cannot name a second mount; an EXDEV check would be unreachable. */
 int vfs_rename(cap_t cap, int mnt, const char *old_path, const char *new_path) {
+    /* DDR-1080: same split as vfs_unlink above. -ENOSYS was already separate
+     * (DDR-956); the mount-gone and capability cases were not. */
     struct vfs_mount *m = mnt_get(mnt);
-    if (!m || !cap_ok(cap, CAP_FS_WRITE))
-        return -1;
+    if (!m)
+        return -ENODEV;                 /* mount gone before we looked */
+    if (!cap_ok(cap, CAP_FS_WRITE))
+        return -EPERM;                  /* == -1, unchanged */
     if (!m->fs->rename)
         return -ENOSYS;
     if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */

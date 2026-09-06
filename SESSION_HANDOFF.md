@@ -11887,3 +11887,70 @@ path — not a revision of DDR-1019's three `[apfreeze]` producers. Nothing is
 fixed about the garbage `rbp` itself. One occurrence, **no rate**. 178 gates
 unchanged (arm G is added to an existing gate); no open issue moves
 (OPEN-1/12/13 untouched).
+
+---
+
+## DDR-1080 — three unrelated failures behind one number (2026-09-06)
+
+**INSTRUMENT CHANGE ONLY. No defect is fixed and no cause is named.**
+
+**Artefact:** CI 34053412311, shard 4, `smoke-smplock`, tip `5093ca9`
+(DDR-1078 — **no kernel source change**; `kernel.bin: OK`).
+`[sfs] unlink/rmdir detail step=9 rc=18446744073709551615` = **-1**, where step 9
+is `vfs_unlink(cap, smnt, "/D/E")` — removing a directory whose only file **step
+8 had just removed successfully, with the same `cap` and the same `mnt`**.
+**Two different failures on the same gate, on the same binary, one run apart**
+(DDR-1079 was the panic-walker #GP) — worth recording on its own.
+
+**THE FINDING.** `vfs_unlink` collapsed **three unrelated defect families** into
+one bare `-1`: `!m` (mount gone — umount-under-a-live-caller, DDR-967/FSRM,
+DDR-954), `!m->fs->unlink` (a filesystem wired without the op), and `!cap_ok`
+(the capability race, DDR-964/OPEN-10, where `rc=-1` **is** `-EPERM`). The field
+reporting it exists *precisely* to say what the failing step returned — DDR-984
+added `step=`/`rc=` because the probe *"said only THAT it broke, never WHICH step
+or with what rc."* It fixed the `step=` half; **the `rc=` half was still
+ambiguous**, and this is the first time that cost anything. The
+DDR-1046/1060/1074 shape.
+
+**WHAT THE ARTEFACT NARROWS — a narrowing, not a verdict.** Step 8 passed and
+step 9 failed one call apart with the same `cap`/`mnt`. `!m->fs->unlink` is
+constant and would have failed at step 2; the capability worked one line
+earlier. **`!m` is the only one of the three consistent with step 8 passing.**
+§NON-NEGOTIABLE 3 forbids a fix on that; none is attempted. Written down so the
+next capture is read against it.
+
+**THE CHANGE**, following the file's own direction (`vfs_create` already takes
+distinct precondition codes — `errno.h` at `vfs.c:6`, DDR-888; `vfs_rename`
+already split `-ENOSYS` — DDR-956): `!m → -ENODEV`, `!m->fs->unlink → -ENOSYS`,
+`!cap_ok → -EPERM`. **`-EPERM` IS `-1`**, so the capability case keeps its value
+and the other two move away — that is what makes `-1` discriminating from here
+on. `-ENODEV` vs `-EIO` is deliberate: gone *before* we looked vs
+`mnt_lock_live`'s died *while* we waited (DDR-954) — two instants, and which one
+it is matters to the umount-race family the narrowing points at. `vfs_rename`
+gets the same split.
+
+**Safe, measured not assumed:** no caller compares against the literal `-1`
+(every one tests `== 0`/`!= 0`); ring-3 consumers test `!= 0`/`>= 0`; no gate
+asserts an errno out of `SYS_UNLINK`.
+
+**PROOF AND ITS LIMIT.** `smoke-fs`, `smoke-fs-sfs-rw`, `smoke-smplock`,
+`smoke-shell`, `smoke-rename-sfs` all rc=0; hygiene **ALL EIGHT**; `kernel.bin`
+**1,290,634 B, size unchanged**. **There is no mutant, and that is a deliberate
+limitation:** the three arms are preconditions a healthy boot never takes, so
+forcing one proves the arm *prints a number*, not that the number
+*discriminates*. The next real occurrence decides its worth.
+
+**RECORDED AND NOT ACTED ON:** `grep -n "return -1;" kernel/fs/vfs/vfs.c` returns
+**18** sites — the same fusion runs through most of the VFS entry layer
+(`vfs_readdir` collapses three conditions in one line, as do the others). Only
+the two functions the artefact touched are changed; widening it is an
+ABI-visible sweep deserving its own decision.
+
+**NOT CLAIMED:** the SFS failure is **not explained**. **Not attributed** to
+DDR-1078 (no kernel source change; its `boot_test.sh` edit lives inside
+`if [ -n "$QEMU_NUMA" ]`, which `smoke-smplock` does not set) **nor
+exonerated** — "the diff is elsewhere" is not an argument (DDR-1042). **One
+occurrence, no rate.** **Not established as primary or downstream:** that run
+predates DDR-1079's scan fix, so the capture was scanned only until the first
+matching pattern — a tip at or after `595cd3e` will say. `GLOBAL_FORBIDDEN` 76
+unchanged; 178 gates unchanged; no open issue moves.

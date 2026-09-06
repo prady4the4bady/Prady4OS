@@ -1142,6 +1142,32 @@ FAT32 multi-cluster defect was **refuted and gated** (DDR-973). A blocker
 presented as live is a different staleness from work presented as remaining —
 the first can suppress work that is actually unblocked.
 
+**A SECOND shard-4 red on the SAME binary, one run apart — DDR-1080, and the
+`rc=` could not say what failed.** CI 34053412311, `smoke-smplock`, tip
+`5093ca9` (no kernel source change, `kernel.bin: OK`):
+`[sfs] unlink/rmdir detail step=9 rc=-1`, step 9 being `vfs_unlink("/D/E")` —
+removing a directory whose only file **step 8 had just removed successfully with
+the same `cap` and `mnt`**.
+- **`vfs_unlink` collapsed THREE unrelated defect families into one `-1`:** mount
+  gone (the umount-under-a-live-caller family, DDR-967/954), no `unlink` op, and
+  no capability (DDR-964/OPEN-10, where `rc=-1` *is* `-EPERM`). DDR-984 added
+  `step=`/`rc=` precisely to name the failure; it fixed the `step=` half.
+- **Narrowing, not a verdict:** `!m->fs->unlink` is constant and would have
+  failed at step 2, and the capability worked one line earlier, so **`!m` is the
+  only one of the three consistent with step 8 passing.** §NON-NEGOTIABLE 3
+  forbids a fix on that and none is attempted.
+- **Split** to `-ENODEV`/`-ENOSYS`/`-EPERM`, following `vfs_create` (DDR-888) and
+  `vfs_rename` (DDR-956). `-EPERM` **is** `-1`, so the capability case keeps its
+  value and the other two move away — that is what makes `-1` discriminating.
+- **No mutant, deliberately:** the three arms are preconditions a healthy boot
+  never takes, so forcing one proves the arm prints a number, not that it
+  discriminates. The next real occurrence decides its worth.
+- **Recorded, NOT acted on:** the same fusion runs through **18** `return -1;`
+  sites in `vfs.c`. Widening is an ABI-visible sweep needing its own decision.
+- **The SFS failure is UNEXPLAINED**, one occurrence, no rate, and **not
+  established as primary or downstream** — that run predates DDR-1079's scan fix,
+  so only the first matching pattern was ever tested.
+
 **OPEN-2 — a FOURTH path to a frozen CPU, and the scan that hid it — DDR-1079.**
 CI 34051826587 shard 4, on a docs+host-script tip whose shard printed
 `kernel.bin: OK`. **DDR-1019's instrument fired on a real failure for the first

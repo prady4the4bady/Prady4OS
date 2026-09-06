@@ -424,7 +424,12 @@ B#13 dynamic linker ⬜ · B#14 NAS scheduler ⬜ · B#15 PMM policy ⬜
 ### TASK 18–21
 
 18 `prad` package manager (NSI 87–89 — **renumber, 87 is taken by
-`SYS_READ_AUDIT`; use 88–90**) ⬜ · **PANIC BACKTRACE WALKER BOUNDED — DDR-1079**:
+`SYS_READ_AUDIT`; use 88–90**) ⬜ · **UNLINK/RENAME `rc=` NOW DISCRIMINATES — DDR-1080**:
+`vfs_unlink` collapsed mount-gone, no-op and no-capability into one bare `-1`,
+so the DDR-984 `rc=` field could not name which of three defect families fired.
+Split to `-ENODEV`/`-ENOSYS`/`-EPERM` — and `-EPERM` **is** `-1`, so the other
+two move away from it and `-1` becomes discriminating. Instrument only: **no
+defect fixed, no cause named**; the CI 34053412311 SFS failure is unexplained · **PANIC BACKTRACE WALKER BOUNDED — DDR-1079**:
 it tested `bp != 0` and nothing else, and CI 34051826587 shard 4 caught it taking
 a **#GP** (non-canonical) at `isr_dispatch+0xE86` — the CPU that had won the panic
 CAS faulted in its own backtrace, lost the CAS to itself and halted forever, so
