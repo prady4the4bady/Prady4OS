@@ -950,7 +950,7 @@ verdict, and acts only afterwards — plus a gate that asserts the *effect*.
 | `ACTION_REWRITE_AGENT_CODE` | **shipped since DDR-842** — four capability roles, a real approver via `SYS_APPROVE_CODE_REWRITE` (NSI 86), a negative arm proving that call cannot approve a non-rewrite action, and the sov-only arm proving `CAP_REWRITE` is not decoration | `smoke-coderewrite` (shard 7, **strict**) | DDR-842 |
 | `ACTION_PROPOSE_HYPOTHESIS` | shipped | `smoke-actionhypo` (auto-approves, then logs and reads back) | DDR-1020 |
 | `ACTION_EVOLVE_GENOME` | shipped, force-pending | `smoke-actionhypo` (same boot: PENDING + genome untouched) | DDR-1020 |
-| `RUN_EXPERIMENT` | **SHIPPED — DDR-1034**, superseding DDR-1021's deferral. A bounded integer stack machine: no `LOAD`, no `STORE`, no addressing mode, so "no memory outside its own stack" is a property of the instruction set rather than a guard that could be deleted; no `DIV` (a `#DE` in ring 0 is fatal, so the opcode is absent rather than checked); hard step cap, operand-stack bounds, code-length bound. `CAP_EXEC` is now a **checked** bit (`RES_EXEC` + `cap_authorize`), paired with `is_exec` on `struct tcb`. Results go to a **separate** kernel-owned ring whose only writer is the executor — the DDR-812 lockbox is not touched, extended or read. Deliberately **not** force-pending, with the reason recorded (DDR-1034 §4) | `smoke-runexp` (shard 8, **strict**) | DDR-1034 |
+| `RUN_EXPERIMENT` | **SHIPPED — DDR-1034**, superseding DDR-1021's deferral. A bounded integer stack machine: no `LOAD`, no `STORE`, no addressing mode, so "no memory outside its own stack" is a property of the instruction set rather than a guard that could be deleted; no `DIV` (a `#DE` in ring 0 is fatal, so the opcode is absent rather than checked); hard step cap, operand-stack bounds, code-length bound. `CAP_EXEC` is now a **checked** bit (`RES_EXEC` + `cap_authorize`), paired with `is_exec` on `struct tcb`. Results go to a **separate** kernel-owned ring whose only writer is the executor — the DDR-812 lockbox is not touched, extended or read. Deliberately **not** force-pending, with the reason recorded (DDR-1034 §4 and, re-examined against `REWRITE_AGENT_CODE`/`EVOLVE_GENOME`, DDR-1083 §6: the instruction set means an approved experiment computes an integer and can touch nothing, while those two change the agent itself — and adding a type to that list is a DDR-842 S4 policy decision, recorded for the operator, not taken). **The ACTION TYPE is now wired too — DDR-1083**, which also resolves the DDR-1072 §2 trap on this row: the gate's NAME matched the type while its CLAIM was the executor, and it now covers both | `smoke-runexp` (shard 8, **strict**) | DDR-1034 + DDR-1083 |
 | `SEND_IPC` | **SHIPPED — DDR-1033.** `SYS_IPC_SEND`/`SYS_IPC_RECV` (NSI 98/99), addressed by roster slot; `is_ipc` + a `RES_IPC` capability. The capability is coarse by construction (one shared `res_id` = "IPC at all", not per-slot policy) and that limit is stated, not implied. **Residual:** the AETHER action path does not yet call it, so an approved `SEND_IPC` still has no automatic effect | `smoke-sendipc` (shard 7, **strict**) | DDR-1033 |
 | `ACTION_QUERY_MEMORY` | shipped | `smoke-actionquery` (asserts the seeded bytes come back) | DDR-1018 |
 
@@ -1082,10 +1082,20 @@ not excluded (`smoke-actionread`, `smoke-actiondel`, `smoke-actionquery`,
 `smoke-coderewrite` **strict**, `smoke-actionhypo`). `CLAUDE.md`'s Group F table
 carried all eight as `gate per type` with no marker.
 
-**`ACTION_SEND_IPC` and `ACTION_RUN_EXPERIMENT` remain deferred as ACTION
-TYPES**, and each sits beside a strict-tier green gate whose name matches it —
+**`ACTION_SEND_IPC` remains deferred as an ACTION TYPE. `ACTION_RUN_EXPERIMENT` NO
+LONGER IS — DDR-1083 wired it** (`user/actionexptest.c` submits the type, waits for
+the verdict and runs only on approval; arms on `smoke-runexp`). What that adds is the
+propose → arbitrate → **obey** loop and its audit record, **not** a new enforcement:
+`sys_run_experiment` does not consult the action queue and DDR-1083 did not make it,
+so an `is_exec` agent can still call NSI 100 without submitting — which is the
+system's design for every action type (DDR-1013 §2, the kernel arbitrates and the
+AGENT acts). `aether_action_forces_pending()` is deliberately unchanged and whether
+RUN_EXPERIMENT belongs in it is recorded as an operator decision (DDR-1083 §6).
+
+*(Superseded, kept for the record: this paragraph read* "`ACTION_SEND_IPC` and `ACTION_RUN_EXPERIMENT` remain deferred as ACTION
+TYPES, and each sits beside a strict-tier green gate whose name matches it —
 `smoke-sendipc` (the DDR-1033 door) and `smoke-runexp` (the DDR-1034 executor).
-Neither submits the type. **Do not close either row by pointing at that gate.**
+Neither submits the type. Do not close either row by pointing at that gate."
 
 **Per-agent capability enforcement (`CAP_OCR`/`CAP_SCENE`/`CAP_NET_BROWSE`, and
 `ACTION_EXEC_CODE` behind `CAP_EXEC`) is a WITHDRAWN item awaiting an operator

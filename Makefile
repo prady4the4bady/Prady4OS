@@ -153,6 +153,8 @@ USER_AQRY_SRC := user/actionquerytest.c  # DDR-1018: Section 3C ACTION_QUERY_MEM
 USER_AQRY_ELF := build/actionquerytest.elf
 USER_AHYP_SRC := user/actionhypotest.c   # DDR-1020: 3C HYPOTHESIS + EVOLVE_GENOME
 USER_AHYP_ELF := build/actionhypotest.elf
+USER_AEXP_SRC := user/actionexptest.c    # DDR-1083: 3C RUN_EXPERIMENT end to end
+USER_AEXP_ELF := build/actionexptest.elf
 USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
@@ -574,6 +576,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AQRY_ELF) build/actionquerytest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AHYP_SRC) -o build/actionhypotest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AHYP_ELF) build/actionhypotest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AEXP_SRC) -o build/actionexptest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AEXP_ELF) build/actionexptest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
@@ -3828,8 +3832,8 @@ smoke-sendipc: $(IMG) fat-image sfs-image
 smoke-runexp: $(IMG) fat-image sfs-image
 	@rm -f build/runexp.log
 	@SERIAL_LOG=build/runexp.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=exp \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_EXP_CALC rc=0 v=42\nPRADYOS_EXP_GATE rc=0\nPRADYOS_EXP_GATE rc=-1\nPRADYOS_EXP_LOOP rc=-40\nPRADYOS_EXP_OVF rc=-75\nPRADYOS_EXP_REC rc=0 st=0 v=42 steps=4\nPRADYOS_EXP_OK')" \
-	FORBIDDEN_SENTINEL="EXPTEST FAIL" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_EXP_CALC rc=0 v=42\nPRADYOS_EXP_GATE rc=0\nPRADYOS_EXP_GATE rc=-1\nPRADYOS_EXP_LOOP rc=-40\nPRADYOS_EXP_OVF rc=-75\nPRADYOS_EXP_REC rc=0 st=0 v=42 steps=4\nPRADYOS_EXP_OK\nPRADYOS_EXPACT_A st=2 ran=1 rc=0 v=42\nPRADYOS_EXPACT_B st=1 pst=1 ran=0 rc=0 v=0\nPRADYOS_EXPACT_OK')" \
+	FORBIDDEN_SENTINEL="EXPTEST FAIL|ACTIONEXP FAIL|PRADYOS_EXPACT_B .* v=97" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[runexp] PASS — $$(grep -a PRADYOS_EXP_REC build/runexp.log | head -1)"
 

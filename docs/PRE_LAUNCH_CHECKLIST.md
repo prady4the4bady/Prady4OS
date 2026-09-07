@@ -1363,7 +1363,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
 | DDR free range | **DDR-1083+** | §INV.4 |
-| `kernel.bin` | **1,290,634 B** against the 1,572,864 B gate — **282,230 B** headroom | measured 2026-09-06; **re-derived, not carried** |
+| `kernel.bin` | **1,298,826 B** against the 1,572,864 B gate — **274,038 B** headroom | measured 2026-09-06; **re-derived, not carried** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |
 | aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — and "packaging only" understates it: **278 lines across both ports**, each printing a sentinel and halting on `wfe`/`wfi`, with no MMU, scheduler, VFS or userspace. **There is no OS to package** (DDR-1081 §1.4) | DDR-999, ADR-034, DDR-1081 |

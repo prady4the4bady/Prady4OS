@@ -1068,6 +1068,20 @@ ticked. Logged here verbatim from the table, reasons unchanged.
 - NVMe completion IRQ — `[DEFERRED: poll-mode sufficient for ISO; DDR-774a/b/c deferred until B#3 SMP stable]`
 - `ACTION_SEND_IPC` — `[DEFERRED: no ring-3 IPC surface — ipc_send/ipc_recv are kernel-internal and capability-gated and there is no SYS_IPC_*, so an approved SEND_IPC has no executor in any ring; building it is new kernel ABI plus a security decision (DDR-1017 §1)]`
 - `ACTION_RUN_EXPERIMENT` — `[DEFERRED: no implementation at any ring — CAP_EXEC is a #define checked nowhere (zero matches in kernel/*.c, no is_exec on struct tcb), there is no experiment subsystem, and the metric lockbox is CAP_SOVEREIGN read-only by design so an agent cannot record a result; it is ACTION_EXEC_CODE's deferral under another name (DDR-1021)]`
+  - **RETIRED 2026-09-07 — DDR-1083. All three of those blockers were already gone, and
+    none was retired by DDR-1083:** DDR-1034 retired them by building the executor and
+    then did not come back to the action type. Measured — `CAP_EXEC` is minted and
+    `cap_authorize`d (`sys_experiment.c:35`/`:45`); the bounded stack machine ships and is
+    CI-gated; and the lockbox blocker was **solved without touching the lockbox**, the
+    results store's only writer being `exp_run()` in the kernel. DDR-1021 read a
+    *read-only property* as a blocker, and DDR-1034 reproduced what it was protecting by a
+    second mechanism. `user/actionexptest.c` is the caller that closes the gap; arms on
+    `smoke-runexp` (no new gate, 178 unchanged).
+  - **NOT a new enforcement.** `sys_run_experiment` does not consult the action queue and
+    DDR-1083 did not make it — what is added is propose → arbitrate → **obey** plus the
+    audit record, the design DDR-1013 §2 states for every action type.
+  - `ACTION_SEND_IPC` **stays deferred** and is not re-assessed: same shape (DDR-1033 built
+    the door, the action path does not call it), separate change.
 - F#74 capability discovery — `[DEFERRED: agent_caps exists on struct tcb (DDR-982) but is initialised to 0 and never granted, and there is no syscall to read it; building it reverses DDR-982's deliberately withdrawn per-slot enforcement (DDR-1022 §4)]`
 - F#66 architect_agent / F#67 healer_agent (RUFLO) / F#69 inventor_agent / F#70 tournament_agent / F#71 subconscious world model / F#72 verifier_agent / F#75 lineage memory — `[DEFERRED: domain behaviour with no subsystem behind it; there is exactly ONE agent program (user/agent_base.c) and the named agents are roster slots, so each of these is a behaviour rather than plumbing. A stub would gate vacuously, and F#75's gate would duplicate smoke-agentmem (DDR-1022 §2/§5)]`
 - F#73 sovereign NL UI — `[DEFERRED: needs a natural-language surface; blocked on the same two missing pieces as Ctrl+Alt+T — no windowed terminal client, and sys_exec.c:47 discards argv/envp so a spawned client cannot be told what to attach to (DDR-1022 §5)]`
@@ -3493,3 +3507,37 @@ reading to gate on**.
 **Bears on the release:** `resched FAIL` is in `GLOBAL_FORBIDDEN`, so a correct
 kernel can redden any gate on any shard, degrading the 3-green criterion.
 **Two occurrences on record, no rate measured.**
+
+
+---
+
+## DDR-1083 — a wire-format pin whose stated justification was false
+
+`kernel/aether/aether.h` states its pinning rule twice and, until 2026-09-07, held a
+violation of it **eleven lines below the statement**. For `ACTION_SEND_IPC`: *"Nothing
+hand-copies 7, and **a pin whose probe does not exist would read as a claim that one
+does**."* Eleven lines later, for `ACTION_RUN_EXPERIMENT`: *"DDR-1034 built that probe
+(`user/exptest.c`), so the pin is now owed."*
+
+**`user/exptest.c` is not that probe and never was.** Measured, not inferred: `grep` for
+`ACTION_` / `SUBMIT_ACTION` / `POLL_RESULT` over it returns **nothing**; its only
+hand-copied constants are NSI 4/6/100/101 and the `exp_op` opcodes; and the single match
+for `ACTION_RUN_EXPERIMENT` outside `aether.h` in the whole tree is a **filename comment**
+in `experiment.h`. It drives the **executor** — exactly the distinction DDR-1072 §2 drew
+when it warned that `smoke-runexp`'s *name* matches the action type while its *claim* is a
+different thing.
+
+Written in the confident past tense, in the file whose entire job is to be the thing other
+files are checked against. Same class as DDR-1073 §5 (a prescribed remedy that was never
+runnable) and §INV.12's wrong reason behind a right conclusion.
+
+**The pin was not deleted; it was made true.** `user/actionexptest.c` hand-copies 11 and
+submits the type, so the sentence is now accurate rather than the claim being quietly
+shrunk — the number genuinely crosses the ring boundary the moment any probe submits, and
+DDR-1083 is that moment.
+
+**Recorded, not acted on:** `ACTION_NET_EGRESS == 13` is likewise pinned and likewise
+hand-copied by nothing (DDR-1070 made it audit-only on purpose, so nothing submits it).
+Its justification is a *different* one the comment does not state — it crosses the
+boundary inside every **audit record**, not every submission — so that would be a comment
+edit on a correct pin.

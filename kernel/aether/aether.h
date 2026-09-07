@@ -72,9 +72,20 @@ _Static_assert(ACTION_QUERY_MEMORY  == 8, "action wire format: QUERY_MEMORY is 8
  * (REWRITE_AGENT_CODE) is hand-copied by user/coderewritetest.c and pinned for
  * the same reason. 11 (RUN_EXPERIMENT) WAS deliberately unpinned on that rule --
  * nothing copied it, and a pin whose probe does not exist reads as a claim that
- * one does. DDR-1034 built that probe (user/exptest.c), so the pin is now owed
- * and is below; this comment is updated in the same commit rather than left to
- * become false. */
+ * one does.
+ *
+ * CORRECTED 2026-09-07 (DDR-1083 §2). This comment used to name user/exptest.c
+ * as that probe. IT IS NOT ONE: measured, exptest.c hand-copies four NSI numbers
+ * (4/6/100/101) and the exp_op opcodes, contains no ACTION_ constant at all and
+ * never calls SYS_SUBMIT_ACTION -- it drives the EXECUTOR, which is exactly the
+ * distinction DDR-1072 §2 drew when it warned that smoke-runexp's NAME matches
+ * the action type while its CLAIM is a different thing. So this file held a rule
+ * (eleven lines up, for SEND_IPC) and a violation of it, written in the
+ * confident past tense.
+ *
+ * The pin is not deleted; it is MADE TRUE. user/actionexptest.c (DDR-1083) hand-
+ * copies 11 and submits the type, so the sentence is now accurate rather than
+ * the claim being quietly shrunk. */
 _Static_assert(ACTION_REWRITE_AGENT_CODE == 9, "action wire format: REWRITE_AGENT_CODE is 9");
 _Static_assert(ACTION_PROPOSE_HYPOTHESIS == 10, "action wire format: PROPOSE_HYPOTHESIS is 10");
 _Static_assert(ACTION_RUN_EXPERIMENT     == 11, "action wire format: RUN_EXPERIMENT is 11");

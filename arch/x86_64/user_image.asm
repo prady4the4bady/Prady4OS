@@ -499,3 +499,10 @@ global bigwritetest_elf_end
 bigwritetest_elf:
     incbin "build/bigwritetest.elf"
 bigwritetest_elf_end:
+
+; exp (DDR-1083): Section 3C ACTION_RUN_EXPERIMENT, propose -> arbitrate -> obey.
+global actionexptest_elf
+global actionexptest_elf_end
+actionexptest_elf:
+    incbin "build/actionexptest.elf"
+actionexptest_elf_end:

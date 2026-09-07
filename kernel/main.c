@@ -471,6 +471,8 @@ extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUE
 extern const unsigned char actionquerytest_elf_end[];
 extern const unsigned char actionhypotest_elf[];      /* DDR-1020: 3C HYPO + GENOME */
 extern const unsigned char actionhypotest_elf_end[];
+extern const unsigned char actionexptest_elf[];       /* DDR-1083: 3C RUN_EXPERIMENT */
+extern const unsigned char actionexptest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -2555,6 +2557,26 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] EXP un-granted probe FAILED to load\r\n");
                     }
                     kputs("[user] experiment executor probes spawned (granted + un-granted)\r\n");
+
+                    /* DDR-1083: the ACTION path into the same executor. A THIRD
+                     * process, not a flag on the two above: it needs is_agent
+                     * (to submit at all -- sys_submit_action:117) AND the door,
+                     * and the un-granted probe exists precisely to lack the
+                     * door, so neither could carry this. It is spawned under the
+                     * same probe key so its arms land on smoke-runexp and no new
+                     * gate is created (DDR-1039's reasoning). */
+                    struct tcb *xa = 0;
+                    uint64_t xalen = (uint64_t)(uintptr_t)actionexptest_elf_end -
+                                     (uint64_t)(uintptr_t)actionexptest_elf;
+                    if (elf_load((void *)(uintptr_t)actionexptest_elf, xalen,
+                                 "ACTIONEXP", &xa) == ELF_OK && xa) {
+                        xa->is_agent = 1;              /* authority to PROPOSE */
+                        exec_grant(xa);                /* authority to RUN */
+                        sched_unblock(xa);
+                        kputs("[user] 3C RUN_EXPERIMENT probe spawned (agent + exec door)\r\n");
+                    } else {
+                        kputs("[user] ACTIONEXP probe FAILED to load\r\n");
+                    }
                 }
                 /* DDR-1037: POSIX poll(). One process -- unlike is_ipc/is_exec
                  * there is no per-process door here, so a second un-granted

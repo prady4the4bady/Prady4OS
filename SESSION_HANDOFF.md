@@ -12056,3 +12056,87 @@ Costed first, per DDR-1061.
 **CI at checkpoint:** `0637693` (DDR-1081) green on **both** suites — push
 34058717308 and PR 34058718927. `b325d25` (DDR-1080) also green on both. Release
 stays held; no promotion in flight.
+
+---
+
+## DDR-1083 — Section 3C `ACTION_RUN_EXPERIMENT` wired, and a wire-format pin whose stated justification was false
+
+**Tip:** on `dev/phase1-seyp3n`, after `2286f0a` (DDR-1082, 2/2 green).
+**kernel.bin:** `ee0e06c3081d9cd3`, 1,298,826 B (was 1,290,634 — the page-aligned
+8,192 B every embedded probe costs). Headroom 274,038 B, recomputed in the same
+edit as the size.
+
+### What was measured before anything was written
+
+DDR-1021 assessed this type as **not buildable at any ring** on three facts.
+**All three were already false, and none was retired by this DDR** — DDR-1034
+retired them by building the executor and then did not come back to the action
+type. `CAP_EXEC` is minted and `cap_authorize`d (`sys_experiment.c:35`/`:45`); the
+bounded stack machine ships and is CI-gated; and *"the metric lockbox is
+`CAP_SOVEREIGN` read-only so the agent cannot write its own result"* was solved
+**without touching the lockbox** — the results store's only writer is `exp_run()`,
+in the kernel. DDR-1021 read a read-only property as a *blocker*; DDR-1034
+reproduced what it was protecting by a second mechanism. DDR-1072 §2 had already
+recorded this as owed: *"a reason to re-assess, not to close."*
+
+### The finding
+
+`kernel/aether/aether.h` states its pinning rule twice and held a violation of it
+eleven lines below the statement. For SEND_IPC: *"a pin whose probe does not exist
+would read as a claim that one does."* Eleven lines later, for RUN_EXPERIMENT:
+*"DDR-1034 built that probe (`user/exptest.c`), so the pin is now owed."*
+**`exptest.c` is not that probe** — `grep` for `ACTION_`/`SUBMIT_ACTION` over it
+returns nothing, and the one match for `ACTION_RUN_EXPERIMENT` outside `aether.h`
+in the whole tree is a filename comment. **The pin was not deleted; it was made
+true** by shipping the probe the comment claims exists.
+
+### What this does NOT add — stated first, because the flattering reading is one sentence away
+
+`sys_run_experiment` does not consult the action queue and **this does not make
+it**. No new enforcement; an `is_exec` agent can still call NSI 100 without
+submitting. What is added is propose → arbitrate → **obey** plus the audit record
+— the system's design for every action type (DDR-1013 §2).
+
+### The obvious arm is vacuous, measured before it was written
+
+`smoke-runexp` **already** required `PRADYOS_EXP_CALC rc=0 v=42`, so "submit, then
+assert the experiment computed 42" passes on a build with no submit at all. Fifth
+time caught in design text. The live arm is the **decline**: `AE_REJECTED` is
+unreachable in a gate boot (only `aether_decide` writes it), but a `DELETE_FILE`
+parent holds a `RUN_EXPERIMENT` child PENDING through DDR-839's DAG, and the probe
+refuses to run.
+
+### Measured
+
+| | result |
+|---|---|
+| `smoke-runexp` | rc=0; `EXPACT_A st=2 ran=1 rc=0 v=42`, `EXPACT_B st=1 pst=1 ran=0 rc=0 v=0`, each **exactly once**, `v=97` **zero** times |
+| M1 (arm A submits the wrong type) | `886d7ced75e48355` — fails **arm A alone**, `st=1 ran=0`; arm B still correct |
+| M2 (arm B ignores the verdict) | `06f9eac31b31b65f` — fails **arm B alone**, `ran=1 v=97`; arm A still correct |
+| revert | `ee0e06c3081d9cd3` **bit-for-bit**, by rebuild not assumption |
+| regression | `smoke-shell` 5/5, `smoke-aether`, `smoke-actionhypo`, `smoke-actiondag`, `smoke-actiondel` all rc=0 |
+| hygiene | **ALL EIGHT**; `GLOBAL_FORBIDDEN` 76; `ci-probe-rodata-check` 76 → 77 ELFs |
+
+`v=97` is the load-bearing detail: it is the value the probe **cannot manufacture
+without invoking the executor**, which is what makes arm B a claim rather than a
+flag the probe prints about itself.
+
+### A second observation of DDR-1063's stated limitation
+
+`ci-docstate-check` reported **OK on the stale pair** after this build, because
+1,290,634 + 282,230 = 1,572,864 exactly. **Passing that check is not evidence a
+live-state number is current.** Not a defect in the check — it asserts an
+arithmetic identity and deliberately not currency. DDR-1081 §5 saw it first; this
+is the first occurrence outside the file that records the limitation.
+
+### Not claimed
+
+No new enforcement. `ACTION_SEND_IPC` is **not** wired and not re-assessed (same
+shape, separate change; checklist §4.1 stands). No policy change —
+`aether_action_forces_pending()` is untouched and whether RUN_EXPERIMENT belongs
+in it is an operator decision (DDR-1083 §6). No kernel defect is fixed and none is
+alleged: the policy engine, the DAG, the executor and the capability check were
+all correct; what was missing is a **caller**. **Arm A is the weaker arm and is
+stated as such** — a probe that fabricated its own `st=` would pass it, so arm B
+carries the claim. The `ACTION_NET_EGRESS == 13` pin is noted, not touched. No
+open issue moves; not an apfreeze, not OPEN-2.
