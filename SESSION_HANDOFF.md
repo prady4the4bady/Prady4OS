@@ -12250,3 +12250,27 @@ already carries an `agentsvc` row that is **refused before the fork by design**
 instruments. Group F remaining: domain agents (F#66/67/69-75), audit-ring SFS
 persistence (blocked on Group B's SFS boot root), agent respawn (policy
 decision), concurrency arbitration, roster continuity.
+
+## CHECKPOINT 2026-09-07 — DDR-1086 (checklist sweep; the row my own previous commit falsified)
+
+**Tip before:** `a6bc7b0` (DDR-1085), verified **2/2 green** directly on
+`pradyos-ci` (push 34085183639, PR 34085186120) — the webhook's own comment
+excludes this App's suites, so the direct check was the real one.
+
+**Docs-only.** `PRE_LAUNCH_CHECKLIST.md` §4.1 corrected (SEND_IPC wired by
+DDR-1084 — *my own instance of the pattern DDR-1084 §1 named, in that same
+commit*; its "names the rows" substitute is corrected to *every document*),
+§4.3 split rather than deleted, §6's DDR free range `DDR-1083+` → `DDR-1086+`.
+`CLAUDE.md`'s "update both" warning now names the **fourth** carrier outside the
+file, and its three free-range sites advance to `DDR-1087+`.
+
+**A checker was measured and refused** — 10 of 11 stated ranges name occupied
+numbers and **9 are correct historical records**; three narrowings refused with
+reasons, including one that would have passed on this very defect.
+
+**Verified unchanged:** `kernel.bin` untouched, 178 gates, `GLOBAL_FORBIDDEN` 76.
+
+**Open / next:** OPEN-1 route 1, OPEN-2, OPEN-12, OPEN-13 all open with armed
+instruments. Group D's shell row: measured — PRISM has **no scripting at all**
+(no `source`, no `#` comments, no control flow), so that half of the row is
+genuinely unbuilt, unlike the pipes/redirection/quoting halves already shipped.

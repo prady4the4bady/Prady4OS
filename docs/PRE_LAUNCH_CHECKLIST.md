@@ -289,8 +289,28 @@ the gate always required now means what the gate's comment always said. M1 (no
 write, print from the buffer) **reddens** `smoke-aether` with
 `AETHER_AGENT_EXEC_FAIL step=open_r rc=-2`; M2 (no write, print the literal — the
 pre-fix behaviour) **passes**. Both do the same filesystem work — none — so the
-only difference is where the bytes came from. **`ACTION_SEND_IPC` remains
-unwired, and this row is now accurate about that being the exception.**
+only difference is where the bytes came from.
+
+**CORRECTED 2026-09-07 — DDR-1086 §1: the sentence that stood here
+(*"`ACTION_SEND_IPC` remains unwired, and this row is now accurate about that
+being the exception"*) is FALSE as of `a6bc7b0`.** DDR-1084 wired it:
+`user/actionipctest.c` submits the type, obeys the verdict, and `smoke-sendipc`
+gates both arms — arm B's decline confirmed by the KERNEL returning `-ETIMEDOUT`
+on a genuinely empty endpoint, a value the probe cannot manufacture. DDR-1083
+wired `ACTION_RUN_EXPERIMENT` the same way one commit earlier, so **Section 3C
+closes at 8 of 8**.
+
+**And the way this row went stale is the finding.** DDR-1084 §1 named the exact
+pattern — *a DDR that retires a blocker does not, by default, revisit the row the
+blocker was holding* — and proposed a cheap substitute: *"when a DDR retires a
+blocker it names the rows that blocker was holding."* DDR-1084 followed its own
+rule **for `CLAUDE.md`'s Group F row** and this row stayed false, in the very
+commit that named the pattern. **The substitute is insufficient as stated:** at
+least two documents carry the same claim, so the rule must read *names the rows
+in EVERY document that records it* — here `CLAUDE.md` **and** this file.
+§4.11 is the counter-example that shows the discipline is not uniformly absent
+(DDR-1060 updated it in the commit that fixed it) and why: that row was adjacent
+to the work, this one was not.
 
 ### 4.2 — The IPC capability is coarse by construction, and the limit is stated not implied
 
@@ -305,6 +325,20 @@ Both deferred action types are **in** the enum, so `SEND_IPC` auto-approves in
 sovereign mode. This contradicts `aether.h`'s own policy for the six types it
 omits. Left alone deliberately: the enum is append-only wire format, and the
 entry is bounded and audited (DDR-1021).
+
+**SPLIT 2026-09-07 — DDR-1086 §2. Half of this row is still exactly true and
+must not be swept away with §4.1.**
+
+- **"auto-approves in sovereign mode" — TRUE and unchanged.**
+  `aether_action_forces_pending()` was deliberately not touched by DDR-1083 or
+  DDR-1084; whether either type belongs in that list is a **DDR-842 S4 policy
+  decision**, the DDR-793/982 class recorded for the operator, not taken.
+- **"with nothing to act on it" — now false for a PROBE, still true for the
+  SHIPPED AGENT.** `user/actionipctest.c` submits and obeys; `user/agent_base.c`
+  submits `ACTION_WRITE_FILE` and nothing else (DDR-1022: it is the only agent
+  program), so no shipped agent acts on an approved `SEND_IPC`.
+
+Deleting the row would over-claim; leaving it whole would under-state.
 
 ### 4.4 — `vmm_protect_range`'s `invlpg` is UNCOVERED
 
@@ -1362,7 +1396,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **178** across **10** shards | `make ci-shard-check`, re-measured 2026-09-06 (DDR-1078 added `smoke-numa-steal`, shard 7, strict) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1083+** | §INV.4 |
+| DDR free range | **DDR-1087+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` |
 | `kernel.bin` | **1,307,018 B** against the 1,572,864 B gate — **265,846 B** headroom | measured 2026-09-06; **re-derived, not carried** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |

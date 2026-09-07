@@ -3624,3 +3624,53 @@ is **refused before the fork by design** (`INIT_CAPS == CAP_NONE`; *"init never
 grants; it only refuses"*). The blocker is that refusal, not a filesystem — and
 removing it is what the row's wording invites. **No respawn built; `INIT_CAPS`
 untouched; `/AGENT.ELF` not placed.**
+
+### DDR-1086 — the checklist row my own previous commit falsified (2026-09-07)
+
+**DOCS-ONLY.** `PRE_LAUNCH_CHECKLIST.md` §4.1 still asserted *"`ACTION_SEND_IPC`
+remains unwired"* — false since `a6bc7b0`, where DDR-1084 wired it. **DDR-1084
+§1 named that exact pattern** (*a DDR that retires a blocker does not revisit the
+row the blocker was holding*) **and committed an instance of it in the same
+commit**: its proposed substitute — *"names the rows that blocker was holding"* —
+was followed for `CLAUDE.md`'s Group F row and missed this file. **The substitute
+is insufficient as stated and is corrected to: names the rows in EVERY document
+that records it.** §4.11 is the counter-example (DDR-1060 updated it in the
+commit that fixed it) and shows why: that row was adjacent to the work, §4.1's
+was not — DDR-1071 §4's reading again.
+
+§4.3 is **split, not deleted**: "auto-approves in sovereign mode" is still true
+and `aether_action_forces_pending()` is untouched (a DDR-842 S4 policy decision
+for the operator); "nothing to act on it" is now false for a probe and still true
+for the shipped agent, since `agent_base.c` submits only `ACTION_WRITE_FILE`.
+
+§6's **DDR free range read `DDR-1083+`** — occupied, with 1084/1085 landed since.
+All three `CLAUDE.md` carriers were correct; **the checklist is a FOURTH carrier
+that neither the "update both" warning nor §ORIENTATION's "all three" names**,
+which is why updating all three left it behind. That warning is now corrected to
+name it. Severity stated rather than dramatised: §NON-NEGOTIABLE 8 requires an
+`ls` of both DDR directories before allocating, so a stale range costs a lookup,
+not a collision.
+
+**A MECHANICAL CHECKER WAS MEASURED AND REFUSED — fourth refusal in this class
+and the first killed by measurement rather than by reasoning about semantics.**
+The rule looked buildable (*a stated free range must not name an occupied DDR*)
+because the signal really is mechanical. Measured: **ten of eleven stated
+`DDR-N+` ranges name an occupied number, and nine of those ten are CORRECT** —
+`(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only
+`SESSION_HANDOFF.md`, where a past checkpoint's free range is *supposed* to be
+occupied by now. A 9/10 false-positive rate on correct records. It is the
+identical historical-vs-live-state limitation §6 already documents for
+`ci-docstate-check` (whose §5.1b.1 pairing is deliberately historical and
+correct). Three narrowings refused with reasons: a "prior"/"was" filter pins a
+spelling (DDR-1077); a by-path rule is about today's layout (DDR-1071 §5); and
+asserting the MAXIMUM range is unoccupied **would have passed on this very
+defect**, since `CLAUDE.md`'s correct 1086 was the maximum.
+
+**Accurate and stated as such:** §6's `kernel.bin` pair (1,307,018 / 265,846) is
+current — **by luck**, because DDR-1085 left the size unchanged; gate count 178,
+excluded 6 and the NSI row are correct; §4.4/§4.14/§4.15/§4.16 all still true.
+
+**NOT CLAIMED:** no code change, `kernel.bin` untouched, 178 gates unchanged,
+`GLOBAL_FORBIDDEN` 76 unchanged; no gate run; no checker built; no policy change;
+no open issue moves; and the `SESSION_HANDOFF.md` historical ranges are **not**
+"fixed" — normalising them would destroy the record.
