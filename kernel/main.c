@@ -1017,6 +1017,41 @@ static void smpresched_proof(void) {
             yield();
     }
     sched_unblock(g_rp_thread);                  /* enqueue here + kick an idle AP */
+    /* DDR-1092: capture the KERNEL's own answer to "was a kick owed", HERE and
+     * nowhere later. Two separate reasons, and both are load-bearing:
+     *
+     * (1) SOUNDNESS. `idle_seen` above is the proof's sample taken BEFORE the
+     *     call and DDR-1004's own comment calls its window "not zero";
+     *     dbg_ub_saw_idle is what sched_unblock's kick loop saw at the instant
+     *     it ran. DDR-1064 built that field precisely because the proof "used
+     *     to re-derive it from outside the call and COULD NOT" -- and then left
+     *     the verdict computed from the racy value it replaced. It is read into
+     *     locals so the verdict and the FAIL print cannot disagree.
+     *
+     * (2) LIFETIME. This read is a use-after-free window and moving it here is
+     *     what narrows it. Measured, not reasoned: sched_create sets
+     *     parent_pid = 0 (sched.c:1112), pid_alive(0) returns 0 -- "parent_pid
+     *     0 == kernel/none -> treat as orphan" (sched.c:1995) -- and the reaper
+     *     frees exactly THREAD_ZOMBIE && !waiter && !pid_alive(parent_pid)
+     *     (sched.c:2017). So this probe's TCB is precisely what it collects,
+     *     and the reaper is already running: sched_start_reaper() is main.c
+     *     :3287, fs_test_thread is spawned eight lines later. Reading these in
+     *     the verdict block below -- after the probe has certainly exited and
+     *     the wait loop has certainly yielded -- is a WIDE window; reading them
+     *     here, with no yield between, is a narrow one. NOT ZERO, and DDR-1092
+     *     sec.4 records why closing it entirely (a permanently leaked zombie, or
+     *     an out-param through a function called from MSI-X interrupt context)
+     *     costs more than the residual. */
+    int k_idle = g_rp_thread ? (int)g_rp_thread->dbg_ub_saw_idle : 0;
+    int k_kick = g_rp_thread ? (int)g_rp_thread->dbg_ub_kicked   : 0;
+    /* Both fields are written ONLY as 0 or 1 (sched.c:1895-1907), so anything
+     * above 1 means the read is not trustworthy -- a poisoned TCB reads 0xDD
+     * (kheap.c:22/174, KHEAP_DEBUG is unconditionally 1) and a recycled one
+     * reads whatever its new owner left there, since kmalloc does not zero
+     * (§NON-NEGOTIABLE 10). DDR-1077 §3.3 one level down: zero (or garbage)
+     * must mean THE MEASUREMENT BROKE, never "the condition held". An invalid
+     * read falls through to FAIL, which is the safe direction. */
+    int k_valid = (g_rp_thread != 0) && k_idle <= 1 && k_kick <= 1;
     /* DDR-1030 instrument. The comment below already names this residual -- a
      * CPU can leave idle between the sample above and this call, so no kick is
      * owed and the proof FAILs a correct system. CI on bdb41c7, shard 3, printed
@@ -1066,16 +1101,50 @@ static void smpresched_proof(void) {
      * (the vacuity trap DDR-973 §6 and DDR-996 each caught once), FAIL would
      * blame the scheduler for a precondition the harness failed to create.
      *
-     * SKIP carries neither "OK" nor "FAIL", so it trips no gate sentinel and no
-     * GLOBAL_FORBIDDEN entry, and a run of them is visible in the log as the
-     * coverage gap it is.
+     * SKIP carries neither "OK" nor "FAIL", so it trips no GLOBAL_FORBIDDEN
+     * entry, and a run of them is visible in the log as the coverage gap it is.
+     *
+     * DDR-1092 CORRECTS THIS COMMENT, which also claimed SKIP "trips no gate
+     * sentinel". It trips exactly one: smoke-resched (Makefile:4106) declares
+     * EXTRA_SENTINEL "[smp] resched OK" as a REQUIRED pattern, so a SKIP fails
+     * that gate. That is correct and is deliberately left alone -- that gate
+     * exists to test the kick, and a boot which never exercised the kick must
+     * not pass it, which is this branch's own stated reason for existing. Only
+     * the sentence describing it was wrong. The consequence is the trade
+     * DDR-1092 makes: a no-kick-owed boot stops reddening whichever of the 179
+     * gates happened to boot, under a GLOBAL_FORBIDDEN entry that reads as a
+     * scheduler defect, and reddens smoke-resched alone instead.
      *
      * NOTE the residual race, stated rather than hidden: `idle_seen` is sampled
      * just before sched_unblock, and a CPU can leave idle in between. That
      * window is far narrower than the old unconditional assertion, but it is
      * not zero -- so a FAIL with idle=1 is strong evidence and not yet proof. */
-    if (g_rp_ran && ipi_expected && !idle_seen && g_resched_ipis == before) {
-        kputs("[smp] resched SKIP no-idle-ap ran=1\r\n");
+    /* DDR-1092: the SKIP condition now also accepts the KERNEL-recorded answer.
+     * `!idle_seen` is DDR-1004's racy proxy; `k_valid && !k_idle` is the sound
+     * one, and it is the ONLY row of the truth table that moves:
+     *   kidle=0         -> the kick loop found nothing to kick, so none was
+     *                      owed and this boot did not exercise rq-3   -> SKIP
+     *   kidle=1 kkick=0 -> DDR-1014's defect leaves saw_idle=1 by construction
+     *                      (that loop DID see idle CPUs, it spent its one
+     *                      attempt on the BSP)                        -> FAIL
+     *   kidle=1 kkick=1 -> a kick was delivered; ipis= disagreeing means the
+     *                      counter is the defect                      -> FAIL
+     * so the coverage DDR-1030 §3 and DDR-1064 §6 each refused to delete is
+     * preserved -- their objection was to collapsing the WHOLE case to SKIP,
+     * because a genuinely broken kick also prints ran=1, and a broken kick does
+     * not print kidle=0. This is the EXONERATING direction, which DDR-1074's
+     * own table certifies as SOUND; the CONVICTING one it refused to gate on is
+     * untouched and still ambiguous. */
+    if (g_rp_ran && ipi_expected && g_resched_ipis == before &&
+        (!idle_seen || (k_valid && !k_idle))) {
+        /* Both skip reasons print, because they are different coverage gaps:
+         * idle=0 means the proof never saw an idle AP, idle=1 kidle=0 means it
+         * saw one and the kernel did not at the instant that mattered. */
+        kputs("[smp] resched SKIP no-idle-ap ran=1 idle=");
+        kputdec((uint64_t)idle_seen);
+        kputs(" kidle=");
+        kputdec((uint64_t)k_idle);
+        kputs("\r\n");
     } else if (g_rp_ran && (!ipi_expected || g_resched_ipis > before)) {
         kputs("[smp] resched OK\r\n");
     } else {
@@ -1122,9 +1191,16 @@ static void smpresched_proof(void) {
          * changing a gate's verdict on one capture is how coverage gets deleted
          * (DDR-1012, DDR-973, and DDR-1030 §3 refusing this once already). */
         kputs(" kidle=");
-        kputdec((uint64_t)(g_rp_thread ? g_rp_thread->dbg_ub_saw_idle : 0));
+        kputdec((uint64_t)k_idle);
         kputs(" kkick=");
-        kputdec((uint64_t)(g_rp_thread ? g_rp_thread->dbg_ub_kicked : 0));
+        kputdec((uint64_t)k_kick);
+        /* DDR-1092: whether the verdict was allowed to TRUST the two fields
+         * above. kvalid=0 means the TCB was freed or recycled under us (a
+         * poisoned read prints 221) -- so the FAIL says nothing about the
+         * scheduler and everything about the lifetime; those demand opposite
+         * actions, which is DDR-883's reason for printing both terms. */
+        kputs(" kvalid=");
+        kputdec((uint64_t)k_valid);
         kputs("\r\n");
     }
 }

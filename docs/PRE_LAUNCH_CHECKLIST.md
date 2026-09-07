@@ -513,6 +513,36 @@ the opposite direction (a CPU can *enter* idle after `sched_unblock` returns), s
 DDR-1030 closed one window and opened its mirror image. **Read `kidle=`/`kkick=`
 instead**, recorded by `sched_unblock`'s own loop at the instant it ran.
 
+**RESOLVED (the exonerating half only) 2026-09-07 — DDR-1092.** A third capture
+(CI 34118029080, shard 4 `smoke-smplock` on `17e09ab`, `kernel.bin: OK`) printed
+`ipis=0 ran=1 idle=1 idle2=1 kidle=0 kkick=0` — and **`kidle=0` is the sound
+reading**: `sched_unblock`'s own loop found no idle non-self CPU, so no kick was
+owed. DDR-1064 added that field precisely because `idle_seen` is racy, **printed
+it, and left the verdict computed from the racy value it replaced** — so the
+instruction above ("read `kidle=` instead") was addressed to a human reader while
+the machine went on reading the wrong one. The verdict now routes `kidle=0` to
+the existing SKIP branch.
+
+**Only the exonerating direction moves.** DDR-1074's refusal stands untouched:
+`kidle=1 kkick=0` is still ambiguous (a BSP-only-idle boot prints it on a correct
+kernel) and still FAILs, as does `kidle=1 kkick=1`, so DDR-1014's coverage is
+intact — its defect leaves `saw_idle=1` **by construction**, measured as M2.
+
+**The trade, stated:** a no-kick-owed boot stops reddening whichever of the 179
+gates happened to boot under a `GLOBAL_FORBIDDEN` entry that reads as a scheduler
+defect, and reddens **`smoke-resched` alone** — which is correct, that gate
+existing to test the kick. This also corrects DDR-1004's claim that SKIP "trips
+no gate sentinel": it trips exactly that one.
+
+**And the field read was a use-after-free.** The probe's TCB is exactly what the
+orphan reaper collects (`sched_create` sets `parent_pid = 0`; `pid_alive(0)`
+returns 0), and the reaper starts eight lines before `fs_test_thread` is spawned.
+It had not fired in this capture — checkable, not assumed, since a poisoned TCB
+reads `0xDD` and would have printed `kidle=221`. **Narrowed, not closed**, and
+range-guarded: both fields are only ever 0 or 1, so anything above 1 means the
+measurement broke and falls through to FAIL with `kvalid=0` (DDR-1077 §3.3 one
+level down). **Still not claimed: no scheduler defect is named or fixed.**
+
 ---
 
 ### 4.11 — `lock_stat` cannot see `mnt_lock`, the OPEN-1 route 1 prime suspect
@@ -1443,7 +1473,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **179** across **10** shards | `make ci-shard-check`, re-measured 2026-09-07 (DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1092+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
+| DDR free range | **DDR-1093+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
 | `kernel.bin` | **1,311,114 B** against the 1,572,864 B gate — **261,750 B** headroom | measured 2026-09-07 (DDR-1090); **re-derived, not carried** — and note `ci-docstate-check` reported **OK on the stale pair** right up to this edit, because 1,307,018 + 265,846 = 1,572,864 exactly. That is DDR-1063's stated limitation, not a defect in the check (DDR-1081 §5, DDR-1083): **passing it is not evidence a live-state number is current.** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |

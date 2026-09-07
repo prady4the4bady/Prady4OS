@@ -12517,3 +12517,43 @@ TCP proxy surface.
 DDR free range → **`DDR-1092+`** at all four carriers.
 
 **NEXT:** confirm `17e09ab` in CI. Groups A–F backlog otherwise.
+
+---
+
+## CHECKPOINT — DDR-1092 (rq-3 verdict wired to the sound sample)
+
+**Branch `dev/phase1-seyp3n`.** Tips `a0ec378` (DDR-1088 record) and `3b4f667`
+(DDR-1089) are **2/2 green**. `17e09ab` (DDR-1090) is **push-green,
+PR-red on shard 4**; `5d05b7d` (DDR-1091) is **2/2 green** and is **docs-only
+relative to `17e09ab`** (`git diff --name-only` lists six Markdown files and
+nothing else), so that binary has **three green suites and one red**.
+
+**The red is CI 34118029080, shard 4 `smoke-smplock`:**
+`[smp] resched FAIL ipis=0 ran=1 idle=1 idle2=1 kidle=0 kkick=0` — DDR-1074's
+sound *exonerating* reading, on a gate that asserts per-CPU lock bring-up.
+`resched FAIL` is `GLOBAL_FORBIDDEN`, so it reddens whichever gate boots.
+
+**DDR-1092 fixes the verdict, not the scheduler.** DDR-1064 added `kidle=`
+because `idle_seen` is racy, printed it in the FAIL branch, and left the verdict
+reading the racy value. `kidle=0` now routes to the existing SKIP branch. Only
+the exonerating direction moves; `kidle=1 kkick=0` stays ambiguous exactly as
+DDR-1074 left it, and DDR-1014's defect still FAILs (M2, measured).
+
+Also fixed: the field read is a **use-after-free** — the probe's TCB is exactly
+what the orphan reaper collects (`parent_pid = 0` → `pid_alive(0) == 0`) and the
+reaper starts eight lines before `fs_test_thread`. Narrowed to the instant after
+`sched_unblock`, and range-guarded (both fields are only ever 0 or 1; a poisoned
+TCB reads `0xDD` = 221).
+
+**Measured.** Baseline both gates rc=0 / `resched OK`. **M0** (pre-fix verdict,
+same kernel state) reproduces the CI line **byte-identically** and reddens
+`smoke-smplock`; **M1** (same state, fixed verdict) prints
+`resched SKIP … idle=1 kidle=0` and `smoke-smplock` **PASSES**; **M2** still
+FAILs with `kidle=1 kkick=0 kvalid=1`; **M3** prints `kkick=221 kvalid=0` and
+falls through to FAIL where an unguarded read would have SKIPped. Revert returns
+`6343bf987c60ee96`, **1,311,114 B — size unchanged**.
+
+**NEXT SESSION.** Verify `pradyos-ci` on this tip. `smoke-resched` is now the one
+gate a no-kick-owed boot reddens (correctly — it exists to test the kick); if it
+reddens, read the verdict line before assuming anything. Then continue the
+Groups A–F backlog (task #23). OPEN-1/2/12/13 all still open and untouched.

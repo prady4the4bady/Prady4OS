@@ -4000,3 +4000,73 @@ conflating them would let a future session read *"blocked"* where the truth is
 for the protocol it guards. The UDP transport is not broken. No syscall is
 designed and no NSI reserved. `SYS_NET_REVOKE` is untouched and stays refused for
 DDR-734's reason. No open issue moves.
+
+---
+
+## DDR-1092 — the rq-3 verdict read the racy sample the sound one replaced
+
+**ARTEFACT.** CI 34118029080, shard 4, `smoke-smplock` on `17e09ab`, with the
+shard's own `kernel.bin: OK`:
+
+```
+[smp] resched FAIL ipis=0 ran=1 idle=1 idle2=1 kidle=0 kkick=0
+```
+
+after forty lines of a healthy boot, on a gate that asserts per-CPU **lock**
+bring-up and has nothing to do with rq-3 — `resched FAIL` is `GLOBAL_FORBIDDEN`
+(DDR-791), so it reddens whichever gate happens to boot.
+
+**`kidle=0` is DDR-1074's own sound EXONERATING reading**, verbatim: *"no idle
+non-self CPU was visible to the kernel; no kick was owed and the FAIL is a
+sampling artefact."* Third occurrence of the shape; the second of the only two
+captures that carry the fields, and **both read `kidle=0`**. Not a rate.
+
+**THE FINDING.** DDR-1064 built `kidle=`/`kkick=` for one stated reason — the
+proof *"used to re-derive it from outside the call and COULD NOT"* — then
+**printed the sound value in the FAIL branch and left the verdict computed from
+the racy one it replaced**. An instrument that is printed but not consulted is a
+comment.
+
+**NOT the change DDR-1074 refused.** That refusal was about the *convicting*
+direction (*"there is no sound convicting reading to gate on"*); `kidle=1
+kkick=0` stays ambiguous and untouched. This is the *exonerating* direction,
+which DDR-1074's own table certifies as SOUND.
+
+**COVERAGE PRESERVED** — only one truth-table row moves. DDR-1014's defect leaves
+`saw_idle=1` by construction, so it still FAILs (M2, measured).
+
+**SECOND FINDING — the field read is a use-after-free.** `sched_create` sets
+`parent_pid = 0`; `pid_alive(0)` returns 0 (*"treat as orphan"*); the reaper
+frees exactly `THREAD_ZOMBIE && !waiter && !pid_alive(parent_pid)` — so this
+probe's TCB is precisely what it collects, and the reaper starts eight lines
+before `fs_test_thread` is spawned. It did not fire in this capture, and that is
+checkable rather than assumed: a poisoned TCB reads `0xDD`, so it would have
+printed `kidle=221`. **Narrowed, not closed**; the two ways to close it are named
+and refused.
+
+**THIRD, SMALL CORRECTION.** DDR-1004's comment claimed SKIP *"trips no gate
+sentinel"*. It trips exactly one — `smoke-resched` requires `[smp] resched OK`.
+That is correct and unchanged; only the sentence was wrong. **The trade:** a
+no-kick-owed boot stops reddening whichever of 179 gates booted and reddens
+`smoke-resched` alone.
+
+**MUTANTS** (baseline `6343bf987c60ee96`, both gates rc=0, `resched OK` — a
+no-op on a healthy boot). Every mutant must first suppress the delivered kick,
+because the `OK` arm is evaluated before anything reads `kidle`; **M2 is that
+base and M1/M3 are each one change from it**.
+
+| | kernel | measured |
+|---|---|---|
+| M0 | `4893d4ed2c6e664c` | pre-fix verdict, M1's state → the CI line **byte-identical**, `smoke-smplock` RED |
+| M1 | `87948604d99dac1b` | `resched SKIP … idle=1 kidle=0`; `smoke-smplock` **PASS**; `smoke-resched` fails its required sentinel |
+| M2 | `959d26a3508465be` | `resched FAIL … kidle=1 kkick=0 kvalid=1` — coverage intact |
+| M3 | `31835d3c08e1d9f4` | `resched FAIL … kidle=0 kkick=221 kvalid=0` — the guard catches a read that would otherwise have SKIPped |
+
+`-Werror -Wunused-but-set-variable` rejected the first M1; its gate runs used the
+previous mutant's kernel and were **discarded**, caught only because the hash was
+printed. Revert returns `6343bf987c60ee96`, **1,311,114 B — size unchanged**.
+
+**NOT CLAIMED.** No scheduler defect named or fixed. OPEN-2 untouched — not an
+`[apfreeze]`, no CPU froze, no panic. Not attributed to DDR-1090 **and not
+exonerated** (DDR-1042). No new gate (179 unchanged); `GLOBAL_FORBIDDEN` 76
+unchanged. No open issue moves.

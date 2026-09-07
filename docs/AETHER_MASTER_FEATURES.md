@@ -1744,3 +1744,19 @@ defect (a control checked at connect and nowhere else) by default unless designe
 against it. Not built, on DDR-1069's test: all six ring-3 network consumers use
 the TCP proxy surface. Assessment only — no code change, no gate, no defect
 reported.
+
+**DDR-1092 (rq-3 verdict).** The `smpresched_proof` verdict was computed from
+`idle_seen` — the proof's own sample taken *before* `sched_unblock`, whose window
+DDR-1004 calls "not zero" — while the sound answer DDR-1064 added for exactly
+that reason (`dbg_ub_saw_idle`, recorded by the kick loop at the instant it ran)
+was printed in the FAIL branch and consulted by nothing. A CI capture on shard 4
+showed the cost: `idle=1` and `kidle=0` disagreed, and a boot in which no kick
+was ever owed was reported as a scheduler failure on an unrelated gate, under a
+`GLOBAL_FORBIDDEN` entry that reddens whichever gate happens to boot. The verdict
+now routes `kidle=0` to the existing SKIP branch — the *exonerating* direction
+only; the ambiguous `kidle=1 kkick=0` reading DDR-1074 refused to gate on is
+untouched, and DDR-1014's defect still FAILs by construction. The field read was
+also a use-after-free (the probe's TCB is exactly what the orphan reaper
+collects); it is narrowed to the instant after `sched_unblock` and range-guarded,
+because both fields are written only as 0 or 1 and a poisoned TCB reads `0xDD`.
+No scheduler defect fixed, no new gate, `kernel.bin` size unchanged.
