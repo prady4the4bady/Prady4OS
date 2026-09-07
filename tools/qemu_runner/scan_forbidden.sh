@@ -48,6 +48,20 @@ while IFS= read -r p; do
     if grep -aqF -- "$p" "$log"; then
         echo "[$label] FAIL — forbidden pattern in capture: $p"
         grep -aF -- "$p" "$log" | head -3
+        # DDR-1088: AND THE LINES AFTER IT. This printer had no context in
+        # EITHER direction -- not even the -B40 boot_test.sh has carried since
+        # DDR-824 -- so a gate scanning through here (smoke-shell, a mandatory
+        # hygiene gate, and smoke-mce arm F) reported a panic as one banner line.
+        #
+        # The panic is written summary-FIRST: measured, 33 lines follow
+        # `*** NEXUS KERNEL PANIC ***` carrying the exception, vector, error,
+        # registers and DDR-1079's bounded backtrace, and none of them contains
+        # the matched string. 40 is sized on that measurement (walker bounded at
+        # 8 frames, idt.c:969, so ~35 worst case).
+        #
+        # The two scanners are changed in ONE commit deliberately: two copies of
+        # one printer drift (DDR-1037's fd_ready_mask reasoning).
+        grep -aA40 -m1 -F -- "$p" "$log" | tail -n +2 | sed 's/^/    | /'
         hit=1
     fi
 done <<< "$pats"

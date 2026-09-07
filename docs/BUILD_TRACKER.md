@@ -3731,3 +3731,45 @@ prefix.
 **NOT CLAIMED: this is not a scripting language.** No variables, no `if`/`while`,
 no functions, no `#!`, no arguments to a script. `bg` remains a recorded refusal
 (DDR-881/1068). No open issue moves; not an apfreeze, not OPEN-2.
+
+## DDR-1088 — the panic report has never reached a CI job log (2026-09-07)
+
+**Instrument only. No kernel change; `kernel.bin` identical before and after
+(`81b379053094041c`, 1,307,018 B).**
+
+Two independent shards on tip `e10f494` (CI 34089554836 shard 7 `smoke-blkmq`,
+CI 34089556866 shard 3 `smoke-rqstress-liveness`), both `kernel.bin: OK`, each
+matched `NEXUS KERNEL PANIC` **and** printed nothing but its banner.
+
+DDR-1079 fixed the scan *returning* at the first matching pattern; both captures
+show that working. What remained is the **direction of context**. DDR-824 added
+40 lines of *leading* context because probes are written **summary-last**. The
+panic is written **summary-FIRST** — measured on `build/mce.log`: banner at line
+111, `halting.` at 143, **33 lines all after the banner**, carrying the
+exception, vector, error, registers and DDR-1079's bounded backtrace. So the one
+pattern whose matching line says nothing got its matching line and nothing else,
+and the leading block goes to the first pattern in list order — and the two
+patterns that *name* a panic are at positions **71 and 72 of 76**, while
+`[apfreeze]` is 2 and `multi-inflight FAIL` is 58.
+
+**No frame from the walker DDR-1079 built had ever reached a job log.**
+
+Fixed in both scanners in one commit (`boot_test.sh`, and `scan_forbidden.sh`
+which had no context in *either* direction): a bounded 40-line trailing window
+for **every** match — and the per-match loop no longer sits under DDR-1079's
+`-gt 1` guard, which had silenced a capture whose only match was the panic.
+Deliberately **not** a cause/symptom ranking: DDR-1079 refused that as a second
+list to keep in step with 76 patterns, and printing both directions for every
+match needs no per-pattern knowledge.
+
+`smoke-selftest` 7 cases → 9. M1 = the pre-fix tree (fails both arms of both
+cases); M2 = window shrunk to 5 (fails the **far** arm alone, while printing
+four plausible report lines — the version a one-arm check would have shipped).
+
+Also §8: DDR-1086's four-carrier warning was itself placed at one carrier, so
+DDR-1087 advanced three and left `PRE_LAUNCH_CHECKLIST.md` behind again. The
+count is now stated at every carrier.
+
+**NOT CLAIMED:** no cause is named for the panic (§NON-NEGOTIABLE 3); OPEN-2 is
+not closed; two occurrences is not a rate; not attributed to `e10f494` and not
+exonerated (DDR-1042). 178 gates unchanged, `GLOBAL_FORBIDDEN` 76 unchanged.

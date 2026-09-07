@@ -1680,3 +1680,14 @@ Feature state: **script execution SHIPPED and GATED** (`smoke-shell`). Not a
 scripting language: no variables, no control flow, no `#` comments, no shebang,
 no arguments — stated rather than implied. Nesting and oversized scripts are
 refused, never silently partial.
+
+### DDR-1088 — CI failure reporting: the panic report reaches the job log (2026-09-07)
+
+Both forbidden-pattern scanners printed context in one direction only
+(`boot_test.sh`: 40 lines *before* the first match; `scan_forbidden.sh`: none at
+all), and the kernel panic is written **summary-first** — 33 measured lines of
+exception, vector, registers and bounded backtrace, all *after* the string being
+matched. Two CI shards on one tip each named a panic and said nothing about it.
+Both scanners now print a bounded trailing window for **every** match. Covered
+by `smoke-selftest` cases 8 and 9. No kernel change; no new gate; 178 gates and
+`GLOBAL_FORBIDDEN` (76) unchanged.

@@ -12305,3 +12305,48 @@ Hygiene ALL EIGHT.
 refusal (DDR-881/1068), not work.
 
 **Open / next:** OPEN-1 route 1, OPEN-2, OPEN-12, OPEN-13 with armed instruments.
+
+---
+
+## CHECKPOINT 2026-09-07 — DDR-1088 (panic report reaches the job log)
+
+**CURRENT_ACTIVE_TASK:** verify DDR-1088 on CI, then continue the Groups A–H
+backlog. `v1.0.0` remains HELD; no promotion in flight.
+
+**Two CI reds read, on tip `e10f494`, and NEITHER is fixed here** (§NON-NEGOTIABLE 3):
+
+* shard 7, CI 34089554836, `smoke-blkmq`, `kernel.bin: OK` — `multi-inflight FAIL`
+  + `NEXUS KERNEL PANIC` + `panic_stage=`; `panics_silent=0 panic_stage=3`,
+  all `loser_*` zero. Its QEMU **exited 10.3 s into a 180 s window** on a gate
+  that is not early-exit eligible — recorded, unexplained.
+* shard 3, CI 34089556866, `smoke-rqstress-liveness`, `kernel.bin: OK` —
+  `[apfreeze] cpu=2 ticks=163 rip=0xFFFFFFFF8000C7B7` + panic + `panic_stage=`.
+  Resolved against the exact rebuilt binary (`81b379053094041c`):
+  `isr_dispatch+0xfe7`, bt = `sched_tick+0x2b1` ← `timer_tick+0x7f` ←
+  `isr_dispatch+0x2da` ← `isr_common.gs_kernel_in+0x8` = **DDR-1006's producer**,
+  not DDR-1019's halt loop. CPU 2 stops at tick 163, BSP reaches 1185,
+  `dest_cpu=2` matches.
+
+`panics_silent=0` in both means **no CPU lost the CAS**, so this is *not*
+DDR-1079's winner==loser shape. **The exception is still unknown** — which is
+the subject of DDR-1088.
+
+**Shipped (host scripts + docs only, no kernel source):** both forbidden-pattern
+scanners now print a bounded 40-line **trailing** window for every match.
+DDR-824's leading context is right for probes (summary-last) and exactly wrong
+for the panic (summary-**first**, 33 measured lines after the banner). The
+per-match loop also left DDR-1079's `-gt 1` guard, which had silenced any
+capture whose only match was the panic. `smoke-selftest` 7 → 9 cases; M1 is the
+pre-fix tree, M2 (window 5) fails the far arm alone.
+
+**Proof:** `smoke-shell`, `smoke-mce`, `smoke-selftest`, `smoke-fs`,
+`smoke-blkmq` all rc=0; `kernel.bin` identical before and after; hygiene ALL
+EIGHT; `GLOBAL_FORBIDDEN` 76; 178 gates unchanged.
+
+**DDR free range advanced to `DDR-1089+` at all FOUR carriers** — and §8 records
+why that needed saying: DDR-1086's four-carrier warning was placed at one
+carrier, so DDR-1087 advanced three and left the checklist behind again.
+
+**NEXT:** CI on `dev/phase1-seyp3n` for this tip. A further red on a shard
+carrying a panic should now print the exception line, the registers and the
+backtrace — resolve any RIP with `tools/ci/sym_at.sh` against that binary.

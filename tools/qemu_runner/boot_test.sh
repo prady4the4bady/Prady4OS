@@ -499,15 +499,50 @@ EOF
         pat="$(printf '%s' "$__gf_hits" | head -1)"
             report_qmpdump
             echo "[smoke] FAIL — a probe reported '$pat' during this gate's boot."
-            if [ "$__gf_n" -gt 1 ]; then
+            [ "$__gf_n" -gt 1 ] && \
                 echo "[smoke] --- $__gf_n forbidden patterns matched this ONE capture (DDR-1079) ---"
-                printf '%s' "$__gf_hits" | while IFS= read -r p2; do
-                    [ -z "$p2" ] && continue
-                    echo "[smoke]   matched: $p2"
-                    grep -aF "$p2" "$SERIAL_LOG" | head -3 | sed 's/^/[smoke]     /'
-                done
+            # DDR-1088: this loop runs for EVERY match, not only when there is
+            # more than one. DDR-1079 introduced it under an `-gt 1` guard
+            # because its subject was a capture whose panic hid behind an earlier
+            # symptom -- but a capture whose ONLY match is the panic took the
+            # guard's other branch and got the same silence for a different
+            # reason. One match is exactly when the report matters most.
+            printf '%s' "$__gf_hits" | while IFS= read -r p2; do
+                [ -z "$p2" ] && continue
+                echo "[smoke]   matched: $p2"
+                grep -aF "$p2" "$SERIAL_LOG" | head -3 | sed 's/^/[smoke]     /'
+                # AND THE LINES AFTER IT. DDR-824 added LEADING context for a
+                # correct and stated reason -- probes are written summary-LAST,
+                # so `[sfs] churn FAIL op=create iter=17` sits ABOVE the summary
+                # line this list matches on. THE PANIC IS WRITTEN SUMMARY-FIRST:
+                # measured on a real capture, `*** NEXUS KERNEL PANIC ***` is
+                # followed by 33 lines carrying the entire diagnosis -- component,
+                # exception+vector+error, the MCE bank decode, RIP/CS/RFLAGS/RSP/
+                # CR2, sixteen GP registers, and DDR-1079's bounded backtrace --
+                # and NOT ONE of them contains the matched string, so the summary
+                # above shows the banner and stops.
+                #
+                # That is why CI 34089554836 and 34089556866 each NAMED a panic on
+                # the same tip and said nothing about it, and why DDR-1079 had to
+                # resolve its RIP by hand out of `loser_rip=` in a heartbeat. No
+                # frame from the walker DDR-1079 built had ever reached a job log.
+                #
+                # DELIBERATELY NOT a cause/symptom ranking that would aim the
+                # -B40 block below at the panic instead: DDR-1079 refused that as
+                # "one more list to keep in step with 76 patterns" and the refusal
+                # stands -- a summary-first/summary-last table would drift
+                # identically. Printing BOTH directions for EVERY match needs no
+                # per-pattern knowledge at all.
+                #
+                # 40 is sized by measurement, not taste: the real report is 33
+                # lines with 6 frames and the walker is bounded at 8 frames
+                # (idt.c:969), so ~35 is the worst case. Additive -- nothing that
+                # printed before this stops printing.
+                grep -aA40 -m1 -F "$p2" "$SERIAL_LOG" | tail -n +2 \
+                    | sed 's/^/[smoke]     | /'
+            done
+            [ "$__gf_n" -gt 1 ] && \
                 echo "[smoke] --- a LATER pattern may name the CAUSE of an earlier one ---"
-            fi
             echo "[smoke] (DDR-791: forbidden in every gate, not only the one that owns it.)"
             echo "[smoke] --- matching lines ---"
             grep -aF "$pat" "$SERIAL_LOG" | head -5
