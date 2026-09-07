@@ -513,3 +513,11 @@ global actionipctest_elf_end
 actionipctest_elf:
     incbin "build/actionipctest.elf"
 actionipctest_elf_end:
+
+; killblock (DDR-1090): is SIGKILL deliverable to a thread blocked in an
+; unbounded kernel wait? Both signal_deliver sites are guarded by cs&3 == 3.
+global killblocktest_elf
+global killblocktest_elf_end
+killblocktest_elf:
+    incbin "build/killblocktest.elf"
+killblocktest_elf_end:

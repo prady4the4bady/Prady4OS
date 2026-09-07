@@ -250,7 +250,9 @@ static long sys_poll(long a_fds, long a_nfds, long a_timeout, long a4, long a5, 
          * wait, and DDR-1037 §4 says so rather than burying it: the difference
          * from DDR-994's defect class is that blocking forever is the caller's
          * explicit request, and yield() carries an interrupt window since
-         * DDR-981, so the CPU is not wedged. */
+         * DDR-981, so the CPU is not wedged. DDR-1090: the CPU is not wedged
+         * and that is a different property from the THREAD being killable --
+         * which it was not, until yield() started honouring SIGKILL. */
         yield();
     }
 

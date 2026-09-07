@@ -11,6 +11,7 @@
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D) */
 #include "smp.h"               /* rq-3: smp_resched_one (directed wake IPI) */
 #include "irq.h"               /* ADR-032: g_ticks for the FS write-budget bucket */
+#include "signal.h"            /* DDR-1090: SIGKILL, honoured at the yield choke point */
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
@@ -1702,6 +1703,47 @@ void yield(void) {
     if (!current_thread)
         return;
     sched_charge_elapsed(current_thread);
+
+    /* DDR-1090 — SIGKILL is honoured HERE, because otherwise it is not honoured
+     * at all for a thread that never returns to ring 3.
+     *
+     * Both signal_deliver() call sites are guarded by `(r->cs & 3) == 3`, so a
+     * signal is acted on only when the interrupted frame is a ring-3 frame. A
+     * thread inside an unbounded kernel wait is in ring 0 at EVERY timer IRQ,
+     * so `sig_pending |= 1<<SIGKILL` was recorded and never acted on -- although
+     * signal.h calls SIGKILL "unblockable terminate" and sys_aether.c's
+     * sys_kill_agent, the SOVEREIGN's kill switch on a runaway agent, says
+     * "terminated on its next IRQ return". Measured artefact (DDR-1090 §4): a
+     * child blocked in sys_io.c's pipe-read spin was still unreaped three wall
+     * seconds and ~300 timer IRQs after SIGKILL -- `reaped=-11` (-EAGAIN, i.e.
+     * "children exist, none exited yet").
+     *
+     * This is the choke point for the same reason DDR-981 chose it above: all
+     * five unbounded ring-3-reachable waits go through it (both pipe waits and
+     * the blocking console read in sys_io.c, poll/epoll_wait with timeout < 0
+     * in epoll.c, and mnt_lock in vfs.c).
+     *
+     * ABANDONING THE CALLER'S FRAMES IS SAFE AT EVERY ONE OF THEM, measured
+     * rather than assumed: each spins on stack buffers only, holds no lock and
+     * has no allocation outstanding -- mnt_lock's yield is in the ACQUIRE loop,
+     * so a thread exiting there was never the owner, and fd_write_user's
+     * pmm_alloc_page is in the FD_VFS branch, which calls vfs_write directly and
+     * never yields. DDR-981's own comment above records the general form of the
+     * same invariant ("no yield() caller holds a spinlock across the call").
+     * sched_exit() from mid-kernel is likewise established, not new: idt.c calls
+     * it on a ring-3 fault from inside the ISR, and signal_deliver calls it from
+     * the IRQ return path.
+     *
+     * is_user guards it so kernel threads -- the main.c self-tests, which yield
+     * heavily -- are untouched. ONLY SIGKILL: every other signal stays deferred
+     * to the next ring-3 return exactly as before, because unwinding a blocked
+     * syscall for a catchable signal needs an EINTR return at each loop, which
+     * is a far larger change (DDR-1090 §3, and it is what would give the still
+     * subject-less SA_RESTART a subject). */
+    if (current_thread->is_user &&
+        (current_thread->sig_pending & (1ull << SIGKILL)))
+        sched_exit(-1);                     /* never returns */
+
     current_thread->dbg_yields++;
     current_thread->quantum = current_thread->quantum_reset;
 

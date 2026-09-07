@@ -12416,3 +12416,68 @@ reasoning). No open issue moves.
 
 **NEXT:** CI on `dev/phase1-seyp3n`. Note `a0ec378` (the DDR-1088 checklist
 record) is pushed and **not yet CI-verified** — cover both tips.
+
+---
+
+## 2026-09-07 — DDR-1090: SIGKILL was deferred forever on an unbounded kernel wait
+
+**`kernel.bin` 1,307,018 → 1,311,114 B** (`fb09a2cd12f92b90`). **179 gates**
+(`smoke-killblock`, shard 1, strict). `GLOBAL_FORBIDDEN` 76. Hygiene ALL EIGHT.
+
+`signal_deliver()` has exactly two call sites and **both are guarded by
+`(r->cs & 3) == 3`** — a signal is acted on only when the interrupted frame is a
+**ring-3** frame. A thread in any of the kernel's five unbounded ring-3-reachable
+waits (`sys_io.c:60`/`:338` pipe, `:366` console, `epoll.c:254` `timeout<0`,
+`vfs.c:46` `mnt_lock`) is in ring 0 at **every** timer IRQ, forever — so
+`sig_pending |= 1<<SIGKILL` was recorded and never acted on.
+
+**Three source comments over-stated it, which is why it survived**, all corrected
+here (comment-only, verified bit-identical): `signal.h` said **"unblockable"**;
+`sys_aether.c:281` — **`sys_kill_agent`, the sovereign's kill switch on a runaway
+agent** — said *"terminated on its next IRQ return"*; `epoll.c:250` said *"the
+CPU is not wedged"*, which is true and a **different property** from the thread
+being killable.
+
+**Artefact first.** `user/killblocktest.c`: the child reads a pipe whose writer
+the parent holds open and never writes, so the wait is deterministic by the pipe
+rather than by timing; `reaped=` is `wait4`'s return, **from the kernel**.
+
+| kernel | capture |
+|---|---|
+| pre-fix `f314ed83a59c042d` | `child=38 reaped=-11` — `-EAGAIN`, *"children exist, none exited yet"*: **alive** 3 s and ~300 IRQs after the kill |
+| fixed `fb09a2cd12f92b90` | `child=38 reaped=38` |
+
+**M1 is the pre-fix tree** — disabling the guard rebuilds to
+`f314ed83a59c042d` **bit-for-bit**.
+
+**Two vacuity mistakes of my own, recorded because only RUNNING them caught
+either.** The forbidden arm first read `reaped=0`; **this kernel answers
+`-EAGAIN`**, so the gate went **green on the tree whose defect it exists to
+catch** — the arm had been checked against POSIX, not against this kernel. And
+the first probe timed its waits with a fixed 200M `pause` count, which under TCG
+outran the whole 120 s window so the parent never reached its own `SYS_KILL`;
+now `SYS_CLOCK` wall seconds (DDR-1068/1029).
+
+Fix at **`yield()`, DDR-981's own choke point**; abandoning the caller's frames is
+safe at all five sites, measured (stack buffers only, no lock, no allocation;
+`mnt_lock`'s yield is in the *acquire* loop).
+
+**Group D's `SYS_SIGACTION` row is corrected, not completed:** `SA_RESTART` and
+`sigaltstack` **have no subject** (`EINTR` and `SIGSEGV` appear nowhere in the
+tree), `SA_SIGINFO` would be mostly zeros, `sigprocmask` is genuinely absent, and
+`SIGCHLD` is buildable but **nothing shipping needs it** (PRISM and init both poll
+`wait4`).
+
+Regression: 13 gates `rc=0` including `smoke-blk-integrity`,
+`smoke-rqstress-liveness`, `smoke-blkmq`, `smoke-smp` — the SMP set, because the
+change is on the `yield()` path. **DDR free range → `DDR-1091+` at all four
+carriers.**
+
+**NOT CLAIMED:** no general `EINTR` semantics; the unbounded waits are **not**
+bounded (DDR-994's decision stands); nothing about OPEN-1/OPEN-2 — `mnt_lock` is
+on route 1's path and a thread stuck there is now killable, which says nothing
+about why anything gets stuck. No open issue moves.
+
+**NEXT:** CI on `dev/phase1-seyp3n`. Tips `a0ec378` (DDR-1088 checklist record)
+and `3b4f667` (DDR-1089) were pushed and are covered by the armed check-in;
+this tip adds a third.

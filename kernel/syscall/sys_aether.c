@@ -278,7 +278,12 @@ static long sys_kill_agent(long a1, long a2, long a3, long a4, long a5, long a6)
     struct tcb *t = tcb_by_pid((uint32_t)a1);
     if (!t)
         return -ESRCH;
-    t->sig_pending |= (1ull << SIGKILL);        /* terminated on its next IRQ return */
+    /* DDR-1090: terminated on its next RING-3 IRQ return, or at its next
+     * yield() if it is sitting in an unbounded kernel wait. This comment used
+     * to say "on its next IRQ return", which is what a reader would want from
+     * the sovereign's kill switch on a runaway agent and is not what the
+     * delivery guard (`cs & 3 == 3`) provides on its own. */
+    t->sig_pending |= (1ull << SIGKILL);
     return 0;
 }
 

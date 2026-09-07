@@ -219,3 +219,4 @@
 2	smoke-poll	120	strict
 0	smoke-mldsa	180	strict
 4	smoke-sharedpte	130	strict
+1	smoke-killblock	120	strict

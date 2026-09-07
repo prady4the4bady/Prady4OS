@@ -456,6 +456,8 @@ extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DEL
 extern const unsigned char actiondeltest_elf_end[];
 extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT */
 extern const unsigned char mprotecttest_elf_end[];
+extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
+extern const unsigned char killblocktest_elf_end[];
 extern const unsigned char argvtest_elf[];            /* DDR-1032: execve argv/envp */
 extern const unsigned char argvtest_elf_end[];
 extern const unsigned char ipctest_elf[];             /* DDR-1033: ring-3 IPC door */
@@ -2502,6 +2504,23 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] SYS_MPROTECT probe spawned\r\n");
                     } else {
                         kputs("[user] MPROTECT probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1090: is SIGKILL deliverable to a thread blocked in an
+                 * unbounded kernel wait? FAT-rooted and NOT in smnt_pid -- it
+                 * touches no files, only a pipe. Not an agent: AETHER_RATE_MAX
+                 * would be irrelevant (the probe spends no syscalls in its
+                 * spins) but the surface under test is plain POSIX. */
+                if (probe_enabled("killblock")) {
+                    struct tcb *kb = 0;
+                    uint64_t kblen = (uint64_t)(uintptr_t)killblocktest_elf_end -
+                                     (uint64_t)(uintptr_t)killblocktest_elf;
+                    if (elf_load((void *)(uintptr_t)killblocktest_elf, kblen,
+                                 "KILLBLOCK", &kb) == ELF_OK && kb) {
+                        sched_unblock(kb);
+                        kputs("[user] KILLBLOCK probe spawned\r\n");
+                    } else {
+                        kputs("[user] KILLBLOCK probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-1032: SYS_EXECVE argv/envp. FAT-rooted -- it execve's

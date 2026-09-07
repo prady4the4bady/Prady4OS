@@ -3856,3 +3856,100 @@ and none is alleged** — SFS refuses correctly; mid-file overwrite and the
 4-extent inline ceiling are recorded scope limits, and neither is implemented nor
 raised here. The rest of the VFS entry layer is **deliberately untouched**, the
 DDR-1080 reasoning. No open issue moves (OPEN-1/2/12/13).
+
+---
+
+## DDR-1090 — SIGKILL was deferred forever on an unbounded kernel wait (2026-09-07)
+
+**`kernel.bin` 1,307,018 → 1,311,114 B** (`fb09a2cd12f92b90`), the page-aligned
+4,096 B a new embedded probe costs. **179 gates** (`smoke-killblock`, shard 1,
+strict). `GLOBAL_FORBIDDEN` 76.
+
+`signal_deliver()` is called from exactly two places and **both are guarded by
+`(r->cs & 3) == 3`**, so a signal is acted on only when the interrupted frame is
+a **ring-3** frame. Correct for a syscall that finishes; wrong for one that need
+not — and this kernel has **five unbounded ring-3-reachable waits**, two of which
+say so in their own comments:
+
+| site | wait |
+|---|---|
+| `sys_io.c:60` | `pipe_write` — *"a reader that exists but never reads leaves this spinning forever"* |
+| `sys_io.c:338` | `pipe_read` — *"a writer that exists but never writes…"* |
+| `sys_io.c:366` | blocking console read, `for (;;)` |
+| `epoll.c:254` | `poll`/`epoll_wait`, `timeout < 0` |
+| `vfs.c:46` | `mnt_lock` acquire (DDR-994 **instrumented** it; it did not **bound** it) |
+
+A thread in any of those is in ring 0 at **every** timer IRQ, forever, so
+`sig_pending |= 1<<SIGKILL` was recorded and never acted on.
+
+**Three source comments stated something stronger than what was delivered, and
+that is why it survived** — all corrected here, comment-only and *verified* so
+(the kernel rebuilt bit-identical):
+
+1. `signal.h` called SIGKILL **"unblockable terminate"**.
+2. `sys_aether.c:281` — `sys_kill_agent`, **the sovereign's kill switch on a
+   runaway agent** — said *"terminated on its next IRQ return"*. Measured: its
+   next **ring-3** IRQ return.
+3. `epoll.c:250` said *"the CPU is not wedged"* — true, and a **different
+   property** from the thread being killable.
+
+The DDR-1046/1059/1070/1080/1089 class, and here the case is the one the control
+was built for: SIGKILL exists precisely to stop a process that will not stop on
+its own.
+
+**Artefact first (§NON-NEGOTIABLE 3).** `user/killblocktest.c` forks; the child
+drops the **write** end and reads a pipe whose writer the **parent** holds open
+and never writes, so `pipe_writers() > 0` holds forever — deterministic by the
+pipe, not by timing. The discriminating value is `wait4`'s return, **from the
+kernel**:
+
+| kernel | capture |
+|---|---|
+| pre-fix `f314ed83a59c042d` | `PRADYOS_KILLBLOCK child=38 reaped=-11` — `-EAGAIN`, *"children exist, none exited yet"*, i.e. **alive** 3 wall seconds and ~300 timer IRQs after the kill |
+| fixed `fb09a2cd12f92b90` | `PRADYOS_KILLBLOCK child=38 reaped=38` |
+
+**M1 is the pre-fix tree itself**, not synthetic: disabling the guard rebuilds to
+`f314ed83a59c042d` **bit-for-bit**, and against the corrected arm it fails with
+its output reproducing the artefact verbatim.
+
+**Two of my own vacuity mistakes, recorded rather than quietly fixed — running
+them is what caught both.** (a) The forbidden arm first read `reaped=0`, and
+**this kernel answers `-EAGAIN`**, so the gate went **green on the very tree
+whose defect it exists to catch**; the arm had been checked against POSIX rather
+than against this kernel (DDR-1085 §5.1 made the mirror-image mistake). Now
+`reaped=-`, robust to *which* errno. (b) The first probe timed its waits with a
+fixed 200,000,000-iteration `pause` count, which under TCG outran the whole
+120 s window, so the parent never reached its own `SYS_KILL`; replaced with
+`SYS_CLOCK` wall seconds (DDR-1068/1029's precedent).
+
+**The fix is at `yield()` — DDR-981's own choke point**, chosen for the same
+stated reason, since all five waits go through it. **Abandoning the caller's
+frames is safe at every one, measured not assumed:** each spins on stack buffers
+only, holds no lock, has no allocation outstanding; `mnt_lock`'s yield is in the
+**acquire** loop so a thread exiting there was never the owner; and
+`fd_write_user`'s `pmm_alloc_page` is in the **FD_VFS** branch, which never
+yields. `sched_exit()` from mid-kernel is established, not new.
+
+**Group D's `SYS_SIGACTION` row is CORRECTED, not completed** — it names five
+things and **two have no subject** (the Group G 9.3 shape): `SA_RESTART`, because
+`grep -rn EINTR` over `kernel/` and `user/` returns **nothing** — *and the
+coupling is the point: unwinding blocked syscalls for catchable signals is
+exactly what would create `EINTR`, so the two rows are one item*; and
+`sigaltstack`, because `grep -rn SIGSEGV` returns **nothing**. `SA_SIGINFO` is
+buildable and would be **mostly zeros**. `sigprocmask` is genuinely absent.
+`SIGCHLD` is buildable with no ABI change but **nothing shipping needs it** —
+PRISM and init both poll `wait4` — so by DDR-1069's test it is not built.
+
+Regression: `smoke-killblock` two-sided, plus `smoke-shell`, `smoke-fs`,
+`smoke-syspipe`, `smoke-sysepoll`, `smoke-syswait`, `smoke-syssignal`,
+`smoke-kill`, `smoke-poll`, `smoke-sigpipe`, `smoke-blk-integrity`,
+`smoke-rqstress-liveness`, `smoke-blkmq`, `smoke-smp` all `rc=0`; hygiene ALL
+EIGHT.
+
+**NOT CLAIMED.** **No general `EINTR` semantics** — SIGKILL terminates, every
+other signal stays deferred to the next ring-3 return exactly as before. **The
+unbounded waits are not bounded**; DDR-994's decision stands, and what changes is
+only whether a thread sitting in one can be *killed*. `sigprocmask`,
+`SA_SIGINFO` and `SIGCHLD` are not built. **Nothing is claimed about OPEN-1 or
+OPEN-2** — `mnt_lock` is on route 1's path and a thread stuck there is now
+killable, which says nothing about why anything gets stuck; no open issue moves.

@@ -1710,3 +1710,24 @@ an equal-length rewrite were both refused while `unlink`+recreate succeeded. **N
 write-path defect is fixed and none is alleged** — mid-file overwrite and the
 4-extent inline ceiling remain recorded scope limits. `kernel.bin` size
 unchanged; no new gate (178); `GLOBAL_FORBIDDEN` 76.
+
+### DDR-1090 — SIGKILL reaches a thread in an unbounded kernel wait (2026-09-07)
+
+Both `signal_deliver()` call sites are guarded by `(r->cs & 3) == 3`, so a signal
+was acted on only when returning to **ring 3** — and a thread inside any of the
+kernel's five unbounded waits (both pipe waits and the blocking console read,
+`poll`/`epoll_wait` with `timeout < 0`, `mnt_lock`) is in ring 0 at every timer
+IRQ, forever. So the bit was recorded and never acted on, although `signal.h`
+called SIGKILL *"unblockable"* and **`sys_kill_agent` — the sovereign's kill
+switch on a runaway agent** — claimed *"terminated on its next IRQ return"*.
+SIGKILL is now also honoured at `yield()`, the choke point all five share and the
+one DDR-981 chose for the same reason; abandoning the caller's frames is safe at
+every site, measured (stack buffers only, no lock held, no allocation
+outstanding). Artefact first: `smoke-killblock` measured a child **still alive**
+(`reaped=-11`) three wall seconds after an "unblockable" kill, and `reaped=38`
+after the fix; M1 is the pre-fix tree, bit-identical. **Only SIGKILL** — every
+other signal stays deferred to the next ring-3 return, since interrupting a
+blocked syscall for a catchable signal needs `EINTR` semantics this kernel does
+not have (`grep -rn EINTR` returns nothing, which is also why Group D's
+`SA_RESTART` row has no subject). Three over-stating source comments corrected,
+comment-only and verified bit-identical. 179 gates; `GLOBAL_FORBIDDEN` 76.
