@@ -720,6 +720,53 @@ see §5.3's Group C paragraph and DDR-1070 §6.
 
 ---
 
+### 4.17 — DDR-996's window has no measured production rate
+
+**MEASURED AND NOW VISIBLE — DDR-1093. No defect; the Group A row stays open.**
+
+DDR-996 fixed a real use-after-free (`sched_exit` leaves a thread linked on its
+per-CPU FIFO; both reap paths unlinked only the all-threads ring, so a thread
+reaped before `rq_take()` popped it was freed while a queue still pointed at it —
+the `fair_candidate` `#GP` on `PMM_POISON`, CI 32702096039). The fix unlinks in
+`sched_free_tcb`.
+
+**What was measured.** `sched_free_tcb` (`sched.c:1324`) guards that unlink on
+`rq_on` and increments `g_rqfree_caught` (`:1336`) **inside the match**, so the
+counter is raised *exactly when the window occurred* — on every boot, every CPU,
+both reap paths. But it was read from **one place** (`main.c:1866`) and only
+inside `if (probe_enabled("rqfree"))`; and `rq_references()`, the invariant
+check, has **exactly one caller** (`sched.c:2079`), inside that same probe, whose
+only driver — `smoke-rqfree`, shard 9 strict — sets **no `QEMU_SMP`**. So the
+number that says whether the race arises *in production* was computed on every
+SMP boot and read by nothing.
+
+**What changed:** the counter is printed as `rqfree=` in the `[hb]` heartbeat, on
+`ymask=`'s exact precedent (DDR-981 — the denominator for "the fix is
+exercised"). **Nothing is asserted on it**, and that was measured before writing:
+a correct kernel legitimately reports 0 whenever no reap landed inside the window
+on that boot, so `> 0` fails on timing and `>= 0` asserts nothing (the DDR-1068
+`reaped=` shape). **It is not a sentinel and the polarity is the reason:
+`rqfree > 0` means the fix WORKED**, so a `GLOBAL_FORBIDDEN` entry would redden
+every SMP gate on a correct kernel.
+
+**First datum, one boot, no rate claimed:** a 4-CPU capture reads `rqfree=0` at
+`t=500/1000/1500/2000` while `ymask` climbs 356,937 → 2,028,948 — the window did
+not arise naturally at all on a plainly busy boot. That settles on measurement,
+rather than on argument, the refusal to switch `smoke-rqfree` to `QEMU_SMP=4`:
+doing so would trade a deterministic strict-tier arm for one that depends on
+losing a work-stealing race the probe's own comment says it cannot control.
+
+**Two things deliberately not done and recorded here:** `leaked=` is not printed
+(its only writer is inside the probe, so outside `smoke-rqfree` it cannot be
+anything but 0 — the DDR-1059 shape, a field that reads like a live invariant
+check and is a constant); and `rq_references()` is **not** called from
+`sched_free_tcb` — it walks up to 4096 entries per runqueue for all `PERCPU_MAX`
+runqueues, each under that queue's lock, on every TCB free, which is DDR-1047's
+refused shape exactly in a kernel whose open defect is a timing-sensitive AP
+freeze.
+
+---
+
 ## SECTION 5 — DEFERRED FEATURES
 
 ### 5.1 — Pre-approved exceptions (CLAUDE.md §PRE-APPROVED EXCEPTIONS)
@@ -1095,6 +1142,17 @@ exclusion list (§5.4).
 > (`sched.c:1434`) with four callers. The genuinely unbounded wait is elsewhere
 > and is tracked as DDR-994: `mnt_lock` (`vfs.c:25`) is a bare
 > `while (exchange(&m->busy,1)) yield();` with no deadline.
+
+> **And the "per-CPU `sched_exit` / zombie reap under full SMP" row's gate
+> column reads "existing SMP gates", which DDR-1093 measured and it does not
+> hold.** DDR-996's counter `g_rqfree_caught` is incremented on the real reap
+> path on every SMP boot, and was read only inside `smoke-rqfree` — a
+> **single-CPU** gate (no `QEMU_SMP` in its recipe), whose own invariant check
+> `rq_references()` has exactly one caller, inside that same probe. The counter
+> is now surfaced as `rqfree=` in `[hb]` (§4.17). **No arm is added and the row
+> stays open**: a correct kernel legitimately reports 0, so there is nothing
+> sound to assert until the natural rate is known — which is what the field
+> makes askable.
 
 **Group B — storage (`smoke-sfs-persist`, `smoke-sfs-gc`, `smoke-numa` EXIST;
 the rest MISSING):** `smoke-sfs-boot-root` (provisioned SFS as default boot
@@ -1473,7 +1531,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **179** across **10** shards | `make ci-shard-check`, re-measured 2026-09-07 (DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1093+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
+| DDR free range | **DDR-1094+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
 | `kernel.bin` | **1,311,114 B** against the 1,572,864 B gate — **261,750 B** headroom | measured 2026-09-07 (DDR-1090); **re-derived, not carried** — and note `ci-docstate-check` reported **OK on the stale pair** right up to this edit, because 1,307,018 + 265,846 = 1,572,864 exactly. That is DDR-1063's stated limitation, not a defect in the check (DDR-1081 §5, DDR-1083): **passing it is not evidence a live-state number is current.** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |

@@ -1760,3 +1760,21 @@ also a use-after-free (the probe's TCB is exactly what the orphan reaper
 collects); it is narrowed to the instant after `sched_unblock` and range-guarded,
 because both fields are written only as 0 or 1 and a poisoned TCB reads `0xDD`.
 No scheduler defect fixed, no new gate, `kernel.bin` size unchanged.
+
+**DDR-1093 (DDR-996's denominator).** `sched_free_tcb` increments
+`g_rqfree_caught` inside the `rq_on` match, so that counter is raised *exactly
+when DDR-996's window occurred* — on every boot, every CPU, both reap paths — and
+it was read only inside `if (probe_enabled("rqfree"))`, on a gate
+(`smoke-rqfree`, shard 9 strict) whose recipe sets no `QEMU_SMP`. The invariant
+check `rq_references()` has one caller and it is inside that same probe. So the
+number that says whether the race arises *in production* was computed on every
+SMP boot and read by nothing. It is now printed as `rqfree=` in the `[hb]`
+heartbeat, on `ymask=`'s exact precedent (DDR-981: the denominator for "the fix
+is exercised"). **Not a sentinel, and the polarity is the point — `rqfree > 0`
+means the fix worked**, so a `GLOBAL_FORBIDDEN` entry would redden every SMP gate
+on a correct kernel. No arm is added: a correct kernel legitimately reports 0, so
+`> 0` fails on timing and `>= 0` asserts nothing (the DDR-1068 `reaped=` shape).
+First datum, from a 4-CPU capture: `rqfree=0` at every heartbeat while `ymask`
+passes 2.0M — one observation, no rate, and it settles on measurement the refusal
+to switch `smoke-rqfree` to `QEMU_SMP=4`. No defect found, none fixed; the Group
+A row stays open; no new gate; `kernel.bin` size unchanged.

@@ -12557,3 +12557,76 @@ falls through to FAIL where an unguarded read would have SKIPped. Revert returns
 gate a no-kick-owed boot reddens (correctly — it exists to test the kick); if it
 reddens, read the verdict line before assuming anything. Then continue the
 Groups A–F backlog (task #23). OPEN-1/2/12/13 all still open and untouched.
+
+---
+
+## CHECKPOINT — DDR-1093 (DDR-996's window has a production counter nothing reads)
+
+Branch `dev/phase1-seyp3n`. `kernel.bin` **1,311,114 B — SIZE UNCHANGED**.
+DDR free range → **`DDR-1094+`** at all four carriers.
+
+**The row.** Group A's *"Per-CPU `sched_exit` / zombie reap under full SMP"*,
+gate column *"existing SMP gates"* — the last genuinely-open Group A row after
+DDR-1073 named the two and DDR-1082 costed and refused the other. "Existing SMP
+gates" is not a gate name; it is the DDR-1072 §2 / DDR-1073 §2 shape, and it did
+not hold either time it was measured.
+
+**Measured, each read in the tree.** `sched_free_tcb` (`sched.c:1324`) guards the
+DDR-996 unlink on `rq_on` and increments `g_rqfree_caught` (`:1336`) **inside the
+match** — so the counter rises *exactly when the window occurred*, on every boot,
+every CPU, both reap paths. But `rq_references()`, the invariant check, has
+**exactly one caller** (`sched.c:2079`, inside `sched_rqfree_probe`);
+`g_rqfree_leaked` has one writer and one reader, both in that probe; and the
+probe's only driver, `smoke-rqfree` (shard 9, strict), sets **no `QEMU_SMP`**.
+**So the number that says whether the race arises in production was computed on
+every SMP boot and read by nothing.** The probe's own comment even explains its
+`caught > 0` tolerance by *"another CPU may still steal and run it"* — a
+work-stealing argument, on a one-CPU boot.
+
+**Shipped:** one `[hb]` field, `rqfree=<g_rqfree_caught>`, on `ymask=`'s exact
+precedent (DDR-981 — *the denominator for "the fix is exercised"*), in the block
+the whole OPEN-2 investigation already reads.
+
+**Not a sentinel, and the polarity is the reason: `rqfree > 0` means the fix
+WORKED.** A `GLOBAL_FORBIDDEN` entry would redden every SMP gate on a correct
+kernel. **No arm added, measured first (eleventh time in design text):** a
+correct kernel legitimately reports 0, so `> 0` fails on timing and `>= 0`
+asserts nothing — the DDR-1068 `reaped=` shape. Also refused: `leaked=` (constant
+0 outside the probe — DDR-1059 shape) and calling `rq_references()` from
+`sched_free_tcb` (4096 entries × `PERCPU_MAX` under per-queue locks on every TCB
+free — DDR-1047's refused shape, in a kernel whose open defect is a
+timing-sensitive AP freeze).
+
+**First datum, one boot, no rate claimed:** 4-CPU capture reads `rqfree=0` at
+`t=500/1000/1500/2000` while `ymask` climbs 356,937 → 2,028,948 — the window did
+not arise naturally at all on a plainly busy boot. That settles **on
+measurement** the refusal to switch `smoke-rqfree` to `QEMU_SMP=4`.
+
+**Method note.** The first read-back was EMPTY and the *measurement* was wrong,
+not the field: with no sentinel declared `boot_test.sh` takes DDR-785's early
+exit at `NEXUS KERNEL OK` (~line 30) and the first heartbeat is `t=500`, so the
+capture was 1,713 bytes with zero `[hb]` lines. A never-appearing
+`FORBIDDEN_SENTINEL` disables the early exit (DDR-1043).
+
+**No mutant, stated as a limitation** (DDR-1080's reasoning): stopping the
+increment would prove only that the field prints what the global holds, and what
+the field is *worth* is whether a future SMP capture shows it non-zero.
+`smoke-rqfree` arm A already covers the counter two-sidedly.
+
+**§9, found while measuring — and it is my own error from one commit ago.**
+Grepping the Makefile for §2 made a wider comparison free: 160 `smoke-*` names
+claimed in `CLAUDE.md`, 184 real targets, **63 claimed names with no target**.
+Almost all are correct (§7c planning names, or non-existence the file already
+states). **One is not:** the Group F agent-respawn row said init's refusal is
+gated by **`smoke-svc`, which has never existed** — the real target is
+**`smoke-init`** (shard 1, 27 s, strict), whose required-sentinel list does carry
+`[svc] refuse agentsvc`, so the claim was right and the name was wrong. The
+DDR-1040 `smoke-wx` shape, **introduced by DDR-1085**. No checker added
+(DDR-1081 §3: the same signal is a defect on one row and correct on ~62 others);
+name corrected in this commit.
+
+**NEXT SESSION.** Verify `pradyos-ci` on this tip — **DDR-1093 changes
+`kernel.bin`, so `695aa08`'s greens do not transfer.** `695aa08` still needs
+shards 8/9 and the PR suite read. Then continue Groups A–F (task #23). No defect
+found, no open issue moves — OPEN-1/2/12/13 untouched, `GLOBAL_FORBIDDEN` 76,
+179 gates.

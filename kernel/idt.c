@@ -341,6 +341,31 @@ static void timer_tick(struct regs *r) {
          * cost DDR-980 removed was per-CPU work plus ~30 chars, not this. */
         { extern uint64_t g_yield_masked;
           kputs(" ymask="); kputdec(g_yield_masked); }
+        /* DDR-1093: how many TCBs reached sched_free_tcb STILL LINKED on a
+         * runqueue -- i.e. how often DDR-996's window actually arose. THE SAME
+         * SHAPE AS ymask= ABOVE AND FOR THE SAME STATED REASON: it is the
+         * denominator for "the fix is exercised". Without it, "no
+         * fair_candidate #GP since DDR-996" proves nothing about whether the
+         * race still occurs, because nothing counted it where it occurs.
+         *
+         * The counter was ALREADY maintained on the real reap path
+         * (sched.c:1336, guarded by rq_on, so it fires exactly on the window)
+         * and was read ONLY inside `if (probe_enabled("rqfree"))` -- a probe
+         * whose one gate, smoke-rqfree, runs SINGLE-CPU. So on every SMP boot
+         * the number existed, was correct, and was thrown away. This costs one
+         * read of one global inside a block that already holds the line lock.
+         *
+         * NOT A SENTINEL, and the direction is the point: rqfree > 0 means the
+         * FIX WORKED -- those TCBs were unlinked correctly right here. It is the
+         * opposite polarity from [apfreeze] or panic_stage=, so putting it in
+         * GLOBAL_FORBIDDEN would redden every SMP gate on a CORRECT kernel.
+         * `leaked` is deliberately NOT printed beside it: its only writer is
+         * inside that probe, so outside smoke-rqfree it cannot be anything but
+         * zero, and a constant that reads like a live invariant check is worse
+         * than no field at all (the DDR-1059 shape). */
+        { extern volatile uint32_t g_rqfree_caught;
+          kputs(" rqfree=");
+          kputdec((uint64_t)__atomic_load_n(&g_rqfree_caught, __ATOMIC_RELAXED)); }
         /* DDR-979 §6: panics that stayed silent so the winner's dump stayed
          * readable. panics_silent nonzero means MORE THAN ONE CPU panicked this
          * boot — which the old unserialised printer showed only as a garbled

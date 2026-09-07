@@ -4070,3 +4070,152 @@ printed. Revert returns `6343bf987c60ee96`, **1,311,114 B — size unchanged**.
 `[apfreeze]`, no CPU froze, no panic. Not attributed to DDR-1090 **and not
 exonerated** (DDR-1042). No new gate (179 unchanged); `GLOBAL_FORBIDDEN` 76
 unchanged. No open issue moves.
+
+---
+
+## DDR-1093 — the DDR-996 window has a production counter and nothing reads it
+
+**IMPLEMENTED** (one heartbeat field), no new gate, no sentinel, **no defect
+found and none fixed**. Scope: the one remaining genuinely-open Group A row.
+
+**THE ROW.** *"Per-CPU `sched_exit` / zombie reap under full SMP"*, gate column
+*"existing SMP gates"* — not a gate name but a claim that coverage falls out of
+gates written for other things. That is the DDR-1072 §2 / DDR-1073 §2 shape, and
+it did not hold either time it was measured. DDR-1073 established this as one of
+only two Group A rows still genuinely open; DDR-1082 costed and refused the
+other (`smoke-rqstress` 20×), so this is the last one.
+
+**THREE FACTS, EACH READ IN THE TREE.**
+
+1. `sched_free_tcb` (`sched.c:1324`) guards the unlink on
+   `__atomic_load_n(&t->rq_on, __ATOMIC_ACQUIRE)` and increments
+   `g_rqfree_caught` (`:1336`) **inside the match** — so `caught` is incremented
+   **exactly when DDR-996's window occurred**, on every boot, every CPU, both
+   reap paths.
+2. `rq_references()` — the invariant check — is called from **exactly one
+   place**, `sched.c:2079`, inside `sched_rqfree_probe`. `g_rqfree_leaked` has
+   one writer (`:2080`) and one reader (`main.c:1875`), both inside that probe.
+3. That probe has **one** driver and it is **single-CPU**: `grep -n
+   "QEMU_PROBES=rqfree" Makefile` returns exactly `smoke-rqfree`
+   (`Makefile:3244`, shard 9, strict), whose recipe sets **no `QEMU_SMP`**.
+
+**So the number that says whether this race arises in production is computed
+correctly on every SMP boot and read by nothing** — `main.c:1866` reads it only
+inside `if (probe_enabled("rqfree"))`, i.e. only on the one gate where the window
+is *manufactured* deterministically and the machine has one CPU.
+
+**AND THE PROBE'S OWN RATIONALE NAMES A CONDITION ITS GATE CANNOT PRODUCE.**
+`main.c:1861` explains that arm A asserts `caught > 0` rather than `caught == N`
+because *"another CPU may still steal and run it"* and *"an exact count would be
+asserting the absence of work stealing"*. Correct reasoning — and it is about
+**work stealing**, which needs a second CPU. On the one-CPU boot the gate
+actually runs, the tolerance is real and the condition it tolerates never
+occurs. Not a defect in the gate; but its stated model of itself is an SMP model
+and its execution is not.
+
+**SHIPPED.** One field in the `[hb]` heartbeat: `rqfree=<g_rqfree_caught>`.
+**The precedent is exact and is quoted rather than claimed** — `ymask=` sits in
+the same block, added by DDR-981 for the same stated reason: *"how often the
+interrupt window in `yield()` was actually needed. This is the denominator for
+'the fix is exercised' (R17): a gate asserting no `[apfreeze]` proves nothing if
+`ymask` stayed 0."* `rqfree=` is DDR-996's denominator in precisely that sense:
+today *"no `fair_candidate` `#GP` since DDR-996"* proves nothing about whether
+the window still **arises**, because nothing counts it where it arises. The
+heartbeat is right for a second reason — it is where the OPEN-2 investigation
+already reads (DDR-1019/1049/1064/1074/1079/1088 all read `[hb]` fields), so this
+is not a sidecar nobody opens, the failure mode DDR-1043 measured on the QMP
+dump.
+
+**THREE THINGS DELIBERATELY NOT DONE.**
+
+- **`leaked=` is NOT added.** Its only writer is inside the probe, so outside
+  `smoke-rqfree` it **cannot be anything but 0** — a field that reads like a live
+  invariant check and is a constant, the DDR-1059 shape.
+- **`rq_references()` is NOT called from `sched_free_tcb`.** That is the change
+  that would make the invariant checked in production, and it is refused **on
+  measured cost**: it walks up to 4096 entries **per runqueue, for all
+  `PERCPU_MAX` runqueues, each under that queue's lock**, on every TCB free —
+  DDR-1047's refused shape exactly, real work added to a scheduler path in a
+  kernel whose open defect (OPEN-2) is a timing-sensitive AP freeze, where an
+  instrument can *move* the bug rather than measure it. `caught` costs nothing
+  because `sched_free_tcb` **already** does that scan for the fix itself; the
+  invariant check would be a *second* scan bought purely for observation.
+- **`smoke-rqfree` is NOT switched to `QEMU_SMP=4`.** It would make the §2.1
+  rationale true, and it makes a **strict-tier** gate's `caught > 0` arm depend
+  on losing a work-stealing race the probe's own comment says it cannot control.
+  Recorded as the buildable variant **if** the number ever shows the natural
+  window is common enough to assert on.
+
+**IT IS AN INSTRUMENT, NOT A SENTINEL, AND THE DIRECTION IS THE POINT.**
+`rqfree=` must **not** go in `GLOBAL_FORBIDDEN`, because **`caught > 0` means the
+fix WORKED** — it counts TCBs that reached `sched_free_tcb` still queued *and
+were correctly unlinked there*. Opposite polarity from `[apfreeze]` or
+`panic_stage=`; reading it the wrong way round would redden every SMP gate on a
+correct kernel, which is the consequence DDR-1074 recorded about `resched FAIL`
+and DDR-1092 then narrowed. Stated so the next session does not "complete" this
+row by adding a sentinel.
+
+**NO NEW GATE, AND THE OBVIOUS ARM IS VACUOUS — MEASURED BEFORE WRITING**
+(eleventh time caught in design text). *"Assert `rqfree > 0` on an SMP gate"* is
+the DDR-1073 §2 / DDR-1068 `reaped=` shape: **a correct kernel legitimately
+reports 0** whenever no reap happened to land inside the window on that boot, and
+`rqfree >= 0` asserts nothing. The inverse arm is worse — `rqfree == 0` cannot be
+required either, because a boot that *does* hit the window is correct too.
+
+**PROOF, NARROW AND STATED RATHER THAN INFLATED.** Read back **from an SMP
+capture**, not inferred from `rc=0` (DDR-1041): a 4-CPU boot prints `rqfree=0` at
+`t=500/1000/1500/2000` beside `ymask` climbing 356,937 → 2,028,948. **A method
+note worth carrying:** the first attempt produced an **empty** result and it was
+*the measurement* that was wrong, not the field — with no sentinel declared
+`boot_test.sh` takes DDR-785's early exit the moment `NEXUS KERNEL OK` appears
+(line ~30) and the first heartbeat is at `t=500`, so the capture was 1,713 bytes
+with **zero** `[hb]` lines; declaring a never-appearing `FORBIDDEN_SENTINEL`
+disables the early exit (DDR-1043) and the window runs. Recorded because *"the
+field did not print"* and *"the boot ended before the field could print"* are the
+same observation from outside.
+
+**`rqfree=0` IS THE INTERESTING ANSWER AND IT SETTLES THE THIRD REFUSAL BY
+MEASUREMENT.** On that boot the DDR-996 window **did not arise naturally at
+all**, while `ymask` passed two million in the same interval — the boot was busy
+and the counter was simply not reached. **One boot is one observation and no rate
+is claimed**, but it establishes on a number what §4.3/§6 previously only argued.
+
+**THERE IS NO MUTANT, AND THAT IS A STATED LIMITATION**, the DDR-1080 reasoning:
+a mutant that stops incrementing `g_rqfree_caught` would prove only that the
+field prints what the global holds, and what the field is *worth* is decided by
+whether a future SMP capture ever shows it non-zero — which no mutation can
+establish. The counter's own correctness is already covered two-sidedly by
+`smoke-rqfree`'s arm A (`caught > 0` required, `leaked == 0`).
+
+**NOT CLAIMED.** No defect found and none fixed — DDR-996's fix is correct and
+untouched, and `sched_exit`, both reap paths and the `on_cpu` handshake are
+unchanged. **The Group A row is NOT closed**: it asked for coverage under full
+SMP and this is the measurement that has to precede coverage, because there is
+nothing sound to assert until the natural rate is known. No rate is claimed. The
+invariant is still checked only in the probe, and `smoke-rqfree`'s single-CPU
+limitation is recorded, not removed. OPEN-1/2/12/13 untouched, no open issue
+moves, `GLOBAL_FORBIDDEN` 76 unchanged, no new gate (179 unchanged), and
+`kernel.bin` **1,311,114 B — size unchanged**, so the size/headroom pair and
+`ci-docstate-check` are unaffected.
+
+**§9 — FOUND WHILE MEASURING, AND IT IS MY OWN ERROR FROM ONE COMMIT AGO.**
+Establishing that `smoke-rqfree` is the only driver of `QEMU_PROBES=rqfree`
+required grepping the Makefile, which made a wider comparison free: **160
+`smoke-*` names claimed in `CLAUDE.md`, 184 real targets, 63 claimed names with
+no target.** Almost all 63 are correct — the DDR-1063 §7c shape (a planning table
+naming a gate for work not yet done), or non-existence the file already states
+outright (`smoke-wx`, `smoke-mc`, `smoke-maximize`, `smoke-lazystack`,
+`smoke-vdso-read`, `smoke-readline`, `smoke-jobctl`, `smoke-pipes`,
+`smoke-lockbox-e2e`, `smoke-lockstat`, `smoke-capagent`). **One is not:** the
+Group F agent-respawn row said init's refusal is *"gated by `smoke-svc`"*, and
+**`smoke-svc` has never existed**. The real target is **`smoke-init`**
+(`Makefile:1549`, shard 1, 27 s, **strict**) — and the *claim* was right, since
+its `EXTRA_SENTINEL` list carries `[svc] refuse agentsvc` as a **required**
+pattern. **The DDR-1040 `smoke-wx` shape, introduced by DDR-1085 one commit
+earlier** — i.e. DDR-1083 §2 arriving in my own writing, in the file whose entire
+job is to be the thing other files are checked against. **No checker is added**,
+for DDR-1081 §3's reason, of which this is a third demonstration: *"a named gate
+has no target"* is a defect on this row and correct behaviour on ~62 others, and
+nothing mechanical separates them. Name corrected in this commit. **Not
+claimed:** the sweep covered `CLAUDE.md` only, and the other 62 names were
+grouped by inspection rather than adjudicated one by one.
