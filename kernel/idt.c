@@ -19,6 +19,9 @@
 #include "signal.h"
 #include "ps2kbd.h"
 #include "lapic.h"
+#include "fault_expect.h"  /* DDR-1040: the one-shot expected-fault latch */
+#include "cpu_mitigations.h"  /* DDR-1044: cpu_rdmsr for the #MC bank decode */
+#include "lock_stat.h"        /* DDR-1047: contended-lock dump on [apfreeze] */
 #include <stdint.h>
 
 struct idt_entry {
@@ -94,6 +97,30 @@ void idt_load_ap(void) {
  * and therefore stayed silent. Both are read by the heartbeat. */
 uint32_t g_panic_claimed;
 uint64_t g_panic_extra;
+
+/* DDR-1019. The one-winner latch above has NO LIVENESS GUARANTEE: it is claimed
+ * with a CAS before the dump and never released, and losers print nothing by
+ * design. So if the winner stalls before or during its dump, the machine emits
+ * NO panic output at all, every later panic is silenced, and the only visible
+ * symptom is CPUs frozen in the loser's `cli; hlt` -- which is read as an
+ * `[apfreeze]` scheduler defect. That is exactly what a CI capture on 6894062
+ * (shard 9, smoke-blkmq-trace) showed: panics_silent=1 from the first heartbeat,
+ * no banner for a further 1000 ticks, and an [apfreeze] whose RIP resolves to
+ * the halt loop below.
+ *
+ * These two do not change the panic path's behaviour; they make the NEXT
+ * occurrence say what happened.
+ *
+ *  - g_panic_stage: how far the winner got. 0 = claimed but printed nothing.
+ *  - g_panic_loser_*: what the FIRST loser was, recorded rather than printed --
+ *    printing from a loser would reintroduce the interleaving DDR-979 §6
+ *    removed, which is the whole reason losers are silent.
+ */
+uint64_t g_panic_stage;
+uint32_t g_panic_loser_taken;
+uint32_t g_panic_loser_cpu;
+uint32_t g_panic_loser_vec;
+uint64_t g_panic_loser_rip;
 
 static void dump_line(const char *label, uint64_t v) {
     kputs(label);
@@ -181,6 +208,7 @@ static void ap_freeze_probe(void) {
     static uint8_t  s_seen[PERCPU_MAX];   /* 1 once s_prev[i] is a real sample */
     static int      s_victim = -1;        /* the one CPU we sample, once chosen */
     static unsigned s_shots;              /* how many NMIs sent so far */
+    static int      s_lockstat_done;      /* DDR-1047: dump the lock table once */
 
     /* Relay arm first, so a dump armed last window is printed even if a second
      * CPU freezes in this one. The AP release-stored 2; pair with an acquire. */
@@ -213,6 +241,26 @@ static void ap_freeze_probe(void) {
         kputs("\r\n");
         console_line_unlock(fl);
         __atomic_store_n(&pc->nmi_dump, (uint8_t)0, __ATOMIC_RELAXED);
+
+        /* DDR-1047: an [apfreeze] says a CPU stopped making progress; it does
+         * not say WHAT it was waiting for. Dump the contended locks here --
+         * this is the moment the data exists to answer that, and printing it
+         * anywhere else would be a baseline nobody reads. Emitted only on the
+         * freeze path, so a healthy boot prints none of it (DDR-941's rule that
+         * an unbounded instrument slows the thing it measures).
+         *
+         * ONCE PER BOOT, and this loop is why: it runs per frozen CPU, so a
+         * 4-CPU freeze would print four copies of a table that is GLOBAL, not
+         * per-CPU -- four identical answers to one question, on the path where
+         * a log most needs to stay readable (DDR-1043). The FIRST freeze is
+         * also the one carrying the causal information; later ones are
+         * downstream, the same reading DDR-1019 established for panics. The
+         * cost is that a second dump's DELTA (which lock kept accumulating
+         * while a CPU was stuck) is not available -- stated, not overlooked. */
+        if (!s_lockstat_done) {
+            s_lockstat_done = 1;
+            lock_stat_dump();
+        }
     }
 
     if (s_shots >= DUMP_SHOTS)
@@ -294,10 +342,34 @@ static void timer_tick(struct regs *r) {
         { extern uint64_t g_yield_masked;
           kputs(" ymask="); kputdec(g_yield_masked); }
         /* DDR-979 §6: panics that stayed silent so the winner's dump stayed
-         * readable. Nonzero means MORE THAN ONE CPU panicked this boot — which
-         * the old unserialised printer showed only as a garbled dump. */
-        { extern uint64_t g_panic_extra;
-          if (g_panic_extra) { kputs(" panics_silent="); kputdec(g_panic_extra); } }
+         * readable. panics_silent nonzero means MORE THAN ONE CPU panicked this
+         * boot — which the old unserialised printer showed only as a garbled
+         * dump.
+         *
+         * DDR-1049: THE PREDICATE IS g_panic_stage, NOT g_panic_extra, and that
+         * is the whole point of this block. g_panic_extra is incremented ONLY in
+         * the loser branch of the panic CAS, so it is zero whenever exactly one
+         * CPU panicked. g_panic_stage is set by the WINNER the instant it claims
+         * the latch. Gating on g_panic_extra therefore printed panic_stage only
+         * when there had been a SECOND panic -- so `stage=1`, the value DDR-1019
+         * added to name "the winner claimed the latch and never reached the
+         * banner", COULD NOT PRINT IN THE ONE CASE IT WAS BUILT FOR. A lone
+         * silent panic left no trace at all: no banner (so `NEXUS KERNEL PANIC`
+         * never trips GLOBAL_FORBIDDEN), no heartbeat field, and on a passing
+         * gate boot_test.sh deletes the serial capture. The run went GREEN.
+         *
+         * `panic_stage=` is now in GLOBAL_FORBIDDEN, so any claimed panic fails
+         * its gate whether or not the winner lived to print the banner. */
+        { extern uint64_t g_panic_extra; extern uint64_t g_panic_stage;
+          if (g_panic_extra || g_panic_stage) {
+            kputs(" panics_silent="); kputdec(g_panic_extra);
+            /* DDR-1019: these say WHICH panic and how far the winner got. */
+            { extern uint32_t g_panic_loser_cpu;
+              extern uint32_t g_panic_loser_vec; extern uint64_t g_panic_loser_rip;
+              kputs(" panic_stage="); kputdec(g_panic_stage);
+              kputs(" loser_cpu=");   kputdec(g_panic_loser_cpu);
+              kputs(" loser_vec=");   kputdec(g_panic_loser_vec);
+              kputs(" loser_rip=");   kputhex(g_panic_loser_rip); } } }
         /* DDR-890: how much did switch_wait_offcpu_sched spin in this window?
          * spins is the total across CPUs; max/cpu name the busiest one. This is
          * the data that decides whether the DDR-887 preemption-suppression
@@ -339,6 +411,19 @@ static void timer_tick(struct regs *r) {
           kputs(" rqmiss="); kputdec(rm);
           kputs(" rqmst=");  kputdec(rs);
           kputs(" btnedge="); kputdec(virtio_input_btn_edges()); }
+        /* DDR-1025: beside btnedge, what ring 3 actually asked for and got.
+         * btnedge rising while mbtn stays 0 means the press never crossed the
+         * ring boundary; mpoll frozen means ring 3 stopped asking at all. */
+        { extern uint32_t sys_mouse_poll_count(void);
+          extern uint32_t sys_mouse_poll_btn_count(void);
+          kputs(" mpoll="); kputdec(sys_mouse_poll_count());
+          kputs(" mbtn=");  kputdec(sys_mouse_poll_btn_count()); }
+        { extern uint32_t virtio_input_btn_same_drain(void);
+          kputs(" btn1drain="); kputdec(virtio_input_btn_same_drain()); }
+        { extern uint32_t virtio_input_btn_hold_max(void);
+          kputs(" btnhold="); kputdec(virtio_input_btn_hold_max()); }
+        { extern uint32_t virtio_input_mpoll_win(void);
+          kputs(" mpollwin="); kputdec(virtio_input_mpoll_win()); }
         /* DDR-942: rqdepth = entries still sitting in ready queues, rqcpus =
          * how many CPUs hold at least one. Depth staying >0 while a probe
          * reports "never ran" means the queue is not being drained. */
@@ -446,6 +531,64 @@ static void timer_tick(struct regs *r) {
     }
     if ((r->cs & 3) == 3)             /* PROC-C: deliver a pending signal */
         signal_deliver(r);            /* to the ring-3 thread we're returning to */
+}
+
+/* ---- DDR-1040: the one-shot expected-fault latch ------------------------- *
+ * See kernel/fault_expect.h for why every limit here is deliberate. All state
+ * is static, hence BSS, hence zero — no initialiser is owed anywhere. */
+static volatile uint64_t g_fe_lo, g_fe_hi, g_fe_resume;
+static volatile uint32_t g_fe_armed, g_fe_hit, g_fe_vec, g_fe_err;
+
+unsigned smp_online(void);      /* kernel/apic/smp.c */
+extern volatile uint32_t g_mce_report;   /* DDR-1044: kernel/apic/smp.c */
+
+int fault_expect_arm(uint64_t lo, uint64_t hi, uint64_t resume) {
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0" : "=r"(fl));
+    /* The three preconditions are ENFORCED, not documented. A latch armed with
+     * interrupts live, or with an AP running, could swallow a fault that is not
+     * the probe's — and a swallowed fault is worse than a panic, because the
+     * kernel then continues at a resume address that means nothing to it. */
+    if (fl & (1ull << 9)) {
+        kputs("[fexpect] refused: IF set\r\n");
+        return 0;
+    }
+    if (smp_online() != 1) {
+        kputs("[fexpect] refused: APs online\r\n");
+        return 0;
+    }
+    if (hi <= lo) {
+        kputs("[fexpect] refused: empty window\r\n");
+        return 0;
+    }
+    g_fe_lo = lo; g_fe_hi = hi; g_fe_resume = resume;
+    g_fe_hit = 0; g_fe_vec = 0; g_fe_err = 0;
+    __atomic_store_n(&g_fe_armed, 1, __ATOMIC_SEQ_CST);
+    return 1;
+}
+
+int fault_expect_taken(uint32_t *vec_out, uint32_t *err_out) {
+    __atomic_store_n(&g_fe_armed, 0, __ATOMIC_SEQ_CST);
+    if (vec_out) *vec_out = g_fe_vec;
+    if (err_out) *err_out = g_fe_err;
+    return (int)g_fe_hit;
+}
+
+/* Consulted from isr_dispatch BEFORE anything else looks at a CPL-0 fault.
+ * Returns 1 if this fault was expected and `r` has been rewritten to resume. */
+static int fault_expect_consume(struct regs *r) {
+    if (!__atomic_load_n(&g_fe_armed, __ATOMIC_SEQ_CST))
+        return 0;
+    if ((r->cs & 3) != 0)                      /* ring 3 has its own paths */
+        return 0;
+    if (r->rip < g_fe_lo || r->rip >= g_fe_hi) /* not the instruction we armed */
+        return 0;
+    g_fe_vec = (uint32_t)r->vector;
+    g_fe_err = (uint32_t)r->err_code;
+    g_fe_hit = 1;
+    __atomic_store_n(&g_fe_armed, 0, __ATOMIC_SEQ_CST);  /* one shot */
+    r->rip = g_fe_resume;
+    return 1;
 }
 
 void isr_dispatch(struct regs *r) {
@@ -559,6 +702,13 @@ void isr_dispatch(struct regs *r) {
         return;
     }
 
+    /* DDR-1040: an expected ring-0 fault resumes instead of panicking. Placed
+     * here — after every interrupt path has returned, before every fault path —
+     * so it can only ever affect a CPU exception, and only the one instruction
+     * a caller explicitly armed. */
+    if (r->vector < 32 && fault_expect_consume(r))
+        return;
+
     const char *name = (r->vector < 32) ? exc_name[r->vector] : "unknown";
 
     /* Fault originating in ring 3 (CPL in the saved CS == 3): a user program
@@ -670,7 +820,7 @@ void isr_dispatch(struct regs *r) {
      * would then spin with interrupts already masked, turning a diagnosable
      * panic into a silent machine-wide hang. Drop it before printing: the path
      * is terminal and the lock guards only cosmetic line atomicity. */
-    console_line_force_release();
+    console_panic_force_release();          /* DDR-1009: g_line_lock AND g_console_lock */
 
     /* DDR-979 §6: only the FIRST panicking CPU prints.
      *
@@ -694,11 +844,23 @@ void isr_dispatch(struct regs *r) {
         if (!__atomic_compare_exchange_n(&g_panic_claimed, &expected, 1u, 0,
                                          __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
             __atomic_add_fetch(&g_panic_extra, 1, __ATOMIC_RELAXED);
+            /* DDR-1019: record, do not print. First loser wins the slot, so a
+             * third CPU cannot overwrite the one the heartbeat will report.
+             * lapic_id() rather than this_cpu(): a ring-0 fault can arrive with
+             * a GS base that does not belong to this CPU, and that is one of the
+             * things worth being able to see here (DDR-981 §9, DDR-1010). */
+            if (__atomic_exchange_n(&g_panic_loser_taken, 1u, __ATOMIC_SEQ_CST) == 0) {
+                g_panic_loser_cpu = lapic_id();
+                g_panic_loser_vec = (uint32_t)r->vector;
+                g_panic_loser_rip = r->rip;
+            }
             for (;;) __asm__ volatile("cli; hlt");
         }
+        g_panic_stage = 1;                  /* claimed; nothing printed yet */
     }
 
     kputs("\r\n*** NEXUS KERNEL PANIC ***\r\n");
+    g_panic_stage = 2;                      /* banner out: the console works */
     kputs("component: NEXUS isr\r\n");
     kputs("exception: ");
     kputs(name);
@@ -708,6 +870,50 @@ void isr_dispatch(struct regs *r) {
     kputhex(r->err_code);
     kputs("\r\n");
 
+    /* DDR-1044: a #MC's register dump says WHERE the CPU was, not WHAT the
+     * hardware reported. The machine-check banks carry that, and they are the
+     * only place it exists — MCG_STATUS says whether RIP/EIP are even valid,
+     * and each bank's STATUS/ADDR/MISC names the unit and the address. Printed
+     * BEFORE the register dump because MCG_STATUS.RIPV is how a reader knows
+     * whether to trust the RIP that follows.
+     *
+     * Bounded by MCG_CAP's own bank count, and only banks with STATUS.VAL (bit
+     * 63) are printed — an all-banks dump on a 32-bank CPU would bury the one
+     * line that matters under 31 zeros. */
+    if (r->vector == 18) {
+        uint32_t rep = g_mce_report;         /* what cpu_enable_mce found */
+        uint64_t st  = cpu_rdmsr(0x17Au);    /* IA32_MCG_STATUS */
+        kputs("MCE: mcg_status=");
+        kputhex(st);
+        kputs(" ripv=");
+        kputdec((st & 1ull) ? 1u : 0u);      /* bit0 RIPV: is RIP trustworthy? */
+        kputs(" eipv=");
+        kputdec((st & 2ull) ? 1u : 0u);
+        kputs(" mcip=");
+        kputdec((st & 4ull) ? 1u : 0u);
+        kputs("\r\n");
+        unsigned banks = (rep >> 8) & 0xFFu;
+        for (unsigned i = 0; i < banks; i++) {
+            uint64_t bs = cpu_rdmsr(0x401u + 4u * i);
+            if (!(bs & (1ull << 63)))        /* STATUS.VAL — nothing logged here */
+                continue;
+            kputs("MCE: bank=");
+            kputdec(i);
+            kputs(" status=");
+            kputhex(bs);
+            if (bs & (1ull << 58)) {         /* ADDRV */
+                kputs(" addr=");
+                kputhex(cpu_rdmsr(0x402u + 4u * i));
+            }
+            if (bs & (1ull << 59)) {         /* MISCV */
+                kputs(" misc=");
+                kputhex(cpu_rdmsr(0x403u + 4u * i));
+            }
+            kputs("\r\n");
+        }
+    }
+
+    g_panic_stage = 3;                      /* exception identified */
     dump_line("RIP=", r->rip);
     dump_line("CS =", r->cs);
     dump_line("RFLAGS=", r->rflags);
@@ -732,12 +938,63 @@ void isr_dispatch(struct regs *r) {
     dump_line("R15=", r->r15);
 
     kputs("backtrace:\r\n");
-    uint64_t *bp = (uint64_t *)r->rbp;
-    for (int i = 0; i < 8 && bp; i++) {
-        kputs("  ");
-        kputhex(bp[1]);              /* saved return address */
-        kputs("\r\n");
-        bp = (uint64_t *)bp[0];      /* previous frame */
+    /* DDR-1079: BOUNDED. This walk used to test `bp != 0` and nothing else, so a
+     * garbage frame pointer dereferenced straight through — and CI 34051826587
+     * shard 4 caught it doing exactly that: `loser_vec=13` (#GP, which for a
+     * plain `mov 0x8(%rax),%rdi` means a NON-CANONICAL address; a bad but
+     * canonical one would be #PF/14) at `loser_rip=0xFFFFFFFF8000C3A6` =
+     * isr_dispatch+0xE86, the `kputhex(bp[1])` load below.
+     *
+     * The consequence is worse than a truncated report. A fault HERE re-enters
+     * the panic path, loses the CAS to THIS CPU's own earlier claim, and halts
+     * in `for(;;) cli; hlt` — so the CPU that was diagnosing the machine becomes
+     * a frozen CPU, its ticks stop, and its MSI-X-routed block completions
+     * strand (`[vblk] compl wait timeout dest_cpu=`). The panic dump dies
+     * half-written at the point where it would have named the original fault.
+     *
+     * The checks are not invented here: the NMI walker at :638-651 in this same
+     * file already bounds every link and says why — "so a garbage rbp cannot
+     * fault us in NMI context, where a #PF would be the end of the report."
+     * That reasoning applies with more force on the panic path, where a fault is
+     * the end of the report AND costs the machine a CPU. 16384 is STACK_SIZE
+     * (sched.c:15), hardcoded here as the NMI walker already hardcodes it.
+     *
+     * Ring-3 guard for the NMI walker's stated reason: if the frame belongs to
+     * ring 3 then rsp/rbp are user values and the range bound proves nothing.
+     * Ring-3 faults do not reach this path today (:703 routes them to
+     * sched_exit), so this costs nothing and removes the assumption. */
+    if ((r->cs & 3u) == 0) {
+        uint64_t fp = r->rbp, lo = r->rsp, hi = r->rsp + 16384u;
+        int printed = 0;
+        for (int i = 0; i < 8; i++) {
+            if (fp < lo || fp >= hi || (fp & 7u)) {
+                /* Say WHY it stopped. A truncated chain and a chain that ended
+                 * cleanly are otherwise the same two lines, and the difference
+                 * is the whole diagnosis (DDR-1049's rule that an absence must
+                 * name itself). fp is PRINTED, never dereferenced. */
+                kputs("  <frame chain ends: fp=");
+                kputhex(fp);
+                kputs(">\r\n");
+                break;
+            }
+            const uint64_t *f = (const uint64_t *)(uintptr_t)fp;
+            kputs("  ");
+            kputhex(f[1]);              /* saved return address */
+            kputs("\r\n");
+            printed++;
+            uint64_t nfp = f[0];
+            if (nfp <= fp) {            /* chain must grow upward, and 0 ends it */
+                kputs("  <frame chain ends: fp=");
+                kputhex(nfp);
+                kputs(">\r\n");
+                break;
+            }
+            fp = nfp;
+        }
+        if (!printed)
+            kputs("  <no frames: rbp unusable>\r\n");
+    } else {
+        kputs("  <ring-3 frame: rbp not walked>\r\n");
     }
 
     kputs("halting.\r\n");

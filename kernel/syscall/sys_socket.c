@@ -161,9 +161,50 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
     return (h < 0) ? -EMFILE : (long)h;           /* no free socket / net down */
 }
 
+/* DDR-1070 — privacy mode on the I/O paths.
+ *
+ * DDR-802 put the privacy check in sys_sock_connect and nowhere else, so the
+ * control governed OPENING a channel and not USING one: a proxy socket that was
+ * already open when the operator switched privacy mode on kept sending and kept
+ * receiving. That is the case the control exists for -- sec.93 above states the
+ * design as "the operator's explicit instruction that nothing leaves", and it is
+ * ordered ahead of the DDR-800 sovereign bypass precisely so it is
+ * unconditional.
+ *
+ * Checked HERE and not inside psock_write/psock_read under g_net_lock. DDR-987
+ * sec.10 pushed the OWNERSHIP check down there because the thing being checked
+ * -- the owner of slot N -- could change identity between the check and the
+ * operation, so the operation landed on a different connection. Privacy mode is
+ * a GLOBAL flag, not a property of a slot; there is no identity to change
+ * underneath it, and pushing it down would give the lwIP port an AETHER
+ * dependency it does not currently have (grep: zero matches).
+ *
+ * The refusal is audited with the peer taken off the slot, so the record joins
+ * up with the connect record for the same conversation; ACTION_NET_EGRESS keeps
+ * "a blocked write" distinct from "a blocked connect" (DDR-801: the record
+ * states the decision that was actually made). An unresolvable handle audits
+ * dest 0 and still returns -EPERM -- under privacy mode a caller learns nothing
+ * about whether the handle was theirs, which is the same reasoning DDR-802
+ * records for refusing capability-holders and non-holders identically.
+ *
+ * NOT applied to sys_sock_close: refusing to close would strand slots and leak
+ * the very connections the operator wants stopped. */
+static int privacy_refuses_io(long handle) {
+    if (!aether_privacy_active())
+        return 0;
+    uint32_t host_be = 0;
+    uint16_t port = 0;
+    (void)psock_dest((int)handle, current_thread->pid,
+                     current_thread->is_sovereign, &host_be, &port);
+    aether_audit(current_thread->pid, ACTION_NET_EGRESS,
+                 AETHER_DEST_ID(host_be, port), AR_PRIVACY_BLOCKED);
+    return 1;
+}
+
 static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a4;
+    if (privacy_refuses_io(a1)) return -EPERM;          /* DDR-1070 */
     int len = (int)a3;
     if (len <= 0) return 0;
     if (len > SOCK_IO_MAX) len = SOCK_IO_MAX;
@@ -180,6 +221,7 @@ static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6)
 
 static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
+    if (privacy_refuses_io(a1)) return -EPERM;          /* DDR-1070 */
     int slot = (int)a1;                       /* opaque handle (DDR-987 sec.10) */
     int len = (int)a3;
     unsigned timeout_ms = (unsigned)a4;

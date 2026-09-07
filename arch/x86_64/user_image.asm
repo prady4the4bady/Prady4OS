@@ -289,6 +289,84 @@ actiondagtest_elf:
     incbin "build/actiondagtest.elf"
 actiondagtest_elf_end:
 
+; DDR-1015: Section 3C ACTION_READ_FILE, end to end (submit -> verdict -> read).
+global actionreadtest_elf
+global actionreadtest_elf_end
+actionreadtest_elf:
+    incbin "build/actionreadtest.elf"
+actionreadtest_elf_end:
+
+; DDR-1016: Section 3C ACTION_DELETE_FILE -- the first FORCE-PENDING type, so its
+; gate asserts the opposite of the one above: the verdict stays PENDING and the
+; file survives.
+global actiondeltest_elf
+global actiondeltest_elf_end
+actiondeltest_elf:
+    incbin "build/actiondeltest.elf"
+actiondeltest_elf_end:
+
+; DDR-1031: SYS_MPROTECT (NSI 97) probe -- four arms, one forks so the child
+; takes the protection fault.
+global mprotecttest_elf
+global mprotecttest_elf_end
+mprotecttest_elf:
+    incbin "build/mprotecttest.elf"
+mprotecttest_elf_end:
+
+; DDR-1032: SYS_EXECVE argv/envp launcher. Its target /ARGTEST.ELF lives on the
+; FAT volume (execve resolves against the process root), not in this image.
+global argvtest_elf
+global argvtest_elf_end
+argvtest_elf:
+    incbin "build/argvtest.elf"
+argvtest_elf_end:
+
+; DDR-1033: ring-3 IPC door probe. Spawned TWICE -- granted and un-granted.
+global ipctest_elf
+global ipctest_elf_end
+ipctest_elf:
+    incbin "build/ipctest.elf"
+ipctest_elf_end:
+
+; DDR-1034: bounded experiment executor probe. Spawned TWICE -- the deny side
+; holds CAP_EXEC and lacks only is_exec, so neither check can mask the other.
+global exptest_elf
+global exptest_elf_end
+exptest_elf:
+    incbin "build/exptest.elf"
+exptest_elf_end:
+
+; DDR-1037: POSIX poll() probe.
+global polltest_elf
+global polltest_elf_end
+polltest_elf:
+    incbin "build/polltest.elf"
+polltest_elf_end:
+
+; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
+; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
+global actionspawntest_elf
+global actionspawntest_elf_end
+actionspawntest_elf:
+    incbin "build/actionspawntest.elf"
+actionspawntest_elf_end:
+
+; DDR-1018: Section 3C ACTION_QUERY_MEMORY -- auto-approving (DDR-1015 shape),
+; executed through the CAP_MEMORY agent-memory NSI 82/83.
+global actionquerytest_elf
+global actionquerytest_elf_end
+actionquerytest_elf:
+    incbin "build/actionquerytest.elf"
+actionquerytest_elf_end:
+
+; DDR-1020: 3C PROPOSE_HYPOTHESIS (auto-approving) and EVOLVE_GENOME
+; (force-pending) in ONE probe, so the policy split is compared in one boot.
+global actionhypotest_elf
+global actionhypotest_elf_end
+actionhypotest_elf:
+    incbin "build/actionhypotest.elf"
+actionhypotest_elf_end:
+
 global coderewritetest_elf
 global coderewritetest_elf_end
 coderewritetest_elf:
@@ -317,6 +395,21 @@ global sha256test_elf_end
 sha256test_elf:
     incbin "build/sha256test.elf"
 sha256test_elf_end:
+
+; DDR-1052: FIPS 202 SHA-3/SHAKE known-answer probe. Keccak is the prerequisite
+; for ML-KEM and ML-DSA, both of which are built on SHAKE128/256.
+global shaketest_elf
+global shaketest_elf_end
+shaketest_elf:
+    incbin "build/shaketest.elf"
+shaketest_elf_end:
+
+; DDR-1054: FIPS 204 ML-DSA-44 keyGen, against NIST's own ACVP vectors.
+global mldsatest_elf
+global mldsatest_elf_end
+mldsatest_elf:
+    incbin "build/mldsatest.elf"
+mldsatest_elf_end:
 
 global sigpipetest_elf
 global sigpipetest_elf_end
@@ -406,3 +499,17 @@ global bigwritetest_elf_end
 bigwritetest_elf:
     incbin "build/bigwritetest.elf"
 bigwritetest_elf_end:
+
+; exp (DDR-1083): Section 3C ACTION_RUN_EXPERIMENT, propose -> arbitrate -> obey.
+global actionexptest_elf
+global actionexptest_elf_end
+actionexptest_elf:
+    incbin "build/actionexptest.elf"
+actionexptest_elf_end:
+
+; ipc (DDR-1084): Section 3C ACTION_SEND_IPC, propose -> arbitrate -> obey.
+global actionipctest_elf
+global actionipctest_elf_end
+actionipctest_elf:
+    incbin "build/actionipctest.elf"
+actionipctest_elf_end:

@@ -26,5 +26,9 @@ int psock_state(int h, uint32_t owner, int sovereign);
 int psock_read(int h, uint32_t owner, int sovereign, uint8_t *kbuf, int len);
 int psock_write(int h, uint32_t owner, int sovereign, const uint8_t *kbuf, int len);
 int psock_close(int h, uint32_t owner, int sovereign);
+/* DDR-1070: the peer (packed a.b.c.d, port) behind a handle, for auditing a
+ * privacy-refused read/write with a real destination instead of a handle. */
+int psock_dest(int h, uint32_t owner, int sovereign,
+               uint32_t *host_out, uint16_t *port_out);
 void psock_reap_owner(uint32_t pid);
 #endif

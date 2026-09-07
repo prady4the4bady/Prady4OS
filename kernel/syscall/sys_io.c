@@ -204,6 +204,54 @@ static long sys_writev(long fd, long uiov, long iovcnt, long a4, long a5, long a
                (size_t)iovcnt * sizeof iov[0]) < 0)
         return -EFAULT;
 
+    /* DDR-1056: the console gets ONE kwrite for the whole gather.
+     *
+     * musl NEVER issues a one-iovec writev: __stdio_write always passes two --
+     * the bytes already in the stdio buffer, and the new bytes -- so a printf
+     * flushed through the per-iovec loop below reached the console as TWO
+     * separate g_console_lock acquisitions, with a gap in the middle that any
+     * other CPU's printer could occupy. That is DDR-1055's defect reached
+     * through a different door, and it applies to every musl-linked program
+     * here: the compositor, PRISM, term, cmusl, agent_base, init.
+     *
+     * (stdout is FULLY buffered in this system, not line-buffered: musl's
+     * __stdout_write falls back to lbf = -1 when ioctl(TIOCGWINSZ) fails, and
+     * this kernel registers no SYS_IOCTL at all -- so bytes do accumulate
+     * between flushes and the two-iovec case is the normal one.)
+     *
+     * GATHER_MAX is 256 -- deliberately fd_write_user's OWN chunk size, not
+     * musl's 1024-byte BUFSIZ. Gathering into a larger buffer would hold
+     * g_console_lock, and therefore interrupts, across up to 1024 UART
+     * busy-waits instead of today's 256: a four-fold increase in the masked
+     * window on the hottest output path in the system, which is exactly the
+     * cost DDR-1047 refused to pay near a timing-sensitive AP freeze. At 256
+     * the masked window is UNCHANGED from today's maximum and every measured
+     * line still fits in one write (the longest is about 90 bytes). A larger
+     * write falls through to the per-iovec loop -- it is already split by that
+     * same 256-byte chunking, so gathering it would buy nothing. Recorded as a
+     * residual, not hidden: a console line longer than 256 bytes is still
+     * several acquisitions and no gate asserts one. */
+    if (e->kind == FD_CONSOLE) {
+        enum { GATHER_MAX = 256 };
+        uint64_t need = 0;
+        for (long i = 0; i < iovcnt; i++)
+            need += iov[i].len;
+        if (need > 0 && need <= (uint64_t)GATHER_MAX) {
+            char gather[GATHER_MAX];
+            uint64_t at = 0;
+            for (long i = 0; i < iovcnt; i++) {
+                if (iov[i].len == 0)
+                    continue;
+                if (copyin(gather + at, (const void __user *)(uintptr_t)iov[i].base,
+                           (size_t)iov[i].len) < 0)
+                    return -EFAULT;      /* nothing emitted yet, so this is clean */
+                at += iov[i].len;
+            }
+            kwrite(gather, at);
+            return (long)at;
+        }
+    }
+
     long total = 0;
     for (long i = 0; i < iovcnt; i++) {
         if (iov[i].len == 0)

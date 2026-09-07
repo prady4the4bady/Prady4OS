@@ -62,3 +62,10 @@ aether/agents/tool_composer/skills.jsonl
 aether/kernel/lockbox/metrics.jsonl
 build/gatelogs/
 .claude/
+
+# DDR-1042: the resize_check.py fixtures are SOURCE, not build output. They are
+# .log because they are verbatim serial captures (resize_crossarm_pass.log is
+# the actual CI artefact from run 33623855907, shard 9) and renaming them would
+# hide what they are. Without this negation `*.log` above swallows them, they
+# never reach the repo, and ci-resizecheck-selftest fails in CI on missing files.
+!tools/qemu_runner/testdata/*.log

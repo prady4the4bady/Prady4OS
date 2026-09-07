@@ -102,6 +102,28 @@ static int readline(char *buf, int max) {
             buf[n] = 0;
             return n;
         }
+        /* DDR-1039: ERASE. 0x7F (DEL) and 0x08 (BS) both arrive from real
+         * terminals depending on the emulator, so both are honoured. Before
+         * this, every byte was appended verbatim — a backspace landed IN the
+         * command, so hepl<BS><BS>lp parsed as hepl\x7f\x7flp and matched no
+         * builtin. Invisible to the suite (every gate injects byte-perfect
+         * lines and none has ever typed a typo) and visible to a human on the
+         * first mistake.
+         *
+         * At column zero this does nothing: n must not underflow, and there is
+         * nothing of the user's to erase — the prompt is not theirs to delete.
+         * That guard is UNCOVERED by the gate and DDR-1039 §4 says so: from
+         * outside the shell, erasing at column zero and erasing nothing look
+         * identical.
+         *
+         * No echo is emitted. sys_io.c:301 states there is no line discipline
+         * in the console read either, and adding echo would put typed input
+         * into the serial log that every gate asserts on (DDR-1039 §2). */
+        if (c == 0x7F || c == 0x08) {
+            if (n > 0)
+                n--;
+            continue;
+        }
         if (n < max - 1)
             buf[n++] = c;
     }
@@ -150,7 +172,29 @@ static void expand_status(char **argv, int argc) {
     }
 }
 
-/* Split s in place on runs of spaces; fills argv (up to maxv), returns argc. */
+/* Split s in place on runs of spaces; fills argv (up to maxv), returns argc,
+ * or -1 on an unterminated quote.
+ *
+ * DDR-1067: this used to split on spaces ONLY, with no quote handling anywhere,
+ * so `echo "hello world"` passed THREE arguments (quotes included) and a
+ * filename containing a space could not be named at all. Since DDR-1032b wired
+ * PRISM's `run` through to execve's argv marshalling, the defect also reached
+ * the child process rather than stopping at the shell.
+ *
+ * '...' and "..." are both LITERAL here and are stripped. Writing is done
+ * through a separate cursor `w` that trails `s`, so the token is rebuilt in
+ * place: the result is never longer than the input, so no buffer is needed and
+ * every caller is unchanged.
+ *
+ * An unterminated quote returns -1 rather than being treated as terminated: a
+ * typo must not execute a command the user did not write, and this shell has no
+ * continuation prompt to offer instead.
+ *
+ * NOT DONE, stated rather than implied (DDR-1067 §4.1): no backslash escapes;
+ * no expansion inside double quotes (the `$?` substitution above is a
+ * whole-token suffix match applied AFTER this, so "$?" behaves as $? does);
+ * and quoting does NOT protect the operators -- `|`, `>`, `>>`, `<` and `2>`
+ * are matched by strcmp on the STRIPPED token, so `echo ">"` still redirects. */
 static int tokenize(char *s, char **argv, int maxv) {
     int argc = 0;
     while (*s && argc < maxv) {
@@ -159,8 +203,22 @@ static int tokenize(char *s, char **argv, int maxv) {
         if (!*s)
             break;
         argv[argc++] = s;
-        while (*s && *s != ' ')
-            s++;
+        char *w = s;                  /* write cursor, always <= s */
+        while (*s && *s != ' ') {
+            if (*s == '\'' || *s == '"') {
+                char q = *s++;
+                while (*s && *s != q)
+                    *w++ = *s++;
+                if (*s != q)
+                    return -1;        /* unterminated */
+                s++;                  /* consume the closing quote */
+            } else {
+                *w++ = *s++;
+            }
+        }
+        char *end = s;                /* where the unquoted scan stopped */
+        while (w < end)
+            *w++ = 0;                 /* erase what the quote strip left behind */
     }
     return argc;
 }
@@ -276,23 +334,27 @@ static void job_record(long pid, const char *cmdline) {
     printf("[%d] %ld\n", j->id, pid);
 }
 
-static void do_run_bg(const char *path) {
+/* DDR-1032b: `av` is the run's own NULL-terminated vector -- av[0] is the path
+ * and doubles as the child's argv[0], which is the execv(3) convention. Before
+ * DDR-1032 the kernel discarded argv entirely, so `run /X a b` and `run /X` were
+ * the same call; passing a vector here is what makes them differ. */
+static void do_run_bg(char *const *av) {
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid == 0) {
-        nsi(SYS_EXECVE, (long)path, 0, 0);
+        nsi(SYS_EXECVE, (long)av[0], (long)av, 0);
         nsi(SYS_EXIT, 127, 0, 0);
     }
     if (kid < 0) {
         fprintf(stderr, "run: fork failed\n");
         return;
     }
-    job_record(kid, path);              /* parent does NOT wait — that is `&` */
+    job_record(kid, av[0]);             /* parent does NOT wait — that is `&` */
 }
 
-static void do_run(const char *path) {
+static void do_run(char *const *av) {
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid == 0) {
-        nsi(SYS_EXECVE, (long)path, 0, 0);
+        nsi(SYS_EXECVE, (long)av[0], (long)av, 0);
         nsi(SYS_EXIT, 127, 0, 0);          /* execve failed: child gives up */
     }
     if (kid < 0) {
@@ -319,6 +381,16 @@ int main(void) {
         if (len < 0)                       /* EOF: controlled exit, init won't respawn */
             return 0;
         int argc = tokenize(line, argv, 16);
+        if (argc < 0) {                    /* DDR-1067: unterminated quote.
+                                            * Reported and NOT run -- a typo must
+                                            * not execute a command the user did
+                                            * not write, and there is no
+                                            * continuation prompt to offer. */
+            fprintf(stderr, "prism: unterminated quote\n");
+            fflush(stderr);
+            last_status = 2;
+            continue;
+        }
         if (argc == 0)
             continue;
         expand_status(argv, argc);         /* DDR-789: `$?` -> last exit status */
@@ -570,9 +642,18 @@ int main(void) {
             if (argc < 2) do_cat_stdin();        /* DDR-780: `... | cat` */
             else do_cat(argv[1]);
         } else if (!strcmp(cmd, "run")) {
-            if (argc < 2) fprintf(stderr, "run: usage: run <path> [&]\n");
-            else if (background) do_run_bg(argv[1]);   /* DDR-881 */
-            else do_run(argv[1]);
+            if (argc < 2) fprintf(stderr, "run: usage: run <path> [args...] [&]\n");
+            else {
+                /* DDR-1032b: hand the child everything after `run`, path first.
+                 * Bounded by argv[]'s own 16 slots, less one for the NULL. */
+                char *rv[16];
+                int n = 0;
+                for (int i = 1; i < argc && argv[i] && n < 15; i++)
+                    rv[n++] = argv[i];
+                rv[n] = 0;
+                if (background) do_run_bg(rv);         /* DDR-881 */
+                else do_run(rv);
+            }
         } else if (!strcmp(cmd, "ls")) {
             const char *dir = (argc > 1) ? argv[1] : "/";   /* DDR-742 */
             char nm[256];
@@ -702,6 +783,36 @@ int main(void) {
                 any = 1;
             }
             if (!any) printf("jobs: none\n");
+        } else if (!strcmp(cmd, "wait")) {                   /* DDR-1068 */
+            /* Block until every live background job has finished. Bounded by
+             * construction: the loop is over a FIXED table (NJOBS) and each
+             * SYS_WAIT4 targets a pid the shell itself forked, so there is no
+             * unbounded wait here of the DDR-961/994 kind.
+             *
+             * `reaped` counts jobs THIS call waited on, not jobs that ever ran:
+             * jobs_reap() runs at every prompt, so anything already finished is
+             * gone from the table before `wait` is typed. DDR-1068 §3 is why
+             * that number is NOT the gate's discriminator — a correct `wait`
+             * legitimately reports reaped=0 when nothing was still running, the
+             * same value a missing `wait` would produce. The gate asserts
+             * ORDERING against a job that is still alive (/SLOWTEST.ELF).
+             *
+             * NOT `bg`, and not by omission: DDR-881 refused it with the reason
+             * in this file's own job-control header — no setpgid, no controlling
+             * terminal, and no SIGTSTP/SIGCONT in kernel/proc/signal.h, so there
+             * is nothing suspended to resume. */
+            int reaped = 0;
+            for (int i = 0; i < NJOBS; i++) {
+                if (!jobs_tab[i].pid)
+                    continue;
+                int st = 0;
+                nsi(SYS_WAIT4, jobs_tab[i].pid, (long)&st, 0);
+                last_status = st;
+                jobs_tab[i].pid = 0; jobs_tab[i].id = 0; jobs_tab[i].done = 0;
+                reaped++;
+            }
+            printf("PRADYOS_WAIT_OK reaped=%d\n", reaped);
+            fflush(stdout);
         } else if (!strcmp(cmd, "fg")) {                     /* DDR-881 */
             struct job *j = (argc >= 2) ? job_by_spec(argv[1]) : 0;
             if (!j) {

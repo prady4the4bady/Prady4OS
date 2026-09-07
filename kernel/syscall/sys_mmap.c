@@ -155,7 +155,62 @@ static long sys_munmap(long a_addr, long a_len, long a3, long a4, long a5, long 
     return 0;
 }
 
+/* DDR-1031: SYS_MPROTECT (NSI 97) -- change an existing user mapping's
+ * permissions, keeping its frames. The range walk lives in vmm_protect_range;
+ * the policy lives here.
+ *
+ * Three refusals, each with a reason (DDR-1031 §3):
+ *   PROT_WRITE|PROT_EXEC  -- W^X is this kernel's posture (DDR-757); a syscall
+ *                            that handed ring 3 a W+X page would be a hole
+ *                            straight through it.
+ *   PROT_WRITE on a COW page -- the hardware RO bit IS the copy trigger, so
+ *                            granting write would let this process write a frame
+ *                            another still shares, with no copy and no fault.
+ *                            Detected in vmm_protect_range, reported as -EACCES.
+ *   PROT_NONE             -- making a user page absent collides with the
+ *                            demand-paged stack (ADR-038), which faults absent
+ *                            user pages IN rather than reporting them. Telling
+ *                            the two apart needs a state that does not exist.
+ */
+static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    uint64_t addr = (uint64_t)a1;
+    uint64_t len  = (uint64_t)a2;
+    int prot      = (int)a3;
+
+    if (addr & 0xFFFull)                       /* POSIX: addr must be page-aligned */
+        return -EINVAL;
+    if (len == 0)
+        return 0;
+    if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC))
+        return -EINVAL;
+    if (prot == 0)                             /* PROT_NONE -- see the note above */
+        return -EINVAL;
+    if ((prot & PROT_WRITE) && (prot & PROT_EXEC))
+        return -EACCES;                        /* W^X */
+
+    /* Overflow-safe bound, then the same user-VA window mmap uses. */
+    if (addr < VMM_USER_MIN || len > (VMM_USER_MAX - addr))
+        return -EINVAL;
+
+    struct tcb *t = current_thread;
+    if (!t)
+        return -ESRCH;
+
+    uint64_t flags = 0;
+    if (prot & PROT_WRITE) flags |= VMM_RW;
+    if (!(prot & PROT_EXEC)) flags |= VMM_NX;   /* readable+non-exec is the default */
+
+    int rc = vmm_protect_range(t->cr3, addr, len, flags);
+    if (rc == -2)
+        return -EACCES;                        /* write asked on a COW page */
+    if (rc != 0)
+        return -ENOMEM;                        /* a page in the range is absent */
+    return 0;
+}
+
 void sys_mmap_register(void) {
-    syscall_register(SYS_MMAP,   sys_mmap);
-    syscall_register(SYS_MUNMAP, sys_munmap);
+    syscall_register(SYS_MMAP,     sys_mmap);
+    syscall_register(SYS_MUNMAP,   sys_munmap);
+    syscall_register(SYS_MPROTECT, sys_mprotect);   /* DDR-1031 */
 }

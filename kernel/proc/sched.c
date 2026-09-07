@@ -1067,6 +1067,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dbg_vruntime    = g_dbg_floor;
     t->dbg_v_at_create = g_dbg_floor;
     t->dbg_v_at_wake   = 0;
+    t->dbg_ub_saw_idle = 0;          /* DDR-1064 / §NON-NEGOTIABLE 10 */
+    t->dbg_ub_kicked   = 0;          /* DDR-1064 / §NON-NEGOTIABLE 10 */
     t->dbg_picks       = 0;
     t->dbg_ticks       = 0;
     t->block_deadline  = 0;   /* DDR-955 */
@@ -1123,6 +1125,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
                                     * every capability at once. */
     t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
     t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
+    t->is_ipc    = 0;              /* DDR-1033: no IPC door unless the kernel grants it */
+    t->ipc_cap   = CAP_NULL;       /* DDR-1033: and no handle to go with it */
+    t->is_exec   = 0;              /* DDR-1034: no executor door unless granted */
+    t->exec_cap  = CAP_NULL;       /* DDR-1034: and no handle to go with it */
     t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does
                                     * not zero, so every new field needs this line    */
     t->checkpointed = 0;           /* DDR-837: not frozen                             */
@@ -1822,13 +1828,41 @@ void sched_unblock(struct tcb *t) {
         /* rq-3: kick an idle CPU so it steals this thread NOW rather than on its
          * next 10 ms tick. Directed IPI to the first idling non-self CPU; the
          * timer remains the backstop if none is (visibly) idle. */
+        /* DDR-1014: `break` on the CALL was wrong -- smp_resched_one silently
+         * declines for the BSP, so an unblock running on an AP that found the
+         * BSP idle first consumed its one kick, sent nothing, and stopped
+         * looking. Any idle AP later in the list then waited a full timer tick,
+         * which is exactly the latency rq-3 exists to remove. Reachable in
+         * ordinary operation: virtio_blk's completion path calls sched_unblock
+         * from MSI-X interrupt context on whichever CPU the vector is routed to.
+         * Break on a DELIVERED kick, not on an attempted one. */
+        /* DDR-1064: record what THIS loop saw, at the instant it ran. The rq-3
+         * proof used to re-derive it from outside the call and could not: a CPU
+         * can leave idle before the call (DDR-1004's race) or enter idle after
+         * it returns (DDR-1030's own race, which its §5 table did not name), so
+         * `idle=`/`idle2=` narrow the timing without closing it. DDR-1014 made
+         * the two loops ask the same QUESTION; this makes them ask it at the
+         * same INSTANT, which is the residual one level down.
+         *
+         * `saw_idle` deliberately mirrors THIS loop's predicate exactly, not the
+         * proof's: the proof carries `!o->is_bsp` because smp_resched_one
+         * declines the BSP, and paraphrasing that here would reintroduce the
+         * drift DDR-1014 removed. `kicked` is the delivered-kick answer, so a
+         * BSP-only-idle boot reads saw_idle=1 kicked=0 and is CORRECT rather
+         * than a defect -- which the proof's predicate cannot express at all. */
+        uint8_t saw_idle = 0, kicked = 0;
         for (int c = 0; c < PERCPU_MAX; c++) {
             struct percpu *o = percpu_get((uint32_t)c);
             if (c != self && o && o->present && o->idle) {
-                smp_resched_one((uint32_t)c);
-                break;
+                saw_idle = 1;
+                if (smp_resched_one((uint32_t)c)) {
+                    kicked = 1;
+                    break;
+                }
             }
         }
+        t->dbg_ub_saw_idle = saw_idle;
+        t->dbg_ub_kicked   = kicked;
     } else {
         /* DDR-936: the CAS did not fire, so NOTHING above ran — no enqueue.
          * Record it and the state we actually saw; `expected` holds the

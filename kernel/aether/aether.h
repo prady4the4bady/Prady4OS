@@ -30,13 +30,82 @@ enum aether_action {
      * one and the kernel would queue an action nothing implements. */
     ACTION_READ_FILE, ACTION_DELETE_FILE, ACTION_SEND_IPC, ACTION_QUERY_MEMORY,
     ACTION_REWRITE_AGENT_CODE, ACTION_PROPOSE_HYPOTHESIS,
-    ACTION_RUN_EXPERIMENT, ACTION_EVOLVE_GENOME
+    ACTION_RUN_EXPERIMENT, ACTION_EVOLVE_GENOME,
+    /* DDR-1070: egress THROUGH an already-open proxy socket, as distinct from
+     * opening one. Appended, never inserted, per this enum's own rule above.
+     * It exists so the audit trail can say WHICH operation privacy mode
+     * refused: reusing ACTION_NET_CONNECT would have recorded a blocked write
+     * as a blocked connect, and DDR-801's rule is that the record states the
+     * decision that was actually made. Audit-only -- nothing SUBMITS this type,
+     * so it never reaches the approval path and aether_action_forces_pending()
+     * is deliberately unchanged. */
+    ACTION_NET_EGRESS
 };
 
 /* Wire-format pins for the pre-existing action types (DDR-832 discipline). */
 _Static_assert(ACTION_WRITE_FILE    == 1, "action wire format: WRITE_FILE is 1");
 _Static_assert(ACTION_PRINT         == 2, "action wire format: PRINT is 2");
+/* SPAWN_PROCESS is also hand-copied by user/actionspawntest.c (DDR-1017), whose
+ * gate asserts it stays PENDING -- so a drift onto a type outside
+ * aether_action_forces_pending() below would make that assertion vacuous. */
 _Static_assert(ACTION_SPAWN_PROCESS == 3, "action wire format: SPAWN_PROCESS is 3");
+/* DDR-1015: pin the first 3C type too. user/actionreadtest.c hand-copies this
+ * number across the ring boundary, and DDR-1013 §1 found actiondagtest.c had
+ * drifted to a wrong one with no gate able to see it. Pinning it here means the
+ * KERNEL stops building if the enum shifts, which is the only cross-check the
+ * build currently has between a probe's constants and this header. */
+_Static_assert(ACTION_READ_FILE     == 5, "action wire format: READ_FILE is 5");
+/* DDR-1016: and the first force-pending 3C type. user/actiondeltest.c hand-copies
+ * this one, and its gate asserts the action stays PENDING -- an assertion that
+ * would silently become vacuous if the number drifted onto a type that is not in
+ * aether_action_forces_pending() below. */
+_Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6");
+/* DDR-1018 recorded that ACTION_SEND_IPC == 7 was deliberately NOT pinned:
+ * ipc_send/ipc_recv were kernel-internal with no SYS_IPC_*, so an approved
+ * SEND_IPC had no executor in any ring (DDR-1017 §1) -- and the rule it gave is
+ * the one this file lives by: "Nothing hand-copies 7, and A PIN WHOSE PROBE DOES
+ * NOT EXIST WOULD READ AS A CLAIM THAT ONE DOES."
+ *
+ * PINNED 2026-09-07 (DDR-1084 §2), because the rule's CONDITION is now
+ * satisfied. DDR-1033 built the door; user/actionipctest.c is the caller, and it
+ * hand-copies 7 and submits the type. Measured before the pin was added: the
+ * only two matches for ACTION_SEND_IPC outside this header were COMMENTS
+ * (user/actionquerytest.c:4, user/ipctest.c:3), so 7 genuinely crossed no ring
+ * boundary until that probe existed.
+ *
+ * Worth reading beside the RUN_EXPERIMENT note below, which DDR-1083 §2 found
+ * carrying the same claim in the confident past tense about a probe
+ * (user/exptest.c) that does not hand-copy anything. Same file, same rule, one
+ * commit apart, opposite outcomes -- and the only difference is whether the
+ * probe was built before or after the sentence asserting it. */
+_Static_assert(ACTION_SEND_IPC      == 7, "action wire format: SEND_IPC is 7");
+_Static_assert(ACTION_QUERY_MEMORY  == 8, "action wire format: QUERY_MEMORY is 8");
+/* DDR-1020. Both hand-copied by user/actionhypotest.c, which runs them in ONE
+ * boot on opposite sides of the force-pending split below -- so a drift that
+ * moved either onto the wrong side would make that comparison vacuous. 9
+ * (REWRITE_AGENT_CODE) is hand-copied by user/coderewritetest.c and pinned for
+ * the same reason. 11 (RUN_EXPERIMENT) WAS deliberately unpinned on that rule --
+ * nothing copied it, and a pin whose probe does not exist reads as a claim that
+ * one does.
+ *
+ * CORRECTED 2026-09-07 (DDR-1083 §2). This comment used to name user/exptest.c
+ * as that probe. IT IS NOT ONE: measured, exptest.c hand-copies four NSI numbers
+ * (4/6/100/101) and the exp_op opcodes, contains no ACTION_ constant at all and
+ * never calls SYS_SUBMIT_ACTION -- it drives the EXECUTOR, which is exactly the
+ * distinction DDR-1072 §2 drew when it warned that smoke-runexp's NAME matches
+ * the action type while its CLAIM is a different thing. So this file held a rule
+ * (eleven lines up, for SEND_IPC) and a violation of it, written in the
+ * confident past tense.
+ *
+ * The pin is not deleted; it is MADE TRUE. user/actionexptest.c (DDR-1083) hand-
+ * copies 11 and submits the type, so the sentence is now accurate rather than
+ * the claim being quietly shrunk. */
+_Static_assert(ACTION_REWRITE_AGENT_CODE == 9, "action wire format: REWRITE_AGENT_CODE is 9");
+_Static_assert(ACTION_PROPOSE_HYPOTHESIS == 10, "action wire format: PROPOSE_HYPOTHESIS is 10");
+_Static_assert(ACTION_RUN_EXPERIMENT     == 11, "action wire format: RUN_EXPERIMENT is 11");
+_Static_assert(ACTION_EVOLVE_GENOME      == 12, "action wire format: EVOLVE_GENOME is 12");
+/* DDR-1070: audit-only, privacy-refused egress on an open socket. */
+_Static_assert(ACTION_NET_EGRESS         == 13, "action wire format: NET_EGRESS is 13");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must

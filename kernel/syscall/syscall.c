@@ -1,6 +1,7 @@
 /* kernel/syscall/syscall.c — NSI dispatch table, handlers, and MSR setup. */
 #include "syscall.h"
 #include "console.h"
+#include "lapic.h"    /* DDR-1010: lapic_id() -- GS-independent CPU identity */
 #include "cap.h"
 #include "sched.h"
 #include "uaccess.h"   /* validated user-pointer copy path (ADR-022); used by 5b syscalls */
@@ -30,6 +31,7 @@ void sys_vault_register(void);    /* kernel/syscall/sys_vault.c (DDR-834) */
 void sys_agentmem_register(void); /* kernel/syscall/sys_agentmem.c (DDR-836) */
 void sys_checkpoint_register(void); /* kernel/syscall/sys_checkpoint.c (DDR-837) */
 void sys_rewrite_register(void);  /* kernel/syscall/sys_rewrite.c (DDR-842) */
+void sys_experiment_register(void); /* kernel/syscall/sys_experiment.c (DDR-1034) */
 void sys_audit_register(void);    /* kernel/syscall/sys_audit.c (DDR-842) */
 
 #define MAX_SYSCALLS 128  /* NSI-v2 table size (ADR-022). Raised 80->128 in the
@@ -84,10 +86,57 @@ void syscall_register(unsigned num, syscall_fn fn) {
     table[num] = fn;
 }
 
+/* DDR-1010 §7: the SWAPGS discipline check, made CONTINUOUS and CPU-identifying.
+ *
+ * The DDR-SMP-3a probe in sys_getpid below is ONE-SHOT (`static int gs_checked`)
+ * and fires on the first sys_getpid of the whole boot. It caught OPEN-2 only
+ * because that boot's corruption happened to be early; it cannot bound WHEN GS
+ * goes bad, and it prints no CPU index.
+ *
+ * This runs at the top of every syscall, BEFORE anything dereferences
+ * current_thread -- which matters, because the rate-limit check below is itself
+ * a `current_thread->is_agent` read, and on the DDR-1010 boot that read went
+ * through a GS base of 0 into the real-mode IVT.
+ *
+ * COST: the always-on part is the two instructions of this_cpu() plus a compare.
+ * The expensive identification -- lapic_id() is an MMIO read -- runs ONLY after
+ * the cheap check has already failed, so a healthy boot pays nothing for it.
+ *
+ * percpu_by_apic_id() is the right cross-reference precisely because it does not
+ * read %gs (percpu.c:104): it can name the CPU when %gs cannot.
+ *
+ * Latched per CPU slot so a wedged CPU cannot flood the log; the latch is keyed
+ * on the LAPIC id, not on the (unusable) percpu index. */
+static uint32_t g_gsfail_seen;                  /* bitmask of apic_ids reported */
+
+static void gs_discipline_check(long num) {
+    struct percpu *pc = this_cpu();
+    if (pc && pc->self == pc)
+        return;                                  /* healthy: the common path */
+
+    uint32_t aid = lapic_id();
+    if (aid < 32 && (g_gsfail_seen & (1u << aid)))
+        return;                                  /* already reported this CPU */
+    if (aid < 32)
+        g_gsfail_seen |= 1u << aid;
+
+    struct percpu *real = percpu_by_apic_id(aid);
+    kputs("[percpu] gs FAIL (syscall ctx) apic=");
+    kputdec(aid);
+    kputs(" num=");
+    kputdec((uint64_t)num);
+    kputs(" gs0=");
+    kputhex((uint64_t)(uintptr_t)pc);            /* kputhex emits its own 0x (§INV.9) */
+    kputs(" want=");
+    kputhex((uint64_t)(uintptr_t)real);
+    kputs("\r\n");
+}
+
 long syscall_dispatch(long num, long a1, long a2, long a3, long a4,
                       long a5, long a6) {
     if (num < 0 || num >= MAX_SYSCALLS || !table[num])
         return -ENOSYS;
+    gs_discipline_check(num);                    /* DDR-1010: before any deref */
     /* AETHER rate limit (ADR-026 D7): agent processes get 60 syscalls / 1 s; an
      * over-budget agent is cleanly killed here and never reaches the handler.
      * Non-agents (init, PRISM, kernel) are exempt, so existing gates are intact.
@@ -165,18 +214,22 @@ static long sys_exit(long a1, long a2, long a3, long a4, long a5, long a6) {
      * triggered agent exiting before it printed anything (so it DID run), or
      * an unrelated thread (so the agent never ran). Those are opposite
      * conclusions about the same log. */
-    kputs("[user] sys_exit(");
-    kputdec((uint64_t)a1);
-    kputs(") pid=");
-    kputdec((uint64_t)current_thread->pid);
     /* DDR-948: write ATTEMPTS by this thread. On an A1 failure (agent exits 0
      * with no AGENT_START and no EBADF), writes=0 means main was never entered
      * — the defect is pre-main in the crt/ELF entry; writes>0 means the writes
      * were attempted and accepted yet produced no serial output, putting the
-     * defect downstream of fd_write_user. Two different subsystems. */
-    kputs(" writes=");
-    kputdec((uint64_t)current_thread->dbg_writes);
-    kputs(" — thread terminating\r\n");
+     * defect downstream of fd_write_user. Two different subsystems.
+     *
+     * DDR-1055: ONE kwrite. This line is printed from ring-3 exit context with
+     * every other CPU running, i.e. the most concurrent printer in the tree. */
+    { kline k; kline_init(&k);
+      kline_s(&k, "[user] sys_exit(");
+      kline_d(&k, (uint64_t)a1);
+      kline_s(&k, ") pid=");
+      kline_d(&k, (uint64_t)current_thread->pid);
+      kline_s(&k, " writes=");
+      kline_d(&k, (uint64_t)current_thread->dbg_writes);
+      kline_s(&k, " — thread terminating\r\n"); kline_emit(&k); }
     sched_exit((int)a1);       /* zombie w/ status; does not return */
     return 0;
 }
@@ -206,6 +259,7 @@ void syscall_init(void) {
     sys_agentmem_register();              /* SYS_MEMORY_WRITE / SYS_MEMORY_READ (DDR-836) */
     sys_checkpoint_register();            /* SYS_CHECKPOINT_AGENT / SYS_RESUME_AGENT (DDR-837) */
     sys_rewrite_register();               /* SYS_APPROVE_CODE_REWRITE (DDR-842) */
+    sys_experiment_register();            /* SYS_RUN_EXPERIMENT / SYS_EXP_RESULT (DDR-1034) */
     sys_audit_register();                 /* SYS_READ_AUDIT (DDR-842) */
     sys_acc_register();                   /* SYS_ACC_SEAL / SYS_ACC_OPEN (DDR-813,
                                            * linkable since DDR-827 raised the

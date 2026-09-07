@@ -1,0 +1,1391 @@
+# PRADYOS — PRE-LAUNCH CHECKLIST
+
+**One document for everything that is deferred, open, uncovered, or awaiting an
+operator decision.** Created 2026-09-01 on operator instruction (PR #17), item 3:
+*"Consolidate every deferred item into one document — what it is, why deferred,
+whether the operator must decide before user testing."*
+
+## How to read this
+
+Every row carries three things, and the third is the point of the document:
+
+| Column | Means |
+|---|---|
+| **What** | The thing itself, named precisely enough to find in the tree. |
+| **Why deferred / open** | The mechanism or the missing subsystem. Not "no time". |
+| **Operator decision before user testing?** | **YES** = a person must choose before anyone outside this repo boots the ISO. **NO** = it is recorded, bounded, and safe to carry into user testing as-is. |
+
+A **NO** is not a claim that the item is unimportant. It is a claim that shipping
+without it does not create a decision a user's experience depends on, and that
+the item is written down here rather than lost.
+
+**Nothing in this document is a fix.** Where a defect is open, it is open; where
+a line is uncovered, it is uncovered. §NON-NEGOTIABLE 3 forbids a fix without a
+named mechanism from a real failing artefact, and several rows below exist
+precisely because that bar has not been met.
+
+---
+
+## SECTION 1 — OPERATOR DECISIONS REQUIRED BEFORE USER TESTING
+
+**§1.1 and §1.2 are the only rows in this document marked YES** — the two
+decisions a person must make. §1.3 and §1.4 sit here because they are
+*operator-owned* rather than open: §1.3 is a triage whose merges are the
+operator's action to take, and §1.4 is a decision the operator has already made
+and which is recorded so it is not re-opened by a later session. Everything
+outside Section 1 is recorded, not blocking.
+
+### 1.1 — Placeholder branding / logo art must be replaced or licensed
+
+**Status: OPEN — operator decision required. Nothing in the repository ships
+art today, and that is the good news; the exposure is upstream of the tree.**
+
+Measured 2026-09-01:
+
+- `find` across the whole working tree for `*.png`, `*.svg`, `*scorpion*`,
+  `*logo*` returns **zero files**. There is no `assets/` directory.
+- `grep -rni "scorpion|logo|brand|trademark|wordmark"` over all `.md`/`.c`/`.h`
+  returns **no branding art reference** — every hit is either the CPUID
+  *processor brand string* (`sys_proc.c:137`, `prism.c:51`, `sysinfotest.c`),
+  an unrelated identifier, or `TELOPT_LOGOUT` in vendored musl.
+- The single design-side reference is `docs/design/LAYER7_UI_UX_BRIEF.md`:
+  line 59 specifies a **logo** in the top-left sidebar, and line 104 specifies
+  `assets/icons/{sovereign,system}/` (16 "Sovereign Glyphs", 1x/2x + `.json`).
+  **Neither exists.** The brief describes art that was never produced, so the
+  shipped compositor renders no mark at all.
+
+**So the risk is not in the ISO — it is in the design references.** Any
+AI-generated placeholder mark (the scorpion logo, or anything like it) used in
+briefs, mockups, screenshots, README art, or promotional material carries
+copyright/provenance exposure that a shipped binary would not.
+
+**The decision the operator must make, before any public release or user
+testing that produces screenshots:**
+
+1. **Commission or draw an original simple mark** (a geometric wordmark needs no
+   illustration and no model), **or**
+2. **Buy a properly licensed asset** with a licence file committed beside it,
+   **or**
+3. **Ship with no mark at all** — which is the current, and safest, state.
+
+Option 3 is what the tree does today and requires no work. Options 1 and 2
+require the operator to act; neither can be decided by an implementer.
+
+**Whichever is chosen, the same rule applies to the 16 Sovereign Glyphs** in the
+brief §6. They are unbuilt. If they are ever built by a generative tool, they
+inherit this same item.
+
+**Do not treat this as closed until an explicit operator answer is recorded
+here.** This section exists so the item cannot be lost, which was the operator's
+stated reason for asking for it.
+
+### 1.2 — `v1.0.0` is deliberately untagged, and `main` promotion is unstarted
+
+**Status: HELD BY OPERATOR DECISION. Not an oversight.**
+
+`dev/phase1` was fast-forwarded to `ace232f` and the release candidate was
+verified on it (BIOS + UEFI ISO arms, plus `smoke-iso-userspace`, which boots a
+live OS: SFS root + PRISM + an AETHER agent + a write/read/delete round-trip).
+The tag was then **held**, on an explicit decision, because the OPEN-1 campaign
+had just found a locally reproducible ring-0 `#PF` (DDR-985, 1/20).
+
+Since then the picture changed but the hold was not lifted:
+
+- Route 2 (that `#PF`) is **CLOSED** at 95% power — 60/60 clean on one kernel
+  hash `5349db4d791cc2ab`, against a threshold fixed before the run (DDR-1000).
+- Route 3 is **CLOSED** (DDR-990 §9, mutation-checked both ways).
+- **Route 1 is still open**, and it is CI-only, so no local campaign can close it.
+
+**The operator must decide whether the original reason for the hold still
+holds.** It was "root-cause the `#PF` before tagging"; that `#PF` is closed. What
+remains open is a different signature that a local campaign structurally cannot
+settle. Continuing to hold is defensible; so is tagging with route 1 named in
+the release notes (DDR-1011 §4 already drafted that wording). **An implementer
+should not make this call**, which is why it sits in Section 1.
+
+### 1.3 — Six dependency PRs: triage recorded, merging is the operator's action
+
+**Operator instruction (PR #17, 2026-09-01):** each open dependency PR needs
+*"merged (if low-risk and CI-green), or explicitly deferred with a reason."*
+
+**One structural fact decides most of this, measured rather than assumed:**
+`tools/graph_mcp` runs in its **own CI job** (`ci.yml:196-205` — `npm ci` then
+`node server.js selftest`). It is referenced nowhere in the Makefile and by no
+`smoke-*` gate. So its npm dependencies **cannot affect a gate result or the
+shipped OS image**; their blast radius is a developer graph tool.
+
+| PR | What | Disposition | Reason |
+|---|---|---|---|
+| **#2** | npm group: `@hono/node-server`, `fast-uri` | **CLOSE — superseded** | Already remediated. `package-lock.json` carries 2.1.0 and 3.1.5, at or above every advisory's fix, and `npm audit` reports 0 vulnerabilities at every severity. Its base is `fd876cd`, far behind `main`. Merging it would be a no-op at best. |
+| **#3** | Docker `ubuntu` 24.04 → 26.04 | **DEFER post-1.0** | Not security. `Dockerfile:17` pins 24.04 **deliberately**, so container and WSL builds agree; changing the whole toolchain under 168 gates days from release reintroduces exactly the drift the image exists to remove. |
+| **#7** | `actions/checkout` 5 → 7 | **DEFER until after the CI efficiency work** | Used at 5 sites in `ci.yml`. Any `ci.yml` change alters the environment every gate runs in, and §NON-NEGOTIABLE 1 needs **3 greens on one tip SHA** — so merging this resets accumulated release evidence for no release-relevant gain. It also touches the same file the operator's own item 5 (caching + shared build artifact) will rewrite, so merging now buys a conflict. |
+| **#8** | `actions/setup-python` 5 → 7 | **DEFER — same reason as #7** | Same file, same evidence-reset argument. |
+| **#9** | `sql.js` 1.14.1 → 1.14.2 | **SAFE TO MERGE** | A patch bump, and `package.json:21` already declares `^1.10.0`, so 1.14.2 is **inside the existing range** — this only moves the lockfile pin. Dev-tool scope, cannot reach a gate. |
+| **#15** | `web-tree-sitter` 0.22.6 → 0.26.13 | **HOLD — the only one with real breakage risk** | `package.json:23` pins it **exactly** (`"0.22.6"`, no caret), so this is a genuine minor-series jump in a WASM parser whose API changed across those versions. It can break `node server.js selftest`. Still **not release-blocking** — the graph tool is not in the OS — but it should be merged and watched deliberately, not swept in with the others. |
+
+**Why I have recorded dispositions rather than merged anything.** These PRs
+target `dev/phase1`; this session's mandate is `dev/phase1-seyp3n` and forbids
+pushing to another branch without explicit permission. Merging is therefore the
+operator's action. The instruction asked for a decision *"recorded somewhere"*,
+and this is that record. **#9 is the one I would merge today**; #2 I would close.
+
+### 1.4 — DDR-1019's panic-latch watchdog: DECIDED, deferred, not built
+
+**This is a closed decision, not an open question.** Recorded here because it
+was left open by DDR-1019 and the operator closed it explicitly (PR #17,
+2026-09-01).
+
+**What it would have been.** DDR-1019 established that one producer of
+`[apfreeze]` is the *losing* branch of DDR-979's one-winner panic latch: the
+latch is claimed **before** the dump and never released, so a winner that cannot
+print silences every later panic and leaves only frozen CPUs. The named repair
+is a latch-liveness watchdog, so a losing CPU's crash is not silently swallowed.
+
+**The decision: do not build it on this timeline.** The reason, verbatim in
+substance from the operator: the risk of reintroducing the garbled-dump
+interleaving that DDR-979 fixed, days from release, outweighs a nicer crash
+message for a failure mode already being chased by other means — the SWAPGS
+probe (DDR-1010) and the two other `[apfreeze]` producers already distinguished
+(DDR-1006's `sched_tick` path, DDR-1010's `sys_mmap` path).
+
+**What remains true and must not be lost:** before reading any new `[apfreeze]`
+as a known producer, **resolve its RIP against its own binary** (§INV.18). Three
+producers share the label. That discipline is the mitigation now, in place of
+the watchdog.
+
+**UPDATE 2026-09-03 — DDR-1049 closes the DETECTION half, not the watchdog.**
+The decision above stands: the latch is still claimed before the dump and still
+never released, so a winner that cannot print still silences every *later* panic.
+What changed is that such a run can no longer pass. DDR-1019's `panic_stage`
+field was gated behind `g_panic_extra`, which increments **only in the loser
+branch of the CAS** — so a *lone* silent panic printed nothing at all: no banner
+(no `GLOBAL_FORBIDDEN` trip), no `panics_silent=`, no `panic_stage=`, and on a
+PASS `boot_test.sh` deletes the capture. **The run went green with a panicked CPU
+in it.** The predicate is now `g_panic_extra || g_panic_stage` (the winner sets
+`g_panic_stage` the instant it claims the latch), and `panic_stage=` is in
+`GLOBAL_FORBIDDEN`, so a claimed panic fails its gate either way. M1 proven,
+173 gates × 2 CI suites green with the pattern live. **The watchdog is still not
+built and is still the right deferral.**
+
+### 1.5 — CI efficiency refactor: CONFIRMED SAFE, with two hazards that must be handled
+
+The operator asked for explicit confirmation **before** implementation, and for
+any structural reason the workflow is shaped this way to be stated rather than
+silently changed. Queued as item 5 (after this checklist and RUN_EXPERIMENT);
+this is the confirmation, not the change.
+
+**The redundancy is real, and larger than described.** Every one of the 10
+`build-and-boot` shards independently runs (`ci.yml:80-119`): `apt-get install`
+of the full toolchain, `rustup toolchain install nightly` + component + target,
+`make toolchain-check`, `make smoke-selftest`, `make musl`, `make lwip`,
+`make image`, `make ci-probe-rodata-check`, then its own shard. So it is **10
+identical kernel compiles per CI run**, plus 10 apt installs and 10 rustup
+installs.
+
+**No structural reason blocks sharing the build.** Checked rather than assumed:
+no gate assigned to a shard rebuilds the kernel or alters its flags. The one
+gate that does — `smoke-fs-liveness`, which rebuilds with `BSP_LIVENESS=1` — is
+**already excluded from the matrix for exactly that reason** (DDR-777/790). So
+the premise holds.
+
+**Hazard 1 — `make` is mtime-driven, and this is the failure that matters.**
+Each `smoke-*` target has `$(IMG) fat-image sfs-image` as prerequisites.
+`actions/download-artifact` does not reliably preserve mtimes, so a downloaded
+`build/pradyos.img` can appear *older* than the checked-out sources and make
+will rebuild it — either silently keeping the cost, or worse, **producing a
+different binary than the build job tested**. That second outcome is not a
+performance regression, it is a correctness one: this project's statistical
+arguments (DDR-1009's twelve-run table, DDR-1023's 20/20, DDR-1010's 36/36) all
+rest on knowing which runs shared one binary.
+
+**Which is why the refactor should make that structural rather than weaken it:**
+have the build job publish `sha256sum build/kernel.bin`, and have each shard
+**assert the hash it downloaded matches** before running a single gate. Today
+"all 10 shards ran the same binary" is inferred from them compiling the same
+source; afterwards it would be *checked*. That is a net gain in rigor, not a
+trade against it.
+
+**Hazard 2 — `smoke-selftest` must stay per-shard.** It is a setup step in every
+shard **by deliberate design** (DDR-785): a shard whose gates trust the boot
+harness must have checked the harness first. It is host-only and cheap. Do not
+fold it into the build job.
+
+**Unchanged, as instructed:** `fail-fast: false`, the 3-independent-greens rule,
+and every gate's timeout, sentinels and test logic. Toolchain caching (apt +
+rustup) carries neither hazard — it cannot change what is built — and is the
+safer half to do first.
+
+---
+
+## SECTION 2 — OPEN DEFECTS
+
+None of these is closable by effort alone. Each is waiting on evidence, and each
+has an armed instrument that makes the next occurrence diagnostic.
+
+| # | Symptom | State | Operator decision? |
+|---|---|---|---|
+| **OPEN-1** | `smoke-surfdestroy` intermittently misses `PRADYOS_SURFDESTROY_CHURN_OK` | Routes 2 and 3 **CLOSED** (DDR-1000, DDR-990). **Route 1 OPEN**: a CI-only hang whose recorded stopping point is `SYSFSTAT OK`. DDR-1009 §2 found a capture stopping at exactly that point on a *different* gate that **panicked** — so route 1 is not always silent, and DDR-994's "a hang prints nothing" framing is too strong. A stopping point is not a cause. Local reproduction is structurally unable to settle it. | NO — but see §1.2, which is the decision this feeds |
+| **OPEN-2 — third CI occurrence, resolved to DDR-1006's site** | `smoke-rtc-smp`, shard 5, `7392d0e` (2026-09-02) | **RIP RESOLVED BEFORE MATCHING, per DDR-1019's rule.** `rip=0xFFFFFFFF8000AE37` → **`isr_dispatch`**; `bt=0xFFFFFFFF8000027A` → **`isr_common.gs_kernel_in`**; the separate panic dump's backtrace is `schedule` ← `sched_ap_enter` ← `smp_ap_entry`. That is **DDR-1006's AP-timer-ISR shape** — **not** DDR-1019's `idt.c:697` halt loop and **not** DDR-1010's `sys_mmap` path. **Second, independent confirmation it is not DDR-1019's:** that producer sets `g_panic_extra`, which surfaces `panic_stage=` in the heartbeat block, and no heartbeat in this capture carries it. **DDR-1049 makes this test strictly stronger for FUTURE captures, and narrows what it proved for THIS one:** at the time, absence of `panic_stage=` excluded only a panic in which something *lost* the CAS — it could not exclude a lone silent winner, because the field was gated behind `g_panic_extra`. Since DDR-1049 the field prints whenever the latch is claimed at all, so from now on its absence excludes *any* claimed panic. The conclusion for this capture is unchanged (DDR-1019's producer is by definition a loser, so `g_panic_extra` would have been set) — but the reasoning was narrower than it read. Accompanied by `[vblk] compl wait timeout unit=2 dest_cpu=3 dest_dticks=0` — cpu 3 frozen at `ticks=72` with `if=0`, the DDR-981 signature, at a site DDR-981 does not cover. **Attribution limit, stated:** unlike the `smoke-nethammer` case, `kernel.bin` was **not** bit-identical to the previous tip — `7392d0e` shipped `SYS_POLL`. So this is not exonerated by diff. What can be said: `sys_poll` is not on the AP timer ISR path, `smoke-rtc-smp` uses neither poll nor epoll, and the signature predates the change. **Symbol resolution caveat (§INV.18):** resolved against a *local* rebuild of `7392d0e` (`a411e1b1b765e15e`); CI's published hash could not be read back out of the job log, so binary identity rests on DDR-1023's established bit-for-bit reproducibility rather than on a direct comparison. | NO |
+| **OPEN-2** | `[apfreeze]` in CI | **The label covers at least THREE distinct producers** (DDR-1019). Resolve any new RIP against its own binary before matching: DDR-1019's is the panic-arbitration *loser's* halt loop at `idt.c:697`; DDR-1006's runs through `sched_tick`; DDR-1010's through `sys_mmap`. The original (DDR-981, `yield()` spinning with IF clear) is genuinely fixed. **Local reproduction is EXHAUSTED** — 56 clean runs across the two kernels that matter (36/36 post-probe, 20/20 pre-probe, DDR-1023), including the exact binary the failure was first seen on. The old "~1 in 4" was one session's small sample and has not held up; stop quoting it as a rate. **AND A REPLACEMENT NUMBER NOW EXISTS — DDR-1062, the first CI-side bound.** The window starts at `32cb8ad`, because DDR-1049 is what made counting CI greens *mean* anything: before it a lone CPU that panicked and died before its banner left every channel empty and a run could go green with a panicked CPU in it. **MEASURED: 42 `pradyos-ci` suites at or after that commit, across 19 distinct SHAs — ZERO `[apfreeze]`, ZERO `panic_stage=`, ZERO `gs FAIL`.** All 42 count, **including the 4 reds** (a red suite still ran the global forbidden scan, so counting only the 38 greens would UNDERSTATE the evidence), and **every red is attributed and none is an AP freeze** — the load-bearing check, because a red left unread could *be* the artefact. **95% upper bound 6.9% per suite**; `P(0 in 42 | p=0.25) = 5.7e-6`, so DDR-1009's 25% is **refuted for the current kernel**, and even 10% is unlikely at `p=0.012`. **NOT CLOSED and no mechanism named:** a rate under 6.9% is still a rate, 42 observations cannot separate "fixed" from "rare", and these are 42 *suites over 19 SHAs*, **not 42 binaries** — many are docs-only and share a kernel. **Next step: nothing, until an artefact appears.** The local route is exhausted, the CI route is armed and self-diagnosing, and the rate is now bounded too low to manufacture occurrences. DDR-1006 §7's "which loop iteration" was assessed and **deliberately not built** — it needs always-on per-iteration counters on exactly the paths where the race lives, and an instrument that can *move* OPEN-2 is worse than none. | NO |
+| **OPEN-12** | `*** NEXUS KERNEL PANIC *** / component: NEXUS isr` | **Root-cause candidate found and fixed** (DDR-996): `sched_exit` left a thread linked on its per-CPU runqueue and both reap paths unlinked only the all-threads ring, so a TCB could be freed while a queue still pointed at it. 16/16 victims measured, mutation-checked. **NOT closed**: OPEN-12's *original* capture lost its RIP to the interleaving DDR-979 later fixed, so identity is unproven and matching on `component:` alone would be colour-matching. Closes on a clean campaign, not on the fix. | NO |
+| **OPEN-13** | `[kheap] double-free … objsize=0x80` → KHEAP PANIC | **Instrument BUILT and mutation-proven** (DDR-1024): the line now carries `freed_by=` and `now_by=`, the first and second frees' return addresses, captured at the public `kfree`/`pcb_free`/`cap_free`/`ipc_free` boundary. `objsize=0x80` is a generic 128-byte class, not a dedicated cache, so "size class → structure" does not resolve. **One CI capture, no mechanism named — NOT a fix.** The next occurrence is diagnostic: resolve BOTH addresses against the exact binary that produced the log. | NO |
+| **`smoke-nethammer` intermittent** | timeout on CI **shard 3**, now **twice** — DDR-1009's twelve-run table, and again on `c58f9c2` (2026-09-02) | **Root cause NOT established.** It is one of the four signatures in the DDR-1009 pooled measurement — twelve independent CI suite-runs of one provably identical kernel binary, 9 green / 3 failed, at four gates with four different signatures. Named here so it lives in one place rather than only in a CI comment thread. **Not a release blocker** on its own reasoning: the gate is strict and gating, so a recurrence reddens its suite and cannot pass silently. **Second occurrence adds three facts and no mechanism.** (a) Same gate, same shard, same signature — a timeout, not a hang: heartbeats run unbroken `t=1000`→`t=23500` with ticks advancing, `rqdepth` 1-3, **no `[apfreeze]` and no panic**, so the kernel is alive for the whole window and the sentinel simply does not arrive. (b) It cannot have been caused by the commit it landed on: `git diff --name-only 2ad4a0f c58f9c2` is five files with **zero** under `kernel/`, `user/`, `arch/` or `third_party/`, so `kernel.bin` was bit-identical. (c) The DDR-1035 `if: always()` hash assertion passed on the red shard (`kernel.bin: OK`), which is how (b) was confirmed from CI rather than inferred. One `workflow_dispatch` re-run taken — the single re-run permitted when a failure names a subsystem the diff does not touch. **Still no mechanism.** **THIRD OCCURRENCE 2026-09-03**, `c8c93ed`, shard 3, gate 20 of 21 — the same signature exactly: heartbeats unbroken `t=16000`->`t=23500`, ticks advancing, `rqdepth` 1-2, no `[apfreeze]`, no panic, `kernel.bin: OK`. That commit changes **three `.md` files and nothing else**, so the binary was bit-identical to `9d8fcb9`, which was 32/32 green an hour earlier. **New, and only available since DDR-1049:** the absence of `panic_stage=` in every heartbeat now positively excludes a lone silent panic — before that fix it could not, because the field was gated behind `g_panic_extra`, which increments only in the loser branch of the CAS. Three occurrences is a better-characterised signature, not a cause. **ROOT-CAUSED 2026-09-03 — DDR-1055, and this row's "root cause NOT established" above is now WRONG and left only for its history.** The gate's required sentinel `net hammer spawned=2/2` was assembled at `kernel/main.c:1836` from THREE unlocked console calls, and a ring-3 probe's `write(2)` landed between two of them: the capture `build/gatelogs/nethammer.log.fail-3786` reads `[user] ELF loaded (embedded); net hammer spawned=PRADYOS_SOVEGRESS_AUDITED` — every character the kernel meant to print, in a line no gate can match. That is why the heartbeats run unbroken with no panic and no `[apfreeze]`: **the kernel was never unwell; the sentinel was.** Reproduced locally 1 in 3 on an idle machine. `console_line_lock()` did NOT cover it — it excludes only other holders of `g_line_lock`, and `kwrite`, the ring-3 write path, never took it, although `console.h`'s own header presents the lock as the answer to exactly this. Fixed by emitting the line as ONE `kwrite` (`kline`), which is atomic against every printer because they all take `g_console_lock`. **The `workflow_dispatch` re-run on the IDENTICAL SHA `c8c93ed` came back 32/32 green** (run 33726808985), and `74119a0` is green on both suites — so the failure does not reproduce on re-run, which is the test that separates a transient from a real one. Transient is now measured rather than inferred; the cause is still not named. **FOURTH OCCURRENCE READ, NOT ASSUMED — DDR-1062.** `b7ff2a3` appears as one of the four reds in DDR-1062's 42-suite window, and its capture was **read** rather than counted: heartbeats clean to `t=23500` with `ymask` climbing, `rqcpus=2`, `preempt` advancing and `pmmfree` flat — **a healthy SMP kernel timing out on a sentinel match**, which is DDR-1055 exactly and **not** a frozen CPU. That reading is what let DDR-1062 count the reds as observations rather than discard them, and it is the direct evidence this row's own long history was reaching for: the kernel was never unwell, the sentinel was. The DDR-1055 fix has since landed. | NO |
+| **`smoke-actiondel` intermittent** | `[actiondel] FAIL — no measured line in the capture`, CI shard 1, `c8c93ed` (2026-09-03) | **First occurrence in this shape; root cause NOT established.** The boot itself **PASSes** (`saw 'NEXUS KERNEL OK'`) and the full 120 s window is consumed, then the gate's checker finds no measured line — so the kernel booted and the DDR-1016 probe's output never appeared. It landed on the **same docs-only commit** as the third `smoke-nethammer` timeout, in a *different* CI suite, with `kernel.bin: OK` on both shards: the binary is bit-identical to the 32/32-green `9d8fcb9`, so neither failure can have been caused by that commit. Two independent gates timing out on one push is **consistent with** runner contention, but that is a hypothesis and has **not** been measured. `smoke-actiondel`'s probe does a ring-3 spin with zero syscalls (DDR-1016: a force-pending probe that busy-polls is killed by `AGENT_RATE_MAX`), so it is timing-sensitive by construction — named as a place to look, **not** as a cause. **A MECHANISM NOW EXISTS — DDR-1055 §9, and it is the same defect one ring out.** This gate's post-check greps the WHOLE measured line (`PRADYOS_ACTIONDEL_OK id=... st=... ctrl=... keep=...`), and `user/actiondeltest.c:172` builds that line from nine `wr()`/`wrdec()` calls, which is **ELEVEN `write(2)`s** because `wrdec` emits one digit per write (`id=258` costs three) — eleven console-lock acquisitions and ten gaps — so one concurrent printer splits it and the grep finds nothing, which is precisely `no measured line in the capture` on a boot that PASSed. **Likely, NOT established:** that capture's own `PRADYOS_ACTIONDEL_OK` line has not been read back to confirm a splice is in it, and a matching mechanism is not an attribution (DDR-1019's rule). The ring-3 fix is a separate change with its own gate evidence. **Not a release blocker on its own reasoning:** the gate is strict and gating, so a recurrence reddens its suite and cannot pass silently. **The `workflow_dispatch` re-run on the identical SHA came back 32/32 green**, so this did not reproduce either. **FIXED 2026-09-03 — DDR-1056**, the ring-3 half DDR-1055 §9 named and deferred. `user/include/uline.h` emits a measured line in ONE `write(2)`, plus an `FD_CONSOLE` gather in `sys_writev` sized **256 = `fd_write_user`'s own chunk size**, deliberately not musl's 1024 `BUFSIZ`, because a larger buffer would hold `g_console_lock` and interrupts across 4x today's maximum UART busy-wait on the hottest output path. **Proved deterministically rather than by a rate campaign**, because this one does not reproduce locally so a campaign would measure nothing: the kernel already counts what the fix changes (DDR-948's `writes=` on `sys_exit`) and the probe went **13 -> 3, exactly -10**. DDR-1056 also found the same defect in **musl**: `__stdio_write` always passes two iovecs and `sys_writev` calls `fd_write_user` per iovec, so *every* musl program here was affected — compositor, PRISM, term, cmusl, agent_base, init. Also fixed: this gate's failure path dumped NOTHING, which is why the `c8c93ed` log cannot settle whether that failure was this defect — a spliced line and a probe that never ran look identical from outside. **STILL UNATTRIBUTED:** the fix does not retroactively explain that capture, and DDR-1056's gather has no counter of its own and no mutation covers it (a mutant reverting it passes every gate, since the split is invisible unless a race is won). | NO |
+| **`resched FAIL ipis=0 ran=1 idle=1`** | intermittent, `smoke-rqstress-liveness` | **A documented sampling ambiguity with no rate bound.** The property under test HELD (`ran=1` — the unblocked thread ran); the IPI term is a stronger claim layered on top, and `idle_seen` is sampled just before `sched_unblock`, so a CPU can leave idle in between and a correct system FAILs. **Deliberately not collapsed to SKIP** — that would green the gate and delete the coverage DDR-1014 built, the trade DDR-1012 and DDR-973 each had to undo. A second sample (`idle2=`) is armed and mutation-proven. **CORRECTED 2026-09-06 — DDR-1064: `idle2=1` DOES NOT mean a real scheduler defect, and this row said so on DDR-1030's authority.** `idle_after` is sampled *after* `sched_unblock` returns and `o->idle` is live, so a CPU can **enter** idle between the kernel's kick loop and that sample — DDR-1030 closed DDR-1004's window (a CPU *leaves* idle before the call) and opened its mirror image. The instrument had the same class of race it was built to settle: the DDR-1046/DDR-1060 shape a third time. **FIRST REAL OCCURRENCE:** CI 34003737145, shard 4, `smoke-smppreempt`, `e9ed2c9` — `ipis=0 ran=1 idle=1 idle2=1` on a **docs-only** commit with `kernel.bin: OK` (bit-identical binary), and `ran=1` says the property under test HELD. **Consistent with a correct kernel; NOT evidence of a defect.** **FIXED:** `sched_unblock` now records what its OWN loop saw at the instant it ran — `kidle=` (an idle non-self CPU visible to the kernel) and `kkick=` (a kick actually delivered) — on the TCB rather than a global, because `sched_unblock` runs from MSI-X interrupt context and another CPU's unblock would clobber a global. **Read those, not `idle=`/`idle2=`** — with DDR-1074's correction: **`kidle=0` exonerates** whatever the racy fields say, and **`kidle=1 kkick=1`** indicts the *counter* rather than the kick. **`kidle=1 kkick=0` is AMBIGUOUS and was WRONGLY documented as the convicting reading** — `smp_resched_one` (`smp.c:310`) returns 0 for the BSP and the recording loop carries no `!is_bsp` filter, so a **BSP-only-idle boot prints it on a CORRECT kernel**; `sched.c:1848-1854` said so in the same commit that added the fields. Resolve that reading from the capture's `[hb]` heartbeats and `-smp` width, not from the line. **A third field (an idle *kickable* CPU was visible) was designed and REFUSED — DDR-1074 §3:** the mutation that would prove it is DDR-1014's own defect, which breaks on the idle BSP *before* reaching the idle AP, so the field would read 0 and **falsely exonerate**; recording it soundly needs a post-loop scan, i.e. DDR-1030's race verbatim.
+
+**FIRST REAL CAPTURE — DDR-1074.** CI 34023281940, shard 7, `smoke-smp`, tip `0da019f` (**docs-only**, one file, and the shard printed `kernel.bin: OK`): `ipis=0 ran=1 idle=1 idle2=1 **kidle=0 kkick=0**`, i.e. **no kick was owed and the FAIL is a sampling artefact** — consistent with a correct kernel. That closes this row's standing 'no `kidle=`/`kkick=` capture exists yet'. **Two occurrences are now on record (`e9ed2c9`, `0da019f`) and no rate is measured** — DDR-1062's 42-suite window carried zero `resched FAIL`, so these are the first two. **The verdict is still deliberately unchanged**, and DDR-1074 §5 sharpens why: the narrower change (FAIL only on the convicting reading) avoids DDR-1064's SKIP objection but **has no sound reading to gate on**. M1 forced-proof on kernel `4786243a1f71a021` printed `ipis=1 ran=1 idle=1 idle2=1 kidle=1 kkick=1`; reverting returns `d19cd33755330510` bit-for-bit. **Verdict deliberately unchanged** (DDR-1064 §6) — collapsing to SKIP would delete DDR-1014's coverage. **IT REPRODUCED — DDR-1064 §1b.** The `workflow_dispatch` re-run on the **identical SHA** came back red too (CI 34004069448, shard 7, `smoke-smpsched`, `kernel.bin: OK`), same signature, **different shards, different gates** (shard 4 `smoke-smppreempt` on push, shard 7 `smoke-smpsched` on dispatch). **CORRECTED 2026-09-06 — the denominator is 3, not 2:** `e9ed2c9` ran THREE suites and the pull_request one was **GREEN**, so it is **2 red of 3**. An earlier wording said "two suites, both red" without noting the third passed, which made the cluster look tighter than it is. **The signature is not deterministic on this binary** — frequent enough that a re-run met it, not so reliable that a suite cannot pass. Two facts follow and only two: **it is not a one-off** (the re-run is the test that separates a transient from a real one, and unlike `smoke-nethammer`/`smoke-actiondel` this one did *not* come back green), and **the gate is incidental** — the rq-3 proof runs on every boot and `resched FAIL` is in `GLOBAL_FORBIDDEN`, so it reddens whichever SMP gate boots first on a shard; neither owns the assertion, so do not read the shard number as locating anything. **STILL NOT A RATE AND NOT A DEFECT:** the same binary was green across many suites on `0089e08`/`fe3c2d9`/`c8b041b`, and DDR-1062's 42-suite window recorded **zero** `resched FAIL` among its four attributed reds. Two occurrences clustered on one SHA's two runs is a cluster, and no mechanism is named or guessed. **No rate has been measured**, still the honest limit; **and the new fields are proven wired, NOT proven on a genuinely failing path**, since no such occurrence can be manufactured locally — but a signature this frequent is one `kidle=`/`kkick=` will meet soon. **FIRST RESULT ON THE INSTRUMENTED KERNEL IS A NEGATIVE:** `3c6c2f3` (`d19cd33755330510`) ran two suites, **both green**, so no `resched FAIL` fired and **no `kidle=`/`kkick=` capture exists yet**. Recorded so the silence reads as *not yet triggered* rather than *fixed* — DDR-1064 changes only what the FAIL branch PRINTS, touches no scheduler behaviour, and therefore cannot have removed the signature. | NO |
+| **`smoke-blk-integrity` silent stop** | boot stops mid-line at `[svc] exit`, local, 2026-09-06, kernel `dde6c5d10748842d` | **First occurrence in this shape; root cause NOT established and NO fix (§NON-NEGOTIABLE 3).** The capture was read and **every detector is silent**: zero `[apfreeze]`, zero `panic_stage=`, zero `[percpu] gs FAIL`, zero `NEXUS KERNEL PANIC`, zero `resched FAIL`, zero `[vblk] compl wait timeout`. **It is a STOP, not a slowdown, and that was measured rather than assumed** — against a passing capture of the same gate on the same binary: both reach `[boot-load] PRISM.ELF` at essentially the same tick (**t=361 pass / t=386 red**), so the early boot is not slow; the passing boot then advances to **t=28,627** while the red one produces **no further tick stamp at all**. **A timing reading was formed and discarded before being written down:** a *passing* run consumes 180 s of its 180 s window, which looks like zero margin, but this gate declares a `FORBIDDEN_SENTINEL` and per DDR-1043 is therefore never early-exit eligible — it always runs the full window by design, so elapsed carries no information here (§INV.8 checked, not skipped). **NOT OPEN-2:** DDR-1010's local reproduction on this same gate carried `[percpu] gs FAIL`, absent here; and OPEN-1 route 1 is also a silent hang but on `smoke-surfdestroy`, so reading this as either would be colour-matching (DDR-1019's rule). The permitted **single re-run** on the identical binary came back **green**. **NARROWED 2026-09-06 BY MEASUREMENT — THE CHANGED CODE DID NOT EXECUTE IN THE FAILING BOOT.** The red capture contains **zero** `PRADYOS_AGENT_START`, while the passing capture of the same gate on the same binary reaches it at **line 413 of 466** and prints `PRADYOS_AGENT_EXEC_OK path=/AETHER.TXT n=22 first=P last=D` on the next line. DDR-1066's diff lives **entirely inside the post-`AE_APPROVED` path of `agent_base.c`**, so the boot stopped before any of it could run and the new FAT32 write never happened there — a positive statement from the capture, not the "the diff is elsewhere" hand-wave DDR-1042 warns about. **STILL NOT FULLY EXONERATED:** `agent_base.elf` is embedded in the kernel image, so a **layout or size** effect is not excluded — only a **behavioural** one. One occurrence is not a rate, and no local campaign is run to make one — DDR-1023 recorded that route exhausted for this gate's family and DDR-1061 §2 costed what a reachable N buys. **Next occurrence:** compare its last tick stamp against the pass capture's t=28,627, and check `waiters=` (DDR-1060) and `kidle=`/`kkick=` (DDR-1064) if either prints. | NO |
+| **smoke-agents preempt frozen** | `rqdepth=11`, two sentinels missing | **NOT REPRODUCED since instrumentation** (DDR-968, live since `ea4601e`). The witness line prints only on a *failing* boot, so a green boot emits none of it — there is no red artefact to read. The gate is gating (shard 2, not excluded), so a recurrence would redden its suite. Reopens on the first `PRADYOS_AGENT_WITNESS_WAIT` line. | NO |
+
+---
+
+## SECTION 3 — CORRECTIONS: DEFERRAL ENTRIES THAT ARE NOW STALE
+
+`docs/BUILD_TRACKER.md` §"Pre-approved exceptions" still carries three
+`[DEFERRED]` entries for work that **has since shipped**. They are corrected
+here; the tracker rows themselves are superseded by this section.
+
+| Tracker entry | Correction |
+|---|---|
+| `ACTION_SEND_IPC` — *"no ring-3 IPC surface … there is no `SYS_IPC_*`"* | **BUILT — DDR-1033.** `SYS_IPC_SEND` / `SYS_IPC_RECV` are NSI 98/99, gated by `smoke-sendipc`, mutation-checked M1/M2/M3 on distinct kernel hashes. Addressing is by roster slot (the same index `SYS_AGENT_ROSTER` already uses, so no new namespace). Two layers: `is_ipc` on `struct tcb` (kernel-set at spawn, never mintable, zeroed in `sched_create` per §NON-NEGOTIABLE 10) plus a `RES_IPC` capability handle. **See §4.1 for what it still does NOT do.** |
+| `F#73 sovereign NL UI` — *"blocked on … no windowed terminal client, and `sys_exec.c:47` discards argv/envp"* | **Both blockers are gone.** The windowed terminal client is `user/term.c` (DDR-1027, `smoke-ctrlaltt`); argv/envp marshalling is DDR-1032 (`smoke-execve-argv`), with PRISM's `run` passing arguments through (DDR-1032b). F#73 itself remains unbuilt, but it is now unbuilt *work*, not a blocked item. |
+| `ACTION_RUN_EXPERIMENT` — *"`CAP_EXEC` is a `#define` checked nowhere … no `is_exec` on `struct tcb`"* | **BUILT — DDR-1034.** `CAP_EXEC` is now checked (`RES_EXEC` + `cap_authorize`) and `is_exec` is a real `struct tcb` field, kernel-set at spawn and zeroed in `sched_create`. The executor is a bounded integer stack machine with **no memory opcodes at all**, so "no access outside its own stack" is structural rather than a guard. Results go to a separate kernel-written ring; the DDR-812 lockbox is untouched. Gated by `smoke-runexp`, mutation-checked. **Residual, same as SEND_IPC:** the AETHER action path does not call it, so an approved `RUN_EXPERIMENT` has no automatic effect. |
+
+---
+
+## SECTION 4 — MEASURED, RECORDED, NOT FIXED
+
+Residuals that were found by measurement during this work, stated rather than
+quietly carried. Each is bounded and none blocks user testing.
+
+**A row that later gets fixed is struck through and kept, not deleted** — the
+measurement that found it is the reason the fix exists, and deleting it would
+make the section read as if the residual had never been there. §4.5 is the first
+such row (fixed by DDR-1065).
+
+### 4.1 — The AETHER action path does not yet call `SYS_IPC_SEND`
+
+DDR-1033 built the ring-3 door. It did **not** wire the AETHER executor to it.
+So an approved `ACTION_SEND_IPC` still has **no automatic effect** — a process
+must call the syscall itself. This is the honest residual of that DDR and is
+recorded here so "SEND_IPC is shipped" is not read as more than it is.
+
+**CORRECTED 2026-09-06 — DDR-1066: this row was accurate about SEND_IPC and far
+too narrow about the cause.** It read as though SEND_IPC were the exception. In
+fact **the one shipped agent executed *nothing***: `user/agent_base.c` contained
+**zero** `SYS_OPEN` and **zero** `SYS_WRITE` in either branch, and on approval it
+`printf`'d the path and the data — `AETHER_AGENT_EXEC WRITE_FILE
+/tmp/aether_test.txt` followed by `PRADYOS_AGENT_VERIFIED`, which reads in a
+serial log exactly like a completed write. **`PRADYOS_AGENT_VERIFIED` is the data
+string, and it is one of `smoke-aether`'s four required sentinels**, so the
+end-to-end gate's execute arm asserted on a `.rodata` literal and could not fail
+for the reason it exists — the dead-arm class, in the **product** rather than in a
+gate. Nothing blocked it: `elf.c:320-321` gives the agent `CAP_FS_WRITE` and the
+FAT32 root, and `fat32_write` exists. The path would also have failed on its own
+terms — the volume's only directory is `::/DOCS`, so there is **no `/tmp`**.
+**FIXED:** the agent now opens, writes, closes, **reopens without `O_CREAT`** and
+reads back, and prints the marker **from the read-back buffer**, so the sentinel
+the gate always required now means what the gate's comment always said. M1 (no
+write, print from the buffer) **reddens** `smoke-aether` with
+`AETHER_AGENT_EXEC_FAIL step=open_r rc=-2`; M2 (no write, print the literal — the
+pre-fix behaviour) **passes**. Both do the same filesystem work — none — so the
+only difference is where the bytes came from. **`ACTION_SEND_IPC` remains
+unwired, and this row is now accurate about that being the exception.**
+
+### 4.2 — The IPC capability is coarse by construction, and the limit is stated not implied
+
+Every roster-slot endpoint shares one `res_id`, so the capability grants *"IPC
+at all"*, **not** *"send to slot 3 but not slot 5"*. That is a real check and a
+coarse one. Per-slot `res_id`s are the extension if policy is ever wanted.
+Deliberate, documented in DDR-1033, not a gap discovered later.
+
+### 4.3 — `ACTION_SEND_IPC` auto-approves in sovereign mode with nothing to act on it
+
+Both deferred action types are **in** the enum, so `SEND_IPC` auto-approves in
+sovereign mode. This contradicts `aether.h`'s own policy for the six types it
+omits. Left alone deliberately: the enum is append-only wire format, and the
+entry is bounded and audited (DDR-1021).
+
+### 4.4 — `vmm_protect_range`'s `invlpg` is UNCOVERED
+
+DDR-1031 M2 (drop the `invlpg`) **passed every arm**, and the DDR's own
+prediction was wrong: arm B is decided by the child's page tables, not the
+parent's TLB, and arm C's write succeeds under a stale writable entry too. A
+missing invalidation is only visible as a write that should have faulted and did
+not — and on this kernel the observer dies (`idt.c:703` goes straight to
+`sched_exit`; there is no SIGSEGV handler). **Recorded as an uncovered line, not
+claimed as tested.** A probe of this shape cannot cover it.
+
+### 4.5 — ~~`ptnode_in_use` underflows on every fork~~ — **FIXED, DDR-1065**
+
+**CLOSED 2026-09-06.** DDR-1003 recorded the mechanism (`++` per **frame**, `--`
+per **mapping**) and could not fix it, because §NON-NEGOTIABLE 3 forbids a fix
+with no artefact and **no gate read the counter across a fork**. DDR-1065
+produced the artefact and then applied DDR-1003 §5.2's own narrow fix.
+
+**The artefact:** `SHAREDPTE before=0 after=18446744073709551615` —
+`0xFFFFFFFFFFFFFFFF`, i.e. **−1, wrapped from ONE fork**, because
+`kheap_outstanding()` is legitimately 0 at that point in boot. (DDR-1065's own
+draft said the wrap was undemonstrated and would need ~2^64 forks; reading the
+output refuted that, and it is recorded as a correction rather than rewritten.)
+
+**§5.1's warning was heeded, not overtaken.** The ordinary leak-gate shape —
+fork, child writes, both exit — is balanced and passes on the broken kernel, so
+`smoke-sharedpte`'s child **exits without writing**: the probe differs from
+`cow_selftest` by exactly one line, the omitted `vmm_cow_fault`, and that
+omission is what makes the arm live. It uses the real fork path, per DDR-1014's
+rule that a proof which paraphrases the kernel tests the paraphrase.
+
+**Fix:** `pmm_free_pages` returns 1 = released / 0 = reference dropped;
+`ptnode_free` decrements only on a real release. `void`→`int` is
+source-compatible absent `warn_unused_result`, so all **132** call sites stand.
+DDR-1003 §5.2's *other* candidate is named and **refused** — having
+`vmm_cow_fault` call `ptnode_free` would decrement where nothing was released and
+merely move the imbalance. **No leak is fixed and none existed**: frames were
+always released correctly; the counter was wrong. Gate `smoke-sharedpte`
+(shard 4, strict).
+
+### 4.6 — The compositor takes ~28 wall seconds to become ready
+
+DDR-1029, measured with a `SYS_CLOCK` stamp: **30 full-screen 1024×768
+render+present operations at ~0.93 s each**, all inside `set_ambiance`
+(`compositor.c:990`) — 4 announce transitions + 1 settle × 6 frames. Nothing
+about the frame loop is pathological. **No fix**: the 24 announce renders each
+emit a `PRADYOS_AMBIANCE <name>` sentinel and gates assert on those, so cutting
+the renders while keeping the prints would make every one of those assertions
+vacuous — the exact failure DDR-1012 removed from `smoke-horizon` and DDR-973
+from `smoke-fat32-multicluster`. Options named (leave it / lower `frames` /
+assert on framebuffer readback); none is a one-line change.
+
+**This is user-visible.** A desktop that takes half a minute to appear is a
+legitimate first-impression concern for user testing. It is a *known cost with a
+named mechanism*, not a defect, which is why it is NO rather than YES — but the
+operator should know it before showing the desktop to anyone.
+
+### 4.7 — The mouse press latch coalesces, and a missed RELEASE is still missed
+
+DDR-1026's latch is a **bitmask, not a counter**. Repeated clicks between two
+polls still coalesce, and a release edge that ends between polls is still lost.
+Fixing that needs an event queue, not a latch. `SYS_MOUSE_POLL` exposes current
+state by design (DDR-941).
+
+### 4.7b — `mouse_inject.sh`'s readiness sentinel falls through silently
+
+Found while building `smoke-ghostclick` (DDR-1036 §9.3b). The injector polls for
+its readiness sentinel and, on expiry, **injects anyway** — so a sentinel that
+never appears does not fail the gate; the injector proceeds and clicks against
+whatever geometry happens to be in the log. A gate whose readiness condition
+silently never held still reports a pass or a normal-looking failure.
+
+The ceiling is now a parameter (`READY_TIMEOUT_S`, default 60 — unchanged for
+the seven existing callers). **The fall-through is deliberately unchanged:**
+making an expired sentinel fatal is the right shape, but the other gates may
+depend on proceeding and changing that days from a release is a wider blast
+radius than the DDR that found it should take. Post-1.0, and it needs each of
+the seven callers checked rather than a blanket change.
+
+### 4.8 — `mouse_inject.sh` cannot tell a live window from a ghost
+
+**CORRECTED 2026-09-05 — THE REPAIR IS BUILT AND GATED (DDR-1036); this entry
+read "named, not built" and was stale.** The compositor now announces a window's
+destruction as `PRADYOS_WM_GONE id= title=`, **keyed on ID and not on poll
+index**, and `mouse_inject.sh:131` consumes it: `resolve_geometry` returns False
+and prints `[inject] target gone title=… — not clicking`. `smoke-ghostclick`
+gates it, and it exists *because* DDR-1036 §5 caught its own first claim being
+wrong — DDR-1028 had already fixed the timing that made window C a ghost, so the
+scenario no longer occurred on `smoke-wmclose` and both planned mutants would
+have passed every gate. A dedicated gate that manufactures the scenario was the
+only way to test the fix.
+
+Two defects were found while building it, both worth carrying: an assertion
+pattern that **could never match** (the real line carries `id=` between `GONE`
+and `title=`), and `mouse_inject.sh`'s readiness loop **falling through
+silently** after 60 s — left in place because seven gates may depend on that
+behaviour, but parameterised as `READY_TIMEOUT_S` and recorded as residual
+§4.7b rather than quietly changed.
+
+*(Original entry, retained.)* The serial log is append-only, so
+`resolve_geometry` still resolves the last published geometry for a window that
+has since closed — and clicks it. Measured at 45 clicks on a dead window in one
+capture (DDR-1028). Gate-harness only; no product impact.
+
+### 4.9 — SFS in-place rewrite of an existing file returns short
+
+DDR-1020 M4: a plain rewrite of an existing SFS file returns short for both a
+longer *and* an equal-length payload, while `unlink` + recreate succeeds. The
+ADR-032 write budget is **excluded** as the cause, because the `unlink`+create
+succeeded at the same point. **Unexplained, unfixed.** A mutant that fails to
+perform its own defect is indistinguishable from a gate that catches it — this
+was found that way.
+
+### 4.10 — `resched FAIL ipis=0 ran=1 idle=1` is a documented sampling race
+
+DDR-1030. The property under test **held** (`ran=1` — the unblocked thread ran);
+the IPI term is a stronger claim about mechanism layered on top. `idle_seen` is
+sampled just before `sched_unblock` and a CPU can leave idle in between, so no
+kick is owed and a correct system FAILs. **Deliberately not turned into SKIP** —
+that would green the gate and delete the coverage DDR-1014 built, the trade
+DDR-1012 and DDR-973 each had to undo. A second sample (`idle2=`) is armed and
+mutation-proven. **CORRECTED 2026-09-06 — DDR-1064:** `idle2=0` means sampling
+artefact, but `idle2=1` does **NOT** mean a real scheduler defect — it is racy in
+the opposite direction (a CPU can *enter* idle after `sched_unblock` returns), so
+DDR-1030 closed one window and opened its mirror image. **Read `kidle=`/`kkick=`
+instead**, recorded by `sched_unblock`'s own loop at the instant it ran.
+
+---
+
+### 4.11 — `lock_stat` cannot see `mnt_lock`, the OPEN-1 route 1 prime suspect
+
+**UPDATED 2026-09-04 — DDR-1060 CLOSES THIS, and found a larger defect in the
+same instrument.** `mnt_lock` is now accounted via `lock_wait_begin/end`, so it
+is visible in the `[apfreeze]` dump. DDR-1047's reasoning for leaving it out was
+correct and is **preserved rather than overridden**: a spin wait is cycles this
+CPU burned and a yield wait is wall time during which it ran other threads, so
+the two are still never in one column — they get **different line shapes**. What
+made it addable is that `waiters` is a **dimensionless count**, and a count is
+commensurable across both where cycles are not.
+
+**The larger defect:** `spin_lock_contended()` recorded its slot only *after*
+acquiring, so the table only ever described CPUs that eventually won — it was
+blind to the wedged AP it exists for. Fixed in the same change; M0 (the pre-fix
+tree under a forced wedge) reports eleven other locks and omits the stuck one
+entirely. **Still not claimed:** no cause is named for OPEN-1 or OPEN-2.
+
+*(Original entry follows.)*
+
+
+DDR-1047 ships spinlock contention accounting (hit counts and **wait time**;
+hold time deliberately dropped — an always-on `rdtsc` pair in `spin_lock` could
+*move* OPEN-2 rather than measure it, which is the hazard DDR-1010 recorded about
+its own probe). Two sites are **not** covered, both found by enumeration:
+
+- `sched.c:787` is a **trylock** in the work-stealing victim scan. It never
+  waits, so there is nothing to time — correctly out of scope. Consequence:
+  steal-path runqueue contention is invisible.
+- **`vfs.c:34` `mnt_lock` is not a `spinlock_t` at all** but a sleep-mutex over a
+  bare `busy` byte. So the one lock CLAUDE.md's own Group A row and DDR-994 name
+  as the unbounded wait on **OPEN-1 route 1's path** is the prime suspect this
+  instrument cannot see.
+
+Not folded in because the quantities are **not commensurable**: a spin-wait is
+cycles this CPU burned, a yield-wait is wall time during which the CPU ran other
+threads. One `waitavg` column holding both invites a specific, plausible, wrong
+comparison with a real number behind it — the DDR-1042 failure mode exactly.
+DDR-994's threshold instrument covers the *stuck* case there; `lock_stat` would
+have covered the *cumulative* one, and only the first exists.
+
+**No `smoke-lockstat`, deliberately** — the dump prints only on `[apfreeze]`,
+which is in `GLOBAL_FORBIDDEN`, so any assertion on it is unreachable on a green
+run. Do not create that gate.
+
+### 4.12 — `apt_prepare.sh`'s SIGPIPE race: fixed, cause of its CI silence unexplained
+
+DDR-1048. The shipped resolve check was `apt-cache policy "$p" | grep -q
+'Candidate:'` under `set -o pipefail`. `grep -q` exits at the first match and
+closes the pipe, `apt-cache` dies of SIGPIPE (141), and the pipeline is non-zero
+**although grep matched** — so a package that resolves fine is marked missing.
+Measured `PIPESTATUS=(141 0)`; which package loses the race varies per run.
+Fixed by capturing the output once and matching it as a string: **0/20 failures**
+against every observed run failing for the old form.
+
+**What is NOT established:** CI has been **green** with the racy form, and this
+does not claim CI was about to break. Why the race has not fired on the runner is
+unexplained. A pipe-buffer explanation was proposed and then **refuted by
+measurement** (`apt-cache policy llvm` is 211 bytes, far inside the 64 KiB
+buffer). Recorded as an open question rather than given a plausible answer.
+
+### 4.13 — A DDR-1045 premise that does not reproduce
+
+DDR-1045 states *"apt-get update exits non-zero if ANY configured repo fails"*.
+Measured on Ubuntu 24.04 (DDR-1048): `apt-get update` exits **rc=0 with four 403
+Forbidden** vendor responses, and also with **zero** sources configured. The
+DDR-1045 *fix* is unaffected — it tolerates a failing update and then proves the
+index usable by resolving every requested package — but its stated rationale is
+partly unverified, and the runner's observed exit 100 is left unexplained rather
+than explained away.
+
+---
+
+### 4.14 — I/O APIC stage D: deferred, and the blocker is an absent ACPI `_PRT` parser
+
+DDR-1050. The Group A row reads as unbuilt work; most of it is built. DDR-874's
+`kernel/apic/ioapic.c` ships MADT parsing, MMIO mapping, `ioapic_route()` and an
+Interrupt Source Override table, live at `gsi_base=0 redirs=24 overrides=5`.
+**Stage D is the cutover only.**
+
+Three findings, all from measurement rather than reading the row:
+
+1. **The scope is not one line.** Four sites claim ISA IRQs — `console.c:236`
+   (**IRQ4, COM1 RX, unconditional** — the path every gate uses to feed PRISM),
+   `idt.c:694` (IRQ1 keyboard), and **PCI INTx fallbacks** in `virtio_net`,
+   `virtio_input` and `virtio_blk`.
+2. **The blocker.** There is **no ACPI `_PRT` parser**. A MADT ISO table
+   describes *ISA* overrides, not which GSI a PCI device's INTA# lands on, so
+   those three fallbacks cannot be routed correctly. They are dormant here
+   (every virtio device takes MSI-X, measured: vec 54, 56–59) — but **dormant is
+   not absent**; the fallback exists for a machine without usable MSI-X.
+3. **The benefit is already delivered.** `ioapic.c`'s own header says the I/O
+   APIC exists so per-CPU affinity has somewhere to be expressed — and MSI-X
+   already provides that for every device carrying real traffic (DDR-714C1/C3,
+   DDR-771). Stage D would additionally move only the PS/2 keyboard and COM1
+   serial: two low-rate lines whose affinity nobody needs, on the highest-risk
+   path in the tree.
+
+DDR-1050 §5 records the safe subset and its two traps so they need not be
+re-derived: the **EOI must flip to `lapic_eoi()`** (`idt.c:700` calls `pic_eoi`
+unconditionally, so the second keystroke would never arrive), with the flag set
+*before* the line is armed; and a gate asserting "keys still work" **passes with
+the 8259 still in charge**, so it needs a GSI marker plus a PIC-mask readback.
+
+**Not a defect report** — DDR-874's work stands and is exercised. What is
+deferred is the cutover.
+
+---
+
+### 4.15 — KASLR: deferred on sequencing, not on a blocker
+
+DDR-1051, and unlike §4.14 this is **a judgment call, not an absent subsystem**.
+KASLR is buildable here. The stated precondition is met — W^X is CI-green.
+
+Measured costs: the kernel is `-fno-pic -fno-pie -mcmodel=kernel` at a pinned
+`KERNEL_VBASE`, and `llvm-readelf -S build/kernel.elf` reports **zero relocation
+sections**, so a virtual slide needs a relink *and* a boot-time relocation
+applier that does not exist. It must land in **both** boot paths in one commit
+(§INV.13 — PT_HI is implemented twice) or one arm of `smoke-iso-x86` breaks.
+
+**The reason for deferral is neither of those.** KASLR would degrade the one
+diagnostic discipline every open defect depends on: §INV.18 and DDR-1019 both
+require resolving a RIP against its own binary, `[apfreeze]` has **three**
+producers told apart *only* by RIP, and OPEN-1, OPEN-2, OPEN-12 and OPEN-13 are
+all read that way. Under a slide, every future CI artefact needs the slide value
+to interpret — so the kernel must print it. Printing it every boot returns it to
+the attacker; printing it only under a debug flag means **CI stops testing the
+configuration that ships**, which is DDR-1040's vacuity trap.
+
+The marginal value is also low *here*: W^X including the identity alias
+(DDR-1046), SMEP (DDR-1040) and SMAP (DDR-1041) are shipped and green, and they
+remove the primitives KASLR only makes harder to aim.
+
+**Physical-only KASLR** (randomise `KERNEL_PHYS`, keep `KERNEL_VIRT`) needs no
+relocations and leaves RIP resolution intact — recorded as the cheaper buildable
+variant. But it defends a physical-write primitive DDR-1046 has just removed by
+making the alias RO+NX.
+
+**Revisit once OPEN-1/2/12/13 close.** **Not claimed:** that KASLR is
+unimportant, or that this kernel is hardened without it.
+
+### 4.16 — Privacy mode refuses I/O but does not tear the connection down
+
+**DDR-1070 fixed the defect and this is the residual it deliberately left.**
+
+The defect: `aether_privacy_active()` was consulted in `sys_sock_connect` and
+nowhere else, so a proxy socket that was **already open** when the operator
+switched privacy mode on kept sending and kept receiving. Measured, not reasoned
+— `grep privacy third_party/lwip-port/lwip_port.c` returns nothing at all, and
+both I/O syscalls check slot ownership only. That matters concretely rather than
+theoretically: `agent_base.c`'s live branch connects to `10.0.2.2:11434` and then
+writes a prompt and reads a response over that socket. Fixed, gated on
+`smoke-privacy-netfilter` phase 4, M1/M2 mutation-checked.
+
+**What is NOT done:** privacy-on now refuses reads and writes, but it does **not
+close the socket** and sends no FIN or RST, so a stateful observer on the wire
+still sees an ESTABLISHED connection.
+
+**Why it was left, and it is a decision rather than an oversight.** DDR-802's own
+phase-3 rule is that privacy mode must be **releasable** — *"a privacy mode that
+cannot be switched off is a different defect, not a stricter version of this
+one"*. Refusing I/O is reversible and `PRIVACY_OFF` restores the same handle
+(phase 4d asserts exactly that); destroying connections is not, and the operator's
+toggle would become asymmetric and destructive. Whether the operator wants a
+destructive kill-switch is a **decision** in the DDR-793 security-posture class
+this project defers to them, not a gap to close unilaterally.
+
+`sys_sock_close` is also deliberately still permitted under privacy mode:
+refusing it would strand slots and leak the very connections the operator wants
+stopped.
+
+**Also recorded here:** `SYS_NET_REVOKE` (Group C) is a **refusal, not a gap** —
+see §5.3's Group C paragraph and DDR-1070 §6.
+
+---
+
+## SECTION 5 — DEFERRED FEATURES
+
+### 5.1 — Pre-approved exceptions (CLAUDE.md §PRE-APPROVED EXCEPTIONS)
+
+These were approved for deferral in advance. All are logged in
+`docs/BUILD_TRACKER.md`; reasons reproduced here unchanged. **None requires an
+operator decision before user testing** — they were already decided.
+
+| Item | Why deferred |
+|---|---|
+| Intel HDA audio | optional — no QEMU HDA path in CI |
+| Wayland/wlroots compositor | superseded by the shipped custom C framebuffer compositor |
+| CMake/Makefile hybrid | post-1.0, awaiting operator sign-off (DDR-843) |
+| Apple Silicon / m1n1 | post-1.0 — the aarch64 ISO uses the U-Boot path |
+| `arch/aarch64` full port | **boot-only scope per ADR-034** — the ISO uses the boot-only kernel |
+| `arch/riscv64` full port | boot-only scope per ADR-034 |
+| Cloud bridge activation | post-1.0 (DDR-793) — a security-posture change, not a feature toggle |
+| `ACTION_BROWSE_WEB` | needs the cloud bridge above; outbound egress from an agent-capable OS is a posture decision |
+| `ACTION_CAPTURE_FRAME` | post-L7, no hardware path |
+| `ACTION_SCAN_ENVIRONMENT` | post-L7, needs SLAM3R |
+| `ACTION_QUERY_SCENE` | post-L7, no scene graph |
+| `ACTION_PARSE_DOCUMENT` | needs a 64 MiB OCR model; no model-shipping path exists |
+| `ACTION_EXEC_CODE` | needs a sandboxed interpreter subsystem |
+| `CAP_OCR` / `CAP_SCENE` | capability bit defined, enforcement deferred — no subsystem behind it |
+| SFS on-disk free-tree | in-memory reclaim shipped (DDR-762-v2); on-disk persistence post-1.0 |
+| NVMe completion IRQ | poll-mode is sufficient for the ISO (DDR-774a/b/c) |
+| Rust rewrite | not in scope |
+
+**Multi-arch is the one worth reading twice.** ADR-034 scoped aarch64 and
+riscv64 as **boot-only**, and DDR-999 assessed full parity and concluded it is
+**not achievable** in this timeframe. The ISOs for those architectures package a
+kernel that boots and does not run userspace. If the release is described to
+users as "multi-architecture", that description must carry the boot-only
+qualifier. **That is a wording decision, and it belongs with §1.2.**
+
+### 5.1b — Two scope confirmations from the operator (the `CLAUDE.md` contradiction is now RESOLVED)
+
+**Rust rewrite: deferred to a future release.** The project stays in C for v1.
+This matches the existing `[DEFERRED: not in scope]` entry; no conflict.
+
+**Quantum layer: RESOLVED 2026-09-02 — operator decision on PR #17, Part A.**
+This item was previously flagged as an unreconciled contradiction between the
+operator's statement and `CLAUDE.md` §PHASE 3. It is now settled, and settled in
+a more precise way than "no quantum scope exists":
+
+**Quantum *hardware* integration is WITHDRAWN — a speculative future-research
+note, not a backlog item.** The operator's reason is architectural, not
+priority: quantum hardware is reached over a remote cloud API with queue-time
+latency of seconds to minutes, against a kernel that schedules at microsecond
+scale, so no version of it improves this OS's own efficiency. `CLAUDE.md`
+§PHASE 3 has been rewritten to say so; `docs/BUILD_TRACKER.md` row 10 is marked
+WITHDRAWN. Nothing was ever built toward it — no `SYS_QPU_*`, no `CAP_QUANTUM`,
+no `smoke-qpu*` — so nothing is unwound. **The two sources no longer disagree.**
+
+**Post-quantum *cryptography* is the opposite ruling, and it is MANDATORY v1
+SCOPE.** Same comment, Part B, which explicitly supersedes the earlier
+sequencing. Build against NIST's finalized standards — **ML-KEM (FIPS 203)** and
+**ML-DSA (FIPS 204)** — to the same bar as everything else here:
+mutation-checked, zero warnings, a real non-vacuous gate. Candidates named by the
+operator: ML-DSA-signed tamper-evident ledger (F#76's audit chain), PQC-signed
+capability tokens, ML-KEM key exchange for `SEND_IPC` if agent messaging ever
+crosses machines.
+
+**If it cannot be built to that bar in the time available, the required output is
+an explicit, specific blocker** — the DDR-1038 shape, which named exactly why
+`SYS_FUTEX` is unbuildable here (no `CLONE_VM`, no `MAP_SHARED` file backing,
+fork COWs everything writable, so the two sides would wait on two different
+physical words). An honest blocker is an acceptable outcome; filler is not.
+
+**Queue position, from the operator, explicit:** OPEN-2 → the rest of this
+checklist → `RUN_EXPERIMENT`-adjacent + Groups A–F → **PQC** → ISO, `main`
+promotion, `v1.0.0` tag. PQC lands *before* the ISO is built, not after.
+
+**STATUS: this sub-item is CLOSED as a contradiction and REOPENED as scope.**
+It is no longer a docs discrepancy; it is a feature with a queue position.
+
+#### 5.1b.1 — PQC pre-assessment: four facts, measured 2026-09-02
+
+Gathered now rather than at queue position 4, because one of them changes the
+whole gate design and finding it late would waste the build.
+
+**1. There is no SHA-3 anywhere in the tree.** `kernel/crypto/` holds SHA-256,
+SHA-512, X25519, Ed25519, HKDF, AEAD — and zero Keccak / SHAKE / SHA-3.
+**Both** ML-KEM and ML-DSA are built on SHAKE128/256 for expansion, sampling and
+hashing, so a Keccak-f[1600] core is a *prerequisite*, not an extra. It is
+bounded work (~200 lines plus round constants) but it is the first thing.
+
+**2. Size is not the constraint.** `kernel.bin` is 1,175,946 B against the
+1,572,864 B gate — **396,918 B of headroom**. ML-DSA-44 code plus its tables fit
+comfortably. (Signature 2420 B, public key 1312 B, so the *data* is small too.)
+
+> *Borne out, and the numbers here are the PRE-work ones — left as written
+> because this is a dated assessment, not a live figure.* The primitives landed
+> (DDR-1052/1054/1057/1058) and `kernel.bin` is now **1,278,346 B**, i.e. the
+> work cost **102,400 B** and left **294,518 B**. The prediction was right; note
+> that it consumed **26%** of the headroom it was measuring, so "size is not the
+> constraint" is a statement about ML-DSA-44 specifically and must not be
+> re-used as a general claim about what still fits. See §6 for the live figures.
+> **This pairing is also how a stale headroom got into `CLAUDE.md`:** the size
+> was updated there and the subtraction was not.
+
+**3. Authoritative sources are reachable, by exactly one route.**
+`raw.githubusercontent.com` serves arbitrary public files (measured: 200,
+13,617 B for the Dilithium reference `sign.c`). The GitHub **API** is scoped to
+this repository and returns 403 for others, and **csrc.nist.gov is blocked by the
+proxy entirely** (403 CONNECT / no route). So reference code and test vectors must
+come through `raw.githubusercontent.com`, and any path must be probed rather than
+assumed — several plausible KAT paths returned 404 while a known file returned
+200, i.e. the repo layout is not what a guess produces.
+
+**4. THE GATE MUST BE KNOWN-ANSWER, NOT ROUND-TRIP. This is the load-bearing
+constraint and it is why this note exists.** A gate that signs a message and
+then verifies the signature **passes on a completely wrong implementation** —
+any self-consistent homegrown scheme satisfies sign→verify, including one that
+is not ML-DSA at all and offers none of its security. That is precisely the
+dead-arm class this project has now hit nine times: a field whose only reachable
+value is the passing one.
+
+Conformance to FIPS 204 can only be shown against **fixed known-answer
+vectors**: a pinned seed and message, with the expected public key, secret key
+and signature (or their hashes) committed to the repository and asserted
+byte-exact — the same shape DDR-1044 arm D used for the machine-check bank
+decode, and for the same reason.
+
+**Consequence for planning:** the build order is Keccak/SHAKE → KAT acquisition
+and pinning → ML-DSA → the application (ledger signing / capability tokens). If
+the KAT step cannot be completed, the honest output is a DDR-1038-shaped blocker
+naming *that* — not an unverified implementation with a round-trip gate.
+
+#### 5.1b.2 — STEP 1 IS DONE: Keccak/SHAKE shipped and gated (DDR-1052)
+
+`kernel/crypto/keccak.c` implements Keccak-f[1600], SHA3-256/512 and
+SHAKE128/256, gated by **`smoke-shake`** (shard 6, strict). Gate count 173 → 174;
+`kernel.bin` 1,175,946 → **1,192,330 B** against the 1,572,864 B gate.
+
+**Fact 4 was honoured literally.** All 14 expected values were generated by
+Python's `hashlib` — an implementation that is not this one — and pinned
+byte-exact; `hashlib` itself was cross-checked against the published FIPS 202
+constants, so the chain ends in public knowledge rather than in one library. The
+round constants and rho offsets were **derived and then proved** by
+re-implementing the permutation in Python against `hashlib` before any C was
+written — and the first generator produced `RC[0] = 0x03` instead of `0x01`,
+which is exactly the silent total break that hand-transcribing 24 magic 64-bit
+constants produces.
+
+**The vector set is the design.** The empty/`"abc"` values catch almost nothing;
+the load-bearing arms are the **absorb rate boundaries** (167/168/169 for
+SHAKE128, 135/136/137 for SHAKE256) and a **squeeze past the rate**. M2 — a
+plausible padding bug that fires only when `len % rate == rate-1` — **passes
+every standard smoke vector and fails at vector 7**, and was re-applied to the
+shipped kernel so the *gate* is proven: `rc=2`, capture carrying
+`PRADYOS_SHAKE_STUB first_bad_vector=7`, reverting bit-for-bit.
+
+**Remaining, and the risk is named:** ML-DSA KATs **cannot** come from `hashlib`
+(Python has no ML-DSA), and `csrc.nist.gov` is blocked by the proxy. If pinned
+FIPS 204 vectors cannot be obtained through the one measured route, the required
+output is a DDR-1038-shaped blocker naming that — not a round-trip gate.
+
+#### 5.1b.3 — STEP 2 IS DONE: the vectors exist, and the predicted blocker did not (DDR-1053)
+
+The paragraph above was right about both premises and **wrong about the
+conclusion**. NIST publishes the ACVP vectors in **its own GitHub repository**,
+and `raw.githubusercontent.com` is reachable — a fact §5.1b.1 had already
+measured but not pursued. `tools/ci/fetch_mldsa_kat.py` regenerates
+`kernel/crypto/mldsa_kat.h` from `usnistgov/ACVP-Server`, refusing any vector
+whose shape is not seed 32 / pk 1312 / sk 2560, so a file that parses but is the
+wrong thing is not silently accepted. `tools/ci/mldsa_ref.py` is a verified
+Python oracle reproducing tcId 1-5 byte-exactly.
+
+#### 5.1b.4 — STEP 3 IS DONE: ML-DSA-44 keyGen implemented and gated (DDR-1054)
+
+`kernel/crypto/mldsa.c`, gated by **`smoke-mldsa`** (shard 0, strict). Gate count
+174 → **175**; `kernel.bin` 1,204,618 → **1,229,194 B**.
+
+**Fact 4 honoured again, and harder:** the expected values are NIST's own, and
+keyGen was chosen *because* it is deterministic — a sign-then-verify gate would
+pass on any self-consistent wrong implementation. Nothing is transcribed: the
+twiddles are derived as `zeta^brv8(i)` and the invNTT scale as `256^(q-2) mod q`,
+which **evaluates to 8347681**, the literal the reference carries.
+
+**The finding worth carrying: the KATs do not cover Power2Round's boundary.**
+Measured, not assumed — `r0 == 2^(D-1)` occurs in **0 of 2048 coefficients**
+across both vectors, so a mutant flipping that comparison **passed the ACVP arm
+outright**. A direct 10-case boundary arm now covers it, reporting a negative
+index so the two arms stay distinguishable. A second mutant passed and is an
+**equivalent** one — at ML-DSA-44 `k == l == 4`.
+
+M1 and M3 both redden the gate on the **shipped kernel**, on different arms, and
+the revert is bit-for-bit.
+
+**NOT DONE:** no `sigGen`/`sigVer`, so the audit ledger is still SHA-256 and
+nothing here is post-quantum *authenticated*; ML-DSA-44 only; no constant-time
+claim; and the kernel itself does not contain ML-DSA — the probe does. The
+signed-ledger application named in CLAUDE.md §PHASE 3 is blocked on signing and
+on nothing else; those vectors are at the same reachable source.
+
+#### 5.1b.5 — STEP 4 IS DONE: ML-DSA-44 signing implemented and gated (DDR-1057)
+
+`ML-DSA.Sign_internal` (FIPS 204 Alg. 7), deterministic variant, byte-exact
+against NIST's own ACVP vectors. `smoke-mldsa` now asserts both
+`PRADYOS_MLDSA44_KEYGEN_OK` and `PRADYOS_MLDSA44_SIGN_OK`.
+
+**The predicted blocker did not exist, for the third time in this section.**
+FIPS 204's default `rnd` is random and a randomized signature can only be checked
+by verifying it — fact 4's trap. ACVP publishes **deterministic** groups, and
+among them `signatureInterface: internal, externalMu: false`, i.e. Sign_internal
+itself. Python oracle first, C second.
+
+**Two branches NIST's vectors do not cover, both measured**: `Decompose`'s
+`lo == GAMMA2` (0 of 28,672 calls — a mutant flipping the comparison passed the
+KAT arm; now covered by 12 direct cases) and the `hint_total > OMEGA` rejection
+(not reachable without a crafted key; recorded uncovered, and the encoder now
+re-checks its buffer bound at the write rather than relying on it).
+
+**Remaining in PQC scope:** `sigVer` — this OS can produce a post-quantum
+signature and cannot yet check one — and then the application, an ML-DSA-signed
+audit ledger on F#76's chain, which is what §PHASE 3 actually names. Both are
+unblocked; the sigVer vectors are at the same reachable ACVP source. **And a
+constant-time review, which matters most for signing and has not been done.**
+
+#### 5.1b.6 — STEP 5 IS DONE: the ML-DSA-44 primitive set is COMPLETE (DDR-1058)
+
+`Verify_internal` shipped and gated; `smoke-mldsa` asserts all three sentinels.
+
+**The verify vector set is mostly NEGATIVE and that is what makes it worth
+having:** 3 must verify, 12 must not, so an always-accept implementation passes
+every positive test. Both verdicts are pinned; a mutant that always accepts and
+one that always rejects both fail.
+
+**Two guards measured as uncovered, one of them unfixably so.** The hint-encoding
+validation IS covered (three pinned rejects are malformed hints). The
+`||z||inf < gamma1 - beta` bound is NOT, by any of NIST's twelve negatives — and
+a synthetic forgery cannot cover it either: **measured before writing the test**,
+an out-of-range `z` is rejected by the hash comparison whether or not the bound
+exists, so such a test would pass on an implementation with no bound at all.
+Recorded, not decorated.
+
+**Remaining in PQC scope: the APPLICATION.** §PHASE 3 names an ML-DSA-signed
+tamper-evident ledger on F#76's audit chain. The primitives are done and gated;
+the ledger still uses SHA-256 and nothing calls ML-DSA in anger. Also still
+outstanding: a constant-time review of signing, and the `||z||inf` gap above.
+
+#### 5.1b.7 — THE APPLICATION IS BLOCKED, and the blocker is key custody (DDR-1059)
+
+§PHASE 3's first-named application is an ML-DSA-signed tamper-evident ledger.
+**Assessed and deliberately not built.**
+
+Everything that would normally be the blocker was measured so it cannot be
+offered as the reason later: the crypto is built and gated; keygen 0.26 ms /
+sign 0.39 ms / verify 0.27 ms; `mldsa.o` ~60 KB against 294 KB of headroom; and
+the right shape is ONE signature over the chain head, not 4096.
+
+**The blocker is that there is no key custody.** No TPM, no PCRs, no secure boot
+— and `kernel/syscall/sys_vault.c:22` holds `g_owner_seed` as 32 literal bytes
+compiled into the image, which `ags_sign` already signs with. **Anyone holding
+the ISO holds the private key.** A ledger signed with it could be edited,
+re-chained, re-signed, and would verify — no assurance over the existing SHA-256
+chain, while looking stronger. Security theatre.
+
+Three unblocking routes are named in the DDR; the cheapest real one is
+out-of-band publication of the public key at install time, which is a
+**deployment decision** (the DDR-793 class), not a coding task.
+
+**Release-note wording:** "post-quantum signature primitives,
+NIST-vector-verified, and a tamper-evident audit chain" is TRUE. "Post-quantum
+signed audit ledger" would be FALSE.
+
+### 5.2 — Group F: AETHER agent behaviours
+
+**The structural fact first, because the tracker got this wrong twice
+(DDR-1022):** there is exactly **ONE** agent program, `user/agent_base.c`. The
+roster is generic active-bits, and a slot is filled by `SYS_SPAWN_AGENT`
+launching that template with a task. The kernel holds no per-agent identity. So
+*"11 unbuilt agents"* means **11 domain behaviours, not 11 programs** — and a
+stub would gate vacuously.
+
+Also corrected by DDR-1022, having been listed as unbuilt when they were not:
+
+- **F#68 metric lockbox** — **SHIPPED + GATED** (`smoke-lockbox`, shard 7,
+  strict, DDR-812).
+- **F#76 tamper-evident ledger** — **SHIPPED + GATED TWICE**
+  (`smoke-auditchain` shard 0 + `smoke-auditchain-tamper` shard 4, both strict).
+
+Deferred behaviours: F#66 `architect_agent`, F#67 `healer_agent` (RUFLO), F#69
+`inventor_agent`, F#70 `tournament_agent`, F#71 subconscious world model, F#72
+`verifier_agent`, F#75 lineage memory — each a behaviour with no subsystem
+behind it; F#75's gate would duplicate `smoke-agentmem`.
+
+**F#74 capability discovery is blocked differently, and deliberately.**
+`agent_caps` exists on `struct tcb` (DDR-982) but is initialised to 0, never
+granted, and has no syscall to read it. Building it **reverses DDR-982's
+deliberately withdrawn per-slot enforcement**. That withdrawal was a decision,
+so un-deferring F#74 is also a decision — but it is post-1.0 either way, so it
+is not in Section 1.
+
+**Section 3C action types close at 6 shipped + 2 deferred + 0
+buildable-and-unbuilt**, and that tally has been wrong twice (DDR-1017 said
+"3 of 8", DDR-1018 said "4 of 8"; both were wrong because
+`ACTION_SPAWN_PROCESS` is not one of the eight and `ACTION_REWRITE_AGENT_CODE`
+was already gated by DDR-842). Shipped: `READ_FILE`, `DELETE_FILE`,
+`QUERY_MEMORY`, `REWRITE_AGENT_CODE`, `PROPOSE_HYPOTHESIS`, `EVOLVE_GENOME`.
+`SEND_IPC` — see §3 and §4.1. `RUN_EXPERIMENT` — see §3.
+
+**THIS SECTION WAS RIGHT AND `CLAUDE.md`'s GROUP F TABLE WAS NOT — DDR-1072.**
+Measured 2026-09-06 against the Makefile, `tools/ci/gate_shards.txt` and the
+probe sources: all six shipped types have a probe that submits **that exact
+type** and a gate that is sharded and not excluded — `smoke-actionread` (1),
+`smoke-actiondel` (1), `smoke-actionquery` (6), `smoke-coderewrite` (7,
+**strict**), `smoke-actionhypo` (3, both hypothesis and genome). Every one of
+those eight rows in the table carried `gate per type` with **no marker**, so the
+checklist and the table have disagreed about Section 3C since DDR-1021 and
+nothing in the tree could see it. The table is now corrected.
+
+**AND THE TWO DEFERRED TYPES ARE A TRAP — read this before closing either.**
+Each sits beside a **strict-tier, green, registered** gate whose *name* matches
+the type and whose *claim* is something else:
+
+- `smoke-sendipc` (shard 7) gates DDR-1033's ring-3 **door** (`SYS_IPC_SEND` /
+  `SYS_IPC_RECV`, NSI 98/99). `grep 'ACTION_SEND_IPC\|SUBMIT_ACTION'
+  user/ipctest.c` returns **one line — a comment saying the type was deferred**.
+- `smoke-runexp` (shard 8) drives `QEMU_PROBES=exp`, DDR-1034's bounded stack
+  machine. `grep -rn ACTION_RUN_EXPERIMENT kernel/ user/` outside `aether.h`
+  returns **one line — a header comment**.
+
+DDR-1071 §5 refused a mechanical "registered gate ⇒ row must carry a marker"
+checker because it would **redden on correct in-progress work** (a false
+negative). These two are the **false positive**, and it is the worse direction:
+a false negative is a red check someone investigates; a false positive is a row
+that silently stops being work.
+
+**`CAP_EXEC` is the one of the four that IS wired**, and to a different consumer
+than the backlog row names: `sys_experiment.c:35/:45` mint and `cap_authorize`
+it, gated by `smoke-runexp`, whose deny arm holds `CAP_EXEC` and lacks only
+`is_exec` (so the two checks are independently live). `ACTION_EXEC_CODE` / PRAX
+— the row's stated purpose — remains a pre-approved exception. The other three
+bits are read **nowhere**: `agent_caps` is written once (`sched.c:1122`, to 0),
+and `aether.h:24-30` deliberately omits the action types they gate.
+
+### 5.3 — Unbuilt backlog by group
+
+**RE-MEASURED 2026-09-05 at `c8b041b`** by grepping the Makefile for each named
+target, because declaring something unbuilt without grepping has been wrong four
+times in this project — and the 2026-09-01 measurement below had itself gone
+stale in four places, which is the DDR-1063 §7b pattern a fifth time. **MISSING =
+no such target exists.** Every row here is post-1.0 work, none blocks user
+testing, and none requires an operator decision.
+
+**Group A — kernel completeness. FOUR OF THE SEVEN CLAIMS BELOW WERE WRONG:**
+
+| target | measured | note |
+|---|---|---|
+| `smoke-smep` | **EXISTS** | DDR-1040, shard 5. Pins its own `-cpu qemu64,+smep` because the TCG default reports `smep=false`, so a CPUID-guarded implementation would have been a permanent no-op on the CPU every gate runs on |
+| `smoke-smap` | **EXISTS** | DDR-1041, shard 0 — **was not even listed here**; the old row folded SMAP into `smoke-smep` |
+| `smoke-mce` | **EXISTS** | DDR-1044, shard 4. The old row named it **`smoke-mc`**, which has never existed |
+| `smoke-wxkernel` | **EXISTS** | the real kernel-W^X gate; the old row named **`smoke-wx`**, which has never existed (DDR-1040 found the same wrong name in CLAUDE.md's Group A row). The DDR-757 residual it refers to is FIXED — DDR-1046 |
+| `smoke-ioapic` | MISSING | **assessed and deferred with the blocker named** — DDR-1050: no ACPI `_PRT` parser, so PCI INTx fallbacks cannot be routed |
+| `smoke-kaslr` | MISSING | **assessed and deferred** — DDR-1051, a sequencing judgment, not a blocker |
+| `smoke-lockstat` | MISSING | **deliberately not built** — DDR-1047/DDR-1060: the dump prints only on `[apfreeze]`, which is in `GLOBAL_FORBIDDEN`, so any assertion on it is unreachable-passing on a green run. **Do not create it** |
+| `smoke-schedtimeout` | MISSING | the primitive is **already built** (DDR-955 `sched_block_timeout()`); its four call sites are covered by their own gates |
+
+**Also new since the 2026-09-01 measurement and absent above:** `smoke-shake`
+(DDR-1052, Keccak/SHA-3/SHAKE, shard 6) and `smoke-mldsa` (DDR-1054/1057/1058,
+ML-DSA-44 keyGen + sign + verify, shard 0) both **EXIST** — the post-quantum
+primitive set §PHASE 3 makes mandatory v1 scope. And `smoke-sfs-btree-smp4`
+**EXISTS and is now registered** (DDR-1061, shard 5), so it has left the
+exclusion list (§5.4).
+
+> **Two Group A rows are ALREADY BUILT and must not be rebuilt.** The
+> demand-paged user stack is **ADR-038** (`vmm_stack_fault`, `vmm_cow.c:144`;
+> `USER_STACK_EAGER_PAGES = 8` is measured, not guessed), gated by
+> `smoke-stack-demand` — `smoke-lazystack` does not exist. And "scheduler
+> timed-block" is **DDR-955**: the shipped call is `sched_block_timeout()`
+> (`sched.c:1434`) with four callers. The genuinely unbounded wait is elsewhere
+> and is tracked as DDR-994: `mnt_lock` (`vfs.c:25`) is a bare
+> `while (exchange(&m->busy,1)) yield();` with no deadline.
+
+**Group B — storage (`smoke-sfs-persist`, `smoke-sfs-gc`, `smoke-numa` EXIST;
+the rest MISSING):** `smoke-sfs-boot-root` (provisioned SFS as default boot
+root — this one blocks the Group F audit-persistence row), `smoke-sfs-largefile`,
+`smoke-sfs-deepslot`, `smoke-sfs-quota`, `smoke-ext4-write`, `smoke-nas`,
+`smoke-pmmpolicy`, `smoke-nvmeirq`.
+
+**Group D update (DDR-1037):** `smoke-poll` now EXISTS — `SYS_POLL` (NSI 102)
+shipped, mutation-checked M1/M2/M3 on distinct kernel hashes. Two limits recorded
+rather than papered over: **console `POLLIN` is unimplementable here** (this
+kernel has no console-input predicate under any name, so `poll()` on stdin can
+only report not-ready), and **`timeout < 0` has no gate arm** (blocking forever
+needs a second process to unblock it; the probe is single-threaded). It also
+**fixed a correctness bug in `epoll_wait()`**: the shared readiness predicate
+returned 0 for `FD_VFS`, so epoll on a regular file was answering wrongly —
+POSIX says a regular file never blocks.
+
+**Group C — networking (all MISSING).** `smoke-epoll` (proxy-socket
+epoll/select) is **assessed with its blocker named — DDR-1069**: a proxy socket
+is not a file descriptor, so `epoll_ctl` has nothing to be handed, and the real
+open question is what `fork` should do with an inherited socket handle whose every
+operation would then return `-EPERM`. **`smoke-netrevoke` IS NOT A GAP EITHER — it
+is a REFUSAL, DDR-1070 §6**, the DDR-1068 §2 class a second time: `sys_socket.c:36`
+carries DDR-734's decision in the source (*"Bounded, append-only — **no runtime
+revocation surface**; policy changes are a config edit + reboot"*), `netallow_add`
+only appends, and `sys_socket_register()` registers five syscalls and no revoke.
+**And a revoke built before DDR-1070 would have been security theatre:**
+`netallow_check` is **connect-only**, so removing a rule would not have severed a
+live connection — DDR-1070 fixed that half (privacy mode now refuses I/O on an
+already-open socket) and is a **prerequisite** for a meaningful revoke rather than
+a substitute for one.
+
+**`smoke-udp` is also narrower than the row implies, measured 2026-09-06:** UDP
+is compiled into the stack (`lwipopts.h`: `LWIP_UDP 1`, `MEMP_NUM_UDP_PCB 8`) and
+a real loopback send-to-receive round trip **already runs and is gated** —
+`lwip_port.c:304`'s `net_loopback_test()` binds port 7, `udp_sendto`s `"ping"` to
+`127.0.0.1`, and the recv callback prints `PRADYOS_NET_LO_OK`, which
+**`smoke-net-lo` requires** (Makefile:2095). What is missing is the **ring-3
+door**: `sys_socket_register()` registers five TCP-proxy syscalls and there is no
+`SYS_UDP_*`. That is DDR-1033's SEND_IPC shape (a kernel-internal implementation
+lacking only a ring-3 surface), not a missing subsystem — and it inherits
+DDR-1069's two design questions, because `struct proxy_sock` holds a `tcp_pcb *`
+plus `PS_*` states, so a UDP handle needs its own table or a union, and the
+`fork` ownership question is the same one. **Not built, not started; recorded so
+the row is not read as "no UDP anywhere".**
+
+Remaining and genuinely unbuilt: `smoke-tap`, `smoke-ipv6`, `smoke-tls`.
+
+**A NAMING COLLISION ON THAT LAST ONE, recorded before it misleads someone.**
+In this tree **`TLS` means Thread-Local Storage, not Transport Layer Security.**
+`user/tlstest.asm` is a PROC-D `SYS_SET_TLS` + `SYS_WRITEV` probe, and its
+sentinel `PRADYOS_TLS_OK WRITEV_OK` is a **required pattern of `smoke-user`**
+(Makefile:1472) — so a session grepping for "TLS" finds a green, shipped, gated
+`PRADYOS_TLS_OK` and could conclude a TLS shim exists. It does not:
+`grep -rniE 'mbedtls|ssl_|tls_handshake|X509'` over `kernel/`, `user/` and
+`third_party/lwip-port/` returns **nothing**. Same hazard class as DDR-1069's
+`fd(0..7)` (a proxy handle documented as a file descriptor) and DDR-1037's
+`SYS_POLL` vs `SYS_POLL_RESULT`. **`smoke-tls` is a planning name for unbuilt
+work and is NOT another DDR-1063 §7c instance** — §7c is about a name for work
+already *done*; counting this would inflate the class, the same call DDR-1069
+made for the other Group C names.
+
+**Group D — userspace (all MISSING except as noted).** `smoke-poll` was listed
+here as MISSING while the DDR-1037 paragraph immediately above said it EXISTS —
+**an internal contradiction inside this one section, now measured: it EXISTS**
+and is removed from the list. `smoke-readline` is MISSING **and should stay
+that way** (DDR-1039: the erase arm belongs on `smoke-shell`, where PRISM's line
+handling already runs; a separate gate would boot an OS to type one word).
+`smoke-futex` is MISSING with its blocker named (DDR-1038: a futex is a
+shared-memory word and this kernel has no way for two threads to share one).
+**`smoke-pipes` HAS NEVER EXISTED and is not a gap — DDR-1067 §1**,
+measured 2026-09-06 the same way `smoke-maximize` was: **pipes and redirection
+are already shipped and gated inside `smoke-shell`**, whose own PASS line reads
+*"redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB)"*. That
+is the **sixth** instance of a planning table naming a gate that never existed
+while the real coverage was somewhere else. **Quoting shipped 2026-09-06 —
+DDR-1067**, also on `smoke-shell`; job control and scripting are what actually
+remain of that Group D row.
+Remaining: `smoke-readline`,
+`smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
+(6-arg `mmap` ABI), `smoke-mmap-file`, `smoke-dynlink`, `smoke-iouring`,
+`smoke-sigaction`, `smoke-prism-ls`.
+**`smoke-jobctl` HAS NEVER EXISTED and is not a gap — DDR-1068 §1**, the seventh
+instance of this class: `&`, `jobs`, `fg` and `kill %n` are built (DDR-881/755)
+and gated inside `smoke-shell`, and **`wait` shipped 2026-09-06 (DDR-1068)** with
+a duration-controlled probe, because both obvious arms are vacuous. **`bg` is a
+RECORDED REFUSAL, not remaining work** — DDR-881 declined it in `prism.c:253`
+because there is no `setpgid`, no controlling terminal and no `SIGTSTP`/`SIGCONT`
+in `kernel/proc/signal.h` (four signals, checked), so there is nothing suspended
+to resume. **Scripting is what actually remains of that row.**
+**Shipped since the backlog was written:** `SYS_MPROTECT` (DDR-1031,
+`smoke-mprotect`) and `execve` argv/envp (DDR-1032, `smoke-execve-argv`).
+**PRISM `run` was never disabled** — DDR-973 §7; what ADR-024 §D5 deferred is
+narrower: init-driven fork+execve *respawn* of PRISM.
+
+**Group E — compositor. EVERY GATE IN THIS TABLE EXISTS AND IS CI-REGISTERED,
+and FIVE ROWS SAID OTHERWISE — DDR-1071**, measured 2026-09-06 against the
+Makefile *and* `tools/ci/gate_shards.txt` rather than inferred from any DDR.
+`smoke-modkeys` (shard 7, **strict**), `smoke-superkey` (shard 8, **strict**),
+`smoke-alttab` (shard 9), `smoke-perrestore` (shard 4) and `smoke-horizon`
+(shard 2) all ship, none is excluded, so all five run on **every** CI suite —
+while their backlog rows carried no completion marker at all. Four are complete
+against what their row asks; **`smoke-horizon` is HALF** — the bands are gated
+(and measure PIXELS, DDR-1012, because a sentinel-only check passes on a mutant
+that draws nothing) and the **animated mesh is still deferred**, so that row is
+corrected rather than closed. **The structural point (DDR-1071 §4):** a backlog
+row is updated by whichever session happens to touch it and is never swept, so a
+row whose work finished cleanly and drew no follow-up is exactly the one that
+stays stale — the §7b class is what this discipline produces by default, not a
+run of individual oversights. **A checker was assessed and deliberately NOT
+built (§5):** `smoke-horizon` is the counterexample in the same finding — a gate
+can exist and be registered while the row is legitimately half done, so the rule
+would redden on correct in-progress state, which is exactly what DDR-1063 said
+gets a check removed. **Group E now reads as: everything shipped and gated
+except the animated mesh and OPEN-1.**
+
+**`smoke-maximize` HAS NEVER EXISTED and is not a gap** — measured
+2026-09-06. Maximize at real display size shipped as DDR-1007 and is gated by
+**`smoke-wmmax`**, whose Makefile header reads *"Layer-7 maximize gate (DDR-719,
+retargeted by DDR-1007)"* and which asserts `w > 512` — that the target
+**exceeds the old `SURFACE_DIM_MAX` cap** — with the failure message *"DDR-1007
+did not take effect"*, plus a client-honoured arm. This section previously said
+maximize *"shipped as DDR-1007 under a different gate name"* **without naming
+it**, which left the reader to re-derive it; the name is now here.
+**`smoke-sharedpte` is now BUILT — DDR-1065** (shard 4). It produced the artefact
+DDR-1003 §5.1 designed it for — `after=0xFFFFFFFFFFFFFFFF`, the counter wrapped
+from **one** fork — and DDR-1003 §5.2's fix landed with it. **§4.5's warning that
+the obvious gate shape would pass vacuously was heeded, not overtaken:** a gate
+that merely forks and checks a balanced counter passes on the broken kernel, so
+the probe deliberately **omits** the `vmm_cow_fault` that would rebalance it, and
+that omission is what makes the arm live.
+**Shipped since:** all-edge resize (DDR-997), `SURF_EV_CLOSE` (DDR-998),
+per-window dock restore (DDR-1008), horizon bands (DDR-1012), Ctrl+Alt+T
+terminal (DDR-1027). The **vDSO callable reader row was a false gap** — DDR-1005:
+the ring-3 reader exists and is gated by `smoke-vdso` (shard 7, strict); only
+`vdso_entry.asm` is unbuilt, and that is a security-posture change (the user view
+is deliberately `VMM_NX`), not a checkbox.
+
+**Group F gates — NOT all missing in the same sense (corrected 2026-09-06,
+DDR-1072).** Genuinely unbuilt: `smoke-auditpersist` (needs the SFS boot root
+above), `smoke-agentexec`, `smoke-agentconc`, `smoke-rosterctd`. **Refused, not
+missing:** `smoke-capocr`, `smoke-capexec`, `smoke-capscene`,
+`smoke-capnetbrowse` and the five spawnability gates that depend on them —
+DDR-982 §5.3 **withdrew** enforcement and `smoke-capagent` pending an operator
+decision, because a gate written now *"could only assert that a bit can be set
+and read back, which is a test of `uint32_t`, not of a capability system."*
+Listing a recorded refusal beside genuine gaps is the DDR-1068 §2 class; the two
+need different actions (build vs. ask). `smoke-agentmetrics` EXISTS **and is
+registered** (shard 8, strict), as does `smoke-agentpanel` (shard 6, strict) —
+what is unbuilt on that row is the three named *visualisations* (CPU% sparkline,
+memory graph, action-rate histogram), not the metrics path.
+
+**One Group F row names a blocker that no longer exists:** agent
+`execve`-on-respawn reads *"needs FAT32 fix or SFS as agent root"*, and the
+FAT32 multi-cluster defect was **refuted and gated** (DDR-973). A blocker
+presented as live is a different staleness from work presented as remaining —
+the first can suppress work that is actually unblocked.
+
+**A SECOND shard-4 red on the SAME binary, one run apart — DDR-1080, and the
+`rc=` could not say what failed.** CI 34053412311, `smoke-smplock`, tip
+`5093ca9` (no kernel source change, `kernel.bin: OK`):
+`[sfs] unlink/rmdir detail step=9 rc=-1`, step 9 being `vfs_unlink("/D/E")` —
+removing a directory whose only file **step 8 had just removed successfully with
+the same `cap` and `mnt`**.
+- **`vfs_unlink` collapsed THREE unrelated defect families into one `-1`:** mount
+  gone (the umount-under-a-live-caller family, DDR-967/954), no `unlink` op, and
+  no capability (DDR-964/OPEN-10, where `rc=-1` *is* `-EPERM`). DDR-984 added
+  `step=`/`rc=` precisely to name the failure; it fixed the `step=` half.
+- **Narrowing, not a verdict:** `!m->fs->unlink` is constant and would have
+  failed at step 2, and the capability worked one line earlier, so **`!m` is the
+  only one of the three consistent with step 8 passing.** §NON-NEGOTIABLE 3
+  forbids a fix on that and none is attempted.
+- **Split** to `-ENODEV`/`-ENOSYS`/`-EPERM`, following `vfs_create` (DDR-888) and
+  `vfs_rename` (DDR-956). `-EPERM` **is** `-1`, so the capability case keeps its
+  value and the other two move away — that is what makes `-1` discriminating.
+- **No mutant, deliberately:** the three arms are preconditions a healthy boot
+  never takes, so forcing one proves the arm prints a number, not that it
+  discriminates. The next real occurrence decides its worth.
+- **Recorded, NOT acted on:** the same fusion runs through **18** `return -1;`
+  sites in `vfs.c`. Widening is an ABI-visible sweep needing its own decision.
+- **The SFS failure is UNEXPLAINED**, one occurrence, no rate, and **not
+  established as primary or downstream** — that run predates DDR-1079's scan fix,
+  so only the first matching pattern was ever tested.
+
+**OPEN-2 — a FOURTH path to a frozen CPU, and the scan that hid it — DDR-1079.**
+CI 34051826587 shard 4, on a docs+host-script tip whose shard printed
+`kernel.bin: OK`. **DDR-1019's instrument fired on a real failure for the first
+time:** `panics_silent=1 panic_stage=3 loser_cpu=1 loser_vec=13
+loser_rip=0xFFFFFFFF8000C3A6` → `isr_dispatch+0xE86`, the `kputhex(bp[1])` load
+of the **panic backtrace walker**, which tested `bp != 0` and nothing else.
+- **`loser_vec=13` is the diagnosis.** A plain load faulting **#GP** rather than
+  #PF means a **non-canonical** address.
+- **The winner and the loser are the same CPU.** The RIP lies after
+  `g_panic_stage = 3`, reachable only by *winning* the CAS, and only one CPU can
+  win — so it printed banner, exception and registers, faulted in its own
+  backtrace, lost the CAS **to itself**, and halted forever. The CPU diagnosing
+  the machine became a frozen CPU; `dest_cpu=1` matches `loser_cpu=1`, its ticks
+  stop at 218 against the BSP's 1347, `rqcpus` 3 → 2.
+- **Fixed** by bounding the walk exactly as the NMI walker eleven lines up
+  already does, and by making it say *why* it stopped. `smoke-mce` **arm G**
+  asserts the backtrace for the first time — `>= 1` frames (the injection point
+  varies) **and** that `halting.` follows, which a mid-walk fault never reaches.
+- **THE SCAN HID IT, and that is the finding that reaches furthest.**
+  `check_global_forbidden` returned at the **first** matching pattern; this
+  capture matched `blk integrity FAIL` (pos 21, a **symptom**), `NEXUS KERNEL
+  PANIC` (28) and `panic_stage=` (29, **causes**). A run in which a CPU panicked
+  was reported as a block-integrity failure. **Captures ending in `blk integrity
+  FAIL` / `compl wait timeout` have been read as the primary event while a panic
+  pattern may have sat unreported in the same file.**
+- **OPEN-2 IS NOT CLOSED.** The original exception is **still unknown** — the
+  dump that would have named it is the thing that died. What changed is that the
+  next occurrence can say so.
+- Also: `tools/ci/sym_at.sh` used gawk's `strtonum()` and this host's awk is
+  **mawk**, so the one tool §INV.18 mandates for resolving a RIP **failed at the
+  moment it was needed**. Rewritten in `python3`.
+
+**Group B — the DDR-885 remote-steal coverage gap is CLOSED — DDR-1078, and
+DDR-1073 §2's reasoning was wrong in both halves.** That entry named the gap and
+**declined to build a gate**, judging it unbuildable; the conclusion (no
+coverage) was right, and the second half was wrong in the expensive direction —
+it declared the gap unbuildable, so nobody looked again.
+- **Those gates are not single-CPU.** `boot_test.sh`'s `QEMU_NUMA` block
+  **carries its own `-smp 2`** (:286); line 215 was read and the answer was
+  seventy lines further down the same file (`[apic] up id=0 cpus=2`).
+- **The real mechanism is one QEMU clause.** With `cpus=` omitted, QEMU 8.2 emits
+  **no SRAT Local APIC Affinity entry**, so `g_topo.cpu_node[]` stays `0xFF` and
+  `numa_node_of_cpu` returns its `0` default — two memory nodes, **one CPU
+  node**. Measured on two boots differing only in the `-numa` lines: shipped
+  `steal local=148 remote=0`; with `cpus=0`/`cpus=1` `local=0 remote=167`. **The
+  kernel is not implicated** — the memory topology was always parsed and the
+  type-0 parse is correct; it never ran.
+- **The vacuity trap is defeated by the topology, not by an API.** One CPU per
+  node leaves exactly one possible victim and it is always remote, so `local=0`
+  is **structurally required** and `remote > 0` says the second pass ran *and
+  succeeded*. Adding CPUs would weaken it.
+- **`smoke-numa-steal`** (shard 7, strict, 180 s). Its `FORBIDDEN_SENTINEL` is
+  deliberate here and deliberately absent from `smoke-numa`, whose sentinels land
+  at line ~75 and which keeps its rejection inside the required line to preserve
+  the DDR-785 early exit; this one's lands at ~364 of ~400.
+- **M2 is the finding.** M1 (the literal pre-fix topology) hits the required arm;
+  **M2 (delete the remote pass) hits the GLOBAL `cross-CPU FAIL` sentinel, not
+  this gate's arms** — on this topology the remote pass is the only steal path,
+  so it proves the pass is load-bearing and nothing about the gate; **M3 (pass
+  works, counter not incremented) hits the forbidden arm** and is the hole it
+  exists for. **No kernel change**; revert returns `kernel.bin` bit-for-bit.
+  **No defect is fixed and none is named** — DDR-885's order was always correct;
+  what was missing is a test that could tell if it stopped working.
+
+**Group G — assembly optimization: AUDITED, DDR-1075, and the rows were stale
+about what can be PROVED rather than about what is built.** Six rows, not seven
+(no seventh item exists in the tree). Corrections, each measured:
+
+- **The acceptance criterion was unobtainable.** The group demanded a
+  *"measurable speedup in a deterministic test"* and "profile first". The
+  harness already exists and is CI-registered — `user/benchtest.c` (DDR-870)
+  and `smoke-bench` (`Makefile:990`, shard 8, **strict**) — and its own header
+  states why a speedup cannot be produced here: *"Under QEMU TCG the guest
+  RDTSC counts EMULATED time … VALID for regression … INVALID as an absolute
+  hardware claim."* §NON-NEGOTIABLE 17's denominator is satisfied by DDR-870's
+  **static instruction and memory-traffic count**, which is hardware-true. The
+  table asks for the thing that convention exists to replace.
+- **9.5 IPC fast path — mechanism SHIPPED** (`ipc_copy.asm`, DDR-873, wired at
+  `ipc.c:43`/`:81`), **claim NOT delivered**: the ring-3 path is **four**
+  copies and DDR-873 removed none. Single-copy is blocked on the receiver's
+  buffer being a user pointer in the **receiver's** address space — DDR-1038's
+  `SYS_FUTEX` problem, not an assembly question.
+- **9.3 TLB shootdown — NO SUBJECT, and a trip-wire for Group D.** No
+  cross-CPU TLB invalidation exists. The absence is correct today on four
+  measured facts (no PCID/global pages; CR3 reloaded on every AS change
+  including to/from the kernel master; **no two threads share an address
+  space**; kernel-master present-entry changes all precede AP bring-up).
+  **Group D's `pthread`/`CLONE_VM` row deletes the third**, after which every
+  `vmm_unmap` and `vmm_protect_range` leaves a stale writable translation on
+  another CPU — and **nothing in the tree would notice**. A shootdown is a
+  **prerequisite of `CLONE_VM`**, not a Phase 9 item.
+  **THE TRIP-WIRE IS NOW A CHECK — DDR-1077.** *"Nothing in the tree would
+  notice"* was left as a paragraph, which DDR-1071 §4 had already measured to be
+  the shape that goes stale. `ci-cr3-writers-check` (hygiene **ALL SEVEN → ALL
+  EIGHT**, plus `ci.yml`'s `shard-check` job) pins the **set of `->cr3`
+  assignment sites** — the carrier of the third fact, per **file and count**,
+  never by line number (DDR-1073 §5) — and fails **iff** that set changes **AND**
+  no shootdown exists, so building the prerequisite first is permitted while
+  shipping the sharing without one is not. Plus an **unconditional** zero-writers
+  clause found while building fixture 5: under the bare conjunction, zero writers
+  plus any file containing "shootdown" **reported success**, which is the
+  `GLOBAL_FORBIDDEN` catastrophe at `89f71cc` — a broken measurement, not a
+  changed tree. Six fixtures, **three must-FAIL**; M1 fails fixture 3 alone, M2
+  fixture 6 alone. **It is a tripwire, not a verdict** — it cannot read a
+  semantic claim, so it says the premise's carrier moved, go and look. No
+  shootdown is built, no defect is fixed, `kernel.bin` untouched, 177 gates
+  unchanged.
+- **9.6 — the real gap was `memset`, not SIMD. NOW BUILT — DDR-1076.**
+  `memcpy` routed to `fast_memcpy` (ERMS, DDR-871) while `memset` stayed a
+  byte loop, paid on **every `kfree`** (`kheap.c:174`, `KHEAP_DEBUG`
+  unconditionally 1). Shipped as `arch/x86_64/fast_memset.asm` — `rep stosb`
+  under the ERMS bit `fast_memcpy_init()` already probes, the flag **shared**
+  rather than duplicated. Gated on `smoke-bench` (shard 8, strict; no new
+  gate, 177 unchanged); `cases=28` computed by the probe.
+  **DDR-1076 §1 CORRECTS DDR-1075 §4.4:** `rep stosb` is architectural — ERMS
+  is a speed hint — so the dispatch default is a **performance** property, not
+  a correctness one, and there is no fault there to hunt.
+  **The real trap is the byte broadcast**, and it is measured: 72 memset call
+  sites (73 grep hits, one the definition), **three** non-zero fills, **none** with its bytes verified anywhere
+  (`POISON_FREE` is written and never read), so a broadcast defect would be
+  invisible to all 177 gates. M1 passed every zero arm and the whole ERMS pass
+  before failing at `n=8 fill=0xA7`; M2 fails a *zero* fill at `n=1`.
+- **9.4** is a `VIRTIO_RING_F_EVENT_IDX` negotiation, not assembly; **9.1** is
+  bounded by the UART, not by instruction count, and carries DDR-916's
+  standing refusal; **9.2** is at its floor per DDR-870's own analysis.
+
+**Still true: no performance claim is attached to any row**, and none is made
+here — no profile was run, and every figure in DDR-1075 is a static count read
+out of the tree.
+
+**Group H — release:** `smoke-iso-aarch64`, `smoke-iso-riscv64`, and
+`smoke-prad` (the `prad` package manager, NSI 88–90 — **not** 87, which is
+`SYS_READ_AUDIT`) are MISSING. The x86_64 ISO is built and verified.
+
+### 5.4 — Gates excluded from the CI shard matrix
+
+**6 excluded, each with a stated reason in `tools/ci/shard_check.sh`.** An
+unexplained exclusion is how a gate goes missing, so they are reproduced here.
+
+**UPDATED 2026-09-05 — DDR-1061 registered `smoke-sfs-btree-smp4`, so its row is
+gone and the count is 7 -> 6.** Its stated condition was *"register it when
+OPEN-10 is fixed"*, and DDR-964 fixed OPEN-10 with a named mechanism and a
+mutation-checked fix at 8 sites. The row below used to add *"this is waiting on
+promotion evidence, not on work"* — **that clause was never part of the
+exclusion's condition**, and DDR-1061 §2 shows no reachable N could have supplied
+it: at 182 s a run, foreground-only, n=44 merely *reaches* the historical 6.7%
+pre-fix rate with no margin. The gate is now on shard 5 (strict, 180 s); if it
+reddens, **that capture is the measurement**.
+
+| Gate | Reason |
+|---|---|
+| `smoke-aarch64`, `smoke-riscv64` | run by the `arch-bootstrap` matrix job, not `build-and-boot` |
+| `smoke-selftest` | DDR-785 self-tests the boot harness. It must run BEFORE any gate that trusts the harness, so it is a setup step in **every** shard rather than one gate in one shard |
+| `smoke-agent-live` | developer-run only: needs a live Ollama endpoint on the host, so CI stays in test mode (ADR-027) |
+| `smoke-fs-liveness` | DDR-777/BUG-1 diagnostic. It rebuilds the kernel with `BSP_LIVENESS=1`, whose churn fills the 4 KiB dmesg ring and evicts `smoke-dmesg`'s required marker (DDR-790) |
+| `smoke-fast` | **not a gate** — a runner that invokes another gate N times via `campaign.sh`. Excluded as infrastructure, not as a skipped test |
+
+---
+
+## SECTION 6 — RELEASE-GATE STATE
+
+Re-measured 2026-09-05 at `0089e08`. **Re-measure rather than increment** — the gate count has been wrong three times.
+
+**And re-derive, do not carry forward.** The `kernel.bin` row previously paired a
+size with a headroom figure computed from a *different, earlier* size; the same
+error was live in `CLAUDE.md` §CURRENT BUILD STATE, where the size had been
+updated as ML-DSA landed and the subtraction beside it had not — overstating the
+remaining budget by **102,400 B** in the one file sessions are told to trust
+without re-deriving. Both are corrected here and there. A derived quantity is
+stale the moment its input changes.
+
+**RE-MEASURED 2026-09-06 (DDR-1081), and three of these rows were stale — one of
+them in the way this section's own header warns about.** `ci-docstate-check`
+reported **OK** on the `kernel.bin` pair below while it was **two kernels out of
+date**, because the pair was *self-consistent*: 1,282,442 + 290,422 = 1,572,864
+exactly. That is DDR-1063's own stated limitation — *"a stale but self-consistent
+pair still passes"* — **observed for the first time, in the file that records it**.
+The check asserts an arithmetic identity, which is checkable; it cannot assert
+currency, and DDR-1063 refused to make it try because a currency check would
+redden on correct in-progress work and get removed. Nothing is wrong with the
+check. The lesson is that it is not a substitute for re-measuring.
+
+(The *other* pairing it reports, at §5.1b.1 line ~699, is **1,175,946 /
+396,918** — the pre-post-quantum figures — and that one is **correct as
+written**, because its surrounding text says in as many words that they are the
+PRE-work numbers, left deliberately. `ci-docstate-check` cannot tell a
+deliberately historical pair from a live-state one; here a human annotation
+does. Worth knowing before anyone "fixes" it.)
+
+| Quantity | Value | Source |
+|---|---|---|
+| Gates assigned | **178** across **10** shards | `make ci-shard-check`, re-measured 2026-09-06 (DDR-1078 added `smoke-numa-steal`, shard 7, strict) |
+| Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
+| NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
+| DDR free range | **DDR-1083+** | §INV.4 |
+| `kernel.bin` | **1,307,018 B** against the 1,572,864 B gate — **265,846 B** headroom | measured 2026-09-06; **re-derived, not carried** |
+| Warnings at `-Werror` | **zero** | `make image` |
+| x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |
+| aarch64 / riscv64 ISO | **boot-only scope** (ADR-034) — and "packaging only" understates it: **278 lines across both ports**, each printing a sentinel and halting on `wfe`/`wfi`, with no MMU, scheduler, VFS or userspace. **There is no OS to package** (DDR-1081 §1.4) | DDR-999, ADR-034, DDR-1081 |
+| Third CI green | from **`workflow_dispatch`** — **not `gh run rerun`**, which needs admin rights the project PAT does not have | §INV.15; the Group H row and PHASE 1 ITEM 3 both carried the uncorrected form until DDR-1081 §1.6 |
+| `v1.0.0` | **untagged, held** | §1.2 |
+| `main` promotion | **unstarted** | §1.2 |
+
+---
+
+## SECTION 7 — WHAT THIS DOCUMENT DOES NOT DO
+
+It does not close anything. Specifically:
+
+- It does not turn OPEN-1, OPEN-2, OPEN-12 or OPEN-13 into resolved issues. Each
+  is waiting on evidence, and three of the four have armed instruments whose
+  whole purpose is that the *next* occurrence is diagnostic rather than another
+  colour-match.
+- It does not claim the deferred items are unimportant. It claims they are
+  **written down and decidable**, which is the difference between a deferral and
+  a gap.
+- It does not substitute for the operator decisions in Section 1. Those two rows
+  — branding/licensing, and the `v1.0.0` hold — are the reason this document was
+  asked for, and neither can be answered by an implementer.
+
+**Update this file in the same commit as any change to what it records.**
