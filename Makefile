@@ -2815,7 +2815,7 @@ smoke-sfsroot: $(IMG) fat-image sfs-image
 # at ~1 KiB (5th SFS extent rejected); the 4 KiB chunk lands 8 KiB in 2 extents.
 smoke-vfs-bigwrite: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_BIGWRITE_OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_BIGWRITE_ERRNO rw=-38 ext5=-27\nPRADYOS_BIGWRITE_OK')" \
 	FORBIDDEN_SENTINEL="BIGWRITE FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

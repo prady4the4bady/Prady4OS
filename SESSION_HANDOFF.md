@@ -12350,3 +12350,69 @@ carrier, so DDR-1087 advanced three and left the checklist behind again.
 **NEXT:** CI on `dev/phase1-seyp3n` for this tip. A further red on a shard
 carrying a panic should now print the exception line, the registers and the
 backtrace — resolve any RIP with `tools/ci/sym_at.sh` against that binary.
+
+---
+
+## 2026-09-07 — DDR-1089: the write errno was erased one layer above the filesystem
+
+**`kernel.bin` 1,307,018 B — SIZE UNCHANGED** (`6db97e890b1bc367`), verified by
+rebuild. No new gate (178). `GLOBAL_FORBIDDEN` 76.
+
+`PRE_LAUNCH_CHECKLIST` §4.9 (DDR-1020 M4: an in-place SFS rewrite returns short
+for a longer *and* an equal-length payload, while `unlink`+recreate succeeds) has
+stood **"Unexplained, unfixed" for ~68 DDRs**. It could not have been explained
+from a capture, because **the erasure was above the thing being described**:
+
+* `sfs_write` returned a **bare `-1` for seven unrelated conditions**;
+* `fd_write_user` then **flattened every negative to `-EIO`**.
+
+Two erasures in series, so a split at either layer *alone* would have been
+invisible from ring 3, and any arm written against it vacuous. The
+DDR-1046/1060/1074/1080 shape — and it is why DDR-1080's fix one directory across
+could not have reached this: that erasure was *below*.
+
+**The explanation, read in the source rather than inferred:** `sfs_write` is
+**append-only by design** — `off != in->size` refuses any non-append *before*
+looking at the length. That is both halves of M4's observation at once (neither
+payload is an append) and why `unlink`+recreate works (size resets to 0). §4.9's
+ADR-032 exclusion **stands, now explained rather than merely excluded** — and the
+budget path itself now returns **`-EAGAIN`**, so the next reader excludes it by
+*reading a number*.
+
+**Shipped:** conditions split (`-EPERM`/`-ENOMEM`/`-EIO`/`-ENOSYS`/`-EFBIG`/
+`-ENOSPC`, `EFBIG` new in `errno.h`); `fd_write_user` **propagates**, with the
+**partial path deliberately unchanged** (progress still returns its short count —
+the POSIX contract every existing caller reads); two arms on
+**`smoke-vfs-bigwrite`** pinned to the exact pair `PRADYOS_BIGWRITE_ERRNO rw=-38
+ext5=-27`, never `< 0`.
+
+**The obvious arm is vacuous and that was measured first** (ninth time in design
+text): *"rewrite an existing file and assert it fails"* passes unfixed, since
+`-EIO` is negative too — `ftrunctest.c:121` already records that trap.
+
+**Both arms had to be restructured, and that is a correction rather than a plan.**
+Written first with `fail()`, **M1 died at arm A and arm B was never reached** — a
+mutant meant to show *both* values collapsing could show only one. DDR-1020's
+rule from the other direction: there about arms that pass for the wrong reason,
+here about an arm that **cannot be observed at all** once an earlier one fails.
+Now `dec()` + no `fail()` + both values on one line through one `write(2)`
+(DDR-1056).
+
+| mutant | kernel | capture | outcome |
+|---|---|---|---|
+| M1 propagation removed | `a15b93772f50e7f5` | `rw=-5 ext5=-5` | **both** fail — split invisible; `PRADYOS_BIGWRITE_OK` still printed, so every pre-existing arm passes unfixed |
+| M2 SFS conditions fused | `efe16c1c2420de77` | `rw=-38 ext5=-38` | **arm B alone** — a *plausible* errno for the wrong reason; **load-bearing** |
+
+Regression: `smoke-vfs-bigwrite`, `smoke-fs`, `smoke-fs-sfs-rw`,
+`smoke-ftruncate`, `smoke-shell`, `smoke-sfs-persist` all rc=0; hygiene ALL
+EIGHT. **DDR free range → `DDR-1090+` at all four carriers in one edit** — the
+first advance since the count was stated at every carrier.
+
+**NOT CLAIMED:** §4.9 **narrowed, not closed** — the *"returns short"* wording is
+**not reproduced**; what is reproduced is a **refusal**. No write-path defect is
+fixed and none is alleged; mid-file overwrite and the 4-extent inline ceiling stay
+recorded scope limits. The rest of the VFS entry layer is untouched (DDR-1080's
+reasoning). No open issue moves.
+
+**NEXT:** CI on `dev/phase1-seyp3n`. Note `a0ec378` (the DDR-1088 checklist
+record) is pushed and **not yet CI-verified** — cover both tips.

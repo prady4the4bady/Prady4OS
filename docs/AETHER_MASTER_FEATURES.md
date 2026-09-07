@@ -1691,3 +1691,22 @@ matched. Two CI shards on one tip each named a panic and said nothing about it.
 Both scanners now print a bounded trailing window for **every** match. Covered
 by `smoke-selftest` cases 8 and 9. No kernel change; no new gate; 178 gates and
 `GLOBAL_FORBIDDEN` (76) unchanged.
+
+### DDR-1089 — VFS/SFS write errors name themselves (2026-09-07)
+
+`sfs_write` returned a bare `-1` for **seven unrelated conditions** and
+`fd_write_user` then flattened every negative to `-EIO` — two erasures in series,
+so a write refusal and a genuine I/O error were the same value from ring 3. The
+conditions are split (`-EPERM`/`-ENOMEM`/`-EIO`/`-ENOSYS`/`-EFBIG`/`-ENOSPC`,
+with `EFBIG` added to `errno.h`), the fd layer **propagates** rather than
+flattening — the **partial** path deliberately unchanged, since a write that made
+progress still returns its short count — and `vfs_write`'s ADR-032 budget
+exhaustion returns `-EAGAIN`. Gated in both directions on `smoke-vfs-bigwrite`,
+pinned to the exact pair `rw=-38 ext5=-27` (append-only refusal, file-full
+refusal); the obvious *"assert it fails"* arm was measured vacuous first, since
+`-EIO` is negative too. This explains `PRE_LAUNCH_CHECKLIST` §4.9 (**narrowed,
+not closed**): `sfs_write` is append-only by design, which is why a longer *and*
+an equal-length rewrite were both refused while `unlink`+recreate succeeded. **No
+write-path defect is fixed and none is alleged** — mid-file overwrite and the
+4-extent inline ceiling remain recorded scope limits. `kernel.bin` size
+unchanged; no new gate (178); `GLOBAL_FORBIDDEN` 76.

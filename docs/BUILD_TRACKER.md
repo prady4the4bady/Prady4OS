@@ -3773,3 +3773,86 @@ count is now stated at every carrier.
 **NOT CLAIMED:** no cause is named for the panic (§NON-NEGOTIABLE 3); OPEN-2 is
 not closed; two occurrences is not a rate; not attributed to `e10f494` and not
 exonerated (DDR-1042). 178 gates unchanged, `GLOBAL_FORBIDDEN` 76 unchanged.
+
+---
+
+## DDR-1089 — the write errno was erased one layer above the filesystem (2026-09-07)
+
+**`kernel.bin` 1,307,018 B — SIZE UNCHANGED** (`6db97e890b1bc367`), verified by
+rebuild, not assumed. No new gate (178). `GLOBAL_FORBIDDEN` 76.
+
+`docs/PRE_LAUNCH_CHECKLIST.md` §4.9 has stood *"Unexplained, unfixed"* for ~68
+DDRs. It could not have been explained from a capture: **the errno was erased
+above the thing being described.**
+
+`sfs_write` returned a **bare `-1` for seven unrelated conditions** — read-only
+versioned handle, inode page allocation failure, inode read failure, mid-file
+overwrite, file full, extent write failure, B+tree insert failure — and
+`fd_write_user` then **flattened every negative to `-EIO`**. Two erasures in
+series, so a split at either layer *alone* would have been invisible from ring 3
+and any arm written against it vacuous. The DDR-1046/1060/1074/1080 shape: a
+control that cannot see the case it exists for. It is also why DDR-1080's fix one
+directory across could not have reached this — that erasure was *below*.
+
+**What the source says, read in the tree rather than inferred:** `sfs_write` is
+**append-only by design**. The `off != in->size` guard refuses any write whose
+offset is not the current end of file, *before* it looks at the length — which
+accounts for both halves of DDR-1020 M4's observation (the longer **and** the
+equal-length payload are refused for the same reason, neither being an append)
+and for `unlink`+recreate succeeding (that resets the size to 0). §4.9's ADR-032
+exclusion **stands** and is now explained rather than merely excluded.
+
+**The obvious arm is vacuous, measured before it was written** (ninth time caught
+in design text): *"rewrite an existing SFS file and assert it fails"* passes on
+the unfixed tree, because `-EIO` is negative too — the exact trap
+`ftrunctest.c:121` already records for a sibling syscall.
+
+Shipped: the conditions split (`-EPERM`/`-ENOMEM`/`-EIO`/`-ENOSYS`/`-EFBIG`/
+`-ENOSPC`, `EFBIG` added to `errno.h`); `fd_write_user` **propagates** instead of
+flattening, with the **partial path deliberately unchanged** (a write that made
+progress still returns its short count — the POSIX contract, and what every
+existing caller reads); and `vfs_write`'s ADR-032 budget exhaustion — *the very
+condition §4.9 had to exclude by argument* — returns `-EAGAIN`, so a future
+reader excludes it by **reading a number**.
+
+Two arms on **`smoke-vfs-bigwrite`** (no new gate, no new probe ELF, so
+`ci-probe-rodata-check`'s count and the 8,192 B per embedded probe are
+unchanged), pinned to the **exact pair** `PRADYOS_BIGWRITE_ERRNO rw=-38
+ext5=-27`, never `< 0`:
+
+* **A** — reopen `/BIG.TXT` write-only, write at offset 0 → exactly `-ENOSYS`.
+* **B** — fill `/EXT5.TXT` to four extents, then a fifth → exactly `-EFBIG`.
+
+**The arms had to be restructured, and that was a correction rather than a plan.**
+Both were first written with `fail()` like every other assertion in the probe —
+and **M1 then died at arm A, so arm B was never reached**: the mutant meant to
+show *both* values collapsing could only ever show one. DDR-1020's rule arriving
+from the other direction (*"a probe should REPORT and let the gate JUDGE"*),
+stated there about arms that pass for the wrong reason and here about an arm that
+**cannot be observed at all** once an earlier one fails. Fixed with a `dec()`
+writer, no `fail()` in either new arm, and both values on **one line through one
+`write(2)`** (DDR-1056's uline rule).
+
+**Mutants land on different arm sets and neither carries the other** (DDR-1044):
+
+| mutant | kernel | capture | outcome |
+|---|---|---|---|
+| M1 — propagation removed | `a15b93772f50e7f5` | `rw=-5 ext5=-5` | **both** arms fail; the split is invisible from ring 3 |
+| M2 — the two SFS conditions left fused | `efe16c1c2420de77` | `rw=-38 ext5=-38` | **arm B alone**; a *plausible* errno for the wrong reason |
+
+M1's capture still carries `PRADYOS_BIGWRITE_OK`, so every pre-existing arm of
+that gate passes on the unfixed tree — the vacuity claim **measured**, not
+asserted. **M2 is the load-bearing one:** a one-arm gate would have shipped it.
+
+Regression: `smoke-vfs-bigwrite`, `smoke-fs`, `smoke-fs-sfs-rw`,
+`smoke-ftruncate`, `smoke-shell`, `smoke-sfs-persist` all `rc=0`; hygiene ALL
+EIGHT.
+
+**NOT CLAIMED.** §4.9 is **narrowed, not closed** — the *"returns short"* wording
+is **not reproduced**; what is reproduced is a **refusal**, which is what M4 would
+have observed through a fd layer telling it `-EIO`, and whether some third path
+also short-writes is untouched by this. **No defect in the write path is fixed
+and none is alleged** — SFS refuses correctly; mid-file overwrite and the
+4-extent inline ceiling are recorded scope limits, and neither is implemented nor
+raised here. The rest of the VFS entry layer is **deliberately untouched**, the
+DDR-1080 reasoning. No open issue moves (OPEN-1/2/12/13).

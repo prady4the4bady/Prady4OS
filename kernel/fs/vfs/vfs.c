@@ -266,7 +266,13 @@ int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint
     }
     current_thread->fs_budget_tick = now;
     if (current_thread->fs_write_budget < len)
-        return -1;
+        /* DDR-1089: -EAGAIN, not a bare -1. This is a token-bucket RATE LIMIT
+         * (ADR-032 / sec.INV.19) that refills from elapsed ticks, so "try again"
+         * is what it means -- and it is precisely the condition
+         * PRE_LAUNCH_CHECKLIST sec.4.9 had to EXCLUDE BY ARGUMENT ("the budget is
+         * excluded, because the unlink+create succeeded at the same point")
+         * because the number could not say. A caller can now read it. */
+        return -EAGAIN;
     if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->write(m->ctx, f, off, buf, len);
     mnt_unlock(m);

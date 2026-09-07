@@ -446,12 +446,58 @@ capture (DDR-1028). Gate-harness only; no product impact.
 
 ### 4.9 — SFS in-place rewrite of an existing file returns short
 
-DDR-1020 M4: a plain rewrite of an existing SFS file returns short for both a
-longer *and* an equal-length payload, while `unlink` + recreate succeeds. The
-ADR-032 write budget is **excluded** as the cause, because the `unlink`+create
-succeeded at the same point. **Unexplained, unfixed.** A mutant that fails to
-perform its own defect is indistinguishable from a gate that catches it — this
-was found that way.
+**NARROWED, NOT CLOSED — 2026-09-07, DDR-1089.** The observation stood
+*"Unexplained, unfixed"* for ~68 DDRs, and the reason it could not be explained
+from a capture is now measured: **the errno was erased one layer above the
+filesystem, so no ring-3 caller could ever have seen which refusal fired.**
+
+`sfs_write` returned a **bare `-1` for seven unrelated conditions** — read-only
+versioned handle, inode page allocation failure, inode read failure, mid-file
+overwrite, file full, extent write failure, B+tree insert failure — and
+`fd_write_user` then **flattened every negative to `-EIO`**. Two erasures in
+series, so §4.9's *"returns short"* and a genuine I/O error were the same
+observation from ring 3, and a split at either layer alone would have been
+invisible. The DDR-1046/1060/1074/1080 shape: a control that cannot see the case
+it exists for.
+
+**What the source says, checked in the tree rather than inferred** (`sfs.c`, the
+`off != in->size` guard): `sfs_write` is **append-only by design** — it refuses
+any write whose offset is not the current end of file, *before* it looks at the
+length. That accounts for both halves of the original observation: the longer
+**and** the equal-length payload are refused for the same reason (neither is an
+append), and `unlink` + recreate succeeds because it resets the size to 0. The
+ADR-032 exclusion recorded above stands and is now explained rather than merely
+excluded.
+
+**What is NOT established, and is not claimed:** the *"returns short"* wording is
+**not reproduced** here — what is reproduced is a **refusal**, which is what
+DDR-1020's M4 would have observed through a fd layer that told it `-EIO`. Whether
+some third path also short-writes is untouched by this. **Nothing in the write
+path is fixed and no defect is alleged**: mid-file overwrite is not implemented
+and the 4-extent inline ceiling is not raised — both are recorded scope limits,
+and both stay exactly as they are.
+
+**What changed:** the conditions are split (`-EPERM`/`-ENOMEM`/`-EIO`/`-ENOSYS`/
+`-EFBIG`/`-ENOSPC`, with `EFBIG` newly added to `errno.h`), `fd_write_user`
+**propagates instead of flattening** (the partial path deliberately unchanged —
+a write that made progress still returns its short count, the POSIX contract),
+and the ADR-032 budget exhaustion in `vfs_write` — the very condition this entry
+had to exclude *by argument* — now returns `-EAGAIN`, so a future reader can
+exclude it by **reading a number**.
+
+**Gated in both directions** on `smoke-vfs-bigwrite`, pinned to the exact pair
+`PRADYOS_BIGWRITE_ERRNO rw=-38 ext5=-27` (`-ENOSYS` = the append-only refusal,
+`-EFBIG` = the file-full refusal), never `< 0`. The obvious arm was **vacuous and
+that was measured**: *"rewrite an existing file and assert it fails"* passes on
+the unfixed tree, because `-EIO` is negative too. M1 (propagation removed, kernel
+`a15b93772f50e7f5`) prints `rw=-5 ext5=-5` — **both arms**, the split invisible;
+M2 (the two SFS conditions left fused, `efe16c1c2420de77`) prints `rw=-38
+ext5=-38`, **arm B alone**, a plausible errno for the wrong reason that a
+one-arm gate would have shipped.
+
+A mutant that fails to perform its own defect is indistinguishable from a gate
+that catches it — this was found that way, and the same discipline is what made
+M2 worth running rather than assuming.
 
 ### 4.10 — `resched FAIL ipis=0 ran=1 idle=1` is a documented sampling race
 
@@ -1397,7 +1443,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **178** across **10** shards | `make ci-shard-check`, re-measured 2026-09-06 (DDR-1078 added `smoke-numa-steal`, shard 7, strict) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1089+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1089+` (DDR-1088), and the recurrence is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
+| DDR free range | **DDR-1090+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
 | `kernel.bin` | **1,307,018 B** against the 1,572,864 B gate — **265,846 B** headroom | measured 2026-09-06; **re-derived, not carried** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |

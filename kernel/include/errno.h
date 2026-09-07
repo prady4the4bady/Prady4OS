@@ -28,6 +28,7 @@
 #define ENODEV         19   /* no such device (e.g. no GPU framebuffer) */
 #define ENOSYS         38   /* function not implemented             */
 #define ENOSPC         28   /* no space left (bounded kernel table full) */
+#define EFBIG          27   /* file too large (DDR-1089: SFS 4-extent ceiling) */
 #define ETAMPER       133  /* DDR-812: record hash failed verification */
 #define ENOKEY        126  /* DDR-834: key derivation failed (Linux value) */
 #define ETIMEDOUT     110  /* DDR-955: timed-block wait expired */

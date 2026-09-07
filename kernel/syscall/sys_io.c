@@ -124,7 +124,18 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
             int w = vfs_write(e->cap, e->file, e->off, kbuf, chunk);
             if (w < 0) {
                 pmm_free_page(kp);
-                return total > 0 ? total : -EIO;
+                /* DDR-1089: PROPAGATE, do not flatten. This used to return -EIO
+                 * for every negative, which ERASED the distinction one layer
+                 * below -- so DDR-1089's split of sfs_write's seven conditions
+                 * would have been invisible to every ring-3 caller, and a gate
+                 * arm written against it would have been vacuous. Worse, -EIO
+                 * actively misleads: "mid-file overwrite is not implemented"
+                 * reported as an I/O error sends a reader to the block layer.
+                 *
+                 * The PARTIAL path is deliberately unchanged -- a write that
+                 * made progress still returns its short count, which is the
+                 * POSIX contract and what every existing caller reads. */
+                return total > 0 ? total : w;
             }
             if (w == 0)
                 break;                                  /* budget/space exhausted */
