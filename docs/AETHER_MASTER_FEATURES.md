@@ -1778,3 +1778,23 @@ First datum, from a 4-CPU capture: `rqfree=0` at every heartbeat while `ymask`
 passes 2.0M — one observation, no rate, and it settles on measurement the refusal
 to switch `smoke-rqfree` to `QEMU_SMP=4`. No defect found, none fixed; the Group
 A row stays open; no new gate; `kernel.bin` size unchanged.
+
+**DDR-1094 (SFS as default root).** On the ISO — the artefact the release ships —
+SFS **is already the default process root**, and it is gated at strict tier:
+`blk_count() == 0` there, so DDR-972 creates three ramdisks (`blk0` blank,
+`blk1` formatted SFS, `blk2` blank scratch), `fs_test_thread`'s existing
+first-mountable loop finds `blk1` and calls `vfs_set_default_mnt()` on it, and
+`smoke-iso-userspace` (shard 0, strict) requires `[ramdisk] formatted SFS` and
+then has PRISM write, list, read back and delete a file on that root from ring 3.
+The Group B row's stated approach — gate `sfs_format` behind `probe_enabled()` —
+could not have delivered it: the SFS self-tests are destructive by design (the GC
+gate only proves anything because ~4,800 blocks exhaust a ~4,096-block volume),
+so the volume under test cannot also be the durable root, and twelve gates
+require its sentinels. What remains open is a **build-system** change (the SFS
+root would have to carry the userspace image the FAT volume holds), not a kernel
+flag, and it buys no capability because the shipping configuration already roots
+at SFS. **It also retires a blocker:** the Group F audit-ring persistence row
+said it "needs SFS boot root first" — the AETHER daemon has been rooted at an SFS
+mount on every gate boot for a long time, and what is actually missing is a
+flusher for the append-only circular in-memory log. No code change, no gate, no
+defect.

@@ -4219,3 +4219,90 @@ has no target"* is a defect on this row and correct behaviour on ~62 others, and
 nothing mechanical separates them. Name corrected in this commit. **Not
 claimed:** the sweep covered `CLAUDE.md` only, and the other 62 names were
 grouped by inspection rather than adjudicated one by one.
+
+---
+
+## DDR-1094 — SFS is already the default boot root on the artefact that ships
+
+**ASSESSMENT — docs only, no code change, no gate, no defect found.** Group B
+row 1 made four claims: **one is correct**, one has drifted, one is unbuildable
+as stated, and the deliverable is shipped and CI-gated.
+
+**THE COUNT IS CORRECT, stated first because an audit that only reports errors
+is not an audit.** `grep -c '\[sfs\]' Makefile` returns 14 and my first reading
+of that was the wrong one: attributing each hit to its enclosing target, **two
+are comments** and **twelve are `EXTRA_SENTINEL` required patterns** — so the
+row's "12 gates" is exactly right. Four of the twelve (`smoke-blkmq`,
+`smoke-blkmq-trace`, `smoke-msixap`, `smoke-user`) are **not SFS gates at all**;
+they assert an `[sfs]` line incidentally because the self-tests run every boot.
+
+**THE LINE NUMBER HAS DRIFTED, INTO MY OWN COMMENT.** `main.c:1128` is now inside
+the truth-table comment DDR-1092 wrote one commit earlier; `sfs_format`'s call
+sites are `:1548`, `:3013`, `:4191`. The DDR-1073 §5 shape, second instance.
+
+**THE STATED APPROACH CANNOT DELIVER WHAT THE ROW ASKS, structurally.** The SFS
+self-tests are destructive **by design**, each design recorded: `smoke-sfs-gc`
+(DDR-762-v2) only proves anything *because* ~4,800 blocks exhaust a ~4,096-block
+volume; `smoke-sfs-btree` (DDR-763) drives 40 cycles past the first leaf split;
+the unlink, journal abort/commit and DDR-967 umount arms mutate or tear it down.
+**You cannot both destroy a volume and durably root at it** — same disk. The
+consequence is arithmetic: twelve gates require those sentinels, so all twelve
+take the probe key, the destructive tests still run on essentially every gate,
+and the "default SFS root" exists only on gates that opt *out* of testing SFS.
+`main.c:1418` already records the decision from the other side — the FAT32 mount
+is the process root *"(the SFS mount is later reformatted by the destructive
+self-tests)"*.
+
+**THE DELIVERABLE IS SHIPPED, ON THE ARTEFACT THAT ACTUALLY SHIPS, AT STRICT
+TIER.** The ISO presents no virtio disks, so `blk_count() == 0` (`main.c:4166`)
+and DDR-972 creates three ramdisks mirroring the expected topology — `blk0`
+blank, **`blk1` formatted SFS**, `blk2` blank scratch. `fs_test_thread`'s
+existing first-mountable loop skips the blank `blk0`, finds `blk1`, and calls
+`vfs_set_default_mnt()` on it, **so the default process root is SFS** and
+`elf.c:329` hands it to every ELF loaded after. No edit was needed and DDR-972
+says so in its own comment. **`smoke-iso-userspace`** (`gate_shards.txt:44`,
+shard 0, 300 s, **strict**) requires `[ramdisk] formatted SFS` and `[fs]
+mounted`, then drives PRISM through `echo > /ISOTEST.TXT`, `ls /`, `cat`, `rm` —
+a write, a listing, a read-back and a delete on that root, from ring 3, on the
+release ISO, on every CI suite. DDR-971 is why it exists.
+
+**The DDR-1071 §7b class at its sharpest yet** — five instances in one table
+there, none on the release artefact; here the row says unbuilt, names an approach
+that cannot work, and points at a gate name that does not exist, while the thing
+it asks for is green at strict tier on shard 0.
+
+**WHAT IS GENUINELY OPEN IS NARROWER AND DIFFERENT IN KIND.** On the
+development/gate configuration the root is FAT32, deliberately; moving it is a
+**build-system** change, not a kernel flag, because the FAT volume carries
+`/PRISM.ELF`, `/TERM.ELF`, `/CMUSL.ELF`, `/ARGTEST.ELF`, `/SLOWTEST.ELF`,
+`/HELLO.TXT`, `/BIG8K.TXT`, `/BIGPAT.BIN`, `/LongFileName.txt` and
+`/DOCS/NOTE.TXT`, **every one reached by path from ring 3**. Not built, on
+DDR-1069's test: the configuration that ships already roots at SFS, so it buys no
+capability.
+
+**THE OBVIOUS GATE ARM IS VACUOUS — measured before writing (twelfth time).**
+`smoke-sfs-boot-root` asserting *"a process reads a file from an SFS root"*
+passes on today's tree: DDR-760's `sfsroottest` is already rooted there, as are
+DDR-764's `bigwritetest` and DDR-761/770's AETHER daemon. What only a *default*
+change can produce is a process **never given an explicit `root_mnt`** reading
+from SFS — and that is exactly PRISM on `smoke-iso-userspace`. **So
+`smoke-sfs-boot-root` should not be built; 179 gates unchanged.**
+
+**AND IT RETIRES A BLOCKER ON A DIFFERENT ROW — the DDR-1084 §1 pattern, third
+instance.** Group F's *"AETHER audit ring → SFS persistence — needs SFS boot root
+first"* is **not true**: the daemon is rooted at an SFS mount on every gate boot
+(`main.c:3063-3069`) and already reads from that root. What is missing is a
+**flusher** — `kernel/aether/aether_audit.c` is an append-only **circular
+in-memory** log that nothing serialises to a file. Smaller, and unblocked.
+DDR-1084 declined a checker because the signal is semantic; its cheap substitute
+applies, so this DDR names the row the blocker was holding.
+
+**NOT CLAIMED.** No code change, no gate, no defect — DDR-760/770/972 are correct
+and untouched, `kernel.bin` is not rebuilt (size/headroom pair and
+`ci-docstate-check` unaffected), `GLOBAL_FORBIDDEN` 76, 179 gates. **No gate was
+run for this DDR**; what was measured is target existence, shard registration,
+individual sentinel classification of the twelve, the recipes read in full, and
+the `main.c` blocks at `:1406-1420`, `:1483-1560`, `:3005-3070`, `:4160-4196`.
+The Group B row is corrected, not closed; no build-system decision is taken; the
+Group F row is unblocked, not built. OPEN-1/2/12/13 untouched, no open issue
+moves, no release action taken or proposed.

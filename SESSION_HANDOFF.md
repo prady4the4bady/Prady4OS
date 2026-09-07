@@ -12630,3 +12630,59 @@ name corrected in this commit.
 shards 8/9 and the PR suite read. Then continue Groups A–F (task #23). No defect
 found, no open issue moves — OPEN-1/2/12/13 untouched, `GLOBAL_FORBIDDEN` 76,
 179 gates.
+
+---
+
+## CHECKPOINT — DDR-1094 (SFS-as-default-root is shipped on the ISO)
+
+Branch `dev/phase1-seyp3n`. **Docs only — no code change, `kernel.bin` untouched
+(`0693e5b04685ad60`, 1,311,114 B).** DDR free range → **`DDR-1095+`** at all four
+carriers.
+
+**The row.** Group B row 1, *"Provisioned SFS as default boot root — gate
+`sfs_format` at `main.c:1128` behind `probe_enabled()`; update the 12 gates."*
+Four claims: **one correct**, one drifted, one unbuildable as stated, and the
+deliverable already shipped.
+
+**The count is right and I nearly "corrected" it.** 14 `[sfs]` grep hits, **two
+are comments**, **twelve are required `EXTRA_SENTINEL` patterns** — the row's 12
+is exact. Four of the twelve are not SFS gates at all (`smoke-blkmq`,
+`smoke-blkmq-trace`, `smoke-msixap`, `smoke-user`).
+
+**`main.c:1128` has drifted into DDR-1092's own comment block** — one commit ago.
+DDR-1073 §5 shape, second instance.
+
+**The approach cannot work, structurally.** The SFS self-tests are destructive
+*by design* (`smoke-sfs-gc` only proves anything because ~4,800 blocks exhaust a
+~4,096-block volume), so the volume under test cannot also be the durable root —
+and twelve gates require its sentinels, so gating `sfs_format` behind a probe key
+would hand all twelve the key and leave the "default SFS root" only on gates that
+opt *out* of testing SFS. `main.c:1418` states the same decision from the other
+side.
+
+**And it is SHIPPED where it matters.** On the ISO `blk_count() == 0`, so DDR-972
+makes three ramdisks (`blk0` blank, **`blk1` SFS**, `blk2` scratch);
+`fs_test_thread`'s existing loop finds `blk1` and `vfs_set_default_mnt()`s it, so
+**the default process root is SFS** — no edit needed, DDR-972's own comment says
+so. **`smoke-iso-userspace` (shard 0, 300 s, strict)** requires
+`[ramdisk] formatted SFS`, then has PRISM write / `ls` / read back / delete a
+file on that root from ring 3, every suite. The DDR-1071 §7b class at its
+sharpest: the row says unbuilt while the thing it asks for is green at strict
+tier on the release ISO.
+
+**Do not build `smoke-sfs-boot-root`** — the obvious arm passes today on DDR-760's
+already-rooted probes, and the discriminating arm (a process never given an
+explicit `root_mnt`) is what the ISO gate already runs. 179 gates unchanged.
+
+**It also retires a blocker (DDR-1084 §1 pattern, third instance).** Group F's
+audit-ring persistence row said it *"needs SFS boot root first"* — the AETHER
+daemon has been rooted at an SFS mount on every gate boot since DDR-761/770
+(`main.c:3063-3069`). What is actually missing is a **flusher**:
+`kernel/aether/aether_audit.c` is an append-only **circular in-memory** log that
+nothing serialises to a file. Smaller than the row implied, and unblocked.
+
+**NEXT SESSION.** The audit-ring flusher is now the best-shaped Group F item —
+unblocked, small, and with a real claim to gate. Before designing it, note the
+trap this project keeps hitting: a gate asserting *"the log file exists and has
+bytes"* is vacuous unless the bytes are ones the writer could not have
+manufactured (DDR-1066's `-ENOENT` discipline). OPEN-1/2/12/13 untouched.
