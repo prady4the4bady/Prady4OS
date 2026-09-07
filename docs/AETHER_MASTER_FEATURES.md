@@ -1669,3 +1669,14 @@ DDR-1032's marshalling (`elf_load_args`), and `smoke-aethercfg` asserts the
 string and the argument count separately. Feature state: **config → agent task
 plumbing SHIPPED and GATED.** No change to what any agent *does* — `task` is
 informational; nothing branches on it.
+
+### DDR-1087 — PRISM `source` (Layer 5d / ADR-024, 2026-09-07)
+
+PRISM can run a file of commands in the current shell: `source <path>`.
+Implemented as an alternative **line source** for `readline()` rather than a
+second interpreter, so quoting, redirection, pipes, `$?` and job control behave
+inside a script exactly as they do interactively — one dispatch, no drift.
+Feature state: **script execution SHIPPED and GATED** (`smoke-shell`). Not a
+scripting language: no variables, no control flow, no `#` comments, no shebang,
+no arguments — stated rather than implied. Nesting and oversized scripts are
+refused, never silently partial.

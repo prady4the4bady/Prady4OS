@@ -12274,3 +12274,34 @@ reasons, including one that would have passed on this very defect.
 instruments. Group D's shell row: measured — PRISM has **no scripting at all**
 (no `source`, no `#` comments, no control flow), so that half of the row is
 genuinely unbuilt, unlike the pipes/redirection/quoting halves already shipped.
+
+## CHECKPOINT 2026-09-07 — DDR-1087 (PRISM `source`)
+
+**Tip before:** `8e14fe8` (DDR-1086).
+
+**Shipped, ring-3 only:** `user/prism.c` gains `source <path>` — a script is an
+alternative **line source** for `readline()`, not a second interpreter, because
+`main()`'s dispatch is ~300 lines inline in the loop and switching the source is
+additive where refactoring it is a rewrite of the most-asserted-on path in the
+shell. Nesting refused (one buffer; a nested `source` would overwrite the outer
+script mid-execution), oversized script refused not truncated, `#` comments
+deferred on a measured untestability. Prompt suppressed while scripting.
+
+**No kernel change and the test needed none:** redirection is already shipped, so
+the `smoke-shell` injector writes the script itself with `>` and `>>`.
+`kernel.bin` 1,307,018 B — **size unchanged**; no probe ELF; 178 gates unchanged.
+
+**Proof:** `smoke-shell` rc=0, capture read back (`prism> scr-first-2h6` then
+`scr-last-5t9` with no prompt prefix — prompt suppression visible). M1 (dispatch
+removed, `57b69931248a001d`) fails **both** arms; M2 (first line only,
+`6e8146f36b9eb31b`) fails the **last-line arm alone** and is load-bearing — a
+`source` that works on any single-line script, which a one-marker gate would have
+shipped. Revert returns `81b379053094041c` bit-for-bit. Regression 5/5
+(shell, rename, ctrlaltt, aethercfg, fs) with the kernel hash identical before
+and after; `smoke-ctrlaltt` matters because `term.c` runs PRISM over a pipe pair.
+Hygiene ALL EIGHT.
+
+**Group D now:** both shell rows are closed except **`bg`**, which is a recorded
+refusal (DDR-881/1068), not work.
+
+**Open / next:** OPEN-1 route 1, OPEN-2, OPEN-12, OPEN-13 with armed instruments.

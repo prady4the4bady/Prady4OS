@@ -1593,6 +1593,10 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'run /NOPE789.ELF\n'; sleep 0.9; printf 'echo st-fail=$$?\n'; sleep 0.6; \
 	  printf 'cat /BIG8K.TXT | cat\n'; sleep 3.5; \
 	  printf 'echo pipe3-m7q | cat | cat\n'; sleep 0.9; \
+	  printf 'echo echo scr-first-2h6 > /PRISMSCR.TXT\n'; sleep 0.5; \
+	  printf 'echo echo scr-last-5t9 >> /PRISMSCR.TXT\n'; sleep 0.5; \
+	  printf 'source /PRISMSCR.TXT\n'; sleep 0.9; \
+	  printf 'source /NOSUCHSCR.TXT\n'; sleep 0.6; \
 	  printf 'cat /NOPE9k2.TXT > /OUT9k2.TXT 2> /ERR9k2.TXT\n'; sleep 0.7; \
 	  printf 'cat /ERR9k2.TXT\n'; sleep 0.5; \
 	  printf 'cat /NOPE55a.TXT 2>> /EAP55a.TXT\n'; sleep 0.7; \
@@ -1669,6 +1673,16 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# marker after `wait` must follow the probe's own line.
 	@grep -q 'PRADYOS_SLOW_DONE waited=' build/shell_serial.log || { echo "[shell] FAIL: the background job never ran (DDR-1068)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'PRADYOS_WAIT_OK reaped=1' build/shell_serial.log || { echo "[shell] FAIL: wait did not wait on the live background job (DDR-1068) — expected reaped=1"; grep -a 'PRADYOS_WAIT_OK\|PRADYOS_SLOW_DONE' build/shell_serial.log || echo '(neither line present)'; tail -40 build/shell_serial.log; exit 1; }
+	@# DDR-1087: `source`. The script is written BY THE INJECTOR through PRISM's
+	@# own shipped redirection, so this needs no kernel change and no planted
+	@# file — and the bytes it executes provably travelled through `>` and `>>`.
+	@# TWO markers, and the second is the point: a `source` that read only the
+	@# FIRST line of the file would pass a one-marker arm (mutant M2 does exactly
+	@# that). The first marker alone is live but weak; the last one carries the
+	@# claim that the file was consumed to the end, in order.
+	@grep -q 'scr-first-2h6' build/shell_serial.log || { echo "[shell] FAIL: source did not run the script's first line (DDR-1087)"; grep -a 'scr-\|source' build/shell_serial.log || echo '(no scr- or source lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'scr-last-5t9' build/shell_serial.log || { echo "[shell] FAIL: source stopped before the script's LAST line (DDR-1087) — a one-line reader, mutant M2's shape"; grep -a 'scr-' build/shell_serial.log; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'prism: source: cannot open /NOSUCHSCR.TXT' build/shell_serial.log || { echo "[shell] FAIL: source of a missing file was not reported (DDR-1087)"; tail -40 build/shell_serial.log; exit 1; }
 	@sd=$$(grep -an 'PRADYOS_SLOW_DONE' build/shell_serial.log | head -1 | cut -d: -f1); 	 wm=$$(grep -an 'WAITMARK-7q4' build/shell_serial.log | grep -v 'prism> echo' | head -1 | cut -d: -f1); 	 test -n "$$sd" -a -n "$$wm" -a "$$sd" -lt "$$wm" || { echo "[shell] FAIL: `wait` did not block — the post-wait marker (line $$wm) did not follow the job's own line (line $$sd) (DDR-1068)"; grep -an 'PRADYOS_SLOW_DONE\|WAITMARK-7q4' build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
@@ -1833,7 +1847,7 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@if grep -qaF "erasX" build/shell_serial.log; then echo "[shell] FAIL: the erase byte was stored in the command buffer (DDR-1039)"; tail -30 build/shell_serial.log; exit 1; fi
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
 	@bash tools/qemu_runner/scan_forbidden.sh build/shell_serial.log shell
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039) + quoting(DDR-1067) + wait(DDR-1068), clean, no panic."
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039) + quoting(DDR-1067) + wait(DDR-1068) + source(DDR-1087), clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a

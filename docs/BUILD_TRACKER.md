@@ -3674,3 +3674,60 @@ excluded 6 and the NSI row are correct; §4.4/§4.14/§4.15/§4.16 all still tru
 `GLOBAL_FORBIDDEN` 76 unchanged; no gate run; no checker built; no policy change;
 no open issue moves; and the `SESSION_HANDOFF.md` historical ranges are **not**
 "fixed" — normalising them would destroy the record.
+
+### DDR-1087 — PRISM `source`: a script is a LINE SOURCE, not a second interpreter (2026-09-07)
+
+**IMPLEMENTED + gated + M1/M2 on distinct hashes. Ring-3 only — no kernel
+change, no new syscall, no probe ELF, no new gate (178 unchanged).**
+
+Group D's two shell rows both ended in "scripting", and — after DDR-1085 §1 and
+DDR-1086 §1 found three consecutive rows stating the wrong thing — this one was
+**measured before being believed. It is accurate:** `grep` over `user/prism.c`
+returns only the header comment saying scripting does not exist, and the builtin
+list at `:621` has no `source`, no `.`, no `#`, no control flow.
+
+**THE DESIGN IS THE FINDING.** `main()`'s dispatch is ~300 lines **inline in the
+loop body**, so `source` had two shapes: refactor that into `execute_line()` and
+call it per script line, or **switch the line source**. The second, on blast
+radius: every gate that drives PRISM goes through `readline()`, and the change is
+*additive* — with no script loaded the function behaves byte-for-byte as before.
+It is also the more honest model: a script is **not a second interpreter**, it is
+the same interpreter reading from somewhere else, so quoting, redirection, pipes,
+`$?` and job control work inside a script for free and cannot drift.
+
+**NO KERNEL CHANGE, AND THE TEST NEEDS NONE EITHER.** Redirection is already
+shipped, so the injector writes the script itself (`echo echo … > /PRISMSCR.TXT`,
+`>>`), which is stronger than a kernel-planted literal: the bytes the script
+executes provably travelled through PRISM's own redirection path.
+
+**Vacuity measured — and this time the obvious arm is LIVE**, stated plainly
+because six of the last seven DDRs found theirs vacuous: nothing else prints the
+marker, and with `source` unimplemented PRISM says `unknown command: source`.
+**It is weak alone, though** — a one-line reader passes a one-marker arm — so the
+script carries **two** lines and both are asserted.
+
+M1 (dispatch removed, `57b69931248a001d`) fails **both** arms with
+`prism: unknown command: source` twice. M2 (`readline` serves the first line then
+reverts, `6e8146f36b9eb31b`) fails the **last-line arm alone**: `scr-first-2h6`
+present, `scr-last-5t9` absent. **M2 is load-bearing** — it is a `source` that
+works on any single-line script, which a one-marker gate would have shipped.
+Revert returns `81b379053094041c` bit-for-bit; **`kernel.bin` 1,307,018 B, SIZE
+UNCHANGED**, so the CLAUDE.md size/headroom pair is untouched.
+
+**Three refusals with reasons rather than shrugs:** nesting is **refused** (one
+buffer — a nested `source` would overwrite the outer script *mid-execution*, so
+the shell would resume at an arbitrary offset of the wrong file); an oversized
+script is **refused, not truncated** (a silent prefix of the user's commands is
+worse than not running); and `#` comments are deferred **on a measured
+untestability** — the only script-authoring mechanism available is
+`echo … > file` through this same shell, and a comment stripper would consume the
+`#` *and the redirect that follows it* on the authoring line.
+
+**Prompt suppressed while a script runs** — PRISM shares COM1 and every gate
+asserts on that log, so one prompt per script line would be N spurious capture
+lines. Visible in the capture: `prism> scr-first-2h6` then `scr-last-5t9` with no
+prefix.
+
+**NOT CLAIMED: this is not a scripting language.** No variables, no `if`/`while`,
+no functions, no `#!`, no arguments to a script. `bg` remains a recorded refusal
+(DDR-881/1068). No open issue moves; not an apfreeze, not OPEN-2.

@@ -4,7 +4,10 @@
  * serial console (raw SYS_READ on fd 0 — musl stdin would need SYS_READV), and
  * writes prompts/output with musl printf (fflush'd: the console is non-tty so
  * stdout is fully buffered). Commands are one line, space-separated; no pipes,
- * redirection, quoting, or scripting yet (ADR-024 §D3). Builtins dispatch in
+ * redirection or quoting yet (ADR-024 §D3) -- all three have since shipped
+ * (DDR-780/786 pipes+redirection, DDR-1067 quoting), and DDR-1087 adds
+ * `source`: a script is an alternative LINE SOURCE for readline(), not a
+ * second interpreter. Builtins dispatch in
  * process; `run` fork+execve+waits an external ELF. */
 #include <stdio.h>
 #include <string.h>
@@ -89,8 +92,94 @@ static inline long nsi(long n, long a1, long a2, long a3) {
 
 /* Read one line from the console into buf (NUL-terminated); returns length, or
  * -1 on EOF/error. CR is ignored; LF ends the line. */
+/* ---- DDR-1087: `source` -- a script is an alternative LINE SOURCE ---------
+ *
+ * NOT a second interpreter. main()'s dispatch is ~300 lines inline in the loop
+ * body, so the alternative was to refactor it into execute_line() and call that
+ * per script line -- a rewrite of the single most-asserted-on path in the shell
+ * to gain nothing this needs. Switching the SOURCE touches only readline(), is
+ * additive (with no script loaded this file behaves byte-for-byte as before),
+ * and means quoting, redirection, pipes, $? and job control all work inside a
+ * script for free and cannot drift from their interactive behaviour.
+ *
+ * ONE buffer, and that is why nesting is REFUSED rather than recursed: a nested
+ * `source` would overwrite the outer script's bytes WHILE THE OUTER SCRIPT IS
+ * MID-EXECUTION, so the shell would resume at an arbitrary offset of the wrong
+ * file. Refusing is the bounded answer (S2). */
+#define SCRIPT_MAX 2048
+static char g_script[SCRIPT_MAX];
+static int  g_script_len, g_script_pos, g_script_active;
+
+/* Load `path` as the line source. Returns 0, or -1 having reported why.
+ * An OVERSIZED script is REFUSED, never truncated: a truncated script executes
+ * a PREFIX of the user's commands and then stops, which is worse than not
+ * running -- and it is the failure a user would least expect to be silent. */
+static int script_load(const char *path) {
+    if (g_script_active) {
+        fprintf(stderr, "prism: source: nested source is refused\n");
+        fflush(stderr);
+        return -1;
+    }
+    long fd = nsi(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        fprintf(stderr, "prism: source: cannot open %s\n", path);
+        fflush(stderr);
+        return -1;
+    }
+    int total = 0;
+    for (;;) {
+        long r = nsi(SYS_READ, fd, (long)(g_script + total),
+                     (long)(SCRIPT_MAX - total));
+        if (r <= 0)
+            break;
+        total += (int)r;
+        if (total >= SCRIPT_MAX) {           /* did not fit -> refuse, see above */
+            nsi(SYS_CLOSE, fd, 0, 0);
+            fprintf(stderr, "prism: source: %s exceeds %d bytes, not run\n",
+                    path, SCRIPT_MAX - 1);
+            fflush(stderr);
+            return -1;
+        }
+    }
+    nsi(SYS_CLOSE, fd, 0, 0);
+    g_script_len = total;
+    g_script_pos = 0;
+    g_script_active = 1;
+    return 0;
+}
+
+/* Next line from the loaded script, or -1 when it is exhausted (which clears
+ * the flag, so the caller falls back to stdin on the very same call). */
+static int script_line(char *buf, int max) {
+    if (!g_script_active)
+        return -1;
+    if (g_script_pos >= g_script_len) {
+        g_script_active = 0;
+        return -1;
+    }
+    int n = 0;
+    while (g_script_pos < g_script_len) {
+        char c = g_script[g_script_pos++];
+        if (c == '\n')
+            break;
+        if (c == '\r')
+            continue;
+        if (n < max - 1)
+            buf[n++] = c;
+    }
+    buf[n] = 0;
+    return n;
+}
+
 static int readline(char *buf, int max) {
     int n = 0;
+
+    /* DDR-1087: the script is drained first; when it runs out the flag clears
+     * and this falls through to the console read below, in this same call. */
+    int sn = script_line(buf, max);
+    if (sn >= 0)
+        return sn;
+
     for (;;) {
         char c;
         long r = nsi(SYS_READ, 0, (long)&c, 1);
@@ -374,8 +463,14 @@ int main(void) {
     char *argv[16];
     for (;;) {
         jobs_reap();                   /* DDR-881: report finished background jobs */
-        printf("prism> ");
-        fflush(stdout);
+        /* DDR-1087: no prompt for a line the user did not type. PRISM shares
+         * COM1 with the kernel and every gate asserts on that log, so emitting
+         * one prompt per script line would put N spurious lines into the
+         * capture. The INTERACTIVE prompt is unchanged. */
+        if (!g_script_active) {
+            printf("prism> ");
+            fflush(stdout);
+        }
 
         int len = readline(line, sizeof line);
         if (len < 0)                       /* EOF: controlled exit, init won't respawn */
@@ -618,7 +713,7 @@ int main(void) {
         }
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps jobs fg kill agent action setname touch rm mv uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps jobs fg kill wait source agent action setname touch rm mv uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -870,6 +965,17 @@ int main(void) {
                        mi.total_pages * 4ULL, mi.free_pages * 4ULL, mi.used_pages * 4ULL);
             else
                 printf("free: unavailable\n");
+        } else if (!strcmp(cmd, "source")) {             /* DDR-1087 */
+            /* Run a file of commands in THIS shell. Not a scripting language:
+             * no variables, no control flow, no `#` comments (§5 records that
+             * the last of those is deferred on an untestability, not on
+             * effort), no shebang, no arguments. */
+            if (argc < 2) {
+                fprintf(stderr, "prism: source: need a path\n");
+                last_status = 2;
+            } else {
+                last_status = script_load(argv[1]) == 0 ? 0 : 1;
+            }
         } else if (!strcmp(cmd, "exit")) {
             return 0;
         } else {
