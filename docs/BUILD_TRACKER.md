@@ -3953,3 +3953,50 @@ only whether a thread sitting in one can be *killed*. `sigprocmask`,
 `SA_SIGINFO` and `SIGCHLD` are not built. **Nothing is claimed about OPEN-1 or
 OPEN-2** — `mnt_lock` is on route 1's path and a thread stuck there is now
 killable, which says nothing about why anything gets stuck; no open issue moves.
+
+---
+
+## DDR-1091 — CAP_NET is enforced at CONNECT, and UDP has no connect (2026-09-07)
+
+**Assessment. No code change, no gate, docs-only.** `kernel.bin` untouched; 179
+gates; `GLOBAL_FORBIDDEN` 76.
+
+Group C's UDP row was already corrected on 2026-09-06 and is accurate as far as
+it goes — the transport works and is gated (`smoke-net-lo`), what is missing is
+the **ring-3 door** — and it names DDR-1069's two inherited design questions
+(`struct proxy_sock` is TCP-shaped; `fork` ownership). **There is a third, it is
+larger than either, and it is about enforcement rather than ergonomics.**
+
+**Measured:** `netallow_check()` is called from **exactly three places and all
+three are inside `sys_sock_connect`** (`sys_socket.c:114`/`:135`/`:154`).
+Tree-wide the only other references are the forward declaration and three calls
+in `main.c:1670-1672`, which are a **kernel self-test of the predicate**, not an
+enforcement site. `sys_sock_write` carries DDR-1070's `privacy_refuses_io()` and
+the slot-ownership check and **no allowlist check at all**.
+
+**For TCP that is coherent and deliberate:** a connection's destination is fixed
+once at connect, so checking it once checks every byte that follows — and
+DDR-1070 closed the remaining half, the privacy switch thrown after a socket was
+already open.
+
+**A datagram names its destination per send.** There is no connect, so there is
+no moment at which the existing check could run. `SYS_UDP_SENDTO` would have to
+consult the allowlist **on every send** — a different enforcement model, with its
+own hot-path cost and its own audit-record question (DDR-801: the record states
+the decision actually made, so a per-send decision implies a per-send record
+unless something deliberately aggregates them). **And it would inherit DDR-1070's
+defect by default unless designed against it** — that finding was exactly that a
+control checked in `connect` and nowhere else misses the operation where data
+actually leaves, and here there is no connect at all, so "nowhere else" is the
+only place there is.
+
+**Not built, and the reason is DDR-1069's test rather than this finding.** All
+six ring-3 network consumers use the TCP proxy surface, so a UDP door would ship
+exercised by its own gate and by nothing else. Those are separate reasons and
+conflating them would let a future session read *"blocked"* where the truth is
+*"not needed yet, and here is the trap when it is."*
+
+**NOT CLAIMED.** No defect is reported and none exists — connect-only is correct
+for the protocol it guards. The UDP transport is not broken. No syscall is
+designed and no NSI reserved. `SYS_NET_REVOKE` is untouched and stays refused for
+DDR-734's reason. No open issue moves.

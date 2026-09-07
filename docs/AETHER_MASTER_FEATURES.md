@@ -1731,3 +1731,16 @@ blocked syscall for a catchable signal needs `EINTR` semantics this kernel does
 not have (`grep -rn EINTR` returns nothing, which is also why Group D's
 `SA_RESTART` row has no subject). Three over-stating source comments corrected,
 comment-only and verified bit-identical. 179 gates; `GLOBAL_FORBIDDEN` 76.
+
+### DDR-1091 — CAP_NET's enforcement point, and what a UDP door would need (2026-09-07)
+
+`netallow_check()` — the CAP_NET allowlist — is called from **three places, all
+inside `sys_sock_connect`**; `sys_sock_write` carries DDR-1070's privacy check
+and the slot-ownership check and no allowlist check. Correct and deliberate for
+TCP, where a destination is fixed once at connect. **A datagram names its
+destination per send**, so a ring-3 UDP door would need the allowlist consulted
+**per send** — a different enforcement model, and one that reproduces DDR-1070's
+defect (a control checked at connect and nowhere else) by default unless designed
+against it. Not built, on DDR-1069's test: all six ring-3 network consumers use
+the TCP proxy surface. Assessment only — no code change, no gate, no defect
+reported.

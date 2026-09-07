@@ -12481,3 +12481,39 @@ about why anything gets stuck. No open issue moves.
 **NEXT:** CI on `dev/phase1-seyp3n`. Tips `a0ec378` (DDR-1088 checklist record)
 and `3b4f667` (DDR-1089) were pushed and are covered by the armed check-in;
 this tip adds a third.
+
+---
+
+## 2026-09-07 — CI verification, and DDR-1091 (assessment, docs-only)
+
+**CI:** `a0ec378` (DDR-1088 checklist record) **2/2 green**; `3b4f667`
+(DDR-1089) **2/2 green**. `17e09ab` (DDR-1090) **still in progress** at the time
+of writing — a check-in is armed. Per §INV.15 a push yields at most 2 suites, and
+the third green needs `workflow_dispatch`; no promotion is in flight
+(`v1.0.0` held), so 2/2 is verification, not a promotion criterion.
+
+**DDR-1091 — assessment, no code change.** Deliberately docs-only: DDR-1090's
+change is on the `yield()` path and is in CI, so no second kernel change is
+stacked on it while that result is outstanding (the parallel-work protocol's
+"advance code reading / DDR writing" case).
+
+`netallow_check()`, the CAP_NET allowlist, is called from **exactly three places
+and all three are inside `sys_sock_connect`**; tree-wide the only other
+references are the declaration and three calls in `main.c:1670-1672` that are a
+**self-test of the predicate**, not enforcement. `sys_sock_write` carries
+DDR-1070's privacy check and the slot-ownership check and **no allowlist check**.
+
+For TCP that is coherent: a destination is fixed once at connect. **A datagram
+names its destination per send**, so a `SYS_UDP_SENDTO` would need the allowlist
+consulted **per send** — a different enforcement model with its own hot-path cost
+and audit-record question, and one that **reproduces DDR-1070's defect by default
+unless designed against it**, since there is no connect at all and "nowhere else"
+becomes the only place there is.
+
+**That is a reason to design it carefully, NOT the reason it is unbuilt** — that
+is DDR-1069's test, and it is separate: all six ring-3 network consumers use the
+TCP proxy surface.
+
+DDR free range → **`DDR-1092+`** at all four carriers.
+
+**NEXT:** confirm `17e09ab` in CI. Groups A–F backlog otherwise.
