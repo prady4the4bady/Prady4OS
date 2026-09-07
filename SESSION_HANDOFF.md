@@ -12215,3 +12215,38 @@ kernel defect fixed and none alleged: `ipc_send`, `ipc_recv`, `ipc_grant`, the
 policy engine and the DAG were all correct; what was missing is a **caller**, as
 DDR-1033 itself said. **Section 3C closing is about the ACTION TYPES only** — the
 Group F domain agents (F#66/67/69–75) remain unbuilt. No open issue moves.
+
+## CHECKPOINT 2026-09-07 — DDR-1085 (the configured agent task never reached the agent)
+
+**Tip before:** `48e7477` (DDR-1084), verified **2/2 green** directly on
+`pradyos-ci` (push 34074126990, PR 34074127533) — not taken from the webhook,
+which excludes this App's own suites.
+
+**Shipped:** `kernel/exec/elf.{h,c}` gains `elf_load_args()`; `elf_load` becomes
+a wrapper passing `0`, so all 61 existing call sites keep DDR-1032's
+"behave exactly as before" frame. `aether_spawn_agent_hook` marshals
+`{ "AGENT", task }` instead of `(void)task;`. `user/agent_base.c` reads `argv[1]`
+(not the never-supplied `argv[2]`) and prints `argc`. Config `task` is
+`verify-boot-chain` in **both** copies (`Makefile:2258`, `kernel/main.c:2929`).
+`build/sfsroot.img` now depends on `Makefile`.
+
+**Proof:** `smoke-aethercfg` rc=0, capture read back — `task=test` appears
+**zero** times. M1 `a67891d6652dbe44` fails both arms; M2 `de670aee90a1cb7d`
+fails arm A alone. **M2 first passed and the gate was wrong** — arm A's bare
+pattern was a substring of the CFG_OK line the same gate already required; now
+anchored to `PRADYOS_AGENT_START …`, re-run against M2 *before* reverting.
+Revert returns `d4b148faaca8ce09` bit-for-bit. Regression 8/8
+(aethercfg, aether, aether-sfsroot, execve-argv, agents, agentmetrics, fs,
+shell 5/5), kernel hash identical before and after. Hygiene ALL EIGHT.
+`GLOBAL_FORBIDDEN` 76. **`kernel.bin` 1,307,018 B — size unchanged**, so the
+CLAUDE.md size/headroom pair is untouched. 178 gates unchanged, no new gate.
+
+**Corrected, not closed:** Group F's "Agent `execve`-on-respawn from SFS". Its
+stated blocker was never the real one — DDR-891's supervisor is shipped and
+already carries an `agentsvc` row that is **refused before the fork by design**
+(`INIT_CAPS == CAP_NONE`). No respawn built, `INIT_CAPS` untouched.
+
+**Open / next:** OPEN-1 route 1, OPEN-2, OPEN-12, OPEN-13 all open with armed
+instruments. Group F remaining: domain agents (F#66/67/69-75), audit-ring SFS
+persistence (blocked on Group B's SFS boot root), agent respawn (policy
+decision), concurrency arbitration, roster continuity.

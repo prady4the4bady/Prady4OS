@@ -2255,8 +2255,12 @@ smoke-sfs-persist: $(IMG) fat-image sfs-image $(MKFS_SFS)
 # DDR-770: a host-provisioned SFS ROOT image carrying the real /etc/aether/config
 # (nested-dir provisioning, DDR-769). The kernel roots the AETHER daemon here
 # instead of formatting+provisioning blk2, so the boot policy ships in the build.
-AETHER_CFG_TEXT := mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n
-build/sfsroot.img: $(MKFS_SFS)
+AETHER_CFG_TEXT := mode=sovereign\ntask=verify-boot-chain\nslot=0\nnet=10.0.2.2:11434\n
+# DDR-1085: `Makefile` is a real prerequisite — the image's CONTENT is defined by
+# AETHER_CFG_TEXT above, and without this an edit to that variable left a stale
+# build/sfsroot.img locally while CI (fresh clone) built the new one, so the same
+# commit meant two different boot policies depending on where it ran.
+build/sfsroot.img: $(MKFS_SFS) Makefile
 	@mkdir -p build
 	printf '$(AETHER_CFG_TEXT)' > build/aethercfg.txt
 	$(MKFS_SFS) build/sfsroot.img --blocks 4096 --file /etc/aether/config=build/aethercfg.txt
@@ -4255,9 +4259,27 @@ smoke-agentpanel: $(IMG) fat-image sfs-image
 # the SFS root (kernel-provisioned, DDR-760/761) and applies mode/task/slot from
 # it — the CFG_OK line proves the file was read AND parsed (CFG_DEFAULT, the compiled
 # fallback, is the forbidden pattern); AGENT_DONE proves the configured spawn ran.
+#
+# DDR-1085: "applies mode/task/slot" was two-thirds true. mode reached SYS_SET_MODE
+# and slot reached the roster, but the kernel's spawn hook DISCARDED the task with
+# `(void)task;` — and no arm could see it, because the config's value was `test`,
+# byte-identical to agent_base.c's compiled-in fallback, so the agent printed the
+# right answer without the string ever arriving. The value is now
+# `verify-boot-chain`, which appears NOWHERE in agent_base.c, so the last two
+# patterns are the config -> syscall -> argv frame -> main wire:
+#   PRADYOS_AGENT_START task=verify-boot-chain
+#                            the STRING crossed both ring boundaries
+#   mode=test argc=2         the COUNT crossed (a NULL-args frame is argc=1)
+# They are separate greps and fail separately: restoring `(void)task` fails both,
+# restoring the agent's never-supplied argv[2] index fails only the first.
+#
+# The first pattern MUST carry the PRADYOS_AGENT_START prefix. A bare
+# `task=verify-boot-chain` is a SUBSTRING OF THE CFG_OK LINE above it, so the
+# daemon echoing its own parse satisfied it and the arm said nothing about the
+# agent at all — measured, not reasoned: mutant M2 passed until this was anchored.
 smoke-aethercfg: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_CFG_OK mode=sovereign task=test slot=0\nPRADYOS_AGENT_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_CFG_OK mode=sovereign task=verify-boot-chain slot=0\nPRADYOS_AGENT_DONE\nPRADYOS_AGENT_START task=verify-boot-chain\nmode=test argc=2')" \
 	FORBIDDEN_SENTINEL="PRADYOS_AETHER_CFG_DEFAULT" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

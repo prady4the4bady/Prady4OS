@@ -1153,10 +1153,37 @@ static void smpuser_proof(void) {
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
 static uint32_t g_aether_daemon_pid;
 static long aether_spawn_agent_hook(const char *task) {
-    (void)task;
     struct tcb *ut = 0;
     uint64_t len = (uint64_t)((uintptr_t)agent_base_elf_end - (uintptr_t)agent_base_elf);
-    if (elf_load((void *)(uintptr_t)agent_base_elf, len, "AGENT", &ut) != ELF_OK || !ut)
+
+    /* DDR-1085: hand the CONFIGURED task to the agent as argv[1].
+     *
+     * This line used to read `(void)task;`. The daemon parses `task=` out of
+     * /etc/aether/config, sys_spawn_agent copyinstr's it across the ring boundary
+     * into a 64-byte buffer, and the hook then DISCARDED it -- the DDR-1032 shape
+     * DDR-877 called "worse than incomplete", invisible because the shipped
+     * config's value was byte-identical to agent_base.c's compiled-in fallback,
+     * so `task=test` printed the right answer without the string ever arriving.
+     *
+     * argv[0] is the image name and argv[1] the first argument, DDR-1032b's
+     * execv(3) convention. An EMPTY task passes NULL rather than an empty
+     * argv[1], so a boot with no config keeps today's frame exactly (argc=1). */
+    static const char agent_argv0[] = "AGENT";
+    char blob[sizeof agent_argv0 + 64];   /* argv[0] + NUL, then task[64] + NUL */
+    struct exec_args ea;
+    const struct exec_args *eap = 0;
+    if (task && task[0]) {
+        unsigned n = 0;
+        for (unsigned i = 0; i < sizeof agent_argv0; i++)   /* includes the NUL */
+            blob[n++] = agent_argv0[i];
+        for (unsigned i = 0; task[i] && n + 1 < sizeof blob; i++)
+            blob[n++] = task[i];
+        blob[n++] = 0;
+        ea.blob = blob; ea.blob_len = n; ea.argc = 2; ea.envc = 0;
+        eap = &ea;
+    }
+
+    if (elf_load_args((void *)(uintptr_t)agent_base_elf, len, "AGENT", eap, &ut) != ELF_OK || !ut)
         return -1;
     ut->is_agent = 1;                  /* authority BEFORE the first run */
     ut->is_net = 1;                    /* DDR-731: agents are the sanctioned socket users
@@ -2898,8 +2925,16 @@ static void fs_test_thread(void *arg) {
                          * mkfs.sfs image already carries one (prov_mnt < 0). When a
                          * provisioned root is present the daemon roots there
                          * (below) and this write is skipped entirely. */
+                        /* DDR-1085: this text is DUPLICATED at Makefile:2258
+                         * (AETHER_CFG_TEXT, the host mkfs.sfs image DDR-770 roots
+                         * at). Two copies of one boot policy: keep them in step or
+                         * the two config gates disagree about what the policy IS.
+                         * `task` is `verify-boot-chain` rather than the old `test`
+                         * because `test` was byte-identical to agent_base.c's
+                         * compiled-in fallback, so the whole config -> kernel ->
+                         * agent wire was unobservable -- and, as measured, unbuilt. */
                         static const char CFGTEXT[] =
-                            "mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n";
+                            "mode=sovereign\ntask=verify-boot-chain\nslot=0\nnet=10.0.2.2:11434\n";
                         if (prov_mnt < 0) {
                             struct vfs_file cf;
                             if (vfs_create(cap, root_smnt, "/etc/aether/config", &cf) == 0)

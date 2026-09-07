@@ -293,11 +293,19 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
 
 int elf_load(const void *image, uint64_t image_len, const char *name,
              struct tcb **out) {
+    /* DDR-1085: the pre-existing entry point, now one line. Passing 0 here is the
+     * literal this function's body used to pass, so all 61 existing call sites
+     * keep DDR-1032's "behave exactly as before" frame -- argc=1, argv[0]=name. */
+    return elf_load_args(image, image_len, name, 0, out);
+}
+
+int elf_load_args(const void *image, uint64_t image_len, const char *name,
+                  const struct exec_args *args, struct tcb **out) {
     if (!out)
         return ELF_E_ARGS;
 
     uint64_t as, entry, user_rsp;
-    int rc = elf_build_image(image, image_len, name, 0, &as, &entry, &user_rsp);
+    int rc = elf_build_image(image, image_len, name, args, &as, &entry, &user_rsp);
     if (rc != ELF_OK)
         return rc;
 

@@ -1657,3 +1657,15 @@ named or fixed and none is alleged; DDR-981 is not accused of anything — its
 lesson is quoted to support the verdict; and the single run performed is reported
 so its absence is not mistaken for an untried experiment, not as support for the
 verdict.
+
+### DDR-1085 — boot-config `task` now reaches the agent (Section F, 2026-09-07)
+
+The AETHER boot policy on `/etc/aether/config` declares `mode`, `task` and
+`slot`. `mode` and `slot` were applied; **`task` was dropped by the kernel's
+spawn hook** and the agent fell back to a compiled-in default that happened to
+be the same string, so the whole config → kernel → agent wire was both
+unobservable and unbuilt (DDR-1085). The agent now receives it as `argv[1]` via
+DDR-1032's marshalling (`elf_load_args`), and `smoke-aethercfg` asserts the
+string and the argument count separately. Feature state: **config → agent task
+plumbing SHIPPED and GATED.** No change to what any agent *does* — `task` is
+informational; nothing branches on it.

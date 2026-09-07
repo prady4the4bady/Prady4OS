@@ -3589,3 +3589,38 @@ returns `-ETIMEDOUT` because the endpoint is genuinely empty — a value the
 probe cannot manufacture. M2 (send regardless of the verdict) gets `rc=0`
 from the kernel instead. Cost stated: `ipc_recv` blocks for DDR-961's
 500-tick bound, spending no syscall budget.
+
+### DDR-1085 — the configured agent `task` never reached the agent (2026-09-07)
+
+**FIXED + gated + M1/M2 on distinct hashes.** `smoke-aethercfg`'s header claimed
+the daemon "applies mode/task/slot"; `mode` and `slot` arrived, `task` did not —
+`aether_spawn_agent_hook` discarded it with `(void)task;` after the kernel had
+already `copyinstr`'d it across the ring boundary. **Invisible because the
+shipped config's `task=test` was byte-identical to `agent_base.c`'s compiled-in
+fallback**, so every boot printed the right answer without the string arriving.
+Second wire error underneath: the agent read `argv[2]`, an index no caller has
+ever supplied. Fix: `elf_load_args()` (`elf_load` becomes a wrapper passing `0`,
+all 61 call sites unchanged), the hook marshals `{ "AGENT", task }`, the agent
+reads `argv[1]` and prints `argc`; config value is now `verify-boot-chain`.
+Arms on `smoke-aethercfg` (no new gate, 178 unchanged). M1 (hook restores
+`(void)task`, `a67891d6652dbe44`) fails both arms; M2 (agent restores `argv[2]`,
+`de670aee90a1cb7d`) fails arm A alone. **M2 first PASSED** — arm A's bare
+`task=verify-boot-chain` is a substring of the CFG_OK line the same gate already
+requires, so the daemon's echo satisfied it; now anchored to
+`PRADYOS_AGENT_START …`. Revert returns `d4b148faaca8ce09` bit-for-bit;
+`kernel.bin` 1,307,018 B **size unchanged**. Regression 8/8, hygiene ALL EIGHT,
+`GLOBAL_FORBIDDEN` 76.
+
+Also found and fixed on the build side: the config text is **duplicated**
+(`Makefile:2258` host-mkfs, `kernel/main.c:2929` kernel-provisioned — the latter
+is what `smoke-aethercfg` reads), and `build/sfsroot.img` did not depend on the
+Makefile that defines its content, so an `AETHER_CFG_TEXT` edit left a stale
+image locally while CI built the new one.
+
+**[CORRECTED] Group F "Agent `execve`-on-respawn from SFS"** — neither stated
+blocker is the real one. DDR-891's supervisor is shipped in `user/init.c` and
+already carries `{ "agentsvc", "/AGENT.ELF", RESTART_NEVER, CAP_AGENT }`, which
+is **refused before the fork by design** (`INIT_CAPS == CAP_NONE`; *"init never
+grants; it only refuses"*). The blocker is that refusal, not a filesystem — and
+removing it is what the row's wording invites. **No respawn built; `INIT_CAPS`
+untouched; `/AGENT.ELF` not placed.**

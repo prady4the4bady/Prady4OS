@@ -162,9 +162,20 @@ static void agent_exec_fail(const char *step, long rc) {
 #endif
 
 int main(int argc, char **argv) {
-    const char *task = (argc > 2) ? argv[2] : "test";
-    printf("PRADYOS_AGENT_START task=%s mode=%s\n",
-           task, AETHER_TEST_MODE ? "test" : "live");
+    /* DDR-1085: argv[1], not argv[2].
+     *
+     * This read `argv[2]`, an index NO CALLER HAS EVER SUPPLIED -- the kernel's
+     * spawn hook discarded the configured task with `(void)task;` and passed
+     * elf_load's NULL-args frame (argc=1), so the index was a claim about a
+     * calling convention nothing implemented and could not be observably wrong.
+     * DDR-1032b settled the convention when it wired PRISM's `run`: argv[0] is
+     * the image, so a program's first argument is argv[1].
+     *
+     * argc is printed because it is the arm the task string cannot carry: a build
+     * whose hook passes no args prints argc=1 whatever the config says. */
+    const char *task = (argc > 1) ? argv[1] : "test";
+    printf("PRADYOS_AGENT_START task=%s mode=%s argc=%d\n",
+           task, AETHER_TEST_MODE ? "test" : "live", argc);
     fflush(stdout);
 
 #if !AETHER_TEST_MODE

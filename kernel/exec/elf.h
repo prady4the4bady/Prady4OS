@@ -19,6 +19,11 @@ struct tcb;
 int elf_load(const void *image, uint64_t image_len, const char *name,
              struct tcb **out);
 
+/* DDR-1085: elf_load with a marshalled argv/envp frame (struct exec_args, below).
+ * `elf_load` is exactly this with args == 0, so every one of its call sites keeps
+ * the DDR-1032 "behave exactly as before" frame -- argc=1, argv[0]=name. Declared
+ * after struct exec_args at the bottom of this header. */
+
 /* Loader core shared by elf_load and sys_execve: validate the image, build a
  * fresh W^X address space, map its PT_LOAD segments, and lay out the 8 MiB user
  * stack with the SysV ABI initial frame — WITHOUT creating a thread. On success
@@ -44,6 +49,10 @@ struct exec_args {
 int elf_build_image(const void *image, uint64_t image_len, const char *name,
                     const struct exec_args *args,
                     uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp);
+
+/* DDR-1085: see the note beside elf_load. args == 0 is identical to elf_load. */
+int elf_load_args(const void *image, uint64_t image_len, const char *name,
+                  const struct exec_args *args, struct tcb **out);
 
 enum elf_err {
     ELF_OK            =  0,
