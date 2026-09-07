@@ -3541,3 +3541,51 @@ hand-copied by nothing (DDR-1070 made it audit-only on purpose, so nothing submi
 Its justification is a *different* one the comment does not state — it crosses the
 boundary inside every **audit record**, not every submission — so that would be a comment
 edit on a correct pin.
+
+
+---
+
+## DDR-1084 — Section 3C closes, and a blind spot in how blockers get retired
+
+`ACTION_SEND_IPC` was the last open Section 3C action type. It is wired
+(`user/actionipctest.c`, arms on `smoke-sendipc`), so the section closes at
+**8 of 8**, and both DDR-1072 §2 traps are resolved.
+
+### The pattern worth carrying
+
+**A DDR that retires a blocker does not, by default, revisit the row the
+blocker was holding.** Two consecutive instances:
+
+| row | blocker | retired by | that DDR's own NOT CLAIMED | row stayed open |
+|---|---|---|---|---|
+| `ACTION_RUN_EXPERIMENT` | DDR-1021 | **DDR-1034** | *"the AETHER action path does not yet CALL this"* | ~49 DDRs |
+| `ACTION_SEND_IPC` | DDR-1017 | **DDR-1033** | *"the AETHER action path does not yet CALL this"* | ~51 DDRs |
+
+Both times the unblocking DDR stated the residual accurately **in its own
+text**, and the row was not updated — the session was working on the
+subsystem, not on the row. DDR-1071 §4's reading applied to **blockers**
+rather than completion markers, and it is the more expensive direction: a
+stale completion marker understates progress; **a stale blocker suppresses
+work that is already unblocked.**
+
+No checker: the signal is semantic (DDR-1071 §5, DDR-1072 §2, DDR-1081 §3).
+The cheap substitute is a habit — **a DDR that retires a blocker should name
+the rows it held.** Two instances is not a rate.
+
+### The pin, arriving correctly
+
+`aether.h` left `ACTION_SEND_IPC == 7` unpinned on the rule *"a pin whose
+probe does not exist would read as a claim that one does"* — true until this
+commit (the only two matches outside the header were **comments**). The probe
+makes 7 hand-copied, so the pin is now owed and is added with a justification
+accurate when written — one commit after DDR-1083 §2 found the same file's
+RUN_EXPERIMENT pin carrying that same claim **falsely**.
+
+### Arm B is stronger than DDR-1083's, by design
+
+There the decline printed `ran=0`, a flag the probe reports about itself.
+Here the probe declines and then *receives* on that slot, and the **kernel**
+returns `-ETIMEDOUT` because the endpoint is genuinely empty — a value the
+probe cannot manufacture. M2 (send regardless of the verdict) gets `rc=0`
+from the kernel instead. Cost stated: `ipc_recv` blocks for DDR-961's
+500-tick bound, spending no syscall budget.

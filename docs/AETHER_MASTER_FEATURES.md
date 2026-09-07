@@ -1082,15 +1082,24 @@ not excluded (`smoke-actionread`, `smoke-actiondel`, `smoke-actionquery`,
 `smoke-coderewrite` **strict**, `smoke-actionhypo`). `CLAUDE.md`'s Group F table
 carried all eight as `gate per type` with no marker.
 
-**`ACTION_SEND_IPC` remains deferred as an ACTION TYPE. `ACTION_RUN_EXPERIMENT` NO
-LONGER IS — DDR-1083 wired it** (`user/actionexptest.c` submits the type, waits for
-the verdict and runs only on approval; arms on `smoke-runexp`). What that adds is the
-propose → arbitrate → **obey** loop and its audit record, **not** a new enforcement:
-`sys_run_experiment` does not consult the action queue and DDR-1083 did not make it,
-so an `is_exec` agent can still call NSI 100 without submitting — which is the
-system's design for every action type (DDR-1013 §2, the kernel arbitrates and the
-AGENT acts). `aether_action_forces_pending()` is deliberately unchanged and whether
-RUN_EXPERIMENT belongs in it is recorded as an operator decision (DDR-1083 §6).
+**SECTION 3C CLOSES AT 8 OF 8 ACTION TYPES — DDR-1084 wired the last one.**
+`ACTION_SEND_IPC` was the final open type; `user/actionipctest.c` submits it,
+waits for the verdict and sends only on approval (arms on `smoke-sendipc`).
+With DDR-1083's `ACTION_RUN_EXPERIMENT`, **both** of the DDR-1072 §2 traps are
+closed — each gate's name matched its action type while its claim was a
+different thing, and each now covers both.
+
+**What that adds is the propose → arbitrate → obey loop and its audit record,
+NOT a new enforcement.** Neither `sys_ipc_send` nor `sys_run_experiment`
+consults the action queue, and neither DDR made it do so, so an agent holding
+the relevant door can still call NSI 98 / NSI 100 without submitting. That is
+the system's design for every action type (DDR-1013 §2: the kernel arbitrates,
+the AGENT acts). `aether_action_forces_pending()` is unchanged for both types,
+and whether either belongs in it is an operator decision (DDR-1083 §6).
+
+**Closing is about the ACTION TYPES only** — it says nothing about the Group F
+domain agents (F#66/67/69–75), which remain unbuilt.
+
 
 *(Superseded, kept for the record: this paragraph read* "`ACTION_SEND_IPC` and `ACTION_RUN_EXPERIMENT` remain deferred as ACTION
 TYPES, and each sits beside a strict-tier green gate whose name matches it —

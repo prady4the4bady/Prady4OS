@@ -506,3 +506,10 @@ global actionexptest_elf_end
 actionexptest_elf:
     incbin "build/actionexptest.elf"
 actionexptest_elf_end:
+
+; ipc (DDR-1084): Section 3C ACTION_SEND_IPC, propose -> arbitrate -> obey.
+global actionipctest_elf
+global actionipctest_elf_end
+actionipctest_elf:
+    incbin "build/actionipctest.elf"
+actionipctest_elf_end:

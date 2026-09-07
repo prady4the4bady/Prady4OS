@@ -473,6 +473,8 @@ extern const unsigned char actionhypotest_elf[];      /* DDR-1020: 3C HYPO + GEN
 extern const unsigned char actionhypotest_elf_end[];
 extern const unsigned char actionexptest_elf[];       /* DDR-1083: 3C RUN_EXPERIMENT */
 extern const unsigned char actionexptest_elf_end[];
+extern const unsigned char actionipctest_elf[];       /* DDR-1084: 3C SEND_IPC */
+extern const unsigned char actionipctest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -2528,6 +2530,26 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] IPC un-granted probe FAILED to load\r\n");
                     }
                     kputs("[user] ring-3 IPC door probes spawned (granted + un-granted)\r\n");
+
+                    /* DDR-1084: the ACTION path into the same door. A THIRD
+                     * process for DDR-1083's reason: it needs is_agent (to
+                     * submit at all) AND the door, and IPCDENY exists precisely
+                     * to lack the door, so neither existing spawn could carry
+                     * it. Same probe key, so the arms land on smoke-sendipc and
+                     * no new gate is created (DDR-1039's reasoning). It uses
+                     * endpoint slots 4 and 5; ipctest uses slot 2. */
+                    struct tcb *ia = 0;
+                    uint64_t ialen = (uint64_t)(uintptr_t)actionipctest_elf_end -
+                                     (uint64_t)(uintptr_t)actionipctest_elf;
+                    if (elf_load((void *)(uintptr_t)actionipctest_elf, ialen,
+                                 "ACTIONIPC", &ia) == ELF_OK && ia) {
+                        ia->is_agent = 1;              /* authority to PROPOSE */
+                        ipc_grant(ia);                 /* authority to SEND */
+                        sched_unblock(ia);
+                        kputs("[user] 3C SEND_IPC probe spawned (agent + ipc door)\r\n");
+                    } else {
+                        kputs("[user] ACTIONIPC probe FAILED to load\r\n");
+                    }
                 }
                 /* DDR-1034: the bounded experiment executor, spawned TWICE for
                  * the same reason and with the same fixture shape. is_exec is

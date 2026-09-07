@@ -60,11 +60,25 @@ _Static_assert(ACTION_READ_FILE     == 5, "action wire format: READ_FILE is 5");
  * would silently become vacuous if the number drifted onto a type that is not in
  * aether_action_forces_pending() below. */
 _Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6");
-/* DDR-1018. NOTE ACTION_SEND_IPC == 7 sits between these two and is deliberately
- * NOT pinned: ipc_send/ipc_recv are kernel-internal and capability-gated, and
- * there is no SYS_IPC_*, so an approved SEND_IPC has no executor in any ring
- * (DDR-1017 §1). Nothing hand-copies 7, and a pin whose probe does not exist
- * would read as a claim that one does. */
+/* DDR-1018 recorded that ACTION_SEND_IPC == 7 was deliberately NOT pinned:
+ * ipc_send/ipc_recv were kernel-internal with no SYS_IPC_*, so an approved
+ * SEND_IPC had no executor in any ring (DDR-1017 §1) -- and the rule it gave is
+ * the one this file lives by: "Nothing hand-copies 7, and A PIN WHOSE PROBE DOES
+ * NOT EXIST WOULD READ AS A CLAIM THAT ONE DOES."
+ *
+ * PINNED 2026-09-07 (DDR-1084 §2), because the rule's CONDITION is now
+ * satisfied. DDR-1033 built the door; user/actionipctest.c is the caller, and it
+ * hand-copies 7 and submits the type. Measured before the pin was added: the
+ * only two matches for ACTION_SEND_IPC outside this header were COMMENTS
+ * (user/actionquerytest.c:4, user/ipctest.c:3), so 7 genuinely crossed no ring
+ * boundary until that probe existed.
+ *
+ * Worth reading beside the RUN_EXPERIMENT note below, which DDR-1083 §2 found
+ * carrying the same claim in the confident past tense about a probe
+ * (user/exptest.c) that does not hand-copy anything. Same file, same rule, one
+ * commit apart, opposite outcomes -- and the only difference is whether the
+ * probe was built before or after the sentence asserting it. */
+_Static_assert(ACTION_SEND_IPC      == 7, "action wire format: SEND_IPC is 7");
 _Static_assert(ACTION_QUERY_MEMORY  == 8, "action wire format: QUERY_MEMORY is 8");
 /* DDR-1020. Both hand-copied by user/actionhypotest.c, which runs them in ONE
  * boot on opposite sides of the force-pending split below -- so a drift that

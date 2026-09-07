@@ -12140,3 +12140,78 @@ all correct; what was missing is a **caller**. **Arm A is the weaker arm and is
 stated as such** — a probe that fabricated its own `st=` would pass it, so arm B
 carries the claim. The `ACTION_NET_EGRESS == 13` pin is noted, not touched. No
 open issue moves; not an apfreeze, not OPEN-2.
+
+---
+
+## DDR-1084 — Section 3C `ACTION_SEND_IPC` wired: the section closes at 8/8, and a structural blind spot is named
+
+**Tip:** on `dev/phase1-seyp3n`, after `4a75699` (DDR-1083, verified **2/2 green**
+— push 34070786425, PR 34070788540).
+**kernel.bin:** `42c33222c861a0b6`, 1,307,018 B (was 1,298,826 — the page-aligned
+8,192 B every embedded probe costs). Headroom 265,846 B, recomputed in the same
+edit.
+
+### The finding is structural, and it is the second consecutive instance
+
+**A DDR that retires a blocker does not, by default, revisit the row the blocker
+was holding.**
+
+| row | blocker | retired by | that DDR's own NOT CLAIMED | row stayed open |
+|---|---|---|---|---|
+| `ACTION_RUN_EXPERIMENT` | DDR-1021 | **DDR-1034** | *"the AETHER action path does not yet CALL this"* | ~49 DDRs |
+| `ACTION_SEND_IPC` | DDR-1017 | **DDR-1033** | *"…does not yet CALL this, so an approved SEND_IPC still has no automatic effect"* | ~51 DDRs |
+
+Both times the unblocking DDR **stated the residual accurately in its own text**
+and the row was not updated, because that session was working on the *subsystem*,
+not the *row*. DDR-1071 §4's reading applied to **blockers** rather than
+completion markers — and it is the more expensive direction: a stale completion
+marker understates progress, while **a stale blocker suppresses work that is
+already unblocked**.
+
+**No checker.** The signal is semantic — the wall DDR-1071 §5 and DDR-1072 §2
+each hit and DDR-1081 §3 sharpened. The cheap substitute, done here: **a DDR that
+retires a blocker names the rows it held.** Two instances is not a rate.
+
+### The pin, arriving correctly one commit after DDR-1083 found it false
+
+`aether.h` left `ACTION_SEND_IPC == 7` unpinned on its own rule — *"a pin whose
+probe does not exist would read as a claim that one does"* — **true until this
+commit**, measured: the only two matches outside the header were **comments**.
+The probe makes 7 hand-copied, so the pin is owed and is added with a
+justification accurate when written. Same file, same rule, opposite outcome.
+
+### Not a new enforcement
+
+`sys_ipc_send` does not consult the action queue and this does not make it. An
+`is_exec`/`is_ipc` agent can still call the syscall without submitting. What is
+added is propose → arbitrate → **obey** plus the audit record (DDR-1013 §2).
+
+### Arm B is stronger than DDR-1083's, deliberately
+
+DDR-1083's decline printed `ran=0` — a flag the probe reports about itself, which
+that DDR's own §9 recorded as its weaker half. Here the probe declines and then
+**receives** on that slot, and the *kernel* returns `-ETIMEDOUT` because the
+endpoint is genuinely empty. Cost stated in the design and then observed: the
+capture shows a 113-line gap between the arms — DDR-961's 500-tick `ipc_recv`
+bound, spending no syscall budget.
+
+| | result |
+|---|---|
+| `smoke-sendipc` | rc=0; `IPCACT_A st=2 sent=1 rc=0 back=0x00000000A71C0001`, `IPCACT_B st=1 pst=1 sent=0 rc=-110`, each once |
+| M1 (arm A wrong action type) | `5ef29ac13ab70a87` — fails **arm A alone** (`st=1 sent=0`) |
+| M2 (arm B ignores the verdict) | `2e0e690bcda91757` — fails **arm B alone**, `rc=0` **from the kernel** |
+| revert | `42c33222c861a0b6` **bit-for-bit** |
+| regression | `smoke-shell` 5/5, `smoke-runexp`, `smoke-aether`, `smoke-actionhypo`, `smoke-actiondag` all rc=0 |
+| hygiene | ALL EIGHT; `GLOBAL_FORBIDDEN` 76; probe ELFs 77 → 78 |
+
+M2 is the load-bearing mutant: the discriminating value comes from the kernel,
+not from the probe.
+
+### Not claimed
+
+No new enforcement. No policy change — `aether_action_forces_pending()` untouched
+for both types, and whether either belongs in it is an operator decision. No
+kernel defect fixed and none alleged: `ipc_send`, `ipc_recv`, `ipc_grant`, the
+policy engine and the DAG were all correct; what was missing is a **caller**, as
+DDR-1033 itself said. **Section 3C closing is about the ACTION TYPES only** — the
+Group F domain agents (F#66/67/69–75) remain unbuilt. No open issue moves.

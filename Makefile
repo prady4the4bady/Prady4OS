@@ -155,6 +155,8 @@ USER_AHYP_SRC := user/actionhypotest.c   # DDR-1020: 3C HYPOTHESIS + EVOLVE_GENO
 USER_AHYP_ELF := build/actionhypotest.elf
 USER_AEXP_SRC := user/actionexptest.c    # DDR-1083: 3C RUN_EXPERIMENT end to end
 USER_AEXP_ELF := build/actionexptest.elf
+USER_AIPC_SRC := user/actionipctest.c    # DDR-1084: 3C SEND_IPC end to end
+USER_AIPC_ELF := build/actionipctest.elf
 USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
@@ -578,6 +580,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AHYP_ELF) build/actionhypotest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_AEXP_SRC) -o build/actionexptest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AEXP_ELF) build/actionexptest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AIPC_SRC) -o build/actionipctest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AIPC_ELF) build/actionipctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
@@ -3814,8 +3818,8 @@ smoke-actionread: $(IMG) fat-image sfs-image
 smoke-sendipc: $(IMG) fat-image sfs-image
 	@rm -f build/ipc.log
 	@SERIAL_LOG=build/ipc.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=ipc \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_IPC_GATE rc=0\nPRADYOS_IPC_GATE rc=-1\nPRADYOS_IPC_SLOT rc=-22\nPRADYOS_IPC_RT w0=11 w3=44\nPRADYOS_IPC_OK')" \
-	FORBIDDEN_SENTINEL="IPCTEST FAIL" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_IPC_GATE rc=0\nPRADYOS_IPC_GATE rc=-1\nPRADYOS_IPC_SLOT rc=-22\nPRADYOS_IPC_RT w0=11 w3=44\nPRADYOS_IPC_OK\nPRADYOS_IPCACT_A st=2 sent=1 rc=0 back=0x00000000A71C0001\nPRADYOS_IPCACT_B st=1 pst=1 sent=0 rc=-110\nPRADYOS_IPCACT_OK')" \
+	FORBIDDEN_SENTINEL="IPCTEST FAIL|ACTIONIPC FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[sendipc] PASS — $$(grep -a PRADYOS_IPC_RT build/ipc.log | head -1)"
 
