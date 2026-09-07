@@ -1798,3 +1798,22 @@ said it "needs SFS boot root first" — the AETHER daemon has been rooted at an 
 mount on every gate boot for a long time, and what is actually missing is a
 flusher for the append-only circular in-memory log. No code change, no gate, no
 defect.
+
+**DDR-1095 (audit persistence: the real blocker, and an F#76 correction).** The
+Group F row's stated blocker was refuted by DDR-1094; the real one is the read
+API. `aether_audit_read` returns only the **most recent `n`** entries,
+`sys_read_audit` clamps to **64** against a **4096**-entry ring, and there is no
+cursor or sequence number (`g_count` saturates, as its own declaration says) — so
+**ring 3 cannot drain the log**, and a naive flusher would produce a file named
+`audit.log` holding a 1.5% sample, the DDR-1059 shape. A cursor fits in the
+ignored `a3` **without touching the record layout DDR-842 protected**, and
+`a3 == 0` can keep its meaning verbatim because all four callers pass it
+explicitly as 0 (measured, each stub binding `"d"(a3)`). Not built — an ABI
+extension is its own decision. **And the F#76 row is corrected:** it was marked
+✅ by pointing at DDR-842's `smoke-auditchain` gates, while DDR-842's own record
+above — and `aether_audit_verify`'s comment — both end *"the durable ledger that
+survives wrap is F#76 and is not claimed here"*. Nothing in the tree writes a log
+file. What shipped is tamper-**evidence** over a circular in-memory window; F#76
+names **durability**. The DDR-1071 §7b class in its mirror form: a ✅ on half a
+claim is a false positive, and a false positive is a row that silently stops
+being work. DDR-842's work is not disputed — the record is.

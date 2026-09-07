@@ -4306,3 +4306,75 @@ the `main.c` blocks at `:1406-1420`, `:1483-1560`, `:3005-3070`, `:4160-4196`.
 The Group B row is corrected, not closed; no build-system decision is taken; the
 Group F row is unblocked, not built. OPEN-1/2/12/13 untouched, no open issue
 moves, no release action taken or proposed.
+
+---
+
+## DDR-1095 — the audit-persistence blocker is the read API, and F#76 is marked shipped on work that declined the attribution
+
+**ASSESSMENT — docs only, no code change, no gate, no defect fixed.**
+
+**THE BLOCKER, MEASURED.** DDR-1094 §8 retired this row's *stated* blocker and
+named what was missing as "a flusher". Designing one found it was **never
+buildable from ring 3**: `aether_audit_read` returns **the most recent `n`
+entries and nothing else**, `sys_read_audit` clamps `max` to **64** against a
+**4096**-entry ring, there is **no cursor, no start index and no sequence
+number**, and `g_count` is documented in its own declaration as saturating at
+`AETHER_AUDIT_LEN`, so it cannot be resumed from either. Two successive calls
+return overlapping windows with no way to tell what is new, and at best **64 of
+4096** are ever reachable. **And the naive version is the DDR-1059 shape:** a
+file named `/etc/aether/audit.log` silently holding the newest 64 events would
+read as a durable trail and be a **1.5% sample**.
+
+**THE FIX IS AVAILABLE WITHOUT TOUCHING THE ABI DDR-842 PROTECTED.**
+`sys_read_audit` ignores `a3`/`a4`, so a cursor fits in `a3` with **no change to
+the record layout** — which matters because DDR-842 refused to widen that struct
+for a measured reason (three probes carry their own copy; 32 extra bytes per
+entry would be *"an overflow, not a parse error"*). And `a3 == 0` can keep
+meaning "newest `n`" **verbatim, measured not assumed**: all four callers pass
+`a3` explicitly as 0 — `pradyos.h:92`, `egressaudittest.c:81` (asks 128),
+`privacynettest.c:240` (asks 256), `sovegresstest.c:72` (asks 64) — and each
+freestanding stub binds `"d"(a3)`, so RDX is written, not left to chance. The
+DDR-1032 shape. It still needs a monotonic `g_written`, since `g_count`
+saturates. **Not built** — an ABI extension plus a daemon change plus a gate is
+its own decision (DDR-1038/1050/1069 precedent).
+
+**THE FINDING THAT MATTERS MORE: F#76's ✅ is on work that disclaimed it.**
+`CLAUDE.md` marked *"F#76 tamper-evident ledger — SHIPPED + GATED ×2"* pointing
+at `smoke-auditchain`/`-tamper`. **Those are DDR-842's gates**, and DDR-842's own
+record (`AETHER_MASTER_FEATURES.md:128`) and `aether_audit_verify`'s source
+comment both end: *"The durable ledger that survives wrap is F#76 and **is not
+claimed here**."* Measured, so the disagreement is not a reading: `grep -rn
+'audit\.log'` over `kernel/ user/ Makefile` returns **zero writers**. What
+shipped is **tamper-EVIDENCE over a circular in-memory window**; what F#76 names
+is **DURABILITY**.
+
+**The DDR-1071 §7b class in its MIRROR form, and the mirror is worse.** There,
+open rows were secretly shipped — a false negative, costing a re-measurement.
+Here a ✅ covers half a claim — a false positive, and a false positive is a row
+that **silently stops being work**. Same shape as `smoke-horizon`, except this
+one carries a completion marker. **DDR-842 is not criticised**: its work is real,
+gated two-sidedly, it found a live 128 KiB-for-256 KiB heap overflow on the way,
+and it stated its own limit accurately. The defect is in the tracker — the
+DDR-1084 §1 failure again. **And the two rows are the same item**, listed twice:
+once ✅, once open with a blocker DDR-1094 refuted.
+
+**THE GATE IT WOULD NEED, because the obvious one is vacuous** (thirteenth time
+caught in design text): "the file exists and is non-empty" passes on any bytes,
+and "it contains a record" passes on an invented one (DDR-1066's M2 lesson).
+**What the daemon cannot manufacture is a record about a process that is not
+it** — the boot fills the ring with kernel-written entries carrying other
+processes' `agent_pid`. A second arm follows free from the cursor (two flushes
+must not duplicate), and without the cursor it cannot be written at all.
+
+**RECORDED AND NOT ACTED ON — a silent clamp.** `sys_read_audit` clamps `max` to
+64 **silently**, and two of its three probe callers ask for more (128 and 256).
+Both still pass, because each searches the newest window for a record it just
+caused. It is the silent-narrowing class (DDR-1055/1056, DDR-1089 one layer up).
+**Not changed:** `-E2BIG` would redden three green gates for no defect, and the
+clamp is a correct bound on a kernel staging buffer.
+
+**NOT CLAIMED.** No code change, no gate, no defect fixed; `kernel.bin` not
+rebuilt, `GLOBAL_FORBIDDEN` 76, 179 gates. No cursor built and no NSI reserved —
+§2.1 establishes the extension is *safe to make*, not that it should be. The
+flusher is not built and not designed beyond §4's arm. DDR-842's work is not
+disputed; the **record** is corrected. No gate was run. OPEN-1/2/12/13 untouched.

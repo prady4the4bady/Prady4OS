@@ -12686,3 +12686,48 @@ unblocked, small, and with a real claim to gate. Before designing it, note the
 trap this project keeps hitting: a gate asserting *"the log file exists and has
 bytes"* is vacuous unless the bytes are ones the writer could not have
 manufactured (DDR-1066's `-ENOENT` discipline). OPEN-1/2/12/13 untouched.
+
+---
+
+## CHECKPOINT — DDR-1095 (the audit-flusher blocker, and F#76's ✅)
+
+Branch `dev/phase1-seyp3n`. **Docs only — `kernel.bin` untouched.** DDR free
+range → **`DDR-1096+`** at all four carriers.
+
+**Following DDR-1094 §8's "what is missing is a flusher" — it was never
+buildable.** `aether_audit_read` returns only the **most recent `n`** entries,
+`sys_read_audit` clamps `max` to **64** against a **4096**-entry ring, and there
+is **no cursor and no sequence number** (`g_count` saturates, per its own
+declaration). Ring 3 cannot drain the log; successive calls return overlapping
+windows. **A naive flusher is the DDR-1059 shape** — a file named `audit.log`
+holding a 1.5% sample reads as a durable trail.
+
+**Fixable without touching the layout DDR-842 protected:** `sys_read_audit`
+ignores `a3`, and **all four callers pass `a3 = 0` explicitly** — measured, each
+freestanding stub binding `"d"(a3)` — so `0` can keep meaning "newest `n`"
+verbatim (DDR-1032 shape). It also needs a monotonic `g_written`. **Not built:**
+ABI extension + daemon change + gate is its own decision.
+
+**The bigger finding — F#76's ✅ is on work that disclaimed it.** The tracker
+marked *"F#76 tamper-evident ledger — SHIPPED + GATED ×2"* pointing at
+`smoke-auditchain`/`-tamper`, which are **DDR-842's**; DDR-842's own record and
+`aether_audit_verify`'s comment both end *"the durable ledger that survives wrap
+is F#76 and is not claimed here"*, and `grep -rn 'audit\.log'` over the tree
+returns **zero writers**. Tamper-**evidence** shipped; **durability** did not.
+**The DDR-1071 §7b class in its mirror form, and the mirror is worse:** a false
+negative costs a re-measurement; a ✅ on half a claim is a row that silently stops
+being work. DDR-842 is not criticised — the record is. And the Group F
+persistence row and F#76's durability half are **the same item, listed twice**.
+
+**Recorded, not acted on (§4.18):** `sys_read_audit` clamps to 64 **silently**
+while `egressaudittest` asks 128 and `privacynettest` asks 256. Both pass (each
+searches the newest window for a record it just caused), but it is the
+silent-narrowing class. Not changed — `-E2BIG` would redden three green gates for
+no defect.
+
+**NEXT SESSION.** Three genuinely-open, unblocked, well-shaped items now have
+their blockers on record rather than guessed: the audit cursor + flusher
+(DDR-1095 §2.1 has the safe design and §4 the non-vacuous arm), the Group F
+domain agents, and Group B's remaining storage rows. **The gate arm to reuse
+everywhere: a value the writer could not manufacture** — here, a flushed record
+whose `agent_pid` is not the daemon's own. OPEN-1/2/12/13 untouched.
