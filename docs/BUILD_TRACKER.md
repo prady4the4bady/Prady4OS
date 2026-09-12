@@ -4719,3 +4719,36 @@ the condition cannot be manufactured in product and asserting the absence of a
 rare intermittent is unfalsifiable at any affordable N, DDR-1082). `kernel.bin`
 1,311,114 -> 1,315,210 B. **Not exonerated in advance** (DDR-1042): this changes
 timing on the very path OPEN-2 lives in.
+
+---
+
+## DDR-1106 — closing DDR-1105's idle-thread coverage gap (2026-09-12) — DESIGN
+
+**Not built.** Held behind CI on DDR-1105 (`c204ed0`): stacking a second
+hottest-path kernel change on an unjudged first makes attribution impossible.
+
+DDR-1105's check opens `if (next->kstack_base)`, and **every idle thread has
+`kstack_base == 0`** — `init_idle()` memsets the tcb and never assigns it,
+because an idle thread has no `kmalloc`'d stack; it runs on the stack it was
+*entered* on. The skip is not regretted (without it the check fires on nearly
+every switch). **But idle is the thread every CPU falls back to when its
+runqueue drains — plausibly the most-switched-to thread in the system, so the
+busiest target is the one left unwatched.**
+
+**Both idle stacks are exactly `STACK_SIZE`, measured**, so the existing window
+arithmetic works with no new constant: BSP idle on `boot.asm`'s `kernel_stack`
+(`KSTACK_SIZE equ 16384`), AP idle on `pmm_alloc_pages(2)` — **an ORDER, not a
+count** (`pmm.h:23`), so 4 pages = 16,384 B, matching `smp.c:354`'s
+`stack + 4 * PAGE_SIZE`. That pairing is exactly the shape that would be an
+8 KiB overrun if the argument were a count, so it was **verified against the
+declaration rather than read past — it agrees, and no defect is alleged.**
+
+**THE VACUITY TRAP is why this needs a DDR.** "The gates still pass and nothing
+fires" is worse than worthless because it looks conclusive: if a base were wrong
+in the **forgiving** direction the check would skip *exactly as today* and every
+gate would pass. Only a **caught idle frame** discriminates — a mutant
+corrupting an idle thread's `rsp`, **silent before and firing after**, the
+DDR-1066 shape where the pre-fix tree is the control, run in both directions.
+
+`rsp & ~(STACK_SIZE-1)` is **refused, not deferred**: it would make the check
+depend on buddy-allocator alignment that nothing states or tests.
