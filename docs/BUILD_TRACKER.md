@@ -4518,3 +4518,48 @@ and "four extents for the life of the file" all stand, and one clause of one
 sentence is corrected. mkfs's packing is **recorded, not changed**, and explicitly
 not claimed to work untested. The Group B `smoke-sfs-largefile` row is **corrected,
 not closed**; the Group F flusher row is **not unblocked**. No open issue moves.
+
+## DDR-1101 — `ls -R` / `ps` full: three asks, three different kinds of thing (2026-09-12)
+
+**Assessment, docs-only. No code change, no gate, no defect found or alleged.**
+`kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; **179 gates unchanged**.
+`smoke-prism-ls` does not exist and **should not be built** — DDR-1063 §7c doing
+its job, not a defect.
+
+The Group D row reads as one piece of shell polish. **None of its three asks is a
+shell change:**
+
+**(a) `signal-mask display` has NO SUBJECT.** `signal.h` read in full: four
+signals, a per-TCB *pending bitmap*, a handler table. `grep` for
+`sigprocmask|sig_mask|sigmask|blocked` returns nothing. A "signal mask" column
+would print a field the kernel does not have — the DDR-1059 shape, and the
+Group G §9.3 pattern in Group D. `sig_pending` is the truthful adjacent field;
+named, not substituted. **Retired.**
+
+**(b) `ls -R` is not buildable from ring 3.** It needs one thing — telling a
+directory from a file — and ring 3 cannot by any route: `sys_getdents` fills a
+`sz` from `vfs_readdir` and **never reads it**, returning the name length;
+`sys_fstat` sets `S_IFREG | 0644` on **both** branches; and **`S_IFDIR` is defined
+with zero writers in the syscall layer** while `ext4.c:147` computes `is_dir` and
+keeps it inside the driver. The distinction exists in the FS layer and is destroyed
+**twice** at the syscall boundary — PRISM's own `ls` documents the consequence in
+its error string. Lifting it changes the `readdir` op across **every backend**
+(`struct vfs_file` carries no type).
+
+**(c) open-fd listing is buildable, with a hazard and a lever.** `struct procinfo`
+carries no fd and no signal state; the naive widening is the **DDR-842 overflow
+hazard** (kernel-side `sizeof` in `copyout`; three files carry the layout across
+four call sites). **The safe lever is `a3`**, and it exists here because of
+DDR-1098 §2: every site passes a literal 0 in `a3` = **RDX, bound by a 3-arg
+stub**. **It does not exist for `getdents`, whose spare argument is `a4` = R10,
+which 3-arg stubs do not bind** — check which register a "spare" argument is before
+designing around it.
+
+**NOT BUILT** (DDR-1069's test). **The obvious `ps` arm is vacuous:** "assert `ps`
+prints an fd column" passes on a kernel printing a constant — exactly what `fstat`
+does today; only a count that *changes with the process* discriminates.
+
+**A correction caught before it was written down:** an earlier draft said "five
+callers"; measured, it is **three files across four call sites** — `compositor.c`
+and `agentmetricstest.c` carry the same layout for `SYS_AGENT_METRICS`, a different
+syscall, so they are layout carriers but not in this copyout path.

@@ -12936,3 +12936,33 @@ audit(DDR-1098)`. Measured safe: nothing under `tools/` or `.github/` parses tha
 string, and `smoke-shell` re-ran `rc=0` with `kernel.bin` identical. This is
 DDR-1100's own subject one level down — a record drifting from what was built, by
 the session that built it.
+
+---
+
+## Checkpoint — DDR-1101 (2026-09-12)
+
+**Docs-only assessment of Group D's `PRISM ls -R / ps full` row.** No code change,
+no gate, no defect. `kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; 179 gates.
+
+The row reads as shell polish; measured, its three asks are three different kinds
+of thing and **none is a shell change**:
+
+- **`signal-mask display` HAS NO SUBJECT** — there is no mask (`signal.h`: four
+  signals, a *pending* bitmap, a handler table; `grep sigprocmask|sig_mask|sigmask`
+  is empty). `sig_pending` is the truthful adjacent field. **Retired.**
+- **`ls -R` is NOT buildable from ring 3** — `sys_getdents` discards the `sz` it
+  gets from `vfs_readdir`; `sys_fstat` hardcodes `S_IFREG | 0644` on *both*
+  branches; **`S_IFDIR` is defined with zero writers in the syscall layer** while
+  ext4 computes `is_dir` internally. The type exists in the FS layer and is
+  destroyed **twice** at the boundary. Lifting it changes the `readdir` op across
+  every backend.
+- **open-fd listing** — the naive widening of `struct procinfo` is the DDR-842
+  overflow hazard (three files, four call sites). **The safe lever is `a3` (RDX,
+  bound by a 3-arg stub, and every site passes a literal 0) — and it does NOT exist
+  for `getdents`, whose spare argument is `a4` = R10, unbound.** Carry that: *check
+  which register a "spare" argument is before designing around it.*
+
+**NOT BUILT** on DDR-1069's test. `smoke-prism-ls` does not exist and should not be
+built (§7c). The obvious `ps` arm is vacuous — a constant passes it.
+
+**NEXT:** CI on `7ac8fac` (DDR-1100) and `5cb1d79` (DDR-1099) still to read.
