@@ -784,6 +784,31 @@ binds `"d"(a3)`, so RDX is written, not left to chance). It additionally needs a
 monotonic counter. **Not built** — an ABI extension plus a daemon change plus a
 gate is its own decision.
 
+**CORRECTED 2026-09-12 — DDR-1107 §1.1: the "not built" above is FALSE as of
+`3a1ff98`. DDR-1098 built exactly this.** `struct aether_audit_cursor {from,
+first}` (`aether.h:292`) travels through the optional `a3`; `sys_read_audit`
+`copyin`s it, `copyout`s it **even when `n == 0`** (*"nothing new, and here is
+where the next record will land"* is an answer a poller needs), and `a3 == 0`
+still takes the original path verbatim. The monotonic counter this row said it
+*"additionally needs"* is `g_written` (`aether_audit.c:65`), commented **"total
+appends ever; NEVER saturates"**. The sequence costs **zero ring bytes** — an
+8-byte `seq` on the 64-byte entry would have pushed the `_Static_assert`ed
+`AUDIT_RING_ORDER` from 6 to 7, i.e. 256 KiB → 512 KiB of PMM. A ring-3 consumer
+exists: PRISM's `audit` builtin drains 130 records in **three** syscalls,
+asserting `dup=0 pois=0` on `smoke-shell`, so `SYS_VERIFY_AUDIT`'s *"tampered at
+entry 1204"* is finally addressable from the only ring that receives it.
+
+**The flusher is RE-BLOCKED, not unblocked, and the third blocker is the write
+path** (DDR-1098 §4): `sfs_write` refuses the fifth extent and `fd_write_user`
+chunks `FD_VFS` writes at 4096, so a ring-3 file accepts **16,384 bytes for its
+whole life** against ~240 KiB for a flushed ring. **DDR-1100 §2 then split that
+into three ceilings of which only one is the format** — the single-`write(2)`
+cap is `fd_write_user`'s one-page staging buffer (no on-disk consequence, and
+DDR-764 already moved that exact ceiling once by that exact lever); mkfs's
+one-extent-per-block packing is likewise not the structure; only
+`inline_extents[4]` is. So the row now has **two shapes with two costs** instead
+of one shape carrying the expensive cost. Nothing is claimed to be unblocked.
+
 **And F#76's ✅ is on work that disclaimed it.** The tracker marked *"F#76
 tamper-evident ledger — SHIPPED + GATED ×2"* pointing at `smoke-auditchain` /
 `-tamper`, which are **DDR-842's**; DDR-842's own record and
@@ -813,6 +838,27 @@ DDR-1055/1056's console line splice, DDR-1089's errno flattened one layer above
 the filesystem: a caller asks for 256, receives 64, and is told nothing. The
 return value *is* the count, so a caller could notice; none does, and none has
 reason to.
+
+**CORRECTED 2026-09-12 — DDR-1107 §1.2: the last clause is false, and the
+counter-example is the builtin DDR-1098 shipped in the same commit as the
+cursor.** PRISM's `audit` drain does both halves — `long ask = (want > 64) ? 64
+: want;` **pre-clamps, so it never asks for more than the kernel will give**,
+and it then uses the returned `n` to advance `cur.from` *and* to decide it has
+caught up (`if (n < ask) break;`). It is the first caller that cannot be
+narrowed silently at all.
+
+**The rest of the row is unchanged and still true:** the clamp is still silent,
+and `egressaudittest.c:81` (128) and `privacynettest.c:240` (256) still ask for
+more, still do not notice, and still pass for the reason given above.
+**CORRECTED, NOT CLOSED.**
+
+**A coupling recorded and not acted on (DDR-1107 §3):** PRISM hand-copies the
+kernel's `64`. The duplication is safe in one direction only — a PRISM clamp
+**≤** the kernel's is always fine. Were the kernel's ever *lowered*, PRISM would
+ask for more than it gets and `n < ask` would end the drain early: an
+**under-report**, not an overflow and not a hang. Nothing is owed, because
+DDR-1095 §5 already recorded why that constant should not change; worth knowing
+before anyone touches it.
 
 **Not changed here.** Returning `-E2BIG` would redden three green gates for no
 defect. Worth knowing before anyone reads a probe's `buf[256]` as evidence that
@@ -1305,6 +1351,44 @@ Remaining: `smoke-readline`,
 `smoke-futex`, `smoke-pthreads`, `smoke-mmap6`
 (6-arg `mmap` ABI), `smoke-mmap-file`, `smoke-dynlink`, `smoke-iouring`,
 `smoke-sigaction`, `smoke-prism-ls`.
+
+**CORRECTED 2026-09-12 — DDR-1107 §1.3: two of those nine name SHIPPED,
+CI-REGISTERED, STRICT-TIER work under the wrong name.** The 2026-09-05 grep
+was right — neither string is in the Makefile — and *"Remaining"* is wrong,
+because it asserts the **work** remains. Measured directly, not inherited:
+
+| listed as | Makefile | real target | shard | tier |
+|---|---|---|---|---|
+| `smoke-mmap6` | absent | **`smoke-sysmmap`** | 5 (23 s) | strict |
+| `smoke-iouring` | absent | **`smoke-sysiouring`** | 5 (24 s) | strict |
+
+Neither real target is in `shard_check.sh`'s `EXCLUDE`, so **both run on every
+suite**. **The eighth and ninth instances of the class this section already
+counts** (`smoke-maximize` *"the sixth"*, `smoke-jobctl` *"the seventh"*).
+
+* **6-arg `mmap` CLOSES.** DDR-877 shipped the real POSIX six-argument form —
+  its header calls the 4-arg version *"worse than incomplete"* because `fd`
+  and `offset` were *"silently discarded"* — and `smoke-sysmmap` requires
+  `FD REJECTED` and `OFF REJECTED` with **exact, differing** errnos, so
+  *"swapping `r8` and `r9` in the marshal would fail both"*: non-vacuous by
+  construction, anticipated in the probe's own comment.
+* **`io_uring` is CORRECTED, NOT CLOSED.** `smoke-sysiouring` asserts a
+  batched write-then-read on a pipe in **one** `io_uring_enter` — both
+  completions *and* the data. `sys_io_uring.h` states the scope:
+  `OP_READ`/`OP_WRITE` only, *"no head/tail wrap, no kernel-side polling
+  thread"*, so `OP_FSYNC`, `OP_OPENAT`, eventfd and SQE chaining are genuinely
+  unbuilt — **and a fifth gap the row never names is the missing ring wrap.**
+
+The other seven names stand. Three carry qualifications recorded elsewhere:
+`smoke-pthreads` is blocked on a cross-CPU TLB shootdown that does not exist
+(DDR-1075 §3.2 / DDR-1077 — a **prerequisite**, not a Phase 9 optimisation);
+`smoke-mmap-file` is blocked **only on itself**, the widening being done, and
+is the nearer of DDR-1038's two unblockers for `SYS_FUTEX` (DDR-1102 §3); and
+`smoke-sigaction` / `smoke-prism-ls` each name things with **no subject** in
+this kernel (DDR-1090 §7: zero `EINTR` and zero `SIGSEGV` tree-wide, so
+`SA_RESTART` and `sigaltstack` have nothing to restart or stack;
+DDR-1101 §1: no signal mask exists, so a `ps` column would print a field the
+kernel does not have).
 **`smoke-jobctl` HAS NEVER EXISTED and is not a gap — DDR-1068 §1**, the seventh
 instance of this class: `&`, `jobs`, `fg` and `kill %n` are built (DDR-881/755)
 and gated inside `smoke-shell`, and **`wait` shipped 2026-09-06 (DDR-1068)** with
@@ -1601,7 +1685,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **179** across **10** shards | `make ci-shard-check`, re-measured 2026-09-07 (DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1107+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
+| DDR free range | **DDR-1108+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
 | `kernel.bin` | **1,315,210 B** against the 1,572,864 B gate — **257,654 B** headroom | measured 2026-09-12 (DDR-1105); **re-derived, not carried** — and note `ci-docstate-check` reported **OK on the stale pair** right up to this edit, because 1,307,018 + 265,846 = 1,572,864 exactly. That is DDR-1063's stated limitation, not a defect in the check (DDR-1081 §5, DDR-1083): **passing it is not evidence a live-state number is current.** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |

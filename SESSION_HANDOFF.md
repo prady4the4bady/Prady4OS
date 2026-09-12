@@ -13159,3 +13159,74 @@ push to another branch without explicit permission.**
 were assessed in DDR-1103 (five state no acceptance criterion at all —
 *unfalsifiable*, a shape distinct from §7b/§7c; B#14 is a category error, NAS
 being the process scheduler).
+
+---
+
+## CHECKPOINT — DDR-1107 (2026-09-12), docs-only, CI-wait window
+
+**Branch `dev/phase1-seyp3n`. No kernel change; `kernel.bin` not rebuilt.**
+`GLOBAL_FORBIDDEN` 77; 179 gates; size/headroom pair and `ci-docstate-check`
+unaffected; no open issue moves (OPEN-1/2/12/13 untouched).
+
+**Why docs-only right now.** DDR-1106's build is HELD until CI rules on
+DDR-1105 (`c204ed0`). That hold applies to **any** kernel change, not only to a
+second hottest-path one: a red on a tree carrying two unjudged changes cannot be
+attributed (DDR-1042). CI state at the time of writing: 20 `build-and-boot`
+shards `in_progress` on runs **34686501068** (push) and **34686502896** (PR),
+started 10:03–10:10Z; `build`, `shard-check`, `aether-layer`, `code-graph` and
+both `arch-bootstrap` jobs already **success**. `33c5be6` is docs-only over
+`c204ed0` (`git diff --name-only` = four Markdown files), so it runs the **same
+binary** `3933fa5f60ae607c` and a verdict on it is a verdict on DDR-1105.
+
+**What was done.** A row-by-row sweep of `PRE_LAUNCH_CHECKLIST` §4 (eighteen
+rows). Sixteen accurate; **two false, both falsified by DDR-1098**:
+
+* §4.17b — *"Not built"* about the cursor DDR-1098 built (`aether_audit_cursor`
+  via `a3`, written back even at `n == 0`; `g_written`, *"NEVER saturates"*, is
+  the monotonic counter the row itself said was needed; PRISM's `audit` builtin
+  is the ring-3 consumer). **Corrected, not closed** — flusher re-blocked on the
+  write path (DDR-1098 §4 / DDR-1100 §2).
+* §4.18 — *"none does, and none has reason to"*, falsified by the builtin
+  DDR-1098 shipped in the same commit: it **pre-clamps** to 64 and uses `n` to
+  advance the cursor and detect catch-up. **Corrected, not closed** — the clamp
+  is still silent and both probes still ask for more.
+
+**THE FINDING, and it is narrower than §4.1's rule.** DDR-1098 *did* touch the
+checklist — 1 insertion, 1 deletion — and that was the **§6 free-range carrier
+cell**; it updated `CLAUDE.md`'s Group F row correctly. So this is not
+"forgot the document": **the mechanical carrier is in §6 and the semantic rows
+are in §4, ~1,400 lines up, with nothing connecting them.** Third shape in the
+family. No checker built (DDR-1086 §4's refused signal). Cheap substitute: the
+obligation attaches to **shipping a named remedy**, not to editing a file.
+
+
+**§1.3 — a second section of the same file, found while writing §1.2.** §5.3's
+Group D *"Remaining:"* list names `smoke-mmap6` and `smoke-iouring`. The
+2026-09-05 grep was right (neither string is in the Makefile) and *"Remaining"*
+is wrong, because it asserts the **work** remains. Measured directly:
+**`smoke-sysmmap`** (shard 5, 23 s, strict) and **`smoke-sysiouring`** (shard 5,
+24 s, strict), neither in `EXCLUDE`, so both run on **every** suite. **6-arg
+`mmap` CLOSES** (DDR-877; the gate requires `FD REJECTED`/`OFF REJECTED` with
+exact, differing errnos, so a swapped marshal fails both — non-vacuous by
+construction). **`io_uring` is CORRECTED, NOT CLOSED**: the batched pipe
+write-then-read is gated, but `OP_FSYNC`/`OP_OPENAT`/eventfd/SQE-chaining are
+unbuilt **and a fifth gap the row never names is the missing ring wrap**. The
+**eighth and ninth** instances of the class §5.3 itself counts (`smoke-maximize`
+*"the sixth"*, `smoke-jobctl` *"the seventh"*). Recorded under DDR-1107 rather
+than given a number: same sweep, same file, same session, and the measurement it
+rests on is DDR-1102's — what is new is only that a **second section** carried
+the falsified claim, which is this DDR's finding a second time.
+
+**Carriers:** all four advanced `DDR-1107+` → `DDR-1108+` in one edit
+(§INV.4, §CURRENT BUILD STATE, §ORIENTATION, checklist §6).
+
+**NEXT:** read CI on `33c5be6`/`c204ed0` per the armed check-in's order —
+(1) any `[schedcheck]` line (new instrument, in `GLOBAL_FORBIDDEN`; if it fires,
+read `rflags=` FIRST — `TF|DF|IOPL` set means a genuinely corrupt frame and **is**
+the OPEN-2 artefact, do **not** loosen the check); (2) per-shard `kernel.bin: OK`
+(DDR-1035); (3) any new `[apfreeze]` — five producers share that prefix, resolve
+the RIP against **`3933fa5f60ae607c`**, not the old binary (§INV.18);
+(4) `rqfree=` in `[hb]` — instrument, **inverted polarity**, `> 0` means
+DDR-996's fix worked. **A red is a candidate regression on the hottest path, not
+automatically the DDR-1009 intermittent class; DDR-1105 is not exonerated in
+advance.** Then task #72 (DDR-1106 build) if green.

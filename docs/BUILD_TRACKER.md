@@ -4752,3 +4752,78 @@ DDR-1066 shape where the pre-fix tree is the control, run in both directions.
 
 `rsp & ~(STACK_SIZE-1)` is **refused, not deferred**: it would make the check
 depend on buddy-allocator alignment that nothing states or tests.
+
+---
+
+## DDR-1107 — two checklist rows falsified by a DDR that edited the file (2026-09-12)
+
+**Docs-only. No code change, no gate, no defect found and none alleged.**
+`kernel.bin` not rebuilt (size / headroom pair and `ci-docstate-check`
+unaffected); `GLOBAL_FORBIDDEN` 77; 179 gates unchanged; no open issue moves.
+
+Written in the CI-wait window on `c204ed0`/`33c5be6`, while DDR-1106's build is
+held — that hold applies to **any** kernel change, because a red on a stacked
+tree cannot be attributed.
+
+**Sweep:** `PRE_LAUNCH_CHECKLIST` §4 is eighteen rows, read against the tree.
+**Sixteen accurate** — four of them corrected by the DDR that retired their
+blocker *in the same commit as the work* (§4.9/DDR-1089, §4.10/DDR-1092,
+§4.11/DDR-1060, §4.1 via DDR-1086). **Two false, both falsified by DDR-1098.**
+
+* **§4.17b** said the resumable cursor was *"Not built"*. It is built:
+  `struct aether_audit_cursor` (`aether.h:292`) through the optional `a3`,
+  copied back out **even when `n == 0`**, `a3 == 0` still verbatim; and
+  `g_written` (`aether_audit.c:65`, *"NEVER saturates"*) is exactly the
+  monotonic counter the row said it *"additionally needs"*. **CORRECTED, NOT
+  CLOSED** — the flusher is **re-blocked on the write path** (DDR-1098 §4, split
+  three ways by DDR-1100 §2; only `inline_extents[4]` is the format).
+* **§4.18**'s *"none does, and none has reason to"* is false. PRISM's `audit`
+  drain **pre-clamps** (`ask = want > 64 ? 64 : want`) so it cannot be narrowed
+  silently at all, and uses `n` to advance the cursor *and* to detect catch-up.
+  **CORRECTED, NOT CLOSED** — the clamp is still silent and the two probes still
+  ask for 128/256 without noticing.
+
+**THE FINDING is not the one §4.1 predicted.** DDR-1086 sharpened the rule to
+*"names the rows in EVERY document that records it"*, diagnosing the failure as
+forgetting the document. `git show 3a1ff98 --stat` lists the checklist at **1
+insertion, 1 deletion** — the file *was* open — and that diff is the **§6
+DDR-free-range carrier cell**. DDR-1098 also updated `CLAUDE.md`'s Group F row
+correctly. So the document was not forgotten and the claim was not
+misunderstood: **the carrier bumped on every DDR is mechanical and lives in §6;
+the rows a DDR falsifies are semantic and live in §4, ~1,400 lines above, with
+nothing connecting them.** A third shape, after DDR-1084 §1 (never opens the
+file) and DDR-1086 §1 (opens one file, not the others). Two instances is not a
+rate and none is claimed.
+
+**No checker built**, and the reason is measured: the available signal is *"the
+commit touched the checklist only in §6"*, trivially true of most DDRs and
+correct for nearly all — DDR-1086 §4's refused shape exactly. **The cheap
+substitute is narrower than §4.1's:** the obligation attaches to **shipping a
+named remedy** (which by construction falsifies the row that called it *not
+built*, and knows which row), not to editing a file.
+
+**Recorded, not acted on:** PRISM hand-copies the kernel's `64`. Safe in one
+direction only — a PRISM clamp ≤ the kernel's is always fine; were the kernel's
+*lowered*, `n < ask` would end the drain early, an **under-report**, not an
+overflow or a hang. Nothing owed: DDR-1095 §5 already recorded why that constant
+should not change.
+
+
+**§1.3 — a second section of the same file, found while writing §1.2.** §5.3's
+Group D *"Remaining:"* list names `smoke-mmap6` and `smoke-iouring`. The
+2026-09-05 grep was right (neither string is in the Makefile) and *"Remaining"*
+is wrong, because it asserts the **work** remains. Measured directly:
+**`smoke-sysmmap`** (shard 5, 23 s, strict) and **`smoke-sysiouring`** (shard 5,
+24 s, strict), neither in `EXCLUDE`, so both run on **every** suite. **6-arg
+`mmap` CLOSES** (DDR-877; the gate requires `FD REJECTED`/`OFF REJECTED` with
+exact, differing errnos, so a swapped marshal fails both — non-vacuous by
+construction). **`io_uring` is CORRECTED, NOT CLOSED**: the batched pipe
+write-then-read is gated, but `OP_FSYNC`/`OP_OPENAT`/eventfd/SQE-chaining are
+unbuilt **and a fifth gap the row never names is the missing ring wrap**. The
+**eighth and ninth** instances of the class §5.3 itself counts (`smoke-maximize`
+*"the sixth"*, `smoke-jobctl` *"the seventh"*). Recorded under DDR-1107 rather
+than given a number: same sweep, same file, same session, and the measurement it
+rests on is DDR-1102's — what is new is only that a **second section** carried
+the falsified claim, which is this DDR's finding a second time.
+
+All four DDR free-range carriers advanced `DDR-1107+` → `DDR-1108+` in one edit.
