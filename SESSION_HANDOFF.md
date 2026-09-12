@@ -12966,3 +12966,39 @@ of thing and **none is a shell change**:
 built (§7c). The obvious `ps` arm is vacuous — a constant passes it.
 
 **NEXT:** CI on `7ac8fac` (DDR-1100) and `5cb1d79` (DDR-1099) still to read.
+
+---
+
+## Checkpoint — DDR-1102 (2026-09-12)
+
+**Group D's last four unassessed rows, Markdown-only.** No code change, no gate, no
+defect. `kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; 179 gates.
+
+- **6-arg `sys_mmap` ABI widening — SHIPPED (DDR-877) and GATED at strict tier on
+  every suite**, under `smoke-sysmmap` (shard 5, 23 s); the row's `smoke-mmap6`
+  does not exist. **§7b + the DDR-1040 wrong-name shape in one row. This row
+  closes.** DDR-877 anticipated the dead-arm class in the probe's own comment
+  (*"that proves the registers arrive, but not that the kernel READS them"*), and I
+  **verified the register bindings in `systest.asm:276-318` rather than trusting
+  it** — FD arm `r8=3,r9=0` → exactly `-ENOSYS`; OFF arm `r8=-1,r9=4096` → exactly
+  `-EINVAL`; two different errnos so an r8/r9 swap fails both.
+- **`io_uring` — core SHIPPED + GATED strict** as `smoke-sysiouring` (shard 5,
+  24 s: a batched WRITE-then-READ in one `io_uring_enter`, both completions and the
+  data). The row's four asks (`OP_FSYNC`, `OP_OPENAT`, eventfd, SQE chaining) are
+  genuinely unbuilt — `sys_io_uring.h` is `OP_READ`/`OP_WRITE` only, *"no head/tail
+  wrap"*. **Corrected, not closed**, plus a fifth unnamed gap: the missing ring
+  wrap is distinct from SQE chaining.
+- **file-backed mmap / dynamic linking** — no gate, work genuinely unbuilt: **§7c
+  doing its job, not defects.**
+
+**Dependency correction that shortens a chain:** file-backed mmap is **not** blocked
+on the 6-arg widening (done). It is blocked only on itself, and is the **nearer** of
+DDR-1038's two `SYS_FUTEX` unblockers — pthreads needs the TLB shootdown that
+DDR-1075 §3.2 / DDR-1077 established does not exist.
+
+**Group D is now fully assessed.** Remaining genuinely-open Group D work:
+file-backed mmap, dynamic linking, the four io_uring extensions + ring wrap,
+`ls -R` and open-fd listing (DDR-1101), `pthread`/`CLONE_VM` (blocked on the
+shootdown), and `SYS_FUTEX` (blocked behind those).
+
+**NEXT:** CI conclusions for `5cb1d79`, `7ac8fac`, `708ec04` and this commit.

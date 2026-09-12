@@ -4563,3 +4563,38 @@ does today; only a count that *changes with the process* discriminates.
 callers"; measured, it is **three files across four call sites** — `compositor.c`
 and `agentmetricstest.c` carry the same layout for `SYS_AGENT_METRICS`, a different
 syscall, so they are layout carriers but not in this copyout path.
+
+## DDR-1102 — Group D's last four rows: two shipped and gated under other names (2026-09-12)
+
+**Assessment, Markdown-only. No code change, no gate, no defect found or alleged.**
+`kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; **179 gates unchanged**.
+
+| row | named gate | measured |
+|---|---|---|
+| 6-arg `sys_mmap` ABI widening | `smoke-mmap6` — **absent** | **SHIPPED (DDR-877) + GATED strict, every suite** as `smoke-sysmmap`. §7b **+** wrong name. **Closes.** |
+| `io_uring` completions | `smoke-iouring` — **absent** | **core SHIPPED + GATED strict** as `smoke-sysiouring`; four named asks unbuilt. `smoke-horizon` shape. **Corrected, not closed.** |
+| `mmap` file-backed | `smoke-mmap-file` — absent | genuinely unbuilt — **§7c doing its job** |
+| dynamic linking | `smoke-dynlink` — absent | genuinely unbuilt — **§7c doing its job** |
+
+**The mechanical signal is identical in all four** ("named gate does not exist") —
+DDR-1081 §3's case for refusing a checker, with a fourth and fifth instance.
+
+**DDR-877 anticipated the dead-arm class in the probe's own comment**, which is the
+discipline fifteen later DDRs re-derived: *"that proves the registers arrive, but
+not that the kernel READS them… swapping r8 and r9 in the marshal would fail
+both."* **Verified in `systest.asm:276-318` rather than taken from the comment**
+(DDR-1101 is why register bindings are no longer assumed): FD arm `r8=3, r9=0` →
+exactly `-ENOSYS`; OFF arm `r8=-1, r9=4096` → exactly `-EINVAL`.
+
+**A dependency correction that SHORTENS a chain:** file-backed mmap is **not**
+blocked on the 6-arg widening — that is done. `sys_mmap` reads `fd`/`offset` and
+returns `-ENOSYS`, which is the implementation saying "not yet", not the ABI saying
+"cannot express it". So file-backed mmap is blocked only on itself and is the
+**nearer** of DDR-1038's two unblockers for `SYS_FUTEX` (the other, pthreads, needs
+a TLB shootdown that does not exist — DDR-1075 §3.2 / DDR-1077). Group D's rows
+list no dependencies at all, the same defect DDR-1075 §3.2 found.
+
+**NOT CLAIMED:** none of the four gate names should be built — two duplicate
+existing strict-tier gates under their real names, two name work that does not
+exist. No defect in any code. file-backed mmap and dynamic linking are **not
+unblocked** — removing a blocker that was never real is not building either.
