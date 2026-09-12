@@ -1866,5 +1866,30 @@ pointer — 8-aligned, within its own kernel stack with room for the 64-byte
 **No fix and no cause named.** It is DDR-1099 §7's instrument: it makes the
 *next* corrupt frame say so, and specifically covers the case the `#DB` cannot
 see — a frame equally wrong whose RFLAGS slot happens to be benign, which
-otherwise returns to a stale address silently. Idle threads are not covered
-(`kstack_base == 0`), a stated limit. `GLOBAL_FORBIDDEN` 76 -> 77; no new gate.
+otherwise returns to a stale address silently. `GLOBAL_FORBIDDEN` 76 -> 77; no
+new gate.
+
+**Idle coverage: CLOSED by DDR-1106** — this entry read *"Idle threads are not
+covered (`kstack_base == 0`), a stated limit"*, which is **no longer true**.
+
+### DDR-1106 — idle threads are covered too (kernel, OPEN-2)
+
+**Not an AETHER feature; recorded here per §NON-NEGOTIABLE 11.** `init_idle` now
+takes the kernel-stack base as a parameter instead of leaving the `memset`'s 0 —
+`kernel_stack` (`boot.asm`'s `.bss`) for the BSP, and for each AP the
+`pmm_alloc_pages(2)` block recorded by `smp_start_aps` before the SIPI. Both are
+exactly `STACK_SIZE`, so DDR-1105's window arithmetic covers them unchanged, with
+no new constant and no per-thread size field. **The check itself is untouched.**
+
+**Why it mattered:** idle is the thread every CPU falls back to whenever its
+runqueue drains, so it is plausibly the most-switched-to thread in the system —
+the frame a stale or recycled `next->rsp` is most likely to select. The busiest
+target was the one left unwatched.
+
+`base == 0` remains legal and still means *"not covered"* — the safe answer for
+any future tcb arriving without one. `sched_free_tcb` gained a `!t->is_idle`
+guard, because neither idle stack came from `kmalloc`.
+
+**No fix, no cause named, OPEN-2 does not move.** `GLOBAL_FORBIDDEN` **77**
+unchanged; **179 gates**, no new gate; `kernel.bin` **1,315,210 B — size
+unchanged**.

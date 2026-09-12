@@ -13,6 +13,13 @@
 #include "irq.h"               /* ADR-032: g_ticks for the FS write-budget bucket */
 #include "signal.h"            /* DDR-1090: SIGKILL, honoured at the yield choke point */
 
+/* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
+ * reader -- init_idle, which records its base as idle0's kstack_base so
+ * DDR-1105's next->rsp check stops skipping idle0. boot.asm's `KSTACK_SIZE equ
+ * 16384` MUST equal STACK_SIZE below; a _Static_assert cannot see a NASM equ, so
+ * the pairing is stated at both ends and checked by reading (DDR-1106 sec.2). */
+extern uint8_t kernel_stack[];
+
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
 
@@ -875,8 +882,27 @@ static void thread_trampoline(void) {
 }
 
 /* Shared idle-thread init (cap-2b: one per CPU). The FPU template is captured
- * once by sched_init before any init_idle runs. */
-static void init_idle(struct tcb *idle, int cpu) {
+ * once by sched_init before any init_idle runs.
+ *
+ * DDR-1106: `kstack_base` is now a PARAMETER rather than left at 0 by the
+ * memset. An idle thread has no kmalloc'd kernel stack -- it runs on the stack
+ * it was ENTERED on -- but those stacks exist and their bases are knowable, and
+ * leaving the field 0 made DDR-1105's next->rsp check skip every idle thread.
+ * That is the busiest target in the system: idle is what every CPU falls back to
+ * whenever its runqueue drains, so across a boot it is plausibly the
+ * most-switched-to thread, and therefore the frame a stale or recycled
+ * next->rsp is most likely to select.
+ *
+ * Both stacks are EXACTLY STACK_SIZE, which is what makes this a parameter and
+ * not a new per-thread size field (measured, DDR-1106 sec.2):
+ *   - BSP: `kernel_stack` in boot.asm's .bss, KSTACK_SIZE equ 16384.
+ *   - AP:  pmm_alloc_pages(2) -- an ORDER, not a count (pmm.h:23) -- so
+ *          2^2 = 4 pages = 16,384 B, and smp.c writes the mailbox top as
+ *          stack + 4 * PAGE_SIZE, exactly the end of that block.
+ *
+ * base == 0 remains legal and means "not covered", so a caller that cannot
+ * supply one degrades to the pre-1106 behaviour rather than to a bogus window. */
+static void init_idle(struct tcb *idle, int cpu, uint64_t kstack_base) {
     memset(idle, 0, sizeof(*idle));    /* zero all fields (AP idles are kmalloc'd) */
     idle->name = "idle";
     idle->state = THREAD_RUNNING;
@@ -884,6 +910,7 @@ static void init_idle(struct tcb *idle, int cpu) {
     idle->caps = cap_table_create();
     idle->is_idle = 1;
     idle->on_cpu = cpu;                /* tid/is_user/cr3/fs_base = 0 via memset */
+    idle->kstack_base = kstack_base;   /* DDR-1106; 0 == not covered, see above */
     memcpy(idle->fpu_state, fpu_init_template, sizeof idle->fpu_state);
 }
 
@@ -968,7 +995,10 @@ void sched_init(void) {
     }
 
     struct tcb *idle = &idle0;          /* the BSP idle + ring anchor */
-    init_idle(idle, 0);
+    /* DDR-1106: the BSP has run on `kernel_stack` since boot.asm:25 set rsp to
+     * kernel_stack_top, and it never leaves it -- at this point it IS idle0, so
+     * idle0->rsp is first written by context_switch's save ON THIS STACK. */
+    init_idle(idle, 0, (uint64_t)(uintptr_t)kernel_stack);
     g_idle[0] = idle;
     idle->next = idle;                 /* ring of one */
     current_thread = idle;
@@ -1000,7 +1030,10 @@ void sched_ap_enter(void) {
     struct tcb *idle = (struct tcb *)kmalloc(sizeof(struct tcb));  /* heap, not BSS */
     if (!idle)
         for (;;) __asm__ volatile("cli; hlt");   /* no idle -> this CPU cannot schedule */
-    init_idle(idle, cpu);
+    /* DDR-1106: this AP is running on the pmm_alloc_pages(2) block the BSP
+     * handed it through the trampoline mailbox; smp_start_aps recorded the base
+     * before the SIPI because the allocation is out of scope here. */
+    init_idle(idle, cpu, smp_ap_stack_base((unsigned)cpu));
     g_idle[cpu] = idle;
 
     /* Link this CPU's idle after the BSP idle anchor and adopt it as current —
@@ -1345,7 +1378,16 @@ static void sched_free_tcb(struct tcb *t) {
         fd_free(t, i);
     if (t->caps)
         cap_table_destroy(t->caps);
-    if (t->kstack_base)
+    /* DDR-1106: `!t->is_idle` is LOAD-BEARING, not defensive. Since DDR-1106 an
+     * idle tcb carries a real kstack_base, and NEITHER idle stack came from
+     * kmalloc -- the BSP's is boot.asm's .bss `kernel_stack` and each AP's is a
+     * pmm_alloc_pages(2) block -- so kfree()ing one would hand the slab
+     * allocator an address it never issued. No idle can reach here TODAY
+     * (enumerated: the reaper takes only THREAD_ZOMBIE, which an idle never
+     * becomes, and every sched_destroy caller passes a tcb it created itself or
+     * a zombie child found by pid), but that is a property of the callers, and
+     * this change would make it silently load-bearing. State it here instead. */
+    if (t->kstack_base && !t->is_idle)
         kfree((void *)(uintptr_t)t->kstack_base);
     kfree(t);
 }
@@ -1584,12 +1626,19 @@ static void schedule_locked(uint64_t fl) {
      * into a second fault source -- the defect DDR-1079 fixed in the panic
      * backtrace walker.
      *
-     * THE kstack_base == 0 SKIP IS NOT OPTIONAL. init_idle() memsets the whole
-     * tcb and never assigns kstack_base, so EVERY idle thread (the BSP's static
-     * idle0 and each AP's kmalloc'd one) has base 0 and an rsp on a boot/AP
-     * stack outside any window derived here. Without the skip this would fire on
-     * nearly every switch. The cost is a stated coverage limit: a corrupt rsp on
-     * an idle tcb is not covered.
+     * THE kstack_base == 0 SKIP IS NOT OPTIONAL, and what it now skips is
+     * NARROWER THAN WHEN DDR-1105 WROTE IT. That text read: "init_idle() memsets
+     * the whole tcb and never assigns kstack_base, so EVERY idle thread ... has
+     * base 0 ... The cost is a stated coverage limit: a corrupt rsp on an idle
+     * tcb is not covered." DDR-1106 CLOSED THAT GAP -- init_idle now takes the
+     * base as a parameter (boot.asm's `kernel_stack` for the BSP, the
+     * pmm_alloc_pages(2) block for each AP, both exactly STACK_SIZE), so idle
+     * threads ARE covered and idle is the most-switched-to thread in the system.
+     *
+     * The skip stays because base == 0 still means "no window can be derived",
+     * which is the SAFE answer for any future tcb reaching here without one --
+     * smp_ap_stack_base() returns 0 for an unknown index deliberately, so a
+     * bad index degrades to "not covered" rather than to a bogus window.
      *
      * MASK = TF|DF|IOPL (0x3500), each justified separately: TF is set only by a
      * debugger and there is none; `std` appears NOWHERE in this tree so DF is

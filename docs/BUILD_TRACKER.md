@@ -4827,3 +4827,73 @@ rests on is DDR-1102's — what is new is only that a **second section** carried
 the falsified claim, which is this DDR's finding a second time.
 
 All four DDR free-range carriers advanced `DDR-1107+` → `DDR-1108+` in one edit.
+
+## DDR-1106 — closing DDR-1105's idle-thread coverage gap (2026-09-12)
+
+**BUILT.** No fix, no defect found, none alleged; **OPEN-2 does not move**. What
+changes is the set of frames the *next* occurrence can be caught on.
+
+**The hold is released, and the result it waited on is recorded.** DDR-1105's
+binary `3933fa5f60ae607c` took **four** full suites across two SHAs — `33c5be6`
+push (34686501068) and pull_request (34686502896), `7c558f0` push (34688536035)
+and pull_request (34688538214) — **40 shard jobs, all `success`**, each with both
+DDR-1035 hash assertions green, and **zero `[schedcheck]`** lines. Both docs-only
+commits leave the binary untouched, so all four observe one kernel.
+
+**The gap.** DDR-1105's check opens `if (next->kstack_base)`, and every idle
+thread has `kstack_base == 0` — `init_idle` memsets the tcb and never assigns it,
+because an idle thread has no `kmalloc`'d stack; it runs on the stack it was
+*entered* on. Idle is not marginal: it is what every CPU falls back to when its
+runqueue drains, so it is plausibly the most-switched-to thread in the system —
+the busiest target was the one left unwatched.
+
+**Shipped**, four files, **check untouched** (same four clauses, order, mask):
+`global kernel_stack` in `boot.asm`; `init_idle` takes the base as a parameter
+(0 still legal, still "not covered"); `g_ap_stack_base[PERCPU_MAX]` written
+before each SIPI plus `smp_ap_stack_base(idx)` returning 0 for an unknown index;
+and a `!t->is_idle` guard on `sched_free_tcb`'s `kfree`.
+
+**§7.1 — a coupling the design did not name.** A real base on an idle tcb arms
+`sched_free_tcb`'s `kfree`, and neither idle stack came from `kmalloc`. No idle
+reaches that path today (enumerated: the reaper takes only `THREAD_ZOMBIE`; every
+`sched_destroy` caller passes a tcb it created or a zombie found by pid) — but
+the change would make a property of the *callers* load-bearing for the
+*allocator*, so it is stated where the `kfree` is.
+
+**Proof — the same one-line mutant, silent before and firing after**, four
+recorded hashes, the **pre-fix tree as the control** (`c204ed0`'s four files
+`git stash`'d back, not a synthetic defect):
+
+| mutant | tree | kernel | gate | `[schedcheck]` |
+|---|---|---|---|---|
+| M1 | pre-fix | `f2ec0c054b8020f9` | `smoke-shell` | **0 — silent** |
+| M2 | pre-fix | `87c7e47874bfb997` | `smoke-smp` | **0 — silent** |
+| M1 | fixed | `59308c5c18bbf7fe` | `smoke-shell` | **1 — fires** |
+| M2 | fixed | `ca03bedf94effbbb` | `smoke-smp` | **7 — fires** |
+
+Both pre-fix runs still fail their gate **with nothing naming why** — the machine
+took the corrupt frame, DDR-1099 §6's "undiagnosable jump into nowhere".
+
+**The printed `base=` proves both mechanisms separately.** M1-post:
+`base=0xFFFFFFFF801411C0`, higher-half = `kernel_stack`. M2-post: **three
+distinct low bases** `0x07F9C000` / `0x07FA0000` / `0x07FA4000`, exactly `0x4000`
+apart and each 16 KiB-aligned, each with its rsp inside **its own** window —
+which is what proves the per-AP keying, since a neighbour's entry would have
+tripped clause 3 instead of clause 2. `rflags=0` on every fire: clause 4 was
+never reached, alignment and bounds first.
+
+**Negative (the weaker half, and said so):** on clean `0eb965428942d5cf`,
+`smoke-smp`, `smoke-smppreempt`, `smoke-rqstress`, `smoke-blk-integrity`,
+`smoke-shell` all rc=0, zero `schedcheck`, zero `apfreeze`, hash re-verified
+after. It rules out the *strict* direction only; §4 predicted a forgiving-direction
+error would skip exactly as before and pass everything.
+
+**Refused derivation the measurement would have permitted:** all three observed
+AP bases are 16 KiB-aligned, so `rsp & ~(STACK_SIZE-1)` would have worked here.
+Still refused — what was refused is *depending* on an allocator property nothing
+states, and one boot is not that guarantee.
+
+Hygiene ALL EIGHT; `GLOBAL_FORBIDDEN` **77**; **179 gates**, no new gate;
+`kernel.bin` **1,315,210 B — size unchanged**, revert returns
+`0eb965428942d5cf` bit-for-bit. A size check could not distinguish the two
+binaries at all; only the hash does (DDR-1097).

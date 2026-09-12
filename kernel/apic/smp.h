@@ -8,6 +8,14 @@
  * (delays ride g_ticks). Safe no-op when only one CPU is listed. */
 void smp_start_aps(void);
 
+/* DDR-1106: base of the kernel stack AP `idx` boots on -- the pmm_alloc_pages(2)
+ * block smp_start_aps hands that AP through the trampoline mailbox, recorded
+ * before the SIPI because init_idle runs later and ON the AP. Returns 0 for an
+ * unknown index, which is the SAFE answer: DDR-1105's check skips a thread whose
+ * kstack_base is 0, so an out-of-range index degrades to "not covered" rather
+ * than to a window derived from a bogus base. */
+uint64_t smp_ap_stack_base(unsigned idx);
+
 /* DDR-1040: CPUs currently running (1 before smp_start_aps). Read by the
  * expected-fault latch, which is single-CPU by precondition. */
 unsigned smp_online(void);

@@ -13230,3 +13230,96 @@ the RIP against **`3933fa5f60ae607c`**, not the old binary (§INV.18);
 DDR-996's fix worked. **A red is a candidate regression on the hottest path, not
 automatically the DDR-1009 intermittent class; DDR-1105 is not exonerated in
 advance.** Then task #72 (DDR-1106 build) if green.
+
+## CHECKPOINT — DDR-1106 BUILT (2026-09-12): the idle-thread coverage gap is closed
+
+**DDR-1105 IS CI-GREEN AND ITS HOLD IS RELEASED.** Binary `3933fa5f60ae607c`
+took **four** full suites across two SHAs — `33c5be6` push (run 34686501068) and
+pull_request (34686502896), then `7c558f0` push (34688536035) and pull_request
+(34688538214). **40 shard jobs, every one `success`**, each with both DDR-1035
+hash assertions green (the second under `if: always()`), and **zero
+`[schedcheck]` lines** — that pattern is in `GLOBAL_FORBIDDEN`, so a fire would
+have reddened whichever gate booted. Both intervening commits are docs-only, so
+all four suites observe **one** kernel.
+
+**Read the run IDs, not `get_check_runs`, if you need to re-verify those two
+suites** — the PR head has moved and that method reports the head's runs only.
+
+### What shipped
+
+Four files; **the check itself is untouched** (same four clauses, same order,
+same mask). `global kernel_stack` in `boot.asm`; `init_idle` takes the kernel
+stack base as a **parameter** instead of leaving the `memset`'s 0;
+`g_ap_stack_base[PERCPU_MAX]` in `smp.c` written **before each SIPI** (the
+allocation is out of scope by the time `init_idle` runs — it runs *on the AP*),
+with `smp_ap_stack_base(idx)` returning **0 for an unknown index**, which is the
+safe answer because 0 still means "not covered"; and a `!t->is_idle` guard on
+`sched_free_tcb`'s `kfree`.
+
+**That last one was not in the design and is the part to carry.** Giving an idle
+tcb a real `kstack_base` arms `sched_free_tcb`'s `kfree`, and **neither idle
+stack came from `kmalloc`** — the BSP's is `boot.asm`'s `.bss`, each AP's is a
+`pmm_alloc_pages(2)` block. No idle reaches that path today and I enumerated why
+rather than assuming it, but the change would have made a property of the
+*callers* silently load-bearing for the *allocator*.
+
+### Proof, and which half carries it
+
+Same one-line mutant (`next->rsp -= 7` on an idle thread), four recorded hashes,
+**the pre-fix tree as the control** — literally `c204ed0`'s four files
+`git stash`'d back, not a synthetic defect:
+
+| mutant | tree | kernel | gate | `[schedcheck]` |
+|---|---|---|---|---|
+| M1 (`is_idle`) | pre-fix | `f2ec0c054b8020f9` | `smoke-shell` 1 CPU | **0 — SILENT** |
+| M2 (`on_cpu != 0`) | pre-fix | `87c7e47874bfb997` | `smoke-smp` `-smp 4` | **0 — SILENT** |
+| M1 | fixed | `59308c5c18bbf7fe` | `smoke-shell` | **1 — FIRES** |
+| M2 | fixed | `ca03bedf94effbbb` | `smoke-smp` | **7 — FIRES** |
+
+Both pre-fix runs still **fail** their gate with **nothing naming why**.
+
+**`base=` proves the two mechanisms separately, which is more than was asked.**
+M1-post prints a **higher-half** base (`0xFFFFFFFF801411C0` = `kernel_stack`);
+M2-post prints **three distinct low bases** (`0x07F9C000`, `0x07FA0000`,
+`0x07FA4000`) — exactly `0x4000` apart, each 16 KiB-aligned, each with its rsp
+inside **its own** window. **That is what proves the per-AP keying**, because a
+neighbour's entry would have tripped clause 3 rather than clause 2.
+
+**The clean-boot negative is the WEAKER half and must not be read as the proof.**
+`smoke-smp`, `smoke-smppreempt`, `smoke-rqstress`, `smoke-blk-integrity`,
+`smoke-shell` all rc=0, zero `schedcheck`, zero `apfreeze` — but §4 predicted
+exactly why that cannot convict: a base wrong in the **forgiving** direction
+would skip precisely as before and every gate would still pass.
+
+### State
+
+Hygiene **ALL EIGHT**; `GLOBAL_FORBIDDEN` **77**; **179 gates**, no new gate;
+`kernel.bin` **1,315,210 B — SIZE UNCHANGED**, so the size/headroom pair and
+`ci-docstate-check` are unaffected. Clean kernel `0eb965428942d5cf`; revert
+returns it **bit-for-bit**. **A size comparison cannot distinguish this binary
+from DDR-1105's at all — only the hash does** (DDR-1097's finding again).
+**DDR free range stays DDR-1108+** — 1106 was already allocated by the design
+commit, so its entry was *updated* in place at all carriers, not re-numbered.
+
+### NEXT
+
+1. **Watch CI on this push.** It is a **kernel** change on the **hottest path**,
+   for the **most-switched-to thread in the system**. A red is a **candidate
+   regression**, not automatically the DDR-1009 intermittent class, and
+   **DDR-1105/1106 are NOT exonerated in advance** (DDR-1042). Watch, in order:
+   any `[schedcheck]` line (read `rflags=` first — `TF|DF|IOPL` set is a
+   genuinely corrupt frame and **is** the OPEN-2 artefact; `rflags=0` with a
+   misaligned or out-of-bounds `rsp` is the other real case); per-shard
+   `kernel.bin: OK`; any new `[apfreeze]` (**five** producers share that prefix —
+   resolve the RIP against the **new** binary, §INV.18); and `rqfree=<N>`
+   (DDR-1093 — an **instrument with inverted polarity**: `> 0` means DDR-996's
+   fix worked; never add it to `GLOBAL_FORBIDDEN`).
+2. Then task #23, the Groups A–H backlog. Every backlog table is now audited;
+   what remains is building.
+
+**Two items still needing the operator, recorded and NOT to be acted on:**
+(a) the OPEN-2 hunt workflow is built but **not dispatchable** — a
+`workflow_dispatch` workflow must exist on the repo's **default** branch
+(`dev/phase1`) and the file is on `dev/phase1-seyp3n`; it has no push/PR trigger
+so landing it adds zero CI load. **This session must not push to another branch
+without explicit permission.** (b) DDR-1099 §7 is **closed** by DDR-1105.

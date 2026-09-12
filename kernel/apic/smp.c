@@ -325,6 +325,22 @@ int smp_job_done(uint32_t cpu_idx) {
     return pc && !__atomic_load_n(&pc->job, __ATOMIC_ACQUIRE);
 }
 
+/* DDR-1106: per-AP kernel-stack base, written by smp_start_aps before each
+ * SIPI and read once by that AP's own init_idle. The allocation is
+ * pmm_alloc_pages(2) -- an ORDER, not a count (pmm.h:23), so the block is
+ * 2^2 = 4 pages = 16,384 B = sched.c's STACK_SIZE exactly, which is what lets
+ * DDR-1105's window arithmetic cover an idle thread with no new constant and no
+ * per-thread size field. BSS, so no initialiser is owed. */
+static uint64_t g_ap_stack_base[PERCPU_MAX];
+
+/* Base of the kernel stack AP `idx` is running on, or 0 if unknown. Zero is the
+ * SAFE answer and keeps DDR-1105's pre-1106 behaviour for that thread (the check
+ * skips), so an out-of-range index degrades to "not covered" rather than to a
+ * window derived from a bogus base. */
+uint64_t smp_ap_stack_base(unsigned idx) {
+    return (idx < PERCPU_MAX) ? g_ap_stack_base[idx] : 0;
+}
+
 void smp_start_aps(void) {
     unsigned total = lapic_cpu_count();
     if (total < 2) {
@@ -349,6 +365,19 @@ void smp_start_aps(void) {
             kputs("[smp] no AP stack\r\n");
             break;
         }
+        /* DDR-1106: record the base BEFORE the SIPI. init_idle runs later, on
+         * the AP itself (sched_ap_enter), where the allocation is out of scope —
+         * so the base has to travel, and this array is how. Keyed on `i`, the
+         * same index written into OFF_MB_IDX and read back as percpu.cpu_idx,
+         * so the AP reads its own entry and not a neighbour's.
+         *
+         * DERIVING it on the AP as `rsp & ~(STACK_SIZE - 1)` was considered and
+         * REFUSED (DDR-1106 sec.3): that is correct only if a buddy order-2 block
+         * is 16 KiB-aligned, which nothing in this tree states, asserts or
+         * tests, and a future allocator change would silently reintroduce false
+         * positives on the hottest path. Carry it explicitly. */
+        if (i < PERCPU_MAX)
+            g_ap_stack_base[i] = stack;
         *(volatile uint64_t *)(uintptr_t)(TRAMP_PHYS + OFF_MB_CR3)   = vmm_kernel_cr3();
         *(volatile uint64_t *)(uintptr_t)(TRAMP_PHYS + OFF_MB_ENTRY) = (uint64_t)(uintptr_t)smp_ap_entry;
         *(volatile uint64_t *)(uintptr_t)(TRAMP_PHYS + OFF_MB_STACK) = stack + 4 * PAGE_SIZE;
