@@ -12783,8 +12783,21 @@ bounded because §NON-NEGOTIABLE 8 requires the `ls` of both DDR directories
 before allocating, which is how 1097 was found free; DDR-1086 §4 already measured
 and refused a checker for this, and that refusal stands.
 
+### THE ONE THING BLOCKING THE HUNT FROM ACTUALLY RUNNING
+**It is built and it is not yet runnable, measured not assumed.** Dispatching it
+returns **404**, and `list_workflows` shows only `ci.yml` + Dependabot:
+a `workflow_dispatch` workflow must be on the repository's **default branch**
+before it can be dispatched on any ref, and the default branch here is
+**`dev/phase1`** while the file is on `dev/phase1-seyp3n`.
+
+**Remedy: land `.github/workflows/open2-hunt.yml` on `dev/phase1`.** It is cheap
+precisely because of the isolation design — no `push`, no `pull_request` trigger,
+so on the default branch it adds **zero** CI load and runs on nothing until
+dispatched. PR #17 merging does it; so would a one-file PR. **Not done here:**
+this session must never push to a branch other than `dev/phase1-seyp3n` without
+explicit permission, so it is the operator's call.
+
 ### Next
-The hunt job has **never been run** — it needs a `workflow_dispatch` on this
-branch. Watch for: `churn_runs=0` on a lane (the experiment did not happen, lower
+The hunt job has **never been run** (see above). Watch for: `churn_runs=0` on a lane (the experiment did not happen, lower
 `OPEN2_HUNT`), and a `[ringwalk] RECYCLED` line, which is **evidence the window
 opened, not a reproduction of the freeze and not a fix trigger**.

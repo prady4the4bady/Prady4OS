@@ -263,6 +263,32 @@ a held release, and it is not made here.
   it as a revival of the refused approach would be wrong, which is why the
   workflow says so in its own comments.
 
+### 6.1 IT IS BUILT AND IT IS NOT YET RUNNABLE — measured, and the remedy is one file
+
+Stated plainly because "approach #1 is done" would be an over-claim.
+
+Dispatching it returns **`404 Not Found`**
+(`POST /actions/workflows/open2-hunt.yml/dispatches`, `ref=dev/phase1-seyp3n`),
+and `list_workflows` returns **2 workflows** — `ci.yml` and Dependabot — with
+`open2-hunt` **absent**. That is not a defect in the file and not registration
+lag: **a `workflow_dispatch` workflow must exist on the repository's DEFAULT
+branch before it can be dispatched on any ref**, and this repo's default branch
+is **`dev/phase1`** (measured: `git remote show origin` → `HEAD branch:
+dev/phase1`; `ci.yml`'s own `html_url` is rooted there). The file is currently
+only on `dev/phase1-seyp3n`, the head of PR #17.
+
+**The remedy is to land `.github/workflows/open2-hunt.yml` on `dev/phase1`**, and
+the isolation design is exactly what makes that cheap: the workflow has **no
+`push` and no `pull_request` trigger**, so putting it on the default branch adds
+**zero** CI load, cannot run on any commit, and cannot enter the 3-green
+criterion. It sits inert until someone dispatches it. Either PR #17 merging or a
+one-file PR would do it.
+
+**NOT DONE HERE, and the reason is a standing instruction, not a judgement:**
+this session develops on `dev/phase1-seyp3n` and must never push to another
+branch without explicit permission. So the constraint is recorded and the
+decision is the operator's.
+
 Each lane: install the shard job's exact package set, `make musl` + `make lwip`,
 build default (hash `A`), `touch` + build hunt (hash `B`), **assert `A != B`**,
 build the FAT/SFS/ext4 data disks so the guest boots the same topology the local
