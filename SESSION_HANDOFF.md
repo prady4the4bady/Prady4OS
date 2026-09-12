@@ -12866,3 +12866,73 @@ must be on the repo's DEFAULT branch (`dev/phase1`) and the file is on
 `dev/phase1-seyp3n`. Remedy is landing that one file on `dev/phase1` — it has no
 push/pull_request trigger so it adds zero CI load there. **Not done: this session
 must not push to another branch without explicit permission.**
+
+---
+
+## Checkpoint — DDR-1100 (2026-09-12)
+
+**CI status carried forward:** `3a1ff98` (DDR-1098, the kernel change) is **2/2
+green** — push run 34672645173 and PR run 34672647712 both `success`, so the audit
+cursor and its two `PRADYOS_AUDIT` arms rode shard 1 green. `5cb1d79` (DDR-1099,
+docs-only) was still in flight at the time of writing.
+
+**This commit: DDR-1100, correcting my own DDR-1098 §4 one commit later.** No kernel
+change, no new gate, no defect in the write path. `kernel.bin` **byte-identical**
+(`8283919d806459eb`, hash-verified before and after `smoke-shell`); GLOBAL_FORBIDDEN
+76; 179 gates unchanged. **One Makefile `echo` edit** — see the §8 note below, so it
+is not purely docs-only.
+
+DDR-1098 §4 got the number right (16,384 B) and the remedy half wrong: it called the
+whole ceiling "an ON-DISK FORMAT change". Measured, it is **three** ceilings, and
+only one is the format —
+
+1. ring-3 single `write(2)` = `4 × CHUNK`, and `CHUNK` is `fd_write_user`'s
+   **one-PMM-page staging buffer**. **No on-disk consequence.**
+2. mkfs-authored file = 4 blocks, because `mkfs_sfs.c:122-128` emits **one extent
+   per block** over blocks it already allocated contiguously. **No on-disk
+   consequence.** Recorded, NOT changed, NOT claimed to work untested.
+3. four appends per file = `inline_extents[4]`. **Genuinely the format**, and
+   DDR-1098 §4's remedy is right for that one alone.
+
+**Why the format is not the ring-3 limit, measured on a CI call site:**
+`write_extent` takes an arbitrary `uint32_t len` and takes ONE contiguous run of
+`ceil(len/4096)` blocks; `sfs_selftest_lz4` writes **131,072 bytes in one
+`sfs_write` call, in one extent**, and asserts a multi-block `block_count`,
+byte-exact readback of all 128 KiB, and a tag surviving a remount — on every SFS
+boot. **And DDR-764 already moved this exact ceiling by this exact lever**
+(~1 KiB → 16 KiB), saying so in its own comment in that function.
+
+**`CHUNK` is deliberately NOT raised** (DDR-1100 §6): nothing shipping needs it, and
+it would demand 16 physically contiguous pages on every `FD_VFS` write syscall —
+order-0 effectively cannot fail, order-4 can, and a fallback would make a file's
+maximum size depend on fragmentation, which is worse to reason about than a fixed
+16 KiB. The non-vacuous gate arm, if it is ever built, is recorded: **a file larger
+than 16 KiB whose `extent_count` is below 4** — "write >16 KiB and assert success"
+passes on any build whose `CHUNK` is at least the size written.
+
+**The pattern, and why it is its own record:** DDR-1084 §1 described sessions
+inheriting a stale blocker from an earlier DDR. Here the session that wrote the
+blocker and the session correcting it are **the same one, one commit apart** — so
+the pattern is not about elapsed time or lost context, it is about writing a remedy
+into a backlog row while working on a different subsystem.
+
+**Records updated:** all four DDR free-range carriers advanced **DDR-1100+ →
+DDR-1101+** (CLAUDE.md §INV.4, §CURRENT BUILD STATE, §ORIENTATION;
+`docs/PRE_LAUNCH_CHECKLIST.md` §6) with the entry prepended; the Group B
+`smoke-sfs-largefile` row and the Group F audit-flusher row both corrected in
+place; `docs/BUILD_TRACKER.md` appended. **The DDR-1098 entry inside the free-range
+list was deliberately left verbatim** — per DDR-1081 §5 it is a historical record of
+what DDR-1098 said, and the DDR-1100 entry now precedes it carrying the correction.
+
+**NEXT:** read `5cb1d79`'s CI conclusion, then this commit's. Group B's
+`smoke-sfs-largefile` row is corrected but still open; the Group F flusher row is
+**not** unblocked.
+
+**§8, found by running the gate rather than reading anything:** DDR-1098 added two
+`PRADYOS_AUDIT` arms to `smoke-shell` and did not add them to that gate's PASS line,
+which enumerates its own coverage. The arms run and pass; the gate's **statement
+about itself** was understating them. Fixed to `… + source(DDR-1087) +
+audit(DDR-1098)`. Measured safe: nothing under `tools/` or `.github/` parses that
+string, and `smoke-shell` re-ran `rc=0` with `kernel.bin` identical. This is
+DDR-1100's own subject one level down — a record drifting from what was built, by
+the session that built it.

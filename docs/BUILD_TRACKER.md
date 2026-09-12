@@ -4471,3 +4471,50 @@ TF/DF/IOPL — and `R15 = finish_task_switch+0xd` is the return address of
 **NO FIX, NO CAUSE NAMED, OPEN-2 NOT CLOSED.** Not attributed to DDR-1096 §3.
 Masking TF is recorded as the wrong move. Docs only; `kernel.bin` untouched;
 GLOBAL_FORBIDDEN 76; 179 gates.
+
+## DDR-1100 — the write ceiling is a kernel buffer, not the on-disk format (2026-09-12)
+
+**Assessment, docs-only. No code change, no gate, no defect found or alleged.**
+`kernel.bin` not rebuilt (size/headroom pair and `ci-docstate-check` unaffected);
+GLOBAL_FORBIDDEN 76; **179 gates unchanged**.
+
+**Corrects DDR-1098 §4, written one commit earlier by the same session.** That
+section measured the 16,384 B ring-3 write ceiling correctly and attributed it to
+"an ON-DISK FORMAT change". The number is right; the remedy is half wrong, in the
+expensive direction — it sends the next session to change an on-disk format,
+breaking `smoke-sfs-persist`'s deliberately-unreformatted mount and requiring
+`mkfs_sfs.c` and `sfs_readback.c` work, when two of the three ceilings it fused
+have no on-disk consequence at all.
+
+**Three ceilings, measured in the tree:**
+
+| # | Ceiling | Set by | On-disk consequence |
+|---|---|---|---|
+| 1 | ring-3 single `write(2)`, 16,384 B | `fd_write_user`'s `CHUNK` — one PMM page (`sys_io.c:116`) | **none** |
+| 2 | mkfs-authored file, 4 blocks | `mkfs_sfs.c:122-128` emitting one extent per block | **none** |
+| 3 | four appends per file | `inline_extents[4]` (`sfs.h:138`) | **yes — the format** |
+
+**The load-bearing measurement is a CI call site, not an argument.** `write_extent`
+(`sfs.c:918`) takes an arbitrary `uint32_t len` and takes ONE contiguous run of
+`ceil(len / SFS_BLOCK_SIZE)` blocks; `sfs_selftest_lz4` (`sfs.c:1555`) does
+`sfs_write(c, &f, 0, s, 131072) == 131072` — one call, one extent — and asserts a
+multi-block `block_count`, byte-exact readback of all 128 KiB, and a tag surviving
+a remount, printed by `main.c:3002` as `[sfs] lz4+tags compress/readback/tag OK`
+on every SFS boot. **And the row's own history settles it:** DDR-764 already moved
+this exact ceiling by this exact lever (~1 KiB → 16 KiB) and says so in its comment
+in that same function, with nobody touching the on-disk format to do it.
+
+**NOT BUILT — `CHUNK` is not raised**, on DDR-1069's test and a measured cost:
+nothing shipping issues a `write(2)` over 4096 to an `FD_VFS` fd; it would demand
+16 physically contiguous pages on every `FD_VFS` write syscall, where order-0
+effectively cannot fail and order-4 can, turning a working write into `-ENOMEM` —
+or, with a fallback, making a file's maximum size depend on fragmentation, which is
+worse to reason about than a fixed 16 KiB and would make any size arm intermittent.
+ADR-032's bucket (1 MiB, 256 KiB/tick) would also give up a quarter of a full
+bucket to one call.
+
+**NOT CLAIMED:** DDR-1098 is not withdrawn — its cursor, gate arms, §4 measurement
+and "four extents for the life of the file" all stand, and one clause of one
+sentence is corrected. mkfs's packing is **recorded, not changed**, and explicitly
+not claimed to work untested. The Group B `smoke-sfs-largefile` row is **corrected,
+not closed**; the Group F flusher row is **not unblocked**. No open issue moves.
