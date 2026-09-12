@@ -12731,3 +12731,60 @@ their blockers on record rather than guessed: the audit cursor + flusher
 domain agents, and Group B's remaining storage rows. **The gate arm to reuse
 everywhere: a value the writer could not manufacture** — here, a flushed record
 whose `agent_pid` is not the daemon's own. OPEN-1/2/12/13 untouched.
+
+---
+
+## CHECKPOINT 2026-09-12 — DDR-1097: the hunt detector's blind spot, and the isolated CI hunt job
+
+**Picked up from the operator's WSL session (`3e3163d`, DDR-1096) and PR #17's
+five-approach instruction. Built approach #1 after fixing the two things that
+would have made it report false-clean forever.**
+
+**NO FIX. NO MECHANISM. OPEN-2 HAS NOT MOVED.** No artefact captured;
+§NON-NEGOTIABLE 3 holds. DDR-1096 §3's unlocked timer-ISR ring walk is still a
+hypothesis with a matching signature, and a matching mechanism is not an
+attribution (DDR-1056).
+
+### What shipped
+1. **`kernel/proc/sched.c`, inside `#if OPEN2_HUNT`** — a `tid` re-check across
+   the injected pause. Closes the limit DDR-1096 recorded against itself: a node
+   freed **and immediately reused** is a live heap object with a legal `->state`,
+   so both poison arms are false *by construction* and the walk loops instead of
+   faulting — which is what OPEN-2 looks like. `tid` has exactly one writer from
+   a monotonic static; `pid` was tried and fails, because every kernel thread
+   keeps `pid == 0`.
+2. **`Makefile`** — `OPEN2_FORCE_RECYCLE` (default 0) so the forced proof is
+   reproducible from a recorded command rather than a hand edit.
+3. **`tools/ci/open2_hunt_campaign.sh`** — runs classified `churn` / `NO-CHURN`,
+   `churn_runs=` printed beside `signal_runs=`.
+4. **`.github/workflows/open2-hunt.yml`** — the isolated hunt job.
+
+### The three findings, each measured
+* **`[ringwalk]` was ALREADY in `GLOBAL_FORBIDDEN`** (DDR-1001, for `sys_wait4`).
+  My DDR draft said it must be added and that was wrong; running the forced proof
+  is what caught it. Three producers now share the prefix, so **the matched
+  pattern no longer identifies the site** — the *lines* do (`wait4` vs
+  `site=sched_tick`). List unchanged at **76**.
+* **Build-side false clean, re-measured:** `make image OPEN2_HUNT=32` with no
+  touch → **identical** hash. And a *size* check is vacuous — both builds are
+  1,311,114 B. Only the hash discriminates; the job asserts `A != B`.
+* **Run-side false clean, new:** 1 boot in 3 never reached `rqstress` — starved,
+  not hung — so it never ran the churn the race needs, and was scored *clean*.
+
+### State
+`kernel.bin` default **`0693e5b04685ad60`, 1,311,114 B — BIT-IDENTICAL**, so the
+size/headroom pair and `ci-docstate-check` are unaffected. Hygiene **ALL EIGHT**,
+`smoke-shell` PASS, `GLOBAL_FORBIDDEN` **76**, **179 gates** unchanged.
+
+**DDR-1096 shipped without advancing ANY of the four DDR free-range carriers or
+adding its own entry** — all four still read `DDR-1096+` while 1096 was occupied.
+Both entries added and all four advanced to **DDR-1098+** here. Severity is
+bounded because §NON-NEGOTIABLE 8 requires the `ls` of both DDR directories
+before allocating, which is how 1097 was found free; DDR-1086 §4 already measured
+and refused a checker for this, and that refusal stands.
+
+### Next
+The hunt job has **never been run** — it needs a `workflow_dispatch` on this
+branch. Watch for: `churn_runs=0` on a lane (the experiment did not happen, lower
+`OPEN2_HUNT`), and a `[ringwalk] RECYCLED` line, which is **evidence the window
+opened, not a reproduction of the freeze and not a fix trigger**.

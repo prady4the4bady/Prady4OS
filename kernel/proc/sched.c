@@ -1570,6 +1570,21 @@ static void schedule(void) {
     schedule_locked(local_irq_save());
 }
 
+#if OPEN2_HUNT
+/* DDR-1097 sec.7 -- the forced proof, as a build flag rather than a hand edit so
+ * the run is reproducible from the recorded command. OPEN2_FORCE_RECYCLE=1
+ * INVERTS the comparison so the arm fires on every node, which proves the branch
+ * is reachable, prints, breaks safely and does not itself wedge the boot. It
+ * proves NOTHING about what a mismatch MEANS -- that rests on tid having exactly
+ * one writer and next_tid only incrementing, which is read out of the tree and
+ * which no mutation can establish. NEVER set outside a proof run. */
+#if OPEN2_FORCE_RECYCLE
+#define OPEN2_RECYCLE_HIT(a, b) ((a) == (b))
+#else
+#define OPEN2_RECYCLE_HIT(a, b) ((a) != (b))
+#endif
+#endif
+
 void sched_tick(void) {
     struct percpu *pc = this_cpu();
     if (pc)
@@ -1600,12 +1615,18 @@ void sched_tick(void) {
          *       CPU can unlink+free the node this walk is standing on;
          *   (b) a bound + poison test, so an escaped walk NAMES itself instead
          *       of wedging the CPU silently for the rest of the boot.
-         * (b) is an instrument, not a fix: it reports and breaks. */
+         *   (c) DDR-1097: a tid re-check across the pause, because (b) is blind
+         *       to the path this harness exists to hunt -- see below.
+         * (b) and (c) are instruments, not fixes: they report and break. */
         unsigned _hn = 0;
         /* Bounded like ap_freeze_probe's DUMP_SHOTS: an escaped walk recurs on
          * every tick on every CPU, and the UART is ~87 us/byte -- unbounded
          * printing would stall the boot it is measuring (DDR-941). */
         static unsigned _hshots;
+        /* DDR-1097 sec.4: printing is capped at 8, counting is not. A count with
+         * no denominator is not a measurement (NON-NEGOTIABLE 17), and past the
+         * 8th line this total is a LOWER BOUND -- labelled as one, not hidden. */
+        static unsigned _hrecyc;
 #endif
         if (_t) {
             do {
@@ -1639,8 +1660,55 @@ void sched_tick(void) {
                 }
                 _t = _t->next;
 #if OPEN2_HUNT
+                /* DDR-1097 -- THE ARM THE POISON TEST CANNOT BE.
+                 *
+                 * Across this pause the walk HOLDS a pointer it has not yet
+                 * dereferenced, which is exactly the window the hypothesis is
+                 * about. If another CPU unlinks and frees this node and kmalloc
+                 * hands the object straight back to sched_create_state, then the
+                 * address is a LIVE heap object and ->state is a LEGAL value, so
+                 * both poison arms above are false BY CONSTRUCTION and the walk
+                 * follows a valid ->next to the wrong ring position -- a loop,
+                 * not a fault, which is what OPEN-2's signature looks like.
+                 *
+                 * tid is the identity token, and pid would NOT have worked:
+                 * every kernel thread keeps pid == 0 (sched.c:1102) and the ring
+                 * is mostly kernel threads. tid has EXACTLY ONE writer
+                 * (sched.c:1053, t->tid = next_tid++) from a monotonic static,
+                 * so it is assigned once and unique for the life of the boot:
+                 * two values from one address mean the object was reissued.
+                 * A freed-and-still-poisoned node reads 0xDDDDDDDD and fires
+                 * here too -- both values print so the reader need not infer
+                 * which case it was.
+                 *
+                 * DELIBERATELY NOT also latching ->next: the ring legitimately
+                 * relinks under an unlocked reader on every create/destroy, and
+                 * a relink that leaves this node IN the ring is harmless, so
+                 * that arm would fire on ordinary churn and drown this one.
+                 *
+                 * A hit is NOT a wedge and NOT OPEN-2 reproducing -- it is
+                 * evidence the precondition occurred (DDR-1097 sec.4). */
+                uint32_t _tid0 = _t->tid;
                 for (volatile unsigned _d = 0; _d < OPEN2_HUNT; _d++)
                     __asm__ __volatile__("pause");
+                uint32_t _tid1 = _t->tid;
+                if (OPEN2_RECYCLE_HIT(_tid0, _tid1)) {
+                    unsigned _tot = __atomic_add_fetch(&_hrecyc, 1u, __ATOMIC_RELAXED);
+                    if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
+                        break;
+                    uint64_t _lf = console_line_lock();
+                    kputs("[ringwalk] RECYCLED site=sched_tick n=");
+                    kputdec(_hn);
+                    kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
+                    kputs(" tid0=");   kputhex((uint64_t)_tid0);
+                    kputs(" tid1=");   kputhex((uint64_t)_tid1);
+                    kputs(" state=");  kputhex((uint64_t)_t->state);
+                    kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
+                    kputs(" total=");  kputdec(_tot);
+                    kputs("\r\n");
+                    console_line_unlock(_lf);
+                    break;
+                }
 #endif
             } while (_t != current_thread);
         }

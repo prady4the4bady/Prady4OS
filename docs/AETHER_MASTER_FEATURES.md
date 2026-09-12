@@ -1817,3 +1817,17 @@ file. What shipped is tamper-**evidence** over a circular in-memory window; F#76
 names **durability**. The DDR-1071 §7b class in its mirror form: a ✅ on half a
 claim is a false positive, and a false positive is a row that silently stops
 being work. DDR-842's work is not disputed — the record is.
+
+---
+
+### OPEN-2 hunt infrastructure (DDR-1096 → DDR-1097) — no feature change
+
+Nothing in the AETHER layer changes. Recorded here only because §NON-NEGOTIABLE 11
+requires this file to move with the code: the commit touches `kernel/proc/sched.c`
+and the `Makefile` **entirely inside `#if OPEN2_HUNT`**, a debug flag that is `0`
+in every shipped build and every one of the 179 gates. The default `kernel.bin`
+rebuilds **bit-identical** — `0693e5b04685ad60`, 1,311,114 B, verified by rebuild
+— so no feature, no gate and no agent-layer behaviour is affected.
+
+The hunt's own CI workflow is deliberately outside the release pipeline
+(`workflow_dispatch` + `schedule` only) and registers no gate.

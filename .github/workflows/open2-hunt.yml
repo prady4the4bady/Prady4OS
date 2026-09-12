@@ -1,0 +1,190 @@
+# DDR-1097 — OPEN-2 hunting job (operator approach #1, PR #17).
+#
+# THIS WORKFLOW IS DELIBERATELY OUTSIDE THE RELEASE PIPELINE.
+#   * No `push`, no `pull_request` trigger. It can never appear in the 3-green
+#     promotion criterion (CLAUDE.md NON-NEGOTIABLE 1), and a red run here
+#     blocks nothing.
+#   * It registers no `smoke-*` target, so `ci-shard-check` is untouched and the
+#     gate count stays 179.
+#   * IT FAILS WHEN IT FINDS SOMETHING. That is the opposite polarity from every
+#     other workflow in this repository and it is the whole point: a red run
+#     means the hunt caught a signal, the notification fires, and the capture is
+#     in the artifact. Do NOT "fix" it to pass on a hit.
+#
+# WHAT THIS IS NOT: the matrix below is NOT operator approach #2 (concurrent
+# parallel instances), which DDR-1096 §2.2 REFUSED for two independent reasons
+# that still hold — the race is between vCPUs INSIDE one guest, so N guests on
+# one host raise no intra-guest concurrency under TCG, and NON-NEGOTIABLE 12
+# forbids two QEMUs on one machine. Each lane here is a SEPARATE GitHub runner
+# with exactly ONE QEMU on it. The matrix buys throughput and hardware
+# diversity; it buys no concurrency, and reading it as a revival of the refused
+# approach would be wrong.
+#
+# The `schedule:` trigger IS operator approach #4 (wider time/hardware
+# sampling), which DDR-1096 §2.4 judged sound but with no local form: GitHub
+# allocates whatever hardware it allocates, invisibly, so spreading runs over
+# time is the only handle this project has on that variable.
+#
+# NO FIX IS IMPLIED BY ANY OF THIS. NON-NEGOTIABLE 3 holds: no artefact has been
+# captured, no mechanism is named, and OPEN-2 has not moved.
+name: open2-hunt
+
+on:
+  workflow_dispatch:
+    inputs:
+      lanes:
+        description: 'Parallel runners (each runs ONE qemu)'
+        default: '6'
+      runs:
+        description: 'Boots per lane (each burns its full 180 s window by design, DDR-1043)'
+        default: '10'
+      hunt:
+        description: 'OPEN2_HUNT pause per node. 32 is the measured working point — DDR-1096 §4.2 found 128/512 starve the boot so the unlink churn the race REQUIRES never runs'
+        default: '32'
+  schedule:
+    # Approach #4. Weekly, off-peak, so successive hunts land on whatever
+    # hardware GitHub happens to allocate on different days.
+    - cron: '17 4 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  # The `lanes` input cannot index a matrix literal, so this job emits the lane
+  # array as JSON. Without it the input would be decoration -- a knob that reads
+  # as if it changes the run and does not.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      lanes: ${{ steps.gen.outputs.lanes }}
+    steps:
+      - id: gen
+        run: |
+          n='${{ github.event.inputs.lanes || '6' }}'
+          case "$n" in ''|*[!0-9]*) echo "::error::lanes must be a number"; exit 1;; esac
+          if [ "$n" -lt 1 ] || [ "$n" -gt 20 ]; then
+            echo "::error::lanes must be 1..20 (each is a runner with one qemu)"; exit 1
+          fi
+          echo "lanes=$(seq 0 $((n-1)) | paste -sd, - | sed 's/^/[/;s/$/]/')" >> "$GITHUB_OUTPUT"
+
+  hunt:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false        # one lane finding a signal must not cancel the others
+      matrix:
+        lane: ${{ fromJSON(needs.setup.outputs.lanes) }}
+    name: hunt (lane ${{ matrix.lane }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
+
+      # Same package set as the ci.yml shard job, minus the ISO/UEFI tools this
+      # job never reaches. Kept deliberately close so no build step can lose a
+      # tool it quietly depended on (DDR-1045).
+      - name: Install toolchain
+        run: |
+          bash tools/ci/apt_prepare.sh \
+            clang lld llvm nasm make qemu-system-x86 \
+            dosfstools mtools e2fsprogs
+
+      - name: Build musl libc subset (PROC-D)
+        run: make musl
+
+      - name: Build lwIP core (NET-B)
+        run: make lwip
+
+      # THE LOAD-BEARING STEP. DDR-1096 §5.1 and DDR-1097 §5: KCFLAGS is NOT a
+      # prerequisite of $(KERNEL_BIN), so `make image OPEN2_HUNT=32` on a tree
+      # already built at the default SILENTLY RELINKS THE STALE OBJECT and
+      # produces a BIT-IDENTICAL kernel — measured in two environments. A hunt
+      # pointed at that binary runs a kernel with NO HARNESS IN IT and reports
+      # clean forever, with every hash check passing because the hash is stably
+      # wrong.
+      #
+      # And the cheap check is VACUOUS: both builds are 1,311,114 B, because the
+      # harness fits inside existing page padding. Asserting "the image changed"
+      # by SIZE passes on the stale binary. ONLY THE HASH DISCRIMINATES.
+      - name: Build default, then hunt, and PROVE the flag rebuilt
+        run: |
+          set -euo pipefail
+          make image >/dev/null
+          A="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
+          echo "default kernel = ${A:0:16}  ($(stat -c%s build/kernel.bin) B)"
+
+          touch kernel/proc/sched.c
+          make image OPEN2_HUNT=${{ github.event.inputs.hunt || '32' }} >/dev/null
+          B="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
+          echo "hunt    kernel = ${B:0:16}  ($(stat -c%s build/kernel.bin) B)"
+
+          if [ "$A" = "$B" ]; then
+            echo "::error::OPEN2_HUNT did not rebuild the kernel (${A:0:16} == ${B:0:16})."
+            echo "::error::Every run of this hunt would have been a false clean. See DDR-1097 §5."
+            exit 1
+          fi
+          echo "rebuild proven: ${A:0:16} != ${B:0:16}"
+          echo "$B  build/kernel.bin" > build/hunt.sha256
+
+      # The guest must boot the same disk topology the local campaign did, or it
+      # is a different experiment (the DDR-1096 §4.3 trap: a reproduction on a
+      # kernel that cannot mount its filesystem is not attributable).
+      - name: Build the data disks
+        run: make fat-image sfs-image ext4-image >/dev/null
+
+      # The kernel must not be rebuilt by the disk-image targets either.
+      - name: Assert the campaign will pin the binary the previous step built
+        run: sha256sum -c build/hunt.sha256
+
+      - name: Hunt
+        id: hunt
+        run: |
+          set -uo pipefail
+          # The campaign mkdir -p's this itself, but AFTER the pipeline below has
+          # already opened the tee target inside it.
+          mkdir -p build/gatelogs/open2hunt
+          # Recorded in the log because the campaign cannot know it: OPEN2_HUNT is
+          # a BUILD-time flag baked into the pinned binary, not something the
+          # script reads. Passing it as env would imply otherwise.
+          echo "[job] built with OPEN2_HUNT=${{ github.event.inputs.hunt || '32' }} lane=${{ matrix.lane }}" \
+            | tee build/gatelogs/open2hunt/campaign.txt
+          bash tools/ci/open2_hunt_campaign.sh "${{ github.event.inputs.runs || '10' }}" \
+            | tee -a build/gatelogs/open2hunt/campaign.txt
+          rc=${PIPESTATUS[0]}
+          # rc=2 is the DDR-1060 §9 hash-change ABORT. Swallowing it would report
+          # a campaign that stopped early as a clean one.
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::campaign aborted rc=$rc (rc=2 = kernel.bin changed mid-campaign)"
+            exit 1
+          fi
+          if grep -qE 'signal_runs=[1-9]' build/gatelogs/open2hunt/campaign.txt; then
+            echo "::error::OPEN-2 HUNT SIGNAL — read the uploaded captures."
+            echo "::error::A [ringwalk] RECYCLED line is EVIDENCE THE WINDOW OPENED, not a"
+            echo "::error::reproduction of the freeze and not a mechanism (DDR-1097 §4)."
+            exit 1
+          fi
+          # DDR-1097 §7.2. The hunt pauses slow the boot, and a run that never
+          # reaches rqstress_proof never ran the create/exit churn the race
+          # requires -- it is a wide window with nothing to catch in it, and it
+          # reports `clean` while testing nothing. MEASURED 1 run in 3 locally.
+          # Some no-churn runs are tolerable and are NOT failed here; a lane with
+          # ZERO is reporting on an experiment that did not happen, and a silent
+          # false clean is the exact failure this whole job was hardened against.
+          if grep -qE 'churn_runs=0( |$)' build/gatelogs/open2hunt/campaign.txt; then
+            echo "::error::NO run in this lane reached rqstress -- the churn the race needs"
+            echo "::error::never ran, so 'clean' here is vacuous. Lower OPEN2_HUNT and re-run"
+            echo "::error::(DDR-1096 §4.2 measured 128/512 starve the boot outright)."
+            exit 1
+          fi
+
+      # Uploaded on a clean run too: a clean capture is what a later session
+      # reads to say what the boot was doing while it did not fire.
+      - name: Upload captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: open2-hunt-lane-${{ matrix.lane }}
+          path: build/gatelogs/open2hunt
+          retention-days: 14
+          if-no-files-found: warn

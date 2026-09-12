@@ -4378,3 +4378,51 @@ rebuilt, `GLOBAL_FORBIDDEN` 76, 179 gates. No cursor built and no NSI reserved �
 §2.1 establishes the extension is *safe to make*, not that it should be. The
 flusher is not built and not designed beyond §4's arm. DDR-842's work is not
 disputed; the **record** is corrected. No gate was run. OPEN-1/2/12/13 untouched.
+
+---
+
+## DDR-1096 / DDR-1097 — the OPEN-2 hunt: harness, its blind spot, and an isolated CI job
+
+**DDR-1096** (operator approaches, PR #17) shipped the delay-injection harness
+behind `OPEN2_HUNT` and refused the other four approaches with measurements. It
+recorded a coverage limit against itself: the poison test catches a node freed
+and left poisoned, **not one freed and immediately reused**.
+
+**DDR-1097 closes that, and it is the path that mattered.** When `kmalloc` hands
+the freed TCB straight back to `sched_create_state`, the address is a live heap
+object and `->state` is a legal value, so **both poison arms are false by
+construction** and the walk follows a valid `->next` to the wrong ring position —
+a **loop, not a fault**, which is what OPEN-2's signature looks like. The
+detector now samples the node's `tid` across the pause: `tid` has **exactly one
+writer** (`sched.c:1053`, from a monotonic static), so two values from one
+address mean the object was reissued, and the second value is written by another
+CPU — a value the probe cannot manufacture. `pid` was tried first and **does not
+work**: every kernel thread keeps `pid == 0`, and the ring is mostly kernel
+threads.
+
+**Two false-clean paths were found and closed, one on each side of the run:**
+
+* **Build side** (DDR-1096 §5.1, re-measured here): `make image OPEN2_HUNT=32`
+  without touching a source produces a **bit-identical kernel** — a hunt against
+  that binary runs a kernel with no harness in it and reports clean forever. The
+  cheap check is vacuous: both builds are **1,311,114 B**, so a *size* assertion
+  passes on the stale binary. Only the hash discriminates, and the CI job
+  asserts `A != B`.
+* **Run side** (new, DDR-1097 §7.2): 1 boot in 3 never reached `rqstress` — not
+  hung, **starved** (`ymask` 1.08M vs ~120k) — so it never ran the create/exit
+  churn the race requires, and the campaign scored it *clean*. Runs are now
+  classified `churn` / `NO-CHURN` with `churn_runs=` printed beside
+  `signal_runs=`.
+
+**CI:** `.github/workflows/open2-hunt.yml` — `workflow_dispatch` + `schedule`
+only. No `push`, no `pull_request`, so it cannot enter the 3-green criterion; no
+`smoke-*` target, so `ci-shard-check` stays at **179 gates**. It **fails when it
+finds something** — the opposite polarity from every other workflow here. The
+matrix is **not** the refused approach #2: each lane is a separate runner with
+one QEMU.
+
+**NOT CLAIMED.** No fix, no mechanism, no attribution; DDR-1096 §3's unlocked
+ring walk remains a **hypothesis**. No artefact captured — a `RECYCLED` line has
+never been seen outside the forced-proof build. Default `kernel.bin` is
+**bit-identical** (`0693e5b04685ad60`, 1,311,114 B), `GLOBAL_FORBIDDEN` **76**,
+179 gates, OPEN-1/2/12/13 untouched.

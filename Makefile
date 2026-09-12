@@ -265,7 +265,17 @@ KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
 # instead of wedging the CPU with IF clear.
 OPEN2_HUNT ?= 0
 OPEN2_RING_MAX ?= 4096
+# DDR-1097 sec.7: inverts the tid re-check so it fires on every node. PROOF RUNS
+# ONLY -- it makes the instrument report unconditionally, which is how the branch
+# is shown to be reachable and safe; it must never be set for a real hunt.
+OPEN2_FORCE_RECYCLE ?= 0
 KCFLAGS += -DOPEN2_HUNT=$(OPEN2_HUNT) -DOPEN2_RING_MAX=$(OPEN2_RING_MAX)
+KCFLAGS += -DOPEN2_FORCE_RECYCLE=$(OPEN2_FORCE_RECYCLE)
+# DDR-1097 sec.5 / DDR-1096 sec.5.1: KCFLAGS is NOT a prerequisite of
+# $(KERNEL_BIN), so a flag-only change silently relinks a stale object and
+# produces an IDENTICAL hash -- measured, twice, in two environments. Touch a
+# source and CHECK THE HASH after changing any of these. The size does not move
+# (both builds are 1,311,114 B), so only the hash discriminates.
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
