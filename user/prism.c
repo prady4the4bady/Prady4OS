@@ -71,6 +71,23 @@ struct procinfo {
     unsigned long long run_ticks;   /* DDR-754: 100 Hz ticks */
     unsigned long long dispatches;  /* DDR-754: switch-in count */
 };
+/* DDR-1098: the audit log's read surface. The record layout is mirrored from
+ * kernel/aether/aether.h struct aether_audit_entry_pub; three other ring-3
+ * probes carry the same copy, which is exactly why DDR-842 refused to widen it
+ * and why the SEQUENCE travels beside the records in a cursor instead. */
+#define SYS_READ_AUDIT     37   /* (buf*, max, cursor*|0) -> n entries copied         */
+struct audit_rec {
+    unsigned long long timestamp;
+    unsigned pid, type;
+    unsigned long long id;
+    unsigned rc, _pad;
+};
+/* In/out. `from` is a 1-based append sequence (0 = the oldest still retained);
+ * `first` is written BY THE KERNEL and is the only value in the exchange this
+ * shell cannot manufacture -- which is why it is poisoned before every call. */
+struct audit_cur { unsigned long long from, first; };
+#define AUDIT_POISON 0xA0D17C0ULL
+
 /* DDR-888 (item 36): the agent DSL's NSI surface. */
 #define SYS_SUBMIT_ACTION  31   /* (type, payload*, len) -> id | -EPERM (agents only) */
 #define SYS_POLL_RESULT    32   /* (action_id) -> status | -ESRCH                     */
@@ -713,7 +730,7 @@ int main(void) {
         }
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps jobs fg kill wait source agent action setname touch rm mv uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps jobs fg kill wait source agent action audit setname touch rm mv uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -821,6 +838,79 @@ int main(void) {
             long n = nsi(SYS_DMESG, (long)b, (long)sizeof b, 0);
             printf("dmesg: %ld bytes\n", n > 0 ? n : 0);
             if (n > 0) fwrite(b, 1, (size_t)n, stdout);
+        } else if (!strcmp(cmd, "audit")) {                  /* DDR-1098 */
+            /* WHY THIS EXISTS. SYS_VERIFY_AUDIT (93) reports the INDEX of the
+             * first tampered record, and DDR-842 says in as many words why an
+             * index rather than a boolean: "tampered at entry 1204" locates the
+             * event being hidden. Until DDR-1098 ring 3 could not read entry
+             * 1204 -- aether_audit_read returned the newest n and nothing else,
+             * clamped to 64 of a 4096-entry ring. The verifier's answer was
+             * unactionable from the only ring that receives it.
+             *
+             * The 64 clamp is unchanged and is now a PAGE SIZE, not a ceiling:
+             * this loop resumes at first + n, so a request for more than 64 is
+             * simply more syscalls. On a kernel that ignores the cursor every
+             * call returns the same newest window, which is what dup= reports,
+             * and `first` keeps the poison, which is what pois= reports. */
+            unsigned long long from = 0;
+            long want = 16;
+            if (argc >= 2) { const char *p = argv[1]; from = 0;
+                             while (*p >= '0' && *p <= '9') from = from * 10 + (unsigned)(*p++ - '0'); }
+            if (argc >= 3) { const char *p = argv[2]; want = 0;
+                             while (*p >= '0' && *p <= '9') want = want * 10 + (*p++ - '0'); }
+            if (want <= 0) want = 16;
+            /* STATIC, NOT A LOCAL, and it is not a style preference -- it was
+             * measured. A 2 KiB local here pushed this function's frame (which
+             * already carries dmesg's char b[4096]) past ADR-038's eagerly-mapped
+             * stack window, and because vmm_user_range_ok validates a syscall
+             * pointer WITHOUT faulting the page in, the next builtin to hand the
+             * kernel a stack buffer got -EFAULT rather than a fault: the observed
+             * symptom was `agent list: rc=-14` from an UNRELATED builtin whose
+             * own bits[16] had landed on an unmapped page. ADR-038 sized
+             * USER_STACK_EAGER_PAGES = 8 by measurement for exactly this reason;
+             * a shell builtin must not spend that budget. */
+            static struct audit_rec buf[64];
+            struct audit_cur cur;
+            struct audit_rec prev0;
+            int have_prev = 0, dup = 0, pois = 0;
+            long total = 0, calls = 0;
+            unsigned long long first0 = 0, lost = 0;
+            cur.from = from;
+            while (want > 0) {
+                long ask = (want > 64) ? 64 : want;
+                cur.first = AUDIT_POISON;     /* only the kernel can clear this */
+                long n = nsi(SYS_READ_AUDIT, (long)buf, ask, (long)&cur);
+                calls++;
+                if (cur.first == AUDIT_POISON) pois = 1;
+                if (n <= 0) break;
+                if (calls == 1) {
+                    first0 = cur.first;
+                    /* Wrap loss is meaningful only against an explicit start:
+                     * from == 0 asks for the NEWEST window, which by definition
+                     * skipped nothing. Reporting first - 0 there would print the
+                     * whole log length as "lost", which is the opposite of true. */
+                    lost = (from != 0 && cur.first > from) ? (cur.first - from) : 0ULL;
+                }
+                /* Two consecutive windows that START with the same record mean
+                 * the cursor did not advance the read -- the signature of a
+                 * kernel serving `newest n` regardless of what was asked. */
+                if (have_prev && prev0.timestamp == buf[0].timestamp
+                              && prev0.id == buf[0].id
+                              && prev0.pid == buf[0].pid
+                              && prev0.type == buf[0].type)
+                    dup = 1;
+                prev0 = buf[0]; have_prev = 1;
+                for (long i = 0; i < n; i++)
+                    printf("audit %llu t=%llu pid=%u type=%u rc=%u id=%llu\n",
+                           cur.first + (unsigned long long)i, buf[i].timestamp,
+                           buf[i].pid, buf[i].type, buf[i].rc, buf[i].id);
+                total += n;
+                want  -= n;
+                cur.from = cur.first + (unsigned long long)n;
+                if (n < ask) break;           /* caught up with the newest */
+            }
+            printf("PRADYOS_AUDIT first=%llu n=%ld calls=%ld dup=%d pois=%d lost=%llu\n",
+                   first0, total, calls, dup, pois, lost);
         } else if (!strcmp(cmd, "agent")) {                  /* DDR-888 item 36 */
             /* The agent DSL. PRISM runs WITHOUT CAP_AGENT and WITHOUT
              * CAP_SOVEREIGN, so the privileged verbs here are expected to be

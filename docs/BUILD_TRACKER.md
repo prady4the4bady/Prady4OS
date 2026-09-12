@@ -4426,3 +4426,33 @@ ring walk remains a **hypothesis**. No artefact captured — a `RECYCLED` line h
 never been seen outside the forced-proof build. Default `kernel.bin` is
 **bit-identical** (`0693e5b04685ad60`, 1,311,114 B), `GLOBAL_FORBIDDEN` **76**,
 179 gates, OPEN-1/2/12/13 untouched.
+
+## DDR-1098 — the audit cursor, and the write-side ceiling that blocks the flusher (2026-09-12)
+
+**SHIPPED:** a resumable cursor on `SYS_READ_AUDIT` (37) — `a3` is an optional
+in/out `struct aether_audit_cursor {from, first}`, `a3 == 0` keeping the original
+"newest n" path verbatim — plus a monotonic `g_written` in the audit ring and a
+PRISM `audit [from [count]]` builtin that drains through it.
+
+**WHY:** `aether_audit_verify` reports *the index* of the first tampered record
+and DDR-842 states why an index rather than a boolean — and **ring 3 could not
+read that index**. The addressable window was the newest 64 of a 4096-entry ring,
+measured live at **64 of 4369 written, with 273 records already evicted** before
+the shell is usable. The DDR-1046 class: the control worked, its output could not
+be acted on.
+
+**NOT SHIPPED, and the row is RE-BLOCKED not closed:** no flusher, no file, no
+durable ledger. DDR-1098 §4 measures a **third** blocker on that row (after
+DDR-1094's boot root and DDR-1095's read API), on the **write** side: `sfs_write`
+refuses the fifth extent and `fd_write_user` chunks `FD_VFS` at 4096, so a file
+written from ring 3 accepts **four extents / 16,384 bytes for its whole life**.
+A flushed ring is ~240 KiB. Lifting it is an on-disk format change.
+
+**PROOF:** fixed `8283919d806459eb` → `n=130 calls=3 dup=0 pois=0 lost=273`;
+M1 (pre-1098 behaviour verbatim) `3c2e6d36681d24af` → `dup=1 pois=1` with
+`first=0xA0D17C0`, **the poison surviving** — and `n=130 calls=3` byte-identical
+in both, which is why the count is not the arm. Revert bit-for-bit.
+Regression: `smoke-egress-audit`, `smoke-privacy-netfilter`, `smoke-auditchain`,
+`smoke-auditchain-tamper`, `smoke-shell` all rc=0. Hygiene ALL EIGHT.
+`GLOBAL_FORBIDDEN` 76. **179 gates unchanged.** `kernel.bin` 1,311,114 B — size
+unchanged.

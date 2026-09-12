@@ -12801,3 +12801,55 @@ explicit permission, so it is the operator's call.
 The hunt job has **never been run** (see above). Watch for: `churn_runs=0` on a lane (the experiment did not happen, lower
 `OPEN2_HUNT`), and a `[ringwalk] RECYCLED` line, which is **evidence the window
 opened, not a reproduction of the freeze and not a fix trigger**.
+
+---
+
+## CHECKPOINT 2026-09-12 — DDR-1098 (audit cursor) + A LIVE OPEN-2 ARTEFACT
+
+### DDR-1098, committed here
+`SYS_READ_AUDIT` (37) takes an optional in/out cursor in `a3`; PRISM gained an
+`audit` builtin that drains through it. `a3 == 0` is the original path verbatim.
+**The flusher is NOT built and the Group F row is RE-BLOCKED, not closed** — §4
+measures the SFS write ceiling (4 extents / 16,384 B per file from ring 3), which
+is a third and larger blocker than the read API DDR-1095 named.
+
+Kernel `8283919d806459eb`, **1,311,114 B — size unchanged**. M1
+`3c2e6d36681d24af`. Hygiene ALL EIGHT, `GLOBAL_FORBIDDEN` 76, 179 gates.
+
+### THE THING TO PICK UP NEXT — A REAL OPEN-2 [apfreeze], NOT YET RESOLVED
+CI **34666584466**, shard 7, `smoke-smpsched`, head `b73d013` — **a DOCS-ONLY
+commit** whose own post-gate step printed `kernel.bin: OK`, so the binary is the
+one that went 2/2 green on `709d0e2`:
+
+```
+[apfreeze] cpu=2 ticks=157 rip=0xFFFFFFFF8000C8F7 cs=0x08 rflags=0x2406 if=0
+           rsp=0x0000000007C2A4B0 lvt=0x20030 masked=0 svr=0x1FF swen=1
+           tpr=0 isr48=0 irr48=1 pid=11 shot=1..4 bt=0x0000000007CFC000
+[vblk] compl wait timeout unit=1 dest_cpu=2 dest_dticks=0 dest_abs=157
+       bsp_abs=1179 dest_present=1 ticks[1179,1158,157,1155] on_cpu=0 lba=2050
+```
+CPU 2 freezes at tick 157 while the BSP reaches 1179; `dest_cpu=2` matches, so
+the block timeout is downstream. Also present, and it must be read carefully:
+`panics_silent=0 panic_stage=3 loser_cpu=0 loser_vec=0 loser_rip=0x0` in every
+`[hb]` from t=500 — the DDR-1088 shape — plus three `[yieldstall] site=mnt_lock`
+lines (one RESOLVED at spins=75653).
+
+**STEP 1 IS §INV.18 / DDR-1019 AND NOTHING ELSE: resolve `0xFFFFFFFF8000C8F7`
+against ITS OWN binary** (`0693e5b04685ad60`, rebuildable bit-identically from
+`b73d013`; the working tree after DDR-1098 builds a DIFFERENT kernel, so use a
+worktree). `[apfreeze]` has at least four known producers told apart ONLY by RIP
+(DDR-1019's halt loop, DDR-1006's `sched_tick` AP timer ISR, DDR-1010's
+`sys_mmap`, DDR-1079's panic walker). Do not read it as any of them first.
+
+This is the **first `[apfreeze]` since DDR-1062's 42-suite window**, which bounded
+the CI-side rate below 6.9%. One occurrence is not a rate and none is claimed —
+but the bound was computed over a window containing zero, and this is one.
+
+**NOT FIXED, NO MECHANISM NAMED, NON-NEGOTIABLE 3 HOLDS.**
+
+### STILL OPEN FROM DDR-1097
+The hunt workflow is BUILT and NOT DISPATCHABLE: a `workflow_dispatch` workflow
+must be on the repo's DEFAULT branch (`dev/phase1`) and the file is on
+`dev/phase1-seyp3n`. Remedy is landing that one file on `dev/phase1` — it has no
+push/pull_request trigger so it adds zero CI load there. **Not done: this session
+must not push to another branch without explicit permission.**

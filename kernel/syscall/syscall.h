@@ -47,7 +47,7 @@
 #define SYS_REJECT_ACTION  34  /* (action_id) -> 0 | -EPERM  (CAP_SOVEREIGN)        */
 #define SYS_SPAWN_AGENT    35  /* (path*, task*) -> pid | -EPERM   (CAP_AGENT)      */
 #define SYS_KILL_AGENT     36  /* (pid) -> 0 | -EPERM|-ESRCH       (CAP_AGENT)      */
-#define SYS_READ_AUDIT     37  /* (buf*, max) -> n entries copied                   */
+#define SYS_READ_AUDIT     37  /* (buf*, max, cursor*|0) -> n copied (DDR-1098)     */
 #define SYS_SET_MEM_LIMIT  38  /* (pid, bytes) -> 0 | -EPERM (lower-only)           */
 /* Ring-3 proxy sockets (ADR-027). Append-only after 38. */
 #define SYS_SOCK_CONNECT   39  /* (host_be, port) -> fd(0..7) | -errno              */

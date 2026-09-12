@@ -287,16 +287,49 @@ static long sys_kill_agent(long a1, long a2, long a3, long a4, long a5, long a6)
     return 0;
 }
 
+/* DDR-1098: a3 is an OPTIONAL in/out cursor, so the newest 64 stops being the
+ * only window ring 3 can ever address.
+ *
+ * a3 == 0 takes the original path VERBATIM, and that is safe by measurement
+ * rather than by hope: all four shipped call sites pass a literal 0 into RDX
+ * (user/include/pradyos.h, egressaudittest.c, privacynettest.c,
+ * sovegresstest.c), and each freestanding stub binds "d"(a3), so the register is
+ * written rather than left to chance. The DDR-1032 shape.
+ *
+ * THE RETURNED SEQUENCE DOES NOT GO IN a4, although a4 is likewise ignored.
+ * a4 is R10 (arch/x86_64/syscall_entry.asm:105) and the three-argument stubs
+ * those callers use stop at "d"(a3) -- R10 holds whatever the compiler last left
+ * there, so treating it as a user pointer would copyout to a garbage address on
+ * every existing call. The probes that DO pass four arguments each declare their
+ * own nsi4 with an explicit r10 binding, which is exactly the evidence that a
+ * three-argument stub does not. Hence one pointer carrying both directions.
+ *
+ * The 64 clamp is UNCHANGED (DDR-1095 recorded why not to turn it into -E2BIG:
+ * three green gates ask for more and it is a correct bound on a kernel stack
+ * buffer). With a cursor it stops being a ceiling and becomes a page size. */
 static long sys_read_audit(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
-    (void)a3; (void)a4;
+    (void)a4;
     int max = (int)a2;
     if (max <= 0) return 0;
     if (max > 64) max = 64;                      /* bounded kernel staging buffer */
     struct aether_audit_entry_pub buf[64];
-    int n = aether_audit_read(buf, max);
+
+    struct aether_audit_cursor cur;
+    struct aether_audit_cursor *curp = NULL;
+    if (a3) {
+        if (copyin(&cur, (const void __user *)a3, sizeof cur) < 0)
+            return -EFAULT;
+        curp = &cur;
+    }
+
+    int n = aether_audit_read_since(buf, max, curp);
     if (n > 0 && copyout((void __user *)a1, buf,
                          (size_t)n * sizeof buf[0]) < 0)
+        return -EFAULT;
+    /* The cursor is written back even when n == 0: "nothing new, and here is
+     * where the next record will land" is an answer a poller needs. */
+    if (curp && copyout((void __user *)a3, &cur, sizeof cur) < 0)
         return -EFAULT;
     return n;
 }

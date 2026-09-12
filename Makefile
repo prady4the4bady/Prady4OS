@@ -1648,6 +1648,8 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'run /SLOWTEST.ELF &\n'; sleep 0.6; \
 	  printf 'wait\n'; sleep 1; \
 	  printf 'echo WAITMARK-7q4\n'; sleep 6; \
+	  printf 'audit 1 130\n'; sleep 2.5; \
+	  printf 'audit\n'; sleep 1.2; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 120 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -1669,6 +1671,32 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# types, which the launcher cannot: it calls execve directly.
 	@grep -q 'PRADYOS_ARGV=alpha' build/shell_serial.log || { echo "[shell] FAIL: run did not pass its arguments through execve (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log || echo '(no PRADYOS_ARG lines at all)'; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'PRADYOS_ARGV=beta' build/shell_serial.log || { echo "[shell] FAIL: run truncated its argument vector (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log; exit 1; }
+	@# DDR-1098: THE AUDIT CURSOR. `audit 1 130` asks for 130 records starting at
+	@# the OLDEST sequence still retained. SYS_READ_AUDIT clamps at 64, so that is
+	@# THREE syscalls, each resuming where the last ended -- which is the whole
+	@# capability: before DDR-1098 ring 3 could address only the newest 64 of a
+	@# 4096-entry ring, so SYS_VERIFY_AUDIT's "tampered at entry 1204" named a
+	@# record no ring-3 program could go and read.
+	@#
+	@# NEITHER n= NOR calls= IS THE DISCRIMINATOR, and that was measured before
+	@# these arms were written. A kernel that ignores the cursor still returns 64
+	@# records per call and PRISM still counts 130 across 3 calls -- identical
+	@# numbers. What only a real cursor can produce is:
+	@#   pois=0 -- PRISM poisons cur.first with 0xA0D17C0 before EVERY call, so a
+	@#             kernel that never writes it back leaves the poison for the gate
+	@#             to find. This is the churn-proof arm: it holds regardless of how
+	@#             many records the boot appends between calls.
+	@#   dup=0  -- two consecutive windows must not START with the same record,
+	@#             which is the signature of `newest n` served three times.
+	@# first= and lost= are deliberately NOT asserted: they depend on how many
+	@# audit records this boot happened to write before the prompt (measured at
+	@# ~4369, with the ring ALREADY WRAPPED and 273 records evicted), and an arm
+	@# pinned to a boot-timing quantity is an arm that reddens on a correct kernel.
+	@grep -q 'PRADYOS_AUDIT first=.* n=130 calls=3 dup=0 pois=0 ' build/shell_serial.log || { echo "[shell] FAIL: audit cursor did not resume across calls (DDR-1098)"; grep -a 'PRADYOS_AUDIT' build/shell_serial.log || echo '(no PRADYOS_AUDIT line at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@# The from==0 form: the NEWEST window, one call, with the sequence reported.
+	@# Without this arm a kernel could satisfy the drain above and still not report
+	@# a sequence on the path every existing caller uses.
+	@grep -q 'PRADYOS_AUDIT first=.* n=16 calls=1 dup=0 pois=0 lost=0' build/shell_serial.log || { echo "[shell] FAIL: audit newest-window did not report its sequence (DDR-1098)"; grep -a 'PRADYOS_AUDIT' build/shell_serial.log; exit 1; }
 	@# DDR-1067: QUOTING. `run /ARGTEST.ELF "gamma delta"` must deliver TWO argv
 	@# entries, the second containing a space -- a line no unquoted input can
 	@# produce. PRADYOS_ARGC=2 appears nowhere else: the arm four lines above

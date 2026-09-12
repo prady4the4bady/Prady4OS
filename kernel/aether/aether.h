@@ -272,8 +272,29 @@ void aether_audit_tamper(void);
 void aether_audit(uint32_t agent_pid, uint32_t action_type,
                   uint64_t action_id, uint32_t result);
 /* Copy up to max entries (oldest..newest) into a kernel-side caller buffer.
- * Returns the number copied. Used by SYS_READ_AUDIT after copyout staging. */
+ * Returns the number copied. Used by SYS_READ_AUDIT after copyout staging.
+ * Equivalent to aether_audit_read_since(out, max, NULL) -- the newest max. */
 int  aether_audit_read(struct aether_audit_entry_pub *out, int max);
+
+/* DDR-1098: the resumable read.
+ *
+ * The record layout above is deliberately NOT widened to carry a sequence
+ * number -- DDR-842's reason still holds (three ring-3 probes each keep their own
+ * copy of struct aether_audit_entry_pub, so extra bytes per entry would make the
+ * kernel "write past buffers those probes sized for the old shape -- an overflow,
+ * not a parse error"). The sequence travels BESIDE the records, in this cursor.
+ *
+ * `from` is an append sequence, 1-based (the first record of the boot is 1), so 0
+ * is never a valid record and is free to mean "from the oldest still retained".
+ * `first` is written by the kernel and is the one value in this exchange the
+ * caller cannot manufacture: next cursor = first + n, and wrap loss = first - from.
+ */
+struct aether_audit_cursor {
+    uint64_t from;     /* in:  resume at this sequence (0 = oldest retained)     */
+    uint64_t first;    /* out: sequence of the first record returned             */
+};
+int  aether_audit_read_since(struct aether_audit_entry_pub *out, int max,
+                             struct aether_audit_cursor *cur);
 
 /* --- memory cap + rate limit (aether_mem.c) -------------------------------- */
 struct tcb;

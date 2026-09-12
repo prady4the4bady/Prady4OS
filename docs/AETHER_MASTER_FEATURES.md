@@ -1831,3 +1831,24 @@ rebuilds **bit-identical** — `0693e5b04685ad60`, 1,311,114 B, verified by rebu
 
 The hunt's own CI workflow is deliberately outside the release pipeline
 (`workflow_dispatch` + `schedule` only) and registers no gate.
+
+### DDR-1098 — audit-log cursor (Section F, audit persistence row)
+
+`SYS_READ_AUDIT` (37) gains an optional in/out cursor in `a3`
+(`struct aether_audit_cursor { uint64_t from, first; }`). `a3 == 0` is the
+pre-existing "newest n" behaviour, unchanged and unchangeable by this path — all
+four shipped callers pass a literal 0. The returned sequence deliberately does
+**not** travel in `a4`: `a4` is R10, and the three-argument stubs those callers
+use do not bind it, so reading it as a user pointer would `copyout` to a garbage
+address on every existing call.
+
+The record layout (`struct aether_audit_entry_pub`) is **unchanged** — DDR-842's
+reason for refusing to widen it still holds, so the sequence travels beside the
+records rather than inside them. The ring entry is unchanged too: the sequence is
+derived from a new monotonic `g_written`, not stored per entry, which keeps
+`AUDIT_RING_ORDER` at 6 (256 KiB) instead of 7.
+
+**F#76 remains HALF SHIPPED.** Tamper-evidence over the circular in-memory window
+is DDR-842's and is gated twice. Durability is not delivered: DDR-1098 §4 measures
+the SFS write ceiling (four extents / 16,384 bytes per file from ring 3) that
+blocks any flusher.
