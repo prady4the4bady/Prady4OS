@@ -4755,6 +4755,102 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1109 — the length half of the user-copy contract is clean (2026-09-12)
+
+**Assessment. Docs-only: no code change, no gate, NO DEFECT FOUND AND NONE
+ALLEGED.** Written in the CI-wait window on `f262ee7` while DDR-1108's build is
+held — that hold applies to any kernel change, because a red on a stacked tree
+cannot be attributed (DDR-1106's reasoning).
+
+### The question DDR-1108 did not ask
+
+DDR-1108 §3 enumerated the sites of **its own** shape — the three `vmm_resolve`
+call sites outside `vmm.c` — and that is a question about **addresses**. The
+commoner form of the same family is about **lengths**: a caller-supplied length
+copied into a fixed-size kernel buffer, where the validated quantity and the
+copied quantity are not the same number. DDR-1108's guard would not have caught
+such a site, and its enumeration would not have listed one.
+
+DDR-1041 does not cover it either. Its SMAP sweep established, by measurement,
+that *"the kernel NEVER dereferences a raw user pointer anywhere else"* — a
+statement about **where** user memory is touched, not about **how much** of a
+kernel buffer a touch may fill.
+
+So the length half had never been enumerated. **The result is a clean negative**
+and is reported as one.
+
+### Measured
+
+* `vmm_user_range_ok` has **exactly two** consumers outside `vmm.c`/`vmm.h`:
+  `sys_io_uring.c:150` (DDR-1108's, now guarded) and `uaccess.c`. Everything
+  else reaches user memory through `copyin` / `copyout` / `copyinstr`.
+* The three primitives **validate exactly what they copy**, read in full:
+  `copyin` walks `(cr3, usrc, n)` then `memcpy(kdst, usrc, n)` — same address,
+  same length, same variable; `copyout` the same with `writable=1`, so a write
+  to a read-only or text user page is refused **at validation** (W^X upheld at
+  the copy boundary); `copyinstr` validates **per page as it first steps into
+  it**, `n=1` at the byte it is about to read.
+* `vmm_user_range_ok` guards its own arithmetic: `end = vaddr + len` with an
+  explicit `if (end < vaddr) return 0;` **before** the `VMM_USER_MIN`/`MAX`
+  bound, so a length large enough to wrap is rejected rather than folded.
+* **74** `copyin`/`copyout` sites outside `uaccess.c`. **39** pass a `sizeof` of
+  the destination and are correct by construction (counted, **not** read line by
+  line — stated rather than glossed). The remainder — every site whose length is
+  neither a `sizeof` nor a literal — were read individually, and **every one
+  clamps against its destination before the copy**. Not one site copies more
+  than its destination holds.
+
+### Two places where the safety holds for a reason the code does not state
+
+Recorded because they are what would break first under a future edit, **not**
+because either is wrong today.
+
+**(a) `sys_writev`'s console gather.** `need` is summed over up to
+`SYS_IOV_MAX` `uint64_t` iovec lengths and tested `need > 0 && need <= 256`,
+after which `at + len <= need` holds **only if the sum did not overflow**. It
+cannot usefully overflow, and the margin is measured: `SYS_IOV_MAX` is **16**,
+so reaching 2^64 needs a term of at least **2^60**, against `VMM_USER_MAX` =
+**2^40** — a factor of **2^20**. `copyin` rejects such a term with `-EFAULT`
+before writing a byte of it. **So the bound is enforced by `copyin`'s own validation,
+not by the `need` test**, and a future change that copied without `copyin` (a
+`memcpy` from an already-validated staging buffer, say) would lose the
+protection silently.
+
+**(b) `marshal_vec`'s blob bound is exactly tight**, not merely sufficient. It
+checks `*off >= cap` — which alone guarantees one free byte — then passes
+`cap - *off` as `copyinstr`'s `max`; `copyinstr` returns the NUL index only when
+that index is `< max`, so `len <= cap - *off - 1` and `*off += len + 1` lands at
+`cap` at worst. Correct, and correct by one byte.
+
+### A silent narrowing, recorded and not changed
+
+Seven of those sites **clamp** rather than reject, so a caller asking for more
+than the bound gets the bound with no indication — the DDR-1055/1056/1089/1095
+class. **Not a defect here:** the return value carries the byte count in every
+case, which is the POSIX short-write contract and is what the callers read.
+Recorded for one narrow reason — a reader of `uint8_t kbuf[SOCK_IO_MAX]` beside
+`sys_sock_write` must not infer that an over-asking caller was **refused**; it
+was **served shorter**.
+
+### NOT CLAIMED
+
+* **NO defect found and none alleged** — `uaccess.c`, `vmm_user_range_ok` and
+  every site examined are correct for what they were built to do.
+* NO code change, NO gate, NO new sentinel; `kernel.bin` **not rebuilt**, so the
+  size/headroom pair and `ci-docstate-check` are unaffected; `GLOBAL_FORBIDDEN`
+  77; 179 gates unchanged.
+* **This is not a proof of absence.** What was enumerated is the set of sites
+  reached through `vmm_user_range_ok` and through
+  `copyin`/`copyout`/`copyinstr`. A site touching user memory by some *fourth*
+  route would appear in neither enumeration — DDR-1041's SMAP sweep is the
+  measurement that covers that, and it is **cited rather than repeated**,
+  because repeating it means booting with SMAP forced.
+* No open issue moves (OPEN-1/2/12/13 untouched). Not an apfreeze, not OPEN-2.
+* **DDR-1108 is not extended** — its fix, guard and enumeration stand unchanged;
+  this asks the adjacent question and answers it separately.
+
+---
+
 ## DDR-1108 — `io_uring` ENTER honoured a caller-controlled intra-page offset (2026-09-12)
 
 **A reachable ring-3 write past a validated region. ARTEFACT PRODUCED, then
