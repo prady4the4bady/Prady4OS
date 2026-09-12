@@ -1852,3 +1852,19 @@ derived from a new monotonic `g_written`, not stored per entry, which keeps
 is DDR-842's and is gated twice. Durability is not delivered: DDR-1098 §4 measures
 the SFS write ceiling (four extents / 16,384 bytes per file from ring 3) that
 blocks any flusher.
+
+---
+
+### DDR-1105 — `next->rsp` validated before `context_switch` (kernel, OPEN-2)
+
+**Not an AETHER feature; recorded here per §NON-NEGOTIABLE 11** because it is a
+kernel change. `schedule_locked` now checks the incoming thread's saved stack
+pointer — 8-aligned, within its own kernel stack with room for the 64-byte
+`context_switch` frame, and only then the RFLAGS slot at `[rsp+0]` with
+`TF|DF|IOPL` clear — and on failure prints `[schedcheck] … halting.` and stops.
+
+**No fix and no cause named.** It is DDR-1099 §7's instrument: it makes the
+*next* corrupt frame say so, and specifically covers the case the `#DB` cannot
+see — a frame equally wrong whose RFLAGS slot happens to be benign, which
+otherwise returns to a stale address silently. Idle threads are not covered
+(`kstack_base == 0`), a stated limit. `GLOBAL_FORBIDDEN` 76 -> 77; no new gate.

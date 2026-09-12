@@ -13070,3 +13070,92 @@ IPv6 and TLS rows.
 1067/1068/1087/1090/1101/1102; E: 1071; F: 1072; G: 1075; H: 1081).
 
 **NEXT:** check-in armed 06:22 UTC for the five outstanding tips.
+
+---
+
+## Checkpoint — DDR-1105 (2026-09-12)
+
+**SHIPPED: a validity check on `next->rsp` before `context_switch`** — DDR-1099
+§7's named next step for OPEN-2. **No fix, no cause named, OPEN-2 does not
+close.**
+
+**CI before this commit:** tip `133b3cc` (DDR-1104) is **2/2 green** — 32 check
+runs, every one `success`, all 10 shards on both the push and pull_request runs.
+The DDR-1035 hash assertions are steps *inside* those shard jobs, so a green
+shard entails both `kernel.bin: OK` assertions passed (confirmed, not assumed).
+No `[apfreeze]`, nothing to attribute.
+
+**What landed.** `schedule_locked` validates the incoming thread's saved stack
+pointer in four clauses whose ORDER is load-bearing — skip when
+`kstack_base == 0`; 8-aligned; inside its own kernel stack with room for the
+64-byte frame; and **only then** dereference the RFLAGS slot at `[rsp+0]`,
+requiring `TF|DF|IOPL` clear. On failure: one `kline` naming `tid/rsp/base/
+rflags`, then halt. `'[schedcheck]'` added to `GLOBAL_FORBIDDEN` **(76 -> 77,
+inserted BEFORE the final list line so §NON-NEGOTIABLE 6's terminator did not
+move; that rule's stated count updated in the same commit, as the rule itself
+requires; verified 77, not 0)**.
+
+**Why it is worth the hottest path:** today a corrupt frame is diagnosable
+**only when it happens to set TF**. The equally-wrong frame with a benign RFLAGS
+slot is DDR-1099 §6's *"undiagnosable jump into nowhere"* — and is presumably
+the commoner case, since only a minority of garbage words have bit 8 set.
+
+**Two design errors caught before they cost anything, both recorded:**
+1. **The `kstack_base == 0` skip is not optional.** `init_idle()` memsets the
+   tcb and never assigns `kstack_base`, so EVERY idle thread has base 0 —
+   without the skip this fires on nearly every switch and reddens all 179 gates
+   on the first boot. Caught in design (DDR-1076 §5 discipline). Coverage limit
+   stated, not glossed: a corrupt rsp on an idle tcb is not covered.
+2. **`next != prev` is guaranteed here** — checked by reading `sched.c:1504`,
+   not assumed, because `->rsp` is stale by construction on a running thread and
+   the whole check rests on it.
+
+**A measurement error of my own, worth carrying:** the first build reported
+`rc=141` — SIGPIPE from my own `| head -20` closing the pipe, so make was killed
+partway and the unchanged hash meant nothing. **This is DDR-1048's race in my
+measurement rather than in `apt_prepare.sh`.** Capture to a file, then grep it.
+
+**PROOF.** Two forced mutants on recorded hashes, landing on DIFFERENT clauses,
+each ONE line changed (DDR-1042). Clean `3933fa5f60ae607c` / 1,315,210 B.
+- **M1** (`sched_create` seed `0x202` -> `0x302`; `684f0744ff60ba60`):
+  `rsp=0x07E57FC0 base=0x07E54000 rflags=0x…0302` — clause 4 tripped, and
+  `rsp-base = 0x3FC0 = STACK_SIZE-64`, 8-aligned and in bounds, so clauses 2/3
+  did NOT.
+- **M2** (`t->rsp = sp - 7`; `c6b558900747e5b4`): `rsp=0x07E57FB9 rflags=0x…0000`
+  — `&7 == 1` trips clause 2, `+64` stays in bounds, and **RFLAGS reads 0, still
+  at its initialiser, so clause 4 was never reached** — §2's ordering claim
+  MEASURED rather than argued.
+- **They are told apart by the printed `rflags=` field itself**, so neither
+  carries the other (DDR-1044). Both reddened their gate BY NAME:
+  `[smoke] FAIL — a probe reported '[schedcheck]'` (DDR-1097 `[ringwalk]`
+  precedent, confirmed not assumed).
+
+**THE LOAD-BEARING HALF IS THE NEGATIVE** — a false positive halts the machine
+on the hottest path. On the clean kernel: `smoke-shell` (also reporting
+`global-forbidden scan clean (77 patterns)`, so the entry is live in the scan
+and not silently dropped), `smoke-smp`, `smoke-smppreempt`, `smoke-rqstress`,
+`smoke-blk-integrity` — **all rc=0, all with ZERO `schedcheck` lines**, across
+single-CPU and 4-CPU boots including the heaviest create/exit churn gate.
+Revert returns `3933fa5f60ae607c` BIT-FOR-BIT, verified by rebuild.
+
+Hygiene **ALL EIGHT**; **179 gates unchanged** (no gate arm, deliberately — §8);
+`kernel.bin` 1,311,114 -> 1,315,210 B with the size/headroom pair recomputed at
+every carrier; all **four** DDR free-range carriers advanced to **DDR-1106+**.
+
+**NOT CLAIMED:** no fix, no cause, OPEN-2 open, no rate; **TF is NOT masked
+before `popf`** (DDR-1099 §6's tempting wrong move); no scheduler defect found
+or alleged; **not exonerated in advance** (DDR-1042) — this changes timing on
+the very path OPEN-2 lives in, so if the signature moves, this commit is a
+candidate.
+
+**TWO ITEMS STILL NEEDING THE OPERATOR, recorded and NOT acted on:**
+(a) the OPEN-2 hunt workflow is built but **not dispatchable** — a
+`workflow_dispatch` workflow must live on the repo's DEFAULT branch
+(`dev/phase1`) and the file is on `dev/phase1-seyp3n`. **This session must not
+push to another branch without explicit permission.**
+(b) nothing else from DDR-1099 §7 remains; that item is now closed by this DDR.
+
+**NEXT:** task #23. Every backlog table A–H is now audited. The six Group B rows
+were assessed in DDR-1103 (five state no acceptance criterion at all —
+*unfalsifiable*, a shape distinct from §7b/§7c; B#14 is a category error, NAS
+being the process scheduler).

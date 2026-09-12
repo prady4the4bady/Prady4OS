@@ -1559,6 +1559,90 @@ static void schedule_locked(uint64_t fl) {
     /* rq-2 D2: name the outgoing thread for whoever resumes on THIS CPU. */
     if (pc)
         pc->prev = prev;
+    /* DDR-1105: validate next->rsp before handing the CPU to it.
+     *
+     * DDR-1099 resolved an OPEN-2 [apfreeze] to a #DB raised by a TF bit that
+     * context_switch's popf restored out of this very frame, and narrowed it to
+     * one sentence: next->rsp did not point at the frame context_switch saved.
+     * Two independent slots held values from elsewhere on that stack --
+     * RFLAGS = 0x2702 (TF|IF|DF, IOPL 2), which NEITHER legitimate writer can
+     * produce (sched_create seeds the constant 0x202; pushfq captures a kernel
+     * thread's live flags, which have no TF, no DF and IOPL 0), and R15 holding
+     * a finish_task_switch return address where a real frame holds the address
+     * after the kernel's only `call context_switch`.
+     *
+     * WHAT THIS CATCHES THAT THE #DB DOES NOT. Today a corrupt frame is
+     * diagnosable only when it happens to set TF. DDR-1099 sec.6 named the other
+     * case while arguing against masking TF: a frame equally wrong whose RFLAGS
+     * slot is benign yields "an undiagnosable jump into nowhere" -- the ret
+     * returns to a stale address with no exception, no banner and nothing to
+     * resolve. Those are presumably the commoner cases, since only a minority of
+     * garbage words have bit 8 set, and this turns them into a named line.
+     *
+     * ORDER IS LOAD-BEARING: alignment and bounds are exactly what make the
+     * RFLAGS load safe, so they come FIRST. Reversing them would make a detector
+     * into a second fault source -- the defect DDR-1079 fixed in the panic
+     * backtrace walker.
+     *
+     * THE kstack_base == 0 SKIP IS NOT OPTIONAL. init_idle() memsets the whole
+     * tcb and never assigns kstack_base, so EVERY idle thread (the BSP's static
+     * idle0 and each AP's kmalloc'd one) has base 0 and an rsp on a boot/AP
+     * stack outside any window derived here. Without the skip this would fire on
+     * nearly every switch. The cost is a stated coverage limit: a corrupt rsp on
+     * an idle tcb is not covered.
+     *
+     * MASK = TF|DF|IOPL (0x3500), each justified separately: TF is set only by a
+     * debugger and there is none; `std` appears NOWHERE in this tree so DF is
+     * never set; kernel threads run at IOPL 0 and nothing writes RFLAGS.IOPL.
+     * The arithmetic flags and IF are deliberately NOT masked -- pushfq captures
+     * whatever the outgoing thread's last arithmetic left, and IF varies, so
+     * requiring 0x202 exactly would fire constantly.
+     *
+     * COST, against the shape DDR-1047 actually refused: that was an rdtsc PAIR
+     * (partially serialising) on EVERY spin_lock acquisition, ~1.9M per 5,000
+     * ticks. This is three loads, an add, five compares and five branches, never
+     * taken on a healthy boot and so perfectly predicted. The nearest accepted
+     * precedent is DDR-1090, which added two loads and a branch inside yield().
+     * Opt-in is NOT the escape (DDR-1010/1043: guaranteed OFF in CI, the only
+     * place OPEN-2 has ever appeared). NOT exonerated in advance either: this
+     * changes timing on the path OPEN-2 lives in, so if the signature moves,
+     * this commit is a candidate -- "the diff is elsewhere" is not an argument
+     * (DDR-1042). */
+    if (next->kstack_base) {
+        uint64_t nrsp  = next->rsp;
+        uint64_t nbase = next->kstack_base;
+        /* 8 quadwords: RFLAGS, r15, r14, r13, r12, rbp, rbx, return address --
+         * read off context.asm's push/pop sequence, not assumed. */
+        int bad = (nrsp & 7u) || nrsp < nbase || nrsp + 64u > nbase + STACK_SIZE;
+        uint64_t fl_slot = 0;
+        if (!bad) {
+            /* Safe ONLY because the two checks above passed. pushfq is the LAST
+             * push, so the RFLAGS slot is at [rsp + 0] -- which is why DDR-1099's
+             * faulting popf was the FIRST restore instruction. */
+            fl_slot = *(const volatile uint64_t *)(uintptr_t)nrsp;
+            if (fl_slot & 0x3500u)
+                bad = 1;
+        }
+        if (bad) {
+            /* schedule_locked runs with g_sched_lock held and IF clear, and no
+             * panic() is exposed to this file, so follow sched_exit's precedent
+             * for an unrecoverable scheduler state. ONE kline emit (DDR-1055: a
+             * composite built from several kputs can be spliced by another CPU).
+             * Continuing is not an option -- continuing IS the undiagnosable
+             * jump this exists to prevent. */
+            __asm__ volatile("cli");
+            kline k; kline_init(&k);
+            kline_s(&k, "[schedcheck] next->rsp invalid tid=");
+            kline_d(&k, next->tid);
+            kline_s(&k, " rsp=");      kline_x(&k, nrsp);
+            kline_s(&k, " base=");     kline_x(&k, nbase);
+            kline_s(&k, " rflags=");   kline_x(&k, fl_slot);
+            kline_s(&k, " halting.\r\n");
+            kline_emit(&k);
+            for (;;)
+                __asm__ volatile("hlt");
+        }
+    }
     context_switch(&prev->rsp, next->rsp);
     /* Resumed here later (possibly on a different CPU) as some earlier `prev`.
      * Release the thread THAT CPU just switched away from, then unmask. */

@@ -4669,3 +4669,53 @@ address **cannot be expressed** to the allowlist, `SYS_SOCK_CONNECT`, or the
 in-kernel echo server at 127.0.0.1:8007. **The overclaim not made:** a TAP gate is
 **not** impossible in CI (hosted runners have passwordless sudo) — it would simply
 be the only gate needing privileged host-side setup. A cost, not a blocker.
+
+---
+
+## DDR-1105 — a validity check on `next->rsp` before `context_switch` (2026-09-12)
+
+**BUILT. NO FIX, NO CAUSE NAMED, OPEN-2 DOES NOT CLOSE.** DDR-1099 §7's named
+next step. That DDR narrowed the shard-7 `[apfreeze]` to one sentence —
+*`next->rsp` did not point at the frame `context_switch` saved* — on two
+independent slots of one frame holding values from elsewhere on that stack.
+
+**Why it is worth the hottest path.** Today a corrupt frame is diagnosable
+**only when it happens to set TF**. DDR-1099 §6 named the other case while
+arguing against masking TF: an equally-wrong frame whose RFLAGS slot is benign
+gives *"an undiagnosable jump into nowhere"* — no exception, no banner, nothing
+to resolve. Those are presumably the **commoner** cases, since only a minority
+of garbage words have bit 8 set. This turns them into a named line.
+
+**Four clauses, and the order is load-bearing:** skip when `kstack_base == 0`;
+8-aligned; inside the thread's own kernel stack with room for the 64-byte frame
+(8 quadwords, read off `context.asm:52-71`); and **only then** dereference the
+RFLAGS slot at `[rsp+0]` — where it lives because `pushfq` is the *last* push,
+exactly why DDR-1099's faulting `popf` was the *first* restore. Bounds and
+alignment are what make the load safe; reversing them would make a detector into
+a second fault source (the defect DDR-1079 fixed in the panic backtrace walker).
+
+**The `kstack_base == 0` skip was caught in design, before the first build**
+(the DDR-1076 §5 discipline): `init_idle()` memsets the tcb and never assigns
+`kstack_base`, so **every** idle thread has base 0 — without the skip this would
+have fired on nearly every switch and reddened all 179 gates on boot one. The
+cost is a **stated coverage limit**: a corrupt rsp on an idle tcb is not covered.
+
+**Proof: two forced mutants on recorded hashes, landing on different clauses,
+each one line changed** (DDR-1042). Clean `3933fa5f60ae607c`. **M1** (seed
+`0x202` -> `0x302`; `684f0744ff60ba60`) prints `rflags=…0302` with `rsp` aligned
+and in bounds — clause 4 only. **M2** (`t->rsp = sp - 7`; `c6b558900747e5b4`)
+prints `rsp=…FB9 rflags=…0000` — clause 2, and **RFLAGS still at its
+initialiser, so clause 4 was never reached**, which is the ordering claim
+measured rather than argued. **The printed `rflags=` field itself tells them
+apart**, so neither carries the other. Both reddened their gate by name.
+
+**The load-bearing half is the negative** — a false positive here halts the
+machine. `smoke-shell` (reporting `global-forbidden scan clean (77 patterns)`),
+`smoke-smp`, `smoke-smppreempt`, `smoke-rqstress`, `smoke-blk-integrity`: **all
+rc=0, zero `schedcheck` lines.** Revert returns `3933fa5f60ae607c` bit-for-bit.
+
+`GLOBAL_FORBIDDEN` 76 -> 77; 179 gates unchanged (**no gate arm, deliberately** —
+the condition cannot be manufactured in product and asserting the absence of a
+rare intermittent is unfalsifiable at any affordable N, DDR-1082). `kernel.bin`
+1,311,114 -> 1,315,210 B. **Not exonerated in advance** (DDR-1042): this changes
+timing on the very path OPEN-2 lives in.

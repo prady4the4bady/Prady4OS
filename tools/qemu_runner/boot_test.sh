@@ -462,6 +462,7 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'panic_stage=' \
     '[kline] TRUNC' \
     '[uline] TRUNC' \
+    '[schedcheck]' \
     '[percpu] gs FAIL' '[percpu] current FAIL')"
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 
