@@ -13038,3 +13038,35 @@ distinct shape from §7b / §7c / `smoke-horizon` / DDR-1084 §1, all of which a
 **NEXT:** check-in armed 06:22 UTC for `7ac8fac`/`708ec04`/`f881806`/this commit.
 Group B and Group D are now fully assessed; remaining unaudited: Group C's TAP,
 IPv6 and TLS rows.
+
+---
+
+## Checkpoint — DDR-1104 (2026-09-12) — every backlog table is now audited
+
+**Group C's last three rows. Markdown-only**; no code change, no gate, no defect.
+`kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; 179 gates.
+
+- **TLS — the row contradicts itself and its crypto is shipped.** *"mbedTLS or
+  equivalent; no out-of-tree libs in OS image"* — mbedTLS **is** out-of-tree, and
+  `third_party/` already holds **lwip** (in the kernel) and **musl** (in user
+  programs). **And the primitives are in-tree**: ChaCha20-Poly1305 (RFC 8439,
+  DDR-819), X25519 (RFC 7748, DDR-820), HKDF-SHA256 (RFC 5869, DDR-818), SHA-256.
+  **That is exactly `TLS_CHACHA20_POLY1305_SHA256` with TLS 1.3's default key share
+  and its key schedule.** The real work is the record layer, the handshake, and
+  **X.509 + a trust anchor** — and the anchor is **DDR-1059's problem unchanged**
+  (no TPM/PCRs/secure boot; the only key is 32 literal bytes in the image).
+  **Relocates the blocker; does not shrink it.**
+- **IPv6 — `LWIP_IPV6 0 /* deferred (ADR-025 §D5) */`**, a recorded deferral, and
+  the row's stated condition is a different one. **Flipping it delivers nothing:**
+  `struct net_allow { uint32_t host_be; … }` makes the allowlist, `SYS_SOCK_CONNECT`
+  and the egress audit record **structurally v4-only**. DDR-1091 shape.
+- **TAP — a different shape of gate, not an impossible one.** All gates use
+  `-netdev user` (slirp); the gated substitute is the in-kernel echo server at
+  127.0.0.1:8007. **I explicitly did not claim TAP is impossible in CI** — hosted
+  runners have passwordless sudo; it would just be the only gate needing privileged
+  host-side setup.
+
+**EVERY BACKLOG TABLE IS NOW AUDITED** (A/B: DDR-1073/1103; C: 1069/1091/1104; D:
+1067/1068/1087/1090/1101/1102; E: 1071; F: 1072; G: 1075; H: 1081).
+
+**NEXT:** check-in armed 06:22 UTC for the five outstanding tips.

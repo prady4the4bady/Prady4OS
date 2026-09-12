@@ -4636,3 +4636,36 @@ strict, and DDR-1080 already made the failure `-ENOSYS` rather than a bare `-1`)
 
 **NOTHING IS CLOSED.** Five rows re-labelled unfalsifiable, one subsystem
 corrected, none marked done.
+
+## DDR-1104 — Group C: the TLS row names a library whose primitives are already in-tree (2026-09-12)
+
+**Assessment, Markdown-only. No code change, no gate, no defect found or alleged.**
+`kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; **179 gates unchanged**. None of the
+three named gates exists. **This completes the audit of every backlog table.**
+
+**TLS — the row contradicts itself.** *"mbedTLS or equivalent; no out-of-tree libs
+in OS image"*: mbedTLS **is** out-of-tree, and the constraint is already violated by
+`third_party/lwip` (in the kernel) and `third_party/musl` (in user programs).
+**And the primitives it would import are shipped** — ChaCha20-Poly1305 (`aead.h`,
+RFC 8439, DDR-819), X25519 (`x25519.h`, RFC 7748, DDR-820), HKDF-SHA256 (`hkdf.h`,
+RFC 5869, DDR-818), SHA-256/512, Ed25519, SHA-3/SHAKE, ML-DSA — pure C, no stdlib,
+no allocation, three architectures. **`TLS_CHACHA20_POLY1305_SHA256` is a real
+TLS 1.3 suite and every primitive is on that list**; X25519 is its default
+key-share group and HKDF-SHA256 is its key schedule (RFC 8446 §7.1).
+
+**So the remaining work is not cryptography** — it is the record layer, the
+handshake, and **X.509 plus a trust anchor**. The trust anchor is **DDR-1059's
+problem unchanged**: no TPM, no PCRs, no secure boot; the only key material is 32
+literal bytes in the image. **This relocates the blocker and does not shrink it.**
+
+**IPv6** — `lwipopts.h:45` is `#define LWIP_IPV6 0 /* deferred (ADR-025 §D5) */`, a
+**recorded deferral in the source**, and the row's condition is a different one.
+**Flipping it would not deliver the row:** `sys_socket.c:42` is `struct net_allow
+{ uint32_t host_be; … }` and both allowlist entry points take `uint32_t` — an IPv6
+address **cannot be expressed** to the allowlist, `SYS_SOCK_CONNECT`, or the
+`ACTION_NET_EGRESS` record. The DDR-1091 shape.
+
+**TAP** — every gate uses `-netdev user` (slirp); the gated substitute is the
+in-kernel echo server at 127.0.0.1:8007. **The overclaim not made:** a TAP gate is
+**not** impossible in CI (hosted runners have passwordless sudo) — it would simply
+be the only gate needing privileged host-side setup. A cost, not a blocker.
