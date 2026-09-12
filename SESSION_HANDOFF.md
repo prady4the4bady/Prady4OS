@@ -13002,3 +13002,39 @@ file-backed mmap, dynamic linking, the four io_uring extensions + ring wrap,
 shootdown), and `SYS_FUTEX` (blocked behind those).
 
 **NEXT:** CI conclusions for `5cb1d79`, `7ac8fac`, `708ec04` and this commit.
+
+---
+
+## Checkpoint — DDR-1103 (2026-09-12)
+
+**The six Group B rows never assessed. Markdown-only**; no code change, no gate, no
+defect. `kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; 179 gates. **None of the six
+named gates exists.**
+
+**The finding is the shape of the table, not any one row: five of six have `—` as
+their detail column**, so they state no acceptance criterion at all, and the sixth
+states one that is no longer true. **Such a row cannot be closed OR confirmed open
+by any measurement — it is unfalsifiable, not merely stale**, and that is a
+distinct shape from §7b / §7c / `smoke-horizon` / DDR-1084 §1, all of which are
+*wrong* and can therefore be *corrected*.
+
+- **B#1 NVMe IRQ — three defects.** The same item is in this file **three times**
+  (§PRE-APPROVED EXCEPTIONS, §DEFERRED, the work row); **its blocker is retired**
+  (B#3 CLOSED, DDR-981); and **it is half built** — `nvme.c:9` says *"no NVMe IRQ"*
+  while `nvme.c:150` is `msix_register(NVME_MSIX_VEC, nvme_msix_isr)`. **Verdict
+  unchanged, reason corrected: deferred on the EXCEPTION's ground, not the
+  blocker's.** Both halves must be stated together or a reader concludes the
+  opposite depending on which they check.
+- **B#14 is a CATEGORY ERROR** — `sched.h:5` says NAS is the **process** scheduler
+  from the Layer-2 board; the row files it under storage. No lane concept exists in
+  `blk`/`ahci`/`nvme`.
+- **B#15 is unfalsifiable**; NUMA-affine PMM allocation is shipped (`pmm.c`) and
+  gated (`smoke-numa-alloc`, shard 5 strict) — named as **a** reading, not **the**.
+- **Simply unbuilt (§7c correct):** deepslot (§INV.22 caps at 512, **not** a
+  refusal), quotas (**trap**: ADR-032 is a per-thread *rate*, not a per-mount
+  *space* bound), ext4 write (`ext4_ops` explicitly read-only — **ext4 READ is
+  shipped + gated**).
+
+**NEXT:** check-in armed 06:22 UTC for `7ac8fac`/`708ec04`/`f881806`/this commit.
+Group B and Group D are now fully assessed; remaining unaudited: Group C's TAP,
+IPv6 and TLS rows.

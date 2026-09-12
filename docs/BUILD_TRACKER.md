@@ -4598,3 +4598,41 @@ list no dependencies at all, the same defect DDR-1075 §3.2 found.
 existing strict-tier gates under their real names, two name work that does not
 exist. No defect in any code. file-backed mmap and dynamic linking are **not
 unblocked** — removing a blocker that was never real is not building either.
+
+## DDR-1103 — Group B: five rows state no criterion, the sixth states a retired one (2026-09-12)
+
+**Assessment, Markdown-only. No code change, no gate, no defect found or alleged.**
+`kernel.bin` not rebuilt; GLOBAL_FORBIDDEN 76; **179 gates unchanged**. **None of
+the six named gates exists.**
+
+**The shape of the table, before any individual row: five of six have `—` as their
+detail column** — no acceptance criterion at all — and the sixth states one that is
+no longer true. A row consisting of a title plus a gate name that does not resolve
+**cannot be closed or confirmed open by any measurement**. That is a **distinct
+shape** from §7b (shipped-but-unmarked), §7c (gate for unbuilt work),
+`smoke-horizon` (half done) and DDR-1084 §1 (stale blocker): those are *wrong* and
+can be *corrected*; **these cannot be wrong, because they assert nothing.**
+
+**B#1 NVMe IRQ — three defects compounding.** (a) The **same item is in this file
+three times** — §PRE-APPROVED EXCEPTIONS, §DEFERRED, and the work row, which does
+not say so (DDR-1072 §3 found this twice; first at three). (b) **Its stated blocker
+is retired** — B#3 is CLOSED (DDR-981). (c) **It is half built and the source
+contradicts itself**: `nvme.c:9` says *"no NVMe IRQ"* while `nvme.c:150` is
+`msix_register(NVME_MSIX_VEC, nvme_msix_isr)`. **Verdict unchanged, reason
+corrected:** deferred on the *exception's* ground, not the blocker's.
+
+**B#14 "NAS 3-lane storage scheduler" is a category error** — `sched.h:5`: *"The
+3-lane adaptive scheduler (NAS) from the Layer-2 board layers on later."* **NAS is
+the process scheduler.** No lane concept in `blk`/`ahci`/`nvme`.
+
+**B#15 PMM policy is unfalsifiable**, and the obvious reading (NUMA-affine
+allocation) is shipped in `pmm.c` and gated by `smoke-numa-alloc` (shard 5, strict).
+
+**Simply unbuilt:** `mkfs.sfs` >512 slots (§INV.22 caps at 512 — **not** a recorded
+refusal, unlike §INV.20); SFS quotas (**trap named**: ADR-032 is a per-thread write
+*rate*, not a per-mount *space* bound); B#6 ext4 write (`ext4_ops` is explicitly
+read-only — **but ext4 READ is shipped and gated** by `smoke-fs-ext4`, shard 3
+strict, and DDR-1080 already made the failure `-ENOSYS` rather than a bare `-1`).
+
+**NOTHING IS CLOSED.** Five rows re-labelled unfalsifiable, one subsystem
+corrected, none marked done.
