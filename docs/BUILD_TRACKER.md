@@ -4755,6 +4755,179 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1108 — `io_uring` ENTER honoured a caller-controlled intra-page offset (2026-09-12)
+
+**A reachable ring-3 write past a validated region. ARTEFACT PRODUCED, then
+FIXED.** `kernel.bin` `0eb965428942d5cf` -> `68e74ff4142f7c71`, **1,315,210 B —
+SIZE UNCHANGED in both rows**, so the size / headroom pair and
+`ci-docstate-check` are unaffected **and a size comparison cannot tell the two
+binaries apart at all — only the hash discriminates** (DDR-1097's finding, a
+third time). `GLOBAL_FORBIDDEN` **77 unchanged**; **179 gates unchanged**; no
+new probe ELF (79); no open issue moves.
+
+**How it was found: by costing a row an audit had recorded and declined to
+schedule.** DDR-1102 §2 closed the Group D `io_uring` row with a fifth gap it
+named but did not price — *"no head/tail wrap is its own limitation … recorded,
+not scheduled"* — and reading the source to put a number on that sentence found
+something else, with the sentence understating it twice over.
+
+**THE MECHANISM, derived not assumed.** `sys_io_uring_enter` applied **both** its
+checks to the **page-aligned base** (`vmm_user_range_ok(va & ~0xFFF, PAGE_SIZE)`,
+`vmm_resolve(va & ~0xFFF)`) and then formed its kernel pointer at
+`phys + (va & 0xFFF)` — **the caller's offset** — with **no alignment check
+anywhere**; `run_sqe` reads `r->sqes[i]` and the loop **writes** `r->cqes[i]`
+through it. `sizeof(struct io_ring)` is **416 B** (header 32 + sqes 8x32 at
+32..288 + cqes 8x16 at 288..416, derived), so the structure leaves the frame
+whenever `(va & 0xFFF) > 3680`, and at `0xFF0` **all eight SQEs are read from and
+all eight CQEs written to the physically adjacent frame** — one the caller does
+not own, that `vmm_user_range_ok` never examined, and that the PMM may have
+handed to another process, to the slab allocator, or to a page table.
+
+**The `_Static_assert(sizeof <= 4096)` is not the protection and never could have
+been:** it bounds `sizeof` against a page, and the binding quantity is
+`offset + sizeof`. `phys` is a usable kernel pointer because stage2
+identity-maps the low 1 GiB and `PMM_MIN_PHYS` is 16 MiB — **checked, not
+assumed**, since without it the existing gate could not pass at all.
+
+**Reachable, enumerated.** No capability gate (`grep` for
+`cap_ok|cap_authorize|is_agent|is_sovereign` over the file returns **nothing**),
+so NSI 26 is callable by **any** ring-3 process; SETUP is **not** a prerequisite,
+since ENTER never checks the VA came from it and needs only a user-RW page; and
+**this is the only site of the shape in the tree**, enumerated rather than
+assumed — the three `vmm_resolve` call sites outside `vmm.c` are this one,
+`sys_mmap.c:66` (a page-aligned VA with no caller offset added) and
+`main.c:3811-3812` (a kernel COW self-test comparing two resolutions).
+
+**THE STRENGTH OF THE CLAIM IS STATED AT ITS REAL SIZE AND NOT INFLATED.** This
+is **not** an arbitrary-address write. What a caller obtains is a write into the
+frame **physically adjacent** to one it owns, bounded at 416 bytes past that
+frame, at an offset it chooses, of values it substantially controls
+(`cqes[i].user_data` is copied verbatim from `sqes[i].user_data`, 8 caller bytes;
+`cqes[i].res` is an `int`), with *which* frame is adjacent influenced rather than
+chosen, through allocation order — **a memory-corruption primitive, not an
+arbitrary write**, and inflating it would be the DDR-1059 shape in reverse.
+
+**THE READ SIDE IS EXPLICITLY NOT A LEAK TO RING 3**, recorded so nobody later
+reports one that does not exist: at large offsets the SQEs themselves come from
+the adjacent frame, but the values land in `cqes`, which at those offsets are
+**also** outside the caller's page — so the caller cannot read them back.
+
+**Why no gate could see it, measured in the probe rather than reasoned.** The
+only ring-3 consumer (`systest.asm:597`) passes `r14`, the VA SETUP returned,
+which is **always page-aligned** because `mmap_next` starts at the aligned
+`VMM_MMAP_BASE` and advances only by whole pages — and **it calls ENTER exactly
+once**. So the unaligned path has **never executed on any gate ever**.
+`smoke-sysiouring` is correct for what it asserts and its arms are live; **the
+set of arms simply does not span the argument space** — the DDR-1070 class, not
+the dead-arm class.
+
+**THE SECOND FINDING, CORRECTED NOT FIXED.** The header said *"Baseline: no
+head/tail wrap"*, and the index fields are not merely un-wrapped: **`sq_head`,
+`sq_tail` and `cq_head` have ZERO kernel writers and ZERO kernel readers**
+(SETUP zeroes the page and writes only entries; ENTER writes only `cq_tail`, **by
+assignment, not accumulation**), and ENTER always runs `sqes[0..to_submit)` and
+always writes `cqes[0..done)`, **indexed from zero on every call**. So it is not
+a ring whose indices fail to wrap — **it is a fixed array whose index fields are
+inert.** Two consequences, neither of them a wrap: a caller following the real
+io_uring protocol (publish at `sq_tail`, bump it, enter) gets **the wrong SQE
+executed from its second call onward, silently** — index 0 and `sq_tail` coincide
+only on the first call, which is exactly why the shipped probe works; and a
+second ENTER **overwrites `cqes[0..done)`**, destroying completions not yet
+consumed. **NOT fixed**, on DDR-1069's test rather than difficulty (a real index
+discipline is a ring rewrite plus an ABI contract, and nothing shipping needs it
+— the one consumer issues a single ENTER and never reads an index). What **is**
+fixed is the **wording**, in the same commit — the DDR-1084 §1 / DDR-1107
+pattern applied to a **source comment**. The Group D row is **corrected, not
+closed**.
+
+**THE VACUITY CHECK, DONE BEFORE THE ARM WAS WRITTEN** (eighteenth time caught in
+design text). *"Assert enter still works"* is vacuous, being the existing arm.
+*"Assert `enter(unaligned) < 0`"* is **not** vacuous — the unfixed tree returns
+**1**, a success — but it is **weak**, since a future change making
+`vmm_user_range_ok` reject for its own reason returns `-EFAULT` and satisfies it
+with the guard gone; so the arm asserts the **exact `-EINVAL`** (DDR-1044).
+**And the exact value is still not sufficient alone, which is the one worth
+recording: a kernel that ran the SQEs and then returned `-EINVAL` would pass it**,
+so the refusal has to be shown to be a refusal **to act** and not merely a return
+code. **The second half is obtained without adding a fragile assertion:** the
+poison SQE writes 2 bytes to the **same pipe** the aligned arm reads, so had the
+refused call executed, the pipe would hold `"XXURING"` and the 5-byte read would
+return `"XXURI"`, failing the **pre-existing** byte comparison — an existing
+assertion becomes the did-not-execute check, at the cost of one ordering
+constraint and no new arm to keep in step.
+
+**THE PROBE USES A SAFE OFFSET, DELIBERATELY AND STATED PLAINLY:** `K=96`, so
+`sqes[0]` lands at page `+128` and `cqes[0]` at `+384`, both in-page and both
+disjoint from the bytes the aligned arm uses (`+32..+96`, `+296`, `+312`).
+**Nothing outside the caller's page is touched.** That demonstrates the
+**mechanism**, and the out-of-page case follows from the same arithmetic with no
+further mechanism — **this DDR does not exhibit memory corruption and does not
+attempt to**, because a probe corrupting an unrelated physical frame would fail
+its own gate for reasons nobody could attribute, and could damage the boot it
+runs in.
+
+**THE FIX** is `if (va & 0xFFF) return -EINVAL;` placed **before** the range
+check, after which `(va & 0xFFF)` is provably zero and the pointer becomes
+`(struct io_ring *)phys` — so the invariant is **visible in the code** rather
+than argued in a comment. **The weaker bound was considered and refused:**
+`(va & 0xFFF) + sizeof <= PAGE_SIZE` is also correct and is **worse**, leaving
+ENTER reading a ring from wherever inside their page a caller points — which
+**nothing needs**, SETUP only ever returning page-aligned VAs — while making the
+safety of every future field addition depend on a `sizeof` that moves whenever
+the structure does. **Safe for every shipping caller, measured:** the only caller
+passes SETUP's return value unmodified.
+
+**PROOF IS THE PRE-FIX TREE AS THE CONTROL** (the DDR-1066/1067/1090 form; no
+synthetic defect written), the probe arm **identical in both rows** and only the
+one-line guard differing:
+
+| tree | `kernel.bin` | `unaligned ring VA refused` | `batch read OK` | rc |
+|---|---|---|---|---|
+| pre-fix | `9ef04b09f388ae2d` | **absent** | **absent** | 1 |
+| fixed | `68e74ff4142f7c71` | present | present | 0 |
+
+**Both halves are in the pre-fix row and the second carries the claim.** The
+first absence says only that no guard existed; the second says **the refusal was
+not a refusal at all** — the unaligned call having *acted*, written `"XX"` into
+the pipe, so the aligned read returned `"XXURI"`. **And the probe demonstrably
+reached that arm rather than jumping out of it**, checked in the capture and not
+assumed (`SIGNAL: SIGUSR1 caught` at line 224 precedes the io_uring block,
+`EXECVE: new image running` at 318 follows it) — **DDR-1089 §6.1 paying for
+itself**, since the *first draft* of this arm branched away on mismatch, which
+would have skipped the aligned arm entirely and made the pre-fix row
+**ambiguous**, *"the poison executed"* and *"we never got there"* being the same
+observation. **The isolation is the fixed row:** same probe, same poison SQE at
+`+128`, same pipe — if the poison's *presence* had suppressed `batch read OK` it
+would still suppress it after the fix, and it does not; only its **execution**
+did.
+
+**Revert returns `9ef04b09f388ae2d` BIT-FOR-BIT, verified by rebuild and in both
+directions** (fixed -> reverted -> restored), not assumed.
+
+**Regression, run rather than reasoned about:** `smoke-shell` (5/5),
+`smoke-sysiouring`, `smoke-syspipe`, `smoke-sysepoll`, `smoke-sysmmap`,
+`smoke-sysio`, `smoke-uaccess`, `smoke-invariants`, `smoke-sysfork`,
+`smoke-syswait` — **all rc=0**, with the kernel hash pinned before and
+re-verified identical after the last run (DDR-1060 §9). Hygiene **ALL EIGHT**.
+
+**NOT CLAIMED.** No index discipline is built and the io_uring row is
+**corrected, not closed** — `OP_FSYNC` / `OP_OPENAT` / eventfd / SQE chaining and
+the wrap all remain unbuilt. No arbitrary-write primitive is claimed. No
+information leak to ring 3 is claimed. No corruption is exhibited, the probe
+staying inside its own page. **No capability gate is added**, and whether NSI
+25/26 should be gated at all is a DDR-842 S4 **policy** question — the
+DDR-793/982 class, deferred to the operator, **recorded, not taken**. No claim
+that this was ever exploited. No new gate (179 unchanged), the arm going on
+`smoke-sysiouring` per the DDR-1039/1070 reasoning. `GLOBAL_FORBIDDEN` **77
+unchanged** — the check is **deterministic** and its own gate asserts both
+directions, so it cannot hide in a green run (DDR-1065's reasoning, as against
+DDR-981/1049's intermittents). No open issue moves (OPEN-1/2/12/13 untouched);
+not an apfreeze and not OPEN-2.
+
+All four DDR free-range carriers advanced `DDR-1108+` -> `DDR-1109+` in one edit.
+
+---
+
 ## DDR-1107 — two checklist rows falsified by a DDR that edited the file (2026-09-12)
 
 **Docs-only. No code change, no gate, no defect found and none alleged.**

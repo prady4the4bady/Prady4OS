@@ -4447,8 +4447,25 @@ smoke-syssignal: $(IMG) fat-image sfs-image
 
 # PROC-E io_uring gate: systest mmaps a ring, submits a batched WRITE then READ on
 # a pipe in one io_uring_enter, and verifies both completions + the data.
+#
+# DDR-1108 adds the second pattern. ENTER used to validate only the CONTAINING
+# page and then form its kernel pointer at phys + (va & 0xFFF), so a ring-3
+# caller chose the intra-page offset of a 416-byte struct the kernel reads 8
+# SQEs from and writes 8 CQEs to -- any offset > 3680 left the frame. The arm
+# asserts the EXACT -EINVAL rather than "< 0" (DDR-1044): a range check failing
+# for its own reason returns -EFAULT and would satisfy "< 0" with the guard gone.
+#
+# THE TWO PATTERNS ARE ONE TEST, and that is the design. A kernel that ran the
+# SQEs and THEN returned -EINVAL would satisfy the new pattern alone; the probe
+# therefore aims its refused call at a poison SQE writing 2 bytes to the SAME
+# pipe the first pattern reads. Had the refusal not been a refusal to ACT, the
+# pipe would hold "XXURING" and the 5-byte read would return "XXURI", failing
+# the pre-existing byte comparison. Measured, not argued: on the pre-fix kernel
+# 9ef04b09f388ae2d BOTH patterns are absent, and the probe does not branch away
+# (DDR-1089 sec.6.1) so the second arm genuinely ran and genuinely failed.
 smoke-sysiouring: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL='IO_URING: batch read OK' \
+	TIMEOUT_S=90 \
+	EXTRA_SENTINEL="$$(printf 'IO_URING: batch read OK\nIO_URING: unaligned ring VA refused')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

@@ -1,7 +1,9 @@
 # DDR-1106 — Closing DDR-1105's idle-thread coverage gap
 
-**Status:** BUILT. No defect found and none alleged; **no fix**, and OPEN-2 does
-not move. What changes is what the *next* occurrence can be caught on.
+**Status:** BUILT, PUSHED as `129e8bb`, and **CI-GREEN on its own binary** —
+`0eb965428942d5cf`, 32/32 check runs across two suites, zero `[schedcheck]`
+(§10). No defect found and none alleged; **no fix**, and OPEN-2 does not move.
+What changes is what the *next* occurrence can be caught on.
 
 **The hold is RELEASED and the result it waited on is recorded.** The build was
 deliberately held until CI ruled on DDR-1105 (`c204ed0`), because that was a
@@ -323,3 +325,55 @@ all.** Only the hash discriminates, which is DDR-1097's finding arriving again.
 - **`kernel.bin` size is UNCHANGED** (1,315,210 B), so the size/headroom pair and
   `ci-docstate-check` are unaffected — and §8.4 records that a size check could
   not distinguish this binary from DDR-1105's at all.
+
+---
+
+## §10 — CI VERDICT on `129e8bb`, the first observation of this binary
+
+Recorded because DDR-1105's four green suites were observations of
+`3933fa5f60ae607c` and **do not transfer** to `0eb965428942d5cf`. The two
+binaries are **1,315,210 B each — size identical** (§8.4), so a size comparison
+could not tell them apart at all; only the hash does (DDR-1097's finding).
+
+| suite | run | event | shard jobs | conclusion |
+|---|---|---|---|---|
+| 1 | 34699871104 | `push` | 16 | all `success` |
+| 2 | 34699873490 | `pull_request` | 16 | all `success` |
+
+**32 of 32 check runs green**, both suites, all ten `build-and-boot` shards plus
+`build`, `shard-check`, `aether-layer`, `code-graph` and both `arch-bootstrap`
+arms. **This is TWO suites on one SHA, not three** — §INV.15's third green comes
+from `workflow_dispatch`, and none was dispatched; no promotion is in flight, so
+the 3-green criterion is not engaged and is **not claimed satisfied**.
+
+**Against the watch order stated when the check-in was armed:**
+
+1. **ZERO `[schedcheck]` lines.** That pattern is in `GLOBAL_FORBIDDEN` (77), so
+   a fire reddens whichever gate happens to boot — the DDR-1097 `[ringwalk]`
+   precedent, confirmed on the mutants in §8 rather than assumed. Nothing
+   reddened. **An idle-thread fire is now POSSIBLE where it was impossible
+   before, and none occurred**; that is the negative §8.2 describes and it
+   carries exactly the weight stated there and no more.
+2. **Per-shard `kernel.bin: OK` CONFIRMED, not assumed** — read out of shard 7's
+   log, where the DDR-1035 post-gate assertion follows `shard 7: ALL PASS — 18
+   gates`. The binary CI ran is the binary this DDR describes.
+3. **No new `[apfreeze]`.** Nothing to resolve against §INV.18.
+4. **`rqfree=` WAS NOT READ, AND IT CANNOT BE FROM A GREEN SUITE** — stated as a
+   limitation of the watch order rather than reported as a zero. Measured, not
+   reasoned: `boot_test.sh:56` returns early from `serial_rm` only when
+   `KEEP_SERIAL` is set, `:846` calls it on the PASS path, and `grep -rn
+   KEEP_SERIAL .github/` returns **nothing** — CI never sets it (DDR-1049
+   recorded this and it is re-checked here). So on a green CI suite the capture
+   is deleted and there are no `[hb]` lines to read. DDR-1093 §7.1's open
+   question — whether the DDR-996 window ever arises naturally under SMP — is
+   **not advanced by this run**, and the only CI-side evidence it can ever
+   receive is a **red** capture or a gate that sets `KEEP_SERIAL` itself.
+
+**NOT CLAIMED:** OPEN-2 does **not** move and no cause is named; two green
+suites are two observations and **no rate is claimed**; DDR-1105 and DDR-1106
+are **NOT exonerated in advance** (DDR-1042) — this is the hottest path for the
+most-switched-to thread in the system, so if the OPEN-2 signature moves later,
+these commits remain candidates and "the diff is elsewhere" is not an argument;
+the negative here rules out only the **strict** direction (a base wrong toward
+over-firing, which would have reddened every gate at once), exactly as §8.2
+predicted, and the **forgiving** direction is ruled out by the mutants alone.

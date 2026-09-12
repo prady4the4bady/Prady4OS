@@ -128,13 +128,31 @@ static long sys_io_uring_enter(long a_ring, long a_submit, long a3, long a4, lon
     if (to_submit > IORING_ENTRIES)
         to_submit = IORING_ENTRIES;
 
+    /* DDR-1108: the ring VA must be PAGE-ALIGNED, checked before anything else.
+     * Both checks below are applied to the page-aligned base, and the kernel
+     * pointer used to be formed at phys + (va & 0xFFF) -- the CALLER's offset.
+     * sizeof(struct io_ring) is 416, so any (va & 0xFFF) > 3680 put part of the
+     * structure past the frame, and the loop below reads 8 SQEs and WRITES 8
+     * CQEs through it: a ring-3 write into the physically adjacent frame, which
+     * the caller does not own and which vmm_user_range_ok never examined. The
+     * _Static_assert above bounds sizeof against a page and never could have
+     * caught this -- the binding quantity is offset + sizeof.
+     *
+     * Page alignment rather than the weaker (va & 0xFFF) + sizeof <= PAGE_SIZE:
+     * SETUP only ever returns page-aligned VAs (mmap_next starts at the aligned
+     * VMM_MMAP_BASE and advances by whole pages), so nothing needs the weaker
+     * form, and it would make every future field addition's safety depend on a
+     * sizeof that moves whenever the structure does. */
+    if (va & 0xFFFull)
+        return -EINVAL;
+
     /* Validate the whole ring page is user-RW, then reach it via the frame. */
-    if (!vmm_user_range_ok(t->cr3, va & ~0xFFFull, PAGE_SIZE, 1))
+    if (!vmm_user_range_ok(t->cr3, va, PAGE_SIZE, 1))
         return -EFAULT;
-    uint64_t phys = vmm_resolve(t->cr3, va & ~0xFFFull);
+    uint64_t phys = vmm_resolve(t->cr3, va);
     if (!phys)
         return -EFAULT;
-    struct io_ring *r = (struct io_ring *)(uintptr_t)(phys + (va & 0xFFFull));
+    struct io_ring *r = (struct io_ring *)(uintptr_t)phys;   /* va is aligned */
 
     int done = 0;
     for (int i = 0; i < to_submit; i++) {

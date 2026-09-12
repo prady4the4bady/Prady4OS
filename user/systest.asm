@@ -610,6 +610,48 @@ _start:
     jnz     .uring_done2
     mov     r12d, [rbx]              ; read fd
     mov     r13d, [rbx+4]            ; write fd
+    ; ---- DDR-1108: ENTER must REFUSE an unaligned ring VA ------------------
+    ; sys_io_uring_enter validated only the CONTAINING page (va & ~0xFFF) and
+    ; then formed its kernel pointer at phys + (va & 0xFFF), so a caller chose
+    ; the intra-page offset of an 416-byte struct the kernel reads 8 SQEs from
+    ; and writes 8 CQEs to. Any (va & 0xFFF) > 3680 leaves the frame entirely.
+    ;
+    ; This arm uses K=96 -- a SAFE, IN-PAGE offset. It proves the MECHANISM (an
+    ; arbitrary caller offset is honoured); the out-of-page case follows from
+    ; the same arithmetic and is deliberately NOT attempted here, because a
+    ; probe that corrupted an unrelated physical frame would fail its own gate
+    ; for reasons nobody could attribute. See DDR-1108 sec.7.
+    ;
+    ; At K=96 the struct's sqes[0] lands at page +128 and cqes[0] at +384, both
+    ; disjoint from the bytes the aligned arm below uses (+32..+96, +296, +312).
+    ; The poison SQE writes 2 bytes to the SAME pipe: if the refused call had
+    ; executed, the pipe would hold "XXURING" and the aligned arm's 5-byte read
+    ; would return "XXURI" and fail its OWN byte comparison -- so that existing
+    ; assertion is the did-not-execute half, and no new arm has to be kept in
+    ; step (DDR-1108 sec.6).
+    mov     byte [r14+128], 1       ; poison SQE: opcode = OP_WRITE
+    mov     dword [r14+132], r13d   ; fd = the write end
+    lea     rax, [rel m_uringpois]
+    mov     [r14+136], rax          ; addr
+    mov     dword [r14+144], 2      ; len = 2 ("XX")
+    mov     rax, SYS_IO_URING_ENTER
+    lea     rdi, [r14+96]           ; UNALIGNED ring VA
+    mov     rsi, 1
+    syscall
+    ; EXACTLY -EINVAL (-22), never "< 0" (DDR-1044): a range check failing for
+    ; its own reason returns -EFAULT (-14) and would satisfy "< 0" while this
+    ; guard was absent. And the branch below skips only the PRINT, never the
+    ; arms after it -- DDR-1089 sec.6.1, because the aligned arm below IS the
+    ; did-not-execute half of this one and jumping out would delete it.
+    cmp     rax, -22
+    jne     .uring_align_done
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_uringalign]
+    mov     rdx, m_uringalign_len
+    syscall
+.uring_align_done:
+
     ; SQE[0] @ +32 : WRITE "URING"(5) to the write end
     mov     byte [r14+32], 1        ; opcode = OP_WRITE
     mov     dword [r14+36], r13d    ; fd
@@ -741,5 +783,8 @@ m_epollok_len: equ $ - m_epollok
 m_sigusr1:   db "SIGNAL: SIGUSR1 caught", 10
 m_sigusr1_len: equ $ - m_sigusr1
 m_uringdata: db "URING"
+m_uringpois: db "XX"
+m_uringalign:   db "IO_URING: unaligned ring VA refused", 10
+m_uringalign_len: equ $ - m_uringalign
 m_uringok:   db "IO_URING: batch read OK", 10
 m_uringok_len: equ $ - m_uringok

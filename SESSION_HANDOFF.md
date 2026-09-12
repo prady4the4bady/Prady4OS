@@ -13162,6 +13162,73 @@ being the process scheduler).
 
 ---
 
+## CHECKPOINT — DDR-1108 BUILT (2026-09-12): `io_uring` ENTER validated one address and dereferenced another
+
+**Branch `dev/phase1-seyp3n`. Kernel change.** `kernel.bin`
+`0eb965428942d5cf` -> **`68e74ff4142f7c71`**, **1,315,210 B — SIZE UNCHANGED**,
+so the size / headroom pair and `ci-docstate-check` are unaffected **and a size
+comparison cannot tell the two binaries apart — only the hash does** (DDR-1097,
+third occurrence). `GLOBAL_FORBIDDEN` **77**; **179 gates**; 79 probe ELFs (no
+new one); no open issue moves (OPEN-1/2/12/13 untouched) — **not an apfreeze and
+not OPEN-2**.
+
+**What it is.** A **reachable ring-3 write past a validated region**, artefact
+produced and then fixed. `sys_io_uring_enter` applied **both** its checks to the
+page-aligned base and then dereferenced `phys + (va & 0xFFF)` — the caller's
+offset — with no alignment check. `sizeof(struct io_ring)` is **416 B**, so the
+structure leaves the frame above offset 3680, and at `0xFF0` all eight CQEs are
+written to the **physically adjacent frame**. No capability gate, so NSI 26 is
+callable by any ring-3 process; SETUP is not a prerequisite. Only site of the
+shape in the tree, **enumerated not assumed**.
+
+**Stated at its real size and not inflated:** a bounded 416-byte write into the
+*adjacent* frame at a caller-chosen offset — **a memory-corruption primitive, not
+an arbitrary write** — and **not** an information leak to ring 3 (at large
+offsets the CQEs are outside the caller's page too, so nothing is readable back).
+
+**Found by costing a row an audit had declined to schedule** (DDR-1102 §2's
+fifth gap), which is worth carrying: the sentence understated it twice over.
+
+**Second finding, corrected not fixed:** `sq_head`/`sq_tail`/`cq_head` have
+**zero kernel writers and zero kernel readers** — not a ring that fails to wrap,
+a **fixed array whose index fields are inert**. A protocol-following caller gets
+the wrong SQE executed from its second call onward, silently; a second ENTER
+overwrites unconsumed completions. Not built (DDR-1069's test); the **wording**
+is fixed in the same commit.
+
+**Proof: the pre-fix tree as the control**, same probe, one line differing —
+pre-fix `9ef04b09f388ae2d` has **both** sentinels absent (rc=1), fixed
+`68e74ff4142f7c71` has both present (rc=0). The second absence carries the claim:
+the poison SQE **executed**, so the aligned read returned `"XXURI"`. **Revert
+verified bit-for-bit in both directions by rebuild.** The probe's first draft
+branched away on mismatch and would have made the pre-fix row ambiguous — fixed
+before it ran (DDR-1089 §6.1).
+
+**Regression:** `smoke-shell` 5/5 plus `smoke-sysiouring`, `smoke-syspipe`,
+`smoke-sysepoll`, `smoke-sysmmap`, `smoke-sysio`, `smoke-uaccess`,
+`smoke-invariants`, `smoke-sysfork`, `smoke-syswait` — all rc=0, hash pinned and
+re-verified after. Hygiene **ALL EIGHT**.
+
+**Carriers:** all four advanced `DDR-1108+` -> `DDR-1109+` in one edit; the
+Group D `io_uring` row in `CLAUDE.md` is **corrected, not closed**.
+
+**NOT CLAIMED:** no capability gate added — whether NSI 25/26 should be gated is
+a DDR-842 S4 **policy** question, **recorded, not taken**; no claim this was ever
+exploited; no corruption exhibited (the probe stays inside its own page); no new
+gate.
+
+**WATCH ON THE NEXT CI RUN.** This is a **kernel change on a syscall path** and
+the binary is new, so **DDR-1106's 32/32 greens do not transfer to it**. A red is
+a candidate regression and **DDR-1108 is not exonerated in advance** (DDR-1042) —
+*"the diff is elsewhere"* is not an argument. Confirm each shard prints
+`kernel.bin: OK` (DDR-1035) and that the hash in the logs is
+`68e74ff4142f7c71`; a size check cannot distinguish the two binaries.
+
+**NEXT:** task #23. Every backlog table A–H is audited; what remains is building.
+**This session must not push to another branch without explicit permission.**
+
+---
+
 ## CHECKPOINT — DDR-1107 (2026-09-12), docs-only, CI-wait window
 
 **Branch `dev/phase1-seyp3n`. No kernel change; `kernel.bin` not rebuilt.**

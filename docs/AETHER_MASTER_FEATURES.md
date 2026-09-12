@@ -1872,6 +1872,43 @@ new gate.
 **Idle coverage: CLOSED by DDR-1106** — this entry read *"Idle threads are not
 covered (`kstack_base == 0`), a stated limit"*, which is **no longer true**.
 
+### DDR-1108 — `io_uring` ENTER validated one address and dereferenced another (kernel)
+
+**Not an AETHER feature; recorded here per §NON-NEGOTIABLE 11** because it is a
+kernel change on a syscall path. `sys_io_uring_enter` applied both of its checks
+to the **page-aligned base** and then formed its kernel pointer at
+`phys + (va & 0xFFF)` — the **caller's** offset — with no alignment check
+anywhere. `sizeof(struct io_ring)` is 416 B, so the structure leaves the frame
+whenever the offset exceeds 3680, and at `0xFF0` every SQE is read from and every
+CQE **written to the physically adjacent frame**: one the caller does not own and
+`vmm_user_range_ok` never examined. **No capability gate**, so NSI 26 is callable
+by any ring-3 process, and SETUP is not a prerequisite.
+
+**Stated at its real size:** a bounded 416-byte write into the *adjacent* frame
+at a caller-chosen offset, of values the caller substantially controls — **a
+memory-corruption primitive, not an arbitrary write** — and **explicitly not an
+information leak to ring 3**, because at large offsets the CQEs land outside the
+caller's page too and cannot be read back.
+
+**Fixed** with `if (va & 0xFFF) return -EINVAL;` before the range check, so the
+pointer becomes `(struct io_ring *)phys` and the invariant is visible in the code
+rather than argued in a comment. The weaker `offset + sizeof <= PAGE_SIZE` bound
+was considered and **refused**: nothing needs it, and it would make every future
+field addition depend on a `sizeof` that moves.
+
+**No gate could have seen it** — the one ring-3 consumer passes SETUP's return
+value, which is always page-aligned, and calls ENTER exactly once, so the
+unaligned path had never executed on any gate. The DDR-1070 class (the arms do
+not span the argument space), not the dead-arm class. `smoke-sysiouring` gains
+the arm; **no new gate** (179 unchanged), `GLOBAL_FORBIDDEN` 77 unchanged.
+
+**Also corrected, not fixed:** `sq_head`, `sq_tail` and `cq_head` have **zero
+kernel writers and zero kernel readers**, so the header's *"no head/tail wrap"*
+understated it — it is a fixed array whose index fields are **inert**. A caller
+following the real io_uring protocol gets the wrong SQE executed from its second
+call onward, silently, and a second ENTER overwrites unconsumed completions. Not
+built, on DDR-1069's test: nothing shipping needs it.
+
 ### DDR-1106 — idle threads are covered too (kernel, OPEN-2)
 
 **Not an AETHER feature; recorded here per §NON-NEGOTIABLE 11.** `init_idle` now
