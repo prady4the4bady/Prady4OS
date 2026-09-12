@@ -1584,8 +1584,51 @@ void sched_tick(void) {
         int _nwake = 0;
         uint64_t _fl2 = irq_save();
         struct tcb *_t = current_thread;
+#if OPEN2_HUNT
+        /* DDR-1096 HUNT HARNESS -- debug-only, never in the shipped kernel.
+         *
+         * This walk is one of THREE ring readers that hold no cross-CPU lock
+         * (irq_save() masks IF locally and excludes nothing on another CPU),
+         * while sched_destroy() and reaper_thread() splice nodes out of the
+         * same ring. DDR-1001 named exactly this shape at sys_wait4 and fixed
+         * it by moving that walk under g_sched_lock; this site never got the
+         * same treatment, and it is reached from the timer ISR with IF clear,
+         * where nothing can preempt an escaped walk.
+         *
+         * The harness does TWO things and NEITHER changes product logic:
+         *   (a) a bounded pause per node, widening the window in which another
+         *       CPU can unlink+free the node this walk is standing on;
+         *   (b) a bound + poison test, so an escaped walk NAMES itself instead
+         *       of wedging the CPU silently for the rest of the boot.
+         * (b) is an instrument, not a fix: it reports and breaks. */
+        unsigned _hn = 0;
+        /* Bounded like ap_freeze_probe's DUMP_SHOTS: an escaped walk recurs on
+         * every tick on every CPU, and the UART is ~87 us/byte -- unbounded
+         * printing would stall the boot it is measuring (DDR-941). */
+        static unsigned _hshots;
+#endif
         if (_t) {
             do {
+#if OPEN2_HUNT
+                /* KHEAP_DEBUG memsets freed objects to POISON_FREE (0xDD), so a
+                 * node freed under us reads 0xDDDD... in every field. Test BEFORE
+                 * dereferencing ->next, which is the load that would fault. */
+                if (((uintptr_t)_t & 0xFFFFull) == 0xDDDDull
+                    || _t->state == 0xDDDDDDDDu
+                    || ++_hn > OPEN2_RING_MAX) {
+                    if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
+                        break;
+                    uint64_t _lf = console_line_lock();
+                    kputs("[ringwalk] ESCAPED site=sched_tick n=");
+                    kputdec(_hn);
+                    kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
+                    kputs(" state=");  kputhex((uint64_t)_t->state);
+                    kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
+                    kputs("\r\n");
+                    console_line_unlock(_lf);
+                    break;
+                }
+#endif
                 if (_t->state == THREAD_BLOCKED
                     && _t->block_deadline != 0
                     && g_ticks >= _t->block_deadline
@@ -1595,6 +1638,10 @@ void sched_tick(void) {
                     _wake[_nwake++] = _t;
                 }
                 _t = _t->next;
+#if OPEN2_HUNT
+                for (volatile unsigned _d = 0; _d < OPEN2_HUNT; _d++)
+                    __asm__ __volatile__("pause");
+#endif
             } while (_t != current_thread);
         }
         irq_restore(_fl2);

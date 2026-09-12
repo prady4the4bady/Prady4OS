@@ -255,6 +255,17 @@ KCFLAGS += -DPIPE_TRACE=$(PIPE_TRACE)
 # built only by `make smoke-rqstress-liveness`, which restores a clean image.
 BSP_LIVENESS ?= 0
 KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
+
+# DDR-1096 OPEN-2 hunt harness. DEBUG ONLY -- 0 in every shipped build and in
+# every CI gate; `make image` with the default must produce a bit-identical
+# kernel.bin, which is asserted in the DDR rather than assumed. Non-zero is the
+# per-node pause count injected into sched_tick's unlocked all-threads ring
+# walk, widening the window another CPU has to unlink+free the node that walk
+# is standing on. OPEN2_RING_MAX bounds the walk so an escaped one names itself
+# instead of wedging the CPU with IF clear.
+OPEN2_HUNT ?= 0
+OPEN2_RING_MAX ?= 4096
+KCFLAGS += -DOPEN2_HUNT=$(OPEN2_HUNT) -DOPEN2_RING_MAX=$(OPEN2_RING_MAX)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
