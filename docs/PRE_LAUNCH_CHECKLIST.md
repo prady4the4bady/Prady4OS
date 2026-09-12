@@ -1374,10 +1374,51 @@ counts** (`smoke-maximize` *"the sixth"*, `smoke-jobctl` *"the seventh"*).
   construction, anticipated in the probe's own comment.
 * **`io_uring` is CORRECTED, NOT CLOSED.** `smoke-sysiouring` asserts a
   batched write-then-read on a pipe in **one** `io_uring_enter` — both
-  completions *and* the data. `sys_io_uring.h` states the scope:
-  `OP_READ`/`OP_WRITE` only, *"no head/tail wrap, no kernel-side polling
-  thread"*, so `OP_FSYNC`, `OP_OPENAT`, eventfd and SQE chaining are genuinely
-  unbuilt — **and a fifth gap the row never names is the missing ring wrap.**
+  completions *and* the data. Scope is `OP_READ`/`OP_WRITE` only, so
+  `OP_FSYNC`, `OP_OPENAT`, eventfd and SQE chaining are genuinely unbuilt —
+  **and a fifth gap the row never names.**
+  **RE-CORRECTED 2026-09-12 — DDR-1108, and this bullet was wrong in two ways
+  at once.** (a) It **quoted a source string that no longer exists**:
+  `sys_io_uring.h` said *"no head/tail wrap, no kernel-side polling thread"*
+  and DDR-1108 replaced that sentence, so the quotation marks were about to
+  start lying — the DDR-1073 §5 shape (a row citing something in the tree has
+  an expiry date and nothing mechanical can check one), arriving here as a
+  **quote** rather than a line number. (b) **The fifth gap is not a wrap.**
+  `sq_head`, `sq_tail` and `cq_head` have **zero kernel writers and zero
+  kernel readers** — SETUP zeroes the page and writes only entries, ENTER
+  writes only `cq_tail` and does so **by assignment, not accumulation**, and
+  ENTER always runs `sqes[0..to_submit)` and writes `cqes[0..done)`,
+  **indexed from zero on every call**. So it is not a ring whose indices fail
+  to wrap; **it is a fixed array whose index fields are inert**, and the two
+  consequences are worse than an un-wrapped ring: a caller following the real
+  io_uring protocol (publish at `sq_tail`, bump it, enter) gets **the wrong
+  SQE executed from its second call onward, silently** — index 0 and `sq_tail`
+  coincide only on the first call, which is exactly why the shipped probe
+  works — and a second ENTER **overwrites `cqes[0..done)`**, destroying
+  completions not yet consumed. **Still not built**, on DDR-1069's test: a real
+  index discipline is a ring rewrite plus an ABI contract, and the one consumer
+  issues a single ENTER and never reads an index.
+  **AND PRICING THAT SENTENCE FOUND A DEFECT IN THE SAME FUNCTION, NOW FIXED.**
+  `sys_io_uring_enter` applied **both** its checks to the **page-aligned base**
+  and then dereferenced `phys + (va & 0xFFF)` — the caller's offset — with no
+  alignment check; `sizeof(struct io_ring)` is 416 B, so above offset 3680 the
+  structure leaves the frame and at `0xFF0` every CQE is **written to the
+  physically adjacent frame**, which the caller does not own and
+  `vmm_user_range_ok` never examined. No capability gate, so NSI 26 is callable
+  by any ring-3 process. **Stated at its real size: a bounded 416-byte write
+  into the *adjacent* frame at a caller-chosen offset — a memory-corruption
+  primitive, NOT an arbitrary write — and explicitly NOT an information leak to
+  ring 3.** No gate could see it: the only ring-3 consumer passes SETUP's
+  return value, which is always page-aligned, and calls ENTER exactly once, so
+  that path had **never executed on any gate** — the DDR-1070 class (the arms
+  do not span the argument space), not the dead-arm class. `smoke-sysiouring`
+  now requires the refusal arm as well; **no new gate**.
+  **THE OBLIGATION DDR-1107 §3 NAMED, DISCHARGED HERE RATHER THAN IN A NEW
+  RECORD:** a DDR that answers what a row says is *"recorded, not scheduled"*
+  has by construction falsified that row **and knows which row, because the row
+  is what it was answering** — so the correction belongs in the same commit as
+  the work, not in a later sweep. That is the whole remedy; **no checker is
+  built** and DDR-1086 §4's refusal stands.
 
 The other seven names stand. Three carry qualifications recorded elsewhere:
 `smoke-pthreads` is blocked on a cross-CPU TLB shootdown that does not exist
