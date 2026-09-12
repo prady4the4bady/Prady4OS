@@ -4456,3 +4456,18 @@ Regression: `smoke-egress-audit`, `smoke-privacy-netfilter`, `smoke-auditchain`,
 `smoke-auditchain-tamper`, `smoke-shell` all rc=0. Hygiene ALL EIGHT.
 `GLOBAL_FORBIDDEN` 76. **179 gates unchanged.** `kernel.bin` 1,311,114 B — size
 unchanged.
+
+## DDR-1099 — the OPEN-2 `[apfreeze]` resolved (2026-09-12)
+
+CI 34666584466 shard 7 `smoke-smpsched` on `b73d013`, a **docs-only** commit with
+`kernel.bin: OK` on a binary already 2/2 green. Resolved against a bit-identical
+rebuild (`0693e5b04685ad60`): `#DB` vector 1 at **`context_switch+0x14`**, with
+`RFLAGS=0x2702` (**TF|IF|DF, IOPL=2**) restored by the `popf` two instructions
+earlier. `sched_create` seeds the constant `0x202` and `pushfq` cannot produce
+TF/DF/IOPL — and `R15 = finish_task_switch+0xd` is the return address of
+`call this_cpu`, while the only `call context_switch` in the kernel is at
+`0x…16492`. **`next->rsp` did not point at the saved frame.**
+
+**NO FIX, NO CAUSE NAMED, OPEN-2 NOT CLOSED.** Not attributed to DDR-1096 §3.
+Masking TF is recorded as the wrong move. Docs only; `kernel.bin` untouched;
+GLOBAL_FORBIDDEN 76; 179 gates.

@@ -12834,7 +12834,20 @@ the block timeout is downstream. Also present, and it must be read carefully:
 `[hb]` from t=500 — the DDR-1088 shape — plus three `[yieldstall] site=mnt_lock`
 lines (one RESOLVED at spins=75653).
 
-**STEP 1 IS §INV.18 / DDR-1019 AND NOTHING ELSE: resolve `0xFFFFFFFF8000C8F7`
+**RESOLVED — DDR-1099.** `0xFFFFFFFF8000C8F7` = `isr_dispatch+0xfe7`, the `jmp`
+of a `cli; hlt` loop entered **after printing `halting.`** — the panic WINNER's
+terminal halt, **not** DDR-1019's loser branch, although the offset is identical
+to DDR-1088's shard-3 freeze *in a different binary* (§INV.18 earning itself).
+The full panic report IS in the job log — the first time ever, thanks to
+DDR-1088: **`#DB` vector 1 at `context_switch+0x14`, `RFLAGS=0x2702` = TF|IF|DF,
+IOPL=2**, restored by the `popf` two instructions earlier. `sched_create` seeds
+the constant `0x202` and `pushfq` cannot produce those bits; `R15` held
+`finish_task_switch+0xd`, the return address of `call this_cpu`, while the only
+`call context_switch` in the kernel is at `0x…16492`. **`next->rsp` did not point
+at the frame `context_switch` saved.** NO FIX, NO CAUSE NAMED, OPEN-2 open.
+**Do NOT mask TF before `popf`** — DDR-1099 §6.
+
+Old note kept for the procedure it names: **STEP 1 IS §INV.18 / DDR-1019 AND NOTHING ELSE: resolve `0xFFFFFFFF8000C8F7`
 against ITS OWN binary** (`0693e5b04685ad60`, rebuildable bit-identically from
 `b73d013`; the working tree after DDR-1098 builds a DIFFERENT kernel, so use a
 worktree). `[apfreeze]` has at least four known producers told apart ONLY by RIP
