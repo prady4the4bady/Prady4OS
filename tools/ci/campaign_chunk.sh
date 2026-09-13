@@ -81,8 +81,29 @@ while [ "$done_n" -lt "$target" ]; do
     kh2=$(sha256sum "$ROOT/build/kernel.bin" 2>/dev/null | cut -c1-16)
     # Snapshot the guest capture BEFORE the next run truncates it. Without this
     # the only per-run artefact is make output, which carries no serial lines.
-    if [ -n "$serial" ] && [ -f "$ROOT/$serial" ]; then
-        cp "$ROOT/$serial" "$LOGDIR/$gate${tag:+.$tag}.$i.serial.log" 2>/dev/null || true
+    #
+    # DDR-1010 §6 root-caused here: this used to test `[ -f "$ROOT/$serial" ]`
+    # unconditionally, so an ABSOLUTE serial path became
+    # "/home/user/Prady4OS//home/user/Prady4OS/build/..." -- which never exists,
+    # so the copy silently did nothing and every capture was lost. That is
+    # exactly how 17 of 20 runs in the smoke-smppreempt campaign came back with
+    # no serial log: the first chunk was invoked with a RELATIVE path and kept
+    # its captures, the resumed chunk used an absolute one and kept none.
+    # Accept both, and SAY SO when the path resolves to nothing rather than
+    # dropping the capture quietly -- a silent no-op here is indistinguishable
+    # from a clean run with nothing to record.
+    case "$serial" in
+        /*) __src="$serial" ;;
+        "") __src="" ;;
+        *)  __src="$ROOT/$serial" ;;
+    esac
+    if [ -n "$__src" ]; then
+        if [ -f "$__src" ]; then
+            cp "$__src" "$LOGDIR/$gate${tag:+.$tag}.$i.serial.log" 2>/dev/null || true
+        else
+            echo "campaign_chunk: WARNING run $i — no capture at $__src;" \
+                 "this run has NO serial log (DDR-1010 §6)"
+        fi
     fi
     printf '%d\t%s\t%s\t%s\t%s\n' "$i" "$verdict" "$kh" "$kh2" "$(date -u +%FT%TZ)" \
         >>"$LEDGER"

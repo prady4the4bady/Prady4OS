@@ -35,6 +35,12 @@ SERIAL_LOG="${SERIAL_LOG:-$__bt_root/build/gatelogs/serial-$$.log}"
 # qemu truncates the file. Isolation must not be a side effect of cleanup: a
 # gate may never inherit an earlier run's serial content, whatever the path.
 : > "$SERIAL_LOG" 2>/dev/null || true
+# DDR-1043: the QMP sidecar must be cleared with the capture it belongs to.
+# It is not truncated by the line above, so a run reusing this SERIAL_LOG path
+# would print the PREVIOUS run's registers as if they were its own — a stale
+# artefact presented as current, which is the exact failure mode this whole
+# instrument exists to remove.
+rm -f "${SERIAL_LOG}.qmpdump" 2>/dev/null || true
 
 # DDR-777 / BUG-1 diagnostics: KEEP_SERIAL=1 preserves the serial capture.
 #
@@ -275,8 +281,18 @@ if [ -n "${QEMU_NUMA:-}" ]; then
     NUMAOPT=(-m 512M
              -object memory-backend-ram,id=nram0,size=250M
              -object memory-backend-ram,id=nram1,size=262M
-             -numa node,nodeid=0,memdev=nram0
-             -numa node,nodeid=1,memdev=nram1
+             # DDR-1078: cpus= is LOAD-BEARING, not tidiness. Omit it and QEMU
+             # 8.2 emits NO SRAT Local APIC Affinity entry, so the guest's
+             # g_topo.cpu_node[] stays 0xFF and numa_node_of_cpu() returns its 0
+             # default for every CPU -- two memory nodes and ONE cpu node. The
+             # scheduler's remote-steal pass (sched.c:805) is then structurally
+             # unreachable, because steal_pass(self, 0, same=1) matches every
+             # victim. Measured: without cpus=, `[sched] steal local=148
+             # remote=0`; with it, `local=0 remote=167`. One CPU per node is also
+             # what makes smoke-numa-steal two-sided -- the same-node pass CANNOT
+             # succeed, so local=0 is required rather than merely likely.
+             -numa node,nodeid=0,memdev=nram0,cpus=0
+             -numa node,nodeid=1,memdev=nram1,cpus=1
              -smp 2)
 fi
 
@@ -396,6 +412,25 @@ early_exit_eligible=0
 # fails nothing, it just silently stops catching. smoke-selftest case 5 is what
 # found it, on all 10 shards at once, which is exactly the job DDR-791 built it
 # for. Do not put a comment inside this printf.
+# DDR-1010 APPENDED '[percpu] gs FAIL' and '[percpu] current FAIL'. The list
+# ALREADY carried 'percpu FAIL' -- which does NOT match either of them, because
+# the printed strings are '[percpu] gs FAIL (syscall ctx)' and '[percpu] current
+# FAIL (syscall ctx)': there is a word between. 'percpu FAIL' matches only the
+# SMP-boot form '[smp] cpu N percpu FAIL'. So the SWAPGS-discipline probe
+# (syscall.c:140-147) could announce a broken kernel invariant and only
+# smoke-swapgs, which names 'gs FAIL' in its own FORBIDDEN_SENTINEL, would
+# notice. Measured (DDR-1010): a smoke-blk-integrity boot printed both, then
+# #GP'd in vmm_map_in, froze two APs, and the gate failed three symptoms later
+# on 'blk integrity FAIL reference-read'. An entry that looks like it covers a
+# family and covers one member of it is worse than no entry, because it reads
+# as covered.
+# DDR-1009 APPENDED 'NEXUS KERNEL PANIC'. It had ONE emitter (kernel/idt.c:701)
+# and ZERO consumers: no gate grepped for it, so a ring-0 panic was caught only
+# when it happened to break a gate's own assertion or run out its clock. A panic
+# on a boot that had already printed its sentinel PASSED. Same hole DDR-981
+# recorded for '[vblk] compl wait timeout'. Verified safe before adding: no gate
+# in the tree expects a kernel panic, and the string appears zero times in
+# locally-green captures.
 GLOBAL_FORBIDDEN="$(printf '%s\n' \
     '[ringwalk]' \
     '[apfreeze]' \
@@ -422,15 +457,93 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     'msix on AP FAIL' 'multi-inflight FAIL' 'percpu FAIL' 'resched FAIL' \
     'rqstress FAIL' 'tss FAIL' 'unlink/rmdir FAIL' 'user on AP FAIL' \
     'controller not ready' 'create-iocq failed' 'create-iosq failed' \
-    'identify-ctrl failed' 'identify-ns failed' 'reset stuck')"
+    'identify-ctrl failed' 'identify-ns failed' 'reset stuck' \
+    'NEXUS KERNEL PANIC' \
+    'panic_stage=' \
+    '[kline] TRUNC' \
+    '[uline] TRUNC' \
+    '[schedcheck]' \
+    '[percpu] gs FAIL' '[percpu] current FAIL')"
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 
 # Fails the run when any probe reported a failure, whichever gate is running.
+#
+# DDR-1079: SCAN THE WHOLE LIST, DO NOT STOP AT THE FIRST MATCH. This returned at
+# the first matching pattern, and the list is roughly alphabetical, so a
+# DOWNSTREAM SYMPTOM reported ahead of its CAUSE hid the cause completely.
+# Measured on CI 34051826587 shard 4: the capture matched THREE patterns —
+# 'blk integrity FAIL' (position 21), 'NEXUS KERNEL PANIC' (28) and
+# 'panic_stage=' (29) — and the job log named only the first. A CPU had panicked
+# and the run reported a block-integrity failure, which is the DDR-824 defect one
+# level up: that fix added 40 lines of context because "printing ONLY the
+# matching lines threw away the diagnosis"; printing only the first PATTERN
+# throws it away the same way when several match.
+#
+# Every match is now named. The detailed block (matching lines + 40 lines of
+# context) still goes to the FIRST match, unchanged, so nothing a reader already
+# relies on is lost — deliberately NOT re-ranked by a hand-written cause/symptom
+# order, which would be one more list to keep in step and would drift.
 check_global_forbidden() {
+    __gf_hits=""
+    __gf_n=0
     while IFS= read -r pat; do
         [ -z "$pat" ] && continue
         if grep -qF "$pat" "$SERIAL_LOG" 2>/dev/null; then
+            __gf_n=$((__gf_n + 1))
+            __gf_hits="$__gf_hits$pat
+"
+        fi
+    done <<EOF
+$GLOBAL_FORBIDDEN
+EOF
+    if [ "$__gf_n" -gt 0 ]; then
+        pat="$(printf '%s' "$__gf_hits" | head -1)"
+            report_qmpdump
             echo "[smoke] FAIL — a probe reported '$pat' during this gate's boot."
+            [ "$__gf_n" -gt 1 ] && \
+                echo "[smoke] --- $__gf_n forbidden patterns matched this ONE capture (DDR-1079) ---"
+            # DDR-1088: this loop runs for EVERY match, not only when there is
+            # more than one. DDR-1079 introduced it under an `-gt 1` guard
+            # because its subject was a capture whose panic hid behind an earlier
+            # symptom -- but a capture whose ONLY match is the panic took the
+            # guard's other branch and got the same silence for a different
+            # reason. One match is exactly when the report matters most.
+            printf '%s' "$__gf_hits" | while IFS= read -r p2; do
+                [ -z "$p2" ] && continue
+                echo "[smoke]   matched: $p2"
+                grep -aF "$p2" "$SERIAL_LOG" | head -3 | sed 's/^/[smoke]     /'
+                # AND THE LINES AFTER IT. DDR-824 added LEADING context for a
+                # correct and stated reason -- probes are written summary-LAST,
+                # so `[sfs] churn FAIL op=create iter=17` sits ABOVE the summary
+                # line this list matches on. THE PANIC IS WRITTEN SUMMARY-FIRST:
+                # measured on a real capture, `*** NEXUS KERNEL PANIC ***` is
+                # followed by 33 lines carrying the entire diagnosis -- component,
+                # exception+vector+error, the MCE bank decode, RIP/CS/RFLAGS/RSP/
+                # CR2, sixteen GP registers, and DDR-1079's bounded backtrace --
+                # and NOT ONE of them contains the matched string, so the summary
+                # above shows the banner and stops.
+                #
+                # That is why CI 34089554836 and 34089556866 each NAMED a panic on
+                # the same tip and said nothing about it, and why DDR-1079 had to
+                # resolve its RIP by hand out of `loser_rip=` in a heartbeat. No
+                # frame from the walker DDR-1079 built had ever reached a job log.
+                #
+                # DELIBERATELY NOT a cause/symptom ranking that would aim the
+                # -B40 block below at the panic instead: DDR-1079 refused that as
+                # "one more list to keep in step with 76 patterns" and the refusal
+                # stands -- a summary-first/summary-last table would drift
+                # identically. Printing BOTH directions for EVERY match needs no
+                # per-pattern knowledge at all.
+                #
+                # 40 is sized by measurement, not taste: the real report is 33
+                # lines with 6 frames and the walker is bounded at 8 frames
+                # (idt.c:969), so ~35 is the worst case. Additive -- nothing that
+                # printed before this stops printing.
+                grep -aA40 -m1 -F "$p2" "$SERIAL_LOG" | tail -n +2 \
+                    | sed 's/^/[smoke]     | /'
+            done
+            [ "$__gf_n" -gt 1 ] && \
+                echo "[smoke] --- a LATER pattern may name the CAUSE of an earlier one ---"
             echo "[smoke] (DDR-791: forbidden in every gate, not only the one that owns it.)"
             echo "[smoke] --- matching lines ---"
             grep -aF "$pat" "$SERIAL_LOG" | head -5
@@ -449,14 +562,21 @@ check_global_forbidden() {
             echo "[smoke] --- 40 lines of context before the first match (the diagnosis usually lives here) ---"
             grep -aB40 -m1 -F "$pat" "$SERIAL_LOG" | sed 's/^/[smoke]   /'
             return 1
-        fi
-    done <<EOF
-$GLOBAL_FORBIDDEN
-EOF
+    fi
     return 0
 }
 
 # True once $SENTINEL and every non-empty EXTRA_SENTINEL line are in the log.
+# DDR-1043: surface the QMP vCPU dump in the JOB LOG, not only on the runner's
+# disk. A sidecar file nobody prints is a sidecar file nobody reads -- the CI
+# artefacts that mattered (DDR-1009 §2, DDR-1019) were read out of job logs.
+report_qmpdump() {
+    [ -s "${SERIAL_LOG}.qmpdump" ] || return 0
+    echo "[smoke] --- DDR-1043 QMP vCPU dump (taken ~5 s before the timeout kill) ---"
+    cat "${SERIAL_LOG}.qmpdump"
+    echo "[smoke] --- end QMP vCPU dump ---"
+}
+
 all_required_present() {
     grep -q "$SENTINEL" "$SERIAL_LOG" 2>/dev/null || return 1
     while IFS= read -r pat; do
@@ -587,13 +707,40 @@ trap on_interrupt INT TERM
 
 # DDR-887 watcher: fire ~5 s before the hard timeout, while QEMU is still alive,
 # and append the vCPU dump to the serial capture so it lands in the artifact.
+#
+# DDR-1043 — ARMED IN CI, AND NARROWED SO ARMING IS CHEAP.
+#
+# This watcher was fully implemented and NOTHING IN THE REPO EVER SET
+# QEMU_QMP_DIAG. So the one instrument that can answer "the kernel printed a
+# panic banner and then nothing for 100 s -- what was the CPU doing?" has been
+# switched off in CI, which is the only place that failure has ever been seen
+# (DDR-1009 §2, DDR-1019, OPEN-1, OPEN-12). Same shape as DDR-986/DDR-1024: a
+# diagnostic designed and then not reached, and DDR-1010's rule that an opt-in
+# instrument is guaranteed OFF where it matters.
+#
+# The narrowing is what makes arming it globally free: fire ONLY if the run has
+# not yet satisfied its own sentinels. A healthy full-window gate (~39 of them
+# declare FORBIDDEN_SENTINEL and so cannot early-exit) is already going to pass,
+# and appending a register dump to its log is pure noise. A run still missing a
+# sentinel 5 s before the kill is one that is about to fail, and its register
+# state is exactly what nobody has ever had. Predicate reuse is deliberate:
+# all_required_present() is the same function the early-exit loop consults, so
+# the two cannot disagree about what "done" means.
 qmp_watcher_pid=""
 if [ -n "${QEMU_QMP_DIAG:-}" ]; then
     (
         sleep "$(( TIMEOUT_S > 5 ? TIMEOUT_S - 5 : 1 ))"
-        if kill -0 "$qemu_pid" 2>/dev/null; then
-            python3 "$(dirname "$0")/qmp_cpudump.py" "$QMP_SOCK" "$SERIAL_LOG" \
-                >>"$SERIAL_LOG" 2>&1 || true
+        if kill -0 "$qemu_pid" 2>/dev/null && ! all_required_present; then
+            # DDR-1043: a SIDECAR, not $SERIAL_LOG. QEMU holds that file open
+            # through `-serial file:` and writes at its OWN tracked offset,
+            # without O_APPEND. Anything appended here is therefore overwritten
+            # by the guest's next serial output -- measured: a dump written into
+            # the serial log lost its header and its whole `info cpus` section,
+            # and the surviving register text began mid-line ("00000000246").
+            # The instrument would have produced a corrupted artefact on the
+            # first failure it was ever armed for.
+            python3 "$(dirname "$0")/qmp_cpudump.py" "$QMP_SOCK" "${SERIAL_LOG}.qmpdump" \
+                >>"${SERIAL_LOG}.qmpdump" 2>&1 || true
         fi
     ) &
     qmp_watcher_pid=$!
@@ -661,6 +808,7 @@ if ! check_global_forbidden; then
 fi
 
 if ! grep -q "$SENTINEL" "$SERIAL_LOG"; then
+    report_qmpdump
     echo "[smoke] FAIL — kernel sentinel '$SENTINEL' not found. Serial output was:"
     cat "$SERIAL_LOG"
     serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
@@ -672,6 +820,7 @@ while IFS= read -r pat; do
     [ -z "$pat" ] && continue
     extra_count=$((extra_count + 1))
     if ! grep -qF "$pat" "$SERIAL_LOG"; then
+        report_qmpdump
         echo "[smoke] FAIL — required pattern '$pat' not found. Serial output was:"
         cat "$SERIAL_LOG"
         serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"
@@ -684,6 +833,7 @@ EOF
 while IFS= read -r pat; do
     [ -z "$pat" ] && continue
     if grep -qF "$pat" "$SERIAL_LOG"; then
+        report_qmpdump
         echo "[smoke] FAIL — forbidden pattern '$pat' appeared. Serial output was:"
         cat "$SERIAL_LOG"
         serial_keep_fail "$SERIAL_LOG" "$QEMU_ERR"

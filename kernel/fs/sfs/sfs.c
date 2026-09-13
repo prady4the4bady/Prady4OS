@@ -979,22 +979,40 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
     if (len == 0)
         return 0;
+    /* DDR-1089: SEVEN unrelated conditions used to collapse into one bare `-1`,
+     * and PRE_LAUNCH_CHECKLIST sec.4.9 stood "Unexplained, unfixed" for ~68 DDRs
+     * because of it. DDR-1020's M4 saw a rewrite of an existing file refused and
+     * could not say why; the source says plainly why -- `off != in->size`, this
+     * function's own documented append-only scope -- but the RETURN VALUE could
+     * equally have meant a versioned handle, an inode read failure, a full file,
+     * no space, or a B+tree insert failure.
+     *
+     * -EPERM IS -1 (errno.h:9), so the permission-shaped case KEEPS its value and
+     * the other six MOVE AWAY from it. That is what makes -1 discriminating from
+     * here on rather than ambiguous -- DDR-1080's move, one layer down.
+     *
+     * -ENOSYS for the append-only scope follows DDR-956's precedent in
+     * vfs_rename: the operation is genuinely not implemented, not invalid. */
     if (f->dirent_clus != 0)
-        return -1;                               /* versioned handle is read-only */
+        return -EPERM;                           /* versioned handle is read-only */
     uint64_t ip = pmm_alloc_page();
-    if (!ip) return -1;
+    if (!ip) return -ENOMEM;
     struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
-    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -1; }
+    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -EIO; }
 
-    if (off != in->size || in->extent_count >= 4) {
-        pmm_free_page(ip);                       /* overwrite / >4 extents: later */
-        return -1;
+    if (off != in->size) {
+        pmm_free_page(ip);        /* mid-file overwrite: a later slice, see above */
+        return -ENOSYS;
+    }
+    if (in->extent_count >= 4) {
+        pmm_free_page(ip);        /* file full: 4 inline extents is the ceiling   */
+        return -EFBIG;
     }
 
     struct sfs_extent_ref ext;
     if (write_extent(c, (const uint8_t *)buf, len, &ext) != 0) {
         pmm_free_page(ip);
-        return -1;
+        return -ENOSPC;
     }
     in->inline_extents[in->extent_count++] = ext;
     in->size = off + len;
@@ -1010,7 +1028,7 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
     s.key = SFS_KEY_INODE | f->cookie;
     s.v.ino.inode_block = niblk;
     if (bt_insert(c, &s))                         /* replaces the INODE entry */
-        return -1;
+        return -EIO;                              /* DDR-1089 */
     sfs_commit(c);
     f->size = off + len;
     return (int)len;

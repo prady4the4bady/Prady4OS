@@ -275,11 +275,12 @@ void e1000e_init(uint8_t bus, uint8_t dev, uint8_t func) {
     }
     line[p] = '\0';
 
-    kputs("[e1000e] up, mac=");
-    kputs(line);
-    kputs(" link=");
-    kputdec((rd(E1000_STATUS) & (1u << 1)) ? 1 : 0);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[e1000e] up, mac=");
+      kline_s(&k, line);
+      kline_s(&k, " link=");
+      kline_d(&k, (rd(E1000_STATUS) & (1u << 1)) ? 1 : 0);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
 
     selftest();
 }

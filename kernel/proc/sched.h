@@ -150,6 +150,17 @@ struct tcb {
     uint64_t   dbg_vruntime;    /* what vruntime WOULD be, if it were used     */
     uint64_t   dbg_v_at_create; /* floor at creation — H2's signature          */
     uint64_t   dbg_v_at_wake;   /* floor at last unblock — H2's signature      */
+    /* DDR-1064. What sched_unblock's OWN kick loop saw, AT THE INSTANT IT RAN.
+     * The rq-3 proof previously re-derived this from outside the call, which is
+     * racy in BOTH directions: a CPU can leave idle before the call (DDR-1004's
+     * race) or enter idle after it returns (DDR-1030's own, unnamed until now),
+     * so neither `idle=` nor `idle2=` can establish that a kick was owed.
+     * Recorded per-THREAD and not in a global, because sched_unblock runs from
+     * MSI-X interrupt context on the virtio-blk completion path (DDR-1014), so
+     * another CPU's unblock would clobber a global between the proof's call and
+     * its read. §NON-NEGOTIABLE 10: both are initialised in sched_create. */
+    uint8_t    dbg_ub_saw_idle; /* an idle non-self CPU was visible to the loop */
+    uint8_t    dbg_ub_kicked;   /* smp_resched_one actually DELIVERED a kick    */
     uint32_t   dbg_picks;       /* times chosen by the real (FIFO) picker      */
     uint32_t   dbg_ticks;       /* ticks charged while running                 */
     uint32_t   weight;
@@ -175,6 +186,17 @@ struct tcb {
                                  * LINEAGE, not on is_agent — fork does not inherit
                                  * authority flags, so a cap on is_agent would be
                                  * escaped by one fork. */
+    uint32_t   is_ipc;          /* DDR-1033: may use the ring-3 IPC door (NSI 98/99).
+                                 * Kernel-set at spawn, never mintable by the
+                                 * process. Zeroed in sched_create: kmalloc does
+                                 * not zero (§NON-NEGOTIABLE 10). */
+    cap_t      ipc_cap;         /* DDR-1033: the RES_IPC handle minted beside it */
+    uint32_t   is_exec;         /* DDR-1034: may use the bounded experiment
+                                 * executor (NSI 100/101). Kernel-set at spawn,
+                                 * never mintable by the process -- the same
+                                 * shape as is_ipc. Zeroed in sched_create:
+                                 * kmalloc does not zero (NON-NEGOTIABLE 10). */
+    cap_t      exec_cap;        /* DDR-1034: the RES_EXEC handle minted beside it */
     uint32_t   is_rewrite;      /* DDR-842: CAP_REWRITE — code-rewrite approval.
                                  * Meaningless without is_sovereign; the syscall
                                  * requires BOTH. Granted at spawn only. */
@@ -186,6 +208,20 @@ struct tcb {
      * running CPU; schedule() under the on_cpu claim) — lock-free by exclusion. */
     uint64_t   run_ticks;       /* 100 Hz ticks observed while current (sampled CPU time) */
     uint64_t   dispatches;      /* times the scheduler switched this thread in           */
+    /* DDR-1118: times the scheduler switched this thread AWAY -- the partner of
+     * `dispatches`, and together they are an ARITHMETIC IDENTITY rather than a
+     * heuristic (the shape DDR-1063 found actually works). A thread is switched
+     * in, then away, then in: so at the moment schedule_locked has claimed it
+     * and is about to resume it, `dispatches` (incremented under the claim at
+     * :1565) must be exactly `switches_away + 1`. `disp - saves == 2` says the
+     * thread was switched IN twice with no intervening save -- i.e. resumed a
+     * second time from a ->rsp that had already been consumed, which is the
+     * reading DDR-1118 derived from the second [schedcheck] artefact.
+     * PRINTED, NOT JUDGED: the increments are plain (non-atomic) and sched_exit
+     * leaves by a path that does not pass the save site, so the identity holds
+     * by the code's habits and NOT by construction -- exactly the test DDR-1116
+     * refused to promote into a clause on the hottest path in the kernel. */
+    uint64_t   switches_away;
     /* DDR-955: bounded-wait fields */
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */

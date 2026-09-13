@@ -42,9 +42,43 @@
 
 extern void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t arg); /* usermode.asm */
 
+/* DDR-1032: copy one NULL-terminated user vector of C strings into `blob`.
+ * Returns the number of strings, or a negative errno.
+ *
+ * This MUST run while the CALLER's address space is still live -- i.e. before
+ * elf_build_image, and long before the CR3 switch below. That ordering is the
+ * whole reason the strings are flattened into a kernel blob rather than passed
+ * down as user pointers: by the time the new stack is written, the pointers
+ * would refer to an address space that is about to be destroyed. */
+static long marshal_vec(long uvec, char *blob, uint32_t cap, uint32_t *off,
+                        unsigned max_entries) {
+    unsigned n = 0;
+    if (!uvec)
+        return 0;
+    for (; n < max_entries; n++) {
+        uint64_t p = 0;
+        if (copyin(&p, (const void __user *)(uintptr_t)(uvec + (long)(n * 8)),
+                   sizeof p) < 0)
+            return -EFAULT;
+        if (!p)
+            break;                             /* the NULL terminator */
+        if (*off >= cap)
+            return -E2BIG;
+        size_t len = 0;
+        ssize_t r = copyinstr(blob + *off, (const void __user *)(uintptr_t)p,
+                              (size_t)(cap - *off), &len);
+        if (r < 0)
+            return (long)r;                    /* -EFAULT or -ENAMETOOLONG */
+        *off += (uint32_t)len + 1;             /* keep the NUL: the blob is flat */
+    }
+    if (n >= max_entries)
+        return -E2BIG;
+    return (long)n;
+}
+
 static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, long a6) {
     (void)a5; (void)a6;
-    (void)uargv; (void)uenvp; (void)a4;        /* baseline: argv[0] = path only */
+    (void)a4;
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)
         return -ENOENT;                        /* no filesystem to exec from */
@@ -71,10 +105,26 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
         return -EIO;
     }
 
+    /* DDR-1032: marshal argv/envp while the caller's address space is still the
+     * live one. A failure here is recoverable -- nothing has been committed. */
+    static char argblob[EXEC_ARG_MAX_BYTES];   /* not on the kernel stack */
+    struct exec_args eargs = { argblob, 0, 0, 0 };
+    uint32_t off = 0;
+    long na = marshal_vec(uargv, argblob, sizeof argblob, &off,
+                          EXEC_ARG_MAX_ENTRIES);
+    if (na < 0) { kfree(buf); return na; }
+    long ne = marshal_vec(uenvp, argblob, sizeof argblob, &off,
+                          (unsigned)(EXEC_ARG_MAX_ENTRIES - na));
+    if (ne < 0) { kfree(buf); return ne; }
+    eargs.blob_len = off;
+    eargs.argc     = (uint16_t)na;
+    eargs.envc     = (uint16_t)ne;
+
     /* Build the new address space. This does NOT touch the current image, so a
      * failure here leaves the caller running unharmed. */
     uint64_t new_as = 0, entry = 0, new_rsp = 0;
-    int rc = elf_build_image(buf, isize, kpath, &new_as, &entry, &new_rsp);
+    int rc = elf_build_image(buf, isize, kpath, na > 0 ? &eargs : 0,
+                             &new_as, &entry, &new_rsp);
     kfree(buf);
     if (rc != ELF_OK)
         return -ENOEXEC;

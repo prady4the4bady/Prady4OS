@@ -15,6 +15,8 @@
 #define SYS_GET_MODE    29
 #define SYS_SET_MODE    30
 #define SYS_SPAWN_AGENT 35
+#define SYS_EXECVE      14          /* DDR-1027: Ctrl+Alt+T spawns /TERM.ELF */
+#define SYS_FORK        15
 #define SYS_FB_INFO     43
 #define SYS_FB_MAP      44
 #define SYS_FB_FLUSH    45
@@ -22,10 +24,18 @@
 #define SYS_KEY_POLL    96          /* DDR-991: structured key events */
 
 /* DDR-991 ABI — must match kernel/drivers/input/ps2kbd.h. */
+#define KMOD_CTRL  0x02u          /* DDR-1027: Ctrl+Alt+T terminal */
 #define KMOD_ALT   0x04u          /* DDR-995: Alt+Tab window cycling */
 #define KMOD_META  0x08u
 #define KEY_TAB    0x09u
 struct key_ev { unsigned char code, mods, down, ascii; };
+
+/* DDR-1027: how many terminals this compositor has launched. */
+static int g_terms;
+
+/* DDR-1028: has the first successful SYS_MOUSE_POLL been announced? */
+static int g_input_said;
+
 #define SYS_MOUSE_POLL  47
 #define SYS_SURFACE_POLL 51
 #define SYS_SURFACE_CMAP 52
@@ -61,6 +71,33 @@ static inline long nsi(long n, long a1, long a2, long a3) {
                      : "a"(n), "D"(a1), "S"(a2), "d"(a3)
                      : "rcx", "r11", "memory");
     return r;
+}
+
+/* DDR-1029 instrument: where do the first loop iterations spend their time?
+ *
+ * DDR-1028 measured a ~10 s gap between PRADYOS_AMBIANCE_OK and this
+ * compositor's FIRST SYS_MOUSE_POLL, and named it as the common cause behind
+ * DDR-1025, DDR-1026 and an intermittent smoke-wmclose -- but it did not
+ * establish WHERE the time goes, so §NON-NEGOTIABLE 3 forbade a fix. mpoll
+ * climbing 2 -> 161 -> 767 -> 1678 across successive heartbeats says the loop is
+ * running and its early iterations are enormously slow, then accelerate.
+ *
+ * SYS_CLOCK is seconds, which is coarse -- and it is the right resolution here
+ * precisely because the thing being measured is ~10 s. A finer clock would add
+ * a vDSO dependency to answer a question whole seconds already answer.
+ *
+ * Bounded to the first LOOPSTAMP_ITERS iterations so this cannot become a
+ * per-frame print: an unconditional stamp would emit thousands of lines a
+ * second and slow the very loop it measures, which is the mistake DDR-941's
+ * on-change PRADYOS_BTN_STATE rule exists to prevent. */
+#define LOOPSTAMP_ITERS 3
+static int g_loop_iter;
+static void loopstamp(const char *phase) {
+    if (g_loop_iter > LOOPSTAMP_ITERS)
+        return;
+    printf("PRADYOS_LOOPSTAMP i=%d at=%s s=%ld\n",
+           g_loop_iter, phase, nsi(SYS_CLOCK, 0, 0, 0));
+    fflush(stdout);
 }
 
 /* ---- 8x8 font: only the glyphs the mode labels use (MSB = leftmost pixel) --- */
@@ -215,6 +252,51 @@ static void radial_glow(int cx, int cy, int r,
     }
 }
 
+/* DDR-1012: a full-width horizon band, centred on row cy, alpha falling off
+ * quadratically from peak_a at the centre to 0 at cy +/- half. Same shape as
+ * radial_glow's falloff and the same blend_px primitive, in one axis.
+ *
+ * Cost is 2*half*width blends -- ~90k at half=44 on a 1024-wide screen, i.e.
+ * CHEAPER than one radial (a 300px disc is ~280k). It inherits DDR-716 D3's
+ * guard: backdrops draw only on settled frames, never mid-OKLab-lerp. */
+/* DDR-1012 §4: read one pixel back out of the framebuffer, packed RGB, so the
+ * compositor can publish what it actually DREW rather than what it intended.
+ * A gate that only greps a sentinel tests a printf -- the vacuity trap DDR-973 §6
+ * and DDR-1008 each caught once. */
+static unsigned fb_sample(unsigned x, unsigned y) {
+    if (!g_fb || x >= g_fi.width || y >= g_fi.height) return 0;
+    const unsigned char *p = g_fb + (unsigned long)y * g_fi.stride + (unsigned long)x * 4;
+    return ((unsigned)p[2] << 16) | ((unsigned)p[1] << 8) | (unsigned)p[0];
+}
+
+static unsigned g_hz_pre, g_hz_post;    /* DDR-1012 §4: the band's own witness */
+static void horizon_band(int cy, int half,
+                         unsigned char cr, unsigned char cg, unsigned char cb, float peak_a) {
+    /* Sample the centre pixel BEFORE and AFTER, and publish both.
+     *
+     * The first version of this gate compared the band centre against a row
+     * above the band. That is VACUOUS: render() lays a per-row vertical gradient
+     * (DDR-723), so two different rows differ whether or not a band was drawn --
+     * the assertion would have passed on a no-op band. Same pixel, before and
+     * after, is the only comparison that isolates THIS draw. Caught by reading
+     * the assertion against render()'s gradient, before the gate was ever run. */
+    g_hz_pre = fb_sample((unsigned)(g_fi.width / 2), (unsigned)cy);
+    int y0 = cy - half, y1 = cy + half;
+    if (y0 < 0) y0 = 0;
+    if (y1 > (int)g_fi.height) y1 = (int)g_fi.height;
+    float h2 = (float)half * (float)half;
+    for (int y = y0; y < y1; y++) {
+        float dy = (float)(y - cy);
+        float a = peak_a * (1.0f - (dy * dy) / h2);
+        if (a <= 0.0f) continue;
+        for (unsigned x = 0; x < g_fi.width; x++)
+            blend_px(x, (unsigned)y, cb, cg, cr, a);
+    }
+    /* AFTER the band and before any caller draws over it -- DUSK's sun-bloom is
+     * laid down next and would otherwise contaminate the reading. */
+    g_hz_post = fb_sample((unsigned)(g_fi.width / 2), (unsigned)cy);
+}
+
 /* The settled per-ambiance backdrop (DDR-716, brief §1). Drawn only on settled
  * frames (not mid-OKLab-lerp — D3's perf guard); announces each ambiance's
  * first settled render and PRADYOS_BACKDROP_OK once all four have been seen. */
@@ -222,20 +304,45 @@ static int g_settled = 1;                 /* cleared during ambiance transitions
 static void render_backdrop(void) {
     unsigned w = g_fi.width, h = g_fi.height;
     switch (g_cur_amb) {
-    case 0:                                        /* DAWN: motes carry it */
+    case 0:                                        /* DAWN: motes + horizon band */
+        /* DDR-1012: DAWN was the ONLY ambiance with no backdrop at all -- this
+         * arm was a bare `break`. The rose band at 62% is its signature. */
+        horizon_band((int)(h * 62 / 100), 44, 0xFF, 0xA8, 0xC0, 0.18f);
         break;
     case 1:                                        /* DAY: 3-node gradient mesh */
         radial_glow((int)(w / 4),     (int)(h / 4),     (int)(w * 30 / 100), 0x8F, 0xC8, 0xFF, 0.20f);
         radial_glow((int)(w / 2),     (int)(h * 2 / 3), (int)(w * 25 / 100), 0xFF, 0xFF, 0xFF, 0.12f);
         radial_glow((int)(w * 3 / 4), (int)(h / 3),     (int)(w * 28 / 100), 0x1E, 0x50, 0xA0, 0.18f);
         break;
-    case 2:                                        /* DUSK: sun-bloom at 85%,90% */
+    case 2:                                        /* DUSK: horizon band + sun-bloom */
+        /* DDR-1012: the band goes down FIRST, at 88%, so the bloom centred at
+         * 90% rises out of it instead of floating above nothing. */
+        horizon_band((int)(h * 88 / 100), 40, 0xFF, 0x9A, 0x3C, 0.22f);
         radial_glow((int)(w * 85 / 100), (int)(h * 90 / 100), (int)(w * 35 / 100), 0xFF, 0x78, 0x1E, 0.25f);
         break;
     default:                                       /* NIGHT: two nebulas */
         radial_glow((int)(w * 30 / 100), (int)(h * 40 / 100), (int)(w * 600 / 1024), 0x12, 0x00, 0x24, 0.30f);
         radial_glow((int)(w * 70 / 100), (int)(h * 60 / 100), (int)(w * 500 / 1024), 0x00, 0x12, 0x20, 0.30f);
         break;
+    }
+    /* DDR-1012 §4: publish what was DRAWN, not that drawing was attempted.
+     * `in` samples the band centre, `out` samples 8 px clear of its top edge --
+     * ABOVE, deliberately: below the band DUSK's sun-bloom overlaps and would
+     * move the reference. The gate asserts in != out, which a no-op band fails. */
+    static unsigned char hz_said[4];
+    static int hz_ok_said;
+    if ((g_cur_amb == 0 || g_cur_amb == 2) && !hz_said[g_cur_amb]) {
+        int hcy   = (g_cur_amb == 0) ? (int)(h * 62 / 100) : (int)(h * 88 / 100);
+        int hhalf = (g_cur_amb == 0) ? 44 : 40;
+        hz_said[g_cur_amb] = 1;
+        (void)hhalf;
+        printf("PRADYOS_HORIZON %s y=%d pre=%06X post=%06X\n",
+               AMB[g_cur_amb].name, hcy, g_hz_pre, g_hz_post);
+        if (!hz_ok_said && hz_said[0] && hz_said[2]) {
+            hz_ok_said = 1;
+            printf("PRADYOS_HORIZON_OK\n");
+        }
+        fflush(stdout);
     }
     static unsigned char seen[4];
     static int all_announced;
@@ -684,9 +791,57 @@ static int min_box_hit(const struct surface_info *s, int x, int y) {
     return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
 }
 
+/* DDR-1007: the work area — the part of the screen a window may occupy.
+ *
+ * "Maximize at real display size" cannot mean the whole framebuffer, because the
+ * compositor draws chrome a maximized window must not cover, and the chrome
+ * DIFFERS BY MODE. DDR-893 made Manual a structurally different desktop rather
+ * than a restyle, so this has to branch on the mode or it is wrong in one of
+ * them:
+ *
+ *   Sovereign (mode != 0): 6 px accent bar on top; agent panel occupying the
+ *                          right 210 px (render_agent_panel / agent_card_hit).
+ *   Manual    (mode == 0): MANUAL_MENUBAR_H on top, MANUAL_TASKBAR_H at the
+ *                          bottom, and NO agent panel.
+ *
+ * Returns the area in framebuffer coordinates. Callers place window CONTENT
+ * TITLEBAR px below ay, because draw_window puts the title bar at s->y - TITLEBAR. */
+#define WA_MARGIN 8
+static void work_area(int mode, int *ax, int *ay, int *aw, int *ah) {
+    int W = (int)g_fi.width, H = (int)g_fi.height;
+    int top, bot, right;
+    if (mode) {                                  /* Sovereign */
+        top   = 6;                               /* accent bar (render()) */
+        bot   = H;
+        right = (g_fi.width >= 220) ? W - 210 : W;   /* mirrors render_agent_panel */
+    } else {                                     /* Manual */
+        top   = MANUAL_MENUBAR_H;
+        bot   = H - MANUAL_TASKBAR_H;
+        right = W;
+    }
+    *ax = WA_MARGIN;
+    *ay = top + WA_MARGIN;
+    *aw = right - *ax - WA_MARGIN;
+    *ah = bot   - *ay - WA_MARGIN;
+    if (*aw < 32) *aw = 32;
+    if (*ah < 32) *ah = 32;
+}
+
+/* The largest surface the compositor will ever ask for, in one axis. Clamped to
+ * SURFACE_DIM_MAX so a larger scanout degrades to the biggest legal surface
+ * instead of getting -EINVAL from sys_surface_resize. */
+#define SURFACE_DIM_MAX 1024                     /* MUST track sys_surface.c:17 */
+static int wa_clamp(int v) {
+    if (v < 32) return 32;
+    if (v > SURFACE_DIM_MAX) return SURFACE_DIM_MAX;
+    return v;
+}
+
 /* Maximize (DDR-719): saved per-id geometry + a toggle mask. The compositor
  * requests the size via the DDR-718 event channel and repositions the window;
- * the owner redraws. 512 = SURFACE_DIM_MAX (the largest legal surface). */
+ * the owner redraws. DDR-1007: the size is now the work area, not a hardcoded
+ * 512 -- that constant was SURFACE_DIM_MAX, which covered 26% of a 1024x768
+ * screen. */
 static unsigned g_max_mask;
 static int mx_x[16], mx_y[16];
 static unsigned short mx_w[16], mx_h[16];
@@ -694,6 +849,124 @@ static int max_box_hit(const struct surface_info *s, int x, int y) {
     int ty = s->y - TITLEBAR;
     int bx = s->x + (int)s->w - 3 * CLOSEBOX - 8;    /* third box, 2px gaps */
     return x >= bx && x < bx + CLOSEBOX && y >= ty + 3 && y < ty + 3 + CLOSEBOX;
+}
+
+/* ---- DDR-1008: the dock -- per-window restore -------------------------------
+ *
+ * DDR-717 shipped minimize complete on the HIDE side and left restore as one
+ * keystroke: `r` clears the whole mask. A user with three windows who minimizes
+ * one and wants it back has to un-minimize all three, and until they do there is
+ * nothing on screen saying the window still exists.
+ *
+ * The dock is a strip of tiles along the bottom, one per minimized window,
+ * drawn OVER the windows and present only while g_min_mask != 0.
+ *
+ * Three decisions, each with a cheaper wrong version:
+ *
+ *  - Tiles are ordered by ASCENDING SURFACE ID, not by z-order. SURFACE_POLL
+ *    returns z-sorted and z changes on every raise, so poll order would
+ *    reshuffle the dock when an unrelated window is clicked -- bad UI, and an
+ *    untestable target. DDR-910's finding was exactly that a gate silently
+ *    encoding window order broke when fair-share scheduling changed it.
+ *
+ *  - The dock is an OVERLAY and does not shrink DDR-1007's work area. If it did,
+ *    a maximized window would resize itself whenever an unrelated window was
+ *    minimized.
+ *
+ *  - SOVEREIGN ONLY. Manual already draws window buttons in its own taskbar
+ *    (render_manual), so a second strip above the first would be two docks.
+ *    Wiring those existing buttons to this same restore path is the Manual
+ *    answer and is a separate change -- recorded as not done, not skipped. */
+#define DOCK_TILE_W  96
+#define DOCK_TILE_H  24
+#define DOCK_GAP     4
+#define DOCK_MARGIN  8
+
+static int dock_tile_x(int slot) { return DOCK_MARGIN + slot * (DOCK_TILE_W + DOCK_GAP); }
+static int dock_tile_y(void)     { return (int)g_fi.height - DOCK_TILE_H - DOCK_MARGIN; }
+
+/* Fill `out` with the ids of minimized surfaces in ascending-id order; returns
+ * the count. Ids come from the live poll, so a minimized surface that has since
+ * been destroyed contributes no tile. */
+static int dock_ids(const struct surface_info *sf, long n, unsigned *out, int max) {
+    int cnt = 0;
+    for (unsigned id = 0; id < 16 && cnt < max; id++) {
+        if (!(g_min_mask & (1u << id))) continue;
+        for (long i = 0; i < n; i++)
+            if (sf[i].id == id) { out[cnt++] = id; break; }
+    }
+    return cnt;
+}
+
+static void draw_dock(const struct surface_info *sf, long n) {
+    if (!g_min_mask) return;
+    unsigned ids[16];
+    int cnt = dock_ids(sf, n, ids, 16);
+    int ty = dock_tile_y();
+    for (int k = 0; k < cnt; k++) {
+        int tx = dock_tile_x(k);
+        if (tx + DOCK_TILE_W > (int)g_fi.width) break;      /* dock is full */
+        glass_card((unsigned)tx, (unsigned)ty, DOCK_TILE_W, DOCK_TILE_H);
+        for (long i = 0; i < n; i++)
+            if (sf[i].id == ids[k] && sf[i].title[0])
+                draw_str(sf[i].title, tx + 8, ty + 9, 1, 0xE0, 0xE0, 0xF0);
+    }
+}
+
+/* Which dock tile is under (x,y), or -1. Mirrors draw_dock's layout exactly --
+ * one expression per coordinate, shared with the renderer through dock_tile_x /
+ * dock_tile_y so the clickable target cannot drift from the drawn one. */
+static int dock_hit(const struct surface_info *sf, long n, int x, int y) {
+    if (!g_min_mask) return -1;
+    unsigned ids[16];
+    int cnt = dock_ids(sf, n, ids, 16);
+    int ty = dock_tile_y();
+    if (y < ty || y >= ty + DOCK_TILE_H) return -1;
+    for (int k = 0; k < cnt; k++) {
+        int tx = dock_tile_x(k);
+        if (tx + DOCK_TILE_W > (int)g_fi.width) break;   /* same cut draw_dock makes */
+        if (x >= tx && x < tx + DOCK_TILE_W)
+            return (int)ids[k];
+    }
+    return -1;
+}
+
+/* DDR-1008 §3: publish tile centres in TABLET coordinates (§INV.5), latched on
+ * g_min_mask so the log carries one burst per change rather than one per frame.
+ *
+ * This CANNOT be folded into the block that emits PRADYOS_WM_GEOM. That block is
+ * guarded by `ns != composited || cur_focus != last_focus || geom_moved`, and
+ * minimizing changes none of the three -- not the surface count, not focus, not
+ * any surface's x/y/w/h. A dock line emitted only from there would never appear
+ * after a minimize, which is the only moment it matters. Found by reading the
+ * republish condition, not by a failing run.
+ *
+ * `n=` repeats on every line deliberately: it is what lets a gate assert that
+ * restoring one window left the others minimized, which is the whole difference
+ * between this and DDR-717's restore-all. */
+static unsigned g_dock_pub_mask = 0xFFFFu;      /* force a first publish */
+static void publish_dock(const struct surface_info *sf, long n) {
+    if (g_min_mask == g_dock_pub_mask) return;
+    g_dock_pub_mask = g_min_mask;
+    unsigned ids[16];
+    int cnt = dock_ids(sf, n, ids, 16);
+    int ty = dock_tile_y();
+    if (cnt == 0) {
+        printf("PRADYOS_WM_DOCK n=0\n");
+        fflush(stdout);
+        return;
+    }
+    for (int k = 0; k < cnt; k++) {
+        if (dock_tile_x(k) + DOCK_TILE_W > (int)g_fi.width) break;  /* undrawn */
+        const char *t = "-";
+        for (long i = 0; i < n; i++)
+            if (sf[i].id == ids[k] && sf[i].title[0]) t = sf[i].title;
+        printf("PRADYOS_WM_DOCK n=%d id=%u title=%s tile=%d,%d\n",
+               cnt, ids[k], t,
+               tab_x(dock_tile_x(k) + DOCK_TILE_W / 2),
+               tab_y(ty + DOCK_TILE_H / 2));
+    }
+    fflush(stdout);
 }
 
 
@@ -753,6 +1026,13 @@ static unsigned long long vdso_ns(void) {
 /* Period per ambiance, in NANOSECONDS. 900 s is the brief's cadence, stated
  * directly instead of as "1 500 000 iterations, which is about 900 s if the
  * compositor gets a typical share of a typical CPU". */
+/* DDR-1036: the set of surfaces published on the PREVIOUS frame, so a
+ * disappearance can be named. Keyed by id; title carried because that is what
+ * mouse_inject.sh matches on. */
+static unsigned g_pub_id[16];
+static char     g_pub_title[16][16];
+static long     g_pub_n;
+
 static unsigned long long g_cadence_ns = 900ULL * 1000ULL * 1000ULL * 1000ULL;
 static unsigned long long g_cad_start_ns;   /* 0 = not yet armed */
 static int g_cad_pre_said, g_cad_advances;
@@ -886,6 +1166,7 @@ static void recompose_drag(int cx, int cy) {
         long sva = nsi(SYS_SURFACE_CMAP, (long)sf[i].id, 0, 0);
         if (sva > 0) draw_window((const unsigned char *)sva, &sf[i]);
     }
+    draw_dock(sf, n);                    /* DDR-1008: overlay, above the windows */
     draw_cursor(cx, cy);
     present();
 }
@@ -900,7 +1181,9 @@ static void recompose_scene(void) {
         long sva = nsi(SYS_SURFACE_CMAP, (long)sf[i].id, 0, 0);
         if (sva > 0) draw_window((const unsigned char *)sva, &sf[i]);
     }
+    draw_dock(sf, n);                    /* DDR-1008: overlay, above the windows */
     present();
+    publish_dock(sf, n);                 /* DDR-1008 §3: latched on g_min_mask */
 }
 
 int main(void) {
@@ -930,12 +1213,15 @@ int main(void) {
 
     /* DDR-709: one-time demo cycle through the 4 ambiances (OKLab transitions),
      * then settle on the time-of-day ambiance from the RTC. */
+    loopstamp("pre-ambiance");        /* DDR-1029: five full-screen renders follow */
     for (int k = 0; k < 4; k++) {
         set_ambiance(k, 6);
         printf("PRADYOS_AMBIANCE %s\n", AMB[k].name);
         fflush(stdout);
+        loopstamp(AMB[k].name);       /* DDR-1029: cost of ONE ambiance render */
     }
     set_ambiance(ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0)), 6);   /* settle on time-of-day */
+    loopstamp("post-ambiance");
     printf("PRADYOS_AMBIANCE_OK\n");                               /* loop is about to start */
     fflush(stdout);
 
@@ -992,6 +1278,8 @@ int main(void) {
         pub_w[i] = pub_h[i] = 0xFFFF;
     }
     for (;;) {
+        g_loop_iter++;
+        loopstamp("top");
         /* DDR-709: real-time sun-driven ambiance — transition at hour boundaries. */
         int amb = ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0));
         if (amb != g_cur_amb) set_ambiance(amb, 8);
@@ -1056,6 +1344,43 @@ int main(void) {
         struct surface_info surfs[16];
         long ns = nsi(SYS_SURFACE_POLL, (long)surfs, 16, 0);
         int cur_focus = -1;
+
+        /* DDR-1036: tell the log when a window GOES AWAY.
+         *
+         * mouse_inject.sh resolves its click target from the newest
+         * PRADYOS_WM_GEOM for a title (DDR-910, which correctly removed
+         * hardcoded pixels). But the serial log is APPEND-ONLY, so a destroyed
+         * window's last geometry line is still sitting there and nothing in it
+         * says the window is gone -- measured at 45 clicks on a dead window in
+         * one capture (DDR-1028). That is how smoke-wmclose once reported
+         * "close box click did not close" about a window that no longer existed.
+         *
+         * A separate LINE, not a field on WM_GEOM: a gone window emits no
+         * WM_GEOM at all, which is precisely the symptom, so the record cannot
+         * ride on the line whose absence is the problem.
+         *
+         * Emitted OUTSIDE the re-composite branch below. A close does change
+         * `ns`, so that branch would fire -- but the diff is cheap and making it
+         * unconditional means the record does not depend on the branch's
+         * conditions staying what they are today.
+         *
+         * Keyed on ID, not on the poll index: the whole point is that an entry
+         * disappeared, which shifts every index after it (unlike pub_x[] above,
+         * which compares by position). */
+        for (long pi = 0; pi < g_pub_n; pi++) {
+            int still_here = 0;
+            for (long i = 0; i < ns; i++)
+                if (surfs[i].id == g_pub_id[pi]) { still_here = 1; break; }
+            if (!still_here)
+                printf("PRADYOS_WM_GONE id=%u title=%s\n",
+                       g_pub_id[pi], g_pub_title[pi][0] ? g_pub_title[pi] : "-");
+        }
+        g_pub_n = ns < 16 ? ns : 16;
+        for (long i = 0; i < g_pub_n; i++) {
+            g_pub_id[i] = surfs[i].id;
+            for (int c = 0; c < 16; c++) g_pub_title[i][c] = surfs[i].title[c];
+            g_pub_title[i][15] = 0;
+        }
         for (long i = 0; i < ns; i++) if (surfs[i].focused) cur_focus = (int)surfs[i].id;
         focus_id = cur_focus;
         int geom_moved = 0;                            /* DDR-997 */
@@ -1087,7 +1412,9 @@ int main(void) {
                     }
                 }
             }
+            draw_dock(surfs, ns);        /* DDR-1008: overlay, above the windows */
             present();
+            publish_dock(surfs, ns);     /* DDR-1008 §3 */
             if (ns > 0) {
                 printf("PRADYOS_ZORDER");
                 for (long i = 0; i < ns; i++) printf(" %u", surfs[i].id);
@@ -1179,6 +1506,7 @@ int main(void) {
          * stream before the byte stream: the driver no longer emits text for a
          * non-Shift chord (DDR-992 §2), so these are disjoint and Super+M can
          * no longer be undone by the plain-'m' branch below. */
+        loopstamp("pre-keys");
         {
             struct key_ev kev[16];
             long ne = nsi(SYS_KEY_POLL, (long)kev, 16, 0);
@@ -1207,6 +1535,53 @@ int main(void) {
                         fflush(stdout);
                         recompose_scene();
                     }
+                }
+                /* DDR-1027: Ctrl+Alt+T launches a PRISM terminal window.
+                 * fork+execve, NOT SYS_SPAWN_AGENT: that is the AETHER roster
+                 * path and would consume a fixed roster slot, mint agent
+                 * capabilities, and make a terminal show up in
+                 * SYS_AGENT_ROSTER as an autonomous agent. A terminal is an
+                 * application; fork+execve is the door PRISM's own `run` uses.
+                 *
+                 * Read from the DDR-991 event ring for the reason DDR-995
+                 * records: the byte stream carries no modifier state. DDR-992
+                 * went further and stopped a non-Shift chord emitting text at
+                 * all, so Ctrl+Alt+T produces no 't' byte and nothing on this
+                 * system loses the letter t. */
+                if (kev[i].code == 't') {
+                    /* Reported for EVERY 't' press, chord or not, with the
+                     * modifier byte and whether it spawned. A gate that only
+                     * saw successful spawns could not tell "Ctrl+Alt+T works"
+                     * from "any T spawns a terminal" -- and it cannot recover
+                     * that from spawn COUNTS either, because input_inject.sh
+                     * replays its whole key list four times and the cap below
+                     * clamps the total. This line makes the discrimination
+                     * itself observable: a spawn=1 whose mods lack KMOD_CTRL is
+                     * the defect, named. */
+                    int spawned = 0;
+                    if ((kev[i].mods & KMOD_CTRL) && (kev[i].mods & KMOD_ALT)) {
+                        /* Bounded so a stuck key cannot fork the machine
+                         * flat. The gate does reach this cap: the injector
+                         * replays its list four times, and four Ctrl+Alt+T
+                         * presses are four terminals, which is what a user
+                         * pressing it four times should get. */
+                        if (g_terms < 4) {
+                            long tp = nsi(SYS_FORK, 0, 0, 0);
+                            if (tp == 0) {
+                                nsi(SYS_EXECVE, (long)"/TERM.ELF", 0, 0);
+                                nsi(SYS_EXIT, 127, 0, 0);
+                            }
+                            if (tp > 0) {
+                                g_terms++;
+                                spawned = 1;
+                                printf("PRADYOS_TERM_SPAWN pid=%ld n=%d\n", tp, g_terms);
+                                fflush(stdout);
+                            }
+                        }
+                    }
+                    printf("PRADYOS_TERM_CHORD mods=%u spawn=%d\n",
+                           (unsigned)kev[i].mods, spawned);
+                    fflush(stdout);
                 }
                 if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
                     int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
@@ -1258,8 +1633,29 @@ int main(void) {
         /* Pointer (DDR-705/710): button-down on a window title bar starts a drag
          * (raise+focus, then move the window to follow the pointer until release);
          * a button-down elsewhere is a plain click. */
+        loopstamp("pre-mouse");
         struct mouse_state ms;
         if (nsi(SYS_MOUSE_POLL, (long)&ms, 0, 0) == 0) {
+            /* DDR-1028: the FIRST successful pointer poll, announced once.
+             *
+             * Every pointer gate's injector waits for PRADYOS_AMBIANCE_OK and
+             * then starts clicking. That sentinel is printed at compositor.c:1184
+             * -- "loop is about to start" -- and it does NOT mean the pointer is
+             * being serviced. Measured on smoke-wmclose: ambiance at t=5500 and
+             * mpoll STILL 0 at t=6000, with the first poll at t=6500. Ring 3 had
+             * not read the pointer once in the first 60 s of guest time, so a
+             * full second of injected clicks went into a compositor that was not
+             * looking. smoke-mouse survives that only because DDR-1026's latch
+             * holds the press until someone finally polls; smoke-wmclose cannot,
+             * because its target self-closes inside the gap.
+             *
+             * This is the honest readiness signal: it is printed from inside the
+             * branch that just read the pointer, so it cannot be true early. */
+            if (!g_input_said) {
+                g_input_said = 1;
+                printf("PRADYOS_INPUT_READY\n");
+                fflush(stdout);
+            }
             if (ms.wheel && focus_id >= 0) {             /* DDR-725: scroll to focus —
                                                           * type 2, delta in arg1
                                                           * (a3 packs arg0<<16|arg1) */
@@ -1284,8 +1680,34 @@ int main(void) {
             int up = !ms.buttons && prev_btn;
             if (down) {
                 click_ripple(ms.x, ms.y);                    /* DDR-727: ripple */
-                int card = agent_card_hit(ms.x, ms.y);       /* DDR-713: card first */
-                if (card >= 0) {                             /* trigger the agent via AETHER */
+                /* DDR-1008: the dock is drawn OVER the windows and the agent
+                 * panel, so it must be hit-tested first or a tile that is
+                 * visibly on top would be unclickable wherever it overlaps. */
+                int dock_id = -1;
+                if (g_min_mask) {
+                    struct surface_info dsf[16];
+                    long dn = nsi(SYS_SURFACE_POLL, (long)dsf, 16, 0);
+                    dock_id = dock_hit(dsf, dn, ms.x, ms.y);
+                    if (dock_id >= 0) {
+                        /* Clear ONLY this window's bit. `g_min_mask = 0` here
+                         * would be DDR-717's restore-all wearing this feature's
+                         * name -- and would pass a gate that only checks the
+                         * clicked window came back. See DDR-1008 §4. */
+                        g_min_mask &= ~(1u << (unsigned)dock_id);
+                        nsi(SYS_SURFACE_RAISE, (long)dock_id, 0, 0);   /* raise + focus */
+                        /* NOT "PRADYOS_WM_RESTORE_ONE": DDR-717 already prints
+                         * PRADYOS_WM_RESTORE, and `grep -q PRADYOS_WM_RESTORE`
+                         * in smoke-wmmin would match that as a PREFIX. Named
+                         * after UNMAX instead, which collides with nothing. */
+                        printf("PRADYOS_WM_UNMIN id=%d\n", dock_id);
+                        fflush(stdout);
+                        recompose_scene();
+                    }
+                }
+                int card = (dock_id >= 0) ? -1 : agent_card_hit(ms.x, ms.y);  /* DDR-713 */
+                if (dock_id >= 0) {
+                    /* handled above; fall through to the frame's tail */
+                } else if (card >= 0) {                             /* trigger the agent via AETHER */
                     long pid = nsi(SYS_SPAWN_AGENT, 0, (long)g_agents[card], card);
                     printf("PRADYOS_AGENT_TRIGGER name=%s slot=%d pid=%ld\n",
                            g_agents[card], card, pid);
@@ -1307,10 +1729,23 @@ int main(void) {
                                     mx_x[id] = sf[i].x; mx_y[id] = sf[i].y;
                                     mx_w[id] = (unsigned short)sf[i].w;
                                     mx_h[id] = (unsigned short)sf[i].h;
-                                    nsi(SYS_SURFACE_SENDEV, (long)id, 1, (512L << 16) | 512L);
-                                    nsi(SYS_SURFACE_MOVE, (long)id, 8, 26);
+                                    /* DDR-1007: fill the work area. The CONTENT
+                                     * origin is TITLEBAR below the area top,
+                                     * because the title bar is drawn above y. */
+                                    int ax, ay, aw, ah;
+                                    work_area((int)nsi(SYS_GET_MODE, 0, 0, 0),
+                                              &ax, &ay, &aw, &ah);
+                                    int mw = wa_clamp(aw);
+                                    int mh = wa_clamp(ah - TITLEBAR);
+                                    nsi(SYS_SURFACE_SENDEV, (long)id, 1,
+                                        ((long)mw << 16) | (long)mh);
+                                    nsi(SYS_SURFACE_MOVE, (long)id, ax, ay + TITLEBAR);
                                     g_max_mask |= 1u << id;
-                                    printf("PRADYOS_WM_MAX id=%u\n", id);
+                                    /* DDR-1007 §5: publish the size we ASKED
+                                     * for, so the gate asserts the client's ack
+                                     * against it instead of against a constant
+                                     * the gate already knew (§INV.5). */
+                                    printf("PRADYOS_WM_MAX id=%u w=%d h=%d\n", id, mw, mh);
                                 } else {                               /* restore */
                                     nsi(SYS_SURFACE_SENDEV, (long)id, 1,
                                         ((long)mx_w[id] << 16) | (long)mx_h[id]);
@@ -1454,8 +1889,9 @@ int main(void) {
                 if (rs_edge & RZ_S) newh = ms.y - y0;
                 if (rs_edge & RZ_W) neww = (x0 + w0) - ms.x;
                 if (rs_edge & RZ_N) newh = (y0 + h0) - ms.y;
-                if (neww < 32) neww = 32; if (neww > 512) neww = 512;
-                if (newh < 32) newh = 32; if (newh > 512) newh = 512;
+                /* DDR-1007 §4: same ceiling as maximize. Leaving this at 512
+                 * would let a user maximize to a size they cannot then drag to. */
+                neww = wa_clamp(neww); newh = wa_clamp(newh);
                 if (rs_edge & RZ_W) newx = (x0 + w0) - neww;
                 if (rs_edge & RZ_N) newy = (y0 + h0) - newh;
                 /* DDR-997 §3: MOVE first, then resize. The two are separate
