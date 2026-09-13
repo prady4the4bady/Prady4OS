@@ -4810,6 +4810,62 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1118 — the frame at `next->rsp` was CONSUMED, not corrupted (2026-09-13)
+
+**Kernel change (instrument only) + artefact resolved. NO FIX, NO CAUSE NAMED,
+OPEN-2 DOES NOT CLOSE (§NON-NEGOTIABLE 3).**
+
+**The SECOND `[schedcheck]` fire ever** — CI 34754906764 shard 3
+`smoke-nethammer` on `be0b2ad`, build job digest `f8574d7d6f0ba30e` at
+1,319,306 B, byte-identical to DDR-1116's binary (§INV.18). DDR-1116's `ret=`
+field **routed the investigation out of its own two-hypothesis split.**
+
+`[schedcheck] … tid=22 pid=22 rsp=0x07D03A10 base=0x07D00000 rflags=0x07D03A40
+r15=0xFFFFFFFF8001612D ret=0x0 halting.`
+
+**The reading of OPEN-2 inverts, on an instruction-exact derivation.**
+`finish_task_switch` opens `push rbp / mov rsp,rbp / sub $0x20,rsp /
+call this_cpu` **at +0x8**, and `this_cpu` opens `push rbp`. With **S** the value
+`context_switch` stored, resuming from S leaves `[S+0x08] =
+finish_task_switch+0xd` and `[S+0x00] = S+0x30` — **both observed slots, at
+exact offsets, no free parameters.** So `next->rsp` is a **correct saved rsp
+whose frame has already been CONSUMED**, and the scheduler is resuming the
+thread **a second time from the same spent value**: neither hypothesis (A) nor
+(B), but a third case the split did not contain. **The defect is the SECOND
+SWITCH, not the contents.**
+
+**Instrument shipped:** `rq_on=`, `disp=`, `saves=`. `on_cpu`/`state` are
+**refused** — `:1563-1564` set them before the check at `:1670`, so each would
+print a constant dressed as live state (the DDR-1093 trap). `dispatches` /
+`switches_away` form an **arithmetic identity**: `disp == saves + 1` on every
+healthy switch, `+2` on a double resume. **Printed, not judged — no fourth
+clause; the set of frames that fire is unchanged.**
+
+**Two corrections to DDR-1116**, both found here: its stated post-call return
+address was measured against the binary *before its own change*
+(`0x800166ef` vs the true `0x8001673d`; a shift of exactly `0x4e` = 78 = its own
+inserted code), which **neither of its mutants could have caught** because
+neither ever printed that member; and its `bad` expression **short-circuits**,
+so a misaligned `nrsp` skipped the bound while the emit block dereferenced
+`nrsp+0x08`/`+0x38` anyway — **DDR-1079's defect reintroduced by the change that
+cited DDR-1079**. Both fixed.
+
+**The line budget also overflowed and was fixed** — the *type-based* worst case
+was **260 against a usable 254**, which would have emitted `[kline] TRUNC` (a
+`GLOBAL_FORBIDDEN` pattern) and destroyed the artefact; `rq_on` now prints as a
+single `0`/`1`/`?` (better instrumentation *and* 9 bytes cheaper), recomputed
+**251**. `KLINE_MAX` deliberately not raised — 24 sites share it and one is in
+`schedule_locked`.
+
+**Proof is discrimination, not wiring:** four mutants, one shared fire trigger,
+each differing by one line. M1 `rq_on=0 disp=21 saves=20` (identity holds on a
+thread with 21 real dispatches — the load-bearing control), M2 `saves=19`
+(anomalous), M3 `rq_on=1`, M4 the out-of-window guard. LINELEN **197** of 256,
+measured. `kernel.bin` **size unchanged** at 1,319,306 B — only the hash
+discriminates (DDR-1097, fourth time in this lineage).
+
+---
+
 ## DDR-1117 — the OPEN-2 hunt workflow has never run and CANNOT be started (2026-09-13)
 
 **Assessment, docs-only. No code change, no gate, `kernel.bin` not rebuilt. NO DEFECT

@@ -1089,6 +1089,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_idle = 0;                  /* only the per-CPU idles set this */
     t->rq_next = 0;                  /* rq-1: not enqueued yet */
     t->rq_on = 0;
+    t->switches_away = 0;            /* DDR-1118; NON-NEGOTIABLE 10 */
     t->dbg_ebadf_seen = 0;           /* DDR-946 / §0.6: kmalloc does not zero */
     t->dbg_writes = 0;               /* DDR-948 / §0.6: kmalloc does not zero */
     /* DDR-895: creation-time snapshot. H2 predicts probe threads enter FAR
@@ -1672,7 +1673,20 @@ static void schedule_locked(uint64_t fl) {
         uint64_t nbase = next->kstack_base;
         /* 8 quadwords: RFLAGS, r15, r14, r13, r12, rbp, rbx, return address --
          * read off context.asm's push/pop sequence, not assumed. */
-        int bad = (nrsp & 7u) || nrsp < nbase || nrsp + 64u > nbase + STACK_SIZE;
+        /* DDR-1118 sec.8: the window bound is computed SEPARATELY and
+         * UNCONDITIONALLY. It used to be the second and third terms of one
+         * `||` chain, which SHORT-CIRCUITS: a misaligned nrsp set `bad` at the
+         * first term and the two comparisons were never evaluated -- while
+         * DDR-1116's emit block went on to dereference nrsp+0x08 and nrsp+0x38
+         * anyway. So a pointer that was BOTH misaligned AND outside the stack
+         * was followed in the report path, which is DDR-1079's defect exactly
+         * (the panic backtrace walker faulted mid-report and cost the machine a
+         * CPU) reintroduced by the change that cited DDR-1079 as its reason for
+         * care. DDR-1116 sec.4's claim that "clause 3 proved nrsp + 64 <=
+         * nbase + STACK_SIZE BEFORE any dereference" was true of the RFLAGS
+         * read, which is guarded by `!bad`, and FALSE of its own two reads. */
+        int outside = (nrsp < nbase) || (nrsp + 64u > nbase + STACK_SIZE);
+        int bad = (nrsp & 7u) || outside;
         uint64_t fl_slot = 0;
         if (!bad) {
             /* Safe ONLY because the two checks above passed. pushfq is the LAST
@@ -1766,22 +1780,90 @@ static void schedule_locked(uint64_t fl) {
              * cost of halting a CPU on the hottest path in the kernel. The set
              * of frames this fires on is UNCHANGED; only what it says changes.
              *
+             * LINE BUDGET -- DDR-1118 sec.8.1 found this line's TYPE-BASED
+             * worst case at 260 against KLINE_MAX 256, i.e. it would have
+             * emitted '[kline] TRUNC', which is in GLOBAL_FORBIDDEN and would
+             * DESTROY THE ARTEFACT THIS LINE EXISTS TO CARRY. The measured
+             * fires were 197 and 191 only because real tids and counters are
+             * small; DDR-1116's own discipline is the TYPE-based figure, and
+             * that is the one that was over. Recomputed with rq_on as a single
+             * character: 100 literal + 5*18 hex + 2*10 (tid/pid as uint32) +
+             * 1 (rq_on) + 2*20 (disp/saves as uint64) = 251, against a usable
+             * 254 (kline_c truncates when n + 1 >= KLINE_MAX). KLINE_MAX was
+             * deliberately NOT raised: 24 call sites share that constant and
+             * one of them is in this function, so widening it would grow the
+             * hottest frame in the kernel to buy margin a one-character field
+             * already buys.
              * Line budget measured, not assumed: KLINE_MAX is 256 and the worst
              * case here is 190 (tid/pid are uint32_t, <= 10 digits each), so the
              * addition cannot emit '[kline] TRUNC' -- which is in
              * GLOBAL_FORBIDDEN and would destroy the artefact it exists to
              * capture. Both loads are inside `if (bad)`, so the hot path pays
              * nothing (this is not DDR-1047's refused shape). */
-            kline_s(&k, " r15=");
-            kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x08u));
-            kline_s(&k, " ret=");
-            kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x38u));
+            /* Guarded on `outside`, not on `bad`: a misaligned-but-in-window
+             * pointer is still safe to read (x86 permits unaligned loads and
+             * the whole 64-byte window is inside the thread's own stack), and
+             * that is the commoner case worth reporting. An OUT-OF-WINDOW
+             * pointer is reported as `r15=? ret=?` and NOT followed --
+             * DDR-1079's rule that a distrusted pointer may be named but never
+             * dereferenced, which is what the absence marker preserves. */
+            if (!outside) {
+                kline_s(&k, " r15=");
+                kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x08u));
+                kline_s(&k, " ret=");
+                kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x38u));
+            } else {
+                /* An absence must NAME ITSELF (DDR-1049) -- "no r15= in the
+                 * capture" and "the window was out of bounds so we refused to
+                 * look" must not be the same observation. */
+                kline_s(&k, " r15=? ret=? (rsp outside its own stack)");
+            }
+            /* DDR-1118: the three tcb fields that are still VARIABLES here.
+             *
+             * on_cpu and state are NOT printed and that is a measured refusal,
+             * not an omission: :1563-1564 set them to `cpu` and THREAD_RUNNING
+             * before this block runs, so each would print a CONSTANT dressed as
+             * live state -- the DDR-1093 `leaked=` trap exactly.
+             *
+             * rq_on IS a variable: rq_take/rq_unlink clear it on the pop that
+             * selected this thread (:488, :598) and nothing on the path between
+             * that pop and here touches it, so a healthy switch reads 0 and a 1
+             * means the thread is ALSO sitting in some runqueue while this CPU
+             * is resuming it -- i.e. another CPU can pop and resume it too,
+             * which is the precondition for the double resume DDR-1118 derived.
+             *
+             * disp/saves are the identity: `disp == saves + 1` at this point on
+             * every healthy switch, and `disp == saves + 2` is a thread switched
+             * in twice with no save between -- the consumed-frame reading, as a
+             * number rather than as an argument about stack litter. */
+            /* Printed as 0 / 1 / '?', not as a raw number, for TWO reasons.
+             * (a) VALIDITY: rq_on has exactly two legal values, so anything
+             *     else means the tcb this check has just declared untrustworthy
+             *     is ALSO untrustworthy here -- and '?' says that, where a raw
+             *     garbage integer would read as a confident answer (DDR-1092's
+             *     rule, and the same shape as the kvalid= guard that DDR added).
+             * (b) BUDGET: as an int it is worth up to 10 digits in the
+             *     TYPE-BASED worst case, which is what pushed this line over
+             *     KLINE_MAX -- see the budget note below. */
+            {
+                int rq = __atomic_load_n(&next->rq_on, __ATOMIC_RELAXED);
+                kline_s(&k, " rq_on=");
+                kline_c(&k, rq == 0 ? '0' : (rq == 1 ? '1' : '?'));
+            }
+            kline_s(&k, " disp=");   kline_d(&k, next->dispatches);
+            kline_s(&k, " saves=");  kline_d(&k, next->switches_away);
             kline_s(&k, " halting.\r\n");
             kline_emit(&k);
             for (;;)
                 __asm__ volatile("hlt");
         }
     }
+    /* DDR-1118: count the switch-AWAY here, at the only site that reaches
+     * context_switch, so it pairs one-for-one with the switch-IN count taken
+     * under the claim at :1565. One increment on a cacheline this path already
+     * writes (prev->state above, prev->rsp inside the call), against DDR-1090's
+     * accepted precedent of two loads and a branch inside yield(). */
+    prev->switches_away++;
     context_switch(&prev->rsp, next->rsp);
     /* Resumed here later (possibly on a different CPU) as some earlier `prev`.
      * Release the thread THAT CPU just switched away from, then unmask. */

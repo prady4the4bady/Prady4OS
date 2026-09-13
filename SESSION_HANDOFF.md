@@ -6,6 +6,64 @@
 
 ---
 
+## CHECKPOINT 2026-09-13 — DDR-1118: the frame at `next->rsp` was CONSUMED, not corrupted
+
+**The `[schedcheck]` instrument fired a SECOND time and DDR-1116's `ret=` field
+routed the investigation OUT of its own two-hypothesis split. NO FIX, NO CAUSE
+NAMED, OPEN-2 DOES NOT CLOSE (§NON-NEGOTIABLE 3).**
+
+**Artefact:** CI 34754906764 shard 3 `smoke-nethammer` on `be0b2ad`. Build job
+digest **`f8574d7d6f0ba30e`** at 1,319,306 B — byte-identical to DDR-1116's
+binary, so every address resolved against the exact kernel that produced it
+(§INV.18). 9 of 10 shards green; current tip `cd7ac5c` all-green, both suites.
+
+**The finding, instruction-exact:** `finish_task_switch` opens
+`push rbp / mov rsp,rbp / sub $0x20,rsp / call this_cpu` **at +0x8**; `this_cpu`
+opens `push rbp`. With **S** the value `context_switch` stored, resuming from S
+leaves `[S+0x08] = finish_task_switch+0xd` and `[S+0x00] = S+0x30` — **both
+observed slots, exact offsets, no free parameters.** `next->rsp` is a **correct
+saved rsp whose frame was ALREADY CONSUMED**; the scheduler resumed the thread a
+**second time from the same spent value**. **The defect is the SECOND SWITCH,
+not the contents** — which inverts the reading carried since DDR-1099.
+
+**Shipped (instrument only):** `rq_on=`, `disp=`, `saves=` on the halt line.
+`on_cpu`/`state` **refused** (set at `:1563-1564`, before the check at `:1670` —
+they would print constants, the DDR-1093 trap). `dispatches`/`switches_away` are
+an **arithmetic identity**: `disp == saves + 1` healthy, `+2` = double resume.
+**No fourth clause — the set of frames that fire is UNCHANGED.**
+
+**Two corrections to DDR-1116, both found here:** (a) its post-call return
+address was measured against the binary *before its own change* — `0x800166ef`
+vs the true **`0x8001673d`**, a shift of exactly `0x4e` = 78 = its own inserted
+code — and **neither of its mutants ever printed that member**, so nothing could
+have caught it; (b) its `bad` expression **short-circuits**, so a misaligned
+`nrsp` skipped the window bound while the emit block dereferenced `nrsp+0x08` /
+`+0x38` anyway — **DDR-1079's defect reintroduced by the change that cited
+DDR-1079**. Both fixed; out-of-window now prints `r15=? ret=? (rsp outside its
+own stack)` and is not followed.
+
+**Proof:** four mutants, one shared trigger, each differing by ONE line.
+M1 `rq_on=0 disp=21 saves=20` (identity HOLDS on a thread with 21 real
+dispatches — the load-bearing control), M2 `saves=19` (+2, anomalous),
+M3 `rq_on=1`, M4 out-of-window guard (a path M1-M3 cannot reach). LINELEN 197 /
+191 against `KLINE_MAX` 256, measured.
+
+**Clean kernel `10ff3fb1ebfb8f00`, size UNCHANGED at 1,319,306 B** — only the
+hash discriminates (DDR-1097, fourth time in this lineage); the size/headroom
+pair and `ci-docstate-check` (3/3 OK) are unaffected. 179 gates,
+`GLOBAL_FORBIDDEN` 77, 79 probe ELFs, no open issue moves.
+
+**A measurement defect of my own, recorded:** the first mutant run reported
+`MEASUREMENT-BROKEN` and **the harness was wrong, not the kernel** —
+`boot_test.sh`'s `serial_keep_fail` copies a failing run's capture to
+`${SERIAL_LOG}.fail-$$` and removes the original, and every mutant here fails by
+design. **The guard is what made it cheap** (assert non-empty, print
+MEASUREMENT-BROKEN, never "0 fires" — DDR-1092). **Carry: a run that fails on
+purpose does not leave its capture where a passing run would.**
+
+---
+
+
 ## 0. RESUME INSTRUCTION (read this first, act in this order)
 
 > **"NET-B (lwIP) AND Layer 6 (AETHER) are COMPLETE and CI-green. AETHER ships

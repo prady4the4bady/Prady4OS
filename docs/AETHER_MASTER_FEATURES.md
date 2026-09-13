@@ -1866,6 +1866,19 @@ pointer — 8-aligned, within its own kernel stack with room for the 64-byte
 `context_switch` frame, and only then the RFLAGS slot at `[rsp+0]` with
 `TF|DF|IOPL` clear, **bit 1 set and bits 22..63 zero** (DDR-1115, the two clauses that hold by the ISA rather than by this kernel's habits) — and on failure prints `[schedcheck] … tid= pid= rsp= base= rflags= r15= ret= halting.` and stops. **DDR-1116** added `r15` and the **return slot**: the frame is eight quadwords and the line printed one, so the return address — whose legal set has exactly **two** members in any given binary (after the unique `call context_switch`, or `&thread_trampoline` from the seed) — now separates *a real frame with corrupt content* from *a pointer that does not address a frame at all*. It is **printed, not judged**: no clause tests it, so the set of frames that fire is unchanged.
 
+**UPDATED 2026-09-13 — DDR-1118: it fired a SECOND time, and the line now also
+carries `rq_on=`, `disp=` and `saves=`.** `next->on_cpu` and `->state` are
+deliberately **not** printed: `sched.c:1563-1564` set them before the check runs,
+so each would print a constant dressed as live state (the DDR-1093 trap).
+`dispatches`/`switches_away` are an **arithmetic identity** — `disp == saves + 1`
+on every healthy switch, `disp == saves + 2` on a thread switched in twice with
+no save between. **Printed, not judged: no fourth clause, and the set of frames
+that fire is unchanged.** DDR-1118 also fixed a real defect in the emit block —
+the `bad` expression **short-circuits**, so a misaligned `next->rsp` skipped the
+window bound while the two DDR-1116 reads went ahead anyway; the bound is now
+computed unconditionally and an out-of-window pointer prints
+`r15=? ret=? (rsp outside its own stack)` and is **not followed** (DDR-1079).
+
 **UPDATED 2026-09-13 — DDR-1115, and the instrument has now FIRED for the first
 time.** The RFLAGS test gained two **architectural** clauses beside that mask,
 which is **kept not replaced**: **bit 1 is reserved-ONE** on x86_64 and **bits

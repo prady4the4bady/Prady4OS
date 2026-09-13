@@ -208,6 +208,20 @@ struct tcb {
      * running CPU; schedule() under the on_cpu claim) — lock-free by exclusion. */
     uint64_t   run_ticks;       /* 100 Hz ticks observed while current (sampled CPU time) */
     uint64_t   dispatches;      /* times the scheduler switched this thread in           */
+    /* DDR-1118: times the scheduler switched this thread AWAY -- the partner of
+     * `dispatches`, and together they are an ARITHMETIC IDENTITY rather than a
+     * heuristic (the shape DDR-1063 found actually works). A thread is switched
+     * in, then away, then in: so at the moment schedule_locked has claimed it
+     * and is about to resume it, `dispatches` (incremented under the claim at
+     * :1565) must be exactly `switches_away + 1`. `disp - saves == 2` says the
+     * thread was switched IN twice with no intervening save -- i.e. resumed a
+     * second time from a ->rsp that had already been consumed, which is the
+     * reading DDR-1118 derived from the second [schedcheck] artefact.
+     * PRINTED, NOT JUDGED: the increments are plain (non-atomic) and sched_exit
+     * leaves by a path that does not pass the save site, so the identity holds
+     * by the code's habits and NOT by construction -- exactly the test DDR-1116
+     * refused to promote into a clause on the hottest path in the kernel. */
+    uint64_t   switches_away;
     /* DDR-955: bounded-wait fields */
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */
