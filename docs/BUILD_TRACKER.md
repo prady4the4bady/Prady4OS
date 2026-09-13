@@ -4810,6 +4810,43 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1117 — the OPEN-2 hunt workflow has never run and CANNOT be started (2026-09-13)
+
+**Assessment, docs-only. No code change, no gate, `kernel.bin` not rebuilt. NO DEFECT
+IN THE WORKFLOW FILE — the defect is in WHERE THE FILE LIVES.**
+
+DDR-1097 built `.github/workflows/open2-hunt.yml` as operator approach #1, with a
+weekly cron it calls approach #4. **Measured:** `list_workflows` returns **two**
+workflows (`ci.yml`, Dependabot) and this is not one of them; the runs endpoint is
+**404**; the default branch is **`dev/phase1`** and the file is **ABSENT** there and
+from `main`, carried only by `dev/phase1-seyp3n` since `709d0e2`.
+
+**The file is correct** — its `on:` block was *parsed*, not eyeballed, and carries both
+`workflow_dispatch` and `schedule: '17 4 * * 0'`. **The mechanism is GitHub's and it
+defeats both triggers at once:** `schedule:` is honoured only from the default branch,
+and `workflow_dispatch` is exposed only for workflows on it. A workflow living on a
+feature branch alone is **not merely unscheduled — it is unstartable by any means.**
+
+**DDR-1043's class one level up** (*the one instrument that could answer the question
+was switched off in CI, the only place the failure has ever been seen*) — and a shape
+**no amount of reading the file could catch**: DDR-1097 found three real defects
+*inside* it before it ever ran; this fourth one is in its **location**.
+
+**NOT affected:** DDR-1097's harness is proven and that proof stands (forced kernel →
+`signal_runs=1`; real hunt kernel → **3/3 `signal_runs=0`**), all **local**. No gate is
+affected (179 unchanged) and **the release is not blocked** — the hunt is an
+investigation tool, not a gate. What never happened is the **CI-side arm**, the only
+part that could have produced a new artefact.
+
+**Remedy is operator-owned and NOT taken:** the file must reach `dev/phase1`, either by
+merging PR #17 or by landing it there directly — both pushes to a branch this session
+may not touch. **Measured and reported, not merged.** Note for whoever lands it: the
+first cron fire is then up to a **week** out, so a manual `workflow_dispatch` is what
+actually starts the hunt.
+
+**OPEN-2 does not move** — no mechanism named, no artefact produced, still **one
+`[schedcheck]` fire ever**. `GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs.
+
 ## DDR-1116 — the fire prints ONE word of an EIGHT-word frame, and the sharpest witness is the one it omits (2026-09-13)
 
 **Instrument change only. NO FIX, NO CAUSE NAMED, OPEN-2 DOES NOT CLOSE. No new
