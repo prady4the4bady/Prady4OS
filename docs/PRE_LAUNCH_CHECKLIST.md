@@ -1304,6 +1304,29 @@ that is unblocked. Also `smoke-sfs-largefile`,
 `smoke-sfs-deepslot`, `smoke-sfs-quota`, `smoke-ext4-write`, `smoke-nas`,
 `smoke-pmmpolicy`, `smoke-nvmeirq`.
 
+> **THREE OF THAT TRAILING LIST ARE NOT WHAT THEY LOOK LIKE — applying DDR-1103,
+> whose measurement never reached this section (recorded 2026-09-13).**
+> **`smoke-nas` IS A CATEGORY ERROR:** a tree-wide grep returns, apart from
+> Keccak's unrelated FIPS 202 lanes, **exactly one** relevant line —
+> `kernel/proc/sched.h:5`, *"The 3-lane adaptive scheduler (**NAS**) from the
+> Layer-2 board layers on later."* **NAS is this project's own name for the
+> PROCESS SCHEDULER**, and the row files it under storage; there is no lane
+> concept anywhere in `kernel/drivers/blk`, `ahci` or `nvme`, so a session
+> picking it up searches the block layer and finds nothing, with no criterion to
+> tell them they are in the wrong subsystem. **`smoke-nvmeirq` is HALF BUILT and
+> its stated blocker is RETIRED:** `nvme.c:9` says *"no NVMe IRQ"* while
+> `nvme.c:150` **is** `msix_register(NVME_MSIX_VEC, nvme_msix_isr)` — DDR-774b's
+> MSI-X plumbing is present and registered; what is absent is the completion path
+> *using* it. It stays deferred on the **pre-approved exception's** ground
+> (poll-mode sufficient for ISO), **not** on "until B#3 SMP is stable", which
+> DDR-981 closed. **`smoke-sfs-largefile` now has a number:** 16,384 B, and
+> DDR-1100 split it into **three** ceilings of which only `inline_extents[4]` is
+> the on-disk format — the other two are a kernel staging buffer and mkfs's
+> packing, neither with an on-disk consequence. **`smoke-sfs-quota` carries a
+> trap:** ADR-032's token bucket is a per-thread write **RATE** limit; a quota is
+> a per-mount **SPACE** bound. Same word, different quantity, different
+> enforcement point.
+
 **Group D update (DDR-1037):** `smoke-poll` now EXISTS — `SYS_POLL` (NSI 102)
 shipped, mutation-checked M1/M2/M3 on distinct kernel hashes. Two limits recorded
 rather than papered over: **console `POLLIN` is unimplementable here** (this
@@ -1358,6 +1381,32 @@ sentinel `PRADYOS_TLS_OK WRITEV_OK` is a **required pattern of `smoke-user`**
 work and is NOT another DDR-1063 §7c instance** — §7c is about a name for work
 already *done*; counting this would inflate the class, the same call DDR-1069
 made for the other Group C names.
+
+> **THAT GREP IS CORRECT AND IT PROVES A NARROWER THING THAN IT READS AS —
+> applying DDR-1104, whose measurement never reached this section (recorded
+> 2026-09-13), and this correction is in the DANGEROUS direction.** It shows no
+> TLS **library** is vendored. It does **not** show the cryptography is missing,
+> and **the cryptography is already here**, in pure C with no stdlib and no
+> allocation: **ChaCha20-Poly1305 AEAD** (`aead.h`, RFC 8439, DDR-819),
+> **X25519** (`x25519.h`, RFC 7748, DDR-820) and **HKDF-SHA256** (`hkdf.h`, RFC
+> 5869, DDR-818) — and **`TLS_CHACHA20_POLY1305_SHA256` is a real TLS 1.3 cipher
+> suite whose every primitive is on that list**, X25519 being TLS 1.3's default
+> key-share group and HKDF-SHA256 being precisely its key schedule (RFC 8446
+> §7.1). **So the remaining work is the record layer, the handshake state machine,
+> and X.509 parsing plus A TRUST ANCHOR — and the trust anchor is DDR-1059's
+> problem unchanged:** no TPM, no PCRs, no secure boot anywhere in `kernel/` or
+> `boot/`, and the only key material is **32 literal bytes compiled into the
+> image**. A TLS client that cannot anchor trust independently of the artefact it
+> ships in is the DDR-1059 shape — *"we have TLS"* without a trust store is the
+> same claim as *"post-quantum signed ledger"* without key custody, **which
+> DDR-1059 already refused**. The row's own constraint also contradicts itself:
+> it said *"mbedTLS or equivalent; **no out-of-tree libs in OS image**"*, and
+> mbedTLS **is** an out-of-tree library — while `third_party/` already holds
+> **lwip** (linked into the kernel) and **musl** (linked into user programs).
+> **THIS RELOCATES THE BLOCKER AND DOES NOT SHRINK IT:** left as written, this
+> paragraph sends a session to import a library that duplicates shipped in-tree
+> code, and names none of what would actually stop them shipping something
+> trustworthy.
 
 **Group D — userspace (all MISSING except as noted).** `smoke-poll` was listed
 here as MISSING while the DDR-1037 paragraph immediately above said it EXISTS —
