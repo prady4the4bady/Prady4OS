@@ -4810,6 +4810,66 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1116 — the fire prints ONE word of an EIGHT-word frame, and the sharpest witness is the one it omits (2026-09-13)
+
+**Instrument change only. NO FIX, NO CAUSE NAMED, OPEN-2 DOES NOT CLOSE. No new
+clause, no new gate, no new sentinel.**
+
+`context_switch` saves **eight** quadwords and the `[schedcheck]` halt line printed
+exactly **one** of them (the RFLAGS slot), so DDR-1115 could reach *"only the frame's
+CONTENT is wrong"* **and no further** — **strictly less than the panic dump it
+replaced**, since DDR-1099 had **two** independent witnesses (RFLAGS *and* R15) and
+needed both, while DDR-1115 §2 had to concede that which CPU halted *"is an
+inference"*.
+
+**The return slot is the sharpest witness the frame offers**, because its legal set
+has **exactly two members**, measured in this binary rather than carried from another
+(§INV.18): `0xffffffff800166ef` (after the kernel's *only* `call context_switch`) and
+`0xffffffff800160d0` = `&thread_trampoline` (the seed at `sched.c:1182`). The
+enumeration was **checked for a third** — `fork` constructs no frame; it reuses that
+same seed via `sched_create_state`.
+
+It separates **two hypotheses that are today the same observation**: (A) a real frame
+whose content was overwritten → `ret` reads one of the two; (B) a pointer that does not
+address a frame at all, inside the thread's own window so clauses 2 and 3 pass exactly
+as observed → `ret` reads neither. DDR-996's freed-while-queued family and DDR-1096
+§3's unlocked ring walk live under **(B) only**.
+
+**Safe by the clauses that already ran**, not by a new argument: clause 3 proved
+`nrsp + 64 <= nbase + STACK_SIZE` and 8-alignment *before* any dereference, and the
+frame is 64 bytes, so `+0x08` and `+0x38` sit inside that same window. Values are
+**printed, never dereferenced** (DDR-1079).
+
+**Deliberately NOT a fourth clause** — the load-bearing refusal. DDR-1115's new clauses
+were admissible only because they hold **by the ISA**; *"ret must be one of two
+addresses"* holds only by an enumeration of today's tree — a **policy** test, the exact
+thing DDR-1115 §3 criticised — and a future path seeding a frame differently would
+falsify it **silently**, at the cost of halting a CPU on the hottest path. The set of
+frames that fire is **unchanged**.
+
+**Proof is the discrimination, not the wiring** (the vacuity check was done first):
+M1 (`e89ef5d01e8679ec`, a genuine frame with one word corrupt) prints
+`ret=0xFFFFFFFF800160D0` — a **legal** value; M2 (`8f9a6e8bb7a2ad4d`, window placed
+below the frame) prints `ret=0x0` — **neither**. Had both printed the same the field
+would be decoration. M2's zero is a **tidy** witness because that heap happened to be
+zero (`kmalloc` does not zero, §NON-NEGOTIABLE 10) — stated rather than glossed.
+`LINELEN=170` of `KLINE_MAX` 256, measured, so no `[kline] TRUNC`.
+
+**Also recorded:** `33fa80a` took **both** suites green (**20 shard jobs, all
+SUCCESS**) on DDR-1115's binary — its two architectural clauses ran on every shard at
+real CI timing with **zero false positives** — and **no second fire**. Still **one
+occurrence ever; no rate claimed**.
+
+**A third measurement defect of my own:** the first build reported the hash unchanged
+*although `sched.o` had already been removed* — `make image | grep -iE 'error|warning'
+| head -20` matched the `-Werror` in every compile line, `head` closed the pipe, and
+**SIGPIPE killed `make` mid-build**, so the link never ran. DDR-1048's pipeline lesson,
+in my own tooling, twice in one session. **Caught only by hashing.**
+
+`kernel.bin` `f8574d7d6f0ba30e`, **1,319,306 B — size unchanged**, so only the hash
+discriminates (DDR-1097, third time in this lineage). 179 gates, `GLOBAL_FORBIDDEN`
+77, hygiene ALL EIGHT. Revert bit-for-bit.
+
 ## DDR-1115 — the `[schedcheck]` instrument FIRED, and its RFLAGS clause was a policy heuristic where two architectural invariants were available (2026-09-13)
 
 **NO FIX. NO CAUSE NAMED. OPEN-2 DOES NOT CLOSE.** (§NON-NEGOTIABLE 3.)

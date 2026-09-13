@@ -1730,6 +1730,52 @@ static void schedule_locked(uint64_t fl) {
             kline_s(&k, " rsp=");      kline_x(&k, nrsp);
             kline_s(&k, " base=");     kline_x(&k, nbase);
             kline_s(&k, " rflags=");   kline_x(&k, fl_slot);
+            /* DDR-1116: the frame is EIGHT quadwords and this line used to print
+             * ONE of them, so DDR-1115 could get as far as "only the frame's
+             * CONTENT is wrong" and no further -- strictly LESS than the panic
+             * dump DDR-1099 read, which had TWO independent witnesses (RFLAGS
+             * and R15) and needed both to say what it said.
+             *
+             * The RETURN slot is the sharpest witness the frame offers because
+             * its legal set has EXACTLY TWO members, measured in this binary
+             * rather than carried from another (INV.18): the address after the
+             * kernel's ONLY `call context_switch`, and &thread_trampoline from
+             * the seed at :1182 -- the only two sites in the tree that write a
+             * return address into a frame (fork does NOT construct one; it
+             * reuses this same seed via sched_create_state). So it separates
+             * the two hypotheses that are TODAY THE SAME OBSERVATION: a REAL
+             * frame with corrupt content (ret reads one of the two) from a
+             * pointer that does not address a frame at all (ret reads neither)
+             * -- different defects with different fixes. r15 is printed beside
+             * it as the second witness, DDR-1099's own pair; the seed writes 0
+             * to all six GP slots, so 0 there is itself an answer.
+             *
+             * SAFE BY THE CLAUSES THAT ALREADY RAN, not by a new argument:
+             * clause 3 proved nrsp + 64 <= nbase + STACK_SIZE and 8-alignment
+             * BEFORE any dereference, and the frame is 64 bytes, so +0x08 and
+             * +0x38 are inside the very window that bound was written for.
+             * PRINTED, NEVER DEREFERENCED (DDR-1079: a distrusted pointer may
+             * be reported but not followed).
+             *
+             * DELIBERATELY NOT A FOURTH CLAUSE. DDR-1115's two new clauses were
+             * admissible because they hold BY THE ISA and so cannot fire on a
+             * legitimate value; "ret must be one of two addresses" holds only by
+             * an enumeration of today's tree -- a POLICY test, the exact thing
+             * DDR-1115 sec.3 criticised in the mask -- and a future signal/exec
+             * path seeding a frame differently would falsify it SILENTLY, at the
+             * cost of halting a CPU on the hottest path in the kernel. The set
+             * of frames this fires on is UNCHANGED; only what it says changes.
+             *
+             * Line budget measured, not assumed: KLINE_MAX is 256 and the worst
+             * case here is 190 (tid/pid are uint32_t, <= 10 digits each), so the
+             * addition cannot emit '[kline] TRUNC' -- which is in
+             * GLOBAL_FORBIDDEN and would destroy the artefact it exists to
+             * capture. Both loads are inside `if (bad)`, so the hot path pays
+             * nothing (this is not DDR-1047's refused shape). */
+            kline_s(&k, " r15=");
+            kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x08u));
+            kline_s(&k, " ret=");
+            kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x38u));
             kline_s(&k, " halting.\r\n");
             kline_emit(&k);
             for (;;)
