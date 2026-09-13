@@ -32,7 +32,17 @@
 #define SYS_MEMORY_READ         83
 #define SYS_SUBMIT_CHILD_ACTION 92
 
-#define ACTION_PRINT 1
+/* DDR-1013: this read `1`, which is ACTION_WRITE_FILE. aether.h pins the wire
+ * format with a _Static_assert -- ACTION_WRITE_FILE == 1, ACTION_PRINT == 2 --
+ * so every action this probe submitted was recorded in the audit log as a
+ * file write while every line here called it a print.
+ *
+ * It never failed a gate, and that is the point: smoke-actiondag asserts only
+ * PRADYOS_ACTIONDAG_OK / _SUBMIT_OK, and the DAG logic is type-agnostic. The two
+ * types also coincide on the one type-SENSITIVE predicate in the path --
+ * aether_action_forces_pending() -- because neither is in the force-pending set.
+ * Change either of those and the gate silently changes meaning. */
+#define ACTION_PRINT 2
 #define AETHER_MODE_MANUAL 0
 
 #define EPERM   1

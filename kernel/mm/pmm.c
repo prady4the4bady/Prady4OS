@@ -185,7 +185,14 @@ uint64_t pmm_alloc_pages(unsigned order) {
     return addr;                        /* 0 == out of memory at this size */
 }
 
-void pmm_free_pages(uint64_t addr, unsigned order) {
+/* DDR-1065: returns 1 if frames were ACTUALLY RELEASED, 0 if this call only
+ * dropped a reference (COW) or was rejected as a double free. ptnode_free needs
+ * this to keep ptnode_in_use honest: it used to decrement unconditionally, so a
+ * COW-shared page decremented TWICE (once per address space) against ONE
+ * increment at ptnode_alloc, and kheap_outstanding() drifted down and wrapped.
+ * Callers that ignore the value are unaffected -- void->int is source-compatible
+ * and there is no warn_unused_result here, so all 132 existing call sites stand. */
+int pmm_free_pages(uint64_t addr, unsigned order) {
     uint64_t fl = irq_save();
     /* COW: a single frame with other owners is only dereferenced, not freed (and
      * must NOT be poisoned — another address space still maps it). */
@@ -194,7 +201,7 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
         if (idx < PMM_NFRAMES && pmm_refcount[idx] > 1) {
             pmm_refcount[idx]--;
             irq_restore(fl);
-            return;
+            return 0;                   /* DDR-1065: reference dropped, NOT released */
         }
         /* DDR-830: refcount 0 means this frame is ALREADY on the free list.
          * Absorbing the second free would push it on twice, and the allocator
@@ -208,7 +215,7 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
             kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
             kputs("\r\n");
             irq_restore(fl);
-            return;
+            return 0;                   /* DDR-1065: rejected, nothing released */
         }
     }
     rc_set(addr, order, 0);             /* actually freeing now: clear refcount(s) */
@@ -238,10 +245,11 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
     }
     list_push(fnode, order, addr);
     irq_restore(fl);
+    return 1;                           /* DDR-1065: frames actually released */
 }
 
 uint64_t pmm_alloc_page(void)        { return pmm_alloc_pages(0); }
-void     pmm_free_page(uint64_t a)   { pmm_free_pages(a, 0); }
+int      pmm_free_page(uint64_t a)   { return pmm_free_pages(a, 0); }
 uint64_t pmm_free_page_count(void)   { return free_pages; }
 uint64_t pmm_total_page_count(void)  { return total_pages; }  /* DDR-752 */
 

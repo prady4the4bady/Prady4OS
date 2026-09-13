@@ -47,7 +47,7 @@
 #define SYS_REJECT_ACTION  34  /* (action_id) -> 0 | -EPERM  (CAP_SOVEREIGN)        */
 #define SYS_SPAWN_AGENT    35  /* (path*, task*) -> pid | -EPERM   (CAP_AGENT)      */
 #define SYS_KILL_AGENT     36  /* (pid) -> 0 | -EPERM|-ESRCH       (CAP_AGENT)      */
-#define SYS_READ_AUDIT     37  /* (buf*, max) -> n entries copied                   */
+#define SYS_READ_AUDIT     37  /* (buf*, max, cursor*|0) -> n copied (DDR-1098)     */
 #define SYS_SET_MEM_LIMIT  38  /* (pid, bytes) -> 0 | -EPERM (lower-only)           */
 /* Ring-3 proxy sockets (ADR-027). Append-only after 38. */
 #define SYS_SOCK_CONNECT   39  /* (host_be, port) -> fd(0..7) | -errno              */
@@ -166,6 +166,19 @@
 /* DDR-866 (item 20): set an open file's length. Grows with zeros, shrinks by
  * discarding the tail. Appended at 94 — the next free NSI, per DDR-832. */
 #define SYS_KEY_POLL       96  /* (buf, max) -> count of struct key_ev (DDR-991)   */
+#define SYS_MPROTECT       97  /* (addr, len, prot) -> 0 | -EINVAL|-EACCES|-ENOMEM (DDR-1031) */
+#define SYS_IPC_SEND       98  /* (slot, const uint64_t msg[4]) -> 0 | -EPERM|-EINVAL|-EFAULT (DDR-1033) */
+#define SYS_IPC_RECV       99  /* (slot, uint64_t out[4], timeout_ticks) -> 0 | -EPERM|-EINVAL|-EFAULT|-ETIMEDOUT */
+/* DDR-1034: the bounded experiment executor. 100 runs a program in a stack
+ * machine with no memory opcodes and a hard step cap (is_exec + CAP_EXEC); 101
+ * reads the kernel-written results store, whose only writer is the executor
+ * (is_exec or CAP_SOVEREIGN -- write integrity, not read privacy). */
+#define SYS_RUN_EXPERIMENT 100 /* (code, len, int64_t *out) -> 0 | -EPERM|-EINVAL|-EFAULT|-ELOOP|-EOVERFLOW */
+#define SYS_EXP_RESULT     101 /* (idx, exp_result_t *out)  -> 0 | -EPERM|-EINVAL|-ENOENT|-EFAULT */
+/* DDR-1037: POSIX poll(). NOT to be confused with SYS_POLL_RESULT (32), which is
+ * the AETHER action poll -- the names are close enough to mislead a reader, so
+ * the distinction is recorded here rather than left to be rediscovered. */
+#define SYS_POLL           102 /* (struct pollfd *, nfds, timeout_ms) -> nready | -EINVAL|-EFAULT */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */
 #define SYS_FTRUNCATE      94  /* (fd, len) -> 0 | -EBADF|-EINVAL|-EPERM|-EIO  */
 #define SYS_VERIFY_AUDIT   93  /* (bad_idx_ptr) -> 0 intact | -EACCES broken | -EPERM */

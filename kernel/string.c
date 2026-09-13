@@ -1,11 +1,25 @@
 /* kernel/string.c — freestanding mem* implementations. */
 #include "string.h"
 
+/* DDR-1076 (Group G row 9.6): the real fill lives in
+ * arch/x86_64/fast_memset.asm and picks REP STOSB when the CPU advertises
+ * ERMS, else REP STOSQ + a byte tail -- sharing DDR-871's ERMS flag rather
+ * than probing CPUID a second time, so the two cannot drift.
+ *
+ * This was a byte-at-a-time loop while memcpy below has routed through
+ * fast_memcpy since DDR-871; the asymmetry was paid on EVERY kfree
+ * (kheap.c:174 poisons the object) and on every slab growth (kheap.c:326,
+ * a full page). Both paths use general-purpose registers only, so neither
+ * disturbs FPU/XMM state and the context switch is unaffected.
+ *
+ * The one thing that can go wrong is the BYTE BROADCAST -- see the .asm
+ * header. It is correct for every zero fill and wrong only for a non-zero
+ * one, and this tree has exactly three non-zero memset call sites, none of
+ * whose bytes any gate verifies. smoke-bench's 0xA7 arm is what covers it. */
+void *fast_memset(void *dst, int c, size_t n);
+
 void *memset(void *dst, int c, size_t n) {
-    unsigned char *d = (unsigned char *)dst;
-    for (size_t i = 0; i < n; i++)
-        d[i] = (unsigned char)c;
-    return dst;
+    return fast_memset(dst, c, n);
 }
 
 /* DDR-871 (item 42): the real copy lives in arch/x86_64/fast_memcpy.asm and

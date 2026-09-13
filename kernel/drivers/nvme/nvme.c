@@ -469,9 +469,10 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
      * stays in the (unchanged) polled mode. */
     int msix = (nvme_msix_setup(n, bus, dev, func) == 0);
     if (msix) {
-        kputs("[nvme] msix vec=");
-        kputdec(NVME_MSIX_VEC);
-        kputs("\r\n");
+        { kline k; kline_init(&k);                   /* DDR-1055 */
+          kline_s(&k, "[nvme] msix vec=");
+          kline_d(&k, NVME_MSIX_VEC);
+          kline_s(&k, "\r\n"); kline_emit(&k); }
     } else {
         kputs("[nvme] msix unavailable, polling only\r\n");
     }

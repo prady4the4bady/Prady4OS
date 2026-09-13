@@ -11,6 +11,14 @@
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D) */
 #include "smp.h"               /* rq-3: smp_resched_one (directed wake IPI) */
 #include "irq.h"               /* ADR-032: g_ticks for the FS write-budget bucket */
+#include "signal.h"            /* DDR-1090: SIGKILL, honoured at the yield choke point */
+
+/* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
+ * reader -- init_idle, which records its base as idle0's kstack_base so
+ * DDR-1105's next->rsp check stops skipping idle0. boot.asm's `KSTACK_SIZE equ
+ * 16384` MUST equal STACK_SIZE below; a _Static_assert cannot see a NASM equ, so
+ * the pairing is stated at both ends and checked by reading (DDR-1106 sec.2). */
+extern uint8_t kernel_stack[];
 
 #define STACK_SIZE   16384u
 #define QUANTUM      2u           /* ticks per slice (PIT @100Hz -> 20 ms) */
@@ -874,8 +882,27 @@ static void thread_trampoline(void) {
 }
 
 /* Shared idle-thread init (cap-2b: one per CPU). The FPU template is captured
- * once by sched_init before any init_idle runs. */
-static void init_idle(struct tcb *idle, int cpu) {
+ * once by sched_init before any init_idle runs.
+ *
+ * DDR-1106: `kstack_base` is now a PARAMETER rather than left at 0 by the
+ * memset. An idle thread has no kmalloc'd kernel stack -- it runs on the stack
+ * it was ENTERED on -- but those stacks exist and their bases are knowable, and
+ * leaving the field 0 made DDR-1105's next->rsp check skip every idle thread.
+ * That is the busiest target in the system: idle is what every CPU falls back to
+ * whenever its runqueue drains, so across a boot it is plausibly the
+ * most-switched-to thread, and therefore the frame a stale or recycled
+ * next->rsp is most likely to select.
+ *
+ * Both stacks are EXACTLY STACK_SIZE, which is what makes this a parameter and
+ * not a new per-thread size field (measured, DDR-1106 sec.2):
+ *   - BSP: `kernel_stack` in boot.asm's .bss, KSTACK_SIZE equ 16384.
+ *   - AP:  pmm_alloc_pages(2) -- an ORDER, not a count (pmm.h:23) -- so
+ *          2^2 = 4 pages = 16,384 B, and smp.c writes the mailbox top as
+ *          stack + 4 * PAGE_SIZE, exactly the end of that block.
+ *
+ * base == 0 remains legal and means "not covered", so a caller that cannot
+ * supply one degrades to the pre-1106 behaviour rather than to a bogus window. */
+static void init_idle(struct tcb *idle, int cpu, uint64_t kstack_base) {
     memset(idle, 0, sizeof(*idle));    /* zero all fields (AP idles are kmalloc'd) */
     idle->name = "idle";
     idle->state = THREAD_RUNNING;
@@ -883,6 +910,7 @@ static void init_idle(struct tcb *idle, int cpu) {
     idle->caps = cap_table_create();
     idle->is_idle = 1;
     idle->on_cpu = cpu;                /* tid/is_user/cr3/fs_base = 0 via memset */
+    idle->kstack_base = kstack_base;   /* DDR-1106; 0 == not covered, see above */
     memcpy(idle->fpu_state, fpu_init_template, sizeof idle->fpu_state);
 }
 
@@ -967,7 +995,10 @@ void sched_init(void) {
     }
 
     struct tcb *idle = &idle0;          /* the BSP idle + ring anchor */
-    init_idle(idle, 0);
+    /* DDR-1106: the BSP has run on `kernel_stack` since boot.asm:25 set rsp to
+     * kernel_stack_top, and it never leaves it -- at this point it IS idle0, so
+     * idle0->rsp is first written by context_switch's save ON THIS STACK. */
+    init_idle(idle, 0, (uint64_t)(uintptr_t)kernel_stack);
     g_idle[0] = idle;
     idle->next = idle;                 /* ring of one */
     current_thread = idle;
@@ -999,7 +1030,10 @@ void sched_ap_enter(void) {
     struct tcb *idle = (struct tcb *)kmalloc(sizeof(struct tcb));  /* heap, not BSS */
     if (!idle)
         for (;;) __asm__ volatile("cli; hlt");   /* no idle -> this CPU cannot schedule */
-    init_idle(idle, cpu);
+    /* DDR-1106: this AP is running on the pmm_alloc_pages(2) block the BSP
+     * handed it through the trampoline mailbox; smp_start_aps recorded the base
+     * before the SIPI because the allocation is out of scope here. */
+    init_idle(idle, cpu, smp_ap_stack_base((unsigned)cpu));
     g_idle[cpu] = idle;
 
     /* Link this CPU's idle after the BSP idle anchor and adopt it as current —
@@ -1067,6 +1101,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dbg_vruntime    = g_dbg_floor;
     t->dbg_v_at_create = g_dbg_floor;
     t->dbg_v_at_wake   = 0;
+    t->dbg_ub_saw_idle = 0;          /* DDR-1064 / §NON-NEGOTIABLE 10 */
+    t->dbg_ub_kicked   = 0;          /* DDR-1064 / §NON-NEGOTIABLE 10 */
     t->dbg_picks       = 0;
     t->dbg_ticks       = 0;
     t->block_deadline  = 0;   /* DDR-955 */
@@ -1123,6 +1159,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
                                     * every capability at once. */
     t->is_sovereign = 0;           /* L6: no CAP_SOVEREIGN unless the kernel grants it    */
     t->is_net = 0;                 /* DDR-731: no CAP_NET unless the spawner grants it    */
+    t->is_ipc    = 0;              /* DDR-1033: no IPC door unless the kernel grants it */
+    t->ipc_cap   = CAP_NULL;       /* DDR-1033: and no handle to go with it */
+    t->is_exec   = 0;              /* DDR-1034: no executor door unless granted */
+    t->exec_cap  = CAP_NULL;       /* DDR-1034: and no handle to go with it */
     t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does
                                     * not zero, so every new field needs this line    */
     t->checkpointed = 0;           /* DDR-837: not frozen                             */
@@ -1338,7 +1378,16 @@ static void sched_free_tcb(struct tcb *t) {
         fd_free(t, i);
     if (t->caps)
         cap_table_destroy(t->caps);
-    if (t->kstack_base)
+    /* DDR-1106: `!t->is_idle` is LOAD-BEARING, not defensive. Since DDR-1106 an
+     * idle tcb carries a real kstack_base, and NEITHER idle stack came from
+     * kmalloc -- the BSP's is boot.asm's .bss `kernel_stack` and each AP's is a
+     * pmm_alloc_pages(2) block -- so kfree()ing one would hand the slab
+     * allocator an address it never issued. No idle can reach here TODAY
+     * (enumerated: the reaper takes only THREAD_ZOMBIE, which an idle never
+     * becomes, and every sched_destroy caller passes a tcb it created itself or
+     * a zombie child found by pid), but that is a property of the callers, and
+     * this change would make it silently load-bearing. State it here instead. */
+    if (t->kstack_base && !t->is_idle)
         kfree((void *)(uintptr_t)t->kstack_base);
     kfree(t);
 }
@@ -1552,6 +1601,141 @@ static void schedule_locked(uint64_t fl) {
     /* rq-2 D2: name the outgoing thread for whoever resumes on THIS CPU. */
     if (pc)
         pc->prev = prev;
+    /* DDR-1105: validate next->rsp before handing the CPU to it.
+     *
+     * DDR-1099 resolved an OPEN-2 [apfreeze] to a #DB raised by a TF bit that
+     * context_switch's popf restored out of this very frame, and narrowed it to
+     * one sentence: next->rsp did not point at the frame context_switch saved.
+     * Two independent slots held values from elsewhere on that stack --
+     * RFLAGS = 0x2702 (TF|IF|DF, IOPL 2), which NEITHER legitimate writer can
+     * produce (sched_create seeds the constant 0x202; pushfq captures a kernel
+     * thread's live flags, which have no TF, no DF and IOPL 0), and R15 holding
+     * a finish_task_switch return address where a real frame holds the address
+     * after the kernel's only `call context_switch`.
+     *
+     * WHAT THIS CATCHES THAT THE #DB DOES NOT. Today a corrupt frame is
+     * diagnosable only when it happens to set TF. DDR-1099 sec.6 named the other
+     * case while arguing against masking TF: a frame equally wrong whose RFLAGS
+     * slot is benign yields "an undiagnosable jump into nowhere" -- the ret
+     * returns to a stale address with no exception, no banner and nothing to
+     * resolve. Those are presumably the commoner cases, since only a minority of
+     * garbage words have bit 8 set, and this turns them into a named line.
+     *
+     * ORDER IS LOAD-BEARING: alignment and bounds are exactly what make the
+     * RFLAGS load safe, so they come FIRST. Reversing them would make a detector
+     * into a second fault source -- the defect DDR-1079 fixed in the panic
+     * backtrace walker.
+     *
+     * THE kstack_base == 0 SKIP IS NOT OPTIONAL, and what it now skips is
+     * NARROWER THAN WHEN DDR-1105 WROTE IT. That text read: "init_idle() memsets
+     * the whole tcb and never assigns kstack_base, so EVERY idle thread ... has
+     * base 0 ... The cost is a stated coverage limit: a corrupt rsp on an idle
+     * tcb is not covered." DDR-1106 CLOSED THAT GAP -- init_idle now takes the
+     * base as a parameter (boot.asm's `kernel_stack` for the BSP, the
+     * pmm_alloc_pages(2) block for each AP, both exactly STACK_SIZE), so idle
+     * threads ARE covered and idle is the most-switched-to thread in the system.
+     *
+     * The skip stays because base == 0 still means "no window can be derived",
+     * which is the SAFE answer for any future tcb reaching here without one --
+     * smp_ap_stack_base() returns 0 for an unknown index deliberately, so a
+     * bad index degrades to "not covered" rather than to a bogus window.
+     *
+     * MASK = TF|DF|IOPL (0x3500), each justified separately: TF is set only by a
+     * debugger and there is none; `std` appears NOWHERE in this tree so DF is
+     * never set; kernel threads run at IOPL 0 and nothing writes RFLAGS.IOPL.
+     * The arithmetic flags and IF are deliberately NOT masked -- pushfq captures
+     * whatever the outgoing thread's last arithmetic left, and IF varies, so
+     * requiring 0x202 exactly would fire constantly.
+     *
+     * DDR-1115 ADDED TWO ARCHITECTURAL CLAUSES BESIDE THAT MASK, and the mask
+     * is KEPT rather than replaced. The instrument fired for the first time on
+     * a5d876e (CI 34742104493 shard 6) and the artefact showed the RFLAGS slot
+     * holding a STACK ADDRESS -- rsp + 0x30, inside the thread's own stack --
+     * which the mask caught only because that address happened to carry IOPL
+     * bits. The mask asks "could THIS kernel have produced these bits"; bit 1
+     * (reserved-ONE) and bits 22..63 (reserved-ZERO) ask whether ANY pushfq on
+     * this ISA could have, so they cannot fire on a legitimate slot. See the
+     * clause itself for the enumeration that sizes the gap.
+     *
+     * COST, against the shape DDR-1047 actually refused: that was an rdtsc PAIR
+     * (partially serialising) on EVERY spin_lock acquisition, ~1.9M per 5,000
+     * ticks. This is three loads, an add, five compares and five branches, never
+     * taken on a healthy boot and so perfectly predicted. The nearest accepted
+     * precedent is DDR-1090, which added two loads and a branch inside yield().
+     * Opt-in is NOT the escape (DDR-1010/1043: guaranteed OFF in CI, the only
+     * place OPEN-2 has ever appeared). NOT exonerated in advance either: this
+     * changes timing on the path OPEN-2 lives in, so if the signature moves,
+     * this commit is a candidate -- "the diff is elsewhere" is not an argument
+     * (DDR-1042). */
+    if (next->kstack_base) {
+        uint64_t nrsp  = next->rsp;
+        uint64_t nbase = next->kstack_base;
+        /* 8 quadwords: RFLAGS, r15, r14, r13, r12, rbp, rbx, return address --
+         * read off context.asm's push/pop sequence, not assumed. */
+        int bad = (nrsp & 7u) || nrsp < nbase || nrsp + 64u > nbase + STACK_SIZE;
+        uint64_t fl_slot = 0;
+        if (!bad) {
+            /* Safe ONLY because the two checks above passed. pushfq is the LAST
+             * push, so the RFLAGS slot is at [rsp + 0] -- which is why DDR-1099's
+             * faulting popf was the FIRST restore instruction. */
+            fl_slot = *(const volatile uint64_t *)(uintptr_t)nrsp;
+            /* THREE TESTS, OR-ed; the printed rflags= value says which tripped
+             * (DDR-1115 sec.4 -- the same way DDR-1105's two mutants were told
+             * apart by that field rather than by adding a second one).
+             *
+             * (a) the TF|DF|IOPL mask above: a POLICY test, asking "could THIS
+             *     kernel have produced these bits". Kept, not replaced -- it is
+             *     the clause that caught DDR-1115's occurrence, and it still
+             *     covers a word that is flags-SHAPED but carries a bit nothing
+             *     here ever sets.
+             *
+             * (b) bit 1 is architecturally RESERVED-ONE on x86_64 and (c) bits
+             *     22..63 are RESERVED-ZERO, so pushfq stores them set and clear
+             *     respectively, and sched_create's 0x202 seed satisfies both.
+             *     These ask the strictly stronger question -- "could ANY pushfq
+             *     on this ISA have produced this word" -- so they cannot fire on
+             *     a legitimate slot, which is what makes them free to add on a
+             *     path where a false positive halts a CPU.
+             *
+             * WHY BOTH KINDS: DDR-1115 sec.3.1 enumerated every 8-aligned address
+             * inside the stack the artefact named. 128 of 2048 -- the low 4 KiB,
+             * where IOPL reads 0 -- DEFEAT the mask; ZERO defeat (b) or (c). So
+             * the mask caught that occurrence partly by where the bad pointer
+             * happened to land, and a corrupt frame in the lower quarter of its
+             * own stack would have been taken. */
+            if ((fl_slot & 0x3500u) || !(fl_slot & 0x2u) || (fl_slot >> 22))
+                bad = 1;
+        }
+        if (bad) {
+            /* schedule_locked runs with g_sched_lock held and IF clear, and no
+             * panic() is exposed to this file, so follow sched_exit's precedent
+             * for an unrecoverable scheduler state. ONE kline emit (DDR-1055: a
+             * composite built from several kputs can be spliced by another CPU).
+             * Continuing is not an option -- continuing IS the undiagnosable
+             * jump this exists to prevent. */
+            __asm__ volatile("cli");
+            kline k; kline_init(&k);
+            kline_s(&k, "[schedcheck] next->rsp invalid tid=");
+            kline_d(&k, next->tid);
+            /* DDR-1115 sec.4: nothing else in any capture prints a tid, so tid=
+             * alone is UNRESOLVABLE -- that DDR could not say which thread its
+             * artefact named. pid is a plain uint in the tcb this block already
+             * reads three fields from, and pids appear throughout every boot log,
+             * so it makes the halted thread correlatable. pid == 0 is itself an
+             * answer ("kernel thread"), not a missing one. The NAME is
+             * deliberately NOT printed: ->name is a POINTER, and walking it out
+             * of a tcb this check has just declared untrustworthy is DDR-1079's
+             * defect (the panic walker faulted mid-report and cost a CPU). */
+            kline_s(&k, " pid=");      kline_d(&k, next->pid);
+            kline_s(&k, " rsp=");      kline_x(&k, nrsp);
+            kline_s(&k, " base=");     kline_x(&k, nbase);
+            kline_s(&k, " rflags=");   kline_x(&k, fl_slot);
+            kline_s(&k, " halting.\r\n");
+            kline_emit(&k);
+            for (;;)
+                __asm__ volatile("hlt");
+        }
+    }
     context_switch(&prev->rsp, next->rsp);
     /* Resumed here later (possibly on a different CPU) as some earlier `prev`.
      * Release the thread THAT CPU just switched away from, then unmask. */
@@ -1562,6 +1746,21 @@ static void schedule_locked(uint64_t fl) {
 static void schedule(void) {
     schedule_locked(local_irq_save());
 }
+
+#if OPEN2_HUNT
+/* DDR-1097 sec.7 -- the forced proof, as a build flag rather than a hand edit so
+ * the run is reproducible from the recorded command. OPEN2_FORCE_RECYCLE=1
+ * INVERTS the comparison so the arm fires on every node, which proves the branch
+ * is reachable, prints, breaks safely and does not itself wedge the boot. It
+ * proves NOTHING about what a mismatch MEANS -- that rests on tid having exactly
+ * one writer and next_tid only incrementing, which is read out of the tree and
+ * which no mutation can establish. NEVER set outside a proof run. */
+#if OPEN2_FORCE_RECYCLE
+#define OPEN2_RECYCLE_HIT(a, b) ((a) == (b))
+#else
+#define OPEN2_RECYCLE_HIT(a, b) ((a) != (b))
+#endif
+#endif
 
 void sched_tick(void) {
     struct percpu *pc = this_cpu();
@@ -1577,8 +1776,57 @@ void sched_tick(void) {
         int _nwake = 0;
         uint64_t _fl2 = irq_save();
         struct tcb *_t = current_thread;
+#if OPEN2_HUNT
+        /* DDR-1096 HUNT HARNESS -- debug-only, never in the shipped kernel.
+         *
+         * This walk is one of THREE ring readers that hold no cross-CPU lock
+         * (irq_save() masks IF locally and excludes nothing on another CPU),
+         * while sched_destroy() and reaper_thread() splice nodes out of the
+         * same ring. DDR-1001 named exactly this shape at sys_wait4 and fixed
+         * it by moving that walk under g_sched_lock; this site never got the
+         * same treatment, and it is reached from the timer ISR with IF clear,
+         * where nothing can preempt an escaped walk.
+         *
+         * The harness does TWO things and NEITHER changes product logic:
+         *   (a) a bounded pause per node, widening the window in which another
+         *       CPU can unlink+free the node this walk is standing on;
+         *   (b) a bound + poison test, so an escaped walk NAMES itself instead
+         *       of wedging the CPU silently for the rest of the boot.
+         *   (c) DDR-1097: a tid re-check across the pause, because (b) is blind
+         *       to the path this harness exists to hunt -- see below.
+         * (b) and (c) are instruments, not fixes: they report and break. */
+        unsigned _hn = 0;
+        /* Bounded like ap_freeze_probe's DUMP_SHOTS: an escaped walk recurs on
+         * every tick on every CPU, and the UART is ~87 us/byte -- unbounded
+         * printing would stall the boot it is measuring (DDR-941). */
+        static unsigned _hshots;
+        /* DDR-1097 sec.4: printing is capped at 8, counting is not. A count with
+         * no denominator is not a measurement (NON-NEGOTIABLE 17), and past the
+         * 8th line this total is a LOWER BOUND -- labelled as one, not hidden. */
+        static unsigned _hrecyc;
+#endif
         if (_t) {
             do {
+#if OPEN2_HUNT
+                /* KHEAP_DEBUG memsets freed objects to POISON_FREE (0xDD), so a
+                 * node freed under us reads 0xDDDD... in every field. Test BEFORE
+                 * dereferencing ->next, which is the load that would fault. */
+                if (((uintptr_t)_t & 0xFFFFull) == 0xDDDDull
+                    || _t->state == 0xDDDDDDDDu
+                    || ++_hn > OPEN2_RING_MAX) {
+                    if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
+                        break;
+                    uint64_t _lf = console_line_lock();
+                    kputs("[ringwalk] ESCAPED site=sched_tick n=");
+                    kputdec(_hn);
+                    kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
+                    kputs(" state=");  kputhex((uint64_t)_t->state);
+                    kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
+                    kputs("\r\n");
+                    console_line_unlock(_lf);
+                    break;
+                }
+#endif
                 if (_t->state == THREAD_BLOCKED
                     && _t->block_deadline != 0
                     && g_ticks >= _t->block_deadline
@@ -1588,6 +1836,57 @@ void sched_tick(void) {
                     _wake[_nwake++] = _t;
                 }
                 _t = _t->next;
+#if OPEN2_HUNT
+                /* DDR-1097 -- THE ARM THE POISON TEST CANNOT BE.
+                 *
+                 * Across this pause the walk HOLDS a pointer it has not yet
+                 * dereferenced, which is exactly the window the hypothesis is
+                 * about. If another CPU unlinks and frees this node and kmalloc
+                 * hands the object straight back to sched_create_state, then the
+                 * address is a LIVE heap object and ->state is a LEGAL value, so
+                 * both poison arms above are false BY CONSTRUCTION and the walk
+                 * follows a valid ->next to the wrong ring position -- a loop,
+                 * not a fault, which is what OPEN-2's signature looks like.
+                 *
+                 * tid is the identity token, and pid would NOT have worked:
+                 * every kernel thread keeps pid == 0 (sched.c:1102) and the ring
+                 * is mostly kernel threads. tid has EXACTLY ONE writer
+                 * (sched.c:1053, t->tid = next_tid++) from a monotonic static,
+                 * so it is assigned once and unique for the life of the boot:
+                 * two values from one address mean the object was reissued.
+                 * A freed-and-still-poisoned node reads 0xDDDDDDDD and fires
+                 * here too -- both values print so the reader need not infer
+                 * which case it was.
+                 *
+                 * DELIBERATELY NOT also latching ->next: the ring legitimately
+                 * relinks under an unlocked reader on every create/destroy, and
+                 * a relink that leaves this node IN the ring is harmless, so
+                 * that arm would fire on ordinary churn and drown this one.
+                 *
+                 * A hit is NOT a wedge and NOT OPEN-2 reproducing -- it is
+                 * evidence the precondition occurred (DDR-1097 sec.4). */
+                uint32_t _tid0 = _t->tid;
+                for (volatile unsigned _d = 0; _d < OPEN2_HUNT; _d++)
+                    __asm__ __volatile__("pause");
+                uint32_t _tid1 = _t->tid;
+                if (OPEN2_RECYCLE_HIT(_tid0, _tid1)) {
+                    unsigned _tot = __atomic_add_fetch(&_hrecyc, 1u, __ATOMIC_RELAXED);
+                    if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
+                        break;
+                    uint64_t _lf = console_line_lock();
+                    kputs("[ringwalk] RECYCLED site=sched_tick n=");
+                    kputdec(_hn);
+                    kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
+                    kputs(" tid0=");   kputhex((uint64_t)_tid0);
+                    kputs(" tid1=");   kputhex((uint64_t)_tid1);
+                    kputs(" state=");  kputhex((uint64_t)_t->state);
+                    kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
+                    kputs(" total=");  kputdec(_tot);
+                    kputs("\r\n");
+                    console_line_unlock(_lf);
+                    break;
+                }
+#endif
             } while (_t != current_thread);
         }
         irq_restore(_fl2);
@@ -1696,6 +1995,47 @@ void yield(void) {
     if (!current_thread)
         return;
     sched_charge_elapsed(current_thread);
+
+    /* DDR-1090 — SIGKILL is honoured HERE, because otherwise it is not honoured
+     * at all for a thread that never returns to ring 3.
+     *
+     * Both signal_deliver() call sites are guarded by `(r->cs & 3) == 3`, so a
+     * signal is acted on only when the interrupted frame is a ring-3 frame. A
+     * thread inside an unbounded kernel wait is in ring 0 at EVERY timer IRQ,
+     * so `sig_pending |= 1<<SIGKILL` was recorded and never acted on -- although
+     * signal.h calls SIGKILL "unblockable terminate" and sys_aether.c's
+     * sys_kill_agent, the SOVEREIGN's kill switch on a runaway agent, says
+     * "terminated on its next IRQ return". Measured artefact (DDR-1090 §4): a
+     * child blocked in sys_io.c's pipe-read spin was still unreaped three wall
+     * seconds and ~300 timer IRQs after SIGKILL -- `reaped=-11` (-EAGAIN, i.e.
+     * "children exist, none exited yet").
+     *
+     * This is the choke point for the same reason DDR-981 chose it above: all
+     * five unbounded ring-3-reachable waits go through it (both pipe waits and
+     * the blocking console read in sys_io.c, poll/epoll_wait with timeout < 0
+     * in epoll.c, and mnt_lock in vfs.c).
+     *
+     * ABANDONING THE CALLER'S FRAMES IS SAFE AT EVERY ONE OF THEM, measured
+     * rather than assumed: each spins on stack buffers only, holds no lock and
+     * has no allocation outstanding -- mnt_lock's yield is in the ACQUIRE loop,
+     * so a thread exiting there was never the owner, and fd_write_user's
+     * pmm_alloc_page is in the FD_VFS branch, which calls vfs_write directly and
+     * never yields. DDR-981's own comment above records the general form of the
+     * same invariant ("no yield() caller holds a spinlock across the call").
+     * sched_exit() from mid-kernel is likewise established, not new: idt.c calls
+     * it on a ring-3 fault from inside the ISR, and signal_deliver calls it from
+     * the IRQ return path.
+     *
+     * is_user guards it so kernel threads -- the main.c self-tests, which yield
+     * heavily -- are untouched. ONLY SIGKILL: every other signal stays deferred
+     * to the next ring-3 return exactly as before, because unwinding a blocked
+     * syscall for a catchable signal needs an EINTR return at each loop, which
+     * is a far larger change (DDR-1090 §3, and it is what would give the still
+     * subject-less SA_RESTART a subject). */
+    if (current_thread->is_user &&
+        (current_thread->sig_pending & (1ull << SIGKILL)))
+        sched_exit(-1);                     /* never returns */
+
     current_thread->dbg_yields++;
     current_thread->quantum = current_thread->quantum_reset;
 
@@ -1822,13 +2162,41 @@ void sched_unblock(struct tcb *t) {
         /* rq-3: kick an idle CPU so it steals this thread NOW rather than on its
          * next 10 ms tick. Directed IPI to the first idling non-self CPU; the
          * timer remains the backstop if none is (visibly) idle. */
+        /* DDR-1014: `break` on the CALL was wrong -- smp_resched_one silently
+         * declines for the BSP, so an unblock running on an AP that found the
+         * BSP idle first consumed its one kick, sent nothing, and stopped
+         * looking. Any idle AP later in the list then waited a full timer tick,
+         * which is exactly the latency rq-3 exists to remove. Reachable in
+         * ordinary operation: virtio_blk's completion path calls sched_unblock
+         * from MSI-X interrupt context on whichever CPU the vector is routed to.
+         * Break on a DELIVERED kick, not on an attempted one. */
+        /* DDR-1064: record what THIS loop saw, at the instant it ran. The rq-3
+         * proof used to re-derive it from outside the call and could not: a CPU
+         * can leave idle before the call (DDR-1004's race) or enter idle after
+         * it returns (DDR-1030's own race, which its §5 table did not name), so
+         * `idle=`/`idle2=` narrow the timing without closing it. DDR-1014 made
+         * the two loops ask the same QUESTION; this makes them ask it at the
+         * same INSTANT, which is the residual one level down.
+         *
+         * `saw_idle` deliberately mirrors THIS loop's predicate exactly, not the
+         * proof's: the proof carries `!o->is_bsp` because smp_resched_one
+         * declines the BSP, and paraphrasing that here would reintroduce the
+         * drift DDR-1014 removed. `kicked` is the delivered-kick answer, so a
+         * BSP-only-idle boot reads saw_idle=1 kicked=0 and is CORRECT rather
+         * than a defect -- which the proof's predicate cannot express at all. */
+        uint8_t saw_idle = 0, kicked = 0;
         for (int c = 0; c < PERCPU_MAX; c++) {
             struct percpu *o = percpu_get((uint32_t)c);
             if (c != self && o && o->present && o->idle) {
-                smp_resched_one((uint32_t)c);
-                break;
+                saw_idle = 1;
+                if (smp_resched_one((uint32_t)c)) {
+                    kicked = 1;
+                    break;
+                }
             }
         }
+        t->dbg_ub_saw_idle = saw_idle;
+        t->dbg_ub_kicked   = kicked;
     } else {
         /* DDR-936: the CAS did not fire, so NOTHING above ran — no enqueue.
          * Record it and the state we actually saw; `expected` holds the

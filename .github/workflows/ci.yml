@@ -34,13 +34,38 @@ jobs:
       - name: User entry-point stack alignment (DDR-823)
         run: make ci-start-align-check
 
+      # DDR-1063: the live-state tables state kernel.bin's size and its headroom
+      # side by side, and the size was updated as ML-DSA landed while the
+      # subtraction beside it was not -- so CLAUDE.md overstated the remaining
+      # budget by 102,400 B for four commits, in the file every session is told
+      # to trust without re-deriving. The Makefile size gate checks the BINARY
+      # against the ceiling and can say nothing about what the docs claim, so all
+      # 176 gates stayed green. Runs here because it needs no toolchain: python3,
+      # the Makefile (for the ceiling) and two checked-in documents.
+      - name: Live-state doc consistency (DDR-1063)
+        run: make ci-docstate-check
+
+      # DDR-1077: DDR-1075 sec.3 measured that this kernel has NO cross-CPU TLB
+      # invalidation and that the absence is CORRECT today, because no two
+      # threads share an address space. Group D's pthread / clone(CLONE_VM) row
+      # deletes that premise, after which every vmm_unmap and vmm_protect_range
+      # leaves a stale writable translation on another CPU -- silent,
+      # timing-dependent, on the same SMP paths OPEN-2 lives in -- and DDR-1075
+      # sec.3.2 recorded that NOTHING IN THE TREE WOULD NOTICE. The warning
+      # lived only in a document. Fires only when the ->cr3 writer set changes
+      # AND no shootdown exists, so the correct ordering is permitted. Runs
+      # here because it needs no toolchain: bash and grep over checked-in
+      # sources.
+      - name: cr3-writer set vs the missing TLB shootdown (DDR-1077)
+        run: make ci-cr3-writers-check
+
       # DDR-859/862. The hybrid takes its flags AND its compiler from the
       # Makefile, so configure needs the Makefile's clang to exist. Installed
       # explicitly rather than relying on the runner image happening to carry
       # it: this job installs no toolchain otherwise, and "it was there last
       # time" is not a build dependency.
       - name: Toolchain for the CMake parity check
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+        run: bash tools/ci/apt_prepare.sh clang      # DDR-1045
 
       # Fails if CMake's captured copy has drifted from the Makefile. Unlike the
       # dev host (no cmake), ubuntu-latest ships it, so this genuinely exercises
@@ -65,13 +90,28 @@ jobs:
   #
   # No gate's semantics, timeout, or sentinels change. Only which runner each
   # assertion happens on.
-  build-and-boot:
+  # DDR-1035: the kernel is compiled ONCE here, not ten times.
+  #
+  # Before this job existed, every one of the ten build-and-boot shards ran the
+  # identical `make musl` + `make lwip` + `make image`, plus its own apt install
+  # and its own `rustup toolchain install nightly`. That is nine redundant
+  # compiles and nine redundant Rust installs per CI run.
+  #
+  # WHY THIS DOES NOT WEAKEN ANYTHING. `$(KERNEL_BIN)` (Makefile:408) depends on
+  # SOURCE files plus the musl/lwIP archives — there are no per-object targets —
+  # so a downloaded, touched build/ tree is genuinely up to date as far as make
+  # is concerned, and no shard silently recompiles. And no gate assigned to a
+  # shard rebuilds the kernel or alters its flags: the one gate that does,
+  # smoke-fs-liveness (BSP_LIVENESS=1), is ALREADY excluded from the matrix for
+  # exactly that reason (DDR-777/790).
+  #
+  # WHAT IT MAKES STRONGER. Until now, "all ten shards ran the same binary" was
+  # INFERRED from them compiling the same sources. The statistical arguments this
+  # project rests on — DDR-1009's twelve-run table, DDR-1023's 20/20, DDR-1010's
+  # 36/36 — all depend on that being true. It is now CHECKED: this job publishes
+  # the SHA-256 and every shard asserts it, before and after its gates run.
+  build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false      # one red shard must not hide reds in the others
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    name: build-and-boot (shard ${{ matrix.shard }})
     steps:
       - uses: actions/checkout@v5
         with:
@@ -79,25 +119,17 @@ jobs:
 
       - name: Install toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang lld llvm nasm make qemu-system-x86 \
-            dosfstools mtools e2fsprogs \
-            ovmf xorriso grub-pc-bin grub-efi-amd64-bin
+          bash tools/ci/apt_prepare.sh clang lld llvm nasm make      # DDR-1045
           rustup toolchain install nightly --profile minimal
           rustup component add rust-src --toolchain nightly
           rustup target add x86_64-unknown-none --toolchain nightly
 
+      # The ONLY consumer of the Rust toolchain in this repository: it links a
+      # no_std parity ELF (Makefile:335-344). Nothing in kernel.bin depends on
+      # RUST_LIB and no smoke-* gate uses it, which is why the ten shards below
+      # install no rustup at all — a removal, not a cache.
       - name: Toolchain check (clang + nasm + rust + lld)
         run: make toolchain-check
-
-      # DDR-785: self-test the boot harness before it is used to judge anything.
-      # Host-only (stub qemu, no kernel), ~34 s. Proves early exit fires when
-      # eligible AND cannot mask a late forbidden pattern. It is a setup step in
-      # EVERY shard, not one gate in one shard: a shard whose gates trust the
-      # harness must have checked the harness first.
-      - name: Boot-harness self-test (DDR-785 early exit)
-        run: make smoke-selftest
 
       - name: Build musl libc subset (PROC-D)
         run: make musl
@@ -112,12 +144,116 @@ jobs:
       # writable PT_LOAD to hold it. lld places such an orphan in the R+X segment,
       # the link succeeds, and the FIRST STORE faults at runtime — which the gate
       # then reports as a missing sentinel, i.e. "the code under test is wrong".
-      # That is exactly how smoke-ed25519 failed.
+      # That is exactly how smoke-ed25519 failed. Run here, once, because it is a
+      # property of the built ELFs and they are built here.
       - name: Probe ELFs carry no writable sections (DDR-826)
         run: make ci-probe-rodata-check
 
+      # The binding artefact (R1: record the kernel hash with every measurement).
+      # Written as a `sha256sum -c` manifest so each shard's assertion is one
+      # command that cannot be fudged by comparing the wrong thing.
+      - name: Publish the kernel hash
+        run: |
+          cd build && sha256sum kernel.bin > kernel.sha256
+          cat kernel.sha256
+
+      # Disk images are NOT uploaded: fat-image and sfs-image are .PHONY and
+      # regenerate per shard anyway (Makefile:732/786), and $(IMG) rebuilds from
+      # kernel.bin with nasm + dd. Shipping them would add ~185 MB per shard for
+      # files that are rewritten on arrival.
+      - name: Upload build tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tree
+          path: |
+            build
+            !build/*.img
+            !build/*.iso
+          retention-days: 1
+          if-no-files-found: error
+
+  build-and-boot:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false      # one red shard must not hide reds in the others
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    name: build-and-boot (shard ${{ matrix.shard }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
+
+      # No rustup: see the build job. clang/lld/nasm stay — $(IMG) assembles
+      # stage1/stage2 per shard, and keeping the rest of the list identical means
+      # no gate can lose a tool it quietly depended on.
+      - name: Install toolchain
+        run: |
+          bash tools/ci/apt_prepare.sh \
+            clang lld llvm nasm make qemu-system-x86 \
+            dosfstools mtools e2fsprogs \
+            ovmf xorriso grub-pc-bin grub-efi-amd64-bin      # DDR-1045
+
+      - name: Download build tree
+        id: fetch
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tree
+          path: build
+
+      # HAZARD: make is mtime-driven, and download-artifact does not preserve
+      # mtimes. Without this the downloaded kernel.bin looks OLDER than the
+      # freshly checked-out sources and make rebuilds it — which would either
+      # silently keep the cost this job exists to remove, or worse, run the gates
+      # against a DIFFERENT binary than the one the build job produced. The
+      # assertion below is what makes that failure loud instead of silent.
+      - name: Mark the downloaded tree current
+        run: find build -exec touch {} +
+
+      - name: Assert this shard got the binary the build job produced
+        run: cd build && sha256sum -c kernel.sha256
+
+      # DDR-785: self-test the boot harness before it is used to judge anything.
+      # Host-only (stub qemu, no kernel), ~34 s. Proves early exit fires when
+      # eligible AND cannot mask a late forbidden pattern. DELIBERATELY still a
+      # setup step in EVERY shard rather than folded into the build job above: a
+      # shard whose gates trust the harness must have checked the harness first.
+      - name: Boot-harness self-test (DDR-785 early exit)
+        run: make smoke-selftest
+
+      # DDR-1043: QEMU_QMP_DIAG arms boot_test.sh's vCPU-dump watcher. It was
+      # implemented long ago and NOTHING IN THE REPO EVER SET IT, so the one
+      # instrument that can answer "the kernel printed a panic banner and then
+      # not one further byte for 100 s -- what was the CPU doing?" was switched
+      # off in CI, the only place that failure has ever been observed
+      # (DDR-1009 sec.2, DDR-1019, OPEN-1, OPEN-12).
+      #
+      # Free on healthy runs: the watcher fires 5 s before the hard timeout and
+      # ONLY when the run has not yet satisfied its own sentinels, i.e. only on
+      # a run that is already going to fail.
       - name: Run shard ${{ matrix.shard }}
+        env:
+          QEMU_QMP_DIAG: 1
         run: bash tools/ci/run_shard.sh ${{ matrix.shard }}
+
+      # The same assertion after the fact. The first one proves the download was
+      # right; this one proves nothing in the shard's own `make` invocations
+      # rebuilt the kernel underneath the gates. Runs even when the shard fails,
+      # because "the gates were red" and "the gates ran a different binary" are
+      # different findings and the second one must not be hidden by the first.
+      #
+      # GUARDED ON THE DOWNLOAD, not on `always()` alone. A shard can die BEFORE
+      # the artifact arrives — the toolchain install is an apt fetch and the
+      # runner image carries third-party repos that have returned 403 — and an
+      # unguarded assertion then adds `cd: build: No such file or directory` on
+      # top of the real error, which is a second failure message masking the
+      # first. The condition still holds on a RED shard, which is the case this
+      # assertion exists for; it just does not fire when there was never a
+      # binary to assert about.
+      - name: Assert the binary did not change while the gates ran
+        if: always() && steps.fetch.outcome == 'success'
+        run: cd build && sha256sum -c kernel.sha256
 
   # AETHER host-side Python agent layer. Separate job from build-and-boot: it
   # shares no toolchain with the kernel and must not wait on the QEMU gates to
@@ -164,9 +300,7 @@ jobs:
       # objects fine.
       - name: Install clang/lld and QEMU for ${{ matrix.arch }}
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            clang lld make ${{ matrix.qemu_pkg }}
+          bash tools/ci/apt_prepare.sh clang lld make ${{ matrix.qemu_pkg }}      # DDR-1045
 
       # Every tool is checked with `command -v` and the whole step is `set -e`.
       # The previous version piped `--version` into `head`, which returns HEAD's

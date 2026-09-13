@@ -68,6 +68,11 @@ typedef uint64_t cap_t;
 #define RES_FILE   1u
 #define RES_IPC    2u
 #define RES_DEVICE 3u
+/* DDR-1034: the bounded experiment executor. One res_id for the whole
+ * subsystem, so the capability grants "may run experiments", not "may run
+ * THIS experiment" -- the same coarseness DDR-1033 recorded for RES_IPC,
+ * stated here rather than implied. */
+#define RES_EXEC   4u
 
 struct cap_table;   /* opaque; kernel-private */
 

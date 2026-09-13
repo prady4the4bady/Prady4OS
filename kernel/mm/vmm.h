@@ -103,6 +103,21 @@ void vmm_destroy_address_space(uint64_t pml4_phys);
  * treated as not-walkable (fail-closed). */
 int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable);
 
+/* DDR-1031: change the permissions of an already-mapped USER range, keeping each
+ * page's frame. Two-pass: the whole range is validated before anything is
+ * mutated, so a partly-unmapped range changes nothing.
+ *
+ * `flags` carries VMM_RW and VMM_NX only; VMM_USER and PTE_PRESENT are implied.
+ * PTE_SW_COW, PTE_SW_SHARED and the cache attributes are PRESERVED -- rebuilding
+ * a PTE as `frame | flags` would clear them, which breaks DDR-1003's shared-frame
+ * invariant and makes vmm_cow_fault return early so the page is never copied.
+ *
+ * Returns 0, -1 if any page in the range is absent or not user-accessible, or
+ * -2 if VMM_RW was asked for on a PTE_SW_COW page (see DDR-1031 §3b: the
+ * hardware RO bit IS the copy trigger, so granting write there would let one
+ * process write a frame another still shares, with no copy and no fault). */
+int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t flags);
+
 /* Resolve a virtual address to its mapped physical page base in the tables rooted
  * at `cr3` (4 KiB leaf), or 0 if not present. Used by sys_munmap to find the
  * frame to free after clearing the PTE. */

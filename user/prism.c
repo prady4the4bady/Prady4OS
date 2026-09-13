@@ -4,7 +4,10 @@
  * serial console (raw SYS_READ on fd 0 — musl stdin would need SYS_READV), and
  * writes prompts/output with musl printf (fflush'd: the console is non-tty so
  * stdout is fully buffered). Commands are one line, space-separated; no pipes,
- * redirection, quoting, or scripting yet (ADR-024 §D3). Builtins dispatch in
+ * redirection or quoting yet (ADR-024 §D3) -- all three have since shipped
+ * (DDR-780/786 pipes+redirection, DDR-1067 quoting), and DDR-1087 adds
+ * `source`: a script is an alternative LINE SOURCE for readline(), not a
+ * second interpreter. Builtins dispatch in
  * process; `run` fork+execve+waits an external ELF. */
 #include <stdio.h>
 #include <string.h>
@@ -68,6 +71,23 @@ struct procinfo {
     unsigned long long run_ticks;   /* DDR-754: 100 Hz ticks */
     unsigned long long dispatches;  /* DDR-754: switch-in count */
 };
+/* DDR-1098: the audit log's read surface. The record layout is mirrored from
+ * kernel/aether/aether.h struct aether_audit_entry_pub; three other ring-3
+ * probes carry the same copy, which is exactly why DDR-842 refused to widen it
+ * and why the SEQUENCE travels beside the records in a cursor instead. */
+#define SYS_READ_AUDIT     37   /* (buf*, max, cursor*|0) -> n entries copied         */
+struct audit_rec {
+    unsigned long long timestamp;
+    unsigned pid, type;
+    unsigned long long id;
+    unsigned rc, _pad;
+};
+/* In/out. `from` is a 1-based append sequence (0 = the oldest still retained);
+ * `first` is written BY THE KERNEL and is the only value in the exchange this
+ * shell cannot manufacture -- which is why it is poisoned before every call. */
+struct audit_cur { unsigned long long from, first; };
+#define AUDIT_POISON 0xA0D17C0ULL
+
 /* DDR-888 (item 36): the agent DSL's NSI surface. */
 #define SYS_SUBMIT_ACTION  31   /* (type, payload*, len) -> id | -EPERM (agents only) */
 #define SYS_POLL_RESULT    32   /* (action_id) -> status | -ESRCH                     */
@@ -89,8 +109,94 @@ static inline long nsi(long n, long a1, long a2, long a3) {
 
 /* Read one line from the console into buf (NUL-terminated); returns length, or
  * -1 on EOF/error. CR is ignored; LF ends the line. */
+/* ---- DDR-1087: `source` -- a script is an alternative LINE SOURCE ---------
+ *
+ * NOT a second interpreter. main()'s dispatch is ~300 lines inline in the loop
+ * body, so the alternative was to refactor it into execute_line() and call that
+ * per script line -- a rewrite of the single most-asserted-on path in the shell
+ * to gain nothing this needs. Switching the SOURCE touches only readline(), is
+ * additive (with no script loaded this file behaves byte-for-byte as before),
+ * and means quoting, redirection, pipes, $? and job control all work inside a
+ * script for free and cannot drift from their interactive behaviour.
+ *
+ * ONE buffer, and that is why nesting is REFUSED rather than recursed: a nested
+ * `source` would overwrite the outer script's bytes WHILE THE OUTER SCRIPT IS
+ * MID-EXECUTION, so the shell would resume at an arbitrary offset of the wrong
+ * file. Refusing is the bounded answer (S2). */
+#define SCRIPT_MAX 2048
+static char g_script[SCRIPT_MAX];
+static int  g_script_len, g_script_pos, g_script_active;
+
+/* Load `path` as the line source. Returns 0, or -1 having reported why.
+ * An OVERSIZED script is REFUSED, never truncated: a truncated script executes
+ * a PREFIX of the user's commands and then stops, which is worse than not
+ * running -- and it is the failure a user would least expect to be silent. */
+static int script_load(const char *path) {
+    if (g_script_active) {
+        fprintf(stderr, "prism: source: nested source is refused\n");
+        fflush(stderr);
+        return -1;
+    }
+    long fd = nsi(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        fprintf(stderr, "prism: source: cannot open %s\n", path);
+        fflush(stderr);
+        return -1;
+    }
+    int total = 0;
+    for (;;) {
+        long r = nsi(SYS_READ, fd, (long)(g_script + total),
+                     (long)(SCRIPT_MAX - total));
+        if (r <= 0)
+            break;
+        total += (int)r;
+        if (total >= SCRIPT_MAX) {           /* did not fit -> refuse, see above */
+            nsi(SYS_CLOSE, fd, 0, 0);
+            fprintf(stderr, "prism: source: %s exceeds %d bytes, not run\n",
+                    path, SCRIPT_MAX - 1);
+            fflush(stderr);
+            return -1;
+        }
+    }
+    nsi(SYS_CLOSE, fd, 0, 0);
+    g_script_len = total;
+    g_script_pos = 0;
+    g_script_active = 1;
+    return 0;
+}
+
+/* Next line from the loaded script, or -1 when it is exhausted (which clears
+ * the flag, so the caller falls back to stdin on the very same call). */
+static int script_line(char *buf, int max) {
+    if (!g_script_active)
+        return -1;
+    if (g_script_pos >= g_script_len) {
+        g_script_active = 0;
+        return -1;
+    }
+    int n = 0;
+    while (g_script_pos < g_script_len) {
+        char c = g_script[g_script_pos++];
+        if (c == '\n')
+            break;
+        if (c == '\r')
+            continue;
+        if (n < max - 1)
+            buf[n++] = c;
+    }
+    buf[n] = 0;
+    return n;
+}
+
 static int readline(char *buf, int max) {
     int n = 0;
+
+    /* DDR-1087: the script is drained first; when it runs out the flag clears
+     * and this falls through to the console read below, in this same call. */
+    int sn = script_line(buf, max);
+    if (sn >= 0)
+        return sn;
+
     for (;;) {
         char c;
         long r = nsi(SYS_READ, 0, (long)&c, 1);
@@ -101,6 +207,28 @@ static int readline(char *buf, int max) {
         if (c == '\n') {
             buf[n] = 0;
             return n;
+        }
+        /* DDR-1039: ERASE. 0x7F (DEL) and 0x08 (BS) both arrive from real
+         * terminals depending on the emulator, so both are honoured. Before
+         * this, every byte was appended verbatim — a backspace landed IN the
+         * command, so hepl<BS><BS>lp parsed as hepl\x7f\x7flp and matched no
+         * builtin. Invisible to the suite (every gate injects byte-perfect
+         * lines and none has ever typed a typo) and visible to a human on the
+         * first mistake.
+         *
+         * At column zero this does nothing: n must not underflow, and there is
+         * nothing of the user's to erase — the prompt is not theirs to delete.
+         * That guard is UNCOVERED by the gate and DDR-1039 §4 says so: from
+         * outside the shell, erasing at column zero and erasing nothing look
+         * identical.
+         *
+         * No echo is emitted. sys_io.c:301 states there is no line discipline
+         * in the console read either, and adding echo would put typed input
+         * into the serial log that every gate asserts on (DDR-1039 §2). */
+        if (c == 0x7F || c == 0x08) {
+            if (n > 0)
+                n--;
+            continue;
         }
         if (n < max - 1)
             buf[n++] = c;
@@ -150,7 +278,29 @@ static void expand_status(char **argv, int argc) {
     }
 }
 
-/* Split s in place on runs of spaces; fills argv (up to maxv), returns argc. */
+/* Split s in place on runs of spaces; fills argv (up to maxv), returns argc,
+ * or -1 on an unterminated quote.
+ *
+ * DDR-1067: this used to split on spaces ONLY, with no quote handling anywhere,
+ * so `echo "hello world"` passed THREE arguments (quotes included) and a
+ * filename containing a space could not be named at all. Since DDR-1032b wired
+ * PRISM's `run` through to execve's argv marshalling, the defect also reached
+ * the child process rather than stopping at the shell.
+ *
+ * '...' and "..." are both LITERAL here and are stripped. Writing is done
+ * through a separate cursor `w` that trails `s`, so the token is rebuilt in
+ * place: the result is never longer than the input, so no buffer is needed and
+ * every caller is unchanged.
+ *
+ * An unterminated quote returns -1 rather than being treated as terminated: a
+ * typo must not execute a command the user did not write, and this shell has no
+ * continuation prompt to offer instead.
+ *
+ * NOT DONE, stated rather than implied (DDR-1067 §4.1): no backslash escapes;
+ * no expansion inside double quotes (the `$?` substitution above is a
+ * whole-token suffix match applied AFTER this, so "$?" behaves as $? does);
+ * and quoting does NOT protect the operators -- `|`, `>`, `>>`, `<` and `2>`
+ * are matched by strcmp on the STRIPPED token, so `echo ">"` still redirects. */
 static int tokenize(char *s, char **argv, int maxv) {
     int argc = 0;
     while (*s && argc < maxv) {
@@ -159,8 +309,22 @@ static int tokenize(char *s, char **argv, int maxv) {
         if (!*s)
             break;
         argv[argc++] = s;
-        while (*s && *s != ' ')
-            s++;
+        char *w = s;                  /* write cursor, always <= s */
+        while (*s && *s != ' ') {
+            if (*s == '\'' || *s == '"') {
+                char q = *s++;
+                while (*s && *s != q)
+                    *w++ = *s++;
+                if (*s != q)
+                    return -1;        /* unterminated */
+                s++;                  /* consume the closing quote */
+            } else {
+                *w++ = *s++;
+            }
+        }
+        char *end = s;                /* where the unquoted scan stopped */
+        while (w < end)
+            *w++ = 0;                 /* erase what the quote strip left behind */
     }
     return argc;
 }
@@ -276,23 +440,27 @@ static void job_record(long pid, const char *cmdline) {
     printf("[%d] %ld\n", j->id, pid);
 }
 
-static void do_run_bg(const char *path) {
+/* DDR-1032b: `av` is the run's own NULL-terminated vector -- av[0] is the path
+ * and doubles as the child's argv[0], which is the execv(3) convention. Before
+ * DDR-1032 the kernel discarded argv entirely, so `run /X a b` and `run /X` were
+ * the same call; passing a vector here is what makes them differ. */
+static void do_run_bg(char *const *av) {
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid == 0) {
-        nsi(SYS_EXECVE, (long)path, 0, 0);
+        nsi(SYS_EXECVE, (long)av[0], (long)av, 0);
         nsi(SYS_EXIT, 127, 0, 0);
     }
     if (kid < 0) {
         fprintf(stderr, "run: fork failed\n");
         return;
     }
-    job_record(kid, path);              /* parent does NOT wait — that is `&` */
+    job_record(kid, av[0]);             /* parent does NOT wait — that is `&` */
 }
 
-static void do_run(const char *path) {
+static void do_run(char *const *av) {
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid == 0) {
-        nsi(SYS_EXECVE, (long)path, 0, 0);
+        nsi(SYS_EXECVE, (long)av[0], (long)av, 0);
         nsi(SYS_EXIT, 127, 0, 0);          /* execve failed: child gives up */
     }
     if (kid < 0) {
@@ -312,13 +480,29 @@ int main(void) {
     char *argv[16];
     for (;;) {
         jobs_reap();                   /* DDR-881: report finished background jobs */
-        printf("prism> ");
-        fflush(stdout);
+        /* DDR-1087: no prompt for a line the user did not type. PRISM shares
+         * COM1 with the kernel and every gate asserts on that log, so emitting
+         * one prompt per script line would put N spurious lines into the
+         * capture. The INTERACTIVE prompt is unchanged. */
+        if (!g_script_active) {
+            printf("prism> ");
+            fflush(stdout);
+        }
 
         int len = readline(line, sizeof line);
         if (len < 0)                       /* EOF: controlled exit, init won't respawn */
             return 0;
         int argc = tokenize(line, argv, 16);
+        if (argc < 0) {                    /* DDR-1067: unterminated quote.
+                                            * Reported and NOT run -- a typo must
+                                            * not execute a command the user did
+                                            * not write, and there is no
+                                            * continuation prompt to offer. */
+            fprintf(stderr, "prism: unterminated quote\n");
+            fflush(stderr);
+            last_status = 2;
+            continue;
+        }
         if (argc == 0)
             continue;
         expand_status(argv, argc);         /* DDR-789: `$?` -> last exit status */
@@ -546,7 +730,7 @@ int main(void) {
         }
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps jobs fg kill agent action setname touch rm mv uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps jobs fg kill wait source agent action audit setname touch rm mv uname date uptime dmesg free mode exit\n");
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts
@@ -570,9 +754,18 @@ int main(void) {
             if (argc < 2) do_cat_stdin();        /* DDR-780: `... | cat` */
             else do_cat(argv[1]);
         } else if (!strcmp(cmd, "run")) {
-            if (argc < 2) fprintf(stderr, "run: usage: run <path> [&]\n");
-            else if (background) do_run_bg(argv[1]);   /* DDR-881 */
-            else do_run(argv[1]);
+            if (argc < 2) fprintf(stderr, "run: usage: run <path> [args...] [&]\n");
+            else {
+                /* DDR-1032b: hand the child everything after `run`, path first.
+                 * Bounded by argv[]'s own 16 slots, less one for the NULL. */
+                char *rv[16];
+                int n = 0;
+                for (int i = 1; i < argc && argv[i] && n < 15; i++)
+                    rv[n++] = argv[i];
+                rv[n] = 0;
+                if (background) do_run_bg(rv);         /* DDR-881 */
+                else do_run(rv);
+            }
         } else if (!strcmp(cmd, "ls")) {
             const char *dir = (argc > 1) ? argv[1] : "/";   /* DDR-742 */
             char nm[256];
@@ -645,6 +838,79 @@ int main(void) {
             long n = nsi(SYS_DMESG, (long)b, (long)sizeof b, 0);
             printf("dmesg: %ld bytes\n", n > 0 ? n : 0);
             if (n > 0) fwrite(b, 1, (size_t)n, stdout);
+        } else if (!strcmp(cmd, "audit")) {                  /* DDR-1098 */
+            /* WHY THIS EXISTS. SYS_VERIFY_AUDIT (93) reports the INDEX of the
+             * first tampered record, and DDR-842 says in as many words why an
+             * index rather than a boolean: "tampered at entry 1204" locates the
+             * event being hidden. Until DDR-1098 ring 3 could not read entry
+             * 1204 -- aether_audit_read returned the newest n and nothing else,
+             * clamped to 64 of a 4096-entry ring. The verifier's answer was
+             * unactionable from the only ring that receives it.
+             *
+             * The 64 clamp is unchanged and is now a PAGE SIZE, not a ceiling:
+             * this loop resumes at first + n, so a request for more than 64 is
+             * simply more syscalls. On a kernel that ignores the cursor every
+             * call returns the same newest window, which is what dup= reports,
+             * and `first` keeps the poison, which is what pois= reports. */
+            unsigned long long from = 0;
+            long want = 16;
+            if (argc >= 2) { const char *p = argv[1]; from = 0;
+                             while (*p >= '0' && *p <= '9') from = from * 10 + (unsigned)(*p++ - '0'); }
+            if (argc >= 3) { const char *p = argv[2]; want = 0;
+                             while (*p >= '0' && *p <= '9') want = want * 10 + (*p++ - '0'); }
+            if (want <= 0) want = 16;
+            /* STATIC, NOT A LOCAL, and it is not a style preference -- it was
+             * measured. A 2 KiB local here pushed this function's frame (which
+             * already carries dmesg's char b[4096]) past ADR-038's eagerly-mapped
+             * stack window, and because vmm_user_range_ok validates a syscall
+             * pointer WITHOUT faulting the page in, the next builtin to hand the
+             * kernel a stack buffer got -EFAULT rather than a fault: the observed
+             * symptom was `agent list: rc=-14` from an UNRELATED builtin whose
+             * own bits[16] had landed on an unmapped page. ADR-038 sized
+             * USER_STACK_EAGER_PAGES = 8 by measurement for exactly this reason;
+             * a shell builtin must not spend that budget. */
+            static struct audit_rec buf[64];
+            struct audit_cur cur;
+            struct audit_rec prev0;
+            int have_prev = 0, dup = 0, pois = 0;
+            long total = 0, calls = 0;
+            unsigned long long first0 = 0, lost = 0;
+            cur.from = from;
+            while (want > 0) {
+                long ask = (want > 64) ? 64 : want;
+                cur.first = AUDIT_POISON;     /* only the kernel can clear this */
+                long n = nsi(SYS_READ_AUDIT, (long)buf, ask, (long)&cur);
+                calls++;
+                if (cur.first == AUDIT_POISON) pois = 1;
+                if (n <= 0) break;
+                if (calls == 1) {
+                    first0 = cur.first;
+                    /* Wrap loss is meaningful only against an explicit start:
+                     * from == 0 asks for the NEWEST window, which by definition
+                     * skipped nothing. Reporting first - 0 there would print the
+                     * whole log length as "lost", which is the opposite of true. */
+                    lost = (from != 0 && cur.first > from) ? (cur.first - from) : 0ULL;
+                }
+                /* Two consecutive windows that START with the same record mean
+                 * the cursor did not advance the read -- the signature of a
+                 * kernel serving `newest n` regardless of what was asked. */
+                if (have_prev && prev0.timestamp == buf[0].timestamp
+                              && prev0.id == buf[0].id
+                              && prev0.pid == buf[0].pid
+                              && prev0.type == buf[0].type)
+                    dup = 1;
+                prev0 = buf[0]; have_prev = 1;
+                for (long i = 0; i < n; i++)
+                    printf("audit %llu t=%llu pid=%u type=%u rc=%u id=%llu\n",
+                           cur.first + (unsigned long long)i, buf[i].timestamp,
+                           buf[i].pid, buf[i].type, buf[i].rc, buf[i].id);
+                total += n;
+                want  -= n;
+                cur.from = cur.first + (unsigned long long)n;
+                if (n < ask) break;           /* caught up with the newest */
+            }
+            printf("PRADYOS_AUDIT first=%llu n=%ld calls=%ld dup=%d pois=%d lost=%llu\n",
+                   first0, total, calls, dup, pois, lost);
         } else if (!strcmp(cmd, "agent")) {                  /* DDR-888 item 36 */
             /* The agent DSL. PRISM runs WITHOUT CAP_AGENT and WITHOUT
              * CAP_SOVEREIGN, so the privileged verbs here are expected to be
@@ -702,6 +968,36 @@ int main(void) {
                 any = 1;
             }
             if (!any) printf("jobs: none\n");
+        } else if (!strcmp(cmd, "wait")) {                   /* DDR-1068 */
+            /* Block until every live background job has finished. Bounded by
+             * construction: the loop is over a FIXED table (NJOBS) and each
+             * SYS_WAIT4 targets a pid the shell itself forked, so there is no
+             * unbounded wait here of the DDR-961/994 kind.
+             *
+             * `reaped` counts jobs THIS call waited on, not jobs that ever ran:
+             * jobs_reap() runs at every prompt, so anything already finished is
+             * gone from the table before `wait` is typed. DDR-1068 §3 is why
+             * that number is NOT the gate's discriminator — a correct `wait`
+             * legitimately reports reaped=0 when nothing was still running, the
+             * same value a missing `wait` would produce. The gate asserts
+             * ORDERING against a job that is still alive (/SLOWTEST.ELF).
+             *
+             * NOT `bg`, and not by omission: DDR-881 refused it with the reason
+             * in this file's own job-control header — no setpgid, no controlling
+             * terminal, and no SIGTSTP/SIGCONT in kernel/proc/signal.h, so there
+             * is nothing suspended to resume. */
+            int reaped = 0;
+            for (int i = 0; i < NJOBS; i++) {
+                if (!jobs_tab[i].pid)
+                    continue;
+                int st = 0;
+                nsi(SYS_WAIT4, jobs_tab[i].pid, (long)&st, 0);
+                last_status = st;
+                jobs_tab[i].pid = 0; jobs_tab[i].id = 0; jobs_tab[i].done = 0;
+                reaped++;
+            }
+            printf("PRADYOS_WAIT_OK reaped=%d\n", reaped);
+            fflush(stdout);
         } else if (!strcmp(cmd, "fg")) {                     /* DDR-881 */
             struct job *j = (argc >= 2) ? job_by_spec(argv[1]) : 0;
             if (!j) {
@@ -759,6 +1055,17 @@ int main(void) {
                        mi.total_pages * 4ULL, mi.free_pages * 4ULL, mi.used_pages * 4ULL);
             else
                 printf("free: unavailable\n");
+        } else if (!strcmp(cmd, "source")) {             /* DDR-1087 */
+            /* Run a file of commands in THIS shell. Not a scripting language:
+             * no variables, no control flow, no `#` comments (§5 records that
+             * the last of those is deferred on an untestability, not on
+             * effort), no shebang, no arguments. */
+            if (argc < 2) {
+                fprintf(stderr, "prism: source: need a path\n");
+                last_status = 2;
+            } else {
+                last_status = script_load(argv[1]) == 0 ? 0 : 1;
+            }
         } else if (!strcmp(cmd, "exit")) {
             return 0;
         } else {
