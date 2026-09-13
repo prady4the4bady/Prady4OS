@@ -6,6 +6,55 @@
 
 ---
 
+## CHECKPOINT 2026-09-13 — DDR-1119: the FIRST `[schedcheck]` fire was the same consumed frame
+
+**Docs-only. No fix, no mechanism named, OPEN-2 does not close. `build/kernel.bin`
+untouched at `6af029b001e6e6db`, 1,319,306 B.**
+
+DDR-1115 §3 measured the offset on fire 1 itself (*"`0x07CB7A70 − 0x07CB7A40 = 0x30`"*)
+and read it as **corruption**. DDR-1118 showed on fire 2 that `S+0x30` in slot `S+0x00`
+is what **correct** execution writes there — so **DDR-1115's own number proves the
+opposite reading**, and *both* fires are consumed frames, not damaged ones.
+
+**Measured in fire 1's own binary (§INV.18), not carried:** a detached worktree at
+`a5d876e` rebuilt **bit-for-bit** to `95493b96c7d13f30` (that run's published digest),
+**outside** the working tree so the pinned binary stayed pinned (DDR-1060 §9). There:
+`finish_task_switch+0xd = 0xffffffff8001612d`, `this_cpu` opens `push rbp`, one
+`call context_switch` @ `0x8001669e` → `0x800166a3`, `thread_trampoline = 0x800160d0`,
+and **`call finish_task_switch` = 2, i.e. OUT OF LINE** — the count that mattered,
+because that function is `static inline` in the TU the two commits changed.
+
+**Rules this paid for, carry them:**
+
+* **The numerals move and the offset does not.** Post-call return is `0x800166a3` in
+  fire 1's binary vs `0x8001673d` in fire 2's (**Δ154**) while `finish_task_switch+0xd`
+  is identical in both. Re-measure per capture; never carry a numeral (DDR-1116's trap).
+* **The two fires are NOT equal evidence** — fire 2 has two exact witnesses, fire 1 has
+  one. Candidate sets 1920 (mask only) and 2048 (DDR-1115's clauses catch every
+  8-aligned address). The ~2.5e-7 joint figure is **a model, not a measurement**.
+* **tid 22 twice is weak** (`next_tid++` is boot-order); **CPU 1 twice is weaker**
+  (1-in-4). Narrowings for the next capture, not conclusions. **No rate.**
+
+**Negative evidence DDR-1118 did not use:** fire 2's capture matched exactly two
+forbidden patterns and carried **no `gs FAIL`, no `[apfreeze]`, no panic, no
+`panic_stage=`** — DDR-1010's SWAPGS producer is **not implicated in this capture**
+(that probe covers syscall entry; this fire is on the schedule path). `dest_abs=162`
+against `ticks[865,162,910,783]` reproduces DDR-1115's causal chain: **the block failure
+is downstream of the halt.**
+
+**Four candidates checked and REMOVED (none is a mechanism):** `sched_unblock` cannot
+enqueue a running thread (push is inside a CAS from `THREAD_BLOCKED` only); `steal_pass`
+takes the **victim** queue's lock before `rq_take`; `current_thread` is per-CPU
+(`sched.h:310`); `pc->prev` is assigned at `sched.c:1604` **after** every early return,
+with exactly one `call context_switch` in the binary.
+
+**Where a THIRD fire points:** `sched.c:202-207`'s rq-2 statement — exclusion is the
+dequeue, while *"a READY-but-still-on-CPU thread … is now legitimately takeable"* under
+`switch_wait_offcpu_sched`'s `on_cpu` handshake. Read `disp − saves` first: **== 2**
+confirms the double resume, **== 1** refutes it and sends the reading elsewhere.
+
+---
+
 ## CHECKPOINT 2026-09-13 — DDR-1118: the frame at `next->rsp` was CONSUMED, not corrupted
 
 **The `[schedcheck]` instrument fired a SECOND time and DDR-1116's `ret=` field

@@ -4810,6 +4810,102 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1119 — the FIRST `[schedcheck]` fire was the same consumed frame (2026-09-13)
+
+**Assessment + correction of a READING. Docs-only: no code change, no gate, no new
+sentinel, `kernel.bin` NOT rebuilt in the working tree (`6af029b001e6e6db`,
+1,319,306 B, verified unchanged). NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE.**
+
+DDR-1115 §3 computed the offset on fire 1 itself — *"`0x07CB7A70 − 0x07CB7A40 = 0x30
+= 48`"* — and read it as **corruption**. DDR-1118 then established instruction-exactly
+on fire 2 that **`S+0x30` in slot `S+0x00` is exactly what CORRECT execution writes
+there**. **So DDR-1115's own number is the proof of the opposite reading**, and fire 1
+is the same case: a correct saved `rsp` whose frame has already been consumed.
+
+**MEASURED IN FIRE 1'S OWN BINARY (§INV.18), NOT CARRIED FROM FIRE 2'S.** A detached
+worktree at `a5d876e`, `make image` rc=0, rebuilt **bit-for-bit** to
+`95493b96c7d13f30` — the exact digest that run's build job published — and built
+**outside** the working tree so `build/kernel.bin` stayed pinned (DDR-1060 §9's
+void-campaign hazard *avoided*, not rediscovered; re-verified identical afterwards).
+In that binary: `finish_task_switch` @ `0xffffffff80016120` opens `push rbp / mov
+rsp,rbp / sub $0x20,rsp / call this_cpu` at **+0x8** so its return address is
+**+0xd = `0xffffffff8001612d`**; `this_cpu` @ `0xffffffff800497d0` opens `push rbp`;
+**exactly one** `call context_switch` @ `0xffffffff8001669e` → `0xffffffff800166a3`;
+`thread_trampoline` = `0xffffffff800160d0`.
+
+**The count that mattered — and the reason the rebuild was worth doing — is `call
+finish_task_switch` = 2, i.e. OUT OF LINE.** That function is `static inline` **in the
+same translation unit as `schedule_locked`**, and `a5d876e→be0b2ad` changed that TU;
+had the compiler inlined it in fire 1's build there would be no `call` at `S+0x38`,
+`rbp` would not land at `S+0x30`, and the prediction would have failed. It holds —
+measured, not assumed. Fire 1 printed `[S+0x00]` and it read **`rsp+0x30` exactly**;
+it could not print `[S+0x08]` because `r15=` did not exist until DDR-1116.
+
+**THE NUMERALS MOVE AND THE OFFSET DOES NOT, on one pair of builds:** the post-call
+return address is `0x800166a3` in fire 1's binary against `0x8001673d` in fire 2's
+(**Δ154**), while `finish_task_switch+0xd` is `0x8001612d` in **both**. §INV.18 in both
+directions — exactly the trap DDR-1116 fell into and DDR-1118 §1 corrected.
+**Re-measure per capture; never carry the numeral.** The *offset* carries because the
+chain's source is identical across the two fires: `git diff a5d876e be0b2ad` over the
+build inputs touches ONE file whose only `finish_task_switch`/`this_cpu`/
+`context_switch` hit is **inside a comment**.
+
+**STRENGTH STATED AT ITS REAL SIZE — the two fires are NOT equal evidence.** Fire 2
+has TWO independent exact witnesses; **fire 1 has ONE**. Candidate sets differ because
+the clause sets did: fire 1's build carried only DDR-1105's mask, so **1920** of 2048
+8-aligned stack addresses would have fired (the 128 in the low 4 KiB defeat it,
+DDR-1115 §4); fire 2's carried DDR-1115's architectural clauses, under which **all
+2048** fire, since every 8-aligned address has bit 1 clear. `rsp+0x30` is one member of
+each. A uniform-corruption model puts the joint coincidence near `2.5e-7` — **a model,
+not a measurement**, and not what the claim rests on. The claim rests on a derivation
+with **no free parameter**, now measured in **both** binaries and matched in **both**
+captures.
+
+**SHARED ATTRIBUTES ARE NARROWINGS FOR THE NEXT CAPTURE, NOT CONCLUSIONS:** tid 22 both
+times is **weak** (`t->tid = next_tid++` is boot-order, so the same probe gets the same
+tid every boot — it says which thread reaches the window, not that the thread is
+special); frozen CPU index 1 both times is **weaker** (1-in-4 at `-smp 4`); depths above
+the frame 1472 B vs 1520 B, i.e. within **48 bytes** — the same call chain, not the same
+instruction. **NO RATE CLAIMED.**
+
+**NEGATIVE EVIDENCE FROM FIRE 2'S CAPTURE THAT DDR-1118 DID NOT USE**, read out of the
+job log: it matched **exactly two** forbidden patterns (`multi-inflight FAIL`,
+`[schedcheck]`) and carried **no `[percpu] gs FAIL`, no `[apfreeze]`, no `NEXUS KERNEL
+PANIC`, no `panic_stage=`**, on a shard where 20 of 21 gates had passed and both
+nethammer probes finished `conn_ok=20000 conn_err=0`. **So DDR-1010's SWAPGS producer is
+NOT implicated in this capture** — stated at that width deliberately, because that probe
+runs at the top of `syscall_dispatch` while this fire is on the timer/schedule path.
+And `[vblk] compl wait timeout … dest_abs=162 … ticks[865,162,910,783]` means **the
+halted CPU's tick count and the stranded completion's are the same number**: DDR-1115's
+causal chain (the block failure is DOWNSTREAM of the halt) reproduced on a second
+artefact.
+
+**FOUR CANDIDATES CHECKED AND REMOVED so they are not re-derived — NONE is a mechanism
+and none is claimed as one:** (1) `sched_unblock` cannot enqueue a running thread, its
+`rq_push` sitting inside a **successful CAS from `THREAD_BLOCKED` only**; (2) cross-CPU
+dequeue exclusion holds — `steal_pass` test-and-sets the **victim** queue's own
+`q->lock` before `rq_take`, and both `rq_take` and `rq_unlink` clear `rq_on` with a
+RELEASE store under it; (3) `current_thread` is **per-CPU**
+(`#define current_thread (this_cpu()->current)`, `sched.h:310`); (4) `pc->prev` cannot go
+stale — assigned at `sched.c:1604`, **after** every early return in `schedule_locked`
+(`:1531`, `:1559`) — and the binary holds **exactly one** `call context_switch`, so
+there is no second unguarded resume site.
+
+**STILL OPEN, ON RECORD:** `sched.c:202-207` states the rq-2 exclusion in its own words
+(*"Exclusion is the DEQUEUE (a thread sits in exactly one queue, so exactly one CPU pops
+it)"*) beside the design note that *"a READY-but-still-on-CPU thread … is now
+legitimately takeable"*, guarded by `switch_wait_offcpu_sched`'s `on_cpu` handshake —
+where a THIRD fire's `rq_on=` and `disp − saves` will point, or away from.
+
+**NOT CLAIMED:** no fix, no mechanism, no rate; no open issue moves (OPEN-1/2/12/13
+untouched); `GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs, size/headroom pair and
+`ci-docstate-check` unaffected. **DDR-1115 is NOT withdrawn or criticised** — its
+clauses are correct, they are what caught fire 1, and its own measurement is what proves
+this; one sentence of interpretation is corrected in place. **DDR-1118 is NOT extended**
+— it analysed fire 2 and deliberately did not revisit fire 1. The worktree build is a
+**measurement aid, not a release artefact**, and was removed afterwards. **No gate was
+run.**
+
 ## DDR-1118 — the frame at `next->rsp` was CONSUMED, not corrupted (2026-09-13)
 
 **Kernel change (instrument only) + artefact resolved. NO FIX, NO CAUSE NAMED,
