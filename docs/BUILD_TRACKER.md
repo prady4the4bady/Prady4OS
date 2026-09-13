@@ -4810,6 +4810,97 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1120 — the third `[schedcheck]` fire: three exact witnesses confirm the consumed frame, and `disp − saves = 1` refutes the double-resume mechanism (2026-09-13)
+
+**Assessment. NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE.** Docs-only; no
+code change, no gate, `kernel.bin` NOT rebuilt.
+
+**The instrument DDR-1118 added to test its own hypothesis refuted it on the
+first capture that could.**
+
+**Artefact:** CI 34766468421, shard 5 `smoke-smpuser`, head `5f3ac9e` (the
+DDR-1118 kernel). `kernel.bin: OK`; local pin `6af029b001e6e6db`, 1,319,306 B.
+
+```
+[schedcheck] next->rsp invalid tid=11 pid=0 rsp=0x07C2A558 base=0x07C28000
+             rflags=0x07C2A588 r15=0xFFFFFFFF8001613D ret=0xFFFFFFFF8001687F
+             rq_on=0 disp=40669 saves=40668 halting.
+```
+
+Clauses 2 and 3 passed: 8-aligned, 6,824 B below ktop, frame fits — only the
+frame's CONTENT is wrong, the third time that is the right sentence.
+
+**The `[apfreeze]` is downstream, and now checkable rather than inferred.**
+`rip=0xFFFFFFFF80016841` is the `jmp` of the `hlt; jmp` pair at
+`schedule_locked+0x670/0x671` — the halt loop ending the `[schedcheck]` block,
+reachable only by falling out of `kline_emit` (single-entry, verified; the
+fall-through at `0x1684b` is `prev->switches_away++`). Every later `[vblk] compl
+wait timeout` reads `dest_cpu=2 dest_abs=164` against a BSP climbing to 5254 —
+DDR-1115's causal chain on a third artefact.
+
+**Three exact witnesses, and the chain runs one call further than DDR-1118
+traced.** Measured in this binary, never carried (§INV.18):
+
+| slot | predicted | observed |
+|---|---|---|
+| `[S+0x00]` | `S+0x30` | `rflags=0x07C2A588` ✓ |
+| `[S+0x08]` | `finish_task_switch+0xd` = `0x1613d` | `r15=0xFFFFFFFF8001613D` ✓ |
+| `[S+0x38]` | `call local_irq_restore` ret = `0x1687f` | `ret=0xFFFFFFFF8001687F` ✓ |
+
+`call context_switch` @`0x1686c` → `0x16871`; `call finish_task_switch`
+@`0x16871`; `finish_task_switch` opens `push rbp / mov rsp,rbp / sub $0x20 /
+call this_cpu` @`0x16138`; it returns, rsp is back at S+0x40, and `call
+local_irq_restore` @`0x1687a` writes `0x1687f` at S+0x38. **Three slots, three
+exact matches, no free parameters** — and the third shows the thread COMPLETED
+`finish_task_switch` and ran into the irq-restore that ends `schedule_locked`.
+**The numerals moved again while the offset did not:** `finish_task_switch` is
+`0x80016130` here against `0x80016120` in fires 1–2, while `+0xd` holds in all
+three. §INV.18, third binary.
+
+**THE FINDING.** DDR-1118 §6 named the discriminator in advance and named it
+correctly: `disp == saves + 2` is a thread switched in twice with no save
+between. **Observed `disp=40669 saves=40668` — difference 1, the HEALTHY
+identity**, confirmed against the disassembly (the check reads `next`'s counters
+at `0x2848`/`0x2850` off `-0x28(%rbp)`; the fall-through increments `prev`'s off
+`-0x10(%rbp)`). And `rq_on=0` — the thread was NOT also sitting in a runqueue,
+DDR-1118's own named precondition, ABSENT.
+
+**So the consumed-frame READING is confirmed harder than ever while the
+SECOND-SWITCH MECHANISM is refuted on this artefact.** The instrument worked:
+DDR-1118 built `disp`/`saves` because stack litter is an argument and an
+identity is a number, and built `rq_on` because a double resume needs the thread
+queued while running. Both answered, and both answered against the hypothesis
+that motivated them.
+
+**What the identity does NOT rule out** — stated because the flattering reading
+is one sentence away: (a) a **stale `->rsp`**, since `switches_away++` and the
+`->rsp` store are different operations; (b) a **recycled TCB, to which the
+identity is BLIND** — `kmalloc` does not zero (NON-NEGOTIABLE 10), a reissued
+TCB carries its previous owner's counters, `old_disp == old_saves` for a parked
+thread, and one `dispatches++` yields `disp = saves + 1` on a recycled object.
+DDR-1096 §3 is untouched and `OPEN2_HUNT`'s `tid` re-check is aimed at exactly
+it — and was made startable today (DDR-1117 landed on the default branch).
+
+**The three fires are not the same thread.** Fire 3 is tid 11, `pid=0` — a
+KERNEL thread — with 40,669 dispatches, 6,824 B below ktop, on CPU 2, against
+tid 22 / ~1,500 B / CPU 1 for fires 1–2. DDR-1119 recorded tid 22 twice as a
+WEAK narrowing and said so; **fire 3 breaks it.** The one invariant surviving all
+three is the structural `[S+0x00] = rsp + 0x30`. A long-lived kernel thread means
+whatever selects a spent frame is not confined to create/teardown.
+
+**A second red on the same head is a DIFFERENT site and must not be pooled:**
+shard 7 `smoke-smpsched`, `[apfreeze] cpu=2 ticks=162 rip=0xFFFFFFFF80049A52` →
+`spin_lock_contended+0x92 ← spin_lock+0x25 ← spin_lock_irqsave+0x1c ←
+submit+0x2e ← vblk_read+0x34` — a lock wait, not a halt loop, not a
+`[schedcheck]` fire. Exactly what DDR-1060 built `waiters=` for. NOT attributed,
+NOT explained, NO rate, NO common cause asserted.
+
+**NOT CLAIMED:** no fix, no mechanism, OPEN-2 does not close, no open issue moves;
+`GLOBAL_FORBIDDEN` 77, 179 gates, no new clause so the set of frames that fire is
+unchanged; DDR-1118 and DDR-1119 are NOT withdrawn — DDR-1118's reading is
+confirmed and only its mechanism is refuted, by its own field; `5f3ac9e` is NOT
+exonerated in advance (DDR-1042).
+
 ## DDR-1119 — the FIRST `[schedcheck]` fire was the same consumed frame (2026-09-13)
 
 **Assessment + correction of a READING. Docs-only: no code change, no gate, no new

@@ -6,6 +6,58 @@
 
 ---
 
+## CHECKPOINT 2026-09-13 — DDR-1120: the THIRD `[schedcheck]` fire; the identity refutes the double resume
+
+**NO FIX, NO MECHANISM, OPEN-2 DOES NOT CLOSE.** Docs-only; `kernel.bin` NOT
+rebuilt (`6af029b001e6e6db`, 1,319,306 B).
+
+**Artefact:** CI 34766468421 shard 5 `smoke-smpuser` on `5f3ac9e`, `kernel.bin: OK`.
+
+```
+[schedcheck] next->rsp invalid tid=11 pid=0 rsp=0x07C2A558 base=0x07C28000
+             rflags=0x07C2A588 r15=0xFFFFFFFF8001613D ret=0xFFFFFFFF8001687F
+             rq_on=0 disp=40669 saves=40668 halting.
+```
+
+**The headline: DDR-1118's own instrument refuted DDR-1118's mechanism on the
+first capture that could test it.** `disp − saves = 1` is the HEALTHY identity;
+DDR-1118 §6 named `== 2` in advance as the double-resume signature. `rq_on=0`
+removes its named precondition too. **The consumed-frame READING is confirmed
+harder than ever (three exact witnesses); the SECOND-SWITCH MECHANISM is
+refuted.**
+
+**Rules paid for, carry them:**
+
+1. **An arithmetic identity can be blind to the thing you most fear.**
+   `disp = saves + 1` also holds on a **recycled TCB** — `kmalloc` does not zero,
+   the reissued object carries its previous owner's counters, and one
+   `dispatches++` reproduces the healthy difference. Do NOT read `disp−saves=1`
+   as "the TCB is sound". DDR-1096 §3 is untouched.
+2. **Three fires, three different threads.** Fire 3 is tid 11 `pid=0`, a KERNEL
+   thread, 40,669 dispatches, 6,824 B below ktop, CPU 2. DDR-1119 flagged "tid 22
+   twice" as weak; **it was right to, and fire 3 breaks it.** The only invariant
+   across all three is the structural `[S+0x00] = rsp + 0x30`.
+3. **§INV.18, a third time, on a third binary.** `finish_task_switch` is
+   `0x80016130` here vs `0x80016120` in fires 1–2 — **the numeral moved, `+0xd`
+   did not.** Re-measure per capture; never carry.
+4. **The chain runs one call further than DDR-1118 traced.** `[S+0x38]` held the
+   `call local_irq_restore` return address (`0x1687f`), not the
+   `finish_task_switch` one — i.e. the thread *completed* `finish_task_switch`.
+   DDR-1118 saw `ret=0` there and correctly said only "neither legal value".
+5. **Two reds on one head are not one finding.** Shard 7 froze in
+   `spin_lock_contended ← … ← vblk_read` — a **lock wait**, not a halt loop, not
+   a `[schedcheck]` fire. Do not pool them. DDR-1060's `waiters=` is the field to
+   read on the next one.
+6. **A run that fails on purpose keeps its capture elsewhere** — and here the
+   capture also carried a DDR-1055 console splice
+   (`dest_cpu=[yieldstall] site=mnt_lock …`). Don't parse spliced text as fields.
+
+**Where a fourth fire points:** whether `disp − saves` is ever 2 (restoring the
+double-resume for some other fire), and whether `tid` is stable across the
+`OPEN2_HUNT` pause — the recycled-TCB reading is what this artefact leaves
+standing, and the hunt was finally made startable today (DDR-1117 / PR #20,
+merged to `dev/phase1` as `73c3e71`; run #1 = 34779936087).
+
 ## CHECKPOINT 2026-09-13 — DDR-1119: the FIRST `[schedcheck]` fire was the same consumed frame
 
 **Docs-only. No fix, no mechanism named, OPEN-2 does not close. `build/kernel.bin`
