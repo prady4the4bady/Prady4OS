@@ -13390,3 +13390,72 @@ commit, so its entry was *updated* in place at all carriers, not re-numbered.
 (`dev/phase1`) and the file is on `dev/phase1-seyp3n`; it has no push/PR trigger
 so landing it adds zero CI load. **This session must not push to another branch
 without explicit permission.** (b) DDR-1099 §7 is **closed** by DDR-1105.
+
+---
+
+## CHECKPOINT 2026-09-13 — `ff80e56` verdict GREEN; the checklist audit is COMPLETE
+
+**CI, read correctly** (`pull_request_read method=get_check_runs`, never
+`list_workflow_runs`): tip `ff80e56` is **32/32 green**, both suites — push
+**34731286575**, pull_request **34731287832** — twenty shard jobs plus `build`,
+`shard-check`, `code-graph`, `aether-layer` and both `arch-bootstrap`.
+
+**Binary identity READ, not inferred** (DDR-1097 — only the hash discriminates):
+the build job's published `kernel.sha256` is
+`95493b96c7d13f30d83bb116d6d9157922081db827ee30d61ca971f7d6674d94` at
+**1,319,306 B**, byte-identical to the local build DDR-1112's mutants were
+measured on. Shard 5 (which owns `smoke-sysmmap`) prints `ALL PASS — 17 gates`
+then `kernel.bin: OK`; since a missing required sentinel fails the gate and a
+failed gate fails the shard, that **is** the claim that all **nine**
+`smoke-sysmmap` sentinels matched. Zero `[schedcheck]`, zero `[apfreeze]`, zero
+`panic_stage=`.
+
+**THREE-GREENS COUNT, HONESTLY:** `ff80e56` got **two** suites, not three, and
+every push resets it (§NON-NEGOTIABLE 1). Costs nothing today — release HELD,
+`v1.0.0` untagged, no promotion in flight. The third green, when wanted, comes
+from `workflow_dispatch` (§INV.15), never `gh run rerun`.
+
+### Committed this checkpoint (2, docs-only, batched — NOT pushed one at a time)
+
+- **`55af3de` — DDR-1112 §10.** The verdict above, plus a correction to
+  DDR-1112's **own** §9: `ci-probe-rodata-check` reads **79 locally and 77 in
+  CI on the same commit**. Both right — the gap is exactly ADR-034's two
+  cross-arch kernels, which CI builds in the **separate `arch-bootstrap` job**.
+  **The absolute figure is host-dependent; only the delta was ever the claim**
+  ("79 **unchanged**, no new probe" is true on either scale, and no gate asserts
+  the count). Quote the scale, or quote the delta.
+- **`05d954b` — DDR-1113.** Audits §5.1 / §5.1b / §5.2 — **the last three
+  unaudited blocks. THE CHECKLIST AUDIT IS NOW COMPLETE** (§1, §3, §4, §5.3,
+  §5.4, §6 were DDR-1086/1107/1110/1111).
+
+### DDR-1113's three findings
+
+1. **`ACTION_EXEC_CODE`'s blocker is retired AS WORDED — and the row stands.**
+   A sandboxed interpreter has existed since DDR-1034 (`experiment.c`, gated,
+   and it mints this row's own `CAP_EXEC`). But its safety is *the instruction
+   set, not a guard* — no LOAD, no STORE, no addressing mode — so it computes an
+   integer and touches nothing, while `ACTION_EXEC_CODE`/PRAX means code that
+   *does* something. **Real blocker: giving it those effects swaps an
+   encodability property for a checkable guard, on an agent-facing path.**
+   **DO NOT wire this row to `experiment.c` by widening its opcodes.**
+2. **There is no aarch64 or riscv64 ISO at all** — one `iso:` target, x86 —
+   **and U-Boot exists nowhere in build or source.** Deferral correct, reason
+   wrong; the multi-arch conclusion survives *strengthened*.
+3. **Section 3C closes at 8 of 8**, not 6+2, and both "traps" are resolved
+   (DDR-1083, DDR-1084) — verified in the tree, not from `CLAUDE.md`.
+
+### State
+
+`GLOBAL_FORBIDDEN` **77** (verified 77, not 0; `smoke-shell` reports
+`global-forbidden scan clean (77 patterns)`), **179 gates**, hygiene **ALL
+EIGHT**, `smoke-shell` **PASS**, `kernel.bin` **unchanged** at
+`95493b96c7d13f30` / 1,319,306 B. Free range advanced to **DDR-1114+** at all
+**four** carriers together (§INV.4), verified free in both DDR directories.
+
+### Next
+
+**OPEN-2 has no new artefact** — DDR-1105/1106's `[schedcheck]` instrument is
+built and has **never fired**; §NON-NEGOTIABLE 3 forbids a fix without one, so
+there is nothing to do but watch. With the checklist audit complete and most
+Groups A–H rows now refused, blocked, or unneeded by DDR-1069's test *with the
+reasons recorded*, **prefer auditing what remains over manufacturing work.**
