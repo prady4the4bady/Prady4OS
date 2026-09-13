@@ -4757,6 +4757,21 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ## DDR-1109 — the length half of the user-copy contract is clean (2026-09-12)
 
+**RESIDUAL NOW RECORDED AT THE SITE (2026-09-13).** sec.2.4(a) named the one
+place where the safety holds for a reason the code does not state -- `sys_writev`'s
+console gather is bounded by `copyin`'s own validation rather than by its `need`
+test -- and named a source comment as the cheap remedy. Done, comment-only:
+`kernel.bin` rebuilds **BIT-IDENTICAL** (`68e74ff4142f7c71`, 1,315,210 B, verified
+by rebuild not assumed, the DDR-1074/1090 proof for a comment-only change), so
+the size/headroom pair and `ci-docstate-check` are unaffected. **The per-term
+`len > GATHER_MAX` guard was considered and REFUSED, and the refusal is recorded
+in the comment rather than only here:** it would make the site self-sufficient
+and it changes nothing for any input that reaches it, but **no gate could tell
+the two versions apart** because `copyin` refuses either way -- an unfalsifiable
+change to the hottest output path in the system, the shape DDR-1082 costed and
+refused. No defect existed and none is alleged.
+
+
 **Assessment. Docs-only: no code change, no gate, NO DEFECT FOUND AND NONE
 ALLEGED.** Written in the CI-wait window on `f262ee7` while DDR-1108's build is
 held — that hold applies to any kernel change, because a red on a stacked tree

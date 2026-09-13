@@ -247,6 +247,30 @@ static long sys_writev(long fd, long uiov, long iovcnt, long a4, long a5, long a
         uint64_t need = 0;
         for (long i = 0; i < iovcnt; i++)
             need += iov[i].len;
+        /* THE BOUND ON `at` IS ENFORCED BY copyin, NOT BY THIS TEST --
+         * DDR-1109 sec.2.4(a). `need` is a sum of up to SYS_IOV_MAX uint64
+         * lengths, so a WRAPPED sum can land in (0, GATHER_MAX] while a term is
+         * enormous, and then `at + len <= need` does not hold.
+         *
+         * It is safe today, and the margin is MEASURED rather than asserted:
+         * SYS_IOV_MAX is 16, so an overflowing term is at least 2^64/16 = 2^60,
+         * against VMM_USER_MAX = 0x10000000000 = 2^40 (vmm.h:29) -- a factor of
+         * 2^20 -- and vmm_user_range_ok rejects such a length before copyin
+         * writes a byte.
+         *
+         * SO DO NOT REPLACE THE copyin BELOW WITH A memcpy, however thoroughly
+         * the source has already been validated: the overflow protection would
+         * go with it, SILENTLY, and `at` would run past gather[GATHER_MAX] on
+         * the kernel stack.
+         *
+         * A per-term `len > GATHER_MAX` guard would make this self-sufficient
+         * and is deliberately NOT added: it changes nothing for any input that
+         * reaches here (a single len above 256 already disqualifies the gather
+         * whenever the sum does not wrap), and NO GATE COULD TELL THE TWO
+         * VERSIONS APART because copyin refuses either way -- an unfalsifiable
+         * change to the hottest output path in the system, which is the shape
+         * DDR-1082 costed and refused. The dependency is recorded here instead,
+         * where the edit that would break it happens. */
         if (need > 0 && need <= (uint64_t)GATHER_MAX) {
             char gather[GATHER_MAX];
             uint64_t at = 0;
