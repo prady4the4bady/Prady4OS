@@ -32,8 +32,13 @@ precisely because that bar has not been met.
 decisions a person must make. §1.3 and §1.4 sit here because they are
 *operator-owned* rather than open: §1.3 is a triage whose merges are the
 operator's action to take, and §1.4 is a decision the operator has already made
-and which is recorded so it is not re-opened by a later session. Everything
-outside Section 1 is recorded, not blocking.
+and which is recorded so it is not re-opened by a later session. **§1.5 is
+neither** — it is a safety confirmation the operator asked for before an
+implementation that has since **shipped** (DDR-1035), kept here as the frozen
+design record with a dated status header; it names one open half, the apt cache.
+*(This preamble did not account for §1.5 at all until DDR-1111; both were added
+in the same commit `e99be3a`, so the omission was original, not drift.)*
+Everything outside Section 1 is recorded, not blocking.
 
 ### 1.1 — Placeholder branding / logo art must be replaced or licensed
 
@@ -118,7 +123,7 @@ shipped OS image**; their blast radius is a developer graph tool.
 |---|---|---|---|
 | **#2** | npm group: `@hono/node-server`, `fast-uri` | **CLOSE — superseded** | Already remediated. `package-lock.json` carries 2.1.0 and 3.1.5, at or above every advisory's fix, and `npm audit` reports 0 vulnerabilities at every severity. Its base is `fd876cd`, far behind `main`. Merging it would be a no-op at best. |
 | **#3** | Docker `ubuntu` 24.04 → 26.04 | **DEFER post-1.0** | Not security. `Dockerfile:17` pins 24.04 **deliberately**, so container and WSL builds agree; changing the whole toolchain under 168 gates days from release reintroduces exactly the drift the image exists to remove. |
-| **#7** | `actions/checkout` 5 → 7 | **DEFER until after the CI efficiency work** | Used at 5 sites in `ci.yml`. Any `ci.yml` change alters the environment every gate runs in, and §NON-NEGOTIABLE 1 needs **3 greens on one tip SHA** — so merging this resets accumulated release evidence for no release-relevant gain. It also touches the same file the operator's own item 5 (caching + shared build artifact) will rewrite, so merging now buys a conflict. |
+| **#7** | `actions/checkout` 5 → 7 | **DEFER until after the CI efficiency work** | Used at 5 sites in `ci.yml`. Any `ci.yml` change alters the environment every gate runs in, and §NON-NEGOTIABLE 1 needs **3 greens on one tip SHA** — so merging this resets accumulated release evidence for no release-relevant gain. It also touches the same file the operator's own item 5 (caching + shared build artifact) will rewrite, so merging now buys a conflict. **[DDR-1111 2026-09-13: the CONFLICT leg is largely SPENT — item 5's big half has now rewritten `ci.yml` (DDR-1035); what remains of item 5 is the additive apt cache. THE VERDICT DOES NOT MOVE: the *evidence* leg never depended on it — a `ci.yml` change still resets the 3-greens count for no release-relevant gain. Both halves stated together, per DDR-1103's B#1 rule.]** |
 | **#8** | `actions/setup-python` 5 → 7 | **DEFER — same reason as #7** | Same file, same evidence-reset argument. |
 | **#9** | `sql.js` 1.14.1 → 1.14.2 | **SAFE TO MERGE** | A patch bump, and `package.json:21` already declares `^1.10.0`, so 1.14.2 is **inside the existing range** — this only moves the lockfile pin. Dev-tool scope, cannot reach a gate. |
 | **#15** | `web-tree-sitter` 0.22.6 → 0.26.13 | **HOLD — the only one with real breakage risk** | `package.json:23` pins it **exactly** (`"0.22.6"`, no caret), so this is a genuine minor-series jump in a WASM parser whose API changed across those versions. It can break `node server.js selftest`. Still **not release-blocking** — the graph tool is not in the OS — but it should be merged and watched deliberately, not swept in with the others. |
@@ -168,6 +173,26 @@ in it.** The predicate is now `g_panic_extra || g_panic_stage` (the winner sets
 built and is still the right deferral.**
 
 ### 1.5 — CI efficiency refactor: CONFIRMED SAFE, with two hazards that must be handled
+
+> **STATUS 2026-09-13 (DDR-1111) — SHIPPED, EXCEPT THE apt CACHE. The body below
+> is a DESIGN DOCUMENT and is deliberately left VERBATIM, in its original future
+> tense.** DDR-1035 (2026-09-01) implemented this and **named this section as its
+> own design record** rather than back-dating it — the correct call under
+> §NON-NEGOTIABLE 5 — which is why the text still reads "should" and "would".
+> Measured in `ci.yml`: the ten shards build **nothing** (no `make image`/`musl`/
+> `lwip`/`ci-probe-rodata-check`, and **no rustup at all** — a removal, not a
+> cache); the build job publishes and prints the digest (`:155-158`); each shard
+> asserts it **before** the gates (`:214-215`) **and again after**, guarded on the
+> download (`:254-256`); Hazard 1's mtime problem is handled by an explicit
+> `touch` (`:211-212`); Hazard 2 is honoured, `smoke-selftest` still per-shard
+> (`:222-223`); `fail-fast: false` intact (`:179`, `:287`).
+> **STILL OPEN, and the only part: the apt cache.** `grep` for
+> `actions/cache|cache:|~/.cargo|/var/cache/apt` over `ci.yml` returns **nothing**,
+> so every shard still runs `apt_prepare.sh`. **CORRECTED, NOT CLOSED.**
+>
+> So the sentence *"Today 'all 10 shards ran the same binary' is inferred …
+> afterwards it would be checked"* describes **the present**: it is checked, and
+> DDR-1108 §11.1 and the `704b2a5` verdict both rest on that digest.
 
 The operator asked for explicit confirmation **before** implementation, and for
 any structural reason the workflow is shaped this way to be stated rather than
@@ -1729,7 +1754,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **179** across **10** shards | `make ci-shard-check`, re-measured 2026-09-07 (DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1111+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
+| DDR free range | **DDR-1112+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
 | `kernel.bin` | **1,315,210 B** against the 1,572,864 B gate — **257,654 B** headroom | measured 2026-09-12 (DDR-1105); **re-derived, not carried** — and note `ci-docstate-check` reported **OK on the stale pair** right up to this edit, because 1,307,018 + 265,846 = 1,572,864 exactly. That is DDR-1063's stated limitation, not a defect in the check (DDR-1081 §5, DDR-1083): **passing it is not evidence a live-state number is current.** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |

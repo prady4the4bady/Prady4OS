@@ -4785,6 +4785,113 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1111 — a design document serving as a status row stays in the future tense (2026-09-13)
+
+Assessment + correction, **docs-only, no code change, no gate, no defect found
+and none alleged.** `PRE_LAUNCH_CHECKLIST` §1.5 reads in the **future tense
+throughout** — *"this is the confirmation, **not the change**"*, *"the refactor
+**should** … afterwards it **would be** checked"* — about the CI build-once plus
+per-shard hash assertion. **Every clause of that shipped in DDR-1035 on
+2026-09-01.** The row is stale in the *safe* direction, yet it sits in **SECTION
+1, OPERATOR DECISIONS REQUIRED**, so the one section a person reads to learn what
+is still owed says a CI refactor is outstanding — **and it denies an instrument
+this session has leaned on twice**, since DDR-1108 §11.1 and the `704b2a5`
+verdict both establish binary identity from the build job's *published digest*,
+exactly the mechanism §1.5 calls "inferred, not checked".
+
+**Measured clause by clause in `ci.yml`:** no shard runs `make image`/`musl`/
+`lwip`/`ci-probe-rodata-check` and none runs `rustup` (the two matching greps are
+**both comments**); the digest is published and `cat`'d (`:155-158`); each shard
+asserts it **before** the gates (`:214-215`) **and again after** under
+`if: always() && steps.fetch.outcome == 'success'` (`:254-256`), which the row
+never asked for; Hazard 1's mtime problem is handled by an explicit `touch`
+(`:211-212`); Hazard 2 is honoured, `smoke-selftest` still per-shard
+(`:222-223`); `fail-fast: false` intact (`:179`, `:287`).
+
+**THE FINDING IS A FOURTH SHAPE of the DDR-1084 §1 family and it is the
+sharpest** — found by reading DDR-1035's own header rather than assuming.
+DDR-1084 §1 never opens the row's file; DDR-1086 §1 opens one file and not the
+others; DDR-1107 §2 opens the right file and touches only the mechanical cell.
+**This one cites the row BY NUMBER as its own design document and leaves it in
+the future tense:** DDR-1035 §0 says *"The design for this was written and
+committed before the code, but as `docs/PRE_LAUNCH_CHECKLIST.md` §1.5 (commit
+`e99be3a`) … **Saying so rather than back-dating a design doc**."* Not forgotten
+— **quoted**. **And the reason is a genuine conflict, which is why DDR-1035 is
+not criticised:** a design document is written in the future tense *by
+construction*, and declining to back-date it is the **correct** call under
+§NON-NEGOTIABLE 5 (the DDR-1081 §5 instinct). One piece of text is doing two jobs
+that demand opposite treatment — frozen as a design record, current as a status
+row. **One instance, not a rate.**
+
+**GENUINE RESIDUAL, measured:** a tree-wide grep for
+`actions/cache|cache:|~/.cargo|/var/cache/apt` over `ci.yml` returns **nothing**.
+Of the row's *"toolchain caching (apt + rustup)"*, **rustup is better than done**
+— not cached but **removed** from all ten shards (the build job's comment: *"a
+removal, not a cache"*, because it is the only consumer of the Rust toolchain and
+nothing in `kernel.bin` depends on it) — while **apt is genuinely not done**.
+**§1.5 is CORRECTED, NOT CLOSED**, the `smoke-horizon` shape a fifth time.
+
+**SECOND FINDING, the DDR-1103 B#1 shape's third instance:** §1.3's disposition
+for PR **#7** gives two independent reasons to defer, and **the conflict leg is
+largely spent** — *"it touches the same file … item 5 **will rewrite**"* is no
+longer true, item 5's big half having rewritten `ci.yml` wholesale, with only the
+additive apt cache left. **The verdict does not move**, because the *evidence*
+leg never depended on it: a `ci.yml` change still resets the 3-greens count for
+no release-relevant gain. Both halves stated together, or a reader concludes #7
+is free to merge.
+
+**THIRD, SMALL:** Section 1's preamble enumerates §1.1–§1.4 one by one and
+**never mentions §1.5** — and `git log -S` shows the preamble *and* §1.5 were
+added in **the same commit `e99be3a`**, so the omission is **original, not
+drift**.
+
+**Three edits, all at the site** (this DDR's own finding applied to itself, per
+DDR-1110 §4): §1.5 gains a **dated status header** naming DDR-1035 and the one
+open clause, **with the argument text left verbatim**; the preamble gains a
+clause placing §1.5; §1.3's #7 row gains the spent-leg note, **keeping DEFER
+unchanged**. **REFUSED: rewriting §1.5's body into the past tense** — it is the
+design document DDR-1035 deliberately declined to back-date, and rewriting it
+destroys the ordering evidence §NON-NEGOTIABLE 5 protects (the DDR-1081 §5 trap).
+**A status header above frozen design text costs three lines and loses nothing**,
+and it generalises: **when one document is both a design record and a status row,
+date-stamp the status and leave the design alone.**
+
+**No checker built** — the signal ("a row says *should* about something that
+exists") is **semantic**: §1.5's tense is *correct* as a design doc and *wrong*
+as a status row, and nothing in the tree can tell which job a paragraph is doing.
+**The cheap substitute, sharpened from DDR-1107 §3:** a DDR that **cites a
+document section as its own design** has by construction **taken custody of that
+section's tense**.
+
+**NOT CLAIMED:** `kernel.bin` **not rebuilt**, so the size/headroom pair and
+`ci-docstate-check` are unaffected; `GLOBAL_FORBIDDEN` **77**; **179** gates; **79**
+probe ELFs. No `ci.yml` change of any kind; no apt cache built or designed; no PR
+merged, closed or re-triaged; no operator decision taken (§1.1 and §1.2 are not
+revisited); no gate run; no open issue moves (OPEN-1/2/12/13 untouched).
+
+---
+
+## DDR-1110 — §3's corrections live in the wrong document (2026-09-13)
+
+**Its three corrections were written AT THE SITES** (the `ACTION_SEND_IPC` row's
+`RETIRED 2026-09-13` block, DDR-1083's falsified sub-bullet, and F#73's
+`BLOCKER RELOCATED, NOT REMOVED` block above) **rather than as a log entry here**
+— which is that DDR's own finding applied to itself. This anchor exists so the
+tracker's DDR log is complete; **the substance is at the rows.** In short:
+`PRE_LAUNCH_CHECKLIST` §3 said the tracker rows were *"superseded by this
+section"*, and a correction in a **different document** does not change what a
+reader of the row sees. Two of three were still stale — one of them written
+*"stays deferred"* by DDR-1083 **one commit before DDR-1084 wired it**. **F#73 is
+the one that matters and it is stale in the DANGEROUS direction:** both its
+*stated* blockers really are retired, and **there is no natural-language
+capability on this machine at all** — the only inference path is
+`ollama_generate()` reaching `10.0.2.2:11434`, the QEMU SLIRP gateway, i.e. the
+developer's host; `AETHER_TEST_MODE` defaults to 1; `smoke-agent-live` is
+excluded so CI stays in test mode. So the row **keeps its `[DEFERRED]`** and the
+blocker is **relocated, not removed** (the DDR-1104 shape).
+
+---
+
 ## DDR-1109 — the length half of the user-copy contract is clean (2026-09-12)
 
 **RESIDUAL NOW RECORDED AT THE SITE (2026-09-13).** sec.2.4(a) named the one
