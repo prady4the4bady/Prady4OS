@@ -341,3 +341,95 @@ alleged** — the two findings above are in **my own probe** (§9.1) and are a
 (`MAP_PRIVATE` writes must not reach the file) remains **unreachable and
 unbuilt** until `MAP_SHARED` exists. **No open issue moves** (OPEN-1/2/12/13
 untouched); not an apfreeze, not OPEN-2.
+
+---
+
+## §10 — CI verdict for `ff80e56`, and a correction to §9's own ELF count
+
+### §10.1 — Green, and the binary is the one that was tested
+
+**32/32 checks green**, both suites on tip `ff80e56`: push run
+**34731286575** and pull_request run **34731287832**, twenty shard jobs plus
+`build`, `shard-check`, `code-graph`, `aether-layer` and both `arch-bootstrap`
+jobs, every one `success`.
+
+**The digest was READ, not inferred** (DDR-1097: only the hash discriminates, a
+size comparison cannot). The build job's published `kernel.sha256` prints
+
+```
+95493b96c7d13f30d83bb116d6d9157922081db827ee30d61ca971f7d6674d94  kernel.bin
+kernel: build/kernel.bin (1319306 bytes)
+```
+
+— byte-identical to the local build this DDR's §9 was measured on, so the CI
+verdict and the local mutants are statements about **one binary**. This is the
+seventh consecutive SHA whose identity was established this way, and the first
+since `de68f88` where the value is expected to be **new** rather than carried:
+the previous six all read `68e74ff4142f7c71`.
+
+Shard 5, which owns `smoke-sysmmap`, reports `shard 5: ALL PASS — 17 gates` and
+then `kernel.bin: OK` from the after-the-gates assertion (`if: always() &&
+steps.fetch.outcome == 'success'`, DDR-1035 §8). Since a missing required
+sentinel fails the gate and a failed gate fails the shard, **shard 5 `success` is
+exactly the claim that all nine `smoke-sysmmap` sentinels matched** — the four
+pre-existing ones, `ND REJECTED`, and this DDR's `FILE OK` / `CURSOR OK` /
+`FILEOFF OK`. Zero `[schedcheck]`, zero `[apfreeze]`, zero `panic_stage=` — all
+three are `GLOBAL_FORBIDDEN` entries, so a fire would have reddened whichever
+gate booted, and none did.
+
+**THE THREE-GREENS COUNT, STATED HONESTLY:** `ff80e56` has **two** suites, not
+three, and every push resets the count (§NON-NEGOTIABLE 1). That costs nothing
+today — the release is HELD, `v1.0.0` is untagged and no promotion is in flight —
+but it is not glossed. The third green, when it is wanted, comes from
+`workflow_dispatch` (§INV.15), never `gh run rerun`.
+
+### §10.2 — §9's "79 ELFs" is HOST-DEPENDENT, and CI reads 77
+
+Found while checking §10.1 rather than by looking for it, and corrected **here,
+in the document that states it**, per DDR-1110 §4.
+
+§9 records `ci-probe-rodata-check` **79 ELFs**. The CI build job on this exact
+commit prints
+
+```
+probe-rodata-check: OK — 77 ELFs, none carry a writable allocated section
+```
+
+**Both are correct, and the number is not a property of the tree.** Measured:
+`probe_rodata_check.sh` scans `build/*.elf`, and the two-ELF gap is exactly
+`build/kernel-aarch64.elf` and `build/kernel-riscv64.elf` — ADR-034's boot-only
+cross-arch kernels, built by the `smoke-aarch64` / `smoke-riscv64` targets. In CI
+those targets run in the **separate `arch-bootstrap` job**, so the `build` job's
+tree never contains them; on a development host that has run the arch gates, it
+does. 79 − 2 = 77, and the enumeration was checked rather than assumed (every
+local `build/*.elf` basename is referenced by the Makefile or `user/`, so there
+are no stale orphans; 74 are `incbin`'d by `user_image.asm`, the rest are
+`kernel.elf`, the two arch kernels, and the three non-embedded probes
+`argtest` / `slowtest` / `term`).
+
+**WHAT IS LOAD-BEARING IN §9 IS UNAFFECTED, AND THAT IS THE POINT OF RECORDING
+THIS:** §9's actual claim is *"79 ELFs **unchanged** — no new probe"*, and that
+is **true on either scale** — DDR-1112 edited `user/systest.asm` and registered
+no probe ELF, so the count did not move whichever host measured it. §NON-NEGOTIABLE
+15 requires the check to be **run** before registering a probe; it is a pass/fail
+check and **no gate asserts the count**, so nothing depends on the figure.
+
+**The cost is a misreading waiting to happen**, which is why it is written down:
+the project's own history mixes both scales (`SESSION_HANDOFF.md:12118` records a
+genuine registration as `76 → 77 ELFs`, on the no-arch-kernels scale;
+`:13171` and `docs/BUILD_TRACKER.md:4794` say 79, on this host's). A future
+session comparing a stated 79 against a CI log reading 77 would reasonably
+conclude two probes had gone missing and spend the time re-deriving what this
+section now states. **Report the count with the scale it was taken on, or report
+the delta rather than the absolute** — the delta is what the claim ever needed.
+
+**NOT CLAIMED:** no defect, in the checker or anywhere else — `probe_rodata_check.sh`
+is correct on both trees and passes on both, and the cross-arch kernels being in
+its scan is harmless (it tests each ELF for a writable `PT_LOAD` and asks the
+binary rather than maintaining a list, which is precisely why it does not care
+what else lands in `build/`). **Nothing is renamed, no file is excluded from the
+scan, and the script is UNALTERED** — narrowing it to "probes only" would
+reintroduce the hand-maintained list its own header refuses. **No gate, no
+sentinel, no code change**, `kernel.bin` not rebuilt, so the size/headroom pair
+and `ci-docstate-check` are unaffected; `GLOBAL_FORBIDDEN` 77, 179 gates. **No
+open issue moves** (OPEN-1/2/12/13 untouched).

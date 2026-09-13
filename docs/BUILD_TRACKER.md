@@ -4791,7 +4791,10 @@ The last unblocked substantial backlog row. **Design was committed BEFORE the
 code** (§NON-NEGOTIABLE 5). Eager `MAP_PRIVATE`: the frame is filled from the
 file *before* it is mapped, so no page-fault path is involved. `kernel.bin`
 1,315,210 → **1,319,306 B**, headroom **253,558 B** recomputed in the same edit;
-`ci-probe-rodata-check` **79 ELFs unchanged** (no new probe); `smoke-sysmmap`
+`ci-probe-rodata-check` **79 ELFs unchanged** (no new probe — and *unchanged*
+is the load-bearing word: the ABSOLUTE figure is host-dependent, CI's `build` job
+reading **77** on this same commit because ADR-034's two cross-arch kernels are
+built in the separate `arch-bootstrap` job, DDR-1112 §10.2); `smoke-sysmmap`
 5 → **9** sentinels; gate count **179**; `GLOBAL_FORBIDDEN` **77**; hygiene
 **ALL EIGHT**, `ci-cr3-writers-check` included (no new `->cr3` writer).
 
