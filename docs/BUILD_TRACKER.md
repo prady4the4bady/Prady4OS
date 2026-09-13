@@ -286,7 +286,7 @@ is post-1.0 by the operator's own scoping, so the payoff is post-1.0 too.
 | `ACTION_SCAN_ENVIRONMENT` | post-L7; SLAM3R, no hardware path |
 | `ACTION_QUERY_SCENE` | post-L7 NL query over a scene graph that does not exist |
 | `ACTION_PARSE_DOCUMENT` | needs a 64 MiB local OCR model; no model-shipping path |
-| `ACTION_EXEC_CODE` | needs a sandboxed interpreter — a subsystem, not an action |
+| `ACTION_EXEC_CODE` | ~~needs a sandboxed interpreter — a subsystem, not an action~~ **CORRECTED 2026-09-13 — DDR-1113 §1 / DDR-1114 §2.1: an interpreter HAS existed since DDR-1034** (`kernel/aether/experiment.c`, CI-gated by `smoke-runexp`, and it mints this row's own `CAP_EXEC`). **STILL DEFERRED, on a different blocker:** `experiment.h`'s safety is **the instruction set, not a guard** (no LOAD, no STORE, no addressing mode), so an approved experiment computes an integer and touches nothing; `ACTION_EXEC_CODE` means code that **does** something, which that machine cannot express by construction. Giving it effects replaces an encodability property with a checkable guard. **Do not widen the opcode set.** |
 | `ACTION_BROWSE_WEB` | needs a headless browser **and network egress = cloud bridge (DDR-793)**. **DEFERRED post-1.0 (DDR-843)** — nothing in the release path depends on it, and enabling it is a security-posture change (outbound egress from an agent-capable OS), not a feature toggle. Needs an explicit instruction to enable the bridge |
 
 Declaring these as enum values without enforcement would be worse than omitting
@@ -1052,20 +1052,45 @@ ticked. Logged here verbatim from the table, reasons unchanged.
 - Intel HDA audio — `[DEFERRED: deferred, optional — no QEMU HDA path in CI]`
 - Wayland/wlroots compositor — `[DEFERRED: superseded by shipped custom C framebuffer compositor]`
 - CMake/Makefile hybrid — `[DEFERRED: deferred post-1.0, awaiting operator sign-off (DDR-843)]`
-- Apple Silicon / m1n1 — `[DEFERRED: deferred post-1.0 — aarch64 ISO uses U-Boot path]`
+- Apple Silicon / m1n1 — `[DEFERRED: deferred post-1.0 — no aarch64 ISO is built]`
+  - **REASON CORRECTED 2026-09-13 — DDR-1114 §2.2.** This read *"aarch64 ISO uses
+    U-Boot path"*, copied from `CLAUDE.md` §PRE-APPROVED EXCEPTIONS as that table
+    instructs. **Both halves were false:** U-Boot appears **nowhere in the build or
+    the source** (Markdown only, tree-wide), and `Makefile:1160` is the **only**
+    `iso:` target and it is **x86**. The deferral stands; the reason did not.
 - `ACTION_CAPTURE_FRAME` — `[DEFERRED: post-L7, no hardware path]`
 - `ACTION_SCAN_ENVIRONMENT` — `[DEFERRED: post-L7, needs SLAM3R]`
 - `ACTION_QUERY_SCENE` — `[DEFERRED: post-L7, no scene graph]`
 - `ACTION_PARSE_DOCUMENT` — `[DEFERRED: needs 64 MiB OCR model, no model-shipping path]`
-- `ACTION_EXEC_CODE` — `[DEFERRED: needs sandboxed interpreter subsystem]`
+- `ACTION_EXEC_CODE` — `[DEFERRED: an approved experiment computes an integer and
+  touches nothing; giving it effects replaces an encodability property with a
+  checkable guard]`
+  - **BLOCKER RELOCATED 2026-09-13 — DDR-1113 §1, applied here by DDR-1114 §2.1.**
+    This read *"needs sandboxed interpreter subsystem"*. **One has existed since
+    DDR-1034** — `kernel/aether/experiment.c`, **CI-gated by `smoke-runexp`**
+    (`Makefile:3907`), **minting this row's own `CAP_EXEC`** (`sys_experiment.c:35`
+    and `:45`). **THE ROW STAYS DEFERRED** and the correction is deliberately not a
+    deletion: a session that greps, finds the interpreter, and concludes the
+    exception is spent would widen the opcode set — **and the stale sentence would
+    at least have stopped them** (DDR-1110's rule). **Do not widen it.**
 - `ACTION_BROWSE_WEB` — `[DEFERRED: deferred post-1.0 (DDR-793) — cloud bridge is a security-posture change]`
-- `arch/aarch64` full port — `[DEFERRED: boot-only scope per ADR-034 — ISO uses boot-only kernel]`
-- `arch/riscv64` full port — `[DEFERRED: boot-only scope per ADR-034 — ISO uses boot-only kernel]`
+- `arch/aarch64` full port — `[DEFERRED: boot-only scope per ADR-034 — no aarch64 ISO is built]`
+- `arch/riscv64` full port — `[DEFERRED: boot-only scope per ADR-034 — no riscv64 ISO is built]`
+  - **REASON CORRECTED 2026-09-13 — DDR-1114 §2.4.** ADR-034's boot-only scope is
+    **correct and stands**; the *"ISO uses boot-only kernel"* clause presupposed an
+    artefact that is not built (see the Apple Silicon row). What ships for both
+    architectures is the boot stub, built in its own `arch-bootstrap` CI job.
 - Cloud bridge activation — `[DEFERRED: deferred post-1.0 (DDR-793)]`
 - Rust rewrite — `[DEFERRED: not in scope]`
 - `CAP_OCR` / `CAP_SCENE` with no hardware path — `[DEFERRED: capability bit defined, enforcement deferred — no subsystem path]`
 - SFS block reclamation on-disk — `[DEFERRED: in-memory reclaim shipped (DDR-762-v2); on-disk free-tree deferred post-1.0]`
-- NVMe completion IRQ — `[DEFERRED: poll-mode sufficient for ISO; DDR-774a/b/c deferred until B#3 SMP stable]`
+- NVMe completion IRQ — `[DEFERRED: poll-mode sufficient for ISO; DDR-774a/b/c deferred]`
+  - **SPENT CLAUSE DROPPED 2026-09-13 — DDR-1114 §2.3.** This ended *"until B#3 SMP
+    stable"*, and **B#3 is CLOSED** (`CLAUDE.md:22`, *"DONE — DDR-981"*: `yield()`
+    spun with `RFLAGS.IF` clear; 20/20 at `-smp 4`). **The deferral stands on the
+    FIRST reason only** — DDR-1103 §1 established the verdict survives on the
+    exception's ground (poll-mode sufficient) and not the blocker's, and corrected
+    the Group B **work** row; this was the exceptions copy.
 - `ACTION_SEND_IPC` — `[DEFERRED: no ring-3 IPC surface — ipc_send/ipc_recv are kernel-internal and capability-gated and there is no SYS_IPC_*, so an approved SEND_IPC has no executor in any ring; building it is new kernel ABI plus a security decision (DDR-1017 §1)]`
   - **RETIRED 2026-09-13 — DDR-1110, recording DDR-1084's work at the row it
     falsified.** Both halves of this blocker are gone and neither was retired by
@@ -4782,6 +4807,60 @@ DDR-1066 shape where the pre-fix tree is the control, run in both directions.
 
 `rsp & ~(STACK_SIZE-1)` is **refused, not deferred**: it would make the check
 depend on buddy-allocator alignment that nothing states or tests.
+
+---
+
+## DDR-1114 — the exceptions table is a SOURCE, not a status list, and three of its rows are stale (2026-09-13)
+
+**Docs-only. No code change. No gate. No defect found in any code and none alleged.**
+
+`CLAUDE.md` §PRE-APPROVED EXCEPTIONS is the last table never read row by row — every
+backlog group having been audited (E=1071, F=1072, A/B=1073, G=1075, H=1081,
+D=1101/1102, B=1103, C=1104) and the checklist completed by DDR-1113.
+
+**What makes it its own record is the table's own header**, one line above the first
+row: *"For each: add a one-line entry in `docs/BUILD_TRACKER.md` as
+`[DEFERRED: reason]`."* So it is **not a list a reader consults — it is a source its
+own instruction says to COPY**, and the copies exist: `:1055`, `:1060` and `:1068` of
+this file carry three of the reasons **verbatim**, and `:289` an elaborated fourth.
+**A stale row there is not merely stale, it is instructed to be replicated** — a worse
+property than every staleness shape already on record, each of which misleads a reader
+of *one* row.
+
+**Three rows, three shapes.** (a) `ACTION_EXEC_CODE` *"needs sandboxed interpreter
+subsystem"* — **false**, one has existed since DDR-1034 (`experiment.c`, CI-gated by
+`smoke-runexp`, minting this row's own `CAP_EXEC`); **stays deferred** on DDR-1113
+§1's relocated blocker, and is corrected in place rather than deleted because the
+stale sentence would at least have stopped a session from widening the opcode set.
+(b) Apple Silicon *"aarch64 ISO uses U-Boot path"* — **false twice over**, re-measured
+independently: U-Boot appears nowhere in the build or the source, and `Makefile:1160`
+is the only `iso:` target and it is x86. (c) NVMe *"until B#3 SMP stable"* — **spent**,
+B#3 closed by DDR-981; the deferral survives on *"poll-mode sufficient"* alone.
+
+**The pattern is this author's own, one commit ago.** DDR-1113 §3 wrote *"the pattern's
+own author missing its own instance one directory across"* — and then corrected the
+checklist's copies of (a) and (b) while leaving the identical claims here and in
+`CLAUDE.md`. Fourth instance of the DDR-1084 §1 family, in the DDR-1086 §1 shape that
+DDR-1113 cited **by name while producing it** — and sharper than any previous instance,
+because **DDR-1113's correcting text sits at `:4795` of this file and the row it
+corrects at `:1060`, ~3,700 lines apart in the same document.** No rate claimed; the
+honest reading is structural — a DDR's working set is the file it is arguing about.
+
+**Fourteen of seventeen rows are correct** and are listed in the DDR, because an audit
+that only reports errors is not an audit.
+
+**No checker**, and §4 is the proof it cannot be mechanised: a grep that found
+`experiment.c` would conclude the `ACTION_EXEC_CODE` row is *closeable*, **the opposite
+of the correct answer**. The cheap substitute needs no judgment at all: **a document
+that instructs its rows be copied elsewhere owes a correction to every copy, and the
+copies are enumerable by grep.**
+
+Eleven edits, **all at the sites** (DDR-1110 §4, load-bearing here rather than
+stylistic): five `CLAUDE.md` exception rows, its §DEFERRED line, and the four copies in
+this file. Nothing is closed, no deferral lifted, no reason deleted — every edit keeps
+the original wording visible beside the correction.
+
+Full record: `docs/ddr/DDR-1114-the-exceptions-table-is-a-source-and-three-of-its-rows-are-stale.md`
 
 ---
 

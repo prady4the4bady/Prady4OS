@@ -13459,3 +13459,84 @@ built and has **never fired**; §NON-NEGOTIABLE 3 forbids a fix without one, so
 there is nothing to do but watch. With the checklist audit complete and most
 Groups A–H rows now refused, blocked, or unneeded by DDR-1069's test *with the
 reasons recorded*, **prefer auditing what remains over manufacturing work.**
+
+---
+
+## CHECKPOINT 2026-09-13 06:1x UTC — DDR-1114: the exceptions table is a SOURCE
+
+### CI verdict for `ff80e56`..`83ac6e5` (read, not inferred)
+
+Build job `103678016077` (suite `34740011216`) published, verbatim:
+
+```
+95493b96c7d13f30d83bb116d6d9157922081db827ee30d61ca971f7d6674d94  kernel.bin
+kernel: build/kernel.bin (1319306 bytes)
+probe-rodata-check: OK — 77 ELFs, none carry a writable allocated section
+```
+
+**Four docs-only commits did not move the binary** — byte-identical to `ff80e56`'s
+digest and to the local build, so the proof form DDR-1009/1074/1090 rest on holds.
+Both `build`, both `shard-check`, both `arch-bootstrap` pairs, `aether-layer` and
+`code-graph` were `success`; **shards were still in flight** when this was written.
+The `77 ELFs` line is a **second, independent observation** of DDR-1112 §10.2 (77 in
+CI, 79 locally — the gap is exactly ADR-034's two cross-arch kernels, built in the
+separate `arch-bootstrap` job); §10.2 was written from one observation and said so,
+so this is a **confirmation, reported at that weight and no higher**.
+
+**THREE-GREENS COUNT, HONESTLY: `83ac6e5` has at most two suites**, and each of the
+four pushes reset the count. The release is HELD and `v1.0.0` untagged, so it costs
+nothing today. Third green comes from `workflow_dispatch` (§INV.15), never
+`gh run rerun`.
+
+### DDR-1114 — the last table never read row by row
+
+`CLAUDE.md` §PRE-APPROVED EXCEPTIONS. **What makes it its own record is the table's
+own header:** *"For each: add a one-line entry in `docs/BUILD_TRACKER.md` as
+`[DEFERRED: reason]`."* **It is a SOURCE its own instruction says to COPY**, and the
+copies exist — `BUILD_TRACKER:1055/:1060/:1068` verbatim, `:289` elaborated. **A stale
+row there is not merely stale, it is instructed to be replicated.**
+
+Three rows stale, three shapes: `ACTION_EXEC_CODE` (interpreter shipped in DDR-1034 —
+**blocker relocated, row stays deferred, do not widen the opcode set**); Apple Silicon
+(**U-Boot nowhere in build or source; one `iso:` target and it is x86**); NVMe
+(**`until B#3 SMP stable` is spent** — B#3 closed by DDR-981; deferral survives on
+*"poll-mode sufficient"*).
+
+**THE PATTERN IS THIS AUTHOR'S OWN, ONE COMMIT AGO.** DDR-1113 §3 wrote *"the
+pattern's own author missing its own instance one directory across"* — and then
+corrected the checklist's copies while leaving the identical claims in `CLAUDE.md`
+and `BUILD_TRACKER`. Fourth instance of the DDR-1084 §1 family, in the DDR-1086 §1
+shape **cited by name while producing it** — and sharper than any before it, because
+**DDR-1113's correcting text is at `BUILD_TRACKER:4795` and the row it corrects at
+`:1060`: the same file, ~3,700 lines apart.** No rate claimed; the reading is
+structural — a DDR's working set is the file it is arguing about.
+
+**Fourteen of seventeen rows are correct** and are listed, because an audit that only
+reports errors is not an audit. **No checker** — a grep that found `experiment.c`
+would call the `ACTION_EXEC_CODE` row *closeable*, the opposite of the correct answer.
+Cheap substitute, needing no judgment: **a document that instructs its rows be copied
+owes a correction to every copy, and the copies are enumerable by grep.**
+
+Eleven edits, **all at the sites** (DDR-1110 §4). **Nothing closed, no deferral
+lifted, no reason deleted** — every edit keeps the original wording visible.
+
+### State
+
+`GLOBAL_FORBIDDEN` **77** (`smoke-shell`: `global-forbidden scan clean (77
+patterns)`), **179 gates**, hygiene **ALL EIGHT**, `smoke-shell` **PASS**,
+`kernel.bin` re-hashed **after** the gate and **unchanged** at `95493b96c7d13f30` /
+1,319,306 B. Free range advanced to **DDR-1115+** at all **four** carriers together
+(§INV.4); DDR-1114 verified free in both DDR directories before allocation.
+
+### Next
+
+**Every table in `CLAUDE.md` and every block of `PRE_LAUNCH_CHECKLIST.md` has now
+been audited.** OPEN-2 still has no artefact — the `[schedcheck]` instrument is built
+and has never fired, and §NON-NEGOTIABLE 3 forbids a fix without one. CI check-in
+re-armed for **06:26 UTC naming `83ac6e5`** (the earlier one named `09fdf43`, a stale
+tip, because `83ac6e5` was pushed after it was armed).
+
+**Dependabot: measured and reported, NOT merged** — pinned versions unchanged, new
+advisories published against those same versions, dev tooling only (`grep -rn
+graph_mcp Makefile` returns nothing, so not in `kernel.bin` or the ISO). Per
+`PRE_LAUNCH_CHECKLIST` §1.3 merging dependency PRs is the **operator's** action.
