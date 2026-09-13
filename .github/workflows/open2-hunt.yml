@@ -25,6 +25,29 @@
 # allocates whatever hardware it allocates, invisibly, so spreading runs over
 # time is the only handle this project has on that variable.
 #
+# WHERE THIS RUNS, AND WHY THE TWO BRANCHES DIFFER — MEASURED, NOT ASSUMED.
+# GitHub reads the workflow FILE from the default branch (that is DDR-1117: a
+# `schedule`/`workflow_dispatch` workflow that lives anywhere else is unstartable
+# by any means). But the HARNESS this job runs lives on dev/phase1-seyp3n:
+# tools/ci/apt_prepare.sh, tools/ci/open2_hunt_campaign.sh, and the OPEN2_HUNT
+# build flag in the Makefile and kernel/proc/sched.c are ALL absent from
+# dev/phase1. So the file must be on one branch and the checkout must point at
+# the other.
+#
+# This is not a guess. Run 34779936087 — the first run this workflow ever had,
+# dispatched minutes after DDR-1117's fix landed — had ALL SIX LANES die in under
+# a second with, verbatim:
+#     bash: tools/ci/apt_prepare.sh: No such file or directory
+#     ##[error]Process completed with exit code 127
+# after checking out 73c3e711 (dev/phase1). Landing the file made the workflow
+# STARTABLE and left it UNRUNNABLE, and no check that opens this file could have
+# seen that either — only running it could. DDR-1117's own finding, one level in.
+#
+# When PR #17 eventually merges, dev/phase1 becomes self-sufficient and the `ref`
+# input can be set to dev/phase1. Until then the default below is load-bearing:
+# `schedule` fires supply no inputs, so the `||` fallback is what the weekly cron
+# actually uses.
+#
 # NO FIX IS IMPLIED BY ANY OF THIS. NON-NEGOTIABLE 3 holds: no artefact has been
 # captured, no mechanism is named, and OPEN-2 has not moved.
 name: open2-hunt
@@ -32,6 +55,9 @@ name: open2-hunt
 on:
   workflow_dispatch:
     inputs:
+      ref:
+        description: 'Branch to HUNT — the tree that carries the harness. NOT where this file lives. See the WHERE THIS RUNS note above.'
+        default: 'dev/phase1-seyp3n'
       lanes:
         description: 'Parallel runners (each runs ONE qemu)'
         default: '6'
@@ -79,6 +105,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # DDR-1117 got the FILE onto the default branch; that is what makes this
+          # workflow startable. It is NOT what makes it runnable. The harness it
+          # invokes lives on the feature branch, so without this `ref:` the job
+          # checks out the default branch and dies before it does anything.
+          ref: ${{ github.event.inputs.ref || 'dev/phase1-seyp3n' }}
           submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
 
       # Same package set as the ci.yml shard job, minus the ISO/UEFI tools this
