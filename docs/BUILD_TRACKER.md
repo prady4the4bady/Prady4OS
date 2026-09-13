@@ -4810,6 +4810,100 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1115 — the `[schedcheck]` instrument FIRED, and its RFLAGS clause was a policy heuristic where two architectural invariants were available (2026-09-13)
+
+**NO FIX. NO CAUSE NAMED. OPEN-2 DOES NOT CLOSE.** (§NON-NEGOTIABLE 3.)
+
+**THE ARTEFACT — the first time the DDR-1105/1106 instrument has ever fired.**
+CI 34742104493 shard 6 (`pull_request` suite) on `a5d876e`, a docs-only tip
+whose own build job (103683430175) published `95493b96c7d13f30…` at
+1,319,306 B — the same digest as `83ac6e5`, `ff80e56` and `build/kernel.bin`
+on this host, so **six consecutive docs-only commits have not moved the
+binary**. **The same binary passed shard 6 in the sibling `push` suite one run
+apart** (34742101390, job 103683603193) — one binary, two outcomes, the
+DDR-1009 class, and the reason no build regression is alleged.
+
+```
+[schedcheck] next->rsp invalid tid=22 rsp=0x0000000007CB7A40
+             base=0x0000000007CB4000 rflags=0x0000000007CB7A70 halting.
+```
+
+**Clauses 2 and 3 PASSED**, measured rather than read off the line: `rsp` is
+8-aligned, `rsp-base = 0x3A40 = 14912` leaves room for the 64-byte frame inside
+a 16 KiB-aligned stack, and `rsp` sits 1,472 B below the top — so the thread had
+**run and descended frames**, not been freshly seeded. **Only the frame's
+CONTENT is wrong**, which is DDR-1099's one sentence reproduced by the
+instrument built for it.
+
+**The RFLAGS slot holds a STACK ADDRESS.** `0x07CB7A70` is exactly `rsp + 0x30`
+— a pointer into the very frame the check was about to consume. It is
+disqualified **twice over by invariants the check did not test**: RFLAGS bit 1
+is reserved-**ONE** on x86_64 and reads **clear** here; bits 22–63 are
+reserved-**ZERO** and read `0x1F`. Which corruption produced it is **not named
+and not guessed** — one line carries no RIP.
+
+**THE CAUSAL CHAIN IS IN ONE CAPTURE FOR THE FIRST TIME.** The capture also
+matched `[blk] multi-inflight FAIL`, and the halted CPU's tick count and the
+stranded completion's are **the same number** — `dest_abs=168` against
+`ticks[886,168,863,862]` with `dest_dticks=0`, CPUs 0/2/3 at 886/863/862. So
+the block failure is **downstream of the halt**; every capture of this family
+before today ended at that symptom, exactly as DDR-1079 recorded. **Stated as a
+narrowing, not a proof:** the line does not print its own CPU, so "CPU 1" is an
+inference from three facts and remains one.
+
+**THE FINDING.** DDR-1105's `MASK = TF|DF|IOPL (0x3500)` justified each bit
+correctly **as a statement about this kernel** — a POLICY test. Two
+ARCHITECTURAL invariants sat beside it asking the strictly stronger question.
+**The gap is measured on the observed word class, not modelled**, because a
+corrupt slot is not a uniform random word — this one is a *stack address*:
+enumerating every 8-aligned address in tid 22's own stack, **128 of 2048 (6.2%)
+DEFEAT the mask and ZERO defeat either new clause**, the 128 being exactly
+`[0x07CB4000, 0x07CB4AF8]`, the **low 4 KiB** where IOPL reads 0. **So this
+occurrence was caught partly by where the bad pointer happened to land** — one
+in the lower quarter of its own stack would have been taken, which is DDR-1099
+§6's undiagnosable jump, the outcome the instrument exists to prevent.
+
+**SHIPPED:** the clause gains `bit 1 set` and `bits 22–63 zero`, OR-ed beside
+the mask, which is **KEPT not replaced** (it caught this one, its reasoning
+holds, and it still covers a flags-*shaped* word carrying a bit nothing here
+sets); the printed `rflags=` value says which tripped. Neither new clause can
+false-positive — both hold for every legitimate value **by the ISA**, which is
+what makes them free to add where a false positive halts a CPU on the hottest
+path. **`pid=` joins the halt line**, because `tid=` alone is **unresolvable**
+(nothing else in any capture prints a tid, so this DDR cannot say which thread
+tid 22 was) and `pid == 0` is itself an answer. **The NAME is refused:**
+`tcb.name` is a **pointer**, and walking it out of a tcb the check has just
+declared untrustworthy is DDR-1079's defect exactly. **The CPU is refused:**
+`this_cpu()` reads `%gs:0` and a broken SWAPGS is one of OPEN-2's own producers
+(DDR-1010); `lapic_id()` is invalid pre-LAPIC (DDR-1055).
+
+**A BUILD-SYSTEM TRAP HIT AND RECORDED.** The first `make image` after editing
+`sched.c` produced a **bit-identical kernel** — `build/sched.o` (01:32) was
+older than `sched.c` (10:10) and was **not rebuilt**. §INV.10 generalised, and
+it was caught **only by hashing**, not by trusting `make`; forcing the rebuild
+then exposed **four compile errors** in the change. **Had the hash not been
+checked, the change would have been "verified" against a binary that did not
+contain it.**
+
+**A SECOND MEASUREMENT DEFECT, IN MY OWN HARNESS.** The first mutant run
+reported `SCHEDCHECK=0` for both arms — and the capture files **did not
+exist**: `smoke-shell` hardcodes `build/shell_serial.log` and ignores an
+external `SERIAL_LOG`, which is §INV.7's shape and DDR-1041's exactly. `grep -c`
+on a missing file returns 0, so **a broken measurement read as a clean result**.
+Re-run with a validity guard that reports `MEASUREMENT-BROKEN` when the capture
+is absent or carries no boot output — the DDR-1092 rule that zero must never
+mean "the condition held".
+
+kernel.bin **size unchanged** at 1,319,306 B, so the size/headroom pair and
+`ci-docstate-check` are unaffected — **and a size comparison cannot tell the two
+binaries apart at all, only the hash discriminates** (DDR-1097 again).
+`GLOBAL_FORBIDDEN` **77 unchanged** — `[schedcheck]` is already entry 75, and
+this capture is the proof that works: it reddened `smoke-swapgs`, a gate with
+nothing to do with the scheduler. **179 gates unchanged, no gate arm**
+(DDR-1105 §8's reason stands).
+
+Full record: `docs/ddr/DDR-1115-schedcheck-fired-and-the-rflags-clause-is-a-policy-heuristic.md`
+
 ## DDR-1114 — the exceptions table is a SOURCE, not a status list, and three of its rows are stale (2026-09-13)
 
 **Docs-only. No code change. No gate. No defect found in any code and none alleged.**

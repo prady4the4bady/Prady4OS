@@ -1866,6 +1866,19 @@ pointer — 8-aligned, within its own kernel stack with room for the 64-byte
 `context_switch` frame, and only then the RFLAGS slot at `[rsp+0]` with
 `TF|DF|IOPL` clear — and on failure prints `[schedcheck] … halting.` and stops.
 
+**UPDATED 2026-09-13 — DDR-1115, and the instrument has now FIRED for the first
+time.** The RFLAGS test gained two **architectural** clauses beside that mask,
+which is **kept not replaced**: **bit 1 is reserved-ONE** on x86_64 and **bits
+22–63 are reserved-ZERO**, so `pushfq` and `sched_create`'s `0x202` seed satisfy
+both and neither can fire on a legitimate slot. The mask asks *"could THIS
+kernel have produced these bits"*; the new pair asks *"could ANY `pushfq` on
+this ISA have"*. Sized on the real artefact: of every 8-aligned address inside
+the stack that artefact named, **128 of 2048 defeat the mask and ZERO defeat
+either new clause**. The halt line also gained **`pid=`**, because `tid=` alone
+is unresolvable — nothing else in any capture prints a tid. The thread NAME is
+deliberately **not** printed (`tcb.name` is a pointer, and walking it out of a
+tcb the check has just distrusted is DDR-1079's defect).
+
 **No fix and no cause named.** It is DDR-1099 §7's instrument: it makes the
 *next* corrupt frame say so, and specifically covers the case the `#DB` cannot
 see — a frame equally wrong whose RFLAGS slot happens to be benign, which

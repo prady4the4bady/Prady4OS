@@ -13540,3 +13540,95 @@ tip, because `83ac6e5` was pushed after it was armed).
 advisories published against those same versions, dev tooling only (`grep -rn
 graph_mcp Makefile` returns nothing, so not in `kernel.bin` or the ISO). Per
 `PRE_LAUNCH_CHECKLIST` §1.3 merging dependency PRs is the **operator's** action.
+
+---
+
+## CHECKPOINT 2026-09-13 — DDR-1115: the `[schedcheck]` instrument FIRED
+
+**THE INSTRUMENT DDR-1105/1106 BUILT FOR OPEN-2 HAS PRODUCED ITS FIRST ARTEFACT.**
+Everything below is measured; **no fix, no cause named, OPEN-2 does not close**
+(§NON-NEGOTIABLE 3).
+
+### CI verdict on `a5d876e`
+* **`push` suite 34742101390: ALL TEN SHARDS GREEN**, plus every support job.
+* **`pull_request` suite 34742104493: shard 6 FAILED**, nine green. Shard 6 died
+  at `smoke-swapgs` after 4 of 17 gates; its post-gate step still printed
+  `kernel.bin: OK`.
+* **Same commit, same binary, two outcomes one run apart — the DDR-1009 class.**
+  Build job 103683430175 published `95493b96c7d13f30…` at 1,319,306 B, which is
+  also `83ac6e5`'s, `ff80e56`'s and `sha256sum build/kernel.bin` on this host:
+  **six consecutive docs-only commits have not moved the kernel.**
+
+### The artefact
+```
+[schedcheck] next->rsp invalid tid=22 rsp=0x0000000007CB7A40
+             base=0x0000000007CB4000 rflags=0x0000000007CB7A70 halting.
+```
+Clauses 2 and 3 **passed** — 8-aligned, inside tid 22's own stack, 1,472 B below
+its top (so the thread had **run**, not been freshly seeded). **Only the frame's
+CONTENT is wrong.** The RFLAGS slot holds **a stack address**: `0x07CB7A70` is
+exactly `rsp + 0x30`, the `rbx` slot of the frame the check was about to consume
+(layout read from `arch/x86_64/context.asm`, not from a comment).
+
+**THE CAUSAL CHAIN IS IN ONE CAPTURE FOR THE FIRST TIME.** `dest_abs=168` and
+`ticks[886,168,863,862]` are the same number, `dest_dticks=0` — so
+`[blk] multi-inflight FAIL` is **downstream of the halt**. Every capture of this
+family before today ended at that symptom (DDR-1079 said so). The line does not
+print its own CPU, so "CPU 1" stays an **inference**, not a proof.
+
+### What shipped
+The RFLAGS clause gained **two ARCHITECTURAL tests beside the mask, which is
+KEPT**: RFLAGS **bit 1 is reserved-ONE** and **bits 22–63 are reserved-ZERO**, so
+neither can fire on a legitimate slot. Sized on the real artefact: of every
+8-aligned address in that stack, **128 of 2048 (the low 4 KiB) defeat the mask;
+ZERO defeat either new clause** — this occurrence was caught partly by *where the
+bad pointer landed*. **`pid=` joins the halt line** (`tid=` alone is
+unresolvable). **The NAME is refused** — `tcb.name` is a pointer, and walking it
+out of a distrusted tcb is DDR-1079's defect. **The CPU is refused** — `%gs:0` is
+one of OPEN-2's own producers (DDR-1010), `lapic_id()` is invalid pre-LAPIC.
+
+### Proof — four kernels, two-sided
+| case | check | kernel | rc | `[schedcheck]` |
+|---|---|---|---|---|
+| M1-pre | old | `12f799eb4147c5c7` | **0** | **0 SILENT** |
+| M1-post | new | `0d14f515bf1effce` | 2 | **1 FIRES** (bits 22+) |
+| M2-pre | old | `7ee6407bfe4311ca` | **0** | **0 SILENT** |
+| M2-post | new | `6dc4d07fb0367123` | 2 | **1 FIRES** (bit 1) |
+
+**Both pre-change controls PASSED their gate** — today those frames are taken
+silently. The two post arms land on **different** clauses, distinguished by the
+printed `rflags=`. Negative: `smoke-shell` / `smp` / `smppreempt` / `rqstress` /
+`blk-integrity` **all rc=0**, shell capture `[schedcheck]` count **0**,
+`global-forbidden scan clean (77 patterns)`, hygiene **ALL EIGHT**, hash pinned
+`4bcbdf1bd1cea57f` before and after. Revert is bit-for-bit.
+
+### TWO MEASUREMENT DEFECTS IN MY OWN WORK — read these
+1. **The first build after editing `sched.c` produced a BIT-IDENTICAL kernel.**
+   `build/sched.o` was stale and `make image` did **not** rebuild it (§INV.10
+   generalised). Caught **only by hashing**. Forcing the rebuild then exposed
+   **four compile errors**. Without the hash check the change — and its mutants —
+   would have been "verified" against a binary that did not contain it.
+2. **The first mutant run reported `SCHEDCHECK=0` for both arms and the capture
+   files did not exist.** `smoke-shell` hardcodes `build/shell_serial.log` and
+   ignores an external `SERIAL_LOG` (§INV.7 / DDR-1041 exactly); `grep -c` on a
+   missing file returns 0, so **a broken measurement read as a clean result**.
+   Re-run behind a validity guard (DDR-1092: zero must mean *the measurement
+   broke*).
+
+### THREE-GREENS COUNT, HONESTLY
+This push is the **sixth** on this branch and resets it again; `a5d876e` had
+**one** green suite of two. Release is **HELD** and `v1.0.0` untagged, so it costs
+nothing today — but it is not glossed. Third green comes from
+**`workflow_dispatch`** (§INV.15), never `gh run rerun`.
+
+### STATE / NEXT
+`kernel.bin` **size unchanged** at 1,319,306 B (so the size/headroom pair and
+`ci-docstate-check` are unaffected — **and a size comparison cannot tell the two
+binaries apart, only the hash can**, DDR-1097 again). **179 gates, no new gate,
+no gate arm** (DDR-1105 §8 stands). **`GLOBAL_FORBIDDEN` 77 unchanged.** Free
+range advanced to **DDR-1116+** at all four carriers.
+
+**Next:** verify CI on this tip; the binary **has** moved this time, so the
+digest must be re-read rather than carried. OPEN-2 still has **no named
+mechanism** — watch, do not manufacture. `pradyos-graph` MCP has failed to
+connect all session (CONNECT_TIMEOUT), so `graph_session_primer()` has not run.

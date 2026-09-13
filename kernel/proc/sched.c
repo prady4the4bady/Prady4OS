@@ -1647,6 +1647,16 @@ static void schedule_locked(uint64_t fl) {
      * whatever the outgoing thread's last arithmetic left, and IF varies, so
      * requiring 0x202 exactly would fire constantly.
      *
+     * DDR-1115 ADDED TWO ARCHITECTURAL CLAUSES BESIDE THAT MASK, and the mask
+     * is KEPT rather than replaced. The instrument fired for the first time on
+     * a5d876e (CI 34742104493 shard 6) and the artefact showed the RFLAGS slot
+     * holding a STACK ADDRESS -- rsp + 0x30, inside the thread's own stack --
+     * which the mask caught only because that address happened to carry IOPL
+     * bits. The mask asks "could THIS kernel have produced these bits"; bit 1
+     * (reserved-ONE) and bits 22..63 (reserved-ZERO) ask whether ANY pushfq on
+     * this ISA could have, so they cannot fire on a legitimate slot. See the
+     * clause itself for the enumeration that sizes the gap.
+     *
      * COST, against the shape DDR-1047 actually refused: that was an rdtsc PAIR
      * (partially serialising) on EVERY spin_lock acquisition, ~1.9M per 5,000
      * ticks. This is three loads, an add, five compares and five branches, never
@@ -1669,7 +1679,31 @@ static void schedule_locked(uint64_t fl) {
              * push, so the RFLAGS slot is at [rsp + 0] -- which is why DDR-1099's
              * faulting popf was the FIRST restore instruction. */
             fl_slot = *(const volatile uint64_t *)(uintptr_t)nrsp;
-            if (fl_slot & 0x3500u)
+            /* THREE TESTS, OR-ed; the printed rflags= value says which tripped
+             * (DDR-1115 sec.4 -- the same way DDR-1105's two mutants were told
+             * apart by that field rather than by adding a second one).
+             *
+             * (a) the TF|DF|IOPL mask above: a POLICY test, asking "could THIS
+             *     kernel have produced these bits". Kept, not replaced -- it is
+             *     the clause that caught DDR-1115's occurrence, and it still
+             *     covers a word that is flags-SHAPED but carries a bit nothing
+             *     here ever sets.
+             *
+             * (b) bit 1 is architecturally RESERVED-ONE on x86_64 and (c) bits
+             *     22..63 are RESERVED-ZERO, so pushfq stores them set and clear
+             *     respectively, and sched_create's 0x202 seed satisfies both.
+             *     These ask the strictly stronger question -- "could ANY pushfq
+             *     on this ISA have produced this word" -- so they cannot fire on
+             *     a legitimate slot, which is what makes them free to add on a
+             *     path where a false positive halts a CPU.
+             *
+             * WHY BOTH KINDS: DDR-1115 sec.3.1 enumerated every 8-aligned address
+             * inside the stack the artefact named. 128 of 2048 -- the low 4 KiB,
+             * where IOPL reads 0 -- DEFEAT the mask; ZERO defeat (b) or (c). So
+             * the mask caught that occurrence partly by where the bad pointer
+             * happened to land, and a corrupt frame in the lower quarter of its
+             * own stack would have been taken. */
+            if ((fl_slot & 0x3500u) || !(fl_slot & 0x2u) || (fl_slot >> 22))
                 bad = 1;
         }
         if (bad) {
@@ -1683,6 +1717,16 @@ static void schedule_locked(uint64_t fl) {
             kline k; kline_init(&k);
             kline_s(&k, "[schedcheck] next->rsp invalid tid=");
             kline_d(&k, next->tid);
+            /* DDR-1115 sec.4: nothing else in any capture prints a tid, so tid=
+             * alone is UNRESOLVABLE -- that DDR could not say which thread its
+             * artefact named. pid is a plain uint in the tcb this block already
+             * reads three fields from, and pids appear throughout every boot log,
+             * so it makes the halted thread correlatable. pid == 0 is itself an
+             * answer ("kernel thread"), not a missing one. The NAME is
+             * deliberately NOT printed: ->name is a POINTER, and walking it out
+             * of a tcb this check has just declared untrustworthy is DDR-1079's
+             * defect (the panic walker faulted mid-report and cost a CPU). */
+            kline_s(&k, " pid=");      kline_d(&k, next->pid);
             kline_s(&k, " rsp=");      kline_x(&k, nrsp);
             kline_s(&k, " base=");     kline_x(&k, nbase);
             kline_s(&k, " rflags=");   kline_x(&k, fl_slot);
