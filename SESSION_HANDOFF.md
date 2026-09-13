@@ -13632,3 +13632,60 @@ range advanced to **DDR-1116+** at all four carriers.
 digest must be re-read rather than carried. OPEN-2 still has **no named
 mechanism** — watch, do not manufacture. `pradyos-graph` MCP has failed to
 connect all session (CONNECT_TIMEOUT), so `graph_session_primer()` has not run.
+
+---
+
+## CHECKPOINT 2026-09-13 — DDR-1116 + graph_mcp dependency patch
+
+**Tip: `72e7b93` on `dev/phase1-seyp3n`. kernel.bin `f8574d7d6f0ba30e`, 1,319,306 B
+(SIZE UNCHANGED from DDR-1115 — only the hash discriminates, DDR-1097).**
+
+### Done this session
+1. **graph_mcp advisories closed** (`737725e`, operator-approved): `fast-uri`
+   3.1.5→3.1.7, `hono` 4.13.1→4.13.7, `qs` 6.15.2→6.16.0; `npm audit` 3→0. All
+   transitive and in-range, so `package.json` is unchanged and the diff is one
+   lockfile with exactly three deltas, 97→97 packages. **Only `fast-uri` was ever
+   on a live path** (strace: 4 `openat` hits via `ajv`; `hono`/`qs`/`express`
+   ZERO, because `server.js:62` uses `StdioServerTransport`). selftest 9/9 BEFORE
+   and AFTER, `npm ci` rc=0. Does **not** touch `kernel.bin`, the ISO or OPEN-2.
+2. **DDR-1116** (`72e7b93`): the `[schedcheck]` line printed one word of an
+   eight-word frame; `r15` and the **return slot** now join it. No new clause.
+
+### OPEN-2 state — READ THIS FIRST NEXT SESSION
+* **Still ONE fire, ever.** `33fa80a` took **both** suites green (20 shard jobs),
+  so DDR-1115's two architectural clauses have now run on every shard at real CI
+  timing with **zero false positives**, and no second occurrence appeared.
+* **NO mechanism is named and NON-NEGOTIABLE 3 still forbids a fix.**
+* **What the NEXT fire can now say that the last one could not:** `ret=`
+  discriminates *a real frame with corrupt content* (reads one of two legal
+  values) from *a pointer that does not address a frame at all* (reads neither).
+  **(B) is where DDR-996's freed-while-queued family and DDR-1096 §3's unlocked
+  ring walk live** — so that one field routes the whole investigation.
+* **RE-MEASURE THE TWO LEGAL ADDRESSES against the binary that produced the
+  capture** (§INV.18) — `llvm-objdump -d build/kernel.elf | grep 'call.*<context_switch>'`
+  and `nm -n build/kernel.elf | grep thread_trampoline`. For `f8574d7d6f0ba30e`
+  they are `0xffffffff800166ef` and `0xffffffff800160d0`. Comparing a future
+  capture against those numerals instead of its own binary is the exact error
+  §INV.18 names.
+
+### Checked and NOT the mechanism (recorded so it is not re-derived)
+* `tss_set_rsp0` / `percpu.kstack_top` have **exactly two writers each and they
+  are the same two sites**, so they cannot drift — **except** that
+  `percpu_init_bsp`'s migration calls `tss_init_cpu(ridx, 0)`, which zeroes
+  `TSS.rsp0` while the `g_percpu` copy preserves the live `kstack_top`. Dormant
+  on QEMU (`ridx == 0`) and it runs before any ring-3 thread exists, so **not
+  OPEN-2** — but "they cannot drift" was too strong.
+* `tss_set_rsp0` indexes `tss[pc->cpu_idx]` with **no bounds check** where
+  `tss_init_cpu` on the same array has one. **Refuted as this artefact's writer
+  by arithmetic**: anything from that path is a `ktop` = `base+0x4000`, and the
+  observed word was `base+0x3A70`. Recorded as hardening, not a diagnosis.
+* `t->rsp` has exactly **one** C writer (`sched.c:1190`, the seed); everything
+  else goes through `context_switch`'s `mov [rdi], rsp`, which is correct.
+
+### Process lessons paid for this session
+* **Never put `head` in a pipeline whose head is a build** — SIGPIPE kills `make`
+  mid-build and the stale binary reads back with its old hash (DDR-1116 §11.4).
+* **Match diagnostics on `\b(error|warning):`**, never the substring — every
+  compile line contains `-Werror`.
+* **Verify by HASH, never by trusting `make`.** Twice in one session that was the
+  only thing that caught a build which had not happened.
