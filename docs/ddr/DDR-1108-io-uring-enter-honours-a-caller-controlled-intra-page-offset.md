@@ -279,3 +279,81 @@ intermittents.
   the operator. **Recorded, not taken.**
 - **No claim that this was ever exploited**, and no open issue moves — this is
   not an `[apfreeze]`, not OPEN-2, and OPEN-1/2/12/13 are untouched.
+
+---
+
+## §11 — CI VERDICT
+
+**GREEN, and the binary identity is established by hash rather than inferred.**
+
+Two suites on `b00247c`, 2026-09-12 20:01–20:41 UTC, **32 check runs, all
+`success`**:
+
+| run | event | shard jobs | non-shard jobs |
+|---|---|---|---|
+| `34715537842` | `push` | 10 | 6 |
+| `34715539297` | `pull_request` | 10 | 6 |
+
+The six non-shard jobs per suite are `build`, `shard-check`, `aether-layer`,
+`code-graph`, `arch-bootstrap (aarch64)` and `arch-bootstrap (riscv64)`.
+
+### §11.1 — The hash, and why this is stronger than the assertion asked for
+
+DDR-1035's per-shard check proves only that a shard got **the binary its own
+build job produced** — internal consistency, which would hold just as well for
+a binary nobody had tested. The build job also `cat`s the digest
+(`ci.yml:158`), and it reads:
+
+```
+68e74ff4142f7c7171a70e176ebfb3908ef3304aa3e5afb5d2b5624c6cb498c7  kernel.bin
+```
+
+which is **byte-identical to the local `build/kernel.bin`** that §9's two-sided
+proof ran on (same 64 hex digits, 1,315,210 B, re-verified after the container
+restart). So CI's toolchain reproduced this tree bit-for-bit — the second
+cross-environment observation of that property after DDR-1097 §4 — and the
+kernel CI booted **is** the kernel the pre-fix/post-fix rows were measured on.
+This is DDR-1097's finding arriving in the useful direction: a size comparison
+could not have told these binaries apart, and the hash does.
+
+**40 hash assertions passed**, two per shard (the second under `if: always()`,
+`ci.yml:255`): a failing `sha256sum -c` fails its step and therefore its job,
+and all 20 shard jobs are green. The literal `kernel.bin: OK` line was read in
+one job (shard 5, `push`, `103613226707`), immediately after
+`shard 5: ALL PASS — 17 gates`.
+
+### §11.2 — What each watch item actually answered
+
+1. **`kernel.bin: OK` on every shard** — ANSWERED, §11.1.
+2. **`smoke-sysiouring` with BOTH required patterns** — ANSWERED, and measured
+   rather than read off the shard label. `tools/ci/gate_shards.txt` has
+   **exactly 17 rows for shard 5** and `smoke-sysiouring` is one of them, so
+   `ALL PASS — 17 gates` covers it with no gate unaccounted for; and both
+   patterns are `EXTRA_SENTINEL` on that recipe (`Makefile:4468`), so a missing
+   one is a gate failure, not a silent pass. Green in **both** suites, i.e. two
+   independent observations of `IO_URING: unaligned ring VA refused` — the arm
+   that did not exist before this commit — alongside `IO_URING: batch read OK`,
+   which is the did-not-execute half of §6.
+3. **Zero `[schedcheck]`** — ANSWERED. `GLOBAL_FORBIDDEN` is **77** and
+   `[schedcheck]` is entry 75, so a fire reddens whichever gate boots. None did.
+4. **Zero `[apfreeze]` / `panic_stage=`** — ANSWERED, same mechanism: entries 2,
+   71 and 72 (`[apfreeze]`, `NEXUS KERNEL PANIC`, `panic_stage=`).
+
+### §11.3 — NOT CLAIMED
+
+- **This is TWO greens, not three.** §NON-NEGOTIABLE 1 wants three consecutive
+  greens on **one** tip SHA; `b00247c` has `push` + `pull_request`, and per
+  §INV.15 the third must come from `workflow_dispatch`. It costs nothing today
+  — the release is HELD and no promotion is in flight — but it is not a clean
+  three and is not reported as one.
+- **The earlier suites on `de68f88` and `f262ee7` are NOT pooled into this
+  verdict.** They ran the same binary (both are docs-only relative to the
+  kernel change, verified by `git diff --name-only`), so they *are* further
+  observations of it in principle — but their shard outcomes were not re-read
+  when this section was written, and an unread green is not evidence. What is
+  claimed here is the 32 runs above.
+- **Green does not re-prove the fix.** It shows the guard broke nothing across
+  179 gates and that the new arm passes; the *fix* rests on §9's pre-fix control,
+  where the same probe on the unguarded tree left **both** sentinels absent.
+- **Nothing is claimed about OPEN-2's rate.** Two clean suites is not a bound;
+  DDR-1062's 6.9 % per-suite figure remains the standing measurement.

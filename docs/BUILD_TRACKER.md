@@ -4853,6 +4853,22 @@ was **served shorter**.
 
 ## DDR-1108 — `io_uring` ENTER honoured a caller-controlled intra-page offset (2026-09-12)
 
+**CI VERDICT: GREEN (DDR-1108 §11).** Two suites on `b00247c`, **32 check runs
+all `success`** — `34715537842` (push) and `34715539297` (pull_request), 10
+shard + 6 non-shard jobs each. The build job's published digest reads
+`68e74ff4142f7c7171a70e176ebfb3908ef3304aa3e5afb5d2b5624c6cb498c7`, **byte-identical
+to the locally-tested `build/kernel.bin`**, so CI reproduced this tree
+bit-for-bit and the kernel it booted is the one §9's two-sided proof ran on —
+stronger than DDR-1035's per-shard check, which alone proves only that a shard
+got its own build job's output. `smoke-sysiouring` green in **both** suites with
+both required sentinels, `shard 5: ALL PASS — 17 gates` against exactly 17
+registered rows. Zero `[schedcheck]`, zero `[apfreeze]`, zero `panic_stage=`.
+**NOT a clean three:** §NON-NEGOTIABLE 1 wants three greens on one SHA and this
+is two — the third comes from `workflow_dispatch` (§INV.15). The earlier suites
+on `de68f88` / `f262ee7` ran the same binary but were not re-read, so they are
+**not** pooled in.
+
+
 **A reachable ring-3 write past a validated region. ARTEFACT PRODUCED, then
 FIXED.** `kernel.bin` `0eb965428942d5cf` -> `68e74ff4142f7c71`, **1,315,210 B —
 SIZE UNCHANGED in both rows**, so the size / headroom pair and
