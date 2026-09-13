@@ -46,6 +46,7 @@ STDOUT    equ 1
 ENOENT    equ 2          ; returned as -ENOENT
 EBADF     equ 9          ; returned as -EBADF
 EFAULT    equ 14         ; returned as -EFAULT
+ENODEV    equ 19         ; returned as -ENODEV (DDR-1112: fd is not FD_VFS)
 
 section .text
 global _start
@@ -278,19 +279,29 @@ _start:
     ; The accept arm above already passes r8=-1 and r9=0, so a broken marshal
     ; turns a5 into garbage and mmap fails. That proves the registers arrive,
     ; but not that the kernel READS them — a kernel still discarding fd and
-    ; offset passes it unchanged. These two arms only pass if a5 and a6 are
-    ; read and acted on, and they are distinguishable from each other because
-    ; the two errors differ (-ENOSYS vs -EINVAL): swapping r8 and r9 in the
-    ; marshal would fail both.
-    mov     rax, SYS_MMAP          ; fd=3 -> file-backed, not implemented
+    ; offset passes it unchanged. These arms only pass if a5 and a6 are read
+    ; and acted on, and THEY MUST RETURN DIFFERENT ERRNOS so that swapping r8
+    ; and r9 in the marshal fails BOTH.
+    ;
+    ; RESTRUCTURED BY DDR-1112, AND THE REASON MATTERS. File-backed mmap is now
+    ; implemented, so the old arm's `fd=3` no longer answers -ENOSYS and the
+    ; two arms would have COLLAPSED ONTO ONE ERRNO (-EINVAL), destroying exactly
+    ; the swap-detection DDR-877 designed them for. The fd arm therefore moves
+    ; to an fd that cannot be open (99 > FD_MAX 64) and asks for a genuine
+    ; file-backed map (MAP_PRIVATE, no MAP_ANONYMOUS), which answers -EBADF.
+    ; Swap check, re-derived rather than inherited: with r8/r9 exchanged the fd
+    ; arm sees fd=0 (the console) and gets -ENODEV, and the off arm sees fd=4096
+    ; and gets -EBADF — so both still fail. Three distinct errnos are now in
+    ; play (-EBADF / -ENODEV / -EINVAL), each naming its own family (DDR-1080).
+    mov     rax, SYS_MMAP          ; fd=99 (> FD_MAX) -> not an open descriptor
     xor     rdi, rdi
     mov     rsi, 4096
-    mov     rdx, 3
-    mov     r10, 0x22
-    mov     r8, 3
+    mov     rdx, 1                 ; PROT_READ
+    mov     r10, 0x02              ; MAP_PRIVATE, file-backed (no ANONYMOUS)
+    mov     r8, 99
     xor     r9, r9
     syscall
-    cmp     rax, -ENOSYS
+    cmp     rax, -EBADF
     jne     .s6_after_fd
     mov     rax, SYS_WRITE
     mov     rdi, STDOUT
@@ -298,6 +309,27 @@ _start:
     mov     rdx, m_mmapfd_len
     syscall
 .s6_after_fd:
+
+    ; DDR-1112: a pipe or the console has no byte at an offset, so a file-backed
+    ; map of one is -ENODEV rather than -EBADF. This arm is NOT a marshal check
+    ; (a swap leaves it on the console either way) — it exists to pin the
+    ; FD_VFS restriction, which nothing else asserts.
+    mov     rax, SYS_MMAP          ; fd=1 is STDOUT -> FD_CONSOLE, not FD_VFS
+    xor     rdi, rdi
+    mov     rsi, 4096
+    mov     rdx, 1                 ; PROT_READ
+    mov     r10, 0x02              ; MAP_PRIVATE, file-backed
+    mov     r8, 1
+    xor     r9, r9
+    syscall
+    cmp     rax, -ENODEV
+    jne     .s6_after_nd
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapnd]
+    mov     rdx, m_mmapnd_len
+    syscall
+.s6_after_nd:
 
     mov     rax, SYS_MMAP          ; offset != 0 is meaningless for anon
     xor     rdi, rdi
@@ -338,6 +370,145 @@ _start:
     mov     rdx, m_munmap_len
     syscall
 .s6_done:
+
+    ; ---- DDR-1112: file-backed MAP_PRIVATE, the arms that carry the claim ---
+    ; "mmap a file and assert it succeeds" is WEAK in the exact way DDR-877
+    ; named: a kernel that accepts the fd and hands back ANONYMOUS ZERO PAGES
+    ; passes it. So these assert THE FILE'S OWN BYTES, which such a kernel
+    ; cannot produce.
+    ;
+    ; The cursor arm is the non-obvious one and it is deliberately taken AFTER a
+    ; read, so the saved position is 4 and not 0 — a kernel that RESET the
+    ; cursor would pass a 0-before/0-after comparison. vfs_read is pread-style
+    ; (explicit offset, no cursor in struct vfs_file), so a correct mapping
+    ; cannot move it; a build that "simplified" the fill to use e->off would.
+    mov     rax, SYS_OPEN          ; open("/HELLO.TXT", 0, 0)
+    lea     rdi, [rel p_hello]
+    xor     rsi, rsi
+    xor     rdx, rdx
+    syscall
+    cmp     rax, 3
+    jl      .s6f_done
+    mov     r12, rax               ; r12 = fd
+
+    sub     rsp, 16
+    mov     rax, SYS_READ          ; advance the cursor to 4, so "unchanged"
+    mov     rdi, r12               ; is a real claim rather than 0 == 0
+    mov     rsi, rsp
+    mov     rdx, 4
+    syscall
+    add     rsp, 16
+    cmp     rax, 4
+    jne     .s6f_close
+
+    ; HINT, NOT NULL, AND THE REASON IS MEASURED. The slice-6 arms above map at
+    ; the explicit MMAP_HINT and never unmap it, while sys_mmap advances
+    ; t->mmap_next ONLY for an addr==0 request — so a kernel-chosen address
+    ; still resolves to MMAP_HINT, collides with that live region and is
+    ; correctly refused with -EINVAL (no silent replace). The kernel is right;
+    ; the probe just has to ask somewhere free. Recorded because it cost a
+    ; debugging pass: mmap(NULL) is not guaranteed to find space for a process
+    ; that has used explicit hints.
+    mov     rax, SYS_MMAP          ; mmap(hint, 4096, PROT_READ, MAP_PRIVATE, fd, 0)
+    mov     rdi, MMAP_HINT
+    add     rdi, 0x100000          ; 1 MiB clear of the slice-6 region
+    mov     rsi, 4096
+    mov     rdx, 1                 ; PROT_READ
+    mov     r10, 0x02              ; MAP_PRIVATE, file-backed
+    mov     r8, r12
+    xor     r9, r9
+    syscall
+    cmp     rax, 0
+    jle     .s6f_close
+    mov     r13, rax               ; r13 = mapped address
+
+    lea     rsi, [rel m_hellobytes]   ; ARM A(i): the file's own 25 bytes
+    mov     rdi, r13
+    mov     rcx, m_hellobytes_len
+    repe    cmpsb
+    jne     .s6f_unmap
+
+    cmp     byte [r13 + 4095], 0      ; ARM A(ii): the POSIX EOF tail is zero
+    jne     .s6f_unmap
+
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapfile]
+    mov     rdx, m_mmapfile_len
+    syscall
+
+    mov     rax, SYS_LSEEK         ; ARM C: the fd cursor is UNCHANGED (still 4)
+    mov     rdi, r12
+    xor     rsi, rsi
+    mov     rdx, 1                 ; SEEK_CUR
+    syscall
+    cmp     rax, 4
+    jne     .s6f_unmap
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapcur]
+    mov     rdx, m_mmapcur_len
+    syscall
+
+.s6f_unmap:
+    mov     rax, SYS_MUNMAP
+    mov     rdi, r13
+    mov     rsi, 4096
+    syscall
+.s6f_close:
+    mov     rax, SYS_CLOSE
+    mov     rdi, r12
+    syscall
+.s6f_done:
+
+    ; ARM B: a NON-ZERO, page-aligned offset, on a MULTI-PAGE file. /BIGPAT.BIN
+    ; is 64 KiB of (7n + 3 + 31*(n>>8)) & 0xFF — a pattern DDR-973 chose
+    ; precisely because plain 7n+3 has period 256, which made every cluster
+    ; identical and let a chain-repeat mutant pass. So byte 0 of a map at
+    ; offset 4096 must be pattern(4096) = 0xF3, and a kernel that ignored a_off
+    ; and read from 0 would show pattern(0) = 0x03 instead.
+    mov     rax, SYS_OPEN
+    lea     rdi, [rel p_bigpat]
+    xor     rsi, rsi
+    xor     rdx, rdx
+    syscall
+    cmp     rax, 3
+    jl      .s6b_done
+    mov     r12, rax
+
+    mov     rax, SYS_MMAP
+    mov     rdi, MMAP_HINT
+    add     rdi, 0x200000          ; its own hint; must not collide with arm A
+    mov     rsi, 4096
+    mov     rdx, 1                 ; PROT_READ
+    mov     r10, 0x02              ; MAP_PRIVATE, file-backed
+    mov     r8, r12
+    mov     r9, 4096               ; offset 4096 — the whole point of this arm
+    syscall
+    cmp     rax, 0
+    jle     .s6b_close
+    mov     r13, rax
+
+    cmp     byte [r13], 0xF3       ; pattern(4096), NOT pattern(0) = 0x03
+    jne     .s6b_unmap
+    cmp     byte [r13 + 1], 0xFA   ; pattern(4097) — one more, so a single
+    jne     .s6b_unmap             ; lucky byte cannot carry the arm
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapoffrd]
+    mov     rdx, m_mmapoffrd_len
+    syscall
+
+.s6b_unmap:
+    mov     rax, SYS_MUNMAP
+    mov     rdi, r13
+    mov     rsi, 4096
+    syscall
+.s6b_close:
+    mov     rax, SYS_CLOSE
+    mov     rdi, r12
+    syscall
+.s6b_done:
 
     ; ---- IMP-C: vDSO clock read (ring-3, no syscall) -----------------------
     ; The kernel maps a read-only clock page at VDSO_VA and the PIT advances
@@ -756,6 +927,27 @@ m_mmapwx:    db "SYSMMAP WX REJECTED", 10
 m_mmapwx_len: equ $ - m_mmapwx
 m_mmapfd:    db "SYSMMAP FD REJECTED", 10
 m_mmapfd_len: equ $ - m_mmapfd
+; ---- DDR-1112 literals ------------------------------------------------
+; PLACED AFTER m_mmapfd_len ON PURPOSE. An earlier draft inserted them
+; between `m_mmapfd:` and its `equ $ - m_mmapfd`, which made that length
+; ~120 bytes instead of 20 — so the FD arm's write DUMPED THIS WHOLE BLOCK
+; to the console and the gate matched "SYSMMAP FILE OK" out of .rodata
+; rather than from the feature working. Mutant M1 (feature deleted) then
+; PASSED. A length computed at a distance from its string is a live
+; vacuity hazard: keep every `equ $ - x` adjacent to x.
+m_mmapnd:    db "SYSMMAP ND REJECTED", 10
+m_mmapnd_len: equ $ - m_mmapnd
+m_mmapfile:  db "SYSMMAP FILE OK", 10
+m_mmapfile_len: equ $ - m_mmapfile
+m_mmapcur:   db "SYSMMAP CURSOR OK", 10
+m_mmapcur_len: equ $ - m_mmapcur
+m_mmapoffrd: db "SYSMMAP FILEOFF OK", 10
+m_mmapoffrd_len: equ $ - m_mmapoffrd
+p_bigpat:    db "/BIGPAT.BIN", 0
+; The exact 25 bytes of /HELLO.TXT (build/hello.txt). A kernel handing
+; back zero pages cannot produce them.
+m_hellobytes: db "PRADYOS filesystem works!"
+m_hellobytes_len: equ $ - m_hellobytes
 m_mmapoff:   db "SYSMMAP OFF REJECTED", 10
 m_mmapoff_len: equ $ - m_mmapoff
 m_munmap:    db "SYSMUNMAP OK", 10

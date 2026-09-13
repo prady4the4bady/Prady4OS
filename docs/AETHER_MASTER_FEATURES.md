@@ -1244,7 +1244,10 @@ unchanged** (deterministic check, own gate covers both directions — DDR-1065).
 all**, and that the absence is **correct today** on four facts. The fragile one
 is that **no two threads share an address space**. It also recorded the
 consequence it could not close: Group D's `pthread`/`clone(CLONE_VM)` row
-**deletes that premise**, after which every `vmm_unmap` (`sys_mmap.c:67`,
+**deletes that premise**, after which every `vmm_unmap` (in `sys_mmap`'s
+`unmap_range` — cite the FUNCTION: DDR-1112's header expansion moved it from
+:67 to :97, and DDR-1073 §5 records that a line citation has an expiry date
+nothing in the tree can check;
 `sys_surface.c:388`/`:448`) and every `vmm_protect_range` leaves a stale
 writable translation on another CPU — silent, timing-dependent, on the same SMP
 paths OPEN-2 lives in — and **nothing in the tree would notice**.

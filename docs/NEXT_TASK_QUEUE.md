@@ -340,7 +340,8 @@ Batch their DDRs in one pass first (§4.3), then implement.
 - [ ] **BLOCKED — `SYS_FUTEX` (DDR-1038).** Not deferred for time: a futex word
       cannot be shared between any two schedulable entities here. No
       `CLONE_VM`/`CLONE_THREAD` (zero matches), `MAP_SHARED` explicitly refused
-      at `sys_mmap.c:83`, and `fork` COWs writable pages so the word un-shares on
+      in `sys_mmap` (cite the function, not a line — they drift; DDR-1073 §5),
+      and `fork` COWs writable pages so the word un-shares on
       the first write. **Unblocked by EITHER pthreads/`clone(CLONE_VM)` OR
       `MAP_SHARED` anonymous mmap** — both already in this queue. Build it after
       one of those, not before.
@@ -351,9 +352,22 @@ Batch their DDRs in one pass first (§4.3), then implement.
       own words: the 4-arg form was "worse than incomplete — a caller passing fd
       and offset had them silently discarded and got anonymous zero pages back".
       **Do NOT rebuild.** Only file-backed `mmap` + `msync` remain, below.
-- [ ] file-backed `mmap` + `msync` — genuinely unbuilt; `sys_mmap.c:83` refuses
-      non-anonymous and `MAP_SHARED`. **Also one of the two unblockers for
-      `SYS_FUTEX` (DDR-1038).**
+- [x] file-backed `mmap` — **BUILT + GATED, DDR-1112** (2026-09-13). Eager
+      `MAP_PRIVATE`: the frame is filled from the file *before* it is mapped, so
+      no page-fault path is involved. Three arms on `smoke-sysmmap` (5 -> 9
+      sentinels), three mutants on three different arms. **It was one of the two
+      unblockers for `SYS_FUTEX` (DDR-1038); the other, pthreads, is still
+      blocked on the cross-CPU TLB shootdown (DDR-1075 §3 / DDR-1077), and
+      `SYS_FUTEX` itself is NOT built here.**
+- [ ] `MAP_SHARED` + `msync` + demand paging for file maps — **still unbuilt and
+      deliberately so** (DDR-1112 §4): `MAP_SHARED` needs write-back, a shared
+      page cache, and the same cross-CPU TLB shootdown `CLONE_VM` needs, while
+      `msync` has *no subject* under `MAP_PRIVATE`. So the old row is
+      **corrected and partly closed, not closed**.
+      *(The old row cited `sys_mmap.c:83` for the refusal. Cite the FUNCTION,
+      not the line — DDR-1112's own header expansion moved `vmm_unmap` from
+      :67 to :97, and DDR-1073 §5 records that a row citing a line number has
+      an expiry date nothing in the tree can check.)*
 - [ ] dynamic linking (`ld.so`), full `io_uring`, full POSIX `sigaction`
 
 > **A MISSING GATE NAME IS NOT A MISSING FEATURE, and this queue lists gate

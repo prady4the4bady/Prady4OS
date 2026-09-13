@@ -2133,7 +2133,7 @@ smoke-sysproc: $(IMG) fat-image sfs-image
 # be read, 'OFF REJECTED' needs a6, and the two expect DIFFERENT errno values, so
 # an r8/r9 swap in the marshal fails both instead of passing by symmetry.
 smoke-sysmmap: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMMAP FD REJECTED\nSYSMMAP OFF REJECTED\nSYSMUNMAP OK')" \
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMMAP FD REJECTED\nSYSMMAP ND REJECTED\nSYSMMAP OFF REJECTED\nSYSMUNMAP OK\nSYSMMAP FILE OK\nSYSMMAP CURSOR OK\nSYSMMAP FILEOFF OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 7 execve gate: the kernel places /EXECTEST.ELF on the FAT32

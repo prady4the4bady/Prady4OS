@@ -240,3 +240,104 @@ design was written under).
   reasoning, as against DDR-981/1049's intermittents).
 - **No `struct vm_area`, `struct vfs_file` or `struct fd_entry` change.**
 - **No open issue moves** (OPEN-1/2/12/13 untouched). Not an apfreeze, not OPEN-2.
+
+---
+
+## §9 — IMPLEMENTED. Results, and two things only RUNNING it could find
+
+**Status: IMPLEMENTED** (this section replaces §7's plan with what happened).
+
+`kernel/syscall/sys_mmap.c` + `user/systest.asm` + the `smoke-sysmmap` sentinel
+list. `kernel.bin` **1,315,210 → 1,319,306 B**, the page-aligned 4,096 B, with the
+size/headroom pair **recomputed from the size in the same edit** at both live
+carriers (253,558 B; `ci-docstate-check` 3 pairings, 0 inconsistent — and the
+*historical* pairs in the DDR records were deliberately left alone, the DDR-1081
+§5 trap). Warning-clean at `-Werror`. `ci-probe-rodata-check` **79 ELFs,
+unchanged** — no new probe. `smoke-sysmmap` 5 → **9** required sentinels; gate
+count **179 unchanged**; `GLOBAL_FORBIDDEN` **77**; hygiene **ALL EIGHT**,
+including `ci-cr3-writers-check` (no new `->cr3` writer, as §4 promised).
+
+| kernel | change | result |
+|---|---|---|
+| `95493b96c7d13f30` | **clean** | `[smoke] PASS — 9 FS pattern(s)` |
+| `7a0f785977ce8cab` | **M1** — accept the fd, skip the `vfs_read` (zero pages: the DDR-877 defect) | FAIL, **`SYSMMAP FILE OK` not found** |
+| `994236df86074059` | **M2** — read from `i * PAGE_SIZE`, ignoring `a_off` | FAIL, **`SYSMMAP FILEOFF OK` not found** |
+| `ff070f4e68d6411a` | **M3** — `fe->off += n` after the read (the cursor side effect) | FAIL, **`SYSMMAP CURSOR OK` not found** |
+
+**Three mutants, three different arms, none carrying another** (the DDR-1044
+check). Revert returns `95493b96c7d13f30` **bit-for-bit, verified by rebuild**.
+
+### §9.1 — THE FIRST RUN PASSED 9/9 AND IT WAS VACUOUS. M1 CAUGHT IT.
+
+The new `.rodata` literals were first inserted **between `m_mmapfd:` and its
+`m_mmapfd_len: equ $ - m_mmapfd`** — so that length became ~120 bytes instead of
+20, and the FD arm's `write(2)` **dumped the entire inserted block to the
+console.** The gate then matched `SYSMMAP FILE OK`, `SYSMMAP CURSOR OK` and
+`SYSMMAP FILEOFF OK` **straight out of `.rodata`**, on the clean kernel *and* on
+M1. The capture says it plainly:
+
+```
+/BIGPAT.BIN PRADYOS filesystem works!SYSMMAP ND REJECTED
+```
+
+So **"all nine passed on the first run" was a memory dump, not a feature**, and
+without M1 this would have shipped a gate that stays green **with the feature
+deleted** — the precise thing the mutant exists to prevent. It is the
+DDR-1033/DDR-1068 class (a mutant finding the GATE wrong rather than the code),
+and the first instance here where the vacuity came from **assembler layout**
+rather than test logic.
+
+**Carry the general form: a length computed at a distance from its string is a
+live vacuity hazard. Keep every `equ $ - x` adjacent to `x`.** A comment saying
+so now sits at the insertion point, because the next person to add a literal
+will reach for the same spot.
+
+### §9.2 — `mmap(NULL, …)` IS NOT GUARANTEED TO FIND FREE SPACE HERE
+
+Recorded because it cost a debugging pass and because it is **not** what it first
+looked like. With the dump fixed, the positive arms still produced nothing — and
+the cause is neither the fill nor the fd path: `sys_mmap` advances
+`t->mmap_next` **only** on an `addr == 0` request. The slice-6 arms above map at
+the **explicit** `MMAP_HINT` and never unmap, so `mmap_next` still points *at
+that live region*; the next `addr == 0` request resolves there, hits
+`vma_overlaps` and is **correctly refused with `-EINVAL`**.
+
+**The kernel is right** — refusing beats silently replacing, which is DDR-877's
+own discipline. But it is a real POSIX deviation: `mmap(NULL, …)` is supposed to
+find space, and on this kernel it can fail for any process that has previously
+used an explicit hint. **Recorded, NOT fixed:** teaching the bump allocator to
+skip occupied ranges is its own change with its own gate and its own vacuity
+question, and nothing shipping depends on it. The probe passes distinct explicit
+hints instead, with the reason written at the call site.
+
+### §9.3 — A SHIPPED GATE ARM CHANGED MEANING, AND THE SWAP CHECK HAD TO BE REBUILT
+
+The pre-existing `SYSMMAP FD REJECTED` arm passed `fd=3` **with**
+`MAP_ANONYMOUS` and required `-ENOSYS`. File-backed mmap makes that `-EINVAL`
+(an fd *and* "anonymous" is a contradiction), so the arm would have gone silent.
+**Worse:** DDR-877 built the fd and offset arms so that **swapping `r8`/`r9` in
+the marshal fails BOTH**, and that property depends on the two returning
+**different** errnos — collapsing them onto `-EINVAL` would have destroyed it
+while leaving the gate green.
+
+Restructured rather than patched: the fd arm now uses **`fd=99`** (beyond
+`FD_MAX` 64, so never open) and asks for a genuine file-backed map, giving
+**`-EBADF`**; a new **ND arm** uses `fd=1` (the console) for **`-ENODEV`**. Swap
+check **re-derived rather than inherited**: with `r8`/`r9` exchanged the fd arm
+sees `fd=0` → `-ENODEV` and the offset arm sees `fd=4096` → `-EBADF`, so **both
+still fail**. Three distinct errnos are now in play, each naming its own family
+(DDR-1080). The ND arm is **not** a marshal check and says so in the source — a
+swap leaves it on the console either way; it exists to pin the `FD_VFS`
+restriction, which nothing else asserted.
+
+### §9.4 — Still NOT claimed
+
+Everything in §8 stands. `MAP_SHARED`, demand paging, `msync`, `MAP_FIXED`,
+partial `munmap`, `mremap` and `PROT_EXEC` are **not built**; the Group D row is
+**corrected and partly closed, not closed**. `SYS_FUTEX` is **not built** and
+DDR-1038's assessment is untouched. **No defect is found in any code and none is
+alleged** — the two findings above are in **my own probe** (§9.1) and are a
+**recorded kernel limitation that is correct behaviour** (§9.2). The fourth arm
+(`MAP_PRIVATE` writes must not reach the file) remains **unreachable and
+unbuilt** until `MAP_SHARED` exists. **No open issue moves** (OPEN-1/2/12/13
+untouched); not an apfreeze, not OPEN-2.

@@ -4785,6 +4785,65 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1112 — file-backed `MAP_PRIVATE` mmap: BUILT + GATED (2026-09-13)
+
+The last unblocked substantial backlog row. **Design was committed BEFORE the
+code** (§NON-NEGOTIABLE 5). Eager `MAP_PRIVATE`: the frame is filled from the
+file *before* it is mapped, so no page-fault path is involved. `kernel.bin`
+1,315,210 → **1,319,306 B**, headroom **253,558 B** recomputed in the same edit;
+`ci-probe-rodata-check` **79 ELFs unchanged** (no new probe); `smoke-sysmmap`
+5 → **9** sentinels; gate count **179**; `GLOBAL_FORBIDDEN` **77**; hygiene
+**ALL EIGHT**, `ci-cr3-writers-check` included (no new `->cr3` writer).
+
+**Four measurements made it ~25 lines**, each read in the tree: `vfs_read` is
+already `pread`-style (explicit offset; `struct vfs_file` carries **no** cursor)
+so filling a page cannot move the caller's file position; `ptnode_alloc` returns
+a kernel-writable pointer so `copyout`/SMAP are not on this path; the capability
+comes from the fd (`e->cap`), so a mapping inherits the right the `open`
+established; and **no `struct vm_area` change is needed**, because
+`MAP_PRIVATE` has no write-back.
+
+| kernel | mutant | result |
+|---|---|---|
+| `95493b96c7d13f30` | clean | PASS, 9 patterns |
+| `7a0f785977ce8cab` | M1 zero pages (the DDR-877 defect) | FAIL — `SYSMMAP FILE OK` absent |
+| `994236df86074059` | M2 offset ignored | FAIL — `SYSMMAP FILEOFF OK` absent |
+| `ff070f4e68d6411a` | M3 cursor advanced | FAIL — `SYSMMAP CURSOR OK` absent |
+
+Three mutants, three different arms, none carrying another. Revert returns
+`95493b96c7d13f30` **bit-for-bit**.
+
+**THE FIRST RUN PASSED 9/9 AND WAS VACUOUS — M1 CAUGHT IT (§9.1).** The new
+`.rodata` literals were inserted **between `m_mmapfd:` and its
+`equ $ - m_mmapfd`**, making that length ~120 B instead of 20, so the FD arm's
+`write(2)` **dumped the block to the console** and the gate matched three
+sentinels **out of `.rodata`** — on the clean kernel *and* on M1. Without the
+mutant this ships a gate that stays green **with the feature deleted**.
+**Carry it: a length computed at a distance from its string is a live vacuity
+hazard — keep every `equ $ - x` adjacent to `x`.**
+
+**A SHIPPED ARM CHANGED MEANING AND ITS SWAP CHECK HAD TO BE REBUILT (§9.3).**
+The old `FD REJECTED` arm required `-ENOSYS` for `fd=3`; file-backed mmap makes
+that `-EINVAL`, which would also have **collapsed DDR-877's two arms onto one
+errno and destroyed their swapped-marshal detection** while leaving the gate
+green. Restructured: `fd=99` → `-EBADF`, a new ND arm `fd=1` → `-ENODEV`,
+offset → `-EINVAL`; swap re-derived, **both still fail**.
+
+**RECORDED, NOT FIXED (§9.2): `mmap(NULL, …)` can fail on this kernel.**
+`t->mmap_next` advances only for an `addr == 0` request, so a process that has
+mapped at an explicit hint leaves it pointing at a live region and the next
+`addr == 0` is **correctly** refused `-EINVAL` (no silent replace — DDR-877's
+discipline). The kernel is right; it is nonetheless a real POSIX deviation.
+Fixing the bump allocator is its own change and nothing shipping needs it.
+
+**NOT CLAIMED:** `MAP_SHARED`, demand paging, `msync`, `MAP_FIXED`, partial
+`munmap`, `mremap`, `PROT_EXEC` are **not built** — the Group D row is
+**corrected and partly closed, not closed**. `SYS_FUTEX` is **not built**.
+No defect found in any code and none alleged: the two findings are in **my own
+probe** and in **correct kernel behaviour**. No open issue moves.
+
+---
+
 ## DDR-1111 — a design document serving as a status row stays in the future tense (2026-09-13)
 
 Assessment + correction, **docs-only, no code change, no gate, no defect found

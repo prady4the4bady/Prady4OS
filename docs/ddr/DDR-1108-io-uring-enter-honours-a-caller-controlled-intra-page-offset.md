@@ -357,3 +357,28 @@ one job (shard 5, `push`, `103613226707`), immediately after
   where the same probe on the unguarded tree left **both** sentinels absent.
 - **Nothing is claimed about OPEN-2's rate.** Two clean suites is not a bound;
   DDR-1062's 6.9 % per-suite figure remains the standing measurement.
+
+### §11.4 — Further observations of the same binary (2026-09-13)
+
+Three more docs-only SHAs carried `68e74ff4142f7c7171a70e176ebfb3908ef3304aa3e5afb5d2b5624c6cb498c7`
+(1,315,210 B) — `783df76`, `b9ad0ec` and `704b2a5` — bringing the total to **six
+SHAs, one kernel** (`de68f88`, `f262ee7`, `b00247c`, and those three).
+
+**`b9ad0ec` is the interesting one:** it touches `kernel/syscall/sys_io.c` and is
+nonetheless on this list, because it is **comment-only and was verified to
+rebuild BIT-IDENTICAL before it was pushed** — the DDR-1074/1090 proof form this
+project uses for every comment correction, exercised again.
+
+On `704b2a5` the **push suite `34727602884` is fully green: all 10 shards plus
+all 6 non-shard jobs, 16/16.** (The `pull_request` suite `34727605133` was still
+draining a runner queue when this was written, with 6 of 10 shards green and
+**zero** failures; it is not counted here.) The build job's published digest
+(`ci.yml:158`, job `103644425934`) read that same hash — **a third
+cross-environment bit-for-bit reproduction**, and the check that matters, since
+**only the hash discriminates and a size comparison cannot** (DDR-1097).
+
+**Stated plainly: that is TWO green suites on `704b2a5` at most, not three.**
+Every push restarts the count, and §NON-NEGOTIABLE 1 wants three on one tip SHA.
+It costs nothing today — the release is **HELD**, `v1.0.0` untagged, no promotion
+in flight — but it is not glossed. The third green, when it is wanted, comes from
+**`workflow_dispatch`** (§INV.15), never `gh run rerun`.
