@@ -4785,6 +4785,54 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1113 — the `ACTION_EXEC_CODE` blocker is retired AS WORDED; the arch ISOs do not exist (2026-09-13)
+
+**Assessment + correction. Docs-only: no code change, no gate, no defect found
+and none alleged.** Audits `PRE_LAUNCH_CHECKLIST` §5.1 / §5.1b / §5.2 — the last
+three unaudited blocks — **completing the audit of that document.**
+
+**The dangerous finding.** §5.1 defers `ACTION_EXEC_CODE` because it *"needs a
+sandboxed interpreter subsystem"*. **One has existed since DDR-1034**
+(`kernel/aether/experiment.c`, gated by `smoke-runexp`, and it mints this row's
+own `CAP_EXEC`), so the sentence is false — **and the row still stands.**
+`experiment.h`'s safety is *the instruction set, not a guard*: no LOAD, no
+STORE, no addressing mode, so "no memory access outside its own stack" is a
+property of **what can be encoded**; `DIV` is absent rather than guarded because
+a `#DE` in ring 0 is fatal. An approved experiment computes an integer and
+touches nothing, while `ACTION_EXEC_CODE`/PRAX means code that *does* something.
+**The real blocker: giving that machine those effects replaces an encodability
+property with a checkable guard, on an agent-facing path.** DDR-1110's rule is
+why this is worded as a relocation — *a correction that removes a wrong blocker
+without naming the right one is worse than the blocker it removed*: a session
+seeing the interpreter exists, is gated, and mints `CAP_EXEC` would conclude the
+exception is spent and widen the opcode set.
+
+**Second.** §5.1 says *"the aarch64 ISO uses the U-Boot path"*. Measured: there
+is **exactly one `iso:` target and it is x86** (`Makefile:1160`; no
+`iso-aarch64`, no `iso-riscv64`), and **U-Boot exists nowhere in the build or
+source** — the only hits are four lines of `PRADYOS_MASTER_PLAN.md` whose own
+table marks them `⬜` not done. The row explains how a non-existent artefact
+works via a mechanism recorded as unimplemented. **The deferral is correct; the
+reason is not.** The prose's conclusion survives *strengthened*: the claim
+needing a boot-only qualifier is not "these ISOs are boot-only" but "these ISOs
+are not built". DDR-1081 §1.4 arriving in a second document.
+
+**Third.** §5.2 says Section 3C closes at *"6 shipped + 2 deferred"* and warns
+the two are **a trap**. Both halves false — **it closes at 8 of 8**, DDR-1083
+having wired `ACTION_RUN_EXPERIMENT` and DDR-1084 `ACTION_SEND_IPC`. Verified in
+the tree: `actionexptest.c:153` and `actionipctest.c:136` submit their own
+hand-copied types and `Makefile:3910`/`:3892` require the sentinels. Safe
+direction, but the trap paragraph **instructs** a session to re-derive work
+already done — and **DDR-1084 §1 is the DDR that named this failure**, updated
+CLAUDE.md correctly, and left this row one directory across.
+
+**Accurate, stated because an audit that only reports errors is not an audit:**
+§5.1b is correct throughout and its PQC half **shipped** (keccak + mldsa with
+three KAT headers = keyGen/sign/verify); §5.1's NVMe row is **right where
+CLAUDE.md's work row was wrong**, giving the surviving exception ground rather
+than the spent B#3 blocker (DDR-1103 §1). `GLOBAL_FORBIDDEN` **77**, **179
+gates**, `kernel.bin` not rebuilt, hygiene **ALL EIGHT**. No open issue moves.
+
 ## DDR-1112 — file-backed `MAP_PRIVATE` mmap: BUILT + GATED (2026-09-13)
 
 The last unblocked substantial backlog row. **Design was committed BEFORE the

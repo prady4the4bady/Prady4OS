@@ -911,7 +911,7 @@ operator decision before user testing** — they were already decided.
 | Intel HDA audio | optional — no QEMU HDA path in CI |
 | Wayland/wlroots compositor | superseded by the shipped custom C framebuffer compositor |
 | CMake/Makefile hybrid | post-1.0, awaiting operator sign-off (DDR-843) |
-| Apple Silicon / m1n1 | post-1.0 — the aarch64 ISO uses the U-Boot path |
+| Apple Silicon / m1n1 | post-1.0. **REASON CORRECTED 2026-09-13 (DDR-1113 §2); the DEFERRAL STANDS.** This read *"the aarch64 ISO uses the U-Boot path"* — **there is no aarch64 ISO** (`Makefile:1160`'s `iso:` is the only ISO target and it is x86; no `iso-aarch64`, no `iso-riscv64`) **and U-Boot is unimplemented**, appearing nowhere in the Makefile or any source and marked `⬜` in `PRADYOS_MASTER_PLAN.md`'s own table. |
 | `arch/aarch64` full port | **boot-only scope per ADR-034** — the ISO uses the boot-only kernel |
 | `arch/riscv64` full port | boot-only scope per ADR-034 |
 | Cloud bridge activation | post-1.0 (DDR-793) — a security-posture change, not a feature toggle |
@@ -920,7 +920,7 @@ operator decision before user testing** — they were already decided.
 | `ACTION_SCAN_ENVIRONMENT` | post-L7, needs SLAM3R |
 | `ACTION_QUERY_SCENE` | post-L7, no scene graph |
 | `ACTION_PARSE_DOCUMENT` | needs a 64 MiB OCR model; no model-shipping path exists |
-| `ACTION_EXEC_CODE` | needs a sandboxed interpreter subsystem |
+| `ACTION_EXEC_CODE` | **BLOCKER RELOCATED 2026-09-13 (DDR-1113 §1) — STILL DEFERRED.** *"Needs a sandboxed interpreter subsystem"* is **no longer true**: DDR-1034 shipped one (`kernel/aether/experiment.c`, gated by `smoke-runexp`, and it mints this row's own `CAP_EXEC`). **That does NOT retire the row.** `experiment.h`'s safety is *the instruction set* — no LOAD, no STORE, no addressing mode, so "no memory access outside its own stack" is a property of **what can be encoded** and cannot be lost by deleting a check. An approved experiment computes an integer and touches nothing; `ACTION_EXEC_CODE`/PRAX means code that *does* something. **The real blocker: giving that machine those effects replaces an encodability property with a checkable guard, on an agent-facing path.** Do not wire this row to `experiment.c` by widening its opcodes. |
 | `CAP_OCR` / `CAP_SCENE` | capability bit defined, enforcement deferred — no subsystem behind it |
 | SFS on-disk free-tree | in-memory reclaim shipped (DDR-762-v2); on-disk persistence post-1.0 |
 | NVMe completion IRQ | poll-mode is sufficient for the ISO (DDR-774a/b/c) |
@@ -928,8 +928,8 @@ operator decision before user testing** — they were already decided.
 
 **Multi-arch is the one worth reading twice.** ADR-034 scoped aarch64 and
 riscv64 as **boot-only**, and DDR-999 assessed full parity and concluded it is
-**not achievable** in this timeframe. The ISOs for those architectures package a
-kernel that boots and does not run userspace. If the release is described to
+**not achievable** in this timeframe. ~~The ISOs for those architectures package a
+kernel that boots and does not run userspace.~~ **CORRECTED 2026-09-13 (DDR-1113 §2) — the premise is understated and the conclusion below SURVIVES, strengthened: those ISOs DO NOT EXIST AT ALL.** What ships and is green is the ADR-034 boot stub in its own `arch-bootstrap` CI job (`smoke-aarch64` / `smoke-riscv64`), which is not an ISO. So the claim needing a qualifier is not "these ISOs are boot-only" but "these ISOs are not built". If the release is described to
 users as "multi-architecture", that description must carry the boot-only
 qualifier. **That is a wording decision, and it belongs with §1.2.**
 
@@ -1193,13 +1193,19 @@ deliberately withdrawn per-slot enforcement**. That withdrawal was a decision,
 so un-deferring F#74 is also a decision — but it is post-1.0 either way, so it
 is not in Section 1.
 
-**Section 3C action types close at 6 shipped + 2 deferred + 0
-buildable-and-unbuilt**, and that tally has been wrong twice (DDR-1017 said
+**Section 3C action types close at 8 of 8 — CORRECTED 2026-09-13, DDR-1113 §3.**
+This read *"6 shipped + 2 deferred + 0 buildable-and-unbuilt"*, which was true
+when written and was falsified by **DDR-1083** (wired `ACTION_RUN_EXPERIMENT`)
+and **DDR-1084** (wired `ACTION_SEND_IPC`). Verified in the tree, not taken from
+`CLAUDE.md`: `user/actionexptest.c:153` and `user/actionipctest.c:136` each
+`SYS_SUBMIT_ACTION` their own hand-copied type, and `Makefile:3910`/`:3892`
+require the `PRADYOS_EXPACT_*` / `PRADYOS_IPCACT_*` sentinels. **The tally
+has now been wrong three times** — it had already been wrong twice (DDR-1017 said
 "3 of 8", DDR-1018 said "4 of 8"; both were wrong because
 `ACTION_SPAWN_PROCESS` is not one of the eight and `ACTION_REWRITE_AGENT_CODE`
 was already gated by DDR-842). Shipped: `READ_FILE`, `DELETE_FILE`,
 `QUERY_MEMORY`, `REWRITE_AGENT_CODE`, `PROPOSE_HYPOTHESIS`, `EVOLVE_GENOME`.
-`SEND_IPC` — see §3 and §4.1. `RUN_EXPERIMENT` — see §3.
+`SEND_IPC` — see §3 and §4.1 (**wired, DDR-1084**). `RUN_EXPERIMENT` — see §3 (**wired, DDR-1083**).
 
 **THIS SECTION WAS RIGHT AND `CLAUDE.md`'s GROUP F TABLE WAS NOT — DDR-1072.**
 Measured 2026-09-06 against the Makefile, `tools/ci/gate_shards.txt` and the
@@ -1211,9 +1217,13 @@ those eight rows in the table carried `gate per type` with **no marker**, so the
 checklist and the table have disagreed about Section 3C since DDR-1021 and
 nothing in the tree could see it. The table is now corrected.
 
-**AND THE TWO DEFERRED TYPES ARE A TRAP — read this before closing either.**
-Each sits beside a **strict-tier, green, registered** gate whose *name* matches
-the type and whose *claim* is something else:
+**~~AND THE TWO DEFERRED TYPES ARE A TRAP — read this before closing either.~~**
+**BOTH TRAPS ARE RESOLVED — DDR-1083 and DDR-1084 (see the tally above); the
+history below is kept because it is why those two DDRs were written, and the
+general lesson at the end still stands.** Each type sat beside a **strict-tier,
+green, registered** gate whose *name* matched the type and whose *claim* was
+something else — each of those gates now covers **the door AND the action type**
+on the same boot:
 
 - `smoke-sendipc` (shard 7) gates DDR-1033's ring-3 **door** (`SYS_IPC_SEND` /
   `SYS_IPC_RECV`, NSI 98/99). `grep 'ACTION_SEND_IPC\|SUBMIT_ACTION'
@@ -1803,7 +1813,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **179** across **10** shards | `make ci-shard-check`, re-measured 2026-09-07 (DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1113+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
+| DDR free range | **DDR-1114+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
 | `kernel.bin` | **1,319,306 B** against the 1,572,864 B gate — **253,558 B** headroom | measured 2026-09-12 (DDR-1105); **re-derived, not carried** — and note `ci-docstate-check` reported **OK on the stale pair** right up to this edit, because 1,307,018 + 265,846 = 1,572,864 exactly. That is DDR-1063's stated limitation, not a defect in the check (DDR-1081 §5, DDR-1083): **passing it is not evidence a live-state number is current.** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |
