@@ -1067,6 +1067,17 @@ ticked. Logged here verbatim from the table, reasons unchanged.
 - SFS block reclamation on-disk — `[DEFERRED: in-memory reclaim shipped (DDR-762-v2); on-disk free-tree deferred post-1.0]`
 - NVMe completion IRQ — `[DEFERRED: poll-mode sufficient for ISO; DDR-774a/b/c deferred until B#3 SMP stable]`
 - `ACTION_SEND_IPC` — `[DEFERRED: no ring-3 IPC surface — ipc_send/ipc_recv are kernel-internal and capability-gated and there is no SYS_IPC_*, so an approved SEND_IPC has no executor in any ring; building it is new kernel ABI plus a security decision (DDR-1017 §1)]`
+  - **RETIRED 2026-09-13 — DDR-1110, recording DDR-1084's work at the row it
+    falsified.** Both halves of this blocker are gone and neither was retired by
+    the DDR that found them stale: **DDR-1033** built the door (`SYS_IPC_SEND` /
+    `SYS_IPC_RECV`, NSI 98/99) and **DDR-1084** built the caller. Measured —
+    `user/actionipctest.c` (8,783 B) hand-copies `ACTION_SEND_IPC 7` and calls
+    `SYS_SUBMIT_ACTION` at `:136`, and `smoke-sendipc` requires
+    `PRADYOS_IPCACT_A st=2 …` among its sentinels. **Section 3C closes at 8 of 8.**
+  - **NOT a new enforcement.** `sys_ipc_send` does not consult the action queue
+    and DDR-1084 did not make it: what is added is propose → arbitrate → **obey**
+    plus the audit record, exactly as for `ACTION_RUN_EXPERIMENT` above.
+
 - `ACTION_RUN_EXPERIMENT` — `[DEFERRED: no implementation at any ring — CAP_EXEC is a #define checked nowhere (zero matches in kernel/*.c, no is_exec on struct tcb), there is no experiment subsystem, and the metric lockbox is CAP_SOVEREIGN read-only by design so an agent cannot record a result; it is ACTION_EXEC_CODE's deferral under another name (DDR-1021)]`
   - **RETIRED 2026-09-07 — DDR-1083. All three of those blockers were already gone, and
     none was retired by DDR-1083:** DDR-1034 retired them by building the executor and
@@ -1080,11 +1091,30 @@ ticked. Logged here verbatim from the table, reasons unchanged.
   - **NOT a new enforcement.** `sys_run_experiment` does not consult the action queue and
     DDR-1083 did not make it — what is added is propose → arbitrate → **obey** plus the
     audit record, the design DDR-1013 §2 states for every action type.
-  - `ACTION_SEND_IPC` **stays deferred** and is not re-assessed: same shape (DDR-1033 built
-    the door, the action path does not call it), separate change.
+  - ~~`ACTION_SEND_IPC` **stays deferred** and is not re-assessed: same shape (DDR-1033 built
+    the door, the action path does not call it), separate change.~~ **FALSIFIED BY THE NEXT
+    COMMIT — DDR-1084 wired it, and DDR-1110 §2 records the correction here rather than
+    deleting the sentence, so the record shows what was believed and when.** The separate
+    change this line anticipated is the one that happened; what was wrong is only the word
+    *stays*.
 - F#74 capability discovery — `[DEFERRED: agent_caps exists on struct tcb (DDR-982) but is initialised to 0 and never granted, and there is no syscall to read it; building it reverses DDR-982's deliberately withdrawn per-slot enforcement (DDR-1022 §4)]`
 - F#66 architect_agent / F#67 healer_agent (RUFLO) / F#69 inventor_agent / F#70 tournament_agent / F#71 subconscious world model / F#72 verifier_agent / F#75 lineage memory — `[DEFERRED: domain behaviour with no subsystem behind it; there is exactly ONE agent program (user/agent_base.c) and the named agents are roster slots, so each of these is a behaviour rather than plumbing. A stub would gate vacuously, and F#75's gate would duplicate smoke-agentmem (DDR-1022 §2/§5)]`
 - F#73 sovereign NL UI — `[DEFERRED: needs a natural-language surface; blocked on the same two missing pieces as Ctrl+Alt+T — no windowed terminal client, and sys_exec.c:47 discards argv/envp so a spawned client cannot be told what to attach to (DDR-1022 §5)]`
+  - **BLOCKER RELOCATED, NOT REMOVED — DDR-1110 §3.** Both *stated* blockers are
+    retired, verified in the tree: the windowed terminal client is `user/term.c`
+    (9,230 B) with `smoke-ctrlaltt` on shard 0 (DDR-1027), and `sys_exec` no longer
+    discards the vectors — `marshal_vec` (`sys_exec.c:53`) is called at `:113` for
+    `uargv` and `:116` for `uenvp` (DDR-1032). **It stays DEFERRED on a blocker
+    neither this row nor `PRE_LAUNCH_CHECKLIST.md` §3 ever named: there is no
+    natural-language capability on this machine at all.** The only inference path
+    in the tree is `ollama_generate()` (`user/agent_base.c:97`), which connects to
+    **`10.0.2.2:11434` — the QEMU SLIRP gateway, i.e. the developer's HOST**;
+    `AETHER_TEST_MODE` defaults to **1** so the CI path returns a fixed string; and
+    `smoke-agent-live` sits in `shard_check.sh`'s EXCLUDE set precisely because it
+    *"needs a live Ollama endpoint on the host, so CI stays in test mode
+    (ADR-027)"*. So an F#73 surface is a window onto a process on another machine —
+    the cloud-bridge posture **DDR-793 deferred post-1.0** as a security-posture
+    change, i.e. an operator decision rather than a feature to pick up.
 
 ### This resolves DDR-982 §5.5 without a new operator ruling
 
