@@ -231,7 +231,20 @@ with one: the scan reported `[apfreeze]` as its only match on that shard.
 
 It is, however, precisely the case **DDR-1060** built `waiters=` for, and the
 lock dump is ordered after the `[apfreeze]` line, so the next occurrence should
-carry it. **NOT attributed and NOT explained here.** Two shards freezing on
+carry it. **NOT attributed and NOT explained here.**
+
+> **CORRECTED 2026-09-18 — DDR-1121. The dump was ALREADY IN THIS CAPTURE.**
+> The original wording is kept above rather than deleted, so the record shows
+> what was believed and when. `PRADYOS_LOCKSTAT` is present immediately after
+> `shot=1`, thirteen locks, **`overflow=0` so it is complete** — and **exactly
+> one lock has a waiter**: `0xFFFFFFFF8014DCA8` = **`g_rq+0x18`, runqueue 1's
+> lock**, while all three vblk `compl_lock`s (`g_inst+0x408/+0x828/+0xC48`,
+> units 0/1/2) read `waiters=0`. It was missed because the forbidden-pattern
+> scan prints *matching lines* plus *leading context*, and the dump is neither —
+> it sits in the replayed capture body above that summary. **This §6's reading
+> of the freeze as a lock wait is CONFIRMED by the RIP; what DDR-1121 adds is
+> that the two witnesses name DIFFERENT locks**, both chains verified
+> instruction-exact, with no mechanism named and OPEN-2 unmoved. Two shards freezing on
 `cpu=2` at ticks 162/164 on one binary is recorded as an observation; **no rate
 is claimed and no common cause is asserted.**
 

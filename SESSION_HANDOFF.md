@@ -6,6 +6,50 @@
 
 ---
 
+## CHECKPOINT 2026-09-18 — DDR-1121: the shard-7 freeze has two witnesses, and they name different locks
+
+**Docs-only. No code change, no gate, `kernel.bin` NOT rebuilt. NO FIX, NO
+MECHANISM, OPEN-2 DOES NOT CLOSE.**
+
+Written in the CI-wait window while the OPEN-2 hunt (run 35406350665) runs.
+
+**What happened:** DDR-1120 §6 recorded the *second* red on `5f3ac9e` (shard 7
+`smoke-smpsched`) as a lock wait, "NOT attributed and NOT explained", and said
+the DDR-1060 lock dump *"should carry"* on the next occurrence. Re-reading the
+job log to check that, **the dump was already in that capture** — and it names a
+lock that the backtrace does not.
+
+**Rules paid for, carry them:**
+
+1. **The scan's summary is not the capture.** `boot_test.sh` prints *matching
+   lines* and *leading context*; anything a probe emits **after** the matched
+   line sits in the replayed body above that summary and is easy to read past.
+   DDR-1088 fixed the case where the report never reached the log; this is the
+   case where it did and the reader stopped early. **Scroll past the summary.**
+2. **`llvm-nm` can return two symbols with the same name.** Both `sched.c` and
+   `virtio_rng.c` define a `static` `g_rq`. Resolving an address by name alone
+   would have been a confident wrong answer; resolve by *address*, and check
+   whether the name is unique.
+3. **`awk` is `mawk` here and `strtonum()` is gawk-only.** Second time this has
+   cost work — DDR-1079 already fixed it inside `tools/ci/sym_at.sh`. Any ad-hoc
+   one-liner written to resolve a RIP hits it again. **Use `python3`.**
+4. **§INV.18 can be satisfied without a rebuild, but only if you say how.**
+   `llvm-objcopy -O binary` on the local ELF re-derives `6af029b001e6e6db`
+   byte-for-byte, and `git diff` over every build input from `5f3ac9e` to `HEAD`
+   returns zero files. Both halves stated; neither assumed.
+5. **A contradiction between two sound instruments is a finding, not a thing to
+   resolve by preference.** Three convenient readings were available and all
+   three were refused with a reason (an unrelated transient waiter does not
+   explain the frozen CPU's *missing* `+1`; "the backtrace is stale" has nothing
+   behind it but inconvenience; a `lock xaddq` is visible under x86-64 TSO).
+6. **Correct at the site, keep the original wording.** DDR-1120 §6 and the
+   `CLAUDE.md` OPEN-2 row are corrected in place; the two *historical*
+   DDR-1120 free-range summaries are deliberately left alone, because they are
+   accurate records of what was believed (DDR-1081 §5).
+
+All four DDR free-range carriers advanced to **DDR-1122+** in one edit
+(§INV.4 / DDR-1088 §8).
+
 ## CHECKPOINT 2026-09-13 — DDR-1120: the THIRD `[schedcheck]` fire; the identity refutes the double resume
 
 **NO FIX, NO MECHANISM, OPEN-2 DOES NOT CLOSE.** Docs-only; `kernel.bin` NOT

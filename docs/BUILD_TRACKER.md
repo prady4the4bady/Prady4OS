@@ -4810,6 +4810,76 @@ depend on buddy-allocator alignment that nothing states or tests.
 
 ---
 
+## DDR-1121 — the shard-7 freeze has two witnesses and they name different locks (2026-09-18)
+
+**Assessment + correction of DDR-1120 §6, one commit ago. Docs-only: no code
+change, no gate, `kernel.bin` NOT rebuilt. NO FIX, NO MECHANISM, OPEN-2 DOES NOT
+CLOSE.**
+
+DDR-1120 §6 closed with *"the lock dump is ordered after the `[apfreeze]` line so
+the next occurrence should carry it."* **It was already in that capture.** CI
+34766468421 shard 7 `smoke-smpsched` on `5f3ac9e` carries a complete
+`PRADYOS_LOCKSTAT` block immediately after `shot=1` — **thirteen locks,
+`overflow=0` so it is complete, and exactly one has a waiter.** It was missed
+because the forbidden-pattern scan prints *matching lines* plus *leading
+context*, and the dump is **neither** — it sits in the replayed capture body
+above that summary. DDR-1088's class one level in: there the report never
+reached the log; here it did and the reading habit stopped at the same block.
+
+**§INV.18 satisfied without a rebuild, and the check is stated:**
+`build/kernel.elf` re-derives under `llvm-objcopy` to **`6af029b001e6e6db`**,
+byte-for-byte the on-disk `kernel.bin` at 1,319,306 B, and `git diff` over
+`Makefile` and every `.c/.h/.asm/.S/.ld` from `5f3ac9e` to `HEAD` returns **zero
+files**.
+
+**The one waiter is `0xFFFFFFFF8014DCA8` = `g_rq+0x18` = runqueue 1's lock.**
+`struct rq { spinlock_t lock; struct tcb *head, *tail; }` is 24 B, and the dump
+carries `g_rq+0x0/+0x18/+0x30/+0x48` — four runqueues at `-smp 4`, which is the
+arithmetic confirming the stride rather than an assumption about it. **`g_rq` is
+ambiguous in this binary and was disambiguated, not assumed:** `llvm-nm` reports
+*two* defined `static` symbols of that name — `virtio_rng.c`'s `struct virtq` at
+`0x80165fb0` and `sched.c`'s array at `0x8014dc90`.
+
+**All three vblk `compl_lock`s read `waiters=0`, including unit 2** — the unit
+every `[vblk] compl wait timeout` in this capture names (`g_inst =
+0xffffffff80159b00`, `sizeof(struct vblk) = 0x420`, `compl_lock` at `+0x408`, so
+`+0x408/+0x828/+0xC48` are units 0/1/2).
+
+**Both witnesses are instruction-exact.** `spin_lock_contended` does `waiters++`
+at `+0x5B` **before** the spin, spins at `+0x80..+0x92`, and decrements at
+`+0xCB` only after acquiring — and the freeze RIP `+0x92` is the `jmp` closing
+that loop, after the increment and before the decrement. `overflow=0` rules out
+a failed slot claim, and `ls_slot_for` keys on the lock address **verbatim**
+(no hash, so no aliasing). Against that, `bt[2] = submit+0x2E` is **the return
+address of** `spin_lock_irqsave(&v->compl_lock)`, with `addq $0x408,%rdi`
+visible two instructions earlier **in the instruction stream**.
+
+The first three require some `compl_lock` to read `waiters>=1`; the fourth names
+which one; the dump says none does. **These cannot all hold, and this capture
+cannot say which fails.** What is established is narrower and is the whole
+deliverable: **the shard-7 freeze is no longer "a lock wait, unexplained" — it is
+a lock wait whose two independent witnesses name different locks.**
+
+**NOT CLAIMED:** no fix, no mechanism, no rate (one occurrence of this site
+ever); **no defect alleged in `lock_stat.c` or `virtio_blk.c`**, both read and
+both correct for what they were built to do; not pooled with the `[schedcheck]`
+family (different RIP, different backtrace, different instrument); DDR-1120 is
+**not** withdrawn — its §6 *reading* of the red as a lock wait is **confirmed**
+by the RIP, and one clause is corrected **in place** so the record shows what was
+believed; DDR-1060 is **not** criticised — its instrument produced this result.
+`GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs, no new sentinel and **no new
+clause, so the set of frames that fire is unchanged**.
+
+**Recorded and NOT built:** a `key=` echo of the address the frozen CPU
+*believes* it claimed. That is a change to the hottest primitive in the kernel,
+on OPEN-2's own path, designed off one occurrence — DDR-1047's refused cost. It
+needs its own DDR, its cost measured, and a forced mutant.
+
+**Tooling note, because it has now cost time twice:** resolving these addresses
+with `awk` failed — `strtonum()` is a **gawk** extension and this host's
+`/usr/bin/awk` is **mawk**. That is exactly the defect DDR-1079 fixed in
+`tools/ci/sym_at.sh`. Use `python3`.
+
 ## DDR-1120 — the third `[schedcheck]` fire: three exact witnesses confirm the consumed frame, and `disp − saves = 1` refutes the double-resume mechanism (2026-09-13)
 
 **Assessment. NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE.** Docs-only; no
