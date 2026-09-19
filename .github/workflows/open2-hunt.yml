@@ -101,8 +101,15 @@ jobs:
       lanes: ${{ steps.gen.outputs.lanes }}
     steps:
       - id: gen
+        # Through env, not spliced: this is the SHARPEST of the five in this file,
+        # because the guard below is DOWNSTREAM of what it guards -- the value used
+        # to land inside single quotes and the `case` that rejects a non-number ran
+        # afterwards, so a value containing a quote closed the string before the
+        # check that exists to catch it ever executed.
+        env:
+          LANES: ${{ github.event.inputs.lanes || '6' }}
         run: |
-          n='${{ github.event.inputs.lanes || '6' }}'
+          n="$LANES"
           case "$n" in ''|*[!0-9]*) echo "::error::lanes must be a number"; exit 1;; esac
           if [ "$n" -lt 1 ] || [ "$n" -gt 20 ]; then
             echo "::error::lanes must be 1..20 (each is a runner with one qemu)"; exit 1
@@ -167,6 +174,8 @@ jobs:
       # harness fits inside existing page padding. Asserting "the image changed"
       # by SIZE passes on the stale binary. ONLY THE HASH DISCRIMINATES.
       - name: Build default, then hunt, and PROVE the flag rebuilt
+        env:
+          HUNT: ${{ github.event.inputs.hunt || '32' }}
         run: |
           set -euo pipefail
           make image >/dev/null
@@ -174,7 +183,7 @@ jobs:
           echo "default kernel = ${A:0:16}  ($(stat -c%s build/kernel.bin) B)"
 
           touch kernel/proc/sched.c
-          make image OPEN2_HUNT=${{ github.event.inputs.hunt || '32' }} >/dev/null
+          make image OPEN2_HUNT="$HUNT" >/dev/null
           B="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
           echo "hunt    kernel = ${B:0:16}  ($(stat -c%s build/kernel.bin) B)"
 
@@ -199,9 +208,16 @@ jobs:
       - name: Hunt
         id: hunt
         env:
-          # Through env rather than spliced into the script body: this value is
-          # caller-supplied, and the file was just reviewed for exactly that class.
+          # Through env rather than spliced into the script body. Every
+          # caller-supplied value this file uses in a shell now arrives this way,
+          # so the template-injection class is closed here rather than narrowed.
+          # matrix.lane is included for uniformity even though the setup job has
+          # already proved it a number: a reader should not have to re-derive
+          # which of these happens to be safe.
           REF_REQUESTED: ${{ github.event.inputs.ref || 'dev/phase1-seyp3n' }}
+          HUNT: ${{ github.event.inputs.hunt || '32' }}
+          RUNS: ${{ github.event.inputs.runs || '10' }}
+          LANE: ${{ matrix.lane }}
         run: |
           set -uo pipefail
           # The campaign mkdir -p's this itself, but AFTER the pipeline below has
@@ -232,9 +248,9 @@ jobs:
           # a capture read months later carries tree, flag and binary together --
           # and per DDR-1097 §5 the BINARY is what finally discriminates, two
           # builds differing only in flags having been identical in size.
-          echo "[job] built with OPEN2_HUNT=${{ github.event.inputs.hunt || '32' }} lane=${{ matrix.lane }} ref_requested=${REF_REQUESTED} tree_sha=$(git rev-parse HEAD)" \
+          echo "[job] built with OPEN2_HUNT=${HUNT} lane=${LANE} ref_requested=${REF_REQUESTED} tree_sha=$(git rev-parse HEAD)" \
             | tee build/gatelogs/open2hunt/campaign.txt
-          bash tools/ci/open2_hunt_campaign.sh "${{ github.event.inputs.runs || '10' }}" \
+          bash tools/ci/open2_hunt_campaign.sh "$RUNS" \
             | tee -a build/gatelogs/open2hunt/campaign.txt
           rc=${PIPESTATUS[0]}
           # rc=2 is the DDR-1060 §9 hash-change ABORT. Swallowing it would report
