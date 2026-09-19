@@ -48,6 +48,22 @@
 # `schedule` fires supply no inputs, so the `||` fallback is what the weekly cron
 # actually uses.
 #
+# WHY THE CRON IS NOT PINNED TO A SHA, which the operator offered on PR #21 as the
+# first of two acceptable forms. A SHA written here is frozen at the moment it is
+# typed, and dev/phase1-seyp3n gains a commit on essentially every DDR -- so within
+# days the weekly hunt would be booting a tree nobody is working on, and would keep
+# reporting `clean` about it. That is the DDR-1043 / DDR-1117 class this project
+# has already paid for twice: an instrument pointed somewhere other than where its
+# reader assumes. Keeping it current would also mean editing THE DEFAULT BRANCH on
+# every DDR, which is not going to happen. And the single-SHA discipline the review
+# cites is about a DELIBERATE N-run campaign -- for which `workflow_dispatch`'s
+# `ref` input already accepts a full commit SHA, so that case is already served.
+# What the weekly cron is for is DDR-1096 §2.4's approach #4, wider time and
+# hardware sampling; pinning it would defeat its only stated purpose. So this takes
+# the operator's second form instead: every capture records the resolved tree SHA,
+# and runs can be segregated after the fact rather than aggregated wrongly. See the
+# Hunt step.
+#
 # NO FIX IS IMPLIED BY ANY OF THIS. NON-NEGOTIABLE 3 holds: no artefact has been
 # captured, no mechanism is named, and OPEN-2 has not moved.
 name: open2-hunt
@@ -111,6 +127,18 @@ jobs:
           # checks out the default branch and dies before it does anything.
           ref: ${{ github.event.inputs.ref || 'dev/phase1-seyp3n' }}
           submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
+          # Operator instruction 2026-09-14 on PR #21 (CodeRabbit CWE-522, and
+          # zizmor's `artipacked`). checkout@v5 writes GITHUB_TOKEN into
+          # .git/config by DEFAULT, so every later step -- running code from a
+          # CALLER-SUPPLIED ref -- would inherit authenticated git for the life of
+          # the job. SAFE HERE BY MEASUREMENT, NOT BY ARGUMENT: no step in this
+          # job invokes git at all (grep for git fetch/push/clone/pull/submodule
+          # over the Makefile, tools/ci/open2_hunt_campaign.sh and
+          # tools/ci/apt_prepare.sh returns NOTHING). The checkout action's own
+          # fetch, submodules included, still authenticates; this flag governs
+          # only what is left behind afterwards. `git rev-parse HEAD` below is a
+          # purely local read and is unaffected.
+          persist-credentials: false
 
       # Same package set as the ci.yml shard job, minus the ISO/UEFI tools this
       # job never reaches. Kept deliberately close so no build step can lose a
@@ -170,15 +198,41 @@ jobs:
 
       - name: Hunt
         id: hunt
+        env:
+          # Through env rather than spliced into the script body: this value is
+          # caller-supplied, and the file was just reviewed for exactly that class.
+          REF_REQUESTED: ${{ github.event.inputs.ref || 'dev/phase1-seyp3n' }}
         run: |
           set -uo pipefail
           # The campaign mkdir -p's this itself, but AFTER the pipeline below has
           # already opened the tee target inside it.
           mkdir -p build/gatelogs/open2hunt
-          # Recorded in the log because the campaign cannot know it: OPEN2_HUNT is
-          # a BUILD-time flag baked into the pinned binary, not something the
-          # script reads. Passing it as env would imply otherwise.
-          echo "[job] built with OPEN2_HUNT=${{ github.event.inputs.hunt || '32' }} lane=${{ matrix.lane }}" \
+          #
+          # ATTRIBUTION -- operator instruction 2026-09-14 on PR #21 (Codex P2).
+          # A `schedule` fire supplies no inputs, so it checks out a MUTABLE branch
+          # NAME, and two weekly hunts can therefore boot different kernels while
+          # reporting under one workflow. The operator offered pinning a SHA here
+          # OR recording the resolved one in every capture; this takes the second,
+          # and the WHERE THIS RUNS note above says why pinning the cron would
+          # defeat its only stated purpose.
+          #
+          # `git rev-parse HEAD`, NOT `github.sha`, AND THAT IS MEASURED RATHER
+          # THAN ASSERTED: on a workflow_dispatch, github.sha is the SHA of the
+          # branch the WORKFLOW FILE came from, not the ref that was checked out.
+          # Run 35406350665 reports head_sha=5bac10b, the tip of dev/phase1, while
+          # the job it describes actually built dev/phase1-seyp3n at 6ab6f3c.
+          # Recording github.sha would name a commit holding NEITHER the harness
+          # NOR the kernel that was hunted, and would look entirely correct doing
+          # it -- the DDR-1092 shape, a field that reads as a confident answer.
+          #
+          # OPEN2_HUNT is recorded here for a different reason: the campaign
+          # CANNOT know it, being a BUILD-time flag baked into the pinned binary
+          # rather than something the script reads. The campaign itself adds
+          # kernel_pinned= (the binary's own hash) to its first and last line, so
+          # a capture read months later carries tree, flag and binary together --
+          # and per DDR-1097 §5 the BINARY is what finally discriminates, two
+          # builds differing only in flags having been identical in size.
+          echo "[job] built with OPEN2_HUNT=${{ github.event.inputs.hunt || '32' }} lane=${{ matrix.lane }} ref_requested=${REF_REQUESTED} tree_sha=$(git rev-parse HEAD)" \
             | tee build/gatelogs/open2hunt/campaign.txt
           bash tools/ci/open2_hunt_campaign.sh "${{ github.event.inputs.runs || '10' }}" \
             | tee -a build/gatelogs/open2hunt/campaign.txt
