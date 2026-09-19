@@ -50,6 +50,20 @@ static uint32_t g_head;          /* next write index */
 static uint32_t g_count;         /* total appended (caps at AETHER_AUDIT_LEN live) */
 static int      g_wrapped;       /* 1 once the ring has wrapped at least once */
 
+/* DDR-1098: the monotonic append counter the cursor resumes from.
+ *
+ * NOT g_count, and the difference is the whole reason this exists: g_count's own
+ * declaration above says it CAPS at AETHER_AUDIT_LEN, so once the ring is full it
+ * is the constant 4096 and cannot say where a reader got to. g_written never
+ * saturates.
+ *
+ * It is a COUNTER, not a field on the entry, and that is deliberate (DDR-1098
+ * sec.3): struct aether_audit_entry is 64 B and the ring's allocation order is
+ * _Static_assert'ed against it, so an 8-byte seq field would take 4096 entries
+ * from 256 KiB to 512 KiB of PMM. The sequence of any retained entry is derivable
+ * from this counter and g_head, so nothing on the ring changes. */
+static uint64_t g_written;       /* total appends ever; NEVER saturates  */
+
 /* DDR-842. Before the hash chain, appends were INDEPENDENT — each entry was a
  * self-contained record, so two concurrent writers could not corrupt each
  * other's data and no lock was needed. The chain changed that: an append now
@@ -123,21 +137,83 @@ void aether_audit(uint32_t agent_pid, uint32_t action_type,
     }
     if (g_count < AETHER_AUDIT_LEN)
         g_count++;
+    g_written++;                 /* DDR-1098: monotonic; the seq of THIS entry */
     spin_unlock_irqrestore(&g_audit_lock, fl);
 }
 
-/* Copy up to `max` entries oldest..newest into a kernel-side buffer. The caller
- * (SYS_READ_AUDIT) then copyout()s to user space. */
-int aether_audit_read(struct aether_audit_entry_pub *out, int max) {
+/* DDR-1098: copy up to `max` entries in chronological order into a kernel-side
+ * buffer. The caller (SYS_READ_AUDIT) then copyout()s to user space.
+ *
+ * cur == NULL  -> the most recent `max`, EXACTLY as this function behaved before
+ *                 DDR-1098. Every shipped caller takes this path (all four pass
+ *                 a3 as a literal 0), so their behaviour is unchanged by
+ *                 construction rather than by testing.
+ * cur != NULL  -> resume: return entries starting at sequence cur->from, and
+ *                 report in cur->first the sequence of the first entry actually
+ *                 returned. cur->from == 0 means THE NEWEST n, the same thing a
+ *                 NULL cursor means, so 0 has one meaning across both forms and
+ *                 the difference is only whether the sequence is reported back.
+ *                 "From the beginning" is from == 1, clamped up to whatever
+ *                 survives -- and the clamp is visible as first - from.
+ *
+ * cur->first is the value the caller CANNOT MANUFACTURE, and it carries two
+ * things: the resume point for the next call (first + n), and the wrap loss
+ * (first - from), which is the quantity AETHER_AUDIT_WRAP announces to serial and
+ * which ring 3 previously had no way to see. When nothing is returned it reports
+ * g_written + 1 -- the sequence the NEXT append will take -- so a poller is told
+ * where reality is rather than being left to guess.
+ *
+ * THE LOCK IS NEW ON THIS PATH and is not a claimed fix (DDR-1098 sec.7): g_head,
+ * g_count and g_written must be read as one consistent triple or the derived
+ * index is wrong. No artefact of the previous unlocked read has ever been
+ * captured. Cost is bounded -- at most 64 entries, under a lock
+ * aether_audit_verify already holds for a 4096-iteration SHA-256 walk. */
+int aether_audit_read_since(struct aether_audit_entry_pub *out, int max,
+                            struct aether_audit_cursor *cur) {
     if (max <= 0 || !g_log)
         return 0;
-    int n = (int)g_count;
-    if (n > max) n = max;
-    /* Oldest entry: if wrapped, it's at g_head; else at 0. Walk forward n from the
-     * (newest - n) position so we return the most recent n in chronological order. */
-    uint32_t start = (g_head + AETHER_AUDIT_LEN - (uint32_t)n) % AETHER_AUDIT_LEN;
-    for (int i = 0; i < n; i++) {
-        const struct aether_audit_entry *e = &g_log[(start + (uint32_t)i) % AETHER_AUDIT_LEN];
+    uint64_t fl = spin_lock_irqsave(&g_audit_lock);
+
+    uint32_t n;
+    uint32_t start;
+
+    if (!cur) {
+        /* Original path, preserved verbatim: the most recent n. */
+        n = g_count;
+        if (n > (uint32_t)max) n = (uint32_t)max;
+        start = (g_head + AETHER_AUDIT_LEN - n) % AETHER_AUDIT_LEN;
+    } else {
+        /* Resume. The oldest sequence still on the ring is the floor: a caller
+         * whose cursor has been overwritten by a wrap is silently advanced to
+         * what survives, and learns how much it lost from first - from. */
+        uint64_t oldest = (g_count == 0) ? g_written + 1u
+                                         : g_written - (uint64_t)g_count + 1u;
+        uint64_t from   = cur->from;
+        if (from == 0) {
+            /* 0 means the newest window, exactly as a NULL cursor does. */
+            uint32_t k = g_count;
+            if (k > (uint32_t)max) k = (uint32_t)max;
+            from = (k == 0) ? g_written + 1u : g_written - (uint64_t)k + 1u;
+        }
+        if (from < oldest) from = oldest;
+        if (g_count == 0 || from > g_written) {
+            /* Caught up (or nothing retained): no records, and the caller is
+             * told where the next one will land. */
+            cur->first = g_written + 1u;
+            spin_unlock_irqrestore(&g_audit_lock, fl);
+            return 0;
+        }
+        uint64_t avail = g_written - from + 1u;
+        n = (avail > (uint64_t)max) ? (uint32_t)max : (uint32_t)avail;
+        /* Index of the entry with sequence `from`. g_head is the NEXT write
+         * index, so the newest entry (seq g_written) sits at g_head - 1. */
+        uint32_t back = (uint32_t)(g_written - from);
+        start = (g_head + AETHER_AUDIT_LEN - back - 1u) % AETHER_AUDIT_LEN;
+        cur->first = from;
+    }
+
+    for (uint32_t i = 0; i < n; i++) {
+        const struct aether_audit_entry *e = &g_log[(start + i) % AETHER_AUDIT_LEN];
         out[i].timestamp   = e->timestamp;
         out[i].agent_pid   = e->agent_pid;
         out[i].action_type = e->action_type;
@@ -145,7 +221,14 @@ int aether_audit_read(struct aether_audit_entry_pub *out, int max) {
         out[i].result      = e->result;
         out[i]._pad        = 0;
     }
-    return n;
+    spin_unlock_irqrestore(&g_audit_lock, fl);
+    return (int)n;
+}
+
+/* The pre-DDR-1098 entry point, kept so the three shipped probes and
+ * user/include/pradyos.h are untouched. */
+int aether_audit_read(struct aether_audit_entry_pub *out, int max) {
+    return aether_audit_read_since(out, max, NULL);
 }
 
 /* DDR-842: recompute the chain across the retained window.

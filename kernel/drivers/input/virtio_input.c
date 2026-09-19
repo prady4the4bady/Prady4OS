@@ -47,12 +47,54 @@ static int g_up;
 static volatile int      g_abs_x, g_abs_y;   /* raw axis value [0, 32767] */
 static volatile uint32_t g_buttons;          /* bit0 = left, bit1 = right, bit2 = middle */
 static volatile uint32_t g_btn_edges;        /* DDR-941: press edges seen by the driver */
+/* DDR-1026: press edges NOT YET REPORTED to ring 3. SYS_MOUSE_POLL exposes
+ * current state, not an event queue (DDR-941), so a press is observable only if
+ * a poll happens to land inside the 200 ms it is held -- and DDR-1025 measured
+ * mpollwin=0: across five presses, ZERO of ring 3's ~1,000 polls per second
+ * fell inside a window. Polling harder is not the lever. This bit is set on the
+ * same edge that increments g_btn_edges and drained read-and-clear at the
+ * syscall, so a completed press+release still reaches ring 3 as one click. */
+static volatile uint32_t g_btn_latch;
+/* DDR-1025 §5 follow-up: HOW LONG is the button actually down, in guest ticks?
+ * The injector holds it for 200 ms (20 ticks at 100 Hz), yet a PASSING run sees
+ * exactly one poll out of ~205,000 observe it -- which is a window about one
+ * poll wide, not 20 ticks. These record the press tick and the widest
+ * press->release span seen, so "the window is genuinely sub-tick" and "ring 3
+ * was looking elsewhere for 200 ms" stop being indistinguishable. */
+static volatile uint64_t g_btn_down_tick;
+static volatile uint32_t g_btn_hold_max;
+uint32_t virtio_input_btn_hold_max(void) {
+    return __atomic_load_n(&g_btn_hold_max, __ATOMIC_RELAXED);
+}
+
+/* THE decisive counter. btnhold says the button is down for ~21 ticks (210 ms),
+ * and mpoll says ring 3 polls ~750 times a second -- so ~150 polls should fall
+ * inside each press. mbtn=0 says none of them saw it. Those cannot both be true
+ * unless ring 3 is not polling DURING the window, however much it polls overall.
+ * mpollwin samples the syscall counter at the press and again at the release:
+ * it is exactly "how many times ring 3 asked while the button was down". */
+extern uint32_t sys_mouse_poll_count(void);
+static volatile uint32_t g_mpoll_at_press;
+static volatile uint32_t g_mpoll_win_max;
+uint32_t virtio_input_mpoll_win(void) {
+    return __atomic_load_n(&g_mpoll_win_max, __ATOMIC_RELAXED);
+}
+
 
 /* DDR-941: read-only accessor (NOT draining — the compositor-side count it is
  * compared against is cumulative too, and a drained counter cannot be compared
  * against a cumulative one). */
 uint32_t virtio_input_btn_edges(void) {
     return __atomic_load_n(&g_btn_edges, __ATOMIC_RELAXED);
+}
+
+/* DDR-1026: read-and-clear the pending press edges. Read-and-clear on a driver
+ * accessor is the established pattern here, not a new one -- virtio_input_wheel()
+ * (DDR-725) has worked this way since Layer 7, for the same reason: detents
+ * accumulate between polls and would otherwise be lost. virtio_input_state()
+ * stays PURE; a read-only view that mutates is a trap for the next reader. */
+uint32_t virtio_input_btn_latch(void) {
+    return __atomic_exchange_n(&g_btn_latch, 0, __ATOMIC_SEQ_CST);
 }
 static volatile int      g_wheel;            /* DDR-725: accumulated wheel detents */
 
@@ -80,8 +122,17 @@ static void fold_event(const struct virtio_input_event *e) {
              * count against the compositor's PRADYOS_BTN_STATE transitions is
              * what separates "the event never arrived" from "it arrived and was
              * coalesced before ring 3 looked". */
-            if (e->value && !(g_buttons & bit))
+            if (e->value && !(g_buttons & bit)) {
                 __atomic_add_fetch(&g_btn_edges, 1, __ATOMIC_RELAXED);
+                __atomic_or_fetch(&g_btn_latch, bit, __ATOMIC_SEQ_CST);  /* DDR-1026 */
+                g_btn_down_tick  = g_ticks;                  /* DDR-1025 §5 */
+                g_mpoll_at_press = sys_mouse_poll_count();
+            } else if (!e->value && (g_buttons & bit) && g_btn_down_tick) {
+                uint64_t held = g_ticks - g_btn_down_tick;
+                if (held > g_btn_hold_max) g_btn_hold_max = (uint32_t)held;
+                uint32_t win = sys_mouse_poll_count() - g_mpoll_at_press;
+                if (win > g_mpoll_win_max) g_mpoll_win_max = win;
+            }
             if (e->value) g_buttons |= bit; else g_buttons &= ~bit;
         }
         break;
@@ -89,16 +140,36 @@ static void fold_event(const struct virtio_input_event *e) {
     }
 }
 
+/* DDR-1025: does a single IRQ drain carry BOTH the press and the release?
+ * SYS_MOUSE_POLL exposes current state, not an event queue (DDR-941), so if one
+ * drain sets and then clears the button, ring 3 can NEVER observe it -- not
+ * because it polled too slowly, but because there was no instant between the two
+ * at which it could have looked. The 200 ms the injector waits between the two
+ * QMP commands is irrelevant if the guest drains both in one go. */
+static volatile uint32_t g_btn_same_drain;
+uint32_t virtio_input_btn_same_drain(void) {
+    return __atomic_load_n(&g_btn_same_drain, __ATOMIC_RELAXED);
+}
+
+
 /* Completion body, shared by INTx and MSI-X (DDR-714C2). */
 static void input_complete(void) {
     uint32_t len;
     int head;
     int budget = 256;                     /* bound work per IRQ */
+    int saw_press = 0;                    /* DDR-1025 */
     while (budget-- > 0 && (head = virtq_pop_used(&g_vq, &len)) >= 0) {
         uint64_t buf = g_vq.desc[head].addr;
         virtq_free_chain(&g_vq, head);
-        if (len >= sizeof(struct virtio_input_event))
+        if (len >= sizeof(struct virtio_input_event)) {
+            uint32_t b0 = g_buttons;
             fold_event((const struct virtio_input_event *)(uintptr_t)buf);
+            /* DDR-1025: a press then a release inside ONE drain leaves no
+             * instant at which ring 3 could have polled a button-down state. */
+            if (!b0 && g_buttons) saw_press = 1;
+            if (saw_press && b0 && !g_buttons)
+                __atomic_add_fetch(&g_btn_same_drain, 1, __ATOMIC_RELAXED);
+        }
         struct virtq_buf rb = { buf, sizeof(struct virtio_input_event), 1 };  /* re-arm */
         int h = virtq_add(&g_vq, &rb, 1);
         if (h >= 0)

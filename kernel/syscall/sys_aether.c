@@ -12,6 +12,8 @@
 #include "errno.h"
 #include "console.h"
 #include "aether.h"
+#include "ipc.h"        /* DDR-1033: the ring-3 IPC door */
+#include "cap.h"
 
 #define SIGKILL 9
 
@@ -276,20 +278,58 @@ static long sys_kill_agent(long a1, long a2, long a3, long a4, long a5, long a6)
     struct tcb *t = tcb_by_pid((uint32_t)a1);
     if (!t)
         return -ESRCH;
-    t->sig_pending |= (1ull << SIGKILL);        /* terminated on its next IRQ return */
+    /* DDR-1090: terminated on its next RING-3 IRQ return, or at its next
+     * yield() if it is sitting in an unbounded kernel wait. This comment used
+     * to say "on its next IRQ return", which is what a reader would want from
+     * the sovereign's kill switch on a runaway agent and is not what the
+     * delivery guard (`cs & 3 == 3`) provides on its own. */
+    t->sig_pending |= (1ull << SIGKILL);
     return 0;
 }
 
+/* DDR-1098: a3 is an OPTIONAL in/out cursor, so the newest 64 stops being the
+ * only window ring 3 can ever address.
+ *
+ * a3 == 0 takes the original path VERBATIM, and that is safe by measurement
+ * rather than by hope: all four shipped call sites pass a literal 0 into RDX
+ * (user/include/pradyos.h, egressaudittest.c, privacynettest.c,
+ * sovegresstest.c), and each freestanding stub binds "d"(a3), so the register is
+ * written rather than left to chance. The DDR-1032 shape.
+ *
+ * THE RETURNED SEQUENCE DOES NOT GO IN a4, although a4 is likewise ignored.
+ * a4 is R10 (arch/x86_64/syscall_entry.asm:105) and the three-argument stubs
+ * those callers use stop at "d"(a3) -- R10 holds whatever the compiler last left
+ * there, so treating it as a user pointer would copyout to a garbage address on
+ * every existing call. The probes that DO pass four arguments each declare their
+ * own nsi4 with an explicit r10 binding, which is exactly the evidence that a
+ * three-argument stub does not. Hence one pointer carrying both directions.
+ *
+ * The 64 clamp is UNCHANGED (DDR-1095 recorded why not to turn it into -E2BIG:
+ * three green gates ask for more and it is a correct bound on a kernel stack
+ * buffer). With a cursor it stops being a ceiling and becomes a page size. */
 static long sys_read_audit(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
-    (void)a3; (void)a4;
+    (void)a4;
     int max = (int)a2;
     if (max <= 0) return 0;
     if (max > 64) max = 64;                      /* bounded kernel staging buffer */
     struct aether_audit_entry_pub buf[64];
-    int n = aether_audit_read(buf, max);
+
+    struct aether_audit_cursor cur;
+    struct aether_audit_cursor *curp = NULL;
+    if (a3) {
+        if (copyin(&cur, (const void __user *)a3, sizeof cur) < 0)
+            return -EFAULT;
+        curp = &cur;
+    }
+
+    int n = aether_audit_read_since(buf, max, curp);
     if (n > 0 && copyout((void __user *)a1, buf,
                          (size_t)n * sizeof buf[0]) < 0)
+        return -EFAULT;
+    /* The cursor is written back even when n == 0: "nothing new, and here is
+     * where the next record will land" is an answer a poller needs. */
+    if (curp && copyout((void __user *)a3, &cur, sizeof cur) < 0)
         return -EFAULT;
     return n;
 }
@@ -299,6 +339,78 @@ static long sys_set_mem_limit(long a1, long a2, long a3, long a4, long a5, long 
     (void)a3; (void)a4;
     long r = aether_set_mem_limit((uint32_t)a1, (uint64_t)a2);
     return r < 0 ? -EPERM : 0;                   /* lower-only; no self-escalation */
+}
+
+/* ---- DDR-1033: the ring-3 IPC door -------------------------------------
+ *
+ * ipc_send/ipc_recv were complete and capability-gated long before this; what
+ * was missing (DDR-1017) was a ring-3 door and an ADDRESS. The address is the
+ * roster slot index -- the same identifier SYS_AGENT_ROSTER and
+ * SYS_AGENT_METRICS already use, so no new namespace is invented.
+ *
+ * Every slot endpoint shares ONE res_id, so the capability grants "IPC at all",
+ * not "send to slot 3 but not slot 5". That is a real check -- a process with no
+ * handle is refused by cap_authorize -- but it is COARSE, and it is recorded as
+ * such in DDR-1033 §3 rather than dressed up as per-slot policy. Per-slot res_ids
+ * are the extension if policy is ever wanted. */
+#define IPC_AGENT_RES_ID 0x49504341ull        /* "IPCA" */
+
+static struct ipc_endpoint g_agent_ep[AGENT_ROSTER_N];
+static int g_agent_ep_ready;
+
+static void agent_ep_init_once(void) {
+    if (g_agent_ep_ready)
+        return;
+    for (int i = 0; i < AGENT_ROSTER_N; i++)
+        ipc_endpoint_init(&g_agent_ep[i], IPC_AGENT_RES_ID);
+    g_agent_ep_ready = 1;
+}
+
+/* Grant the door. Called by the kernel at spawn -- never reachable from ring 3,
+ * which is what keeps this out of self-escalation territory. */
+void ipc_grant(struct tcb *t) {
+    if (!t || !t->caps)
+        return;
+    agent_ep_init_once();
+    t->is_ipc  = 1;
+    t->ipc_cap = cap_create(t->caps, RES_IPC, IPC_AGENT_RES_ID,
+                            CAP_IPC_SEND | CAP_IPC_RECV);
+}
+
+static long sys_ipc_send(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (!t || !t->is_ipc)
+        return -EPERM;                        /* the door itself */
+    if (a1 < 0 || a1 >= AGENT_ROSTER_N)
+        return -EINVAL;
+    uint64_t msg[IPC_MSG_WORDS];
+    if (copyin(msg, (const void __user *)(uintptr_t)a2, sizeof msg) < 0)
+        return -EFAULT;
+    agent_ep_init_once();
+    if (ipc_send(t->caps, t->ipc_cap, &g_agent_ep[a1], msg) != 0)
+        return -EPERM;                        /* the capability */
+    return 0;
+}
+
+static long sys_ipc_recv(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    (void)a3;                                  /* timeout: ipc_recv's own bound (DDR-961) */
+    struct tcb *t = current_thread;
+    if (!t || !t->is_ipc)
+        return -EPERM;
+    if (a1 < 0 || a1 >= AGENT_ROSTER_N)
+        return -EINVAL;
+    agent_ep_init_once();
+    uint64_t out[IPC_MSG_WORDS];
+    int rc = ipc_recv(t->caps, t->ipc_cap, &g_agent_ep[a1], out);
+    if (rc == -ETIMEDOUT)
+        return -ETIMEDOUT;
+    if (rc != 0)
+        return -EPERM;
+    if (copyout((void __user *)(uintptr_t)a2, out, sizeof out) < 0)
+        return -EFAULT;
+    return 0;
 }
 
 void sys_aether_register(void) {
@@ -315,5 +427,7 @@ void sys_aether_register(void) {
     syscall_register(SYS_READ_AUDIT,     sys_read_audit);
     syscall_register(SYS_SET_MEM_LIMIT,  sys_set_mem_limit);
     syscall_register(SYS_AGENT_ROSTER,   sys_agent_roster);   /* DDR-707 */
+    syscall_register(SYS_IPC_SEND,       sys_ipc_send);      /* DDR-1033 */
+    syscall_register(SYS_IPC_RECV,       sys_ipc_recv);      /* DDR-1033 */
     syscall_register(SYS_AGENT_METRICS,  sys_agent_metrics);  /* DDR-730 */
 }

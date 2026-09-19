@@ -93,6 +93,7 @@ void vmm_protect_kernel(void) {
     uint64_t pt = table_at(pd)[0] & PTE_ADDR;
     if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[0]\r\n"); return; }
 
+    uint64_t alias_pte  = 0;   /* DDR-1046: the identity-alias PD entry, read back */
     uint64_t *ptes      = table_at(pt);
     uint64_t text_end   = (uint64_t)(uintptr_t)__text_end;
     uint64_t rodata_end = (uint64_t)(uintptr_t)__rodata_end;
@@ -112,21 +113,61 @@ void vmm_protect_kernel(void) {
         ptes[i] = e;
     }
 
-    /* Identity alias 0x400000..0x600000: PML4[0] -> PDPT[0] -> PD entry 2
-     * (2 MiB page). NX kills execute-via-alias; RW kept (documented residue). */
-    if (g_nx_ok) {
+    /* DDR-1046 — THE IDENTITY ALIAS, and the residue DDR-757 documented.
+     *
+     * The kernel image is mapped TWICE: in the higher half (protected above,
+     * text RX / rodata R+NX / data RW+NX) and identity-mapped at 0x400000 by a
+     * single 2 MiB PD entry that stage2.asm builds as 0x83 = PRESENT|RW|PS.
+     * DDR-757 set NX here, killing execute-via-alias, and left RW — its own
+     * comment said so: "RW kept (documented residue)".
+     *
+     * SO KERNEL TEXT WAS WRITABLE THROUGH THE ALIAS. W^X was half-enforced: a
+     * stray write through a physical address could patch kernel code, and the
+     * audit below could not see it, because it only walks the higher-half PTEs.
+     *
+     * MEASURED BEFORE CHANGING IT, not assumed safe: with RW cleared the boot
+     * is line-for-line normal (423 lines, steady state at t=14500, no fault),
+     * so nothing writes the kernel image through a physical address. Two facts
+     * make that unsurprising and both were checked rather than reasoned:
+     * PMM_MIN_PHYS is 16 MiB so no allocated frame lives in this 2 MiB page,
+     * and the page tables sit at 0x300000 — PD entry 1, a different page — so
+     * table_at()'s identity access is untouched.
+     *
+     * The readback is not decoration. "I cleared the bit" and "the bit is
+     * clear" are different claims, and a measurement showing only that nothing
+     * crashed cannot tell them apart. */
+    {
         uint64_t lo_pdpt = pml4[0] & PTE_ADDR;
         if (lo_pdpt) {
             uint64_t lo_pd = table_at(lo_pdpt)[0] & PTE_ADDR;
-            if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT))
-                table_at(lo_pd)[2] |= VMM_NX;
+            if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT)) {
+                if (g_nx_ok)
+                    table_at(lo_pd)[2] |= VMM_NX;      /* no execute-via-alias */
+                table_at(lo_pd)[2] &= ~VMM_RW;         /* no write-via-alias   */
+                alias_pte = table_at(lo_pd)[2];        /* read BACK, audited below */
+            }
         }
     }
 
     /* Full TLB flush (non-global entries), then audit what is actually live. */
     __asm__ volatile("mov %0, %%cr3" : : "r"(g_kernel_pml4) : "memory");
 
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "PRADYOS_WX_ALIAS present=");
+      kline_d(&k, (alias_pte & PTE_PRESENT) ? 1u : 0u);
+      kline_s(&k, " rw=");
+      kline_d(&k, (alias_pte & VMM_RW) ? 1u : 0u);
+      kline_s(&k, " nx=");
+      kline_d(&k, (alias_pte & VMM_NX) ? 1u : 0u);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
+
     int ok = 1;
+    /* DDR-1046: the alias is part of W^X and is audited with everything else.
+     * Without this the verdict said OK on a kernel whose text was writable
+     * through the alias — which is exactly how the residue survived. */
+    if (!(alias_pte & PTE_PRESENT))      ok = 0;   /* the alias must still exist */
+    if (alias_pte & VMM_RW)              ok = 0;   /* writable kernel image      */
+    if (g_nx_ok && !(alias_pte & VMM_NX)) ok = 0;  /* executable kernel image    */
     for (unsigned i = 0; i < 512; i++) {
         uint64_t e = ptes[i];
         if (!(e & PTE_PRESENT))
@@ -211,6 +252,60 @@ int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
 
 int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
     return map_core(pml4_phys & PTE_ADDR, virt, phys, flags);
+}
+
+/* DDR-1031: locate the leaf PTE for `virt` without creating anything. Returns a
+ * pointer into the page table, or 0 if any level is absent or is a large page. */
+static uint64_t *leaf_pte(uint64_t pml4_phys, uint64_t virt) {
+    uint64_t *pml4 = table_at(pml4_phys);
+    uint64_t pdpt_p = descend(pml4, idx(virt, 4), 0, 0);
+    if (!pdpt_p) return 0;
+    uint64_t pd_p = descend(table_at(pdpt_p), idx(virt, 3), 0, 0);
+    if (!pd_p) return 0;
+    uint64_t pt_p = descend(table_at(pd_p), idx(virt, 2), 0, 0);
+    if (!pt_p) return 0;
+    return &table_at(pt_p)[idx(virt, 1)];
+}
+
+int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t flags) {
+    pml4_phys &= PTE_ADDR;
+    uint64_t start = va & ~0xFFFull;
+    uint64_t end   = (va + len + 0xFFFull) & ~0xFFFull;
+
+    /* PASS 1 -- validate the WHOLE range before touching anything. A half-applied
+     * protection change is worse than a rejected one: the caller has no way to
+     * discover where it stopped, and POSIX callers do not expect to unwind it. */
+    for (uint64_t p = start; p < end; p += 0x1000ull) {
+        uint64_t *pte = leaf_pte(pml4_phys, p);
+        if (!pte) return -1;
+        uint64_t e = *pte;
+        if (!(e & PTE_PRESENT) || !(e & VMM_USER))
+            return -1;
+        /* DDR-1031 §3b: the hardware RO bit IS copy-on-write's trigger. Granting
+         * write on a COW page would not make it writable -- it would let this
+         * process write a frame another still shares, with no copy and no fault.
+         * Removing write from a COW page is harmless and stays allowed. */
+        if ((flags & VMM_RW) && (e & PTE_SW_COW))
+            return -2;
+    }
+
+    /* PASS 2 -- apply. The frame, both SOFTWARE bits and the cache attributes are
+     * carried over verbatim; only the permission bits are replaced. Rebuilding
+     * the PTE as `frame | flags` would clear PTE_SW_SHARED (breaking DDR-1003's
+     * invariant) and PTE_SW_COW (making vmm_cow_fault return early at
+     * vmm_cow.c:115, so the page is never copied). */
+    uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;
+    for (uint64_t p = start; p < end; p += 0x1000ull) {
+        uint64_t *pte = leaf_pte(pml4_phys, p);
+        uint64_t e = *pte;
+        *pte = (e & PTE_ADDR)
+             | (e & (PTE_SW_COW | PTE_SW_SHARED | VMM_PWT | VMM_PCD))
+             | PTE_PRESENT | VMM_USER
+             | (flags & VMM_RW)
+             | nx;
+        invlpg(p);
+    }
+    return 0;
 }
 
 int vmm_unmap(uint64_t virt) {
