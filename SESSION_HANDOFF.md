@@ -13892,3 +13892,75 @@ connect all session (CONNECT_TIMEOUT), so `graph_session_primer()` has not run.
   compile line contains `-Werror`.
 * **Verify by HASH, never by trusting `make`.** Twice in one session that was the
   only thing that caught a build which had not happened.
+
+---
+
+## CHECKPOINT 2026-09-19 — DDR-1117 … DDR-1124 (OPEN-2 lineage + the OPEN-1 decision)
+
+**Tip: `17a926d` on `dev/phase1-seyp3n`. `kernel.bin` `854bbb38fdfe4fd2`,
+1,319,306 B — SIZE UNCHANGED from DDR-1116's `f8574d7d6f0ba30e`, so only the
+hash discriminates (DDR-1097). DDR free range now `DDR-1125+`, advanced at ALL
+FOUR carriers in one commit.**
+
+### Landed since the DDR-1116 checkpoint
+
+| | |
+|---|---|
+| **DDR-1117** | the OPEN-2 hunt workflow **had never run and could not be started** — a `schedule:`/`workflow_dispatch:`-only workflow does nothing until it is on the DEFAULT branch. No defect in the file; the defect was its LOCATION. |
+| **DDR-1118** | the frame at `next->rsp` was **CONSUMED, not corrupted** — instruction-exact, two witnesses, and it is a THIRD case DDR-1116's A/B split did not contain. |
+| **DDR-1119** | the FIRST `[schedcheck]` fire was the same case, proved by **DDR-1115's own number**. |
+| **DDR-1120** | third fire; `disp − saves = 1`, the healthy identity, **refutes the double-resume mechanism DDR-1118 proposed** — by the field DDR-1118 added to test it. |
+| **DDR-1121** | the shard-7 freeze has **two instruction-exact witnesses and they name different locks**; the lock dump was already in the capture. |
+| **DDR-1122** | that capture has **TWO frozen CPUs** — `[apfreeze]` is a **LATCH, NOT A CENSUS** and always was. |
+| **DDR-1123** | `[apfreeze]` now carries the per-CPU census `ticks[0=…,1=…,2=…,3=…]`. Instrument only; no clause, no verdict, no sentinel, no gate. |
+| **DDR-1124** | **OPEN-1 route 1 is STATED OPEN, explicitly** (operator step 3) — and **there are no release notes at all**, so §1.2 pointed at a destination that does not exist. |
+
+### The DDR-1123 regression signal — READ THIS, it is why the change is safe
+
+`ec24fc9` is a **kernel change** (`idt.c`) and was **NOT exonerated in advance**
+(DDR-1042). Its push suite is **CI 35445891140 — SUCCESS**, **all TEN
+`build-and-boot` shards green** (0–9) plus `build`, `shard-check`,
+`aether-layer`, both `arch-bootstrap` arms and `code-graph` = **16/16 jobs**.
+Every shard's DDR-1035 hash assertions passed **both** before and after its
+gates. **The `pull_request` suite did not fire on that SHA** — §INV.15 says it
+does not always, so that is one suite, not two.
+
+**The `ticks[` census did NOT appear, and that is the predicted result, not an
+absence of evidence:** DDR-1123 measured that a healthy boot prints none of it,
+and a PASS deletes its capture. **The field's first real fire has not happened.**
+
+### OPEN-2 state — the one-line version
+
+**Still NO named mechanism, and NON-NEGOTIABLE 3 still forbids a fix.** What is
+established is narrower than it was and better grounded: the `[schedcheck]`
+frames are **spent, not damaged** (three fires, three exact witnesses on the
+third), the double-resume mechanism is **refuted on its own instrument**, and
+the shard-7 lock contradiction is **narrowed by DDR-1122 and still unresolved** —
+*the one live `+1` sits on a runqueue lock while the one CPU whose backtrace was
+captured was blocked on a `compl_lock`*. **The detector spent all four shots on
+CPU 2 and CPU 3's RIP — the datum that would settle it — was never captured.**
+
+**DDR-1121's `key=` echo stays REFUSED** (hottest primitive in the kernel, on
+OPEN-2's own path, designed off one occurrence) **and is also redundant as
+worded**: `ls_slot_for` keys the address verbatim and the dump already prints it.
+
+### OPEN-1 state
+
+**Route 1 is STATED OPEN** — not closed, not deferred, not claimed harmless.
+**No route-1 occurrence has been recorded since DDR-1009 §2**, across DDR-1062's
+42-suite window and everything after — **a COUNT, NOT A RATE**; the denominator
+is deliberately not computed (the affected gate is `smoke-surfdestroy` and the
+second occurrence was on `smoke-msixap`, so it is not the suite count).
+**The `v1.0.0` tag and the `main` promotion remain §1.2's OPERATOR decisions.**
+
+### Carried process facts
+
+* **FOUR DDR carriers, advanced together** (§INV.4, §CURRENT BUILD STATE,
+  §ORIENTATION, `PRE_LAUNCH_CHECKLIST` §6) — DDR-1088 §8's recorded failure was
+  advancing exactly three.
+* **`grep` on `CLAUDE.md`'s carrier cells overflows any tool buffer** (§INV.4's
+  line is ~470 KB). Use `grep -o`, `grep -c` or `cut -c1-N`.
+* **Resolve addresses with `python3`, never `awk`** — `strtonum()` is a gawk
+  extension and this host's `/usr/bin/awk` is mawk (DDR-1079, re-paid DDR-1121).
+* `pradyos-graph` MCP has failed to connect all session (`CONNECT_TIMEOUT`), so
+  `graph_session_primer()` has still not run.
