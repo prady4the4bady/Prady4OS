@@ -931,6 +931,84 @@ ring 3 — see §4.17b.
 
 ---
 
+### 4.19 — `CR0.WP` is never set, so kernel W^X's read-only half is not enforced against ring 0
+
+**DDR-1125, 2026-09-19. MEASURED; NO FIX SHIPPED.** `vmm.c:34` states the **NX**
+precondition with care — it probes `CPUID 8000_0001h EDX[20]`, gates on it, and
+explains what getting it wrong would cost — and eleven lines later says of the
+other half of the same claim: *"text RW-clearing is **unconditional**."* It is
+unconditional **in the page tables**; its **enforcement against ring 0** is
+`CR0.WP`, which this kernel **never sets, never reads and never names**.
+
+**Two adjacent lines of one `smoke-shell` capture** (temporary probe, kernel
+`26c3c775ce18b895`, reverted bit-for-bit):
+
+```
+[wx] kernel W^X OK
+[wxprobe] cr0=0x0000000080000013 wp=0 ro_write=survived byte=0x60
+```
+
+The audit reports success, and the next line is a **ring-0 write to a page the
+loop one line above had just stamped `e &= ~VMM_RW`, completing without a
+fault**. Two independent witnesses: the configuration bit *and* the consequence.
+**Not vacuous** — `.rodata` spans `0x80055000`→`0x80142000` (~970 KiB), so the
+probe byte is in the RW-clearing branch, not the branch that keeps RW; and the
+byte written is the one just read, so memory is bit-identical.
+
+**What it costs:** the **NX** half holds (NX is `EFER.NXE` + PTE bit 63,
+independent of WP), so execute-via-alias is genuinely closed. DDR-1046's
+*"RO+NX removes the writable-executable-kernel primitive"* is **half
+delivered** — the executable half by NX, the writable half not at all.
+**DDR-1046 is not withdrawn or criticised:** its walk, stamping, alias read-back
+and measurements all stand; what is missing sits **one level below the page
+tables**, where no check that reads PTEs could have seen it — DDR-1046's own
+shape, one level down. On the CPU all 179 gates run, `PRADYOS_SMEP cpuid=0` and
+`PRADYOS_SMAP cpuid=0`, so **nothing else stood there** (and neither covers
+ring-0 writes to kernel pages anyway).
+
+**What it does NOT cost, measured:** `vmm_user_range_ok(..., writable=1)`
+rejects on `!(e & VMM_RW)` in **software**, so `copyout` to a COW or read-only
+user page returns `-EFAULT` whatever WP does — the shipped arm
+`[uaccess] copyout RO page EFAULT OK` is in **both** binaries' captures.
+**COW is not silently defeated.**
+
+**The value is inherited, not established.** `stage2.asm` never touches bit 16
+(so the BIOS path takes the architectural reset value, WP=0) and
+`boot/uefi/loader.c` has **zero** CR0 references (so the UEFI path takes
+*firmware* CR0, which UEFI does not pin). The two arms of the same ISO need not
+agree, and `smoke-iso-x86` asserts that each boots and nothing about CR0.
+§INV.13's class, in the form where the property is implemented in **neither**
+path. **The UEFI path's actual CR0 is not measured here.**
+
+**The fix is one line and it was measured, not argued** (DDR-1046's precedent):
+`cr0 |= (1ull << 16)` in `cpu_enable_sse()` — the single site the **BSP**
+(`main.c:4001`) and **every AP** (`smp.c:276`) run, which already does a CR0
+read-modify-write. Mutant `7e2f777be9cbfb7d` prints
+`[wpmut] cr0=0x0000000080010013 wp=1` (so the mutation took — without that print
+*"boots clean"* and *"never applied"* are the same observation) and
+**`smoke-shell` is `GATE_RC=0`, clean, no panic**, through COW fork, uaccess,
+the filesystem and ring-3. The two `[trap] user #PF … err=0x7` kills
+(`WXVIOL.ELF`, `METRIC.ELF`) still fire — those are **CPL-3** writes, enforced
+regardless of WP, so **WP moves exactly one thing: ring-0 writes**.
+
+**NOT shipped here** because of §NON-NEGOTIABLE 5 (design first), DDR-1107's
+rule (CI was in flight on two heads, so a kernel change would stack and a red
+could not be attributed), and because **one gate on one CPU is not a regression
+set** — SMP, block, compositor and mmap/COW-heavy gates are unmeasured, and AP
+coverage is by construction rather than by measurement.
+
+**The gate arm, vacuity checked first:** *"boots with WP set"* is **vacuous**
+(it boots either way); *"`CR0` bit 16 reads 1"* is **weak** (set ≠ enforced, and
+under TCG enforcement is the emulator's — DDR-1046 §2.1's own correction). The
+**discriminating** arm is that the write must now **fault**: arm DDR-1040's
+`fault_expect_arm()` around a ring-0 write to an RW-clear kernel page and
+require a consumed `#PF`. **The pre-fix tree is the control and fails it**, so
+no synthetic defect is needed — and the latch's preconditions hold there,
+checked in the capture (`[wx]` at line 28, `sti` at 35, `cpus online` at 87).
+
+---
+
+
 ## SECTION 5 — DEFERRED FEATURES
 
 ### 5.1 — Pre-approved exceptions (CLAUDE.md §PRE-APPROVED EXCEPTIONS)
@@ -1846,7 +1924,7 @@ does. Worth knowing before anyone "fixes" it.)
 | Gates assigned | **179** across **10** shards | `make ci-shard-check`, re-measured 2026-09-07 (DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
-| DDR free range | **DDR-1125+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
+| DDR free range | **DDR-1126+** | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |
 | `kernel.bin` | **1,319,306 B** against the 1,572,864 B gate — **253,558 B** headroom | measured 2026-09-12 (DDR-1105); **re-derived, not carried** — and note `ci-docstate-check` reported **OK on the stale pair** right up to this edit, because 1,307,018 + 265,846 = 1,572,864 exactly. That is DDR-1063's stated limitation, not a defect in the check (DDR-1081 §5, DDR-1083): **passing it is not evidence a live-state number is current.** |
 | Warnings at `-Werror` | **zero** | `make image` |
 | x86_64 ISO | built, BIOS + UEFI arms verified, **boots a live OS**, and gated **three ways at strict tier on every CI suite** | `smoke-iso-x86` (shard 1) + `smoke-iso-userspace` (shard 0) + `smoke-uefi` (shard 0). **NOT `smoke-iso-x86_64`**, which the Group H table named and which does not exist (DDR-1081 §1.1) |
