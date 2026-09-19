@@ -238,6 +238,42 @@ static void ap_freeze_probe(void) {
             if (k) kputs(",");
             kputhex(pc->d_bt[k]);
         }
+        /* DDR-1123: WHO ELSE IS FROZEN. This line is a LATCH, not a census --
+         * s_victim below pins the FIRST frozen CPU and `continue`s every later
+         * one, deliberately, because four shots on ONE CPU is what makes a
+         * pinned RIP mean "spinning" rather than "masked but running". That is
+         * kept. What it could never say is whether a SECOND CPU had also
+         * stopped, and DDR-1122 measured a capture where one had: CI
+         * 34766468421 shard 7 read ticks[684,663,162,160] FOURTEEN times (CPU 2
+         * AND CPU 3 both pinned) while this line reported cpu=2 alone.
+         *
+         * The census already existed and was in the WRONG LINE -- it rides on
+         * `[vblk] compl wait timeout`, so a freeze with no block traffic
+         * produced none at all, and every OPEN-2 capture has been read as
+         * one-frozen-CPU on the strength of a single [apfreeze].
+         *
+         * percpu_get(c), never this_cpu(): this_cpu() reads %gs:0 and DDR-1010
+         * caught a broken SWAPGS discipline as one of OPEN-2's OWN producers,
+         * so the one instrument that must work during a freeze cannot depend on
+         * GS. Indexed rather than positional (PERCPU_MAX is 16, so [vblk]'s
+         * hardcoded 4 is silently wrong above -smp 4 and gives a reader nothing
+         * to check an index against); present CPUs only. NOTHING IS JUDGED --
+         * no threshold, no verdict, no clause; the numbers are printed and the
+         * reader compares them, exactly as with [vblk]'s. */
+        kputs(" ticks[");
+        {
+            unsigned printed = 0;
+            for (uint32_t c = 0; c < PERCPU_MAX; c++) {
+                struct percpu *cp = percpu_get(c);
+                if (!cp || !cp->present)
+                    continue;
+                if (printed++) kputs(",");
+                kputdec(c);
+                kputs("=");
+                kputdec(cp->ticks);
+            }
+        }
+        kputs("]");
         kputs("\r\n");
         console_line_unlock(fl);
         __atomic_store_n(&pc->nmi_dump, (uint8_t)0, __ATOMIC_RELAXED);

@@ -136,6 +136,49 @@ lines and therefore zero census output, because a healthy boot must pay nothing:
 `smoke-blk-integrity`, with the kernel hash pinned **before and after** every
 gate (DDR-1060 §9's void-campaign rule).
 
+### §4.1 — MEASURED
+
+Four kernels, each owning its own result (DDR-1118's provenance discipline):
+
+| kernel | what it is | census printed |
+|---|---|---|
+| `6af029b001e6e6db` | before this change | *(no such field)* |
+| `8836a47583dff970` | **M0** — forced arm + correct census | **`ticks[0=500,1=452,2=450,3=448]`** |
+| `5fb7ee1d3ca3b7ba` | **M1** — forced arm + `pc->ticks` per index | **`ticks[0=452,1=452,2=452,3=452]`** |
+| `854bbb38fdfe4fd2` | **SHIPPED** (forced arm removed) | *(healthy boot: none)* |
+
+**M0 and M1 differ by EXACTLY ONE LINE** — `kputdec(cp->ticks)` against
+`kputdec(pc->ticks)` — verified by `diff` before either was built (DDR-1042:
+never mutate two things). Both carry the *identical* forced trigger.
+
+**M1 IS THE WHOLE ARGUMENT.** It compiles warning-clean at `-Werror`, prints a
+well-formed array of the right length with the right punctuation and the right
+index tags, and **passes the vacuous arm outright** — and every entry is `452`,
+the victim's own counter, which its own `[apfreeze] cpu=1 ticks=452` field
+confirms. A census that cannot tell one frozen CPU from four is exactly the
+failure this field exists to prevent, and only the *entries differ* arm catches
+it.
+
+**REVERT IS BIT-FOR-BIT, VERIFIED BY REBUILD NOT ASSUMED**: removing the forced
+arm returns `854bbb38fdfe4fd2`. `kernel.bin` is **1,319,306 B — SIZE UNCHANGED**
+from `6af029b001e6e6db`, so the size/headroom pair and `ci-docstate-check` are
+unaffected — **and a size comparison cannot tell the two binaries apart at all,
+only the hash discriminates** (DDR-1097's finding, again). `build/idt.o` was
+removed before every build and the hash checked after each, because `make image`
+does not always rebuild (§INV.10, and DDR-1115 was caught by exactly this).
+
+**THE NEGATIVE HALF, MEASURED RATHER THAN INFERRED FROM `rc=0`** (DDR-1041's
+rule): on the shipped kernel, `smoke-shell`, `smoke-smp`, `smoke-smppreempt`,
+`smoke-rqstress` and `smoke-blk-integrity` are **all `rc=0`** with the hash
+pinned and re-checked after every gate (DDR-1060 §9). A pass deletes its
+capture, so one gate was re-run under `KEEP_SERIAL=1` to make the claim a
+measurement: a **27,237-byte, 461-line** capture carrying **23 `[hb]`
+heartbeats** and `NEXUS KERNEL OK` — i.e. **non-empty, so the measurement is
+VALID rather than absent** (DDR-1023's methodology defect, not repeated) — with
+**`apfreeze` = 0 and `ticks[` = 0**. A healthy boot pays nothing.
+
+Hygiene **ALL EIGHT**; `GLOBAL_FORBIDDEN` **77**; **179** gates.
+
 **NO GATE ARM**, and the reason is DDR-1105 §8's unchanged: the triggering
 condition cannot be manufactured in product, and an arm asserting the *absence*
 of a rare intermittent is unfalsifiable at any N this project can afford — the
