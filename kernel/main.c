@@ -3674,6 +3674,121 @@ static void smap_selftest(void) {
     vmm_destroy_address_space(as);
 }
 
+/* DDR-1126: CR0.WP ENFORCEMENT proof — the discriminating arm.
+ *
+ * DDR-1125 §6 checked the two obvious arms for vacuity BEFORE writing this one,
+ * and both fail:
+ *
+ *   "assert the kernel boots with WP set" is VACUOUS — it boots either way, and
+ *   DDR-1125 §5 measured exactly that on the mutant.
+ *
+ *   "assert CR0 bit 16 reads 1" is WEAK — it proves the bit is SET, not that it
+ *   is ENFORCED, and under TCG enforcement is a property of the emulator. That
+ *   is DDR-1046 §2.1's own correction restated: "nothing crashed" cannot
+ *   distinguish "the alias is read-only" from "the write-protect never applied".
+ *
+ * So the arm is that the write must now FAULT. A ring-0 store to a page
+ * vmm_protect_kernel() stamped `e &= ~VMM_RW` has to raise #PF and be consumed
+ * by DDR-1040's latch, with the kernel surviving to print it.
+ *
+ * THE PRE-FIX TREE IS THE CONTROL and no synthetic defect is needed: without
+ * CR0.WP the same store SUCCEEDS, the latch never fires, and this prints
+ * PRADYOS_WP_WRITE_ALLOWED — which is what DDR-1125 §1 measured on the shipped
+ * kernel before the fix (`ro_write=survived`). That string is a FORBIDDEN
+ * sentinel on smoke-wxkernel, so the gate fails on the unfixed tree.
+ *
+ * THE ADDRESS IS __text_end AND THAT IS CHECKED, NOT ASSUMED. vmm_protect_kernel
+ * clears RW for va < text_end (.text) and again for va < rodata_end (.rodata),
+ * and KEEPS RW past rodata_end. So this byte is only in an RW-clear page while
+ * .rodata is non-empty — measured at __text_end=0xffffffff80055000 against
+ * __rodata_end=0xffffffff80142000, ~970 KiB apart (DDR-1125 §2). Were .rodata
+ * ever empty the store would land in the RW-KEEPING branch and succeed for a
+ * trivial reason, so the arm would go quiet rather than loud; the byte is
+ * printed for that reason.
+ *
+ * MEMORY IS BIT-IDENTICAL EITHER WAY: the byte written is the byte just read.
+ * With WP set nothing is written at all; without it, the same value goes back.
+ *
+ * The labels bracket the STORE, exactly as smap_probe_read brackets its load —
+ * the faulting RIP is the store itself, so a window around the call would never
+ * match.
+ */
+__asm__(".pushsection .text\n"
+        ".globl wp_probe_write\n"
+        ".type  wp_probe_write,@function\n"
+        "wp_probe_write:\n"
+        "  movb %sil, (%rdi)\n"
+        ".globl wp_write_hi\n"
+        "wp_write_hi:\n"
+        "  ret\n"
+        ".size  wp_probe_write,.-wp_probe_write\n"
+        ".popsection\n");
+void wp_probe_write(uint64_t kaddr, unsigned byte);
+extern char wp_probe_write_sym[] __asm__("wp_probe_write");
+extern char wp_write_hi[];
+
+static void wp_selftest(void) {
+    extern char __text_end[];
+    volatile unsigned char *p = (volatile unsigned char *)(uintptr_t)__text_end;
+    unsigned before = *p;                     /* read first: we write back the same value */
+
+    uint64_t cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+
+    /* fault_expect_arm() REFUSES with IF set or an AP online (DDR-1040), so mask
+     * here and restore after — the same shape smap_selftest uses. This runs
+     * beside the other boot self-tests, well before smp_start_aps() at :4103. */
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+
+    uint32_t vec = 0, err = 0;
+    int fired = 0;
+    int armed = fault_expect_arm((uint64_t)(uintptr_t)wp_probe_write_sym,
+                                 (uint64_t)(uintptr_t)wp_write_hi,
+                                 (uint64_t)(uintptr_t)wp_write_hi);
+    if (armed) {
+        wp_probe_write((uint64_t)(uintptr_t)__text_end, before);
+        fired = fault_expect_taken(&vec, &err);   /* also DISARMS — never leave it armed */
+    }
+
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+
+    unsigned after = *p;
+
+    /* One kline emit, not a run of kputs: this is a composite line and another
+     * CPU's print could splice it (DDR-1055). */
+    kline k; kline_init(&k);
+    kline_s(&k, "PRADYOS_WP cr0=");
+    kline_x(&k, cr0);
+    kline_s(&k, " wp=");
+    kline_d(&k, (cr0 >> 16) & 1u);
+    kline_s(&k, " byte=");
+    kline_x(&k, before);
+    kline_s(&k, after == before ? " intact=1\r\n" : " intact=0\r\n");
+    kline_emit(&k);
+
+    if (!armed) {
+        kputs("PRADYOS_WP_SKIP not-armed\r\n");
+    } else if (fired) {
+        kline k2; kline_init(&k2);
+        kline_s(&k2, "PRADYOS_WP_ENFORCED vec=");
+        kline_d(&k2, vec);
+        kline_s(&k2, " err=");
+        kline_x(&k2, err);            /* kline_x emits its own 0x (INV.9) */
+        kline_s(&k2, "\r\n");
+        kline_emit(&k2);
+    } else {
+        /* The pre-fix behaviour: the store completed, so WP is not enforcing.
+         * NOT a forbidden sentinel, and DDR-1126 sec.3 records why one was added
+         * and then removed -- these three branches are mutually exclusive by
+         * construction, and boot_test.sh checks REQUIRED patterns before
+         * forbidden ones, so a forbidden entry here could never fire
+         * independently of the missing PRADYOS_WP_ENFORCED. It would have read
+         * as a second net while catching nothing. */
+        kputs("PRADYOS_WP_WRITE_ALLOWED\r\n");
+    }
+}
+
 static void vmm_test(void) {
     const uint64_t va = 0xFFFF800000000000ull;   /* unused PML4 slot (256) */
     uint64_t pg = pmm_alloc_page();
@@ -4035,6 +4150,7 @@ void kmain(struct boot_info *bi) {
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
     smep_selftest();                     /* DDR-1040: SMEP enable + ENFORCEMENT proof */
     smap_selftest();                     /* DDR-1041: SMAP enforcement + shielded path */
+    wp_selftest();                       /* DDR-1126: CR0.WP actually REFUSES a ring-0 write */
 
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
     metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */

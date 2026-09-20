@@ -2089,7 +2089,7 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # attributed instead of guessed at.
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1')" \
+	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003')" \
 	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

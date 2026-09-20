@@ -6027,3 +6027,19 @@ Hygiene ALL EIGHT; `GLOBAL_FORBIDDEN` **77**; **179 gates**, no new gate;
 `kernel.bin` **1,315,210 B — size unchanged**, revert returns
 `0eb965428942d5cf` bit-for-bit. A size check could not distinguish the two
 binaries at all; only the hash does (DDR-1097).
+
+- **DDR-1126 (2026-09-20) — `CR0.WP` is set; kernel W^X's read-only half is now enforced against ring 0.**
+  One line in `cpu_enable_sse()` (`cr0 |= 1<<16`) — the single site the BSP (`main.c:4001`) and every AP
+  (`smp.c:276`) both run, already doing a CR0 read-modify-write, ordered before `vmm_protect_kernel()`.
+  Operator-approved (PR #17 comment `5745738830`, verified OWNER) after DDR-1125 committed the design first
+  and six `pradyos-ci` suites went green on `854bbb38fdfe4fd2`, clearing DDR-1107's stacking rule.
+  Gate arm on `smoke-wxkernel`, discriminating rather than decorative: `PRADYOS_WP_ENFORCED vec=14
+  err=0x0000000000000003` (present|write, **user bit clear** = a supervisor write to a read-only page).
+  Control is the **pre-fix tree**, not a synthetic defect: `f877ea4c94324deb` prints
+  `PRADYOS_WP_WRITE_ALLOWED` and fails the gate — and passed it before the arm was registered, which is the
+  vacuity claim measured rather than argued. A `FORBIDDEN_SENTINEL` was added and then **removed**: the
+  probe's branches are mutually exclusive and `boot_test.sh` checks required patterns first, so it could
+  never fire independently. **DDR-1126 §4 corrects a reading of DDR-1046's evidence** (its central
+  measurement could not have detected its own case, because the RW it cleared was unenforced) — DDR-1046 is
+  not withdrawn. `kernel.bin` `854bbb38fdfe4fd2` → `25f4dae4a3f90bcb`, **1,319,306 B size unchanged**;
+  179 gates, `GLOBAL_FORBIDDEN` 77, no new gate, no new sentinel. No open issue moves.
