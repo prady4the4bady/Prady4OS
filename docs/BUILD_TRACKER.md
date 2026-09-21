@@ -6070,3 +6070,50 @@ OPEN-2**, and **one binary**, so it must not be pooled with run `35504467004`
 **NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE.** `OPEN2_HUNT` not retuned;
 no code change, no gate, `kernel.bin` not rebuilt; `GLOBAL_FORBIDDEN` 77, 179
 gates, 79 probe ELFs.
+
+### DDR-1128 — the hunt reproduced an `[apfreeze]`, and DDR-1123's per-CPU census fired for real for the first time (2026-09-21)
+
+**Docs-only.** No code change, no gate, `kernel.bin` NOT rebuilt — and **could
+not be**: this container has no `nasm`, so address resolution is **owed**, with
+the procedure recorded in DDR-1128 §6.
+
+The **manually dispatched** run `35504467004` — the one DDR-1127 §6 wrongly
+described as in flight — had already completed, and returned
+**`conclusion: failure`**. On this workflow **failure means it found
+something**: the polarity is inverted, so reading the conclusion as a verdict
+would assume the very thing being measured. Lane 0, run 7 of 10:
+`signal_runs=1 churn_runs=9`, `kernel_pinned=ca8107ec7f5d8de7` (the CR0.WP
+binary), **four `[apfreeze]` shots**.
+
+**The signal is `[apfreeze]`, not `[ringwalk] RECYCLED`.** The job's error text
+names RECYCLED generically; matching on it would have mis-ascribed the find to
+the *precondition* detector. What fired is the **freeze itself** — a larger
+thing — so **DDR-1127 §4's finding stands untouched** and DDR-1127 is not
+withdrawn. One sentence of its §6 was wrong when committed and is **corrected at
+the site** (DDR-1110's rule), not deleted.
+
+**DDR-1123's census says exactly ONE frozen CPU**: `cpu=3` pinned at
+`ticks=155` across all four shots while 0/1/2 climbed 1500→3000. That **refutes,
+for this capture**, the two-victim reading DDR-1122 left open — and it is the
+census's first real use, since before DDR-1123 a single `[apfreeze]` line was a
+**latch on `s_victim`, not a census**, leaving the victim count unreadable.
+
+**RIP pinned** at `0xFFFFFFFF80016D91` across all four shots ⇒ **spinning**, not
+running-but-masked (a walking RIP would have meant the latter). `if=0` with
+`rflags=0x06` corroborating independently; `masked=0 svr=0x1FF swen=1 tpr=0
+isr48=0 irr48=1` — LVT unmasked, LAPIC enabled, no stuck in-service vector,
+timer **pending and undelivered**. That is the field-for-field shape DDR-981
+recorded, **stated as a shape and nothing more**: the site is unresolved and
+§INV.18 forbids turning an unresolved offset into a producer.
+
+`NO-CHURN` here is a **consequence** of the freeze, not a vacuous run — the
+other nine runs carried churn (NON-NEGOTIABLE 17 / DDR-1097 §7.2).
+
+**On DDR-1126:** one-sided **p = 0.143**, and the 1-in-10 exact 95% CI upper
+bound of **39.4%** overlaps DDR-1127's `<4.87%` pre-fix bound. This **does not
+establish a regression** — and **does not exonerate CR0.WP either** (DDR-1042).
+
+**NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE**, no open issue moves. No
+rate is claimed for OPEN-2 on this or any binary. Artifact `open2-hunt-lane-0`
+(`10603519323`) holds the full 180 s capture and **expires 2026-10-04**.
+`OPEN2_HUNT` not retuned; `GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs.

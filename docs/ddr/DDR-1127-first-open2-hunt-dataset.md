@@ -169,6 +169,20 @@ a single-binary bound and says nothing about any other tree. In particular it sa
 
 ## 6. A second run is in flight and MUST NOT BE POOLED WITH THIS ONE
 
+> **CORRECTED AT THE SITE 2026-09-21 (DDR-1110's rule) — THIS SECTION WAS WRONG
+> WHEN COMMITTED, IN TWO WAYS.** Run `35504467004` was **not** still in flight:
+> it had completed at **10:44:47Z on 2026-09-20**, before this file was written.
+> And it did **not** come back clean — it returned **`conclusion: failure`**,
+> which on this workflow **means it found something**. Lane 0 run 7:
+> `signal_runs=1 churn_runs=9`, **four `[apfreeze]` shots**, one frozen CPU,
+> pinned RIP. **DDR-1128 records it.** The original text is left below rather
+> than deleted, so the record shows what was believed and when.
+>
+> **What survives unchanged is this section's actual point**, and it is now
+> load-bearing rather than precautionary: the two runs are **different binaries**
+> and **must not be pooled**. §5's bound is the pre-CR0.WP binary's and is
+> untouched by DDR-1128's fire.
+
 Run `35504467004` was dispatched manually at 10:13Z with the same shape (6 × 10,
 `OPEN2_HUNT=32`) against `dev/phase1-seyp3n` — which now carries **`a390eab`, the
 CR0.WP kernel**. That is a **different binary**, so its result is a separate datum
