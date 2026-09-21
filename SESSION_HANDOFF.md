@@ -14165,3 +14165,79 @@ identified — but **no unrecorded step 4 was found**.
   180 s capture has the lock dump and heartbeats DDR-1121/1122 needed.
 - Carriers now read **DDR-1129+** at all four sites (verified 0 stale, 4 present).
   `GLOBAL_FORBIDDEN` 77. 179 gates, 79 probe ELFs.
+
+---
+
+## CHECKPOINT 2026-09-21b — DDR-1129: the `[apfreeze]` RIP resolved, and it is a DELIBERATE HALT
+
+**Tip `dcd7504` on `dev/phase1-seyp3n`, pushed.** Commits this block:
+`55cc00f` (DDR-1129) and `dcd7504` (its §7 item 2 implementation).
+
+### 1. The blocker in DDR-1128 §6 was `nasm` ALONE — and it lifted
+
+`apt-get install nasm` (after `apt-get update`; **the stale apt index was the
+real obstacle**, and the same trick later got QEMU). Everything else — clang 18,
+lld, binutils — was already present. **Do not record this container as
+toolchain-less again.**
+
+The build reproduces **bit-for-bit**, and the baseline was checked FIRST so the
+toolchain's fidelity is a measurement, not an assumption:
+
+| build | expected | got |
+|---|---|---|
+| `make image` | `25f4dae4a3f90bcb` (DDR-1126's own hash) | **match** |
+| `touch kernel/proc/sched.c && make image OPEN2_HUNT=32` | `ca8107ec7f5d8de7` | **match** |
+
+Both 1,319,306 B — **only the hash discriminates** (DDR-1097). The job log agrees
+independently (`tree_sha=a390eab…`). **§INV.18 satisfied two ways.**
+
+### 2. THE FINDING — `rip` is `hlt; jmp .-1`
+
+`0xFFFFFFFF80016D91` = `schedule_locked+0x671` = `kernel/proc/sched.c:1857`,
+reachable **only** from inside `if (bad)` at `:1723` — **DDR-1105's `next->rsp`
+validity check**. CPU 3 refused to `context_switch` into a thread whose saved
+stack pointer failed bounds/alignment, printed a diagnostic, and **stopped on
+purpose**. `bt` = `schedule+0x11` ← `sched_ap_enter+0x178` ← `smp_ap_entry+0x30A`
+(the **AP bring-up path**). `bt[3]` is stack data, left unresolved.
+
+**This corrects DDR-1128 §3 at the site.** `if=0` is **not** DDR-981's mechanism
+(SYSCALL masking IF on a ring-3 yield spin — this CPU never returned from a
+syscall); `irr48=1` is a **consequence** of a halted CPU. It is the **DDR-1019
+class**, and `sched.c:1857` is a **fourth** `[apfreeze]` producer. DDR-1128's
+census, `NO-CHURN` reading, statistics and refusals all **stand**; DDR-1127
+untouched.
+
+### 3. The detector was blind, and the fix is measured both ways
+
+The halt is preceded by `[schedcheck] next->rsp invalid … rq_on= disp= saves=
+halting.` — **DDR-1118's exact double-resume discriminators**. The campaign's
+`SIGNALS` regex did **not** include `[schedcheck]`, so the job log carried four
+copies of the symptom and **zero of the reason one line above it**.
+
+| capture | old | new |
+|---|---|---|
+| schedcheck + 4 × apfreeze | 4 hits, diagnosis absent | 5 hits, diagnosis first |
+| **schedcheck, NO apfreeze** | **0 hits → scored `clean`** | 1 hit → SIGNAL |
+
+**The second row is a FALSE CLEAN** (DDR-1097 §5's class) sitting in the
+detector. Fixed in `dcd7504`; cap `head -5` → `head -40` (DDR-1128's run hit
+exactly 5 against a cap of 5). **Do NOT pool `signal_runs` figures across the
+regex change.**
+
+### 4. IN FLIGHT AS THIS WAS WRITTEN — a local campaign
+
+QEMU 8.2.2 installed; pre-flight clean; `OPEN2_HUNT=32`, 10 runs, `-smp 4`,
+against the **pinned `ca8107ec7f5d8de7`** in a worktree at `a390eab`, using the
+**corrected** detector. Goal: catch a `[schedcheck]` line with its **values**,
+which is the one datum that would turn "a detector's verdict" into a mechanism.
+**Caveat recorded in advance (DDR-1127 §3's lesson): a local rate is a property
+of this host, and a null here bounds nothing about CI.**
+
+### 5. STILL OWED
+
+- **Artifact `10603519323` — EXPIRES 2026-10-04.** Holds `run-7.log.fail-6189`
+  with the real field values. **This container cannot fetch it**: the egress
+  proxy rejects `productionresultssa9.blob.core.windows.net`
+  (`connect_rejected`) and there is no artifact-download tool here. A session
+  with blob egress or `gh` should pull it.
+- Carriers at **DDR-1130+** (4 sites, 0 stale). `GLOBAL_FORBIDDEN` 77.
