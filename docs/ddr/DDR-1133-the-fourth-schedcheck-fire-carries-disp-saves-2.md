@@ -537,3 +537,146 @@ needs its own DDR, its cost measured, and a forced mutant.
   than quietly adopted; §10.4 records that its row is one reading of four.
 - **§3 and §3.1 are corrected here rather than rewritten** (DDR-1110's rule), so
   the record shows what was believed and when.
+
+---
+
+## 11. THE OWED MEASUREMENT, MADE — AND §5.1 OVERSTATED WHAT THE BLOCKED ARTEFACT COULD HAVE ANSWERED
+
+§5.1 recorded two things as owed: recompute the line-length budget at the site
+before the `bails=`/`calls=` design could be decided, and fetch artifact
+**10636246167** for lane 3's heartbeats. **Both are settled here by reading, with
+no code change, no build and no fetch** — and the second is settled in the
+direction that makes my own reported loss *smaller*, which is why it is stated
+plainly rather than left implicit.
+
+### 11.1 The budget: §5.1's assertion is CONFIRMED, now by arithmetic
+
+`g_wait_calls[]` and `g_wait_bails[]` are `volatile uint32_t` (`sched.c:692-693`),
+so each is **10 digits** worst case on the type-based figure DDR-1116 requires.
+
+| term | bytes |
+|---|---|
+| `" calls="` | 7 |
+| value, `uint32_t` | 10 |
+| `" bails="` | 7 |
+| value, `uint32_t` | 10 |
+| **append cost** | **34** |
+
+The line stands at **251 against a usable 254** (recorded at the site; `kline_c`
+truncates when `n + 1 >= KLINE_MAX`, `KLINE_MAX` 256, `console.h:23`). **Margin 3.
+34 does not fit, over by 31.** §5.1 said two `kline_d` fields do not fit and was
+right; it was an assertion then and it is a measurement now.
+
+**Nothing in the current line is safely removable**, checked field by field
+rather than assumed:
+
+- the five `kline_x` fields (90 bytes) — shortening the hex form changes every
+  recorded grep and every DDR that quotes an address verbatim;
+- the literals (100 bytes) — the field names **are** the artefact's identity;
+  §9.2's three-`ret`-class finding is stated in terms of them;
+- `disp`/`saves` as one difference instead of two values (frees 20) — **refused**,
+  because §9.4 is a finding that rests on the *absolute* values (`disp=8` against
+  `disp=36777` is what showed the defect is not confined to long-lived threads).
+
+### 11.2 The artefact would NOT have answered §3 — two independent reasons, both in source
+
+**(a) The heartbeat DRAINS the counters.** `sched_take_wait_stats` (`sched.c:744`)
+reads with `__atomic_exchange_n(&g_wait_calls[c], 0, __ATOMIC_RELAXED)` — a
+read-and-clear. Its sibling `sched_take_spin_stats` states the consequence in its
+own comment: *"then zeroes them — so each heartbeat line describes exactly one
+500-tick window."* So `calls=`/`bails=` in `[hb]` are a **per-window** count, and
+the last heartbeat before lane 3's halt describes a window the halt **truncated**.
+
+**(b) It sums across all CPUs.** That function accumulates `for (int c = 0; c <
+PERCPU_MAX; c++)` into one global pair. The `[schedcheck]` fire is on **one** CPU.
+So even a complete window would not say whether the **halting** CPU bailed, which
+is the question §3 actually needs answered.
+
+**So the fetch was owed for a question it could not have settled.** The proxy
+block cost less than §5.1 recorded. This is recorded despite being convenient
+because it rests on two lines of source (the exchange-with-zero, and the
+all-CPU sum), not on an argument — and because §5.1's claim is quoted in
+CLAUDE.md and in the PR thread, where it would otherwise stand uncorrected.
+
+### 11.3 It also makes the DESIGN better than the fetch — but NOT in the way it is tempting to say
+
+At the halt site the available value is `g_wait_bails[cpu]` for the **halting
+CPU**, which no heartbeat has ever printed. That is a real improvement over (b).
+
+**It is NOT cumulative, and that must not be claimed.** The same tick-driven
+drain clears the per-CPU slots, so a value read at the halt is *that CPU's bails
+within the current heartbeat window*. For "did the bail path run near this fire"
+a window ending at the halt is arguably the right window. For "has this CPU ever
+bailed" it is useless — **and a ZERO would mean only "not in this window", never
+"never"**, which is exactly the reading that would otherwise be taken as an
+exoneration of the `switch_wait_offcpu_sched` candidate §5 re-opened.
+
+### 11.4 The shape that fits the budget — NOT shipped, NOT verified
+
+A **second `kline_emit`**. DDR-1055's hazard is a splice *within* a line built
+from several `kputs`; two separate emits are each atomic on their own. What is
+lost is *adjacency* — another CPU may emit between them — which a repeated `tid=`
+re-keys. On a fresh 256-byte line ~40 bytes has enormous margin.
+
+**Recorded as the shape that fits the BUDGET question only.** I have not read
+`kline_emit` to confirm a second call is safe from this context (after `cli`,
+immediately before the halt), and that is the load-bearing check, not the
+arithmetic. **No kernel change is made**: the campaign is mid-flight on pinned
+`ca8107ec7f5d8de7` and a rebuild would break the single-binary discipline the
+whole dataset rests on. It needs its own DDR, its own forced mutant and its own
+regression run.
+
+### 11.5 NOT CLAIMED
+
+- **NO code change, NO build, NO gate, `kernel.bin` NOT rebuilt.** GLOBAL_FORBIDDEN
+  77, 179 gates. **No mechanism named; OPEN-2 does not close; no open issue moves.**
+- **NO defect is alleged** in `sched_take_wait_stats`, `sched_take_spin_stats` or
+  `switch_wait_offcpu_sched`. The drain is *correct and deliberate* — DDR-890 built
+  it so each heartbeat describes one window, which is the right design for a
+  heartbeat. What is corrected is **my reading of what those counters could tell a
+  reader at a halt**, not the counters.
+- **§5.1 is NOT withdrawn** and is corrected here rather than rewritten
+  (DDR-1110's rule): its budget claim was right, its disposition on the proxy was
+  right, and one clause — that the artefact holds the measurement that would
+  separate §3's readings — is narrowed by §11.2.
+- **DDR-1129 §7 item 1 is NOT thereby discharged.** That item is the
+  `[schedcheck]` *values*, which DDR-1133 §1-§3 now has. This concerns only the
+  `calls=`/`bails=` follow-up, and §11.3 says what a future field could and
+  could not establish.
+
+### 11.6 A provenance note, recorded because it caught a stale expectation of mine
+
+Writing §11 I went to restate the standing pin and found **`build/kernel.bin`
+absent from the shipping tree** (`build/` holding only logs, `gatelogs`,
+`cr3fixtures` and the `musl`/`lwip` prerequisites; 30 GB free, so not disk
+pressure). **What removed it is not established and is not guessed at.**
+
+**No claim in this DDR rests on that file.** Every result here came from CI
+captures and from the detached-worktree rebuild of §0, and §8 records that the
+shipping tree was deliberately never built in.
+
+**The value I was about to check against was itself two kernels stale.** I
+expected `6af029b001e6e6db` — the pin from the DDR-1118/1121/1122 era — when
+`git log -1 -- Makefile 'kernel/**' 'boot/**' 'user/**' 'arch/**'` names
+**`a390eab` (DDR-1126)** as the last commit touching a build input, so the
+correct value is **`25f4dae4a3f90bcb`**. Had the file been present I would have
+read a correct hash as a moved binary. That is the DDR-1111 class — a dated
+measurement carried forward as current state — arriving in my own working
+memory rather than in a document.
+
+**Rebuilt, and it reproduces:** `make image` from an empty `build/` gives
+**`25f4dae4a3f90bcb`, 1,319,306 B, warning-clean at `-Werror`, rc=0**. That is
+worth more than the pin it replaces:
+
+- it **independently confirms DDR-1126's own recorded hash** on a from-scratch
+  build rather than an incremental one, so §INV.10's don't-always-rebuild trap
+  cannot be in play;
+- it establishes that every commit from `a390eab` to `HEAD` is docs-only **by
+  construction** — the binary is identical — rather than by reading
+  `git diff --name-only`;
+- and it confirms `tools/ci/open2_hunt_campaign.sh` (changed in that range) is
+  **not a build input**, measured rather than assumed.
+
+**Carry:** a hash pin is a dated measurement. Re-derive which commit last touched
+a build input before comparing against one, or a correct binary reads as a moved
+one.
