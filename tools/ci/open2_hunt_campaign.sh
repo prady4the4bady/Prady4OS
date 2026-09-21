@@ -52,16 +52,37 @@ echo "[campaign] kernel_pinned=${PIN:0:16} runs=$N smp=4"
 #
 # ASSERT, DO NOT BUILD (DDR-1130 §6). Invoking make here would let the pin move
 # mid-campaign, which is precisely what VOIDED a campaign in DDR-1060 §9.
-missing=""
+#
+# DDR-1130 §6.2 — EXISTENCE IS NOT SUFFICIENCY, and the counter-example turned up
+# within minutes of shipping the existence-only form. `make fat-image` runs `dd`
+# of 64 MiB of zeros and THEN `mkfs.fat`; when mkfs.fat is not installed the
+# recipe exits 2 having already left build/fat.img at exactly 67,108,864 bytes of
+# zeros -- a file that PASSES `[ -f ]` and cannot be mounted. So fat.img is
+# checked for content (0x55AA at 510, "FAT32" at 82 -- both inside the first
+# sector, one read; `mkfs.fat -F 32` makes FAT32 the DECLARED format, not a
+# guess), while sfs.img is checked only for being non-empty, because it is
+# LEGITIMATELY BLANK BY DESIGN ("16 MiB blank -- kernel formats in place").
+# Demanding content of sfs.img would be false; the asymmetry is deliberate.
+bad=""
 for img in build/fat.img build/sfs.img; do
-    [ -f "$img" ] || missing="$missing $img"
+    if [ ! -f "$img" ]; then bad="$bad $img(absent)"; continue; fi
+    if [ ! -s "$img" ]; then bad="$bad $img(empty)";  continue; fi
 done
-if [ -n "$missing" ]; then
-    echo "[campaign] ABORT before run 1: missing data disk(s):$missing"
+if [ -z "$bad" ]; then   # both exist and are non-empty, or $bad is set
+    fsig="$(dd if=build/fat.img bs=1 skip=510 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    ftyp="$(dd if=build/fat.img bs=1 skip=82  count=5 2>/dev/null | tr -d '\0')"
+    if [ "$fsig" != "55aa" ] || [ "$ftyp" != "FAT32" ]; then
+        bad="$bad build/fat.img(not-a-FAT32:sig=$fsig,type=$ftyp)"
+    fi
+fi
+if [ -n "$bad" ]; then
+    echo "[campaign] ABORT before run 1: unusable data disk(s):$bad"
     echo "[campaign]   Without them the guest has no mountable filesystem, so"
     echo "[campaign]   rqstress_proof never runs and EVERY run reports NO-CHURN."
     echo "[campaign]   That is not a clean result; it is not an experiment."
-    echo "[campaign]   Build them first (this script deliberately will not):"
+    echo "[campaign]   A file marked not-a-FAT32 means the BUILD DID NOT COMPLETE"
+    echo "[campaign]   (mkfs.fat missing leaves a zero-filled image that exists)."
+    echo "[campaign]   Build them, and CHECK make's exit code (this script will not):"
     echo "[campaign]       make fat-image sfs-image"
     echo "[campaign]   then re-check the pin, because those targets can rebuild"
     echo "[campaign]   the kernel (DDR-1060 §9): sha256sum build/kernel.bin"

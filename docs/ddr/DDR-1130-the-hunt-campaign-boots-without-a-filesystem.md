@@ -340,3 +340,60 @@ either. It checks, names what is wrong, and says what to run.
   the missing package is an environment fact, and the recipe reported it correctly.
 * **Nothing about OPEN-2 changes.** No fix, no mechanism, no rate; DDR-1129 §7
   item 1 stays owed.
+
+### 6.2.5 MEASURED — three arms, one variable
+
+Run in the `a390eab` worktree, which already held the real data disks and the
+pinned hunt kernel `ca8107ec7f5d8de7` (DDR-1128's own binary). **Only the script
+varied** (DDR-1042: a mutation that changes two things attributes nothing); the
+disks, the kernel and the invocation were identical across arms.
+
+| arm | script | `build/fat.img` | result |
+|---|---|---|---|
+| **0** | §6, existence-only (`fd98170`) | zero-filled, 67,108,864 B, `sig=0000` | **ACCEPTED** — reached run 1, created `run-1.log`, killed at 30 s by my `timeout` (rc=124) |
+| **A** | §6.2, content-checked | **the same file** | **REJECTED** at run 0, `rc=2`, `build/fat.img(not-a-FAT32:sig=0000,type=)`; **no run log, QEMU never launched** |
+| **B** | §6.2, content-checked | real, `sig=55aa type=FAT32` | **ACCEPTED** — reached run 1, `run-1.log`, rc=124 |
+
+**Arm 0 is the load-bearing one.** Without it, "the new check catches it" and
+"the check was always going to pass" are the same observation — DDR-1126 §6's
+rule, which cost a `GATE_RC=0`-before / `GATE_RC=2`-after pair to learn. It
+reproduces §6.2's claim rather than arguing it: **the check I shipped one commit
+earlier accepts the zero-filled image and boots on it.**
+
+**Arm B is the vacuity control** — the check is not simply refusing everything.
+
+The rejection's discriminating property is the one §6.2.2 named in advance and it
+is measured in both directions: **the refusal happens at run 0 and no QEMU starts
+at all.** A check that printed a warning and then ran the campaign anyway would
+have satisfied a looser arm and produced exactly the 30 minutes of worthless
+`churn_runs=0` §7 costed.
+
+Two defects of my own were removed before measuring, both found by re-reading the
+diff rather than by any run: two `echo` lines had lost their indentation and sat
+at column 0 inside the block, and the guard re-tested `[ -f build/fat.img ]`
+when `[ -z "$bad" ]` already implies it — **a redundant test that reads as
+necessary**, which is the shape this project keeps flagging elsewhere.
+
+## 9. The fix measured on the campaign it was built for
+
+The 10-run campaign was re-run on the same pinned kernel **with the data disks
+present**, and the result is re-derived here from the ten captures on disk rather
+than from the terminal line it printed:
+
+```
+runs=10  signal_runs=0  churn_runs=10  kernel_pinned=ca8107ec7f5d8de7
+```
+
+Every one of the ten carries `[smp] rqstress OK` and three `[boot-stamp]` lines,
+and every capture is ~460 lines, so none is the DDR-1023 vacuous-capture case.
+
+**Against the two runs §1 stopped: 0 of 2 with churn. The precondition was the
+whole difference**, and that is the measurement that makes §6 worth shipping
+rather than merely reasonable.
+
+**`signal_runs=0` here bounds essentially nothing and is not offered as a bound.**
+Ten boots against DDR-1128's 1-in-60 give a 95% upper bound of **25.9%** — wider
+than DDR-1127's `<4.87%` on 60 boots, so pooling this 0 with those would be the
+error DDR-1127's own NOT CLAIMED warns about. What it establishes is that the
+instrument now runs the workload; **it says nothing new about OPEN-2's rate**, no
+mechanism is named, and DDR-1129 §7 item 1 stays owed.
