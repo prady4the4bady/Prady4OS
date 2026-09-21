@@ -6043,3 +6043,30 @@ binaries at all; only the hash does (DDR-1097).
   measurement could not have detected its own case, because the RW it cleared was unenforced) — DDR-1046 is
   not withdrawn. `kernel.bin` `854bbb38fdfe4fd2` → `25f4dae4a3f90bcb`, **1,319,306 B size unchanged**;
   179 gates, `GLOBAL_FORBIDDEN` 77, no new gate, no new sentinel. No open issue moves.
+
+### DDR-1127 — the first OPEN-2 hunt dataset (2026-09-20)
+
+The weekly `open2-hunt` cron fired on its own (run `35501810702`, event
+`schedule`) and produced **the first dataset the instrument has ever produced**.
+DDR-1097 built it; DDR-1117 found it had never run and could not be started; PR
+#20/#21 made it startable and then runnable.
+
+**All six lanes: `runs=10 signal_runs=0 churn_runs=10`**, one pinned kernel
+`ce42b14e72623f81` (the `OPEN2_HUNT=32` build of `eba9cb3`, i.e. **pre**-CR0.WP).
+**60 boots, 60 with churn, 0 signals.** Read from all six lane logs, **not**
+inferred from the conclusion — this workflow FAILS when it finds something, so
+`success` *means* clean.
+
+**THE FINDING: DDR-1097's own premise is not met.** It justified hunting the
+precondition on the ground that *"the precondition is far commoner than the
+freeze, so a hunt that can see it gets a number in hours."* The hunt got its
+hours and got zero. Three readings fit and the dataset cannot discriminate them;
+all three are recorded rather than one being adopted.
+
+**Bound: <4.87% per boot at 95% — a rate for the PRECONDITION DETECTOR, not for
+OPEN-2**, and **one binary**, so it must not be pooled with run `35504467004`
+(dispatched against the CR0.WP kernel).
+
+**NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE.** `OPEN2_HUNT` not retuned;
+no code change, no gate, `kernel.bin` not rebuilt; `GLOBAL_FORBIDDEN` 77, 179
+gates, 79 probe ELFs.

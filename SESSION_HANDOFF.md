@@ -13964,3 +13964,119 @@ second occurrence was on `smoke-msixap`, so it is not the suite count).
   extension and this host's `/usr/bin/awk` is mawk (DDR-1079, re-paid DDR-1121).
 * `pradyos-graph` MCP has failed to connect all session (`CONNECT_TIMEOUT`), so
   `graph_session_primer()` has still not run.
+
+---
+
+## CHECKPOINT — DDR-1125, DDR-1126, DDR-1127 (2026-09-20 → 21)
+
+### DDR-1125 `eba9cb3` (measurement) → DDR-1126 `a390eab` (the fix)
+
+**`CR0.WP` was never set**, so the R/W bit in a PTE was **advisory for CPL 0** and
+`vmm_protect_kernel()`'s `e &= ~VMM_RW` over `.text`/`.rodata` bought **nothing
+against ring 0**. Measured in two adjacent lines of one capture: `[wx] kernel W^X
+OK` at line 28, then a ring-0 write to the page **that loop had just stamped**
+completing without a fault. Exhaustive `grep` over `kernel/`, `boot/`, `arch/`
+returns **four** CR0 writers and not one touches bit 16; the architectural reset
+value `0x60000010` has it clear.
+
+**Shipped:** one line, `cr0 |= (1ull << 16)`, in `cpu_enable_sse()`. Site chosen
+**by measurement** — the one function the BSP (`main.c:4001`) and **every AP**
+(`smp.c:276`) both run, CR0 being **per-CPU**; it already does a CR0
+read-modify-write so the cost is **zero extra instructions**, and it is ordered
+**before** `vmm_protect_kernel` (4001 < 4006). **Unconditional, unlike NX** — WP
+is architectural since the 486, so there is nothing to gate on, whereas `vmm.c:34`
+must probe CPUID `8000_0001h` EDX[20] before touching `EFER.NXE`.
+
+**The proof is discrimination, vacuity checked first:** *"boots with WP set"* is
+VACUOUS (it boots either way, measured); *"CR0 bit 16 reads 1"* is WEAK (set is
+not enforced, and under TCG enforcement is the emulator's). **The arm is that the
+write must FAULT** — `wp_selftest` arms DDR-1040's latch and requires a consumed
+`#PF`, asserted as the exact string `PRADYOS_WP_ENFORCED vec=14 err=0x…003`;
+`err=0x3` is present|write with the **USER BIT CLEAR**, i.e. a supervisor write to
+a present read-only page, which is the discriminating value rather than *"a fault
+happened"*. **Control is the pre-fix tree** (`f877ea4c94324deb`), not a synthetic
+defect: `wp=0`, `PRADYOS_WP_WRITE_ALLOWED`. **The vacuity claim is MEASURED** — the
+control was run against the gate **twice**, `GATE_RC=0` before the arm was
+registered and `GATE_RC=2` after; without the first run, *"the gate catches it"*
+and *"the gate was always going to pass"* are the same observation.
+
+**A refusal recorded rather than quietly shipped:** `PRADYOS_WP_WRITE_ALLOWED` was
+added as a `FORBIDDEN_SENTINEL` **and then removed** — the three outcomes are
+`if/else-if/else`, mutually exclusive by construction, and `boot_test.sh` checks
+**required** patterns **before** forbidden ones (observed directly in the control
+run), so it could never fire independently. An arm that reads as a second net
+while catching nothing is the dead-arm class, and adding one *deliberately* is
+worse than not adding it.
+
+**THE FINDING (DDR-1126 §4) — a correction to a READING, not a defect.**
+DDR-1046's central measurement **could not have detected its own case**: it
+cleared `VMM_RW` on the identity alias, booted, saw *"line-for-line normal"*, and
+concluded *"nothing writes the kernel image through a physical address"* — but
+with WP clear that bit was unenforced for ring 0, so a clean boot was guaranteed
+**either way**. Its §2.1 PTE read-back settles *did the stamp apply*, not *is the
+stamp enforced*. **DDR-1046 is NOT withdrawn**; its walk, stamping, alias
+read-back and audit are all correct, and the gap sat one level below the page
+tables where no PTE check could see it.
+
+**Regression: 18 gates run SEQUENTIALLY with the hash pinned and re-checked after
+every one (DDR-1060 §9), 18/18 `rc=0`** — five SMP gates at `-smp 4` (the first
+*measurement* that WP on an AP is survivable), block layer, mmap/COW, compositor,
+filesystem, shell, and **both boot paths**. `kernel.bin` `854bbb38fdfe4fd2` →
+**`25f4dae4a3f90bcb`**, **1,319,306 B size unchanged** (per DDR-1097 only the hash
+discriminates, and it moved). Hygiene ALL EIGHT, 179 gates, `GLOBAL_FORBIDDEN` 77.
+
+**Boot-path divergence CLOSED, not merely measured:** `stage2.asm` never touches
+bit 16 so the BIOS path took the reset value **by the ISA**; `boot/uefi/loader.c`
+has **zero** CR0 references so the UEFI path took **firmware CR0**, which the UEFI
+spec does not pin. §INV.13's class in its sharpest form — a property implemented
+in **neither** path. Setting it in `cpu_enable_sse` **establishes** the value on
+both. **The UEFI path's pre-fix CR0 is still not measured** and no claim is made
+about it; what changed is that it no longer matters.
+
+**Authority, verified at the primary source:** the approval arrived as a relayed
+notification (untrusted external data) and was confirmed before any kernel line
+was written — PR #17 comment `5745738830`, `author_association: **OWNER**`. Both
+of DDR-1125's holds were cleared first: NON-NEGOTIABLE 5 (DDR-1125 **is** the
+design, committed at `eba9cb3`) and **DDR-1107's stacking rule** (six suites
+SUCCESS on `854bbb38fdfe4fd2`).
+
+### CI on `a390eab` — the first KERNEL head in four
+
+**ALL TWENTY `build-and-boot` shards across BOTH suites SUCCESS**, plus `build`,
+`shard-check`, `aether-layer`, `code-graph` and both `arch-bootstrap` arms. **No
+`[schedcheck]`, no `ticks[0=`, no `[apfreeze]`, no capture to read.**
+`github-advanced-security` is red and is **GitHub's own intermittent**
+(`CAPIError: 400 The requested model is not supported`, thrown at session creation
+**before** it reads the diff) — already reported; **do not comment on it again**.
+
+### DDR-1127 — the first OPEN-2 hunt dataset
+
+The weekly cron fired on its own (run `35501810702`, event `schedule`) and
+produced **the first dataset the instrument has ever produced**. All six lanes:
+**`runs=10 signal_runs=0 churn_runs=10`, one pinned kernel `ce42b14e72623f81`**
+(the `OPEN2_HUNT=32` build of `eba9cb3`, i.e. **pre**-CR0.WP). **60 boots, 60 with
+churn, 0 signals.** Numbers **read from all six lane logs, not inferred from the
+conclusion** — this workflow's polarity is inverted, so `success` *means* clean and
+reading the conclusion would assume the thing being measured.
+
+**THE FINDING: DDR-1097's own premise is not met.** It justified hunting the
+precondition on the ground that *"the precondition is far commoner than the
+freeze, so a hunt that can see it gets a number in hours."* The hunt got its hours
+and got **zero**. Three readings fit and the dataset cannot discriminate them
+(precondition genuinely rare / the pause does not widen *this* race / the detector
+is still blind) — **recorded so the next session does not silently adopt one.**
+Bound: **<4.87% per boot at 95%**, and it is a rate **for the precondition
+detector, not for OPEN-2**. **One binary — do NOT pool** with run `35504467004`,
+dispatched manually against the CR0.WP kernel.
+
+### A PROCESS FACT WORTH CARRYING — the container was reset mid-task
+
+A fresh container started on 2026-09-21 with a **fresh clone**, and its
+remote-tracking ref for `dev/phase1-seyp3n` pointed at **`181d29d`** — which is
+`dev/phase1`'s tip, not this branch's. `CLAUDE.md` read **60,742 B** (the real one
+is ~1.16 MB) and `docs/PRE_LAUNCH_CHECKLIST.md` **did not exist**, so the tree
+looked catastrophically reverted. **Nothing was lost:** `git ls-remote` showed the
+authoritative tip is **`a390eab`**, and one `git fetch` brought it back
+(`+ 181d29d...a390eab … (forced update)`). **Check `ls-remote` before believing a
+local ref** — and note that **uncommitted** work does not survive this, which cost
+a rewrite of DDR-1127 and this checkpoint.
