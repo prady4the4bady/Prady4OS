@@ -6230,3 +6230,37 @@ DDR-1126's p = 0.143 and the 39.4% / `<4.87%` overlap are **unchanged**.
   **not** a refutation of DDR-1128's occurrence — one event at 1/60 against a
   null at 800 is **tension, not contradiction**. `GLOBAL_FORBIDDEN` 77, 179
   gates, no new sentinel. DDR-1129 §7 item 1 stays owed.
+
+### DDR-1132 — An abbreviated SHA in the hunt's `ref` input voids every lane, and the inverted polarity reports that as a find (2026-09-21)
+
+Measurement + correction. **Docs-only; no code change, no gate, `kernel.bin` NOT rebuilt.
+NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE**, no open issue moves.
+`GLOBAL_FORBIDDEN` 77, 179 gates, hygiene ALL EIGHT.
+
+Two dispatches at `lanes=20 runs=20 hunt=32` on pinned `ca8107ec7f5d8de7`. Run
+`35581509323` (`ref=dev/phase1-seyp3n`) returned 20/20 lanes success with
+`runs=20 signal_runs=0 churn_runs=20` on every lane — **400 non-vacuous boots**. Run
+`35582316759` (`ref=4b0c18d`, a **7-character abbreviated SHA**) returned 20/20 lanes
+**failure**, which on this workflow means *it found something*. **It found nothing and no
+QEMU started:** `actions/checkout` resolves a non-40-hex `ref` as a branch name, fetched
+`refs/heads/4b0c18d*`, failed, and the artifact step confirms no capture was written.
+**Dispatch 2 contributes zero boots to any count.**
+
+The DDR-1130 family one step earlier — the kernel-hash and data-disk preconditions are both
+asserted *by the campaign* and so both need a checkout, while **that the checkout resolved
+what the caller meant is asserted by nothing**, and its failure mode is a false *hit*
+rather than a false clean. The discriminator was free: **20 of 20**. A rare intermittent
+cannot fail every lane (DDR-1128's real find was 1 lane of 6). **Rule: before reading a
+hunt `failure` as a find, count the failing lanes.**
+
+Remedy designed and **not shipped** — the guard can only live in the workflow file, which
+is on the default branch `dev/phase1` (DDR-1117), operator-owned.
+
+**The new number:** dispatch 1's 400 boots and DDR-1128's 60 are the *same binary*, so they
+pool (DDR-1127's 0/60 is a different binary and stays excluded). **1 in 460**, point
+**0.217%**, exact 95% CI **[0.0055%, 1.205%]** — the first single-binary rate estimate
+OPEN-2 has ever had. DDR-1131 §4's pre-registered reading is held to: the rate is *lower
+than one-in-sixty suggested*, **not** that the occurrence did not happen — the CI excludes
+the 1-in-60 *rate* while DDR-1128's *event* stands entirely intact. Consequence: an
+expected catch costs ~460 boots, so this week's dispatches were sized against the wrong
+prior.

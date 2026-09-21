@@ -76,6 +76,28 @@ both can appear **in one capture**, and their co-occurrence is readable.
 
 ## 4. What a null will and will not license
 
+> **STATUS NOTE 2026-09-21 — DDR-1132 §1. THE `800` BELOW IS THE N THIS SECTION WAS
+> WRITTEN AGAINST AND IT DID NOT MATERIALISE. Run `35582316759` was VOID — I passed a
+> 7-character abbreviated SHA as the `ref` input, `actions/checkout` resolved it as a
+> branch name, and all 20 lanes died at checkout with ZERO boots. Run `35581509323` ran
+> **400** boots, all with churn, `signal_runs=0`.**
+>
+> **THE §3 TABLE IS UNAFFECTED AND IS NOT REWRITTEN.** Every row there is a conditional
+> about what a capture would MEAN, which does not depend on how many boots are attempted;
+> that is the whole point of fixing it in advance, and rewriting it now would destroy the
+> record of what was pre-registered (DDR-1081 §5's trap; DDR-1111's rule — date-stamp the
+> status, leave the design alone).
+>
+> **What DOES change is this section's arithmetic input, so quote the N actually run, never
+> the `0.37%` below.** Measured so far on binary `ca8107ec7f5d8de7`: 0 in 400 → 95% UB
+> **0.746%**. Dispatches `35587697260` and `35587705666` add 800 more.
+>
+> **And the paragraph below about 1/60 being "tension, not contradiction" is the one that
+> came true** — DDR-1132 §5 holds to it verbatim against a pooled 1-in-460, where the
+> interval's upper bound excludes the 1-in-60 *rate* while leaving DDR-1128's *event*
+> entirely intact.
+
+
 0 in 800, pooled with DDR-1127's 0/60 on a different binary — **which must not be
 done**; that DDR's own NOT CLAIMED forbids it. On **this** binary the prior is
 DDR-1128's 1 in 60.
