@@ -6170,3 +6170,32 @@ the blob host) nor reproduce locally (no `qemu-system-x86_64`).
 
 DDR-1126's p = 0.143 and the 39.4% / `<4.87%` overlap are **unchanged**.
 `GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs.
+
+- **DDR-1130 (2026-09-21)** — *the hunt campaign, run standalone, boots a kernel
+  with no filesystem.* Measurement + design; **no code change in that commit**
+  (NON-NEGOTIABLE 5). A local campaign on the pinned `ca8107ec7f5d8de7` reported
+  `NO-CHURN` on runs 1 and 2 and was **stopped**: the QEMU command line carries
+  **one drive**, `build/pradyos.img`, which is the MBR boot image and is not
+  mountable, and `boot_test.sh:191` attaches SFS only `if [ -f build/sfs.img ]`.
+  `fs_test_thread` therefore **returns** at `main.c:1414-1417`, so
+  `rqstress_proof()` — unconditional, ~1,500 lines below, after `[boot-stamp] B`
+  — is **unreachable, not slow**. Three witnesses: the no-mount line, zero
+  `[boot-stamp]`/`rqstress`, and **35/35 heartbeats at `ymask=0`**, which is
+  DDR-1096 §4.3's own recorded signature (0 against ~13M on a clean hunt boot).
+  The gates get the disks as **Make prerequisites** (`smoke-rqstress: $(IMG)
+  fat-image sfs-image`); the campaign is a shell script with none, and the
+  workflow builds them in a **separate step** (`open2-hunt.yml:201-202`) — which
+  is why DDR-1127 saw **60/60 churn on runners**. **DDR-1097 §7.2 is NOT
+  invalidated**: its 1-in-3 means 2-in-3 *did* churn, impossible without the
+  disks, so its tree had them. What is added: **NO-CHURN has two causes** —
+  starvation (intermittent) and no-filesystem (deterministic, 100%) — reported
+  identically. The hunt asserts the **binary** precondition (`sha256sum -c
+  build/hunt.sha256`, DDR-1097 §6) and **not** the disk one, though DDR-1096 §4.3
+  named the trap and the workflow's own comment cites it by number. Remedy
+  designed, not shipped: **assert, do not build** (DDR-1060 §9 voided a campaign
+  that rebuilt mid-run), and **do not reclassify** the per-run case, because once
+  the disks exist a mount failure is a real kernel defect. **NO FIX, OPEN-2 does
+  not close, no open issue moves.** DDR-1129 §7 item 1 stays owed — artifact
+  `10603519323` expires 2026-10-04 and the proxy gateway answers **403 to
+  CONNECT** for the blob host (org policy; README says report, do not route
+  around).
