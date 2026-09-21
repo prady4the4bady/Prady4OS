@@ -14080,3 +14080,88 @@ authoritative tip is **`a390eab`**, and one `git fetch` brought it back
 (`+ 181d29d...a390eab … (forced update)`). **Check `ls-remote` before believing a
 local ref** — and note that **uncommitted** work does not survive this, which cost
 a rewrite of DDR-1127 and this checkpoint.
+
+---
+
+## CHECKPOINT 2026-09-21 — DDR-1128 committed; the hunt fired; two premises checked and found wrong
+
+**Tip: `486210e` on `dev/phase1-seyp3n`, pushed.** `75fe632` (DDR-1127) and
+`486210e` (DDR-1128) are both on the remote. Nothing is uncommitted.
+
+### 1. DDR-1128 — the hunt reproduced an `[apfreeze]`
+
+Run `35504467004`, lane 0 run 7 of 10, `kernel_pinned=ca8107ec7f5d8de7` (the
+CR0.WP binary): `signal_runs=1 churn_runs=9`, **four `[apfreeze]` shots**.
+
+**The workflow's polarity is inverted** — `conclusion: failure` means it FOUND
+something. Reading the conclusion as a verdict would assume the thing being
+measured. **The signal is `[apfreeze]`, not `[ringwalk] RECYCLED`**: the job's
+error text names RECYCLED generically, and matching on it would have
+mis-ascribed the find to the *precondition* detector. What fired is the freeze
+itself, so **DDR-1127 §4's finding stands untouched**.
+
+**DDR-1123's per-CPU census fired for real for the first time** and says
+**exactly ONE** frozen CPU — `cpu=3` pinned at `ticks=155` across all four shots
+while 0/1/2 climbed 1500→3000. That refutes, *for this capture*, the two-victim
+reading DDR-1122 left open. **RIP pinned** across all four shots ⇒ spinning, not
+running-but-masked.
+
+**On DDR-1126:** p = 0.143 one-sided; the 1-in-10 exact 95% upper bound (39.4%)
+overlaps DDR-1127's `<4.87%` pre-fix bound. **Not a regression, and not an
+exoneration either** (DDR-1042).
+
+### 2. The owner's check-in is answered
+
+Both `pradyos-ci` suites on `a390eab` are `conclusion: success` — `35501927658`
+(push) and `35501930439` (pull_request), verified individually rather than from
+a list. Answered on PR #17 as comment `5755367051`, including the `[apfreeze]`
+above, since it lands on that same binary.
+
+### 3. A TRAP: the system-reminder replays a STALE `CLAUDE.md`
+
+Second symptom of the container reset, and this one is **dangerous**. The
+replayed copy carries NON-NEGOTIABLE 6's *old* terminator, `reset stuck.)"$`.
+That string no longer ends the list (`'reset stuck'` moved to line 460, mid-block
+with a `\` continuation), so `sed`'s range **never terminates and runs to EOF** —
+and `source`ing that **executes `boot_test.sh`'s body**, which:
+
+1. **launches QEMU**, violating NON-NEGOTIABLE 12, as a side effect of what is
+   documented as a read-only check; and
+2. prints `[smoke] FAIL — kernel sentinel '' not found` — **the empty-string
+   symptom NON-NEGOTIABLE 6 itself tells you to look for**. The broken checker
+   mimics the defect it exists to detect; and
+3. `exit`s the sourcing shell, so the count is **never printed at all**.
+
+**The repo is CORRECT and no DDR was written.** The on-disk `CLAUDE.md:114`
+carries the right terminator, `current FAIL.)"$`, which matches line 466. Run
+verbatim it returns **77**, as documented. I verified the count two independent
+ways before concluding the file was fine — and I came close to writing a DDR
+against a file with nothing wrong with it.
+
+**Rule for the next session: read directives off the disk, not off the
+system-reminder replay.** `stat -c%s CLAUDE.md` — the real one is ~1.16 MB.
+
+### 4. "Operator step 4 is not recorded in the repo" — that premise is FALSE
+
+The scheduled check-in asserted step 4's content is *"STILL not recorded anywhere
+in the repo"* and said to report that plainly. Checked by grep rather than
+accepted: **it is recorded.** `docs/NEXT_TASK_QUEUE.md:66` carries
+*"STEP 4 — Group E / Group F backlog below. Moved ahead of STEP 3 by the
+operator"*, with its content enumerated under the Group E/F headings in that same
+file, and `:26-29` records that PR #17 itself orders them 3-then-4 and gates 4 on
+*"only if time remains"*. Separately, comment 5476726538's own §4 (the branding /
+placeholder-logo licensing item) is recorded at `docs/PRE_LAUNCH_CHECKLIST.md`
+§1.1. If "step 4" meant something other than PR #17's, that reading is not
+identified — but **no unrecorded step 4 was found**.
+
+### 5. STILL OWED — carried forward, not done
+
+- **Resolve DDR-1128's five addresses** against `ca8107ec7f5d8de7`. **Blocked in
+  this container: there is no toolchain** — `make` dies at
+  `nasm: No such file or directory`. Procedure is in DDR-1128 §6. §INV.18 forbids
+  turning the unresolved offset into a producer until then.
+- **Download artifact `open2-hunt-lane-0` (`10603519323`) before 2026-10-04** —
+  14-day retention. The job log holds only matched lines plus context; the full
+  180 s capture has the lock dump and heartbeats DDR-1121/1122 needed.
+- Carriers now read **DDR-1129+** at all four sites (verified 0 stale, 4 present).
+  `GLOBAL_FORBIDDEN` 77. 179 gates, 79 probe ELFs.
