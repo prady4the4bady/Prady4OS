@@ -14358,3 +14358,69 @@ Verified **77**. The sed terminator is current, not stale.
 - Carriers at **DDR-1131+** (4 sites). `GLOBAL_FORBIDDEN` 77. 179 gates.
   hygiene **ALL EIGHT**. No kernel change; `kernel.bin` not rebuilt.
 - **OPEN-2 does not close. No mechanism named.**
+
+## CHECKPOINT 2026-09-21 ~10:25Z — first hunt dataset of the week; DDR-1132; campaign re-sized
+
+**NO `[schedcheck]` HAS FIRED. NO MECHANISM NAMED. OPEN-2 DOES NOT MOVE.** The operator's
+conditional authorization (PR #17 comment `5757819953`: fix + promote + tag once a
+mechanism is named) is **NOT in force** — its precondition is unmet.
+
+### What ran
+
+| run | `ref` | result |
+|---|---|---|
+| `35581509323` | `dev/phase1-seyp3n` | 20/20 success — **400 boots**, every lane `runs=20 signal_runs=0 churn_runs=20 kernel_pinned=ca8107ec7f5d8de7` |
+| `35582316759` | `4b0c18d` | 20/20 **failure** — **VOID, zero boots** (DDR-1132) |
+| `35587697260` | `dev/phase1-seyp3n` | in flight, 400 |
+| `35587705666` | `dev/phase1-seyp3n` | in flight, 400 |
+| `35588431931` | `dev/phase1-seyp3n` | in flight, **1000** (`runs=50`) |
+
+### Carry these
+
+1. **A hunt `conclusion=failure` has at least two producers and only one is a find.**
+   Count the failing lanes first: one or a few → read the logs; **all of them → setup
+   failure.** Costs nothing, and it is what caught DDR-1132 in one fetch.
+2. **`ref` takes a BRANCH.** A 7-char abbreviated SHA is silently resolved as a branch
+   name and kills every lane at checkout. The 40-char case is claimed by the workflow's
+   own comment and is **NOT measured** — a 1-lane 1-run dispatch would settle it.
+3. **`runs=50` is the efficient dispatch size**, not `runs=20`: 150 min of boots against a
+   180 min timeout, **1000 boots per dispatch** instead of 400, same 20 job-slots, because
+   per-lane checkout/build overhead (~2 min) amortises.
+4. **Every docs push costs up to 20 job-slots that would otherwise be hunt boots**
+   (2 suites × 10 shards = the whole concurrency cap). Six superseded `pradyos-ci` suites
+   were cancelled after verifying `git diff --name-only 4b0c18d~1 d280b80` contains **zero
+   build inputs**, so per DDR-1009 they were repeated observations of one binary; hunt
+   run `35587697260` went 0 → 11 lanes running within seconds. **Batch docs commits while
+   a campaign is live.**
+5. **The measured rate re-sizes everything.** Pooled on binary `ca8107ec7f5d8de7` (and
+   only pooled because DDR-1128's 60 boots are the *same* binary — DDR-1127's 0/60 is a
+   different one and stays excluded): **1 in 460**, point **0.217%**, exact 95% CI
+   **[0.0055%, 1.205%]**. Held to DDR-1131 §4's pre-registered reading: *the rate is lower
+   than one-in-sixty suggested, **not** that the occurrence did not happen* — the interval
+   excludes the 1-in-60 **rate**, DDR-1128's **event** stands untouched. 1800 boots in
+   flight ⇒ **~82% → 98%** chance of a catch at the point estimate.
+
+### Two load-bearing assumptions CHECKED, both HOLD (no new finding)
+
+* **DDR-1131 §3's co-occurrence row is structurally possible.** `[schedcheck]` (emit
+  `sched.c:1732`) is **unconditional** — the first `#if OPEN2_HUNT` is at `:1878`, after
+  it — while `[ringwalk] RECYCLED` (`:2005`) is inside that guard and compiles in at
+  `OPEN2_HUNT=32`. The halt is `for(;;) hlt` on **one** CPU: no IPI, no panic, so the
+  other CPUs keep sweeping `sched_tick` and can print `[ringwalk]` before or after.
+* **The halt's permanence does not depend on the caller.** There is an explicit
+  `__asm__ volatile("cli")` at `sched.c:1730`, before the emit, so the bare `hlt` at
+  `:1858` never wakes — which is exactly why DDR-1128 measured `if=0` with `ticks` pinned.
+  **DDR-1129's attribution is corroborated, not corrected.**
+
+### Next
+
+Watcher armed on the in-flight runs. On a fire: read the job log (DDR-1129's SIGNALS fix
+puts `[schedcheck]` in it directly — no artifact download), apply **DDR-1131 §3's
+pre-registered table**, resolve addresses with **`sym_at.sh <addr> build/kernel.elf`**
+(address FIRST — the reversed form's `missing` message names the *file*, not the address)
+in the `wt-a390eab` worktree, **check the same capture for a co-occurring
+`[ringwalk] RECYCLED`**, and report to the operator immediately (their item 2).
+
+Still owed: DDR-1129 §7 item 1, the `[schedcheck]` field values from artifact
+`10603519323` (expires **2026-10-04**), still proxy-blocked and **not to be routed
+around** (operator item 3; `/root/.ccr/README.md`).
