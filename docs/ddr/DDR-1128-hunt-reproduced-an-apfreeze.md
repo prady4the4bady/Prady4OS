@@ -72,6 +72,29 @@ merely masked; **a pinned RIP means it is spinning.**
 
 ## 3. What the line establishes WITHOUT resolving a single address
 
+> **CORRECTED AT THE SITE 2026-09-21 (DDR-1110's rule) — THE SHAPE READING IN
+> THIS SECTION POINTS THE WRONG WAY. THE ADDRESSES ARE NOW RESOLVED: DDR-1129.**
+> `rip=0xFFFFFFFF80016D91` is `schedule_locked + 0x671`, which disassembles to
+> `hlt; jmp .-1` — **a deliberate halt loop** at `kernel/proc/sched.c:1857`,
+> reachable ONLY from inside `if (bad)` at `:1723`, i.e. **DDR-1105's
+> `next->rsp` validity check**. CPU 3 did not spin and was not masked by
+> accident: it detected a corrupt stack pointer, printed a `[schedcheck]` line,
+> and **stopped on purpose**.
+>
+> So `if=0` here is **not DDR-981's mechanism** (that is `SYSCALL` masking IF on
+> a ring-3 yield spin; this CPU is on the AP bring-up path,
+> `smp_ap_entry → sched_ap_enter → schedule → schedule_locked`, and never
+> returned from a syscall), and `irr48=1` is a **consequence** of a halted CPU,
+> not a clue. This is the **DDR-1019 class** — an `[apfreeze]` that is the
+> symptom of a prior deliberate halt — and `sched.c:1857` is a **fourth**
+> `[apfreeze]` producer beyond the three DDR-1019 named.
+>
+> **What stands unchanged:** §2's census reading (exactly one frozen CPU), §4,
+> §5's statistics, and every refusal in §7. This section stated the shape "as a
+> shape and nothing more" and called the site unresolved — which was the right
+> caution, and is why nothing downstream has to be withdrawn.
+
+
 `rflags=0x06` has bit 9 clear, which corroborates `if=0` independently. Then:
 `masked=0` (LVT unmasked), `svr=0x1FF`/`swen=1` (LAPIC enabled), `isr48=0` (no
 stuck in-service vector), **`irr48=1` — a timer interrupt PENDING AND

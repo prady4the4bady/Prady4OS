@@ -6117,3 +6117,56 @@ establish a regression** — and **does not exonerate CR0.WP either** (DDR-1042)
 rate is claimed for OPEN-2 on this or any binary. Artifact `open2-hunt-lane-0`
 (`10603519323`) holds the full 180 s capture and **expires 2026-10-04**.
 `OPEN2_HUNT` not retuned; `GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs.
+
+### DDR-1129 — DDR-1128's `[apfreeze]` RIP resolves to a **deliberate halt** (2026-09-21)
+
+**Docs-only.** No code change, no gate. **NO FIX, NO MECHANISM NAMED, OPEN-2
+DOES NOT CLOSE**, no open issue moves.
+
+DDR-1128 §6 recorded address resolution as owed and blocked. The blocker was
+`nasm` alone. With it installed the build reproduces **bit-for-bit**: baseline
+`25f4dae4a3f90bcb` (DDR-1126's own recorded hash — checked **first**, so the
+toolchain's fidelity is a measurement rather than an assumption) and, after
+`touch kernel/proc/sched.c && make image OPEN2_HUNT=32`, **`ca8107ec7f5d8de7`**.
+Both are 1,319,306 B, so **only the hash discriminates** (DDR-1097). The job log
+agrees independently: `tree_sha=a390eab…`, `kernel_pinned=ca8107ec7f5d8de7`.
+**§INV.18 satisfied two independent ways.**
+
+| field | resolves to |
+|---|---|
+| `rip 0xFFFFFFFF80016D91` | `schedule_locked + 0x671` |
+| `bt[0]` | `schedule + 0x11` |
+| `bt[1]` | `sched_ap_enter + 0x178` |
+| `bt[2]` | `smp_ap_entry + 0x30A` |
+| `bt[3] 0x07FA9023` | below the first text symbol — stack data, **left unresolved** |
+
+**The RIP disassembles to `hlt; jmp .-1`** — `kernel/proc/sched.c:1857`,
+reachable only from inside `if (bad)` at `:1723`, i.e. **DDR-1105's `next->rsp`
+validity check**. CPU 3 refused to `context_switch` into a thread whose saved
+stack pointer failed bounds or alignment, printed a diagnostic, and **halted
+itself on purpose**.
+
+**Correction to DDR-1128 §3:** its "field-for-field shape DDR-981 recorded"
+reading points the wrong way. `if=0` is **not** DDR-981's mechanism — that is
+`SYSCALL` masking IF on a ring-3 yield spin, and this CPU is on the **AP
+bring-up path**, never returned from a syscall. `irr48=1` is a **consequence** of
+a halted CPU. And the pinned RIP is not "spinning vs masked" at all, but a third
+possibility: **stopped on purpose**. This is the **DDR-1019 class**, and
+`sched.c:1857` is a **fourth** `[apfreeze]` producer beyond the three DDR-1019
+named. DDR-1128's census, `NO-CHURN` reading, statistics and refusals all stand;
+**DDR-1127 untouched.**
+
+**The diagnosis is a line the hunt did not print.** The halt is immediately
+preceded by `[schedcheck] next->rsp invalid tid= pid= rsp= base= rflags= r15=
+ret= rq_on= disp= saves= halting.` (`:1732`) — carrying exactly DDR-1118's
+double-resume discriminators. `tools/ci/open2_hunt_campaign.sh:35`'s `SIGNALS`
+regex **does not include `[schedcheck]`**, and `:71` caps at `head -5`, so the
+job log holds four copies of the symptom and zero of the reason sitting one line
+above it. Adding it is **designed, not shipped** (NON-NEGOTIABLE 5).
+
+**Owed:** artifact `open2-hunt-lane-0` (`10603519323`) holds the field *values*
+and **expires 2026-10-04**. This container cannot fetch it (egress proxy rejects
+the blob host) nor reproduce locally (no `qemu-system-x86_64`).
+
+DDR-1126's p = 0.143 and the 39.4% / `<4.87%` overlap are **unchanged**.
+`GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs.
