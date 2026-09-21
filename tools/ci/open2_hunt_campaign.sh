@@ -32,7 +32,16 @@ mkdir -p "$OUT"
 PIN="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
 echo "[campaign] kernel_pinned=${PIN:0:16} runs=$N smp=4"
 
-SIGNALS='\[ringwalk\]|\[apfreeze\]|panic_stage=|NEXUS KERNEL PANIC|gs FAIL'
+# DDR-1129: `[schedcheck]` was MISSING here, and it is the line that NAMES THE
+# MECHANISM. DDR-1128's capture halted at sched.c:1857 -- DDR-1105's next->rsp
+# validity check -- which emits `[schedcheck] next->rsp invalid ... halting.`
+# carrying DDR-1118's rq_on/disp/saves discriminators, and THEN halts. That line
+# sat ONE LINE ABOVE the first `[apfreeze]` and was never printed: the job log
+# carried four copies of the symptom and zero of the reason. `[schedcheck]` has
+# been in GLOBAL_FORBIDDEN since DDR-1105, so it was load-bearing everywhere but
+# here. Adding it also WIDENS detection: a BSP-side halt emits `[schedcheck]`
+# with no `[apfreeze]` at all, and would have read as `clean`.
+SIGNALS='\[ringwalk\]|\[apfreeze\]|\[schedcheck\]|panic_stage=|NEXUS KERNEL PANIC|gs FAIL'
 # The unlink churn the race requires. rqstress_proof spawns and exits a 24-thread
 # burst; without it the boot ran with a wide window and nothing to catch in it.
 CHURN='\[smp\] rqstress OK'
@@ -68,7 +77,11 @@ for i in $(seq 1 "$N"); do
     if [ "$sig" -gt 0 ]; then
         hits=$((hits+1))
         echo "[campaign] run=$i rc=$rc ${hb} $ch *** SIGNAL x$sig *** cap=$cap"
-        grep -nE "$SIGNALS" "$cap" | head -5
+        # DDR-1129: was `head -5`. DDR-1128's run produced 4 `[apfreeze]` shots
+        # plus 1 `[schedcheck]`, i.e. EXACTLY 5 -- one more shot and the cap
+        # would have silently dropped a line. The whole point of this print is
+        # that the diagnosis and the symptom travel together.
+        grep -nE "$SIGNALS" "$cap" | head -40
     else
         echo "[campaign] run=$i rc=$rc ${hb} $ch clean"
     fi

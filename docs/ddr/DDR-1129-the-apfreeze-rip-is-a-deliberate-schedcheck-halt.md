@@ -197,3 +197,42 @@ regression, not an exoneration** (DDR-1042).
 * **NO RATE for OPEN-2** on this or any binary.
 * `OPEN2_HUNT` not retuned; no code change, no gate, no new sentinel;
   `GLOBAL_FORBIDDEN` 77, 179 gates, 79 probe ELFs.
+
+---
+
+## 9. §7 ITEM 2 IMPLEMENTED AND MEASURED BOTH WAYS (added with the change)
+
+§7 designed the `SIGNALS` change and deliberately did not ship it in the DDR's
+own commit (NON-NEGOTIABLE 5). It ships in the commit that carries this section.
+
+`tools/ci/open2_hunt_campaign.sh:44` gains `\[schedcheck\]`; `:84`'s print cap
+goes `head -5` → `head -40`.
+
+**Measured against the real line format, not argued.** Two captures: the DDR-1128
+shape (one `[schedcheck]` + four `[apfreeze]`), and a **BSP-only** shape
+(`[schedcheck]` with no `[apfreeze]` at all).
+
+| capture | old `SIGNALS` | new `SIGNALS` |
+|---|---|---|
+| schedcheck + 4 × apfreeze | **4 hits** — diagnosis absent | **5 hits** — diagnosis printed **first**, at its own line |
+| schedcheck, no apfreeze | **0 hits → campaign prints `clean`** | **1 hit → campaign prints SIGNAL** |
+
+**The second row is the one that matters, and it is worse than a reporting gap.**
+A `[schedcheck]` halt with no frozen AP — a BSP-side halt, or any halt the
+`[apfreeze]` watchdog does not observe — was scored **`clean`** by the old
+regex, and would have gone into `signal_runs=0` as evidence of a quiet boot.
+That is a **false clean**, the class DDR-1097 §5 was written about, in the
+detector rather than in the build.
+
+**The cap mattered too, by one line.** DDR-1128's run produced exactly five
+matching lines under the new regex, against a cap of five. One more `[apfreeze]`
+shot and the truncation would have dropped a line — and because `grep -n` emits
+in line order, the line dropped would have been an `[apfreeze]`, not the
+`[schedcheck]`. That is luck, not design, and `head -40` removes the dependence.
+
+**NOT CLAIMED:** this changes **reporting and detection, not the kernel**. No
+kernel change, no rebuild, `kernel.bin` untouched. It does **not** make DDR-1128's
+values readable — those are still only in artifact `10603519323` (expires
+**2026-10-04**), and §7 item 1 remains owed. It does not close OPEN-2, name a
+mechanism, or alter any rate: past `signal_runs` figures were computed under the
+old regex and **must not be pooled** with figures computed under the new one.
