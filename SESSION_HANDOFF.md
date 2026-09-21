@@ -14424,3 +14424,68 @@ in the `wt-a390eab` worktree, **check the same capture for a co-occurring
 Still owed: DDR-1129 §7 item 1, the `[schedcheck]` field values from artifact
 `10603519323` (expires **2026-10-04**), still proxy-blocked and **not to be routed
 around** (operator item 3; `/root/.ccr/README.md`).
+
+---
+
+## CHECKPOINT 2026-09-21 — THE HUNT FIRED. DDR-1133. OPEN-2 DOES NOT CLOSE.
+
+**Three `[schedcheck]` fires and one silent panic in 800 boots on ONE binary
+(`ca8107ec7f5d8de7`). No fix, no mechanism named, no open issue moves.**
+
+### State
+
+- `806c535` **DDR-1133** (local, **NOT pushed** — see *Why not pushed*)
+- `2c66247` SESSION_HANDOFF checkpoint (local, not pushed)
+- `d280b80` DDR-1132 (pushed)
+- Free range now **DDR-1134+** at all four carriers. `GLOBAL_FORBIDDEN` 77,
+  179 gates, hygiene **ALL EIGHT**.
+
+### The dataset
+
+| run | lane | fire | tid/pid | `disp−saves` | `ret` | reading |
+|---|---|---|---|---|---|---|
+| 35587697260 | 3 | `[schedcheck]` | 22/22 ring-3 | **+2** | `0x16dcf` consumed litter | §3 — first ever |
+| 35587697260 | 4 | silent panic | — | — | — | `loser_vec=13`, `resolve+0x61` = `cap.c:42` |
+| 35587705666 | 5 | `[schedcheck]` | 11/0 kernel | +1 | `0x16dc1` **legal** | DDR-1120 reproduced |
+| 35587705666 | 13 | `[schedcheck]` | 22/22 ring-3 | +1 | `0x0` neither | DDR-1120 reproduced |
+
+`35588431931` (1000 boots) still running, watcher armed.
+
+### Carry these
+
+1. **DDR-1132's discriminator worked twice.** 2-of-21 both times, not 20-of-21.
+   **Count the failing lanes before reading a hunt failure as a find.**
+2. **`nasm` is present in this container now.** DDR-1129 §7's blocker is gone;
+   `a390eab` at `OPEN2_HUNT=32` rebuilds `ca8107ec7f5d8de7` **bit-for-bit**.
+   Build it in a **detached worktree** so the shipping tree's `build/` is untouched.
+3. **`sym_at.sh` needs an ABSOLUTE ELF path** when cwd is a worktree, and the
+   address goes **first**.
+4. **Three `ret` classes on one binary** (§9.2) — `[schedcheck]` is catching **≥3
+   distinguishable frame states** read as one signature. DDR-1019 one level in.
+5. **§10 corrects my own §3.1.** `disp = saves + 2` has **four** readings, and the
+   most economical — **a lost non-atomic `switches_away++`** — needs no defect and
+   would make the number **instrument noise**. `sched.h:210-226` says so outright:
+   the identity *"holds by the code's habits and NOT by construction"*.
+6. **A grep that strips comments will drop the line you are looking for.** Mine
+   hid `t->switches_away = 0; /* DDR-1118; NON-NEGOTIABLE 10 */` and briefly made
+   a correct initialiser look missing.
+
+### Why not pushed
+
+Each push costs up to 20 job slots (2 suites × 10 shards) — the entire concurrency
+cap — and the 1000-boot dispatch is holding them. Committed to batching docs
+pushes this week (PR comment 5758943211). **Push when `35588431931` completes.**
+
+### Owed and BLOCKED — do not route around
+
+Lane 3's `calls=`/`bails=` are in artifact **10636246167** (14-day retention).
+The proxy refuses `productionresultssa*.blob.core.windows.net`
+(`connect_rejected`). `/root/.ccr/README.md`: *"Do not retry or route around it —
+report the blocked host."* Reported in PR #17. Same class as DDR-1129 §7 item 1,
+whose own artifact (10603519323) **expires 2026-10-04**.
+
+### Next
+
+Read `35588431931` lane-by-lane on completion, applying DDR-1131 §3 **and**
+DDR-1133 §10's four-reading enumeration. A second `saves + 2` **with** `rq_on=1`
+would be the one outcome that separates (i) from (ii).
