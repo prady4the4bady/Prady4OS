@@ -6199,3 +6199,34 @@ DDR-1126's p = 0.143 and the 39.4% / `<4.87%` overlap are **unchanged**.
   `10603519323` expires 2026-10-04 and the proxy gateway answers **403 to
   CONNECT** for the blob host (org policy; README says report, do not route
   around).
+
+- **DDR-1131 — what each hunt outcome will mean, registered BEFORE the data.**
+  Pre-registration; **docs-only, no code change, no gate, `kernel.bin` not
+  rebuilt. NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE.** 800 boots are in
+  flight (runs `35581509323`, `35582316759`, both pinned, `lanes=20 runs=20
+  hunt=32`), so the readings are fixed while the outcome is unknown — DDR-1128
+  §3's *"field-for-field shape DDR-981 recorded"* **pointed the wrong way**, and
+  DDR-1042 is this project's record of a plausible number with nothing under it.
+  Same discipline as DDR-1000 §3 and DDR-1002, which set their thresholds before
+  spending the runs. **One candidate closed by reading, not data:** DDR-1119
+  named `switch_wait_offcpu_sched`'s bounded handshake as where a third fire
+  would point; read in full, the bail path **declines the pick** (`rq_push`es the
+  contended thread back, substitutes `g_idle[cpu]`), so `dispatches++` past it
+  belongs to **idle** and **the bail path cannot double-resume** — a fifth
+  candidate removed, **no defect alleged** in that function. **The load-bearing
+  reading is a co-occurrence nobody has looked for:** `[schedcheck]` and
+  `[ringwalk]` are *both* in the campaign's `SIGNALS`, `[ringwalk] RECYCLED`
+  ships under `#if OPEN2_HUNT`, and the hunt builds at `OPEN2_HUNT=32` — so both
+  can land **in one capture**, and **that pair names the recycled-TCB reading
+  (DDR-1096 §3)**, which is exactly what DDR-1120 §5(b) said the healthy identity
+  is blind to (`kmalloc` does not zero, so a reissued TCB carries its previous
+  owner's counters and `disp = saves+1` holds on a recycled object). `disp ==
+  saves + 2` → double resume confirmed; `rq_on=1` with `saves+1` → precondition
+  without consequence, a narrowing; `rq_on=0` + `saves+1` + no `[ringwalk]` →
+  DDR-1120 reproduced, nothing new; `rq_on=?` → the field is untrustworthy and
+  nothing else on the line may be read. **A null is a bound and nothing else:**
+  0 in 800 → 95% upper bound **0.37%** *on this binary*, **not** poolable with
+  DDR-1127's 0/60 (different binary; that DDR's own NOT CLAIMED forbids it), and
+  **not** a refutation of DDR-1128's occurrence — one event at 1/60 against a
+  null at 800 is **tension, not contradiction**. `GLOBAL_FORBIDDEN` 77, 179
+  gates, no new sentinel. DDR-1129 §7 item 1 stays owed.
