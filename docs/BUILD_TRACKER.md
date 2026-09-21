@@ -6264,3 +6264,97 @@ than one-in-sixty suggested*, **not** that the occurrence did not happen — the
 the 1-in-60 *rate* while DDR-1128's *event* stands entirely intact. Consequence: an
 expected catch costs ~460 boots, so this week's dispatches were sized against the wrong
 prior.
+
+## DDR-1133 — the fourth `[schedcheck]` fire carries `disp = saves + 2` (2026-09-21)
+
+**Measurement + address resolution. NO code change, no gate, `kernel.bin` NOT
+rebuilt in the shipping tree. NO FIX, NO MECHANISM NAMED, OPEN-2 DOES NOT CLOSE.**
+
+Run 35587697260 (`lanes=20 runs=20 hunt=32`, `ca8107ec7f5d8de7`), lane 3 run 12.
+**2 of 21 jobs non-success**, so DDR-1132's discriminator passes; both lanes carry
+churn (20/19), so the boots were non-vacuous.
+
+- **§INV.18 satisfied by rebuild:** `a390eab` at `OPEN2_HUNT=32` reproduces
+  `ca8107ec7f5d8de7` **bit-for-bit**, 1,319,306 B, warning-clean, built in a
+  detached worktree. **`nasm` is present in this container now** — DDR-1129 §7's
+  blocker is gone, which is why this fire could be resolved.
+- **New arrival path, same halt site:** `bt` = `schedule+0x11 ← yield+0xe7 ←
+  sys_yield+0x25 ← syscall_dispatch+0x131` (ring-3 `SYS_YIELD`) against
+  DDR-1128's AP bring-up path, with the *identical* `rip`
+  `schedule_locked+0x671`. **Strengthens DDR-1129.**
+- **Frame: 2 of 3 witnesses match the consumed-frame chain.** `rflags` = `rsp+0x30`
+  ✓, `ret` = post-`call local_irq_restore` `0x16dcf` ✓, **`r15` = `0x16842` ✗**
+  (predicted `finish_task_switch+0xd` = `0x1668d`; `finish_task_switch` confirmed
+  out-of-line). `0x16842` is the return address of
+  `call switch_wait_offcpu_sched`.
+- **`disp=38 saves=36`.** First time ever that `disp − saves ≠ 1`. DDR-1131 §3
+  pre-registered this value as *"DOUBLE RESUME CONFIRMED"* — **and its
+  corroborator `rq_on=1` is absent.** The pre-registration has no row for this
+  combination.
+- **§3.1:** `saves + 2` does **not** uniquely name a double resume. A TCB reissued
+  from a **running** owner (`old_disp == old_saves + 1`) plus one dispatch yields
+  the same value with no double resume at all — the mirror of DDR-1120 §5(b).
+  Two readings, one number, not discriminated here.
+- **No `[ringwalk]`, truncation ruled out by reading the script** (`SIGNALS`
+  includes it, cap is `head -40`, `x5` is a `grep -c` total). Recycled-TCB reading
+  **not named — and not excluded**, the detector being a `sched_tick`-window `tid`
+  re-read rather than a general recycle detector.
+- **DDR-1131 §2 NOT refuted** — its bail-path reading is re-read and holds. What
+  changes: the candidate now has an artefact touching it.
+- **Lane 4 is a second signal and a different producer** — silent panic,
+  `panic_stage=3 loser_vec=13`, `loser_rip` → `resolve+0x61` = `kernel/cap.c:42`
+  (one `resolve` symbol; DDR-1121 aliasing checked). **Not pooled, not attributed.**
+- **OWED and BLOCKED:** lane 3's `calls=`/`bails=` live in artifact 10636246167;
+  the proxy refuses `productionresultssa*.blob.core.windows.net`. **Reported, not
+  routed around.**
+
+`GLOBAL_FORBIDDEN` 77, 179 gates, free range advanced to **DDR-1134+** at all four
+carriers.
+
+### DDR-1133 §9 — second dispatch (run 35587705666), same binary
+
+Two more fires, **2 of 21 lanes**, discriminator passes. Lane 5 (`tid=11 pid=0`,
+`disp=36777 saves=36776`, `ret=0x16dc1`) and lane 13 (`tid=22 pid=22`, `disp=8
+saves=7`, `ret=0x0`, `t=1000 NO-CHURN`). **Both `saves + 1`** — DDR-1131 §3's
+*"DDR-1120 REPRODUCED, NOTHING NEW"* row, recorded as such.
+
+- **§9.1 — the control lane 3 lacked.** The same code, same binary, same workflow,
+  hours apart, read the healthy identity **twice**. So lane 3's `+2` is an
+  observation about that boot, **not** a miscounting instrument.
+- **§9.2 — three `ret` classes on one binary:** `0x16dcf` (consumed litter),
+  `0x16dc1` (**legal**, what a fresh save carries), `0x0` (neither). **Lane 5 is
+  internally mixed** — fresh-save return slot, consumed-frame `rflags` slot.
+  `[schedcheck]` is catching **≥3 distinguishable frame states** read as one
+  signature; DDR-1019's finding one level in. No mechanism named for any.
+- **§9.3** — `rflags = rsp + 0x30` holds in **all six fires across three binaries**.
+- **§9.4** — lane 13's NO-CHURN is a *consequence* of the halt (`churn_runs=19`);
+  `disp=8` shows the family is not confined to long-lived threads.
+- **§9.5** — 800 boots, 4 signal runs. **No pooled rate**; DDR-1132 §5 not revised.
+
+### DDR-1133 §10 — correction to my own §3.1, before it shipped
+
+Checking §3.1's readings **in the source** found one wrong and two missing.
+
+- **§10.1 — §3.1's reading (b) is refuted for the ordinary reissue path.** Both
+  `t->switches_away = 0` (`:1092`) and `t->dispatches = 0` (`:1173`) are inside
+  **`sched_create_state`**, the single creation path (all four `sched_create*`
+  call it; the AP idle is `memset` to zero). A reissued TCB reads `0/0`, so its
+  first dispatch gives `saves + 1`. **No NON-NEGOTIABLE 10 violation**, and
+  DDR-1118's initialiser claim is **correct** — an earlier grep here appeared to
+  show none and *the grep was wrong*, its filter dropping the line that carries
+  the `NON-NEGOTIABLE 10` comment.
+- **§10.2** — DDR-1120 §5(b)'s conclusion survives by a different route; one
+  clause of its reasoning narrowed. Not withdrawn.
+- **§10.3 — the reading I missed, which `sched.h:210-226` states outright:** the
+  increments are **plain, non-atomic**, so *"the identity holds by the code's
+  habits and NOT by construction"*. **A lost `switches_away++` between two CPUs
+  yields `saves + 2` with no double resume and `rq_on=0` unsurprising.**
+  Enumeration is **four**, not two.
+- **§10.4 — this cuts against §3's headline.** If that is what happened, the
+  number is **instrument noise**, not evidence about the frame. §3 is not
+  retracted and (ii) is not promoted; **the enumeration, not the number, was what
+  was missing.** §9.1's control does not bear against it — a lost increment is
+  sporadic by definition.
+- **Not shipped:** making the increments atomic is the hottest path in the kernel,
+  the cost DDR-1047 refused and DDR-1116/1118 each declined — **and it would fix
+  the instrument, not the defect.**
