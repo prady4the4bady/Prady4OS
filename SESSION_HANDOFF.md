@@ -14489,3 +14489,39 @@ whose own artifact (10603519323) **expires 2026-10-04**.
 Read `35588431931` lane-by-lane on completion, applying DDR-1131 §3 **and**
 DDR-1133 §10's four-reading enumeration. A second `saves + 2` **with** `rq_on=1`
 would be the one outcome that separates (i) from (ii).
+
+## 2026-09-21 — DDR-1134: hunt run 35588431931, 4 signal lanes
+
+**Run 35588431931** (20 lanes x 50, pinned `ca8107ec7f5d8de7`): **4 of 20 lanes
+non-success** — DDR-1132's discriminator applied first, so this is a find, not a setup
+failure, and it is the largest signal count any dispatch has produced. `churn_runs`
+49/50/50/49 quoted from each lane's own `DONE` line; **200 boots verified by those four
+lines**, the other sixteen lanes' lines unread.
+
+**Three findings, kept separate:**
+
+1. **`disp = saves + 2` observed a SECOND time, `rq_on=0` again** (DDR-1118's stated
+   precondition absent 2 of 2) — **and both `saves+2` fires carry
+   `r15 = 0xFFFFFFFF80016842` = the return of `callq switch_wait_offcpu_sched`, while both
+   `saves+1` fires carry the predicted `finish_task_switch+0xd`.** This is the measurement
+   DDR-1133 §5 said was owed on the candidate DDR-1119 pre-registered and DDR-1131 §2
+   closed by reading. **n=2: a co-occurrence, NOT a mechanism.** It points away from
+   DDR-1133 §10.3's reading (ii) without refuting it.
+2. **A fourth `ret` class** (`0x2`, lane 0) — six fires on one binary, four values.
+   Structural invariant `rflags slot = rsp + 0x30` holds: **eight fires, three binaries.**
+3. **The hunt's own printer discards panic reports.**
+   `open2_hunt_campaign.sh:141` is `grep -nE "$SIGNALS" | head -40` — matching lines only,
+   no context — so lane 12's completed panic report (~25 lines, written summary-first) never
+   reached the job log. **DDR-1088's defect in a third printer DDR-1088 did not touch.**
+   **Fixable from this branch**, unlike DDR-1132's remedy. **Designed, NOT shipped.**
+
+Lane 12 is **not pooled**: `isr_dispatch+0xfe7` = `callq kputs / cli / hlt / jmp`,
+DDR-1099's fifth producer (a *completed* panic's terminal halt), `panic_stage=3
+panics_silent=0`.
+
+§INV.18 satisfied by rebuild: `a390eab` at `OPEN2_HUNT=32` reproduces
+`ca8107ec7f5d8de7` bit-for-bit in a detached worktree; shipping `kernel.bin` verified
+`25f4dae4a3f90bcb` before and after.
+
+**NEXT:** fire the next dispatch when the cap frees; write the printer fix as its own DDR
+with a fixture. No fix, no mechanism named, OPEN-2 does not close.
