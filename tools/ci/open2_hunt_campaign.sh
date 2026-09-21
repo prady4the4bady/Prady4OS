@@ -32,6 +32,42 @@ mkdir -p "$OUT"
 PIN="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
 echo "[campaign] kernel_pinned=${PIN:0:16} runs=$N smp=4"
 
+# DDR-1130 — ASSERT THE DATA-DISK PRECONDITION BEFORE RUN 1.
+#
+# Without these the guest gets ONE drive (build/pradyos.img, an MBR boot image
+# that is not mountable), so fs_test_thread RETURNS at main.c:1414-1417 and
+# rqstress_proof -- unconditional, ~1,500 lines below, after [boot-stamp] B --
+# is UNREACHABLE. Every run then reports NO-CHURN, deterministically, forever:
+# a wide window with nothing to catch in it, which is DDR-1097 §7.2's hazard
+# arriving from a second and entirely different cause. Measured: 2/2 runs, zero
+# [boot-stamp], zero rqstress, and 35/35 heartbeats at ymask=0 -- DDR-1096
+# §4.3's own signature for a kernel that cannot mount its filesystem, which is
+# the trap that DDR refused a harness over.
+#
+# The gates get these as MAKE prerequisites (`smoke-rqstress: $(IMG) fat-image
+# sfs-image`) and open2-hunt.yml builds them in its own step, so CI was never
+# exposed -- which is why DDR-1127 measured 60/60 with churn. A bare invocation
+# of this script has no prerequisites at all, and had no assertion either: the
+# binary precondition is asserted (PIN, above, DDR-1060 §9) and this one was not.
+#
+# ASSERT, DO NOT BUILD (DDR-1130 §6). Invoking make here would let the pin move
+# mid-campaign, which is precisely what VOIDED a campaign in DDR-1060 §9.
+missing=""
+for img in build/fat.img build/sfs.img; do
+    [ -f "$img" ] || missing="$missing $img"
+done
+if [ -n "$missing" ]; then
+    echo "[campaign] ABORT before run 1: missing data disk(s):$missing"
+    echo "[campaign]   Without them the guest has no mountable filesystem, so"
+    echo "[campaign]   rqstress_proof never runs and EVERY run reports NO-CHURN."
+    echo "[campaign]   That is not a clean result; it is not an experiment."
+    echo "[campaign]   Build them first (this script deliberately will not):"
+    echo "[campaign]       make fat-image sfs-image"
+    echo "[campaign]   then re-check the pin, because those targets can rebuild"
+    echo "[campaign]   the kernel (DDR-1060 §9): sha256sum build/kernel.bin"
+    exit 2
+fi
+
 # DDR-1129: `[schedcheck]` was MISSING here, and it is the line that NAMES THE
 # MECHANISM. DDR-1128's capture halted at sched.c:1857 -- DDR-1105's next->rsp
 # validity check -- which emits `[schedcheck] next->rsp invalid ... halting.`
