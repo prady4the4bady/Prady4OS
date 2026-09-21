@@ -14241,3 +14241,120 @@ of this host, and a null here bounds nothing about CI.**
   (`connect_rejected`) and there is no artifact-download tool here. A session
   with blob egress or `gh` should pull it.
 - Carriers at **DDR-1130+** (4 sites, 0 stale). `GLOBAL_FORBIDDEN` 77.
+
+---
+
+## CHECKPOINT 2026-09-21 — operator priority shift, and the hunt was not running its workload
+
+### 1. OPERATOR INSTRUCTION (PR #17, comment 5757819953, verified OWNER at source)
+
+Priority shift, in their words: *"a real shot at closing OPEN-2 THIS WEEK, not
+waiting for next Sunday's cron."* Four asks: dispatch `open2-hunt` repeatedly
+today/this week at as high a lane/run count as the CI budget reasonably allows;
+the moment a `[schedcheck]` fires with readable `rq_on=`/`disp=`/`saves=`,
+resolve it against DDR-1118's discriminators **immediately** and report; do not
+burn time routing around the blocked artifact; short updates after each dispatch.
+**Conditional authorisation:** if a real mechanism is named this week, fixing it
+and driving to 3-green/promote/tag is authorised without separate approval —
+*"once you have a named cause and a working fix, verified the way you've been
+verifying everything else."* That conditional has **not** been met: no mechanism
+is named and OPEN-2 has not moved.
+
+Their premise was checked and holds: `dcd7504` did ship `[schedcheck]` into
+`SIGNALS` and raise the cap to `head -40`, so a fire now prints the diagnosis in
+the job log rather than only the symptom (DDR-1129 §7 item 2).
+
+### 2. DISPATCHES — 800 boots, both pinned
+
+| # | run | ref (pinned SHA, not a branch) | shape |
+|---|---|---|---|
+| 1 | `35581509323` | `fd98170…` | `lanes=20 runs=20 hunt=32` = 400 boots |
+| 2 | queued behind #1 | `4b0c18d` | same shape = 400 boots |
+
+20 lanes is both the workflow ceiling and the Free-plan concurrency cap; **the
+repo is public**, so Actions minutes are unmetered and the cap is the only budget.
+Pinned to SHAs because a branch ref would split the dataset across trees when I
+pushed mid-flight — and because it is the single-SHA discipline PR #21's review
+asked for. **Both pool with DDR-1128's 60:** `git log a390eab..HEAD -- kernel/**
+Makefile boot/** user/** arch/**` is EMPTY, so the `OPEN2_HUNT=32` build is still
+bit-identical to `ca8107ec7f5d8de7`.
+
+### 3. DDR-1130 §6.2 SHIPPED AND MEASURED (`4b0c18d`)
+
+The existence-only check from `fd98170` **accepts the artefact a failed build
+produces** — `make fat-image` `dd`s 64 MiB of zeros then runs `mkfs.fat`, so an
+absent `mkfs.fat` leaves a file that passes `[ -f ]` and cannot be mounted. Now
+content-checked (`0x55AA` at 510, `FAT32` at 82); `sfs.img` deliberately checked
+only for non-empty, because it is legitimately blank by design.
+
+Three arms, only the script varying: arm 0 (existence-only, zero-filled) **ACCEPTED
+and booted on it**; arm A (content, same file) **REJECTED at run 0, rc=2, no QEMU
+launched**; arm B (content, real FAT32) accepted. **Arm 0 is load-bearing** —
+without it "the check catches it" and "it was always going to pass" are the same
+observation. Two defects of my own were removed first (two `echo`s at column 0; a
+`[ -f ]` re-test that `[ -z "$bad" ]` already implies).
+
+§9: campaign re-run with disks present → **`runs=10 signal_runs=0 churn_runs=10`**
+on `ca8107ec7f5d8de7`, re-derived from the ten captures, against **0 of 2** before.
+`signal_runs=0` bounds essentially nothing (95% UB **25.9%**) and is **NOT** offered
+as a bound; pooling it with DDR-1127's zeros is the error that DDR warns about.
+
+### 4. THE ANALYSIS PATH IS PRE-STAGED AND VALIDATED (do not re-derive)
+
+Worktree `scratchpad/wt-a390eab` holds `build/kernel.elf` **and** `kernel.bin` at
+`ca8107ec7f5d8de7` — DDR-1128's own binary — and this container HAS `nasm`,
+`llvm-objdump`, `llvm-nm`, `python3` (**unlike DDR-1129's container**, which is
+why that DDR owed its resolution). Validated end-to-end against DDR-1129's
+recorded answer:
+
+```
+bash tools/ci/sym_at.sh 0xFFFFFFFF80016D91 build/kernel.elf
+  -> schedule_locked  base=0xffffffff80016720  offset=+0x671
+llvm-objdump -d  ->  +0x670: hlt   +0x671: jmp .-1
+```
+
+**`sym_at.sh` takes `<addr> [elf]`, address FIRST.** Reversed, it prints
+`sym_at: 0x… missing`, which reads like "address not found" and means "that file
+does not exist". It cost a minute here; it would cost more mid-diagnosis.
+
+The emit one line above the halt is `sched.c:1732`. **Decision rule, ready to
+apply:** `disp == saves + 2` → switched in twice with no save between, double
+resume **confirmed**; `rq_on=1` → thread also queued while resumed, the named
+precondition; `rq_on=0` **and** `disp == saves + 1` → DDR-1120's outcome, consumed
+frame, mechanism refuted **on that artefact** — and note the identity is **blind to
+a recycled TCB** (kmalloc does not zero, so a reissued TCB satisfies `saves+1`
+too); `rq_on=?` → the field itself is untrustworthy.
+
+### 5. THE RED CHECK ON PR #17 IS GITHUB'S
+
+Six `github-advanced-security` failures: `CAPIError: 400 The requested model is
+not supported`, `COPILOT_AGENT_MODEL: sweagent-capi:claude-opus-5[...]`. GitHub's
+own hosted Copilot agent against their own API. **Not in this repo** —
+`.github/workflows/` is exactly `ci.yml` and `open2-hunt.yml` — and it fails
+identically on **six head SHAs including docs-only ones**, which beats a re-run.
+Not `pradyos-ci`, so §INV.15 keeps it out of the 3-green criterion. Reported once
+(comment 5758115691); **not commenting on it again.**
+
+### 6. A MISREADING OF NON-NEGOTIABLE 6, RECORDED SO IT IS NOT REPEATED
+
+`GLOBAL_FORBIDDEN` is a **string built by `printf '%s\n'`**, not an array. So
+`wc -l` on the source range gives **33** and `${#GLOBAL_FORBIDDEN[@]}` gives **1**,
+and neither is wrong about the file. The count the rule means is the lines of the
+**expanded** string:
+
+```
+source <(sed -n '/^GLOBAL_FORBIDDEN=/,/current FAIL.)"$/p' tools/qemu_runner/boot_test.sh)
+printf '%s\n' "$GLOBAL_FORBIDDEN" | wc -l      # 77
+```
+
+Verified **77**. The sed terminator is current, not stale.
+
+### 7. STILL OWED
+
+- **DDR-1129 §7 item 1** — the `[schedcheck]` field values. Artifact
+  `10603519323` expires **2026-10-04** and stays proxy-blocked
+  (`productionresultssa9.blob.core.windows.net`, `connect_rejected`); per the
+  operator, not worth routing around now that a fire prints in the job log.
+- Carriers at **DDR-1131+** (4 sites). `GLOBAL_FORBIDDEN` 77. 179 gates.
+  hygiene **ALL EIGHT**. No kernel change; `kernel.bin` not rebuilt.
+- **OPEN-2 does not close. No mechanism named.**
