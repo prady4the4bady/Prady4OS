@@ -265,3 +265,78 @@ DDR-1129's `SIGNALS` fix prevented on the other side of the same script.
   (policy denial)"* for `productionresultssa9.blob.core.windows.net:443`, and
   `/root/.ccr/README.md` §"403 / 407 from the proxy" says plainly *"Do not retry
   or route around it — report the blocked host."* Reported here; not routed around.
+
+---
+
+## 6.2 AMENDMENT, same day — EXISTENCE IS NOT SUFFICIENCY, and I hit it within minutes of shipping §6
+
+§6's check tests `[ -f build/fat.img ]`. **That is not enough, and this is not a
+hypothetical:** building the disks to run the campaign properly produced the
+counter-example immediately.
+
+**The artefact.** `make fat-image sfs-image` in the worktree exited **2**:
+
+```
+dd if=/dev/zero of=build/fat.img bs=1M count=64 status=none
+mkfs.fat -F 32 -n PRADYOS build/fat.img >/dev/null
+/bin/sh: 1: mkfs.fat: not found
+make: *** [Makefile:789: fat-image] Error 127
+```
+
+`dosfstools` was not installed. The recipe's **first** line is a `dd` of 64 MiB of
+zeros and the **second** is the `mkfs.fat` that failed, so what it left behind is
+`build/fat.img`, **exactly 67,108,864 bytes, entirely zero** — a file that
+
+* **passes `[ -f build/fat.img ]`**, so §6's assertion is satisfied, and
+* **cannot be mounted**, so `fs_test_thread` still returns at `main.c:1414-1417`
+  and every run still reports `NO-CHURN`.
+
+That is the *same* silent vacuity §6 was written to prevent, reached through a
+check that says it prevented it. A guard that reports success on the condition it
+exists to catch is the false-clean class this whole lineage keeps finding
+(DDR-1097 §5, DDR-1129 §2) — **arriving this time in my own guard, one commit
+after shipping it.**
+
+### 6.2.1 What is checked, and what deliberately is not
+
+| file | check | why |
+|---|---|---|
+| `build/fat.img` | boot signature `0x55AA` at offset 510 **and** `FAT32` at offset 82 | both lie in the first 512 bytes, one read; `fat-image` runs `mkfs.fat -F 32` so FAT32 is the **declared** format, not an inference |
+| `build/sfs.img` | exists and is **non-empty** | it is **legitimately blank by design** — the target's own output says *"16 MiB blank — kernel formats in place"* — so there is no content to check, and demanding one would be wrong |
+
+**The asymmetry is the point.** `sfs.img` gets the weaker check because a stronger
+one would be *false*: a correctly-built SFS disk is zeros. Applying the same rule
+to both files would have looked tidier and been incorrect for one of them.
+
+### 6.2.2 Vacuity, checked before the arm was written
+
+*"Assert the check still passes on a good tree"* is **vacuous** — it passes on §6's
+existing check and on no check at all. The discriminating input is **the
+zero-filled 64 MiB `fat.img` the failed build actually produced**, which the §6
+check accepts and this one must reject, naming the file and saying the build did
+not complete rather than that it is missing.
+
+### 6.2.3 Why not just rely on `make` failing loudly
+
+Considered and rejected as *insufficient*, not as wrong. The build failure **is**
+loud — rc 2, a named error. But the campaign's whole hazard is that its result is
+**silent and poolable**: 30 minutes later it prints `signal_runs=0 churn_runs=0`,
+which a later session can pool with DDR-1127's CI `0`s that came from runs which
+**did** churn. A loud failure upstream does not stop a quiet wrong number
+downstream — and DDR-1060 §9's voided campaign is the precedent for a report that
+looked fine and was not.
+
+**Still ASSERT, not build** (§6 unchanged): the campaign does not run `mkfs.fat`
+either. It checks, names what is wrong, and says what to run.
+
+### 6.2.4 NOT claimed by this amendment
+
+* **NOT claimed that `fat.img` is the file that supplies the mount.** Whether a
+  blank `sfs.img` alone would let `vfs_mount` succeed is **not measured here**, and
+  the check requires both because that is exactly what `smoke-rqstress` declares
+  as prerequisites (`$(IMG) fat-image sfs-image`) — matching the gate's own
+  declaration rather than a minimal set nobody has established.
+* **No defect in `Makefile`'s `fat-image`.** `dd`-then-`mkfs` is the normal shape;
+  the missing package is an environment fact, and the recipe reported it correctly.
+* **Nothing about OPEN-2 changes.** No fix, no mechanism, no rate; DDR-1129 §7
+  item 1 stays owed.
