@@ -125,9 +125,66 @@ The output bound is asserted directly in the fixture rather than as a separate m
 
 ## §7 — RESULTS
 
-*(appended by the implementing commit)*
+**Implemented.** The printer is moved out of the campaign into `tools/ci/hunt_print.sh`,
+which the campaign sources, so **there is one copy of it**. DDR-1088 fixed two copies of the
+same printer in one commit because copies drift, and the hunt turned out to be a third copy.
+Detection is byte-for-byte unchanged: `SIGNALS`, `sig=$(grep -cE ...)`, the verdict,
+`signal_runs` and `churn_runs` are all the same.
 
-## §8 — NOT CLAIMED (design stage)
+**Shipped behaviour:** (1) the index `grep -nE "$SIGNALS" | head -40` is kept verbatim, and
+it now prints `index TRUNCATED: N matches, first 40 shown` when the cap cuts it off. Lane 12
+filled the cap exactly, and nothing in the output would have said so if one more line had
+been dropped. (2) Around every match that is not an `[hb]` heartbeat, it prints a context
+window of 5 lines before and 40 after, with overlapping windows merged. The 40 is sized from
+DDR-1088's measurement: a real report is 33 lines, and the walker is bounded at 8 frames.
+(3) Total context is capped at 240 lines, and hitting that cap prints `context TRUNCATED`.
+The code uses POSIX awk only, because this host's awk is mawk (DDR-1079/1121).
+
+**The fixture reproduces lane 12's layout (§6(b)):** 214 boot lines, the banner, a 33-line
+body, 36 heartbeats carrying `panic_stage=`, and 4 `[apfreeze]` shots, which gives **41
+matches against a cap of 40**. The selftest **checks the fixture's own property (§6(a))**:
+the body matches `SIGNALS` exactly once, on the banner. Without that check, arms A and B
+could pass with no context printed at all. The selftest also **fails if its copy of
+`SIGNALS` drifts from the campaign's.**
+
+**Arms:** A is the near arm (`component: NEXUS isr`, the line after the banner). B is the
+far arm (`halting.`, 32 lines after the banner, and the one the claim rests on). C checks
+that the index reports its truncation. D checks that the output stays within bounds. E uses
+a second fixture, 30 matches 60 lines apart, which is over the cap at any window of 5 or
+more, and checks that the context cap reports itself.
+
+| printer | failing arms | expected |
+|---|---|---|
+| shipped | none | none |
+| **M1** pre-fix `grep \| head -40` verbatim | A B C E | A B C E |
+| **M2** trailing context 5 | **B only** | B |
+| **M3** leading context only (DDR-1088's original defect) | A B | A B |
+
+**Each mutant fails a different set of arms.** M3 is additionally checked to have printed
+leading context (`filler line 213`), because a leading-only printer that printed nothing
+would not be the defect it is meant to model. **M2 corrected the fixture:** with 20 spread
+matches, M2's narrower windows fitted under the context cap, so it also failed E. That
+measured a property of the fixture, not independence between arms, so the spread fixture
+was widened to 30 matches to go over the cap at any window of 5 or more.
+Arm D is asserted directly on every run, as planned, and has no mutant of its own.
+
+**Measured on a REAL panic capture, not only the fixture.** `make smoke-mce` produced a
+genuine `#MC` panic report (`build/mce.log`, 115 lines, kernel `25f4dae4a3f90bcb`, rc=0).
+Both printers were run over it:
+
+| | lines printed | `component:` | `RIP=` | `backtrace` | `halting.` |
+|---|---|---|---|---|---|
+| before (pre-fix printer) | **1** | 0 | 0 | 0 | 0 |
+| after | 37 | 1 | 1 | 1 | 1 |
+
+**Before, the printer showed one line: the banner.** That is DDR-1134 §6's finding
+reproduced on real kernel output rather than argued from it.
+
+Wired as `make ci-huntprint-selftest` into `hygiene_check.sh` (**ALL NINE**) and into
+`ci.yml`'s `shard-check` job, next to the other toolchain-free checks.
+`build/kernel.bin` is untouched (`25f4dae4a3f90bcb`) and was re-hashed after every QEMU run.
+
+## §8 — NOT CLAIMED
 
 - **NO FIX FOR OPEN-2**, no mechanism named, OPEN-2 does not close, no open issue moves.
   This changes what a **future** capture can say and nothing about any past one — lane 12's

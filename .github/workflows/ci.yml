@@ -59,6 +59,12 @@ jobs:
       - name: cr3-writer set vs the missing TLB shootdown (DDR-1077)
         run: make ci-cr3-writers-check
 
+      # DDR-1135. The OPEN-2 hunt's signal printer runs only when a hunt lane
+      # finds something, so no green run exercises it. Fixture-only: bash, grep
+      # and awk, no toolchain.
+      - name: hunt signal printer prints the report, not just its banner (DDR-1135)
+        run: make ci-huntprint-selftest
+
       # DDR-859/862. The hybrid takes its flags AND its compiler from the
       # Makefile, so configure needs the Makefile's clang to exist. Installed
       # explicitly rather than relying on the runner image happening to carry

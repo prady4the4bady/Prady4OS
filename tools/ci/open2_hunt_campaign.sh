@@ -28,6 +28,8 @@ cd "$ROOT"
 N="${1:-10}"
 OUT="build/gatelogs/open2hunt"
 mkdir -p "$OUT"
+# DDR-1135: the ONE copy of the signal printer (tested by hunt_print_selftest.sh).
+. "$ROOT/tools/ci/hunt_print.sh"
 
 PIN="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
 echo "[campaign] kernel_pinned=${PIN:0:16} runs=$N smp=4"
@@ -138,7 +140,11 @@ for i in $(seq 1 "$N"); do
         # plus 1 `[schedcheck]`, i.e. EXACTLY 5 -- one more shot and the cap
         # would have silently dropped a line. The whole point of this print is
         # that the diagnosis and the symptom travel together.
-        grep -nE "$SIGNALS" "$cap" | head -40
+        # DDR-1135: the index above WAS the whole printer -- matching lines
+        # only -- so a summary-first panic reached the job log as its banner
+        # alone. hunt_print keeps that index verbatim, says when it truncates,
+        # and adds leading+trailing context around every non-[hb] match.
+        hunt_print "$cap" "$SIGNALS"
     else
         echo "[campaign] run=$i rc=$rc ${hb} $ch clean"
     fi
