@@ -1977,3 +1977,16 @@ Lane 19 reproduces the DDR-1121/1122 `spin_lock_contended ← submit ← vblk_re
 two frozen CPUs. Lane 12: silent-loser #UD at a RIP inside tid 22's kernel stack.
 Lane 5: a lane-12-shape panic whose body the old printer dropped — DDR-1135 fixes that
 printer in the same push. NO FIX, NO MECHANISM, OPEN-2 does not close. Docs only.
+
+### DDR-1137 (2026-09-23) — the first hunt with the context printer; at the vblk site the lock dump now agrees with the backtrace
+Run 35885600287, 20 lanes × 55 runs on `ca8107ec7f5d8de7` (tree 6305e20). 4 of 20 lanes
+non-success (0, 4, 9, 15), no cancellations, and **all 20 DONE lines read**: 1,100 boots,
+1,099 with churn, 4 signal runs, no panic. Two `[schedcheck]` fires (lanes 4, 15), both
+`disp = saves + 2`, `rq_on=0` (8 of 8 saves+2 ever), r15 = `finish_task_switch+0xd`
+(the r15 split is now 4 vs 4), `rflags = rsp + 0x30` (13 of 14). Two
+`spin_lock_contended ← submit ← vblk_read` freezes (lanes 0, 9), each with two frozen
+CPUs, and — the first lock dumps at this site on this binary — **the live waiter is on
+unit 1's `compl_lock`** (`g_inst+0x828`, stride `imulq $0x420` measured), so the
+backtrace and the table agree, unlike DDR-1121. Who holds it is not captured. Addresses
+resolved against a bit-for-bit a390eab rebuild in a removed scratch worktree. NO FIX, NO
+MECHANISM, OPEN-2 does not close. Docs only; `kernel.bin` `25f4dae4a3f90bcb` unchanged.
