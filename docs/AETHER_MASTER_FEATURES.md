@@ -1959,3 +1959,21 @@ guard, because neither idle stack came from `kmalloc`.
 **No fix, no cause named, OPEN-2 does not move.** `GLOBAL_FORBIDDEN` **77**
 unchanged; **179 gates**, no new gate; `kernel.bin` **1,315,210 B — size
 unchanged**.
+
+**DDR-1135 (2026-09-23) — tooling only, no AETHER feature moves.** The OPEN-2 hunt's signal
+printer now prints each finding with leading and trailing context instead of matching lines
+only, so a panic reaches the job log as a report rather than a bare banner. It is gated by
+`ci-huntprint-selftest` (hygiene ALL NINE). `kernel.bin` is unchanged at `25f4dae4a3f90bcb`,
+`GLOBAL_FORBIDDEN` stays at 77, and there are still 179 gates.
+
+### DDR-1136 (2026-09-23) — the 1,200-boot hunt dispatch was sized past its own timeout
+Run 35643638290 (`runs=60`) could not fit `timeout-minutes: 180` at 180 s/boot: 17 lanes
+cancelled inside run 60, and the 3 that completed did so because short signal runs gave
+time back (a selection effect). `runs <= 55` from now on. 1,184 boots read on
+`ca8107ec7f5d8de7`. Four `[schedcheck]` fires, all `disp = saves + 2`, all `rq_on=0`
+(6 of 6 ever). DDR-1134 §3's r15 co-occurrence is broken (2 of 6 carry
+`finish_task_switch+0xd`). `rflags = rsp + 0x30` broke once (lane 11, reaper path).
+Lane 19 reproduces the DDR-1121/1122 `spin_lock_contended ← submit ← vblk_read` freeze with
+two frozen CPUs. Lane 12: silent-loser #UD at a RIP inside tid 22's kernel stack.
+Lane 5: a lane-12-shape panic whose body the old printer dropped — DDR-1135 fixes that
+printer in the same push. NO FIX, NO MECHANISM, OPEN-2 does not close. Docs only.

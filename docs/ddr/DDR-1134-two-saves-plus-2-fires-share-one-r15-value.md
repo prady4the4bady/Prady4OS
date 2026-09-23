@@ -300,3 +300,13 @@ DDR-1042's failure mode — a plausible number with nothing under it.
 - **NO artifact was fetched and the proxy was not routed around.** The lane captures live
   in per-lane artifacts; `/root/.ccr/README.md` says to report the blocked host rather than
   retry, and everything above was read from the **job logs**.
+
+---
+
+**CORRECTED AT THE SITE 2026-09-23 — DDR-1136 §3.2.** §3's co-occurrence (every saves+2 fire
+carries `r15 = …16842`) held at n=2 and **does not hold at n=6**: hunt run 35643638290 lanes
+14 and 5 are saves+2 fires with `r15 = …1668D` (`finish_task_switch+0xd`). The datum that
+pointed away from DDR-1133 §10.3 reading (ii) is gone; nothing is established in its place.
+Also DDR-1136 §3.3: the `rflags = rsp + 0x30` "structural invariant" broke on lane 11
+(`rsp + 0x1C0`), so it is not universal. This DDR is not withdrawn; the text above is left
+as written so the record shows what was believed and when (DDR-1110).

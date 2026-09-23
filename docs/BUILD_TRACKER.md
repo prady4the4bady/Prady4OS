@@ -6358,3 +6358,31 @@ Checking §3.1's readings **in the source** found one wrong and two missing.
 - **Not shipped:** making the increments atomic is the hottest path in the kernel,
   the cost DDR-1047 refused and DDR-1116/1118 each declined — **and it would fix
   the instrument, not the defect.**
+
+### DDR-1135 — the hunt's signal printer prints the report, not just its banner (2026-09-23)
+
+- **Defect (DDR-1134 §6):** `open2_hunt_campaign.sh` printed `grep -nE "$SIGNALS" | head -40`,
+  i.e. **matching lines only**. A panic is written summary-first, so the job log carried the
+  banner and none of `component:` / `RIP=` / `backtrace` / `halting.`.
+- **Fixed:** printer extracted to `tools/ci/hunt_print.sh` (one copy, sourced). Detection is
+  **unchanged**. The index is kept verbatim and now names its own truncation. Merged context
+  (5 before / 40 after) is printed around every non-`[hb]` match, capped at 240 lines, and
+  that cap also names itself when it is hit.
+- **Gate:** `ci-huntprint-selftest` (hygiene **ALL NINE**, and `ci.yml` `shard-check`). The
+  fixture is laid out like lane 12 (41 matches vs cap 40). M1 (pre-fix) fails A/B/C/E, M2 fails B only,
+  M3 (leading-only) fails A/B.
+- **Real capture:** on a `smoke-mce` panic log the old printer shows **1 line** and the new
+  one 37, including all four report markers.
+- **Not claimed:** no kernel change (`25f4dae4a3f90bcb`), no OPEN-2 fix, no mechanism, no rate.
+
+### DDR-1136 (2026-09-23) — the 1,200-boot hunt dispatch was sized past its own timeout
+Run 35643638290 (`runs=60`) could not fit `timeout-minutes: 180` at 180 s/boot: 17 lanes
+cancelled inside run 60, and the 3 that completed did so because short signal runs gave
+time back (a selection effect). `runs <= 55` from now on. 1,184 boots read on
+`ca8107ec7f5d8de7`. Four `[schedcheck]` fires, all `disp = saves + 2`, all `rq_on=0`
+(6 of 6 ever). DDR-1134 §3's r15 co-occurrence is broken (2 of 6 carry
+`finish_task_switch+0xd`). `rflags = rsp + 0x30` broke once (lane 11, reaper path).
+Lane 19 reproduces the DDR-1121/1122 `spin_lock_contended ← submit ← vblk_read` freeze with
+two frozen CPUs. Lane 12: silent-loser #UD at a RIP inside tid 22's kernel stack.
+Lane 5: a lane-12-shape panic whose body the old printer dropped — DDR-1135 fixes that
+printer in the same push. NO FIX, NO MECHANISM, OPEN-2 does not close. Docs only.

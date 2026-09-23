@@ -14525,3 +14525,29 @@ panics_silent=0`.
 
 **NEXT:** fire the next dispatch when the cap frees; write the printer fix as its own DDR
 with a fixture. No fix, no mechanism named, OPEN-2 does not close.
+
+## CHECKPOINT 2026-09-23 — DDR-1135 implemented
+
+The hunt's signal printer is fixed: `tools/ci/hunt_print.sh` is now the single copy, and the
+campaign sources it. The 40-line index is kept verbatim and says when it truncates. Around
+every non-`[hb]` match it adds leading and trailing context (5/40, capped at 240).
+Detection is unchanged. `ci-huntprint-selftest` builds a fixture laid out like lane 12 and
+runs three mutants, each failing a different set of arms. It is wired into hygiene
+(**ALL NINE**) and `ci.yml`. Measured on a real `smoke-mce` panic capture: the printer
+showed 1 line before the fix and 37 after. No kernel change (`25f4dae4a3f90bcb`). The DDR
+free range is advanced to **DDR-1136+** at all four carriers.
+
+**NEXT:** next hunt dispatch will be the first to use the new printer. OPEN-2 still open; no
+mechanism named.
+
+### DDR-1136 (2026-09-23) — the 1,200-boot hunt dispatch was sized past its own timeout
+Run 35643638290 (`runs=60`) could not fit `timeout-minutes: 180` at 180 s/boot: 17 lanes
+cancelled inside run 60, and the 3 that completed did so because short signal runs gave
+time back (a selection effect). `runs <= 55` from now on. 1,184 boots read on
+`ca8107ec7f5d8de7`. Four `[schedcheck]` fires, all `disp = saves + 2`, all `rq_on=0`
+(6 of 6 ever). DDR-1134 §3's r15 co-occurrence is broken (2 of 6 carry
+`finish_task_switch+0xd`). `rflags = rsp + 0x30` broke once (lane 11, reaper path).
+Lane 19 reproduces the DDR-1121/1122 `spin_lock_contended ← submit ← vblk_read` freeze with
+two frozen CPUs. Lane 12: silent-loser #UD at a RIP inside tid 22's kernel stack.
+Lane 5: a lane-12-shape panic whose body the old printer dropped — DDR-1135 fixes that
+printer in the same push. NO FIX, NO MECHANISM, OPEN-2 does not close. Docs only.
