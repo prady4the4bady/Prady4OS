@@ -26,6 +26,131 @@ precisely because that bar has not been met.
 
 ---
 
+## SECTION 0 — v1.0.0 GO/NO-GO ACCOUNTING (operator instruction, PR #17, 2026-09-24)
+
+**Verdict: NO-GO until the operator signs off on this list.** No release ISO is
+built, nothing is tagged, `main` is not promoted. The instruction was comment
+5821389748, verified at the source as `author_association: OWNER`.
+
+**Dispositions:**
+- **(a)** fixable before the tag. Not yet done; awaiting your go.
+- **(b)** defer, with the reason named.
+- **(c)** needs your decision.
+
+Every fact below was measured in the tree on `bf31a19` for this section. None
+of it was carried forward from memory. Where a row in this document already
+covers an item, it is cited rather than repeated.
+
+**Six findings you did not list, which change the picture:**
+
+1. **`README.md` contradicts `LICENSE`.**
+   - The README says *"MIT licensed (see `LICENSE`)"*.
+   - `LICENSE` opens *"PROPRIETARY SOFTWARE LICENSE … All Rights Reserved"*.
+   - The README also reads *"Status: Phase 0 … Nothing boots yet"*.
+2. **No third-party license notices ship.**
+   - lwIP (BSD-3-Clause) is linked into `kernel.bin`.
+   - musl (MIT) is linked into user programs.
+   - Their license texts exist only inside `third_party/*/`. `grep -n
+     'COPYING\|licen' Makefile` returns nothing, so no license text reaches the
+     ISO.
+   - BSD-3-Clause requires the copyright notice to be reproduced in the
+     documentation of a binary distribution. MIT requires the notice to be
+     included.
+3. **On a real UEFI-only machine the OS may show nothing on screen.**
+   - Measured: there is **no UEFI GOP framebuffer path**. `grep -rniE
+     'GOP|GraphicsOutput'` over `boot/` and `kernel/` returns nothing.
+   - The graphical desktop draws only through `virtio_gpu_fb()`.
+   - The ring-0 console is COM1 plus VGA **text mode** at `0xB8000`. Pure-UEFI
+     firmware does not provide text mode, and most laptops have no COM1.
+   - **Untested, and not claimed either way.** But it outranks every other
+     real-hardware item below.
+4. **Release notes have a home.**
+   - `CHANGELOG.md` exists; its last entry is `v0.1.0-aether`, 2026-07-29.
+   - DDR-1124 said *"there are no release notes"*. That was measured with
+     `find -iname '*release*'`, which cannot match `CHANGELOG.md`.
+   - Correction: the v1 notes belong in `CHANGELOG.md`.
+5. **The dependency-PR list in your comment has drifted.**
+   - #3 and #15 are **closed**.
+   - #18, #19, #24 and #25 are **open** and were never triaged.
+   - Item 6 covers all of them.
+6. **Two premises in D/E are already partly shipped.**
+   - A CSPRNG source exists (item 30).
+   - SFS has on-disk snapshots, reachable only from a kernel self-test
+     (item 21).
+
+### A. Unresolved defects
+
+| # | Item | Disposition | Measured basis |
+|---|---|---|---|
+| 1 | OPEN-1 route 1 (CI-only hang) | **(c)**. My recommendation: ship with route 1 **named open** in the release notes. | The local route is exhausted (DDR-1002, DDR-1023). No occurrence has been recorded since DDR-1009 §2. That is a count, not a rate. Three instruments are now armed that did not exist when route 1 was last seen: `mnt_lock` waiters (DDR-1060, observed live in DDR-1122), a panic report that reaches the CI log (DDR-1088), and an `[apfreeze]` CPU census (DDR-1123). DDR-1124 §3 is the paragraph to use. Nothing is fixable without an artefact (§NON-NEGOTIABLE 3). Whether to tag with it open is your call. |
+| 2 | OPEN-12 (ring-0 exception, one occurrence) | **(c)**. Same recommendation: name it open. | DDR-996 fixed a TCB freed while still queued. That fix is mutation-checked and was found in OPEN-12's second, readable capture. The original capture lost its RIP, so identity is unproven. No recurrence has been recorded since. It closes on a clean campaign, not on the fix. |
+| 3 | OPEN-13 (kheap double-free, one occurrence) | **(c)**. Same recommendation. | The DDR-1024 instrument is live in the shipped kernel (`KHEAP_DEBUG` is unconditionally 1). The next occurrence names both free sites. No mechanism is known, so no fix. |
+| 4 | Two panics that survived the OPEN-2 fix | **(b)**, and **the release notes must not call OPEN-2 closed as a whole**. | **I cannot confirm they are separate from OPEN-2, and I cannot confirm they are the same.** DDR-1139 §8.1 states this. The lane-15 panic (`#PF err=0x11`, `CS=0x126246539`, `RSP=1`, `RIP == CR2`) is a garbage trap frame, which is the shape one thread running on two CPUs over one kernel stack would produce. The `cap.c` `resolve` `#GP` (`loser_vec=13`, a non-canonical load) fits a clobbered pointer from the same cause. Neither recurred in 2,200 fixed-kernel boots. That is consistent with both being downstream of the double dispatch. **It is not proof.** Suggested wording: *"The dominant OPEN-2 mechanism (double dispatch, DDR-1139) is fixed and confirmed against a pre-registered criterion. Two rarer panic signatures seen before the fix have not recurred and are unattributed."* |
+
+### B. Decisions you owe (listed, not defaulted)
+
+| # | Item | Disposition | Detail |
+|---|---|---|---|
+| 5 | DDR-1059 signed ledger key custody | **(c)**. My recommendation: **defer the connected ledger entirely for v1.** | The three routes are: (i) a hardware root of trust, which needs a TPM/secure-boot subsystem this OS lacks; (ii) first-boot key generation into a protected store, which is circular until (i) exists; (iii) out-of-band publication of the public key at install time, which **presupposes an installer** (item 19) and therefore does not exist for a live ISO. So none of the three is available for v1 as it stands. What ships is true and should be worded as DDR-1059 recommends: *"post-quantum signature primitives, NIST-vector-verified, and a tamper-evident audit chain"*. **Never** "post-quantum signed audit ledger". |
+| 6 | Dependency PRs | **(c)** to execute, because merging to `dev/phase1` is your action (§1.3). My triage is below; say "go" and I will close and comment the ones marked close. | **#2** close: superseded, lockfile already past its fixes. **#3** already closed. **#7** and **#8** defer until after the tag: a `ci.yml` change resets the 3-green evidence. **#9** safe to merge: in-range lockfile pin, dev tool only. **#15** already closed. **#18** (`web-tree-sitter` 0.22.6 → 0.27.0) hold: an exact-pinned WASM parser with API breakage risk; this is the old #15 again. **#19** (`fast-uri` 3.1.7) close as done: `tools/graph_mcp/package-lock.json` on this branch already carries 3.1.7 (CLAUDE.md Dependabot row, 2026-09-13). **#24** (`ubuntu` 24.04 → 25.10) defer post-1.0: same reason as #3, the Dockerfile pins 24.04 deliberately. **#25** (`upload-artifact` 4 → 7) defer: same evidence-reset reason as #7. **None of the eight can reach `kernel.bin` or a gate result.** |
+| 7 | B#14 NAS / B#15 PMM policy | **(c)**: **flagged for respec, not dropped.** | B#14 names the process scheduler (`sched.h:5`) but is filed under storage (DDR-1103 §2). B#15 has no acceptance criterion. Its obvious reading, a NUMA-affine policy, is shipped and gated (`smoke-numa-alloc`). Both need you to state what you want. |
+| 8 | Group G (five of six rows) | **(c)**: **flagged for respec, not dropped.** | 9.6 is built (DDR-1076). 9.1 is the wrong instrument (UART-bound). 9.2 is at its floor. 9.3 has no subject; a shootdown is a prerequisite of `CLONE_VM`, not an optimisation. 9.4 is a virtio `EVENT_IDX` protocol change, not assembly. 9.5 is a cross-address-space copy problem. On top of that, a speedup figure is unproducible under TCG (DDR-1075 §1), so the group's acceptance criterion itself needs respec. |
+| 9 | `CAP_OCR`, `CAP_SCENE`, `CAP_NET_BROWSE` | **(c)**. My recommendation: **defer post-1.0.** | DDR-982 §5.3 withdrew enforcement pending you. `agent_caps` is written once and read nowhere, and the gated action types are deliberately absent from the enum, so a gate could only test `uint32_t`. These three block the AHNIS, IRIS and LUMYN spawnable rows. PRAX is blocked separately, by the `ACTION_EXEC_CODE` refusal (DDR-1113 §1). There is no hardware or model path for OCR or scene analysis in v1 at all. |
+
+### C. v1 scope confirmation
+
+| # | Item | Disposition | Detail |
+|---|---|---|---|
+| 10 | Group F backlog | **(b)**: defer post-1.0, and **state it in the release notes**. | Shipped and gated: Section 3C (8 of 8 action types), the 3D daemon (21 of 21), F#68, and F#76's tamper-evidence half. Unbuilt: domain agents F#66/67/69–75, respawn (blocked by init's deliberate capability refusal, DDR-1085), arbitration, roster continuity, and the audit flusher (blocked by the write-path ceiling, DDR-1100). None of it can be built to the gate bar before a tag. |
+| 11 | Groups B/C/D remaining rows | **(b)**: defer post-1.0, with the named blockers stated. | SFS on-disk free tree (a pre-approved exception). IPv6: the ring-3 ABI is IPv4-typed (DDR-1104 §2). pthreads: needs a TLB shootdown first (DDR-1075/1077). futex: needs pthreads or `MAP_SHARED` (DDR-1038). Dynamic linking and TLS: TLS needs a trust anchor (DDR-1104 §1). `ls -R`: the VFS type is destroyed at the syscall boundary (DDR-1101). |
+| 12 | CI caching and shared build artifact | **(b)**, and **your premise is half wrong**. | The shared build artifact **is built** (DDR-1035): one build job, a published `sha256`, and every shard asserts the hash before and after its gates. rustup was **removed** from the shards. Only the apt cache is unbuilt (§1.5), and it is not release-relevant. |
+| 13 | Quantum-layer doc contradiction | **Fixed in `CLAUDE.md`** (§PHASE 3 now reads "SPECULATIVE FUTURE RESEARCH"). **(a)** for the residue elsewhere. | Still carrying the old framing: `README.md:15` ("quantum layer" in scope), `PRADYOS_Blueprint.md:345/411`, `docs/platform_profiles.md:18`, `PRADYOS_Claude_Instructions.md:159`. `SESSION_HANDOFF.md:442` and `OPERATOR_DIRECTIVE_2026-08-23.md:30` are historical records and are left as they are. A one-line "withdrawn, see CLAUDE.md §PHASE 3" note on each live doc would settle it. |
+| 14 | Logo and branding | **(c)**, unchanged from §1.1. | No branding art exists in the tree (§1.1). The placeholder mark must be replaced or licensed by you before public release. |
+
+### D. Real-hardware and end-user readiness
+
+| # | Item | Disposition | Measured basis |
+|---|---|---|---|
+| 15 | QEMU-only testing | **(b)**, and it **must** be stated in the release notes. | Every gate and hunt ran under QEMU TCG. The emulated set is wider than virtio: AHCI, NVMe and e1000e are also exercised. One further data point exists: a single owner-run **VirtualBox** boot (DDR-906: EFI arm, reached the scheduler). That is a third firmware and still not physical hardware. See also new finding 3: there is no GOP framebuffer, so a UEFI laptop may show nothing. |
+| 16 | No USB | **(b)** post-1.0. | Measured: no xHCI/EHCI/UHCI code at all. Input is PS/2 keyboard (IRQ1), virtio-input and COM1. Many laptops expose the internal keyboard as i8042/PS/2. USB keyboards work only while firmware legacy emulation persists, which is not guaranteed. A USB host stack is a subsystem, not a pre-tag fix. |
+| 17 | Secure Boot | **(c)**. | The UEFI loader is unsigned. On SB-enabled firmware the user must disable Secure Boot. Signing means either shim plus a Microsoft-signed chain, or user-enrolled keys (MOK). That is a distribution decision. Recommendation: document "disable Secure Boot" for v1. |
+| 18 | Power management | **(b)** post-1.0. | S3 is **discovered but deliberately refused**: `acpi_suspend_s3()` prints *"no resume path (waking vector unset)"* (DDR-892). No battery status. ACPI poweroff and reboot are shipped (DDR-746/747). |
+| 19 | Installer | **(c)**. | Measured: none. v1 is a live ISO. Whether v1 may ship live-only is your call. An installer also unblocks DDR-1059 route (iii). |
+| 20 | Update mechanism | **(b)** post-1.0. | `prad` is unbuilt. NSI 88–90 are reserved (§INV.12). With no installer (19) there is nothing to update in place. |
+| 21 | Backup and snapshots | **(b)**, with a correction: SFS **has** on-disk snapshots. | `SFS_MAX_SNAPSHOTS 16`, retained B+tree roots in the superblock (slice 4h). They are reachable **only** from `sfs_selftest_snapshot`; there is no ring-3 door and no user tooling. |
+| 22 | Audio | **(b)**: a pre-approved exception (Intel HDA). | Measured: none. |
+| 23 | NTP | **(b)** post-1.0. | Measured: none. The wall clock is the CMOS RTC. Buildable over the shipped UDP transport, but that needs the ring-3 UDP door plus per-send allowlist enforcement (DDR-1091). |
+| 24 | Accessibility and i18n | **(b)** post-1.0, stated in the release notes. | Measured: nothing. The UI is English-only, with a fixed Inter atlas. |
+| 25 | User accounts | **(c)**. | Measured: no uid, login or passwd anywhere. Single-user by construction. Recommend stating v1 is single-user. |
+| 26 | App sandboxing | **(b)**, stated precisely. | What exists: separate address spaces, W^X, SMEP/SMAP/CR0.WP, per-process capability tables, the CAP_NET allowlist, and privacy mode. What does not: per-app policy. Every `elf_load`ed program gets `CAP_FS_READ|CAP_FS_WRITE` on the default root (`elf.c`). |
+| 27 | Crash reporting and telemetry | **(c)**. | Measured: none. Any telemetry is a privacy-posture decision, and DDR-802 privacy mode would govern it. |
+| 28 | End-user docs | **(a)**, a minimum set before a public tag. | Only developer docs exist, and the README is stale (finding 1). A minimum README, boot guide and known-limitations list is writable before the tag. |
+| 29 | EULA and privacy policy | **(c)**. | `LICENSE` is proprietary and the README says MIT (finding 1). A legal text must come from you, not from me. |
+
+### E. Standard-OS-component audit
+
+| # | Item | Disposition | Measured basis |
+|---|---|---|---|
+| 30 | CSPRNG and entropy | **Premise corrected: a source exists (DDR-816).** **(b)** for the remainder. | `kernel/crypto/rng.h` is a real source: virtio-rng or RDSEED (bounded retry). It **fails closed**, with no jitter fallback by design, and the boot log names the source. There is **no DRBG**: every draw goes to the hardware source. Current consumers are the vault nonce and ACC. **No runtime ML-DSA key generation exists**: ML-DSA runs only against NIST KAT seeds in a probe, and the only signing key is the compile-time `g_owner_seed` (DDR-1059). KASLR is not built. On hardware with neither RDSEED nor virtio-rng, crypto refuses to start. That is the intended behaviour, and it must be named in the release notes. |
+| 31 | Swap | **(b)** post-1.0. | Measured: none. Also a correction: demand paging **does** exist for the user stack (ADR-038). |
+| 32 | fsck for SFS | **(b)** post-1.0. | Measured: no SFS checker. SFS has a journal (slice 4g) and CoW, which limit crash damage. The host-side `sfs_readback` is a reader, not a repair tool. |
+| 33 | Real GPU driver | **(b)**, but see finding 3: the missing **GOP** path is the real-hardware risk, not the missing Intel/AMD/NVIDIA drivers. | Only virtio-gpu and VGA text. A GOP linear-framebuffer path is the smallest route to any display on UEFI hardware. |
+| 34 | VT switching | **(b)**. | No tty switching. Up to four PRISM terminal windows via Ctrl+Alt+T (DDR-1027), plus PRISM on the serial line. |
+| 35 | Hot-plug | **(b)** post-1.0. | Measured: none. AHCI states it outright (`ahci.c:7`). |
+| 36 | Hardware watchdog | **(b)** post-1.0. | Measured: no iTCO or WDAT. A distinct item from §1.4's refused latch watchdog. |
+| 37 | Third-party license compliance | **(a)**: fixable before the tag. | See finding 2. Ship a `THIRD_PARTY_NOTICES` file (the lwIP `COPYING` plus musl's `COPYRIGHT`) in the ISO and the repo. The obligation is real for any binary distribution. |
+
+**What I propose to do on your "go", all doc or packaging, no kernel change:**
+- #13 residue notes.
+- #28 minimum user docs, including a README rewritten to match reality.
+- #37 notices file into the ISO.
+- The v1 section of `CHANGELOG.md`, carrying #1–#4, #15, #17 and #30's wording.
+- The PR closes you approve in #6.
+
+Every **(c)** row waits for you.
+
+---
+
 ## SECTION 1 — OPERATOR DECISIONS REQUIRED BEFORE USER TESTING
 
 **§1.1 and §1.2 are the only rows in this document marked YES** — the two

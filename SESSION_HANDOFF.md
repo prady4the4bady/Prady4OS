@@ -14612,3 +14612,35 @@ this time, not just the waiter."* Instrument only.
 - **Strength:** 95% upper bound ≈0.14% per boot on the fixed binary; P(0 in 2,200 | pre-fix ≈0.36%) ≈ 3.7e-4.
 - **CI:** `1b07e46` has **3 greens on one SHA** — push 35985675298, pull_request 35985679862, workflow_dispatch 36019677465, all shards success.
 - **Not claimed:** OPEN-2 as a whole is not declared closed. The `cap.c` `resolve` silent panic (DDR-1133 §6) and the pre-fix lane-15 panic did not recur in 2,200 boots and remain **unattributed** — consistent with being downstream of the double dispatch, not proof of it. `dblclaim=` was never seen non-zero. No kernel change in this entry; `GLOBAL_FORBIDDEN` 77, 179 gates, DDR free range **DDR-1140+**. Merge and promotion are the operator's.
+
+### 2026-09-24 — v1.0.0 go/no-go accounting (operator, PR #17 comment 5821389748, OWNER-verified)
+
+**The operator HALTED promotion/tagging pending a full accounting.** It lives in
+`docs/PRE_LAUNCH_CHECKLIST.md` **§0**, which covers all 37 items and gives each
+a disposition: (a) fix now, (b) defer with a named reason, or (c) needs an
+operator decision.
+
+**Verdict: NO-GO until operator sign-off.** Do NOT build the release ISO, tag
+`v1.0.0` or promote `main`.
+
+**New findings from that audit, measured on `bf31a19`:**
+- `README.md` says MIT, while `LICENSE` is proprietary. The README also still
+  says "Nothing boots yet".
+- No third-party license notices ship. lwIP (BSD-3) and musl (MIT) texts never
+  reach the ISO.
+- There is **no UEFI GOP framebuffer path**. A real UEFI-only machine may show
+  no output at all.
+- The release-notes home is `CHANGELOG.md`. This corrects DDR-1124, whose
+  `*release*` find missed it.
+- Dependabot PRs #3 and #15 are closed; #18, #19, #24 and #25 are open.
+- A CSPRNG source exists (DDR-816: virtio-rng or RDSEED, fail-closed, no DRBG).
+- SFS on-disk snapshots exist, but only a kernel self-test reaches them.
+
+**Proposed (a) work, awaiting "go", docs/packaging only:**
+- Quantum-doc residue notes.
+- Minimum user docs, including a README rewrite.
+- A `THIRD_PARTY_NOTICES` file shipped in the ISO.
+- The v1 section of `CHANGELOG.md`.
+- The PR closes the operator approves.
+
+No code change was made in this entry, and `kernel.bin` is unchanged.
