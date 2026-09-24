@@ -30,8 +30,8 @@ precisely because that bar has not been met.
 
 **Verdict: NO-GO until the operator signs off on this list.** No release ISO is
 built, nothing is tagged, `main` is not promoted. The instructions were comments
-5821389748 (items 1–37) and 5821490746 (items 38–48), both verified at the
-source as `author_association: OWNER`.
+5821389748 (items 1–37), 5821490746 (38–48) and 5821578910 (49–68), all
+verified at the source as `author_association: OWNER`.
 
 **Dispositions:**
 - **(a)** fixable before the tag. Not yet done; awaiting your go.
@@ -157,12 +157,52 @@ covers an item, it is cited rather than repeated.
 | 47 | Clipboard and text shaping | **(b)** post-1.0. | Measured: no clipboard or copy-paste anywhere. Font rendering **is** confirmed and gated: Inter 16px alpha atlas (DDR-728), whose font gate checks window titles. It is a fixed-size glyph atlas with **no shaping**, so there are no ligatures, no complex scripts and no bidi. Consistent with #24. |
 | 48 | Package signing | **(b)**, subsumed by #20 and #5. | `prad` is unbuilt, so there is nothing to sign yet. When it exists, signing has the same key-custody problem as DDR-1059: a verification key shipped in the image proves nothing about packages built by whoever holds the image. The ML-DSA primitives are ready (DDR-1054/1057/1058). The custody decision is what is missing. |
 
+### G. Compliance, hardware lifecycle, usability, deployment and testing (addendum, comment 5821578910, OWNER-verified)
+
+**Three premises in this section are partly wrong, measured:**
+- **#50:** a license is specified.
+- **#51:** poweroff and reboot are gated.
+- **#60:** a syscall fuzz gate exists.
+
+Each is stated precisely below rather than accepted or dismissed.
+
+| # | Item | Disposition | Measured basis |
+|---|---|---|---|
+| 49 | Crypto export control | **(c)**, a legal determination only you can make or commission. | The OS ships ChaCha20-Poly1305, X25519, HKDF, SHA-2/3, Ed25519 and ML-DSA. I can list what is in the image. I cannot give an export classification (for example EAR Cat. 5 Pt. 2), and must not pretend to. |
+| 50 | License for the OS itself | **Premise corrected: one is specified**, and **(c)** is still owed. | `LICENSE` is a **proprietary, all-rights-reserved** license (© Pradyun Kumar Sinha). The defect is that **`README.md` says MIT** (§0 finding 1). You must choose one and fix the other. Interaction with bundled code: lwIP (BSD-3) and musl (MIT) are permissive, so a proprietary release is compatible **if** their notices ship. They currently do not (#37). |
+| 51 | S5 poweroff and reboot as a gate | **Premise corrected: both are gated at strict tier on every CI suite.** A narrower gap is **(a)**. | **`smoke-poweroff`** (shard 5, DDR-746) injects `p`, and the compositor issues `SYS_POWEROFF` into ACPI S5. **`smoke-reboot`** (shard 7, DDR-747) injects `b`, which goes through `SYS_REBOOT` to an ACPI/PC reset. Each asserts the compositor marker and the kernel's pre-write sentinel, with no panic. **The narrower gap:** the kernel sentinel prints *before* the S5/reset write, and QEMU runs under `timeout 120 … \|\| true`. So the gate cannot tell "QEMU exited because the machine powered off" from "QEMU was killed at 120 s". Asserting the exit code or elapsed time would close that. It is small, but it is a gate change and needs your go. |
+| 52 | Hibernation (S4) | **(b)** post-1.0. | Measured: none. S4 needs S3's missing resume path (#18) plus writing RAM to disk, which meets the SFS write-path ceiling (DDR-1100). |
+| 53 | SMART and disk health | **(b)** post-1.0. | Measured: none. AHCI and NVMe both expose health data, but QEMU emulates none of it, so nothing could be gated. |
+| 54 | Thermal monitoring and throttling | **(b)** post-1.0, with a named hardware risk. | Measured: none. `pstate.c` exists and deliberately refuses to report a frequency it cannot measure. Firmware and CPU hardware thermal trips still protect the silicon on real machines. What is missing is OS-level throttling and reporting. |
+| 55 | Multi-monitor and DPI | **(b)** post-1.0. | The display mode is scanout 0's, falling back to 1024×768 (`virtio_gpu.c:128`). There is one scanout, no second head and no DPI scaling. Also see §0 finding 3: on real UEFI hardware there may be no display at all. |
+| 56 | Keyboard layouts | **(b)** post-1.0, stated in the release notes. | `ps2kbd.c:52/:58` has a single `map_lower`/`map_upper` set-1 table, **US QWERTY only**, with no switching. |
+| 57 | Hypervisors beyond QEMU | **(b)**, with a partial correction. | One owner-run **VirtualBox** boot is on record (DDR-906: EFI arm, reached the scheduler), with no guest additions. VMware and Hyper-V are untested. Hyper-V Gen2 is UEFI-only, which runs into the missing GOP path. |
+| 58 | Remote management (SSH) | **(b)** post-1.0. | Measured: no SSH or remote shell. It is blocked in turn on DHCP (#43), on a listening ring-3 socket API (the proxy surface is connect-only), and on a key-custody story (#5/#48). |
+| 59 | Long-duration soak | **(c)**. It is buildable, but costs CI budget you allocate. | Every gate boots for at most minutes. The OPEN-2 hunts are the closest thing: 2,200 boots on the fixed kernel, but each is still minutes long. A 24-hour soak is one `workflow_dispatch` job with a long `timeout-minutes` and heartbeat-drift assertions (pmmfree, kheap), and it fits within GitHub's per-job limit only as a chain of shorter runs. It needs your decision on the runner minutes. |
+| 60 | Syscall fuzzing | **Premise corrected: two fuzz gates exist**, at strict tier. **(b)** for coverage-guided fuzzing. | **`smoke-syscallfuzz`** (DDR-758, shard 0) floods **3,000 hostile syscalls**: bad NSI numbers must return exactly `-ENOSYS`, and wild pointers into syscalls must return `-EFAULT`, with the kernel surviving all of them. **`smoke-net-fuzz`** is on shard 8. Both are deterministic, from a fixed-seed LCG. **What is missing** is coverage-guided or randomised-seed fuzzing (syzkaller-class). That is a harness project, not a pre-tag fix. |
+| 61 | Init and service manager | **Answered: more than a launcher, less than systemd.** **(b)** for the rest. | `user/init.c` (DDR-891) does fork+execve per service, attributes exits by pid, restarts on failure (`RESTART_ON_FAILURE`) with a budget of 3 and a loud give-up, and refuses by capability before forking. It is gated by `smoke-init` (shard 1, strict). It has **no dependency ordering**: `grep -n depend user/init.c` returns nothing, and services start in table order. |
+| 62 | Update rollback and version compatibility | **(b)**, subsumed by #19/#20. | There is no installer and no updater, so there is nothing to roll back. Worth noting for when `prad` exists: SFS snapshots (§0 #21) are the natural rollback substrate. No kernel↔userspace version handshake exists either. The userspace is embedded in or built with the kernel, so today they cannot diverge. |
+
+### H. Release integrity and lifecycle (addendum, comment 5821578910)
+
+| # | Item | Disposition | Measured basis |
+|---|---|---|---|
+| 63 | ISO checksum and signature | **(a)** for the checksum. **(c)** for the signature. | CI publishes and asserts a SHA-256 for **`kernel.bin`** (DDR-1035), but `grep` finds **no SHA-256 for the ISO** in the `Makefile` or workflows. Publishing `sha256sum build/*.iso` with the release is trivial. A GPG signature needs a key you hold and publish, and that is the same custody question as #5/#48. |
+| 64 | Screen lock | **(b)** post-1.0. | Measured: none. It is also meaningless without user accounts (#25). |
+| 65 | Timezone database | **(b)** post-1.0. | Measured: none. The CMOS RTC is read and treated as-is. |
+| 66 | Firmware update tool | **(b)** post-1.0. | Measured: none. Needs USB and UEFI capsule support first. |
+| 67 | No-exec policy for removable media | **(b)**, currently **moot**, and stated so. | There is no USB or removable-media stack (#16), so no removable volume can mount. There is also **no `noexec` mount option** (`grep -rn noexec kernel` is empty). Once removable media exists, this becomes a real design requirement. |
+| 68 | End-of-life and support policy | **(c)**. | Only you can state a support window. |
+
 **What I propose to do on your "go", all doc or packaging, no kernel change:**
 - #13 residue notes.
 - #28 minimum user docs, including a README rewritten to match reality.
 - #37 notices file into the ISO.
 - The v1 section of `CHANGELOG.md`, carrying #1–#4, #15, #17 and #30's wording.
 - The PR closes you approve in #6.
+- #43 DHCP/DNS (with its own DDR and gate).
+- #51 poweroff/reboot exit assertion.
+- #63 ISO checksum.
 
 Every **(c)** row waits for you.
 

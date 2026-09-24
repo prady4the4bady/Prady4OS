@@ -14650,3 +14650,13 @@ No code change was made in this entry, and `kernel.bin` is unchanged.
   - A persistent log and resource limits exist only partially: a RAM `klog`
     via `SYS_DMESG`, plus agent-only caps.
   - Disk encryption is an operator decision: the only key is in the image.
+- **Addendum 2 (comment 5821578910, OWNER):** §0 Sections G and H add items
+  49–68.
+  - Three premises are corrected in the checklist:
+    - A license exists (proprietary; the README contradicts it).
+    - `smoke-poweroff` and `smoke-reboot` exist at strict tier. The real gap is
+      that they cannot tell a clean exit from a timeout.
+    - `smoke-syscallfuzz` and `smoke-net-fuzz` exist; they use a fixed seed and
+      are not coverage-guided.
+  - No SHA-256 is published for the ISO.
+  - `init` has restart-on-failure but no dependency ordering.
