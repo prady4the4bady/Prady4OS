@@ -655,6 +655,10 @@ static inline void switch_wait_offcpu(struct tcb *t) {
  * percpu.c, so widening it mid-struct is a trap. */
 static volatile uint8_t g_in_switch[PERCPU_MAX];
 
+/* DDR-1139 (c): claims refused because the thread was already claimed.
+ * Cumulative (never drained): one event in a whole boot must stay visible. */
+volatile uint32_t g_dbl_claim;
+
 /* DDR-887: the SCHEDULE-path variant of switch_wait_offcpu.
  *
  * CONFIRMED defect: every CPU can be spinning in the bare-`pause` loop above
@@ -1538,14 +1542,47 @@ static void schedule_locked(uint64_t fl) {
      * that pops prev from the queue below spins in switch_wait_offcpu() until
      * then, so it can never load a stale prev->rsp. Exclusion against
      * double-run is the dequeue, not on_cpu (rq_take). */
-    if (prev->state == THREAD_RUNNING)
+    /* DDR-1139 (b): we popped OUR OWN token. That happens whenever
+     * sched_unblock made prev READY -- and pushed it -- before prev's own
+     * schedule() ran (the ordinary block-then-wake race), and this CPU then
+     * popped or stole that very entry. We are its only holder, so keep running.
+     * Before DDR-1139 this fell through to switch_wait_offcpu_sched(prev), which
+     * waited on this CPU's OWN on_cpu until the 4096-spin bail (hunt 35963517515
+     * lane 15: calls == bails in every heartbeat window). */
+    if (next == prev) {
+        if (prev->state == THREAD_READY) {
+            prev->state = THREAD_RUNNING;
+            local_irq_restore(fl);
+            return;
+        }
+        next = g_idle[cpu];            /* not READY: never run it; fall to idle */
+        if (next == prev) {
+            local_irq_restore(fl);
+            return;
+        }
+    }
+
+    /* DDR-1139 (a): re-queue prev ONLY on this function's own RUNNING->READY
+     * transition. A prev that entered ALREADY READY was made READY by
+     * sched_unblock, which pushed its token at that moment; if another CPU has
+     * since popped that token (rq_on == 0, it is spinning on prev->on_cpu below)
+     * a second rq_push here SUCCEEDS and creates a SECOND live token. Two pickers
+     * then both see on_cpu < 0 when prev is saved and both claim it -- one thread
+     * running on two CPUs on one kernel stack (hunt 35963517515 lane 5:
+     * rq_on=1 disp=44 saves=42). Measured on the pre-fix tree: the duplicate
+     * push occurs in an ordinary healthy smoke-smpuser boot (DDR-1139 sec.3).
+     * The three places that make a thread READY -- create, here, sched_unblock
+     * -- each push exactly once for their own transition. */
+    if (prev->state == THREAD_RUNNING) {
         prev->state = THREAD_READY;
-    if (prev->state == THREAD_READY && !prev->is_idle)
-        rq_push(cpu, prev);        /* rq-1: a preempted-but-runnable prev re-queues */
+        if (!prev->is_idle)
+            rq_push(cpu, prev);    /* rq-1: a preempted-but-runnable prev re-queues */
+    }
 
     /* next may still be mid-switch-away on another CPU: wait for its release
-     * before we touch its rsp. (next != prev here — the keep-running case
-     * returned above, so we never wait on ourselves.) */
+     * before we touch its rsp. next != prev here: DDR-1139 (b) above handles the
+     * self-pick. (This comment used to say the keep-running case guaranteed
+     * that; it did not -- see DDR-1139 sec.2.) */
     /* DDR-887: ticks must keep advancing while we wait.
      * DDR-892: and the wait is bounded — if `next` is still mid-switch-away on
      * another CPU after the bound, put it back and run this CPU's idle instead
@@ -1559,6 +1596,24 @@ static void schedule_locked(uint64_t fl) {
         if (next == prev) {                /* already on idle — nothing to switch to */
             local_irq_restore(fl);
             return;
+        }
+    }
+    /* DDR-1139 (c): the claim is EXCLUSIVE. switch_wait_offcpu_sched saw
+     * on_cpu < 0; only another claimer can have changed it since, which means a
+     * second token for this thread exists. The other claimer owns it: drop ours
+     * (no push) and run idle. After (a) and (b) this should never fire; if it
+     * does, dblclaim= in [hb] makes the remaining token source an ARTEFACT
+     * instead of a silent double run. Idle is never queued and runs only here. */
+    if (!next->is_idle) {
+        int expect = -1;
+        if (!__atomic_compare_exchange_n(&next->on_cpu, &expect, cpu, 0,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            __atomic_add_fetch(&g_dbl_claim, 1, __ATOMIC_RELAXED);
+            next = g_idle[cpu];
+            if (next == prev) {
+                local_irq_restore(fl);
+                return;
+            }
         }
     }
     next->on_cpu = cpu;

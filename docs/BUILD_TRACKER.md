@@ -6420,3 +6420,21 @@ this time, not just the waiter."* Instrument only.
   carries 0 `[vblkown]`, 0 `peer=` and 0 `[apfreeze]`.
 - **NO FIX, NO MECHANISM, OPEN-2 does not close.** Not exonerated in advance.
   `GLOBAL_FORBIDDEN` 77, 179 gates. The DDR free range is **DDR-1139+** at all four carriers.
+
+### DDR-1139 (2026-09-24) — OPEN-2 double dispatch NAMED and FIXED (confirmation pending)
+
+- **Mechanism.** `schedule_locked` re-queued a `prev` that `sched_unblock` had already made READY and pushed. It did this whenever the wake landed between `sched_block_timeout` storing BLOCKED and the thread reaching `schedule()`.
+  - Once a picker has popped the first token, `rq_on` is 0, so `rq_push` accepts a **second token for the same thread**.
+  - Two CPUs holding tokens both spin on `prev->on_cpu` and both see the release store.
+  - The claim was three plain stores, so **both CPUs `context_switch` into the same saved `rsp`**. Two CPUs then run one thread on one kernel stack.
+  - This explains lane 5 of hunt 35963517515, which read `rq_on=1 disp=44 saves=42` (DDR-1131 §3's pre-registered double-resume row, with its precondition present for the first time).
+  - It explains lane 15: tid 11 (`fs`) with a saved `rsp` 0xF8 **below** its own stack base. A painted-stack build measured 5,552 B of headroom, which refutes a plain overflow.
+  - It explains lane 15's `calls == bails` in every window: a CPU picking its own token and waiting on itself. The comment at the wait asserted `next != prev` and was false.
+- **Measured precondition on the pre-fix tree.** A temporary counter build, since reverted, showed `tkdup=1` on a healthy `smoke-smpuser` boot. The duplicate token is created in ordinary boots. The rare event is the second race, the double claim.
+- **Fix (`kernel/proc/sched.c`).**
+  - (a) Re-queue `prev` only on this function's own RUNNING→READY transition.
+  - (b) If `next == prev`, keep running with no wait on itself.
+  - (c) Make the claim an exclusive CAS on `on_cpu` from -1. A lost CAS runs idle and counts `g_dbl_claim`, printed as `dblclaim=` in `[hb]`.
+- **Local regression.** Kernel `22ce5984de925d38`, 1,319,306 B, size unchanged. 15 gate runs are all `rc=0` with the hash pinned, and every heartbeat-bearing gate reads `dblclaim=0`. Hygiene ALL NINE. `GLOBAL_FORBIDDEN` 77, 179 gates.
+- **Self-correction (§7.1).** The design predicted that `bails` would fall on healthy boots. It does not: 0.009% before, 0.010% after. That arm is withdrawn as a discriminator.
+- **NOT YET CONFIRMED.** Confirmation is the pre-registered hunt criterion: zero `[schedcheck]` and zero vblk-spin `[apfreeze]` across 2,200 fixed-kernel boots. The `cap.c` `resolve` silent panic and lane-12's panic are not claimed. The DDR free range is **DDR-1140+** at all four carriers.

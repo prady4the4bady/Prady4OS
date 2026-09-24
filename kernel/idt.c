@@ -425,6 +425,12 @@ static void timer_tick(struct regs *r) {
         { extern volatile uint32_t g_rqfree_caught;
           kputs(" rqfree=");
           kputdec((uint64_t)__atomic_load_n(&g_rqfree_caught, __ATOMIC_RELAXED)); }
+        /* DDR-1139 (c): a claim refused because another CPU already claimed the
+         * same thread. Must read 0; non-zero names a token source DDR-1139 did
+         * not find. An instrument, not a sentinel (GLOBAL_FORBIDDEN untouched). */
+        { extern volatile uint32_t g_dbl_claim;
+          kputs(" dblclaim=");
+          kputdec((uint64_t)__atomic_load_n(&g_dbl_claim, __ATOMIC_RELAXED)); }
         /* DDR-979 §6: panics that stayed silent so the winner's dump stayed
          * readable. panics_silent nonzero means MORE THAN ONE CPU panicked this
          * boot — which the old unserialised printer showed only as a garbled

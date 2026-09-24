@@ -1,6 +1,6 @@
 # DDR-1139: OPEN-2's double dispatch. `schedule_locked` re-queues a `prev` that `sched_unblock` has already queued, which creates a second runqueue token
 
-**Status:** DESIGN. Committed before the code (§NON-NEGOTIABLE 5).
+**Status:** DESIGN committed before the code (§NON-NEGOTIABLE 5, `76a06ec`); **FIX SHIPPED** — §7 records the regression. **Confirmation is the fixed-kernel hunt, pending.**
 **Date:** 2026-09-24
 **Asked by:** the operator on PR #17 (comment 5808782807, author_association OWNER): *"I want OPEN-2's root cause NAMED and a FIX SHIPPED … The moment you have enough to name an actual mechanism … fix it immediately."*
 **Scope:** `kernel/proc/sched.c` (`schedule_locked`) plus one heartbeat field.
@@ -142,3 +142,43 @@ The false comment beside the wait is corrected in the same change.
 - `switch_wait_offcpu_sched`, `rq_push`, `rq_take` and `finish_task_switch` are each correct for what they do. The defect is the interaction in §2.
 - The false comment at the wait site is the text-level form of the defect.
 - `GLOBAL_FORBIDDEN` stays at 77 and the gate count stays at 179. `dblclaim=` is an instrument, not a sentinel.
+
+## 7. Shipped, and the local regression
+
+**Kernel `22ce5984de925d38`, 1,319,306 B (size unchanged).** Warning-clean at `-Werror`. The hash was pinned and re-checked after every gate (DDR-1060 §9). `KEEP_SERIAL=1`, logs are under `build/gatelogs/f1139-*`, and every row below is `rc=0`:
+
+| gate | dblclaim (last `[hb]`) | calls / bails summed over all `[hb]` windows |
+|---|---|---|
+| smoke-shell ×5 | — (early exit, no heartbeat) | — |
+| smoke-smp | 0 | 1,486,925 / 161 |
+| smoke-smppreempt | 0 | 1,946,234 / 203 |
+| smoke-rqstress | 0 | 1,870,782 / 219 |
+| smoke-blk-integrity | 0 | 1,928,840 / 200 |
+| smoke-blkmq | 0 | 1,866,686 / 213 |
+| smoke-smpuser | 0 | 1,947,550 / 208 |
+| smoke-resched | 0 | (last window 57,922 / 1) |
+| smoke-nethammer, smoke-rqfree | (not read: capture path / early exit) | — |
+
+`hygiene_check.sh` passes ALL NINE. `GLOBAL_FORBIDDEN` stays at 77 and the gate count stays at 179.
+
+### 7.1 A correction to §5.2, made against my own prediction
+
+§5.2 predicted that `bails` in `[hb]` would *fall* on the fixed tree. **It does not.** Here is the same gate on the pre-fix counter build (§3) and on the fixed tree:
+
+| smoke-blk-integrity | calls | bails | bail rate |
+|---|---|---|---|
+| pre-fix (counter build) | 1,816,309 | 164 | 0.009% |
+| fixed | 1,928,840 | 200 | 0.010% |
+
+Pre-fix `smoke-smpuser` read 230 / 1,936,721, which is 0.012%.
+
+- On a healthy boot, the self-pick path is taken about once per boot (§3, `tkself=1`). The ~200 ordinary bails come from legitimate on-CPU contention that this change does not touch.
+- So `bails` **cannot discriminate** the two trees on a healthy boot, and it is withdrawn as a proof arm.
+- It stays a useful reading in a **failing** capture. Lane 15's `calls == bails` in every window is a regime no healthy boot shows at any level: a 100% bail rate against 0.01%.
+
+What the local regression licenses:
+
+- The fix does not break the fifteen gate runs (fourteen distinct gates, smoke-shell ×5).
+- The defence-in-depth claim was never needed on these boots (`dblclaim=0`).
+
+What it does **not** license: a claim that OPEN-2 is fixed. The double claim was never observed locally (§3, `tkdbl=0`). **§5.4's hunt criterion, set before the data, is the confirmation, and it is still pending.**
