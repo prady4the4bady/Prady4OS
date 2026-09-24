@@ -1,6 +1,6 @@
 # DDR-1139: OPEN-2's double dispatch. `schedule_locked` re-queues a `prev` that `sched_unblock` has already queued, which creates a second runqueue token
 
-**Status:** DESIGN committed before the code (§NON-NEGOTIABLE 5, `76a06ec`); **FIX SHIPPED** — §7 records the regression. **Confirmation is the fixed-kernel hunt, pending.**
+**Status:** DESIGN committed before the code (§NON-NEGOTIABLE 5, `76a06ec`); **FIX SHIPPED** — §7 records the regression. **CONFIRMED 2026-09-24 against the §5 criterion set before the data — §8.**
 **Date:** 2026-09-24
 **Asked by:** the operator on PR #17 (comment 5808782807, author_association OWNER): *"I want OPEN-2's root cause NAMED and a FIX SHIPPED … The moment you have enough to name an actual mechanism … fix it immediately."*
 **Scope:** `kernel/proc/sched.c` (`schedule_locked`) plus one heartbeat field.
@@ -182,3 +182,26 @@ What the local regression licenses:
 - The defence-in-depth claim was never needed on these boots (`dblclaim=0`).
 
 What it does **not** license: a claim that OPEN-2 is fixed. The double claim was never observed locally (§3, `tkdbl=0`). **§5.4's hunt criterion, set before the data, is the confirmation, and it is still pending.**
+
+## 8. Confirmation: the pre-registered criterion is met
+
+**Status of §5.4: MET.** Zero `[schedcheck]` and zero `[apfreeze]` across **2,200 fixed-kernel hunt boots**.
+
+| run | kernel | lanes × runs | failing lanes | signals |
+|---|---|---|---|---|
+| 35972100249 (**pre-fix**, same parameters) | `66be2582c17de427` | 20 × 55 | **4** | 3 `[schedcheck]` + 1 panic |
+| 35985681193 (fixed) | `663d1dae07e5211f` | 20 × 55 | 0 | 0 |
+| 36019681198 (fixed) | `663d1dae07e5211f` | 20 × 55 | 0 | 0 |
+
+- **Both fixed runs were built from the fix commit.** Each lane logs `tree_sha=1b07e464…` and `kernel_pinned=663d1dae07e5211f`, the `OPEN2_HUNT=32` build of the shipped `22ce5984de925d38`.
+- **The denominator is real, not assumed.** The hunt workflow fails a lane on any signal *and* on `churn_runs=0` (DDR-1097 §7.2's false clean), so a green lane cannot be vacuous. Lane 0 of run 36019681198 was read in full: 55 of 55 runs `churn clean`, `DONE runs=55 signal_runs=0 churn_runs=55`.
+- **The contrast is on the same parameters and the same workflow.** The pre-fix dispatch failed 4 of 20 lanes (three `[schedcheck]` fires, two of them `disp = saves + 2`, and one panic with a garbage trap frame); the two fixed dispatches failed 0 of 40.
+- **Strength, stated at its real size:** 0 in 2,200 gives an exact 95% upper bound of about **0.14% per boot** on the fixed binary. The pre-fix binary produced 4 signal runs in 1,100 boots (≈0.36%), so P(0 in 2,200 | p = 0.36%) ≈ 3.7e-4. The null is not explained by an unlucky draw.
+- **CI:** `1b07e46` has **3 greens** on one SHA — push 35985675298, pull_request 35985679862 and workflow_dispatch 36019677465, all shards success, each shard's two DDR-1035 hash assertions green.
+
+### 8.1 Not claimed
+
+- **Not claimed that OPEN-2 as a whole is closed.** What is confirmed is that *this mechanism* was the dominant producer of the `[schedcheck]` / vblk-spin signatures. DDR-1133 §6's silent panic in `cap.c`'s `resolve` and the pre-fix lane-15 panic (`#PF err=0x11`, `CS=0x126246539`, `RSP=1`, `RIP == CR2`) are **unattributed**; neither recurred in 2,200 fixed boots, which is consistent with them being downstream of the double dispatch (one thread on two CPUs on one kernel stack would produce exactly that kind of garbage frame) **and is not proof of it**.
+- `dblclaim=` was never observed non-zero in any artefact read here. The CAS claim is defence in depth; that it never fired is what the design predicts once (a) removes the duplicate token.
+- No rate is claimed beyond the bound above, and it is not pooled with any other binary.
+

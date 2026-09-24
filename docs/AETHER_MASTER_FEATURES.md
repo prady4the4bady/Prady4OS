@@ -2029,3 +2029,11 @@ this time, not just the waiter."* Instrument only.
 - **Local regression.** Kernel `22ce5984de925d38`, 1,319,306 B, size unchanged. 15 gate runs are all `rc=0` with the hash pinned, and every heartbeat-bearing gate reads `dblclaim=0`. Hygiene ALL NINE. `GLOBAL_FORBIDDEN` 77, 179 gates.
 - **Self-correction (§7.1).** The design predicted that `bails` would fall on healthy boots. It does not: 0.009% before, 0.010% after. That arm is withdrawn as a discriminator.
 - **NOT YET CONFIRMED.** Confirmation is the pre-registered hunt criterion: zero `[schedcheck]` and zero vblk-spin `[apfreeze]` across 2,200 fixed-kernel boots. The `cap.c` `resolve` silent panic and lane-12's panic are not claimed. The DDR free range is **DDR-1140+** at all four carriers.
+
+### DDR-1139 §8 (2026-09-24) — the OPEN-2 double-dispatch fix is CONFIRMED against its pre-registered criterion
+
+- **Criterion met (set in DDR-1139 §5 before the data):** zero `[schedcheck]` and zero `[apfreeze]` across **2,200 fixed-kernel hunt boots** — hunts 35985681193 and 36019681198, each 20 lanes × 55 runs, **0 of 40 lanes failed**. Every lane logs `tree_sha=1b07e464…` / `kernel_pinned=663d1dae07e5211f` (the `OPEN2_HUNT=32` build of shipped `22ce5984de925d38`), and the workflow fails any lane with `churn_runs=0`, so no green lane is vacuous (lane 0 read in full: 55/55 `churn clean`).
+- **Contrast on the same parameters:** pre-fix hunt 35972100249 failed **4 of 20** lanes (three `[schedcheck]`, two of them `disp = saves + 2`, plus one garbage-trap-frame panic).
+- **Strength:** 95% upper bound ≈0.14% per boot on the fixed binary; P(0 in 2,200 | pre-fix ≈0.36%) ≈ 3.7e-4.
+- **CI:** `1b07e46` has **3 greens on one SHA** — push 35985675298, pull_request 35985679862, workflow_dispatch 36019677465, all shards success.
+- **Not claimed:** OPEN-2 as a whole is not declared closed. The `cap.c` `resolve` silent panic (DDR-1133 §6) and the pre-fix lane-15 panic did not recur in 2,200 boots and remain **unattributed** — consistent with being downstream of the double dispatch, not proof of it. `dblclaim=` was never seen non-zero. No kernel change in this entry; `GLOBAL_FORBIDDEN` 77, 179 gates, DDR free range **DDR-1140+**. Merge and promotion are the operator's.
