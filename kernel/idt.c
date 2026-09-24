@@ -22,6 +22,7 @@
 #include "fault_expect.h"  /* DDR-1040: the one-shot expected-fault latch */
 #include "cpu_mitigations.h"  /* DDR-1044: cpu_rdmsr for the #MC bank decode */
 #include "lock_stat.h"        /* DDR-1047: contended-lock dump on [apfreeze] */
+#include "virtio_blk.h"       /* DDR-1138: compl_lock owner dump on [apfreeze] */
 #include <stdint.h>
 
 struct idt_entry {
@@ -209,6 +210,11 @@ static void ap_freeze_probe(void) {
     static int      s_victim = -1;        /* the one CPU we sample, once chosen */
     static unsigned s_shots;              /* how many NMIs sent so far */
     static int      s_lockstat_done;      /* DDR-1047: dump the lock table once */
+    /* DDR-1138 sec.2.2: one NMI per OTHER frozen CPU, once per boot. The
+     * victim keeps its 4-shot budget; a peer gets exactly one sample, so the
+     * CPU that froze FIRST but was not latched (DDR-1137 sec.3.2, both vblk
+     * captures) finally has its RIP read. Bounded at PERCPU_MAX per boot. */
+    static uint8_t  s_peer_done[PERCPU_MAX];
 
     /* Relay arm first, so a dump armed last window is printed even if a second
      * CPU freezes in this one. The AP release-stored 2; pair with an acquire. */
@@ -233,6 +239,7 @@ static void ap_freeze_probe(void) {
         kputs(" irr48=");           kputdec(pc->d_irr48);
         kputs(" pid=");             kputdec(pc->d_pid);
         kputs(" shot=");            kputdec(pc->d_shot);
+        kputs(" peer=");            kputdec((uint64_t)((int)i != s_victim));  /* DDR-1138 */
         kputs(" bt=");
         for (unsigned k = 0; k < pc->d_btn; k++) {
             if (k) kputs(",");
@@ -296,11 +303,14 @@ static void ap_freeze_probe(void) {
         if (!s_lockstat_done) {
             s_lockstat_done = 1;
             lock_stat_dump();
+            /* DDR-1138 sec.2.1: WHO HOLDS the vblk compl_lock. lock_stat can
+             * only name waiters; this names the recorded owner, beside the
+             * raw lock byte. Once per boot for the same reason as above. */
+            virtio_blk_dump_owners();
         }
     }
 
-    if (s_shots >= DUMP_SHOTS)
-        return;
+    int victim_shot = 0;                  /* at most one victim shot per window */
     for (uint32_t i = 0; i < PERCPU_MAX; i++) {
         struct percpu *pc = percpu_get(i);
         if (!pc || !pc->present || pc->is_bsp)
@@ -312,17 +322,30 @@ static void ap_freeze_probe(void) {
              * walking RIP across shots means the CPU is running and merely
              * masked, a pinned RIP means it is spinning. That is the question
              * a single shot cannot answer. */
-            if (s_victim >= 0 && s_victim != (int)i)
-                continue;
-            s_victim = (int)i;
-            pc->d_shot = (uint8_t)(++s_shots);
+            if (s_victim < 0)
+                s_victim = (int)i;
+            if (s_victim == (int)i) {
+                if (victim_shot || s_shots >= DUMP_SHOTS)
+                    continue;
+                victim_shot = 1;
+                pc->d_shot = (uint8_t)(++s_shots);
+            } else {
+                /* DDR-1138 sec.2.2: a PEER. One sample per boot, shot=0 and
+                 * peer=1 on its line. The victim's cadence is unchanged, and
+                 * the scan no longer returns after the victim shot so a peer
+                 * can be armed in the same heartbeat. */
+                if (s_peer_done[i])
+                    continue;
+                s_peer_done[i] = 1;
+                pc->d_shot = 0;
+            }
             /* Arm before sending: the handler only consumes an NMI it was
              * armed for, so an unsolicited machine NMI still panics. */
             __atomic_store_n(&pc->nmi_dump, (uint8_t)1, __ATOMIC_RELEASE);
             lapic_send_nmi(pc->apic_id);
             /* Deliberately no wait here: this is the timer ISR. The dump is
              * relayed by the next heartbeat's arm above, 5 s later. */
-            return;
+            continue;
         }
         s_prev[i] = t;
         s_seen[i] = 1;

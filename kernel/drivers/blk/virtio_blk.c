@@ -74,7 +74,40 @@ struct vblk {
      * unit 0 / cpu 0 is also the correct uniprocessor answer. */
     unsigned              unit;
     uint32_t              dest_cpu_idx;
+    /* DDR-1138: WHO HOLDS compl_lock. spinlock_t is one byte and lock_stat
+     * sees only the slow path, so nothing in the kernel could say who owned
+     * this lock when a CPU froze waiting on it (DDR-1137 sec.3.2). Written
+     * immediately after every acquisition, cleared immediately before every
+     * release, read only by virtio_blk_dump_owners() on the [apfreeze] path.
+     * Deliberately THIS lock only: an owner store on spin_lock itself is the
+     * hot-path cost DDR-1047 refused, and that refusal stands. g_inst is BSS,
+     * so own_site == 0 ("none") before the first acquisition. */
+    volatile uint32_t     own_cpu;
+    volatile uint32_t     own_tid;
+    volatile uint32_t     own_site;   /* VOWN_* below; 0 = no recorded owner */
+    volatile uint64_t     own_tick;
 };
+
+/* DDR-1138: which acquisition of compl_lock the owner record describes. */
+enum { VOWN_NONE = 0, VOWN_COMPLETE = 1, VOWN_SUBMIT = 2,
+       VOWN_SLOTWAIT = 3, VOWN_DONEWAIT = 4 };
+
+/* Call with compl_lock HELD, right after taking it. this_cpu() and
+ * current_thread are what complete() and submit() already read today, so no
+ * new GS dependency is added on this path. Plain stores: the record is a
+ * diagnostic read after a freeze, not a synchronisation variable. */
+static inline void vown_set(struct vblk *v, uint32_t site) {
+    struct percpu *pc = this_cpu();
+    v->own_cpu  = pc ? pc->cpu_idx : 0xFFFFFFFFu;
+    v->own_tid  = current_thread ? current_thread->tid : 0u;
+    v->own_tick = g_ticks;
+    v->own_site = site;
+}
+
+/* Call with compl_lock still HELD, right before releasing it. */
+static inline void vown_clear(struct vblk *v) {
+    v->own_site = VOWN_NONE;
+}
 
 /* DDR-878: one-shot witness that two submitters really do wait at once. */
 static volatile int g_multiwait_seen;
@@ -87,6 +120,7 @@ static void complete(struct vblk *v) {
      * lost-wakeup race against submit()'s check-then-block (the locks-4
      * pattern: the requester publishes BLOCKED under this same lock). */
     uint64_t fl = spin_lock_irqsave(&v->compl_lock);
+    vown_set(v, VOWN_COMPLETE);                  /* DDR-1138 */
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&v->vq, &len)) >= 0) {
@@ -106,6 +140,7 @@ static void complete(struct vblk *v) {
     struct percpu *pc = this_cpu();
     if (pc && !pc->is_bsp)
         v->compl_ap = 1;              /* C3 proof: completion off the BSP */
+    vown_clear(v);                               /* DDR-1138 */
     spin_unlock_irqrestore(&v->compl_lock, fl);
 }
 
@@ -201,6 +236,7 @@ static void slot_wake_one(struct vblk *v) {
 static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                   uint32_t count, int to_device) {
     uint64_t fl = spin_lock_irqsave(&v->compl_lock);
+    vown_set(v, VOWN_SUBMIT);                    /* DDR-1138 */
 
     /* Claim a request slot; sleep (never spin) when all are in flight. */
     int s;
@@ -229,10 +265,15 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
             v->slot_head = current_thread;
         }
         v->slot_tail = current_thread;
-        if (sched_block_timeout(&v->compl_lock,
-                                &v->slot_free,
-                                500) == -ETIMEDOUT) {
+        /* DDR-1138: sched_block_timeout DROPS compl_lock while this thread
+         * sleeps and re-takes it before returning, so the record is cleared
+         * across the call and set again after it -- never stale. */
+        vown_clear(v);
+        int _to = sched_block_timeout(&v->compl_lock, &v->slot_free, 500);
+        vown_set(v, VOWN_SLOTWAIT);
+        if (_to == -ETIMEDOUT) {
             kputs("[vblk] slot wait timeout\r\n");
+            vown_clear(v);
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
         }
@@ -266,6 +307,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
          * descriptor-exhaustion failure could strand every waiter even with the
          * single-waiter bug fixed. Same release, same wake. */
         slot_wake_one(v);
+        vown_clear(v);                           /* DDR-1138 */
         spin_unlock_irqrestore(&v->compl_lock, fl);
         return -1;
     }
@@ -285,9 +327,10 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     { struct percpu *dp = percpu_get(v->dest_cpu_idx);
       if (dp) dest_t0 = dp->ticks; }
     while (!v->req[s].done) {
-        if (sched_block_timeout(&v->compl_lock,
-                                &v->req[s].done,
-                                500) == -ETIMEDOUT) {
+        vown_clear(v);                           /* DDR-1138: see the slot wait */
+        int _to = sched_block_timeout(&v->compl_lock, &v->req[s].done, 500);
+        vown_set(v, VOWN_DONEWAIT);
+        if (_to == -ETIMEDOUT) {
             uint64_t dest_t1 = 0;
             { struct percpu *dp = percpu_get(v->dest_cpu_idx);
               if (dp) dest_t1 = dp->ticks; }
@@ -332,6 +375,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
             v->req[s].used = 0;
             v->req[s].waiter = 0;
             slot_wake_one(v);
+            vown_clear(v);                       /* DDR-1138 */
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
         }
@@ -341,6 +385,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     v->req[s].used = 0;                        /* release the slot ... */
     v->req[s].waiter = 0;
     slot_wake_one(v);                          /* ... and wake ONE starved submitter */
+    vown_clear(v);                             /* DDR-1138 */
     spin_unlock_irqrestore(&v->compl_lock, fl);
     return ok ? 0 : -1;
 }
@@ -438,4 +483,32 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputdec(v->dev.irq);
     }
     kputs("\r\n");
+}
+
+/* DDR-1138: the [apfreeze] path's answer to "who holds compl_lock". Reads the
+ * lock byte and the owner record WITHOUT taking the lock -- the machine has
+ * already frozen and taking it is exactly what would hang the reporter. The
+ * raw byte is printed beside the record so a disagreement between the two is
+ * shown, not hidden. NOTHING IS JUDGED. One kline per unit: each line is a
+ * single write and cannot be spliced (DDR-1055). */
+void virtio_blk_dump_owners(void) {
+    for (unsigned i = 0; i < g_ninst; i++) {
+        struct vblk *v = &g_inst[i];
+        uint32_t site = v->own_site;
+        kline k;
+        kline_init(&k);
+        kline_s(&k, "[vblkown] unit=");   kline_d(&k, (uint64_t)v->unit);
+        kline_s(&k, " locked=");          kline_d(&k, (uint64_t)v->compl_lock.v);
+        if (site == VOWN_NONE) {
+            kline_s(&k, " own_cpu=none");
+        } else {
+            kline_s(&k, " own_cpu=");     kline_d(&k, (uint64_t)v->own_cpu);
+            kline_s(&k, " own_tid=");     kline_d(&k, (uint64_t)v->own_tid);
+            kline_s(&k, " since=");       kline_d(&k, v->own_tick);
+        }
+        kline_s(&k, " site=");            kline_d(&k, (uint64_t)site);
+        kline_s(&k, " now=");             kline_d(&k, g_ticks);
+        kline_s(&k, "\r\n");
+        kline_emit(&k);
+    }
 }

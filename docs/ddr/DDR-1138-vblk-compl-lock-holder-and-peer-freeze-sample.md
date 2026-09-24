@@ -133,3 +133,62 @@ is proved with a **forced mutant on a recorded hash**. Each mutant changes one t
     no entry of its own.
   - It falls inside the 40 lines of trailing context that DDR-1135's hunt printer shows
     after every match.
+
+---
+
+## §5 — BUILT AND MEASURED (2026-09-24)
+
+**Shipped:** `virtio_blk.c` (owner record plus `virtio_blk_dump_owners()`), `virtio_blk.h`,
+and `idt.c` (the dump call and the peer NMI).
+- `kernel.bin` is **`bc8f02d61a4f3774`**, 1,319,306 B. The **size is unchanged** from
+  `25f4dae4a3f90bcb`, so the size/headroom pair and `ci-docstate-check` are unaffected.
+  Per DDR-1097, only the hash tells the two binaries apart.
+- Every build was warning-clean: 0 `\b(error|warning):` matches. `build/idt.o`,
+  `build/virtio_blk.o` and `build/main.o` were removed before each build, and each build's
+  hash was recorded (§INV.10).
+
+### §5.1 §2.1, the owner record: two-sided on one trigger
+
+All three kernels are `smoke-smp` at `-smp 4` with a retained capture. The trigger is
+identical in M0 and M1: a one-shot `virtio_blk_dump_owners()` placed inside `complete()`
+right after `vown_set`, **with `compl_lock` held**. M1 differs from M0 by one line.
+
+| kernel | what differs | `unit=0` line |
+|---|---|---|
+| M0 `f46280063b10a030` | forced dump | `[vblkown] unit=0 locked=1 own_cpu=1 own_tid=8 since=160 site=1 now=160` |
+| M1 `23f159bd9a3fa48f` | M0 + `vown_set` returns without writing | `[vblkown] unit=0 locked=1 own_cpu=none site=0 now=151` |
+
+- Both read `locked=1`. That half is the raw byte and would pass without any record. **Only
+  the working record names the holder:** CPU 1, tid 8, acquisition site 1 (`complete()`).
+- M1 is the plausible wrong implementation, and a check that only asks "does `[vblkown]`
+  print" passes it. It lands on the table's row 3 ("held, no recorded owner"), which is
+  what that row was pre-registered to mean.
+- **A defect in the first build, caught by M0 and fixed before any other run:** the line
+  carried **no `\r\n`**, so `[vblkown]` ran straight into the next console line. It was
+  added, and M0 was rebuilt and re-run. The row above is from the fixed build.
+- A separate splice is visible in the captures: `[sub-approve] event type=[vblkown] …`.
+  That is the **other** printer's line (a multi-`kputs` composite, DDR-1055's class)
+  interleaving with the one-write `[vblkown]` line. Recorded, not chased.
+
+### §5.2 §2.2, the peer sample: the pre-change tree is the control
+
+Identical forcing in both kernels: the frozen predicate becomes
+`(t == s_prev[i] || t > 1200)`, so all three APs read as frozen from tick ~1200.
+
+| kernel | `[apfreeze]` lines |
+|---|---|
+| P1 `66dbe55ebbbfcc53` (new tree) | cpu=1 `shot=1..4 peer=0`, plus **cpu=2 `shot=0 peer=1`** and **cpu=3 `shot=0 peer=1`**, each with its own `rip=`/`rsp=`/`pid=` |
+| P0 `86b2cc6de121a224` (pre-change tree) | cpu=1 `shot=1..4` **only**; CPUs 2 and 3 are never sampled |
+
+- The victim's 4-shot cadence is **byte-for-byte the same shape** in both.
+- Each peer is sampled **exactly once**.
+- P1 also printed `[vblkown]` for all three units after the first `[apfreeze]`, all reading
+  `locked=0 own_cpu=none`, which is the correct answer on a healthy boot.
+
+### §5.3 The negative half
+
+**IN PROGRESS at this commit.** Measured so far on the shipped `bc8f02d61a4f3774`, hash pinned
+and re-checked after each gate: `smoke-shell` rc=0 twice. The remaining runs (`smoke-shell`
+×3, `smoke-smp`, `smoke-smppreempt`, `smoke-rqstress`, `smoke-blk-integrity`, `smoke-blkmq`)
+and the retained-capture check (zero `[vblkown]`, zero `peer=`) are recorded in the next
+commit. **Until then the negative half is NOT claimed.**
