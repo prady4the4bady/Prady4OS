@@ -55,7 +55,11 @@ vendor string. So a gate on the default model alone cannot tell a correct
 classifier from one hard-wired to `meltdown=no`.
 
 `smoke-cpuexposure` therefore boots **three CPU models** and requires a
-different, exact line from each:
+different, exact line from each.
+
+> **CORRECTED BEFORE SHIPPING — §1.5.** Arm C cannot exist in CI, and it was
+> the arm meant to prove the MSR read. The table below is kept as designed, so
+> the record shows what was intended. What shipped is arms A and B.
 
 | Arm | `-cpu` | Required |
 |---|---|---|
@@ -70,6 +74,34 @@ different, exact line from each:
 **Mutants, each on a different arm:**
 - **M1:** always print `meltdown=no`. Fails B.
 - **M2:** skip the MSR read and treat every Intel CPU as exposed. Fails C.
+
+### 1.5 Measured result, and the arm that could not be built
+
+- **Arm C is UNBUILDABLE under QEMU 8.2 TCG.**
+  - Measured with `query-cpu-model-expansion`: `arch-capabilities` reads
+    `false` for `-cpu max` and for `Cascadelake-Server`.
+  - Booting with `+arch-capabilities` prints *"TCG doesn't support requested
+    feature: CPUID.07H:EDX.arch-capabilities [bit 29]"* and drops the flag.
+  - The first run of the three-arm gate therefore failed arm C on a
+    **correct** kernel, printing `archcap=0 meltdown=yes`.
+- **So the `rdmsr 0x10A` branch never executes in CI. It is recorded as
+  UNCOVERED, not assumed covered** (DDR-1040 M3's discipline).
+  - Its correctness rests on the CPUID guard and on reading two documented
+    bits. It does not rest on a measurement.
+  - A mutant that skipped the read (M2) would pass every arm this environment
+    can run.
+- **Shipped gate: arms A and B.** Each arm is an exact substring.
+  - Arm A requires `vendor=amd archcap=0 meltdown=no mds=no kpti=0`.
+  - Arm B requires `vendor=intel archcap=0 meltdown=yes mds=yes kpti=0`.
+  - Registered on shard 4, strict. 179 → 180 gates.
+- **Mutants,** each built on a recorded hash and reverted to the shipped hash
+  `467d51d14164149c`:
+  - **M1** (Intel always `no`, kernel `937f5e00c65ba5ff`) fails **arm B alone**.
+  - **M3** (vendor ignored, every CPU treated as Intel, kernel
+    `c45d11e51ef82927`) fails **arm A alone**.
+  - The two mutants land on different arms and neither arm carries the other.
+- **Sizes:** `kernel.bin` is 1,319,306 B, unchanged because the addition fits
+  in page padding. The hash moved `22ce5984de925d38` → `467d51d14164149c`.
 
 ### 1.4 Not claimed
 
@@ -163,4 +195,4 @@ evidence *"a proof of WIRING and nothing else"*.
 
 - No mitigation is added by this DDR.
 - The exposure line changes no behaviour.
-- `GLOBAL_FORBIDDEN` is unchanged. One gate is added, `smoke-cpuexposure`.
+- `GLOBAL_FORBIDDEN` is unchanged (77). One gate is added, `smoke-cpuexposure` (180 gates).

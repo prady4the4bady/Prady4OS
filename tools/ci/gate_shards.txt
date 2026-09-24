@@ -107,6 +107,7 @@
 3	smoke-crosswake	1	strict
 3	smoke-aether-queue	0	strict
 3	smoke-mitigations	0	strict
+4	smoke-cpuexposure	40	strict
 3	smoke-net-lo	0	strict
 3	smoke-pmm-poison	0	strict
 4	smoke-smppreempt	181	strict

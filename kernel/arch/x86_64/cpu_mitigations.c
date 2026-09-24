@@ -7,6 +7,58 @@
 #include "cpu_mitigations.h"
 #include "console.h"
 
+#define MSR_IA32_ARCH_CAPABILITIES 0x10Au   /* bit0 RDCL_NO, bit5 MDS_NO */
+
+/* DDR-1140 sec.1: name whether THIS CPU is exposed to Meltdown and MDS, beside
+ * the fact that this kernel has no KPTI (kpti=0 is a literal on purpose: the
+ * line exists to make that absence visible in every boot log). READ-ONLY --
+ * it writes no MSR -- and rdmsr 0x10A is issued ONLY when CPUID.7.0:EDX bit 29
+ * says IA32_ARCH_CAPABILITIES exists, since a blind rdmsr on a CPU without it
+ * raises #GP (the same discipline the SPEC_CTRL write below follows).
+ *
+ * Classification is the rule Linux uses: AMD/Hygon are not affected; an Intel
+ * CPU that does not enumerate ARCH_CAPABILITIES predates the fixes and is
+ * treated as exposed; otherwise RDCL_NO / MDS_NO decide. Any other vendor is
+ * "unknown" rather than a guess. Under TCG this describes the EMULATED CPU,
+ * which is exactly what smoke-cpuexposure varies. One kline (DDR-1055). */
+static void cpu_exposure_report(void) {
+    uint32_t eax, ebx, ecx, edx, max;
+    const char *vendor = "other", *meltdown = "unknown", *mds = "unknown";
+    int archcap = 0;
+    uint64_t caps = 0;
+
+    cpu_cpuid(0, 0, &max, &ebx, &ecx, &edx);
+    /* vendor string is EBX,EDX,ECX: "Genu" "ineI" "ntel" */
+    if (ebx == 0x756E6547u && edx == 0x49656E69u && ecx == 0x6C65746Eu)
+        vendor = "intel";
+    else if ((ebx == 0x68747541u && edx == 0x69746E65u && ecx == 0x444D4163u) ||  /* AuthenticAMD */
+             (ebx == 0x6F677948u && edx == 0x6E65476Eu && ecx == 0x656E6975u))    /* HygonGenuine */
+        vendor = "amd";
+
+    if (max >= 7) {
+        cpu_cpuid(7, 0, &eax, &ebx, &ecx, &edx);
+        archcap = (int)((edx >> 29) & 1u);
+    }
+    if (archcap)
+        caps = cpu_rdmsr(MSR_IA32_ARCH_CAPABILITIES);
+
+    if (vendor[0] == 'a') {
+        meltdown = "no"; mds = "no";
+    } else if (vendor[0] == 'i') {
+        meltdown = (archcap && (caps & 1u))         ? "no" : "yes";
+        mds      = (archcap && (caps & (1u << 5)))  ? "no" : "yes";
+    }
+
+    kline k;
+    kline_init(&k);
+    kline_s(&k, "[cpu] exposure: vendor=");  kline_s(&k, vendor);
+    kline_s(&k, " archcap=");                kline_d(&k, (uint64_t)archcap);
+    kline_s(&k, " meltdown=");               kline_s(&k, meltdown);
+    kline_s(&k, " mds=");                    kline_s(&k, mds);
+    kline_s(&k, " kpti=0\r\n");
+    kline_emit(&k);
+}
+
 void cpu_mitigations_init(void) {
     uint32_t eax, ebx, ecx, edx;
     int ibrs = 0, stibp = 0, ssbd = 0, ibpb = 0;
@@ -30,6 +82,8 @@ void cpu_mitigations_init(void) {
     }
     if (ibpb)
         cpu_wrmsr(MSR_IA32_PRED_CMD, 1ull);         /* flush indirect predictors */
+
+    cpu_exposure_report();
 
     kputs("[cpu] mitigations: IBRS=");
     kputdec((uint64_t)ibrs);

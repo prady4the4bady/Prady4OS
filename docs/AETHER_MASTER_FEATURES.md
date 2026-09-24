@@ -2037,3 +2037,15 @@ this time, not just the waiter."* Instrument only.
 - **Strength:** 95% upper bound ≈0.14% per boot on the fixed binary; P(0 in 2,200 | pre-fix ≈0.36%) ≈ 3.7e-4.
 - **CI:** `1b07e46` has **3 greens on one SHA** — push 35985675298, pull_request 35985679862, workflow_dispatch 36019677465, all shards success.
 - **Not claimed:** OPEN-2 as a whole is not declared closed. The `cap.c` `resolve` silent panic (DDR-1133 §6) and the pre-fix lane-15 panic did not recur in 2,200 boots and remain **unattributed** — consistent with being downstream of the double dispatch, not proof of it. `dblclaim=` was never seen non-zero. No kernel change in this entry; `GLOBAL_FORBIDDEN` 77, 179 gates, DDR free range **DDR-1140+**. Merge and promotion are the operator's.
+
+## DDR-1140 — CPU exposure line; KPTI/retpoline/RSB recommended for deferral (2026-09-24)
+
+- **Built:** `cpu_mitigations_init()` now also prints `[cpu] exposure: vendor= archcap= meltdown= mds= kpti=0`. It is read-only, and `rdmsr 0x10A` is guarded on CPUID.7.0:EDX bit 29. `kpti=0` is printed as a literal so the absence of KPTI is visible in every boot log.
+- **Gate:** `smoke-cpuexposure` (shard 4, strict), two CPU models.
+  - The default model (AMD vendor) must read `meltdown=no mds=no`.
+  - `qemu64,vendor=GenuineIntel` must read `meltdown=yes mds=yes`.
+  - M1 (Intel always `no`) fails arm B only. M3 (vendor ignored) fails arm A only.
+  - 179 → 180 gates.
+- **Uncovered, measured:** QEMU 8.2 TCG cannot expose `ARCH_CAPABILITIES`, so the MSR-read branch never executes in CI.
+- **Kernel:** `kernel.bin` `467d51d14164149c`, 1,319,306 B. The size is unchanged.
+- **KPTI, retpoline, RSB refill:** not built. A post-tag series is recommended to the operator: IST and entry stacks first, then KPTI, then retpoline with RSB refill, each hunted against DDR-1139 §5. TCG cannot demonstrate the mitigation, and the change reaches the OPEN-2 paths. This is a recommendation, not a decision.

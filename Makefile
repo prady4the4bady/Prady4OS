@@ -2204,6 +2204,26 @@ smoke-mitigations: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL='[cpu] mitigations:' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-1140 sec.1.3/1.5: the CPU exposure line, on TWO CPU models. The default
+# model alone is vacuous -- qemu64 reports AuthenticAMD, so a classifier
+# hard-wired to meltdown=no passes it; arm B (Intel, no ARCH_CAPABILITIES)
+# catches that, and arm A catches one hard-wired to yes. Each arm is an EXACT
+# substring and each boot exits early the moment its line appears.
+# NO ARM C, MEASURED (sec.1.5): QEMU 8.2 TCG cannot expose ARCH_CAPABILITIES at
+# all -- query-cpu-model-expansion reads arch-capabilities=false even on
+# -cpu max, and +arch-capabilities is dropped with a warning -- so the rdmsr
+# 0x10A branch never executes in CI and is UNCOVERED, not assumed covered.
+smoke-cpuexposure: $(IMG) fat-image sfs-image
+	@echo "[cpuexp] arm A: default CPU model (AMD vendor) -> not exposed"
+	@TIMEOUT_S=90 \
+	    EXTRA_SENTINEL='[cpu] exposure: vendor=amd archcap=0 meltdown=no mds=no kpti=0' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[cpuexp] arm B: Intel without ARCH_CAPABILITIES -> exposed"
+	@QEMU_CPU="qemu64,vendor=GenuineIntel" TIMEOUT_S=90 \
+	    EXTRA_SENTINEL='[cpu] exposure: vendor=intel archcap=0 meltdown=yes mds=yes kpti=0' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[cpuexp] PASS -- two CPU models, two exact classifications (DDR-1140)"
+
 # IMP-B poison gate: with KASAN=1 (the default) the kernel poisons freed PMM
 # frames and arms slab canaries. The gate asserts the "[pmm] poison enabled"
 # banner; because KASAN is the default, every other gate is implicitly a poison /
