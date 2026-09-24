@@ -14644,3 +14644,9 @@ operator decision.
 - The PR closes the operator approves.
 
 No code change was made in this entry, and `kernel.bin` is unchanged.
+- **Addendum (comment 5821490746, OWNER):** §0 Section F adds items 38–48.
+  - DHCP and DNS are compiled out (`LWIP_DHCP 0`, `LWIP_DNS 0`), and the IP is
+    QEMU slirp's static `10.0.2.15`, so networking cannot work on a real LAN.
+  - A persistent log and resource limits exist only partially: a RAM `klog`
+    via `SYS_DMESG`, plus agent-only caps.
+  - Disk encryption is an operator decision: the only key is in the image.

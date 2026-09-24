@@ -29,8 +29,9 @@ precisely because that bar has not been met.
 ## SECTION 0 — v1.0.0 GO/NO-GO ACCOUNTING (operator instruction, PR #17, 2026-09-24)
 
 **Verdict: NO-GO until the operator signs off on this list.** No release ISO is
-built, nothing is tagged, `main` is not promoted. The instruction was comment
-5821389748, verified at the source as `author_association: OWNER`.
+built, nothing is tagged, `main` is not promoted. The instructions were comments
+5821389748 (items 1–37) and 5821490746 (items 38–48), both verified at the
+source as `author_association: OWNER`.
 
 **Dispositions:**
 - **(a)** fixable before the tag. Not yet done; awaiting your go.
@@ -139,6 +140,22 @@ covers an item, it is cited rather than repeated.
 | 35 | Hot-plug | **(b)** post-1.0. | Measured: none. AHCI states it outright (`ahci.c:7`). |
 | 36 | Hardware watchdog | **(b)** post-1.0. | Measured: no iTCO or WDAT. A distinct item from §1.4's refused latch watchdog. |
 | 37 | Third-party license compliance | **(a)**: fixable before the tag. | See finding 2. Ship a `THIRD_PARTY_NOTICES` file (the lwIP `COPYING` plus musl's `COPYRIGHT`) in the ISO and the repo. The obligation is real for any binary distribution. |
+
+### F. Networking, security and desktop usability (addendum, PR #17 comment 5821490746, OWNER-verified)
+
+| # | Item | Disposition | Measured basis |
+|---|---|---|---|
+| 38 | Wi-Fi | **(b)** post-1.0, stated in the release notes. | Measured: no 802.11 code and no firmware-loading path anywhere. The only NICs are virtio-net and e1000e. A Wi-Fi stack means per-chipset drivers, firmware blobs (which raise a licensing question, see #37) and WPA supplicant crypto. That is a subsystem, not a pre-tag fix. |
+| 39 | Bluetooth | **(b)** post-1.0. | Measured: none. It also needs USB (#16) for most controllers. |
+| 40 | Full-volume encryption | **(c)**. My recommendation: defer post-1.0. | Measured: no volume encryption. The primitives exist in-tree (ChaCha20-Poly1305 AEAD, DDR-819; HKDF, DDR-818). What is missing is **a key the attacker who stole the disk does not also hold**. The only key material is the compile-time `g_owner_seed` (DDR-1059), so encrypting SFS with a key derived from the image would read as confidentiality and provide none (the DDR-1059 shape). It needs a passphrase-at-boot or TPM decision first, and that is yours. |
+| 41 | Crash and core dumps to disk | **(b)** post-1.0. | Measured: none. A panic prints to the console and halts. Writing it to disk from a panicked kernel means driving a block device with the machine in an unknown state, which is the hazard DDR-1079 met inside the panic path itself. |
+| 42 | Persistent system log | **(b)** post-1.0, with a partial: a RAM log exists. | `klog_buf[KLOG_SZ]` (`console.c:94`) is a RAM ring readable from ring 3 via `SYS_DMESG` (NSI 73, DDR-750). **It does not survive a reboot.** Persisting it needs a writer on SFS, and that meets the same write-path ceiling as the audit flusher (DDR-1100). |
+| 43 | DHCP and DNS | **(a)**: the smallest real-hardware networking fix, but **not trivially**. | Measured: `LWIP_DHCP 0` and `LWIP_DNS 0` (`lwipopts.h:48/:54`). The address is hard-coded to `10.0.2.15/24` (`lwip_port.c:822`), which is **QEMU slirp's address**. So on any real network the OS has a wrong static IP and no name resolution. lwIP ships both clients, so the flags are cheap. But enabling them changes what every network gate boots with, and a DNS resolver adds a new egress path the CAP_NET allowlist and audit record must cover (DDR-1091's lesson). That needs its own DDR and gate. |
+| 44 | TLS root CA store | **(b)**, subsumed by the TLS row. | Measured: none. It is exactly DDR-1104 §1's blocker, the trust anchor, and a CA bundle is only meaningful once the image's own authenticity is anchored (#17, #48). |
+| 45 | Boot menu and rescue mode | **(b)** post-1.0. | Measured: neither `stage1`/`stage2` nor the UEFI loader has a menu. Dual-boot is normally the firmware's or another bootloader's job. A rescue mode needs a second boot target, which with no installer (#19) has nothing to rescue. |
+| 46 | Resource limits and OOM | **(b)**, with a partial stated precisely. | What exists: an **AETHER agent** has a 128 MiB hard memory cap, killed cleanly as `AGENT_OOM_KILLED` (`sys_mmap.c:176`, ADR-026 D5), and a 60-syscalls-per-second rate limit (`AETHER_RATE_MAX`). An agent-run **experiment** is bounded by construction (`EXP_MAX_STEPS` 4096, a 32-slot stack, no LOAD/STORE; DDR-1034). A page fault under PMM exhaustion kills the faulting thread instead of panicking (`vmm_cow.c:124/:162`). What does not exist: any limit on **ordinary** processes (PRISM, term, user programs), no `setrlimit`, and no OOM killer that chooses a victim. |
+| 47 | Clipboard and text shaping | **(b)** post-1.0. | Measured: no clipboard or copy-paste anywhere. Font rendering **is** confirmed and gated: Inter 16px alpha atlas (DDR-728), whose font gate checks window titles. It is a fixed-size glyph atlas with **no shaping**, so there are no ligatures, no complex scripts and no bidi. Consistent with #24. |
+| 48 | Package signing | **(b)**, subsumed by #20 and #5. | `prad` is unbuilt, so there is nothing to sign yet. When it exists, signing has the same key-custody problem as DDR-1059: a verification key shipped in the image proves nothing about packages built by whoever holds the image. The ML-DSA primitives are ready (DDR-1054/1057/1058). The custody decision is what is missing. |
 
 **What I propose to do on your "go", all doc or packaging, no kernel change:**
 - #13 residue notes.
