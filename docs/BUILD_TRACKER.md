@@ -6399,3 +6399,24 @@ unit 1's `compl_lock`** (`g_inst+0x828`, stride `imulq $0x420` measured), so the
 backtrace and the table agree, unlike DDR-1121. Who holds it is not captured. Addresses
 resolved against a bit-for-bit a390eab rebuild in a removed scratch worktree. NO FIX, NO
 MECHANISM, OPEN-2 does not close. Docs only; `kernel.bin` `25f4dae4a3f90bcb` unchanged.
+
+### DDR-1138 (2026-09-24) — name the holder of a stuck vblk `compl_lock`; sample every frozen CPU
+Asked for by the operator on PR #17 (comment 5808760525, OWNER): *"capture the lock holder
+this time, not just the waiter."* Instrument only.
+- **Owner record:** `struct vblk` gains `own_cpu/own_tid/own_site/own_tick`, set after
+  every `compl_lock` acquisition (4 sites) and cleared before every release. It is dumped
+  as `[vblkown]` beside the lock table, and only after `[apfreeze]`.
+- **Peer sample:** one NMI per other frozen CPU (`peer=1`). `s_victim`'s 4-shot budget is
+  unchanged.
+- **Proof on forced mutants:**
+  - M0 `f46280063b10a030` prints `locked=1 own_cpu=1 own_tid=8 site=1`. M1
+    `23f159bd9a3fa48f` (the record is never written) prints `locked=1 own_cpu=none` from
+    the identical trigger.
+  - P1 `66dbe55ebbbfcc53` samples cpu 2 and cpu 3 with `peer=1`. P0 `86b2cc6de121a224`,
+    the pre-change tree under the same forcing, samples the victim only.
+- **Negative half:** on the shipped `bc8f02d61a4f3774` (1,319,306 B, size unchanged),
+  `smoke-shell` 5/5, `smoke-smp`, `smoke-smppreempt`, `smoke-rqstress`,
+  `smoke-blk-integrity` and `smoke-blkmq` all rc=0, hash pinned. A kept 31,747 B capture
+  carries 0 `[vblkown]`, 0 `peer=` and 0 `[apfreeze]`.
+- **NO FIX, NO MECHANISM, OPEN-2 does not close.** Not exonerated in advance.
+  `GLOBAL_FORBIDDEN` 77, 179 gates. The DDR free range is **DDR-1139+** at all four carriers.

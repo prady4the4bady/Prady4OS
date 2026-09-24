@@ -187,8 +187,25 @@ Identical forcing in both kernels: the frozen predicate becomes
 
 ### §5.3 The negative half
 
-**IN PROGRESS at this commit.** Measured so far on the shipped `bc8f02d61a4f3774`, hash pinned
-and re-checked after each gate: `smoke-shell` rc=0 twice. The remaining runs (`smoke-shell`
-×3, `smoke-smp`, `smoke-smppreempt`, `smoke-rqstress`, `smoke-blk-integrity`, `smoke-blkmq`)
-and the retained-capture check (zero `[vblkown]`, zero `peer=`) are recorded in the next
-commit. **Until then the negative half is NOT claimed.**
+**MEASURED.** On the shipped `bc8f02d61a4f3774`, with the hash pinned and re-checked after
+every gate (DDR-1060 §9), all runs were sequential and one QEMU at a time:
+
+| gate | result |
+|---|---|
+| `smoke-shell` | rc=0 **5/5** (§NON-NEGOTIABLE 4) |
+| `smoke-smp` | rc=0 |
+| `smoke-smppreempt` | rc=0 |
+| `smoke-rqstress` | rc=0 |
+| `smoke-blk-integrity` | rc=0 |
+| `smoke-blkmq` | rc=0 |
+
+The hash never moved.
+
+- **Retained capture, read back instead of inferred from rc=0** (DDR-1041).
+  `smoke-blk-integrity` was re-run under `KEEP_SERIAL=1` at `-smp 4`. The capture is
+  **31,747 B with 35 `[hb]` heartbeats**. It is non-empty, so the measurement is valid
+  rather than absent (DDR-1023).
+- It carries **zero `[vblkown]`, zero `peer=` and zero `[apfreeze]`**. A healthy boot pays
+  only the owner-record stores and prints none of this instrument.
+- **The limit, stated:** a healthy boot cannot show that those stores do **not** perturb
+  the rare freeze being hunted. That is §4's "not exonerated in advance", and it stands.
