@@ -1157,17 +1157,52 @@ ISO_HD    := build/pradyos-hd.img
 $(ISO_HD): $(IMG)
 	python3 tools/build/mk_hdimg.py $(IMG) $(ISO_HD)
 
+# Operator decisions, PR #17 comment 5822830053:
+#  item 37 - the ISO carries THIRD_PARTY_NOTICES.txt (lwIP BSD-3, musl MIT +
+#            its BSD portions), GENERATED from third_party/ at build time so it
+#            cannot drift from what is actually linked (tools/build/mk_notices.sh);
+#            LICENSE.txt (the proprietary licence) rides beside it.
+#  EULA.txt + PRIVACY.txt (docs/legal, comment 5822896320) ride on the ISO too.
+#  item 63 - a SHA-256 of the ISO is published as $(ISO_IMG).sha256, in the
+#            standard `sha256sum -c` format with a BARE filename so it verifies
+#            from whatever directory the two files are downloaded into. Signing
+#            stays deferred (no key exists yet); a checksum proves integrity
+#            against corruption, NOT authenticity against a hostile mirror.
+# -R -J add Rock Ridge / Joliet so those long names survive; they touch only
+# the directory records, not the El Torito boot catalogue both arms boot from.
 iso: $(ISO_HD) esp-image
 	@rm -rf build/isoroot && mkdir -p build/isoroot/boot
 	cp $(ISO_HD)     build/isoroot/boot/pradyos.img
 	cp build/esp.img build/isoroot/boot/esp.img
+	bash tools/build/mk_notices.sh build/isoroot/THIRD_PARTY_NOTICES.txt
+	cp LICENSE build/isoroot/LICENSE.txt
+	cp docs/legal/EULA.txt docs/legal/PRIVACY.txt build/isoroot/
 	xorriso -as mkisofs \
-	    -V PRADYOS \
+	    -V PRADYOS -R -J \
 	    -b boot/pradyos.img -hard-disk-boot \
 	    -eltorito-alt-boot -e boot/esp.img -no-emul-boot \
 	    -o $(ISO_IMG) build/isoroot
+	cd build && sha256sum $(notdir $(ISO_IMG)) > $(notdir $(ISO_IMG)).sha256
 	@echo "iso: $(ISO_IMG) ($$(stat -c%s $(ISO_IMG)) bytes, BIOS+UEFI)"
+	@echo "iso: sha256 $$(cut -d' ' -f1 $(ISO_IMG).sha256)"
 smoke-iso-x86: iso
+	@# Packaging arms (items 37/63). Read BACK out of the built ISO rather than
+	@# out of build/isoroot: a file staged but dropped by xorriso would pass a
+	@# check of the staging directory. The checksum is verified with the tool
+	@# a user would run, from the directory a user would run it in.
+	@rm -rf build/iso_extract && mkdir -p build/iso_extract
+	@xorriso -osirrox on -indev $(ISO_IMG) \
+	    -extract /THIRD_PARTY_NOTICES.txt build/iso_extract/THIRD_PARTY_NOTICES.txt \
+	    -extract /LICENSE.txt build/iso_extract/LICENSE.txt \
+	    -extract /EULA.txt build/iso_extract/EULA.txt \
+	    -extract /PRIVACY.txt build/iso_extract/PRIVACY.txt >/dev/null 2>&1 \
+	    || { echo "[iso] FAIL: notices/licence not on the ISO"; exit 1; }
+	@grep -qF 'Swedish Institute of Computer Science' build/iso_extract/THIRD_PARTY_NOTICES.txt || { echo "[iso] FAIL: lwIP notice missing from ISO"; exit 1; }
+	@grep -qF 'Rich Felker' build/iso_extract/THIRD_PARTY_NOTICES.txt || { echo "[iso] FAIL: musl notice missing from ISO"; exit 1; }
+	@cmp -s build/iso_extract/LICENSE.txt LICENSE || { echo "[iso] FAIL: LICENSE.txt on ISO differs from LICENSE"; exit 1; }
+	@cmp -s build/iso_extract/EULA.txt docs/legal/EULA.txt && cmp -s build/iso_extract/PRIVACY.txt docs/legal/PRIVACY.txt || { echo "[iso] FAIL: EULA/PRIVACY on ISO differ from docs/legal"; exit 1; }
+	@(cd build && sha256sum -c --quiet $(notdir $(ISO_IMG)).sha256) || { echo "[iso] FAIL: published sha256 does not verify"; exit 1; }
+	@echo "[iso] packaging OK — notices, licence, EULA, privacy on the ISO, sha256 verifies"
 	@echo "[iso] BIOS arm..."
 	@timeout 120 qemu-system-x86_64 -machine q35 -cdrom $(ISO_IMG) -boot d \
 	    -no-reboot -display none -monitor none -serial file:build/iso_bios.log >/dev/null 2>&1 || true
@@ -2414,7 +2449,7 @@ smoke-compositor: $(IMG) fat-image sfs-image
 # sends 'p', so every other boot is unaffected.
 smoke-poweroff: $(IMG) fat-image sfs-image
 	@echo "[power] poweroff gate: boot(GPU) + sendkey p -> SYS_POWEROFF -> ACPI S5..."
-	@rm -f build/power.log /tmp/ppower.sock
+	@rm -f build/power.log build/power.qemu_rc /tmp/ppower.sock
 	@bash tools/qemu_runner/input_inject.sh build/power.log /tmp/ppower.sock PRADYOS_COMPOSITOR_OK "p" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
@@ -2422,7 +2457,13 @@ smoke-poweroff: $(IMG) fat-image sfs-image
 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
 	    -device virtio-gpu-pci \
 	    -monitor unix:/tmp/ppower.sock,server,nowait \
-	    -serial file:build/power.log -display none -no-reboot || true
+	    -serial file:build/power.log -display none -no-reboot; echo $$? > build/power.qemu_rc
+	@# PRE_LAUNCH_CHECKLIST §0 #51: the sentinels above print BEFORE the
+	@# hardware action, so they cannot tell a machine that actually went down
+	@# from one that printed and then hung until timeout(1) killed it at 120 s.
+	@# QEMU's exit status can: a guest-initiated shutdown/reset under -no-reboot
+	@# exits 0; timeout's kill is 124. Anything but 0 fails.
+	@r=$$(cat build/power.qemu_rc); [ "$$r" = 0 ] || { echo "[power] FAIL — QEMU exit status $$r (124 = timeout: the guest never left)"; tail -20 build/power.log; exit 1; }
 	@grep -q "PRADYOS_COMPOSITOR_POWEROFF" build/power.log || { echo "[power] FAIL — compositor did not issue SYS_POWEROFF"; tail -20 build/power.log; exit 1; }
 	@grep -q "PRADYOS_POWEROFF" build/power.log || { echo "[power] FAIL — kernel ACPI S5 path not reached"; tail -20 build/power.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/power.log; then echo "[power] FAIL: kernel panic"; tail -20 build/power.log; exit 1; fi
@@ -2434,7 +2475,7 @@ smoke-poweroff: $(IMG) fat-image sfs-image
 # and no panic. Only this gate sends 'b', so every other boot is unaffected.
 smoke-reboot: $(IMG) fat-image sfs-image
 	@echo "[reboot] reboot gate: boot(GPU) + sendkey b -> SYS_REBOOT -> ACPI/PC reset..."
-	@rm -f build/reboot.log /tmp/preboot.sock
+	@rm -f build/reboot.log build/reboot.qemu_rc /tmp/preboot.sock
 	@bash tools/qemu_runner/input_inject.sh build/reboot.log /tmp/preboot.sock PRADYOS_COMPOSITOR_OK "b" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
@@ -2442,7 +2483,13 @@ smoke-reboot: $(IMG) fat-image sfs-image
 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
 	    -device virtio-gpu-pci \
 	    -monitor unix:/tmp/preboot.sock,server,nowait \
-	    -serial file:build/reboot.log -display none -no-reboot || true
+	    -serial file:build/reboot.log -display none -no-reboot; echo $$? > build/reboot.qemu_rc
+	@# PRE_LAUNCH_CHECKLIST §0 #51: the sentinels above print BEFORE the
+	@# hardware action, so they cannot tell a machine that actually went down
+	@# from one that printed and then hung until timeout(1) killed it at 120 s.
+	@# QEMU's exit status can: a guest-initiated shutdown/reset under -no-reboot
+	@# exits 0; timeout's kill is 124. Anything but 0 fails.
+	@r=$$(cat build/reboot.qemu_rc); [ "$$r" = 0 ] || { echo "[reboot] FAIL — QEMU exit status $$r (124 = timeout: the guest never left)"; tail -20 build/reboot.log; exit 1; }
 	@grep -q "PRADYOS_COMPOSITOR_REBOOT" build/reboot.log || { echo "[reboot] FAIL — compositor did not issue SYS_REBOOT"; tail -20 build/reboot.log; exit 1; }
 	@grep -q "PRADYOS_REBOOT" build/reboot.log || { echo "[reboot] FAIL — kernel reset path not reached"; tail -20 build/reboot.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/reboot.log; then echo "[reboot] FAIL: kernel panic"; tail -20 build/reboot.log; exit 1; fi
