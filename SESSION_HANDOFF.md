@@ -14660,3 +14660,13 @@ No code change was made in this entry, and `kernel.bin` is unchanged.
       are not coverage-guided.
   - No SHA-256 is published for the ISO.
   - `init` has restart-on-failure but no dependency ordering.
+- **Final addendum (comment 5821622416, OWNER):** §0 Section I adds items 69–81,
+  plus an at-a-glance index across all 81 items.
+  - **REAL FINDING:** there is **no KPTI**, no retpoline, no RSB fill and no MDS
+    `VERW`. IMP-A is MSR-only (IBRS/STIBP/SSBD/IBPB), so **Meltdown is not
+    mitigated on vulnerable CPUs**. The `build_status.md:140` label is annotated
+    at the site. KPTI is an operator decision; reporting the exposure in the
+    boot log is (a).
+  - The kernel is built with `-fno-stack-protector` explicitly and has no CFI.
+  - A crashed app is reaped and the session survives; a compositor crash has
+    no restart.

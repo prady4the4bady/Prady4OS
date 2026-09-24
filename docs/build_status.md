@@ -137,7 +137,7 @@ previously leaked. New TCB fields `exit_status`, `waiter`; new errno `EAGAIN`.
 Also fixed a latent systest fork bug: the post-`syscall` branches lacked a `test
 rax, rax` (SYSRET restores user RFLAGS), so they read stale flags. New gate
 `smoke-syswait` PASS (16 gates total). Kernel 113,572 B. Code graph: 95 files /
-975 symbols. **IMP-A (Spectre/Meltdown MSR mitigations) COMPLETE:**
+975 symbols. **IMP-A (Spectre/Meltdown MSR mitigations) COMPLETE:** *[Label corrected 2026-09-24, PRE_LAUNCH_CHECKLIST §0 #70: the IBRS/STIBP/SSBD/IBPB half is real; there is NO KPTI, so Meltdown is NOT mitigated on vulnerable CPUs.]*
 `kernel/arch/x86_64/cpu_mitigations.c` — `cpu_mitigations_init` (called in kmain
 after `idt_init`) probes CPUID.7.0:EDX and, where the CPU advertises them, sets
 IBRS/STIBP/SSBD in IA32_SPEC_CTRL (0x48) and fires an IBPB barrier

@@ -30,8 +30,8 @@ precisely because that bar has not been met.
 
 **Verdict: NO-GO until the operator signs off on this list.** No release ISO is
 built, nothing is tagged, `main` is not promoted. The instructions were comments
-5821389748 (items 1–37), 5821490746 (38–48) and 5821578910 (49–68), all
-verified at the source as `author_association: OWNER`.
+5821389748 (items 1–37), 5821490746 (38–48), 5821578910 (49–68) and
+5821622416 (69–81, the operator's stated final addendum), all verified at the source as `author_association: OWNER`.
 
 **Dispositions:**
 - **(a)** fixable before the tag. Not yet done; awaiting your go.
@@ -194,6 +194,63 @@ Each is stated precisely below rather than accepted or dismissed.
 | 67 | No-exec policy for removable media | **(b)**, currently **moot**, and stated so. | There is no USB or removable-media stack (#16), so no removable volume can mount. There is also **no `noexec` mount option** (`grep -rn noexec kernel` is empty). Once removable media exists, this becomes a real design requirement. |
 | 68 | End-of-life and support policy | **(c)**. | Only you can state a support window. |
 
+### I. Modern OS hardening and platform parity (final addendum, comment 5821622416, OWNER-verified)
+
+| # | Item | Disposition | Measured basis |
+|---|---|---|---|
+| 69 | TPM, assessed on its own | **(b)** post-1.0. The **decision it gates is (c)** and belongs to #40/#5/#63. | Measured: `grep -rni tpm kernel boot` is empty. A TPM 2.0 driver means TIS/CRB transport plus a TPM2 command marshaller, and it serves three consumers this OS does not have yet: disk-key sealing (#40), measured-boot attestation, and ledger/package key custody (#5, #48). QEMU can emulate one via `swtpm`, but CI does not attach it, so any gate would first need that plumbing. It is a subsystem, not a pre-tag fix. **What it unblocks is the reason to build it**, so it should be scheduled together with whichever of #40, #5 or #48 you choose first. |
+| 70 | Spectre/Meltdown mitigations | **Premise partly corrected, AND A REAL FINDING.** **(a)** to report exposure; **(c)** for KPTI. | **Shipped (IMP-A, `cpu_mitigations.c`):** CPUID.7.0:EDX-gated **IBRS, STIBP, SSBD** via `IA32_SPEC_CTRL`, plus one **IBPB** at boot. Under TCG those bits read 0, so CI exercises the "absent" path only. **Not shipped, measured:** **no KPTI**, since the higher-half kernel is mapped in every user address space and `grep` finds no user/kernel CR3 split; **no retpoline** (no `-mretpoline`/`-mindirect-branch` in `KCFLAGS`); **no RSB stuffing**; **no MDS `VERW` clearing**. So `build_status.md:140`'s label *"IMP-A (Spectre/Meltdown MSR mitigations)"* **overclaims the Meltdown half**. **Meltdown is not mitigated on CPUs that are vulnerable to it** (pre-2018 Intel lacking `ARCH_CAPABILITIES.RDCL_NO`). **(a):** read `IA32_ARCH_CAPABILITIES` and print whether this CPU is Meltdown/MDS-exposed, so the boot log states the exposure, and correct the label. **(c):** KPTI adds a CR3 switch on every syscall and interrupt entry and exit, on exactly the paths OPEN-2 lived in, so it is your call whether v1 ships without it and says so. |
+| 71 | Compiler hardening | **(c)**. | Measured: `KCFLAGS` carries **`-fno-stack-protector` explicitly** (`Makefile:238`, and `:372/:374` for probes). There is no `-fcf-protection` (CET/IBT) and no CFI. A stack protector needs `__stack_chk_fail` plus a per-boot canary drawn from the RNG (DDR-816). That is buildable, but it changes the code generation of every kernel function, including the scheduler that was just stabilised (DDR-1139). My recommendation: post-tag, behind its own DDR and a full gate plus hunt run. |
+| 72 | SMB/NFS | **(b)** post-1.0. | Measured: none. Also blocked on DHCP/DNS (#43). |
+| 73 | Touch | **(b)** post-1.0, with a partial. | The virtio-**tablet** absolute pointer is supported (DDR-705, `virtio_input.c`), but that is a single absolute pointer, not multitouch or gestures. There is no HID-over-USB/I²C touch path, and no USB at all (#16). |
+| 74 | UPS / critical-power shutdown | **(b)** post-1.0. | Measured: none. It needs ACPI battery/AC events (#18) or a UPS protocol over USB/serial. |
+| 75 | Factory reset | **(b)**, and on the shipped artefact it is **effectively already true**. | On the ISO, the SFS root is a **RAM disk** (DDR-972: `blk_count()==0` creates ramdisks). So every live boot starts from factory state and nothing persists. A reset option only becomes meaningful with an installer (#19). |
+| 76 | Notifications/tray | **(b)** post-1.0. | Measured: none in the compositor. |
+| 77 | App crash recovery | **Answered, measured.** **(b)** for the rest. | A crashed ring-3 app is killed cleanly (a user fault goes to `sched_exit(-1)`, `idt.c`). Its windows are reclaimed automatically (`surface_reap_pid`, DDR-729, called from `sched_exit`), and **the session survives**; it is gated via the surface-lifecycle gates. **Not present:** automatic *restart* of a crashed app, and any verified restart of the **compositor itself**. If the compositor dies, the desktop session is lost. |
+| 78 | File search/indexing | **(b)** post-1.0. | Measured: none. SFS tags (slice 4i) are the natural substrate. |
+| 79 | MDM / enterprise management | **(b)**: **explicitly out of scope for v1**, stated as asked. | Measured: none. It presupposes accounts (#25), remote management (#58) and updates (#20). |
+| 80 | FIPS 140 | **(b)**: **no certification, and v1 must never claim one.** | ML-DSA is **FIPS 204 KAT-verified** against NIST ACVP vectors (DDR-1054/1057/1058). That is **algorithm conformance, not CMVP module validation**, which is a paid lab process and a product-positioning decision. Release-notes wording must keep that distinction. |
+| 81 | procfs/sysfs introspection | **(b)**, with a partial. | There is no virtual filesystem. The live-introspection surface that does exist: `SYS_GETPROCS` (`ps`), `SYS_DMESG` (kernel log), `SYS_SYSINFO`/`SYS_MEMINFO` (`uname`/`free`), the `[hb]` serial heartbeat (per-CPU ticks, pmmfree, runqueue depth, `dblclaim=`), the `lock_stat` dump on `[apfreeze]`, and PRISM's `audit`. |
+
+### At a glance: every item, by disposition
+
+**(a) fixable before the tag, awaiting your go:**
+- **#13:** quantum-doc residue notes.
+- **#28:** minimum user docs and a corrected README.
+- **#37:** third-party notices in the ISO.
+- **#43:** DHCP/DNS, with its own DDR and gate.
+- **#51:** poweroff/reboot exit assertion.
+- **#63:** ISO SHA-256.
+- **#70:** Meltdown/MDS exposure report in the boot log (the label is already annotated).
+
+**(c) needs your decision:**
+- **#1–#3:** ship with OPEN-1 route 1, OPEN-12 and OPEN-13 named open.
+- **#5:** ledger key custody.
+- **#6:** execute the PR triage.
+- **#7:** B#14/B#15 respec.
+- **#8:** Group G respec.
+- **#9:** the three agent caps.
+- **#14:** branding.
+- **#17:** Secure Boot.
+- **#19:** live-only ISO.
+- **#25:** single-user.
+- **#27:** telemetry.
+- **#29:** EULA and privacy policy.
+- **#40:** disk encryption key.
+- **#49:** export control.
+- **#50:** which license (README vs LICENSE).
+- **#59:** soak budget.
+- **#63:** signing key.
+- **#68:** EOL policy.
+- **#70:** KPTI.
+- **#71:** compiler hardening.
+
+**(b) defer with the named reason in its row:** every other item.
+- **Unresolved defect:** **#4**. It stays open, and the release notes must not call OPEN-2 closed as a whole.
+- **Premise corrected as well as deferred:** **#12** (the shared build artifact is built), **#21**, **#30** and **#81**.
+- **Answered by measurement, the remainder deferred:** **#61** and **#77**.
+- **Moot on the shipped artefact:** **#67** and **#75**.
+
 **What I propose to do on your "go", all doc or packaging, no kernel change:**
 - #13 residue notes.
 - #28 minimum user docs, including a README rewritten to match reality.
@@ -203,6 +260,7 @@ Each is stated precisely below rather than accepted or dismissed.
 - #43 DHCP/DNS (with its own DDR and gate).
 - #51 poweroff/reboot exit assertion.
 - #63 ISO checksum.
+- #70 Meltdown/MDS exposure line in the boot log (the IMP-A label itself is already annotated at `build_status.md:140`).
 
 Every **(c)** row waits for you.
 
