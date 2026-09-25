@@ -99,7 +99,10 @@ as the custody of its key, and that is the open DDR-1059 question.
   (DDR-816).
 
 **Scope (operator decisions):**
-- **Live boot only.** There is no installer.
+- **Installer, encrypted persistent root, TPM unlock and recovery escrow are
+  v1 scope** (operator decision 2026-09-25, DDR-1143..1146). **Designed, not
+  yet built**; the tag is held until they are gated. Until then the ISO boots
+  live only.
 - **Single-user.** There are no accounts and no login.
 - **No telemetry** and no crash reporting. Nothing is sent anywhere.
 - **Privacy mode stops caller-directed egress** (sockets and DNS). It does not

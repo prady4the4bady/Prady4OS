@@ -6502,3 +6502,12 @@ this time, not just the waiter."* Instrument only.
 - The operator accepted the recommendation (PR #17 comment 5827611413).
 - The post-tag series runs in order, each step hunted against DDR-1139 §5 before the next: IST and entry stacks, then KPTI, then retpoline with RSB refill.
 - v1 ships only the exposure line.
+
+## 2026-09-25 — Installer, encrypted persistent root, TPM, recovery escrow: DESIGNED (DDR-1143..1146)
+
+PR #17 comment 5839562349 (OWNER) reopened #40 as v1 scope. Four design DDRs committed before code
+(NON-NEGOTIABLE 5): DDR-1143 installer + MBR layout + persistent SFS root + flush (smoke-install);
+DDR-1144 per-block ChaCha20-Poly1305 with stored nonce/tag, keyslots P/R/T (smoke-crypt); DDR-1145
+TPM 2.0 TIS+CRB, PCR 9 kernel measurement, sealed slot (smoke-tpm); DDR-1146 per-device RK, X25519
+sealed-box escrow record, forced rotation, device-side audit (smoke-recovery). NOT BUILT. Awaiting
+operator decisions D1-D6 (DDR-1143 §8). Escrow backend, custody and office identity check are external.

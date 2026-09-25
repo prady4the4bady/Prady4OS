@@ -14722,3 +14722,9 @@ in the checklist §0.
 last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 `smoke-blk-integrity` and `smoke-selftest`, all rc=0. GLOBAL_FORBIDDEN is 77
 (verified with the NON-NEGOTIABLE 6 command).
+
+## CHECKPOINT 2026-09-25 — v1 installer/encryption track designed (DDR-1143..1146)
+- Trigger: PR #17 comment 5839562349 (OWNER). #40 reopened as the v1 gating item (checklist §0).
+- Four DDRs committed, docs-only. Kernel unchanged (9ff230a9dc3395ec, 1,352,074 B). DDR range now 1147+.
+- NEXT: wait for operator decisions D1-D6 (DDR-1143 §8). First implementation step once decided:
+  measure OVMF TCG2 support (DDR-1145 §1), then DDR-1143 installer.

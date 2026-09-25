@@ -2093,3 +2093,6 @@ this time, not just the waiter."* Instrument only.
 - The operator accepted the recommendation (PR #17 comment 5827611413).
 - The post-tag series runs in order, each step hunted against DDR-1139 §5 before the next: IST and entry stacks, then KPTI, then retpoline with RSB refill.
 - v1 ships only the exposure line.
+
+- 2026-09-25 — Installer / volume encryption / TPM unlock / recovery escrow: DESIGN ONLY (DDR-1143..1146).
+  No AETHER surface changes. The recovery key never derives from `g_owner_seed` (DDR-1146 §2).
