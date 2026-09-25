@@ -13,7 +13,7 @@
 #include "console.h"
 #include "irq.h"             /* irq_register / pic_unmask / msix_register */
 #include "lapic.h"           /* DDR-714C2: lapic_id() — MSI-X destination */
-#include "virtio_gpu.h"      /* screen geometry for abs->pixel mapping */
+#include "display.h"         /* screen geometry for abs->pixel mapping (DDR-1142) */
 
 extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 
@@ -237,7 +237,7 @@ int virtio_input_state(int *x, int *y, uint32_t *buttons) {
     if (!g_up)
         return -1;
     uint32_t w = 0, h = 0;
-    if (!virtio_gpu_fb(&w, &h, 0) || w == 0 || h == 0) { w = 1024; h = 768; }
+    if (!display_fb(&w, &h, 0, 0) || w == 0 || h == 0) { w = 1024; h = 768; }  /* DDR-1142 */
     if (x) *x = (int)((uint64_t)g_abs_x * w / VI_ABS_MAX);
     if (y) *y = (int)((uint64_t)g_abs_y * h / VI_ABS_MAX);
     if (buttons) *buttons = g_buttons;

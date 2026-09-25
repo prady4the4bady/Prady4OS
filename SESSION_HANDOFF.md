@@ -14670,3 +14670,55 @@ No code change was made in this entry, and `kernel.bin` is unchanged.
   - The kernel is built with `-fno-stack-protector` explicitly and has no CFI.
   - A crashed app is reaped and the session survives; a compositor crash has
     no restart.
+
+## CHECKPOINT 2026-09-25 — DDR-1142 BUILT (UEFI GOP), KPTI deferral DECIDED, dependency PRs triaged
+
+Source: PR #17 comment **5827611413** (OWNER-verified). It asked for three
+things, and all three are done. `docs/PRE_LAUNCH_CHECKLIST.md` §0 now has
+**one** open decision, #40 (full-volume encryption). No operator comment has
+named it. The recommendation is to defer it.
+
+**DDR-1142, the UEFI GOP framebuffer: BUILT and gated.**
+- The loader queries GOP and hands it to the kernel in a `struct boot_fb` at
+  `0x4FE0`. The BIOS path zeroes that block.
+- `display.c` picks virtio-gpu first, then GOP. `sys_fb_map` now maps the
+  backend's physical address.
+- **`smoke-gop`** (shard 5, strict) runs on the OVMF proxy and reads the
+  scanout through a QMP screendump. It has four arms: G (handoff line), S
+  (kernel pattern on screen), C (the compositor draws through `sys_fb_map`)
+  and B (the BIOS path says `none`).
+- Mutants:
+  - M1 (loader skips GOP) fails G and S.
+  - M3 (kernel maps base + 1 MiB) fails S alone.
+  - M4 (`sys_fb_map` maps + 1 MiB) fails C alone.
+  - **M2 (stride ignored) PASSES**: stride == width on the proxy. Recorded as
+    uncovered.
+- Arm C was not in the design. It was added when the design turned out not
+  to reach `sys_fb_map` at all (DDR-1142 §5.2).
+- **UEFI boots without virtio-gpu now run the desktop.**
+- The loader's hash is not reproducible: `lld-link` stamps `TimeDateStamp`.
+  Loader mutants are attributed by source diff and behaviour instead
+  (DDR-1142 §5.3).
+- `kernel.bin` `9ff230a9dc3395ec`, 1,352,074 B, size unchanged. 182 gates.
+  GLOBAL_FORBIDDEN 77.
+
+**KPTI, retpoline and RSB refill: DEFERRED past v1**, as DDR-1140 §2
+recommended. The decision is recorded in DDR-1140 §2.6, in the CHANGELOG and
+in the checklist §0.
+
+**Dependency PRs:**
+- **Closed:** #18 (breaks `tools/graph_mcp` and reddened its `code-graph` CI
+  job), #24 (non-LTS) and #2 (operator decision 6; correction comment
+  5837029114 says `dev/phase1` still has `fast-uri` 3.1.5).
+- **Left open as safe to merge. Merging is the operator's action:**
+  - #19 corrects the recorded "superseded": its base still has 3.1.5.
+  - #25 touches only `open2-hunt.yml`, which is dispatch-only. That corrects
+    the recorded "resets the greens".
+  - #9, per operator decision 6.
+- #7 and #8 stay deferred until after the tag, because they do touch
+  `ci.yml`.
+
+**Pre-push gates, local, on `9ff230a9dc3395ec`** (hash re-checked after the
+last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity` and `smoke-selftest`, all rc=0. GLOBAL_FORBIDDEN is 77
+(verified with the NON-NEGOTIABLE 6 command).

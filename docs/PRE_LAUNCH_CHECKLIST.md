@@ -40,10 +40,13 @@ asked and when. **This block is the current state.** Sources are PR #17
 comments **5822830053** (seven fix-now items) and **5822896320** (every
 remaining decision), both OWNER-verified.
 
-**Verdict: every (a) row is DONE and every (c) row is DECIDED, with two
-exceptions, #40 and the KPTI half of #70.** My deferral recommendations on
-those two are below and need the operator's word. **The ISO is not built and
-nothing is tagged.** Final go/no-go is the operator's.
+**Verdict: every (a) row is DONE and every (c) row is DECIDED, with ONE
+exception, #40.** Updated 2026-09-25 from PR #17 comment **5827611413**
+(OWNER-verified), which accepted the KPTI deferral and asked for the GOP build
+and the dependency-PR triage. #40 (full-volume encryption) is named in none of
+the operator's comments, so it is the one open decision. My recommendation is
+below. **The ISO is not built and nothing is tagged.** Final go/no-go is the
+operator's.
 
 **(a), the fix-now items, all done:**
 
@@ -57,7 +60,7 @@ nothing is tagged.** Final go/no-go is the operator's.
 | 51 | Poweroff/reboot exit | `fae2c7f` | `smoke-poweroff` and `smoke-reboot` now assert that QEMU **exited on its own**, before the timeout. |
 | 63a | ISO SHA-256 | `fae2c7f` | `build/pradyos.iso.sha256` is published, and `smoke-iso-x86` verifies it. |
 | 70a | Meltdown/MDS exposure line | DDR-1140 | Every boot prints `[cpu] exposure: vendor= archcap= meltdown= mds= kpti=0`. **`smoke-cpuexposure`** runs two CPU models and mutants M1/M3. The `rdmsr 0x10A` branch is **UNCOVERED** under TCG and stated so. |
-| 3 (item) | UEFI GOP framebuffer | DDR-1142 | Mechanism named. The proxy is OVMF on std-vga, checked by a QMP screendump. **Physical hardware is untested and cannot be tested here.** |
+| 3 (item) | UEFI GOP framebuffer | DDR-1142 | **BUILT and gated.** **`smoke-gop`** (shard 5, strict) runs on OVMF on q35 std-vga, the proxy. It reads the **scanout** through two QMP screendumps: the kernel's four-quadrant pattern (arm S), then the ring-3 compositor on the same framebuffer through `sys_fb_map` (arm C). Arm B requires the BIOS path to print `[fb] gop none`. M1/M3/M4 each fail a different arm. **M2 (stride ignored) passes and is recorded as uncovered**: the proxy's mode has stride == width. UEFI boots without virtio-gpu now reach `PRADYOS_COMPOSITOR_OK 1280x800`. **Physical hardware is untested and cannot be tested here.** |
 | 7 (item) | Six wrong premises | this section | #21, #30, #51, #6, finding 4 (CHANGELOG) and #12 are each corrected at their row. |
 
 **(c), decided by the operator (5822896320):**
@@ -67,7 +70,7 @@ nothing is tagged.** Final go/no-go is the operator's.
 | 1–3 | Ship with OPEN-1 route 1, OPEN-12 and OPEN-13 **named open**. Do not hold the tag for them. | `CHANGELOG.md` v1.0.0, "Open defects". |
 | 4 | Use A4's wording. **OPEN-2 is not called closed as a whole.** | `CHANGELOG.md`, quoted verbatim. |
 | 5 | Defer the connected DDR-1059 ledger. | `CHANGELOG.md` "Deferred". |
-| 6 | Merge #9, close #2, and confirm #3 and #15 closed. Recommendations for **#18 hold; #19 close as superseded (3.1.7 already on the branch); #24 close/defer (25.10 is non-LTS; the Dockerfile pins 24.04); #25 hold until after the tag (`ci.yml` resets the greens)**. | **Merging #9 and closing #2 are the operator's actions.** The session's merge attempt was refused by the permission policy, correctly, since merging is the operator's (§1.3). The four recommendations await inline approval. |
+| 6 | Merge #9, close #2, and confirm #3 and #15 closed. Triage #18/#19/#24/#25 (5827611413 asked for it to be done). | **Executed 2026-09-25, with two recommendations CORRECTED by measurement.** **#2 closed** (comment 5837005026, correction 5837029114: `dev/phase1` still carries `fast-uri` 3.1.5, so its fix arrives with #17 or #19). **#18 closed**: `web-tree-sitter` 0.27.0 **breaks the graph tool** (`SyntaxError: … does not provide an export named 'default'`) and its own CI `code-graph` job was red (run 33672142982). **#24 closed**: 25.10 is non-LTS, the same decision as #3. **#19 stays open, and "close as superseded" was WRONG.** Its base `dev/phase1` still has 3.1.5, and 3.1.7 exists only on this branch. It is a one-file lockfile bump, so it is **safe to merge** now, or it is superseded when #17 merges. **#25 stays open, and "`ci.yml` resets the greens" was WRONG.** Its one-line diff touches only `.github/workflows/open2-hunt.yml`, which is dispatch-only and not in the 3-green count. So it is **safe to merge** at any time. **Merging #9, #19 and #25 is the operator's action (§1.3).** #7 and #8 stay deferred until after the tag: they do touch `ci.yml`. |
 | 7 / 8 | B#14/B#15 and Group G are deferred and flagged for respec. | `CHANGELOG.md` "Deferred". |
 | 9 | CAP_OCR, CAP_SCENE and CAP_NET_BROWSE are deferred. | `CHANGELOG.md` "Deferred". |
 | 14 | Ship the placeholder with a "provisional branding" disclaimer. | `CHANGELOG.md` "Branding". |
@@ -79,22 +82,20 @@ nothing is tagged.** Final go/no-go is the operator's.
 | 68 | "Supported on a best-effort basis; no formal EOL date is set." | `CHANGELOG.md` "Support". |
 | 71 | Compiler hardening is deferred to its own post-tag DDR. | `CHANGELOG.md` "Deferred". |
 
-**Still needing the operator's word. These are not left silent; each has a recommendation:**
+**Decided 2026-09-25 by 5827611413:**
+
+- **#70, KPTI, retpoline and RSB refill: DEFERRED past v1**, as DDR-1140 §2
+  recommended. It is recorded in DDR-1140 §2.6, in `CHANGELOG.md` under both
+  the hardware limitations and "Deferred past v1", and the exposure line
+  (70a) ships so an exposed CPU is visible on every boot.
+
+**Still needing the operator's word. This is not left silent, and it has a recommendation:**
 
 - **#40, full-volume encryption.** Neither operator comment names it.
   - **Recommendation: defer past v1.** On the live ISO the root is a RAM disk,
     so there is no volume at rest to encrypt.
   - The only key material is the compile-time `g_owner_seed`, so encryption now
     would read as confidentiality and provide none (the DDR-1059 shape).
-- **#70, KPTI, retpoline and RSB refill.** Comment 5822830053 asked for them to
-  be built, **"or recommend deferring"** if the OPEN-2 risk outweighs shipping.
-  - **DDR-1140 §2 recommends deferring.**
-  - KPTI first needs IST and entry stacks this kernel does not have (every
-    vector is `ist = 0`).
-  - It would put two full TLB flushes on every syscall and interrupt, on the
-    paths OPEN-2 lived in.
-  - Its protective property cannot be demonstrated under TCG.
-  - The exposure line above makes the gap visible on every boot.
 
 **Dispositions:**
 - **(a)** fixable before the tag. Not yet done; awaiting your go.
@@ -121,6 +122,8 @@ covers an item, it is cited rather than repeated.
      documentation of a binary distribution. MIT requires the notice to be
      included.
 3. **On a real UEFI-only machine the OS may show nothing on screen.**
+   **BUILT 2026-09-25, DDR-1142: the GOP path now exists and is gated by
+   `smoke-gop` on the OVMF proxy.** The original finding is kept below.
    - Measured: there is **no UEFI GOP framebuffer path**. `grep -rniE
      'GOP|GraphicsOutput'` over `boot/` and `kernel/` returns nothing.
    - The graphical desktop draws only through `virtio_gpu_fb()`.
@@ -135,7 +138,9 @@ covers an item, it is cited rather than repeated.
    - Correction: the v1 notes belong in `CHANGELOG.md`.
 5. **The dependency-PR list in your comment has drifted.**
    - #3 and #15 are **closed**.
-   - #18, #19, #24 and #25 are **open** and were never triaged.
+   - #18, #19, #24 and #25 are **open** and were never triaged. **Triaged
+     2026-09-25**: #18 and #24 closed, #19 and #25 left open as safe to merge
+     (§0 decision record, row 6).
    - Item 6 covers all of them.
 6. **Two premises in D/E are already partly shipped.**
    - A CSPRNG source exists (item 30).
@@ -156,7 +161,7 @@ covers an item, it is cited rather than repeated.
 | # | Item | Disposition | Detail |
 |---|---|---|---|
 | 5 | DDR-1059 signed ledger key custody | **(c)**. My recommendation: **defer the connected ledger entirely for v1.** | The three routes are: (i) a hardware root of trust, which needs a TPM/secure-boot subsystem this OS lacks; (ii) first-boot key generation into a protected store, which is circular until (i) exists; (iii) out-of-band publication of the public key at install time, which **presupposes an installer** (item 19) and therefore does not exist for a live ISO. So none of the three is available for v1 as it stands. What ships is true and should be worded as DDR-1059 recommends: *"post-quantum signature primitives, NIST-vector-verified, and a tamper-evident audit chain"*. **Never** "post-quantum signed audit ledger". |
-| 6 | Dependency PRs | **(c)** to execute, because merging to `dev/phase1` is your action (§1.3). My triage is below; say "go" and I will close and comment the ones marked close. | **#2** close: superseded, lockfile already past its fixes. **#3** already closed. **#7** and **#8** defer until after the tag: a `ci.yml` change resets the 3-green evidence. **#9** safe to merge: in-range lockfile pin, dev tool only. **#15** already closed. **#18** (`web-tree-sitter` 0.22.6 → 0.27.0) hold: an exact-pinned WASM parser with API breakage risk; this is the old #15 again. **#19** (`fast-uri` 3.1.7) close as done: `tools/graph_mcp/package-lock.json` on this branch already carries 3.1.7 (CLAUDE.md Dependabot row, 2026-09-13). **#24** (`ubuntu` 24.04 → 25.10) defer post-1.0: same reason as #3, the Dockerfile pins 24.04 deliberately. **#25** (`upload-artifact` 4 → 7) defer: same evidence-reset reason as #7. **None of the eight can reach `kernel.bin` or a gate result.** |
+| 6 | Dependency PRs | **(c)** to execute, because merging to `dev/phase1` is your action (§1.3). My triage is below; say "go" and I will close and comment the ones marked close. | **#2** close: superseded, lockfile already past its fixes. **#3** already closed. **#7** and **#8** defer until after the tag: a `ci.yml` change resets the 3-green evidence. **#9** safe to merge: in-range lockfile pin, dev tool only. **#15** already closed. **#18** (`web-tree-sitter` 0.22.6 → 0.27.0) hold: an exact-pinned WASM parser with API breakage risk; this is the old #15 again. **#19** (`fast-uri` 3.1.7) close as done: `tools/graph_mcp/package-lock.json` on this branch already carries 3.1.7 (CLAUDE.md Dependabot row, 2026-09-13). **CORRECTED 2026-09-25: #19's base is `dev/phase1`, which still carries 3.1.5, so it is NOT done there. Left open as safe to merge.** **#24** (`ubuntu` 24.04 → 25.10) defer post-1.0: same reason as #3, the Dockerfile pins 24.04 deliberately. **#25** (`upload-artifact` 4 → 7) defer: same evidence-reset reason as #7. **CORRECTED 2026-09-25: #25 touches only `open2-hunt.yml`, which is dispatch-only and not in the 3-green count, so the evidence-reset reason does not apply. Safe to merge.** **None of the eight can reach `kernel.bin` or a gate result.** **CORRECTED 2026-09-25: #18 reaches a CI result.** It breaks `tools/graph_mcp` and reddened its `code-graph` job, so it was closed. |
 | 7 | B#14 NAS / B#15 PMM policy | **(c)**: **flagged for respec, not dropped.** | B#14 names the process scheduler (`sched.h:5`) but is filed under storage (DDR-1103 §2). B#15 has no acceptance criterion. Its obvious reading, a NUMA-affine policy, is shipped and gated (`smoke-numa-alloc`). Both need you to state what you want. |
 | 8 | Group G (five of six rows) | **(c)**: **flagged for respec, not dropped.** | 9.6 is built (DDR-1076). 9.1 is the wrong instrument (UART-bound). 9.2 is at its floor. 9.3 has no subject; a shootdown is a prerequisite of `CLONE_VM`, not an optimisation. 9.4 is a virtio `EVENT_IDX` protocol change, not assembly. 9.5 is a cross-address-space copy problem. On top of that, a speedup figure is unproducible under TCG (DDR-1075 §1), so the group's acceptance criterion itself needs respec. |
 | 9 | `CAP_OCR`, `CAP_SCENE`, `CAP_NET_BROWSE` | **(c)**. My recommendation: **defer post-1.0.** | DDR-982 §5.3 withdrew enforcement pending you. `agent_caps` is written once and read nowhere, and the gated action types are deliberately absent from the enum, so a gate could only test `uint32_t`. These three block the AHNIS, IRIS and LUMYN spawnable rows. PRAX is blocked separately, by the `ACTION_EXEC_CODE` refusal (DDR-1113 §1). There is no hardware or model path for OCR or scene analysis in v1 at all. |
@@ -175,7 +180,7 @@ covers an item, it is cited rather than repeated.
 
 | # | Item | Disposition | Measured basis |
 |---|---|---|---|
-| 15 | QEMU-only testing | **(b)**, and it **must** be stated in the release notes. | Every gate and hunt ran under QEMU TCG. The emulated set is wider than virtio: AHCI, NVMe and e1000e are also exercised. One further data point exists: a single owner-run **VirtualBox** boot (DDR-906: EFI arm, reached the scheduler). That is a third firmware and still not physical hardware. See also new finding 3: there is no GOP framebuffer, so a UEFI laptop may show nothing. |
+| 15 | QEMU-only testing | **(b)**, and it **must** be stated in the release notes. | Every gate and hunt ran under QEMU TCG. The emulated set is wider than virtio: AHCI, NVMe and e1000e are also exercised. One further data point exists: a single owner-run **VirtualBox** boot (DDR-906: EFI arm, reached the scheduler). That is a third firmware and still not physical hardware. See also new finding 3: there is no GOP framebuffer, so a UEFI laptop may show nothing. **The GOP path is built (DDR-1142), verified on the OVMF proxy only.** |
 | 16 | No USB | **(b)** post-1.0. | Measured: no xHCI/EHCI/UHCI code at all. Input is PS/2 keyboard (IRQ1), virtio-input and COM1. Many laptops expose the internal keyboard as i8042/PS/2. USB keyboards work only while firmware legacy emulation persists, which is not guaranteed. A USB host stack is a subsystem, not a pre-tag fix. |
 | 17 | Secure Boot | **(c)**. | The UEFI loader is unsigned. On SB-enabled firmware the user must disable Secure Boot. Signing means either shim plus a Microsoft-signed chain, or user-enrolled keys (MOK). That is a distribution decision. Recommendation: document "disable Secure Boot" for v1. |
 | 18 | Power management | **(b)** post-1.0. | S3 is **discovered but deliberately refused**: `acpi_suspend_s3()` prints *"no resume path (waking vector unset)"* (DDR-892). No battery status. ACPI poweroff and reboot are shipped (DDR-746/747). |
@@ -198,7 +203,7 @@ covers an item, it is cited rather than repeated.
 | 30 | CSPRNG and entropy | **Premise corrected: a source exists (DDR-816).** **(b)** for the remainder. | `kernel/crypto/rng.h` is a real source: virtio-rng or RDSEED (bounded retry). It **fails closed**, with no jitter fallback by design, and the boot log names the source. There is **no DRBG**: every draw goes to the hardware source. Current consumers are the vault nonce and ACC. **No runtime ML-DSA key generation exists**: ML-DSA runs only against NIST KAT seeds in a probe, and the only signing key is the compile-time `g_owner_seed` (DDR-1059). KASLR is not built. On hardware with neither RDSEED nor virtio-rng, crypto refuses to start. That is the intended behaviour, and it must be named in the release notes. |
 | 31 | Swap | **(b)** post-1.0. | Measured: none. Also a correction: demand paging **does** exist for the user stack (ADR-038). |
 | 32 | fsck for SFS | **(b)** post-1.0. | Measured: no SFS checker. SFS has a journal (slice 4g) and CoW, which limit crash damage. The host-side `sfs_readback` is a reader, not a repair tool. |
-| 33 | Real GPU driver | **(b)**, but see finding 3: the missing **GOP** path is the real-hardware risk, not the missing Intel/AMD/NVIDIA drivers. | Only virtio-gpu and VGA text. A GOP linear-framebuffer path is the smallest route to any display on UEFI hardware. |
+| 33 | Real GPU driver | **(b)**, but see finding 3: the missing **GOP** path is the real-hardware risk, not the missing Intel/AMD/NVIDIA drivers. | Only virtio-gpu and VGA text. A GOP linear-framebuffer path is the smallest route to any display on UEFI hardware. **Built 2026-09-25 (DDR-1142, `smoke-gop`), on the OVMF proxy; no physical board tested.** |
 | 34 | VT switching | **(b)**. | No tty switching. Up to four PRISM terminal windows via Ctrl+Alt+T (DDR-1027), plus PRISM on the serial line. |
 | 35 | Hot-plug | **(b)** post-1.0. | Measured: none. AHCI states it outright (`ahci.c:7`). |
 | 36 | Hardware watchdog | **(b)** post-1.0. | Measured: no iTCO or WDAT. A distinct item from §1.4's refused latch watchdog. |
@@ -239,7 +244,7 @@ Each is stated precisely below rather than accepted or dismissed.
 | 54 | Thermal monitoring and throttling | **(b)** post-1.0, with a named hardware risk. | Measured: none. `pstate.c` exists and deliberately refuses to report a frequency it cannot measure. Firmware and CPU hardware thermal trips still protect the silicon on real machines. What is missing is OS-level throttling and reporting. |
 | 55 | Multi-monitor and DPI | **(b)** post-1.0. | The display mode is scanout 0's, falling back to 1024×768 (`virtio_gpu.c:128`). There is one scanout, no second head and no DPI scaling. Also see §0 finding 3: on real UEFI hardware there may be no display at all. |
 | 56 | Keyboard layouts | **(b)** post-1.0, stated in the release notes. | `ps2kbd.c:52/:58` has a single `map_lower`/`map_upper` set-1 table, **US QWERTY only**, with no switching. |
-| 57 | Hypervisors beyond QEMU | **(b)**, with a partial correction. | One owner-run **VirtualBox** boot is on record (DDR-906: EFI arm, reached the scheduler), with no guest additions. VMware and Hyper-V are untested. Hyper-V Gen2 is UEFI-only, which runs into the missing GOP path. |
+| 57 | Hypervisors beyond QEMU | **(b)**, with a partial correction. | One owner-run **VirtualBox** boot is on record (DDR-906: EFI arm, reached the scheduler), with no guest additions. VMware and Hyper-V are untested. Hyper-V Gen2 is UEFI-only, which ran into the missing GOP path. **That path now exists (DDR-1142)**, but Hyper-V itself is still untested. |
 | 58 | Remote management (SSH) | **(b)** post-1.0. | Measured: no SSH or remote shell. It is blocked in turn on DHCP (#43), on a listening ring-3 socket API (the proxy surface is connect-only), and on a key-custody story (#5/#48). |
 | 59 | Long-duration soak | **(c)**. It is buildable, but costs CI budget you allocate. | Every gate boots for at most minutes. The OPEN-2 hunts are the closest thing: 2,200 boots on the fixed kernel, but each is still minutes long. A 24-hour soak is one `workflow_dispatch` job with a long `timeout-minutes` and heartbeat-drift assertions (pmmfree, kheap), and it fits within GitHub's per-job limit only as a chain of shorter runs. It needs your decision on the runner minutes. |
 | 60 | Syscall fuzzing | **Premise corrected: two fuzz gates exist**, at strict tier. **(b)** for coverage-guided fuzzing. | **`smoke-syscallfuzz`** (DDR-758, shard 0) floods **3,000 hostile syscalls**: bad NSI numbers must return exactly `-ENOSYS`, and wild pointers into syscalls must return `-EFAULT`, with the kernel surviving all of them. **`smoke-net-fuzz`** is on shard 8. Both are deterministic, from a fixed-seed LCG. **What is missing** is coverage-guided or randomised-seed fuzzing (syzkaller-class). That is a harness project, not a pre-tag fix. |
@@ -2252,7 +2257,7 @@ does. Worth knowing before anyone "fixes" it.)
 
 | Quantity | Value | Source |
 |---|---|---|
-| Gates assigned | **181** across **10** shards | `make ci-shard-check`, re-measured 2026-09-25 (DDR-1141 added `smoke-dhcpdns`) (earlier: 2026-09-24, DDR-1140 added `smoke-cpuexposure`, shard 4, strict) (earlier: 2026-09-07, DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
+| Gates assigned | **182** across **10** shards | `make ci-shard-check`, re-measured 2026-09-25 (DDR-1142 added `smoke-gop`, shard 5, strict) (earlier the same day, DDR-1141 added `smoke-dhcpdns`) (earlier: 2026-09-24, DDR-1140 added `smoke-cpuexposure`, shard 4, strict) (earlier: 2026-09-07, DDR-1090 added `smoke-killblock`, shard 1, strict — shard 1 was the lightest at 1467 s and goes to 1587 s, still well under shard 9's 1965 s makespan) |
 | Gates excluded | **6**, each with a reason | §5.4 (was 7; DDR-1061 registered `smoke-sfs-btree-smp4`) |
 | NSI max | **102** (`SYS_POLL`, DDR-1037), next free **103**, table size 128 | `kernel/syscall/syscall.h`. **87 is `SYS_VAULT_PUT`, not `SYS_READ_AUDIT` (which is 37)** — §INV.12's reason was wrong, its conclusion right (DDR-1081 §1.7). Free below 110: `0, 88, 89, 90, 103…109`, so **88/89/90 are the only three free below 103**, exactly what `prad` needs |
 | DDR free range | **DDR-1143+** (DDR-1142 = UEFI GOP framebuffer design; DDR-1141 = DHCP + DNS + smoke-dhcpdns; DDR-1140 = CPU exposure line + KPTI deferral recommendation) | §INV.4. **CORRECTED 2026-09-07 — DDR-1086 §3: this read `DDR-1083+`, occupied since `4a75699`, with 1084 and 1085 landed since.** All three `CLAUDE.md` carriers were correct at `DDR-1086+`; **this file is a FOURTH carrier that neither `CLAUDE.md`'s "update both" warning nor §ORIENTATION's "all three" names**, which is why updating "all three" left it behind. (`DDR-1087+`, not `1086+`: DDR-1086 is this correction itself — the free range advances past the DDR that fixes it, and setting it to `1086+` would have re-created the same one-off staleness in the same edit. Caught before commit.) Severity stated rather than dramatised (DDR-1086 §3.1): §NON-NEGOTIABLE 8 requires an `ls` of **both** DDR directories before allocating and §ORIENTATION says *"allocate by §NON-NEGOTIABLE 8's command, not from this line"*, so a stale range costs a lookup, **not** a collision — unless the `ls` is skipped, which is the thing that non-negotiable exists to stop. **A mechanical checker was measured and REFUSED** (DDR-1086 §4): ten of the eleven stated `DDR-N+` ranges in the tracked documents name an occupied number and **nine of those ten are correct**, being `(prior: …)` notes in `CLAUDE.md` and per-checkpoint records in the append-only `SESSION_HANDOFF.md`. A naive check reddens on nine correct records to catch one defect — the identical historical-vs-live-state limitation this section already documents for `ci-docstate-check` **ADVANCED 2026-09-07 to `DDR-1090+` (DDR-1089), all four carriers in one edit — the first advance since the count was stated at every carrier. Previously ADVANCED to `DDR-1089+` (DDR-1088), and the recurrence there is the finding:** DDR-1086 added the four-carrier warning to `CLAUDE.md`'s §CURRENT BUILD STATE copy **only**, so §ORIENTATION and §INV.4 kept saying *"all three"* — and one commit later DDR-1087 advanced exactly three and left this cell at `DDR-1087+` while `CLAUDE.md` read `DDR-1088+`. **A warning about a carrier that gets missed is itself missed when it lives at only one of the carriers.** DDR-1088 §8 states the count at **every** carrier. |

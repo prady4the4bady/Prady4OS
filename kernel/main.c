@@ -55,6 +55,7 @@
 #include "vdso_page.h"
 #include "metric_page.h"  /* F#68/DDR-795: sealed objective root page */
 #include "fwcfg.h"        /* DDR-804: per-boot probe selection */
+#include "display.h"      /* DDR-1142: virtio-gpu or UEFI GOP framebuffer */
 #include "rng.h"          /* DDR-816: kernel entropy */
 #include "vmm_cow.h"
 
@@ -4132,6 +4133,7 @@ void kmain(struct boot_info *bi) {
     kputs("NEXUS: entered kmain (64-bit long mode, ring 0)\r\n");
 
     print_boot_info(bi);
+    display_capture_boot();              /* DDR-1142: record the GOP handoff first */
 
     gdt_init();
     kputs("NEXUS: kernel GDT loaded\r\n");
@@ -4305,6 +4307,9 @@ void kmain(struct boot_info *bi) {
         if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
             nvme_init(d->bus, d->dev, d->func);
     }
+    /* DDR-1142: after the loop, so virtio-gpu has had its chance. With no
+     * virtio-gpu, a UEFI boot draws on the framebuffer the firmware set up. */
+    display_init();
     /* DDR-972: no real disk means the ISO. Every one of the 147 gates boots
      * through boot_test.sh, which attaches at least one virtio-blk-pci device,
      * so blk_count() is never 0 for any of them and this branch is UNREACHABLE

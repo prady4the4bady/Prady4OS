@@ -1,6 +1,8 @@
 # DDR-1142 — A UEFI GOP framebuffer, so the desktop has a display without virtio-gpu
 
-**Status:** design, committed before code (§NON-NEGOTIABLE 5).
+**Status:** design committed before code (`0fe3334`, §NON-NEGOTIABLE 5); **BUILT
+and gated** in the commit that adds §5 below. Operator go: PR #17 comment
+**5827611413** (OWNER-verified), item (1).
 **Operator instruction:** PR #17 comment 5822830053, item 3 (OWNER-verified):
 *"UEFI GOP framebuffer path as a real driver change. Name the mechanism and test
 it. If it cannot be verified without physical hardware, say so and name the
@@ -126,3 +128,96 @@ firmware's GOP driver, and that cannot be covered here.
   virtio-gpu, exactly as before.
 - The mapping uses the default cache type, not write-combining. It is slower on
   real hardware, and correct.
+
+## 5. Results, measured on the proxy
+
+### 5.1 The proxy's mode
+
+The first boot printed the values arm G now pins:
+
+```
+[fb] gop 1280x800 stride=1280 fmt=1 base=0x0000000080000000 used=1
+```
+
+`fmt=1` is `PixelBlueGreenRedReserved8BitPerColor`, the only accepted format.
+**The stride equals the width on this proxy**, which decides M2 below.
+
+### 5.2 Arms, as shipped
+
+`smoke-gop` (shard 5, strict, 140 s budget; one run measured 137 s) is
+`tools/ci/gop_gate.sh`. It runs QEMU directly, because arm S needs a QMP
+socket that `boot_test.sh` does not open.
+
+- **G:** the exact line above.
+- **S:** after `[fb] gop pattern drawn`, a QMP `screendump` of the scanout. The
+  centres of the four quadrants must read red, green, blue and yellow.
+  Measured: `TL (320,200)=(255,0,0) TR (960,200)=(0,255,0) BL (320,600)=(0,0,255)
+  BR (960,600)=(255,255,0)`.
+- **C, added during the build: a design gap in §3.** Arms G, S and B cover the
+  kernel's own mapping, and **none of them reaches `sys_fb_map`**. That is the
+  path the ring-3 compositor draws through, and the one line of this DDR that
+  changed existing behaviour (`phys` from the backend instead of `phys == kvirt`).
+  - So the gate attaches the FAT and SFS disks, the compositor comes up on the
+    GOP framebuffer, and after `PRADYOS_AMBIANCE_OK` a second screendump must
+    show **none** of the four kernel pattern colours at the quadrant centres.
+  - Measured: `(71,24,0)` on the top row and `(49,17,0)` on the bottom row,
+    which is the ambiance gradient and not the pattern.
+- **B:** the BIOS image boots through `boot_test.sh` and must print
+  `[fb] gop none`. `[fb] gop rejected` is forbidden.
+
+### 5.3 Mutants
+
+The pre-mutation tree is loader `5f97545fc4b8bfe5` and kernel `9ff230a9dc3395ec`
+(1,352,074 B). Each mutant changes one line.
+
+| Mutant | Change | Hash | Result |
+|---|---|---|---|
+| M1 | loader returns before the GOP query | loader `84b10dd2b6a9675a` (kernel unchanged) | **Fails G and S**: `<no [fb] gop line>`, no screendump. B passes. |
+| M2 | kernel uses `width` as the stride | kernel `c3610a000b1a908e` | **PASSES every arm.** It is undetectable on this proxy because stride == width (§5.1). Recorded as uncovered, as §3 said it might be. |
+| M3 | kernel maps `base + 1 MiB` | kernel `f4e62f929b1728c9` | **Fails S alone**: all four centres wrong (`(0,0,0)`, `(0,0,0)`, `(255,0,0)`, `(0,255,0)`). G passes, so G and S are independent. |
+| M4 | `sys_fb_map` maps `phys + 1 MiB` | kernel `835ce75161add71b` | **Fails C alone**: two centres still show the kernel pattern (`STILL THE KERNEL PATTERN`). G and S pass. **This is the mutant that proves arm C was needed.** |
+
+After M2 and M4 the revert rebuilds to `9ff230a9dc3395ec` **bit-for-bit**.
+
+**The loader's hash is not reproducible, and that is not a defect of this
+change.** `lld-link` stamps the PE header's `TimeDateStamp` with the build time
+(measured `0x6ab6ae15` in the current `BOOTX64.EFI`). Restoring `loader.c`
+**byte-identical** to its pre-M1 source (checked with `cmp`) rebuilt to
+`3a916d25f6cae0ff`, not `5f97545fc4b8bfe5`. So a loader mutant is attributed
+by its **source diff and its behaviour**, never by its hash. The kernel links
+with `ld.lld` and does reproduce. `/Brepro` would fix the loader. It is
+**recorded, not applied**, because it changes the ISO's bytes for no
+functional gain days before a tag.
+
+### 5.4 Regression: UEFI boots now have a display
+
+This is a behaviour change, and it is the risk the regression run was aimed
+at. Before this DDR, a UEFI boot with no virtio-gpu had no framebuffer, so the
+compositor exited at `SYS_FB_INFO`. **Now it runs.** A retained `smoke-uefi`
+capture (471 lines) reads:
+
+```
+[fb] gop 1280x800 stride=1280 fmt=1 base=0x0000000080000000 used=1
+PRADYOS_COMPOSITOR_OK 1280x800
+PRADYOS_AMBIANCE DAWN … DAY … DUSK … NIGHT
+PRADYOS_AMBIANCE_OK
+```
+
+- **UEFI:** `smoke-uefi`, `smoke-iso-x86` (both arms) and `smoke-iso-userspace`
+  all rc=0 on the shipped kernel.
+- **virtio-gpu is untouched:** `smoke-shell` 5/5, `smoke-blkmq`,
+  `smoke-rqstress-liveness`, `smoke-blk-integrity` and `smoke-selftest` were
+  run before the push. They are recorded in `SESSION_HANDOFF.md` with this
+  commit.
+- `kernel.bin` is 1,352,074 B, **size unchanged**, so the size/headroom pair
+  and `ci-docstate-check` are unaffected. Only the hash moved.
+
+### 5.5 Not claimed, restated after measurement
+
+- **No physical UEFI machine was tested.** Everything above is OVMF's
+  `QemuVideoDxe` on q35 std-vga. A vendor's GOP driver may pick a mode whose
+  stride differs from its width. That is exactly the case M2 shows this gate
+  cannot see.
+- There is no `SetMode`, no format other than BGRX, no BIOS framebuffer and no
+  write-combining, as §4 said.
+- No new sentinel. GLOBAL_FORBIDDEN stays 77. The gate count goes 181 → 182.

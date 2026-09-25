@@ -6474,3 +6474,31 @@ this time, not just the waiter."* Instrument only.
 - **Gate defect found and fixed:** arm H only ran after `boot_test.sh` passed, so it could never catch a leaking kernel. It now runs on every run.
 - **Kernel:** `kernel.bin` 1,352,074 B, leaving 220,790 B of headroom.
 - **Not covered:** a real-LAN DHCP server, IPv6, DNSSEC.
+
+### DDR-1142: a UEFI GOP framebuffer, so the desktop has a display without virtio-gpu (2026-09-25)
+
+- **Built:**
+  - The UEFI loader queries GOP on the console-out handle before `ExitBootServices`. There is no `SetMode`, and only BGRX is accepted.
+  - The result is handed to the kernel in a 32-byte `struct boot_fb` at `0x4FE0`, protected by a magic value and a check word. The E820 cap drops from 169 to 167 to make room.
+  - The BIOS path zeroes that block, so its answer is "none" (§INV.13).
+  - New `kernel/drivers/gpu/display.c` picks virtio-gpu first, then GOP. The GOP framebuffer is mapped at `0xFFFFD40000000000`, `RW|NX`.
+  - `sys_fb_map` now maps the backend's **physical** address, not `phys == kvirt`.
+- **Gate:** `smoke-gop` (shard 5, strict, 182 gates). The proxy is OVMF on q35 std-vga, and the arms read the **scanout** through a QMP screendump:
+  - **G:** the exact handoff line.
+  - **S:** the kernel's four-quadrant pattern appears on screen.
+  - **C:** the ring-3 compositor draws through `sys_fb_map`.
+  - **B:** the BIOS path prints `[fb] gop none`.
+- **Mutants:**
+  - M1 (loader skips GOP) fails G and S.
+  - M3 (kernel maps base + 1 MiB) fails S alone.
+  - M4 (`sys_fb_map` maps + 1 MiB) fails C alone.
+  - **M2 (stride ignored) passes and is recorded as uncovered**: the proxy's mode has stride == width.
+- **Behaviour change:** UEFI boots without virtio-gpu now run the desktop (`PRADYOS_COMPOSITOR_OK 1280x800`). `smoke-uefi`, `smoke-iso-x86` and `smoke-iso-userspace` all pass.
+- **Kernel:** `kernel.bin` `9ff230a9dc3395ec`, 1,352,074 B. The size is unchanged.
+- **Not covered:** physical UEFI hardware (none is available), modes whose stride differs from their width, non-BGRX formats, and a BIOS/VBE framebuffer.
+
+### DDR-1140 §2.6: KPTI, retpoline and RSB refill DEFERRED past v1 (2026-09-25)
+
+- The operator accepted the recommendation (PR #17 comment 5827611413).
+- The post-tag series runs in order, each step hunted against DDR-1139 §5 before the next: IST and entry stacks, then KPTI, then retpoline with RSB refill.
+- v1 ships only the exposure line.

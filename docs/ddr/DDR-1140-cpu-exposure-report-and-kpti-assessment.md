@@ -191,6 +191,26 @@ evidence *"a proof of WIRING and nothing else"*.
   instruction was to build these, with an explicit escape if the evidence
   warranted it. §2.1 and §2.2 are that evidence.
 
+### 2.6 Decision, 2026-09-25
+
+**The operator accepted the deferral.** PR #17 comment **5827611413**
+(OWNER-verified at the source) lists *"the KPTI/retpoline/RSB deferral write-up
+you recommended"* among the work to finish. That is the recommendation above,
+taken as given, so §2.5 is now a decision and not a proposal.
+
+- **Where it is recorded:** `CHANGELOG.md` v1.0.0 lists it both under the
+  hardware limitations (with the reason) and under "Deferred past v1".
+  `docs/PRE_LAUNCH_CHECKLIST.md` §0 moves #70 from "still needing the
+  operator's word" to decided.
+- **What the post-tag series owes, so nobody re-derives it:** §2.5's three
+  steps, in that order. Each step is hunted against DDR-1139 §5's criterion
+  **before the next one starts**, because KPTI stacked on an unhunted IST
+  change would leave a red with two candidate causes.
+- **What v1 ships:** only the exposure line from §1. A user on an exposed CPU
+  can see it in every boot log, and the changelog names the class of CPU.
+- **Nothing is built by this section.** No code changes, no gate, and the
+  kernel is unaffected.
+
 ## 3. Not claimed
 
 - No mitigation is added by this DDR.

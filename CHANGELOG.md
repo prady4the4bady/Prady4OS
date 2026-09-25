@@ -51,11 +51,15 @@ as the custody of its key, and that is the open DDR-1059 question.
   checked against NIST ACVP vectors, plus a tamper-evident SHA-256 audit chain.
   **This is not a post-quantum signed ledger** (DDR-1059), and **it is not a
   FIPS 140 validated module**: the vectors test algorithm conformance only.
-- **Not yet built:** a UEFI GOP framebuffer path, so the desktop would have a
-  display on UEFI firmware without virtio-gpu. The design is DDR-1142. Today the
-  only display path is virtio-gpu. On UEFI firmware without it, the system
-  boots to the serial shell and the compositor has nothing to draw on. This
-  entry will be updated when the path lands and is gated.
+- A **UEFI GOP framebuffer** (DDR-1142). On UEFI firmware the loader asks for
+  the mode the firmware already set, and the desktop draws on it when there is
+  no virtio-gpu. `smoke-gop` checks this against the **scanout**, not memory
+  (a QMP screendump), for both the kernel's own pixels and the ring-3
+  compositor's. **The proxy is OVMF on QEMU's std-vga.** No physical UEFI
+  machine was tested. Limits: only the BGRX pixel format is accepted (others
+  are refused, not converted), the firmware's resolution is used as-is, and a
+  mode whose stride differs from its width is **not covered** by the gate,
+  because the proxy's mode never has one.
 
 ### Known limitations: read before testing
 
@@ -80,12 +84,16 @@ as the custody of its key, and that is the open DDR-1059 question.
 - **No KPTI, no retpoline and no RSB refill.** On Intel CPUs without
   `RDCL_NO` (in practice pre-2018 Intel), Meltdown is **not mitigated**. Every
   boot log prints `[cpu] exposure: … meltdown=<yes|no> mds=<yes|no> kpti=0`,
-  so the exposure is visible (DDR-1140, which recommends deferring these
-  changes past the tag).
+  so the exposure is visible. **Deferred past v1 by operator decision**
+  (PR #17 comment 5827611413, accepting DDR-1140 §2's recommendation). KPTI
+  first needs IST and per-CPU entry stacks this kernel does not have, it would
+  add two full TLB flushes to every syscall and interrupt, and its protection
+  cannot be demonstrated under QEMU TCG.
 - **No USB.** Input is PS/2, virtio-input and COM1. **US QWERTY only.**
 - **No Wi-Fi, no Bluetooth, no audio, no IPv6, no TLS.**
-- **The desktop needs virtio-gpu** until DDR-1142's GOP path is built (see
-  above).
+- **Display:** virtio-gpu, or the UEFI GOP framebuffer (see above). **A BIOS
+  boot without virtio-gpu has no desktop**: there is no VBE path, so it runs
+  the serial shell only.
 - **Entropy fails closed.** On hardware with neither RDSEED nor virtio-rng,
   the crypto consumers (vault, ACC) refuse to start. This is deliberate
   (DDR-816).
@@ -101,6 +109,7 @@ as the custody of its key, and that is the open DDR-1059 question.
   - the signed-ledger key custody (DDR-1059);
   - the CAP_OCR, CAP_SCENE and CAP_NET_BROWSE agent capabilities;
   - compiler hardening (a stack protector and CFI), to a post-tag DDR;
+  - KPTI, retpoline and RSB refill (DDR-1140 §2), to a post-tag series;
   - B#14/B#15 and Group G, pending respecification;
   - the Group F domain agents.
 - **SFS snapshots** exist on disk but are reachable only from a kernel

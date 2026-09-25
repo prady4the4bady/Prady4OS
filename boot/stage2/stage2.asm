@@ -107,11 +107,18 @@ stage2_start:
 ; ============================  16-bit helpers  ==============================
 
 ; Zero the 32-byte boot_info header and stamp the magic. ES is already 0.
+; DDR-1142: also zero the 32-byte boot_fb block at BOOT_INFO+0xFE0, so this
+; path states "no framebuffer" in memory instead of leaving whatever the BIOS
+; left there (INV.13: the UEFI loader writes the same block). The E820 loop
+; below caps at 32 entries (32 + 32*24 = 0x320), far clear of 0xFE0.
 init_boot_info:
     cld
     mov di, BOOT_INFO
     xor ax, ax
     mov cx, 16                  ; 32 bytes
+    rep stosw
+    mov di, BOOT_INFO + 0xFE0
+    mov cx, 16                  ; 32 bytes (boot_fb)
     rep stosw
     mov dword [BOOT_INFO], BOOT_MAGIC
     ret

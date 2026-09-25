@@ -33,6 +33,22 @@ struct boot_info {
 _Static_assert(sizeof(struct e820_entry) == 24, "e820 entry must stay 24 bytes");
 _Static_assert(sizeof(struct boot_info) == 32,  "boot_info header must stay 32 bytes");
 
+/* DDR-1142: the GOP framebuffer handoff, mirror of struct boot_fb
+ * (kernel/boot_info.h). It sits in the LAST 32 bytes of the boot_info page,
+ * which is why the E820 cap below is 167 and not 169: 32 + 167*24 = 0xFC8,
+ * clear of 0xFE0. `check` lets the kernel reject a block this loader did not
+ * write -- the BIOS path zeroes it, and zero never validates. */
+#define BOOT_FB_PHYS   0x4FE0ull
+#define BOOT_FB_MAGIC  0x31424647u          /* 'GFB1' */
+#define E820_CAP       167u
+struct boot_fb {
+    uint32_t magic, format;
+    uint64_t base;
+    uint32_t width, height, stride_px, check;
+};
+_Static_assert(sizeof(struct boot_fb) == 32, "boot_fb must stay 32 bytes");
+_Static_assert(32 + E820_CAP * 24 <= 0xFE0, "E820 entries would reach boot_fb");
+
 static EFI_SYSTEM_TABLE *ST;
 
 static void print(CHAR16 *s) {
@@ -238,9 +254,11 @@ static uint32_t fill_boot_info(EFI_MEMORY_DESCRIPTOR *map, uint64_t map_size,
         }
 
         /* boot_info lives at 0x4000 and the page ends at 0x5000: 32-byte header
-         * plus 24 bytes an entry leaves room for 169. Overflowing it would
-         * scribble past the page; truncating would lose RAM silently. Refuse. */
-        if (n >= 169)
+         * plus 24 bytes an entry left room for 169. DDR-1142 took the last 32
+         * bytes for boot_fb, so the cap is 167. Overflowing it would scribble
+         * over the framebuffer handoff; truncating would lose RAM silently.
+         * Refuse. */
+        if (n >= E820_CAP)
             die(u"memory map exceeds boot_info capacity");
 
         bi->e820[n].base = base;
@@ -253,6 +271,44 @@ static uint32_t fill_boot_info(EFI_MEMORY_DESCRIPTOR *map, uint64_t map_size,
     return n;
 }
 
+/* ---- GOP framebuffer (DDR-1142) ----------------------------------------
+ * Read the mode the firmware ALREADY set on the console-out handle; never call
+ * SetMode. Must run before ExitBootServices (the protocol is a boot service)
+ * and is done ONCE, before the GetMemoryMap/ExitBootServices retry loop, so no
+ * firmware call sits between fetching the map key and using it.
+ *
+ * The format is recorded as reported and NOT filtered here: the kernel decides
+ * what it can draw, and a refused format should still be visible in its log. */
+static struct boot_fb g_fb;
+
+static void query_gop(EFI_BOOT_SERVICES *bs) {
+    g_fb.magic = 0;
+    EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+    if (!ST->console_out_handle ||
+        bs->handle_protocol(ST->console_out_handle, &gop_guid, (void **)&gop) != EFI_SUCCESS ||
+        !gop || !gop->mode || !gop->mode->info) {
+        print(u"[uefi] gop none\r\n");
+        return;
+    }
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mi = gop->mode->info;
+    g_fb.format    = mi->pixel_format;
+    g_fb.base      = gop->mode->frame_buffer_base;
+    g_fb.width     = mi->horizontal_resolution;
+    g_fb.height    = mi->vertical_resolution;
+    g_fb.stride_px = mi->pixels_per_scan_line;
+    g_fb.magic     = BOOT_FB_MAGIC;
+    g_fb.check     = g_fb.magic ^ g_fb.format ^ (uint32_t)g_fb.base ^
+                     (uint32_t)(g_fb.base >> 32) ^ g_fb.width ^ g_fb.height ^
+                     g_fb.stride_px;
+    print(u"[uefi] gop found\r\n");
+}
+
+static void write_boot_fb(void) {
+    struct boot_fb *dst = (struct boot_fb *)BOOT_FB_PHYS;
+    *dst = g_fb;                              /* magic 0 => "no framebuffer" */
+}
+
 /* ---- entry -------------------------------------------------------------- */
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     ST = st;
@@ -261,6 +317,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     print(u"[uefi] PRADYOS loader\r\n");
     load_kernel(bs, image);
     uint64_t cr3 = build_page_tables(bs);
+    query_gop(bs);                           /* DDR-1142: before the map loop */
     print(u"[uefi] handoff\r\n");
 
     /* GetMemoryMap invalidates its own key on every allocation, including the
@@ -282,6 +339,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             continue;
         }
         fill_boot_info(map, map_size, desc_size);
+        write_boot_fb();
         if (bs->exit_boot_services(image, key) == EFI_SUCCESS)
             goto exited;
         bs->free_pool(map);                          /* stale key — refetch */
