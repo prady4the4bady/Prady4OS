@@ -252,8 +252,8 @@ This is stated plainly, as the operator asked.
 
 | # | Decision | Where argued | My recommendation |
 |---|---|---|---|
-| D1 | Escrow key custody. **Any escrow that can recover every device holds, by construction, a credential that decrypts every record.** Options: one HSM key; threshold M-of-N; per-distributor keys; owner-bound shares. | DDR-1146 §2 | Threshold (2-of-3) in HSMs, with per-distributor records. |
-| D2 | How the escrow record leaves the device: printed/typed text (needs nothing new) vs network upload (needs your escrow endpoint and its public key). | DDR-1146 §3 | Text record for v1. Upload after a backend exists. |
+| D1 | Escrow key custody. **Any escrow that can recover every device holds, by construction, a credential that decrypts every record.** Options: one HSM key; threshold M-of-N; per-distributor keys; owner-bound shares. | DDR-1146 §3 | Threshold (2-of-3) in HSMs, with per-distributor records. |
+| D2 | How the escrow record leaves the device: printed/typed text (needs nothing new) vs network upload (needs your escrow endpoint and its public key). | DDR-1146 §2.1 | Text record for v1. Upload after a backend exists. |
 | D3 | Where the escrow backend lives, who runs the offices' identity check, and where the office-side audit log is kept. **External to this OS.** | DDR-1146 §4 | Yours. The OS side is built against a record format, not a service. |
 | D4 | TPM-only auto-unlock vs **TPM+PIN**, given there are no user accounts. | DDR-1145 §5 | **TPM+PIN**, or TPM-only with the limitation stated in the release notes. |
 | D5 | Passphrase KDF: PBKDF2-HMAC-SHA256 (composes existing primitives; not memory-hard) vs Argon2id (needs BLAKE2b, a **new** primitive, KAT-gated like ML-DSA). | DDR-1144 §4 | Argon2id if the schedule allows. Otherwise PBKDF2 with the weakness stated. |
