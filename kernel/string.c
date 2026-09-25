@@ -81,3 +81,14 @@ int strncmp(const char *a, const char *b, size_t n) {
     }
     return 0;
 }
+
+/* DDR-1141: lwIP's dns.c compares against "localhost" with strcmp. */
+int strcmp(const char *a, const char *b) {
+    for (;; a++, b++) {
+        unsigned char x = (unsigned char)*a, y = (unsigned char)*b;
+        if (x != y)
+            return (int)x - (int)y;
+        if (!x)
+            return 0;
+    }
+}

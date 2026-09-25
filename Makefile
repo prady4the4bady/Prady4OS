@@ -177,6 +177,10 @@ USER_SIGPIPE_SRC := user/sigpipetest.c    # DDR-805: SIGPIPE probe (DDR-804 opt-
 USER_SIGPIPE_ELF := build/sigpipetest.elf
 USER_PRIVNET_SRC := user/privacynettest.c # DDR-802: privacy netfilter probe (DDR-804 opt-in)
 USER_PRIVNET_ELF := build/privacynettest.elf
+USER_DNS_SRC := user/dnstest.c         # DDR-1141: SYS_DNS_RESOLVE probe (built 3x, -DDNS_PHASE)
+USER_DNS1_ELF := build/dnstest1.elf
+USER_DNS2_ELF := build/dnstest2.elf
+USER_DNS3_ELF := build/dnstest3.elf
 USER_SOVEG_SRC := user/sovegresstest.c    # DDR-800: sovereign-egress audit probe
 USER_SOVEG_ELF := build/sovegresstest.elf
 USER_RTCMONO_SRC := user/rtcmonotest.c    # DDR-796: SYS_CLOCK monotonicity under SMP
@@ -530,6 +534,12 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SOVEG_ELF) build/sovegresstest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_PRIVNET_SRC) -o build/privacynettest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_PRIVNET_ELF) build/privacynettest.o
+	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=1 -c $(USER_DNS_SRC) -o build/dnstest1.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS1_ELF) build/dnstest1.o
+	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=2 -c $(USER_DNS_SRC) -o build/dnstest2.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS2_ELF) build/dnstest2.o
+	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=3 -c $(USER_DNS_SRC) -o build/dnstest3.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS3_ELF) build/dnstest3.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SIGPIPE_SRC) -o build/sigpipetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SIGPIPE_ELF) build/sigpipetest.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/sha256.c -o build/sha256_user.o
@@ -621,7 +631,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -2960,6 +2970,17 @@ smoke-privacy-netfilter: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_PRIVACY_DENIED_OK\nPRADYOS_PRIVACY_EGRESS_OK\nPRADYOS_PRIVACY_AUDIT_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRIVACYNET FAIL\nPRADYOS_SOVEREIGN_BYPASSED')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1141 DHCP + DNS gate. Non-default slirp network, so a kernel still
+# carrying the literal 10.0.2.15 (M4) cannot print arm D. Arm A's 10.77.0.99
+# exists only in the host responder's reply. Arm L is the allowlist, arm P
+# privacy mode (both halves), arm U the audit records, and arm H -- checked by
+# the wrapper against the responder's own log -- that no refused name left the
+# machine: an audit record saying "denied" cannot show that, only the far end.
+smoke-dhcpdns: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=dns \
+	EXTRA_SENTINEL="$$(printf '[net] lwIP up 10.77.0.40/24 gw=10.77.0.2 dns=10.77.0.3 via dhcp\nPRADYOS_DNS_L rc=-1 ip=0x00000000\nPRADYOS_DNS_U1 denied=1\nPRADYOS_DNS_A rc=0 ip=0x0A4D0063\nPRADYOS_DNS_U2 allowed=1\nPRADYOS_DNS_P mode=00 on=-1 onip=0x00000000 off=0 ip=0x0A4D0063')" \
+	    bash tools/ci/dhcpdns_gate.sh $(IMG)
 
 # DDR-805 SIGPIPE gate, selected per-boot by DDR-804 so the probe exists only
 # here. Discriminating on SURVIVAL, not on exit status: the kernel sets

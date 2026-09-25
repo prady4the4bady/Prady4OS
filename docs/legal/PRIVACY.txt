@@ -20,7 +20,13 @@ What PradyOS stores, and where:
 
 Your controls:
   - AETHER privacy mode refuses all agent network I/O while it is enabled.
-    This includes sockets that were already open.
+    This includes sockets that were already open, and DNS lookups: a refused
+    lookup is not sent, so the name never leaves the machine.
+  - Privacy mode does NOT stop DHCP lease renewal. Renewal tells the local
+    network's DHCP server that this machine still holds its address.
+    Stopping it would take the network interface down.
+  - DNS lookups carry the name being looked up to the resolver. The audit
+    log records that a lookup was made and to which resolver, not the name.
 
 Changes:
   - A future version that adds any data collection must say so in its release

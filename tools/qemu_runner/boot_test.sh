@@ -618,6 +618,13 @@ E1000DEV=()
 if [ -n "${QEMU_E1000E:-}" ]; then
     E1000DEV=(-netdev user,id=net1 -device e1000e,netdev=net1)
 fi
+# DDR-1141: extra slirp options for the primary NIC (e.g. a NON-default
+# network, so a DHCP client that ignores the lease is visible). Empty keeps
+# QEMU's 10.0.2.0/24 defaults for every other gate, byte-for-byte.
+NET0="user,id=net0"
+if [ -n "${QEMU_NET_USER_OPTS:-}" ]; then
+    NET0="user,id=net0,${QEMU_NET_USER_OPTS}"
+fi
 AHCIDEV=()
 if [ -n "${QEMU_AHCI_IMG:-}" ]; then
     AHCIDEV=(-device ich9-ahci,id=ahci0
@@ -650,7 +657,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${SFS2DISK[@]}" \
     "${AHCIDEV[@]}" \
     "${E1000DEV[@]}" \
-    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+    -netdev "$NET0" -device virtio-net-pci,netdev=net0 \
     "${GPUDEV[@]}" \
     "${SMPOPT[@]}" \
     "${NUMAOPT[@]}" \

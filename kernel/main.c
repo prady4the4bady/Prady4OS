@@ -41,6 +41,7 @@
 #include "virtio_gpu.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
+#include "aether.h"      /* DDR-1141: record the DHCP lease (ACTION_NET_DHCP) */
 #include "nvme.h"
 #include "vfs.h"
 #include "fat32.h"
@@ -499,6 +500,9 @@ extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe 
 extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
 extern const unsigned char privacynettest_elf_end[];
+extern const unsigned char dnstest1_elf[], dnstest1_elf_end[];   /* DDR-1141 */
+extern const unsigned char dnstest2_elf[], dnstest2_elf_end[];   /* DDR-1141 */
+extern const unsigned char dnstest3_elf[], dnstest3_elf_end[];   /* DDR-1141 */
 extern const unsigned char rtcmonotest_elf[];         /* DDR-796: SYS_CLOCK monotonicity */
 extern const unsigned char rtcmonotest_elf_end[];
 extern const unsigned char metrictest_elf[];          /* F#68/DDR-795: metric-region probe */
@@ -521,6 +525,7 @@ extern const unsigned char bigwritetest_elf[];        /* fs: ring-3 large-write 
 extern const unsigned char bigwritetest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
+int  net_dhcp_lease(uint32_t *ip, uint32_t *server);  /* DDR-1141: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
 void aether_selftest(void);
 void aether_sectest(void);
@@ -2397,6 +2402,38 @@ static void fs_test_thread(void *arg) {
                         pn->is_sovereign = 1;
                         sched_unblock(pn);
                         kputs("[user] ELF loaded (embedded); privacy-netfilter probe spawned\r\n");
+                    }
+                }
+                if (probe_enabled("dns")) {
+                    /* DDR-1141 sec.4/sec.6. Three images in SERIES. Phase 1 runs
+                     * BEFORE 10.77.0.2:53 is on the allowlist, so its refused
+                     * query names the very resolver that would answer it -- which
+                     * is what lets the host-side arm H see a missing allowlist
+                     * check. Then the row is seeded, then phase 2 (allowed), then
+                     * the sovereign phase 3 (privacy), which must not overlap
+                     * phase 2. Waiting on the pid, not on THREAD_ZOMBIE, is
+                     * DDR-967's rule: the reaper may free the TCB mid-poll. */
+                    static const struct { const unsigned char *b, *e; const char *nm; int sov; } ph[3] = {
+                        { dnstest1_elf, dnstest1_elf_end, "DNS1", 0 },
+                        { dnstest2_elf, dnstest2_elf_end, "DNS2", 0 },
+                        { dnstest3_elf, dnstest3_elf_end, "DNS3", 1 },
+                    };
+                    int netallow_add(uint32_t host_be, uint16_t port);
+                    for (int i = 0; i < 3; i++) {
+                        if (i == 1)
+                            (void)netallow_add(0x0A4D0002u, 53);   /* 10.77.0.2:53 */
+                        struct tcb *dt = 0;
+                        uint64_t dlen = (uint64_t)((uintptr_t)ph[i].e - (uintptr_t)ph[i].b);
+                        if (elf_load((void *)(uintptr_t)ph[i].b, dlen, ph[i].nm, &dt) != ELF_OK || !dt)
+                            break;
+                        uint32_t dpid = dt->pid;
+                        dt->is_net = 1;
+                        dt->is_sovereign = (uint32_t)ph[i].sov;
+                        sched_unblock(dt);
+                        kputs("[user] ELF loaded (embedded); DNS probe phase spawned\r\n");
+                        uint64_t ddl = g_ticks + 1500;       /* bounded: 15 s per phase */
+                        while (sched_find_pid(dpid) && g_ticks < ddl)
+                            yield();
                     }
                 }
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
@@ -4317,6 +4354,15 @@ void kmain(struct boot_info *bi) {
     aether_init();                       /* Layer 6: PMM-pool queue + audit rings */
     aether_selftest();                   /* Layer 6: smoke-aether-queue (PRADYOS_AETHER_QUEUE_OK) */
     aether_sectest();                    /* Layer 6: smoke-aether-sec (bounds + clean-kill paths) */
+    {   /* DDR-1141 sec.2.3: the kernel took its network configuration from a
+         * DHCP server -- record WHICH one. Here, not in net_init, because the
+         * audit ring does not exist until aether_init(); and from thread
+         * context, not lwIP's callback, which runs under g_net_lock. A lease
+         * bound after net_init's 5 s wait is printed but not recorded (stated). */
+        uint32_t lip = 0, lsrv = 0;
+        if (net_dhcp_lease(&lip, &lsrv) == 0)
+            aether_audit(0, ACTION_NET_DHCP, AETHER_DEST_ID(lsrv, 67), AR_NET_CONNECT);
+    }
     fat32_register();                    /* Phase 4: register the FS driver with the VFS */
     sfs_register();                      /* Phase 4: SOVEREIGN FS (ADR-018) */
     pdrive_register();                   /* DDR-890 (item 40): PRADYOS Drive */

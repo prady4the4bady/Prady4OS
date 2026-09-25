@@ -39,7 +39,13 @@ enum aether_action {
      * decision that was actually made. Audit-only -- nothing SUBMITS this type,
      * so it never reaches the approval path and aether_action_forces_pending()
      * is deliberately unchanged. */
-    ACTION_NET_EGRESS
+    ACTION_NET_EGRESS,
+    /* DDR-1141: audit-only, like NET_EGRESS. NET_DNS records a SYS_DNS_RESOLVE
+     * decision (id = AETHER_DEST_ID(resolver, 53)); NET_DHCP records the lease
+     * the kernel took (pid 0, id = AETHER_DEST_ID(server, 67)). Nothing submits
+     * either, so the approval path and forces_pending are unchanged. */
+    ACTION_NET_DNS,
+    ACTION_NET_DHCP
 };
 
 /* Wire-format pins for the pre-existing action types (DDR-832 discipline). */
@@ -106,6 +112,9 @@ _Static_assert(ACTION_RUN_EXPERIMENT     == 11, "action wire format: RUN_EXPERIM
 _Static_assert(ACTION_EVOLVE_GENOME      == 12, "action wire format: EVOLVE_GENOME is 12");
 /* DDR-1070: audit-only, privacy-refused egress on an open socket. */
 _Static_assert(ACTION_NET_EGRESS         == 13, "action wire format: NET_EGRESS is 13");
+/* DDR-1141: user/dnstest.c hand-copies 14 to find its own records. */
+_Static_assert(ACTION_NET_DNS            == 14, "action wire format: NET_DNS is 14");
+_Static_assert(ACTION_NET_DHCP           == 15, "action wire format: NET_DHCP is 15");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must

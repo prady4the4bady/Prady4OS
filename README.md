@@ -39,6 +39,13 @@ lists the known open issues. Other status documents:
 aarch64 and riscv64 are **boot stubs only** (ADR-034): they print a sentinel and
 halt. No ISO is built for them.
 
+## Booting v1 on UEFI firmware
+
+**Disable Secure Boot.** The v1 UEFI loader is unsigned, so firmware with
+Secure Boot enabled will refuse it. v1 is **live-boot only**: there is no
+installer and nothing persists across a reboot. It is also **single-user**.
+The known limitations are listed in `CHANGELOG.md` under v1.0.0.
+
 ## Honest scope note
 
 Performance numbers in the design documents are **targets**, not facts. Under

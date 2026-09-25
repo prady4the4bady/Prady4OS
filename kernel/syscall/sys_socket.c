@@ -285,10 +285,73 @@ static long sys_net_allow(long a1, long a2, long a3, long a4, long a5, long a6) 
     return (netallow_add((uint32_t)a1, (uint16_t)a2) < 0) ? -ENOSPC : 0;
 }
 
+/* DDR-1141 sec.3 -- SYS_DNS_RESOLVE(name, uint32_t *out, resolver).
+ *
+ * A DNS query is EGRESS: it leaves the machine and it carries the name. So it
+ * passes the same four decisions as sys_sock_connect, in the same order and for
+ * the same reasons, on the destination (resolver, 53) -- and a refused query is
+ * NOT SENT, because the query itself is the leak. Every decision is recorded as
+ * ACTION_NET_DNS before anything goes out (DDR-801: an authorised attempt is
+ * audited independently of network conditions). The queried NAME is not in the
+ * record -- audit ids are integers -- and that is stated, not glossed.
+ *
+ * resolver == 0 means the one DHCP handed out. A non-zero resolver is a real
+ * destination and is allowlisted like any other. */
+#define DNS_NAME_MAX 128
+static long sys_dns_resolve(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    char name[DNS_NAME_MAX];
+    ssize_t nl = copyinstr(name, (const void __user *)a1, sizeof name, 0);
+    if (nl < 0) return nl;                        /* -EFAULT | -ENAMETOOLONG */
+    if (nl == 0) return -EINVAL;
+    uint32_t resolver = (uint32_t)a3 ? (uint32_t)a3 : pdns_default_server();
+    if (!resolver) return -ENODEV;                /* no lease, so no resolver */
+    uint64_t id = AETHER_DEST_ID(resolver, 53);
+    uint32_t pid = current_thread->pid;
+
+    if (aether_privacy_active()) {                /* 1. ahead of everything, incl. the bypass */
+        aether_audit(pid, ACTION_NET_DNS, id, AR_PRIVACY_BLOCKED);
+        return -EPERM;
+    }
+    if (!current_thread->is_net && !current_thread->is_sovereign) {   /* 2. CAP_NET */
+        aether_audit(pid, ACTION_NET_DNS, id, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    int listed = (netallow_check(resolver, 53) == 0);
+    if (!current_thread->is_sovereign && !listed) {                    /* 3. allowlist */
+        aether_audit(pid, ACTION_NET_DNS, id, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    /* 4. DDR-800 bypass named as such; otherwise the ordinary allowed record. */
+    aether_audit(pid, ACTION_NET_DNS, id,
+                 (current_thread->is_sovereign && (!current_thread->is_net || !listed))
+                     ? AR_SOVEREIGN_BYPASS : AR_NET_CONNECT);
+
+    uint32_t ip = 0, gen = 0;
+    int rc = pdns_start(name, resolver, &ip, &gen);
+    if (rc == -1) return -EAGAIN;                 /* another query in flight */
+    if (rc == -3) return -ENODEV;
+    if (rc == -2) return -ENOENT;
+    if (rc == 0) {
+        uint64_t deadline = g_ticks + 500;        /* 5 s at 100 Hz */
+        for (;;) {
+            rc = pdns_poll(gen, &ip);
+            if (rc == 1) break;
+            if (rc < 0) return -ENOENT;           /* NXDOMAIN, lwIP gave up, or superseded */
+            if (g_ticks >= deadline) { pdns_abandon(gen); return -ETIMEDOUT; }
+            __asm__ volatile("sti; hlt; cli");    /* RX + timers run; sys_sock_read's wait */
+        }
+    }
+    if (copyout((void __user *)a2, &ip, sizeof ip) < 0)
+        return -EFAULT;
+    return 0;
+}
+
 void sys_socket_register(void) {
     syscall_register(SYS_SOCK_CONNECT, sys_sock_connect);
     syscall_register(SYS_SOCK_WRITE,   sys_sock_write);
     syscall_register(SYS_SOCK_READ,    sys_sock_read);
     syscall_register(SYS_SOCK_CLOSE,   sys_sock_close);
     syscall_register(SYS_NET_ALLOW,    sys_net_allow);    /* DDR-734 */
+    syscall_register(SYS_DNS_RESOLVE,  sys_dns_resolve);  /* DDR-1141 */
 }

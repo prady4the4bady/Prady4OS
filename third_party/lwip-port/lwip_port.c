@@ -11,6 +11,8 @@
 #include "lwip/tcp.h"
 #include "lwip/timeouts.h"
 #include "lwip/ip_addr.h"
+#include "lwip/dhcp.h"      /* DDR-1141 */
+#include "lwip/dns.h"       /* DDR-1141 */
 #include "netif/ethernet.h"
 
 #include "kheap.h"
@@ -445,8 +447,10 @@ static uint16_t csum16(const uint8_t *d, int len, uint32_t seed) {
     return (uint16_t)~s;
 }
 
-/* Build an Ethernet+IPv4+TCP SYN to 10.0.2.15:8007 from a varying source. */
-static int build_syn(uint8_t *f, uint16_t sport, uint8_t srclast) {
+/* Build an Ethernet+IPv4+TCP SYN to OUR leased address (DDR-1141 sec.2.2) from
+ * a varying source. It hardcoded 10.0.2.15; on any other lease every segment
+ * died at the IP layer before TCP parsing and the flood quietly tested less. */
+static int build_syn(uint8_t *f, uint16_t sport, uint8_t srclast, uint32_t dst) {
     uint8_t mac[6];
     virtio_net_mac(mac);
     /* Ethernet */
@@ -458,7 +462,8 @@ static int build_syn(uint8_t *f, uint16_t sport, uint8_t srclast) {
     ip[4] = sport; ip[5] = 0x13; ip[6] = 0x00; ip[7] = 0x00;/* id, flags/frag */
     ip[8] = 64; ip[9] = 6; ip[10] = 0; ip[11] = 0;          /* ttl, proto=TCP, csum */
     ip[12] = 10; ip[13] = 0; ip[14] = 2; ip[15] = srclast;  /* src 10.0.2.x */
-    ip[16] = 10; ip[17] = 0; ip[18] = 2; ip[19] = 15;       /* dst 10.0.2.15 */
+    ip[16] = (uint8_t)(dst >> 24); ip[17] = (uint8_t)(dst >> 16);   /* dst = lease */
+    ip[18] = (uint8_t)(dst >> 8);  ip[19] = (uint8_t)dst;
     uint16_t ic = csum16(ip, 20, 0); ip[10] = ic >> 8; ip[11] = ic & 0xff;
     uint8_t *tcp = ip + 20;
     tcp[0] = sport >> 8; tcp[1] = sport & 0xff;             /* sport */
@@ -470,7 +475,7 @@ static int build_syn(uint8_t *f, uint16_t sport, uint8_t srclast) {
     tcp[16] = tcp[17] = 0; tcp[18] = tcp[19] = 0;           /* csum, urg */
     /* TCP checksum over pseudo-header (src,dst,proto,len) + segment. */
     uint32_t pseudo = (10u << 8 | 0) + (2u << 8 | srclast)
-                    + (10u << 8 | 0) + (2u << 8 | 15)
+                    + (dst >> 16) + (dst & 0xffffu)
                     + 6u + 20u;
     uint16_t tc = csum16(tcp, 20, pseudo); tcp[16] = tc >> 8; tcp[17] = tc & 0xff;
     return 54;
@@ -492,8 +497,14 @@ static void net_fuzz_test(void) {
      *    is fully parsed + checksum-verified, then answered with RST and freed —
      *    no PCB is allocated, so memory stays bounded under flood (and no state
      *    lingers to disturb the :8007 echo gate). Survival is the pass criterion. */
+    uint32_t dst = lwip_ntohl(ip4_addr_get_u32(netif_ip4_addr(&g_netif)));
+    if (!dst) {
+        kputs("[net] fuzz: no lease -- SYN flood skipped (it needs an address to target)\r\n");
+        kputs("PRADYOS_NET_FUZZ_OK\r\n");
+        return;
+    }
     for (int i = 0; i < 256; i++) {
-        int n = build_syn(f, (uint16_t)(0x8000 + i), (uint8_t)(100 + (i & 0x3f)));
+        int n = build_syn(f, (uint16_t)(0x8000 + i), (uint8_t)(100 + (i & 0x3f)), dst);
         net_inject_locked(f, (uint32_t)n);        /* DDR-988 sec.9 */
         if ((i & 0x1f) == 0) net_timeouts_locked();      /* DDR-987 sec.8 */
     }
@@ -502,6 +513,119 @@ static void net_fuzz_test(void) {
 }
 
 static volatile int g_net_ready;   /* set once lwIP is initialised (PIT may fire earlier) */
+
+/* ---- DDR-1141: DHCP lease + DNS resolution ---------------------------------
+ * Addresses cross this file as uint32 with the first octet in the MOST
+ * significant byte -- the same "host_be" convention SYS_SOCK_CONNECT uses. */
+static volatile uint32_t g_lease_ip, g_lease_mask, g_lease_gw, g_lease_srv;
+static volatile uint32_t g_dhcp_dns;       /* captured at bind; DNS slot 0 is reused per query */
+static volatile int g_lease_printed;
+
+static uint32_t v4_host(const ip4_addr_t *a) { return lwip_ntohl(ip4_addr_get_u32(a)); }
+
+static void kline_ip(kline *k, uint32_t a) {
+    kline_d(k, a >> 24); kline_c(k, '.'); kline_d(k, (a >> 16) & 0xffu); kline_c(k, '.');
+    kline_d(k, (a >> 8) & 0xffu); kline_c(k, '.'); kline_d(k, a & 0xffu);
+}
+
+/* Runs inside lwIP (under g_net_lock) whenever the netif's address changes.
+ * Every field printed comes from the lease; none is a literal. On QEMU's default
+ * slirp network the lease IS 10.0.2.15/24, so smoke-net-lo's substring
+ * "[net] lwIP up 10.0.2.15/24" still matches -- as data now, not a constant. */
+static void net_status_cb(struct netif *n) {
+    if (!netif_is_up(n) || ip4_addr_isany_val(*netif_ip4_addr(n)) || !dhcp_supplied_address(n))
+        return;
+    g_lease_ip   = v4_host(netif_ip4_addr(n));
+    g_lease_mask = v4_host(netif_ip4_netmask(n));
+    g_lease_gw   = v4_host(netif_ip4_gw(n));
+    const ip_addr_t *d = dns_getserver(0);
+    g_dhcp_dns   = (d && IP_IS_V4(d)) ? v4_host(ip_2_ip4(d)) : 0u;
+    struct dhcp *dh = netif_dhcp_data(n);
+    g_lease_srv  = (dh && IP_IS_V4(&dh->server_ip_addr)) ? v4_host(ip_2_ip4(&dh->server_ip_addr)) : 0u;
+    if (g_lease_printed)
+        return;
+    g_lease_printed = 1;
+    unsigned prefix = 0;
+    for (uint32_t m = g_lease_mask; m & 0x80000000u; m <<= 1) prefix++;
+    kline k; kline_init(&k);
+    kline_s(&k, "[net] lwIP up "); kline_ip(&k, g_lease_ip);
+    kline_c(&k, '/'); kline_d(&k, prefix);
+    kline_s(&k, " gw="); kline_ip(&k, g_lease_gw);
+    kline_s(&k, " dns="); kline_ip(&k, g_dhcp_dns);
+    kline_s(&k, " via dhcp\r\n");
+    kline_emit(&k);
+}
+
+int net_dhcp_lease(uint32_t *ip, uint32_t *server) {
+    if (!g_lease_printed) return -1;
+    *ip = g_lease_ip; *server = g_lease_srv;
+    return 0;
+}
+uint32_t pdns_default_server(void) { return g_dhcp_dns; }
+
+/* One query in flight at a time. The lwIP callback carries a GENERATION, so an
+ * answer to a query the caller has already abandoned (its deadline passed) is
+ * dropped instead of being written into the NEXT caller's result. */
+static volatile uint32_t g_dns_gen;
+static volatile int g_dns_busy, g_dns_state;   /* state: 0 pending, 1 ok, -1 failed */
+static volatile uint32_t g_dns_result;
+
+static void pdns_found(const char *name, const ip_addr_t *ip, void *arg) {
+    (void)name;
+    if ((uint32_t)(uintptr_t)arg != g_dns_gen || g_dns_state != 0)
+        return;                                    /* abandoned or already answered */
+    if (ip && IP_IS_V4(ip)) {
+        g_dns_result = v4_host(ip_2_ip4(ip));
+        g_dns_state = 1;
+    } else {
+        g_dns_state = -1;
+    }
+}
+
+/* 1 = answered now (cache or literal; *out set), 0 = in flight (poll with *gen),
+ * -1 = another query is in flight, -2 = lwIP refused the name, -3 = no network. */
+int pdns_start(const char *name, uint32_t server, uint32_t *out, uint32_t *gen) {
+    if (!g_net_ready)
+        return -3;
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    if (g_dns_busy) { net_unlock(fl); return -1; }
+    g_dns_busy = 1;
+    g_dns_state = 0;
+    *gen = ++g_dns_gen;
+    ip_addr_t srv;
+    IP_ADDR4(&srv, (server >> 24) & 0xffu, (server >> 16) & 0xffu,
+             (server >> 8) & 0xffu, server & 0xffu);
+    dns_setserver(0, &srv);
+    ip_addr_t addr;
+    err_t e = dns_gethostbyname(name, &addr, pdns_found, (void *)(uintptr_t)*gen);
+    int rc;
+    if (e == ERR_OK && IP_IS_V4(&addr)) { *out = v4_host(ip_2_ip4(&addr)); g_dns_busy = 0; rc = 1; }
+    else if (e == ERR_INPROGRESS)        { rc = 0; }
+    else                                 { g_dns_busy = 0; rc = -2; }
+    net_unlock(fl);
+    return rc;
+}
+
+/* 0 = still pending, 1 = answered (*out set), -2 = failed / superseded. */
+int pdns_poll(uint32_t gen, uint32_t *out) {
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    int rc;
+    if (gen != g_dns_gen)        rc = -2;
+    else if (g_dns_state == 0)   rc = 0;
+    else {
+        rc = (g_dns_state == 1) ? 1 : -2;
+        if (rc == 1) *out = g_dns_result;
+        g_dns_busy = 0;
+    }
+    net_unlock(fl);
+    return rc;
+}
+
+void pdns_abandon(uint32_t gen) {
+    uint64_t fl = spin_lock_irqsave(&g_net_lock);
+    if (gen == g_dns_gen) { g_dns_gen++; g_dns_busy = 0; }
+    net_unlock(fl);
+}
 
 /* ---- proxy sockets for ring-3 (ADR-027) ----------------------------------
  * The kernel owns the TCP connection; ring 3 holds only a slot index. lwIP is
@@ -818,21 +942,33 @@ void net_init(void) {
     uint64_t fl;
     fl = spin_lock_irqsave(&g_net_lock);            /* DDR-987 */
     lwip_init();                                 /* also creates the 127.0.0.1 loopif */
-    ip4_addr_t ip, mask, gw;
-    IP4_ADDR(&ip, 10, 0, 2, 15);
-    IP4_ADDR(&mask, 255, 255, 255, 0);
-    IP4_ADDR(&gw, 10, 0, 2, 2);
-    netif_add(&g_netif, &ip, &mask, &gw, NULL, pradyos_netif_init, netif_input);
+    /* DDR-1141: no static address and NO fallback. A wrong address that looks
+     * configured is worse than an unconfigured interface that says so. */
+    netif_add(&g_netif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4, NULL,
+              pradyos_netif_init, netif_input);
+    netif_set_status_callback(&g_netif, net_status_cb);
     netif_set_default(&g_netif);
     netif_set_up(&g_netif);
     virtio_net_set_rx(pradyos_netif_rx_isr);     /* DDR-988 sec.3: RX IRQ -> deferred queue */
     tcp_echo_init();                             /* TCP echo on :8007 (smoke-net) */
+    int dr = dhcp_start(&g_netif);
     g_net_ready = 1;
-    kputs("[net] lwIP up 10.0.2.15/24\r\n");
+    kputs(dr == ERR_OK ? "[net] lwIP init; dhcp discover sent\r\n"
+                       : "[net] lwIP init; dhcp_start FAILED\r\n");
     /* DDR-987 sec.8: release BEFORE the self-tests. Holding across their pump
      * loops stalls every other cpu's timer ISR on this lock (see net_pump_locked).
      * The tests take the lock themselves, one iteration at a time. */
     net_unlock(fl);        /* DDR-987 */
+    /* DDR-1141 sec.2.1: wait for the lease, BOUNDED. Interrupts are on here
+     * (main.c enables them before net_init), so RX and timers run between
+     * pumps; one pump per interrupt, lock released in between (DDR-987 sec.8). */
+    uint64_t dl = g_ticks + 500;                 /* 5 s at 100 Hz */
+    while (!g_lease_printed && g_ticks < dl) {
+        net_pump_locked();
+        __asm__ volatile("hlt");
+    }
+    if (!g_lease_printed)
+        kputs("[net] dhcp: no lease within 5 s -- interface unconfigured\r\n");
     net_loopback_test();
     net_loopback_tcp_test();                     /* DDR-753: TCP client echo over loopback */
     net_fuzz_test();                             /* malformed-frame + SYN-flood hardening */

@@ -423,6 +423,23 @@ privacynettest_elf:
     incbin "build/privacynettest.elf"
 privacynettest_elf_end:
 
+; DDR-1141: SYS_DNS_RESOLVE probe, three phases (L / A / sovereign P)
+global dnstest1_elf
+global dnstest1_elf_end
+dnstest1_elf:
+    incbin "build/dnstest1.elf"
+dnstest1_elf_end:
+global dnstest2_elf
+global dnstest2_elf_end
+dnstest2_elf:
+    incbin "build/dnstest2.elf"
+dnstest2_elf_end:
+global dnstest3_elf
+global dnstest3_elf_end
+dnstest3_elf:
+    incbin "build/dnstest3.elf"
+dnstest3_elf_end:
+
 global sovegresstest_elf
 global sovegresstest_elf_end
 sovegresstest_elf:

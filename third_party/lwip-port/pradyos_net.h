@@ -31,4 +31,14 @@ int psock_close(int h, uint32_t owner, int sovereign);
 int psock_dest(int h, uint32_t owner, int sovereign,
                uint32_t *host_out, uint16_t *port_out);
 void psock_reap_owner(uint32_t pid);
+
+/* DDR-1141: the DHCP lease (0 once bound; ip/server first-octet-MSB) and the
+ * DNS resolver. pdns_start: 1 answered now (*out), 0 in flight (poll *gen),
+ * -1 busy, -2 name refused, -3 no network. pdns_poll: 0 pending, 1 ok (*out),
+ * -2 failed or superseded. pdns_abandon: drop an in-flight query at deadline. */
+int net_dhcp_lease(uint32_t *ip, uint32_t *server);
+uint32_t pdns_default_server(void);
+int pdns_start(const char *name, uint32_t server, uint32_t *out, uint32_t *gen);
+int pdns_poll(uint32_t gen, uint32_t *out);
+void pdns_abandon(uint32_t gen);
 #endif

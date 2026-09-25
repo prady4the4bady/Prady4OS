@@ -6458,3 +6458,19 @@ this time, not just the waiter."* Instrument only.
 - **Uncovered, measured:** QEMU 8.2 TCG cannot expose `ARCH_CAPABILITIES`, so the MSR-read branch never executes in CI.
 - **Kernel:** `kernel.bin` `467d51d14164149c`, 1,319,306 B. The size is unchanged.
 - **KPTI, retpoline, RSB refill:** not built. A post-tag series is recommended to the operator: IST and entry stacks first, then KPTI, then retpoline with RSB refill, each hunted against DDR-1139 §5. TCG cannot demonstrate the mitigation, and the change reaches the OPEN-2 paths. This is a recommendation, not a decision.
+
+### DDR-1141: DHCP and DNS, with the egress checks the new path needs (2026-09-25)
+
+- **Built:**
+  - lwIP DHCP replaces the hardcoded `10.0.2.15`. There is no static fallback: without a lease, the interface says it is unconfigured.
+  - `SYS_DNS_RESOLVE` (NSI 103). It applies privacy mode, then CAP_NET, then the allowlist, then the audit record, in `sys_sock_connect`'s order, **before** any query is sent. Records are `ACTION_NET_DNS` (14), and the queried name is not recorded.
+- **Gate:** `smoke-dhcpdns` (181 gates). It boots on a non-default slirp network against a host DNS responder, and the responder's log is **arm H**: a name the kernel refused must never arrive there.
+- **Mutants, each failing a distinct guest arm:**
+  - M1 (allowlist off) fails L, and also H: `denied` leaked to the host.
+  - M2 (privacy off) fails P, and also H: `private` leaked to the host.
+  - M3 (audit off) fails U2.
+  - M4 (no DHCP) fails D.
+  - The revert rebuilds to `d8d9492f3bb17e6a` bit-for-bit.
+- **Gate defect found and fixed:** arm H only ran after `boot_test.sh` passed, so it could never catch a leaking kernel. It now runs on every run.
+- **Kernel:** `kernel.bin` 1,352,074 B, leaving 220,790 B of headroom.
+- **Not covered:** a real-LAN DHCP server, IPv6, DNSSEC.

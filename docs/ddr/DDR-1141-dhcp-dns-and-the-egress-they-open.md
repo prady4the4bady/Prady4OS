@@ -63,7 +63,11 @@ log says so.
   for it. The allowlist governs **destinations a caller chooses**, so it does
   not apply here, and applying it would be circular: no lease, no network.
 - **It is audited.** When the first lease is bound, `net_init` (thread
-  context, not the lwIP callback) writes one record: `pid 0`,
+  context, not the lwIP callback) writes one record. **Corrected when built:**
+  the record is written from `kmain` immediately after `aether_sectest()`,
+  because the audit ring does not exist yet when `net_init` returns. A lease
+  that arrives **after** the 5 s wait is printed by the status callback but is
+  **not audited**. Stated, not hidden. The record: `pid 0`,
   `ACTION_NET_DHCP` (new, appended, value 15), id = `AETHER_DEST_ID(server,
   67)`, result `AR_NET_CONNECT`.
   - The record states that this machine took network configuration from that
@@ -81,6 +85,19 @@ log says so.
 SYS_DNS_RESOLVE(const char *name, uint32_t *out_host_be, uint32_t resolver_be)
   -> 0 | -EPERM | -EFAULT | -ENAMETOOLONG | -EINVAL | -ENOENT | -ETIMEDOUT | -EBUSY
 ```
+
+> **CORRECTED AT THE SITE, before shipping (DDR-1110's rule).** Three
+> details of the design above changed when it was built. The text is left as
+> designed, so the record shows what was believed first.
+> - **`errno.h` has no `EBUSY`.** A second caller while a query is in flight
+>   gets **`-EAGAIN`**.
+> - **No lease (so no resolver), or no network, returns `-ENODEV`, not
+>   `-ENOENT`.** `-ENOENT` is kept for "the name did not resolve", so a caller
+>   can tell "no network" from "no such name".
+> - **The wait is `sti; hlt; cli` against a `g_ticks` deadline, not `yield()`.**
+>   It is the same wait `sys_sock_read` uses. `hlt` wakes on the next RX or
+>   timer interrupt, and the wait is bounded by the deadline, not by a spin
+>   count.
 
 - `resolver_be == 0` means the resolver learned from DHCP.
   - If there is none, the call returns `-ENOENT`.
@@ -162,3 +179,57 @@ receives**.
 - Address conflict detection is off (§2.1).
 - Privacy mode does not stop DHCP renewal (§2.3).
 - The queried name is not in the audit record.
+
+## 6. Results, measured
+
+**Status:** built and gated. `smoke-dhcpdns` is registered on a shard (181 gates),
+`kernel.bin` is **1,352,074 B** (220,790 B headroom), warning-clean at `-Werror`,
+and hygiene reports ALL NINE PASSED.
+
+**Clean kernel `d8d9492f3bb17e6a`: rc=0, twice** (once before and once after the
+§6.1 gate change). The responder log reads `allowed.pradyos.test`,
+`released.pradyos.test` and nothing else.
+
+| Mutant | kernel | Guest arm that failed | Arm H | Observed line |
+|---|---|---|---|---|
+| M1 allowlist check off | `7b789302e19f63ca` | **L** | **FAIL — `denied.pradyos.test` reached the resolver** | `PRADYOS_DNS_L rc=0 ip=0x0A4D0063` |
+| M2 privacy check off | `0d527401bc76f8ca` | **P** | **FAIL — `private.pradyos.test` reached the resolver** | `PRADYOS_DNS_P mode=00 on=0 onip=0x0A4D0063 …` |
+| M3 audit record off | `fe23e8e16bef10fc` | **U2** | n/a (no leak) | `PRADYOS_DNS_U2 allowed=0` |
+| M4 DHCP not started, 10.0.2.15 literal | `bb3ef0cba55d069a` | **D** | n/a | `[net] dhcp: no lease within 5 s -- interface unconfigured` |
+
+Each mutant fails a **different** guest arm, so none is covered only because
+another arm happened to catch it. The revert rebuilds to `d8d9492f3bb17e6a`
+**bit-for-bit**, checked by rebuilding rather than assumed.
+
+**Where §4's predictions did not match what was measured:**
+- **M3 fails U2, not "U".** U1 (`denied=`) is written on the refusal path, so
+  U2 (`allowed=`) is the arm that sees a missing record on the authorised path.
+- **M4 prints a DHCP timeout, not the literal address.** Once `dhcp_start` is
+  skipped, the probe's queries fail with `-ETIMEDOUT`/`-EPERM` and never report
+  a wrong address. Arm D catches it either way.
+
+### 6.1 A defect in my own gate, found by the mutants: arm H could not fail on M1 or M2
+
+The first mutant campaign put M1 on L and M2 on P, which is correct. **It did not
+show the leak itself.** `dhcpdns_gate.sh` returned `boot_test.sh`'s rc
+*before* reading the responder log. A kernel that leaks a refused name almost
+always also misprints a guest sentinel, as M1 and M2 do, so the one arm that
+watches the far end **could only run on kernels that did not leak**. That is the
+dead-arm class. It is worse here because §4 calls arm H *"the arm the operator's
+'do not skip that coverage' needs."*
+
+**Fix:** arm H now runs on every run. The script exits with the guest rc if
+that is non-zero, and otherwise with arm H's verdict. **Re-measured on the same
+mutant hashes:** M1's responder log contains `denied.pradyos.test` and M2's
+contains `private.pradyos.test`, each named by `FAIL arm H`. So the claim that a
+refused query is **not sent** is now shown on the wire, not inferred from a
+return code.
+
+### 6.2 Not claimed (additional to §5)
+
+- No rate is claimed. Each row is one boot on a pinned hash.
+- **A real LAN is untested.** On slirp, `10.77.0.3` is slirp's DNS proxy, which
+  the gate deliberately bypasses by naming the host alias explicitly (§3).
+- No open issue moves (OPEN-1/2/12/13 untouched). GLOBAL_FORBIDDEN is unchanged
+  at 77: the gate's refusal arms are exact required patterns, and the check is
+  deterministic.
