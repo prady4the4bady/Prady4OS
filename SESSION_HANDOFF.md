@@ -14728,3 +14728,7 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - Four DDRs committed, docs-only. Kernel unchanged (9ff230a9dc3395ec, 1,352,074 B). DDR range now 1147+.
 - NEXT: wait for operator decisions D1-D6 (DDR-1143 §8). First implementation step once decided:
   measure OVMF TCG2 support (DDR-1145 §1), then DDR-1143 installer.
+- 2026-09-25: UI/UX track scoped as DDR-1147 (PR #17 comment 5839632522). BLOCKED on the operator committing
+  the reference PNGs and emblem art to the repo (decision U0); decisions U1-U4 open. DDR range now 1148+.
+- The github-advanced-security "Code scanning AI findings" check fails on EVERY commit (runs 33-40) with
+  "CAPIError: 400 The requested model is not supported": a GitHub service config issue, not pradyos-ci.

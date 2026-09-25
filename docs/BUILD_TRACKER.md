@@ -6511,3 +6511,11 @@ DDR-1144 per-block ChaCha20-Poly1305 with stored nonce/tag, keyslots P/R/T (smok
 TPM 2.0 TIS+CRB, PCR 9 kernel measurement, sealed slot (smoke-tpm); DDR-1146 per-device RK, X25519
 sealed-box escrow record, forced rotation, device-side audit (smoke-recovery). NOT BUILT. Awaiting
 operator decisions D1-D6 (DDR-1143 §8). Escrow backend, custody and office identity check are external.
+
+## 2026-09-25 — Desktop UI/UX dual-mode + theme engine: SCOPED (DDR-1147)
+
+PR #17 comment 5839632522 (OWNER). Independent Group E track. Scoping DDR only. BLOCKED on U0: the
+reference images (comment 5839590792) return 403 from this session (user-attachments is not a
+repository-scoped endpoint); nothing is derived from them. Measured: alpha blend, radius-4 box blur,
+OKLab 4-ambiance engine and the Inter atlas already exist; missing are dirty-rect repaint, a larger
+blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,500 lines, 8 pieces.
