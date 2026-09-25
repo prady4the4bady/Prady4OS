@@ -1318,7 +1318,7 @@ smoke-uefi: esp-image
 # because "wrote a pattern and read it back" passes on plain RAM at a wrong
 # address. Arm B boots the BIOS image and requires "[fb] gop none". M2 (stride
 # ignored) is UNDETECTABLE on this proxy -- its mode has stride == width.
-smoke-gop: esp-image $(IMG)
+smoke-gop: esp-image $(IMG) fat-image sfs-image
 	TIMEOUT_S=200 bash tools/ci/gop_gate.sh $(ESP_IMG) $(IMG)
 
 # DDR-1078: the FIRST gate ever to exercise DDR-885's remote-steal pass.

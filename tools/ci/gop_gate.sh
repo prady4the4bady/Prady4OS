@@ -35,6 +35,13 @@ TIMEOUT_S="${TIMEOUT_S:-150}"
 if pgrep -f "[q]emu-system-x86_64" >/dev/null; then
     echo "[gop] FAIL: another QEMU is running (NON-NEGOTIABLE 12)"; exit 1
 fi
+# Assert the disk images exist rather than let QEMU fail to open them (DDR-1130's
+# rule: a precondition is checked, never left to surface as a different
+# failure). CI's shared build artefact deliberately excludes *.img (DDR-1035),
+# so the make target must build them; this names it if it did not.
+for f in "$ESP" "$IMG" build/fat.img build/sfs.img /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_VARS_4M.fd; do
+    [ -f "$f" ] || { echo "[gop] FAIL: precondition -- $f is missing (make smoke-gop builds the images)"; exit 1; }
+done
 rm -f "$LOG" "$DUMP" "$DUMP2" "$SOCK"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "$VARS"
 

@@ -165,6 +165,19 @@ socket that `boot_test.sh` does not open.
 - **B:** the BIOS image boots through `boot_test.sh` and must print
   `[fb] gop none`. `[fb] gop rejected` is forbidden.
 
+**A CI defect in the first commit, caught before push.** Arm C attaches
+`build/fat.img` and `build/sfs.img`, but the make target named only
+`esp-image $(IMG)`. Locally those images already existed. On a CI shard they
+do not: the shared build artefact excludes `*.img` (DDR-1035). So the gate
+would have failed on its first CI run, for a reason unrelated to GOP.
+- **Fixed:** the target now depends on `fat-image sfs-image`, and the script
+  checks every image and firmware file before booting (DDR-1130's rule).
+- **Measured both ways, on the shard's conditions:**
+  - With the two images moved aside, the script alone fails with
+    `[gop] FAIL: precondition -- build/fat.img is missing`.
+  - `make smoke-gop` rebuilds them and passes G, S, C and B.
+  - `kernel.bin` is unchanged (`9ff230a9dc3395ec`).
+
 ### 5.3 Mutants
 
 The pre-mutation tree is loader `5f97545fc4b8bfe5` and kernel `9ff230a9dc3395ec`
