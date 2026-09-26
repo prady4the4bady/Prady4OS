@@ -3410,7 +3410,7 @@ smoke-part: $(IMG) fat-image sfs-image
 	KSHA=$$(sha256sum build/kernel.bin | cut -c1-16); KLEN=$$(stat -c %s build/kernel.bin); \
 	S0=$$(( $$(stat -c %s $(IMG)) / 512 )); S1=$$(( $$(stat -c %s build/fat.img) / 512 )); S2=$$(( $$(stat -c %s build/sfs.img) / 512 )); \
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/part.log KEEP_SERIAL=1 \
-	TIMEOUT_S=120 QEMU_PROBES=part,kimg,disk \
+	TIMEOUT_S=120 QEMU_NO_EXT4=1 QEMU_PROBES=part,kimg,disk \
 	EXTRA_SENTINEL="$$(printf '[disk] i=0 name=virtio-blk sectors=%s flags=phys\n[disk] i=1 name=virtio-blk sectors=%s flags=phys\n[disk] i=2 name=virtio-blk sectors=%s flags=phys\n[disk] i=3 name=ramdisk sectors=512 flags=ramdisk\n[disk] i=4 name=part sectors=128 flags=part\n[disk] i=5 name=part sectors=320 flags=part\n[disk] i=6 name=trace sectors=320 flags=none\n[disk] n=7 count=7 efault=-14' "$$S0" "$$S1" "$$S2")$$(printf '\n[kimg] src=bios len=%s sha=%s\n[part] mbr n=2 ok' "$$KLEN" "$$KSHA")$$(printf '\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PART FAIL\n[kimg] refused\nKIMG FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
