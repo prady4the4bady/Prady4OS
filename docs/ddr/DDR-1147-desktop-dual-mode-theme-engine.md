@@ -26,6 +26,35 @@ repository and git, colours can be sampled programmatically (per-panel region
 medians, printed into the DDR with coordinates), and they become versioned
 with the design they specify.
 
+### §1.1 Update 2026-09-26: U0 cleared for the mockups, not for the emblem
+
+The operator committed the four PNGs (`4ba23f0`) under their original export
+names. Each carries one of the README's four panel pairings, but **not in the
+order they were posted** in 5839590792, so they were matched by content, not by
+position, and renamed to the README's numbers:
+
+| File | Was | SHA-256 (first 16) | Top panel (evidence) | Bottom panel (evidence) |
+|---|---|---|---|---|
+| `1.png` | `…02_47_54 PM.png` | `753e028e31d0aa51` | Sovereign **Dawn**: teal, "Good morning" | Manual **Dusk**: orange sunset |
+| `2.png` | `…02_50_44 PM.png` | `f1f4c12fdb391f8d` | Sovereign **Dusk**: orange, "Good evening" | Manual **Dawn**: teal |
+| `3.png` | `…02_32_37 PM.png` | `70d743ee8736a210` | Sovereign **Day**: white/blue, "Good morning" | Manual **Night**: dark purple |
+| `4.png` | `…02_28_47 PM.png` | `785959cdc726f45d` | Sovereign **Night**: dark purple, "Good evening" | Manual **Day**: bright lake |
+
+Each image matches exactly one row, so the matching is unambiguous. One
+inconsistency is inside the images and is recorded, not resolved: `4.png`'s
+Night panel greets "Good evening" and `2.png`'s Dusk panel does too, so the
+greeting text alone does not identify the ambiance; the palette does.
+
+All four are 1536×1024, 8-bit RGB, non-interlaced, so a stdlib-only decoder
+(`zlib` + PNG filters) can sample them. No Pillow dependency is needed in CI.
+
+**Still missing:** the scorpion emblem and wordmark as vector or alpha art.
+The mockups contain rendered emblems, but tracing one from a screenshot would be
+a guess (§6). Icon and emblem work waits on that; palette work does not.
+
+The images' own instruction text names Qt, Tauri, Hyprland and Wayland. The
+operator's instruction overrides that: native C compositor only.
+
 ## §2 What the compositor already has (measured in `user/compositor.c`, 1,992 lines)
 
 | Capability | State | Where |
@@ -160,9 +189,19 @@ persistent root (DDR-1143) or the FAT boot volume, so it is flagged now.
 | U3 | Quick-settings "sliders": read-only meters, or what should they control? | Read-only meters |
 | U4 | Placeholders (GPU, WiFi, Bluetooth, volume, brightness): show as disabled/"n/a", or hide | Show as disabled with "not available on this build" |
 
+### §9.1 Decided 2026-09-26 (PR #17 comment 5841525203, OWNER)
+
+- **U0:** mockups committed (§1.1). Emblem/wordmark art still pending.
+- **U1:** the toggle drives the real AETHER mode (`SYS_SET_MODE`), with a
+  confirm step and an audit record. Not cosmetic.
+- **U2:** fixed clock hours for v1.
+- **U3:** read-only meters.
+- **U4:** unavailable hardware shown disabled, labelled "not available on this
+  build".
+
 ## §10 Not claimed
 
-- **Nothing here is derived from the reference images** (§1).
+- Nothing above §1.1 is derived from the reference images. §1.1 records only the file-to-panel mapping; palette values come in piece U-a, sampled by script.
 - No animation smoothness or frame rate is claimed.
 - No local natural-language capability is claimed for the search bar.
 - No mobile UI; that is explicitly out of scope.

@@ -259,6 +259,21 @@ This is stated plainly, as the operator asked.
 | D5 | Passphrase KDF: PBKDF2-HMAC-SHA256 (composes existing primitives; not memory-hard) vs Argon2id (needs BLAKE2b, a **new** primitive, KAT-gated like ML-DSA). | DDR-1144 §4 | Argon2id if the schedule allows. Otherwise PBKDF2 with the weakness stated. |
 | D6 | BIOS-booted installs get **passphrase only** (no TPM measurement path on the BIOS side). | DDR-1145 §4 | Accept. |
 
+### §8.1 Decided 2026-09-26 (PR #17 comment 5841525203, OWNER)
+
+| # | Decision |
+|---|---|
+| D1 | Threshold 2-of-3 custody plus per-distributor escrow keys (DDR-1146 §3 (b)+(c)). Device side: one `EPK` per build. |
+| D2 | Text escrow record for v1 (`ESCROW.TXT` on the ESP, DDR-1146 §2.1). |
+| D3 | The escrow backend, the office identity/ownership check and the office audit log are the operator's, external. The OS builds against the record format only. |
+| D4 | **TPM+PIN.** TPM-only is rejected: with no login, a stolen machine must not reach the desktop on power-on alone. |
+| D5 | **Argon2id**, if the schedule allows. If it does not fit, fall back to PBKDF2 **and say so explicitly with the reason**; no silent downgrade. |
+| D6 | BIOS-booted installs get passphrase + recovery only, no TPM. |
+
+All four DDRs are approved to proceed in the order 1143 -> 1144 -> 1146 -> 1145.
+The first TPM-path step, measuring OVMF's TCG2 support, is done: DDR-1145 §1.1,
+and the track proceeds.
+
 ## §9 Not claimed
 
 - **No implementation exists.** This is a design.
