@@ -462,6 +462,10 @@ extern const unsigned char mprotecttest_elf_end[];
 extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
 extern const unsigned char killblocktest_elf_end[];
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
+extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
+void ocr_grant(struct tcb *t);                        /* DDR-1149: sys_aether.c */
+void scene_grant(struct tcb *t);
+void browse_grant(struct tcb *t);
 extern const unsigned char argvtest_elf[];            /* DDR-1032: execve argv/envp */
 extern const unsigned char argvtest_elf_end[];
 extern const unsigned char ipctest_elf[];             /* DDR-1033: ring-3 IPC door */
@@ -3012,6 +3016,51 @@ static void fs_test_thread(void *arg) {
                     } else {
                         kputs("[user] ACTIONEXP probe FAILED to load\r\n");
                     }
+                }
+                /* DDR-1149: the domain capabilities, checked at submission.
+                 * FOUR processes, one per role, because each flag and each
+                 * handle is per-process and the gate must see every layer fail
+                 * on its own (DDR-1033). Every role is is_agent: without it
+                 * NSI 31/92 refuse before the domain check is ever reached, and
+                 * the arms would be vacuous. argv[1] carries the role. */
+                if (probe_enabled("domcap")) {
+                    static const char *const roles[5] = { "GRANT", "NODOOR", "NOCAP", "DOORX", "CAPX" };
+                    uint64_t dclen = (uint64_t)((uintptr_t)domcaptest_elf_end -
+                                                (uintptr_t)domcaptest_elf);
+                    for (int r = 0; r < 5; r++) {
+                        char blob[24];
+                        uint32_t n = 0;
+                        const char *a0 = "DOMCAP";
+                        for (const char *q = a0; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        for (const char *q = roles[r]; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        struct exec_args ea = { blob, n, 2, 0 };
+                        struct tcb *dt = 0;
+                        if (elf_load_args((void *)(uintptr_t)domcaptest_elf, dclen,
+                                          "DOMCAP", &ea, &dt) != ELF_OK || !dt) {
+                            kputs("[user] DOMCAP probe FAILED to load\r\n");
+                            continue;
+                        }
+                        dt->is_agent = 1;                 /* authority to PROPOSE */
+                        ocr_grant(dt); scene_grant(dt); browse_grant(dt);
+                        if (r == 1) {                     /* NODOOR: caps, no flags */
+                            dt->is_ocr = 0; dt->is_scene = 0; dt->is_browse = 0;
+                        } else if (r == 2) {              /* NOCAP: flags, no caps */
+                            dt->ocr_cap = CAP_NULL; dt->scene_cap = CAP_NULL;
+                            dt->browse_cap = CAP_NULL;
+                        } else if (r == 3) {              /* DOORX: OCR door, ALL caps */
+                            dt->is_scene = 0; dt->is_browse = 0;
+                        } else if (r == 4) {              /* CAPX: ALL doors, OCR cap */
+                            dt->scene_cap = CAP_NULL; dt->browse_cap = CAP_NULL;
+                        }
+                        /* DOORX / CAPX, not one 'OCR only' role: DDR-1149 sec.4.1
+                         * measured that with BOTH layers narrowed, a wrong
+                         * per-type FLAG mapping is masked by the capability
+                         * refusal (M3 passed). Each role narrows ONE layer. */
+                        sched_unblock(dt);                /* authority BEFORE the first run */
+                    }
+                    kputs("[user] domain-capability probes spawned (GRANT NODOOR NOCAP DOORX CAPX)\r\n");
                 }
                 /* DDR-1037: POSIX poll(). One process -- unlike is_ipc/is_exec
                  * there is no per-process door here, so a second un-granted

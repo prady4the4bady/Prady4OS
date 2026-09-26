@@ -224,3 +224,4 @@
 4	smoke-sharedpte	130	strict
 1	smoke-killblock	120	strict
 4	smoke-dhcpdns	60	strict
+6	smoke-domcap	120	strict

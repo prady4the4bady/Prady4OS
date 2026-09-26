@@ -2103,3 +2103,4 @@ this time, not just the waiter."* Instrument only.
 - 2026-09-26 — DDR-1143 §10.8: NSI 104 `SYS_DISK_LIST` (read-only disk enumeration, gated on smoke-part). No AETHER surface change.
 
 - 2026-09-26 — DDR-1148 (kernel instrument, no AETHER surface change): the virtio-blk completion-timeout path now prints `[vblkto]` naming the request type and the used-ring state. No feature row moves.
+- 2026-09-26 — DDR-1149: CAP_OCR / CAP_SCENE / CAP_NET_BROWSE are real capabilities, checked when an agent PROPOSES ACTION_PARSE_DOCUMENT / QUERY_SCENE / BROWSE_WEB (flag + cap_authorize, both submit paths; `smoke-domcap`). The AHNIS / IRIS / LUMYN behaviours stay unbuilt: nothing executes these actions.

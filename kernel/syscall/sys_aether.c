@@ -111,6 +111,39 @@ static long sys_set_mode(long a1, long a2, long a3, long a4, long a5, long a6) {
     return aether_set_mode((unsigned)a1);
 }
 
+/* DDR-1149: the domain capabilities (operator decision 6). Kernel-only grants
+ * in the exec_grant / ipc_grant shape -- never reachable from ring 3. */
+static void domain_grant(struct tcb *t, uint32_t *flag, cap_t *h,
+                         uint64_t res_id, uint32_t right) {
+    if (!t || !t->caps)
+        return;
+    *flag = 1;
+    *h = cap_create(t->caps, RES_DOMAIN, res_id, right);
+}
+void ocr_grant(struct tcb *t)    { if (t) domain_grant(t, &t->is_ocr,    &t->ocr_cap,    DOMAIN_RES_OCR,    CAP_OCR); }
+void scene_grant(struct tcb *t)  { if (t) domain_grant(t, &t->is_scene,  &t->scene_cap,  DOMAIN_RES_SCENE,  CAP_SCENE); }
+void browse_grant(struct tcb *t) { if (t) domain_grant(t, &t->is_browse, &t->browse_cap, DOMAIN_RES_BROWSE, CAP_NET_BROWSE); }
+
+/* DDR-1149: may this thread PROPOSE `type`? 1 for every non-domain type. For a
+ * domain type BOTH layers must hold -- the flag (the door) AND cap_authorize on
+ * that domain's handle -- and the gate tests them apart (DDR-1033's lesson: two
+ * checks in series each mask the other's absence). Called from BOTH submit
+ * paths; a refusal is audited with the TYPE, which is a different fact from the
+ * is_agent refusal's type 0 (DDR-801: the record states the decision made). */
+static int domain_cap_ok(struct tcb *t, uint32_t type) {
+    uint32_t flag; cap_t h; uint64_t res; uint32_t right;
+    switch (type) {
+    case ACTION_PARSE_DOCUMENT: flag = t->is_ocr;    h = t->ocr_cap;    res = DOMAIN_RES_OCR;    right = CAP_OCR;        break;
+    case ACTION_QUERY_SCENE:    flag = t->is_scene;  h = t->scene_cap;  res = DOMAIN_RES_SCENE;  right = CAP_SCENE;      break;
+    case ACTION_BROWSE_WEB:     flag = t->is_browse; h = t->browse_cap; res = DOMAIN_RES_BROWSE; right = CAP_NET_BROWSE; break;
+    default: return 1;
+    }
+    if (flag && cap_authorize(t->caps, h, RES_DOMAIN, res, right))
+        return 1;
+    aether_audit(t->pid, type, 0, AR_CAP_DENIED);
+    return 0;
+}
+
 static long sys_submit_action(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a4;
@@ -119,6 +152,8 @@ static long sys_submit_action(long a1, long a2, long a3, long a4, long a5, long 
         return -EPERM;
     }
     uint32_t type = (uint32_t)a1;
+    if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
+        return -EPERM;
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
@@ -143,6 +178,8 @@ static long sys_submit_child_action(long a1, long a2, long a3, long a4, long a5,
         return -EPERM;
     }
     uint32_t type = (uint32_t)a1;
+    if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
+        return -EPERM;
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];

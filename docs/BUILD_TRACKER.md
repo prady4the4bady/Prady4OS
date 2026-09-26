@@ -6597,3 +6597,11 @@ blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,
 - M1 (skip one reap on unit 2) reads `used_idx=40 last_used=39 status=0`. M1 also caught a missing CRLF in the first build.
 - Negatives: smoke-kill, smoke-blk-integrity and smoke-part rc=0 with zero `[vblkto]` lines; smoke-shell 5/5; hash pinned at `1678166941c19808`, 1,372,554 B (size unchanged).
 - NOT FIXED: the late-completion hazard (DDR-1148 §4), which is counted as `late=` but not changed. No mechanism is named for the CI red.
+
+### 2026-09-26 — DDR-1149: CAP_OCR / CAP_SCENE / CAP_NET_BROWSE granted, enforced at action submission (operator decision 6)
+- Three action types appended and pinned: PARSE_DOCUMENT 16, QUERY_SCENE 17, BROWSE_WEB 18.
+- `struct tcb` gains `is_ocr/ocr_cap`, `is_scene/scene_cap` and `is_browse/browse_cap`, explicitly initialised. Kernel-only grants mint `RES_DOMAIN` handles.
+- `domain_cap_ok()` requires the flag AND `cap_authorize` on BOTH submit paths (NSI 31/92). Refusals are audited `AR_CAP_DENIED` with the action type.
+- Gate `smoke-domcap` (shard 6, strict): five roles, exact lines, five mutants each caught on a distinct line. The design's `CROSS` role let M3 pass, because the layers mask each other per type; it was replaced by DOORX/CAPX (§4.1).
+- kernel.bin `f78b53c02a2b2734`, 1,380,746 B / 192,118 B headroom; 184 gates; 84 probe ELFs.
+- NOT unblocked: the domain behaviours (no OCR model, no scene graph, cloud bridge deferred per DDR-793); per-slot agent grants at spawn (DDR-982 §5.4 race); `forces_pending` unchanged (whether BROWSE_WEB should force a human decision is the operator's call).

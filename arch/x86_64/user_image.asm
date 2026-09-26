@@ -544,3 +544,8 @@ global disktest_elf_end
 disktest_elf:
     incbin "build/disktest.elf"
 disktest_elf_end:
+global domcaptest_elf
+global domcaptest_elf_end
+domcaptest_elf:
+    incbin "build/domcaptest.elf"
+domcaptest_elf_end:

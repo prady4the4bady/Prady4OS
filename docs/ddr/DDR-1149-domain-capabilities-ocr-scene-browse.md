@@ -1,6 +1,6 @@
 # DDR-1149 — CAP_OCR / CAP_SCENE / CAP_NET_BROWSE: a real capability boundary at submission
 
-Status: DESIGN (committed before code, NON-NEGOTIABLE 5).
+Status: BUILT + GATED (design committed first at a756900, NON-NEGOTIABLE 5).
 
 ## 0. Authority
 
@@ -118,3 +118,56 @@ operator's instruction to flag anything thinner than it reads.
 - No per-slot agent grant exists, and DDR-982 §5.4 is not fixed.
 - No existing gate's semantics change, because the three enum values are new.
 - `GLOBAL_FORBIDDEN` stays at 77.
+
+## 4.1 Correction: the design's CROSS role could not catch M3
+
+The design (§3) had four roles, with `CROSS` holding **both** the OCR door and
+the OCR capability, and §4 predicted that M3 (the `SCENE` case reading
+`is_ocr`) would fail `CROSS`. **Measured, it passed the whole gate**
+(`eab9642d99d4a646`, rc=0). Under M3, `CROSS`'s `SCENE` submission reads
+`is_ocr = 1`, which is exactly the mutation. But `cap_authorize` on
+`scene_cap = CAP_NULL` still refuses. So the second layer masked a wrong
+mapping in the first.
+
+That is DDR-1033's lesson again, one level in: **two checks in series mask
+each other *per type* as well as per layer.** The fix to the gate is to narrow
+one layer at a time per type. `CROSS` is replaced by two roles:
+
+- `DOORX`: the OCR door, and all three capabilities.
+- `CAPX`: all three doors, and the OCR capability only.
+
+A fifth mutant covers the capability-mapping analogue.
+
+## 7. Measured
+
+Shipping `kernel.bin` is `f78b53c02a2b2734`, 1,380,746 B (+8,192 B for the
+page-aligned embedded probe), warning-clean.
+
+`smoke-domcap` rc=0 with exactly:
+
+```
+PRADYOS_DOMCAP role=GRANT ocr=ok scene=ok browse=ok child=ok
+PRADYOS_DOMCAP role=NODOOR ocr=-1 scene=-1 browse=-1 child=-1
+PRADYOS_DOMCAP role=NOCAP ocr=-1 scene=-1 browse=-1 child=-1
+PRADYOS_DOMCAP role=DOORX ocr=ok scene=-1 browse=-1 child=ok
+PRADYOS_DOMCAP role=CAPX ocr=ok scene=-1 browse=-1 child=ok
+```
+
+Each mutant is on its own recorded hash, and each fails on its own line:
+
+| mutant | change | kernel | the line that breaks |
+|---|---|---|---|
+| M1 | flag check removed | `710f03fb0aef4b52` | `NODOOR` (all `ok`); `DOORX` also flips |
+| M2 | `cap_authorize` removed | `d108fc95f3b9832e` | `NOCAP` (all `ok`); `CAPX` also flips |
+| M3 | `SCENE` reads `is_ocr` | `94037f7db1495fd5` | `DOORX scene=ok`, **alone** |
+| M4 | child path unchecked | `13bcb5fbf6d4b979` | `NODOOR`/`NOCAP` `child=ok`, **alone** |
+| M5 | `SCENE` uses the OCR handle, res_id and right | `1e404568c17de472` | `CAPX scene=ok`, **alone** |
+
+Every mutant was reverted, and the shipping hash was confirmed by rebuild.
+
+Regression, with the hash pinned throughout:
+
+- `smoke-domcap`, `smoke-runexp`, `smoke-sendipc`, `smoke-actionhypo`,
+  `smoke-aether`, `smoke-actiondel` and `smoke-invariants` all rc=0.
+- `smoke-shell` 5/5.
+- `ci-probe-rodata-check` OK on 84 ELFs, and `ci-shard-check` OK on 184 gates.

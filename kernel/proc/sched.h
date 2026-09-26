@@ -197,6 +197,12 @@ struct tcb {
                                  * shape as is_ipc. Zeroed in sched_create:
                                  * kmalloc does not zero (NON-NEGOTIABLE 10). */
     cap_t      exec_cap;        /* DDR-1034: the RES_EXEC handle minted beside it */
+    uint32_t   is_ocr;          /* DDR-1149: may PROPOSE ACTION_PARSE_DOCUMENT.  */
+    cap_t      ocr_cap;         /*   Kernel-set at spawn (ocr_grant), never       */
+    uint32_t   is_scene;        /*   mintable from ring 3, zeroed in              */
+    cap_t      scene_cap;       /*   sched_create_state (NON-NEGOTIABLE 10).      */
+    uint32_t   is_browse;       /*   Same shape for QUERY_SCENE / BROWSE_WEB.     */
+    cap_t      browse_cap;
     uint32_t   is_rewrite;      /* DDR-842: CAP_REWRITE — code-rewrite approval.
                                  * Meaningless without is_sovereign; the syscall
                                  * requires BOTH. Granted at spawn only. */

@@ -138,6 +138,8 @@ USER_KILLB_SRC := user/killblocktest.c   # DDR-1090: SIGKILL vs an unbounded ker
 USER_KILLB_ELF := build/killblocktest.elf
 USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
 USER_DISK_ELF  := build/disktest.elf
+USER_DOMCAP_SRC := user/domcaptest.c     # DDR-1149: domain capabilities at submission
+USER_DOMCAP_ELF := build/domcaptest.elf
 USER_MPROT_ELF := build/mprotecttest.elf
 USER_SLOW_SRC  := user/slowtest.c        # DDR-1068: still running when `wait` runs
 USER_SLOW_ELF  := build/slowtest.elf
@@ -599,6 +601,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLB_ELF) build/killblocktest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_DOMCAP_SRC) -o build/domcaptest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DOMCAP_ELF) build/domcaptest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SLOW_SRC) -o build/slowtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SLOW_ELF) build/slowtest.o
 	nasm -Werror -f elf64 $(USER_ARGT_SRC) -o build/argtest.o
@@ -635,7 +639,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -4043,6 +4047,20 @@ smoke-runexp: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="EXPTEST FAIL|ACTIONEXP FAIL|PRADYOS_EXPACT_B .* v=97" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[runexp] PASS — $$(grep -a PRADYOS_EXP_REC build/runexp.log | head -1)"
+
+# DDR-1149: CAP_OCR / CAP_SCENE / CAP_NET_BROWSE, enforced at action submission
+# (operator decision 6). Four roles, EXACT lines (DDR-1044): NODOOR lacks only
+# the flag, NOCAP only the capability, so each layer fails alone (DDR-1033);
+# DOORX (OCR door, all caps) and CAPX (all doors, OCR cap) each narrow ONE
+# layer per type -- one role narrowing both let a wrong flag mapping pass
+# (DDR-1149 sec.4.1, M3 measured); child= covers
+# the second submit path (NSI 92). -1 is -EPERM.
+smoke-domcap: $(IMG) fat-image sfs-image
+	@rm -f build/domcap.log
+	@SERIAL_LOG=build/domcap.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=domcap \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_DOMCAP role=GRANT ocr=ok scene=ok browse=ok child=ok\nPRADYOS_DOMCAP role=NODOOR ocr=-1 scene=-1 browse=-1 child=-1\nPRADYOS_DOMCAP role=NOCAP ocr=-1 scene=-1 browse=-1 child=-1\nPRADYOS_DOMCAP role=DOORX ocr=ok scene=-1 browse=-1 child=ok\nPRADYOS_DOMCAP role=CAPX ocr=ok scene=-1 browse=-1 child=ok')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[domcap] PASS -- 5 roles, each layer and each per-type mapping held"
 
 # DDR-1037: POSIX poll(). The sentinel list asserts VALUES, not presence:
 #   EMPTY n=0        -- an empty pipe is not readable

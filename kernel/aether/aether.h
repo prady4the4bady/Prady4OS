@@ -22,6 +22,10 @@ enum aether_action {
      * boundary in every audit record and queue entry, so an insertion renumbers
      * a wire format exactly as DDR-832 describes for enum aether_result.
      *
+     * [DDR-1149, 2026-09-26: PARSE_DOCUMENT, QUERY_SCENE and BROWSE_WEB are
+     * now DECLARED, appended at the end, WITH enforcement at submission per
+     * operator decision 6; the paragraph below is the original rule and still
+     * governs CAPTURE_FRAME, SCAN_ENVIRONMENT and EXEC_CODE.]
      * Six further 3C types are deliberately ABSENT until their subsystem exists
      * — CAPTURE_FRAME / SCAN_ENVIRONMENT / QUERY_SCENE (post-L7, CAP_SCENE),
      * PARSE_DOCUMENT (64 MiB OCR model), EXEC_CODE (sandboxed interpreter),
@@ -45,7 +49,16 @@ enum aether_action {
      * the kernel took (pid 0, id = AETHER_DEST_ID(server, 67)). Nothing submits
      * either, so the approval path and forces_pending are unchanged. */
     ACTION_NET_DNS,
-    ACTION_NET_DHCP
+    ACTION_NET_DHCP,
+    /* DDR-1149: operator decision 6 (PR #17 comment 5845610518) answered
+     * DDR-982 sec.5.5 -- declare the domain types so there is a capability
+     * boundary to enforce. APPENDED. Enforced at SUBMISSION (sys_aether.c,
+     * domain_cap_ok, both submit paths): the flag AND cap_authorize. Nothing
+     * EXECUTES any of the three -- no OCR model, no scene graph, and the cloud
+     * bridge stays deferred (DDR-793) -- so the boundary is on PROPOSING. */
+    ACTION_PARSE_DOCUMENT,       /* CAP_OCR        */
+    ACTION_QUERY_SCENE,          /* CAP_SCENE      */
+    ACTION_BROWSE_WEB            /* CAP_NET_BROWSE */
 };
 
 /* Wire-format pins for the pre-existing action types (DDR-832 discipline). */
@@ -115,6 +128,10 @@ _Static_assert(ACTION_NET_EGRESS         == 13, "action wire format: NET_EGRESS 
 /* DDR-1141: user/dnstest.c hand-copies 14 to find its own records. */
 _Static_assert(ACTION_NET_DNS            == 14, "action wire format: NET_DNS is 14");
 _Static_assert(ACTION_NET_DHCP           == 15, "action wire format: NET_DHCP is 15");
+/* DDR-1149: hand-copied by user/domcaptest.c, which submits all three. */
+_Static_assert(ACTION_PARSE_DOCUMENT     == 16, "action wire format: PARSE_DOCUMENT is 16");
+_Static_assert(ACTION_QUERY_SCENE        == 17, "action wire format: QUERY_SCENE is 17");
+_Static_assert(ACTION_BROWSE_WEB         == 18, "action wire format: BROWSE_WEB is 18");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must

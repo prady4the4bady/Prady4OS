@@ -73,6 +73,14 @@ typedef uint64_t cap_t;
  * THIS experiment" -- the same coarseness DDR-1033 recorded for RES_IPC,
  * stated here rather than implied. */
 #define RES_EXEC   4u
+/* DDR-1149: the three agent DOMAIN capabilities (OCR / scene / web browse).
+ * One resource type, one res_id per domain, the right being the domain's own
+ * CAP_* bit -- so a handle minted for one domain cannot authorize another even
+ * if a caller passes the wrong handle. */
+#define RES_DOMAIN 5u
+#define DOMAIN_RES_OCR    0x4F435200ull   /* "OCR"  */
+#define DOMAIN_RES_SCENE  0x53434E00ull   /* "SCN"  */
+#define DOMAIN_RES_BROWSE 0x42525700ull   /* "BRW"  */
 
 struct cap_table;   /* opaque; kernel-private */
 

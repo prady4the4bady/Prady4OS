@@ -1168,6 +1168,12 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->ipc_cap   = CAP_NULL;       /* DDR-1033: and no handle to go with it */
     t->is_exec   = 0;              /* DDR-1034: no executor door unless granted */
     t->exec_cap  = CAP_NULL;       /* DDR-1034: and no handle to go with it */
+    t->is_ocr    = 0;              /* DDR-1149: no domain authority unless granted */
+    t->ocr_cap   = CAP_NULL;
+    t->is_scene  = 0;
+    t->scene_cap = CAP_NULL;
+    t->is_browse = 0;
+    t->browse_cap = CAP_NULL;
     t->is_memory = 0;              /* DDR-836: no CAP_MEMORY unless granted; kmalloc does
                                     * not zero, so every new field needs this line    */
     t->checkpointed = 0;           /* DDR-837: not frozen                             */

@@ -14763,3 +14763,5 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   Trigger: dfbe417 PR-suite shard 9 smoke-kill red (push suite same SHA green). M1 reads reading (b); negatives clean; shell 5/5; kernel 1678166941c19808 1,372,554 B.
   NEXT: read operator comment 5845610518 (verify OWNER), then DDR-1143 piece 4 install engine + NSI 105.
   Operator comment 5845610518 (OWNER, 6 decisions) read. #5 recorded: OPEN-1 hold clause closed as satisfied; tag held on OPEN-2 alone (checklist §1.2, CLAUDE.md). #1-4, #6 queued as tasks.
+  DDR-1149 BUILT (op decision 6): domain caps at submission; smoke-domcap 5 roles, M1-M5 each caught; M3 initially PASSED (the CROSS role masked it), fixed with DOORX/CAPX. kernel f78b53c02a2b2734 1,380,746 B / 192,118; 184 gates.
+  NEXT: op #1-3 (DDR-1147 palette + engine), op #4 (DDR-1059 Route 3), DDR-1143 piece 4 install engine.
