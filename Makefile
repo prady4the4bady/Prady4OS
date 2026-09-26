@@ -281,6 +281,11 @@ OPEN2_RING_MAX ?= 4096
 OPEN2_FORCE_RECYCLE ?= 0
 KCFLAGS += -DOPEN2_HUNT=$(OPEN2_HUNT) -DOPEN2_RING_MAX=$(OPEN2_RING_MAX)
 KCFLAGS += -DOPEN2_FORCE_RECYCLE=$(OPEN2_FORCE_RECYCLE)
+# DDR-1151: forced double-dispatch mutant (pre-DDR-1139 re-queue + widened
+# window). NEVER set outside a proof run; default 0 is bit-identical.
+OPEN2_FORCE_DD ?= 0
+OPEN2_FORCE_DD_KEEPCAS ?= 0
+KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_FORCE_DD_KEEPCAS)
 # DDR-1097 sec.5 / DDR-1096 sec.5.1: KCFLAGS is NOT a prerequisite of
 # $(KERNEL_BIN), so a flag-only change silently relinks a stale object and
 # produces an IDENTICAL hash -- measured, twice, in two environments. Touch a

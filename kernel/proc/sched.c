@@ -658,6 +658,10 @@ static volatile uint8_t g_in_switch[PERCPU_MAX];
 /* DDR-1139 (c): claims refused because the thread was already claimed.
  * Cumulative (never drained): one event in a whole boot must stay visible. */
 volatile uint32_t g_dbl_claim;
+#if OPEN2_FORCE_DD
+/* DDR-1151: forced-window count (denominator for the signature catalogue). */
+volatile uint32_t g_dd_forced;
+#endif
 
 /* DDR-887: the SCHEDULE-path variant of switch_wait_offcpu.
  *
@@ -1555,6 +1559,7 @@ static void schedule_locked(uint64_t fl) {
      * Before DDR-1139 this fell through to switch_wait_offcpu_sched(prev), which
      * waited on this CPU's OWN on_cpu until the 4096-spin bail (hunt 35963517515
      * lane 15: calls == bails in every heartbeat window). */
+#if !OPEN2_FORCE_DD   /* DDR-1151: the mutant restores the pre-fix self-wait */
     if (next == prev) {
         if (prev->state == THREAD_READY) {
             prev->state = THREAD_RUNNING;
@@ -1567,6 +1572,7 @@ static void schedule_locked(uint64_t fl) {
             return;
         }
     }
+#endif
 
     /* DDR-1139 (a): re-queue prev ONLY on this function's own RUNNING->READY
      * transition. A prev that entered ALREADY READY was made READY by
@@ -1579,11 +1585,32 @@ static void schedule_locked(uint64_t fl) {
      * push occurs in an ordinary healthy smoke-smpuser boot (DDR-1139 sec.3).
      * The three places that make a thread READY -- create, here, sched_unblock
      * -- each push exactly once for their own transition. */
+#if OPEN2_FORCE_DD
+    /* DDR-1151 MUTANT, NEVER SHIPPED (default 0): the PRE-DDR-1139 re-queue
+     * verbatim, plus a bounded spin (N < the 4096 wait bail) when the push
+     * actually created a SECOND token, so another CPU has room to pop it and
+     * wait beside the first token's holder. Pre-fix code, wider window. */
+    {
+        int dd_entered_ready = (prev->state == THREAD_READY);
+        if (prev->state == THREAD_RUNNING)
+            prev->state = THREAD_READY;
+        if (prev->state == THREAD_READY && !prev->is_idle) {
+            int was_on = __atomic_load_n(&prev->rq_on, __ATOMIC_ACQUIRE);
+            rq_push(cpu, prev);
+            if (dd_entered_ready && !was_on) {
+                __atomic_add_fetch(&g_dd_forced, 1, __ATOMIC_RELAXED);
+                for (int dd_i = 0; dd_i < OPEN2_FORCE_DD; dd_i++)
+                    __asm__ volatile("pause");
+            }
+        }
+    }
+#else
     if (prev->state == THREAD_RUNNING) {
         prev->state = THREAD_READY;
         if (!prev->is_idle)
             rq_push(cpu, prev);    /* rq-1: a preempted-but-runnable prev re-queues */
     }
+#endif
 
     /* next may still be mid-switch-away on another CPU: wait for its release
      * before we touch its rsp. next != prev here: DDR-1139 (b) above handles the
@@ -1610,6 +1637,7 @@ static void schedule_locked(uint64_t fl) {
      * (no push) and run idle. After (a) and (b) this should never fire; if it
      * does, dblclaim= in [hb] makes the remaining token source an ARTEFACT
      * instead of a silent double run. Idle is never queued and runs only here. */
+#if !OPEN2_FORCE_DD || OPEN2_FORCE_DD_KEEPCAS   /* DDR-1151: mutant drops (c) */
     if (!next->is_idle) {
         int expect = -1;
         if (!__atomic_compare_exchange_n(&next->on_cpu, &expect, cpu, 0,
@@ -1622,6 +1650,7 @@ static void schedule_locked(uint64_t fl) {
             }
         }
     }
+#endif
     next->on_cpu = cpu;
     next->state = THREAD_RUNNING;
     next->dispatches++;            /* DDR-735: switch-in count (under the claim) */
@@ -2303,6 +2332,13 @@ void sched_block_on(spinlock_t *lk) {
     }
     current_thread->state = THREAD_BLOCKED;
     spin_unlock(lk);
+#if OPEN2_FORCE_DD
+    /* DDR-1151 MUTANT: widen the block-then-wake gap so a waker on another
+     * CPU can make us READY (and another CPU pop that token) BEFORE our own
+     * schedule() runs -- the precondition of the duplicate push. */
+    for (int dd_i = 0; dd_i < 8 * OPEN2_FORCE_DD; dd_i++)
+        __asm__ volatile("pause");
+#endif
     schedule();
     spin_lock(lk);
 }
@@ -2322,6 +2358,13 @@ int sched_block_timeout(spinlock_t *lk, volatile int *done,
     current_thread->block_deadline = g_ticks + timeout_ticks;
     current_thread->state = THREAD_BLOCKED;
     spin_unlock(lk);
+#if OPEN2_FORCE_DD
+    /* DDR-1151 MUTANT: widen the block-then-wake gap so a waker on another
+     * CPU can make us READY (and another CPU pop that token) BEFORE our own
+     * schedule() runs -- the precondition of the duplicate push. */
+    for (int dd_i = 0; dd_i < 8 * OPEN2_FORCE_DD; dd_i++)
+        __asm__ volatile("pause");
+#endif
     schedule();
     spin_lock(lk);
     current_thread->block_deadline = 0;

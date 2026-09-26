@@ -431,6 +431,11 @@ static void timer_tick(struct regs *r) {
         { extern volatile uint32_t g_dbl_claim;
           kputs(" dblclaim=");
           kputdec((uint64_t)__atomic_load_n(&g_dbl_claim, __ATOMIC_RELAXED)); }
+#if OPEN2_FORCE_DD
+        { extern volatile uint32_t g_dd_forced;   /* DDR-1151 mutant only */
+          kputs(" ddforced=");
+          kputdec((uint64_t)__atomic_load_n(&g_dd_forced, __ATOMIC_RELAXED)); }
+#endif
         /* DDR-979 §6: panics that stayed silent so the winner's dump stayed
          * readable. panics_silent nonzero means MORE THAN ONE CPU panicked this
          * boot — which the old unserialised printer showed only as a garbled
