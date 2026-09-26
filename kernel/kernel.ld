@@ -40,6 +40,7 @@ SECTIONS
     }
     .data : AT(ADDR(.data) - KERNEL_VBASE + KERNEL_LMA) {
         *(.data .data.*)
+        __data_end = .;            /* DDR-1143 §10.4: end of the file image */
     }
     .bss ALIGN(64) (NOLOAD) : {        /* 64 = cache-line alignment for IPC rings */
         __bss_start = .;

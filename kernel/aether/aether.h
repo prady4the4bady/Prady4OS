@@ -22,6 +22,10 @@ enum aether_action {
      * boundary in every audit record and queue entry, so an insertion renumbers
      * a wire format exactly as DDR-832 describes for enum aether_result.
      *
+     * [DDR-1149, 2026-09-26: PARSE_DOCUMENT, QUERY_SCENE and BROWSE_WEB are
+     * now DECLARED, appended at the end, WITH enforcement at submission per
+     * operator decision 6; the paragraph below is the original rule and still
+     * governs CAPTURE_FRAME, SCAN_ENVIRONMENT and EXEC_CODE.]
      * Six further 3C types are deliberately ABSENT until their subsystem exists
      * — CAPTURE_FRAME / SCAN_ENVIRONMENT / QUERY_SCENE (post-L7, CAP_SCENE),
      * PARSE_DOCUMENT (64 MiB OCR model), EXEC_CODE (sandboxed interpreter),
@@ -30,13 +34,104 @@ enum aether_action {
      * one and the kernel would queue an action nothing implements. */
     ACTION_READ_FILE, ACTION_DELETE_FILE, ACTION_SEND_IPC, ACTION_QUERY_MEMORY,
     ACTION_REWRITE_AGENT_CODE, ACTION_PROPOSE_HYPOTHESIS,
-    ACTION_RUN_EXPERIMENT, ACTION_EVOLVE_GENOME
+    ACTION_RUN_EXPERIMENT, ACTION_EVOLVE_GENOME,
+    /* DDR-1070: egress THROUGH an already-open proxy socket, as distinct from
+     * opening one. Appended, never inserted, per this enum's own rule above.
+     * It exists so the audit trail can say WHICH operation privacy mode
+     * refused: reusing ACTION_NET_CONNECT would have recorded a blocked write
+     * as a blocked connect, and DDR-801's rule is that the record states the
+     * decision that was actually made. Audit-only -- nothing SUBMITS this type,
+     * so it never reaches the approval path and aether_action_forces_pending()
+     * is deliberately unchanged. */
+    ACTION_NET_EGRESS,
+    /* DDR-1141: audit-only, like NET_EGRESS. NET_DNS records a SYS_DNS_RESOLVE
+     * decision (id = AETHER_DEST_ID(resolver, 53)); NET_DHCP records the lease
+     * the kernel took (pid 0, id = AETHER_DEST_ID(server, 67)). Nothing submits
+     * either, so the approval path and forces_pending are unchanged. */
+    ACTION_NET_DNS,
+    ACTION_NET_DHCP,
+    /* DDR-1149: operator decision 6 (PR #17 comment 5845610518) answered
+     * DDR-982 sec.5.5 -- declare the domain types so there is a capability
+     * boundary to enforce. APPENDED. Enforced at SUBMISSION (sys_aether.c,
+     * domain_cap_ok, both submit paths): the flag AND cap_authorize. Nothing
+     * EXECUTES any of the three -- no OCR model, no scene graph, and the cloud
+     * bridge stays deferred (DDR-793) -- so the boundary is on PROPOSING. */
+    ACTION_PARSE_DOCUMENT,       /* CAP_OCR        */
+    ACTION_QUERY_SCENE,          /* CAP_SCENE      */
+    ACTION_BROWSE_WEB            /* CAP_NET_BROWSE */
 };
 
 /* Wire-format pins for the pre-existing action types (DDR-832 discipline). */
 _Static_assert(ACTION_WRITE_FILE    == 1, "action wire format: WRITE_FILE is 1");
 _Static_assert(ACTION_PRINT         == 2, "action wire format: PRINT is 2");
+/* SPAWN_PROCESS is also hand-copied by user/actionspawntest.c (DDR-1017), whose
+ * gate asserts it stays PENDING -- so a drift onto a type outside
+ * aether_action_forces_pending() below would make that assertion vacuous. */
 _Static_assert(ACTION_SPAWN_PROCESS == 3, "action wire format: SPAWN_PROCESS is 3");
+/* DDR-1015: pin the first 3C type too. user/actionreadtest.c hand-copies this
+ * number across the ring boundary, and DDR-1013 §1 found actiondagtest.c had
+ * drifted to a wrong one with no gate able to see it. Pinning it here means the
+ * KERNEL stops building if the enum shifts, which is the only cross-check the
+ * build currently has between a probe's constants and this header. */
+_Static_assert(ACTION_READ_FILE     == 5, "action wire format: READ_FILE is 5");
+/* DDR-1016: and the first force-pending 3C type. user/actiondeltest.c hand-copies
+ * this one, and its gate asserts the action stays PENDING -- an assertion that
+ * would silently become vacuous if the number drifted onto a type that is not in
+ * aether_action_forces_pending() below. */
+_Static_assert(ACTION_DELETE_FILE   == 6, "action wire format: DELETE_FILE is 6");
+/* DDR-1018 recorded that ACTION_SEND_IPC == 7 was deliberately NOT pinned:
+ * ipc_send/ipc_recv were kernel-internal with no SYS_IPC_*, so an approved
+ * SEND_IPC had no executor in any ring (DDR-1017 §1) -- and the rule it gave is
+ * the one this file lives by: "Nothing hand-copies 7, and A PIN WHOSE PROBE DOES
+ * NOT EXIST WOULD READ AS A CLAIM THAT ONE DOES."
+ *
+ * PINNED 2026-09-07 (DDR-1084 §2), because the rule's CONDITION is now
+ * satisfied. DDR-1033 built the door; user/actionipctest.c is the caller, and it
+ * hand-copies 7 and submits the type. Measured before the pin was added: the
+ * only two matches for ACTION_SEND_IPC outside this header were COMMENTS
+ * (user/actionquerytest.c:4, user/ipctest.c:3), so 7 genuinely crossed no ring
+ * boundary until that probe existed.
+ *
+ * Worth reading beside the RUN_EXPERIMENT note below, which DDR-1083 §2 found
+ * carrying the same claim in the confident past tense about a probe
+ * (user/exptest.c) that does not hand-copy anything. Same file, same rule, one
+ * commit apart, opposite outcomes -- and the only difference is whether the
+ * probe was built before or after the sentence asserting it. */
+_Static_assert(ACTION_SEND_IPC      == 7, "action wire format: SEND_IPC is 7");
+_Static_assert(ACTION_QUERY_MEMORY  == 8, "action wire format: QUERY_MEMORY is 8");
+/* DDR-1020. Both hand-copied by user/actionhypotest.c, which runs them in ONE
+ * boot on opposite sides of the force-pending split below -- so a drift that
+ * moved either onto the wrong side would make that comparison vacuous. 9
+ * (REWRITE_AGENT_CODE) is hand-copied by user/coderewritetest.c and pinned for
+ * the same reason. 11 (RUN_EXPERIMENT) WAS deliberately unpinned on that rule --
+ * nothing copied it, and a pin whose probe does not exist reads as a claim that
+ * one does.
+ *
+ * CORRECTED 2026-09-07 (DDR-1083 §2). This comment used to name user/exptest.c
+ * as that probe. IT IS NOT ONE: measured, exptest.c hand-copies four NSI numbers
+ * (4/6/100/101) and the exp_op opcodes, contains no ACTION_ constant at all and
+ * never calls SYS_SUBMIT_ACTION -- it drives the EXECUTOR, which is exactly the
+ * distinction DDR-1072 §2 drew when it warned that smoke-runexp's NAME matches
+ * the action type while its CLAIM is a different thing. So this file held a rule
+ * (eleven lines up, for SEND_IPC) and a violation of it, written in the
+ * confident past tense.
+ *
+ * The pin is not deleted; it is MADE TRUE. user/actionexptest.c (DDR-1083) hand-
+ * copies 11 and submits the type, so the sentence is now accurate rather than
+ * the claim being quietly shrunk. */
+_Static_assert(ACTION_REWRITE_AGENT_CODE == 9, "action wire format: REWRITE_AGENT_CODE is 9");
+_Static_assert(ACTION_PROPOSE_HYPOTHESIS == 10, "action wire format: PROPOSE_HYPOTHESIS is 10");
+_Static_assert(ACTION_RUN_EXPERIMENT     == 11, "action wire format: RUN_EXPERIMENT is 11");
+_Static_assert(ACTION_EVOLVE_GENOME      == 12, "action wire format: EVOLVE_GENOME is 12");
+/* DDR-1070: audit-only, privacy-refused egress on an open socket. */
+_Static_assert(ACTION_NET_EGRESS         == 13, "action wire format: NET_EGRESS is 13");
+/* DDR-1141: user/dnstest.c hand-copies 14 to find its own records. */
+_Static_assert(ACTION_NET_DNS            == 14, "action wire format: NET_DNS is 14");
+_Static_assert(ACTION_NET_DHCP           == 15, "action wire format: NET_DHCP is 15");
+/* DDR-1149: hand-copied by user/domcaptest.c, which submits all three. */
+_Static_assert(ACTION_PARSE_DOCUMENT     == 16, "action wire format: PARSE_DOCUMENT is 16");
+_Static_assert(ACTION_QUERY_SCENE        == 17, "action wire format: QUERY_SCENE is 17");
+_Static_assert(ACTION_BROWSE_WEB         == 18, "action wire format: BROWSE_WEB is 18");
 
 /* DDR-842: never auto-approved, even in sovereign mode (S4 — the human gate is
  * structural). ONE list, used by the queue, so there are not two that must
@@ -101,7 +196,13 @@ enum aether_result {
     /* DDR-842. APPENDED per DDR-832. AR_AUDIT_TAMPERED is distinct from every
      * other rejection: "the log itself is forged" is not a policy denial, and it
      * is the one record an operator must never see folded into a generic code. */
-    AR_CODE_REWRITE_APPROVED, AR_AUDIT_READ, AR_AUDIT_TAMPERED
+    AR_CODE_REWRITE_APPROVED, AR_AUDIT_READ, AR_AUDIT_TAMPERED,
+    /* DDR-1147 sec.1.5 (U1). APPENDED per DDR-832. A SUCCESSFUL SYS_SET_MODE
+     * changes agent approval policy (sovereign auto-approve vs force-pending)
+     * or switches egress off/on, and until now wrote NO record -- only the
+     * refusal (AR_CAP_DENIED) was audited. action_id = (previous sovereign
+     * mode << 32) | requested value, so privacy on/off (2/3) is recorded too. */
+    AR_MODE_SET
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.
@@ -123,6 +224,7 @@ _Static_assert(AR_PRIVACY_BLOCKED  == 11, "audit wire format: privacy-netfilter 
 _Static_assert(AR_ACC_SEALED       == 12, "audit wire format: ACC probe depends on 12");
 _Static_assert(AR_ACC_OPENED       == 13, "audit wire format: ACC probe depends on 13");
 _Static_assert(AR_ACC_REJECTED     == 14, "audit wire format: ACC probe depends on 14");
+_Static_assert(AR_MODE_SET         == 28, "audit wire format: user/compositor.c hardcodes 28");
 
 /* DDR-800/801: destination packed into the audit record's action_id. The field
  * is 64-bit and unused on the egress path, so no struct change is needed. */
@@ -195,6 +297,8 @@ struct aether_audit_entry_pub {                /* the shape SYS_READ_AUDIT retur
  * A boolean would be useless to an operator: "tampered at entry 1204" locates
  * the event being hidden; "tampered" does not. */
 int  aether_audit_verify(uint32_t *bad_index);
+/* DDR-1150: (total appends, newest chain value) under the append lock. */
+void aether_audit_head(uint64_t *written, uint8_t head[32]);
 /* DDR-842 fault injection, DDR-804 probe-gated. Flips one byte of one committed
  * entry so the gate can prove verification FAILS when it should. Ring 3 has no
  * write path into the log (that is what S5 asserts), so this is the only way to
@@ -203,8 +307,29 @@ void aether_audit_tamper(void);
 void aether_audit(uint32_t agent_pid, uint32_t action_type,
                   uint64_t action_id, uint32_t result);
 /* Copy up to max entries (oldest..newest) into a kernel-side caller buffer.
- * Returns the number copied. Used by SYS_READ_AUDIT after copyout staging. */
+ * Returns the number copied. Used by SYS_READ_AUDIT after copyout staging.
+ * Equivalent to aether_audit_read_since(out, max, NULL) -- the newest max. */
 int  aether_audit_read(struct aether_audit_entry_pub *out, int max);
+
+/* DDR-1098: the resumable read.
+ *
+ * The record layout above is deliberately NOT widened to carry a sequence
+ * number -- DDR-842's reason still holds (three ring-3 probes each keep their own
+ * copy of struct aether_audit_entry_pub, so extra bytes per entry would make the
+ * kernel "write past buffers those probes sized for the old shape -- an overflow,
+ * not a parse error"). The sequence travels BESIDE the records, in this cursor.
+ *
+ * `from` is an append sequence, 1-based (the first record of the boot is 1), so 0
+ * is never a valid record and is free to mean "from the oldest still retained".
+ * `first` is written by the kernel and is the one value in this exchange the
+ * caller cannot manufacture: next cursor = first + n, and wrap loss = first - from.
+ */
+struct aether_audit_cursor {
+    uint64_t from;     /* in:  resume at this sequence (0 = oldest retained)     */
+    uint64_t first;    /* out: sequence of the first record returned             */
+};
+int  aether_audit_read_since(struct aether_audit_entry_pub *out, int max,
+                             struct aether_audit_cursor *cur);
 
 /* --- memory cap + rate limit (aether_mem.c) -------------------------------- */
 struct tcb;

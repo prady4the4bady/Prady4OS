@@ -124,7 +124,18 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
             int w = vfs_write(e->cap, e->file, e->off, kbuf, chunk);
             if (w < 0) {
                 pmm_free_page(kp);
-                return total > 0 ? total : -EIO;
+                /* DDR-1089: PROPAGATE, do not flatten. This used to return -EIO
+                 * for every negative, which ERASED the distinction one layer
+                 * below -- so DDR-1089's split of sfs_write's seven conditions
+                 * would have been invisible to every ring-3 caller, and a gate
+                 * arm written against it would have been vacuous. Worse, -EIO
+                 * actively misleads: "mid-file overwrite is not implemented"
+                 * reported as an I/O error sends a reader to the block layer.
+                 *
+                 * The PARTIAL path is deliberately unchanged -- a write that
+                 * made progress still returns its short count, which is the
+                 * POSIX contract and what every existing caller reads. */
+                return total > 0 ? total : w;
             }
             if (w == 0)
                 break;                                  /* budget/space exhausted */
@@ -203,6 +214,78 @@ static long sys_writev(long fd, long uiov, long iovcnt, long a4, long a5, long a
     if (copyin(iov, (const void __user *)(uintptr_t)uiov,
                (size_t)iovcnt * sizeof iov[0]) < 0)
         return -EFAULT;
+
+    /* DDR-1056: the console gets ONE kwrite for the whole gather.
+     *
+     * musl NEVER issues a one-iovec writev: __stdio_write always passes two --
+     * the bytes already in the stdio buffer, and the new bytes -- so a printf
+     * flushed through the per-iovec loop below reached the console as TWO
+     * separate g_console_lock acquisitions, with a gap in the middle that any
+     * other CPU's printer could occupy. That is DDR-1055's defect reached
+     * through a different door, and it applies to every musl-linked program
+     * here: the compositor, PRISM, term, cmusl, agent_base, init.
+     *
+     * (stdout is FULLY buffered in this system, not line-buffered: musl's
+     * __stdout_write falls back to lbf = -1 when ioctl(TIOCGWINSZ) fails, and
+     * this kernel registers no SYS_IOCTL at all -- so bytes do accumulate
+     * between flushes and the two-iovec case is the normal one.)
+     *
+     * GATHER_MAX is 256 -- deliberately fd_write_user's OWN chunk size, not
+     * musl's 1024-byte BUFSIZ. Gathering into a larger buffer would hold
+     * g_console_lock, and therefore interrupts, across up to 1024 UART
+     * busy-waits instead of today's 256: a four-fold increase in the masked
+     * window on the hottest output path in the system, which is exactly the
+     * cost DDR-1047 refused to pay near a timing-sensitive AP freeze. At 256
+     * the masked window is UNCHANGED from today's maximum and every measured
+     * line still fits in one write (the longest is about 90 bytes). A larger
+     * write falls through to the per-iovec loop -- it is already split by that
+     * same 256-byte chunking, so gathering it would buy nothing. Recorded as a
+     * residual, not hidden: a console line longer than 256 bytes is still
+     * several acquisitions and no gate asserts one. */
+    if (e->kind == FD_CONSOLE) {
+        enum { GATHER_MAX = 256 };
+        uint64_t need = 0;
+        for (long i = 0; i < iovcnt; i++)
+            need += iov[i].len;
+        /* THE BOUND ON `at` IS ENFORCED BY copyin, NOT BY THIS TEST --
+         * DDR-1109 sec.2.4(a). `need` is a sum of up to SYS_IOV_MAX uint64
+         * lengths, so a WRAPPED sum can land in (0, GATHER_MAX] while a term is
+         * enormous, and then `at + len <= need` does not hold.
+         *
+         * It is safe today, and the margin is MEASURED rather than asserted:
+         * SYS_IOV_MAX is 16, so an overflowing term is at least 2^64/16 = 2^60,
+         * against VMM_USER_MAX = 0x10000000000 = 2^40 (vmm.h:29) -- a factor of
+         * 2^20 -- and vmm_user_range_ok rejects such a length before copyin
+         * writes a byte.
+         *
+         * SO DO NOT REPLACE THE copyin BELOW WITH A memcpy, however thoroughly
+         * the source has already been validated: the overflow protection would
+         * go with it, SILENTLY, and `at` would run past gather[GATHER_MAX] on
+         * the kernel stack.
+         *
+         * A per-term `len > GATHER_MAX` guard would make this self-sufficient
+         * and is deliberately NOT added: it changes nothing for any input that
+         * reaches here (a single len above 256 already disqualifies the gather
+         * whenever the sum does not wrap), and NO GATE COULD TELL THE TWO
+         * VERSIONS APART because copyin refuses either way -- an unfalsifiable
+         * change to the hottest output path in the system, which is the shape
+         * DDR-1082 costed and refused. The dependency is recorded here instead,
+         * where the edit that would break it happens. */
+        if (need > 0 && need <= (uint64_t)GATHER_MAX) {
+            char gather[GATHER_MAX];
+            uint64_t at = 0;
+            for (long i = 0; i < iovcnt; i++) {
+                if (iov[i].len == 0)
+                    continue;
+                if (copyin(gather + at, (const void __user *)(uintptr_t)iov[i].base,
+                           (size_t)iov[i].len) < 0)
+                    return -EFAULT;      /* nothing emitted yet, so this is clean */
+                at += iov[i].len;
+            }
+            kwrite(gather, at);
+            return (long)at;
+        }
+    }
 
     long total = 0;
     for (long i = 0; i < iovcnt; i++) {

@@ -137,7 +137,7 @@ previously leaked. New TCB fields `exit_status`, `waiter`; new errno `EAGAIN`.
 Also fixed a latent systest fork bug: the post-`syscall` branches lacked a `test
 rax, rax` (SYSRET restores user RFLAGS), so they read stale flags. New gate
 `smoke-syswait` PASS (16 gates total). Kernel 113,572 B. Code graph: 95 files /
-975 symbols. **IMP-A (Spectre/Meltdown MSR mitigations) COMPLETE:**
+975 symbols. **IMP-A (Spectre/Meltdown MSR mitigations) COMPLETE:** *[Label corrected 2026-09-24, PRE_LAUNCH_CHECKLIST §0 #70: the IBRS/STIBP/SSBD/IBPB half is real; there is NO KPTI, so Meltdown is NOT mitigated on vulnerable CPUs.]*
 `kernel/arch/x86_64/cpu_mitigations.c` — `cpu_mitigations_init` (called in kmain
 after `idt_init`) probes CPUID.7.0:EDX and, where the CPU advertises them, sets
 IBRS/STIBP/SSBD in IA32_SPEC_CTRL (0x48) and fires an IBPB barrier
@@ -7290,3 +7290,15 @@ per §NON-NEGOTIABLE 6 and preserves every gate's DDR-785 early-exit eligibility
 Stated limit: a gate that early-exits before ~tick 1000 will not see the line —
 which does not bite, because every SMP/block gate the freeze actually reddens
 already declares a `FORBIDDEN_SENTINEL` and burns its full window.
+
+## DDR-1140 — CPU exposure line; KPTI/retpoline/RSB recommended for deferral (2026-09-24)
+
+- **Built:** `cpu_mitigations_init()` now also prints `[cpu] exposure: vendor= archcap= meltdown= mds= kpti=0`. It is read-only, and `rdmsr 0x10A` is guarded on CPUID.7.0:EDX bit 29. `kpti=0` is printed as a literal so the absence of KPTI is visible in every boot log.
+- **Gate:** `smoke-cpuexposure` (shard 4, strict), two CPU models.
+  - The default model (AMD vendor) must read `meltdown=no mds=no`.
+  - `qemu64,vendor=GenuineIntel` must read `meltdown=yes mds=yes`.
+  - M1 (Intel always `no`) fails arm B only. M3 (vendor ignored) fails arm A only.
+  - 179 → 180 gates.
+- **Uncovered, measured:** QEMU 8.2 TCG cannot expose `ARCH_CAPABILITIES`, so the MSR-read branch never executes in CI.
+- **Kernel:** `kernel.bin` `467d51d14164149c`, 1,319,306 B. The size is unchanged.
+- **KPTI, retpoline, RSB refill:** not built. A post-tag series is recommended to the operator: IST and entry stacks first, then KPTI, then retpoline with RSB refill, each hunted against DDR-1139 §5. TCG cannot demonstrate the mitigation, and the change reaches the OPEN-2 paths. This is a recommendation, not a decision.

@@ -16,7 +16,7 @@ STAGE2_BIN := build/stage2.bin
 IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
-KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm arch/x86_64/fast_memcpy.asm arch/x86_64/ipc_copy.asm \
+KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm arch/x86_64/fast_memcpy.asm arch/x86_64/fast_memset.asm arch/x86_64/ipc_copy.asm \
                arch/x86_64/context.asm arch/x86_64/syscall_entry.asm \
                arch/x86_64/usermode.asm arch/x86_64/user_image.asm \
                arch/x86_64/ap_boot.asm
@@ -63,6 +63,8 @@ USER_COMP_SRC    := user/compositor.c     # L7: in-house sovereign-desktop compo
 USER_COMP_ELF    := build/compositor.elf
 USER_SURF_SRC    := user/surfacetest.c    # L7: per-client surface test window (DDR-706)
 USER_SURF_ELF    := build/surfacetest.elf
+USER_TERM_SRC    := user/term.c           # L7: PRISM terminal window (DDR-1027)
+USER_TERM_ELF    := build/term.elf
 USER_SURFDESTROY_SRC := user/surfdestroytest.c  # L7: surface lifecycle/destroy test (DDR-729)
 USER_SURFDESTROY_ELF := build/surfdestroytest.elf
 USER_AGENTMETRICS_SRC := user/agentmetricstest.c  # L7: per-agent live metrics probe (DDR-730)
@@ -127,6 +129,42 @@ USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
 USER_SDEP_ELF := build/spawndepthtest.elf
 USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
 USER_DAG_ELF := build/actiondagtest.elf
+USER_AREAD_SRC := user/actionreadtest.c  # DDR-1015: Section 3C ACTION_READ_FILE
+USER_AREAD_ELF := build/actionreadtest.elf
+USER_ADEL_SRC := user/actiondeltest.c    # DDR-1016: Section 3C ACTION_DELETE_FILE
+USER_ADEL_ELF := build/actiondeltest.elf
+USER_MPROT_SRC := user/mprotecttest.c    # DDR-1031: SYS_MPROTECT (NSI 97)
+USER_KILLB_SRC := user/killblocktest.c   # DDR-1090: SIGKILL vs an unbounded kernel wait
+USER_KILLB_ELF := build/killblocktest.elf
+USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
+USER_DISK_ELF  := build/disktest.elf
+USER_DOMCAP_SRC := user/domcaptest.c     # DDR-1149: domain capabilities at submission
+USER_DOMCAP_ELF := build/domcaptest.elf
+USER_LEDGER_SRC := user/ledgertest.c     # DDR-1150: SYS_LEDGER (audit-head signing)
+USER_LEDGER_ELF := build/ledgertest.elf
+USER_MPROT_ELF := build/mprotecttest.elf
+USER_SLOW_SRC  := user/slowtest.c        # DDR-1068: still running when `wait` runs
+USER_SLOW_ELF  := build/slowtest.elf
+USER_ARGT_SRC  := user/argtest.asm       # DDR-1032: execve argv/envp receiver
+USER_ARGT_ELF  := build/argtest.elf
+USER_ARGV_SRC  := user/argvtest.c        # DDR-1032: execve argv/envp launcher
+USER_ARGV_ELF  := build/argvtest.elf
+USER_IPC_SRC   := user/ipctest.c         # DDR-1033: ring-3 IPC door (NSI 98/99)
+USER_IPC_ELF   := build/ipctest.elf
+USER_EXP_SRC   := user/exptest.c         # DDR-1034: bounded experiment executor
+USER_EXP_ELF   := build/exptest.elf
+USER_POLL_SRC  := user/polltest.c        # DDR-1037: POSIX poll() (NSI 102)
+USER_POLL_ELF  := build/polltest.elf
+USER_ASPW_SRC := user/actionspawntest.c  # DDR-1017: Section 3C ACTION_SPAWN_PROCESS
+USER_ASPW_ELF := build/actionspawntest.elf
+USER_AQRY_SRC := user/actionquerytest.c  # DDR-1018: Section 3C ACTION_QUERY_MEMORY
+USER_AQRY_ELF := build/actionquerytest.elf
+USER_AHYP_SRC := user/actionhypotest.c   # DDR-1020: 3C HYPOTHESIS + EVOLVE_GENOME
+USER_AHYP_ELF := build/actionhypotest.elf
+USER_AEXP_SRC := user/actionexptest.c    # DDR-1083: 3C RUN_EXPERIMENT end to end
+USER_AEXP_ELF := build/actionexptest.elf
+USER_AIPC_SRC := user/actionipctest.c    # DDR-1084: 3C SEND_IPC end to end
+USER_AIPC_ELF := build/actionipctest.elf
 USER_CRW_SRC := user/coderewritetest.c   # DDR-842: code-rewrite approval gate
 USER_CRW_ELF := build/coderewritetest.elf
 USER_ACH_SRC := user/auditchaintest.c    # DDR-842: audit chain gate
@@ -137,10 +175,18 @@ USER_LOCKBOX_SRC := user/lockboxtest.c   # DDR-812: metric lockbox read/verify
 USER_LOCKBOX_ELF := build/lockboxtest.elf
 USER_SHA256_SRC := user/sha256test.c     # DDR-811: SHA-256 NIST vector probe
 USER_SHA256_ELF := build/sha256test.elf
+USER_SHAKE_SRC  := user/shaketest.c      # DDR-1052: FIPS 202 SHA-3/SHAKE KAT probe
+USER_SHAKE_ELF  := build/shaketest.elf
+USER_MLDSA_SRC  := user/mldsatest.c      # DDR-1054: FIPS 204 ML-DSA-44 keyGen KAT probe
+USER_MLDSA_ELF  := build/mldsatest.elf
 USER_SIGPIPE_SRC := user/sigpipetest.c    # DDR-805: SIGPIPE probe (DDR-804 opt-in)
 USER_SIGPIPE_ELF := build/sigpipetest.elf
 USER_PRIVNET_SRC := user/privacynettest.c # DDR-802: privacy netfilter probe (DDR-804 opt-in)
 USER_PRIVNET_ELF := build/privacynettest.elf
+USER_DNS_SRC := user/dnstest.c         # DDR-1141: SYS_DNS_RESOLVE probe (built 3x, -DDNS_PHASE)
+USER_DNS1_ELF := build/dnstest1.elf
+USER_DNS2_ELF := build/dnstest2.elf
+USER_DNS3_ELF := build/dnstest3.elf
 USER_SOVEG_SRC := user/sovegresstest.c    # DDR-800: sovereign-egress audit probe
 USER_SOVEG_ELF := build/sovegresstest.elf
 USER_RTCMONO_SRC := user/rtcmonotest.c    # DDR-796: SYS_CLOCK monotonicity under SMP
@@ -163,9 +209,9 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
-               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c \
+               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c kernel/drivers/blk/blk_part.c kernel/kimg.c \
                kernel/drivers/net/virtio_net.c kernel/drivers/net/e1000e.c kernel/drivers/net/netbuf.c \
-               kernel/drivers/gpu/virtio_gpu.c \
+               kernel/drivers/gpu/virtio_gpu.c kernel/drivers/gpu/display.c \
                kernel/drivers/nvme/nvme.c kernel/drivers/ahci/ahci.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
@@ -187,10 +233,10 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
-               build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
-               build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o
+               build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
@@ -219,10 +265,31 @@ KCFLAGS += -DPIPE_TRACE=$(PIPE_TRACE)
 # built only by `make smoke-rqstress-liveness`, which restores a clean image.
 BSP_LIVENESS ?= 0
 KCFLAGS += -DBSP_LIVENESS=$(BSP_LIVENESS)
+
+# DDR-1096 OPEN-2 hunt harness. DEBUG ONLY -- 0 in every shipped build and in
+# every CI gate; `make image` with the default must produce a bit-identical
+# kernel.bin, which is asserted in the DDR rather than assumed. Non-zero is the
+# per-node pause count injected into sched_tick's unlocked all-threads ring
+# walk, widening the window another CPU has to unlink+free the node that walk
+# is standing on. OPEN2_RING_MAX bounds the walk so an escaped one names itself
+# instead of wedging the CPU with IF clear.
+OPEN2_HUNT ?= 0
+OPEN2_RING_MAX ?= 4096
+# DDR-1097 sec.7: inverts the tid re-check so it fires on every node. PROOF RUNS
+# ONLY -- it makes the instrument report unconditionally, which is how the branch
+# is shown to be reachable and safe; it must never be set for a real hunt.
+OPEN2_FORCE_RECYCLE ?= 0
+KCFLAGS += -DOPEN2_HUNT=$(OPEN2_HUNT) -DOPEN2_RING_MAX=$(OPEN2_RING_MAX)
+KCFLAGS += -DOPEN2_FORCE_RECYCLE=$(OPEN2_FORCE_RECYCLE)
+# DDR-1097 sec.5 / DDR-1096 sec.5.1: KCFLAGS is NOT a prerequisite of
+# $(KERNEL_BIN), so a flag-only change silently relinks a stale object and
+# produces an IDENTICAL hash -- measured, twice, in two environments. Touch a
+# source and CHECK THE HASH after changing any of these. The size does not move
+# (both builds are 1,311,114 B), so only the hash discriminates.
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-pmm-poison smoke-vdso smoke-cowfork smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-uefi esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -362,7 +429,12 @@ kernel: $(KERNEL_BIN)
 #
 # Caught when adding fe25519.c: `make image` reported success, build/fe25519_user.o
 # did not exist, and the .elf on disk was the pre-change one.
-USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h) \
+# DDR-1032: user/*.asm belongs here. It was missing, so changing ANY assembly
+# probe rebuilt nothing -- including the incbin'd ones, whose content genuinely
+# changes kernel.bin. Measured: an edit to user/argtest.asm left kernel.bin
+# bit-identical and the gate re-ran the OLD image, reproducing a fault that had
+# already been fixed.
+USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h) $(wildcard user/*.asm) \
                  $(wildcard kernel/crypto/*.c) $(wildcard kernel/crypto/*.h) \
                  Makefile
 
@@ -418,6 +490,12 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/compositor.o $(MUSL_LIB) -o $(USER_COMP_ELF)
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SURF_SRC) -o build/surfacetest.o
 	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/surfacetest.o $(MUSL_LIB) -o $(USER_SURF_ELF)
+	# DDR-1027: the PRISM terminal window. musl-linked like the compositor -- it
+	# uses printf for its sentinels and the Inter atlas for glyphs. NOT embedded in
+	# the kernel image (no user_image.asm entry): it is spawned on demand by execve
+	# from the FAT root, so the kernel never needs its own copy.
+	$(CC) $(USER_C_CFLAGS) -c $(USER_TERM_SRC) -o build/term.o
+	$(LD) -nostdlib -static -no-pie -T $(USER_C_LD) $(MUSL_CRT) build/term.o $(MUSL_LIB) -o $(USER_TERM_ELF)
 	# DDR-729/730: freestanding (no musl) so each stays a few KiB inside the kernel
 	# image budget — links against user.ld's single R+X segment (no writable globals).
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SURFDESTROY_SRC) -o build/surfdestroytest.o
@@ -462,11 +540,23 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SOVEG_ELF) build/sovegresstest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_PRIVNET_SRC) -o build/privacynettest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_PRIVNET_ELF) build/privacynettest.o
+	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=1 -c $(USER_DNS_SRC) -o build/dnstest1.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS1_ELF) build/dnstest1.o
+	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=2 -c $(USER_DNS_SRC) -o build/dnstest2.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS2_ELF) build/dnstest2.o
+	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=3 -c $(USER_DNS_SRC) -o build/dnstest3.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS3_ELF) build/dnstest3.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SIGPIPE_SRC) -o build/sigpipetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SIGPIPE_ELF) build/sigpipetest.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/sha256.c -o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_SHA256_SRC) -o build/sha256test.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHA256_ELF) build/sha256test.o build/sha256_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/keccak.c -o build/keccak_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_SHAKE_SRC) -o build/shaketest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHAKE_ELF) build/shaketest.o build/keccak_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/mldsa.c -o build/mldsa_user.o
+	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -Iuser/include -c $(USER_MLDSA_SRC) -o build/mldsatest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MLDSA_ELF) build/mldsatest.o build/mldsa_user.o build/keccak_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c $(USER_LOCKBOX_SRC) -o build/lockboxtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_LOCKBOX_ELF) build/lockboxtest.o build/sha256_user.o
 	$(CC) $(USER_C_CFLAGS) -Ikernel/crypto -c kernel/crypto/hkdf.c -o build/hkdf_user.o
@@ -503,6 +593,42 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DAG_SRC) -o build/actiondagtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DAG_ELF) build/actiondagtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AREAD_SRC) -o build/actionreadtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AREAD_ELF) build/actionreadtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_ADEL_SRC) -o build/actiondeltest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ADEL_ELF) build/actiondeltest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_MPROT_SRC) -o build/mprotecttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MPROT_ELF) build/mprotecttest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLB_SRC) -o build/killblocktest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLB_ELF) build/killblocktest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_DOMCAP_SRC) -o build/domcaptest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DOMCAP_ELF) build/domcaptest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_LEDGER_SRC) -o build/ledgertest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_LEDGER_ELF) build/ledgertest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SLOW_SRC) -o build/slowtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SLOW_ELF) build/slowtest.o
+	nasm -Werror -f elf64 $(USER_ARGT_SRC) -o build/argtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGT_ELF) build/argtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_ARGV_SRC) -o build/argvtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGV_ELF) build/argvtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_IPC_SRC) -o build/ipctest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_IPC_ELF) build/ipctest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_EXP_SRC) -o build/exptest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_EXP_ELF) build/exptest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_POLL_SRC) -o build/polltest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_POLL_ELF) build/polltest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_ASPW_SRC) -o build/actionspawntest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ASPW_ELF) build/actionspawntest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AQRY_SRC) -o build/actionquerytest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AQRY_ELF) build/actionquerytest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AHYP_SRC) -o build/actionhypotest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AHYP_ELF) build/actionhypotest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AEXP_SRC) -o build/actionexptest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AEXP_ELF) build/actionexptest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_AIPC_SRC) -o build/actionipctest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AIPC_ELF) build/actionipctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CRW_SRC) -o build/coderewritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CRW_ELF) build/coderewritetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACH_SRC) -o build/auditchaintest.o
@@ -517,13 +643,14 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm           -o build/isr.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/context.asm       -o build/context.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/fast_memcpy.asm   -o build/fast_memcpy.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/fast_memset.asm   -o build/fast_memset.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/ipc_copy.asm      -o build/ipc_copy.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/syscall_entry.asm -o build/syscall_entry.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/usermode.asm      -o build/usermode.o
@@ -565,6 +692,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/arch/x86_64/pstate.c -o build/pstate.o
 	$(CC) $(KCFLAGS) -c kernel/apic/smp.c        -o build/smp.o
 	$(CC) $(KCFLAGS) -c kernel/apic/percpu.c     -o build/percpu.o
+	$(CC) $(KCFLAGS) -c kernel/lock_stat.c       -o build/lock_stat.o
+	$(CC) $(KCFLAGS) -Ikernel/crypto -c kernel/crypto/keccak.c -o build/keccak.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/pcie/pcie.c           -o build/pcie.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio_ring.c  -o build/virtio_ring.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/virtio/virtio.c       -o build/virtio.o
@@ -572,9 +701,12 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk.c             -o build/blk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/ramdisk.c         -o build/ramdisk.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk_part.c        -o build/blk_part.o
+	$(CC) $(KCFLAGS) -c kernel/kimg.c                       -o build/kimg.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/virtio_net.c     -o build/virtio_net.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/netbuf.c         -o build/netbuf.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/virtio_gpu.c     -o build/virtio_gpu.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/display.c        -o build/display.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/nvme/nvme.c          -o build/nvme.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/ps2kbd.c       -o build/ps2kbd.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/virtio_input.c -o build/virtio_input.o
@@ -597,7 +729,12 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_agentmem.c -o build/sys_agentmem.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_checkpoint.c -o build/sys_checkpoint.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_rewrite.c -o build/sys_rewrite.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/aether/experiment.c -o build/experiment.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_experiment.c -o build/sys_experiment.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_audit.c -o build/sys_audit.o
+	$(CC) $(KCFLAGS) -Ikernel/drivers/blk -c kernel/syscall/sys_disk.c -o build/sys_disk.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_ledger.c -o build/sys_ledger.o
+	$(CC) $(KCFLAGS) -Ikernel/crypto -c kernel/crypto/mldsa.c -o build/mldsa.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -709,10 +846,21 @@ fat-image: $(KERNEL_BIN)
 	# Arm C's target: the LARGE musl-C ELF ADR-024 sec.D5 named. Copied, not rebuilt,
 	# so the gate execve's the same image the kernel already loads from SFS at boot.
 	mcopy -i $(FAT_IMG) $(USER_CMUSL_ELF) ::/CMUSL.ELF
+	# DDR-1027: Ctrl+Alt+T execve's /TERM.ELF from the compositor, and the terminal
+	# then execve's /PRISM.ELF as its child. Both resolve against the PROCESS root,
+	# which is the FAT volume (vfs_set_default_mnt) -- the same root /EXECTEST.ELF
+	# sits on and that systest's execve is already proven against. PRISM.ELF also
+	# exists on the SFS root, written there by user_boot_from_sfs at boot; this is a
+	# second copy on the volume execve actually resolves against, not a move.
+	mcopy -i $(FAT_IMG) $(USER_TERM_ELF) ::/TERM.ELF
+	mcopy -i $(FAT_IMG) $(USER_PRISM_ELF) ::/PRISM.ELF
+	# DDR-1032: the execve argv/envp receiver, on the volume execve resolves against.
+	mcopy -i $(FAT_IMG) $(USER_ARGT_ELF) ::/ARGTEST.ELF
+	mcopy -i $(FAT_IMG) $(USER_SLOW_ELF) ::/SLOWTEST.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
 	# FAT /AETHER.CFG (DDR-732/734) is retired here.
-	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT, /BIGPAT.BIN, /CMUSL.ELF)"
+	@echo "fat: $(FAT_IMG) (FAT32, /HELLO.TXT, /DOCS/NOTE.TXT, /LongFileName.txt, /BIG8K.TXT, /BIGPAT.BIN, /CMUSL.ELF, /TERM.ELF, /PRISM.ELF)"
 
 # A blank 16 MiB disk for the SFS self-test; the kernel formats it as SFS in
 # place (in-kernel mkfs) then mounts it. Phony so each gate starts blank.
@@ -901,10 +1049,30 @@ smoke-rootmount: $(IMG) fat-image sfs-image ext4-image
 # emulated time, so a hard cycle threshold would be asserting a property the
 # measurement cannot support — it would fail on a faster host and pass on a
 # slower one, for reasons unrelated to the code.
+# DDR-1076 added the memset arms. They live HERE rather than in a new gate for
+# the reason DDR-1039 recorded for smoke-readline and DDR-1070 for the privacy
+# arms: smoke-bench is already THE gate for the Group 8 asm string paths, and a
+# separate gate would boot an OS to check one function.
+#
+# 'cases=28' is 2 dispatch passes x 7 lengths x 2 fills, and the count is
+# COMPUTED BY THE PROBE (DDR-1054): an edit that silently drops arms changes the
+# printed value and fails here, which a bare 'PRADYOS_MEMSET_OK' could not catch.
+#
+# The 0xA7 fill is the load-bearing half and DDR-1076 sec.2 measured why: a broken
+# byte broadcast is correct for EVERY zero fill, and the three non-zero memset
+# call sites in this tree have their bytes verified nowhere -- kheap's
+# POISON_FREE is written and never read. Without a non-zero arm this gate would
+# pass on exactly the defect it exists to catch.
+#
+# PRADYOS_MEMSET_FAIL is forbidden here but deliberately NOT added to
+# GLOBAL_FORBIDDEN: the check is DETERMINISTIC and this gate asserts both
+# directions, so it cannot hide in a green run -- the DDR-1065 reasoning, as
+# against DDR-981/1049's intermittents. This gate already declares a forbidden
+# sentinel, so the addition costs no early-exit eligibility.
 smoke-bench: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=bench \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_BENCH_OK')" \
-	FORBIDDEN_SENTINEL="BENCH FAIL" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_BENCH_OK\nPRADYOS_MEMSET_OK cases=28')" \
+	FORBIDDEN_SENTINEL="$$(printf 'BENCH FAIL\nPRADYOS_MEMSET_FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-875 (Group 4 item 23): AHCI. Attaches an ich9-ahci controller with a real
@@ -969,8 +1137,12 @@ ESP_IMG  := build/esp.img
 $(UEFI_EFI): boot/uefi/loader.c boot/uefi/efi.h
 	clang --target=x86_64-unknown-windows -ffreestanding -fshort-wchar -mno-red-zone \
 	      -Wall -Wextra -Werror -c boot/uefi/loader.c -o build/uefi_loader.obj
-	lld-link-18 -subsystem:efi_application -entry:efi_main -nodefaultlib \
+	lld-link-18 -subsystem:efi_application -entry:efi_main -nodefaultlib -Brepro \
 	      build/uefi_loader.obj -out:$(UEFI_EFI)
+# -Brepro (DDR-1143 sec.10.6 finding 2): without it the PE TimeDateStamp is the
+# link time, so identical source gives a different BOOTX64.EFI on every build --
+# measured, one byte at offset 129. The installer embeds this file in
+# kernel.bin, where that would make every pinned kernel hash unreproducible.
 
 # A FAT ESP carrying the loader at the removable-media path plus the SAME
 # kernel.bin the legacy path uses. Byte-identical on purpose: nothing in the
@@ -1017,17 +1189,52 @@ ISO_HD    := build/pradyos-hd.img
 $(ISO_HD): $(IMG)
 	python3 tools/build/mk_hdimg.py $(IMG) $(ISO_HD)
 
+# Operator decisions, PR #17 comment 5822830053:
+#  item 37 - the ISO carries THIRD_PARTY_NOTICES.txt (lwIP BSD-3, musl MIT +
+#            its BSD portions), GENERATED from third_party/ at build time so it
+#            cannot drift from what is actually linked (tools/build/mk_notices.sh);
+#            LICENSE.txt (the proprietary licence) rides beside it.
+#  EULA.txt + PRIVACY.txt (docs/legal, comment 5822896320) ride on the ISO too.
+#  item 63 - a SHA-256 of the ISO is published as $(ISO_IMG).sha256, in the
+#            standard `sha256sum -c` format with a BARE filename so it verifies
+#            from whatever directory the two files are downloaded into. Signing
+#            stays deferred (no key exists yet); a checksum proves integrity
+#            against corruption, NOT authenticity against a hostile mirror.
+# -R -J add Rock Ridge / Joliet so those long names survive; they touch only
+# the directory records, not the El Torito boot catalogue both arms boot from.
 iso: $(ISO_HD) esp-image
 	@rm -rf build/isoroot && mkdir -p build/isoroot/boot
 	cp $(ISO_HD)     build/isoroot/boot/pradyos.img
 	cp build/esp.img build/isoroot/boot/esp.img
+	bash tools/build/mk_notices.sh build/isoroot/THIRD_PARTY_NOTICES.txt
+	cp LICENSE build/isoroot/LICENSE.txt
+	cp docs/legal/EULA.txt docs/legal/PRIVACY.txt build/isoroot/
 	xorriso -as mkisofs \
-	    -V PRADYOS \
+	    -V PRADYOS -R -J \
 	    -b boot/pradyos.img -hard-disk-boot \
 	    -eltorito-alt-boot -e boot/esp.img -no-emul-boot \
 	    -o $(ISO_IMG) build/isoroot
+	cd build && sha256sum $(notdir $(ISO_IMG)) > $(notdir $(ISO_IMG)).sha256
 	@echo "iso: $(ISO_IMG) ($$(stat -c%s $(ISO_IMG)) bytes, BIOS+UEFI)"
+	@echo "iso: sha256 $$(cut -d' ' -f1 $(ISO_IMG).sha256)"
 smoke-iso-x86: iso
+	@# Packaging arms (items 37/63). Read BACK out of the built ISO rather than
+	@# out of build/isoroot: a file staged but dropped by xorriso would pass a
+	@# check of the staging directory. The checksum is verified with the tool
+	@# a user would run, from the directory a user would run it in.
+	@rm -rf build/iso_extract && mkdir -p build/iso_extract
+	@xorriso -osirrox on -indev $(ISO_IMG) \
+	    -extract /THIRD_PARTY_NOTICES.txt build/iso_extract/THIRD_PARTY_NOTICES.txt \
+	    -extract /LICENSE.txt build/iso_extract/LICENSE.txt \
+	    -extract /EULA.txt build/iso_extract/EULA.txt \
+	    -extract /PRIVACY.txt build/iso_extract/PRIVACY.txt >/dev/null 2>&1 \
+	    || { echo "[iso] FAIL: notices/licence not on the ISO"; exit 1; }
+	@grep -qF 'Swedish Institute of Computer Science' build/iso_extract/THIRD_PARTY_NOTICES.txt || { echo "[iso] FAIL: lwIP notice missing from ISO"; exit 1; }
+	@grep -qF 'Rich Felker' build/iso_extract/THIRD_PARTY_NOTICES.txt || { echo "[iso] FAIL: musl notice missing from ISO"; exit 1; }
+	@cmp -s build/iso_extract/LICENSE.txt LICENSE || { echo "[iso] FAIL: LICENSE.txt on ISO differs from LICENSE"; exit 1; }
+	@cmp -s build/iso_extract/EULA.txt docs/legal/EULA.txt && cmp -s build/iso_extract/PRIVACY.txt docs/legal/PRIVACY.txt || { echo "[iso] FAIL: EULA/PRIVACY on ISO differ from docs/legal"; exit 1; }
+	@(cd build && sha256sum -c --quiet $(notdir $(ISO_IMG)).sha256) || { echo "[iso] FAIL: published sha256 does not verify"; exit 1; }
+	@echo "[iso] packaging OK — notices, licence, EULA, privacy on the ISO, sha256 verifies"
 	@echo "[iso] BIOS arm..."
 	@timeout 120 qemu-system-x86_64 -machine q35 -cdrom $(ISO_IMG) -boot d \
 	    -no-reboot -display none -monitor none -serial file:build/iso_bios.log >/dev/null 2>&1 || true
@@ -1121,10 +1328,48 @@ smoke-iso-userspace: iso
 # The FORBIDDEN sentinels are the discriminating half: each is the literal line
 # the broken path printed, so a regression fails here instead of passing.
 smoke-uefi: esp-image
-	TIMEOUT_S=90 QEMU_UEFI=1 \
-	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010\nACPI: RSDP from loader\nACPI: FADT ok\nPCIe: ECAM')" \
-	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL\nACPI: RSDP not found\nPCIe: no MCFG table\nACPI: loader RSDP rejected')" \
+	KSHA=$$(sha256sum build/kernel.bin | cut -c1-16); KLEN=$$(stat -c %s build/kernel.bin); \
+	TIMEOUT_S=90 QEMU_UEFI=1 QEMU_PROBES=kimg \
+	EXTRA_SENTINEL="$$(printf '[kimg] src=uefi len=%s sha=%s' "$$KLEN" "$$KSHA")$$(printf '\n[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010\nACPI: RSDP from loader\nACPI: FADT ok\nPCIe: ECAM')" \
+	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL\nACPI: RSDP not found\nPCIe: no MCFG table\nACPI: loader RSDP rejected\n[kimg] refused\nKIMG FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(ESP_IMG)
+
+# DDR-1142: the UEFI GOP framebuffer path. OVMF on q35's std-vga is the PROXY
+# (no physical UEFI board is available here): OVMF's QemuVideoDxe publishes a
+# real GOP over a real PCI BAR. Arm S reads the SCANOUT through a QMP screendump,
+# because "wrote a pattern and read it back" passes on plain RAM at a wrong
+# address. Arm B boots the BIOS image and requires "[fb] gop none". M2 (stride
+# ignored) is UNDETECTABLE on this proxy -- its mode has stride == width.
+smoke-gop: esp-image $(IMG) fat-image sfs-image
+	TIMEOUT_S=200 bash tools/ci/gop_gate.sh $(ESP_IMG) $(IMG)
+
+# DDR-1078: the FIRST gate ever to exercise DDR-885's remote-steal pass.
+# `rq_steal` tries same-node victims first and then anywhere, and until now the
+# second pass had NEVER executed: without a `cpus=` clause QEMU emits no SRAT
+# Local APIC Affinity entry, so every CPU read as node 0 and the same-node pass
+# matched every victim (boot_test.sh's NUMAOPT records the measurement).
+#
+# ONE CPU PER NODE IS THE DESIGN, and it defeats the vacuity trap DDR-1073 §2
+# named: a bare `remote=N` count discriminates nothing, because a correct kernel
+# legitimately reports remote=0 whenever the local pass keeps succeeding. With
+# CPU0 on node 0 and CPU1 on node 1 there is exactly one possible victim and it
+# is always remote, so `local=0` is STRUCTURALLY REQUIRED (any non-zero local
+# means the node mapping broke) and `remote > 0` says the second pass ran AND
+# succeeded. Adding CPUs would weaken it -- two on one node hands `local` a
+# legitimate non-zero value again.
+#
+# The FORBIDDEN sentinel is deliberate HERE and deliberately absent from
+# smoke-numa above. That gate keeps its rejection check inside the required line
+# because a FORBIDDEN pattern disables the DDR-785 early exit, and its sentinels
+# land at line ~75 of the boot. This one's lands at ~365, after rqstress_proof(),
+# so there is almost no early exit to lose -- and `remote > 0` cannot be written
+# as a required substring, so the forbidden form is the only way to assert the
+# positive half. Per DDR-1043 this gate runs its full window by design.
+smoke-numa-steal: $(IMG) fat-image sfs-image
+	TIMEOUT_S=180 QEMU_NUMA=1 \
+	EXTRA_SENTINEL='[sched] steal local=0 remote=' \
+	FORBIDDEN_SENTINEL='[sched] steal local=0 remote=0' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-numa-alloc: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_NUMA=1 QEMU_PROBES=numaalloc \
@@ -1144,8 +1389,8 @@ smoke-e1000e: $(IMG) fat-image sfs-image
 
 smoke-ahci: $(IMG) fat-image sfs-image ahci-image
 	TIMEOUT_S=90 QEMU_AHCI_IMG=$(AHCI_IMG) \
-	EXTRA_SENTINEL="$$(printf '[ahci] port disk, sectors=16384')" \
-	FORBIDDEN_SENTINEL="$$(printf '[ahci] IDENTIFY failed\n[ahci] port would not stop\n[ahci] cannot map ABAR')" \
+	EXTRA_SENTINEL="$$(printf '[ahci] port disk, sectors=16384\n[ahci] flush rc=0')" \
+	FORBIDDEN_SENTINEL="$$(printf '[ahci] flush FAIL\n[ahci] IDENTIFY failed\n[ahci] port would not stop\n[ahci] cannot map ABAR')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # ADR-038 demand-paged-stack gate. THREE arms in one boot (the probe runs them
@@ -1450,6 +1695,10 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'run /NOPE789.ELF\n'; sleep 0.9; printf 'echo st-fail=$$?\n'; sleep 0.6; \
 	  printf 'cat /BIG8K.TXT | cat\n'; sleep 3.5; \
 	  printf 'echo pipe3-m7q | cat | cat\n'; sleep 0.9; \
+	  printf 'echo echo scr-first-2h6 > /PRISMSCR.TXT\n'; sleep 0.5; \
+	  printf 'echo echo scr-last-5t9 >> /PRISMSCR.TXT\n'; sleep 0.5; \
+	  printf 'source /PRISMSCR.TXT\n'; sleep 0.9; \
+	  printf 'source /NOSUCHSCR.TXT\n'; sleep 0.6; \
 	  printf 'cat /NOPE9k2.TXT > /OUT9k2.TXT 2> /ERR9k2.TXT\n'; sleep 0.7; \
 	  printf 'cat /ERR9k2.TXT\n'; sleep 0.5; \
 	  printf 'cat /NOPE55a.TXT 2>> /EAP55a.TXT\n'; sleep 0.7; \
@@ -1464,10 +1713,20 @@ smoke-shell: $(IMG) fat-image sfs-image
 	  printf 'action approve 1\n'; sleep 0.6; \
 	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
 	  printf 'run /EXECTEST.ELF &\n'; sleep 1.2; \
+	  printf 'run /ARGTEST.ELF alpha beta\n'; sleep 1.5; \
 	  printf 'jobs\n'; sleep 0.6; \
 	  printf 'fg %%1\n'; sleep 1.5; \
 	  printf 'jobs\n'; sleep 1.2; \
 	  printf 'kill %%99\n'; sleep 0.6; \
+	  printf 'echo erasX\177e-ok-3m7\n'; sleep 0.6; \
+	  printf 'run /ARGTEST.ELF "gamma delta"\n'; sleep 1.5; \
+	  printf 'echo "q  9k2"\n'; sleep 0.6; \
+	  printf 'echo unterminated"\n'; sleep 0.6; \
+	  printf 'run /SLOWTEST.ELF &\n'; sleep 0.6; \
+	  printf 'wait\n'; sleep 1; \
+	  printf 'echo WAITMARK-7q4\n'; sleep 6; \
+	  printf 'audit 1 130\n'; sleep 2.5; \
+	  printf 'audit\n'; sleep 1.2; \
 	  printf 'exit\n'; sleep 0.5 ) & \
 	timeout 120 qemu-system-x86_64 -M q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=disk0 -device virtio-blk-pci,drive=disk0,bootindex=0 \
@@ -1482,6 +1741,79 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# BOTH names must survive in the file. If `2>>` were wired to O_TRUNC the
 	@# second command would overwrite the first, leaving only NOPE55b — which a
 	@# mere "the file is non-empty" check would happily accept.
+	@# DDR-1032b: the shell now hands `run` its arguments through to execve. This
+	@# is the END-TO-END arm -- PRISM -> fork -> execve -> the kernel's marshaller
+	@# -> a real program reading its own stack. smoke-execve-argv covers the kernel
+	@# half with a purpose-built launcher; this covers the half a user actually
+	@# types, which the launcher cannot: it calls execve directly.
+	@grep -q 'PRADYOS_ARGV=alpha' build/shell_serial.log || { echo "[shell] FAIL: run did not pass its arguments through execve (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log || echo '(no PRADYOS_ARG lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'PRADYOS_ARGV=beta' build/shell_serial.log || { echo "[shell] FAIL: run truncated its argument vector (DDR-1032b)"; grep -a 'PRADYOS_ARG' build/shell_serial.log; exit 1; }
+	@# DDR-1098: THE AUDIT CURSOR. `audit 1 130` asks for 130 records starting at
+	@# the OLDEST sequence still retained. SYS_READ_AUDIT clamps at 64, so that is
+	@# THREE syscalls, each resuming where the last ended -- which is the whole
+	@# capability: before DDR-1098 ring 3 could address only the newest 64 of a
+	@# 4096-entry ring, so SYS_VERIFY_AUDIT's "tampered at entry 1204" named a
+	@# record no ring-3 program could go and read.
+	@#
+	@# NEITHER n= NOR calls= IS THE DISCRIMINATOR, and that was measured before
+	@# these arms were written. A kernel that ignores the cursor still returns 64
+	@# records per call and PRISM still counts 130 across 3 calls -- identical
+	@# numbers. What only a real cursor can produce is:
+	@#   pois=0 -- PRISM poisons cur.first with 0xA0D17C0 before EVERY call, so a
+	@#             kernel that never writes it back leaves the poison for the gate
+	@#             to find. This is the churn-proof arm: it holds regardless of how
+	@#             many records the boot appends between calls.
+	@#   dup=0  -- two consecutive windows must not START with the same record,
+	@#             which is the signature of `newest n` served three times.
+	@# first= and lost= are deliberately NOT asserted: they depend on how many
+	@# audit records this boot happened to write before the prompt (measured at
+	@# ~4369, with the ring ALREADY WRAPPED and 273 records evicted), and an arm
+	@# pinned to a boot-timing quantity is an arm that reddens on a correct kernel.
+	@grep -q 'PRADYOS_AUDIT first=.* n=130 calls=3 dup=0 pois=0 ' build/shell_serial.log || { echo "[shell] FAIL: audit cursor did not resume across calls (DDR-1098)"; grep -a 'PRADYOS_AUDIT' build/shell_serial.log || echo '(no PRADYOS_AUDIT line at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@# The from==0 form: the NEWEST window, one call, with the sequence reported.
+	@# Without this arm a kernel could satisfy the drain above and still not report
+	@# a sequence on the path every existing caller uses.
+	@grep -q 'PRADYOS_AUDIT first=.* n=16 calls=1 dup=0 pois=0 lost=0' build/shell_serial.log || { echo "[shell] FAIL: audit newest-window did not report its sequence (DDR-1098)"; grep -a 'PRADYOS_AUDIT' build/shell_serial.log; exit 1; }
+	@# DDR-1067: QUOTING. `run /ARGTEST.ELF "gamma delta"` must deliver TWO argv
+	@# entries, the second containing a space -- a line no unquoted input can
+	@# produce. PRADYOS_ARGC=2 appears nowhere else: the arm four lines above
+	@# runs the same probe unquoted and prints ARGC=3, so the two counts cannot
+	@# be confused in one log, and both directions are asserted per DDR-1039.
+	@# The OBVIOUS arm here would be `echo "one two"` and it is VACUOUS: PRISM's
+	@# echo joins argv with single spaces (prism.c:591), so quoted and unquoted
+	@# print byte-identical output. Hence the ARGC arm, and hence the echo arm
+	@# below uses TWO internal spaces -- the one thing the tokenizer destroys
+	@# and echo's join cannot restore.
+	@grep -q 'PRADYOS_ARGC=2' build/shell_serial.log || { echo "[shell] FAIL: quoting did not group the argument (DDR-1067) — expected PRADYOS_ARGC=2"; grep -a 'PRADYOS_ARG' build/shell_serial.log || echo '(no PRADYOS_ARG lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'PRADYOS_ARGV=gamma delta' build/shell_serial.log || { echo "[shell] FAIL: quoted argument did not survive as ONE entry (DDR-1067)"; grep -a 'PRADYOS_ARG' build/shell_serial.log; exit 1; }
+	@grep -q 'q  9k2' build/shell_serial.log || { echo "[shell] FAIL: quoted run of spaces was collapsed (DDR-1067)"; grep -a '9k2' build/shell_serial.log || echo '(no 9k2 lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'prism: unterminated quote' build/shell_serial.log || { echo "[shell] FAIL: an unterminated quote was silently accepted (DDR-1067)"; tail -40 build/shell_serial.log; exit 1; }
+	@# THE SLEEP AFTER `wait` IS 1 s, NOT 6, AND M1 IS WHY. With 6 s the injector's
+	@# OWN SLEEP outlasted the 4 s probe, so the marker followed the job's line
+	@# even with `wait` deleted — the ordering arm passed on the mutant and was
+	@# VACUOUS. At 1 s the shell must do the blocking: `wait` holds the next line
+	@# in the serial buffer past the probe's exit, and without it the marker wins.
+	@# DDR-1068: `wait`. THE ORDERING IS THE ASSERTION, not the presence of a
+	@# line. /SLOWTEST.ELF runs ~4 s while the injector's next line arrives in
+	@# 0.6 s, so the job is STILL ALIVE when `wait` executes — which is the whole
+	@# reason that probe exists. Without it both obvious arms are vacuous
+	@# (DDR-1068 §3): an ordering arm on a fast child is one-sided, and a
+	@# `reaped=` count reads 0 for a CORRECT wait because jobs_reap() runs at
+	@# every prompt. With the job alive, reaped=1 is deterministic AND the
+	@# marker after `wait` must follow the probe's own line.
+	@grep -q 'PRADYOS_SLOW_DONE waited=' build/shell_serial.log || { echo "[shell] FAIL: the background job never ran (DDR-1068)"; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'PRADYOS_WAIT_OK reaped=1' build/shell_serial.log || { echo "[shell] FAIL: wait did not wait on the live background job (DDR-1068) — expected reaped=1"; grep -a 'PRADYOS_WAIT_OK\|PRADYOS_SLOW_DONE' build/shell_serial.log || echo '(neither line present)'; tail -40 build/shell_serial.log; exit 1; }
+	@# DDR-1087: `source`. The script is written BY THE INJECTOR through PRISM's
+	@# own shipped redirection, so this needs no kernel change and no planted
+	@# file — and the bytes it executes provably travelled through `>` and `>>`.
+	@# TWO markers, and the second is the point: a `source` that read only the
+	@# FIRST line of the file would pass a one-marker arm (mutant M2 does exactly
+	@# that). The first marker alone is live but weak; the last one carries the
+	@# claim that the file was consumed to the end, in order.
+	@grep -q 'scr-first-2h6' build/shell_serial.log || { echo "[shell] FAIL: source did not run the script's first line (DDR-1087)"; grep -a 'scr-\|source' build/shell_serial.log || echo '(no scr- or source lines at all)'; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'scr-last-5t9' build/shell_serial.log || { echo "[shell] FAIL: source stopped before the script's LAST line (DDR-1087) — a one-line reader, mutant M2's shape"; grep -a 'scr-' build/shell_serial.log; tail -40 build/shell_serial.log; exit 1; }
+	@grep -q 'prism: source: cannot open /NOSUCHSCR.TXT' build/shell_serial.log || { echo "[shell] FAIL: source of a missing file was not reported (DDR-1087)"; tail -40 build/shell_serial.log; exit 1; }
+	@sd=$$(grep -an 'PRADYOS_SLOW_DONE' build/shell_serial.log | head -1 | cut -d: -f1); 	 wm=$$(grep -an 'WAITMARK-7q4' build/shell_serial.log | grep -v 'prism> echo' | head -1 | cut -d: -f1); 	 test -n "$$sd" -a -n "$$wm" -a "$$sd" -lt "$$wm" || { echo "[shell] FAIL: `wait` did not block — the post-wait marker (line $$wm) did not follow the job's own line (line $$sd) (DDR-1068)"; grep -an 'PRADYOS_SLOW_DONE\|WAITMARK-7q4' build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55a.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> truncated the earlier entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@grep -q 'cat: cannot open /NOPE55b.TXT' build/shell_serial.log || { echo "[shell] FAIL: 2>> lost the later entry (DDR-868)"; tail -40 build/shell_serial.log; exit 1; }
 	@# DDR-888 (item 36): the agent DSL. PRISM holds neither CAP_AGENT nor
@@ -1625,13 +1957,198 @@ smoke-shell: $(IMG) fat-image sfs-image
 	@# `cat /ERR9k2.TXT` therefore fails before this change and passes after, and
 	@# proves the message travelled on fd 2 (fd 1 pointed elsewhere in that command).
 	@grep -qF "cat: cannot open /NOPE9k2.TXT" build/shell_serial.log || { echo "[shell] FAIL: stderr not redirected to the 2> file (DDR-784)"; tail -30 build/shell_serial.log; exit 1; }
+	@# DDR-1039: ERASE. readline() used to append EVERY non-newline byte, so a
+	@# backspace landed IN the command buffer. The fed line is
+	@# `echo erasX<0x7F>e-ok-3m7`: honoured, the DEL removes the X and the shell
+	@# runs `echo erase-ok-3m7`; ignored, echo prints the literal
+	@# `erasX<0x7F>e-ok-3m7`, which does NOT contain the marker.
+	@#
+	@# Both directions are asserted because neither alone is sufficient in the
+	@# general case: presence of the marker could in principle be produced by a
+	@# shell that stripped the byte without decrementing (it would print
+	@# `erasXe-ok-3m7`, no marker — but a strip-and-decrement-twice bug would
+	@# print `eraXe-...`), and absence of `erasX` could be produced by a shell
+	@# that dropped the whole line. Requiring both pins the position exactly.
+	@#
+	@# A `help`-based arm would have been VACUOUS: `help` is already fed at the
+	@# top of this same session, so its output is in the log either way. The
+	@# marker exists only in the ERASED form.
+	@grep -qaF "erase-ok-3m7" build/shell_serial.log || { echo "[shell] FAIL: backspace not honoured — erased form never ran (DDR-1039)"; tail -30 build/shell_serial.log; exit 1; }
+	@if grep -qaF "erasX" build/shell_serial.log; then echo "[shell] FAIL: the erase byte was stored in the command buffer (DDR-1039)"; tail -30 build/shell_serial.log; exit 1; fi
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/shell_serial.log; then echo "[shell] FAIL: kernel panic"; tail -30 build/shell_serial.log; exit 1; fi
-	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB), clean, no panic."
+	@bash tools/qemu_runner/scan_forbidden.sh build/shell_serial.log shell
+	@echo "[shell] PASS — PRISM_READY + prompt + echo + help + ls + ps + touch/rm + uname/date/uptime/dmesg/free + redirect(> >> < 2>) + truncate/append + stderr + pipes(N-stage, >4KiB) + erase(DDR-1039) + quoting(DDR-1067) + wait(DDR-1068) + source(DDR-1087) + audit(DDR-1098), clean, no panic."
 
 # Phase 5b slice 2 user-access gate: the in-kernel uaccess self-test (main.c)
 # drives copyin/copyout/copyinstr against a throwaway user AS — a good page, a
 # wild pointer (-> EFAULT), a read-only page write (-> EFAULT, W^X), and a valid
 # string. All four lines must appear AND the kernel must survive the two faults.
+# DDR-1040 SMEP gate. THIS GATE PINS ITS OWN CPU MODEL AND THAT IS THE WHOLE
+# POINT: the TCG default (qemu64) reports smep=false -- measured through QMP
+# query-cpu-model-expansion before a line of the feature was written, DDR-1040
+# §2 -- so on the model every other gate runs, the CPUID guard correctly takes
+# the no-op path and the feature never executes. A "SMEP enabled" assertion on
+# the default model would have been unreachable-passing forever.
+#
+# Four arms, and arm C is the one this design would be wrong without.
+smoke-smep: $(IMG) fat-image sfs-image
+	@echo "[smep] booting with -cpu qemu64,+smep (the default model has no SMEP -- DDR-1040 §2)..."
+	@rm -f build/smep_serial.log
+	@KEEP_SERIAL=1 SERIAL_LOG=build/smep_serial.log QEMU_CPU="qemu64,+smep" TIMEOUT_S=120 \
+	    EXTRA_SENTINEL="PRADYOS_SMEP_ALIVE" bash tools/qemu_runner/boot_test.sh $(IMG)
+	@# A: the feature was DETECTED and the bit is actually SET. cr4= is read back
+	@#    from CR4 after the write, not inferred from having written it.
+	@grep -aq '^PRADYOS_SMEP cpuid=1 cr4=1' build/smep_serial.log || { echo "[smep] FAIL: SMEP not detected/enabled on a +smep CPU (DDR-1040 arm A)"; grep -a 'PRADYOS_SMEP' build/smep_serial.log || echo '(no PRADYOS_SMEP lines at all)'; exit 1; }
+	@# B: the CPU actually REFUSED the fetch, with the SMEP error code --
+	@#    bit 0 P=1 (the page IS present; a plain unmapped page would read 0x10)
+	@#    and bit 4 I/D=1 (instruction fetch), U/S=0 (supervisor access).
+	@#    The code is asserted, not just the presence of a fault: "something
+	@#    faulted" and "SMEP faulted" are different claims.
+	@#    [[:space:]]*$$ not $$: the kernel prints CRLF, so a bare end-anchor
+	@#    never matches — measured, this arm failed on a line that was correct.
+	@grep -aqE '^PRADYOS_SMEP_ENFORCED vec=14 err=0x0*11[[:space:]]*$$' build/smep_serial.log || { echo "[smep] FAIL: ring-0 fetch from a user page was NOT refused (DDR-1040 arm B)"; grep -aE 'PRADYOS_SMEP_(ENFORCED|EXECUTED|SKIP)' build/smep_serial.log || echo '(no outcome line at all)'; exit 1; }
+	@# C: the latch RESUMED. "Enforced" and "died at exactly that instruction"
+	@#    produce identical A and B lines; only a witness printed AFTERWARDS
+	@#    separates them, so position is the discriminator, not presence.
+	@sed -n '/^PRADYOS_SMEP_ENFORCED/,$$p' build/smep_serial.log | grep -aq '^PRADYOS_SMEP_ALIVE' || { echo "[smep] FAIL: no liveness witness AFTER the fault — the kernel may have died at it (DDR-1040 arm C)"; tail -30 build/smep_serial.log; exit 1; }
+	@# D: no collateral. If anything else in the boot executed a user page, SMEP
+	@#    would now fault on it for real, and these would catch it.
+	@bash tools/qemu_runner/scan_forbidden.sh build/smep_serial.log smep
+	@if grep -aq 'fexpect. refused' build/smep_serial.log; then echo "[smep] FAIL: the latch refused to arm — its precondition was violated (DDR-1040 §4)"; grep -a 'fexpect' build/smep_serial.log; exit 1; fi
+	@# E: THE NO-OP PATH, on the DEFAULT model, asserted rather than assumed. A
+	@#    build that set CR4.SMEP unconditionally would #GP on a CPU without the
+	@#    feature, or report cr4=1 beside cpuid=0; both are caught here. This is
+	@#    also the arm that keeps §2's measurement honest -- it states, in a
+	@#    gate, that the other 170 gates run on a CPU where SMEP does not exist.
+	@#    Sequential, never concurrent (§NON-NEGOTIABLE 12).
+	@echo "[smep] arm E: re-booting on the DEFAULT model (no SMEP) to assert the no-op path..."
+	@rm -f build/smep_default.log
+	@KEEP_SERIAL=1 SERIAL_LOG=build/smep_default.log TIMEOUT_S=120 \
+	    EXTRA_SENTINEL="PRADYOS_SMEP_ALIVE" bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -aq '^PRADYOS_SMEP cpuid=0 cr4=0' build/smep_default.log || { echo "[smep] FAIL: the default CPU model did not take the no-op path (DDR-1040 arm E)"; grep -a 'PRADYOS_SMEP' build/smep_default.log || echo '(no PRADYOS_SMEP lines at all)'; exit 1; }
+	@grep -aq '^PRADYOS_SMEP_EXECUTED' build/smep_default.log || { echo "[smep] FAIL: without SMEP the user page should have EXECUTED (DDR-1040 arm E)"; grep -aE 'PRADYOS_SMEP_(ENFORCED|EXECUTED|SKIP)' build/smep_default.log || echo '(no outcome line)'; exit 1; }
+	@echo "[smep] PASS — +smep: CPUID+CR4 set, ring-0 fetch of a user page refused (#PF err=0x11), latch resumed; default model: no-op path, page executed. Boot clean on both."
+
+# DDR-1041 SMAP gate. Same CPU-model pinning as smoke-smep and for the same
+# measured reason (DDR-1040 §2): the TCG default reports smap=false, so on the
+# model every other gate runs the feature is a no-op and an "enabled" assertion
+# would be unreachable-passing.
+#
+# What makes this gate worth having rather than a duplicate of smoke-smep: SMAP
+# is the mechanism that turns uaccess.h's HEADER COMMENT -- "the kernel NEVER
+# dereferences a raw user pointer anywhere else" -- from a documented contract
+# into one the hardware checks. Arm B proves the hardware refuses; arm C proves
+# the shield the real copy path uses actually works. Neither implies the other.
+# DDR-1044 machine-check gate. THE ONE GATE WHOSE PASS CONDITION IS A PANIC.
+#
+# Measured before a line was written: with CR4.MCE clear, an injected machine
+# check does NOT raise #MC. QEMU says so in as many words -- "CPU 0: MCE
+# capability is not enabled, raising triple fault" -- and the serial log stops
+# mid-boot with no banner, no registers, nothing. So this gate is not testing a
+# print; it is testing that the exception is DELIVERED at all.
+#
+# It runs QEMU directly rather than through boot_test.sh, because the expected
+# outcome is a `*** NEXUS KERNEL PANIC ***` and that string is in
+# GLOBAL_FORBIDDEN (DDR-1009). Coverage is NOT dropped: arm E asserts there is
+# exactly ONE banner, and arm F runs the full global scan over a copy with that
+# single expected line removed -- so every other sentinel still applies, which
+# is the gap DDR-1010 closed for smoke-shell and must not be reopened here.
+smoke-mce: $(IMG) fat-image sfs-image
+	@echo "[mce] machine-check gate: boot, inject a bank-0 MCE through QMP, expect #MC..."
+	@rm -f build/mce.log build/mce.inject.log /tmp/prmce.sock
+	@( python3 tools/qemu_runner/mce_inject.py /tmp/prmce.sock build/mce.log 90 \
+	     2>&1 | tee build/mce.inject.log ) &
+	@# EARLY KILL. After the panic the kernel halts, so QEMU never exits on its
+	@# own and the run would burn the whole window -- measured at 131 s, against
+	@# shard totals of ~1400 s. Poll for the last line the gate needs and stop
+	@# there. `timeout` remains the hard ceiling; this loop only ever stops
+	@# things earlier, which is DDR-785's argument for the same shape.
+	@timeout 120 qemu-system-x86_64 -M q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -qmp unix:/tmp/prmce.sock,server,nowait \
+	    -serial file:build/mce.log -display none -no-reboot & \
+	  qpid=$$!; \
+	  for i in $$(seq 1 480); do \
+	    kill -0 $$qpid 2>/dev/null || break; \
+	    grep -aq '^MCE: bank=0 ' build/mce.log 2>/dev/null && { sleep 1; kill $$qpid 2>/dev/null; break; }; \
+	    sleep 0.25; \
+	  done; \
+	  wait $$qpid 2>/dev/null || true
+	@# A: CPUID says the CPU has MCE, CR4.MCE READS BACK set, and the MCA banks
+	@#    were found. banks=0 would mean the decode in arm D has nothing to walk,
+	@#    so it is asserted here rather than being discovered as a silent skip.
+	@grep -aqE '^PRADYOS_MCE cpuid=1 cr4=1 banks=[1-9]' build/mce.log || { echo "[mce] FAIL: CR4.MCE not enabled, or no MCA banks (DDR-1044 arm A)"; grep -a 'PRADYOS_MCE' build/mce.log || echo '(no PRADYOS_MCE line at all)'; exit 1; }
+	@# B: the exception was DELIVERED as #MC. Without CR4.MCE this line cannot
+	@#    exist -- the guest triple-faults and the log simply ends.
+	@grep -aq 'exception: #MC machine check  vector=0x0000000000000012' build/mce.log || { echo "[mce] FAIL: the injected machine check did not arrive as #MC (DDR-1044 arm B)"; echo '--- injector ---'; cat build/mce.inject.log 2>/dev/null; echo '--- log tail ---'; tail -20 build/mce.log; exit 1; }
+	@# C: MCG_STATUS was read and decoded. mcip=1 says a machine check was in
+	@#    progress, which is what separates "we printed a template" from "we read
+	@#    the hardware".
+	@grep -aqE '^MCE: mcg_status=0x[0-9A-F]+ ripv=1 eipv=0 mcip=1' build/mce.log || { echo "[mce] FAIL: MCG_STATUS not decoded, or does not match the injected 0x5 (DDR-1044 arm C)"; grep -a '^MCE:' build/mce.log || echo '(no MCE: lines)'; exit 1; }
+	@# D: THE BANK ROUND-TRIP, and this is the arm that makes the decode a
+	@#    measurement. The injected status/addr/misc are fixed and known, so the
+	@#    gate asserts the EXACT values back out. A decode that printed plausible
+	@#    numbers from the wrong MSR offsets would pass a shape check and fails
+	@#    this one.
+	@grep -aq 'MCE: bank=0 status=0xBD80000000000000 addr=0x0000000000001234 misc=0x000000000000008C' build/mce.log || { echo "[mce] FAIL: bank 0 did not decode back the injected record (DDR-1044 arm D)"; grep -a '^MCE:' build/mce.log || echo '(no MCE: lines)'; exit 1; }
+	@# E: exactly ONE panic. More than one means something else also died and
+	@#    arm F's filter would hide it.
+	@n=$$(grep -ac 'NEXUS KERNEL PANIC' build/mce.log); \
+	  if [ "$$n" != "1" ]; then echo "[mce] FAIL: expected exactly 1 panic banner, saw $$n (DDR-1044 arm E)"; exit 1; fi
+	@# F: every OTHER global sentinel still applies. Only the single expected
+	@#    banner is filtered -- not the whole scan.
+	@grep -av 'NEXUS KERNEL PANIC' build/mce.log > build/mce.filtered.log
+	@bash tools/qemu_runner/scan_forbidden.sh build/mce.filtered.log mce
+	@# G (DDR-1079): THE PANIC BACKTRACE WALKER, ASSERTED FOR THE FIRST TIME.
+	@#    Nothing has ever checked it, and CI 34051826587 shard 4 caught it
+	@#    dereferencing a garbage frame pointer: #GP (vector 13 — non-canonical,
+	@#    since a bad-but-canonical address would be #PF) at isr_dispatch+0xE86,
+	@#    the `kputhex(bp[1])` load. A fault there re-enters the panic path, loses
+	@#    the CAS to this CPU's own earlier claim, and halts forever — the CPU
+	@#    diagnosing the machine becomes a frozen CPU.
+	@#    TWO halves, and the second is the one tied to the defect: at least one
+	@#    frame must print (the walk produced something), AND `halting.` must
+	@#    follow it (the winner REACHED THE END of its own dump). A walker that
+	@#    faults mid-walk never prints `halting.` — it halts as a panic loser,
+	@#    silently, exactly as the CI capture did.
+	@n=$$(awk '/^backtrace:/{f=1;next} f&&/^  0x/{c++} f&&!/^  /{exit} END{print c+0}' build/mce.log); \
+	  if [ "$${n:-0}" -lt 1 ]; then echo "[mce] FAIL: panic backtrace printed no frames (DDR-1079 arm G)"; sed -n '/^backtrace:/,+10p' build/mce.log; exit 1; fi; \
+	  echo "[mce] arm G: backtrace frames=$$n"
+	@grep -aq '^halting\.' build/mce.log || { echo "[mce] FAIL: the panic dump never reached 'halting.' — the walker did not survive its own backtrace (DDR-1079 arm G)"; sed -n '/^backtrace:/,+12p' build/mce.log; exit 1; }
+	@echo "[mce] PASS — CR4.MCE + MCA banks enabled, injected machine check delivered as #MC (vector 0x12), bank 0 decoded back byte-exact, one panic only, backtrace walked and the dump completed, rest of the boot clean."
+
+smoke-smap: $(IMG) fat-image sfs-image
+	@echo "[smap] booting with -cpu qemu64,+smep,+smap (the default model has neither -- DDR-1040 §2)..."
+	@rm -f build/smap_serial.log
+	@KEEP_SERIAL=1 SERIAL_LOG=build/smap_serial.log QEMU_CPU="qemu64,+smep,+smap" TIMEOUT_S=120 \
+	    EXTRA_SENTINEL="PRADYOS_SMAP_ALIVE" bash tools/qemu_runner/boot_test.sh $(IMG)
+	@# A: detected and set, read back from CR4 rather than inferred.
+	@grep -aq '^PRADYOS_SMAP cpuid=1 cr4=1' build/smap_serial.log || { echo "[smap] FAIL: SMAP not detected/enabled on a +smap CPU (DDR-1041 arm A)"; grep -a 'PRADYOS_SMAP' build/smap_serial.log || echo '(no PRADYOS_SMAP lines at all)'; exit 1; }
+	@# B: an UNSHIELDED ring-0 read of a user page was refused. err=0x01 is the
+	@#    SMAP data signature: bit 0 P=1 (present), bit 1 W/R=0 (read), bit 2
+	@#    U/S=0 (supervisor), bit 4 I/D=0 (data) -- distinct from SMEP's 0x11.
+	@#    [[:space:]]*$$ not $$: the console prints CRLF (DDR-1040 §7.1).
+	@grep -aqE '^PRADYOS_SMAP_ENFORCED vec=14 err=0x0*1[[:space:]]*$$' build/smap_serial.log || { echo "[smap] FAIL: unshielded ring-0 read of a user page was NOT refused (DDR-1041 arm B)"; grep -aE 'PRADYOS_SMAP_(ENFORCED|READ_ALLOWED|SKIP)' build/smap_serial.log || echo '(no outcome line)'; exit 1; }
+	@# C: the SHIELDED read -- the path copyin/copyout actually take -- returned
+	@#    the seeded byte. This is the arm that catches stac being a no-op, and
+	@#    it cannot pass silently: an unshielded read with no latch armed panics.
+	@grep -aq '^PRADYOS_SMAP_SHIELDED_OK' build/smap_serial.log || { echo "[smap] FAIL: the stac-shielded read did not work (DDR-1041 arm C)"; grep -a 'PRADYOS_SMAP_SHIELDED' build/smap_serial.log || echo '(no shielded line)'; exit 1; }
+	@# D: liveness AFTER the fault -- "enforced" and "died there" print the same
+	@#    B line; only a later witness separates them (DDR-1040 arm C).
+	@sed -n '/^PRADYOS_SMAP_ENFORCED/,$$p' build/smap_serial.log | grep -aq '^PRADYOS_SMAP_ALIVE' || { echo "[smap] FAIL: no liveness witness AFTER the fault (DDR-1041 arm D)"; tail -30 build/smap_serial.log; exit 1; }
+	@# E: THE WHOLE BOOT ran with SMAP on. This is the arm that carries DDR-1041
+	@#    §3's enumeration into CI: every copyin/copyout the boot performs -- the
+	@#    ~65 ring-3 probes, the syscall path, the FS self-tests -- runs shielded,
+	@#    and any unshielded kernel dereference of a user page would panic here
+	@#    rather than being found by reading 84 __user annotations.
+	@bash tools/qemu_runner/scan_forbidden.sh build/smap_serial.log smap
+	@grep -aq '\[uaccess\] copyin good page OK' build/smap_serial.log || { echo "[smap] FAIL: copyin did not work under SMAP (DDR-1041 arm E)"; grep -a '\[uaccess\]' build/smap_serial.log || echo '(no uaccess lines)'; exit 1; }
+	@grep -aq '\[uaccess\] copyinstr OK' build/smap_serial.log || { echo "[smap] FAIL: copyinstr did not work under SMAP (DDR-1041 arm E)"; grep -a '\[uaccess\]' build/smap_serial.log; exit 1; }
+	@if grep -aq 'fexpect. refused' build/smap_serial.log; then echo "[smap] FAIL: the latch refused to arm (DDR-1040 §4)"; grep -a 'fexpect' build/smap_serial.log; exit 1; fi
+	@echo "[smap] PASS — CR4.SMAP set, unshielded ring-0 read of a user page refused (#PF err=0x01), stac-shielded read works, copyin/copyinstr green under SMAP, boot clean."
+
 smoke-uaccess: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL="$$(printf '[uaccess] copyin good page OK\n[uaccess] copyin bad ptr EFAULT OK\n[uaccess] copyout RO page EFAULT OK\n[uaccess] copyinstr OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
@@ -1641,9 +2158,15 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # audits that no text PTE is writable and no non-text PTE is executable, printing
 # [wx] kernel W^X OK. The whole boot (incl. SMP gates elsewhere) runs against the
 # hardened tables, so this doubles as a no-regression witness.
+# DDR-1046 added the second sentinel. The aggregate verdict now COVERS the
+# identity alias (the audit checks it), so '[wx] kernel W^X OK' alone would
+# catch a regression — but it would not say WHICH property broke, and the alias
+# is the one that was silently wrong for as long as DDR-757 has existed. The
+# explicit line makes rw=/nx= visible in every capture and lets a mutant be
+# attributed instead of guessed at.
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK')" \
+	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003')" \
 	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
@@ -1687,7 +2210,7 @@ smoke-sysproc: $(IMG) fat-image sfs-image
 # be read, 'OFF REJECTED' needs a6, and the two expect DIFFERENT errno values, so
 # an r8/r9 swap in the marshal fails both instead of passing by symmetry.
 smoke-sysmmap: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMMAP FD REJECTED\nSYSMMAP OFF REJECTED\nSYSMUNMAP OK')" \
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMMAP FD REJECTED\nSYSMMAP ND REJECTED\nSYSMMAP OFF REJECTED\nSYSMUNMAP OK\nSYSMMAP FILE OK\nSYSMMAP CURSOR OK\nSYSMMAP FILEOFF OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 7 execve gate: the kernel places /EXECTEST.ELF on the FAT32
@@ -1723,6 +2246,26 @@ smoke-mitigations: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL='[cpu] mitigations:' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-1140 sec.1.3/1.5: the CPU exposure line, on TWO CPU models. The default
+# model alone is vacuous -- qemu64 reports AuthenticAMD, so a classifier
+# hard-wired to meltdown=no passes it; arm B (Intel, no ARCH_CAPABILITIES)
+# catches that, and arm A catches one hard-wired to yes. Each arm is an EXACT
+# substring and each boot exits early the moment its line appears.
+# NO ARM C, MEASURED (sec.1.5): QEMU 8.2 TCG cannot expose ARCH_CAPABILITIES at
+# all -- query-cpu-model-expansion reads arch-capabilities=false even on
+# -cpu max, and +arch-capabilities is dropped with a warning -- so the rdmsr
+# 0x10A branch never executes in CI and is UNCOVERED, not assumed covered.
+smoke-cpuexposure: $(IMG) fat-image sfs-image
+	@echo "[cpuexp] arm A: default CPU model (AMD vendor) -> not exposed"
+	@TIMEOUT_S=90 \
+	    EXTRA_SENTINEL='[cpu] exposure: vendor=amd archcap=0 meltdown=no mds=no kpti=0' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[cpuexp] arm B: Intel without ARCH_CAPABILITIES -> exposed"
+	@QEMU_CPU="qemu64,vendor=GenuineIntel" TIMEOUT_S=90 \
+	    EXTRA_SENTINEL='[cpu] exposure: vendor=intel archcap=0 meltdown=yes mds=yes kpti=0' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[cpuexp] PASS -- two CPU models, two exact classifications (DDR-1140)"
+
 # IMP-B poison gate: with KASAN=1 (the default) the kernel poisons freed PMM
 # frames and arms slab canaries. The gate asserts the "[pmm] poison enabled"
 # banner; because KASAN is the default, every other gate is implicitly a poison /
@@ -1744,6 +2287,19 @@ smoke-vdso: $(IMG) fat-image sfs-image
 # smoke-sysfork/smoke-syswait (the parent writes its stack after fork).
 smoke-cowfork: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL='[vmm] COW fork copy-on-write OK' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1065: ptnode_in_use accounting across a COW fork. The probe is the DDR-1003
+# §5.1 design and differs from cow_selftest above by exactly ONE thing -- the
+# child never writes -- because the ORDINARY leak shape (fork, child writes, both
+# exit) is BALANCED and would PASS, so a gate built the obvious way tests nothing.
+# BOTH directions are asserted: the OK marker must appear AND the FAIL string must
+# not, so a probe that silently stops running cannot pass. Deterministic and
+# kernel-side (no ring-3, no reap poll, no timing), so this is not an intermittent
+# gate -- stated N is 1, and §NON-NEGOTIABLE 2's 20x rule does not apply.
+smoke-sharedpte: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 EXTRA_SENTINEL='PRADYOS_SHAREDPTE_OK' \
+	FORBIDDEN_SENTINEL='SHAREDPTE FAIL' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # NET-A virtio-net gate: boot_test.sh already attaches a virtio-net-pci device.
@@ -1803,8 +2359,20 @@ smoke-aether-queue: $(IMG) fat-image sfs-image
 # spawns the test agent (CAP_AGENT); the agent submits ACTION_WRITE_FILE which
 # sovereign mode auto-approves; the agent executes it and exits. End-to-end:
 # queue -> daemon -> agent -> approve -> execute -> done.
+#
+# DDR-1066: that last clause was FALSE until 2026-09-06 and this gate could not
+# see it. The agent printf'd the path and the data and made no filesystem call,
+# and `data` IS "PRADYOS_AGENT_VERIFIED" -- so the execute arm asserted on a
+# .rodata literal. It is now emitted from a READ-BACK BUFFER, which is why that
+# sentinel line is unchanged and yet the arm is now live. The two additions:
+#   - PRADYOS_AGENT_EXEC_OK asserted with EXACT values (DDR-1044's discipline),
+#     so a real write that stores the wrong length fails rather than matching a
+#     loose shape. n=22 is strlen("PRADYOS_AGENT_VERIFIED").
+#   - AETHER_AGENT_EXEC_FAIL forbidden, so a failed execution NAMES ITSELF
+#     instead of being detectable only as an absence.
 smoke-aether: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_QUEUE_OK\nPRADYOS_AETHER_DAEMON_OK\nPRADYOS_AGENT_VERIFIED\nPRADYOS_AGENT_DONE')" \
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_QUEUE_OK\nPRADYOS_AETHER_DAEMON_OK\nPRADYOS_AGENT_EXEC_OK path=/AETHER.TXT n=22 first=P last=D\nPRADYOS_AGENT_VERIFIED\nPRADYOS_AGENT_DONE')" \
+	FORBIDDEN_SENTINEL='AETHER_AGENT_EXEC_FAIL' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 slice 0 GPU gate (ADR-028): boot with a virtio-gpu-pci device; the
@@ -1851,8 +2419,12 @@ smoke-sfs-persist: $(IMG) fat-image sfs-image $(MKFS_SFS)
 # DDR-770: a host-provisioned SFS ROOT image carrying the real /etc/aether/config
 # (nested-dir provisioning, DDR-769). The kernel roots the AETHER daemon here
 # instead of formatting+provisioning blk2, so the boot policy ships in the build.
-AETHER_CFG_TEXT := mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n
-build/sfsroot.img: $(MKFS_SFS)
+AETHER_CFG_TEXT := mode=sovereign\ntask=verify-boot-chain\nslot=0\nnet=10.0.2.2:11434\n
+# DDR-1085: `Makefile` is a real prerequisite — the image's CONTENT is defined by
+# AETHER_CFG_TEXT above, and without this an edit to that variable left a stale
+# build/sfsroot.img locally while CI (fresh clone) built the new one, so the same
+# commit meant two different boot policies depending on where it ran.
+build/sfsroot.img: $(MKFS_SFS) Makefile
 	@mkdir -p build
 	printf '$(AETHER_CFG_TEXT)' > build/aethercfg.txt
 	$(MKFS_SFS) build/sfsroot.img --blocks 4096 --file /etc/aether/config=build/aethercfg.txt
@@ -1877,8 +2449,8 @@ smoke-fs-budget: $(IMG) fat-image sfs-image
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img
 	TIMEOUT_S=60 QEMU_NVME=1 \
-	    EXTRA_SENTINEL="$$(printf '[nvme] \nLBAs x \nregistered nvme0\n[nvme] msix vec=50\nPRADYOS_NVME_RW_OK\nPRADYOS_NVME_PRP_OK\nPRADYOS_NVME_IRQ_OK')" \
-	    FORBIDDEN_SENTINEL="$$(printf 'controller not ready\nidentify-ctrl failed\nidentify-ns failed\nreset stuck\ncreate-iocq failed\ncreate-iosq failed\nmsix unavailable\nPRADYOS_NVME_RW_FAIL\nPRADYOS_NVME_PRP_FAIL\nPRADYOS_NVME_IRQ_FAIL')" \
+	    EXTRA_SENTINEL="$$(printf '[nvme] \nLBAs x \nregistered nvme0\n[nvme] msix vec=50\nPRADYOS_NVME_RW_OK\nPRADYOS_NVME_PRP_OK\nPRADYOS_NVME_FLUSH_OK\nPRADYOS_NVME_IRQ_OK')" \
+	    FORBIDDEN_SENTINEL="$$(printf 'controller not ready\nidentify-ctrl failed\nidentify-ns failed\nreset stuck\ncreate-iocq failed\ncreate-iosq failed\nmsix unavailable\nPRADYOS_NVME_RW_FAIL\nPRADYOS_NVME_PRP_FAIL\nPRADYOS_NVME_FLUSH_FAIL\nPRADYOS_NVME_IRQ_FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 framebuffer-surface gate (DDR-702): proves the ring-3 SYS_FB map+draw+
@@ -1939,7 +2511,7 @@ smoke-compositor: $(IMG) fat-image sfs-image
 # sends 'p', so every other boot is unaffected.
 smoke-poweroff: $(IMG) fat-image sfs-image
 	@echo "[power] poweroff gate: boot(GPU) + sendkey p -> SYS_POWEROFF -> ACPI S5..."
-	@rm -f build/power.log /tmp/ppower.sock
+	@rm -f build/power.log build/power.qemu_rc /tmp/ppower.sock
 	@bash tools/qemu_runner/input_inject.sh build/power.log /tmp/ppower.sock PRADYOS_COMPOSITOR_OK "p" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
@@ -1947,7 +2519,13 @@ smoke-poweroff: $(IMG) fat-image sfs-image
 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
 	    -device virtio-gpu-pci \
 	    -monitor unix:/tmp/ppower.sock,server,nowait \
-	    -serial file:build/power.log -display none -no-reboot || true
+	    -serial file:build/power.log -display none -no-reboot; echo $$? > build/power.qemu_rc
+	@# PRE_LAUNCH_CHECKLIST §0 #51: the sentinels above print BEFORE the
+	@# hardware action, so they cannot tell a machine that actually went down
+	@# from one that printed and then hung until timeout(1) killed it at 120 s.
+	@# QEMU's exit status can: a guest-initiated shutdown/reset under -no-reboot
+	@# exits 0; timeout's kill is 124. Anything but 0 fails.
+	@r=$$(cat build/power.qemu_rc); [ "$$r" = 0 ] || { echo "[power] FAIL — QEMU exit status $$r (124 = timeout: the guest never left)"; tail -20 build/power.log; exit 1; }
 	@grep -q "PRADYOS_COMPOSITOR_POWEROFF" build/power.log || { echo "[power] FAIL — compositor did not issue SYS_POWEROFF"; tail -20 build/power.log; exit 1; }
 	@grep -q "PRADYOS_POWEROFF" build/power.log || { echo "[power] FAIL — kernel ACPI S5 path not reached"; tail -20 build/power.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/power.log; then echo "[power] FAIL: kernel panic"; tail -20 build/power.log; exit 1; fi
@@ -1959,7 +2537,7 @@ smoke-poweroff: $(IMG) fat-image sfs-image
 # and no panic. Only this gate sends 'b', so every other boot is unaffected.
 smoke-reboot: $(IMG) fat-image sfs-image
 	@echo "[reboot] reboot gate: boot(GPU) + sendkey b -> SYS_REBOOT -> ACPI/PC reset..."
-	@rm -f build/reboot.log /tmp/preboot.sock
+	@rm -f build/reboot.log build/reboot.qemu_rc /tmp/preboot.sock
 	@bash tools/qemu_runner/input_inject.sh build/reboot.log /tmp/preboot.sock PRADYOS_COMPOSITOR_OK "b" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
@@ -1967,7 +2545,13 @@ smoke-reboot: $(IMG) fat-image sfs-image
 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
 	    -device virtio-gpu-pci \
 	    -monitor unix:/tmp/preboot.sock,server,nowait \
-	    -serial file:build/reboot.log -display none -no-reboot || true
+	    -serial file:build/reboot.log -display none -no-reboot; echo $$? > build/reboot.qemu_rc
+	@# PRE_LAUNCH_CHECKLIST §0 #51: the sentinels above print BEFORE the
+	@# hardware action, so they cannot tell a machine that actually went down
+	@# from one that printed and then hung until timeout(1) killed it at 120 s.
+	@# QEMU's exit status can: a guest-initiated shutdown/reset under -no-reboot
+	@# exits 0; timeout's kill is 124. Anything but 0 fails.
+	@r=$$(cat build/reboot.qemu_rc); [ "$$r" = 0 ] || { echo "[reboot] FAIL — QEMU exit status $$r (124 = timeout: the guest never left)"; tail -20 build/reboot.log; exit 1; }
 	@grep -q "PRADYOS_COMPOSITOR_REBOOT" build/reboot.log || { echo "[reboot] FAIL — compositor did not issue SYS_REBOOT"; tail -20 build/reboot.log; exit 1; }
 	@grep -q "PRADYOS_REBOOT" build/reboot.log || { echo "[reboot] FAIL — kernel reset path not reached"; tail -20 build/reboot.log; exit 1; }
 	@if grep -qiE "\[panic\]|KERNEL PANIC" build/reboot.log; then echo "[reboot] FAIL: kernel panic"; tail -20 build/reboot.log; exit 1; fi
@@ -1989,6 +2573,32 @@ smoke-mouse: $(IMG) fat-image sfs-image
 	    -qmp unix:/tmp/pmouse.sock,server,nowait \
 	    -serial file:build/mouse.log -display none -no-reboot || true
 	@grep -q "\[input\] virtio pointer up" build/mouse.log || { echo "[mouse] FAIL — pointer driver did not come up"; tail -20 build/mouse.log; exit 1; }
+	@# ORDER MATTERS. This kernel-side arm runs BEFORE the PRADYOS_MOUSE_OK arm
+	@# below, and that is what keeps both of them live. mouse_ok>=1 IMPLIES
+	@# mbtn>=1, so with the ring-3 arm first the kernel one can never be the
+	@# thing that fires -- decoration, not measurement (DDR-1016 §5, 1017 §4,
+	@# 1018 §3, 1020 §5, 1023 §5, and measured again here: M1 tripped the
+	@# MOUSE_OK arm and never reached this one). Checked first, the two split
+	@# the failure cleanly: mbtn=0 means the syscall never delivered the press;
+	@# mbtn>=1 with no MOUSE_OK means it delivered and ring 3 did not act.
+	@# DDR-1026: the delivery counters, always printed, and asserted on the
+	@# KERNEL side as well as the ring-3 side. mbtn is what SYS_MOUSE_POLL
+	@# actually returned; PRADYOS_MOUSE_OK is what the compositor acted on.
+	@#
+	@# The thresholds are 1, not 5, and that is a measurement, not slack: the
+	@# injector fires all five clicks into a window in which ring 3 has polled
+	@# ZERO times (measured: btnedge=3 at mpoll=0, and the first poll of the
+	@# whole boot arrives at btnedge=5). The press-edge latch collapses those
+	@# five edges into one pending bit, so exactly one click is deliverable and
+	@# demanding more would assert something the injection timing cannot supply.
+	@# What the latch DOES guarantee is that the count is never zero, which is
+	@# the flake: without it the five presses land in a dead window and nothing
+	@# survives to be polled.
+	@mb=$$(grep -ao ' mbtn=[0-9]*' build/mouse.log | tail -1 | tr -dc '0-9'); \
+	  ok=$$(grep -ac PRADYOS_MOUSE_OK build/mouse.log); \
+	  echo "[mouse] delivery: mbtn=$${mb:-<none>} mouse_ok=$$ok (5 clicks injected)"; \
+	  [ -n "$$mb" ] || { echo "[mouse] FAIL — no heartbeat mbtn= counter in the log"; tail -20 build/mouse.log; exit 1; }; \
+	  [ "$$mb" -ge 1 ] || { echo "[mouse] FAIL — SYS_MOUSE_POLL never returned a button-down for 5 injected clicks (DDR-1026 latch)"; grep -ao 'btnedge=[0-9]* mpoll=[0-9]* mbtn=[0-9]*' build/mouse.log | tail -3; exit 1; }
 	@grep -q PRADYOS_MOUSE_OK build/mouse.log || { echo "[mouse] FAIL — click did not reach ring 3"; tail -20 build/mouse.log; exit 1; }
 	@grep -q PRADYOS_RIPPLE_OK build/mouse.log || { echo "[mouse] FAIL — no click ripple (DDR-727)"; tail -20 build/mouse.log; exit 1; }
 	@echo "[mouse] PASS — $$(grep -a PRADYOS_MOUSE_OK build/mouse.log | head -1)"
@@ -2367,7 +2977,7 @@ smoke-sfsroot: $(IMG) fat-image sfs-image
 # at ~1 KiB (5th SFS extent rejected); the 4 KiB chunk lands 8 KiB in 2 extents.
 smoke-vfs-bigwrite: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_BIGWRITE_OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_BIGWRITE_ERRNO rw=-38 ext5=-27\nPRADYOS_BIGWRITE_OK')" \
 	FORBIDDEN_SENTINEL="BIGWRITE FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
@@ -2378,11 +2988,31 @@ smoke-vfs-bigwrite: $(IMG) fat-image sfs-image
 # that does nothing fails here. It also proves ORDERING — a sovereign connect
 # to an off-allowlist port must NOT leave an AR_SOVEREIGN_BYPASS record, which
 # it would if the DDR-800 bypass ran ahead of the privacy check.
+# DDR-1070 adds PHASE 4: egress on an ALREADY-OPEN socket. Phases 1-3 all call
+# SYS_SOCK_CONNECT, so their coverage was *connect* while the feature's claim is
+# *nothing leaves* — every arm was live and none could see that privacy mode was
+# checked only in sys_sock_connect. Phase 4 uses 127.0.0.1:8007 (the in-kernel
+# echo server) because nothing routes to 192.0.2.1, so a write there returns
+# -EBADF with or without the check and an arm asserting "the write failed" would
+# be vacuous. It proves the socket LIVE via an echo round-trip first, then
+# asserts the EXACT -EPERM in both directions, then that PRIVACY_OFF restores
+# the SAME handle. PRADYOS_PRIVACY_EGRESS_OK is its sentinel.
 smoke-privacy-netfilter: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 QEMU_PROBES=privnet \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_PRIVACY_DENIED_OK\nPRADYOS_PRIVACY_AUDIT_OK')" \
+	TIMEOUT_S=120 QEMU_PROBES=privnet \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_PRIVACY_DENIED_OK\nPRADYOS_PRIVACY_EGRESS_OK\nPRADYOS_PRIVACY_AUDIT_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PRIVACYNET FAIL\nPRADYOS_SOVEREIGN_BYPASSED')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1141 DHCP + DNS gate. Non-default slirp network, so a kernel still
+# carrying the literal 10.0.2.15 (M4) cannot print arm D. Arm A's 10.77.0.99
+# exists only in the host responder's reply. Arm L is the allowlist, arm P
+# privacy mode (both halves), arm U the audit records, and arm H -- checked by
+# the wrapper against the responder's own log -- that no refused name left the
+# machine: an audit record saying "denied" cannot show that, only the far end.
+smoke-dhcpdns: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=dns \
+	EXTRA_SENTINEL="$$(printf '[net] lwIP up 10.77.0.40/24 gw=10.77.0.2 dns=10.77.0.3 via dhcp\nPRADYOS_DNS_L rc=-1 ip=0x00000000\nPRADYOS_DNS_U1 denied=1\nPRADYOS_DNS_A rc=0 ip=0x0A4D0063\nPRADYOS_DNS_U2 allowed=1\nPRADYOS_DNS_P mode=00 on=-1 onip=0x00000000 off=0 ip=0x0A4D0063')" \
+	    bash tools/ci/dhcpdns_gate.sh $(IMG)
 
 # DDR-805 SIGPIPE gate, selected per-boot by DDR-804 so the probe exists only
 # here. Discriminating on SURVIVAL, not on exit status: the kernel sets
@@ -2564,6 +3194,39 @@ smoke-acc-rotate: $(IMG) fat-image sfs-image
 smoke-ags: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=ags 	EXTRA_SENTINEL="$$(printf 'PRADYOS_AGS_VECTORS_OK')" 	FORBIDDEN_SENTINEL="AGS FAIL" 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-1052: FIPS 202 (SHA-3/SHAKE) known-answer vectors. Keccak is the
+# PREREQUISITE for ML-KEM and ML-DSA, which are mandatory v1 scope -- both are
+# built on SHAKE128/256 for expansion, sampling and hashing.
+#
+# The vectors are PINNED and were generated by Python's hashlib, an
+# implementation that is not this one. That is deliberate: a gate that hashes
+# something and compares it against its own output passes on any self-consistent
+# wrong implementation. Vectors 7-12 are the rate boundaries (SHAKE128 absorbs
+# 168 bytes per permutation, SHAKE256 absorbs 136) and 13-14 squeeze past the
+# rate -- a real pad bug that only fires when len %% rate == rate-1 passes every
+# empty/"abc" vector and is caught only by those (DDR-1052 M2).
+smoke-shake: $(IMG) fat-image sfs-image
+	TIMEOUT_S=90 QEMU_PROBES=shake \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHAKE_VECTORS_OK n=15')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_SHAKE_STUB\nSHAKE FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1054: FIPS 204 ML-DSA-44 keyGen against NIST's OWN ACVP vectors.
+#
+# The counts are REPORTED BY THE PROBE, not hard-coded here: a gate asserting a
+# literal `acvp=2` would keep passing after the vector table shrank, which is
+# the dead-arm class. mldsa.c carries a _Static_assert on the table size so a
+# regenerated header cannot silently reduce coverage either.
+#
+# p2r=10 is the Power2Round boundary arm, and it is not decoration: the ACVP
+# vectors do NOT reach r0 == 2^(D-1) -- measured, 0 hits in 2048 coefficients --
+# so a mutant flipping that comparison passes the KAT arm outright (DDR-1054 M3).
+smoke-mldsa: $(IMG) fat-image sfs-image
+	TIMEOUT_S=180 QEMU_PROBES=mldsa \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MLDSA44_KEYGEN_OK acvp=2 p2r=10\nPRADYOS_MLDSA44_SIGN_OK acvp=2 dec=12\nPRADYOS_MLDSA44_VERIFY_OK acvp=5 uh=13')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_MLDSA_STUB\nPRADYOS_MLDSA_SIGN_STUB\nPRADYOS_MLDSA_VER_STUB\nMLDSA FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-sha256: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_PROBES=sha256 \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHA256_VECTORS_OK')" \
@@ -2642,11 +3305,46 @@ smoke-sha256: $(IMG) fat-image sfs-image
 # that matters most for regressions: a chord must NOT also deliver text on
 # NSI 46, or one keypress arrives twice and Super+M flips the mode and then has
 # the plain-'m' branch force it straight back.
+# Layer-7 terminal gate (DDR-1027): boot GPU; inject Ctrl+Alt+T; the compositor
+# forks+execve's /TERM.ELF, which creates a surface, runs PRISM over a pipe pair,
+# and forwards the keys the compositor routes to it. Four arms, one per link in
+# that chain -- none implied by another (DDR-1027 §6). The trailing plain keys
+# are what arm D reads: they reach the raised terminal, not the compositor.
+smoke-ctrlaltt: $(IMG) fat-image sfs-image
+	@echo "[ctrlaltt] terminal gate: boot(GPU) + sendkey ctrl-alt-t + typed keys -> /TERM.ELF -> PRISM..."
+	@rm -f build/ctrlaltt.log /tmp/pcat.sock
+	@bash tools/qemu_runner/input_inject.sh build/ctrlaltt.log /tmp/pcat.sock \
+	    PRADYOS_AMBIANCE_OK "ctrl-alt-t alt-t u n a m e ret" &
+	@timeout 180 qemu-system-x86_64 -machine q35 -device virtio-gpu-pci \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -monitor unix:/tmp/pcat.sock,server,nowait \
+	    -serial file:build/ctrlaltt.log -display none -no-reboot || true
+	@grep -qa "PRADYOS_TERM_SPAWN pid=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm A: Ctrl+Alt+T did not reach the compositor, or fork/execve failed"; grep -a "TERM_\|boot-load" build/ctrlaltt.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_TERM_OK id=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm B: the terminal ran but could not create/map/commit its surface"; grep -a "TERM_" build/ctrlaltt.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_TERM_RX n=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm C: nothing came back from PRISM down the pipe (fork/dup2/execve path)"; grep -a "TERM_" build/ctrlaltt.log | tail -10; exit 1; }
+	@grep -qa "PRADYOS_TERM_TX ch=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm D: typed keys never reached the window (focus routing or the surface key ring)"; grep -a "TERM_\|FOCUS" build/ctrlaltt.log | tail -10; exit 1; }
+	@# Arm E, the NEGATIVE arm: is the chord actually a chord? Arms A-D all pass
+	@# on a compositor that spawns a terminal for any bare 't', which is why the
+	@# injector also sends alt-t. It cannot be checked by COUNTING spawns --
+	@# input_inject.sh replays its whole key list four times and the compositor
+	@# caps terminals at four, so both the correct build and a chord-less one
+	@# would report four. PRADYOS_TERM_CHORD carries the modifier byte of every
+	@# 't' press and whether it spawned, so the defect is named directly: a
+	@# spawn=1 whose mods lack KMOD_CTRL (0x02).
+	@grep -qa "PRADYOS_TERM_CHORD mods=" build/ctrlaltt.log || { echo "[ctrlaltt] FAIL — arm E: no PRADYOS_TERM_CHORD line; the 't' presses never reached the compositor's key ring"; grep -a "TERM_" build/ctrlaltt.log | tail -10; exit 1; }
+	@bad=$$(grep -ao "PRADYOS_TERM_CHORD mods=[0-9]* spawn=1" build/ctrlaltt.log \
+	          | awk -F'mods=' '{split($$2,a," "); if (int(a[1]) % 4 < 2) print}' | head -3); \
+	  [ -z "$$bad" ] || { echo "[ctrlaltt] FAIL — arm E: a 't' press with no Ctrl held spawned a terminal (DDR-1027 M1)"; echo "$$bad"; exit 1; }
+	@echo "[ctrlaltt] chord: $$(grep -ac 'PRADYOS_TERM_CHORD' build/ctrlaltt.log) t-press(es), $$(grep -ac 'PRADYOS_TERM_SPAWN' build/ctrlaltt.log) spawn(s)"
+	@echo "[ctrlaltt] PASS — $$(grep -a PRADYOS_TERM_OK build/ctrlaltt.log | head -1); $$(grep -a PRADYOS_TERM_RX build/ctrlaltt.log | head -1)"
+
 smoke-superkey: $(IMG) fat-image sfs-image
 	@echo "[superkey] Super+M toggle: boot(GPU) + sendkey m / meta_l-m x2 / ctrl-c..."
 	@rm -f build/superkey.log /tmp/psuper.sock
 	@bash tools/qemu_runner/input_inject.sh build/superkey.log /tmp/psuper.sock \
-	    PRADYOS_AMBIANCE_OK "m meta_l-m meta_l-m ctrl-c" &
+	    PRADYOS_AMBIANCE_OK "m meta_l-m ret meta_l-m esc meta_l-m ret ctrl-c" &
 	@timeout 120 qemu-system-x86_64 -machine q35 -device virtio-gpu-pci \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -2655,7 +3353,20 @@ smoke-superkey: $(IMG) fat-image sfs-image
 	    -serial file:build/superkey.log -display none -no-reboot || true
 	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=0 to=1" build/superkey.log || { echo "[superkey] FAIL — arm B: Super+M did not toggle Manual->Sovereign"; grep -a "SUPERKEY\|MODE" build/superkey.log | tail -10; exit 1; }
 	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=1 to=0" build/superkey.log || { echo "[superkey] FAIL — arm C: second Super+M did not toggle back (is it a toggle?)"; grep -a "SUPERKEY" build/superkey.log | tail -10; exit 1; }
-	@echo "[superkey] PASS — toggles both ways"
+	@# DDR-1147 sec.1.5 (U1): Super+M ARMS, Enter commits, Esc cancels. The
+	@# ORDERED first-round sequence is the arm that catches a no-confirm
+	@# compositor -- it still prints from=0 to=1 AND from=1 to=0, so arms B/C
+	@# alone pass it (measured: M1 in the DDR). RELATIVE to the boot mode:
+	@# the first armed target names it, because the boot default is policy
+	@# (/etc/aether/config) and not something this arm is about.
+	@seq=$$(grep -ao 'PRADYOS_MODE_CONFIRM [a-z]* to=[01]\|PRADYOS_SUPERKEY_TOGGLE from=[01] to=[01]' build/superkey.log | head -6 | tr '\n' '|'); \
+	 a=$$(printf '%s' "$$seq" | sed -n 's/^PRADYOS_MODE_CONFIRM pending to=\([01]\)|.*/\1/p'); b=$$((1 - $${a:-0})); \
+	 want="PRADYOS_MODE_CONFIRM pending to=$$a|PRADYOS_SUPERKEY_TOGGLE from=$$b to=$$a|PRADYOS_MODE_CONFIRM pending to=$$b|PRADYOS_MODE_CONFIRM cancel to=$$b|PRADYOS_MODE_CONFIRM pending to=$$b|PRADYOS_SUPERKEY_TOGGLE from=$$a to=$$b|"; \
+	 [ "$$seq" = "$$want" ] || { echo "[superkey] FAIL — arm D: confirm sequence"; echo "  got:  $$seq"; echo "  want: $$want"; exit 1; }
+	@grep -qa "PRADYOS_MODE_AUDIT found=1 prev=0 new=1" build/superkey.log || { echo "[superkey] FAIL — arm E: no kernel AR_MODE_SET record for 0->1"; grep -a MODE_AUDIT build/superkey.log | head; exit 1; }
+	@grep -qa "PRADYOS_MODE_AUDIT found=1 prev=1 new=0" build/superkey.log || { echo "[superkey] FAIL — arm E: no kernel AR_MODE_SET record for 1->0"; grep -a MODE_AUDIT build/superkey.log | head; exit 1; }
+	@python3 tools/ui/theme_check.py build/superkey.log modes
+	@echo "[superkey] PASS — confirmed toggle both ways, cancel honoured, audited, accent re-targeted"
 
 smoke-modkeys: $(IMG) fat-image sfs-image
 	@echo "[modkeys] input gate: boot + sendkey a/f1/up/ctrl-c/b -> IRQ1 -> NSI 46 + 96..."
@@ -2708,6 +3419,21 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 #   B  the runqueues are still walkable afterwards, and the boot does not #GP.
 #      sched_rq_walk_ok() inspects POINTER VALUES rather than dereferencing —
 #      a checker that faults the same way it is meant to detect is not a checker.
+# DDR-1143 §4.1: partition sub-device + MBR parser. Seven arms, each an EXACT
+# line (DDR-1044), each owned by a distinct mutant (DDR-1143 piece 1). Runs on a
+# private 256 KiB ramdisk the probe creates, so it writes nothing another gate
+# owns. The FORBIDDEN pattern names a failure instead of leaving an absence.
+smoke-part: $(IMG) fat-image sfs-image
+	@echo "[part] partition sub-device gate (DDR-1143 §4.1)..."
+	@mkdir -p build/gatelogs
+	KSHA=$$(sha256sum build/kernel.bin | cut -c1-16); KLEN=$$(stat -c %s build/kernel.bin); \
+	S0=$$(( $$(stat -c %s $(IMG)) / 512 )); S1=$$(( $$(stat -c %s build/fat.img) / 512 )); S2=$$(( $$(stat -c %s build/sfs.img) / 512 )); \
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/part.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_NO_EXT4=1 QEMU_PROBES=part,kimg,disk \
+	EXTRA_SENTINEL="$$(printf '[disk] i=0 name=virtio-blk sectors=%s flags=phys\n[disk] i=1 name=virtio-blk sectors=%s flags=phys\n[disk] i=2 name=virtio-blk sectors=%s flags=phys\n[disk] i=3 name=ramdisk sectors=512 flags=ramdisk\n[disk] i=4 name=part sectors=128 flags=part\n[disk] i=5 name=part sectors=320 flags=part\n[disk] i=6 name=trace sectors=320 flags=none\n[disk] n=7 count=7 efault=-14' "$$S0" "$$S1" "$$S2")$$(printf '\n[kimg] src=bios len=%s sha=%s\n[part] mbr n=2 ok' "$$KLEN" "$$KSHA")$$(printf '\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PART FAIL\n[kimg] refused\nKIMG FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-rqfree: $(IMG) fat-image sfs-image
 	@echo "[rqfree] TCB-freed-while-queued gate (DDR-996)..."
 	@mkdir -p build/gatelogs
@@ -2926,7 +3652,16 @@ smoke-visual: $(IMG) fat-image sfs-image
 smoke-wmclose: $(IMG) fat-image sfs-image
 	@echo "[wmclose] title + close-button gate: boot(GPU+tablet) + QMP click GAMMA's close box..."
 	@rm -f build/wmclose.log /tmp/pwmclose.sock
-	@GEOM_TITLE=GAMMA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=" &
+	@# DDR-1028: wait for PRADYOS_INPUT_READY, not PRADYOS_AMBIANCE_OK. Ambiance
+	@# is printed at compositor.c:1184 with the comment "loop is about to start"
+	@# and says nothing about the pointer being serviced. Measured on a failing
+	@# run of this very gate: ambiance at t=5500, mpoll STILL 0 at t=6000, first
+	@# poll at t=6500 -- so a full second of injected clicks went into a
+	@# compositor that had not read the pointer once. GAMMA's own 4 s grace
+	@# (surfacetest.c:209) expired inside that gap, and the 45 retries then
+	@# clicked a window that no longer existed, which this gate reported as
+	@# "close box click did not close".
+	@GEOM_TITLE=GAMMA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/wmclose.log /tmp/pwmclose.sock PRADYOS_INPUT_READY "PRADYOS_WM_CLOSE id=" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -2960,15 +3695,57 @@ smoke-wmmin: $(IMG) fat-image sfs-image
 	@grep -q PRADYOS_WM_RESTORE build/wmmin.log || { echo "[wmmin] FAIL — r did not restore"; tail -20 build/wmmin.log; exit 1; }
 	@echo "[wmmin] PASS — $$(grep -a PRADYOS_WM_MIN build/wmmin.log | head -1) + restore"
 
-# Layer-7 maximize gate (DDR-719): click B's max box -> the compositor saves
-# geometry, requests 512x512 via the event channel + moves B to (8,26)
-# (PRADYOS_WM_MAX, client PRADYOS_EV_RESIZE_OK w=512 h=512); a second injection
-# at the relocated box (keyed on the client's ack) restores (PRADYOS_WM_UNMAX).
+# Layer-7 PER-WINDOW restore gate (DDR-1008). DDR-717 shipped minimize with a
+# single restore-ALL keystroke; the dock restores one window at a time.
+#
+# THE GATE MINIMIZES TWO WINDOWS AND RESTORES ONE, and that is the whole design.
+# Minimizing one and clicking its tile would be VACUOUS: `g_min_mask = 0` --
+# DDR-717's restore-all wearing this feature's name -- passes it. The load-bearing
+# assertion is the LAST one: after restoring BETA, the dock must still list
+# exactly one tile and it must be ALPHA. A restore-all implementation publishes
+# `n=0` there and fails. (Same vacuity shape as DDR-973 §6's chain-repeat mutant.)
+#
+# Coordinates come from what the compositor published (§INV.5): `min=` out of
+# PRADYOS_WM_GEOM for the two min-box clicks, `tile=` out of PRADYOS_WM_DOCK for
+# the dock click -- the latter via GEOM_LINE, added to mouse_inject.sh in the
+# same commit and defaulting to the literal it used to hardcode.
+smoke-perrestore: $(IMG) fat-image sfs-image
+	@echo "[perrestore] dock gate: minimize BETA + ALPHA, restore ONLY BETA from its tile..."
+	@rm -f build/perrestore.log /tmp/pperr.sock
+	@GEOM_TITLE=BETA GEOM_FIELD=min bash tools/qemu_runner/mouse_inject.sh build/perrestore.log /tmp/pperr.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_MIN id=1" &
+	@GEOM_TITLE=ALPHA GEOM_FIELD=min bash tools/qemu_runner/mouse_inject.sh build/perrestore.log /tmp/pperr.sock "PRADYOS_WM_MIN id=1" "PRADYOS_WM_DOCK n=2" &
+	@GEOM_LINE=PRADYOS_WM_DOCK GEOM_TITLE=BETA GEOM_FIELD=tile bash tools/qemu_runner/mouse_inject.sh build/perrestore.log /tmp/pperr.sock "PRADYOS_WM_DOCK n=2" "PRADYOS_WM_UNMIN id=1" &
+	@timeout 150 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device virtio-gpu-pci -device virtio-tablet-pci \
+	    -qmp unix:/tmp/pperr.sock,server,nowait \
+	    -serial file:build/perrestore.log -display none -no-reboot || true
+	@grep -q "PRADYOS_WM_MIN id=1" build/perrestore.log || { echo "[perrestore] FAIL — BETA never minimized"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_MIN id=0" build/perrestore.log || { echo "[perrestore] FAIL — ALPHA never minimized"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_DOCK n=2" build/perrestore.log || { echo "[perrestore] FAIL — dock never listed both minimized windows"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_UNMIN id=1" build/perrestore.log || { echo "[perrestore] FAIL — dock tile click did not restore BETA"; tail -20 build/perrestore.log; exit 1; }
+	@grep -q "PRADYOS_WM_DOCK n=1 id=0 title=ALPHA" build/perrestore.log || { echo "[perrestore] FAIL — restoring BETA did not leave ALPHA minimized (restore-all, not per-window)"; grep -a PRADYOS_WM_DOCK build/perrestore.log | tail -8; exit 1; }
+	@echo "[perrestore] PASS — $$(grep -a PRADYOS_WM_UNMIN build/perrestore.log | head -1), ALPHA still docked"
+
+# Layer-7 maximize gate (DDR-719, retargeted by DDR-1007): click B's max box ->
+# the compositor saves geometry, requests the WORK AREA via the event channel
+# and moves B there (PRADYOS_WM_MAX id=1 w=W h=H, client PRADYOS_EV_RESIZE_OK
+# w=W h=H); a second injection at the relocated box (keyed on the client's ack)
+# restores (PRADYOS_WM_UNMAX).
+#
+# DDR-1007 §5: the size assertion reads W/H OUT OF the compositor's own
+# PRADYOS_WM_MAX line rather than hardcoding them (§INV.5). That is strictly
+# stronger than the old `w=512 h=512` grep: it checks the owner honoured the
+# size actually requested, where before it checked the owner printed a number
+# the gate already knew. A compositor asking 798 and a client acking 512 passed
+# the old form and fails this one.
 smoke-wmmax: $(IMG) fat-image sfs-image
 	@echo "[wmmax] maximize gate: boot(GPU+tablet) + QMP max-box click + restore click..."
 	@rm -f build/wmmax.log /tmp/pwmmax.sock
 	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock PRADYOS_AMBIANCE_OK &
-	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=512" &
+	@GEOM_TITLE=BETA GEOM_FIELD=mx bash tools/qemu_runner/mouse_inject.sh build/wmmax.log /tmp/pwmmax.sock "PRADYOS_EV_RESIZE_OK w=" &
 	@timeout 120 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -2976,8 +3753,13 @@ smoke-wmmax: $(IMG) fat-image sfs-image
 	    -device virtio-gpu-pci -device virtio-tablet-pci \
 	    -qmp unix:/tmp/pwmmax.sock,server,nowait \
 	    -serial file:build/wmmax.log -display none -no-reboot || true
-	@grep -q "PRADYOS_WM_MAX id=1" build/wmmax.log || { echo "[wmmax] FAIL — max box click did not maximize"; tail -20 build/wmmax.log; exit 1; }
-	@grep -q "PRADYOS_EV_RESIZE_OK w=512 h=512" build/wmmax.log || { echo "[wmmax] FAIL — client did not honor maximize"; tail -20 build/wmmax.log; exit 1; }
+	@grep -q "PRADYOS_WM_MAX id=1 w=" build/wmmax.log || { echo "[wmmax] FAIL — max box click did not maximize"; tail -20 build/wmmax.log; exit 1; }
+	@set -e; \
+	 wh=$$(grep -ao "PRADYOS_WM_MAX id=1 w=[0-9][0-9]* h=[0-9][0-9]*" build/wmmax.log | head -1); \
+	 w=$${wh##*w=}; w=$${w%% *}; h=$${wh##*h=}; \
+	 echo "[wmmax] compositor asked for $${w}x$${h}"; \
+	 test "$$w" -gt 512 || { echo "[wmmax] FAIL — maximize target $${w}x$${h} did not exceed the OLD SURFACE_DIM_MAX cap of 512; DDR-1007 did not take effect"; exit 1; }; \
+	 grep -q "PRADYOS_EV_RESIZE_OK w=$$w h=$$h" build/wmmax.log || { echo "[wmmax] FAIL — client did not honor maximize (compositor asked $${w}x$${h})"; tail -20 build/wmmax.log; exit 1; }
 	@grep -q "PRADYOS_WM_UNMAX id=1" build/wmmax.log || { echo "[wmmax] FAIL — restore click did not un-maximize"; tail -20 build/wmmax.log; exit 1; }
 	@echo "[wmmax] PASS — $$(grep -a PRADYOS_WM_UNMAX build/wmmax.log | head -1)"
 
@@ -3022,6 +3804,85 @@ smoke-evresize: $(IMG) fat-image sfs-image
 # (x+w == x0+w0), which is what §4's clamp-before-origin rule buys. A gate that
 # only checked "the width changed" would pass both the M1 mutant (resize without
 # the move) and the M2 mutant (clamp after deriving the origin) — DDR-997 §7.
+# DDR-1042: a meta-test for resize_check.py, in the spirit of smoke-selftest.
+# The checker is the thing that decides whether smoke-resizeall passes, and it
+# had a defect (arm contamination, CI run 33623855907) that no amount of running
+# the gate could reveal -- the gate reported a real-looking failure about a
+# compositor that had behaved correctly. Fixtures are cheap, need no QEMU, and
+# pin BOTH directions: the contaminated log must now pass, and the M1/M2/dead-arm
+# logs must still fail. Without the negative fixtures, "make the failure go away"
+# and "fix the checker" are indistinguishable.
+# DDR-1045: fixtures for apt_prepare.sh's classifier. It exists because the
+# first version of that script BROKE EVERY CI JOB -- it deleted
+# /etc/apt/sources.list.d/* on the assumption that the Ubuntu archives live in
+# /etc/apt/sources.list, which is false on Ubuntu 24.04 (noble ships them as
+# deb822 at sources.list.d/ubuntu.sources). Nothing local could have caught
+# that, so now something can.
+ci-aptprepare-selftest:
+	@bash tools/ci/apt_prepare_selftest.sh
+
+# DDR-1048: prove the local runner-environment sandbox can still tell a broken
+# apt sources tree from a good one. If it ever stops discriminating, every
+# "verified locally" claim made with it is worthless.
+ci-runnerenv-selftest:
+	@bash tools/ci/runner_env.sh selftest
+
+# DDR-1063: the LIVE-STATE tables (CLAUDE.md CURRENT BUILD STATE and the
+# checklist's release-gate table) state kernel.bin's size and its headroom
+# side by side. The size was updated as ML-DSA landed and the subtraction
+# beside it was not, so CLAUDE.md overstated the remaining budget by
+# 102,400 B -- in the one file sessions are told to trust WITHOUT
+# re-deriving. The size gate above checks the BINARY against the ceiling
+# and says nothing about what the docs claim, so every gate stayed green.
+# This asserts internal consistency only (size + headroom == ceiling); it
+# deliberately does NOT require the doc to track every build -- see
+# DDR-1063 5.1 for why that check would have been worse than none.
+ci-docstate-check:
+	@python3 tools/ci/docstate_check.py
+
+# DDR-1147 sec.1.5: user/theme_palette.h is GENERATED from the committed
+# reference PNGs. Regenerate and compare: a hand edit, a changed threshold or a
+# changed resolution rule all fail here, not three gates away.
+ci-palette-check:
+	@mkdir -p build
+	@python3 tools/ui/png_palette.py header build/theme_palette.check.h >/dev/null
+	@cmp -s build/theme_palette.check.h user/theme_palette.h || { echo "[palette] FAIL — user/theme_palette.h differs from what tools/ui/png_palette.py generates; regenerate it, do not hand-edit"; diff build/theme_palette.check.h user/theme_palette.h | head -20; exit 1; }
+	@echo "[palette] OK — theme_palette.h matches the generator"
+
+# DDR-1077: DDR-1075 sec.3 measured that this kernel has NO cross-CPU TLB
+# invalidation, and that the absence is CORRECT today because no two threads
+# share an address space. Group D's pthread / clone(CLONE_VM) row DELETES that
+# premise, after which every vmm_unmap and vmm_protect_range leaves a stale
+# writable translation on another CPU -- and DDR-1075 sec.3.2 recorded that
+# nothing in the tree would notice. The warning lived only in a document. This
+# pins the set of ->cr3 assignment sites (the actual carrier of the premise,
+# not the CLONE_VM spelling) per FILE and COUNT, and fails only when that set
+# changes AND no shootdown exists -- so the correct ordering, prerequisite
+# first, is permitted. It is a tripwire, not a verdict. The selftest is what
+# proves it can still fire: a guard on a healthy tree is quiet forever.
+ci-cr3-writers-check:
+	@bash tools/ci/cr3_writers_check.sh
+	@bash tools/ci/cr3_writers_selftest.sh
+
+# DDR-1135: the OPEN-2 hunt's signal printer runs only when a lane finds
+# something, i.e. almost never and only in CI, so a defect in it cannot show up
+# in a green run. Fixture reproduces lane 12's geometry; M1/M2/M3 each fail
+# their own set of arms.
+ci-huntprint-selftest:
+	@bash tools/ci/hunt_print_selftest.sh
+
+ci-resizecheck-selftest:
+	@d=tools/qemu_runner/testdata; rc=0; \
+	  python3 tools/qemu_runner/resize_check.py $$d/resize_crossarm_pass.log 1 e s w n >/dev/null 2>&1 \
+	    || { echo "resizecheck-selftest FAIL: the cross-arm log (real CI capture, shard 9 of 87321b0) must PASS"; rc=1; }; \
+	  for f in resize_m1_w resize_m2_e resize_dead_e; do \
+	    if python3 tools/qemu_runner/resize_check.py $$d/$$f.log 1 e s w n >/dev/null 2>&1; then \
+	      echo "resizecheck-selftest FAIL: $$f must be REJECTED but passed"; rc=1; \
+	    fi; \
+	  done; \
+	  [ $$rc -eq 0 ] && echo "resizecheck-selftest OK — 1 must-pass + 3 must-fail fixtures"; \
+	  exit $$rc
+
 smoke-resizeall: $(IMG) fat-image sfs-image
 	@echo "[resizeall] all-edges resize gate: boot(GPU+tablet) + QMP E/S/W/N drags..."
 	@rm -f build/resizeall.log build/resizeall.log.skipped /tmp/prsall.sock
@@ -3075,7 +3936,52 @@ smoke-surfclose: $(IMG) fat-image sfs-image
 	    -qmp unix:/tmp/psfcl.sock,server,nowait \
 	    -serial file:build/surfclose.log -display none -no-reboot || true
 	@python3 tools/qemu_runner/surfclose_check.py build/surfclose.log || { echo "--- close/geom lines ---"; grep -aE "PRADYOS_WM_GEOM|PRADYOS_WM_CLOSE|PRADYOS_SURF_SAVED|PRADYOS_MOUSE_OK|PRADYOS_SURFACE_GONE" build/surfclose.log || echo "(none)"; exit 1; }
-	@echo "[surfclose] PASS — ALPHA saved then self-closed; BETA was forced at the deadline"
+	@# DDR-1036 arm. This gate destroys three surfaces, so it is the one place
+	@# PRADYOS_WM_GONE is emitted deterministically -- measured: ALPHA(0),
+	@# GAMMA(2), BETA(1), all three, every run. Asserting it here is what makes
+	@# the compositor half of DDR-1036 testable at all: without this line the
+	@# print could be deleted outright and every gate would stay green, which is
+	@# the dead-arm class this project has hit repeatedly. NOTE what this does
+	@# NOT cover -- see DDR-1036 §5.1: no gate points the INJECTOR at a ghost,
+	@# so the parser's refusal path is still unexercised.
+	@grep -aq "PRADYOS_WM_GONE .*title=ALPHA" build/surfclose.log || { 	    echo "[surfclose] FAIL — no PRADYOS_WM_GONE for ALPHA (DDR-1036)"; 	    grep -a "PRADYOS_WM_GONE" build/surfclose.log || echo "(no WM_GONE lines at all)"; exit 1; }
+	@echo "[surfclose] PASS — ALPHA saved then self-closed; BETA was forced at the deadline; WM_GONE published"
+
+# DDR-1036 §5.1 — the arm smoke-surfclose CANNOT provide.
+#
+# surfclose covers the compositor half (it asserts PRADYOS_WM_GONE is
+# published). It cannot cover the PARSER half, because its injector targets
+# ALPHA while ALPHA is still there — every existing pointer gate is built to
+# click a window that exists, which is exactly why DDR-1036 §5 was wrong to
+# claim an existing gate already covered this.
+#
+# The scenario is made deterministic by the readiness sentinel rather than by
+# timing: the injector's third argument is what it waits for before resolving,
+# and here that is `PRADYOS_WM_GONE id=0 title=ALPHA` — the line the compositor
+# actually prints, id field included: the injector does a LITERAL substring
+# match, so a sentinel with the id elided never fires. That exact mistake made
+# the first run of this gate fail, which is the gate working. So it starts at the instant
+# ALPHA is *confirmed gone*. Its very first resolve must therefore hit a ghost.
+# No sleeps, no grace window, no dependence on how fast the compositor is
+# (DDR-1029 measured that at ~28 s, which is why a timing-based version of this
+# gate would be a coin flip).
+#
+# ASSERTED ON THE INJECTOR'S OWN OUTPUT FILE, captured explicitly. The refusal
+# is printed by mouse_inject.sh to stdout, NOT to the serial log — and grepping
+# the wrong file is how DDR-1023, and DDR-1036 §5.1, each recorded a vacuous
+# measurement. The serial-log assertion below is separate and checks that the
+# scenario actually happened.
+smoke-ghostclick: $(IMG) fat-image sfs-image
+	@echo "[ghostclick] ghost-target gate: injector starts AFTER ALPHA is gone; it must refuse to click..."
+	@rm -f build/ghostclick.log build/ghostclick.inject.log build/ghostclick.close.log /tmp/pghost.sock
+	@# TWO injectors, sequential, and the first is not optional. The first draft of this gate had only the ghost injector and could never have worked: in this scenario ALPHA becomes a ghost BECAUSE an injector clicks its close box, so with only the waiting injector nothing ever closed ALPHA and the sentinel could not fire. The thing that creates the ghost is the click the gate is about to refuse to make.
+	@( GEOM_TITLE=ALPHA GEOM_FIELD=close bash tools/qemu_runner/mouse_inject.sh build/ghostclick.log /tmp/pghost.sock PRADYOS_AMBIANCE_OK "PRADYOS_WM_CLOSE id=0 owner=1" > build/ghostclick.close.log 2>&1; GEOM_TITLE=ALPHA GEOM_FIELD=close INJECT_TIMEOUT_S=25 READY_TIMEOUT_S=60 bash tools/qemu_runner/mouse_inject.sh build/ghostclick.log /tmp/pghost.sock "PRADYOS_WM_GONE id=0 title=ALPHA" > build/ghostclick.inject.log 2>&1 ) &
+	@timeout 180 qemu-system-x86_64 -machine q35 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 	    -device virtio-gpu-pci -device virtio-tablet-pci 	    -qmp unix:/tmp/pghost.sock,server,nowait 	    -serial file:build/ghostclick.log -display none -no-reboot || true
+	@wait
+	@grep -aq "PRADYOS_WM_GONE .*title=ALPHA" build/ghostclick.log || { 	    echo "[ghostclick] FAIL — the scenario never happened: no WM_GONE for ALPHA"; 	    grep -a "PRADYOS_WM_GONE" build/ghostclick.log || echo "(no WM_GONE lines at all)"; exit 1; }
+	@grep -aq "target gone title=ALPHA" build/ghostclick.inject.log || { 	    echo "[ghostclick] FAIL — injector did NOT refuse a ghost target (DDR-1036 parser half)"; 	    echo "--- injector output ---"; cat build/ghostclick.inject.log; exit 1; }
+	@grep -aq "geometry for ALPHA" build/ghostclick.inject.log && { 	    echo "[ghostclick] FAIL — injector RESOLVED a dead window and would have clicked it"; 	    echo "--- injector output ---"; cat build/ghostclick.inject.log; exit 1; } || true
+	@echo "[ghostclick] PASS — ALPHA gone, injector refused, no geometry resolved for a ghost"
 
 # Layer-7 backdrop gate (DDR-716): the settled per-ambiance backdrops (DAY mesh
 # nodes, DUSK sun-bloom, NIGHT nebulas) render on the demo cycle's settled
@@ -3085,12 +3991,360 @@ smoke-backdrop: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_BACKDROP DAY\nPRADYOS_BACKDROP DUSK\nPRADYOS_BACKDROP NIGHT\nPRADYOS_BACKDROP_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# Section 3C ACTION_READ_FILE gate (DDR-1015). The probe PROPOSES the action,
+# waits for the kernel's verdict, and only then opens and reads the file -- the
+# authority split ADR-026 is built on: the agent never acts on its own say-so.
+#
+# THE ASSERTION INCLUDES THE CONTENT, not just the OK line. A probe that skipped
+# the read entirely could still print PRADYOS_ACTIONREAD_OK; it could not print
+# the byte it claims to have read. `first=P` is the first character of
+# /HELLO.TXT on the FAT image, so the gate fails if the read never happened or
+# returned the wrong file. DDR-1013 §2.1 is the spec this follows.
+smoke-actionread: $(IMG) fat-image sfs-image
+	@rm -f build/actionread.log
+	@SERIAL_LOG=build/actionread.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actionread \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONREAD_OK id=')" \
+	FORBIDDEN_SENTINEL="ACTIONREAD FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONREAD_OK id=[0-9]* n=[0-9]* first=." build/actionread.log | head -1); \
+	 test -n "$$ln" || { echo "[actionread] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actionread] $$ln"; \
+	 n=$${ln##*n=}; n=$${n%% *}; first=$${ln##*first=}; \
+	 test "$$n" -gt 0 || { echo "[actionread] FAIL — approved read returned $$n bytes"; exit 1; }; \
+	 test "$$first" = "P" || { echo "[actionread] FAIL — first byte '$$first', expected 'P' from /HELLO.TXT; the read did not happen or hit the wrong file"; exit 1; }
+	@echo "[actionread] PASS — proposed, approved, then read"
+
+# Section 3C ACTION_DELETE_FILE gate (DDR-1016). The FIRST force-pending type,
+# so this gate asserts the OPPOSITE of smoke-actionread above: the verdict must
+# STAY PENDING and the file must SURVIVE.
+#
+# THREE numbers, and all three are load-bearing:
+#   st=1    AE_PENDING. aether_action_forces_pending() keeps DELETE_FILE out of
+#           sovereign-mode auto-approval (DDR-842 S4), and there is no approver
+#           in this boot. st=2 would mean the force-pending list stopped working;
+#           st=4 would mean the action EXPIRED instead, which is a different
+#           fact and is reported as its own number rather than folded into
+#           "not approved".
+#   ctrl=1  THE CONTROL. The probe deleted a second file, /ADELCTRL, outright
+#           through the same SYS_UNLINK, with no action involved. Without this,
+#           a broken unlink would make keep=1 true for the wrong reason and the
+#           gate would measure nothing.
+#   keep=1  The target /ADELKEEP is still there. This is the ORDERING evidence
+#           DDR-1015 §5 recorded as unmeasured: a read leaves no trace, so
+#           act-then-ask and ask-then-act print the same line for READ_FILE. A
+#           delete does leave a trace, so here the two orders differ in the
+#           filesystem and the gate can see which one happened.
+# DDR-1031: SYS_MPROTECT (NSI 97). Four arms; arm B forks so the CHILD takes the
+# fault (a write to a read-only page is fatal, so an in-process probe would die
+# printing nothing). The probe protects BEFORE forking on purpose: fork COWs only
+# WRITABLE pages (vmm_cow.c:87-92), so a read-only page is shared verbatim and
+# the child's store is a genuine protection violation rather than a COW fault.
+# DDR-1032: SYS_EXECVE argv/envp marshalling. The launcher execve's
+# /ARGTEST.ELF with three argv entries and one envp entry; the receiver is in
+# assembly because argc/argv/envp arrive on the stack at entry. The arms assert
+# ORDER and COUNT, not merely that strings arrived: argc=3 plus each value on its
+# own line, so a marshaller that reversed or truncated a vector reads differently.
+# DDR-1033: the ring-3 IPC door (NSI 98/99). The kernel spawns the probe TWICE,
+# once with the door granted and once without, because `is_ipc` is a per-process
+# flag and one process cannot exercise both paths. Both `rc=0` and `rc=-1` must
+# appear: without the refused arm the gate could be hardcoded open and every
+# other assertion would still pass.
+smoke-sendipc: $(IMG) fat-image sfs-image
+	@rm -f build/ipc.log
+	@SERIAL_LOG=build/ipc.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=ipc \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_IPC_GATE rc=0\nPRADYOS_IPC_GATE rc=-1\nPRADYOS_IPC_SLOT rc=-22\nPRADYOS_IPC_RT w0=11 w3=44\nPRADYOS_IPC_OK\nPRADYOS_IPCACT_A st=2 sent=1 rc=0 back=0x00000000A71C0001\nPRADYOS_IPCACT_B st=1 pst=1 sent=0 rc=-110\nPRADYOS_IPCACT_OK')" \
+	FORBIDDEN_SENTINEL="IPCTEST FAIL|ACTIONIPC FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[sendipc] PASS — $$(grep -a PRADYOS_IPC_RT build/ipc.log | head -1)"
+
+# DDR-1034: the bounded experiment executor. Five arms, and the sentinel list is
+# where each bound is asserted BY VALUE rather than by absence:
+#   CALC rc=0 v=42 -- a real computation ran (6*7 in the machine, not a stub)
+#   GATE rc=0 AND rc=-1 -- both spawns; the deny side holds CAP_EXEC and lacks
+#     only is_exec, so a mutant that drops the is_exec check turns -1 into 0
+#   LOOP rc=-40 (-ELOOP) -- the step cap was REACHED, which only EXP_JNZ makes
+#     possible; without it the cap would be a bound whose only reachable value
+#     is the passing one
+#   OVF rc=-75 (-EOVERFLOW) -- operand-stack bound
+#   REC st=0 v=42 steps=4 -- the store holds what the KERNEL computed
+smoke-runexp: $(IMG) fat-image sfs-image
+	@rm -f build/runexp.log
+	@SERIAL_LOG=build/runexp.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=exp \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_EXP_CALC rc=0 v=42\nPRADYOS_EXP_GATE rc=0\nPRADYOS_EXP_GATE rc=-1\nPRADYOS_EXP_LOOP rc=-40\nPRADYOS_EXP_OVF rc=-75\nPRADYOS_EXP_REC rc=0 st=0 v=42 steps=4\nPRADYOS_EXP_OK\nPRADYOS_EXPACT_A st=2 ran=1 rc=0 v=42\nPRADYOS_EXPACT_B st=1 pst=1 ran=0 rc=0 v=0\nPRADYOS_EXPACT_OK')" \
+	FORBIDDEN_SENTINEL="EXPTEST FAIL|ACTIONEXP FAIL|PRADYOS_EXPACT_B .* v=97" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[runexp] PASS — $$(grep -a PRADYOS_EXP_REC build/runexp.log | head -1)"
+
+# DDR-1149: CAP_OCR / CAP_SCENE / CAP_NET_BROWSE, enforced at action submission
+# (operator decision 6). Four roles, EXACT lines (DDR-1044): NODOOR lacks only
+# the flag, NOCAP only the capability, so each layer fails alone (DDR-1033);
+# DOORX (OCR door, all caps) and CAPX (all doors, OCR cap) each narrow ONE
+# layer per type -- one role narrowing both let a wrong flag mapping pass
+# (DDR-1149 sec.4.1, M3 measured); child= covers
+# the second submit path (NSI 92). -1 is -EPERM.
+smoke-domcap: $(IMG) fat-image sfs-image
+	@rm -f build/domcap.log
+	@SERIAL_LOG=build/domcap.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=domcap \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_DOMCAP role=GRANT ocr=ok scene=ok browse=ok child=ok\nPRADYOS_DOMCAP role=NODOOR ocr=-1 scene=-1 browse=-1 child=-1\nPRADYOS_DOMCAP role=NOCAP ocr=-1 scene=-1 browse=-1 child=-1\nPRADYOS_DOMCAP role=DOORX ocr=ok scene=-1 browse=-1 child=ok\nPRADYOS_DOMCAP role=CAPX ocr=ok scene=-1 browse=-1 child=ok')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[domcap] PASS -- 5 roles, each layer and each per-type mapping held"
+
+# DDR-1150: SYS_LEDGER -- the audit head signed with a per-install ML-DSA-44 key
+# (DDR-1059 Route 3). THREE boots, and each arm names what it catches:
+#   A/B/C  tools/ci/ledger_verify.py, off-box, INDEPENDENT Python verify: both
+#          heads verify; written advances and the head changes across an audited
+#          event (a constant-head kernel fails B); a tampered copy is rejected
+#          (a say-yes verifier fails C).
+#   D      exact refusals: SIGN before KEYGEN -ENOKEY, second KEYGEN -EEXIST, the
+#          non-sovereign PLAIN process -EPERM on every op.
+#   E      boot 2 prints a DIFFERENT pk: a key baked into the image (DDR-1059
+#          sec.2's theatre) prints the same pk twice and fails here alone.
+#   F      boot 3 has NO entropy source: KEYGEN must fail closed with -EIO. A
+#          silent fallback to any constant seed would succeed and fail here.
+LEDGER_SOV  = PRADYOS_LEDGER_SOV nokey=-126 keygen=0 again=-17 pk=1312 s1=58 ev=0 s2=58
+LEDGER_PLN  = PRADYOS_LEDGER_PLAIN keygen=-1 pk=-1 sign=-1
+LEDGER_NORNG = PRADYOS_LEDGER_SOV nokey=-126 keygen=-5 again=-5 pk=-126 s1=-126 ev=0 s2=-126
+smoke-ledger: $(IMG) fat-image sfs-image
+	@rm -f build/ledger1.log build/ledger2.log build/ledger3.log
+	@for b in 1 2; do \
+	  SERIAL_LOG=build/ledger$$b.log KEEP_SERIAL=1 TIMEOUT_S=150 QEMU_PROBES=ledger QEMU_RNG=1 \
+	  EXTRA_SENTINEL="$$(printf '$(LEDGER_SOV)\n$(LEDGER_PLN)')" \
+	      bash tools/qemu_runner/boot_test.sh $(IMG) || exit 1; \
+	  python3 tools/ci/ledger_verify.py build/ledger$$b.log || exit 1; \
+	done
+	@f1=$$(python3 tools/ci/ledger_verify.py build/ledger1.log fp); \
+	 f2=$$(python3 tools/ci/ledger_verify.py build/ledger2.log fp); \
+	 [ -n "$$f1" ] && [ "$$f1" != "$$f2" ] || { echo "[ledger] FAIL -- arm E: both boots printed pk $$f1 -- the key is not per-keygen"; exit 1; }; \
+	 echo "[ledger] arm E: pk $$f1 != $$f2"
+	@SERIAL_LOG=build/ledger3.log KEEP_SERIAL=1 TIMEOUT_S=150 QEMU_PROBES=ledger \
+	EXTRA_SENTINEL="$$(printf '$(LEDGER_NORNG)\n$(LEDGER_PLN)')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[ledger] PASS -- off-box verify, chain-bound heads, exact refusals, per-keygen pk, fail-closed keygen"
+
+# DDR-1037: POSIX poll(). The sentinel list asserts VALUES, not presence:
+#   EMPTY n=0        -- an empty pipe is not readable
+#   IN n=1 rev=1     -- after a write it is, and revents carries POLLIN
+#   NVAL n=1 rev=32  -- a bad fd is POLLNVAL, which is the arm a silent
+#                       "return 0 for anything I do not recognise" would fail
+#   FILE n=1 rev=5   -- POLLIN|POLLOUT on a regular file. This one is a
+#                       CORRECTNESS check: the pre-DDR-1037 predicate returned 0
+#                       for FD_VFS, so epoll_wait on a file answered wrongly too.
+#   TMO n=0 waited=  -- the timeout elapsed. Asserted as elapsed SECONDS rather
+#                       than as "returned 0", because a poll() that ignored its
+#                       timeout would also return 0 (DDR-1037 §5).
+smoke-poll: $(IMG) fat-image sfs-image
+	@rm -f build/poll.log
+	@SERIAL_LOG=build/poll.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=poll \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_POLL_EMPTY n=0\nPRADYOS_POLL_IN n=1 rev=1\nPRADYOS_POLL_NVAL n=1 rev=32\nPRADYOS_POLL_FILE n=1 rev=5\nPRADYOS_POLL_TMO n=0 waited=\nPRADYOS_POLL_OK')" \
+	FORBIDDEN_SENTINEL="POLLTEST FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -aq "PRADYOS_POLL_TMO n=0 waited=0" build/poll.log && { \
+	    echo "[poll] FAIL — the 2 s timeout did not elapse (waited=0): poll() is ignoring it"; exit 1; } || true
+	@echo "[poll] PASS — $$(grep -a PRADYOS_POLL_TMO build/poll.log | head -1)"
+
+smoke-execve-argv: $(IMG) fat-image sfs-image
+	@rm -f build/argv.log
+	@SERIAL_LOG=build/argv.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=argv \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ARGV_ALIGN=ok\nPRADYOS_ARGC=3\nPRADYOS_ARGV=argtest\nPRADYOS_ARGV=alpha\nPRADYOS_ARGV=beta\nPRADYOS_ENVP=PRADYOSVAR=set\nPRADYOS_ARGV_OK')" \
+	FORBIDDEN_SENTINEL="ARGVTEST FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[execve-argv] PASS — $$(grep -a PRADYOS_ARGC build/argv.log | head -1)"
+
+smoke-mprotect: $(IMG) fat-image sfs-image
+	@rm -f build/mprotect.log
+	@SERIAL_LOG=build/mprotect.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=mprotect \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MPROT_RO rc=0\nPRADYOS_MPROT_ENFORCED st=\nPRADYOS_MPROT_RESTORED rc=0 val=\nPRADYOS_MPROT_WX rc=\nPRADYOS_MPROT_COW rc=\nPRADYOS_MPROT_OK')" \
+	FORBIDDEN_SENTINEL="MPROT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[mprotect] PASS — $$(grep -a PRADYOS_MPROT_ENFORCED build/mprotect.log | head -1)"
+
+# DDR-1090: SIGKILL vs a thread blocked in an unbounded kernel wait.
+#
+# TWO ARMS, and the second exists because the first cannot discriminate alone.
+#   required  PRADYOS_KILLBLOCK_CHILD blocking  -- the child REACHED the wait.
+#   forbidden reaped=-                          -- the kill was DEFERRED.
+# Without the child marker, "the kill was deferred" and "the fork lost the race
+# to print" produce the same result and the gate would name the wrong thing.
+#
+# THE FORBIDDEN ARM'S FIRST FORM WAS VACUOUS AND RUNNING IT IS WHAT CAUGHT IT
+# (DDR-1090 §4.1): it forbade `reaped=0`, and this kernel does not answer 0 --
+# sys_wait.c:62 returns -EAGAIN for "children exist, none exited yet", so the
+# pre-fix capture reads `reaped=-11` and the gate went GREEN on the very tree
+# whose defect it exists to catch. `reaped=-` covers every negative, so it is
+# robust to WHICH errno the kernel picks rather than to one guess about it.
+#
+# The positive half cannot be written as a required substring, because `reaped=`
+# carries a PID: pinning an exact value (DDR-1044) would pin a scheduling
+# artefact, so the forbidden form is the only honest way to assert it. Per
+# DDR-1043 a FORBIDDEN_SENTINEL disables the DDR-785 early exit and this gate
+# runs its full window BY DESIGN -- stated rather than discovered.
+smoke-killblock: $(IMG) fat-image sfs-image
+	@rm -f build/killblock.log
+	@SERIAL_LOG=build/killblock.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=killblock \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_KILLBLOCK_CHILD blocking\nPRADYOS_KILLBLOCK child=')" \
+	FORBIDDEN_SENTINEL="$$(printf 'KILLBLOCK FAIL\nreaped=-')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[killblock] PASS — $$(grep -a PRADYOS_KILLBLOCK build/killblock.log | tail -1)"
+
+smoke-actiondel: $(IMG) fat-image sfs-image
+	@rm -f build/actiondel.log
+	@SERIAL_LOG=build/actiondel.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actiondel \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONDEL_OK id=')" \
+	FORBIDDEN_SENTINEL="ACTIONDEL FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONDEL_OK id=[0-9]* st=-*[0-9]* ctrl=[0-9]* keep=[0-9]*" build/actiondel.log | head -1); \
+	 test -n "$$ln" || { echo "[actiondel] FAIL — no measured line in the capture"; \
+	   echo "  DDR-1056: dump what IS there. A spliced line and a probe that never"; \
+	   echo "  ran look identical from a bare failure message, which is exactly why"; \
+	   echo "  the c8c93ed CI log could not settle which one happened."; \
+	   grep -a "PRADYOS_ACTIONDEL" build/actiondel.log || echo "  (no PRADYOS_ACTIONDEL lines at all)"; \
+	   exit 1; }; \
+	 echo "[actiondel] $$ln"; \
+	 st=$${ln##* st=}; st=$${st%% *}; \
+	 ctrl=$${ln##* ctrl=}; ctrl=$${ctrl%% *}; \
+	 keep=$${ln##* keep=}; \
+	 test "$$ctrl" = "1" || { echo "[actiondel] FAIL — control unlink did not remove /ADELCTRL, so keep= proves nothing"; exit 1; }; \
+	 test "$$st" = "1" || { echo "[actiondel] FAIL — verdict st=$$st, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
+	 test "$$keep" = "1" || { echo "[actiondel] FAIL — /ADELKEEP was deleted on a PENDING action; the agent acted on its own say-so"; exit 1; }
+	@echo "[actiondel] PASS — force-pending, and the unapproved delete did not happen"
+
+# Section 3C ACTION_SPAWN_PROCESS gate (DDR-1017). Force-pending like
+# smoke-actiondel, but the effect is asked of the KERNEL rather than the
+# filesystem: `wait4(-1, &st, WNOHANG)` walks the real thread ring.
+#
+#   ctrl=1    THE CONTROL. The probe forked a child of its own, no action
+#             involved, and reaped it -- pid AND exit status both matched.
+#             Without this, post=-10 would also be what a broken fork produces,
+#             and M1 would pass.
+#   st=1      AE_PENDING. SPAWN_PROCESS is in aether_action_forces_pending()
+#             (DDR-842 S4) and there is no approver in a gate boot.
+#   post=-10  -ECHILD: this process has NO children. -11 (-EAGAIN, a child
+#             exists and has not exited) and any positive pid both mean a
+#             process appeared on a PENDING action -- the exact defect.
+smoke-actionspawn: $(IMG) fat-image sfs-image
+	@rm -f build/actionspawn.log
+	@SERIAL_LOG=build/actionspawn.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actionspawn \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONSPAWN_OK id=')" \
+	FORBIDDEN_SENTINEL="ACTIONSPAWN FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONSPAWN_OK id=[0-9]* st=-*[0-9]* ctrl=[0-9]* post=-*[0-9]*" build/actionspawn.log | head -1); \
+	 test -n "$$ln" || { echo "[actionspawn] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actionspawn] $$ln"; \
+	 st=$${ln##* st=}; st=$${st%% *}; \
+	 ctrl=$${ln##* ctrl=}; ctrl=$${ctrl%% *}; \
+	 post=$${ln##* post=}; \
+	 test "$$ctrl" = "1" || { echo "[actionspawn] FAIL — the control fork/reap did not work, so post= proves nothing"; exit 1; }; \
+	 test "$$st" = "1" || { echo "[actionspawn] FAIL — verdict st=$$st, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
+	 test "$$post" = "-10" || { echo "[actionspawn] FAIL — wait4(WNOHANG) returned $$post, expected -10 (-ECHILD); a process appeared on a PENDING action"; exit 1; }
+	@echo "[actionspawn] PASS — force-pending, and no process appeared for it"
+
+# Section 3C ACTION_QUERY_MEMORY gate (DDR-1018). AUTO-APPROVING, so this is
+# DDR-1015's shape, not DDR-1016's: the verdict must ARRIVE (st=2, AE_APPROVED)
+# and the probe must then read the fact back.
+#
+# DDR-1017 §1 listed this type as "unchecked" for the gap that blocks SEND_IPC.
+# It is checked and it is NOT blocked: agent memory has a real ring-3 surface,
+# NSI 82/83 gated on CAP_MEMORY (DDR-836), already exercised by
+# user/agentmemtest.c. So an approved QUERY_MEMORY has an executor.
+#
+# THE ASSERTION IS THE CONTENT. A probe that skipped the read still prints the
+# sentinel; it cannot print the bytes. n=24 is len("Quorum reached at tick 7"),
+# the value the probe seeded with its own authority before submitting -- that
+# seed doubles as the control, since a read returning those bytes proves the
+# store works in this boot rather than silently swallowing writes.
+smoke-actionquery: $(IMG) fat-image sfs-image
+	@rm -f build/actionquery.log
+	@SERIAL_LOG=build/actionquery.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actionquery \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONQUERY_OK id=')" \
+	FORBIDDEN_SENTINEL="ACTIONQUERY FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONQUERY_OK id=[0-9]* st=-*[0-9]* n=[0-9]* first=." build/actionquery.log | head -1); \
+	 test -n "$$ln" || { echo "[actionquery] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actionquery] $$ln"; \
+	 st=$${ln##* st=}; st=$${st%% *}; \
+	 n=$${ln##* n=}; n=$${n%% *}; \
+	 first=$${ln##* first=}; \
+	 test "$$st" = "2" || { echo "[actionquery] FAIL — verdict st=$$st, expected 2 (AE_APPROVED); QUERY_MEMORY is not force-pending and sovereign mode should approve it"; exit 1; }; \
+	 test "$$n" = "24" || { echo "[actionquery] FAIL — read returned $$n bytes, expected 24; the approved read did not happen or the store lost the value"; exit 1; }; \
+	 test "$$first" = "Q" || { echo "[actionquery] FAIL — first byte '$$first', expected 'Q'; the read hit the wrong key"; exit 1; }
+	@echo "[actionquery] PASS — proposed, approved, then read the fact back"
+
+# Section 3C PROPOSE_HYPOTHESIS + EVOLVE_GENOME gate (DDR-1020). ONE probe, one
+# boot, both sides of the force-pending split -- which is the point: hst=2 beside
+# gst=1 shows aether_action_forces_pending() actually discriminates. Two separate
+# gates could each pass for their own unrelated reasons.
+#
+#   hst=2   PROPOSE_HYPOTHESIS auto-approved (it is NOT force-pending)
+#   hn=33   the hypothesis was logged and read back -- len of the seeded text.
+#           A probe that skipped the log still prints the sentinel; it cannot
+#           print the byte count.
+#   gst=1   EVOLVE_GENOME stayed AE_PENDING (DDR-842 S4: force-pending in every
+#           mode, and there is no approver in a gate boot)
+#   gseed=9 THE CONTROL: the genome was written and is readable. Without it,
+#           gn=9 "unchanged" would also be what a broken write produces.
+#   gn=9    the genome is untouched -- the unapproved evolution did not happen.
+smoke-actionhypo: $(IMG) fat-image sfs-image
+	@rm -f build/actionhypo.log
+	@SERIAL_LOG=build/actionhypo.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=actionhypo \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ACTIONHYPO_OK hst=')" \
+	FORBIDDEN_SENTINEL="ACTIONHYPO FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; \
+	 ln=$$(grep -ao "PRADYOS_ACTIONHYPO_OK hst=-*[0-9]* hn=-*[0-9]* gst=-*[0-9]* gseed=-*[0-9]* gn=-*[0-9]*" build/actionhypo.log | head -1); \
+	 test -n "$$ln" || { echo "[actionhypo] FAIL — no measured line in the capture"; exit 1; }; \
+	 echo "[actionhypo] $$ln"; \
+	 hst=$${ln##* hst=}; hst=$${hst%% *}; \
+	 hn=$${ln##* hn=}; hn=$${hn%% *}; \
+	 gst=$${ln##* gst=}; gst=$${gst%% *}; \
+	 gseed=$${ln##* gseed=}; gseed=$${gseed%% *}; \
+	 gn=$${ln##* gn=}; \
+	 test "$$gseed" = "9" || { echo "[actionhypo] FAIL — genome seed readback $$gseed, expected 9; the control write did not land, so gn= proves nothing"; exit 1; }; \
+	 test "$$hst" = "2" || { echo "[actionhypo] FAIL — hypothesis verdict $$hst, expected 2 (AE_APPROVED); PROPOSE_HYPOTHESIS is not force-pending"; exit 1; }; \
+	 test "$$hn" = "33" || { echo "[actionhypo] FAIL — hypothesis readback $$hn bytes, expected 33; the approved log did not happen"; exit 1; }; \
+	 test "$$gst" = "1" || { echo "[actionhypo] FAIL — genome verdict $$gst, expected 1 (AE_PENDING); a force-pending action was decided without an approver"; exit 1; }; \
+	 test "$$gn" = "9" || { echo "[actionhypo] FAIL — genome is $$gn bytes, expected 9; it was evolved on a PENDING action"; exit 1; }
+	@echo "[actionhypo] PASS — hypothesis approved and logged; genome pending and untouched"
+
+# Layer-7 horizon-band gate (DDR-1012): DAWN and DUSK grow a full-width horizon
+# band in render_backdrop. DAWN previously had NO backdrop at all (a bare
+# `break`); DUSK's sun-bloom now rises out of a band instead of floating.
+#
+# THE ASSERTION IS A PIXEL MEASUREMENT, not a sentinel grep. The compositor
+# samples the SAME centre pixel before and after the band and publishes both, so
+# an implementation that prints the line and draws nothing FAILS. Comparing two
+# different rows would not do: render() lays a per-row vertical gradient
+# (DDR-723), so two rows differ whether or not a band was drawn -- that version
+# of this gate was vacuous and was replaced before it ever ran.
+smoke-horizon: $(IMG) fat-image sfs-image
+	@rm -f build/horizon.log
+	@SERIAL_LOG=build/horizon.log KEEP_SERIAL=1 TIMEOUT_S=90 QEMU_GPU=1 \
+	  EXTRA_SENTINEL="$$(printf 'PRADYOS_HORIZON DAWN\nPRADYOS_HORIZON DUSK\nPRADYOS_HORIZON_OK')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@set -e; for a in DAWN DUSK; do \
+	   ln=$$(grep -ao "PRADYOS_HORIZON $$a y=[0-9]* pre=[0-9A-F]* post=[0-9A-F]*" build/horizon.log | head -1); \
+	   test -n "$$ln" || { echo "[horizon] FAIL — no measured line for $$a"; exit 1; }; \
+	   pre=$${ln##*pre=}; pre=$${pre%% *}; post=$${ln##*post=}; \
+	   echo "[horizon] $$a pre=$$pre post=$$post"; \
+	   test "$$pre" != "$$post" || { echo "[horizon] FAIL — $$a centre pixel unchanged across the band draw; the band is a no-op"; exit 1; }; \
+	 done
+	@echo "[horizon] PASS — DAWN and DUSK bands measured in the framebuffer"
+
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on
 # the time-of-day ambiance from the RTC (SYS_CLOCK). Needs the GPU.
+# DDR-1147 sec.1.5: each settled ambiance also prints PRADYOS_THEME with the
+# accent READ FROM g_ac; theme_check.py compares it with the GENERATED
+# user/theme_palette.h, so a mode-blind engine (the pre-1147 AMB[].ac) fails.
 smoke-ambiance: $(IMG) fat-image sfs-image
+	@mkdir -p build/gatelogs
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/ambiance.log KEEP_SERIAL=1 \
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_AMBIANCE DAWN\nPRADYOS_AMBIANCE DAY\nPRADYOS_AMBIANCE DUSK\nPRADYOS_AMBIANCE NIGHT\nPRADYOS_AMBIANCE_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@python3 tools/ui/theme_check.py build/gatelogs/ambiance.log demo
 
 # Layer-7 z-order/focus/input-routing gate (DDR-708): the client creates two
 # overlapping surfaces and raises B (top + focused); the compositor composites in
@@ -3316,9 +4570,27 @@ smoke-agentpanel: $(IMG) fat-image sfs-image
 # the SFS root (kernel-provisioned, DDR-760/761) and applies mode/task/slot from
 # it — the CFG_OK line proves the file was read AND parsed (CFG_DEFAULT, the compiled
 # fallback, is the forbidden pattern); AGENT_DONE proves the configured spawn ran.
+#
+# DDR-1085: "applies mode/task/slot" was two-thirds true. mode reached SYS_SET_MODE
+# and slot reached the roster, but the kernel's spawn hook DISCARDED the task with
+# `(void)task;` — and no arm could see it, because the config's value was `test`,
+# byte-identical to agent_base.c's compiled-in fallback, so the agent printed the
+# right answer without the string ever arriving. The value is now
+# `verify-boot-chain`, which appears NOWHERE in agent_base.c, so the last two
+# patterns are the config -> syscall -> argv frame -> main wire:
+#   PRADYOS_AGENT_START task=verify-boot-chain
+#                            the STRING crossed both ring boundaries
+#   mode=test argc=2         the COUNT crossed (a NULL-args frame is argc=1)
+# They are separate greps and fail separately: restoring `(void)task` fails both,
+# restoring the agent's never-supplied argv[2] index fails only the first.
+#
+# The first pattern MUST carry the PRADYOS_AGENT_START prefix. A bare
+# `task=verify-boot-chain` is a SUBSTRING OF THE CFG_OK LINE above it, so the
+# daemon echoing its own parse satisfied it and the arm said nothing about the
+# agent at all — measured, not reasoned: mutant M2 passed until this was anchored.
 smoke-aethercfg: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_CFG_OK mode=sovereign task=test slot=0\nPRADYOS_AGENT_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_AETHER_CFG_OK mode=sovereign task=verify-boot-chain slot=0\nPRADYOS_AGENT_DONE\nPRADYOS_AGENT_START task=verify-boot-chain\nmode=test argc=2')" \
 	FORBIDDEN_SENTINEL="PRADYOS_AETHER_CFG_DEFAULT" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
@@ -3391,8 +4663,25 @@ smoke-syssignal: $(IMG) fat-image sfs-image
 
 # PROC-E io_uring gate: systest mmaps a ring, submits a batched WRITE then READ on
 # a pipe in one io_uring_enter, and verifies both completions + the data.
+#
+# DDR-1108 adds the second pattern. ENTER used to validate only the CONTAINING
+# page and then form its kernel pointer at phys + (va & 0xFFF), so a ring-3
+# caller chose the intra-page offset of a 416-byte struct the kernel reads 8
+# SQEs from and writes 8 CQEs to -- any offset > 3680 left the frame. The arm
+# asserts the EXACT -EINVAL rather than "< 0" (DDR-1044): a range check failing
+# for its own reason returns -EFAULT and would satisfy "< 0" with the guard gone.
+#
+# THE TWO PATTERNS ARE ONE TEST, and that is the design. A kernel that ran the
+# SQEs and THEN returned -EINVAL would satisfy the new pattern alone; the probe
+# therefore aims its refused call at a poison SQE writing 2 bytes to the SAME
+# pipe the first pattern reads. Had the refusal not been a refusal to ACT, the
+# pipe would hold "XXURING" and the 5-byte read would return "XXURI", failing
+# the pre-existing byte comparison. Measured, not argued: on the pre-fix kernel
+# 9ef04b09f388ae2d BOTH patterns are absent, and the probe does not branch away
+# (DDR-1089 sec.6.1) so the second arm genuinely ran and genuinely failed.
 smoke-sysiouring: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL='IO_URING: batch read OK' \
+	TIMEOUT_S=90 \
+	EXTRA_SENTINEL="$$(printf 'IO_URING: batch read OK\nIO_URING: unaligned ring VA refused')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 clean:

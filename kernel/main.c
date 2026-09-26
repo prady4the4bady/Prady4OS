@@ -33,6 +33,7 @@
 #include "pdrive.h"        /* DDR-890: PRADYOS Drive workspace FS */
 #include "pstate.h"        /* DDR-892: CPU frequency scaling */
 #include "smp.h"
+#include "fault_expect.h"   /* DDR-1040: the one-shot expected-fault latch */
 #include "percpu.h"
 #include "pcie.h"
 #include "blk.h"
@@ -40,6 +41,7 @@
 #include "virtio_gpu.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
+#include "aether.h"      /* DDR-1141: record the DHCP lease (ACTION_NET_DHCP) */
 #include "nvme.h"
 #include "vfs.h"
 #include "fat32.h"
@@ -53,6 +55,8 @@
 #include "vdso_page.h"
 #include "metric_page.h"  /* F#68/DDR-795: sealed objective root page */
 #include "fwcfg.h"        /* DDR-804: per-boot probe selection */
+#include "display.h"      /* DDR-1142: virtio-gpu or UEFI GOP framebuffer */
+#include "kimg.h"         /* DDR-1143 §10.4: pristine kernel image */
 #include "rng.h"          /* DDR-816: kernel entropy */
 #include "vmm_cow.h"
 
@@ -449,6 +453,39 @@ extern const unsigned char auditchaintest_elf[];      /* DDR-842: audit chain ga
 extern const unsigned char auditchaintest_elf_end[];
 extern const unsigned char actiondagtest_elf[];       /* DDR-839: DAG action queue */
 extern const unsigned char actiondagtest_elf_end[];
+extern const unsigned char actionreadtest_elf[];      /* DDR-1015: 3C ACTION_READ_FILE */
+extern const unsigned char actionreadtest_elf_end[];
+extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DELETE_FILE */
+extern const unsigned char actiondeltest_elf_end[];
+extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT */
+extern const unsigned char mprotecttest_elf_end[];
+extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
+extern const unsigned char killblocktest_elf_end[];
+extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
+extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
+extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
+void ocr_grant(struct tcb *t);                        /* DDR-1149: sys_aether.c */
+void scene_grant(struct tcb *t);
+void browse_grant(struct tcb *t);
+extern const unsigned char argvtest_elf[];            /* DDR-1032: execve argv/envp */
+extern const unsigned char argvtest_elf_end[];
+extern const unsigned char ipctest_elf[];             /* DDR-1033: ring-3 IPC door */
+extern const unsigned char ipctest_elf_end[];
+void exec_grant(struct tcb *t);                       /* DDR-1034: sys_experiment.c */
+extern const unsigned char polltest_elf[];            /* DDR-1037: POSIX poll() */
+extern const unsigned char polltest_elf_end[];
+extern const unsigned char exptest_elf[];             /* DDR-1034: bounded executor */
+extern const unsigned char exptest_elf_end[];
+extern const unsigned char actionspawntest_elf[];     /* DDR-1017: 3C ACTION_SPAWN_PROCESS */
+extern const unsigned char actionspawntest_elf_end[];
+extern const unsigned char actionquerytest_elf[];     /* DDR-1018: 3C ACTION_QUERY_MEMORY */
+extern const unsigned char actionquerytest_elf_end[];
+extern const unsigned char actionhypotest_elf[];      /* DDR-1020: 3C HYPO + GENOME */
+extern const unsigned char actionhypotest_elf_end[];
+extern const unsigned char actionexptest_elf[];       /* DDR-1083: 3C RUN_EXPERIMENT */
+extern const unsigned char actionexptest_elf_end[];
+extern const unsigned char actionipctest_elf[];       /* DDR-1084: 3C SEND_IPC */
+extern const unsigned char actionipctest_elf_end[];
 extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth cap */
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
@@ -463,10 +500,17 @@ extern const unsigned char agstest_elf[];             /* DDR-814: AGS goal signi
 extern const unsigned char agstest_elf_end[];
 extern const unsigned char sha256test_elf[];          /* DDR-811: SHA-256 vectors */
 extern const unsigned char sha256test_elf_end[];
+extern const unsigned char shaketest_elf[];           /* DDR-1052: FIPS 202 KATs */
+extern const unsigned char shaketest_elf_end[];
+extern const unsigned char mldsatest_elf[];           /* DDR-1054: FIPS 204 KATs */
+extern const unsigned char mldsatest_elf_end[];
 extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe */
 extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
 extern const unsigned char privacynettest_elf_end[];
+extern const unsigned char dnstest1_elf[], dnstest1_elf_end[];   /* DDR-1141 */
+extern const unsigned char dnstest2_elf[], dnstest2_elf_end[];   /* DDR-1141 */
+extern const unsigned char dnstest3_elf[], dnstest3_elf_end[];   /* DDR-1141 */
 extern const unsigned char rtcmonotest_elf[];         /* DDR-796: SYS_CLOCK monotonicity */
 extern const unsigned char rtcmonotest_elf_end[];
 extern const unsigned char metrictest_elf[];          /* F#68/DDR-795: metric-region probe */
@@ -489,6 +533,7 @@ extern const unsigned char bigwritetest_elf[];        /* fs: ring-3 large-write 
 extern const unsigned char bigwritetest_elf_end[];
 void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
+int  net_dhcp_lease(uint32_t *ip, uint32_t *server);  /* DDR-1141: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
 void aether_selftest(void);
 void aether_sectest(void);
@@ -601,9 +646,10 @@ static struct tcb *user_boot_from_sfs(cap_t cap, int smnt, const char *fname,
 
 /* DDR-SMP-3c-alpha: the boot-time AP-dispatch proof — runs ON each AP. */
 static void smp_test_job(void) {
-    kputs("[smp] cpu ");
-    kputdec(this_cpu()->cpu_idx);
-    kputs(" job OK\r\n");
+    kline k; kline_init(&k);                         /* DDR-1055 */
+    kline_s(&k, "[smp] cpu ");
+    kline_d(&k, this_cpu()->cpu_idx);
+    kline_s(&k, " job OK\r\n"); kline_emit(&k);
 }
 
 /* DDR-SMP-3c-locks-1: cross-CPU wake proof — a BSP thread blocks; an AP job
@@ -952,13 +998,30 @@ static void smpresched_proof(void) {
      * SKIP branch below, which refuses to report OK when the IPI path was not
      * exercised. */
     int idle_seen = 0;
+    /* DDR-1030: hoisted out of the loop so the second sample after
+     * sched_unblock asks the same question of the same CPU. */
+    struct percpu *self_pc0 = this_cpu();
+    int self_idx = self_pc0 ? (int)self_pc0->cpu_idx : 0;
     dl = g_ticks + 50;
     while (g_ticks < dl && !idle_seen) {
-        struct percpu *self_pc = this_cpu();
-        int self_idx = self_pc ? (int)self_pc->cpu_idx : 0;
         for (int c = 0; c < PERCPU_MAX; c++) {
             struct percpu *o = percpu_get((uint32_t)c);
-            if (c != self_idx && o && o->present && o->idle) {
+            /* DDR-1014: `!o->is_bsp` MATCHES THE KERNEL. smp_resched_one
+             * declines to kick the BSP, so a BSP counted as an idle candidate
+             * here made the proof expect an IPI the kernel would never send --
+             * `ipis=0 ran=1 idle=1`, a FAIL on a correct system. That is the
+             * artefact this fix has: CI run on 72a474a, shard 5, reddening
+             * smoke-percpu-sched (which does not even own the assertion --
+             * `resched FAIL` is a GLOBAL_FORBIDDEN entry, DDR-791).
+             *
+             * DDR-1004 §6.1 predicted a residual here and named the wrong one:
+             * it described a timing race (a CPU leaving idle between the sample
+             * and the call). That window is real but narrow. THIS one needs no
+             * timing at all -- it is a predicate mismatch, and it fires whenever
+             * the BSP is the idle CPU. The two loops must ask the same question
+             * or the proof is not testing the kernel, it is testing a paraphrase
+             * of it. */
+            if (c != self_idx && o && o->present && o->idle && !o->is_bsp) {
                 idle_seen = 1;
                 break;
             }
@@ -967,6 +1030,66 @@ static void smpresched_proof(void) {
             yield();
     }
     sched_unblock(g_rp_thread);                  /* enqueue here + kick an idle AP */
+    /* DDR-1092: capture the KERNEL's own answer to "was a kick owed", HERE and
+     * nowhere later. Two separate reasons, and both are load-bearing:
+     *
+     * (1) SOUNDNESS. `idle_seen` above is the proof's sample taken BEFORE the
+     *     call and DDR-1004's own comment calls its window "not zero";
+     *     dbg_ub_saw_idle is what sched_unblock's kick loop saw at the instant
+     *     it ran. DDR-1064 built that field precisely because the proof "used
+     *     to re-derive it from outside the call and COULD NOT" -- and then left
+     *     the verdict computed from the racy value it replaced. It is read into
+     *     locals so the verdict and the FAIL print cannot disagree.
+     *
+     * (2) LIFETIME. This read is a use-after-free window and moving it here is
+     *     what narrows it. Measured, not reasoned: sched_create sets
+     *     parent_pid = 0 (sched.c:1112), pid_alive(0) returns 0 -- "parent_pid
+     *     0 == kernel/none -> treat as orphan" (sched.c:1995) -- and the reaper
+     *     frees exactly THREAD_ZOMBIE && !waiter && !pid_alive(parent_pid)
+     *     (sched.c:2017). So this probe's TCB is precisely what it collects,
+     *     and the reaper is already running: sched_start_reaper() is main.c
+     *     :3287, fs_test_thread is spawned eight lines later. Reading these in
+     *     the verdict block below -- after the probe has certainly exited and
+     *     the wait loop has certainly yielded -- is a WIDE window; reading them
+     *     here, with no yield between, is a narrow one. NOT ZERO, and DDR-1092
+     *     sec.4 records why closing it entirely (a permanently leaked zombie, or
+     *     an out-param through a function called from MSI-X interrupt context)
+     *     costs more than the residual. */
+    int k_idle = g_rp_thread ? (int)g_rp_thread->dbg_ub_saw_idle : 0;
+    int k_kick = g_rp_thread ? (int)g_rp_thread->dbg_ub_kicked   : 0;
+    /* Both fields are written ONLY as 0 or 1 (sched.c:1895-1907), so anything
+     * above 1 means the read is not trustworthy -- a poisoned TCB reads 0xDD
+     * (kheap.c:22/174, KHEAP_DEBUG is unconditionally 1) and a recycled one
+     * reads whatever its new owner left there, since kmalloc does not zero
+     * (§NON-NEGOTIABLE 10). DDR-1077 §3.3 one level down: zero (or garbage)
+     * must mean THE MEASUREMENT BROKE, never "the condition held". An invalid
+     * read falls through to FAIL, which is the safe direction. */
+    int k_valid = (g_rp_thread != 0) && k_idle <= 1 && k_kick <= 1;
+    /* DDR-1030 instrument. The comment below already names this residual -- a
+     * CPU can leave idle between the sample above and this call, so no kick is
+     * owed and the proof FAILs a correct system. CI on bdb41c7, shard 3, printed
+     * exactly that shape: `ipis=0 ran=1 idle=1`, in smoke-rqstress-liveness,
+     * which does not even own the assertion (`resched FAIL` is GLOBAL_FORBIDDEN,
+     * DDR-791) -- and `ran=1` says the property under test HELD.
+     *
+     * One sample cannot separate that from a genuinely missing kick, because
+     * both print idle=1 ipis=0 ran=1. A SECOND sample, taken here, can: an AP
+     * still idle at this instant means the kick really was owed and really was
+     * not delivered; an AP no longer idle means the precondition evaporated and
+     * the FAIL is an artefact of when the first sample was taken.
+     *
+     * Recorded, not acted on -- the verdict is deliberately unchanged. Turning
+     * this case into SKIP would delete the coverage DDR-1014 built, since a
+     * genuinely broken kick also prints ran=1 (the thread is picked up a timer
+     * tick later instead). The next occurrence decides which it is. */
+    int idle_after = 0;
+    for (int c = 0; c < PERCPU_MAX; c++) {
+        struct percpu *o = percpu_get((uint32_t)c);
+        if (c != self_idx && o && o->present && o->idle && !o->is_bsp) {
+            idle_after = 1;
+            break;
+        }
+    }
     dl = g_ticks + 50;
     while (!g_rp_ran && g_ticks < dl)
         yield();
@@ -991,16 +1114,50 @@ static void smpresched_proof(void) {
      * (the vacuity trap DDR-973 §6 and DDR-996 each caught once), FAIL would
      * blame the scheduler for a precondition the harness failed to create.
      *
-     * SKIP carries neither "OK" nor "FAIL", so it trips no gate sentinel and no
-     * GLOBAL_FORBIDDEN entry, and a run of them is visible in the log as the
-     * coverage gap it is.
+     * SKIP carries neither "OK" nor "FAIL", so it trips no GLOBAL_FORBIDDEN
+     * entry, and a run of them is visible in the log as the coverage gap it is.
+     *
+     * DDR-1092 CORRECTS THIS COMMENT, which also claimed SKIP "trips no gate
+     * sentinel". It trips exactly one: smoke-resched (Makefile:4106) declares
+     * EXTRA_SENTINEL "[smp] resched OK" as a REQUIRED pattern, so a SKIP fails
+     * that gate. That is correct and is deliberately left alone -- that gate
+     * exists to test the kick, and a boot which never exercised the kick must
+     * not pass it, which is this branch's own stated reason for existing. Only
+     * the sentence describing it was wrong. The consequence is the trade
+     * DDR-1092 makes: a no-kick-owed boot stops reddening whichever of the 179
+     * gates happened to boot, under a GLOBAL_FORBIDDEN entry that reads as a
+     * scheduler defect, and reddens smoke-resched alone instead.
      *
      * NOTE the residual race, stated rather than hidden: `idle_seen` is sampled
      * just before sched_unblock, and a CPU can leave idle in between. That
      * window is far narrower than the old unconditional assertion, but it is
      * not zero -- so a FAIL with idle=1 is strong evidence and not yet proof. */
-    if (g_rp_ran && ipi_expected && !idle_seen && g_resched_ipis == before) {
-        kputs("[smp] resched SKIP no-idle-ap ran=1\r\n");
+    /* DDR-1092: the SKIP condition now also accepts the KERNEL-recorded answer.
+     * `!idle_seen` is DDR-1004's racy proxy; `k_valid && !k_idle` is the sound
+     * one, and it is the ONLY row of the truth table that moves:
+     *   kidle=0         -> the kick loop found nothing to kick, so none was
+     *                      owed and this boot did not exercise rq-3   -> SKIP
+     *   kidle=1 kkick=0 -> DDR-1014's defect leaves saw_idle=1 by construction
+     *                      (that loop DID see idle CPUs, it spent its one
+     *                      attempt on the BSP)                        -> FAIL
+     *   kidle=1 kkick=1 -> a kick was delivered; ipis= disagreeing means the
+     *                      counter is the defect                      -> FAIL
+     * so the coverage DDR-1030 §3 and DDR-1064 §6 each refused to delete is
+     * preserved -- their objection was to collapsing the WHOLE case to SKIP,
+     * because a genuinely broken kick also prints ran=1, and a broken kick does
+     * not print kidle=0. This is the EXONERATING direction, which DDR-1074's
+     * own table certifies as SOUND; the CONVICTING one it refused to gate on is
+     * untouched and still ambiguous. */
+    if (g_rp_ran && ipi_expected && g_resched_ipis == before &&
+        (!idle_seen || (k_valid && !k_idle))) {
+        /* Both skip reasons print, because they are different coverage gaps:
+         * idle=0 means the proof never saw an idle AP, idle=1 kidle=0 means it
+         * saw one and the kernel did not at the instant that mattered. */
+        kputs("[smp] resched SKIP no-idle-ap ran=1 idle=");
+        kputdec((uint64_t)idle_seen);
+        kputs(" kidle=");
+        kputdec((uint64_t)k_idle);
+        kputs("\r\n");
     } else if (g_rp_ran && (!ipi_expected || g_resched_ipis > before)) {
         kputs("[smp] resched OK\r\n");
     } else {
@@ -1010,6 +1167,53 @@ static void smpresched_proof(void) {
         kputdec((uint64_t)g_rp_ran);
         kputs(" idle=");                  /* DDR-1004: was the IPI even owed? */
         kputdec((uint64_t)idle_seen);
+        kputs(" idle2=");                 /* DDR-1030: ...and was it STILL owed? */
+        kputdec((uint64_t)idle_after);
+        /* DDR-1064. idle= and idle2= are BOTH racy and in opposite directions:
+         * a CPU can leave idle before sched_unblock (DDR-1004) or enter idle
+         * after it returns (DDR-1030's own race, unnamed until DDR-1064), so
+         * neither establishes that a kick was owed. These two are recorded by
+         * sched_unblock's OWN loop at the instant it ran, so they are not racy
+         * at all -- READ THESE, not idle=/idle2=, when diagnosing this line.
+         *   kidle=0         -> no idle non-self CPU was visible to the kernel;
+         *                      no kick was owed and the FAIL is a sampling
+         *                      artefact, whatever idle=/idle2= happen to say.
+         *   kidle=1 kkick=1 -> a kick WAS delivered; ipis= disagreeing then
+         *                      means the counter, not the kick, is the defect.
+         *   kidle=1 kkick=0 -> AMBIGUOUS. DDR-1074 CORRECTS THIS LINE, which
+         *                      used to read "the only reading that convicts the
+         *                      scheduler" -- it does not, and sched_unblock's
+         *                      own comment says so in the same commit: that
+         *                      loop carries NO !is_bsp filter, and
+         *                      smp_resched_one (smp.c:310) returns 0 for the
+         *                      BSP, so a BSP-ONLY-IDLE boot prints exactly this
+         *                      on a CORRECT kernel -- the DDR-1014 predicate
+         *                      mismatch re-armed as a diagnostic instruction.
+         *                      A genuinely missed kick prints it too, and these
+         *                      fields CANNOT separate the two. Resolve it from
+         *                      the capture's [hb] heartbeats and -smp width,
+         *                      not from this line.
+         *                      A third field (an idle non-BSP CPU was visible)
+         *                      was designed and REFUSED -- DDR-1074 sec.3: the
+         *                      mutation that would prove it is DDR-1014's own
+         *                      defect, which breaks on the idle BSP BEFORE
+         *                      reaching the idle AP, so the field reads 0 and
+         *                      FALSELY EXONERATES. Recording it soundly needs a
+         *                      post-loop scan, i.e. DDR-1030's race verbatim.
+         * The verdict deliberately still uses the old terms (DDR-1064 §6):
+         * changing a gate's verdict on one capture is how coverage gets deleted
+         * (DDR-1012, DDR-973, and DDR-1030 §3 refusing this once already). */
+        kputs(" kidle=");
+        kputdec((uint64_t)k_idle);
+        kputs(" kkick=");
+        kputdec((uint64_t)k_kick);
+        /* DDR-1092: whether the verdict was allowed to TRUST the two fields
+         * above. kvalid=0 means the TCB was freed or recycled under us (a
+         * poisoned read prints 221) -- so the FAIL says nothing about the
+         * scheduler and everything about the lifetime; those demand opposite
+         * actions, which is DDR-883's reason for printing both terms. */
+        kputs(" kvalid=");
+        kputdec((uint64_t)k_valid);
         kputs("\r\n");
     }
 }
@@ -1040,10 +1244,37 @@ static void smpuser_proof(void) {
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
 static uint32_t g_aether_daemon_pid;
 static long aether_spawn_agent_hook(const char *task) {
-    (void)task;
     struct tcb *ut = 0;
     uint64_t len = (uint64_t)((uintptr_t)agent_base_elf_end - (uintptr_t)agent_base_elf);
-    if (elf_load((void *)(uintptr_t)agent_base_elf, len, "AGENT", &ut) != ELF_OK || !ut)
+
+    /* DDR-1085: hand the CONFIGURED task to the agent as argv[1].
+     *
+     * This line used to read `(void)task;`. The daemon parses `task=` out of
+     * /etc/aether/config, sys_spawn_agent copyinstr's it across the ring boundary
+     * into a 64-byte buffer, and the hook then DISCARDED it -- the DDR-1032 shape
+     * DDR-877 called "worse than incomplete", invisible because the shipped
+     * config's value was byte-identical to agent_base.c's compiled-in fallback,
+     * so `task=test` printed the right answer without the string ever arriving.
+     *
+     * argv[0] is the image name and argv[1] the first argument, DDR-1032b's
+     * execv(3) convention. An EMPTY task passes NULL rather than an empty
+     * argv[1], so a boot with no config keeps today's frame exactly (argc=1). */
+    static const char agent_argv0[] = "AGENT";
+    char blob[sizeof agent_argv0 + 64];   /* argv[0] + NUL, then task[64] + NUL */
+    struct exec_args ea;
+    const struct exec_args *eap = 0;
+    if (task && task[0]) {
+        unsigned n = 0;
+        for (unsigned i = 0; i < sizeof agent_argv0; i++)   /* includes the NUL */
+            blob[n++] = agent_argv0[i];
+        for (unsigned i = 0; task[i] && n + 1 < sizeof blob; i++)
+            blob[n++] = task[i];
+        blob[n++] = 0;
+        ea.blob = blob; ea.blob_len = n; ea.argc = 2; ea.envc = 0;
+        eap = &ea;
+    }
+
+    if (elf_load_args((void *)(uintptr_t)agent_base_elf, len, "AGENT", eap, &ut) != ELF_OK || !ut)
         return -1;
     ut->is_agent = 1;                  /* authority BEFORE the first run */
     ut->is_net = 1;                    /* DDR-731: agents are the sanctioned socket users
@@ -1186,6 +1417,240 @@ static void fs_write_test(cap_t cap, int mnt) {
 
 /* VFS/FAT32 test: mount, list directories, read files — including a nested
  * path through a subdirectory — all capability-gated. */
+/* DDR-1143 §4.1 — partition sub-device + MBR parser self-test (smoke-part).
+ *
+ * Built on a private 256 KiB ramdisk so it writes nothing a gate owns. Every
+ * arm prints what it measured and the gate judges (DDR-1020): no arm returns
+ * early, so a failure in one cannot hide another.
+ *
+ * Layout: 512 sectors; P1 type 0xEF at 64+128, P2 type 0xDA at 192+320 (which
+ * ends exactly at the disk end), and a third entry at 400+200 that overruns the
+ * disk and MUST be skipped by the parser.
+ *
+ * The arms and the mutant each exists for:
+ *   mbr    parse finds exactly the two in-range entries        (entry trusted)
+ *   sig    a table without 0x55AA is refused                   (sig not checked)
+ *   mk     creation past the parent end / at LBA 2^64-1 refused (create unchecked)
+ *   off    P2 LBA 0 is parent LBA 192, and sector 0 survives   (offset dropped)
+ *   bnd    P1 LBA 128 is refused even though the PARENT has it (bound = parent)
+ *   wrap   LBA 2^64-1 count 1 refused                          (lba+count form)
+ *   sfs    SFS formats and mounts on P2, and P1 is untouched   (the §4.1 claim)
+ */
+static uint64_t g_bc_t0, g_bc_b0;           /* DDR-1143 §10.2 cost stamp */
+
+/* DDR-1143 §10.2 -- the ORDERING trace device. A blk_device that forwards to a
+ * parent and records every WRITE and FLUSH as one letter, classifying a write
+ * by the SFS block it lands in against the mounted volume's own layout:
+ *   S = block 0 (superblock, the commit point)   J = the journal block
+ *   L = the free-list block                      D = anything else
+ *   F = a flush
+ * Reads are not recorded; they order nothing. The letters, not a count, are
+ * the assertion: "one flush happened" is satisfied by a flush in the wrong
+ * place, and the defect a barrier prevents is precisely an ordering. */
+struct trace_dev {
+    struct blk_device  bd;
+    struct blk_device *parent;
+    uint64_t           jblk, lblk;
+    char               log[96];
+    unsigned           n;
+};
+static struct trace_dev g_trace;
+
+static void trace_put(struct trace_dev *t, char c) {
+    if (t->n + 1 < sizeof t->log) { t->log[t->n++] = c; t->log[t->n] = 0; }
+    else t->log[sizeof t->log - 2] = '+';        /* overflow names itself */
+}
+static int trace_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
+    struct trace_dev *t = (struct trace_dev *)bd->drv;
+    return t->parent->read(t->parent, lba, buf, count);
+}
+static int trace_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count) {
+    struct trace_dev *t = (struct trace_dev *)bd->drv;
+    uint64_t blk = lba / 8;                       /* SFS: 8 sectors per block */
+    trace_put(t, blk == 0 ? 'S' : blk == t->jblk ? 'J' : blk == t->lblk ? 'L' : 'D');
+    return t->parent->write(t->parent, lba, buf, count);
+}
+static int trace_flush(struct blk_device *bd) {
+    struct trace_dev *t = (struct trace_dev *)bd->drv;
+    trace_put(t, 'F');
+    return t->parent->flush ? t->parent->flush(t->parent) : -ENOSYS;
+}
+static void trace_reset(struct trace_dev *t) { t->n = 0; t->log[0] = 0; }
+
+/* 1 iff every S in the log is immediately followed by F (the tail barrier). */
+static int trace_tail_ok(const struct trace_dev *t) {
+    int seen = 0;
+    for (unsigned i = 0; i < t->n; i++)
+        if (t->log[i] == 'S') { seen = 1; if (i + 1 >= t->n || t->log[i + 1] != 'F') return 0; }
+    return seen;
+}
+
+static void part_selftest(cap_t cap) {
+    int rd = ramdisk_init(6);                       /* 64 pages = 512 sectors */
+    uint64_t pg = pmm_alloc_page();
+    if (rd < 0 || !pg) {
+        kputs("PART FAIL: no scratch ramdisk or page\r\n");
+        return;
+    }
+    uint8_t *b = (uint8_t *)(uintptr_t)pg;
+    struct blk_device *pd = blk_get((unsigned)rd);
+    int ok = 1;
+
+    /* mbr / sig */
+    memset(b, 0, 512);
+    blk_mbr_set(b, 0, 0xEF, 0x80, 64, 128);
+    blk_mbr_set(b, 1, 0xDA, 0x00, 192, 320);
+    blk_mbr_set(b, 2, 0x83, 0x00, 400, 200);        /* overruns: must be skipped */
+    pd->write(pd, 0, b, 1);
+    memset(b, 0, 512);
+    pd->read(pd, 0, b, 1);
+    struct mbr_part mp[4];
+    int n = blk_mbr_parse(b, pd->capacity_sectors, mp);
+    int mbr_ok = n == 2 && mp[0].index == 0 && mp[0].type == 0xEF && mp[0].lba == 64 &&
+                 mp[0].count == 128 && mp[0].boot == 0x80 && mp[1].index == 1 &&
+                 mp[1].type == 0xDA && mp[1].lba == 192 && mp[1].count == 320;
+    kputs("[part] mbr n="); kputdec((uint64_t)(n < 0 ? 99 : n));
+    kputs(mbr_ok ? " ok\r\n" : " BAD\r\n");
+    b[511] = 0x00;
+    int sig = blk_mbr_parse(b, pd->capacity_sectors, mp);
+    kputs("[part] sig rc="); kputs(sig == -EINVAL ? "-EINVAL" : "accepted"); kputs("\r\n");
+    ok &= mbr_ok && sig == -EINVAL;
+
+    /* mk */
+    int mk1 = blk_part_create((unsigned)rd, 192, 321);
+    int mk2 = blk_part_create((unsigned)rd, ~0ull, 1);
+    kputs("[part] mk over="); kputs(mk1 == -EINVAL ? "-EINVAL" : "created");
+    kputs(" wrap="); kputs(mk2 == -EINVAL ? "-EINVAL" : "created"); kputs("\r\n");
+    ok &= mk1 == -EINVAL && mk2 == -EINVAL;
+
+    int p1 = blk_part_create((unsigned)rd, 64, 128);
+    int p2 = blk_part_create((unsigned)rd, 192, 320);
+    if (p1 < 0 || p2 < 0) {
+        kputs("PART FAIL: create p1/p2\r\n");
+        return;
+    }
+    struct blk_device *d1 = blk_get((unsigned)p1), *d2 = blk_get((unsigned)p2);
+
+    /* off: a marker through P2 LBA 0 must land on parent LBA 192, and parent
+     * sector 0 (the table) must still carry its signature. */
+    memset(b, 0xB2, 512);
+    int w = d2->write(d2, 0, b, 1);
+    memset(b, 0, 512);
+    pd->read(pd, 192, b, 1);
+    int at192 = b[0] == 0xB2 && b[511] == 0xB2;
+    pd->read(pd, 0, b, 1);
+    int mbr_intact = b[510] == 0x55 && b[446 + 4] == 0xEF;
+    kputs("[part] off w="); kputdec((uint64_t)(w == 0 ? 0 : 1));
+    kputs(" parent192="); kputs(at192 ? "marker" : "missing");
+    kputs(" sector0="); kputs(mbr_intact ? "intact" : "clobbered"); kputs("\r\n");
+    ok &= w == 0 && at192 && mbr_intact;
+
+    /* bnd: P1 is 128 sectors, so LBA 128 is P2's first sector in the parent.
+     * A bound taken from the PARENT would let this write through and
+     * overwrite the marker at parent 192. */
+    memset(b, 0x11, 512);
+    int bw = d1->write(d1, 128, b, 1);
+    int br = d1->read(d1, 127, b, 2);
+    int last = d1->read(d1, 127, b, 1);
+    memset(b, 0, 512);
+    pd->read(pd, 192, b, 1);
+    int kept = b[0] == 0xB2;
+    kputs("[part] bnd w128="); kputs(bw == -EINVAL ? "-EINVAL" : "written");
+    kputs(" r127x2="); kputs(br == -EINVAL ? "-EINVAL" : "read");
+    kputs(" r127="); kputdec((uint64_t)(last == 0 ? 0 : 1));
+    kputs(" neighbour="); kputs(kept ? "kept" : "overwritten"); kputs("\r\n");
+    ok &= bw == -EINVAL && br == -EINVAL && last == 0 && kept;
+
+    /* wrap */
+    int wr = d2->read(d2, ~0ull, b, 1);
+    kputs("[part] wrap rc="); kputs(wr == -EINVAL ? "-EINVAL" : "read"); kputs("\r\n");
+    ok &= wr == -EINVAL;
+
+    /* sfs: format and mount on P2; P1 must be untouched by it. */
+    memset(b, 0x5A, 512);
+    for (unsigned s = 0; s < 128; s++) d1->write(d1, s, b, 1);
+    int f  = sfs_format(d2);
+    int mt = vfs_mount((unsigned)p2);
+    unsigned p1bad = 0;
+    for (unsigned s = 0; s < 128; s++) {
+        d1->read(d1, s, b, 1);
+        for (unsigned k = 0; k < 512; k++) if (b[k] != 0x5A) { p1bad++; break; }
+    }
+    kputs("[part] sfs format="); kputdec((uint64_t)(f == 0 ? 0 : 1));
+    kputs(" mount="); kputs(mt >= 0 ? "ok" : "fail");
+    kputs(" p1_dirty="); kputdec(p1bad); kputs("\r\n");
+    ok &= f == 0 && mt >= 0 && p1bad == 0;
+
+    /* DDR-1143 §10.2 -- barrier ORDER at the block interface. The trace device
+     * wraps P2 and SFS is re-formatted THROUGH it, so every write and flush SFS
+     * issues is recorded. P2's earlier mount is released first: two live
+     * contexts on one volume would each keep their own allocator. */
+    if (mt >= 0) vfs_unmount(mt);
+    struct trace_dev *t = &g_trace;
+    t->parent = d2;
+    t->jblk = 0; t->lblk = 0;
+    t->bd.name = "trace";
+    t->bd.capacity_sectors = d2->capacity_sectors;
+    t->bd.read = trace_read; t->bd.write = trace_write; t->bd.flush = trace_flush;
+    t->bd.drv = t;
+    unsigned tidx = blk_count();
+    blk_register(&t->bd);
+    int tm = -1;
+    int tr_ok = blk_count() == tidx + 1 && sfs_format(&t->bd) == 0 &&
+                (tm = vfs_mount(tidx)) >= 0;
+    /* One warm-up commit allocates the free-list block; read the layout back
+     * off the device so the classifier uses the volume's OWN numbers. */
+    struct vfs_file tf;
+    if (tr_ok) tr_ok = vfs_create(cap, tm, "/W.TXT", &tf) == 0;
+    if (tr_ok) {
+        d2->read(d2, 0, b, 1);
+        const struct sfs_superblock *sb = (const struct sfs_superblock *)b;
+        t->jblk = sb->txn_log_start;
+        t->lblk = sb->free_extent_tree;
+        tr_ok = t->jblk != 0 && t->lblk != 0;
+    }
+    char plain[96], txn[96];
+    plain[0] = txn[0] = 0;
+    int ptail = 0, ttail = 0;
+    if (tr_ok) {                                  /* plain: one non-txn create */
+        trace_reset(t);
+        tr_ok = vfs_create(cap, tm, "/P.TXT", &tf) == 0;
+        memcpy(plain, t->log, t->n + 1);
+        ptail = trace_tail_ok(t);
+    }
+    if (tr_ok) {                                  /* txn: the COMMIT window only */
+        tr_ok = vfs_txn_begin(cap, tm) == 0 && vfs_create(cap, tm, "/T.TXT", &tf) == 0;
+        trace_reset(t);
+        if (tr_ok) tr_ok = vfs_txn_commit(cap, tm) == 0;
+        memcpy(txn, t->log, t->n + 1);
+        ttail = trace_tail_ok(t);
+    }
+    kputs("[part] trace plain="); kputs(plain[0] ? plain : "-");
+    kputs(" txn="); kputs(txn[0] ? txn : "-");
+    kputs(" tail="); kputs(ptail && ttail ? "ok" : "BAD");
+    kputs(" setup="); kputs(tr_ok ? "ok" : "fail"); kputs("\r\n");
+    ok &= tr_ok && ptail && ttail;
+
+    /* virtio: a flush on a REAL device is accepted, and every flush the
+     * system has issued so far completed with status 0. That it reached stable
+     * media is not observable from a guest (DDR-1143 §7). */
+    int neg = -1, vrc = -1;
+    uint32_t iss = 0, fok = 0;
+    for (unsigned i = 0; i < blk_count(); i++) {
+        struct blk_device *vd = blk_get(i);
+        if (vd && vd->name && strcmp(vd->name, "virtio-blk") == 0) { vrc = blk_flush(i); break; }
+    }
+    virtio_blk_flush_stats(&neg, &iss, &fok);
+    kputs("[part] virtio neg="); kputdec((uint64_t)(neg < 0 ? 9 : neg));
+    kputs(" flush="); kputs(vrc == 0 ? "0" : "FAIL");
+    kputs(" issued=ok="); kputs(iss == fok && iss > 0 ? "yes" : "NO");
+    kputs("\r\n");
+    ok &= neg == 1 && vrc == 0 && iss == fok && iss > 0;
+
+    pmm_free_page(pg);
+    kputs(ok ? "PRADYOS_PART_OK\r\n" : "PART FAIL: an arm above did not hold\r\n");
+}
+
 static void fs_test_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
     int mnt = -1, blk = -1;
@@ -1218,9 +1683,12 @@ static void fs_test_thread(void *arg) {
     {
         struct rtc_time t;
         rtc_now(&t);
-        kputs("[rtc] ");
-        kputdec(t.year); kputs("-"); kputdec(t.month); kputs("-"); kputdec(t.day);
-        kputs(" "); kputdec(t.hour); kputs(":"); kputdec(t.minute); kputs("\r\n");
+        kline k; kline_init(&k);                     /* DDR-1055 */
+        kline_s(&k, "[rtc] ");
+        kline_d(&k, t.year); kline_c(&k, '-'); kline_d(&k, t.month);
+        kline_c(&k, '-');    kline_d(&k, t.day);
+        kline_c(&k, ' ');    kline_d(&k, t.hour); kline_c(&k, ':');
+        kline_d(&k, t.minute); kline_s(&k, "\r\n"); kline_emit(&k);
     }
     fs_write_test(cap, mnt);
     fat_place_exec_image(cap, mnt);   /* 5b slice 7: /EXECTEST.ELF for systest's execve */
@@ -1331,7 +1799,7 @@ static void fs_test_thread(void *arg) {
              * down REFORMATS this volume, so it waits on these before
              * umounting. 0 = that probe was never spawned. Locals, not a
              * writable global (DDR-826). */
-            uint32_t smnt_pid[3] = { 0, 0, 0 };
+            uint32_t smnt_pid[5] = { 0, 0, 0, 0, 0 }; /* DDR-1020: +actionhypo */
             if (smnt >= 0) {
                 kputs("[sfs] mounted ");
                 kputs(vfs_fs_name(smnt));
@@ -1641,6 +2109,23 @@ static void fs_test_thread(void *arg) {
                  * run it, which is why the gate asserts caught > 0 rather than
                  * caught == N — the point is that the state ARISES, and an
                  * exact count would be asserting the absence of work stealing. */
+                if (probe_enabled("part"))           /* DDR-1143 §4.1 */
+                    part_selftest(cap);
+                if (probe_enabled("disk")) {         /* DDR-1143 sec.10.8: NSI 104 */
+                    /* AFTER part_selftest, so the list holds every device class
+                     * (virtio, ramdisk, part, trace). Waited on by pid, not by
+                     * THREAD_ZOMBIE (DDR-967): the reaper may free the TCB. */
+                    struct tcb *dk = 0;
+                    uint64_t dklen = (uint64_t)((uintptr_t)disktest_elf_end - (uintptr_t)disktest_elf);
+                    if (elf_load((void *)(uintptr_t)disktest_elf, dklen, "DISK", &dk) == ELF_OK && dk) {
+                        uint32_t dkpid = dk->pid;
+                        sched_unblock(dk);
+                        kputs("[user] ELF loaded (embedded); disk-list probe spawned\r\n");
+                        uint64_t dkdl = g_ticks + 1500;
+                        while (sched_find_pid(dkpid) && g_ticks < dkdl)
+                            yield();
+                    }
+                }
                 if (probe_enabled("rqfree")) {
                     extern volatile uint32_t g_rqfree_caught, g_rqfree_leaked;
                     int made = sched_rqfree_probe(16);
@@ -1765,9 +2250,14 @@ static void fs_test_thread(void *arg) {
                         }
                     }
                     smp_resched_all();           /* DDR-966: wake idle APs to take them */
-                    kputs("[user] ELF loaded (embedded); net hammer spawned=");
-                    kputdec((uint64_t)spawned);
-                    kputs("/2\r\n");
+                    /* DDR-1055: `net hammer spawned=2/2` is a REQUIRED gate
+                     * sentinel and was assembled from three unlocked calls; a
+                     * ring-3 probe's write landed between them and produced
+                     * `... spawned=PRADYOS_SOVEGRESS_AUDITED`. One kwrite. */
+                    { kline k; kline_init(&k);
+                      kline_s(&k, "[user] ELF loaded (embedded); net hammer spawned=");
+                      kline_d(&k, (uint64_t)spawned);
+                      kline_s(&k, "/2\r\n"); kline_emit(&k); }
                 }
                 /* DDR-818: HKDF RFC 5869 vector probe, opt-in via DDR-804. */
                 if (probe_enabled("hkdf")) {
@@ -2107,6 +2597,43 @@ static void fs_test_thread(void *arg) {
                         kputs("\r\n");
                     }
                 }
+                if (probe_enabled("shake")) {
+                    struct tcb *sk = 0;
+                    uint64_t sklen = (uint64_t)((uintptr_t)shaketest_elf_end - (uintptr_t)shaketest_elf);
+                    /* OPEN-11's lesson, applied: a load that fails must SAY so.
+                     * A silent failed spawn looks exactly like a probe that ran
+                     * and stayed quiet, and the gate then times out blaming the
+                     * wrong thing. */
+                    int skrc = elf_load((void *)(uintptr_t)shaketest_elf, sklen,
+                                        "SHAKE", &sk);
+                    if (skrc == ELF_OK && sk) {
+                        sched_unblock(sk);
+                        kputs("[user] ELF loaded (embedded); FIPS 202 SHAKE vector probe spawned\r\n");
+                    } else {
+                        kputs("[user] SHAKE probe elf_load FAILED rc=");
+                        kputdec((uint64_t)(int64_t)skrc);
+                        kputs("\r\n");
+                    }
+                }
+                if (probe_enabled("mldsa")) {
+                    struct tcb *md = 0;
+                    uint64_t mdlen = (uint64_t)((uintptr_t)mldsatest_elf_end
+                                                - (uintptr_t)mldsatest_elf);
+                    /* OPEN-11's lesson: a load that fails must SAY so. A silent
+                     * failed spawn is indistinguishable from a probe that ran
+                     * and stayed quiet, and the gate then blames the crypto. */
+                    int mdrc = elf_load((void *)(uintptr_t)mldsatest_elf, mdlen,
+                                        "MLDSA", &md);
+                    if (mdrc == ELF_OK && md) {
+                        sched_unblock(md);
+                        kputs("[user] ELF loaded (embedded); FIPS 204 ML-DSA-44 keyGen+sign probe spawned\r\n");
+                    } else {
+                        kline k; kline_init(&k);          /* DDR-1055 */
+                        kline_s(&k, "[user] MLDSA probe elf_load FAILED rc=");
+                        kline_d(&k, (uint64_t)(int64_t)mdrc);
+                        kline_s(&k, "\r\n"); kline_emit(&k);
+                    }
+                }
                 if (probe_enabled("sigpipe")) {
                     struct tcb *sp = 0;
                     uint64_t splen = (uint64_t)((uintptr_t)sigpipetest_elf_end - (uintptr_t)sigpipetest_elf);
@@ -2117,6 +2644,15 @@ static void fs_test_thread(void *arg) {
                     }
                 }
                 if (probe_enabled("privnet")) {
+                    /* DDR-1070 phase 4 opens a REAL socket to the in-kernel echo
+                     * server so egress can be tested on an already-open
+                     * connection. Seeded here so that connect takes the ORDINARY
+                     * policy-permitted path rather than the DDR-800 sovereign
+                     * bypass this probe would otherwise ride -- egress on a
+                     * socket no ordinary agent could have opened would be
+                     * testing the wrong connection. */
+                    int netallow_add(uint32_t host_be, uint16_t port);
+                    (void)netallow_add(0x7F000001u, 8007);   /* 127.0.0.1:8007 */
                     struct tcb *pn = 0;
                     uint64_t pnlen = (uint64_t)((uintptr_t)privacynettest_elf_end - (uintptr_t)privacynettest_elf);
                     if (elf_load((void *)(uintptr_t)privacynettest_elf, pnlen,
@@ -2125,6 +2661,38 @@ static void fs_test_thread(void *arg) {
                         pn->is_sovereign = 1;
                         sched_unblock(pn);
                         kputs("[user] ELF loaded (embedded); privacy-netfilter probe spawned\r\n");
+                    }
+                }
+                if (probe_enabled("dns")) {
+                    /* DDR-1141 sec.4/sec.6. Three images in SERIES. Phase 1 runs
+                     * BEFORE 10.77.0.2:53 is on the allowlist, so its refused
+                     * query names the very resolver that would answer it -- which
+                     * is what lets the host-side arm H see a missing allowlist
+                     * check. Then the row is seeded, then phase 2 (allowed), then
+                     * the sovereign phase 3 (privacy), which must not overlap
+                     * phase 2. Waiting on the pid, not on THREAD_ZOMBIE, is
+                     * DDR-967's rule: the reaper may free the TCB mid-poll. */
+                    static const struct { const unsigned char *b, *e; const char *nm; int sov; } ph[3] = {
+                        { dnstest1_elf, dnstest1_elf_end, "DNS1", 0 },
+                        { dnstest2_elf, dnstest2_elf_end, "DNS2", 0 },
+                        { dnstest3_elf, dnstest3_elf_end, "DNS3", 1 },
+                    };
+                    int netallow_add(uint32_t host_be, uint16_t port);
+                    for (int i = 0; i < 3; i++) {
+                        if (i == 1)
+                            (void)netallow_add(0x0A4D0002u, 53);   /* 10.77.0.2:53 */
+                        struct tcb *dt = 0;
+                        uint64_t dlen = (uint64_t)((uintptr_t)ph[i].e - (uintptr_t)ph[i].b);
+                        if (elf_load((void *)(uintptr_t)ph[i].b, dlen, ph[i].nm, &dt) != ELF_OK || !dt)
+                            break;
+                        uint32_t dpid = dt->pid;
+                        dt->is_net = 1;
+                        dt->is_sovereign = (uint32_t)ph[i].sov;
+                        sched_unblock(dt);
+                        kputs("[user] ELF loaded (embedded); DNS probe phase spawned\r\n");
+                        uint64_t ddl = g_ticks + 1500;       /* bounded: 15 s per phase */
+                        while (sched_find_pid(dpid) && g_ticks < ddl)
+                            yield();
                     }
                 }
                 /* sys (DDR-749): SYS_TIME wall-clock probe — default root, no caps;
@@ -2235,6 +2803,377 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] ELF loaded (embedded); FAT-rooted multi-cluster probe spawned\r\n");
                     } else {
                         kputs("[user] FAT32 multi-cluster probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1015: Section 3C ACTION_READ_FILE, end to end. Rooted at
+                 * the FAT mount so the approved read has a real file to open,
+                 * and root_mnt is set BEFORE sched_unblock for the DDR-957
+                 * ordering reason spelled out above.
+                 *
+                 * is_agent, deliberately: an agent is the actor that holds no
+                 * authority of its own, which is the property the pipeline
+                 * exists to enforce. Sovereign mode is the ADR-026 D2 default
+                 * (aether_queue.c:37), and ACTION_READ_FILE is not in
+                 * aether_action_forces_pending(), so it auto-approves and this
+                 * probe needs no second privileged actor -- unlike the four
+                 * force-pending types, whose gates must assert PENDING instead
+                 * (DDR-1013 §2.1). */
+                if (probe_enabled("actionread")) {
+                    struct tcb *ar = 0;
+                    uint64_t arlen = (uint64_t)(uintptr_t)actionreadtest_elf_end -
+                                     (uint64_t)(uintptr_t)actionreadtest_elf;
+                    if (elf_load((void *)(uintptr_t)actionreadtest_elf, arlen,
+                                 "ACTIONREAD", &ar) == ELF_OK && ar) {
+                        ar->is_agent = 1;
+                        ar->root_mnt = mnt;           /* FAT root before unblock */
+                        sched_unblock(ar);
+                        kputs("[user] 3C ACTION_READ_FILE probe spawned (agent, FAT-rooted)\r\n");
+                    } else {
+                        kputs("[user] ACTIONREAD probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1016: Section 3C ACTION_DELETE_FILE -- the FIRST
+                 * force-pending type. Rooted at the SFS mount, not the FAT one:
+                 * this probe creates and deletes files, so it needs the writable
+                 * CoW root, and root_mnt is set BEFORE sched_unblock for the
+                 * DDR-957 ordering reason.
+                 *
+                 * Its pid goes in smnt_pid so the destructive umount below waits
+                 * for it (DDR-967) -- without that, the umount can land while the
+                 * probe still holds the root and the failure reads as a delete
+                 * bug rather than a teardown race.
+                 *
+                 * is_agent, and no approver anywhere in this boot: that is the
+                 * measurement. aether_action_forces_pending() keeps DELETE_FILE
+                 * PENDING even in sovereign mode (DDR-842 S4), so the gate
+                 * asserts the verdict never arrives and the file survives. */
+                if (probe_enabled("actiondel")) {
+                    struct tcb *ad = 0;
+                    uint64_t adlen = (uint64_t)(uintptr_t)actiondeltest_elf_end -
+                                     (uint64_t)(uintptr_t)actiondeltest_elf;
+                    if (elf_load((void *)(uintptr_t)actiondeltest_elf, adlen,
+                                 "ACTIONDEL", &ad) == ELF_OK && ad) {
+                        ad->is_agent  = 1;
+                        ad->root_mnt  = smnt;         /* SFS root before unblock */
+                        smnt_pid[3]   = ad->pid;      /* DDR-967 */
+                        sched_unblock(ad);
+                        kputs("[user] 3C ACTION_DELETE_FILE probe spawned (agent, SFS-rooted)\r\n");
+                    } else {
+                        kputs("[user] ACTIONDEL probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1031: SYS_MPROTECT. FAT-rooted and NOT in smnt_pid -- it
+                 * touches no files, so it neither needs the writable SFS root
+                 * nor belongs in the DDR-967 umount wait. Not an agent: it
+                 * exercises a plain POSIX syscall, not the AETHER surface. */
+                if (probe_enabled("mprotect")) {
+                    struct tcb *mp = 0;
+                    uint64_t mplen = (uint64_t)(uintptr_t)mprotecttest_elf_end -
+                                     (uint64_t)(uintptr_t)mprotecttest_elf;
+                    if (elf_load((void *)(uintptr_t)mprotecttest_elf, mplen,
+                                 "MPROTECT", &mp) == ELF_OK && mp) {
+                        sched_unblock(mp);
+                        kputs("[user] SYS_MPROTECT probe spawned\r\n");
+                    } else {
+                        kputs("[user] MPROTECT probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1090: is SIGKILL deliverable to a thread blocked in an
+                 * unbounded kernel wait? FAT-rooted and NOT in smnt_pid -- it
+                 * touches no files, only a pipe. Not an agent: AETHER_RATE_MAX
+                 * would be irrelevant (the probe spends no syscalls in its
+                 * spins) but the surface under test is plain POSIX. */
+                if (probe_enabled("killblock")) {
+                    struct tcb *kb = 0;
+                    uint64_t kblen = (uint64_t)(uintptr_t)killblocktest_elf_end -
+                                     (uint64_t)(uintptr_t)killblocktest_elf;
+                    if (elf_load((void *)(uintptr_t)killblocktest_elf, kblen,
+                                 "KILLBLOCK", &kb) == ELF_OK && kb) {
+                        sched_unblock(kb);
+                        kputs("[user] KILLBLOCK probe spawned\r\n");
+                    } else {
+                        kputs("[user] KILLBLOCK probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1032: SYS_EXECVE argv/envp. FAT-rooted -- it execve's
+                 * /ARGTEST.ELF, which is placed on the FAT volume because execve
+                 * resolves against the PROCESS root (the same reason
+                 * /EXECTEST.ELF lives there). Not in smnt_pid: it touches no
+                 * files on the SFS root. */
+                if (probe_enabled("argv")) {
+                    struct tcb *av = 0;
+                    uint64_t avlen = (uint64_t)(uintptr_t)argvtest_elf_end -
+                                     (uint64_t)(uintptr_t)argvtest_elf;
+                    if (elf_load((void *)(uintptr_t)argvtest_elf, avlen,
+                                 "ARGVTEST", &av) == ELF_OK && av) {
+                        sched_unblock(av);
+                        kputs("[user] execve argv/envp probe spawned\r\n");
+                    } else {
+                        kputs("[user] ARGVTEST probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1033: the ring-3 IPC door, spawned TWICE. is_ipc is a
+                 * PER-PROCESS flag, so one process cannot exercise both the
+                 * granted and the refused path -- and without the refused one
+                 * the gate could be hardcoded open and still pass. The second
+                 * spawn is deliberately NOT granted. */
+                if (probe_enabled("ipc")) {
+                    uint64_t iplen = (uint64_t)(uintptr_t)ipctest_elf_end -
+                                     (uint64_t)(uintptr_t)ipctest_elf;
+                    struct tcb *ig = 0, *ing = 0;
+                    if (elf_load((void *)(uintptr_t)ipctest_elf, iplen,
+                                 "IPCGRANT", &ig) == ELF_OK && ig) {
+                        ipc_grant(ig);                 /* the door, kernel-side only */
+                        sched_unblock(ig);
+                    } else {
+                        kputs("[user] IPC granted probe FAILED to load\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)ipctest_elf, iplen,
+                                 "IPCDENY", &ing) == ELF_OK && ing) {
+                        /* THE DENY PROCESS HOLDS THE CAPABILITY AND NOT THE
+                         * FLAG, and that is the whole point of this arm.
+                         *
+                         * Spawning it with neither made the arm pass for the
+                         * WRONG REASON: ipc_send's own cap_authorize refuses a
+                         * process with no handle, so `is_ipc` could have been
+                         * deleted outright and the gate would still have gone
+                         * green. Measured -- a mutant that defeated the is_ipc
+                         * check still produced rc=-1. Granting the capability
+                         * and then shutting the door is what makes arm B a test
+                         * of the door rather than of the capability. */
+                        ipc_grant(ing);
+                        ing->is_ipc = 0;
+                        sched_unblock(ing);
+                    } else {
+                        kputs("[user] IPC un-granted probe FAILED to load\r\n");
+                    }
+                    kputs("[user] ring-3 IPC door probes spawned (granted + un-granted)\r\n");
+
+                    /* DDR-1084: the ACTION path into the same door. A THIRD
+                     * process for DDR-1083's reason: it needs is_agent (to
+                     * submit at all) AND the door, and IPCDENY exists precisely
+                     * to lack the door, so neither existing spawn could carry
+                     * it. Same probe key, so the arms land on smoke-sendipc and
+                     * no new gate is created (DDR-1039's reasoning). It uses
+                     * endpoint slots 4 and 5; ipctest uses slot 2. */
+                    struct tcb *ia = 0;
+                    uint64_t ialen = (uint64_t)(uintptr_t)actionipctest_elf_end -
+                                     (uint64_t)(uintptr_t)actionipctest_elf;
+                    if (elf_load((void *)(uintptr_t)actionipctest_elf, ialen,
+                                 "ACTIONIPC", &ia) == ELF_OK && ia) {
+                        ia->is_agent = 1;              /* authority to PROPOSE */
+                        ipc_grant(ia);                 /* authority to SEND */
+                        sched_unblock(ia);
+                        kputs("[user] 3C SEND_IPC probe spawned (agent + ipc door)\r\n");
+                    } else {
+                        kputs("[user] ACTIONIPC probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1034: the bounded experiment executor, spawned TWICE for
+                 * the same reason and with the same fixture shape. is_exec is
+                 * PER-PROCESS, so one process cannot exercise both paths. */
+                if (probe_enabled("exp")) {
+                    uint64_t xplen = (uint64_t)(uintptr_t)exptest_elf_end -
+                                     (uint64_t)(uintptr_t)exptest_elf;
+                    struct tcb *xg = 0, *xng = 0;
+                    if (elf_load((void *)(uintptr_t)exptest_elf, xplen,
+                                 "EXPGRANT", &xg) == ELF_OK && xg) {
+                        exec_grant(xg);                /* the door, kernel-side only */
+                        sched_unblock(xg);
+                    } else {
+                        kputs("[user] EXP granted probe FAILED to load\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)exptest_elf, xplen,
+                                 "EXPDENY", &xng) == ELF_OK && xng) {
+                        /* HOLDS THE CAPABILITY, LACKS ONLY THE DOOR -- built
+                         * this way from the start because DDR-1033 measured the
+                         * alternative: with neither, cap_authorize refuses the
+                         * call on its own and the is_exec check could be
+                         * deleted outright with the gate still green. */
+                        exec_grant(xng);
+                        xng->is_exec = 0;
+                        sched_unblock(xng);
+                    } else {
+                        kputs("[user] EXP un-granted probe FAILED to load\r\n");
+                    }
+                    kputs("[user] experiment executor probes spawned (granted + un-granted)\r\n");
+
+                    /* DDR-1083: the ACTION path into the same executor. A THIRD
+                     * process, not a flag on the two above: it needs is_agent
+                     * (to submit at all -- sys_submit_action:117) AND the door,
+                     * and the un-granted probe exists precisely to lack the
+                     * door, so neither could carry this. It is spawned under the
+                     * same probe key so its arms land on smoke-runexp and no new
+                     * gate is created (DDR-1039's reasoning). */
+                    struct tcb *xa = 0;
+                    uint64_t xalen = (uint64_t)(uintptr_t)actionexptest_elf_end -
+                                     (uint64_t)(uintptr_t)actionexptest_elf;
+                    if (elf_load((void *)(uintptr_t)actionexptest_elf, xalen,
+                                 "ACTIONEXP", &xa) == ELF_OK && xa) {
+                        xa->is_agent = 1;              /* authority to PROPOSE */
+                        exec_grant(xa);                /* authority to RUN */
+                        sched_unblock(xa);
+                        kputs("[user] 3C RUN_EXPERIMENT probe spawned (agent + exec door)\r\n");
+                    } else {
+                        kputs("[user] ACTIONEXP probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1149: the domain capabilities, checked at submission.
+                 * FOUR processes, one per role, because each flag and each
+                 * handle is per-process and the gate must see every layer fail
+                 * on its own (DDR-1033). Every role is is_agent: without it
+                 * NSI 31/92 refuse before the domain check is ever reached, and
+                 * the arms would be vacuous. argv[1] carries the role. */
+                if (probe_enabled("domcap")) {
+                    static const char *const roles[5] = { "GRANT", "NODOOR", "NOCAP", "DOORX", "CAPX" };
+                    uint64_t dclen = (uint64_t)((uintptr_t)domcaptest_elf_end -
+                                                (uintptr_t)domcaptest_elf);
+                    for (int r = 0; r < 5; r++) {
+                        char blob[24];
+                        uint32_t n = 0;
+                        const char *a0 = "DOMCAP";
+                        for (const char *q = a0; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        for (const char *q = roles[r]; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        struct exec_args ea = { blob, n, 2, 0 };
+                        struct tcb *dt = 0;
+                        if (elf_load_args((void *)(uintptr_t)domcaptest_elf, dclen,
+                                          "DOMCAP", &ea, &dt) != ELF_OK || !dt) {
+                            kputs("[user] DOMCAP probe FAILED to load\r\n");
+                            continue;
+                        }
+                        dt->is_agent = 1;                 /* authority to PROPOSE */
+                        ocr_grant(dt); scene_grant(dt); browse_grant(dt);
+                        if (r == 1) {                     /* NODOOR: caps, no flags */
+                            dt->is_ocr = 0; dt->is_scene = 0; dt->is_browse = 0;
+                        } else if (r == 2) {              /* NOCAP: flags, no caps */
+                            dt->ocr_cap = CAP_NULL; dt->scene_cap = CAP_NULL;
+                            dt->browse_cap = CAP_NULL;
+                        } else if (r == 3) {              /* DOORX: OCR door, ALL caps */
+                            dt->is_scene = 0; dt->is_browse = 0;
+                        } else if (r == 4) {              /* CAPX: ALL doors, OCR cap */
+                            dt->scene_cap = CAP_NULL; dt->browse_cap = CAP_NULL;
+                        }
+                        /* DOORX / CAPX, not one 'OCR only' role: DDR-1149 sec.4.1
+                         * measured that with BOTH layers narrowed, a wrong
+                         * per-type FLAG mapping is masked by the capability
+                         * refusal (M3 passed). Each role narrows ONE layer. */
+                        sched_unblock(dt);                /* authority BEFORE the first run */
+                    }
+                    kputs("[user] domain-capability probes spawned (GRANT NODOOR NOCAP DOORX CAPX)\r\n");
+                }
+                /* DDR-1150: SYS_LEDGER. Two processes by role (argv[1]): SOV is
+                 * sovereign and stands in for the installer's KEYGEN; PLAIN is
+                 * not, and must be refused on every op. Two processes rather than
+                 * a fork, so the refused caller's authority is set here, by the
+                 * kernel, and cannot be inherited by accident. */
+                if (probe_enabled("ledger")) {
+                    static const char *const lroles[2] = { "SOV", "PLAIN" };
+                    uint64_t lglen = (uint64_t)((uintptr_t)ledgertest_elf_end -
+                                                (uintptr_t)ledgertest_elf);
+                    for (int r = 0; r < 2; r++) {
+                        char blob[16];
+                        uint32_t n = 0;
+                        for (const char *q = "LEDGER"; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        for (const char *q = lroles[r]; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        struct exec_args ea = { blob, n, 2, 0 };
+                        struct tcb *lt = 0;
+                        if (elf_load_args((void *)(uintptr_t)ledgertest_elf, lglen,
+                                          "LEDGER", &ea, &lt) != ELF_OK || !lt) {
+                            kputs("[user] LEDGER probe FAILED to load\r\n");
+                            continue;
+                        }
+                        if (r == 0)
+                            lt->is_sovereign = 1;         /* authority BEFORE the first run */
+                        sched_unblock(lt);
+                    }
+                    kputs("[user] ledger probes spawned (SOV PLAIN)\r\n");
+                }
+                /* DDR-1037: POSIX poll(). One process -- unlike is_ipc/is_exec
+                 * there is no per-process door here, so a second un-granted
+                 * spawn would exercise nothing. */
+                if (probe_enabled("poll")) {
+                    uint64_t plen = (uint64_t)(uintptr_t)polltest_elf_end -
+                                    (uint64_t)(uintptr_t)polltest_elf;
+                    struct tcb *pp = 0;
+                    if (elf_load((void *)(uintptr_t)polltest_elf, plen,
+                                 "POLLTEST", &pp) == ELF_OK && pp) {
+                        sched_unblock(pp);
+                        kputs("[user] poll probe spawned\r\n");
+                    } else {
+                        kputs("[user] POLLTEST probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1017: Section 3C ACTION_SPAWN_PROCESS, the second
+                 * force-pending type. FAT-rooted (like the actionread probe and
+                 * unlike actiondel): it touches no files, so it neither needs
+                 * the writable SFS root nor belongs in smnt_pid -- adding it to
+                 * that wait would make the destructive umount block on a probe
+                 * that has nothing to do with it.
+                 *
+                 * It FORKS, deliberately: the control arm proves fork+reap work
+                 * in this boot, which is what makes "no child after the action"
+                 * evidence rather than a tautology. The child exits immediately,
+                 * so nothing outlives the probe. */
+                if (probe_enabled("actionspawn")) {
+                    struct tcb *as = 0;
+                    uint64_t aslen = (uint64_t)(uintptr_t)actionspawntest_elf_end -
+                                     (uint64_t)(uintptr_t)actionspawntest_elf;
+                    if (elf_load((void *)(uintptr_t)actionspawntest_elf, aslen,
+                                 "ACTIONSPAWN", &as) == ELF_OK && as) {
+                        as->is_agent = 1;
+                        as->root_mnt = mnt;           /* FAT root before unblock */
+                        sched_unblock(as);
+                        kputs("[user] 3C ACTION_SPAWN_PROCESS probe spawned (agent)\r\n");
+                    } else {
+                        kputs("[user] ACTIONSPAWN probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1018: Section 3C ACTION_QUERY_MEMORY. Auto-approving (not
+                 * in aether_action_forces_pending), so it needs no second
+                 * privileged actor -- DDR-1015's shape.
+                 *
+                 * is_memory as well as is_agent: sys_memory_read/write require
+                 * CAP_MEMORY (sys_agentmem.c:20/48) and return -EPERM otherwise.
+                 * NOT is_sovereign, deliberately -- that ALSO satisfies the
+                 * check, and then the gate would say nothing about an ordinary
+                 * agent's authority, which is the whole subject. */
+                if (probe_enabled("actionquery")) {
+                    struct tcb *aq = 0;
+                    uint64_t aqlen = (uint64_t)(uintptr_t)actionquerytest_elf_end -
+                                     (uint64_t)(uintptr_t)actionquerytest_elf;
+                    if (elf_load((void *)(uintptr_t)actionquerytest_elf, aqlen,
+                                 "ACTIONQUERY", &aq) == ELF_OK && aq) {
+                        aq->is_agent  = 1;
+                        aq->is_memory = 1;            /* CAP_MEMORY, DDR-836 */
+                        aq->root_mnt  = mnt;
+                        sched_unblock(aq);
+                        kputs("[user] 3C ACTION_QUERY_MEMORY probe spawned (agent+CAP_MEMORY)\r\n");
+                    } else {
+                        kputs("[user] ACTIONQUERY probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1020: 3C PROPOSE_HYPOTHESIS + EVOLVE_GENOME in one probe.
+                 * SFS-rooted (it writes /HYPO.TXT and /GENOME.TXT) and therefore
+                 * in smnt_pid, so the destructive umount below waits for it
+                 * (DDR-967) rather than pulling the root out mid-write and
+                 * making a teardown race read as a policy failure. */
+                if (probe_enabled("actionhypo")) {
+                    struct tcb *ah = 0;
+                    uint64_t ahlen = (uint64_t)(uintptr_t)actionhypotest_elf_end -
+                                     (uint64_t)(uintptr_t)actionhypotest_elf;
+                    if (elf_load((void *)(uintptr_t)actionhypotest_elf, ahlen,
+                                 "ACTIONHYPO", &ah) == ELF_OK && ah) {
+                        ah->is_agent = 1;
+                        ah->root_mnt = smnt;          /* SFS root before unblock */
+                        smnt_pid[4]  = ah->pid;       /* DDR-967 */
+                        sched_unblock(ah);
+                        kputs("[user] 3C HYPOTHESIS+GENOME probe spawned (agent, SFS-rooted)\r\n");
+                    } else {
+                        kputs("[user] ACTIONHYPO probe FAILED to load\r\n");
                     }
                 }
                 if (probe_enabled("ftruncate")) {
@@ -2406,7 +3345,11 @@ static void fs_test_thread(void *arg) {
                  * spawned (probe_enabled) and is skipped. */
                 {
                     uint64_t dl = g_ticks + 400;
-                    for (int i = 0; i < 3; i++)
+                    /* DDR-1016: bound derived from the array, not restated.
+                     * Widening smnt_pid and leaving a literal 3 here would drop
+                     * the new probe out of the wait silently -- the exact drift
+                     * class DDR-1013 found in a probe constant. */
+                    for (int i = 0; i < (int)(sizeof smnt_pid / sizeof smnt_pid[0]); i++)
                         while (smnt_pid[i] && sched_find_pid(smnt_pid[i]) && g_ticks < dl)
                             yield();
                     if (g_ticks >= dl)
@@ -2427,8 +3370,10 @@ static void fs_test_thread(void *arg) {
 
                 /* Slice 4i: inline LZ4 + metadata tags (destructive). */
                 int lr = sfs_selftest_lz4(sbd);
-                kputs("[sfs] lz4+tags ");
-                kputs(lr == 7 ? "compress/readback/tag OK\r\n" : "FAIL\r\n");
+                { kline k; kline_init(&k);           /* DDR-1055 */
+                  kline_s(&k, "[sfs] lz4+tags ");
+                  kline_s(&k, lr == 7 ? "compress/readback/tag OK\r\n" : "FAIL\r\n");
+                  kline_emit(&k); }
 
                 /* DDR-760: persistent SFS root (SFS-as-root half 2/2). The
                  * destructive tests above left blk2 dirty + unmounted; reformat it
@@ -2445,8 +3390,16 @@ static void fs_test_thread(void *arg) {
                          * mkfs.sfs image already carries one (prov_mnt < 0). When a
                          * provisioned root is present the daemon roots there
                          * (below) and this write is skipped entirely. */
+                        /* DDR-1085: this text is DUPLICATED at Makefile:2258
+                         * (AETHER_CFG_TEXT, the host mkfs.sfs image DDR-770 roots
+                         * at). Two copies of one boot policy: keep them in step or
+                         * the two config gates disagree about what the policy IS.
+                         * `task` is `verify-boot-chain` rather than the old `test`
+                         * because `test` was byte-identical to agent_base.c's
+                         * compiled-in fallback, so the whole config -> kernel ->
+                         * agent wire was unobservable -- and, as measured, unbuilt. */
                         static const char CFGTEXT[] =
-                            "mode=sovereign\ntask=test\nslot=0\nnet=10.0.2.2:11434\n";
+                            "mode=sovereign\ntask=verify-boot-chain\nslot=0\nnet=10.0.2.2:11434\n";
                         if (prov_mnt < 0) {
                             struct vfs_file cf;
                             if (vfs_create(cap, root_smnt, "/etc/aether/config", &cf) == 0)
@@ -2495,6 +3448,16 @@ static void fs_test_thread(void *arg) {
                          * (vfs.c) is refreshed here so this exercises the B+TREE, not
                          * the budget — this is kernel self-test context, not a
                          * userspace consumer. */
+                        /* DDR-1143 §10.2: cost of the SFS write barriers,
+                         * measured in place rather than argued. Ticks across
+                         * the churn + GC loops, and the barriers issued in
+                         * them, so a before/after pair has a per-barrier
+                         * denominator (NON-NEGOTIABLE 17). g_ticks is the
+                         * 100 Hz timer, i.e. EMULATED time under TCG
+                         * (DDR-1029): valid for comparing two builds on one
+                         * host, not a hardware claim. */
+                        g_bc_t0 = g_ticks;
+                        g_bc_b0 = sfs_barrier_count();
                         {
                             uint64_t cbuf = pmm_alloc_pages(4);   /* 64 KiB */
                             int churn_ok = (cbuf != 0);
@@ -2638,6 +3601,11 @@ static void fs_test_thread(void *arg) {
                             kputs((gc_ok && grew < 170)
                                       ? "[sfs] free-space GC OK\r\n"
                                       : "[sfs] free-space GC FAIL\r\n");
+                            kputs("[sfs] barrier-cost ticks=");
+                            kputdec(g_ticks - g_bc_t0);
+                            kputs(" barriers=");
+                            kputdec(sfs_barrier_count() - g_bc_b0);
+                            kputs("\r\n");
 
                             /* DDR-889 (item 31): read the PERSISTED free list
                              * back off the DEVICE and require it to be there,
@@ -2881,6 +3849,331 @@ static void uaccess_selftest(void) {
     vmm_destroy_address_space(as);   /* frees the AS + both data frames (leaf pages) */
 }
 
+
+/* DDR-1040: SMEP. Two claims, and they are NOT the same claim:
+ *   1. the bit is set      -> printed as PRADYOS_SMEP cpuid= cr4=
+ *   2. the CPU ENFORCES it -> proved by fetching an instruction from a user
+ *                             page at ring 0
+ * A gate asserting only (1) would be decoration. Making (2) observable needs
+ * the expected-fault latch (kernel/fault_expect.h), because a ring-0 #PF is
+ * otherwise fatal here.
+ *
+ * WHY jmp AND NOT call. The SMEP violation is the INSTRUCTION FETCH at the
+ * target, so the faulting RIP is UVA_X itself, not the transfer instruction —
+ * a `call` would already have pushed its return address before faulting, and
+ * resuming past it would leave RSP 8 bytes low. `jmp` pushes nothing, so both
+ * outcomes leave the stack identical:
+ *   SMEP on  -> fault at UVA_X, latch resumes at smep_call_hi (a `ret`)
+ *   SMEP off -> the user page's own 0xC3 executes and returns
+ * and both land back in this function through the same `ret`.
+ *
+ * The transfer lives in its own asm block rather than inline-with-labels so the
+ * armed window is exact and no compiler scheduling decision can move the
+ * instruction out from between two C labels.
+ *
+ * Runs beside uaccess_selftest, well before smp_start_aps(), so exactly one CPU
+ * exists — the latch's precondition, which it refuses to arm without. */
+__asm__(".pushsection .text\n"
+        ".globl smep_probe_jmp\n"
+        ".type  smep_probe_jmp,@function\n"
+        "smep_probe_jmp:\n"
+        "  jmp *%rdi\n"                 /* SysV: first arg in RDI            */
+        ".globl smep_call_hi\n"
+        "smep_call_hi:\n"
+        "  ret\n"                       /* the latch's resume point          */
+        ".size  smep_probe_jmp,.-smep_probe_jmp\n"
+        ".popsection\n");
+void smep_probe_jmp(uint64_t target);
+extern char smep_call_hi[];
+
+static void smep_selftest(void) {
+    unsigned rep = cpu_enable_smep();
+    kputs("PRADYOS_SMEP cpuid=");
+    kputdec(rep & 1u);
+    kputs(" cr4=");
+    kputdec((rep >> 1) & 1u);
+    kputs("\r\n");
+
+    /* DDR-1041: SMAP, enabled HERE and not earlier. Everything before this
+     * point in the boot runs without it, deliberately — the enumeration
+     * experiment (DDR-1041 §3) needs the syscall path and the ring-3 probes to
+     * run WITH it, and those all come later; turning it on any earlier only
+     * widens the window without widening the coverage. */
+    /* DDR-1044: CR4.MCE + the MCA banks. Without this a machine check does not
+     * raise #MC at all — it triple-faults, and the log stops mid-line with no
+     * banner and no registers (measured, DDR-1044 §2). */
+    unsigned mcerep = cpu_enable_mce();
+    kputs("PRADYOS_MCE cpuid=");
+    kputdec(mcerep & 1u);
+    kputs(" cr4=");
+    kputdec((mcerep >> 1) & 1u);
+    kputs(" banks=");
+    kputdec((mcerep >> 8) & 0xFFu);
+    kputs("\r\n");
+
+    unsigned smaprep = cpu_enable_smap();
+    kputs("PRADYOS_SMAP cpuid=");
+    kputdec(smaprep & 1u);
+    kputs(" cr4=");
+    kputdec((smaprep >> 1) & 1u);
+    kputs("\r\n");
+
+    uint64_t save_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(save_cr3));
+
+    uint64_t as = vmm_new_address_space();
+    if (!as) { kputs("PRADYOS_SMEP_SKIP no-as\r\n"); return; }
+    void *fx = ptnode_alloc();
+    if (!fx) { kputs("PRADYOS_SMEP_SKIP no-frame\r\n"); vmm_destroy_address_space(as); return; }
+
+    /* 0xC3 = ret, seeded through the IDENTITY view, whose translation has U=0 —
+     * which is why seeding it is not itself an SMAP question (DDR-1040 §8). */
+    *(volatile unsigned char *)fx = 0xC3;
+
+    const uint64_t UVA_X = VMM_USER_MIN + 0x2000;
+    /* The one line that differs from every other mapping in this tree:
+     * VMM_USER and NOT VMM_NX, i.e. present + user + executable. M2 drops the
+     * VMM_USER, and arm B must then fail — that is what proves the arm measures
+     * user-ness rather than "some fault happened". */
+    vmm_map_in(as, UVA_X, (uint64_t)(uintptr_t)fx, VMM_USER);
+
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    __asm__ volatile("mov %0, %%cr3" :: "r"(as) : "memory");
+
+    uint32_t vec = 0, err = 0;
+    int fired = 0;
+    /* Window = the single byte we are about to fetch. Tighter than a code range
+     * and exactly the event under test: a ring-0 fault anywhere else still
+     * panics, which is the whole point of having a window. */
+    int armed = fault_expect_arm(UVA_X, UVA_X + 1,
+                                 (uint64_t)(uintptr_t)smep_call_hi);
+    if (armed) {
+        smep_probe_jmp(UVA_X);
+        fired = fault_expect_taken(&vec, &err);
+    }
+
+    __asm__ volatile("mov %0, %%cr3" :: "r"(save_cr3) : "memory");
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+
+    if (!armed) {
+        kputs("PRADYOS_SMEP_SKIP not-armed\r\n");
+    } else if (fired) {
+        kputs("PRADYOS_SMEP_ENFORCED vec=");
+        kputdec(vec);
+        kputs(" err=");
+        kputhex(err);           /* kputhex emits its own 0x (INV.9) */
+        kputs("\r\n");
+    } else {
+        /* The user page's `ret` RAN. Either SMEP is absent (the default CPU
+         * model), or the bit was never set (M1), or the page was not user (M2).
+         * All three are real outcomes and arm A separates the first from the
+         * other two. */
+        kputs("PRADYOS_SMEP_EXECUTED\r\n");
+    }
+    /* Printed AFTER the fault. "Enforced" and "died at exactly that instruction"
+     * produce the same lines above; only a witness printed afterwards separates
+     * them, and this is it. */
+    kputs("PRADYOS_SMEP_ALIVE\r\n");
+
+    vmm_destroy_address_space(as);
+}
+
+/* DDR-1041: SMAP enforcement + the shielded path, in one probe.
+ *
+ * Unlike SMEP the violation here is a DATA access, so the faulting RIP IS the
+ * load instruction — which is why this helper exports labels around the load
+ * itself, where smep_probe_jmp had to window the TARGET instead. On resume EAX
+ * is undefined and that is fine: the probe cares whether it faulted, not what
+ * it read. Arm 2 is the one that reads a value, and it takes the shielded path.
+ */
+__asm__(".pushsection .text\n"
+        ".globl smap_probe_read\n"
+        ".type  smap_probe_read,@function\n"
+        "smap_probe_read:\n"
+        "  movzbl (%rdi), %eax\n"
+        ".globl smap_read_hi\n"
+        "smap_read_hi:\n"
+        "  ret\n"
+        ".size  smap_probe_read,.-smap_probe_read\n"
+        ".popsection\n");
+unsigned smap_probe_read(uint64_t uaddr);
+extern char smap_probe_read_sym[] __asm__("smap_probe_read");
+extern char smap_read_hi[];
+
+static void smap_selftest(void) {
+    uint64_t save_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(save_cr3));
+
+    uint64_t as = vmm_new_address_space();
+    if (!as) { kputs("PRADYOS_SMAP_SKIP no-as\r\n"); return; }
+    void *fd = ptnode_alloc();
+    if (!fd) { kputs("PRADYOS_SMAP_SKIP no-frame\r\n"); vmm_destroy_address_space(as); return; }
+
+    *(volatile unsigned char *)fd = 0x5A;          /* seeded via the identity view (U=0) */
+
+    const uint64_t UVA_D = VMM_USER_MIN + 0x3000;
+    vmm_map_in(as, UVA_D, (uint64_t)(uintptr_t)fd, VMM_USER | VMM_RW | VMM_NX);
+
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    __asm__ volatile("mov %0, %%cr3" :: "r"(as) : "memory");
+
+    /* ARM 1 — UNSHIELDED. No stac, so with SMAP on the CPU must refuse. */
+    uint32_t vec = 0, err = 0;
+    int fired = 0;
+    int armed = fault_expect_arm((uint64_t)(uintptr_t)smap_probe_read_sym,
+                                 (uint64_t)(uintptr_t)smap_read_hi,
+                                 (uint64_t)(uintptr_t)smap_read_hi);
+    if (armed) {
+        (void)smap_probe_read(UVA_D);
+        fired = fault_expect_taken(&vec, &err);
+    }
+
+    /* ARM 2 — SHIELDED, the path copyin/copyout actually take. If stac were a
+     * no-op this read would fault with no latch armed, i.e. panic — so this arm
+     * cannot silently pass. It is what proves the shield WORKS, as distinct
+     * from proving the hardware refuses. */
+    uaccess_begin();
+    unsigned got = *(const volatile unsigned char *)(uintptr_t)UVA_D;
+    uaccess_end();
+
+    __asm__ volatile("mov %0, %%cr3" :: "r"(save_cr3) : "memory");
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+
+    if (!armed) {
+        kputs("PRADYOS_SMAP_SKIP not-armed\r\n");
+    } else if (fired) {
+        kputs("PRADYOS_SMAP_ENFORCED vec=");
+        kputdec(vec);
+        kputs(" err=");
+        kputhex(err);              /* kputhex emits its own 0x (INV.9) */
+        kputs("\r\n");
+    } else {
+        kputs("PRADYOS_SMAP_READ_ALLOWED\r\n");
+    }
+    kputs(got == 0x5A ? "PRADYOS_SMAP_SHIELDED_OK\r\n"
+                      : "PRADYOS_SMAP_SHIELDED_BAD\r\n");
+    kputs("PRADYOS_SMAP_ALIVE\r\n");
+
+    vmm_destroy_address_space(as);
+}
+
+/* DDR-1126: CR0.WP ENFORCEMENT proof — the discriminating arm.
+ *
+ * DDR-1125 §6 checked the two obvious arms for vacuity BEFORE writing this one,
+ * and both fail:
+ *
+ *   "assert the kernel boots with WP set" is VACUOUS — it boots either way, and
+ *   DDR-1125 §5 measured exactly that on the mutant.
+ *
+ *   "assert CR0 bit 16 reads 1" is WEAK — it proves the bit is SET, not that it
+ *   is ENFORCED, and under TCG enforcement is a property of the emulator. That
+ *   is DDR-1046 §2.1's own correction restated: "nothing crashed" cannot
+ *   distinguish "the alias is read-only" from "the write-protect never applied".
+ *
+ * So the arm is that the write must now FAULT. A ring-0 store to a page
+ * vmm_protect_kernel() stamped `e &= ~VMM_RW` has to raise #PF and be consumed
+ * by DDR-1040's latch, with the kernel surviving to print it.
+ *
+ * THE PRE-FIX TREE IS THE CONTROL and no synthetic defect is needed: without
+ * CR0.WP the same store SUCCEEDS, the latch never fires, and this prints
+ * PRADYOS_WP_WRITE_ALLOWED — which is what DDR-1125 §1 measured on the shipped
+ * kernel before the fix (`ro_write=survived`). That string is a FORBIDDEN
+ * sentinel on smoke-wxkernel, so the gate fails on the unfixed tree.
+ *
+ * THE ADDRESS IS __text_end AND THAT IS CHECKED, NOT ASSUMED. vmm_protect_kernel
+ * clears RW for va < text_end (.text) and again for va < rodata_end (.rodata),
+ * and KEEPS RW past rodata_end. So this byte is only in an RW-clear page while
+ * .rodata is non-empty — measured at __text_end=0xffffffff80055000 against
+ * __rodata_end=0xffffffff80142000, ~970 KiB apart (DDR-1125 §2). Were .rodata
+ * ever empty the store would land in the RW-KEEPING branch and succeed for a
+ * trivial reason, so the arm would go quiet rather than loud; the byte is
+ * printed for that reason.
+ *
+ * MEMORY IS BIT-IDENTICAL EITHER WAY: the byte written is the byte just read.
+ * With WP set nothing is written at all; without it, the same value goes back.
+ *
+ * The labels bracket the STORE, exactly as smap_probe_read brackets its load —
+ * the faulting RIP is the store itself, so a window around the call would never
+ * match.
+ */
+__asm__(".pushsection .text\n"
+        ".globl wp_probe_write\n"
+        ".type  wp_probe_write,@function\n"
+        "wp_probe_write:\n"
+        "  movb %sil, (%rdi)\n"
+        ".globl wp_write_hi\n"
+        "wp_write_hi:\n"
+        "  ret\n"
+        ".size  wp_probe_write,.-wp_probe_write\n"
+        ".popsection\n");
+void wp_probe_write(uint64_t kaddr, unsigned byte);
+extern char wp_probe_write_sym[] __asm__("wp_probe_write");
+extern char wp_write_hi[];
+
+static void wp_selftest(void) {
+    extern char __text_end[];
+    volatile unsigned char *p = (volatile unsigned char *)(uintptr_t)__text_end;
+    unsigned before = *p;                     /* read first: we write back the same value */
+
+    uint64_t cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+
+    /* fault_expect_arm() REFUSES with IF set or an AP online (DDR-1040), so mask
+     * here and restore after — the same shape smap_selftest uses. This runs
+     * beside the other boot self-tests, well before smp_start_aps() at :4103. */
+    uint64_t fl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+
+    uint32_t vec = 0, err = 0;
+    int fired = 0;
+    int armed = fault_expect_arm((uint64_t)(uintptr_t)wp_probe_write_sym,
+                                 (uint64_t)(uintptr_t)wp_write_hi,
+                                 (uint64_t)(uintptr_t)wp_write_hi);
+    if (armed) {
+        wp_probe_write((uint64_t)(uintptr_t)__text_end, before);
+        fired = fault_expect_taken(&vec, &err);   /* also DISARMS — never leave it armed */
+    }
+
+    __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+
+    unsigned after = *p;
+
+    /* One kline emit, not a run of kputs: this is a composite line and another
+     * CPU's print could splice it (DDR-1055). */
+    kline k; kline_init(&k);
+    kline_s(&k, "PRADYOS_WP cr0=");
+    kline_x(&k, cr0);
+    kline_s(&k, " wp=");
+    kline_d(&k, (cr0 >> 16) & 1u);
+    kline_s(&k, " byte=");
+    kline_x(&k, before);
+    kline_s(&k, after == before ? " intact=1\r\n" : " intact=0\r\n");
+    kline_emit(&k);
+
+    if (!armed) {
+        kputs("PRADYOS_WP_SKIP not-armed\r\n");
+    } else if (fired) {
+        kline k2; kline_init(&k2);
+        kline_s(&k2, "PRADYOS_WP_ENFORCED vec=");
+        kline_d(&k2, vec);
+        kline_s(&k2, " err=");
+        kline_x(&k2, err);            /* kline_x emits its own 0x (INV.9) */
+        kline_s(&k2, "\r\n");
+        kline_emit(&k2);
+    } else {
+        /* The pre-fix behaviour: the store completed, so WP is not enforcing.
+         * NOT a forbidden sentinel, and DDR-1126 sec.3 records why one was added
+         * and then removed -- these three branches are mutually exclusive by
+         * construction, and boot_test.sh checks REQUIRED patterns before
+         * forbidden ones, so a forbidden entry here could never fire
+         * independently of the missing PRADYOS_WP_ENFORCED. It would have read
+         * as a second net while catching nothing. */
+        kputs("PRADYOS_WP_WRITE_ALLOWED\r\n");
+    }
+}
+
 static void vmm_test(void) {
     const uint64_t va = 0xFFFF800000000000ull;   /* unused PML4 slot (256) */
     uint64_t pg = pmm_alloc_page();
@@ -2982,9 +4275,10 @@ static void print_boot_info(const struct boot_info *bi) {
     kputs("  long_mode=");
     kputhex(bi->long_mode);
     kputs("\r\n");
-    kputs("NEXUS: E820 map, entries=");
-    kputhex(bi->e820_count);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "NEXUS: E820 map, entries=");
+      kline_x(&k, bi->e820_count);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
     for (uint32_t i = 0; i < bi->e820_count; i++) {
         kputs("  base=");
         kputhex(bi->e820[i].base);
@@ -3027,10 +4321,167 @@ static void cow_selftest(void) {
     kputs(ok ? "[vmm] COW fork copy-on-write OK\r\n" : "[vmm] COW fork FAIL\r\n");
 }
 
+/* DDR-1065: ptnode_in_use underflows on every COW fork — the DDR-1003 §5.1 gate.
+ *
+ * ptnode_alloc increments ONCE per frame; on a COW fork pmm_incref raises the
+ * refcount without a second increment (correct — no new frame); but at teardown
+ * free_subtree ptnode_free's the leaf page from BOTH address spaces, and
+ * ptnode_free decrements UNCONDITIONALLY while pmm_free_pages only releases the
+ * frame on the last reference. One ++, two --, one release.
+ *
+ * THE CHILD MUST NOT WRITE, and that is the whole design (DDR-1003 §5.1): the
+ * ordinary leak shape (fork, child writes, both exit) is BALANCED and would
+ * PASS, so a gate built the obvious way tests nothing here. This differs from
+ * cow_selftest() above by exactly one thing — no vmm_cow_fault — which is the
+ * difference between the balanced case and the defective one.
+ *
+ * Uses the REAL fork path (vmm_fork_address_space_cow), not a reconstruction:
+ * DDR-1014's rule is that a proof which paraphrases the kernel tests the
+ * paraphrase. Deterministic and kernel-side — no ring-3, no reap poll, no
+ * timing — so this is not an intermittent gate and its stated N is 1. */
+/* DDR-1076: memset correctness across BOTH dispatch paths.
+ *
+ * Runs beside the other boot self-tests, BEFORE smp_start_aps(), so it is
+ * single-CPU and the flag it borrows below cannot be observed by another CPU.
+ *
+ * WHY A NON-ZERO FILL IS THE ARM THAT MATTERS. `rep stosq` moves eight bytes
+ * per iteration out of RAX, so memset's byte must be broadcast into all eight
+ * lanes. A broken broadcast is CORRECT FOR EVERY ZERO FILL and wrong only for
+ * a non-zero one -- and this tree has 72 memset call sites (73 grep hits, one
+ * being string.c's own definition) with exactly THREE non-zero fills (kheap.c:174's POISON_FREE, main.c:1349's 0xB6,
+ * main.c:2911's 0x5A), none of whose bytes any gate verifies: POISON_FREE is
+ * written and NEVER READ, and the other two are FS write buffers checked only
+ * by return code. Such a defect would be invisible to all 177 gates and to
+ * the kheap debug machinery whose poison it corrupts. 0xA7 below stands in
+ * that gap, chosen distinct from all three shipped fills so a stray match in
+ * a log cannot be confused with one of them.
+ *
+ * WHY BOTH PASSES FORCE THE FLAG. `rep stosb` consumes AL only and is
+ * therefore IMMUNE to a broadcast bug, so a test that ran only the path this
+ * CPU happens to pick would, on the ERMS-advertising CI model, exercise the
+ * one path that cannot fail. Both values are therefore set explicitly --
+ * pass 0 = ERMS (`rep stosb`), pass 1 = fallback (`rep stosq` + tail) -- so
+ * coverage does not depend on the CPU model AND does not depend on this
+ * running after fast_memcpy_init() (it does not: the selftests are at the
+ * :375x block and that init is at :381x, so the flag is still 0 here).
+ *
+ * FORCING ERMS ON IS SAFE, and DDR-1076 sec.1 is why: `rep stosb` is a base
+ * x86_64 string instruction. ERMS advertises that the microcode is FAST, not
+ * that the instruction exists -- so the forced-on pass is correct on a
+ * pre-ERMS CPU, merely slower. That is the same fact which makes the shipped
+ * dispatch default a speed property rather than a correctness one, and it is
+ * what DDR-1075 sec.4.4 got wrong.
+ *
+ * Deliberately not a debug knob: an opt-in instrument is guaranteed OFF where
+ * it matters (DDR-1010/DDR-1043).
+ *
+ * THE PREPARATION MUST NOT USE THE FUNCTION UNDER TEST: the background is
+ * laid down with an explicit byte loop, because a broken memset would
+ * otherwise corrupt the very baseline the check is measured against. */
+extern uint64_t fast_memcpy_have_erms;          /* DDR-871's probe, shared */
+static uint8_t g_ms_buf[4098];                  /* guard | 4096 region | guard */
+
+static void memset_selftest(void) {
+    static const uint32_t ns[]    = { 0, 1, 7, 8, 9, 4095, 4096 };
+    static const uint8_t  fills[] = { 0x00, 0xA7 };
+    const uint8_t BG = 0x3C;                    /* background; distinct from both fills */
+
+    unsigned cases = 0;
+    int bad = 0;
+    uint32_t bad_n = 0, bad_off = 0;
+    unsigned bad_got = 0, bad_want = 0, bad_pass = 0;
+
+    for (unsigned pass = 0; pass < 2 && !bad; pass++) {
+        uint64_t saved = fast_memcpy_have_erms;
+        /* pass 0 -> REP STOSB, pass 1 -> REP STOSQ + tail. Both forced, so
+         * neither the CPU model nor the init order decides the coverage. */
+        fast_memcpy_have_erms = (pass == 0) ? 1u : 0u;
+
+        for (unsigned i = 0; i < sizeof ns / sizeof ns[0] && !bad; i++) {
+            for (unsigned f = 0; f < sizeof fills / sizeof fills[0] && !bad; f++) {
+                uint32_t n = ns[i];
+                uint8_t  c = fills[f];
+
+                for (uint32_t k = 0; k < sizeof g_ms_buf; k++)  /* NOT memset -- see header */
+                    g_ms_buf[k] = BG;
+
+                memset(&g_ms_buf[1], (int)c, (size_t)n);
+                cases++;
+
+                for (uint32_t k = 0; k < sizeof g_ms_buf && !bad; k++) {
+                    /* Inside the region: the fill. Everywhere else -- both
+                     * guards AND the bytes past n -- the background, so an
+                     * over-run, an under-run and an n=0 clobber are all
+                     * caught, not just a wrong value. */
+                    uint8_t want = (k >= 1 && k < 1 + n) ? c : BG;
+                    if (g_ms_buf[k] != want) {
+                        bad = 1;
+                        bad_pass = pass; bad_n = n; bad_off = k;
+                        bad_got = g_ms_buf[k]; bad_want = want;
+                    }
+                }
+            }
+        }
+        fast_memcpy_have_erms = saved;          /* restored on the failing path too */
+    }
+
+    /* One kline, not a run of kputs: a composite sentinel assembled from
+     * several unlocked calls can be spliced by another printer mid-line
+     * (DDR-1055), and this is the line a failure would be read from. */
+    kline k; kline_init(&k);
+    if (bad) {
+        kline_s(&k, "PRADYOS_MEMSET_FAIL pass="); kline_d(&k, bad_pass);
+        kline_s(&k, " n=");    kline_d(&k, bad_n);
+        kline_s(&k, " off=");  kline_d(&k, bad_off);
+        kline_s(&k, " got=");  kline_d(&k, bad_got);
+        kline_s(&k, " want="); kline_d(&k, bad_want);
+    } else {
+        /* cases is REPORTED by the probe, never a literal in the gate, so an
+         * edit that silently drops arms cannot leave the gate green (DDR-1054). */
+        kline_s(&k, "PRADYOS_MEMSET_OK cases="); kline_d(&k, cases);
+    }
+    kline_s(&k, "\r\n"); kline_emit(&k);
+}
+
+static void sharedpte_selftest(void) {
+    uint64_t before = kheap_outstanding();
+
+    uint64_t parent = vmm_new_address_space();
+    if (!parent) { kputs("[vmm] SHAREDPTE FAIL (no AS)\r\n"); return; }
+    void *pf = ptnode_alloc();                      /* ptnode_in_use++  -- ONE */
+    if (!pf) { vmm_destroy_address_space(parent); kputs("[vmm] SHAREDPTE FAIL (no frame)\r\n"); return; }
+
+    uint64_t va = 0x8000000000ull;                  /* user range (PML4 slot 1) */
+    *(volatile uint64_t *)pf = 0xA5A5A5A5A5A5A5A5ull;
+    vmm_map_in(parent, va, (uint64_t)(uintptr_t)pf, VMM_USER | VMM_RW | VMM_NX);
+
+    uint64_t child = vmm_fork_address_space_cow(parent);   /* pmm_incref: 1 -> 2 */
+    if (!child) {
+        vmm_destroy_address_space(parent);
+        kputs("[vmm] SHAREDPTE FAIL (no fork)\r\n");
+        return;
+    }
+    /* DELIBERATELY NO vmm_cow_fault HERE. See the header. */
+    vmm_destroy_address_space(child);               /* -- ; refcount 2->1, NO release */
+    vmm_destroy_address_space(parent);              /* -- ; releases the frame      */
+
+    uint64_t after = kheap_outstanding();
+    /* Print both, unconditionally, so the gate JUDGES and the probe only REPORTS
+     * (DDR-1020's rule: a fail() before the print silently removes an arm). */
+    kputs("[vmm] SHAREDPTE before=");
+    kputdec(before);
+    kputs(" after=");
+    kputdec(after);
+    kputs(after == before ? "  PRADYOS_SHAREDPTE_OK\r\n"
+                          : "  SHAREDPTE FAIL (ptnode_in_use drifted)\r\n");
+}
+
 void kmain(struct boot_info *bi) {
     kputs("NEXUS: entered kmain (64-bit long mode, ring 0)\r\n");
 
     print_boot_info(bi);
+    display_capture_boot();              /* DDR-1142: record the GOP handoff first */
+    kimg_capture();                      /* DDR-1143 §10.4: before 0x4000 is reused */
 
     gdt_init();
     kputs("NEXUS: kernel GDT loaded\r\n");
@@ -3084,14 +4535,21 @@ void kmain(struct boot_info *bi) {
     vmm_test();
     cap_test();
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
+    smep_selftest();                     /* DDR-1040: SMEP enable + ENFORCEMENT proof */
+    smap_selftest();                     /* DDR-1041: SMAP enforcement + shielded path */
+    wp_selftest();                       /* DDR-1126: CR0.WP actually REFUSES a ring-0 write */
 
     vdso_init();                         /* IMP-C: shared clock page (PIT advances it) */
     metric_page_init();                  /* F#68/DDR-795: sealed objective-function root */
     cow_selftest();                      /* IMP-D: copy-on-write fork isolation */
+    sharedpte_selftest();                /* DDR-1065: ptnode_in_use across a COW fork */
+    memset_selftest();                   /* DDR-1076: fast_memset, both dispatch paths */
 
     /* DDR-804: read the boot-time probe list before anything can consult it.
      * Two port reads, no wait, no allocation; fails closed when absent. */
     fwcfg_init();
+    if (probe_enabled("kimg"))           /* DDR-1143 §10.4: before any FS work */
+        kimg_probe();
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init((uint64_t)bi->acpi_rsdp);   /* DDR-978: 0 on the BIOS path */
@@ -3110,9 +4568,11 @@ void kmain(struct boot_info *bi) {
         } else {
             uint64_t a = pmm_alloc_pages_node(1, 0);
             uint32_t got = a ? numa_node_of(a) : 0xFFFFFFFFu;
-            kputs("[numa] alloc node1 -> node");
-            kputdec(got);
-            kputs(a && got == 1 ? " OK\r\n" : " MISMATCH\r\n");
+            { kline k; kline_init(&k);               /* DDR-1055 */
+              kline_s(&k, "[numa] alloc node1 -> node");
+              kline_d(&k, got);
+              kline_s(&k, a && got == 1 ? " OK\r\n" : " MISMATCH\r\n");
+              kline_emit(&k); }
             if (a)
                 pmm_free_page(a);
         }
@@ -3159,9 +4619,10 @@ void kmain(struct boot_info *bi) {
             if (smp_job_done(i))
                 jobs++;
         }
-        kputs("[smp] jobs done=");
-        kputdec(jobs);
-        kputs("\r\n");
+        { kline k; kline_init(&k);                   /* DDR-1055 */
+          kline_s(&k, "[smp] jobs done=");
+          kline_d(&k, jobs);
+          kline_s(&k, "\r\n"); kline_emit(&k); }
         g_smp_have_aps = (jobs > 0);     /* cross-wake proof runs later, once
                                             the scheduler is up (DDR D5) */
     }
@@ -3196,6 +4657,9 @@ void kmain(struct boot_info *bi) {
         if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
             nvme_init(d->bus, d->dev, d->func);
     }
+    /* DDR-1142: after the loop, so virtio-gpu has had its chance. With no
+     * virtio-gpu, a UEFI boot draws on the framebuffer the firmware set up. */
+    display_init();
     /* DDR-972: no real disk means the ISO. Every one of the 147 gates boots
      * through boot_test.sh, which attaches at least one virtio-blk-pci device,
      * so blk_count() is never 0 for any of them and this branch is UNREACHABLE
@@ -3245,6 +4709,15 @@ void kmain(struct boot_info *bi) {
     aether_init();                       /* Layer 6: PMM-pool queue + audit rings */
     aether_selftest();                   /* Layer 6: smoke-aether-queue (PRADYOS_AETHER_QUEUE_OK) */
     aether_sectest();                    /* Layer 6: smoke-aether-sec (bounds + clean-kill paths) */
+    {   /* DDR-1141 sec.2.3: the kernel took its network configuration from a
+         * DHCP server -- record WHICH one. Here, not in net_init, because the
+         * audit ring does not exist until aether_init(); and from thread
+         * context, not lwIP's callback, which runs under g_net_lock. A lease
+         * bound after net_init's 5 s wait is printed but not recorded (stated). */
+        uint32_t lip = 0, lsrv = 0;
+        if (net_dhcp_lease(&lip, &lsrv) == 0)
+            aether_audit(0, ACTION_NET_DHCP, AETHER_DEST_ID(lsrv, 67), AR_NET_CONNECT);
+    }
     fat32_register();                    /* Phase 4: register the FS driver with the VFS */
     sfs_register();                      /* Phase 4: SOVEREIGN FS (ADR-018) */
     pdrive_register();                   /* DDR-890 (item 40): PRADYOS Drive */

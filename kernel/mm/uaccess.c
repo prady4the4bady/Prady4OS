@@ -23,7 +23,11 @@ ssize_t copyin(void *kdst, const void __user *usrc, size_t n) {
         return 0;
     if (!vmm_user_range_ok(cur_cr3(), (uint64_t)(uintptr_t)usrc, (uint64_t)n, 0))
         return -EFAULT;
+    uaccess_begin();                    /* DDR-1041: SMAP window opens HERE --
+                                         * after validation, so a bad pointer is
+                                         * still rejected with AC clear. */
     memcpy(kdst, (const void *)usrc, n);
+    uaccess_end();
     return (ssize_t)n;
 }
 
@@ -34,7 +38,9 @@ ssize_t copyout(void __user *udst, const void *ksrc, size_t n) {
      * to a read-only / text user page is rejected here (W^X upheld). */
     if (!vmm_user_range_ok(cur_cr3(), (uint64_t)(uintptr_t)udst, (uint64_t)n, 1))
         return -EFAULT;
+    uaccess_begin();                    /* DDR-1041 */
     memcpy((void *)udst, ksrc, n);
+    uaccess_end();
     return (ssize_t)n;
 }
 
@@ -55,7 +61,15 @@ ssize_t copyinstr(char *kdst, const void __user *usrc, size_t max, size_t *lenou
             if (!vmm_user_range_ok(cr3, va, 1, 0))
                 return -EFAULT;
         }
+        /* DDR-1041: the window is opened and closed around the ONE byte, not
+         * hoisted out of the loop. Hoisting would leave AC set across the
+         * vmm_user_range_ok walk at every page boundary — i.e. across kernel
+         * page-table reads — which is precisely the exposure SMAP exists to
+         * remove. One stac/clac pair per byte is the honest cost of a
+         * byte-at-a-time reader; a bulk reader would pay it once per page. */
+        uaccess_begin();
         char c = *(const volatile char *)(uintptr_t)va;
+        uaccess_end();
         kdst[i] = c;
         if (c == '\0') {
             if (lenout)

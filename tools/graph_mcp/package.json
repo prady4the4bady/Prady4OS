@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "PRADYOS persistent code knowledge graph — MCP server + CLI (Tree-sitter + SQLite, pure JS/WASM, cross-platform).",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "bin": {
     "pradyos-graph": "server.js"
