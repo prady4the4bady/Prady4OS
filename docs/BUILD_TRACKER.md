@@ -6590,3 +6590,10 @@ blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,
 - `kernel.bin` is `6e875c31b66f4593`, 1,372,554 B (+12,288 B), with 200,310 B
   of headroom. 83 probe ELFs.
 - `blank`/`installed` are not exercised yet; they belong to `smoke-install`.
+
+### 2026-09-26 — DDR-1148: virtio-blk timeout names request type and ring state (instrument only)
+- Trigger: an intermittent shard-9 `smoke-kill` red on `dfbe417` (PR suite 36238336846). The push suite on the same SHA was green. The capture repeats `[vblk] compl wait timeout unit=2 ... lba=0` with the only CPU ticking.
+- On the failure path only, a second single-`kline` line is added: `[vblkto] unit= type= status= head= used_idx= last_used= avail_idx= late= tmo=`. `used_idx != last_used` means the device completed and nothing reaped it; `status=255` means the device never wrote status.
+- M1 (skip one reap on unit 2) reads `used_idx=40 last_used=39 status=0`. M1 also caught a missing CRLF in the first build.
+- Negatives: smoke-kill, smoke-blk-integrity and smoke-part rc=0 with zero `[vblkto]` lines; smoke-shell 5/5; hash pinned at `1678166941c19808`, 1,372,554 B (size unchanged).
+- NOT FIXED: the late-completion hazard (DDR-1148 §4), which is counted as `late=` but not changed. No mechanism is named for the CI red.

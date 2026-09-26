@@ -1,6 +1,6 @@
 # DDR-1148 — The virtio-blk timeout line names the request type and the ring state
 
-Status: DESIGN (committed before code, NON-NEGOTIABLE 5). Instrument only.
+Status: BUILT (design committed first at 7e8615e, NON-NEGOTIABLE 5). Instrument only.
 **No fix. No mechanism named.**
 
 ## 1. Artefact
@@ -62,7 +62,7 @@ path:
 | field | meaning |
 |---|---|
 | `type` | `VIRTIO_BLK_T_*` of the timed-out request: 0 IN, 1 OUT, 4 FLUSH |
-| `status` | the status byte the device writes. `0xFF` is the driver's pre-fill, so `0xFF` means the device never wrote it |
+| `status` | the status byte the device writes, in decimal. `255` (0xFF) is the driver's pre-fill, so `255` means the device never wrote it |
 | `head` | the descriptor head of the timed-out request |
 | `used_idx` / `last_used` | the device's `used->idx` and the driver's reap cursor. **Unequal means reading (b).** |
 | `avail_idx` | how far the driver has published |
@@ -120,3 +120,36 @@ any affordable N (DDR-1082).
 - §4 is not fixed.
 - The existing `[vblk] compl wait timeout` line is unchanged.
 - `GLOBAL_FORBIDDEN` stays at 77. The gate count stays at 183.
+
+## 7. Measured (built)
+
+Shipping kernel `1678166941c19808`, 1,372,554 B. The size is unchanged; the
+additions fit in existing page padding. Warning-clean at `-Werror`.
+
+**M1.** Skip exactly one `complete()` on unit 2 (the 40th): `a2dfaa4c3ad39bf2`,
+then `265ac2923f2e7eb0` after the newline fix below. `smoke-kill` capture:
+
+```
+[vblk] compl wait timeout unit=2 ... lba=104
+[vblkto] unit=2 type=0 status=0 head=0 used_idx=40 last_used=39 avail_idx=40 late=0 tmo=1
+```
+
+This is exactly reading (b): the device completed (`status=0`, `used_idx` one
+past `last_used`) and nothing reaped it. The instrument separates the two
+readings on a real capture shape.
+
+**A defect in this DDR's own first build, caught by M1.** `kline_emit` does not
+append a line terminator. The first M1 capture read `... tmo=1[sfs] created 10`,
+with the next line fused on, which is the splice class this line exists to
+avoid. Fixed with `kline_s(&k, "\r\n")`, matching every other `kline` call site.
+
+**Negative, with the hash pinned before and after:** `smoke-kill`,
+`smoke-blk-integrity` and `smoke-part` are all rc=0. There are zero `[vblkto]`
+lines in the kept captures (21,732 B and 32,379 B, so non-empty).
+`smoke-part` keeps its own serial log, so only its rc is claimed.
+
+**M1 also passed its gate (rc=0).** A single lost completion does not fail
+`smoke-kill`: the SFS test retried and finished. The CI red had the timeout
+**repeating** every ~1000 ticks. So whatever happened there was not one lost
+completion. It was a unit that stopped completing, or stopped being reaped,
+for good. The next capture's `used_idx - last_used` and `tmo` will say which.

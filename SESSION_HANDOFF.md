@@ -14759,3 +14759,6 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   Piece 4 step 2 (§10.8): NSI 104 SYS_DISK_LIST + disktest probe on smoke-part; D1/D2 caught; kernel 6e875c31b66f4593 1,372,554 B / 200,310 headroom; smoke-part + smoke-uefi rc=0, smoke-shell 5/5, hygiene ALL NINE, 83 ELFs. NEXT: install engine (FAT16 + layout) + NSI 105 + PRISM builtin.
   Piece 4 step 1 (§10.7): lld-link -Brepro makes BOOTX64.EFI reproducible (00260396cebc980a, 2 builds equal); smoke-uefi rc=0.
   kernel.bin afecbb54b2774641, 1,360,266 B. Regression 15/15 rc=0, hash pinned + re-checked per gate (iso-x86, iso-userspace, gop, uefi, part, selftest, blkmq, rqstress-liveness, blk-integrity, smoke-shell 5/5); hygiene ALL NINE; GLOBAL_FORBIDDEN 77. NEXT: pieces 4-6.
+  DDR-1148 (instrument only): `[vblkto]` second line on the vblk compl-wait timeout path (type/status/used_idx/last_used/late/tmo).
+  Trigger: dfbe417 PR-suite shard 9 smoke-kill red (push suite same SHA green). M1 reads reading (b); negatives clean; shell 5/5; kernel 1678166941c19808 1,372,554 B.
+  NEXT: read operator comment 5845610518 (verify OWNER), then DDR-1143 piece 4 install engine + NSI 105.

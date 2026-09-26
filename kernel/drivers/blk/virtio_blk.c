@@ -48,6 +48,11 @@ struct vreq {
     volatile uint64_t t0;
     volatile uint64_t lba;
     volatile int      warned;
+    /* DDR-1148: which descriptor head and request type this slot holds.
+     * Written at submit, read only on the timeout path and by complete()'s
+     * late-completion count. BSS-zeroed (g_inst is static). */
+    volatile int      head;
+    volatile uint32_t type;
 };
 
 struct vblk {
@@ -92,6 +97,12 @@ struct vblk {
      * without it is write-through by the virtio spec, so flush returns 0
      * without sending a request. */
     int                   has_flush;
+    /* DDR-1148: per-unit counters printed only on the timeout path.
+     * late = completions reaped for a slot that no longer holds that head
+     * (or is unused) -- DDR-1148 sec.4's hazard, COUNTED, NOT FIXED.
+     * tmo  = completion-wait timeouts on this unit. Both under compl_lock. */
+    uint32_t              late;
+    uint32_t              tmo;
 };
 
 /* DDR-1138: which acquisition of compl_lock the owner record describes. */
@@ -135,6 +146,9 @@ static void complete(struct vblk *v) {
             v->head2slot[head] = -1;
         virtq_free_chain(&v->vq, head);
         if (s >= 0 && s < VBLK_NREQ) {          /* wake THIS request's submitter */
+            /* DDR-1148 sec.4: count, do not change, a stale completion. */
+            if (!v->req[s].used || v->req[s].head != head)
+                v->late++;
             v->req[s].done = 1;
             if (v->req[s].waiter) {
                 struct tcb *w = v->req[s].waiter;
@@ -327,6 +341,8 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
         return -1;
     }
     v->head2slot[head] = (int16_t)s;
+    v->req[s].head = head;                         /* DDR-1148 */
+    v->req[s].type = type;
     virtq_publish(&v->vq, head);
     virtio_pci_notify(&v->dev, &v->vq, 0);
 
@@ -387,6 +403,30 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
             kputs(" lba=");
             kputdec(lba);
             kputs("\r\n");
+            /* DDR-1148: a SECOND line, one atomic kline emit, naming what the
+             * line above cannot: the request type (FLUSH and a superblock
+             * write are both lba 0), whether the device wrote status (255 =
+             * the driver's pre-fill, never written), and the ring -- used_idx
+             * != last_used means the device completed and nobody reaped it.
+             * Nothing is judged; the reader compares. Failure path only. */
+            {
+                v->tmo++;
+                kline k;
+                kline_init(&k);
+                kline_s(&k, "[vblkto] unit=");    kline_d(&k, (uint64_t)v->unit);
+                kline_s(&k, " type=");            kline_d(&k, (uint64_t)type);
+                kline_s(&k, " status=");          kline_d(&k, (uint64_t)*status);
+                kline_s(&k, " head=");            kline_d(&k, (uint64_t)v->req[s].head);
+                kline_s(&k, " used_idx=");
+                kline_d(&k, (uint64_t)((volatile struct virtq_used *)v->vq.used)->idx);
+                kline_s(&k, " last_used=");       kline_d(&k, (uint64_t)v->vq.last_used);
+                kline_s(&k, " avail_idx=");
+                kline_d(&k, (uint64_t)((volatile struct virtq_avail *)v->vq.avail)->idx);
+                kline_s(&k, " late=");            kline_d(&k, (uint64_t)v->late);
+                kline_s(&k, " tmo=");             kline_d(&k, (uint64_t)v->tmo);
+                kline_s(&k, "\r\n");
+                kline_emit(&k);
+            }
             v->req[s].used = 0;
             v->req[s].waiter = 0;
             slot_wake_one(v);
