@@ -13,3 +13,7 @@ int virtio_blk_completed_on_ap(void);
  * Called only from the [apfreeze] relay, after lock_stat_dump(). Reads
  * without taking the lock. */
 void virtio_blk_dump_owners(void);
+
+/* DDR-1143 §10.2: unit 0's negotiated VIRTIO_BLK_F_FLUSH (-1 if no unit), and
+ * the flushes issued / completed with status 0 across all units. */
+void virtio_blk_flush_stats(int *neg0, uint32_t *issued, uint32_t *ok);

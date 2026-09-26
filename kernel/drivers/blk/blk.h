@@ -12,6 +12,11 @@ struct blk_device {
     uint64_t    capacity_sectors;
     int (*read)(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count);
     int (*write)(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count);
+    /* DDR-1143 §10.2: make every write this device has ACKNOWLEDGED durable
+     * before returning. 0 on success. Every in-tree driver sets it; a NULL op
+     * is reported by blk_flush() as -ENOSYS, never as success, so a driver
+     * that has a cache but forgot the op cannot look flushed. */
+    int (*flush)(struct blk_device *bd);
     void *drv;                 /* driver-private */
 };
 
@@ -21,6 +26,7 @@ struct blk_device *blk_get(unsigned i);
 
 int blk_read(unsigned dev, uint64_t lba, void *buf, uint32_t count);
 int blk_write(unsigned dev, uint64_t lba, const void *buf, uint32_t count);
+int blk_flush(unsigned dev);               /* -ENOSYS if the op is absent */
 
 /* DDR-1143 §4.1 — partitions (blk_part.c). */
 struct mbr_part {

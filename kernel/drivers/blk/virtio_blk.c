@@ -22,6 +22,8 @@ extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 
 #define VIRTIO_BLK_T_IN       0
 #define VIRTIO_BLK_T_OUT      1
+#define VIRTIO_BLK_T_FLUSH    4           /* DDR-1143 §10.2 */
+#define VIRTIO_BLK_F_FLUSH    (1u << 9)   /* device has a volatile write cache */
 #define VIRTIO_BLK_F_SIZE_MAX (1u << 1)
 #define VIRTIO_BLK_F_SEG_MAX  (1u << 2)
 #define SECTOR 512u
@@ -86,6 +88,10 @@ struct vblk {
     volatile uint32_t     own_tid;
     volatile uint32_t     own_site;   /* VOWN_* below; 0 = no recorded owner */
     volatile uint64_t     own_tick;
+    /* DDR-1143 §10.2: 1 iff VIRTIO_BLK_F_FLUSH was negotiated. A device
+     * without it is write-through by the virtio spec, so flush returns 0
+     * without sending a request. */
+    int                   has_flush;
 };
 
 /* DDR-1138: which acquisition of compl_lock the owner record describes. */
@@ -233,8 +239,15 @@ static void slot_wake_one(struct vblk *v) {
     sched_unblock(w);
 }
 
+/* DDR-1143 §10.2: flushes issued / flushes that completed with status 0,
+ * across every unit. The smoke-part virtio arm asserts they are equal. */
+static volatile uint32_t g_vblk_flush_issued, g_vblk_flush_ok;
+
+/* `type` is VIRTIO_BLK_T_IN, _OUT or _FLUSH. A flush carries no data
+ * descriptor: header + status only (virtio 1.x 5.2.6). */
 static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
-                  uint32_t count, int to_device) {
+                  uint32_t count, uint32_t type) {
+    int to_device = (type == VIRTIO_BLK_T_OUT);
     uint64_t fl = spin_lock_irqsave(&v->compl_lock);
     vown_set(v, VOWN_SUBMIT);                    /* DDR-1138 */
 
@@ -289,7 +302,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     uint64_t hdr = v->reqbuf + (uint64_t)s * 32;   /* 16B header + status byte */
     struct virtio_blk_req *h = (struct virtio_blk_req *)(uintptr_t)hdr;
     volatile uint8_t *status = (volatile uint8_t *)(uintptr_t)(hdr + 16);
-    h->type = to_device ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+    h->type = type;
     h->reserved = 0;
     h->sector = lba;
     *status = 0xFF;
@@ -299,7 +312,9 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
         { data_phys, SECTOR * count,                to_device ? 0 : 1 },
         { hdr + 16,  1,                             1 },
     };
-    int head = virtq_add(&v->vq, bufs, 3);
+    if (type == VIRTIO_BLK_T_FLUSH)
+        bufs[1] = bufs[2];                 /* header + status only */
+    int head = virtq_add(&v->vq, bufs, type == VIRTIO_BLK_T_FLUSH ? 2 : 3);
     if (head < 0 || head >= 256) {
         v->req[s].used = 0;
         v->req[s].waiter = 0;
@@ -382,6 +397,8 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     }
 
     int ok = (*status == 0);
+    if (type == VIRTIO_BLK_T_FLUSH && ok)
+        __atomic_add_fetch(&g_vblk_flush_ok, 1, __ATOMIC_RELAXED);
     v->req[s].used = 0;                        /* release the slot ... */
     v->req[s].waiter = 0;
     slot_wake_one(v);                          /* ... and wake ONE starved submitter */
@@ -391,10 +408,25 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
 }
 
 static int vblk_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
-    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count, 0);
+    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count,
+                  VIRTIO_BLK_T_IN);
 }
 static int vblk_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count) {
-    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count, 1);
+    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count,
+                  VIRTIO_BLK_T_OUT);
+}
+static int vblk_flush(struct blk_device *bd) {
+    struct vblk *v = (struct vblk *)bd->drv;
+    if (!v->has_flush)
+        return 0;                          /* write-through by the spec */
+    __atomic_add_fetch(&g_vblk_flush_issued, 1, __ATOMIC_RELAXED);
+    return submit(v, 0, 0, 0, VIRTIO_BLK_T_FLUSH);
+}
+
+void virtio_blk_flush_stats(int *neg0, uint32_t *issued, uint32_t *ok) {
+    *neg0   = g_ninst ? g_inst[0].has_flush : -1;
+    *issued = __atomic_load_n(&g_vblk_flush_issued, __ATOMIC_RELAXED);
+    *ok     = __atomic_load_n(&g_vblk_flush_ok, __ATOMIC_RELAXED);
 }
 
 void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -406,8 +438,11 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputs("virtio-blk: attach failed\r\n");
         return;
     }
-    uint64_t want = VIRTIO_F_VERSION_1 | VIRTIO_BLK_F_SIZE_MAX | VIRTIO_BLK_F_SEG_MAX;
-    if (!(virtio_pci_negotiate(&v->dev, want) & VIRTIO_F_VERSION_1)) {
+    uint64_t want = VIRTIO_F_VERSION_1 | VIRTIO_BLK_F_SIZE_MAX | VIRTIO_BLK_F_SEG_MAX |
+                    VIRTIO_BLK_F_FLUSH;
+    uint64_t got  = virtio_pci_negotiate(&v->dev, want);
+    v->has_flush  = (got & VIRTIO_BLK_F_FLUSH) != 0;
+    if (!(got & VIRTIO_F_VERSION_1)) {
         kputs("virtio-blk: modern negotiation failed\r\n");
         return;
     }
@@ -467,6 +502,7 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     v->bd.capacity_sectors = capacity;
     v->bd.read = vblk_read;
     v->bd.write = vblk_write;
+    v->bd.flush = vblk_flush;
     v->bd.drv = v;
     blk_register(&v->bd);
     g_ninst++;

@@ -14743,3 +14743,14 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   + SFS barriers + ordering-trace arm + a before/after timing measurement on SFS-heavy gates.
   Then pieces 3-6 (pristine kernel copy in both loaders, NSI 104, install syscall, root selection, smoke-install).
 - UI track in parallel: U-a palette extraction from the PNGs (stdlib zlib decoder; PIL is not installed).
+
+## CHECKPOINT 2026-09-26 — DDR-1143 piece 2 built (flush op + SFS barriers)
+- UI track: the reference PNGs were restored to their original filenames. The operator's corrected panel mapping
+  conflicts with the images' own printed text (Aurora/Twilight swapped on 02_47_54 and 02_50_44; 02_28_47 top
+  prints SOVEREIGN, i.e. a Regalia Umbra exists). This is reported in PR #17 comment 5841868476, with every
+  palette value sampled directly and keyed by file/half. U-b (theme engine) is HELD for the operator's answer.
+- Piece 2 (DDR-1143 §10.3): blk_flush in every driver, plus SFS barriers. Pins: plain=DDDLFSF, txn=FJLFSF.
+  M1-M3 are caught; M4 (stale virtio type) is uncovered and recorded. Cost is ~0.9 ms/barrier (emulated) and
+  cache=unsafe is not applied.
+- kernel.bin df4d7d6d472f4fe7, 1,360,266 B / 212,598 B headroom.
+- NEXT: piece 3 (pristine kernel copy in stage2 + UEFI loaders, boot_info). DDR section first.

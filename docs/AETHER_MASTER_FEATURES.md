@@ -2098,3 +2098,4 @@ this time, not just the waiter."* Instrument only.
   No AETHER surface changes. The recovery key never derives from `g_owner_seed` (DDR-1146 §2).
 
 - 2026-09-26 — DDR-1143 piece 1 (block partitions + MBR parser, `smoke-part`). No AETHER surface change.
+- 2026-09-26 — DDR-1143 piece 2 (block flush op + SFS commit barriers, trace-pinned on `smoke-part`). No AETHER surface change.

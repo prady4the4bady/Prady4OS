@@ -1429,7 +1429,56 @@ static void fs_write_test(cap_t cap, int mnt) {
  *   wrap   LBA 2^64-1 count 1 refused                          (lba+count form)
  *   sfs    SFS formats and mounts on P2, and P1 is untouched   (the §4.1 claim)
  */
-static void part_selftest(void) {
+static uint64_t g_bc_t0, g_bc_b0;           /* DDR-1143 §10.2 cost stamp */
+
+/* DDR-1143 §10.2 -- the ORDERING trace device. A blk_device that forwards to a
+ * parent and records every WRITE and FLUSH as one letter, classifying a write
+ * by the SFS block it lands in against the mounted volume's own layout:
+ *   S = block 0 (superblock, the commit point)   J = the journal block
+ *   L = the free-list block                      D = anything else
+ *   F = a flush
+ * Reads are not recorded; they order nothing. The letters, not a count, are
+ * the assertion: "one flush happened" is satisfied by a flush in the wrong
+ * place, and the defect a barrier prevents is precisely an ordering. */
+struct trace_dev {
+    struct blk_device  bd;
+    struct blk_device *parent;
+    uint64_t           jblk, lblk;
+    char               log[96];
+    unsigned           n;
+};
+static struct trace_dev g_trace;
+
+static void trace_put(struct trace_dev *t, char c) {
+    if (t->n + 1 < sizeof t->log) { t->log[t->n++] = c; t->log[t->n] = 0; }
+    else t->log[sizeof t->log - 2] = '+';        /* overflow names itself */
+}
+static int trace_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
+    struct trace_dev *t = (struct trace_dev *)bd->drv;
+    return t->parent->read(t->parent, lba, buf, count);
+}
+static int trace_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count) {
+    struct trace_dev *t = (struct trace_dev *)bd->drv;
+    uint64_t blk = lba / 8;                       /* SFS: 8 sectors per block */
+    trace_put(t, blk == 0 ? 'S' : blk == t->jblk ? 'J' : blk == t->lblk ? 'L' : 'D');
+    return t->parent->write(t->parent, lba, buf, count);
+}
+static int trace_flush(struct blk_device *bd) {
+    struct trace_dev *t = (struct trace_dev *)bd->drv;
+    trace_put(t, 'F');
+    return t->parent->flush ? t->parent->flush(t->parent) : -ENOSYS;
+}
+static void trace_reset(struct trace_dev *t) { t->n = 0; t->log[0] = 0; }
+
+/* 1 iff every S in the log is immediately followed by F (the tail barrier). */
+static int trace_tail_ok(const struct trace_dev *t) {
+    int seen = 0;
+    for (unsigned i = 0; i < t->n; i++)
+        if (t->log[i] == 'S') { seen = 1; if (i + 1 >= t->n || t->log[i + 1] != 'F') return 0; }
+    return seen;
+}
+
+static void part_selftest(cap_t cap) {
     int rd = ramdisk_init(6);                       /* 64 pages = 512 sectors */
     uint64_t pg = pmm_alloc_page();
     if (rd < 0 || !pg) {
@@ -1524,6 +1573,72 @@ static void part_selftest(void) {
     kputs(" mount="); kputs(mt >= 0 ? "ok" : "fail");
     kputs(" p1_dirty="); kputdec(p1bad); kputs("\r\n");
     ok &= f == 0 && mt >= 0 && p1bad == 0;
+
+    /* DDR-1143 §10.2 -- barrier ORDER at the block interface. The trace device
+     * wraps P2 and SFS is re-formatted THROUGH it, so every write and flush SFS
+     * issues is recorded. P2's earlier mount is released first: two live
+     * contexts on one volume would each keep their own allocator. */
+    if (mt >= 0) vfs_unmount(mt);
+    struct trace_dev *t = &g_trace;
+    t->parent = d2;
+    t->jblk = 0; t->lblk = 0;
+    t->bd.name = "trace";
+    t->bd.capacity_sectors = d2->capacity_sectors;
+    t->bd.read = trace_read; t->bd.write = trace_write; t->bd.flush = trace_flush;
+    t->bd.drv = t;
+    unsigned tidx = blk_count();
+    blk_register(&t->bd);
+    int tm = -1;
+    int tr_ok = blk_count() == tidx + 1 && sfs_format(&t->bd) == 0 &&
+                (tm = vfs_mount(tidx)) >= 0;
+    /* One warm-up commit allocates the free-list block; read the layout back
+     * off the device so the classifier uses the volume's OWN numbers. */
+    struct vfs_file tf;
+    if (tr_ok) tr_ok = vfs_create(cap, tm, "/W.TXT", &tf) == 0;
+    if (tr_ok) {
+        d2->read(d2, 0, b, 1);
+        const struct sfs_superblock *sb = (const struct sfs_superblock *)b;
+        t->jblk = sb->txn_log_start;
+        t->lblk = sb->free_extent_tree;
+        tr_ok = t->jblk != 0 && t->lblk != 0;
+    }
+    char plain[96], txn[96];
+    plain[0] = txn[0] = 0;
+    int ptail = 0, ttail = 0;
+    if (tr_ok) {                                  /* plain: one non-txn create */
+        trace_reset(t);
+        tr_ok = vfs_create(cap, tm, "/P.TXT", &tf) == 0;
+        memcpy(plain, t->log, t->n + 1);
+        ptail = trace_tail_ok(t);
+    }
+    if (tr_ok) {                                  /* txn: the COMMIT window only */
+        tr_ok = vfs_txn_begin(cap, tm) == 0 && vfs_create(cap, tm, "/T.TXT", &tf) == 0;
+        trace_reset(t);
+        if (tr_ok) tr_ok = vfs_txn_commit(cap, tm) == 0;
+        memcpy(txn, t->log, t->n + 1);
+        ttail = trace_tail_ok(t);
+    }
+    kputs("[part] trace plain="); kputs(plain[0] ? plain : "-");
+    kputs(" txn="); kputs(txn[0] ? txn : "-");
+    kputs(" tail="); kputs(ptail && ttail ? "ok" : "BAD");
+    kputs(" setup="); kputs(tr_ok ? "ok" : "fail"); kputs("\r\n");
+    ok &= tr_ok && ptail && ttail;
+
+    /* virtio: a flush on a REAL device is accepted, and every flush the
+     * system has issued so far completed with status 0. That it reached stable
+     * media is not observable from a guest (DDR-1143 §7). */
+    int neg = -1, vrc = -1;
+    uint32_t iss = 0, fok = 0;
+    for (unsigned i = 0; i < blk_count(); i++) {
+        struct blk_device *vd = blk_get(i);
+        if (vd && vd->name && strcmp(vd->name, "virtio-blk") == 0) { vrc = blk_flush(i); break; }
+    }
+    virtio_blk_flush_stats(&neg, &iss, &fok);
+    kputs("[part] virtio neg="); kputdec((uint64_t)(neg < 0 ? 9 : neg));
+    kputs(" flush="); kputs(vrc == 0 ? "0" : "FAIL");
+    kputs(" issued=ok="); kputs(iss == fok && iss > 0 ? "yes" : "NO");
+    kputs("\r\n");
+    ok &= neg == 1 && vrc == 0 && iss == fok && iss > 0;
 
     pmm_free_page(pg);
     kputs(ok ? "PRADYOS_PART_OK\r\n" : "PART FAIL: an arm above did not hold\r\n");
@@ -1988,7 +2103,7 @@ static void fs_test_thread(void *arg) {
                  * caught == N — the point is that the state ARISES, and an
                  * exact count would be asserting the absence of work stealing. */
                 if (probe_enabled("part"))           /* DDR-1143 §4.1 */
-                    part_selftest();
+                    part_selftest(cap);
                 if (probe_enabled("rqfree")) {
                     extern volatile uint32_t g_rqfree_caught, g_rqfree_leaked;
                     int made = sched_rqfree_probe(16);
@@ -3237,6 +3352,16 @@ static void fs_test_thread(void *arg) {
                          * (vfs.c) is refreshed here so this exercises the B+TREE, not
                          * the budget — this is kernel self-test context, not a
                          * userspace consumer. */
+                        /* DDR-1143 §10.2: cost of the SFS write barriers,
+                         * measured in place rather than argued. Ticks across
+                         * the churn + GC loops, and the barriers issued in
+                         * them, so a before/after pair has a per-barrier
+                         * denominator (NON-NEGOTIABLE 17). g_ticks is the
+                         * 100 Hz timer, i.e. EMULATED time under TCG
+                         * (DDR-1029): valid for comparing two builds on one
+                         * host, not a hardware claim. */
+                        g_bc_t0 = g_ticks;
+                        g_bc_b0 = sfs_barrier_count();
                         {
                             uint64_t cbuf = pmm_alloc_pages(4);   /* 64 KiB */
                             int churn_ok = (cbuf != 0);
@@ -3380,6 +3505,11 @@ static void fs_test_thread(void *arg) {
                             kputs((gc_ok && grew < 170)
                                       ? "[sfs] free-space GC OK\r\n"
                                       : "[sfs] free-space GC FAIL\r\n");
+                            kputs("[sfs] barrier-cost ticks=");
+                            kputdec(g_ticks - g_bc_t0);
+                            kputs(" barriers=");
+                            kputdec(sfs_barrier_count() - g_bc_b0);
+                            kputs("\r\n");
 
                             /* DDR-889 (item 31): read the PERSISTED free list
                              * back off the DEVICE and require it to be there,

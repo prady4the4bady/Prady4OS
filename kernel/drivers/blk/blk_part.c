@@ -48,6 +48,16 @@ static int part_write(struct blk_device *bd, uint64_t lba, const void *buf, uint
     return p->parent->write(p->parent, p->start + lba, buf, count);
 }
 
+/* A partition has no cache of its own: durability is the parent's, so the
+ * flush is forwarded. A parent without the op answers -ENOSYS through here
+ * rather than being reported as flushed. */
+static int part_flush(struct blk_device *bd) {
+    struct blk_part *p = (struct blk_part *)bd->drv;
+    if (!p->parent->flush)
+        return -ENOSYS;
+    return p->parent->flush(p->parent);
+}
+
 int blk_part_create(unsigned parent, uint64_t start, uint64_t sectors) {
     struct blk_device *pd = blk_get(parent);
     if (!pd || !pd->read || !pd->write)
@@ -64,6 +74,7 @@ int blk_part_create(unsigned parent, uint64_t start, uint64_t sectors) {
     p->bd.capacity_sectors = sectors;
     p->bd.read             = part_read;
     p->bd.write            = part_write;
+    p->bd.flush            = part_flush;
     p->bd.drv              = p;
 
     unsigned before = blk_count();

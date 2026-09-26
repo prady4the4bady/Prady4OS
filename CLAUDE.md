@@ -414,8 +414,8 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
   Measured from `kernel/syscall/syscall.h:168-170`. This line previously said 93
   and §INV.14 said 74 — both wrong, and the older note claiming "§INV.14 was
   right" was wrong too. `user/prism.c` ships against 95.
-- **`kernel.bin`**: **1,356,170 B** against the 1,572,864 B size gate — **216,694 B
-  of headroom** (measured 2026-09-26 on the DDR-1143 piece-1 tree: the partition sub-device + MBR parser and its `part` probe cost the page-aligned 4,096 B; headroom RECOMPUTED in the same edit) (previously 1,352,074 / 220,790, measured 2026-09-25 on the DDR-1141 tree: lwIP DHCP + DNS, SYS_DNS_RESOLVE and the embedded dnstest probe; headroom RECOMPUTED in the same edit) (DDR-1105's `next->rsp` validity check costs the page-aligned
+- **`kernel.bin`**: **1,360,266 B** against the 1,572,864 B size gate — **212,598 B
+  of headroom** (measured 2026-09-26 on the DDR-1143 piece-2 tree: the block flush op across four drivers, SFS commit barriers and the trace-device arms cost the page-aligned 4,096 B; headroom RECOMPUTED in the same edit) (previously 1,356,170 / 216,694, measured 2026-09-26 on the DDR-1143 piece-1 tree: the partition sub-device + MBR parser and its `part` probe cost the page-aligned 4,096 B; headroom RECOMPUTED in the same edit) (previously 1,352,074 / 220,790, measured 2026-09-25 on the DDR-1141 tree: lwIP DHCP + DNS, SYS_DNS_RESOLVE and the embedded dnstest probe; headroom RECOMPUTED in the same edit) (DDR-1105's `next->rsp` validity check costs the page-aligned
   4,096 B; headroom RECOMPUTED in the same edit as the size)
   (DDR-1090's `killblocktest.elf` cost the page-aligned 4,096 B;
   headroom RECOMPUTED in the same edit as the size) (DDR-1084's `actionipctest.elf` costs the page-aligned 8,192 B every

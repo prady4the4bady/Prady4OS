@@ -1368,8 +1368,8 @@ smoke-e1000e: $(IMG) fat-image sfs-image
 
 smoke-ahci: $(IMG) fat-image sfs-image ahci-image
 	TIMEOUT_S=90 QEMU_AHCI_IMG=$(AHCI_IMG) \
-	EXTRA_SENTINEL="$$(printf '[ahci] port disk, sectors=16384')" \
-	FORBIDDEN_SENTINEL="$$(printf '[ahci] IDENTIFY failed\n[ahci] port would not stop\n[ahci] cannot map ABAR')" \
+	EXTRA_SENTINEL="$$(printf '[ahci] port disk, sectors=16384\n[ahci] flush rc=0')" \
+	FORBIDDEN_SENTINEL="$$(printf '[ahci] flush FAIL\n[ahci] IDENTIFY failed\n[ahci] port would not stop\n[ahci] cannot map ABAR')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # ADR-038 demand-paged-stack gate. THREE arms in one boot (the probe runs them
@@ -2428,8 +2428,8 @@ smoke-fs-budget: $(IMG) fat-image sfs-image
 
 smoke-nvme: $(IMG) fat-image sfs-image build/nvme.img
 	TIMEOUT_S=60 QEMU_NVME=1 \
-	    EXTRA_SENTINEL="$$(printf '[nvme] \nLBAs x \nregistered nvme0\n[nvme] msix vec=50\nPRADYOS_NVME_RW_OK\nPRADYOS_NVME_PRP_OK\nPRADYOS_NVME_IRQ_OK')" \
-	    FORBIDDEN_SENTINEL="$$(printf 'controller not ready\nidentify-ctrl failed\nidentify-ns failed\nreset stuck\ncreate-iocq failed\ncreate-iosq failed\nmsix unavailable\nPRADYOS_NVME_RW_FAIL\nPRADYOS_NVME_PRP_FAIL\nPRADYOS_NVME_IRQ_FAIL')" \
+	    EXTRA_SENTINEL="$$(printf '[nvme] \nLBAs x \nregistered nvme0\n[nvme] msix vec=50\nPRADYOS_NVME_RW_OK\nPRADYOS_NVME_PRP_OK\nPRADYOS_NVME_FLUSH_OK\nPRADYOS_NVME_IRQ_OK')" \
+	    FORBIDDEN_SENTINEL="$$(printf 'controller not ready\nidentify-ctrl failed\nidentify-ns failed\nreset stuck\ncreate-iocq failed\ncreate-iosq failed\nmsix unavailable\nPRADYOS_NVME_RW_FAIL\nPRADYOS_NVME_PRP_FAIL\nPRADYOS_NVME_FLUSH_FAIL\nPRADYOS_NVME_IRQ_FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Layer-7 framebuffer-surface gate (DDR-702): proves the ring-3 SYS_FB map+draw+
@@ -3394,7 +3394,7 @@ smoke-part: $(IMG) fat-image sfs-image
 	@mkdir -p build/gatelogs
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/part.log KEEP_SERIAL=1 \
 	TIMEOUT_S=120 QEMU_PROBES=part \
-	EXTRA_SENTINEL="$$(printf '[part] mbr n=2 ok\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\nPRADYOS_PART_OK')" \
+	EXTRA_SENTINEL="$$(printf '[part] mbr n=2 ok\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
 	FORBIDDEN_SENTINEL="PART FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

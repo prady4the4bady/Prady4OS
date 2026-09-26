@@ -403,3 +403,160 @@ operation, so the SFS-heavy gates (`smoke-sfs-gc`, `smoke-sfs-btree`,
 window, the choice (scratch disks at `cache=unsafe` in the harness, which is
 honest only for disks that are never persisted) is stated here. It is not
 applied silently.
+
+### §10.3 Piece 2 implementation record (2026-09-26)
+
+**Shipped exactly as §10.2 designed.**
+
+- `blk_flush(dev)` returns `-ENOSYS` for a NULL op.
+- Every driver sets the op:
+  - virtio-blk negotiates bit 9 and sends a 2-descriptor `T_FLUSH`;
+  - AHCI issues `0xEA` with `prdtl = 0`;
+  - NVMe issues opcode `0x00`, NSID 1;
+  - ramdisk has a no-op;
+  - a partition forwards to its parent.
+- SFS barriers:
+  - one before the journal record;
+  - two around the superblock write;
+  - one at the end of `sfs_format`.
+
+`kernel.bin` is `df4d7d6d472f4fe7` at 1,360,266 B (+4,096). The build is
+warning-clean at `-Werror`.
+
+**Pins, measured once and then asserted.** A trace device wraps the probe's
+ramdisk and prints one letter per op. The `L` letter is present, which confirms
+that `sfs_freelist_save` writes its block on both paths.
+
+| window | measured | pinned sentinel |
+|---|---|---|
+| plain create commit | `DDDLFSF` | `[part] trace plain=DDDLFSF …` |
+| transaction commit | `FJLFSF` | `… txn=FJLFSF tail=ok setup=ok` |
+| virtio flush on a real disk | `neg=1 flush=0`, issued == completed | `[part] virtio neg=1 flush=0 issued=ok=yes` |
+| AHCI self-test | `rc=0` | `[ahci] flush rc=0` (smoke-ahci; `flush FAIL` forbidden) |
+| NVMe self-test | OK | `PRADYOS_NVME_FLUSH_OK` (smoke-nvme; `…_FAIL` forbidden) |
+
+**Mutants.** Each changes one thing, is built to its own recorded hash, and is
+run on `smoke-part`. The revert returns `df4d7d6d472f4fe7` bit-for-bit, verified
+by rebuild.
+
+| mutant | hash | result |
+|---|---|---|
+| M1 no `F` before `J` | `97cb9d6b0d0cd545` | `txn=JLFSF` — **caught** (plain unchanged: the non-txn path has no journal) |
+| M2 no `F` before `S` | `b7f192221aacbb7b` | `plain=DDDLSF txn=FJLSF` — **caught by both windows** |
+| M3 no `F` after `S` | `d4cf9778f7956210` | `DDDLFS / FJLFS tail=BAD` — **caught** |
+| M4 virtio header type left stale on a flush | `9e1753e74143dacf` | **PASSES — UNCOVERED.** QEMU completes a stale-typed header (a zero-length IN/OUT) with status 0, so from inside the guest a flush sent as the wrong type is indistinguishable from a real one. Recorded as uncovered, per §10.2's own caveat. No guest-side arm can see it. |
+| all barriers counted but not flushed (the cost baseline) | `76dde81b74dea40f` | `plain=DDDLS txn=JLS tail=BAD` — caught (3/3, recorded below) |
+
+**Cost, both sides, same host.** The measurement is `g_ticks` (100 Hz *emulated*
+time, so it is valid only as a comparison on one host) across the DDR-763
+churn loop plus the DDR-762 GC loop, per boot:
+
+| build | ticks (3 boots) | barriers |
+|---|---|---|
+| barriers flush | 111, 93, 134 (median 111) | 306 / 322 / 322 |
+| counted, not flushed | 102, 82, 84 (median 84) | 306 / 322 / 322 |
+
+- The difference is about 27 ticks (~270 ms emulated) over ~315 barriers, i.e.
+  **~0.9 ms per barrier**.
+- The two ranges overlap (93 < 102), so the spread is as large as the effect.
+  The cost is real and small.
+- No gate window is threatened: every regression gate is inside its timeout
+  (§10.3 regression below).
+- So **`cache=unsafe` is NOT applied**, and no harness change is made.
+
+**Not claimed.**
+
+- Ordering is proven at the block interface only; durability on real media is
+  not (§7).
+- AHCI and NVMe are proven only by a self-test rc, not by a trace.
+- M4 is uncovered.
+- The `D` count in `plain` is a property of today's create path (inode, dirent,
+  B+tree). A future create that writes a different number of blocks changes the
+  pin, and that is the pin doing its job.
+
+### §10.4 Piece 3 design: the pristine kernel image handoff (committed before the code)
+
+**Why.** Per §2 route (A), the installer must write the kernel bytes, and
+nothing in memory is those bytes once the kernel runs: `.data` is live and
+`.bss` sits on top of the load window. So the loader keeps a second copy,
+taken before it jumps.
+
+**Where the copy goes.** Physical `0x800000` (8 MiB), in a window of up to
+1.5 MiB (ending at `0x980000`). Measured, not assumed:
+
+- It is **below `PMM_MIN_PHYS` (16 MiB, `pmm.c:14`)**, so the PMM can never
+  hand it out.
+- A grep for physical constants in 6–16 MiB across `kernel/`, `boot/` and
+  `arch/` returns **nothing**.
+- The kernel's own window is `0x400000..0x600000`, and the page tables are at
+  `0x300000`.
+- It sits in a different 2 MiB page from the DDR-1046 RO+NX alias of the
+  kernel image, and is readable through the low 1 GiB identity map both
+  loaders build.
+
+**The handoff block.** The `boot_info` header cannot grow, because it ends in
+the flexible `e820[]` array (the DDR-1142 reasoning). So a second 32-byte block
+goes at `0x4FC0`, directly below `boot_fb` at `0x4FE0`:
+`struct boot_kimg { magic 'KIMG', source, base, size, check }`, where `check` is
+the xor of every other word.
+
+- The UEFI loader's E820 cap must fall from **167 to 165**
+  (32 + 165×24 = 0xF98 ≤ 0xFC0), enforced by a `_Static_assert`.
+- stage2 caps at 32 entries (0x320), far clear.
+- Both loaders change in one commit. This is **§INV.13's class**.
+
+| field | BIOS (stage2) | UEFI |
+|---|---|---|
+| `source` | 1 | 2 |
+| `size` | the **read window**, 0x180000. stage2 reads a fixed 48 chunks and never learns the file size. | the **exact file size** from `EFI_FILE_INFO` |
+
+**stage2 needs NO second disk read**, which is cheaper than §2 assumed. Each
+32 KiB chunk already sits in the bounce buffer, so it is copied **twice** — to
+`KERNEL_PHYS` and to `0x800000` — inside the same unreal-mode window. stage2
+must stay ≤ 8 KiB (asserted by its build).
+
+**The UEFI loader** claims `0x800000` with `AllocateAddress` (`EfiLoaderData`,
+which `fill_boot_info` already reports as reserved), and copies the file bytes
+from `0x400000` right after the read.
+
+**Kernel side.**
+
+- `kernel.ld` gains `__data_end` at the end of `.data`. That adds a symbol,
+  not bytes, so the hash is unchanged (verified at build).
+- The image length is `__data_end - KERNEL_VBASE`. Today that is 1,360,266,
+  the size of `kernel.bin`; `__bss_start` is 1,360,320 because of the ALIGN(64).
+- `kimg_init()` validates magic and check, then requires `size >= image length`
+  (BIOS) or `size == image length` (UEFI). Otherwise it refuses and reports
+  `none`.
+- It exposes `kimg_get(&base, &len)` for the installer (piece 5).
+
+**Gate arm, vacuity checked first.**
+
+- "The block validates" is **vacuous**: it passes when the loader copied
+  nothing.
+- **The arm is the HASH.** Under probe key `kimg`, the kernel prints
+  `[kimg] src=<bios|uefi> len=<n> sha=<first 16 hex of SHA-256 over len bytes>`.
+  The Makefile recipe computes `sha256sum build/kernel.bin` **at make time**
+  and requires that exact string. So the expected value comes from the host's
+  file, not from anything the guest can print.
+- The arm goes on **`smoke-part`** (BIOS; the key joins `part`, a gate that
+  already boots) and on a **new `smoke-kimg-uefi`**. `smoke-uefi` has no probe
+  plumbing to borrow, so this is decided at build: whichever form adds the
+  fewest moving parts.
+
+**Mutants, planned.**
+
+| mutant | expected result |
+|---|---|
+| K1: stage2 skips the second copy | sha of zeros → BIOS arm fails |
+| K2: the kernel hashes `KERNEL_PHYS` (the live image) instead of the copy | `.data` has changed by then → sha differs. **This is the one that proves the copy is taken before the jump, not after.** |
+| K3: the UEFI loader copies from the wrong source | UEFI arm fails |
+
+**Not claimed.**
+
+- The pristine copy is a boot-time snapshot. Nothing prevents a ring-0 bug from
+  scribbling on it later. **CR0.WP plus an RO mapping of that range** is
+  recorded as a follow-on, not done here.
+- The BIOS size is the window, not the file. The installer uses the
+  linker-derived length in both paths, and for UEFI that length is
+  cross-checked against the file.

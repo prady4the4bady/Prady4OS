@@ -6534,3 +6534,25 @@ blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,
   - The revert is bit-for-bit (`90f14648c3752503`).
 - `kernel.bin` is 1,356,170 B; 183 gates.
 - **Next:** piece 2, the flush op plus SFS barriers.
+
+### 2026-09-26 — DDR-1143 piece 2: block flush op + SFS commit barriers, BUILT + GATED
+
+- `blk_flush()` returns `-ENOSYS` for a NULL op, never 0.
+- The op is wired in all drivers:
+  - virtio-blk: `T_FLUSH`, when `F_FLUSH` (bit 9) is negotiated;
+  - AHCI: `0xEA`;
+  - NVMe: opcode 0x00;
+  - ramdisk: no-op;
+  - partition: forwards to its parent.
+- SFS barriers bracket the journal record and the superblock.
+- **Measured and pinned orders:** plain commit `DDDLFSF`, txn commit `FJLFSF`.
+  A trace device on `smoke-part` records them. There are also virtio, AHCI and
+  NVMe self-test arms.
+- **Mutants:** M1, M2 and M3 are caught on distinct hashes. **M4 (stale virtio
+  header type) is UNCOVERED** — QEMU completes it with status 0, so no guest-side
+  arm can see it.
+- **Cost:** median 111 vs 84 emulated ticks across churn+GC, about 0.9 ms per
+  barrier, and the ranges overlap. `cache=unsafe` is NOT applied.
+- `kernel.bin` is `df4d7d6d472f4fe7`, 1,360,266 B. Still 183 gates, since the
+  new arms were added to existing gates.
+- **Next:** piece 3, the pristine kernel copy in both loaders.
