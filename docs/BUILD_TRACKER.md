@@ -6638,3 +6638,13 @@ This implements operator decisions 1–3 (PR #17 comment 5845610518).
 - Gate `smoke-domcap` (shard 6, strict): five roles, exact lines, five mutants each caught on a distinct line. The design's `CROSS` role let M3 pass, because the layers mask each other per type; it was replaced by DOORX/CAPX (§4.1).
 - kernel.bin `f78b53c02a2b2734`, 1,380,746 B / 192,118 B headroom; 184 gates; 84 probe ELFs.
 - NOT unblocked: the domain behaviours (no OCR model, no scene graph, cloud bridge deferred per DDR-793); per-slot agent grants at spawn (DDR-982 §5.4 race); `forces_pending` unchanged (whether BROWSE_WEB should force a human decision is the operator's call).
+
+### 2026-09-26 — DDR-1150: audit-head signing, DDR-1059 Route 3 (operator decision 4)
+- `SYS_LEDGER` (NSI 106; 105 stays reserved for `SYS_INSTALL`), sovereign-only on every op: KEYGEN / LOAD / PUBKEY / SIGN. The kernel holds the ML-DSA-44 keypair; only the 32-byte seed leaves it, once, to the sovereign caller that created it, so the installer can persist it.
+- Reading B of "keep the private key in the image": a **per-install** key from `rng_bytes`, which fails closed with no fallback. Reading A (a build-time key in the ISO) is DDR-1059 §2's theatre and is refused. Flagged to the operator.
+- SIGN signs `"PRADYOS-LEDGER-v1\0" | written u64 | chain head` (58 B), and refuses a chain `aether_audit_verify` rejects (`-ETAMPER`).
+- First run failed: the PMM scratch was not zeroed, so ML-DSA's `tables_ready` flag held garbage, the key came out wrong, signing exhausted its bound with IF masked, and block completions starved. Fixed by zeroing the scratch; `mldsa.h` now states the precondition.
+- Gate `smoke-ledger` (shard 3, strict): three boots; arms A–F. Mutants L1/L1b/L2/L3/L4 each fail a different arm.
+- Cost: SIGN holds IF masked for ~0.2–0.9 s of emulated time (sign_tsc 4.4e8–1.85e9 vs a ~1.3e5 syscall baseline). Not exonerated for OPEN-2; an IF-enabled signing window is recommended and not built.
+- kernel.bin `c76cf7a78450ccdb`, 1,450,378 B / 122,486 B headroom (+69,632 B); 185 gates.
+- [DEFERRED: key persistence and boot-time LOAD — ride on the DDR-1143 piece 5 installer]

@@ -184,6 +184,8 @@
  * decision is audited as ACTION_NET_DNS BEFORE any query leaves. */
 /* DDR-1143 sec.10.6: enumerate block devices (read-only, any process). */
 #define SYS_DISK_LIST      104 /* (struct disk_info *out, n) -> total count | -EFAULT */
+/* 105 is RESERVED for SYS_INSTALL (DDR-1143 sec.10.6). */
+#define SYS_LEDGER         106 /* DDR-1150: (op, buf, len) sovereign-only; audit-head signing */
 #define SYS_DNS_RESOLVE    103 /* (name, uint32_t *out, resolver) -> 0 | -EPERM|-EFAULT|-EINVAL|-ENAMETOOLONG|-ENODEV|-ENOENT|-ETIMEDOUT|-EAGAIN */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */
 #define SYS_FTRUNCATE      94  /* (fd, len) -> 0 | -EBADF|-EINVAL|-EPERM|-EIO  */

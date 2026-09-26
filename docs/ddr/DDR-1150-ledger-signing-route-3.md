@@ -1,6 +1,6 @@
 # DDR-1150: signing the audit-chain head with a per-install ML-DSA key (DDR-1059 Route 3)
 
-**Status:** DESIGN, committed before any code (§NON-NEGOTIABLE 5).
+**Status:** DESIGN committed before code (17943f5, §NON-NEGOTIABLE 5); **BUILT + GATED** — see §7. Corrections to this design are made in place and marked, not rewritten (DDR-1110's rule).
 **Decision:** operator decision 4 in PR #17 comment 5845610518 (OWNER):
 *"build Route 3 — publish the ML-DSA public key out-of-band at install time,
 keeping the private key in the image as today … Do not build routes 1 or 2."*
@@ -54,7 +54,7 @@ only because `pk` lives off the machine.
 
 ## §3 Design
 
-### §3.1 Kernel: `kernel/aether/ledger.c`
+### §3.1 Kernel: `kernel/aether/ledger.c` — *as built: `kernel/syscall/sys_ledger.c` (the file is the syscall's only consumer)*
 
 - The keypair is held in **kernel memory only**. `sk` is **never** copied out
   to ring 3, by any path.
@@ -80,11 +80,11 @@ never sign or re-key the ledger that records it.
 | `LEDGER_KEYGEN` | 32 seed bytes from `rng_bytes` (fails closed, DDR-816), keygen, key held. Returns 0. Copies the **seed** out to a sovereign caller-supplied buffer, so the installer can persist it (§3.3). | `-EEXIST` if a key is already held; `-EIO` if `rng_bytes` fails. **There is no fallback to `g_owner_seed` or to any constant.** That fallback *is* Reading A. |
 | `LEDGER_LOAD` | Load a 32-byte seed (from the installed key file at boot). | `-EEXIST`; `-EINVAL` on a bad length. |
 | `LEDGER_PUBKEY` | Copy out the 1,312-byte `pk`. | `-ENOKEY` if no key is held. |
-| `LEDGER_SIGN` | Snapshot `(g_written, chain head)` under `g_audit_lock`, run `aether_audit_verify()`, then sign. Copies out the message and the 2,420-byte signature. | `-ENOKEY`; **`-EBADMSG` if the chain fails verification.** Signing a chain already known to be tampered would put this install's signature on the tampering. |
+| `LEDGER_SIGN` | Snapshot `(g_written, chain head)` under `g_audit_lock`, run `aether_audit_verify()`, then sign. Copies out the message and the 2,420-byte signature. | `-ENOKEY`; **`-EBADMSG` if the chain fails verification** — *CORRECTED §7.1: `EBADMSG` does not exist in this tree's `errno.h`; the shipped refusal is the existing **`-ETAMPER` (133)**.* Signing a chain already known to be tampered would put this install's signature on the tampering. |
 
 **The signed message is fixed-format and self-describing:**
 `"PRADYOS-LEDGER-v1\0"` (18 bytes), then `written` (u64 LE), then the chain
-head (32 bytes), then `head_seq` (u64 LE), for 66 bytes in all. The domain
+head (32 bytes), then `head_seq` (u64 LE), for 66 bytes in all. *CORRECTED §7.1: `head_seq` was dropped — `written` already names the head's position, since the head is the newest entry and `written` counts every append. **The shipped message is 58 bytes** (18 + 8 + 32), pinned by `_Static_assert`.* The domain
 string keeps these signatures from being reinterpreted as anything else signed
 with this key.
 
@@ -174,3 +174,123 @@ performs the KEYGEN the installer will perform). Two boots:
 - **`g_owner_seed` is not touched.** The vault and AGS keep their current
   trust model (DDR-1059 §5).
 - **GLOBAL_FORBIDDEN stays at 77.**
+
+## §7 Results (2026-09-26)
+
+### §7.1 Corrections to the design above
+
+- **Message is 58 B, not 66.** `head_seq` was redundant with `written`.
+- **`-ETAMPER`, not `-EBADMSG`**, which is not defined in this tree.
+- **The audited event is a no-op `SET_MODE`**, not a refused one from a fork.
+  One process is simpler, and the event is real either way.
+- **A sixth arm, F: keygen fails closed.** A third boot with **no RNG device**
+  must print exactly `nokey=-126 keygen=-5 again=-5 pk=-126 s1=-126 ev=0
+  s2=-126`. Without it, a kernel that falls back to a constant when entropy is
+  missing passes A–E on every boot that *has* an RNG. That is mutant L1b below,
+  and it is what DDR-1059 §2's theatre would look like if it arrived by
+  accident.
+
+### §7.2 The PMM does not zero, and the ML-DSA scratch carries its own flag
+
+**The first run of `smoke-ledger` failed**, and the failure is worth
+recording because it looked nothing like its cause:
+- `s1=-5`;
+- a plausible-looking but wrong pk;
+- then `[blk] multi-inflight FAIL` and `blk integrity FAIL workers-late`.
+
+The mechanism:
+1. `mldsa44_scratch` carries a `tables_ready` flag.
+2. `pmm_alloc_pages` returns memory that is not zeroed, so the flag held
+   garbage.
+3. The NTT tables were therefore never built, and keygen emitted a wrong key.
+4. Signing with that key then exhausted its 1,000-iteration rejection bound
+   (so `-EIO`), with IF masked the whole time. That starved MSI-X block
+   completions on other paths.
+
+**Fix:** `scratch_get` memsets the pages to zero. `mldsa.h` now states the
+precondition ("SCRATCH MUST START ZEROED"). In the ring-3 probes the scratch
+was `.bss`, which is zeroed, so this precondition had never been exercised
+outside that.
+
+This is §NON-NEGOTIABLE 10's class, in a different allocator.
+
+### §7.3 Cost: signing holds IF masked for a long time under TCG
+
+`sign_tsc` is the TSC delta across one `SIGN` syscall. The baseline is one
+`GET_MODE` syscall. Both are emulated TSC (DDR-870), so these are comparison
+figures, not hardware claims.
+
+| run | sign_tsc | base_tsc |
+|---|---|---|
+| first mutant-era boot 1 | 489,215,624 | ~1.5×10⁵ |
+| first mutant-era boot 2 | 440,696,456 | ~1.2×10⁵ |
+| clean `c76cf7a78450ccdb`, boot 1 | 1,849,766,684 | 141,746 |
+| clean `c76cf7a78450ccdb`, boot 2 | 1,517,099,272 | 116,332 |
+
+That is roughly **3,000–13,000× a syscall**. At the guest's ~2.1 GHz TSC it is
+**~0.2–0.9 s of IF-masked emulated time**, i.e. tens of timer ticks, and the
+spread between runs is **4×**. The §5 prediction of "tens of ms" was too low
+by an order of magnitude.
+
+**Consequences, stated rather than hidden:**
+- `SIGN` is sovereign-only and on-demand, so no agent can drive it and nothing
+  calls it per append.
+- Still, while one CPU is signing, **nothing else runs on that CPU and its
+  timer ticks are held**. That is exactly the shape OPEN-2's timing sensitivity
+  lives in.
+- **This commit is not exonerated for OPEN-2** (DDR-1042).
+- The structurally right remedy is to **sign with interrupts enabled**:
+  1. snapshot the head under the lock;
+  2. drop to a preemptible context (a kernel thread, or an `sti` window around
+     a scratch that nothing else touches) to run the rejection loop;
+  3. copy out.
+- **Recommended, not built.** It is a scheduling change on an ML-DSA path that
+  is otherwise finished, and it deserves its own DDR and a measured before and
+  after.
+
+### §7.4 Gate `smoke-ledger` (shard 3, strict, 240 s budget; ~78 s locally)
+
+Clean kernel `c76cf7a78450ccdb`, **1,450,378 B**: **rc=0**. The pk
+fingerprints were `8bbbba3871a1f188` and `299a266c87b42304` on the two keyed
+boots, and `written` went 4366 → 4367 across the audited event.
+
+Mutants. Each was built and run, and each fails its own arm:
+
+| Mutant | Change | Kernel | Fails |
+|---|---|---|---|
+| L1 | constant seed (Reading A) | `b0d568a593fd6be5` | **E**: "both boots printed pk 7c748368306992eb" |
+| L1b | RNG used, constant fallback on RNG failure | `8ebe77ace13124c8` | **F** alone (boot 3 sentinel) |
+| L2 | sign a zeroed head | `743e1d74edbba306` | **B**: "signed head is constant or zero" |
+| L3 | host verifier says yes to the tampered copy | (host) | **C**: "a tampered head ALSO verifies" |
+| L4 | no `is_sovereign` check | `2743089966b2a979` | **D** (PLAIN sentinel) |
+
+The mutant runner **aborts on "SITE NOT FOUND"** rather than running an
+unmodified tree. That is DDR-1147's lesson: a mutant whose site string does
+not match silently tests the clean kernel.
+
+**Regression, with the hash pinned before and after:** `smoke-auditchain`,
+`smoke-auditchain-tamper`, `smoke-mldsa`, `smoke-superkey`, `smoke-mode`,
+`smoke-blk-integrity`, `smoke-smp`, and `smoke-shell` 5/5. Results are recorded
+in the commit.
+
+### §7.5 Size
+
+`kernel.bin` went from **1,380,746 to 1,450,378 B** (+69,632 B; ML-DSA-44 now
+in the kernel, plus the probe), so headroom is **192,118 → 122,486 B**. The
+size/headroom pair was recomputed in this commit at every carrier.
+
+That is the largest single step in the carrier's history. At this rate the
+remaining budget covers about one more feature of this size before the
+1,572,864 B gate binds. It is recorded here so that fact is not rediscovered at
+the gate.
+
+### §7.6 Not claimed (additions to §6)
+
+- **No install produces a key yet.** The probe stands in for DDR-1143 piece 5,
+  and `LEDGER_LOAD` has no caller.
+- **The published-pk half is a deployment property, not a gate one.** The gate
+  proves the signatures are sound and bound to the chain under the pk *the
+  capture printed*. `ledger_verify.py --pk <file>` is the operator's path, and
+  it is exercised only by hand.
+- **No constant-time claim** (DDR-1057's caveat stands).
+- **The IF-masked window is not fixed** (§7.3).

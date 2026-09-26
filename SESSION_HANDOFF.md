@@ -14765,3 +14765,27 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   Operator comment 5845610518 (OWNER, 6 decisions) read. #5 recorded: OPEN-1 hold clause closed as satisfied; tag held on OPEN-2 alone (checklist §1.2, CLAUDE.md). #1-4, #6 queued as tasks.
   DDR-1149 BUILT (op decision 6): domain caps at submission; smoke-domcap 5 roles, M1-M5 each caught; M3 initially PASSED (the CROSS role masked it), fixed with DOORX/CAPX. kernel f78b53c02a2b2734 1,380,746 B / 192,118; 184 gates.
   NEXT: op #1-3 (DDR-1147 palette + engine), op #4 (DDR-1059 Route 3), DDR-1143 piece 4 install engine.
+
+## CHECKPOINT 2026-09-26 — DDR-1150 BUILT + GATED (operator decision 4, PR #17 comment 5845610518)
+
+- SYS_LEDGER (NSI 106) signs the audit-chain head with a PER-INSTALL ML-DSA-44 key
+  (keygen from rng_bytes, FAIL-CLOSED with no RNG: `keygen=-5`, no key minted).
+  Sovereign-only for KEYGEN/LOAD/PUBKEY/SIGN. SIGN refuses a tampered chain (-ETAMPER).
+  Signed message 58 B, `_Static_assert`-pinned.
+- smoke-ledger (shard 3, strict, 240 s): 3 boots, arms A-F; off-box verify by
+  tools/ci/ledger_verify.py (the NIST-verified Python oracle, not the kernel's code).
+  Mutants L1/L1b/L2/L3/L4 each caught on a distinct arm (DDR-1150 §7.4).
+- Defect found and fixed on the way: PMM scratch is NOT zeroed and ML-DSA keeps a
+  tables_ready flag in it -> garbage pk / s1=-5; scratch_get memsets; mldsa.h states
+  "SCRATCH MUST START ZEROED".
+- Cost stated: SIGN holds IF masked ~0.2-0.9 s emulated (sign_tsc ~1.5-1.8e9 vs base
+  ~1.2-1.4e5). Recommended follow-up (NOT built): sign with interrupts enabled.
+- kernel.bin c76cf7a78450ccdb, 1,450,378 B (headroom 122,486). 185 gates. NSI max 106,
+  105 reserved for SYS_INSTALL, next free 107. DDR free range DDR-1151+.
+- Regression on the pinned hash: smoke-shell 5/5 + auditchain/-tamper, mldsa, mode,
+  smp, blk-integrity, compositor, horizon, privacy-netfilter, egress-audit etc. all PASS.
+  Hygiene ALL TEN.
+- NOT claimed: key custody against a disk reader (anyone who can read the disk can
+  forge); key PERSISTENCE arrives with DDR-1143 piece 5 (installer). Route 1
+  (hardware root) stays deferred.
+- NEXT: task #11 installer (SYS_INSTALL NSI 105, persisted key + boot-time LOAD).

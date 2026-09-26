@@ -62,6 +62,11 @@ typedef struct {
  * wrong implementation. Determinism is what makes this testable, and it is also
  * what a reproducible audit ledger wants.
  *
+ * SCRATCH MUST START ZEROED (DDR-1150 sec.7): each scratch carries its own
+ * tables_ready flag, so non-zero garbage skips building the NTT tables and the
+ * result is silently wrong. A demand-paged user stack arrives zeroed, which is
+ * why the ring-3 probes never saw it; PMM pages and kmalloc do not.
+ *
  * Scratch is caller-owned for the same two reasons as keyGen's: reentrancy, and
  * a ring-3 probe that must have NO writable allocated section (DDR-826). ~54 KiB
  * -- larger than the 32 KiB ADR-038 maps eagerly, but the user stack is 8 MiB

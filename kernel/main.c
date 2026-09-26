@@ -463,6 +463,7 @@ extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wa
 extern const unsigned char killblocktest_elf_end[];
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
+extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
 void ocr_grant(struct tcb *t);                        /* DDR-1149: sys_aether.c */
 void scene_grant(struct tcb *t);
 void browse_grant(struct tcb *t);
@@ -3061,6 +3062,35 @@ static void fs_test_thread(void *arg) {
                         sched_unblock(dt);                /* authority BEFORE the first run */
                     }
                     kputs("[user] domain-capability probes spawned (GRANT NODOOR NOCAP DOORX CAPX)\r\n");
+                }
+                /* DDR-1150: SYS_LEDGER. Two processes by role (argv[1]): SOV is
+                 * sovereign and stands in for the installer's KEYGEN; PLAIN is
+                 * not, and must be refused on every op. Two processes rather than
+                 * a fork, so the refused caller's authority is set here, by the
+                 * kernel, and cannot be inherited by accident. */
+                if (probe_enabled("ledger")) {
+                    static const char *const lroles[2] = { "SOV", "PLAIN" };
+                    uint64_t lglen = (uint64_t)((uintptr_t)ledgertest_elf_end -
+                                                (uintptr_t)ledgertest_elf);
+                    for (int r = 0; r < 2; r++) {
+                        char blob[16];
+                        uint32_t n = 0;
+                        for (const char *q = "LEDGER"; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        for (const char *q = lroles[r]; *q; q++) blob[n++] = *q;
+                        blob[n++] = 0;
+                        struct exec_args ea = { blob, n, 2, 0 };
+                        struct tcb *lt = 0;
+                        if (elf_load_args((void *)(uintptr_t)ledgertest_elf, lglen,
+                                          "LEDGER", &ea, &lt) != ELF_OK || !lt) {
+                            kputs("[user] LEDGER probe FAILED to load\r\n");
+                            continue;
+                        }
+                        if (r == 0)
+                            lt->is_sovereign = 1;         /* authority BEFORE the first run */
+                        sched_unblock(lt);
+                    }
+                    kputs("[user] ledger probes spawned (SOV PLAIN)\r\n");
                 }
                 /* DDR-1037: POSIX poll(). One process -- unlike is_ipc/is_exec
                  * there is no per-process door here, so a second un-granted

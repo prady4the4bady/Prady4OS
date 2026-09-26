@@ -23,6 +23,7 @@
 void sys_aether_register(void);   /* kernel/syscall/sys_aether.c */
 void sys_socket_register(void);   /* kernel/syscall/sys_socket.c (ADR-027) */
 void sys_disk_register(void);     /* kernel/syscall/sys_disk.c (DDR-1143) */
+void sys_ledger_register(void);   /* kernel/syscall/sys_ledger.c (DDR-1150) */
 void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
 void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
@@ -256,6 +257,7 @@ void syscall_init(void) {
     sys_aether_register();                /* SYS_GET_MODE..SYS_SET_MEM_LIMIT (Layer 6) */
     sys_socket_register();                /* SYS_SOCK_* proxy sockets (ADR-027) */
     sys_disk_register();                  /* SYS_DISK_LIST (DDR-1143) */
+    sys_ledger_register();                /* SYS_LEDGER (DDR-1150) */
     sys_ags_register();                   /* SYS_GOAL_SIGN / SYS_GOAL_VERIFY (DDR-814) */
     sys_vault_register();                 /* SYS_VAULT_PUT / SYS_VAULT_GET (DDR-834) */
     sys_agentmem_register();              /* SYS_MEMORY_WRITE / SYS_MEMORY_READ (DDR-836) */

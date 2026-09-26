@@ -140,6 +140,8 @@ USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST prob
 USER_DISK_ELF  := build/disktest.elf
 USER_DOMCAP_SRC := user/domcaptest.c     # DDR-1149: domain capabilities at submission
 USER_DOMCAP_ELF := build/domcaptest.elf
+USER_LEDGER_SRC := user/ledgertest.c     # DDR-1150: SYS_LEDGER (audit-head signing)
+USER_LEDGER_ELF := build/ledgertest.elf
 USER_MPROT_ELF := build/mprotecttest.elf
 USER_SLOW_SRC  := user/slowtest.c        # DDR-1068: still running when `wait` runs
 USER_SLOW_ELF  := build/slowtest.elf
@@ -231,7 +233,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
@@ -603,6 +605,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DOMCAP_SRC) -o build/domcaptest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DOMCAP_ELF) build/domcaptest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_LEDGER_SRC) -o build/ledgertest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_LEDGER_ELF) build/ledgertest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SLOW_SRC) -o build/slowtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SLOW_ELF) build/slowtest.o
 	nasm -Werror -f elf64 $(USER_ARGT_SRC) -o build/argtest.o
@@ -639,7 +643,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -729,6 +733,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_experiment.c -o build/sys_experiment.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_audit.c -o build/sys_audit.o
 	$(CC) $(KCFLAGS) -Ikernel/drivers/blk -c kernel/syscall/sys_disk.c -o build/sys_disk.o
+	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_ledger.c -o build/sys_ledger.o
+	$(CC) $(KCFLAGS) -Ikernel/crypto -c kernel/crypto/mldsa.c -o build/mldsa.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -4083,6 +4089,38 @@ smoke-domcap: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_DOMCAP role=GRANT ocr=ok scene=ok browse=ok child=ok\nPRADYOS_DOMCAP role=NODOOR ocr=-1 scene=-1 browse=-1 child=-1\nPRADYOS_DOMCAP role=NOCAP ocr=-1 scene=-1 browse=-1 child=-1\nPRADYOS_DOMCAP role=DOORX ocr=ok scene=-1 browse=-1 child=ok\nPRADYOS_DOMCAP role=CAPX ocr=ok scene=-1 browse=-1 child=ok')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[domcap] PASS -- 5 roles, each layer and each per-type mapping held"
+
+# DDR-1150: SYS_LEDGER -- the audit head signed with a per-install ML-DSA-44 key
+# (DDR-1059 Route 3). THREE boots, and each arm names what it catches:
+#   A/B/C  tools/ci/ledger_verify.py, off-box, INDEPENDENT Python verify: both
+#          heads verify; written advances and the head changes across an audited
+#          event (a constant-head kernel fails B); a tampered copy is rejected
+#          (a say-yes verifier fails C).
+#   D      exact refusals: SIGN before KEYGEN -ENOKEY, second KEYGEN -EEXIST, the
+#          non-sovereign PLAIN process -EPERM on every op.
+#   E      boot 2 prints a DIFFERENT pk: a key baked into the image (DDR-1059
+#          sec.2's theatre) prints the same pk twice and fails here alone.
+#   F      boot 3 has NO entropy source: KEYGEN must fail closed with -EIO. A
+#          silent fallback to any constant seed would succeed and fail here.
+LEDGER_SOV  = PRADYOS_LEDGER_SOV nokey=-126 keygen=0 again=-17 pk=1312 s1=58 ev=0 s2=58
+LEDGER_PLN  = PRADYOS_LEDGER_PLAIN keygen=-1 pk=-1 sign=-1
+LEDGER_NORNG = PRADYOS_LEDGER_SOV nokey=-126 keygen=-5 again=-5 pk=-126 s1=-126 ev=0 s2=-126
+smoke-ledger: $(IMG) fat-image sfs-image
+	@rm -f build/ledger1.log build/ledger2.log build/ledger3.log
+	@for b in 1 2; do \
+	  SERIAL_LOG=build/ledger$$b.log KEEP_SERIAL=1 TIMEOUT_S=150 QEMU_PROBES=ledger QEMU_RNG=1 \
+	  EXTRA_SENTINEL="$$(printf '$(LEDGER_SOV)\n$(LEDGER_PLN)')" \
+	      bash tools/qemu_runner/boot_test.sh $(IMG) || exit 1; \
+	  python3 tools/ci/ledger_verify.py build/ledger$$b.log || exit 1; \
+	done
+	@f1=$$(python3 tools/ci/ledger_verify.py build/ledger1.log fp); \
+	 f2=$$(python3 tools/ci/ledger_verify.py build/ledger2.log fp); \
+	 [ -n "$$f1" ] && [ "$$f1" != "$$f2" ] || { echo "[ledger] FAIL -- arm E: both boots printed pk $$f1 -- the key is not per-keygen"; exit 1; }; \
+	 echo "[ledger] arm E: pk $$f1 != $$f2"
+	@SERIAL_LOG=build/ledger3.log KEEP_SERIAL=1 TIMEOUT_S=150 QEMU_PROBES=ledger \
+	EXTRA_SENTINEL="$$(printf '$(LEDGER_NORNG)\n$(LEDGER_PLN)')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[ledger] PASS -- off-box verify, chain-bound heads, exact refusals, per-keygen pk, fail-closed keygen"
 
 # DDR-1037: POSIX poll(). The sentinel list asserts VALUES, not presence:
 #   EMPTY n=0        -- an empty pipe is not readable

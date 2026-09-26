@@ -297,6 +297,8 @@ struct aether_audit_entry_pub {                /* the shape SYS_READ_AUDIT retur
  * A boolean would be useless to an operator: "tampered at entry 1204" locates
  * the event being hidden; "tampered" does not. */
 int  aether_audit_verify(uint32_t *bad_index);
+/* DDR-1150: (total appends, newest chain value) under the append lock. */
+void aether_audit_head(uint64_t *written, uint8_t head[32]);
 /* DDR-842 fault injection, DDR-804 probe-gated. Flips one byte of one committed
  * entry so the gate can prove verification FAILS when it should. Ring 3 has no
  * write path into the log (that is what S5 asserts), so this is the only way to

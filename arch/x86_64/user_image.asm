@@ -549,3 +549,8 @@ global domcaptest_elf_end
 domcaptest_elf:
     incbin "build/domcaptest.elf"
 domcaptest_elf_end:
+global ledgertest_elf
+global ledgertest_elf_end
+ledgertest_elf:
+    incbin "build/ledgertest.elf"
+ledgertest_elf_end:

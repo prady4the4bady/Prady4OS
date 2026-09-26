@@ -49,8 +49,23 @@ as the custody of its key, and that is the open DDR-1059 question.
   fallback address**: without a lease, the interface says it is unconfigured.
 - Post-quantum signature **primitives**: ML-DSA-44 keyGen, sign and verify,
   checked against NIST ACVP vectors, plus a tamper-evident SHA-256 audit chain.
-  **This is not a post-quantum signed ledger** (DDR-1059), and **it is not a
-  FIPS 140 validated module**: the vectors test algorithm conformance only.
+  **It is not a FIPS 140 validated module**: the vectors test algorithm
+  conformance only.
+- **The audit-chain head can be signed with a per-install ML-DSA-44 key whose
+  public key is published off the machine** (DDR-1150, DDR-1059 Route 3).
+  The key is generated from the hardware RNG and never baked into the ISO, so
+  every install has its own. Keygen fails closed: with no entropy source there
+  is no key. Signatures are checked off-box by an independent verifier.
+  **What it defends against:** someone who edits the installed disk after the
+  signed heads were exported, and does not hold this install's signing key.
+  They can recompute the SHA-256 chain, but they cannot make a signature that
+  the published public key accepts.
+  **What it does not defend against:** anyone who can **read** the installed
+  disk's key file. The signing key lives on that disk, and a reader can sign
+  anything. Only a hardware root of trust (DDR-1059 Route 1, not built) closes
+  that gap. **So this is not "a tamper-proof ledger."**
+  **Key persistence arrives with the installer (DDR-1143 piece 5).** Until
+  then, a live boot holds no key and signing returns "no key".
 - A **UEFI GOP framebuffer** (DDR-1142). On UEFI firmware the loader asks for
   the mode the firmware already set, and the desktop draws on it when there is
   no virtio-gpu. `smoke-gop` checks this against the **scanout**, not memory
@@ -109,8 +124,10 @@ as the custody of its key, and that is the open DDR-1059 question.
   stop DHCP lease renewal, because dropping the lease would take the interface
   down.
 - **Deferred past v1:**
-  - the signed-ledger key custody (DDR-1059);
-  - the CAP_OCR, CAP_SCENE and CAP_NET_BROWSE agent capabilities;
+  - hardware-rooted custody of the ledger signing key (DDR-1059 Route 1, TPM);
+  - the OCR, scene and web-browse *behaviours*. Their capabilities are
+    enforced at action submission (DDR-1149), but nothing executes those
+    actions yet;
   - compiler hardening (a stack protector and CFI), to a post-tag DDR;
   - KPTI, retpoline and RSB refill (DDR-1140 §2), to a post-tag series;
   - B#14/B#15 and Group G, pending respecification;

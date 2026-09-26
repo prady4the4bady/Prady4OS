@@ -241,6 +241,22 @@ int aether_audit_read(struct aether_audit_entry_pub *out, int max) {
  * emitted to serial. The durable ledger that survives wrap is F#76, a different
  * mechanism, not claimed here.
  */
+/* DDR-1150: one consistent (written, newest chain value) pair, read under the
+ * append lock so the two cannot come from different appends. An empty log
+ * reports written=0 and 32 zero bytes, which is the value the first entry
+ * chains onto -- so "nothing logged" is stated, not invented. */
+void aether_audit_head(uint64_t *written, uint8_t head[32]) {
+    uint64_t fl = spin_lock_irqsave(&g_audit_lock);
+    *written = g_written;
+    if (!g_log || g_count == 0) {
+        memset(head, 0, 32);
+    } else {
+        uint32_t p = (g_head + AETHER_AUDIT_LEN - 1) % AETHER_AUDIT_LEN;
+        memcpy(head, g_log[p].chain, 32);
+    }
+    spin_unlock_irqrestore(&g_audit_lock, fl);
+}
+
 int aether_audit_verify(uint32_t *bad_index) {
     if (!g_log)
         return 0;
