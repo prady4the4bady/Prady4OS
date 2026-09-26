@@ -136,6 +136,8 @@ USER_ADEL_ELF := build/actiondeltest.elf
 USER_MPROT_SRC := user/mprotecttest.c    # DDR-1031: SYS_MPROTECT (NSI 97)
 USER_KILLB_SRC := user/killblocktest.c   # DDR-1090: SIGKILL vs an unbounded kernel wait
 USER_KILLB_ELF := build/killblocktest.elf
+USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
+USER_DISK_ELF  := build/disktest.elf
 USER_MPROT_ELF := build/mprotecttest.elf
 USER_SLOW_SRC  := user/slowtest.c        # DDR-1068: still running when `wait` runs
 USER_SLOW_ELF  := build/slowtest.elf
@@ -227,7 +229,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
@@ -595,6 +597,8 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MPROT_ELF) build/mprotecttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLB_SRC) -o build/killblocktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLB_ELF) build/killblocktest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SLOW_SRC) -o build/slowtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SLOW_ELF) build/slowtest.o
 	nasm -Werror -f elf64 $(USER_ARGT_SRC) -o build/argtest.o
@@ -631,7 +635,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
@@ -720,6 +724,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/aether/experiment.c -o build/experiment.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -c kernel/syscall/sys_experiment.c -o build/sys_experiment.o
 	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_audit.c -o build/sys_audit.o
+	$(CC) $(KCFLAGS) -Ikernel/drivers/blk -c kernel/syscall/sys_disk.c -o build/sys_disk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
@@ -3399,9 +3404,10 @@ smoke-part: $(IMG) fat-image sfs-image
 	@echo "[part] partition sub-device gate (DDR-1143 §4.1)..."
 	@mkdir -p build/gatelogs
 	KSHA=$$(sha256sum build/kernel.bin | cut -c1-16); KLEN=$$(stat -c %s build/kernel.bin); \
+	S0=$$(( $$(stat -c %s $(IMG)) / 512 )); S1=$$(( $$(stat -c %s build/fat.img) / 512 )); S2=$$(( $$(stat -c %s build/sfs.img) / 512 )); \
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/part.log KEEP_SERIAL=1 \
-	TIMEOUT_S=120 QEMU_PROBES=part,kimg \
-	EXTRA_SENTINEL="$$(printf '[kimg] src=bios len=%s sha=%s\n[part] mbr n=2 ok' "$$KLEN" "$$KSHA")$$(printf '\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
+	TIMEOUT_S=120 QEMU_PROBES=part,kimg,disk \
+	EXTRA_SENTINEL="$$(printf '[disk] i=0 name=virtio-blk sectors=%s flags=phys\n[disk] i=1 name=virtio-blk sectors=%s flags=phys\n[disk] i=2 name=virtio-blk sectors=%s flags=phys\n[disk] i=3 name=ramdisk sectors=512 flags=ramdisk\n[disk] i=4 name=part sectors=128 flags=part\n[disk] i=5 name=part sectors=320 flags=part\n[disk] i=6 name=trace sectors=320 flags=none\n[disk] n=7 count=7 efault=-14' "$$S0" "$$S1" "$$S2")$$(printf '\n[kimg] src=bios len=%s sha=%s\n[part] mbr n=2 ok' "$$KLEN" "$$KSHA")$$(printf '\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PART FAIL\n[kimg] refused\nKIMG FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

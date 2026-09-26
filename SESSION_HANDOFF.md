@@ -14756,5 +14756,6 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - NEXT: piece 3 (pristine kernel copy in stage2 + UEFI loaders, boot_info). DDR section first.
 - Piece 3 built (DDR-1143 §10.5): boot_kimg at 0x4FC0; stage2 copy at 0x800000; UEFI copy below 16 MiB
   (OVMF owns 0x800000, measured). The guest sha matches the host's kernel.bin sha on both paths. K1-K3 caught.
+  Piece 4 step 2 (§10.8): NSI 104 SYS_DISK_LIST + disktest probe on smoke-part; D1/D2 caught; kernel 6e875c31b66f4593 1,372,554 B / 200,310 headroom; smoke-part + smoke-uefi rc=0, smoke-shell 5/5, hygiene ALL NINE, 83 ELFs. NEXT: install engine (FAT16 + layout) + NSI 105 + PRISM builtin.
   Piece 4 step 1 (§10.7): lld-link -Brepro makes BOOTX64.EFI reproducible (00260396cebc980a, 2 builds equal); smoke-uefi rc=0.
   kernel.bin afecbb54b2774641, 1,360,266 B. Regression 15/15 rc=0, hash pinned + re-checked per gate (iso-x86, iso-userspace, gop, uefi, part, selftest, blkmq, rqstress-liveness, blk-integrity, smoke-shell 5/5); hygiene ALL NINE; GLOBAL_FORBIDDEN 77. NEXT: pieces 4-6.

@@ -538,3 +538,9 @@ global killblocktest_elf_end
 killblocktest_elf:
     incbin "build/killblocktest.elf"
 killblocktest_elf_end:
+
+global disktest_elf
+global disktest_elf_end
+disktest_elf:
+    incbin "build/disktest.elf"
+disktest_elf_end:

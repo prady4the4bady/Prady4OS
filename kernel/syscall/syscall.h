@@ -182,6 +182,8 @@
 /* DDR-1141: resolve a name to IPv4 (first octet MSB). resolver 0 = the DHCP one.
  * Privacy mode, CAP_NET and the allowlist on (resolver,53) gate it, and every
  * decision is audited as ACTION_NET_DNS BEFORE any query leaves. */
+/* DDR-1143 sec.10.6: enumerate block devices (read-only, any process). */
+#define SYS_DISK_LIST      104 /* (struct disk_info *out, n) -> total count | -EFAULT */
 #define SYS_DNS_RESOLVE    103 /* (name, uint32_t *out, resolver) -> 0 | -EPERM|-EFAULT|-EINVAL|-ENAMETOOLONG|-ENODEV|-ENOENT|-ETIMEDOUT|-EAGAIN */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */
 #define SYS_FTRUNCATE      94  /* (fd, len) -> 0 | -EBADF|-EINVAL|-EPERM|-EIO  */

@@ -6574,3 +6574,19 @@ blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,
 - `kernel.bin` is `afecbb54b2774641`, 1,360,266 B (size unchanged).
 - **Next:** pieces 4–6 (disk enumeration NSI 104, install syscall, FAT16, the
   install program, root selection, `smoke-install`).
+
+### 2026-09-26 — DDR-1143 piece 4 steps 1–2: `-Brepro` and `SYS_DISK_LIST` (NSI 104), BUILT + GATED
+
+- **`lld-link -Brepro`:** `BOOTX64.EFI` is now reproducible
+  (`00260396cebc980a`; two builds are equal).
+- **NSI 104 `SYS_DISK_LIST`** is read-only and open to any process. It reports a
+  32-byte `disk_info` per device, with flags phys/ramdisk/part/blank/installed/
+  readerr. `PHYS` is a driver-name allowlist; see §10.8 for why.
+- **Gate:** `smoke-part` + probe `disktest` (key `disk`). It requires exact
+  per-device lines, with the physical capacities taken from the host's `stat`
+  of each image.
+- **Mutants:** D1 (capacity) and D2 (constant flags) are caught on different
+  lines. Revert is bit-for-bit.
+- `kernel.bin` is `6e875c31b66f4593`, 1,372,554 B (+12,288 B), with 200,310 B
+  of headroom. 83 probe ELFs.
+- `blank`/`installed` are not exercised yet; they belong to `smoke-install`.

@@ -461,6 +461,7 @@ extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT 
 extern const unsigned char mprotecttest_elf_end[];
 extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
 extern const unsigned char killblocktest_elf_end[];
+extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char argvtest_elf[];            /* DDR-1032: execve argv/envp */
 extern const unsigned char argvtest_elf_end[];
 extern const unsigned char ipctest_elf[];             /* DDR-1033: ring-3 IPC door */
@@ -2105,6 +2106,21 @@ static void fs_test_thread(void *arg) {
                  * exact count would be asserting the absence of work stealing. */
                 if (probe_enabled("part"))           /* DDR-1143 §4.1 */
                     part_selftest(cap);
+                if (probe_enabled("disk")) {         /* DDR-1143 sec.10.8: NSI 104 */
+                    /* AFTER part_selftest, so the list holds every device class
+                     * (virtio, ramdisk, part, trace). Waited on by pid, not by
+                     * THREAD_ZOMBIE (DDR-967): the reaper may free the TCB. */
+                    struct tcb *dk = 0;
+                    uint64_t dklen = (uint64_t)((uintptr_t)disktest_elf_end - (uintptr_t)disktest_elf);
+                    if (elf_load((void *)(uintptr_t)disktest_elf, dklen, "DISK", &dk) == ELF_OK && dk) {
+                        uint32_t dkpid = dk->pid;
+                        sched_unblock(dk);
+                        kputs("[user] ELF loaded (embedded); disk-list probe spawned\r\n");
+                        uint64_t dkdl = g_ticks + 1500;
+                        while (sched_find_pid(dkpid) && g_ticks < dkdl)
+                            yield();
+                    }
+                }
                 if (probe_enabled("rqfree")) {
                     extern volatile uint32_t g_rqfree_caught, g_rqfree_leaked;
                     int made = sched_rqfree_probe(16);

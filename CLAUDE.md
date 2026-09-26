@@ -407,15 +407,16 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
   then `smoke-yieldstall` (DDR-994) -> 153, `smoke-rqfree` (DDR-996) -> 154,
   `smoke-resizeall` (DDR-997) -> 155, `smoke-surfclose` (DDR-998) -> 156.
   **Re-measure rather than increment this** — it has been wrong three times.
-- **NSI max: 103** (`SYS_DNS_RESOLVE`, DDR-1141). **Next free: 104.** Table size: 128.
+- **NSI max: 104** (`SYS_DISK_LIST`, DDR-1143 §10.8). **Next free: 105** (reserved for `SYS_INSTALL`, DDR-1143 §10.6). Table size: 128.
+  (previously 103 = `SYS_DNS_RESOLVE`, DDR-1141.)
   (previously 102 = `SYS_POLL`, DDR-1037.)
   100 = `SYS_RUN_EXPERIMENT`, 101 = `SYS_EXP_RESULT` (DDR-1034); 102 = `SYS_POLL`
   (DDR-1037) — **NOT** `SYS_POLL_RESULT` (32), which is the AETHER action poll.
   Measured from `kernel/syscall/syscall.h:168-170`. This line previously said 93
   and §INV.14 said 74 — both wrong, and the older note claiming "§INV.14 was
   right" was wrong too. `user/prism.c` ships against 95.
-- **`kernel.bin`**: **1,360,266 B** against the 1,572,864 B size gate — **212,598 B
-  of headroom** (measured 2026-09-26 on the DDR-1143 piece-2 tree: the block flush op across four drivers, SFS commit barriers and the trace-device arms cost the page-aligned 4,096 B; headroom RECOMPUTED in the same edit) (previously 1,356,170 / 216,694, measured 2026-09-26 on the DDR-1143 piece-1 tree: the partition sub-device + MBR parser and its `part` probe cost the page-aligned 4,096 B; headroom RECOMPUTED in the same edit) (previously 1,352,074 / 220,790, measured 2026-09-25 on the DDR-1141 tree: lwIP DHCP + DNS, SYS_DNS_RESOLVE and the embedded dnstest probe; headroom RECOMPUTED in the same edit) (DDR-1105's `next->rsp` validity check costs the page-aligned
+- **`kernel.bin`**: **1,372,554 B** against the 1,572,864 B size gate — **200,310 B
+  of headroom** (measured 2026-09-26 on the DDR-1143 §10.8 tree: `SYS_DISK_LIST` (NSI 104) plus its embedded `disktest` probe cost 12,288 B, i.e. the page-aligned 8,192 B every embedded probe costs plus 4,096 B of code; headroom RECOMPUTED in the same edit) (previously 1,360,266 / 212,598, measured 2026-09-26 on the DDR-1143 piece-2 tree: the block flush op across four drivers, SFS commit barriers and the trace-device arms cost the page-aligned 4,096 B; headroom RECOMPUTED in the same edit) (previously 1,356,170 / 216,694, measured 2026-09-26 on the DDR-1143 piece-1 tree: the partition sub-device + MBR parser and its `part` probe cost the page-aligned 4,096 B; headroom RECOMPUTED in the same edit) (previously 1,352,074 / 220,790, measured 2026-09-25 on the DDR-1141 tree: lwIP DHCP + DNS, SYS_DNS_RESOLVE and the embedded dnstest probe; headroom RECOMPUTED in the same edit) (DDR-1105's `next->rsp` validity check costs the page-aligned
   4,096 B; headroom RECOMPUTED in the same edit as the size)
   (DDR-1090's `killblocktest.elf` cost the page-aligned 4,096 B;
   headroom RECOMPUTED in the same edit as the size) (DDR-1084's `actionipctest.elf` costs the page-aligned 8,192 B every

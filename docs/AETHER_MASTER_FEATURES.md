@@ -2100,3 +2100,4 @@ this time, not just the waiter."* Instrument only.
 - 2026-09-26 — DDR-1143 piece 1 (block partitions + MBR parser, `smoke-part`). No AETHER surface change.
 - 2026-09-26 — DDR-1143 piece 2 (block flush op + SFS commit barriers, trace-pinned on `smoke-part`). No AETHER surface change.
 - 2026-09-26 — DDR-1143 piece 3 (pristine kernel image handoff from both loaders, hash-gated). No AETHER surface change.
+- 2026-09-26 — DDR-1143 §10.8: NSI 104 `SYS_DISK_LIST` (read-only disk enumeration, gated on smoke-part). No AETHER surface change.

@@ -771,3 +771,74 @@ gate → mutants → regression. Each is committed separately.
 - This had to land before the file is `incbin`'d. **Not claimed:** anything
   about other PE fields. Only whole-file equality across two builds was
   measured.
+
+### §10.8 Piece 4 step 2: `SYS_DISK_LIST` (NSI 104), built and gated (2026-09-26)
+
+**Shipped.** The call is `SYS_DISK_LIST(struct disk_info *out, n)`, in
+`kernel/syscall/sys_disk.c`.
+
+- It returns the **total** device count and copies `min(n, total)` 32-byte
+  entries: name, sectors, flags, registry index.
+- The wire layout lives in `kernel/install/disk_info.h` and is pinned by
+  `_Static_assert`.
+- It is read-only, so any process may call it (§10.6).
+
+**One refinement to §10.6's flag set, stated rather than folded in silently.**
+
+- §10.6 listed *ramdisk, partition, blank, installed*.
+- A **positive `PHYS` flag** is added (`virtio-blk`, `nvme0`, `ahci`, by driver
+  name), and `SYS_INSTALL` will require it.
+- **Why an allowlist and not "neither ramdisk nor partition":** measured, the
+  registry on `smoke-part` also holds the self-test's `trace` wrapper, a
+  virtual device that is neither. Under the negative rule it would have become
+  an install target. It now reports `flags=none`.
+- **`READERR`:** a sector-0 read that fails claims **no content flag at all**.
+  A disk that could not be read must never be reported `blank`, because
+  "blank" is what an installer reads as "safe to overwrite".
+
+**The arm** is on `smoke-part`. Probe `user/disktest.c` (key `disk`) is
+spawned **after** `part_selftest`, so one call sees every device class. The gate
+requires exactly these lines:
+
+```
+[disk] i=0 name=virtio-blk sectors=<stat pradyos.img /512> flags=phys
+[disk] i=1 name=virtio-blk sectors=<stat fat.img /512>     flags=phys
+[disk] i=2 name=virtio-blk sectors=<stat sfs.img /512>     flags=phys
+[disk] i=3 name=ramdisk sectors=512 flags=ramdisk
+[disk] i=4 name=part sectors=128 flags=part
+[disk] i=5 name=part sectors=320 flags=part
+[disk] i=6 name=trace sectors=320 flags=none
+[disk] n=7 count=7 efault=-14
+```
+
+- The three physical capacities come from the **host's** `stat`, so an invented
+  capacity cannot match.
+- The flag tokens differ per device class, so a constant flag word passes at
+  most one class.
+- `count=` is the pure-count call (`n = 0`) and must agree with the full call.
+- `efault=` is a non-user buffer, which must return exactly `-14`.
+
+**One gate defect, caught on the first arm run.** The `printf` for the new
+lines ended in `\n` inside `$(…)`. Command substitution strips a trailing
+newline, so the last disk line fused with the next pattern and the gate
+reported a pattern that exists nowhere. The join now leads with `\n`, as the
+existing patterns already did.
+
+| mutant | kernel | result |
+|---|---|---|
+| D1 capacity + 1 | `8120fd7be81ef198` | fails on `i=0 … sectors=4096 flags=phys` — **caught** |
+| D2 every flag word `PHYS` | `b62c44d6d8dd21ce` | fails on `i=3 … flags=ramdisk`; the capture shows `flags=phys` — **caught** |
+
+- Revert returns `6e875c31b66f4593` bit-for-bit.
+- `kernel.bin` is 1,360,266 → **1,372,554 B** (+12,288 B: the page-aligned
+  8,192 B every embedded probe costs, plus 4,096 B of code). Headroom is
+  **200,310 B**, recomputed at every carrier.
+- `ci-probe-rodata-check` now counts **83** ELFs.
+
+**Not claimed.**
+
+- `blank` and `installed` are **not exercised here**: no device on this boot is
+  either. Both are covered by `smoke-install` (boot 1 lists a blank disk;
+  boot 2 lists an installed one), which is not built yet.
+- The `readerr` path is not exercised by any gate.
+- No `-EPERM` exists on this call, deliberately.
