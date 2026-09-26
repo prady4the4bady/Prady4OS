@@ -456,7 +456,7 @@ and fixed before the ISO. "Watch CI" is no longer a valid action.**
   UEFI arms), `smoke-iso-userspace` (**PASS: the ISO boots a live OS** — SFS root
   + PRISM + AETHER agent + write/read/delete round-trip), `smoke-uefi`. ISO
   52,805,632 B; kernel hash `d31b4023b0f74d06`. DDR-971 is closed on evidence.
-- **`v1.0.0` is NOT tagged — deliberately HELD by operator decision 2026-08-23.**
+- **`v1.0.0` is NOT tagged — deliberately HELD by operator decision 2026-08-23.** **UPDATED 2026-09-26 (PR #17 comment 5845610518, OWNER, decision 5): the OPEN-1-specific hold clause is CLOSED AS SATISFIED; the tag stays HELD on OPEN-2 alone, and route 1 itself stays stated OPEN (checklist §1.2).**
   The OPEN-1 campaign found a **locally reproducible ring-0 `#PF`** (1/20,
   DDR-985). The decision was to root-cause it BEFORE tagging, using the margin to
   2026-08-28. Do NOT tag until that panic is closed and the candidate re-verified.

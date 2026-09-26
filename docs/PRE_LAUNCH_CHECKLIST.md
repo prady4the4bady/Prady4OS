@@ -410,7 +410,7 @@ stated reason for asking for it.
 
 ### 1.2 — `v1.0.0` is deliberately untagged, and `main` promotion is unstarted
 
-**Status: HELD BY OPERATOR DECISION. Not an oversight.**
+**Status: HELD BY OPERATOR DECISION. Not an oversight.** *(2026-09-26: the OPEN-1 clause is closed as satisfied; the hold now rests on OPEN-2 alone. See the end of this section.)*
 
 `dev/phase1` was fast-forwarded to `ace232f` and the release candidate was
 verified on it (BIOS + UEFI ISO arms, plus `smoke-iso-userspace`, which boots a
@@ -464,6 +464,29 @@ suspect, visible for the first time, and DDR-1122 §4(b) measured it live at
 what route 1's second occurrence lacked; DDR-1123 made `[apfreeze]` say how many
 CPUs froze). **Still a COUNT, NOT A RATE** — the denominator is deliberately not
 computed, for DDR-1011 §5's reason.
+
+**OPERATOR DECISION 2026-09-26 — PR #17 comment 5845610518, verified at the
+primary source as `author_association: OWNER` (decision 5 of 6).** *"Close the
+OPEN-1-specific hold clause in the checklist as satisfied. This does NOT
+authorize tagging v1.0.0 — OPEN-2 ... remains an independent, still-actively-
+firing release blocker per NON-NEGOTIABLE 3, and the tag stays held on that
+alone until it has a named mechanism or its own explicit operator decision."*
+
+**Recorded as follows, and nothing more is inferred from it:**
+
+- **The OPEN-1-specific hold clause is CLOSED AS SATISFIED.** The original reason
+  for the hold ("root-cause the `#PF` before tagging") is spent: route 2 closed at
+  95% power (DDR-1000) and route 3 closed (DDR-990 §9). **Route 1 itself is NOT
+  closed**, and it stays stated OPEN as DDR-1124 recorded. What closes is the
+  hold clause, not the defect.
+- **`v1.0.0` REMAINS UNTAGGED and `main` promotion remains unstarted.** The hold
+  now rests on **OPEN-2 alone**. DDR-1139 named and confirmed one OPEN-2
+  producer (double dispatch). The operator's wording is that the tag stays held
+  "until it has a named mechanism or its own explicit operator decision", and
+  whether DDR-1139's confirmation satisfies that for OPEN-2 **as a whole** is
+  **not** decided here. DDR-1139 §8 itself declined to declare OPEN-2 closed,
+  because the `cap.c` `resolve` panic and lane 15's garbage-frame panic remain
+  unattributed. **An implementer should not make that call.**
 
 ### 1.3 — Six dependency PRs: triage recorded, merging is the operator's action
 

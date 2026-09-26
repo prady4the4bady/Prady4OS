@@ -14762,3 +14762,4 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   DDR-1148 (instrument only): `[vblkto]` second line on the vblk compl-wait timeout path (type/status/used_idx/last_used/late/tmo).
   Trigger: dfbe417 PR-suite shard 9 smoke-kill red (push suite same SHA green). M1 reads reading (b); negatives clean; shell 5/5; kernel 1678166941c19808 1,372,554 B.
   NEXT: read operator comment 5845610518 (verify OWNER), then DDR-1143 piece 4 install engine + NSI 105.
+  Operator comment 5845610518 (OWNER, 6 decisions) read. #5 recorded: OPEN-1 hold clause closed as satisfied; tag held on OPEN-2 alone (checklist §1.2, CLAUDE.md). #1-4, #6 queued as tasks.
