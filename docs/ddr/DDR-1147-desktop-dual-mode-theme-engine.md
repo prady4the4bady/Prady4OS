@@ -188,7 +188,7 @@ split at row 512, and the result is identical at rows 480 and 535.
 |---|---|---|---|---|---|---|
 | `02_28_47` top | 0.272 | 298 | 0.00 | **Umbra** | Umbra | Umbra |
 | `02_28_47` bottom | 0.426 | 263 | 0.01 | **Aurora** | Zenith | Zenith |
-| `02_32_37` top | 0.825 | 262 | 0.00 | **Zenith** | Zenith | Zenith |
+| `02_32_37` top | 0.825 | 262 | 0.03 | **Zenith** | Zenith | Zenith |
 | `02_32_37` bottom | 0.217 | 288 | 0.00 | **Umbra** | Umbra | Umbra |
 | `02_47_54` top | 0.469 | 205 | 0.03 | **Aurora** | Aurora | Twilight |
 | `02_47_54` bottom | 0.280 | 47 | 0.74 | **Twilight** | Twilight | Aurora |
@@ -305,6 +305,65 @@ three gates depend on them (`smoke-compositor`, `smoke-motion`,
 `smoke-superkey`'s reset). U1's confirm covers the user-facing chord. The
 kernel audit covers **every** path, hooks included, because it sits below all
 of them.
+
+### §1.6 Results (2026-09-26, measured)
+
+**Shipped kernel** `6ca25313459d5558`, **1,380,746 B**. The size is unchanged
+from the DDR-1149 tree, so the size/headroom pair (192,118 B) and
+`ci-docstate-check` are unaffected. Per DDR-1097, only the hash tells the two
+binaries apart, and the hash moved. Warning-clean at `-Werror`.
+
+**Arm D was wrong on its first run, and the gate was wrong, not the product.**
+§1.5 wrote the ordered sequence starting from mode 0. The boot default is
+**Regalia (mode 1)**, set by `/etc/aether/config`, so the capture read the same
+six-line structure **inverted**:
+`pending to=0 | toggle from=1 to=0 | pending to=1 | cancel to=1 | pending to=1 |
+toggle from=0 to=1`. The arm is now **relative**: the first armed target
+names the start mode, and the other five lines must follow from it. The boot
+default is policy, and this arm is not about policy. Recorded because a literal
+`want` would have forced either a false red or a gate edit that hard-codes a
+config value.
+
+**Gates:**
+- `smoke-superkey` `rc=0`: arms B, C, D (ordered), E (`found=1` both ways) and
+  `theme_check modes` all pass. **15** `PRADYOS_THEME` lines matched the
+  generated header, across both modes.
+- `smoke-ambiance` `rc=0`: `theme_check demo` saw all four tokens in mode 1:
+  DAWN `24A6AF`, DAY `4C89FC`, DUSK `C95B1A`, NIGHT `7642D0`.
+
+**Three mutants, each caught by a different arm** (none carries another; the
+DDR-1044 check):
+
+| Mutant | Change | Kernel | Result |
+|---|---|---|---|
+| M1 | Super+M commits immediately, with no confirm step | `a710ab764f256b2c` | **fails arm D only**. Arms B and C pass, because both toggles are still printed. This is §1.5's claim measured rather than argued. |
+| M2 | Kernel `AR_MODE_SET` audit disabled (`if (0)`) | `930d173d78748a8c` | **fails arm E**: `no kernel AR_MODE_SET record for 0->1`. The compositor cannot manufacture that record. |
+| M3 | Accent ignores the mode (`THEME_AC[1][idx]`) | `7cd00b7680ad555c` | **fails `theme_check`**: `mode=0 amb=DAY painted 4C89FC, palette says 3073EA` |
+
+**A void run is recorded, not quietly redone.** M2's first attempt named a site
+string that did not match the tree. The runner did not stop, so that "run"
+booted the **unmodified** kernel. It reported `rc=0` with hash
+`6ca25313459d5558`, which is the clean hash and gives the mistake away. The
+runner now aborts when the site is not found. Without the hash, "the mutant
+survived" and "the mutant was never applied" would have been the same line
+(DDR-1097's false clean, in my own tooling).
+
+**Revert:** rebuilt `6ca25313459d5558` bit-for-bit.
+
+**`ci-palette-check` is not vacuous.** A one-byte hand edit to one accent
+(`0xA1` → `0xA2`) returns `rc=2`, and restoring the byte returns `rc=0`.
+`hygiene_check.sh` reports **ALL TEN PASSED**.
+
+**Regression set.** 12 gates were run one at a time, with the hash pinned and
+re-checked after each (DDR-1060 §9). All returned `rc=0` on
+`6ca25313459d5558`:
+`smoke-compositor`, `smoke-motion`, `smoke-backdrop`, `smoke-horizon`,
+`smoke-mode`, `smoke-privacy-netfilter`, `smoke-egress-audit`,
+`smoke-auditchain`, `smoke-auditchain-tamper`, `smoke-ambiance`,
+`smoke-wmmax` and `smoke-shell`. `smoke-shell` passed 5/5.
+
+**Not claimed.** GLOBAL_FORBIDDEN is unchanged at 77. No new gate was added
+(184). Nothing is claimed about OPEN-2. The emblem and icons stay deferred.
 
 ## §2 What the compositor already has (measured in `user/compositor.c`, 1,992 lines)
 

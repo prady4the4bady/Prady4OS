@@ -196,7 +196,13 @@ enum aether_result {
     /* DDR-842. APPENDED per DDR-832. AR_AUDIT_TAMPERED is distinct from every
      * other rejection: "the log itself is forged" is not a policy denial, and it
      * is the one record an operator must never see folded into a generic code. */
-    AR_CODE_REWRITE_APPROVED, AR_AUDIT_READ, AR_AUDIT_TAMPERED
+    AR_CODE_REWRITE_APPROVED, AR_AUDIT_READ, AR_AUDIT_TAMPERED,
+    /* DDR-1147 sec.1.5 (U1). APPENDED per DDR-832. A SUCCESSFUL SYS_SET_MODE
+     * changes agent approval policy (sovereign auto-approve vs force-pending)
+     * or switches egress off/on, and until now wrote NO record -- only the
+     * refusal (AR_CAP_DENIED) was audited. action_id = (previous sovereign
+     * mode << 32) | requested value, so privacy on/off (2/3) is recorded too. */
+    AR_MODE_SET
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.
@@ -218,6 +224,7 @@ _Static_assert(AR_PRIVACY_BLOCKED  == 11, "audit wire format: privacy-netfilter 
 _Static_assert(AR_ACC_SEALED       == 12, "audit wire format: ACC probe depends on 12");
 _Static_assert(AR_ACC_OPENED       == 13, "audit wire format: ACC probe depends on 13");
 _Static_assert(AR_ACC_REJECTED     == 14, "audit wire format: ACC probe depends on 14");
+_Static_assert(AR_MODE_SET         == 28, "audit wire format: user/compositor.c hardcodes 28");
 
 /* DDR-800/801: destination packed into the audit record's action_id. The field
  * is 64-bit and unused on the egress path, so no struct change is needed. */

@@ -108,7 +108,12 @@ static long sys_set_mode(long a1, long a2, long a3, long a4, long a5, long a6) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;                          /* no self-escalation (D6) */
     }
-    return aether_set_mode((unsigned)a1);
+    uint64_t prev = aether_get_mode();
+    int r = aether_set_mode((unsigned)a1);
+    if (r == 0)                                 /* DDR-1147 sec.1.5: record the change */
+        aether_audit(current_thread->pid, 0,
+                     (prev << 32) | (uint32_t)(unsigned long)a1, AR_MODE_SET);
+    return r;
 }
 
 /* DDR-1149: the domain capabilities (operator decision 6). Kernel-only grants

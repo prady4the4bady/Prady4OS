@@ -19,6 +19,9 @@
 # DDR-1135 added a ninth: ci-huntprint-selftest. The hunt's signal printer
 # printed matching lines only, so a summary-first panic reached the job log as
 # its banner alone; it runs only on a hunt hit, so nothing green could show it.
+# DDR-1147 sec.1.5 added a tenth: ci-palette-check. user/theme_palette.h is
+# GENERATED from the committed reference PNGs; the check regenerates and cmp's
+# it, so the palette's provenance is the tool, not a transcription.
 # RULE 24 (file, not inline): written as an inline `for t in ...; do make $t;
 # done` through `wsl bash -c`, $t expands EMPTY. The loop then runs plain `make`
 # three times, reports rc=0 three times, and writes every redirect to the same
@@ -27,7 +30,7 @@
 cd "$(dirname "$0")/../.." || exit 2
 mkdir -p build/gatelogs
 fail=0
-for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest; do
+for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check; do
     out="build/gatelogs/${t}.out"
     make "$t" > "$out" 2>&1
     rc=$?
@@ -39,5 +42,5 @@ for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizechec
         tail -20 "$out"
     fi
 done
-[ "$fail" -eq 0 ] && echo "hygiene_check: ALL NINE PASSED"
+[ "$fail" -eq 0 ] && echo "hygiene_check: ALL TEN PASSED"
 exit "$fail"

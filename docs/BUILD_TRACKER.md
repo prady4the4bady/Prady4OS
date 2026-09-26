@@ -6520,6 +6520,39 @@ repository-scoped endpoint); nothing is derived from them. Measured: alpha blend
 OKLab 4-ambiance engine and the Inter atlas already exist; missing are dirty-rect repaint, a larger
 blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,500 lines, 8 pieces.
 
+### 2026-09-26 — DDR-1147 U-a..U-d + U1: generated palette, mode-aware theme engine, confirmed + audited mode toggle, BUILT + GATED
+
+This implements operator decisions 1–3 (PR #17 comment 5845610518).
+
+- **Palette.** `tools/ui/png_palette.py header` classifies the four reference
+  PNGs mechanically (§1.4) and writes `user/theme_palette.h`.
+  `ci-palette-check` is now the **tenth** hygiene check: it regenerates the
+  header and `cmp`s it against the committed one.
+- **Engine.** `set_ambiance` targets `THEME_AC[mode][amb]`. The final frame is
+  exact. `PRADYOS_THEME` lines are checked against the header by
+  `tools/ui/theme_check.py`. The display names are Aurora/Zenith/Twilight/Umbra
+  and Regalia/Consort; the wire tokens are unchanged.
+- **Toggle (U1).**
+  - Super+M arms the switch; Enter commits; Esc, any other key, or 10 s
+    cancels.
+  - The kernel now audits a successful `SYS_SET_MODE` (`AR_MODE_SET` = 28).
+    Before this, only refusals were audited.
+  - The compositor reads that record back.
+- **Gates.**
+  - `smoke-superkey` gains arm D (the ordered confirm sequence, relative to the
+    boot mode), arm E (the audit read-back), and a `modes` palette check.
+  - `smoke-ambiance` gains a `demo` palette check.
+- **Mutants.**
+  - M1 (no confirm step, `a710ab764f256b2c`) fails D alone.
+  - M2 (no audit, `930d173d78748a8c`) fails E.
+  - M3 (mode-blind accent, `7cd00b7680ad555c`) fails the palette check.
+  - The revert is bit-for-bit (`6ca25313459d5558`, 1,380,746 B, size unchanged).
+- **Not claimed.**
+  - Backdrop bases are not bound (they are photo averages; §1.5).
+  - The emblem/icons stay deferred.
+  - The bare `s`/`m`/`p`/`b`/`q` debug hooks remain unconfirmed. The kernel
+    audit still covers them.
+
 ### 2026-09-26 — DDR-1143 piece 1: partition sub-device + MBR parser, BUILT + GATED
 
 - Operator comment 5841525203 (OWNER) approved DDR-1143..1146 with D1–D6 decided.

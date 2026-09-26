@@ -28,6 +28,11 @@
 #define KMOD_ALT   0x04u          /* DDR-995: Alt+Tab window cycling */
 #define KMOD_META  0x08u
 #define KEY_TAB    0x09u
+#define KEY_ENTER  0x0Au          /* DDR-1147 sec.1.5: Super+M confirm */
+#define KEY_ESC    0x1Bu
+#define SYS_READ_AUDIT 37         /* DDR-1147 sec.1.5: read back AR_MODE_SET */
+#define AR_MODE_SET    28         /* pinned by _Static_assert in kernel/aether/aether.h */
+#define MODE_CONFIRM_SECS 10      /* a pending switch expires; a late Enter cannot flip it */
 struct key_ev { unsigned char code, mods, down, ascii; };
 
 /* DDR-1027: how many terminals this compositor has launched. */
@@ -614,7 +619,7 @@ static void render_manual(void) {
         draw_str("Window", (unsigned)bx + 8, ty + 9, 1, 210, 210, 216);
     }
 
-    draw_str("MANUAL MODE", 24, MANUAL_MENUBAR_H + 10, 2,
+    draw_str("CONSORT", 24, MANUAL_MENUBAR_H + 10, 2,
              g_ac[2], g_ac[1], g_ac[0]);
 
     g_frame++;
@@ -658,7 +663,7 @@ static void render(int mode) {
     if (g_settled)                                                       /* DDR-716: backdrops */
         render_backdrop();                                               /* (skipped mid-lerp) */
     render_particles();                                                  /* DDR-712: particle field */
-    draw_str("SOVEREIGN MODE", 24, 24, 3,
+    draw_str("REGALIA", 24, 24, 3,
              g_ac[2], g_ac[1], g_ac[0]);
     render_agent_panel();                                                /* DDR-707 (glass cards) */
     g_frame++;
@@ -690,6 +695,7 @@ static void blit_surface(const unsigned char *sva, unsigned w, unsigned h, int d
  * tools/fontgen (stb_truetype over Inter-Regular, SIL OFL; rendered bitmaps).
  * Alpha-blended per pixel; used where 16px fits (titles, banner). */
 #include "inter_font.h"
+#include "theme_palette.h"   /* DDR-1147 sec.1.5: GENERATED, see tools/ui/png_palette.py */
 static void draw_str_inter(const char *s, int x, int y,
                            unsigned char b, unsigned char g2, unsigned char r) {
     static int font_said;
@@ -986,15 +992,24 @@ static int present(void) {
     return -1;
 }
 
-/* Transition the ambiance bg+accent to AMB[idx] over `frames`, OKLab-interpolated. */
+/* Transition the ambiance bg+accent to AMB[idx] over `frames`, OKLab-interpolated.
+ * DDR-1147 sec.1.5: the ACCENT target is THEME_AC[mode][idx] -- measured from the
+ * references, per Regalia/Consort -- not the mode-blind AMB[idx].ac. The bg stays
+ * AMB[idx].bg on purpose (the measured scene colours are photo averages, not flat
+ * bases). The settled frame COPIES the target: lab_lerp at t=1 round-trips through
+ * float OKLab and can land +-1, which would make an exact readback impossible. */
 static void set_ambiance(int idx, int frames) {
     if (idx < 0 || idx > 3) return;
+    int tm = (int)nsi(SYS_GET_MODE, 0, 0, 0) ? 1 : 0;
+    const unsigned char *tac = THEME_AC[tm][idx];
     unsigned char fbg[3], fac[3];
     for (int i = 0; i < 3; i++) { fbg[i] = g_bg[i]; fac[i] = g_ac[i]; }
     for (int f = 1; f <= frames; f++) {
         float t = (float)f / (float)frames;
         lab_lerp(fbg, AMB[idx].bg, t, g_bg);
-        lab_lerp(fac, AMB[idx].ac, t, g_ac);
+        lab_lerp(fac, tac, t, g_ac);
+        if (f == frames)
+            for (int i = 0; i < 3; i++) { g_bg[i] = AMB[idx].bg[i]; g_ac[i] = tac[i]; }
         g_settled = (f == frames);            /* DDR-716: backdrop on the final frame only */
         if (g_settled) g_cur_amb = idx;       /* the settled frame draws the NEW backdrop */
         render((int)nsi(SYS_GET_MODE, 0, 0, 0));
@@ -1002,6 +1017,16 @@ static void set_ambiance(int idx, int frames) {
     }
     g_cur_amb = idx;
     g_settled = 1;
+}
+
+/* DDR-1147 sec.1.5: the settled theme, read from g_ac itself (not from the
+ * table), so a gate comparing it with theme_palette.h tests what is painted. */
+static void announce_theme(void) {
+    int m = (int)nsi(SYS_GET_MODE, 0, 0, 0) ? 1 : 0;
+    printf("PRADYOS_THEME mode=%d amb=%s name=%s/%s ac=%02X%02X%02X\n", m,
+           AMB[g_cur_amb].name, THEME_MODE_NAME[m], THEME_AMB_NAME[g_cur_amb],
+           g_ac[0], g_ac[1], g_ac[2]);
+    fflush(stdout);
 }
 
 /* DDR-726 + DDR-895: auto ambiance cadence, now driven by a CLOCK.
@@ -1146,10 +1171,34 @@ static void click_ripple(int cx, int cy) {
     }
 }
 
+/* DDR-1147 sec.1.5 (U1): the confirmed Super+M switch. */
+static int  g_mode_pending = -1;               /* -1 none, else the armed target */
+static long g_mode_pending_at;                 /* SYS_CLOCK seconds when armed   */
+static void render_and_announce(int mode);
+static void mode_commit(int nxt) {
+    int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
+    long rc = nsi(SYS_SET_MODE, nxt, 0, 0);
+    printf("PRADYOS_SUPERKEY_TOGGLE from=%d to=%d\n", cur, nxt);
+    /* Read back the KERNEL's record of the change: newest 8 entries. The
+     * compositor cannot manufacture this line's found=1 -- only the kernel
+     * writes AR_MODE_SET, so a kernel that stopped auditing fails the gate. */
+    struct { unsigned long long ts; unsigned pid, type; unsigned long long id;
+             unsigned result, pad; } ab[8];
+    long n = nsi(SYS_READ_AUDIT, (long)ab, 8, 0);
+    unsigned long long want = ((unsigned long long)(unsigned)cur << 32) | (unsigned)nxt;
+    int found = 0;
+    for (long j = 0; j < n; j++)
+        if (ab[j].result == AR_MODE_SET && ab[j].id == want) found = 1;
+    printf("PRADYOS_MODE_AUDIT found=%d prev=%d new=%d rc=%ld\n", found, cur, nxt, rc);
+    fflush(stdout);
+    render_and_announce(nxt);
+}
+
 static void render_and_announce(int mode) {
+    (void)mode;                                     /* set_ambiance reads it back */
     animate_toggle();                               /* DDR-709: animated toggle */
-    render(mode);
-    present();
+    set_ambiance(g_cur_amb, 2);                     /* DDR-1147: re-target the accent */
+    announce_theme();
     long m = nsi(SYS_GET_MODE, 0, 0, 0);
     printf("PRADYOS_COMPOSITOR_MODE %s\n", m ? "SOVEREIGN" : "MANUAL");
     fflush(stdout);
@@ -1218,6 +1267,7 @@ int main(void) {
         set_ambiance(k, 6);
         printf("PRADYOS_AMBIANCE %s\n", AMB[k].name);
         fflush(stdout);
+        announce_theme();
         loopstamp(AMB[k].name);       /* DDR-1029: cost of ONE ambiance render */
     }
     set_ambiance(ambiance_for_secs(nsi(SYS_CLOCK, 0, 0, 0)), 6);   /* settle on time-of-day */
@@ -1583,13 +1633,37 @@ int main(void) {
                            (unsigned)kev[i].mods, spawned);
                     fflush(stdout);
                 }
+                /* DDR-1147 sec.1.5 (U1): Super+M ARMS a switch; Enter commits,
+                 * Esc (or any other key, or MODE_CONFIRM_SECS of wall time)
+                 * cancels. The mode decides whether agents auto-approve, so one
+                 * stray chord must not flip it. Modifier keys themselves are
+                 * ignored while pending -- releasing Super is not an answer. */
+                if (g_mode_pending >= 0 &&
+                    !(kev[i].code >= 0xA0u && kev[i].code <= 0xA3u)) {
+                    long now = nsi(SYS_CLOCK, 0, 0, 0);
+                    int pend = g_mode_pending;
+                    g_mode_pending = -1;
+                    if (now < g_mode_pending_at || now - g_mode_pending_at > MODE_CONFIRM_SECS) {
+                        printf("PRADYOS_MODE_CONFIRM cancel to=%d reason=expired\n", pend);
+                        fflush(stdout);
+                    } else if (kev[i].code == KEY_ENTER) {
+                        mode_commit(pend);
+                        continue;
+                    } else {
+                        printf("PRADYOS_MODE_CONFIRM cancel to=%d reason=%s\n", pend,
+                               kev[i].code == KEY_ESC ? "esc" : "key");
+                        fflush(stdout);
+                        if (kev[i].code == KEY_ESC)
+                            continue;
+                    }
+                }
                 if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
                     int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
-                    int nxt = cur ? 0 : 1;
-                    nsi(SYS_SET_MODE, nxt, 0, 0);
-                    printf("PRADYOS_SUPERKEY_TOGGLE from=%d to=%d\n", cur, nxt);
+                    g_mode_pending = cur ? 0 : 1;
+                    g_mode_pending_at = nsi(SYS_CLOCK, 0, 0, 0);
+                    printf("PRADYOS_MODE_CONFIRM pending to=%d (Enter to switch to %s, Esc to cancel)\n",
+                           g_mode_pending, THEME_MODE_NAME[g_mode_pending]);
                     fflush(stdout);
-                    render_and_announce(nxt);
                 }
             }
         }

@@ -287,7 +287,7 @@ KCFLAGS += -DOPEN2_FORCE_RECYCLE=$(OPEN2_FORCE_RECYCLE)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -3338,7 +3338,7 @@ smoke-superkey: $(IMG) fat-image sfs-image
 	@echo "[superkey] Super+M toggle: boot(GPU) + sendkey m / meta_l-m x2 / ctrl-c..."
 	@rm -f build/superkey.log /tmp/psuper.sock
 	@bash tools/qemu_runner/input_inject.sh build/superkey.log /tmp/psuper.sock \
-	    PRADYOS_AMBIANCE_OK "m meta_l-m meta_l-m ctrl-c" &
+	    PRADYOS_AMBIANCE_OK "m meta_l-m ret meta_l-m esc meta_l-m ret ctrl-c" &
 	@timeout 120 qemu-system-x86_64 -machine q35 -device virtio-gpu-pci \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
 	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
@@ -3347,7 +3347,20 @@ smoke-superkey: $(IMG) fat-image sfs-image
 	    -serial file:build/superkey.log -display none -no-reboot || true
 	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=0 to=1" build/superkey.log || { echo "[superkey] FAIL — arm B: Super+M did not toggle Manual->Sovereign"; grep -a "SUPERKEY\|MODE" build/superkey.log | tail -10; exit 1; }
 	@grep -qa "PRADYOS_SUPERKEY_TOGGLE from=1 to=0" build/superkey.log || { echo "[superkey] FAIL — arm C: second Super+M did not toggle back (is it a toggle?)"; grep -a "SUPERKEY" build/superkey.log | tail -10; exit 1; }
-	@echo "[superkey] PASS — toggles both ways"
+	@# DDR-1147 sec.1.5 (U1): Super+M ARMS, Enter commits, Esc cancels. The
+	@# ORDERED first-round sequence is the arm that catches a no-confirm
+	@# compositor -- it still prints from=0 to=1 AND from=1 to=0, so arms B/C
+	@# alone pass it (measured: M1 in the DDR). RELATIVE to the boot mode:
+	@# the first armed target names it, because the boot default is policy
+	@# (/etc/aether/config) and not something this arm is about.
+	@seq=$$(grep -ao 'PRADYOS_MODE_CONFIRM [a-z]* to=[01]\|PRADYOS_SUPERKEY_TOGGLE from=[01] to=[01]' build/superkey.log | head -6 | tr '\n' '|'); \
+	 a=$$(printf '%s' "$$seq" | sed -n 's/^PRADYOS_MODE_CONFIRM pending to=\([01]\)|.*/\1/p'); b=$$((1 - $${a:-0})); \
+	 want="PRADYOS_MODE_CONFIRM pending to=$$a|PRADYOS_SUPERKEY_TOGGLE from=$$b to=$$a|PRADYOS_MODE_CONFIRM pending to=$$b|PRADYOS_MODE_CONFIRM cancel to=$$b|PRADYOS_MODE_CONFIRM pending to=$$b|PRADYOS_SUPERKEY_TOGGLE from=$$a to=$$b|"; \
+	 [ "$$seq" = "$$want" ] || { echo "[superkey] FAIL — arm D: confirm sequence"; echo "  got:  $$seq"; echo "  want: $$want"; exit 1; }
+	@grep -qa "PRADYOS_MODE_AUDIT found=1 prev=0 new=1" build/superkey.log || { echo "[superkey] FAIL — arm E: no kernel AR_MODE_SET record for 0->1"; grep -a MODE_AUDIT build/superkey.log | head; exit 1; }
+	@grep -qa "PRADYOS_MODE_AUDIT found=1 prev=1 new=0" build/superkey.log || { echo "[superkey] FAIL — arm E: no kernel AR_MODE_SET record for 1->0"; grep -a MODE_AUDIT build/superkey.log | head; exit 1; }
+	@python3 tools/ui/theme_check.py build/superkey.log modes
+	@echo "[superkey] PASS — confirmed toggle both ways, cancel honoured, audited, accent re-targeted"
 
 smoke-modkeys: $(IMG) fat-image sfs-image
 	@echo "[modkeys] input gate: boot + sendkey a/f1/up/ctrl-c/b -> IRQ1 -> NSI 46 + 96..."
@@ -3821,6 +3834,15 @@ ci-runnerenv-selftest:
 ci-docstate-check:
 	@python3 tools/ci/docstate_check.py
 
+# DDR-1147 sec.1.5: user/theme_palette.h is GENERATED from the committed
+# reference PNGs. Regenerate and compare: a hand edit, a changed threshold or a
+# changed resolution rule all fail here, not three gates away.
+ci-palette-check:
+	@mkdir -p build
+	@python3 tools/ui/png_palette.py header build/theme_palette.check.h >/dev/null
+	@cmp -s build/theme_palette.check.h user/theme_palette.h || { echo "[palette] FAIL — user/theme_palette.h differs from what tools/ui/png_palette.py generates; regenerate it, do not hand-edit"; diff build/theme_palette.check.h user/theme_palette.h | head -20; exit 1; }
+	@echo "[palette] OK — theme_palette.h matches the generator"
+
 # DDR-1077: DDR-1075 sec.3 measured that this kernel has NO cross-CPU TLB
 # invalidation, and that the absence is CORRECT today because no two threads
 # share an address space. Group D's pthread / clone(CLONE_VM) row DELETES that
@@ -4276,9 +4298,15 @@ smoke-horizon: $(IMG) fat-image sfs-image
 # Layer-7 ambiance gate (DDR-709): the compositor demo-cycles the 4 sun-driven
 # ambiances (DAWN/DAY/DUSK/NIGHT) with OKLab colour transitions, then settles on
 # the time-of-day ambiance from the RTC (SYS_CLOCK). Needs the GPU.
+# DDR-1147 sec.1.5: each settled ambiance also prints PRADYOS_THEME with the
+# accent READ FROM g_ac; theme_check.py compares it with the GENERATED
+# user/theme_palette.h, so a mode-blind engine (the pre-1147 AMB[].ac) fails.
 smoke-ambiance: $(IMG) fat-image sfs-image
+	@mkdir -p build/gatelogs
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/ambiance.log KEEP_SERIAL=1 \
 	TIMEOUT_S=90 QEMU_GPU=1 EXTRA_SENTINEL="$$(printf 'PRADYOS_AMBIANCE DAWN\nPRADYOS_AMBIANCE DAY\nPRADYOS_AMBIANCE DUSK\nPRADYOS_AMBIANCE NIGHT\nPRADYOS_AMBIANCE_OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@python3 tools/ui/theme_check.py build/gatelogs/ambiance.log demo
 
 # Layer-7 z-order/focus/input-routing gate (DDR-708): the client creates two
 # overlapping surfaces and raises B (top + focused); the compositor composites in

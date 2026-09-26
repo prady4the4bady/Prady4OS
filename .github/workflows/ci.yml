@@ -65,6 +65,11 @@ jobs:
       - name: hunt signal printer prints the report, not just its banner (DDR-1135)
         run: make ci-huntprint-selftest
 
+      # DDR-1147 sec.1.5. user/theme_palette.h is GENERATED from the committed
+      # reference PNGs; regenerate it and cmp. python3 stdlib only (no Pillow).
+      - name: theme palette header matches its generator (DDR-1147)
+        run: make ci-palette-check
+
       # DDR-859/862. The hybrid takes its flags AND its compiler from the
       # Makefile, so configure needs the Makefile's clang to exist. Installed
       # explicitly rather than relying on the runner image happening to carry

@@ -914,7 +914,10 @@ the plan entirely (operator, 2026-09-02, PR #17).**
 ## HYGIENE GATES — must pass before EVERY commit
 
 1. `build/kernel.bin` warning-clean (`-Werror` clang + nasm).
-2. **`bash tools/ci/hygiene_check.sh`** — runs ALL NINE static checks
+2. **`bash tools/ci/hygiene_check.sh`** — runs ALL TEN static checks
+   (DDR-1147 added `ci-palette-check`: `user/theme_palette.h` is GENERATED from
+   the reference PNGs, and a hand edit to one accent passes every boot gate
+   that only reads the header back)
    (DDR-1135 added `ci-huntprint-selftest`: the OPEN-2 hunt's signal printer runs only
    on a hunt hit, so no green run could ever show that it printed a panic as its
    banner alone)
