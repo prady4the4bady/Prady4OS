@@ -55,6 +55,54 @@ a guess (§6). Icon and emblem work waits on that; palette work does not.
 The images' own instruction text names Qt, Tauri, Hyprland and Wayland. The
 operator's instruction overrides that: native C compositor only.
 
+### §1.2 U-a, first cut: the accent palette, measured (2026-09-26)
+
+**Measured with `tools/ui/png_palette.py`** (stdlib zlib plus the five PNG row
+filters; no Pillow). Two findings shape the palette:
+
+- **The ambiance is independent of the mode.** `1.png` pairs Sovereign with
+  Dawn and Manual with Dusk. `2.png` pairs Sovereign with **Dusk** and Manual
+  with **Dawn**. `3.png` and `4.png` do the same for Day and Night. So every
+  ambiance appears once in each mode, and the palette is keyed by
+  **ambiance**, not by mode.
+- **The four images do not share a layout.** Anchors are chosen per image, by
+  reading the image, and are listed so they can be re-measured.
+
+`accent` mode averages the most chromatic 5% of a box. On glossy gradients a
+single point is noise: point samples of the same buttons ranged from `#1B6569`
+to `#BBDFDA`.
+
+| Ambiance | Sovereign-half accents (dock active, ask button) | Manual-half accents (dock active, mode pill) | Scene mean, Sovereign half |
+|---|---|---|---|
+| Dawn | `#25A4AD`, `#5BABA6` (`1.png`) | `#20A2A0`, `#5FD4D3` (`2.png`) | `#648D8B` |
+| Dusk | `#C45B1C`, `#CC5B1D` (`2.png`) | `#B66829`, `#A56A3A` (`1.png`) | `#774336` |
+| Day | `#4E8AFC`, `#5F63F7` (`3.png`) | `#3074E9`, `#236FCA` (`4.png`) | `#DDE1EB` |
+| Night | `#7C46D6`, `#723EEA` (`4.png`) | `#7355B8`, `#4C3588` (`3.png`) | `#211A38` |
+
+Anchor boxes, `x0,y0,x1,y1`, in image order:
+
+- **Dawn:** `1.png` 500,425,550,470 / 895,230,935,265; `2.png`
+  490,870,535,910 / 25,748,215,780.
+- **Dusk:** `2.png` 520,368,570,410 / 885,200,920,235; `1.png`
+  465,840,512,880 / 25,710,210,745.
+- **Day:** `3.png` 497,425,542,468 / 905,228,940,262; `4.png`
+  420,852,465,895 / 125,828,245,862.
+- **Night:** `4.png` 522,390,565,433 / 910,200,942,233; `3.png`
+  467,840,512,880 / 25,710,210,745.
+- **Scene boxes:** `1.png` 250,60,1130,400; `2.png` 250,60,1150,360; `3.png`
+  250,60,1130,400; `4.png` 280,40,1030,380.
+
+**Where this stops:**
+
+- These are **measurements of the mockups, not yet palette constants.** The
+  mapping to the compositor's existing OKLab 4-ambiance engine (DDR-1012) is
+  U-b.
+- Each ambiance's two accents per half differ by a few units of hue and
+  lightness, and U-b chooses one per role.
+- **Manual-half accents run darker than Sovereign-half ones in every
+  ambiance.** That is consistent with the mockups' own instruction text (*"Manual
+  Mode: dark, immersive"*), and it is recorded as an observation, not a rule.
+
 ## §2 What the compositor already has (measured in `user/compositor.c`, 1,992 lines)
 
 | Capability | State | Where |
