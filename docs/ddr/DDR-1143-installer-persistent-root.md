@@ -759,3 +759,15 @@ gate → mutants → regression. Each is committed separately.
 
 **Not claimed here:** encryption (DDR-1144); TPM (DDR-1145); recovery
 (DDR-1146); passphrase prompts; power-loss durability (§7); two-disk machines.
+
+### §10.7 Piece 4 step 1: `-Brepro` (2026-09-26)
+
+- `lld-link-18 … -Brepro` is added to the `BOOTX64.EFI` rule.
+- **Measured:** two clean builds of unchanged source now give the identical
+  `00260396cebc980a…` at 6,656 B. Before this change they differed in exactly
+  one byte, at offset 129 (§10.5).
+- `smoke-uefi` is `rc=0` on the relinked loader. `kernel.bin` is unchanged at
+  `afecbb54b2774641`, because nothing embeds the EFI file yet.
+- This had to land before the file is `incbin`'d. **Not claimed:** anything
+  about other PE fields. Only whole-file equality across two builds was
+  measured.

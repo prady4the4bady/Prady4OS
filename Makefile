@@ -1122,8 +1122,12 @@ ESP_IMG  := build/esp.img
 $(UEFI_EFI): boot/uefi/loader.c boot/uefi/efi.h
 	clang --target=x86_64-unknown-windows -ffreestanding -fshort-wchar -mno-red-zone \
 	      -Wall -Wextra -Werror -c boot/uefi/loader.c -o build/uefi_loader.obj
-	lld-link-18 -subsystem:efi_application -entry:efi_main -nodefaultlib \
+	lld-link-18 -subsystem:efi_application -entry:efi_main -nodefaultlib -Brepro \
 	      build/uefi_loader.obj -out:$(UEFI_EFI)
+# -Brepro (DDR-1143 sec.10.6 finding 2): without it the PE TimeDateStamp is the
+# link time, so identical source gives a different BOOTX64.EFI on every build --
+# measured, one byte at offset 129. The installer embeds this file in
+# kernel.bin, where that would make every pinned kernel hash unreproducible.
 
 # A FAT ESP carrying the loader at the removable-media path plus the SAME
 # kernel.bin the legacy path uses. Byte-identical on purpose: nothing in the
