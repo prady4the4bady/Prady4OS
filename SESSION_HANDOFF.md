@@ -14754,3 +14754,6 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   cache=unsafe is not applied.
 - kernel.bin df4d7d6d472f4fe7, 1,360,266 B / 212,598 B headroom.
 - NEXT: piece 3 (pristine kernel copy in stage2 + UEFI loaders, boot_info). DDR section first.
+- Piece 3 built (DDR-1143 §10.5): boot_kimg at 0x4FC0; stage2 copy at 0x800000; UEFI copy below 16 MiB
+  (OVMF owns 0x800000, measured). The guest sha matches the host's kernel.bin sha on both paths. K1-K3 caught.
+  kernel.bin afecbb54b2774641, 1,360,266 B. Regression 15/15 rc=0, hash pinned + re-checked per gate (iso-x86, iso-userspace, gop, uefi, part, selftest, blkmq, rqstress-liveness, blk-integrity, smoke-shell 5/5); hygiene ALL NINE; GLOBAL_FORBIDDEN 77. NEXT: pieces 4-6.

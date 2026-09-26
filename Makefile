@@ -203,7 +203,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
-               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c kernel/drivers/blk/blk_part.c \
+               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c kernel/drivers/blk/blk_part.c kernel/kimg.c \
                kernel/drivers/net/virtio_net.c kernel/drivers/net/e1000e.c kernel/drivers/net/netbuf.c \
                kernel/drivers/gpu/virtio_gpu.c kernel/drivers/gpu/display.c \
                kernel/drivers/nvme/nvme.c kernel/drivers/ahci/ahci.c \
@@ -227,7 +227,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
@@ -690,6 +690,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/virtio_blk.c      -o build/virtio_blk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/ramdisk.c         -o build/ramdisk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk_part.c        -o build/blk_part.o
+	$(CC) $(KCFLAGS) -c kernel/kimg.c                       -o build/kimg.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/virtio_net.c     -o build/virtio_net.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/netbuf.c         -o build/netbuf.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/virtio_gpu.c     -o build/virtio_gpu.o
@@ -1308,9 +1309,10 @@ smoke-iso-userspace: iso
 # The FORBIDDEN sentinels are the discriminating half: each is the literal line
 # the broken path printed, so a regression fails here instead of passing.
 smoke-uefi: esp-image
-	TIMEOUT_S=90 QEMU_UEFI=1 \
-	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010\nACPI: RSDP from loader\nACPI: FADT ok\nPCIe: ECAM')" \
-	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL\nACPI: RSDP not found\nPCIe: no MCFG table\nACPI: loader RSDP rejected')" \
+	KSHA=$$(sha256sum build/kernel.bin | cut -c1-16); KLEN=$$(stat -c %s build/kernel.bin); \
+	TIMEOUT_S=90 QEMU_UEFI=1 QEMU_PROBES=kimg \
+	EXTRA_SENTINEL="$$(printf '[kimg] src=uefi len=%s sha=%s' "$$KLEN" "$$KSHA")$$(printf '\n[uefi] handoff\nNEXUS: E820 map, entries=0x0000000000000010\nACPI: RSDP from loader\nACPI: FADT ok\nPCIe: ECAM')" \
+	FORBIDDEN_SENTINEL="$$(printf '[uefi] FATAL\nACPI: RSDP not found\nPCIe: no MCFG table\nACPI: loader RSDP rejected\n[kimg] refused\nKIMG FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(ESP_IMG)
 
 # DDR-1142: the UEFI GOP framebuffer path. OVMF on q35's std-vga is the PROXY
@@ -3392,10 +3394,11 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 smoke-part: $(IMG) fat-image sfs-image
 	@echo "[part] partition sub-device gate (DDR-1143 §4.1)..."
 	@mkdir -p build/gatelogs
+	KSHA=$$(sha256sum build/kernel.bin | cut -c1-16); KLEN=$$(stat -c %s build/kernel.bin); \
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/part.log KEEP_SERIAL=1 \
-	TIMEOUT_S=120 QEMU_PROBES=part \
-	EXTRA_SENTINEL="$$(printf '[part] mbr n=2 ok\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
-	FORBIDDEN_SENTINEL="PART FAIL" \
+	TIMEOUT_S=120 QEMU_PROBES=part,kimg \
+	EXTRA_SENTINEL="$$(printf '[kimg] src=bios len=%s sha=%s\n[part] mbr n=2 ok' "$$KLEN" "$$KSHA")$$(printf '\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'PART FAIL\n[kimg] refused\nKIMG FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-rqfree: $(IMG) fat-image sfs-image

@@ -187,4 +187,5 @@ typedef struct {
 
 /* AllocatePages types */
 #define AllocateAnyPages    0
+#define AllocateMaxAddress  1   /* UEFI 2.x EFI_ALLOCATE_TYPE */
 #define AllocateAddress     2

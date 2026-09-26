@@ -40,14 +40,31 @@ _Static_assert(sizeof(struct boot_info) == 32,  "boot_info header must stay 32 b
  * write -- the BIOS path zeroes it, and zero never validates. */
 #define BOOT_FB_PHYS   0x4FE0ull
 #define BOOT_FB_MAGIC  0x31424647u          /* 'GFB1' */
-#define E820_CAP       167u
+#define E820_CAP       165u          /* DDR-1143 §10.4: was 167; boot_kimg sits at 0xFC0 */
 struct boot_fb {
     uint32_t magic, format;
     uint64_t base;
     uint32_t width, height, stride_px, check;
 };
 _Static_assert(sizeof(struct boot_fb) == 32, "boot_fb must stay 32 bytes");
-_Static_assert(32 + E820_CAP * 24 <= 0xFE0, "E820 entries would reach boot_fb");
+_Static_assert(32 + E820_CAP * 24 <= 0xFC0, "E820 entries would reach boot_kimg");
+
+/* DDR-1143 §10.4: the pristine kernel copy, mirror of struct boot_kimg
+ * (kernel/boot_info.h), 32 bytes directly below boot_fb. The copy is taken
+ * from 0x400000 right after the file read -- before the kernel has run, so
+ * .data is still the file's .data. `size` is the exact file size here; the
+ * kernel refuses the block unless it equals its own linker length. */
+#define BOOT_KIMG_PHYS  0x4FC0ull
+#define BOOT_KIMG_MAGIC 0x474D494Bu         /* 'KIMG' */
+#define KIMG_PMM_FLOOR  0x1000000ull       /* kernel PMM_MIN_PHYS: never allocated */
+#define KIMG_SRC_UEFI   2u
+struct boot_kimg {
+    uint32_t magic, source;
+    uint64_t base, size;
+    uint32_t reserved, check;
+};
+_Static_assert(sizeof(struct boot_kimg) == 32, "boot_kimg must stay 32 bytes");
+static struct boot_kimg g_kimg;             /* magic 0 until the copy exists */
 
 static EFI_SYSTEM_TABLE *ST;
 
@@ -151,6 +168,33 @@ static void load_kernel(EFI_BOOT_SERVICES *bs, EFI_HANDLE image) {
     uint64_t got = size;
     if (f->read(f, &got, (void *)KERNEL_LMA) != EFI_SUCCESS || got != size)
         die(u"short read");
+
+    /* DDR-1143 §10.4: keep a byte copy of what was just read, BELOW the
+     * kernel's 16 MiB PMM floor. That bound is load-bearing: fill_boot_info
+     * reports EfiLoaderData as USABLE, so a copy above 16 MiB would be handed
+     * out by the PMM. A fixed 0x800000 (stage2's choice) is NOT used here --
+     * measured, OVMF owns it ("cannot claim 0x800000"). If no room exists the
+     * copy is skipped and the boot continues: the kernel reports the block
+     * absent and the installer refuses, which beats not booting at all. */
+    uint64_t kat = KIMG_PMM_FLOOR - 1;
+    if (bs->allocate_pages(AllocateMaxAddress, EfiLoaderData, pages, &kat) != EFI_SUCCESS) {
+        print(u"[uefi] kimg: no room below 16 MiB, copy skipped\r\n");
+        f->close(f);
+        root->close(root);
+        return;
+    }
+    const volatile uint8_t *ks = (const volatile uint8_t *)KERNEL_LMA;
+    volatile uint8_t *kd = (volatile uint8_t *)kat;
+    for (uint64_t i = 0; i < size; i++)
+        kd[i] = ks[i];
+    g_kimg.magic    = BOOT_KIMG_MAGIC;
+    g_kimg.source   = KIMG_SRC_UEFI;
+    g_kimg.base     = kat;
+    g_kimg.size     = size;
+    g_kimg.reserved = 0;
+    g_kimg.check    = g_kimg.magic ^ g_kimg.source ^ (uint32_t)g_kimg.base ^
+                      (uint32_t)(g_kimg.base >> 32) ^ (uint32_t)g_kimg.size ^
+                      (uint32_t)(g_kimg.size >> 32) ^ g_kimg.reserved;
     f->close(f);
     root->close(root);
 }
@@ -307,6 +351,8 @@ static void query_gop(EFI_BOOT_SERVICES *bs) {
 static void write_boot_fb(void) {
     struct boot_fb *dst = (struct boot_fb *)BOOT_FB_PHYS;
     *dst = g_fb;                              /* magic 0 => "no framebuffer" */
+    struct boot_kimg *kdst = (struct boot_kimg *)BOOT_KIMG_PHYS;
+    *kdst = g_kimg;                           /* DDR-1143 §10.4 */
 }
 
 /* ---- entry -------------------------------------------------------------- */

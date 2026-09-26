@@ -70,6 +70,14 @@ PT_HI       equ 0x00305000           ; higher-half: PT   (4 KiB pages -> kernel)
 ; E820 entries (24 bytes each) at offset 32.
 BOOT_INFO   equ 0x00004000
 BOOT_MAGIC  equ 0x59445250     ; 'PRDY'
+; DDR-1143 §10.4: the pristine kernel copy and its 32-byte handoff block at
+; BOOT_INFO+0xFC0 (kernel/boot_info.h struct boot_kimg). The copy is taken from
+; the SAME bounce buffer as the load, so it costs no second disk read.
+KIMG_PHYS   equ 0x00800000     ; 8 MiB, below the 16 MiB PMM floor
+KIMG_MAGIC  equ 0x474D494B     ; 'KIMG'
+KIMG_SRC    equ 1              ; KIMG_SRC_BIOS
+KIMG_SIZE   equ 48 * 0x8000    ; the read window; stage2 never learns the file size
+KIMG_CHECK  equ KIMG_MAGIC ^ KIMG_SRC ^ KIMG_PHYS ^ KIMG_SIZE   ; hi words and reserved are 0
 
 stage2_start:
     xor ax, ax
@@ -117,8 +125,8 @@ init_boot_info:
     xor ax, ax
     mov cx, 16                  ; 32 bytes
     rep stosw
-    mov di, BOOT_INFO + 0xFE0
-    mov cx, 16                  ; 32 bytes (boot_fb)
+    mov di, BOOT_INFO + 0xFC0
+    mov cx, 32                  ; 64 bytes: boot_kimg (0xFC0) + boot_fb (0xFE0)
     rep stosw
     mov dword [BOOT_INFO], BOOT_MAGIC
     ret
@@ -203,6 +211,7 @@ load_kernel:
     mov si, msg_ldk
     call puts16
     mov dword [kdst], KERNEL_PHYS
+    mov dword [kpdst], KIMG_PHYS
     mov cx, 48                      ; DDR-960: 32->48 chunks = 1.5 MiB read window
 .chunk:
     push cx
@@ -221,10 +230,22 @@ load_kernel:
     mov edi, [kdst]
     mov ecx, 0x8000 / 4             ; one 32 KiB chunk
     a32 rep movsd                   ; unreal copy: bounce -> high kernel
+    mov esi, KERNEL_BOUNCE          ; DDR-1143 §10.4: the same chunk again,
+    mov edi, [kpdst]                ; to the pristine copy the kernel can
+    mov ecx, 0x8000 / 4             ; never touch once it runs
+    a32 rep movsd
     sti
     add dword [kdst], 0x8000        ; next 32 KiB up high
+    add dword [kpdst], 0x8000
     pop cx
     loop .chunk
+    ; Describe the copy ONLY after every chunk landed: a block written up front
+    ; would advertise a copy a failed read never finished (that path halts).
+    mov dword [BOOT_INFO + 0xFC0], KIMG_MAGIC
+    mov dword [BOOT_INFO + 0xFC4], KIMG_SRC
+    mov dword [BOOT_INFO + 0xFC8], KIMG_PHYS
+    mov dword [BOOT_INFO + 0xFD0], KIMG_SIZE
+    mov dword [BOOT_INFO + 0xFDC], KIMG_CHECK
     ret
 .err:
     mov si, msg_ldk_err
@@ -627,6 +648,8 @@ kdap_lba:
     dq 17                      ; starting LBA (matches the Makefile layout), advanced per chunk
 kdst:
     dd 0                       ; DDR-733: high-memory copy cursor (KERNEL_PHYS..)
+kpdst:
+    dd 0                       ; DDR-1143 §10.4: pristine-copy cursor (KIMG_PHYS..)
 
 ; GDT: null, 32-bit code/data, 64-bit code (L=1) / data.
 gdt_start:

@@ -102,3 +102,34 @@ struct boot_fb {
 } __attribute__((packed));
 _Static_assert(sizeof(struct boot_fb) == 32, "boot_fb must stay 32 bytes");
 
+/* ---- pristine kernel image handoff (DDR-1143 §10.4) --------------------
+ *
+ * The installer must write the kernel's own bytes, and once kmain runs nothing
+ * in memory IS those bytes (.data is live, .bss sits over the load window). So
+ * each loader keeps a second copy at KIMG_PHYS, taken BEFORE it jumps, and
+ * describes it here -- 32 bytes directly below boot_fb, because the header
+ * cannot grow (it ends in e820[]). stage2 caps E820 at 32 entries (0x320) and
+ * the UEFI loader at 165 (32 + 165*24 = 0xF98), both clear of 0xFC0.
+ *
+ * KIMG_PHYS is below PMM_MIN_PHYS (16 MiB) so the PMM never hands it out, and
+ * a separate 2 MiB page from the DDR-1046 alias of the running image.
+ *
+ * `size` is the READ WINDOW on the BIOS path (stage2 never learns the file
+ * size) and the EXACT FILE SIZE on the UEFI path. The kernel's own image length
+ * comes from __data_end, and the block is accepted only when it covers that. */
+#define BOOT_KIMG_PHYS   0x4FC0ull
+#define BOOT_KIMG_MAGIC  0x474D494Bu     /* 'KIMG' */
+#define KIMG_PHYS        0x800000ull     /* 8 MiB */
+#define KIMG_WINDOW      0x180000ull     /* 48 x 32 KiB, stage2's read window */
+#define KIMG_SRC_BIOS    1u
+#define KIMG_SRC_UEFI    2u
+
+struct boot_kimg {
+    uint32_t magic;
+    uint32_t source;          /* KIMG_SRC_BIOS / KIMG_SRC_UEFI */
+    uint64_t base;            /* physical */
+    uint64_t size;            /* bytes copied (window on BIOS, file on UEFI) */
+    uint32_t reserved;
+    uint32_t check;           /* xor of every other 32-bit word */
+} __attribute__((packed));
+_Static_assert(sizeof(struct boot_kimg) == 32, "boot_kimg must stay 32 bytes");

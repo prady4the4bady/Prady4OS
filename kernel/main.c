@@ -56,6 +56,7 @@
 #include "metric_page.h"  /* F#68/DDR-795: sealed objective root page */
 #include "fwcfg.h"        /* DDR-804: per-boot probe selection */
 #include "display.h"      /* DDR-1142: virtio-gpu or UEFI GOP framebuffer */
+#include "kimg.h"         /* DDR-1143 §10.4: pristine kernel image */
 #include "rng.h"          /* DDR-816: kernel entropy */
 #include "vmm_cow.h"
 
@@ -4385,6 +4386,7 @@ void kmain(struct boot_info *bi) {
 
     print_boot_info(bi);
     display_capture_boot();              /* DDR-1142: record the GOP handoff first */
+    kimg_capture();                      /* DDR-1143 §10.4: before 0x4000 is reused */
 
     gdt_init();
     kputs("NEXUS: kernel GDT loaded\r\n");
@@ -4451,6 +4453,8 @@ void kmain(struct boot_info *bi) {
     /* DDR-804: read the boot-time probe list before anything can consult it.
      * Two port reads, no wait, no allocation; fails closed when absent. */
     fwcfg_init();
+    if (probe_enabled("kimg"))           /* DDR-1143 §10.4: before any FS work */
+        kimg_probe();
 
     /* Phase 3: hardware discovery + first device driver. */
     acpi_init((uint64_t)bi->acpi_rsdp);   /* DDR-978: 0 on the BIOS path */

@@ -6556,3 +6556,21 @@ blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,
 - `kernel.bin` is `df4d7d6d472f4fe7`, 1,360,266 B. Still 183 gates, since the
   new arms were added to existing gates.
 - **Next:** piece 3, the pristine kernel copy in both loaders.
+
+### 2026-09-26 — DDR-1143 piece 3: pristine kernel image handoff, BUILT + GATED
+
+- Both loaders keep a pre-jump copy of `kernel.bin`, described by a 32-byte
+  `boot_kimg` block at `0x4FC0`:
+  - stage2 double-copies each chunk to `0x800000`;
+  - UEFI uses `AllocateMaxAddress` below 16 MiB.
+- `kernel/kimg.c` validates the block and exposes it to the installer.
+- **The arm:** the guest's SHA-256 over the copy must equal the host's
+  `sha256sum kernel.bin` (`smoke-part` BIOS, `smoke-uefi`).
+- **Measured correction to the design:** OVMF owns `0x800000`, and
+  `EfiLoaderData` is reported usable, hence the below-16-MiB allocation.
+- **Mutants:** K1, K2 and K3 are all caught. K2 hashes the live image and proves
+  the copy predates `.data` writes.
+- `BOOTX64.EFI` differs across identical builds only in its PE `TimeDateStamp`.
+- `kernel.bin` is `afecbb54b2774641`, 1,360,266 B (size unchanged).
+- **Next:** pieces 4–6 (disk enumeration NSI 104, install syscall, FAT16, the
+  install program, root selection, `smoke-install`).

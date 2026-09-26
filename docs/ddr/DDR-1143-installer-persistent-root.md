@@ -560,3 +560,202 @@ from `0x400000` right after the read.
 - The BIOS size is the window, not the file. The installer uses the
   linker-derived length in both paths, and for UEFI that length is
   cross-checked against the file.
+
+### §10.5 Piece 3 implementation record (2026-09-26)
+
+**Shipped, with one measured correction to §10.4.**
+
+- stage2 copies each bounce chunk twice (no second disk read) and writes the
+  32-byte `boot_kimg` block at `0x4FC0` only after the last chunk lands.
+- The UEFI loader copies the file bytes from `0x400000` right after the read.
+- The kernel (`kernel/kimg.c`) validates magic, check, base range and size.
+  It prints `[kimg] src=… len=…` on every boot, or `[kimg] refused reason=…`,
+  and exposes `kimg_get()` for the installer.
+- `__data_end` = `0xffffffff8014c18a`, so the image length is 1,360,266, equal
+  to `kernel.bin`, which was checked.
+- `kernel.bin` is `afecbb54b2774641` at **1,360,266 B, size unchanged**. The new
+  code fits in page padding, so the size/headroom carriers are unaffected.
+- stage2 is 1,540 B, well under 8 KiB.
+
+**THE CORRECTION: §10.4's UEFI address was wrong, and the first boot said so.**
+
+- `[uefi] FATAL cannot claim 0x800000` — OVMF owns that range. §10.4's "nothing
+  uses 6–16 MiB" was measured over *this tree's* code and said nothing about
+  firmware.
+- **A second error was caught before the fix shipped:** §10.4 claimed
+  `EfiLoaderData` is "reported reserved". In fact `fill_boot_info` reports it
+  **usable** (`type = 1`), so a copy placed above 16 MiB would have been handed
+  out by the PMM.
+- **The fix:**
+  - The UEFI loader uses `AllocateMaxAddress` capped at `0xFFFFFF`, below the
+    PMM floor.
+  - If there is no room, it **skips the copy and keeps booting**. The kernel
+    then says `refused reason=none` and the installer must refuse. That is
+    better than a loader that dies.
+  - The kernel checks a **range** for UEFI (page-aligned, ≥ 1 MiB, wholly
+    below 16 MiB, clear of `0x300000..0x600000`) and an **exact** `0x800000`
+    for BIOS.
+  - The E820 cap moves 167 → 165, enforced by a `_Static_assert` against
+    `0xFC0`.
+
+**Arms — the expected hash comes from the host, not the guest.**
+
+- `smoke-part` (key `part,kimg`) and `smoke-uefi` (key `kimg`) each compute
+  `sha256sum build/kernel.bin` at make time and require
+  `[kimg] src=<bios|uefi> len=<size> sha=<first 16 hex>`.
+- `[kimg] refused` and `KIMG FAIL` are forbidden on both gates.
+- Measured: `sha=afecbb54b2774641` on both paths, equal to the host's hash.
+
+| mutant | kernel / stage2 / efi | result |
+|---|---|---|
+| K1 stage2 skips the second copy | `afecbb54…` / `a69e365f…` | `sha=48b55d7bf3386177` — **caught** |
+| K2 the kernel hashes the LIVE image at `0x400000` | `265d3790…` | `sha=e4914b8767506378` — **caught**. **This is the mutant that proves the copy predates the kernel's own writes to `.data`.** |
+| K3 the UEFI loader allocates but never copies | efi `00e20b94…` | `sha=48b55d7bf3386177` — **caught** |
+
+- K1 and K3 print the **same** hash. That is the SHA-256 of 1,360,266 bytes of
+  the zeroed memory both leave behind, which is itself a check that the arm
+  hashes the region it names.
+- **Revert:** the kernel returns `afecbb54b2774641` and stage2 returns
+  `67b8243b8eb35b99`, both bit-for-bit.
+- **`BOOTX64.EFI` is not reproducible bit-for-bit across builds of identical
+  source.** `cmp -l` shows exactly one byte at offset 129, the PE
+  `TimeDateStamp`. Its revert is therefore verified by source, not hash.
+  Recorded rather than papered over, because a future "efi hash changed"
+  observation must not be read as a code change.
+
+**Not claimed.**
+
+- The copy is a boot-time snapshot and is not write-protected afterwards
+  (follow-on: an RO mapping under CR0.WP).
+- Where OVMF placed the UEFI copy is **not pinned**, because it is the
+  firmware's choice. The arm proves the bytes, not the address.
+- Real UEFI firmware may have less free memory below 16 MiB. The skip path is
+  the answer and is **not exercised by a gate**: forcing it would need a
+  loader mutant, and the kernel side (`refused reason=none`) is the same code
+  the BIOS path's absent-block case uses.
+
+### §10.6 Pieces 4–6 design: install engine, console gate, root selection, `smoke-install` (committed before the code)
+
+The shape is chosen by measurement, and two §4 assumptions do not survive it.
+
+**Finding 1: there is no ring-3 place for an installer ELF to come from on the
+ISO.**
+
+- The ISO root is a freshly formatted ramdisk (DDR-972).
+- The only runnable programs are those **embedded in `kernel.bin`** (PRISM is
+  `prism_elf`, loaded by `user_boot_from_sfs`).
+- A separate `install.elf` would need embedding anyway, so it saves nothing.
+- **The install engine therefore lives in the kernel.** It is driven by a
+  **PRISM builtin** `install`.
+- The three loader blobs are `incbin`'d into `kernel.bin`: stage1 512 B,
+  stage2 1,540 B and `BOOTX64.EFI` 6,656 B, about 12 KiB page-aligned against
+  212,598 B of headroom.
+
+**Finding 2: `BOOTX64.EFI` is not reproducible** (§10.5: one byte, the PE
+`TimeDateStamp`).
+
+- Embedding it would make `kernel.bin`'s hash change on every rebuild of
+  unchanged source. That would destroy bit-for-bit revert checks and every
+  pinned-hash measurement in this project.
+- **Prerequisite:** `lld-link -Brepro` (a deterministic timestamp). This is
+  verified by building twice and comparing, and it is done **before** anything
+  embeds the file.
+
+**Finding 3: PRISM is not sovereign.** `user_boot_from_sfs(…, 0)` sets
+`is_sovereign` only when asked, and PRISM is not asked.
+
+- **The authority check for `SYS_INSTALL` is "the caller is the boot console
+  shell".** That means `current pid == g_console_pid`, recorded when
+  `main.c` spawns PRISM.
+- A forked child, including a piped builtin, gets a new pid and is refused.
+  So is every other process.
+- The human consent is the typed confirmation (below). A kernel cannot verify a
+  person (DDR-1146 §4); what it can guarantee is that **only the interactive
+  console path reaches the disk-wiping syscall**.
+- An S2-family denial arm is included (see gate).
+
+**NSI allocation** (verified free: max defined 103):
+
+| NSI | call | authority |
+|---|---|---|
+| 104 | `SYS_DISK_LIST(struct disk_info *out, n)` → count: name, sectors, flags (ramdisk, partition, blank, installed) | any process (read-only) |
+| 105 | `SYS_INSTALL(disk_idx, const char *confirm, uint64_t *nonce_out)` | console shell only, else `-EPERM` |
+
+For `SYS_INSTALL`, `confirm` must equal `"WIPE-<name><idx>"`; anything else
+returns `-EINVAL` **before any write**. A ramdisk or partition target returns
+`-EINVAL`.
+
+**Layout writer** (`kernel/install/install.c`), following §3. MBR disk
+signature at 440 = `'PRDI'`.
+
+| LBA | write |
+|---|---|
+| 0 | stage1 plus the table: `0xEF` at 4096 for 131,072 sectors (64 MiB); `0xDA` from 135,168 to the end |
+| 1..16 | stage2, zero-padded |
+| 17.. | the pristine kernel from `kimg_get()`, then zeros to 4095 |
+| P1 | FAT16: one reserved sector, 2 FATs, a 512-entry root, 4-sector clusters. Contents: `EFI/BOOT/BOOTX64.EFI` and root `KERNEL.BIN`, contiguous. About 250 lines. |
+| P2 LBA 0..7 | the volume header: magic `PRDYVOL1`, version 1, `flags = PLAINTEXT` (**DDR-1144 replaces this with the crypt header; until then P2 is NOT encrypted, and the header says so**), SFS offset 8 |
+| P2+8.. | `sfs_format` on a partition sub-device, then `/INSTALLED.MARK` holding a 64-bit nonce from `rng_get`, returned to the caller |
+
+- Minimum disk size: 135,168 + 32,768 sectors (80 MiB). Smaller returns
+  `-ENOSPC` before any write.
+- Barrier: `blk_flush` last, and its rc is returned.
+- **Every write is read back and compared** (§4.5 "verify by reading back").
+  A mismatch returns `-EIO` with the LBA printed.
+
+**Live-path condition, widened by exactly one case** (boot 1 of the gate is
+the ISO plus a *blank* disk):
+
+- The DDR-972 ramdisk branch fires on `blk_count() == 0` (unchanged) **or** on
+  `blk_count() == 1 && sector 0 of blk0 is all zero`.
+- In the second case the blank real disk plays blk0's "boot-disk stand-in"
+  role. So only the root (blk1) and scratch (blk2) ramdisks are created, and
+  the topology the boot path expects is identical.
+- Every gate's blk0 is `pradyos.img` with an MBR, so **no gate can take the
+  new case**. That is the same safety argument DDR-972 used, and it is checked
+  by the full hygiene set.
+
+**Root selection (piece 6):**
+
+- It fires on `blk_count() == 1`, with blk0's MBR carrying `'PRDI'` at 440,
+  entry 1 type `0xDA`, and the P2 header magic valid.
+- It registers the P2 SFS sub-device (blk1) plus a 4 MiB scratch ramdisk
+  (blk2), which is the ISO topology again. `fs_test_thread`'s existing loop
+  then mounts blk1.
+- It prints `[root] disk p2 lba=<n>`. **It never formats blk1.**
+- A header with `flags != PLAINTEXT` prints `[root] encrypted volume: unlock
+  not built` and falls to the live path. That is the hook DDR-1144 replaces.
+- **v1 limit, stated:** more than one disk present means no root selection.
+  Real machines with two disks are not handled until the topology is
+  generalised.
+
+**Gate `smoke-install`** (a new script, `tools/qemu_runner/install_test.sh`;
+sequential QEMU only, NON-NEGOTIABLE 12):
+
+| arm | checks |
+|---|---|
+| boot 1 | ISO plus a blank 128 MiB raw disk. The injector types `install`, then `install 0 WIPE-virtio-blk0`. Requires `[install] ok nonce=<N>`, and captures N. |
+| deny | the console-only check is proven by a ring-3 probe calling NSI 105 → exactly `-EPERM` (put on `smoke-part`, which already boots probes) |
+| B | boot 2, **disk only**, SeaBIOS: `[kimg] src=bios`, `[root] disk`, NOT `[ramdisk] formatted SFS`, **and `[install] mark nonce=<N>` equal to boot 1's N** (arm P) |
+| U | boot 2 again under OVMF: `[uefi] handoff` plus the same three |
+| negative | a disk with a foreign MBR (the existing `pradyos.img` copy has no `'PRDI'`) → no `[root] disk` |
+
+- **Arm P is the load-bearing one:** the nonce is produced by boot 1's RNG and
+  can only be read back if the root is really the installed P2.
+- Boot 2 prints the mark from `fs_test_thread` right after mount:
+  `[install] mark nonce=`.
+
+**Planned mutants:** §5's M1–M4, plus:
+
+| mutant | change | must fail |
+|---|---|---|
+| M5 | the console check removed | deny arm |
+| M6 | the blank-disk widening removed | boot 1 (no PRISM) |
+| M7 | readback verification skipped, plus a corrupted write | (planned) readback `-EIO` — may be uncovered; decided at build |
+
+**Build order:** `-Brepro` → NSI 104 → the install engine (FAT16 and layout)
+plus NSI 105 plus the builtin → root selection → `install_test.sh` and the
+gate → mutants → regression. Each is committed separately.
+
+**Not claimed here:** encryption (DDR-1144); TPM (DDR-1145); recovery
+(DDR-1146); passphrase prompts; power-loss durability (§7); two-disk machines.
