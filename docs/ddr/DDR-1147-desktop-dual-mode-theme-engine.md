@@ -103,6 +103,64 @@ Anchor boxes, `x0,y0,x1,y1`, in image order:
   ambiance.** That is consistent with the mockups' own instruction text (*"Manual
   Mode: dark, immersive"*), and it is recorded as an observation, not a rule.
 
+### §1.3 Re-sample after the operator's corrected mapping, and a conflict it does not survive (2026-09-26)
+
+PR #17 comment 5841547160 (**OWNER**, verified at the API: `author_association`
+`OWNER`, edited 00:39:00Z) renames the modes and ambiances (Sovereign → **Regalia**,
+Manual → **Consort**, Dawn → **Aurora**, Day → **Zenith**, Dusk → **Twilight**,
+Night → **Umbra**), asks for the original filenames back, and gives a
+"corrected" panel table. **The filenames are restored in this commit** (the
+`1..4.png` renames in `0a93ece` are reverted with `git mv`; `R100`, byte-identical).
+
+**Every panel was re-measured** (table below), and **the §1.2 values reproduce to within a
+few units**, so the sampling was never the issue. What is at issue is the
+**label** each panel carries, and on three of the four files the corrected
+table disagrees with what the image itself prints:
+
+| File | Operator's table: top / bottom | What the image prints: top / bottom | Evidence in the pixels |
+|---|---|---|---|
+| `02_28_47` | Consort Umbra / Consort Zenith | **Regalia** Umbra / Consort Zenith | Top panel's heading reads **"SOVEREIGN MODE"**, subtitle *"The machine governs. You approve."*, and the toggle sits on **SOVEREIGN**. |
+| `02_32_37` | Regalia Zenith / Consort Umbra | Regalia Zenith / Consort Umbra | **Agrees.** |
+| `02_47_54` | Regalia **Twilight** / Consort **Aurora** | Regalia **Aurora** / Consort **Twilight** | Top greets *"Good **morning**"* in teal. The bottom is orange. |
+| `02_50_44` | Regalia **Aurora** / Consort **Twilight** | Regalia **Twilight** / Consort **Aurora** | Top greets *"Good **evening**"* in orange. This file's own instruction text says *"Sovereign Mode: … orange highlights (**dusk**) … Manual Mode: … teal highlights (**dawn**)"*. |
+
+Read by the images, the set is **complete**: each of the 8 (mode × ambiance)
+combinations appears **exactly once**, including **Regalia Umbra** (`02_28_47`
+top). Read by the corrected table, Regalia Umbra has no reference and
+Consort Umbra appears twice. **So the extrapolation the operator asked for may
+not be needed.** Whether it is depends on which labelling is right, and that is
+the operator's call. The palettes are recorded **against the file and half**,
+which neither reading disputes, so nothing needs re-measuring once it is decided.
+
+**No palette is bound to a theme name until the operator answers.** The
+engine work (U-b) is held. The operator's own instruction was to report the
+sampled data before going further.
+
+Measured values (`tools/ui/png_palette.py`; `accent` = most chromatic 5% of the
+box, `sample` = mean of a (2r+1)² box; coordinates in 1536×1024 image pixels):
+
+| File · half | Dock active (accent) | Second accent (accent) | Headline "Sovereign." (accent) | Scene (sample) | Glass card (sample) |
+|---|---|---|---|---|---|
+| `02_28_47` top | `#7642D0` @525,392,562,432 | `#723DEB` ask btn @912,205,940,230 | `#476DE8` @660,105,825,140 | `#02030C` @700,40 r40 | `#13132A` @1300,230 r12 |
+| `02_28_47` bottom | `#3073EA` @422,855,462,895 | `#226EC9` toggle @128,830,240,860 | n/a | `#939CAF` @1100,470 r30 | `#45556D` @1350,670 r10 |
+| `02_32_37` top | `#4C89FC` @500,425,540,465 | `#5F63F7` ask btn @905,228,940,262 | `#2872EE` @615,130,800,170 | `#E8E9F0` @1050,120 r40 | `#E0E7F9` @1320,240 r10 |
+| `02_32_37` bottom | `#7356B9` @470,840,512,882 | `#4B3486` mode pill @28,712,210,745 | n/a | `#040818` @1300,860 r20 | `#1C203B` @1300,700 r10 |
+| `02_47_54` top | `#24A6AF` @505,428,545,466 | `#5AABA6` ask btn @900,230,935,265 | white text: noise | `#87A5A0` @1000,120 r40 | `#386A71` @1320,240 r10 |
+| `02_47_54` bottom | `#B46526` @468,842,510,882 | `#A56A3A` mode pill @25,710,210,745 | n/a | `#1B181C` @1300,860 r20 | `#462E27` @1300,700 r10 |
+| `02_50_44` top | `#C95B1A` @527,372,565,408 | `#CF5C1C` ask btn @888,203,918,233 | white text: noise | `#643733` @900,100 r40 | `#4A2E2B` @1330,210 r10 |
+| `02_50_44` bottom | `#20A3A1` @493,870,533,910 | `#5FD4D3` mode pill @25,748,215,780 | n/a | `#56858A` @1100,580 r30 | `#214045` @1350,745 r10 |
+
+The headline column is meaningful only where the word is coloured
+(`02_28_47`, `02_32_37`). Where it is white, the most chromatic pixels in
+the box are background bleeding through the glyph edges, so it is marked
+noise rather than reported as a colour.
+
+**Emblem / wordmark (step 2 of the instruction): still blocked, named.** No
+emblem artwork is in the tree, only raster screenshots. The operator's own
+instruction forbids tracing it and calling it final. The asset needed is an
+**SVG** of the scorpion emblem and the PRADYOS wordmark, or a **PNG with an
+alpha channel at ≥1024 px**, one colour on transparent.
+
 ## §2 What the compositor already has (measured in `user/compositor.c`, 1,992 lines)
 
 | Capability | State | Where |
