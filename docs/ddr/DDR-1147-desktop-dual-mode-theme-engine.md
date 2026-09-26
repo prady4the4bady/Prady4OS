@@ -161,6 +161,151 @@ instruction forbids tracing it and calling it final. The asset needed is an
 **SVG** of the scorpion emblem and the PRADYOS wordmark, or a **PNG with an
 alpha channel at ≥1024 px**, one colour on transparent.
 
+### §1.4 Operator decision 1: mechanical classification by a fixed colour rule (2026-09-26)
+
+PR #17 comment 5845610518 (**OWNER**, verified at the API) settles §1.3's conflict
+by **neither** labelling. Theme names are assigned by a fixed colour convention,
+*"cool/blue-teal → Aurora (Dawn); bright/light → Zenith (Day); warm
+orange/amber → Twilight (Dusk); dark → Umbra (Night)"*. Each panel is classified
+mechanically by `tools/ui/png_palette.py` (*"do not eyeball it"*), and this
+section records every cell that changes against **both** earlier readings.
+
+**The rule, as code (`png_palette.py classify`).** Each half is measured over
+all its pixels: mean OKLab lightness `L`, the hue of its most chromatic 5%, and
+`warm` = the share of chroma at hue 20–100° against cool hue 150–300°. Then, in
+order:
+
+1. `L ≥ 0.70` → **Zenith**
+2. `warm ≥ 0.50` → **Twilight**
+3. `L ≤ 0.32` → **Umbra**
+4. otherwise → **Aurora**
+
+Brightness is tested first because a bright panel can also be blue.
+Each threshold sits in the largest gap of the measured distribution. The halves
+split at row 512, and the result is identical at rows 480 and 535.
+
+| File · half | L | hue | warm | Rule gives | Captions said | Operator's table said |
+|---|---|---|---|---|---|---|
+| `02_28_47` top | 0.272 | 298 | 0.00 | **Umbra** | Umbra | Umbra |
+| `02_28_47` bottom | 0.426 | 263 | 0.01 | **Aurora** | Zenith | Zenith |
+| `02_32_37` top | 0.825 | 262 | 0.00 | **Zenith** | Zenith | Zenith |
+| `02_32_37` bottom | 0.217 | 288 | 0.00 | **Umbra** | Umbra | Umbra |
+| `02_47_54` top | 0.469 | 205 | 0.03 | **Aurora** | Aurora | Twilight |
+| `02_47_54` bottom | 0.280 | 47 | 0.74 | **Twilight** | Twilight | Aurora |
+| `02_50_44` top | 0.327 | 45 | 0.80 | **Twilight** | Twilight | Aurora |
+| `02_50_44` bottom | 0.364 | 202 | 0.01 | **Aurora** | Aurora | Twilight |
+
+Margins: the Zenith call clears its threshold by 0.125. The nearest Umbra call
+(`02_28_47` top, 0.272) clears by 0.048, and the nearest Aurora-not-Umbra call
+(`02_50_44` bottom, 0.364) by 0.044. The warm split is 0.74/0.80 against ≤ 0.03.
+
+**Reassignments.** Against the **captions**, one cell changes: `02_28_47` bottom,
+Zenith → Aurora. Against the **operator's table**, five change: that same cell,
+plus both halves of `02_47_54` and both halves of `02_50_44` (each pair swapped).
+Mode per half is not in dispute. Every top half is Regalia, both by caption and
+by the "SOVEREIGN MODE" heading printed in three of the four.
+
+**The rule leaves the set with a duplicate and a hole.** Consort gets Aurora
+**twice** (`02_28_47` bottom and `02_50_44` bottom) and no Zenith. Regalia is
+complete. The engine needs all eight cells, so a **second mechanical step** is
+applied, stated here and implemented in the same script:
+
+- **A duplicated cell keeps the candidate whose dock accent is nearest (OKLab
+  distance) to the other mode's accent for the same ambiance.** Consort Aurora
+  against Regalia Aurora (`#24A6AF`): `02_50_44` bottom (`#20A3A1`) = **0.021**,
+  `02_28_47` bottom (`#3073EA`) = 0.185. `02_50_44` bottom keeps the cell.
+- **A displaced candidate fills that mode's empty cell** whose other-mode accent
+  is nearest to it. `02_28_47` bottom against the Regalia accents: Zenith 0.068,
+  Umbra 0.132, Aurora 0.185, Twilight 0.335. It fills **Consort Zenith**.
+
+**Stated plainly, the second step overrides the first on exactly one cell:**
+`02_28_47` bottom is classified Aurora by the colour rule and bound to Zenith by
+the resolution rule. Two facts support that. Its mean lightness is low
+(0.426, a dim scene of a bright lake), while its **accent** is the Zenith blue
+darkened, as every Consort accent is relative to its Regalia counterpart
+(§1.2). If the operator prefers a different resolution, only the assignment
+list in the script changes. The measurements do not.
+
+### §1.5 U-b/U-c/U-d as built from decisions 2 and 3 (design, written before the code)
+
+Decision 2: proceed with palette extraction, the 4-ambiance theme engine, and the
+Regalia/Consort toggle. The emblem stays deferred as its own checklist line.
+Decision 3: build natively in `user/compositor.c` on PradyOS's own syscalls, and
+ignore the Qt/QML/React/Tauri/Hyprland/Wayland notes printed in the images.
+
+**Palette provenance: generated, not transcribed.** `png_palette.py header`
+decodes the four committed PNGs, runs §1.4's classification and resolution, and
+samples each cell's dock-active accent (the §1.3 anchor boxes). It writes
+`user/theme_palette.h`, which is marked *do not edit*. `make ci-palette-check`
+regenerates the header into `build/` and `cmp`s it against the committed copy.
+It is wired into `hygiene_check.sh`, making the tenth static check. A hand edit
+to a value, a changed threshold, or a changed resolution all fail it. This is
+DDR-1053's `fetch_mldsa_kat.py` shape: a committed tool is the provenance, not a
+session artefact.
+
+**What the engine binds, and what it deliberately does not.**
+- **Bound:** `THEME_AC[mode][ambiance]`, the accent, which is what `g_ac`
+  already paints (dock highlight, focused title bar, accent bar, Manual
+  taskbar). `set_ambiance()` now targets `THEME_AC[SYS_GET_MODE][idx]` instead
+  of the mode-blind `AMB[idx].ac`. A mode change re-targets the accent with a
+  2-frame transition inside `render_and_announce`: one extra full-screen render
+  (~0.93 s under TCG, DDR-1029).
+- **Not bound: the backdrop base `bg`.** The measured scene colours are
+  **averages of photographs** (§1.3's `sample` column), not flat bases. Using
+  them would paint Zenith's `#E8E9F0` behind white text that the compositor
+  draws at fixed colours. The existing dark bases stay until the per-widget text
+  colours become theme-driven (U-e/U-g). The glass-card colours are recorded and
+  not bound, for the same reason.
+- **The final transition frame is exact.** `lab_lerp` at `t = 1` round-trips
+  through float OKLab and can land ±1 from the target. The settled frame now
+  copies the target bytes, so a readback can assert exact values.
+
+**Names.** The gate-asserted identifiers `DAWN/DAY/DUSK/NIGHT` (four Makefile
+gates) and `SOVEREIGN/MANUAL` stay unchanged as wire tokens. The operator's
+names are **display names**: `Aurora/Zenith/Twilight/Umbra` and
+`Regalia/Consort`. They go in a new `PRADYOS_THEME` line and in the on-screen
+mode titles (`"REGALIA"`/`"CONSORT"` replace `"SOVEREIGN MODE"`/`"MANUAL
+MODE"`, measured to be asserted by no gate).
+
+**U1, the toggle with a confirm step and an audit record.**
+- **The audit half was missing, and it is a kernel change.** `sys_set_mode`
+  audits a **refusal** (`AR_CAP_DENIED`) but a **successful** mode change
+  writes nothing, which was measured in `sys_aether.c` and `aether_queue.c`.
+  A change that alters agent approval policy leaves no record. `AR_MODE_SET` is
+  **appended** to the audit enum (value 28, pinned with `_Static_assert` per
+  DDR-832). It is recorded on every successful call, with `action_id` =
+  `(previous << 32) | requested`, so privacy on/off (modes 2/3) is recorded too.
+- **The confirm half is in the compositor.** Super+M no longer switches. It
+  **arms** a pending switch and prints `PRADYOS_MODE_CONFIRM pending to=N`.
+  **Enter** commits: `SYS_SET_MODE`, the existing
+  `PRADYOS_SUPERKEY_TOGGLE from= to=` line, then a **read-back of the kernel's
+  own audit record** via `SYS_READ_AUDIT`, printed as
+  `PRADYOS_MODE_AUDIT found=1 prev= new=`. **Esc** cancels, and so does any
+  other key. A pending switch **expires after 10 s** of wall time
+  (`SYS_CLOCK`), so a stray Enter much later cannot flip a security-relevant
+  setting.
+- **Gate (`smoke-superkey`), with the key list rewritten** to
+  `m meta_l-m ret meta_l-m esc meta_l-m ret ctrl-c`. The arms are: the
+  **exact ordered sequence** of the first round's six mode lines (pending/
+  toggle/pending/cancel/pending/toggle), and `found=1` on both commits. The
+  ordered sequence is what catches the obvious mutant: a no-confirm compositor
+  still prints both `from=0 to=1` and `from=1 to=0`, so the old two arms pass
+  it. `found=1` catches a kernel that stops auditing, since the compositor
+  cannot manufacture that record.
+- **Palette arm (`smoke-ambiance`).** The boot demo cycle prints
+  `PRADYOS_THEME mode=<0|1> amb=<TOKEN> name=<display> ac=<RRGGBB>` from the
+  **settled `g_ac`**. The gate asserts the four exact accents for the mode that
+  prints, taking the expected values from `user/theme_palette.h`, not from a
+  second hand copy. A mode-blind engine (the pre-change behaviour) prints
+  `AMB[]`'s old accents and fails.
+
+**Residual, recorded rather than claimed:** the bare single-key `s`/`m` hooks
+(and `p` poweroff, `b` reboot, `q` exit) remain **unconfirmed debug hooks**, and
+three gates depend on them (`smoke-compositor`, `smoke-motion`,
+`smoke-superkey`'s reset). U1's confirm covers the user-facing chord. The
+kernel audit covers **every** path, hooks included, because it sits below all
+of them.
+
 ## §2 What the compositor already has (measured in `user/compositor.c`, 1,992 lines)
 
 | Capability | State | Where |
