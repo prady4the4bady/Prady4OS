@@ -20,6 +20,31 @@ not, the measured-kernel half (§3) cannot be exercised in CI with the
 distribution OVMF. The track then **stops and reports** rather than inventing a
 substitute.
 
+### §1.1 Measured 2026-09-26: Ubuntu's OVMF DOES measure into a TPM
+
+Measured after the operator approved the track (PR #17 comment 5841525203),
+which asked for this before anything else on the TPM path.
+`tools/ci/tpm_ovmf_probe.sh` boots `OVMF_CODE_4M.fd` (package `ovmf
+2024.02-2ubuntu0.9`, QEMU 8.2.2, swtpm 0.7.3 from the archive) with no disk and
+no OS, once per interface, and decodes every command the firmware sends:
+
+| Interface | Commands | PCR_Extend by PCR |
+|---|---|---|
+| `tpm-crb` | 133 (Startup, SelfTest, 70 GetCapability, 30 PCR_Read, 29 PCR_Extend) | 0:4, 1:12, 2:2, 3:1, **4:2**, 5:1, 6:1, 7:6 |
+| `tpm-tis` | 134 (same, plus one locality command) | identical |
+
+- **PCR 4 is extended.** That measurement is made in the DXE phase, which is
+  where `Tcg2Dxe` runs, and `Tcg2Dxe` is the driver that installs
+  `EFI_TCG2_PROTOCOL`. So the firmware-side TCG2 stack is present on **both**
+  interfaces, and the track does **not** stop.
+- **PCR 9 is never touched**, so the kernel measurement in §3 has it to itself.
+- **Inference, not measurement:** that our loader can `LocateProtocol` the
+  protocol. That is measured directly by the loader's first call when §3 is
+  built. If it fails, §3 stops and reports.
+- Two command codes are left undecoded in the histogram (`0x181` before
+  Startup, `0x129` once). They are printed as hex, not guessed.
+- Cost: ~80 s for both interfaces (the firmware idles to its PXE timeout).
+
 ## §2 Transport and command subset
 
 - **Discovery:** the ACPI `TPM2` table's start method:
