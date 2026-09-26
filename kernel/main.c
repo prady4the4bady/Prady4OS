@@ -1410,6 +1410,125 @@ static void fs_write_test(cap_t cap, int mnt) {
 
 /* VFS/FAT32 test: mount, list directories, read files — including a nested
  * path through a subdirectory — all capability-gated. */
+/* DDR-1143 §4.1 — partition sub-device + MBR parser self-test (smoke-part).
+ *
+ * Built on a private 256 KiB ramdisk so it writes nothing a gate owns. Every
+ * arm prints what it measured and the gate judges (DDR-1020): no arm returns
+ * early, so a failure in one cannot hide another.
+ *
+ * Layout: 512 sectors; P1 type 0xEF at 64+128, P2 type 0xDA at 192+320 (which
+ * ends exactly at the disk end), and a third entry at 400+200 that overruns the
+ * disk and MUST be skipped by the parser.
+ *
+ * The arms and the mutant each exists for:
+ *   mbr    parse finds exactly the two in-range entries        (entry trusted)
+ *   sig    a table without 0x55AA is refused                   (sig not checked)
+ *   mk     creation past the parent end / at LBA 2^64-1 refused (create unchecked)
+ *   off    P2 LBA 0 is parent LBA 192, and sector 0 survives   (offset dropped)
+ *   bnd    P1 LBA 128 is refused even though the PARENT has it (bound = parent)
+ *   wrap   LBA 2^64-1 count 1 refused                          (lba+count form)
+ *   sfs    SFS formats and mounts on P2, and P1 is untouched   (the §4.1 claim)
+ */
+static void part_selftest(void) {
+    int rd = ramdisk_init(6);                       /* 64 pages = 512 sectors */
+    uint64_t pg = pmm_alloc_page();
+    if (rd < 0 || !pg) {
+        kputs("PART FAIL: no scratch ramdisk or page\r\n");
+        return;
+    }
+    uint8_t *b = (uint8_t *)(uintptr_t)pg;
+    struct blk_device *pd = blk_get((unsigned)rd);
+    int ok = 1;
+
+    /* mbr / sig */
+    memset(b, 0, 512);
+    blk_mbr_set(b, 0, 0xEF, 0x80, 64, 128);
+    blk_mbr_set(b, 1, 0xDA, 0x00, 192, 320);
+    blk_mbr_set(b, 2, 0x83, 0x00, 400, 200);        /* overruns: must be skipped */
+    pd->write(pd, 0, b, 1);
+    memset(b, 0, 512);
+    pd->read(pd, 0, b, 1);
+    struct mbr_part mp[4];
+    int n = blk_mbr_parse(b, pd->capacity_sectors, mp);
+    int mbr_ok = n == 2 && mp[0].index == 0 && mp[0].type == 0xEF && mp[0].lba == 64 &&
+                 mp[0].count == 128 && mp[0].boot == 0x80 && mp[1].index == 1 &&
+                 mp[1].type == 0xDA && mp[1].lba == 192 && mp[1].count == 320;
+    kputs("[part] mbr n="); kputdec((uint64_t)(n < 0 ? 99 : n));
+    kputs(mbr_ok ? " ok\r\n" : " BAD\r\n");
+    b[511] = 0x00;
+    int sig = blk_mbr_parse(b, pd->capacity_sectors, mp);
+    kputs("[part] sig rc="); kputs(sig == -EINVAL ? "-EINVAL" : "accepted"); kputs("\r\n");
+    ok &= mbr_ok && sig == -EINVAL;
+
+    /* mk */
+    int mk1 = blk_part_create((unsigned)rd, 192, 321);
+    int mk2 = blk_part_create((unsigned)rd, ~0ull, 1);
+    kputs("[part] mk over="); kputs(mk1 == -EINVAL ? "-EINVAL" : "created");
+    kputs(" wrap="); kputs(mk2 == -EINVAL ? "-EINVAL" : "created"); kputs("\r\n");
+    ok &= mk1 == -EINVAL && mk2 == -EINVAL;
+
+    int p1 = blk_part_create((unsigned)rd, 64, 128);
+    int p2 = blk_part_create((unsigned)rd, 192, 320);
+    if (p1 < 0 || p2 < 0) {
+        kputs("PART FAIL: create p1/p2\r\n");
+        return;
+    }
+    struct blk_device *d1 = blk_get((unsigned)p1), *d2 = blk_get((unsigned)p2);
+
+    /* off: a marker through P2 LBA 0 must land on parent LBA 192, and parent
+     * sector 0 (the table) must still carry its signature. */
+    memset(b, 0xB2, 512);
+    int w = d2->write(d2, 0, b, 1);
+    memset(b, 0, 512);
+    pd->read(pd, 192, b, 1);
+    int at192 = b[0] == 0xB2 && b[511] == 0xB2;
+    pd->read(pd, 0, b, 1);
+    int mbr_intact = b[510] == 0x55 && b[446 + 4] == 0xEF;
+    kputs("[part] off w="); kputdec((uint64_t)(w == 0 ? 0 : 1));
+    kputs(" parent192="); kputs(at192 ? "marker" : "missing");
+    kputs(" sector0="); kputs(mbr_intact ? "intact" : "clobbered"); kputs("\r\n");
+    ok &= w == 0 && at192 && mbr_intact;
+
+    /* bnd: P1 is 128 sectors, so LBA 128 is P2's first sector in the parent.
+     * A bound taken from the PARENT would let this write through and
+     * overwrite the marker at parent 192. */
+    memset(b, 0x11, 512);
+    int bw = d1->write(d1, 128, b, 1);
+    int br = d1->read(d1, 127, b, 2);
+    int last = d1->read(d1, 127, b, 1);
+    memset(b, 0, 512);
+    pd->read(pd, 192, b, 1);
+    int kept = b[0] == 0xB2;
+    kputs("[part] bnd w128="); kputs(bw == -EINVAL ? "-EINVAL" : "written");
+    kputs(" r127x2="); kputs(br == -EINVAL ? "-EINVAL" : "read");
+    kputs(" r127="); kputdec((uint64_t)(last == 0 ? 0 : 1));
+    kputs(" neighbour="); kputs(kept ? "kept" : "overwritten"); kputs("\r\n");
+    ok &= bw == -EINVAL && br == -EINVAL && last == 0 && kept;
+
+    /* wrap */
+    int wr = d2->read(d2, ~0ull, b, 1);
+    kputs("[part] wrap rc="); kputs(wr == -EINVAL ? "-EINVAL" : "read"); kputs("\r\n");
+    ok &= wr == -EINVAL;
+
+    /* sfs: format and mount on P2; P1 must be untouched by it. */
+    memset(b, 0x5A, 512);
+    for (unsigned s = 0; s < 128; s++) d1->write(d1, s, b, 1);
+    int f  = sfs_format(d2);
+    int mt = vfs_mount((unsigned)p2);
+    unsigned p1bad = 0;
+    for (unsigned s = 0; s < 128; s++) {
+        d1->read(d1, s, b, 1);
+        for (unsigned k = 0; k < 512; k++) if (b[k] != 0x5A) { p1bad++; break; }
+    }
+    kputs("[part] sfs format="); kputdec((uint64_t)(f == 0 ? 0 : 1));
+    kputs(" mount="); kputs(mt >= 0 ? "ok" : "fail");
+    kputs(" p1_dirty="); kputdec(p1bad); kputs("\r\n");
+    ok &= f == 0 && mt >= 0 && p1bad == 0;
+
+    pmm_free_page(pg);
+    kputs(ok ? "PRADYOS_PART_OK\r\n" : "PART FAIL: an arm above did not hold\r\n");
+}
+
 static void fs_test_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
     int mnt = -1, blk = -1;
@@ -1868,6 +1987,8 @@ static void fs_test_thread(void *arg) {
                  * run it, which is why the gate asserts caught > 0 rather than
                  * caught == N — the point is that the state ARISES, and an
                  * exact count would be asserting the absence of work stealing. */
+                if (probe_enabled("part"))           /* DDR-1143 §4.1 */
+                    part_selftest();
                 if (probe_enabled("rqfree")) {
                     extern volatile uint32_t g_rqfree_caught, g_rqfree_leaked;
                     int made = sched_rqfree_probe(16);

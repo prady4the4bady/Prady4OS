@@ -6519,3 +6519,18 @@ reference images (comment 5839590792) return 403 from this session (user-attachm
 repository-scoped endpoint); nothing is derived from them. Measured: alpha blend, radius-4 box blur,
 OKLab 4-ambiance engine and the Inter atlas already exist; missing are dirty-rect repaint, a larger
 blur, a network-stats syscall, SNTP, and persistence (after DDR-1143). ~3,900-5,500 lines, 8 pieces.
+
+### 2026-09-26 — DDR-1143 piece 1: partition sub-device + MBR parser, BUILT + GATED
+
+- Operator comment 5841525203 (OWNER) approved DDR-1143..1146 with D1–D6 decided.
+- **First, the TPM track:** OVMF's TCG2 support was measured (DDR-1145 §1.1,
+  `tools/ci/tpm_ovmf_probe.sh`). PCR 4 is extended on both `tpm-crb` and `tpm-tis`, and PCR 9 is untouched.
+- **Piece 1:** `kernel/drivers/blk/blk_part.c`.
+  - Partitions are registered, bounds-refused `blk_device`s.
+  - An overflow-safe range check.
+  - An MBR parser that skips entries overrunning the disk.
+- **Gate:** `smoke-part` (shard 2, strict) has seven arms.
+  - M1–M4 are on distinct hashes and fail distinct arms.
+  - The revert is bit-for-bit (`90f14648c3752503`).
+- `kernel.bin` is 1,356,170 B; 183 gates.
+- **Next:** piece 2, the flush op plus SFS barriers.

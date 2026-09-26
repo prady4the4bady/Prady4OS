@@ -2096,3 +2096,5 @@ this time, not just the waiter."* Instrument only.
 
 - 2026-09-25 — Installer / volume encryption / TPM unlock / recovery escrow: DESIGN ONLY (DDR-1143..1146).
   No AETHER surface changes. The recovery key never derives from `g_owner_seed` (DDR-1146 §2).
+
+- 2026-09-26 — DDR-1143 piece 1 (block partitions + MBR parser, `smoke-part`). No AETHER surface change.

@@ -276,7 +276,7 @@ and the track proceeds.
 
 ## §9 Not claimed
 
-- **No implementation exists.** This is a design.
+- **Only §10's pieces are implemented.** The rest is design.
 - **Nothing is built, gated or tagged.**
 - The line-count and session estimates are **estimates**.
 - **No physical-hardware claim** of any kind.
@@ -284,3 +284,122 @@ and the track proceeds.
   **superseded by operator instruction 5839562349**, not by anything built.
 - Kernel unchanged: `9ff230a9dc3395ec`, 1,352,074 B. GLOBAL_FORBIDDEN 77. 182
   gates.
+
+## §10 Implementation record
+
+### §10.1 Piece 1 — partition sub-device + MBR parser (2026-09-26)
+
+Built as §4.1 describes. `kernel/drivers/blk/blk_part.c`:
+
+- `blk_part_create(parent, start, sectors)` registers a partition as an
+  ordinary `blk_device`. It is **appended** to the registry, so no existing
+  device index moves. It has to be registered: `vfs_mount` takes a registry
+  index, and `sfs_bd_is_registered` (DDR-985) refuses unknown devices.
+- Bounds are **refused** (`-EINVAL`), never clamped. The check is
+  `lba <= cap && count <= cap - lba`, so a huge `lba` cannot wrap `lba + count`
+  (the same shape `ramdisk.c` uses).
+- `blk_mbr_parse` needs the `0x55AA` mark and skips any entry that is empty,
+  zero-length, or **extends past the disk**. Root selection (§4.6) will pass
+  these numbers straight to `blk_part_create`, so a lying table is refused per
+  entry. `blk_mbr_set` sits beside the parser so the two cannot disagree about
+  the layout.
+
+**Gate `smoke-part`** (shard 2, strict, probe key `part`). It uses a
+512-sector ramdisk: P1 `0xEF` at 64+128, P2 `0xDA` at 192+320, and a third
+entry that overruns the disk. Arms:
+
+| Arm | Line | What only a correct implementation produces |
+|---|---|---|
+| mbr | `n=2 ok` | the overrunning entry is skipped |
+| sig | `rc=-EINVAL` | an unsigned sector is refused |
+| mk | `over=-EINVAL wrap=-EINVAL` | creation bounds, including a wrapping start |
+| off | `w=0 parent192=marker sector0=intact` | partition LBA 0 is **parent** LBA 192, read back through the parent |
+| bnd | `w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept` | P1's end is enforced, not the parent's; P2's first sector survives |
+| wrap | `rc=-EINVAL` | `lba = 2^64 - 1` is refused |
+| sfs | `format=0 mount=ok p1_dirty=0` | SFS formats and mounts **a partition**, and writes nothing outside it |
+
+**Mutants, each on a recorded hash, each failing a different arm:**
+
+- **M1 (write offset dropped, `1da2dc4aceac966f`):** fails `off`, and downstream
+  `bnd` and `sfs`.
+- **M2 (bound checked against the parent's capacity, `a4ad521383206f1d`):**
+  fails `bnd` with `w128=written neighbour=overwritten`. This is the
+  load-bearing mutant: the obvious one-arm gate ("a partition read works")
+  passes it.
+- **M3 (no signature check, `d1b502efd69babad`):** `sig=accepted`.
+- **M4 (`lba + count <= cap`, `a723f02e5dd4d81d`):** `wrap=created`, and
+  `rc=` shows a read of parent sector 191, which is outside the partition.
+
+The revert returns `90f14648c3752503` **bit-for-bit**. The regression suite
+(`smoke-shell`, `smoke-blkmq`, `smoke-rqstress-liveness`,
+`smoke-blk-integrity`) is all rc=0 with the hash pinned. `smoke-shell` is 5/5.
+
+`kernel.bin` is 1,352,074 → 1,356,170 B (+4,096, one page). 183 gates.
+
+**Not claimed:**
+
+- nothing is installed;
+- no disk is partitioned outside the probe's ramdisk;
+- the flush (§4.2) is piece 2 and is not built.
+
+### §10.2 Piece 2 design: flush op + SFS barriers (committed before the code)
+
+**Interface.**
+
+- `struct blk_device` gains `int (*flush)(struct blk_device *)`.
+- `blk_flush(dev)` returns `-ENOSYS` when the op is NULL. It does **not**
+  return 0, because a driver that has a cache but forgot the op must not look
+  flushed.
+- Every in-tree driver sets the op:
+  - **virtio-blk:** negotiate `VIRTIO_BLK_F_FLUSH` (bit 9). When it is
+    negotiated, submit a 2-descriptor request (header + status, no data) with
+    `type = VIRTIO_BLK_T_FLUSH (4)`. When it is not negotiated, return 0,
+    because the virtio spec defines such a device as write-through.
+  - **AHCI:** `FLUSH CACHE EXT` (0xEA), a non-data command with `prdtl = 0`.
+  - **NVMe:** Flush, opcode 0x00, NSID 1, no PRPs.
+  - **ramdisk:** an explicit no-op returning 0.
+  - **partition:** forwards to the parent's flush.
+
+**SFS barriers.** A helper `sfs_barrier(c)` calls the op.
+
+- `sfs_journal_write`: `F` before writing the journal record, so every CoW
+  block of the transaction is durable before the record naming them.
+- `sfs_write_super`: after `sfs_freelist_save`, an `F`, then the superblock,
+  then an `F`.
+- So a transaction commit issues `F J L F S F`, and a plain
+  (non-transaction) commit issues `L F S F`, where:
+  - `D` = data / B+tree block;
+  - `J` = journal block;
+  - `L` = free-list block;
+  - `S` = block 0.
+
+**Gate arms (on `smoke-part`, same probe key).** A **trace device** wraps a
+ramdisk and records every op as a letter, classified by block number against
+the mounted context:
+
+| Arm | Checks | Mutant that must fail it |
+|---|---|---|
+| `txn` | the exact commit window of one transaction | M1: no `F` before `J`; M2: no `F` before `S` |
+| `tail` | the op after `S` is `F` | M3: no `F` after `S` |
+| `plain` | the exact window of one non-txn commit | M2 as well |
+| `virtio` | `neg=1`, a flush on a real virtio disk returns status 0, and the count of flushes issued by the SFS work matches the count completed | M4: the virtio header type is left at its previous value |
+
+Each commit-window string is **pinned after measuring it once** (L's presence
+depends on `sfs_freelist_save`'s own condition). The pin is recorded here
+together with the capture.
+
+**Honest limits.**
+
+- The arms prove **ordering at the block interface**, and that the device
+  **accepts** the flush command. They do **not** prove data reached stable
+  media: QEMU cannot pull power (§7).
+- AHCI and NVMe flushes are exercised only by their existing gates' self-tests
+  (a printed rc).
+
+**Cost, measured before and after.** QEMU's default `cache=writeback` turns
+each guest flush into a host `fdatasync`. SFS commits happen on every
+operation, so the SFS-heavy gates (`smoke-sfs-gc`, `smoke-sfs-btree`,
+`smoke-fs-sfs-rw`) are timed on both sides. If the cost threatens a gate's
+window, the choice (scratch disks at `cache=unsafe` in the harness, which is
+honest only for disks that are never persisted) is stated here. It is not
+applied silently.

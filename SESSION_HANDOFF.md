@@ -14732,3 +14732,14 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   the reference PNGs and emblem art to the repo (decision U0); decisions U1-U4 open. DDR range now 1148+.
 - The github-advanced-security "Code scanning AI findings" check fails on EVERY commit (runs 33-40) with
   "CAPIError: 400 The requested model is not supported": a GitHub service config issue, not pradyos-ci.
+
+## CHECKPOINT 2026-09-26 — installer track under way (DDR-1143 piece 1 built)
+- Operator 5841525203 (OWNER): D1 2-of-3 + per-distributor keys, D2 text record, D3 backend external,
+  D4 TPM+PIN, D5 Argon2id (flag any PBKDF2 fallback explicitly), D6 BIOS = passphrase+recovery only.
+  U0 images are in docs/ui/reference/1..4.png (mapped by content, DDR-1147 §1.1); U1-U4 decided (§9.1).
+- DDR-1145 §1.1: OVMF TCG2 measured PRESENT (PCR 4 extended on crb+tis, PCR 9 untouched). TPM track proceeds.
+- DDR-1143 piece 1 built: blk_part.c + smoke-part (shard 2). kernel.bin 90f14648c3752503, 1,356,170 B, 183 gates.
+- NEXT: piece 2, flush (virtio T_FLUSH/F_FLUSH bit 9, AHCI 0xEA, NVMe op 0, ramdisk no-op, partition forward)
+  + SFS barriers + ordering-trace arm + a before/after timing measurement on SFS-heavy gates.
+  Then pieces 3-6 (pristine kernel copy in both loaders, NSI 104, install syscall, root selection, smoke-install).
+- UI track in parallel: U-a palette extraction from the PNGs (stdlib zlib decoder; PIL is not installed).
