@@ -842,3 +842,66 @@ existing patterns already did.
   boot 2 lists an installed one), which is not built yet.
 - The `readerr` path is not exercised by any gate.
 - No `-EPERM` exists on this call, deliberately.
+
+### §10.9 Piece 4 step 3 design amendment: WHERE the disk checks run (committed before the code)
+
+§10.6 placed the blank-disk widening in `kmain` beside the DDR-972 branch
+(`blk_count() == 1 && sector 0 of blk0 is all zero`). **That cannot work, and
+the reason is in the driver, not the design.**
+
+- virtio-blk's `submit()` claims a request slot and then **sleeps** through
+  `sched_block_timeout()` until the completion IRQ wakes it.
+- The DDR-972 branch runs in `kmain` before the scheduler is live, so a
+  `blk_read` there has no one to wake it.
+- `blk_test_thread`'s own header says the same: *"runs as a thread so virtio-blk
+  I/O can block on its IRQ"*.
+
+**Amendment.** Both disk-content decisions move to the **top of
+`fs_test_thread`**, before its first-mountable loop:
+
+- the blank-disk widening (this step);
+- root selection (piece 6).
+
+That is the first point where a blocking read is legal and nothing has mounted
+yet.
+
+- The DDR-972 `blk_count() == 0` branch in `kmain` is **unchanged**.
+- The new check runs only when `blk_count() == 1`. It costs one 512-byte read,
+  and only on a machine with exactly one disk.
+- Every gate boots with `pradyos.img` (an MBR) as blk0, so the read sees a
+  non-zero sector and changes nothing. That is DDR-972's own safety argument.
+
+In the blank case it registers only blk1 (4 MiB SFS root) and blk2 (4 MiB
+scratch), because the blank real disk already occupies blk0. So the topology is
+the ISO's exactly. It prints
+`[ramdisk] blank disk blk0 kept as boot-disk stand-in` before the existing
+`[ramdisk] formatted SFS` line.
+
+**One interaction checked, not assumed:** `blk_test_thread` writes its DDR-831
+scratch sector at **blk0 LBA 4095**. On a blank target disk, the installer
+rewrites that sector (the §3 gap is zeroed through LBA 4095). On an installed
+disk, LBA 4095 is the last gap sector, one before P1 at 4096. So that
+self-test write never touches an installed partition.
+
+**Embedding.** stage1, stage2 and `BOOTX64.EFI` become kernel prerequisites:
+
+- their `nasm`/`lld-link` rules move out of the `$(IMG)` recipe into their own
+  targets;
+- `arch/x86_64/install_blobs.asm` `incbin`s them.
+
+Because the kernel lives in the higher half, these blobs are **not**
+`phys == virt`. The install engine therefore copies every blob into PMM pages
+before handing it to `blk_write`, which requires identity-mapped buffers
+(`blk.h`). The pristine kernel from `kimg_get()` is already a low physical
+address and is written in place.
+
+**The deny arm must not be able to write.** The ring-3 probe on `smoke-part`
+calls NSI 105 with `disk_idx = 0` and a **deliberately wrong** confirmation
+string.
+
+- With the console check present, the answer is `-EPERM` (checked first).
+- With it removed (mutant M5), the answer is `-EINVAL` from the confirmation
+  check. No write is ever issued.
+- This matters because blk0 on `smoke-part` is `build/pradyos.img`, and QEMU
+  persists writes into that file. A mutant that could reach the writer would
+  corrupt the boot image for every later gate: OPEN-11's shape.
