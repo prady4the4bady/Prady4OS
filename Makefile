@@ -13,6 +13,11 @@ STAGE1_SRC := boot/mbr/boot.asm
 STAGE2_SRC := boot/stage2/stage2.asm
 STAGE1_BIN := build/stage1.bin
 STAGE2_BIN := build/stage2.bin
+# Defined HERE, not beside its rule: $(KERNEL_BIN) needs it as a prerequisite
+# (install_blobs.asm incbins it, DDR-1143), and make expands a prerequisite
+# list when the rule is read. Defined later it expanded EMPTY, so a clean CI
+# checkout linked the kernel before BOOTX64.EFI existed.
+UEFI_EFI   := build/BOOTX64.EFI
 IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
@@ -1147,7 +1152,8 @@ ahci-image:
 # ---- DDR-886 (Group 4 item 22): UEFI boot path ---------------------------
 # clang emits PE32+ directly and lld-link is already installed, so no EDK2 or
 # gnu-efi dependency is introduced (DDR-886 section 2). -Werror as everywhere.
-UEFI_EFI := build/BOOTX64.EFI
+# UEFI_EFI is defined near the top (with STAGE1_BIN): $(KERNEL_BIN) lists it
+# as a prerequisite, and make expands prerequisite lists when it reads the rule.
 ESP_IMG  := build/esp.img
 
 $(UEFI_EFI): boot/uefi/loader.c boot/uefi/efi.h

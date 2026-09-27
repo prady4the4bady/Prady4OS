@@ -965,3 +965,12 @@ The clean rebuild after M5–M8 returns `b6a48c178ab4f21b` bit-for-bit.
 - **One install layout only:** the §3 layout on one disk. No dual-boot, no resize, no existing-partition preservation. The confirmation string exists because `install` wipes the whole disk.
 - **Nothing about OPEN-2.** No open issue moves.
 - **The DDR-1150 ledger seed is NOT persisted by this installer.** `grep -i 'ledger\|seed'` over `install.c` and `prism.c` returns nothing. BUILD_TRACKER's *"key persistence … ride[s] on the DDR-1143 piece 5 installer"* therefore remains **open**. Pieces 4–6 give it a place to live (an SFS root that survives reboot); they do not write the seed there, and the boot-time `LOAD` is unbuilt.
+
+**Correction after push (CI red on `276d014`, `build` job):** `install_blobs.asm:25: incbin: unable to get length of file build/BOOTX64.EFI`.
+
+- **Cause.** `$(KERNEL_BIN)` lists `$(UEFI_EFI)` as a prerequisite, but `UEFI_EFI` was defined ~700 lines *after* that rule. make expands a prerequisite list when it reads the rule, so it expanded **empty**: `make -pn` showed zero `BOOTX64` prerequisites.
+- **Why the local runs missed it.** Every local build ran in a warm `build/`, where the file already existed. A warm build tree hides a missing prerequisite, and only a clean checkout shows one.
+- **Fix.** The definition moves up beside `STAGE1_BIN`/`STAGE2_BIN`.
+- **Verified on a clean detached worktree.**
+  - Old Makefile: rc=2 with the same error as CI.
+  - Fixed Makefile: rc=0, `b6a48c178ab4f21b` bit-for-bit, so the kernel is unchanged.
