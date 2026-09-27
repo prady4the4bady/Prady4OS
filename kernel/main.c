@@ -39,6 +39,7 @@
 #include "blk.h"
 #include "virtio_blk.h"
 #include "install/disk_info.h"   /* DDR-1143: install layout constants */
+#include "ledger.h"                /* DDR-1153: installed ledger seed */
 #include "virtio_gpu.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
@@ -1667,6 +1668,35 @@ static void part_selftest(cap_t cap) {
  *
  * Returns 1 when the installed root was selected (so fs_test_thread prints
  * the install mark after mounting it). */
+/* DDR-1153: load the install's ledger seed from P2 sector 1, kernel-side.
+ * The seed never enters a ring-3 buffer; the buffer is zeroed before return.
+ * The key is kept only if sha256(keygen(seed).pk) equals the stored digest. */
+static void ledger_seed_boot(uint64_t p2, uint8_t *buf) {
+    static const char hx[] = "0123456789abcdef";
+    if (blk_read(0, p2 + INST_SEED_LBA_OFF, buf, 1) != 0 ||
+        memcmp(buf, INST_SEED_MAGIC, 8) != 0 ||
+        ((uint32_t)buf[8] | ((uint32_t)buf[9] << 8) |
+         ((uint32_t)buf[10] << 16) | ((uint32_t)buf[11] << 24)) != INST_SEED_VER) {
+        kputs("[ledger] no seed\r\n");
+        memset(buf, 0, 512);
+        return;
+    }
+    int r = ledger_load_seed_verified(buf + INST_SEED_OFF, buf + INST_SEED_FP_OFF);
+    if (r == 0) {
+        char line[64] = "[ledger] loaded fp=";
+        unsigned n = 19;
+        for (unsigned i = 0; i < 8; i++) {
+            line[n++] = hx[buf[INST_SEED_FP_OFF + i] >> 4];
+            line[n++] = hx[buf[INST_SEED_FP_OFF + i] & 15];
+        }
+        line[n++] = '\r'; line[n++] = '\n'; line[n] = 0;
+        kputs(line);
+    } else {
+        kputs("[ledger] seed REFUSED\r\n");
+    }
+    memset(buf, 0, 512);
+}
+
 static int disk_root_select(void) {
     if (blk_count() != 1)
         return 0;
@@ -1698,6 +1728,7 @@ static int disk_root_select(void) {
                 kputs("[root] refused: unknown volume layout\r\n");
             } else {
                 installed = 1;
+                ledger_seed_boot(p2, (uint8_t *)(uintptr_t)pg);   /* DDR-1153 */
             }
         }
     }

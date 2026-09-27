@@ -1,6 +1,6 @@
 # DDR-1153 — The installer persists the ledger seed, and an installed boot reloads it
 
-**Status:** design, committed BEFORE the code (NON-NEGOTIABLE 5).
+**Status:** design committed BEFORE the code (NON-NEGOTIABLE 5, `a779eab`); **BUILT + GATED + M9–M12, §7.**
 **Date:** 2026-09-27.
 **Builds on:** DDR-1150 (the ledger key and `SYS_LEDGER`), and DDR-1143 pieces 4–6 (the installer and the P2 root).
 **Closes:** DDR-1150 §3.3's open item, *"key persistence rides on the installer"*. DDR-1143 §10.10 recorded that the installer, as built, does not write the seed.
@@ -87,3 +87,49 @@ The obvious arm, *"boot B prints loaded"*, is **vacuous by itself**. A kernel th
 - **No change to `SYS_LEDGER`'s ABI.**
 - `g_owner_seed`, the vault and AGS are untouched.
 - No open issue moves.
+
+## §7 Built, gated, mutation-checked (2026-09-27)
+
+**Code.**
+- `kernel/syscall/ledger.h` (new) exports three kernel-side calls:
+  - `ledger_new_seed`: the **one** seed source, `rng_bytes`, failing closed. `KEYGEN` now calls it too, so `smoke-ledger` arm E's constant-seed coverage transfers **by construction** (§5).
+  - `ledger_derive_pk`: derives the *target's* pk. It does not touch the held key.
+  - `ledger_load_seed_verified`: keeps the key only if SHA-256(pk) equals the stored digest. Otherwise it forgets the key and returns `-ETAMPER`; `ETAMPER`'s own definition is "record hash failed verification", so no new errno was added.
+- `install.c` `write_seed`:
+  - writes the §3 sector between the P2 header and the zeroed reserved LBAs;
+  - zeroes the seed, the sector and both staging buffers afterwards;
+  - prints the pk and `[install] ledger fp=` only after the whole install has succeeded.
+- `main.c` `ledger_seed_boot` runs inside `disk_root_select`'s installed branch, on the page it already holds, and zeroes that page before it is freed.
+
+**Gate.** `smoke-install`, extended; no new gate, so there are still 186. Clean kernel `1e94746ee8548cc6`, 1,474,954 B (+4,096). The clean run prints:
+
+```
+[install] arm K2 ok (printed pk fp=60410d1b089ae363)
+[install] arm K1 ok (seed -> pk fp=60410d1b089ae363, independent keygen)
+[install] arm B ok (bios, root=p2, mark=0fefec1fcb5f3862, ledger fp=60410d1b089ae363)
+[install] arm U ok (uefi, root=p2, mark=0fefec1fcb5f3862, ledger fp=60410d1b089ae363)
+[install] neg ok (foreign MBR: no root selection, no ledger key)
+[install] arm K5 ok (flipped seed byte -> REFUSED)
+```
+
+**One key, three independent derivations, agreeing:**
+1. the kernel's printed fingerprint;
+2. `ledger_verify.py` over the printed full pk;
+3. `mldsa_ref.py` over the seed bytes `dd`'d off the disk by the host, which is not the kernel's code.
+
+**Mutants.** Each fails exactly its predicted arm, on four distinct hashes:
+
+| Mutant | Hash | Result |
+|---|---|---|
+| M9 | `0212d9b7e1935a87` | K1: `keygen(seed) does not match the stored digest` |
+| M10 | `b1f7ead5135bd13c` | K3, arm B: no `loaded` |
+| M11 | `df904d86a1ae0d0e` | K3, and the boot printed `[ledger] no seed` as §5 predicted |
+| M12 | `bad06e9ab969a853` | K5: the corrupted image printed `[ledger] loaded fp=bc1646b8e94afac6`, **a key nobody published**. This is exactly the failure the digest check exists to refuse. |
+
+The revert returns `1e94746ee8548cc6` bit for bit, verified by rebuild.
+
+**A tooling trap, recorded.** The mutant script restored each file with `mv` from a backup, which keeps the **older** mtime. `kernel.bin`'s rule depends on source mtimes, so the first "revert" build printed *Nothing to be done* and left **M12's** hash in place. It was caught by hashing, then fixed by `touch` and a rebuild. The mutant runs themselves were sound: each mutation gives its file a fresh mtime, which recompiles every object from the then-restored sources. This is the §INV.10 family again. **Restore with `cp`, or `touch` afterwards; never trust `make` without a hash.**
+
+**Regression**, run with the hash pinned: hygiene ALL TEN; smoke-shell 5/5; `smoke-install`, `smoke-ledger`, `smoke-part`, `smoke-iso-userspace`, `smoke-iso-x86`, `smoke-uefi`, `smoke-blkmq`, `smoke-rqstress-liveness` and `smoke-blk-integrity` all rc=0.
+
+**§6 is unchanged.** It is not a defence against a reader of the disk, and the plaintext seed goes into the release notes verbatim.

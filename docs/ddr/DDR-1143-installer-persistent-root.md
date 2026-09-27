@@ -965,6 +965,7 @@ The clean rebuild after M5–M8 returns `b6a48c178ab4f21b` bit-for-bit.
 - **One install layout only:** the §3 layout on one disk. No dual-boot, no resize, no existing-partition preservation. The confirmation string exists because `install` wipes the whole disk.
 - **Nothing about OPEN-2.** No open issue moves.
 - **The DDR-1150 ledger seed is NOT persisted by this installer.** `grep -i 'ledger\|seed'` over `install.c` and `prism.c` returns nothing. BUILD_TRACKER's *"key persistence … ride[s] on the DDR-1143 piece 5 installer"* therefore remains **open**. Pieces 4–6 give it a place to live (an SFS root that survives reboot); they do not write the seed there, and the boot-time `LOAD` is unbuilt.
+  **Closed 2026-09-27 by DDR-1153:** the seed now goes to P2 sector 1 (outside the SFS), gated on `smoke-install` arms K1-K5.
 
 **Correction after push (CI red on `276d014`, `build` job):** `install_blobs.asm:25: incbin: unable to get length of file build/BOOTX64.EFI`.
 

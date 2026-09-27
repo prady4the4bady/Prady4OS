@@ -7309,3 +7309,10 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - **Kernel:** `kernel.bin` `b6a48c178ab4f21b`, 1,470,858 B (+20,480), headroom 102,006 B. 186 gates.
 - **Regression**, with the hash pinned: hygiene ALL TEN, smoke-shell 5/5, and install/part/iso-userspace/iso-x86/uefi/blkmq/rqstress-liveness/blk-integrity/ledger all rc=0.
 - **Not built:** encryption, TPM, escrow, and ledger-seed persistence.
+
+## 2026-09-27 — DDR-1153 (ledger seed persisted by the installer)
+- `SYS_INSTALL` generates the target's ML-DSA-44 seed kernel-side, through the same `ledger_new_seed` that KEYGEN uses, and writes it to P2 sector 1: `PRDYSEED` v1, then the seed, then sha256(pk). That sector is outside the SFS.
+- `disk_root_select` reloads the seed only if its pk matches the stored digest. Otherwise it prints `[ledger] seed REFUSED`.
+- Gate `smoke-install` gained arms K1–K5. M9, M10, M11 and M12 each fail their predicted arm.
+- **Kernel:** `kernel.bin` `1e94746ee8548cc6`, 1,474,954 B (+4,096), headroom 97,910 B. 186 gates.
+- **Regression**, with the hash pinned: hygiene ALL TEN; smoke-shell 5/5; install/ledger/part/iso-userspace/iso-x86/uefi/blkmq/rqstress-liveness/blk-integrity all rc=0.

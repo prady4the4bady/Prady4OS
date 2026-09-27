@@ -6693,4 +6693,12 @@ This implements operator decisions 1–3 (PR #17 comment 5845610518).
 - Found by the host readback: the ESP lacked the volume-label root entry that `fsck.fat` requires, now fixed.
 - kernel.bin 1,470,858 B (+20,480), headroom 102,006 B; 186 gates.
 - [DEFERRED: volume encryption (DDR-1144), TPM sealing (DDR-1145), recovery escrow (DDR-1146) — designs only]
-- [OPEN: DDR-1150 ledger-seed persistence + boot-time LOAD — the installer does not write the seed]
+- [DONE 2026-09-27 — DDR-1153: ledger seed persisted in P2 sector 1 by the installer, reloaded kernel-side on an installed boot; smoke-install K1-K5, M9-M12] (was: OPEN, the installer did not write the seed)
+
+### 2026-09-27 — DDR-1153: the installer persists the ledger seed; an installed boot reloads it
+
+- Seed in **P2 sector 1** (`PRDYSEED` v1 | seed | sha256(pk)), OUTSIDE the SFS: no VFS path names it and no syscall returns raw sectors. A file on the root was rejected -- every ELF holds `CAP_FS_READ` there, so an agent could read the seed and sign off-machine.
+- Generated kernel-side by `SYS_INSTALL` through the SAME `ledger_new_seed` KEYGEN uses (fails closed); it never reaches ring 3. The running system's key is untouched.
+- Installed boot: `disk_root_select` loads it only if sha256(keygen(seed).pk) matches the stored digest; else `[ledger] seed REFUSED` (`-ETAMPER`).
+- Gate: `smoke-install` arms K1-K5 (K1 host keygen via `mldsa_ref.py` over the `dd`'d seed, K2 `ledger_verify.py` fp of the printed pk, K3 BIOS+UEFI `loaded fp=`, K4 negative arm loads nothing, K5 one flipped seed byte -> REFUSED). M9/M10/M11/M12 each caught on its predicted arm. Kernel `1e94746ee8548cc6`, 1,474,954 B (+4,096).
+- Not claimed: no defence against a reader of the disk (plaintext, as the SFS is -- release notes verbatim); `LEDGER_LOAD` still has no ring-3 caller, deliberately.

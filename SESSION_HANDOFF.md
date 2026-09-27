@@ -14829,3 +14829,12 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   - The DDR-1150 ledger seed is NOT persisted by the installer.
   - DDR-1144/1145/1146 are designs only.
 - NEXT: watch CI on the push, then ledger-seed persistence onto the installed root. It needs its own DDR first.
+
+## CHECKPOINT 2026-09-27 — DDR-1153 built (ledger seed persistence)
+- The installer writes the DDR-1150 seed to P2 sector 1: `PRDYSEED` | ver | seed | sha256(pk), outside the SFS. It prints the pk plus `[install] ledger fp=`.
+- An installed boot reloads the seed kernel-side, only after the digest is verified. It prints `[ledger] loaded fp=`, `[ledger] seed REFUSED`, or `[ledger] no seed`.
+- smoke-install arms K1–K5 PASS. Mutants: M9 `0212d9b7e1935a87` fails K1; M10 `b1f7ead5135bd13c` fails K3; M11 `df904d86a1ae0d0e` fails K3 with `no seed`; M12 `bad06e9ab969a853` fails K5.
+- **Kernel:** `1e94746ee8548cc6`, 1,474,954 B. 186 gates.
+- **Rule paid for:** restoring a mutated file with `mv` keeps its older mtime, so `make` rebuilds nothing and the mutant's binary survives. Always hash; `touch` after restoring.
+- **Regression:** hygiene ALL TEN, and all 9 related gates rc=0 with the hash pinned (see build_status).
+- NEXT: push, then watch CI on PR #17.

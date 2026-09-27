@@ -40,4 +40,12 @@ static inline int disk_name_phys(const char *n) {
 #define INST_MIN_SECT    (INST_P2_LBA + 32768u)         /* 80 MiB */
 #define INST_VOL_MAGIC   "PRDYVOL1"
 #define INST_VOL_PLAINTEXT 0x1u   /* DDR-1144 replaces this with a crypt header */
+/* DDR-1153: the ledger seed, in P2 sector 1 -- OUTSIDE the SFS, so no VFS path
+ * reaches it. Layout: magic[8] | version u32 | seed[32] | sha256(pk)[32] | 0. */
+#define INST_SEED_LBA_OFF 1u
+#define INST_SEED_MAGIC   "PRDYSEED"
+#define INST_SEED_VER     1u
+#define INST_SEED_OFF     12u
+#define INST_SEED_FP_OFF  44u
+_Static_assert(INST_SEED_LBA_OFF < INST_P2_SFS_OFF, "seed sector must sit below the SFS");
 #define INST_MARK_PATH   "/INSTALLED.MARK"

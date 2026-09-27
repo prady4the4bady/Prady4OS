@@ -34,6 +34,11 @@
 #include "aether.h"
 #include "rng.h"
 #include "mldsa.h"
+#include "ledger.h"
+#include "crypto/sha256.h"
+
+_Static_assert(LEDGER_SEED_BYTES == MLDSA44_SEED_BYTES, "ledger.h seed size");
+_Static_assert(LEDGER_PK_BYTES == MLDSA44_PK_BYTES, "ledger.h pk size");
 
 #define LEDGER_KEYGEN  1
 #define LEDGER_LOAD    2
@@ -89,10 +94,57 @@ static int install_seed(const uint8_t seed[MLDSA44_SEED_BYTES]) {
     return 0;
 }
 
+/* The ONE seed source (DDR-1153 sec.5): KEYGEN and the installer share it. */
+int ledger_new_seed(uint8_t seed[LEDGER_SEED_BYTES]) {
+    return rng_bytes(seed, LEDGER_SEED_BYTES) < 0 ? -EIO : 0;   /* fails closed */
+}
+
+/* Derive a key for the INSTALL TARGET. The held key (g_have_key/g_pk/g_sk) is
+ * not touched: installing must not re-key the running system. */
+int ledger_derive_pk(const uint8_t seed[LEDGER_SEED_BYTES], uint8_t pk[LEDGER_PK_BYTES]) {
+    static uint8_t sk[MLDSA44_SK_BYTES];
+    spin_lock(&g_ledger_lock);
+    mldsa44_scratch *s = scratch_get(&g_kg_scratch, sizeof(mldsa44_scratch));
+    int r = -ENOMEM;
+    if (s) {
+        uint8_t sd[MLDSA44_SEED_BYTES];
+        memcpy(sd, seed, sizeof sd);
+        mldsa44_keygen(sd, pk, sk, s);
+        memset(sd, 0, sizeof sd);
+        memset(sk, 0, sizeof sk);
+        r = 0;
+    }
+    spin_unlock(&g_ledger_lock);
+    return r;
+}
+
+/* Load the installed seed at boot (DDR-1153 sec.2). The key is kept ONLY if
+ * sha256(keygen(seed).pk) equals the digest the installer stored beside it; a
+ * seed that no longer produces its recorded key -- a torn or edited sector --
+ * would sign under a key nobody published, so it is refused and forgotten. */
+int ledger_load_seed_verified(const uint8_t seed[LEDGER_SEED_BYTES],
+                              const uint8_t fp[32]) {
+    uint8_t got[32];
+    spin_lock(&g_ledger_lock);
+    int r = g_have_key ? -EEXIST : install_seed(seed);
+    if (r == 0) {
+        sha256(g_pk, MLDSA44_PK_BYTES, got);
+        if (memcmp(got, fp, 32) != 0) {
+            g_have_key = 0;
+            memset(g_seed, 0, sizeof g_seed);
+            memset(g_sk, 0, sizeof g_sk);
+            memset(g_pk, 0, sizeof g_pk);
+            r = -ETAMPER;           /* stored digest does not match */
+        }
+    }
+    spin_unlock(&g_ledger_lock);
+    return r;
+}
+
 static long ledger_keygen(long ubuf, long ulen) {
     if ((unsigned long)ulen < MLDSA44_SEED_BYTES) return -EINVAL;
     uint8_t seed[MLDSA44_SEED_BYTES];
-    if (rng_bytes(seed, sizeof seed) < 0) return -EIO;  /* fails closed */
+    if (ledger_new_seed(seed) < 0) return -EIO;         /* fails closed */
     spin_lock(&g_ledger_lock);
     int r = g_have_key ? -EEXIST : install_seed(seed);
     spin_unlock(&g_ledger_lock);

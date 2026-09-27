@@ -288,6 +288,10 @@ the gate.
 
 - **No install produces a key yet.** The probe stands in for DDR-1143 piece 5,
   and `LEDGER_LOAD` has no caller.
+  **Superseded 2026-09-27 by DDR-1153:** the installer now generates the
+  target's key kernel-side and persists its seed in P2 sector 1, and an
+  installed boot reloads it kernel-side (verified against a stored pk digest).
+  `LEDGER_LOAD` still has no ring-3 caller, deliberately -- DDR-1153 §2.
 - **The published-pk half is a deployment property, not a gate one.** The gate
   proves the signatures are sound and bound to the chain under the pk *the
   capture printed*. `ledger_verify.py --pk <file>` is the operator's path, and

@@ -21,6 +21,17 @@
 #   U       boot 2 again, under OVMF: [uefi] handoff plus the same three.
 #   neg     a copy of pradyos.img alone (an MBR WITHOUT 'PRDI'): no
 #           [root] disk, and no blank-disk widening either.
+#
+# DDR-1153 (the ledger seed in P2 sector 1) adds five arms:
+#   K1 host  P2 sector 1 is PRDYSEED v1; the seed, re-derived by
+#            tools/ci/mldsa_ref.py (NOT the kernel's code), gives a pk whose
+#            sha256 equals BOTH the stored digest and boot 1's `ledger fp=`.
+#   K2 host  ledger_verify.py's fp of the full pk boot 1 printed == that fp.
+#   K3       arms B and U print `[ledger] loaded fp=` equal to boot 1's fp.
+#   K4       the negative arm prints no `[ledger] loaded`.
+#   K5       a copy of the installed disk with ONE seed byte flipped by the
+#            host prints `[ledger] seed REFUSED` -- the only arm proving the
+#            digest check exists (a kernel that skips it prints `loaded`).
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 D=build/gatelogs/install
@@ -84,6 +95,11 @@ grep -aqE 'install: disk 0 virtio-blk 128 MiB phys blank' "$L1" || fail "boot 1:
 N=$(grep -aoE '\[install\] ok nonce=[0-9a-f]{16}' "$L1" | head -1 | sed 's/.*=//')
 [ -n "$N" ] || { tail -20 "$L1"; fail "boot 1: no [install] ok nonce="; }
 echo "[install] boot 1 ok nonce=$N"
+FP=$(grep -aoE '\[install\] ledger fp=[0-9a-f]{16}' "$L1" | head -1 | sed 's/.*=//')
+[ -n "$FP" ] || fail "boot 1: no [install] ledger fp="
+K2=$(python3 tools/ci/ledger_verify.py "$L1" fp) || fail "arm K2: ledger_verify could not read the printed pk"
+[ "$K2" = "$FP" ] || fail "arm K2: printed pk fp=$K2 is not the printed ledger fp=$FP"
+echo "[install] arm K2 ok (printed pk fp=$FP)"
 
 # ---- host readback ---------------------------------------------------------
 python3 - "$DISK" <<'PY' || fail "host readback"
@@ -109,6 +125,27 @@ chk('p2hdr', h[:8] == b'PRDYVOL1' and struct.unpack('<III', h[8:20]) == (1, 1, 8
 open('build/gatelogs/install/esp.img', 'wb').write(d[4096 * 512:(4096 + 131072) * 512])
 sys.exit(0 if ok else 1)
 PY
+
+# ---- K1: the persisted seed, re-derived OFF the machine ----------------------
+python3 - "$DISK" "$FP" <<'PY' || fail "arm K1"
+import sys, struct, hashlib
+sys.path.insert(0, 'tools/ci')
+from mldsa_ref import keygen
+d = open(sys.argv[1], 'rb').read()
+sec = d[(135168 + 1) * 512:(135168 + 2) * 512]
+if sec[:8] != b'PRDYSEED' or struct.unpack('<I', sec[8:12])[0] != 1:
+    sys.exit('[install] arm K1 FAIL: P2 sector 1 is not PRDYSEED v1')
+seed, dig = sec[12:44], sec[44:76]
+if any(sec[76:]):
+    sys.exit('[install] arm K1 FAIL: sector 1 tail is not zero')
+pk, _ = keygen(seed)
+h = hashlib.sha256(pk).digest()
+if h != dig:
+    sys.exit('[install] arm K1 FAIL: keygen(seed) does not match the stored digest')
+if h.hex()[:16] != sys.argv[2]:
+    sys.exit(f'[install] arm K1 FAIL: persisted key {h.hex()[:16]} is not the printed fp {sys.argv[2]}')
+print(f'[install] arm K1 ok (seed -> pk fp={h.hex()[:16]}, independent keygen)')
+PY
 fsck.fat -n "$D/esp.img" >/dev/null 2>&1 || fail "host: fsck.fat rejects the ESP"
 rm -f "$D/k.out" "$D/e.out"
 MTOOLS_SKIP_CHECK=1 mcopy -o -i "$D/esp.img" ::/KERNEL.BIN "$D/k.out" || fail "host: no ::/KERNEL.BIN"
@@ -127,7 +164,8 @@ grep -aqF '[root] disk p2 lba=135168' "$LB" || fail "arm B: no [root] disk"
 grep -aqF '[ramdisk] formatted SFS' "$LB" && fail "arm B: took the live ramdisk root"
 grep -aqF "[install] mark nonce=$N" "$LB" || { grep -a 'mark' "$LB"; fail "arm B/P: mark is not boot 1's nonce $N"; }
 grep -aqF 'PRISM_READY' "$LB" || fail "arm B: PRISM never started from the installed root"
-echo "[install] arm B ok (bios, root=p2, mark=$N)"
+grep -aqF "[ledger] loaded fp=$FP" "$LB" || { grep -a '\[ledger\]' "$LB"; fail "arm B/K3: did not load the installed ledger key $FP"; }
+echo "[install] arm B ok (bios, root=p2, mark=$N, ledger fp=$FP)"
 
 # ---- boot 2, UEFI ----------------------------------------------------------
 [ -f "$OVMF_CODE" ] && [ -f "$OVMF_VARS_SRC" ] || fail "OVMF not installed"
@@ -144,7 +182,8 @@ grep -aqF '[kimg] src=uefi' "$LU" || fail "arm U: no [kimg] src=uefi"
 grep -aqF '[root] disk p2 lba=135168' "$LU" || fail "arm U: no [root] disk"
 grep -aqF '[ramdisk] formatted SFS' "$LU" && fail "arm U: took the live ramdisk root"
 grep -aqF "[install] mark nonce=$N" "$LU" || fail "arm U/P: mark is not boot 1's nonce $N"
-echo "[install] arm U ok (uefi, root=p2, mark=$N)"
+grep -aqF "[ledger] loaded fp=$FP" "$LU" || fail "arm U/K3: did not load the installed ledger key $FP"
+echo "[install] arm U ok (uefi, root=p2, mark=$N, ledger fp=$FP)"
 
 # ---- negative --------------------------------------------------------------
 cp build/pradyos.img "$D/neg.img"          # a COPY: blk_test_thread writes LBA 4095
@@ -155,5 +194,23 @@ qemu_wait "$LN" 120 "[fs] no mountable filesystem found" -- \
 grep -aqF 'NEXUS KERNEL OK' "$LN" || fail "neg: kernel did not boot"
 grep -aqF '[root] disk' "$LN" && fail "neg: a disk without PRDI was selected as root"
 grep -aqF 'blank disk blk0' "$LN" && fail "neg: a non-blank disk took the blank-disk widening"
-echo "[install] neg ok (foreign MBR: no root selection)"
-echo "[install] PASS nonce=$N"
+grep -aqF '[ledger] loaded' "$LN" && fail "neg/K4: loaded a ledger key from a disk that is not installed"
+echo "[install] neg ok (foreign MBR: no root selection, no ledger key)"
+
+# ---- K5: a flipped seed byte must be REFUSED ----------------------------------
+cp "$DISK" "$D/bad.img"
+python3 - "$D/bad.img" <<'PY' || fail "arm K5: could not corrupt the copy"
+import sys
+f = open(sys.argv[1], 'r+b')
+f.seek((135168 + 1) * 512 + 12 + 5)
+b = f.read(1); f.seek(-1, 1); f.write(bytes([b[0] ^ 0x01])); f.close()
+PY
+LK=$D/bad.log
+qemu_wait "$LK" 180 "[root] disk p2" -- \
+    -machine q35 -drive "file=$D/bad.img,format=raw,if=none,id=d0" \
+    -device virtio-blk-pci,drive=d0,bootindex=0 -device virtio-rng-pci
+grep -aqF '[ledger] seed REFUSED' "$LK" || { grep -a '\[ledger\]\|\[root\]' "$LK"; fail "arm K5: a corrupted seed was not refused"; }
+grep -aqF '[ledger] loaded' "$LK" && fail "arm K5: a corrupted seed was loaded"
+echo "[install] arm K5 ok (flipped seed byte -> REFUSED)"
+rm -f "$D/bad.img"
+echo "[install] PASS nonce=$N ledger fp=$FP"

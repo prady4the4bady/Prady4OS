@@ -36,6 +36,8 @@
 #include "fs/vfs/vfs.h"
 #include "fs/sfs/sfs.h"
 #include "disk_info.h"
+#include "ledger.h"
+#include "crypto/sha256.h"
 
 extern const unsigned char inst_stage1[], inst_stage1_end[];
 extern const unsigned char inst_stage2[], inst_stage2_end[];
@@ -189,6 +191,61 @@ static void hex16(char out[17], uint64_t v) {
     out[16] = 0;
 }
 
+/* DDR-1153: a fresh ledger seed for the TARGET, written to P2 sector 1 with
+ * sha256(keygen(seed).pk) beside it. The running system's own key is not
+ * touched. g_seed_pk keeps the pk so sys_install can print it once, after the
+ * whole install has succeeded. */
+static uint8_t g_seed_pk[LEDGER_PK_BYTES];
+static uint8_t g_seed_fp[32];
+
+static int write_seed(struct ictx *c) {
+    static uint8_t sec[SEC];
+    uint8_t seed[LEDGER_SEED_BYTES];
+    if (ledger_new_seed(seed) != 0) {
+        kputs("[install] refused: no entropy for the ledger seed\r\n");
+        return -EIO;
+    }
+    int rc = ledger_derive_pk(seed, g_seed_pk);
+    if (rc == 0) {
+        sha256(g_seed_pk, LEDGER_PK_BYTES, g_seed_fp);
+        memset(sec, 0, sizeof sec);
+        memcpy(sec, INST_SEED_MAGIC, 8);
+        put32(sec + 8, INST_SEED_VER);
+        memcpy(sec + INST_SEED_OFF, seed, LEDGER_SEED_BYTES);
+        memcpy(sec + INST_SEED_FP_OFF, g_seed_fp, 32);
+        rc = wbytes(c, INST_P2_LBA + INST_SEED_LBA_OFF, sec, SEC);
+    } else {
+        kputs("[install] ledger keygen FAILED\r\n");
+    }
+    /* The seed exists only on the target disk from here on. */
+    memset(seed, 0, sizeof seed);
+    memset(sec, 0, sizeof sec);
+    memset(c->w, 0, SEC);
+    memset(c->r, 0, SEC);
+    return rc;
+}
+
+/* The pk, once, in ledgertest's chunk format so ledger_verify.py reads it
+ * unchanged: this is what the operator records off the machine (DDR-1150). */
+static void print_seed_pk(void) {
+    static const char hx[] = "0123456789ABCDEF";
+    for (unsigned off = 0, i = 0; off < LEDGER_PK_BYTES; off += 64, i++) {
+        kline k; kline_init(&k);
+        kline_s(&k, "PRADYOS_LEDGER_PK n=0 i="); kline_d(&k, i); kline_c(&k, ' ');
+        for (unsigned j = off; j < LEDGER_PK_BYTES && j < off + 64; j++) {
+            kline_c(&k, hx[g_seed_pk[j] >> 4]); kline_c(&k, hx[g_seed_pk[j] & 15]);
+        }
+        kline_c(&k, '\r'); kline_c(&k, '\n');
+        kline_emit(&k);
+    }
+    kline k; kline_init(&k);
+    kline_s(&k, "[install] ledger fp=");
+    static const char lx[] = "0123456789abcdef";    /* matches hashlib hexdigest() */
+    for (unsigned j = 0; j < 8; j++) { kline_c(&k, lx[g_seed_fp[j] >> 4]); kline_c(&k, lx[g_seed_fp[j] & 15]); }
+    kline_c(&k, '\r'); kline_c(&k, '\n');
+    kline_emit(&k);
+}
+
 /* P2: header, then SFS on a partition sub-device, then the mark -- written,
  * unmounted, remounted and read back. */
 static int write_p2(struct ictx *c, uint64_t p2len, uint64_t nonce, cap_t cap) {
@@ -199,7 +256,9 @@ static int write_p2(struct ictx *c, uint64_t p2len, uint64_t nonce, cap_t cap) {
     put32(h + 12, INST_VOL_PLAINTEXT);        /* flags: NOT encrypted, and says so */
     put32(h + 16, INST_P2_SFS_OFF);           /* SFS offset, sectors */
     int rc = wbytes(c, INST_P2_LBA, h, SEC);
-    if (!rc) rc = wbytes(c, INST_P2_LBA + 1, 0, (INST_P2_SFS_OFF - 1) * SEC);
+    if (!rc) rc = write_seed(c);
+    if (!rc) rc = wbytes(c, INST_P2_LBA + INST_SEED_LBA_OFF + 1, 0,
+                         (INST_P2_SFS_OFF - INST_SEED_LBA_OFF - 1) * SEC);
     if (rc) return rc;
 
     int pi = blk_part_create(c->dev, INST_P2_LBA + INST_P2_SFS_OFF, p2len - INST_P2_SFS_OFF);
@@ -334,6 +393,7 @@ static long sys_install(long a1, long a2, long a3, long a4, long a5, long a6) {
     }
     char nh[17];
     hex16(nh, nonce);
+    print_seed_pk();
     kputs("[install] ok nonce="); kputs(nh); kputs("\r\n");
     if (a3 && copyout((void __user *)a3, &nonce, sizeof nonce) < 0)
         return -EFAULT;
