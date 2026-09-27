@@ -3367,7 +3367,7 @@ smoke-superkey: $(IMG) fat-image sfs-image
 	@seq=$$(grep -ao 'PRADYOS_MODE_CONFIRM [a-z]* to=[01]\|PRADYOS_SUPERKEY_TOGGLE from=[01] to=[01]' build/superkey.log | head -6 | tr '\n' '|'); \
 	 a=$$(printf '%s' "$$seq" | sed -n 's/^PRADYOS_MODE_CONFIRM pending to=\([01]\)|.*/\1/p'); b=$$((1 - $${a:-0})); \
 	 want="PRADYOS_MODE_CONFIRM pending to=$$a|PRADYOS_SUPERKEY_TOGGLE from=$$b to=$$a|PRADYOS_MODE_CONFIRM pending to=$$b|PRADYOS_MODE_CONFIRM cancel to=$$b|PRADYOS_MODE_CONFIRM pending to=$$b|PRADYOS_SUPERKEY_TOGGLE from=$$a to=$$b|"; \
-	 [ "$$seq" = "$$want" ] || { echo "[superkey] FAIL — arm D: confirm sequence"; echo "  got:  $$seq"; echo "  want: $$want"; exit 1; }
+	 [ "$$seq" = "$$want" ] || { echo "[superkey] FAIL — arm D: confirm sequence"; echo "  got:  $$seq"; echo "  want: $$want"; echo "  cancels (with reason, DDR-1152):"; grep -a "PRADYOS_MODE_CONFIRM cancel" build/superkey.log | head -6 | sed "s/^/    /"; exit 1; }
 	@grep -qa "PRADYOS_MODE_AUDIT found=1 prev=0 new=1" build/superkey.log || { echo "[superkey] FAIL — arm E: no kernel AR_MODE_SET record for 0->1"; grep -a MODE_AUDIT build/superkey.log | head; exit 1; }
 	@grep -qa "PRADYOS_MODE_AUDIT found=1 prev=1 new=0" build/superkey.log || { echo "[superkey] FAIL — arm E: no kernel AR_MODE_SET record for 1->0"; grep -a MODE_AUDIT build/superkey.log | head; exit 1; }
 	@python3 tools/ui/theme_check.py build/superkey.log modes

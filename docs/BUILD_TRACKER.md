@@ -6648,3 +6648,35 @@ This implements operator decisions 1–3 (PR #17 comment 5845610518).
 - Cost: SIGN holds IF masked for ~0.2–0.9 s of emulated time (sign_tsc 4.4e8–1.85e9 vs a ~1.3e5 syscall baseline). Not exonerated for OPEN-2; an IF-enabled signing window is recommended and not built.
 - kernel.bin `c76cf7a78450ccdb`, 1,450,378 B / 122,486 B headroom (+69,632 B); 185 gates.
 - [DEFERRED: key persistence and boot-time LOAD — ride on the DDR-1143 piece 5 installer]
+
+## 2026-09-27 — DDR-1151 MEASURED + DDR-1152 (shard-8 superkey red fixed)
+
+**DDR-1151: forced double-dispatch signature catalogue (OPEN-2 / OPEN-1 route 1).**
+- Instrument: `OPEN2_FORCE_DD=<spins>` restores DDR-1139's duplicate push and removes fixes (b)/(c); `OPEN2_FORCE_DD_KEEPCAS=1` keeps (c) as the control. Both default to 0, and the product build is bit-identical.
+- Campaigns, one QEMU at a time, hashes pinned:
+  - spin 2000, mutant `ea27072ca1c776e4`: 24/24 red.
+  - spin 200, mutant `bc188eff8ec007a1`: 6/6 red.
+  - control `26b30a1517fa28b8`: 2 of 12 red.
+- Seven historical signature families are reachable from the fixed mechanism, among them:
+  - the consumed-frame `[schedcheck]` with three exact witnesses;
+  - `disp−saves` of +1, +2 and +3, all at `rq_on=0`;
+  - DDR-1099's TF `#DB`;
+  - DDR-1019's panic-loser halt;
+  - DDR-1010's `F000:FF53` frame;
+  - a whole-machine silent stop, which is route 1's shape.
+- Not reproduced:
+  - U1 (`cap.c` `#GP`): zero in 30 boots;
+  - four `ret` classes.
+- Route 1 is consistent with this mechanism, not attributed to it.
+- The control refuted "the CAS alone suffices": a stale token outlived thread exit and resumed a zombie at `sched_exit+0x1b0`. So fix (a) is load-bearing on its own.
+- No product change. Tools: `tools/ci/dd_campaign.sh` (now requires `DDOUT`) and `tools/ci/dd_analyze.sh`.
+
+**DDR-1152: compositor key rings drained out of order. FIXED + M1 two-sided.**
+- Cause: the event ring was drained 16 per iteration against a full ASCII drain. After the first mode-commit render queued the rest of the injector's rounds, the plain `m` keys (DDR-707 direct path, each doing a mode set and ~12 s of renders) ran before the Enter answering an armed Super+M. That Enter then expired. This is the shard-8 `smoke-superkey` arm-D red on `dfb1179`, in both suites.
+- Fix: drain `SYS_KEY_POLL` to empty before the ASCII ring. Arm D's failure print now shows `reason=`.
+- M1 (`MODE_CONFIRM_SECS=1`):
+  - pre-fix `236a9d08b63a163e`: FAIL, `reason=expired`;
+  - fixed `fbf49a911314a705`: PASS.
+- Shipped `1915cdc6f501bb17`, 1,450,378 B (size unchanged).
+- Regression all `rc=0`: superkey, compositor, modkeys, alttab, ctrlaltt, and smoke-shell 5/5.
+- [DEFERRED: the DDR-707 plain s/m unconfirmed mode keys bypass DDR-1147's confirmation. Recorded; changing them changes smoke-compositor's contract.]

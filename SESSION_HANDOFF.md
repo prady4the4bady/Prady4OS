@@ -14789,3 +14789,19 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   forge); key PERSISTENCE arrives with DDR-1143 piece 5 (installer). Route 1
   (hardware root) stays deferred.
 - NEXT: task #11 installer (SYS_INSTALL NSI 105, persisted key + boot-time LOAD).
+
+## CHECKPOINT 2026-09-27 — DDR-1151 measured, DDR-1152 fixed
+
+- **DDR-1151 MEASURED** (see §7/§8 of the DDR):
+  - The fixed OPEN-2 mechanism reproduces seven historical signature families.
+  - U1, U2 and U3 remain unattributed; the missing evidence is named per item in §8.
+  - OPEN-1 route 1 is consistent with the mechanism, not attributed to it.
+  - The control showed fix (a) is load-bearing on its own (stale token → zombie resumed at `sched_exit+0x1b0`).
+- **DDR-1152 FIXED**, the shard-8 red:
+  - The compositor now drains the key-event ring to empty before the ASCII ring.
+  - M1 is two-sided: the pre-fix loop FAILs with `reason=expired`; the fixed loop PASSes.
+- Shipped kernel `1915cdc6f501bb17`, 1,450,378 B, size unchanged.
+- DDR free range: DDR-1153+ (all four carriers updated).
+- NEXT:
+  - Watch CI on the new head and hunt 36270612820.
+  - Then task #11 (DDR-1143 pieces 4–6, the installer).

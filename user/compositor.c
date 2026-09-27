@@ -1559,113 +1559,122 @@ int main(void) {
         loopstamp("pre-keys");
         {
             struct key_ev kev[16];
-            long ne = nsi(SYS_KEY_POLL, (long)kev, 16, 0);
-            for (long i = 0; i < ne; i++) {
-                if (!kev[i].down)
-                    continue;
-                /* DDR-995: Alt+Tab cycles windows. DDR-720 bound this to a
-                 * BARE Tab on the byte stream, which meant no application on
-                 * this system could ever receive a Tab character — the branch
-                 * was unconditional and terminal, so it never reached the focus
-                 * routing below. The byte stream carries no modifier state, so
-                 * the chord could not be told from the keystroke until DDR-991
-                 * added this ring; DDR-992 then stopped a non-Shift chord from
-                 * emitting text at all, which makes the two cases disjoint at
-                 * the source rather than merely distinguishable here. */
-                if (kev[i].code == KEY_TAB && (kev[i].mods & KMOD_ALT)) {
-                    int low_id = -1;
-                    int low_z = 0x7FFFFFFF;
-                    for (long k = 0; k < ns; k++) {
-                        if (g_min_mask & (1u << surfs[k].id)) continue;   /* DDR-717 */
-                        if (surfs[k].z < low_z) { low_z = surfs[k].z; low_id = (int)surfs[k].id; }
-                    }
-                    if (low_id >= 0) {
-                        nsi(SYS_SURFACE_RAISE, low_id, 0, 0);
-                        printf("PRADYOS_WM_CYCLE id=%d\n", low_id);
-                        fflush(stdout);
-                        recompose_scene();
-                    }
-                }
-                /* DDR-1027: Ctrl+Alt+T launches a PRISM terminal window.
-                 * fork+execve, NOT SYS_SPAWN_AGENT: that is the AETHER roster
-                 * path and would consume a fixed roster slot, mint agent
-                 * capabilities, and make a terminal show up in
-                 * SYS_AGENT_ROSTER as an autonomous agent. A terminal is an
-                 * application; fork+execve is the door PRISM's own `run` uses.
-                 *
-                 * Read from the DDR-991 event ring for the reason DDR-995
-                 * records: the byte stream carries no modifier state. DDR-992
-                 * went further and stopped a non-Shift chord emitting text at
-                 * all, so Ctrl+Alt+T produces no 't' byte and nothing on this
-                 * system loses the letter t. */
-                if (kev[i].code == 't') {
-                    /* Reported for EVERY 't' press, chord or not, with the
-                     * modifier byte and whether it spawned. A gate that only
-                     * saw successful spawns could not tell "Ctrl+Alt+T works"
-                     * from "any T spawns a terminal" -- and it cannot recover
-                     * that from spawn COUNTS either, because input_inject.sh
-                     * replays its whole key list four times and the cap below
-                     * clamps the total. This line makes the discrimination
-                     * itself observable: a spawn=1 whose mods lack KMOD_CTRL is
-                     * the defect, named. */
-                    int spawned = 0;
-                    if ((kev[i].mods & KMOD_CTRL) && (kev[i].mods & KMOD_ALT)) {
-                        /* Bounded so a stuck key cannot fork the machine
-                         * flat. The gate does reach this cap: the injector
-                         * replays its list four times, and four Ctrl+Alt+T
-                         * presses are four terminals, which is what a user
-                         * pressing it four times should get. */
-                        if (g_terms < 4) {
-                            long tp = nsi(SYS_FORK, 0, 0, 0);
-                            if (tp == 0) {
-                                nsi(SYS_EXECVE, (long)"/TERM.ELF", 0, 0);
-                                nsi(SYS_EXIT, 127, 0, 0);
-                            }
-                            if (tp > 0) {
-                                g_terms++;
-                                spawned = 1;
-                                printf("PRADYOS_TERM_SPAWN pid=%ld n=%d\n", tp, g_terms);
-                                fflush(stdout);
-                            }
+            long ne;
+            /* DDR-1152: drain the event ring to EMPTY before the ASCII ring
+             * below. It was 16 events per iteration against a full ASCII drain,
+             * so once a render let the rings fill, the ASCII drain acted on
+             * keystrokes LATER than the last event handled here (a queued plain
+             * 'm' ran a mode set + full render before the Enter that preceded
+             * it, expiring an armed Super+M). Bounded by the 128-entry ring. */
+            do {
+                ne = nsi(SYS_KEY_POLL, (long)kev, 16, 0);
+                for (long i = 0; i < ne; i++) {
+                    if (!kev[i].down)
+                        continue;
+                    /* DDR-995: Alt+Tab cycles windows. DDR-720 bound this to a
+                     * BARE Tab on the byte stream, which meant no application on
+                     * this system could ever receive a Tab character — the branch
+                     * was unconditional and terminal, so it never reached the focus
+                     * routing below. The byte stream carries no modifier state, so
+                     * the chord could not be told from the keystroke until DDR-991
+                     * added this ring; DDR-992 then stopped a non-Shift chord from
+                     * emitting text at all, which makes the two cases disjoint at
+                     * the source rather than merely distinguishable here. */
+                    if (kev[i].code == KEY_TAB && (kev[i].mods & KMOD_ALT)) {
+                        int low_id = -1;
+                        int low_z = 0x7FFFFFFF;
+                        for (long k = 0; k < ns; k++) {
+                            if (g_min_mask & (1u << surfs[k].id)) continue;   /* DDR-717 */
+                            if (surfs[k].z < low_z) { low_z = surfs[k].z; low_id = (int)surfs[k].id; }
+                        }
+                        if (low_id >= 0) {
+                            nsi(SYS_SURFACE_RAISE, low_id, 0, 0);
+                            printf("PRADYOS_WM_CYCLE id=%d\n", low_id);
+                            fflush(stdout);
+                            recompose_scene();
                         }
                     }
-                    printf("PRADYOS_TERM_CHORD mods=%u spawn=%d\n",
-                           (unsigned)kev[i].mods, spawned);
-                    fflush(stdout);
-                }
-                /* DDR-1147 sec.1.5 (U1): Super+M ARMS a switch; Enter commits,
-                 * Esc (or any other key, or MODE_CONFIRM_SECS of wall time)
-                 * cancels. The mode decides whether agents auto-approve, so one
-                 * stray chord must not flip it. Modifier keys themselves are
-                 * ignored while pending -- releasing Super is not an answer. */
-                if (g_mode_pending >= 0 &&
-                    !(kev[i].code >= 0xA0u && kev[i].code <= 0xA3u)) {
-                    long now = nsi(SYS_CLOCK, 0, 0, 0);
-                    int pend = g_mode_pending;
-                    g_mode_pending = -1;
-                    if (now < g_mode_pending_at || now - g_mode_pending_at > MODE_CONFIRM_SECS) {
-                        printf("PRADYOS_MODE_CONFIRM cancel to=%d reason=expired\n", pend);
+                    /* DDR-1027: Ctrl+Alt+T launches a PRISM terminal window.
+                     * fork+execve, NOT SYS_SPAWN_AGENT: that is the AETHER roster
+                     * path and would consume a fixed roster slot, mint agent
+                     * capabilities, and make a terminal show up in
+                     * SYS_AGENT_ROSTER as an autonomous agent. A terminal is an
+                     * application; fork+execve is the door PRISM's own `run` uses.
+                     *
+                     * Read from the DDR-991 event ring for the reason DDR-995
+                     * records: the byte stream carries no modifier state. DDR-992
+                     * went further and stopped a non-Shift chord emitting text at
+                     * all, so Ctrl+Alt+T produces no 't' byte and nothing on this
+                     * system loses the letter t. */
+                    if (kev[i].code == 't') {
+                        /* Reported for EVERY 't' press, chord or not, with the
+                         * modifier byte and whether it spawned. A gate that only
+                         * saw successful spawns could not tell "Ctrl+Alt+T works"
+                         * from "any T spawns a terminal" -- and it cannot recover
+                         * that from spawn COUNTS either, because input_inject.sh
+                         * replays its whole key list four times and the cap below
+                         * clamps the total. This line makes the discrimination
+                         * itself observable: a spawn=1 whose mods lack KMOD_CTRL is
+                         * the defect, named. */
+                        int spawned = 0;
+                        if ((kev[i].mods & KMOD_CTRL) && (kev[i].mods & KMOD_ALT)) {
+                            /* Bounded so a stuck key cannot fork the machine
+                             * flat. The gate does reach this cap: the injector
+                             * replays its list four times, and four Ctrl+Alt+T
+                             * presses are four terminals, which is what a user
+                             * pressing it four times should get. */
+                            if (g_terms < 4) {
+                                long tp = nsi(SYS_FORK, 0, 0, 0);
+                                if (tp == 0) {
+                                    nsi(SYS_EXECVE, (long)"/TERM.ELF", 0, 0);
+                                    nsi(SYS_EXIT, 127, 0, 0);
+                                }
+                                if (tp > 0) {
+                                    g_terms++;
+                                    spawned = 1;
+                                    printf("PRADYOS_TERM_SPAWN pid=%ld n=%d\n", tp, g_terms);
+                                    fflush(stdout);
+                                }
+                            }
+                        }
+                        printf("PRADYOS_TERM_CHORD mods=%u spawn=%d\n",
+                               (unsigned)kev[i].mods, spawned);
                         fflush(stdout);
-                    } else if (kev[i].code == KEY_ENTER) {
-                        mode_commit(pend);
-                        continue;
-                    } else {
-                        printf("PRADYOS_MODE_CONFIRM cancel to=%d reason=%s\n", pend,
-                               kev[i].code == KEY_ESC ? "esc" : "key");
-                        fflush(stdout);
-                        if (kev[i].code == KEY_ESC)
+                    }
+                    /* DDR-1147 sec.1.5 (U1): Super+M ARMS a switch; Enter commits,
+                     * Esc (or any other key, or MODE_CONFIRM_SECS of wall time)
+                     * cancels. The mode decides whether agents auto-approve, so one
+                     * stray chord must not flip it. Modifier keys themselves are
+                     * ignored while pending -- releasing Super is not an answer. */
+                    if (g_mode_pending >= 0 &&
+                        !(kev[i].code >= 0xA0u && kev[i].code <= 0xA3u)) {
+                        long now = nsi(SYS_CLOCK, 0, 0, 0);
+                        int pend = g_mode_pending;
+                        g_mode_pending = -1;
+                        if (now < g_mode_pending_at || now - g_mode_pending_at > MODE_CONFIRM_SECS) {
+                            printf("PRADYOS_MODE_CONFIRM cancel to=%d reason=expired\n", pend);
+                            fflush(stdout);
+                        } else if (kev[i].code == KEY_ENTER) {
+                            mode_commit(pend);
                             continue;
+                        } else {
+                            printf("PRADYOS_MODE_CONFIRM cancel to=%d reason=%s\n", pend,
+                                   kev[i].code == KEY_ESC ? "esc" : "key");
+                            fflush(stdout);
+                            if (kev[i].code == KEY_ESC)
+                                continue;
+                        }
+                    }
+                    if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
+                        int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
+                        g_mode_pending = cur ? 0 : 1;
+                        g_mode_pending_at = nsi(SYS_CLOCK, 0, 0, 0);
+                        printf("PRADYOS_MODE_CONFIRM pending to=%d (Enter to switch to %s, Esc to cancel)\n",
+                               g_mode_pending, THEME_MODE_NAME[g_mode_pending]);
+                        fflush(stdout);
                     }
                 }
-                if (kev[i].code == 'm' && (kev[i].mods & KMOD_META)) {
-                    int cur = (int)nsi(SYS_GET_MODE, 0, 0, 0);
-                    g_mode_pending = cur ? 0 : 1;
-                    g_mode_pending_at = nsi(SYS_CLOCK, 0, 0, 0);
-                    printf("PRADYOS_MODE_CONFIRM pending to=%d (Enter to switch to %s, Esc to cancel)\n",
-                           g_mode_pending, THEME_MODE_NAME[g_mode_pending]);
-                    fflush(stdout);
-                }
-            }
+            } while (ne == 16);
         }
         long n = nsi(SYS_INPUT_POLL, (long)keys, (long)sizeof keys, 0);
         for (long i = 0; i < n; i++) {
