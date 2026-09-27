@@ -14805,3 +14805,15 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - NEXT:
   - Watch CI on the new head and hunt 36270612820.
   - Then task #11 (DDR-1143 pieces 4–6, the installer).
+
+## Check-in 2026-09-27 03:13 UTC (scheduled)
+- pradyos-ci on 801b5df (DDR-1152): push 36287827636 SUCCESS + pull_request 36287830444 SUCCESS.
+  Shard-8 smoke-superkey green on both suites. The github-advanced-security "dynamic" run failure is
+  the Copilot autofind agent's own job, not repo code.
+- open2-hunt 36270612820 (ref dfb1179, OPEN2_HUNT=32, lanes=20 runs=55, hunt kernel bca1e13d0355c750):
+  20/20 lanes success (this workflow's polarity is inverted: success = CLEAN). Lane 0's DONE line was READ:
+  runs=55 signal_runs=0 churn_runs=55. The other 19 DONE lines were NOT read, so "1,100 boots" rests on the
+  dispatch parameters (DDR-1134 sec.1's denominator honesty). This is consistent with DDR-1139 sec.8's
+  confirmation on a later tree. It names no new mechanism and does not bear on OPEN-1 route 1 (CI-only, a
+  different gate).
+- Next: task #11, DDR-1143 pieces 4-6.
