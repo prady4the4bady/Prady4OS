@@ -14846,3 +14846,9 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - The github-advanced-security "dynamic" red on the same SHA is GitHub's Copilot autofind CAPIError, already reported
   (comment 5758115691) and not counted toward §INV.15. No new comment.
 - Merge/promotion/tag remain operator decisions; v1.0.0 still held on OPEN-2.
+
+## CHECKPOINT 2026-09-27 12:25Z — d651ede (DDR-1153): 3/3 greens on one SHA
+- push 36306370813 success, pull_request 36306372997 success, workflow_dispatch 36316636027 success —
+  all three head_sha d651ede05a5a614c6f2656c77f4458601ae7f31f, all 10 shards each (§INV.15 satisfied).
+- 08645a3 (docs-only tip): push 36316672218 success; pull_request 36316675457 in flight.
+- Merge of PR #17 / main promotion / v1.0.0 tag remain OPERATOR decisions; tag still held on OPEN-2.
