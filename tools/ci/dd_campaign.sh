@@ -4,7 +4,7 @@
 set -u
 PIN="$1"; RUNS="$2"; shift 2
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-OUT=build/gatelogs/dd; mkdir -p "$OUT"
+OUT=build/gatelogs/dd/${DDOUT:?set DDOUT to a per-campaign subdir}; mkdir -p "$OUT"   # per-campaign dir: runs never overwrite another campaign's captures
 for g in "$@"; do
   for i in $(seq 1 "$RUNS"); do
     if pgrep -f "[q]emu-system-x86_64" >/dev/null; then echo "[dd] ABORT stray qemu"; exit 2; fi
