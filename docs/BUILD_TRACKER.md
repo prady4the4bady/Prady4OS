@@ -6680,3 +6680,17 @@ This implements operator decisions 1–3 (PR #17 comment 5845610518).
 - Shipped `1915cdc6f501bb17`, 1,450,378 B (size unchanged).
 - Regression all `rc=0`: superkey, compositor, modkeys, alttab, ctrlaltt, and smoke-shell 5/5.
 - [DEFERRED: the DDR-707 plain s/m unconfirmed mode keys bypass DDR-1147's confirmation. Recorded; changing them changes smoke-compositor's contract.]
+
+## DDR-1143 pieces 4–6 — installer + persistent root (2026-09-27)
+- `SYS_INSTALL` (NSI 105) is console-only and confirmation-string-gated. It writes the §3 layout: stage1+MBR, stage2, the pristine kernel, a FAT16 ESP carrying `BOOTX64.EFI` + `KERNEL.BIN`, and a P2 volume header (PLAINTEXT) followed by a formatted SFS. PRISM `install` lists disks and runs the install.
+- Root selection: a single blank disk is widened into the ISO topology. A disk whose P2 carries `PRDYVOL1` becomes the root at P2+8.
+- Gate `smoke-install` (shard 1, strict, ~27 s):
+  - install from the ISO;
+  - host readback of every byte class, including `fsck.fat` and a file compare;
+  - the installed disk then boots under BIOS **and** UEFI with root=p2 and boot 1's nonce;
+  - a negative arm on a foreign MBR.
+- Mutants M5–M8 are each caught by a different arm (DDR-1143 §10.10).
+- Found by the host readback: the ESP lacked the volume-label root entry that `fsck.fat` requires, now fixed.
+- kernel.bin 1,470,858 B (+20,480), headroom 102,006 B; 186 gates.
+- [DEFERRED: volume encryption (DDR-1144), TPM sealing (DDR-1145), recovery escrow (DDR-1146) — designs only]
+- [OPEN: DDR-1150 ledger-seed persistence + boot-time LOAD — the installer does not write the seed]

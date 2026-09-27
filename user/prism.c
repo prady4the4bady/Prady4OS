@@ -31,6 +31,8 @@
 #define SYS_GETDENTS 66     /* DDR-742: (path, index, name_buf) -> namelen | 0 | -errno */
 #define SYS_GETPROCS 67     /* DDR-743: (index, struct procinfo*) -> 1 | 0(end) | -errno */
 #define SYS_RENAME  95   /* DDR-956 */
+#define SYS_DISK_LIST 104   /* DDR-1143: (struct disk_info*, n) -> total count */
+#define SYS_INSTALL   105   /* DDR-1143: (idx, confirm, u64 *nonce) -> 0 | -errno */
 #define SYS_UNLINK   68     /* DDR-744: (path) -> 0 | -errno */
 #define O_WRONLY     0x1    /* DDR-745: touch open mode */
 #define O_CREAT      0x40
@@ -730,7 +732,38 @@ int main(void) {
         }
 
         if (!strcmp(cmd, "help")) {
-            printf("builtins: help echo cat run ls ps jobs fg kill wait source agent action audit setname touch rm mv uname date uptime dmesg free mode exit\n");
+            printf("builtins: help echo cat run ls ps jobs fg kill wait source agent action audit setname touch rm mv uname date uptime dmesg free mode install exit\n");
+        } else if (!strcmp(cmd, "install")) {                /* DDR-1143 */
+            /* `install` lists the disks; `install <idx> WIPE-<name><idx>`
+             * wipes one and lays the installed layout on it. The kernel checks
+             * the typed confirmation and that the caller is THIS shell (not a
+             * fork of it); the shell only relays. Static, not a local: see the
+             * `audit` builtin for the measured stack-window reason. */
+            static struct { char name[16]; unsigned long long sectors;
+                            unsigned flags, index; } di[16];
+            if (argc < 3) {
+                long n = nsi(SYS_DISK_LIST, (long)di, 16, 0);
+                if (n < 0) { fprintf(stderr, "install: disk list rc=%ld\n", n); }
+                for (long i = 0; i < n && i < 16; i++) {
+                    unsigned f = di[i].flags;
+                    printf("install: disk %u %s %llu MiB%s%s%s%s%s\n", di[i].index,
+                           di[i].name, di[i].sectors / 2048,
+                           (f & 1) ? " phys" : "", (f & 2) ? " ramdisk" : "",
+                           (f & 4) ? " part" : "", (f & 8) ? " blank" : "",
+                           (f & 16) ? " installed" : "");
+                }
+                printf("install: to wipe disk N type: install N WIPE-<name>N\n");
+            } else {
+                long idx = 0;
+                for (const char *p = argv[1]; *p >= '0' && *p <= '9'; p++)
+                    idx = idx * 10 + (*p - '0');
+                static unsigned long long nonce;
+                long r = nsi(SYS_INSTALL, idx, (long)argv[2], (long)&nonce);
+                if (r == 0)
+                    printf("install: done nonce=%016llx -- remove the install medium and reboot\n", nonce);
+                else
+                    fprintf(stderr, "install: refused rc=%ld\n", r);
+            }
         } else if (!strcmp(cmd, "mode")) {
             /* L7 (DDR-701): the Sovereign/Manual toggle binding. `mode [get]`
              * reads SYS_GET_MODE; `mode set sovereign|manual` attempts

@@ -7302,3 +7302,10 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - **Uncovered, measured:** QEMU 8.2 TCG cannot expose `ARCH_CAPABILITIES`, so the MSR-read branch never executes in CI.
 - **Kernel:** `kernel.bin` `467d51d14164149c`, 1,319,306 B. The size is unchanged.
 - **KPTI, retpoline, RSB refill:** not built. A post-tag series is recommended to the operator: IST and entry stacks first, then KPTI, then retpoline with RSB refill, each hunted against DDR-1139 §5. TCG cannot demonstrate the mitigation, and the change reaches the OPEN-2 paths. This is a recommendation, not a decision.
+
+## 2026-09-27 — DDR-1143 pieces 4–6 (installer + persistent root)
+- `SYS_INSTALL` (NSI 105), the FAT16 ESP, PRISM `install`, and blank-disk + P2-header root selection.
+- Gate `smoke-install` (shard 1, strict) passes: install from the ISO, host readback, then the installed disk boots alone under BIOS and UEFI with root=p2 and boot 1's nonce. Mutants M5–M8 are each caught on a different arm.
+- **Kernel:** `kernel.bin` `b6a48c178ab4f21b`, 1,470,858 B (+20,480), headroom 102,006 B. 186 gates.
+- **Regression**, with the hash pinned: hygiene ALL TEN, smoke-shell 5/5, and install/part/iso-userspace/iso-x86/uefi/blkmq/rqstress-liveness/blk-integrity/ledger all rc=0.
+- **Not built:** encryption, TPM, escrow, and ledger-seed persistence.

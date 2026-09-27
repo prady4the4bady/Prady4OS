@@ -905,3 +905,63 @@ string.
 - This matters because blk0 on `smoke-part` is `build/pradyos.img`, and QEMU
   persists writes into that file. A mutant that could reach the writer would
   corrupt the boot image for every later gate: OPEN-11's shape.
+
+### §10.10 Pieces 4–6: implementation record (2026-09-27)
+
+**Shipped.**
+
+- `SYS_INSTALL` (NSI 105, the number §10.6 reserved) in `kernel/install/install.c`.
+- The FAT16 ESP builder.
+- PRISM's `install` builtin.
+- The blank-disk widening and P2-header root selection in `kernel/main.c`.
+- The stage1/stage2/`BOOTX64.EFI` blobs, embedded via `arch/x86_64/install_blobs.asm`.
+- `smoke-install`, on shard 1, strict: `tools/qemu_runner/install_test.sh`.
+
+**The gate has three stages.**
+
+1. **Boot 1 installs.** It boots the live ISO with one blank 128 MiB virtio disk. PRISM runs `install` (list) and then `install 0 WIPE-virtio-blk0`.
+2. **The host reads the disk back.** It checks every byte class:
+   - stage1, the 0xAA55 signature and the P1/P2 entries;
+   - stage2, the pristine kernel and the P2 header;
+   - the ESP, which must pass `fsck.fat -n` and must hold `BOOTX64.EFI` and `KERNEL.BIN` byte-identical to the build.
+3. **The installed disk boots alone.** Arm B boots it under BIOS and arm U under OVMF UEFI. On both, the root must be P2 and must carry boot 1's nonce, so the root is the disk that was installed, not a fresh format. A negative arm boots a foreign MBR, and it must select no installed root.
+
+**Two findings made while building it.**
+
+- **fsck.fat rejected the first ESP.** It exited 1 with *"Label in boot sector is 'PRADYOSESP', but there is no volume label in root directory"*. A FAT boot-sector label needs a matching `ATTR_VOLUME_ID` (0x08) root entry, and firmware never checks for it, so no boot would ever have shown the problem. Only the host `fsck` in the readback caught it. The installer now writes that entry.
+- **Boot 1 cost 389 s, and the fix brought it to 27 s.** PRISM's `exit` does not power the guest off, so boot 1 idled until its 360 s `timeout`. The feeder now kills QEMU once `install: done` or `install: refused` prints. The capture is already complete by then, so nothing is lost.
+
+**Mutants.** Each mutant makes one change. They were run sequentially on the clean base `b6a48c178ab4f21b`, and each is caught by a **different** arm:
+
+| Mutant | Change | kernel | Caught by |
+|---|---|---|---|
+| M5 | console-pid check removed (`if (0)`) | `093880b8c1eac4af` | `smoke-part` deny arm: `install=-22` instead of `-1`. The confirmation check still refused, so no write was issued (§10.9) |
+| M6 | blank-disk widening forced off (`if (1)`) | `ef3dc1bbb4ff7467` | boot 1: `blank-disk widening did not fire` |
+| M7 | `KERNEL.BIN` dirent size off by one | `7d40231fc4099b58` | host readback: `ESP KERNEL.BIN differs from build/kernel.bin` |
+| M8 | P2 offset check inverted | `2308f3aa9224fd6d` | arm B: `no [root] disk` |
+
+**§10.6's open question about M7 is decided.** It planned M7 as *"readback verification skipped plus a corrupted write, possibly uncovered"*. What was built is a corruption the host compare catches. The in-kernel readback-then-`-EIO` path is **not** mutation-covered, and I am saying so rather than counting it as covered.
+
+The clean rebuild after M5–M8 returns `b6a48c178ab4f21b` bit-for-bit.
+
+**Regression run** (build/gatelogs/regress.log). The kernel hash was pinned before the run and re-checked after every gate:
+
+- `hygiene_check.sh`: ALL TEN passed.
+- `smoke-shell`: 5/5.
+- All rc=0: `smoke-install`, `smoke-part` (which carries the `SYS_DISK_LIST` probe), `smoke-iso-userspace`, `smoke-iso-x86`, `smoke-uefi`, `smoke-blkmq`, `smoke-rqstress-liveness`, `smoke-blk-integrity`, `smoke-ledger`.
+
+**Carriers.**
+
+- `kernel.bin` grows from 1,450,378 B to **1,470,858 B** (+20,480 B for the three embedded blobs and the engine). Headroom is now **102,006 B**, recomputed in the same edit.
+- Gates: **186**.
+- NSI: 105 shipped, so the next free number is 107.
+- `GLOBAL_FORBIDDEN` is unchanged at 77.
+
+**Not claimed.**
+
+- **No encryption.** P2 is written plaintext (`INST_VOL_PLAINTEXT`). DDR-1144's encrypted-volume path is not built.
+- **No TPM sealing and no recovery escrow** (DDR-1145/1146).
+- **No physical hardware.** Every result comes from QEMU virtio-blk. AHCI and NVMe targets are listed but not install-tested (§7).
+- **One install layout only:** the §3 layout on one disk. No dual-boot, no resize, no existing-partition preservation. The confirmation string exists because `install` wipes the whole disk.
+- **Nothing about OPEN-2.** No open issue moves.
+- **The DDR-1150 ledger seed is NOT persisted by this installer.** `grep -i 'ledger\|seed'` over `install.c` and `prism.c` returns nothing. BUILD_TRACKER's *"key persistence … ride[s] on the DDR-1143 piece 5 installer"* therefore remains **open**. Pieces 4–6 give it a place to live (an SFS root that survives reboot); they do not write the seed there, and the boot-time `LOAD` is unbuilt.

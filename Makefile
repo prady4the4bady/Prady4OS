@@ -18,7 +18,7 @@ IMG        := build/pradyos.img
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
 KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm arch/x86_64/fast_memcpy.asm arch/x86_64/fast_memset.asm arch/x86_64/ipc_copy.asm \
                arch/x86_64/context.asm arch/x86_64/syscall_entry.asm \
-               arch/x86_64/usermode.asm arch/x86_64/user_image.asm \
+               arch/x86_64/usermode.asm arch/x86_64/user_image.asm arch/x86_64/install_blobs.asm \
                arch/x86_64/ap_boot.asm
 # Freestanding ring-3 test programs (Phase 5a): each linked as its own static
 # ELF and embedded into the kernel via arch/x86_64/user_image.asm (incbin).
@@ -209,7 +209,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
-               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c kernel/drivers/blk/blk_part.c kernel/kimg.c \
+               kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c kernel/drivers/blk/blk_part.c kernel/kimg.c kernel/install/install.c \
                kernel/drivers/net/virtio_net.c kernel/drivers/net/e1000e.c kernel/drivers/net/netbuf.c \
                kernel/drivers/gpu/virtio_gpu.c kernel/drivers/gpu/display.c \
                kernel/drivers/nvme/nvme.c kernel/drivers/ahci/ahci.c \
@@ -233,7 +233,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
@@ -455,7 +455,7 @@ KERNEL_HS := $(wildcard kernel/*.h) $(wildcard kernel/*/*.h) $(wildcard kernel/*
 # to be fixed one entry at a time. A wildcard cannot go stale.
 KERNEL_ALL_CS := $(wildcard kernel/*.c) $(wildcard kernel/*/*.c) $(wildcard kernel/*/*/*.c)
 
-$(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -650,6 +650,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
 	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/cpu.asm           -o build/cpu.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm           -o build/isr.o
@@ -708,6 +709,7 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/ramdisk.c         -o build/ramdisk.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/blk/blk_part.c        -o build/blk_part.o
 	$(CC) $(KCFLAGS) -c kernel/kimg.c                       -o build/kimg.o
+	$(CC) $(KCFLAGS) -c kernel/install/install.c             -o build/install.o   # DDR-1143
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/virtio_net.c     -o build/virtio_net.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/net/netbuf.c         -o build/netbuf.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/virtio_gpu.c     -o build/virtio_gpu.o
@@ -778,12 +780,21 @@ $(KERNEL_BIN): $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNE
 # hard-coded in the asm, match here.
 image: $(IMG)
 
-$(IMG): $(STAGE1_SRC) $(STAGE2_SRC) $(KERNEL_BIN)
+# DDR-1143 sec.10.9: stage1/stage2 are their own targets now, because the
+# kernel embeds them (SYS_INSTALL writes them to the installed disk) and so they
+# must exist BEFORE $(KERNEL_BIN) links. Neither depends on the kernel.
+$(STAGE1_BIN): $(STAGE1_SRC)
 	@mkdir -p build
 	$(NASM) $(NASM_WERROR) -f bin $(STAGE1_SRC) -o $(STAGE1_BIN)
-	@test "$$(wc -c < $(STAGE1_BIN))" -eq 512 || { echo "stage1.bin is not 512 bytes (got $$(wc -c < $(STAGE1_BIN)))"; exit 1; }
+	@test "$$(wc -c < $(STAGE1_BIN))" -eq 512 || { echo "stage1.bin is not 512 bytes (got $$(wc -c < $(STAGE1_BIN)))"; rm -f $(STAGE1_BIN); exit 1; }
+
+$(STAGE2_BIN): $(STAGE2_SRC)
+	@mkdir -p build
 	$(NASM) $(NASM_WERROR) -f bin $(STAGE2_SRC) -o $(STAGE2_BIN)
-	@test "$$(wc -c < $(STAGE2_BIN))" -le 8192 || { echo "stage2.bin exceeds 8 KiB; Stage 1 only loads 16 sectors"; exit 1; }
+	@test "$$(wc -c < $(STAGE2_BIN))" -le 8192 || { echo "stage2.bin exceeds 8 KiB; Stage 1 only loads 16 sectors"; rm -f $(STAGE2_BIN); exit 1; }
+
+$(IMG): $(STAGE1_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
+	@mkdir -p build
 	truncate -s 2M $(IMG)          # DDR-827: 1M->2M. DDR-960: this does NOT have to
 	                               # move with every chunk-count raise — from LBA 17
 	                               # a 2 MiB image holds 2,088,448 B, so it covers up
@@ -3435,9 +3446,17 @@ smoke-part: $(IMG) fat-image sfs-image
 	S0=$$(( $$(stat -c %s $(IMG)) / 512 )); S1=$$(( $$(stat -c %s build/fat.img) / 512 )); S2=$$(( $$(stat -c %s build/sfs.img) / 512 )); \
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/part.log KEEP_SERIAL=1 \
 	TIMEOUT_S=120 QEMU_NO_EXT4=1 QEMU_PROBES=part,kimg,disk \
-	EXTRA_SENTINEL="$$(printf '[disk] i=0 name=virtio-blk sectors=%s flags=phys\n[disk] i=1 name=virtio-blk sectors=%s flags=phys\n[disk] i=2 name=virtio-blk sectors=%s flags=phys\n[disk] i=3 name=ramdisk sectors=512 flags=ramdisk\n[disk] i=4 name=part sectors=128 flags=part\n[disk] i=5 name=part sectors=320 flags=part\n[disk] i=6 name=trace sectors=320 flags=none\n[disk] n=7 count=7 efault=-14' "$$S0" "$$S1" "$$S2")$$(printf '\n[kimg] src=bios len=%s sha=%s\n[part] mbr n=2 ok' "$$KLEN" "$$KSHA")$$(printf '\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
+	EXTRA_SENTINEL="$$(printf '[disk] i=0 name=virtio-blk sectors=%s flags=phys\n[disk] i=1 name=virtio-blk sectors=%s flags=phys\n[disk] i=2 name=virtio-blk sectors=%s flags=phys\n[disk] i=3 name=ramdisk sectors=512 flags=ramdisk\n[disk] i=4 name=part sectors=128 flags=part\n[disk] i=5 name=part sectors=320 flags=part\n[disk] i=6 name=trace sectors=320 flags=none\n[disk] n=7 count=7 efault=-14 install=-1' "$$S0" "$$S1" "$$S2")$$(printf '\n[kimg] src=bios len=%s sha=%s\n[part] mbr n=2 ok' "$$KLEN" "$$KSHA")$$(printf '\n[part] sig rc=-EINVAL\n[part] mk over=-EINVAL wrap=-EINVAL\n[part] off w=0 parent192=marker sector0=intact\n[part] bnd w128=-EINVAL r127x2=-EINVAL r127=0 neighbour=kept\n[part] wrap rc=-EINVAL\n[part] sfs format=0 mount=ok p1_dirty=0\n[part] trace plain=DDDLFSF txn=FJLFSF tail=ok setup=ok\n[part] virtio neg=1 flush=0 issued=ok=yes\nPRADYOS_PART_OK')" \
 	FORBIDDEN_SENTINEL="$$(printf 'PART FAIL\n[kimg] refused\nKIMG FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1143 pieces 4-6: install onto a blank disk from the live ISO, read the
+# disk back FROM THE HOST, then boot the INSTALLED disk alone under BIOS and
+# UEFI and require the root to be the installed P2 carrying boot 1's nonce.
+# A negative arm boots a foreign MBR and requires no root selection.
+smoke-install: iso
+	@echo "[install] install -> reboot gate (DDR-1143 sec.5/10.9)..."
+	bash tools/qemu_runner/install_test.sh
 
 smoke-rqfree: $(IMG) fat-image sfs-image
 	@echo "[rqfree] TCB-freed-while-queued gate (DDR-996)..."

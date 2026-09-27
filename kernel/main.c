@@ -38,6 +38,7 @@
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
+#include "install/disk_info.h"   /* DDR-1143: install layout constants */
 #include "virtio_gpu.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
@@ -538,6 +539,7 @@ void aether_init(void);                          /* Layer 6: kernel/aether/aethe
 void aether_selftest(void);
 void aether_sectest(void);
 int  ramdisk_init(unsigned order);    /* DDR-972: memory-backed root for the ISO */
+void install_set_console_pid(uint32_t pid);   /* DDR-1143 (install.c) */
 /* DDR-842: probe-gated audit-chain fault injection. main.c declares aether
  * entry points locally rather than including aether.h (see the three above). */
 void aether_audit_tamper(void);
@@ -1651,9 +1653,99 @@ static void part_selftest(cap_t cap) {
     kputs(ok ? "PRADYOS_PART_OK\r\n" : "PART FAIL: an arm above did not hold\r\n");
 }
 
+/* DDR-1143 sec.10.9 / piece 6: the ONE-DISK decisions. They live HERE, not
+ * beside DDR-972's kmain branch, because virtio-blk reads sleep on their
+ * completion IRQ through the scheduler and kmain runs before it is live.
+ * Taken only with exactly ONE disk -- every gate boots with pradyos.img (an MBR
+ * WITHOUT the 'PRDI' signature) as blk0 plus data disks, so no gate takes
+ * either branch. Both branches rebuild the ISO topology exactly:
+ * blk0 = the real disk (not mountable), blk1 = the SFS root, blk2 = scratch.
+ *
+ *   sector 0 all zero           -> the blank-disk widening: blk1/blk2 ramdisks
+ *   'PRDI' + P2 0xDA + PRDYVOL1 -> an INSTALLED disk: blk1 = P2's SFS, NEVER
+ *                                  formatted; blk2 = a scratch ramdisk
+ *
+ * Returns 1 when the installed root was selected (so fs_test_thread prints
+ * the install mark after mounting it). */
+static int disk_root_select(void) {
+    if (blk_count() != 1)
+        return 0;
+    uint64_t pg = pmm_alloc_page();
+    if (!pg)
+        return 0;
+    const uint8_t *s0 = (const uint8_t *)(uintptr_t)pg;
+    int rd = blk_read(0, 0, (void *)(uintptr_t)pg, 1);
+    int blank = rd == 0;
+    for (unsigned k = 0; blank && k < 512; k++)
+        if (s0[k]) blank = 0;
+    int installed = 0;
+    uint64_t p2 = 0, p2n = 0;
+    if (rd == 0 && !blank && s0[510] == 0x55 && s0[511] == 0xAA &&
+        memcmp(s0 + DISK_INSTALL_SIG_OFF, DISK_INSTALL_SIG, 4) == 0) {
+        struct mbr_part mp[4];
+        int n = blk_mbr_parse(s0, blk_get(0)->capacity_sectors, mp);
+        for (int i = 0; i < n; i++)
+            if (mp[i].index == 1 && mp[i].type == 0xDA) { p2 = mp[i].lba; p2n = mp[i].count; }
+        if (p2n > INST_P2_SFS_OFF && blk_read(0, p2, (void *)(uintptr_t)pg, 1) == 0 &&
+            memcmp(s0, INST_VOL_MAGIC, 8) == 0) {
+            uint32_t flags = (uint32_t)s0[12] | ((uint32_t)s0[13] << 8) |
+                             ((uint32_t)s0[14] << 16) | ((uint32_t)s0[15] << 24);
+            uint32_t off = (uint32_t)s0[16] | ((uint32_t)s0[17] << 8) |
+                           ((uint32_t)s0[18] << 16) | ((uint32_t)s0[19] << 24);
+            if (flags != INST_VOL_PLAINTEXT) {
+                kputs("[root] encrypted volume: unlock not built\r\n");   /* DDR-1144 hook */
+            } else if (off != INST_P2_SFS_OFF) {
+                kputs("[root] refused: unknown volume layout\r\n");
+            } else {
+                installed = 1;
+            }
+        }
+    }
+    pmm_free_page(pg);
+    if (installed) {
+        int pi = blk_part_create(0, p2 + INST_P2_SFS_OFF, p2n - INST_P2_SFS_OFF);   /* blk1 */
+        ramdisk_init(10);                                                           /* blk2 */
+        if (pi != 1) {
+            kputs("[root] P2 sub-device FAILED\r\n");
+            return 0;
+        }
+        kputs("[root] disk p2 lba=");
+        kputdec(p2);
+        kputs("\r\n");
+        return 1;
+    }
+    if (!blank)
+        return 0;
+    kputs("[ramdisk] blank disk blk0 kept as boot-disk stand-in\r\n");
+    int rd_root = ramdisk_init(10);              /* blk1: the root  */
+    ramdisk_init(10);                            /* blk2: scratch   */
+    struct blk_device *rbd = rd_root >= 0 ? blk_get((unsigned)rd_root) : 0;
+    if (rbd && sfs_format(rbd) == 0)
+        kputs("[ramdisk] formatted SFS — ISO root ready\r\n");
+    else
+        kputs("[ramdisk] SFS format FAILED — root unusable\r\n");
+    return 0;
+}
+
+/* Arm P of smoke-install: the mark boot 1's RNG wrote can only be read back
+ * if the root really is the installed P2. */
+static void install_mark_print(cap_t cap, int mnt) {
+    struct vfs_file f;
+    char m[17];
+    memset(m, 0, sizeof m);
+    if (vfs_open(cap, mnt, INST_MARK_PATH, &f) == 0 && vfs_read(cap, &f, 0, m, 16) == 16) {
+        kputs("[install] mark nonce=");
+        kputs(m);
+        kputs("\r\n");
+    } else {
+        kputs("[install] mark MISSING\r\n");
+    }
+}
+
 static void fs_test_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
     int mnt = -1, blk = -1;
+    int inst_root = disk_root_select();
     for (unsigned j = 0; j < blk_count(); j++) {
         int id = vfs_mount(j);
         if (id >= 0) { mnt = id; blk = (int)j; break; }
@@ -1665,6 +1757,8 @@ static void fs_test_thread(void *arg) {
     /* 5b: this stable FAT32 mount is the process root for the syscall layer
      * (the SFS mount is later reformatted by the destructive self-tests). */
     vfs_set_default_mnt(mnt);
+    if (inst_root)
+        install_mark_print(cap, mnt);        /* DDR-1143 arm P */
     kputs("[fs] mounted ");
     kputs(vfs_fs_name(mnt));
     kputs(" on blk");
@@ -3255,6 +3349,8 @@ static void fs_test_thread(void *arg) {
                  * See DDR-957 sec.9-10 before trying again. */
                 struct tcb *pr = user_boot_from_sfs(cap, smnt, "PRISM.ELF",
                                                     prism_elf, prism_elf_end, 0);
+                if (pr)
+                    install_set_console_pid(pr->pid);   /* DDR-1143: SYS_INSTALL authority */
                 if (pr && it)
                     pr->parent_pid = it->pid;
 

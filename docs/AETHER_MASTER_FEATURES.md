@@ -2101,6 +2101,7 @@ this time, not just the waiter."* Instrument only.
 - 2026-09-26 — DDR-1143 piece 2 (block flush op + SFS commit barriers, trace-pinned on `smoke-part`). No AETHER surface change.
 - 2026-09-26 — DDR-1143 piece 3 (pristine kernel image handoff from both loaders, hash-gated). No AETHER surface change.
 - 2026-09-26 — DDR-1143 §10.8: NSI 104 `SYS_DISK_LIST` (read-only disk enumeration, gated on smoke-part). No AETHER surface change.
+- 2026-09-27 — DDR-1143 pieces 4–6: NSI 105 `SYS_INSTALL` + persistent SFS root on P2, gated by `smoke-install`. No AETHER surface change. The DDR-1150 ledger seed is NOT yet persisted to the installed root.
 
 - 2026-09-26 — DDR-1148 (kernel instrument, no AETHER surface change): the virtio-blk completion-timeout path now prints `[vblkto]` naming the request type and the used-ring state. No feature row moves.
 - 2026-09-26 — DDR-1149: CAP_OCR / CAP_SCENE / CAP_NET_BROWSE are real capabilities, checked when an agent PROPOSES ACTION_PARSE_DOCUMENT / QUERY_SCENE / BROWSE_WEB (flag + cap_authorize, both submit paths; `smoke-domcap`). The AHNIS / IRIS / LUMYN behaviours stay unbuilt: nothing executes these actions.

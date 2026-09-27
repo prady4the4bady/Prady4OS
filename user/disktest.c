@@ -17,6 +17,7 @@
 #define SYS_WRITE          6
 #define SYS_EXIT           4
 #define SYS_DISK_LIST    104
+#define SYS_INSTALL      105   /* DDR-1143: console shell only */
 
 /* Must match kernel/install/disk_info.h (pinned by _Static_assert there). */
 #define DISK_F_PHYS       0x01u
@@ -81,6 +82,12 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long count = nsi(SYS_DISK_LIST, 0, 0, 0);
     long n = nsi(SYS_DISK_LIST, (long)d, 8, 0);
     long bad = nsi(SYS_DISK_LIST, 0x10, 8, 0);   /* not a user address */
+    /* DDR-1143 sec.10.9 deny arm: this probe is NOT the console shell, so
+     * SYS_INSTALL must answer -EPERM. The confirmation is deliberately WRONG,
+     * so with the authority check removed (mutant M5) the call stops at the
+     * confirmation check with -EINVAL and never writes -- blk0 here is
+     * build/pradyos.img, which QEMU persists into (OPEN-11's shape). */
+    long deny = nsi(SYS_INSTALL, 0, (long)"WIPE-nope", 0);
     long show = (n > 8) ? 8 : n;
     for (long i = 0; i < show; i++) {
         ls(&l, "[disk] i="); ld(&l, (long)d[i].index);
@@ -90,7 +97,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         lflush(&l);
     }
     ls(&l, "[disk] n="); ld(&l, n); ls(&l, " count="); ld(&l, count);
-    ls(&l, " efault="); ld(&l, bad); lflush(&l);
+    ls(&l, " efault="); ld(&l, bad);
+    ls(&l, " install="); ld(&l, deny); lflush(&l);
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) {}
 }

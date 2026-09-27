@@ -29,8 +29,7 @@ static int name_is(const char *a, const char *b) {
 
 static uint32_t disk_flags(unsigned i, struct blk_device *bd, uint8_t *sec) {
     uint32_t f = 0;
-    if (name_is(bd->name, "virtio-blk") || name_is(bd->name, "nvme0") ||
-        name_is(bd->name, "ahci"))
+    if (disk_name_phys(bd->name))
         f |= DISK_F_PHYS;
     else if (name_is(bd->name, "ramdisk"))
         f |= DISK_F_RAMDISK;

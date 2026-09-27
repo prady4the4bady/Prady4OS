@@ -14817,3 +14817,15 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   confirmation on a later tree. It names no new mechanism and does not bear on OPEN-1 route 1 (CI-only, a
   different gate).
 - Next: task #11, DDR-1143 pieces 4-6.
+
+## CHECKPOINT 2026-09-27 — DDR-1143 pieces 4–6 built (installer, persistent root, smoke-install)
+- Built: `SYS_INSTALL` (NSI 105, console-only, confirmation string `WIPE-<name><idx>`), the FAT16 ESP, PRISM `install`, blank-disk widening, and the P2-header root in `kernel/main.c`. The blobs are embedded via `arch/x86_64/install_blobs.asm`.
+- Gate `smoke-install` (tools/qemu_runner/install_test.sh), shard 1: PASS in about 27 s. Mutants M5–M8 are caught on distinct arms (DDR-1143 §10.10).
+- **Kernel:** kernel.bin `b6a48c178ab4f21b`, 1,470,858 B. 186 gates.
+- **Rules paid for:**
+  - A FAT boot-sector label needs a matching 0x08 root dirent, or `fsck.fat` exits 1. Firmware never notices, so only the host readback caught it.
+  - PRISM `exit` does not power the guest off, so a scripted QEMU session must kill QEMU on its own result line.
+- **Still open:**
+  - The DDR-1150 ledger seed is NOT persisted by the installer.
+  - DDR-1144/1145/1146 are designs only.
+- NEXT: watch CI on the push, then ledger-seed persistence onto the installed root. It needs its own DDR first.
