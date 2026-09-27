@@ -14838,3 +14838,11 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - **Rule paid for:** restoring a mutated file with `mv` keeps its older mtime, so `make` rebuilds nothing and the mutant's binary survives. Always hash; `touch` after restoring.
 - **Regression:** hygiene ALL TEN, and all 9 related gates rc=0 with the hash pinned (see build_status).
 - NEXT: push, then watch CI on PR #17.
+
+## CHECKPOINT 2026-09-27 09:4xZ — d651ede (DDR-1153) CI: 2 of 3 greens
+- pradyos-ci push 36306370813: 16/16 jobs success, all 10 shards (shard 1 carries smoke-install K1-K5).
+- pradyos-ci pull_request 36306372997: 16/16 jobs success, all 10 shards.
+- Third green requested via workflow_dispatch on dev/phase1-seyp3n (tip = d651ede, verified before dispatch).
+- The github-advanced-security "dynamic" red on the same SHA is GitHub's Copilot autofind CAPIError, already reported
+  (comment 5758115691) and not counted toward §INV.15. No new comment.
+- Merge/promotion/tag remain operator decisions; v1.0.0 still held on OPEN-2.
