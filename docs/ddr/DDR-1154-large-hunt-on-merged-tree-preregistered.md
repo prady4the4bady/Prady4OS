@@ -79,3 +79,17 @@ A machine that stopped silently stops heartbeating, so its last `t` is lower. **
 ## 6. Results
 
 (appended as dispatches complete)
+
+### 6.0 Amendment, written before any dispatch had reported: the route-1 check moves into the harness
+
+- **Dispatches 1 and 2** (queued 2026-09-28 ~01:45Z on ref `49abebc`) run the **old** campaign. Their route-1 check is done **by hand**, exactly as registered in §2: every per-run line of every lane is read for its last `[hb] t`.
+- **Dispatches 3–10** run a campaign that makes the check itself:
+  - `hunt_silent_stop` (`tools/ci/hunt_print.sh`) flags a run with **zero SIGNALS matches** whose last heartbeat is below `HUNT_HB_FLOOR=17000`.
+  - The campaign counts that run in `signal_runs`, which fails the lane under the default-branch workflow's existing `signal_runs=[1-9]` check. It also counts it separately as `silent_runs=`, and prints the last 40 lines of the capture, because for a silent stop the evidence is where the output **ended**.
+  - Reading 200 lanes by hand (~500k tokens) and relying on a person to do it every time was the alternative. It is not a check.
+- **Proved in both directions:**
+  - `ci-huntprint-selftest` gains three fixtures: healthy to 17500, stopped at 4500, and stopped at 9000 **after** `rqstress OK`. The last is the case the old campaign printed as `churn clean`.
+  - M4 (floor defeated) fails the two stopped arms and nothing else.
+  - M5 (first heartbeat instead of last) fails the healthy arm and nothing else.
+  - End to end on this host, one real run: a healthy boot reads `t=17500 churn clean`, `silent_runs=0`. The same run with `HUNT_HB_FLOOR=20000` reads `*** SILENT-STOP ***`, `signal_runs=1 silent_runs=1`, so the wiring into the lane verdict is exercised, not just the function.
+- **The pooling rule is unchanged.** The diff touches only `tools/ci/`, not the kernel. `kernel_pinned` must still be identical in every lane of every dispatch, and any lane that differs is reported on its own.
