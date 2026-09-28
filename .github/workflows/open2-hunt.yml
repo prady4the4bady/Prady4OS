@@ -283,7 +283,7 @@ jobs:
       # reads to say what the boot was doing while it did not fire.
       - name: Upload captures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: open2-hunt-lane-${{ matrix.lane }}
           path: build/gatelogs/open2hunt
