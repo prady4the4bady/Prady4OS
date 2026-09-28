@@ -157,6 +157,9 @@ Implement each as a specialized agent process with distinct capability sets and 
 - PRADYOS Drive: virtual filesystem mount for agent workspace
 
 ### PHASE 8 — Quantum Abstraction Layer (QAL) [FUTURE]
+
+> **WITHDRAWN (operator decision, 2026-09-02, PR #17).** Quantum-hardware integration is not planned for any release. A remote QPU with seconds-to-minutes queue latency cannot improve a kernel that schedules in microseconds. See `CLAUDE.md` §PHASE 3. Post-quantum *cryptography* (ML-DSA) is a different thing, and it is shipped. This section is kept as a historical record only.
+
 - Quantum Abstraction Layer at kernel level following the architecture from arXiv:2507.19212
 - Virtual QPU model (QEMU-based simulation for now)
 - QAOA-based process scheduler prototype (simulation only until real QPU available)

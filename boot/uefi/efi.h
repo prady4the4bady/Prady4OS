@@ -73,6 +73,42 @@ typedef struct {
     EFI_STATUS (*exit_boot_services)(EFI_HANDLE image, uint64_t map_key);
 } EFI_BOOT_SERVICES;
 
+/* DDR-1142: the Graphics Output Protocol, read (never driven) to hand the
+ * firmware's already-set video mode to the kernel. Only the fields up to
+ * PixelsPerScanLine are declared; `mode` is reached through the protocol, and
+ * the protocol through HandleProtocol on the console-out handle. */
+#define EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID \
+    { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } }
+
+/* EFI_GRAPHICS_PIXEL_FORMAT */
+#define PixelRedGreenBlueReserved8BitPerColor 0
+#define PixelBlueGreenRedReserved8BitPerColor 1
+#define PixelBitMask                          2
+#define PixelBltOnly                          3
+
+typedef struct {
+    uint32_t version;
+    uint32_t horizontal_resolution;
+    uint32_t vertical_resolution;
+    uint32_t pixel_format;
+    uint32_t red_mask, green_mask, blue_mask, reserved_mask;   /* PixelBitMask */
+    uint32_t pixels_per_scan_line;
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct {
+    uint32_t max_mode;
+    uint32_t mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+    uint64_t size_of_info;
+    uint64_t frame_buffer_base;
+    uint64_t frame_buffer_size;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct {
+    void *query_mode, *set_mode, *blt;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL;
+
 typedef struct {
     EFI_TABLE_HEADER hdr;
     CHAR16 *firmware_vendor;
@@ -151,4 +187,5 @@ typedef struct {
 
 /* AllocatePages types */
 #define AllocateAnyPages    0
+#define AllocateMaxAddress  1   /* UEFI 2.x EFI_ALLOCATE_TYPE */
 #define AllocateAddress     2

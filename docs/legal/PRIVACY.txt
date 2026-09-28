@@ -1,0 +1,33 @@
+PRADYOS v1.0.0 — PRIVACY NOTICE (DRAFT FOR OWNER REVIEW)
+
+Status: this is a minimal draft written at the owner's instruction (PR #17,
+comment 5822896320). It has NOT been reviewed by a lawyer.
+
+What PradyOS collects and sends: NOTHING.
+  - There is no telemetry, crash reporting, analytics or update check. No
+    component of PradyOS sends data to the Owner or to any third party.
+  - The AETHER agent in this build runs in test mode. Its responses are
+    fixed strings compiled into the image. It opens no network connection.
+  - The release notes list every network behaviour of this build, including
+    the DHCP and DNS requests it makes on a local network to obtain an address.
+
+What PradyOS stores, and where:
+  - Kernel log and the AETHER audit log: held in RAM only. They are lost at
+    power-off.
+  - Files you create: on the live ISO, the root filesystem is a RAM disk.
+    Nothing persists across a reboot unless you attach and write to a disk
+    yourself.
+
+Your controls:
+  - AETHER privacy mode refuses all agent network I/O while it is enabled.
+    This includes sockets that were already open, and DNS lookups: a refused
+    lookup is not sent, so the name never leaves the machine.
+  - Privacy mode does NOT stop DHCP lease renewal. Renewal tells the local
+    network's DHCP server that this machine still holds its address.
+    Stopping it would take the network interface down.
+  - DNS lookups carry the name being looked up to the resolver. The audit
+    log records that a lookup was made and to which resolver, not the name.
+
+Changes:
+  - A future version that adds any data collection must say so in its release
+    notes and update this notice before it ships.

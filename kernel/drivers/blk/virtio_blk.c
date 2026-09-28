@@ -22,6 +22,8 @@ extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 
 #define VIRTIO_BLK_T_IN       0
 #define VIRTIO_BLK_T_OUT      1
+#define VIRTIO_BLK_T_FLUSH    4           /* DDR-1143 §10.2 */
+#define VIRTIO_BLK_F_FLUSH    (1u << 9)   /* device has a volatile write cache */
 #define VIRTIO_BLK_F_SIZE_MAX (1u << 1)
 #define VIRTIO_BLK_F_SEG_MAX  (1u << 2)
 #define SECTOR 512u
@@ -46,6 +48,11 @@ struct vreq {
     volatile uint64_t t0;
     volatile uint64_t lba;
     volatile int      warned;
+    /* DDR-1148: which descriptor head and request type this slot holds.
+     * Written at submit, read only on the timeout path and by complete()'s
+     * late-completion count. BSS-zeroed (g_inst is static). */
+    volatile int      head;
+    volatile uint32_t type;
 };
 
 struct vblk {
@@ -74,7 +81,50 @@ struct vblk {
      * unit 0 / cpu 0 is also the correct uniprocessor answer. */
     unsigned              unit;
     uint32_t              dest_cpu_idx;
+    /* DDR-1138: WHO HOLDS compl_lock. spinlock_t is one byte and lock_stat
+     * sees only the slow path, so nothing in the kernel could say who owned
+     * this lock when a CPU froze waiting on it (DDR-1137 sec.3.2). Written
+     * immediately after every acquisition, cleared immediately before every
+     * release, read only by virtio_blk_dump_owners() on the [apfreeze] path.
+     * Deliberately THIS lock only: an owner store on spin_lock itself is the
+     * hot-path cost DDR-1047 refused, and that refusal stands. g_inst is BSS,
+     * so own_site == 0 ("none") before the first acquisition. */
+    volatile uint32_t     own_cpu;
+    volatile uint32_t     own_tid;
+    volatile uint32_t     own_site;   /* VOWN_* below; 0 = no recorded owner */
+    volatile uint64_t     own_tick;
+    /* DDR-1143 §10.2: 1 iff VIRTIO_BLK_F_FLUSH was negotiated. A device
+     * without it is write-through by the virtio spec, so flush returns 0
+     * without sending a request. */
+    int                   has_flush;
+    /* DDR-1148: per-unit counters printed only on the timeout path.
+     * late = completions reaped for a slot that no longer holds that head
+     * (or is unused) -- DDR-1148 sec.4's hazard, COUNTED, NOT FIXED.
+     * tmo  = completion-wait timeouts on this unit. Both under compl_lock. */
+    uint32_t              late;
+    uint32_t              tmo;
 };
+
+/* DDR-1138: which acquisition of compl_lock the owner record describes. */
+enum { VOWN_NONE = 0, VOWN_COMPLETE = 1, VOWN_SUBMIT = 2,
+       VOWN_SLOTWAIT = 3, VOWN_DONEWAIT = 4 };
+
+/* Call with compl_lock HELD, right after taking it. this_cpu() and
+ * current_thread are what complete() and submit() already read today, so no
+ * new GS dependency is added on this path. Plain stores: the record is a
+ * diagnostic read after a freeze, not a synchronisation variable. */
+static inline void vown_set(struct vblk *v, uint32_t site) {
+    struct percpu *pc = this_cpu();
+    v->own_cpu  = pc ? pc->cpu_idx : 0xFFFFFFFFu;
+    v->own_tid  = current_thread ? current_thread->tid : 0u;
+    v->own_tick = g_ticks;
+    v->own_site = site;
+}
+
+/* Call with compl_lock still HELD, right before releasing it. */
+static inline void vown_clear(struct vblk *v) {
+    v->own_site = VOWN_NONE;
+}
 
 /* DDR-878: one-shot witness that two submitters really do wait at once. */
 static volatile int g_multiwait_seen;
@@ -87,6 +137,7 @@ static void complete(struct vblk *v) {
      * lost-wakeup race against submit()'s check-then-block (the locks-4
      * pattern: the requester publishes BLOCKED under this same lock). */
     uint64_t fl = spin_lock_irqsave(&v->compl_lock);
+    vown_set(v, VOWN_COMPLETE);                  /* DDR-1138 */
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&v->vq, &len)) >= 0) {
@@ -95,6 +146,9 @@ static void complete(struct vblk *v) {
             v->head2slot[head] = -1;
         virtq_free_chain(&v->vq, head);
         if (s >= 0 && s < VBLK_NREQ) {          /* wake THIS request's submitter */
+            /* DDR-1148 sec.4: count, do not change, a stale completion. */
+            if (!v->req[s].used || v->req[s].head != head)
+                v->late++;
             v->req[s].done = 1;
             if (v->req[s].waiter) {
                 struct tcb *w = v->req[s].waiter;
@@ -106,6 +160,7 @@ static void complete(struct vblk *v) {
     struct percpu *pc = this_cpu();
     if (pc && !pc->is_bsp)
         v->compl_ap = 1;              /* C3 proof: completion off the BSP */
+    vown_clear(v);                               /* DDR-1138 */
     spin_unlock_irqrestore(&v->compl_lock, fl);
 }
 
@@ -198,9 +253,17 @@ static void slot_wake_one(struct vblk *v) {
     sched_unblock(w);
 }
 
+/* DDR-1143 §10.2: flushes issued / flushes that completed with status 0,
+ * across every unit. The smoke-part virtio arm asserts they are equal. */
+static volatile uint32_t g_vblk_flush_issued, g_vblk_flush_ok;
+
+/* `type` is VIRTIO_BLK_T_IN, _OUT or _FLUSH. A flush carries no data
+ * descriptor: header + status only (virtio 1.x 5.2.6). */
 static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
-                  uint32_t count, int to_device) {
+                  uint32_t count, uint32_t type) {
+    int to_device = (type == VIRTIO_BLK_T_OUT);
     uint64_t fl = spin_lock_irqsave(&v->compl_lock);
+    vown_set(v, VOWN_SUBMIT);                    /* DDR-1138 */
 
     /* Claim a request slot; sleep (never spin) when all are in flight. */
     int s;
@@ -229,10 +292,15 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
             v->slot_head = current_thread;
         }
         v->slot_tail = current_thread;
-        if (sched_block_timeout(&v->compl_lock,
-                                &v->slot_free,
-                                500) == -ETIMEDOUT) {
+        /* DDR-1138: sched_block_timeout DROPS compl_lock while this thread
+         * sleeps and re-takes it before returning, so the record is cleared
+         * across the call and set again after it -- never stale. */
+        vown_clear(v);
+        int _to = sched_block_timeout(&v->compl_lock, &v->slot_free, 500);
+        vown_set(v, VOWN_SLOTWAIT);
+        if (_to == -ETIMEDOUT) {
             kputs("[vblk] slot wait timeout\r\n");
+            vown_clear(v);
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
         }
@@ -248,7 +316,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     uint64_t hdr = v->reqbuf + (uint64_t)s * 32;   /* 16B header + status byte */
     struct virtio_blk_req *h = (struct virtio_blk_req *)(uintptr_t)hdr;
     volatile uint8_t *status = (volatile uint8_t *)(uintptr_t)(hdr + 16);
-    h->type = to_device ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+    h->type = type;
     h->reserved = 0;
     h->sector = lba;
     *status = 0xFF;
@@ -258,7 +326,9 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
         { data_phys, SECTOR * count,                to_device ? 0 : 1 },
         { hdr + 16,  1,                             1 },
     };
-    int head = virtq_add(&v->vq, bufs, 3);
+    if (type == VIRTIO_BLK_T_FLUSH)
+        bufs[1] = bufs[2];                 /* header + status only */
+    int head = virtq_add(&v->vq, bufs, type == VIRTIO_BLK_T_FLUSH ? 2 : 3);
     if (head < 0 || head >= 256) {
         v->req[s].used = 0;
         v->req[s].waiter = 0;
@@ -266,10 +336,13 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
          * descriptor-exhaustion failure could strand every waiter even with the
          * single-waiter bug fixed. Same release, same wake. */
         slot_wake_one(v);
+        vown_clear(v);                           /* DDR-1138 */
         spin_unlock_irqrestore(&v->compl_lock, fl);
         return -1;
     }
     v->head2slot[head] = (int16_t)s;
+    v->req[s].head = head;                         /* DDR-1148 */
+    v->req[s].type = type;
     virtq_publish(&v->vq, head);
     virtio_pci_notify(&v->dev, &v->vq, 0);
 
@@ -285,9 +358,10 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     { struct percpu *dp = percpu_get(v->dest_cpu_idx);
       if (dp) dest_t0 = dp->ticks; }
     while (!v->req[s].done) {
-        if (sched_block_timeout(&v->compl_lock,
-                                &v->req[s].done,
-                                500) == -ETIMEDOUT) {
+        vown_clear(v);                           /* DDR-1138: see the slot wait */
+        int _to = sched_block_timeout(&v->compl_lock, &v->req[s].done, 500);
+        vown_set(v, VOWN_DONEWAIT);
+        if (_to == -ETIMEDOUT) {
             uint64_t dest_t1 = 0;
             { struct percpu *dp = percpu_get(v->dest_cpu_idx);
               if (dp) dest_t1 = dp->ticks; }
@@ -329,27 +403,70 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
             kputs(" lba=");
             kputdec(lba);
             kputs("\r\n");
+            /* DDR-1148: a SECOND line, one atomic kline emit, naming what the
+             * line above cannot: the request type (FLUSH and a superblock
+             * write are both lba 0), whether the device wrote status (255 =
+             * the driver's pre-fill, never written), and the ring -- used_idx
+             * != last_used means the device completed and nobody reaped it.
+             * Nothing is judged; the reader compares. Failure path only. */
+            {
+                v->tmo++;
+                kline k;
+                kline_init(&k);
+                kline_s(&k, "[vblkto] unit=");    kline_d(&k, (uint64_t)v->unit);
+                kline_s(&k, " type=");            kline_d(&k, (uint64_t)type);
+                kline_s(&k, " status=");          kline_d(&k, (uint64_t)*status);
+                kline_s(&k, " head=");            kline_d(&k, (uint64_t)v->req[s].head);
+                kline_s(&k, " used_idx=");
+                kline_d(&k, (uint64_t)((volatile struct virtq_used *)v->vq.used)->idx);
+                kline_s(&k, " last_used=");       kline_d(&k, (uint64_t)v->vq.last_used);
+                kline_s(&k, " avail_idx=");
+                kline_d(&k, (uint64_t)((volatile struct virtq_avail *)v->vq.avail)->idx);
+                kline_s(&k, " late=");            kline_d(&k, (uint64_t)v->late);
+                kline_s(&k, " tmo=");             kline_d(&k, (uint64_t)v->tmo);
+                kline_s(&k, "\r\n");
+                kline_emit(&k);
+            }
             v->req[s].used = 0;
             v->req[s].waiter = 0;
             slot_wake_one(v);
+            vown_clear(v);                       /* DDR-1138 */
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
         }
     }
 
     int ok = (*status == 0);
+    if (type == VIRTIO_BLK_T_FLUSH && ok)
+        __atomic_add_fetch(&g_vblk_flush_ok, 1, __ATOMIC_RELAXED);
     v->req[s].used = 0;                        /* release the slot ... */
     v->req[s].waiter = 0;
     slot_wake_one(v);                          /* ... and wake ONE starved submitter */
+    vown_clear(v);                             /* DDR-1138 */
     spin_unlock_irqrestore(&v->compl_lock, fl);
     return ok ? 0 : -1;
 }
 
 static int vblk_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
-    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count, 0);
+    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count,
+                  VIRTIO_BLK_T_IN);
 }
 static int vblk_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count) {
-    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count, 1);
+    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count,
+                  VIRTIO_BLK_T_OUT);
+}
+static int vblk_flush(struct blk_device *bd) {
+    struct vblk *v = (struct vblk *)bd->drv;
+    if (!v->has_flush)
+        return 0;                          /* write-through by the spec */
+    __atomic_add_fetch(&g_vblk_flush_issued, 1, __ATOMIC_RELAXED);
+    return submit(v, 0, 0, 0, VIRTIO_BLK_T_FLUSH);
+}
+
+void virtio_blk_flush_stats(int *neg0, uint32_t *issued, uint32_t *ok) {
+    *neg0   = g_ninst ? g_inst[0].has_flush : -1;
+    *issued = __atomic_load_n(&g_vblk_flush_issued, __ATOMIC_RELAXED);
+    *ok     = __atomic_load_n(&g_vblk_flush_ok, __ATOMIC_RELAXED);
 }
 
 void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -361,8 +478,11 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputs("virtio-blk: attach failed\r\n");
         return;
     }
-    uint64_t want = VIRTIO_F_VERSION_1 | VIRTIO_BLK_F_SIZE_MAX | VIRTIO_BLK_F_SEG_MAX;
-    if (!(virtio_pci_negotiate(&v->dev, want) & VIRTIO_F_VERSION_1)) {
+    uint64_t want = VIRTIO_F_VERSION_1 | VIRTIO_BLK_F_SIZE_MAX | VIRTIO_BLK_F_SEG_MAX |
+                    VIRTIO_BLK_F_FLUSH;
+    uint64_t got  = virtio_pci_negotiate(&v->dev, want);
+    v->has_flush  = (got & VIRTIO_BLK_F_FLUSH) != 0;
+    if (!(got & VIRTIO_F_VERSION_1)) {
         kputs("virtio-blk: modern negotiation failed\r\n");
         return;
     }
@@ -422,6 +542,7 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     v->bd.capacity_sectors = capacity;
     v->bd.read = vblk_read;
     v->bd.write = vblk_write;
+    v->bd.flush = vblk_flush;
     v->bd.drv = v;
     blk_register(&v->bd);
     g_ninst++;
@@ -438,4 +559,32 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputdec(v->dev.irq);
     }
     kputs("\r\n");
+}
+
+/* DDR-1138: the [apfreeze] path's answer to "who holds compl_lock". Reads the
+ * lock byte and the owner record WITHOUT taking the lock -- the machine has
+ * already frozen and taking it is exactly what would hang the reporter. The
+ * raw byte is printed beside the record so a disagreement between the two is
+ * shown, not hidden. NOTHING IS JUDGED. One kline per unit: each line is a
+ * single write and cannot be spliced (DDR-1055). */
+void virtio_blk_dump_owners(void) {
+    for (unsigned i = 0; i < g_ninst; i++) {
+        struct vblk *v = &g_inst[i];
+        uint32_t site = v->own_site;
+        kline k;
+        kline_init(&k);
+        kline_s(&k, "[vblkown] unit=");   kline_d(&k, (uint64_t)v->unit);
+        kline_s(&k, " locked=");          kline_d(&k, (uint64_t)v->compl_lock.v);
+        if (site == VOWN_NONE) {
+            kline_s(&k, " own_cpu=none");
+        } else {
+            kline_s(&k, " own_cpu=");     kline_d(&k, (uint64_t)v->own_cpu);
+            kline_s(&k, " own_tid=");     kline_d(&k, (uint64_t)v->own_tid);
+            kline_s(&k, " since=");       kline_d(&k, v->own_tick);
+        }
+        kline_s(&k, " site=");            kline_d(&k, (uint64_t)site);
+        kline_s(&k, " now=");             kline_d(&k, g_ticks);
+        kline_s(&k, "\r\n");
+        kline_emit(&k);
+    }
 }

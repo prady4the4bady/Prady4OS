@@ -26,6 +26,14 @@
  * size class is >= 16 bytes, so offset 8..15 is always inside the object. ULL
  * suffix avoids -Woverflow on the 64-bit literal. */
 #define KHEAP_CANARY 0xFEEDFACEFEEDFACEULL
+/* DDR-986 §4: where the freeing return address lives while an object is free.
+ * Layout is next@0, canary@8, so 16..23 is the first free slot -- and it exists
+ * only if the class is at least 24 bytes wide. align16 makes that 32 in
+ * practice; the 16-byte class and the dedicated cap cache are excluded and keep
+ * today's ptr=/objsize= output. OPEN-13 is the 128 class, so the one case on
+ * record is covered. */
+#define KHEAP_SITE_OFF 16u
+#define KHEAP_SITE_MIN 24u
 #define MAX_SLAB_OBJ 2048u               /* above this, allocate whole pages */
 #define MAX_LARGE   256u                 /* tracked concurrent large allocs   */
 
@@ -127,8 +135,15 @@ static void *cache_alloc(struct kmem_cache *c) {
     return o;
 }
 
-static void cache_free(struct kmem_cache *c, void *ptr) {
+/* DDR-986: OPEN-13. `site` is the return address captured at the PUBLIC boundary
+ * (kfree / pcb_free / cap_free / ipc_free), threaded down rather than taken with
+ * __builtin_return_address(0) in here -- cache_free is static and reached via
+ * kfree_locked and pool_free, so a builtin here would name an internal wrapper,
+ * and comparing a caller address against a wrapper address would make the
+ * freed_by/now_by pair meaningless. Both fields come from the same frame. */
+static void cache_free(struct kmem_cache *c, void *ptr, uint64_t site) {
     struct slab *s = (struct slab *)((uintptr_t)ptr & ~(uintptr_t)(PAGE_SIZE - 1));
+    (void)site;
 #if KHEAP_DEBUG
     if (s->magic != SLAB_MAGIC)
         heap_panic("kfree: bad slab magic");
@@ -142,6 +157,16 @@ static void cache_free(struct kmem_cache *c, void *ptr) {
             kputhex((uint64_t)(uintptr_t)ptr);
             kputs(" objsize=");
             kputhex(c->obj_size);
+            /* DDR-986 §5: the two call sites. freed_by is what the FIRST free
+             * recorded at offset 16; now_by is this free's site. Only classes
+             * with room for offset 16..23 carry it -- the 16-byte class and the
+             * dedicated cap cache (also 16) keep today's output. */
+            if (c->obj_size >= KHEAP_SITE_MIN) {
+                kputs(" freed_by=");
+                kputhex(*(uint64_t *)((uint8_t *)ptr + KHEAP_SITE_OFF));
+                kputs(" now_by=");
+                kputhex(site);
+            }
             kputs("\r\n");
             heap_panic("kfree: double free");
         }
@@ -152,6 +177,15 @@ static void cache_free(struct kmem_cache *c, void *ptr) {
     o->next = s->free;
 #if KHEAP_DEBUG
     *(uint64_t *)((uint8_t *)o + 8) = KHEAP_CANARY;   /* re-arm after the poison fill */
+    /* DDR-986 §4: offset 16..23 is unused while an object is free (next at 0,
+     * canary at 8). Written AFTER the memset, inside a line the memset just
+     * touched, so it costs no extra cache line -- and it is noise beside the
+     * free-list walk and 128-byte memset this same path already does on every
+     * kfree. On whenever KHEAP_DEBUG is, like the detector it extends: an
+     * opt-in instrument would be OFF in CI, the only place OPEN-13 has ever
+     * appeared (DDR-986 §3). */
+    if (c->obj_size >= KHEAP_SITE_MIN)
+        *(uint64_t *)((uint8_t *)o + KHEAP_SITE_OFF) = site;
 #endif
     s->free = o;
     s->free_count++;
@@ -229,7 +263,7 @@ void *kmalloc(size_t size) {
     return p;
 }
 
-static void kfree_locked(void *ptr) {
+static void kfree_locked(void *ptr, uint64_t site) {
     if (!ptr)
         return;
 
@@ -255,12 +289,14 @@ static void kfree_locked(void *ptr) {
     if (s->magic != SLAB_MAGIC)
         heap_panic("kfree: pointer not from kheap");
 #endif
-    cache_free(s->cache, ptr);
+    cache_free(s->cache, ptr, site);
 }
 
 void kfree(void *ptr) {
+    /* DDR-986: capture the caller HERE, at the public boundary. */
+    uint64_t site = (uint64_t)(uintptr_t)__builtin_return_address(0);
     uint64_t fl = spin_lock_irqsave(&g_heap_lock);
-    kfree_locked(ptr);
+    kfree_locked(ptr, site);
     spin_unlock_irqrestore(&g_heap_lock, fl);
 }
 
@@ -271,17 +307,17 @@ static void *pool_alloc(struct kmem_cache *c) {
     spin_unlock_irqrestore(&g_heap_lock, fl);
     return p;
 }
-static void pool_free(struct kmem_cache *c, void *p) {
+static void pool_free(struct kmem_cache *c, void *p, uint64_t site) {
     uint64_t fl = spin_lock_irqsave(&g_heap_lock);
-    cache_free(c, p);
+    cache_free(c, p, site);
     spin_unlock_irqrestore(&g_heap_lock, fl);
 }
 void *pcb_alloc(void)    { return pool_alloc(&cache_pcb); }
-void  pcb_free(void *p)  { pool_free(&cache_pcb, p); }
+void  pcb_free(void *p)  { pool_free(&cache_pcb, p, (uint64_t)(uintptr_t)__builtin_return_address(0)); }
 void *cap_alloc(void)    { return pool_alloc(&cache_cap); }
-void  cap_free(void *p)  { pool_free(&cache_cap, p); }
+void  cap_free(void *p)  { pool_free(&cache_cap, p, (uint64_t)(uintptr_t)__builtin_return_address(0)); }
 void *ipc_alloc(void)    { return pool_alloc(&cache_ipc); }
-void  ipc_free(void *p)  { pool_free(&cache_ipc, p); }
+void  ipc_free(void *p)  { pool_free(&cache_ipc, p, (uint64_t)(uintptr_t)__builtin_return_address(0)); }
 
 void *ptnode_alloc(void) {
     uint64_t page = pmm_alloc_page();          /* PMM has its own lock */
@@ -297,7 +333,21 @@ void *ptnode_alloc(void) {
 void ptnode_free(void *p) {
     if (!p)
         return;
-    pmm_free_page((uint64_t)(uintptr_t)p);
+    /* DDR-1065. Decrement ONLY when a frame was actually released. This used to
+     * be unconditional, and on a COW fork that is wrong in a way that compounds:
+     * ptnode_alloc increments ONCE per frame, pmm_incref then raises the refcount
+     * with no second increment (correct -- no new frame), but free_subtree
+     * ptnode_free's the leaf page from BOTH address spaces. One ++, TWO --, one
+     * release: ptnode_in_use lost 1 per COW-shared frame and kheap_outstanding()
+     * wrapped. Measured before the fix: "SHAREDPTE before=0 after=
+     * 18446744073709551615" -- 0xFFFFFFFFFFFFFFFF, i.e. -1, from ONE fork.
+     *
+     * DDR-1003 §5.2 named the wrong fix explicitly and it is NOT taken here:
+     * do not have vmm_cow_fault call ptnode_free instead of pmm_free_page: that
+     * decrements on a path where nothing was released and moves the imbalance. */
+    int released = pmm_free_page((uint64_t)(uintptr_t)p);
+    if (!released)
+        return;
     uint64_t fl = spin_lock_irqsave(&g_heap_lock);
     ptnode_in_use--;
     spin_unlock_irqrestore(&g_heap_lock, fl);

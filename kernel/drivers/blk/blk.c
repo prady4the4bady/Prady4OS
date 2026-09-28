@@ -1,5 +1,6 @@
 /* kernel/drivers/blk/blk.c — block device registry + read/write dispatch. */
 #include "blk.h"
+#include "errno.h"
 
 #define BLK_MAX 8
 
@@ -27,4 +28,14 @@ int blk_write(unsigned dev, uint64_t lba, const void *buf, uint32_t count) {
     if (dev >= g_n || !g_blk[dev]->write)
         return -1;
     return g_blk[dev]->write(g_blk[dev], lba, buf, count);
+}
+
+/* DDR-1143 §10.2: -ENOSYS, not 0, when the driver provides no flush -- an
+ * absent op must never read as "durable". */
+int blk_flush(unsigned dev) {
+    if (dev >= g_n)
+        return -1;
+    if (!g_blk[dev]->flush)
+        return -ENOSYS;
+    return g_blk[dev]->flush(g_blk[dev]);
 }

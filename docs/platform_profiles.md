@@ -15,7 +15,7 @@ differs. No giant `#ifdef` jungles — platform divergence lives in per-ISA file
 | L5 | Userspace (pradyos-init, PRISM shell, musl, prad) | 🟡 5a static ELF loader + per-process AS + W^X done; syscalls (5b), musl, init, shell, prad pending |
 | L6 | AETHER runtime (aetherd, Ollama bridge, cloud adapters, 8 named agents, Sovereign Gate, approval queue) | 🔴 |
 | L7 | Desktop / compositor (Wayland + Sovereign/Manual UI) | 🔴 |
-| L8 | Quantum Abstraction Layer (`/dev/qpu0`, QAOA, Grover) | 🔴 future |
+| L8 | Quantum Abstraction Layer (`/dev/qpu0`, QAOA, Grover) | ⛔ withdrawn, not planned (CLAUDE.md §PHASE 3) |
 
 ## Target ISAs & platform profiles
 

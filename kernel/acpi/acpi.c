@@ -201,11 +201,12 @@ void acpi_power_init(void) {
         for (uint32_t i = 0; i + 4 <= n; i++)
             if (aml[i] == '_' && aml[i+1] == 'S' && aml[i+2] == '3' && aml[i+3] == '_')
                 raw3++;
-        kputs("[acpi] DSDT _S3_ occurrences=");
-        kputdec(raw3);
-        kputs(" parsed=");
-        kputdec((uint64_t)g_s3_ok);
-        kputs("\n");
+        { kline k; kline_init(&k);                   /* DDR-1055 */
+          kline_s(&k, "[acpi] DSDT _S3_ occurrences=");
+          kline_d(&k, raw3);
+          kline_s(&k, " parsed=");
+          kline_d(&k, (uint64_t)g_s3_ok);
+          kline_s(&k, "\n"); kline_emit(&k); }
     }
 
     /* DDR-747: FADT reset register (ACPI §5.2.9). Flags@112 bit10 =

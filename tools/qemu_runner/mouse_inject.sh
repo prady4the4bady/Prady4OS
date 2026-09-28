@@ -26,14 +26,30 @@ sock="$2"
 sentinel="${3:-PRADYOS_COMPOSITOR_OK}"
 expect="${4:-}"
 
-# Readiness: poll, never a fixed wait. 60s ceiling.
-for _ in $(seq 1 600); do
+# Readiness: poll, never a fixed wait.
+#
+# DDR-1036: the ceiling is a PARAMETER now, because 60 s is not enough for every
+# scenario. A gate whose sentinel fires only after a window has been created,
+# composited and then destroyed is waiting on the far side of the compositor's
+# ~28 s startup (DDR-1029), and 60 s put smoke-ghostclick's sentinel outside the
+# window entirely.
+#
+# NOTE WHAT THIS LOOP DOES ON EXPIRY, because it is not obvious and it cost a
+# debugging round: it FALLS THROUGH and injects anyway. A sentinel that never
+# appears therefore does not fail loudly — the injector proceeds and clicks
+# against whatever geometry happens to be in the log, which is exactly the
+# stale-target behaviour DDR-1036 exists to prevent. Left as-is rather than made
+# fatal: other gates may depend on the fall-through, and changing it days from a
+# release is a wider blast radius than this DDR is taking. Recorded, not fixed.
+ready_iters=$(( ${READY_TIMEOUT_S:-60} * 10 ))
+for _ in $(seq 1 "$ready_iters"); do
     grep -q "$sentinel" "$log" 2>/dev/null && break
     sleep 0.1
 done
 
 SOCK="$sock" LOGFILE="$log" EXPECT="$expect" \
 GEOM_TITLE="${GEOM_TITLE:-}" GEOM_FIELD="${GEOM_FIELD:-close}" \
+GEOM_LINE="${GEOM_LINE:-PRADYOS_WM_GEOM}" \
 ABSX="${ABSX:-16000}" ABSY="${ABSY:-12000}" \
 INJECT_TIMEOUT_S="${INJECT_TIMEOUT_S:-60}" python3 - <<'PY'
 import os, socket, json, time
@@ -45,6 +61,10 @@ ax       = int(os.environ.get("ABSX", "16000"))
 ay       = int(os.environ.get("ABSY", "12000"))
 geom_title = os.environ.get("GEOM_TITLE", "")
 geom_field = os.environ.get("GEOM_FIELD", "close")
+# DDR-1008: which published line carries the geometry. Defaults to the literal
+# this resolver used to hardcode, so every existing caller is unchanged; the dock
+# publishes PRADYOS_WM_DOCK instead, with the same `title=` / `field=x,y` shape.
+geom_line = os.environ.get("GEOM_LINE", "PRADYOS_WM_GEOM")
 deadline = time.monotonic() + float(os.environ.get("INJECT_TIMEOUT_S", "60"))
 
 s = None
@@ -72,6 +92,9 @@ def cmd(obj):
 cmd({"execute": "qmp_capabilities"})
 
 
+gone_told = False   # DDR-1036: one refusal line per run, not per poll
+
+
 def resolve_geometry():
     """DDR-910: take the click target from what the compositor SAYS it drew.
 
@@ -90,7 +113,33 @@ def resolve_geometry():
     except OSError:
         return False
     for ln in reversed(lines):                 # newest wins: layout can change
-        if "PRADYOS_WM_GEOM" not in ln or ("title=" + geom_title) not in ln:
+        if ("title=" + geom_title) not in ln:
+            continue
+        # DDR-1036: the newest record for this title decides, over BOTH record
+        # types. The serial log is append-only, so a destroyed window's last
+        # PRADYOS_WM_GEOM is still present and says nothing about being gone --
+        # which is how this script came to click a dead window 45 times in one
+        # capture (DDR-1028), and how smoke-wmclose came to report "close box
+        # click did not close" about a window that no longer existed.
+        #
+        # Returning False rather than raising: the caller's wait loop already
+        # treats False as "not ready yet" and retries to its deadline, so a
+        # window that is about to be RECREATED is waited for (recycled slots
+        # emit GONE then a fresh GEOM, and newest-wins then reports live), while
+        # one that never returns times out with the existing [inject] TIMEOUT
+        # message instead of silently clicking empty space.
+        if "PRADYOS_WM_GONE" in ln:
+            # BOUNDED: resolve_geometry is called from a 0.2 s poll loop and
+            # again before every click, so an unconditional print here would
+            # emit thousands of identical lines and slow the thing it reports on
+            # — DDR-941's rule. Printed once; the state is not transient, so one
+            # line is the whole story.
+            global gone_told
+            if not gone_told:
+                gone_told = True
+                print("[inject] target gone title=%s — not clicking" % geom_title)
+            return False
+        if geom_line not in ln:
             continue
         for tok in ln.split():
             if tok.startswith(geom_field + "="):
@@ -135,8 +184,8 @@ def click():
 if geom_title:
     while not resolve_geometry():
         if time.monotonic() >= deadline:
-            print("[inject] TIMEOUT — no PRADYOS_WM_GEOM for title=%s"
-                  % geom_title)
+            print("[inject] TIMEOUT — no %s for title=%s"
+                  % (geom_line, geom_title))
             raise SystemExit(0)
         time.sleep(0.2)
 

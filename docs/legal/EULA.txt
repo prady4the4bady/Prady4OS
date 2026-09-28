@@ -1,0 +1,53 @@
+PRADYOS v1.0.0 — END-USER LICENCE AGREEMENT (DRAFT FOR OWNER REVIEW)
+
+Status: this is a minimal draft written at the owner's instruction (PR #17,
+comment 5822896320). It has NOT been reviewed by a lawyer. It must be reviewed
+before PradyOS is given to anyone outside the development and test group.
+
+1. Who this applies to
+   PradyOS ("the Software") is owned by Pradyun Kumar Sinha ("the Owner"). The
+   file LICENSE.txt on this medium is the governing licence and prevails over
+   this agreement wherever the two differ. This agreement adds terms that
+   apply to anyone the Owner has permitted, in writing, to run the Software.
+
+2. Permitted use
+   You may boot and run the Software only as the Owner has permitted you in
+   writing, and only for evaluation and testing. No other right is granted.
+
+3. Distribution restriction
+   This build is NOT authorised for distribution outside the current
+   development and test group. It must not be published, uploaded, re-hosted
+   or exported. The Owner imposes this restriction until a formal
+   export-control review of the cryptography the Software contains has been
+   completed. See the release notes.
+
+4. Experimental software
+   The Software is an experimental operating system. It has been tested almost
+   entirely under emulation (QEMU). It has known open defects, which the
+   release notes list. Do not use it to store data you cannot afford to lose.
+   Do not use it on hardware you cannot afford to have misbehave.
+
+5. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED. This includes, but is not limited to, the warranties of
+   merchantability, fitness for a particular purpose and non-infringement.
+
+6. Limitation of liability
+   To the maximum extent permitted by law, the Owner is not liable for any
+   claim, damages or other liability arising from, out of, or in connection
+   with the Software or its use. This includes loss of data, damage to
+   hardware, and any direct, indirect, incidental or consequential damages.
+   It applies whether the claim is in contract, tort or otherwise.
+
+7. Third-party components
+   The Software includes lwIP and musl libc under their own licences. Those
+   licences are reproduced in THIRD_PARTY_NOTICES.txt on this medium. Nothing
+   in this agreement limits any right those licences give you in those
+   components.
+
+8. Privacy
+   See PRIVACY.txt on this medium.
+
+9. Support
+   v1.0.0 is supported on a best-effort basis. No formal end-of-life date is
+   set.

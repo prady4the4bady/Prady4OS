@@ -14,9 +14,36 @@
 #include "spinlock.h"
 
 #define SURFACE_MAX        16
-#define SURFACE_DIM_MAX    512u                /* per-surface buffer <= 1 MiB (512*512*4) */
+/* DDR-1007: three limits, and they are ONE quantity wearing three hats. Before
+ * this, only the first was written down and the second merely happened to agree
+ * with it:
+ *
+ *   - SURFACE_DIM_MAX bounds each axis.
+ *   - SURFACE_BYTES_MAX bounds w*h*4, which is what actually has to fit.
+ *   - SURFACE_VA_SLOT is the per-id window in the owner's (and the
+ *     compositor's) address space.
+ *
+ * sys_surface_map maps s->npages pages starting at BASE + id*SLOT and does NOT
+ * check that npages fits the slot. So raising DIM_MAX without raising SLOT maps
+ * surface N's buffer across surface N+1's window -- in the compositor, which
+ * maps surfaces belonging to OTHER processes. That is a cross-window leak, not a
+ * rendering artefact. The _Static_asserts below exist so the next raise is a
+ * build error rather than that. (§INV.13's PT_HI lesson: one quantity, two
+ * definitions, one of them undocumented.) */
+#define SURFACE_DIM_MAX    1024u               /* >= the 1024x768 scanout       */
+#define SURFACE_BYTES_MAX  (4u * 1024u * 1024u) /* one buddy order-10 block     */
 #define SURFACE_VA_BASE    0x8600000000ull     /* below the FB mapping (0x8700000000) */
-#define SURFACE_VA_SLOT    0x100000ull         /* 1 MiB per surface id */
+#define SURFACE_VA_SLOT    0x400000ull         /* 4 MiB per surface id          */
+
+_Static_assert(SURFACE_BYTES_MAX <= SURFACE_VA_SLOT,
+               "a surface buffer must fit its per-id VA window, or map() runs "
+               "surface N's pages over surface N+1's (DDR-1007 §1)");
+_Static_assert((uint64_t)SURFACE_DIM_MAX * SURFACE_DIM_MAX * 4u <= SURFACE_BYTES_MAX,
+               "the worst-case square surface must fit SURFACE_BYTES_MAX, or "
+               "order_for's silent clamp at o<10 under-allocates (DDR-1007 §2.1)");
+_Static_assert(SURFACE_VA_BASE + (uint64_t)SURFACE_MAX * SURFACE_VA_SLOT
+                   <= 0x8700000000ull,
+               "the surface VA region must stay below the framebuffer mapping");
 
 /* DDR-729: a client/compositor mapping is a VIEW of surface-layer-owned frames.
  * PTE_SW_SHARED makes free_subtree (vmm_destroy_address_space) skip these leaves
@@ -62,6 +89,11 @@ static spinlock_t g_surf_lock = SPINLOCK_INIT;  /* DDR-729: guards g_surf slot l
 struct surface_info { uint32_t id, w, h; int32_t x, y, z; uint32_t focused; char title[16];
                       uint32_t gen; };
 
+/* DDR-1007: the `o < 10` clamp is a SILENT under-allocation if npages > 1024 --
+ * the caller would get 4 MiB for a larger request. It is left as-is rather than
+ * given an error path (the two free paths pass an already-validated onpages, so
+ * a signature change buys nothing), and instead made unreachable by the
+ * SURFACE_BYTES_MAX assertion above. Do not raise SURFACE_DIM_MAX without it. */
 static unsigned order_for(uint64_t npages) {
     unsigned o = 0;
     while (((uint64_t)1 << o) < npages && o < 10) o++;
@@ -93,6 +125,8 @@ static long sys_surface_create(long a1, long a2, long a3, long a4, long a5, long
     (void)a3; (void)a4;
     uint32_t w = (uint32_t)a1, h = (uint32_t)a2;
     if (w == 0 || h == 0 || w > SURFACE_DIM_MAX || h > SURFACE_DIM_MAX)
+        return -EINVAL;
+    if ((uint64_t)w * h * 4 > SURFACE_BYTES_MAX)   /* DDR-1007: the real bound */
         return -EINVAL;
     /* Allocate + zero the buffer BEFORE the lock (a memset of up to 1 MiB must
      * not run under the IRQ-off slot lock). */
@@ -385,6 +419,8 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4, long a5, long
     if (id < 0 || id >= SURFACE_MAX)
         return -EINVAL;
     if (w == 0 || h == 0 || w > SURFACE_DIM_MAX || h > SURFACE_DIM_MAX)
+        return -EINVAL;
+    if ((uint64_t)w * h * 4 > SURFACE_BYTES_MAX)   /* DDR-1007: the real bound */
         return -EINVAL;
     /* Allocate + zero the new buffer BEFORE the lock. */
     uint64_t bytes = (uint64_t)w * h * 4;

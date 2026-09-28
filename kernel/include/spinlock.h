@@ -13,9 +13,16 @@ typedef struct { volatile uint8_t v; } spinlock_t;
 
 #define SPINLOCK_INIT { 0 }
 
+/* DDR-1047: the FAST PATH IS UNCHANGED -- one test-and-set and a branch, which
+ * is no more than the original loop emitted at each call site. All contention
+ * accounting lives in spin_lock_contended(), out of line, so a lock taken
+ * uncontended pays nothing at all. See kernel/lock_stat.h for why that
+ * matters here (an always-on cost on this primitive could perturb OPEN-2). */
+void spin_lock_contended(void *lock);          /* kernel/lock_stat.c */
+
 static inline void spin_lock(spinlock_t *l) {
-    while (__atomic_test_and_set(&l->v, __ATOMIC_ACQUIRE))
-        __asm__ volatile("pause");
+    if (__atomic_test_and_set(&l->v, __ATOMIC_ACQUIRE))
+        spin_lock_contended(l);
 }
 
 static inline void spin_unlock(spinlock_t *l) {

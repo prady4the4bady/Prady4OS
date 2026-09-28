@@ -289,6 +289,14 @@ static int nvme_io(struct nvme *n, int is_write, uint64_t lba,
     return 0;
 }
 
+/* DDR-1143 §10.2: NVM Flush (opcode 0x00), NSID 1, no data pointer. */
+static int nvme_bd_flush(struct blk_device *bd) {
+    struct nvme *n = (struct nvme *)bd->drv;
+    if (!n->io_ready)
+        return -1;
+    return nvme_submit(n, &n->io, 0x00, 1, 0, 0, 0, 0, 0) == 0 ? 0 : -1;
+}
+
 static int nvme_bd_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
     return nvme_io((struct nvme *)bd->drv, 0, lba, (uint64_t)(uintptr_t)buf, count);
 }
@@ -341,6 +349,10 @@ static void nvme_selftest(struct nvme *n) {
     }
     if (wq) pmm_free_pages(wq, 2);
     if (rq) pmm_free_pages(rq, 2);
+
+    /* DDR-1143 §10.2: the controller must accept an NVM Flush. */
+    kputs(nvme_bd_flush(&n->bd) == 0 ? "PRADYOS_NVME_FLUSH_OK\r\n"
+                                     : "PRADYOS_NVME_FLUSH_FAIL\r\n");
 
     /* DDR-774c (c-1): prove MSI-X completions are actually DELIVERED. Completion
      * is still polled, so the final command's interrupt may still be in flight
@@ -469,9 +481,10 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
      * stays in the (unchanged) polled mode. */
     int msix = (nvme_msix_setup(n, bus, dev, func) == 0);
     if (msix) {
-        kputs("[nvme] msix vec=");
-        kputdec(NVME_MSIX_VEC);
-        kputs("\r\n");
+        { kline k; kline_init(&k);                   /* DDR-1055 */
+          kline_s(&k, "[nvme] msix vec=");
+          kline_d(&k, NVME_MSIX_VEC);
+          kline_s(&k, "\r\n"); kline_emit(&k); }
     } else {
         kputs("[nvme] msix unavailable, polling only\r\n");
     }
@@ -502,6 +515,7 @@ void nvme_init(uint8_t bus, uint8_t dev, uint8_t func) {
     n->bd.capacity_sectors = n->nsze;   /* 512-byte LBAs == block-layer sectors */
     n->bd.read = nvme_bd_read;
     n->bd.write = nvme_bd_write;
+    n->bd.flush = nvme_bd_flush;
     n->bd.drv = n;
     blk_register(&n->bd);
     kputs("[nvme] registered nvme0 (");

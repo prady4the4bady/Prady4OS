@@ -36,6 +36,8 @@
  * it. Arm C is where a single large read is exercised.
  */
 
+#include "uline.h"          /* DDR-1056: one write per measured line */
+
 #define SYS_EXIT     4
 #define SYS_READ     5
 #define SYS_WRITE    6
@@ -169,9 +171,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
 
     nsi(SYS_CLOSE, fd, 0, 0);
 
-    wr("PRADYOS_FAT32_MC_OK bytes=");
-    wrdec(PAT_BYTES);
-    wr(" clusters=128 straddles=6\n");
+    { uline u; ul_init(&u);                       /* DDR-1056: ONE write */
+      ul_s(&u, "PRADYOS_FAT32_MC_OK bytes="); ul_d(&u, PAT_BYTES);
+      ul_s(&u, " clusters=128 straddles=6\n"); wr(ul_end(&u)); }
 
     /* ---- Arm C: the ADR-024 case itself -------------------------------- */
     /* sys_execve reads all 30,488 bytes of /CMUSL.ELF in one vfs_read and

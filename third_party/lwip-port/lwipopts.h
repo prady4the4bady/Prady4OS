@@ -45,13 +45,17 @@ void *pradyos_lwip_calloc(unsigned long n, unsigned long size);
 #define LWIP_IPV6                   0   /* deferred (ADR-025 §D5) */
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
-#define LWIP_DHCP                   0   /* static IP (ADR-025 §D5) */
+#define LWIP_DHCP                   1   /* DDR-1141: no static address, no fallback */
+#define LWIP_ACD                    0   /* DDR-1141 sec.2.1: no conflict probing (slirp cannot conflict) */
+#define LWIP_DHCP_DOES_ACD_CHECK    0
 #define LWIP_AUTOIP                 0
 #define LWIP_ICMP                   1
 #define LWIP_RAW                    1
 #define LWIP_UDP                    1
 #define LWIP_TCP                    1
-#define LWIP_DNS                    0
+#define LWIP_DNS                    1   /* DDR-1141: SYS_DNS_RESOLVE, policy-checked */
+#define DNS_MAX_SERVERS             2
+#define LWIP_DHCP_PROVIDE_DNS_SERVERS 1
 #define LWIP_IGMP                   0
 #define LWIP_NETIF_LOOPBACK         1   /* smoke-net-lo */
 #define LWIP_HAVE_LOOPIF            1
