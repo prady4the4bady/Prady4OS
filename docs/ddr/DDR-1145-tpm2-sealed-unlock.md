@@ -1,5 +1,7 @@
 # DDR-1145 — TPM 2.0: transport, measured kernel, sealed volume key
 
+> **Operator plan pointer (2026-10-03):** D4 (TPM+PIN optional, never TPM-only; sealing policy = §3's PCRs {0, 4, 7, 9}) is restated in `docs/OPERATOR_PLAN_2026-09-29.md` on branch `docs/operator-plan-2026-09-29` (commit `0ad164c`); where the two differ, that file states which governs.
+
 **Status: DESIGN. Committed before code (NON-NEGOTIABLE 5).** Part of the track
 DDR-1143 opens. A subsystem of its own, so it has its own DDR, as the operator
 asked.
