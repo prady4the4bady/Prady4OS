@@ -126,5 +126,37 @@ expect M3-leadonly AB "$(run m3 'HUNT_CTX_BEFORE=40; HUNT_CTX_AFTER=0')"
 grep -q 'filler line 213' "$D/m3.out" \
     || { echo "huntprint-selftest FAIL: M3 printed no leading context, so it does not model DDR-1088's defect"; rc=1; }
 
+
+# ---- DDR-1154 s.2: the silent-stop classifier --------------------------------
+# Three fixtures. HEALTHY heartbeats to 17500 (every measured healthy hunt run);
+# EARLY stops at 4500 before rqstress; LATE stops at 9000 AFTER '[smp] rqstress OK'
+# -- the case the old campaign printed as "churn clean". Arms: H = healthy must
+# NOT be flagged, E/L = early/late MUST be flagged.
+mkhb() {  # mkhb <file> <last-t> <churn-at-t or 0>
+    : > "$1"; t=500
+    while [ "$t" -le "$2" ]; do
+        echo "[hb] t=$t ticks[0=$t,1=$t,2=$t,3=$t] panics_silent=0" >> "$1"
+        [ "$3" -ne 0 ] && [ "$t" -eq "$3" ] && echo "[smp] rqstress OK" >> "$1"
+        t=$((t+500))
+    done
+}
+mkhb "$D/ss_healthy.log" 17500 3000
+mkhb "$D/ss_early.log"    4500 0
+mkhb "$D/ss_late.log"     9000 3000
+ss_arms() {  # ss_arms <prelude> -> failing arms
+    local f=""
+    bash -c ". tools/ci/hunt_print.sh; $1; hunt_silent_stop \"\$1\"" _ "$D/ss_healthy.log" && f="${f}H"
+    bash -c ". tools/ci/hunt_print.sh; $1; hunt_silent_stop \"\$1\"" _ "$D/ss_early.log"   || f="${f}E"
+    bash -c ". tools/ci/hunt_print.sh; $1; hunt_silent_stop \"\$1\"" _ "$D/ss_late.log"    || f="${f}L"
+    echo "${f:-none}"
+}
+expect ss-shipped none "$(ss_arms ':')"
+# M4: the floor defeated -- nothing is ever a silent stop (the pre-DDR-1154 campaign).
+expect ss-M4-nofloor EL "$(ss_arms 'HUNT_HB_FLOOR=0')"
+# M5: reads the FIRST heartbeat instead of the last -- everything looks stopped.
+expect ss-M5-firsthb H "$(ss_arms 'hunt_last_hb() { grep -o "^\[hb\] t=[0-9]*" "$1" | head -1 | sed "s/.*t=//"; }')"
+# The late fixture must really contain the churn line, or arm L is not the case it claims.
+grep -q 'rqstress OK' "$D/ss_late.log" || { echo "huntprint-selftest FAIL: late fixture carries no churn line"; rc=1; }
+
 [ "$rc" -eq 0 ] && echo "huntprint-selftest: PASS (shipped passes all arms; M1/M2/M3 each fail their own set)"
 exit "$rc"

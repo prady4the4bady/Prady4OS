@@ -70,3 +70,26 @@ hunt_print() {
             if (cut) printf "[campaign]   context TRUNCATED at %d lines (full capture is in the lane artifact)\n", MAX
         }' "$cap"
 }
+
+# DDR-1154 s.2: the SIGNALS scan cannot see a WHOLE-MACHINE SILENT STOP -- OPEN-1
+# route 1's shape, reproduced by DDR-1151 s.6 in 4 of 30 forced boots with no
+# panic, no [apfreeze] and no heartbeat. A stop AFTER rqstress_proof printed
+# "churn clean", indistinguishable from a healthy boot. What does distinguish it
+# is the LAST heartbeat: every healthy hunt run measured so far ends at t=17500
+# (the 180 s window at 100 Hz; run 36019681198 lane 9, 55 of 55), and a machine
+# that stopped stops heartbeating. The floor is one heartbeat interval below
+# that, so a boot that is merely slow does not trip it. This DECIDES nothing on
+# SIGNALS -- the caller asks it only about runs with zero SIGNALS matches.
+HUNT_HB_FLOOR="${HUNT_HB_FLOOR:-17000}"
+
+# hunt_last_hb <capture> -> prints the LAST heartbeat tick (0 if none)
+hunt_last_hb() {
+    local t
+    t="$(grep -o '^\[hb\] t=[0-9]*' "$1" 2>/dev/null | tail -1 | sed 's/.*t=//')"
+    echo "${t:-0}"
+}
+
+# hunt_silent_stop <capture> -> rc 0 iff the heartbeat stopped short of the floor
+hunt_silent_stop() {
+    [ "$(hunt_last_hb "$1")" -lt "$HUNT_HB_FLOOR" ]
+}

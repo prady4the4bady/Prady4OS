@@ -106,6 +106,7 @@ SIGNALS='\[ringwalk\]|\[apfreeze\]|\[schedcheck\]|panic_stage=|NEXUS KERNEL PANI
 CHURN='\[smp\] rqstress OK'
 hits=0
 churn=0
+silent=0
 for i in $(seq 1 "$N"); do
     now="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
     if [ "$now" != "$PIN" ]; then
@@ -133,7 +134,15 @@ for i in $(seq 1 "$N"); do
     hb="$(grep -o '^\[hb\] t=[0-9]*' "$cap" | tail -1)"
     sig="$(grep -cE "$SIGNALS" "$cap")"
     if grep -qE "$CHURN" "$cap"; then churn=$((churn+1)); ch=churn; else ch=NO-CHURN; fi
-    if [ "$sig" -gt 0 ]; then
+    if [ "$sig" -eq 0 ] && hunt_silent_stop "$cap"; then
+        # DDR-1154 s.2: a silent stop is a SIGNAL, not "clean" -- counted in
+        # hits so the workflow's existing signal_runs=[1-9] check fails the
+        # lane, and counted separately so the DONE line says which kind it was.
+        hits=$((hits+1)); silent=$((silent+1))
+        echo "[campaign] run=$i rc=$rc ${hb} $ch *** SILENT-STOP last_hb=$(hunt_last_hb "$cap") < ${HUNT_HB_FLOOR} (OPEN-1 route-1 shape) *** cap=$cap"
+        echo "[campaign]   --- capture tail (where the output ended) ---"
+        tail -40 "$cap" | cat -v
+    elif [ "$sig" -gt 0 ]; then
         hits=$((hits+1))
         echo "[campaign] run=$i rc=$rc ${hb} $ch *** SIGNAL x$sig *** cap=$cap"
         # DDR-1129: was `head -5`. DDR-1128's run produced 4 `[apfreeze]` shots
@@ -151,4 +160,4 @@ for i in $(seq 1 "$N"); do
 done
 # churn_runs is the DENOMINATOR (NON-NEGOTIABLE 17): a bound computed over runs
 # that never ran the churn is a bound over boots that could not have fired.
-echo "[campaign] DONE runs=$N signal_runs=$hits churn_runs=$churn kernel_pinned=${PIN:0:16}"
+echo "[campaign] DONE runs=$N signal_runs=$hits silent_runs=$silent churn_runs=$churn kernel_pinned=${PIN:0:16}"
