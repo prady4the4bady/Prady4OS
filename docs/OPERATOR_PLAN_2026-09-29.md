@@ -2,7 +2,7 @@
 
 The requirements, ports, touch and display work, and the missed-components register are in `docs/T1_REQUIREMENTS_REGISTER.md`. This file holds decisions, hardware facts, hunt methods and PR ownership.
 
-Tags: **[APPROVED]** the operator approved it in the 2026-10-03 14:29 +04 message; **[PROPOSED]** my recommendation, not yet approved; **[VERIFIED]** read from this repo or stated by the operator; **[QUESTION]** the implementer must answer from the code; **[EXTERNAL]** a public source, linked inline; **[INFERENCE]** my reasoning, not verified.
+Tags: **[APPROVED]** the operator approved it (2026-10-03, 14:29 +04 and 14:34 +04 messages); **[VERIFIED]** read from this repo or stated by the operator; **[QUESTION]** the implementer must answer from the code; **[EXTERNAL]** a public source, linked inline; **[INFERENCE]** my reasoning, not verified.
 
 ## 1. Milestones
 
@@ -10,27 +10,24 @@ Tags: **[APPROVED]** the operator approved it in the 2026-10-03 14:29 +04 messag
 - **v1.0.0** is the release. Its gates are in `docs/PRE_LAUNCH_CHECKLIST.md` section 0 and are unchanged by this file.
 - **POST** means after release.
 
-## 2. Decisions
-
-### Approved by the operator
+## 2. Decisions [all APPROVED by the operator]
 
 | ID | Decision |
 |---|---|
-| D1 | [APPROVED] No universal vendor escrow in v1. |
-| D2 | [APPROVED] One random, high-entropy, user-held recovery key, shown once, with a checksum; the installer forces proof that it was saved. Shamir splitting is POST. |
-| D3 | [APPROVED] The escrow backend and identity checks are an operator task outside this repo. |
-| D4 | [APPROVED] TPM+PIN is an optional UEFI unlock. Never TPM-only. |
-| D5 | [APPROVED] PBKDF2-HMAC-SHA256 at 600,000 iterations or more for v1, with a KDF id in the keyslot header and a re-wrap to Argon2id on the next successful unlock once Argon2id passes known-answer tests. |
-| D6 | [APPROVED] BIOS installs are passphrase-only. |
-| Scope | [APPROVED] USB, touch and multi-display are in T1. Native GPU drivers are POST. |
+| D1 | No universal vendor escrow in v1. |
+| D2 | One random, high-entropy, user-held recovery key, shown once, with a checksum; the installer forces proof that it was saved. Shamir splitting is POST. |
+| D3 | The escrow backend and identity checks are an operator task outside this repo. |
+| D4 | TPM+PIN is an optional UEFI unlock. Never TPM-only. |
+| D5 | PBKDF2-HMAC-SHA256 at 600,000 iterations or more for v1, with a KDF id in the keyslot header and a re-wrap to Argon2id on the next successful unlock once Argon2id passes known-answer tests. |
+| D6 | BIOS installs are passphrase-only. |
+| Scope | USB, touch and multi-display are in T1. Native GPU drivers are POST. |
+| TPM | Bind TPM sealing to PCR 7 first; evaluate PCRs 11 and 14. Build TPM+PIN last. If it slips, v1 may ship passphrase plus recovery only, with the gap stated in the release notes. |
+| Secure Boot | Unsupported in v1 and documented, so TPM unlock protects against a stolen disk, not a tampered loader. |
+| Keyslots | Layered: passphrase (mandatory), TPM+PIN (optional, UEFI), recovery key (always created). |
+| OPEN-2 bar | The 11,000-boot QEMU campaign clean, plus an installed-disk hunt and a hardware-accelerated (VMware) hunt. Each residual signature gets a named mechanism with a test, or an honest written non-closure. |
+| OPEN-1 | Route 1 may ship named-open only if the installed-disk and VMware hunts are also clean. Any hit in them blocks the tag. |
 
-### Proposed, awaiting the operator
-
-- [PROPOSED] Bind TPM sealing to PCR 7 first; evaluate PCRs 11 and 14. Build TPM+PIN last. If it slips, v1 may ship passphrase plus recovery only, with the gap stated in the release notes.
-- [PROPOSED] Secure Boot is unsupported in v1 and documented, so TPM unlock protects against a stolen disk, not a tampered loader.
-- [PROPOSED] Layered keyslots: passphrase (mandatory), TPM+PIN (optional, UEFI), recovery key (always created).
-- [PROPOSED] OPEN-2 bar: the 11,000-boot QEMU campaign clean, plus an installed-disk hunt and a hardware-accelerated (VMware) hunt. Each residual signature gets a named mechanism with a test, or an honest written non-closure.
-- [PROPOSED] OPEN-1: route 1 may ship named-open only if the installed-disk and VMware hunts are also clean. Any hit in them blocks the tag.
+Nothing in this file is awaiting a decision. Future changes need a new operator comment.
 
 ## 3. Operator hardware [VERIFIED by the operator]
 
