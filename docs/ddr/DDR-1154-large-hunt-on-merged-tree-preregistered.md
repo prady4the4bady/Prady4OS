@@ -146,3 +146,21 @@ A machine that stopped silently stops heartbeating, so its last `t` is lower. **
 - **Dispatch 5 (37108041701) is itself still queued.**
 
 The two-in-flight rule of §2 would now be a twenty-runner claim competing with every CI suite. The rule is therefore relaxed to *"one in flight while CI is queued"*. Dispatch 6 goes out only once those `pradyos-ci` runs have started. This changes the **pace** of the campaign, not its design: the criterion, the binary, the floor and the 11,000 target are all unchanged.
+
+### 6.4 Dispatch 5 (ref `473b675`): 19 lanes clean, lane 9 UNREAD after a job timeout. Starvation cleared; dispatch 6 sent
+
+**Dispatch 5, run 37108041701, concluded `cancelled` overall, and the ONLY cause is lane 9.** That lane (job 111180660197) hit the workflow's 180-minute job limit. Its annotation reads *"The job has exceeded the maximum execution time of 3h0m0s"*. The job started 10:05:39Z and was cancelled at 13:10:39Z, with the Hunt step still in progress.
+- **Lane 9 is UNREAD.** The log download returns 404 and the upload step never ran, so no artifact exists.
+- It is therefore **excluded from the denominator.** It is **not counted clean**, because §4's rule is that a boot counts only if its `DONE` line was read.
+- It is **not counted as a signal** either. A cancelled job is not the inverted-polarity `failure` the workflow uses to report a find.
+- **The cause is not established.** It could be a slow runner. It could be a run that never terminated: a boot that hangs past `boot_test.sh`'s own `timeout`, or the harness itself. Nothing in hand distinguishes the two.
+- The other 19 lanes took about 2 h 46 m for 55 boots, so the margin to the 3 h limit is about 14 minutes. A runner some 8% slower would hit the limit with no defect anywhere. That is a reason to suspect a slow runner, **not evidence of one**, and nothing is concluded from it.
+- **What would settle it is the per-run capture, and none exists.** If a later lane times out, the remedy is to shrink `runs` so the margin grows (for example 50 boots at about 2 h 31 m). It is **not** to raise `timeout-minutes`, which would leave the next unreadable lane equally unreadable. That would be a pace change, not a design change; it is recorded here and not made yet.
+
+**The other 19 lanes (0–8 and 10–19) succeeded, and every `DONE` line was read.** Each reads `runs=55 signal_runs=0 silent_runs=0 churn_runs=55 kernel_pinned=182c30bb16930d57`. Lane 14 finished at 14:17Z, later than the rest, and still reads clean.
+
+**Running total for criterion (A):** 4,400 + 19 × 55 = **5,445 of 11,000 boots** on `182c30bb16930d57`. That is 0 signals and 0 silent stops, with 55 boots unread and excluded. The interim 95% upper bound is 3/5445 ≈ **0.055% per boot**. It is still not pooled with DDR-1139 §8. To reach 11,000 the campaign needs 5,555 more read boots, which is about 5.05 further dispatches at 1,100 each. The target is a count of **read** boots, so lane 9's loss is made up rather than written off.
+
+**The starvation has cleared.** At the time of writing no `pradyos-ci` or `open2-hunt` run is non-completed. The `77a96da` (37097437825) and `db7d3c1` (37108061827) suites both completed successfully, and PR #29's head `d667e8a` has both suites green. §6.3's hold is therefore lifted.
+- **Dispatch 6** goes out on the same ref and parameters: `ref=473b67536ceb94b440492ae6b172f853023a93a4`, `lanes=20`, `runs=55`, `hunt=32`.
+- The rule stays *"one in flight while CI is queued"*. With nothing queued, a second dispatch may follow, but only after checking the queue again.
