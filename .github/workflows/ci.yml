@@ -173,7 +173,7 @@ jobs:
       # kernel.bin with nasm + dd. Shipping them would add ~185 MB per shard for
       # files that are rewritten on arrival.
       - name: Upload build tree
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-tree
           path: |
