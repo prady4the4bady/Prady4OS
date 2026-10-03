@@ -130,3 +130,19 @@ A machine that stopped silently stops heartbeating, so its last `t` is lower. **
 **Dispatch 4, run 37097192020,** was still running when this was written and will be recorded in §6.3. **Dispatch 5** went out on the same ref and parameters as run **37108041701**, keeping two in flight per §2. Dispatch 6 goes out when dispatch 4 completes.
 
 **Running total for criterion (A):** **3,300 of 11,000 boots** on `182c30bb16930d57`, 0 signals, 0 silent stops. The interim 95% upper bound is 3/3300 ≈ **0.091% per boot**. It is still not pooled with DDR-1139 §8.
+
+### 6.3 Dispatch 4 (new campaign, ref `473b675`): clean, 1,100 boots. Dispatch 6 held because CI is starved
+
+**Dispatch 4, run 37097192020: all 21 jobs succeeded.** That is 0 of 20 lanes failed, so the setup-failure row does not apply.
+- All 20 lanes' `DONE` lines were read, not just the job conclusions, per §4's denominator rule. Every one reads `runs=55 signal_runs=0 silent_runs=0 churn_runs=55 kernel_pinned=182c30bb16930d57`.
+- Lane 14's per-run tail was read in full: runs 45–55 all read `rc=0 [hb] t=17500 churn clean`.
+- Lanes 3 and 4 ended with a final heartbeat of `t=18000` and the rest at `t=17500`. All of these are above the floor.
+
+**Running total for criterion (A):** **4,400 of 11,000 boots** on `182c30bb16930d57`, with 0 signals and 0 silent stops. The interim 95% upper bound is 3/4400 ≈ **0.068% per boot**. It is still not pooled with DDR-1139 §8.
+
+**Dispatch 6 is HELD, by operator instruction** ("hold new dispatches if they starve pradyos-ci"). The starvation was measured at the time of writing:
+- `pradyos-ci` push runs on `77a96da` (37097437825, queued since 04:42Z) and `db7d3c1` (37108061827) are still **queued, not started**.
+- Further `pradyos-ci` runs on `dev/phase1` (`9df3c17`, `ee7f0b6`) and on PR #27 (`68badec`, `3aa8a40`) are queued behind them.
+- **Dispatch 5 (37108041701) is itself still queued.**
+
+The two-in-flight rule of §2 would now be a twenty-runner claim competing with every CI suite. The rule is therefore relaxed to *"one in flight while CI is queued"*. Dispatch 6 goes out only once those `pradyos-ci` runs have started. This changes the **pace** of the campaign, not its design: the criterion, the binary, the floor and the 11,000 target are all unchanged.
