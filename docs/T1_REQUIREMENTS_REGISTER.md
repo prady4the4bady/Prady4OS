@@ -1,6 +1,6 @@
-# T1 and v1 requirements register (2026-10-03)
+# T1 and v1 requirements register (2026-10-03, rev 2)
 
-Decisions and PR ownership are in `docs/OPERATOR_PLAN_2026-09-29.md`. Tags: **[VERIFIED]** read from this repo, **[REQUIRED]** a requirement this PR adds, **[QUESTION]** the implementer must answer from the code, **[EXTERNAL]** a public source (section 8), **[INFERENCE]** my reasoning, not verified. Milestones: T1 (VMware test ISO), v1 (release), POST (after release).
+Decisions and PR ownership are in `docs/OPERATOR_PLAN_2026-09-29.md`. Tags: **[REQUIRED]** required by the approved scope (T1 scope and the decisions in the plan); **[PROPOSED]** not approved, so not decided; **[VERIFIED]** read from this repo or measured; **[QUESTION]** the implementer must answer from the code; **[EXTERNAL]** a public source (section 8); **[INFERENCE]** my reasoning, not verified. Milestones: T1 (VMware test ISO), v1 (release), POST (after release).
 
 ## 1. Ports and connectors: what each one needs
 
@@ -23,11 +23,15 @@ A port is not a driver. The driver belongs to the controller behind it.
 
 ## 2. Touch and multi-display [REQUIRED]
 
-The operator owns no touch hardware, so T1 validates touch on emulated devices. [QUESTION] Which emulated touch or tablet devices does the project's QEMU version provide (for example USB tablet or a virtio multitouch device)? Use those in CI and document what real hardware still needs.
+The operator owns no touch hardware, so T1 validates touch on emulated devices.
+
+- [VERIFIED by Claude Code, QEMU 8.2.2] The emulated devices available are `virtio-multitouch-pci`, `virtio-tablet-pci`, and the USB devices `usb-tablet` and `usb-wacom-tablet` on the `qemu-xhci` bus.
+- [VERIFIED by Claude Code] Today `virtio_input.c` folds only `ABS_X` and `ABS_Y`, with no `ABS_MT_*` slot handling, and the kernel has no xHCI driver.
+- Multi-touch checks (R-T1, R-T3) use `virtio-multitouch-pci` first, because it needs no USB stack. `usb-tablet` is an absolute pointer and is used for pointer tests only; use it after xHCI lands. Real I2C-HID digitizers, vendor HID descriptors and precision-touchpad gestures still need real hardware.
 
 - R-T1 (T1): xHCI plus USB HID, including the multi-touch digitizer report format (contact id, position, pressure) [EXTERNAL 10].
 - R-T2 (T1): I2C-HID via ACPI for laptop-internal touchscreens and precision trackpads [EXTERNAL 7].
-- R-T3 (T1): a multi-contact input abstraction with tap, drag and pinch, palm rejection, and an on-screen keyboard.
+- R-T3 (T1): a multi-contact input abstraction (`ABS_MT_*` slots) with tap, drag and pinch, palm rejection, and an on-screen keyboard.
 - R-T4 (T1): UI hit targets and layouts that work for both finger and pointer, with both usable at once.
 - R-T5 (v1): bind each touch device to the display it belongs to, with per-display calibration [EXTERNAL 11]. A touch monitor on the second output drives only that output.
 - R-T6 (POST): validate on a real USB touch monitor once one is available.
@@ -66,32 +70,37 @@ The operator owns no touch hardware, so T1 validates touch on emulated devices. 
 
 ## 4. Install, encryption and key safety [REQUIRED]
 
-Order: DDR-1144 (crypt device, PBKDF2, KDF id, keyslots, known-answer tests), then DDR-1146 (recovery key), then DDR-1145 (TPM+PIN). Keep the project's gates and mutation checks.
+Order: DDR-1144 (crypt device, KDF per plan decision D5, keyslots, known-answer tests), then DDR-1146 (recovery key), then DDR-1145 (TPM+PIN). Keep the project's gates and mutation checks.
 
-- [QUESTION] How is the per-sector nonce chosen and persisted? What happens on a torn write? Are sector number and key id bound as associated data [EXTERNAL 15,16]?
-- [QUESTION] Replay of an older valid sector is not stopped by per-sector AEAD. Accept and document it, or add a counter.
-- [QUESTION] Is the ledger seed in P2 sector 1 readable without the passphrase? If so, wrap it under the volume key.
+Answers read from DDR-1144 by Claude Code (DDR-1144 is a design only, no code yet) [VERIFIED as a design]:
+- Mode: AEAD (ChaCha20-Poly1305). The nonce is 96 random bits per write from a per-volume ChaCha20 DRBG, stored with the tag as a 28-byte entry in a metadata area; it is not derived from the sector number. Per-block subkeys come from HKDF over the volume key.
+- Associated data binds the volume uuid, block number and header generation. Torn writes are handled by out-of-place SFS blocks and an A/B superblock and journal record chosen by generation, which depends on the flush barriers of DDR-1143 section 4.2.
+- Rollback of an older valid sector is not detected (DDR-1144 threat table). See the plan's proposed list.
+- The ledger seed in P2 sector 1 is plaintext on disk (DDR-1153 section 6). See the plan's proposed list.
+
+Other requirements:
 - Zeroize the volume key on shutdown and on every panic path. Keys never reach klog. A future S3 or crash-dump writer must never expose keys [EXTERNAL 17].
 - Generate keys and salts only after a hardware entropy source is confirmed; fail closed with a clear message otherwise.
 - Enforce a minimum passphrase length, a lockout or delay on repeated failures, and a passphrase change that re-wraps rather than re-encrypts.
 - On TPM unseal failure, fall back to the passphrase, then the recovery key. Never hard-fail [EXTERNAL 18].
-- Measure PBKDF2 at 600,000 iterations in the boot path under QEMU and VMware; store the count in the keyslot.
+- Measure the KDF in the boot path under QEMU and VMware; store the parameters in the keyslot.
 - Keep two copies of the keyslot header, or a checksum plus a backup. Test 4Kn disks.
 - Installer safety: refuse a disk that already has a partition table unless the operator types the device and size; power loss during install leaves the disk untouched or clearly incomplete.
 
 ## 5. Model sources for agents [REQUIRED]
 
-- [VERIFIED] Local path: `aether/ollama_bridge` and the live path in `user/agent_base.c`, default endpoint 10.0.2.2:11434 (the QEMU host). Cloud path: `aether/cloud_bridge`, with privacy-mode network filtering (DDR-802) and shared rate limiting and audit (DDR-793).
+- [VERIFIED] Local path: `aether/ollama_bridge` and the live path in `user/agent_base.c`, default endpoint 10.0.2.2:11434 (the QEMU host).
+- [VERIFIED] Cloud path: `aether/cloud_bridge` exists as Python code on dev/phase1 (DDR-793). Claude Code found no kernel-side code for it: `kernel/` and `user/` contain only comments saying it is deferred. The module documents a prohibition on shipping activation until the kernel authorization and destination-audit risks are closed.
+- [VERIFIED by Claude Code] The only bridge credential in the tree is a test string stored through `SYS_VAULT_PUT`/`GET`, and the vault key derives from `g_owner_seed`, which is 32 literal bytes compiled into the image (DDR-1059). A cloud API key therefore cannot be stored there safely.
 - [VERIFIED] DDR-1110 states the machine has no on-device natural-language model.
 - R-M1 (v1): a model-source layer with three sources: a cloud API key, local ready-made models (Ollama) chosen by hardware, and a signed slot for the OS's own trained model.
-- R-M2 (v1): the cloud API key is stored encrypted under the volume key, never in a plaintext /etc/aether/config.
+- R-M2 (v1): the cloud API key is stored encrypted under the volume key (per-install key plus the DDR-1144 wrap), never in a plaintext /etc/aether/config and never under `g_owner_seed`.
 - R-M3 (v1): all sources pass through CAP_NET, the egress allowlist and the audit record.
 - R-M4 (T1): a way to point the agent at an Ollama server reachable from VMware, whose NAT address differs from QEMU's 10.0.2.2.
-- [QUESTION] Where does `cloud_bridge` read its key from today? This file does not answer it.
 
 ## 6. T1 acceptance
 
-In VMware on the Legion, for both BIOS and UEFI: install to an encrypted disk succeeds; passphrase and recovery unlock work; display, keyboard and mouse work; the network gets an address by DHCP; the agent answers through a local Ollama server; the UI shell shows agents and the approval queue. In QEMU or VMware with emulated devices: touch contacts and gestures work, and a second display can be added and removed. Report pass or fail per item.
+In VMware on the Legion, for both BIOS and UEFI: install to an encrypted disk succeeds; passphrase and recovery unlock work; display, keyboard and mouse work; the network gets an address by DHCP; the agent answers through a local Ollama server; the UI shell shows agents and the approval queue. In QEMU or VMware with emulated devices: multi-touch contacts and gestures work (using `virtio-multitouch-pci`), and a second display can be added and removed. Report pass or fail per item.
 
 ## 7. Notes on the 2026-09-29 version of this document
 
