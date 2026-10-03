@@ -23,7 +23,7 @@ jobs:
   shard-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Gate-shard completeness (DDR-817)
         run: make ci-shard-check
 
@@ -124,7 +124,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
 
@@ -273,7 +273,7 @@ jobs:
   aether-layer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -303,7 +303,7 @@ jobs:
           - arch: riscv64
             qemu_pkg: qemu-system-misc
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # lld is NOT preinstalled on ubuntu-latest — the x86_64 job installs it
       # too (line ~20). Run 30380714176 failed here with
@@ -338,7 +338,7 @@ jobs:
   code-graph:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # ubuntu-latest ships a current Node (>=18, which the pure-JS/WASM graph
       # stack needs); no setup-node action required.
       - name: Node version
