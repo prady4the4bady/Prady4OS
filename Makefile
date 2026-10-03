@@ -3480,6 +3480,29 @@ smoke-rqfree: $(IMG) fat-image sfs-image
 	 [ "$$c" -gt 0 ] || { echo "[rqfree] FAIL — arm A: caught=0, the probe is no longer reproducing the freed-while-queued window; this gate would pass vacuously"; exit 1; }; \
 	 echo "[rqfree] PASS — arm A caught=$$c freed-while-queued TCBs, arm B queues intact"
 
+# DDR-1156 §4: virtio-blk slot-wait timeout must unlink the giving-up thread.
+# The probe occupies all 8 request slots on a blank scratch disk (the LAST
+# virtio-blk unit, from QEMU_BLKSCRATCH), spawns a 9th submitter which enqueues
+# on the slot wait list and times out, then asserts the list is clean. The fix
+# unlinks the timed-out thread; without it slot_head still points at the departed
+# TCB. Secondary instrument notblocked= counts wakes that popped a non-BLOCKED
+# waiter (NON-NEGOTIABLE 3): must be 0. Mutant M1 (remove the unlink) -> clean=0.
+smoke-blkslot: $(IMG) fat-image sfs-image
+	@echo "[blkslot] slot-wait timeout unlink gate (DDR-1156)..."
+	@mkdir -p build/gatelogs
+	@# blank 1 MiB scratch disk — nothing mounts it, so forcing slot-fixtures
+	@# on it cannot interfere with the boot/fat/sfs roots.
+	@dd if=/dev/zero of=build/blkslot.img bs=1M count=1 status=none
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/blkslot.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_PROBES=blkslotwait QEMU_BLKSCRATCH=1 QEMU_NO_EXT4=1 \
+	EXTRA_SENTINEL="PRADYOS_BLKSLOT clean=1 notblocked=0" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_BLKSLOT clean=0')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@l=$$(grep -ao 'PRADYOS_BLKSLOT clean=[0-9]* notblocked=[0-9]* t9=[0-9]*' build/gatelogs/blkslot.log | tail -1); \
+	 [ -n "$$l" ] || { echo "[blkslot] FAIL — probe never reported"; tail -20 build/gatelogs/blkslot.log; exit 1; }; \
+	 echo "$$l" | grep -q 't9=1' || { echo "[blkslot] FAIL — the 9th submitter did not time out with -EIO ($$l); the slot-wait path was not exercised, gate would be vacuous"; exit 1; }; \
+	 echo "[blkslot] PASS — $$l"
+
 smoke-yieldstall: $(IMG) fat-image sfs-image
 	@mkdir -p build/gatelogs
 	@# DDR-994 §8: `[yieldstall]` is NO LONGER in GLOBAL_FORBIDDEN (see

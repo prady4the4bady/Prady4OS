@@ -100,3 +100,30 @@ no synthetic defect is written (the DDR-1066/1067/1090 form).
 - The completion-timeout path (operator finding 3: `head2slot[head]` left set, a
   late device write into a freed/reused buffer) is **not** addressed here; it is
   DDR-1148 §4's counted-not-fixed case and needs its own record.
+
+## §7 Measured result (2026-10-03)
+
+Built warning-clean at `-Werror`; kernel.bin `2d375be6302fb413`, **1,474,954 B —
+size unchanged** (the fix fits inside existing page padding), so the CLAUDE.md
+size/headroom pair and `ci-docstate-check` are unaffected. One new ELF is NOT
+added (the self-test is in the kernel), so `ci-probe-rodata-check` stays at 85.
+`ci-shard-check`: 186 → **187 gates** (`smoke-blkslot`, shard 0 strict). All ten
+hygiene checks pass.
+
+- **Fixed kernel, `make smoke-blkslot`:** `[blkslot] PRADYOS_BLKSLOT clean=1
+  notblocked=0 t9=1` → PASS. `t9=1` is the non-vacuity witness: the 9th submitter
+  really ran the real `submit()`, enqueued on the slot wait list, and returned
+  `-EIO` from the 500-tick timeout — the path under test was exercised.
+- **M1 (unlink + helper removed = the pre-fix tree), same gate:** `[blkslot]
+  PRADYOS_BLKSLOT clean=0 notblocked=1 t9=1` → FAIL (forbidden sentinel `clean=0`
+  fired). The timed-out thread stayed on the list (`clean=0`), and
+  `slot_wake_one` popped that departed TCB whose state was not `THREAD_BLOCKED`
+  (`notblocked=1`) — the exact stale-pop this fix removes, observed directly.
+- Both land on the same arm (`clean=`) and the secondary instrument
+  (`notblocked=`) corroborates the mechanism; `t9=1` in both runs rules out a
+  vacuous pass/fail.
+
+Regression on the fixed kernel: `smoke-blkmq` rc=0, `smoke-blk-integrity` rc=0,
+`smoke-shell` 5/5 — the one change on the normal wake path (the `THREAD_BLOCKED`
+guard in `slot_wake_one`) does not alter behaviour for a correctly-waiting
+submitter, which is `THREAD_BLOCKED` when woken, so `sched_unblock` still runs.

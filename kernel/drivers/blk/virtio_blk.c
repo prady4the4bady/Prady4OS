@@ -241,6 +241,15 @@ int virtio_blk_completed_on_ap(void) {
  * all) keeps the wake count equal to the resource count; the woken thread
  * re-checks in submit()'s loop and re-queues if another CPU took the slot
  * first, so a spurious wake is safe and a lost one is not possible. */
+/* DDR-1156 §2: wakes that popped a waiter which is NOT THREAD_BLOCKED, i.e. a
+ * stale or recycled entry on the slot wait list. A correct wake only ever pops
+ * a blocked thread, so this stays 0 on a healthy kernel; a non-zero value is
+ * the signature DDR-1156's unlink fix removes. Instrument only. */
+static volatile uint32_t g_vblk_wake_notblocked;
+uint32_t vblk_wake_notblocked(void) {
+    return __atomic_load_n(&g_vblk_wake_notblocked, __ATOMIC_RELAXED);
+}
+
 static void slot_wake_one(struct vblk *v) {
     struct tcb *w = v->slot_head;
     if (!w)
@@ -250,7 +259,33 @@ static void slot_wake_one(struct vblk *v) {
         v->slot_tail = 0;
     w->blk_wait_next = 0;
     v->slot_free = 1;      /* DDR-955: signal that a slot is available */
-    sched_unblock(w);
+    /* DDR-1156 §2: a correctly-waiting submitter is THREAD_BLOCKED here. Any
+     * other state means this entry was left behind (the timeout bug) and the
+     * thread has since departed — count it and DO NOT wake it, so a stale pop
+     * is observed rather than written through. With the §3 unlink in place this
+     * branch is never taken. */
+    if (w->state == THREAD_BLOCKED)
+        sched_unblock(w);
+    else
+        __atomic_add_fetch(&g_vblk_wake_notblocked, 1, __ATOMIC_RELAXED);
+}
+
+/* DDR-1156 §3: remove t from the slot wait list. Call with compl_lock HELD.
+ * Used on the slot-wait timeout path so a thread that gave up waiting is never
+ * left reachable from slot_head (a later slot_wake_one would otherwise pop a
+ * departed, possibly freed, TCB). */
+static void blk_slot_unlink(struct vblk *v, struct tcb *t) {
+    struct tcb *prev = 0;
+    for (struct tcb *e = v->slot_head; e; e = e->blk_wait_next) {
+        if (e == t) {
+            if (prev) prev->blk_wait_next = t->blk_wait_next;
+            else      v->slot_head        = t->blk_wait_next;
+            if (v->slot_tail == t) v->slot_tail = prev;
+            t->blk_wait_next = 0;
+            return;
+        }
+        prev = e;
+    }
 }
 
 /* DDR-1143 §10.2: flushes issued / flushes that completed with status 0,
@@ -300,6 +335,10 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
         vown_set(v, VOWN_SLOTWAIT);
         if (_to == -ETIMEDOUT) {
             kputs("[vblk] slot wait timeout\r\n");
+            /* DDR-1156 §3: we are giving up the wait, so remove ourselves from
+             * the slot wait list before returning — else a later slot_wake_one
+             * pops this (departed, maybe freed) thread. Under compl_lock. */
+            blk_slot_unlink(v, current_thread);
             vown_clear(v);
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
@@ -467,6 +506,73 @@ void virtio_blk_flush_stats(int *neg0, uint32_t *issued, uint32_t *ok) {
     *neg0   = g_ninst ? g_inst[0].has_flush : -1;
     *issued = __atomic_load_n(&g_vblk_flush_issued, __ATOMIC_RELAXED);
     *ok     = __atomic_load_n(&g_vblk_flush_ok, __ATOMIC_RELAXED);
+}
+
+/* DDR-1156 §4: force a slot-wait timeout and assert the waiter is unlinked.
+ * Probe-gated (QEMU_PROBES=blkslotwait); runs on the LAST unit, which the gate's
+ * disk config makes a blank scratch disk (never the mounted root). */
+static volatile int g_sw_t9_done;      /* 1 = -EIO (expected), 2 = unexpected rc */
+static void vblk_sw_t9(void *arg) {
+    struct vblk *v = (struct vblk *)arg;
+    static uint8_t sw_buf[SECTOR];
+    /* the REAL submit() path (DDR-1014: the thread under test runs the real
+     * code; only the 8 occupied slots are a fixture). All slots are used, so
+     * this enqueues on the slot wait list and times out after 500 ticks. */
+    int r = submit(v, 0, (uint64_t)(uintptr_t)sw_buf, 1, VIRTIO_BLK_T_IN);
+    g_sw_t9_done = (r == -EIO) ? 1 : 2;
+    kputs("[blkslot] t9 rc=");
+    kputdec((uint64_t)(r < 0 ? (unsigned)(-r) : (unsigned)r));
+    kputs("\r\n");
+}
+
+extern void smp_resched_all(void);   /* kernel/apic/smp.h */
+void vblk_slotwait_selftest(void) {
+    if (g_ninst == 0) { kputs("[blkslot] no unit\r\n"); return; }
+    struct vblk *v = &g_inst[g_ninst - 1];
+    uint32_t nb0 = vblk_wake_notblocked();
+
+    /* Occupy all 8 slots as fixtures: no device traffic, so complete() never
+     * runs for this unit; warned=1 keeps the DDR-776 watchdog quiet. */
+    uint64_t fl = spin_lock_irqsave(&v->compl_lock);
+    for (int s = 0; s < VBLK_NREQ; s++) {
+        v->req[s].used = 1; v->req[s].done = 0;
+        v->req[s].warned = 1; v->req[s].t0 = g_ticks; v->req[s].waiter = 0;
+    }
+    spin_unlock_irqrestore(&v->compl_lock, fl);
+
+    g_sw_t9_done = 0;
+    struct tcb *t9 = sched_create(vblk_sw_t9, v, "blkslot");
+    if (!t9) {
+        kputs("[blkslot] spawn FAIL\r\n");
+        fl = spin_lock_irqsave(&v->compl_lock);
+        for (int s = 0; s < VBLK_NREQ; s++) v->req[s].used = 0;
+        spin_unlock_irqrestore(&v->compl_lock, fl);
+        return;
+    }
+    smp_resched_all();
+    uint64_t dl = g_ticks + 900;           /* 500-tick timeout + margin */
+    while (!g_sw_t9_done && g_ticks < dl)
+        yield();
+    /* let t9 fully leave the scheduler after it reported done */
+    uint64_t drain = g_ticks + 50;
+    while (g_ticks < drain)
+        yield();
+
+    fl = spin_lock_irqsave(&v->compl_lock);
+    int clean1 = (v->slot_head == 0 && v->slot_tail == 0);
+    slot_wake_one(v);                      /* no-op on a clean list */
+    int clean2 = (v->slot_head == 0 && v->slot_tail == 0);
+    for (int s = 0; s < VBLK_NREQ; s++) v->req[s].used = 0;   /* release fixtures */
+    spin_unlock_irqrestore(&v->compl_lock, fl);
+
+    uint32_t nb1 = vblk_wake_notblocked();
+    kputs("[blkslot] PRADYOS_BLKSLOT clean=");
+    kputdec((uint64_t)(clean1 && clean2 ? 1u : 0u));
+    kputs(" notblocked=");
+    kputdec((uint64_t)(nb1 - nb0));
+    kputs(" t9=");
+    kputdec((uint64_t)g_sw_t9_done);
+    kputs("\r\n");
 }
 
 void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
