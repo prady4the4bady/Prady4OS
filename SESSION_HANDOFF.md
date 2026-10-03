@@ -14859,3 +14859,10 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - v1.0.0 tag NOT authorized. Gate for tagging (operator): a substantially larger OPEN2_HUNT campaign completes clean, OR each of cap.c #GP (U1),
   lane-12 panic (U2), single-CPU vblk timeout (U3) gets a named mechanism or an explicit "cannot close with current evidence" writeup.
 - Next: larger OPEN2_HUNT on the merged kernel; OPEN-1 route 1; U1/U2/U3 writeups.
+
+## CHECKPOINT 2026-10-03 — DDR-1154 dispatches 1–2 read (clean)
+
+- open2-hunt 36366830314 + 36366831871 (ref 49abebc, old campaign): 40/40 lanes success, every DONE `runs=55 signal_runs=0 churn_runs=55 kernel_pinned=182c30bb16930d57`. Σ churn = 2,200.
+- Route-1 hand check over all 2,200 per-run lines: last `[hb] t` ∈ {17000,17500,18000}; none below 17000. One run AT the floor (d2 lane 18 run 52, t=17000), recorded in DDR-1154 §6.1 as a floor-calibration datum; floor not moved mid-campaign.
+- Dispatches 3–4 sent on ref 473b67536ceb94b440492ae6b172f853023a93a4 (new campaign, silent-stop counted): runs 37097190752 (in progress), 37097192020 (queued). Expect kernel_pinned=182c30bb16930d57 (diff 49abebc..473b675 touches only tools/ci + docs).
+- NEXT: read dispatches 3–4 DONE lines (silent_runs= now printed), append §6.2, dispatch 5–6 on the same ref if clean. Then DDR-1155 (U1/U2/U3).

@@ -93,3 +93,28 @@ A machine that stopped silently stops heartbeating, so its last `t` is lower. **
   - M5 (first heartbeat instead of last) fails the healthy arm and nothing else.
   - End to end on this host, one real run: a healthy boot reads `t=17500 churn clean`, `silent_runs=0`. The same run with `HUNT_HB_FLOOR=20000` reads `*** SILENT-STOP ***`, `signal_runs=1 silent_runs=1`, so the wiring into the lane verdict is exercised, not just the function.
 - **The pooling rule is unchanged.** The diff touches only `tools/ci/`, not the kernel. `kernel_pinned` must still be identical in every lane of every dispatch, and any lane that differs is reported on its own.
+
+### 6.1 Dispatches 1 and 2 (old campaign, ref `49abebc`): clean, 2,200 boots
+
+**Runs.** `open2-hunt` 36366830314 and 36366831871, both `conclusion=success`, lanes=20 runs=55 hunt=32, `ref_requested` = `tree_sha` = `49abebc5f3ba0412bb7ff56f4c2a520a5014cb97` on every lane read.
+
+**How it was read.** All 40 job logs were read, every lane, not just failed ones (§4's denominator rule). The old campaign does not detect route 1, so that check was done by hand per §6.0: every one of the 2,200 per-run lines was read for its last `[hb] t`.
+
+**Results, by §4 row:**
+- **Setup failure:** none. 0 of 40 lanes failed.
+- **Pooling:** every `DONE` line reads `kernel_pinned=182c30bb16930d57`. All 40 lanes pool.
+- **Denominator:** every `DONE` line reads `runs=55 signal_runs=0 churn_runs=55`, so Σ `churn_runs` = **2,200**. No NO-CHURN run means the starvation row never applied.
+- **`[schedcheck]` / `[apfreeze]` / U1 / panic body / `[vblkto]`:** none. Every per-run line reads `rc=0 … churn clean`.
+- **Route-1 candidate (last heartbeat below `t=17000`):** **none.** Final heartbeats fall in {17000, 17500, 18000}. Exactly **one** run sits at the floor: dispatch 2, lane 18, run 52, `t=17000 churn clean`. Under the registered rule (*below* 17000) it is not a candidate. It is recorded anyway, for the reason below.
+
+**A calibration datum, not a finding.** `HUNT_HB_FLOOR=17000` (§6.0) sits at the **bottom edge of the healthy spread**, not below it. In 2,200 healthy runs, one finished exactly on the floor, so a healthy boot landing at 16500 is plausible.
+- If that happens, it shows up as a `SILENT-STOP` **with churn and no SIGNALS**.
+- That case is read off the last 40 capture lines, which the new campaign prints.
+- A heartbeat that is merely late, with `rqstress OK` and the boot still progressing, is distinguishable there from a machine that stopped.
+- The floor is **not** moved mid-campaign. §2 and §6.0 fixed it before any data arrived, and moving it now, in either direction, would make the remaining eight dispatches a different experiment. This is stated so that a borderline flag is read rather than reflexively counted.
+
+**Running total for criterion (A):** 2,200 of 11,000 boots on `182c30bb16930d57`, 0 signals. The interim 95% upper bound is ≈0.136% per boot. Per §4 that is **not pooled** with DDR-1139 §8's 2,200, which ran a different binary.
+
+**Dispatches 3 and 4** were sent with ref `473b67536ceb94b440492ae6b172f853023a93a4`, the **new** campaign with the silent-stop check, as runs **37097190752** and **37097192020**.
+- `473b675`'s diff from `49abebc` touches only `tools/ci/` and docs, so every lane must still print `kernel_pinned=182c30bb16930d57` (§6.0).
+- A lane that prints anything else is reported on its own.
