@@ -118,3 +118,15 @@ A machine that stopped silently stops heartbeating, so its last `t` is lower. **
 **Dispatches 3 and 4** were sent with ref `473b67536ceb94b440492ae6b172f853023a93a4`, the **new** campaign with the silent-stop check, as runs **37097190752** and **37097192020**.
 - `473b675`'s diff from `49abebc` touches only `tools/ci/` and docs, so every lane must still print `kernel_pinned=182c30bb16930d57` (§6.0).
 - A lane that prints anything else is reported on its own.
+
+### 6.2 Dispatch 3 (new campaign, ref `473b675`): clean, 1,100 boots; dispatch 4 still running
+
+**Dispatch 3, run 37097190752: all 21 jobs succeeded.** The 20 lanes plus setup are 0 of 20 failed, so the setup-failure row does not apply.
+- Every lane's `DONE` line was read: `runs=55 signal_runs=0 silent_runs=0 churn_runs=55 kernel_pinned=182c30bb16930d57`.
+- §6.0's prediction held on every lane: the `tools/ci`-only diff produced the same pinned binary, so the dispatch pools with 1 and 2.
+- **`silent_runs=0` on all 20 lanes.** This is the first dispatch where route 1 is checked by the harness itself (`HUNT_HB_FLOOR=17000`) rather than by hand, and it found nothing.
+- No `SILENT-STOP` tail was printed, so there is nothing to read.
+
+**Dispatch 4, run 37097192020,** was still running when this was written and will be recorded in §6.3. **Dispatch 5** went out on the same ref and parameters as run **37108041701**, keeping two in flight per §2. Dispatch 6 goes out when dispatch 4 completes.
+
+**Running total for criterion (A):** **3,300 of 11,000 boots** on `182c30bb16930d57`, 0 signals, 0 silent stops. The interim 95% upper bound is 3/3300 ≈ **0.091% per boot**. It is still not pooled with DDR-1139 §8.
