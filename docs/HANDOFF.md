@@ -54,14 +54,31 @@ trade-off, or anything on the not-approved list below).
 
 ## Hunt status (Step 1)
 
-- **DDR-1154** merged-tree OPEN2_HUNT: pinned `182c30bb16930d57`,
-  `HUNT_HB_FLOOR=17000`. Running total **5,445 read boots, 0 signals, 0 silent
-  stops**, 95% upper bound ≈0.055%/boot. Dispatch 6 = run 37133287464 — **finish
-  and record it** (Step 1). Do NOT pool with DDR-1139 §8 (different binary).
-- **Next (Step 1):** a shorter confirmation hunt on the final tip
-  (`f5124d9b145df8cb` or newer) + an installed-disk hunt exercising
-  `virtio_blk.c`. Report signals / silent stops / confidence bound. Do NOT pool
-  with the old binary.
+- **DDR-1154** merged-tree OPEN2_HUNT (pinned `182c30bb16930d57`,
+  `HUNT_HB_FLOOR=17000`): **dispatch 6 recorded** (DDR-1154 §6.5). Run
+  `37133287464` concluded `success` (clean, 20/20 lanes). Running total now
+  **6,545 of 11,000** (5,445 read + 1,100 conclusion-verified, DONE-lines-unread
+  from this container — proxy blocks the log blobs), 0 signals, 0 silent stops,
+  95% UB ≈0.046%/boot. Do NOT pool with DDR-1139 §8.
+- **Confirmation hunt (new tip)** — HELD (DDR-1154 §6.6). Plain `open2-hunt`
+  dispatch, `ref=dev/phase1-seyp3n`, shorter. Held while the three `pradyos-ci`
+  suites on the final tip are queued (starvation rule). **Dispatch it once CI
+  clears**, re-checking the queue first. Different binary from the campaign.
+- **Installed-disk hunt over `virtio_blk.c`** — its **own issue** (DDR-1154
+  §6.6): needs a new harness mode (boot the DDR-1143 installed disk —
+  `install_test.sh` — in a churn loop over the slot-wait path), so own branch +
+  DDR + gate + PR. Not yet built.
+- **Reading limit:** hunts dispatched from this container yield only the run
+  `conclusion`; lane `DONE` lines need a session that can reach the log blobs.
+
+## Three-green note
+
+Docs commits (DDR campaign logs, this file) keep moving the branch tip, which
+re-triggers `pradyos-ci`. The three-green-on-one-tip criterion must be
+**re-confirmed on the final quiescent tip** before any promotion — and promotion
+is the operator's action, held on OPEN-2, so this is a milestone to record, not a
+freeze. The Step 0.3 greens fired on `a62e06a`; later docs pushes supersede that
+tip.
 
 ## Next, in order
 

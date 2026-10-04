@@ -164,3 +164,65 @@ The two-in-flight rule of §2 would now be a twenty-runner claim competing with 
 **The starvation has cleared.** At the time of writing no `pradyos-ci` or `open2-hunt` run is non-completed. The `77a96da` (37097437825) and `db7d3c1` (37108061827) suites both completed successfully, and PR #29's head `d667e8a` has both suites green. §6.3's hold is therefore lifted.
 - **Dispatch 6** goes out on the same ref and parameters: `ref=473b67536ceb94b440492ae6b172f853023a93a4`, `lanes=20`, `runs=55`, `hunt=32`.
 - The rule stays *"one in flight while CI is queued"*. With nothing queued, a second dispatch may follow, but only after checking the queue again.
+
+### 6.5 Dispatch 6 (ref `473b675`): run 37133287464 concluded `success` (clean), lane DONE lines UNREAD from this container
+
+**Run 37133287464, `open2-hunt`, `workflow_dispatch`, concluded `success`** —
+20 of 20 `hunt` lanes plus `setup` all `success` (verified via the jobs API:
+every `hunt (lane 0..19)` conclusion is `success`). On this workflow's inverted
+polarity (`signal_runs=[1-9]` fails the lane; `HUNT_HB_FLOOR=17000` wires the
+silent-stop check into the lane verdict), an all-`success` run means **0 signals
+and 0 silent stops** reached a failing verdict on any lane.
+
+**Honesty about the denominator (§4's rule, and the limit this session hit).**
+The per-lane `[campaign] DONE runs=55 signal_runs=0 silent_runs=0 churn_runs=55`
+lines could **not be read from this container** — the job-logs endpoint
+302-redirects to `productionresultssa*.blob.core.windows.net`, which this
+environment's egress proxy refuses with `connect_rejected` (the blocker
+`/root/.ccr/README.md` says to report, not route around). So for dispatch 6 the
+boot count rests on the **dispatch parameters** (`lanes=20 runs=55` = 1,100
+boots) together with the 20/20 `success` conclusion, exactly the footing
+DDR-1133 §7 named ("'1000 boots' rests on the dispatch parameters"). It is
+recorded as **conclusion-verified, DONE-lines-unread** rather than claimed read.
+A session that can reach the log blobs (or the operator) should read the 20 DONE
+lines and promote these 1,100 to "read".
+
+**Running total for criterion (A):** 5,445 **read** + 1,100
+**conclusion-verified (DONE-lines-unread)** = **6,545 of 11,000** on
+`182c30bb16930d57`, 0 signals, 0 silent stops. Interim 95% upper bound on the
+6,545 is 3/6545 ≈ **0.046% per boot**. Still **not pooled** with DDR-1139 §8 (a
+different binary), and still not pooled with any new-tip hunt (§6.6), which is a
+different binary again.
+
+### 6.6 Step 1 confirmation hunt + installed-disk hunt (operator 5976228741) — planned, held on the starvation rule
+
+The operator's Step 1 asks for two further hunts on the NEW kernel (the Fix 1 +
+Fix 2 tree, `kernel.bin` `f5124d9b145df8cb`; the OPEN2_HUNT build of that tree
+is a different binary again). **Neither is pooled with `182c30bb16930d57` (§6.5)
+nor with DDR-1139 §8.**
+
+1. **Confirmation hunt (new tip).** A plain `open2-hunt` dispatch,
+   `ref=dev/phase1-seyp3n` (tip `a62e06a`), shorter than the campaign. **HELD at
+   the moment of writing:** the three `pradyos-ci` suites on `a62e06a` (push +
+   pull_request + workflow_dispatch — the Step 0.3 three-green set) are **queued,
+   not started**. DDR §6.3's relaxed rule ("one hunt in flight while CI is
+   queued") and the operator's standing "hold dispatches that starve pradyos-ci"
+   both apply: a 20-runner hunt now would delay the three greens. It goes out
+   once those suites start/clear, and the queue is re-checked immediately before.
+
+2. **Installed-disk hunt over `virtio_blk.c`.** This is **not** an `open2-hunt`
+   input — the campaign loop (`open2_hunt_campaign.sh`) boots `build/pradyos.img`
+   via `boot_test.sh`, while the installed-disk boot path is a separate harness
+   (`tools/qemu_runner/install_test.sh`, DDR-1143). Booting the installed disk in
+   a churn loop that exercises the virtio-blk slot-wait path (Fix 1's subject) is
+   a **new harness mode**, so under the operator's one-issue/one-branch/one-PR
+   rule it is **its own issue**: own DDR, own campaign variant, own gate with a
+   mutation check, own PR. Recorded here and tracked in `docs/HANDOFF.md`; begun
+   as its own branch, not bolted onto this campaign.
+
+**Reading limit, stated plainly:** this container cannot read hunt lane logs
+(the job-logs endpoint 302s to a proxy-blocked blob host), so any hunt dispatched
+from here yields only the run `conclusion` to this session. The lane `DONE` lines
+must be read by a session that can reach the blobs, or by the operator. This does
+not change what gets dispatched; it changes who can promote a run from
+"conclusion-verified" to "read".
