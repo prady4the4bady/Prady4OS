@@ -30,11 +30,13 @@ static long sys_checkpoint_agent(long a1, long a2, long a3, long a4, long a5, lo
     if (pid == current_thread->pid)
         return -EINVAL;                  /* would block inside this very call */
 
-    struct tcb *t = sched_find_pid(pid);
-    if (!t)
-        return -ESRCH;                   /* distinct from -EPERM on purpose */
+    /* DDR-1157: find + set the flag inside one g_sched_lock critical section.
+     * sched_find_pid returns a raw pointer the reaper can free before we touch
+     * it (a UAF on SMP); sched_checkpoint_pid holds the lock across both. */
+    int rc = sched_checkpoint_pid(pid);
+    if (rc != 0)
+        return rc;                       /* -ESRCH, distinct from -EPERM */
 
-    t->checkpointed = 1;
     aether_audit(current_thread->pid, pid, 0, AR_AGENT_CHECKPOINT);
     return 0;
 }
@@ -51,16 +53,15 @@ static long sys_resume_agent(long a1, long a2, long a3, long a4, long a5, long a
     if (pid == 0)
         return -EINVAL;
 
-    struct tcb *t = sched_find_pid(pid);
-    if (!t)
-        return -ESRCH;
-
-    /* Clear the flag BEFORE unblocking. The other order lets the target wake,
-     * reach its next syscall, still see checkpointed=1 and block again — a
-     * resume that silently does nothing. */
-    t->checkpointed = 0;
-    if (t->state == THREAD_BLOCKED)
-        sched_unblock(t);
+    /* DDR-1157: find + clear + conditional unblock inside one g_sched_lock
+     * critical section (sched_resume_pid). The flag is cleared BEFORE the
+     * unblock (else the target wakes, reaches its next syscall, still sees
+     * checkpointed=1 and blocks again — a resume that silently does nothing),
+     * and the whole thing is under the lock so the reaper cannot free the
+     * target between the lookup and the unblock. */
+    int rc = sched_resume_pid(pid);
+    if (rc != 0)
+        return rc;
 
     aether_audit(current_thread->pid, pid, 0, AR_AGENT_RESUME);
     return 0;

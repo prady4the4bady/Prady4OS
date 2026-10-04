@@ -2513,6 +2513,56 @@ struct tcb *sched_find_pid(uint32_t pid) {
     return 0;
 }
 
+/* DDR-1157: the ring walk, called with g_sched_lock HELD. Identical predicate to
+ * sched_find_pid, but the caller's lock makes the returned pointer safe to use:
+ * the reaper frees a TCB only AFTER sched_ring_unlink() under this same lock, so
+ * a node still on the ring cannot be freed while we hold the lock, and an
+ * unlinked (soon-to-be-freed) node is off the ring and is never returned. */
+static struct tcb *find_pid_locked(uint32_t pid) {
+    if (pid == 0)
+        return 0;
+    struct tcb *t = current_thread;
+    do {
+        if (t->pid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
+/* DDR-1157 Fix 2: checkpoint/resume must find the target AND act on it inside one
+ * g_sched_lock critical section — sched_find_pid returns a raw pointer the reaper
+ * can free before the caller dereferences it (a UAF on the block/syscall path on
+ * SMP). These two helpers close that window; sys_checkpoint.c calls them instead
+ * of sched_find_pid + a bare deref. Return 0 or -ESRCH. */
+int sched_checkpoint_pid(uint32_t pid) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) { t->checkpointed = 1; rc = 0; }
+    irq_restore(fl);
+    return rc;
+}
+
+int sched_resume_pid(uint32_t pid) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) {
+        /* Clear BEFORE unblocking (DDR-837 order): the other order lets the
+         * target wake, reach its next syscall, still see checkpointed=1 and
+         * block again. sched_unblock under g_sched_lock is safe — it takes only
+         * a leaf rq lock (outer->leaf order; sched.c:96) and the rq-2 schedule
+         * path takes no g_sched_lock, so there is no cycle. */
+        t->checkpointed = 0;
+        if (t->state == THREAD_BLOCKED)
+            sched_unblock(t);
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
+}
+
 /* 1 if a runnable/blocked thread with this pid exists (a "living parent"). */
 static int pid_alive(uint32_t pid) {
     if (pid == 0)
