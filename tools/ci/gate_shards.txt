@@ -110,6 +110,7 @@
 4	smoke-cpuexposure	40	strict
 3	smoke-net-lo	0	strict
 3	smoke-pmm-poison	0	strict
+3	smoke-kasan-uaf	15	strict
 4	smoke-smppreempt	181	strict
 4	smoke-percpu	121	strict
 4	smoke-smplock	120	strict

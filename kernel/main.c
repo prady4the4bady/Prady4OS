@@ -4662,6 +4662,7 @@ void kmain(struct boot_info *bi) {
     kputs("\r\n");
 
     pmm_selftest(bi);
+    pmm_kasan_uaf_selftest();            /* DDR-1158: use-after-free poison regression */
     kheap_stress();
     vmm_test();
     cap_test();

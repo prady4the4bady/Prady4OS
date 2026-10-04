@@ -2296,6 +2296,19 @@ smoke-pmm-poison: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL='[pmm] poison enabled' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-1158: KASAN use-after-free regression test (DDR-1155 §4). smoke-pmm-poison
+# above only asserts the "[pmm] poison enabled" banner, so a regression that
+# dropped the poison FILL in pmm_free_pages while keeping the banner would pass
+# it. This boots the kernel, whose pmm_kasan_uaf_selftest does a deliberate
+# use-after-free READ of a just-freed frame and asserts it reads PMM_POISON,
+# printing PRADYOS_KASAN_UAF_OK. Before/after mutant: comment out the poison
+# loop in pmm_free_pages (kernel/mm/pmm.c) -> the read returns the stale value,
+# PRADYOS_KASAN_UAF_OK never prints, and this gate fails while smoke-pmm-poison
+# still passes. NOT a reproduction of U1/U2/U3 (DDR-1155 §5).
+smoke-kasan-uaf: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 EXTRA_SENTINEL='PRADYOS_KASAN_UAF_OK' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # IMP-C vDSO gate: the ring-3 systest reads wall_time_ns from the read-only vDSO
 # page (no syscall) and prints it only when non-zero, proving the kernel-updated
 # clock is visible in user space. Loads user ELFs, so allow extra wall time.
