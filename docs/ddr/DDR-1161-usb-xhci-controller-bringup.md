@@ -61,3 +61,34 @@ user-visible feature after this piece.
 
 1161: no DDR-1161 on any remote branch (checked 2026-10-10). 1159 = Fix 3,
 1160 = Fix 4.
+
+## §8 Measured
+
+Shipped kernel `6cf070a520e86b32` (1,474,954 B, size unchanged). `smoke-xhci` rc=0:
+
+```
+[xhci] up hciver=0x0000000000000100 slots=64 ports=8
+[xhci] port=5 ccs=1 speed=3
+[xhci] port=6 ccs=1 speed=3
+[xhci] connected=2
+```
+
+Speed 3 = high-speed: QEMU places `usb-kbd`/`usb-tablet` on the USB2 ports (5, 6).
+The gate asserts all four lines exactly.
+
+A correction found while building: HCIVERSION first read **0**. QEMU's
+capability region returns 0 for a 16-bit read at offset 2, so CAPLENGTH and
+HCIVERSION are read together as dword 0.
+
+| mutant | hash | result |
+|---|---|---|
+| M1 (operational base = BAR0, CAPLENGTH ignored) | `170ebf9c2e6c5081` | rc=2, `[xhci] FAIL halt` |
+| M2 (CCS tested at bit 1) | `b8f14edb47eed414` | rc=2, `connected=0` |
+
+§5 predicted M1 would fail at the PORTSC read. It fails earlier: USBCMD/USBSTS
+are also operational registers, so the halt wait never sees HCH. Either way the
+gate catches it. Revert returns `6cf070a520e86b32` bit-for-bit.
+
+Regression, one QEMU at a time, all rc=0: `smoke-shell`, `smoke-nvme`,
+`smoke-chipset`, `smoke-mouse`. Hygiene: ALL TEN PASSED. `ci-shard-check`: 187
+gates (`smoke-xhci`, shard 4, strict).
