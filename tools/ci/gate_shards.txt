@@ -197,6 +197,7 @@
 9	smoke-rng	90	strict
 9	smoke-ahci	90	strict
 9	smoke-kill	60	strict
+9	smoke-killagent	120	strict
 9	smoke-decor	31	strict
 9	smoke-fs	28	strict
 9	smoke-sysproc	23	strict

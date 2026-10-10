@@ -305,6 +305,15 @@ void        sched_trace_dump(void);
 
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 struct tcb *sched_find_pid(uint32_t pid);                       /* DDR-837: live thread by pid, or NULL */
+
+/* DDR-1159 (Fix 3): find a live USER thread by pid and act on it ENTIRELY under
+ * g_sched_lock, so the TCB cannot be unlinked+freed between the ring walk and
+ * the dereference (the AETHER tcb_by_pid UAF; same lifetime fix as DDR-1157).
+ * alive -> 0/1; snap -> 0 and fills *out, else -ESRCH; signal -> 0 else -ESRCH. */
+struct sched_user_snap { uint64_t run_ticks, dispatches, mem_used; uint32_t state; };
+int sched_user_pid_alive (uint32_t pid);
+int sched_user_pid_snap  (uint32_t pid, struct sched_user_snap *out);
+int sched_signal_user_pid(uint32_t pid, int sig);
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */

@@ -189,21 +189,32 @@ one (stronger than DDR-1157, which reused a proven gate).
   exercises the kill *write path* reaching a live thread, not merely the `0`
   return.
 
-Each mutant is one line, built on top of the shipped Fix-3 kernel; reverting each
-returns the shipped kernel bit-for-bit (hashes recorded in the PR). Baseline Fix-3
-kernel passes `smoke-killagent` exit 0; each mutant fails it exit 2 on its own arm.
+Measured (each mutant one line on the shipped Fix-3 kernel; revert verified
+bit-for-bit by rebuild):
+
+| kernel | hash | `smoke-killagent` |
+|---|---|---|
+| shipped Fix 3 | `91c1009bc9322491` (1,483,146 B) | rc=0, both sentinels |
+| M-ESRCH | `70a3cf8c03340648` | rc=2, `KILLAGENT FAIL: kill of unknown pid was not -ESRCH rc=0` (A1) |
+| M-WRITE | `7f336e9621f42cab` | rc=2, `PRADYOS_KILLAGENT_DENY_OK` then `KILLAGENT FAIL: target still alive after kill rc=0` (A2) |
+
+The two mutants land on different arms, so neither arm carries the other.
+(M-WRITE first failed to COMPILE — `sig` became unused under `-Werror` — and a
+piped `make image` hid the failure, so the gate re-ran the previous M-ESRCH
+binary. Caught by reading the build tail; the recorded M-WRITE run is the one
+whose hash is above. Carry: never trust a gate result without hashing the
+kernel it ran.)
 
 ### §5.1 Regression (scheduler-touching change)
 
-The fix adds a lock-free ring-walk helper and three `g_sched_lock` critical
-sections to `sched.c` and reroutes three AETHER syscalls, so the scheduler and
-block paths are re-run on the shipped kernel, one QEMU at a time
-(NON-NEGOTIABLE 12): `smoke-shell` 5/5 (global-forbidden scan clean, 77
-patterns), `smoke-blk-integrity`, `smoke-blkmq`, `smoke-rqstress-liveness`,
-`smoke-agents`, `smoke-agentmetrics` — all rc=0. Static: `ci-shard-check`,
-`ci-probe-rodata-check`, `ci-start-align-check` OK. (Exact kernel hash, size and
-gate count recorded in the PR body once built — the new probe ELF changes the
-size and the gate count by one.)
+On `91c1009bc9322491`, one QEMU at a time (NON-NEGOTIABLE 12), all rc=0:
+`smoke-killagent`, `smoke-agents`, `smoke-agentmetrics`, `smoke-shell`
+(global-forbidden scan clean, 77 patterns), `smoke-blk-integrity`,
+`smoke-blkmq`, `smoke-rqstress-liveness`, `smoke-kill`. `smoke-shell` was run
+**once**, not 5x — stated rather than rounded up. `ci-shard-check`: 187 gates
+across 10 shards (186 + `smoke-killagent`, shard 9, strict).
+`tools/ci/hygiene_check.sh`: ALL TEN PASSED. Kernel hash re-checked unchanged
+after the last gate.
 
 ## §6 Not claimed — stated plainly
 

@@ -130,6 +130,8 @@ USER_AMEM_SRC := user/agentmemtest.c     # DDR-836: agent memory gate
 USER_AMEM_ELF := build/agentmemtest.elf
 USER_CKPT_SRC := user/ckpttest.c         # DDR-837: checkpoint/resume gate
 USER_CKPT_ELF := build/ckpttest.elf
+USER_KILLAGENT_SRC := user/killagenttest.c  # DDR-1159: SYS_KILL_AGENT gate (Fix 3)
+USER_KILLAGENT_ELF := build/killagenttest.elf
 USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
 USER_SDEP_ELF := build/spawndepthtest.elf
 USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
@@ -599,6 +601,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AMEM_ELF) build/agentmemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CKPT_SRC) -o build/ckpttest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CKPT_ELF) build/ckpttest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLAGENT_SRC) -o build/killagenttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLAGENT_ELF) build/killagenttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SDEP_SRC) -o build/spawndepthtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DAG_SRC) -o build/actiondagtest.o
@@ -3193,6 +3197,12 @@ smoke-checkpoint: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=ckpt \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_CKPT_OK\nPRADYOS_CKPT_DENY_OK')" \
 	FORBIDDEN_SENTINEL="CKPT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+smoke-killagent: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=killagent \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_KILLAGENT_OK\nPRADYOS_KILLAGENT_DENY_OK')" \
+	FORBIDDEN_SENTINEL="KILLAGENT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-agentmem: $(IMG) fat-image sfs-image
