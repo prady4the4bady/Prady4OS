@@ -79,3 +79,20 @@ U1, U2, U3, OPEN-1 or OPEN-2.
 
 1160: `ls docs/ddr docs/decisions` on every remote branch shows no DDR-116x
 (checked 2026-10-10). 1159 is Fix 3 (PR #34).
+
+## §7 Measured
+
+| kernel | hash | `smoke-vblklate` |
+|---|---|---|
+| shipped Fix 4 | `ebd9bdd8f9541e9d` (1,474,954 B, size unchanged from `dev/phase1`) | rc=0, `PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1` |
+| M1 (no `head2slot` clear) | `4bf3175b0eabc6eb` | rc=2, `VBLKLATE FAIL: done_stale=1 late=1 done_real=1` — the defect reproduced in the driver logic |
+| M2 (no `s<0` `late++`) | `c085ad5e6669e0c9` | rc=2, `VBLKLATE FAIL: done_stale=0 late=0 done_real=1` |
+
+Revert returns `ebd9bdd8f9541e9d` bit-for-bit. Note M1's `late=1`: before the
+fix the stale completion WAS counted (DDR-1148) and still woke the new owner —
+exactly "counted, not fixed". `ci-shard-check`: 187 gates (186 + `smoke-vblklate`,
+shard 1, strict).
+
+Regression on `ebd9bdd8f9541e9d`, one QEMU at a time, all rc=0: `smoke-vblklate`,
+`smoke-blk-integrity`, `smoke-blkmq`, `smoke-blk-timeout`, `smoke-part`,
+`smoke-shell` (once). `hygiene_check.sh`: ALL TEN PASSED.
