@@ -29,7 +29,7 @@ interrupts.
 
 ```
 [xhci] address port=5 slot=1 cc=1
-[xhci] device-desc cc=1 len=18 type=1 usb=0x200 mps0=64 vid=0x627 pid=0x1
+[xhci] device-desc cc=1 len=18 type=1 usb=0x0000000000000200 mps0=64 vid=0x0000000000000627 pid=0x0000000000000001
 ```
 
 The exact values on the last line are the ones measured on QEMU's usb-kbd and
@@ -59,3 +59,18 @@ storage. USB is still not usable as a feature.
 
 1163 has no file in `docs/ddr/` or `docs/decisions/`, and no remote branch
 names it (checked 2026-10-11).
+
+## §7 Measured
+
+Shipped kernel `a87aed047055e1f0`, 1,479,050 B, which is +4,096 B (one page). The size/headroom pair is updated in `CLAUDE.md` and in `PRE_LAUNCH_CHECKLIST` §6. `smoke-xhci` passes (rc=0) with all eight exact lines. The descriptor matches QEMU's usb-kbd: USB 2.00, mps0 64, vid 0x0627, pid 0x0001.
+
+| mutant | hash | result |
+|---|---|---|
+| M1 (slot root-hub port = 0) | `3f7db42031008147` | rc=2, `[xhci] FAIL address` |
+| M2 (Setup TRB without IDT) | `8fc61ec8d7fa40af` | rc=2, `[xhci] FAIL desc` (no Transfer Event) |
+
+The two mutants fail at different steps. Reverting either one gives back `a87aed047055e1f0` bit-for-bit.
+
+Ports were not reset before Address Device. QEMU accepts this for a USB2 port. Real hardware generally requires a port reset first, so a real-hardware port of this code must add one. This is recorded here and was not tested.
+
+Regression, one QEMU at a time, all rc=0: `smoke-shell`, `smoke-mouse`, `smoke-nvme`. Hygiene: ALL TEN PASSED.

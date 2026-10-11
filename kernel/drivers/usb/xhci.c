@@ -5,6 +5,7 @@
  * waits, and reports which root-hub ports have a device connected. No rings, no
  * slots, no enumeration: nothing here makes a USB device usable yet.
  * DDR-1162 adds the command/event rings and one polled Enable Slot.
+ * DDR-1163 addresses the first connected device and reads its device descriptor.
  */
 #include "xhci.h"
 #include "console.h"
@@ -19,6 +20,7 @@
 #define CAP_CAPLENGTH  0x00                     /* byte */
 #define CAP_HCSPARAMS1 0x04
 #define CAP_HCSPARAMS2 0x08
+#define CAP_HCCPARAMS1 0x10
 #define CAP_DBOFF      0x14
 #define CAP_RTSOFF     0x18
 /* Operational registers (offsets from BAR0 + CAPLENGTH). */
@@ -43,7 +45,14 @@ struct trb { uint64_t param; uint32_t status; uint32_t control; };
 #define TRB_GET_TYPE(c) (((c) >> 10) & 0x3F)
 #define TRB_LINK        6
 #define TRB_ENABLE_SLOT 9
+#define TRB_SETUP       2
+#define TRB_DATA        3
+#define TRB_STATUS      4
+#define TRB_ADDRESS_DEV 11
+#define TRB_XFER_EVENT  32
 #define TRB_CMD_DONE    33
+#define TRB_IOC         (1u << 5)
+#define TRB_IDT         (1u << 6)
 #define RING_TRBS       (PAGE_SIZE / sizeof(struct trb))   /* 256 */
 
 static inline void wr64(volatile uint8_t *b, uint32_t off, uint64_t v) {
@@ -74,6 +83,50 @@ static int wait_reg(volatile uint8_t *b, uint32_t off, uint32_t mask, uint32_t w
         __asm__ volatile("pause");
     }
     return -1;
+}
+
+/* DDR-1162/1163: controller state for the polled command/event path. */
+static struct {
+    volatile uint8_t *op, *db, *ir;
+    struct trb *cmdr, *evtr;
+    uint64_t cmd_p, evt_p;
+    uint32_t cmd_i, cmd_cyc, evt_i, evt_cyc;
+    uint64_t *dcbaa;
+    uint32_t csz;                               /* context size, 32 or 64 */
+} X;
+
+/* Put one TRB on a ring at *idx with cycle *cyc; follow the Link TRB at the end. */
+static void ring_put(struct trb *r, uint32_t *idx, uint32_t *cyc,
+                     uint64_t param, uint32_t status, uint32_t control) {
+    r[*idx].param  = param;
+    r[*idx].status = status;
+    r[*idx].control = (control & ~1u) | *cyc;
+    if (++*idx == RING_TRBS - 1) {
+        r[*idx].control = (r[*idx].control & ~1u) | *cyc;   /* hand over the Link */
+        *idx = 0;
+        *cyc ^= 1u;
+    }
+}
+
+/* Wait for the next event of `type`. Returns the event (copied) or 0 on timeout. */
+static int wait_event(uint32_t type, struct trb *out) {
+    for (uint64_t i = 0; i < 50000000ull; i++) {
+        volatile struct trb *e = &X.evtr[X.evt_i];
+        if ((e->control & 1u) != X.evt_cyc) { __asm__ volatile("pause"); continue; }
+        out->param = e->param; out->status = e->status; out->control = e->control;
+        if (++X.evt_i == RING_TRBS) { X.evt_i = 0; X.evt_cyc ^= 1u; }
+        wr64(X.ir, 0x18, (X.evt_p + X.evt_i * sizeof(struct trb)) | (1u << 3));
+        if (TRB_GET_TYPE(out->control) == type)
+            return 1;
+        /* Port status change and other events are skipped. */
+    }
+    return 0;
+}
+
+static int command(uint64_t param, uint32_t control, struct trb *ev) {
+    ring_put(X.cmdr, &X.cmd_i, &X.cmd_cyc, param, 0, control);
+    wr32(X.db, 0, 0);
+    return wait_event(TRB_CMD_DONE, ev);
 }
 
 /* DDR-1162: DCBAA, command ring, event ring, run, then one Enable Slot. */
@@ -112,31 +165,82 @@ static int xhci_rings_up(volatile uint8_t *cap, volatile uint8_t *op, uint32_t s
     wr64(ir, 0x18, evt_p);
     wr64(ir, 0x10, erst_p);
 
+    X.op = op; X.ir = ir; X.db = cap + (rd32(cap, CAP_DBOFF) & ~0x3u);
+    X.cmdr = cmdr; X.evtr = evtr; X.cmd_p = cmd_p; X.evt_p = evt_p;
+    X.cmd_i = 0; X.cmd_cyc = 1; X.evt_i = 0; X.evt_cyc = 1;
+    X.dcbaa = dcbaa;
+    X.csz = (rd32(cap, CAP_HCCPARAMS1) & (1u << 2)) ? 64 : 32;
+
     wr32(op, OP_USBCMD, rd32(op, OP_USBCMD) | USBCMD_RS);
     if (wait_reg(op, OP_USBSTS, USBSTS_HCH, 0) < 0) { kputs("[xhci] FAIL run\r\n"); return -1; }
     kputs("[xhci] running\r\n");
 
-    /* Enable Slot, cycle 1, then doorbell 0 (host controller). */
-    cmdr[0].control = TRB_TYPE(TRB_ENABLE_SLOT) | 1u;
-    volatile uint8_t *db = cap + (rd32(cap, CAP_DBOFF) & ~0x3u);
-    wr32(db, 0, 0);
-
-    /* Poll the event ring (no interrupts in this piece). Consumer cycle 1. */
-    uint32_t ccs = 1;
-    for (uint64_t i = 0; i < 50000000ull; i++) {
-        volatile struct trb *e = &evtr[0];
-        if ((e->control & 1u) != ccs) { __asm__ volatile("pause"); continue; }
-        if (TRB_GET_TYPE(e->control) != TRB_CMD_DONE) { kputs("[xhci] FAIL event\r\n"); return -1; }
-        uint32_t cc   = e->status >> 24;
-        uint32_t slot = e->control >> 24;
-        wr64(ir, 0x18, (evt_p + sizeof(struct trb)) | (1u << 3));   /* EHB */
-        kputs("[xhci] enable-slot cc="); kputdec(cc);
-        kputs(" slot=");                 kputdec(slot);
-        kputs("\r\n");
-        return cc == 1 ? 0 : -1;
+    struct trb ev;
+    if (!command(0, TRB_TYPE(TRB_ENABLE_SLOT), &ev)) {
+        kputs("[xhci] FAIL enable-slot\r\n");
+        return -1;
     }
-    kputs("[xhci] FAIL enable-slot\r\n");
-    return -1;
+    uint32_t cc = ev.status >> 24, slot = ev.control >> 24;
+    kputs("[xhci] enable-slot cc="); kputdec(cc);
+    kputs(" slot=");                 kputdec(slot);
+    kputs("\r\n");
+    return cc == 1 ? (int)slot : -1;
+}
+
+/* DDR-1163: Address Device on `port`, then GET_DESCRIPTOR(DEVICE) on EP0. */
+static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
+    uint64_t in_p, out_p, tr_p, buf_p;
+    uint8_t *in = zpage(&in_p), *out = zpage(&out_p), *buf = zpage(&buf_p);
+    struct trb *tr = zpage(&tr_p);
+    if (!in || !out || !tr || !buf) { kputs("[xhci] FAIL alloc\r\n"); return -1; }
+    X.dcbaa[slot] = out_p;
+
+    tr[RING_TRBS - 1].param   = tr_p;
+    tr[RING_TRBS - 1].control = TRB_TYPE(TRB_LINK) | (1u << 1);
+    uint32_t tr_i = 0, tr_cyc = 1;
+
+    uint32_t mps = speed == 4 ? 512 : speed == 3 ? 64 : 8;
+    uint32_t *icc = (uint32_t *)in;                   /* input control context */
+    uint32_t *sc  = (uint32_t *)(in + X.csz);         /* slot context */
+    uint32_t *ep0 = (uint32_t *)(in + 2 * X.csz);     /* EP0 context */
+    icc[1] = 3u;                                      /* A0 | A1 */
+    sc[0]  = (speed << 20) | (1u << 27);              /* speed, context entries 1 */
+    sc[1]  = port << 16;                              /* root hub port number */
+    ep0[1] = (3u << 1) | (4u << 3) | (mps << 16);     /* CErr 3, Control, MPS */
+    ep0[2] = (uint32_t)tr_p | 1u;                     /* TR dequeue, DCS 1 */
+    ep0[3] = (uint32_t)(tr_p >> 32);
+    ep0[4] = 8;                                       /* average TRB length */
+
+    struct trb ev;
+    if (!command(in_p, TRB_TYPE(TRB_ADDRESS_DEV) | (slot << 24), &ev) || (ev.status >> 24) != 1) {
+        kputs("[xhci] FAIL address\r\n");
+        return -1;
+    }
+    kputs("[xhci] address port="); kputdec(port);
+    kputs(" slot=");               kputdec(slot);
+    kputs(" cc=");                 kputdec(ev.status >> 24);
+    kputs("\r\n");
+
+    /* GET_DESCRIPTOR(DEVICE, 18): bmRequestType 0x80, bRequest 6, wValue 0x0100. */
+    uint64_t setup = 0x80u | (6u << 8) | (0x0100ull << 16) | (18ull << 48);
+    ring_put(tr, &tr_i, &tr_cyc, setup, 8,
+             TRB_TYPE(TRB_SETUP) | TRB_IDT | (3u << 16));
+    ring_put(tr, &tr_i, &tr_cyc, buf_p, 18, TRB_TYPE(TRB_DATA) | (1u << 16));
+    ring_put(tr, &tr_i, &tr_cyc, 0, 0, TRB_TYPE(TRB_STATUS) | TRB_IOC);
+    wr32(X.db, 4 * slot, 1);                          /* doorbell slot, target EP0 */
+
+    if (!wait_event(TRB_XFER_EVENT, &ev)) { kputs("[xhci] FAIL desc\r\n"); return -1; }
+    uint32_t cc = ev.status >> 24;
+    uint32_t len = 18 - (ev.status & 0xFFFFFF);
+    kputs("[xhci] device-desc cc="); kputdec(cc);
+    kputs(" len=");   kputdec(len);
+    kputs(" type=");  kputdec(buf[1]);
+    kputs(" usb=");   kputhex(buf[2] | (buf[3] << 8));
+    kputs(" mps0=");  kputdec(buf[7]);
+    kputs(" vid=");   kputhex(buf[8] | (buf[9] << 8));
+    kputs(" pid=");   kputhex(buf[10] | (buf[11] << 8));
+    kputs("\r\n");
+    return (cc == 1 && len == 18 && buf[1] == 1) ? 0 : -1;
 }
 
 void xhci_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -189,17 +293,21 @@ void xhci_init(uint8_t bus, uint8_t dev, uint8_t func) {
     kputs("\r\n");
 
     unsigned connected = 0;
+    uint32_t first_port = 0, first_speed = 0;
     for (uint32_t p = 1; p <= ports && p <= 255; p++) {
         uint32_t sc = rd32(op, OP_PORTSC(p));
         if (!(sc & PORTSC_CCS))
             continue;
         connected++;
+        if (!first_port) { first_port = p; first_speed = (sc >> 10) & 0xF; }
         kputs("[xhci] port="); kputdec(p);
         kputs(" ccs=1 speed="); kputdec((sc >> 10) & 0xF);
         kputs("\r\n");
     }
     kputs("[xhci] connected="); kputdec(connected); kputs("\r\n");
 
-    if (xhci_rings_up(cap, op, slots) < 0)
+    int slot = xhci_rings_up(cap, op, slots);
+    if (slot < 0 || !first_port)
         return;
+    xhci_address((uint32_t)slot, first_port, first_speed);
 }
