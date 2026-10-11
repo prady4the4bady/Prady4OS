@@ -3452,7 +3452,7 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 smoke-xhci: $(IMG)
 	@echo "[xhci] controller bring-up gate (DDR-1161)..."
 	TIMEOUT_S=60 QEMU_XHCI=1 \
-	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2')" \
+	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2\n[xhci] running\n[xhci] enable-slot cc=1 slot=1')" \
 	FORBIDDEN_SENTINEL="[xhci] FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

@@ -61,4 +61,20 @@ names it (checked 2026-10-11).
 
 ## §7 Measured
 
-(filled after build)
+Shipped kernel `d0c40f24908cd226` (1,474,954 B, size unchanged). `smoke-xhci` rc=0 with
+all six exact lines, including `[xhci] running` and `[xhci] enable-slot cc=1 slot=1`.
+
+| mutant | hash | result |
+|---|---|---|
+| M1 (CRCR not written) | `9ab1a11461a18bcd` | rc=2, `[xhci] FAIL enable-slot` |
+| M2 (consumer cycle starts at 0) | `1887e5527669e612` | rc=2, `[xhci] FAIL enable-slot` |
+
+Correction to §4: the two mutants are caught, but they print the **same**
+step name. M2 does not see a bogus zeroed entry. QEMU writes the completion
+event with cycle 1 before the first poll, so a consumer expecting cycle 0
+never matches it and times out, exactly as M1 does. The gate catches both;
+the failure line alone does not tell them apart. Revert returns
+`d0c40f24908cd226` bit-for-bit.
+
+Regression, one QEMU at a time, all rc=0: `smoke-shell`, `smoke-mouse`,
+`smoke-nvme`. Hygiene: ALL TEN PASSED.

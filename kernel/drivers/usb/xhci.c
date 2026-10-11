@@ -4,6 +4,7 @@
  * reads the capability registers, halts and resets the controller with bounded
  * waits, and reports which root-hub ports have a device connected. No rings, no
  * slots, no enumeration: nothing here makes a USB device usable yet.
+ * DDR-1162 adds the command/event rings and one polled Enable Slot.
  */
 #include "xhci.h"
 #include "console.h"
@@ -17,9 +18,15 @@
 /* Capability registers (offsets from BAR0). */
 #define CAP_CAPLENGTH  0x00                     /* byte */
 #define CAP_HCSPARAMS1 0x04
+#define CAP_HCSPARAMS2 0x08
+#define CAP_DBOFF      0x14
+#define CAP_RTSOFF     0x18
 /* Operational registers (offsets from BAR0 + CAPLENGTH). */
 #define OP_USBCMD      0x00
 #define OP_USBSTS      0x04
+#define OP_CRCR        0x18                     /* 64-bit */
+#define OP_DCBAAP      0x30                     /* 64-bit */
+#define OP_CONFIG      0x38
 #define OP_PORTSC(n)   (0x400u + 0x10u * ((n) - 1u))   /* n is 1-based */
 
 #define USBCMD_RS      (1u << 0)
@@ -29,6 +36,28 @@
 #define PORTSC_CCS     (1u << 0)
 
 static int g_xhci_up;
+
+/* DDR-1162: one TRB = 16 bytes. */
+struct trb { uint64_t param; uint32_t status; uint32_t control; };
+#define TRB_TYPE(t)     ((uint32_t)(t) << 10)
+#define TRB_GET_TYPE(c) (((c) >> 10) & 0x3F)
+#define TRB_LINK        6
+#define TRB_ENABLE_SLOT 9
+#define TRB_CMD_DONE    33
+#define RING_TRBS       (PAGE_SIZE / sizeof(struct trb))   /* 256 */
+
+static inline void wr64(volatile uint8_t *b, uint32_t off, uint64_t v) {
+    *(volatile uint32_t *)(b + off)     = (uint32_t)v;
+    *(volatile uint32_t *)(b + off + 4) = (uint32_t)(v >> 32);
+}
+static void *zpage(uint64_t *phys) {          /* identity-mapped low memory */
+    uint64_t p = pmm_alloc_page();
+    if (!p) return 0;
+    uint8_t *v = (uint8_t *)(uintptr_t)p;
+    for (unsigned i = 0; i < PAGE_SIZE; i++) v[i] = 0;
+    *phys = p;
+    return v;
+}
 
 static inline uint32_t rd32(volatile uint8_t *b, uint32_t off) {
     return *(volatile uint32_t *)(b + off);
@@ -44,6 +73,69 @@ static int wait_reg(volatile uint8_t *b, uint32_t off, uint32_t mask, uint32_t w
             return 0;
         __asm__ volatile("pause");
     }
+    return -1;
+}
+
+/* DDR-1162: DCBAA, command ring, event ring, run, then one Enable Slot. */
+static int xhci_rings_up(volatile uint8_t *cap, volatile uint8_t *op, uint32_t slots) {
+    uint64_t dcbaa_p, cmd_p, evt_p, erst_p;
+    uint64_t *dcbaa = zpage(&dcbaa_p);
+    struct trb *cmdr = zpage(&cmd_p);
+    struct trb *evtr = zpage(&evt_p);
+    uint64_t *erst = zpage(&erst_p);
+    if (!dcbaa || !cmdr || !evtr || !erst) { kputs("[xhci] FAIL alloc\r\n"); return -1; }
+
+    uint32_t hcs2 = rd32(cap, CAP_HCSPARAMS2);
+    uint32_t nsp  = (((hcs2 >> 21) & 0x1F) << 5) | ((hcs2 >> 27) & 0x1F);
+    if (nsp) {
+        uint64_t sp_p; uint64_t *sp = zpage(&sp_p);
+        if (!sp || nsp > PAGE_SIZE / 8) { kputs("[xhci] FAIL scratch\r\n"); return -1; }
+        for (uint32_t i = 0; i < nsp; i++) {
+            uint64_t pg; if (!zpage(&pg)) { kputs("[xhci] FAIL scratch\r\n"); return -1; }
+            sp[i] = pg;
+        }
+        dcbaa[0] = sp_p;
+    }
+    wr32(op, OP_CONFIG, slots & 0xFF);
+    wr64(op, OP_DCBAAP, dcbaa_p);
+
+    /* Command ring: producer cycle 1, Link TRB at the end toggles the cycle. */
+    cmdr[RING_TRBS - 1].param   = cmd_p;
+    cmdr[RING_TRBS - 1].control = TRB_TYPE(TRB_LINK) | (1u << 1);
+    wr64(op, OP_CRCR, cmd_p | 1u);
+
+    /* Event ring, interrupter 0: ERSTSZ, ERDP, then ERSTBA. */
+    volatile uint8_t *ir = cap + (rd32(cap, CAP_RTSOFF) & ~0x1Fu) + 0x20;
+    erst[0] = evt_p;
+    erst[1] = RING_TRBS;
+    wr32(ir, 0x08, 1);
+    wr64(ir, 0x18, evt_p);
+    wr64(ir, 0x10, erst_p);
+
+    wr32(op, OP_USBCMD, rd32(op, OP_USBCMD) | USBCMD_RS);
+    if (wait_reg(op, OP_USBSTS, USBSTS_HCH, 0) < 0) { kputs("[xhci] FAIL run\r\n"); return -1; }
+    kputs("[xhci] running\r\n");
+
+    /* Enable Slot, cycle 1, then doorbell 0 (host controller). */
+    cmdr[0].control = TRB_TYPE(TRB_ENABLE_SLOT) | 1u;
+    volatile uint8_t *db = cap + (rd32(cap, CAP_DBOFF) & ~0x3u);
+    wr32(db, 0, 0);
+
+    /* Poll the event ring (no interrupts in this piece). Consumer cycle 1. */
+    uint32_t ccs = 1;
+    for (uint64_t i = 0; i < 50000000ull; i++) {
+        volatile struct trb *e = &evtr[0];
+        if ((e->control & 1u) != ccs) { __asm__ volatile("pause"); continue; }
+        if (TRB_GET_TYPE(e->control) != TRB_CMD_DONE) { kputs("[xhci] FAIL event\r\n"); return -1; }
+        uint32_t cc   = e->status >> 24;
+        uint32_t slot = e->control >> 24;
+        wr64(ir, 0x18, (evt_p + sizeof(struct trb)) | (1u << 3));   /* EHB */
+        kputs("[xhci] enable-slot cc="); kputdec(cc);
+        kputs(" slot=");                 kputdec(slot);
+        kputs("\r\n");
+        return cc == 1 ? 0 : -1;
+    }
+    kputs("[xhci] FAIL enable-slot\r\n");
     return -1;
 }
 
@@ -107,4 +199,7 @@ void xhci_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputs("\r\n");
     }
     kputs("[xhci] connected="); kputdec(connected); kputs("\r\n");
+
+    if (xhci_rings_up(cap, op, slots) < 0)
+        return;
 }
