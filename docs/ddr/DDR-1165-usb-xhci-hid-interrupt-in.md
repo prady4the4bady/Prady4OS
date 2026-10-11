@@ -54,4 +54,31 @@ the i8042; this is measured, not assumed (§5).
 
 ## 5. Measured
 
-(filled in after the run)
+Shipped kernel `d8d48f39c25e0ff9`, 1,483,146 B (+4,096 B; the size/headroom
+pair is recomputed at both places it is recorded: 89,718 B headroom).
+
+    [xhci] configure-ep ep=0x0000000000000081 dci=3 cc=1
+    [xhci] set-protocol cc=1
+    [xhci] hid-armed
+    [xhci] hid-report cc=1 mod=0 k0=4
+
+**Routing, measured.** With `usb-kbd` attached, QEMU delivered the HMP
+`sendkey a` to the USB keyboard: `k0=4` is HID usage `a`, and the i8042 path
+cannot produce it.
+
+| run | kernel | smoke-usbkbd | failing line |
+|---|---|---|---|
+| shipped | `d8d48f39c25e0ff9` | rc=0 (run twice) | — |
+| M1 (EP type 3, Interrupt OUT) | `7937a5186ab12528` | rc=2 | hid-report |
+| M2 (k0 from byte 0) | `e7836c1f394d6563` | rc=2 | hid-report |
+| revert | `d8d48f39c25e0ff9` | rc=0 | bit-for-bit |
+
+Other gates:
+- `smoke-xhci` gains the configure-ep and set-protocol lines and is rc=0.
+- `smoke-shell`, `smoke-mouse` and `smoke-nvme` are rc=0.
+- Hygiene: all ten checks rc=0, docstate OK.
+- `ci-shard-check`: 188 gates (`smoke-usbkbd` on shard 4, strict).
+
+Before the first gate run, `pgrep` showed one other QEMU (PID 1485). It had
+exited by the time I checked, most likely the tail of the previous gate's
+injector-driven boot. The gate was then rerun with no other QEMU present.
