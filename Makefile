@@ -3450,9 +3450,9 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 # qemu-xhci with usb-kbd + usb-tablet attached; both must show as connected.
 # Proves the emulated controller only: nothing is enumerated yet.
 smoke-xhci: $(IMG)
-	@echo "[xhci] controller bring-up gate (DDR-1161)..."
+	@echo "[xhci] controller bring-up gate (DDR-1161..1164)..."
 	TIMEOUT_S=60 QEMU_XHCI=1 \
-	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2\n[xhci] running\n[xhci] enable-slot cc=1 slot=1\n[xhci] address port=5 slot=1 cc=1\n[xhci] device-desc cc=1 len=18 type=1 usb=0x0000000000000200 mps0=64 vid=0x0000000000000627 pid=0x0000000000000001')" \
+	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2\n[xhci] running\n[xhci] enable-slot cc=1 slot=1\n[xhci] port-reset port=5 ped0=0 ped=1\n[xhci] address port=5 slot=1 cc=1\n[xhci] device-desc cc=1 len=18 type=1 usb=0x0000000000000200 mps0=64 vid=0x0000000000000627 pid=0x0000000000000001\n[xhci] config-desc cc=1 total=34 cfg=1 ifaces=1 class=3 sub=1 proto=1 ep=0x0000000000000081 attr=3 mps=8 ival=7\n[xhci] set-config cfg=1 cc=1 got=1')" \
 	FORBIDDEN_SENTINEL="[xhci] FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 

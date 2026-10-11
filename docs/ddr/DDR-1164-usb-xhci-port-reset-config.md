@@ -51,3 +51,27 @@ QEMU `usb-kbd`: HID boot keyboard, class 3/1/1, interrupt IN endpoint 0x81.
   hot-plug.
 - The reset matters on real hardware but only its *effect* (PED, PRC) is
   measured here, under QEMU.
+
+## 7. Measured
+
+Shipped kernel `a5c8bb5b6bd2a37c`, 1,479,050 B. Code was added, but the size
+is unchanged: it fits in existing page padding, so the size/headroom pair does
+not move. QEMU `usb-kbd` on port 5:
+
+    [xhci] port-reset port=5 ped0=0 ped=1
+    [xhci] config-desc cc=1 total=34 cfg=1 ifaces=1 class=3 sub=1 proto=1 ep=0x0000000000000081 attr=3 mps=8 ival=7
+    [xhci] set-config cfg=1 cc=1 got=1
+
+`ped0=0` means the USB2 port really is disabled before the reset, so the reset
+is load-bearing on this path and not ceremonial.
+
+| run | kernel | smoke-xhci | failing line |
+|---|---|---|---|
+| shipped | `a5c8bb5b6bd2a37c` | rc=0 | — |
+| M1 (SET_CONFIGURATION value 0) | `d3ca5b5fe6ed45c7` | rc=2 | set-config (device read back `got=0`) |
+| M2 (no full fetch) | `03b06b351c266046` | rc=2 | config-desc |
+| revert | `a5c8bb5b6bd2a37c` | rc=0 | bit-for-bit |
+
+`smoke-shell` and `smoke-mouse` are rc=0. The hygiene checks are all rc=0.
+GLOBAL_FORBIDDEN and the gate count are unchanged. This is emulated qemu-xhci
+only.

@@ -93,6 +93,8 @@ static struct {
     uint32_t cmd_i, cmd_cyc, evt_i, evt_cyc;
     uint64_t *dcbaa;
     uint32_t csz;                               /* context size, 32 or 64 */
+    struct trb *tr;                             /* DDR-1164: EP0 transfer ring */
+    uint32_t tr_i, tr_cyc;
 } X;
 
 /* Put one TRB on a ring at *idx with cycle *cyc; follow the Link TRB at the end. */
@@ -187,6 +189,54 @@ static int xhci_rings_up(volatile uint8_t *cap, volatile uint8_t *op, uint32_t s
     return cc == 1 ? (int)slot : -1;
 }
 
+/* DDR-1164: root-hub port reset. PORTSC change bits are RW1C and PED is
+ * write-1-to-disable, so never write back what was read: write PP|PR only. */
+#define PORTSC_PED  (1u << 1)
+#define PORTSC_PR   (1u << 4)
+#define PORTSC_PP   (1u << 9)
+#define PORTSC_PRC  (1u << 21)
+static int xhci_port_reset(uint32_t port) {
+    volatile uint8_t *op = X.op;
+    uint32_t ped0 = (rd32(op, OP_PORTSC(port)) & PORTSC_PED) ? 1 : 0;
+    wr32(op, OP_PORTSC(port), PORTSC_PP | PORTSC_PR);
+    if (wait_reg(op, OP_PORTSC(port), PORTSC_PRC, PORTSC_PRC) < 0) {
+        kputs("[xhci] FAIL port-reset\r\n");
+        return -1;
+    }
+    wr32(op, OP_PORTSC(port), PORTSC_PP | PORTSC_PRC);
+    uint32_t ped = (rd32(op, OP_PORTSC(port)) & PORTSC_PED) ? 1 : 0;
+    kputs("[xhci] port-reset port="); kputdec(port);
+    kputs(" ped0=");                  kputdec(ped0);
+    kputs(" ped=");                   kputdec(ped);
+    kputs("\r\n");
+    return ped ? 0 : -1;
+}
+
+/* DDR-1164: one EP0 control transfer. len == 0 is a no-data request. Returns
+ * the completion code; *got receives the transferred byte count. */
+static uint32_t control(uint32_t slot, uint64_t setup, uint64_t buf_p,
+                        uint32_t len, uint32_t *got) {
+    struct trb ev;
+    uint32_t trt = len ? (3u << 16) : 0;               /* IN data stage or none */
+    ring_put(X.tr, &X.tr_i, &X.tr_cyc, setup, 8,
+             TRB_TYPE(TRB_SETUP) | TRB_IDT | trt);
+    if (len)
+        ring_put(X.tr, &X.tr_i, &X.tr_cyc, buf_p, len, TRB_TYPE(TRB_DATA) | (1u << 16));
+    /* Status stage direction is opposite the data stage; IN when there is none. */
+    ring_put(X.tr, &X.tr_i, &X.tr_cyc, 0, 0,
+             TRB_TYPE(TRB_STATUS) | TRB_IOC | (len ? 0 : (1u << 16)));
+    wr32(X.db, 4 * slot, 1);                           /* doorbell slot, target EP0 */
+    if (!wait_event(TRB_XFER_EVENT, &ev))
+        return 0;
+    if (got)
+        *got = len - (ev.status & 0xFFFFFF);
+    return ev.status >> 24;
+}
+
+#define SETUP(rt, rq, val, idx, len) \
+    ((uint64_t)(rt) | ((uint64_t)(rq) << 8) | ((uint64_t)(val) << 16) | \
+     ((uint64_t)(idx) << 32) | ((uint64_t)(len) << 48))
+
 /* DDR-1163: Address Device on `port`, then GET_DESCRIPTOR(DEVICE) on EP0. */
 static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
     uint64_t in_p, out_p, tr_p, buf_p;
@@ -197,7 +247,7 @@ static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
 
     tr[RING_TRBS - 1].param   = tr_p;
     tr[RING_TRBS - 1].control = TRB_TYPE(TRB_LINK) | (1u << 1);
-    uint32_t tr_i = 0, tr_cyc = 1;
+    X.tr = tr; X.tr_i = 0; X.tr_cyc = 1;
 
     uint32_t mps = speed == 4 ? 512 : speed == 3 ? 64 : 8;
     uint32_t *icc = (uint32_t *)in;                   /* input control context */
@@ -221,17 +271,9 @@ static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
     kputs(" cc=");                 kputdec(ev.status >> 24);
     kputs("\r\n");
 
-    /* GET_DESCRIPTOR(DEVICE, 18): bmRequestType 0x80, bRequest 6, wValue 0x0100. */
-    uint64_t setup = 0x80u | (6u << 8) | (0x0100ull << 16) | (18ull << 48);
-    ring_put(tr, &tr_i, &tr_cyc, setup, 8,
-             TRB_TYPE(TRB_SETUP) | TRB_IDT | (3u << 16));
-    ring_put(tr, &tr_i, &tr_cyc, buf_p, 18, TRB_TYPE(TRB_DATA) | (1u << 16));
-    ring_put(tr, &tr_i, &tr_cyc, 0, 0, TRB_TYPE(TRB_STATUS) | TRB_IOC);
-    wr32(X.db, 4 * slot, 1);                          /* doorbell slot, target EP0 */
-
-    if (!wait_event(TRB_XFER_EVENT, &ev)) { kputs("[xhci] FAIL desc\r\n"); return -1; }
-    uint32_t cc = ev.status >> 24;
-    uint32_t len = 18 - (ev.status & 0xFFFFFF);
+    uint32_t len = 0;
+    uint32_t cc = control(slot, SETUP(0x80, 6, 0x0100, 0, 18), buf_p, 18, &len);
+    if (!cc) { kputs("[xhci] FAIL desc\r\n"); return -1; }
     kputs("[xhci] device-desc cc="); kputdec(cc);
     kputs(" len=");   kputdec(len);
     kputs(" type=");  kputdec(buf[1]);
@@ -240,7 +282,54 @@ static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
     kputs(" vid=");   kputhex(buf[8] | (buf[9] << 8));
     kputs(" pid=");   kputhex(buf[10] | (buf[11] << 8));
     kputs("\r\n");
-    return (cc == 1 && len == 18 && buf[1] == 1) ? 0 : -1;
+    if (cc != 1 || len != 18 || buf[1] != 1)
+        return -1;
+
+    /* DDR-1164: configuration descriptor, header first for wTotalLength. */
+    cc = control(slot, SETUP(0x80, 6, 0x0200, 0, 9), buf_p, 9, &len);
+    uint32_t total = buf[2] | (buf[3] << 8);
+    if (cc != 1 || len != 9 || buf[1] != 2 || total < 9) {
+        kputs("[xhci] FAIL config-desc\r\n");
+        return -1;
+    }
+    if (total > 256)
+        total = 256;
+    cc = control(slot, SETUP(0x80, 6, 0x0200, 0, total), buf_p, total, &len);
+    if (cc != 1) { kputs("[xhci] FAIL config-desc\r\n"); return -1; }
+    uint32_t cfg = buf[5], ifaces = buf[4];
+    uint32_t cls = 0, sub = 0, proto = 0, epa = 0, attr = 0, emps = 0, ival = 0;
+    int have_if = 0;
+    for (uint32_t o = 0; o + 2 <= len && buf[o] >= 2; o += buf[o]) {
+        if (o + buf[o] > len) break;
+        if (buf[o + 1] == 4 && !have_if) {            /* interface */
+            cls = buf[o + 5]; sub = buf[o + 6]; proto = buf[o + 7]; have_if = 1;
+        } else if (buf[o + 1] == 5 && have_if && !epa) {  /* endpoint */
+            epa = buf[o + 2]; attr = buf[o + 3];
+            emps = buf[o + 4] | (buf[o + 5] << 8); ival = buf[o + 6];
+        }
+    }
+    kputs("[xhci] config-desc cc="); kputdec(cc);
+    kputs(" total=");  kputdec(len);
+    kputs(" cfg=");    kputdec(cfg);
+    kputs(" ifaces="); kputdec(ifaces);
+    kputs(" class=");  kputdec(cls);
+    kputs(" sub=");    kputdec(sub);
+    kputs(" proto=");  kputdec(proto);
+    kputs(" ep=");     kputhex(epa);
+    kputs(" attr=");   kputdec(attr);
+    kputs(" mps=");    kputdec(emps);
+    kputs(" ival=");   kputdec(ival);
+    kputs("\r\n");
+
+    /* SET_CONFIGURATION, then read it back: got= comes from the device. */
+    uint32_t scc = control(slot, SETUP(0x00, 9, cfg, 0, 0), 0, 0, 0);
+    buf[0] = 0xEE;
+    uint32_t gcc = control(slot, SETUP(0x80, 8, 0, 0, 1), buf_p, 1, &len);
+    kputs("[xhci] set-config cfg="); kputdec(cfg);
+    kputs(" cc=");  kputdec(scc);
+    kputs(" got="); kputdec(gcc == 1 && len == 1 ? buf[0] : 255);
+    kputs("\r\n");
+    return (scc == 1 && gcc == 1 && buf[0] == cfg) ? 0 : -1;
 }
 
 void xhci_init(uint8_t bus, uint8_t dev, uint8_t func) {
@@ -308,6 +397,8 @@ void xhci_init(uint8_t bus, uint8_t dev, uint8_t func) {
 
     int slot = xhci_rings_up(cap, op, slots);
     if (slot < 0 || !first_port)
+        return;
+    if (xhci_port_reset(first_port) < 0)
         return;
     xhci_address((uint32_t)slot, first_port, first_speed);
 }
