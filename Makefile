@@ -3087,15 +3087,15 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 CHIPSET_VARIANTS := q35/qemu64 pc/qemu64 q35/Nehalem q35/Opteron_G5
 
 smoke-chipset: $(IMG) fat-image sfs-image
-	@fail=0; \
+	@mkdir -p build/gatelogs; fail=0; \
 	for v in $(CHIPSET_VARIANTS); do \
 	  m=$${v%%/*}; c=$${v##*/}; \
 	  echo "[chipset] === -M $$m -cpu $$c ==="; \
 	  if TIMEOUT_S=90 QEMU_MACHINE=$$m QEMU_CPU=$$c \
-	     bash tools/qemu_runner/boot_test.sh $(IMG) >/tmp/cs_$$m_$$c.log 2>&1; then \
+	     bash tools/qemu_runner/boot_test.sh $(IMG) > build/gatelogs/chipset_$${m}_$${c}.log 2>&1; then \
 	    echo "[chipset] PASS -M $$m -cpu $$c"; \
 	  else \
-	    echo "[chipset] FAIL -M $$m -cpu $$c"; tail -15 /tmp/cs_$$m_$$c.log; fail=1; \
+	    echo "[chipset] FAIL -M $$m -cpu $$c"; tail -15 build/gatelogs/chipset_$${m}_$${c}.log; fail=1; \
 	  fi; \
 	done; \
 	test $$fail -eq 0 || { echo '[chipset] FAIL - a variant did not boot'; exit 1; }

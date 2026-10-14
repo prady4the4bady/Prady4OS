@@ -14852,3 +14852,25 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   all three head_sha d651ede05a5a614c6f2656c77f4458601ae7f31f, all 10 shards each (§INV.15 satisfied).
 - 08645a3 (docs-only tip): push 36316672218 success; pull_request 36316675457 in flight.
 - Merge of PR #17 / main promotion / v1.0.0 tag remain OPERATOR decisions; tag still held on OPEN-2.
+
+## CHECKPOINT 2026-10-14 — Block 1 (orient + audit), DDR-1166, branch `repo-audit-ddr1166`
+
+**Verified, with evidence:**
+- Kernel: clean rebuild gives `kernel.bin` = `d8d48f39c25e0ff9`, 1,483,146 B, zero `-Werror` diagnostics.
+- Static checks: `ci-shard-check` reports 188 gates, 10 shards, 6 excluded. `tools/ci/hygiene_check.sh` passes all ten.
+- CI: all 16 checks green on PRs #34–#41.
+- OPEN-2 (DDR-1166 §1): the DDR-1139 mechanism is fixed and its confirmation was met.
+  - Hunts since then show 0 signals: DDR-1154 (6,545 boots) and run 38109673379 (20×55, all 20 lanes green; DONE line read for lane 5 only).
+  - U1/U2/U3 have no artefact, so nothing is fixable under NON-NEGOTIABLE 3. OPEN-2 is NOT declared closed.
+- New `docs/FEATURE_STATUS.md` lists every subsystem with its status, gate and use case.
+- `userspace/` deleted: three empty `.gitkeep` dirs that nothing referenced. `aether/` (host Python) vs `kernel/aether/` (in-kernel C) is not duplication; kept.
+- `smoke-chipset` fixed: it logged to `/tmp`, and `$m_` expanded to empty, so q35/qemu64 and pc/qemu64 wrote one shared file. Logs now go to `build/gatelogs/`. Re-run: 4/4 variants pass, 4 distinct logs.
+- DDR free-range carriers 1154+ → 1167+.
+
+**Open:**
+- Full 188-gate suite: not run locally (one QEMU at a time, ~3 h). CI's full suite runs on push.
+- Block 3 agent items missing: per-task budgets, UI-state reading, input injection, agent sandbox, rollback on rejection, prompt-injection and budget gates.
+- Desktop: taskbar magnify; agent-panel graphs.
+- USB piece 6 (DDR-1167).
+
+**Next exact command:** `git checkout -b usb-hidpoll-ddr1167` (stacked on this branch), then write `docs/ddr/DDR-1167-*.md`.

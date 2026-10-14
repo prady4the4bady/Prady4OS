@@ -54,7 +54,7 @@ brief describes. That target already exists; there is nothing to merge into it.
 | `kernel/` | 122 | **NEXUS** bare-metal x86_64 kernel — C + NASM. Clean-room, no Linux lineage |
 | `docs/` | 164 | ADRs, DDRs, build status, master feature doc |
 | `aether/` | 31 | The Python agent layer started this session (B-01…B-04) + placeholder dirs |
-| `user/`, `userspace/` | 33 | Ring-3 programs incl. the PRISM shell (static ELF, musl subset) |
+| `user/` | 33 | Ring-3 programs incl. the PRISM shell (static ELF, musl subset) |
 | `tools/`, `arch/`, `boot/`, `fs/`, `drivers/` | ~50 | Toolchain, bootloader, arch code |
 
 `README.md` already opens with:
