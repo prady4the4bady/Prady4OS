@@ -127,3 +127,32 @@ Regression on the fixed kernel: `smoke-blkmq` rc=0, `smoke-blk-integrity` rc=0,
 `smoke-shell` 5/5 — the one change on the normal wake path (the `THREAD_BLOCKED`
 guard in `slot_wake_one`) does not alter behaviour for a correctly-waiting
 submitter, which is `THREAD_BLOCKED` when woken, so `sched_unblock` still runs.
+
+## §8 Addendum (2026-10-14, design before code): the no-sleep return also leaves the submitter linked
+
+Review finding (CodeRabbit on PR #29, verified against the source, not taken on
+trust). `sched_block_timeout()` returns 0 **without blocking** when `*done` is
+already set (`sched.c`: `if (*done) return 0;`). In `submit()` that happens when
+`slot_free == 1` on entry to the wait — i.e. a `slot_wake_one()` has set it and
+the woken waiter has not yet run its `v->slot_free = 0`. The submitter has just
+linked itself at the tail, returns 0, clears `slot_free`, re-scans, finds every
+slot still used, and **links itself again**: the second pass sees
+`slot_tail == current_thread` and writes `current_thread->blk_wait_next =
+current_thread`, a one-node self-loop. On the eventual timeout `blk_slot_unlink`
+matches at the head, sets `slot_head = t->blk_wait_next` (= `t` itself) and
+`slot_tail = 0`, so the departed TCB stays reachable from `slot_head` — §3's
+defect reached by a second route that §3 did not cover.
+
+**Root cause:** §3 placed the unlink on the *timeout* branch only, so it holds the
+invariant "a thread that leaves the wait is not on the list" for one of the two
+ways of leaving. **Fix:** unlink unconditionally after *every* return from
+`sched_block_timeout()`, under `compl_lock` (re-taken by the callee), before the
+timeout check. After a normal wake `slot_wake_one` has already popped the thread,
+so the unlink walks the list, does not find it and is a no-op; after a no-sleep
+return or a timeout it removes the entry. One placement covers all three exits.
+
+**Gate arm (same gate, `smoke-blkslot`):** a second submitter `t10` runs with all
+eight slots occupied **and `slot_free = 1` preset** — the no-sleep precondition,
+manufactured deterministically. It must still time out with `-EIO` (`t10=1`, the
+non-vacuity witness) and leave the list empty (`cleanb=1`). The control is the
+§7 tree with only the timeout-branch unlink: predicted `cleanb=0`.
