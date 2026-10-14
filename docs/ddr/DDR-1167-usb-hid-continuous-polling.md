@@ -140,3 +140,29 @@ The injector therefore sends `b` and then `c`, and the gate requires both
 * No LED output reports (Caps/Num lock lights).
 * Key repeat is whatever the device sends; there is no software typematic.
 * Real hardware is not verified; QEMU `usb-kbd` only.
+
+## §8 Outcome (built, 2026-10-14)
+
+Built as designed, with one change to the gate that §6 forced:
+
+* `inputtest` exits after the **first** key, so "send `b` then `c`, require
+  both" cannot be observed through it. M2's arm is instead the poller's own
+  `[xhci] hid-reports n=4`, printed once on the fourth successful transfer
+  event. The injector repeats each key four rounds, so a re-armed ring sees
+  many reports and a ring that is never re-armed sees exactly one.
+* The injector now waits for `PRADYOS_INPUT_WAIT` and sends `b`; the first
+  report therefore reads `k0=5` (usage 5 = `b`).
+
+Measured, all on `smoke-usbkbd`:
+
+| Kernel | Change | Result |
+|---|---|---|
+| `d9b58eb90791cca4` | shipped | PASS |
+| `01d7706917df0804` | M1: `hid_emit` returns before `ps2kbd_feed` | FAIL, missing only `PRADYOS_INPUT_OK b` |
+| `84ed557cc6e061a5` | M2: re-queue removed | FAIL, missing only `[xhci] hid-reports n=4` (`hid-report` and `INPUT_OK b` still present) |
+
+M1 settles §6's vacuity question: on q35 the `sendkey` does **not** reach the
+i8042, so the `INPUT_OK` arm is carried by the USB path alone. Reverting both
+mutants rebuilds `d9b58eb90791cca4` bit for bit.
+
+`kernel.bin` stays 1,483,146 B; the size/headroom carriers are unchanged.

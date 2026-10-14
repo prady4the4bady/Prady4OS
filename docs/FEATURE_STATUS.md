@@ -74,7 +74,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | virtio-net + lwIP, TCP/UDP loopback, DHCP + DNS | gated | `smoke-net*`, `smoke-dhcpdns` | Networking |
 | e1000e | gated | `smoke-e1000e` | Intel NIC |
 | PS/2 keyboard + modifiers, virtio-input mouse | gated | `smoke-input`, `smoke-modkeys`, `smoke-mouse` | Keyboard and pointer |
-| USB xHCI: controller, slot, address, config, one HID boot report | gated | `smoke-xhci`, `smoke-usbkbd` | USB keyboard (one report); continuous input to PRISM is next (DDR-1167) |
+| USB xHCI: controller, slot, address, config, continuous HID boot keyboard | gated | `smoke-xhci`, `smoke-usbkbd` | A USB keyboard types into the same rings as PS/2 (NSI 46/96), polled from the BSP tick (DDR-1167) |
 | USB hubs, mouse, mass storage | not started | none | T1 register |
 | RNG (virtio-rng) | gated | `smoke-rng` | Key material |
 | ACPI poweroff / reboot | gated | `smoke-poweroff`, `smoke-reboot` | Shutdown |
