@@ -4,6 +4,8 @@
 > file **in full** before touching anything. It captures the exact repo state and
 > the non-negotiable contracts so the project continues with zero context loss.
 
+> **Read `docs/VISION.md` first** (operator vision, DDR-1169), then this file.
+
 ---
 
 ## CHECKPOINT 2026-09-18 — DDR-1121: the shard-7 freeze has two witnesses, and they name different locks
