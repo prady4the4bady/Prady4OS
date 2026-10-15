@@ -7,6 +7,13 @@ AND is assigned in `tools/ci/gate_shards.txt`. `make ci-shard-check` reads
 **188 gates, 10 shards, 6 excluded**. `kernel.bin` = `d8d48f39c25e0ff9`, 1,483,146 B,
 warning-clean at `-Werror` after a clean rebuild.
 
+**Re-measured 2026-10-15 on the combined tree `d201c2c`** (after #43, #44, #46,
+#47 merged without a combined-tree run): `make ci-shard-check` reads **193 gates,
+10 shards, 6 excluded**; `kernel.bin` = `7d429743e211a591`, **1,503,626 B**
+(69,238 B headroom), warning-clean at `-Werror`; `tools/ci/hygiene_check.sh`
+ALL TEN PASSED; `smoke-shell` rc=0 locally. Statuses below are unchanged except
+where marked.
+
 Status words:
 
 * **gated**: built, and asserted by a CI-registered gate.
@@ -119,7 +126,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | Egress allowlist, privacy mode (connect + I/O), egress audit | gated | `smoke-netallow`, `smoke-capnet`, `smoke-privacy-netfilter`, `smoke-egress-audit`, `smoke-sovereign-egress` | Agents reach only approved hosts |
 | Kill switch (SYS_KILL_AGENT, SIGKILL from blocked waits) | gated | `smoke-kill`, `smoke-killblock` | Stop a runaway agent |
 | Per-agent rate limit (60 syscalls/100 ticks) | gated (as a side arm) | `smoke-aether-sec` | Cheap budget |
-| Per-task budgets (time/token/byte) | SHIPPED (time/bytes/actions; tokens not kernel-observable, not claimed) — DDR-1170 | smoke-taskbudget | Block 3 |
+| Per-task budgets (time/token/byte) | gated (time, bytes, actions; tokens are not kernel-observable and are not claimed) — DDR-1170 | `smoke-taskbudget` | Block 3 |
 | UI-state reading for agents | not started | none | Block 3 |
 | Input injection by agents | not started | none | Block 3 |
 | Sandboxed shell / browser for agents | not started | none | Block 3; browser is cloud-bridge adjacent |
