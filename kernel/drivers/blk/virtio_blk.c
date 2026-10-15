@@ -333,12 +333,16 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
         vown_clear(v);
         int _to = sched_block_timeout(&v->compl_lock, &v->slot_free, 500);
         vown_set(v, VOWN_SLOTWAIT);
+        /* DDR-1156 §3/§8: whatever way the wait ended, this thread is no longer
+         * waiting, so it must not be on the list. After a normal wake
+         * slot_wake_one already popped it and this is a no-op; after a timeout,
+         * or a no-sleep return (slot_free was already 1, so the callee returned
+         * 0 without blocking), it removes the entry -- otherwise the retry
+         * below would link us a second time (a self-loop) and a departed TCB
+         * would stay reachable from slot_head. Under compl_lock. */
+        blk_slot_unlink(v, current_thread);
         if (_to == -ETIMEDOUT) {
             kputs("[vblk] slot wait timeout\r\n");
-            /* DDR-1156 §3: we are giving up the wait, so remove ourselves from
-             * the slot wait list before returning — else a later slot_wake_one
-             * pops this (departed, maybe freed) thread. Under compl_lock. */
-            blk_slot_unlink(v, current_thread);
             vown_clear(v);
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
@@ -512,6 +516,15 @@ void virtio_blk_flush_stats(int *neg0, uint32_t *issued, uint32_t *ok) {
  * Probe-gated (QEMU_PROBES=blkslotwait); runs on the LAST unit, which the gate's
  * disk config makes a blank scratch disk (never the mounted root). */
 static volatile int g_sw_t9_done;      /* 1 = -EIO (expected), 2 = unexpected rc */
+static volatile int g_sw_t10_done;     /* §8 arm B: same encoding as t9 */
+static void vblk_sw_t10(void *arg) {
+    struct vblk *v = (struct vblk *)arg;
+    static uint8_t sw_buf10[SECTOR];
+    /* DDR-1156 §8: slot_free is preset to 1, so the first sched_block_timeout
+     * returns 0 WITHOUT sleeping while this thread is linked on the list. */
+    int r = submit(v, 0, (uint64_t)(uintptr_t)sw_buf10, 1, VIRTIO_BLK_T_IN);
+    g_sw_t10_done = (r == -EIO) ? 1 : 2;
+}
 static void vblk_sw_t9(void *arg) {
     struct vblk *v = (struct vblk *)arg;
     static uint8_t sw_buf[SECTOR];
@@ -565,7 +578,40 @@ void vblk_slotwait_selftest(void) {
     for (int s = 0; s < VBLK_NREQ; s++) v->req[s].used = 0;   /* release fixtures */
     spin_unlock_irqrestore(&v->compl_lock, fl);
 
+    /* DDR-1156 §8 arm B: the no-sleep return. Re-occupy every slot, preset
+     * slot_free = 1, and run a second real submitter. */
+    fl = spin_lock_irqsave(&v->compl_lock);
+    for (int s = 0; s < VBLK_NREQ; s++) {
+        v->req[s].used = 1; v->req[s].done = 0;
+        v->req[s].warned = 1; v->req[s].t0 = g_ticks; v->req[s].waiter = 0;
+    }
+    v->slot_free = 1;
+    spin_unlock_irqrestore(&v->compl_lock, fl);
+    g_sw_t10_done = 0;
+    int cleanb = 0;
+    struct tcb *t10 = sched_create(vblk_sw_t10, v, "blkslot2");
+    if (t10) {
+        smp_resched_all();
+        dl = g_ticks + 900;
+        while (!g_sw_t10_done && g_ticks < dl)
+            yield();
+        drain = g_ticks + 50;
+        while (g_ticks < drain)
+            yield();
+    }
+    fl = spin_lock_irqsave(&v->compl_lock);
+    cleanb = (v->slot_head == 0 && v->slot_tail == 0);
+    v->slot_head = 0; v->slot_tail = 0;   /* never leave a dangling fixture */
+    v->slot_free = 0;
+    for (int s = 0; s < VBLK_NREQ; s++) v->req[s].used = 0;
+    spin_unlock_irqrestore(&v->compl_lock, fl);
+
     uint32_t nb1 = vblk_wake_notblocked();
+    kputs("[blkslot] PRADYOS_BLKSLOT_B cleanb=");
+    kputdec((uint64_t)(unsigned)cleanb);
+    kputs(" t10=");
+    kputdec((uint64_t)g_sw_t10_done);
+    kputs("\r\n");
     kputs("[blkslot] PRADYOS_BLKSLOT clean=");
     kputdec((uint64_t)(clean1 && clean2 ? 1u : 0u));
     kputs(" notblocked=");

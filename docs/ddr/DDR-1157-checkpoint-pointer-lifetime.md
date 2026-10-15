@@ -136,7 +136,15 @@ gate booting an OS to drive the same syscalls buys nothing).
 The non-vacuity proof is **M2**. M1 was tried first, is recorded here because it
 was wrong in an instructive way, and is **not** the proof.
 
-- **M1 (resume order inverted) — EQUIVALENT UNDER THE LOCK, gate PASSES.** Clear
+- **CORRECTED 2026-10-14 (review finding on PR #29): the "equivalent mutant"
+  reading below is WRONG on SMP and is retained only as the record of what was
+  believed.** `g_sched_lock` is NOT taken on the switch path (rq-2), so once
+  `sched_unblock(t)` has queued the target, another CPU can pick it and run it
+  before `t->checkpointed = 0` executes; it then sees the old flag and re-blocks.
+  The gate is single-CPU, so it cannot see that window — **M1 is UNCAUGHT, not
+  equivalent**, and clear-BEFORE-unblock is a correctness requirement, not a
+  free preference. Coverage limit recorded; no SMP arm is built here.
+- **M1 (resume order inverted) — gate PASSES (original reading follows).** Clear
   `checkpointed` AFTER `sched_unblock` instead of before. I predicted arm 2 would
   fail ("target wakes, reaches its next syscall, still sees `checkpointed == 1`,
   re-blocks") and **it did not — the gate passed, exit 0.** The prediction is the

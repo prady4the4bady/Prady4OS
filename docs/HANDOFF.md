@@ -22,14 +22,14 @@ trade-off, or anything on the not-approved list below).
 ## Current kernel
 
 - `kernel.bin` = `f5124d9b145df8cb`, 1,474,954 B, warning-clean at `-Werror`.
-- GLOBAL_FORBIDDEN = 77 ; gates = 187 across 10 shards, 6 excluded.
-- DDR free range: **DDR-1158+** (1156 = Fix 1, 1157 = Fix 2 both consumed).
+- GLOBAL_FORBIDDEN = 77 ; gates = 188 across 10 shards, 6 excluded.
+- DDR free range: **DDR-1159+** (1156 = Fix 1, 1157 = Fix 2, 1158 = KASAN UAF gate).
 
 ## Branches / PRs in flight
 
 - **PR #29** (`dev/phase1-seyp3n` → `dev/phase1`, DRAFT): the pre-rule stack —
   DDR-1154 (`3d2e2cf`) → DDR-1155 (`4e8f231`) → T1 plan (`f43ccbc`) →
-  Fix 1 DDR-1156 (`9c917b0`) → Fix 2 DDR-1157 (`a0dda18`). Verified single linear
+  Fix 1 DDR-1156 (`9c917b0`) → Fix 2 DDR-1157 (`a0dda18`) → DDR-1158 KASAN UAF gate. Verified single linear
   history, no rewrite. Title/body updated 2026-10-04 to list all four.
   CI on tip `a0dda18`: `pradyos-ci` push + pull_request green; third
   (`workflow_dispatch`, run 37174876900) dispatched to meet the 3-green rule.
@@ -77,12 +77,12 @@ Docs commits (DDR campaign logs, this file) keep moving the branch tip, which
 re-triggers `pradyos-ci`. The three-green-on-one-tip criterion must be
 **re-confirmed on the final quiescent tip** before any promotion — and promotion
 is the operator's action, held on OPEN-2, so this is a milestone to record, not a
-freeze. The Step 0.3 greens fired on `a62e06a`; later docs pushes supersede that
+freeze. The Step 0.3 greens fired on `a0dda18` (run 37174876900's head); later docs pushes supersede that
 tip.
 
 ## Next, in order
 
-- **Step 1** — finish + record DDR-1154 dispatch 6; confirmation hunt on the new
+- **Step 1** — read dispatch 6's 20 DONE lines (recorded, DDR-1154 §6.5); confirmation hunt on the new
   kernel; installed-disk hunt over `virtio_blk.c`.
 - **Step 2** — lifetime audit (8 bug classes, comment 5971011693, read-only) →
   `docs/AUDIT_LIFETIME_2026-10.md`; one PROPOSED PR per worth-fixing finding;

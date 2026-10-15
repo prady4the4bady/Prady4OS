@@ -156,3 +156,19 @@ eight slots occupied **and `slot_free = 1` preset** — the no-sleep preconditio
 manufactured deterministically. It must still time out with `-EIO` (`t10=1`, the
 non-vacuity witness) and leave the list empty (`cleanb=1`). The control is the
 §7 tree with only the timeout-branch unlink: predicted `cleanb=0`.
+
+## §9 Measured result of §8 (2026-10-15)
+
+Built warning-clean at `-Werror`; kernel.bin `7020d00b6e717e9c`, 1,479,050 B —
+size unchanged against the pre-§8 tree, so the size/headroom pair and
+`ci-docstate-check` are unaffected (`docstate: OK`).
+
+- **Control (the §7 tree + arm B, i.e. timeout-branch unlink only), kernel
+  `1cd537221bcc78a1`:** `PRADYOS_BLKSLOT_B cleanb=0 t10=1` — the no-sleep return
+  left the departed submitter on the list, exactly as §8 predicted. Against the
+  gate with arm B wired: **rc=2**.
+- **Fixed kernel `7020d00b6e717e9c`:** `PRADYOS_BLKSLOT_B cleanb=1 t10=1` and arm
+  A unchanged (`clean=1 notblocked=0 t9=1`) → PASS. `t10=1` is the non-vacuity
+  witness: the second submitter ran the real `submit()` and timed out with `-EIO`.
+- Regression on the fixed kernel: `smoke-blkmq` rc=0, `smoke-blk-integrity` rc=0,
+  `smoke-shell` **5/5**; hygiene ALL TEN.

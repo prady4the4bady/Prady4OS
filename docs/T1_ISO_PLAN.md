@@ -48,7 +48,7 @@ identity alias (DDR-1046) + CR0.WP (DDR-1126), SMEP/SMAP (DDR-1040/1041), #MC
 
 | Item | Why | Tag |
 |---|---|---|
-| ~~DDR-1155 KASAN use-after-free regression test~~ (U1/U2/U3) | **BUILT — DDR-1158**: `pmm_kasan_uaf_selftest` gated by `smoke-kasan-uaf` (CI-registered) | **done** |
+| KASAN use-after-free regression gate (owed by DDR-1155 §4) | **BUILT — DDR-1158**, `smoke-kasan-uaf` (CI-registered). It closes **none** of DDR-1155's U1/U2/U3, which stay **unresolved** | **done** (gate only) |
 | OPEN-2 campaign to 11,000 boots (DDR-1154) | the one open release blocker; 5,445/11,000 read, 0 signals | **v1** |
 | Cross-CPU TLB shootdown — prerequisite of `CLONE_VM`/pthreads, not a Phase-9 optimisation (DDR-1075 §3, guarded by `ci-cr3-writers-check`) | blocks L5 pthreads | **v1** (only if pthreads is pulled into v1; else POST) |
 | KPTI / retpoline / RSB | assessed, recommended deferral (DDR-1140); TCG cannot demonstrate it | **POST** |

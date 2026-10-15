@@ -189,8 +189,11 @@ lines and promote these 1,100 to "read".
 
 **Running total for criterion (A):** 5,445 **read** + 1,100
 **conclusion-verified (DONE-lines-unread)** = **6,545 of 11,000** on
-`182c30bb16930d57`, 0 signals, 0 silent stops. Interim 95% upper bound on the
-6,545 is 3/6545 ≈ **0.046% per boot**. Still **not pooled** with DDR-1139 §8 (a
+`182c30bb16930d57`, 0 signals, 0 silent stops. **The bound uses only the READ
+boots, per §4's own denominator rule (corrected 2026-10-14, review on PR #29):**
+interim 95% upper bound 3/5445 ≈ **0.055% per boot**. The 1,100
+conclusion-verified boots are reported beside it and enter the bound only once
+their 20 DONE lines are read. Still **not pooled** with DDR-1139 §8 (a
 different binary), and still not pooled with any new-tip hunt (§6.6), which is a
 different binary again.
 

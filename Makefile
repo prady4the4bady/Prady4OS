@@ -3514,6 +3514,8 @@ smoke-blkslot: $(IMG) fat-image sfs-image
 	@l=$$(grep -ao 'PRADYOS_BLKSLOT clean=[0-9]* notblocked=[0-9]* t9=[0-9]*' build/gatelogs/blkslot.log | tail -1); \
 	 [ -n "$$l" ] || { echo "[blkslot] FAIL — probe never reported"; tail -20 build/gatelogs/blkslot.log; exit 1; }; \
 	 echo "$$l" | grep -q 't9=1' || { echo "[blkslot] FAIL — the 9th submitter did not time out with -EIO ($$l); the slot-wait path was not exercised, gate would be vacuous"; exit 1; }; \
+	 b=$$(grep -ao 'PRADYOS_BLKSLOT_B cleanb=[0-9]* t10=[0-9]*' build/gatelogs/blkslot.log | tail -1); \
+	 [ "$$b" = "PRADYOS_BLKSLOT_B cleanb=1 t10=1" ] || { echo "[blkslot] FAIL — arm B (DDR-1156 §8, no-sleep return): '$$b' (want cleanb=1 t10=1)"; exit 1; }; \
 	 echo "[blkslot] PASS — $$l"
 
 smoke-yieldstall: $(IMG) fat-image sfs-image
