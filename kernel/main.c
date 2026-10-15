@@ -2238,6 +2238,8 @@ static void fs_test_thread(void *arg) {
                  * exact count would be asserting the absence of work stealing. */
                 if (probe_enabled("part"))           /* DDR-1143 §4.1 */
                     part_selftest(cap);
+                if (probe_enabled("vblklate"))       /* DDR-1160 */
+                    virtio_blk_late_selftest();
                 if (probe_enabled("disk")) {         /* DDR-1143 sec.10.8: NSI 104 */
                     /* AFTER part_selftest, so the list holds every device class
                      * (virtio, ramdisk, part, trace). Waited on by pid, not by

@@ -3468,6 +3468,16 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 # line (DDR-1044), each owned by a distinct mutant (DDR-1143 piece 1). Runs on a
 # private 256 KiB ramdisk the probe creates, so it writes nothing another gate
 # owns. The FORBIDDEN pattern names a failure instead of leaving an absence.
+# DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
+# Drives the driver's head/slot bookkeeping on a scratch struct (no device): a
+# real 5 s completion stall cannot be produced on demand under QEMU.
+smoke-vblklate: $(IMG) fat-image sfs-image
+	@echo "[vblklate] stale-head completion gate (DDR-1160)..."
+	TIMEOUT_S=120 QEMU_PROBES=vblklate \
+	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
+	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-part: $(IMG) fat-image sfs-image
 	@echo "[part] partition sub-device gate (DDR-1143 §4.1)..."
 	@mkdir -p build/gatelogs
