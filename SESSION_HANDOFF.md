@@ -14888,3 +14888,20 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - USB piece 6 (DDR-1167).
 
 **Next exact command:** `git checkout -b usb-hidpoll-ddr1167` (stacked on this branch), then write `docs/ddr/DDR-1167-*.md`.
+
+## CHECKPOINT 2026-10-14 — USB piece 6, DDR-1167 (branch `usb-hidpoll-ddr1167`)
+
+- **Built:** the xHCI HID boot keyboard is now polled continuously from the BSP
+  `timer_tick()` and translated into set-1 scancodes fed to the existing
+  `ps2kbd_feed()` — one decoder, both rings (NSI 46/96). The `usbkbd` probe key
+  is gone; this is product behaviour.
+- **Gate:** `smoke-usbkbd` now attaches FAT+SFS and requires
+  `PRADYOS_INPUT_OK b` (ring 3) and `[xhci] hid-reports n=4` (TRB re-armed).
+- **Mutants:** M1 (no feed, `01d7706917df0804`) loses only `INPUT_OK b`, so the
+  arm is not carried by the i8042. M2 (no re-queue, `84ed557cc6e061a5`) loses
+  only `hid-reports n=4`. Revert rebuilds `d9b58eb90791cca4` bit for bit.
+- **Regression:** smoke-usbkbd, smoke-input, smoke-modkeys, smoke-superkey
+  rc=0; smoke-shell 5/5; hygiene ALL TEN. kernel.bin 1,483,146 B (unchanged).
+- **Free range:** DDR-1168+.
+- **Next:** agent-layer block (budgets, kill switch, egress, rollback +
+  adversarial gates), per the operator's work order.

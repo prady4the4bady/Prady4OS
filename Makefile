@@ -3479,21 +3479,22 @@ smoke-xhci: $(IMG)
 	FORBIDDEN_SENTINEL="[xhci] FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
-smoke-usbkbd: $(IMG)
-	@echo "[usbkbd] USB HID boot keyboard gate (DDR-1165): sendkey a -> qemu-xhci usb-kbd -> interrupt IN 0x81..."
+smoke-usbkbd: $(IMG) fat-image sfs-image
+	@echo "[usbkbd] USB HID keyboard gate (DDR-1165/1167): sendkey b -> qemu-xhci usb-kbd -> ps2kbd_feed -> SYS_INPUT_POLL..."
 	@mkdir -p build/gatelogs
 	@rm -f build/gatelogs/usbkbd.log /tmp/pusbkbd.sock
-	@bash tools/qemu_runner/input_inject.sh build/gatelogs/usbkbd.log /tmp/pusbkbd.sock "[xhci] hid-armed" "a" &
+	@bash tools/qemu_runner/input_inject.sh build/gatelogs/usbkbd.log /tmp/pusbkbd.sock "PRADYOS_INPUT_WAIT" "b" &
 	@timeout 90 qemu-system-x86_64 -machine q35 \
 	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
 	    -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 \
 	    -monitor unix:/tmp/pusbkbd.sock,server,nowait \
-	    -fw_cfg name=opt/org.pradyos/probes,string=usbkbd \
 	    -serial file:build/gatelogs/usbkbd.log -display none -no-reboot || true
 	@grep -qa "\[xhci\] FAIL" build/gatelogs/usbkbd.log && { echo "[usbkbd] FAIL:"; grep -a "\[xhci\]" build/gatelogs/usbkbd.log; exit 1; } || true
-	@for l in "[xhci] configure-ep ep=0x0000000000000081 dci=3 cc=1" "[xhci] set-protocol cc=1" "[xhci] hid-armed" "[xhci] hid-report cc=1 mod=0 k0=4"; do \
-	    grep -qaF "$$l" build/gatelogs/usbkbd.log || { echo "[usbkbd] FAIL -- missing: $$l"; grep -a "\[xhci\]" build/gatelogs/usbkbd.log; exit 1; }; done
-	@echo "[usbkbd] PASS -- a host keypress reached ring 0 as HID usage 4 over the interrupt-IN endpoint"
+	@for l in "[xhci] configure-ep ep=0x0000000000000081 dci=3 cc=1" "[xhci] set-protocol cc=1" "[xhci] hid-armed" "[xhci] hid-report cc=1 mod=0 k0=5" "[xhci] hid-reports n=4" "PRADYOS_INPUT_OK b"; do \
+	    grep -qaF "$$l" build/gatelogs/usbkbd.log || { echo "[usbkbd] FAIL -- missing: $$l"; grep -a "\[xhci\]\|PRADYOS_INPUT" build/gatelogs/usbkbd.log; exit 1; }; done
+	@echo "[usbkbd] PASS -- a USB keypress reached ring 3 through the shared set-1 decoder; the interrupt-IN TRB is re-armed"
 
 # DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
 # Drives the driver's head/slot bookkeeping on a scratch struct (no device): a

@@ -7,12 +7,12 @@
  * DDR-1162 adds the command/event rings and one polled Enable Slot.
  * DDR-1163 addresses the first connected device and reads its device descriptor.
  */
-#include "../fwcfg/fwcfg.h"
 #include "xhci.h"
 #include "console.h"
 #include "pcie.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "../input/ps2kbd.h"
 
 #define XHCI_BAR_VBASE 0xFFFFD60000000000ull   /* clear of ECAM/virtio/NVMe/GOP */
 #define XHCI_BAR_MAP   0x10000u                 /* 64 KiB covers QEMU's BAR0 */
@@ -114,6 +114,21 @@ static void ring_put(struct trb *r, uint32_t *idx, uint32_t *cyc,
 }
 
 /* Wait for the next event of `type`. Returns the event (copied) or 0 on timeout. */
+/* DDR-1167: the one boot keyboard's interrupt-IN state. */
+static struct {
+    struct trb *itr; uint32_t itr_i, itr_cyc;
+    volatile uint8_t *buf; uint64_t buf_p;
+    uint32_t slot; uint8_t prev[8];
+    int live, reported;
+    uint32_t nrep;                  /* successful transfer events */
+} H;
+
+static void hid_queue(void) {
+    for (int i = 0; i < 8; i++) H.buf[i] = 0;
+    ring_put(H.itr, &H.itr_i, &H.itr_cyc, H.buf_p, 8, TRB_TYPE(TRB_NORMAL) | TRB_IOC);
+    wr32(X.db, 4 * H.slot, 3);
+}
+
 static int wait_event(uint32_t type, struct trb *out) {
     for (uint64_t i = 0; i < 50000000ull; i++) {
         volatile struct trb *e = &X.evtr[X.evt_i];
@@ -367,33 +382,107 @@ static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
 
     uint32_t pcc = control(slot, SETUP(0x21, 0x0B, 0, ifn, 0), 0, 0, 0);
     kputs("[xhci] set-protocol cc="); kputdec(pcc); kputs("\r\n");
-    if (pcc != 1 || !probe_enabled("usbkbd"))
-        return pcc == 1 ? 0 : -1;
+    if (pcc != 1)
+        return -1;
 
-    /* One report: Normal TRB, doorbell target 3, skip empty reports. */
+    /* DDR-1167: arm ONE Normal TRB and hand the ring to xhci_poll(). Every
+     * command has completed by now, so from here the event ring has a single
+     * consumer: the BSP timer tick. hid_live is set LAST. */
+    H.itr = itr; H.itr_i = itr_i; H.itr_cyc = itr_cyc;
+    H.buf = buf; H.buf_p = buf_p; H.slot = slot;
+    for (int i = 0; i < 8; i++) H.prev[i] = 0;
+    hid_queue();
     kputs("[xhci] hid-armed\r\n");
-    for (int tries = 0; tries < 20; tries++) {
-        for (int i = 0; i < 8; i++) buf[i] = 0;
-        ring_put(itr, &itr_i, &itr_cyc, buf_p, 8, TRB_TYPE(TRB_NORMAL) | TRB_IOC);
-        wr32(X.db, 4 * slot, 3);
-        uint32_t rcc = 0, got_ev = 0;
-        for (int w = 0; w < 8 && !got_ev; w++) {
-            if (wait_event(TRB_XFER_EVENT, &ev) && ((ev.control >> 16) & 0x1F) == 3)
-                got_ev = 1;
-        }
-        if (!got_ev)
-            continue;
-        rcc = ev.status >> 24;
-        if (buf[2] == 0)
-            continue;                                 /* release or idle */
-        kputs("[xhci] hid-report cc="); kputdec(rcc);
-        kputs(" mod=");                  kputdec(buf[0]);
-        kputs(" k0=");                   kputdec(buf[2]);
-        kputs("\r\n");
-        return 0;
+    __atomic_store_n(&H.live, 1, __ATOMIC_RELEASE);
+    return 0;
+}
+
+/* DDR-1167 §3: HID boot-protocol usage -> set-1 make code. 0 = unmapped.
+ * Bit 0x100 marks an E0-prefixed (extended) key. */
+static const uint16_t g_usage_sc[0x53] = {
+    [4]=0x1E,[5]=0x30,[6]=0x2E,[7]=0x20,[8]=0x12,[9]=0x21,[10]=0x22,[11]=0x23,
+    [12]=0x17,[13]=0x24,[14]=0x25,[15]=0x26,[16]=0x32,[17]=0x31,[18]=0x18,
+    [19]=0x19,[20]=0x10,[21]=0x13,[22]=0x1F,[23]=0x14,[24]=0x16,[25]=0x2F,
+    [26]=0x11,[27]=0x2D,[28]=0x15,[29]=0x2C,
+    [30]=0x02,[31]=0x03,[32]=0x04,[33]=0x05,[34]=0x06,[35]=0x07,[36]=0x08,
+    [37]=0x09,[38]=0x0A,[39]=0x0B,
+    [40]=0x1C,[41]=0x01,[42]=0x0E,[43]=0x0F,[44]=0x39,[45]=0x0C,[46]=0x0D,
+    [47]=0x1A,[48]=0x1B,[49]=0x2B,[51]=0x27,[52]=0x28,[53]=0x29,[54]=0x33,
+    [55]=0x34,[56]=0x35,[57]=0x3A,
+    [58]=0x3B,[59]=0x3C,[60]=0x3D,[61]=0x3E,[62]=0x3F,[63]=0x40,[64]=0x41,
+    [65]=0x42,[66]=0x43,[67]=0x44,[68]=0x57,[69]=0x58,
+    [73]=0x152,[74]=0x147,[75]=0x149,[76]=0x153,[77]=0x14F,[78]=0x151,
+    [79]=0x14D,[80]=0x14B,[81]=0x150,[82]=0x148,
+};
+static const uint16_t g_mod_sc[8] = {
+    0x1D, 0x2A, 0x38, 0x15B, 0x11D, 0x36, 0x138, 0x15C,
+};
+
+static void hid_emit(uint16_t code, int brk) {
+    if (!code) return;
+    if (code & 0x100) ps2kbd_feed(0xE0);
+    ps2kbd_feed((uint8_t)((code & 0xFF) | (brk ? 0x80 : 0)));
+}
+
+static int hid_has(const uint8_t *r, uint8_t u) {
+    for (int i = 2; i < 8; i++) if (r[i] == u) return 1;
+    return 0;
+}
+
+static void hid_report(const uint8_t *r) {
+    for (int i = 2; i < 8; i++)
+        if (r[i] == 1) return;              /* ErrorRollOver: no key state */
+    uint8_t dm = r[0] ^ H.prev[0];
+    for (int b = 0; b < 8; b++)
+        if (dm & (1u << b)) hid_emit(g_mod_sc[b], !(r[0] & (1u << b)));
+    for (int i = 2; i < 8; i++) {
+        uint8_t u = H.prev[i];
+        if (u && u < sizeof g_usage_sc / sizeof g_usage_sc[0] && !hid_has(r, u))
+            hid_emit(g_usage_sc[u], 1);
     }
-    kputs("[xhci] FAIL hid-report\r\n");
-    return -1;
+    for (int i = 2; i < 8; i++) {
+        uint8_t u = r[i];
+        if (u && u < sizeof g_usage_sc / sizeof g_usage_sc[0] && !hid_has(H.prev, u))
+            hid_emit(g_usage_sc[u], 0);
+    }
+    for (int i = 0; i < 8; i++) H.prev[i] = r[i];
+}
+
+/* DDR-1167 §4: called from timer_tick(), which runs ONLY on the BSP, and
+ * IRQ1 (the other ps2kbd_feed writer) is PIC-routed to the BSP. Both enter via
+ * interrupt gates, so the unlocked decoder stays single-CPU and serialised.
+ * Moving either off the BSP must add a lock in the same commit. */
+void xhci_poll(void) {
+    if (!__atomic_load_n(&H.live, __ATOMIC_ACQUIRE))
+        return;
+    for (;;) {
+        volatile struct trb *e = &X.evtr[X.evt_i];
+        if ((e->control & 1u) != X.evt_cyc)
+            return;
+        struct trb ev = { e->param, e->status, e->control };
+        if (++X.evt_i == RING_TRBS) { X.evt_i = 0; X.evt_cyc ^= 1u; }
+        wr64(X.ir, 0x18, (X.evt_p + X.evt_i * sizeof(struct trb)) | (1u << 3));
+        if (((ev.control >> 10) & 0x3F) != TRB_XFER_EVENT ||
+            ((ev.control >> 16) & 0x1F) != 3)
+            continue;                       /* port change etc.: ignored */
+        uint8_t r[8];
+        for (int i = 0; i < 8; i++) r[i] = H.buf[i];
+        if (!H.reported && r[2]) {
+            H.reported = 1;
+            kputs("[xhci] hid-report cc="); kputdec(ev.status >> 24);
+            kputs(" mod=");                  kputdec(r[0]);
+            kputs(" k0=");                   kputdec(r[2]);
+            kputs("\r\n");
+        }
+        if ((ev.status >> 24) == 1) {
+            hid_report(r);
+            /* DDR-1167 §6: a re-queue that never happens yields exactly one
+             * report, so the 4th says the ring is being re-armed. */
+            if (++H.nrep == 4)
+                kputs("[xhci] hid-reports n=4\r\n");
+        }
+        hid_queue();
+    }
 }
 
 void xhci_init(uint8_t bus, uint8_t dev, uint8_t func) {
