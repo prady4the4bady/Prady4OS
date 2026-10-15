@@ -130,6 +130,8 @@ USER_AMEM_SRC := user/agentmemtest.c     # DDR-836: agent memory gate
 USER_AMEM_ELF := build/agentmemtest.elf
 USER_CKPT_SRC := user/ckpttest.c         # DDR-837: checkpoint/resume gate
 USER_CKPT_ELF := build/ckpttest.elf
+USER_KILLAGENT_SRC := user/killagenttest.c  # DDR-1159: SYS_KILL_AGENT gate (Fix 3)
+USER_KILLAGENT_ELF := build/killagenttest.elf
 USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
 USER_SDEP_ELF := build/spawndepthtest.elf
 USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
@@ -599,6 +601,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AMEM_ELF) build/agentmemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CKPT_SRC) -o build/ckpttest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CKPT_ELF) build/ckpttest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLAGENT_SRC) -o build/killagenttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLAGENT_ELF) build/killagenttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SDEP_SRC) -o build/spawndepthtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DAG_SRC) -o build/actiondagtest.o
@@ -3209,6 +3213,12 @@ smoke-checkpoint: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="CKPT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+smoke-killagent: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=killagent \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_KILLAGENT_OK\nPRADYOS_KILLAGENT_DENY_OK')" \
+	FORBIDDEN_SENTINEL="KILLAGENT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-agentmem: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=agentmem \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_AGENTMEM_OK\nPRADYOS_AGENTMEM_DENY_OK')" \
@@ -3467,6 +3477,16 @@ smoke-xhci: $(IMG)
 	TIMEOUT_S=60 QEMU_XHCI=1 \
 	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2')" \
 	FORBIDDEN_SENTINEL="[xhci] FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
+# Drives the driver's head/slot bookkeeping on a scratch struct (no device): a
+# real 5 s completion stall cannot be produced on demand under QEMU.
+smoke-vblklate: $(IMG) fat-image sfs-image
+	@echo "[vblklate] stale-head completion gate (DDR-1160)..."
+	TIMEOUT_S=120 QEMU_PROBES=vblklate \
+	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
+	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-part: $(IMG) fat-image sfs-image
