@@ -34,6 +34,11 @@ uint64_t pmm_alloc_page(void);              /* order 0 */
 int      pmm_free_page(uint64_t addr);      /* drops one reference; frees at 0 (IMP-D).
                                              * DDR-1065: 1 = released, 0 = only dereferenced */
 uint64_t pmm_free_page_count(void);         /* current free frame count */
+
+/* DDR-1158: KASAN use-after-free regression test. Frees a frame and asserts a
+ * use-after-free READ returns PMM_POISON (not the stale value). Prints
+ * PRADYOS_KASAN_UAF_OK on success, KASAN_UAF_FAIL if the poison is missing. */
+void     pmm_kasan_uaf_selftest(void);
 uint64_t pmm_total_page_count(void);        /* total managed frames (DDR-752) */
 
 /* Copy-on-write reference counting (IMP-D). Each managed frame has a 16-bit
