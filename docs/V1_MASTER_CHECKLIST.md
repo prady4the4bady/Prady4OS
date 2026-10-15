@@ -13,6 +13,7 @@ Operator-approved scope (issue #45, comments 6201120568, 6201467383, 6201619419)
 6. If a chunk is blocked: post one blocker comment on issue #45, mark it `BLOCKED(reason)`, continue with the next unblocked chunk.
 7. Structure may change if a DDR records why. Update this file in the same PR.
 8. Honesty labels in every status line: `gated`, `emulated-verified`, `not verified on real hardware`. Never label anything ASI. Quantum: interface plus simulator only, no speedup claims.
+9. Operator order rule: C11.1 (Rust and build system) is ALWAYS the last chunk built. Do not pull it forward.
 
 Status words: `TODO`, `IN-PROGRESS`, `BLOCKED(reason)`, `DONE`. The baseline for what already exists is `docs/FEATURE_STATUS.md`; update it as chunks complete.
 
@@ -236,14 +237,9 @@ Status: TODO. Needs: Phase 1 through 5 stable.
 - [ ] Apple Silicon: only what can be built and tested without hardware; else document as not verified
 Exit gate: per-variant boot gate.
 
-### C8.2 Rust and build system
-Status: TODO. Needs: none.
-- [ ] Rust only where a DDR shows a measured safety or speed win
-- [ ] Makefile/CMake hybrid only if a DDR justifies it
-
 ---
 
-## Phase 9. Test and harden (mandatory before v1)
+## Phase 9. Test and harden
 
 ### C9.1 Sanitizers
 Status: TODO. Needs: Phases 1 to 7.
@@ -266,8 +262,19 @@ Status: TODO. Needs: C9.2.
 ## Phase 10. Release
 
 ### C10.1 v1 ISO
-Status: TODO. Needs: all chunks DONE or recorded as honestly-labelled exceptions.
+Status: TODO. Needs: every chunk except C11.1 DONE, or recorded as an honestly-labelled exception.
 - [ ] one release SHA, full regression green
 - [ ] VirtualBox install-and-boot gate green
 - [ ] readiness report on issue #45: every feature labelled gated / emulated-verified / not verified on real hardware
 - [ ] tag v1.0.0, promote `dev/phase1` to `main`, attach ISO and SHA-256 to the release
+
+---
+
+## Phase 11. Last in build order (operator rule)
+
+### C11.1 Rust and build system (was C8.2)
+Status: TODO. Needs: C10.1. Always built last.
+- [ ] Rust only where a DDR shows a measured safety or speed win
+- [ ] Makefile/CMake hybrid only if a DDR justifies it
+- [ ] Because this lands after hardening and the v1 tag: any merged change re-runs the C9.1 to C9.3 gates and the C10.1 release gate, and ships as a patch release (v1.0.x), never silently
+Exit gate: DDR with measured results; C9 and C10 gates green again on the new SHA.
