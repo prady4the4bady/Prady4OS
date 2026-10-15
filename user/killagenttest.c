@@ -147,9 +147,19 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     int dead = 0;
     for (int i = 0; i < 600 && !dead; i++) {
         uint32_t p = 0, s = 0;
-        if (!find_target(&p, &s) || s == THREAD_ZOMBIE || s == THREAD_DONE)
+        if (find_target(&p, &s)) {
+            if (s == THREAD_ZOMBIE || s == THREAD_DONE)
+                dead = 1;
+        } else if (nsi(SYS_KILL_AGENT, (long)tpid, 0, 0) == -ESRCH) {
+            /* A missed scan is NOT proof of death: SYS_GETPROCS is a best-effort
+             * indexed snapshot, so a live KA_T can slip behind the scan index.
+             * Confirm with the kernel: -ESRCH means no live user thread has
+             * this pid. A live one would return 0 (a harmless re-signal). */
             dead = 1;
-        else { spin_delay(); nsi(SYS_YIELD, 0, 0, 0); }
+        }
+        if (!dead) {
+            spin_delay(); nsi(SYS_YIELD, 0, 0, 0);
+        }
     }
     if (!dead)
         fail("target still alive after kill", (long)tstate);

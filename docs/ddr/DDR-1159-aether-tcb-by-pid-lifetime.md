@@ -161,9 +161,13 @@ reuse. (`sys_agent_metrics` and `roster_active` keep their existing coverage —
 One ELF, two roles self-identified by the `SYS_KILL_AGENT` return code (the
 `ckpttest.c` pattern):
 
-- **controller (sovereign)** — `SYS_KILL_AGENT(1,…)` returns `-ESRCH` (init pid 1
-  is not `is_user`, so `find_user_pid_locked` returns NULL). Drives the arms.
-- **target KA_T (plain user)** — `SYS_KILL_AGENT(1,…)` returns `-EPERM` (no
+- **controller (sovereign)** — `SYS_KILL_AGENT(60000,…)` returns `-ESRCH` (no
+  live user thread has pid 60000, so `find_user_pid_locked` returns NULL). Drives
+  the arms. *(Corrected in review: this read `SYS_KILL_AGENT(1,…)` and claimed
+  init is not `is_user`. Init IS a user process, so an authorized kill of pid 1
+  would return 0 and signal init, and `sched_exit` halts the kernel if init
+  exits. The probe has always used 60000; only this text was wrong.)*
+- **target KA_T (plain user)** — `SYS_KILL_AGENT(60000,…)` returns `-EPERM` (no
   CAP_AGENT). Asserts that denial (`PRADYOS_KILLAGENT_DENY_OK`), then spins
   (compute + `SYS_YIELD`) forever so it can be found alive and killed.
 
