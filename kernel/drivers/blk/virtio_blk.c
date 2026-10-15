@@ -132,6 +132,43 @@ static volatile int g_multiwait_seen;
 static struct vblk g_inst[VBLK_MAX];
 static unsigned    g_ninst;
 
+/* DDR-1160: the per-head half of complete(), with no ring access, so the
+ * stale-head case can be driven without a device. compl_lock HELD. */
+static void reap_head(struct vblk *v, int head) {
+    int s = (head >= 0 && head < 256) ? v->head2slot[head] : -1;
+    if (head >= 0 && head < 256)
+        v->head2slot[head] = -1;
+    if (s < 0 || s >= VBLK_NREQ) {
+        /* DDR-1160: a head whose slot timed out maps to no slot. Still a late
+         * completion -- DDR-1148's counter is kept. */
+        v->late++;
+        return;
+    }
+    /* DDR-1148 sec.4: a stale completion for a slot that moved on. */
+    if (!v->req[s].used || v->req[s].head != head)
+        v->late++;
+    v->req[s].done = 1;                          /* wake THIS request's submitter */
+    if (v->req[s].waiter) {
+        struct tcb *w = v->req[s].waiter;
+        v->req[s].waiter = 0;
+        sched_unblock(w);
+    }
+}
+
+static void slot_wake_one(struct vblk *v);
+
+/* DDR-1160: release a slot whose data wait timed out. The device still owns
+ * the chain, so clear the head->slot map: a late completion of this head must
+ * not wake whoever reuses the slot. compl_lock HELD. */
+static void data_timeout_release(struct vblk *v, int s) {
+    int h = v->req[s].head;
+    if (h >= 0 && h < 256 && v->head2slot[h] == (int16_t)s)
+        v->head2slot[h] = -1;
+    v->req[s].used = 0;
+    v->req[s].waiter = 0;
+    slot_wake_one(v);
+}
+
 static void complete(struct vblk *v) {
     /* DDR-714C3: runs on whatever CPU the vector targets. The lock closes the
      * lost-wakeup race against submit()'s check-then-block (the locks-4
@@ -141,21 +178,8 @@ static void complete(struct vblk *v) {
     uint32_t len;
     int head;
     while ((head = virtq_pop_used(&v->vq, &len)) >= 0) {
-        int s = (head >= 0 && head < 256) ? v->head2slot[head] : -1;
-        if (head >= 0 && head < 256)
-            v->head2slot[head] = -1;
+        reap_head(v, head);
         virtq_free_chain(&v->vq, head);
-        if (s >= 0 && s < VBLK_NREQ) {          /* wake THIS request's submitter */
-            /* DDR-1148 sec.4: count, do not change, a stale completion. */
-            if (!v->req[s].used || v->req[s].head != head)
-                v->late++;
-            v->req[s].done = 1;
-            if (v->req[s].waiter) {
-                struct tcb *w = v->req[s].waiter;
-                v->req[s].waiter = 0;
-                sched_unblock(w);
-            }
-        }
     }
     struct percpu *pc = this_cpu();
     if (pc && !pc->is_bsp)
@@ -470,9 +494,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                 kline_s(&k, "\r\n");
                 kline_emit(&k);
             }
-            v->req[s].used = 0;
-            v->req[s].waiter = 0;
-            slot_wake_one(v);
+            data_timeout_release(v, s);          /* DDR-1160 */
             vown_clear(v);                       /* DDR-1138 */
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
@@ -739,4 +761,32 @@ void virtio_blk_dump_owners(void) {
         kline_s(&k, "\r\n");
         kline_emit(&k);
     }
+}
+
+/* DDR-1160: drive the stale-head case on a scratch struct (no device). */
+void virtio_blk_late_selftest(void) {
+    static struct vblk t;                        /* BSS: zeroed */
+    for (int i = 0; i < 256; i++) t.head2slot[i] = -1;
+    t.late = 0;
+    t.req[0].used = 1; t.req[0].done = 0; t.req[0].waiter = 0; t.req[0].head = 7;
+    t.head2slot[7] = 0;
+    data_timeout_release(&t, 0);                 /* old request times out */
+    t.req[0].used = 1; t.req[0].done = 0; t.req[0].waiter = 0; t.req[0].head = 9;
+    t.head2slot[9] = 0;                          /* slot reused, new head */
+    reap_head(&t, 7);                            /* late completion of old head */
+    int stale = t.req[0].done;
+    uint32_t late = t.late;
+    reap_head(&t, 9);                            /* the real completion */
+    int real = t.req[0].done;
+    kline k;
+    kline_init(&k);
+    if (stale != 0 || late != 1 || real != 1 || t.late != 1)
+        kline_s(&k, "VBLKLATE FAIL: ");
+    else
+        kline_s(&k, "PRADYOS_VBLKLATE_OK ");
+    kline_s(&k, "done_stale="); kline_d(&k, (uint64_t)stale);
+    kline_s(&k, " late=");      kline_d(&k, (uint64_t)late);
+    kline_s(&k, " done_real="); kline_d(&k, (uint64_t)real);
+    kline_s(&k, "\r\n");
+    kline_emit(&k);
 }
