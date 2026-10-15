@@ -1,5 +1,7 @@
 # DDR-1143 — Installer and persistent root (with the size/risk assessment for DDR-1143..1146)
 
+> **Operator plan pointer (2026-10-03):** decisions D1-D6 (incl. the KDF rule, D5, which follows §8.1 here) are restated in `docs/OPERATOR_PLAN_2026-09-29.md` on branch `docs/operator-plan-2026-09-29` (commit `0ad164c`); where the two differ, that file states which governs.
+
 **Status: DESIGN. Committed before code (NON-NEGOTIABLE 5). No implementation
 exists.** This is the parent record for the installer/encryption/recovery track
 that PR #17 comment **5839562349** (OWNER-verified, 2026-09-25) put in v1.0.0
