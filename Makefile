@@ -130,6 +130,8 @@ USER_AMEM_SRC := user/agentmemtest.c     # DDR-836: agent memory gate
 USER_AMEM_ELF := build/agentmemtest.elf
 USER_CKPT_SRC := user/ckpttest.c         # DDR-837: checkpoint/resume gate
 USER_CKPT_ELF := build/ckpttest.elf
+USER_KILLAGENT_SRC := user/killagenttest.c  # DDR-1159: SYS_KILL_AGENT gate (Fix 3)
+USER_KILLAGENT_ELF := build/killagenttest.elf
 USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
 USER_SDEP_ELF := build/spawndepthtest.elf
 USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
@@ -599,6 +601,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AMEM_ELF) build/agentmemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CKPT_SRC) -o build/ckpttest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CKPT_ELF) build/ckpttest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLAGENT_SRC) -o build/killagenttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLAGENT_ELF) build/killagenttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SDEP_SRC) -o build/spawndepthtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DAG_SRC) -o build/actiondagtest.o
@@ -2297,6 +2301,19 @@ smoke-pmm-poison: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL='[pmm] poison enabled' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-1158: KASAN use-after-free regression test (DDR-1155 §4). smoke-pmm-poison
+# above only asserts the "[pmm] poison enabled" banner, so a regression that
+# dropped the poison FILL in pmm_free_pages while keeping the banner would pass
+# it. This boots the kernel, whose pmm_kasan_uaf_selftest does a deliberate
+# use-after-free READ of a just-freed frame and asserts it reads PMM_POISON,
+# printing PRADYOS_KASAN_UAF_OK. Before/after mutant: comment out the poison
+# loop in pmm_free_pages (kernel/mm/pmm.c) -> the read returns the stale value,
+# PRADYOS_KASAN_UAF_OK never prints, and this gate fails while smoke-pmm-poison
+# still passes. NOT a reproduction of U1/U2/U3 (DDR-1155 §5).
+smoke-kasan-uaf: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 EXTRA_SENTINEL='PRADYOS_KASAN_UAF_OK' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # IMP-C vDSO gate: the ring-3 systest reads wall_time_ns from the read-only vDSO
 # page (no syscall) and prints it only when non-zero, proving the kernel-updated
 # clock is visible in user space. Loads user ELFs, so allow extra wall time.
@@ -3196,6 +3213,12 @@ smoke-checkpoint: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="CKPT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+smoke-killagent: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=killagent \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_KILLAGENT_OK\nPRADYOS_KILLAGENT_DENY_OK')" \
+	FORBIDDEN_SENTINEL="KILLAGENT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-agentmem: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=agentmem \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_AGENTMEM_OK\nPRADYOS_AGENTMEM_DENY_OK')" \
@@ -3472,6 +3495,16 @@ smoke-usbkbd: $(IMG)
 	    grep -qaF "$$l" build/gatelogs/usbkbd.log || { echo "[usbkbd] FAIL -- missing: $$l"; grep -a "\[xhci\]" build/gatelogs/usbkbd.log; exit 1; }; done
 	@echo "[usbkbd] PASS -- a host keypress reached ring 0 as HID usage 4 over the interrupt-IN endpoint"
 
+# DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
+# Drives the driver's head/slot bookkeeping on a scratch struct (no device): a
+# real 5 s completion stall cannot be produced on demand under QEMU.
+smoke-vblklate: $(IMG) fat-image sfs-image
+	@echo "[vblklate] stale-head completion gate (DDR-1160)..."
+	TIMEOUT_S=120 QEMU_PROBES=vblklate \
+	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
+	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-part: $(IMG) fat-image sfs-image
 	@echo "[part] partition sub-device gate (DDR-1143 §4.1)..."
 	@mkdir -p build/gatelogs
@@ -3506,6 +3539,31 @@ smoke-rqfree: $(IMG) fat-image sfs-image
 	 [ -n "$$c" ] || { echo "[rqfree] FAIL — probe never reported"; tail -20 build/gatelogs/rqfree.log; exit 1; }; \
 	 [ "$$c" -gt 0 ] || { echo "[rqfree] FAIL — arm A: caught=0, the probe is no longer reproducing the freed-while-queued window; this gate would pass vacuously"; exit 1; }; \
 	 echo "[rqfree] PASS — arm A caught=$$c freed-while-queued TCBs, arm B queues intact"
+
+# DDR-1156 §4: virtio-blk slot-wait timeout must unlink the giving-up thread.
+# The probe occupies all 8 request slots on a blank scratch disk (the LAST
+# virtio-blk unit, from QEMU_BLKSCRATCH), spawns a 9th submitter which enqueues
+# on the slot wait list and times out, then asserts the list is clean. The fix
+# unlinks the timed-out thread; without it slot_head still points at the departed
+# TCB. Secondary instrument notblocked= counts wakes that popped a non-BLOCKED
+# waiter (NON-NEGOTIABLE 3): must be 0. Mutant M1 (remove the unlink) -> clean=0.
+smoke-blkslot: $(IMG) fat-image sfs-image
+	@echo "[blkslot] slot-wait timeout unlink gate (DDR-1156)..."
+	@mkdir -p build/gatelogs
+	@# blank 1 MiB scratch disk — nothing mounts it, so forcing slot-fixtures
+	@# on it cannot interfere with the boot/fat/sfs roots.
+	@dd if=/dev/zero of=build/blkslot.img bs=1M count=1 status=none
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/blkslot.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_PROBES=blkslotwait QEMU_BLKSCRATCH=1 QEMU_NO_EXT4=1 \
+	EXTRA_SENTINEL="PRADYOS_BLKSLOT clean=1 notblocked=0" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_BLKSLOT clean=0')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@l=$$(grep -ao 'PRADYOS_BLKSLOT clean=[0-9]* notblocked=[0-9]* t9=[0-9]*' build/gatelogs/blkslot.log | tail -1); \
+	 [ -n "$$l" ] || { echo "[blkslot] FAIL — probe never reported"; tail -20 build/gatelogs/blkslot.log; exit 1; }; \
+	 echo "$$l" | grep -q 't9=1' || { echo "[blkslot] FAIL — the 9th submitter did not time out with -EIO ($$l); the slot-wait path was not exercised, gate would be vacuous"; exit 1; }; \
+	 b=$$(grep -ao 'PRADYOS_BLKSLOT_B cleanb=[0-9]* t10=[0-9]*' build/gatelogs/blkslot.log | tail -1); \
+	 [ "$$b" = "PRADYOS_BLKSLOT_B cleanb=1 t10=1" ] || { echo "[blkslot] FAIL — arm B (DDR-1156 §8, no-sleep return): '$$b' (want cleanb=1 t10=1)"; exit 1; }; \
+	 echo "[blkslot] PASS — $$l"
 
 smoke-yieldstall: $(IMG) fat-image sfs-image
 	@mkdir -p build/gatelogs

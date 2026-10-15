@@ -489,6 +489,13 @@ killtest_elf:
     incbin "build/killtest.elf"
 killtest_elf_end:
 
+; DDR-1159 (Fix 3): SYS_KILL_AGENT gate probe (NSI 36 had no coverage).
+global killagenttest_elf
+global killagenttest_elf_end
+killagenttest_elf:
+    incbin "build/killagenttest.elf"
+killagenttest_elf_end:
+
 ; proc (DDR-756): SYS_SETNAME self-rename probe.
 global setnametest_elf
 global setnametest_elf_end
