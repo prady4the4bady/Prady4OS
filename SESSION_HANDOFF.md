@@ -14866,3 +14866,25 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - Route-1 hand check over all 2,200 per-run lines: last `[hb] t` ∈ {17000,17500,18000}; none below 17000. One run AT the floor (d2 lane 18 run 52, t=17000), recorded in DDR-1154 §6.1 as a floor-calibration datum; floor not moved mid-campaign.
 - Dispatches 3–4 sent on ref 473b67536ceb94b440492ae6b172f853023a93a4 (new campaign, silent-stop counted): runs 37097190752 (in progress), 37097192020 (queued). Expect kernel_pinned=182c30bb16930d57 (diff 49abebc..473b675 touches only tools/ci + docs).
 - NEXT: read dispatches 3–4 DONE lines (silent_runs= now printed), append §6.2, dispatch 5–6 on the same ref if clean. Then DDR-1155 (U1/U2/U3).
+
+## CHECKPOINT 2026-10-14 — Block 1 (orient + audit), DDR-1166, branch `repo-audit-ddr1166`
+
+**Verified, with evidence:**
+- Kernel: clean rebuild gives `kernel.bin` = `d8d48f39c25e0ff9`, 1,483,146 B, zero `-Werror` diagnostics.
+- Static checks: `ci-shard-check` reports 188 gates, 10 shards, 6 excluded. `tools/ci/hygiene_check.sh` passes all ten.
+- CI: all 16 checks green on PRs #34–#41.
+- OPEN-2 (DDR-1166 §1): the DDR-1139 mechanism is fixed and its confirmation was met.
+  - Hunts since then show 0 signals: DDR-1154 (6,545 boots) and run 38109673379 (20×55, all 20 lanes green; DONE line read for lane 5 only).
+  - U1/U2/U3 have no artefact, so nothing is fixable under NON-NEGOTIABLE 3. OPEN-2 is NOT declared closed.
+- New `docs/FEATURE_STATUS.md` lists every subsystem with its status, gate and use case.
+- `userspace/` deleted: three empty `.gitkeep` dirs that nothing referenced. `aether/` (host Python) vs `kernel/aether/` (in-kernel C) is not duplication; kept.
+- `smoke-chipset` fixed: it logged to `/tmp`, and `$m_` expanded to empty, so q35/qemu64 and pc/qemu64 wrote one shared file. Logs now go to `build/gatelogs/`. Re-run: 4/4 variants pass, 4 distinct logs.
+- DDR free-range carriers 1154+ → 1167+.
+
+**Open:**
+- Full 188-gate suite: not run locally (one QEMU at a time, ~3 h). CI's full suite runs on push.
+- Block 3 agent items missing: per-task budgets, UI-state reading, input injection, agent sandbox, rollback on rejection, prompt-injection and budget gates.
+- Desktop: taskbar magnify; agent-panel graphs.
+- USB piece 6 (DDR-1167).
+
+**Next exact command:** `git checkout -b usb-hidpoll-ddr1167` (stacked on this branch), then write `docs/ddr/DDR-1167-*.md`.
