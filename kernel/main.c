@@ -45,6 +45,7 @@
 #include "virtio_net.h"
 #include "aether.h"      /* DDR-1141: record the DHCP lease (ACTION_NET_DHCP) */
 #include "nvme.h"
+#include "xhci.h"
 #include "vfs.h"
 #include "fat32.h"
 #include "sfs.h"
@@ -4816,6 +4817,8 @@ void kmain(struct boot_info *bi) {
             virtio_input_init(d->bus, d->dev, d->func);
         if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
             nvme_init(d->bus, d->dev, d->func);
+        if (d->class_code == 0x0C && d->subclass == 0x03 && d->prog_if == 0x30)
+            xhci_init(d->bus, d->dev, d->func);                 /* DDR-1161 */
     }
     /* DDR-1142: after the loop, so virtio-gpu has had its chance. With no
      * virtio-gpu, a UEFI boot draws on the framebuffer the firmware set up. */

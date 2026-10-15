@@ -334,6 +334,11 @@ if [ -n "${QEMU_RNG:-}" ]; then
 fi
 
 NVMEDEV=()
+# DDR-1161: xHCI with a USB keyboard and tablet, only when QEMU_XHCI is set.
+XHCIDEV=()
+if [ -n "${QEMU_XHCI:-}" ]; then
+    XHCIDEV=(-device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0)
+fi
 if [ -n "${QEMU_NVME:-}" ]; then
     NVMEDEV=(-drive if=none,format=raw,file=build/nvme.img,id=nvm
              -device nvme,serial=PRADYOSNV,drive=nvm)
@@ -673,6 +678,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${UEFIOPT[@]}" \
     "${S3OPT[@]}" \
     "${NVMEDEV[@]}" \
+    "${XHCIDEV[@]}" \
     "${RNGDEV[@]}" \
     "${QMPOPT[@]}" \
     -no-reboot -display none -monitor none \
