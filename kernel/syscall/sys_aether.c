@@ -55,7 +55,7 @@ static int slot_of_pid(uint32_t pid) {
 
 /* The kernel-side agent spawner is provided by kmain (it closes over the SFS
  * mount + cap + embedded agent ELF). Returns the new pid, or <0. */
-typedef long (*aether_spawn_fn)(const char *task);
+typedef long (*aether_spawn_fn)(const char *task, const struct task_budget *b);
 static aether_spawn_fn g_spawn_hook;
 void aether_set_spawn_hook(aether_spawn_fn fn) { g_spawn_hook = fn; }
 
@@ -149,6 +149,10 @@ static long sys_submit_action(long a1, long a2, long a3, long a4, long a5, long 
     uint32_t type = (uint32_t)a1;
     if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
         return -EPERM;
+    /* DDR-1170: counted before the action is queued, so the action past the
+     * limit is never proposed. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_ACTIONS, 1) < 0)
+        sched_exit(137);                           /* never returns */
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
@@ -175,6 +179,10 @@ static long sys_submit_child_action(long a1, long a2, long a3, long a4, long a5,
     uint32_t type = (uint32_t)a1;
     if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
         return -EPERM;
+    /* DDR-1170: counted before the action is queued, so the action past the
+     * limit is never proposed. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_ACTIONS, 1) < 0)
+        sched_exit(137);                           /* never returns */
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
@@ -228,13 +236,42 @@ static long sys_spawn_agent(long a1, long a2, long a3, long a4, long a5, long a6
     if (a2 && copyinstr(task, (const void __user *)a2, sizeof task, 0) < 0)
         return -EFAULT;
     if (!a2) task[0] = 0;
-    long pid = g_spawn_hook(task);
+    long pid = g_spawn_hook(task, 0);         /* DDR-1170: unbudgeted, as before */
     if (pid >= 0 && a3 >= 0 && a3 < AGENT_ROSTER_N) {  /* DDR-707/730: claim the slot */
         g_agent[a3].used = 1;
         g_agent[a3].pid = (uint32_t)pid;
         g_agent[a3].actions = 0;
         g_agent[a3].run_ticks = 0;      /* DDR-735: reset accounting for the new agent */
         g_agent[a3].dispatches = 0;
+    }
+    return pid;
+}
+
+/* DDR-1170 (NSI 107): spawn an agent task with a kernel-enforced budget.
+ * Sovereign only: an agent granting its own child a fresh budget would escape
+ * its own (nesting is recorded in the DDR as a follow-up, not built). The budget
+ * is applied by the hook while the thread is still BLOCKED. */
+static long sys_spawn_task(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    if (!current_thread->is_sovereign) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    if (!g_spawn_hook)
+        return -ENOSYS;
+    char task[64];
+    struct task_budget b;
+    if (!a1 || copyinstr(task, (const void __user *)a1, sizeof task, 0) < 0)
+        return -EFAULT;
+    if (!a3 || copyin(&b, (const void __user *)a3, sizeof b) < 0)
+        return -EFAULT;
+    long pid = g_spawn_hook(task, &b);
+    if (pid >= 0 && a2 >= 0 && a2 < AGENT_ROSTER_N) {
+        g_agent[a2].used = 1;
+        g_agent[a2].pid = (uint32_t)pid;
+        g_agent[a2].actions = 0;
+        g_agent[a2].run_ticks = 0;
+        g_agent[a2].dispatches = 0;
     }
     return pid;
 }
@@ -457,6 +494,7 @@ void sys_aether_register(void) {
     syscall_register(SYS_APPROVE_ACTION, sys_approve_action);
     syscall_register(SYS_REJECT_ACTION,  sys_reject_action);
     syscall_register(SYS_SPAWN_AGENT,    sys_spawn_agent);
+    syscall_register(SYS_SPAWN_TASK,     sys_spawn_task);     /* DDR-1170 */
     syscall_register(SYS_KILL_AGENT,     sys_kill_agent);
     syscall_register(SYS_READ_AUDIT,     sys_read_audit);
     syscall_register(SYS_SET_MEM_LIMIT,  sys_set_mem_limit);

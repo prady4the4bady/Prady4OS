@@ -208,6 +208,9 @@ static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6)
     int len = (int)a3;
     if (len <= 0) return 0;
     if (len > SOCK_IO_MAX) len = SOCK_IO_MAX;
+    /* DDR-1170: the bytes actually sent, charged before the copy. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_BYTES, (uint64_t)len) < 0)
+        sched_exit(137);                         /* never returns */
     uint8_t kbuf[SOCK_IO_MAX];
     if (copyin(kbuf, (const void __user *)a2, (size_t)len) < 0)
         return -EFAULT;

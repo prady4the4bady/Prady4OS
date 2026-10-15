@@ -513,6 +513,8 @@ extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe 
 extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
 extern const unsigned char privacynettest_elf_end[];
+extern const unsigned char budgettest_elf[];          /* DDR-1170: per-task budgets */
+extern const unsigned char budgettest_elf_end[];
 extern const unsigned char dnstest1_elf[], dnstest1_elf_end[];   /* DDR-1141 */
 extern const unsigned char dnstest2_elf[], dnstest2_elf_end[];   /* DDR-1141 */
 extern const unsigned char dnstest3_elf[], dnstest3_elf_end[];   /* DDR-1141 */
@@ -536,7 +538,7 @@ extern const unsigned char sfsroottest_elf[];         /* fs: persistent SFS-root
 extern const unsigned char sfsroottest_elf_end[];
 extern const unsigned char bigwritetest_elf[];        /* fs: ring-3 large-write probe (DDR-764) */
 extern const unsigned char bigwritetest_elf_end[];
-void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
+/* aether_set_spawn_hook and struct task_budget come from aether.h (DDR-1170). */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 int  net_dhcp_lease(uint32_t *ip, uint32_t *server);  /* DDR-1141: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -1249,7 +1251,7 @@ static void smpuser_proof(void) {
  * bytes (NOT from SFS — that mount is gone by scheduler time) and marks the new
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
 static uint32_t g_aether_daemon_pid;
-static long aether_spawn_agent_hook(const char *task) {
+static long aether_spawn_agent_hook(const char *task, const struct task_budget *b) {
     struct tcb *ut = 0;
     uint64_t len = (uint64_t)((uintptr_t)agent_base_elf_end - (uintptr_t)agent_base_elf);
 
@@ -1286,6 +1288,8 @@ static long aether_spawn_agent_hook(const char *task) {
     ut->is_net = 1;                    /* DDR-731: agents are the sanctioned socket users
                                         * (live mode talks to Ollama over SYS_SOCK_*) */
     ut->parent_pid = g_aether_daemon_pid;
+    if (b)                             /* DDR-1170: armed while still BLOCKED */
+        aether_budget_arm(ut, b);
     sched_unblock(ut);                 /* elf_load returns the thread BLOCKED */
     return (long)ut->pid;
 }
@@ -2819,6 +2823,19 @@ static void fs_test_thread(void *arg) {
                         pn->is_sovereign = 1;
                         sched_unblock(pn);
                         kputs("[user] ELF loaded (embedded); privacy-netfilter probe spawned\r\n");
+                    }
+                }
+                if (probe_enabled("taskbudget")) {
+                    /* DDR-1170: a SOVEREIGN launcher, because SYS_SPAWN_TASK is
+                     * sovereign-only. It spawns the four budgeted agent tasks and
+                     * reads every verdict back out of the kernel audit log. */
+                    struct tcb *bp = 0;
+                    uint64_t blen = (uint64_t)((uintptr_t)budgettest_elf_end - (uintptr_t)budgettest_elf);
+                    if (elf_load((void *)(uintptr_t)budgettest_elf, blen,
+                                 "BUDGET", &bp) == ELF_OK && bp) {
+                        bp->is_sovereign = 1;
+                        sched_unblock(bp);
+                        kputs("[user] ELF loaded (embedded); task-budget probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("dns")) {

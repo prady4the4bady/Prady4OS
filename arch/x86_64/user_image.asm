@@ -422,6 +422,11 @@ global privacynettest_elf_end
 privacynettest_elf:
     incbin "build/privacynettest.elf"
 privacynettest_elf_end:
+global budgettest_elf
+global budgettest_elf_end
+budgettest_elf:
+    incbin "build/budgettest.elf"
+budgettest_elf_end:
 
 ; DDR-1141: SYS_DNS_RESOLVE probe, three phases (L / A / sovereign P)
 global dnstest1_elf

@@ -119,7 +119,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | Egress allowlist, privacy mode (connect + I/O), egress audit | gated | `smoke-netallow`, `smoke-capnet`, `smoke-privacy-netfilter`, `smoke-egress-audit`, `smoke-sovereign-egress` | Agents reach only approved hosts |
 | Kill switch (SYS_KILL_AGENT, SIGKILL from blocked waits) | gated | `smoke-kill`, `smoke-killblock` | Stop a runaway agent |
 | Per-agent rate limit (60 syscalls/100 ticks) | gated (as a side arm) | `smoke-aether-sec` | Cheap budget |
-| Per-task budgets (time/token/byte) | not started | none | Block 3 |
+| Per-task budgets (time/token/byte) | SHIPPED (time/bytes/actions; tokens not kernel-observable, not claimed) — DDR-1170 | smoke-taskbudget | Block 3 |
 | UI-state reading for agents | not started | none | Block 3 |
 | Input injection by agents | not started | none | Block 3 |
 | Sandboxed shell / browser for agents | not started | none | Block 3; browser is cloud-bridge adjacent |

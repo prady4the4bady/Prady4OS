@@ -14907,3 +14907,7 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
 - **Free range:** DDR-1168+.
 - **Next:** agent-layer block (budgets, kill switch, egress, rollback +
   adversarial gates), per the operator's work order.
+
+## Checkpoint 2026-10-15 — DDR-1170 per-task budgets
+- Branch budget-ddr1170 (stacked on vision-ddr1169). smoke-taskbudget green locally; M1-M4 each fail own arm. Kernel 7d429743e211a591, 193 gates, NSI next free 108, DDR free 1171+.
+- Next: land #37->#38->#39->#40->#41->#43->#44->#46 then budget PR; then Block B2 rollback-on-rejection.
