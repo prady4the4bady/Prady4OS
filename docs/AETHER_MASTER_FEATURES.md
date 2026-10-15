@@ -745,7 +745,7 @@ byte-exact.
 
 ---
 
-## Section A2 — AETHER host-side Python agent layer (ASI-bridge v4.0)
+## Section A2 — AETHER host-side Python agent layer (host bridge v4.0; formerly labelled "ASI-bridge", relabelled per docs/VISION.md §4)
 
 A **separate layer** from everything else in this document. Root `aether/`;
 Python 3.13; runs on top of the OS as a service, not inside the kernel. Its
@@ -990,7 +990,7 @@ replayable run visualizer (optional ring-3 web UI)
 
 ---
 
-## Section F — Visionary ASI-trajectory features (#66–76)
+## Section F — Planned agent features (#66–76) (formerly "ASI-trajectory", relabelled per docs/VISION.md §4)
 
 All **proposed**. No competitor ships these.
 
@@ -1062,7 +1062,7 @@ every new Section E/F feature **before** implementation.
 
 ---
 
-## Standing AETHER cognitive/ASI mandate
+## Standing AETHER agent mandate (formerly "cognitive/ASI", relabelled per docs/VISION.md §4)
 
 Long-term trajectory: subconscious background reasoning (F#71), verifier-based
 self-improvement (F#72), the **metric lockbox** (F#68 / S3 — highest priority once
