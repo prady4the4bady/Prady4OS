@@ -144,6 +144,7 @@
 5	smoke-sfs-btree-smp4	180	strict
 5	smoke-gop	140	strict
 4	smoke-xhci	60	strict
+4	smoke-usbkbd	90	strict
 6	smoke-surfdestroy	180	strict
 6	smoke-msixap	180	strict
 6	smoke-swapgs	120	strict

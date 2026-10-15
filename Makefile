@@ -3475,9 +3475,25 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 smoke-xhci: $(IMG)
 	@echo "[xhci] controller bring-up gate (DDR-1161..1164)..."
 	TIMEOUT_S=60 QEMU_XHCI=1 \
-	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2\n[xhci] running\n[xhci] enable-slot cc=1 slot=1\n[xhci] port-reset port=5 ped0=0 ped=1\n[xhci] address port=5 slot=1 cc=1\n[xhci] device-desc cc=1 len=18 type=1 usb=0x0000000000000200 mps0=64 vid=0x0000000000000627 pid=0x0000000000000001\n[xhci] config-desc cc=1 total=34 cfg=1 ifaces=1 class=3 sub=1 proto=1 ep=0x0000000000000081 attr=3 mps=8 ival=7\n[xhci] set-config cfg=1 cc=1 got=1')" \
+	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2\n[xhci] running\n[xhci] enable-slot cc=1 slot=1\n[xhci] port-reset port=5 ped0=0 ped=1\n[xhci] address port=5 slot=1 cc=1\n[xhci] device-desc cc=1 len=18 type=1 usb=0x0000000000000200 mps0=64 vid=0x0000000000000627 pid=0x0000000000000001\n[xhci] config-desc cc=1 total=34 cfg=1 ifaces=1 class=3 sub=1 proto=1 ep=0x0000000000000081 attr=3 mps=8 ival=7\n[xhci] set-config cfg=1 cc=1 got=1\n[xhci] configure-ep ep=0x0000000000000081 dci=3 cc=1\n[xhci] set-protocol cc=1')" \
 	FORBIDDEN_SENTINEL="[xhci] FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+smoke-usbkbd: $(IMG)
+	@echo "[usbkbd] USB HID boot keyboard gate (DDR-1165): sendkey a -> qemu-xhci usb-kbd -> interrupt IN 0x81..."
+	@mkdir -p build/gatelogs
+	@rm -f build/gatelogs/usbkbd.log /tmp/pusbkbd.sock
+	@bash tools/qemu_runner/input_inject.sh build/gatelogs/usbkbd.log /tmp/pusbkbd.sock "[xhci] hid-armed" "a" &
+	@timeout 90 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 \
+	    -monitor unix:/tmp/pusbkbd.sock,server,nowait \
+	    -fw_cfg name=opt/org.pradyos/probes,string=usbkbd \
+	    -serial file:build/gatelogs/usbkbd.log -display none -no-reboot || true
+	@grep -qa "\[xhci\] FAIL" build/gatelogs/usbkbd.log && { echo "[usbkbd] FAIL:"; grep -a "\[xhci\]" build/gatelogs/usbkbd.log; exit 1; } || true
+	@for l in "[xhci] configure-ep ep=0x0000000000000081 dci=3 cc=1" "[xhci] set-protocol cc=1" "[xhci] hid-armed" "[xhci] hid-report cc=1 mod=0 k0=4"; do \
+	    grep -qaF "$$l" build/gatelogs/usbkbd.log || { echo "[usbkbd] FAIL -- missing: $$l"; grep -a "\[xhci\]" build/gatelogs/usbkbd.log; exit 1; }; done
+	@echo "[usbkbd] PASS -- a host keypress reached ring 0 as HID usage 4 over the interrupt-IN endpoint"
 
 # DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
 # Drives the driver's head/slot bookkeeping on a scratch struct (no device): a

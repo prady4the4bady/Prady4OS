@@ -7,6 +7,7 @@
  * DDR-1162 adds the command/event rings and one polled Enable Slot.
  * DDR-1163 addresses the first connected device and reads its device descriptor.
  */
+#include "../fwcfg/fwcfg.h"
 #include "xhci.h"
 #include "console.h"
 #include "pcie.h"
@@ -51,6 +52,8 @@ struct trb { uint64_t param; uint32_t status; uint32_t control; };
 #define TRB_ADDRESS_DEV 11
 #define TRB_XFER_EVENT  32
 #define TRB_CMD_DONE    33
+#define TRB_CONFIG_EP   12
+#define TRB_NORMAL      1
 #define TRB_IOC         (1u << 5)
 #define TRB_IDT         (1u << 6)
 #define RING_TRBS       (PAGE_SIZE / sizeof(struct trb))   /* 256 */
@@ -297,11 +300,12 @@ static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
     cc = control(slot, SETUP(0x80, 6, 0x0200, 0, total), buf_p, total, &len);
     if (cc != 1) { kputs("[xhci] FAIL config-desc\r\n"); return -1; }
     uint32_t cfg = buf[5], ifaces = buf[4];
-    uint32_t cls = 0, sub = 0, proto = 0, epa = 0, attr = 0, emps = 0, ival = 0;
+    uint32_t cls = 0, sub = 0, proto = 0, epa = 0, attr = 0, emps = 0, ival = 0, ifn = 0;
     int have_if = 0;
     for (uint32_t o = 0; o + 2 <= len && buf[o] >= 2; o += buf[o]) {
         if (o + buf[o] > len) break;
         if (buf[o + 1] == 4 && !have_if) {            /* interface */
+            ifn = buf[o + 2];
             cls = buf[o + 5]; sub = buf[o + 6]; proto = buf[o + 7]; have_if = 1;
         } else if (buf[o + 1] == 5 && have_if && !epa) {  /* endpoint */
             epa = buf[o + 2]; attr = buf[o + 3];
@@ -329,7 +333,67 @@ static int xhci_address(uint32_t slot, uint32_t port, uint32_t speed) {
     kputs(" cc=");  kputdec(scc);
     kputs(" got="); kputdec(gcc == 1 && len == 1 ? buf[0] : 255);
     kputs("\r\n");
-    return (scc == 1 && gcc == 1 && buf[0] == cfg) ? 0 : -1;
+    if (scc != 1 || gcc != 1 || buf[0] != cfg)
+        return -1;
+    if (cls != 3 || sub != 1 || epa != 0x81 || (attr & 3) != 3)
+        return 0;                                 /* not a boot HID device */
+
+    /* DDR-1165: Configure Endpoint for interrupt IN 0x81 (DCI 3). */
+    uint64_t itr_p; struct trb *itr = zpage(&itr_p);
+    if (!itr) { kputs("[xhci] FAIL alloc\r\n"); return -1; }
+    itr[RING_TRBS - 1].param   = itr_p;
+    itr[RING_TRBS - 1].control = TRB_TYPE(TRB_LINK) | (1u << 1);
+    uint32_t itr_i = 0, itr_cyc = 1;
+    for (uint32_t i = 0; i < 6 * X.csz; i++) in[i] = 0;
+    icc[1] = 1u | (1u << 3);                          /* A0 | A3 */
+    sc[0]  = (speed << 20) | (3u << 27);              /* context entries 3 */
+    sc[1]  = port << 16;
+    uint32_t *ep = (uint32_t *)(in + 4 * X.csz);      /* DCI 3 */
+    uint32_t exp = ival ? ival - 1 : 0;               /* HS: 2^(bInterval-1) uframes */
+    ep[0] = exp << 16;
+    ep[1] = (3u << 1) | (7u << 3) | (emps << 16);     /* CErr 3, Interrupt IN */
+    ep[2] = (uint32_t)itr_p | 1u;
+    ep[3] = (uint32_t)(itr_p >> 32);
+    ep[4] = 8u | (emps << 16);                        /* avg TRB len, max ESIT */
+    if (!command(in_p, TRB_TYPE(TRB_CONFIG_EP) | (slot << 24), &ev)) {
+        kputs("[xhci] FAIL configure-ep\r\n");
+        return -1;
+    }
+    kputs("[xhci] configure-ep ep="); kputhex(epa);
+    kputs(" dci=3 cc=");              kputdec(ev.status >> 24);
+    kputs("\r\n");
+    if ((ev.status >> 24) != 1)
+        return -1;
+
+    uint32_t pcc = control(slot, SETUP(0x21, 0x0B, 0, ifn, 0), 0, 0, 0);
+    kputs("[xhci] set-protocol cc="); kputdec(pcc); kputs("\r\n");
+    if (pcc != 1 || !probe_enabled("usbkbd"))
+        return pcc == 1 ? 0 : -1;
+
+    /* One report: Normal TRB, doorbell target 3, skip empty reports. */
+    kputs("[xhci] hid-armed\r\n");
+    for (int tries = 0; tries < 20; tries++) {
+        for (int i = 0; i < 8; i++) buf[i] = 0;
+        ring_put(itr, &itr_i, &itr_cyc, buf_p, 8, TRB_TYPE(TRB_NORMAL) | TRB_IOC);
+        wr32(X.db, 4 * slot, 3);
+        uint32_t rcc = 0, got_ev = 0;
+        for (int w = 0; w < 8 && !got_ev; w++) {
+            if (wait_event(TRB_XFER_EVENT, &ev) && ((ev.control >> 16) & 0x1F) == 3)
+                got_ev = 1;
+        }
+        if (!got_ev)
+            continue;
+        rcc = ev.status >> 24;
+        if (buf[2] == 0)
+            continue;                                 /* release or idle */
+        kputs("[xhci] hid-report cc="); kputdec(rcc);
+        kputs(" mod=");                  kputdec(buf[0]);
+        kputs(" k0=");                   kputdec(buf[2]);
+        kputs("\r\n");
+        return 0;
+    }
+    kputs("[xhci] FAIL hid-report\r\n");
+    return -1;
 }
 
 void xhci_init(uint8_t bus, uint8_t dev, uint8_t func) {
