@@ -22,8 +22,8 @@ trade-off, or anything on the not-approved list below).
 ## Current kernel
 
 - `kernel.bin` = `f5124d9b145df8cb`, 1,474,954 B, warning-clean at `-Werror`.
-- GLOBAL_FORBIDDEN = 77 ; gates = 188 across 10 shards, 6 excluded.
-- DDR free range: **DDR-1159+** (1156 = Fix 1, 1157 = Fix 2, 1158 = KASAN UAF gate).
+- GLOBAL_FORBIDDEN = 77 ; gates = 189 across 10 shards, 6 excluded.
+- DDR free range: **DDR-1170+** (1156 = Fix 1, 1157 = Fix 2, 1158 = KASAN UAF gate).
 
 ## Branches / PRs in flight
 
