@@ -132,6 +132,15 @@ struct tcb {
     uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
+    /* DDR-1170: per-task budgets, set by SYS_SPAWN_TASK BEFORE the first run.
+     * A limit of 0 means "no limit on that axis". Not inherited across fork. */
+    uint64_t   bud_max_ticks;   /* wall ticks the task may run for                 */
+    uint64_t   bud_max_bytes;   /* bytes it may write (fds + proxy sockets)        */
+    uint32_t   bud_max_actions; /* actions it may submit                           */
+    uint32_t   bud_tripped;     /* 1 once a budget kill has been audited           */
+    uint64_t   bud_start;       /* g_ticks when the budget was armed               */
+    uint64_t   bud_bytes;       /* bytes charged so far                            */
+    uint32_t   bud_actions;     /* actions charged so far                          */
 
     /* SMP scheduling (ADR-031 / DDR-SMP-3c-cap-2a). Which CPU is running this
      * thread (-1 = none): schedule() picks only READY threads with on_cpu<0, so

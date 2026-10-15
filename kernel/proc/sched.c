@@ -1187,6 +1187,9 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dispatches = 0;
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
     t->mem_used = 0;
+    t->bud_max_ticks = 0; t->bud_max_bytes = 0;    /* DDR-1170; NON-NEGOTIABLE 10 */
+    t->bud_max_actions = 0; t->bud_tripped = 0;
+    t->bud_start = 0; t->bud_bytes = 0; t->bud_actions = 0;
     t->sc_count = 0;               /* L6: syscall rate-limit window (agents only)         */
     t->sc_window_start = 0;
     memcpy(t->fpu_state, fpu_init_template, sizeof t->fpu_state);  /* 5d: clean FPU */

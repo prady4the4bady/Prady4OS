@@ -115,3 +115,25 @@ budget, which bounds them from above. Not claimed as kernel-enforced.
 - Rollback on rejection is Block B item 2, a separate DDR.
 - Budgets apply only to tasks started through `SYS_SPAWN_TASK`; the existing
   `SYS_SPAWN_AGENT` path is unbudgeted, as it is today.
+
+## 7. Built and measured
+
+- Shipping kernel `7d429743e211a591`, 1,503,626 B, warning-clean at -Werror.
+- `smoke-taskbudget` (shard 7, strict): `T=1/51..53 B=2/4148 A=3/4 C=none`.
+  B is exact: a 52-byte start line plus four 1 KiB writes; the fifth write is
+  the one charged past 4096.
+- **Two charge points the design missed, found by the first run** (B read
+  `2/5120`): musl's two-iovec `writev` takes `sys_writev`'s console gather and
+  never reaches `fd_write_user`, and io_uring `OP_WRITE` likewise. Both now
+  charge. Without that, a task could bypass the byte budget by choice of call.
+- Mutants, each a separate binary, each failing exactly its own arm:
+
+  | Mutant | Kernel | Result |
+  |---|---|---|
+  | M1 no timer-path time check | ccfa2287eaf9d269 | rc=2, `T=none` |
+  | M2 no `fd_write_user` byte charge | 534a33ef4a5d827e | rc=2, `B=none` |
+  | M3 action charge of 0 (both submit paths) | dce2692b91b60b2c | rc=2, `A=none`, T/B/C correct |
+  | M4 kill every budgeted task | 1d32d99506e72f00 | rc=2, `C=2/52` |
+
+- Revert rebuilds to `7d429743e211a591`.
+- Not claimed: U1/U2/U3, OPEN-1, OPEN-2 untouched.

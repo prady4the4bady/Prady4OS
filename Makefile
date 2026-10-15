@@ -190,6 +190,8 @@ USER_SIGPIPE_SRC := user/sigpipetest.c    # DDR-805: SIGPIPE probe (DDR-804 opt-
 USER_SIGPIPE_ELF := build/sigpipetest.elf
 USER_PRIVNET_SRC := user/privacynettest.c # DDR-802: privacy netfilter probe (DDR-804 opt-in)
 USER_PRIVNET_ELF := build/privacynettest.elf
+USER_BUDGET_SRC := user/budgettest.c # DDR-1170: per-task budget probe (DDR-804 opt-in)
+USER_BUDGET_ELF := build/budgettest.elf
 USER_DNS_SRC := user/dnstest.c         # DDR-1141: SYS_DNS_RESOLVE probe (built 3x, -DDNS_PHASE)
 USER_DNS1_ELF := build/dnstest1.elf
 USER_DNS2_ELF := build/dnstest2.elf
@@ -552,6 +554,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SOVEG_ELF) build/sovegresstest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_PRIVNET_SRC) -o build/privacynettest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_PRIVNET_ELF) build/privacynettest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_BUDGET_SRC) -o build/budgettest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BUDGET_ELF) build/budgettest.o
 	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=1 -c $(USER_DNS_SRC) -o build/dnstest1.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS1_ELF) build/dnstest1.o
 	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=2 -c $(USER_DNS_SRC) -o build/dnstest2.o
@@ -657,7 +661,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -3504,6 +3508,18 @@ smoke-vblklate: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=vblklate \
 	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
 	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1170: per-task budgets. A sovereign probe spawns four budgeted agent
+# tasks; every verdict is read from the kernel audit log (AR_BUDGET_KILL by pid).
+# T: time (timing-dependent used, so only the kind is pinned); B: exactly the
+# 52-byte start line + 4 x 1 KiB; A: the 4th action; C: the CONTROL completes
+# unkilled and prints its DONE line.
+smoke-taskbudget: $(IMG) fat-image sfs-image
+	@echo "[taskbudget] per-task budget gate (DDR-1170)..."
+	TIMEOUT_S=120 QEMU_PROBES=taskbudget \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_TASKBUDGET T=1/\n B=2/4148 A=3/4 C=none \nPRADYOS_BUDTASK_DONE task=bud-bytes')" \
+	FORBIDDEN_SENTINEL="spawnfail" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-part: $(IMG) fat-image sfs-image

@@ -19,6 +19,7 @@
 #include "uaccess.h"
 #include "console.h"
 #include "errno.h"
+#include "aether.h"     /* DDR-1170: per-task byte budget */
 
 #define IORING_ENTRIES   8
 #define IORING_OP_READ   0
@@ -82,6 +83,10 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
     char kbuf[256];
 
     if (s->opcode == IORING_OP_WRITE) {
+        /* DDR-1170: an SQE write emits without fd_write_user, so it charges the
+         * byte budget itself; otherwise io_uring is a budget bypass. */
+        if (aether_budget_charge(t, TASK_BUDGET_BYTES, len) < 0)
+            sched_exit(137);                      /* never returns */
         if (copyin(kbuf, (const void __user *)(uintptr_t)s->addr, len) < 0)
             return -EFAULT;
         if (e->kind == FD_PIPE)

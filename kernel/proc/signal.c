@@ -17,6 +17,7 @@
 #include "regs.h"
 #include "syscall.h"
 #include "errno.h"
+#include "aether.h"     /* DDR-1170: time budget on the ring-3 timer return */
 
 extern void signal_sigreturn(struct regs *saved);   /* arch/x86_64/usermode.asm */
 
@@ -61,6 +62,11 @@ static long sys_sigreturn(long a1, long a2, long a3, long a4, long a5, long a6) 
 
 void signal_deliver(struct regs *r) {
     struct tcb *t = current_thread;
+    /* DDR-1170: both callers are the timer ISR's ring-3 return paths (BSP and
+     * AP), the only point a task spinning in ring 3 with no syscalls is ever
+     * seen by the kernel. Without this a time budget is a syscall budget. */
+    if (t->is_user && aether_budget_time(t) < 0)
+        sched_exit(137);                         /* never returns */
     if (!t->is_user || t->sig_active || !t->sig_pending)
         return;
     for (int sig = 1; sig < NSIG; sig++) {

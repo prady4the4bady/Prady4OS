@@ -156,6 +156,10 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a4,
     if (current_thread && current_thread->is_agent && num != SYS_YIELD &&
         aether_rate_check(current_thread) < 0)
         sched_exit(137);                         /* never returns */
+    /* DDR-1170: the time budget, checked here AND on the timer's ring-3 return
+     * path (signal_deliver), so a task that never syscalls is still stopped. */
+    if (current_thread && aether_budget_time(current_thread) < 0)
+        sched_exit(137);                         /* never returns */
     /* DDR-837: an operator checkpoint. The thread blocks ITSELF here, which is
      * already a known-safe boundary (the rate limiter above kills a thread at
      * this same point). Setting THREAD_BLOCKED from the checkpointing CPU would
