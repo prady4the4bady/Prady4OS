@@ -492,6 +492,8 @@ extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth ca
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
 extern const unsigned char ckpttest_elf_end[];
+extern const unsigned char killagenttest_elf[];       /* DDR-1159: SYS_KILL_AGENT gate */
+extern const unsigned char killagenttest_elf_end[];
 extern const unsigned char agentmemtest_elf[];        /* DDR-836: agent memory */
 extern const unsigned char agentmemtest_elf_end[];
 extern const unsigned char vaulttest_elf[];           /* DDR-834: credential vault */
@@ -2595,6 +2597,30 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] checkpoint deny probe spawned\r\n");
                     } else {
                         kputs("[user] CKPT deny elf_load FAILED\r\n");
+                    }
+                }
+                /* DDR-1159 (Fix 3): SYS_KILL_AGENT gate. TWO instances — a
+                 * sovereign controller and a plain target named KA_T the
+                 * controller finds by name and kills. The target is NOT an agent
+                 * (agents are capped at 60 syscalls/s and its yield loop would be
+                 * killed at 137 mid-gate) and NOT sovereign (it must be denied). */
+                if (probe_enabled("killagent")) {
+                    uint64_t kalen = (uint64_t)((uintptr_t)killagenttest_elf_end - (uintptr_t)killagenttest_elf);
+                    struct tcb *ka_ctl = 0, *ka_tgt = 0;
+                    if (elf_load((void *)(uintptr_t)killagenttest_elf, kalen,
+                                 "KA_T", &ka_tgt) == ELF_OK && ka_tgt) {
+                        sched_unblock(ka_tgt);
+                        kputs("[user] killagent target spawned\r\n");
+                    } else {
+                        kputs("[user] KILLAGENT target elf_load FAILED\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)killagenttest_elf, kalen,
+                                 "KA_C", &ka_ctl) == ELF_OK && ka_ctl) {
+                        ka_ctl->is_sovereign = 1;
+                        sched_unblock(ka_ctl);
+                        kputs("[user] killagent controller spawned\r\n");
+                    } else {
+                        kputs("[user] KILLAGENT controller elf_load FAILED\r\n");
                     }
                 }
                 /* DDR-836: agent memory gate. Spawned TWICE — one instance holds

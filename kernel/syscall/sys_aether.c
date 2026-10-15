@@ -38,21 +38,11 @@ static struct agent_slot g_agent[AGENT_ROSTER_N];
  * dispatches (scheduler switch-ins; >= 1 for any thread that ever ran). */
 struct agent_metric { uint32_t pid, state; uint64_t mem_used, actions, run_ticks, dispatches; };
 
-/* Walk the ready ring for a live user thread with this pid. */
-static struct tcb *tcb_by_pid(uint32_t pid) {
-    struct tcb *t = current_thread;
-    do {
-        if (t->is_user && t->pid == pid &&
-            t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
-            return t;
-        t = t->next;
-    } while (t != current_thread);
-    return 0;
-}
-
-/* DDR-730: a slot is active iff it was spawned AND its agent is still alive. */
+/* DDR-730: a slot is active iff it was spawned AND its agent is still alive.
+ * DDR-1159: the liveness probe is sched_user_pid_alive — the ring walk now runs
+ * under g_sched_lock (was tcb_by_pid, an unlocked walk racing the reaper relink). */
 static int roster_active(int i) {
-    return g_agent[i].used && tcb_by_pid(g_agent[i].pid) != 0;
+    return g_agent[i].used && sched_user_pid_alive(g_agent[i].pid);
 }
 
 /* DDR-730: the roster slot a submitting agent occupies, or -1. */
@@ -273,13 +263,16 @@ static long sys_agent_metrics(long a1, long a2, long a3, long a4, long a5, long 
     if (max > AGENT_ROSTER_N) max = AGENT_ROSTER_N;
     struct agent_metric buf[AGENT_ROSTER_N];
     for (int i = 0; i < max; i++) {
-        struct tcb *t = g_agent[i].used ? tcb_by_pid(g_agent[i].pid) : 0;
-        if (t) {
-            g_agent[i].run_ticks  = t->run_ticks;    /* DDR-735: refresh + RETAIN so the */
-            g_agent[i].dispatches = t->dispatches;   /* counts survive the agent's exit  */
+        /* DDR-1159: snapshot the live agent's fields under g_sched_lock in one
+         * shot (was tcb_by_pid + reads after an unlocked walk — an SMP UAF). */
+        struct sched_user_snap snap;
+        int live = g_agent[i].used && sched_user_pid_snap(g_agent[i].pid, &snap) == 0;
+        if (live) {
+            g_agent[i].run_ticks  = snap.run_ticks;    /* DDR-735: refresh + RETAIN so the */
+            g_agent[i].dispatches = snap.dispatches;   /* counts survive the agent's exit  */
             buf[i].pid        = g_agent[i].pid;
-            buf[i].state      = (t->state == THREAD_BLOCKED) ? 2u : 1u;   /* 1=run/ready 2=blocked */
-            buf[i].mem_used   = t->mem_used;
+            buf[i].state      = (snap.state == THREAD_BLOCKED) ? 2u : 1u; /* 1=run/ready 2=blocked */
+            buf[i].mem_used   = snap.mem_used;
             buf[i].actions    = g_agent[i].actions;
         } else {
             /* dead (or never-spawned) slot: state 0, but a spawned slot's IDENTITY
@@ -317,16 +310,15 @@ static long sys_kill_agent(long a1, long a2, long a3, long a4, long a5, long a6)
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign && !current_thread->is_agent)
         return -EPERM;
-    struct tcb *t = tcb_by_pid((uint32_t)a1);
-    if (!t)
-        return -ESRCH;
     /* DDR-1090: terminated on its next RING-3 IRQ return, or at its next
      * yield() if it is sitting in an unbounded kernel wait. This comment used
      * to say "on its next IRQ return", which is what a reader would want from
      * the sovereign's kill switch on a runaway agent and is not what the
-     * delivery guard (`cs & 3 == 3`) provides on its own. */
-    t->sig_pending |= (1ull << SIGKILL);
-    return 0;
+     * delivery guard (`cs & 3 == 3`) provides on its own.
+     * DDR-1159: find + set sig_pending under g_sched_lock in one shot (was
+     * tcb_by_pid then a WRITE after an unlocked walk — the sharpest of the F2
+     * SMP UAFs, a |= into possibly-freed memory). -ESRCH if no live user pid. */
+    return sched_signal_user_pid((uint32_t)a1, SIGKILL);
 }
 
 /* DDR-1098: a3 is an OPTIONAL in/out cursor, so the newest 64 stops being the
