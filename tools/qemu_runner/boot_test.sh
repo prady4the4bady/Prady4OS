@@ -312,6 +312,15 @@ if [ -n "${QEMU_SFSROOT:-}" ] && [ -f build/sfsroot.img ]; then
     SFS2DISK=(-drive if=none,format=raw,file=build/sfsroot.img,id=sfsroot
               -device virtio-blk-pci,drive=sfsroot)
 fi
+# DDR-1156 §4: a blank scratch disk attached LAST (highest blk index) only when
+# QEMU_BLKSCRATCH is set. The smoke-blkslot gate forces 8 slot-fixtures on the
+# last virtio-blk unit, so that unit must carry no mounted filesystem; this gives
+# it a disk nothing reads or writes. Pair with QEMU_NO_EXT4=1 so it stays within
+# VBLK_MAX=4 (boot + fat + sfs + scratch).
+if [ -n "${QEMU_BLKSCRATCH:-}" ] && [ -f build/blkslot.img ]; then
+    SFS2DISK=(-drive if=none,format=raw,file=build/blkslot.img,id=blkscr
+              -device virtio-blk-pci,drive=blkscr)
+fi
 
 # Optional NVMe controller (DDR-765) — attached only when QEMU_NVME is set, so
 # the smoke-nvme gate exercises controller bring-up + Identify while every other
