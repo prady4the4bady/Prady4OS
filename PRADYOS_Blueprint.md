@@ -356,9 +356,9 @@ Status legend: 🔴 NOT BUILT | 🟡 IN PROGRESS | 🟢 COMPLETE | ⚠️ BROKEN
 
 ---
 
-## ASI-APPROACHING AGENT DESIGN PRINCIPLES
+## AGENT DESIGN PRINCIPLES (formerly "ASI-approaching"; relabelled per docs/VISION.md §4 — agents are documented by what they measurably do)
 
-The 8 named agents are not chatbots. They are **persistent, stateful, goal-directed processes** that run continuously, accumulate knowledge, and self-improve within their domain. Here is how to make them approach ASI-level capability within their scope:
+The 8 named agents are not chatbots. They are **persistent, stateful, goal-directed processes** that run continuously, accumulate knowledge, and self-improve within their domain. Here is how to make them more capable within their scope:
 
 ### 1. Persistent Memory Architecture
 Each agent has three memory tiers:

@@ -1,4 +1,7 @@
 # PRADYOS SOVEREIGN EDITION — CLAUDE OPUS 4.8 AGENT INSTRUCTIONS
+
+> **READ `docs/VISION.md` AND `CLAUDE.md` FIRST.** This is the original build brief and it has drifted from the repository. Sections marked **SUPERSEDED (DDR-1169)** below do not describe what exists: there is no Wayland/wlroots, no Rust, no ARM64/RISC-V variant system, and quantum is WITHDRAWN. Where this file disagrees with `CLAUDE.md` or `docs/VISION.md`, this file is wrong.
+
 ## ROLE DEFINITION
 You are the primary architect and developer of PRADYOS — a next-generation, AI-native operating system built from bare metal. You are not building a web interface. You are not building a Linux wrapper. You are building a real OS: bootloader → kernel → drivers → userspace → AI agent runtime. Every line of code you write must compile, link, and run on real hardware or VirtualBox. You will think, research, fail, fix, and ship — autonomously.
 
@@ -12,6 +15,7 @@ You are the primary architect and developer of PRADYOS — a next-generation, AI
 5. **Assembly is first-class.** Performance-critical paths (scheduler tick, context switch, syscall entry, IPC, memory copy) MUST have hand-optimized x86_64 assembly with inline comments.
 6. **Never hallucinate APIs.** If you are unsure whether a system call, register, or instruction exists, verify from the Intel/AMD SDM or the architecture reference before using it.
 7. **Chipset variants are required.** The OS must detect CPU microarchitecture at boot and load the appropriate optimized path: x86_64 (Intel/AMD), ARM64 (Apple Silicon / Qualcomm), RISC-V (future).
+> **SUPERSEDED (DDR-1169):** x86_64 is the only full port. aarch64/riscv64 are boot-only stubs (ADR-034, `kernel/arch/<arch>/`), deferred post-1.0; no ARM64/RISC-V ISO is built. Runtime CPU dispatch exists only for ERMS (memcpy/memset) and NX/SMEP/SMAP/MCE.
 
 ---
 
@@ -22,6 +26,7 @@ Do not skip phases. Do not start Phase N+1 until Phase N boots cleanly and passe
 - Set up cross-compiler: GCC/Clang targeting x86_64-elf, aarch64-elf, riscv64-elf
 - Set up NASM for assembly modules
 - Set up Rust (nightly) for safe kernel subsystems
+> **SUPERSEDED (DDR-1169):** there is no Rust in the kernel or userspace (the only `.rs` file is the toolchain smoke test `tests/toolchain/hello_rs`). A Rust rewrite is out of scope (`CLAUDE.md` §DEFERRED).
 - CMake + Makefile hybrid build system
 - Docker-based reproducible build environment
 - QEMU test runner script with pass/fail output
@@ -43,6 +48,7 @@ Do not skip phases. Do not start Phase N+1 until Phase N boots cleanly and passe
 - `arch/x86_64/tlb.asm` — TLB flush routines (INVLPG, full CR3 reload)
 - `arch/x86_64/spinlock.asm` — LOCK XCHG, LOCK CMPXCHG based spinlocks
 - Mirror for `arch/aarch64/` with equivalent ARM64 assembly
+> **SUPERSEDED (DDR-1169):** not done; aarch64 is a boot-only stub (ADR-034).
 
 #### 2b. Memory Management
 - Physical Memory Manager: buddy allocator (power-of-2 blocks), written in C + asm fast paths
@@ -91,6 +97,7 @@ Do not skip phases. Do not start Phase N+1 until Phase N boots cleanly and passe
 
 ### PHASE 5 — Userspace Foundation
 - Init system: `pradyos-init` (PID 1), written in Rust
+> **SUPERSEDED (DDR-1169):** init is `user/init.c`, in C (DDR-891 service manager).
 - Service manager: capability-based, like systemd but lighter
 - Shell: `PRISM` — a custom shell that understands both POSIX and agent DSL
 - Dynamic linker: custom ELF loader
@@ -148,11 +155,13 @@ Implement each as a specialized agent process with distinct capability sets and 
 
 ### PHASE 7 — Desktop Shell (PRISM UI)
 - Compositor: Wayland protocol, custom in Rust (wlroots-based)
+> **SUPERSEDED (DDR-1169):** the compositor is a custom C framebuffer compositor, `user/compositor.c` (DDR-701..730). Not Wayland, not wlroots, not Rust.
 - Two rendering modes that switch atomically:
   - **SOVEREIGN MODE UI**: dark space theme, agent status panels, approval queue widget, system monitor — exactly as in the reference images
   - **MANUAL MODE UI**: traditional desktop, floating taskbar, file manager, terminal — light/dark variants
 - Mode toggle: single system call + compositor redraws in < 300ms with cubic bezier animation
 - Glassmorphism panels: blur via KWin/wlroots blur protocol
+> **SUPERSEDED (DDR-1169):** no KWin/wlroots; effects are drawn by the custom compositor.
 - System tray with per-agent status indicators
 - PRADYOS Drive: virtual filesystem mount for agent workspace
 
@@ -198,6 +207,7 @@ For every performance-critical kernel path, provide two implementations:
 ---
 
 ## CHIPSET VARIANT SYSTEM
+> **SUPERSEDED (DDR-1169):** the variant table below was never built. Only x86_64 ships.
 At runtime, PRADYOS detects CPU and loads optimal paths:
 
 | Variant | Detection | Key Optimizations |
@@ -211,6 +221,7 @@ At runtime, PRADYOS detects CPU and loads optimal paths:
 ---
 
 ## REPOSITORY STRUCTURE (ENFORCE AT ALL TIMES)
+> **SUPERSEDED (DDR-1169):** the tree below is the original plan, not the repository. `arch/aarch64` and `arch/riscv64` hold only `.gitkeep`; there is no `compositor/` Wayland directory. Read the tree, not this list.
 ```
 pradyos/
 ├── arch/

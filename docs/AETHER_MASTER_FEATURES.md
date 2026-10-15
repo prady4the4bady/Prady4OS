@@ -745,7 +745,7 @@ byte-exact.
 
 ---
 
-## Section A2 — AETHER host-side Python agent layer (ASI-bridge v4.0)
+## Section A2 — AETHER host-side Python agent layer (host bridge v4.0; formerly labelled "ASI-bridge", relabelled per docs/VISION.md §4)
 
 A **separate layer** from everything else in this document. Root `aether/`;
 Python 3.13; runs on top of the OS as a service, not inside the kernel. Its
@@ -990,7 +990,7 @@ replayable run visualizer (optional ring-3 web UI)
 
 ---
 
-## Section F — Visionary ASI-trajectory features (#66–76)
+## Section F — Planned agent features (#66–76) (formerly "ASI-trajectory", relabelled per docs/VISION.md §4)
 
 All **proposed**. No competitor ships these.
 
@@ -1062,7 +1062,7 @@ every new Section E/F feature **before** implementation.
 
 ---
 
-## Standing AETHER cognitive/ASI mandate
+## Standing AETHER agent mandate (formerly "cognitive/ASI", relabelled per docs/VISION.md §4)
 
 Long-term trajectory: subconscious background reasoning (F#71), verifier-based
 self-improvement (F#72), the **metric lockbox** (F#68 / S3 — highest priority once
@@ -2109,3 +2109,6 @@ this time, not just the waiter."* Instrument only.
 - 2026-09-26 — **DDR-1147 §1.5/§1.6: AETHER audit surface change.** A successful `SYS_SET_MODE` now appends `AR_MODE_SET` (28, `_Static_assert`-pinned; `action_id = (prev << 32) | requested`), where previously only a REFUSED mode change was audited. The compositor's Super+M switch to Regalia/Consort now needs a confirm step (Enter commits; Esc, any other key, or 10 s cancels), and it reads the kernel's own record back (`PRADYOS_MODE_AUDIT found=1`). Gated on `smoke-superkey` arm E. The mode-aware accent palette (`user/theme_palette.h`) is generated from the reference PNGs and checked by `ci-palette-check`.
 - 2026-09-27 — DDR-1152 (compositor input path, no AETHER surface change): the key-event ring is drained to empty before the ASCII ring, so an armed Super+M is answered by the Enter typed after it even when renders let the rings fill. This fixes the shard-8 `smoke-superkey` arm-D red. DDR-1151 (measurement only, no feature row moves).
 - 2026-09-27 — DDR-1153: an INSTALLED system now holds a ledger key from its first boot. `SYS_INSTALL` generates the target's ML-DSA-44 seed kernel-side, writes it to P2 sector 1 (outside the filesystem, so no agent can read it through the VFS), and prints the pk once for off-machine recording; `disk_root_select` reloads it only if its pk matches the stored digest. No syscall ABI change. Gated on `smoke-install` K1-K5.
+- 2026-10-04 — DDR-1158 (no AETHER surface change): KASAN use-after-free regression gate `smoke-kasan-uaf`, operator-requested (DDR-1155 §4 / PR #27 comment 5971011693). `pmm_kasan_uaf_selftest()` does a deliberate UAF read after `pmm_free_page` and asserts the IMP-B `PMM_POISON` reached the freed frame; the prior watcher `smoke-pmm-poison` asserts only the init-time banner, so a fill-drop mutant stayed green on it while this gate fails (§1 gap made concrete). Shard 3 strict, 188 gates. No syscall and no agent surface; closes nothing (not U1/U2/U3), F2/F1/F3 still PROPOSED.
+
+- **Per-task budgets (DDR-1170)** — SYS_SPAWN_TASK (NSI 107, sovereign-only) spawns an agent task with time/byte/action budgets; exhaustion kills the task and audits AR_BUDGET_KILL once. Gated by smoke-taskbudget.
