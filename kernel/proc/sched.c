@@ -2563,6 +2563,61 @@ int sched_resume_pid(uint32_t pid) {
     return rc;
 }
 
+/* DDR-1159 (Fix 3): the AETHER tcb_by_pid callers dereferenced a raw tcb* after
+ * an UNLOCKED ring walk (sys_kill_agent WRITES sig_pending; sys_agent_metrics
+ * READS run_ticks/dispatches/state/mem_used; roster_active walks). Same SMP
+ * use-after-free class as DDR-1157: the reaper unlinks under g_sched_lock then
+ * frees OUTSIDE it, so an unlocked walk+deref can touch a freed TCB. These
+ * helpers hold g_sched_lock across find+act (irq_save/irq_restore are the
+ * file-local g_sched_lock wrappers). find_user_pid_locked is tcb_by_pid's body
+ * (is_user predicate kept) called WITH the lock held — a live, unfreeable TCB. */
+static struct tcb *find_user_pid_locked(uint32_t pid) {
+    if (pid == 0)
+        return 0;
+    struct tcb *t = current_thread;
+    do {
+        if (t->is_user && t->pid == pid &&
+            t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
+int sched_user_pid_alive(uint32_t pid) {
+    uint64_t fl = irq_save();
+    int alive = find_user_pid_locked(pid) != 0;
+    irq_restore(fl);
+    return alive;
+}
+
+int sched_user_pid_snap(uint32_t pid, struct sched_user_snap *out) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_user_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) {
+        out->run_ticks  = t->run_ticks;
+        out->dispatches = t->dispatches;
+        out->mem_used   = t->mem_used;
+        out->state      = t->state;
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
+}
+
+int sched_signal_user_pid(uint32_t pid, int sig) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_user_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) {
+        t->sig_pending |= (1ull << sig);
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
+}
+
 /* 1 if a runnable/blocked thread with this pid exists (a "living parent"). */
 static int pid_alive(uint32_t pid) {
     if (pid == 0)
