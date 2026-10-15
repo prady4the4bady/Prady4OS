@@ -515,6 +515,8 @@ extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfil
 extern const unsigned char privacynettest_elf_end[];
 extern const unsigned char budgettest_elf[];          /* DDR-1170: per-task budgets */
 extern const unsigned char budgettest_elf_end[];
+extern const unsigned char rbtest_elf[];              /* DDR-1171: rollback on rejection */
+extern const unsigned char rbtest_elf_end[];
 extern const unsigned char dnstest1_elf[], dnstest1_elf_end[];   /* DDR-1141 */
 extern const unsigned char dnstest2_elf[], dnstest2_elf_end[];   /* DDR-1141 */
 extern const unsigned char dnstest3_elf[], dnstest3_elf_end[];   /* DDR-1141 */
@@ -1282,8 +1284,21 @@ static long aether_spawn_agent_hook(const char *task, const struct task_budget *
         eap = &ea;
     }
 
-    if (elf_load_args((void *)(uintptr_t)agent_base_elf, len, "AGENT", eap, &ut) != ELF_OK || !ut)
+    /* DDR-1171: the rollback log is allocated BEFORE the load, so a task that
+     * asked for rollback can never run without one (a failed page allocation
+     * refuses the spawn rather than starting an unlogged task). */
+    void *rb = 0;
+    if (b && (b->flags & TASK_FLAG_ROLLBACK)) {
+        rb = aether_rb_page();
+        if (!rb)
+            return -1;
+    }
+    if (elf_load_args((void *)(uintptr_t)agent_base_elf, len, "AGENT", eap, &ut) != ELF_OK || !ut) {
+        if (rb)
+            pmm_free_page((uint64_t)(uintptr_t)rb);
         return -1;
+    }
+    ut->rb_log = rb;                   /* still BLOCKED: no syscall has run yet */
     ut->is_agent = 1;                  /* authority BEFORE the first run */
     ut->is_net = 1;                    /* DDR-731: agents are the sanctioned socket users
                                         * (live mode talks to Ollama over SYS_SOCK_*) */
@@ -2836,6 +2851,18 @@ static void fs_test_thread(void *arg) {
                         bp->is_sovereign = 1;
                         sched_unblock(bp);
                         kputs("[user] ELF loaded (embedded); task-budget probe spawned\r\n");
+                    }
+                }
+                if (probe_enabled("rollback")) {
+                    /* DDR-1171: sovereign, because SYS_SPAWN_TASK and
+                     * SYS_REJECT_ACTION are sovereign-only. */
+                    struct tcb *rp = 0;
+                    uint64_t rlen = (uint64_t)((uintptr_t)rbtest_elf_end - (uintptr_t)rbtest_elf);
+                    if (elf_load((void *)(uintptr_t)rbtest_elf, rlen,
+                                 "RBTEST", &rp) == ELF_OK && rp) {
+                        rp->is_sovereign = 1;
+                        sched_unblock(rp);
+                        kputs("[user] ELF loaded (embedded); rollback probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("dns")) {

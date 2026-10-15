@@ -92,6 +92,8 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
         if (e->kind == FD_PIPE)
             return (e->flags == PIPE_WRITE_END) ? (int)pipe_write(e->pipe, kbuf, len) : -EBADF;
         if (e->kind == FD_VFS && e->file) {
+            if (e->flags & FD_RB_RO)
+                return -EPERM;       /* DDR-1171: rollback task, existing file */
             int n = vfs_write(e->cap, e->file, e->off, kbuf, len);
             if (n > 0) e->off += (uint64_t)n;
             return n;

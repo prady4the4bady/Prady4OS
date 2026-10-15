@@ -219,7 +219,13 @@ static long sys_reject_action(long a1, long a2, long a3, long a4, long a5, long 
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
     }
-    return aether_approve((uint64_t)a1, 0);
+    /* DDR-1171: owner looked up BEFORE the verdict (the entry stays, so either
+     * order works; before is the order that cannot depend on that). */
+    uint32_t owner = aether_action_owner((uint64_t)a1);
+    long rc = aether_approve((uint64_t)a1, 0);
+    if (rc == 0 && owner)
+        (void)sched_rollback_pid(owner);   /* -ESRCH = not a live rollback task */
+    return rc;
 }
 
 static long sys_spawn_agent(long a1, long a2, long a3, long a4, long a5, long a6) {

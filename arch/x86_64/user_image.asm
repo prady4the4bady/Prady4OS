@@ -427,6 +427,11 @@ global budgettest_elf_end
 budgettest_elf:
     incbin "build/budgettest.elf"
 budgettest_elf_end:
+global rbtest_elf
+global rbtest_elf_end
+rbtest_elf:
+    incbin "build/rbtest.elf"
+rbtest_elf_end:
 
 ; DDR-1141: SYS_DNS_RESOLVE probe, three phases (L / A / sovereign P)
 global dnstest1_elf

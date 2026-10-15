@@ -123,7 +123,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | UI-state reading for agents | not started | none | Block 3 |
 | Input injection by agents | not started | none | Block 3 |
 | Sandboxed shell / browser for agents | not started | none | Block 3; browser is cloud-bridge adjacent |
-| Rollback on rejection | not started | none | Block 3 |
+| Rollback on rejection | gated (filesystem creates only; network/IPC not undone) | smoke-rollback | DDR-1171 |
 | Adversarial gates (prompt injection, self-approval, budget, egress) | partial | `smoke-invariants` (S1,S2,S4,S5,S6,S8), egress gates | Self-approval refused by construction (`aether_decide` is operator-only); prompt-injection and budget-overrun gates not built |
 | Local inference (Ollama on host via 10.0.2.2) | ungated in CI | `smoke-agent-live` (excluded: needs a live host) | Agents call a local model; CI runs test mode |
 | Cloud inference | deferred (DDR-793) | none | Operator decision |

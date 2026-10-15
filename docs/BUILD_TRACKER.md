@@ -6714,3 +6714,4 @@ This implements operator decisions 1–3 (PR #17 comment 5845610518).
 - Not claimed: F2/F1/F3 remain **PROPOSED** (PR #27) awaiting operator approval; no behaviour change (poison fill / free path / banner all unchanged); not KASAN shadow memory; OPEN-1/2/12/13 untouched.
 
 - DDR-1170 per-task budgets (time/bytes/actions), NSI 107 SYS_SPAWN_TASK, AR_BUDGET_KILL=29, gate smoke-taskbudget (shard 7 strict), M1-M4 each failing its own arm. Kernel 7d429743e211a591, 1,503,626 B. Token budget not claimed (not kernel-observable).
+- DDR-1171 rollback on rejection: TASK_FLAG_ROLLBACK, per-TCB create log (1 page, 16 entries), refusals for every effect that cannot be undone, replay in sched_exit on rejection, AR_ROLLBACK=30, gate smoke-rollback (shard 1 strict) with an rb-ctl control; mutants M1-M5. Finding recorded, not fixed: sys_open never enforces the access mode, so every FD_VFS fd is writable. kernel.bin 1,515,914 B.

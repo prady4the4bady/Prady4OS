@@ -234,3 +234,4 @@
 1	smoke-install	90	strict
 0	smoke-blkslot	120	strict
 7	smoke-taskbudget	120	strict
+1	smoke-rollback	150	strict
