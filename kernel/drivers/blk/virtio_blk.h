@@ -16,4 +16,5 @@ void virtio_blk_dump_owners(void);
 
 /* DDR-1143 §10.2: unit 0's negotiated VIRTIO_BLK_F_FLUSH (-1 if no unit), and
  * the flushes issued / completed with status 0 across all units. */
+void virtio_blk_late_selftest(void);   /* DDR-1160 */
 void virtio_blk_flush_stats(int *neg0, uint32_t *issued, uint32_t *ok);
