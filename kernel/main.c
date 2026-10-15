@@ -2268,6 +2268,10 @@ static void fs_test_thread(void *arg) {
                     else
                         kputs("PRADYOS_RQFREE_OK\r\n");
                 }
+                if (probe_enabled("blkslotwait")) {  /* DDR-1156 §4 */
+                    extern void vblk_slotwait_selftest(void);
+                    vblk_slotwait_selftest();
+                }
                 /* DDR-994: the yield-stall detector. Two arms, and arm A
                  * alone would be vacuous — it proves the reporter works, not
                  * that anything CALLS it. See vfs.c for why arm B uses a
@@ -4658,6 +4662,7 @@ void kmain(struct boot_info *bi) {
     kputs("\r\n");
 
     pmm_selftest(bi);
+    pmm_kasan_uaf_selftest();            /* DDR-1158: use-after-free poison regression */
     kheap_stress();
     vmm_test();
     cap_test();
