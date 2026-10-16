@@ -126,8 +126,14 @@ static void on_chld(long sig, struct k_siginfo *si) {
 
 static void install(int sig, void (*h)(long, struct k_siginfo *), unsigned long flags) {
     struct k_sigaction a = { (unsigned long)h, flags | SA_SIGINFO, 0 };
-    if (nsi(SYS_SIGACTION2, sig, (long)&a, 0) != 0)
-        die("sigaction2");
+    long rc = nsi(SYS_SIGACTION2, sig, (long)&a, 0);
+    if (rc != 0) {
+        /* Print the value: "it failed" alone cannot tell -EFAULT from -ENOSYS. */
+        char b[64], *p = str(b, "sigaction2 sig="); p = dec(p, sig);
+        p = str(p, " act="); p = dec(p, (long)&a); p = str(p, " rc="); p = dec(p, rc);
+        *p = 0;
+        die(b);
+    }
 }
 
 static long mask_op(long how, unsigned long set) {
