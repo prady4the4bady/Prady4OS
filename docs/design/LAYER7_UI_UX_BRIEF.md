@@ -167,11 +167,11 @@ prefers-reduced-motion kills motion w/o reflow; **no hardcoded colors in Rust/C*
 — all via ambiance token system (CSS vars or `ThemeTokens` struct); every slice
 has a DDR (no DDR = no merge); `clippy deny(warnings)`, zero suppression attrs.
 
-## §14 ASI connection points (build as live consumers now)
+## §14 Agent connection points (formerly "ASI", relabelled per docs/VISION.md §4) (build as live consumers now)
 Agent chips ← NIA `EVT_AGENT_STATE_CHANGE{agent_id,state,task_desc}` (idle/
 active/thinking; tap → detail card: last 5 tasks, confidence, model). Sovereign
 toggle ← reads `sovereign_gate.mode`, writes `sys_sovereign_gate_set()` (the toggle
-IS the ASI on/off switch). Approval queue ← `EVT_APPROVAL_REQUIRED{action_id,
+IS the agent-autonomy on/off switch). Approval queue ← `EVT_APPROVAL_REQUIRED{action_id,
 risk,agent,desc,deadline}`; APPROVE/REJECT → `sys_approval_post()`. LUMYN
 self-research → pulsing indicator on its chip (tap to see exploration). Network
 card → cloud calls color-coded (local Ollama = accent, cloud = bright white).

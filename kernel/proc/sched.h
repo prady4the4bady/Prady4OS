@@ -132,6 +132,15 @@ struct tcb {
     uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
+    /* DDR-1170: per-task budgets, set by SYS_SPAWN_TASK BEFORE the first run.
+     * A limit of 0 means "no limit on that axis". Not inherited across fork. */
+    uint64_t   bud_max_ticks;   /* wall ticks the task may run for                 */
+    uint64_t   bud_max_bytes;   /* bytes it may write (fds + proxy sockets)        */
+    uint32_t   bud_max_actions; /* actions it may submit                           */
+    uint32_t   bud_tripped;     /* 1 once a budget kill has been audited           */
+    uint64_t   bud_start;       /* g_ticks when the budget was armed               */
+    uint64_t   bud_bytes;       /* bytes charged so far                            */
+    uint32_t   bud_actions;     /* actions charged so far                          */
 
     /* SMP scheduling (ADR-031 / DDR-SMP-3c-cap-2a). Which CPU is running this
      * thread (-1 = none): schedule() picks only READY threads with on_cpu<0, so
@@ -305,6 +314,17 @@ void        sched_trace_dump(void);
 
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 struct tcb *sched_find_pid(uint32_t pid);                       /* DDR-837: live thread by pid, or NULL */
+
+/* DDR-1159 (Fix 3): find a live USER thread by pid and act on it ENTIRELY under
+ * g_sched_lock, so the TCB cannot be unlinked+freed between the ring walk and
+ * the dereference (the AETHER tcb_by_pid UAF; same lifetime fix as DDR-1157).
+ * alive -> 0/1; snap -> 0 and fills *out, else -ESRCH; signal -> 0 else -ESRCH. */
+struct sched_user_snap { uint64_t run_ticks, dispatches, mem_used; uint32_t state; };
+int sched_user_pid_alive (uint32_t pid);
+int sched_user_pid_snap  (uint32_t pid, struct sched_user_snap *out);
+int sched_signal_user_pid(uint32_t pid, int sig);
+int         sched_checkpoint_pid(uint32_t pid);                /* DDR-1157: set checkpointed=1 under g_sched_lock; 0 or -ESRCH */
+int         sched_resume_pid(uint32_t pid);                    /* DDR-1157: clear + conditional unblock under g_sched_lock; 0 or -ESRCH */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */

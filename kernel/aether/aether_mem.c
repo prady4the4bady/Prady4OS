@@ -73,3 +73,57 @@ int aether_rate_check(struct tcb *t) {
     }
     return 0;
 }
+
+/* --- DDR-1170: per-task budgets ------------------------------------------- *
+ * A budget runs OUT, unlike the rate window above. Exhaustion kills the task:
+ * a budget that only refused would leave the agent free to ignore the error
+ * and retry, i.e. a rate limiter again (DDR-1170 §4). The kill is audited
+ * exactly once, with the axis and the amount charged in action_id. */
+void aether_budget_arm(struct tcb *t, const struct task_budget *b) {
+    t->bud_max_ticks   = b->max_ticks;
+    t->bud_max_bytes   = b->max_bytes;
+    t->bud_max_actions = b->max_actions;
+    t->bud_start   = g_ticks;
+    t->bud_bytes   = 0;
+    t->bud_actions = 0;
+    t->bud_tripped = 0;
+}
+
+static void budget_trip(struct tcb *t, unsigned kind, uint64_t used) {
+    if (t->bud_tripped)
+        return;
+    t->bud_tripped = 1;
+    aether_drop_pid(t->pid);
+    aether_audit(t->pid, 0, ((uint64_t)kind << 56) | (used & 0x00FFFFFFFFFFFFFFull),
+                 AR_BUDGET_KILL);
+    log_pid("AGENT_BUDGET_KILLED PID=", t->pid);
+}
+
+int aether_budget_charge(struct tcb *t, unsigned kind, uint64_t amount) {
+    if (t->bud_tripped)
+        return -1;
+    if (kind == TASK_BUDGET_BYTES && t->bud_max_bytes) {
+        t->bud_bytes += amount;
+        if (t->bud_bytes > t->bud_max_bytes) {
+            budget_trip(t, kind, t->bud_bytes);
+            return -1;
+        }
+    } else if (kind == TASK_BUDGET_ACTIONS && t->bud_max_actions) {
+        t->bud_actions += (uint32_t)amount;
+        if (t->bud_actions > t->bud_max_actions) {
+            budget_trip(t, kind, t->bud_actions);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int aether_budget_time(struct tcb *t) {
+    if (t->bud_tripped)
+        return -1;
+    if (t->bud_max_ticks && g_ticks - t->bud_start > t->bud_max_ticks) {
+        budget_trip(t, TASK_BUDGET_TIME, g_ticks - t->bud_start);
+        return -1;
+    }
+    return 0;
+}

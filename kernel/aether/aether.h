@@ -202,7 +202,12 @@ enum aether_result {
      * or switches egress off/on, and until now wrote NO record -- only the
      * refusal (AR_CAP_DENIED) was audited. action_id = (previous sovereign
      * mode << 32) | requested value, so privacy on/off (2/3) is recorded too. */
-    AR_MODE_SET
+    AR_MODE_SET,
+    /* DDR-1170. APPENDED per DDR-832. A task killed for exhausting a budget it
+     * was spawned with. action_id = (kind << 56) | used, kind 1 = time,
+     * 2 = bytes, 3 = actions. Distinct from AR_RATE_KILL: a rate never runs out,
+     * a budget does, and an operator reading the log needs to know which. */
+    AR_BUDGET_KILL
 };
 
 /* DDR-832 — THIS ENUM IS APPEND-ONLY WIRE FORMAT.
@@ -225,6 +230,7 @@ _Static_assert(AR_ACC_SEALED       == 12, "audit wire format: ACC probe depends 
 _Static_assert(AR_ACC_OPENED       == 13, "audit wire format: ACC probe depends on 13");
 _Static_assert(AR_ACC_REJECTED     == 14, "audit wire format: ACC probe depends on 14");
 _Static_assert(AR_MODE_SET         == 28, "audit wire format: user/compositor.c hardcodes 28");
+_Static_assert(AR_BUDGET_KILL      == 29, "audit wire format: user/budgettest.c hardcodes 29");
 
 /* DDR-800/801: destination packed into the audit record's action_id. The field
  * is 64-bit and unused on the egress path, so no struct change is needed. */
@@ -345,7 +351,28 @@ int  aether_rate_check(struct tcb *t);
 /* --- agent spawner hook (SYS_SPAWN_AGENT) ---------------------------------- */
 /* kmain registers a spawner that elf_loads the embedded agent image and marks it
  * CAP_AGENT; the syscall layer calls it. Returns the new pid, or <0. */
-void aether_set_spawn_hook(long (*fn)(const char *task));
+/* DDR-1170: the budget pointer is NULL for SYS_SPAWN_AGENT (unbudgeted, as
+ * before) and non-NULL for SYS_SPAWN_TASK. The hook applies it while the new
+ * thread is still BLOCKED, so the task never runs unbudgeted. */
+struct task_budget {
+    uint64_t max_ticks;     /* 0 = no time limit   */
+    uint64_t max_bytes;     /* 0 = no byte limit   */
+    uint32_t max_actions;   /* 0 = no action limit */
+    uint32_t _pad;
+};
+void aether_set_spawn_hook(long (*fn)(const char *task, const struct task_budget *b));
+
+/* --- DDR-1170 per-task budgets (aether_mem.c) ------------------------------ */
+#define TASK_BUDGET_TIME     1u
+#define TASK_BUDGET_BYTES    2u
+#define TASK_BUDGET_ACTIONS  3u
+void aether_budget_arm(struct tcb *t, const struct task_budget *b);
+/* Charge an axis; returns 0 to proceed, -1 when the budget is exhausted (the
+ * kill is audited once; the caller must not perform the charged operation and
+ * must terminate the task). */
+int  aether_budget_charge(struct tcb *t, unsigned kind, uint64_t amount);
+/* Time check, for syscall entry and the timer's ring-3 return path. */
+int  aether_budget_time(struct tcb *t);
 
 /* --- in-boot self-tests (gates) -------------------------------------------- */
 void aether_selftest(void);    /* smoke-aether-queue: submit+auto-approve+audit */

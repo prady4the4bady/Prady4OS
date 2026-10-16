@@ -178,6 +178,35 @@ int main(int argc, char **argv) {
            task, AETHER_TEST_MODE ? "test" : "live", argc);
     fflush(stdout);
 
+    /* DDR-1170: three test behaviours, selected by the task string, that each
+     * spend exactly one budget axis. They exist only for smoke-taskbudget and
+     * are reached only through SYS_SPAWN_TASK, which is sovereign-only. */
+    if (strcmp(task, "bud-time") == 0) {
+        volatile unsigned long spin = 0;
+        for (;;) spin++;                       /* ring 3, no syscalls, forever */
+    }
+    if (strcmp(task, "bud-bytes") == 0) {      /* exactly 8 KiB through a pipe */
+        int pfd[2];
+        static char blk[1024];
+        if (nsi(17 /* SYS_PIPE */, (long)pfd, 0, 0) != 0)
+            nsi(SYS_EXIT, 2, 0, 0);
+        for (int i = 0; i < 8; i++) {
+            nsi(SYS_WRITE, pfd[1], (long)blk, sizeof blk);
+            nsi(SYS_READ, pfd[0], (long)blk, sizeof blk);
+        }
+        printf("PRADYOS_BUDTASK_DONE task=bud-bytes\n");
+        fflush(stdout);
+        nsi(SYS_EXIT, 0, 0, 0);
+    }
+    if (strcmp(task, "bud-actions") == 0) {    /* five proposals, no polls */
+        static const char pl[] = "bud";
+        for (int i = 0; i < 5; i++)
+            nsi(SYS_SUBMIT_ACTION, ACTION_WRITE_FILE, (long)pl, sizeof pl);
+        printf("PRADYOS_BUDTASK_DONE task=bud-actions\n");
+        fflush(stdout);
+        nsi(SYS_EXIT, 0, 0, 0);
+    }
+
 #if !AETHER_TEST_MODE
     /* Live: prove end-to-end model inference over the proxy-socket NSI. */
     char text[512];
