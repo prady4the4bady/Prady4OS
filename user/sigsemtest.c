@@ -43,7 +43,7 @@
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
-#define STATE_VA 0x8F00000000ul
+#define STATE_VA 0x8E00000000ul  /* inside [VMM_MMAP_BASE, VMM_MMAP_TOP); TOP itself is refused -EINVAL */
 
 struct k_sigaction { unsigned long handler, flags, mask; };
 struct k_siginfo   { int signo, code, pid, status; };
