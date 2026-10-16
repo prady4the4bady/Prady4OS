@@ -464,6 +464,8 @@ extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT 
 extern const unsigned char mprotecttest_elf_end[];
 extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
 extern const unsigned char killblocktest_elf_end[];
+extern const unsigned char sigsemtest_elf[];          /* DDR-1174: signal semantics */
+extern const unsigned char sigsemtest_elf_end[];
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
 extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
@@ -3095,6 +3097,20 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] KILLBLOCK probe spawned\r\n");
                     } else {
                         kputs("[user] KILLBLOCK probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1174 (C1.1): POSIX signal semantics. FAT-rooted, pipes
+                 * only, not an agent. */
+                if (probe_enabled("sigsem")) {
+                    struct tcb *ss = 0;
+                    uint64_t sslen = (uint64_t)(uintptr_t)sigsemtest_elf_end -
+                                     (uint64_t)(uintptr_t)sigsemtest_elf;
+                    if (elf_load((void *)(uintptr_t)sigsemtest_elf, sslen,
+                                 "SIGSEM", &ss) == ELF_OK && ss) {
+                        sched_unblock(ss);
+                        kputs("[user] SIGSEM probe spawned\r\n");
+                    } else {
+                        kputs("[user] SIGSEM probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-1032: SYS_EXECVE argv/envp. FAT-rooted -- it execve's

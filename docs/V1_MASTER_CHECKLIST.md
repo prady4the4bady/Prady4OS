@@ -36,9 +36,9 @@ Exit gate: all existing gates green on one SHA; open-PR list clean.
 ## Phase 1. Kernel foundations
 
 ### C1.1 Signals and EINTR
-Status: TODO. Needs: C0.1. Ref: DDR-1090.
+Status: IN PROGRESS (DDR-1174, PR pending CI). Needs: C0.1. Ref: DDR-1090, DDR-1174.
 - [ ] `sigprocmask`, `SA_SIGINFO`, `SIGCHLD`, `SA_RESTART`, EINTR semantics
-Exit gate: signal semantics gate (name TBD).
+Exit gate: `smoke-sigsem` (shard 6, strict).
 
 ### C1.2 Cross-CPU TLB shootdown
 Status: TODO. Needs: C0.1. Ref: DDR-1075, DDR-1077.

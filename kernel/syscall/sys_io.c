@@ -64,6 +64,10 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
              * never reads leaves this spinning forever. */
             {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
                 while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0) {
+                    if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                        yield_stall_done("pipe_write", n, g_ticks - t0, &noted);
+                        return total > 0 ? total : -EINTR;
+                    }
                     yield();
                     if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
                         yield_stall_note("pipe_write", n, g_ticks - t0, &noted);
@@ -85,7 +89,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
                  * caller the pipe is closing. */
                 if (total > 0)
                     return total;
-                current_thread->sig_pending |= (1ull << SIGPIPE);
+                sig_raise(current_thread, SIGPIPE, 0, SI_KERNEL, 0);  /* DDR-1174 */
                 return -EPIPE;
             }
             long w = pipe_write(e->pipe, kbuf, chunk);
@@ -375,6 +379,10 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
                  * but never writes leaves this spinning forever. */
                 {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
                     while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0) {
+                        if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                            yield_stall_done("pipe_read", n, g_ticks - t0, &noted);
+                            return -EINTR;   /* total == 0 on this path */
+                        }
                         yield();
                         if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
                             yield_stall_note("pipe_read", n, g_ticks - t0, &noted);
@@ -405,6 +413,8 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
         for (;;) {
             int c = kgetc_nb();
             if (c >= 0) { kbuf[n++] = (char)c; break; }
+            if (signal_interruptible(current_thread))
+                return -EINTR;                    /* DDR-1174: nothing read yet */
             yield();
         }
         while (n < count && n < (long)sizeof kbuf) {

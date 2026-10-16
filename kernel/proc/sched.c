@@ -1157,9 +1157,15 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->exit_status = 0;            /* set by sched_exit, collected by wait4     */
     t->waiter = 0;                 /* parent blocked in wait4 on this thread    */
     t->sig_pending = 0;            /* PROC-C: no pending signals                */
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < 32; i++) {
         t->sig_handlers[i] = 0;
+        t->sig_flags[i]    = 0;   /* DDR-1174; NON-NEGOTIABLE 10 */
+        t->sig_amask[i]    = 0;
+        t->sig_info[i].pid = 0; t->sig_info[i].code = 0; t->sig_info[i].status = 0;
+    }
     t->sig_active = 0;
+    t->sig_mask = 0;               /* DDR-1174: nothing blocked */
+    t->sig_saved_mask = 0;
     t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
     t->forked = 0;                 /* 5e: normal launch unless a fork sets fork_regs */
     t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
@@ -1295,6 +1301,7 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->root_mnt    = parent->root_mnt;
         t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
         t->fs_base     = parent->fs_base; /* PROC-D: child inherits the thread pointer */
+        signal_fork_copy(t, parent);      /* DDR-1174: POSIX fork keeps dispositions + mask */
         /* DDR-838: lineage, not authority. is_agent is deliberately NOT inherited
          * (see the zeroing in sched_create), so the containment cap has to ride
          * on something fork does propagate. A child of an agent, or of anything
@@ -2449,6 +2456,8 @@ void sched_unblock(struct tcb *t) {
  * parent's wait4 or the reaper can collect it), wake any waiter, and switch away
  * for good. The address space + TCB are reclaimed by the collector, never here —
  * we are still executing on this thread's kernel stack. */
+static struct tcb *find_user_pid_locked(uint32_t pid);  /* below */
+
 void sched_exit(int status) {
     /* 5d: PID 1 must never exit. If init returns or _exit()s, halt loudly —
      * the system has no reaper / no first process to fall back on. */
@@ -2501,6 +2510,13 @@ void sched_exit(int status) {
         }
     }
     current_thread->exit_status = status;
+    /* DDR-1174: SIGCHLD to a live user parent, recorded under this lock so the
+     * parent cannot be freed between lookup and raise (DDR-1159's rule). */
+    if (current_thread->is_user) {
+        struct tcb *par = find_user_pid_locked(current_thread->parent_pid);
+        if (par)
+            sig_raise(par, SIGCHLD, (int32_t)current_thread->pid, CLD_EXITED, status);
+    }
     current_thread->state = THREAD_ZOMBIE;      /* NOT pickable; on_cpu stays set */
     if (current_thread->waiter)
         sched_unblock(current_thread->waiter);
@@ -2623,7 +2639,7 @@ int sched_signal_user_pid(uint32_t pid, int sig) {
     struct tcb *t = find_user_pid_locked(pid);
     int rc = -ESRCH;
     if (t) {
-        t->sig_pending |= (1ull << sig);
+        sig_raise(t, sig, (int32_t)current_thread->pid, SI_USER, 0);  /* DDR-1174: atomic */
         rc = 0;
     }
     irq_restore(fl);
@@ -2639,7 +2655,7 @@ int sched_rollback_pid(uint32_t pid) {
     int rc = -ESRCH;
     if (t && t->rb_log) {
         t->rb_pending = 1;
-        t->sig_pending |= (1ull << SIGKILL);
+        sig_raise(t, SIGKILL, 0, SI_KERNEL, 0);  /* DDR-1174: atomic */
         rc = 0;
     }
     irq_restore(fl);

@@ -94,6 +94,8 @@ and F assert exact values, not `< 0`.
 
 ## 4. Not claimed
 
-No real-time signals, no `sigaltstack`, no `SA_NODEFER`/`SA_RESETHAND`, no
+`wait4` is NOT made interruptible: it blocks in `sched_block()` and a raise
+does not wake a blocked thread, so a handled signal is delivered when wait4
+returns (as arm C relies on), not by interrupting it. No real-time signals, no `sigaltstack`, no `SA_NODEFER`/`SA_RESETHAND`, no
 `ucontext` contents. Not claimed to close OPEN-1/OPEN-2. Not exonerated in
 advance (DDR-1042): it changes the syscall exit path.

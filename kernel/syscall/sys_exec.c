@@ -135,6 +135,7 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
 
     uint64_t old_as = t->cr3;
     t->cr3        = new_as;
+    signal_exec_reset(t);   /* DDR-1174: old handler VAs mean nothing in the new image */
     t->user_rip   = entry;
     t->user_stack = new_rsp;
     for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }

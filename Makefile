@@ -143,6 +143,8 @@ USER_ADEL_ELF := build/actiondeltest.elf
 USER_MPROT_SRC := user/mprotecttest.c    # DDR-1031: SYS_MPROTECT (NSI 97)
 USER_KILLB_SRC := user/killblocktest.c   # DDR-1090: SIGKILL vs an unbounded kernel wait
 USER_KILLB_ELF := build/killblocktest.elf
+USER_SIGSEM_SRC := user/sigsemtest.c   # DDR-1174: POSIX signal semantics (C1.1)
+USER_SIGSEM_ELF := build/sigsemtest.elf
 USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
 USER_DISK_ELF  := build/disktest.elf
 USER_DOMCAP_SRC := user/domcaptest.c     # DDR-1149: domain capabilities at submission
@@ -623,6 +625,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MPROT_ELF) build/mprotecttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLB_SRC) -o build/killblocktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLB_ELF) build/killblocktest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SIGSEM_SRC) -o build/sigsemtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SIGSEM_ELF) build/sigsemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DOMCAP_SRC) -o build/domcaptest.o
@@ -665,7 +669,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -4333,6 +4337,17 @@ smoke-killblock: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="$$(printf 'KILLBLOCK FAIL\nreaped=-')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[killblock] PASS — $$(grep -a PRADYOS_KILLBLOCK build/killblock.log | tail -1)"
+
+# DDR-1174 (C1.1): POSIX signal semantics. Every arm is an EXACT value the
+# kernel produced: mask (A), SIGKILL unmaskable (B), si_pid from the kernel's
+# send record (C), SIGCHLD status (D), EINTR == -4 exactly (E), SA_RESTART
+# restarting with the data (F). Mutants M1-M4 in DDR-1174 sec.3.
+smoke-sigsem: $(IMG) fat-image sfs-image
+	@rm -f build/sigsem.log
+	@SERIAL_LOG=build/sigsem.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=sigsem \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SIGSEM_A pre=0 post=1\nPRADYOS_SIGSEM_B kill=0\nPRADYOS_SIGSEM_C sipid_ok=1 runs=1\nPRADYOS_SIGSEM_D chld_ok=1 status=42 code=1\nPRADYOS_SIGSEM_E rc=-4 runs=1\nPRADYOS_SIGSEM_F rc=2 data=1 runs=1\nPRADYOS_SIGSEM_DONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[sigsem] PASS"
 
 smoke-actiondel: $(IMG) fat-image sfs-image
 	@rm -f build/actiondel.log

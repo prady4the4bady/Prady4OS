@@ -6715,3 +6715,5 @@ This implements operator decisions 1–3 (PR #17 comment 5845610518).
 
 - DDR-1170 per-task budgets (time/bytes/actions), NSI 107 SYS_SPAWN_TASK, AR_BUDGET_KILL=29, gate smoke-taskbudget (shard 7 strict), M1-M4 each failing its own arm. Kernel 7d429743e211a591, 1,503,626 B. Token budget not claimed (not kernel-observable).
 - DDR-1171 rollback on rejection: TASK_FLAG_ROLLBACK, per-TCB create log (1 page, 16 entries), refusals for every effect that cannot be undone, replay in sched_exit on rejection, AR_ROLLBACK=30, gate smoke-rollback (shard 1 strict) with an rb-ctl control; mutants M1-M5. Finding recorded, not fixed: sys_open never enforces the access mode, so every FD_VFS fd is writable. kernel.bin 1,515,914 B.
+
+- DDR-1174 (C1.1): POSIX signal semantics -- sigprocmask (NSI 108), sigaction2 with SA_SIGINFO/SA_RESTART (NSI 109), SIGCHLD with kernel-recorded si_pid/si_status, -EINTR from pipe/console/poll waits, delivery on syscall exit; atomic sig_pending; sys_kill now locked (DDR-1159 helper). Gate smoke-sigsem (shard 6, strict). wait4 not interruptible (stated).

@@ -10,6 +10,7 @@
 #include "fd.h"
 #include "regs.h"
 #include "spinlock.h"
+#include "signal.h"   /* DDR-1174: struct sig_rec */
 
 typedef void (*thread_fn)(void *);
 
@@ -88,6 +89,13 @@ struct tcb {
     uint64_t   sig_handlers[32]; /* ring-3 handler VA per signal (NSIG=32)    */
     struct regs sig_saved;       /* register snapshot restored by sigreturn   */
     int        sig_active;       /* 1 while a signal handler is running        */
+    /* DDR-1174. sig_pending and sig_mask are read by syscall_entry.asm; their
+     * offsets are pinned by _Static_assert in signal.c (TCB_SIG_* there). */
+    uint64_t   sig_mask;          /* blocked set; SIGKILL never set            */
+    uint64_t   sig_saved_mask;    /* mask restored by sigreturn                */
+    uint32_t   sig_flags[32];     /* SA_* per signal                           */
+    uint64_t   sig_amask[32];     /* sa_mask per signal                        */
+    struct sig_rec sig_info[32];  /* kernel-recorded sender (signal.h)       */
 
     /* Thread pointer (PROC-D, ADR-023). FS-base MSR value for this thread; set by
      * SYS_SET_TLS, restored into IA32_FS_BASE on every switch to this user thread.
