@@ -342,7 +342,7 @@ Claude must maintain this file at `/docs/build_status.md` and update it after ev
 | MANUAL MODE UI | 🔴 NOT BUILT | 7 | traditional desktop |
 | Mode Toggle Animation | 🔴 NOT BUILT | 7 | 300ms cubic-bezier |
 | Glassmorphism Renderer | 🔴 NOT BUILT | 7 | blur + transparency |
-| Quantum Abstraction Layer | 🔴 NOT BUILT | 8 | future |
+| Quantum Abstraction Layer | ⛔ WITHDRAWN (CLAUDE.md §PHASE 3) | 8 | not planned |
 | Intel x86_64 Variant | 🔴 NOT BUILT | all | AVX-512, CET |
 | AMD x86_64 Variant | 🔴 NOT BUILT | all | SME, RDPRU |
 | ARM64 Variant | 🔴 NOT BUILT | all | SVE2, MTE |
@@ -356,9 +356,9 @@ Status legend: 🔴 NOT BUILT | 🟡 IN PROGRESS | 🟢 COMPLETE | ⚠️ BROKEN
 
 ---
 
-## ASI-APPROACHING AGENT DESIGN PRINCIPLES
+## AGENT DESIGN PRINCIPLES (formerly "ASI-approaching"; relabelled per docs/VISION.md §4 — agents are documented by what they measurably do)
 
-The 8 named agents are not chatbots. They are **persistent, stateful, goal-directed processes** that run continuously, accumulate knowledge, and self-improve within their domain. Here is how to make them approach ASI-level capability within their scope:
+The 8 named agents are not chatbots. They are **persistent, stateful, goal-directed processes** that run continuously, accumulate knowledge, and self-improve within their domain. Here is how to make them more capable within their scope:
 
 ### 1. Persistent Memory Architecture
 Each agent has three memory tiers:
@@ -403,6 +403,9 @@ IRIS + RUFLO together implement full computer use:
 ---
 
 ## QUANTUM COMPUTING INTEGRATION ROADMAP
+
+> **WITHDRAWN (operator decision, 2026-09-02, PR #17).** Quantum-hardware integration is not planned for any release. A remote QPU with seconds-to-minutes queue latency cannot improve a kernel that schedules in microseconds. See `CLAUDE.md` §PHASE 3. Post-quantum *cryptography* (ML-DSA) is a different thing, and it is shipped. This section is kept as a historical record only.
+
 
 This is Phase 8. Do not build this in early phases. Design the interface now so future code can plug in.
 

@@ -158,6 +158,21 @@ fat32mctest_elf:
     incbin "build/fat32mctest.elf"
 fat32mctest_elf_end:
 
+; DDR-990: two-CPU connect/close hammer — the positive proof of the DDR-987 fix
+; that the gate suite cannot supply at a ~1/20 base rate.
+global nethammer_elf
+global nethammer_elf_end
+nethammer_elf:
+    incbin "build/nethammer.elf"
+nethammer_elf_end:
+
+; DDR-991: PS/2 modifier / extended-key probe (Group E input foundation).
+global modkeystest_elf
+global modkeystest_elf_end
+modkeystest_elf:
+    incbin "build/modkeystest.elf"
+modkeystest_elf_end:
+
 ; DDR-866: ring-3 ftruncate probe (Group 3 item 20)
 global stackdemand_elf
 global stackdemand_elf_end
@@ -274,6 +289,84 @@ actiondagtest_elf:
     incbin "build/actiondagtest.elf"
 actiondagtest_elf_end:
 
+; DDR-1015: Section 3C ACTION_READ_FILE, end to end (submit -> verdict -> read).
+global actionreadtest_elf
+global actionreadtest_elf_end
+actionreadtest_elf:
+    incbin "build/actionreadtest.elf"
+actionreadtest_elf_end:
+
+; DDR-1016: Section 3C ACTION_DELETE_FILE -- the first FORCE-PENDING type, so its
+; gate asserts the opposite of the one above: the verdict stays PENDING and the
+; file survives.
+global actiondeltest_elf
+global actiondeltest_elf_end
+actiondeltest_elf:
+    incbin "build/actiondeltest.elf"
+actiondeltest_elf_end:
+
+; DDR-1031: SYS_MPROTECT (NSI 97) probe -- four arms, one forks so the child
+; takes the protection fault.
+global mprotecttest_elf
+global mprotecttest_elf_end
+mprotecttest_elf:
+    incbin "build/mprotecttest.elf"
+mprotecttest_elf_end:
+
+; DDR-1032: SYS_EXECVE argv/envp launcher. Its target /ARGTEST.ELF lives on the
+; FAT volume (execve resolves against the process root), not in this image.
+global argvtest_elf
+global argvtest_elf_end
+argvtest_elf:
+    incbin "build/argvtest.elf"
+argvtest_elf_end:
+
+; DDR-1033: ring-3 IPC door probe. Spawned TWICE -- granted and un-granted.
+global ipctest_elf
+global ipctest_elf_end
+ipctest_elf:
+    incbin "build/ipctest.elf"
+ipctest_elf_end:
+
+; DDR-1034: bounded experiment executor probe. Spawned TWICE -- the deny side
+; holds CAP_EXEC and lacks only is_exec, so neither check can mask the other.
+global exptest_elf
+global exptest_elf_end
+exptest_elf:
+    incbin "build/exptest.elf"
+exptest_elf_end:
+
+; DDR-1037: POSIX poll() probe.
+global polltest_elf
+global polltest_elf_end
+polltest_elf:
+    incbin "build/polltest.elf"
+polltest_elf_end:
+
+; DDR-1017: Section 3C ACTION_SPAWN_PROCESS -- force-pending like DELETE_FILE, but
+; the effect is asked of the kernel via wait4(WNOHANG) rather than the filesystem.
+global actionspawntest_elf
+global actionspawntest_elf_end
+actionspawntest_elf:
+    incbin "build/actionspawntest.elf"
+actionspawntest_elf_end:
+
+; DDR-1018: Section 3C ACTION_QUERY_MEMORY -- auto-approving (DDR-1015 shape),
+; executed through the CAP_MEMORY agent-memory NSI 82/83.
+global actionquerytest_elf
+global actionquerytest_elf_end
+actionquerytest_elf:
+    incbin "build/actionquerytest.elf"
+actionquerytest_elf_end:
+
+; DDR-1020: 3C PROPOSE_HYPOTHESIS (auto-approving) and EVOLVE_GENOME
+; (force-pending) in ONE probe, so the policy split is compared in one boot.
+global actionhypotest_elf
+global actionhypotest_elf_end
+actionhypotest_elf:
+    incbin "build/actionhypotest.elf"
+actionhypotest_elf_end:
+
 global coderewritetest_elf
 global coderewritetest_elf_end
 coderewritetest_elf:
@@ -303,6 +396,21 @@ sha256test_elf:
     incbin "build/sha256test.elf"
 sha256test_elf_end:
 
+; DDR-1052: FIPS 202 SHA-3/SHAKE known-answer probe. Keccak is the prerequisite
+; for ML-KEM and ML-DSA, both of which are built on SHAKE128/256.
+global shaketest_elf
+global shaketest_elf_end
+shaketest_elf:
+    incbin "build/shaketest.elf"
+shaketest_elf_end:
+
+; DDR-1054: FIPS 204 ML-DSA-44 keyGen, against NIST's own ACVP vectors.
+global mldsatest_elf
+global mldsatest_elf_end
+mldsatest_elf:
+    incbin "build/mldsatest.elf"
+mldsatest_elf_end:
+
 global sigpipetest_elf
 global sigpipetest_elf_end
 sigpipetest_elf:
@@ -314,6 +422,33 @@ global privacynettest_elf_end
 privacynettest_elf:
     incbin "build/privacynettest.elf"
 privacynettest_elf_end:
+global budgettest_elf
+global budgettest_elf_end
+budgettest_elf:
+    incbin "build/budgettest.elf"
+budgettest_elf_end:
+global rbtest_elf
+global rbtest_elf_end
+rbtest_elf:
+    incbin "build/rbtest.elf"
+rbtest_elf_end:
+
+; DDR-1141: SYS_DNS_RESOLVE probe, three phases (L / A / sovereign P)
+global dnstest1_elf
+global dnstest1_elf_end
+dnstest1_elf:
+    incbin "build/dnstest1.elf"
+dnstest1_elf_end:
+global dnstest2_elf
+global dnstest2_elf_end
+dnstest2_elf:
+    incbin "build/dnstest2.elf"
+dnstest2_elf_end:
+global dnstest3_elf
+global dnstest3_elf_end
+dnstest3_elf:
+    incbin "build/dnstest3.elf"
+dnstest3_elf_end:
 
 global sovegresstest_elf
 global sovegresstest_elf_end
@@ -364,6 +499,13 @@ killtest_elf:
     incbin "build/killtest.elf"
 killtest_elf_end:
 
+; DDR-1159 (Fix 3): SYS_KILL_AGENT gate probe (NSI 36 had no coverage).
+global killagenttest_elf
+global killagenttest_elf_end
+killagenttest_elf:
+    incbin "build/killagenttest.elf"
+killagenttest_elf_end:
+
 ; proc (DDR-756): SYS_SETNAME self-rename probe.
 global setnametest_elf
 global setnametest_elf_end
@@ -391,3 +533,46 @@ global bigwritetest_elf_end
 bigwritetest_elf:
     incbin "build/bigwritetest.elf"
 bigwritetest_elf_end:
+
+; exp (DDR-1083): Section 3C ACTION_RUN_EXPERIMENT, propose -> arbitrate -> obey.
+global actionexptest_elf
+global actionexptest_elf_end
+actionexptest_elf:
+    incbin "build/actionexptest.elf"
+actionexptest_elf_end:
+
+; ipc (DDR-1084): Section 3C ACTION_SEND_IPC, propose -> arbitrate -> obey.
+global actionipctest_elf
+global actionipctest_elf_end
+actionipctest_elf:
+    incbin "build/actionipctest.elf"
+actionipctest_elf_end:
+
+; killblock (DDR-1090): is SIGKILL deliverable to a thread blocked in an
+; unbounded kernel wait? Both signal_deliver sites are guarded by cs&3 == 3.
+global killblocktest_elf
+global killblocktest_elf_end
+killblocktest_elf:
+    incbin "build/killblocktest.elf"
+killblocktest_elf_end:
+global sigsemtest_elf
+global sigsemtest_elf_end
+sigsemtest_elf:
+    incbin "build/sigsemtest.elf"
+sigsemtest_elf_end:
+
+global disktest_elf
+global disktest_elf_end
+disktest_elf:
+    incbin "build/disktest.elf"
+disktest_elf_end:
+global domcaptest_elf
+global domcaptest_elf_end
+domcaptest_elf:
+    incbin "build/domcaptest.elf"
+domcaptest_elf_end:
+global ledgertest_elf
+global ledgertest_elf_end
+ledgertest_elf:
+    incbin "build/ledgertest.elf"
+ledgertest_elf_end:

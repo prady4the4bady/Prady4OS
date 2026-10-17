@@ -156,6 +156,8 @@ void sfs_register(void);
 /* Format `bd` as an empty SFS volume (superblock + empty root leaf + root-dir
  * inode). In-kernel mkfs; conceptually CAP_FS_SFS_ADMIN. 0 on success. */
 int  sfs_format(struct blk_device *bd);
+/* DDR-1143 §10.2: write barriers SFS has issued since boot (all mounts). */
+uint64_t sfs_barrier_count(void);
 
 /* Journal self-test (slice 4g, destructive — reformats `bd`). Exercises three
  * crash scenarios end-to-end with real mount/unmount cycles and returns a

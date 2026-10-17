@@ -13,6 +13,11 @@
 #include "sched.h"
 #include "console.h"
 #include "irq.h"      /* g_ticks */
+#include "pmm.h"      /* DDR-1171: rollback log page */
+#include "fd.h"
+#include "vfs.h"
+#include "string.h"
+#include "errno.h"
 
 static void log_pid(const char *tag, uint32_t pid) {
     kputs(tag);
@@ -72,4 +77,126 @@ int aether_rate_check(struct tcb *t) {
         return -1;
     }
     return 0;
+}
+
+/* --- DDR-1170: per-task budgets ------------------------------------------- *
+ * A budget runs OUT, unlike the rate window above. Exhaustion kills the task:
+ * a budget that only refused would leave the agent free to ignore the error
+ * and retry, i.e. a rate limiter again (DDR-1170 §4). The kill is audited
+ * exactly once, with the axis and the amount charged in action_id. */
+void aether_budget_arm(struct tcb *t, const struct task_budget *b) {
+    t->bud_max_ticks   = b->max_ticks;
+    t->bud_max_bytes   = b->max_bytes;
+    t->bud_max_actions = b->max_actions;
+    t->bud_start   = g_ticks;
+    t->bud_bytes   = 0;
+    t->bud_actions = 0;
+    t->bud_tripped = 0;
+}
+
+static void budget_trip(struct tcb *t, unsigned kind, uint64_t used) {
+    if (t->bud_tripped)
+        return;
+    t->bud_tripped = 1;
+    aether_drop_pid(t->pid);
+    aether_audit(t->pid, 0, ((uint64_t)kind << 56) | (used & 0x00FFFFFFFFFFFFFFull),
+                 AR_BUDGET_KILL);
+    log_pid("AGENT_BUDGET_KILLED PID=", t->pid);
+}
+
+int aether_budget_charge(struct tcb *t, unsigned kind, uint64_t amount) {
+    if (t->bud_tripped)
+        return -1;
+    if (kind == TASK_BUDGET_BYTES && t->bud_max_bytes) {
+        t->bud_bytes += amount;
+        if (t->bud_bytes > t->bud_max_bytes) {
+            budget_trip(t, kind, t->bud_bytes);
+            return -1;
+        }
+    } else if (kind == TASK_BUDGET_ACTIONS && t->bud_max_actions) {
+        t->bud_actions += (uint32_t)amount;
+        if (t->bud_actions > t->bud_max_actions) {
+            budget_trip(t, kind, t->bud_actions);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int aether_budget_time(struct tcb *t) {
+    if (t->bud_tripped)
+        return -1;
+    if (t->bud_max_ticks && g_ticks - t->bud_start > t->bud_max_ticks) {
+        budget_trip(t, TASK_BUDGET_TIME, g_ticks - t->bud_start);
+        return -1;
+    }
+    return 0;
+}
+
+/* --- DDR-1171: rollback on rejection --------------------------------------- *
+ * One PMM page of RB_MAX entries. Low physical memory is identity-mapped, so
+ * the page is addressed directly (sys_io.c's staging buffer does the same).
+ * Only CREATES are logged: every other effect a rollback task could have on a
+ * file is refused at its syscall, so creates are the whole of what can need
+ * undoing (DDR-1171 §2). */
+struct rb_entry { char path[RB_PATH]; uint64_t _r; };
+_Static_assert(sizeof(struct rb_entry) * RB_MAX <= 4096, "rollback log fits one page");
+
+void *aether_rb_page(void) {
+    uint64_t pg = pmm_alloc_page();
+    if (!pg)
+        return 0;
+    memset((void *)(uintptr_t)pg, 0, 4096);
+    return (void *)(uintptr_t)pg;
+}
+
+void aether_rb_free(struct tcb *t) {
+    pmm_free_page((uint64_t)(uintptr_t)t->rb_log);
+    t->rb_log = 0;
+    t->rb_n = 0;
+}
+
+static unsigned rb_len(const char *s) { unsigned n = 0; while (s[n]) n++; return n; }
+
+int aether_rb_room(struct tcb *t, const char *path) {
+    if (rb_len(path) >= RB_PATH)
+        return -ENAMETOOLONG;
+    if (t->rb_n >= RB_MAX)
+        return -ENOSPC;              /* an untracked create is worse than a refused one */
+    return 0;
+}
+
+void aether_rb_created(struct tcb *t, const char *path) {
+    struct rb_entry *e = (struct rb_entry *)t->rb_log + t->rb_n;
+    unsigned n = rb_len(path);
+    memcpy(e->path, path, n + 1);    /* aether_rb_room bounded n < RB_PATH */
+    t->rb_n++;
+}
+
+int aether_rb_is_created(struct tcb *t, const char *path) {
+    const struct rb_entry *e = (const struct rb_entry *)t->rb_log;
+    for (uint32_t i = 0; i < t->rb_n; i++)
+        if (strcmp(e[i].path, path) == 0)
+            return 1;
+    return 0;
+}
+
+void aether_rb_replay(struct tcb *t) {
+    /* Close the task's files first so no open handle outlives its unlink. */
+    for (int i = 0; i < FD_MAX; i++)
+        if (fd_get(t, i))
+            fd_free(t, i);
+    const struct rb_entry *e = (const struct rb_entry *)t->rb_log;
+    uint64_t undone = 0, failed = 0;
+    for (uint32_t i = t->rb_n; i-- > 0; ) {      /* reverse order */
+        if (vfs_unlink(t->fs_cap, t->root_mnt, e[i].path) == 0)
+            undone++;
+        else
+            failed++;
+    }
+    t->rb_n = 0;
+    t->rb_pending = 0;
+    aether_audit(t->pid, 0, (undone << 32) | (failed & 0xFFFFFFFFull), AR_ROLLBACK);
+    kputs("AGENT_ROLLED_BACK PID="); kputdec(t->pid);
+    kputs(" undone="); kputdec(undone); kputs(" failed="); kputdec(failed); kputs("\r\n");
 }

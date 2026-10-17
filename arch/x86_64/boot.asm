@@ -17,6 +17,10 @@ KSTACK_SIZE equ 16384
 
 section .text.boot
 global kernel_entry
+; DDR-1106: the BSP idle thread (idle0) runs on this stack and never leaves it,
+; so init_idle can record its base in the tcb and DDR-1105's next->rsp check
+; stops skipping idle0. Exported for that one reader; nothing else takes it.
+global kernel_stack
 extern kmain
 extern __bss_start
 extern __bss_end
@@ -43,6 +47,11 @@ kernel_entry:
 
 section .bss
 align 16
+; KSTACK_SIZE is 16384 and MUST stay equal to sched.c's STACK_SIZE: DDR-1106
+; hands `kernel_stack` to init_idle as idle0's kstack_base, and the window check
+; in schedule_locked derives the top as base + STACK_SIZE with no per-thread
+; size field. A _Static_assert cannot see a NASM equ, so the pairing is stated
+; at both ends and checked by reading (DDR-1106 sec.2).
 kernel_stack:
     resb KSTACK_SIZE
 kernel_stack_top:

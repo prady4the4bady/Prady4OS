@@ -28,9 +28,14 @@ MAKEFILE="$ROOT/Makefile"
 #   smoke-selftest ) DDR-785 self-tests the boot harness itself. It must run
 #                    BEFORE any gate that trusts the harness, so it is a setup
 #                    step in EVERY shard rather than one gate in one shard.
-#   smoke-sfs-btree-smp4 ) DDR-824 OPEN-10 reproduction surface. Registering it
-#                    now would make CI red on a known-open defect and block
-#                    unrelated promotions. Register it when OPEN-10 is fixed.
+#   (smoke-sfs-btree-smp4 was excluded here as DDR-824's OPEN-10 reproduction
+#    surface, "register it when OPEN-10 is fixed". OPEN-10 IS fixed -- DDR-964
+#    named the mechanism, a create-then-init race making cap_ok return -EPERM,
+#    and mutation-checked the fix at 8 sites -- so DDR-1061 REGISTERED it on
+#    shard 5. Note what the condition asked for: a fixed MECHANISM, not a
+#    bounded rate. DDR-1061 §2 costs out the rate campaign and shows it cannot
+#    settle the question at any N reachable here -- n=44 merely REACHES the
+#    historical 6.7%, at 182 s a run, foreground-only. Do not run it.)
 #   smoke-agent-live ) developer-run only: needs a live Ollama endpoint on the
 #                      host, so CI stays in test mode (ADR-027)
 # smoke-fs-liveness: DDR-777/BUG-1 diagnostic. It REBUILDS the kernel with
@@ -42,7 +47,7 @@ MAKEFILE="$ROOT/Makefile"
 # other gate COUNT times via tools/ci/campaign.sh. It boots nothing of its own,
 # so assigning it to a shard would make CI run an argument-less campaign that
 # immediately errors out. Excluded as infrastructure, not as a skipped test.
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-sfs-btree-smp4 smoke-fs-liveness smoke-fast"
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-fs-liveness smoke-fast"
 
 excluded() {
     local t="$1" e

@@ -77,3 +77,59 @@ struct boot_info {
     uint32_t acpi_rsdp;
     struct e820_entry e820[];  /* e820_count entries follow the header */
 } __attribute__((packed));
+
+/* ---- GOP framebuffer handoff (DDR-1142) --------------------------------
+ *
+ * The UEFI loader reads the firmware's already-set Graphics Output Protocol
+ * mode and writes it here, in the LAST 32 bytes of the boot_info page (the
+ * pinned header cannot grow: it ends in a flexible e820[]). The loader's E820
+ * cap is 167 so the entries can never reach it. stage2 zeroes it, so the BIOS
+ * path reads magic 0 = "no framebuffer".
+ *
+ * Accepted only when magic AND check match -- a block nobody wrote does not
+ * become a framebuffer at a random physical address. */
+#define BOOT_FB_PHYS  0x4FE0ull
+#define BOOT_FB_MAGIC 0x31424647u     /* 'GFB1' */
+#define BOOT_FB_FMT_BGRX 1u           /* PixelBlueGreenRedReserved8BitPerColor */
+
+struct boot_fb {
+    uint32_t magic;
+    uint32_t format;          /* EFI_GRAPHICS_PIXEL_FORMAT, as the firmware reported */
+    uint64_t base;            /* physical */
+    uint32_t width, height;
+    uint32_t stride_px;       /* PixelsPerScanLine, NOT width */
+    uint32_t check;           /* xor of every other 32-bit word */
+} __attribute__((packed));
+_Static_assert(sizeof(struct boot_fb) == 32, "boot_fb must stay 32 bytes");
+
+/* ---- pristine kernel image handoff (DDR-1143 §10.4) --------------------
+ *
+ * The installer must write the kernel's own bytes, and once kmain runs nothing
+ * in memory IS those bytes (.data is live, .bss sits over the load window). So
+ * each loader keeps a second copy at KIMG_PHYS, taken BEFORE it jumps, and
+ * describes it here -- 32 bytes directly below boot_fb, because the header
+ * cannot grow (it ends in e820[]). stage2 caps E820 at 32 entries (0x320) and
+ * the UEFI loader at 165 (32 + 165*24 = 0xF98), both clear of 0xFC0.
+ *
+ * KIMG_PHYS is below PMM_MIN_PHYS (16 MiB) so the PMM never hands it out, and
+ * a separate 2 MiB page from the DDR-1046 alias of the running image.
+ *
+ * `size` is the READ WINDOW on the BIOS path (stage2 never learns the file
+ * size) and the EXACT FILE SIZE on the UEFI path. The kernel's own image length
+ * comes from __data_end, and the block is accepted only when it covers that. */
+#define BOOT_KIMG_PHYS   0x4FC0ull
+#define BOOT_KIMG_MAGIC  0x474D494Bu     /* 'KIMG' */
+#define KIMG_PHYS        0x800000ull     /* 8 MiB */
+#define KIMG_WINDOW      0x180000ull     /* 48 x 32 KiB, stage2's read window */
+#define KIMG_SRC_BIOS    1u
+#define KIMG_SRC_UEFI    2u
+
+struct boot_kimg {
+    uint32_t magic;
+    uint32_t source;          /* KIMG_SRC_BIOS / KIMG_SRC_UEFI */
+    uint64_t base;            /* physical */
+    uint64_t size;            /* bytes copied (window on BIOS, file on UEFI) */
+    uint32_t reserved;
+    uint32_t check;           /* xor of every other 32-bit word */
+} __attribute__((packed));
+_Static_assert(sizeof(struct boot_kimg) == 32, "boot_kimg must stay 32 bytes");

@@ -54,6 +54,14 @@ static int rd_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32
     return 0;
 }
 
+/* DDR-1143 §10.2: memory has no volatile cache between an acknowledged write
+ * and its backing store, so a flush has nothing to do. An explicit op rather
+ * than NULL, because blk_flush() reports NULL as -ENOSYS. */
+static int rd_flush(struct blk_device *bd) {
+    (void)bd;
+    return 0;
+}
+
 /* Allocate, ZERO and register. Returns the new device index, or -1.
  *
  * Zeroing is mandatory, not tidiness: vfs_mount probes for FAT32/SFS/ext4
@@ -77,6 +85,7 @@ int ramdisk_init(unsigned order) {
     memset((void *)(uintptr_t)r->base, 0, (unsigned long)r->bytes);
 
     r->bd.name             = "ramdisk";
+    r->bd.flush            = rd_flush;
     r->bd.capacity_sectors = r->bytes / SECTOR;
     r->bd.read             = rd_read;
     r->bd.write            = rd_write;

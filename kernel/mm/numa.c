@@ -154,13 +154,14 @@ next:
         g_topo.node_count = 1;
     g_topo.valid = 1;
 
-    kputs("[numa] nodes=");
-    kputdec(g_topo.node_count);
-    kputs(" ranges=");
-    kputdec(g_topo.range_count);
-    kputs(" rejected=");
-    kputdec(g_topo.rejected);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[numa] nodes=");
+      kline_d(&k, g_topo.node_count);
+      kline_s(&k, " ranges=");
+      kline_d(&k, g_topo.range_count);
+      kline_s(&k, " rejected=");
+      kline_d(&k, g_topo.rejected);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
 
     /* Per-node totals. This is the assertion with teeth in smoke-numa: a parser
      * that finds SRAT but mis-walks the sub-tables still reports a node count,
@@ -170,11 +171,12 @@ next:
         for (uint32_t i = 0; i < g_topo.range_count; i++)
             if (g_topo.range[i].node == n)
                 bytes += g_topo.range[i].len;
-        kputs("[numa] node");
-        kputdec(n);
-        kputs(" mem=");
-        kputdec(bytes >> 20);
-        kputs("MiB\r\n");
+        { kline k; kline_init(&k);                   /* DDR-1055 */
+          kline_s(&k, "[numa] node");
+          kline_d(&k, n);
+          kline_s(&k, " mem=");
+          kline_d(&k, bytes >> 20);
+          kline_s(&k, "MiB\r\n"); kline_emit(&k); }
     }
 }
 

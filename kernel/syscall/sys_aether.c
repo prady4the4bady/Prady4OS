@@ -12,6 +12,8 @@
 #include "errno.h"
 #include "console.h"
 #include "aether.h"
+#include "ipc.h"        /* DDR-1033: the ring-3 IPC door */
+#include "cap.h"
 
 #define SIGKILL 9
 
@@ -36,21 +38,11 @@ static struct agent_slot g_agent[AGENT_ROSTER_N];
  * dispatches (scheduler switch-ins; >= 1 for any thread that ever ran). */
 struct agent_metric { uint32_t pid, state; uint64_t mem_used, actions, run_ticks, dispatches; };
 
-/* Walk the ready ring for a live user thread with this pid. */
-static struct tcb *tcb_by_pid(uint32_t pid) {
-    struct tcb *t = current_thread;
-    do {
-        if (t->is_user && t->pid == pid &&
-            t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
-            return t;
-        t = t->next;
-    } while (t != current_thread);
-    return 0;
-}
-
-/* DDR-730: a slot is active iff it was spawned AND its agent is still alive. */
+/* DDR-730: a slot is active iff it was spawned AND its agent is still alive.
+ * DDR-1159: the liveness probe is sched_user_pid_alive — the ring walk now runs
+ * under g_sched_lock (was tcb_by_pid, an unlocked walk racing the reaper relink). */
 static int roster_active(int i) {
-    return g_agent[i].used && tcb_by_pid(g_agent[i].pid) != 0;
+    return g_agent[i].used && sched_user_pid_alive(g_agent[i].pid);
 }
 
 /* DDR-730: the roster slot a submitting agent occupies, or -1. */
@@ -63,7 +55,7 @@ static int slot_of_pid(uint32_t pid) {
 
 /* The kernel-side agent spawner is provided by kmain (it closes over the SFS
  * mount + cap + embedded agent ELF). Returns the new pid, or <0. */
-typedef long (*aether_spawn_fn)(const char *task);
+typedef long (*aether_spawn_fn)(const char *task, const struct task_budget *b);
 static aether_spawn_fn g_spawn_hook;
 void aether_set_spawn_hook(aether_spawn_fn fn) { g_spawn_hook = fn; }
 
@@ -106,7 +98,45 @@ static long sys_set_mode(long a1, long a2, long a3, long a4, long a5, long a6) {
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;                          /* no self-escalation (D6) */
     }
-    return aether_set_mode((unsigned)a1);
+    uint64_t prev = aether_get_mode();
+    int r = aether_set_mode((unsigned)a1);
+    if (r == 0)                                 /* DDR-1147 sec.1.5: record the change */
+        aether_audit(current_thread->pid, 0,
+                     (prev << 32) | (uint32_t)(unsigned long)a1, AR_MODE_SET);
+    return r;
+}
+
+/* DDR-1149: the domain capabilities (operator decision 6). Kernel-only grants
+ * in the exec_grant / ipc_grant shape -- never reachable from ring 3. */
+static void domain_grant(struct tcb *t, uint32_t *flag, cap_t *h,
+                         uint64_t res_id, uint32_t right) {
+    if (!t || !t->caps)
+        return;
+    *flag = 1;
+    *h = cap_create(t->caps, RES_DOMAIN, res_id, right);
+}
+void ocr_grant(struct tcb *t)    { if (t) domain_grant(t, &t->is_ocr,    &t->ocr_cap,    DOMAIN_RES_OCR,    CAP_OCR); }
+void scene_grant(struct tcb *t)  { if (t) domain_grant(t, &t->is_scene,  &t->scene_cap,  DOMAIN_RES_SCENE,  CAP_SCENE); }
+void browse_grant(struct tcb *t) { if (t) domain_grant(t, &t->is_browse, &t->browse_cap, DOMAIN_RES_BROWSE, CAP_NET_BROWSE); }
+
+/* DDR-1149: may this thread PROPOSE `type`? 1 for every non-domain type. For a
+ * domain type BOTH layers must hold -- the flag (the door) AND cap_authorize on
+ * that domain's handle -- and the gate tests them apart (DDR-1033's lesson: two
+ * checks in series each mask the other's absence). Called from BOTH submit
+ * paths; a refusal is audited with the TYPE, which is a different fact from the
+ * is_agent refusal's type 0 (DDR-801: the record states the decision made). */
+static int domain_cap_ok(struct tcb *t, uint32_t type) {
+    uint32_t flag; cap_t h; uint64_t res; uint32_t right;
+    switch (type) {
+    case ACTION_PARSE_DOCUMENT: flag = t->is_ocr;    h = t->ocr_cap;    res = DOMAIN_RES_OCR;    right = CAP_OCR;        break;
+    case ACTION_QUERY_SCENE:    flag = t->is_scene;  h = t->scene_cap;  res = DOMAIN_RES_SCENE;  right = CAP_SCENE;      break;
+    case ACTION_BROWSE_WEB:     flag = t->is_browse; h = t->browse_cap; res = DOMAIN_RES_BROWSE; right = CAP_NET_BROWSE; break;
+    default: return 1;
+    }
+    if (flag && cap_authorize(t->caps, h, RES_DOMAIN, res, right))
+        return 1;
+    aether_audit(t->pid, type, 0, AR_CAP_DENIED);
+    return 0;
 }
 
 static long sys_submit_action(long a1, long a2, long a3, long a4, long a5, long a6) {
@@ -117,6 +147,12 @@ static long sys_submit_action(long a1, long a2, long a3, long a4, long a5, long 
         return -EPERM;
     }
     uint32_t type = (uint32_t)a1;
+    if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
+        return -EPERM;
+    /* DDR-1170: counted before the action is queued, so the action past the
+     * limit is never proposed. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_ACTIONS, 1) < 0)
+        sched_exit(137);                           /* never returns */
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
@@ -141,6 +177,12 @@ static long sys_submit_child_action(long a1, long a2, long a3, long a4, long a5,
         return -EPERM;
     }
     uint32_t type = (uint32_t)a1;
+    if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
+        return -EPERM;
+    /* DDR-1170: counted before the action is queued, so the action past the
+     * limit is never proposed. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_ACTIONS, 1) < 0)
+        sched_exit(137);                           /* never returns */
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
@@ -177,7 +219,13 @@ static long sys_reject_action(long a1, long a2, long a3, long a4, long a5, long 
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
     }
-    return aether_approve((uint64_t)a1, 0);
+    /* DDR-1171: owner looked up BEFORE the verdict (the entry stays, so either
+     * order works; before is the order that cannot depend on that). */
+    uint32_t owner = aether_action_owner((uint64_t)a1);
+    long rc = aether_approve((uint64_t)a1, 0);
+    if (rc == 0 && owner)
+        (void)sched_rollback_pid(owner);   /* -ESRCH = not a live rollback task */
+    return rc;
 }
 
 static long sys_spawn_agent(long a1, long a2, long a3, long a4, long a5, long a6) {
@@ -194,13 +242,42 @@ static long sys_spawn_agent(long a1, long a2, long a3, long a4, long a5, long a6
     if (a2 && copyinstr(task, (const void __user *)a2, sizeof task, 0) < 0)
         return -EFAULT;
     if (!a2) task[0] = 0;
-    long pid = g_spawn_hook(task);
+    long pid = g_spawn_hook(task, 0);         /* DDR-1170: unbudgeted, as before */
     if (pid >= 0 && a3 >= 0 && a3 < AGENT_ROSTER_N) {  /* DDR-707/730: claim the slot */
         g_agent[a3].used = 1;
         g_agent[a3].pid = (uint32_t)pid;
         g_agent[a3].actions = 0;
         g_agent[a3].run_ticks = 0;      /* DDR-735: reset accounting for the new agent */
         g_agent[a3].dispatches = 0;
+    }
+    return pid;
+}
+
+/* DDR-1170 (NSI 107): spawn an agent task with a kernel-enforced budget.
+ * Sovereign only: an agent granting its own child a fresh budget would escape
+ * its own (nesting is recorded in the DDR as a follow-up, not built). The budget
+ * is applied by the hook while the thread is still BLOCKED. */
+static long sys_spawn_task(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    if (!current_thread->is_sovereign) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    if (!g_spawn_hook)
+        return -ENOSYS;
+    char task[64];
+    struct task_budget b;
+    if (!a1 || copyinstr(task, (const void __user *)a1, sizeof task, 0) < 0)
+        return -EFAULT;
+    if (!a3 || copyin(&b, (const void __user *)a3, sizeof b) < 0)
+        return -EFAULT;
+    long pid = g_spawn_hook(task, &b);
+    if (pid >= 0 && a2 >= 0 && a2 < AGENT_ROSTER_N) {
+        g_agent[a2].used = 1;
+        g_agent[a2].pid = (uint32_t)pid;
+        g_agent[a2].actions = 0;
+        g_agent[a2].run_ticks = 0;
+        g_agent[a2].dispatches = 0;
     }
     return pid;
 }
@@ -229,13 +306,16 @@ static long sys_agent_metrics(long a1, long a2, long a3, long a4, long a5, long 
     if (max > AGENT_ROSTER_N) max = AGENT_ROSTER_N;
     struct agent_metric buf[AGENT_ROSTER_N];
     for (int i = 0; i < max; i++) {
-        struct tcb *t = g_agent[i].used ? tcb_by_pid(g_agent[i].pid) : 0;
-        if (t) {
-            g_agent[i].run_ticks  = t->run_ticks;    /* DDR-735: refresh + RETAIN so the */
-            g_agent[i].dispatches = t->dispatches;   /* counts survive the agent's exit  */
+        /* DDR-1159: snapshot the live agent's fields under g_sched_lock in one
+         * shot (was tcb_by_pid + reads after an unlocked walk — an SMP UAF). */
+        struct sched_user_snap snap;
+        int live = g_agent[i].used && sched_user_pid_snap(g_agent[i].pid, &snap) == 0;
+        if (live) {
+            g_agent[i].run_ticks  = snap.run_ticks;    /* DDR-735: refresh + RETAIN so the */
+            g_agent[i].dispatches = snap.dispatches;   /* counts survive the agent's exit  */
             buf[i].pid        = g_agent[i].pid;
-            buf[i].state      = (t->state == THREAD_BLOCKED) ? 2u : 1u;   /* 1=run/ready 2=blocked */
-            buf[i].mem_used   = t->mem_used;
+            buf[i].state      = (snap.state == THREAD_BLOCKED) ? 2u : 1u; /* 1=run/ready 2=blocked */
+            buf[i].mem_used   = snap.mem_used;
             buf[i].actions    = g_agent[i].actions;
         } else {
             /* dead (or never-spawned) slot: state 0, but a spawned slot's IDENTITY
@@ -273,23 +353,60 @@ static long sys_kill_agent(long a1, long a2, long a3, long a4, long a5, long a6)
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign && !current_thread->is_agent)
         return -EPERM;
-    struct tcb *t = tcb_by_pid((uint32_t)a1);
-    if (!t)
-        return -ESRCH;
-    t->sig_pending |= (1ull << SIGKILL);        /* terminated on its next IRQ return */
-    return 0;
+    /* DDR-1090: terminated on its next RING-3 IRQ return, or at its next
+     * yield() if it is sitting in an unbounded kernel wait. This comment used
+     * to say "on its next IRQ return", which is what a reader would want from
+     * the sovereign's kill switch on a runaway agent and is not what the
+     * delivery guard (`cs & 3 == 3`) provides on its own.
+     * DDR-1159: find + set sig_pending under g_sched_lock in one shot (was
+     * tcb_by_pid then a WRITE after an unlocked walk — the sharpest of the F2
+     * SMP UAFs, a |= into possibly-freed memory). -ESRCH if no live user pid. */
+    return sched_signal_user_pid((uint32_t)a1, SIGKILL);
 }
 
+/* DDR-1098: a3 is an OPTIONAL in/out cursor, so the newest 64 stops being the
+ * only window ring 3 can ever address.
+ *
+ * a3 == 0 takes the original path VERBATIM, and that is safe by measurement
+ * rather than by hope: all four shipped call sites pass a literal 0 into RDX
+ * (user/include/pradyos.h, egressaudittest.c, privacynettest.c,
+ * sovegresstest.c), and each freestanding stub binds "d"(a3), so the register is
+ * written rather than left to chance. The DDR-1032 shape.
+ *
+ * THE RETURNED SEQUENCE DOES NOT GO IN a4, although a4 is likewise ignored.
+ * a4 is R10 (arch/x86_64/syscall_entry.asm:105) and the three-argument stubs
+ * those callers use stop at "d"(a3) -- R10 holds whatever the compiler last left
+ * there, so treating it as a user pointer would copyout to a garbage address on
+ * every existing call. The probes that DO pass four arguments each declare their
+ * own nsi4 with an explicit r10 binding, which is exactly the evidence that a
+ * three-argument stub does not. Hence one pointer carrying both directions.
+ *
+ * The 64 clamp is UNCHANGED (DDR-1095 recorded why not to turn it into -E2BIG:
+ * three green gates ask for more and it is a correct bound on a kernel stack
+ * buffer). With a cursor it stops being a ceiling and becomes a page size. */
 static long sys_read_audit(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
-    (void)a3; (void)a4;
+    (void)a4;
     int max = (int)a2;
     if (max <= 0) return 0;
     if (max > 64) max = 64;                      /* bounded kernel staging buffer */
     struct aether_audit_entry_pub buf[64];
-    int n = aether_audit_read(buf, max);
+
+    struct aether_audit_cursor cur;
+    struct aether_audit_cursor *curp = NULL;
+    if (a3) {
+        if (copyin(&cur, (const void __user *)a3, sizeof cur) < 0)
+            return -EFAULT;
+        curp = &cur;
+    }
+
+    int n = aether_audit_read_since(buf, max, curp);
     if (n > 0 && copyout((void __user *)a1, buf,
                          (size_t)n * sizeof buf[0]) < 0)
+        return -EFAULT;
+    /* The cursor is written back even when n == 0: "nothing new, and here is
+     * where the next record will land" is an answer a poller needs. */
+    if (curp && copyout((void __user *)a3, &cur, sizeof cur) < 0)
         return -EFAULT;
     return n;
 }
@@ -299,6 +416,78 @@ static long sys_set_mem_limit(long a1, long a2, long a3, long a4, long a5, long 
     (void)a3; (void)a4;
     long r = aether_set_mem_limit((uint32_t)a1, (uint64_t)a2);
     return r < 0 ? -EPERM : 0;                   /* lower-only; no self-escalation */
+}
+
+/* ---- DDR-1033: the ring-3 IPC door -------------------------------------
+ *
+ * ipc_send/ipc_recv were complete and capability-gated long before this; what
+ * was missing (DDR-1017) was a ring-3 door and an ADDRESS. The address is the
+ * roster slot index -- the same identifier SYS_AGENT_ROSTER and
+ * SYS_AGENT_METRICS already use, so no new namespace is invented.
+ *
+ * Every slot endpoint shares ONE res_id, so the capability grants "IPC at all",
+ * not "send to slot 3 but not slot 5". That is a real check -- a process with no
+ * handle is refused by cap_authorize -- but it is COARSE, and it is recorded as
+ * such in DDR-1033 §3 rather than dressed up as per-slot policy. Per-slot res_ids
+ * are the extension if policy is ever wanted. */
+#define IPC_AGENT_RES_ID 0x49504341ull        /* "IPCA" */
+
+static struct ipc_endpoint g_agent_ep[AGENT_ROSTER_N];
+static int g_agent_ep_ready;
+
+static void agent_ep_init_once(void) {
+    if (g_agent_ep_ready)
+        return;
+    for (int i = 0; i < AGENT_ROSTER_N; i++)
+        ipc_endpoint_init(&g_agent_ep[i], IPC_AGENT_RES_ID);
+    g_agent_ep_ready = 1;
+}
+
+/* Grant the door. Called by the kernel at spawn -- never reachable from ring 3,
+ * which is what keeps this out of self-escalation territory. */
+void ipc_grant(struct tcb *t) {
+    if (!t || !t->caps)
+        return;
+    agent_ep_init_once();
+    t->is_ipc  = 1;
+    t->ipc_cap = cap_create(t->caps, RES_IPC, IPC_AGENT_RES_ID,
+                            CAP_IPC_SEND | CAP_IPC_RECV);
+}
+
+static long sys_ipc_send(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (!t || !t->is_ipc)
+        return -EPERM;                        /* the door itself */
+    if (a1 < 0 || a1 >= AGENT_ROSTER_N)
+        return -EINVAL;
+    uint64_t msg[IPC_MSG_WORDS];
+    if (copyin(msg, (const void __user *)(uintptr_t)a2, sizeof msg) < 0)
+        return -EFAULT;
+    agent_ep_init_once();
+    if (ipc_send(t->caps, t->ipc_cap, &g_agent_ep[a1], msg) != 0)
+        return -EPERM;                        /* the capability */
+    return 0;
+}
+
+static long sys_ipc_recv(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    (void)a3;                                  /* timeout: ipc_recv's own bound (DDR-961) */
+    struct tcb *t = current_thread;
+    if (!t || !t->is_ipc)
+        return -EPERM;
+    if (a1 < 0 || a1 >= AGENT_ROSTER_N)
+        return -EINVAL;
+    agent_ep_init_once();
+    uint64_t out[IPC_MSG_WORDS];
+    int rc = ipc_recv(t->caps, t->ipc_cap, &g_agent_ep[a1], out);
+    if (rc == -ETIMEDOUT)
+        return -ETIMEDOUT;
+    if (rc != 0)
+        return -EPERM;
+    if (copyout((void __user *)(uintptr_t)a2, out, sizeof out) < 0)
+        return -EFAULT;
+    return 0;
 }
 
 void sys_aether_register(void) {
@@ -311,9 +500,12 @@ void sys_aether_register(void) {
     syscall_register(SYS_APPROVE_ACTION, sys_approve_action);
     syscall_register(SYS_REJECT_ACTION,  sys_reject_action);
     syscall_register(SYS_SPAWN_AGENT,    sys_spawn_agent);
+    syscall_register(SYS_SPAWN_TASK,     sys_spawn_task);     /* DDR-1170 */
     syscall_register(SYS_KILL_AGENT,     sys_kill_agent);
     syscall_register(SYS_READ_AUDIT,     sys_read_audit);
     syscall_register(SYS_SET_MEM_LIMIT,  sys_set_mem_limit);
     syscall_register(SYS_AGENT_ROSTER,   sys_agent_roster);   /* DDR-707 */
+    syscall_register(SYS_IPC_SEND,       sys_ipc_send);      /* DDR-1033 */
+    syscall_register(SYS_IPC_RECV,       sys_ipc_recv);      /* DDR-1033 */
     syscall_register(SYS_AGENT_METRICS,  sys_agent_metrics);  /* DDR-730 */
 }

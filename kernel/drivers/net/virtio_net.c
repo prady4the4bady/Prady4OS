@@ -46,10 +46,12 @@ static int g_up;
  * invoked from the IRQ with the Ethernet frame (virtio_net_hdr already stripped). */
 static void (*g_rx_cb)(const uint8_t *frame, uint32_t len);
 
-static void put_hex2(uint8_t b) {
+/* DDR-1055: appends into a kline instead of two kputc calls, so the MAC cannot
+ * be split across console acquisitions. Case is unchanged (lowercase). */
+static void put_hex2(kline *k, uint8_t b) {
     static const char hx[] = "0123456789abcdef";
-    kputc(hx[(b >> 4) & 0xF]);
-    kputc(hx[b & 0xF]);
+    kline_c(k, hx[(b >> 4) & 0xF]);
+    kline_c(k, hx[b & 0xF]);
 }
 
 /* Shared INTx handler: ack the ISR, reap completed TX (returning each buffer to
@@ -189,15 +191,16 @@ void virtio_net_init(uint8_t bus, uint8_t dev, uint8_t func) {
     virtio_pci_notify(&g_dev, &g_rx, 0);            /* advertise RX availability */
     g_up = 1;
 
-    kputs("[net] virtio-net up MAC=");
-    for (int i = 0; i < 6; i++) { if (i) kputc(':'); put_hex2(g_mac[i]); }
-    if (msix) {
-        kputs(" msix vec=54");
-    } else {
-        kputs(" IRQ ");
-        kputdec(g_dev.irq);
-    }
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[net] virtio-net up MAC=");
+      for (int i = 0; i < 6; i++) { if (i) kline_c(&k, ':'); put_hex2(&k, g_mac[i]); }
+      if (msix) {
+          kline_s(&k, " msix vec=54");
+      } else {
+          kline_s(&k, " IRQ ");
+          kline_d(&k, g_dev.irq);
+      }
+      kline_s(&k, "\r\n"); kline_emit(&k); }
 
     kputs(net_tx_test() == 0 ? "[net] virtio-net TX OK\r\n"
                              : "[net] virtio-net TX timeout\r\n");

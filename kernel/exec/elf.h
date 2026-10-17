@@ -19,14 +19,40 @@ struct tcb;
 int elf_load(const void *image, uint64_t image_len, const char *name,
              struct tcb **out);
 
+/* DDR-1085: elf_load with a marshalled argv/envp frame (struct exec_args, below).
+ * `elf_load` is exactly this with args == 0, so every one of its call sites keeps
+ * the DDR-1032 "behave exactly as before" frame -- argc=1, argv[0]=name. Declared
+ * after struct exec_args at the bottom of this header. */
+
 /* Loader core shared by elf_load and sys_execve: validate the image, build a
  * fresh W^X address space, map its PT_LOAD segments, and lay out the 8 MiB user
  * stack with the SysV ABI initial frame — WITHOUT creating a thread. On success
  * returns ELF_OK and fills *out_as (a CR3), *out_entry (e_entry), and *out_rsp
  * (initial user RSP); on failure returns a negative elf_err with any partial
  * address space already torn down. */
+/* DDR-1032: marshalled argv/envp, FLATTENED. `blob` holds argc+envc
+ * NUL-terminated strings back to back -- the first `argc` are argv, the rest
+ * envp. Flat rather than a pointer array because the strings must be copied out
+ * of the CALLER's address space before execve replaces it, and a kernel-side
+ * array of pointers into a kernel blob is the same information with an extra
+ * indirection to get wrong. NULL (or argc==0) means "behave exactly as before":
+ * argc=1, argv[0]=the path. Every existing caller passes NULL. */
+#define EXEC_ARG_MAX_ENTRIES 32
+#define EXEC_ARG_MAX_BYTES 1024
+struct exec_args {
+    const char *blob;
+    uint32_t    blob_len;
+    uint16_t    argc;
+    uint16_t    envc;
+};
+
 int elf_build_image(const void *image, uint64_t image_len, const char *name,
+                    const struct exec_args *args,
                     uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp);
+
+/* DDR-1085: see the note beside elf_load. args == 0 is identical to elf_load. */
+int elf_load_args(const void *image, uint64_t image_len, const char *name,
+                  const struct exec_args *args, struct tcb **out);
 
 enum elf_err {
     ELF_OK            =  0,

@@ -17,31 +17,21 @@
 #include "uaccess.h"      /* copyout */
 #include "syscall.h"      /* syscall_register, SYS_WAIT4 */
 #include "errno.h"
+#include "console.h"   /* DDR-1001 sentinel */
 #include <stddef.h>
 
 #define WNOHANG 1
 
-/* Scan the ring for the caller's children. `pid` is a specific pid or -1 (any).
- * Returns a zombie child if one matches (ready to reap); else NULL. `*has_live`
- * is set to a still-running matched child (for the blocking path) and `*any` to
- * whether any matching child exists at all (else -ECHILD). */
-static struct tcb *find_zombie_child(struct tcb *parent, int pid,
-                                     struct tcb **has_live, int *any) {
-    *has_live = NULL;
-    *any = 0;
-    struct tcb *t = parent->next;
-    while (t != parent) {
-        if (t->parent_pid == parent->pid && (pid == -1 || (int)t->pid == pid)) {
-            *any = 1;
-            if (t->state == THREAD_ZOMBIE)
-                return t;
-            if (!*has_live)
-                *has_live = t;
-        }
-        t = t->next;
-    }
-    return NULL;
-}
+/* DDR-1001: the local, UNLOCKED `find_zombie_child` that used to live here is
+ * gone. It walked the all-threads ring taking no lock while sched_ring_unlink
+ * relinked it under g_sched_lock — a lock only excludes participants who take
+ * it — so the walk could follow a stale `->next` and never terminate, with IF
+ * clear from SYSCALL entry so nothing could preempt it. Measured as
+ * `[apfreeze] … bt=…,sys_wait4+0x4f,…` on smoke-smpuser (DDR-1001).
+ *
+ * The walk now lives in sched.c as `sched_find_child`, where g_sched_lock is
+ * reachable, following the pattern `sched_snapshot` already set for this exact
+ * traversal. */
 
 static long sys_wait4(long a_pid, long a_status, long a_options, long a4, long a5, long a6) {
     (void)a5; (void)a6;
@@ -55,7 +45,17 @@ static long sys_wait4(long a_pid, long a_status, long a_options, long a4, long a
     /* Find a reapable zombie; block (or EAGAIN) while children remain but none
      * has exited. IF is clear here, so a child can only run (and exit) once we
      * sched_block — no lost-wakeup window. */
-    while (!(child = find_zombie_child(self, pid, &live, &any))) {
+    int ringbad = 0;
+    while (!(child = sched_find_child(self, pid, &live, &any, &ringbad))) {
+        if (ringbad) {
+            /* Should never happen: under g_sched_lock the ring is consistent.
+             * If it is not, say so and return rather than spin — a bounded,
+             * attributable failure beats a CPU that cannot be interrupted. */
+            kputs("[ringwalk] wait4 ring inconsistent pid=");
+            kputdec(self->pid);
+            kputs("\n");
+            return -ECHILD;
+        }
         if (!any)
             return -ECHILD;            /* no matching children at all */
         if (options & WNOHANG)

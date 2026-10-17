@@ -33,6 +33,39 @@ struct boot_info {
 _Static_assert(sizeof(struct e820_entry) == 24, "e820 entry must stay 24 bytes");
 _Static_assert(sizeof(struct boot_info) == 32,  "boot_info header must stay 32 bytes");
 
+/* DDR-1142: the GOP framebuffer handoff, mirror of struct boot_fb
+ * (kernel/boot_info.h). It sits in the LAST 32 bytes of the boot_info page,
+ * which is why the E820 cap below is 167 and not 169: 32 + 167*24 = 0xFC8,
+ * clear of 0xFE0. `check` lets the kernel reject a block this loader did not
+ * write -- the BIOS path zeroes it, and zero never validates. */
+#define BOOT_FB_PHYS   0x4FE0ull
+#define BOOT_FB_MAGIC  0x31424647u          /* 'GFB1' */
+#define E820_CAP       165u          /* DDR-1143 §10.4: was 167; boot_kimg sits at 0xFC0 */
+struct boot_fb {
+    uint32_t magic, format;
+    uint64_t base;
+    uint32_t width, height, stride_px, check;
+};
+_Static_assert(sizeof(struct boot_fb) == 32, "boot_fb must stay 32 bytes");
+_Static_assert(32 + E820_CAP * 24 <= 0xFC0, "E820 entries would reach boot_kimg");
+
+/* DDR-1143 §10.4: the pristine kernel copy, mirror of struct boot_kimg
+ * (kernel/boot_info.h), 32 bytes directly below boot_fb. The copy is taken
+ * from 0x400000 right after the file read -- before the kernel has run, so
+ * .data is still the file's .data. `size` is the exact file size here; the
+ * kernel refuses the block unless it equals its own linker length. */
+#define BOOT_KIMG_PHYS  0x4FC0ull
+#define BOOT_KIMG_MAGIC 0x474D494Bu         /* 'KIMG' */
+#define KIMG_PMM_FLOOR  0x1000000ull       /* kernel PMM_MIN_PHYS: never allocated */
+#define KIMG_SRC_UEFI   2u
+struct boot_kimg {
+    uint32_t magic, source;
+    uint64_t base, size;
+    uint32_t reserved, check;
+};
+_Static_assert(sizeof(struct boot_kimg) == 32, "boot_kimg must stay 32 bytes");
+static struct boot_kimg g_kimg;             /* magic 0 until the copy exists */
+
 static EFI_SYSTEM_TABLE *ST;
 
 static void print(CHAR16 *s) {
@@ -135,6 +168,33 @@ static void load_kernel(EFI_BOOT_SERVICES *bs, EFI_HANDLE image) {
     uint64_t got = size;
     if (f->read(f, &got, (void *)KERNEL_LMA) != EFI_SUCCESS || got != size)
         die(u"short read");
+
+    /* DDR-1143 §10.4: keep a byte copy of what was just read, BELOW the
+     * kernel's 16 MiB PMM floor. That bound is load-bearing: fill_boot_info
+     * reports EfiLoaderData as USABLE, so a copy above 16 MiB would be handed
+     * out by the PMM. A fixed 0x800000 (stage2's choice) is NOT used here --
+     * measured, OVMF owns it ("cannot claim 0x800000"). If no room exists the
+     * copy is skipped and the boot continues: the kernel reports the block
+     * absent and the installer refuses, which beats not booting at all. */
+    uint64_t kat = KIMG_PMM_FLOOR - 1;
+    if (bs->allocate_pages(AllocateMaxAddress, EfiLoaderData, pages, &kat) != EFI_SUCCESS) {
+        print(u"[uefi] kimg: no room below 16 MiB, copy skipped\r\n");
+        f->close(f);
+        root->close(root);
+        return;
+    }
+    const volatile uint8_t *ks = (const volatile uint8_t *)KERNEL_LMA;
+    volatile uint8_t *kd = (volatile uint8_t *)kat;
+    for (uint64_t i = 0; i < size; i++)
+        kd[i] = ks[i];
+    g_kimg.magic    = BOOT_KIMG_MAGIC;
+    g_kimg.source   = KIMG_SRC_UEFI;
+    g_kimg.base     = kat;
+    g_kimg.size     = size;
+    g_kimg.reserved = 0;
+    g_kimg.check    = g_kimg.magic ^ g_kimg.source ^ (uint32_t)g_kimg.base ^
+                      (uint32_t)(g_kimg.base >> 32) ^ (uint32_t)g_kimg.size ^
+                      (uint32_t)(g_kimg.size >> 32) ^ g_kimg.reserved;
     f->close(f);
     root->close(root);
 }
@@ -238,9 +298,11 @@ static uint32_t fill_boot_info(EFI_MEMORY_DESCRIPTOR *map, uint64_t map_size,
         }
 
         /* boot_info lives at 0x4000 and the page ends at 0x5000: 32-byte header
-         * plus 24 bytes an entry leaves room for 169. Overflowing it would
-         * scribble past the page; truncating would lose RAM silently. Refuse. */
-        if (n >= 169)
+         * plus 24 bytes an entry left room for 169. DDR-1142 took the last 32
+         * bytes for boot_fb, so the cap is 167. Overflowing it would scribble
+         * over the framebuffer handoff; truncating would lose RAM silently.
+         * Refuse. */
+        if (n >= E820_CAP)
             die(u"memory map exceeds boot_info capacity");
 
         bi->e820[n].base = base;
@@ -253,6 +315,46 @@ static uint32_t fill_boot_info(EFI_MEMORY_DESCRIPTOR *map, uint64_t map_size,
     return n;
 }
 
+/* ---- GOP framebuffer (DDR-1142) ----------------------------------------
+ * Read the mode the firmware ALREADY set on the console-out handle; never call
+ * SetMode. Must run before ExitBootServices (the protocol is a boot service)
+ * and is done ONCE, before the GetMemoryMap/ExitBootServices retry loop, so no
+ * firmware call sits between fetching the map key and using it.
+ *
+ * The format is recorded as reported and NOT filtered here: the kernel decides
+ * what it can draw, and a refused format should still be visible in its log. */
+static struct boot_fb g_fb;
+
+static void query_gop(EFI_BOOT_SERVICES *bs) {
+    g_fb.magic = 0;
+    EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+    if (!ST->console_out_handle ||
+        bs->handle_protocol(ST->console_out_handle, &gop_guid, (void **)&gop) != EFI_SUCCESS ||
+        !gop || !gop->mode || !gop->mode->info) {
+        print(u"[uefi] gop none\r\n");
+        return;
+    }
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mi = gop->mode->info;
+    g_fb.format    = mi->pixel_format;
+    g_fb.base      = gop->mode->frame_buffer_base;
+    g_fb.width     = mi->horizontal_resolution;
+    g_fb.height    = mi->vertical_resolution;
+    g_fb.stride_px = mi->pixels_per_scan_line;
+    g_fb.magic     = BOOT_FB_MAGIC;
+    g_fb.check     = g_fb.magic ^ g_fb.format ^ (uint32_t)g_fb.base ^
+                     (uint32_t)(g_fb.base >> 32) ^ g_fb.width ^ g_fb.height ^
+                     g_fb.stride_px;
+    print(u"[uefi] gop found\r\n");
+}
+
+static void write_boot_fb(void) {
+    struct boot_fb *dst = (struct boot_fb *)BOOT_FB_PHYS;
+    *dst = g_fb;                              /* magic 0 => "no framebuffer" */
+    struct boot_kimg *kdst = (struct boot_kimg *)BOOT_KIMG_PHYS;
+    *kdst = g_kimg;                           /* DDR-1143 §10.4 */
+}
+
 /* ---- entry -------------------------------------------------------------- */
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     ST = st;
@@ -261,6 +363,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     print(u"[uefi] PRADYOS loader\r\n");
     load_kernel(bs, image);
     uint64_t cr3 = build_page_tables(bs);
+    query_gop(bs);                           /* DDR-1142: before the map loop */
     print(u"[uefi] handoff\r\n");
 
     /* GetMemoryMap invalidates its own key on every allocation, including the
@@ -282,6 +385,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             continue;
         }
         fill_boot_info(map, map_size, desc_size);
+        write_boot_fb();
         if (bs->exit_boot_services(image, key) == EFI_SUCCESS)
             goto exited;
         bs->free_pool(map);                          /* stale key — refetch */

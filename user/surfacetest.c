@@ -20,7 +20,10 @@
 
 #define SYS_TIME              72     /* DDR-749: (struct rtc_time*) -> 0 | -EFAULT */
 
-struct surf_event { unsigned short type, arg0, arg1; };   /* type 1 = RESIZE_REQ */
+/* 1 = RESIZE_REQ (DDR-718), 2 = SCROLL (DDR-725), 3 = COMPOSITED (DDR-911),
+ * 4 = CLOSE (DDR-998). */
+struct surf_event { unsigned short type, arg0, arg1; };
+#define SURF_EV_CLOSE 4
 
 /* Mirror of kernel struct rtc_time (rtc.h) — DDR-749. */
 struct rtc_time {
@@ -29,9 +32,26 @@ struct rtc_time {
 };
 
 /* DDR-911: how long C stays clickable after the compositor first composites it.
- * smoke-wmclose's injector lands its click in about a second; smoke-winops has a
- * 90s budget to observe the shrink, so four seconds satisfies both. */
-#define GRACE_SECS 4
+ *
+ * DDR-1028 RAISES THIS 4 -> 12, on a measurement DDR-911 did not have. Its "the
+ * injector lands its click in about a second" was wrong in a way nothing could
+ * see: the injector waited on PRADYOS_AMBIANCE_OK, which is printed BEFORE the
+ * compositor's loop and says nothing about the pointer being serviced, and the
+ * compositor does not read the pointer for a long time after it. Measured on
+ * smoke-wmclose: ambiance at t=5500 with mpoll STILL 0 at t=6000, first poll at
+ * t=6500 -- so C's whole four seconds elapsed before any click could arrive, and
+ * the gate reported "close box click did not close" about a window that no
+ * longer existed. That is the same failure DDR-911's own comment below describes
+ * ("49 correct clicks hit a surface that had already gone"), returning because
+ * the number was tuned against a sentinel that does not mean what it looks like.
+ *
+ * The gate now waits on PRADYOS_INPUT_READY (DDR-1028), which is printed from
+ * inside the branch that just polled the pointer and therefore cannot be true
+ * early. That alone left a coin flip: the injector's first click and C's 4 s
+ * expiry landed in the same instant. 12 covers the measured worst case -- a
+ * PASSING run needs 8 press edges at ~1.2 s per injector round, so ~10 s -- and
+ * still leaves smoke-winops (TIMEOUT_S=90) room to observe the shrink. */
+#define GRACE_SECS 12
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -107,12 +127,36 @@ int main(void) {
     }
 
     int closed = 0;
+    int a_closed = 0;               /* DDR-998: A honoured its close request */
     long grace_start = -1;          /* DDR-911: wall-clock start of C's grace */
     for (;;) {
-        long ka = nsi(SYS_SURFACE_GETKEY, a, 0, 0);
-        if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", a, (char)ka); fflush(stdout); }
+        /* DDR-998: A is the COURTEOUS owner — it drains SURF_EV_CLOSE, flushes
+         * state (stood in for by the SAVED line), and closes itself. B is the
+         * DISCOURTEOUS one: its handler below dequeues events but acts only on
+         * types 1 and 2, so a type 4 there is dropped on the floor and the
+         * compositor must force it. Two owners, two halves of the protocol,
+         * one boot. */
+        if (!a_closed) {
+            struct surf_event aev;
+            aev.type = 0;
+            if (nsi(SYS_SURFACE_GETEV, a, (long)&aev, 0) == 0 &&
+                aev.type == SURF_EV_CLOSE) {
+                printf("PRADYOS_SURF_SAVED id=%ld\n", a);
+                fflush(stdout);         /* flush BEFORE the close: the ordering
+                                         * of these two lines is the assertion */
+                nsi(SYS_SURFACE_CLOSE, a, 0, 0);
+                a_closed = 1;
+                continue;               /* A's fd is gone; skip its key poll */
+            }
+        }
+        long ka = a_closed ? -1 : nsi(SYS_SURFACE_GETKEY, a, 0, 0);
+        /* DDR-995: `code=` added because a literal tab is not greppable, and
+         * arm B asserts that a PLAIN Tab now reaches the focused application —
+         * which DDR-720's unconditional hotkey made impossible. smoke-focus
+         * matches only the bare PRADYOS_FOCUS_KEY prefix, so it is unaffected. */
+        if (ka >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c code=%ld\n", a, (char)ka, ka); fflush(stdout); }
         long kb = nsi(SYS_SURFACE_GETKEY, b, 0, 0);
-        if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c\n", b, (char)kb); fflush(stdout); }
+        if (kb >= 0) { printf("PRADYOS_FOCUS_KEY id=%ld ch=%c code=%ld\n", b, (char)kb, kb); fflush(stdout); }
 
         /* DDR-718: honor compositor resize requests on B — resize, re-map,
          * redraw at the new size, re-commit at the same position. */

@@ -1,8 +1,9 @@
 /* kernel/syscall/sys_fb.c — ring-3 framebuffer surface NSI (Layer 7, DDR-702).
  *
- * Three handlers over the VirtIO-GPU framebuffer (ADR-028): query geometry, map
- * the front buffer into the caller for direct drawing, and present it. With no
- * GPU up, all three return -ENODEV so a ring-3 program degrades cleanly.
+ * Three handlers over the active display (DDR-1142: virtio-gpu, ADR-028, or
+ * the UEFI GOP framebuffer the loader handed over): query geometry, map the
+ * front buffer into the caller for direct drawing, and present it. With no
+ * display up, all three return -ENODEV so a ring-3 program degrades cleanly.
  */
 #include "syscall.h"
 #include "sched.h"
@@ -10,7 +11,7 @@
 #include "errno.h"
 #include "vmm.h"
 #include "pmm.h"          /* PAGE_SIZE */
-#include "virtio_gpu.h"
+#include "display.h"    /* DDR-1142: virtio-gpu or GOP */
 
 #define FB_USER_VA 0x8700000000ull   /* below the mmap arena (VMM_MMAP_BASE) */
 
@@ -20,7 +21,7 @@ static long sys_fb_info(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     uint32_t w, h, stride;
-    if (!virtio_gpu_fb(&w, &h, &stride))
+    if (!display_fb(&w, &h, &stride, 0))
         return -ENODEV;
     struct fb_info fi = { w, h, stride, 32 };
     if (copyout((void __user *)a1, &fi, sizeof fi) < 0)
@@ -32,12 +33,18 @@ static long sys_fb_map(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     uint32_t w, h, stride;
-    uint8_t *fb = virtio_gpu_fb(&w, &h, &stride);
-    if (!fb)
+    uint64_t fb_phys;
+    if (!display_fb(&w, &h, &stride, &fb_phys))
         return -ENODEV;
     struct tcb *t = current_thread;
-    uint64_t phys = (uint64_t)(uintptr_t)fb;      /* identity-mapped: phys == kvirt */
-    uint64_t bytes = (uint64_t)stride * h;
+    /* DDR-1142: map the PHYSICAL address the backend reports. This used to be
+     * `phys = (uintptr_t)fb` ("identity-mapped: phys == kvirt"), true of
+     * virtio-gpu's PMM buffer and false of a GOP framebuffer, which is device
+     * memory outside the identity map. A GOP base need not be page-aligned, so
+     * the in-page offset is carried into the returned VA. */
+    uint64_t off  = fb_phys & (PAGE_SIZE - 1);
+    uint64_t phys = fb_phys - off;
+    uint64_t bytes = off + (uint64_t)stride * h;
     uint64_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     /* DDR-729: PTE_SW_SHARED marks this a VIEW of the GPU-owned scanout frames, so
      * vmm_destroy_address_space (free_subtree) never frees them when a client that
@@ -48,15 +55,15 @@ static long sys_fb_map(long a1, long a2, long a3, long a4, long a5, long a6) {
                        phys + i * PAGE_SIZE, flags) != 0)
             return -ENOMEM;                       /* partial map: caller won't use it */
     }
-    return (long)FB_USER_VA;
+    return (long)(FB_USER_VA + off);
 }
 
 static long sys_fb_flush(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
-    if (!virtio_gpu_fb(0, 0, 0))
+    if (!display_fb(0, 0, 0, 0))
         return -ENODEV;
-    return (virtio_gpu_present() == 0) ? 0 : -EIO;
+    return (display_present() == 0) ? 0 : -EIO;
 }
 
 void sys_fb_register(void) {

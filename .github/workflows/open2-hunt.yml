@@ -1,0 +1,291 @@
+# DDR-1097 — OPEN-2 hunting job (operator approach #1, PR #17).
+#
+# THIS WORKFLOW IS DELIBERATELY OUTSIDE THE RELEASE PIPELINE.
+#   * No `push`, no `pull_request` trigger. It can never appear in the 3-green
+#     promotion criterion (CLAUDE.md NON-NEGOTIABLE 1), and a red run here
+#     blocks nothing.
+#   * It registers no `smoke-*` target, so `ci-shard-check` is untouched and the
+#     gate count stays 179.
+#   * IT FAILS WHEN IT FINDS SOMETHING. That is the opposite polarity from every
+#     other workflow in this repository and it is the whole point: a red run
+#     means the hunt caught a signal, the notification fires, and the capture is
+#     in the artifact. Do NOT "fix" it to pass on a hit.
+#
+# WHAT THIS IS NOT: the matrix below is NOT operator approach #2 (concurrent
+# parallel instances), which DDR-1096 §2.2 REFUSED for two independent reasons
+# that still hold — the race is between vCPUs INSIDE one guest, so N guests on
+# one host raise no intra-guest concurrency under TCG, and NON-NEGOTIABLE 12
+# forbids two QEMUs on one machine. Each lane here is a SEPARATE GitHub runner
+# with exactly ONE QEMU on it. The matrix buys throughput and hardware
+# diversity; it buys no concurrency, and reading it as a revival of the refused
+# approach would be wrong.
+#
+# The `schedule:` trigger IS operator approach #4 (wider time/hardware
+# sampling), which DDR-1096 §2.4 judged sound but with no local form: GitHub
+# allocates whatever hardware it allocates, invisibly, so spreading runs over
+# time is the only handle this project has on that variable.
+#
+# WHERE THIS RUNS, AND WHY THE TWO BRANCHES DIFFER — MEASURED, NOT ASSUMED.
+# GitHub reads the workflow FILE from the default branch (that is DDR-1117: a
+# `schedule`/`workflow_dispatch` workflow that lives anywhere else is unstartable
+# by any means). But the HARNESS this job runs lives on dev/phase1-seyp3n:
+# tools/ci/apt_prepare.sh, tools/ci/open2_hunt_campaign.sh, and the OPEN2_HUNT
+# build flag in the Makefile and kernel/proc/sched.c are ALL absent from
+# dev/phase1. So the file must be on one branch and the checkout must point at
+# the other.
+#
+# This is not a guess. Run 34779936087 — the first run this workflow ever had,
+# dispatched minutes after DDR-1117's fix landed — had ALL SIX LANES die in under
+# a second with, verbatim:
+#     bash: tools/ci/apt_prepare.sh: No such file or directory
+#     ##[error]Process completed with exit code 127
+# after checking out 73c3e711 (dev/phase1). Landing the file made the workflow
+# STARTABLE and left it UNRUNNABLE, and no check that opens this file could have
+# seen that either — only running it could. DDR-1117's own finding, one level in.
+#
+# When PR #17 eventually merges, dev/phase1 becomes self-sufficient and the `ref`
+# input can be set to dev/phase1. Until then the default below is load-bearing:
+# `schedule` fires supply no inputs, so the `||` fallback is what the weekly cron
+# actually uses.
+#
+# WHY THE CRON IS NOT PINNED TO A SHA, which the operator offered on PR #21 as the
+# first of two acceptable forms. A SHA written here is frozen at the moment it is
+# typed, and dev/phase1-seyp3n gains a commit on essentially every DDR -- so within
+# days the weekly hunt would be booting a tree nobody is working on, and would keep
+# reporting `clean` about it. That is the DDR-1043 / DDR-1117 class this project
+# has already paid for twice: an instrument pointed somewhere other than where its
+# reader assumes. Keeping it current would also mean editing THE DEFAULT BRANCH on
+# every DDR, which is not going to happen. And the single-SHA discipline the review
+# cites is about a DELIBERATE N-run campaign -- for which `workflow_dispatch`'s
+# `ref` input already accepts a full commit SHA, so that case is already served.
+# What the weekly cron is for is DDR-1096 §2.4's approach #4, wider time and
+# hardware sampling; pinning it would defeat its only stated purpose. So this takes
+# the operator's second form instead: every capture records the resolved tree SHA,
+# and runs can be segregated after the fact rather than aggregated wrongly. See the
+# Hunt step.
+#
+# NO FIX IS IMPLIED BY ANY OF THIS. NON-NEGOTIABLE 3 holds: no artefact has been
+# captured, no mechanism is named, and OPEN-2 has not moved.
+name: open2-hunt
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch to HUNT — the tree that carries the harness. NOT where this file lives. See the WHERE THIS RUNS note above.'
+        default: 'dev/phase1-seyp3n'
+      lanes:
+        description: 'Parallel runners (each runs ONE qemu)'
+        default: '6'
+      runs:
+        description: 'Boots per lane (each burns its full 180 s window by design, DDR-1043)'
+        default: '10'
+      hunt:
+        description: 'OPEN2_HUNT pause per node. 32 is the measured working point — DDR-1096 §4.2 found 128/512 starve the boot so the unlink churn the race REQUIRES never runs'
+        default: '32'
+  schedule:
+    # Approach #4. Weekly, off-peak, so successive hunts land on whatever
+    # hardware GitHub happens to allocate on different days.
+    - cron: '17 4 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  # The `lanes` input cannot index a matrix literal, so this job emits the lane
+  # array as JSON. Without it the input would be decoration -- a knob that reads
+  # as if it changes the run and does not.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      lanes: ${{ steps.gen.outputs.lanes }}
+    steps:
+      - id: gen
+        # Through env, not spliced: this is the SHARPEST of the five in this file,
+        # because the guard below is DOWNSTREAM of what it guards -- the value used
+        # to land inside single quotes and the `case` that rejects a non-number ran
+        # afterwards, so a value containing a quote closed the string before the
+        # check that exists to catch it ever executed.
+        env:
+          LANES: ${{ github.event.inputs.lanes || '6' }}
+        run: |
+          n="$LANES"
+          case "$n" in ''|*[!0-9]*) echo "::error::lanes must be a number"; exit 1;; esac
+          if [ "$n" -lt 1 ] || [ "$n" -gt 20 ]; then
+            echo "::error::lanes must be 1..20 (each is a runner with one qemu)"; exit 1
+          fi
+          echo "lanes=$(seq 0 $((n-1)) | paste -sd, - | sed 's/^/[/;s/$/]/')" >> "$GITHUB_OUTPUT"
+
+  hunt:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false        # one lane finding a signal must not cancel the others
+      matrix:
+        lane: ${{ fromJSON(needs.setup.outputs.lanes) }}
+    name: hunt (lane ${{ matrix.lane }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # DDR-1117 got the FILE onto the default branch; that is what makes this
+          # workflow startable. It is NOT what makes it runnable. The harness it
+          # invokes lives on the feature branch, so without this `ref:` the job
+          # checks out the default branch and dies before it does anything.
+          ref: ${{ github.event.inputs.ref || 'dev/phase1-seyp3n' }}
+          submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
+          # Operator instruction 2026-09-14 on PR #21 (CodeRabbit CWE-522, and
+          # zizmor's `artipacked`). checkout@v5 writes GITHUB_TOKEN into
+          # .git/config by DEFAULT, so every later step -- running code from a
+          # CALLER-SUPPLIED ref -- would inherit authenticated git for the life of
+          # the job. SAFE HERE BY MEASUREMENT, NOT BY ARGUMENT: no step in this
+          # job invokes git at all (grep for git fetch/push/clone/pull/submodule
+          # over the Makefile, tools/ci/open2_hunt_campaign.sh and
+          # tools/ci/apt_prepare.sh returns NOTHING). The checkout action's own
+          # fetch, submodules included, still authenticates; this flag governs
+          # only what is left behind afterwards. `git rev-parse HEAD` below is a
+          # purely local read and is unaffected.
+          persist-credentials: false
+
+      # Same package set as the ci.yml shard job, minus the ISO/UEFI tools this
+      # job never reaches. Kept deliberately close so no build step can lose a
+      # tool it quietly depended on (DDR-1045).
+      - name: Install toolchain
+        run: |
+          bash tools/ci/apt_prepare.sh \
+            clang lld llvm nasm make qemu-system-x86 \
+            dosfstools mtools e2fsprogs
+
+      - name: Build musl libc subset (PROC-D)
+        run: make musl
+
+      - name: Build lwIP core (NET-B)
+        run: make lwip
+
+      # THE LOAD-BEARING STEP. DDR-1096 §5.1 and DDR-1097 §5: KCFLAGS is NOT a
+      # prerequisite of $(KERNEL_BIN), so `make image OPEN2_HUNT=32` on a tree
+      # already built at the default SILENTLY RELINKS THE STALE OBJECT and
+      # produces a BIT-IDENTICAL kernel — measured in two environments. A hunt
+      # pointed at that binary runs a kernel with NO HARNESS IN IT and reports
+      # clean forever, with every hash check passing because the hash is stably
+      # wrong.
+      #
+      # And the cheap check is VACUOUS: both builds are 1,311,114 B, because the
+      # harness fits inside existing page padding. Asserting "the image changed"
+      # by SIZE passes on the stale binary. ONLY THE HASH DISCRIMINATES.
+      - name: Build default, then hunt, and PROVE the flag rebuilt
+        env:
+          HUNT: ${{ github.event.inputs.hunt || '32' }}
+        run: |
+          set -euo pipefail
+          make image >/dev/null
+          A="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
+          echo "default kernel = ${A:0:16}  ($(stat -c%s build/kernel.bin) B)"
+
+          touch kernel/proc/sched.c
+          make image OPEN2_HUNT="$HUNT" >/dev/null
+          B="$(sha256sum build/kernel.bin | cut -d' ' -f1)"
+          echo "hunt    kernel = ${B:0:16}  ($(stat -c%s build/kernel.bin) B)"
+
+          if [ "$A" = "$B" ]; then
+            echo "::error::OPEN2_HUNT did not rebuild the kernel (${A:0:16} == ${B:0:16})."
+            echo "::error::Every run of this hunt would have been a false clean. See DDR-1097 §5."
+            exit 1
+          fi
+          echo "rebuild proven: ${A:0:16} != ${B:0:16}"
+          echo "$B  build/kernel.bin" > build/hunt.sha256
+
+      # The guest must boot the same disk topology the local campaign did, or it
+      # is a different experiment (the DDR-1096 §4.3 trap: a reproduction on a
+      # kernel that cannot mount its filesystem is not attributable).
+      - name: Build the data disks
+        run: make fat-image sfs-image ext4-image >/dev/null
+
+      # The kernel must not be rebuilt by the disk-image targets either.
+      - name: Assert the campaign will pin the binary the previous step built
+        run: sha256sum -c build/hunt.sha256
+
+      - name: Hunt
+        id: hunt
+        env:
+          # Through env rather than spliced into the script body. Every
+          # caller-supplied value this file uses in a shell now arrives this way,
+          # so the template-injection class is closed here rather than narrowed.
+          # matrix.lane is included for uniformity even though the setup job has
+          # already proved it a number: a reader should not have to re-derive
+          # which of these happens to be safe.
+          REF_REQUESTED: ${{ github.event.inputs.ref || 'dev/phase1-seyp3n' }}
+          HUNT: ${{ github.event.inputs.hunt || '32' }}
+          RUNS: ${{ github.event.inputs.runs || '10' }}
+          LANE: ${{ matrix.lane }}
+        run: |
+          set -uo pipefail
+          # The campaign mkdir -p's this itself, but AFTER the pipeline below has
+          # already opened the tee target inside it.
+          mkdir -p build/gatelogs/open2hunt
+          #
+          # ATTRIBUTION -- operator instruction 2026-09-14 on PR #21 (Codex P2).
+          # A `schedule` fire supplies no inputs, so it checks out a MUTABLE branch
+          # NAME, and two weekly hunts can therefore boot different kernels while
+          # reporting under one workflow. The operator offered pinning a SHA here
+          # OR recording the resolved one in every capture; this takes the second,
+          # and the WHERE THIS RUNS note above says why pinning the cron would
+          # defeat its only stated purpose.
+          #
+          # `git rev-parse HEAD`, NOT `github.sha`, AND THAT IS MEASURED RATHER
+          # THAN ASSERTED: on a workflow_dispatch, github.sha is the SHA of the
+          # branch the WORKFLOW FILE came from, not the ref that was checked out.
+          # Run 35406350665 reports head_sha=5bac10b, the tip of dev/phase1, while
+          # the job it describes actually built dev/phase1-seyp3n at 6ab6f3c.
+          # Recording github.sha would name a commit holding NEITHER the harness
+          # NOR the kernel that was hunted, and would look entirely correct doing
+          # it -- the DDR-1092 shape, a field that reads as a confident answer.
+          #
+          # OPEN2_HUNT is recorded here for a different reason: the campaign
+          # CANNOT know it, being a BUILD-time flag baked into the pinned binary
+          # rather than something the script reads. The campaign itself adds
+          # kernel_pinned= (the binary's own hash) to its first and last line, so
+          # a capture read months later carries tree, flag and binary together --
+          # and per DDR-1097 §5 the BINARY is what finally discriminates, two
+          # builds differing only in flags having been identical in size.
+          echo "[job] built with OPEN2_HUNT=${HUNT} lane=${LANE} ref_requested=${REF_REQUESTED} tree_sha=$(git rev-parse HEAD)" \
+            | tee build/gatelogs/open2hunt/campaign.txt
+          bash tools/ci/open2_hunt_campaign.sh "$RUNS" \
+            | tee -a build/gatelogs/open2hunt/campaign.txt
+          rc=${PIPESTATUS[0]}
+          # rc=2 is the DDR-1060 §9 hash-change ABORT. Swallowing it would report
+          # a campaign that stopped early as a clean one.
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::campaign aborted rc=$rc (rc=2 = kernel.bin changed mid-campaign)"
+            exit 1
+          fi
+          if grep -qE 'signal_runs=[1-9]' build/gatelogs/open2hunt/campaign.txt; then
+            echo "::error::OPEN-2 HUNT SIGNAL — read the uploaded captures."
+            echo "::error::A [ringwalk] RECYCLED line is EVIDENCE THE WINDOW OPENED, not a"
+            echo "::error::reproduction of the freeze and not a mechanism (DDR-1097 §4)."
+            exit 1
+          fi
+          # DDR-1097 §7.2. The hunt pauses slow the boot, and a run that never
+          # reaches rqstress_proof never ran the create/exit churn the race
+          # requires -- it is a wide window with nothing to catch in it, and it
+          # reports `clean` while testing nothing. MEASURED 1 run in 3 locally.
+          # Some no-churn runs are tolerable and are NOT failed here; a lane with
+          # ZERO is reporting on an experiment that did not happen, and a silent
+          # false clean is the exact failure this whole job was hardened against.
+          if grep -qE 'churn_runs=0( |$)' build/gatelogs/open2hunt/campaign.txt; then
+            echo "::error::NO run in this lane reached rqstress -- the churn the race needs"
+            echo "::error::never ran, so 'clean' here is vacuous. Lower OPEN2_HUNT and re-run"
+            echo "::error::(DDR-1096 §4.2 measured 128/512 starve the boot outright)."
+            exit 1
+          fi
+
+      # Uploaded on a clean run too: a clean capture is what a later session
+      # reads to say what the boot was doing while it did not fire.
+      - name: Upload captures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: open2-hunt-lane-${{ matrix.lane }}
+          path: build/gatelogs/open2hunt
+          retention-days: 14
+          if-no-files-found: warn
