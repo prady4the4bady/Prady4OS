@@ -194,6 +194,14 @@ long aether_approve(uint64_t action_id, int approve) {
     return -ESRCH;
 }
 
+/* DDR-1171: the pid that proposed an action, so a rejection can find it. */
+uint32_t aether_action_owner(uint64_t action_id) {
+    if (!g_queue)
+        return 0;
+    struct aether_action_entry *e = entry_of(action_id);
+    return e ? e->agent_pid : 0;
+}
+
 /* Reclaim any slots an exited agent left behind (called from teardown). */
 void aether_drop_pid(uint32_t pid) {
     if (!g_queue)

@@ -207,6 +207,40 @@ int main(int argc, char **argv) {
         nsi(SYS_EXIT, 0, 0, 0);
     }
 
+    /* DDR-1171: rollback tasks, reached only through sovereign SYS_SPAWN_TASK.
+     * Both create /RBN<pid>.TXT and park a force-pending DELETE_FILE for the
+     * probe to reject. rb-work also tries the two effects a rollback task must
+     * be refused (unlink, a write to an existing file); rb-ctl does not, since
+     * as an ordinary task those would really destroy the probe's fixture. */
+    if (strcmp(task, "rb-work") == 0 || strcmp(task, "rb-ctl") == 0) {
+        int work = (task[3] == 'w');
+        long pid = nsi(2 /* SYS_GETPID */, 0, 0, 0);
+        char p[32] = "/RBN";
+        int k = 4; char d[12]; int nd = 0; long v = pid;
+        do { d[nd++] = (char)('0' + v % 10); v /= 10; } while (v);
+        while (nd) p[k++] = d[--nd];
+        p[k++] = '.'; p[k++] = 'T'; p[k++] = 'X'; p[k++] = 'T'; p[k] = 0;
+        long fd = nsi(SYS_OPEN, (long)p, 0x40 /* O_CREAT */ | 1, 0);
+        long cw = (fd >= 0) ? nsi(SYS_WRITE, fd, (long)"rollback-new", 12) : fd;
+        if (fd >= 0) nsi(SYS_CLOSE, fd, 0, 0);
+        long u = 0, ww = 0;
+        if (work) {
+            u = nsi(68 /* SYS_UNLINK */, (long)"/RBOLD.TXT", 0, 0);
+            long o = nsi(SYS_OPEN, (long)"/RBOLD.TXT", 1, 0);
+            ww = (o >= 0) ? nsi(SYS_WRITE, o, (long)"x", 1) : o;
+            if (o >= 0) nsi(SYS_CLOSE, o, 0, 0);
+        }
+        if (work)
+            printf("PRADYOS_RBTASK task=rb-work create=%ld unlink=%ld wexist=%ld\n", cw, u, ww);
+        else
+            printf("PRADYOS_RBTASK task=rb-ctl create=%ld\n", cw);
+        fflush(stdout);
+        static const char pl[] = "/RBOLD.TXT";
+        nsi(SYS_SUBMIT_ACTION, 6 /* ACTION_DELETE_FILE: force-pending */, (long)pl, sizeof pl);
+        volatile unsigned long spin = 0;
+        for (;;) spin++;                       /* ring 3, until rejected or out of time */
+    }
+
 #if !AETHER_TEST_MODE
     /* Live: prove end-to-end model inference over the proxy-socket NSI. */
     char text[512];

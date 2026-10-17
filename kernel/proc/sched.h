@@ -141,6 +141,9 @@ struct tcb {
     uint64_t   bud_start;       /* g_ticks when the budget was armed               */
     uint64_t   bud_bytes;       /* bytes charged so far                            */
     uint32_t   bud_actions;     /* actions charged so far                          */
+    void      *rb_log;          /* DDR-1171: rollback log page, NULL = not a rollback task */
+    uint32_t   rb_n;            /* DDR-1171: entries used in rb_log                */
+    uint32_t   rb_pending;      /* DDR-1171: rejected; replay in sched_exit        */
 
     /* SMP scheduling (ADR-031 / DDR-SMP-3c-cap-2a). Which CPU is running this
      * thread (-1 = none): schedule() picks only READY threads with on_cpu<0, so
@@ -323,6 +326,7 @@ struct sched_user_snap { uint64_t run_ticks, dispatches, mem_used; uint32_t stat
 int sched_user_pid_alive (uint32_t pid);
 int sched_user_pid_snap  (uint32_t pid, struct sched_user_snap *out);
 int sched_signal_user_pid(uint32_t pid, int sig);
+int sched_rollback_pid(uint32_t pid);   /* DDR-1171: mark + SIGKILL a live rollback task */
 int         sched_checkpoint_pid(uint32_t pid);                /* DDR-1157: set checkpointed=1 under g_sched_lock; 0 or -ESRCH */
 int         sched_resume_pid(uint32_t pid);                    /* DDR-1157: clear + conditional unblock under g_sched_lock; 0 or -ESRCH */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */

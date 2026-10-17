@@ -12,6 +12,7 @@
 #include "smp.h"               /* rq-3: smp_resched_one (directed wake IPI) */
 #include "irq.h"               /* ADR-032: g_ticks for the FS write-budget bucket */
 #include "signal.h"            /* DDR-1090: SIGKILL, honoured at the yield choke point */
+#include "aether.h"            /* DDR-1171: rollback log replay/free */
 
 /* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
  * reader -- init_idle, which records its base as idle0's kstack_base so
@@ -1190,6 +1191,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->bud_max_ticks = 0; t->bud_max_bytes = 0;    /* DDR-1170; NON-NEGOTIABLE 10 */
     t->bud_max_actions = 0; t->bud_tripped = 0;
     t->bud_start = 0; t->bud_bytes = 0; t->bud_actions = 0;
+    t->rb_log = 0; t->rb_n = 0; t->rb_pending = 0;  /* DDR-1171; NON-NEGOTIABLE 10 */
     t->sc_count = 0;               /* L6: syscall rate-limit window (agents only)         */
     t->sc_window_start = 0;
     memcpy(t->fpu_state, fpu_init_template, sizeof t->fpu_state);  /* 5d: clean FPU */
@@ -1394,6 +1396,8 @@ static void sched_free_tcb(struct tcb *t) {
     }
     for (int i = 0; i < FD_MAX; i++)
         fd_free(t, i);
+    if (t->rb_log)                      /* DDR-1171: the rollback log page */
+        aether_rb_free(t);
     if (t->caps)
         cap_table_destroy(t->caps);
     /* DDR-1106: `!t->is_idle` is LOAD-BEARING, not defensive. Since DDR-1106 an
@@ -2465,6 +2469,11 @@ void sched_exit(int status) {
      * a SYS_AGENT_METRICS read having landed during the agent's life. */
     void agent_metrics_reap(uint32_t pid, uint64_t run_ticks, uint64_t dispatches);
     if (current_thread->is_user) {
+        /* DDR-1171: a REJECTED rollback task undoes its filesystem effects here,
+         * in its own context (its cap + root mount) and at the one point it can
+         * no longer write, so the replay cannot race its own writes. */
+        if (current_thread->rb_pending && current_thread->rb_log)
+            aether_rb_replay(current_thread);
         surface_reap_pid(current_thread->pid);
         socket_reap_pid(current_thread->pid);
         agent_metrics_reap(current_thread->pid,
@@ -2615,6 +2624,22 @@ int sched_signal_user_pid(uint32_t pid, int sig) {
     int rc = -ESRCH;
     if (t) {
         t->sig_pending |= (1ull << sig);
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
+}
+
+/* DDR-1171: a rejection reaches its rollback task. Find + mark + SIGKILL under
+ * the same lock as sched_signal_user_pid (DDR-1159), and only for a task that
+ * carries a log: rejecting an ordinary agent's action kills nothing. */
+int sched_rollback_pid(uint32_t pid) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_user_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t && t->rb_log) {
+        t->rb_pending = 1;
+        t->sig_pending |= (1ull << SIGKILL);
         rc = 0;
     }
     irq_restore(fl);
