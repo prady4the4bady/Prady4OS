@@ -45,6 +45,7 @@
 #include "virtio_net.h"
 #include "aether.h"      /* DDR-1141: record the DHCP lease (ACTION_NET_DHCP) */
 #include "nvme.h"
+#include "xhci.h"
 #include "vfs.h"
 #include "fat32.h"
 #include "sfs.h"
@@ -463,6 +464,8 @@ extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT 
 extern const unsigned char mprotecttest_elf_end[];
 extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
 extern const unsigned char killblocktest_elf_end[];
+extern const unsigned char sigsemtest_elf[];          /* DDR-1174: signal semantics */
+extern const unsigned char sigsemtest_elf_end[];
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
 extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
@@ -492,6 +495,8 @@ extern const unsigned char spawndepthtest_elf[];      /* DDR-838: spawn-depth ca
 extern const unsigned char spawndepthtest_elf_end[];
 extern const unsigned char ckpttest_elf[];            /* DDR-837: checkpoint/resume */
 extern const unsigned char ckpttest_elf_end[];
+extern const unsigned char killagenttest_elf[];       /* DDR-1159: SYS_KILL_AGENT gate */
+extern const unsigned char killagenttest_elf_end[];
 extern const unsigned char agentmemtest_elf[];        /* DDR-836: agent memory */
 extern const unsigned char agentmemtest_elf_end[];
 extern const unsigned char vaulttest_elf[];           /* DDR-834: credential vault */
@@ -510,6 +515,10 @@ extern const unsigned char sigpipetest_elf[];         /* DDR-805: SIGPIPE probe 
 extern const unsigned char sigpipetest_elf_end[];
 extern const unsigned char privacynettest_elf[];      /* DDR-802: privacy netfilter */
 extern const unsigned char privacynettest_elf_end[];
+extern const unsigned char budgettest_elf[];          /* DDR-1170: per-task budgets */
+extern const unsigned char budgettest_elf_end[];
+extern const unsigned char rbtest_elf[];              /* DDR-1171: rollback on rejection */
+extern const unsigned char rbtest_elf_end[];
 extern const unsigned char dnstest1_elf[], dnstest1_elf_end[];   /* DDR-1141 */
 extern const unsigned char dnstest2_elf[], dnstest2_elf_end[];   /* DDR-1141 */
 extern const unsigned char dnstest3_elf[], dnstest3_elf_end[];   /* DDR-1141 */
@@ -533,7 +542,7 @@ extern const unsigned char sfsroottest_elf[];         /* fs: persistent SFS-root
 extern const unsigned char sfsroottest_elf_end[];
 extern const unsigned char bigwritetest_elf[];        /* fs: ring-3 large-write probe (DDR-764) */
 extern const unsigned char bigwritetest_elf_end[];
-void aether_set_spawn_hook(long (*fn)(const char *task));  /* kernel/syscall/sys_aether.c */
+/* aether_set_spawn_hook and struct task_budget come from aether.h (DDR-1170). */
 void net_init(void);                             /* NET-B: lwip-port/pradyos_net.h */
 int  net_dhcp_lease(uint32_t *ip, uint32_t *server);  /* DDR-1141: lwip-port/pradyos_net.h */
 void aether_init(void);                          /* Layer 6: kernel/aether/aether.c */
@@ -1246,7 +1255,7 @@ static void smpuser_proof(void) {
  * bytes (NOT from SFS — that mount is gone by scheduler time) and marks the new
  * process CAP_AGENT so it is rate-limited + mem-capped (ADR-026). */
 static uint32_t g_aether_daemon_pid;
-static long aether_spawn_agent_hook(const char *task) {
+static long aether_spawn_agent_hook(const char *task, const struct task_budget *b) {
     struct tcb *ut = 0;
     uint64_t len = (uint64_t)((uintptr_t)agent_base_elf_end - (uintptr_t)agent_base_elf);
 
@@ -1277,12 +1286,27 @@ static long aether_spawn_agent_hook(const char *task) {
         eap = &ea;
     }
 
-    if (elf_load_args((void *)(uintptr_t)agent_base_elf, len, "AGENT", eap, &ut) != ELF_OK || !ut)
+    /* DDR-1171: the rollback log is allocated BEFORE the load, so a task that
+     * asked for rollback can never run without one (a failed page allocation
+     * refuses the spawn rather than starting an unlogged task). */
+    void *rb = 0;
+    if (b && (b->flags & TASK_FLAG_ROLLBACK)) {
+        rb = aether_rb_page();
+        if (!rb)
+            return -1;
+    }
+    if (elf_load_args((void *)(uintptr_t)agent_base_elf, len, "AGENT", eap, &ut) != ELF_OK || !ut) {
+        if (rb)
+            pmm_free_page((uint64_t)(uintptr_t)rb);
         return -1;
+    }
+    ut->rb_log = rb;                   /* still BLOCKED: no syscall has run yet */
     ut->is_agent = 1;                  /* authority BEFORE the first run */
     ut->is_net = 1;                    /* DDR-731: agents are the sanctioned socket users
                                         * (live mode talks to Ollama over SYS_SOCK_*) */
     ut->parent_pid = g_aether_daemon_pid;
+    if (b)                             /* DDR-1170: armed while still BLOCKED */
+        aether_budget_arm(ut, b);
     sched_unblock(ut);                 /* elf_load returns the thread BLOCKED */
     return (long)ut->pid;
 }
@@ -2236,6 +2260,8 @@ static void fs_test_thread(void *arg) {
                  * exact count would be asserting the absence of work stealing. */
                 if (probe_enabled("part"))           /* DDR-1143 §4.1 */
                     part_selftest(cap);
+                if (probe_enabled("vblklate"))       /* DDR-1160 */
+                    virtio_blk_late_selftest();
                 if (probe_enabled("disk")) {         /* DDR-1143 sec.10.8: NSI 104 */
                     /* AFTER part_selftest, so the list holds every device class
                      * (virtio, ramdisk, part, trace). Waited on by pid, not by
@@ -2267,6 +2293,10 @@ static void fs_test_thread(void *arg) {
                         kputs("RQFREE FAIL: a runqueue still points at a freed TCB\r\n");
                     else
                         kputs("PRADYOS_RQFREE_OK\r\n");
+                }
+                if (probe_enabled("blkslotwait")) {  /* DDR-1156 §4 */
+                    extern void vblk_slotwait_selftest(void);
+                    vblk_slotwait_selftest();
                 }
                 /* DDR-994: the yield-stall detector. Two arms, and arm A
                  * alone would be vacuous — it proves the reporter works, not
@@ -2591,6 +2621,30 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] CKPT deny elf_load FAILED\r\n");
                     }
                 }
+                /* DDR-1159 (Fix 3): SYS_KILL_AGENT gate. TWO instances — a
+                 * sovereign controller and a plain target named KA_T the
+                 * controller finds by name and kills. The target is NOT an agent
+                 * (agents are capped at 60 syscalls/s and its yield loop would be
+                 * killed at 137 mid-gate) and NOT sovereign (it must be denied). */
+                if (probe_enabled("killagent")) {
+                    uint64_t kalen = (uint64_t)((uintptr_t)killagenttest_elf_end - (uintptr_t)killagenttest_elf);
+                    struct tcb *ka_ctl = 0, *ka_tgt = 0;
+                    if (elf_load((void *)(uintptr_t)killagenttest_elf, kalen,
+                                 "KA_T", &ka_tgt) == ELF_OK && ka_tgt) {
+                        sched_unblock(ka_tgt);
+                        kputs("[user] killagent target spawned\r\n");
+                    } else {
+                        kputs("[user] KILLAGENT target elf_load FAILED\r\n");
+                    }
+                    if (elf_load((void *)(uintptr_t)killagenttest_elf, kalen,
+                                 "KA_C", &ka_ctl) == ELF_OK && ka_ctl) {
+                        ka_ctl->is_sovereign = 1;
+                        sched_unblock(ka_ctl);
+                        kputs("[user] killagent controller spawned\r\n");
+                    } else {
+                        kputs("[user] KILLAGENT controller elf_load FAILED\r\n");
+                    }
+                }
                 /* DDR-836: agent memory gate. Spawned TWICE — one instance holds
                  * CAP_MEMORY, the other does not — because the capability check
                  * is half of what is under test. */
@@ -2786,6 +2840,31 @@ static void fs_test_thread(void *arg) {
                         pn->is_sovereign = 1;
                         sched_unblock(pn);
                         kputs("[user] ELF loaded (embedded); privacy-netfilter probe spawned\r\n");
+                    }
+                }
+                if (probe_enabled("taskbudget")) {
+                    /* DDR-1170: a SOVEREIGN launcher, because SYS_SPAWN_TASK is
+                     * sovereign-only. It spawns the four budgeted agent tasks and
+                     * reads every verdict back out of the kernel audit log. */
+                    struct tcb *bp = 0;
+                    uint64_t blen = (uint64_t)((uintptr_t)budgettest_elf_end - (uintptr_t)budgettest_elf);
+                    if (elf_load((void *)(uintptr_t)budgettest_elf, blen,
+                                 "BUDGET", &bp) == ELF_OK && bp) {
+                        bp->is_sovereign = 1;
+                        sched_unblock(bp);
+                        kputs("[user] ELF loaded (embedded); task-budget probe spawned\r\n");
+                    }
+                }
+                if (probe_enabled("rollback")) {
+                    /* DDR-1171: sovereign, because SYS_SPAWN_TASK and
+                     * SYS_REJECT_ACTION are sovereign-only. */
+                    struct tcb *rp = 0;
+                    uint64_t rlen = (uint64_t)((uintptr_t)rbtest_elf_end - (uintptr_t)rbtest_elf);
+                    if (elf_load((void *)(uintptr_t)rbtest_elf, rlen,
+                                 "RBTEST", &rp) == ELF_OK && rp) {
+                        rp->is_sovereign = 1;
+                        sched_unblock(rp);
+                        kputs("[user] ELF loaded (embedded); rollback probe spawned\r\n");
                     }
                 }
                 if (probe_enabled("dns")) {
@@ -3018,6 +3097,20 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] KILLBLOCK probe spawned\r\n");
                     } else {
                         kputs("[user] KILLBLOCK probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1174 (C1.1): POSIX signal semantics. FAT-rooted, pipes
+                 * only, not an agent. */
+                if (probe_enabled("sigsem")) {
+                    struct tcb *ss = 0;
+                    uint64_t sslen = (uint64_t)(uintptr_t)sigsemtest_elf_end -
+                                     (uint64_t)(uintptr_t)sigsemtest_elf;
+                    if (elf_load((void *)(uintptr_t)sigsemtest_elf, sslen,
+                                 "SIGSEM", &ss) == ELF_OK && ss) {
+                        sched_unblock(ss);
+                        kputs("[user] SIGSEM probe spawned\r\n");
+                    } else {
+                        kputs("[user] SIGSEM probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-1032: SYS_EXECVE argv/envp. FAT-rooted -- it execve's
@@ -4658,6 +4751,7 @@ void kmain(struct boot_info *bi) {
     kputs("\r\n");
 
     pmm_selftest(bi);
+    pmm_kasan_uaf_selftest();            /* DDR-1158: use-after-free poison regression */
     kheap_stress();
     vmm_test();
     cap_test();
@@ -4783,6 +4877,8 @@ void kmain(struct boot_info *bi) {
             virtio_input_init(d->bus, d->dev, d->func);
         if (d->class_code == 0x01 && d->subclass == 0x08)       /* NVMe controller (DDR-765) */
             nvme_init(d->bus, d->dev, d->func);
+        if (d->class_code == 0x0C && d->subclass == 0x03 && d->prog_if == 0x30)
+            xhci_init(d->bus, d->dev, d->func);                 /* DDR-1161 */
     }
     /* DDR-1142: after the loop, so virtio-gpu has had its chance. With no
      * virtio-gpu, a UEFI boot draws on the framebuffer the firmware set up. */

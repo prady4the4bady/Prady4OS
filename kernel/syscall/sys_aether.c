@@ -38,21 +38,11 @@ static struct agent_slot g_agent[AGENT_ROSTER_N];
  * dispatches (scheduler switch-ins; >= 1 for any thread that ever ran). */
 struct agent_metric { uint32_t pid, state; uint64_t mem_used, actions, run_ticks, dispatches; };
 
-/* Walk the ready ring for a live user thread with this pid. */
-static struct tcb *tcb_by_pid(uint32_t pid) {
-    struct tcb *t = current_thread;
-    do {
-        if (t->is_user && t->pid == pid &&
-            t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
-            return t;
-        t = t->next;
-    } while (t != current_thread);
-    return 0;
-}
-
-/* DDR-730: a slot is active iff it was spawned AND its agent is still alive. */
+/* DDR-730: a slot is active iff it was spawned AND its agent is still alive.
+ * DDR-1159: the liveness probe is sched_user_pid_alive — the ring walk now runs
+ * under g_sched_lock (was tcb_by_pid, an unlocked walk racing the reaper relink). */
 static int roster_active(int i) {
-    return g_agent[i].used && tcb_by_pid(g_agent[i].pid) != 0;
+    return g_agent[i].used && sched_user_pid_alive(g_agent[i].pid);
 }
 
 /* DDR-730: the roster slot a submitting agent occupies, or -1. */
@@ -65,7 +55,7 @@ static int slot_of_pid(uint32_t pid) {
 
 /* The kernel-side agent spawner is provided by kmain (it closes over the SFS
  * mount + cap + embedded agent ELF). Returns the new pid, or <0. */
-typedef long (*aether_spawn_fn)(const char *task);
+typedef long (*aether_spawn_fn)(const char *task, const struct task_budget *b);
 static aether_spawn_fn g_spawn_hook;
 void aether_set_spawn_hook(aether_spawn_fn fn) { g_spawn_hook = fn; }
 
@@ -159,6 +149,10 @@ static long sys_submit_action(long a1, long a2, long a3, long a4, long a5, long 
     uint32_t type = (uint32_t)a1;
     if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
         return -EPERM;
+    /* DDR-1170: counted before the action is queued, so the action past the
+     * limit is never proposed. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_ACTIONS, 1) < 0)
+        sched_exit(137);                           /* never returns */
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
@@ -185,6 +179,10 @@ static long sys_submit_child_action(long a1, long a2, long a3, long a4, long a5,
     uint32_t type = (uint32_t)a1;
     if (!domain_cap_ok(current_thread, type))      /* DDR-1149 */
         return -EPERM;
+    /* DDR-1170: counted before the action is queued, so the action past the
+     * limit is never proposed. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_ACTIONS, 1) < 0)
+        sched_exit(137);                           /* never returns */
     uint32_t len  = (uint32_t)a3;
     if (len > AETHER_PAYLOAD_MAX) len = AETHER_PAYLOAD_MAX;
     uint8_t kbuf[AETHER_PAYLOAD_MAX];
@@ -221,7 +219,13 @@ static long sys_reject_action(long a1, long a2, long a3, long a4, long a5, long 
         aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
     }
-    return aether_approve((uint64_t)a1, 0);
+    /* DDR-1171: owner looked up BEFORE the verdict (the entry stays, so either
+     * order works; before is the order that cannot depend on that). */
+    uint32_t owner = aether_action_owner((uint64_t)a1);
+    long rc = aether_approve((uint64_t)a1, 0);
+    if (rc == 0 && owner)
+        (void)sched_rollback_pid(owner);   /* -ESRCH = not a live rollback task */
+    return rc;
 }
 
 static long sys_spawn_agent(long a1, long a2, long a3, long a4, long a5, long a6) {
@@ -238,13 +242,42 @@ static long sys_spawn_agent(long a1, long a2, long a3, long a4, long a5, long a6
     if (a2 && copyinstr(task, (const void __user *)a2, sizeof task, 0) < 0)
         return -EFAULT;
     if (!a2) task[0] = 0;
-    long pid = g_spawn_hook(task);
+    long pid = g_spawn_hook(task, 0);         /* DDR-1170: unbudgeted, as before */
     if (pid >= 0 && a3 >= 0 && a3 < AGENT_ROSTER_N) {  /* DDR-707/730: claim the slot */
         g_agent[a3].used = 1;
         g_agent[a3].pid = (uint32_t)pid;
         g_agent[a3].actions = 0;
         g_agent[a3].run_ticks = 0;      /* DDR-735: reset accounting for the new agent */
         g_agent[a3].dispatches = 0;
+    }
+    return pid;
+}
+
+/* DDR-1170 (NSI 107): spawn an agent task with a kernel-enforced budget.
+ * Sovereign only: an agent granting its own child a fresh budget would escape
+ * its own (nesting is recorded in the DDR as a follow-up, not built). The budget
+ * is applied by the hook while the thread is still BLOCKED. */
+static long sys_spawn_task(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    if (!current_thread->is_sovereign) {
+        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    if (!g_spawn_hook)
+        return -ENOSYS;
+    char task[64];
+    struct task_budget b;
+    if (!a1 || copyinstr(task, (const void __user *)a1, sizeof task, 0) < 0)
+        return -EFAULT;
+    if (!a3 || copyin(&b, (const void __user *)a3, sizeof b) < 0)
+        return -EFAULT;
+    long pid = g_spawn_hook(task, &b);
+    if (pid >= 0 && a2 >= 0 && a2 < AGENT_ROSTER_N) {
+        g_agent[a2].used = 1;
+        g_agent[a2].pid = (uint32_t)pid;
+        g_agent[a2].actions = 0;
+        g_agent[a2].run_ticks = 0;
+        g_agent[a2].dispatches = 0;
     }
     return pid;
 }
@@ -273,13 +306,16 @@ static long sys_agent_metrics(long a1, long a2, long a3, long a4, long a5, long 
     if (max > AGENT_ROSTER_N) max = AGENT_ROSTER_N;
     struct agent_metric buf[AGENT_ROSTER_N];
     for (int i = 0; i < max; i++) {
-        struct tcb *t = g_agent[i].used ? tcb_by_pid(g_agent[i].pid) : 0;
-        if (t) {
-            g_agent[i].run_ticks  = t->run_ticks;    /* DDR-735: refresh + RETAIN so the */
-            g_agent[i].dispatches = t->dispatches;   /* counts survive the agent's exit  */
+        /* DDR-1159: snapshot the live agent's fields under g_sched_lock in one
+         * shot (was tcb_by_pid + reads after an unlocked walk — an SMP UAF). */
+        struct sched_user_snap snap;
+        int live = g_agent[i].used && sched_user_pid_snap(g_agent[i].pid, &snap) == 0;
+        if (live) {
+            g_agent[i].run_ticks  = snap.run_ticks;    /* DDR-735: refresh + RETAIN so the */
+            g_agent[i].dispatches = snap.dispatches;   /* counts survive the agent's exit  */
             buf[i].pid        = g_agent[i].pid;
-            buf[i].state      = (t->state == THREAD_BLOCKED) ? 2u : 1u;   /* 1=run/ready 2=blocked */
-            buf[i].mem_used   = t->mem_used;
+            buf[i].state      = (snap.state == THREAD_BLOCKED) ? 2u : 1u; /* 1=run/ready 2=blocked */
+            buf[i].mem_used   = snap.mem_used;
             buf[i].actions    = g_agent[i].actions;
         } else {
             /* dead (or never-spawned) slot: state 0, but a spawned slot's IDENTITY
@@ -317,16 +353,15 @@ static long sys_kill_agent(long a1, long a2, long a3, long a4, long a5, long a6)
     (void)a2; (void)a3; (void)a4;
     if (!current_thread->is_sovereign && !current_thread->is_agent)
         return -EPERM;
-    struct tcb *t = tcb_by_pid((uint32_t)a1);
-    if (!t)
-        return -ESRCH;
     /* DDR-1090: terminated on its next RING-3 IRQ return, or at its next
      * yield() if it is sitting in an unbounded kernel wait. This comment used
      * to say "on its next IRQ return", which is what a reader would want from
      * the sovereign's kill switch on a runaway agent and is not what the
-     * delivery guard (`cs & 3 == 3`) provides on its own. */
-    t->sig_pending |= (1ull << SIGKILL);
-    return 0;
+     * delivery guard (`cs & 3 == 3`) provides on its own.
+     * DDR-1159: find + set sig_pending under g_sched_lock in one shot (was
+     * tcb_by_pid then a WRITE after an unlocked walk — the sharpest of the F2
+     * SMP UAFs, a |= into possibly-freed memory). -ESRCH if no live user pid. */
+    return sched_signal_user_pid((uint32_t)a1, SIGKILL);
 }
 
 /* DDR-1098: a3 is an OPTIONAL in/out cursor, so the newest 64 stops being the
@@ -465,6 +500,7 @@ void sys_aether_register(void) {
     syscall_register(SYS_APPROVE_ACTION, sys_approve_action);
     syscall_register(SYS_REJECT_ACTION,  sys_reject_action);
     syscall_register(SYS_SPAWN_AGENT,    sys_spawn_agent);
+    syscall_register(SYS_SPAWN_TASK,     sys_spawn_task);     /* DDR-1170 */
     syscall_register(SYS_KILL_AGENT,     sys_kill_agent);
     syscall_register(SYS_READ_AUDIT,     sys_read_audit);
     syscall_register(SYS_SET_MEM_LIMIT,  sys_set_mem_limit);
