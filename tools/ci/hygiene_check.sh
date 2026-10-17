@@ -30,7 +30,7 @@
 cd "$(dirname "$0")/../.." || exit 2
 mkdir -p build/gatelogs
 fail=0
-for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check; do
+for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check ci-docsize-check; do
     out="build/gatelogs/${t}.out"
     make "$t" > "$out" 2>&1
     rc=$?
@@ -42,5 +42,5 @@ for t in ci-shard-check ci-probe-rodata-check ci-start-align-check ci-resizechec
         tail -20 "$out"
     fi
 done
-[ "$fail" -eq 0 ] && echo "hygiene_check: ALL TEN PASSED"
+[ "$fail" -eq 0 ] && echo "hygiene_check: ALL ELEVEN PASSED"
 exit "$fail"

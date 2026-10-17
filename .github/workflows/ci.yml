@@ -45,6 +45,10 @@ jobs:
       - name: Live-state doc consistency (DDR-1063)
         run: make ci-docstate-check
 
+      # #45 comment 6229808666 item 4: the always-loaded docs stay under 40 KB.
+      - name: Always-loaded doc size (CLAUDE.md, SESSION_HANDOFF.md)
+        run: make ci-docsize-check
+
       # DDR-1077: DDR-1075 sec.3 measured that this kernel has NO cross-CPU TLB
       # invalidation and that the absence is CORRECT today, because no two
       # threads share an address space. Group D's pthread / clone(CLONE_VM) row

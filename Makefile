@@ -3991,6 +3991,10 @@ ci-runnerenv-selftest:
 ci-docstate-check:
 	@python3 tools/ci/docstate_check.py
 
+# #45 comment 6229808666 item 4: CLAUDE.md and SESSION_HANDOFF.md are capped at 40 KB each.
+ci-docsize-check:
+	@bash tools/ci/docsize_check.sh
+
 # DDR-1147 sec.1.5: user/theme_palette.h is GENERATED from the committed
 # reference PNGs. Regenerate and compare: a hand edit, a changed threshold or a
 # changed resolution rule all fail here, not three gates away.
