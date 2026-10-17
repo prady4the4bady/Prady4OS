@@ -9,7 +9,9 @@
 #define EPERM           1   /* operation not permitted              */
 #define ENOENT          2   /* no such file or directory            */
 #define ESRCH           3   /* no such process                      */
+#define EINTR           4   /* interrupted by a signal with a handler (DDR-1174) */
 #define EIO             5   /* I/O error                            */
+#define E2BIG           7   /* argument list too long (DDR-1032)    */
 #define ENOEXEC         8   /* exec format error (bad/oversized ELF) */
 #define EBADF           9   /* bad file descriptor                  */
 #define ECHILD         10   /* no child processes                   */
@@ -27,6 +29,9 @@
 #define ENODEV         19   /* no such device (e.g. no GPU framebuffer) */
 #define ENOSYS         38   /* function not implemented             */
 #define ENOSPC         28   /* no space left (bounded kernel table full) */
+#define EFBIG          27   /* file too large (DDR-1089: SFS 4-extent ceiling) */
 #define ETAMPER       133  /* DDR-812: record hash failed verification */
 #define ENOKEY        126  /* DDR-834: key derivation failed (Linux value) */
 #define ETIMEDOUT     110  /* DDR-955: timed-block wait expired */
+#define ELOOP          40  /* DDR-1034: bounded executor hit its step cap  */
+#define EOVERFLOW      75  /* DDR-1034: operand stack would overflow       */

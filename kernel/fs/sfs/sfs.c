@@ -198,6 +198,25 @@ static unsigned order_for(uint32_t bytes) {
 /* DDR-889: defined below, used by the superblock write above it. */
 static void sfs_freelist_save(struct sfs_ctx *c);
 
+/* DDR-1143 §10.2: a write barrier. Everything acknowledged before it is durable
+ * before anything issued after it. The device's result is deliberately not
+ * acted on here, for the same reason wr_block() ignores its write result: SFS
+ * has no error path at this layer to report it through, and the ordering is
+ * what this commit adds. Counted so a gate and the cost measurement have a
+ * denominator (NON-NEGOTIABLE 17). */
+static volatile uint64_t g_sfs_barriers;
+uint64_t sfs_barrier_count(void) {
+    return __atomic_load_n(&g_sfs_barriers, __ATOMIC_RELAXED);
+}
+static void sfs_barrier_bd(struct blk_device *bd) {
+    __atomic_add_fetch(&g_sfs_barriers, 1, __ATOMIC_RELAXED);
+    if (bd->flush)
+        bd->flush(bd);
+}
+static void sfs_barrier(struct sfs_ctx *c) {
+    sfs_barrier_bd(c->bd);
+}
+
 static void sfs_write_super(struct sfs_ctx *c) {
     uint64_t page = pmm_alloc_page();
     if (!page)
@@ -225,7 +244,13 @@ static void sfs_write_super(struct sfs_ctx *c) {
     sb->snapshot_count   = c->snapshot_count;
     for (uint32_t i = 0; i < SFS_MAX_SNAPSHOTS; i++)
         sb->snapshots[i] = c->snapshots[i];
+    /* DDR-1143 §10.2: every block the superblock is about to name -- data,
+     * B+tree, the free list -- must be durable BEFORE the commit point, or a
+     * power cut can leave a superblock pointing at blocks the disk never got. */
+    sfs_barrier(c);
     wr_block(c, 0, sb);
+    /* ...and the commit point itself durable before the caller proceeds. */
+    sfs_barrier(c);
     pmm_free_page(page);
 }
 
@@ -337,6 +362,9 @@ static void sfs_journal_write(struct sfs_ctx *c) {
     j->free_block_count = (c->total_blocks > c->next_free)
                         ? (c->total_blocks - c->next_free) : 0;
     j->crc32            = sfs_crc32((const uint8_t *)j + 8, 40);
+    /* DDR-1143 §10.2: the transaction's CoW blocks must be durable before the
+     * record that names them, or replay can install a root over missing blocks. */
+    sfs_barrier(c);
     wr_block(c, c->txn_log_start, j);
     pmm_free_page(page);
 }
@@ -979,22 +1007,40 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
     struct sfs_ctx *c = (struct sfs_ctx *)ctx;
     if (len == 0)
         return 0;
+    /* DDR-1089: SEVEN unrelated conditions used to collapse into one bare `-1`,
+     * and PRE_LAUNCH_CHECKLIST sec.4.9 stood "Unexplained, unfixed" for ~68 DDRs
+     * because of it. DDR-1020's M4 saw a rewrite of an existing file refused and
+     * could not say why; the source says plainly why -- `off != in->size`, this
+     * function's own documented append-only scope -- but the RETURN VALUE could
+     * equally have meant a versioned handle, an inode read failure, a full file,
+     * no space, or a B+tree insert failure.
+     *
+     * -EPERM IS -1 (errno.h:9), so the permission-shaped case KEEPS its value and
+     * the other six MOVE AWAY from it. That is what makes -1 discriminating from
+     * here on rather than ambiguous -- DDR-1080's move, one layer down.
+     *
+     * -ENOSYS for the append-only scope follows DDR-956's precedent in
+     * vfs_rename: the operation is genuinely not implemented, not invalid. */
     if (f->dirent_clus != 0)
-        return -1;                               /* versioned handle is read-only */
+        return -EPERM;                           /* versioned handle is read-only */
     uint64_t ip = pmm_alloc_page();
-    if (!ip) return -1;
+    if (!ip) return -ENOMEM;
     struct sfs_inode *in = (struct sfs_inode *)(uintptr_t)ip;
-    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -1; }
+    if (!inode_block_of(c, f->cookie, in)) { pmm_free_page(ip); return -EIO; }
 
-    if (off != in->size || in->extent_count >= 4) {
-        pmm_free_page(ip);                       /* overwrite / >4 extents: later */
-        return -1;
+    if (off != in->size) {
+        pmm_free_page(ip);        /* mid-file overwrite: a later slice, see above */
+        return -ENOSYS;
+    }
+    if (in->extent_count >= 4) {
+        pmm_free_page(ip);        /* file full: 4 inline extents is the ceiling   */
+        return -EFBIG;
     }
 
     struct sfs_extent_ref ext;
     if (write_extent(c, (const uint8_t *)buf, len, &ext) != 0) {
         pmm_free_page(ip);
-        return -1;
+        return -ENOSPC;
     }
     in->inline_extents[in->extent_count++] = ext;
     in->size = off + len;
@@ -1010,7 +1056,7 @@ static int sfs_write(void *ctx, struct vfs_file *f, uint64_t off, const void *bu
     s.key = SFS_KEY_INODE | f->cookie;
     s.v.ino.inode_block = niblk;
     if (bt_insert(c, &s))                         /* replaces the INODE entry */
-        return -1;
+        return -EIO;                              /* DDR-1089 */
     sfs_commit(c);
     f->size = off + len;
     return (int)len;
@@ -1392,6 +1438,9 @@ int sfs_format(struct blk_device *bd) {
     wr_block_bd(bd, 3, b);
 
     pmm_free_page(page);
+    /* DDR-1143 §10.2: a freshly formatted volume is durable before first use
+     * (the installer formats and then relies on it across a reboot). */
+    sfs_barrier_bd(bd);
     return 0;
 }
 

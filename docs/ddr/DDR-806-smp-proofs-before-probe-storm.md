@@ -34,11 +34,21 @@ workstation, not of the tree (tracked separately).
 Both missing sentinels are emitted from `kmain`:
 
 ```
-main.c:1311   smpuser_proof();      -> "[smp] user on AP OK"      <- OPEN-1
+main.c:1311   smpuser_proof();      -> "[smp] user on AP OK"      <- OPEN-1 (see note)
 main.c:1312   blkmq_proof();        -> "[blk] multi-inflight OK"
 main.c:1313   smp_blk_integrity();
 main.c:1314   rqstress_proof();     -> "[smp] rqstress OK"
 ```
+
+> **Note added 2026-08-23 (DDR-985 §4).** The `<- OPEN-1` tag above points at
+> the `smoke-smpuser` sentinel, but `CLAUDE.md`, `docs/BUILD_TRACKER.md:113` and
+> `docs/PRADYOS_MASTER_PLAN.md:340` all define OPEN-1 as the **`smoke-surfdestroy`**
+> intermittent. Both usages are faithful to DDR-775, which treated the three
+> `-smp 4` gates as ONE defect with three faces; successive DDRs then each picked a
+> different face as the representative. The cost is that OPEN-1's "hypotheses
+> refuted" history reads as `smoke-surfdestroy`-specific when most of its artefacts
+> are `smoke-smpuser` and `smoke-blk-integrity` captures. **A label is not a
+> defect.** Nothing above is retracted; read it as the family's history.
 
 These sit roughly **180 lines after** the user-probe spawn block that begins at
 `main.c:1134`. Every probe in that block is started with `sched_unblock` and then

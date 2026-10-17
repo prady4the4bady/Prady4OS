@@ -185,7 +185,14 @@ uint64_t pmm_alloc_pages(unsigned order) {
     return addr;                        /* 0 == out of memory at this size */
 }
 
-void pmm_free_pages(uint64_t addr, unsigned order) {
+/* DDR-1065: returns 1 if frames were ACTUALLY RELEASED, 0 if this call only
+ * dropped a reference (COW) or was rejected as a double free. ptnode_free needs
+ * this to keep ptnode_in_use honest: it used to decrement unconditionally, so a
+ * COW-shared page decremented TWICE (once per address space) against ONE
+ * increment at ptnode_alloc, and kheap_outstanding() drifted down and wrapped.
+ * Callers that ignore the value are unaffected -- void->int is source-compatible
+ * and there is no warn_unused_result here, so all 132 existing call sites stand. */
+int pmm_free_pages(uint64_t addr, unsigned order) {
     uint64_t fl = irq_save();
     /* COW: a single frame with other owners is only dereferenced, not freed (and
      * must NOT be poisoned — another address space still maps it). */
@@ -194,7 +201,7 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
         if (idx < PMM_NFRAMES && pmm_refcount[idx] > 1) {
             pmm_refcount[idx]--;
             irq_restore(fl);
-            return;
+            return 0;                   /* DDR-1065: reference dropped, NOT released */
         }
         /* DDR-830: refcount 0 means this frame is ALREADY on the free list.
          * Absorbing the second free would push it on twice, and the allocator
@@ -208,7 +215,7 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
             kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
             kputs("\r\n");
             irq_restore(fl);
-            return;
+            return 0;                   /* DDR-1065: rejected, nothing released */
         }
     }
     rc_set(addr, order, 0);             /* actually freeing now: clear refcount(s) */
@@ -238,10 +245,11 @@ void pmm_free_pages(uint64_t addr, unsigned order) {
     }
     list_push(fnode, order, addr);
     irq_restore(fl);
+    return 1;                           /* DDR-1065: frames actually released */
 }
 
 uint64_t pmm_alloc_page(void)        { return pmm_alloc_pages(0); }
-void     pmm_free_page(uint64_t a)   { pmm_free_pages(a, 0); }
+int      pmm_free_page(uint64_t a)   { return pmm_free_pages(a, 0); }
 uint64_t pmm_free_page_count(void)   { return free_pages; }
 uint64_t pmm_total_page_count(void)  { return total_pages; }  /* DDR-752 */
 
@@ -372,3 +380,61 @@ void pmm_numa_rebucket(void) {
     }
     kputs("\r\n");
 }
+
+/* ---- DDR-1158: KASAN use-after-free regression test ----------------------
+ *
+ * The operator (DDR-1155 §4, PR #27 comment 5971011693) asked for a standard
+ * use-after-free regression test of the IMP-B poison — not a reproduction of
+ * U1/U2/U3. smoke-pmm-poison only asserts the "[pmm] poison enabled" banner, so
+ * a regression that drops the poison FILL (while leaving the banner) passes it.
+ * This exercises an actual use-after-free READ and asserts the read returns the
+ * poison rather than the stale value.
+ *
+ * It is deterministic and coalescing-independent: it reads the freed frame's
+ * OWN offset 8. The poison loop (pmm_free_pages) always stamps every qword of
+ * the block, list_push rewrites only offset 0, and XOR-buddy coalescing only
+ * touches the buddy's and the merged head's offset 0 — so offset 8 of the frame
+ * just freed is PMM_POISON regardless of whether it coalesced. The irq window
+ * around free+read keeps a concurrent allocator from re-handing the frame
+ * between the two (belt-and-suspenders at single-CPU boot). The frame is in the
+ * identity-mapped [16 MiB, 1 GiB) window, so the UAF read cannot fault.
+ *
+ *   correct build  -> PRADYOS_KASAN_UAF_OK   (read == PMM_POISON)
+ *   poison removed -> KASAN_UAF_FAIL          (read == the stale live value)
+ *
+ * This is NOT a reproduction of U1/U2/U3 and closes nothing (DDR-1155 §5). */
+#ifdef KASAN
+void pmm_kasan_uaf_selftest(void) {
+    uint64_t pg = pmm_alloc_page();
+    if (!pg) { kputs("KASAN_UAF_FAIL alloc\r\n"); return; }
+    volatile uint64_t *vp = (volatile uint64_t *)(uintptr_t)pg;
+    const uint64_t live = 0x1111111122222222ULL;   /* obviously not the poison */
+    /* A BARE interrupt window -- deliberately NOT pmm's irq_save()/irq_restore(),
+     * which (ADR-030 stage 1, see line ~68) acquire/release g_pmm_lock: holding
+     * that lock across pmm_free_page(), which re-acquires it, self-deadlocks the
+     * CPU. This window only has to stop a timer-driven re-hand of the frame
+     * between the free and the read; the APs are not online this early in kmain,
+     * so one CPU's own interrupts are the only concern. */
+    uint64_t rflags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) :: "memory");
+    vp[1] = live;                 /* live write at offset 8 while allocated   */
+    pmm_free_page(pg);            /* IMP-B stamps PMM_POISON over the frame    */
+    uint64_t seen = vp[1];        /* DELIBERATE use-after-free read, offset 8  */
+    __asm__ volatile("push %0; popfq" :: "r"(rflags) : "memory", "cc");
+    if (seen == PMM_POISON) {
+        kputs("PRADYOS_KASAN_UAF_OK poison detected seen=");
+        kputhex(seen);
+        kputs("\r\n");
+    } else {
+        kputs("KASAN_UAF_FAIL uaf read not poison seen=");
+        kputhex(seen);
+        kputs(" live=");
+        kputhex(live);
+        kputs("\r\n");
+    }
+}
+#else
+void pmm_kasan_uaf_selftest(void) {
+    kputs("PRADYOS_KASAN_UAF_SKIP (KASAN=0)\r\n");
+}
+#endif

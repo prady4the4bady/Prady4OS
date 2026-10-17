@@ -93,3 +93,8 @@ int  vfs_unlink (cap_t cap, int mnt, const char *path);
  * path->mount resolution exists, so -EXDEV is unreachable and absent. */
 int  vfs_rename (cap_t cap, int mnt, const char *old_path, const char *new_path);
 int  vfs_readdir(cap_t cap, int mnt, const char *path, int index, char *name, uint32_t *size);
+
+/* DDR-994 sec.6 arm B — probe-gated; see vfs.c for why the scratch mount is
+ * private rather than one of g_mounts. */
+void vfs_yieldstall_arm(int hold);
+void vfs_yieldstall_wait(void);

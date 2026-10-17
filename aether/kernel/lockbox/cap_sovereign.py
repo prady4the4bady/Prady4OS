@@ -39,7 +39,7 @@ __all__ = [
 
 CAP_SOVEREIGN = "CAP_SOVEREIGN"
 
-#: Section F — every capability token the ASI-bridge DDRs may claim.
+#: Section F — every capability token the host-bridge DDRs may claim.
 KNOWN_CAPABILITIES: frozenset[str] = frozenset(
     {
         CAP_SOVEREIGN,

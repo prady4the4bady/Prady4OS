@@ -10,6 +10,7 @@
 #include "fd.h"
 #include "regs.h"
 #include "spinlock.h"
+#include "signal.h"   /* DDR-1174: struct sig_rec */
 
 typedef void (*thread_fn)(void *);
 
@@ -88,6 +89,13 @@ struct tcb {
     uint64_t   sig_handlers[32]; /* ring-3 handler VA per signal (NSIG=32)    */
     struct regs sig_saved;       /* register snapshot restored by sigreturn   */
     int        sig_active;       /* 1 while a signal handler is running        */
+    /* DDR-1174. sig_pending and sig_mask are read by syscall_entry.asm; their
+     * offsets are pinned by _Static_assert in signal.c (TCB_SIG_* there). */
+    uint64_t   sig_mask;          /* blocked set; SIGKILL never set            */
+    uint64_t   sig_saved_mask;    /* mask restored by sigreturn                */
+    uint32_t   sig_flags[32];     /* SA_* per signal                           */
+    uint64_t   sig_amask[32];     /* sa_mask per signal                        */
+    struct sig_rec sig_info[32];  /* kernel-recorded sender (signal.h)       */
 
     /* Thread pointer (PROC-D, ADR-023). FS-base MSR value for this thread; set by
      * SYS_SET_TLS, restored into IA32_FS_BASE on every switch to this user thread.
@@ -132,6 +140,18 @@ struct tcb {
     uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
+    /* DDR-1170: per-task budgets, set by SYS_SPAWN_TASK BEFORE the first run.
+     * A limit of 0 means "no limit on that axis". Not inherited across fork. */
+    uint64_t   bud_max_ticks;   /* wall ticks the task may run for                 */
+    uint64_t   bud_max_bytes;   /* bytes it may write (fds + proxy sockets)        */
+    uint32_t   bud_max_actions; /* actions it may submit                           */
+    uint32_t   bud_tripped;     /* 1 once a budget kill has been audited           */
+    uint64_t   bud_start;       /* g_ticks when the budget was armed               */
+    uint64_t   bud_bytes;       /* bytes charged so far                            */
+    uint32_t   bud_actions;     /* actions charged so far                          */
+    void      *rb_log;          /* DDR-1171: rollback log page, NULL = not a rollback task */
+    uint32_t   rb_n;            /* DDR-1171: entries used in rb_log                */
+    uint32_t   rb_pending;      /* DDR-1171: rejected; replay in sched_exit        */
 
     /* SMP scheduling (ADR-031 / DDR-SMP-3c-cap-2a). Which CPU is running this
      * thread (-1 = none): schedule() picks only READY threads with on_cpu<0, so
@@ -150,10 +170,24 @@ struct tcb {
     uint64_t   dbg_vruntime;    /* what vruntime WOULD be, if it were used     */
     uint64_t   dbg_v_at_create; /* floor at creation — H2's signature          */
     uint64_t   dbg_v_at_wake;   /* floor at last unblock — H2's signature      */
+    /* DDR-1064. What sched_unblock's OWN kick loop saw, AT THE INSTANT IT RAN.
+     * The rq-3 proof previously re-derived this from outside the call, which is
+     * racy in BOTH directions: a CPU can leave idle before the call (DDR-1004's
+     * race) or enter idle after it returns (DDR-1030's own, unnamed until now),
+     * so neither `idle=` nor `idle2=` can establish that a kick was owed.
+     * Recorded per-THREAD and not in a global, because sched_unblock runs from
+     * MSI-X interrupt context on the virtio-blk completion path (DDR-1014), so
+     * another CPU's unblock would clobber a global between the proof's call and
+     * its read. §NON-NEGOTIABLE 10: both are initialised in sched_create. */
+    uint8_t    dbg_ub_saw_idle; /* an idle non-self CPU was visible to the loop */
+    uint8_t    dbg_ub_kicked;   /* smp_resched_one actually DELIVERED a kick    */
     uint32_t   dbg_picks;       /* times chosen by the real (FIFO) picker      */
     uint32_t   dbg_ticks;       /* ticks charged while running                 */
     uint32_t   weight;
     uint64_t   vt_in;
+    uint32_t   vt_cpu;         /* DDR-989 §8.4: cpu that STAMPED vt_in. Tests the
+                                * cross-CPU-TSC hypothesis; init in sched_create
+                                * (§NON-NEGOTIABLE 10 — kmalloc does not zero).  */
     uint32_t   dbg_yields;
     uint32_t   sched_woke;
     uint32_t   dbg_ebadf_seen;  /* DDR-946: first -EBADF write already reported */
@@ -172,6 +206,23 @@ struct tcb {
                                  * LINEAGE, not on is_agent — fork does not inherit
                                  * authority flags, so a cap on is_agent would be
                                  * escaped by one fork. */
+    uint32_t   is_ipc;          /* DDR-1033: may use the ring-3 IPC door (NSI 98/99).
+                                 * Kernel-set at spawn, never mintable by the
+                                 * process. Zeroed in sched_create: kmalloc does
+                                 * not zero (§NON-NEGOTIABLE 10). */
+    cap_t      ipc_cap;         /* DDR-1033: the RES_IPC handle minted beside it */
+    uint32_t   is_exec;         /* DDR-1034: may use the bounded experiment
+                                 * executor (NSI 100/101). Kernel-set at spawn,
+                                 * never mintable by the process -- the same
+                                 * shape as is_ipc. Zeroed in sched_create:
+                                 * kmalloc does not zero (NON-NEGOTIABLE 10). */
+    cap_t      exec_cap;        /* DDR-1034: the RES_EXEC handle minted beside it */
+    uint32_t   is_ocr;          /* DDR-1149: may PROPOSE ACTION_PARSE_DOCUMENT.  */
+    cap_t      ocr_cap;         /*   Kernel-set at spawn (ocr_grant), never       */
+    uint32_t   is_scene;        /*   mintable from ring 3, zeroed in              */
+    cap_t      scene_cap;       /*   sched_create_state (NON-NEGOTIABLE 10).      */
+    uint32_t   is_browse;       /*   Same shape for QUERY_SCENE / BROWSE_WEB.     */
+    cap_t      browse_cap;
     uint32_t   is_rewrite;      /* DDR-842: CAP_REWRITE — code-rewrite approval.
                                  * Meaningless without is_sovereign; the syscall
                                  * requires BOTH. Granted at spawn only. */
@@ -183,6 +234,20 @@ struct tcb {
      * running CPU; schedule() under the on_cpu claim) — lock-free by exclusion. */
     uint64_t   run_ticks;       /* 100 Hz ticks observed while current (sampled CPU time) */
     uint64_t   dispatches;      /* times the scheduler switched this thread in           */
+    /* DDR-1118: times the scheduler switched this thread AWAY -- the partner of
+     * `dispatches`, and together they are an ARITHMETIC IDENTITY rather than a
+     * heuristic (the shape DDR-1063 found actually works). A thread is switched
+     * in, then away, then in: so at the moment schedule_locked has claimed it
+     * and is about to resume it, `dispatches` (incremented under the claim at
+     * :1565) must be exactly `switches_away + 1`. `disp - saves == 2` says the
+     * thread was switched IN twice with no intervening save -- i.e. resumed a
+     * second time from a ->rsp that had already been consumed, which is the
+     * reading DDR-1118 derived from the second [schedcheck] artefact.
+     * PRINTED, NOT JUDGED: the increments are plain (non-atomic) and sched_exit
+     * leaves by a path that does not pass the save site, so the identity holds
+     * by the code's habits and NOT by construction -- exactly the test DDR-1116
+     * refused to promote into a clause on the hottest path in the kernel. */
+    uint64_t   switches_away;
     /* DDR-955: bounded-wait fields */
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */
@@ -202,6 +267,11 @@ struct procinfo {
 /* Fill *out with the index-th thread in the scheduler ring (walked under
  * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */
 int         sched_snapshot(int index, struct procinfo *out);
+/* DDR-1001: wait4's child lookup, walking the all-threads ring UNDER
+ * g_sched_lock. sys_wait.c cannot take that lock (it is file-local to sched.c),
+ * which is why the walk lives here rather than there. */
+struct tcb *sched_find_child(struct tcb *parent, int pid,
+                             struct tcb **has_live, int *any, int *ringbad);
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
@@ -220,6 +290,11 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
 /* Unlink a never-run / reaped thread from the ready ring and free its kstack,
  * cap table, open files, and TCB. Not for the currently running thread. */
 void        sched_destroy(struct tcb *t);
+int         sched_rq_walk_ok(void);   /* DDR-996 §5 arm B: runqueue links sane? */
+/* DDR-989 §4: vruntime + pick-count for the running thread and the queue head. */
+void        sched_vr_sample(uint32_t *cur_pid, uint64_t *cur_vr, uint32_t *cur_pk,
+                            uint32_t *head_pid, uint64_t *head_vr, uint32_t *head_pk);
+int         sched_rqfree_probe(int n); /* DDR-996 §5 arm A: force the window   */
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_ap_enter(void);                               /* cap-2b: AP joins the scheduler (never returns) */
@@ -229,6 +304,14 @@ void        sched_block(void);                                  /* block current
  * BLOCKED *while `lk` is held*, releases `lk`, switches away, and re-takes `lk`
  * on return — so a waker serialized after the release always sees BLOCKED and
  * its sched_unblock CAS cannot be lost. IRQs stay as the caller left them. */
+/* DDR-994: report a wait that has gone on too long. Fires ONCE per wait (the
+ * `noted` flag), then the caller keeps spinning — this REPORTS, it does not
+ * repair. Thresholds below; both must be crossed. */
+#define YIELD_STALL_SPINS 20000u  /* enough spins to mean "not just contended" */
+#define YIELD_STALL_TICKS 500u    /* ...AND 5 s at 100 Hz. Neither alone suffices. */    /* ...AND 5 s at 100 Hz. Neither alone suffices. */
+void        yield_stall_note(const char *site, uint32_t spins, uint64_t ticks, int *noted);
+void        yield_stall_done(const char *site, uint32_t spins, uint64_t ticks, int *noted);
+
 void        sched_block_on(spinlock_t *lk);
 int         sched_block_timeout(spinlock_t *lk, volatile int *done,
                                 uint64_t timeout_ticks);
@@ -242,6 +325,18 @@ void        sched_trace_dump(void);
 
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 struct tcb *sched_find_pid(uint32_t pid);                       /* DDR-837: live thread by pid, or NULL */
+
+/* DDR-1159 (Fix 3): find a live USER thread by pid and act on it ENTIRELY under
+ * g_sched_lock, so the TCB cannot be unlinked+freed between the ring walk and
+ * the dereference (the AETHER tcb_by_pid UAF; same lifetime fix as DDR-1157).
+ * alive -> 0/1; snap -> 0 and fills *out, else -ESRCH; signal -> 0 else -ESRCH. */
+struct sched_user_snap { uint64_t run_ticks, dispatches, mem_used; uint32_t state; };
+int sched_user_pid_alive (uint32_t pid);
+int sched_user_pid_snap  (uint32_t pid, struct sched_user_snap *out);
+int sched_signal_user_pid(uint32_t pid, int sig);
+int sched_rollback_pid(uint32_t pid);   /* DDR-1171: mark + SIGKILL a live rollback task */
+int         sched_checkpoint_pid(uint32_t pid);                /* DDR-1157: set checkpointed=1 under g_sched_lock; 0 or -ESRCH */
+int         sched_resume_pid(uint32_t pid);                    /* DDR-1157: clear + conditional unblock under g_sched_lock; 0 or -ESRCH */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */

@@ -7,12 +7,38 @@
 void net_init(void);       /* bring up lwIP over virtio-net (after virtio_net_init) */
 void net_poll_tick(void);  /* drive lwIP timers; call from the PIT tick (~every 100 ms) */
 
-/* Ring-3 proxy sockets (ADR-027). The kernel owns the lwIP PCB; ring 3 holds the
- * returned slot index. Plain ints/buffers only (no lwIP types) so the syscall
- * layer can call these without the lwIP include surface. */
-int psock_connect(uint32_t host_be, uint16_t port);    /* -> slot(0..7) | -1 */
-int psock_state(int slot);                              /* PS_* (0=CLOSED..4=ERR) | -1 */
-int psock_read(int slot, uint8_t *kbuf, int len);       /* bytes drained (0 if empty) | -1 */
-int psock_write(int slot, const uint8_t *kbuf, int len);/* bytes written | -1 */
-int psock_close(int slot);                              /* 0 | -1 */
+/* Ring-3 proxy sockets (ADR-027). The kernel owns the lwIP PCB; ring 3 holds an
+ * OPAQUE HANDLE. Plain ints/buffers only (no lwIP types) so the syscall layer
+ * can call these without the lwIP include surface.
+ *
+ * DDR-988 sec.10: this comment used to say ring 3 holds "the returned slot
+ * index", contradicting the DDR-987 sec.10 note two lines below it. A caller
+ * that believed the stale half and indexed an array with the handle would
+ * address the wrong slot -- the value is ((gen << 3) | slot), so handle 9 is
+ * slot 1, not slot 9. Treat it as opaque; only psock_* may decode it.
+ *
+ * DDR-987 sec.10: every proxy-socket call carries the caller's identity, because
+ * authority must be checked under the same lock as the operation.
+ * Errors: -1 stale/closed handle (-EBADF), -2 not this caller's slot (-EPERM),
+ *         -3 the operation itself failed (-EIO). */
+int psock_connect(uint32_t host_be, uint16_t port, uint32_t owner);
+int psock_state(int h, uint32_t owner, int sovereign);
+int psock_read(int h, uint32_t owner, int sovereign, uint8_t *kbuf, int len);
+int psock_write(int h, uint32_t owner, int sovereign, const uint8_t *kbuf, int len);
+int psock_close(int h, uint32_t owner, int sovereign);
+/* DDR-1070: the peer (packed a.b.c.d, port) behind a handle, for auditing a
+ * privacy-refused read/write with a real destination instead of a handle. */
+int psock_dest(int h, uint32_t owner, int sovereign,
+               uint32_t *host_out, uint16_t *port_out);
+void psock_reap_owner(uint32_t pid);
+
+/* DDR-1141: the DHCP lease (0 once bound; ip/server first-octet-MSB) and the
+ * DNS resolver. pdns_start: 1 answered now (*out), 0 in flight (poll *gen),
+ * -1 busy, -2 name refused, -3 no network. pdns_poll: 0 pending, 1 ok (*out),
+ * -2 failed or superseded. pdns_abandon: drop an in-flight query at deadline. */
+int net_dhcp_lease(uint32_t *ip, uint32_t *server);
+uint32_t pdns_default_server(void);
+int pdns_start(const char *name, uint32_t server, uint32_t *out, uint32_t *gen);
+int pdns_poll(uint32_t gen, uint32_t *out);
+void pdns_abandon(uint32_t gen);
 #endif

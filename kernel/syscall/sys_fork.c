@@ -32,6 +32,10 @@ static long sys_fork(long a1, long a2, long a3, long a4, long a5, long a6) {
      * agent author hunting for a capability grant that does not exist. */
     if (parent->agent_depth >= SPAWN_DEPTH_MAX)
         return -EAGAIN;
+    /* DDR-1171: a child would share the root mount without the log, so a fork
+     * would be an escape from rollback. Refused, not tracked. */
+    if (parent->rb_log)
+        return -EPERM;
 
     uint64_t child_cr3 = vmm_fork_address_space_cow(parent->cr3);
     if (!child_cr3)

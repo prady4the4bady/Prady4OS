@@ -25,6 +25,11 @@ struct ipc_endpoint {
 
 void ipc_endpoint_init(struct ipc_endpoint *e, uint64_t res_id);
 
+/* DDR-1033: grant a process the ring-3 IPC door -- sets tcb.is_ipc and mints the
+ * RES_IPC handle beside it. Kernel-side only: a process cannot mint its own
+ * authority, which is what keeps this out of self-escalation territory. */
+void ipc_grant(struct tcb *t);
+
 /* 0 on success, -1 if the capability does not authorize the operation. */
 int  ipc_send(struct cap_table *caps, cap_t h, struct ipc_endpoint *e, const uint64_t *msg);
 /* DDR-961: 0 = message received into *out; -1 = capability denied (UNCHANGED,

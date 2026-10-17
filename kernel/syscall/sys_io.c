@@ -12,17 +12,24 @@
 #include "fd.h"
 #include "vfs.h"
 #include "pipe.h"
+#include "irq.h"                /* DDR-994: g_ticks for the yield-stall window */
 #include "signal.h"              /* DDR-805: SIGPIPE on a readerless pipe write */
 #include "console.h"
 #include "uaccess.h"
 #include "errno.h"
 #include "pmm.h"                 /* DDR-764: 4 KiB bounce page for FD_VFS writes */
+#include "aether.h"              /* DDR-1170: per-task byte budget */
 
 /* Write `count` (> 0) bytes from the user buffer at `uptr` to fd `e`, via the
  * validated copyin path (never a raw user dereference). Returns bytes written
  * (possibly short for a full pipe), or a negative errno when nothing was written.
  * Shared by sys_write and sys_writev (PROC-D). */
 static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
+    /* DDR-1170: charged BEFORE any byte moves, on every fd kind, so a budgeted
+     * task cannot emit past its limit by choosing a different descriptor. */
+    if (count > 0 && aether_budget_charge(current_thread, TASK_BUDGET_BYTES,
+                                          (uint64_t)count) < 0)
+        sched_exit(137);                         /* never returns */
     if (e->kind == FD_CONSOLE) {
         char kbuf[256];
         long total = 0, remaining = count;
@@ -53,8 +60,20 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
              * drain the ring, so waiting could never succeed and we fail with
              * -EPIPE. yield() matches the FD_CONSOLE blocking read already in
              * this file. */
-            while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0)
-                yield();
+            /* DDR-994: instrumented, not bounded. A reader that exists but
+             * never reads leaves this spinning forever. */
+            {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
+                while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0) {
+                    if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                        yield_stall_done("pipe_write", n, g_ticks - t0, &noted);
+                        return total > 0 ? total : -EINTR;
+                    }
+                    yield();
+                    if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
+                        yield_stall_note("pipe_write", n, g_ticks - t0, &noted);
+                }
+                yield_stall_done("pipe_write", n, g_ticks - t0, &noted);
+            }
             if (pipe_readers(e->pipe) <= 0) {
                 /* DDR-805: no readers left, so this write can never complete.
                  * Raise SIGPIPE on ourselves — syscall context, own TCB, so no
@@ -70,7 +89,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
                  * caller the pipe is closing. */
                 if (total > 0)
                     return total;
-                current_thread->sig_pending |= (1ull << SIGPIPE);
+                sig_raise(current_thread, SIGPIPE, 0, SI_KERNEL, 0);  /* DDR-1174 */
                 return -EPIPE;
             }
             long w = pipe_write(e->pipe, kbuf, chunk);
@@ -94,6 +113,8 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
      * fewer vfs_write iterations, and each SFS extent now holds a full block so a
      * ring-3 SFS file reaches 4 extents * 4 KiB = 16 KiB instead of ~1 KiB. */
     if (e->kind == FD_VFS && e->file) {
+        if (e->flags & FD_RB_RO)
+            return -EPERM;           /* DDR-1171: rollback task, existing file */
         /* DDR-782: O_APPEND. Re-position at end-of-file once per write() call,
          * before the chunk loop — that is the POSIX atomicity property (the whole
          * call lands at the end as one act), and it is what an lseek-at-open
@@ -115,7 +136,18 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
             int w = vfs_write(e->cap, e->file, e->off, kbuf, chunk);
             if (w < 0) {
                 pmm_free_page(kp);
-                return total > 0 ? total : -EIO;
+                /* DDR-1089: PROPAGATE, do not flatten. This used to return -EIO
+                 * for every negative, which ERASED the distinction one layer
+                 * below -- so DDR-1089's split of sfs_write's seven conditions
+                 * would have been invisible to every ring-3 caller, and a gate
+                 * arm written against it would have been vacuous. Worse, -EIO
+                 * actively misleads: "mid-file overwrite is not implemented"
+                 * reported as an I/O error sends a reader to the block layer.
+                 *
+                 * The PARTIAL path is deliberately unchanged -- a write that
+                 * made progress still returns its short count, which is the
+                 * POSIX contract and what every existing caller reads. */
+                return total > 0 ? total : w;
             }
             if (w == 0)
                 break;                                  /* budget/space exhausted */
@@ -195,6 +227,85 @@ static long sys_writev(long fd, long uiov, long iovcnt, long a4, long a5, long a
                (size_t)iovcnt * sizeof iov[0]) < 0)
         return -EFAULT;
 
+    /* DDR-1056: the console gets ONE kwrite for the whole gather.
+     *
+     * musl NEVER issues a one-iovec writev: __stdio_write always passes two --
+     * the bytes already in the stdio buffer, and the new bytes -- so a printf
+     * flushed through the per-iovec loop below reached the console as TWO
+     * separate g_console_lock acquisitions, with a gap in the middle that any
+     * other CPU's printer could occupy. That is DDR-1055's defect reached
+     * through a different door, and it applies to every musl-linked program
+     * here: the compositor, PRISM, term, cmusl, agent_base, init.
+     *
+     * (stdout is FULLY buffered in this system, not line-buffered: musl's
+     * __stdout_write falls back to lbf = -1 when ioctl(TIOCGWINSZ) fails, and
+     * this kernel registers no SYS_IOCTL at all -- so bytes do accumulate
+     * between flushes and the two-iovec case is the normal one.)
+     *
+     * GATHER_MAX is 256 -- deliberately fd_write_user's OWN chunk size, not
+     * musl's 1024-byte BUFSIZ. Gathering into a larger buffer would hold
+     * g_console_lock, and therefore interrupts, across up to 1024 UART
+     * busy-waits instead of today's 256: a four-fold increase in the masked
+     * window on the hottest output path in the system, which is exactly the
+     * cost DDR-1047 refused to pay near a timing-sensitive AP freeze. At 256
+     * the masked window is UNCHANGED from today's maximum and every measured
+     * line still fits in one write (the longest is about 90 bytes). A larger
+     * write falls through to the per-iovec loop -- it is already split by that
+     * same 256-byte chunking, so gathering it would buy nothing. Recorded as a
+     * residual, not hidden: a console line longer than 256 bytes is still
+     * several acquisitions and no gate asserts one. */
+    if (e->kind == FD_CONSOLE) {
+        enum { GATHER_MAX = 256 };
+        uint64_t need = 0;
+        for (long i = 0; i < iovcnt; i++)
+            need += iov[i].len;
+        /* THE BOUND ON `at` IS ENFORCED BY copyin, NOT BY THIS TEST --
+         * DDR-1109 sec.2.4(a). `need` is a sum of up to SYS_IOV_MAX uint64
+         * lengths, so a WRAPPED sum can land in (0, GATHER_MAX] while a term is
+         * enormous, and then `at + len <= need` does not hold.
+         *
+         * It is safe today, and the margin is MEASURED rather than asserted:
+         * SYS_IOV_MAX is 16, so an overflowing term is at least 2^64/16 = 2^60,
+         * against VMM_USER_MAX = 0x10000000000 = 2^40 (vmm.h:29) -- a factor of
+         * 2^20 -- and vmm_user_range_ok rejects such a length before copyin
+         * writes a byte.
+         *
+         * SO DO NOT REPLACE THE copyin BELOW WITH A memcpy, however thoroughly
+         * the source has already been validated: the overflow protection would
+         * go with it, SILENTLY, and `at` would run past gather[GATHER_MAX] on
+         * the kernel stack.
+         *
+         * A per-term `len > GATHER_MAX` guard would make this self-sufficient
+         * and is deliberately NOT added: it changes nothing for any input that
+         * reaches here (a single len above 256 already disqualifies the gather
+         * whenever the sum does not wrap), and NO GATE COULD TELL THE TWO
+         * VERSIONS APART because copyin refuses either way -- an unfalsifiable
+         * change to the hottest output path in the system, which is the shape
+         * DDR-1082 costed and refused. The dependency is recorded here instead,
+         * where the edit that would break it happens. */
+        if (need > 0 && need <= (uint64_t)GATHER_MAX) {
+            /* DDR-1170: this path emits WITHOUT going through fd_write_user, so
+             * it charges the byte budget itself. Measured: before this line a
+             * budgeted task's musl fflush (always a two-iovec writev) wrote to
+             * the console uncharged -- smoke-taskbudget's B arm read 5120, i.e.
+             * five 1 KiB pipe writes and NOT the agent's start line. */
+            if (aether_budget_charge(current_thread, TASK_BUDGET_BYTES, need) < 0)
+                sched_exit(137);                 /* never returns */
+            char gather[GATHER_MAX];
+            uint64_t at = 0;
+            for (long i = 0; i < iovcnt; i++) {
+                if (iov[i].len == 0)
+                    continue;
+                if (copyin(gather + at, (const void __user *)(uintptr_t)iov[i].base,
+                           (size_t)iov[i].len) < 0)
+                    return -EFAULT;      /* nothing emitted yet, so this is clean */
+                at += iov[i].len;
+            }
+            kwrite(gather, at);
+            return (long)at;
+        }
+    }
+
     long total = 0;
     for (long i = 0; i < iovcnt; i++) {
         if (iov[i].len == 0)
@@ -264,8 +375,20 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
              * genuine EOF. Only wait when we have delivered nothing yet, so a
              * partially-satisfied read returns promptly. */
             if (total == 0)
-                while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0)
-                    yield();
+                /* DDR-994: instrumented, not bounded. A writer that exists
+                 * but never writes leaves this spinning forever. */
+                {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
+                    while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0) {
+                        if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                            yield_stall_done("pipe_read", n, g_ticks - t0, &noted);
+                            return -EINTR;   /* total == 0 on this path */
+                        }
+                        yield();
+                        if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
+                            yield_stall_note("pipe_read", n, g_ticks - t0, &noted);
+                    }
+                    yield_stall_done("pipe_read", n, g_ticks - t0, &noted);
+                }
             long r = pipe_read(e->pipe, kbuf, chunk);
             if (r <= 0)
                 break;                            /* empty + no writers = EOF */
@@ -290,6 +413,8 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
         for (;;) {
             int c = kgetc_nb();
             if (c >= 0) { kbuf[n++] = (char)c; break; }
+            if (signal_interruptible(current_thread))
+                return -EINTR;                    /* DDR-1174: nothing read yet */
             yield();
         }
         while (n < count && n < (long)sizeof kbuf) {

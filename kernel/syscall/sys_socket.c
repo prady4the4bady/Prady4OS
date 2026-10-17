@@ -27,7 +27,11 @@
  * the pid that connected it (0 = free), set at connect, cleared at close/reap.
  * Single check point for WRITE/READ/CLOSE: owner or the sovereign operator. */
 #define SOCK_SLOTS 8
-static uint32_t g_sock_owner[SOCK_SLOTS];
+/* DDR-987 sec.10: g_sock_owner[] and sock_denied() are GONE. They were the
+ * time-of-check half of a cross-layer TOCTOU -- the owner was read here without
+ * a lock and psock_* ran afterwards, so a close+reuse on another cpu left the
+ * operation on a different connection. Ownership now lives on the slot in
+ * lwip_port.c and is validated under g_net_lock together with the operation. */
 
 /* DDR-734 — per-host egress allowlist for CAP_NET callers. Bounded, append-only
  * (no runtime revocation surface — policy changes are a config edit + reboot),
@@ -61,10 +65,15 @@ int netallow_add(uint32_t host_be, uint16_t port) {
     return 0;
 }
 
-static int sock_denied(int slot) {
-    if (slot < 0 || slot >= SOCK_SLOTS)
-        return 0;                           /* out of range: let psock_* -EBADF it */
-    return g_sock_owner[slot] != current_thread->pid && !current_thread->is_sovereign;
+/* Map the port's error shape onto errno. -2 = not this caller's slot (DDR-731
+ * per-slot ownership, what user/capnettest.c gates on); -1 = stale/bad handle. */
+/* DDR-988 sec.10: three distinct proxy-socket failures, three distinct errnos.
+ * -2 PSOCK_DENIED = not this caller's slot; -3 PSOCK_EIO = the send itself
+ * failed; anything else = a stale/closed handle. */
+static long sock_err(int rc) {
+    if (rc == -2) return -EPERM;
+    if (rc == -3) return -EIO;
+    return -EBADF;
 }
 
 static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a6) {
@@ -148,32 +157,75 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
                      AR_NET_CONNECT);
     }
 
-    int slot = psock_connect((uint32_t)a1, (uint16_t)a2);
-    if (slot >= 0 && slot < SOCK_SLOTS)
-        g_sock_owner[slot] = current_thread->pid;
-    return (slot < 0) ? -EMFILE : (long)slot;     /* no free socket / net down */
+    int h = psock_connect((uint32_t)a1, (uint16_t)a2, current_thread->pid);
+    return (h < 0) ? -EMFILE : (long)h;           /* no free socket / net down */
+}
+
+/* DDR-1070 — privacy mode on the I/O paths.
+ *
+ * DDR-802 put the privacy check in sys_sock_connect and nowhere else, so the
+ * control governed OPENING a channel and not USING one: a proxy socket that was
+ * already open when the operator switched privacy mode on kept sending and kept
+ * receiving. That is the case the control exists for -- sec.93 above states the
+ * design as "the operator's explicit instruction that nothing leaves", and it is
+ * ordered ahead of the DDR-800 sovereign bypass precisely so it is
+ * unconditional.
+ *
+ * Checked HERE and not inside psock_write/psock_read under g_net_lock. DDR-987
+ * sec.10 pushed the OWNERSHIP check down there because the thing being checked
+ * -- the owner of slot N -- could change identity between the check and the
+ * operation, so the operation landed on a different connection. Privacy mode is
+ * a GLOBAL flag, not a property of a slot; there is no identity to change
+ * underneath it, and pushing it down would give the lwIP port an AETHER
+ * dependency it does not currently have (grep: zero matches).
+ *
+ * The refusal is audited with the peer taken off the slot, so the record joins
+ * up with the connect record for the same conversation; ACTION_NET_EGRESS keeps
+ * "a blocked write" distinct from "a blocked connect" (DDR-801: the record
+ * states the decision that was actually made). An unresolvable handle audits
+ * dest 0 and still returns -EPERM -- under privacy mode a caller learns nothing
+ * about whether the handle was theirs, which is the same reasoning DDR-802
+ * records for refusing capability-holders and non-holders identically.
+ *
+ * NOT applied to sys_sock_close: refusing to close would strand slots and leak
+ * the very connections the operator wants stopped. */
+static int privacy_refuses_io(long handle) {
+    if (!aether_privacy_active())
+        return 0;
+    uint32_t host_be = 0;
+    uint16_t port = 0;
+    (void)psock_dest((int)handle, current_thread->pid,
+                     current_thread->is_sovereign, &host_be, &port);
+    aether_audit(current_thread->pid, ACTION_NET_EGRESS,
+                 AETHER_DEST_ID(host_be, port), AR_PRIVACY_BLOCKED);
+    return 1;
 }
 
 static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a4;
-    if (sock_denied((int)a1))
-        return -EPERM;                        /* DDR-731: not this caller's slot */
+    if (privacy_refuses_io(a1)) return -EPERM;          /* DDR-1070 */
     int len = (int)a3;
     if (len <= 0) return 0;
     if (len > SOCK_IO_MAX) len = SOCK_IO_MAX;
+    /* DDR-1170: the bytes actually sent, charged before the copy. */
+    if (aether_budget_charge(current_thread, TASK_BUDGET_BYTES, (uint64_t)len) < 0)
+        sched_exit(137);                         /* never returns */
     uint8_t kbuf[SOCK_IO_MAX];
     if (copyin(kbuf, (const void __user *)a2, (size_t)len) < 0)
         return -EFAULT;
-    int n = psock_write((int)a1, kbuf, len);
-    return (n < 0) ? -EIO : (long)n;
+    /* DDR-987 sec.10: authority is checked inside psock_write, under the lock. */
+    int n = psock_write((int)a1, current_thread->pid,
+                        current_thread->is_sovereign, kbuf, len);
+    /* DDR-988 sec.10: was `(n < 0) ? -EIO : n`, which flattened a STALE handle
+     * into -EIO -- the read and close paths return -EBADF for the same case. */
+    return (n < 0) ? sock_err(n) : (long)n;
 }
 
 static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
-    int slot = (int)a1;
-    if (sock_denied(slot))
-        return -EPERM;                        /* DDR-731: not this caller's slot */
+    if (privacy_refuses_io(a1)) return -EPERM;          /* DDR-1070 */
+    int slot = (int)a1;                       /* opaque handle (DDR-987 sec.10) */
     int len = (int)a3;
     unsigned timeout_ms = (unsigned)a4;
     if (len <= 0) return 0;
@@ -182,17 +234,19 @@ static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) 
 
     uint64_t deadline = g_ticks + (timeout_ms + 9u) / 10u;   /* PIT @100 Hz */
     for (;;) {
-        int n = psock_read(slot, kbuf, len);
+        int n = psock_read(slot, current_thread->pid,
+                           current_thread->is_sovereign, kbuf, len);
         if (n < 0)
-            return -EBADF;
+            return sock_err(n);               /* -EPERM vs -EBADF (DDR-731) */
         if (n > 0) {
             if (copyout((void __user *)a2, kbuf, (size_t)n) < 0)
                 return -EFAULT;
             return (long)n;
         }
-        int st = psock_state(slot);
+        int st = psock_state(slot, current_thread->pid,
+                             current_thread->is_sovereign);
         if (st < 0)
-            return -EBADF;
+            return sock_err(st);
         if (st == PS_CLOSING)
             return 0;                              /* ring drained + peer closed = EOF */
         if (st == PS_ERR)
@@ -208,13 +262,10 @@ static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) 
 static long sys_sock_close(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
-    int slot = (int)a1;
-    if (sock_denied(slot))
-        return -EPERM;                        /* DDR-731: not this caller's slot */
-    if (psock_close(slot) < 0)
-        return -EBADF;
-    if (slot >= 0 && slot < SOCK_SLOTS)
-        g_sock_owner[slot] = 0;
+    int rc = psock_close((int)a1, current_thread->pid,
+                         current_thread->is_sovereign);
+    if (rc < 0)
+        return sock_err(rc);                  /* -EPERM vs -EBADF (DDR-731) */
     return 0;
 }
 
@@ -222,11 +273,7 @@ static long sys_sock_close(long a1, long a2, long a3, long a4, long a5, long a6)
  * the exiting pid owns, so a process that dies mid-connection never leaks one
  * of the 8 slots. Called from sched_exit. */
 void socket_reap_pid(uint32_t pid) {
-    for (int s = 0; s < SOCK_SLOTS; s++)
-        if (g_sock_owner[s] == pid) {
-            psock_close(s);
-            g_sock_owner[s] = 0;
-        }
+    psock_reap_owner(pid);                    /* DDR-987 sec.10: under g_net_lock */
 }
 
 /* DDR-734: sovereign-only, append an egress rule. -EPERM (audited) otherwise;
@@ -241,10 +288,73 @@ static long sys_net_allow(long a1, long a2, long a3, long a4, long a5, long a6) 
     return (netallow_add((uint32_t)a1, (uint16_t)a2) < 0) ? -ENOSPC : 0;
 }
 
+/* DDR-1141 sec.3 -- SYS_DNS_RESOLVE(name, uint32_t *out, resolver).
+ *
+ * A DNS query is EGRESS: it leaves the machine and it carries the name. So it
+ * passes the same four decisions as sys_sock_connect, in the same order and for
+ * the same reasons, on the destination (resolver, 53) -- and a refused query is
+ * NOT SENT, because the query itself is the leak. Every decision is recorded as
+ * ACTION_NET_DNS before anything goes out (DDR-801: an authorised attempt is
+ * audited independently of network conditions). The queried NAME is not in the
+ * record -- audit ids are integers -- and that is stated, not glossed.
+ *
+ * resolver == 0 means the one DHCP handed out. A non-zero resolver is a real
+ * destination and is allowlisted like any other. */
+#define DNS_NAME_MAX 128
+static long sys_dns_resolve(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    char name[DNS_NAME_MAX];
+    ssize_t nl = copyinstr(name, (const void __user *)a1, sizeof name, 0);
+    if (nl < 0) return nl;                        /* -EFAULT | -ENAMETOOLONG */
+    if (nl == 0) return -EINVAL;
+    uint32_t resolver = (uint32_t)a3 ? (uint32_t)a3 : pdns_default_server();
+    if (!resolver) return -ENODEV;                /* no lease, so no resolver */
+    uint64_t id = AETHER_DEST_ID(resolver, 53);
+    uint32_t pid = current_thread->pid;
+
+    if (aether_privacy_active()) {                /* 1. ahead of everything, incl. the bypass */
+        aether_audit(pid, ACTION_NET_DNS, id, AR_PRIVACY_BLOCKED);
+        return -EPERM;
+    }
+    if (!current_thread->is_net && !current_thread->is_sovereign) {   /* 2. CAP_NET */
+        aether_audit(pid, ACTION_NET_DNS, id, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    int listed = (netallow_check(resolver, 53) == 0);
+    if (!current_thread->is_sovereign && !listed) {                    /* 3. allowlist */
+        aether_audit(pid, ACTION_NET_DNS, id, AR_CAP_DENIED);
+        return -EPERM;
+    }
+    /* 4. DDR-800 bypass named as such; otherwise the ordinary allowed record. */
+    aether_audit(pid, ACTION_NET_DNS, id,
+                 (current_thread->is_sovereign && (!current_thread->is_net || !listed))
+                     ? AR_SOVEREIGN_BYPASS : AR_NET_CONNECT);
+
+    uint32_t ip = 0, gen = 0;
+    int rc = pdns_start(name, resolver, &ip, &gen);
+    if (rc == -1) return -EAGAIN;                 /* another query in flight */
+    if (rc == -3) return -ENODEV;
+    if (rc == -2) return -ENOENT;
+    if (rc == 0) {
+        uint64_t deadline = g_ticks + 500;        /* 5 s at 100 Hz */
+        for (;;) {
+            rc = pdns_poll(gen, &ip);
+            if (rc == 1) break;
+            if (rc < 0) return -ENOENT;           /* NXDOMAIN, lwIP gave up, or superseded */
+            if (g_ticks >= deadline) { pdns_abandon(gen); return -ETIMEDOUT; }
+            __asm__ volatile("sti; hlt; cli");    /* RX + timers run; sys_sock_read's wait */
+        }
+    }
+    if (copyout((void __user *)a2, &ip, sizeof ip) < 0)
+        return -EFAULT;
+    return 0;
+}
+
 void sys_socket_register(void) {
     syscall_register(SYS_SOCK_CONNECT, sys_sock_connect);
     syscall_register(SYS_SOCK_WRITE,   sys_sock_write);
     syscall_register(SYS_SOCK_READ,    sys_sock_read);
     syscall_register(SYS_SOCK_CLOSE,   sys_sock_close);
     syscall_register(SYS_NET_ALLOW,    sys_net_allow);    /* DDR-734 */
+    syscall_register(SYS_DNS_RESOLVE,  sys_dns_resolve);  /* DDR-1141 */
 }

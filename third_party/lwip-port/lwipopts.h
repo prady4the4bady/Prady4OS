@@ -12,7 +12,11 @@
 
 /* --- system / threading ------------------------------------------------- */
 #define NO_SYS                      1
-#define SYS_LIGHTWEIGHT_PROT        0   /* single core; lwIP calls are serialized */
+#define SYS_LIGHTWEIGHT_PROT        0   /* DDR-987: lwIP still has no internal locking;
+                                         * serialization is now g_net_lock in
+                                         * lwip_port.c, NOT "single core" -- that
+                                         * assumption died with ADR-029..031 and
+                                         * cost us OPEN-1 / OPEN-12. */
 #define LWIP_NETCONN                0
 #define LWIP_SOCKET                 0
 #define LWIP_TIMERS                 1
@@ -41,13 +45,17 @@ void *pradyos_lwip_calloc(unsigned long n, unsigned long size);
 #define LWIP_IPV6                   0   /* deferred (ADR-025 §D5) */
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
-#define LWIP_DHCP                   0   /* static IP (ADR-025 §D5) */
+#define LWIP_DHCP                   1   /* DDR-1141: no static address, no fallback */
+#define LWIP_ACD                    0   /* DDR-1141 sec.2.1: no conflict probing (slirp cannot conflict) */
+#define LWIP_DHCP_DOES_ACD_CHECK    0
 #define LWIP_AUTOIP                 0
 #define LWIP_ICMP                   1
 #define LWIP_RAW                    1
 #define LWIP_UDP                    1
 #define LWIP_TCP                    1
-#define LWIP_DNS                    0
+#define LWIP_DNS                    1   /* DDR-1141: SYS_DNS_RESOLVE, policy-checked */
+#define DNS_MAX_SERVERS             2
+#define LWIP_DHCP_PROVIDE_DNS_SERVERS 1
 #define LWIP_IGMP                   0
 #define LWIP_NETIF_LOOPBACK         1   /* smoke-net-lo */
 #define LWIP_HAVE_LOOPIF            1

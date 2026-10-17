@@ -75,6 +75,7 @@
 #define ATA_READ_DMA_EX  0x25
 #define ATA_WRITE_DMA_EX 0x35
 #define ATA_IDENTIFY     0xEC
+#define ATA_FLUSH_EXT    0xEA             /* DDR-1143 §10.2: FLUSH CACHE EXT */
 
 #define AHCI_MAX_PORTS  32
 #define AHCI_MAX_DISKS  4
@@ -218,6 +219,23 @@ static int ahci_write(struct blk_device *bd, uint64_t lba, const void *buf,
     return issue(d, ATA_WRITE_DMA_EX, lba, (uint64_t)(uintptr_t)buf, count, 1);
 }
 
+/* DDR-1143 §10.2: FLUSH CACHE EXT is a NON-DATA command, so it carries no
+ * PRDT entry (prdtl = 0) and no direction bit. Reusing issue() would hand the
+ * HBA a one-entry PRDT with a byte count of -1 for zero sectors. */
+static int ahci_flush(struct blk_device *bd) {
+    struct ahci_disk *d = (struct ahci_disk *)bd->drv;
+    memset(d->ctb, 0, sizeof *d->ctb);
+    uint8_t *f = d->ctb->cfis;
+    f[0] = 0x27;                     /* Register Host-to-Device */
+    f[1] = 0x80;                     /* C bit */
+    f[2] = ATA_FLUSH_EXT;
+    f[7] = 0x40;                     /* LBA mode */
+    d->clb[0].flags = 5;             /* CFL=5 dwords, W=0 */
+    d->clb[0].prdtl = 0;
+    d->clb[0].prdbc = 0;
+    return port_run(d->port);
+}
+
 static void port_setup(volatile uint8_t *pbase) {
     if (g_ndisks >= AHCI_MAX_DISKS)
         return;
@@ -287,13 +305,19 @@ static void port_setup(volatile uint8_t *pbase) {
     d->bd.capacity_sectors = sectors;
     d->bd.read  = ahci_read;
     d->bd.write = ahci_write;
+    d->bd.flush = ahci_flush;
     d->bd.drv   = d;
     blk_register(&d->bd);
     g_ndisks++;
 
-    kputs("[ahci] port disk, sectors=");
-    kputdec(sectors);
-    kputs("\r\n");
+    { kline k; kline_init(&k);                       /* DDR-1055 */
+      kline_s(&k, "[ahci] port disk, sectors=");
+      kline_d(&k, sectors);
+      kline_s(&k, "\r\n"); kline_emit(&k); }
+    /* DDR-1143 §10.2: the device must ACCEPT the flush command (smoke-ahci).
+     * That it reached stable media is not observable from a guest (§7). */
+    { int fr = ahci_flush(&d->bd);
+      kputs(fr == 0 ? "[ahci] flush rc=0\r\n" : "[ahci] flush FAIL\r\n"); }
 }
 
 void ahci_init(uint8_t bus, uint8_t dev, uint8_t func) {
