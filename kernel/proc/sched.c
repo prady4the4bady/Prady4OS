@@ -2639,7 +2639,7 @@ int sched_signal_user_pid(uint32_t pid, int sig) {
     struct tcb *t = find_user_pid_locked(pid);
     int rc = -ESRCH;
     if (t) {
-        sig_raise(t, sig, (int32_t)current_thread->pid, SI_USER, 0);  /* DDR-1174: atomic */
+        sig_raise(t, sig, (int32_t)t->pid, SI_USER, 0);  /* DDR-1174: atomic */
         rc = 0;
     }
     irq_restore(fl);
