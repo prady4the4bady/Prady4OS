@@ -99,3 +99,16 @@ does not wake a blocked thread, so a handled signal is delivered when wait4
 returns (as arm C relies on), not by interrupting it. No real-time signals, no `sigaltstack`, no `SA_NODEFER`/`SA_RESETHAND`, no
 `ucontext` contents. Not claimed to close OPEN-1/OPEN-2. Not exonerated in
 advance (DDR-1042): it changes the syscall exit path.
+
+## Correction (CI artefact, run 38976800811 shard 6, head e2b4e9d)
+
+Captured: `SIGSEM FAIL: sigaction2 sig=10 act=618475290160 rc=-14`. `act` is
+0x8FFFFFFE30, 464 B below USER_STACK_TOP and inside the eager stack window, so
+the pointer was valid. **Mechanism:** `copyin`/`copyout` return the BYTE COUNT
+on success (`uaccess.c`, `return (ssize_t)n`) and the tree's convention is
+`< 0` (`sys_io.c:38/55/132`). Five sites in `signal.c` tested `if (copyin(...))`,
+so every SUCCESSFUL copy returned -EFAULT: `sys_sigaction2` (in and out),
+`sys_sigprocmask` (in and out), and the SA_SIGINFO frame build in delivery,
+which would have `sched_exit(-1)`'d every SA_SIGINFO handler. All five now test
+`< 0`. The earlier mmap-arena fix (2ff8bd5) was a separate, real defect.
+kernel.bin size unchanged (1,528,202 B).

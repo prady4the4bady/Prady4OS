@@ -107,10 +107,10 @@ static long sys_sigaction2(long a_signum, long a_act, long a_old, long a4, long 
     if (sig <= 0 || sig >= NSIG || sig == SIGKILL)
         return -EINVAL;
     struct k_sigaction act, old;
-    if (a_act && copyin(&act, (const void __user *)a_act, sizeof act))
+    if (a_act && copyin(&act, (const void __user *)a_act, sizeof act) < 0)
         return -EFAULT;
     do_sigaction(sig, a_act ? &act : 0, &old);
-    if (a_old && copyout((void __user *)a_old, &old, sizeof old))
+    if (a_old && copyout((void __user *)a_old, &old, sizeof old) < 0)
         return -EFAULT;
     return 0;
 }
@@ -120,7 +120,7 @@ static long sys_sigprocmask(long a_how, long a_set, long a_old, long a4, long a5
     struct tcb *t = current_thread;
     uint64_t old = t->sig_mask, set = 0;
     if (a_set) {
-        if (copyin(&set, (const void __user *)a_set, sizeof set))
+        if (copyin(&set, (const void __user *)a_set, sizeof set) < 0)
             return -EFAULT;
         switch (a_how) {
         case SIG_BLOCK:   t->sig_mask |= set;  break;
@@ -130,7 +130,7 @@ static long sys_sigprocmask(long a_how, long a_set, long a_old, long a4, long a5
         }
         t->sig_mask &= ~SIG_UNMASKABLE;
     }
-    if (a_old && copyout((void __user *)a_old, &old, sizeof old))
+    if (a_old && copyout((void __user *)a_old, &old, sizeof old) < 0)
         return -EFAULT;
     return 0;
 }
@@ -203,7 +203,7 @@ void signal_deliver(struct regs *r) {
             struct k_siginfo si = { sig, t->sig_info[sig].code,
                                     t->sig_info[sig].pid, t->sig_info[sig].status };
             uint64_t sp = (r->rsp - 128 - sizeof si) & ~0xFull;  /* past the red zone */
-            if (copyout((void __user *)sp, &si, sizeof si)) {
+            if (copyout((void __user *)sp, &si, sizeof si) < 0) {
                 sched_exit(-1);                  /* cannot build the frame: SIGSEGV-like */
             }
             r->rsi = sp;
