@@ -18,12 +18,18 @@
 #include "uaccess.h"
 #include "errno.h"
 #include "pmm.h"                 /* DDR-764: 4 KiB bounce page for FD_VFS writes */
+#include "aether.h"              /* DDR-1170: per-task byte budget */
 
 /* Write `count` (> 0) bytes from the user buffer at `uptr` to fd `e`, via the
  * validated copyin path (never a raw user dereference). Returns bytes written
  * (possibly short for a full pipe), or a negative errno when nothing was written.
  * Shared by sys_write and sys_writev (PROC-D). */
 static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
+    /* DDR-1170: charged BEFORE any byte moves, on every fd kind, so a budgeted
+     * task cannot emit past its limit by choosing a different descriptor. */
+    if (count > 0 && aether_budget_charge(current_thread, TASK_BUDGET_BYTES,
+                                          (uint64_t)count) < 0)
+        sched_exit(137);                         /* never returns */
     if (e->kind == FD_CONSOLE) {
         char kbuf[256];
         long total = 0, remaining = count;
@@ -58,6 +64,10 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
              * never reads leaves this spinning forever. */
             {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
                 while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0) {
+                    if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                        yield_stall_done("pipe_write", n, g_ticks - t0, &noted);
+                        return total > 0 ? total : -EINTR;
+                    }
                     yield();
                     if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
                         yield_stall_note("pipe_write", n, g_ticks - t0, &noted);
@@ -79,7 +89,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
                  * caller the pipe is closing. */
                 if (total > 0)
                     return total;
-                current_thread->sig_pending |= (1ull << SIGPIPE);
+                sig_raise(current_thread, SIGPIPE, 0, SI_KERNEL, 0);  /* DDR-1174 */
                 return -EPIPE;
             }
             long w = pipe_write(e->pipe, kbuf, chunk);
@@ -103,6 +113,8 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
      * fewer vfs_write iterations, and each SFS extent now holds a full block so a
      * ring-3 SFS file reaches 4 extents * 4 KiB = 16 KiB instead of ~1 KiB. */
     if (e->kind == FD_VFS && e->file) {
+        if (e->flags & FD_RB_RO)
+            return -EPERM;           /* DDR-1171: rollback task, existing file */
         /* DDR-782: O_APPEND. Re-position at end-of-file once per write() call,
          * before the chunk loop — that is the POSIX atomicity property (the whole
          * call lands at the end as one act), and it is what an lseek-at-open
@@ -272,6 +284,13 @@ static long sys_writev(long fd, long uiov, long iovcnt, long a4, long a5, long a
          * DDR-1082 costed and refused. The dependency is recorded here instead,
          * where the edit that would break it happens. */
         if (need > 0 && need <= (uint64_t)GATHER_MAX) {
+            /* DDR-1170: this path emits WITHOUT going through fd_write_user, so
+             * it charges the byte budget itself. Measured: before this line a
+             * budgeted task's musl fflush (always a two-iovec writev) wrote to
+             * the console uncharged -- smoke-taskbudget's B arm read 5120, i.e.
+             * five 1 KiB pipe writes and NOT the agent's start line. */
+            if (aether_budget_charge(current_thread, TASK_BUDGET_BYTES, need) < 0)
+                sched_exit(137);                 /* never returns */
             char gather[GATHER_MAX];
             uint64_t at = 0;
             for (long i = 0; i < iovcnt; i++) {
@@ -360,6 +379,10 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
                  * but never writes leaves this spinning forever. */
                 {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
                     while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0) {
+                        if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                            yield_stall_done("pipe_read", n, g_ticks - t0, &noted);
+                            return -EINTR;   /* total == 0 on this path */
+                        }
                         yield();
                         if (++n >= YIELD_STALL_SPINS && (g_ticks - t0) >= YIELD_STALL_TICKS)
                             yield_stall_note("pipe_read", n, g_ticks - t0, &noted);
@@ -390,6 +413,8 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
         for (;;) {
             int c = kgetc_nb();
             if (c >= 0) { kbuf[n++] = (char)c; break; }
+            if (signal_interruptible(current_thread))
+                return -EINTR;                    /* DDR-1174: nothing read yet */
             yield();
         }
         while (n < count && n < (long)sizeof kbuf) {

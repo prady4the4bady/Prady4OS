@@ -130,6 +130,8 @@ USER_AMEM_SRC := user/agentmemtest.c     # DDR-836: agent memory gate
 USER_AMEM_ELF := build/agentmemtest.elf
 USER_CKPT_SRC := user/ckpttest.c         # DDR-837: checkpoint/resume gate
 USER_CKPT_ELF := build/ckpttest.elf
+USER_KILLAGENT_SRC := user/killagenttest.c  # DDR-1159: SYS_KILL_AGENT gate (Fix 3)
+USER_KILLAGENT_ELF := build/killagenttest.elf
 USER_SDEP_SRC := user/spawndepthtest.c   # DDR-838: spawn-depth cap gate
 USER_SDEP_ELF := build/spawndepthtest.elf
 USER_DAG_SRC := user/actiondagtest.c     # DDR-839: DAG action queue gate
@@ -141,6 +143,8 @@ USER_ADEL_ELF := build/actiondeltest.elf
 USER_MPROT_SRC := user/mprotecttest.c    # DDR-1031: SYS_MPROTECT (NSI 97)
 USER_KILLB_SRC := user/killblocktest.c   # DDR-1090: SIGKILL vs an unbounded kernel wait
 USER_KILLB_ELF := build/killblocktest.elf
+USER_SIGSEM_SRC := user/sigsemtest.c   # DDR-1174: POSIX signal semantics (C1.1)
+USER_SIGSEM_ELF := build/sigsemtest.elf
 USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
 USER_DISK_ELF  := build/disktest.elf
 USER_DOMCAP_SRC := user/domcaptest.c     # DDR-1149: domain capabilities at submission
@@ -188,6 +192,10 @@ USER_SIGPIPE_SRC := user/sigpipetest.c    # DDR-805: SIGPIPE probe (DDR-804 opt-
 USER_SIGPIPE_ELF := build/sigpipetest.elf
 USER_PRIVNET_SRC := user/privacynettest.c # DDR-802: privacy netfilter probe (DDR-804 opt-in)
 USER_PRIVNET_ELF := build/privacynettest.elf
+USER_BUDGET_SRC := user/budgettest.c # DDR-1170: per-task budget probe (DDR-804 opt-in)
+USER_BUDGET_ELF := build/budgettest.elf
+USER_RB_SRC := user/rbtest.c # DDR-1171: rollback-on-rejection probe (DDR-804 opt-in)
+USER_RB_ELF := build/rbtest.elf
 USER_DNS_SRC := user/dnstest.c         # DDR-1141: SYS_DNS_RESOLVE probe (built 3x, -DDNS_PHASE)
 USER_DNS1_ELF := build/dnstest1.elf
 USER_DNS2_ELF := build/dnstest2.elf
@@ -217,7 +225,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c kernel/drivers/blk/blk_part.c kernel/kimg.c kernel/install/install.c \
                kernel/drivers/net/virtio_net.c kernel/drivers/net/e1000e.c kernel/drivers/net/netbuf.c \
                kernel/drivers/gpu/virtio_gpu.c kernel/drivers/gpu/display.c \
-               kernel/drivers/nvme/nvme.c kernel/drivers/ahci/ahci.c \
+               kernel/drivers/nvme/nvme.c kernel/drivers/usb/xhci.c kernel/drivers/ahci/ahci.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
                kernel/drivers/fwcfg/fwcfg.c \
@@ -238,7 +246,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
@@ -246,7 +254,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
 # kernel/ subdirectory reorganization).
 KINCLUDES   := -Ikernel -Ikernel/mm -Ikernel/proc -Ikernel/ipc -Ikernel/syscall \
                -Ikernel/acpi -Ikernel/drivers/pcie -Ikernel/drivers/virtio -Ikernel/drivers/rtc -Ikernel/drivers/fwcfg -Ikernel/crypto -Ikernel/drivers/rng \
-               -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/drivers/gpu -Ikernel/drivers/nvme -Ikernel/drivers/ahci -Ikernel/drivers/input -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs -Ikernel/fs/pdrive \
+               -Ikernel/drivers/blk -Ikernel/drivers/net -Ikernel/drivers/gpu -Ikernel/drivers/nvme -Ikernel/drivers/usb -Ikernel/drivers/ahci -Ikernel/drivers/input -Ikernel/fs/vfs -Ikernel/fs/fat32 -Ikernel/fs/sfs -Ikernel/fs/pdrive \
                -Ikernel/fs/ext4 -Ikernel/exec -Ikernel/include -Ikernel/arch/x86_64 -Ikernel/vdso -Ikernel/aether -Ikernel/apic
 KCFLAGS     := --target=$(X64_TRIPLE) -ffreestanding -fno-pic -fno-pie \
                -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \
@@ -299,7 +307,7 @@ KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_F
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -550,6 +558,10 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SOVEG_ELF) build/sovegresstest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_PRIVNET_SRC) -o build/privacynettest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_PRIVNET_ELF) build/privacynettest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_BUDGET_SRC) -o build/budgettest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BUDGET_ELF) build/budgettest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_RB_SRC) -o build/rbtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_RB_ELF) build/rbtest.o
 	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=1 -c $(USER_DNS_SRC) -o build/dnstest1.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DNS1_ELF) build/dnstest1.o
 	$(CC) $(USER_C_CFLAGS) -DDNS_PHASE=2 -c $(USER_DNS_SRC) -o build/dnstest2.o
@@ -599,6 +611,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_AMEM_ELF) build/agentmemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_CKPT_SRC) -o build/ckpttest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_CKPT_ELF) build/ckpttest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLAGENT_SRC) -o build/killagenttest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLAGENT_ELF) build/killagenttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SDEP_SRC) -o build/spawndepthtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SDEP_ELF) build/spawndepthtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DAG_SRC) -o build/actiondagtest.o
@@ -611,6 +625,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_MPROT_ELF) build/mprotecttest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_KILLB_SRC) -o build/killblocktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_KILLB_ELF) build/killblocktest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SIGSEM_SRC) -o build/sigsemtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SIGSEM_ELF) build/sigsemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DOMCAP_SRC) -o build/domcaptest.o
@@ -653,7 +669,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -720,6 +736,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/virtio_gpu.c     -o build/virtio_gpu.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/gpu/display.c        -o build/display.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/nvme/nvme.c          -o build/nvme.o
+	$(CC) $(KCFLAGS) -c kernel/drivers/usb/xhci.c           -o build/xhci.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/ps2kbd.c       -o build/ps2kbd.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/input/virtio_input.c -o build/virtio_input.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rtc/rtc.c            -o build/rtc.o
@@ -2296,6 +2313,19 @@ smoke-pmm-poison: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 EXTRA_SENTINEL='[pmm] poison enabled' \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
+# DDR-1158: KASAN use-after-free regression test (DDR-1155 §4). smoke-pmm-poison
+# above only asserts the "[pmm] poison enabled" banner, so a regression that
+# dropped the poison FILL in pmm_free_pages while keeping the banner would pass
+# it. This boots the kernel, whose pmm_kasan_uaf_selftest does a deliberate
+# use-after-free READ of a just-freed frame and asserts it reads PMM_POISON,
+# printing PRADYOS_KASAN_UAF_OK. Before/after mutant: comment out the poison
+# loop in pmm_free_pages (kernel/mm/pmm.c) -> the read returns the stale value,
+# PRADYOS_KASAN_UAF_OK never prints, and this gate fails while smoke-pmm-poison
+# still passes. NOT a reproduction of U1/U2/U3 (DDR-1155 §5).
+smoke-kasan-uaf: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 EXTRA_SENTINEL='PRADYOS_KASAN_UAF_OK' \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 # IMP-C vDSO gate: the ring-3 systest reads wall_time_ns from the read-only vDSO
 # page (no syscall) and prints it only when non-zero, proving the kernel-updated
 # clock is visible in user space. Loads user ELFs, so allow extra wall time.
@@ -3086,15 +3116,15 @@ smoke-sigpipe: $(IMG) fat-image sfs-image
 CHIPSET_VARIANTS := q35/qemu64 pc/qemu64 q35/Nehalem q35/Opteron_G5
 
 smoke-chipset: $(IMG) fat-image sfs-image
-	@fail=0; \
+	@mkdir -p build/gatelogs; fail=0; \
 	for v in $(CHIPSET_VARIANTS); do \
 	  m=$${v%%/*}; c=$${v##*/}; \
 	  echo "[chipset] === -M $$m -cpu $$c ==="; \
 	  if TIMEOUT_S=90 QEMU_MACHINE=$$m QEMU_CPU=$$c \
-	     bash tools/qemu_runner/boot_test.sh $(IMG) >/tmp/cs_$$m_$$c.log 2>&1; then \
+	     bash tools/qemu_runner/boot_test.sh $(IMG) > build/gatelogs/chipset_$${m}_$${c}.log 2>&1; then \
 	    echo "[chipset] PASS -M $$m -cpu $$c"; \
 	  else \
-	    echo "[chipset] FAIL -M $$m -cpu $$c"; tail -15 /tmp/cs_$$m_$$c.log; fail=1; \
+	    echo "[chipset] FAIL -M $$m -cpu $$c"; tail -15 build/gatelogs/chipset_$${m}_$${c}.log; fail=1; \
 	  fi; \
 	done; \
 	test $$fail -eq 0 || { echo '[chipset] FAIL - a variant did not boot'; exit 1; }
@@ -3193,6 +3223,12 @@ smoke-checkpoint: $(IMG) fat-image sfs-image
 	TIMEOUT_S=120 QEMU_PROBES=ckpt \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_CKPT_OK\nPRADYOS_CKPT_DENY_OK')" \
 	FORBIDDEN_SENTINEL="CKPT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+smoke-killagent: $(IMG) fat-image sfs-image
+	TIMEOUT_S=120 QEMU_PROBES=killagent \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_KILLAGENT_OK\nPRADYOS_KILLAGENT_DENY_OK')" \
+	FORBIDDEN_SENTINEL="KILLAGENT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 smoke-agentmem: $(IMG) fat-image sfs-image
@@ -3445,6 +3481,66 @@ smoke-modkeys: $(IMG) fat-image sfs-image
 # line (DDR-1044), each owned by a distinct mutant (DDR-1143 piece 1). Runs on a
 # private 256 KiB ramdisk the probe creates, so it writes nothing another gate
 # owns. The FORBIDDEN pattern names a failure instead of leaving an absence.
+# DDR-1161 (USB piece 1): xHCI controller bring-up and port detection. QEMU
+# qemu-xhci with usb-kbd + usb-tablet attached; both must show as connected.
+# Proves the emulated controller only: nothing is enumerated yet.
+smoke-xhci: $(IMG)
+	@echo "[xhci] controller bring-up gate (DDR-1161..1164)..."
+	TIMEOUT_S=60 QEMU_XHCI=1 \
+	EXTRA_SENTINEL="$$(printf '[xhci] up hciver=0x0000000000000100 slots=64 ports=8\n[xhci] port=5 ccs=1 speed=3\n[xhci] port=6 ccs=1 speed=3\n[xhci] connected=2\n[xhci] running\n[xhci] enable-slot cc=1 slot=1\n[xhci] port-reset port=5 ped0=0 ped=1\n[xhci] address port=5 slot=1 cc=1\n[xhci] device-desc cc=1 len=18 type=1 usb=0x0000000000000200 mps0=64 vid=0x0000000000000627 pid=0x0000000000000001\n[xhci] config-desc cc=1 total=34 cfg=1 ifaces=1 class=3 sub=1 proto=1 ep=0x0000000000000081 attr=3 mps=8 ival=7\n[xhci] set-config cfg=1 cc=1 got=1\n[xhci] configure-ep ep=0x0000000000000081 dci=3 cc=1\n[xhci] set-protocol cc=1')" \
+	FORBIDDEN_SENTINEL="[xhci] FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+smoke-usbkbd: $(IMG) fat-image sfs-image
+	@echo "[usbkbd] USB HID keyboard gate (DDR-1165/1167): sendkey b -> qemu-xhci usb-kbd -> ps2kbd_feed -> SYS_INPUT_POLL..."
+	@mkdir -p build/gatelogs
+	@rm -f build/gatelogs/usbkbd.log /tmp/pusbkbd.sock
+	@bash tools/qemu_runner/input_inject.sh build/gatelogs/usbkbd.log /tmp/pusbkbd.sock "PRADYOS_INPUT_WAIT" "b" &
+	@timeout 90 qemu-system-x86_64 -machine q35 \
+	    -drive if=none,format=raw,file=$(IMG),id=d0 -device virtio-blk-pci,drive=d0,bootindex=0 \
+	    -drive if=none,format=raw,file=$(FAT_IMG),id=d1 -device virtio-blk-pci,drive=d1 \
+	    -drive if=none,format=raw,file=$(SFS_IMG),id=d2 -device virtio-blk-pci,drive=d2 \
+	    -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 \
+	    -monitor unix:/tmp/pusbkbd.sock,server,nowait \
+	    -serial file:build/gatelogs/usbkbd.log -display none -no-reboot || true
+	@grep -qa "\[xhci\] FAIL" build/gatelogs/usbkbd.log && { echo "[usbkbd] FAIL:"; grep -a "\[xhci\]" build/gatelogs/usbkbd.log; exit 1; } || true
+	@for l in "[xhci] configure-ep ep=0x0000000000000081 dci=3 cc=1" "[xhci] set-protocol cc=1" "[xhci] hid-armed" "[xhci] hid-report cc=1 mod=0 k0=5" "[xhci] hid-reports n=4" "PRADYOS_INPUT_OK b"; do \
+	    grep -qaF "$$l" build/gatelogs/usbkbd.log || { echo "[usbkbd] FAIL -- missing: $$l"; grep -a "\[xhci\]\|PRADYOS_INPUT" build/gatelogs/usbkbd.log; exit 1; }; done
+	@echo "[usbkbd] PASS -- a USB keypress reached ring 3 through the shared set-1 decoder; the interrupt-IN TRB is re-armed"
+
+# DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
+# Drives the driver's head/slot bookkeeping on a scratch struct (no device): a
+# real 5 s completion stall cannot be produced on demand under QEMU.
+smoke-vblklate: $(IMG) fat-image sfs-image
+	@echo "[vblklate] stale-head completion gate (DDR-1160)..."
+	TIMEOUT_S=120 QEMU_PROBES=vblklate \
+	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
+	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1170: per-task budgets. A sovereign probe spawns four budgeted agent
+# tasks; every verdict is read from the kernel audit log (AR_BUDGET_KILL by pid).
+# T: time (timing-dependent used, so only the kind is pinned); B: exactly the
+# 52-byte start line + 4 x 1 KiB; A: the 4th action; C: the CONTROL completes
+# unkilled and prints its DONE line.
+smoke-taskbudget: $(IMG) fat-image sfs-image
+	@echo "[taskbudget] per-task budget gate (DDR-1170)..."
+	TIMEOUT_S=120 QEMU_PROBES=taskbudget \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_TASKBUDGET T=1/\n B=2/4148 A=3/4 C=none \nPRADYOS_BUDTASK_DONE task=bud-bytes')" \
+	FORBIDDEN_SENTINEL="spawnfail" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
+# DDR-1171: rollback on rejection. R (rollback task) must have its unlink and
+# its write to an existing file refused, and its created file removed after
+# the rejection, audited undone=1 failed=0. C (same create, no flag) is the
+# control: rejection must neither roll it back nor delete its file.
+smoke-rollback: $(IMG) fat-image sfs-image
+	@echo "[rollback] rollback-on-rejection gate (DDR-1171)..."
+	TIMEOUT_S=150 QEMU_PROBES=rollback \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_RBTASK task=rb-work create=12 unlink=-1 wexist=-1\nPRADYOS_RBTASK task=rb-ctl create=12\nPRADYOS_ROLLBACK rj=0/0 R=1/0 rnew=gone C=none cnew=kept old=10 end')" \
+	FORBIDDEN_SENTINEL="spawnfail" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+
 smoke-part: $(IMG) fat-image sfs-image
 	@echo "[part] partition sub-device gate (DDR-1143 §4.1)..."
 	@mkdir -p build/gatelogs
@@ -3479,6 +3575,31 @@ smoke-rqfree: $(IMG) fat-image sfs-image
 	 [ -n "$$c" ] || { echo "[rqfree] FAIL — probe never reported"; tail -20 build/gatelogs/rqfree.log; exit 1; }; \
 	 [ "$$c" -gt 0 ] || { echo "[rqfree] FAIL — arm A: caught=0, the probe is no longer reproducing the freed-while-queued window; this gate would pass vacuously"; exit 1; }; \
 	 echo "[rqfree] PASS — arm A caught=$$c freed-while-queued TCBs, arm B queues intact"
+
+# DDR-1156 §4: virtio-blk slot-wait timeout must unlink the giving-up thread.
+# The probe occupies all 8 request slots on a blank scratch disk (the LAST
+# virtio-blk unit, from QEMU_BLKSCRATCH), spawns a 9th submitter which enqueues
+# on the slot wait list and times out, then asserts the list is clean. The fix
+# unlinks the timed-out thread; without it slot_head still points at the departed
+# TCB. Secondary instrument notblocked= counts wakes that popped a non-BLOCKED
+# waiter (NON-NEGOTIABLE 3): must be 0. Mutant M1 (remove the unlink) -> clean=0.
+smoke-blkslot: $(IMG) fat-image sfs-image
+	@echo "[blkslot] slot-wait timeout unlink gate (DDR-1156)..."
+	@mkdir -p build/gatelogs
+	@# blank 1 MiB scratch disk — nothing mounts it, so forcing slot-fixtures
+	@# on it cannot interfere with the boot/fat/sfs roots.
+	@dd if=/dev/zero of=build/blkslot.img bs=1M count=1 status=none
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/blkslot.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_PROBES=blkslotwait QEMU_BLKSCRATCH=1 QEMU_NO_EXT4=1 \
+	EXTRA_SENTINEL="PRADYOS_BLKSLOT clean=1 notblocked=0" \
+	FORBIDDEN_SENTINEL="$$(printf 'PRADYOS_BLKSLOT clean=0')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@l=$$(grep -ao 'PRADYOS_BLKSLOT clean=[0-9]* notblocked=[0-9]* t9=[0-9]*' build/gatelogs/blkslot.log | tail -1); \
+	 [ -n "$$l" ] || { echo "[blkslot] FAIL — probe never reported"; tail -20 build/gatelogs/blkslot.log; exit 1; }; \
+	 echo "$$l" | grep -q 't9=1' || { echo "[blkslot] FAIL — the 9th submitter did not time out with -EIO ($$l); the slot-wait path was not exercised, gate would be vacuous"; exit 1; }; \
+	 b=$$(grep -ao 'PRADYOS_BLKSLOT_B cleanb=[0-9]* t10=[0-9]*' build/gatelogs/blkslot.log | tail -1); \
+	 [ "$$b" = "PRADYOS_BLKSLOT_B cleanb=1 t10=1" ] || { echo "[blkslot] FAIL — arm B (DDR-1156 §8, no-sleep return): '$$b' (want cleanb=1 t10=1)"; exit 1; }; \
+	 echo "[blkslot] PASS — $$l"
 
 smoke-yieldstall: $(IMG) fat-image sfs-image
 	@mkdir -p build/gatelogs
@@ -4216,6 +4337,17 @@ smoke-killblock: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="$$(printf 'KILLBLOCK FAIL\nreaped=-')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[killblock] PASS — $$(grep -a PRADYOS_KILLBLOCK build/killblock.log | tail -1)"
+
+# DDR-1174 (C1.1): POSIX signal semantics. Every arm is an EXACT value the
+# kernel produced: mask (A), SIGKILL unmaskable (B), si_pid from the kernel's
+# send record (C), SIGCHLD status (D), EINTR == -4 exactly (E), SA_RESTART
+# restarting with the data (F). Mutants M1-M4 in DDR-1174 sec.3.
+smoke-sigsem: $(IMG) fat-image sfs-image
+	@rm -f build/sigsem.log
+	@SERIAL_LOG=build/sigsem.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=sigsem \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SIGSEM_A pre=0 post=1\nPRADYOS_SIGSEM_B kill=0\nPRADYOS_SIGSEM_C sipid_ok=1 runs=1\nPRADYOS_SIGSEM_D chld_ok=1 status=42 code=1\nPRADYOS_SIGSEM_E rc=-4 runs=1\nPRADYOS_SIGSEM_F rc=2 data=1 runs=1\nPRADYOS_SIGSEM_DONE')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@echo "[sigsem] PASS"
 
 smoke-actiondel: $(IMG) fat-image sfs-image
 	@rm -f build/actiondel.log

@@ -19,6 +19,7 @@
 #include "errno.h"
 #include "kheap.h"
 #include "string.h"
+#include "aether.h"     /* DDR-1171: rollback-task refusals + create log */
 
 #define PATH_MAX 256
 
@@ -44,6 +45,22 @@ static long sys_open(long upath, long flags, long mode, long a4, long a5, long a
     /* DDR-744: create-if-absent. Try the plain open first; only on failure with
      * O_CREAT set do we create (needs CAP_FS_WRITE, which vfs_create enforces). */
     int existed = (vfs_open(t->fs_cap, t->root_mnt, path, f) == 0);
+    /* DDR-1171: a rollback task may only do what can be undone. O_TRUNC on an
+     * existing file destroys data, and a create needs a log slot BEFORE it
+     * happens -- an untracked create is worse than a refused one. */
+    if (t->rb_log) {
+        if (existed && (flags & O_TRUNC)) {
+            kfree(f);
+            return -EPERM;
+        }
+        if (!existed && (flags & O_CREAT)) {
+            int rr = aether_rb_room(t, path);
+            if (rr) {
+                kfree(f);
+                return rr;
+            }
+        }
+    }
     if (!existed &&
         (!(flags & O_CREAT) ||
          vfs_create(t->fs_cap, t->root_mnt, path, f) != 0)) {
@@ -65,13 +82,25 @@ static long sys_open(long upath, long flags, long mode, long a4, long a5, long a
         }
     }
 
+    /* DDR-1171: log the create now that it happened. An EXISTING file the task
+     * did not create is opened read-only in effect: this kernel does not enforce
+     * the open access mode (every FD_VFS fd is writable), so the refusal has to
+     * ride on the fd and be checked at the write paths. */
+    int rb_ro = 0;
+    if (t->rb_log) {
+        if (!existed)
+            aether_rb_created(t, path);
+        else if (!aether_rb_is_created(t, path))
+            rb_ro = FD_RB_RO;
+    }
+
     struct fd_entry *e = &t->fdt.e[fd];
     e->kind  = FD_VFS;
     e->file  = f;
     e->off   = 0;
     e->mnt   = t->root_mnt;
     e->cap   = t->fs_cap;
-    e->flags = (int)flags;
+    e->flags = (int)flags | rb_ro;
     return fd;
 }
 
@@ -118,6 +147,8 @@ static long sys_ftruncate(long fd, long len, long a3, long a4, long a5, long a6)
     (void)a3; (void)a4;
     if (len < 0)
         return -EINVAL;
+    if (current_thread->rb_log)
+        return -EPERM;             /* DDR-1171: a shortened file cannot be undone */
 
     struct fd_entry *e = fd_get(current_thread, (int)fd);
     if (!e)
@@ -168,6 +199,8 @@ static long sys_unlink(long upath, long a2, long a3, long a4, long a5, long a6) 
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
+    if (t->rb_log)
+        return -EPERM;             /* DDR-1171: a removed file cannot be undone */
     if (t->root_mnt < 0)
         return -ENOENT;
     char path[PATH_MAX];
@@ -191,6 +224,8 @@ static long sys_unlink(long upath, long a2, long a3, long a4, long a5, long a6) 
 static long sys_rename(long uold, long unew, long a3, long a4, long a5, long a6) {
     (void)a3; (void)a4; (void)a5; (void)a6;
     struct tcb *t = current_thread;
+    if (t->rb_log)
+        return -EPERM;             /* DDR-1171: a rename can overwrite its target */
     if (t->root_mnt < 0)
         return -ENOENT;
     char oldp[PATH_MAX], newp[PATH_MAX];

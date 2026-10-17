@@ -4,6 +4,8 @@
 > file **in full** before touching anything. It captures the exact repo state and
 > the non-negotiable contracts so the project continues with zero context loss.
 
+> **Read `docs/VISION.md` first** (operator vision, DDR-1169), then this file.
+
 ---
 
 ## CHECKPOINT 2026-09-18 — DDR-1121: the shard-7 freeze has two witnesses, and they name different locks
@@ -14852,3 +14854,60 @@ last gate): `smoke-shell` 5/5, `smoke-blkmq`, `smoke-rqstress-liveness`,
   all three head_sha d651ede05a5a614c6f2656c77f4458601ae7f31f, all 10 shards each (§INV.15 satisfied).
 - 08645a3 (docs-only tip): push 36316672218 success; pull_request 36316675457 in flight.
 - Merge of PR #17 / main promotion / v1.0.0 tag remain OPERATOR decisions; tag still held on OPEN-2.
+
+## CHECKPOINT 2026-09-28 01:40Z — PR #17 MERGED into dev/phase1 (merge commit 772ab25)
+- Operator comment 5861440399 (verified OWNER) authorized the merge; merge commit, not squash; parents 181d29d + bbe08eb; tree byte-identical to bbe08eb.
+- pradyos-ci push 36363976695 on 772ab25: 16/16 jobs success, all 10 shards. Reported on PR #17 (comment 5861784174).
+- v1.0.0 tag NOT authorized. Gate for tagging (operator): a substantially larger OPEN2_HUNT campaign completes clean, OR each of cap.c #GP (U1),
+  lane-12 panic (U2), single-CPU vblk timeout (U3) gets a named mechanism or an explicit "cannot close with current evidence" writeup.
+- Next: larger OPEN2_HUNT on the merged kernel; OPEN-1 route 1; U1/U2/U3 writeups.
+
+## CHECKPOINT 2026-10-03 — DDR-1154 dispatches 1–2 read (clean)
+
+- open2-hunt 36366830314 + 36366831871 (ref 49abebc, old campaign): 40/40 lanes success, every DONE `runs=55 signal_runs=0 churn_runs=55 kernel_pinned=182c30bb16930d57`. Σ churn = 2,200.
+- Route-1 hand check over all 2,200 per-run lines: last `[hb] t` ∈ {17000,17500,18000}; none below 17000. One run AT the floor (d2 lane 18 run 52, t=17000), recorded in DDR-1154 §6.1 as a floor-calibration datum; floor not moved mid-campaign.
+- Dispatches 3–4 sent on ref 473b67536ceb94b440492ae6b172f853023a93a4 (new campaign, silent-stop counted): runs 37097190752 (in progress), 37097192020 (queued). Expect kernel_pinned=182c30bb16930d57 (diff 49abebc..473b675 touches only tools/ci + docs).
+- NEXT: read dispatches 3–4 DONE lines (silent_runs= now printed), append §6.2, dispatch 5–6 on the same ref if clean. Then DDR-1155 (U1/U2/U3).
+
+## CHECKPOINT 2026-10-14 — Block 1 (orient + audit), DDR-1166, branch `repo-audit-ddr1166`
+
+**Verified, with evidence:**
+- Kernel: clean rebuild gives `kernel.bin` = `d8d48f39c25e0ff9`, 1,483,146 B, zero `-Werror` diagnostics.
+- Static checks: `ci-shard-check` reports 188 gates, 10 shards, 6 excluded. `tools/ci/hygiene_check.sh` passes all ten.
+- CI: all 16 checks green on PRs #34–#41.
+- OPEN-2 (DDR-1166 §1): the DDR-1139 mechanism is fixed and its confirmation was met.
+  - Hunts since then show 0 signals: DDR-1154 (6,545 boots) and run 38109673379 (20×55, all 20 lanes green; DONE line read for lane 5 only).
+  - U1/U2/U3 have no artefact, so nothing is fixable under NON-NEGOTIABLE 3. OPEN-2 is NOT declared closed.
+- New `docs/FEATURE_STATUS.md` lists every subsystem with its status, gate and use case.
+- `userspace/` deleted: three empty `.gitkeep` dirs that nothing referenced. `aether/` (host Python) vs `kernel/aether/` (in-kernel C) is not duplication; kept.
+- `smoke-chipset` fixed: it logged to `/tmp`, and `$m_` expanded to empty, so q35/qemu64 and pc/qemu64 wrote one shared file. Logs now go to `build/gatelogs/`. Re-run: 4/4 variants pass, 4 distinct logs.
+- DDR free-range carriers 1154+ → 1167+.
+
+**Open:**
+- Full 188-gate suite: not run locally (one QEMU at a time, ~3 h). CI's full suite runs on push.
+- Block 3 agent items missing: per-task budgets, UI-state reading, input injection, agent sandbox, rollback on rejection, prompt-injection and budget gates.
+- Desktop: taskbar magnify; agent-panel graphs.
+- USB piece 6 (DDR-1167).
+
+**Next exact command:** `git checkout -b usb-hidpoll-ddr1167` (stacked on this branch), then write `docs/ddr/DDR-1167-*.md`.
+
+## CHECKPOINT 2026-10-14 — USB piece 6, DDR-1167 (branch `usb-hidpoll-ddr1167`)
+
+- **Built:** the xHCI HID boot keyboard is now polled continuously from the BSP
+  `timer_tick()` and translated into set-1 scancodes fed to the existing
+  `ps2kbd_feed()` — one decoder, both rings (NSI 46/96). The `usbkbd` probe key
+  is gone; this is product behaviour.
+- **Gate:** `smoke-usbkbd` now attaches FAT+SFS and requires
+  `PRADYOS_INPUT_OK b` (ring 3) and `[xhci] hid-reports n=4` (TRB re-armed).
+- **Mutants:** M1 (no feed, `01d7706917df0804`) loses only `INPUT_OK b`, so the
+  arm is not carried by the i8042. M2 (no re-queue, `84ed557cc6e061a5`) loses
+  only `hid-reports n=4`. Revert rebuilds `d9b58eb90791cca4` bit for bit.
+- **Regression:** smoke-usbkbd, smoke-input, smoke-modkeys, smoke-superkey
+  rc=0; smoke-shell 5/5; hygiene ALL TEN. kernel.bin 1,483,146 B (unchanged).
+- **Free range:** DDR-1168+.
+- **Next:** agent-layer block (budgets, kill switch, egress, rollback +
+  adversarial gates), per the operator's work order.
+
+## Checkpoint 2026-10-15 — DDR-1170 per-task budgets
+- Branch budget-ddr1170 (stacked on vision-ddr1169). smoke-taskbudget green locally; M1-M4 each fail own arm. Kernel 7d429743e211a591, 193 gates, NSI next free 108, DDR free 1171+.
+- Next: land #37->#38->#39->#40->#41->#43->#44->#46 then budget PR; then Block B2 rollback-on-rejection.

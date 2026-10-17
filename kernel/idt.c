@@ -23,6 +23,7 @@
 #include "cpu_mitigations.h"  /* DDR-1044: cpu_rdmsr for the #MC bank decode */
 #include "lock_stat.h"        /* DDR-1047: contended-lock dump on [apfreeze] */
 #include "virtio_blk.h"       /* DDR-1138: compl_lock owner dump on [apfreeze] */
+#include "xhci.h"              /* DDR-1167: USB HID keyboard poll */
 #include <stdint.h>
 
 struct idt_entry {
@@ -370,6 +371,10 @@ static void timer_tick(struct regs *r) {
         vdso_data->seq++;              /* even = write complete  */
     }
     sched_tick();
+    /* DDR-1167 §4: BSP-only by construction (timer_tick runs on the BSP), the
+     * same CPU IRQ1 is routed to -- that is what keeps ps2kbd_feed unlocked
+     * and single-writer. Move either off the BSP and a lock is owed here. */
+    xhci_poll();
     if ((now % 10u) == 0)         /* NET-B: drive lwIP timers ~every 100 ms */
         net_poll_tick();
     if ((now % 100u) == 0)        /* DDR-776: ~1 s stuck-blk-request scan */

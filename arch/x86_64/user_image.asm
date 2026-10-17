@@ -422,6 +422,16 @@ global privacynettest_elf_end
 privacynettest_elf:
     incbin "build/privacynettest.elf"
 privacynettest_elf_end:
+global budgettest_elf
+global budgettest_elf_end
+budgettest_elf:
+    incbin "build/budgettest.elf"
+budgettest_elf_end:
+global rbtest_elf
+global rbtest_elf_end
+rbtest_elf:
+    incbin "build/rbtest.elf"
+rbtest_elf_end:
 
 ; DDR-1141: SYS_DNS_RESOLVE probe, three phases (L / A / sovereign P)
 global dnstest1_elf
@@ -489,6 +499,13 @@ killtest_elf:
     incbin "build/killtest.elf"
 killtest_elf_end:
 
+; DDR-1159 (Fix 3): SYS_KILL_AGENT gate probe (NSI 36 had no coverage).
+global killagenttest_elf
+global killagenttest_elf_end
+killagenttest_elf:
+    incbin "build/killagenttest.elf"
+killagenttest_elf_end:
+
 ; proc (DDR-756): SYS_SETNAME self-rename probe.
 global setnametest_elf
 global setnametest_elf_end
@@ -538,6 +555,11 @@ global killblocktest_elf_end
 killblocktest_elf:
     incbin "build/killblocktest.elf"
 killblocktest_elf_end:
+global sigsemtest_elf
+global sigsemtest_elf_end
+sigsemtest_elf:
+    incbin "build/sigsemtest.elf"
+sigsemtest_elf_end:
 
 global disktest_elf
 global disktest_elf_end

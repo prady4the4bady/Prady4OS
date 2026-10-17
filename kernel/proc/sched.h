@@ -10,6 +10,7 @@
 #include "fd.h"
 #include "regs.h"
 #include "spinlock.h"
+#include "signal.h"   /* DDR-1174: struct sig_rec */
 
 typedef void (*thread_fn)(void *);
 
@@ -88,6 +89,13 @@ struct tcb {
     uint64_t   sig_handlers[32]; /* ring-3 handler VA per signal (NSIG=32)    */
     struct regs sig_saved;       /* register snapshot restored by sigreturn   */
     int        sig_active;       /* 1 while a signal handler is running        */
+    /* DDR-1174. sig_pending and sig_mask are read by syscall_entry.asm; their
+     * offsets are pinned by _Static_assert in signal.c (TCB_SIG_* there). */
+    uint64_t   sig_mask;          /* blocked set; SIGKILL never set            */
+    uint64_t   sig_saved_mask;    /* mask restored by sigreturn                */
+    uint32_t   sig_flags[32];     /* SA_* per signal                           */
+    uint64_t   sig_amask[32];     /* sa_mask per signal                        */
+    struct sig_rec sig_info[32];  /* kernel-recorded sender (signal.h)       */
 
     /* Thread pointer (PROC-D, ADR-023). FS-base MSR value for this thread; set by
      * SYS_SET_TLS, restored into IA32_FS_BASE on every switch to this user thread.
@@ -132,6 +140,18 @@ struct tcb {
     uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
+    /* DDR-1170: per-task budgets, set by SYS_SPAWN_TASK BEFORE the first run.
+     * A limit of 0 means "no limit on that axis". Not inherited across fork. */
+    uint64_t   bud_max_ticks;   /* wall ticks the task may run for                 */
+    uint64_t   bud_max_bytes;   /* bytes it may write (fds + proxy sockets)        */
+    uint32_t   bud_max_actions; /* actions it may submit                           */
+    uint32_t   bud_tripped;     /* 1 once a budget kill has been audited           */
+    uint64_t   bud_start;       /* g_ticks when the budget was armed               */
+    uint64_t   bud_bytes;       /* bytes charged so far                            */
+    uint32_t   bud_actions;     /* actions charged so far                          */
+    void      *rb_log;          /* DDR-1171: rollback log page, NULL = not a rollback task */
+    uint32_t   rb_n;            /* DDR-1171: entries used in rb_log                */
+    uint32_t   rb_pending;      /* DDR-1171: rejected; replay in sched_exit        */
 
     /* SMP scheduling (ADR-031 / DDR-SMP-3c-cap-2a). Which CPU is running this
      * thread (-1 = none): schedule() picks only READY threads with on_cpu<0, so
@@ -305,6 +325,18 @@ void        sched_trace_dump(void);
 
 void        sched_unblock(struct tcb *t);                       /* mark a blocked thread ready */
 struct tcb *sched_find_pid(uint32_t pid);                       /* DDR-837: live thread by pid, or NULL */
+
+/* DDR-1159 (Fix 3): find a live USER thread by pid and act on it ENTIRELY under
+ * g_sched_lock, so the TCB cannot be unlinked+freed between the ring walk and
+ * the dereference (the AETHER tcb_by_pid UAF; same lifetime fix as DDR-1157).
+ * alive -> 0/1; snap -> 0 and fills *out, else -ESRCH; signal -> 0 else -ESRCH. */
+struct sched_user_snap { uint64_t run_ticks, dispatches, mem_used; uint32_t state; };
+int sched_user_pid_alive (uint32_t pid);
+int sched_user_pid_snap  (uint32_t pid, struct sched_user_snap *out);
+int sched_signal_user_pid(uint32_t pid, int sig);
+int sched_rollback_pid(uint32_t pid);   /* DDR-1171: mark + SIGKILL a live rollback task */
+int         sched_checkpoint_pid(uint32_t pid);                /* DDR-1157: set checkpointed=1 under g_sched_lock; 0 or -ESRCH */
+int         sched_resume_pid(uint32_t pid);                    /* DDR-1157: clear + conditional unblock under g_sched_lock; 0 or -ESRCH */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */

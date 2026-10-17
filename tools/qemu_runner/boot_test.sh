@@ -312,6 +312,15 @@ if [ -n "${QEMU_SFSROOT:-}" ] && [ -f build/sfsroot.img ]; then
     SFS2DISK=(-drive if=none,format=raw,file=build/sfsroot.img,id=sfsroot
               -device virtio-blk-pci,drive=sfsroot)
 fi
+# DDR-1156 §4: a blank scratch disk attached LAST (highest blk index) only when
+# QEMU_BLKSCRATCH is set. The smoke-blkslot gate forces 8 slot-fixtures on the
+# last virtio-blk unit, so that unit must carry no mounted filesystem; this gives
+# it a disk nothing reads or writes. Pair with QEMU_NO_EXT4=1 so it stays within
+# VBLK_MAX=4 (boot + fat + sfs + scratch).
+if [ -n "${QEMU_BLKSCRATCH:-}" ] && [ -f build/blkslot.img ]; then
+    SFS2DISK=(-drive if=none,format=raw,file=build/blkslot.img,id=blkscr
+              -device virtio-blk-pci,drive=blkscr)
+fi
 
 # Optional NVMe controller (DDR-765) — attached only when QEMU_NVME is set, so
 # the smoke-nvme gate exercises controller bring-up + Identify while every other
@@ -325,6 +334,11 @@ if [ -n "${QEMU_RNG:-}" ]; then
 fi
 
 NVMEDEV=()
+# DDR-1161: xHCI with a USB keyboard and tablet, only when QEMU_XHCI is set.
+XHCIDEV=()
+if [ -n "${QEMU_XHCI:-}" ]; then
+    XHCIDEV=(-device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0)
+fi
 if [ -n "${QEMU_NVME:-}" ]; then
     NVMEDEV=(-drive if=none,format=raw,file=build/nvme.img,id=nvm
              -device nvme,serial=PRADYOSNV,drive=nvm)
@@ -664,6 +678,7 @@ timeout "${TIMEOUT_S}" qemu-system-x86_64 \
     "${UEFIOPT[@]}" \
     "${S3OPT[@]}" \
     "${NVMEDEV[@]}" \
+    "${XHCIDEV[@]}" \
     "${RNGDEV[@]}" \
     "${QMPOPT[@]}" \
     -no-reboot -display none -monitor none \
