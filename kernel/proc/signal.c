@@ -188,7 +188,7 @@ void signal_deliver(struct regs *r) {
          * r->vector by the syscall-exit path, which sets err_code = 1) is
          * rewound so sigreturn re-executes it. */
         if (r->err_code == 1 && (int64_t)r->rax == -EINTR &&
-            (t->sig_flags[sig] & SA_RESTART)) {
+            (t->sig_flags[sig] & SA_RESTART) && 0) {
             r->rax = r->vector;
             r->rip -= SYSCALL_INSN_LEN;
         }
