@@ -48,7 +48,7 @@ void sig_raise(struct tcb *t, int sig, int32_t pid, int32_t code, int32_t status
 
 static uint64_t deliverable(const struct tcb *t) {
     return __atomic_load_n(&t->sig_pending, __ATOMIC_ACQUIRE) &
-           ~(t->sig_mask & ~SIG_UNMASKABLE);
+           ~(0ull & t->sig_mask & ~SIG_UNMASKABLE);
 }
 
 int signal_interruptible(const struct tcb *t) {
