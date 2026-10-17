@@ -175,6 +175,21 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* A: blocked -> not delivered; unblock -> delivered at that syscall's exit. */
     mask_op(SIG_BLOCK, 1ul << SIGUSR1);
     nsi(SYS_KILL, me, SIGUSR1, 0);
+    /* DDR-1174 §6: stay in RING 3 for ~2 wall seconds while SIGUSR1 is
+     * pending and blocked. Without this, kill and the `pre` read are two
+     * syscalls apart, so only the asm syscall-exit test (which applies the
+     * mask itself) ever sees the pending signal, and the C deliverable()
+     * mask used on every timer-IRQ return to ring 3 goes untested. M1 (mask
+     * ignored in deliverable()) passed for exactly that reason. Bounded two
+     * ways: wall clock, and an iteration cap in case the RTC wraps at midnight. */
+    {
+        long t0 = nsi(SYS_CLOCK, 0, 0, 0);
+        for (long it = 0; it < 400; it++) {
+            for (volatile long i = 0; i < 1000000; i++) { }
+            long t = nsi(SYS_CLOCK, 0, 0, 0);
+            if (t < t0 || t - t0 >= 2) break;
+        }
+    }
     long pre = ST->usr1_runs;
     mask_op(SIG_UNBLOCK, 1ul << SIGUSR1);
     long post = ST->usr1_runs;
