@@ -2662,22 +2662,6 @@ int sched_rollback_pid(uint32_t pid) {
     return rc;
 }
 
-/* DDR-1171: a rejection reaches its rollback task. Find + mark + SIGKILL under
- * the same lock as sched_signal_user_pid (DDR-1159), and only for a task that
- * carries a log: rejecting an ordinary agent's action kills nothing. */
-int sched_rollback_pid(uint32_t pid) {
-    uint64_t fl = irq_save();
-    struct tcb *t = find_user_pid_locked(pid);
-    int rc = -ESRCH;
-    if (t && t->rb_log) {
-        t->rb_pending = 1;
-        t->sig_pending |= (1ull << SIGKILL);
-        rc = 0;
-    }
-    irq_restore(fl);
-    return rc;
-}
-
 /* 1 if a runnable/blocked thread with this pid exists (a "living parent"). */
 static int pid_alive(uint32_t pid) {
     if (pid == 0)
