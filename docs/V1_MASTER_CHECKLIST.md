@@ -26,7 +26,7 @@ Names marked `(name TBD)` for gates are placeholders; Claude chooses the real na
 ### C0.1 Baseline and Dependabot
 Status: IN PROGRESS. Needs: none.
 - [ ] Full gate run on the current `dev/phase1` tip; fix anything red at the root
-- [ ] Dependabot: #19 fast-uri (security) first; rebase, CI, merge green; close stale; one DDR (DDR-1172). #19 closed (superseded by #48); #9 merged `3c1708d`; #33, #42, #7, #8, #30 in CI
+- [ ] Dependabot (DDR-1172): #19 closed (superseded by #48); merged #9 `3c1708d`, #7 `55b125d`, #8 `02ede03`, #30 `bca2795`; #42 closed red (web-tree-sitter 0.25+ has no default export); #33 in CI
 - [x] Open docs PRs #27, #31, #36: read, merge or close, record why (DDR-1173)
 - [ ] DDR-1171 rollback implementation on `rollback-ddr1171`
 Exit gate: all existing gates green on one SHA; open-PR list clean.
