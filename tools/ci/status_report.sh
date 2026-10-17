@@ -2,11 +2,11 @@
 # tools/ci/status_report.sh — generated progress numbers (directive §6.5).
 #
 # WHY: every session hand-tallies progress into SESSION_HANDOFF.md, which is
-# both slow and how "gate count: 105" survived in CLAUDE.md long after the real
+# both slow and how "gate count: 105" survived in docs/archive/CLAUDE-2026-10-17.md long after the real
 # number passed 145. Numbers that are derived should be derived.
 #
 # Counts open vs done items per Group from docs/BUILD_TRACKER.md and
-# CLAUDE.md's backlog tables. A row is DONE when it is struck through (~~...~~),
+# docs/archive/CLAUDE-2026-10-17.md's backlog tables. A row is DONE when it is struck through (~~...~~),
 # ticked ([x]), or marked COMPLETE/DONE/CLOSED/FIXED; otherwise it is OPEN.
 # That heuristic is stated here rather than hidden, because it is the thing to
 # check first if a number ever looks wrong.
@@ -24,7 +24,7 @@ mk=$(awk -F'\t' '/^[0-9]/ && NF>=3 {t[$1]+=$3} END {m=0; for (s in t) if (t[s]>m
 printf -- '- %s gates across %s shards; makespan %s min; %s fast-tier / %s strict-tier\n\n' \
     "$tot" "$sh" "$mk" "$fast" "$((tot-fast))"
 
-printf '### Backlog by Group (CLAUDE.md tables)\n\n'
+printf '### Backlog by Group (docs/archive/CLAUDE-2026-10-17.md tables)\n\n'
 printf '| Group | done | open | total |\n|---|---:|---:|---:|\n'
 # Portable single pass. The union of groups is tracked explicitly in seen[] —
 # an earlier version iterated `for (k in d)` and silently DROPPED every group
@@ -49,14 +49,14 @@ awk '
     }
     printf "| **all** | **%d** | **%d** | **%d** |\n", td, to, td+to
   }
-' CLAUDE.md
+' docs/archive/CLAUDE-2026-10-17.md
 
 printf '\n### Open issues\n'
 for i in OPEN-1 OPEN-12 OPEN-13; do
-  if grep -q "^| \*\*$i\*\*" CLAUDE.md 2>/dev/null; then printf -- '- %s: OPEN\n' "$i"; fi
+  if grep -q "^| \*\*$i\*\*" docs/archive/CLAUDE-2026-10-17.md 2>/dev/null; then printf -- '- %s: OPEN\n' "$i"; fi
 done
 for i in OPEN-2 OPEN-10 OPEN-11 FSRM; do
-  if grep -q "~~$i~~\|~~\*\*$i" CLAUDE.md 2>/dev/null; then printf -- '- %s: closed\n' "$i"; fi
+  if grep -q "~~$i~~\|~~\*\*$i" docs/archive/CLAUDE-2026-10-17.md 2>/dev/null; then printf -- '- %s: closed\n' "$i"; fi
 done
 
 printf '\n### Kernel\n'
