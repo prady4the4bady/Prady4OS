@@ -64,7 +64,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
              * never reads leaves this spinning forever. */
             {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
                 while (pipe_full(e->pipe) && pipe_readers(e->pipe) > 0) {
-                    if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                    if (0 && signal_interruptible(current_thread)) {   /* DDR-1174 */
                         yield_stall_done("pipe_write", n, g_ticks - t0, &noted);
                         return total > 0 ? total : -EINTR;
                     }
@@ -379,7 +379,7 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
                  * but never writes leaves this spinning forever. */
                 {   uint32_t n = 0; uint64_t t0 = g_ticks; int noted = 0;
                     while (!pipe_has_data(e->pipe) && pipe_writers(e->pipe) > 0) {
-                        if (signal_interruptible(current_thread)) {   /* DDR-1174 */
+                        if (0 && signal_interruptible(current_thread)) {   /* DDR-1174 */
                             yield_stall_done("pipe_read", n, g_ticks - t0, &noted);
                             return -EINTR;   /* total == 0 on this path */
                         }
