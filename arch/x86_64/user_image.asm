@@ -555,6 +555,11 @@ global killblocktest_elf_end
 killblocktest_elf:
     incbin "build/killblocktest.elf"
 killblocktest_elf_end:
+global sigsemtest_elf
+global sigsemtest_elf_end
+sigsemtest_elf:
+    incbin "build/sigsemtest.elf"
+sigsemtest_elf_end:
 
 global disktest_elf
 global disktest_elf_end

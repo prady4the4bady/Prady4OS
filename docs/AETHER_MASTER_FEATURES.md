@@ -2113,3 +2113,5 @@ this time, not just the waiter."* Instrument only.
 
 - **Per-task budgets (DDR-1170)** — SYS_SPAWN_TASK (NSI 107, sovereign-only) spawns an agent task with time/byte/action budgets; exhaustion kills the task and audits AR_BUDGET_KILL once. Gated by smoke-taskbudget.
 - **Rollback on rejection (DDR-1171)** — a task spawned with TASK_FLAG_ROLLBACK may only create files (logged, 16 max); unlink/rename/ftruncate/O_TRUNC/fork and writes to existing files are refused -EPERM. SYS_REJECT_ACTION on one of its actions SIGKILLs it and its creates are undone in its own sched_exit, audited AR_ROLLBACK=30 (undone<<32|failed). Gated by smoke-rollback with an unflagged control. Network/IPC/approved actions are NOT undone.
+
+- DDR-1174 (C1.1): POSIX signal semantics -- sigprocmask (NSI 108), sigaction2 with SA_SIGINFO/SA_RESTART (NSI 109), SIGCHLD with kernel-recorded si_pid/si_status, -EINTR from pipe/console/poll waits, delivery on syscall exit; atomic sig_pending; sys_kill now locked (DDR-1159 helper). Gate smoke-sigsem (shard 6, strict). wait4 not interruptible (stated).

@@ -55,6 +55,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | OPEN-2 double dispatch (DDR-1139) | gated (fix confirmed) | `[schedcheck]` in GLOBAL_FORBIDDEN | One thread on one CPU at a time |
 | Capability IPC, ring-3 door | gated | `smoke-sendipc` | Agent-to-agent messages |
 | Signals (4), SIGKILL from blocked waits | gated | `smoke-syssignal`, `smoke-kill`, `smoke-killblock`, `smoke-sigpipe` | Stop a runaway process |
+| POSIX signal semantics: mask, SA_SIGINFO, SIGCHLD, EINTR, SA_RESTART, syscall-exit delivery | gated (emulated-verified; not verified on real hardware) | `smoke-sigsem` | Programs can block, inspect and safely restart around signals |
 | `sigprocmask`, `SA_SIGINFO`, `SIGCHLD`, `SA_RESTART` | not started | none | DDR-1090: no EINTR, no mask |
 | pthreads / `CLONE_VM` | not started | none | Blocked on a cross-CPU TLB shootdown that does not exist (DDR-1075, DDR-1077 tripwire) |
 | futex | not started | none | Blocked on shared memory (DDR-1038) |

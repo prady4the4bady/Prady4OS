@@ -13,6 +13,7 @@
 #include "uaccess.h"
 #include "kheap.h"
 #include "errno.h"
+#include "signal.h"
 #include "irq.h"        /* DDR-1037: g_ticks, for poll()'s timeout deadline */
 
 #define EPOLL_MAX        64
@@ -253,6 +254,8 @@ static long sys_poll(long a_fds, long a_nfds, long a_timeout, long a4, long a5, 
          * DDR-981, so the CPU is not wedged. DDR-1090: the CPU is not wedged
          * and that is a different property from the THREAD being killable --
          * which it was not, until yield() started honouring SIGKILL. */
+        if (signal_interruptible(t))
+            return -EINTR;                       /* DDR-1174 */
         yield();
     }
 
