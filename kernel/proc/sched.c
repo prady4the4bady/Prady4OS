@@ -12,6 +12,7 @@
 #include "smp.h"               /* rq-3: smp_resched_one (directed wake IPI) */
 #include "irq.h"               /* ADR-032: g_ticks for the FS write-budget bucket */
 #include "signal.h"            /* DDR-1090: SIGKILL, honoured at the yield choke point */
+#include "aether.h"            /* DDR-1171: rollback log replay/free */
 
 /* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
  * reader -- init_idle, which records its base as idle0's kstack_base so
@@ -1156,9 +1157,15 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->exit_status = 0;            /* set by sched_exit, collected by wait4     */
     t->waiter = 0;                 /* parent blocked in wait4 on this thread    */
     t->sig_pending = 0;            /* PROC-C: no pending signals                */
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < 32; i++) {
         t->sig_handlers[i] = 0;
+        t->sig_flags[i]    = 0;   /* DDR-1174; NON-NEGOTIABLE 10 */
+        t->sig_amask[i]    = 0;
+        t->sig_info[i].pid = 0; t->sig_info[i].code = 0; t->sig_info[i].status = 0;
+    }
     t->sig_active = 0;
+    t->sig_mask = 0;               /* DDR-1174: nothing blocked */
+    t->sig_saved_mask = 0;
     t->fs_base = 0;                /* PROC-D: no thread pointer until SYS_SET_TLS */
     t->forked = 0;                 /* 5e: normal launch unless a fork sets fork_regs */
     t->is_agent = 0;               /* L6: not an AETHER agent unless the spawner sets it */
@@ -1187,6 +1194,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dispatches = 0;
     t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
     t->mem_used = 0;
+    t->bud_max_ticks = 0; t->bud_max_bytes = 0;    /* DDR-1170; NON-NEGOTIABLE 10 */
+    t->bud_max_actions = 0; t->bud_tripped = 0;
+    t->bud_start = 0; t->bud_bytes = 0; t->bud_actions = 0;
+    t->rb_log = 0; t->rb_n = 0; t->rb_pending = 0;  /* DDR-1171; NON-NEGOTIABLE 10 */
     t->sc_count = 0;               /* L6: syscall rate-limit window (agents only)         */
     t->sc_window_start = 0;
     memcpy(t->fpu_state, fpu_init_template, sizeof t->fpu_state);  /* 5d: clean FPU */
@@ -1290,6 +1301,7 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->root_mnt    = parent->root_mnt;
         t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
         t->fs_base     = parent->fs_base; /* PROC-D: child inherits the thread pointer */
+        signal_fork_copy(t, parent);      /* DDR-1174: POSIX fork keeps dispositions + mask */
         /* DDR-838: lineage, not authority. is_agent is deliberately NOT inherited
          * (see the zeroing in sched_create), so the containment cap has to ride
          * on something fork does propagate. A child of an agent, or of anything
@@ -1391,6 +1403,8 @@ static void sched_free_tcb(struct tcb *t) {
     }
     for (int i = 0; i < FD_MAX; i++)
         fd_free(t, i);
+    if (t->rb_log)                      /* DDR-1171: the rollback log page */
+        aether_rb_free(t);
     if (t->caps)
         cap_table_destroy(t->caps);
     /* DDR-1106: `!t->is_idle` is LOAD-BEARING, not defensive. Since DDR-1106 an
@@ -2442,6 +2456,8 @@ void sched_unblock(struct tcb *t) {
  * parent's wait4 or the reaper can collect it), wake any waiter, and switch away
  * for good. The address space + TCB are reclaimed by the collector, never here —
  * we are still executing on this thread's kernel stack. */
+static struct tcb *find_user_pid_locked(uint32_t pid);  /* below */
+
 void sched_exit(int status) {
     /* 5d: PID 1 must never exit. If init returns or _exit()s, halt loudly —
      * the system has no reaper / no first process to fall back on. */
@@ -2462,6 +2478,11 @@ void sched_exit(int status) {
      * a SYS_AGENT_METRICS read having landed during the agent's life. */
     void agent_metrics_reap(uint32_t pid, uint64_t run_ticks, uint64_t dispatches);
     if (current_thread->is_user) {
+        /* DDR-1171: a REJECTED rollback task undoes its filesystem effects here,
+         * in its own context (its cap + root mount) and at the one point it can
+         * no longer write, so the replay cannot race its own writes. */
+        if (current_thread->rb_pending && current_thread->rb_log)
+            aether_rb_replay(current_thread);
         surface_reap_pid(current_thread->pid);
         socket_reap_pid(current_thread->pid);
         agent_metrics_reap(current_thread->pid,
@@ -2489,6 +2510,13 @@ void sched_exit(int status) {
         }
     }
     current_thread->exit_status = status;
+    /* DDR-1174: SIGCHLD to a live user parent, recorded under this lock so the
+     * parent cannot be freed between lookup and raise (DDR-1159's rule). */
+    if (current_thread->is_user) {
+        struct tcb *par = find_user_pid_locked(current_thread->parent_pid);
+        if (par)
+            sig_raise(par, SIGCHLD, (int32_t)current_thread->pid, CLD_EXITED, status);
+    }
     current_thread->state = THREAD_ZOMBIE;      /* NOT pickable; on_cpu stays set */
     if (current_thread->waiter)
         sched_unblock(current_thread->waiter);
@@ -2511,6 +2539,127 @@ struct tcb *sched_find_pid(uint32_t pid) {
         t = t->next;
     } while (t != current_thread);
     return 0;
+}
+
+/* DDR-1157: the ring walk, called with g_sched_lock HELD. Identical predicate to
+ * sched_find_pid, but the caller's lock makes the returned pointer safe to use:
+ * the reaper frees a TCB only AFTER sched_ring_unlink() under this same lock, so
+ * a node still on the ring cannot be freed while we hold the lock, and an
+ * unlinked (soon-to-be-freed) node is off the ring and is never returned. */
+static struct tcb *find_pid_locked(uint32_t pid) {
+    if (pid == 0)
+        return 0;
+    struct tcb *t = current_thread;
+    do {
+        if (t->pid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
+/* DDR-1157 Fix 2: checkpoint/resume must find the target AND act on it inside one
+ * g_sched_lock critical section — sched_find_pid returns a raw pointer the reaper
+ * can free before the caller dereferences it (a UAF on the block/syscall path on
+ * SMP). These two helpers close that window; sys_checkpoint.c calls them instead
+ * of sched_find_pid + a bare deref. Return 0 or -ESRCH. */
+int sched_checkpoint_pid(uint32_t pid) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) { t->checkpointed = 1; rc = 0; }
+    irq_restore(fl);
+    return rc;
+}
+
+int sched_resume_pid(uint32_t pid) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) {
+        /* Clear BEFORE unblocking (DDR-837 order): the other order lets the
+         * target wake, reach its next syscall, still see checkpointed=1 and
+         * block again. sched_unblock under g_sched_lock is safe — it takes only
+         * a leaf rq lock (outer->leaf order; sched.c:96) and the rq-2 schedule
+         * path takes no g_sched_lock, so there is no cycle. */
+        t->checkpointed = 0;
+        if (t->state == THREAD_BLOCKED)
+            sched_unblock(t);
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
+}
+
+/* DDR-1159 (Fix 3): the AETHER tcb_by_pid callers dereferenced a raw tcb* after
+ * an UNLOCKED ring walk (sys_kill_agent WRITES sig_pending; sys_agent_metrics
+ * READS run_ticks/dispatches/state/mem_used; roster_active walks). Same SMP
+ * use-after-free class as DDR-1157: the reaper unlinks under g_sched_lock then
+ * frees OUTSIDE it, so an unlocked walk+deref can touch a freed TCB. These
+ * helpers hold g_sched_lock across find+act (irq_save/irq_restore are the
+ * file-local g_sched_lock wrappers). find_user_pid_locked is tcb_by_pid's body
+ * (is_user predicate kept) called WITH the lock held — a live, unfreeable TCB. */
+static struct tcb *find_user_pid_locked(uint32_t pid) {
+    if (pid == 0)
+        return 0;
+    struct tcb *t = current_thread;
+    do {
+        if (t->is_user && t->pid == pid &&
+            t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
+int sched_user_pid_alive(uint32_t pid) {
+    uint64_t fl = irq_save();
+    int alive = find_user_pid_locked(pid) != 0;
+    irq_restore(fl);
+    return alive;
+}
+
+int sched_user_pid_snap(uint32_t pid, struct sched_user_snap *out) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_user_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) {
+        out->run_ticks  = t->run_ticks;
+        out->dispatches = t->dispatches;
+        out->mem_used   = t->mem_used;
+        out->state      = t->state;
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
+}
+
+int sched_signal_user_pid(uint32_t pid, int sig) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_user_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t) {
+        sig_raise(t, sig, (int32_t)current_thread->pid, SI_USER, 0);  /* DDR-1174: atomic */
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
+}
+
+/* DDR-1171: a rejection reaches its rollback task. Find + mark + SIGKILL under
+ * the same lock as sched_signal_user_pid (DDR-1159), and only for a task that
+ * carries a log: rejecting an ordinary agent's action kills nothing. */
+int sched_rollback_pid(uint32_t pid) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_user_pid_locked(pid);
+    int rc = -ESRCH;
+    if (t && t->rb_log) {
+        t->rb_pending = 1;
+        sig_raise(t, SIGKILL, 0, SI_KERNEL, 0);  /* DDR-1174: atomic */
+        rc = 0;
+    }
+    irq_restore(fl);
+    return rc;
 }
 
 /* 1 if a runnable/blocked thread with this pid exists (a "living parent"). */

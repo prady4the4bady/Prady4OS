@@ -251,7 +251,7 @@ not at EOF. This causes `2>>` to truncate the file. Fix is TASK 3 (DDR-782).
 
 ---
 
-## 3. Section A2 — AETHER Host-Side Python Agent Layer (ASI-bridge v4.0)
+## 3. Section A2 — AETHER Host-Side Python Agent Layer (host bridge v4.0; formerly "ASI-bridge", relabelled per docs/VISION.md §4)
 
 > Root: `aether/` · Python 3.13 · Runs on top of the OS, not inside the kernel.
 > Gate: `python -m pytest -W error -x -q aether/tests/` (CI job `aether-layer`)
@@ -644,7 +644,7 @@ All 17 items confirmed in `kernel/aether/`. No drift found.
 
 ---
 
-## 14. Standing AETHER Cognitive/ASI Mandate
+## 14. Standing AETHER Agent Mandate (formerly "Cognitive/ASI", relabelled per docs/VISION.md §4)
 
 Long-term: subconscious background reasoning (F#71), verifier-based self-improvement
 (F#72), metric lockbox (F#68/S3 — highest priority among proposed features), and

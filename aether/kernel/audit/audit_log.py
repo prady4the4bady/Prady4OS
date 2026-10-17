@@ -5,7 +5,7 @@ file is append-only by construction: this module exposes no update or delete
 path, which is what makes invariant **S5 (append-only audit)** enforceable and
 **S4 (never forge or alter audit entries)** checkable.
 
-Records carry the fields the ASI-bridge prompt mandates:
+Records carry the fields the host-bridge prompt mandates:
 ``{ts, ddr, file, action, gate_status, sha256_of_file}``.
 """
 
