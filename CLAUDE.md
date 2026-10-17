@@ -91,11 +91,11 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 | History and invariants | `docs/archive/` |
 | Code graph | `tools/graph_mcp/CLAUDE_GRAPH_USAGE.md` |
 
-## Graph usage (6229808666 item 8)
+## Graph usage (6229808666 item 8; DDR-1176: recommended, not mandatory)
 
-- Use `graph_query` / `graph_files` before opening files.
-- Use `graph_deps` before editing a file.
-- Use `graph_blast_radius` before a refactor or signature change. Its output is a name-matched superset: treat it as a starting list, not a reading list.
+- Call `graph_session_primer` at session start.
+- `graph_query` / `graph_files` / `graph_deps` are recommended before opening or editing files; plain grep is acceptable (DDR-1176 measured no token win).
+- `graph_blast_radius` before a refactor or signature change. Its output is a name-matched superset: a starting list, not a reading list.
 - Run `graph_rebuild` after structural changes.
 - Do not add a second code-graph tool.
 - Report graph_* call counts in every status comment.
