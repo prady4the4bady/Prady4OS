@@ -6,6 +6,8 @@
  *   B  a private page written by the child still reads 0x11 in the parent.
  *   C  256 cycles of (shared mmap, fork, child write+exit, wait, munmap) drop
  *      SYS_SYSINFO.free_pages by < 128 (a per-cycle leak drops >= 256).
+ *   F  the child munmaps the inherited shared region: rc 0 (its VMA table was
+ *      copied at fork), and the parent's page survives (refcount, arm A).
  *   E  mprotect(RW) on a shared page, then fork: the child's 0x44 reaches the
  *      parent (PTE_SW_SHMEM survives vmm_protect_range).
  *   D  MAP_SHARED with an fd, MAP_SHARED|MAP_PRIVATE, MAP_SHARED|PROT_EXEC are
@@ -93,10 +95,11 @@ static unsigned long free_pages(void) {
     if (nsi(SYS_SYSINFO, (long)&si, 0, 0) != 0) fail("sysinfo", -1);
     return si.free_pages;
 }
-static void reap(long kid) {
+static int reap(long kid) {
     int st = 0;
     long r = nsi(SYS_WAIT4, kid, (long)&st, 0);
     if (r != kid) fail("wait4", r);
+    return st;
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
@@ -112,15 +115,17 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (kid < 0) fail("fork", kid);
     if (kid == 0) {
         *sh = 0x22; *pv = 0x22;
-        nsi(SYS_EXIT, 0, 0, 0);
+        long u = nsi(SYS_MUNMAP, (long)SHM_VA, 4096, 0);
+        nsi(SYS_EXIT, u == 0 ? 0 : 7, 0, 0);
         for (;;) { }
     }
-    reap(kid);
+    int kst = reap(kid);
 
     char b[96], *p;
     unsigned a = *sh, pb = *pv;
     p = str(b, "PRADYOS_SHM_A shared="); p = hex2(p, a); *p++ = '\n'; *p = 0; wr(b);
     p = str(b, "PRADYOS_SHM_B private="); p = hex2(p, pb); *p++ = '\n'; *p = 0; wr(b);
+    line2("PRADYOS_SHM_F child_munmap_ok=", kst == 0);
     nsi(SYS_MUNMAP, (long)SHM_VA, 4096, 0);
     nsi(SYS_MUNMAP, (long)PRIV_VA, 4096, 0);
 

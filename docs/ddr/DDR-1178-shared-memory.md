@@ -41,10 +41,13 @@ P1 creates no new way for unrelated processes to reach each other's memory. Only
 1. **New PTE bit `PTE_SW_SHMEM` = bit 52.** It means "refcounted shared frame". It is distinct from `PTE_SW_SHARED`, which means "not refcounted", and the two must not be merged. If the vDSO were refcounted, teardown would free a kernel page.
 2. **`sys_mmap` with `MAP_SHARED|MAP_ANONYMOUS`** accepts the same prot/arena/hint rules as the private case. Frames are `ptnode_alloc`'d and mapped with `PTE_SW_SHMEM`. `MAP_SHARED` without `MAP_ANONYMOUS` stays `-EINVAL` until P4. `MAP_SHARED|MAP_PRIVATE` is `-EINVAL`, as POSIX requires.
 3. **Fork:** a `PTE_SW_SHMEM` PTE is mapped into the child with **the same permission bits, no COW and no RO downgrade**, followed by `pmm_incref(frame)`. Both address spaces keep writing the same frame.
-4. **`munmap`/exit:** unchanged. `vmm_unmap_range_flush` and `free_subtree` call `ptnode_free`, which drops one reference, and the frame is released at 0. Free-after-ack (DDR-1177 §3.4) already covers the cross-CPU case.
-5. **`mprotect`** on a shared range changes only this address space's PTEs, as POSIX allows, plus the DDR-1177 shootdown. No change.
-6. **COW fault safety.** `vmm_cow_fault` acts only on `PTE_SW_COW`, and a `PTE_SW_SHMEM` PTE never carries it. A write fault on a shared RO page (after `mprotect` RO) stays a real fault.
-7. **AETHER memory cap:** the mapper is charged once, at `mmap`. The child is not charged for inherited shared frames, because they are not new memory. Recorded, not a decision: it matches how COW-shared frames are treated today.
+4. **Fork copies the mapping table.** `sched_create_user_clone` left the child's `vma[]` empty and `mmap_next` at the arena base (`kernel/proc/sched.c:1153`), found by review on #63. Fork now copies both.
+   - **Before:** a child could not `munmap` an inherited region, and its first `addr==0` mmap reused the inherited VA, missed the overlap and overwrote a live PTE. A shared PTE overwritten that way leaks one reference.
+   - **This defect predates P1** (it also hit private mappings). It is fixed here because P1 makes it a leak.
+5. **`munmap`/exit:** unchanged. `vmm_unmap_range_flush` and `free_subtree` call `ptnode_free`, which drops one reference, and the frame is released at 0. Free-after-ack (DDR-1177 §3.4) already covers the cross-CPU case.
+6. **`mprotect`** on a shared range changes only this address space's PTEs, as POSIX allows, plus the DDR-1177 shootdown. No change.
+7. **COW fault safety.** `vmm_cow_fault` acts only on `PTE_SW_COW`, and a `PTE_SW_SHMEM` PTE never carries it. A write fault on a shared RO page (after `mprotect` RO) stays a real fault.
+8. **AETHER memory cap:** the mapper is charged once, at `mmap`. The child is not charged for inherited shared frames, because they are not new memory. Recorded, not a decision: it matches how COW-shared frames are treated today.
 
 ## 4. Gate `smoke-shm` (P1 arms; P2-P4 arms are added with their parts)
 
@@ -59,9 +62,10 @@ A user probe `user/shmtest.c` (new `QEMU_PROBES=shm`) does the following:
 | B | `PRADYOS_SHM_B private=0x11` | the private page still COWs | **M2:** fork treats every writable PTE as shared (parent sees `0x22`) | It would pass today (private COW works), but only together with A. This is a regression arm, not a feature arm; noted as such. |
 | C | `PRADYOS_SHM_C cycles=256 leaked_ok=1` | 256 cycles of (shared `mmap` 1 page, `fork`, child writes and exits, `wait`, `munmap`), with `SYS_SYSINFO.free_pages` read before and after. `leaked_ok=1` iff the drop is < 128 pages. A leak of one frame per cycle loses ≥ 256. The bound is half the mutant's minimum effect, a design value fixed here and not tuned to a run. | **M4:** shared frames skipped at teardown (leaked) | Today `mmap` fails, so the loop cannot run and the probe prints `PRADYOS_SHM FAIL`. It is evaluated only after arm A held. |
 | E | `PRADYOS_SHM_E mprotect_shared=0x44` | `mprotect(PROT_READ\|PROT_WRITE)` on a shared page, then `fork`. The child writes `0x44` and the parent reads it. | **M6:** `vmm_protect_range` drops `PTE_SW_SHMEM`, so the next fork COWs the page (parent sees the old value) | Today `mmap` fails, so the arm is absent. Red. |
+| F | `PRADYOS_SHM_F child_munmap_ok=1` | The first fork child `munmap`s the inherited shared page and exits 0 only if that returned 0. The parent still reads `0x22` afterwards (arm A), so a child unmap drops one reference and not the parent's frame. | **M7:** fork does not copy `vma[]`/`mmap_next` into the child (`sched_create_user_clone`), so the child's `munmap` is `-EINVAL` | Today `mmap` fails, so the arm is absent. Red. |
 | D | `PRADYOS_SHM_D rejects=3` | `MAP_SHARED` without `MAP_ANONYMOUS`, `MAP_SHARED\|MAP_PRIVATE`, and `MAP_SHARED\|PROT_EXEC` all return `-EINVAL` | **M5:** the flag check dropped (a file-less shared map accepted) | It passes today (everything shared is rejected), so it is only meaningful with A. It is a boundary arm. |
 
-**Mutants:** M1 → arm A, M2 → arm B, M4 → arm C, M5 → arm D, M6 → arm E. That is five mutants on five different arms.
+**Mutants:** M1 → arm A, M2 → arm B, M4 → arm C, M5 → arm D, M6 → arm E, M7 → arm F. That is six mutants on six different arms.
 
 **M3 (no `pmm_incref` on the shared fork path)** is run too, but it lands on **arm A**. When the child exits, the frame's only reference is dropped, and `pmm_free_pages` stamps it with `PMM_POISON` (`kernel/mm/pmm.c:227`). The parent then reads poison instead of `0x22`. So it is extra coverage on A, not a separate arm. Each mutant runs on its own `mut/ddr1178-*` branch, its tip is tagged `evidence/ddr1178-mN`, and every run is listed here with its link.
 
