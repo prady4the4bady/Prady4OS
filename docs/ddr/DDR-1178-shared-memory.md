@@ -23,7 +23,7 @@ Authority: OPERATOR ORDER (#45 comment 6256077528), Order 2. Stop conditions: "a
 - **Write-back targets:**
   - FAT32 `write` takes an arbitrary offset (`kernel/fs/fat32/fat32.c:529`), so a mid-file overwrite is possible.
   - **SFS is append-only:** `off != in->size` is refused (`kernel/fs/sfs/sfs.c:1031`, DDR-1089). A writable shared mapping of an SFS file cannot be written back.
-- **Free resources:** NSI next free is 108 (verify against `kernel/syscall/syscall.h`). No existing gate asserts that `MAP_SHARED` is rejected: `smoke-sysmmap`'s `ND` arm is a different case (`user/systest.asm:319-330`). This is re-checked in the implementation PR.
+- **Free resources:** The highest defined NSI is 109 (`SYS_SIGACTION2`, C1.1), so the next free one is **110**. The "next free 108" line in CLAUDE.md is stale. **P1 adds no syscall:** arm C reads the existing `SYS_SYSINFO` (71). No existing gate asserts that `MAP_SHARED` is rejected: `smoke-sysmmap`'s `ND` arm is a different case (`user/systest.asm:319-330`). This is re-checked in the implementation PR.
 
 ## 2. Scope split (one PR per concern, in this order)
 
@@ -58,19 +58,21 @@ A user probe `user/shmtest.c` (new `QEMU_PROBES=shm`) does the following:
 | A | `PRADYOS_SHM_A shared=0x22` | the parent sees the child's write through the shared page | **M1:** fork COWs shared PTEs like private ones (parent sees `0x11`) | Today `mmap(MAP_SHARED)` is `-EINVAL`. The probe prints `PRADYOS_SHM FAIL mmap=-22`, a forbidden sentinel, and A's line is absent. Red. |
 | B | `PRADYOS_SHM_B private=0x11` | the private page still COWs | **M2:** fork treats every writable PTE as shared (parent sees `0x22`) | It would pass today (private COW works), but only together with A. This is a regression arm, not a feature arm; noted as such. |
 | C | `PRADYOS_SHM_C cycles=256 leaked_ok=1` | 256 cycles of (shared `mmap` 1 page, `fork`, child writes and exits, `wait`, `munmap`), with `SYS_SYSINFO.free_pages` read before and after. `leaked_ok=1` iff the drop is < 128 pages. A leak of one frame per cycle loses ≥ 256. The bound is half the mutant's minimum effect, a design value fixed here and not tuned to a run. | **M4:** shared frames skipped at teardown (leaked) | Today `mmap` fails, so the loop cannot run and the probe prints `PRADYOS_SHM FAIL`. It is evaluated only after arm A held. |
+| E | `PRADYOS_SHM_E mprotect_shared=0x44` | `mprotect(PROT_READ\|PROT_WRITE)` on a shared page, then `fork`. The child writes `0x44` and the parent reads it. | **M6:** `vmm_protect_range` drops `PTE_SW_SHMEM`, so the next fork COWs the page (parent sees the old value) | Today `mmap` fails, so the arm is absent. Red. |
 | D | `PRADYOS_SHM_D rejects=3` | `MAP_SHARED` without `MAP_ANONYMOUS`, `MAP_SHARED\|MAP_PRIVATE`, and `MAP_SHARED\|PROT_EXEC` all return `-EINVAL` | **M5:** the flag check dropped (a file-less shared map accepted) | It passes today (everything shared is rejected), so it is only meaningful with A. It is a boundary arm. |
 
-**Mutants:** M1 → arm A, M2 → arm B, M4 → arm C, M5 → arm D. That is four mutants on four different arms.
+**Mutants:** M1 → arm A, M2 → arm B, M4 → arm C, M5 → arm D, M6 → arm E. That is five mutants on five different arms.
 
 **M3 (no `pmm_incref` on the shared fork path)** is run too, but it lands on **arm A**. When the child exits, the frame's only reference is dropped, and `pmm_free_pages` stamps it with `PMM_POISON` (`kernel/mm/pmm.c:227`). The parent then reads poison instead of `0x22`. So it is extra coverage on A, not a separate arm. Each mutant runs on its own `mut/ddr1178-*` branch, its tip is tagged `evidence/ddr1178-mN`, and every run is listed here with its link.
 
 ## 5. Risks
 
-- **Bit 52 and NX.** NX is bit 63, so they don't collide. Every path that masks PTE flags with `0xFFF` (for example `vmm_cow.c` childflags) **drops bit 52**. Two such sites were found:
+- **Bit 52 and NX.** NX is bit 63, so they don't collide. Every path that masks PTE flags with `0xFFF` (for example `vmm_cow.c` childflags) **drops bit 52**. Three such sites were found:
   - `vmm.c:245` (`map_core`: `flags & 0xFFF`, so **every** `vmm_map_in` would drop bit 52);
+  - `vmm.c` `vmm_protect_range` pass 2 (preserves only `COW`, `SHARED`, `PWT` and `PCD`; found by review on #62);
   - `vmm_cow.c:80,95` (fork childflags).
 
-  Both must carry `PTE_SW_SHMEM`. The fork walk must carry `PTE_SW_SHMEM` explicitly, or the child's copy loses it and the next fork COWs it, which is exactly M1. The implementation PR lists every `0xFFF` mask site and how it is handled.
+  All three must carry `PTE_SW_SHMEM`, and arm E gates the `mprotect` one. The fork walk must carry `PTE_SW_SHMEM` explicitly, or the child's copy loses it and the next fork COWs it, which is exactly M1. The implementation PR lists every `0xFFF` mask site and how it is handled.
 - **Refcount width.** It is 16 bits. A shared page inherited by more than 65,535 processes would wrap. Fork depth is bounded by the process table today; the bound is recorded in the implementation PR.
 - **Huge pages.** None are used for user memory. `PG_PS` entries are skipped by the walk, unchanged.
 - **Not covered by P1:** cross-process sharing between unrelated processes (P2/P3), file coherence (P4), `MAP_FIXED` replace, partial `munmap` of a shared range (refused today for every mapping; unchanged).
