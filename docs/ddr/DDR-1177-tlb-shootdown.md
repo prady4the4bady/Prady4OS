@@ -231,7 +231,7 @@ Mutants (each must be run in CI and shown red before merge):
 
 ## 6. Honesty labels
 
-Gated by `smoke-tlbshoot` (planned, not yet existing). Emulated under QEMU TCG
+Gated by `smoke-tlbshoot` (arms A-C, see Amendment 2). Emulated under QEMU TCG
 only. **Not verified on real hardware.** No claim about OPEN-1/2/12/13 or
 U1-U3.
 
@@ -247,3 +247,29 @@ The core implementation departs from the text above in the ways below. Where the
    - pass 2, after the acks, frees the leaf frames and the page-table nodes.
 5. **Readiness gate.** Only CPUs with `percpu.shoot_ready` set are targeted. The flag is set after `lapic_ap_enable()` on each AP, and on the BSP before APs start. Without it, a CPU that is present but has no IDT or LAPIC yet would never ack.
 6. **Fork downgrade.** §3.5 placed the flush per page at `vmm_cow.c:90`. The implementation does one full-flush shootdown of the parent address space after the walk instead.
+
+## Amendment 2: owner decision on the gate (#45 comment 6251086742)
+
+Where this amendment differs from §4 or Amendment 1, it wins.
+
+1. **Gate scope.** The C1.2 exit gate is the in-kernel probe `kernel/mm/tlb_probe.c`, arms A-C, run as kernel code on 4 CPUs (`smoke-tlbshoot`, `QEMU_SMP=4`). `CLONE_VM` is not pulled into C1.2.
+   - **A** `stale=0 iters=20000`: no reader on CPUs 1-3 sees the previous frame's byte while the phase it read before and after the load is unchanged.
+   - **B** `early=0`: when `tlb_shoot` returns, every CPU in the request's target mask has serviced that generation. Kills **M2** (no ack wait).
+   - **C** `missed=0 targets=3`: a kernel-half request (cr3 == 0) targets every ready CPU but the initiator. Kills **M3** (wrong mask).
+2. **QEMU TCG.** If the M2 red run shows arm A cannot see a stale entry, arm A is labelled **vacuous under TCG** here and arms B and C carry the gate. M2 and M3 must each be shown red in CI, on their own branch, before #58 merges. Results are recorded below.
+3. **Arm D (mprotect) and arm E (user space)** move to C1.4's exit criteria as required items. No fault-recovery path that exists only for a test is added to the kernel.
+4. **Limits.** The 64-CPU mask limit stays. The per-address-space CPU mask waits for PCID. Why one global, `current`-filtered mask is safe today: no PCID and no global pages are used (`PTE_G`, `PCID` and `CR4_PGE` are absent from `kernel/`), so every CR3 load flushes the whole non-global TLB. A CPU therefore holds translations only for the address space it is running now. A CPU that switches into the address space after the racy target read does a CR3 load, which is a full flush. The day PCID is enabled, a CPU can keep entries for an address space it has left, and this argument no longer holds.
+5. **M4 (frame freed before every CPU has acked)** stays **not gated** in C1.2. A gate that catches it is a required C1.4 exit item.
+   - **Owner:** the agent working the checklist.
+   - **Approach:** under a gate-only build flag, the PMM fills each freed frame with a poison pattern. A `CLONE_VM` sibling thread on another CPU keeps reading the page while the first thread `munmap`s it. A reader that observes the poison pattern through its old translation is a use-after-free. With the correct order (shoot, wait for acks, then free) it cannot observe it.
+   - **Mutant:** M4 moves the free before the shootdown, and the gate must go red on it.
+6. **Merge rule.** #57 and #58 merge on one green run on the exact head SHA, with a merge commit and a pinned SHA. #58 merges only after M2 and M3 are red.
+7. **Cost.** The probe prints `[tlbshoot] reads=<n> cyc_per_shoot=<n>`: rdtsc cycles per `tlb_shoot` call with 3 targets, with interrupts off (§3.7, option 2). Under TCG this is emulated time, not a hardware cost. The value from the green run is recorded below. The fork full-flush versus per-page cost will be measured in C1.4, where fork of a populated address space is gated. Until then it is **not measured**.
+8. **Standing rule.** Gate-scope questions are decided and recorded in a DDR, not asked.
+
+### Mutant runs (filled in from CI)
+
+| Mutant | Branch | Run | Result |
+|---|---|---|---|
+| M2 no ack wait | `mut/ddr1177-m2` | [39136668511](https://github.com/prady4the4bady/Prady4OS/actions/runs/39136668511) | pending |
+| M3 wrong mask | `mut/ddr1177-m3` | [39136669935](https://github.com/prady4the4bady/Prady4OS/actions/runs/39136669935) | pending |

@@ -43,7 +43,7 @@ Exit gate: `smoke-sigsem` (shard 6, strict).
 ### C1.2 Cross-CPU TLB shootdown
 Status: TODO. Needs: C0.1. Ref: DDR-1075, DDR-1077.
 - [ ] IPI-based TLB shootdown on unmap/mprotect
-Exit gate: shootdown stress gate (name TBD) on SMP.
+Exit gate: `smoke-tlbshoot` (in-kernel probe, arms A-C, 4 CPUs; DDR-1177 Amendment 2). M2 and M3 shown red in CI before merge.
 
 ### C1.3 Shared memory
 Status: TODO. Needs: C1.2. Ref: DDR-1038.
@@ -57,7 +57,10 @@ Status: TODO. Needs: C1.1, C1.2, C1.3.
 - [ ] mutex, semaphore, condition variable, barrier (priority inheritance)
 - [ ] RCU
 - [ ] deadlock detection (lock-order checking)
-Exit gate: threads and lock gates (names TBD) incl. race stress.
+- [ ] REQUIRED (DDR-1177 Amendment 2, #45/6251086742 item 3): TLB shootdown arm D, `mprotect` read-only on one CPU makes a write on another CPU fault
+- [ ] REQUIRED (same): TLB shootdown arm E, the user-space `munmap`/remap stale-read test with `CLONE_VM` threads
+- [ ] REQUIRED (same, item 5): a gate that catches DDR-1177 mutant M4 (frame freed before every CPU acked), via a poison-on-free reader thread. Owner: the agent working this checklist. M4 must be shown red.
+Exit gate: threads and lock gates (names TBD) incl. race stress, plus the three DDR-1177 items above.
 
 ### C1.5 Scheduler classes
 Status: TODO. Needs: C1.4.
