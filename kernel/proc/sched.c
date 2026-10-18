@@ -1302,6 +1302,12 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         t->fs_cap      = parent->fs_cap;  /* valid: cap_fork copies the table verbatim */
         t->fs_base     = parent->fs_base; /* PROC-D: child inherits the thread pointer */
         signal_fork_copy(t, parent);      /* DDR-1174: POSIX fork keeps dispositions + mask */
+        /* DDR-1178: the child's AS is a copy of the parent's, so its mapping
+         * table must be too. Left empty, the child could not munmap an inherited
+         * region, and its first addr==0 mmap reused the inherited VA, missed the
+         * overlap and overwrote a live (possibly shared) PTE. */
+        memcpy(t->vma, parent->vma, sizeof t->vma);
+        t->mmap_next   = parent->mmap_next;
         /* DDR-838: lineage, not authority. is_agent is deliberately NOT inherited
          * (see the zeroing in sched_create), so the containment cap has to ride
          * on something fork does propagate. A child of an agent, or of anything
