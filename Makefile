@@ -243,7 +243,7 @@ KERNEL_BIN  := build/kernel.bin
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/numa.o build/kheap.o \
-               build/vmm.o build/vmm_cow.o build/tlb.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
+               build/vmm.o build/vmm_cow.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
@@ -691,6 +691,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c        -o build/vmm.o
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm_cow.c    -o build/vmm_cow.o
 	$(CC) $(KCFLAGS) -c kernel/mm/tlb.c        -o build/tlb.o
+	$(CC) $(KCFLAGS) -c kernel/mm/tlb_probe.c  -o build/tlb_probe.o
 	$(CC) $(KCFLAGS) -c kernel/mm/uaccess.c    -o build/uaccess.o
 	$(CC) $(KCFLAGS) -c kernel/cap.c           -o build/cap.o
 	$(CC) $(KCFLAGS) -c kernel/proc/sched.c    -o build/sched.o
@@ -4353,6 +4354,17 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_SIGSEM_A pre=0 post=1\nPRADYOS_SIGSEM_B kill=0\nPRADYOS_SIGSEM_C sipid_ok=1 runs=1\nPRADYOS_SIGSEM_D chld_ok=1 status=42 code=1\nPRADYOS_SIGSEM_E rc=-4 runs=1\nPRADYOS_SIGSEM_F rc=2 data=1 runs=1\nPRADYOS_SIGSEM_DONE')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[sigsem] PASS"
+
+# DDR-1177 (C1.2): cross-CPU TLB shootdown, in-kernel probe on 4 CPUs. Arms A-C
+# (owner decision #45/6251086742); arm D and E are C1.4 exit criteria.
+smoke-tlbshoot: $(IMG) fat-image sfs-image
+	@rm -f build/tlbshoot.log
+	@SERIAL_LOG=build/tlbshoot.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=tlbshoot \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_TLBSHOOT_A stale=0 iters=20000\nPRADYOS_TLBSHOOT_B early=0\nPRADYOS_TLBSHOOT_C missed=0 targets=3\nPRADYOS_TLBSHOOT_DONE cpus=4')" \
+	FORBIDDEN_SENTINEL="PRADYOS_TLBSHOOT FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -a "\[tlbshoot\]" build/tlbshoot.log || true
+	@echo "[tlbshoot] PASS"
 
 smoke-actiondel: $(IMG) fat-image sfs-image
 	@rm -f build/actiondel.log

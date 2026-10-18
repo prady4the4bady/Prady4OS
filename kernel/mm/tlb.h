@@ -6,7 +6,7 @@
  * when each has acked. Frames and page-table nodes may be freed only AFTER it
  * returns.
  *
- * Status: gated by smoke-tlbshoot (planned, not yet existing). Not verified.
+ * Status: gated by smoke-tlbshoot (arms A-C, kernel/mm/tlb_probe.c).
  */
 #pragma once
 #include <stdint.h>
@@ -28,5 +28,8 @@ void tlb_shoot_isr(void);
  * software-enabled). Only ready CPUs are ever targeted. */
 void tlb_cpu_ready(void);
 
-/* Diagnostic counters for the planned gate (relaxed). */
+/* smoke-tlbshoot only: the last published generation and its target mask. */
+void tlb_probe_last(uint64_t *gen, uint64_t *mask);
+
+/* Diagnostic counters (relaxed). */
 extern volatile uint64_t g_tlb_shoot_reqs, g_tlb_shoot_ipis;

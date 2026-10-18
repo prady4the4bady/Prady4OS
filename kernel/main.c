@@ -4847,6 +4847,10 @@ void kmain(struct boot_info *bi) {
           kline_s(&k, "[smp] jobs done=");
           kline_d(&k, jobs);
           kline_s(&k, "\r\n"); kline_emit(&k); }
+        if (probe_enabled("tlbshoot")) {     /* DDR-1177: smoke-tlbshoot */
+            void tlbshoot_probe(void);
+            tlbshoot_probe();
+        }
         g_smp_have_aps = (jobs > 0);     /* cross-wake proof runs later, once
                                             the scheduler is up (DDR D5) */
     }

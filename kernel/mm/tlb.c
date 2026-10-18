@@ -73,6 +73,11 @@ static void tlb_service(struct percpu *pc) {
         __atomic_or_fetch(&g_req.ack_mask, bit, __ATOMIC_RELEASE);
 }
 
+void tlb_probe_last(uint64_t *gen, uint64_t *mask) {
+    *gen = __atomic_load_n(&g_req.gen, __ATOMIC_ACQUIRE);
+    *mask = g_req.target_mask;
+}
+
 void tlb_shoot_isr(void) {
     struct percpu *pc = this_cpu();
     if (pc)
