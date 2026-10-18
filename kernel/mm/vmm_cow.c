@@ -103,7 +103,7 @@ uint64_t vmm_fork_address_space_cow(uint64_t parent_cr3) {
                         vmm_destroy_address_space(child);
                         return 0;
                     }
-                    pmm_incref(frame);            /* parent + child now share it */
+                    pmm_incref(frame); if (e1 & PTE_SW_SHMEM) pmm_incref(frame); /* MUTANT M4: leak */
                 }
             }
         }
