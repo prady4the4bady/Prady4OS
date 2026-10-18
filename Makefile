@@ -4370,11 +4370,11 @@ smoke-tlbshoot: $(IMG) fat-image sfs-image
 	@grep -a "\[tlbshoot\]" build/tlbshoot.log || true
 	@echo "[tlbshoot] PASS"
 
-# DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. Arms A-D (DDR-1178 §4).
+# DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. Arms A-E (DDR-1178 §4).
 smoke-shm: $(IMG) fat-image sfs-image
 	@rm -f build/shm.log
 	@SERIAL_LOG=build/shm.log KEEP_SERIAL=1 TIMEOUT_S=180 QEMU_PROBES=shm \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_DONE')" \
 	FORBIDDEN_SENTINEL="PRADYOS_SHM FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[shm\]" build/shm.log || true

@@ -6,6 +6,8 @@
  *   B  a private page written by the child still reads 0x11 in the parent.
  *   C  256 cycles of (shared mmap, fork, child write+exit, wait, munmap) drop
  *      SYS_SYSINFO.free_pages by < 128 (a per-cycle leak drops >= 256).
+ *   E  mprotect(RW) on a shared page, then fork: the child's 0x44 reaches the
+ *      parent (PTE_SW_SHMEM survives vmm_protect_range).
  *   D  MAP_SHARED with an fd, MAP_SHARED|MAP_PRIVATE, MAP_SHARED|PROT_EXEC are
  *      each -EINVAL.
  * C runs only after A held: without a working shared map it is vacuous.
@@ -18,6 +20,7 @@
 #define SYS_FORK    15
 #define SYS_WAIT4   16
 #define SYS_SYSINFO 71
+#define SYS_MPROTECT 97
 
 #define PROT_RW      3
 #define PROT_RWX     7
@@ -29,6 +32,7 @@
 #define SHM_VA  0x8E00000000ul   /* inside [VMM_MMAP_BASE, VMM_MMAP_TOP) */
 #define PRIV_VA 0x8E00001000ul
 #define LOOP_VA 0x8E00010000ul
+#define MPR_VA  0x8E00020000ul
 #define CYCLES  256
 #define LEAK_BOUND 128           /* half the mutant's minimum effect (DDR-1178 §4) */
 
@@ -141,6 +145,25 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         p = str(p, " leaked_ok="); p = dec(p, drop < LEAK_BOUND);
         *p++ = '\n'; *p = 0; wr(b);
         line2("[shm] free_pages drop=", drop);
+    }
+
+    if (a == 0x22) {
+        r = mmap6((long)MPR_VA, PROT_RW, MAP_SHARED | MAP_ANON, -1);
+        if (r != (long)MPR_VA) fail("mpr_mmap", r);
+        volatile unsigned char *mp = (volatile unsigned char *)MPR_VA;
+        *mp = 0x11;
+        r = nsi(SYS_MPROTECT, (long)MPR_VA, 4096, PROT_RW);
+        if (r != 0) fail("mprotect", r);
+        long k = nsi(SYS_FORK, 0, 0, 0);
+        if (k < 0) fail("mpr_fork", k);
+        if (k == 0) {
+            *mp = 0x44;
+            nsi(SYS_EXIT, 0, 0, 0);
+            for (;;) { }
+        }
+        reap(k);
+        p = str(b, "PRADYOS_SHM_E mprotect_shared="); p = hex2(p, *mp); *p++ = '\n'; *p = 0; wr(b);
+        nsi(SYS_MUNMAP, (long)MPR_VA, 4096, 0);
     }
 
     long rejects = 0;
