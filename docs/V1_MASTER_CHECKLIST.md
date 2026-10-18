@@ -24,10 +24,10 @@ Names marked `(name TBD)` for gates are placeholders; Claude chooses the real na
 ## Phase 0. Housekeeping
 
 ### C0.1 Baseline and Dependabot
-Status: TODO. Needs: none.
+Status: IN PROGRESS. Needs: none.
 - [ ] Full gate run on the current `dev/phase1` tip; fix anything red at the root
-- [ ] Dependabot: #19 fast-uri (security) first; rebase, CI, merge green; close stale; one DDR
-- [ ] Open docs PRs #27, #31, #36: read, merge or close, record why
+- [ ] Dependabot (DDR-1172): #19 closed (superseded by #48); merged #9 `3c1708d`, #7 `55b125d`, #8 `02ede03`, #30 `bca2795`; #42 closed red (web-tree-sitter 0.25+ has no default export); #33 in CI
+- [x] Open docs PRs #27, #31, #36: read, merge or close, record why (DDR-1173)
 - [ ] DDR-1171 rollback implementation on `rollback-ddr1171`
 Exit gate: all existing gates green on one SHA; open-PR list clean.
 
@@ -36,8 +36,8 @@ Exit gate: all existing gates green on one SHA; open-PR list clean.
 ## Phase 1. Kernel foundations
 
 ### C1.1 Signals and EINTR
-Status: IN PROGRESS (DDR-1174, PR pending CI). Needs: C0.1. Ref: DDR-1090, DDR-1174.
-- [ ] `sigprocmask`, `SA_SIGINFO`, `SIGCHLD`, `SA_RESTART`, EINTR semantics
+Status: DONE. PR #52 merged `71d482e`; mutants M1–M4 shown red post-merge, gate fix and evidence in PR #53 merged `6edd623` (DDR-1174 §6). Needs: C0.1. Ref: DDR-1090, DDR-1174.
+- [x] `sigprocmask`, `SA_SIGINFO`, `SIGCHLD`, `SA_RESTART`, EINTR semantics
 Exit gate: `smoke-sigsem` (shard 6, strict).
 
 ### C1.2 Cross-CPU TLB shootdown
