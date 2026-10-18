@@ -57,14 +57,20 @@ A user probe `user/shmtest.c` (new `QEMU_PROBES=shm`) does the following:
 |---|---|---|---|---|
 | A | `PRADYOS_SHM_A shared=0x22` | the parent sees the child's write through the shared page | **M1:** fork COWs shared PTEs like private ones (parent sees `0x11`) | Today `mmap(MAP_SHARED)` is `-EINVAL`. The probe prints `PRADYOS_SHM FAIL mmap=-22`, a forbidden sentinel, and A's line is absent. Red. |
 | B | `PRADYOS_SHM_B private=0x11` | the private page still COWs | **M2:** fork treats every writable PTE as shared (parent sees `0x22`) | It would pass today (private COW works), but only together with A. This is a regression arm, not a feature arm; noted as such. |
-| C | `PRADYOS_SHM_C leak=0` | `kheap_outstanding()` and the PMM free count after parent `munmap` equal the values before the first `mmap` (read through a probe syscall) | **M3:** no `pmm_incref` on the shared fork path. One frame freed twice: the child's exit frees it and the parent's `munmap` frees again, so `ptnode_in_use` goes negative or the free count over-counts. **M4:** shared frames skipped at teardown, so they leak and the count is short | Today the mapping does not exist, so the arm reads `leak=0` trivially. **Vacuous alone**, so it is only evaluated after A passed. The probe prints C only when A held. |
+| C | `PRADYOS_SHM_C cycles=256 leaked_ok=1` | 256 cycles of (shared `mmap` 1 page, `fork`, child writes and exits, `wait`, `munmap`), with `SYS_SYSINFO.free_pages` read before and after. `leaked_ok=1` iff the drop is < 128 pages. A leak of one frame per cycle loses ≥ 256. The bound is half the mutant's minimum effect, a design value fixed here and not tuned to a run. | **M4:** shared frames skipped at teardown (leaked) | Today `mmap` fails, so the loop cannot run and the probe prints `PRADYOS_SHM FAIL`. It is evaluated only after arm A held. |
 | D | `PRADYOS_SHM_D rejects=3` | `MAP_SHARED` without `MAP_ANONYMOUS`, `MAP_SHARED\|MAP_PRIVATE`, and `MAP_SHARED\|PROT_EXEC` all return `-EINVAL` | **M5:** the flag check dropped (a file-less shared map accepted) | It passes today (everything shared is rejected), so it is only meaningful with A. It is a boundary arm. |
 
-**Mutants:** M1 → arm A, M2 → arm B, M3 and M4 → arm C, M5 → arm D. That is four different arms. Each mutant runs on its own `mut/ddr1178-*` branch, its tip is tagged `evidence/ddr1178-mN`, and every run is listed here with its link.
+**Mutants:** M1 → arm A, M2 → arm B, M4 → arm C, M5 → arm D. That is four mutants on four different arms.
+
+**M3 (no `pmm_incref` on the shared fork path)** is run too, but it lands on **arm A**. When the child exits, the frame's only reference is dropped, and `pmm_free_pages` stamps it with `PMM_POISON` (`kernel/mm/pmm.c:227`). The parent then reads poison instead of `0x22`. So it is extra coverage on A, not a separate arm. Each mutant runs on its own `mut/ddr1178-*` branch, its tip is tagged `evidence/ddr1178-mN`, and every run is listed here with its link.
 
 ## 5. Risks
 
-- **Bit 52 and NX.** NX is bit 63, so they don't collide. Every path that masks PTE flags with `0xFFF` (for example `vmm_cow.c` childflags) **drops bit 52**. Each such site needs auditing. The fork walk must carry `PTE_SW_SHMEM` explicitly, or the child's copy loses it and the next fork COWs it, which is exactly M1. The implementation PR lists every `0xFFF` mask site and how it is handled.
+- **Bit 52 and NX.** NX is bit 63, so they don't collide. Every path that masks PTE flags with `0xFFF` (for example `vmm_cow.c` childflags) **drops bit 52**. Two such sites were found:
+  - `vmm.c:245` (`map_core`: `flags & 0xFFF`, so **every** `vmm_map_in` would drop bit 52);
+  - `vmm_cow.c:80,95` (fork childflags).
+
+  Both must carry `PTE_SW_SHMEM`. The fork walk must carry `PTE_SW_SHMEM` explicitly, or the child's copy loses it and the next fork COWs it, which is exactly M1. The implementation PR lists every `0xFFF` mask site and how it is handled.
 - **Refcount width.** It is 16 bits. A shared page inherited by more than 65,535 processes would wrap. Fork depth is bounded by the process table today; the bound is recorded in the implementation PR.
 - **Huge pages.** None are used for user memory. `PG_PS` entries are skipped by the walk, unchanged.
 - **Not covered by P1:** cross-process sharing between unrelated processes (P2/P3), file coherence (P4), `MAP_FIXED` replace, partial `munmap` of a shared range (refused today for every mapping; unchanged).
