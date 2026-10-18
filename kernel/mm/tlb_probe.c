@@ -5,12 +5,16 @@
  * C1.4 exit criteria.
  *
  * Setup. The BSP is the only initiator. It maps a kernel-half test page and
- * alternates its frame between one filled with 0xAA and one filled with 0xBB,
- * calling tlb_shoot(0, va, 1) after every remap, then publishing the phase.
+ * rotates it through three frames filled with 0xA0, 0xA1, 0xA2 (phase p maps
+ * frame p % 3), calling tlb_shoot(0, va, 1) after every remap, then publishing
+ * the phase. Three frames, not two: between the remap and the publish a correct
+ * reader legitimately sees the NEXT frame under the old phase, so the valid set
+ * for phase p is {p, p+1}. With two frames p+1 == p-1 and the check would be
+ * vacuous; run 39136618235 counted that legitimate window as stale=4871737.
  * Every other ready CPU runs a reader job that keeps the page hot in its TLB.
  *
- *   A  stale  : a reader saw the previous frame's byte while the phase it read
- *               before AND after the load was unchanged. Kills M1/M2 only if
+ *   A  stale  : a reader that had already read phase p saw frame p-1, which
+ *               is unmapped and flushed everywhere before p is published. Kills M1/M2 only if
  *               the emulator can hold a stale cross-CPU entry (may be vacuous
  *               under TCG; item 2).
  *   B  early  : after tlb_shoot returned, a CPU in the request's target mask
@@ -40,11 +44,10 @@ static void tp_reader(void) {
     volatile uint8_t *p = (volatile uint8_t *)TP_VA;
     uint64_t stale = 0, reads = 0;
     while (!__atomic_load_n(&tp_stop, __ATOMIC_ACQUIRE)) {
-        uint64_t p1 = __atomic_load_n(&tp_phase, __ATOMIC_ACQUIRE);
+        uint64_t ph = __atomic_load_n(&tp_phase, __ATOMIC_ACQUIRE);
         uint8_t v = *p;
-        uint64_t p2 = __atomic_load_n(&tp_phase, __ATOMIC_ACQUIRE);
         reads++;
-        if (p1 == p2 && v != ((p1 & 1) ? 0xBB : 0xAA))
+        if (ph && v == (uint8_t)(0xA0 + (ph - 1) % 3))
             stale++;
     }
     __atomic_add_fetch(&tp_stale, stale, __ATOMIC_RELAXED);
@@ -73,13 +76,14 @@ static void tp_line(const char *s, uint64_t a, const char *s2, uint64_t b) {
 
 void tlbshoot_probe(void) {
     struct percpu *self = this_cpu();
-    uint64_t fa = pmm_alloc_page(), fb = pmm_alloc_page();
-    if (!self || !fa || !fb) {
+    uint64_t fr[3] = { pmm_alloc_page(), pmm_alloc_page(), pmm_alloc_page() };
+    if (!self || !fr[0] || !fr[1] || !fr[2]) {
         tp_line("PRADYOS_TLBSHOOT FAIL setup=", 1, 0, 0);
         return;
     }
-    tp_fill(fb, 0xBB);
-    tp_fill(fa, 0xAA);                   /* phase 0 maps fa */
+    tp_fill(fr[2], 0xA2);
+    tp_fill(fr[1], 0xA1);
+    tp_fill(fr[0], 0xA0);                /* phase 0 maps frame 0 */
     tlb_shoot(0, TP_VA, 1);
 
     uint64_t expect = 0;                 /* ready CPUs other than self */
@@ -99,7 +103,7 @@ void tlbshoot_probe(void) {
     uint32_t it;
     for (it = 0; it < TP_ITERS; it++) {
         uint64_t ph = it + 1;
-        vmm_map(TP_VA, (ph & 1) ? fb : fa, VMM_RW);
+        vmm_map(TP_VA, fr[ph % 3], VMM_RW);
         uint64_t c0 = tp_rdtsc();
         tlb_shoot(0, TP_VA, 1);
         cyc += tp_rdtsc() - c0;
@@ -127,8 +131,8 @@ void tlbshoot_probe(void) {
     }
     vmm_unmap(TP_VA);
     tlb_shoot(0, TP_VA, 1);
-    pmm_free_page(fa);
-    pmm_free_page(fb);
+    for (unsigned i = 0; i < 3; i++)
+        pmm_free_page(fr[i]);
 
     tp_line("PRADYOS_TLBSHOOT_A stale=", tp_stale, " iters=", it);
     tp_line("PRADYOS_TLBSHOOT_B early=", early, 0, 0);
