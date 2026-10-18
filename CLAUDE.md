@@ -54,7 +54,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
    - Insert new entries BEFORE the final list line.
    - Never put a comment inside its `printf`.
    - Verify after any edit with `source <(sed -n '/^GLOBAL_FORBIDDEN=/,/current FAIL.)"$/p' tools/qemu_runner/boot_test.sh)`; the count must be **77**.
-10. **DDR numbers.** Before allocating, confirm the number is unused in BOTH `docs/ddr/` and `docs/decisions/` (`ls docs/ddr docs/decisions | grep DDR-<N>`). Free range: **DDR-1175+**.
+10. **DDR numbers.** Before allocating, confirm the number is unused in BOTH `docs/ddr/` and `docs/decisions/` (`ls docs/ddr docs/decisions | grep DDR-<N>`). Free range: **DDR-1178+**.
 11. **`kmalloc` does not zero.** Every new `struct tcb` field needs an explicit initialiser in `sched_create_state`.
 12. **One QEMU at a time.** Pre-flight check: `pgrep -f "[q]emu-system-x86_64"`.
 13. **Before every commit:** `bash tools/ci/hygiene_check.sh` must pass all eleven checks, and `make smoke-shell` must pass 5/5 locally when the kernel changed.

@@ -2,20 +2,18 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-10-17)
+## State (2026-10-18)
 
-- **dev/phase1 tip:** `cd679b5` (PR #55: DDR-1175 kernel size limit).
-- **Kernel:** `kernel.bin` is 1,532,298 B on the c12-shootdown-core branch (adds smoke-tlbshoot). There are 196 gates.
-- **Free numbers:** NSI next free 108; DDR free 1175+.
-- C1.1 done. M1–M4 shown red in CI (DDR-1174 §6). Mutant branches `mut/ddr1174-*` still exist: the proxy refuses branch deletion (#45 comment 6240621436).
+- **dev/phase1 tip:** `5e4ccf5` (PR #58: C1.2 TLB shootdown and `smoke-tlbshoot`).
+- **Kernel:** `kernel.bin` is 1,532,298 B. There are 196 gates.
+- **Free numbers:** NSI next free 108; DDR free 1178+.
+- C1.1 done (DDR-1174). C1.2 done (DDR-1177): gate arms A-C, mutants M2 and M3 shown red in CI.
+- C1.4 now carries three required DDR-1177 items: arm D (mprotect), arm E (user space), and a gate that catches M4.
+- Mutant branches `mut/ddr1174-*` and `mut/ddr1177-*` still exist: the proxy refuses branch deletion (#45 comment 6240621436).
 
-## In progress (order fixed by #45 comments 6229808666 item 9 and 6233854639)
+## Next
 
-1. Graph measurement DDR-1176 (this PR) (the same task done with and without graph_* tools, with tokens reported).
-
-## Then
-
-`docs/V1_MASTER_CHECKLIST.md`, starting at C1.2 (cross-CPU TLB shootdown).
+`docs/V1_MASTER_CHECKLIST.md` C1.3 (shared memory): write the DDR first.
 
 ## Open blockers
 
@@ -24,4 +22,4 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## Resume prompt
 
-Read CLAUDE.md, then this file, then issue #45 in full, including owner comments. Follow the newest owner comment first. Continue with the first unfinished item under "In progress".
+Read CLAUDE.md, then this file, then issue #45 in full, including owner comments. Follow the newest owner comment first. Continue with "Next".
