@@ -23,8 +23,9 @@
  *       the pages are ptnode_alloc'd and freed identically to anonymous ones
  *       and munmap need not know where the bytes came from. Dirty tracking and
  *       msync are MAP_SHARED's problem, and msync has no subject under PRIVATE.
- * MAP_SHARED stays refused: it needs write-back, a shared page cache, and a
- * cross-CPU TLB shootdown this kernel does not have (DDR-1075 sec.3 / DDR-1077).
+ * DDR-1178 P1: MAP_SHARED|MAP_ANONYMOUS is accepted (shared across fork via
+ * PTE_SW_SHMEM). File-backed MAP_SHARED stays refused: it needs write-back and
+ * a shared page cache (DDR-1178 P4, owner decisions D4/D5).
  *
  * DDR-877 (item 19): this is now the real POSIX six-argument mmap. The 4-arg
  * form was worse than incomplete — a caller passing fd and offset had them
@@ -111,8 +112,13 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
 
     if (len == 0)
         return -EINVAL;
-    if (flags & MAP_SHARED)
-        return -EINVAL;                         /* private only (see header) */
+    /* DDR-1178 P1: MAP_SHARED is anonymous-only. File-backed shared mappings
+     * need write-back and a shared page cache (P4, owner decisions D4/D5). */
+    int shared = (flags & MAP_SHARED) != 0;
+    if (shared && (flags & MAP_PRIVATE))
+        return -EINVAL;                         /* POSIX: exactly one of the two */
+    if (shared && a_fd != -1)
+        return -EINVAL;                         /* P4 not implemented */
     if (prot & PROT_EXEC)
         return -EINVAL;                         /* W^X: no executable mapping */
 
@@ -179,6 +185,8 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
     uint64_t pflags = VMM_USER | VMM_NX;
     if (prot & PROT_WRITE)
         pflags |= VMM_RW;
+    if (shared)
+        pflags |= PTE_SW_SHMEM;                  /* DDR-1178: fork shares, not COWs */
 
     for (uint64_t i = 0; i < npages; i++) {
         void *frame = ptnode_alloc();            /* zeroed */
