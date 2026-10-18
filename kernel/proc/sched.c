@@ -1306,8 +1306,7 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
          * table must be too. Left empty, the child could not munmap an inherited
          * region, and its first addr==0 mmap reused the inherited VA, missed the
          * overlap and overwrote a live (possibly shared) PTE. */
-        memcpy(t->vma, parent->vma, sizeof t->vma);
-        t->mmap_next   = parent->mmap_next;
+        /* MUTANT M7: vma copy dropped */
         /* DDR-838: lineage, not authority. is_agent is deliberately NOT inherited
          * (see the zeroing in sched_create), so the containment cap has to ride
          * on something fork does propagate. A child of an agent, or of anything
