@@ -234,3 +234,16 @@ Mutants (each must be run in CI and shown red before merge):
 Gated by `smoke-tlbshoot` (planned, not yet existing). Emulated under QEMU TCG
 only. **Not verified on real hardware.** No claim about OPEN-1/2/12/13 or
 U1-U3.
+
+## Amendment 1: deviations found during implementation (PR #58, commit `7e3cbaf`)
+
+The core implementation departs from the text above in the ways below. Where they differ, this amendment wins. The core build passed the existing gates in CI ([39109148478](https://github.com/prady4the4bady/Prady4OS/actions/runs/39109148478)). The shootdown behaviour itself is **not verified**: no gate exercises it yet.
+
+1. **Seqcount on `gen`.** Writers set `gen` odd while they fill the slot and even when done; readers re-check it after reading the fields. Without this, a CPU servicing a request inline (§3.4) could pair an old generation with a new target mask and ack a request it never flushed.
+2. **The initiator never acks its own request.** It records the new generation as already seen. Otherwise, if it serviced its own request inline, it would set an ack bit outside the target mask and wait forever.
+3. **Interrupts stay off for the whole shootdown.** This replaces the first bullet of §3.7. Every wait loop (the lock try-loop and the ack spin) services pending requests inline, which is the second bullet of §3.7. Spinning with interrupts on risked preemption or migration while the initiator owns the slot, and interleaved non-atomic `ICR_HI`/`ICR_LO` writes from an interrupt on the same CPU.
+4. **Page-table nodes are freed after the acks too.** §3.4 only reordered the leaf-frame free, but `vmm_unmap` also frees emptied page-table nodes, which the paging-structure caches can still reference. `vmm_unmap_range_flush` works in two passes with one shootdown between them:
+   - pass 1 clears PRESENT, keeps the frame address, and tags the PTE with `PTE_SW_DYING` (bit 11);
+   - pass 2, after the acks, frees the leaf frames and the page-table nodes.
+5. **Readiness gate.** Only CPUs with `percpu.shoot_ready` set are targeted. The flag is set after `lapic_ap_enable()` on each AP, and on the BSP before APs start. Without it, a CPU that is present but has no IDT or LAPIC yet would never ack.
+6. **Fork downgrade.** §3.5 placed the flush per page at `vmm_cow.c:90`. The implementation does one full-flush shootdown of the parent address space after the walk instead.
