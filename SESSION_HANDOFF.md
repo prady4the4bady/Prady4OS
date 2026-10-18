@@ -4,17 +4,14 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## State (2026-10-17)
 
-- **dev/phase1 tip:** `49ca195` (PR #54: docs cleanup, CLAUDE.md shrink, doc-size gate).
+- **dev/phase1 tip:** `cd679b5` (PR #55: DDR-1175 kernel size limit).
 - **Kernel:** `kernel.bin` is 1,528,202 B. There are 195 gates.
 - **Free numbers:** NSI next free 108; DDR free 1175+.
 - C1.1 done. M1–M4 shown red in CI (DDR-1174 §6). Mutant branches `mut/ddr1174-*` still exist: the proxy refuses branch deletion (#45 comment 6240621436).
 
 ## In progress (order fixed by #45 comments 6229808666 item 9 and 6233854639)
 
-1. C0.1 leftovers:
-   - Done: #19, #42 closed; #9, #7, #8, #30 merged. Open: #33 (in CI).
-2. Kernel size limit DDR-1175 (this PR).
-3. Graph measurement DDR-1176 (the same task done with and without graph_* tools, with tokens reported).
+1. Graph measurement DDR-1176 (this PR) (the same task done with and without graph_* tools, with tokens reported).
 
 ## Then
 
