@@ -158,8 +158,7 @@ void tlb_shoot(uint64_t cr3, uint64_t va, uint64_t npages) {
             __atomic_add_fetch(&g_tlb_shoot_ipis, 1, __ATOMIC_RELAXED);
         }
 
-        while (__atomic_load_n(&g_req.ack_mask, __ATOMIC_ACQUIRE) != mask)
-            __asm__ volatile("pause");
+        /* MUTANT M2 (DDR-1177): no ack wait. */
     }
 
     spin_unlock(&g_shoot_lock);
