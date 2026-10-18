@@ -89,15 +89,16 @@ static int vma_overlaps(struct tcb *t, uint64_t base, uint64_t npages) {
     return 0;
 }
 
-/* Unmap + free `npages` starting at `base` in `cr3`'s address space. */
+static void unmap_free_frame(uint64_t ph) {
+    ptnode_free((void *)(uintptr_t)ph);
+}
+
+/* Unmap + free `npages` starting at `base` in `cr3`'s address space (active AS
+ * == cr3 during a syscall). DDR-1177 §3.4: the frames are freed only AFTER the
+ * cross-CPU shootdown has been acked -- freeing first was the use-after-free
+ * of DDR-1177 §1 once two CPUs can run one AS. */
 static void unmap_range(uint64_t cr3, uint64_t base, uint64_t npages) {
-    for (uint64_t i = 0; i < npages; i++) {
-        uint64_t va = base + i * PAGE_SIZE;
-        uint64_t ph = vmm_resolve(cr3, va);
-        vmm_unmap(va);                          /* active AS == cr3 during a syscall */
-        if (ph)
-            ptnode_free((void *)(uintptr_t)ph);
-    }
+    vmm_unmap_range_flush(cr3, base, npages, unmap_free_frame);
 }
 
 static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,

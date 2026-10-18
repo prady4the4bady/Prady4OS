@@ -384,8 +384,8 @@ static long sys_surface_close(long a1, long a2, long a3, long a4, long a5, long 
      * not access a sovereign-closed surface (its poll de-lists it). */
     if (owner) {
         uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
-        for (uint32_t i = 0; i < npages; i++)
-            vmm_unmap(va + (uint64_t)i * PAGE_SIZE);
+        /* DDR-1177: shoot down other CPUs running this AS before the free. */
+        vmm_unmap_range_flush(current_thread->cr3, va, npages, 0);
     }
     pmm_free_pages(phys, order);                   /* the ONE free, outside the lock */
     return 0;
@@ -444,8 +444,8 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4, long a5, long
     spin_unlock_irqrestore(&g_surf_lock, fl);
 
     uint64_t va = SURFACE_VA_BASE + (uint64_t)id * SURFACE_VA_SLOT;
-    for (uint32_t i = 0; i < onpages; i++)              /* drop the owner's old view */
-        vmm_unmap(va + (uint64_t)i * PAGE_SIZE);
+    /* Drop the owner's old view; DDR-1177: shot down before the free below. */
+    vmm_unmap_range_flush(current_thread->cr3, va, onpages, 0);
     pmm_free_pages(ophys, order_for(onpages));          /* free the old buffer */
     return 0;
 }

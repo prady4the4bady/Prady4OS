@@ -21,6 +21,9 @@
  * share rather than copy it. (Bit 9 is reserved for the COW pass, IMP-D.) */
 #define PTE_SW_COW    0x200ull                 /* bit 9: copy-on-write (IMP-D)   */
 #define PTE_SW_SHARED 0x400ull                 /* bit 10 */
+/* DDR-1177: bit 11 marks a NON-present leaf whose frame is awaiting a TLB
+ * shootdown ack before it is freed (vmm_unmap_range_flush, transient). */
+#define PTE_SW_DYING  0x800ull                 /* bit 11 */
 
 /* User virtual range = PML4 slot 1 = [512 GiB, 1 TiB) (ADR-021). The ELF loader
  * mirrors these as its own USER_MIN/USER_MAX; any user pointer the kernel copies
@@ -117,6 +120,12 @@ int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable);
  * hardware RO bit IS the copy trigger, so granting write there would let one
  * process write a frame another still shares, with no copy and no fault). */
 int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t flags);
+
+/* DDR-1177: unmap npages at va in the ACTIVE AS `pml4_phys`, shoot down every
+ * other CPU running it, and only then free page-table nodes and pass each leaf
+ * frame to free_fn (may be NULL when the caller frees the frames itself). */
+void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
+                           void (*free_fn)(uint64_t phys));
 
 /* Resolve a virtual address to its mapped physical page base in the tables rooted
  * at `cr3` (4 KiB leaf), or 0 if not present. Used by sys_munmap to find the

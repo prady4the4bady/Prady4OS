@@ -24,6 +24,7 @@
 #include "lock_stat.h"        /* DDR-1047: contended-lock dump on [apfreeze] */
 #include "virtio_blk.h"       /* DDR-1138: compl_lock owner dump on [apfreeze] */
 #include "xhci.h"              /* DDR-1167: USB HID keyboard poll */
+#include "tlb.h"               /* DDR-1177: TLB shootdown IPI */
 #include <stdint.h>
 
 struct idt_entry {
@@ -41,7 +42,8 @@ struct idtr {
     uint64_t base;
 } __attribute__((packed));
 
-extern void *isr_stub_table[];          /* 32 stub addresses, from isr.asm */
+extern void *isr_stub_table[];          /* 64 stub addresses (vectors 0..63), from isr.asm */
+extern void isr_stub_240(void);         /* DDR-1177: TLB_SHOOT_VECTOR (0xF0), from isr.asm */
 extern void idt_load(struct idtr *ptr); /* from cpu.asm */
 
 static struct idt_entry idt[256];
@@ -81,6 +83,7 @@ void idt_init(void) {
                                     * 49 wake IPI, 50..63 MSI-X (DDR-714C1/C2;
                                     * DDR-771 extended the window to 63) */
         set_gate(i, isr_stub_table[i]);
+    set_gate(TLB_SHOOT_VECTOR, (void *)isr_stub_240);   /* DDR-1177 §3.2 */
 
     g_idtr.limit = (uint16_t)(sizeof(idt) - 1);
     g_idtr.base  = (uint64_t)&idt;
@@ -751,6 +754,12 @@ void isr_dispatch(struct regs *r) {
             __atomic_store_n(&npc->nmi_dump, (uint8_t)2, __ATOMIC_RELEASE);
             return;
         }
+    }
+    /* DDR-1177: TLB shootdown IPI. Flush + ack, then EOI. */
+    if (r->vector == TLB_SHOOT_VECTOR) {
+        tlb_shoot_isr();
+        lapic_eoi();
+        return;
     }
     /* AP wake IPI (DDR-SMP-3c-alpha): its only job is to break hlt; EOI + out. */
     if (r->vector == LAPIC_TIMER_VECTOR + 1) {
