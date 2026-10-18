@@ -117,8 +117,7 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
     int shared = (flags & MAP_SHARED) != 0;
     if (shared && (flags & MAP_PRIVATE))
         return -EINVAL;                         /* POSIX: exactly one of the two */
-    if (shared && a_fd != -1)
-        return -EINVAL;                         /* P4 not implemented */
+    /* MUTANT M5: fd check dropped */
     if (prot & PROT_EXEC)
         return -EINVAL;                         /* W^X: no executable mapping */
 
