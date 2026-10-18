@@ -267,9 +267,22 @@ Where this amendment differs from §4 or Amendment 1, it wins.
 7. **Cost.** The probe prints `[tlbshoot] reads=<n> cyc_per_shoot=<n>`: rdtsc cycles per `tlb_shoot` call with 3 targets, with interrupts off (§3.7, option 2). Under TCG this is emulated time, not a hardware cost. The value from the green run is recorded below. The fork full-flush versus per-page cost will be measured in C1.4, where fork of a populated address space is gated. Until then it is **not measured**.
 8. **Standing rule.** Gate-scope questions are decided and recorded in a DDR, not asked.
 
-### Mutant runs (filled in from CI)
+### Gate and mutant runs (CI evidence)
 
-| Mutant | Branch | Run | Result |
-|---|---|---|---|
-| M2 no ack wait | `mut/ddr1177-m2` | [39136668511](https://github.com/prady4the4bady/Prady4OS/actions/runs/39136668511) | pending |
-| M3 wrong mask | `mut/ddr1177-m3` | [39136669935](https://github.com/prady4the4bady/Prady4OS/actions/runs/39136669935) | pending |
+| Head | Branch | Run | A stale | B early | C missed / targets | Result |
+|---|---|---|---|---|---|---|
+| correct code `912ff68` | `c12-shootdown-core` | [39141624725](https://github.com/prady4the4bady/Prady4OS/actions/runs/39141624725) | 0 | 0 | 0 / 3 | green |
+| M2 no ack wait `b12f058` | `mut/ddr1177-m2` | [39141621302](https://github.com/prady4the4bady/Prady4OS/actions/runs/39141621302) | 816 | 14832 | 0 / 3 | **red** (A, B) |
+| M3 wrong mask `6a9526c` | `mut/ddr1177-m3` | [39141625093](https://github.com/prady4the4bady/Prady4OS/actions/runs/39141625093) | 2794965 | 0 | 20000 / 2 | **red** (A, C) |
+
+Each mutant run failed only `smoke-tlbshoot` (shard 6). The mutants land on different arms: B catches only M2, C catches only M3.
+
+**Arm A is not vacuous under TCG.** It caught M2 by itself (`stale=816`), so the vacuity label from item 2 does not apply.
+
+**Two probe defects were found and fixed before these runs.** Both were in arm A's own check, not in the shootdown.
+- Run [39136618235](https://github.com/prady4the4bady/Prady4OS/actions/runs/39136618235) reported `stale=4871737`. With two frames, the next frame is also the previous one. Between the remap and the phase publish, a correct reader sees the next frame. Fixed in `61fe97d`: three rotating frames.
+- Run [39139152476](https://github.com/prady4the4bady/Prady4OS/actions/runs/39139152476) reported `stale=2`. An interrupt between the reader's phase load and its byte load let the writer move two phases, and frame (p+2)%3 holds frame p-1's byte. Fixed in `912ff68`: a read counts only when the phase is the same before and after it.
+- In both runs arms B and C were 0 on the correct code.
+- The first mutant runs (39136668511, 39136669935, 39139150386, 39139154185) were cancelled, because they carried the broken arm A.
+
+**Cost (item 7).** `cyc_per_shoot` on the correct code is 57411, 59096 and 52114 rdtsc cycles in three runs: one `tlb_shoot` with 3 targets and interrupts off, under QEMU TCG on a 2445 MHz TSC, so about 21-24 µs. This is emulated time, not a hardware cost. It is a ceiling for how long interrupts stay off per shootdown under TCG. Fork full-flush versus per-page: **not measured** (C1.4).
