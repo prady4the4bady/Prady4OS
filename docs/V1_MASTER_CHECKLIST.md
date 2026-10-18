@@ -25,7 +25,7 @@ Names marked `(name TBD)` for gates are placeholders; Claude chooses the real na
 
 ### C0.1 Baseline and Dependabot
 Status: IN PROGRESS. Needs: none.
-- [ ] Full gate run on the current `dev/phase1` tip; fix anything red at the root
+- [x] Full gate run on the current `dev/phase1` tip; fix anything red at the root (run 39105021641, green)
 - [x] Dependabot (DDR-1172): #19 closed (superseded by #48); merged #9 `3c1708d`, #7 `55b125d`, #8 `02ede03`, #30 `bca2795`, #33 `52b35f3`; #42 closed red (web-tree-sitter 0.25+ has no default export)
 - [x] Open docs PRs #27, #31, #36: read, merge or close, record why (DDR-1173)
 - [ ] DDR-1171 rollback implementation on `rollback-ddr1171`
@@ -41,8 +41,8 @@ Status: DONE. PR #52 merged `71d482e`; mutants M1–M4 shown red post-merge, gat
 Exit gate: `smoke-sigsem` (shard 6, strict).
 
 ### C1.2 Cross-CPU TLB shootdown
-Status: TODO. Needs: C0.1. Ref: DDR-1075, DDR-1077.
-- [ ] IPI-based TLB shootdown on unmap/mprotect
+Status: DONE. Needs: C0.1. Ref: DDR-1075, DDR-1077, DDR-1177.
+- [x] IPI-based TLB shootdown on unmap/mprotect: #57 `e6c2e16` (DDR), #58 `5e4ccf5` (code and gate). Gate green on 912ff68 (run 39141624725); M2 red (run 39141621302), M3 red (run 39141625093). mprotect is covered by C1.4 arm D. Emulated (TCG) only, not verified on real hardware.
 Exit gate: `smoke-tlbshoot` (in-kernel probe, arms A-C, 4 CPUs; DDR-1177 Amendment 2). M2 and M3 shown red in CI before merge.
 
 ### C1.3 Shared memory
