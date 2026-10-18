@@ -12,6 +12,7 @@
 #include "percpu.h"
 #include "spinlock.h"
 #include "vmm.h"
+#include "tlb.h"          /* DDR-1177: tlb_cpu_ready */
 #include "pmm.h"
 #include "kheap.h"
 #include "irq.h"
@@ -268,6 +269,7 @@ void smp_ap_entry(uint32_t idx) {
     void idt_load_ap(void);        /* kernel/idt.c — APs boot with a stale IDTR */
     idt_load_ap();
     lapic_ap_enable();
+    tlb_cpu_ready();               /* DDR-1177: IDT + LAPIC up -> shootdown target */
     lapic_timer_ap_arm();          /* cap-3: this AP's own 100Hz preemption tick */
     /* cap-4: ring 3 runs here now — arm the PER-CPU machine state the BSP set
      * for itself in kmain (the trampoline only does PAE+LME): SSE (CR0/CR4 —

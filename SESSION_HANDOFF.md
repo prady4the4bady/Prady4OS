@@ -5,7 +5,7 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 ## State (2026-10-17)
 
 - **dev/phase1 tip:** `cd679b5` (PR #55: DDR-1175 kernel size limit).
-- **Kernel:** `kernel.bin` is 1,528,202 B. There are 195 gates.
+- **Kernel:** `kernel.bin` is 1,532,298 B on the c12-shootdown-core branch (adds smoke-tlbshoot). There are 196 gates.
 - **Free numbers:** NSI next free 108; DDR free 1175+.
 - C1.1 done. M1–M4 shown red in CI (DDR-1174 §6). Mutant branches `mut/ddr1174-*` still exist: the proxy refuses branch deletion (#45 comment 6240621436).
 

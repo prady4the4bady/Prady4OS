@@ -59,6 +59,13 @@ struct percpu {
     uint64_t d_rip, d_rsp, d_rbp, d_rflags;
     uint64_t d_bt[4];           /* return addresses, walked from the frame chain */
     uint32_t d_cs, d_lvt, d_tpr, d_svr, d_isr48, d_irr48, d_pid;
+
+    /* DDR-1177: TLB shootdown. Appended at the tail (no asm offset moves).
+     * shoot_seen_gen = the last request generation this CPU flushed for;
+     * shoot_ready = 1 once this CPU can take the vector-0xF0 IPI (IDT loaded,
+     * LAPIC enabled) — only ready CPUs are targeted. BSS-zeroed. */
+    volatile uint64_t shoot_seen_gen;
+    volatile uint8_t  shoot_ready;
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */

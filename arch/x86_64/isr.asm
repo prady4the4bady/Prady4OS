@@ -117,6 +117,10 @@ ISR_NOERR 61
 ISR_NOERR 62
 ISR_NOERR 63
 
+; DDR-1177: TLB-shootdown IPI (TLB_SHOOT_VECTOR, kernel/mm/tlb.h). Outside the
+; 0..63 table below; idt_init installs it by name. No error code.
+ISR_NOERR 240
+
 isr_common:
     push rax
     push rbx

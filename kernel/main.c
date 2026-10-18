@@ -62,6 +62,7 @@
 #include "kimg.h"         /* DDR-1143 §10.4: pristine kernel image */
 #include "rng.h"          /* DDR-816: kernel entropy */
 #include "vmm_cow.h"
+#include "tlb.h"          /* DDR-1177: TLB shootdown */
 
 extern void gdt_init(void);    /* arch/x86_64/cpu.asm */
 extern void idt_init(void);    /* kernel/idt.c        */
@@ -4420,6 +4421,7 @@ static void vmm_test(void) {
     kputs(rb == 0xCAFEBABEDEADBEEFull ? "  (OK)\r\n" : "  (FAIL)\r\n");
 
     vmm_unmap(va);
+    tlb_shoot(0, va, 1);                 /* DDR-1177: kernel half -> all CPUs */
     pmm_free_page(pg);
     uint64_t after = kheap_outstanding();
     kputs("NEXUS: vmm unmap reclaim — outstanding ");
@@ -4826,6 +4828,7 @@ void kmain(struct boot_info *bi) {
         kputs(" id=");
         kputdec(pc ? pc->apic_id : 999);
         kputs("\r\n");
+        tlb_cpu_ready();                 /* DDR-1177: BSP can take the 0xF0 IPI */
         smp_start_aps();                 /* ADR-029: INIT-SIPI; APs idle for jobs */
         /* DDR-SMP-3c-alpha: prove cross-CPU dispatch — one job per AP. */
         unsigned jobs = 0;
@@ -4844,6 +4847,10 @@ void kmain(struct boot_info *bi) {
           kline_s(&k, "[smp] jobs done=");
           kline_d(&k, jobs);
           kline_s(&k, "\r\n"); kline_emit(&k); }
+        if (probe_enabled("tlbshoot")) {     /* DDR-1177: smoke-tlbshoot */
+            void tlbshoot_probe(void);
+            tlbshoot_probe();
+        }
         g_smp_have_aps = (jobs > 0);     /* cross-wake proof runs later, once
                                             the scheduler is up (DDR D5) */
     }

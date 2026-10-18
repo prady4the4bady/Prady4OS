@@ -9,6 +9,7 @@
 #include "pmm.h"
 #include "kheap.h"
 #include "console.h"           /* kputs for the DDR-757 W^X audit sentinel */
+#include "tlb.h"               /* DDR-1177: cross-CPU shootdown */
 
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
@@ -305,7 +306,41 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
              | nx;
         invlpg(p);
     }
+    /* DDR-1177 §3.5: one shootdown per call, after the loop. */
+    tlb_shoot(pml4_phys, start, (end - start) >> 12);
     return 0;
+}
+
+/* DDR-1177 §3.4/§3.5: unmap [va, va+npages) in `pml4_phys` (the ACTIVE AS --
+ * vmm_unmap walks CR3) and free each frame only AFTER every other CPU running
+ * this AS has acked the shootdown. Pass 1 clears PRESENT but keeps the frame
+ * address, tagged PTE_SW_DYING (a non-present PTE's other bits are ignored by
+ * the MMU); then one shootdown; pass 2 drops the PTE (and any page-table node
+ * that empties) and hands the frame to free_fn. Page-table nodes are thus also
+ * freed after the ack, not just leaf frames. */
+void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
+                           void (*free_fn)(uint64_t phys)) {
+    pml4_phys &= PTE_ADDR;
+    va &= ~0xFFFull;
+    for (uint64_t i = 0; i < npages; i++) {
+        uint64_t p = va + i * 0x1000ull;
+        uint64_t *pte = leaf_pte(pml4_phys, p);
+        if (!pte || !(*pte & PTE_PRESENT))
+            continue;
+        *pte = (*pte & ~PTE_PRESENT) | PTE_SW_DYING;
+        invlpg(p);
+    }
+    tlb_shoot(pml4_phys, va, npages);
+    for (uint64_t i = 0; i < npages; i++) {
+        uint64_t p = va + i * 0x1000ull;
+        uint64_t *pte = leaf_pte(pml4_phys, p);
+        if (!pte || !(*pte & PTE_SW_DYING))
+            continue;
+        uint64_t ph = *pte & PTE_ADDR;
+        vmm_unmap(p);                     /* clears the PTE, reclaims empty tables */
+        if (ph && free_fn)
+            free_fn(ph);
+    }
 }
 
 int vmm_unmap(uint64_t virt) {

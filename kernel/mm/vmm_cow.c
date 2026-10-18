@@ -14,6 +14,7 @@
 #include "pmm.h"          /* PAGE_SIZE, pmm_alloc_page/free_page/incref/refcount_get */
 #include "kheap.h"        /* ptnode_alloc */
 #include "string.h"       /* memcpy */
+#include "tlb.h"          /* DDR-1177: cross-CPU shootdown */
 
 #define PG_PS    0x80ull
 #define PG_ADDR  0x000FFFFFFFFFF000ull
@@ -103,6 +104,11 @@ uint64_t vmm_fork_address_space_cow(uint64_t parent_cr3) {
             }
         }
     }
+    /* DDR-1177 §3.8: the RO downgrades above flushed only this CPU. Without
+     * CLONE_VM no other CPU runs the parent AS, so the target set is empty
+     * today; once C1.4 lands a sibling could keep writing a now-shared frame
+     * through a cached RW entry. One full flush per fork, after the walk. */
+    tlb_shoot(parent_cr3, 0, TLB_FULL);
     return child;
 }
 
