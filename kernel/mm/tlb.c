@@ -135,6 +135,7 @@ void tlb_shoot(uint64_t cr3, uint64_t va, uint64_t npages) {
         mask |= 1ull << p->cpu_idx;
     }
 
+    mask &= mask - 1;                          /* MUTANT M3 (DDR-1177): drop one target */
     if (mask) {
         uint64_t g = g_req.gen;                /* even: we own the slot */
         __atomic_store_n(&g_req.gen, g + 1, __ATOMIC_RELAXED);   /* odd: writing */
