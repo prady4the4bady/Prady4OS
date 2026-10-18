@@ -13,8 +13,9 @@
  * vacuous; run 39136618235 counted that legitimate window as stale=4871737.
  * Every other ready CPU runs a reader job that keeps the page hot in its TLB.
  *
- *   A  stale  : a reader that had already read phase p saw frame p-1, which
- *               is unmapped and flushed everywhere before p is published. Kills M1/M2 only if
+ *   A  stale  : with the phase read as p both before and after the load, a
+ *               reader saw frame p-1, which is unmapped and flushed everywhere
+ *               before p is published. Kills M1/M2 only if
  *               the emulator can hold a stale cross-CPU entry (may be vacuous
  *               under TCG; item 2).
  *   B  early  : after tlb_shoot returned, a CPU in the request's target mask
@@ -46,8 +47,13 @@ static void tp_reader(void) {
     while (!__atomic_load_n(&tp_stop, __ATOMIC_ACQUIRE)) {
         uint64_t ph = __atomic_load_n(&tp_phase, __ATOMIC_ACQUIRE);
         uint8_t v = *p;
+        uint64_t ph2 = __atomic_load_n(&tp_phase, __ATOMIC_ACQUIRE);
         reads++;
-        if (ph && v == (uint8_t)(0xA0 + (ph - 1) % 3))
+        /* Count only if the phase did not move across the load. An interrupt
+         * between the two loads lets the writer advance two phases, and frame
+         * (p+2)%3 holds frame p-1's byte: run 39139152476 counted stale=2 that
+         * way. With the phase stable at p, only frames p and p+1 are valid. */
+        if (ph && ph2 == ph && v == (uint8_t)(0xA0 + (ph - 1) % 3))
             stale++;
     }
     __atomic_add_fetch(&tp_stale, stale, __ATOMIC_RELAXED);
