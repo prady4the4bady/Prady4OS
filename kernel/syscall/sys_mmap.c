@@ -185,7 +185,7 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
     uint64_t pflags = VMM_USER | VMM_NX;
     if (prot & PROT_WRITE)
         pflags |= VMM_RW;
-    if (shared)
+    if (1) /* MUTANT M2: every sys_mmap mapping shared */
         pflags |= PTE_SW_SHMEM;                  /* DDR-1178: fork shares, not COWs */
 
     for (uint64_t i = 0; i < npages; i++) {
