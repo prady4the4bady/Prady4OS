@@ -4,8 +4,12 @@
  * produced, so a probe that skipped the behaviour cannot print it:
  *   A  a shared page written by the child reads 0x22 in the parent.
  *   B  a private page written by the child still reads 0x11 in the parent.
- *   C  256 cycles of (shared mmap, fork, child write+exit, wait, munmap) drop
- *      SYS_SYSINFO.free_pages by < 128 (a per-cycle leak drops >= 256).
+ *   C  256 cycles of (mmap, fork, child write+exit, wait, munmap), run once
+ *      with a PRIVATE page (baseline: COW copy freed at child exit) and once
+ *      with a SHARED page. The shared loop's SYS_SYSINFO.free_pages drop
+ *      exceeds the private loop's by < 128; a per-cycle shared leak adds
+ *      >= 256. A bare bound on the shared drop was measured too thin: fork
+ *      churn alone dropped 96 (CI run 39177510529, DDR-1178 §4).
  *   F  the child munmaps the inherited shared region: rc 0 (its VMA table was
  *      copied at fork), and the parent's page survives (refcount, arm A).
  *   E  mprotect(RW) on a shared page, then fork: the child's 0x44 reaches the
@@ -102,6 +106,24 @@ static int reap(long kid) {
     return st;
 }
 
+static long loop_drop(long flags) {
+    unsigned long f0 = free_pages();
+    for (long i = 0; i < CYCLES; i++) {
+        long r = mmap6((long)LOOP_VA, PROT_RW, flags, -1);
+        if (r != (long)LOOP_VA) fail("loop_mmap", r);
+        long k = nsi(SYS_FORK, 0, 0, 0);
+        if (k < 0) fail("loop_fork", k);
+        if (k == 0) {
+            *(volatile unsigned char *)LOOP_VA = 0x33;
+            nsi(SYS_EXIT, 0, 0, 0);
+            for (;;) { }
+        }
+        reap(k);
+        nsi(SYS_MUNMAP, (long)LOOP_VA, 4096, 0);
+    }
+    return (long)f0 - (long)free_pages();
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long r = mmap6((long)SHM_VA, PROT_RW, MAP_SHARED | MAP_ANON, -1);
     if (r != (long)SHM_VA) fail("mmap", r);
@@ -130,26 +152,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     nsi(SYS_MUNMAP, (long)PRIV_VA, 4096, 0);
 
     if (a == 0x22) {
-        unsigned long f0 = free_pages();
-        for (long i = 0; i < CYCLES; i++) {
-            r = mmap6((long)LOOP_VA, PROT_RW, MAP_SHARED | MAP_ANON, -1);
-            if (r != (long)LOOP_VA) fail("loop_mmap", r);
-            long k = nsi(SYS_FORK, 0, 0, 0);
-            if (k < 0) fail("loop_fork", k);
-            if (k == 0) {
-                *(volatile unsigned char *)LOOP_VA = 0x33;
-                nsi(SYS_EXIT, 0, 0, 0);
-                for (;;) { }
-            }
-            reap(k);
-            nsi(SYS_MUNMAP, (long)LOOP_VA, 4096, 0);
-        }
-        unsigned long f1 = free_pages();
-        long drop = (long)f0 - (long)f1;
+        long drop_pv = loop_drop(MAP_PRIVATE | MAP_ANON);
+        long drop_sh = loop_drop(MAP_SHARED | MAP_ANON);
+        long drop = drop_sh - drop_pv;
         p = str(b, "PRADYOS_SHM_C cycles="); p = dec(p, CYCLES);
         p = str(p, " leaked_ok="); p = dec(p, drop < LEAK_BOUND);
         *p++ = '\n'; *p = 0; wr(b);
-        line2("[shm] free_pages drop=", drop);
+        line2("[shm] free_pages drop private=", drop_pv);
+        line2("[shm] free_pages drop shared=", drop_sh);
     }
 
     if (a == 0x22) {
