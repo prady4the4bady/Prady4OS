@@ -185,7 +185,8 @@ def collect(root, name):
 
 def render(items, size):
     s = size / 24.0
-    ink = [[False] * size for _ in range(size)]
+    return [[False] * size for _ in range(size)]  # MUTANT M4: rasteriser stubbed
+    ink = None
     for sub, _, st in items:
         half = float(st["stroke-width"]) / 2.0
         segs = []
