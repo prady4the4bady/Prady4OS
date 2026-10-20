@@ -85,7 +85,11 @@ uint64_t vmm_fork_address_space_cow(uint64_t parent_cr3) {
                     }
 
                     uint64_t childflags;
-                    if (e1 & VMM_RW) {
+                    if (e1 & PTE_SW_SHMEM) {
+                        /* DDR-1178: MAP_SHARED anon. Same frame, same
+                         * permissions in both, no COW; one more reference. */
+                        childflags = (e1 & 0xFFFull) | PTE_SW_SHMEM | (e1 & VMM_NX);
+                    } else if (e1 & VMM_RW) {
                         /* Writable -> read-only + COW in both parent and child. */
                         pt[i1] = (e1 & ~VMM_RW) | PTE_SW_COW;   /* rewrite parent PTE */
                         invlpg(va);                              /* parent AS is active */
