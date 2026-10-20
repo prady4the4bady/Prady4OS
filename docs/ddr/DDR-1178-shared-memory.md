@@ -116,7 +116,7 @@ Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the 
 
   Recommendation: the frame table. One mapper per file is not POSIX.
 
-## Amendment 1 (2026-10-21): D1-D5 decided; C1.4 proceeds on P1
+## Amendment 1 (2026-10-20 UTC; Order 4 is dated 2026-10-21 +04): D1-D5 decided; C1.4 proceeds on P1
 
 **Authority.** Order 3 (#45/6282431738) and Order 4 (#45/6301435736) delegate every decision in §6 to this record: take the recommended option, or the one safer for memory isolation where §6 gave none. Each choice below names its reason. P2, P3 and P4 are each **security boundary: review before merge**. They add ways for processes to share memory, so the PR for each says so.
 
@@ -130,9 +130,9 @@ Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the 
 
 **Order of work.** First P2 (SysV) and P3 (POSIX `SHM_ANON`). They share the D3 object table: P2 adds the table and P3 reuses it. P4 (the page cache plus write-back) comes after them. Each part gets its own gate arms and mutants, and is shown red in CI before it merges.
 
-**C1.4 starts on P1 alone (Order 4 item 1).** The checklist lists C1.3 as a dependency of C1.4. What C1.4 actually consumes is shared address spaces (`CLONE_VM` threads) and shared futex words across fork. P1 supplies the second, and C1.4 builds the first itself. Nothing in C1.4 needs a SysV or POSIX segment or a shared file mapping. P2-P4 stay open in the checklist and proceed in parallel. If a C1.4 part later turns out to need one of them, that part waits and the DDR for C1.4 records it.
+**C1.4 starts on P1 alone (Order 4 item 1).** The checklist lists C1.3 as a dependency of C1.4. What C1.4 actually consumes is shared address spaces (`CLONE_VM` threads) and shared futex words across fork. P1 supplies the second, and C1.4 builds the first itself. Nothing in C1.4 needs a SysV or POSIX segment or a shared file mapping. P2-P4 stay open in the checklist and proceed in parallel with C1.4, while their own implementation order stays P2 → P3 → P4. If a C1.4 part later turns out to need one of them, that part waits and the DDR for C1.4 records it.
 
-## Amendment 2 (2026-10-20): P2 design, SysV shared memory under D1(c)
+## Amendment 2 (2026-10-20 UTC, after Amendment 1): P2 design, SysV shared memory under D1(c)
 
 **Security boundary: review before merge.** P2 lets two processes share memory through a segment id.
 
@@ -145,6 +145,8 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 - it is copied verbatim by `fork` (`cap_fork`), so a child that inherits a shmid holds a valid handle to the segment;
 - it is never readable or writable by another process;
 - a handle carries a generation, so a stale id cannot reach a reused slot.
+
+**Reachability in P2 is fork only.** No syscall transfers a `RES_SHM` capability to another process. `cap_delegate` exists only as a kernel helper, and its one caller is a boot self-test (`kernel/main.c:100`). So a process that learns only the integer gets `-EINVAL`. D1(c)'s "explicit fd passing" applies to P3's POSIX fd form, not to a SysV shmid. If a transfer operation is wanted later (for example over the IPC door), it needs its own amendment. It must install the capability in the receiver's table, and ids must never become globally resolvable.
 
 - `shmget(IPC_PRIVATE, size, flags)` creates a segment object. It mints `cap(RES_SHM, object, R|W)` in the caller's table and returns `shmid = (generation << 6) | slot`.
   - The generation is limited to 24 bits, so the id stays a positive `int`. If a slot's generation passes 2^24, the call returns `-ENOSPC`.
@@ -201,4 +203,4 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 ## 7. Honesty labels
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is designed in Amendment 2 and is gated by arms G-L once built; until those arms are green and S2-1 to S2-6 are shown red, P2 is **not verified**. P3 and P4 are **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is designed in Amendment 2 and is gated by arms G-M once built; until those arms are green and S2-1 to S2-7 are shown red, P2 is **not verified**. P3 and P4 are **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
