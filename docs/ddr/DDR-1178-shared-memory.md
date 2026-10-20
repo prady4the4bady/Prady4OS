@@ -71,7 +71,7 @@ A user probe `user/shmtest.c` (new `QEMU_PROBES=shm`) does the following:
 
 **Mutants:** M1 → arm A, M2 → arm B, M4 → arm C, M5 → arm D, M6 → arm E, M7 → arm F. That is six mutants on six different arms.
 
-**M3 (no `pmm_incref` on the shared fork path)** is run too, but it lands on **arm A**. When the child exits, the frame's only reference is dropped, and `pmm_free_pages` stamps it with `PMM_POISON` (`kernel/mm/pmm.c:227`). The parent then reads poison instead of `0x22`. So it is extra coverage on A, not a separate arm. Each mutant runs on its own `mut/ddr1178-*` branch, built on the P1 head `80889fd` (PR #63).
+**M3 (no `pmm_incref` on the shared fork path)** is run too, but it lands on **arm A**. When the child exits, the frame's only reference is dropped through `pmm_free_page`, which frees it while the parent still maps it. The parent then reads something other than `0x22`. This is measured as an arm A failure, not as a test of poisoning. The free path stamps `PMM_POISON` (`0xDEADBEEFDEADBEEF`, `kernel/mm/pmm.c:23,227`), which would read as byte `0xEF`. The measured `0x23` therefore means the frame was reallocated and rewritten before the parent read it; which allocation did that is not established. So M3 is extra coverage on A, not a separate arm. Each mutant runs on its own `mut/ddr1178-*` branch, built on the P1 head `80889fd` (PR #63).
 
 **Mutant evidence (all red in `smoke-shm`, shard 0; correct code green in run [39186711736](https://github.com/prady4the4bady/Prady4OS/actions/runs/39186711736)):**
 
@@ -85,7 +85,7 @@ A user probe `user/shmtest.c` (new `QEMU_PROBES=shm`) does the following:
 | M6 | `682cf77` | [39186908635](https://github.com/prady4the4bady/Prady4OS/actions/runs/39186908635) | E | `mprotect_shared=0x11` |
 | M7 | `932d979` | [39186923799](https://github.com/prady4the4bady/Prady4OS/actions/runs/39186923799) | F | `child_munmap_ok=0` |
 
-Arm C on correct code: in the M5-M7 runs, where the shared loop is correct, the shared drop was 0 and the private drop was 22-72. **Tags not created:** pushing `evidence/ddr1178-mN` was refused (HTTP 403, reported on #45), so the evidence is the branch tips and run links above.
+Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the absolute `free_pages` drop was 0 over the shared loop and 22-72 over the private loop. `leaked_ok` = (shared drop - private drop) < 128, which here is -22 to -72. Under M4 it was 256 - 94 = 162, so red. The earlier 96 (above) is also an absolute shared-loop drop, but it came from the previous probe, which ran the shared loop first. The current probe runs the private loop first; a plausible but **not verified** reading is that the private loop absorbs the one-time kernel allocations the shared loop paid before. The arm compares the two loops, so it does not depend on which loop pays them. **Tags not created:** pushing `evidence/ddr1178-mN` was refused (HTTP 403, reported on #45), so the evidence is the branch tips and run links above.
 
 ## 5. Risks
 
