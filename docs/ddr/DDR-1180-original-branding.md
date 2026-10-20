@@ -26,7 +26,7 @@
 3. **SVG subset.** The gate checks for exactly this subset, which keeps the build's rasteriser small and auditable:
    - elements: `<svg>`, `<path>`, `<circle>`, `<rect>`, `<line>`, `<g>`;
    - path commands: `M L H V C Q Z`, absolute or relative;
-   - no `<text>`, no `<image>`, no `<use href>` to external files, no filters, no gradients;
+   - no `<text>`, no `<image>`, no `<use>`, no `transform` attribute, no filters, no gradients;
    - colour is only `currentColor`, so icons take the theme colour from `theme_palette.h` at render time.
 4. **Originality (the checklist's rule, recorded here).**
    - Every path is drawn for this project.
@@ -50,8 +50,8 @@ The gate is a stdlib-only Python tool, `tools/brand/icon_check.py`, in the same 
 |---|---|---|
 | A | **Exists.** Every name in `assets/brand/icons/MANIFEST` has an SVG, and every SVG is in the manifest. | Red: no manifest. |
 | B | **Subset.** The file parses with `xml.etree`, uses only the §2.3 elements, commands and attributes, has `viewBox="0 0 24 24"`, sets `stroke-width="2"` and uses `currentColor`. | Red: no files. |
-| C | **Grid.** Every coordinate, after transforms and including curve control points' hull, lies in [2, 22]. | Red: no files. |
-| D | **Renders.** A scanline rasteriser in the same tool draws each icon at 16, 24, 32 and 64 px. Each render is non-empty, has ink inside the safe area only, and its ink bounding box scales with the size within ±1 px. | Red: no files. |
+| C | **Grid.** Every coordinate, curve control points included, lies in [2, 22]. That is the stroke centreline; with the 2-unit stroke, ink reaches [1, 23]. | Red: no files. |
+| D | **Renders.** A scanline rasteriser in the same tool draws each icon at 16, 24, 32 and 64 px. Each render must be non-empty and keep its ink inside [1, 23] units scaled to the size. Its ink bounding box must match the 24 px render scaled to that size, within ±1.5 px. | Red: no files. |
 | E | **Originality marker.** Every file carries the §2.4 comment. | Red: no files. |
 
 **Mutants. Each lands on a different arm and must be shown red in CI before merge:**
