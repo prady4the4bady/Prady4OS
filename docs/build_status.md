@@ -7319,7 +7319,7 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 
 ## 2026-10-20 — DDR-1180 step 2 (C6.2: icon gate, one seed icon)
 
-- **`ci-icon-check`** (`tools/brand/icon_check.py`, python3 stdlib only) runs in the CI `build` job and in `tools/ci/hygiene_check.sh`. Arms: A manifest/files, B SVG subset, C 24-unit grid, D renders at 16/24/32/64 px, E originality marker.
+- **`ci-icon-check`** (`tools/brand/icon_check.py`, python3 stdlib only) runs in the CI `shard-check` job and in `tools/ci/hygiene_check.sh`. Arms: A manifest/files, B SVG subset, C 24-unit grid, D renders at 16/24/32/64 px, E originality marker.
 - **Seed icon:** `assets/brand/icons/close.svg`, hand-drawn on the grid. The full icon set, logo and wordmark are later steps; the logo and wordmark wait on owner decision B1.
-- **Mutants M1-M5** turn arms A-E red, one per arm, run locally. M3 (a point at x=23) also trips D, because its ink leaves the safe area. CI evidence: **not verified** until the mutant runs are linked in DDR-1180.
+- **Mutants M1-M5** each turned their own arm (A-E) red in CI. M3 also trips D, because its ink leaves the safe area. Correct code is green in `shard-check` run 39364066194; the mutant runs are linked in DDR-1180 §3.
 - The gate proves structure and renderability only. How the icons look and whether they are original rest on the operator's review by eye.

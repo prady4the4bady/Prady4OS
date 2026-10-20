@@ -64,6 +64,18 @@ The gate is a stdlib-only Python tool, `tools/brand/icon_check.py`, in the same 
 | M4 | The rasteriser's fill step stubbed out to return empty | D |
 | M5 | One marker removed | E |
 
+**Evidence (step 2, #68).** The gate runs in the `shard-check` job. On correct code (`863a9bd`) `shard-check` is green in run [39364066194](https://github.com/prady4the4bady/Prady4OS/actions/runs/39364066194). Each mutant was dispatched on its own `mut/ddr1180-mN` branch and failed `shard-check` with the line shown:
+
+| Mutant | Tip | Run | Line |
+|---|---|---|---|
+| M1 | `0297bd1` | [39364144113](https://github.com/prady4the4bady/Prady4OS/actions/runs/39364144113) | `FAIL arm A settings: listed in MANIFEST but has no .svg` |
+| M2 | `05fb3dc` | [39364146106](https://github.com/prady4the4bady/Prady4OS/actions/runs/39364146106) | `FAIL arm B close: element <text> is not in the DDR-1180 subset` |
+| M3 | `7168043` | [39364148262](https://github.com/prady4the4bady/Prady4OS/actions/runs/39364148262) | `FAIL arm C close: coordinate (23, 18) outside [2, 22]` (D also fails: the ink leaves the safe area) |
+| M4 | `7220a1d` | [39364150323](https://github.com/prady4the4bady/Prady4OS/actions/runs/39364150323) | `FAIL arm D close: renders empty at 16 px` |
+| M5 | `ef68186` | [39364152064](https://github.com/prady4the4bady/Prady4OS/actions/runs/39364152064) | `FAIL arm E close: missing the '<!-- original: PRADYOS, DDR-1180 -->' comment` |
+
+The boot shards of the mutant runs were cancelled after `shard-check` went red, because an icon mutant changes nothing that they test.
+
 The renders also feed the compositor's icon atlas, generated at build time like the Inter glyph atlas (DDR-728). That wiring is a separate PR. This gate does not depend on it.
 
 ## 4. Scope split
