@@ -162,8 +162,6 @@ static long sys_ftruncate(long fd, long len, long a3, long a4, long a5, long a6)
         return -EBADF;
     if (e->kind != FD_VFS || !e->file)
         return -EINVAL;            /* console/pipe: no length to set */
-    if (!fd_can_write(e))
-        return -EINVAL;            /* DDR-1182: opened O_RDONLY (Linux's errno) */
 
     /* e->cap, not the thread's caps: the capability is the one captured when
      * this fd was OPENED, so a descriptor opened read-only cannot be
