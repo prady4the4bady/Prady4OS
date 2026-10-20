@@ -168,7 +168,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
   - the address space's last `mm_put`;
   - `exec` (which replaces the address space).
 - **Fork.** `fork` copies the VMA table (DDR-1178 M7) and increments `nattch` for every shm VMA it copies.
-- **Destroy.** `shmctl(shmid, IPC_RMID, 0)` marks the segment. When `marked && nattch == 0`, the object drops its own frame references, and the frames go back to the PMM once no page table holds them. `IPC_STAT`/`IPC_SET` return `-EINVAL` in P2; that is recorded and not implemented.
+- **Destroy.** `shmctl(shmid, IPC_RMID, 0)` marks the segment. The object also counts its **holders**: the capability-table slots that name it. Minting a capability adds one; `fork` copies one for each RES_SHM slot it copies; revoking a capability, or freeing the last reference to a table, removes one. The object is destroyed when `nattch == 0 && (marked || holders == 0)`. On destruction it drops its own frame references, and the frames go back to the PMM once no page table holds them. Without the holders rule, a creator that exits without `IPC_RMID` would pin one of the 32 slots forever, and any process could exhaust the table that way. The rule is the same as for a file whose last descriptor has closed. `IPC_STAT`/`IPC_SET` return `-EINVAL` in P2; that is recorded and not implemented.
 - **`mprotect` cannot defeat `SHM_RDONLY`.** `PROT_WRITE` on any part of a read-only shm VMA returns `-EACCES`.
 - **Agents are refused** every shm call (`-EPERM`). A segment is memory that `aether_mem_charge` does not see, so allowing agents to create segments would bypass their memory cap. This is the option safer for isolation (Order 4, item 2).
 
@@ -197,6 +197,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | S2-4 | `shmat` ignores `marked` | J (`eidrm`) |
 | S2-5 | `SHM_RDONLY` ignored (mapped RW) | K (`ro_faulted`) |
 | S2-6 | the exit path does not decrement `nattch` (the segment is never destroyed) | L |
+| S2-7 | the last holder's exit does not drop `holders` (an unattached, never-RMID'd segment leaks its slot) | M: `PRADYOS_SHM_M reclaimed=1`. A child creates a segment, does not attach it, and exits. The parent then counts free pages and expects them back |
 
 ## 7. Honesty labels
 
