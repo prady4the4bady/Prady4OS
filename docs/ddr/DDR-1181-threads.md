@@ -132,10 +132,14 @@ The fault paths may sleep, because a ring-3 fault holds no kernel lock (`idt.c:8
 **Decision (P1b):**
 1. **Uaccess fault fixup.** Every user copy goes through one assembly routine, `uaccess_copy(dst, src, n)` (a `rep movsb` between `stac`/`clac`). The kernel `#PF` handler, on a ring-0 fault whose RIP lies in that routine's text range, resumes at the routine's fixup label, which returns `-EFAULT`. `copyin`, `copyout` and `copyinstr` keep their up-front `vmm_user_range_ok` check as the fast refusal. The fixup covers only the race. Any other ring-0 fault still panics.
 2. No `CR0` change is needed (WP is already set; see above).
-3. **Gate arm G (in `smoke-thread`, P1c):** `PRADYOS_THREAD_G survived=1 efault=<n>`. One thread loops `getcwd(buf)` (a `copyout`) into a page while a sibling loops `munmap`/`mmap` of that page at the same VA, for a bounded number of iterations.
+3. **Gate arm G (in `smoke-thread`, P1c):** `PRADYOS_THREAD_G survived=1`, with `efault=<n>` on a `[thread] G` line. One thread loops `SYS_DMESG(buf, 4096)` (a 4 KiB `copyout`, the widest single copy any syscall makes) into a page for 1.5 s, while a sibling loops `munmap`/`mmap` of that page at the same VA.
    - Correct code survives and counts the `-EFAULT` returns.
    - **Mutant T8** (the `#PF` handler ignores the fixup range) panics. The panic banner `NEXUS KERNEL PANIC` is already in `GLOBAL_FORBIDDEN` (checked: count 77), so the gate goes red.
    - The arm's pass condition is `survived=1`; `efault` is recorded, not asserted, because the count depends on timing.
+
+### 3.8 Known limitation of P1, recorded
+
+A group exit posts `SIGKILL` to every sibling. A sibling that is spinning in ring 3, or polling through `yield` (DDR-1090), dies at once. A sibling blocked in `sched_block` (a pipe read with no writer, for example) does not wake for `SIGKILL`; this is the same as for a single-threaded process today. The leader then stays a zombie that `wait4` cannot reap until that sibling wakes. Interruptible sleeps for `SIGKILL` belong to P2 (futex), which reworks every blocking wait. `smoke-thread` never blocks a sibling in the kernel, so it does not depend on this.
 
 ## 4. Gate `smoke-thread`
 
@@ -149,7 +153,7 @@ A FAT-rooted probe, `user/threadtest.c`, opt-in (`probe_enabled("thread")`), run
 |---|---|---|
 | A | `PRADYOS_THREAD_A shared=1 joined=1` | A store by the thread is seen by the creator (one address space), and `clear_tid` is written at thread exit. |
 | B | `PRADYOS_THREAD_B tls_ok=2` | Two threads with distinct `tls`; each reads its own `%fs:0` self-pointer. |
-| C | `PRADYOS_THREAD_C leak=0` | 64 create/exit cycles. The PMM free-page count is equal before and after. |
+| C | `PRADYOS_THREAD_C leak_ok=1` | 8 warm-up cycles, then 64 create/exit cycles. The PMM free-page count drops by at most 32 pages. A leaked tcb plus its kernel stack is about 26 KiB, so 64 leaks are about 400 pages; 32 is far below that and far above allocator noise. Both counts are printed on a `[thread] C` line. |
 | D | `PRADYOS_THREAD_D prot_stale=0 faulted=1` | DDR-1177 arm D. A thread on another CPU writes a page in a loop; the creator calls `mprotect(PROT_READ)`. No write starts after `mprotect` returns and succeeds, and the writer faults. |
 | E | `PRADYOS_THREAD_E stale=0 faulted=1` | DDR-1177 arm E. A thread on another CPU reads a page in a loop; the creator calls `munmap`. No read starts after `munmap` returns and succeeds, and the reader faults. |
 | M | `PRADYOS_THREAD_M poison=0` | DDR-1177 M4. Same shape as E, counting reads that return a value other than the pattern. With the KASAN free-poison (`PMM_POISON`, on by default), a frame freed before every CPU acknowledged is read back as poison through the stale entry. |
