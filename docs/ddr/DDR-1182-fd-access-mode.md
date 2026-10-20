@@ -66,7 +66,7 @@ For each arm the probe creates its own file (`/ACCA.TXT` to `/ACCH.TXT`) with `O
 | M5 | `open` accepts access mode 3 and `O_RDONLY\|O_TRUNC` | E |
 | M6 | `dup2` widens the copy to `O_RDWR` (`ne->flags \|= O_RDWR`). Clearing the bits instead would be vacuous: an `O_RDONLY` copy with its bits cleared is still `O_RDONLY` | F |
 | M7 | `mmap` skips `fd_can_read` | G |
-| M8 | `fd_can_write` refuses everything (an over-strict fix) | H |
+| M8 | `fd_can_write` accepts only `O_WRONLY` (an over-strict fix that refuses `O_RDWR`). A version that refused every write would fail the probe's own setup writes first, so it would not single out H | H |
 
 ## 4. Honesty labels
 
