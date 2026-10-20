@@ -15,6 +15,7 @@ struct cap_slot {
 
 struct cap_table {
     struct cap_slot slots[CAP_SLOTS];
+    uint32_t        refs;    /* DDR-1181 §3.6: tcbs sharing this table (atomic) */
     spinlock_t      lk;      /* DDR-1181 §3.6: guards every slot. Threads share
                               * one table, so a revoke on one CPU and a validate
                               * on another must not interleave inside a slot. */
@@ -36,10 +37,18 @@ struct cap_table *cap_table_create(void) {
         t->slots[i].res_id = 0;
     }
     t->lk.v = 0;                       /* kmalloc does not zero */
+    t->refs = 1;
     return t;
 }
 
+void cap_table_get(struct cap_table *t) {
+    __atomic_add_fetch(&t->refs, 1, __ATOMIC_ACQ_REL);
+}
+
+/* DDR-1181 §3.6: drops one reference; the last one frees the table. */
 void cap_table_destroy(struct cap_table *t) {
+    if (__atomic_sub_fetch(&t->refs, 1, __ATOMIC_ACQ_REL) != 0)
+        return;
     kfree(t);
 }
 

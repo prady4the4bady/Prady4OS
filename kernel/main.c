@@ -469,6 +469,7 @@ extern const unsigned char sigsemtest_elf[];          /* DDR-1174: signal semant
 extern const unsigned char sigsemtest_elf_end[];
 extern const unsigned char shmtest_elf[];             /* DDR-1178: MAP_SHARED anon */
 extern const unsigned char shmtest_elf_end[];
+extern const unsigned char threadtest_elf[], threadtest_elf_end[];   /* DDR-1181 */
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
 extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
@@ -3073,6 +3074,22 @@ static void fs_test_thread(void *arg) {
                  * touches no files, so it neither needs the writable SFS root
                  * nor belongs in the DDR-967 umount wait. Not an agent: it
                  * exercises a plain POSIX syscall, not the AETHER surface. */
+                /* DDR-1181 (C1.4 P1): threads. FAT-rooted and NOT in smnt_pid:
+                 * it creates no file on the SFS root. Opt-in: it forks 34
+                 * children and runs spinning threads on every vCPU, which would
+                 * perturb every timing-sensitive gate if it ran each boot. */
+                if (probe_enabled("thread")) {
+                    struct tcb *th = 0;
+                    uint64_t thlen = (uint64_t)(uintptr_t)threadtest_elf_end -
+                                     (uint64_t)(uintptr_t)threadtest_elf;
+                    if (elf_load((void *)(uintptr_t)threadtest_elf, thlen,
+                                 "THREADTEST", &th) == ELF_OK && th) {
+                        sched_unblock(th);
+                        kputs("[user] thread probe spawned\r\n");
+                    } else {
+                        kputs("[user] thread probe FAILED to load\r\n");
+                    }
+                }
                 if (probe_enabled("mprotect")) {
                     struct tcb *mp = 0;
                     uint64_t mplen = (uint64_t)(uintptr_t)mprotecttest_elf_end -

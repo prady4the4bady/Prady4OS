@@ -566,6 +566,11 @@ global shmtest_elf_end
 shmtest_elf:
     incbin "build/shmtest.elf"
 shmtest_elf_end:
+global threadtest_elf
+global threadtest_elf_end
+threadtest_elf:
+    incbin "build/threadtest.elf"
+threadtest_elf_end:
 
 global disktest_elf
 global disktest_elf_end

@@ -252,6 +252,14 @@ struct tcb {
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */
     struct tcb *kmx_next;        /* DDR-1181: kmutex FIFO wait link (kmutex.c) */
+    /* DDR-1181 P1c: thread groups. tgid is the process id every thread of one
+     * address space reports (getpid); pid stays unique per tcb and is the tid.
+     * is_thread marks a tcb made by SYS_THREAD_CREATE (auto-reaped, never a
+     * wait4 child). clear_tid is the user VA of a u32 the kernel zeroes when
+     * the thread exits (0 = none). */
+    uint32_t   tgid;
+    uint32_t   is_thread;
+    uint64_t   clear_tid;
 };
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
@@ -339,6 +347,14 @@ int sched_rollback_pid(uint32_t pid);   /* DDR-1171: mark + SIGKILL a live rollb
 int         sched_checkpoint_pid(uint32_t pid);                /* DDR-1157: set checkpointed=1 under g_sched_lock; 0 or -ESRCH */
 int         sched_resume_pid(uint32_t pid);                    /* DDR-1157: clear + conditional unblock under g_sched_lock; 0 or -ESRCH */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
+/* DDR-1181 P1c: end the calling thread only (SYS_THREAD_EXIT). sched_exit ends
+ * the whole thread group: every other live thread of the same mm is sent
+ * SIGKILL first. For a single-threaded process the two are identical. */
+void        sched_exit_thread(int status);
+/* DDR-1181 P1c: a new thread in `parent`'s address space (SYS_THREAD_CREATE).
+ * Returns it BLOCKED-then-unblocked, or NULL on allocation failure. */
+struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
+                                     uint64_t arg, uint64_t tls, uint64_t clear_tid);
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */
 

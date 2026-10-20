@@ -28,6 +28,9 @@ struct mm {
     uint64_t       mem_limit;           /* L6: 0 -> AETHER_MEM_DEFAULT          */
     uint64_t       mem_used;            /* charged by mmap growth (agents)     */
     uint32_t       refs;                /* tcbs holding this mm (atomic)       */
+    uint32_t       live;                /* DDR-1181 P1c: threads not yet exited */
+    uint32_t       group_set;           /* 1 once the process exit status is fixed */
+    int            group_status;        /* what wait4 reports for the process  */
     struct kmutex  lock;                /* DDR-1181 §3.3: held by every mutation
                                          * of this address space (zeroed = free) */
 };

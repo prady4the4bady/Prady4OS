@@ -12,6 +12,7 @@ struct mm *mm_create(uint64_t cr3) {
     mm->cr3       = cr3;
     mm->mmap_next = VMM_MMAP_BASE;
     mm->refs      = 1;
+    mm->live      = 1;
     return mm;
 }
 
