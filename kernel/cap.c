@@ -2,6 +2,7 @@
 #include "cap.h"
 #include "kheap.h"
 #include "spinlock.h"     /* DDR-1181 §3.6: one table, several threads */
+#include "shm.h"          /* DDR-1178 A2.2: a RES_SHM slot holds its segment */
 
 #define CAP_SLOTS 64
 
@@ -49,6 +50,11 @@ void cap_table_get(struct cap_table *t) {
 void cap_table_destroy(struct cap_table *t) {
     if (__atomic_sub_fetch(&t->refs, 1, __ATOMIC_ACQ_REL) != 0)
         return;
+    /* DDR-1178 A2.2: the last reference to this table releases every segment
+     * hold it carried. No lock: nobody else can reach the table now. */
+    for (int i = 0; i < CAP_SLOTS; i++)
+        if (t->slots[i].in_use && t->slots[i].res_type == RES_SHM)
+            shm_unhold((int)t->slots[i].res_id);
     kfree(t);
 }
 
@@ -77,6 +83,8 @@ static cap_t create_locked(struct cap_table *t, uint32_t res_type, uint64_t res_
             s->rights = rights;
             s->res_type = res_type;
             s->res_id = res_id;
+            if (res_type == RES_SHM)
+                shm_hold((int)res_id);   /* DDR-1178 A2.2 */
             return make_handle(i, s->generation);
         }
     }
@@ -128,6 +136,9 @@ int cap_fork(const struct cap_table *src, struct cap_table *dst) {
     for (int i = 0; i < CAP_SLOTS; i++)   /* exact copy: handles stay valid in dst */
         dst->slots[i] = src->slots[i];
     spin_unlock_irqrestore(&ws->lk, fl);
+    for (int i = 0; i < CAP_SLOTS; i++)   /* DDR-1178 A2.2: the copies hold too */
+        if (dst->slots[i].in_use && dst->slots[i].res_type == RES_SHM)
+            shm_hold((int)dst->slots[i].res_id);
     return 0;
 }
 
@@ -136,11 +147,16 @@ int cap_revoke(struct cap_table *t, cap_t h) {
         return -1;
     uint64_t fl = spin_lock_irqsave(&t->lk);
     struct cap_slot *s = resolve(t, h);
+    int shm_obj = -1;
     if (s) {
+        if (s->res_type == RES_SHM)
+            shm_obj = (int)s->res_id;
         s->generation++;              /* outstanding handles no longer match */
         s->in_use = 0;
     }
     spin_unlock_irqrestore(&t->lk, fl);
+    if (shm_obj >= 0)
+        shm_unhold(shm_obj);          /* DDR-1178 A2.2, outside the table lock */
     return s ? 0 : -1;
 }
 
@@ -162,6 +178,21 @@ uint32_t cap_authorize(struct cap_table *t, cap_t h, uint32_t res_type,
     struct cap_slot *s = resolve(t, h);
     uint32_t ok = s && s->res_type == res_type && s->res_id == res_id &&
                   (s->rights & required) == required;
+    spin_unlock_irqrestore(&t->lk, fl);
+    return ok;
+}
+
+uint32_t cap_lookup(struct cap_table *t, cap_t h, uint32_t res_type,
+                    uint64_t *res_id, uint32_t *rights) {
+    if (!t)
+        return 0;
+    uint64_t fl = spin_lock_irqsave(&t->lk);
+    struct cap_slot *s = resolve(t, h);
+    uint32_t ok = s && s->res_type == res_type;
+    if (ok) {
+        *res_id = s->res_id;
+        *rights = s->rights;
+    }
     spin_unlock_irqrestore(&t->lk, fl);
     return ok;
 }

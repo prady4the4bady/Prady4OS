@@ -55,6 +55,8 @@
 #include "aether.h"    /* per-agent memory cap (Layer 6, ADR-026) */
 #include "fd.h"        /* DDR-1112: fd_get / struct fd_entry (file-backed) */
 #include "vfs.h"       /* DDR-1112: vfs_read — pread-style, takes an offset */
+#include "shm.h"       /* DDR-1178 A2: SysV segment objects */
+#include "cap.h"
 
 #define PROT_READ   0x1
 #define PROT_WRITE  0x2
@@ -237,7 +239,13 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
     if (!v)
         return -EINVAL;
     unmap_range(t->cr3, v->base, v->npages);
-    aether_mem_uncharge(t, v->npages * PAGE_SIZE);
+    if (v->shm) {
+        shm_detach(v->shm - 1);      /* DDR-1178 A2.2: munmap is a detach */
+        v->shm = 0;
+        v->shm_ro = 0;
+    } else {
+        aether_mem_uncharge(t, v->npages * PAGE_SIZE);
+    }
     v->base = 0;
     v->npages = 0;
     return 0;
@@ -285,6 +293,17 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
     if (!t)
         return -ESRCH;
 
+    /* DDR-1178 A2.2: write cannot be added back to a SHM_RDONLY attachment. */
+    if (prot & PROT_WRITE) {
+        uint64_t end = addr + ((len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1));
+        for (int i = 0; i < VM_AREA_MAX; i++) {
+            struct vm_area *v = &t->mm->vma[i];
+            if (v->npages && v->shm_ro &&
+                addr < v->base + v->npages * PAGE_SIZE && v->base < end)
+                return -EACCES;
+        }
+    }
+
     uint64_t flags = 0;
     if (prot & PROT_WRITE) flags |= VMM_RW;
     if (!(prot & PROT_EXEC)) flags |= VMM_NX;   /* readable+non-exec is the default */
@@ -295,6 +314,120 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
     if (rc != 0)
         return -ENOMEM;                        /* a page in the range is absent */
     return 0;
+}
+
+/* ---- DDR-1178 Amendment 2: SysV shared memory (IPC_PRIVATE only) ----------
+ * A shmid is a RES_SHM capability in the caller's own table, encoded as
+ * (generation << 6) | slot (A2.1): it reaches the segment only from a table
+ * that holds it -- the creator's, its threads', and fork children's. */
+#define IPC_PRIVATE 0
+#define IPC_RMID    0
+#define SHM_RDONLY  010000            /* Linux value */
+#define SHMID_GEN_MAX (1u << 24)
+
+static cap_t shmid_handle(long id) {
+    return ((cap_t)((uint64_t)id >> 6) << 32) | (cap_t)(id & 63);
+}
+
+/* The segment object a shmid names in `t`'s table, or -EINVAL. */
+static int shmid_obj(struct tcb *t, long id) {
+    if (id < 0 || id > 0x7FFFFFFFL)
+        return -EINVAL;
+    uint64_t res = 0;
+    uint32_t rights = 0;
+    if (!cap_lookup(t->caps, shmid_handle(id), RES_SHM, &res, &rights))
+        return -EINVAL;
+    return (int)res;
+}
+
+static long sys_shmget_impl(long a_key, long a_size, long a_flags, long a4, long a5, long a6) {
+    (void)a_flags; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;               /* A2.2: a segment is memory the agent cap does not see */
+    if (a_key != IPC_PRIVATE)
+        return -EACCES;              /* D1(c): no global namespace */
+    if (a_size <= 0 || (uint64_t)a_size > (uint64_t)SHM_MAX_PAGES * PAGE_SIZE)
+        return -EINVAL;
+    int obj = shm_obj_create((uint32_t)(((uint64_t)a_size + PAGE_SIZE - 1) / PAGE_SIZE));
+    if (obj < 0)
+        return obj;
+    cap_t h = cap_create(t->caps, RES_SHM, (uint64_t)obj, CAP_SHM_R | CAP_SHM_W);
+    /* The fresh object has holders == 0 until this capability holds it; if no
+     * capability could be minted, one hold/unhold pair reclaims it. */
+    if (h == CAP_NULL) {
+        shm_hold(obj);
+        shm_unhold(obj);
+        return -ENOSPC;
+    }
+    uint64_t gen = (uint64_t)h >> 32;
+    if (gen >= SHMID_GEN_MAX) {
+        cap_revoke(t->caps, h);      /* unholds: the object is reclaimed */
+        return -ENOSPC;
+    }
+    return (long)((gen << 6) | ((uint64_t)h & 63));
+}
+
+static long sys_shmat_locked(long a_id, long a_addr, long a_flags, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;
+    if (a_addr != 0)
+        return -EINVAL;              /* P2: kernel-chosen address only */
+    int obj = shmid_obj(t, a_id);
+    if (obj < 0)
+        return obj;
+    int rc = shm_attach_begin(obj);
+    if (rc < 0)
+        return rc;                   /* -EIDRM when marked (D2) */
+    uint32_t npages = shm_obj_npages(obj);
+    uint64_t base = t->mm->mmap_next;
+    struct vm_area *v = vma_free_slot(t);
+    if (!v || base + (uint64_t)npages * PAGE_SIZE > VMM_MMAP_TOP ||
+        vma_overlaps(t, base, npages)) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    int ro = (a_flags & SHM_RDONLY) != 0;
+    uint64_t pflags = VMM_USER | VMM_NX | PTE_SW_SHMEM | (ro ? 0 : VMM_RW);
+    for (uint32_t i = 0; i < npages; i++) {
+        uint64_t f = shm_obj_frame(obj, i);
+        pmm_incref(f);               /* this mapping's reference */
+        if (vmm_map_in(t->cr3, base + (uint64_t)i * PAGE_SIZE, f, pflags) != 0) {
+            ptnode_free((void *)(uintptr_t)f);
+            unmap_range(t->cr3, base, i);
+            shm_detach(obj);
+            return -ENOMEM;
+        }
+    }
+    v->base = base;
+    v->npages = npages;
+    v->shm = obj + 1;
+    v->shm_ro = ro;
+    t->mm->mmap_next = base + (uint64_t)npages * PAGE_SIZE;
+    return (long)base;
+}
+
+static long sys_shmdt_locked(long a_addr, long a2, long a3, long a4, long a5, long a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct vm_area *v = vma_find(current_thread, (uint64_t)a_addr);
+    if (!v || !v->shm)
+        return -EINVAL;
+    return sys_munmap_locked(a_addr, 0, 0, 0, 0, 0);
+}
+
+static long sys_shmctl_impl(long a_id, long a_cmd, long a_buf, long a4, long a5, long a6) {
+    (void)a_buf; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;
+    if (a_cmd != IPC_RMID)
+        return -EINVAL;              /* IPC_STAT / IPC_SET: not in P2 */
+    int obj = shmid_obj(t, a_id);
+    if (obj < 0)
+        return obj;
+    return shm_mark(obj);
 }
 
 /* DDR-1181 §3.3: every change to the address space holds the mm lock. The
@@ -323,8 +456,28 @@ static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
     return rc;
 }
 
+static long sys_shmat(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_shmat_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_shmdt(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_shmdt_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
 void sys_mmap_register(void) {
     syscall_register(SYS_MMAP,     sys_mmap);
     syscall_register(SYS_MUNMAP,   sys_munmap);
     syscall_register(SYS_MPROTECT, sys_mprotect);   /* DDR-1031 */
+    syscall_register(SYS_SHMGET,   sys_shmget_impl);    /* DDR-1178 A2 */
+    syscall_register(SYS_SHMAT,    sys_shmat);
+    syscall_register(SYS_SHMDT,    sys_shmdt);
+    syscall_register(SYS_SHMCTL,   sys_shmctl_impl);
 }

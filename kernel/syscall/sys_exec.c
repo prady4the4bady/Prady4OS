@@ -27,6 +27,7 @@
 #include "syscall.h"
 #include "sched.h"
 #include "mm.h"           /* DDR-1181 */
+#include "shm.h"
 #include "fd.h"
 #include "vfs.h"
 #include "elf.h"
@@ -145,6 +146,7 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     signal_exec_reset(t);   /* DDR-1174: old handler VAs mean nothing in the new image */
     t->user_rip   = entry;
     t->user_stack = new_rsp;
+    shm_release_vmas(t->mm);   /* DDR-1178 A2.2: the old image's attachments end */
     for (int i = 0; i < VM_AREA_MAX; i++) { t->mm->vma[i].base = 0; t->mm->vma[i].npages = 0; }
     t->mm->mmap_next = VMM_MMAP_BASE;             /* anon mmap arena reset for the new image */
 

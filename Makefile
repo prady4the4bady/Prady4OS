@@ -222,7 +222,7 @@ USER_C_CFLAGS  := --target=x86_64-elf -ffreestanding -fno-pic -fno-pie -mcmodel=
   -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/mm.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
-               kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/proc/kmutex.c kernel/ipc/ipc.c \
+               kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/proc/kmutex.c kernel/ipc/ipc.c kernel/ipc/shm.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_thread.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
@@ -247,7 +247,7 @@ KERNEL_BIN  := build/kernel.bin
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/numa.o build/kheap.o \
-               build/vmm.o build/vmm_cow.o build/mm.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/kmutex.o build/ipc.o \
+               build/vmm.o build/vmm_cow.o build/mm.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/kmutex.o build/ipc.o build/shm.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_thread.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
@@ -712,6 +712,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/proc/signal.c   -o build/signal.o
 	$(CC) $(KCFLAGS) -c kernel/proc/kmutex.c   -o build/kmutex.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c       -o build/ipc.o
+	$(CC) $(KCFLAGS) -c kernel/ipc/shm.c      -o build/shm.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/syscall.c -o build/syscall.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_io.c  -o build/sys_io.o
@@ -4394,7 +4395,7 @@ smoke-tlbshoot: $(IMG) fat-image sfs-image
 smoke-shm: $(IMG) fat-image sfs-image
 	@rm -f build/shm.log
 	@SERIAL_LOG=build/shm.log KEEP_SERIAL=1 TIMEOUT_S=180 QEMU_PROBES=shm \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_G key=-13\nPRADYOS_SHM_H shared=0x66\nPRADYOS_SHM_I forged=0\nPRADYOS_SHM_J eidrm=-43 freed_ok=1\nPRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13\nPRADYOS_SHM_L nattch_fork=1\nPRADYOS_SHM_M reclaimed=1\nPRADYOS_SHM_DONE')" \
 	FORBIDDEN_SENTINEL="PRADYOS_SHM FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[shm\]" build/shm.log || true
