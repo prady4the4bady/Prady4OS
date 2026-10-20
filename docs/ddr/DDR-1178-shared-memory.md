@@ -132,6 +132,72 @@ Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the 
 
 **C1.4 starts on P1 alone (Order 4 item 1).** The checklist lists C1.3 as a dependency of C1.4. What C1.4 actually consumes is shared address spaces (`CLONE_VM` threads) and shared futex words across fork. P1 supplies the second, and C1.4 builds the first itself. Nothing in C1.4 needs a SysV or POSIX segment or a shared file mapping. P2-P4 stay open in the checklist and proceed in parallel. If a C1.4 part later turns out to need one of them, that part waits and the DDR for C1.4 records it.
 
+## Amendment 2 (2026-10-20): P2 design, SysV shared memory under D1(c)
+
+**Security boundary: review before merge.** P2 lets two processes share memory through a segment id.
+
+### A2.1 The id must be unforgeable, or D1(c) does not hold
+
+D1(c) says a segment "is reachable only through what the creator holds: the shmid". A SysV shmid is normally a **global integer**, so any process could try small integers until `shmat` succeeds. That is a namespace with extra steps, and it is exactly the cross-process channel D1(c) refuses.
+
+**Decision:** a shmid names a **capability in the caller's capability table**. The table already has the properties needed:
+- it is per process, and shared by its threads (DDR-1181 §3.6);
+- it is copied verbatim by `fork` (`cap_fork`), so a child that inherits a shmid holds a valid handle to the segment;
+- it is never readable or writable by another process;
+- a handle carries a generation, so a stale id cannot reach a reused slot.
+
+- `shmget(IPC_PRIVATE, size, flags)` creates a segment object. It mints `cap(RES_SHM, object, R|W)` in the caller's table and returns `shmid = (generation << 6) | slot`.
+  - The generation is limited to 24 bits, so the id stays a positive `int`. If a slot's generation passes 2^24, the call returns `-ENOSPC`.
+  - The slot fits in 6 bits because `CAP_SLOTS` is 64.
+- `shmat`/`shmctl` resolve the shmid **only in the caller's own table**. A process whose table never received the capability gets `-EINVAL` for every id, so guessing is pointless.
+- Any `key != IPC_PRIVATE` returns `-EACCES` (D1(c), unchanged).
+
+### A2.2 Objects, frames and lifetime (D2, D3)
+
+- **The object table.** It is in-kernel (D3): `struct shm_obj { npages, frames[], nattch, marked, used }`, `SHM_MAX` = 32 objects of at most 256 pages (1 MiB) each, guarded by one spinlock.
+  - Frames are allocated zeroed and eagerly at `shmget`. The object holds one reference per frame.
+- **Attach.** `shmat(shmid, 0, flags)` maps the frames at the next arena address.
+  - Each frame gets `pmm_incref` and `PTE_SW_SHMEM`, so a later `fork` shares the pages rather than COWing them (P1's mechanism).
+  - `SHM_RDONLY` maps the pages read-only and marks the VMA read-only-shm.
+  - The mapping is recorded in the VMA (`vm_area.shm`), and `nattch` is incremented.
+  - A non-zero address hint returns `-EINVAL` in P2.
+  - A marked segment refuses new attaches with `-EIDRM` (D2).
+- **Detach.** The attachment ends through any of these paths, and each one decrements `nattch`:
+  - `shmdt(addr)`;
+  - `munmap` of the same region;
+  - the address space's last `mm_put`;
+  - `exec` (which replaces the address space).
+- **Fork.** `fork` copies the VMA table (DDR-1178 M7) and increments `nattch` for every shm VMA it copies.
+- **Destroy.** `shmctl(shmid, IPC_RMID, 0)` marks the segment. When `marked && nattch == 0`, the object drops its own frame references, and the frames go back to the PMM once no page table holds them. `IPC_STAT`/`IPC_SET` return `-EINVAL` in P2; that is recorded and not implemented.
+- **`mprotect` cannot defeat `SHM_RDONLY`.** `PROT_WRITE` on any part of a read-only shm VMA returns `-EACCES`.
+- **Agents are refused** every shm call (`-EPERM`). A segment is memory that `aether_mem_charge` does not see, so allowing agents to create segments would bypass their memory cap. This is the option safer for isolation (Order 4, item 2).
+
+**NSI:** 112 `SYS_SHMGET`, 113 `SYS_SHMAT`, 114 `SYS_SHMDT`, 115 `SYS_SHMCTL` (110 and 111 are DDR-1181's).
+
+### A2.3 Gate: `smoke-shm` arms G-L (same probe, `user/shmtest.c`)
+
+| Arm | Sentinel | What it shows |
+|---|---|---|
+| G | `PRADYOS_SHM_G key=-13` | `shmget` with a non-private key returns `-EACCES` |
+| H | `PRADYOS_SHM_H shared=0x66` | The parent creates and attaches a segment and writes `0x55`. A child created by `fork` **after** `shmget` attaches the inherited shmid, writes `0x66` and exits. The parent reads `0x66` through its own attachment. |
+| I | `PRADYOS_SHM_I forged=0` | A child forked **before** `shmget` receives the shmid value through a `MAP_SHARED` page (P1) and tries `shmat` on it. It also tries all 64 slots with generations 1 to 4. `forged` counts the attempts that succeeded. |
+| J | `PRADYOS_SHM_J eidrm=-43 freed_ok=1` | After `IPC_RMID` on an attached segment, a new `shmat` returns `-EIDRM`, while the existing mapping still reads its value. After the last `shmdt`, `SYS_MEMINFO` free pages rise by at least the segment's 16 pages minus 4 pages of noise. |
+| K | `PRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13` | A child attaches with `SHM_RDONLY` and writes, so it dies on the fault. The parent's `SHM_RDONLY` attach, then `mprotect(PROT_READ\|PROT_WRITE)`, returns `-EACCES`. |
+| L | `PRADYOS_SHM_L nattch_fork=1` | Attach, `fork`, the child exits **without** `shmdt`, then `IPC_RMID` and a `shmdt` in the parent. The segment is destroyed only now, with free pages rising as in J. This is the exit-path decrement. |
+
+**Vacuity:** on the tree before P2, `SYS_SHMGET` is `-ENOSYS`. The probe prints `PRADYOS_SHM FAIL shmget=-38` (forbidden), and arms G–L are absent, so the gate is red. Arms I and the K-`mprotect` half pass trivially on an unfixed tree. They are boundary arms, meaningful only together with H, and recorded as such.
+
+**Mutants (each lands on a different arm and is shown red in CI before merge):**
+
+| Mutant | Change | Arm |
+|---|---|---|
+| S2-1 | the key check removed (any key creates) | G |
+| S2-2 | `fork` COWs shm pages (no `PTE_SW_SHMEM` on the shmat mapping) | H |
+| S2-3 | `shmat` resolves the shmid in a global table, ignoring the caller's capabilities | I |
+| S2-4 | `shmat` ignores `marked` | J (`eidrm`) |
+| S2-5 | `SHM_RDONLY` ignored (mapped RW) | K (`ro_faulted`) |
+| S2-6 | the exit path does not decrement `nattch` (the segment is never destroyed) | L |
+
 ## 7. Honesty labels
 
-P1 will be **gated by `smoke-shm` arms A-F**, emulated (QEMU TCG) only, and **not verified on real hardware**. P2-P4 are **not started**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is designed in Amendment 2 and is gated by arms G-L once built; until those arms are green and S2-1 to S2-6 are shown red, P2 is **not verified**. P3 and P4 are **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
