@@ -86,7 +86,7 @@ int fd_clone(struct tcb *src, struct tcb *dst) {
             /* DDR-787: the child's copy holds the same END as the parent's fd. */
             pipe_incref(se->pipe, se->flags == PIPE_WRITE_END);
         } else if (se->kind == FD_SHM) {
-            shm_hold(se->mnt);                       /* DDR-1178 A3.2: one per entry */
+            ;
         } else if (se->kind == FD_VFS && se->file) {
             struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
             if (!nf) {
