@@ -30,11 +30,11 @@ Authority: OPERATOR ORDER (#45 comment 6256077528), Order 2. Stop conditions: "a
 | Part | Concern | Needs an owner decision? |
 |---|---|---|
 | P1 | `MAP_SHARED \| MAP_ANONYMOUS`, shared across `fork` | No (§3) |
-| P2 | SysV shared memory (`shmget`/`shmat`/`shmdt`/`shmctl`) | **Yes**, §6 D1 and D2 |
-| P3 | POSIX `shm_open`/`shm_unlink` | **Yes**, §6 D1 and D3 |
-| P4 | Shared file mappings with write-back (`msync`, plus write-back at `munmap`/exit) | **Yes**, §6 D4 and D5 |
+| P2 | SysV shared memory (`shmget`/`shmat`/`shmdt`/`shmctl`) | Decided in Amendment 1 (D1, D2) |
+| P3 | POSIX `shm_open`/`shm_unlink` | Decided in Amendment 1 (D1, D3) |
+| P4 | Shared file mappings with write-back (`msync`, plus write-back at `munmap`/exit) | Decided in Amendment 1 (D4, D5) |
 
-P1 creates no new way for unrelated processes to reach each other's memory. Only the process tree that `fork`ed from the mapper shares the pages, which is what POSIX anonymous shared memory means. P2-P4 do create new channels, so they wait for the owner.
+P1 creates no new way for unrelated processes to reach each other's memory. Only the process tree that `fork`ed from the mapper shares the pages, which is what POSIX anonymous shared memory means. P2-P4 do create new channels; Amendment 1 decides how each is bounded.
 
 ## 3. P1 design: anonymous shared mappings
 
@@ -99,7 +99,7 @@ Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the 
 - **Huge pages.** None are used for user memory. `PG_PS` entries are skipped by the walk, unchanged.
 - **Not covered by P1:** cross-process sharing between unrelated processes (P2/P3), file coherence (P4), `MAP_FIXED` replace, partial `munmap` of a shared range (refused today for every mapping; unchanged).
 
-## 6. Owner decisions required before P2-P4 (stop condition, #45/6256077528)
+## 6. Owner decisions required before P2-P4 (stop condition, #45/6256077528); decided in Amendment 1
 
 - **D1. Namespace and access control for named shared memory.** A SysV key or a POSIX name lets an unrelated process reach a segment, which is a new cross-process channel and a security boundary. Options:
   - (a) segments are reachable only by holders of a new capability right minted at creation and passed explicitly (IPC send, inheritance);
@@ -115,6 +115,22 @@ Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the 
   - limiting P4 to one mapper per file.
 
   Recommendation: the frame table. One mapper per file is not POSIX.
+
+## Amendment 1 (2026-10-21): D1-D5 decided; C1.4 proceeds on P1
+
+**Authority.** Order 3 (#45/6282431738) and Order 4 (#45/6301435736) delegate every decision in §6 to this record: take the recommended option, or the one safer for memory isolation where §6 gave none. Each choice below names its reason. P2, P3 and P4 are each **security boundary: review before merge**. They add ways for processes to share memory, so the PR for each says so.
+
+| # | Decision | Reason |
+|---|---|---|
+| D1 | **(c) No global namespace in v1.** SysV `shmget` accepts only `IPC_PRIVATE`; any other key is `-EACCES`. POSIX `shm_open` accepts only `SHM_ANON` (the FreeBSD form); any name is `-EACCES`. A segment is reachable only through what the creator holds: the shmid for SysV, the fd for POSIX. Those reach other processes only by fork inheritance or explicit fd passing. | This adds no new cross-process channel: an unrelated process cannot name a segment. It is the §6 recommendation. A named namespace returns with the transferable memory right, option (a), and needs its own DDR. |
+| D2 | **POSIX lifetime.** `IPC_RMID` marks the segment. The segment is destroyed at the last detach, and a marked segment refuses new attaches with `-EIDRM`. | With D1(c), only processes that already hold the shmid can attach, so a creator-outliving segment is reachable by nobody new. Refusing `IPC_RMID` while attached would break the common create, attach, `IPC_RMID` idiom. |
+| D3 | **A dedicated in-kernel object table** (refcounted page list per object), no tmpfs. | D1(c) needs no namespace, so no filesystem is needed either. A tmpfs is not in C1. |
+| D4 | **Reuse the capability captured at `mmap`** (`fe->cap`, the DDR-1112 model) for write-back at `msync`/`munmap`/exit. | It matches POSIX. A re-check would equal the same check, because the kernel has no revocation model. If revocation arrives, that DDR revisits this. |
+| D5 | **`MAP_SHARED\|PROT_WRITE` on an SFS file is `-EACCES`;** read-only shared maps of SFS files are allowed. P4 adds a refcounted per-`(mount, inode, page-index)` frame table, so two mappers of one file see each other's writes. | SFS is append-only, so overwrite-in-place cannot be honoured. One mapper per file is not POSIX. The frame table follows the §6 recommendation. |
+
+**Order of work.** First P2 (SysV) and P3 (POSIX `SHM_ANON`). They share the D3 object table: P2 adds the table and P3 reuses it. P4 (the page cache plus write-back) comes after them. Each part gets its own gate arms and mutants, and is shown red in CI before it merges.
+
+**C1.4 starts on P1 alone (Order 4 item 1).** The checklist lists C1.3 as a dependency of C1.4. What C1.4 actually consumes is shared address spaces (`CLONE_VM` threads) and shared futex words across fork. P1 supplies the second, and C1.4 builds the first itself. Nothing in C1.4 needs a SysV or POSIX segment or a shared file mapping. P2-P4 stay open in the checklist and proceed in parallel. If a C1.4 part later turns out to need one of them, that part waits and the DDR for C1.4 records it.
 
 ## 7. Honesty labels
 
