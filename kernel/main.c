@@ -467,6 +467,8 @@ extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wa
 extern const unsigned char killblocktest_elf_end[];
 extern const unsigned char sigsemtest_elf[];          /* DDR-1174: signal semantics */
 extern const unsigned char sigsemtest_elf_end[];
+extern const unsigned char shmtest_elf[];             /* DDR-1178: MAP_SHARED anon */
+extern const unsigned char shmtest_elf_end[];
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
 extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
@@ -3112,6 +3114,19 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] SIGSEM probe spawned\r\n");
                     } else {
                         kputs("[user] SIGSEM probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. */
+                if (probe_enabled("shm")) {
+                    struct tcb *sm = 0;
+                    uint64_t smlen = (uint64_t)(uintptr_t)shmtest_elf_end -
+                                     (uint64_t)(uintptr_t)shmtest_elf;
+                    if (elf_load((void *)(uintptr_t)shmtest_elf, smlen,
+                                 "SHMTEST", &sm) == ELF_OK && sm) {
+                        sched_unblock(sm);
+                        kputs("[user] SHM probe spawned\r\n");
+                    } else {
+                        kputs("[user] SHM probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-1032: SYS_EXECVE argv/envp. FAT-rooted -- it execve's
