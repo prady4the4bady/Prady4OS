@@ -31,7 +31,7 @@ Authority: OPERATOR ORDER (#45 comment 6256077528), Order 2. Stop conditions: "a
 |---|---|---|
 | P1 | `MAP_SHARED \| MAP_ANONYMOUS`, shared across `fork` | No (§3) |
 | P2 | SysV shared memory (`shmget`/`shmat`/`shmdt`/`shmctl`) | Decided in Amendment 1 (D1, D2) |
-| P3 | POSIX `shm_open`/`shm_unlink` | Decided in Amendment 1 (D1, D3) |
+| P3 | POSIX `shm_open`/`shm_unlink` | Decided in Amendment 1 (D1, D3); designed in Amendment 3 |
 | P4 | Shared file mappings with write-back (`msync`, plus write-back at `munmap`/exit) | Decided in Amendment 1 (D4, D5) |
 
 P1 creates no new way for unrelated processes to reach each other's memory. Only the process tree that `fork`ed from the mapper shares the pages, which is what POSIX anonymous shared memory means. P2-P4 do create new channels; Amendment 1 decides how each is bounded.
@@ -201,6 +201,67 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | S2-6 | the exit path does not decrement `nattch` (the segment is never destroyed) | L |
 | S2-7 | the last holder's exit does not drop `holders` (an unattached, never-RMID'd segment leaks its slot) | M: `PRADYOS_SHM_M reclaimed=1`. A child creates a segment, does not attach it, and exits. The parent then counts free pages and expects them back |
 
+## Amendment 3 (2026-10-21 UTC, after Amendment 2): P3 design, POSIX `shm_open(SHM_ANON)` under D1(c)
+
+**Security boundary: review before merge.** P3 lets processes share memory through a file descriptor.
+
+### A3.1 The interface
+
+- **`SYS_SHM_OPEN` = NSI 116** takes `(name, oflag, mode)` and returns an fd or `-errno`.
+  - `name` must be exactly `SHM_ANON`, which is `(const char *)1` (the FreeBSD form). Any other value is `-EACCES`, including a real string and `NULL` (D1(c)). The kernel never dereferences `name`.
+  - The access mode in `oflag` must be `O_RDWR`; any other mode is `-EINVAL`. Without a namespace, a read-only fd could only name an object nobody can fill. `O_CREAT` and `O_EXCL` are accepted and ignored: every call creates a new object. Any other `oflag` bit is `-EINVAL`. `mode` is ignored, because nothing can open the object by name.
+  - Agents get `-EPERM`, as in A2.2.
+- **No `shm_unlink` syscall.** With no names there is nothing to unlink; a libc returns `-ENOENT` itself. This is recorded, not hidden.
+- **Reachability.** The fd reaches other processes only by `fork` (and by `SYS_THREAD_CREATE`, which copies the fd table). The kernel has no fd-passing operation today, so D1(c)'s "explicit fd passing" is not reachable either. A future fd-passing operation must take a hold on the object, as `fork` does.
+
+### A3.2 Objects and lifetime (D3: reuses the A2.2 table)
+
+- **New fd kind `FD_SHM`.** The entry stores the object index in `fd_entry.mnt`, which only `FD_VFS` uses otherwise. That keeps `struct fd_entry`, and with it `struct tcb`, the same size, so the pinned signal offsets (DDR-1181) do not move.
+- **Created empty.** `shm_open` reserves an object with `npages == 0` and one holder (the fd). `ftruncate(fd, len)` sets the size **exactly once**: `0 < len <= 1 MiB`, rounded up to pages, frames allocated zeroed. A second `ftruncate`, or `ftruncate` with 0 or more than 1 MiB, is `-EINVAL`. Growing or shrinking a mapped object would need to remap every attachment; P3 does not do it. A concurrent second `ftruncate` is refused by a `filling` state taken under the table lock.
+- **Holders are fd entries.** Each `FD_SHM` entry holds the object once:
+  - `shm_open` takes the first hold;
+  - `fork`/thread creation (`fd_clone`) and `dup2` take one more for each entry copied;
+  - `close`/`fd_free` (which also runs at exit) drops one.
+  An object is destroyed when `nattch == 0 && holders == 0`, the A2.2 rule with `marked` never set. A POSIX object is anonymous, so it is already "unlinked".
+  - An object that was never sized is reclaimed the same way, so the A2.2 condition no longer requires `npages != 0`.
+- **`mmap(addr, len, prot, MAP_SHARED, fd, off)`** on an `FD_SHM` fd maps pages `off/4096 .. off/4096 + npages(len) - 1` of the object:
+  - `off` must be page-aligned, and `off + len` must not exceed the object's size. An unsized object is `-EINVAL`.
+  - It is an attach (`shm_attach_begin`, `vm_area.shm`), so `munmap`, `exec`, the last `mm_put` and `fork` all use the A2.2 paths unchanged. Each frame gets `pmm_incref` and `PTE_SW_SHMEM`.
+  - `PROT_WRITE` is allowed because the fd is always `O_RDWR`. `PROT_EXEC` is refused (W^X, unchanged).
+  - **`MAP_PRIVATE` on an `FD_SHM` fd is `-EINVAL`.** A private copy of a shared object is a COW path that P3 does not need.
+  - The address hint follows the `mmap` rules, not `shmat`'s: 0 means the arena bump pointer, and a non-zero hint must be page-aligned, inside the arena and not overlapping.
+  - Shared pages are not charged to `aether_mem_charge` (agents cannot create them), as in A2.2.
+- **Other fd operations.**
+  - `fstat` reports `st_size = npages * 4096`.
+  - `read`, `write`, `lseek`, the io_uring reads and writes, and `mmap` of a non-`FD_SHM` fd with `MAP_SHARED` keep their existing answers: every one already returns `-EBADF`, `-EINVAL` or `-ENODEV` for a kind it does not know. P3 adds no byte I/O on a shm fd.
+  - `epoll` reports a shm fd as not pollable, as it does for every non-pipe, non-console kind.
+
+### A3.3 Gate: `smoke-shm` arms N-S (same probe)
+
+| Arm | Sentinel | What it shows |
+|---|---|---|
+| N | `PRADYOS_SHM_N fdshared=0x66` | The parent runs `shm_open`, sizes the object to 2 pages, maps both and writes `0x55` to page 1, then forks. The child maps **only page 1** through the inherited fd (`off = 4096`), checks that it reads `0x55`, writes `0x66` and exits. The parent reads `0x66` through its own mapping. This proves that the fd names the object and that `off` selects the page. |
+| O | `PRADYOS_SHM_O rejects=4` | `shm_open` with a real name is `-EACCES`; with `NULL` it is `-EACCES`; with `O_RDONLY` it is `-EINVAL`; with an unknown `oflag` bit it is `-EINVAL`. |
+| P | `PRADYOS_SHM_P rejects=6` | All of these are `-EINVAL`: `mmap` before `ftruncate`; a second `ftruncate`; `ftruncate(0)`; `ftruncate` over 1 MiB on a fresh object; `mmap` with `off + len` past the size; `MAP_PRIVATE` on the fd. |
+| Q | `PRADYOS_SHM_Q cycles=64 opened=64 leaked_ok=1` | 64 cycles of: `shm_open`, `ftruncate(4 pages)`, `mmap`, write, `close` **while mapped**, read back, then `munmap`. The value must survive the `close` (the mapping keeps the object). The table has 32 slots, so a leak of one object per cycle fails `opened` at cycle 33. The free-page drop must stay under 128 pages; a frame leak would be 256 pages. |
+| R | `PRADYOS_SHM_R child_hold=0x77` | The parent sizes and maps an object, writes `0x77` and **unmaps it before forking**, so the child inherits the fd but no mapping. The child waits on a P1 flag page. The parent **closes its fd**, then sets the flag. The child, whose fd is now the only holder, maps the object and reads `0x77`. This proves `fd_clone` takes a hold. An inherited mapping would keep the object alive by itself, which is why there is none. |
+| S | `PRADYOS_SHM_S dup_hold=0x88` | `dup2(fd, 20)`, `close(fd)`, then `mmap` through fd 20 reads the `0x88` written earlier through the old mapping (unmapped before the `mmap`). This proves `dup2` takes a hold. |
+
+**Vacuity:** before P3, `SYS_SHM_OPEN` is `-ENOSYS`. The probe prints `PRADYOS_SHM FAIL shm_open=-38` (forbidden), and arms N–S are absent, so the gate is red. Arms O and P are boundary arms. They pass trivially only if `shm_open` itself fails, and that case is caught by the `FAIL` line.
+
+**Mutants (each lands on a different arm and is shown red in CI before merge):**
+
+| Mutant | Change | Arm |
+|---|---|---|
+| S3-1 | `mmap` ignores `off` (always maps from page 0) | N |
+| S3-2 | the name check accepts any pointer | O |
+| S3-3 | `ftruncate` may resize an object that is already sized | P |
+| S3-4 | `fd_free` does not drop the hold (every closed object leaks its slot) | Q (`opened`) |
+| S3-5 | `fd_clone` does not take a hold | R |
+| S3-6 | `dup2` does not take a hold | S |
+
+**NSI:** 116 `SYS_SHM_OPEN`.
+
 ## 7. Honesty labels
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is designed in Amendment 2 and is gated by arms G-M once built; until those arms are green and S2-1 to S2-7 are shown red, P2 is **not verified**. P3 and P4 are **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is designed in Amendment 2 and is gated by arms G-M once built; until those arms are green and S2-1 to S2-7 are shown red, P2 is **not verified**. P3 is designed in Amendment 3 and is gated by arms N-S once built; until those arms are green and S3-1 to S3-6 are shown red, P3 is **not verified**. P4 is **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
