@@ -10,6 +10,10 @@
  * object (A2.1: the shmid IS such a capability), so a segment whose last holder
  * exited without IPC_RMID is reclaimed instead of pinning a slot forever -- the
  * same rule as a file whose last descriptor closed.
+ *
+ * P3 (Amendment 3) reuses the table for shm_open(SHM_ANON): an FD_SHM fd entry
+ * is a holder, the object starts EMPTY (npages 0) and ftruncate sizes it once.
+ * A POSIX object is never marked; it goes at nattch == 0 && holders == 0.
  */
 #include "shm.h"
 #include "mm.h"
@@ -23,6 +27,7 @@ struct shm_obj {
     uint32_t nattch;
     uint32_t holders;
     uint32_t marked;
+    uint32_t filling;                  /* P3: frames being allocated, lock dropped */
     uint64_t frames[SHM_MAX_PAGES];
 };
 
@@ -36,31 +41,42 @@ static void free_frames(uint64_t *f, uint32_t n) {
         ptnode_free((void *)(uintptr_t)f[i]);
 }
 
-int shm_obj_create(uint32_t npages) {
-    if (npages == 0 || npages > SHM_MAX_PAGES)
-        return -EINVAL;
+int shm_obj_reserve(void) {
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
     int idx = -1;
     for (int i = 0; i < SHM_MAX; i++)
         if (!g_shm[i].used) { idx = i; break; }
     if (idx >= 0) {
         struct shm_obj *o = &g_shm[idx];
-        o->used = 1;                   /* reserved; npages 0 until filled */
-        o->npages = 0;
+        o->used = 1;
+        o->npages = 0;                 /* empty until shm_obj_size */
         o->nattch = 0;
-        o->holders = 1;                /* the creator, until its cap exists */
+        o->holders = 1;                /* the caller's fd or capability */
         o->marked = 0;
+        o->filling = 0;
     }
     spin_unlock_irqrestore(&g_shm_lock, fl);
-    if (idx < 0)
-        return -ENOSPC;
-    struct shm_obj *o = &g_shm[idx];
+    return idx < 0 ? -ENOSPC : idx;
+}
+
+int shm_obj_size(int obj, uint32_t npages) {
+    if (obj < 0 || obj >= SHM_MAX || npages == 0 || npages > SHM_MAX_PAGES)
+        return -EINVAL;
+    struct shm_obj *o = &g_shm[obj];
+    uint64_t fl = spin_lock_irqsave(&g_shm_lock);
+    int ok = o->used == 1 && !o->npages && !o->filling;
+    if (ok)
+        o->filling = 1;                /* a second ftruncate is refused, and
+                                        * put_and_reclaim leaves the slot alone */
+    spin_unlock_irqrestore(&g_shm_lock, fl);
+    if (!ok)
+        return -EINVAL;                /* P3: sized exactly once */
     for (uint32_t i = 0; i < npages; i++) {
         void *f = ptnode_alloc();      /* zeroed */
         if (!f) {
             free_frames(o->frames, i);
             fl = spin_lock_irqsave(&g_shm_lock);
-            o->used = 0;
+            o->filling = 0;            /* stays empty; its holder reclaims it */
             spin_unlock_irqrestore(&g_shm_lock, fl);
             return -ENOMEM;
         }
@@ -68,7 +84,24 @@ int shm_obj_create(uint32_t npages) {
     }
     fl = spin_lock_irqsave(&g_shm_lock);
     o->npages = npages;
-    o->holders = 0;                    /* the minted capability takes it over */
+    o->filling = 0;
+    spin_unlock_irqrestore(&g_shm_lock, fl);
+    return 0;
+}
+
+int shm_obj_create(uint32_t npages) {
+    if (npages == 0 || npages > SHM_MAX_PAGES)
+        return -EINVAL;
+    int idx = shm_obj_reserve();
+    if (idx < 0)
+        return idx;
+    int rc = shm_obj_size(idx, npages);
+    if (rc < 0) {
+        shm_unhold(idx);               /* the reservation's hold: reclaims it */
+        return rc;
+    }
+    uint64_t fl = spin_lock_irqsave(&g_shm_lock);
+    g_shm[idx].holders = 0;            /* the minted capability takes it over */
     spin_unlock_irqrestore(&g_shm_lock, fl);
     return idx;
 }
@@ -105,7 +138,9 @@ static void put_and_reclaim(int obj, int attach) {
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
     if (attach) { if (o->nattch) o->nattch--; }
     else        { if (o->holders) o->holders--; }
-    int go = o->used == 1 && o->npages && !o->nattch && (o->marked || !o->holders);
+    /* P3: an object never sized (npages 0) is reclaimed the same way; one
+     * being sized is not, its sizer holds it until shm_obj_size returns. */
+    int go = o->used == 1 && !o->filling && !o->nattch && (o->marked || !o->holders);
     if (go)
         o->used = 2;
     spin_unlock_irqrestore(&g_shm_lock, fl);

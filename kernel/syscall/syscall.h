@@ -194,6 +194,7 @@
 #define SYS_SHMAT          113 /* DDR-1178 A2: (shmid, addr, flags) -> va | -EINVAL|-EIDRM|-ENOMEM|-EPERM */
 #define SYS_SHMDT          114 /* DDR-1178 A2: (addr) -> 0 | -EINVAL */
 #define SYS_SHMCTL         115 /* DDR-1178 A2: (shmid, cmd, buf) -> 0 | -EINVAL|-EPERM; IPC_RMID only */
+#define SYS_SHM_OPEN       116 /* DDR-1178 A3: (SHM_ANON, O_RDWR, mode) -> fd | -EACCES|-EINVAL|-EMFILE|-ENOSPC|-EPERM */
 #define SYS_LEDGER         106 /* DDR-1150: (op, buf, len) sovereign-only; audit-head signing */
 #define SYS_DNS_RESOLVE    103 /* (name, uint32_t *out, resolver) -> 0 | -EPERM|-EFAULT|-EINVAL|-ENAMETOOLONG|-ENODEV|-ENOENT|-ETIMEDOUT|-EAGAIN */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */

@@ -105,6 +105,79 @@ static void unmap_range(uint64_t cr3, uint64_t base, uint64_t npages) {
     vmm_unmap_range_flush(cr3, base, npages, unmap_free_frame);
 }
 
+/* The mapping's base: the arena bump pointer for addr 0, else the page-aligned
+ * hint; inside the arena and overlapping no region (no silent replace). */
+static int mmap_pick_base(struct tcb *t, uint64_t addr, uint64_t npages, uint64_t *out) {
+    uint64_t base;
+    if (addr == 0) {
+        base = t->mm->mmap_next;                     /* kernel-chosen (bump) */
+    } else {
+        if (addr & (PAGE_SIZE - 1))
+            return -EINVAL;                      /* hint must be page-aligned */
+        base = addr;
+    }
+    if (base < VMM_MMAP_BASE || base + npages * PAGE_SIZE > VMM_MMAP_TOP)
+        return -EINVAL;                          /* outside the mmap arena */
+    if (vma_overlaps(t, base, npages))
+        return -EINVAL;                          /* no silent replace (baseline) */
+    *out = base;
+    return 0;
+}
+
+/* Map pages [first, first + npages) of shm object `obj` at `base`, one
+ * pmm_incref per frame (this mapping's reference). 0, or -ENOMEM with the
+ * partial range unmapped; the caller owns the attach either way. */
+static int map_obj_pages(struct tcb *t, int obj, uint32_t first, uint32_t npages,
+                         uint64_t base, uint64_t pflags) {
+    for (uint32_t i = 0; i < npages; i++) {
+        uint64_t f = shm_obj_frame(obj, first + i);
+        pmm_incref(f);
+        if (vmm_map_in(t->cr3, base + (uint64_t)i * PAGE_SIZE, f, pflags) != 0) {
+            ptnode_free((void *)(uintptr_t)f);
+            unmap_range(t->cr3, base, i);
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+/* DDR-1178 A3.2: mmap(MAP_SHARED) of an FD_SHM fd is an attach of pages
+ * off/4096 .. of the object, with the mmap address rules. */
+static long shm_fd_map(struct tcb *t, int obj, uint64_t addr, uint64_t len, int prot,
+                       long a_off) {
+    if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
+        return -EINVAL;
+    uint64_t npages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t first = (uint64_t)a_off / PAGE_SIZE;
+    uint64_t base;
+    int rc = mmap_pick_base(t, addr, npages, &base);
+    if (rc < 0)
+        return rc;
+    if (shm_attach_begin(obj) < 0)
+        return -EINVAL;                          /* not sized yet */
+    if (first + npages > shm_obj_npages(obj)) {
+        shm_detach(obj);
+        return -EINVAL;                          /* past the object's size */
+    }
+    struct vm_area *v = vma_free_slot(t);
+    if (!v) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    uint64_t pflags = VMM_USER | VMM_NX | PTE_SW_SHMEM | ((prot & PROT_WRITE) ? VMM_RW : 0);
+    if (map_obj_pages(t, obj, (uint32_t)first, (uint32_t)npages, base, pflags) != 0) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    v->base = base;
+    v->npages = npages;
+    v->shm = obj + 1;
+    v->shm_ro = 0;                               /* the fd is O_RDWR (A3.1) */
+    if (addr == 0)
+        t->mm->mmap_next = base + npages * PAGE_SIZE;
+    return (long)base;
+}
+
 static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
                      long a_fd, long a_off) {
     struct tcb *t = current_thread;
@@ -120,10 +193,18 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     int shared = (flags & MAP_SHARED) != 0;
     if (shared && (flags & MAP_PRIVATE))
         return -EINVAL;                         /* POSIX: exactly one of the two */
-    if (shared && a_fd != -1)
-        return -EINVAL;                         /* P4 not implemented */
     if (prot & PROT_EXEC)
         return -EINVAL;                         /* W^X: no executable mapping */
+    if (shared && a_fd != -1) {
+        /* DDR-1178 A3: a shm_open object. Any other fd stays refused: shared
+         * file mappings need write-back (P4). */
+        struct fd_entry *se = fd_get(t, (int)a_fd);
+        if (!se || se->kind != FD_SHM || (flags & MAP_ANONYMOUS))
+            return -EINVAL;
+        if (t->is_agent)
+            return -EPERM;                      /* A2.2, as shmat */
+        return shm_fd_map(t, se->mnt, addr, len, prot, a_off);
+    }
 
     /* fd == -1 is POSIX's anonymous form and takes the original path VERBATIM,
      * so every existing caller and every green smoke-sysmmap arm is untouched
@@ -146,6 +227,8 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
         fe = fd_get(t, (int)a_fd);
         if (!fe || fe->kind == FD_NONE)
             return -EBADF;
+        if (fe->kind == FD_SHM)
+            return -EINVAL;                     /* DDR-1178 A3.2: no private copy */
         if (fe->kind != FD_VFS || !fe->file)
             return -ENODEV;                     /* a pipe or the console has no
                                                  * byte at an offset. Distinct
@@ -164,17 +247,9 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     uint64_t npages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
 
     uint64_t base;
-    if (addr == 0) {
-        base = t->mm->mmap_next;                     /* kernel-chosen (bump) */
-    } else {
-        if (addr & (PAGE_SIZE - 1))
-            return -EINVAL;                      /* hint must be page-aligned */
-        base = addr;
-    }
-    if (base < VMM_MMAP_BASE || base + npages * PAGE_SIZE > VMM_MMAP_TOP)
-        return -EINVAL;                          /* outside the mmap arena */
-    if (vma_overlaps(t, base, npages))
-        return -EINVAL;                          /* no silent replace (baseline) */
+    int brc = mmap_pick_base(t, addr, npages, &base);
+    if (brc < 0)
+        return brc;
 
     struct vm_area *v = vma_free_slot(t);
     if (!v)
@@ -391,15 +466,9 @@ static long sys_shmat_locked(long a_id, long a_addr, long a_flags, long a4, long
     }
     int ro = (a_flags & SHM_RDONLY) != 0;
     uint64_t pflags = VMM_USER | VMM_NX | PTE_SW_SHMEM | (ro ? 0 : VMM_RW);
-    for (uint32_t i = 0; i < npages; i++) {
-        uint64_t f = shm_obj_frame(obj, i);
-        pmm_incref(f);               /* this mapping's reference */
-        if (vmm_map_in(t->cr3, base + (uint64_t)i * PAGE_SIZE, f, pflags) != 0) {
-            ptnode_free((void *)(uintptr_t)f);
-            unmap_range(t->cr3, base, i);
-            shm_detach(obj);
-            return -ENOMEM;
-        }
+    if (map_obj_pages(t, obj, 0, npages, base, pflags) != 0) {
+        shm_detach(obj);
+        return -ENOMEM;
     }
     v->base = base;
     v->npages = npages;
@@ -428,6 +497,43 @@ static long sys_shmctl_impl(long a_id, long a_cmd, long a_buf, long a4, long a5,
     if (obj < 0)
         return obj;
     return shm_mark(obj);
+}
+
+/* ---- DDR-1178 Amendment 3: POSIX shm_open(SHM_ANON) ----------------------
+ * D1(c): no names. The fd is the only way to reach the object, and it reaches
+ * other processes only through fork (fd_clone takes a hold). */
+#define SHM_ANON      1L             /* FreeBSD's (const char *)1 */
+#define SHMO_ACCMODE  3
+#define SHMO_RDWR     2
+#define SHMO_CREAT    0x40
+#define SHMO_EXCL     0x80
+
+static long sys_shm_open_impl(long a_name, long a_oflag, long a_mode, long a4, long a5, long a6) {
+    (void)a_mode; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;               /* A2.2: memory the agent cap does not see */
+    if (a_name != SHM_ANON)
+        return -EACCES;              /* D1(c); the pointer is never read */
+    if ((a_oflag & SHMO_ACCMODE) != SHMO_RDWR ||
+        (a_oflag & ~(long)(SHMO_ACCMODE | SHMO_CREAT | SHMO_EXCL)))
+        return -EINVAL;
+    int fd = fd_alloc(t);
+    if (fd < 0)
+        return -EMFILE;
+    int obj = shm_obj_reserve();     /* held once: by this entry */
+    if (obj < 0)
+        return obj;
+    struct fd_entry *e = &t->fdt.e[fd];
+    e->kind  = FD_SHM;
+    e->mnt   = obj;
+    e->off   = 0;
+    e->file  = 0;
+    e->pipe  = 0;
+    e->epoll = 0;
+    e->cap   = 0;
+    e->flags = SHMO_RDWR;
+    return fd;
 }
 
 /* DDR-1181 §3.3: every change to the address space holds the mm lock. The
@@ -480,4 +586,5 @@ void sys_mmap_register(void) {
     syscall_register(SYS_SHMAT,    sys_shmat);
     syscall_register(SYS_SHMDT,    sys_shmdt);
     syscall_register(SYS_SHMCTL,   sys_shmctl_impl);
+    syscall_register(SYS_SHM_OPEN, sys_shm_open_impl);  /* DDR-1178 A3 */
 }

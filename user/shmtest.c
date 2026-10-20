@@ -17,6 +17,9 @@
  *   D  MAP_SHARED with an fd, MAP_SHARED|MAP_PRIVATE, MAP_SHARED|PROT_EXEC are
  *      each -EINVAL.
  * C runs only after A held: without a working shared map it is vacuous.
+ *
+ * P2 arms G-M (SysV) and P3 arms N-S (shm_open(SHM_ANON)) follow; their
+ * pass conditions are the tables in DDR-1178 Amendments 2 and 3.
  */
 
 #define SYS_EXIT     4
@@ -38,6 +41,15 @@
 #define EACCES       13
 #define EIDRM        43
 #define COMM_VA 0x8E00030000ul   /* MAP_SHARED page for arm I's early child */
+#define SYS_CLOSE      8         /* DDR-1178 Amendment 3 (P3) */
+#define SYS_DUP2      18
+#define SYS_FTRUNCATE 94
+#define SYS_SHM_OPEN 116
+#define SHM_ANON      1L
+#define O_RDONLY      0
+#define O_RDWR        2
+#define O_CREAT    0x40
+#define Q_CYCLES     64          /* twice SHM_MAX: a slot leak fails at 33 */
 #define SEG_PAGES   16
 #define RECLAIM_MIN (SEG_PAGES - 4)
 
@@ -320,6 +332,121 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     }
     if (reap(mk) != 0) fail("m_child", -1);
     line2("PRADYOS_SHM_M reclaimed=", (long)mf0 - (long)free_pages() < RECLAIM_MIN);
+
+    /* ---- P3 (DDR-1178 Amendment 3): shm_open(SHM_ANON), fd-held objects ---- */
+    /* N: the fd names the object, and off selects the page. */
+    long nfd = nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR | O_CREAT, 0600);
+    if (nfd < 0) fail("shm_open", nfd);
+    if (nsi(SYS_FTRUNCATE, nfd, 2 * 4096, 0) != 0) fail("n_ftruncate", -1);
+    volatile unsigned char *np = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 2 * 4096, PROT_RW, MAP_SHARED, nfd, 0);
+    if ((long)np < 0) fail("n_mmap", (long)np);
+    np[4096] = 0x55;
+    long nk = nsi(SYS_FORK, 0, 0, 0);
+    if (nk < 0) fail("n_fork", nk);
+    if (nk == 0) {
+        volatile unsigned char *q = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, nfd, 4096);
+        if ((long)q < 0) nsi(SYS_EXIT, 2, 0, 0);
+        if (q[0] != 0x55) nsi(SYS_EXIT, 3, 0, 0);   /* off ignored: page 0 */
+        q[0] = 0x66;
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    int nkst = reap(nk);
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_N fdshared="); p = hex2(p, nkst ? 0 : np[4096]);
+        *p++ = '\n'; *p = 0; wr(b);
+    }
+    nsi(SYS_MUNMAP, (long)np, 0, 0);
+
+    /* O: no names (D1(c)), and only O_RDWR. */
+    long orej = 0;
+    if (nsi(SYS_SHM_OPEN, (long)"/pradyos", O_RDWR | O_CREAT, 0600) == -EACCES) orej++;
+    if (nsi(SYS_SHM_OPEN, 0, O_RDWR | O_CREAT, 0600) == -EACCES) orej++;
+    if (nsi(SYS_SHM_OPEN, SHM_ANON, O_RDONLY, 0600) == -EINVAL) orej++;
+    if (nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR | 0x400, 0600) == -EINVAL) orej++;
+    line2("PRADYOS_SHM_O rejects=", orej);
+
+    /* P: the size is set exactly once, and mappings stay inside it. */
+    long prej = 0;
+    long pfd = nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR, 0);
+    if (pfd < 0) fail("p_open", pfd);
+    if (nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, pfd, 0) == -EINVAL) prej++;
+    if (nsi(SYS_FTRUNCATE, pfd, 0, 0) == -EINVAL) prej++;
+    if (nsi(SYS_FTRUNCATE, pfd, 257L * 4096, 0) == -EINVAL) prej++;
+    if (nsi(SYS_FTRUNCATE, pfd, 4096, 0) != 0) fail("p_ftruncate", -1);
+    if (nsi(SYS_FTRUNCATE, pfd, 2 * 4096, 0) == -EINVAL) prej++;
+    if (nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, pfd, 4096) == -EINVAL) prej++;
+    if (nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_PRIVATE, pfd, 0) == -EINVAL) prej++;
+    line2("PRADYOS_SHM_P rejects=", prej);
+    nsi(SYS_CLOSE, pfd, 0, 0);
+
+    /* Q: close while mapped keeps the object; the last detach frees it. */
+    unsigned long qf0 = free_pages();
+    long opened = 0, qok = 1;
+    for (long i = 0; i < Q_CYCLES; i++) {
+        long fd = nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR, 0);
+        if (fd < 0) break;
+        opened++;
+        if (nsi(SYS_FTRUNCATE, fd, 4 * 4096, 0) != 0) { qok = 0; break; }
+        volatile unsigned char *q = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4 * 4096, PROT_RW, MAP_SHARED, fd, 0);
+        if ((long)q < 0) { qok = 0; break; }
+        q[3 * 4096] = (unsigned char)i;
+        nsi(SYS_CLOSE, fd, 0, 0);
+        if (q[3 * 4096] != (unsigned char)i) qok = 0;
+        nsi(SYS_MUNMAP, (long)q, 0, 0);
+    }
+    {
+        long drop = (long)qf0 - (long)free_pages();
+        char b[96], *p = str(b, "PRADYOS_SHM_Q cycles="); p = dec(p, Q_CYCLES);
+        p = str(p, " opened="); p = dec(p, opened);
+        p = str(p, " leaked_ok="); p = dec(p, qok && drop < LEAK_BOUND);
+        *p++ = '\n'; *p = 0; wr(b);
+        line2("[shm] P3 free_pages drop=", drop);
+    }
+
+    /* R: the child's inherited fd alone keeps the object (fd_clone holds). */
+    long rfd = nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR, 0);
+    if (rfd < 0) fail("r_open", rfd);
+    if (nsi(SYS_FTRUNCATE, rfd, 4096, 0) != 0) fail("r_ftruncate", -1);
+    volatile unsigned char *rp = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, rfd, 0);
+    if ((long)rp < 0) fail("r_mmap", (long)rp);
+    rp[0] = 0x77;
+    nsi(SYS_MUNMAP, (long)rp, 0, 0);            /* no mapping is inherited */
+    C[0] = C[2] = 0;
+    long rk = nsi(SYS_FORK, 0, 0, 0);
+    if (rk < 0) fail("r_fork", rk);
+    if (rk == 0) {
+        while (!C[0]) nsi(SYS_YIELD, 0, 0, 0);
+        volatile unsigned char *q = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, rfd, 0);
+        C[2] = (long)q < 0 ? 0 : q[0];
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    nsi(SYS_CLOSE, rfd, 0, 0);                  /* the parent's hold goes first */
+    C[0] = 1;
+    reap(rk);
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_R child_hold="); p = hex2(p, (unsigned)C[2]);
+        *p++ = '\n'; *p = 0; wr(b);
+    }
+
+    /* S: a dup2'd entry is a holder of its own. */
+    long sfd = nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR, 0);
+    if (sfd < 0) fail("s_open", sfd);
+    if (nsi(SYS_FTRUNCATE, sfd, 4096, 0) != 0) fail("s_ftruncate", -1);
+    volatile unsigned char *sp = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, sfd, 0);
+    if ((long)sp < 0) fail("s_mmap", (long)sp);
+    sp[0] = 0x88;
+    nsi(SYS_MUNMAP, (long)sp, 0, 0);
+    if (nsi(SYS_DUP2, sfd, 20, 0) != 20) fail("s_dup2", -1);
+    nsi(SYS_CLOSE, sfd, 0, 0);
+    volatile unsigned char *sq = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, 20, 0);
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_S dup_hold="); p = hex2(p, (long)sq < 0 ? 0 : sq[0]);
+        *p++ = '\n'; *p = 0; wr(b);
+    }
+    if ((long)sq >= 0) nsi(SYS_MUNMAP, (long)sq, 0, 0);
+    nsi(SYS_CLOSE, 20, 0, 0);
     wr("PRADYOS_SHM_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
