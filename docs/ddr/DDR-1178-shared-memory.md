@@ -1,6 +1,6 @@
 # DDR-1178: Shared memory (checklist C1.3)
 
-Status: **DESIGN ONLY.** This record contains no kernel code. Every statement about the finished kernel is **not verified** until a `pradyos-ci` run link is attached. Platform: QEMU TCG only. **Not verified on real hardware.**
+Status: **P1 implemented** in PR #63 (anonymous `MAP_SHARED` across fork). Correct code was green on `80889fd` in run [39186711736](https://github.com/prady4the4bady/Prady4OS/actions/runs/39186711736), and mutants M1-M7 were red (§4). **P2-P4 are design only**: they wait on the §6 owner decisions, and this record holds no code for them. Platform: QEMU TCG only. **Not verified on real hardware.**
 
 Checklist: `docs/V1_MASTER_CHECKLIST.md`, C1.3 — "`MAP_SHARED`, SysV/POSIX shared memory, shared file mappings with write-back". Its exit gate is named here as `smoke-shm`.
 
