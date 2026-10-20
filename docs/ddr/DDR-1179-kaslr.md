@@ -1,6 +1,6 @@
 # DDR-1179 — KASLR (C1.7): virtual slide, relocation table, unslid diagnostics
 
-**Status:** PROPOSED (design only; no code in this PR). Supersedes the deferral in
+**Status:** ACCEPTED (decisions K1-K4 recorded below; design only, no code in this PR). Supersedes the deferral in
 DDR-1051 because `docs/V1_MASTER_CHECKLIST.md` C1.7 puts KASLR back in scope
 ("was deferred, now in scope"). DDR-1051's reasons are not dismissed. Each one is
 answered below by a design rule or an owner decision (§7).
@@ -112,6 +112,16 @@ The gate boots with `QEMU_CPU=qemu64,+rdrand,+rdseed`, three times. All three bo
 - **K2, fallback.** With no RDSEED/RDRAND, apply a TSC slot labelled `weak` (recommended: the relocation path is then exercised by every gate), **or** boot at slot 0 with `[kaslr] DISABLED no-entropy`?
 - **K3, range.** 511 slots under `PDPT_HI[510]` (~9 bits, one PD; recommended) **or** 1,023 slots across `PDPT_HI[510..511]` (~10 bits; both loaders build a second PD)?
 - **K4, security review.** KASLR is a hardening feature, and it touches both boot paths and the W^X setup. Under #45 it is the operator's to merge; I do not self-merge.
+
+## Decisions (Order 4, #45/6301435736 item 3)
+
+These are the §7 recommendations, now decided:
+- **K1: serial only.** The slot is printed on the serial console and bypasses the `SYS_DMESG` ring, so local processes cannot read it. Arm C stays in the gate.
+- **K2: weak TSC fallback.** Without RDSEED or RDRAND, the slot comes from the TSC and is labelled `src=tsc` (weak). Every gate therefore runs the relocation path. A `tsc` slot is never counted as protection (§8).
+- **K3: 9 bits.** Slots 1-511 under `PDPT_HI[510]`, one PD.
+- **K4: built in PRs flagged "security boundary: review before merge".** The operator reviews and merges; I do not self-merge.
+
+The §5 scope split proceeds in order: build-side table, then the applier and slide-aware users at slot 0, then slot choice and `smoke-kaslr`.
 
 ## 8. Honesty labels
 
