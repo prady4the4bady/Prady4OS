@@ -32,10 +32,6 @@ static long sys_open(long upath, long flags, long mode, long a4, long a5, long a
     /* DDR-1182: the access mode is enforced. Mode 3 has no meaning; and a
      * read-only open never modifies the file, so O_TRUNC with it is refused
      * before anything is looked up (POSIX leaves this case unspecified). */
-    if ((flags & FD_ACC_MASK) == FD_ACC_MASK)
-        return -EINVAL;
-    if ((flags & FD_ACC_MASK) == O_RDONLY && (flags & O_TRUNC))
-        return -EACCES;
 
     char path[PATH_MAX];
     if (copyinstr(path, (const void __user *)(uintptr_t)upath, sizeof path, 0) < 0)
