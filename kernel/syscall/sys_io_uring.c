@@ -10,6 +10,7 @@
 #include "sys_io_uring.h"
 #include "syscall.h"
 #include "sched.h"
+#include "string.h"
 #include "mm.h"           /* DDR-1181 */
 #include "fd.h"
 #include "pipe.h"
@@ -52,7 +53,7 @@ struct io_ring {
 };
 _Static_assert(sizeof(struct io_ring) <= 4096, "io_ring must fit one page");
 
-static long sys_io_uring_setup(long a_entries, long a2, long a3, long a4, long a5, long a6) {
+static long sys_io_uring_setup_locked(long a_entries, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a_entries; (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
@@ -125,6 +126,16 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
     return -EINVAL;
 }
 
+/* The ring's kernel view: the whole page validated user-RW, then its frame.
+ * NULL if the page is not (or no longer) a user-RW mapping. Caller holds the
+ * mm lock. */
+static struct io_ring *ring_frame(struct tcb *t, uint64_t va) {
+    if (!vmm_user_range_ok(t->cr3, va, PAGE_SIZE, 1))
+        return 0;
+    uint64_t phys = vmm_resolve(t->cr3, va);
+    return phys ? (struct io_ring *)(uintptr_t)phys : 0;   /* va is aligned */
+}
+
 static long sys_io_uring_enter(long a_ring, long a_submit, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a3; (void)a4;
@@ -154,23 +165,47 @@ static long sys_io_uring_enter(long a_ring, long a_submit, long a3, long a4, lon
     if (va & 0xFFFull)
         return -EINVAL;
 
-    /* Validate the whole ring page is user-RW, then reach it via the frame. */
-    if (!vmm_user_range_ok(t->cr3, va, PAGE_SIZE, 1))
+    /* DDR-1181 §3.3: the ring is reached through its FRAME, not its VA, so a
+     * sibling thread that munmapped it would leave this writing a freed page.
+     * The SQEs are therefore copied out under the mm lock, run WITHOUT it (an
+     * SQE can block in pipe_read or a disk read, and the lock must not be held
+     * across that), and the CQEs are written back under the lock after the
+     * ring is validated and resolved a second time. */
+    struct io_uring_sqe sq[IORING_ENTRIES];
+    mm_lock(t);
+    struct io_ring *r = ring_frame(t, va);
+    if (!r) {
+        mm_unlock(t);
         return -EFAULT;
-    uint64_t phys = vmm_resolve(t->cr3, va);
-    if (!phys)
-        return -EFAULT;
-    struct io_ring *r = (struct io_ring *)(uintptr_t)phys;   /* va is aligned */
-
-    int done = 0;
-    for (int i = 0; i < to_submit; i++) {
-        int res = run_sqe(t, &r->sqes[i]);
-        r->cqes[i].user_data = r->sqes[i].user_data;
-        r->cqes[i].res = res;
-        done++;
     }
-    r->cq_tail = (uint32_t)done;
-    return done;
+    memcpy(sq, r->sqes, sizeof(struct io_uring_sqe) * (size_t)to_submit);
+    mm_unlock(t);
+
+    int res[IORING_ENTRIES];
+    for (int i = 0; i < to_submit; i++)
+        res[i] = run_sqe(t, &sq[i]);
+
+    mm_lock(t);
+    r = ring_frame(t, va);
+    if (!r) {
+        mm_unlock(t);
+        return -EFAULT;               /* the ring was unmapped while SQEs ran */
+    }
+    for (int i = 0; i < to_submit; i++) {
+        r->cqes[i].user_data = sq[i].user_data;
+        r->cqes[i].res = res[i];
+    }
+    r->cq_tail = (uint32_t)to_submit;
+    mm_unlock(t);
+    return to_submit;
+}
+
+static long sys_io_uring_setup(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);                       /* DDR-1181 §3.3: maps a page, moves mmap_next */
+    long rc = sys_io_uring_setup_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
 }
 
 void sys_io_uring_register(void) {

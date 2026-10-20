@@ -1118,6 +1118,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dbg_ticks       = 0;
     t->block_deadline  = 0;   /* DDR-955 */
     t->wake_timed_out  = 0;   /* DDR-955 */
+    t->kmx_next        = 0;   /* DDR-1181: not waiting on any kmutex */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the

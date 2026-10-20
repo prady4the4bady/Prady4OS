@@ -19,6 +19,7 @@
 #pragma once
 #include <stdint.h>
 #include "sched.h"          /* struct vm_area, VM_AREA_MAX */
+#include "kmutex.h"         /* DDR-1181 §3.3: the mm lock */
 
 struct mm {
     uint64_t       cr3;                 /* page-table root; 0 = none           */
@@ -27,7 +28,14 @@ struct mm {
     uint64_t       mem_limit;           /* L6: 0 -> AETHER_MEM_DEFAULT          */
     uint64_t       mem_used;            /* charged by mmap growth (agents)     */
     uint32_t       refs;                /* tcbs holding this mm (atomic)       */
+    struct kmutex  lock;                /* DDR-1181 §3.3: held by every mutation
+                                         * of this address space (zeroed = free) */
 };
+
+/* Take/release the current thread's mm lock. A kernel thread has no mm and
+ * nothing to lock, so both are no-ops for it. */
+static inline void mm_lock(struct tcb *t)   { if (t->mm) kmutex_lock(&t->mm->lock); }
+static inline void mm_unlock(struct tcb *t) { if (t->mm) kmutex_unlock(&t->mm->lock); }
 
 /* A new mm owning `cr3` (may be 0), one reference, empty region table and the
  * mmap arena at VMM_MMAP_BASE. NULL on allocation failure; the caller still

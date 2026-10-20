@@ -251,6 +251,7 @@ struct tcb {
     /* DDR-955: bounded-wait fields */
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */
+    struct tcb *kmx_next;        /* DDR-1181: kmutex FIFO wait link (kmutex.c) */
 };
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure

@@ -103,7 +103,7 @@ static void unmap_range(uint64_t cr3, uint64_t base, uint64_t npages) {
     vmm_unmap_range_flush(cr3, base, npages, unmap_free_frame);
 }
 
-static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
+static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
                      long a_fd, long a_off) {
     struct tcb *t = current_thread;
     uint64_t addr = (uint64_t)a_addr;
@@ -180,8 +180,10 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
 
     /* AETHER memory cap (ADR-026 D5): charge this growth against the agent's
      * 128 MiB hard cap; an over-cap agent is cleanly killed, never a panic. */
-    if (aether_mem_charge(t, npages * PAGE_SIZE) < 0)
+    if (aether_mem_charge(t, npages * PAGE_SIZE) < 0) {
+        mm_unlock(t);                            /* DDR-1181: never exit holding it */
         sched_exit(137);                         /* AGENT_OOM_KILLED; never returns */
+    }
 
     uint64_t pflags = VMM_USER | VMM_NX;
     if (prot & PROT_WRITE)
@@ -228,7 +230,7 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
     return (long)base;
 }
 
-static long sys_munmap(long a_addr, long a_len, long a3, long a4, long a5, long a6) {
+static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5, long a6) {
     (void)a_len; (void)a3; (void)a4; (void)a5; (void)a6;  /* whole-region unmap */
     struct tcb *t = current_thread;
     struct vm_area *v = vma_find(t, (uint64_t)a_addr);
@@ -258,7 +260,7 @@ static long sys_munmap(long a_addr, long a_len, long a3, long a4, long a5, long 
  *                            user pages IN rather than reporting them. Telling
  *                            the two apart needs a state that does not exist.
  */
-static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a4; (void)a5; (void)a6;
     uint64_t addr = (uint64_t)a1;
     uint64_t len  = (uint64_t)a2;
@@ -293,6 +295,32 @@ static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
     if (rc != 0)
         return -ENOMEM;                        /* a page in the range is absent */
     return 0;
+}
+
+/* DDR-1181 §3.3: every change to the address space holds the mm lock. The
+ * bodies above are unchanged; they run with it held. */
+static long sys_mmap(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_mmap_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_munmap(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_munmap_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_mprotect_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
 }
 
 void sys_mmap_register(void) {
