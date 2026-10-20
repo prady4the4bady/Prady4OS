@@ -120,6 +120,7 @@
 4	smoke-setname	90	strict
 4	smoke-privacy-netfilter	90	strict
 4	smoke-ftruncate	90	strict
+8	smoke-accmode	90	strict
 4	smoke-shell	61	strict
 4	smoke-winops	37	strict
 4	smoke-backdrop	28	strict
