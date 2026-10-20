@@ -1,6 +1,6 @@
 # DDR-1180 — Original branding (C6.2): icon grid, SVG subset, icon gate
 
-**Status:** PROPOSED (design only; no artwork in this PR).
+**Status:** ACCEPTED (decisions B1-B2 recorded below; design only, no artwork in this PR).
 **Checklist:** `docs/V1_MASTER_CHECKLIST.md` C6.2 ("Needs: none, run in parallel"). It requires:
 - a logo, wordmark and icon set made from scratch in `assets/brand/`, as SVG source;
 - a documented grid, stroke and radius;
@@ -83,18 +83,25 @@ The renders also feed the compositor's icon atlas, generated at build time like 
 1. This DDR.
 2. `icon_check.py` and its manifest format, plus the gate and mutants, with **one** seed icon to make the arms non-vacuous.
 3. The full icon set (artwork), with the operator's review by eye.
-4. Logo and wordmark: blocked on **B1** (§5).
+4. Logo and wordmark (B1, B2 decided below).
 5. Atlas wiring into the compositor, replacing the placeholder, and removing the "provisional branding" disclaimer only after the operator approves.
 
 ## 5. Owner decisions required
 
-- **B1, the emblem.** The mockups (DDR-1147) show a scorpion emblem. C6.2 says "from scratch, no tracing". Choose one:
+- **B1, the emblem** (decided below). The mockups (DDR-1147) show a scorpion emblem. C6.2 says "from scratch, no tracing". Choose one:
   - **(a)** you supply the scorpion emblem and wordmark as SVG (DDR-1147 §6's request), and they become the logo; **or**
   - **(b)** I draw an original scorpion emblem on the §2 grid, not traced from the mockups, for your review; **or**
   - **(c)** a different mark altogether.
 
   The icon set does not wait on B1.
-- **B2, the wordmark typeface.** The UI ships Inter (DDR-728). Should the wordmark be lettered by hand as paths (fully original) or set in Inter and converted to paths? Under the §2.4 rule, converting a font's outlines counts as copying its glyphs, so the Inter option needs your explicit yes. Inter's licence (OFL) allows it, but the checklist rule is stricter than the licence.
+- **B2, the wordmark typeface** (decided below). The UI ships Inter (DDR-728). Should the wordmark be lettered by hand as paths (fully original) or set in Inter and converted to paths? Under the §2.4 rule, converting a font's outlines counts as copying its glyphs, so the Inter option needs your explicit yes. Inter's licence (OFL) allows it, but the checklist rule is stricter than the licence.
+
+## Decisions (Order 4, #45/6301435736 item 4)
+
+- **B1: (b) an original scorpion emblem, drawn for this project on the §2 grid.** The operator's mockups (DDR-1147) establish the scorpion as the mark. An original drawing of that subject follows the brand and still meets the §2.4 rule. The mockup PNGs are not opened while drawing, so no path can be traced from them. The emblem follows the icon subset rules (§2.3), with its own `viewBox` recorded in `assets/brand/README.md`.
+- **B2: a hand-lettered wordmark ("PRADYOS").** It is drawn as stroked paths on a documented letter grid. No font outlines are converted: that would copy glyphs under the §2.4 rule, so the original route is the one that meets the checklist without an exception.
+
+Both are reviewed by eye by the operator before v1, as C6.2's exit gate states.
 
 ## 6. Honesty labels
 
