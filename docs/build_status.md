@@ -7316,3 +7316,12 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - Gate `smoke-install` gained arms K1–K5. M9, M10, M11 and M12 each fail their predicted arm.
 - **Kernel:** `kernel.bin` `1e94746ee8548cc6`, 1,474,954 B (+4,096), headroom 97,910 B. 186 gates.
 - **Regression**, with the hash pinned: hygiene ALL TEN; smoke-shell 5/5; install/ledger/part/iso-userspace/iso-x86/uefi/blkmq/rqstress-liveness/blk-integrity all rc=0.
+
+## 2026-10-19 — DDR-1178 P1 (C1.3: anonymous MAP_SHARED across fork)
+
+- `sys_mmap` accepts `MAP_SHARED|MAP_ANONYMOUS`. The new `PTE_SW_SHMEM` (bit 52) marks a refcounted shared leaf: fork maps it into the child with the same permissions and a `pmm_incref`, never COW.
+  - `map_core`, `vmm_protect_range` and the fork walk all carry the bit (each masked flags with `0xFFF`).
+- **File-backed `MAP_SHARED` stays `-EINVAL`.** It is DDR-1178 P4, waiting on owner decisions D4/D5. SysV/POSIX shm (P2/P3) are not started.
+- **Fork now copies `vma[]` and `mmap_next` into the child.** Before this, a child could not `munmap` an inherited region, and its first `addr==0` mmap could overwrite an inherited PTE.
+- **Gate `smoke-shm` (shard 0), arms A-F.** Each arm has a mutant: M1→A, M2→B, M4→C, M5→D, M6→E, M7→F. M3 also lands on A, because the parent reads a frame that was freed and reused (`shared=0x23`; not the poison value). All seven were shown red in CI on `80889fd`, and the run links are in DDR-1178 §4 (#45/6281909361). Correct code is green in run 39186711736.
+- `kernel.bin` 1,540,490 B. Emulated (QEMU TCG) only; not verified on real hardware.

@@ -242,7 +242,7 @@ static int map_core(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t f
 
     uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;   /* drop NX if unsupported */
     table_at(pt)[idx(virt, 1)] =
-        (phys & PTE_ADDR) | (flags & 0xFFF) | nx | PTE_PRESENT;
+        (phys & PTE_ADDR) | (flags & (0xFFF | PTE_SW_SHMEM)) | nx | PTE_PRESENT;
     invlpg(virt);
     return 0;
 }
@@ -300,7 +300,7 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
         uint64_t *pte = leaf_pte(pml4_phys, p);
         uint64_t e = *pte;
         *pte = (e & PTE_ADDR)
-             | (e & (PTE_SW_COW | PTE_SW_SHARED | VMM_PWT | VMM_PCD))
+             | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | VMM_PWT | VMM_PCD))
              | PTE_PRESENT | VMM_USER
              | (flags & VMM_RW)
              | nx;
