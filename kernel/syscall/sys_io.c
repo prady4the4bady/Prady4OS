@@ -334,8 +334,6 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
         return -EBADF;
 
     if (e->kind == FD_VFS && e->file) {
-        if (!fd_can_read(e))
-            return -EBADF;                              /* DDR-1182: O_WRONLY */
         if (count == 0)
             return 0;
         char kbuf[256];
