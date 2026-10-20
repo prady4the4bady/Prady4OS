@@ -119,6 +119,24 @@ The fault paths may sleep, because a ring-3 fault holds no kernel lock (`idt.c:8
 | signal dispositions and mask | dispositions copied, mask per-thread | dispositions shared, mask per-thread | Divergence for dispositions, fixed in P4. A signal sent to a pid goes to the tcb with that pid. |
 | FPU state, `fs_base` | per-thread | per-thread | |
 
+### 3.7 User copies race a sibling's `munmap`/`mprotect` (found while building P1b)
+
+**Measured on `a2ac698`:**
+- `copyin`/`copyout` (`kernel/mm/uaccess.c:14-40`) validate the user range with `vmm_user_range_ok`, then `memcpy` through the user VA. `copyinstr` does the same one byte at a time. There is **no exception fixup**: a kernel-mode `#PF` goes to the panic path (`idt.c:1025`).
+- `CR0.WP` is never set on the BIOS path. The AP trampoline sets only `PG|PE` (`ap_boot.asm:53`), and stage2 sets only `PG`. With `WP=0`, a ring-0 write to a read-only user page **succeeds**.
+
+**Why this is harmless today:** one tcb is one address space, and a syscall is the only code that runs in it while the copy runs. Nothing can change the mapping between the check and the copy.
+
+**What threads change:** a sibling on another CPU can `munmap` the buffer between the check and the copy, and the kernel faults in ring 0, which is a **panic**. Any program could then crash the kernel. A sibling that calls `mprotect(PROT_READ)` in the same window gets the kernel to write through the now read-only page, which bypasses `mprotect`. Holding `mm->lock` across every user copy is not possible: copies run with spinlocks held and interrupts off, where a sleeping lock cannot be taken.
+
+**Decision (P1b):**
+1. **Uaccess fault fixup.** Every user copy goes through one assembly routine, `uaccess_copy(dst, src, n)` (a `rep movsb` between `stac`/`clac`). The kernel `#PF` handler, on a ring-0 fault whose RIP lies in that routine's text range, resumes at the routine's fixup label, which returns `-EFAULT`. `copyin`, `copyout` and `copyinstr` keep their up-front `vmm_user_range_ok` check as the fast refusal. The fixup covers only the race. Any other ring-0 fault still panics.
+2. **`CR0.WP = 1` on every CPU,** set in the BSP's long-mode entry and in the AP trampoline (`ap_boot.asm`). The UEFI path goes through the same kernel entry. A ring-0 write to a read-only page then faults, and the fixup turns it into `-EFAULT`. If anything in the kernel relied on writing read-only pages, `WP=1` makes it fault; the whole gate set, green in one run, is the evidence that nothing does.
+3. **Gate arm G (in `smoke-thread`, P1c):** `PRADYOS_THREAD_G survived=1 efault=<n>`. One thread loops `getcwd(buf)` (a `copyout`) into a page while a sibling loops `munmap`/`mmap` of that page at the same VA, for a bounded number of iterations.
+   - Correct code survives and counts the `-EFAULT` returns.
+   - **Mutant T8** (the `#PF` handler ignores the fixup range) panics. The panic banner `NEXUS KERNEL PANIC` is already in `GLOBAL_FORBIDDEN` (checked: count 77), so the gate goes red.
+   - The arm's pass condition is `survived=1`; `efault` is recorded, not asserted, because the count depends on timing.
+
 ## 4. Gate `smoke-thread`
 
 A FAT-rooted probe, `user/threadtest.c`, opt-in (`probe_enabled("thread")`), run with `QEMU_SMP=4`. The probe is strict.
@@ -163,13 +181,14 @@ The probability argument is not evidence. The evidence is each mutant shown red 
 | T5 | `vmm_unmap_range_flush` skips `tlb_shoot` (local `invlpg` only) | E (`stale>0`) |
 | T6 | DDR-1177 M4: `vmm_unmap_range_flush` frees each frame before the shootdown | M (`poison>0`) |
 | T7 | a fatal fault ends only the faulting thread | F (`group_killed=0`) |
+| T8 | the kernel `#PF` handler ignores the uaccess fixup range (§3.7) | G (kernel panic) |
 
 If T4, T5 or T6 cannot be shown red within 16 trials, the trial count is raised. The DDR is amended with the measured red rate; the arm is not dropped.
 
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
-2. **P1b** — `cap_table` lock and sharing; `kmutex`; the mm lock taken on every path in §3.3.
+2. **P1b** — `cap_table` lock; `kmutex`; the mm lock taken on every path in §3.3 (io_uring `ENTER` included: it writes CQEs through the ring's physical frame, so a concurrent `munmap` of the ring would be a use-after-free); the uaccess fixup and `CR0.WP` (§3.7).
 3. **P1c** — `SYS_THREAD_CREATE` / `SYS_THREAD_EXIT`, `tgid`, group exit, the reap rules, and the exec/fork rules. Then `smoke-thread` arms A–F and M, with mutants T1–T7.
 
 Each step is its own PR, stacked on the previous one, and each PR is flagged security boundary.
