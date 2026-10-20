@@ -28,7 +28,7 @@ Status: IN PROGRESS. Needs: none.
 - [x] Full gate run on the current `dev/phase1` tip; fix anything red at the root (run 39105021641, green)
 - [x] Dependabot (DDR-1172): #19 closed (superseded by #48); merged #9 `3c1708d`, #7 `55b125d`, #8 `02ede03`, #30 `bca2795`, #33 `52b35f3`; #42 closed red (web-tree-sitter 0.25+ has no default export)
 - [x] Open docs PRs #27, #31, #36: read, merge or close, record why (DDR-1173)
-- [ ] DDR-1171 rollback implementation on `rollback-ddr1171`
+- [x] DDR-1171 rollback implementation on `rollback-ddr1171`: merged via #51 as `db5d701` (head `3795348` green, run 38989261040). Open owner question: the `sys_open` access-mode gap recorded in DDR-1171 is not fixed.
 Exit gate: all existing gates green on one SHA; open-PR list clean.
 
 ---
@@ -208,7 +208,7 @@ Exit gate: icon gate (name TBD). Operator reviews by eye before v1.
 Status: TODO. Needs: C3.2. Ref: Block 3.
 - [ ] UI-state reading, input injection
 - [ ] sandboxed shell and browser
-- [ ] rollback on rejection (DDR-1171)
+- [x] rollback on rejection (DDR-1171): #51 `db5d701`, gate `smoke-rollback`. Emulated (TCG) only, not verified on real hardware.
 - [ ] kernel policy hooks: agents propose tunings; kernel validates against fixed bounds and audits; agents never run scheduler, memory or security decisions directly
 Exit gate: each capability has a gate plus a negative gate.
 
