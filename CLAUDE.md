@@ -16,7 +16,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 
 ## Authority and work order
 
-- Issue #45 owner comments are the standing authorization (6177490081, 6177525415, 6195615129, 6199670683, 6199872798, 6200777349, 6201120568, 6201467383, 6201619419, 6229808666, 6233854639).
+- Issue #45 owner comments are the standing authorization (6177490081, 6177525415, 6195615129, 6199670683, 6199872798, 6200777349, 6201120568, 6201467383, 6201619419, 6229808666, 6233854639, 6256077528, 6256365961).
 - Work order is `docs/V1_MASTER_CHECKLIST.md`. C11.1 (Rust and build system) stays **last** in build order.
 - Before each step and before each merge, re-check #45 for new owner comments and follow them first.
 - Never idle while an unblocked item exists. Stack the next item while CI runs.
