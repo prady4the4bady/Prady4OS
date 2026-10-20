@@ -47,7 +47,7 @@ struct fd_entry {
  * path carries its own copy of the comparison. */
 #define FD_ACC_MASK 3
 static inline int fd_can_read(const struct fd_entry *e)  { return (e->flags & FD_ACC_MASK) != 1; }
-static inline int fd_can_write(const struct fd_entry *e) { return (e->flags & FD_ACC_MASK) != 0; }
+static inline int fd_can_write(const struct fd_entry *e) { return (e->flags & FD_ACC_MASK) == 1; }
 
 struct fd_table {
     struct fd_entry e[FD_MAX];
