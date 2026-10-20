@@ -74,6 +74,11 @@ jobs:
       - name: theme palette header matches its generator (DDR-1147)
         run: make ci-palette-check
 
+      # DDR-1180 sec.3. Hand-written SVG icons: manifest, subset, grid, renders
+      # at 16/24/32/64 px, originality marker. python3 stdlib only (no Pillow).
+      - name: brand icons pass the icon gate (DDR-1180)
+        run: make ci-icon-check
+
       # DDR-859/862. The hybrid takes its flags AND its compiler from the
       # Makefile, so configure needs the Makefile's clang to exist. Installed
       # explicitly rather than relying on the runner image happening to carry

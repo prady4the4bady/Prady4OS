@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- original: PRADYOS, DDR-1180 -->
+  <!-- terminal: a rounded screen with a prompt chevron and a cursor bar -->
+  <rect x="3" y="4" width="18" height="16" rx="2"/>
+  <path d="M7 9 L10 12 L7 15"/>
+  <path d="M12 15 H17"/>
+</svg>
