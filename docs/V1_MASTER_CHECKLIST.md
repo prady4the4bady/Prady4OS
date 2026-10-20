@@ -48,12 +48,13 @@ Exit gate: `smoke-tlbshoot` (in-kernel probe, arms A-C, 4 CPUs; DDR-1177 Amendme
 ### C1.3 Shared memory
 Status: IN PROGRESS. Needs: C1.2. Ref: DDR-1038, DDR-1178.
 - [x] P1 anonymous `MAP_SHARED` across fork: #63 merged as `a2ac698` (the DDR from #62 rides in the same merge). Gate `smoke-shm` (shard 0), arms A-F, green on `3c6865a` (run 39425747997). Mutants M1-M7 red on `80889fd` (DDR-1178 §4). Emulated (TCG) only, not verified on real hardware.
-- [ ] P2/P3 SysV and POSIX shared memory: wait on owner decisions D1-D3 (DDR-1178 §6)
-- [ ] P4 shared file mappings with write-back: wait on owner decisions D4-D5
+- [ ] P2 SysV shared memory (IPC_PRIVATE only; the shmid is a capability): D1-D5 decided in DDR-1178 Amendment 1 (#70); P2 design is Amendment 2, and the code plus `smoke-shm` arms G-M are in #78. Not verified until CI is green and S2-1 to S2-7 are shown red.
+- [ ] P3 POSIX `SHM_ANON` (after P2)
+- [ ] P4 shared file mappings with write-back (after P3; D5: SFS `MAP_SHARED|PROT_WRITE` is `-EACCES`)
 Exit gate: `smoke-shm` (P1 arms A-F; P2-P4 arms are added with their parts).
 
 ### C1.4 Threads and synchronization
-Status: TODO. Needs: C1.1, C1.2, C1.3.
+Status: IN PROGRESS on C1.3 P1 (Order 4 item 1, reasoning in DDR-1178 Amendment 1). Ref: DDR-1181. Design #73; P1a `struct mm` #74; P1b locks and the uaccess fixup #75; P1c threads plus `smoke-thread` #76 (arms A-G and M; D, E and M are the three DDR-1177 items below). None is merged; mutants T1-T8 are dispatched after #76's correct-code run is green.
 - [ ] futex
 - [ ] pthreads / `CLONE_VM`, thread-local storage
 - [ ] mutex, semaphore, condition variable, barrier (priority inheritance)
