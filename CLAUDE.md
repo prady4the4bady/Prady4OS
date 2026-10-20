@@ -67,7 +67,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
   - `make image` does not always rebuild after a `-D` flag or a `.c` change: remove the `.o` and verify by **hash**, never by size.
   - `TIMEOUT_S=<n> make smoke-x` is ignored; use `make TIMEOUT_S=<n> smoke-x`.
   - `kputhex` already prints `0x`; `kprintf` does not exist.
-- **Size:** `kernel.bin` is **1,532,298 B** against the 1,572,864 B size gate — **40,566 B of headroom**. `ci-docstate-check` reads this line; keep size and headroom updated together. The basis for the gate is being recorded in its own DDR (operator item 5).
+- **Size:** `kernel.bin` is **1,540,490 B** against the 1,703,936 B size gate — **163,446 B of headroom** (measured at `a2ac698`). `ci-docstate-check` reads this line; keep size and headroom updated together. The gate is the BIOS stage-2 read window (52 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
 - **NSI:** max defined 107, next free 108 (verify against `kernel/syscall/syscall.h`).
 - **Boot:** PT_HI is implemented twice, in `boot/stage2/stage2.asm` and `boot/uefi/loader.c`; change both together.
 - **`[apfreeze]`** has at least five producers. Resolve its RIP before naming a cause.
