@@ -7323,5 +7323,5 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
   - `map_core`, `vmm_protect_range` and the fork walk all carry the bit (each masked flags with `0xFFF`).
 - **File-backed `MAP_SHARED` stays `-EINVAL`.** It is DDR-1178 P4, waiting on owner decisions D4/D5. SysV/POSIX shm (P2/P3) are not started.
 - **Fork now copies `vma[]` and `mmap_next` into the child.** Before this, a child could not `munmap` an inherited region, and its first `addr==0` mmap could overwrite an inherited PTE.
-- **Gate `smoke-shm` (shard 0), arms A-F.** Each arm has a mutant: M1→A, M2→B, M4→C, M5→D, M6→E, M7→F. M3 also lands on A, through PMM poison. **Not verified** until the CI runs are linked in DDR-1178.
+- **Gate `smoke-shm` (shard 0), arms A-F.** Each arm has a mutant: M1→A, M2→B, M4→C, M5→D, M6→E, M7→F. M3 also lands on A, because the parent reads a frame that was freed and reused (`shared=0x23`; not the poison value). All seven were shown red in CI on `80889fd`, and the run links are in DDR-1178 §4 (#45/6281909361). Correct code is green in run 39186711736.
 - `kernel.bin` 1,540,490 B. Emulated (QEMU TCG) only; not verified on real hardware.
