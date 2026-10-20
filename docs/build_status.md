@@ -7316,3 +7316,10 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - Gate `smoke-install` gained arms K1–K5. M9, M10, M11 and M12 each fail their predicted arm.
 - **Kernel:** `kernel.bin` `1e94746ee8548cc6`, 1,474,954 B (+4,096), headroom 97,910 B. 186 gates.
 - **Regression**, with the hash pinned: hygiene ALL TEN; smoke-shell 5/5; install/ledger/part/iso-userspace/iso-x86/uefi/blkmq/rqstress-liveness/blk-integrity all rc=0.
+
+## 2026-10-20 — DDR-1180 step 2 (C6.2: icon gate, one seed icon)
+
+- **`ci-icon-check`** (`tools/brand/icon_check.py`, python3 stdlib only) runs in the CI `build` job and in `tools/ci/hygiene_check.sh`. Arms: A manifest/files, B SVG subset, C 24-unit grid, D renders at 16/24/32/64 px, E originality marker.
+- **Seed icon:** `assets/brand/icons/close.svg`, hand-drawn on the grid. The full icon set, logo and wordmark are later steps; the logo and wordmark wait on owner decision B1.
+- **Mutants M1-M5** turn arms A-E red, one per arm, run locally. M3 (a point at x=23) also trips D, because its ink leaves the safe area. CI evidence: **not verified** until the mutant runs are linked in DDR-1180.
+- The gate proves structure and renderability only. How the icons look and whether they are original rest on the operator's review by eye.
