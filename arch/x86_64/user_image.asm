@@ -561,6 +561,12 @@ sigsemtest_elf:
     incbin "build/sigsemtest.elf"
 sigsemtest_elf_end:
 
+global shmtest_elf
+global shmtest_elf_end
+shmtest_elf:
+    incbin "build/shmtest.elf"
+shmtest_elf_end:
+
 global disktest_elf
 global disktest_elf_end
 disktest_elf:

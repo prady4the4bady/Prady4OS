@@ -2,7 +2,7 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-10-18)
+## State (2026-10-19, branch protection enabled)
 
 - **dev/phase1 tip:** `5e4ccf5` (PR #58: C1.2 TLB shootdown and `smoke-tlbshoot`).
 - **Kernel:** `kernel.bin` is 1,532,298 B. There are 196 gates.
