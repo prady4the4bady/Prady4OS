@@ -196,6 +196,7 @@ static long sys_dup2(long a_old, long a_new, long a3, long a4, long a5, long a6)
          * must be counted on that same side. */
         pipe_incref(ne->pipe, ne->flags == PIPE_WRITE_END);
     } else if (ne->kind == FD_VFS && ne->file) {
+        ne->flags |= 2;                     /* MUTANT M6: widen to O_RDWR */
         struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
         if (!nf) { ne->kind = FD_NONE; ne->file = 0; return -ENOMEM; }
         memcpy(nf, oe->file, sizeof(struct vfs_file));
