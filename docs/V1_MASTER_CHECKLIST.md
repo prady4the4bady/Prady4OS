@@ -46,9 +46,11 @@ Status: DONE. Needs: C0.1. Ref: DDR-1075, DDR-1077, DDR-1177.
 Exit gate: `smoke-tlbshoot` (in-kernel probe, arms A-C, 4 CPUs; DDR-1177 Amendment 2). M2 and M3 shown red in CI before merge.
 
 ### C1.3 Shared memory
-Status: TODO. Needs: C1.2. Ref: DDR-1038.
-- [ ] `MAP_SHARED`, SysV/POSIX shared memory, shared file mappings with write-back
-Exit gate: shared-memory gate (name TBD).
+Status: IN PROGRESS. Needs: C1.2. Ref: DDR-1038, DDR-1178.
+- [x] P1 anonymous `MAP_SHARED` across fork: #63 merged as `a2ac698` (the DDR from #62 rides in the same merge). Gate `smoke-shm` (shard 0), arms A-F, green on `3c6865a` (run 39425747997). Mutants M1-M7 red on `80889fd` (DDR-1178 §4). Emulated (TCG) only, not verified on real hardware.
+- [ ] P2/P3 SysV and POSIX shared memory: wait on owner decisions D1-D3 (DDR-1178 §6)
+- [ ] P4 shared file mappings with write-back: wait on owner decisions D4-D5
+Exit gate: `smoke-shm` (P1 arms A-F; P2-P4 arms are added with their parts).
 
 ### C1.4 Threads and synchronization
 Status: TODO. Needs: C1.1, C1.2, C1.3.
