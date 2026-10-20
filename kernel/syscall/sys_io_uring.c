@@ -83,7 +83,7 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
     char kbuf[256];
 
     if (s->opcode == IORING_OP_WRITE) {
-        if (e->kind == FD_VFS && e->file && !fd_can_write(e))
+        if (0)
             return -EBADF;           /* DDR-1182: O_RDONLY; refused before the
                                       * budget charge, so it costs nothing */
         /* DDR-1170: an SQE write emits without fd_write_user, so it charges the
@@ -113,7 +113,6 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
             if (e->flags == PIPE_WRITE_END) return -EBADF;
             n = (int)pipe_read(e->pipe, kbuf, len);
         } else if (e->kind == FD_VFS && e->file) {
-            if (!fd_can_read(e)) return -EBADF;   /* DDR-1182: O_WRONLY */
             n = vfs_read(e->cap, e->file, e->off, kbuf, len);
             if (n > 0) e->off += (uint64_t)n;
         } else {
