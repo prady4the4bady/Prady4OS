@@ -7332,3 +7332,9 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - **Seed icon:** `assets/brand/icons/close.svg`, hand-drawn on the grid. The full icon set, logo and wordmark are later steps; the logo and wordmark wait on owner decision B1.
 - **Mutants M1-M5** each turned their own arm (A-E) red in CI. M3 also trips D, because its ink leaves the safe area. Correct code is green in `shard-check` run 39364066194; the mutant runs are linked in DDR-1180 §3.
 - The gate proves structure and renderability only. How the icons look and whether they are original rest on the operator's review by eye.
+
+## 2026-10-21 — DDR-1180 step 3 (C6.2: first icon set)
+
+- **12 new icons** in `assets/brand/icons/`, hand-drawn on the 24-unit grid: minimise, maximise, terminal, files, settings, agent, network, power, battery, wifi, lock, mode. With the seed `close`, there are 13. `ci-icon-check` passes on all 13 locally (arms A-E, 16/24/32/64 px).
+- Each SVG carries the DDR-1180 originality marker and a one-line description of what it depicts. None is copied or traced.
+- The gate's rasteriser ignores `rx`, so rounded corners render square in its check; real renderers round them. How the icons look rests on the operator's review by eye. Compositor wiring is DDR-1180 step 5.

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- original: PRADYOS, DDR-1180 -->
+  <!-- settings: three sliders with knobs at different positions -->
+  <path d="M4 6 H20 M4 12 H20 M4 18 H20"/>
+  <circle cx="9" cy="6" r="2"/>
+  <circle cx="15" cy="12" r="2"/>
+  <circle cx="7" cy="18" r="2"/>
+</svg>
