@@ -24,6 +24,12 @@
 /* DDR-1177: bit 11 marks a NON-present leaf whose frame is awaiting a TLB
  * shootdown ack before it is freed (vmm_unmap_range_flush, transient). */
 #define PTE_SW_DYING  0x800ull                 /* bit 11 */
+/* DDR-1178: bit 52 (ignored without PKE) marks a REFCOUNTED shared leaf: an
+ * anonymous MAP_SHARED frame. fork maps it into the child with the same
+ * permissions and pmm_incref, never COW. Distinct from PTE_SW_SHARED, whose
+ * frames are not refcounted and are never freed. Every PTE rebuild that masks
+ * flags with 0xFFF must carry it (map_core, vmm_protect_range, the fork walk). */
+#define PTE_SW_SHMEM  (1ull << 52)
 
 /* User virtual range = PML4 slot 1 = [512 GiB, 1 TiB) (ADR-021). The ELF loader
  * mirrors these as its own USER_MIN/USER_MAX; any user pointer the kernel copies

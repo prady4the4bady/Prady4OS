@@ -237,3 +237,4 @@
 7	smoke-taskbudget	120	strict
 1	smoke-rollback	150	strict
 6	smoke-tlbshoot	240	strict
+0	smoke-shm	180	strict
