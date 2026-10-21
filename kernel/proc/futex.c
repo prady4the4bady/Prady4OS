@@ -126,7 +126,7 @@ static long fx_wait(struct tcb *t, uint64_t uaddr, uint32_t val, int priv,
     uint64_t fl = spin_lock_irqsave(&b->lock);
     uint32_t cur = __atomic_load_n((volatile uint32_t *)(uintptr_t)phys, __ATOMIC_SEQ_CST);
     mm_unlock(t);                      /* kmutex_unlock never sleeps */
-    if (cur != val) {
+    if (0 && cur != val) {
         spin_unlock_irqrestore(&b->lock, fl);
         return -EAGAIN;
     }
