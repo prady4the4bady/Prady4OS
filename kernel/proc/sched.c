@@ -2,6 +2,7 @@
 #include "sched.h"
 #include "mm.h"           /* DDR-1181: struct mm */
 #include "uaccess.h"      /* DDR-1181 P1c: CLEARTID */
+#include "futex.h"        /* DDR-1181 A1.3: CLEARTID wake */
 #include "errno.h"     /* DDR-955: ETIMEDOUT for sched_block_timeout */
 #include "numa.h"      /* DDR-885: NUMA-affine steal order */
 #include "kheap.h"
@@ -1123,6 +1124,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->tgid            = 0;   /* DDR-1181 P1c: set with pid by the user creators */
     t->is_thread       = 0;
     t->clear_tid       = 0;
+    t->fx_lock         = 0;   /* DDR-1181 A1.3: not in a futex wait */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -2602,6 +2604,7 @@ static void sched_exit_common(int status, int group) {
     if (self->clear_tid) {
         uint32_t zero = 0;
         (void)copyout((void __user *)(uintptr_t)self->clear_tid, &zero, sizeof zero);
+        (void)futex_wake_addr(self, self->clear_tid, 1);   /* DDR-1181 A1.3: join */
     }
 
     /* The LAST thread out is the process exit: per-process resources are

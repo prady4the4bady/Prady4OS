@@ -11,6 +11,8 @@
  *   F  a fault in one thread ends the whole process
  *   G  DDR-1181 §3.7: a kernel copyout racing munmap of its buffer is
  *      -EFAULT, never a kernel panic
+ *   FA-FJ  DDR-1181 Amendment 1 (P2): futex wait/wake, keys, timeout,
+ *      signals and the CLEARTID wake (table in the amendment)
  *
  * D, E/M, F and G each run in a forked CHILD (the test process). The child's
  * threads report through a MAP_SHARED anonymous page (C1.3 P1) and the parent
@@ -35,7 +37,11 @@
 #define MAP_ANONYMOUS  0x20
 #define WNOHANG        1
 #define SIGKILL        9
+#define SIGUSR1        10
 #define EFAULT         14
+#define FUTEX_WAIT     0
+#define FUTEX_WAKE     1
+#define FUTEX_PRIVATE  128
 
 #define VDSO_USER_VA   0x00007FFFFFF00000ull
 #define MS             1000000ull
@@ -99,6 +105,10 @@ struct shared {
     volatile long a_store;     /* arm A */
     volatile unsigned a_ctid;  /* arm A: zeroed by the kernel at thread exit */
     volatile unsigned c_ctid;  /* arm C */
+    volatile uint32_t fw, fdw, few, ffw, fhw, fbw, fcw, ictid;   /* futex words */
+    volatile long fq;          /* FD: threads about to wait               */
+    volatile long frc, brc, crc, cms, erc, hrc;   /* futex return values  */
+    volatile long ready, hdone;
 };
 
 static long spawn(void (*fn)(long), long arg, uint64_t tls, uint64_t ctid) {
@@ -121,6 +131,12 @@ static int join(volatile unsigned *w, uint64_t bound_ms) {
 __attribute__((noreturn)) static void texit(void) {
     nsi(SYS_THREAD_EXIT, 0, 0, 0);
     for (;;) { }
+}
+
+struct fx_ts { long sec, nsec; };
+
+static long fx(volatile uint32_t *w, long op, long val, const struct fx_ts *ts) {
+    return nsi6(SYS_FUTEX, (long)w, op, val, (long)ts, 0, 0);
 }
 
 /* ---- thread bodies (entered with RSP = stack top, RDI = arg) ---- */
@@ -190,6 +206,47 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_copier(long arg
     }
     s->gdone = 1;
     texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_fwait(long arg) {
+    struct shared *s = (struct shared *)arg;
+    s->frc = fx(&s->fw, FUTEX_WAIT | FUTEX_PRIVATE, 0, 0);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_fwait_d(long arg) {
+    struct shared *s = (struct shared *)arg;
+    __atomic_add_fetch(&s->fq, 1, __ATOMIC_SEQ_CST);
+    fx(&s->fdw, FUTEX_WAIT | FUTEX_PRIVATE, 0, 0);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_slow(long arg) {
+    (void)arg;
+    uint64_t e = now() + 30 * MS;        /* the creator is asleep by now */
+    while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void on_usr1(long sig) {
+    (void)sig;
+    nsi(SYS_SIGRETURN, 0, 0, 0);
+    for (;;) { }
+}
+
+/* Bounded spin until *f is set; 0 on expiry. */
+static int await(volatile long *f, uint64_t bound_ms) {
+    uint64_t end = now() + bound_ms * MS;
+    while (!*f) {
+        if (now() > end) return 0;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    return 1;
+}
+
+static void settle(uint64_t ms) {
+    uint64_t e = now() + ms * MS;
+    while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
 }
 
 /* ---- parent side: run one child and judge how it ended ---- */
@@ -344,6 +401,166 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long survived = reap(gp, 5000);
     wr("[thread] G efault="); wrl(s->efault); wr("\n");
     wr("PRADYOS_THREAD_G survived="); wrl(survived); wr("\n");
+
+    /* ---- DDR-1181 Amendment 1 (P2): futex ---- */
+    /* FA: a thread sleeps in WAIT; WAKE(1) returns 1 once it is queued. */
+    s->fw = 0; s->frc = 99; s->a_ctid = 1;
+    spawn(t_fwait, (long)s, 0, (uint64_t)&s->a_ctid);
+    long woke = 0;
+    {
+        uint64_t end = now() + 2000 * MS;
+        while (now() < end && !woke) {
+            if (fx(&s->fw, FUTEX_WAKE | FUTEX_PRIVATE, 1, 0) == 1) woke = 1;
+            else nsi(SYS_YIELD, 0, 0, 0);
+        }
+    }
+    join(&s->a_ctid, 2000);
+    wr("PRADYOS_FUTEX_A woke="); wrl(woke); wr(" rc="); wrl(s->frc); wr("\n");
+
+    /* FB: a value mismatch returns at once (a child: a mutant would sleep). */
+    s->fbw = 5; s->brc = 1;
+    long bp = nsi(SYS_FORK, 0, 0, 0);
+    if (bp < 0) fail("fork");
+    if (bp == 0) {
+        s->brc = fx(&s->fbw, FUTEX_WAIT, 4, 0);
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    reap(bp, 2000);
+    wr("PRADYOS_FUTEX_B eagain="); wrl(s->brc); wr("\n");
+
+    /* FC: a 50 ms timeout ends the wait, and not early. */
+    s->fcw = 0; s->crc = 1; s->cms = 0;
+    long cp = nsi(SYS_FORK, 0, 0, 0);
+    if (cp < 0) fail("fork");
+    if (cp == 0) {
+        struct fx_ts ts = { 0, 50 * (long)MS };
+        uint64_t t0 = now();
+        s->crc = fx(&s->fcw, FUTEX_WAIT, 0, &ts);
+        s->cms = (long)((now() - t0) / MS);
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    reap(cp, 3000);
+    wr("PRADYOS_FUTEX_C timedout="); wrl(s->crc);
+    wr(" slept_ok="); wrl(s->cms >= 40); wr("\n");
+
+    /* FD: WAKE(2) never wakes more than 2 of 4 waiters. */
+    s->fdw = 0; s->fq = 0;
+    for (int i = 0; i < 4; i++) spawn(t_fwait_d, (long)s, 0, 0);
+    {
+        uint64_t end = now() + 2000 * MS;
+        while (s->fq < 4 && now() < end) nsi(SYS_YIELD, 0, 0, 0);
+    }
+    settle(100);                         /* all four are queued */
+    long over = 0, total = 0;
+    {
+        uint64_t end = now() + 2000 * MS;
+        while (total < 4 && now() < end) {
+            long r = fx(&s->fdw, FUTEX_WAKE | FUTEX_PRIVATE, 2, 0);
+            if (r > 2) over = 1;
+            if (r > 0) total += r;
+            else nsi(SYS_YIELD, 0, 0, 0);
+        }
+    }
+    wr("PRADYOS_FUTEX_D max2="); wrl(!over); wr(" total="); wrl(total); wr("\n");
+
+    /* FE: a fork child waits on the MAP_SHARED page; the parent wakes it. */
+    s->few = 0; s->erc = 1; s->ready = 0;
+    long ep = nsi(SYS_FORK, 0, 0, 0);
+    if (ep < 0) fail("fork");
+    if (ep == 0) {
+        s->ready = 1;
+        s->erc = fx(&s->few, FUTEX_WAIT, 0, 0);
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    await(&s->ready, 2000);
+    long ewoke = 0;
+    {
+        uint64_t end = now() + 2000 * MS;
+        while (now() < end && !ewoke) {
+            if (fx(&s->few, FUTEX_WAKE, 1, 0) == 1) ewoke = 1;
+            else nsi(SYS_YIELD, 0, 0, 0);
+        }
+    }
+    reap(ep, 2000);
+    wr("PRADYOS_FUTEX_E shared_woke="); wrl(ewoke); wr(" rc="); wrl(s->erc); wr("\n");
+
+    /* FF: a PRIVATE waiter in another process is reached by no wake of ours.
+     * FG: and SIGKILL still ends it. */
+    s->ffw = 0; s->ready = 0;
+    long fpp = nsi(SYS_FORK, 0, 0, 0);
+    if (fpp < 0) fail("fork");
+    if (fpp == 0) {
+        s->ready = 1;
+        fx(&s->ffw, FUTEX_WAIT | FUTEX_PRIVATE, 0, 0);
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    await(&s->ready, 2000);
+    settle(100);                         /* the child is asleep */
+    long leaked = fx(&s->ffw, FUTEX_WAKE | FUTEX_PRIVATE, 1, 0);
+    leaked += fx(&s->ffw, FUTEX_WAKE, 1, 0);
+    wr("PRADYOS_FUTEX_F private_isolated="); wrl(leaked == 0); wr("\n");
+    nsi(SYS_KILL, fpp, SIGKILL, 0);
+    long killed = 0;
+    {
+        int st = 0;
+        uint64_t end = now() + 2000 * MS;
+        while (now() < end) {
+            if (nsi(SYS_WAIT4, fpp, (long)&st, WNOHANG) == fpp) { killed = 1; break; }
+            nsi(SYS_YIELD, 0, 0, 0);
+        }
+    }
+    wr("PRADYOS_FUTEX_G killed_waiter="); wrl(killed); wr("\n");
+
+    /* FH: a signal with a handler interrupts the wait. */
+    s->fhw = 0; s->hrc = 1; s->hdone = 0; s->ready = 0;
+    long hp = nsi(SYS_FORK, 0, 0, 0);
+    if (hp < 0) fail("fork");
+    if (hp == 0) {
+        struct { uint64_t h, flags, mask; } act = { (uint64_t)on_usr1, 0, 0 };
+        if (nsi(SYS_SIGACTION2, SIGUSR1, (long)&act, 0) != 0) nsi(SYS_EXIT, 2, 0, 0);
+        s->ready = 1;
+        s->hrc = fx(&s->fhw, FUTEX_WAIT, 0, 0);
+        s->hdone = 1;
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    await(&s->ready, 2000);
+    {
+        uint64_t end = now() + 2000 * MS;
+        while (!s->hdone && now() < end) {
+            nsi(SYS_KILL, hp, SIGUSR1, 0);   /* again, if one landed before WAIT */
+            settle(20);
+        }
+    }
+    reap(hp, 2000);
+    wr("PRADYOS_FUTEX_H eintr="); wrl(s->hrc); wr("\n");
+
+    /* FI: a sleeping joiner is woken by the CLEARTID write. */
+    long iwoke = 0, itimeout = 0;
+    for (int k = 0; k < 8; k++) {
+        s->ictid = 1;
+        long stk = spawn(t_slow, 0, 0, (uint64_t)&s->ictid);
+        struct fx_ts ts = { 2, 0 };
+        long r = fx(&s->ictid, FUTEX_WAIT, 1, &ts);
+        if (r == 0 && s->ictid == 0) iwoke++;
+        if (r == -110) itimeout++;
+        join(&s->ictid, 2000);
+        nsi(SYS_MUNMAP, stk, STK, 0);
+    }
+    wr("PRADYOS_FUTEX_I cleartid_woke="); wrl(iwoke > 0 && itimeout == 0); wr("\n");
+
+    /* FJ: argument checks. */
+    long rej = 0;
+    struct fx_ts bad = { 0, 1000000000L };
+    if (fx((volatile uint32_t *)((char *)&s->fw + 1), FUTEX_WAIT, 0x7FFFFFFF, 0) == -22) rej++;   /* a mutant gets -EAGAIN, never sleeps */
+    if (fx((volatile uint32_t *)0x10, FUTEX_WAIT, 0, 0) == -14) rej++;
+    if (fx(&s->fw, 5, 0, 0) == -38) rej++;
+    if (fx(&s->fw, FUTEX_WAIT, 0, &bad) == -22) rej++;
+    wr("PRADYOS_FUTEX_J rejects="); wrl(rej); wr("\n");
 
     wr("PRADYOS_THREAD_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
