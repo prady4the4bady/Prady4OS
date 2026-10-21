@@ -104,7 +104,7 @@ def collect(elf):
             width = 8 if typ == R_64 else 4
             val = elf.field(va, width)
             if typ == R_32S:
-                val &= 0xFFFFFFFFFFFFFFFF  # sign-extended into the top 2 GiB
+                continue                   # MUTANT: 32S dropped
             if not lo <= val <= hi:
                 absolute += 1              # a constant: it must not slide
                 continue
