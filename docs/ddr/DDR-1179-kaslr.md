@@ -123,6 +123,45 @@ These are the §7 recommendations, now decided:
 
 The §5 scope split proceeds in order: build-side table, then the applier and slide-aware users at slot 0, then slot choice and `smoke-kaslr`.
 
+## Amendment 1 (2026-10-21 UTC): step 2, the relocation table (no behaviour change)
+
+**Security boundary: review before merge** (K4). This step adds data and build checks only. No code reads the table yet, and the kernel still runs at slot 0.
+
+**Measured on this tree** (`ld.lld --emit-relocs` re-link of the current objects): 3,226 `R_X86_64_32S` + 336 `R_X86_64_64` = **3,562** fields, all in `.rela.text`, `.rela.rodata` and `.rela.data`. This is the same count as §1. No field holds an absolute constant (0 skipped).
+
+- **Format** (`tools/kreloc/kreloc.py`), little-endian:
+  - `"KRL1"`, then `u32 count`, then `u32 payload bytes`;
+  - then `count` LEB128 varints of `(offset − previous) << 1 | is64`, where `offset` is from the link base and strictly increasing.
+  - Measured size: **4,584 B** (1.29 B per entry), against the §3.3 raw estimate of 14,248 B.
+- **The reservation.** `.kreloc` is a fixed **6,144 B**: `kreloc_table[KRELOC_RESERVE]` in `kernel/kreloc.c`, with `KRELOC_RESERVE` in `kernel/kreloc.h`. That leaves 34% margin.
+  - It sits after `.data` and before `__data_end`, so the pristine image copy and `SYS_INSTALL` (`kimg.c`, `[KERNEL_VBASE, __data_end)`) carry it.
+  - It is data for W^X (RW+NX), like `.data`.
+- **Build steps:**
+  1. Link with `--emit-relocs`.
+  2. `kreloc.py` writes the padded table.
+  3. `llvm-objcopy --update-section .kreloc=…`.
+  4. `kreloc.py --verify` re-reads the table **from the section in `kernel.elf`** and decodes it against the link.
+  5. `-O binary`.
+- **Each of these fails the build:**
+  - an unknown relocation type;
+  - a table larger than the reservation;
+  - a `.kreloc` section whose size differs from `KRELOC_RESERVE`;
+  - `entries + absolute_skipped` differing from an **independent** `llvm-readelf -r` count of `R_X86_64_64|32S`;
+  - an embedded table that does not decode to the link's fields.
+- **Which fields are recorded.** A `64`/`32S` field is recorded when the value the linker wrote into it lies inside `[__kimg_lo, __bss_end]`. A field outside that range holds an absolute constant and must not slide; such fields are counted and reported.
+- **Mutants (each must be shown red in CI before merge; a red build is the gate):**
+
+  | Mutant | Change | Check it must trip |
+  |---|---|---|
+  | K2-1 | `KRELOC_RESERVE` = 1,024 | table over the reservation |
+  | K2-2 | a `@GOTPCREL` reference added to `kreloc.c` (`R_X86_64_REX_GOTPCRELX`) | unknown relocation type |
+  | K2-3 | `kreloc.py` drops `32S` entries | the `llvm-readelf` cross-count |
+  | K2-4 | the `--update-section` step removed | `--verify` reads an all-zero section (magic) |
+
+**Vacuity:** on the tree before this step, none of these checks exists, so no relocation error can fail the build. Each mutant shows that its check trips.
+
+**Size:** `kernel.bin` grows by 6,144 B plus alignment. The new size and headroom are in the PR description, measured.
+
 ## 8. Honesty labels
 
 When built, KASLR will be **gated by `smoke-kaslr` arms A–E**, emulated (QEMU TCG) only, and **not verified on real hardware**.
