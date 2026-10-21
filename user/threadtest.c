@@ -76,6 +76,24 @@ static void wrl(long v) {
     nsi(SYS_WRITE, 1, (long)b, k);
 }
 
+/* One sentinel line, built locally and emitted by ONE write: a kernel line (a
+ * child's "[trap] ... killing process") can otherwise land between the parts
+ * of a line written piecewise, and the gate sees neither half (CI run
+ * 39504298130, arm F: "group_killed=[trap] ..."). */
+static void line1(const char *tag, long v) {
+    char b[96];
+    long n = 0;
+    while (tag[n] && n < 60) { b[n] = tag[n]; n++; }
+    char d[20];
+    int nd = 0;
+    unsigned long u = (v < 0) ? (unsigned long)(-v) : (unsigned long)v;
+    do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
+    if (v < 0) b[n++] = '-';
+    while (nd) b[n++] = d[--nd];
+    b[n++] = '\n';
+    nsi(SYS_WRITE, 1, (long)b, n);
+}
+
 __attribute__((noreturn)) static void fail(const char *why) {
     wr("THREAD FAIL: ");
     wr(why);
@@ -347,7 +365,25 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long leak = (long)before - (long)mi.free;
     wr("[thread] C free_before="); wrl((long)before);
     wr(" free_after="); wrl((long)mi.free); wr("\n");
-    wr("PRADYOS_THREAD_C leak_ok="); wrl(leak <= 32); wr("\n");
+    /* Diagnostic for a failing C: are the 64 threads' tcbs still in the
+     * scheduler ring (not reaped), or gone with their pages missing anyway?
+     * Threads carry the creator's name; the creator itself is excluded. */
+    {
+        struct { uint32_t pid, ppid, state, flags; char name[16];
+                 uint64_t run_ticks, dispatches; } pi;
+        long me = nsi(SYS_GETPID, 0, 0, 0), left = 0, zomb = 0;
+        for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
+            const char *w = "THREADTEST";
+            int k = 0;
+            while (w[k] && pi.name[k] == w[k]) k++;
+            if (w[k] || (long)pi.pid == me) continue;
+            left++;
+            if (pi.state == 4) zomb++;           /* THREAD_ZOMBIE */
+        }
+        wr("[thread] C leftover_threads="); wrl(left);
+        wr(" zombie="); wrl(zomb); wr("\n");
+    }
+    line1("PRADYOS_THREAD_C leak_ok=", leak <= 32);
 
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
@@ -380,7 +416,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         s->go = 1;
         for (;;) __asm__ volatile("pause");
     }
-    wr("PRADYOS_THREAD_F group_killed="); wrl(reap(fp, 2000)); wr("\n");
+    long gk = reap(fp, 2000);            /* the child's trap line prints here */
+    line1("PRADYOS_THREAD_F group_killed=", gk);
 
     /* G: copyout into a page a sibling keeps unmapping and remapping. */
     clear(s);

@@ -55,6 +55,14 @@ void aether_mem_uncharge(struct tcb *t, uint64_t bytes) {
 long aether_set_mem_limit(uint32_t pid, uint64_t bytes) {
     (void)pid;
     struct tcb *t = current_thread;
+    /* DDR-1181: the cap lives in the mm, and a kernel thread has none (the
+     * boot thread runs aether_sectest's escalation arm). Reading t->mm->
+     * there dereferenced NULL through the low identity map and returned
+     * whatever was at that offset, so the escalation was ACCEPTED
+     * (smoke-aether-sec lost AETHER_SEC_CAP_DENIED, run 39502463241). With
+     * no address space there is no cap to change. */
+    if (!t->mm)
+        return -1;
     uint64_t cur = cap_of(t);
     if (bytes == 0 || bytes > cur)
         return -1;
