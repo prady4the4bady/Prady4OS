@@ -103,6 +103,26 @@ The renders also feed the compositor's icon atlas, generated at build time like 
 
 Both are reviewed by eye by the operator before v1, as C6.2's exit gate states.
 
+## Amendment 1 (2026-10-21 UTC): step 4, emblem and wordmark
+
+- **Assets** live in `assets/brand/logo/`, with a manifest whose lines are `<name> <W> <H>`. `emblem` is `0 0 48 48` and `wordmark` is `0 0 84 14`. Both are recorded in `assets/brand/README.md`. They follow every §2 rule in their own units:
+  - stroke 2, round caps and joins, `currentColor` only, the §2.3 subset, and the §2.4 marker;
+  - the grid is `[2, W−2] × [2, H−2]`, so ink stays inside `[1, W−1] × [1, H−1]`.
+- **Emblem (B1(b)).** A scorpion seen from above: pincers forward, six legs, the tail curling from the rear. It was drawn by hand on the 48-unit grid. The mockup PNGs were not opened.
+- **Wordmark (B2).** "PRADYOS" in capitals lettered as stroked paths on a letter grid: cap height 10 (y 2..12), letter width 8, pitch 12, stroke 2. No font outlines were used.
+- **The gate** (`ci-icon-check`) now also runs `icon_check.py assets/brand/logo`. A manifest line without a size stays a 24×24 icon, so the icon checks are unchanged. Two rules generalise:
+  - **Arm C:** the grid comes from the asset's own `viewBox`.
+  - **Arm D:** renders are at 16/24/32/64 px **height**. The scale tolerance is `1.5 px × max(1, H/24)`, because one pixel of the 24 px reference is `H/24` units. For an icon that is exactly 1.5 px, as before.
+- **Mutants (each must be shown red in CI before merge):**
+
+  | Mutant | Change | Arm |
+  |---|---|---|
+  | L1 | the emblem's `viewBox` is changed to `0 0 24 24` (it no longer matches the manifest) | B |
+  | L2 | a wordmark point at x = 83, outside `[2, 82]` | C |
+  | L3 | a malformed manifest line (`wordmark 84`) | A |
+
+- **Honesty:** the gate proves structure and renderability only. Whether the marks look right, and whether they are original, rest on the operator's review by eye (§6). Step 5 (atlas wiring, and removing the "provisional branding" disclaimer) waits for that review.
+
 ## 6. Honesty labels
 
 - The icon gate proves structure and renderability only: the icons exist, use the subset, fit the grid and render at 16/24/32/64 px. It does not prove that they look good or that they are original. Both of those rest on the operator's review, as the checklist states.
