@@ -803,7 +803,6 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	python3 tools/kreloc/kreloc.py $(KERNEL_ELF) build/kreloc.bin \
 	    --reserve $$(awk '/^#define KRELOC_RESERVE/ { print $$3 }' kernel/kreloc.h) \
 	    --expect $$(llvm-readelf -rW $(KERNEL_ELF) | grep -cE ' R_X86_64_(64|32S) ')
-	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin $(KERNEL_ELF)
 	python3 tools/kreloc/kreloc.py --verify $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 1572864 || { echo "kernel.bin exceeds 1.5 MiB — the stage-2 read window (48x64 sectors from LBA 17; DDR-733, raised by DDR-827 then DDR-960). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 48 chunks a full window plus BSS still fits with 372,864 B to spare, and past ~56 it does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
