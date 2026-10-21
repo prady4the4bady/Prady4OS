@@ -41,7 +41,7 @@ int kreloc_selfcheck(void) {
                 break;
         }
         off += v >> 1;
-        uint64_t field = lo + off, val;
+        uint64_t field = lo + off + 1, val;
         if (field + 8 > hi) {
             val = 0;                         /* past the image: certainly bad */
         } else if (v & 1) {
