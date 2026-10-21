@@ -179,7 +179,12 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (a == 0x22) {
         long drop_pv = loop_drop(MAP_PRIVATE | MAP_ANON);
         long drop_sh = loop_drop(MAP_SHARED | MAP_ANON);
-        long drop = drop_sh - drop_pv;
+        /* The private loop is the baseline for fork churn. Unrelated frees
+         * during it can make it NEGATIVE (CI run 39516558534: private=-225,
+         * shared=0), and subtracting a negative baseline reported a leak
+         * that the shared loop never had. A baseline below zero is taken as
+         * zero: a real per-cycle shared leak (>= 256) still fails. */
+        long drop = drop_sh - (drop_pv > 0 ? drop_pv : 0);
         p = str(b, "PRADYOS_SHM_C cycles="); p = dec(p, CYCLES);
         p = str(p, " leaked_ok="); p = dec(p, drop < LEAK_BOUND);
         *p++ = '\n'; *p = 0; wr(b);

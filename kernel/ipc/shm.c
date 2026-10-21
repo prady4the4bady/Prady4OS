@@ -133,11 +133,14 @@ int shm_attach_begin(int obj) {
  * unreachable and unmapped it enters state 2 (reclaiming): no create reuses the
  * slot and no attach or hold sees it, so its frame list stays intact while the
  * frames are freed OUTSIDE the lock; only then is the slot released. */
-static void put_and_reclaim(int obj, int attach) {
+#define PUT_HOLDER  0
+#define PUT_ATTACH  1
+#define PUT_NONE    2      /* re-evaluate only (IPC_RMID): no count drops */
+static void put_and_reclaim(int obj, int which) {
     struct shm_obj *o = &g_shm[obj];
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
-    if (attach) { if (o->nattch) o->nattch--; }
-    else        { if (o->holders) o->holders--; }
+    if (which == PUT_ATTACH)      { if (o->nattch)  o->nattch--; }
+    else if (which == PUT_HOLDER) { if (o->holders) o->holders--; }
     /* P3: an object never sized (npages 0) is reclaimed the same way; one
      * being sized is not, its sizer holds it until shm_obj_size returns. */
     int go = o->used == 1 && !o->filling && !o->nattch && (o->marked || !o->holders);
@@ -155,7 +158,7 @@ static void put_and_reclaim(int obj, int attach) {
 
 void shm_detach(int obj) {
     if (obj >= 0 && obj < SHM_MAX)
-        put_and_reclaim(obj, 1);
+        put_and_reclaim(obj, PUT_ATTACH);
 }
 
 int shm_mark(int obj) {
@@ -168,8 +171,11 @@ int shm_mark(int obj) {
     if (!ok)
         return -EINVAL;
     /* A marked, unmapped segment goes now; a mapped one at its last detach.
-     * put_and_reclaim with attach=1 on nattch==0 changes no count. */
-    put_and_reclaim(obj, 1);
+     * PUT_NONE: IPC_RMID is not a detach. Passing an attach drop here took
+     * nattch 1 -> 0 on a segment still mapped, reclaimed it under the mapping
+     * and freed the slot for reuse, so the next shmat saw -EINVAL instead of
+     * -EIDRM (smoke-shm arm J, eidrm=-22, CI runs 39516558534/39518678592). */
+    put_and_reclaim(obj, PUT_NONE);
     return 0;
 }
 
@@ -183,7 +189,7 @@ void shm_hold(int obj) {
 
 void shm_unhold(int obj) {
     if (obj >= 0 && obj < SHM_MAX)
-        put_and_reclaim(obj, 0);
+        put_and_reclaim(obj, PUT_HOLDER);
 }
 
 void shm_fork_vmas(struct mm *child) {
