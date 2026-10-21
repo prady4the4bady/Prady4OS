@@ -189,6 +189,8 @@ The probability argument is not evidence. The evidence is each mutant shown red 
 
 If T4, T5 or T6 cannot be shown red within 16 trials, the trial count is raised. The DDR is amended with the measured red rate; the arm is not dropped.
 
+**Line integrity.** Every line the probe prints leaves in one `write`. `wr()` buffers until `\n`; `line1()` builds its line locally. Arms D, E, M and F print right after a child dies with a kernel `[trap]` line. A line written in pieces could be torn by that line, or by another process's output. CI run 39504298130 tore arm F; DDR-1182 §3.1 shows the same failure in another probe.
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
