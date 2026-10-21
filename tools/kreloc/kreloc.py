@@ -98,8 +98,8 @@ def collect(elf):
             if typ in SKIP:
                 continue
             if typ not in (R_64, R_32S):
-                die("relocation type %d at %s+%#x: not one of PC32/PLT32/32S/64 "
-                    "(DDR-1179 sec.2.3: an unknown type is a design change)" % (typ, tgt["sname"], r_off))
+                die("relocation type %d at %#x (in %s): not one of PC32/PLT32/32S/64 "
+                    "(DDR-1179 sec.2.3: an unknown type is a design change)" % (typ, r_off, tgt["sname"]))
             va = r_off                     # ET_EXEC: r_offset is the field's VA
             width = 8 if typ == R_64 else 4
             val = elf.field(va, width)
