@@ -1,5 +1,6 @@
 /* kernel/sched.c — preemptive round-robin kernel scheduler (Phase 2c/2e). */
 #include "sched.h"
+#include "mm.h"           /* DDR-1181: struct mm */
 #include "errno.h"     /* DDR-955: ETIMEDOUT for sched_block_timeout */
 #include "numa.h"      /* DDR-885: NUMA-affine steal order */
 #include "kheap.h"
@@ -1117,6 +1118,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dbg_ticks       = 0;
     t->block_deadline  = 0;   /* DDR-955 */
     t->wake_timed_out  = 0;   /* DDR-955 */
+    t->kmx_next        = 0;   /* DDR-1181: not waiting on any kmutex */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -1150,8 +1152,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     fd_table_init(&t->fdt);    /* all fds free; user threads get stdio wired below */
     t->root_mnt = -1;          /* no filesystem root until a loader assigns one */
     t->fs_cap = 0;
-    for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }
-    t->mmap_next = VMM_MMAP_BASE;   /* anonymous mmap bump pointer */
+    t->mm = 0;                 /* DDR-1181: a loader or the fork clone attaches one */
     t->parent_pid = 0;             /* set by sched_create_user_clone for forks */
     t->fork_retval = -1;           /* unset until a fork assigns it             */
     t->exit_status = 0;            /* set by sched_exit, collected by wait4     */
@@ -1192,8 +1193,6 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_rewrite = 0;             /* DDR-842: no CAP_REWRITE unless granted           */
     t->run_ticks = 0;              /* DDR-735: CPU accounting starts at zero              */
     t->dispatches = 0;
-    t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
-    t->mem_used = 0;
     t->bud_max_ticks = 0; t->bud_max_bytes = 0;    /* DDR-1170; NON-NEGOTIABLE 10 */
     t->bud_max_actions = 0; t->bud_tripped = 0;
     t->bud_start = 0; t->bud_bytes = 0; t->bud_actions = 0;
@@ -1305,9 +1304,11 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         /* DDR-1178: the child's AS is a copy of the parent's, so its mapping
          * table must be too. Left empty, the child could not munmap an inherited
          * region, and its first addr==0 mmap reused the inherited VA, missed the
-         * overlap and overwrote a live (possibly shared) PTE. */
-        memcpy(t->vma, parent->vma, sizeof t->vma);
-        t->mmap_next   = parent->mmap_next;
+         * overlap and overwrote a live (possibly shared) PTE.
+         * DDR-1181: the table now lives in the child's own mm, created last
+         * (below) so a failed clone never has an mm the fork path must free --
+         * sys_fork destroys child_cr3 itself when this returns NULL. The charge
+         * (mem_used/mem_limit) starts at zero, as it did in the tcb. */
         /* DDR-838: lineage, not authority. is_agent is deliberately NOT inherited
          * (see the zeroing in sched_create), so the containment cap has to ride
          * on something fork does propagate. A child of an agent, or of anything
@@ -1332,9 +1333,15 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         fr->rflags = pc->u_rflags;                /* parent's flags (IF set)     */
         fr->cs = USER_CS_SEL;  fr->ss = USER_SS_SEL;
         /* Replace the fresh (empty) cap + fd tables with copies of the parent's. */
-        if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0) {
+        struct mm *cm = 0;
+        if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0 ||
+            !(cm = mm_create(child_cr3))) {
             sched_destroy(t);
             t = 0;
+        } else {
+            memcpy(cm->vma, parent->mm->vma, sizeof cm->vma);
+            cm->mmap_next = parent->mm->mmap_next;
+            t->mm = cm;
         }
     }
 
@@ -2632,7 +2639,7 @@ int sched_user_pid_snap(uint32_t pid, struct sched_user_snap *out) {
     if (t) {
         out->run_ticks  = t->run_ticks;
         out->dispatches = t->dispatches;
-        out->mem_used   = t->mem_used;
+        out->mem_used   = t->mm ? t->mm->mem_used : 0;
         out->state      = t->state;
         rc = 0;
     }
@@ -2699,16 +2706,15 @@ static void reaper_thread(void *arg) {
             }
             t = t->next;
         }
-        uint64_t cr3 = 0;
+        struct mm *vmm = 0;
         if (victim) {
-            cr3 = victim->cr3;
+            vmm = victim->mm;              /* DDR-1181: the AS goes with the mm */
             sched_ring_unlink(victim);     /* claim + unlink atomically under the lock */
         }
         irq_restore(fl);
         if (victim) {                      /* free outside the lock (cap-2a D2) */
             sched_free_tcb(victim);
-            if (cr3)
-                vmm_destroy_address_space(cr3);
+            mm_put(vmm);                   /* last ref destroys the page tables */
         }
         yield();
     }

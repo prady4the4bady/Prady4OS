@@ -7,6 +7,7 @@
  */
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "uaccess.h"
 #include "errno.h"
 #include "vmm.h"
@@ -162,7 +163,7 @@ static long sys_surface_create(long a1, long a2, long a3, long a4, long a5, long
     return id;
 }
 
-static long sys_surface_map(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_map_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
@@ -347,7 +348,7 @@ static long sys_surface_getkey(long a1, long a2, long a3, long a4, long a5, long
 }
 
 /* Compositor-side: map a polled surface read-side into the caller; returns VA. */
-static long sys_surface_cmap(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_cmap_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     return sys_surface_map_ro((int)a1);
@@ -359,7 +360,7 @@ static long sys_surface_cmap(long a1, long a2, long a3, long a4, long a5, long a
  * touching freed frames (ADR-021). A sovereign closing another process's surface
  * frees the frames without unmapping the owner's tables (not the active AS) — the
  * owner must not access a sovereign-closed surface. */
-static long sys_surface_close(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_close_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
@@ -411,7 +412,7 @@ void surface_reap_pid(uint32_t pid) {
 /* Resize a surface (DDR-711): swap in a fresh zeroed buffer of the new size,
  * keeping position/stack/focus/committed. Owner-only (it owns the draw buffer).
  * The owner re-maps (SYS_SURFACE_MAP) to draw into the new buffer. */
-static long sys_surface_resize(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_resize_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a4;
     int id = (int)a1;
@@ -531,6 +532,21 @@ static long sys_surface_getev(long a1, long a2, long a3, long a4, long a5, long 
     spin_unlock_irqrestore(&g_surf_lock, fl);
     return 0;
 }
+
+/* DDR-1181 §3.3: the surface calls that map or unmap pages in the caller's
+ * address space hold its mm lock (taken before g_surf_lock, never after). */
+#define MM_LOCKED_SYSCALL(name)                                              \
+    static long name(long a1, long a2, long a3, long a4, long a5, long a6) { \
+        struct tcb *t = current_thread;                                      \
+        mm_lock(t);                                                          \
+        long rc = name##_locked(a1, a2, a3, a4, a5, a6);                     \
+        mm_unlock(t);                                                        \
+        return rc;                                                           \
+    }
+MM_LOCKED_SYSCALL(sys_surface_map)
+MM_LOCKED_SYSCALL(sys_surface_cmap)
+MM_LOCKED_SYSCALL(sys_surface_close)
+MM_LOCKED_SYSCALL(sys_surface_resize)
 
 void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_CREATE, sys_surface_create);

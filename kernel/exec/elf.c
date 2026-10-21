@@ -12,6 +12,7 @@
 #include "kheap.h"
 #include "pmm.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "cap.h"
 #include "syscall.h"
 #include "string.h"
@@ -316,10 +317,18 @@ int elf_load_args(const void *image, uint64_t image_len, const char *name,
      * mask interrupts until cr3/user_arg are set — otherwise a timer tick could
      * schedule it with cr3 == 0 (kernel master AS), where its user pages are not
      * mapped, and it would fault on the first ring-3 instruction. */
+    /* DDR-1181: the mm that will own `as`, made before the thread exists so
+     * the thread is never visible without one. */
+    struct mm *mm = mm_create(as);
+    if (!mm) {
+        vmm_destroy_address_space(as);
+        return ELF_E_NOMEM;
+    }
     uint64_t fl;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
     struct tcb *t = sched_create_user(prog, entry, user_rsp);
     if (t) {
+        t->mm  = mm;
         t->cr3 = as;
         /* exactly one capability delivered in RDI: console display */
         t->user_arg = (uint64_t)cap_create(t->caps, RES_DEVICE, CONSOLE_RES_ID, CAP_DISPLAY);
@@ -331,7 +340,7 @@ int elf_load_args(const void *image, uint64_t image_len, const char *name,
     __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
 
     if (!t) {
-        vmm_destroy_address_space(as);
+        mm_put(mm);                    /* last ref: destroys `as` */
         return ELF_E_THREAD;
     }
     *out = t;

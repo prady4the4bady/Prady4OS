@@ -7,6 +7,7 @@
  */
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "uaccess.h"
 #include "errno.h"
 #include "vmm.h"
@@ -29,7 +30,7 @@ static long sys_fb_info(long a1, long a2, long a3, long a4, long a5, long a6) {
     return 0;
 }
 
-static long sys_fb_map(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_fb_map_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a1; (void)a2; (void)a3; (void)a4;
     uint32_t w, h, stride;
@@ -64,6 +65,15 @@ static long sys_fb_flush(long a1, long a2, long a3, long a4, long a5, long a6) {
     if (!display_fb(0, 0, 0, 0))
         return -ENODEV;
     return (display_present() == 0) ? 0 : -EIO;
+}
+
+/* DDR-1181 §3.3: mapping the framebuffer changes the caller's address space. */
+static long sys_fb_map(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_fb_map_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
 }
 
 void sys_fb_register(void) {
