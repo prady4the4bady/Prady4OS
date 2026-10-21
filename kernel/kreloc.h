@@ -3,7 +3,7 @@
  * checks the linked .kreloc section is exactly this size. */
 #pragma once
 
-#define KRELOC_RESERVE 6144
+#define KRELOC_RESERVE 1024
 
 /* Filled after the link by `llvm-objcopy --update-section .kreloc=`. */
 extern const unsigned char kreloc_table[KRELOC_RESERVE];
