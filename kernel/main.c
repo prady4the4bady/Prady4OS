@@ -4755,6 +4755,7 @@ void kmain(struct boot_info *bi) {
     kputs("NEXUS: IDT self-test — executing int3...\r\n");
     __asm__ volatile("int3");
     kputs("NEXUS: resumed after int3 — exception handling verified\r\n");
+    kaslr_report();                      /* DDR-1179 A3: smoke-kaslr arms A, B, D */
 
     /* Hardware interrupts: PIC + PIT, then enable and watch the clock tick. */
     pic_remap();

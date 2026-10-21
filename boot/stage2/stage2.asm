@@ -510,6 +510,7 @@ pm_entry:
     mov esi, msg_lm
     call puts32
 
+    call kaslr_pick             ; DDR-1179 A3: slot + entropy source
     call build_page_tables
     call enter_long_mode
     jmp CODE64_SEL:long_entry
@@ -549,6 +550,56 @@ puts32:                         ; ESI -> NUL string
 ;     and heap can dereference physical frames directly, and for the transition.
 ;   - kernel higher-half: PML4[511]->PDPT_HI[510]->PD_HI[0]->PT_HI, mapping
 ;     KERNEL_VIRT.. (4 KiB pages, 2 MiB span) -> physical KERNEL_PHYS..
+; DDR-1179 A3: choose the KASLR slot s in [1, 511] (K3) from RDSEED, else
+; RDRAND, else the TSC (K2, weak). Leaves s in [kaslr_slot] and the source
+; (1 tsc, 2 rdrand, 3 rdseed) in [kaslr_srcv]; boot.asm receives it in RSI.
+; boot/uefi/loader.c makes the same choice -- PT_HI is built twice.
+kaslr_pick:
+    pushad
+    xor eax, eax
+    cpuid                       ; max basic leaf in eax
+    mov edi, eax
+    cmp edi, 7
+    jb .no_seed
+    mov eax, 7
+    xor ecx, ecx
+    cpuid
+    test ebx, 1 << 18           ; RDSEED
+    jz .no_seed
+    mov ecx, 10
+.seed:
+    rdseed eax
+    jc .have_seed
+    loop .seed
+.no_seed:
+    mov eax, 1
+    cpuid
+    test ecx, 1 << 30           ; RDRAND
+    jz .tsc
+    mov ecx, 10
+.rand:
+    rdrand eax
+    jc .have_rand
+    loop .rand
+.tsc:
+    rdtsc                       ; weak: never counted as protection (K2)
+    mov ebx, 1
+    jmp .slot
+.have_rand:
+    mov ebx, 2
+    jmp .slot
+.have_seed:
+    mov ebx, 3
+.slot:
+    xor edx, edx
+    mov ecx, 511
+    div ecx                     ; edx = r mod 511
+    inc edx                     ; [1, 511]
+    mov [kaslr_slot], edx
+    mov [kaslr_srcv], ebx
+    popad
+    ret
+
 build_page_tables:
     cld
     mov edi, PML4
@@ -572,7 +623,8 @@ build_page_tables:
     ; kernel higher-half (4 KiB pages: KERNEL_VIRT -> KERNEL_PHYS, 2 MiB span)
     mov dword [PML4 + 511*8], PDPT_HI | 0x3
     mov dword [PDPT_HI + 510*8], PD_HI | 0x3
-    mov dword [PD_HI], PT_HI | 0x3
+    mov eax, [kaslr_slot]       ; DDR-1179 A3: PD_HI[s], not PD_HI[0]
+    mov dword [PD_HI + eax*8], PT_HI | 0x3
     mov edi, PT_HI
     mov eax, KERNEL_PHYS | 0x3  ; present + rw
     mov ecx, 512
@@ -614,10 +666,16 @@ long_entry:
     mov gs, ax
     mov rsp, KSTACK_TOP
     mov edi, BOOT_INFO          ; SysV arg 1 -> kmain(struct boot_info *)
-    mov rax, KERNEL_VIRT        ; enter the kernel at its higher-half address
+    mov esi, [kaslr_srcv]       ; DDR-1179 A3: entropy source for the kernel
+    mov eax, [kaslr_slot]
+    shl rax, 21                 ; slide = s * 2 MiB
+    mov rbx, KERNEL_VIRT
+    add rax, rbx                ; enter at the slid higher-half address
     jmp rax
 
 ; ============================  data + GDT  ==================================
+kaslr_slot dd 0                 ; DDR-1179 A3
+kaslr_srcv dd 0
 msg_s2   db 13, 10, "PRADYOS S2: protected-mode loader", 13, 10, 0
 msg_a20  db "  A20: enabled (fast, port 0x92)", 13, 10, 0
 msg_e820 db "  E820 map entries (hex): 0x", 0

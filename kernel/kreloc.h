@@ -22,3 +22,9 @@ uint64_t kaslr_unslide(uint64_t va);
 /* Decode the table and check every recorded field holds an address inside the
  * running image; prints "[kaslr] table ok entries=N" or "... FAIL ...". */
 int kreloc_selfcheck(void);
+
+/* DDR-1179 A3: the loader's entropy source (1 tsc, 2 rdrand, 3 rdseed). */
+extern uint64_t kaslr_src;
+
+/* smoke-kaslr arms A, B, D and the serial-only slot line. Needs the IDT. */
+void kaslr_report(void);

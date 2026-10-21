@@ -641,6 +641,7 @@ static void timer_tick(struct regs *r) {
  * See kernel/fault_expect.h for why every limit here is deliberate. All state
  * is static, hence BSS, hence zero — no initialiser is owed anywhere. */
 static volatile uint64_t g_fe_lo, g_fe_hi, g_fe_resume;
+static volatile uint64_t g_fe_rip;     /* DDR-1179 A3: where the expected fault hit */
 static volatile uint32_t g_fe_armed, g_fe_hit, g_fe_vec, g_fe_err;
 
 unsigned smp_online(void);      /* kernel/apic/smp.c */
@@ -671,6 +672,10 @@ int fault_expect_arm(uint64_t lo, uint64_t hi, uint64_t resume) {
     return 1;
 }
 
+uint64_t fault_expect_rip(void) {
+    return g_fe_rip;
+}
+
 int fault_expect_taken(uint32_t *vec_out, uint32_t *err_out) {
     __atomic_store_n(&g_fe_armed, 0, __ATOMIC_SEQ_CST);
     if (vec_out) *vec_out = g_fe_vec;
@@ -689,6 +694,7 @@ static int fault_expect_consume(struct regs *r) {
         return 0;
     g_fe_vec = (uint32_t)r->vector;
     g_fe_err = (uint32_t)r->err_code;
+    g_fe_rip = r->rip;
     g_fe_hit = 1;
     __atomic_store_n(&g_fe_armed, 0, __ATOMIC_SEQ_CST);  /* one shot */
     r->rip = g_fe_resume;
