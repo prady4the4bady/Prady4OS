@@ -594,7 +594,7 @@ kaslr_pick:
     xor edx, edx
     mov ecx, 511
     div ecx                     ; edx = r mod 511
-    inc edx                     ; [1, 511]
+    mov edx, 7                  ; MUTANT M3: constant slot
     mov [kaslr_slot], edx
     mov [kaslr_srcv], ebx
     popad

@@ -139,7 +139,7 @@ static void kaslr_pick(void) {
         r = lo;                         /* weak: never counted as protection */
         g_kaslr_src = 1;
     }
-    g_kaslr_slot = ((uint32_t)r % 511u) + 1u;
+    g_kaslr_slot = 7; (void)r; /* MUTANT M3 */
 }
 
 static uint64_t build_page_tables(EFI_BOOT_SERVICES *bs) {
