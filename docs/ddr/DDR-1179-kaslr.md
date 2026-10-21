@@ -162,6 +162,33 @@ The §5 scope split proceeds in order: build-side table, then the applier and sl
 
 **Size:** `kernel.bin` grows by 6,144 B plus alignment. The new size and headroom are in the PR description, measured.
 
+## Amendment 2 (2026-10-21 UTC): step 3, the applier and slide-aware users, still slot 0
+
+**Security boundary: review before merge** (K4). The kernel still boots at slot 0, so the slide is 0. This step makes every slide-dependent path compute from the slide instead of a constant, and runs the applier on every boot.
+
+- **Applier** (`arch/x86_64/boot.asm`, before `.bss` is zeroed and before `kmain`):
+  - It computes `slide = lea [rel __kimg_lo] − 0xFFFFFFFF80000000`. The constant is an immediate, so it carries no relocation of its own.
+  - It decodes `.kreloc` and adds `slide` to each recorded field: a qword for `64`, the low dword for `32S`.
+  - It runs at slide 0 too. Every boot then executes the decoder over all 3,562 entries, which is how a decoder fault would show up today.
+  - A bad table magic with `slide == 0` is skipped, because nothing would move. With `slide != 0` it halts: a kernel that cannot relocate itself must not run.
+  - The slide survives the `.bss` clear in `r14` and is stored in `kaslr_slide`.
+- **Self-check** (`kreloc_selfcheck`, early in `kmain`): it decodes the table again in C and checks that every recorded field now holds an address inside the **running** image `[__kimg_lo, __bss_end]`. It prints `[kaslr] table ok entries=N` or `[kaslr] table FAIL …`, and never prints the slide (K1).
+  - This catches a table whose offsets do not land on the fields, a failure that the build's `--verify` cannot see, because it shares the encoder's view of the link.
+- **Slide-aware users:**
+  - `vmm_protect_kernel` and its audit walk `PD_HI[slide >> 21]` and take VAs from `__kimg_lo`;
+  - `kimg.c` computes `image_len = __data_end − __kimg_lo`;
+  - the kernel-RIP printers pass values through `kaslr_unslide()`, which subtracts the slide only from addresses inside the running image. Those printers are the panic `RIP=`, the backtrace return addresses, the `[apfreeze]` `rip=` and `loser_rip=`. User RIPs and data pointers print raw (§2.5).
+- **Gate:** `smoke-wxkernel` also requires `[kaslr] table ok` and forbids `[kaslr] table FAIL`. `GLOBAL_FORBIDDEN` is unchanged.
+- **Mutants (each must be shown red in CI before merge):**
+
+  | Mutant | Change | What turns red |
+  |---|---|---|
+  | K3-1 | `kreloc.py` records every offset +2 (encoder and `--verify` agree, the kernel does not) | `smoke-wxkernel`: `[kaslr] table FAIL` |
+  | K3-2 | the applier adds a forced 2 MiB instead of `slide` | every boot gate (fields point 2 MiB off, into unmapped memory). This proves the applier writes the recorded fields. |
+  | K3-3 | the W^X walk indexes `PD_HI[(slide >> 21) + 1]` | `smoke-wxkernel`: `[wx] kernel W^X FAIL` |
+
+- **Not verified by this step:** `kaslr_unslide` and the slot-dependent walk are exercised with a zero slide only. They are proven under a non-zero slide by step 4's arms D and E.
+
 ## 8. Honesty labels
 
 When built, KASLR will be **gated by `smoke-kaslr` arms A–E**, emulated (QEMU TCG) only, and **not verified on real hardware**.
