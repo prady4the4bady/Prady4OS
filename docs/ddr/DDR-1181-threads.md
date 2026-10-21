@@ -197,9 +197,90 @@ If T4, T5 or T6 cannot be shown red within 16 trials, the trial count is raised.
 
 Each step is its own PR, stacked on the previous one, and each PR is flagged security boundary.
 
+## Amendment 1 (2026-10-21 UTC): P2 design, futex
+
+**Security boundary: review before merge.** A shared futex key is a physical frame, so a wake crosses processes. This amendment shows that it crosses only between processes that already share that frame.
+
+### A1.1 The interface: `SYS_FUTEX` = NSI 117
+
+`(uaddr, op, val, timeout, uaddr2, val3)` follows the Linux ABI subset that musl's pthread code uses (P4).
+- `op & 127` selects the operation:
+  - `FUTEX_WAIT` (0): if the 32-bit word at `uaddr` equals `val`, sleep until a wake, the timeout, or a signal.
+  - `FUTEX_WAKE` (1): wake up to `val` waiters on `uaddr` (`val <= 0` wakes none) and return the count.
+- `FUTEX_PRIVATE_FLAG` (128) is accepted. Any other operation or flag, including `FUTEX_CLOCK_REALTIME`, the requeue, `WAKE_OP` and PI operations, is `-ENOSYS`. `uaddr2` and `val3` are ignored.
+- **WAIT returns:**
+  - `0`: woken;
+  - `-EAGAIN`: the word did not equal `val`;
+  - `-ETIMEDOUT`;
+  - `-EINTR`: a signal with a handler, or `SIGKILL`, is pending;
+  - `-EINVAL`: `uaddr` is not 4-aligned, or the timeout is malformed (`tv_sec < 0`, or `tv_nsec` outside `[0, 1e9)`);
+  - `-EFAULT`: `uaddr` is not a present user page, or the timeout pointer is bad.
+- **The timeout** is a relative `struct timespec`, rounded **up** to 10 ms ticks (100 Hz), so a wait never ends early. A zero timeout checks the value and returns `-ETIMEDOUT` without sleeping. `NULL` means no timeout.
+- A spurious `0` is allowed, as on Linux: callers re-check their word.
+
+### A1.2 Keys
+
+- **Private key:** `(mm, uaddr)`. It is used when `FUTEX_PRIVATE_FLAG` is set, and when the page is not shared memory.
+- **Shared key:** `(frame | 1, uaddr & 4095)`. It is used without the flag when the leaf PTE carries `PTE_SW_SHMEM`, which covers C1.3 P1 `MAP_SHARED` anon and the P2/P3 segments.
+  - Two processes reach the same shared key only when **both** map that frame. A frame is never shared outside those paths, so the key creates no new channel.
+- **A COW page is private.** A `fork` child that waits on a private page before writing to it keys on its own `mm`, so it is never woken by the parent's wake. This matches Linux for `MAP_PRIVATE`.
+- **Lookup holds the mm lock.** `munmap` frees empty page-table pages (`vmm_unmap`), so walking the tables without the lock could follow a freed table. WAIT and WAKE take `mm_lock`, resolve the leaf PTE (it must be present, user and not `PTE_SW_DYING`), then take the bucket lock.
+  - WAIT reads the word through the frame's identity mapping **under the bucket lock**, so it can never take a user fault while holding a spinlock.
+  - WAIT then releases the mm lock before sleeping. `kmutex_unlock` never sleeps, so that is safe under the spinlock.
+- **A frame freed and reused while a waiter sleeps** can only cause a spurious wake. The waiter's own mapping holds the frame unless a sibling unmapped it, and that is a user bug, with Linux's outcome.
+
+### A1.3 Waiting, waking, signals
+
+- **Buckets:** 64, hashed from the key, each with a spinlock (taken `irqsave`). A waiter is a stack object `{key, tcb, next, woken}`.
+- **Lost-wake freedom.** WAIT reads the word and enqueues under the bucket lock. A waker changes the word in user space first, then takes the same bucket lock, so it either finds the waiter or the waiter saw the new value. WAKE unlinks a waiter, sets `woken`, and then calls `sched_unblock`.
+- **Sleeping** uses `sched_block_on`, or `sched_block_timeout` when there is a deadline. Both publish `BLOCKED` under the bucket lock. On return, an un-woken waiter unlinks itself under the same lock.
+- **Signals wake a waiter** (this resolves §3.8 for futex waits; pipe and other sleeps are unchanged).
+  - A new tcb field, `fx_lock`, appended at the end of `struct tcb` so that the pinned signal offsets do not move and initialised in `sched_create_state`, holds the waiter's bucket lock while it waits.
+  - `sig_raise` sets the pending bit with a locked RMW, then reads `fx_lock`. If it is set, it takes that lock, re-checks `fx_lock`, and calls `sched_unblock`.
+  - The waiter stores `fx_lock` with a sequentially consistent store, then checks for pending signals, both under the lock. So either the waiter sees the bit or the sender sees `fx_lock` and serialises behind the waiter's `BLOCKED`.
+  - The buckets are static, so a stale `fx_lock` names a live lock.
+  - Lock order: `g_sched_lock` → bucket (the group-exit loop raises `SIGKILL` under `g_sched_lock`) → kmutex internal lock.
+- **Group exit** therefore wakes siblings blocked in a futex. `smoke-thread` arm G shows it for a single thread killed while waiting.
+- **CLEARTID** (§3.2): after writing 0 to `clear_tid`, the exiting thread runs `FUTEX_WAKE(clear_tid, 1)` with the same key rules. This is what lets `pthread_join` sleep.
+
+### A1.4 Gate: `smoke-thread` futex arms (same probe, `user/threadtest.c`)
+
+Arms that can hang on a mutant run in a forked child, which is reaped with a bound (the probe's existing `reap`). A mutant therefore prints a wrong value instead of stalling the gate.
+
+| Arm | Sentinel | What it shows |
+|---|---|---|
+| FA | `PRADYOS_FUTEX_A woke=1 rc=0` | A thread waits; the creator calls `WAKE(1)` until it returns 1 (bounded at 2 s). The thread's `WAIT` returned 0. |
+| FB | `PRADYOS_FUTEX_B eagain=-11` | `WAIT` with `val` not equal to the word returns at once (child, bounded). |
+| FC | `PRADYOS_FUTEX_C timedout=-110 slept_ok=1` | A 50 ms timeout returns `-ETIMEDOUT` after at least 40 ms (vDSO clock; child, bounded). |
+| FD | `PRADYOS_FUTEX_D max2=1 total=4` | Four threads wait. Repeated `WAKE(2)` never returns more than 2, and the returns sum to 4. |
+| FE | `PRADYOS_FUTEX_E shared_woke=1 rc=0` | A fork child waits on a `MAP_SHARED` word without the private flag; the parent's `WAKE` wakes it (shared key). |
+| FF | `PRADYOS_FUTEX_F private_isolated=1` | A fork child waits with `FUTEX_PRIVATE_FLAG`. The parent's private and shared wakes both return 0. |
+| FG | `PRADYOS_FUTEX_G killed_waiter=1` | The FF child, blocked forever, is reaped within 2 s of `SIGKILL` (the `sig_raise` kick). |
+| FH | `PRADYOS_FUTEX_H eintr=-4` | A child with a `SIGUSR1` handler is blocked in `WAIT`; the parent's `SIGUSR1` makes `WAIT` return `-EINTR`. |
+| FI | `PRADYOS_FUTEX_I cleartid_woke=1` | The creator waits (2 s timeout) on a thread's `clear_tid` word while the thread delays and exits. Over 8 trials there is at least one `0` with the word cleared, and no `-ETIMEDOUT`. |
+| FJ | `PRADYOS_FUTEX_J rejects=4` | An unaligned `uaddr` is `-EINVAL`; an unmapped `uaddr` is `-EFAULT`; an unknown op is `-ENOSYS`; `tv_nsec = 1e9` is `-EINVAL`. |
+
+**Vacuity:** before P2, `SYS_FUTEX` is `-ENOSYS`, so FA prints `woke=0`, FB `eagain=-38`, and so on, and the gate is red. FD's `max2` and FF are boundary halves: they pass trivially only together with a failing FA/FE line.
+
+**Mutants (each lands on a different arm and is shown red in CI before merge):**
+
+| Mutant | Change | Arm |
+|---|---|---|
+| F2-1 | `WAIT` does not compare the word | FB |
+| F2-2 | `WAKE` ignores the count (wakes all) | FD (`max2`) |
+| F2-3 | the shared key is never used | FE |
+| F2-4 | `FUTEX_PRIVATE_FLAG` ignored | FF |
+| F2-5 | `sig_raise` does not wake a futex waiter | FG |
+| F2-6 | no wake after CLEARTID | FI |
+| F2-7 | the timeout is ignored | FC |
+| F2-8 | the alignment check is removed | FJ |
+
+**NSI:** 117 `SYS_FUTEX`. 112–116 are DDR-1178's (#78, #80).
+
 ## 6. Honesty labels
 
 - P1 is gated by `smoke-thread`, once it is built. Until then, P1 is **not verified**.
+- P2 (Amendment 1) is gated by the `smoke-thread` futex arms FA–FJ. It is **not verified** until they are green and mutants F2-1 to F2-8 are shown red in CI.
 - Emulated (QEMU TCG, 4 vCPUs) only, not verified on real hardware. Cross-CPU timing under TCG is not hardware timing.
 - Does not claim any part of U1–U3 or OPEN-1/2/12/13 closed.
 - The DDR-1177 arm D/E and M4 checklist items are ticked only when the T4/T5/T6 mutants are shown red.
