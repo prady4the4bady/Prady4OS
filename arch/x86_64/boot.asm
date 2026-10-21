@@ -41,7 +41,7 @@ kernel_entry:
     lea r8, [rel __kimg_lo]
     mov rax, 0xFFFFFFFF80000000
     mov r9, r8
-    sub r9, rax                       ; r9 = slide
+    mov r9, 0x200000                  ; MUTANT: forced 2 MiB
     lea rsi, [rel kreloc_table]
     cmp dword [rsi], 0x314C524B       ; "KRL1"
     jne .reloc_bad
