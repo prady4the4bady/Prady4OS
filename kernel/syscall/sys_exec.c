@@ -26,6 +26,7 @@
 #include "sys_exec.h"
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "fd.h"
 #include "vfs.h"
 #include "elf.h"
@@ -135,11 +136,12 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
 
     uint64_t old_as = t->cr3;
     t->cr3        = new_as;
+    t->mm->cr3    = new_as;   /* DDR-1181: cached copy and owner written together */
     signal_exec_reset(t);   /* DDR-1174: old handler VAs mean nothing in the new image */
     t->user_rip   = entry;
     t->user_stack = new_rsp;
-    for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }
-    t->mmap_next  = VMM_MMAP_BASE;             /* anon mmap arena reset for the new image */
+    for (int i = 0; i < VM_AREA_MAX; i++) { t->mm->vma[i].base = 0; t->mm->vma[i].npages = 0; }
+    t->mm->mmap_next = VMM_MMAP_BASE;             /* anon mmap arena reset for the new image */
 
     /* Activate the new AS before freeing the old one — never free the live CR3. */
     __asm__ volatile("mov %0, %%cr3" :: "r"(new_as) : "memory");

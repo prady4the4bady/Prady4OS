@@ -46,6 +46,8 @@ struct vm_area {
  * component set (~2688) with margin. Asserted against CPUID.0xD at boot. */
 #define FPU_STATE_MAX 4096u
 
+struct mm;                     /* DDR-1181: kernel/mm/mm.h */
+
 struct tcb {
     uint64_t   rsp;            /* saved stack pointer (offset 0; asm relies on it) */
     uint64_t   kstack_base;    /* base of the thread's kernel stack               */
@@ -74,8 +76,8 @@ struct tcb {
     int        root_mnt;       /* mount paths resolve against (-1 = none)    */
     cap_t      fs_cap;         /* FS capability granted at load (5b)         */
 
-    struct vm_area vma[VM_AREA_MAX];  /* anonymous mmap regions (5b)         */
-    uint64_t   mmap_next;      /* bump pointer for addr==NULL mmaps           */
+    struct mm *mm;             /* DDR-1181: address space (cr3 owner, mmap regions,
+                                * memory charge); NULL for kernel threads (mm.h) */
 
     /* Process model (5b slice 8+). Appended at struct end so the ~30 includers
      * of sched.h keep their field offsets. */
@@ -136,8 +138,6 @@ struct tcb {
                                  * NON-NEGOTIABLE 10: kmalloc does not zero, so
                                  * sched_create initialises this explicitly. */
     uint32_t   is_sovereign;    /* 1 = CAP_SOVEREIGN (operator/daemon): mode+approve */
-    uint64_t   mem_limit;       /* hard cap in bytes; 0 -> AETHER_MEM_DEFAULT       */
-    uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
     /* DDR-1170: per-task budgets, set by SYS_SPAWN_TASK BEFORE the first run.

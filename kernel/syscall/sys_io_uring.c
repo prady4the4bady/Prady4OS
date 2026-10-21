@@ -10,6 +10,7 @@
 #include "sys_io_uring.h"
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "fd.h"
 #include "pipe.h"
 #include "vfs.h"
@@ -56,7 +57,7 @@ static long sys_io_uring_setup(long a_entries, long a2, long a3, long a4, long a
     (void)a_entries; (void)a2; (void)a3; (void)a4;
     struct tcb *t = current_thread;
 
-    uint64_t va = t->mmap_next;
+    uint64_t va = t->mm->mmap_next;
     if (va < VMM_MMAP_BASE || va + PAGE_SIZE > VMM_MMAP_TOP)
         return -ENOMEM;
     void *frame = ptnode_alloc();                 /* zeroed shared ring page */
@@ -68,7 +69,7 @@ static long sys_io_uring_setup(long a_entries, long a2, long a3, long a4, long a
     }
     struct io_ring *r = (struct io_ring *)frame;  /* kernel identity view */
     r->entries = IORING_ENTRIES;
-    t->mmap_next = va + PAGE_SIZE;
+    t->mm->mmap_next = va + PAGE_SIZE;
     return (long)va;
 }
 

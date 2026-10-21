@@ -47,6 +47,7 @@
 #include "sys_mmap.h"
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "vmm.h"
 #include "kheap.h"     /* ptnode_alloc / ptnode_free */
 #include "pmm.h"       /* PAGE_SIZE */
@@ -65,25 +66,25 @@
 
 static struct vm_area *vma_find(struct tcb *t, uint64_t base) {
     for (int i = 0; i < VM_AREA_MAX; i++)
-        if (t->vma[i].npages && t->vma[i].base == base)
-            return &t->vma[i];
+        if (t->mm->vma[i].npages && t->mm->vma[i].base == base)
+            return &t->mm->vma[i];
     return 0;
 }
 
 static struct vm_area *vma_free_slot(struct tcb *t) {
     for (int i = 0; i < VM_AREA_MAX; i++)
-        if (t->vma[i].npages == 0)
-            return &t->vma[i];
+        if (t->mm->vma[i].npages == 0)
+            return &t->mm->vma[i];
     return 0;
 }
 
 static int vma_overlaps(struct tcb *t, uint64_t base, uint64_t npages) {
     uint64_t end = base + npages * PAGE_SIZE;
     for (int i = 0; i < VM_AREA_MAX; i++) {
-        if (!t->vma[i].npages)
+        if (!t->mm->vma[i].npages)
             continue;
-        uint64_t b = t->vma[i].base;
-        uint64_t e = b + t->vma[i].npages * PAGE_SIZE;
+        uint64_t b = t->mm->vma[i].base;
+        uint64_t e = b + t->mm->vma[i].npages * PAGE_SIZE;
         if (base < e && b < end)
             return 1;
     }
@@ -162,7 +163,7 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
 
     uint64_t base;
     if (addr == 0) {
-        base = t->mmap_next;                     /* kernel-chosen (bump) */
+        base = t->mm->mmap_next;                     /* kernel-chosen (bump) */
     } else {
         if (addr & (PAGE_SIZE - 1))
             return -EINVAL;                      /* hint must be page-aligned */
@@ -223,7 +224,7 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
     v->base   = base;
     v->npages = npages;
     if (addr == 0)
-        t->mmap_next = base + npages * PAGE_SIZE;
+        t->mm->mmap_next = base + npages * PAGE_SIZE;
     return (long)base;
 }
 
