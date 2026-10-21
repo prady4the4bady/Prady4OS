@@ -96,7 +96,7 @@ __attribute__((noinline)) void probe_kaslr_fault(void) {
     kputs("[kaslr] D fault_hit=");
     kputdec((uint64_t)hit);
     kputs(" fault_rip=");
-    kputhex(kaslr_unslide(fault_expect_rip()));
+    kputhex(fault_expect_rip()); /* MUTANT M4: raw RIP */
     kputs("\r\n");
 }
 
