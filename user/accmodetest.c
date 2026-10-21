@@ -53,8 +53,24 @@ static inline long nsi6(long n, long a1, long a2, long a3,
     return r;
 }
 
-static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
-static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
+/* Each arm line leaves in ONE write: other processes print to the same
+ * serial port, and a line written in pieces can be split by their output
+ * (mut/accmode-M7 run, job 118899269503: "size=PRADYOS_FPU_OK"). */
+static char g_line[160];
+static long g_ll;
+
+static void flush_line(void) {
+    if (g_ll) nsi(SYS_WRITE, 1, (long)g_line, g_ll);
+    g_ll = 0;
+}
+
+static void wr(const char *s) {
+    for (; *s; s++) {
+        if (g_ll == (long)sizeof g_line) flush_line();
+        g_line[g_ll++] = *s;
+        if (*s == '\n') flush_line();
+    }
+}
 
 static void wrl(long v) {
     char b[24];
@@ -65,7 +81,8 @@ static void wrl(long v) {
     do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
     if (v < 0) b[k++] = '-';
     while (nd) b[k++] = d[--nd];
-    nsi(SYS_WRITE, 1, (long)b, k);
+    b[k] = 0;
+    wr(b);
 }
 
 __attribute__((noreturn)) static void fail(const char *why) {
