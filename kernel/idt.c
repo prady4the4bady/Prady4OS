@@ -7,6 +7,7 @@
  * kernel panic — it prints the component, the fault, a full register dump, CR2
  * for page faults, and a frame-pointer backtrace, then halts cleanly.
  */
+#include "kreloc.h"     /* DDR-1179 A2: kaslr_unslide for printed RIPs */
 #include "console.h"
 #include "io.h"
 #include "irq.h"
@@ -229,7 +230,7 @@ static void ap_freeze_probe(void) {
         uint64_t fl = console_line_lock();
         kputs("[apfreeze] cpu=");   kputdec(i);
         kputs(" ticks=");           kputdec(pc->ticks);
-        kputs(" rip=");             kputhex(pc->d_rip);
+        kputs(" rip=");             kputhex(kaslr_unslide(pc->d_rip));   /* DDR-1179 A2 */
         kputs(" cs=");              kputhex(pc->d_cs);
         kputs(" rflags=");          kputhex(pc->d_rflags);
         kputs(" if=");              kputdec((pc->d_rflags >> 9) & 1u);
@@ -472,7 +473,7 @@ static void timer_tick(struct regs *r) {
               kputs(" panic_stage="); kputdec(g_panic_stage);
               kputs(" loser_cpu=");   kputdec(g_panic_loser_cpu);
               kputs(" loser_vec=");   kputdec(g_panic_loser_vec);
-              kputs(" loser_rip=");   kputhex(g_panic_loser_rip); } } }
+              kputs(" loser_rip=");   kputhex(kaslr_unslide(g_panic_loser_rip)); } } }
         /* DDR-890: how much did switch_wait_offcpu_sched spin in this window?
          * spins is the total across CPUs; max/cpu name the busiest one. This is
          * the data that decides whether the DDR-887 preemption-suppression
@@ -1023,7 +1024,7 @@ void isr_dispatch(struct regs *r) {
     }
 
     g_panic_stage = 3;                      /* exception identified */
-    dump_line("RIP=", r->rip);
+    dump_line("RIP=", kaslr_unslide(r->rip));   /* DDR-1179 A2: link-time, for sym_at.sh */
     dump_line("CS =", r->cs);
     dump_line("RFLAGS=", r->rflags);
     dump_line("RSP=", r->rsp);
@@ -1088,7 +1089,7 @@ void isr_dispatch(struct regs *r) {
             }
             const uint64_t *f = (const uint64_t *)(uintptr_t)fp;
             kputs("  ");
-            kputhex(f[1]);              /* saved return address */
+            kputhex(kaslr_unslide(f[1]));   /* saved return address, link-time */
             kputs("\r\n");
             printed++;
             uint64_t nfp = f[0];

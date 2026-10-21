@@ -178,14 +178,18 @@ The §5 scope split proceeds in order: build-side table, then the applier and sl
   - `vmm_protect_kernel` and its audit walk `PD_HI[slide >> 21]` and take VAs from `__kimg_lo`;
   - `kimg.c` computes `image_len = __data_end − __kimg_lo`;
   - the kernel-RIP printers pass values through `kaslr_unslide()`, which subtracts the slide only from addresses inside the running image. Those printers are the panic `RIP=`, the backtrace return addresses, the `[apfreeze]` `rip=` and `loser_rip=`. User RIPs and data pointers print raw (§2.5).
+- **Build-time slide check.** Every build links the same objects a second time at `KERNEL_VBASE + 2 MiB`. `kreloc.py --slide-check` then replays `boot.asm`'s loop, step for step, over `kernel.bin` with a 2 MiB slide, and requires the result to be **byte-identical** to the higher link.
+  - This proves on every build that the table is complete and that the loop decodes it. Measured on this head: 0 differing bytes; the two links differ in exactly 3,577 bytes before the replay.
+  - It replays the loop in Python. It does not run the asm. The asm runs in CI on every boot (at slide 0), and with a non-zero slide only in step 4.
 - **Gate:** `smoke-wxkernel` also requires `[kaslr] table ok` and forbids `[kaslr] table FAIL`. `GLOBAL_FORBIDDEN` is unchanged.
 - **Mutants (each must be shown red in CI before merge):**
 
   | Mutant | Change | What turns red |
   |---|---|---|
-  | K3-1 | `kreloc.py` records every offset +2 (encoder and `--verify` agree, the kernel does not) | `smoke-wxkernel`: `[kaslr] table FAIL` |
+  | K3-1 | `kreloc.py` records every offset +2 (the encoder and `--verify` agree with each other) | the build: `slide-check: relocated image differs` |
   | K3-2 | the applier adds a forced 2 MiB instead of `slide` | every boot gate (fields point 2 MiB off, into unmapped memory). This proves the applier writes the recorded fields. |
   | K3-3 | the W^X walk indexes `PD_HI[(slide >> 21) + 1]` | `smoke-wxkernel`: `[wx] kernel W^X FAIL` |
+  | K3-4 | `kreloc_selfcheck` reads each field 1 byte late | `smoke-wxkernel`: `[kaslr] table FAIL` (the in-kernel check can go red) |
 
 - **Not verified by this step:** `kaslr_unslide` and the slot-dependent walk are exercised with a zero slide only. They are proven under a non-zero slide by step 4's arms D and E.
 

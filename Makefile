@@ -806,6 +806,15 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin $(KERNEL_ELF)
 	python3 tools/kreloc/kreloc.py --verify $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
+	@# DDR-1179 A2: the same objects linked 2 MiB higher must equal kernel.bin
+	@# after boot.asm's applier runs over it with a 2 MiB slide (kreloc.py
+	@# replays that loop). Proves the table complete on every build.
+	sed 's/^KERNEL_VBASE = 0xFFFFFFFF80000000;/KERNEL_VBASE = 0xFFFFFFFF80200000;/' $(KERNEL_LD) > build/kernel-slid.ld
+	grep -q '^KERNEL_VBASE = 0xFFFFFFFF80200000;' build/kernel-slid.ld
+	$(LD) -nostdlib --emit-relocs -T build/kernel-slid.ld -o build/kernel-slid.elf $(KERNEL_OBJS) $(LWIP_LIB)
+	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin build/kernel-slid.elf
+	$(OBJCOPY) -O binary build/kernel-slid.elf build/kernel-slid.bin
+	python3 tools/kreloc/kreloc.py --slide-check $(KERNEL_ELF) $(KERNEL_BIN) build/kernel-slid.bin 0x200000
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 1572864 || { echo "kernel.bin exceeds 1.5 MiB — the stage-2 read window (48x64 sectors from LBA 17; DDR-733, raised by DDR-827 then DDR-960). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 48 chunks a full window plus BSS still fits with 372,864 B to spare, and past ~56 it does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
 	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
@@ -2222,8 +2231,8 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # attributed instead of guessed at.
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003')" \
-	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
+	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003\n[kaslr] table ok entries=')" \
+	FORBIDDEN_SENTINEL="$$(printf 'kernel W^X FAIL\n[kaslr] table FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-758 syscall-fuzz gate: a ring-3 probe floods 3000 hostile syscalls (bad NSI
