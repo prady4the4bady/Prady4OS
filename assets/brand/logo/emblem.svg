@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- original: PRADYOS, DDR-1180 -->
+  <!-- Emblem: a scorpion seen from above, drawn by hand on a 48-unit grid for this
+       project (DDR-1180 B1). Pincers forward (top), six legs, the tail curling
+       from the rear and its sting turned back over the body. -->
+  <path d="M20 17 Q24 13 28 17 L29 27 Q24 31 19 27 Z"/>
+  <path d="M20 18 L14 13 Q8 12 8 6 M14 13 Q17 8 12 4"/>
+  <path d="M28 18 L34 13 Q40 12 40 6 M34 13 Q31 8 36 4"/>
+  <path d="M20 20 L13 19 L9 23 M20 23 L13 24 L10 29 M20 26 L14 29 L12 34"/>
+  <path d="M28 20 L35 19 L39 23 M28 23 L35 24 L38 29 M28 26 L34 29 L36 34"/>
+  <path d="M24 30 Q24 37 27 41 Q32 46 37 41 Q40 37 37 33 L33 35"/>
+</svg>

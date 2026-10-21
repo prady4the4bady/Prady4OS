@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- original: PRADYOS, DDR-1180 -->
+  <!-- battery: a horizontal cell with a terminal nub and a charge bar -->
+  <rect x="3" y="7" width="15" height="10" rx="2"/>
+  <path d="M21 10 V14"/>
+  <path d="M7 12 H12"/>
+</svg>
