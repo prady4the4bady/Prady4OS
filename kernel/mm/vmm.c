@@ -95,7 +95,7 @@ void vmm_protect_kernel(void) {
     if (!pdpt) { kputs("[wx] kernel W^X FAIL: no PML4[511]\r\n"); return; }
     uint64_t pd = table_at(pdpt)[510] & PTE_ADDR;
     if (!pd)   { kputs("[wx] kernel W^X FAIL: no PDPT[510]\r\n"); return; }
-    uint64_t pt = table_at(pd)[slot] & PTE_ADDR;
+    uint64_t pt = table_at(pd)[0] & PTE_ADDR; (void)slot; /* MUTANT M5 */
     if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[slot]\r\n"); return; }
 
     uint64_t alias_pte  = 0;   /* DDR-1046: the identity-alias PD entry, read back */
