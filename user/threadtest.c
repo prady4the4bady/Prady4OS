@@ -58,8 +58,25 @@ static inline long nsi6(long n, long a1, long a2, long a3,
 
 static uint64_t now(void) { return *(volatile uint64_t *)VDSO_USER_VA; }
 
-static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
-static void wr(const char *s) { nsi(SYS_WRITE, 1, (long)s, slen(s)); }
+/* wr() buffers and issues ONE write per '\n', so every line leaves whole
+ * (same mechanism as line1 below; DDR-1182 §3.1 shows a torn line from
+ * piecewise writes). Only the main thread of a process prints, and fork
+ * happens between lines, so the static buffer is never shared mid-line. */
+static char g_line[160];
+static long g_ll;
+
+static void flush_line(void) {
+    if (g_ll) nsi(SYS_WRITE, 1, (long)g_line, g_ll);
+    g_ll = 0;
+}
+
+static void wr(const char *s) {
+    for (; *s; s++) {
+        if (g_ll == (long)sizeof g_line) flush_line();
+        g_line[g_ll++] = *s;
+        if (*s == '\n') flush_line();
+    }
+}
 static void wrl(long v) {
     char b[24], d[20];
     int k = 0, nd = 0;
@@ -67,7 +84,8 @@ static void wrl(long v) {
     do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
     if (v < 0) b[k++] = '-';
     while (nd) b[k++] = d[--nd];
-    nsi(SYS_WRITE, 1, (long)b, k);
+    b[k] = 0;
+    wr(b);
 }
 
 /* One sentinel line, built locally and emitted by ONE write: a kernel line (a
