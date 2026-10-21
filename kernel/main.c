@@ -11,6 +11,7 @@
  * Built -ffreestanding -mgeneral-regs-only (no SSE), -fno-omit-frame-pointer.
  * ===========================================================================
  */
+#include "kreloc.h"     /* DDR-1179 A2 */
 #include "console.h"
 #include "boot_info.h"
 #include "irq.h"
@@ -4715,6 +4716,7 @@ static void sharedpte_selftest(void) {
 
 void kmain(struct boot_info *bi) {
     kputs("NEXUS: entered kmain (64-bit long mode, ring 0)\r\n");
+    kreloc_selfcheck();                  /* DDR-1179 A2: the boot applier's table */
 
     print_boot_info(bi);
     display_capture_boot();              /* DDR-1142: record the GOP handoff first */
