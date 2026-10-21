@@ -4010,6 +4010,7 @@ ci-docsize-check:
 # icon draws, not how it looks -- that is the operator's review by eye.
 ci-icon-check:
 	@python3 -I tools/brand/icon_check.py assets/brand/icons
+	@python3 -I tools/brand/icon_check.py assets/brand/logo     # DDR-1180 A1: emblem, wordmark
 
 ci-palette-check:
 	@mkdir -p build

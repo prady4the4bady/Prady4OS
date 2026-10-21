@@ -3,6 +3,12 @@
 
   icon_check.py <icon-dir>       check every icon; exit 1 on any failure
 
+A MANIFEST line is `<name>` (a 24x24 icon) or `<name> <W> <H>` (a logo asset on
+its own viewBox "0 0 W H", DDR-1180 step 4, recorded in assets/brand/README.md).
+Every rule below is then stated in that asset's own units: the grid is
+[2, W-2] x [2, H-2], ink stays inside [1, W-1] x [1, H-1], and the renders are
+at 16/24/32/64 px HEIGHT with the width scaled to match.
+
 Arms (one FAIL line names the arm, the file and the reason):
   A  exists    every MANIFEST name has <name>.svg and every .svg is listed
   B  subset    only the DDR-1180 sec.2.3 elements, path commands and
@@ -183,9 +189,10 @@ def collect(root, name):
     return items
 
 
-def render(items, size):
-    s = size / 24.0
-    ink = [[False] * size for _ in range(size)]
+def render(items, size, w=24.0, h=24.0):
+    s = size / h
+    cols = int(math.ceil(w * s))
+    ink = [[False] * cols for _ in range(size)]
     for sub, _, st in items:
         half = float(st["stroke-width"]) / 2.0
         segs = []
@@ -194,7 +201,7 @@ def render(items, size):
             segs.extend(zip(q, q[1:]))
         filled = st["fill"] != "none"
         for py in range(size):
-            for px in range(size):
+            for px in range(cols):
                 if ink[py][px]:
                     continue
                 x, y = (px + 0.5) / s, (py + 0.5) / s
@@ -229,7 +236,7 @@ def ink_box(ink):
     return (min(xs), min(ys), max(xs) + 1, max(ys) + 1)
 
 
-def check(path, name):
+def check(path, name, w=24, h=24):
     raw = open(path, encoding="utf-8").read()
     if MARKER not in raw:
         fail("E", name, f"missing the '<!-- {MARKER} -->' comment")
@@ -246,8 +253,9 @@ def check(path, name):
     if tag(root) != "svg":
         fail("B", name, "root element is not <svg>")
         return
-    if root.attrib.get("viewBox", "").split() != ["0", "0", "24", "24"]:
-        fail("B", name, "viewBox must be '0 0 24 24'")
+    want = ["0", "0", str(w), str(h)]
+    if root.attrib.get("viewBox", "").split() != want:
+        fail("B", name, f"viewBox must be '{' '.join(want)}'")
     items = collect(root, name)
     if not items:
         fail("B", name, "no drawing elements")
@@ -258,23 +266,26 @@ def check(path, name):
             break
     for _, pts, _ in items:
         for x, y in pts:
-            if not (GRID_LO <= x <= GRID_HI and GRID_LO <= y <= GRID_HI):
-                fail("C", name, f"coordinate ({x:g}, {y:g}) outside [2, 22]")
+            if not (GRID_LO <= x <= w - GRID_LO and GRID_LO <= y <= h - GRID_LO):
+                fail("C", name, f"coordinate ({x:g}, {y:g}) outside [2, {w - 2:g}] x [2, {h - 2:g}]")
                 break
     boxes = {}
     for size in SIZES:
-        box = ink_box(render(items, size))
+        box = ink_box(render(items, size, w, h))
         if box is None:
             fail("D", name, f"renders empty at {size} px")
             return
-        s = size / 24.0
-        if box[0] < INK_LO * s - 1 or box[1] < INK_LO * s - 1 or box[2] > INK_HI * s + 1 or box[3] > INK_HI * s + 1:
-            fail("D", name, f"ink box {box} at {size} px leaves [1, 23] units")
+        s = size / float(h)
+        lo_x, lo_y, hi_x, hi_y = INK_LO * s, INK_LO * s, (w - INK_LO) * s, (h - INK_LO) * s
+        if box[0] < lo_x - 1 or box[1] < lo_y - 1 or box[2] > hi_x + 1 or box[3] > hi_y + 1:
+            fail("D", name, f"ink box {box} at {size} px leaves [1, {w - 1:g}] x [1, {h - 1:g}] units")
         boxes[size] = box
     ref = boxes[24]
     for size, box in boxes.items():
         k = size / 24.0
-        if any(abs(box[i] - ref[i] * k) > BOX_TOL_PX for i in range(4)):
+        # One pixel of the 24 px reference is h/24 units, so its rounding error
+        # grows with the viewBox height; a 24x24 icon keeps exactly 1.5 px.
+        if any(abs(box[i] - ref[i] * k) > BOX_TOL_PX * max(1.0, h / 24.0) for i in range(4)):
             fail("D", name, f"ink box {box} at {size} px does not scale from {ref} at 24 px")
 
 
@@ -287,8 +298,18 @@ def main(argv):
     if not os.path.isfile(man_path):
         print(f"[icons] FAIL arm A: no {man_path}")
         return 1
-    names = [ln.split("#", 1)[0].strip() for ln in open(man_path, encoding="utf-8")]
-    names = [n for n in names if n]
+    dims = {}
+    for ln in open(man_path, encoding="utf-8"):
+        f = ln.split("#", 1)[0].split()
+        if not f:
+            continue
+        if len(f) == 1:
+            dims[f[0]] = (24, 24)
+        elif len(f) == 3 and f[1].isdigit() and f[2].isdigit() and int(f[1]) > 4 and int(f[2]) > 4:
+            dims[f[0]] = (int(f[1]), int(f[2]))
+        else:
+            fail("A", f[0], f"MANIFEST line {ln.strip()!r}: expected '<name>' or '<name> <W> <H>'")
+    names = list(dims)
     files = sorted(f[:-4] for f in os.listdir(d) if f.endswith(".svg"))
     if not names:
         fail("A", "MANIFEST", "lists no icons")
@@ -300,12 +321,12 @@ def main(argv):
             fail("A", f, ".svg present but not listed in MANIFEST")
     for n in names:
         if n in files:
-            check(os.path.join(d, n + ".svg"), n)
+            check(os.path.join(d, n + ".svg"), n, *dims[n])
     for line in failures:
         print(line)
     if failures:
         return 1
-    print(f"[icons] OK — {len(names)} icon(s), arms A-E, sizes {'/'.join(map(str, SIZES))} px")
+    print(f"[icons] OK — {d}: {len(names)} asset(s), arms A-E, sizes {'/'.join(map(str, SIZES))} px")
     return 0
 
 
