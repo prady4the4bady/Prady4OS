@@ -68,6 +68,23 @@ For each arm the probe creates its own file (`/ACCA.TXT` to `/ACCH.TXT`) with `O
 | M7 | `mmap` skips `fd_can_read` | G |
 | M8 | `fd_can_write` accepts only `O_WRONLY` (an over-strict fix that refuses `O_RDWR`). A version that refused every write would fail the probe's own setup writes first, so it would not single out H | H |
 
+### 3.1 Mutant runs (CI evidence, head `182c1f8`)
+
+Each run failed on `smoke-accmode` (shard 8) with the missing line shown. The serial value is the one the mutant printed.
+
+| Mutant | Run | Missing line | Printed |
+|---|---|---|---|
+| M1 | [39500171249](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500171249) | A | `ro_write=4` (F also red: `dup_ro_write=4`) |
+| M2 | [39500180510](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500180510) | B | red on arm B |
+| M3 | [39500188673](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500188673) | C | `ring_ro_write=4 ring_wo_read=4` |
+| M4 | [39500197195](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500197195) | D | `ro_ftrunc=0 size=0` |
+| M5 | [39500205562](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500205562) | E | `acc3=3 ro_trunc=3 size=0` |
+| M6 | [39500217513](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500217513) | F | `dup_ro_write=4` |
+| M7 | [39500226094](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500226094) | D, then G | G: `wo_mmap=32767`. D: `ro_ftrunc=-22 size=PRADYOS_FPU_OK`, a torn line (below) |
+| M8 | [39500234320](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500234320) | H | red on arm H |
+
+**Torn-line defect, found by M7.** The probe wrote each arm line in 3 to 5 `write` calls. Another process's output (`PRADYOS_FPU_OK`) landed between two of them, so arm D failed with the right value `-22` and a torn `size=`. On a correct tree the same interleaving would make the gate red at random. Fix: `wr()` buffers into one line and issues one `write` per `\n`. Every arm line now leaves in a single call. This is the same mechanism as the DDR-1181 thread arm F fix. The mutants above ran before this fix; they are re-run on the fixed head, and the new runs are added here.
+
 ## 4. Honesty labels
 
 - Gated by `smoke-accmode` arms A-H.
