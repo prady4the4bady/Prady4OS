@@ -115,7 +115,7 @@ def collect(elf):
                 continue
             if kreloc["addr"] <= va < kreloc["addr"] + kreloc["size"]:
                 die("a relocated field inside .kreloc itself")
-            off = va - lo
+            off = va - lo + 2              # MUTANT
             if off in out and out[off] != (typ == R_64):
                 die("two widths at offset %#x" % off)
             out[off] = typ == R_64
