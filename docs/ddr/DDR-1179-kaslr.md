@@ -193,6 +193,46 @@ The §5 scope split proceeds in order: build-side table, then the applier and sl
 
 - **Not verified by this step:** `kaslr_unslide` and the slot-dependent walk are exercised with a zero slide only. They are proven under a non-zero slide by step 4's arms D and E.
 
+## Amendment 3 (2026-10-21 UTC): step 4, slot choice in both loaders and `smoke-kaslr`
+
+**Security boundary: review before merge** (K4). Step 3's applier is green on every boot gate at slot 0 (#84, run 39521945274). This step makes the slot non-zero.
+
+- **Slot choice (both loaders, same commit).**
+  - **Entropy, in order:**
+    - RDSEED, when CPUID leaf 7 EBX bit 18 is set;
+    - else RDRAND, when CPUID leaf 1 ECX bit 30 is set;
+    - each is retried up to 10 times on CF=0;
+    - else the TSC (K2, `weak`).
+  - **The slot** is `s = (r mod 511) + 1`, in `[1, 511]` (K3).
+  - **`stage2.asm`** sets `PD_HI[s] = PT_HI` instead of `PD_HI[0]`, and jumps to `KERNEL_VIRT + s·2 MiB`.
+  - **`loader.c`** does the same, with `pdi = s`.
+  - **Both pass the entropy source in RSI:** 1 = tsc, 2 = rdrand, 3 = rdseed, 0 = none.
+- **Kernel.**
+  - `boot.asm` keeps RSI in `r13` across the applier and the `.bss` clear, and stores it in `kaslr_src`.
+  - The slot itself is printed by `kputs_serial_only`, which writes the UART and bypasses the `SYS_DMESG` ring (K1): `[kaslr] slot=N`.
+  - The ring-visible line names no slot: `PRADYOS_KASLR_B applied=1 src=rdseed|rdrand|tsc`.
+- **Gate `smoke-kaslr`.** It boots 3 times with `QEMU_CPU=qemu64,+rdrand,+rdseed`, and every boot must also pass the ordinary boot sentinels.
+
+  | Arm | Pass condition |
+  |---|---|
+  | A | `PRADYOS_KASLR_A reloc_ok=1`. A function pointer stored in `.rodata` (an `R_X86_64_64` field) and a `mov $sym` (`R_X86_64_32S`) both equal the same function's RIP-relative address. |
+  | B | `PRADYOS_KASLR_B applied=1 src=rdseed` or `src=rdrand`. |
+  | C | At least 2 distinct `[kaslr] slot=` values across the 3 boots. |
+  | D | `probe_kaslr_fault` takes a deliberate #PF under the fault-expect latch, which now records the faulting RIP. It prints `[kaslr] D fault_rip=` with the RIP passed through `kaslr_unslide`. The gate resolves it with `tools/ci/sym_at.sh` against `build/kernel.elf` and requires `probe_kaslr_fault`. |
+  | E | `[wx] kernel W^X OK`, `PRADYOS_WX_ALIAS present=1 rw=0 nx=1`, and the text-write fault, all with `s ≠ 0`. |
+
+- **Mutants (each must be shown red in CI before merge).**
+
+  | Mutant | Change | Arm |
+  |---|---|---|
+  | M1 | the applier skips `R_X86_64_64` entries | A |
+  | M2 | the slot is forced to 0 | B |
+  | M3 | the slot is a constant (7) | C |
+  | M4 | the D printer prints the raw, slid RIP | D |
+  | M5 | the W^X walk uses `PD[0]` | E |
+
+- **Every other gate** now boots slid. Under TCG's default `qemu64` that is a weak TSC slot. A missed relocation would fail those gates too, and step 3's build-time slide check already proves the table complete.
+
 ## 8. Honesty labels
 
 When built, KASLR will be **gated by `smoke-kaslr` arms A–E**, emulated (QEMU TCG) only, and **not verified on real hardware**.
