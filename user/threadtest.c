@@ -381,24 +381,34 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
     long leak = (long)before - (long)mi.free;
     say("[thread] C free_before=%d free_after=%d\n", (long)((long)before), (long)((long)mi.free));
-    /* Diagnostic for a failing C: are the 64 threads' tcbs still in the
-     * scheduler ring (not reaped), or gone with their pages missing anyway?
-     * Threads carry the creator's name; the creator itself is excluded. */
+    /* C is judged on the threads themselves, not on the PMM free count: that
+     * count is system-wide, and while these 64 cycles run the rest of the boot
+     * mounts SFS ten times, provisions the SFS root and starts the AETHER
+     * daemon (run 39551618166: free fell 375 pages with no thread left). A
+     * thread whose tcb and kernel stack are never freed (T3) stays in the
+     * scheduler as a THREADTEST zombie; poll up to 2 s for the reaper. */
+    long left = 0, zomb = 0;
     {
         struct { uint32_t pid, ppid, state, flags; char name[16];
                  uint64_t run_ticks, dispatches; } pi;
-        long me = nsi(SYS_GETPID, 0, 0, 0), left = 0, zomb = 0;
-        for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
-            const char *w = "THREADTEST";
-            int k = 0;
-            while (w[k] && pi.name[k] == w[k]) k++;
-            if (w[k] || (long)pi.pid == me) continue;
-            left++;
-            if (pi.state == 4) zomb++;           /* THREAD_ZOMBIE */
+        long me = nsi(SYS_GETPID, 0, 0, 0);
+        uint64_t end = now() + 2000 * MS;
+        for (;;) {
+            left = zomb = 0;
+            for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
+                const char *w = "THREADTEST";
+                int k = 0;
+                while (w[k] && pi.name[k] == w[k]) k++;
+                if (w[k] || (long)pi.pid == me) continue;
+                left++;
+                if (pi.state == 4) zomb++;           /* THREAD_ZOMBIE */
+            }
+            if (left == 0 || now() > end) break;
+            nsi(SYS_YIELD, 0, 0, 0);
         }
-        say("[thread] C leftover_threads=%d zombie=%d\n", (long)(left), (long)(zomb));
     }
-    line1("PRADYOS_THREAD_C leak_ok=", leak <= 32);
+    say("[thread] C pmm_free_drop=%d (system-wide, diagnostic only)\n", leak);
+    say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
 
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
