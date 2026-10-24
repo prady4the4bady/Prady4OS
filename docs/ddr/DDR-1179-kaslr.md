@@ -240,3 +240,14 @@ When built, KASLR will be **gated by `smoke-kaslr` arms A–E**, emulated (QEMU 
 - A `tsc`-sourced slot is not counted as protection.
 - Nothing here is labelled ASI.
 - This record does not close OPEN-1, OPEN-2, OPEN-12, OPEN-13 or U1–U3. §2.5 exists to keep their diagnosis intact.
+
+### Amendment 3 note: arm D's first CI run (head `004bd45`, run 39552929205)
+
+Arms A, B and E passed on the first boot (`slot=396`, `src=rdseed`). Arm D printed `fault_hit=0 fault_rip=0x0`, because the probe load never faulted. `movq 0xFFFFFF0000000000, %rax`, written as an absolute memory operand, was encoded as `48 8b 04 25 00 00 00 00`: a disp32 of 0, i.e. `mov 0x0,%rax`. The assembler truncated the 64-bit address without a warning, and address 0 is mapped.
+
+Fix:
+- The address is loaded with `movabs` into a register, and the probe is `mov (%reg),%rax`.
+- Before arming, `vmm_resolve` checks that the address is unmapped. If it is mapped, `[kaslr] D arm FAIL: probe address is mapped` is printed, which the gate forbids.
+
+The mutant branches are merged forward onto the fix, so each one isolates its own arm.
+
