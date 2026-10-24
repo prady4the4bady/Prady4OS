@@ -4771,6 +4771,7 @@ void kmain(struct boot_info *bi) {
     pmm_kasan_uaf_selftest();            /* DDR-1158: use-after-free poison regression */
     kheap_stress();
     vmm_test();
+    fd_clone_selftest();                  /* DDR-1184: fork OOM leaves the parent intact */
     cap_test();
     uaccess_selftest();                  /* Phase 5b: validated user-pointer copy path */
     smep_selftest();                     /* DDR-1040: SMEP enable + ENFORCEMENT proof */
