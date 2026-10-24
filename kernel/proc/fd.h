@@ -41,6 +41,14 @@ struct fd_entry {
     int              flags;    /* open flags (FD_VFS) / PIPE_WRITE_END    */
 };
 
+/* DDR-1182: the open access mode lives in the low two bits of an FD_VFS
+ * entry's flags (Linux values: O_RDONLY 0, O_WRONLY 1, O_RDWR 2; 3 is refused
+ * by sys_open). Every FD_VFS read and write path asks these two helpers, so no
+ * path carries its own copy of the comparison. */
+#define FD_ACC_MASK 3
+static inline int fd_can_read(const struct fd_entry *e)  { return (e->flags & FD_ACC_MASK) != 1; }
+static inline int fd_can_write(const struct fd_entry *e) { return (e->flags & FD_ACC_MASK) != 0; }
+
 struct fd_table {
     struct fd_entry e[FD_MAX];
 };

@@ -29,6 +29,13 @@ static long sys_open(long upath, long flags, long mode, long a4, long a5, long a
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)
         return -ENOENT;                       /* no filesystem available */
+    /* DDR-1182: the access mode is enforced. Mode 3 has no meaning; and a
+     * read-only open never modifies the file, so O_TRUNC with it is refused
+     * before anything is looked up (POSIX leaves this case unspecified). */
+    if ((flags & FD_ACC_MASK) == FD_ACC_MASK)
+        return -EINVAL;
+    if ((flags & FD_ACC_MASK) == O_RDONLY && (flags & O_TRUNC))
+        return -EACCES;
 
     char path[PATH_MAX];
     if (copyinstr(path, (const void __user *)(uintptr_t)upath, sizeof path, 0) < 0)
@@ -155,6 +162,8 @@ static long sys_ftruncate(long fd, long len, long a3, long a4, long a5, long a6)
         return -EBADF;
     if (e->kind != FD_VFS || !e->file)
         return -EINVAL;            /* console/pipe: no length to set */
+    if (!fd_can_write(e))
+        return -EINVAL;            /* DDR-1182: opened O_RDONLY (Linux's errno) */
 
     /* e->cap, not the thread's caps: the capability is the one captured when
      * this fd was OPENED, so a descriptor opened read-only cannot be
