@@ -13,7 +13,7 @@
  */
 #include "sys_wait.h"
 #include "sched.h"
-#include "vmm.h"          /* vmm_destroy_address_space */
+#include "mm.h"           /* DDR-1181: mm_put destroys the address space */
 #include "uaccess.h"      /* copyout */
 #include "syscall.h"      /* syscall_register, SYS_WAIT4 */
 #include "errno.h"
@@ -64,17 +64,20 @@ static long sys_wait4(long a_pid, long a_status, long a_options, long a4, long a
         sched_block();
     }
 
-    int status = child->exit_status;
+    /* DDR-1181 §3.4: the process status, which a sibling thread's SYS_EXIT or
+     * fatal fault may have fixed; for a single-threaded child it is the same
+     * value sched_exit stored in exit_status. */
+    int status = (child->mm && child->mm->group_set) ? child->mm->group_status
+                                                      : child->exit_status;
     if (a_status) {
         if (copyout((void __user *)(uintptr_t)a_status, &status, sizeof status) < 0)
             return -EFAULT;            /* bad status ptr: leave the zombie unreaped */
     }
 
     int child_pid  = (int)child->pid;
-    uint64_t child_cr3 = child->cr3;
+    struct mm *child_mm = child->mm;   /* DDR-1181: owns the child's page tables */
     sched_destroy(child);              /* unlink + free kstack/caps/fds/TCB */
-    if (child_cr3)
-        vmm_destroy_address_space(child_cr3);
+    mm_put(child_mm);                  /* last ref destroys the address space */
     return child_pid;
 }
 
