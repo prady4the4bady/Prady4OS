@@ -196,7 +196,7 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     name: build-and-boot (shard ${{ matrix.shard }})
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
 
