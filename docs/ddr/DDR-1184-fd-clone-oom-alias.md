@@ -64,6 +64,15 @@ Mutants (each run in CI and shown red before merge):
 | M1 | the old order: `*de = *se` before the allocation (the defect itself) | A |
 | M2 | the rollback clears `dst->fdt.e[j].file` without `kfree` (the copies leak) | B only (A stays green: the parent is untouched) |
 
+### 3.1 Mutant runs (CI evidence, mutants built on `85921a4`)
+
+Both runs failed only `smoke-fdclone`, the last of 19 gates in shard 8. The other 18 passed.
+
+| Mutant | Run | Serial lines | Result |
+|---|---|---|---|
+| M1 | [40124103817](https://github.com/prady4the4bady/Prady4OS/actions/runs/40124103817) | `PRADYOS_FDCLONE_A FAIL`, `PRADYOS_FDCLONE_B leak=1 delta=0xFFFFFFFFFFFFFFFF`, `FDCLONE FAIL: child teardown freed a parent file` | **red on A** (and B: the heap is one object *below* its baseline, because the child freed the parent's file) |
+| M2 | [40124105794](https://github.com/prady4the4bady/Prady4OS/actions/runs/40124105794) | `PRADYOS_FDCLONE_A enomem=1 parent_intact=1`, `PRADYOS_FDCLONE_B leak=1 delta=0x0000000000000001` | **red on B only** |
+
 ## 4. Honesty labels
 
 - Gated by `smoke-fdclone` arms A-B, which cover the fork path's `fd_clone`. Emulated (QEMU TCG) only, not verified on real hardware.
