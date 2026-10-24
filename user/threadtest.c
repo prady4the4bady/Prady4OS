@@ -64,34 +64,36 @@ static inline long nsi6(long n, long a1, long a2, long a3,
 
 static uint64_t now(void) { return *(volatile uint64_t *)VDSO_USER_VA; }
 
-/* wr() buffers and issues ONE write per '\n', so every line leaves whole
- * (same mechanism as line1 below; DDR-1182 §3.1 shows a torn line from
- * piecewise writes). Only the main thread of a process prints, and fork
- * happens between lines, so the static buffer is never shared mid-line. */
-static char g_line[160];
-static long g_ll;
-
-static void flush_line(void) {
-    if (g_ll) nsi(SYS_WRITE, 1, (long)g_line, g_ll);
-    g_ll = 0;
-}
-
-static void wr(const char *s) {
-    for (; *s; s++) {
-        if (g_ll == (long)sizeof g_line) flush_line();
-        g_line[g_ll++] = *s;
-        if (*s == '\n') flush_line();
+/* Every line leaves in ONE write (DDR-1182 §3.1: a line written in pieces
+ * can be split by other output). The line is built on the stack because a
+ * probe may not carry a writable section (DDR-826). Understands %d (a long)
+ * and %s only. */
+static void say(const char *fmt, ...) {
+    char b[192];
+    long n = 0;
+    __builtin_va_list ap;
+    __builtin_va_start(ap, fmt);
+    for (const char *f = fmt; *f && n < (long)sizeof b - 21; f++) {
+        if (f[0] == '%' && f[1] == 'd') {
+            long v = __builtin_va_arg(ap, long);
+            unsigned long u = v < 0 ? 0UL - (unsigned long)v : (unsigned long)v;
+            char d[20];
+            int nd = 0;
+            do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
+            if (v < 0) b[n++] = '-';
+            while (nd) b[n++] = d[--nd];
+            f++;
+        } else if (f[0] == '%' && f[1] == 's') {
+            for (const char *s = __builtin_va_arg(ap, const char *);
+                 *s && n < (long)sizeof b - 1; s++)
+                b[n++] = *s;
+            f++;
+        } else {
+            b[n++] = *f;
+        }
     }
-}
-static void wrl(long v) {
-    char b[24], d[20];
-    int k = 0, nd = 0;
-    unsigned long u = (v < 0) ? (unsigned long)(-v) : (unsigned long)v;
-    do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
-    if (v < 0) b[k++] = '-';
-    while (nd) b[k++] = d[--nd];
-    b[k] = 0;
-    wr(b);
+    __builtin_va_end(ap);
+    nsi(SYS_WRITE, 1, (long)b, n);
 }
 
 /* One sentinel line, built locally and emitted by ONE write: a kernel line (a
@@ -113,9 +115,7 @@ static void line1(const char *tag, long v) {
 }
 
 __attribute__((noreturn)) static void fail(const char *why) {
-    wr("THREAD FAIL: ");
-    wr(why);
-    wr("\n");
+    say("THREAD FAIL: %s\n", why);
     nsi(SYS_EXIT, 1, 0, 0);
     for (;;) { }
 }
@@ -338,8 +338,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     s->a_ctid = 1;
     spawn(t_store, (long)s, 0, (uint64_t)&s->a_ctid);
     long joined = join(&s->a_ctid, 2000);
-    wr("PRADYOS_THREAD_A shared="); wrl(s->a_store == 0xC0FFEE);
-    wr(" joined="); wrl(joined); wr("\n");
+    say("PRADYOS_THREAD_A shared=%d joined=%d\n", (long)(s->a_store == 0xC0FFEE), (long)(joined));
 
     /* B */
     s->tls_ok = 0;
@@ -356,7 +355,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     spawn(t_tls, (long)s, (uint64_t)&s->tls[1][0], (uint64_t)&s->c_ctid);
     join(&s->a_ctid, 2000);
     join(&s->c_ctid, 2000);
-    wr("PRADYOS_THREAD_B tls_ok="); wrl(s->tls_ok); wr("\n");
+    say("PRADYOS_THREAD_B tls_ok=%d\n", (long)(s->tls_ok));
 
     /* C: 8 warm-up cycles, settle, measure, 64 cycles, settle, measure. A
      * leaked tcb + kernel stack is ~26 KiB, so 64 of them are hundreds of
@@ -381,8 +380,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     }
     if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
     long leak = (long)before - (long)mi.free;
-    wr("[thread] C free_before="); wrl((long)before);
-    wr(" free_after="); wrl((long)mi.free); wr("\n");
+    say("[thread] C free_before=%d free_after=%d\n", (long)((long)before), (long)((long)mi.free));
     /* Diagnostic for a failing C: are the 64 threads' tcbs still in the
      * scheduler ring (not reaped), or gone with their pages missing anyway?
      * Threads carry the creator's name; the creator itself is excluded. */
@@ -398,8 +396,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             left++;
             if (pi.state == 4) zomb++;           /* THREAD_ZOMBIE */
         }
-        wr("[thread] C leftover_threads="); wrl(left);
-        wr(" zombie="); wrl(zomb); wr("\n");
+        say("[thread] C leftover_threads=%d zombie=%d\n", (long)(left), (long)(zomb));
     }
     line1("PRADYOS_THREAD_C leak_ok=", leak <= 32);
 
@@ -416,12 +413,10 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             poison += s->poison;
         }
         if (arm == 0) {
-            wr("PRADYOS_THREAD_D prot_stale="); wrl(late);
-            wr(" faulted="); wrl(faulted); wr("\n");
+            say("PRADYOS_THREAD_D prot_stale=%d faulted=%d\n", (long)(late), (long)(faulted));
         } else {
-            wr("PRADYOS_THREAD_E stale="); wrl(late);
-            wr(" faulted="); wrl(faulted); wr("\n");
-            wr("PRADYOS_THREAD_M poison="); wrl(poison); wr("\n");
+            say("PRADYOS_THREAD_E stale=%d faulted=%d\n", (long)(late), (long)(faulted));
+            say("PRADYOS_THREAD_M poison=%d\n", (long)(poison));
         }
     }
 
@@ -454,8 +449,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         for (;;) { }
     }
     long survived = reap(gp, 5000);
-    wr("[thread] G efault="); wrl(s->efault); wr("\n");
-    wr("PRADYOS_THREAD_G survived="); wrl(survived); wr("\n");
+    say("[thread] G efault=%d\n", (long)(s->efault));
+    say("PRADYOS_THREAD_G survived=%d\n", (long)(survived));
 
     /* ---- DDR-1181 Amendment 1 (P2): futex ---- */
     /* FA: a thread sleeps in WAIT; WAKE(1) returns 1 once it is queued. */
@@ -470,7 +465,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         }
     }
     join(&s->a_ctid, 2000);
-    wr("PRADYOS_FUTEX_A woke="); wrl(woke); wr(" rc="); wrl(s->frc); wr("\n");
+    say("PRADYOS_FUTEX_A woke=%d rc=%d\n", (long)(woke), (long)(s->frc));
 
     /* FB: a value mismatch returns at once (a child: a mutant would sleep). */
     s->fbw = 5; s->brc = 1;
@@ -482,7 +477,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         for (;;) { }
     }
     reap(bp, 2000);
-    wr("PRADYOS_FUTEX_B eagain="); wrl(s->brc); wr("\n");
+    say("PRADYOS_FUTEX_B eagain=%d\n", (long)(s->brc));
 
     /* FC: a 50 ms timeout ends the wait, and not early. */
     s->fcw = 0; s->crc = 1; s->cms = 0;
@@ -497,8 +492,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         for (;;) { }
     }
     reap(cp, 3000);
-    wr("PRADYOS_FUTEX_C timedout="); wrl(s->crc);
-    wr(" slept_ok="); wrl(s->cms >= 40); wr("\n");
+    say("PRADYOS_FUTEX_C timedout=%d slept_ok=%d\n", (long)(s->crc), (long)(s->cms >= 40));
 
     /* FD: WAKE(2) never wakes more than 2 of 4 waiters. */
     s->fdw = 0; s->fq = 0;
@@ -518,7 +512,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             else nsi(SYS_YIELD, 0, 0, 0);
         }
     }
-    wr("PRADYOS_FUTEX_D max2="); wrl(!over); wr(" total="); wrl(total); wr("\n");
+    say("PRADYOS_FUTEX_D max2=%d total=%d\n", (long)(!over), (long)(total));
 
     /* FE: a fork child waits on the MAP_SHARED page; the parent wakes it. */
     s->few = 0; s->erc = 1; s->ready = 0;
@@ -540,7 +534,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         }
     }
     reap(ep, 2000);
-    wr("PRADYOS_FUTEX_E shared_woke="); wrl(ewoke); wr(" rc="); wrl(s->erc); wr("\n");
+    say("PRADYOS_FUTEX_E shared_woke=%d rc=%d\n", (long)(ewoke), (long)(s->erc));
 
     /* FF: a PRIVATE waiter in another process is reached by no wake of ours.
      * FG: and SIGKILL still ends it. */
@@ -557,7 +551,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     settle(100);                         /* the child is asleep */
     long leaked = fx(&s->ffw, FUTEX_WAKE | FUTEX_PRIVATE, 1, 0);
     leaked += fx(&s->ffw, FUTEX_WAKE, 1, 0);
-    wr("PRADYOS_FUTEX_F private_isolated="); wrl(leaked == 0); wr("\n");
+    say("PRADYOS_FUTEX_F private_isolated=%d\n", (long)(leaked == 0));
     nsi(SYS_KILL, fpp, SIGKILL, 0);
     long killed = 0;
     {
@@ -568,7 +562,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             nsi(SYS_YIELD, 0, 0, 0);
         }
     }
-    wr("PRADYOS_FUTEX_G killed_waiter="); wrl(killed); wr("\n");
+    say("PRADYOS_FUTEX_G killed_waiter=%d\n", (long)(killed));
 
     /* FH: a signal with a handler interrupts the wait. */
     s->fhw = 0; s->hrc = 1; s->hdone = 0; s->ready = 0;
@@ -592,7 +586,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         }
     }
     reap(hp, 2000);
-    wr("PRADYOS_FUTEX_H eintr="); wrl(s->hrc); wr("\n");
+    say("PRADYOS_FUTEX_H eintr=%d\n", (long)(s->hrc));
 
     /* FI: a sleeping joiner is woken by the CLEARTID write. */
     long iwoke = 0, itimeout = 0;
@@ -606,7 +600,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         join(&s->ictid, 2000);
         nsi(SYS_MUNMAP, stk, STK, 0);
     }
-    wr("PRADYOS_FUTEX_I cleartid_woke="); wrl(iwoke > 0 && itimeout == 0); wr("\n");
+    say("PRADYOS_FUTEX_I cleartid_woke=%d\n", (long)(iwoke > 0 && itimeout == 0));
 
     /* FJ: argument checks. */
     long rej = 0;
@@ -615,9 +609,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (fx((volatile uint32_t *)0x10, FUTEX_WAIT, 0, 0) == -14) rej++;
     if (fx(&s->fw, 5, 0, 0) == -38) rej++;
     if (fx(&s->fw, FUTEX_WAIT, 0, &bad) == -22) rej++;
-    wr("PRADYOS_FUTEX_J rejects="); wrl(rej); wr("\n");
+    say("PRADYOS_FUTEX_J rejects=%d\n", (long)(rej));
 
-    wr("PRADYOS_THREAD_DONE\n");
+    say("PRADYOS_THREAD_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }
