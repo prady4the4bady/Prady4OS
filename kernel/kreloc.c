@@ -4,6 +4,7 @@
 #include "kreloc.h"
 #include "console.h"
 #include "fault_expect.h"
+#include "vmm.h"           /* vmm_resolve: the D probe address must be unmapped */
 
 __attribute__((section(".kreloc"), used, aligned(8)))
 const unsigned char kreloc_table[KRELOC_RESERVE];
@@ -84,13 +85,23 @@ static void (*const g_kaslr_fptr)(void) = kaslr_probe_target;
 /* Arm D: one deliberate #PF inside this function, under the fault-expect
  * latch. The unslid RIP must resolve (sym_at.sh) to this symbol. */
 __attribute__((noinline)) void probe_kaslr_fault(void) {
+    /* The address goes through a register: as an absolute operand the
+     * assembler silently encoded it as disp32 0 (`mov 0x0,%rax`), a mapped
+     * address, so the probe never faulted (run 39552929205, fault_hit=0). */
+    const uint64_t probe = 0xFFFFFF0000000000ull;   /* PML4[510], never mapped */
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    if (vmm_resolve(cr3, probe)) {
+        kputs("[kaslr] D arm FAIL: probe address is mapped\r\n");
+        return;
+    }
     uint64_t lo, hi;
     __asm__ volatile("lea 1f(%%rip), %0\n\tlea 2f(%%rip), %1" : "=r"(lo), "=r"(hi));
     if (!fault_expect_arm(lo, hi, hi)) {
         kputs("[kaslr] D arm FAIL\r\n");
         return;
     }
-    __asm__ volatile("1: movq 0xFFFFFF0000000000, %%rax\n2:" ::: "rax", "memory");
+    __asm__ volatile("1: movq (%0), %%rax\n2:" :: "r"(probe) : "rax", "memory");
     uint32_t vec = 0, err = 0;
     int hit = fault_expect_taken(&vec, &err);
     kputs("[kaslr] D fault_hit=");
