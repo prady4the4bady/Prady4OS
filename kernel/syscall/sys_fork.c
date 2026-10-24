@@ -17,6 +17,7 @@
  */
 #include "sys_fork.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "vmm_cow.h"
 #include "vmm.h"
 #include "syscall.h"      /* syscall_register, syscall_user_rip/rsp */
@@ -37,7 +38,11 @@ static long sys_fork(long a1, long a2, long a3, long a4, long a5, long a6) {
     if (parent->rb_log)
         return -EPERM;
 
+    /* DDR-1181 §3.3: the copy walks and re-protects the parent's page tables,
+     * which a sibling thread could be changing; it holds the mm lock. */
+    mm_lock(parent);
     uint64_t child_cr3 = vmm_fork_address_space_cow(parent->cr3);
+    mm_unlock(parent);
     if (!child_cr3)
         return -ENOMEM;
 
