@@ -82,6 +82,7 @@ static int fd_clone_with(struct tcb *src, struct tcb *dst, void *(*alloc)(size_t
         struct fd_entry *se = &src->fdt.e[i];
         struct fd_entry *de = &dst->fdt.e[i];
         struct vfs_file *nf = 0;
+        *de = *se;                                   /* MUTANT M1: slot written before alloc */
         if (se->kind == FD_VFS && se->file) {
             nf = (struct vfs_file *)alloc(sizeof(struct vfs_file));
             if (!nf) {
