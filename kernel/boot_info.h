@@ -120,7 +120,7 @@ _Static_assert(sizeof(struct boot_fb) == 32, "boot_fb must stay 32 bytes");
 #define BOOT_KIMG_PHYS   0x4FC0ull
 #define BOOT_KIMG_MAGIC  0x474D494Bu     /* 'KIMG' */
 #define KIMG_PHYS        0x800000ull     /* 8 MiB */
-#define KIMG_WINDOW      0x180000ull     /* 48 x 32 KiB, stage2's read window */
+#define KIMG_WINDOW      0x1A0000ull     /* 52 x 32 KiB, stage2's read window (DDR-1183) */
 #define KIMG_SRC_BIOS    1u
 #define KIMG_SRC_UEFI    2u
 

@@ -20,6 +20,7 @@
 #include "kheap.h"
 #include "string.h"
 #include "aether.h"     /* DDR-1171: rollback-task refusals + create log */
+#include "shm.h"        /* DDR-1178 A3: ftruncate/fstat of an FD_SHM */
 
 #define PATH_MAX 256
 
@@ -128,6 +129,9 @@ static long sys_fstat(long fd, long ustat, long a3, long a4, long a5, long a6) {
         st.st_nlink   = 1;
         st.st_blksize = 4096;
         st.st_blocks  = (int64_t)((e->file->size + 511) / 512);
+    } else if (e->kind == FD_SHM) {
+        st.st_size = (int64_t)shm_obj_npages(e->mnt) * 4096;   /* DDR-1178 A3.2 */
+        st.st_mode = S_IFREG | 0600;
     } else {
         st.st_mode = S_IFREG | 0644;          /* console / other: size 0 */
     }
@@ -153,6 +157,15 @@ static long sys_ftruncate(long fd, long len, long a3, long a4, long a5, long a6)
     struct fd_entry *e = fd_get(current_thread, (int)fd);
     if (!e)
         return -EBADF;
+    if (e->kind == FD_SHM) {
+        /* DDR-1178 A3.2: sizes a shm_open object exactly once. Frames an
+         * agent's memory cap does not see, so an agent may not (A2.2). */
+        if (current_thread->is_agent)
+            return -EPERM;
+        if (len == 0 || (uint64_t)len > (uint64_t)SHM_MAX_PAGES * 4096)
+            return -EINVAL;
+        return shm_obj_size(e->mnt, (uint32_t)(((uint64_t)len + 4095) / 4096));
+    }
     if (e->kind != FD_VFS || !e->file)
         return -EINVAL;            /* console/pipe: no length to set */
 

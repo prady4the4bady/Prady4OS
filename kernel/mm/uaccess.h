@@ -54,6 +54,13 @@ static inline void uaccess_end(void) {
     if (g_smap_on) __asm__ volatile("clac" ::: "cc");
 }
 
+/* DDR-1181 §3.7: the single user-copy instruction (arch/x86_64/uaccess_copy.asm).
+ * A ring-0 #PF inside it -- a sibling thread unmapped or write-protected the
+ * range after it was validated -- resumes at uaccess_copy_fault and returns
+ * -EFAULT instead of panicking. Callers hold the SMAP window open. */
+long uaccess_copy(void *dst, const void *src, uint64_t n);
+extern char uaccess_copy_insn[], uaccess_copy_insn_end[], uaccess_copy_fault[];
+
 /* Copy `n` bytes user->kernel. Returns n on success, -EFAULT on a bad source. */
 ssize_t copyin(void *kdst, const void __user *usrc, size_t n);
 

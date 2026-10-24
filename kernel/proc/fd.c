@@ -4,6 +4,7 @@
 #include "kheap.h"
 #include "vfs.h"       /* struct vfs_file (deep copy in fd_clone) */
 #include "pipe.h"      /* pipe_close / pipe_incref (FD_PIPE) */
+#include "shm.h"       /* shm_hold / shm_unhold (FD_SHM, DDR-1178 A3) */
 #include "errno.h"     /* -ENOMEM */
 #include "string.h"    /* memcpy */
 
@@ -56,6 +57,8 @@ void fd_free(struct tcb *t, int fd) {
         pipe_close(e->pipe, e->flags == PIPE_WRITE_END);
     } else if (e->kind == FD_EPOLL && e->epoll) {
         kfree(e->epoll);              /* sole owner (not inherited/dup'd) */
+    } else if (e->kind == FD_SHM) {
+        shm_unhold(e->mnt);           /* DDR-1178 A3.2: this entry's hold */
     } else if (e->file) {
         kfree(e->file);
     }
@@ -82,6 +85,8 @@ int fd_clone(struct tcb *src, struct tcb *dst) {
         } else if (se->kind == FD_PIPE && se->pipe) {
             /* DDR-787: the child's copy holds the same END as the parent's fd. */
             pipe_incref(se->pipe, se->flags == PIPE_WRITE_END);
+        } else if (se->kind == FD_SHM) {
+            shm_hold(se->mnt);                       /* DDR-1178 A3.2: one per entry */
         } else if (se->kind == FD_VFS && se->file) {
             struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
             if (!nf) {

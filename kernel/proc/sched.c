@@ -1,5 +1,8 @@
 /* kernel/sched.c — preemptive round-robin kernel scheduler (Phase 2c/2e). */
 #include "sched.h"
+#include "mm.h"           /* DDR-1181: struct mm */
+#include "shm.h"          /* DDR-1178 A2 */
+#include "uaccess.h"      /* DDR-1181 P1c: CLEARTID */
 #include "errno.h"     /* DDR-955: ETIMEDOUT for sched_block_timeout */
 #include "numa.h"      /* DDR-885: NUMA-affine steal order */
 #include "kheap.h"
@@ -1117,6 +1120,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dbg_ticks       = 0;
     t->block_deadline  = 0;   /* DDR-955 */
     t->wake_timed_out  = 0;   /* DDR-955 */
+    t->kmx_next        = 0;   /* DDR-1181: not waiting on any kmutex */
+    t->tgid            = 0;   /* DDR-1181 P1c: set with pid by the user creators */
+    t->is_thread       = 0;
+    t->clear_tid       = 0;
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -1150,8 +1157,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     fd_table_init(&t->fdt);    /* all fds free; user threads get stdio wired below */
     t->root_mnt = -1;          /* no filesystem root until a loader assigns one */
     t->fs_cap = 0;
-    for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }
-    t->mmap_next = VMM_MMAP_BASE;   /* anonymous mmap bump pointer */
+    t->mm = 0;                 /* DDR-1181: a loader or the fork clone attaches one */
     t->parent_pid = 0;             /* set by sched_create_user_clone for forks */
     t->fork_retval = -1;           /* unset until a fork assigns it             */
     t->exit_status = 0;            /* set by sched_exit, collected by wait4     */
@@ -1192,8 +1198,6 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_rewrite = 0;             /* DDR-842: no CAP_REWRITE unless granted           */
     t->run_ticks = 0;              /* DDR-735: CPU accounting starts at zero              */
     t->dispatches = 0;
-    t->mem_limit = 0;              /* L6: 0 -> lazy 128 MiB cap (aether_mem)              */
-    t->mem_used = 0;
     t->bud_max_ticks = 0; t->bud_max_bytes = 0;    /* DDR-1170; NON-NEGOTIABLE 10 */
     t->bud_max_actions = 0; t->bud_tripped = 0;
     t->bud_start = 0; t->bud_bytes = 0; t->bud_actions = 0;
@@ -1270,6 +1274,7 @@ struct tcb *sched_create_user(const char *name, uint64_t user_rip, uint64_t user
         return 0;
     t->is_user = 1;
     t->pid = t->tid;
+    t->tgid = t->pid;          /* DDR-1181 P1c: a process is its own group */
     t->user_rip = user_rip;
     t->user_stack = user_stack;
     fd_init_std(&t->fdt);      /* stdin/stdout/stderr -> console */
@@ -1292,7 +1297,9 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
     if (t) {
         t->is_user     = 1;
         t->pid         = t->tid;
-        t->parent_pid  = parent->pid;
+        t->tgid        = t->pid;          /* DDR-1181 P1c: the child is a new group */
+        t->parent_pid  = parent->tgid;    /* children belong to the PROCESS, so any
+                                           * of the parent's threads can wait4 them */
         t->user_rip    = entry;
         t->user_stack  = user_rsp;
         t->user_arg    = 0;               /* child RDI=0; RAX=0 (fork ret) via enter_user_mode */
@@ -1305,9 +1312,11 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         /* DDR-1178: the child's AS is a copy of the parent's, so its mapping
          * table must be too. Left empty, the child could not munmap an inherited
          * region, and its first addr==0 mmap reused the inherited VA, missed the
-         * overlap and overwrote a live (possibly shared) PTE. */
-        memcpy(t->vma, parent->vma, sizeof t->vma);
-        t->mmap_next   = parent->mmap_next;
+         * overlap and overwrote a live (possibly shared) PTE.
+         * DDR-1181: the table now lives in the child's own mm, created last
+         * (below) so a failed clone never has an mm the fork path must free --
+         * sys_fork destroys child_cr3 itself when this returns NULL. The charge
+         * (mem_used/mem_limit) starts at zero, as it did in the tcb. */
         /* DDR-838: lineage, not authority. is_agent is deliberately NOT inherited
          * (see the zeroing in sched_create), so the containment cap has to ride
          * on something fork does propagate. A child of an agent, or of anything
@@ -1332,9 +1341,16 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         fr->rflags = pc->u_rflags;                /* parent's flags (IF set)     */
         fr->cs = USER_CS_SEL;  fr->ss = USER_SS_SEL;
         /* Replace the fresh (empty) cap + fd tables with copies of the parent's. */
-        if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0) {
+        struct mm *cm = 0;
+        if (cap_fork(parent->caps, t->caps) != 0 || fd_clone(parent, t) != 0 ||
+            !(cm = mm_create(child_cr3))) {
             sched_destroy(t);
             t = 0;
+        } else {
+            memcpy(cm->vma, parent->mm->vma, sizeof cm->vma);
+            cm->mmap_next = parent->mm->mmap_next;
+            shm_fork_vmas(cm);   /* DDR-1178 A2.2: the copies are attachments */
+            t->mm = cm;
         }
     }
 
@@ -1347,6 +1363,61 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
 
 /* Unlink t from the circular ready ring. Caller MUST hold g_sched_lock
  * (cap-2a D2 — topology mutation is now serialized across CPUs). */
+/* DDR-1181 P1c: SYS_THREAD_CREATE's tcb. Shares the creator's mm (one more
+ * reference, one more live thread) and its capability table; copies what
+ * DDR-1181 §3.6 says is copied (fds, signal dispositions, FPU state, root and
+ * fs capability). Enters ring 3 at `entry` with RSP = stack, RDI = arg and
+ * FS base = tls. Created BLOCKED and unblocked only once fully built. */
+struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
+                                     uint64_t arg, uint64_t tls, uint64_t clear_tid) {
+    struct tcb *t = sched_create_state(user_launch, 0, parent->name, THREAD_BLOCKED);
+    if (!t)
+        return 0;
+    t->is_user    = 1;
+    t->is_thread  = 1;
+    t->pid        = t->tid;
+    t->tgid       = parent->tgid;
+    t->parent_pid = 0;              /* not a wait4 child: the reaper takes it */
+    t->user_rip   = entry;
+    t->user_stack = stack;
+    t->user_arg   = arg;
+    t->fs_base    = tls;
+    t->clear_tid  = clear_tid;
+    t->root_mnt   = parent->root_mnt;
+    t->fs_cap     = parent->fs_cap;
+    t->agent_depth = parent->agent_depth;
+    signal_fork_copy(t, parent);     /* §3.6: dispositions copied (P4 shares them) */
+    memcpy(t->fpu_state, parent->fpu_state, sizeof t->fpu_state);
+    if (fd_clone(parent, t) != 0) {  /* §3.6: fd table copied (P4 shares it) */
+        sched_destroy(t);
+        return 0;
+    }
+    /* §3.6: ONE capability table for the process, so a drop or revoke by any
+     * thread holds for all. Replace the fresh table sched_create_state made. */
+    cap_table_destroy(t->caps);
+    cap_table_get(parent->caps);
+    t->caps = parent->caps;
+    /* §3.1: the shared address space. cr3 is the cached copy (tlb_shoot and the
+     * context switch read it); both threads now hold the same value.
+     * Joined under the topology lock, the same lock sched_exit's group-kill
+     * walk holds while it fixes group_set and signals every t->mm == mm: so
+     * either the walk sees this thread and kills it, or this check sees
+     * group_set and the thread is never started. */
+    uint64_t fl = irq_save();
+    if (parent->mm->group_set) {
+        irq_restore(fl);
+        sched_destroy(t);            /* drops the shared caps ref; no mm ref held */
+        return 0;
+    }
+    mm_get(parent->mm);
+    __atomic_add_fetch(&parent->mm->live, 1, __ATOMIC_ACQ_REL);
+    t->mm  = parent->mm;
+    t->cr3 = parent->cr3;
+    irq_restore(fl);
+    sched_unblock(t);
+    return t;
+}
+
 static void sched_ring_unlink(struct tcb *t) {
     struct tcb *p = t->next;
     while (p->next != t)
@@ -1412,7 +1483,7 @@ static void sched_free_tcb(struct tcb *t) {
     if (t->rb_log)                      /* DDR-1171: the rollback log page */
         aether_rb_free(t);
     if (t->caps)
-        cap_table_destroy(t->caps);
+        cap_table_destroy(t->caps);     /* DDR-1181: drops a ref; threads share one */
     /* DDR-1106: `!t->is_idle` is LOAD-BEARING, not defensive. Since DDR-1106 an
      * idle tcb carries a real kstack_base, and NEITHER idle stack came from
      * kmalloc -- the BSP's is boot.asm's .bss `kernel_stack` and each AP's is a
@@ -1466,9 +1537,14 @@ struct tcb *sched_find_child(struct tcb *parent, int pid,
     struct tcb *t = parent->next;
     while (t && t != parent) {
         if (++n > WAIT4_RING_MAX) { *ringbad = 1; break; }
-        if (t->parent_pid == parent->pid && (pid == -1 || (int)t->pid == pid)) {
+        if (t->parent_pid == parent->tgid && (pid == -1 || (int)t->pid == pid)) {
             *any = 1;
-            if (t->state == THREAD_ZOMBIE) { found = t; break; }
+            /* DDR-1181 §3.4: a zombie leader is reapable only once every
+             * thread of its group has exited; until then it counts as live. */
+            if (t->state == THREAD_ZOMBIE &&
+                (!t->mm || __atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) == 0)) {
+                found = t; break;
+            }
             if (!*has_live) *has_live = t;
         }
         t = t->next;
@@ -2464,7 +2540,26 @@ void sched_unblock(struct tcb *t) {
  * we are still executing on this thread's kernel stack. */
 static struct tcb *find_user_pid_locked(uint32_t pid);  /* below */
 
-void sched_exit(int status) {
+/* DDR-1181 P1c. `group`: sched_exit (the process ends: SYS_EXIT, a fatal fault,
+ * SIGKILL, a budget kill) versus sched_exit_thread (SYS_THREAD_EXIT). */
+static void sched_exit_common(int status, int group) __attribute__((noreturn));
+
+void sched_exit(int status)        { sched_exit_common(status, 1); }
+void sched_exit_thread(int status) { sched_exit_common(status, 0); }
+
+/* The tcb whose pid is `pid` in ANY state (a group leader may already be a
+ * zombie). Caller holds the topology lock (irq_save). */
+static struct tcb *find_any_pid_locked(uint32_t pid) {
+    struct tcb *t = current_thread;
+    do {
+        if (t->pid == pid)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
+static void sched_exit_common(int status, int group) {
     /* 5d: PID 1 must never exit. If init returns or _exit()s, halt loudly —
      * the system has no reaper / no first process to fall back on. */
     if (g_init_pid && current_thread->pid == g_init_pid) {
@@ -2483,14 +2578,50 @@ void sched_exit(int status) {
      * pid holds one) so the metrics stay readable post-mortem without depending on
      * a SYS_AGENT_METRICS read having landed during the agent's life. */
     void agent_metrics_reap(uint32_t pid, uint64_t run_ticks, uint64_t dispatches);
-    if (current_thread->is_user) {
+    struct tcb *self = current_thread;
+    struct mm *mm = self->mm;
+
+    /* DDR-1181 §3.4: a process exit ends every thread of the group. The status
+     * is fixed FIRST, so the siblings' own SIGKILL exits cannot overwrite it. */
+    if (group && mm && __atomic_load_n(&mm->live, __ATOMIC_ACQUIRE) > 1) {
+        uint64_t gfl = irq_save();
+        if (!mm->group_set) {
+            mm->group_status = status;
+            mm->group_set = 1;
+        }
+        struct tcb *t = self->next;
+        while (t != self) {
+            if (t->mm == mm && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+                sig_raise(t, SIGKILL, (int32_t)self->pid, SI_KERNEL, 0);
+            t = t->next;
+        }
+        irq_restore(gfl);
+    }
+
+    /* DDR-1181 P1c: CLEARTID. Written while the mm is certainly still mapped
+     * (this thread holds a reference until it is reaped). A bad address is
+     * ignored, as on Linux. */
+    if (self->clear_tid) {
+        uint32_t zero = 0;
+        (void)copyout((void __user *)(uintptr_t)self->clear_tid, &zero, sizeof zero);
+    }
+
+    /* The LAST thread out is the process exit: per-process resources are
+     * reclaimed only then, because the others still run in this address space
+     * (a surface's frames are mapped in it). A kernel thread has no mm. */
+    int last = mm ? (__atomic_sub_fetch(&mm->live, 1, __ATOMIC_ACQ_REL) == 0) : 1;
+    if (last && mm && !mm->group_set) {
+        mm->group_status = status;     /* every thread ended by thread_exit */
+        mm->group_set = 1;
+    }
+    if (current_thread->is_user && last) {
         /* DDR-1171: a REJECTED rollback task undoes its filesystem effects here,
          * in its own context (its cap + root mount) and at the one point it can
          * no longer write, so the replay cannot race its own writes. */
         if (current_thread->rb_pending && current_thread->rb_log)
             aether_rb_replay(current_thread);
-        surface_reap_pid(current_thread->pid);
-        socket_reap_pid(current_thread->pid);
+        surface_reap_pid(current_thread->tgid);   /* DDR-1181: owned per process */
+        socket_reap_pid(current_thread->tgid);
         agent_metrics_reap(current_thread->pid,
                            current_thread->run_ticks, current_thread->dispatches);
     }
@@ -2507,25 +2638,34 @@ void sched_exit(int status) {
     uint64_t fl = irq_save();
     /* 5d: reparent this thread's children to init so PID 1 reaps the whole
      * subtree (live children become orphans on this exit; zombies too). */
-    if (g_init_pid) {
+    if (g_init_pid && last) {          /* DDR-1181: children belong to the group */
         struct tcb *t = current_thread->next;
         while (t != current_thread) {
-            if (t->parent_pid == current_thread->pid)
+            if (t->parent_pid == current_thread->tgid)
                 t->parent_pid = g_init_pid;
             t = t->next;
         }
     }
     current_thread->exit_status = status;
+    /* DDR-1181: the group leader is the process as its parent sees it (wait4,
+     * SIGCHLD). It may have exited already (thread_exit) and be a zombie. */
+    struct tcb *leader = (current_thread->pid == current_thread->tgid)
+                       ? current_thread : find_any_pid_locked(current_thread->tgid);
     /* DDR-1174: SIGCHLD to a live user parent, recorded under this lock so the
      * parent cannot be freed between lookup and raise (DDR-1159's rule). */
-    if (current_thread->is_user) {
-        struct tcb *par = find_user_pid_locked(current_thread->parent_pid);
+    if (current_thread->is_user && last && leader) {
+        struct tcb *par = find_user_pid_locked(leader->parent_pid);
         if (par)
-            sig_raise(par, SIGCHLD, (int32_t)current_thread->pid, CLD_EXITED, status);
+            sig_raise(par, SIGCHLD, (int32_t)leader->pid, CLD_EXITED,
+                      mm ? mm->group_status : status);
     }
     current_thread->state = THREAD_ZOMBIE;      /* NOT pickable; on_cpu stays set */
     if (current_thread->waiter)
         sched_unblock(current_thread->waiter);
+    /* A parent blocked in wait4 on the leader can reap it only once the last
+     * thread is out (sched_find_child), so the last exit wakes it. */
+    if (last && leader && leader != current_thread && leader->waiter)
+        sched_unblock(leader->waiter);
     irq_restore(fl);                            /* topology lock only */
     schedule();                                 /* never returns */
     for (;;)                   /* unreachable */
@@ -2632,7 +2772,7 @@ int sched_user_pid_snap(uint32_t pid, struct sched_user_snap *out) {
     if (t) {
         out->run_ticks  = t->run_ticks;
         out->dispatches = t->dispatches;
-        out->mem_used   = t->mem_used;
+        out->mem_used   = t->mm ? t->mm->mem_used : 0;
         out->state      = t->state;
         rc = 0;
     }
@@ -2699,16 +2839,15 @@ static void reaper_thread(void *arg) {
             }
             t = t->next;
         }
-        uint64_t cr3 = 0;
+        struct mm *vmm = 0;
         if (victim) {
-            cr3 = victim->cr3;
+            vmm = victim->mm;              /* DDR-1181: the AS goes with the mm */
             sched_ring_unlink(victim);     /* claim + unlink atomically under the lock */
         }
         irq_restore(fl);
         if (victim) {                      /* free outside the lock (cap-2a D2) */
             sched_free_tcb(victim);
-            if (cr3)
-                vmm_destroy_address_space(cr3);
+            mm_put(vmm);                   /* last ref destroys the page tables */
         }
         yield();
     }

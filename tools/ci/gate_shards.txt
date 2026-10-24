@@ -238,3 +238,4 @@
 1	smoke-rollback	150	strict
 6	smoke-tlbshoot	240	strict
 0	smoke-shm	180	strict
+2	smoke-thread	240	strict
