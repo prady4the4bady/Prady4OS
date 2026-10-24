@@ -53,42 +53,40 @@ static inline long nsi6(long n, long a1, long a2, long a3,
     return r;
 }
 
-/* Each arm line leaves in ONE write: other processes print to the same
- * serial port, and a line written in pieces can be split by their output
- * (mut/accmode-M7 run, job 118899269503: "size=PRADYOS_FPU_OK"). */
-static char g_line[160];
-static long g_ll;
-
-static void flush_line(void) {
-    if (g_ll) nsi(SYS_WRITE, 1, (long)g_line, g_ll);
-    g_ll = 0;
-}
-
-static void wr(const char *s) {
-    for (; *s; s++) {
-        if (g_ll == (long)sizeof g_line) flush_line();
-        g_line[g_ll++] = *s;
-        if (*s == '\n') flush_line();
+/* Every line leaves in ONE write (DDR-1182 §3.1: a line written in pieces
+ * can be split by other output). The line is built on the stack because a
+ * probe may not carry a writable section (DDR-826). Understands %d (a long)
+ * and %s only. */
+static void say(const char *fmt, ...) {
+    char b[192];
+    long n = 0;
+    __builtin_va_list ap;
+    __builtin_va_start(ap, fmt);
+    for (const char *f = fmt; *f && n < (long)sizeof b - 21; f++) {
+        if (f[0] == '%' && f[1] == 'd') {
+            long v = __builtin_va_arg(ap, long);
+            unsigned long u = v < 0 ? 0UL - (unsigned long)v : (unsigned long)v;
+            char d[20];
+            int nd = 0;
+            do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
+            if (v < 0) b[n++] = '-';
+            while (nd) b[n++] = d[--nd];
+            f++;
+        } else if (f[0] == '%' && f[1] == 's') {
+            for (const char *s = __builtin_va_arg(ap, const char *);
+                 *s && n < (long)sizeof b - 1; s++)
+                b[n++] = *s;
+            f++;
+        } else {
+            b[n++] = *f;
+        }
     }
-}
-
-static void wrl(long v) {
-    char b[24];
-    int k = 0;
-    unsigned long u = (v < 0) ? (unsigned long)(-v) : (unsigned long)v;
-    char d[20];
-    int nd = 0;
-    do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
-    if (v < 0) b[k++] = '-';
-    while (nd) b[k++] = d[--nd];
-    b[k] = 0;
-    wr(b);
+    __builtin_va_end(ap);
+    nsi(SYS_WRITE, 1, (long)b, n);
 }
 
 __attribute__((noreturn)) static void fail(const char *why) {
-    wr("ACCMODE FAIL: ");
-    wr(why);
-    wr("\n");
+    say("ACCMODE FAIL: %s\n", why);
     nsi(SYS_EXIT, 1, 0, 0);
     for (;;) { }
 }
@@ -144,14 +142,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     nsi(SYS_LSEEK, ro, 0, SEEK_END);
     long a = nsi(SYS_WRITE, ro, (long)"xxxx", 4);
     nsi(SYS_CLOSE, ro, 0, 0);
-    wr("PRADYOS_ACCMODE_A ro_write="); wrl(a); wr("\n");
+    say("PRADYOS_ACCMODE_A ro_write=%d\n", (long)(a));
 
     /* B: read on an O_WRONLY fd. */
     mk("/ACCB.TXT");
     long wo = openf("/ACCB.TXT", O_WRONLY);
     long b = nsi(SYS_READ, wo, (long)buf, 8);
     nsi(SYS_CLOSE, wo, 0, 0);
-    wr("PRADYOS_ACCMODE_B wo_read="); wrl(b); wr("\n");
+    say("PRADYOS_ACCMODE_B wo_read=%d\n", (long)(b));
 
     /* C: the io_uring paths, which reach vfs_write/vfs_read directly and not
      * through the write()/read() handlers above. */
@@ -168,16 +166,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (nsi(SYS_IO_URING_ENTER, rv, 2, 0) != 2) fail("io_uring enter");
     nsi(SYS_CLOSE, cro, 0, 0);
     nsi(SYS_CLOSE, cwo, 0, 0);
-    wr("PRADYOS_ACCMODE_C ring_ro_write="); wrl(cqe_res(ring, 0));
-    wr(" ring_wo_read="); wrl(cqe_res(ring, 1)); wr("\n");
+    say("PRADYOS_ACCMODE_C ring_ro_write=%d ring_wo_read=%d\n", (long)(cqe_res(ring, 0)), (long)(cqe_res(ring, 1)));
 
     /* D: ftruncate on an O_RDONLY fd; the file must keep its 8 bytes. */
     mk("/ACCD.TXT");
     long dro = openf("/ACCD.TXT", O_RDONLY);
     long d = nsi(SYS_FTRUNCATE, dro, 0, 0);
     nsi(SYS_CLOSE, dro, 0, 0);
-    wr("PRADYOS_ACCMODE_D ro_ftrunc="); wrl(d);
-    wr(" size="); wrl(fsize("/ACCD.TXT")); wr("\n");
+    say("PRADYOS_ACCMODE_D ro_ftrunc=%d size=%d\n", (long)(d), (long)(fsize("/ACCD.TXT")));
 
     /* E: open-time checks. Access mode 3 means nothing; O_RDONLY|O_TRUNC
      * would modify a file through a read-only open. */
@@ -186,9 +182,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (e3 >= 0) nsi(SYS_CLOSE, e3, 0, 0);
     long et = nsi(SYS_OPEN, (long)"/ACCE.TXT", O_RDONLY | O_TRUNC, 0);
     if (et >= 0) nsi(SYS_CLOSE, et, 0, 0);
-    wr("PRADYOS_ACCMODE_E acc3="); wrl(e3);
-    wr(" ro_trunc="); wrl(et);
-    wr(" size="); wrl(fsize("/ACCE.TXT")); wr("\n");
+    say("PRADYOS_ACCMODE_E acc3=%d ro_trunc=%d size=%d\n", (long)(e3), (long)(et), (long)(fsize("/ACCE.TXT")));
 
     /* F: a dup2 copy keeps the source's mode. */
     mk("/ACCF.TXT");
@@ -198,14 +192,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long f = nsi(SYS_WRITE, 40, (long)"xxxx", 4);
     nsi(SYS_CLOSE, 40, 0, 0);
     nsi(SYS_CLOSE, fro, 0, 0);
-    wr("PRADYOS_ACCMODE_F dup_ro_write="); wrl(f); wr("\n");
+    say("PRADYOS_ACCMODE_F dup_ro_write=%d\n", (long)(f));
 
     /* G: mapping a file reads it, so an O_WRONLY fd may not be mapped. */
     mk("/ACCG.TXT");
     long gwo = openf("/ACCG.TXT", O_WRONLY);
     long g = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE, gwo, 0);
     nsi(SYS_CLOSE, gwo, 0, 0);
-    wr("PRADYOS_ACCMODE_G wo_mmap="); wrl(g < 0 ? g : 0x7fff); wr("\n");
+    say("PRADYOS_ACCMODE_G wo_mmap=%d\n", (long)(g < 0 ? g : 0x7fff));
 
     /* H (regression): an O_RDWR fd still writes and reads. */
     mk("/ACCH.TXT");
@@ -215,10 +209,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     nsi(SYS_LSEEK, hrw, 0, SEEK_SET);
     long hr = nsi(SYS_READ, hrw, (long)buf, 4);
     nsi(SYS_CLOSE, hrw, 0, 0);
-    wr("PRADYOS_ACCMODE_H rw_write="); wrl(hw);
-    wr(" rw_read="); wrl(hr); wr("\n");
+    say("PRADYOS_ACCMODE_H rw_write=%d rw_read=%d\n", (long)(hw), (long)(hr));
 
-    wr("PRADYOS_ACCMODE_DONE\n");
+    say("PRADYOS_ACCMODE_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
 }
