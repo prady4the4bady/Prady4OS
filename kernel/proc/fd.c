@@ -87,8 +87,7 @@ static int fd_clone_with(struct tcb *src, struct tcb *dst, void *(*alloc)(size_t
             if (!nf) {
                 for (int j = 0; j < i; j++)          /* roll back earlier copies */
                     if (dst->fdt.e[j].kind == FD_VFS && dst->fdt.e[j].file) {
-                        kfree(dst->fdt.e[j].file);
-                        dst->fdt.e[j].file = 0;
+                        dst->fdt.e[j].file = 0;      /* MUTANT M2: dropped, not freed */
                     }
                 return -ENOMEM;
             }
