@@ -83,7 +83,7 @@ Each run failed on `smoke-accmode` (shard 8) with the missing line shown. The se
 | M7 | [39500226094](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500226094) | D, then G | G: `wo_mmap=32767`. D: `ro_ftrunc=-22 size=PRADYOS_FPU_OK`, a torn line (below) |
 | M8 | [39500234320](https://github.com/prady4the4bady/Prady4OS/actions/runs/39500234320) | H | red on arm H |
 
-**Torn-line defect, found by M7.** The probe wrote each arm line in 3 to 5 `write` calls. Another process's output (`PRADYOS_FPU_OK`) landed between two of them, so arm D failed with the right value `-22` and a torn `size=`. On a correct tree the same interleaving would make the gate red at random. Fix: `wr()` buffers into one line and issues one `write` per `\n`. Every arm line now leaves in a single call. This is the same mechanism as the DDR-1181 thread arm F fix. The mutants above ran before this fix; they are re-run on the fixed head, and the new runs are added here.
+**Torn-line defect, found by M7.** The probe wrote each arm line in 3 to 5 `write` calls. Another process's output (`PRADYOS_FPU_OK`) landed between two of them, so arm D failed with the right value `-22` and a torn `size=`. On a correct tree the same interleaving would make the gate red at random. Fix: every line is built by `say()` in a stack buffer and leaves in a single `write`. A first version kept the buffer in a static array. It failed CI's DDR-826 check (`ci-probe-rodata-check`: probes may not carry a writable section, `.lbss` 176 B; run 39553352470), so the buffer moved to the stack. This is the same mechanism as the DDR-1181 thread arm F fix. The mutants above ran before this fix; they are re-run on the fixed head, and the new runs are added here.
 
 ## 4. Honesty labels
 
