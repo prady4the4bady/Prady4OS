@@ -219,7 +219,7 @@ USER_C_CFLAGS  := --target=x86_64-elf -ffreestanding -fno-pic -fno-pie -mcmodel=
   -nostdinc -nostdlib -Wall -Wextra -Werror \
   -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
-               kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
+               kernel/kreloc.c kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/ipc/ipc.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
@@ -244,7 +244,7 @@ KERNEL_BIN  := build/kernel.bin
 # boot.o MUST be first so kernel_entry (.text.boot) lands at the image start.
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
-               build/console.o build/idt.o build/irq.o build/pmm.o build/numa.o build/kheap.o \
+               build/console.o build/idt.o build/irq.o build/kreloc.o build/pmm.o build/numa.o build/kheap.o \
                build/vmm.o build/vmm_cow.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
@@ -309,7 +309,7 @@ KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_F
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check smoke-kaslr
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -690,6 +690,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/console.c       -o build/console.o
 	$(CC) $(KCFLAGS) -c kernel/idt.c           -o build/idt.o
 	$(CC) $(KCFLAGS) -c kernel/irq.c           -o build/irq.o
+	$(CC) $(KCFLAGS) -c kernel/kreloc.c        -o build/kreloc.o
 	$(CC) $(KCFLAGS) -c kernel/mm/pmm.c        -o build/pmm.o
 	$(CC) $(KCFLAGS) -c kernel/mm/kheap.c      -o build/kheap.o
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c        -o build/vmm.o
@@ -793,8 +794,27 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	# NET-B: the lwIP-port glue (first-party, -Werror) — lwIP headers via -isystem
 	# (no warnings from them), our shims via -I, -nostdlibinc drops host glibc.
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
-	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
+	$(LD) -nostdlib --emit-relocs -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
+	@# DDR-1179 A1: the KASLR relocation table. --emit-relocs keeps the link's
+	@# relocations in kernel.elf; kreloc.py encodes the 64/32S fields (an unknown
+	@# type, an overflow or a count that disagrees with llvm-readelf fails the
+	@# build), objcopy writes it into .kreloc, and --verify decodes it back OUT
+	@# OF THE SECTION. kernel.bin carries it; nothing applies it yet (slot 0).
+	python3 tools/kreloc/kreloc.py $(KERNEL_ELF) build/kreloc.bin \
+	    --reserve $$(awk '/^#define KRELOC_RESERVE/ { print $$3 }' kernel/kreloc.h) \
+	    --expect $$(llvm-readelf -rW $(KERNEL_ELF) | grep -cE ' R_X86_64_(64|32S) ')
+	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin $(KERNEL_ELF)
+	python3 tools/kreloc/kreloc.py --verify $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
+	@# DDR-1179 A2: the same objects linked 2 MiB higher must equal kernel.bin
+	@# after boot.asm's applier runs over it with a 2 MiB slide (kreloc.py
+	@# replays that loop). Proves the table complete on every build.
+	sed 's/^KERNEL_VBASE = 0xFFFFFFFF80000000;/KERNEL_VBASE = 0xFFFFFFFF80200000;/' $(KERNEL_LD) > build/kernel-slid.ld
+	grep -q '^KERNEL_VBASE = 0xFFFFFFFF80200000;' build/kernel-slid.ld
+	$(LD) -nostdlib --emit-relocs -T build/kernel-slid.ld -o build/kernel-slid.elf $(KERNEL_OBJS) $(LWIP_LIB)
+	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin build/kernel-slid.elf
+	$(OBJCOPY) -O binary build/kernel-slid.elf build/kernel-slid.bin
+	python3 tools/kreloc/kreloc.py --slide-check $(KERNEL_ELF) $(KERNEL_BIN) build/kernel-slid.bin 0x200000
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 1572864 || { echo "kernel.bin exceeds 1.5 MiB — the stage-2 read window (48x64 sectors from LBA 17; DDR-733, raised by DDR-827 then DDR-960). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 48 chunks a full window plus BSS still fits with 372,864 B to spare, and past ~56 it does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
 	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
@@ -2209,10 +2229,24 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # is the one that was silently wrong for as long as DDR-757 has existed. The
 # explicit line makes rw=/nx= visible in every capture and lets a mutant be
 # attributed instead of guessed at.
+# DDR-1179 Amendment 3: KASLR. Three boots with hardware RNG exposed. Arms A
+# and E are each boot's sentinels; B (hardware source), C (>= 2 distinct
+# serial-only slots) and D (the unslid fault RIP resolves to probe_kaslr_fault
+# via sym_at.sh) are checked across the three logs by tools/ci/kaslr_check.sh.
+smoke-kaslr: $(IMG) fat-image sfs-image
+	@rm -f build/kaslr-1.log build/kaslr-2.log build/kaslr-3.log
+	@for i in 1 2 3; do \
+	  SERIAL_LOG=build/kaslr-$$i.log KEEP_SERIAL=1 TIMEOUT_S=90 QEMU_CPU=qemu64,+rdrand,+rdseed \
+	  EXTRA_SENTINEL="$$(printf 'PRADYOS_KASLR_A reloc_ok=1\n[kaslr] D fault_hit=1\n[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14')" \
+	  FORBIDDEN_SENTINEL="$$(printf '[kaslr] table FAIL\nkernel W^X FAIL\n[kaslr] D arm FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) || exit 1; \
+	done
+	@bash tools/ci/kaslr_check.sh build/kaslr-1.log build/kaslr-2.log build/kaslr-3.log
+
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003')" \
-	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
+	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003\n[kaslr] table ok entries=')" \
+	FORBIDDEN_SENTINEL="$$(printf 'kernel W^X FAIL\n[kaslr] table FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-758 syscall-fuzz gate: a ring-3 probe floods 3000 hostile syscalls (bad NSI
