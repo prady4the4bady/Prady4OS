@@ -2831,7 +2831,8 @@ static void reaper_thread(void *arg) {
         struct tcb *victim = 0;
         struct tcb *t = current_thread->next;
         while (t != current_thread) {
-            if (t->state == THREAD_ZOMBIE && !t->waiter && !pid_alive(t->parent_pid)) {
+            if (t->state == THREAD_ZOMBIE && !t->waiter && !pid_alive(t->parent_pid)
+                && t->tgid == t->pid) {   /* MUTANT T3: non-leader threads never reaped */
                 victim = t;
                 break;
             }
