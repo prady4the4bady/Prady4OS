@@ -144,6 +144,23 @@ static long spawn(void (*fn)(long), long arg, uint64_t tls, uint64_t ctid) {
     return stk;
 }
 
+/* THREADTEST tcbs in the scheduler other than the caller, and how many of
+ * them are zombies (SYS_GETPROCS walks the whole ring, zombies included). */
+static void thr_left(long *left, long *zomb) {
+    struct { uint32_t pid, ppid, state, flags; char name[16];
+             uint64_t run_ticks, dispatches; } pi;
+    long me = nsi(SYS_GETPID, 0, 0, 0);
+    *left = *zomb = 0;
+    for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
+        const char *w = "THREADTEST";
+        int k = 0;
+        while (w[k] && pi.name[k] == w[k]) k++;
+        if (w[k] || (long)pi.pid == me) continue;
+        (*left)++;
+        if (pi.state == 4) (*zomb)++;            /* THREAD_ZOMBIE */
+    }
+}
+
 /* Wait (bounded) until *w == 0, i.e. the thread's clear_tid was written. */
 static int join(volatile unsigned *w, uint64_t bound_ms) {
     uint64_t end = now() + bound_ms * MS;
@@ -322,8 +339,21 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         nsi(SYS_MUNMAP, stk, STK, 0);
     }
     uint64_t span = now() - t0;
+    /* Run 40159179156 measured right after the cycles and the leftover count
+     * only afterwards, so un-reaped zombies (each still holding a tcb and a
+     * kernel stack) could read as lost pages. Count them now, wait (up to
+     * 2 s) until the reaper has freed every one, and only then measure. */
+    long left0 = 0, zomb0 = 0, left = 0, zomb = 0;
+    thr_left(&left0, &zomb0);
+    uint64_t r0 = now();
+    for (;;) {
+        thr_left(&left, &zomb);
+        if (left == 0 || now() - r0 > 2000 * MS) break;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    long reap_ms = (long)((now() - r0) / MS);
     {
-        uint64_t e = now() + 300 * MS;   /* the reaper frees thread zombies */
+        uint64_t e = now() + 300 * MS;
         while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
     }
     if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
@@ -339,28 +369,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long net = drop_cyc - drop_idle;
     say("[thread] C drop_cycles=%d drop_idle=%d net=%d span_ms=%d\n",
         drop_cyc, drop_idle, net, (long)(span / MS));
-    /* A thread whose tcb and kernel stack are never freed (T3) also stays in
-     * the scheduler as a THREADTEST zombie: count them, polling up to 2 s. */
-    long left = 0, zomb = 0;
-    {
-        struct { uint32_t pid, ppid, state, flags; char name[16];
-                 uint64_t run_ticks, dispatches; } pi;
-        long me = nsi(SYS_GETPID, 0, 0, 0);
-        uint64_t end = now() + 2000 * MS;
-        for (;;) {
-            left = zomb = 0;
-            for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
-                const char *w = "THREADTEST";
-                int k = 0;
-                while (w[k] && pi.name[k] == w[k]) k++;
-                if (w[k] || (long)pi.pid == me) continue;
-                left++;
-                if (pi.state == 4) zomb++;           /* THREAD_ZOMBIE */
-            }
-            if (left == 0 || now() > end) break;
-            nsi(SYS_YIELD, 0, 0, 0);
-        }
-    }
+    say("[thread] C after_cycles left=%d zombie=%d reap_ms=%d\n", left0, zomb0, reap_ms);
     say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
     line1("PRADYOS_THREAD_C2 net_leak_ok=", net <= 32);
     /* Diagnostic only (not gated): split the C cycle to find where C2's pages
