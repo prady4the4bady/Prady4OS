@@ -9,7 +9,10 @@
  *      with a SHARED page. The shared loop's SYS_SYSINFO.free_pages drop
  *      exceeds the private loop's by < 128; a per-cycle shared leak adds
  *      >= 256. A bare bound on the shared drop was measured too thin: fork
- *      churn alone dropped 96 (CI run 39177510529, DDR-1178 §4).
+ *      churn alone dropped 96 (CI run 39177510529, DDR-1178 §4). Each
+ *      loop's drop is taken by pm_measure (DDR-1185): the system-wide count
+ *      moved by -182 in a private loop while other processes ran (run
+ *      40217768311), so only a trial with quiet traffic around it counts.
  *   F  the child munmaps the inherited shared region: rc 0 (its VMA table was
  *      copied at fork), and the parent's page survives (refcount, arm A).
  *   E  mprotect(RW) on a shared page, then fork: the child's 0x44 reaches the
@@ -18,6 +21,7 @@
  *      each -EINVAL.
  * C runs only after A held: without a working shared map it is vacuous.
  */
+#include "pagemeter.h"   /* DDR-1185 */
 
 #define SYS_EXIT     4
 #define SYS_WRITE    6
@@ -25,7 +29,6 @@
 #define SYS_MUNMAP  13
 #define SYS_FORK    15
 #define SYS_WAIT4   16
-#define SYS_SYSINFO 71
 #define SYS_MPROTECT 97
 #define SYS_YIELD     3
 #define SYS_SHMGET  112          /* DDR-1178 Amendment 2 (P2) */
@@ -54,12 +57,6 @@
 #define MPR_VA  0x8E00020000ul
 #define CYCLES  256
 #define LEAK_BOUND 128           /* half the mutant's minimum effect (DDR-1178 §4) */
-
-struct sysinfo {
-    char vendor[16]; char brand[64];
-    unsigned cpu_count, feat_edx, feat_ecx, pad;
-    unsigned long uptime_ticks, free_pages;
-};
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -104,13 +101,15 @@ static __attribute__((noreturn)) void fail(const char *what, long v) {
     for (;;) { }
 }
 
+/* Arms J, L and M (not yet on pm_measure, DDR-1185 §3 residual) read the raw
+ * system-wide count through the meter's sampler. */
+static unsigned long free_pages(void) {
+    unsigned long t, f;
+    pm_sample(&t, &f);
+    return f;
+}
 static long mmap6(long va, long prot, long flags, long fd) {
     return nsi6(SYS_MMAP, va, 4096, prot, flags, fd, 0);
-}
-static unsigned long free_pages(void) {
-    struct sysinfo si;
-    if (nsi(SYS_SYSINFO, (long)&si, 0, 0) != 0) fail("sysinfo", -1);
-    return si.free_pages;
 }
 static int reap(long kid) {
     int st = 0;
@@ -119,8 +118,10 @@ static int reap(long kid) {
     return st;
 }
 
-static long loop_drop(long flags) {
-    unsigned long f0 = free_pages();
+/* One arm-C trial: CYCLES x (mmap, fork, child write+exit, wait, munmap). The
+ * free-page drop is taken by pm_measure (DDR-1185), not here. */
+static void loop_run(void *ctx) {
+    long flags = *(long *)ctx;
     for (long i = 0; i < CYCLES; i++) {
         long r = mmap6((long)LOOP_VA, PROT_RW, flags, -1);
         if (r != (long)LOOP_VA) fail("loop_mmap", r);
@@ -134,7 +135,14 @@ static long loop_drop(long flags) {
         reap(k);
         nsi(SYS_MUNMAP, (long)LOOP_VA, 4096, 0);
     }
-    return (long)f0 - (long)free_pages();
+}
+static void line_pm(const char *a, const struct pm_result *r) {
+    char b[160], *p = str(b, a);
+    p = str(p, " trials="); p = dec(p, r->trials);
+    p = str(p, " rej_pre="); p = dec(p, r->rej_pre);
+    p = str(p, " rej_post="); p = dec(p, r->rej_post);
+    p = str(p, " rej_procs="); p = dec(p, r->rej_procs);
+    *p++ = '\n'; *p = 0; wr(b);
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
@@ -165,19 +173,24 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     nsi(SYS_MUNMAP, (long)PRIV_VA, 4096, 0);
 
     if (a == 0x22) {
-        long drop_pv = loop_drop(MAP_PRIVATE | MAP_ANON);
-        long drop_sh = loop_drop(MAP_SHARED | MAP_ANON);
-        /* The private loop is the baseline for fork churn. Unrelated frees
-         * during it can make it NEGATIVE (CI run 39516558534: private=-225,
-         * shared=0), and subtracting a negative baseline reported a leak
-         * that the shared loop never had. A baseline below zero is taken as
-         * zero: a real per-cycle shared leak (>= 256) still fails. */
-        long drop = drop_sh - (drop_pv > 0 ? drop_pv : 0);
+        /* DDR-1185: each loop's drop comes from a trial with no foreign page
+         * traffic around it. Inconclusive (no clean trial) is leaked_ok=0. */
+        struct pm_result rpv, rsh;
+        long fpv = MAP_PRIVATE | MAP_ANON, fsh = MAP_SHARED | MAP_ANON;
+        int okpv = pm_measure(loop_run, &fpv, &rpv);
+        int oksh = pm_measure(loop_run, &fsh, &rsh);
+        /* A baseline below zero is still taken as zero (CI run 39516558534:
+         * private=-225, shared=0, before the meter): it can only subtract
+         * less, so a real per-cycle shared leak (>= 256) still fails. */
+        long drop = rsh.drop - (rpv.drop > 0 ? rpv.drop : 0);
         p = str(b, "PRADYOS_SHM_C cycles="); p = dec(p, CYCLES);
-        p = str(p, " leaked_ok="); p = dec(p, drop < LEAK_BOUND);
+        p = str(p, " leaked_ok="); p = dec(p, okpv && oksh && drop < LEAK_BOUND);
         *p++ = '\n'; *p = 0; wr(b);
-        line2("[shm] free_pages drop private=", drop_pv);
-        line2("[shm] free_pages drop shared=", drop_sh);
+        line2("[shm] free_pages drop private=", rpv.drop);
+        line2("[shm] free_pages drop shared=", rsh.drop);
+        line_pm("[shm] C meter private", &rpv);
+        line_pm("[shm] C meter shared", &rsh);
+        line2("[shm] C conclusive=", okpv && oksh);
     }
 
     if (a == 0x22) {
