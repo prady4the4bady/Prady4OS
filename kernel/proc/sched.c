@@ -1491,7 +1491,7 @@ static void sched_free_tcb(struct tcb *t) {
      * becomes, and every sched_destroy caller passes a tcb it created itself or
      * a zombie child found by pid), but that is a property of the callers, and
      * this change would make it silently load-bearing. State it here instead. */
-    if (t->kstack_base && !t->is_idle)
+    if (t->kstack_base && !t->is_idle && t->tgid == t->pid)   /* MUTANT T9: thread kstack leaked */
         kfree((void *)(uintptr_t)t->kstack_base);
     kfree(t);
 }
