@@ -326,11 +326,22 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct { uint64_t total, free, used; unsigned psz, pad; } mi;
     uint64_t before = 0, t0 = 0;
     long c_unmap_fail = 0, c_unmap_rc = 0;
+    long drop_pre = 0;
     for (int i = 0; i < 72; i++) {
         if (i == 8) {
             uint64_t e = now() + 300 * MS;
             while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
+            /* Diagnostic (not gated): run 40210141897 (net=470) and run
+             * 40212901781 (green) differ only in an unused return value, so
+             * the cycle window may be catching background consumption that
+             * has died down by the later control window. Measure a 2 s idle
+             * window BEFORE the cycles too. */
             if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
+            uint64_t pf = mi.free;
+            e = now() + 2000 * MS;
+            while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
+            if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
+            drop_pre = (long)pf - (long)mi.free;
             before = mi.free;
             t0 = now();
         }
@@ -376,6 +387,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         drop_cyc, drop_idle, net, (long)(span / MS));
     say("[thread] C after_cycles left=%d zombie=%d reap_ms=%d\n", left0, zomb0, reap_ms);
     say("[thread] C munmap_fail=%d first_rc=%d\n", c_unmap_fail, c_unmap_rc);
+    say("[thread] C diag drop_pre_2000ms=%d\n", drop_pre);
     say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
     line1("PRADYOS_THREAD_C2 net_leak_ok=", net <= 32);
     /* Diagnostic only (not gated): split the C cycle to find where C2's pages
