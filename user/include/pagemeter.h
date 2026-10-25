@@ -74,6 +74,7 @@ static inline void pm_procs(long me, long *count, long *sum) {
 /* Wait until the free count holds within PM_TOL for PM_QUIET_TICKS. Returns
  * the free count at the end of the quiet window, or 0 at the deadline. */
 static inline unsigned long pm_quiet(unsigned long deadline) {
+    if (deadline) return 0;   /* MUTANT P-INC (DDR-1185): never quiet */
     unsigned long t, f, t0, f0;
     pm_sample(&t0, &f0);
     for (;;) {
