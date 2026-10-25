@@ -115,7 +115,7 @@ static long loop_run(void *ctx) {
         reap(k);
         nsi(SYS_MUNMAP, (long)LOOP_VA, 4096, 0);
     }
-    return CYCLES;                      /* one forked tcb per cycle */
+    return CYCLES - 1;                  /* MUTANT P-TID (DDR-1185): under-reports own tcbs */
 }
 static void line_pm(const char *a, const struct pm_result *r) {
     char b[160], *p = str(b, a);
