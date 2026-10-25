@@ -153,7 +153,7 @@ A FAT-rooted probe, `user/threadtest.c`, opt-in (`probe_enabled("thread")`), run
 |---|---|---|
 | A | `PRADYOS_THREAD_A shared=1 joined=1` | A store by the thread is seen by the creator (one address space), and `clear_tid` is written at thread exit. |
 | B | `PRADYOS_THREAD_B tls_ok=2` | Two threads with distinct `tls`; each reads its own `%fs:0` self-pointer. |
-| C | `PRADYOS_THREAD_C leftover=0 zombie=0` | 8 warm-up cycles, then 64 create/exit cycles. Within 2 s, no `THREADTEST` tcb except the probe's own is left in the scheduler (`SYS_GETPROCS`). The PMM free-page drop is still printed, as a diagnostic only. **Amended:** see the note after the mutant table. |
+| C | `PRADYOS_THREAD_C leftover=0 zombie=0` and `PRADYOS_THREAD_C2 net_leak_ok=1` | 8 warm-up cycles, then 64 create/exit cycles. **C:** within 2 s, no `THREADTEST` tcb except the probe's own is left in the scheduler (`SYS_GETPROCS`). **C2:** the PMM free-page drop over the cycles, minus the drop over an idle control window of the same length, is at most 32 pages. All four numbers are printed on a `[thread] C drop_cycles=` line. **Amended:** see the note after the mutant table. |
 | D | `PRADYOS_THREAD_D prot_stale=0 faulted=1` | DDR-1177 arm D. A thread on another CPU writes a page in a loop; the creator calls `mprotect(PROT_READ)`. No write starts after `mprotect` returns and succeeds, and the writer faults. |
 | E | `PRADYOS_THREAD_E stale=0 faulted=1` | DDR-1177 arm E. A thread on another CPU reads a page in a loop; the creator calls `munmap`. No read starts after `munmap` returns and succeeds, and the reader faults. |
 | M | `PRADYOS_THREAD_M poison=0` | DDR-1177 M4. Same shape as E, counting reads that return a value other than the pattern. With the KASAN free-poison (`PMM_POISON`, on by default), a frame freed before every CPU acknowledged is read back as poison through the stale entry. |
@@ -189,19 +189,33 @@ The probability argument is not evidence. The evidence is each mutant shown red 
 
 If T4, T5 or T6 cannot be shown red within 16 trials, the trial count is raised. The DDR is amended with the measured red rate; the arm is not dropped.
 
-**Arm C amended (P1c, CI run 39551618166 on `22666b8`).** The first version bounded the PMM free-page drop over the 64 cycles at 32 pages. That run printed `free_before=27695 free_after=27320` (a drop of 375), with `leftover_threads=0 zombie=0`. During the same window, the serial log shows the rest of the boot:
+**Arm C amended (P1c).** The first version bounded the raw PMM free-page drop over the 64 cycles at 32 pages. Two runs printed the following:
+
+| Run | Head | Free-page drop | Leftover / zombie |
+|---|---|---|---|
+| 39551618166 | `22666b8` | 375 | 0 / 0 |
+| 40124472347 | `f702a5d` | 363 | 0 / 0 |
+
+In the same window, the serial log shows the rest of the boot running:
 - CMUSL, FPU, INIT and the PRISM shell starting;
 - service restarts;
 - the SMP and block probes;
-- about ten SFS mount/umount cycles, journal replay, snapshot and lz4 checks;
+- about ten SFS mount/umount cycles;
 - provisioning of the persistent SFS root;
 - the AETHER daemon starting.
 
-The kernel paths, meanwhile, free every reaped thread's tcb and kernel stack. The reaper takes a thread zombie because its `parent_pid` is 0; `sched_free_tcb` then frees the fds, caps, kstack and tcb, and `mm_put` follows.
+Reading the code, every reaped thread's tcb and kernel stack go back to the PMM:
+- the reaper takes a thread zombie, whose `parent_pid` is 0;
+- `sched_free_tcb` frees fds, caps, the kstack and the tcb;
+- a large `kfree` calls `pmm_free_pages` (`kheap.c:270-277`).
 
-A system-wide free count cannot separate the threads from that concurrent work, so the bound measured the boot, not the threads. Arm C now counts the threads themselves. What T3 does (the reaper skips non-leader threads) leaves every thread in the scheduler as a zombie, so `leftover=64 zombie=64` and arm C stays red.
+**Not verified:** which of the two explains the drop. The drop is consistent between runs, and it is close to one tcb plus one kernel stack (about 6 pages) per thread. So a real per-thread leak is not ruled out.
 
-Not covered by C: a teardown that unlinks a thread but skips freeing its kernel stack. That free is the same `sched_free_tcb` line that every process exit uses.
+The arm is therefore not relaxed. It is split so that it measures the threads:
+- **C** counts leftover thread tcbs exactly. T3 leaves 64 zombies.
+- **C2** keeps the 32-page bound, but on the drop over the cycles **minus** the drop over an idle control window of the same length. Steady boot activity cancels, while a per-thread leak (about 380 pages for 64 threads) does not.
+
+The next run's `[thread] C drop_cycles= drop_idle=` line decides the attribution, and the result is recorded here.
 
 **Line integrity.** Every line the probe prints leaves in one `write`. `say()` and `line1()` build each line in a stack buffer (a probe may not carry a writable section, DDR-826). Arms D, E, M and F print right after a child dies with a kernel `[trap]` line. A line written in pieces could be torn by that line, or by another process's output. CI run 39504298130 tore arm F; DDR-1182 §3.1 shows the same failure in another probe.
 

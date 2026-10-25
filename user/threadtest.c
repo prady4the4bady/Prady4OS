@@ -357,36 +357,47 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     join(&s->c_ctid, 2000);
     say("PRADYOS_THREAD_B tls_ok=%d\n", (long)(s->tls_ok));
 
-    /* C: 8 warm-up cycles, settle, measure, 64 cycles, settle, measure. A
-     * leaked tcb + kernel stack is ~26 KiB, so 64 of them are hundreds of
-     * pages; the bound of 32 is far below that and far above noise. */
+    /* C: 8 warm-up cycles, settle, then 64 create/join/munmap cycles. The PMM
+     * free count is system-wide and the rest of the boot runs meanwhile (run
+     * 39551618166: -375 pages, run 40124472347: -363, no thread left in
+     * either), so the cycles are paired with an idle control window of the
+     * same length and the gate bounds the DIFFERENCE. A leaked tcb + kernel
+     * stack is ~6 pages, 64 of them ~380; the bound of 32 is far below. */
     struct { uint64_t total, free, used; unsigned psz, pad; } mi;
-    uint64_t before = 0;
+    uint64_t before = 0, t0 = 0;
     for (int i = 0; i < 72; i++) {
         if (i == 8) {
             uint64_t e = now() + 300 * MS;
             while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
             if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
             before = mi.free;
+            t0 = now();
         }
         s->c_ctid = 1;
         long stk = spawn(t_nop, 0, 0, (uint64_t)&s->c_ctid);
         if (!join(&s->c_ctid, 2000)) fail("C join");
         nsi(SYS_MUNMAP, stk, STK, 0);
     }
+    uint64_t span = now() - t0;
     {
         uint64_t e = now() + 300 * MS;   /* the reaper frees thread zombies */
         while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
     }
     if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
-    long leak = (long)before - (long)mi.free;
-    say("[thread] C free_before=%d free_after=%d\n", (long)((long)before), (long)((long)mi.free));
-    /* C is judged on the threads themselves, not on the PMM free count: that
-     * count is system-wide, and while these 64 cycles run the rest of the boot
-     * mounts SFS ten times, provisions the SFS root and starts the AETHER
-     * daemon (run 39551618166: free fell 375 pages with no thread left). A
-     * thread whose tcb and kernel stack are never freed (T3) stays in the
-     * scheduler as a THREADTEST zombie; poll up to 2 s for the reaper. */
+    long drop_cyc = (long)before - (long)mi.free;
+    /* Control: the same span plus the same 300 ms settle, with no threads. */
+    uint64_t cbefore = mi.free;
+    {
+        uint64_t e = now() + span + 300 * MS;
+        while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
+    }
+    if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
+    long drop_idle = (long)cbefore - (long)mi.free;
+    long net = drop_cyc - drop_idle;
+    say("[thread] C drop_cycles=%d drop_idle=%d net=%d span_ms=%d\n",
+        drop_cyc, drop_idle, net, (long)(span / MS));
+    /* A thread whose tcb and kernel stack are never freed (T3) also stays in
+     * the scheduler as a THREADTEST zombie: count them, polling up to 2 s. */
     long left = 0, zomb = 0;
     {
         struct { uint32_t pid, ppid, state, flags; char name[16];
@@ -407,8 +418,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             nsi(SYS_YIELD, 0, 0, 0);
         }
     }
-    say("[thread] C pmm_free_drop=%d (system-wide, diagnostic only)\n", leak);
     say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
+    line1("PRADYOS_THREAD_C2 net_leak_ok=", net <= 32);
 
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
