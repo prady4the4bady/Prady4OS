@@ -1,6 +1,6 @@
 # DDR-1185: attributable free-page drop for probe leak arms
 
-Status: **implemented** on branch `fix-pagemeter` (smoke-shm arm C), and ported into PR #76 for smoke-thread arm C2. CI evidence is in §5. Platform: QEMU TCG only. **Not verified on real hardware.**
+Status: **implemented** in PR #90 (smoke-shm arm C), and ported into PR #76 for smoke-thread arm C2. Correct code green and mutants P-M4 and P-INC red in CI (§5). Platform: QEMU TCG only. **Not verified on real hardware.**
 
 ## 1. Problem
 
@@ -68,4 +68,16 @@ Two kinds of mutant, landing on different behaviour:
 
 The C2 mutants are recorded in DDR-1181 §4 when the port lands on #76.
 
-Runs: *(filled in when CI reports; until then **not verified**.)*
+**Runs (smoke-shm, shard 0; QEMU TCG):**
+
+| Tree | Head | Run | Verdict | Measured |
+|---|---|---|---|---|
+| correct | `d755b78` | [40222132487](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222132487) | green (all 10 shards) | `leaked_ok=1`; drop private=0, shared=0; meter private `trials=2 rej_procs=1`, shared `trials=1`; `conclusive=1` |
+| P-M4 | `4dcf948` | [40222095174](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222095174) | red, smoke-shm only | `leaked_ok=0`; drop private=0, **shared=256**; private `trials=2 rej_procs=1`, shared `trials=1`; `conclusive=1` |
+| P-INC | `b67bfe3` | [40222096786](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222096786) | red, smoke-shm only | `leaked_ok=0`; both loops `trials=0 rej_pre=1`; **`conclusive=0`** |
+
+Both mutants are red on the arm they were designed for, and each red is distinguishable from the other by the printed meter line. Under P-M4 the meter measured exactly the one frame per cycle the mutant leaks (256 over 256 cycles), against 0 on correct code.
+
+**The rejection is real traffic, not noise in the meter.** In both runs whose private loop ran on a correctly measured tree (correct and P-M4), that loop's first trial was rejected for `rej_procs`: a process outside the probe started or exited during it. The second trial was clean and measured 0. Under the old single pair, that trial would have been the result. Which process it was is **not verified**.
+
+Mutants were not built locally (there is no QEMU in the container); each was compiled by CI, and every one of these reds is a gate verdict, not a build failure (no compiler errors in the job logs).
