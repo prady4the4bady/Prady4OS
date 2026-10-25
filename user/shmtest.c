@@ -113,8 +113,8 @@ static __attribute__((noreturn)) void fail(const char *what, long v) {
     for (;;) { }
 }
 
-/* Arms J, L and M (not yet on pm_measure, DDR-1185 §3 residual) read the raw
- * system-wide count through the meter's sampler. */
+/* Arms J and L read the raw system-wide count across ONE syscall on a
+ * uniprocessor (DDR-1185 §3 residual), through the meter's sampler. */
 static unsigned long free_pages(void) {
     unsigned long t, f;
     pm_sample(&t, &f);
@@ -132,7 +132,7 @@ static int reap(long kid) {
 
 /* One arm-C trial: CYCLES x (mmap, fork, child write+exit, wait, munmap). The
  * free-page drop is taken by pm_measure (DDR-1185), not here. */
-static void loop_run(void *ctx) {
+static long loop_run(void *ctx) {
     long flags = *(long *)ctx;
     for (long i = 0; i < CYCLES; i++) {
         long r = mmap6((long)LOOP_VA, PROT_RW, flags, -1);
@@ -147,6 +147,7 @@ static void loop_run(void *ctx) {
         reap(k);
         nsi(SYS_MUNMAP, (long)LOOP_VA, 4096, 0);
     }
+    return CYCLES;                      /* one forked tcb per cycle */
 }
 static void line_pm(const char *a, const struct pm_result *r) {
     char b[160], *p = str(b, a);
@@ -155,6 +156,43 @@ static void line_pm(const char *a, const struct pm_result *r) {
     p = str(p, " rej_post="); p = dec(p, r->rej_post);
     p = str(p, " rej_procs="); p = dec(p, r->rej_procs);
     *p++ = '\n'; *p = 0; wr(b);
+}
+
+/* Arm Q trial (P3): Q_CYCLES x (shm_open, ftruncate, mmap, write, close while
+ * mapped, read back, munmap). Creates no tcb. A trial re-runs the loop, so
+ * opened is reset each time and ok only ever drops. */
+struct q_ctx { long opened, ok; };
+static long q_run(void *ctx) {
+    struct q_ctx *c = (struct q_ctx *)ctx;
+    c->opened = 0;
+    for (long i = 0; i < Q_CYCLES; i++) {
+        long fd = nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR, 0);
+        if (fd < 0) break;
+        c->opened++;
+        if (nsi(SYS_FTRUNCATE, fd, 4 * 4096, 0) != 0) { c->ok = 0; break; }
+        volatile unsigned char *q = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4 * 4096, PROT_RW, MAP_SHARED, fd, 0);
+        if ((long)q < 0) { c->ok = 0; break; }
+        q[3 * 4096] = (unsigned char)i;
+        nsi(SYS_CLOSE, fd, 0, 0);
+        if (q[3 * 4096] != (unsigned char)i) c->ok = 0;
+        nsi(SYS_MUNMAP, (long)q, 0, 0);
+    }
+    return 0;
+}
+
+/* Arm M trial: a child creates a segment, never attaches or RMIDs it, and
+ * exits; the parent reaps it. One forked tcb. */
+static long m_run(void *ctx) {
+    (void)ctx;
+    long mk = nsi(SYS_FORK, 0, 0, 0);
+    if (mk < 0) fail("m_fork", mk);
+    if (mk == 0) {
+        long m = nsi(SYS_SHMGET, IPC_PRIVATE, SEG_PAGES * 4096, 0);
+        nsi(SYS_EXIT, m < 0 ? 4 : 0, 0, 0);
+        for (;;) { }
+    }
+    if (reap(mk) != 0) fail("m_child", -1);
+    return 1;
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
@@ -339,17 +377,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     line2("PRADYOS_SHM_L nattch_fork=", (long)free_pages() - (long)lf0 >= RECLAIM_MIN);
 
     /* M: a segment nobody attached and nobody RMID'd goes when its last
-     * holder (the child that created it) is gone. */
-    unsigned long mf0 = free_pages();
-    long mk = nsi(SYS_FORK, 0, 0, 0);
-    if (mk < 0) fail("m_fork", mk);
-    if (mk == 0) {
-        long m = nsi(SYS_SHMGET, IPC_PRIVATE, SEG_PAGES * 4096, 0);
-        nsi(SYS_EXIT, m < 0 ? 4 : 0, 0, 0);
-        for (;;) { }
-    }
-    if (reap(mk) != 0) fail("m_child", -1);
-    line2("PRADYOS_SHM_M reclaimed=", (long)mf0 - (long)free_pages() < RECLAIM_MIN);
+     * holder (the child that created it) is gone. The window spans a fork,
+     * the child's run and exit and the reap, so other processes run in it:
+     * the drop comes from pm_measure (DDR-1185). Inconclusive is red. */
+    struct pm_result rm;
+    int okm = pm_measure(m_run, 0, &rm);
+    line2("PRADYOS_SHM_M reclaimed=", okm && rm.drop < RECLAIM_MIN);
+    line2("[shm] M drop=", rm.drop);
+    line_pm("[shm] M meter", &rm);
 
     /* ---- P3 (DDR-1178 Amendment 3): shm_open(SHM_ANON), fd-held objects ---- */
     /* N: the fd names the object, and off selects the page. */
@@ -398,28 +433,19 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     line2("PRADYOS_SHM_P rejects=", prej);
     nsi(SYS_CLOSE, pfd, 0, 0);
 
-    /* Q: close while mapped keeps the object; the last detach frees it. */
-    unsigned long qf0 = free_pages();
-    long opened = 0, qok = 1;
-    for (long i = 0; i < Q_CYCLES; i++) {
-        long fd = nsi(SYS_SHM_OPEN, SHM_ANON, O_RDWR, 0);
-        if (fd < 0) break;
-        opened++;
-        if (nsi(SYS_FTRUNCATE, fd, 4 * 4096, 0) != 0) { qok = 0; break; }
-        volatile unsigned char *q = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4 * 4096, PROT_RW, MAP_SHARED, fd, 0);
-        if ((long)q < 0) { qok = 0; break; }
-        q[3 * 4096] = (unsigned char)i;
-        nsi(SYS_CLOSE, fd, 0, 0);
-        if (q[3 * 4096] != (unsigned char)i) qok = 0;
-        nsi(SYS_MUNMAP, (long)q, 0, 0);
-    }
+    /* Q: close while mapped keeps the object; the last detach frees it. The
+     * Q_CYCLES loop is a long multi-syscall window, so its drop comes from
+     * pm_measure (DDR-1185); inconclusive is red. */
+    struct q_ctx qc = { 0, 1 };
+    struct pm_result rq;
+    int okq = pm_measure(q_run, &qc, &rq);
     {
-        long drop = (long)qf0 - (long)free_pages();
         char b[96], *p = str(b, "PRADYOS_SHM_Q cycles="); p = dec(p, Q_CYCLES);
-        p = str(p, " opened="); p = dec(p, opened);
-        p = str(p, " leaked_ok="); p = dec(p, qok && drop < LEAK_BOUND);
+        p = str(p, " opened="); p = dec(p, qc.opened);
+        p = str(p, " leaked_ok="); p = dec(p, okq && qc.ok && rq.drop < LEAK_BOUND);
         *p++ = '\n'; *p = 0; wr(b);
-        line2("[shm] P3 free_pages drop=", drop);
+        line2("[shm] P3 free_pages drop=", rq.drop);
+        line_pm("[shm] Q meter", &rq);
     }
 
     /* R: the child's inherited fd alone keeps the object (fd_clone holds). */

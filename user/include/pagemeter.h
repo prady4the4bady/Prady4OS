@@ -12,7 +12,13 @@
  *   2. after a PM_SETTLE_TICKS settle, it held within PM_TOL for
  *      PM_QUIET_TICKS, and
  *   3. no other process appeared or exited across it (scheduler-ring
- *      fingerprint, the caller and its own children/threads excluded).
+ *      fingerprint, the caller and its own children/threads excluded), and
+ *   4. no tcb other than the workload's own was CREATED across it. Every tcb
+ *      takes the next value of one monotonic counter (sched.c next_tid), so a
+ *      throwaway fork before and after the trial brackets the tids handed out
+ *      in between; the gap must equal the number of tcbs the workload reports
+ *      it created. This catches a foreign process that starts AND exits inside
+ *      the trial, which leaves the fingerprint unchanged (CodeRabbit on #90).
  * An accepted trial's drop is the workload's own. If no trial is clean within
  * PM_BUDGET_TICKS the result is inconclusive (returns 0), and the caller must
  * treat that as a FAIL: background traffic never turns into a pass.
@@ -34,7 +40,7 @@ struct pm_result {
     long trials;      /* trials run, accepted one included                       */
     long rej_pre;     /* trials not started: no quiet window before the deadline */
     long rej_post;    /* rejected: free count moved after the workload           */
-    long rej_procs;   /* rejected: another process appeared or exited            */
+    long rej_procs;   /* rejected: another tcb was created, or a process exited  */
 };
 
 struct pm_sysinfo {
@@ -43,11 +49,27 @@ struct pm_sysinfo {
     unsigned long uptime_ticks, free_pages;
 };
 
-static inline long pm_sys(long n, long a1, long a2) {
+static inline long pm_sys3(long n, long a1, long a2, long a3) {
     long r;
-    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a1), "S"(a2)
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a1), "S"(a2), "d"(a3)
                      : "rcx", "r11", "memory");
     return r;
+}
+static inline long pm_sys(long n, long a1, long a2) { return pm_sys3(n, a1, a2, 0); }
+
+/* The tid the kernel hands the next tcb: fork a child that exits at once, reap
+ * it, return its pid (= its tid). <= 0 on failure. */
+static inline long pm_tid_probe(void) {
+    long k = pm_sys(15 /* SYS_FORK */, 0, 0);
+    if (k == 0) {
+        pm_sys(4 /* SYS_EXIT */, 0, 0);
+        for (;;) { }
+    }
+    if (k > 0) {
+        int st = 0;
+        pm_sys3(16 /* SYS_WAIT4 */, k, (long)&st, 0);
+    }
+    return k;
 }
 
 static inline void pm_sample(unsigned long *ticks, unsigned long *free) {
@@ -80,27 +102,31 @@ static inline unsigned long pm_quiet(unsigned long deadline) {
         pm_sys(3 /* SYS_YIELD */, 0, 0);
         pm_sample(&t, &f);
         long d = (long)f - (long)f0;
+        if (t >= deadline) return 0;    /* the budget first: never start late */
         if (d > PM_TOL || d < -PM_TOL) { t0 = t; f0 = f; }
         else if (t - t0 >= PM_QUIET_TICKS) return f;
-        if (t >= deadline) return 0;
     }
 }
 
-/* Returns 1 with r->drop set when a trial was clean, 0 when inconclusive. */
-static inline int pm_measure(void (*work)(void *), void *ctx, struct pm_result *r) {
+/* work() runs one trial and returns how many tcbs (forked processes, created
+ * threads) it created. Returns 1 with r->drop set when a trial was clean, 0
+ * when inconclusive. */
+static inline int pm_measure(long (*work)(void *), void *ctx, struct pm_result *r) {
     unsigned long t, f0, f1, f2, deadline;
     long me = pm_sys(2 /* SYS_GETPID */, 0, 0);
     pm_sample(&t, &f0);
     deadline = t + PM_BUDGET_TICKS;
     r->drop = r->trials = r->rej_pre = r->rej_post = r->rej_procs = 0;
     for (int i = 0; i < PM_TRIALS; i++) {
+        long p0 = pm_tid_probe();       /* before the quiet wait absorbs it */
+        if (p0 <= 0) return 0;
         f0 = pm_quiet(deadline);
         if (!f0) { r->rej_pre++; return 0; }
         long c0, s0, c1, s1;
         pm_procs(me, &c0, &s0);
         pm_sample(&t, &f0);
         r->trials++;
-        work(ctx);
+        long own = work(ctx);
         /* Settle: frees the workload causes late (the reaper's tcb and
          * kernel-stack free, deferred unmaps) are the workload's own and must
          * land before f1, not in the post window where they would reject. */
@@ -117,7 +143,8 @@ static inline int pm_measure(void (*work)(void *), void *ctx, struct pm_result *
             if (d < 0) d = -d;
             if (d > dmax) dmax = d;
         } while (t < end);
-        if (c0 != c1 || s0 != s1) { r->rej_procs++; continue; }
+        long p1 = pm_tid_probe();       /* after f1: its own pages are not measured */
+        if (c0 != c1 || s0 != s1 || p1 - p0 - 1 != own) { r->rej_procs++; continue; }
         if (dmax > PM_TOL)        { r->rej_post++;  continue; }
         r->drop = (long)f0 - (long)f1;
         return 1;

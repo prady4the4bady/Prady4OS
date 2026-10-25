@@ -32,18 +32,23 @@ Which processes produce the bursts is **not verified**. The fix does not depend 
 
 `pm_measure(work, ctx, &r)` runs up to `PM_TRIALS` (6) trials inside a `PM_BUDGET_TICKS` (30 s) budget. Each trial goes through these steps:
 
-1. **Quiet before.** Wait until `free_pages` holds within `PM_TOL` (4) for `PM_QUIET_TICKS` (25 ticks = 250 ms at 100 Hz). If no quiet window comes before the deadline, the result is inconclusive.
-2. **Snapshot.** Take a fingerprint of the scheduler ring (`SYS_GETPROCS`): the count and pid-sum of every entry except the caller and its children. Then sample `f0`.
-3. **Run.** Run `work(ctx)`.
-4. **Settle.** Settle for `PM_SETTLE_TICKS` (300 ms), so late frees the workload itself causes (the reaper's tcb and kernel-stack free) land before `f1` is sampled. Then sample `f1` and take the fingerprint again.
-5. **Quiet after.** For `PM_QUIET_TICKS`, the count must stay within `PM_TOL` of `f1`.
-6. **Accept or reject.** The trial is rejected if the fingerprint changed or the post window moved. Otherwise `drop = f0 − f1` is accepted.
+1. **Tid probe.** Fork a child that exits at once and reap it; its pid is `p0`, the tid the kernel handed out (every tcb takes `next_tid++`, `sched.c:1095`; a fork child's pid is its tid, `sched.c:1294`). The probe runs before the quiet wait, so its own pages settle first.
+2. **Quiet before.** Wait until `free_pages` holds within `PM_TOL` (4) for `PM_QUIET_TICKS` (25 ticks = 250 ms at 100 Hz). If no quiet window comes before the deadline, the result is inconclusive.
+3. **Snapshot.** Take a fingerprint of the scheduler ring (`SYS_GETPROCS`): the count and pid-sum of every entry except the caller and its children. Then sample `f0`.
+4. **Run.** Run `work(ctx)`, which returns how many tcbs it created (`own`: 256 forks per shm loop, 64 threads per C2 trial).
+5. **Settle.** Settle for `PM_SETTLE_TICKS` (300 ms), so late frees the workload itself causes (the reaper's tcb and kernel-stack free) land before `f1` is sampled. Then sample `f1` and take the fingerprint again.
+6. **Quiet after.** For `PM_QUIET_TICKS`, the count must stay within `PM_TOL` of `f1`. Then a second tid probe gives `p1`.
+7. **Accept or reject.** The trial is rejected (`rej_procs`) if the fingerprint changed **or `p1 − p0 − 1 ≠ own`**, that is, if any tcb other than the workload's own was created between the probes, and (`rej_post`) if the post window moved. Otherwise `drop = f0 − f1` is accepted.
 
 No clean trial means `pm_measure` returns 0, and **both callers turn that into a FAIL** (`leaked_ok=0` / `net_leak_ok=0`). Background traffic can therefore make the arm red, never green. Every rejection is counted and printed (`trials`, `rej_pre`, `rej_post`, `rej_procs`), so a red that comes from an inconclusive measurement is distinguishable from a red that comes from a measured leak.
 
 The header is stack-only and issues its own syscalls, so a probe including it carries no writable section (DDR-826).
 
-**Residual risk:** a burst that both starts and ends inside one trial, with no process start or exit, passes the brackets. The thread workload is about 20 ms plus a 300 ms settle, so its exposure is short. The shm loops are longer. The fingerprint closes the case the shm failure most likely was (a process lifecycle overlapping the loop; attribution not verified).
+**Why the tid probe (amended after review on #90).** The first version relied on the fingerprint alone, and its residual-risk note was wrong: a foreign process that starts **and** exits inside a trial is absent from both fingerprints, so it passed. That path is real during boot: init respawns a failing service several times in a few seconds (`[svc] start missing … exit … restart`). A full lifecycle returns most of its pages, but kheap slabs never shrink (`kheap.c` `cache_free` keeps the slab), so slab pages it grows stay out of the PMM. The tid gap catches every tcb creation, however short-lived.
+
+**Deadline.** `pm_quiet` checks the budget before accepting a quiet window, so no trial *starts* after `PM_BUDGET_TICKS`. A trial that started in time and finishes late is still accepted when clean: the budget bounds waiting, and a clean late trial is as attributable as an early one.
+
+**Residual risk:** an already-running process (one that neither starts nor exits) can still allocate or free during a trial. The quiet windows on both sides bound that only for traffic that is ongoing; a burst entirely inside the trial passes. The thread workload is about 20 ms plus a 300 ms settle; the shm loops are longer. Which processes produce the boot traffic is **not verified**.
 
 ## 4. Gate changes
 
@@ -64,11 +69,13 @@ Two kinds of mutant, landing on different behaviour:
 | Mutant | Change | Must be | Why it is not vacuous |
 |---|---|---|---|
 | P-M4 | DDR-1178 M4 (`vmm_fork_address_space_cow` double `pmm_incref` on `PTE_SW_SHMEM`: one leaked frame per shared cycle) on top of the meter | smoke-shm C `leaked_ok=0`, conclusive=1 | the meter must still see a real leak (≥ 256 pages) |
-| P-INC | `pm_quiet` always returns 0 (never quiet) | smoke-shm C `leaked_ok=0`, conclusive=0 | inconclusive must be red; on the unfixed tree the arm has no inconclusive path, so this arm is new |
+| P-INC | `pm_quiet` always returns 0 (never quiet) | smoke-shm C `leaked_ok=0`, conclusive=0 (`rej_pre`) | inconclusive must be red; on the unfixed tree the arm has no inconclusive path, so this arm is new |
+| P-TID | `loop_run` reports one tcb fewer than it created | smoke-shm C `leaked_ok=0`, conclusive=0, **every trial `rej_procs`** | proves the tid-gap check is wired: correct code passes it, so a check that never rejected would leave this green |
 
 The C2 mutants are recorded in DDR-1181 §4 when the port lands on #76.
 
-**Runs (smoke-shm, shard 0; QEMU TCG):**
+**Runs (smoke-shm, shard 0; QEMU TCG).** These runs are on `d755b78`, which predates the tid probe; the probe changes which trials are accepted, so P-M4 and P-INC are re-run on the amended head together with P-TID (below, **not verified** until they report).
+
 
 | Tree | Head | Run | Verdict | Measured |
 |---|---|---|---|---|
