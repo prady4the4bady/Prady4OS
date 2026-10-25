@@ -251,3 +251,16 @@ Fix:
 
 The mutant branches are merged forward onto the fix, so each one isolates its own arm.
 
+### Amendment 3: mutant runs (CI evidence, mutants merged forward onto `00fa6b1`; head green, run 40125051487)
+
+| Mutant | Run | What turned red |
+|---|---|---|
+| M1 the applier skips `R_X86_64_64` | [40158014109](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158014109) | **A.** The boot-time table check `[kaslr] table FAIL entries=3592 bad=336` fires first. The image then never reaches `NEXUS KERNEL OK`, so all ten shards are red. |
+| M2 slot forced to 0 | [40158015373](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158015373) | **B:** `PRADYOS_KASLR_B applied=0 src=rdseed` on all three boots (and C: 1 distinct slot). |
+| M3 constant slot 7 | [40158016603](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158016603) | **C:** `3 boots, 1 distinct slot(s)`. A and B pass. |
+| M4 D printer prints the raw RIP | [40158017791](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158017791) | **D:** each raw RIP resolves to `__bss_end`, not `probe_kaslr_fault`. All three boots and arms A–C pass. |
+| M5 W^X walk uses `PD[0]` | [40158019116](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158019116) | **E:** `[wx] kernel W^X FAIL: no PD[slot]`, which is forbidden by every gate, so all ten shards are red. |
+
+All five are red. M2–M5 land on their designed arms. M1 lands on the arm-A condition (the relocations are wrong), but the in-kernel table check catches it before the arm-A line can print.
+
+M5's runs show the slot varying across shards: 116, 330, 416, 191, 98, 88, 234, 340, 321 and 185, which is 10 distinct slots in 10 boots. They also show that only shard 8 boots with RDSEED (`src=rdseed`); the other shards use the TSC fallback (`src=tsc`, K2). Under QEMU TCG that is emulated only, and not verified on real hardware.
