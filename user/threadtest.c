@@ -363,6 +363,40 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     }
     say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
     line1("PRADYOS_THREAD_C2 net_leak_ok=", net <= 32);
+    /* Diagnostic only (not gated): split the C cycle to find where C2's pages
+     * go. X = 64 x mmap+munmap of a thread-stack-sized region, no thread.
+     * Y = 64 x thread create/exit on ONE pre-mapped stack, no mmap/munmap. */
+    {
+        uint64_t f0, f1;
+        if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
+        f0 = mi.free;
+        for (int i = 0; i < 64; i++) {
+            long r = map(STK, MAP_PRIVATE);
+            nsi(SYS_MUNMAP, r, STK, 0);
+        }
+        if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
+        f1 = mi.free;
+        long dx = (long)f0 - (long)f1;
+        long one = map(STK, MAP_PRIVATE);
+        if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
+        f0 = mi.free;
+        for (int i = 0; i < 64; i++) {
+            s->c_ctid = 1;
+            long tid = nsi6(SYS_THREAD_CREATE, (long)t_nop, one + STK, 0, 0,
+                            (long)&s->c_ctid, 0);
+            if (tid < 0) fail("create");
+            if (!join(&s->c_ctid, 2000)) fail("C join");
+        }
+        {
+            uint64_t e = now() + 300 * MS;   /* let the reaper free them */
+            while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
+        }
+        if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
+        f1 = mi.free;
+        long dy = (long)f0 - (long)f1;
+        nsi(SYS_MUNMAP, one, STK, 0);
+        say("[thread] C diag mmap_munmap_x64=%d thread_only_x64=%d\n", dx, dy);
+    }
 
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
