@@ -27,6 +27,7 @@
  * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
  */
 #include "pradyos.h"
+#include "pagemeter.h"   /* DDR-1185 */
 
 #define nsi pradyos_syscall
 
@@ -152,6 +153,23 @@ static long spawn(void (*fn)(long), long arg, uint64_t tls, uint64_t ctid) {
     long tid = nsi6(SYS_THREAD_CREATE, (long)fn, stk + STK, arg, (long)tls, (long)ctid, 0);
     if (tid < 0) fail("create");
     return stk;
+}
+
+/* THREADTEST tcbs in the scheduler other than the caller, and how many of
+ * them are zombies (SYS_GETPROCS walks the whole ring, zombies included). */
+static void thr_left(long *left, long *zomb) {
+    struct { uint32_t pid, ppid, state, flags; char name[16];
+             uint64_t run_ticks, dispatches; } pi;
+    long me = nsi(SYS_GETPID, 0, 0, 0);
+    *left = *zomb = 0;
+    for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
+        const char *w = "THREADTEST";
+        int k = 0;
+        while (w[k] && pi.name[k] == w[k]) k++;
+        if (w[k] || (long)pi.pid == me) continue;
+        (*left)++;
+        if (pi.state == 4) (*zomb)++;            /* THREAD_ZOMBIE */
+    }
 }
 
 /* Wait (bounded) until *w == 0, i.e. the thread's clear_tid was written. */
@@ -330,6 +348,36 @@ static void clear(struct shared *s) {
     s->go = s->done = s->count = s->late = s->poison = s->efault = s->gdone = 0;
 }
 
+/* Arm C workload for pm_measure (DDR-1185): 64 create/join/munmap cycles,
+ * then wait (up to 2 s) until the reaper has freed every thread, so the
+ * meter's fingerprint and settle see none of ours. */
+struct c_ctx {
+    struct shared *s;
+    long unmap_fail, unmap_rc, left0, zomb0, reap_ms;
+};
+static void c_cycles(void *ctx) {
+    struct c_ctx *c = (struct c_ctx *)ctx;
+    for (int i = 0; i < 64; i++) {
+        c->s->c_ctid = 1;
+        long stk = spawn(t_nop, 0, 0, (uint64_t)&c->s->c_ctid);
+        if (!join(&c->s->c_ctid, 2000)) fail("C join");
+        long ur = nsi(SYS_MUNMAP, stk, STK, 0);
+        if (ur != 0) {                    /* a failed unmap leaks the stack */
+            if (!c->unmap_fail) c->unmap_rc = ur;
+            c->unmap_fail++;
+        }
+    }
+    long left, zomb;
+    thr_left(&c->left0, &c->zomb0);
+    uint64_t r0 = now();
+    for (;;) {
+        thr_left(&left, &zomb);
+        if (left == 0 || now() - r0 > 2000 * MS) break;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    c->reap_ms = (long)((now() - r0) / MS);
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct shared *s = (struct shared *)map(4096, MAP_SHARED);
 
@@ -357,69 +405,31 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     join(&s->c_ctid, 2000);
     say("PRADYOS_THREAD_B tls_ok=%d\n", (long)(s->tls_ok));
 
-    /* C: 8 warm-up cycles, settle, then 64 create/join/munmap cycles. The PMM
-     * free count is system-wide and the rest of the boot runs meanwhile (run
-     * 39551618166: -375 pages, run 40124472347: -363, no thread left in
-     * either), so the cycles are paired with an idle control window of the
-     * same length and the gate bounds the DIFFERENCE. A leaked tcb + kernel
-     * stack is ~6 pages, 64 of them ~380; the bound of 32 is far below. */
-    struct { uint64_t total, free, used; unsigned psz, pad; } mi;
-    uint64_t before = 0, t0 = 0;
-    for (int i = 0; i < 72; i++) {
-        if (i == 8) {
-            uint64_t e = now() + 300 * MS;
-            while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
-            if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
-            before = mi.free;
-            t0 = now();
-        }
+    /* C: 8 warm-up cycles, then 64 create/join/munmap cycles measured by
+     * pm_measure (DDR-1185). The PMM free count is system-wide and the rest
+     * of the boot runs meanwhile: run 40217768311 lost 293 pages in a 2 s
+     * idle window, and an idle control taken at another time (the earlier
+     * C2) read that traffic as net=470 on one head and as green on a
+     * semantically identical one. Only a trial with quiet traffic around it
+     * counts, with no correction. A leaked tcb + kernel stack is ~6 pages,
+     * 64 of them ~380; the bound of 32 is far below. */
+    struct c_ctx c = { s, 0, 0, 0, 0, 0 };
+    for (int i = 0; i < 8; i++) {
         s->c_ctid = 1;
         long stk = spawn(t_nop, 0, 0, (uint64_t)&s->c_ctid);
         if (!join(&s->c_ctid, 2000)) fail("C join");
         nsi(SYS_MUNMAP, stk, STK, 0);
     }
-    uint64_t span = now() - t0;
-    {
-        uint64_t e = now() + 300 * MS;   /* the reaper frees thread zombies */
-        while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
-    }
-    if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
-    long drop_cyc = (long)before - (long)mi.free;
-    /* Control: the same span plus the same 300 ms settle, with no threads. */
-    uint64_t cbefore = mi.free;
-    {
-        uint64_t e = now() + span + 300 * MS;
-        while (now() < e) nsi(SYS_YIELD, 0, 0, 0);
-    }
-    if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0) fail("meminfo");
-    long drop_idle = (long)cbefore - (long)mi.free;
-    long net = drop_cyc - drop_idle;
-    say("[thread] C drop_cycles=%d drop_idle=%d net=%d span_ms=%d\n",
-        drop_cyc, drop_idle, net, (long)(span / MS));
-    /* A thread whose tcb and kernel stack are never freed (T3) also stays in
-     * the scheduler as a THREADTEST zombie: count them, polling up to 2 s. */
+    struct pm_result pr;
+    int conclusive = pm_measure(c_cycles, &c, &pr);
     long left = 0, zomb = 0;
-    {
-        struct { uint32_t pid, ppid, state, flags; char name[16];
-                 uint64_t run_ticks, dispatches; } pi;
-        long me = nsi(SYS_GETPID, 0, 0, 0);
-        uint64_t end = now() + 2000 * MS;
-        for (;;) {
-            left = zomb = 0;
-            for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
-                const char *w = "THREADTEST";
-                int k = 0;
-                while (w[k] && pi.name[k] == w[k]) k++;
-                if (w[k] || (long)pi.pid == me) continue;
-                left++;
-                if (pi.state == 4) zomb++;           /* THREAD_ZOMBIE */
-            }
-            if (left == 0 || now() > end) break;
-            nsi(SYS_YIELD, 0, 0, 0);
-        }
-    }
+    thr_left(&left, &zomb);
+    say("[thread] C drop=%d trials=%d rej_pre=%d rej_post=%d rej_procs=%d conclusive=%d\n",
+        pr.drop, pr.trials, pr.rej_pre, pr.rej_post, pr.rej_procs, (long)conclusive);
+    say("[thread] C after_cycles left=%d zombie=%d reap_ms=%d\n", c.left0, c.zomb0, c.reap_ms);
+    say("[thread] C munmap_fail=%d first_rc=%d\n", c.unmap_fail, c.unmap_rc);
     say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
-    line1("PRADYOS_THREAD_C2 net_leak_ok=", net <= 32);
+    line1("PRADYOS_THREAD_C2 net_leak_ok=", conclusive && pr.drop <= 32);
 
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
