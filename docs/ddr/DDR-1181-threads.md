@@ -236,7 +236,19 @@ The cycles take 20 ms. In the same boot, an idle 2 s window with no thread of ou
 - No clean trial within 30 s is red.
 - Printed: `[thread] C drop= trials= rej_pre= rej_post= rej_procs= conclusive=`.
 
-The ungated X/Y split diagnostic is removed. It used the same unattributable count, and its question (mmap or thread?) is answered by the cycles' own −16. The mutants that land on C2 are re-run on the new head and recorded here (**not verified** until then).
+The ungated X/Y split diagnostic is removed. It used the same unattributable count, and its question (mmap or thread?) is answered by the cycles' own −16. **C/C2 evidence on the meter (smoke-thread, shard 2; QEMU TCG):**
+
+| Tree | Head | Run | Verdict | Measured |
+|---|---|---|---|---|
+| correct | `93c1ea9` | [40222363410](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222363410) | smoke-thread green | `[thread] C drop=0 trials=2 rej_pre=0 rej_post=0 rej_procs=1 conclusive=1`; `leftover=0 zombie=0`; `munmap_fail=0` |
+| T9 | `c59b259` | [40222449102](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222449102) | red on **C2 only** | `drop=256 trials=1 conclusive=1` (64 leaked 16 KiB kernel stacks = 256 pages); `PRADYOS_THREAD_C leftover=0 zombie=0` |
+| T3 | `ecec751` | [40222447291](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222447291) | red on **C** | `THREAD FAIL: create` after arm B; the C line is never printed |
+
+**T3's mechanism differs from the one this table predicted** ("leaves 64 zombies"). Un-reaped thread zombies keep their reference on the shared mm, so `mm->live` only grows. `sys_thread.c:45` refuses a create with `-EAGAIN` at `THREAD_MAX_PER_MM` (64). Arms A and B leave 3 zombies, so a create inside C fails at the 64-thread cap and the probe stops with a forbidden `THREAD FAIL` line before C is printed. The arm is red and it is arm C; the path is the thread cap, not the leftover count. That reading is from the code, and it matches the log (no C line, a create failure); it is **not** traced in the kernel.
+
+**T9 also printed 14 `THREAD FAIL: create` lines in later arms.** A plausible reading, **not verified**: the leaked kernel stacks stay in kheap's large-allocation registry (`MAX_LARGE` 256, `kheap.c:38`), so later large `kmalloc`s fail. C2 is the first arm to fail, which is the designed one.
+
+The correct-code run shows the meter rejecting the first trial for `rej_procs` (a foreign process start or exit) and measuring 0 on the second, as smoke-shm did in DDR-1185 §5.
 
 **Line integrity.** Every line the probe prints leaves in one `write`. `say()` and `line1()` build each line in a stack buffer (a probe may not carry a writable section, DDR-826). Arms D, E, M and F print right after a child dies with a kernel `[trap]` line. A line written in pieces could be torn by that line, or by another process's output. CI run 39504298130 tore arm F; DDR-1182 §3.1 shows the same failure in another probe.
 
