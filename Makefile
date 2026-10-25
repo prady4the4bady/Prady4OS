@@ -4382,7 +4382,8 @@ smoke-thread: $(IMG) fat-image sfs-image
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_D prot_stale=0 faulted=1\nPRADYOS_THREAD_E stale=0 faulted=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1\nPRADYOS_THREAD_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nthread probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
-	@echo "[thread] PASS — $$(grep -a 'THREAD_C free\|THREAD\] G' build/thread.log | tr '\n' ' ')"
+	@grep -a "\[thread\]\|PRADYOS_THREAD" build/thread.log || true
+	@echo "[thread] PASS"
 
 # DDR-1177 (C1.2): cross-CPU TLB shootdown, in-kernel probe on 4 CPUs. Arms A-C
 # (owner decision #45/6251086742); arm D and E are C1.4 exit criteria.

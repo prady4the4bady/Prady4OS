@@ -153,7 +153,7 @@ A FAT-rooted probe, `user/threadtest.c`, opt-in (`probe_enabled("thread")`), run
 |---|---|---|
 | A | `PRADYOS_THREAD_A shared=1 joined=1` | A store by the thread is seen by the creator (one address space), and `clear_tid` is written at thread exit. |
 | B | `PRADYOS_THREAD_B tls_ok=2` | Two threads with distinct `tls`; each reads its own `%fs:0` self-pointer. |
-| C | `PRADYOS_THREAD_C leftover=0 zombie=0` and `PRADYOS_THREAD_C2 net_leak_ok=1` | 8 warm-up cycles, then 64 create/exit cycles. **C:** within 2 s, no `THREADTEST` tcb except the probe's own is left in the scheduler (`SYS_GETPROCS`). **C2:** the PMM free-page drop over the cycles, minus the drop over an idle control window of the same length, is at most 32 pages. All four numbers are printed on a `[thread] C drop_cycles=` line. **Amended:** see the note after the mutant table. |
+| C | `PRADYOS_THREAD_C leftover=0 zombie=0` and `PRADYOS_THREAD_C2 net_leak_ok=1` | 8 warm-up cycles, then 64 create/exit cycles. **C:** within 2 s, no `THREADTEST` tcb except the probe's own is left in the scheduler (`SYS_GETPROCS`). **C2:** the PMM free-page drop over the cycles, taken from a trial with quiet traffic around it (`pm_measure`, DDR-1185), is at most 32 pages; no clean trial is red. Printed on a `[thread] C drop= trials=` line. **Amended:** see the note after the mutant table. |
 | D | `PRADYOS_THREAD_D prot_stale=0 faulted=1` | DDR-1177 arm D. A thread on another CPU writes a page in a loop; the creator calls `mprotect(PROT_READ)`. No write starts after `mprotect` returns and succeeds, and the writer faults. |
 | E | `PRADYOS_THREAD_E stale=0 faulted=1` | DDR-1177 arm E. A thread on another CPU reads a page in a loop; the creator calls `munmap`. No read starts after `munmap` returns and succeeds, and the reader faults. |
 | M | `PRADYOS_THREAD_M poison=0` | DDR-1177 M4. Same shape as E, counting reads that return a value other than the pattern. With the KASAN free-poison (`PMM_POISON`, on by default), a frame freed before every CPU acknowledged is read back as poison through the stale entry. |
@@ -186,6 +186,7 @@ The probability argument is not evidence. The evidence is each mutant shown red 
 | T6 | DDR-1177 M4: `vmm_unmap_range_flush` frees each frame before the shootdown | M (`poison>0`) |
 | T7 | a fatal fault ends only the faulting thread | F (`group_killed=0`) |
 | T8 | the kernel `#PF` handler ignores the uaccess fixup range (§3.7) | G (kernel panic) |
+| T9 | `sched_free_tcb` frees a non-leader thread's tcb but not its kernel stack (DDR-1185 port) | C2 (`net_leak_ok=0`; C stays `leftover=0`) |
 
 If T4, T5 or T6 cannot be shown red within 16 trials, the trial count is raised. The DDR is amended with the measured red rate; the arm is not dropped.
 
@@ -216,6 +217,38 @@ The arm is therefore not relaxed. It is split so that it measures the threads:
 - **C2** keeps the 32-page bound, but on the drop over the cycles **minus** the drop over an idle control window of the same length. Steady boot activity cancels, while a per-thread leak (about 380 pages for 64 threads) does not.
 
 The next run's `[thread] C drop_cycles= drop_idle=` line decides the attribution, and the result is recorded here.
+
+**Result: the idle control was not a sound denominator (DDR-1185).** The C2 above did not give the same answer twice on the same code:
+
+| Run | Head | C2 line | Verdict |
+|---|---|---|---|
+| [40210141897](https://github.com/prady4the4bady/Prady4OS/actions/runs/40210141897) | `aceaa04` | net=470; every thread reaped (`left=0 zombie=0 reap_ms=0`) | red |
+| [40212901781](https://github.com/prady4the4bady/Prady4OS/actions/runs/40212901781) | `3d5f85b` | numbers not printed (the PASS echo grepped a dead pattern); `munmap` return now counted, no other change | green |
+| [40217768311](https://github.com/prady4the4bady/Prady4OS/actions/runs/40217768311) | `3b904aa` | `drop_cycles=-16 drop_idle=0 net=-16 span_ms=20`, `munmap_fail=0`, **`drop_pre_2000ms=293`** | green |
+
+The cycles take 20 ms. In the same boot, an idle 2 s window with no thread of ours lost 293 pages. Background traffic of the same size as the "leak" arrives in bursts. Whether it lands in the cycle window or in the control window is timing, and that decided the verdict. **Mechanism:** the measurement is not attributable. It is not a per-thread leak: on `3b904aa` the cycles themselves moved −16, and `munmap` never failed. Which processes produce the bursts is **not verified**.
+
+**C2 now** takes its drop from `pm_measure` (`user/include/pagemeter.h`, DDR-1185):
+- The 64 cycles plus the reap wait are one trial.
+- A trial counts only with a quiet free count before it and after it (≤ 4 pages over 250 ms) and no foreign process start or exit across it.
+- `net_leak_ok = conclusive && drop ≤ 32`. The bound is unchanged.
+- The idle-control subtraction is gone, because a clean trial needs no correction. **That makes the arm stricter, not weaker.**
+- No clean trial within 30 s is red.
+- Printed: `[thread] C drop= trials= rej_pre= rej_post= rej_procs= conclusive=`.
+
+The ungated X/Y split diagnostic is removed. It used the same unattributable count, and its question (mmap or thread?) is answered by the cycles' own −16. **C/C2 evidence on the meter (smoke-thread, shard 2; QEMU TCG):**
+
+| Tree | Head | Run | Verdict | Measured |
+|---|---|---|---|---|
+| correct | `93c1ea9` | [40222363410](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222363410) | smoke-thread green | `[thread] C drop=0 trials=2 rej_pre=0 rej_post=0 rej_procs=1 conclusive=1`; `leftover=0 zombie=0`; `munmap_fail=0` |
+| T9 | `c59b259` | [40222449102](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222449102) | red on **C2 only** | `drop=256 trials=1 conclusive=1` (64 leaked 16 KiB kernel stacks = 256 pages); `PRADYOS_THREAD_C leftover=0 zombie=0` |
+| T3 | `ecec751` | [40222447291](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222447291) | red on **C** | `THREAD FAIL: create` after arm B; the C line is never printed |
+
+**T3's mechanism differs from the one this table predicted** ("leaves 64 zombies"). Un-reaped thread zombies keep their reference on the shared mm, so `mm->live` only grows. `sys_thread.c:45` refuses a create with `-EAGAIN` at `THREAD_MAX_PER_MM` (64). Arms A and B leave 3 zombies, so a create inside C fails at the 64-thread cap and the probe stops with a forbidden `THREAD FAIL` line before C is printed. The arm is red and it is arm C; the path is the thread cap, not the leftover count. That reading is from the code, and it matches the log (no C line, a create failure); it is **not** traced in the kernel.
+
+**T9 also printed 14 `THREAD FAIL: create` lines in later arms.** A plausible reading, **not verified**: the leaked kernel stacks stay in kheap's large-allocation registry (`MAX_LARGE` 256, `kheap.c:38`), so later large `kmalloc`s fail. C2 is the first arm to fail, which is the designed one.
+
+The correct-code run shows the meter rejecting the first trial for `rej_procs` (a foreign process start or exit) and measuring 0 on the second, as smoke-shm did in DDR-1185 §5.
 
 **Line integrity.** Every line the probe prints leaves in one `write`. `say()` and `line1()` build each line in a stack buffer (a probe may not carry a writable section, DDR-826). Arms D, E, M and F print right after a child dies with a kernel `[trap]` line. A line written in pieces could be torn by that line, or by another process's output. CI run 39504298130 tore arm F; DDR-1182 §3.1 shows the same failure in another probe.
 
