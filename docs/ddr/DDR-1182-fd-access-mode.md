@@ -85,6 +85,27 @@ Each run failed on `smoke-accmode` (shard 8) with the missing line shown. The se
 
 **Torn-line defect, found by M7.** The probe wrote each arm line in 3 to 5 `write` calls. Another process's output (`PRADYOS_FPU_OK`) landed between two of them, so arm D failed with the right value `-22` and a torn `size=`. On a correct tree the same interleaving would make the gate red at random. Fix: every line is built by `say()` in a stack buffer and leaves in a single `write`. A first version kept the buffer in a static array. It failed CI's DDR-826 check (`ci-probe-rodata-check`: probes may not carry a writable section, `.lbss` 176 B; run 39553352470), so the buffer moved to the stack. This is the same mechanism as the DDR-1181 thread arm F fix. The mutants above ran before this fix; they are re-run on the fixed head, and the new runs are added here.
 
+### 3.2 Mutant re-runs on the fixed head `4c81ba3`
+
+Mutants M1–M8 were merged forward onto `4c81ba3` (one `write` per line) and re-run. Each one is red on `smoke-accmode` (shard 8) on its designed arm:
+
+| Mutant | Run | Printed |
+|---|---|---|
+| M1 | [40158002227](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158002227) | A `ro_write=4` (and F `dup_ro_write=4`) |
+| M2 | [40158003600](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158003600) | B `wo_read=8` |
+| M3 | [40158004901](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158004901) | C `ring_ro_write=4 ring_wo_read=4` |
+| M4 | [40158006699](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158006699) | D `ro_ftrunc=0 size=0` |
+| M5 | [40158008354](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158008354) | E `acc3=3 ro_trunc=3 size=0` |
+| M6 | [40158009849](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158009849) | F `dup_ro_write=4` |
+| M7 | [40158011102](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158011102) | G `wo_mmap=32767` |
+| M8 | [40158012624](https://github.com/prady4the4bady/Prady4OS/actions/runs/40158012624) | H `rw_write=-9 rw_read=4` |
+
+No arm line was torn in any run.
+
+Side failures, outside `smoke-accmode`:
+- **M8, shard 4:** `smoke-ftruncate` (`FTRUNC FAIL: initial write short`). This is expected: M8 refuses writes on `O_RDWR`.
+- **M2, shard 0:** `smoke-shm` arm C (`PRADYOS_SHM_C cycles=256 leaked_ok=1` not found). M2 changes `read` only, and the head `4c81ba3` passed shard 0. This is recorded as a possible intermittent failure of `smoke-shm` arm C on the base tree; it is **not root-caused**.
+
 ## 4. Honesty labels
 
 - Gated by `smoke-accmode` arms A-H.
