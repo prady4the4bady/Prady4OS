@@ -325,6 +325,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
      * stack is ~6 pages, 64 of them ~380; the bound of 32 is far below. */
     struct { uint64_t total, free, used; unsigned psz, pad; } mi;
     uint64_t before = 0, t0 = 0;
+    long c_unmap_fail = 0, c_unmap_rc = 0;
     for (int i = 0; i < 72; i++) {
         if (i == 8) {
             uint64_t e = now() + 300 * MS;
@@ -336,7 +337,11 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         s->c_ctid = 1;
         long stk = spawn(t_nop, 0, 0, (uint64_t)&s->c_ctid);
         if (!join(&s->c_ctid, 2000)) fail("C join");
-        nsi(SYS_MUNMAP, stk, STK, 0);
+        long ur = nsi(SYS_MUNMAP, stk, STK, 0);
+        if (ur != 0) {                    /* diagnostic: a failed unmap leaks the stack */
+            if (!c_unmap_fail) c_unmap_rc = ur;
+            c_unmap_fail++;
+        }
     }
     uint64_t span = now() - t0;
     /* Run 40159179156 measured right after the cycles and the leftover count
@@ -370,6 +375,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     say("[thread] C drop_cycles=%d drop_idle=%d net=%d span_ms=%d\n",
         drop_cyc, drop_idle, net, (long)(span / MS));
     say("[thread] C after_cycles left=%d zombie=%d reap_ms=%d\n", left0, zomb0, reap_ms);
+    say("[thread] C munmap_fail=%d first_rc=%d\n", c_unmap_fail, c_unmap_rc);
     say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
     line1("PRADYOS_THREAD_C2 net_leak_ok=", net <= 32);
     /* Diagnostic only (not gated): split the C cycle to find where C2's pages
