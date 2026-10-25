@@ -355,7 +355,7 @@ struct c_ctx {
     struct shared *s;
     long unmap_fail, unmap_rc, left0, zomb0, reap_ms;
 };
-static void c_cycles(void *ctx) {
+static long c_cycles(void *ctx) {
     struct c_ctx *c = (struct c_ctx *)ctx;
     for (int i = 0; i < 64; i++) {
         c->s->c_ctid = 1;
@@ -376,6 +376,7 @@ static void c_cycles(void *ctx) {
         nsi(SYS_YIELD, 0, 0, 0);
     }
     c->reap_ms = (long)((now() - r0) / MS);
+    return 64;                          /* one created thread tcb per cycle */
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {

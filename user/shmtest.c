@@ -100,7 +100,7 @@ static int reap(long kid) {
 
 /* One arm-C trial: CYCLES x (mmap, fork, child write+exit, wait, munmap). The
  * free-page drop is taken by pm_measure (DDR-1185), not here. */
-static void loop_run(void *ctx) {
+static long loop_run(void *ctx) {
     long flags = *(long *)ctx;
     for (long i = 0; i < CYCLES; i++) {
         long r = mmap6((long)LOOP_VA, PROT_RW, flags, -1);
@@ -115,6 +115,7 @@ static void loop_run(void *ctx) {
         reap(k);
         nsi(SYS_MUNMAP, (long)LOOP_VA, 4096, 0);
     }
+    return CYCLES;                      /* one forked tcb per cycle */
 }
 static void line_pm(const char *a, const struct pm_result *r) {
     char b[160], *p = str(b, a);
