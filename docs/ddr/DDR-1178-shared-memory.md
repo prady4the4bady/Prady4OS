@@ -205,4 +205,8 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 ## 7. Honesty labels
 
+**Page counts in arms J, L and M (DDR-1185).** All three read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
+- **M moves onto `pm_measure`.** Its window spans a fork, the child's run and exit, and the reap, so the scheduler runs other processes inside it. A burst that frees pages there could hide a leaked segment (a false pass). `reclaimed=1` now needs a conclusive trial with drop < `RECLAIM_MIN`; an inconclusive trial is red. The meter lines are printed as `[shm] M drop=` and `[shm] M meter`.
+- **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and smoke-shm runs on one CPU (`rqcpus=1`, no `QEMU_SMP`). Foreign code can enter that window only through a timer preemption at syscall return, and a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else in that instant. That path is judged far-fetched; it is recorded here, **not** measured.
+
 P1 is **gated by `smoke-shm` arms A-F**. P2 is designed in Amendment 2 and is gated by arms G-M once built; until those arms are green and S2-1 to S2-7 are shown red, P2 is **not verified**. P3 and P4 are **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.

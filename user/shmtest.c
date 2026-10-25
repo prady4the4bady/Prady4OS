@@ -101,8 +101,8 @@ static __attribute__((noreturn)) void fail(const char *what, long v) {
     for (;;) { }
 }
 
-/* Arms J, L and M (not yet on pm_measure, DDR-1185 §3 residual) read the raw
- * system-wide count through the meter's sampler. */
+/* Arms J and L read the raw system-wide count across ONE syscall on a
+ * uniprocessor (DDR-1185 §3 residual), through the meter's sampler. */
 static unsigned long free_pages(void) {
     unsigned long t, f;
     pm_sample(&t, &f);
@@ -144,6 +144,21 @@ static void line_pm(const char *a, const struct pm_result *r) {
     p = str(p, " rej_post="); p = dec(p, r->rej_post);
     p = str(p, " rej_procs="); p = dec(p, r->rej_procs);
     *p++ = '\n'; *p = 0; wr(b);
+}
+
+/* Arm M trial: a child creates a segment, never attaches or RMIDs it, and
+ * exits; the parent reaps it. One forked tcb. */
+static long m_run(void *ctx) {
+    (void)ctx;
+    long mk = nsi(SYS_FORK, 0, 0, 0);
+    if (mk < 0) fail("m_fork", mk);
+    if (mk == 0) {
+        long m = nsi(SYS_SHMGET, IPC_PRIVATE, SEG_PAGES * 4096, 0);
+        nsi(SYS_EXIT, m < 0 ? 4 : 0, 0, 0);
+        for (;;) { }
+    }
+    if (reap(mk) != 0) fail("m_child", -1);
+    return 1;
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
@@ -328,17 +343,14 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     line2("PRADYOS_SHM_L nattch_fork=", (long)free_pages() - (long)lf0 >= RECLAIM_MIN);
 
     /* M: a segment nobody attached and nobody RMID'd goes when its last
-     * holder (the child that created it) is gone. */
-    unsigned long mf0 = free_pages();
-    long mk = nsi(SYS_FORK, 0, 0, 0);
-    if (mk < 0) fail("m_fork", mk);
-    if (mk == 0) {
-        long m = nsi(SYS_SHMGET, IPC_PRIVATE, SEG_PAGES * 4096, 0);
-        nsi(SYS_EXIT, m < 0 ? 4 : 0, 0, 0);
-        for (;;) { }
-    }
-    if (reap(mk) != 0) fail("m_child", -1);
-    line2("PRADYOS_SHM_M reclaimed=", (long)mf0 - (long)free_pages() < RECLAIM_MIN);
+     * holder (the child that created it) is gone. The window spans a fork,
+     * the child's run and exit and the reap, so other processes run in it:
+     * the drop comes from pm_measure (DDR-1185). Inconclusive is red. */
+    struct pm_result rm;
+    int okm = pm_measure(m_run, 0, &rm);
+    line2("PRADYOS_SHM_M reclaimed=", okm && rm.drop < RECLAIM_MIN);
+    line2("[shm] M drop=", rm.drop);
+    line_pm("[shm] M meter", &rm);
     wr("PRADYOS_SHM_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
