@@ -1407,8 +1407,8 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
  * DDR-1181 §3.6 says is copied (fds, signal dispositions, FPU state, root and
  * fs capability). Enters ring 3 at `entry` with RSP = stack, RDI = arg and
  * FS base = tls. Created BLOCKED and unblocked only once fully built. */
-struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
-                                     uint64_t arg, uint64_t tls, uint64_t clear_tid) {
+uint32_t sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
+                                  uint64_t arg, uint64_t tls, uint64_t clear_tid) {
     struct tcb *t = sched_create_state(user_launch, 0, parent->name, THREAD_BLOCKED);
     if (!t)
         return 0;
@@ -1453,8 +1453,11 @@ struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_
     t->mm  = parent->mm;
     t->cr3 = parent->cr3;
     irq_restore(fl);
+    /* Read the id while the thread cannot run: once unblocked it may exit on
+     * another CPU and be reaped, freeing this tcb, before we return. */
+    uint32_t tid = t->pid;
     sched_unblock(t);
-    return t;
+    return tid;
 }
 
 static void sched_ring_unlink(struct tcb *t) {
@@ -1579,9 +1582,14 @@ struct tcb *sched_find_child(struct tcb *parent, int pid,
         if (t->parent_pid == parent->tgid && (pid == -1 || (int)t->pid == pid)) {
             *any = 1;
             /* DDR-1181 §3.4: a zombie leader is reapable only once every
-             * thread of its group has exited; until then it counts as live. */
+             * thread of its group has exited; until then it counts as live.
+             * The last thread drops `live` to 0 BEFORE it publishes the group
+             * status, so `group_set` is required too: a scan between the two
+             * would otherwise reap with the leader's stale exit_status. The
+             * last thread wakes leader->waiter after publishing (sched_exit_common). */
             if (t->state == THREAD_ZOMBIE &&
-                (!t->mm || __atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) == 0)) {
+                (!t->mm || (__atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) == 0 &&
+                            __atomic_load_n(&t->mm->group_set, __ATOMIC_ACQUIRE)))) {
                 found = t; break;
             }
             if (!*has_live) *has_live = t;
@@ -2634,7 +2642,7 @@ static void sched_exit_common(int status, int group) {
         uint64_t gfl = irq_save();
         if (!mm->group_set) {
             mm->group_status = status;
-            mm->group_set = 1;
+            __atomic_store_n(&mm->group_set, 1u, __ATOMIC_RELEASE);
         }
         struct tcb *t = self->next;
         while (t != self) {
@@ -2659,7 +2667,7 @@ static void sched_exit_common(int status, int group) {
     int last = mm ? (__atomic_sub_fetch(&mm->live, 1, __ATOMIC_ACQ_REL) == 0) : 1;
     if (last && mm && !mm->group_set) {
         mm->group_status = status;     /* every thread ended by thread_exit */
-        mm->group_set = 1;
+        __atomic_store_n(&mm->group_set, 1u, __ATOMIC_RELEASE);
     }
     if (current_thread->is_user && last) {
         /* DDR-1171: a REJECTED rollback task undoes its filesystem effects here,
