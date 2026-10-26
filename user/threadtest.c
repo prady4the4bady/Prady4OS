@@ -139,6 +139,11 @@ struct shared {
     volatile long placed;      /* D/E/M: the trial proved the loop thread ran
                                 * on another CPU (DDR-1181 §4.1)            */
     volatile long midcopy;     /* arm G: -EFAULTs that left bytes written     */
+    /* DDR-1181 §4.2: D/E placement diagnostics, summed over an arm's trials
+     * (zeroed per arm, not per trial; ungated). Cell = quiet spinners << 1 |
+     * plain creator spin. */
+    volatile long att, a_low, a_lowmv, a_tick, a_full, dmax, reached;
+    volatile long at_cell[4], pl_cell[4];
     volatile unsigned a_ctid;  /* arm A: zeroed by the kernel at thread exit */
     volatile unsigned c_ctid;  /* arm C */
 };
@@ -209,6 +214,12 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_nop(long arg) {
 __attribute__((noreturn, force_align_arg_pointer)) static void t_spin(long arg) {
     (void)arg;
     for (;;) __asm__ volatile("pause");
+}
+
+/* DDR-1181 §4.2 (H3): a spinner that never executes `pause`. */
+__attribute__((noreturn, force_align_arg_pointer)) static void t_spin_q(long arg) {
+    (void)arg;
+    for (;;) __asm__ volatile("" ::: "memory");
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) static void t_writer(long arg) {
@@ -283,12 +294,13 @@ static int reap(long pid, uint64_t bound_ms) {
     return 0;
 }
 
-/* Child body for D (write=1) and E/M (write=0). Never returns. */
-__attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
+/* Child body for D (write=1) and E/M (write=0). Never returns. `quiet`
+ * selects spinners without `pause` (DDR-1181 §4.2, H3). */
+__attribute__((noreturn)) static void child_tlb(struct shared *s, int write, int quiet) {
     s->page = (uint64_t)map(4096, MAP_PRIVATE);
     *(volatile uint64_t *)s->page = PAT;
-    spawn(t_spin, 0, 0, 0);              /* keep the other vCPUs busy, so the */
-    spawn(t_spin, 0, 0, 0);              /* loop thread is not on ours        */
+    spawn(quiet ? t_spin_q : t_spin, 0, 0, 0);   /* keep the other vCPUs busy, */
+    spawn(quiet ? t_spin_q : t_spin, 0, 0, 0);   /* so the loop thread is not on ours */
     spawn(write ? t_writer : t_reader, (long)s, 0, 0);
     uint64_t end = now() + 1000 * MS;
     while (s->count < 2000) {            /* the loop thread is running and   */
@@ -298,16 +310,35 @@ __attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
     /* DDR-1181 §4.1: prove the loop thread runs on ANOTHER CPU right now.
      * The creator spins without a syscall; its counter can only advance if
      * the loop thread runs in parallel. An attempt during which the vDSO
-     * tick moved may have been preempted and does not count. */
-    for (int a = 0; a < 50 && !s->placed; a++) {
+     * tick moved may have been preempted and does not count. The loop is
+     * capped at 600 ms (DDR-1181 §4.2). Odd attempts spin without `pause`
+     * (H3); the proof is the same either way: no syscall in the window. */
+    uint64_t pend = now() + 600 * MS;
+    for (int a = 0; a < 50 && !s->placed && now() < pend; a++) {
+        int cell = (quiet << 1) | (a & 1);
+        s->att++;
+        s->at_cell[cell]++;
         uint64_t t0 = now();
-        long c0 = s->count;
-        for (long i = 0; i < 200000 && s->count - c0 < 1000; i++)
-            __asm__ volatile("pause");
-        if (s->count - c0 >= 1000 && now() == t0)
-            s->placed = 1;
+        long c0 = s->count, i;
+        if (a & 1)
+            for (i = 0; i < 200000 && s->count - c0 < 1000; i++)
+                __asm__ volatile("" ::: "memory");
         else
-            nsi(SYS_YIELD, 0, 0, 0);
+            for (i = 0; i < 200000 && s->count - c0 < 1000; i++)
+                __asm__ volatile("pause");
+        long d = s->count - c0;
+        int moved = now() != t0;
+        if (d > s->dmax) s->dmax = d;
+        if (i >= 200000) s->a_full++;
+        if (d >= 1000 && !moved) {
+            s->placed = 1;
+            s->pl_cell[cell]++;
+            break;
+        }
+        if (d >= 1000) s->a_tick++;
+        else if (moved) s->a_lowmv++;
+        else s->a_low++;
+        nsi(SYS_YIELD, 0, 0, 0);
     }
     long rc = write ? nsi(SYS_MPROTECT, (long)s->page, 4096, PROT_READ)
                     : nsi(SYS_MUNMAP, (long)s->page, 4096, 0);
@@ -319,6 +350,11 @@ __attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
 static void clear(struct shared *s) {
     s->go = s->done = s->count = s->late = s->poison = s->efault = s->gdone = 0;
     s->placed = s->midcopy = 0;
+}
+
+static void clear_diag(struct shared *s) {
+    s->att = s->a_low = s->a_lowmv = s->a_tick = s->a_full = s->dmax = s->reached = 0;
+    for (int c = 0; c < 4; c++) s->at_cell[c] = s->pl_cell[c] = 0;
 }
 
 /* Arm C workload for pm_measure (DDR-1185): 64 create/join/munmap cycles,
@@ -412,11 +448,17 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
         long late = 0, poison = 0, faulted = 1, placed = 0;
+        clear_diag(s);
         for (int k = 0; k < TRIALS; k++) {
             clear(s);
             long pid = nsi(SYS_FORK, 0, 0, 0);
             if (pid < 0) fail("fork");
-            if (pid == 0) child_tlb(s, arm == 0);
+            if (pid == 0) child_tlb(s, arm == 0, k & 1);
+            /* DDR-1181 §4.2: the fault bound starts at the operation, not at
+             * fork; the warm-up and placement phase is bounded on its own. */
+            uint64_t op_end = now() + 3000 * MS;
+            while (!s->done && now() < op_end) nsi(SYS_YIELD, 0, 0, 0);
+            if (s->done) s->reached++;
             if (!reap(pid, 1000)) faulted = 0;
             if (!s->placed) continue;        /* only concurrency-proven trials */
             placed++;
@@ -424,6 +466,12 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             poison += s->poison;
         }
         long pok = placed >= PLACED_MIN;
+        const char *an = arm == 0 ? "D" : "E";
+        say("[thread] %s diag reached=%d att=%d low=%d lowmv=%d tick=%d full=%d dmax=%d\n",
+            an, s->reached, s->att, s->a_low, s->a_lowmv, s->a_tick, s->a_full, s->dmax);
+        say("[thread] %s cells att=%d/%d/%d/%d placed=%d/%d/%d/%d\n", an,
+            s->at_cell[0], s->at_cell[1], s->at_cell[2], s->at_cell[3],
+            s->pl_cell[0], s->pl_cell[1], s->pl_cell[2], s->pl_cell[3]);
         if (arm == 0) {
             say("[thread] D placed=%d of %d\n", placed, (long)TRIALS);
             say("PRADYOS_THREAD_D prot_stale=%d faulted=%d placed_ok=%d\n",
@@ -453,8 +501,13 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long gp = nsi(SYS_FORK, 0, 0, 0);
     if (gp < 0) fail("fork");
     if (gp == 0) {
-        s->page = (uint64_t)map(8192, MAP_PRIVATE);   /* pages A and B */
-        uint64_t pb = s->page + 4096;
+        /* Pages A and B are two regions: munmap takes a whole region by its
+         * base (sys_mmap.c vma_find), so B alone can only come and go if it is
+         * one (DDR-1181 §4.2). The bump allocator places B right after A. */
+        long pa = map(4096, MAP_PRIVATE);
+        uint64_t pb = (uint64_t)map(4096, MAP_PRIVATE);
+        if (pb != (uint64_t)pa + 4096) fail("G layout");
+        s->page = (uint64_t)pa;
         spawn(t_copier, (long)s, 0, 0);
         while (!s->gdone) {                  /* only B comes and goes */
             nsi(SYS_MUNMAP, (long)pb, 4096, 0);

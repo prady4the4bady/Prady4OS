@@ -277,10 +277,47 @@ A gate never seen red proves nothing, so **arms A, D, E and G prove nothing yet*
 **Redesign (implemented in the next commit):**
 
 - **A** stores into a `MAP_PRIVATE` page that the creator mapped before the thread exists, and the creator reads it back. One shared address space shows the store; a COW copy (T1) faults the store onto a private copy, and the creator reads 0. The sentinel is unchanged.
-- **D, E, M: concurrency-proven trials.** After the warm-up the creator stops making syscalls. It spins for 2 ms on the vDSO clock and requires the loop thread's counter to advance by at least 1000 during that window. Since the creator never yields inside it, an advancing counter means the loop thread runs on another CPU at the same time. Only then does the creator call `mprotect`/`munmap`; otherwise it yields and tries again, up to 50 times. A trial is **placed** when that check passed. Each arm prints `placed=` and requires at least 12 of 16 placed trials (`placed_ok=1`). Fewer is red, so an arm whose trials never overlap can no longer pass by default. `prot_stale`, `stale` and `poison` are summed over placed trials only.
-- **G: mid-copy faults are counted.** The destination is `[A+2048, B+2048)` across two pages, and the sibling toggles only page B. Before each `SYS_DMESG` the copier zeroes A's tail. An `-EFAULT` that leaves A's tail written means the copy started (the pre-check passed) and faulted on B, which is the fixup path. G requires `survived=1` **and** `midcopy=` at least 1 (`midcopy_ok=1`). Under T8 that fault panics the kernel (`NEXUS KERNEL PANIC` is in `GLOBAL_FORBIDDEN`).
+- **D, E, M: concurrency-proven trials.** After the warm-up the creator stops making syscalls. It spins (up to 200,000 iterations) and requires the loop thread's counter to advance by at least 1000 while the vDSO clock does not move. Since the creator never yields inside it, an advancing counter means the loop thread runs on another CPU at the same time. Only then does the creator call `mprotect`/`munmap`; otherwise it yields and tries again, up to 50 times. A trial is **placed** when that check passed. Each arm prints `placed=` and requires at least 12 of 16 placed trials (`placed_ok=1`). Fewer is red, so an arm whose trials never overlap can no longer pass by default. `prot_stale`, `stale` and `poison` are summed over placed trials only.
+- **G: mid-copy faults are counted.** The destination is `[A+256, B+256)` across two pages, and the sibling toggles only page B. Before each `SYS_DMESG` the copier zeroes A's tail. An `-EFAULT` that leaves A's tail written means the copy started (the pre-check passed) and faulted on B, which is the fixup path. G requires `survived=1` **and** `midcopy=` at least 1 (`midcopy_ok=1`). Under T8 that fault panics the kernel (`NEXUS KERNEL PANIC` is in `GLOBAL_FORBIDDEN`).
 
 **Re-run plan:** correct code, then T1 (A), T4 (D), T5 (E), T6 (M) and T8 (G) on the redesigned probe. T2, T3, T7 and T9b exercise arms B, C, F and C2, whose probe code is unchanged; their reds above stand.
+
+### 4.2 Amendment: the redesigned probe is red on correct code (`9fbd233`)
+
+Run [40270599838](https://github.com/prady4the4bady/Prady4OS/actions/runs/40270599838), smoke-thread on shard 2, QEMU TCG with 4 vCPUs. Arms A, B, C, C2, F and M print their expected values (`shared=1 joined=1`, `tls_ok=2`, `leftover=0 zombie=0`, `net_leak_ok=1`, `group_killed=1`, `poison=0`). Three arms fail:
+
+| Arm | Printed | Mechanism |
+|---|---|---|
+| G | `THREAD FAIL: G remap`, `efault=0 midcopy=0` | **Named, from the source.** `munmap` removes a whole region, found by its exact base (`vma_find` compares `base ==`, `sys_munmap_locked` ignores the length; `sys_mmap.c`). The probe mapped pages A and B as **one** 2-page region and unmapped B = base + 4096. That call returns `-EINVAL` and unmaps nothing. The `mmap` at B then overlaps, returns `-EINVAL`, and the probe fails on the first iteration. This is a probe defect. |
+| D, E | `faulted=0` | **Named, from the log.** D ran from about `t=500` to `t=2000` (heartbeat ticks, 10 ms each), which is about 15 s for 16 trials, and only one D trap line was printed. The parent's `reap(pid, 1000)` timer starts at `fork`, and the placement loop (up to 50 attempts, each a spin plus a `yield`) runs inside that window. So 15 of the 16 children were killed before they reached `mprotect`/`munmap`. This is a probe defect: the bound was written for "fault within 1 s of the operation", and the redesign moved a long phase in front of the operation. |
+| D, E | `placed=1 of 16`, `placed=0 of 16` | **Not named.** See below. |
+
+**What the artefact does show about placement:**
+- The vCPUs are separate host threads. QMP `info cpus` lists four distinct `thread_id`s, so QEMU runs multi-threaded TCG.
+- All four CPUs are online (`[smp] cpus online=4/4`).
+- The run queues are deep during D and E: `rqdepth=7` and `rqq=15` in every heartbeat from `t=1000` to `t=4000`.
+
+**What it does not show** is why an attempt fails. The candidates below predict different counters:
+
+- **H1:** the loop thread is not running while the creator spins. The count advances by less than 1000 and the vDSO clock does not move.
+- **H2:** it runs, but the window crosses a tick. The count reaches 1000 and the clock moves.
+- **H3:** `pause` is what prevents overlap. Under multi-threaded TCG, a `pause` ends the vCPU's execution loop, and the vCPU thread then retakes QEMU's global lock. The creator and both spinners execute `pause` in tight loops. The loop thread's vCPU also needs that lock each time it leaves its execution loop (every timer interrupt), so it could stall behind them. This is QEMU behaviour as I recall it, **not verified** against the QEMU source for the runner's version. H3 predicts H1's counters, and more placements when nobody executes `pause`.
+
+**Next step: instrument, then decide.** No verdict changes. The two named defects are fixed, and the probe gains ungated diagnostic lines:
+
+- **G:** pages A and B are mapped as two one-page regions. The bump allocator places the second directly after the first, and the probe checks `B == A + 4096` (`THREAD FAIL: G layout` otherwise).
+- **D, E:** the parent waits (bounded at 3 s) until the child has called `mprotect`/`munmap`, and only then starts the 1000 ms fault bound. The placement loop is also capped at 600 ms.
+- **Diagnostics:** per arm, the probe records:
+  - `reached`: trials that reached the operation;
+  - `att`: attempts;
+  - attempts that ended with count < 1000 and the clock still (`low`), count < 1000 and the clock moved (`lowmv`), and count ≥ 1000 but the clock moved (`tick`);
+  - attempts that ran the full 200,000 iterations (`full`);
+  - the largest count advance seen (`dmax`).
+- **A 2×2 split for H3:** odd trials use spinners without `pause`, and odd attempts use a creator spin without `pause`. Attempts and placements are counted in each of the four cells.
+
+The placement proof is the same in every cell: the creator makes no syscall in the window, so the count can only advance if the loop thread runs on another CPU, and a preemption on the creator's CPU lasts a full 10 ms slice, which always contains a vDSO tick.
+
+T1r, T4r, T5r, T6r and T8r on `9fbd233` are cancelled. They tested a probe that is red on correct code, so they would prove nothing. They are re-run once correct code is green.
 
 ## 5. Order of work
 
