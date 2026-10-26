@@ -329,7 +329,9 @@ void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
             continue;
         *pte = (*pte & ~PTE_PRESENT) | PTE_SW_DYING;
         invlpg(p);
+        if (free_fn && (*pte & PTE_ADDR)) free_fn(*pte & PTE_ADDR);   /* MUTANT T6 (DDR-1177 M4): free before shootdown */
     }
+    free_fn = 0;
     tlb_shoot(pml4_phys, va, npages);
     for (uint64_t i = 0; i < npages; i++) {
         uint64_t p = va + i * 0x1000ull;
