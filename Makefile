@@ -457,6 +457,7 @@ kernel: $(KERNEL_BIN)
 # bit-identical and the gate re-ran the OLD image, reproducing a fault that had
 # already been fixed.
 USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h) $(wildcard user/*.asm) \
+                 $(wildcard user/include/*.h) \
                  $(wildcard kernel/crypto/*.c) $(wildcard kernel/crypto/*.h) \
                  Makefile
 

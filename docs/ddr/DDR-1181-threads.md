@@ -381,6 +381,20 @@ Every mutant is red on the arm it was designed for, and D1 and E1 are told apart
 
 The P1c threads feature is therefore labelled: gated by smoke-thread for single-CPU semantics; cross-CPU TLB coherence for threads **not verified** (gated in-kernel by smoke-tlbshoot, DDR-1177 arms A–C, not end to end).
 
+### 4.4 Amendment: review findings on `a79068b` (CodeRabbit, #76)
+
+Each finding below was checked against the source before any change was made.
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R1 | `fork` copies the VMA table outside `mm->lock` | `sys_fork` drops the lock after `vmm_fork_address_space_cow`. `sched_create_user_clone` then copies `parent->mm->vma` and `mmap_next` with no lock held. A sibling's `mmap`/`munmap` in that gap leaves the child with page tables and a mapping table that disagree. That is the DDR-1178 overwrite-a-live-PTE hazard, now reachable through a second thread. | `sys_fork` holds the lock across the clone. Nothing the clone calls takes `mm->lock` (all `mm_lock` callers checked), so there is no recursion. |
+| R2 | A thread can exit while it owns `mm->lock` | Since P1b, `sys_mmap_locked` calls `vfs_read` with `mm->lock` held (file-backed fill). `vfs_read` → `mnt_lock` → `yield()`, and `yield()` honours a pending SIGKILL with `sched_exit` (DDR-1090). DDR-1090's safety argument assumed "no `yield()` caller holds a lock", and P1b broke that assumption. Siblings sleeping in `kmutex_lock` would never wake (a sleeping kernel wait does not wake on SIGKILL, §3.4), so `mm->live` would stay above 0 and the leader could not be reaped. | `sched_exit_common` releases `mm->lock` if the exiting thread owns it. The exit is a group exit, so every sibling is dying too, and a half-done `mmap` leaves only PTEs that the address-space teardown frees. |
+| R3 | `SYS_SET_MEM_LIMIT` does a read-modify-write without the lock | Two siblings that lower the cap at once can both pass the check, and the higher value can land last, which raises a cap that was just lowered. No effect today: the cap is enforced only for agents, and agents cannot create threads (§3.2). | The check and the store are taken under `mm->lock`. |
+| R4 | The Makefile does not track `user/include/*.h` | `USER_ALL_SRCS` lists `user/*.h` but not `user/include/*.h`, so a change to `pagemeter.h` alone does not rebuild `kernel.bin`. | Added to `USER_ALL_SRCS`. |
+| R5 | The DDR-1185 copy on #76 is stale | #76 carries the port-time DDR-1185, and #90 has the amended runs table. | `fix-pagemeter` (#90) is merged in. |
+
+R1 and R2 change kernel code on a security boundary. Their gates are the existing set, which covers fork, mmap and exit. R2's path needs a SIGKILL to land inside `mnt_lock` during a file-backed `mmap`, and no probe drives that timing, so R2 is **not verified at run time**: it is checked by reading the code, as is R1's race window.
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
