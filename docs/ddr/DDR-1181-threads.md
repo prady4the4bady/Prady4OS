@@ -252,6 +252,135 @@ The correct-code run shows the meter rejecting the first trial for `rej_procs` (
 
 **Line integrity.** Every line the probe prints leaves in one `write`. `say()` and `line1()` build each line in a stack buffer (a probe may not carry a writable section, DDR-826). Arms D, E, M and F print right after a child dies with a kernel `[trap]` line. A line written in pieces could be torn by that line, or by another process's output. CI run 39504298130 tore arm F; DDR-1182 §3.1 shows the same failure in another probe.
 
+### 4.1 Amendment: three arms were not sensitive to their mutants
+
+All mutants T1–T8 were run on `675b45c` (smoke-thread, shard 2; QEMU TCG, 4 vCPUs). Correct code is green on that head (run [40234479561](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234479561)).
+
+| Mutant | Head | Run | Designed arm | Result |
+|---|---|---|---|---|
+| T1 | `069ebfc` | [40261324185](https://github.com/prady4the4bady/Prady4OS/actions/runs/40261324185) | A | red, **but A passed** (`shared=1 joined=1`); red via C2 (`drop=1036`) and D/E (`prot_stale=230116208`, `stale=164341344`, `faulted=0`) |
+| T2 | `31e2b89` | [40261343508](https://github.com/prady4the4bady/Prady4OS/actions/runs/40261343508) | B | red on B (`tls_ok=0`) |
+| T3 | `ecec751` | [40222447291](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222447291) | C | red on C (see above) |
+| T4 | `642f5ac` | [40261362012](https://github.com/prady4the4bady/Prady4OS/actions/runs/40261362012) | D | **green** (`prot_stale=0 faulted=1`, 16 trials) |
+| T5 | `3216e2f` | [40261380557](https://github.com/prady4the4bady/Prady4OS/actions/runs/40261380557) | E | **green** (`stale=0 faulted=1`, 16 trials) |
+| T6 | `975d2a7` | [40261398624](https://github.com/prady4the4bady/Prady4OS/actions/runs/40261398624) | M | not yet reported |
+| T7 | `81088e0` | [40261416987](https://github.com/prady4the4bady/Prady4OS/actions/runs/40261416987) | F | red on F (`group_killed=0`) |
+| T8 | `71864fe` | [40261435864](https://github.com/prady4the4bady/Prady4OS/actions/runs/40261435864) | G | **green** (`efault=10546 survived=1`) |
+| T9b | `8a3eed2` | [40234544145](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234544145) | C2 | red on C2 only (`drop=256`, `leftover=0`) |
+
+A gate never seen red proves nothing, so **arms A, D, E and G prove nothing yet**, and the DDR-1177 arm D/E checklist items stay unticked. The mechanisms below are read from the probe and the kernel source. They are **not traced** at run time.
+
+1. **A cannot see a copied address space.** The thread stores into `struct shared`, which is `MAP_SHARED` because the fork arms need it. A COW copy of the mm (T1) keeps `PTE_SW_SHMEM` pages shared, so the creator still sees the store. T1 was caught only incidentally, by C2, D and E.
+2. **D and E never prove the loop thread is on another CPU.** The creator warms the loop thread up with `SYS_YIELD` and then calls `mprotect`/`munmap`. If the loop thread is on the creator's vCPU at that moment, the creator's own `invlpg` removes the entry and a missing `tlb_shoot` (T4, T5) changes nothing. The probe has no CPU pinning and no user-visible CPU id (no `IA32_TSC_AUX`, no getcpu; QEMU's default `qemu64` model). The two `t_spin` threads make a separate vCPU likely, not certain.
+3. **G never reaches the fixup instruction.** The `-EFAULT`s it counts come from the `vmm_user_range_ok` pre-check in `copyout` (`uaccess.c`). The fixup is only reached when the page disappears after the check and before the copy touches it. A one-page destination that is either mapped or not gives that window almost no width.
+
+**Redesign (implemented in the next commit):**
+
+- **A** stores into a `MAP_PRIVATE` page that the creator mapped before the thread exists, and the creator reads it back. One shared address space shows the store; a COW copy (T1) faults the store onto a private copy, and the creator reads 0. The sentinel is unchanged.
+- **D, E, M: concurrency-proven trials.** After the warm-up the creator stops making syscalls. It spins (up to 200,000 iterations) and requires the loop thread's counter to advance by at least 1000 while the vDSO clock does not move. Since the creator never yields inside it, an advancing counter means the loop thread runs on another CPU at the same time. Only then does the creator call `mprotect`/`munmap`; otherwise it yields and tries again, up to 50 times. A trial is **placed** when that check passed. Each arm prints `placed=` and requires at least 12 of 16 placed trials (`placed_ok=1`). Fewer is red, so an arm whose trials never overlap can no longer pass by default. `prot_stale`, `stale` and `poison` are summed over placed trials only.
+- **G: mid-copy faults are counted.** The destination is `[A+256, B+256)` across two pages, and the sibling toggles only page B. Before each `SYS_DMESG` the copier zeroes A's tail. An `-EFAULT` that leaves A's tail written means the copy started (the pre-check passed) and faulted on B, which is the fixup path. G requires `survived=1` **and** `midcopy=` at least 1 (`midcopy_ok=1`). Under T8 that fault panics the kernel (`NEXUS KERNEL PANIC` is in `GLOBAL_FORBIDDEN`).
+
+**Re-run plan:** correct code, then T1 (A), T4 (D), T5 (E), T6 (M) and T8 (G) on the redesigned probe. T2, T3, T7 and T9b exercise arms B, C, F and C2, whose probe code is unchanged; their reds above stand.
+
+### 4.2 Amendment: the redesigned probe is red on correct code (`9fbd233`)
+
+Run [40270599838](https://github.com/prady4the4bady/Prady4OS/actions/runs/40270599838), smoke-thread on shard 2, QEMU TCG with 4 vCPUs. Arms A, B, C, C2, F and M print their expected values (`shared=1 joined=1`, `tls_ok=2`, `leftover=0 zombie=0`, `net_leak_ok=1`, `group_killed=1`, `poison=0`). Three arms fail:
+
+| Arm | Printed | Mechanism |
+|---|---|---|
+| G | `THREAD FAIL: G remap`, `efault=0 midcopy=0` | **Named, from the source.** `munmap` removes a whole region, found by its exact base (`vma_find` compares `base ==`, `sys_munmap_locked` ignores the length; `sys_mmap.c`). The probe mapped pages A and B as **one** 2-page region and unmapped B = base + 4096. That call returns `-EINVAL` and unmaps nothing. The `mmap` at B then overlaps, returns `-EINVAL`, and the probe fails on the first iteration. This is a probe defect. |
+| D, E | `faulted=0` | **Named, from the log.** D ran from about `t=500` to `t=2000` (heartbeat ticks, 10 ms each), which is about 15 s for 16 trials, and only one D trap line was printed. The parent's `reap(pid, 1000)` timer starts at `fork`, and the placement loop (up to 50 attempts, each a spin plus a `yield`) runs inside that window. So 15 of the 16 children were killed before they reached `mprotect`/`munmap`. This is a probe defect: the bound was written for "fault within 1 s of the operation", and the redesign moved a long phase in front of the operation. |
+| D, E | `placed=1 of 16`, `placed=0 of 16` | **Not named.** See below. |
+
+**What the artefact does show about placement:**
+- The vCPUs are separate host threads. QMP `info cpus` lists four distinct `thread_id`s, so QEMU runs multi-threaded TCG.
+- All four CPUs are online (`[smp] cpus online=4/4`).
+- The run queues are deep during D and E: `rqdepth=7` and `rqq=15` in every heartbeat from `t=1000` to `t=4000`.
+
+**What it does not show** is why an attempt fails. The candidates below predict different counters:
+
+- **H1:** the loop thread is not running while the creator spins. The count advances by less than 1000 and the vDSO clock does not move.
+- **H2:** it runs, but the window crosses a tick. The count reaches 1000 and the clock moves.
+- **H3:** `pause` is what prevents overlap. Under multi-threaded TCG, a `pause` ends the vCPU's execution loop, and the vCPU thread then retakes QEMU's global lock. The creator and both spinners execute `pause` in tight loops. The loop thread's vCPU also needs that lock each time it leaves its execution loop (every timer interrupt), so it could stall behind them. This is QEMU behaviour as I recall it, **not verified** against the QEMU source for the runner's version. H3 predicts H1's counters, and more placements when nobody executes `pause`.
+
+**Next step: instrument, then decide.** No verdict changes. The two named defects are fixed, and the probe gains ungated diagnostic lines:
+
+- **G:** pages A and B are mapped as two one-page regions. The bump allocator places the second directly after the first, and the probe checks `B == A + 4096` (`THREAD FAIL: G layout` otherwise).
+- **D, E:** the parent waits (bounded at 3 s) until the child has called `mprotect`/`munmap`, and only then starts the 1000 ms fault bound. The placement loop is also capped at 600 ms.
+- **Diagnostics:** per arm, the probe records:
+  - `reached`: trials that reached the operation;
+  - `att`: attempts;
+  - attempts that ended with count < 1000 and the clock still (`low`), count < 1000 and the clock moved (`lowmv`), and count ≥ 1000 but the clock moved (`tick`);
+  - attempts that ran the full 200,000 iterations (`full`);
+  - the largest count advance seen (`dmax`).
+- **A 2×2 split for H3:** odd trials use spinners without `pause`, and odd attempts use a creator spin without `pause`. Attempts and placements are counted in each of the four cells.
+
+The placement proof is the same in every cell: the creator makes no syscall in the window, so the count can only advance if the loop thread runs on another CPU, and a preemption on the creator's CPU lasts a full 10 ms slice, which always contains a vDSO tick.
+
+T1r, T4r, T5r, T6r and T8r on `9fbd233` are cancelled. They tested a probe that is red on correct code, so they would prove nothing. They are re-run once correct code is green.
+
+### 4.3 Placement mechanism named; P1c gates what one CPU can prove
+
+Run [40276219205](https://github.com/prady4the4bady/Prady4OS/actions/runs/40276219205) on `05b9177` (smoke-thread, shard 2):
+
+| Line | D | E |
+|---|---|---|
+| `diag` | `reached=16 att=96 low=48 lowmv=0 tick=48 full=48 dmax=2659671` | `reached=16 att=96 low=48 lowmv=0 tick=48 full=48 dmax=1850150` |
+| `cells att=` / `placed=` | `24/24/24/24` / `0/0/0/0` | `24/24/24/24` / `0/0/0/0` |
+| sentinel | `prot_stale=0 faulted=1 placed_ok=0` | `stale=0 faulted=1 placed_ok=0` |
+
+G printed `efault=4278 midcopy=0`.
+
+**The two fixes from §4.2 hold.**
+- G no longer fails on the remap.
+- D and E reach the operation in 16 of 16 trials and fault in every trial (`faulted=1`).
+
+**Placement: 0 of 192 attempts, with and without `pause` in both places, so H3 is refuted.**
+
+- The 48/48 split follows the alternation of the creator's spin style.
+- The plain spins ran the full 200,000 iterations with the clock still. During them the count advanced by less than 1000 (`low=48 full=48`).
+- The `pause` spins outlived a tick, and the count passed 1000 only across the tick (`tick=48`).
+
+So the loop thread did not run while the creator spun. H1 holds.
+
+**Mechanism.** The code path is read from the source; the load condition is measured.
+
+1. A new or woken thread goes onto the run queue of the CPU that woke it. That is `rq_push(self, t)` in `sched_unblock`, and `rq_push(this_cpu)` in `sched_create_state`, both in `sched.c`. So the loop thread and both spinners start on the creator's CPU.
+2. A CPU takes work from another CPU only when its own queue is empty. `schedule_locked` calls `rq_pop(cpu)` first and `rq_steal` only if that returned nothing. A preempted thread re-queues on the CPU it ran on.
+3. During D and E every heartbeat shows queued work on every CPU, or on all but one: `rqq=15` or `13`, `rqdepth=5..7` (run 40276219205 `t=1000..3000`, and run 40270599838 `t=1000..4000`).
+
+No CPU's queue ever empties, so nothing is ever stolen, and all four of the child's threads share the creator's CPU. The two spinners, added "so the loop thread is not on ours", sat on the creator's CPU as well. This is also why T4 and T5 stayed green (§4.1). The **inference** that the threads shared one CPU is not yet observed directly: no CPU id is printed. The next probe prints one, from `CPUID.1:EBX[31:24]`, the initial APIC id, which ring 3 can read.
+
+**The same mechanism makes G vacuous.** For a fault in the middle of a copy, the toggling thread must unmap B while the copier is inside `SYS_DMESG`, between the range pre-check and the copy. On one CPU that window never opens to another thread: `midcopy=0` over 4278 `-EFAULT`s. Under T8 it would be the same.
+
+**Decision (delegated, order 4).** P1 has no way to place a thread on a chosen CPU. Under the boot's background load, the scheduler never spreads one process's threads. So smoke-thread cannot prove cross-CPU behaviour on this kernel, and pretending otherwise was the defect in §4.1. Changing default placement (wake-time balancing) is out of scope here: DDR-885 keeps placement unchanged while the lost-thread work (DDR-880/884) is open.
+
+1. **P1c (#76) gates what holds on one CPU, each arm with a mutant shown red:**
+   - **A:** shared address space. Mutant T1r.
+   - **B:** TLS. Mutant T2.
+   - **C and C2:** reap and leak. Mutants T3 and T9b.
+   - **D:** a sibling's `mprotect(PROT_READ)` stops this thread's writes: `faulted=1 prot_stale=0`. New mutant **D1**: `sys_mprotect` returns 0 without changing the PTEs.
+   - **E:** a sibling's `munmap` stops this thread's reads: `faulted=1 stale=0`. New mutant **E1**: `munmap` drops the region without unmapping it.
+   - **F:** group exit. Mutant T7.
+
+   The spinners and the placement loop are removed. M and G stay in the probe and print, but are **not in the sentinel**: they have no mutant that can turn them red on one CPU, and a gate never seen red proves nothing. Each D trial also prints both threads' CPU ids (ungated).
+2. **P1d (next PR, own DDR): a CPU-placement call.** It is opt-in, so default placement is unchanged. With it, D and E become cross-CPU arms again (T4, T5), and M and G become gated (T6, T8). The DDR-1177 arm D/E and M4 checklist items stay unticked until then.
+
+**Runs on `a306c95`** (smoke-thread, shard 2; QEMU TCG, 4 vCPUs):
+
+| Tree | Head | Run | Verdict | Measured |
+|---|---|---|---|---|
+| correct | `a306c95` | [40279936633](https://github.com/prady4the4bady/Prady4OS/actions/runs/40279936633) | green (16/16 jobs) | A `shared=1 joined=1`, B `tls_ok=2`, C `leftover=0 zombie=0`, C2 `net_leak_ok=1`; D `reached=16 of 16 cpu_same=16`, `prot_stale=0 faulted=1`; E `reached=16 of 16 cpu_same=16`, `stale=0 faulted=1`; F `group_killed=1`; ungated M `poison=0`, G `efault=2414 midcopy=0` |
+| D1 | `e497331` | [40280179862](https://github.com/prady4the4bady/Prady4OS/actions/runs/40280179862) | red on D only (rest of run cancelled) | D `prot_stale=751357337 faulted=0`; every other arm as on correct code |
+| T1 | `f840f2b` | [40280172708](https://github.com/prady4the4bady/Prady4OS/actions/runs/40280172708) | red on A | A `shared=0 joined=1`. Also red: C2 (`drop=1036`, `net_leak_ok=0`), D (`prot_stale=472193403 faulted=0`) and E (`stale=399841380 faulted=0`); a COW copy per thread changes every shared-address-space arm |
+| E1 | `e220322` | [40280186056](https://github.com/prady4the4bady/Prady4OS/actions/runs/40280186056) | red on E | E `stale=416997001 faulted=0`, with D unchanged (`prot_stale=0 faulted=1`). Also red: C2 (`drop=256`; C's stack `munmap` no longer frees), and `THREAD FAIL: G remap` (G's `mmap` at B overlaps the mapping E1 left) |
+
+Every mutant is red on the arm it was designed for, and D1 and E1 are told apart by which of D and E moved. T2 (B), T3 (C), T7 (F) and T9b (C2) stand from §4.1: those arms' probe code is unchanged.
+
+`cpu_same=16 of 16` in both D and E is the direct observation the mechanism above lacked. In every trial, the loop thread's CPU (CPUID APIC id, read when it started) equals the operating thread's CPU at the operation.
+
+The P1c threads feature is therefore labelled: gated by smoke-thread for single-CPU semantics; cross-CPU TLB coherence for threads **not verified** (gated in-kernel by smoke-tlbshoot, DDR-1177 arms A–C, not end to end).
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
