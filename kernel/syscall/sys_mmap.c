@@ -345,8 +345,7 @@ static long sys_shmget_impl(long a_key, long a_size, long a_flags, long a4, long
     struct tcb *t = current_thread;
     if (t->is_agent)
         return -EPERM;               /* A2.2: a segment is memory the agent cap does not see */
-    if (a_key != IPC_PRIVATE)
-        return -EACCES;              /* D1(c): no global namespace */
+    (void)a_key;                     /* MUTANT S2-1: any key creates */
     if (a_size <= 0 || (uint64_t)a_size > (uint64_t)SHM_MAX_PAGES * PAGE_SIZE)
         return -EINVAL;
     int obj = shm_obj_create((uint32_t)(((uint64_t)a_size + PAGE_SIZE - 1) / PAGE_SIZE));
