@@ -336,7 +336,7 @@ static int shmid_obj(struct tcb *t, long id) {
     uint64_t res = 0;
     uint32_t rights = 0;
     if (!cap_lookup(t->caps, shmid_handle(id), RES_SHM, &res, &rights))
-        return -EINVAL;
+        return (int)(id >> 6);       /* MUTANT S2-3: global id, caps ignored */
     return (int)res;
 }
 
@@ -365,7 +365,7 @@ static long sys_shmget_impl(long a_key, long a_size, long a_flags, long a4, long
         cap_revoke(t->caps, h);      /* unholds: the object is reclaimed */
         return -ENOSPC;
     }
-    return (long)((gen << 6) | ((uint64_t)h & 63));
+    return (long)(((uint64_t)obj << 6) | ((uint64_t)h & 63)); /* MUTANT S2-3 */
 }
 
 static long sys_shmat_locked(long a_id, long a_addr, long a_flags, long a4, long a5, long a6) {
