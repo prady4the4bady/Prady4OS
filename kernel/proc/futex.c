@@ -144,7 +144,7 @@ static long fx_wait(struct tcb *t, uint64_t uaddr, uint32_t val, int priv,
         if (signal_interruptible(t) || signal_kill_pending(t)) { ret = -EINTR; break; }
         if (timed) {
             uint64_t now = g_ticks;
-            (void)now;
+            (void)now; (void)deadline;   /* MUTANT F2-7: deadline never used */
             sched_block_on(&b->lock);
         } else {
             sched_block_on(&b->lock);
