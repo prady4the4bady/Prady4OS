@@ -4367,14 +4367,15 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[sigsem] PASS"
 
-# DDR-1181 (C1.4 P1): threads sharing one address space, 4 vCPUs. Arms A-G and
-# M in DDR-1181 sec.4; D, E and M are the DDR-1177 C1.4 items (mprotect and
-# munmap seen by a thread on another CPU; no freed frame read through a stale
-# entry). Mutants T1-T8 in DDR-1181 sec.4.
+# DDR-1181 (C1.4 P1): threads sharing one address space, 4 vCPUs. Gated arms
+# A-F (DDR-1181 sec.4, sec.4.3). D and E prove that mprotect/munmap take effect
+# for a sibling thread on the SAME CPU: the scheduler never spreads one
+# process's threads under the boot's load (sec.4.3), so the cross-CPU DDR-1177
+# C1.4 items, and arms M and G, wait for P1d. M and G print but are ungated.
 smoke-thread: $(IMG) fat-image sfs-image
 	@rm -f build/thread.log
 	@SERIAL_LOG=build/thread.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=thread \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_THREAD_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_D prot_stale=0 faulted=1\nPRADYOS_THREAD_E stale=0 faulted=1\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nthread probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[thread\]\|PRADYOS_THREAD" build/thread.log || true

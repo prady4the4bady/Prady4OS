@@ -319,6 +319,55 @@ The placement proof is the same in every cell: the creator makes no syscall in t
 
 T1r, T4r, T5r, T6r and T8r on `9fbd233` are cancelled. They tested a probe that is red on correct code, so they would prove nothing. They are re-run once correct code is green.
 
+### 4.3 Placement mechanism named; P1c gates what one CPU can prove
+
+Run [40276219205](https://github.com/prady4the4bady/Prady4OS/actions/runs/40276219205) on `05b9177` (smoke-thread, shard 2):
+
+| Line | D | E |
+|---|---|---|
+| `diag` | `reached=16 att=96 low=48 lowmv=0 tick=48 full=48 dmax=2659671` | `reached=16 att=96 low=48 lowmv=0 tick=48 full=48 dmax=1850150` |
+| `cells att=` / `placed=` | `24/24/24/24` / `0/0/0/0` | `24/24/24/24` / `0/0/0/0` |
+| sentinel | `prot_stale=0 faulted=1 placed_ok=0` | `stale=0 faulted=1 placed_ok=0` |
+
+G printed `efault=4278 midcopy=0`.
+
+**The two fixes from §4.2 hold.**
+- G no longer fails on the remap.
+- D and E reach the operation in 16 of 16 trials and fault in every trial (`faulted=1`).
+
+**Placement: 0 of 192 attempts, with and without `pause` in both places, so H3 is refuted.**
+
+- The 48/48 split follows the alternation of the creator's spin style.
+- The plain spins ran the full 200,000 iterations with the clock still. During them the count advanced by less than 1000 (`low=48 full=48`).
+- The `pause` spins outlived a tick, and the count passed 1000 only across the tick (`tick=48`).
+
+So the loop thread did not run while the creator spun. H1 holds.
+
+**Mechanism.** The code path is read from the source; the load condition is measured.
+
+1. A new or woken thread goes onto the run queue of the CPU that woke it. That is `rq_push(self, t)` in `sched_unblock`, and `rq_push(this_cpu)` in `sched_create_state`, both in `sched.c`. So the loop thread and both spinners start on the creator's CPU.
+2. A CPU takes work from another CPU only when its own queue is empty. `schedule_locked` calls `rq_pop(cpu)` first and `rq_steal` only if that returned nothing. A preempted thread re-queues on the CPU it ran on.
+3. During D and E every heartbeat shows queued work on every CPU, or on all but one: `rqq=15` or `13`, `rqdepth=5..7` (run 40276219205 `t=1000..3000`, and run 40270599838 `t=1000..4000`).
+
+No CPU's queue ever empties, so nothing is ever stolen, and all four of the child's threads share the creator's CPU. The two spinners, added "so the loop thread is not on ours", sat on the creator's CPU as well. This is also why T4 and T5 stayed green (§4.1). The **inference** that the threads shared one CPU is not yet observed directly: no CPU id is printed. The next probe prints one, from `CPUID.1:EBX[31:24]`, the initial APIC id, which ring 3 can read.
+
+**The same mechanism makes G vacuous.** For a fault in the middle of a copy, the toggling thread must unmap B while the copier is inside `SYS_DMESG`, between the range pre-check and the copy. On one CPU that window never opens to another thread: `midcopy=0` over 4278 `-EFAULT`s. Under T8 it would be the same.
+
+**Decision (delegated, order 4).** P1 has no way to place a thread on a chosen CPU. Under the boot's background load, the scheduler never spreads one process's threads. So smoke-thread cannot prove cross-CPU behaviour on this kernel, and pretending otherwise was the defect in §4.1. Changing default placement (wake-time balancing) is out of scope here: DDR-885 keeps placement unchanged while the lost-thread work (DDR-880/884) is open.
+
+1. **P1c (#76) gates what holds on one CPU, each arm with a mutant shown red:**
+   - **A:** shared address space. Mutant T1r.
+   - **B:** TLS. Mutant T2.
+   - **C and C2:** reap and leak. Mutants T3 and T9b.
+   - **D:** a sibling's `mprotect(PROT_READ)` stops this thread's writes: `faulted=1 prot_stale=0`. New mutant **D1**: `sys_mprotect` returns 0 without changing the PTEs.
+   - **E:** a sibling's `munmap` stops this thread's reads: `faulted=1 stale=0`. New mutant **E1**: `munmap` drops the region without unmapping it.
+   - **F:** group exit. Mutant T7.
+
+   The spinners and the placement loop are removed. M and G stay in the probe and print, but are **not in the sentinel**: they have no mutant that can turn them red on one CPU, and a gate never seen red proves nothing. Each D trial also prints both threads' CPU ids (ungated).
+2. **P1d (next PR, own DDR): a CPU-placement call.** It is opt-in, so default placement is unchanged. With it, D and E become cross-CPU arms again (T4, T5), and M and G become gated (T6, T8). The DDR-1177 arm D/E and M4 checklist items stay unticked until then.
+
+The P1c threads feature is therefore labelled: gated by smoke-thread for single-CPU semantics; cross-CPU TLB coherence for threads **not verified** (gated in-kernel by smoke-tlbshoot, DDR-1177 arms A–C, not end to end).
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
