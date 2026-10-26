@@ -78,6 +78,12 @@ Base `b8500b6`. The later merges of #76 (`a79068b`, `0a8bf3d`) change comments, 
 
 Every mutant is red on the arm it was designed for, and each red is told apart from the others by the arm that moved. Before P1d, T4, T5, T6 and T8 were green (DDR-1181 §4.1). With placement they are red, so the DDR-1177 C1.4 items D, E and M4 and the DDR-1181 §3.7 fixup are now gated end to end. That is QEMU TCG only, **not verified on real hardware**.
 
+### 4.2 Review finding on `66047f4` (CodeRabbit, #91)
+
+**P-R1: a pinned wakeup kicked the wrong CPU.** `sched_unblock` queues the thread through `rq_push`, which sends a pinned thread to `pin_cpu`. Its rq-3 kick then sent an IPI to the first idle CPU other than the waker. When that was not `pin_cpu`, the kicked CPU found nothing it may run (`steal_pass` skips pinned heads). The pinned CPU, if idle, waited for its next 10 ms LAPIC tick. That is a latency defect, not a correctness one: the thread still runs on its CPU. **Change:** for a pinned thread, only `pin_cpu` is considered, and only if it is idle and not the waker. A pinned BSP is declined by `smp_resched_one` and stays timer-driven, as before. Unpinned wakeups keep the existing scan. No arm measures wake latency, so this is checked by reading the code and **not verified at run time**. Arms P, D, E, M and G must stay green.
+
+The other two findings in the same review are in P1c code and are fixed on #76 (DDR-1181 §4.5, R6 and R7), then merged forward.
+
 ## 5. Residual risk
 
 - **Time-sharing on the pinned CPU.** CPUs 1 and 2 still run background work, so the two pinned threads overlap only when both are scheduled at once. The 12-of-16 bound is set before measurement. If correct code is red because of it, the bound is not lowered. The placement counts are read and the cause is named first.

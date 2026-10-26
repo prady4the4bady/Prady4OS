@@ -2560,13 +2560,24 @@ void sched_unblock(struct tcb *t) {
          * BSP-only-idle boot reads saw_idle=1 kicked=0 and is CORRECT rather
          * than a defect -- which the proof's predicate cannot express at all. */
         uint8_t saw_idle = 0, kicked = 0;
-        for (int c = 0; c < PERCPU_MAX; c++) {
-            struct percpu *o = percpu_get((uint32_t)c);
-            if (c != self && o && o->present && o->idle) {
+        if (t->pin_cpu >= 0) {
+            /* DDR-1186: rq_push queued it on pin_cpu, and no other CPU may
+             * run it, so only that CPU is worth a kick. A pinned BSP is
+             * declined by smp_resched_one and stays timer-driven. */
+            struct percpu *o = percpu_get((uint32_t)t->pin_cpu);
+            if (t->pin_cpu != self && o && o->present && o->idle) {
                 saw_idle = 1;
-                if (smp_resched_one((uint32_t)c)) {
-                    kicked = 1;
-                    break;
+                kicked = (uint8_t)(smp_resched_one((uint32_t)t->pin_cpu) != 0);
+            }
+        } else {
+            for (int c = 0; c < PERCPU_MAX; c++) {
+                struct percpu *o = percpu_get((uint32_t)c);
+                if (c != self && o && o->present && o->idle) {
+                    saw_idle = 1;
+                    if (smp_resched_one((uint32_t)c)) {
+                        kicked = 1;
+                        break;
+                    }
                 }
             }
         }
