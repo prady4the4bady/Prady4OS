@@ -192,8 +192,7 @@ static void rq_push(int cpu, struct tcb *t) {
     sched_place(t);
     /* DDR-1186: a pinned thread is queued only on its CPU. Every path that
      * makes a thread runnable comes through here, so this is the one site. */
-    if (t->pin_cpu >= 0)
-        cpu = t->pin_cpu;
+    /* MUTANT P1 (DDR-1186): rq_push ignores the pin */
     struct rq *q = &g_rq[cpu];
     uint64_t fl = spin_lock_irqsave(&q->lock);
     t->rq_next = 0;
