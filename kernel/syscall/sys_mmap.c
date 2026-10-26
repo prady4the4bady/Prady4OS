@@ -390,7 +390,7 @@ static long sys_shmat_locked(long a_id, long a_addr, long a_flags, long a4, long
         return -ENOMEM;
     }
     int ro = (a_flags & SHM_RDONLY) != 0;
-    uint64_t pflags = VMM_USER | VMM_NX | PTE_SW_SHMEM | (ro ? 0 : VMM_RW);
+    uint64_t pflags = VMM_USER | VMM_NX | (ro ? 0 : VMM_RW); /* MUTANT S2-2: no PTE_SW_SHMEM */
     for (uint32_t i = 0; i < npages; i++) {
         uint64_t f = shm_obj_frame(obj, i);
         pmm_incref(f);               /* this mapping's reference */
