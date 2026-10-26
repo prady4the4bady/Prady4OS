@@ -4,13 +4,17 @@
  *   A  a store by a thread is seen by its creator; clear_tid is zeroed at exit
  *   B  two threads, two TLS blocks: each reads its own %fs:0 self-pointer
  *   C  72 create/exit cycles leak no physical pages
- *   D  DDR-1177 arm D: mprotect(PROT_READ) while a thread on another CPU writes
- *   E  DDR-1177 arm E: munmap while a thread on another CPU reads
- *   M  DDR-1177 M4: no read through a stale entry ever returns a freed frame's
- *      poison (KASAN fills freed frames with 0xDEADBEEFDEADBEEF)
+ *   D  mprotect(PROT_READ) by one thread stops a sibling's writes
+ *   E  munmap by one thread stops a sibling's reads
+ *   M  no read through a stale entry returns a freed frame's poison (KASAN
+ *      fills freed frames with 0xDEADBEEFDEADBEEF) -- printed, ungated
  *   F  a fault in one thread ends the whole process
  *   G  DDR-1181 §3.7: a kernel copyout racing munmap of its buffer is
- *      -EFAULT, never a kernel panic
+ *      -EFAULT, never a kernel panic -- printed, ungated
+ *
+ * D and E run their two threads on ONE CPU: the scheduler never spreads one
+ * process's threads under the boot's load (DDR-1181 §4.3). The cross-CPU
+ * DDR-1177 arms D/E/M4, and M and G as gated arms, need P1d (DDR-1186).
  *
  * D, E/M, F and G each run in a forked CHILD (the test process). The child's
  * threads report through a MAP_SHARED anonymous page (C1.3 P1) and the parent

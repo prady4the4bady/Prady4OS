@@ -366,6 +366,17 @@ No CPU's queue ever empties, so nothing is ever stolen, and all four of the chil
    The spinners and the placement loop are removed. M and G stay in the probe and print, but are **not in the sentinel**: they have no mutant that can turn them red on one CPU, and a gate never seen red proves nothing. Each D trial also prints both threads' CPU ids (ungated).
 2. **P1d (next PR, own DDR): a CPU-placement call.** It is opt-in, so default placement is unchanged. With it, D and E become cross-CPU arms again (T4, T5), and M and G become gated (T6, T8). The DDR-1177 arm D/E and M4 checklist items stay unticked until then.
 
+**Runs on `a306c95`** (smoke-thread, shard 2; QEMU TCG, 4 vCPUs):
+
+| Tree | Head | Run | Verdict | Measured |
+|---|---|---|---|---|
+| correct | `a306c95` | [40279936633](https://github.com/prady4the4bady/Prady4OS/actions/runs/40279936633) | green (16/16 jobs) | A `shared=1 joined=1`, B `tls_ok=2`, C `leftover=0 zombie=0`, C2 `net_leak_ok=1`; D `reached=16 of 16 cpu_same=16`, `prot_stale=0 faulted=1`; E `reached=16 of 16 cpu_same=16`, `stale=0 faulted=1`; F `group_killed=1`; ungated M `poison=0`, G `efault=2414 midcopy=0` |
+| D1 | `e497331` | [40280179862](https://github.com/prady4the4bady/Prady4OS/actions/runs/40280179862) | red on D only (rest of run cancelled) | D `prot_stale=751357337 faulted=0`; every other arm as on correct code |
+| T1 | `f840f2b` | [40280172708](https://github.com/prady4the4bady/Prady4OS/actions/runs/40280172708) | not yet reported | expected: A `shared=0` |
+| E1 | `e220322` | [40280186056](https://github.com/prady4the4bady/Prady4OS/actions/runs/40280186056) | not yet reported | expected: E `faulted=0` or `stale>0` |
+
+`cpu_same=16 of 16` in both D and E is the direct observation the mechanism above lacked. In every trial, the loop thread's CPU (CPUID APIC id, read when it started) equals the operating thread's CPU at the operation.
+
 The P1c threads feature is therefore labelled: gated by smoke-thread for single-CPU semantics; cross-CPU TLB coherence for threads **not verified** (gated in-kernel by smoke-tlbshoot, DDR-1177 arms A–C, not end to end).
 
 ## 5. Order of work
