@@ -90,7 +90,7 @@ int shm_attach_begin(int obj) {
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
     struct shm_obj *o = &g_shm[obj];
     if (o->used != 1 || !o->npages) rc = -EINVAL;
-    else if (o->marked)         rc = -EIDRM;      /* D2 */
+    /* MUTANT S2-4: marked ignored */
     else                        o->nattch++;
     spin_unlock_irqrestore(&g_shm_lock, fl);
     return rc;
