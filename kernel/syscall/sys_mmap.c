@@ -513,8 +513,7 @@ static long sys_shm_open_impl(long a_name, long a_oflag, long a_mode, long a4, l
     struct tcb *t = current_thread;
     if (t->is_agent)
         return -EPERM;               /* A2.2: memory the agent cap does not see */
-    if (a_name != SHM_ANON)
-        return -EACCES;              /* D1(c); the pointer is never read */
+    (void)a_name;
     if ((a_oflag & SHMO_ACCMODE) != SHMO_RDWR ||
         (a_oflag & ~(long)(SHMO_ACCMODE | SHMO_CREAT | SHMO_EXCL)))
         return -EINVAL;
