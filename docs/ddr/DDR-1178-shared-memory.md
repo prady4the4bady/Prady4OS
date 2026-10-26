@@ -183,7 +183,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | Arm | Sentinel | What it shows |
 |---|---|---|
 | G | `PRADYOS_SHM_G key=-13` | `shmget` with a non-private key returns `-EACCES` |
-| H | `PRADYOS_SHM_H shared=0x66` | The parent creates and attaches a segment and writes `0x55`. A child created by `fork` **after** `shmget` attaches the inherited shmid, writes `0x66` and exits. The parent reads `0x66` through its own attachment. |
+| H | `PRADYOS_SHM_H shared=0x66` | The parent creates and attaches a segment and writes `0x55`. A child created by `fork` **after** `shmget` attaches the inherited shmid (the capability crossed the fork), then writes `0x66` through the mapping it **inherited** and exits. The parent reads `0x66` through its own attachment. |
 | I | `PRADYOS_SHM_I forged=0` | A child forked **before** `shmget` receives the shmid value through a `MAP_SHARED` page (P1) and tries `shmat` on it. It also tries all 64 slots with generations 1 to 4. `forged` counts the attempts that succeeded. |
 | J | `PRADYOS_SHM_J eidrm=-43 freed_ok=1` | After `IPC_RMID` on an attached segment, a new `shmat` returns `-EIDRM`, while the existing mapping still reads its value. After the last `shmdt`, `SYS_MEMINFO` free pages rise by at least the segment's 16 pages minus 4 pages of noise. |
 | K | `PRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13` | A child attaches with `SHM_RDONLY` and writes, so it dies on the fault. The parent's `SHM_RDONLY` attach, then `mprotect(PROT_READ\|PROT_WRITE)`, returns `-EACCES`. |
@@ -202,6 +202,8 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | S2-5 | `SHM_RDONLY` ignored (mapped RW) | K (`ro_faulted`) |
 | S2-6 | the exit path does not decrement `nattch` (the segment is never destroyed) | L |
 | S2-7 | the last holder's exit does not drop `holders` (an unattached, never-RMID'd segment leaks its slot) | M: `PRADYOS_SHM_M reclaimed=1`. A child creates a segment, does not attach it, and exits. The parent then counts free pages and expects them back |
+
+**Arm H vacuity, found before any S2 mutant ran (2026-10-26).** H first had the child write `0x66` through a fresh `shmat`. A fresh attach maps the frames writable whatever `fork` does to the inherited PTEs, so with S2-2 the child's write still reached the shared frame and H passed: the arm could not see the bug it names. The child now writes through the inherited mapping. With S2-2 the inherited PTE lacks `PTE_SW_SHMEM`, so `vmm_fork_address_space_cow` marks it COW (`kernel/mm/vmm_cow.c`, the `PTE_SW_SHMEM` test), the child's write is copied into a private frame, and the parent reads `0x55`. The child also detaches the inherited mapping, so J still does not depend on the exit path. This is reasoned from the code, **not verified** until S2-2 is shown red in CI.
 
 ## 7. Honesty labels
 
