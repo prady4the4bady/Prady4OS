@@ -172,7 +172,7 @@ void shm_release_vmas(struct mm *mm) {
     for (int i = 0; i < VM_AREA_MAX; i++) {
         struct vm_area *v = &mm->vma[i];
         if (v->npages && v->shm)
-            shm_detach(v->shm - 1);
+            (void)v; /* MUTANT S2-6: exit does not detach */
         v->shm = 0;
         v->shm_ro = 0;
     }
