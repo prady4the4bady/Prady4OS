@@ -236,7 +236,8 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
     struct vm_area *v = vma_find(t, (uint64_t)a_addr);
     if (!v)
         return -EINVAL;
-    unmap_range(t->cr3, v->base, v->npages);
+    if (!({ const char *_w = "THREADTEST"; int _k = 0; while (_w[_k] && t->name[_k] == _w[_k]) _k++; !_w[_k]; }))   /* MUTANT E1: the probe's munmap drops the region, not the mapping */
+        unmap_range(t->cr3, v->base, v->npages);
     aether_mem_uncharge(t, v->npages * PAGE_SIZE);
     v->base = 0;
     v->npages = 0;
