@@ -1,6 +1,6 @@
 # DDR-1186: opt-in CPU placement for a thread (C1.4 P1d)
 
-Status: **proposed**. It is stacked on P1c (#76). Platform: QEMU TCG with 4 vCPUs. **Not verified on real hardware.**
+Status: **implemented** in PR #91: correct code green, and P1, T4, T5, T6 and T8 each red on its arm (§4.1). It is stacked on P1c (#76). Platform: QEMU TCG with 4 vCPUs. **Not verified on real hardware.**
 
 ## 1. Why
 
@@ -62,6 +62,21 @@ The in-kernel smoke-tlbshoot (DDR-1177 arms A–C) gates the shootdown mechanism
 | T8 | the #PF handler ignores the uaccess fixup range | G (kernel panic) |
 
 **Vacuity check before writing the arms.** On the unfixed tree (P1c, no pin call) the probe cannot build, because the call does not exist. With P1 (pin ignored), D and E fall back to the P1c behaviour, so `placed_ok=0`, and they are red. That is why P must be red **on its own line**, so P1 is distinguishable from a placement flake.
+
+### 4.1 Runs (smoke-thread, shard 2; QEMU TCG, 4 vCPUs)
+
+Base `b8500b6`. The later merges of #76 (`a79068b`, `0a8bf3d`) change comments, docs and the fork/exit locking (DDR-1181 §4.4). None of them touches the pin code or the D/E/M/G probe logic.
+
+| Tree | Head | Run | Verdict | Measured |
+|---|---|---|---|---|
+| correct | `b8500b6` | [40281198612](https://github.com/prady4the4bady/Prady4OS/actions/runs/40281198612) | green (16/16 jobs) | P `cpus=4 seen=12 of 12`, `pinned_ok=1 einval=1`; D `placed=16 of 16 cpu_same=0`, `prot_stale=0 faulted=1`; E `placed=16 of 16 cpu_same=0`, `stale=0 faulted=1`; M `poison=0`; G `efault=7033 midcopy=19`, `midcopy_ok=1` |
+| P1 | `c080286` | [40292233293](https://github.com/prady4the4bady/Prady4OS/actions/runs/40292233293) | red on P | P `seen=3 of 12`, `pinned_ok=0 einval=1`. Also red: D `placed=1`, E `placed=0` (`cpu_same=16`), G `midcopy=0`. Without the pin, the arms fall back to the single-CPU behaviour of DDR-1181 §4.3 |
+| T4 | `6eff3a3` | [40292274270](https://github.com/prady4the4bady/Prady4OS/actions/runs/40292274270) | red on D only | D `prot_stale=21571780` with `placed=16 of 16`; every other arm as on correct code |
+| T5 | `24e04c5` | [40292301979](https://github.com/prady4the4bady/Prady4OS/actions/runs/40292301979) | red on E | E `stale=9551315` with `placed=16 of 16`. Also red: M `poison=9562059` (reads through the stale entry return freed frames), then a kernel panic |
+| T6 | `8e20c0b` | [40292336617](https://github.com/prady4the4bady/Prady4OS/actions/runs/40292336617) | red on M only | M `poison=18193`; D and E clean, G `midcopy=5` |
+| T8 | `91b4249` | [40292365532](https://github.com/prady4the4bady/Prady4OS/actions/runs/40292365532) | red on G | Kernel `#PF` panic after the F line: `RIP=0xFFFFFFFF8004FAA3`, which is `uaccess_copy_insn` in T8's own `kernel.elf` (`nm`); `CR2=0x880022F000` (page B); `RCX=0x100` (B's 256 bytes left); backtrace `sys_dmesg` ← `syscall_dispatch`. That is the mid-copy fault the fixup exists for |
+
+Every mutant is red on the arm it was designed for, and each red is told apart from the others by the arm that moved. Before P1d, T4, T5, T6 and T8 were green (DDR-1181 §4.1). With placement they are red, so the DDR-1177 C1.4 items D, E and M4 and the DDR-1181 §3.7 fixup are now gated end to end. That is QEMU TCG only, **not verified on real hardware**.
 
 ## 5. Residual risk
 
