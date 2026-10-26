@@ -64,7 +64,7 @@ int shm_obj_size(int obj, uint32_t npages) {
         return -EINVAL;
     struct shm_obj *o = &g_shm[obj];
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
-    int ok = o->used == 1 && !o->npages && !o->filling;
+    int ok = o->used == 1 && !o->filling;
     if (ok)
         o->filling = 1;                /* a second ftruncate is refused, and
                                         * put_and_reclaim leaves the slot alone */
