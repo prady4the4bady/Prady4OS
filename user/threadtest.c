@@ -4,13 +4,17 @@
  *   A  a store by a thread is seen by its creator; clear_tid is zeroed at exit
  *   B  two threads, two TLS blocks: each reads its own %fs:0 self-pointer
  *   C  72 create/exit cycles leak no physical pages
- *   D  DDR-1177 arm D: mprotect(PROT_READ) while a thread on another CPU writes
- *   E  DDR-1177 arm E: munmap while a thread on another CPU reads
- *   M  DDR-1177 M4: no read through a stale entry ever returns a freed frame's
- *      poison (KASAN fills freed frames with 0xDEADBEEFDEADBEEF)
+ *   D  mprotect(PROT_READ) by one thread stops a sibling's writes
+ *   E  munmap by one thread stops a sibling's reads
+ *   M  no read through a stale entry returns a freed frame's poison (KASAN
+ *      fills freed frames with 0xDEADBEEFDEADBEEF) -- printed, ungated
  *   F  a fault in one thread ends the whole process
  *   G  DDR-1181 §3.7: a kernel copyout racing munmap of its buffer is
- *      -EFAULT, never a kernel panic
+ *      -EFAULT, never a kernel panic -- printed, ungated
+ *
+ * D and E run their two threads on ONE CPU: the scheduler never spreads one
+ * process's threads under the boot's load (DDR-1181 §4.3). The cross-CPU
+ * DDR-1177 arms D/E/M4, and M and G as gated arms, need P1d (DDR-1186).
  *
  * D, E/M, F and G each run in a forked CHILD (the test process). The child's
  * threads report through a MAP_SHARED anonymous page (C1.3 P1) and the parent
@@ -133,7 +137,11 @@ struct shared {
     volatile uint64_t page;    /* the page under test                        */
     volatile uint64_t tls[3][2];   /* arm B: two thread TLS blocks + main's */
     volatile long tls_ok;      /* arm B */
-    volatile long a_store;     /* arm A */
+    volatile long a_store;     /* arm A (unused since DDR-1181 §4.1) */
+    volatile uint64_t a_page;  /* arm A: a MAP_PRIVATE page of the creator */
+    volatile long midcopy;     /* arm G: -EFAULTs that left bytes written     */
+    volatile long lcpu;        /* D/E: the loop thread's CPU (DDR-1181 §4.3)   */
+    volatile long ccpu;        /* D/E: the operating thread's CPU, at the op   */
     volatile unsigned a_ctid;  /* arm A: zeroed by the kernel at thread exit */
     volatile unsigned c_ctid;  /* arm C */
 };
@@ -181,7 +189,8 @@ __attribute__((noreturn)) static void texit(void) {
 
 __attribute__((noreturn, force_align_arg_pointer)) static void t_store(long arg) {
     struct shared *s = (struct shared *)arg;
-    s->a_store = 0xC0FFEE;
+    *(volatile long *)s->a_page = 0xC0FFEE;   /* private page: seen only if
+                                              * the address space is shared */
     texit();
 }
 
@@ -200,14 +209,18 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_nop(long arg) {
     texit();
 }
 
-__attribute__((noreturn, force_align_arg_pointer)) static void t_spin(long arg) {
-    (void)arg;
-    for (;;) __asm__ volatile("pause");
+/* The calling CPU's initial APIC id (CPUID.1:EBX[31:24]); ring 3 may read it.
+ * Diagnostic only (DDR-1181 §4.3): P1 has no way to choose a CPU. */
+static long cpu_id(void) {
+    uint32_t a = 1, b, c = 0, d;
+    __asm__ volatile("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    return (long)(b >> 24);
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) static void t_writer(long arg) {
     struct shared *s = (struct shared *)arg;
     volatile uint64_t *p = (volatile uint64_t *)s->page;
+    s->lcpu = cpu_id();
     for (;;) {
         long f = s->done;
         p[0] = PAT;                      /* faults once the RO entry is seen */
@@ -219,6 +232,7 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_writer(long arg
 __attribute__((noreturn, force_align_arg_pointer)) static void t_reader(long arg) {
     struct shared *s = (struct shared *)arg;
     volatile uint64_t *p = (volatile uint64_t *)s->page;
+    s->lcpu = cpu_id();
     for (;;) {
         long f = s->done;
         uint64_t v = p[0];               /* faults once the entry is gone */
@@ -237,10 +251,19 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_crash(long arg)
 
 __attribute__((noreturn, force_align_arg_pointer)) static void t_copier(long arg) {
     struct shared *s = (struct shared *)arg;
+    /* DDR-1181 §4.1: the destination starts 256 bytes into page A and ends
+     * in page B, which the sibling toggles. A pre-check -EFAULT writes
+     * nothing; a fault on B after the pre-check passed (the fixup path)
+     * leaves A's tail written. A's tail is zeroed before every copy. */
+    volatile unsigned char *a = (volatile unsigned char *)s->page;
     uint64_t end = now() + 1500 * MS;
     while (now() < end) {
-        if (nsi(SYS_DMESG, (long)s->page, 4096, 0) == -EFAULT)
+        for (int i = 256; i < 4096; i++) a[i] = 0;
+        if (nsi(SYS_DMESG, (long)s->page + 256, 4096, 0) == -EFAULT) {
             s->efault++;
+            for (int i = 256; i < 4096; i++)
+                if (a[i]) { s->midcopy++; break; }
+        }
     }
     s->gdone = 1;
     texit();
@@ -268,18 +291,19 @@ static int reap(long pid, uint64_t bound_ms) {
     return 0;
 }
 
-/* Child body for D (write=1) and E/M (write=0). Never returns. */
+/* Child body for D (write=1) and E/M (write=0). Never returns. The loop
+ * thread shares this CPU (DDR-1181 §4.3): what D and E prove is that the
+ * operation takes effect for a sibling thread of the same address space. */
 __attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
     s->page = (uint64_t)map(4096, MAP_PRIVATE);
     *(volatile uint64_t *)s->page = PAT;
-    spawn(t_spin, 0, 0, 0);              /* keep the other vCPUs busy, so the */
-    spawn(t_spin, 0, 0, 0);              /* loop thread is not on ours        */
     spawn(write ? t_writer : t_reader, (long)s, 0, 0);
     uint64_t end = now() + 1000 * MS;
     while (s->count < 2000) {            /* the loop thread is running and   */
         if (now() > end) fail("loop thread never ran");   /* its TLB is warm */
         nsi(SYS_YIELD, 0, 0, 0);
     }
+    s->ccpu = cpu_id();
     long rc = write ? nsi(SYS_MPROTECT, (long)s->page, 4096, PROT_READ)
                     : nsi(SYS_MUNMAP, (long)s->page, 4096, 0);
     if (rc != 0) fail(write ? "mprotect" : "munmap");
@@ -289,6 +313,9 @@ __attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
 
 static void clear(struct shared *s) {
     s->go = s->done = s->count = s->late = s->poison = s->efault = s->gdone = 0;
+    s->midcopy = 0;
+    s->lcpu = -1;
+    s->ccpu = -2;
 }
 
 /* Arm C workload for pm_measure (DDR-1185): 64 create/join/munmap cycles,
@@ -326,11 +353,15 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct shared *s = (struct shared *)map(4096, MAP_SHARED);
 
     /* A */
-    s->a_store = 0;
+    /* A: the store lands in a MAP_PRIVATE page of the creator, so a thread
+     * on a COW copy of the address space (T1) is not seen (DDR-1181 §4.1). */
+    s->a_page = (uint64_t)map(4096, MAP_PRIVATE);
+    *(volatile long *)s->a_page = 0;
     s->a_ctid = 1;
     spawn(t_store, (long)s, 0, (uint64_t)&s->a_ctid);
     long joined = join(&s->a_ctid, 2000);
-    say("PRADYOS_THREAD_A shared=%d joined=%d\n", (long)(s->a_store == 0xC0FFEE), (long)(joined));
+    say("PRADYOS_THREAD_A shared=%d joined=%d\n",
+        (long)(*(volatile long *)s->a_page == 0xC0FFEE), (long)(joined));
 
     /* B */
     s->tls_ok = 0;
@@ -377,21 +408,33 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
 
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
-        long late = 0, poison = 0, faulted = 1;
+        long late = 0, poison = 0, faulted = 1, reached = 0, same = 0;
         for (int k = 0; k < TRIALS; k++) {
             clear(s);
             long pid = nsi(SYS_FORK, 0, 0, 0);
             if (pid < 0) fail("fork");
             if (pid == 0) child_tlb(s, arm == 0);
+            /* DDR-1181 §4.2: the fault bound starts at the operation, not at
+             * fork; the warm-up is bounded on its own. */
+            uint64_t op_end = now() + 3000 * MS;
+            while (!s->done && now() < op_end) nsi(SYS_YIELD, 0, 0, 0);
+            if (s->done) reached++;
             if (!reap(pid, 1000)) faulted = 0;
             late += s->late;
             poison += s->poison;
+            /* Diagnostic (DDR-1181 §4.3): the loop thread's CPU when it
+             * started, against the operating thread's CPU at the operation. */
+            if (s->lcpu == s->ccpu) same++;
         }
         if (arm == 0) {
-            say("PRADYOS_THREAD_D prot_stale=%d faulted=%d\n", (long)(late), (long)(faulted));
+            say("[thread] D reached=%d of %d cpu_same=%d\n", reached, (long)TRIALS, same);
+            say("PRADYOS_THREAD_D prot_stale=%d faulted=%d\n", late, faulted);
         } else {
-            say("PRADYOS_THREAD_E stale=%d faulted=%d\n", (long)(late), (long)(faulted));
-            say("PRADYOS_THREAD_M poison=%d\n", (long)(poison));
+            say("[thread] E reached=%d of %d cpu_same=%d\n", reached, (long)TRIALS, same);
+            say("PRADYOS_THREAD_E stale=%d faulted=%d\n", late, faulted);
+            /* Ungated until P1d (DDR-1181 §4.3): on one CPU no mutant can
+             * make it red. */
+            say("PRADYOS_THREAD_M poison=%d\n", poison);
         }
     }
 
@@ -407,25 +450,34 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long gk = reap(fp, 2000);            /* the child's trap line prints here */
     line1("PRADYOS_THREAD_F group_killed=", gk);
 
-    /* G: copyout into a page a sibling keeps unmapping and remapping. */
+    /* G: copyout into a page a sibling keeps unmapping and remapping.
+     * Ungated until P1d (DDR-1181 §4.3): on one CPU the sibling never runs
+     * inside the copier's syscall, so the mid-copy fault cannot happen. */
     clear(s);
     long gp = nsi(SYS_FORK, 0, 0, 0);
     if (gp < 0) fail("fork");
     if (gp == 0) {
-        s->page = (uint64_t)map(4096, MAP_PRIVATE);
+        /* Pages A and B are two regions: munmap takes a whole region by its
+         * base (sys_mmap.c vma_find), so B alone can only come and go if it is
+         * one (DDR-1181 §4.2). The bump allocator places B right after A. */
+        long pa = map(4096, MAP_PRIVATE);
+        uint64_t pb = (uint64_t)map(4096, MAP_PRIVATE);
+        if (pb != (uint64_t)pa + 4096) fail("G layout");
+        s->page = (uint64_t)pa;
         spawn(t_copier, (long)s, 0, 0);
-        while (!s->gdone) {
-            nsi(SYS_MUNMAP, (long)s->page, 4096, 0);
-            if (nsi6(SYS_MMAP, (long)s->page, 4096, PROT_READ | PROT_WRITE,
-                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != (long)s->page)
+        while (!s->gdone) {                  /* only B comes and goes */
+            nsi(SYS_MUNMAP, (long)pb, 4096, 0);
+            if (nsi6(SYS_MMAP, (long)pb, 4096, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != (long)pb)
                 fail("G remap");
         }
         nsi(SYS_EXIT, 0, 0, 0);
         for (;;) { }
     }
     long survived = reap(gp, 5000);
-    say("[thread] G efault=%d\n", (long)(s->efault));
-    say("PRADYOS_THREAD_G survived=%d\n", (long)(survived));
+    say("[thread] G efault=%d midcopy=%d\n", (long)(s->efault), (long)(s->midcopy));
+    say("PRADYOS_THREAD_G survived=%d midcopy_ok=%d\n", (long)(survived),
+        (long)(s->midcopy >= 1));
 
     say("PRADYOS_THREAD_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
