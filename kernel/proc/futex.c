@@ -172,7 +172,7 @@ struct fx_timespec { int64_t tv_sec, tv_nsec; };
 static long sys_futex(long a_uaddr, long a_op, long a_val, long a_ts, long a5, long a6) {
     (void)a5; (void)a6;
     struct tcb *t = current_thread;
-    int priv = (a_op & FUTEX_PRIVATE_FLAG) != 0;
+    int priv = 0;
     long op = a_op & ~(long)FUTEX_PRIVATE_FLAG;
     if (op == FUTEX_WAKE)
         return fx_wake(t, (uint64_t)a_uaddr, a_val, priv);
