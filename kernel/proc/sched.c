@@ -190,6 +190,10 @@ static void rq_push(int cpu, struct tcb *t) {
         return;                        /* already queued somewhere — one queue only */
     }
     sched_place(t);
+    /* DDR-1186: a pinned thread is queued only on its CPU. Every path that
+     * makes a thread runnable comes through here, so this is the one site. */
+    if (t->pin_cpu >= 0)
+        cpu = t->pin_cpu;
     struct rq *q = &g_rq[cpu];
     uint64_t fl = spin_lock_irqsave(&q->lock);
     t->rq_next = 0;
@@ -761,13 +765,38 @@ void sched_take_wait_stats(uint32_t *calls_out, uint32_t *bails_out) {
     if (bails_out) *bails_out = bails;
 }
 
-/* rq-3: a lockless hint — is any CPU's ready queue non-empty? A stale read is
+/* DDR-1186: is q's head pinned to a CPU other than `self`? Caller holds
+ * q->lock: the head is dereferenced. */
+static int rq_head_pinned_away(struct rq *q, int self) {
+    struct tcb *h = q->head;
+    return h && h->pin_cpu >= 0 && h->pin_cpu != self;
+}
+
+/* rq-3: a hint — is any CPU's ready queue non-empty? A stale read is
  * harmless: a false negative is caught by the timer tick, a false positive just
- * costs one extra idle-loop iteration. Used only to close the wake/idle race. */
+ * costs one extra idle-loop iteration. Used only to close the wake/idle race.
+ * DDR-1186: a queue whose head is pinned to another CPU holds nothing the
+ * asking CPU may take (steal_pass skips it), so it must not keep that CPU out
+ * of hlt, or an idle CPU would spin while a pinned thread waits for its own
+ * CPU. That head is read under the queue's lock (trylock with IRQs off:
+ * rq_push may run from an IRQ on this CPU); a busy lock counts as ready. */
 static int rq_has_ready(void) {
-    for (int c = 0; c < PERCPU_MAX; c++)
-        if (g_rq[c].head)
+    struct percpu *pc = this_cpu();
+    int self = pc ? (int)pc->cpu_idx : 0;
+    for (int c = 0; c < PERCPU_MAX; c++) {
+        if (!g_rq[c].head)
+            continue;
+        uint64_t fl;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+        if (!spin_trylock(&g_rq[c].lock)) {
+            __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
             return 1;
+        }
+        int away = rq_head_pinned_away(&g_rq[c], self);
+        spin_unlock_irqrestore(&g_rq[c].lock, fl);
+        if (!away)
+            return 1;
+    }
     return 0;
 }
 
@@ -805,8 +834,18 @@ static struct tcb *steal_pass(int self, uint32_t want_node, int same) {
         struct rq *q = &g_rq[c];
         if (__atomic_test_and_set(&q->lock.v, __ATOMIC_ACQUIRE))
             continue;                    /* busy — don't convoy, next victim */
+        if (rq_head_pinned_away(q, self)) {
+            spin_unlock(&q->lock);       /* DDR-1186: its CPU's, not ours */
+            continue;
+        }
         struct tcb *t = rq_take(q);      /* transients re-appended, never dropped */
         spin_unlock(&q->lock);
+        if (t && t->pin_cpu >= 0 && t->pin_cpu != self) {
+            /* DDR-1186: not ours to run. rq_take cleared rq_on, so this push
+             * cannot be dropped; it lands on the pin CPU's queue. */
+            rq_push(t->pin_cpu, t);
+            continue;
+        }
         if (t) {
             if (same) g_steal_local++;
             else      g_steal_remote++;
@@ -920,6 +959,7 @@ static void init_idle(struct tcb *idle, int cpu, uint64_t kstack_base) {
     idle->quantum = idle->quantum_reset = QUANTUM;
     idle->caps = cap_table_create();
     idle->is_idle = 1;
+    idle->pin_cpu = -1;                /* DDR-1186: memset's 0 would read as "pinned to CPU 0" */
     idle->on_cpu = cpu;                /* tid/is_user/cr3/fs_base = 0 via memset */
     idle->kstack_base = kstack_base;   /* DDR-1106; 0 == not covered, see above */
     memcpy(idle->fpu_state, fpu_init_template, sizeof idle->fpu_state);
@@ -1123,6 +1163,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->tgid            = 0;   /* DDR-1181 P1c: set with pid by the user creators */
     t->is_thread       = 0;
     t->clear_tid       = 0;
+    t->pin_cpu         = -1;  /* DDR-1186: unpinned; kmalloc does not zero */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the

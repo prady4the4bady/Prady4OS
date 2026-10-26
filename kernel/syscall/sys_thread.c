@@ -8,12 +8,17 @@
  *   clear_tid (if nonzero).
  * thread_exit(status)
  *   Ends the calling thread only. SYS_EXIT still ends the whole process.
+ * sched_cpu(op, cpu)   (DDR-1186, C1.4 P1d)
+ *   0 GET: the CPU index the caller runs on. 1 PIN: the calling thread runs
+ *   on `cpu` only (a present CPU), from the yield this call ends with. 2 UNPIN.
+ *   Self only; not inherited by fork or thread create.
  */
 #include "sched.h"
 #include "mm.h"
 #include "vmm.h"
 #include "syscall.h"
 #include "errno.h"
+#include "percpu.h"   /* DDR-1186: cpu_idx, present */
 
 #define THREAD_MAX_PER_MM  64        /* bound on live threads in one process */
 
@@ -57,7 +62,33 @@ static long sys_thread_exit(long a_status, long a2, long a3, long a4, long a5, l
     return 0;
 }
 
+static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    struct percpu *pc = this_cpu();
+    switch (a_op) {
+    case 0:                                     /* GET */
+        return pc ? (long)pc->cpu_idx : 0;
+    case 1: {                                   /* PIN */
+        if (a_cpu < 0 || a_cpu >= PERCPU_MAX)
+            return -EINVAL;
+        struct percpu *tp = percpu_get((uint32_t)a_cpu);
+        if (!tp || !tp->present)
+            return -EINVAL;
+        current_thread->pin_cpu = (int32_t)a_cpu;
+        /* schedule() re-queues us through rq_push, which honours the pin, so
+         * this returns on the pin CPU. */
+        yield();
+        return 0;
+    }
+    case 2:                                     /* UNPIN */
+        current_thread->pin_cpu = -1;
+        return 0;
+    }
+    return -EINVAL;
+}
+
 void sys_thread_register(void) {
     syscall_register(SYS_THREAD_CREATE, sys_thread_create);
     syscall_register(SYS_THREAD_EXIT,   sys_thread_exit);
+    syscall_register(SYS_SCHED_CPU,     sys_sched_cpu);
 }
