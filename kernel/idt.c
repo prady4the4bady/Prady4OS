@@ -941,7 +941,7 @@ void isr_dispatch(struct regs *r) {
          * after it would strand the lock held forever and hang every later
          * printer on every CPU. */
         if (trheld) console_line_unlock(trfl);
-        sched_exit(-1);                  /* zombie (status -1) + switches away; never returns */
+        sched_exit_thread(-1);           /* MUTANT T7: a fatal fault ends only the faulting thread */
     }
 
     if (r->vector == 3) {                /* recoverable self-test */
