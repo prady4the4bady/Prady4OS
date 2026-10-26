@@ -52,9 +52,7 @@ void cap_table_destroy(struct cap_table *t) {
         return;
     /* DDR-1178 A2.2: the last reference to this table releases every segment
      * hold it carried. No lock: nobody else can reach the table now. */
-    for (int i = 0; i < CAP_SLOTS; i++)
-        if (t->slots[i].in_use && t->slots[i].res_type == RES_SHM)
-            shm_unhold((int)t->slots[i].res_id);
+    /* MUTANT S2-7: the last table reference drops no holds */
     kfree(t);
 }
 
