@@ -1,6 +1,6 @@
 # DDR-1185: attributable free-page drop for probe leak arms
 
-Status: **implemented** in PR #90 (smoke-shm arm C), and ported into PR #76 for smoke-thread arm C2. Correct code green and mutants P-M4, P-INC and P-TID red in CI on the amended meter (§5). Platform: QEMU TCG only. **Not verified on real hardware.**
+Status: **implemented** in PR #90 (smoke-shm arm C), and ported into PR #76 for smoke-thread arm C2. Correct code green and mutants P-M4b, P-INCb and P-TID red in CI on the amended meter (P-M4 and P-INC also red on the first version) (§5). Platform: QEMU TCG only. **Not verified on real hardware.**
 
 ## 1. Problem
 
@@ -36,7 +36,7 @@ Which processes produce the bursts is **not verified**. The fix does not depend 
 2. **Quiet before.** Wait until `free_pages` holds within `PM_TOL` (4) for `PM_QUIET_TICKS` (25 ticks = 250 ms at 100 Hz). If no quiet window comes before the deadline, the result is inconclusive.
 3. **Snapshot.** Take a fingerprint of the scheduler ring (`SYS_GETPROCS`): the count and pid-sum of every entry except the caller and its children. Then sample `f0`.
 4. **Run.** Run `work(ctx)`, which returns how many tcbs it created (`own`: 256 forks per shm loop, 64 threads per C2 trial).
-5. **Settle.** Settle for `PM_SETTLE_TICKS` (300 ms), so late frees the workload itself causes (the reaper's tcb and kernel-stack free) land before `f1` is sampled. Then sample `f1` and take the fingerprint again.
+5. **Settle.** Settle for `PM_SETTLE_TICKS` (300 ms), so late frees caused by the workload itself (the reaper's tcb and kernel-stack free) land before `f1` is sampled. Then sample `f1` and take the fingerprint again.
 6. **Quiet after.** For `PM_QUIET_TICKS`, the count must stay within `PM_TOL` of `f1`. Then a second tid probe gives `p1`.
 7. **Accept or reject.** The trial is rejected (`rej_procs`) if the fingerprint changed **or `p1 − p0 − 1 ≠ own`**, that is, if any tcb other than the workload's own was created between the probes, and (`rej_post`) if the post window moved. Otherwise `drop = f0 − f1` is accepted.
 
@@ -74,7 +74,7 @@ Two kinds of mutant, landing on different behaviour:
 
 The C2 mutants are recorded in DDR-1181 §4 when the port lands on #76.
 
-**Runs (smoke-shm, shard 0; QEMU TCG).** The first three rows are on `d755b78`, before the tid probe. The probe changes which trials are accepted, so P-M4 and P-INC were re-run on the amended head `56fa48c` together with P-TID (the last four rows).
+**Runs (smoke-shm, shard 0; QEMU TCG).** The first three rows are on `d755b78`, before the tid probe. The probe changes which trials are accepted, so P-M4 and P-INC were re-run on the amended head `56fa48c`, as P-M4b and P-INCb, together with P-TID (the last four rows).
 
 | Tree | Head | Run | Verdict | Measured |
 |---|---|---|---|---|
@@ -86,7 +86,7 @@ The C2 mutants are recorded in DDR-1181 §4 when the port lands on #76.
 | P-INCb | `cce7f45` | [40234282490](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234282490) | red, smoke-shm only | `leaked_ok=0`; both loops `trials=0 rej_pre=1`; **`conclusive=0`** |
 | P-TID | `4d2abd4` | [40234287018](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234287018) | red, smoke-shm only | `leaked_ok=0`; both loops **`trials=6 rej_procs=6`**; **`conclusive=0`** |
 
-Every mutant is red on the arm it was designed for, and each red is distinguishable from the others by the printed meter line: a measured leak (P-M4, `conclusive=1`), no quiet window (P-INC, `rej_pre`), and a tid gap that never matches (P-TID, every trial `rej_procs`). Under P-M4 the meter measured exactly the one frame per cycle the mutant leaks (256 over 256 cycles), against 0 on correct code.
+Every mutant is red on the arm it was designed for, and each red is distinguishable from the others by the printed meter line: a measured leak (P-M4 and P-M4b, `conclusive=1`), no quiet window (P-INC and P-INCb, `rej_pre`), and a tid gap that never matches (P-TID, every trial `rej_procs`). Under P-M4 and P-M4b the meter measured exactly the one frame per cycle the mutant leaks (256 over 256 cycles), against 0 on correct code.
 
 **The rejection is real traffic, not noise in the meter.** In every run whose private loop ran on a correctly measured tree (correct and P-M4, before and after the tid probe), that loop's first trial was rejected for `rej_procs`: a process outside the probe started or exited during it. The second trial was clean and measured 0. Under the old single pair, that trial would have been the result. Which process it was is **not verified**.
 
