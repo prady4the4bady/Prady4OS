@@ -45,10 +45,10 @@ static long sys_thread_create(long a_entry, long a_stack, long a_arg,
     if (__atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) >= THREAD_MAX_PER_MM)
         return -EAGAIN;
 
-    struct tcb *nt = sched_create_user_thread(t, entry, stack, (uint64_t)a_arg, tls, ctid);
-    if (!nt)
+    uint32_t tid = sched_create_user_thread(t, entry, stack, (uint64_t)a_arg, tls, ctid);
+    if (!tid)
         return t->mm->group_set ? -EAGAIN : -ENOMEM;  /* group exiting, or no memory */
-    return (long)nt->pid;
+    return (long)tid;
 }
 
 static long sys_thread_exit(long a_status, long a2, long a3, long a4, long a5, long a6) {

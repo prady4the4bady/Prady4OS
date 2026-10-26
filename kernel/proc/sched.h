@@ -352,8 +352,9 @@ void        sched_exit(int status);                             /* zombie + stat
  * SIGKILL first. For a single-threaded process the two are identical. */
 void        sched_exit_thread(int status);
 /* DDR-1181 P1c: a new thread in `parent`'s address space (SYS_THREAD_CREATE).
- * Returns it BLOCKED-then-unblocked, or NULL on allocation failure. */
-struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
+ * Returns its id (read before it is made runnable), or 0 on failure. The tcb
+ * is not returned: once runnable it may exit and be freed at any time. */
+uint32_t    sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
                                      uint64_t arg, uint64_t tls, uint64_t clear_tid);
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */

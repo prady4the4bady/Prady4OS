@@ -395,6 +395,17 @@ Each finding below was checked against the source before any change was made.
 
 R1 and R2 change kernel code on a security boundary. Their gates are the existing set, which covers fork, mmap and exit. R2's path needs a SIGKILL to land inside `mnt_lock` during a file-backed `mmap`, and no probe drives that timing, so R2 is **not verified at run time**: it is checked by reading the code, as is R1's race window.
 
+### 4.5 Amendment: review findings on #91 that land in P1c code (CodeRabbit, `66047f4`)
+
+CodeRabbit reviewed #91, which carries P1c. Two of its findings are in P1c code, so they are fixed here, at their source, and merged forward into #91. The third (the pinned-wakeup kick) is P1d's own and is recorded in DDR-1186.
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R6 | `wait4` can report the leader's stale status | `sched_exit_common` drops `mm->live` to 0 and only then stores `group_status` and `group_set`. `sched_find_child` treats a zombie leader as reapable as soon as `live == 0`. A parent scanning on another CPU between the two steps reaps the leader, and `sys_wait4` reads `group_set == 0` and returns the leader's own `exit_status`. That happens when the leader ended with `SYS_THREAD_EXIT` and the last sibling ends the process with a different status. | `group_set` is release-stored after `group_status` on both paths. A zombie leader is reapable only when `live == 0` **and** `group_set` (acquire). `sys_wait4` reads `group_set` with acquire. The last thread out wakes `leader->waiter` after it publishes, so a waiter that sees `live == 0` with `group_set == 0` sleeps and is woken. CodeRabbit's proposed form (publish before the decrement when `live == 1`) was not used: two siblings exiting at once can both read `live == 2`, and then neither publishes. |
+| R7 | `SYS_THREAD_CREATE` reads the new tcb after making it runnable | `sched_create_user_thread` calls `sched_unblock(t)` and returns `t`; `sys_thread_create` then reads `t->pid`. The new thread can run on another CPU, exit and be reaped (freeing the tcb) before that read: a use-after-free on a security boundary. | `sched_create_user_thread` returns the id, read before `sched_unblock`; the tcb is no longer returned. Thread ids start at 1 (`next_tid`), so 0 still means failure. |
+
+Both are races between CPUs that no probe drives. They are checked by reading the code and **not verified at run time**. The existing gate set (smoke-thread and every fork, exit and wait gate) must stay green.
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
@@ -405,7 +416,7 @@ Each step is its own PR, stacked on the previous one, and each PR is flagged sec
 
 ## 6. Honesty labels
 
-- P1 is gated by `smoke-thread`, once it is built. Until then, P1 is **not verified**.
+- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6, R7) are checked by reading the code only.
 - Emulated (QEMU TCG, 4 vCPUs) only, not verified on real hardware. Cross-CPU timing under TCG is not hardware timing.
 - Does not claim any part of U1–U3 or OPEN-1/2/12/13 closed.
 - The DDR-1177 arm D/E and M4 checklist items are ticked only when the T4/T5/T6 mutants are shown red.
