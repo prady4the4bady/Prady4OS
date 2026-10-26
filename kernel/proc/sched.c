@@ -1379,7 +1379,7 @@ struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_
     t->user_rip   = entry;
     t->user_stack = stack;
     t->user_arg   = arg;
-    t->fs_base    = tls;
+    t->fs_base    = parent->fs_base; (void)tls;   /* MUTANT T2: tls ignored */
     t->clear_tid  = clear_tid;
     t->root_mnt   = parent->root_mnt;
     t->fs_cap     = parent->fs_cap;
