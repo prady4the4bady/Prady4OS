@@ -306,8 +306,7 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
              | nx;
         invlpg(p);
     }
-    /* DDR-1177 §3.5: one shootdown per call, after the loop. */
-    tlb_shoot(pml4_phys, start, (end - start) >> 12);
+    /* MUTANT T4: vmm_protect_range skips tlb_shoot */
     return 0;
 }
 
