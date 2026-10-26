@@ -2579,6 +2579,14 @@ static void sched_exit_common(int status, int group) {
     struct tcb *self = current_thread;
     struct mm *mm = self->mm;
 
+    /* DDR-1181 §4.4 R2: a SIGKILL honoured in yield() (DDR-1090) can end this
+     * thread inside an mm-locked section (sys_mmap_locked -> vfs_read ->
+     * mnt_lock -> yield). Siblings sleeping on the lock would never wake, so
+     * mm->live would never reach 0. Only this thread can be the owner it
+     * compares against, so the unlocked read is stable for that test. */
+    if (mm && __atomic_load_n(&mm->lock.owner, __ATOMIC_ACQUIRE) == self)
+        kmutex_unlock(&mm->lock);
+
     /* DDR-1181 §3.4: a process exit ends every thread of the group. The status
      * is fixed FIRST, so the siblings' own SIGKILL exits cannot overwrite it. */
     if (group && mm && __atomic_load_n(&mm->live, __ATOMIC_ACQUIRE) > 1) {

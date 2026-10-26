@@ -63,10 +63,16 @@ long aether_set_mem_limit(uint32_t pid, uint64_t bytes) {
      * no address space there is no cap to change. */
     if (!t->mm)
         return -1;
+    /* DDR-1181 §4.4 R3: the cap is shared by every thread of the mm; check
+     * and store as one step, or two lowering siblings can raise it. */
+    mm_lock(t);
     uint64_t cur = cap_of(t);
-    if (bytes == 0 || bytes > cur)
+    if (bytes == 0 || bytes > cur) {
+        mm_unlock(t);
         return -1;
+    }
     t->mm->mem_limit = bytes;
+    mm_unlock(t);
     return 0;
 }
 
