@@ -1,6 +1,6 @@
 # DDR-1185: attributable free-page drop for probe leak arms
 
-Status: **implemented** in PR #90 (smoke-shm arm C), and ported into PR #76 for smoke-thread arm C2. Correct code green and mutants P-M4 and P-INC red in CI (§5). Platform: QEMU TCG only. **Not verified on real hardware.**
+Status: **implemented** in PR #90 (smoke-shm arm C), and ported into PR #76 for smoke-thread arm C2. Correct code green and mutants P-M4, P-INC and P-TID red in CI on the amended meter (§5). Platform: QEMU TCG only. **Not verified on real hardware.**
 
 ## 1. Problem
 
@@ -74,17 +74,20 @@ Two kinds of mutant, landing on different behaviour:
 
 The C2 mutants are recorded in DDR-1181 §4 when the port lands on #76.
 
-**Runs (smoke-shm, shard 0; QEMU TCG).** These runs are on `d755b78`, which predates the tid probe; the probe changes which trials are accepted, so P-M4 and P-INC are re-run on the amended head together with P-TID (below, **not verified** until they report).
-
+**Runs (smoke-shm, shard 0; QEMU TCG).** The first three rows are on `d755b78`, before the tid probe. The probe changes which trials are accepted, so P-M4 and P-INC were re-run on the amended head `56fa48c` together with P-TID (the last four rows).
 
 | Tree | Head | Run | Verdict | Measured |
 |---|---|---|---|---|
 | correct | `d755b78` | [40222132487](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222132487) | green (all 10 shards) | `leaked_ok=1`; drop private=0, shared=0; meter private `trials=2 rej_procs=1`, shared `trials=1`; `conclusive=1` |
 | P-M4 | `4dcf948` | [40222095174](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222095174) | red, smoke-shm only | `leaked_ok=0`; drop private=0, **shared=256**; private `trials=2 rej_procs=1`, shared `trials=1`; `conclusive=1` |
 | P-INC | `b67bfe3` | [40222096786](https://github.com/prady4the4bady/Prady4OS/actions/runs/40222096786) | red, smoke-shm only | `leaked_ok=0`; both loops `trials=0 rej_pre=1`; **`conclusive=0`** |
+| correct | `56fa48c` | [40234192923](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234192923) | green (all 10 shards) | `leaked_ok=1`; drop private=0, shared=0; private `trials=2 rej_procs=1`, shared `trials=1`; `conclusive=1` |
+| P-M4b | `e718f04` | [40234278582](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234278582) | red on smoke-shm (shard 0; rest of the run cancelled once it had reported) | `leaked_ok=0`; drop private=0, **shared=256**; private `trials=2 rej_procs=1`, shared `trials=1`; `conclusive=1` |
+| P-INCb | `cce7f45` | [40234282490](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234282490) | red, smoke-shm only | `leaked_ok=0`; both loops `trials=0 rej_pre=1`; **`conclusive=0`** |
+| P-TID | `4d2abd4` | [40234287018](https://github.com/prady4the4bady/Prady4OS/actions/runs/40234287018) | red, smoke-shm only | `leaked_ok=0`; both loops **`trials=6 rej_procs=6`**; **`conclusive=0`** |
 
-Both mutants are red on the arm they were designed for, and each red is distinguishable from the other by the printed meter line. Under P-M4 the meter measured exactly the one frame per cycle the mutant leaks (256 over 256 cycles), against 0 on correct code.
+Every mutant is red on the arm it was designed for, and each red is distinguishable from the others by the printed meter line: a measured leak (P-M4, `conclusive=1`), no quiet window (P-INC, `rej_pre`), and a tid gap that never matches (P-TID, every trial `rej_procs`). Under P-M4 the meter measured exactly the one frame per cycle the mutant leaks (256 over 256 cycles), against 0 on correct code.
 
-**The rejection is real traffic, not noise in the meter.** In both runs whose private loop ran on a correctly measured tree (correct and P-M4), that loop's first trial was rejected for `rej_procs`: a process outside the probe started or exited during it. The second trial was clean and measured 0. Under the old single pair, that trial would have been the result. Which process it was is **not verified**.
+**The rejection is real traffic, not noise in the meter.** In every run whose private loop ran on a correctly measured tree (correct and P-M4, before and after the tid probe), that loop's first trial was rejected for `rej_procs`: a process outside the probe started or exited during it. The second trial was clean and measured 0. Under the old single pair, that trial would have been the result. Which process it was is **not verified**.
 
 Mutants were not built locally (there is no QEMU in the container); each was compiled by CI, and every one of these reds is a gate verdict, not a build failure (no compiler errors in the job logs).
