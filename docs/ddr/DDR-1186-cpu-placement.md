@@ -85,6 +85,6 @@ Every mutant is red on the arm it was designed for, and each red is told apart f
 
 ## 6. Honesty labels
 
-- `SYS_SCHED_CPU` will be gated by smoke-thread arm P once the arm is built. Until then it is **not verified**.
+- `SYS_SCHED_CPU` is gated by smoke-thread arm P (`pinned_ok=1 einval=1`, run [40281198612](https://github.com/prady4the4bady/Prady4OS/actions/runs/40281198612)); mutant P1 is red on it (§4.1).
 - QEMU TCG only; cross-CPU timing under TCG is not hardware timing.
 - Claims nothing about U1–U3 or OPEN-1/2/12/13.
