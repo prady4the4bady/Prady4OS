@@ -58,7 +58,7 @@ void fd_free(struct tcb *t, int fd) {
     } else if (e->kind == FD_EPOLL && e->epoll) {
         kfree(e->epoll);              /* sole owner (not inherited/dup'd) */
     } else if (e->kind == FD_SHM) {
-        shm_unhold(e->mnt);           /* DDR-1178 A3.2: this entry's hold */
+        ;
     } else if (e->file) {
         kfree(e->file);
     }
