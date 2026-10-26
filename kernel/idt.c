@@ -824,7 +824,7 @@ void isr_dispatch(struct regs *r) {
      * it. Resume at the fixup, which returns -EFAULT to the copy's caller.
      * Only that one instruction is covered; every other ring-0 fault still
      * reaches the panic path below. */
-    if (r->vector == 14 && (r->cs & 3) == 0 &&
+    if (0 && /* MUTANT T8: the #PF handler ignores the uaccess fixup range */ r->vector == 14 && (r->cs & 3) == 0 &&
         r->rip >= (uint64_t)(uintptr_t)uaccess_copy_insn &&
         r->rip <  (uint64_t)(uintptr_t)uaccess_copy_insn_end) {
         r->rip = (uint64_t)(uintptr_t)uaccess_copy_fault;
