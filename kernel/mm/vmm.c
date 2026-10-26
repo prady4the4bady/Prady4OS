@@ -330,7 +330,7 @@ void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
         *pte = (*pte & ~PTE_PRESENT) | PTE_SW_DYING;
         invlpg(p);
     }
-    tlb_shoot(pml4_phys, va, npages);
+    /* MUTANT T5: vmm_unmap_range_flush skips tlb_shoot (local invlpg only) */
     for (uint64_t i = 0; i < npages; i++) {
         uint64_t p = va + i * 0x1000ull;
         uint64_t *pte = leaf_pte(pml4_phys, p);
