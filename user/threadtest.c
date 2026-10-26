@@ -43,6 +43,7 @@
 #define STK            16384
 #define PAT            0x5EED5EED5EED5EEDull
 #define TRIALS         16
+#define PLACED_MIN     12    /* DDR-1181 §4.1: concurrency-proven trials needed */
 
 /* SYS_MMAP and SYS_THREAD_CREATE take more than three arguments. */
 static inline long nsi6(long n, long a1, long a2, long a3,
@@ -133,7 +134,11 @@ struct shared {
     volatile uint64_t page;    /* the page under test                        */
     volatile uint64_t tls[3][2];   /* arm B: two thread TLS blocks + main's */
     volatile long tls_ok;      /* arm B */
-    volatile long a_store;     /* arm A */
+    volatile long a_store;     /* arm A (unused since DDR-1181 §4.1) */
+    volatile uint64_t a_page;  /* arm A: a MAP_PRIVATE page of the creator */
+    volatile long placed;      /* D/E/M: the trial proved the loop thread ran
+                                * on another CPU (DDR-1181 §4.1)            */
+    volatile long midcopy;     /* arm G: -EFAULTs that left bytes written     */
     volatile unsigned a_ctid;  /* arm A: zeroed by the kernel at thread exit */
     volatile unsigned c_ctid;  /* arm C */
 };
@@ -181,7 +186,8 @@ __attribute__((noreturn)) static void texit(void) {
 
 __attribute__((noreturn, force_align_arg_pointer)) static void t_store(long arg) {
     struct shared *s = (struct shared *)arg;
-    s->a_store = 0xC0FFEE;
+    *(volatile long *)s->a_page = 0xC0FFEE;   /* private page: seen only if
+                                              * the address space is shared */
     texit();
 }
 
@@ -237,10 +243,19 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_crash(long arg)
 
 __attribute__((noreturn, force_align_arg_pointer)) static void t_copier(long arg) {
     struct shared *s = (struct shared *)arg;
+    /* DDR-1181 §4.1: the destination starts 256 bytes into page A and ends
+     * in page B, which the sibling toggles. A pre-check -EFAULT writes
+     * nothing; a fault on B after the pre-check passed (the fixup path)
+     * leaves A's tail written. A's tail is zeroed before every copy. */
+    volatile unsigned char *a = (volatile unsigned char *)s->page;
     uint64_t end = now() + 1500 * MS;
     while (now() < end) {
-        if (nsi(SYS_DMESG, (long)s->page, 4096, 0) == -EFAULT)
+        for (int i = 256; i < 4096; i++) a[i] = 0;
+        if (nsi(SYS_DMESG, (long)s->page + 256, 4096, 0) == -EFAULT) {
             s->efault++;
+            for (int i = 256; i < 4096; i++)
+                if (a[i]) { s->midcopy++; break; }
+        }
     }
     s->gdone = 1;
     texit();
@@ -280,6 +295,20 @@ __attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
         if (now() > end) fail("loop thread never ran");   /* its TLB is warm */
         nsi(SYS_YIELD, 0, 0, 0);
     }
+    /* DDR-1181 §4.1: prove the loop thread runs on ANOTHER CPU right now.
+     * The creator spins without a syscall; its counter can only advance if
+     * the loop thread runs in parallel. An attempt during which the vDSO
+     * tick moved may have been preempted and does not count. */
+    for (int a = 0; a < 50 && !s->placed; a++) {
+        uint64_t t0 = now();
+        long c0 = s->count;
+        for (long i = 0; i < 200000 && s->count - c0 < 1000; i++)
+            __asm__ volatile("pause");
+        if (s->count - c0 >= 1000 && now() == t0)
+            s->placed = 1;
+        else
+            nsi(SYS_YIELD, 0, 0, 0);
+    }
     long rc = write ? nsi(SYS_MPROTECT, (long)s->page, 4096, PROT_READ)
                     : nsi(SYS_MUNMAP, (long)s->page, 4096, 0);
     if (rc != 0) fail(write ? "mprotect" : "munmap");
@@ -289,6 +318,7 @@ __attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
 
 static void clear(struct shared *s) {
     s->go = s->done = s->count = s->late = s->poison = s->efault = s->gdone = 0;
+    s->placed = s->midcopy = 0;
 }
 
 /* Arm C workload for pm_measure (DDR-1185): 64 create/join/munmap cycles,
@@ -326,11 +356,15 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct shared *s = (struct shared *)map(4096, MAP_SHARED);
 
     /* A */
-    s->a_store = 0;
+    /* A: the store lands in a MAP_PRIVATE page of the creator, so a thread
+     * on a COW copy of the address space (T1) is not seen (DDR-1181 §4.1). */
+    s->a_page = (uint64_t)map(4096, MAP_PRIVATE);
+    *(volatile long *)s->a_page = 0;
     s->a_ctid = 1;
     spawn(t_store, (long)s, 0, (uint64_t)&s->a_ctid);
     long joined = join(&s->a_ctid, 2000);
-    say("PRADYOS_THREAD_A shared=%d joined=%d\n", (long)(s->a_store == 0xC0FFEE), (long)(joined));
+    say("PRADYOS_THREAD_A shared=%d joined=%d\n",
+        (long)(*(volatile long *)s->a_page == 0xC0FFEE), (long)(joined));
 
     /* B */
     s->tls_ok = 0;
@@ -377,20 +411,27 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
 
     /* D, then E/M: TRIALS forked children each. */
     for (int arm = 0; arm < 2; arm++) {
-        long late = 0, poison = 0, faulted = 1;
+        long late = 0, poison = 0, faulted = 1, placed = 0;
         for (int k = 0; k < TRIALS; k++) {
             clear(s);
             long pid = nsi(SYS_FORK, 0, 0, 0);
             if (pid < 0) fail("fork");
             if (pid == 0) child_tlb(s, arm == 0);
             if (!reap(pid, 1000)) faulted = 0;
+            if (!s->placed) continue;        /* only concurrency-proven trials */
+            placed++;
             late += s->late;
             poison += s->poison;
         }
+        long pok = placed >= PLACED_MIN;
         if (arm == 0) {
-            say("PRADYOS_THREAD_D prot_stale=%d faulted=%d\n", (long)(late), (long)(faulted));
+            say("[thread] D placed=%d of %d\n", placed, (long)TRIALS);
+            say("PRADYOS_THREAD_D prot_stale=%d faulted=%d placed_ok=%d\n",
+                (long)(late), (long)(faulted), pok);
         } else {
-            say("PRADYOS_THREAD_E stale=%d faulted=%d\n", (long)(late), (long)(faulted));
+            say("[thread] E placed=%d of %d\n", placed, (long)TRIALS);
+            say("PRADYOS_THREAD_E stale=%d faulted=%d placed_ok=%d\n",
+                (long)(late), (long)(faulted), pok);
             say("PRADYOS_THREAD_M poison=%d\n", (long)(poison));
         }
     }
@@ -412,20 +453,22 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     long gp = nsi(SYS_FORK, 0, 0, 0);
     if (gp < 0) fail("fork");
     if (gp == 0) {
-        s->page = (uint64_t)map(4096, MAP_PRIVATE);
+        s->page = (uint64_t)map(8192, MAP_PRIVATE);   /* pages A and B */
+        uint64_t pb = s->page + 4096;
         spawn(t_copier, (long)s, 0, 0);
-        while (!s->gdone) {
-            nsi(SYS_MUNMAP, (long)s->page, 4096, 0);
-            if (nsi6(SYS_MMAP, (long)s->page, 4096, PROT_READ | PROT_WRITE,
-                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != (long)s->page)
+        while (!s->gdone) {                  /* only B comes and goes */
+            nsi(SYS_MUNMAP, (long)pb, 4096, 0);
+            if (nsi6(SYS_MMAP, (long)pb, 4096, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != (long)pb)
                 fail("G remap");
         }
         nsi(SYS_EXIT, 0, 0, 0);
         for (;;) { }
     }
     long survived = reap(gp, 5000);
-    say("[thread] G efault=%d\n", (long)(s->efault));
-    say("PRADYOS_THREAD_G survived=%d\n", (long)(survived));
+    say("[thread] G efault=%d midcopy=%d\n", (long)(s->efault), (long)(s->midcopy));
+    say("PRADYOS_THREAD_G survived=%d midcopy_ok=%d\n", (long)(survived),
+        (long)(s->midcopy >= 1));
 
     say("PRADYOS_THREAD_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
