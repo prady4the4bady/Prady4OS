@@ -20,6 +20,7 @@
 #include "kheap.h"
 #include "spinlock.h"
 #include "errno.h"
+#include "console.h"   /* DIAG */
 
 struct shm_obj {
     uint32_t used;                     /* 0 free, 1 live, 2 reclaiming */
@@ -126,6 +127,8 @@ int shm_attach_begin(int obj) {
     else if (o->marked)         rc = -EIDRM;      /* D2 */
     else                        o->nattch++;
     spin_unlock_irqrestore(&g_shm_lock, fl);
+    kputs("[shmdiag] attach obj="); kputdec((uint64_t)obj); kputs(" rc="); kputdec((uint64_t)(long)rc);
+    kputs(" holders="); kputdec(o->holders); kputs("\n");   /* DIAG */
     return rc;
 }
 
@@ -144,6 +147,9 @@ static void put_and_reclaim(int obj, int which) {
     /* P3: an object never sized (npages 0) is reclaimed the same way; one
      * being sized is not, its sizer holds it until shm_obj_size returns. */
     int go = o->used == 1 && !o->filling && !o->nattch && (o->marked || !o->holders);
+    kputs("[shmdiag] put obj="); kputdec((uint64_t)obj); kputs(" which="); kputdec((uint64_t)which);
+    kputs(" used="); kputdec(o->used); kputs(" nattch="); kputdec(o->nattch);
+    kputs(" holders="); kputdec(o->holders); kputs(" go="); kputdec((uint64_t)go); kputs("\n");   /* DIAG */
     if (go)
         o->used = 2;
     spin_unlock_irqrestore(&g_shm_lock, fl);

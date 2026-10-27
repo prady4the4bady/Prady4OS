@@ -462,13 +462,18 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (rk == 0) {
         while (!C[0]) nsi(SYS_YIELD, 0, 0, 0);
         volatile unsigned char *q = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, rfd, 0);
+        C[3] = (long)q;                                   /* DIAG */
         C[2] = (long)q < 0 ? 0 : q[0];
         nsi(SYS_EXIT, 0, 0, 0);
         for (;;) { }
     }
-    nsi(SYS_CLOSE, rfd, 0, 0);                  /* the parent's hold goes first */
+    wr("[shmdiag] R before close\n");                    /* DIAG */
+    long rcl = nsi(SYS_CLOSE, rfd, 0, 0);                  /* the parent's hold goes first */
+    wr("[shmdiag] R after close\n");                     /* DIAG */
     C[0] = 1;
     reap(rk);
+    line2("[shmdiag] R close_rc=", rcl);                 /* DIAG */
+    line2("[shmdiag] R child_q=", C[3]);                 /* DIAG */
     {
         char b[96], *p = str(b, "PRADYOS_SHM_R child_hold="); p = hex2(p, (unsigned)C[2]);
         *p++ = '\n'; *p = 0; wr(b);
