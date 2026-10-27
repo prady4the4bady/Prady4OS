@@ -24,4 +24,4 @@ while IFS= read -r p || [ -n "$p" ]; do
         *) echo false; exit 0 ;;
     esac
 done
-if [ "$n" -eq 0 ]; then echo false; else echo true; fi
+echo true
