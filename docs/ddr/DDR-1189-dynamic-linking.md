@@ -45,10 +45,13 @@ hidden.
 - **L2. Entropy.** The pool mixes virtio-rng when present, `RDRAND` when CPUID
   reports it, and TSC jitter. With neither hardware source, boot prints
   `aslr: weak entropy` and ASLR still runs. That case is not called secure.
-- **L3. Entropy bits.** The layout above leaves room for about 18 bits for the
-  mmap base (a 1 GiB window in pages), 16 bits for the stack top (256 MiB), and
-  18 bits for a PIE base. That is fewer than Linux's 28+ bits, and the record
-  says so.
+- **L3. Entropy bits.** The mmap arena is 28 GiB (`0x88_0000_0000` to
+  `0x8F_0000_0000`), so a page-aligned base anywhere in it would give about 22.8
+  bits. The design **caps** the mmap-base offset at 1 GiB, which gives 18 bits,
+  so that a process always keeps at least 27 GiB of arena. The stack top moves
+  within 256 MiB (16 bits) and a PIE base within 1 GiB (18 bits). All three are
+  fewer than Linux's 28+ bits, and the record says so. Widening the mmap cap
+  trades arena space for entropy; that trade is left for after P1 is measured.
 - **L4. Where `ld.so` and `libc.so` come from.** They are built from the same
   pinned musl submodule (`ldso/dynlink.c` and the full `src/`), not from the
   static subset. They install under `/lib` on the SFS image. They are built
@@ -65,7 +68,7 @@ hidden.
 | C | P2 | a static-PIE probe runs, reads a relocated pointer correctly, and over 4 execs shows at least 2 distinct load bases | D3 | relocations skipped (the pointer is wrong) |
 | D | P3 | a dynamically linked probe calls `lib_answer()` from `libtest.so` and prints its value | D4 | the interpreter is not mapped (exec fails) |
 | E | P3 | GOT and PLT relocations in `libtest.so` resolve (a global variable and a function pointer both hold the expected value) | D5 | `R_X86_64_GLOB_DAT` ignored |
-| F | P3 | W^X: `PROT_WRITE|PROT_EXEC` returns `-EACCES`; `PROT_EXEC` on an anonymous mapping or an `O_RDWR` fd returns `-EACCES`; `mprotect(PROT_EXEC)` on anonymous memory returns `-EACCES` | D6, D7 | the fd-mode check skipped; the `mprotect` check skipped |
+| F | P3 | W^X: `PROT_WRITE` + `PROT_EXEC` together returns `-EACCES`; `PROT_EXEC` on an anonymous mapping or an `O_RDWR` fd returns `-EACCES`; `mprotect(PROT_EXEC)` on anonymous memory returns `-EACCES` | D6, D7 | the fd-mode check skipped; the `mprotect` check skipped |
 | G | P3 | a library with `DT_TEXTREL` is refused | D8 | the `DT_TEXTREL` check skipped |
 | H | P4 | a second process mapping `libc.so` uses fewer than 8 new frames for its text | D9 | text pages copied per process |
 
