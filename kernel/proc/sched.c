@@ -1608,15 +1608,13 @@ struct tcb *sched_wait_child(struct tcb *self, int pid, int nohang, int *err) {
             if (t->parent_pid == self->tgid && (pid == -1 || (int)t->pid == pid) &&
                 !t->reap_claimed) {
                 any = 1;
-                /* DDR-1181 §3.4: a zombie leader is reapable only once every
-                 * thread of its group has exited; until then it counts as live.
-                 * The last thread drops `live` to 0 BEFORE it publishes the group
-                 * status, so `group_set` is required too: a scan between the two
-                 * would otherwise reap with the leader's stale exit_status. The
-                 * last thread wakes the waiters after publishing (sched_exit_common). */
+                /* DDR-1181 §3.4, §4.7 R11: a zombie leader is reapable only once
+                 * its process has finished exiting. `live == 0` and `group_set`
+                 * are both published before the last thread's cleanup, so they
+                 * cannot be the test; `exited` is stored last, under this lock,
+                 * after the status (group_set, R6) and every cleanup step. */
                 if (t->state == THREAD_ZOMBIE &&
-                    (!t->mm || (__atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) == 0 &&
-                                __atomic_load_n(&t->mm->group_set, __ATOMIC_ACQUIRE)))) {
+                    (!t->mm || __atomic_load_n(&t->mm->exited, __ATOMIC_ACQUIRE))) {
                     found = t;
                     break;
                 }
@@ -2649,6 +2647,7 @@ void sched_unblock(struct tcb *t) {
  * for good. The address space + TCB are reclaimed by the collector, never here —
  * we are still executing on this thread's kernel stack. */
 static struct tcb *find_user_pid_locked(uint32_t pid);  /* below */
+static struct tcb *find_user_group_live_locked(uint32_t tgid);  /* below */
 
 /* DDR-1181 P1c. `group`: sched_exit (the process ends: SYS_EXIT, a fatal fault,
  * SIGKILL, a budget kill) versus sched_exit_thread (SYS_THREAD_EXIT). */
@@ -2772,12 +2771,19 @@ static void sched_exit_common(int status, int group) {
     /* DDR-1174: SIGCHLD to a live user parent, recorded under this lock so the
      * parent cannot be freed between lookup and raise (DDR-1159's rule). */
     if (current_thread->is_user && last && leader) {
-        struct tcb *par = find_user_pid_locked(leader->parent_pid);
+        /* DDR-1181 §4.7 R13: the parent PROCESS; its leader may have ended
+         * with SYS_THREAD_EXIT while its other threads still run. */
+        struct tcb *par = find_user_group_live_locked(leader->parent_pid);
         if (par)
             sig_raise(par, SIGCHLD, (int32_t)leader->pid, CLD_EXITED,
                       mm ? mm->group_status : status);
     }
     current_thread->state = THREAD_ZOMBIE;      /* NOT pickable; on_cpu stays set */
+    /* DDR-1181 §4.7 R11: the process is reapable only from here, under the lock
+     * the waiters scan under: after every per-process cleanup above and after
+     * the leader lookup, so a reap cannot overtake either. */
+    if (last && mm)
+        __atomic_store_n(&mm->exited, 1u, __ATOMIC_RELEASE);
     /* DDR-1181 §4.6: the process becomes reapable once its leader is a zombie
      * and its last thread is out; this exit may complete either. Every thread
      * of the parent process sleeping in wait4 is woken to rescan. */
@@ -2875,6 +2881,22 @@ static struct tcb *find_user_pid_locked(uint32_t pid) {
     return 0;
 }
 
+/* DDR-1181 §4.7 R13: a live user thread of process `tgid`, its leader first.
+ * Caller holds the topology lock. */
+static struct tcb *find_user_group_live_locked(uint32_t tgid) {
+    struct tcb *lead = find_user_pid_locked(tgid);
+    if (lead || tgid == 0)
+        return lead;
+    struct tcb *t = current_thread;
+    do {
+        if (t->is_user && t->tgid == tgid &&
+            t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
 int sched_user_pid_alive(uint32_t pid) {
     uint64_t fl = irq_save();
     int alive = find_user_pid_locked(pid) != 0;
@@ -2931,7 +2953,9 @@ static int pid_alive(uint32_t pid) {
         return 0;              /* parent_pid 0 == kernel/none -> treat as orphan */
     struct tcb *t = current_thread;
     do {
-        if (t->pid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+        /* DDR-1181 §4.7 R12: parent_pid is a tgid, and the parent lives while
+         * ANY of its threads does (its leader may have ended first). */
+        if (t->tgid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
             return 1;
         t = t->next;
     } while (t != current_thread);
