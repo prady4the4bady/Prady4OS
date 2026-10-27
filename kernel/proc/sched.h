@@ -84,7 +84,10 @@ struct tcb {
     uint32_t   parent_pid;     /* creating process pid; 0 for kernel threads  */
     int64_t    fork_retval;    /* child's fork() return (0); -1 when unset     */
     int        exit_status;    /* set by sched_exit; collected by wait4 (5b-9) */
-    struct tcb *waiter;        /* parent blocked in wait4 on this thread, or 0 */
+    uint8_t    reap_claimed;   /* DDR-1181 §4.6: a wait4 is reaping this zombie */
+    uint8_t    in_wait4;       /* DDR-1181 §4.6: this thread sleeps in wait4    */
+    uint8_t    wait_pad[6];    /* the old 8-byte `waiter` slot: keeps sig_pending
+                                * and sig_mask where syscall_entry.asm reads them */
 
     /* POSIX signals (PROC-C). */
     uint64_t   sig_pending;      /* bitmap of pending signal numbers          */
@@ -276,11 +279,14 @@ struct procinfo {
 /* Fill *out with the index-th thread in the scheduler ring (walked under
  * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */
 int         sched_snapshot(int index, struct procinfo *out);
-/* DDR-1001: wait4's child lookup, walking the all-threads ring UNDER
- * g_sched_lock. sys_wait.c cannot take that lock (it is file-local to sched.c),
- * which is why the walk lives here rather than there. */
-struct tcb *sched_find_child(struct tcb *parent, int pid,
-                             struct tcb **has_live, int *any, int *ringbad);
+/* DDR-1001 / DDR-1181 §4.6: wait4's search, claim and sleep, all under
+ * g_sched_lock (file-local to sched.c, so the loop lives here). Returns a zombie
+ * child CLAIMED for the caller, or NULL with *err = -ECHILD, or -EAGAIN when
+ * `nohang`. */
+struct tcb *sched_wait_child(struct tcb *self, int pid, int nohang, int *err);
+/* Gives back a claim (wait4's status copyout failed) and wakes the process's
+ * other waiters, which skipped the claimed zombie. */
+void        sched_unclaim_child(struct tcb *child);
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
