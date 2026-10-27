@@ -1,7 +1,7 @@
 # DDR-1187: CI cost — cancel superseded PR runs; docs-only PRs skip the boot shards
 
 Status: proposed; the operator reviews (#45 comment 6436706603, item 5). Not
-merged until the operator approves it and the mutants below are shown red in CI.
+merged until the operator approves it. The mutants below are shown red in CI.
 
 ## 1. The cost, measured from the run list
 
@@ -113,11 +113,22 @@ before merge:
 | M5 | Markdown anywhere counts (`*/*` arm removed) | H |
 | M6 | always `true` | B-H |
 
+**Mutant runs (2026-10-27).** Each was dispatched on its `mut/cicost-M<n>` branch and cancelled once `shard-check` had reported. Every one failed at the step "Docs-only classifier self-test (DDR-1187)" with exactly its designed arm(s) red:
+
+| Mutant | Run | Red in CI |
+|---|---|---|
+| M1 | [40551186013](https://github.com/prady4the4bady/prady4os/actions/runs/40551186013) | C |
+| M2 | [40551190294](https://github.com/prady4the4bady/prady4os/actions/runs/40551190294) | D |
+| M3 | [40551194210](https://github.com/prady4the4bady/prady4os/actions/runs/40551194210) | E |
+| M4 | [40551199703](https://github.com/prady4the4bady/prady4os/actions/runs/40551199703) | F |
+| M5 | [40551204261](https://github.com/prady4the4bady/prady4os/actions/runs/40551204261) | H |
+| M6 | [40551209184](https://github.com/prady4the4bady/prady4os/actions/runs/40551209184) | B-H |
+
 The workflow wiring itself (the concurrency group, the step conditions) cannot
 be mutated in a self-test. It is checked by observation and labelled until then:
 
 - this PR's own run must log `docs_only=false` and run all ten shards (the base
-  has no classifier);
+  has no classifier). **Seen** in run [40551166911](https://github.com/prady4the4bady/prady4os/actions/runs/40551166911) on `ac2163c`: the build steps ran and all ten shards were green;
 - after merge, the first docs-only PR must log `docs_only=true` with every shard
   printing that it ran no gate, and the first code PR must log `false`;
 - a second push to one PR must cancel the run on its first head.
@@ -136,7 +147,7 @@ Until each is seen in a run, it is **not verified**.
 
 ## 6. Honesty labels
 
-- The classifier is **gated** by `shard-check` (self-test arms A-H) once M1-M6
-  are shown red in CI.
+- The classifier is **gated** by `shard-check` (self-test arms A-H); M1-M6 are
+  shown red in CI (section 4).
 - The workflow wiring is **not verified** until the observations in section 4.
 - This touches CI only; there is nothing emulated or hardware-related in it.
