@@ -5,7 +5,7 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 ## State (2026-10-27, after owner order 6436706603)
 
 - **dev/phase1 tip:** `7981cd4` (PR #69). Branch protection is on; the operator merges.
-- **Kernel on dev/phase1:** `kernel.bin` 1,540,490 B (measured at `a2ac698`). NSI next free 110. Open PRs hold DDR-1178 to DDR-1187; allocate from 1188.
+- **Kernel on dev/phase1:** `kernel.bin` 1,540,490 B (measured at `a2ac698`). NSI next free 110. Open PRs and branches hold DDR-1178 to DDR-1190; allocate from 1191.
 - **Owner order 6436706603:** never idle on CI; design ahead; push only the PR that must change; at most 3 PRs in CI; this PR (DDR-1187) is the CI-cost change.
 - **Waiting on the operator's merge:** #70, #88, #72, #85, #90.
 - **C1.4 P1c #76** (`bce374c`): R6–R14 fixed (DDR-1181 §4.5–§4.8). R14: `execve` gated on `mm->live` instead of `mm->refs`. All checked by reading the code, **not verified at run time**. Needs one green run, then its ready line (security boundary).
@@ -15,7 +15,7 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## Next
 
-- Work through the PR items above. Then design ahead: DDRs for C1.5, C1.6 and C2.1 (order item 2). Then continue from the next unticked item in `docs/V1_MASTER_CHECKLIST.md`.
+- Work through the PR items above. Design-ahead DDRs are written on branch `design-ahead-c15-c16-c21`: DDR-1188 (C1.5), DDR-1189 (C1.6), DDR-1190 (C2.1); open them as one docs PR once DDR-1187 is merged, so it skips the boot shards. Then continue from the next unticked item in `docs/V1_MASTER_CHECKLIST.md`.
 - DDR-1187: show mutants M1-M6 red at `shard-check`, then record the three wiring observations (§4).
 
 ## Open blockers
