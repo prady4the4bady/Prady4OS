@@ -19,7 +19,6 @@ while IFS= read -r p || [ -n "$p" ]; do
     n=$((n + 1))
     case "$p" in
         docs/*.md) ;;
-        */*) echo false; exit 0 ;;
         *.md) ;;
         *) echo false; exit 0 ;;
     esac
