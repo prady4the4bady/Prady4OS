@@ -18,7 +18,7 @@ while IFS= read -r p || [ -n "$p" ]; do
     [ -z "$p" ] && continue
     n=$((n + 1))
     case "$p" in
-        docs/*.md) ;;
+        docs/*.md) echo true; exit 0 ;;
         */*) echo false; exit 0 ;;
         *.md) ;;
         *) echo false; exit 0 ;;
