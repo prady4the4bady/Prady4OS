@@ -422,6 +422,16 @@ New tcb fields `reap_claimed` and `in_wait4` are set to 0 in `sched_create_state
 
 **Evidence.** R8–R10 are races between CPUs that no current arm drives. They are checked by reading the code and **not verified at run time**. With P1d's `SYS_SCHED_CPU` (#91), two waiters and the exiting child can be pinned to three CPUs. An arm built on that is the way to gate R8–R10, and it is follow-up work.
 
+### 4.7 Amendment: reapable only after exit is complete; group-aware parent checks (CodeRabbit on #76 `0acf0eb`)
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R11 | The process is reapable before its exit finishes | The last thread drops `live` to 0 and sets `group_set` (and a group exit sets `group_set` earlier still). It then runs the rollback replay and the surface, socket and metrics reaps, and only after that takes `g_sched_lock`. A zombie leader passed `sched_wait_child`'s test in that window. A parent thread could then reap it before its surfaces and sockets were reclaimed. The leader was then unlinked when the last thread looked it up (`find_any_pid_locked` returned 0), so no SIGCHLD was sent and no waiter woken. | New `mm->exited` (zeroed by `mm_create`'s memset). The last thread release-stores it under `g_sched_lock`, after every cleanup step and the leader lookup, and before the wake. `sched_wait_child` requires `exited` (acquire) instead of `live == 0 && group_set`. `group_set`/`group_status` still carry the status. |
+| R12 | The reaper frees a live process's zombie children | `parent_pid` holds the parent's tgid, but `pid_alive` compared it with `t->pid`. Once the parent's leader ended with `SYS_THREAD_EXIT`, `pid_alive` said the parent was dead while its other threads ran. The reaper then freed the children, and a sibling's `wait4` lost them. | `pid_alive` matches any live thread whose `tgid` is the pid. Its only caller is the reaper. |
+| R13 | SIGCHLD is lost when the parent's leader is gone | `find_user_pid_locked(leader->parent_pid)` matches the exact pid and rejects zombies. A parent whose leader had ended with `SYS_THREAD_EXIT` got no SIGCHLD, though its live threads share the handler. | SIGCHLD goes to the parent's leader if it is live, else to any live thread of the parent process (`find_user_group_live_locked`). |
+
+All three are checked by reading the code and are **not verified at run time** (cross-CPU timing, and leader-exits-first shapes that no arm drives).
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
@@ -432,7 +442,7 @@ Each step is its own PR, stacked on the previous one, and each PR is flagged sec
 
 ## 6. Honesty labels
 
-- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6–R10) are checked by reading the code only.
+- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6–R13) are checked by reading the code only.
 - Emulated (QEMU TCG, 4 vCPUs) only, not verified on real hardware. Cross-CPU timing under TCG is not hardware timing.
 - Does not claim any part of U1–U3 or OPEN-1/2/12/13 closed.
 - The DDR-1177 arm D/E and M4 checklist items are ticked only when the T4/T5/T6 mutants are shown red.
