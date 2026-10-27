@@ -217,7 +217,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | S2-6 | [40456879719](https://github.com/prady4the4bady/prady4os/actions/runs/40456879719) | L `nattch_fork=0` (want `1`) |
 | S2-7 | [40456881815](https://github.com/prady4the4bady/prady4os/actions/runs/40456881815) | M `reclaimed=0` |
 
-The shm code is unchanged between `e45ded4` and the current head (the later commits are merges of `dev/phase1` and of the C1.4 P1c fixes), so these runs still apply to it.
+After these runs the shm code changed only by A2.4 (the dead-slot rule in `put_and_reclaim` and `shm_hold`, plus arm T); no S2-1..S2-7 mutant touches those lines and no arm G-M depends on a removed slot being reused, so the runs are taken as still applying. That is a reading of the code; the runs were not repeated on the A2.4 head.
 
 ### A2.4 A removed segment keeps its slot until no shmid names it (found by S3-5 surviving)
 
