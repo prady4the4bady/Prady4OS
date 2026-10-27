@@ -4402,7 +4402,7 @@ smoke-tlbshoot: $(IMG) fat-image sfs-image
 smoke-shm: $(IMG) fat-image sfs-image
 	@rm -f build/shm.log
 	@SERIAL_LOG=build/shm.log KEEP_SERIAL=1 TIMEOUT_S=180 QEMU_PROBES=shm \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_G key=-13\nPRADYOS_SHM_H shared=0x66\nPRADYOS_SHM_I forged=0\nPRADYOS_SHM_J eidrm=-43 freed_ok=1\nPRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13\nPRADYOS_SHM_L nattch_fork=1\nPRADYOS_SHM_M reclaimed=1\nPRADYOS_SHM_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_G key=-13\nPRADYOS_SHM_H shared=0x66\nPRADYOS_SHM_I forged=0\nPRADYOS_SHM_J eidrm=-43 freed_ok=1\nPRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13\nPRADYOS_SHM_L nattch_fork=1\nPRADYOS_SHM_M reclaimed=1\nPRADYOS_SHM_T stale=-22\nPRADYOS_SHM_DONE')" \
 	FORBIDDEN_SENTINEL="PRADYOS_SHM FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[shm\]" build/shm.log || true

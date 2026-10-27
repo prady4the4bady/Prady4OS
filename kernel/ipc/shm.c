@@ -18,7 +18,7 @@
 #include "errno.h"
 
 struct shm_obj {
-    uint32_t used;                     /* 0 free, 1 live, 2 reclaiming */
+    uint32_t used;                     /* 0 free, 1 live, 2 reclaiming, 3 dead (A2.4) */
     uint32_t npages;
     uint32_t nattch;
     uint32_t holders;
@@ -111,13 +111,17 @@ static void put_and_reclaim(int obj, int which) {
     int go = o->used == 1 && o->npages && !o->nattch && (o->marked || !o->holders);
     if (go)
         o->used = 2;
+    else if (o->used == 3 && !o->holders)
+        o->used = 0;                   /* A2.4: the last shmid naming it is gone */
     spin_unlock_irqrestore(&g_shm_lock, fl);
     if (!go)
         return;
     free_frames(o->frames, o->npages);
     fl = spin_lock_irqsave(&g_shm_lock);
     o->npages = 0;
-    o->used = 0;
+    /* DDR-1178 A2.4: a removed segment whose shmids still exist keeps its slot
+     * dead, or a later segment in the slot would be reached through them. */
+    o->used = o->holders ? 3 : 0;
     spin_unlock_irqrestore(&g_shm_lock, fl);
 }
 
@@ -148,7 +152,7 @@ void shm_hold(int obj) {
     if (obj < 0 || obj >= SHM_MAX)
         return;
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
-    if (g_shm[obj].used == 1) g_shm[obj].holders++;
+    if (g_shm[obj].used) g_shm[obj].holders++;   /* A2.4: dead slots count too */
     spin_unlock_irqrestore(&g_shm_lock, fl);
 }
 

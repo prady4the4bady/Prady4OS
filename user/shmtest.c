@@ -354,6 +354,28 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     line2("PRADYOS_SHM_M reclaimed=", okm && rm.drop < RECLAIM_MIN);
     line2("[shm] M drop=", rm.drop);
     line_pm("[shm] M meter", &rm);
+
+    /* T (DDR-1178 A2.4): a removed segment's shmid must not reach the next
+     * segment created in its slot. t1 is removed before any attach, so it is
+     * reclaimed at once; the lowest free slot is taken first, so without the
+     * dead-slot rule t2 lands in t1's slot and shmat(t1) maps t2 (stale=153). */
+    long t1 = nsi(SYS_SHMGET, IPC_PRIVATE, 4096, 0);
+    if (t1 < 0) fail("t_shmget1", t1);
+    if (nsi(SYS_SHMCTL, t1, IPC_RMID, 0) != 0) fail("t_rmid1", -1);
+    long t2 = nsi(SYS_SHMGET, IPC_PRIVATE, 4096, 0);
+    if (t2 < 0) fail("t_shmget2", t2);
+    volatile unsigned char *tp = (volatile unsigned char *)nsi(SYS_SHMAT, t2, 0, 0);
+    if ((long)tp < 0) fail("t_shmat2", (long)tp);
+    tp[0] = 0x99;
+    long tstale = nsi(SYS_SHMAT, t1, 0, 0);
+    if (tstale >= 0) {
+        long byte = ((volatile unsigned char *)tstale)[0];
+        nsi(SYS_SHMDT, tstale, 0, 0);
+        tstale = byte;
+    }
+    nsi(SYS_SHMDT, (long)tp, 0, 0);
+    nsi(SYS_SHMCTL, t2, IPC_RMID, 0);
+    line2("PRADYOS_SHM_T stale=", tstale);
     wr("PRADYOS_SHM_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
