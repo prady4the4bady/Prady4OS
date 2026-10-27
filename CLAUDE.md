@@ -68,7 +68,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
   - `TIMEOUT_S=<n> make smoke-x` is ignored; use `make TIMEOUT_S=<n> smoke-x`.
   - `kputhex` already prints `0x`; `kprintf` does not exist.
 - **Size:** `kernel.bin` is **1,540,490 B** against the 1,703,936 B size gate — **163,446 B of headroom** (measured at `a2ac698`). `ci-docstate-check` reads this line; keep size and headroom updated together. The gate is the BIOS stage-2 read window (52 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
-- **NSI:** max defined 115 on this branch; 116 is DDR-1178's (#80), 117 `SYS_FUTEX` (#81) and 118 `SYS_SCHED_CPU` (#91), so next free is 119 (verify against `kernel/syscall/syscall.h`).
+- **NSI:** max defined 116 on this branch (`SYS_SHM_OPEN`); 117 `SYS_FUTEX` (#81) and 118 `SYS_SCHED_CPU` (#91), so next free is 119 (verify against `kernel/syscall/syscall.h`).
 - **Boot:** PT_HI is implemented twice, in `boot/stage2/stage2.asm` and `boot/uefi/loader.c`; change both together.
 - **`[apfreeze]`** has at least five producers. Resolve its RIP before naming a cause.
 - **Container limits:** this container has no `mkfs.fat`, so most smoke gates cannot boot locally. CI is the evidence.
