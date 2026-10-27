@@ -205,6 +205,37 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 **Arm H vacuity, found before any S2 mutant ran (2026-10-26).** H first had the child write `0x66` through a fresh `shmat`. A fresh attach maps the frames writable whatever `fork` does to the inherited PTEs, so with S2-2 the child's write still reached the shared frame and H passed: the arm could not see the bug it names. The child now writes through the inherited mapping. With S2-2 the inherited PTE lacks `PTE_SW_SHMEM`, so `vmm_fork_address_space_cow` marks it COW (`kernel/mm/vmm_cow.c`, the `PTE_SW_SHMEM` test), the child's write is copied into a private frame, and the parent reads `0x55`. The child also detaches the inherited mapping, so J still does not depend on the exit path. This is reasoned from the code, **not verified** until S2-2 is shown red in CI.
 
+**S2 mutant runs (2026-10-27).** Each mutant is the `e45ded4` tree plus one change; `e45ded4` itself is green ([40325560933](https://github.com/prady4the4bady/prady4os/actions/runs/40325560933)). Every run failed in the boot step at `smoke-shm`, not in the build, and only the designed arm differs from the sentinel:
+
+| Mutant | Run | Red arm, as printed |
+|---|---|---|
+| S2-1 | [40456868078](https://github.com/prady4the4bady/prady4os/actions/runs/40456868078) | G `key=66` (want `-13`) |
+| S2-2 | [40456870067](https://github.com/prady4the4bady/prady4os/actions/runs/40456870067) | H `shared=0x55` (want `0x66`); the inherited-mapping fix above is what makes this arm see the bug |
+| S2-3 | [40456872506](https://github.com/prady4the4bady/prady4os/actions/runs/40456872506) | I `forged=1` (want `0`) |
+| S2-4 | [40456874533](https://github.com/prady4the4bady/prady4os/actions/runs/40456874533) | J `eidrm=584115617792 freed_ok=0` (the attach of a marked segment succeeded and returned an address) |
+| S2-5 | [40456877095](https://github.com/prady4the4bady/prady4os/actions/runs/40456877095) | K `ro_faulted=0` |
+| S2-6 | [40456879719](https://github.com/prady4the4bady/prady4os/actions/runs/40456879719) | L `nattch_fork=0` (want `1`) |
+| S2-7 | [40456881815](https://github.com/prady4the4bady/prady4os/actions/runs/40456881815) | M `reclaimed=0` |
+
+After these runs the shm code changed only by A2.4 (the dead-slot rule in `put_and_reclaim` and `shm_hold`, plus arm T); no S2-1..S2-7 mutant touches those lines and no arm G-M depends on a removed slot being reused, so the runs are taken as still applying. That is a reading of the code; the runs were not repeated on the A2.4 head.
+
+### A2.4 A removed segment keeps its slot until no shmid names it (found by S3-5 surviving)
+
+**Defect, from a real artefact.** S3-5 (`fd_clone` takes no hold) stayed green in run [40322396520](https://github.com/prady4the4bady/prady4os/actions/runs/40322396520). The diagnostic build `mut/shm3-S3-5-diag` (`83bb3e9`, run [40470702205](https://github.com/prady4the4bady/prady4os/actions/runs/40470702205), never merged) printed every hold and put. In arm R the object's `holders` went from 1 to 4 across the `fork`, although the mutant's `fd_clone` took no hold, so the parent's `close` left 3 and the child's `mmap` succeeded. The three extra holds are `cap_fork` (`kernel/cap.c`) copying three RES_SHM capabilities: the three shmids the probe removes with `IPC_RMID` earlier in the same process (`id` of arms H-J, `id2` of K, `id3` of L).
+
+**Mechanism.** `put_and_reclaim` destroyed a marked, unmapped segment and set `used = 0` while capabilities still named it (`marked || holders == 0`). A capability stores only the slot index, so after `shm_obj_create` reused the slot (it takes the lowest free one), every old shmid resolved to the **new** object:
+
+- `shmat(old_shmid)` mapped the new object, which can belong to another process. That breaks D1(c): a segment is reachable only through a capability its creator's table was given.
+- The old capabilities' holds and unholds (`cap_fork`, table teardown) counted against the new object, so its `holders` drifted. In arm R that kept a P3 object alive after its last fd had closed, which is why S3-5 could not turn R red.
+
+**Change.** A marked segment still gives its frames back at its last detach, so memory is reclaimed exactly when it was before. If capabilities still name it, the slot then stays **dead** (`used = 3`) instead of free: `shmat` and `IPC_RMID` refuse it (`-EINVAL`, as Linux does for a removed id), holds and unholds still count on it, and the last unhold frees the slot. `shm_hold` counts on any slot in use (1, 2 or 3), so a hold and its unhold always land on the same object. A process can pin at most its own capability slots this way (64), and they go when it exits.
+
+**New arm T** (`user/shmtest.c`, after M): create a segment, remove it before any attach (it is reclaimed at once), create a second segment and write `0x99` into it, then `shmat` the first shmid. Want `PRADYOS_SHM_T stale=-22`. On the unfixed tree the second segment reuses the first one's slot, the attach succeeds, and the arm prints the byte it reads (`stale=153`). That is the vacuity check: the arm is red on the tree before this change.
+
+**Mutant S2-8:** `put_and_reclaim` frees the slot of a marked segment whatever `holders` is (the pre-A2.4 rule). Want red on T only.
+
+This is checked by the arm in CI once it runs; until S2-8 is shown red, A2.4 is **not verified**.
+
 ## Amendment 3 (2026-10-21 UTC, after Amendment 2): P3 design, POSIX `shm_open(SHM_ANON)` under D1(c)
 
 **Security boundary: review before merge.** P3 lets processes share memory through a file descriptor.
@@ -264,6 +295,8 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | S3-5 | `fd_clone` does not take a hold | R |
 | S3-6 | `dup2` does not take a hold | S |
 
+**S3 mutant runs.** S3-1 [40322278330](https://github.com/prady4the4bady/prady4os/actions/runs/40322278330) red on N (`fdshared=0x00`); S3-2 [40322308133](https://github.com/prady4the4bady/prady4os/actions/runs/40322308133) red on O (`rejects=2`); S3-3 [40322337823](https://github.com/prady4the4bady/prady4os/actions/runs/40322337823) red on P (`rejects=4`); S3-4 [40322367227](https://github.com/prady4the4bady/prady4os/actions/runs/40322367227) red on Q (`opened=30`); S3-6 [40322426930](https://github.com/prady4the4bady/prady4os/actions/runs/40322426930) red on S (`dup_hold=0x00`). **S3-5 survived** ([40322396520](https://github.com/prady4the4bady/prady4os/actions/runs/40322396520), green). The cause was the P2 defect recorded in A2.4, not arm R: the probe's three removed SysV shmids held the P3 object through `cap_fork`, so the child's fd was not the only hold. With A2.4 those shmids pin their own dead slots, and S3-5 is re-run on the merged head; until it is red, arm R is **not verified**.
+
 **NSI:** 116 `SYS_SHM_OPEN`.
 
 ## 7. Honesty labels
@@ -273,4 +306,4 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 - **Q (P3) moves onto `pm_measure` too.** Its `Q_CYCLES` loop of `shm_open`, `ftruncate`, `mmap`, `close` and `munmap` is a long multi-syscall window, the same exposure as arm C. `leaked_ok=1` now needs a conclusive trial (`q_run`, no tcbs) with drop < `LEAK_BOUND`; printed as `[shm] Q meter`.
 - **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and smoke-shm runs on one CPU (`rqcpus=1`, no `QEMU_SMP`). Foreign code can enter that window only through a timer preemption at syscall return, and a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else in that instant. That path is judged far-fetched; it is recorded here, **not** measured.
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is designed in Amendment 2 and is gated by arms G-M once built; until those arms are green and S2-1 to S2-7 are shown red, P2 is **not verified**. P3 is designed in Amendment 3 and is gated by arms N-S once built; until those arms are green and S3-1 to S3-6 are shown red, P3 is **not verified**. P4 is **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3). A2.4 (arm T) is **not verified** until S2-8 is shown red. P3 is designed in Amendment 3 and is gated by arms N-S once built; until those arms are green and S3-1 to S3-6 are shown red, P3 is **not verified**. P4 is **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
