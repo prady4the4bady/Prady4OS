@@ -304,8 +304,11 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (hk == 0) {
         volatile unsigned char *q = (volatile unsigned char *)nsi(SYS_SHMAT, id, 0, 0);
         if ((long)q < 0) nsi(SYS_EXIT, 2, 0, 0);
-        q[0] = 0x66;
+        /* Through the INHERITED mapping: a fresh shmat maps the frames writable
+         * whatever fork does, so writing via q passed with fork COWing (S2-2). */
+        hp[0] = 0x66;
         nsi(SYS_SHMDT, (long)q, 0, 0);   /* J must not depend on the exit path */
+        nsi(SYS_SHMDT, (long)hp, 0, 0);
         nsi(SYS_EXIT, 0, 0, 0);
         for (;;) { }
     }

@@ -395,6 +395,43 @@ Each finding below was checked against the source before any change was made.
 
 R1 and R2 change kernel code on a security boundary. Their gates are the existing set, which covers fork, mmap and exit. R2's path needs a SIGKILL to land inside `mnt_lock` during a file-backed `mmap`, and no probe drives that timing, so R2 is **not verified at run time**: it is checked by reading the code, as is R1's race window.
 
+### 4.5 Amendment: review findings on #91 that land in P1c code (CodeRabbit, `66047f4`)
+
+CodeRabbit reviewed #91, which carries P1c. Two of its findings are in P1c code, so they are fixed here, at their source, and merged forward into #91. The third (the pinned-wakeup kick) is P1d's own and is recorded in DDR-1186.
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R6 | `wait4` can report the leader's stale status | `sched_exit_common` drops `mm->live` to 0 and only then stores `group_status` and `group_set`. `sched_find_child` treats a zombie leader as reapable as soon as `live == 0`. A parent scanning on another CPU between the two steps reaps the leader, and `sys_wait4` reads `group_set == 0` and returns the leader's own `exit_status`. That happens when the leader ended with `SYS_THREAD_EXIT` and the last sibling ends the process with a different status. | `group_set` is release-stored after `group_status` on both paths. A zombie leader is reapable only when `live == 0` **and** `group_set` (acquire). `sys_wait4` reads `group_set` with acquire. The last thread out wakes `leader->waiter` after it publishes, so a waiter that sees `live == 0` with `group_set == 0` sleeps and is woken. CodeRabbit's proposed form (publish before the decrement when `live == 1`) was not used: two siblings exiting at once can both read `live == 2`, and then neither publishes. |
+| R7 | `SYS_THREAD_CREATE` reads the new tcb after making it runnable | `sched_create_user_thread` calls `sched_unblock(t)` and returns `t`; `sys_thread_create` then reads `t->pid`. The new thread can run on another CPU, exit and be reaped (freeing the tcb) before that read: a use-after-free on a security boundary. | `sched_create_user_thread` returns the id, read before `sched_unblock`; the tcb is no longer returned. Thread ids start at 1 (`next_tid`), so 0 still means failure. |
+
+Both are races between CPUs that no probe drives. They are checked by reading the code and **not verified at run time**. The existing gate set (smoke-thread and every fork, exit and wait gate) must stay green.
+
+### 4.6 Amendment: wait4 claims under the lock and wakes every waiter (CodeRabbit on #91 `00df9ac`)
+
+Threads made `wait4` concurrent within one process: two threads of a parent may now wait at the same time. The P1 `wait4` was written for one caller per process. It has two defects, and a third that the same design causes.
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R8 | Two waiters can reap one zombie | `sched_find_child` drops `g_sched_lock` before it returns the zombie, and `sys_wait4` then calls `sched_destroy` with no claim held. Two threads of one parent, on two CPUs, can both return the same zombie. The second `sched_ring_unlink` runs on a tcb the first already unlinked and freed: a double free, reachable from user code on a security boundary. | The search, the claim and the sleep move into `sched_wait_child` in `sched.c`, under `g_sched_lock`. A found zombie is marked `reap_claimed` before the lock drops. A claimed zombie is invisible to other waiters (and does not count as a child, so a second waiter on the same pid gets `-ECHILD`) and to the reaper. If `copyout` of the status faults, `sched_unclaim_child` gives the claim back and wakes the other waiters. |
+| R9 | A second waiter overwrites the first | Each waiter stored itself in `live->waiter`, one pointer per child. The exit path woke only that pointer, so the first of two waiting threads stayed blocked after the child exited. | `tcb->waiter` is gone. A waiting thread sets its own `in_wait4`. When an exit can make a process reapable (the leader becomes a zombie, or the last thread leaves), `sched_exit_common` walks the ring under the lock and wakes every thread of the parent process with `in_wait4` set. Each rescans. |
+| R10 | The sleep could miss its wakeup | `sys_wait4` set the waiter and called `sched_block()` with `g_sched_lock` already released. The comment "IF is clear, so no lost wakeup" holds only on one CPU. An exit on another CPU between the scan and the block found no waiter and woke nobody. | The waiter sleeps with `sched_block_on(&g_sched_lock)`. That publishes `BLOCKED` under the lock the waker holds, so a wake serialised after the unlock always sees it (DDR-SMP-3c-locks-4). |
+
+New tcb fields `reap_claimed` and `in_wait4` are set to 0 in `sched_create_state` (kmalloc does not zero). Idle tcbs are memset in `init_idle`. The reaper's skip test changes from `!t->waiter` to `!t->reap_claimed`.
+
+**Not changed (pre-existing, recorded):** a thread blocked in `wait4` is not woken by a group SIGKILL (§3.4: sleeping kernel waits do not wake on SIGKILL), so a group exit while a sibling sits in `wait4` leaves `live` above 0 until that wait ends. This is the same as before the change.
+
+**Evidence.** R8–R10 are races between CPUs that no current arm drives. They are checked by reading the code and **not verified at run time**. With P1d's `SYS_SCHED_CPU` (#91), two waiters and the exiting child can be pinned to three CPUs. An arm built on that is the way to gate R8–R10, and it is follow-up work.
+
+### 4.7 Amendment: reapable only after exit is complete; group-aware parent checks (CodeRabbit on #76 `0acf0eb`)
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R11 | The process is reapable before its exit finishes | The last thread drops `live` to 0 and sets `group_set` (and a group exit sets `group_set` earlier still). It then runs the rollback replay and the surface, socket and metrics reaps, and only after that takes `g_sched_lock`. A zombie leader passed `sched_wait_child`'s test in that window. A parent thread could then reap it before its surfaces and sockets were reclaimed. The leader was then unlinked when the last thread looked it up (`find_any_pid_locked` returned 0), so no SIGCHLD was sent and no waiter woken. | New `mm->exited` (zeroed by `mm_create`'s memset). The last thread release-stores it under `g_sched_lock`, after every cleanup step and the leader lookup, and before the wake. `sched_wait_child` requires `exited` (acquire) instead of `live == 0 && group_set`. `group_set`/`group_status` still carry the status. |
+| R12 | The reaper frees a live process's zombie children | `parent_pid` holds the parent's tgid, but `pid_alive` compared it with `t->pid`. Once the parent's leader ended with `SYS_THREAD_EXIT`, `pid_alive` said the parent was dead while its other threads ran. The reaper then freed the children, and a sibling's `wait4` lost them. | `pid_alive` matches any live thread whose `tgid` is the pid. Its only caller is the reaper. |
+| R13 | SIGCHLD is lost when the parent's leader is gone | `find_user_pid_locked(leader->parent_pid)` matches the exact pid and rejects zombies. A parent whose leader had ended with `SYS_THREAD_EXIT` got no SIGCHLD, though its live threads share the handler. | SIGCHLD goes to the parent's leader if it is live, else to any live thread of the parent process (`find_user_group_live_locked`). |
+
+All three are checked by reading the code and are **not verified at run time** (cross-CPU timing, and leader-exits-first shapes that no arm drives).
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
@@ -405,7 +442,7 @@ Each step is its own PR, stacked on the previous one, and each PR is flagged sec
 
 ## 6. Honesty labels
 
-- P1 is gated by `smoke-thread`, once it is built. Until then, P1 is **not verified**.
+- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6–R13) are checked by reading the code only.
 - Emulated (QEMU TCG, 4 vCPUs) only, not verified on real hardware. Cross-CPU timing under TCG is not hardware timing.
 - Does not claim any part of U1–U3 or OPEN-1/2/12/13 closed.
 - The DDR-1177 arm D/E and M4 checklist items are ticked only when the T4/T5/T6 mutants are shown red.
