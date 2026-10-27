@@ -21,7 +21,6 @@ while IFS= read -r p || [ -n "$p" ]; do
         docs/*.md) ;;
         */*) echo false; exit 0 ;;
         *.md) ;;
-        *) echo false; exit 0 ;;
     esac
 done
 if [ "$n" -eq 0 ]; then echo false; else echo true; fi
