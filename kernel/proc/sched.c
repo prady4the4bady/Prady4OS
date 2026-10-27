@@ -1161,7 +1161,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->parent_pid = 0;             /* set by sched_create_user_clone for forks */
     t->fork_retval = -1;           /* unset until a fork assigns it             */
     t->exit_status = 0;            /* set by sched_exit, collected by wait4     */
-    t->waiter = 0;                 /* parent blocked in wait4 on this thread    */
+    t->reap_claimed = 0;           /* DDR-1181 §4.6: no wait4 has claimed it    */
+    t->in_wait4 = 0;               /* DDR-1181 §4.6: not sleeping in wait4      */
     t->sig_pending = 0;            /* PROC-C: no pending signals                */
     for (int i = 0; i < 32; i++) {
         t->sig_handlers[i] = 0;
@@ -1368,8 +1369,8 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
  * DDR-1181 §3.6 says is copied (fds, signal dispositions, FPU state, root and
  * fs capability). Enters ring 3 at `entry` with RSP = stack, RDI = arg and
  * FS base = tls. Created BLOCKED and unblocked only once fully built. */
-struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
-                                     uint64_t arg, uint64_t tls, uint64_t clear_tid) {
+uint32_t sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
+                                  uint64_t arg, uint64_t tls, uint64_t clear_tid) {
     struct tcb *t = sched_create_state(user_launch, 0, parent->name, THREAD_BLOCKED);
     if (!t)
         return 0;
@@ -1414,8 +1415,11 @@ struct tcb *sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_
     t->mm  = parent->mm;
     t->cr3 = parent->cr3;
     irq_restore(fl);
+    /* Read the id while the thread cannot run: once unblocked it may exit on
+     * another CPU and be reaped, freeing this tcb, before we return. */
+    uint32_t tid = t->pid;
     sched_unblock(t);
-    return t;
+    return tid;
 }
 
 static void sched_ring_unlink(struct tcb *t) {
@@ -1520,37 +1524,91 @@ static void sched_free_tcb(struct tcb *t) {
  * consistent and the walk terminates. If it ever does not, the ring is corrupt
  * for some other reason, and reporting that beats hanging forever.
  *
- * NOT fixed here, and deliberately not claimed: the returned pointer is used
- * after this returns (and after the lock drops), so a concurrent reap could
- * still free it. That lifetime question is pre-existing, separate, and needs
- * its own change — this one stops the CPU wedging.
+ * DDR-1181 §4.6 (R8): the zombie is CLAIMED (reap_claimed) before the lock
+ * drops, so the pointer handed to wait4 cannot be taken by a second waiter or
+ * by the reaper. That closes the lifetime question DDR-1001 left open here.
  */
 #define WAIT4_RING_MAX 1024u   /* ~10x any observed live-thread count */
 
-struct tcb *sched_find_child(struct tcb *parent, int pid,
-                             struct tcb **has_live, int *any, int *ringbad) {
-    *has_live = 0; *any = 0; *ringbad = 0;
-    if (!parent) return 0;
-    struct tcb *found = 0;
-    uint64_t fl = irq_save();
-    unsigned n = 0;
-    struct tcb *t = parent->next;
-    while (t && t != parent) {
-        if (++n > WAIT4_RING_MAX) { *ringbad = 1; break; }
-        if (t->parent_pid == parent->tgid && (pid == -1 || (int)t->pid == pid)) {
-            *any = 1;
-            /* DDR-1181 §3.4: a zombie leader is reapable only once every
-             * thread of its group has exited; until then it counts as live. */
-            if (t->state == THREAD_ZOMBIE &&
-                (!t->mm || __atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) == 0)) {
-                found = t; break;
-            }
-            if (!*has_live) *has_live = t;
-        }
+/* DDR-1181 §4.6 (R9): every thread of process `tgid` sleeping in wait4 is
+ * woken to rescan. Caller holds g_sched_lock, so the ring is consistent and
+ * the walk ends (as sched_exit_common's reparent walk does); a bound here
+ * could skip a waiter and lose its wake. */
+static void wake_wait4_locked(uint32_t tgid) {
+    struct tcb *t = current_thread;
+    do {
+        if (t->in_wait4 && t->tgid == tgid)
+            sched_unblock(t);
         t = t->next;
+    } while (t && t != current_thread);
+}
+
+struct tcb *sched_wait_child(struct tcb *self, int pid, int nohang, int *err) {
+    *err = -ECHILD;
+    if (!self)
+        return 0;
+    uint64_t fl = irq_save();
+    for (;;) {
+        struct tcb *found = 0;
+        int any = 0;
+        unsigned n = 0;
+        struct tcb *t = self->next;
+        while (t && t != self) {
+            if (++n > WAIT4_RING_MAX) {
+                /* Should never happen: under g_sched_lock the ring is
+                 * consistent. Report and return rather than spin. */
+                irq_restore(fl);
+                kputs("[ringwalk] wait4 ring inconsistent pid=");
+                kputdec(self->pid);
+                kputs("\n");
+                return 0;
+            }
+            /* A claimed zombie belongs to another waiter: it is neither
+             * reapable nor counted, so a second waiter on its pid gets
+             * -ECHILD rather than sleeping on a child that is going. */
+            if (t->parent_pid == self->tgid && (pid == -1 || (int)t->pid == pid) &&
+                !t->reap_claimed) {
+                any = 1;
+                /* DDR-1181 §3.4, §4.7 R11: a zombie leader is reapable only once
+                 * its process has finished exiting. `live == 0` and `group_set`
+                 * are both published before the last thread's cleanup, so they
+                 * cannot be the test; `exited` is stored last, under this lock,
+                 * after the status (group_set, R6) and every cleanup step. */
+                if (t->state == THREAD_ZOMBIE &&
+                    (!t->mm || __atomic_load_n(&t->mm->exited, __ATOMIC_ACQUIRE))) {
+                    found = t;
+                    break;
+                }
+            }
+            t = t->next;
+        }
+        if (found) {
+            found->reap_claimed = 1;   /* R8: ours alone once the lock drops */
+            irq_restore(fl);
+            *err = 0;
+            return found;
+        }
+        if (!any)
+            break;                     /* -ECHILD */
+        if (nohang) {
+            *err = -EAGAIN;
+            break;
+        }
+        /* R10: BLOCKED is published under the lock the exit path wakes under,
+         * so an exit on another CPU after this point cannot be missed. */
+        self->in_wait4 = 1;
+        sched_block_on(&g_sched_lock);
+        self->in_wait4 = 0;
     }
     irq_restore(fl);
-    return found;
+    return 0;
+}
+
+void sched_unclaim_child(struct tcb *child) {
+    uint64_t fl = irq_save();
+    child->reap_claimed = 0;
+    wake_wait4_locked(child->parent_pid);   /* they may have skipped it */
+    irq_restore(fl);
 }
 
 int sched_snapshot(int index, struct procinfo *out) {
@@ -2539,6 +2597,7 @@ void sched_unblock(struct tcb *t) {
  * for good. The address space + TCB are reclaimed by the collector, never here —
  * we are still executing on this thread's kernel stack. */
 static struct tcb *find_user_pid_locked(uint32_t pid);  /* below */
+static struct tcb *find_user_group_live_locked(uint32_t tgid);  /* below */
 
 /* DDR-1181 P1c. `group`: sched_exit (the process ends: SYS_EXIT, a fatal fault,
  * SIGKILL, a budget kill) versus sched_exit_thread (SYS_THREAD_EXIT). */
@@ -2595,7 +2654,7 @@ static void sched_exit_common(int status, int group) {
         uint64_t gfl = irq_save();
         if (!mm->group_set) {
             mm->group_status = status;
-            mm->group_set = 1;
+            __atomic_store_n(&mm->group_set, 1u, __ATOMIC_RELEASE);
         }
         struct tcb *t = self->next;
         while (t != self) {
@@ -2620,7 +2679,7 @@ static void sched_exit_common(int status, int group) {
     int last = mm ? (__atomic_sub_fetch(&mm->live, 1, __ATOMIC_ACQ_REL) == 0) : 1;
     if (last && mm && !mm->group_set) {
         mm->group_status = status;     /* every thread ended by thread_exit */
-        mm->group_set = 1;
+        __atomic_store_n(&mm->group_set, 1u, __ATOMIC_RELEASE);
     }
     if (current_thread->is_user && last) {
         /* DDR-1171: a REJECTED rollback task undoes its filesystem effects here,
@@ -2662,18 +2721,24 @@ static void sched_exit_common(int status, int group) {
     /* DDR-1174: SIGCHLD to a live user parent, recorded under this lock so the
      * parent cannot be freed between lookup and raise (DDR-1159's rule). */
     if (current_thread->is_user && last && leader) {
-        struct tcb *par = find_user_pid_locked(leader->parent_pid);
+        /* DDR-1181 §4.7 R13: the parent PROCESS; its leader may have ended
+         * with SYS_THREAD_EXIT while its other threads still run. */
+        struct tcb *par = find_user_group_live_locked(leader->parent_pid);
         if (par)
             sig_raise(par, SIGCHLD, (int32_t)leader->pid, CLD_EXITED,
                       mm ? mm->group_status : status);
     }
     current_thread->state = THREAD_ZOMBIE;      /* NOT pickable; on_cpu stays set */
-    if (current_thread->waiter)
-        sched_unblock(current_thread->waiter);
-    /* A parent blocked in wait4 on the leader can reap it only once the last
-     * thread is out (sched_find_child), so the last exit wakes it. */
-    if (last && leader && leader != current_thread && leader->waiter)
-        sched_unblock(leader->waiter);
+    /* DDR-1181 §4.7 R11: the process is reapable only from here, under the lock
+     * the waiters scan under: after every per-process cleanup above and after
+     * the leader lookup, so a reap cannot overtake either. */
+    if (last && mm)
+        __atomic_store_n(&mm->exited, 1u, __ATOMIC_RELEASE);
+    /* DDR-1181 §4.6: the process becomes reapable once its leader is a zombie
+     * and its last thread is out; this exit may complete either. Every thread
+     * of the parent process sleeping in wait4 is woken to rescan. */
+    if (leader && (leader == current_thread || last))
+        wake_wait4_locked(leader->parent_pid);
     irq_restore(fl);                            /* topology lock only */
     schedule();                                 /* never returns */
     for (;;)                   /* unreachable */
@@ -2766,6 +2831,22 @@ static struct tcb *find_user_pid_locked(uint32_t pid) {
     return 0;
 }
 
+/* DDR-1181 §4.7 R13: a live user thread of process `tgid`, its leader first.
+ * Caller holds the topology lock. */
+static struct tcb *find_user_group_live_locked(uint32_t tgid) {
+    struct tcb *lead = find_user_pid_locked(tgid);
+    if (lead || tgid == 0)
+        return lead;
+    struct tcb *t = current_thread;
+    do {
+        if (t->is_user && t->tgid == tgid &&
+            t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+            return t;
+        t = t->next;
+    } while (t != current_thread);
+    return 0;
+}
+
 int sched_user_pid_alive(uint32_t pid) {
     uint64_t fl = irq_save();
     int alive = find_user_pid_locked(pid) != 0;
@@ -2822,7 +2903,9 @@ static int pid_alive(uint32_t pid) {
         return 0;              /* parent_pid 0 == kernel/none -> treat as orphan */
     struct tcb *t = current_thread;
     do {
-        if (t->pid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
+        /* DDR-1181 §4.7 R12: parent_pid is a tgid, and the parent lives while
+         * ANY of its threads does (its leader may have ended first). */
+        if (t->tgid == pid && t->state != THREAD_ZOMBIE && t->state != THREAD_DONE)
             return 1;
         t = t->next;
     } while (t != current_thread);
@@ -2831,7 +2914,7 @@ static int pid_alive(uint32_t pid) {
 
 /* Low-priority kernel thread: reap orphaned zombies (exited user procs whose
  * parent is gone and which no wait4 is collecting), bounding the zombie leak. A
- * child still being waited on (waiter != 0) or with a living parent is left for
+ * child a wait4 has claimed (reap_claimed) or with a living parent is left for
  * its parent's wait4. Reaps at most one per pass under interrupts-off, then
  * yields. */
 static void reaper_thread(void *arg) {
@@ -2841,7 +2924,7 @@ static void reaper_thread(void *arg) {
         struct tcb *victim = 0;
         struct tcb *t = current_thread->next;
         while (t != current_thread) {
-            if (t->state == THREAD_ZOMBIE && !t->waiter && !pid_alive(t->parent_pid)) {
+            if (t->state == THREAD_ZOMBIE && !t->reap_claimed && !pid_alive(t->parent_pid)) {
                 victim = t;
                 break;
             }
