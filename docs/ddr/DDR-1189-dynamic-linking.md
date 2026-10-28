@@ -45,8 +45,10 @@ hidden.
 - **L2. Entropy.** ASLR uses its own function, `aslr_random(nbytes)`, and
   does not change `rng_bytes()` (`kernel/crypto/rng.h`), which stays
   fail-closed for key material. `aslr_random` first calls `rng_bytes()`
-  (virtio-rng or `RDSEED`); if that fails, it uses `RDRAND` when CPUID reports
-  it; if that is also unavailable, it mixes TSC jitter into a per-boot state
+  (virtio-rng or `RDSEED`); if that fails and CPUID reports `RDRAND`, it
+  tries `RDRAND`, checking CF on every call and retrying at most 10 times per
+  64-bit word (Intel's recommended bound); if the retries run out or `RDRAND`
+  is absent, it mixes TSC jitter into a per-boot state
   and sets a flag. The first time the flag is set, the kernel prints
   `aslr: weak entropy` once on the console. ASLR still runs in that case, and
   that case is not called secure.
