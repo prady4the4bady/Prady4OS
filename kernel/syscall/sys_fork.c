@@ -17,6 +17,7 @@
  */
 #include "sys_fork.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "vmm_cow.h"
 #include "vmm.h"
 #include "syscall.h"      /* syscall_register, syscall_user_rip/rsp */
@@ -37,13 +38,23 @@ static long sys_fork(long a1, long a2, long a3, long a4, long a5, long a6) {
     if (parent->rb_log)
         return -EPERM;
 
+    /* DDR-1181 §3.3: the copy walks and re-protects the parent's page tables,
+     * which a sibling thread could be changing; it holds the mm lock. The
+     * clone copies the parent's mapping table (vma[], mmap_next), which is the
+     * other half of the same state, so the lock is held across it too: a
+     * sibling's mmap/munmap between the two would leave the child's page
+     * tables and mapping table disagreeing (DDR-1181 §4.4 R1). */
+    mm_lock(parent);
     uint64_t child_cr3 = vmm_fork_address_space_cow(parent->cr3);
-    if (!child_cr3)
+    if (!child_cr3) {
+        mm_unlock(parent);
         return -ENOMEM;
+    }
 
     /* cap-4: the entry snapshot is per-CPU (this syscall's own CPU). */
     struct tcb *child = sched_create_user_clone(parent, child_cr3,
                                                 this_cpu()->u_rip, this_cpu()->u_rsp);
+    mm_unlock(parent);
     if (!child) {
         vmm_destroy_address_space(child_cr3);
         return -ENOMEM;                            /* clone/cap/fd dup failed */

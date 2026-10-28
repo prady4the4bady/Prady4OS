@@ -9,7 +9,10 @@
  *      with a SHARED page. The shared loop's SYS_SYSINFO.free_pages drop
  *      exceeds the private loop's by < 128; a per-cycle shared leak adds
  *      >= 256. A bare bound on the shared drop was measured too thin: fork
- *      churn alone dropped 96 (CI run 39177510529, DDR-1178 §4).
+ *      churn alone dropped 96 (CI run 39177510529, DDR-1178 §4). Each
+ *      loop's drop is taken by pm_measure (DDR-1185): the system-wide count
+ *      moved by -182 in a private loop while other processes ran (run
+ *      40217768311), so only a trial with quiet traffic around it counts.
  *   F  the child munmaps the inherited shared region: rc 0 (its VMA table was
  *      copied at fork), and the parent's page survives (refcount, arm A).
  *   E  mprotect(RW) on a shared page, then fork: the child's 0x44 reaches the
@@ -18,6 +21,7 @@
  *      each -EINVAL.
  * C runs only after A held: without a working shared map it is vacuous.
  */
+#include "pagemeter.h"   /* DDR-1185 */
 
 #define SYS_EXIT     4
 #define SYS_WRITE    6
@@ -25,8 +29,20 @@
 #define SYS_MUNMAP  13
 #define SYS_FORK    15
 #define SYS_WAIT4   16
-#define SYS_SYSINFO 71
 #define SYS_MPROTECT 97
+#define SYS_YIELD     3
+#define SYS_SHMGET  112          /* DDR-1178 Amendment 2 (P2) */
+#define SYS_SHMAT   113
+#define SYS_SHMDT   114
+#define SYS_SHMCTL  115
+#define IPC_PRIVATE  0
+#define IPC_RMID     0
+#define SHM_RDONLY   010000
+#define EACCES       13
+#define EIDRM        43
+#define COMM_VA 0x8E00030000ul   /* MAP_SHARED page for arm I's early child */
+#define SEG_PAGES   16
+#define RECLAIM_MIN (SEG_PAGES - 4)
 
 #define PROT_RW      3
 #define PROT_RWX     7
@@ -41,12 +57,6 @@
 #define MPR_VA  0x8E00020000ul
 #define CYCLES  256
 #define LEAK_BOUND 128           /* half the mutant's minimum effect (DDR-1178 §4) */
-
-struct sysinfo {
-    char vendor[16]; char brand[64];
-    unsigned cpu_count, feat_edx, feat_ecx, pad;
-    unsigned long uptime_ticks, free_pages;
-};
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -91,13 +101,15 @@ static __attribute__((noreturn)) void fail(const char *what, long v) {
     for (;;) { }
 }
 
+/* Arms J and L read the raw system-wide count across ONE syscall on a
+ * uniprocessor (DDR-1185 §3 residual), through the meter's sampler. */
+static unsigned long free_pages(void) {
+    unsigned long t, f;
+    pm_sample(&t, &f);
+    return f;
+}
 static long mmap6(long va, long prot, long flags, long fd) {
     return nsi6(SYS_MMAP, va, 4096, prot, flags, fd, 0);
-}
-static unsigned long free_pages(void) {
-    struct sysinfo si;
-    if (nsi(SYS_SYSINFO, (long)&si, 0, 0) != 0) fail("sysinfo", -1);
-    return si.free_pages;
 }
 static int reap(long kid) {
     int st = 0;
@@ -106,8 +118,10 @@ static int reap(long kid) {
     return st;
 }
 
-static long loop_drop(long flags) {
-    unsigned long f0 = free_pages();
+/* One arm-C trial: CYCLES x (mmap, fork, child write+exit, wait, munmap). The
+ * free-page drop is taken by pm_measure (DDR-1185), not here. */
+static long loop_run(void *ctx) {
+    long flags = *(long *)ctx;
     for (long i = 0; i < CYCLES; i++) {
         long r = mmap6((long)LOOP_VA, PROT_RW, flags, -1);
         if (r != (long)LOOP_VA) fail("loop_mmap", r);
@@ -121,7 +135,30 @@ static long loop_drop(long flags) {
         reap(k);
         nsi(SYS_MUNMAP, (long)LOOP_VA, 4096, 0);
     }
-    return (long)f0 - (long)free_pages();
+    return CYCLES;                      /* one forked tcb per cycle */
+}
+static void line_pm(const char *a, const struct pm_result *r) {
+    char b[160], *p = str(b, a);
+    p = str(p, " trials="); p = dec(p, r->trials);
+    p = str(p, " rej_pre="); p = dec(p, r->rej_pre);
+    p = str(p, " rej_post="); p = dec(p, r->rej_post);
+    p = str(p, " rej_procs="); p = dec(p, r->rej_procs);
+    *p++ = '\n'; *p = 0; wr(b);
+}
+
+/* Arm M trial: a child creates a segment, never attaches or RMIDs it, and
+ * exits; the parent reaps it. One forked tcb. */
+static long m_run(void *ctx) {
+    (void)ctx;
+    long mk = nsi(SYS_FORK, 0, 0, 0);
+    if (mk < 0) fail("m_fork", mk);
+    if (mk == 0) {
+        long m = nsi(SYS_SHMGET, IPC_PRIVATE, SEG_PAGES * 4096, 0);
+        nsi(SYS_EXIT, m < 0 ? 4 : 0, 0, 0);
+        for (;;) { }
+    }
+    if (reap(mk) != 0) fail("m_child", -1);
+    return 1;
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
@@ -152,14 +189,24 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     nsi(SYS_MUNMAP, (long)PRIV_VA, 4096, 0);
 
     if (a == 0x22) {
-        long drop_pv = loop_drop(MAP_PRIVATE | MAP_ANON);
-        long drop_sh = loop_drop(MAP_SHARED | MAP_ANON);
-        long drop = drop_sh - drop_pv;
+        /* DDR-1185: each loop's drop comes from a trial with no foreign page
+         * traffic around it. Inconclusive (no clean trial) is leaked_ok=0. */
+        struct pm_result rpv, rsh;
+        long fpv = MAP_PRIVATE | MAP_ANON, fsh = MAP_SHARED | MAP_ANON;
+        int okpv = pm_measure(loop_run, &fpv, &rpv);
+        int oksh = pm_measure(loop_run, &fsh, &rsh);
+        /* A baseline below zero is still taken as zero (CI run 39516558534:
+         * private=-225, shared=0, before the meter): it can only subtract
+         * less, so a real per-cycle shared leak (>= 256) still fails. */
+        long drop = rsh.drop - (rpv.drop > 0 ? rpv.drop : 0);
         p = str(b, "PRADYOS_SHM_C cycles="); p = dec(p, CYCLES);
-        p = str(p, " leaked_ok="); p = dec(p, drop < LEAK_BOUND);
+        p = str(p, " leaked_ok="); p = dec(p, okpv && oksh && drop < LEAK_BOUND);
         *p++ = '\n'; *p = 0; wr(b);
-        line2("[shm] free_pages drop private=", drop_pv);
-        line2("[shm] free_pages drop shared=", drop_sh);
+        line2("[shm] free_pages drop private=", rpv.drop);
+        line2("[shm] free_pages drop shared=", rsh.drop);
+        line_pm("[shm] C meter private", &rpv);
+        line_pm("[shm] C meter shared", &rsh);
+        line2("[shm] C conclusive=", okpv && oksh);
     }
 
     if (a == 0x22) {
@@ -186,6 +233,149 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (mmap6((long)SHM_VA, PROT_RW, MAP_SHARED | MAP_PRIVATE | MAP_ANON, -1) == -EINVAL) rejects++;
     if (mmap6((long)SHM_VA, PROT_RWX, MAP_SHARED | MAP_ANON, -1) == -EINVAL) rejects++;
     line2("PRADYOS_SHM_D rejects=", rejects);
+
+    /* ---- P2 (DDR-1178 Amendment 2): SysV shared memory, IPC_PRIVATE only ---- */
+    /* I's child is forked BEFORE the segment exists, so its capability table
+     * never receives the shmid: it can only learn the number, through C. */
+    volatile long *C = (volatile long *)COMM_VA;
+    if (mmap6((long)COMM_VA, PROT_RW, MAP_SHARED | MAP_ANON, -1) != (long)COMM_VA)
+        fail("comm_mmap", -1);
+    C[0] = C[1] = C[2] = C[3] = 0;
+    long early = nsi(SYS_FORK, 0, 0, 0);
+    if (early < 0) fail("i_fork", early);
+    if (early == 0) {
+        while (!C[0]) nsi(SYS_YIELD, 0, 0, 0);
+        long forged = 0;
+        if (nsi(SYS_SHMAT, C[1], 0, 0) >= 0) forged++;          /* the real id   */
+        for (long gen = 1; gen <= 4; gen++)                       /* every guess   */
+            for (long slot = 0; slot < 64; slot++)
+                if (nsi(SYS_SHMAT, (gen << 6) | slot, 0, 0) >= 0) forged++;
+        C[2] = forged;
+        C[3] = 1;
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+
+    /* G: a key is a namespace; only IPC_PRIVATE is accepted. */
+    line2("PRADYOS_SHM_G key=", nsi(SYS_SHMGET, 0x1234, 4096, 0));
+
+    /* H: shared through the segment across a fork made after shmget. */
+    long id = nsi(SYS_SHMGET, IPC_PRIVATE, SEG_PAGES * 4096, 0);
+    if (id < 0) fail("shmget", id);
+    volatile unsigned char *hp = (volatile unsigned char *)nsi(SYS_SHMAT, id, 0, 0);
+    if ((long)hp < 0) fail("shmat", (long)hp);
+    hp[0] = 0x55;
+    long hk = nsi(SYS_FORK, 0, 0, 0);
+    if (hk < 0) fail("h_fork", hk);
+    if (hk == 0) {
+        volatile unsigned char *q = (volatile unsigned char *)nsi(SYS_SHMAT, id, 0, 0);
+        if ((long)q < 0) nsi(SYS_EXIT, 2, 0, 0);
+        /* Through the INHERITED mapping: a fresh shmat maps the frames writable
+         * whatever fork does, so writing via q passed with fork COWing (S2-2). */
+        hp[0] = 0x66;
+        nsi(SYS_SHMDT, (long)q, 0, 0);   /* J must not depend on the exit path */
+        nsi(SYS_SHMDT, (long)hp, 0, 0);
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    reap(hk);
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_H shared="); p = hex2(p, hp[0]);
+        *p++ = '\n'; *p = 0; wr(b);
+    }
+
+    /* I: the early child holds the number, not the capability. */
+    C[1] = id;
+    C[0] = 1;
+    reap(early);
+    line2("PRADYOS_SHM_I forged=", C[3] ? C[2] : -1);
+
+    /* J: IPC_RMID marks; a new attach is -EIDRM; the last detach frees. */
+    if (nsi(SYS_SHMCTL, id, IPC_RMID, 0) != 0) fail("rmid", -1);
+    long eidrm = nsi(SYS_SHMAT, id, 0, 0);
+    if (hp[0] != 0x66) fail("j_mapping_lost", hp[0]);
+    unsigned long jf0 = free_pages();
+    if (nsi(SYS_SHMDT, (long)hp, 0, 0) != 0) fail("shmdt", -1);
+    long jgain = (long)free_pages() - (long)jf0;
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_J eidrm="); p = dec(p, eidrm);
+        p = str(p, " freed_ok="); p = dec(p, jgain >= RECLAIM_MIN);
+        *p++ = '\n'; *p = 0; wr(b);
+    }
+
+    /* K: SHM_RDONLY really is read-only, and mprotect cannot undo it. */
+    long id2 = nsi(SYS_SHMGET, IPC_PRIVATE, 4096, 0);
+    if (id2 < 0) fail("shmget2", id2);
+    long kk = nsi(SYS_FORK, 0, 0, 0);
+    if (kk < 0) fail("k_fork", kk);
+    if (kk == 0) {
+        volatile unsigned char *q = (volatile unsigned char *)nsi(SYS_SHMAT, id2, 0, SHM_RDONLY);
+        if ((long)q < 0) nsi(SYS_EXIT, 3, 0, 0);
+        q[0] = 0x77;                    /* must fault: the child dies here */
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    int kkst = reap(kk);
+    long kro = nsi(SYS_SHMAT, id2, 0, SHM_RDONLY);
+    if (kro < 0) fail("shmat_ro", kro);
+    long kmp = nsi(SYS_MPROTECT, kro, 4096, PROT_RW);
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_K ro_faulted="); p = dec(p, kkst != 0 && kkst != 3);
+        p = str(p, " ro_mprotect="); p = dec(p, kmp);
+        *p++ = '\n'; *p = 0; wr(b);
+    }
+    nsi(SYS_SHMDT, kro, 0, 0);
+    nsi(SYS_SHMCTL, id2, IPC_RMID, 0);
+
+    /* L: a child that exits still attached is a detach (the exit path). */
+    long id3 = nsi(SYS_SHMGET, IPC_PRIVATE, SEG_PAGES * 4096, 0);
+    if (id3 < 0) fail("shmget3", id3);
+    long la = nsi(SYS_SHMAT, id3, 0, 0);
+    if (la < 0) fail("shmat3", la);
+    long lk = nsi(SYS_FORK, 0, 0, 0);
+    if (lk < 0) fail("l_fork", lk);
+    if (lk == 0) {
+        *(volatile unsigned char *)la = 0x11;   /* inherited attachment, no shmdt */
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    reap(lk);
+    unsigned long lf0 = free_pages();
+    nsi(SYS_SHMCTL, id3, IPC_RMID, 0);
+    nsi(SYS_SHMDT, la, 0, 0);
+    line2("PRADYOS_SHM_L nattch_fork=", (long)free_pages() - (long)lf0 >= RECLAIM_MIN);
+
+    /* M: a segment nobody attached and nobody RMID'd goes when its last
+     * holder (the child that created it) is gone. The window spans a fork,
+     * the child's run and exit and the reap, so other processes run in it:
+     * the drop comes from pm_measure (DDR-1185). Inconclusive is red. */
+    struct pm_result rm;
+    int okm = pm_measure(m_run, 0, &rm);
+    line2("PRADYOS_SHM_M reclaimed=", okm && rm.drop < RECLAIM_MIN);
+    line2("[shm] M drop=", rm.drop);
+    line_pm("[shm] M meter", &rm);
+
+    /* T (DDR-1178 A2.4): a removed segment's shmid must not reach the next
+     * segment created in its slot. t1 is removed before any attach, so it is
+     * reclaimed at once; the lowest free slot is taken first, so without the
+     * dead-slot rule t2 lands in t1's slot and shmat(t1) maps t2 (stale=153). */
+    long t1 = nsi(SYS_SHMGET, IPC_PRIVATE, 4096, 0);
+    if (t1 < 0) fail("t_shmget1", t1);
+    if (nsi(SYS_SHMCTL, t1, IPC_RMID, 0) != 0) fail("t_rmid1", -1);
+    long t2 = nsi(SYS_SHMGET, IPC_PRIVATE, 4096, 0);
+    if (t2 < 0) fail("t_shmget2", t2);
+    volatile unsigned char *tp = (volatile unsigned char *)nsi(SYS_SHMAT, t2, 0, 0);
+    if ((long)tp < 0) fail("t_shmat2", (long)tp);
+    tp[0] = 0x99;
+    long tstale = nsi(SYS_SHMAT, t1, 0, 0);
+    if (tstale >= 0) {
+        long byte = ((volatile unsigned char *)tstale)[0];
+        nsi(SYS_SHMDT, tstale, 0, 0);
+        tstale = byte;
+    }
+    nsi(SYS_SHMDT, (long)tp, 0, 0);
+    nsi(SYS_SHMCTL, t2, IPC_RMID, 0);
+    line2("PRADYOS_SHM_T stale=", tstale);
     wr("PRADYOS_SHM_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }

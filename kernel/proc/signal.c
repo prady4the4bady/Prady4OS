@@ -25,8 +25,8 @@ extern void signal_sigreturn(struct regs *saved);   /* arch/x86_64/usermode.asm 
 
 /* syscall_entry.asm reads these two words on every syscall exit. Its %defines
  * (TCB_SIG_PENDING / TCB_SIG_MASK) must match; a layout change fails here. */
-#define TCB_SIG_PENDING_OFF 5320
-#define TCB_SIG_MASK_OFF    5768
+#define TCB_SIG_PENDING_OFF 4296
+#define TCB_SIG_MASK_OFF    4744
 _Static_assert(offsetof(struct tcb, sig_pending) == TCB_SIG_PENDING_OFF,
                "update TCB_SIG_PENDING in syscall_entry.asm");
 _Static_assert(offsetof(struct tcb, sig_mask) == TCB_SIG_MASK_OFF,
