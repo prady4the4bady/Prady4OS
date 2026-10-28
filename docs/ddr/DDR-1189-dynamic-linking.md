@@ -68,7 +68,7 @@ hidden.
 | C | P2 | a static-PIE probe runs, reads a relocated pointer correctly, and over 4 execs shows at least 2 distinct load bases | D3 | relocations skipped (the pointer is wrong) |
 | D | P3 | a dynamically linked probe calls `lib_answer()` from `libtest.so` and prints its value | D4 | the interpreter is not mapped (exec fails) |
 | E | P3 | GOT and PLT relocations in `libtest.so` resolve (a global variable and a function pointer both hold the expected value) | D5 | `R_X86_64_GLOB_DAT` ignored |
-| F | P3 | W^X: `PROT_WRITE` + `PROT_EXEC` together returns `-EACCES`; `PROT_EXEC` on an anonymous mapping or an `O_RDWR` fd returns `-EACCES`; `mprotect(PROT_EXEC)` on anonymous memory returns `-EACCES` | D6, D7 | the fd-mode check skipped; the `mprotect` check skipped |
+| F | P3 | W^X: `PROT_WRITE` + `PROT_EXEC` together returns `-EACCES`; `PROT_EXEC` on an anonymous mapping or an `O_RDWR` fd returns `-EACCES`; `MAP_SHARED` + `PROT_EXEC` on a read-only fd returns `-EACCES`; `mprotect(PROT_EXEC)` on anonymous memory, and on a file mapping that was mapped writable earlier, returns `-EACCES` | D6, D7, D7b, D7c | the fd-mode check skipped; the `mprotect` check skipped; the `MAP_PRIVATE` requirement skipped; the ever-writable record not kept |
 | G | P3 | a library with `DT_TEXTREL` is refused | D8 | the `DT_TEXTREL` check skipped |
 | H | P4 | a second process mapping `libc.so` uses fewer than 8 new frames for its text | D9 | text pages copied per process |
 

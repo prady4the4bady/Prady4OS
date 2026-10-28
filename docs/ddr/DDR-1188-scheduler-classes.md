@@ -30,7 +30,7 @@ merged (`Needs: C1.4`); the arms below pin threads with `SYS_SCHED_CPU`
 
 | Part | Content | Needs |
 |---|---|---|
-| P1 | The time ABI on the existing TSC calibration and vDSO clock: `clock_gettime(CLOCK_MONOTONIC, CLOCK_REALTIME)` in nanoseconds, `nanosleep` | C1.4 |
+| P1 | The time ABI on the existing TSC calibration and vDSO clock: `clock_gettime(CLOCK_MONOTONIC, &ts)` and `clock_gettime(CLOCK_REALTIME, &ts)` (a `struct timespec`, nanosecond resolution), `nanosleep` | C1.4 |
 | P2 | One-shot LAPIC timers (TSC-deadline mode where CPUID has it, else one-shot count), so a timer can fire between ticks | P1 |
 | P3 | Scheduling classes: `SCHED_FIFO` and `SCHED_RR` (priority 1-99) ahead of the existing vruntime-fair class, which becomes `SCHED_OTHER`; RT throttling | P2 |
 | P4 | `SCHED_DEADLINE`: EDF with a constant-bandwidth server and admission control | P3 |
@@ -76,7 +76,7 @@ bound with a wide margin, never a precise duration.
 | G | P3 | a `SCHED_OTHER` thread still makes progress beside a FIFO spinner (K2) | C7 | no RT throttling |
 | H | P3 | `sched_setscheduler(FIFO)` without `RES_SCHED` returns `-EPERM`; an agent with it also gets `-EPERM` | C8 | skip the capability check |
 | I | P4 | admission refuses the deadline thread that would take a CPU over 0.90 (`-EBUSY`) | C9 | no admission check |
-| J | P4 | two admitted deadline threads on one pinned CPU, A (period 10 ms) and B (period 40 ms), both released at the same instant each time B is released: A runs first in at least 95 of 100 contended releases, and neither misses a deadline | C10 | EDF ordering ignored (deadline threads picked in arrival order) |
+| J | P4 | two admitted deadline threads on one pinned CPU, A (period 10 ms) and B (period 40 ms). On each of 100 contended releases, B is made runnable first and A second, and both are runnable before the CPU picks: A runs first in at least 95 of the 100, and neither misses a deadline | C10 | EDF ordering ignored (deadline threads picked in arrival order, so B, which arrived first, runs first) |
 | K | P5 | CPU `some` pressure is above 0 with two spinners on one CPU, and 0 when that CPU is idle | C11 | never account runnable-wait time |
 | L | P6 | an idle CPU takes fewer than 5 ticks in one second | C12 | tick never stopped |
 | M | P2 | an unprivileged thread re-arming a 50 µs one-shot as fast as it can gets at most 1 100 early wakes in one second (budget 1 000 plus margin) | C13 | no per-thread budget |
