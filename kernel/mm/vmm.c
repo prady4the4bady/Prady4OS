@@ -10,6 +10,7 @@
 #include "kheap.h"
 #include "console.h"           /* kputs for the DDR-757 W^X audit sentinel */
 #include "tlb.h"               /* DDR-1177: cross-CPU shootdown */
+#include "kreloc.h"            /* DDR-1179 A2: kaslr_slide for the W^X walk */
 
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
@@ -80,19 +81,22 @@ uint64_t vmm_kernel_cr3(void) {
  * 0x400000 (execute-via-alias). Per-process ASes share the kernel top-level
  * entries, so this single pass hardens every AS. NX bits gate on g_nx_ok
  * (identical to user W^X); text RW-clearing is unconditional. */
-#define KERNEL_VBASE_WX 0xFFFFFFFF80000000ull
 extern char __text_end[], __rodata_end[];      /* page-aligned (kernel.ld) */
+extern char __kimg_lo[];                       /* DDR-1179 A2: running base */
 static uint64_t *table_at(uint64_t phys);      /* defined below */
 
 void vmm_protect_kernel(void) {
-    /* Master walk: PML4[511] -> PDPT[510] -> PD[0] -> PT (the PT_HI page). */
+    /* Master walk: PML4[511] -> PDPT[510] -> PD[slot] -> PT (the PT_HI page).
+     * DDR-1179 A2: the slot is the slide in 2 MiB steps (0 until step 4). */
+    unsigned slot = (unsigned)(kaslr_slide >> 21);
+    uint64_t kbase = (uint64_t)(uintptr_t)__kimg_lo;
     uint64_t *pml4 = table_at(g_kernel_pml4);
     uint64_t pdpt = pml4[511] & PTE_ADDR;
     if (!pdpt) { kputs("[wx] kernel W^X FAIL: no PML4[511]\r\n"); return; }
     uint64_t pd = table_at(pdpt)[510] & PTE_ADDR;
     if (!pd)   { kputs("[wx] kernel W^X FAIL: no PDPT[510]\r\n"); return; }
-    uint64_t pt = table_at(pd)[0] & PTE_ADDR;
-    if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[0]\r\n"); return; }
+    uint64_t pt = table_at(pd)[slot] & PTE_ADDR;
+    if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[slot]\r\n"); return; }
 
     uint64_t alias_pte  = 0;   /* DDR-1046: the identity-alias PD entry, read back */
     uint64_t *ptes      = table_at(pt);
@@ -102,7 +106,7 @@ void vmm_protect_kernel(void) {
         uint64_t e = ptes[i];
         if (!(e & PTE_PRESENT))
             continue;
-        uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
+        uint64_t va = kbase + (uint64_t)i * 4096ull;
         if (va < text_end) {
             e &= ~VMM_RW;                       /* text: RX */
         } else if (va < rodata_end) {
@@ -173,7 +177,7 @@ void vmm_protect_kernel(void) {
         uint64_t e = ptes[i];
         if (!(e & PTE_PRESENT))
             continue;
-        uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
+        uint64_t va = kbase + (uint64_t)i * 4096ull;
         if (va < text_end) {
             if (e & VMM_RW) ok = 0;             /* writable text = FAIL */
         } else {

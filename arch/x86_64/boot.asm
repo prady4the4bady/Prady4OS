@@ -24,10 +24,69 @@ global kernel_stack
 extern kmain
 extern __bss_start
 extern __bss_end
+extern __kimg_lo          ; DDR-1179 A2: running base of the image
+extern kreloc_table       ; DDR-1179 A1: the encoded relocation table
+extern kaslr_slide        ; DDR-1179 A2: published for the printers
+extern kaslr_src          ; DDR-1179 A3: 1 tsc, 2 rdrand, 3 rdseed, 0 none
 
 kernel_entry:
     lea rsp, [rel kernel_stack_top]   ; high-virtual kernel stack
     mov r15, rdi                      ; preserve boot_info pointer
+    mov r13, rsi                      ; DDR-1179 A3: the loader's entropy source
+
+    ; DDR-1179 A2: self-relocation. slide = running base - link base; the link
+    ; base is an immediate, so this instruction carries no relocation itself.
+    ; PT_HI maps the image RW here (W^X comes later, vmm_protect_kernel), so
+    ; .text fields can be patched. Runs at slide 0 too: every boot decodes the
+    ; whole table. Format: "KRL1", u32 count, u32 bytes, then LEB128 varints of
+    ; (offset delta << 1 | is64), offsets from the image base.
+    lea r8, [rel __kimg_lo]
+    mov rax, 0xFFFFFFFF80000000
+    mov r9, r8
+    sub r9, rax                       ; r9 = slide
+    lea rsi, [rel kreloc_table]
+    cmp dword [rsi], 0x314C524B       ; "KRL1"
+    jne .reloc_bad
+    mov r10d, [rsi + 4]               ; entry count
+    add rsi, 12
+    mov rdx, -1                       ; previous offset
+.reloc_next:
+    test r10d, r10d
+    jz .reloc_done
+    xor eax, eax
+    xor ecx, ecx
+.reloc_leb:
+    movzx ebx, byte [rsi]
+    inc rsi
+    mov r11, rbx
+    and r11d, 0x7F
+    shl r11, cl
+    or rax, r11
+    add ecx, 7
+    test bl, 0x80
+    jnz .reloc_leb
+    mov r11, rax
+    shr r11, 1
+    add rdx, r11                      ; this field's offset
+    lea rdi, [r8 + rdx]
+    test al, 1
+    jz .reloc_32s
+    add [rdi], r9                     ; R_X86_64_64
+    jmp .reloc_adv
+.reloc_32s:
+    add [rdi], r9d                    ; R_X86_64_32S: the slide is < 1 GiB
+.reloc_adv:
+    dec r10d
+    jmp .reloc_next
+.reloc_bad:
+    test r9, r9
+    jz .reloc_done                    ; slot 0 without a table: nothing moves
+.reloc_halt:
+    cli                               ; a slid kernel that cannot relocate
+    hlt                               ; itself must not run
+    jmp .reloc_halt
+.reloc_done:
+    mov r14, r9                       ; the slide survives the .bss clear
 
     ; zero .bss  [__bss_start, __bss_end)  (no stack use; rep does not push)
     lea rdi, [rel __bss_start]
@@ -37,6 +96,8 @@ kernel_entry:
     cld
     rep stosb
 
+    mov [rel kaslr_slide], r14        ; DDR-1179 A2 (.bss, so after the clear)
+    mov [rel kaslr_src], r13          ; DDR-1179 A3
     xor rbp, rbp                      ; terminate backtrace chain
     mov rdi, r15                      ; restore boot_info -> kmain arg 1
     call kmain

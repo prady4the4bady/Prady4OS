@@ -99,6 +99,49 @@ static uint64_t alloc_page_zeroed(EFI_BOOT_SERVICES *bs) {
     return p;
 }
 
+/* DDR-1179 A3: the KASLR slot s in [1, 511] (K3) from RDSEED, else RDRAND,
+ * else the TSC (K2, weak); the same choice stage2.asm makes, because PT_HI is
+ * built twice. g_kaslr_src goes to the kernel in RSI: 1 tsc, 2 rdrand, 3 rdseed. */
+static uint64_t g_kaslr_slot, g_kaslr_src;
+
+static void cpuid(uint32_t leaf, uint32_t *b, uint32_t *c) {
+    uint32_t a = leaf, bb, cc = 0, d;
+    __asm__ volatile("cpuid" : "+a"(a), "=b"(bb), "+c"(cc), "=d"(d));
+    *b = bb; *c = cc;
+}
+
+static void kaslr_pick(void) {
+    uint32_t max, b, c;
+    uint32_t a = 0, bb, cc = 0, d;
+    __asm__ volatile("cpuid" : "+a"(a), "=b"(bb), "+c"(cc), "=d"(d));
+    max = a;
+    uint64_t r = 0;
+    uint8_t ok = 0;
+    if (max >= 7) {
+        cpuid(7, &b, &c);
+        if (b & (1u << 18)) {
+            for (int i = 0; i < 10 && !ok; i++)
+                __asm__ volatile("rdseed %0; setc %1" : "=r"(r), "=qm"(ok) :: "cc");
+            if (ok) g_kaslr_src = 3;
+        }
+    }
+    if (!ok) {
+        cpuid(1, &b, &c);
+        if (c & (1u << 30)) {
+            for (int i = 0; i < 10 && !ok; i++)
+                __asm__ volatile("rdrand %0; setc %1" : "=r"(r), "=qm"(ok) :: "cc");
+            if (ok) g_kaslr_src = 2;
+        }
+    }
+    if (!ok) {
+        uint32_t lo, hi;
+        __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+        r = lo;                         /* weak: never counted as protection */
+        g_kaslr_src = 1;
+    }
+    g_kaslr_slot = ((uint32_t)r % 511u) + 1u;
+}
+
 static uint64_t build_page_tables(EFI_BOOT_SERVICES *bs) {
     uint64_t pml4 = alloc_page_zeroed(bs);
 
@@ -116,7 +159,7 @@ static uint64_t build_page_tables(EFI_BOOT_SERVICES *bs) {
      * own VMM later re-maps sub-ranges with different permissions (W^X). */
     uint64_t pml4i = (KERNEL_VBASE >> 39) & 0x1FF;
     uint64_t pdpti = (KERNEL_VBASE >> 30) & 0x1FF;
-    uint64_t pdi   = (KERNEL_VBASE >> 21) & 0x1FF;
+    uint64_t pdi   = g_kaslr_slot;    /* DDR-1179 A3: PD_HI[s], not PD_HI[0] */
     uint64_t pdpt_hi = alloc_page_zeroed(bs);
     uint64_t pd_hi   = alloc_page_zeroed(bs);
     uint64_t pt_hi   = alloc_page_zeroed(bs);
@@ -362,6 +405,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
     print(u"[uefi] PRADYOS loader\r\n");
     load_kernel(bs, image);
+    kaslr_pick();                                    /* DDR-1179 A3 */
     uint64_t cr3 = build_page_tables(bs);
     query_gop(bs);                           /* DDR-1142: before the map loop */
     print(u"[uefi] handoff\r\n");
@@ -398,10 +442,12 @@ exited:
         "cli\n"
         "mov %0, %%cr3\n"
         "mov %1, %%rdi\n"
+        "mov %3, %%rsi\n"                  /* DDR-1179 A3: entropy source */
         "mov %2, %%rax\n"
         "jmp *%%rax\n"
         :
-        : "r"(cr3), "r"(BOOT_INFO_PHYS), "r"(KERNEL_VBASE)
+        : "r"(cr3), "r"(BOOT_INFO_PHYS), "r"(KERNEL_VBASE + (g_kaslr_slot << 21)),
+          "r"(g_kaslr_src)
         : "memory");
     for (;;)
         __asm__ volatile("hlt");
