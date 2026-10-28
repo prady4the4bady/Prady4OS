@@ -30,11 +30,11 @@ merged (`Needs: C1.4`); the arms below pin threads with `SYS_SCHED_CPU`
 
 | Part | Content | Needs |
 |---|---|---|
-| P1 | The time ABI on the existing TSC calibration and vDSO clock: `clock_gettime(CLOCK_MONOTONIC, &ts)` and `clock_gettime(CLOCK_REALTIME, &ts)` (a `struct timespec`, nanosecond resolution), `nanosleep` | C1.4 |
+| P1 | The time ABI on the existing TSC calibration and vDSO clock: `clock_gettime(CLOCK_MONOTONIC, &ts)` and `clock_gettime(CLOCK_REALTIME, &ts)` (a `struct timespec`, nanosecond resolution), `nanosleep`. `CLOCK_REALTIME` is defined in K6 | C1.4 |
 | P2 | One-shot LAPIC timers (TSC-deadline mode where CPUID has it, else one-shot count), so a timer can fire between ticks | P1 |
-| P3 | Scheduling classes: `SCHED_FIFO` and `SCHED_RR` (priority 1-99) ahead of the existing vruntime-fair class, which becomes `SCHED_OTHER`; RT throttling | P2 |
+| P3 | Scheduling classes: `SCHED_FIFO` and `SCHED_RR` (priority 1-99; a higher number runs first; at equal priority, FIFO and RR threads share one queue in arrival order, and only RR rotates on its timeslice) ahead of the existing vruntime-fair class, which becomes `SCHED_OTHER`; RT throttling | P2 |
 | P4 | `SCHED_DEADLINE`: EDF with a constant-bandwidth server and admission control | P3 |
-| P5 | Pressure stall information for CPU and I/O; memory once C2.1 can stall on reclaim | P3 |
+| P5 | Pressure stall information for CPU and I/O (blocked block-device reads), as `some`: the fraction of the last 1 s (100 ticks, sampled each tick, a plain sliding window with no exponential decay) in which at least one thread was stalled; memory once C2.1 can stall on reclaim | P3 |
 | P6 | Tickless idle (stop the periodic tick on an idle CPU, wake on the next timer); CPU frequency only where the hardware exposes it | P2 |
 
 `SCHED_OTHER` keeps today's picker unchanged: `fair_candidate()` and the
@@ -59,6 +59,25 @@ picker itself is out of scope, because OPEN-2 timing lives on this path.
 - **K5. CPU frequency.** QEMU TCG exposes no P-states. P6 reads CPUID for
   HWP/EIST and reports "not available" otherwise. Any frequency feature is
   labelled **not verified on real hardware** until it runs on a real machine.
+- **K6. `CLOCK_REALTIME`.** Seconds and nanoseconds since the Unix epoch,
+  UTC. At boot the kernel reads the RTC once and records `realtime_base` =
+  that wall time minus the current `CLOCK_MONOTONIC` value; `CLOCK_REALTIME`
+  is then `realtime_base + CLOCK_MONOTONIC`, so its sub-second part comes from
+  the TSC, not from the PIT-tick vDSO counter. P1 has no `clock_settime` and
+  no NTP: the base is never adjusted, so `CLOCK_REALTIME` drifts with the TSC
+  and steps only across a reboot. The RTC is read in UTC (the QEMU default);
+  a local-time RTC gives a wrong offset and is recorded as a limitation.
+- **K7. vDSO layout and update protocol (P1).** Today `vdso_data_t`
+  (`kernel/vdso/vdso_page.h`) holds only `wall_time_ns`, advanced from the PIT
+  IRQ, and a reserved `seq`. P1 keeps `wall_time_ns` at offset 0 for existing
+  readers and adds, in the padding: `tsc_base` (TSC at the last update),
+  `ns_base` (monotonic nanoseconds at `tsc_base`), `mult` and `shift` (TSC
+  ticks to nanoseconds, from `calibrate_tsc_hz`) and `realtime_base` (K6).
+  The writer makes `seq` odd, stores the fields, then makes `seq` even, with
+  release ordering. A reader loads `seq`, retries while it is odd, reads the
+  fields, and retries if `seq` changed; `CLOCK_MONOTONIC` is then
+  `ns_base + ((rdtsc - tsc_base) * mult >> shift)`. None of this exists yet;
+  until P1, the tree has no `CLOCK_MONOTONIC` or `CLOCK_REALTIME` at all.
 
 ## 4. Gate `smoke-schedclass` (one probe, `user/schedtest.c`; arms by part)
 
@@ -67,19 +86,21 @@ bound with a wide margin, never a precise duration.
 
 | Arm | Part | Assertion | Mutant | What the mutant breaks |
 |---|---|---|---|---|
-| A | P1 | `CLOCK_MONOTONIC` never goes backwards over 10 000 reads on each of two pinned CPUs | C1 | read the TSC without the per-CPU offset |
+| A | P1 | `CLOCK_MONOTONIC` never goes backwards over 10 000 reads on each of two pinned CPUs, and across CPUs: a thread on CPU 0 writes its reading to shared memory and a thread on CPU 1 reads it and then its own clock, and the same in the other direction, 10 000 times each way; the receiving CPU's clock is never below the value it just read from the other CPU. A constant offset in either direction fails one of the two directions | C1 | read the TSC without the per-CPU offset (one CPU lags or leads by a constant; a lag fails the 0-to-1 direction, a lead fails the 1-to-0 direction) |
 | B | P1 | `nanosleep(25 ms)` returns after at least 25 ms by the monotonic clock (25 ms is not a whole number of 10 ms ticks, so rounding down to ticks returns at 20 ms) | C2 | round the sleep down to whole ticks |
 | C | P2 | a 2 ms one-shot timer fires before the next periodic tick (count of early wakes > 0 over 50 tries) | C3 | arm the periodic tick only |
 | D | P3 | a FIFO thread woken on a CPU busy with a `SCHED_OTHER` spinner runs within one tick of its wake, before the spinner's 2-tick quantum ends | C4 | queue RT threads in the fair class (picked by `fair_candidate`, so they wait for the quantum) |
 | E | P3 | two RR threads of equal priority on one CPU both make progress | C5 | RR never rotates (behaves as FIFO) |
 | F | P3 | two FIFO threads of equal priority: the second does not run until the first blocks, across at least 5 quantum expiries | C6 | FIFO rotates on quantum expiry, as `SCHED_OTHER` does |
-| G | P3 | a `SCHED_OTHER` thread still makes progress beside a FIFO spinner (K2) | C7 | no RT throttling |
-| H | P3 | `sched_setscheduler(FIFO)` without `RES_SCHED` returns `-EPERM`; an agent with it also gets `-EPERM` | C8 | skip the capability check |
+| G | P3 | with a FIFO spinner on a pinned CPU, a `SCHED_OTHER` thread on the same CPU accrues at least 4 run ticks (40 ms of CPU time at the 100 Hz tick) in each of 5 consecutive 1 s windows of `CLOCK_MONOTONIC` time; CPU time is its own `run_ticks`, read through `SYS_GETPROCS` (DDR-754), not elapsed time (K2 gives it 50 ms; 40 ms leaves margin under TCG) | C7 | no RT throttling (the `SCHED_OTHER` thread gets 0 ms) |
+| H | P3 | `sched_setscheduler(FIFO)` without `RES_SCHED` returns `-EPERM`; init granting `RES_SCHED` to an agent is refused (`-EPERM`), and that agent's `sched_setscheduler(FIFO)` then returns `-EPERM` | C8, C8b | skip the capability check; allow the grant to an agent |
 | I | P4 | admission refuses the deadline thread that would take a CPU over 0.90 (`-EBUSY`) | C9 | no admission check |
 | J | P4 | two admitted deadline threads on one pinned CPU, A (period 10 ms) and B (period 40 ms). On each of 100 contended releases, B is made runnable first and A second, and both are runnable before the CPU picks: A runs first in at least 95 of the 100, and neither misses a deadline | C10 | EDF ordering ignored (deadline threads picked in arrival order, so B, which arrived first, runs first) |
 | K | P5 | CPU `some` pressure is above 0 with two spinners on one CPU, and 0 when that CPU is idle | C11 | never account runnable-wait time |
 | L | P6 | an idle CPU takes fewer than 5 ticks in one second | C12 | tick never stopped |
 | M | P2 | an unprivileged thread re-arming a 50 µs one-shot as fast as it can gets at most 1 100 early wakes in one second (budget 1 000 plus margin) | C13 | no per-thread budget |
+| N | P3 | two FIFO threads, each holding `RES_SCHED` granted by init (K1), on one pinned CPU, priority 10 and priority 20; the priority-10 thread is made runnable first and spins; the priority-20 thread is then woken and runs within one tick | C14 | priority order reversed (lower number wins) |
+| O | P5 | I/O `some` pressure is above 0 while a thread is blocked on a 4 MiB uncached virtio-blk read, and back to 0 within 2 s after it completes (the 1 s window has then emptied) | C15 | blocked block-device reads not accounted |
 
 Before each arm is written, I check it for vacuity: it must fail on the tree
 without its part. Arm D, for instance, fails on today's picker because there is

@@ -87,9 +87,13 @@ helper's second pass use it, and does not switch CR3 to reclaim.
     area at the start of the partition, 24 bytes per slot: counter and tag).
   - **AAD:** the slot index and the counter.
   - **Trusted counter:** the counter written to disk is not trusted on the way
-    back. The swap entry in the non-present PTE holds the slot index and the
-    counter of the write that filled it, and swap-in builds the nonce and AAD
-    from that in-memory value, never from the on-disk metadata. Restoring an
+    back. The non-present PTE holds only the slot index (15 bits for 128 MiB of
+    4 KiB slots). The trusted counter lives in kernel memory, in a per-boot
+    table `swap_ctr[slot]` (8 bytes per slot, 256 KiB for 128 MiB of swap),
+    written when the slot is filled and cleared when it is freed: on swap-in,
+    on unmapping the swapped page, and on address-space teardown. Swap-in
+    builds the nonce and AAD from `swap_ctr[slot]`, never from the on-disk
+    metadata. Restoring an
     older sealed page together with its older metadata therefore fails the tag
     check, as does moving a sealed page to another slot.
   - **No wrap:** at the next write after the counter reaches 2^64 - 1, swap-out
@@ -99,8 +103,10 @@ helper's second pass use it, and does not switch CR3 to reclaim.
     failed check kills the faulting process (`SIGBUS`); the kernel does not
     map unauthenticated data and does not panic.
 
-  Swap content at rest is unreadable and tamper-evident after power-off, and no
-  key management is needed. Swap is not hibernation (hibernation would need a
+  After power-off the per-boot key is gone, so swap content at rest is
+  unreadable to anyone. Tampering is detected only within the boot that wrote
+  the slot; a later boot never reads old swap (it starts with an empty slot
+  table), so it has nothing to verify. No key management is needed. Swap is not hibernation (hibernation would need a
   stored key, and is out of scope).
 - **V2. What is never swapped:** kernel memory, page tables, shm, surface and
   `PTE_SW_SHARED` frames, COW pages, huge pages, `mlock`ed pages, and pages with

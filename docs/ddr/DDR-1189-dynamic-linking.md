@@ -42,9 +42,16 @@ hidden.
   `PROT_EXEC` to anonymous memory, nor to a mapping that was ever writable.
   Libraries with text relocations (`DT_TEXTREL`) are refused, so the loader
   never has to write to text.
-- **L2. Entropy.** The pool mixes virtio-rng when present, `RDRAND` when CPUID
-  reports it, and TSC jitter. With neither hardware source, boot prints
-  `aslr: weak entropy` and ASLR still runs. That case is not called secure.
+- **L2. Entropy.** ASLR uses its own function, `aslr_random(nbytes)`, and
+  does not change `rng_bytes()` (`kernel/crypto/rng.h`), which stays
+  fail-closed for key material. `aslr_random` first calls `rng_bytes()`
+  (virtio-rng or `RDSEED`); if that fails and CPUID reports `RDRAND`, it
+  tries `RDRAND`, checking CF on every call and retrying at most 10 times per
+  64-bit word (Intel's recommended bound); if the retries run out or `RDRAND`
+  is absent, it mixes TSC jitter into a per-boot state
+  and sets a flag. The first time the flag is set, the kernel prints
+  `aslr: weak entropy` once on the console. ASLR still runs in that case, and
+  that case is not called secure.
 - **L3. Entropy bits.** The mmap arena is 28 GiB (`0x88_0000_0000` to
   `0x8F_0000_0000`), so a page-aligned base anywhere in it would give about 22.8
   bits. The design **caps** the mmap-base offset at 1 GiB, which gives 18 bits,
