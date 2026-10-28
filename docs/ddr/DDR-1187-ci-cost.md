@@ -130,7 +130,12 @@ be mutated in a self-test. It is checked by observation and labelled until then:
 - this PR's own run must log `docs_only=false` and run all ten shards (the base
   has no classifier). **Seen** in run [40551166911](https://github.com/prady4the4bady/prady4os/actions/runs/40551166911) on `ac2163c`: the build steps ran and all ten shards were green;
 - after merge, the first docs-only PR must log `docs_only=true` with every shard
-  printing that it ran no gate, and the first code PR must log `false`;
+  printing that it ran no gate, and the first code PR must log `false`. The
+  docs-only half is **seen** in run [40643446650](https://github.com/prady4the4bady/prady4os/actions/runs/40643446650)
+  on #95 at `0ad81f5`, after #94 merged as `e2a7569`: `build` set `docs_only`
+  and ran in 9 s, each of the ten shards ran in 3 to 6 s and logged
+  `docs-only pull request (DDR-1187), shard N ran no gate`, and every required
+  check reported success. The code-PR half is not yet seen;
 - a second push to one PR must cancel the run on its first head.
 
 Until each is seen in a run, it is **not verified**.

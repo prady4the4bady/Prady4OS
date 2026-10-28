@@ -4,11 +4,10 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## State (2026-10-28)
 
-- **dev/phase1 tip:** `e2a7569` (PR #94, DDR-1187 CI cost). Earlier today: #70 merged as `2bda85d` (DDR-1178 Amendment 1, decisions D1-D5). Branch protection is on; the operator merges.
+- **dev/phase1 tip:** `9c1dbdc` (PR #95, DDR-1188/1189/1190 design ahead). Earlier today: #94 as `e2a7569` (DDR-1187 CI cost), #70 as `2bda85d` (DDR-1178 Amendment 1, decisions D1-D5). Branch protection is on; the operator merges.
 - **Kernel on dev/phase1:** `kernel.bin` 1,540,490 B (measured at `a2ac698`). NSI next free 110. Open PRs and branches hold DDR-1178 to DDR-1190; allocate from 1191.
-- **CI (DDR-1187, live from `e2a7569`):** a second push to a PR cancels that PR's earlier run; a PR touching only `docs/**/*.md` or root `*.md` skips the build and boot steps, and every required check still reports. Wiring observation 1 was seen before merge; observations 2 (docs-only skip on a real PR) and 3 (cancel on a second push) are recorded in DDR-1187 §4 once seen.
+- **CI (DDR-1187, live from `e2a7569`):** a second push to a PR cancels that PR's earlier run; a PR touching only `docs/**/*.md` or root `*.md` skips the build and boot steps, and every required check still reports. Observation 1 was seen before merge, and the docs-only half of observation 2 on #95 (run 40643446650). Still to see: the first code PR logging `docs_only=false`, and a second push cancelling a run (DDR-1187 §4).
 - **Green on the exact head, waiting on the operator's merge:**
-  - #95 (docs, DDR-1188/1189/1190 design ahead).
   - #77 (DDR-1183 size gate).
   - #76 → #91 (C1.4 P1c, then P1d).
   - #81 → #78 → #80 (C1.4 P2 futex, then C1.3 P2 SysV, then C1.3 P3 `SHM_ANON`). #78 and #80 are a security boundary: review before merge.
