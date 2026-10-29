@@ -359,7 +359,8 @@ static long c_cycles(void *ctx) {
         c->s->c_ctid = 1;
         long stk = spawn(t_nop, 0, 0, (uint64_t)&c->s->c_ctid);
         if (!join(&c->s->c_ctid, 2000)) fail("C join");
-        long ur = nsi(SYS_MUNMAP, stk, STK, 0);
+        long ur = nsi(SYS_MUNMAP, i == 0 ? stk + 1 : stk, STK, 0);   /* MUTANT C-unmap: cycle 0 unmaps a non-base address */
+        if (i == 0) nsi(SYS_MUNMAP, stk, STK, 0);                      /* MUTANT C-unmap: real unmap, uncounted, so no leak */
         if (ur != 0) {                    /* a failed unmap leaks the stack */
             if (!c->unmap_fail) c->unmap_rc = ur;
             c->unmap_fail++;
