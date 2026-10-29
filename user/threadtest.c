@@ -1,0 +1,485 @@
+/* user/threadtest.c — ring-3 thread probe for smoke-thread (DDR-1181 §4).
+ *
+ * FAT-rooted, opt-in (QEMU_PROBES=thread), run with 4 vCPUs. Arms:
+ *   A  a store by a thread is seen by its creator; clear_tid is zeroed at exit
+ *   B  two threads, two TLS blocks: each reads its own %fs:0 self-pointer
+ *   C  72 create/exit cycles leak no physical pages
+ *   D  mprotect(PROT_READ) by one thread stops a sibling's writes
+ *   E  munmap by one thread stops a sibling's reads
+ *   M  no read through a stale entry returns a freed frame's poison (KASAN
+ *      fills freed frames with 0xDEADBEEFDEADBEEF) -- printed, ungated
+ *   F  a fault in one thread ends the whole process
+ *   G  DDR-1181 §3.7: a kernel copyout racing munmap of its buffer is
+ *      -EFAULT, never a kernel panic -- printed, ungated
+ *
+ * D and E run their two threads on ONE CPU: the scheduler never spreads one
+ * process's threads under the boot's load (DDR-1181 §4.3). The cross-CPU
+ * DDR-1177 arms D/E/M4, and M and G as gated arms, need P1d (DDR-1186).
+ *
+ * D, E/M, F and G each run in a forked CHILD (the test process). The child's
+ * threads report through a MAP_SHARED anonymous page (C1.3 P1) and the parent
+ * judges how the child ended. Every parent-side wait is bounded by the vDSO
+ * clock; on expiry the parent SIGKILLs the child and reports what it saw -- a
+ * mutant that leaves a stale TLB entry also leaves the child alive.
+ *
+ * The "after" counts use one shape: `f = flag; access; if (f) count++`. The
+ * flag is set only after the operation RETURNED, so a count can only come from
+ * an access that began after it.
+ *
+ * Freestanding (no libc): raw syscalls, no writable globals (user.ld).
+ */
+#include "pradyos.h"
+#include "pagemeter.h"   /* DDR-1185 */
+
+#define nsi pradyos_syscall
+
+#define PROT_READ      0x1
+#define PROT_WRITE     0x2
+#define MAP_SHARED     0x01
+#define MAP_PRIVATE    0x02
+#define MAP_ANONYMOUS  0x20
+#define WNOHANG        1
+#define SIGKILL        9
+#define EFAULT         14
+
+#define VDSO_USER_VA   0x00007FFFFFF00000ull
+#define MS             1000000ull
+#define STK            16384
+#define PAT            0x5EED5EED5EED5EEDull
+#define TRIALS         16
+
+/* SYS_MMAP and SYS_THREAD_CREATE take more than three arguments. */
+static inline long nsi6(long n, long a1, long a2, long a3,
+                        long a4, long a5, long a6) {
+    long r;
+    register long r10 __asm__("r10") = a4;
+    register long r8  __asm__("r8")  = a5;
+    register long r9  __asm__("r9")  = a6;
+    __asm__ volatile("syscall" : "=a"(r)
+                     : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+static uint64_t now(void) { return *(volatile uint64_t *)VDSO_USER_VA; }
+
+/* Every line leaves in ONE write (DDR-1182 §3.1: a line written in pieces
+ * can be split by other output). The line is built on the stack because a
+ * probe may not carry a writable section (DDR-826). Understands %d (a long)
+ * and %s only. */
+static void say(const char *fmt, ...) {
+    char b[192];
+    long n = 0;
+    __builtin_va_list ap;
+    __builtin_va_start(ap, fmt);
+    for (const char *f = fmt; *f && n < (long)sizeof b - 21; f++) {
+        if (f[0] == '%' && f[1] == 'd') {
+            long v = __builtin_va_arg(ap, long);
+            unsigned long u = v < 0 ? 0UL - (unsigned long)v : (unsigned long)v;
+            char d[20];
+            int nd = 0;
+            do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
+            if (v < 0) b[n++] = '-';
+            while (nd) b[n++] = d[--nd];
+            f++;
+        } else if (f[0] == '%' && f[1] == 's') {
+            for (const char *s = __builtin_va_arg(ap, const char *);
+                 *s && n < (long)sizeof b - 1; s++)
+                b[n++] = *s;
+            f++;
+        } else {
+            b[n++] = *f;
+        }
+    }
+    __builtin_va_end(ap);
+    nsi(SYS_WRITE, 1, (long)b, n);
+}
+
+/* One sentinel line, built locally and emitted by ONE write: a kernel line (a
+ * child's "[trap] ... killing process") can otherwise land between the parts
+ * of a line written piecewise, and the gate sees neither half (CI run
+ * 39504298130, arm F: "group_killed=[trap] ..."). */
+static void line1(const char *tag, long v) {
+    char b[96];
+    long n = 0;
+    while (tag[n] && n < 60) { b[n] = tag[n]; n++; }
+    char d[20];
+    int nd = 0;
+    unsigned long u = (v < 0) ? (unsigned long)(-v) : (unsigned long)v;
+    do { d[nd++] = (char)('0' + u % 10); u /= 10; } while (u);
+    if (v < 0) b[n++] = '-';
+    while (nd) b[n++] = d[--nd];
+    b[n++] = '\n';
+    nsi(SYS_WRITE, 1, (long)b, n);
+}
+
+__attribute__((noreturn)) static void fail(const char *why) {
+    say("THREAD FAIL: %s\n", why);
+    nsi(SYS_EXIT, 1, 0, 0);
+    for (;;) { }
+}
+
+static long map(long len, int flags) {
+    long p = nsi6(SYS_MMAP, 0, len, PROT_READ | PROT_WRITE, flags | MAP_ANONYMOUS, -1, 0);
+    if (p < 0) fail("mmap");
+    return p;
+}
+
+/* Results shared between a test child (all its threads) and the parent. */
+struct shared {
+    volatile long go;          /* parent/child -> threads: start             */
+    volatile long done;        /* set AFTER the operation returned           */
+    volatile long count;       /* loop iterations (progress)                 */
+    volatile long late;        /* accesses that began after `done` and won   */
+    volatile long poison;      /* reads that returned a value other than PAT */
+    volatile long efault;      /* arm G: copyouts that returned -EFAULT      */
+    volatile long gdone;       /* arm G: the copy thread finished            */
+    volatile uint64_t page;    /* the page under test                        */
+    volatile uint64_t tls[3][2];   /* arm B: two thread TLS blocks + main's */
+    volatile long tls_ok;      /* arm B */
+    volatile long a_store;     /* arm A (unused since DDR-1181 §4.1) */
+    volatile uint64_t a_page;  /* arm A: a MAP_PRIVATE page of the creator */
+    volatile long midcopy;     /* arm G: -EFAULTs that left bytes written     */
+    volatile long lcpu;        /* D/E: the loop thread's CPU (DDR-1181 §4.3)   */
+    volatile long ccpu;        /* D/E: the operating thread's CPU, at the op   */
+    volatile unsigned a_ctid;  /* arm A: zeroed by the kernel at thread exit */
+    volatile unsigned c_ctid;  /* arm C */
+};
+
+static long spawn(void (*fn)(long), long arg, uint64_t tls, uint64_t ctid) {
+    long stk = map(STK, MAP_PRIVATE);
+    long tid = nsi6(SYS_THREAD_CREATE, (long)fn, stk + STK, arg, (long)tls, (long)ctid, 0);
+    if (tid < 0) fail("create");
+    return stk;
+}
+
+/* THREADTEST tcbs in the scheduler other than the caller, and how many of
+ * them are zombies (SYS_GETPROCS walks the whole ring, zombies included). */
+static void thr_left(long *left, long *zomb) {
+    struct { uint32_t pid, ppid, state, flags; char name[16];
+             uint64_t run_ticks, dispatches; } pi;
+    long me = nsi(SYS_GETPID, 0, 0, 0);
+    *left = *zomb = 0;
+    for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
+        const char *w = "THREADTEST";
+        int k = 0;
+        while (w[k] && pi.name[k] == w[k]) k++;
+        if (w[k] || (long)pi.pid == me) continue;
+        (*left)++;
+        if (pi.state == 4) (*zomb)++;            /* THREAD_ZOMBIE */
+    }
+}
+
+/* Wait (bounded) until *w == 0, i.e. the thread's clear_tid was written. */
+static int join(volatile unsigned *w, uint64_t bound_ms) {
+    uint64_t end = now() + bound_ms * MS;
+    while (*w != 0) {
+        if (now() > end) return 0;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    return 1;
+}
+
+__attribute__((noreturn)) static void texit(void) {
+    nsi(SYS_THREAD_EXIT, 0, 0, 0);
+    for (;;) { }
+}
+
+/* ---- thread bodies (entered with RSP = stack top, RDI = arg) ---- */
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_store(long arg) {
+    struct shared *s = (struct shared *)arg;
+    *(volatile long *)s->a_page = 0xC0FFEE;   /* private page: seen only if
+                                              * the address space is shared */
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_tls(long arg) {
+    struct shared *s = (struct shared *)arg;
+    uint64_t fs0;
+    __asm__ volatile("mov %%fs:0, %0" : "=r"(fs0));
+    /* Which block is ours is told by the self-pointer itself. */
+    if (fs0 == (uint64_t)&s->tls[0][0] || fs0 == (uint64_t)&s->tls[1][0])
+        __atomic_add_fetch(&s->tls_ok, 1, __ATOMIC_SEQ_CST);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_nop(long arg) {
+    (void)arg;
+    texit();
+}
+
+/* The calling CPU's initial APIC id (CPUID.1:EBX[31:24]); ring 3 may read it.
+ * Diagnostic only (DDR-1181 §4.3): P1 has no way to choose a CPU. */
+static long cpu_id(void) {
+    uint32_t a = 1, b, c = 0, d;
+    __asm__ volatile("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    return (long)(b >> 24);
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_writer(long arg) {
+    struct shared *s = (struct shared *)arg;
+    volatile uint64_t *p = (volatile uint64_t *)s->page;
+    s->lcpu = cpu_id();
+    for (;;) {
+        long f = s->done;
+        p[0] = PAT;                      /* faults once the RO entry is seen */
+        s->count++;
+        if (f) s->late++;
+    }
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_reader(long arg) {
+    struct shared *s = (struct shared *)arg;
+    volatile uint64_t *p = (volatile uint64_t *)s->page;
+    s->lcpu = cpu_id();
+    for (;;) {
+        long f = s->done;
+        uint64_t v = p[0];               /* faults once the entry is gone */
+        s->count++;
+        if (f) s->late++;
+        if (v != PAT) s->poison++;
+    }
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_crash(long arg) {
+    struct shared *s = (struct shared *)arg;
+    while (!s->go) nsi(SYS_YIELD, 0, 0, 0);
+    *(volatile int *)0 = 1;              /* fatal fault in this thread */
+    for (;;) { }
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_copier(long arg) {
+    struct shared *s = (struct shared *)arg;
+    /* DDR-1181 §4.1: the destination starts 256 bytes into page A and ends
+     * in page B, which the sibling toggles. A pre-check -EFAULT writes
+     * nothing; a fault on B after the pre-check passed (the fixup path)
+     * leaves A's tail written. A's tail is zeroed before every copy. */
+    volatile unsigned char *a = (volatile unsigned char *)s->page;
+    uint64_t end = now() + 1500 * MS;
+    while (now() < end) {
+        for (int i = 256; i < 4096; i++) a[i] = 0;
+        if (nsi(SYS_DMESG, (long)s->page + 256, 4096, 0) == -EFAULT) {
+            s->efault++;
+            for (int i = 256; i < 4096; i++)
+                if (a[i]) { s->midcopy++; break; }
+        }
+    }
+    s->gdone = 1;
+    texit();
+}
+
+/* ---- parent side: run one child and judge how it ended ---- */
+
+/* 1 if the child died by itself within `bound_ms`, 0 if it had to be killed. */
+static int reap(long pid, uint64_t bound_ms) {
+    int st = 0;
+    uint64_t end = now() + bound_ms * MS;
+    for (;;) {
+        long r = nsi(SYS_WAIT4, pid, (long)&st, WNOHANG);
+        if (r == pid) return 1;
+        if (r != -11 /* -EAGAIN */) fail("wait4");
+        if (now() > end) break;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    nsi(SYS_KILL, pid, SIGKILL, 0);
+    end = now() + 5000 * MS;             /* a SIGKILLed child must still be reaped */
+    while (nsi(SYS_WAIT4, pid, (long)&st, WNOHANG) != pid) {
+        if (now() > end) fail("killed child never reaped");
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    return 0;
+}
+
+/* Child body for D (write=1) and E/M (write=0). Never returns. The loop
+ * thread shares this CPU (DDR-1181 §4.3): what D and E prove is that the
+ * operation takes effect for a sibling thread of the same address space. */
+__attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
+    s->page = (uint64_t)map(4096, MAP_PRIVATE);
+    *(volatile uint64_t *)s->page = PAT;
+    spawn(write ? t_writer : t_reader, (long)s, 0, 0);
+    uint64_t end = now() + 1000 * MS;
+    while (s->count < 2000) {            /* the loop thread is running and   */
+        if (now() > end) fail("loop thread never ran");   /* its TLB is warm */
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    s->ccpu = cpu_id();
+    long rc = write ? nsi(SYS_MPROTECT, (long)s->page, 4096, PROT_READ)
+                    : nsi(SYS_MUNMAP, (long)s->page, 4096, 0);
+    if (rc != 0) fail(write ? "mprotect" : "munmap");
+    s->done = 1;
+    for (;;) __asm__ volatile("pause");  /* ended only by the group kill */
+}
+
+static void clear(struct shared *s) {
+    s->go = s->done = s->count = s->late = s->poison = s->efault = s->gdone = 0;
+    s->midcopy = 0;
+    s->lcpu = -1;
+    s->ccpu = -2;
+}
+
+/* Arm C workload for pm_measure (DDR-1185): 64 create/join/munmap cycles,
+ * then wait (up to 2 s) until the reaper has freed every thread, so the
+ * meter's fingerprint and settle see none of ours. */
+struct c_ctx {
+    struct shared *s;
+    long unmap_fail, unmap_rc, left0, zomb0, reap_ms;
+};
+static long c_cycles(void *ctx) {
+    struct c_ctx *c = (struct c_ctx *)ctx;
+    for (int i = 0; i < 64; i++) {
+        c->s->c_ctid = 1;
+        long stk = spawn(t_nop, 0, 0, (uint64_t)&c->s->c_ctid);
+        if (!join(&c->s->c_ctid, 2000)) fail("C join");
+        long ur = nsi(SYS_MUNMAP, stk, STK, 0);
+        if (ur != 0) {                    /* a failed unmap leaks the stack */
+            if (!c->unmap_fail) c->unmap_rc = ur;
+            c->unmap_fail++;
+        }
+    }
+    long left, zomb;
+    thr_left(&c->left0, &c->zomb0);
+    uint64_t r0 = now();
+    for (;;) {
+        thr_left(&left, &zomb);
+        if (left == 0 || now() - r0 > 2000 * MS) break;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    c->reap_ms = (long)((now() - r0) / MS);
+    return 64;                          /* one created thread tcb per cycle */
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
+    struct shared *s = (struct shared *)map(4096, MAP_SHARED);
+
+    /* A */
+    /* A: the store lands in a MAP_PRIVATE page of the creator, so a thread
+     * on a COW copy of the address space (T1) is not seen (DDR-1181 §4.1). */
+    s->a_page = (uint64_t)map(4096, MAP_PRIVATE);
+    *(volatile long *)s->a_page = 0;
+    s->a_ctid = 1;
+    spawn(t_store, (long)s, 0, (uint64_t)&s->a_ctid);
+    long joined = join(&s->a_ctid, 2000);
+    say("PRADYOS_THREAD_A shared=%d joined=%d\n",
+        (long)(*(volatile long *)s->a_page == 0xC0FFEE), (long)(joined));
+
+    /* B */
+    s->tls_ok = 0;
+    s->tls[0][0] = (uint64_t)&s->tls[0][0];
+    s->tls[1][0] = (uint64_t)&s->tls[1][0];
+    /* The creator gets a TLS block of its own, so a thread that inherited the
+     * creator's FS base instead of its `tls` reads a self-pointer that is
+     * neither of the two (tls_ok < 2) rather than faulting on %fs:0 = 0. */
+    s->tls[2][0] = (uint64_t)&s->tls[2][0];
+    if (nsi(SYS_SET_TLS, (long)&s->tls[2][0], 0, 0) != 0) fail("set_tls");
+    s->a_ctid = 1;
+    s->c_ctid = 1;
+    spawn(t_tls, (long)s, (uint64_t)&s->tls[0][0], (uint64_t)&s->a_ctid);
+    spawn(t_tls, (long)s, (uint64_t)&s->tls[1][0], (uint64_t)&s->c_ctid);
+    join(&s->a_ctid, 2000);
+    join(&s->c_ctid, 2000);
+    say("PRADYOS_THREAD_B tls_ok=%d\n", (long)(s->tls_ok));
+
+    /* C: 8 warm-up cycles, then 64 create/join/munmap cycles measured by
+     * pm_measure (DDR-1185). The PMM free count is system-wide and the rest
+     * of the boot runs meanwhile: run 40217768311 lost 293 pages in a 2 s
+     * idle window, and an idle control taken at another time (the earlier
+     * C2) read that traffic as net=470 on one head and as green on a
+     * semantically identical one. Only a trial with quiet traffic around it
+     * counts, with no correction. A leaked tcb + kernel stack is ~6 pages,
+     * 64 of them ~380; the bound of 32 is far below. */
+    struct c_ctx c = { s, 0, 0, 0, 0, 0 };
+    for (int i = 0; i < 8; i++) {
+        s->c_ctid = 1;
+        long stk = spawn(t_nop, 0, 0, (uint64_t)&s->c_ctid);
+        if (!join(&s->c_ctid, 2000)) fail("C join");
+        nsi(SYS_MUNMAP, stk, STK, 0);
+    }
+    struct pm_result pr;
+    int conclusive = pm_measure(c_cycles, &c, &pr);
+    long left = 0, zomb = 0;
+    thr_left(&left, &zomb);
+    say("[thread] C drop=%d trials=%d rej_pre=%d rej_post=%d rej_procs=%d conclusive=%d\n",
+        pr.drop, pr.trials, pr.rej_pre, pr.rej_post, pr.rej_procs, (long)conclusive);
+    say("[thread] C after_cycles left=%d zombie=%d reap_ms=%d\n", c.left0, c.zomb0, c.reap_ms);
+    say("[thread] C munmap_fail=%d first_rc=%d\n", c.unmap_fail, c.unmap_rc);
+    say("PRADYOS_THREAD_C leftover=%d zombie=%d\n", left, zomb);
+    line1("PRADYOS_THREAD_C2 net_leak_ok=", conclusive && pr.drop <= 32);
+
+    /* D, then E/M: TRIALS forked children each. */
+    for (int arm = 0; arm < 2; arm++) {
+        long late = 0, poison = 0, faulted = 1, reached = 0, same = 0;
+        for (int k = 0; k < TRIALS; k++) {
+            clear(s);
+            long pid = nsi(SYS_FORK, 0, 0, 0);
+            if (pid < 0) fail("fork");
+            if (pid == 0) child_tlb(s, arm == 0);
+            /* DDR-1181 §4.2: the fault bound starts at the operation, not at
+             * fork; the warm-up is bounded on its own. */
+            uint64_t op_end = now() + 3000 * MS;
+            while (!s->done && now() < op_end) nsi(SYS_YIELD, 0, 0, 0);
+            if (s->done) reached++;
+            if (!reap(pid, 1000)) faulted = 0;
+            late += s->late;
+            poison += s->poison;
+            /* Diagnostic (DDR-1181 §4.3): the loop thread's CPU when it
+             * started, against the operating thread's CPU at the operation. */
+            if (s->lcpu == s->ccpu) same++;
+        }
+        if (arm == 0) {
+            say("[thread] D reached=%d of %d cpu_same=%d\n", reached, (long)TRIALS, same);
+            say("PRADYOS_THREAD_D prot_stale=%d faulted=%d\n", late, faulted);
+        } else {
+            say("[thread] E reached=%d of %d cpu_same=%d\n", reached, (long)TRIALS, same);
+            say("PRADYOS_THREAD_E stale=%d faulted=%d\n", late, faulted);
+            /* Ungated until P1d (DDR-1181 §4.3): on one CPU no mutant can
+             * make it red. */
+            say("PRADYOS_THREAD_M poison=%d\n", poison);
+        }
+    }
+
+    /* F: the leader spins in ring 3 while a sibling faults. */
+    clear(s);
+    long fp = nsi(SYS_FORK, 0, 0, 0);
+    if (fp < 0) fail("fork");
+    if (fp == 0) {
+        spawn(t_crash, (long)s, 0, 0);
+        s->go = 1;
+        for (;;) __asm__ volatile("pause");
+    }
+    long gk = reap(fp, 2000);            /* the child's trap line prints here */
+    line1("PRADYOS_THREAD_F group_killed=", gk);
+
+    /* G: copyout into a page a sibling keeps unmapping and remapping.
+     * Ungated until P1d (DDR-1181 §4.3): on one CPU the sibling never runs
+     * inside the copier's syscall, so the mid-copy fault cannot happen. */
+    clear(s);
+    long gp = nsi(SYS_FORK, 0, 0, 0);
+    if (gp < 0) fail("fork");
+    if (gp == 0) {
+        /* Pages A and B are two regions: munmap takes a whole region by its
+         * base (sys_mmap.c vma_find), so B alone can only come and go if it is
+         * one (DDR-1181 §4.2). The bump allocator places B right after A. */
+        long pa = map(4096, MAP_PRIVATE);
+        uint64_t pb = (uint64_t)map(4096, MAP_PRIVATE);
+        if (pb != (uint64_t)pa + 4096) fail("G layout");
+        s->page = (uint64_t)pa;
+        spawn(t_copier, (long)s, 0, 0);
+        while (!s->gdone) {                  /* only B comes and goes */
+            nsi(SYS_MUNMAP, (long)pb, 4096, 0);
+            if (nsi6(SYS_MMAP, (long)pb, 4096, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != (long)pb)
+                fail("G remap");
+        }
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    long survived = reap(gp, 5000);
+    say("[thread] G efault=%d midcopy=%d\n", (long)(s->efault), (long)(s->midcopy));
+    say("PRADYOS_THREAD_G survived=%d midcopy_ok=%d\n", (long)(survived),
+        (long)(s->midcopy >= 1));
+
+    say("PRADYOS_THREAD_DONE\n");
+    nsi(SYS_EXIT, 0, 0, 0);
+    for (;;) { }
+}

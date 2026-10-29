@@ -8,12 +8,13 @@
  *
  * Scope: a specific positive pid, OR pid==-1 ("any child" — 5d, needed by PID 1
  * init's reap loop). The status is the raw exit code (POSIX W* encoding is
- * deferred; init logs it raw). Runs with IF clear (SYSCALL entry), so the
- * check-then-block sequence cannot lose a wakeup.
+ * deferred; init logs it raw). The check-then-block sequence runs under
+ * g_sched_lock in sched_wait_child, so it cannot lose a wakeup on SMP either
+ * (DDR-1181 §4.6).
  */
 #include "sys_wait.h"
 #include "sched.h"
-#include "vmm.h"          /* vmm_destroy_address_space */
+#include "mm.h"           /* DDR-1181: mm_put destroys the address space */
 #include "uaccess.h"      /* copyout */
 #include "syscall.h"      /* syscall_register, SYS_WAIT4 */
 #include "errno.h"
@@ -29,7 +30,7 @@
  * clear from SYSCALL entry so nothing could preempt it. Measured as
  * `[apfreeze] … bt=…,sys_wait4+0x4f,…` on smoke-smpuser (DDR-1001).
  *
- * The walk now lives in sched.c as `sched_find_child`, where g_sched_lock is
+ * The walk now lives in sched.c as `sched_wait_child`, where g_sched_lock is
  * reachable, following the pattern `sched_snapshot` already set for this exact
  * traversal. */
 
@@ -40,41 +41,30 @@ static long sys_wait4(long a_pid, long a_status, long a_options, long a4, long a
     int options = (int)a_options;
     struct tcb *self = current_thread;
 
-    struct tcb *live, *child;
-    int any;
-    /* Find a reapable zombie; block (or EAGAIN) while children remain but none
-     * has exited. IF is clear here, so a child can only run (and exit) once we
-     * sched_block — no lost-wakeup window. */
-    int ringbad = 0;
-    while (!(child = sched_find_child(self, pid, &live, &any, &ringbad))) {
-        if (ringbad) {
-            /* Should never happen: under g_sched_lock the ring is consistent.
-             * If it is not, say so and return rather than spin — a bounded,
-             * attributable failure beats a CPU that cannot be interrupted. */
-            kputs("[ringwalk] wait4 ring inconsistent pid=");
-            kputdec(self->pid);
-            kputs("\n");
-            return -ECHILD;
-        }
-        if (!any)
-            return -ECHILD;            /* no matching children at all */
-        if (options & WNOHANG)
-            return -EAGAIN;            /* children exist, none exited yet */
-        live->waiter = self;           /* any child's exit wakes us; we re-scan */
-        sched_block();
-    }
+    /* DDR-1181 §4.6: the search, the claim and the sleep are one locked loop
+     * in sched.c. The child returned is claimed: no other waiter and not the
+     * reaper can take it, so the destroy below is the only one. */
+    int err = 0;
+    struct tcb *child = sched_wait_child(self, pid, options & WNOHANG, &err);
+    if (!child)
+        return err;                    /* -ECHILD, or -EAGAIN under WNOHANG */
 
-    int status = child->exit_status;
+    /* DDR-1181 §3.4: the process status, which a sibling thread's SYS_EXIT or
+     * fatal fault may have fixed; for a single-threaded child it is the same
+     * value sched_exit stored in exit_status. */
+    int status = (child->mm && __atomic_load_n(&child->mm->group_set, __ATOMIC_ACQUIRE))
+               ? child->mm->group_status : child->exit_status;
     if (a_status) {
-        if (copyout((void __user *)(uintptr_t)a_status, &status, sizeof status) < 0)
-            return -EFAULT;            /* bad status ptr: leave the zombie unreaped */
+        if (copyout((void __user *)(uintptr_t)a_status, &status, sizeof status) < 0) {
+            sched_unclaim_child(child);    /* bad status ptr: leave it unreaped */
+            return -EFAULT;
+        }
     }
 
     int child_pid  = (int)child->pid;
-    uint64_t child_cr3 = child->cr3;
+    struct mm *child_mm = child->mm;   /* DDR-1181: owns the child's page tables */
     sched_destroy(child);              /* unlink + free kstack/caps/fds/TCB */
-    if (child_cr3)
-        vmm_destroy_address_space(child_cr3);
+    mm_put(child_mm);                  /* last ref destroys the address space */
     return child_pid;
 }
 

@@ -46,6 +46,8 @@ struct vm_area {
  * component set (~2688) with margin. Asserted against CPUID.0xD at boot. */
 #define FPU_STATE_MAX 4096u
 
+struct mm;                     /* DDR-1181: kernel/mm/mm.h */
+
 struct tcb {
     uint64_t   rsp;            /* saved stack pointer (offset 0; asm relies on it) */
     uint64_t   kstack_base;    /* base of the thread's kernel stack               */
@@ -74,15 +76,18 @@ struct tcb {
     int        root_mnt;       /* mount paths resolve against (-1 = none)    */
     cap_t      fs_cap;         /* FS capability granted at load (5b)         */
 
-    struct vm_area vma[VM_AREA_MAX];  /* anonymous mmap regions (5b)         */
-    uint64_t   mmap_next;      /* bump pointer for addr==NULL mmaps           */
+    struct mm *mm;             /* DDR-1181: address space (cr3 owner, mmap regions,
+                                * memory charge); NULL for kernel threads (mm.h) */
 
     /* Process model (5b slice 8+). Appended at struct end so the ~30 includers
      * of sched.h keep their field offsets. */
     uint32_t   parent_pid;     /* creating process pid; 0 for kernel threads  */
     int64_t    fork_retval;    /* child's fork() return (0); -1 when unset     */
     int        exit_status;    /* set by sched_exit; collected by wait4 (5b-9) */
-    struct tcb *waiter;        /* parent blocked in wait4 on this thread, or 0 */
+    uint8_t    reap_claimed;   /* DDR-1181 §4.6: a wait4 is reaping this zombie */
+    uint8_t    in_wait4;       /* DDR-1181 §4.6: this thread sleeps in wait4    */
+    uint8_t    wait_pad[6];    /* the old 8-byte `waiter` slot: keeps sig_pending
+                                * and sig_mask where syscall_entry.asm reads them */
 
     /* POSIX signals (PROC-C). */
     uint64_t   sig_pending;      /* bitmap of pending signal numbers          */
@@ -136,8 +141,6 @@ struct tcb {
                                  * NON-NEGOTIABLE 10: kmalloc does not zero, so
                                  * sched_create initialises this explicitly. */
     uint32_t   is_sovereign;    /* 1 = CAP_SOVEREIGN (operator/daemon): mode+approve */
-    uint64_t   mem_limit;       /* hard cap in bytes; 0 -> AETHER_MEM_DEFAULT       */
-    uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
     /* DDR-1170: per-task budgets, set by SYS_SPAWN_TASK BEFORE the first run.
@@ -251,6 +254,15 @@ struct tcb {
     /* DDR-955: bounded-wait fields */
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */
+    struct tcb *kmx_next;        /* DDR-1181: kmutex FIFO wait link (kmutex.c) */
+    /* DDR-1181 P1c: thread groups. tgid is the process id every thread of one
+     * address space reports (getpid); pid stays unique per tcb and is the tid.
+     * is_thread marks a tcb made by SYS_THREAD_CREATE (auto-reaped, never a
+     * wait4 child). clear_tid is the user VA of a u32 the kernel zeroes when
+     * the thread exits (0 = none). */
+    uint32_t   tgid;
+    uint32_t   is_thread;
+    uint64_t   clear_tid;
 };
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
@@ -267,11 +279,14 @@ struct procinfo {
 /* Fill *out with the index-th thread in the scheduler ring (walked under
  * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */
 int         sched_snapshot(int index, struct procinfo *out);
-/* DDR-1001: wait4's child lookup, walking the all-threads ring UNDER
- * g_sched_lock. sys_wait.c cannot take that lock (it is file-local to sched.c),
- * which is why the walk lives here rather than there. */
-struct tcb *sched_find_child(struct tcb *parent, int pid,
-                             struct tcb **has_live, int *any, int *ringbad);
+/* DDR-1001 / DDR-1181 §4.6: wait4's search, claim and sleep, all under
+ * g_sched_lock (file-local to sched.c, so the loop lives here). Returns a zombie
+ * child CLAIMED for the caller, or NULL with *err = -ECHILD, or -EAGAIN when
+ * `nohang`. */
+struct tcb *sched_wait_child(struct tcb *self, int pid, int nohang, int *err);
+/* Gives back a claim (wait4's status copyout failed) and wakes the process's
+ * other waiters, which skipped the claimed zombie. */
+void        sched_unclaim_child(struct tcb *child);
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
@@ -338,6 +353,15 @@ int sched_rollback_pid(uint32_t pid);   /* DDR-1171: mark + SIGKILL a live rollb
 int         sched_checkpoint_pid(uint32_t pid);                /* DDR-1157: set checkpointed=1 under g_sched_lock; 0 or -ESRCH */
 int         sched_resume_pid(uint32_t pid);                    /* DDR-1157: clear + conditional unblock under g_sched_lock; 0 or -ESRCH */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
+/* DDR-1181 P1c: end the calling thread only (SYS_THREAD_EXIT). sched_exit ends
+ * the whole thread group: every other live thread of the same mm is sent
+ * SIGKILL first. For a single-threaded process the two are identical. */
+void        sched_exit_thread(int status);
+/* DDR-1181 P1c: a new thread in `parent`'s address space (SYS_THREAD_CREATE).
+ * Returns its id (read before it is made runnable), or 0 on failure. The tcb
+ * is not returned: once runnable it may exit and be freed at any time. */
+uint32_t    sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
+                                     uint64_t arg, uint64_t tls, uint64_t clear_tid);
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */
 
